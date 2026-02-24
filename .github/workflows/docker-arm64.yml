@@ -36,6 +36,10 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/arm64
+          build-args: |
+            TARGETOS=linux
+            TARGETARCH=arm64
+          no-cache: true
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/orchids-2api:latest
