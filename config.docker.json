@@ -1,0 +1,13 @@
+{
+  "port": "3002",
+  "debug_enabled": false,
+  "admin_user": "admin",
+  "admin_pass": "change_me_please",
+  "admin_path": "/admin",
+  "admin_token": "",
+  "store_mode": "redis",
+  "redis_addr": "redis:6379",
+  "redis_password": "",
+  "redis_db": 0,
+  "redis_prefix": "orchids:"
+}

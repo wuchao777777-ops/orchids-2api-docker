@@ -1,0 +1,9 @@
+.git
+.github
+.gitignore
+.idea
+.vscode
+debug-logs
+data
+orchids-server
+*.log

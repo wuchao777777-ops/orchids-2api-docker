@@ -22,10 +22,32 @@
 
 ## 环境要求
 
-- Go 1.22+
+- Go 1.24+
 - Redis（必需，当前仅支持 Redis 存储）
+- 或 Docker / Docker Compose（容器化部署）
 
 ## 快速开始
+
+### Docker 一键部署（推荐）
+
+1. 修改容器配置文件 `config.docker.json`（至少改掉 `admin_pass`）。
+2. 启动：
+
+```bash
+docker compose up -d --build
+```
+
+3. 验证服务：
+
+```bash
+curl -s http://127.0.0.1:3002/health
+```
+
+4. 查看日志：
+
+```bash
+docker compose logs -f orchids-api
+```
 
 ### 1) 准备 Redis
 

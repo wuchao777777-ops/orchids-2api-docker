@@ -1,0 +1,27 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: orchids-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  orchids-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: orchids-api
+    restart: unless-stopped
+    depends_on:
+      - redis
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./config.docker.json:/app/config.json:ro
+      - orchids_data:/app/data
+    environment:
+      TZ: Asia/Shanghai
+
+volumes:
+  redis_data:
+  orchids_data:
