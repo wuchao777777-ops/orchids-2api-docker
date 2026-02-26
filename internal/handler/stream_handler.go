@@ -13,6 +13,7 @@ import (
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/perf"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
@@ -491,6 +492,13 @@ func sanitizeToolInput(name, input string) string {
 		mapField("path", "file_path")
 	case "bash":
 		mapField("cmd", "command")
+	case "glob":
+		if _, ok := payload["pattern"]; !ok {
+			if path, ok := payload["path"].(string); ok && strings.TrimSpace(path) != "" {
+				payload["pattern"] = "*"
+				changed = true
+			}
+		}
 	}
 
 	if !changed {
@@ -502,6 +510,14 @@ func sanitizeToolInput(name, input string) string {
 		return input
 	}
 	return string(normalized)
+}
+
+func normalizeUpstreamToolName(name string) string {
+	mapped := orchids.NormalizeToolName(name)
+	if strings.TrimSpace(mapped) == "" {
+		return name
+	}
+	return mapped
 }
 
 func (h *streamHandler) emitToolCallNonStream(call toolCall) {
@@ -1649,6 +1665,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		h.closeActiveBlock() // Tool input starts a separate block mechanism
 		toolID, _ := msg.Event["id"].(string)
 		toolName, _ := msg.Event["toolName"].(string)
+		toolName = normalizeUpstreamToolName(toolName)
 		if toolID == "" || toolName == "" {
 			return
 		}
@@ -1720,6 +1737,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	case "model.tool-call":
 		toolID, _ := msg.Event["toolCallId"].(string)
 		toolName, _ := msg.Event["toolName"].(string)
+		toolName = normalizeUpstreamToolName(toolName)
 		inputStr, _ := msg.Event["input"].(string)
 		inputStr = sanitizeToolInput(toolName, inputStr)
 		if toolID == "" {

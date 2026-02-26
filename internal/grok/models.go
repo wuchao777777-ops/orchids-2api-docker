@@ -16,24 +16,20 @@ type ModelSpec struct {
 
 // SupportedModels is the Go-native model table ported from grok2api behavior.
 var SupportedModels = []ModelSpec{
-	{ID: "grok-3", Name: "Grok 3", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3"},
-	{ID: "grok-3-mini", Name: "Grok 3 Mini", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3_MINI_THINKING"},
-	{ID: "grok-3-thinking", Name: "Grok 3 Thinking", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3_THINKING"},
-	{ID: "grok-3-fast", Name: "Grok 3 Fast", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST"}, // compat alias
-	{ID: "grok-4", Name: "Grok 4", UpstreamModel: "grok-4", ModelMode: "MODEL_MODE_GROK_4"},
-	{ID: "grok-4-mini", Name: "Grok 4 Mini", UpstreamModel: "grok-4-mini", ModelMode: "MODEL_MODE_GROK_4_MINI_THINKING"},
-	{ID: "grok-4-thinking", Name: "Grok 4 Thinking", UpstreamModel: "grok-4", ModelMode: "MODEL_MODE_GROK_4_THINKING"},
-	{ID: "grok-4-fast", Name: "Grok 4 Fast", UpstreamModel: "grok-4", ModelMode: "MODEL_MODE_FAST"},
-	{ID: "grok-4-heavy", Name: "Grok 4 Heavy", UpstreamModel: "grok-4", ModelMode: "MODEL_MODE_HEAVY"},
-	{ID: "grok-4.1-mini", Name: "Grok 4.1 Mini", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_MINI_THINKING"},
-	{ID: "grok-4.1-fast", Name: "Grok 4.1 Fast", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_FAST"},
-	{ID: "grok-4.1-expert", Name: "Grok 4.1 Expert", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_EXPERT"},
-	{ID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
-	{ID: "grok-4.1", Name: "Grok 4.1", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_MINI_THINKING"}, // compat alias
-	{ID: "grok-4.20-beta", Name: "Grok 4.20 Beta", UpstreamModel: "grok-420", ModelMode: "MODEL_MODE_GROK_420"},
-	{ID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsImage: true},
-	{ID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_FAST", IsImage: true},
-	{ID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsVideo: true},
+	{ID: "grok-3", Name: "Grok 3", UpstreamModel: "grok-3"},
+	{ID: "grok-3-mini", Name: "Grok 3 Mini", UpstreamModel: "grok-3-mini"},
+	{ID: "grok-3-thinking", Name: "Grok 3 Thinking", UpstreamModel: "grok-3-thinking"},
+	{ID: "grok-4", Name: "Grok 4", UpstreamModel: "grok-4"},
+	{ID: "grok-4-mini", Name: "Grok 4 Mini", UpstreamModel: "grok-4-mini"},
+	{ID: "grok-4-thinking", Name: "Grok 4 Thinking", UpstreamModel: "grok-4-thinking"},
+	{ID: "grok-4-heavy", Name: "Grok 4 Heavy", UpstreamModel: "grok-4-heavy"},
+	{ID: "grok-4.1-mini", Name: "Grok 4.1 Mini", UpstreamModel: "grok-4.1-mini"},
+	{ID: "grok-4.1-fast", Name: "Grok 4.1 Fast", UpstreamModel: "grok-4.1-fast"},
+	{ID: "grok-4.1-expert", Name: "Grok 4.1 Expert", UpstreamModel: "grok-4.1-expert"},
+	{ID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", UpstreamModel: "grok-4.1-thinking"},
+	{ID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", UpstreamModel: "grok-imagine-1.0", IsImage: true},
+	{ID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", UpstreamModel: "grok-imagine-1.0-edit", IsImage: true},
+	{ID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", UpstreamModel: "grok-imagine-1.0-video", IsVideo: true},
 }
 
 var modelByID = func() map[string]ModelSpec {

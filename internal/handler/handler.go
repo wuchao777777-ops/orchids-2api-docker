@@ -369,6 +369,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if suggestionMode {
 		gateNoTools = true
 	}
+	if lastUserIsToolResultOnly(req.Messages) {
+		gateNoTools = true
+		if h.config.DebugEnabled {
+			slog.Debug("tool_gate: disabled tools for tool_result-only follow-up")
+		}
+	}
 	effectiveTools := req.Tools
 	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
 		effectiveTools = nil

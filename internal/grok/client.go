@@ -288,11 +288,11 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 
 	model := strings.TrimSpace(modelID)
 	if model == "" {
-		model = "grok-3"
+		model = "grok-4.1-fast"
 	}
 	spec, ok := ResolveModelOrDynamic(model)
 	if !ok {
-		spec, ok = ResolveModel("grok-3")
+		spec, ok = ResolveModel("grok-4.1-fast")
 		if !ok {
 			return nil, fmt.Errorf("grok default model not available")
 		}
@@ -310,11 +310,11 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {
 	model := strings.TrimSpace(modelID)
 	if model == "" {
-		model = "grok-3"
+		model = "grok-4.1-fast"
 	}
 	spec, ok := ResolveModelOrDynamic(model)
 	if !ok {
-		spec, ok = ResolveModel("grok-3")
+		spec, ok = ResolveModel("grok-4.1-fast")
 		if !ok {
 			return nil, fmt.Errorf("grok default model not available")
 		}

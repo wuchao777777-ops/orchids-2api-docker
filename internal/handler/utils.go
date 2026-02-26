@@ -83,25 +83,25 @@ func normalizeOrchidsModelKey(model string) string {
 }
 
 var orchidsModelMap = map[string]string{
-	"claude-sonnet-4-5":           "claude-sonnet-4-6",
-	"claude-sonnet-4-6":           "claude-sonnet-4-6",
-	"claude-sonnet-4-5-thinking":  "claude-sonnet-4-5-thinking",
-	"claude-sonnet-4-6-thinking":  "claude-sonnet-4-6",
-	"claude-opus-4-6":             "claude-opus-4-6",
-	"claude-opus-4-5":             "claude-opus-4-6",
-	"claude-opus-4-5-thinking":    "claude-opus-4-5-thinking",
-	"claude-opus-4-6-thinking":    "claude-opus-4-6",
-	"claude-haiku-4-5":            "claude-haiku-4-5",
-	"claude-sonnet-4-20250514":    "claude-sonnet-4-20250514",
-	"claude-3-7-sonnet-20250219":  "claude-3-7-sonnet-20250219",
-	"gemini-3-flash":              "gemini-3-flash",
-	"gemini-3-pro":                "gemini-3-pro",
-	"gpt-5.3-codex":               "gpt-5.3-codex",
-	"gpt-5.2-codex":               "gpt-5.2-codex",
-	"gpt-5.2":                     "gpt-5.2",
-	"grok-4.1-fast":               "grok-4.1-fast",
-	"glm-5":                       "glm-5",
-	"kimi-k2.5":                   "kimi-k2.5",
+	"claude-sonnet-4-5":          "claude-sonnet-4-6",
+	"claude-sonnet-4-6":          "claude-sonnet-4-6",
+	"claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
+	"claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
+	"claude-opus-4-6":            "claude-opus-4-6",
+	"claude-opus-4-5":            "claude-opus-4-6",
+	"claude-opus-4-5-thinking":   "claude-opus-4-5-thinking",
+	"claude-opus-4-6-thinking":   "claude-opus-4-6",
+	"claude-haiku-4-5":           "claude-haiku-4-5",
+	"claude-sonnet-4-20250514":   "claude-sonnet-4-20250514",
+	"claude-3-7-sonnet-20250219": "claude-3-7-sonnet-20250219",
+	"gemini-3-flash":             "gemini-3-flash",
+	"gemini-3-pro":               "gemini-3-pro",
+	"gpt-5.3-codex":              "gpt-5.3-codex",
+	"gpt-5.2-codex":              "gpt-5.2-codex",
+	"gpt-5.2":                    "gpt-5.2",
+	"grok-4.1-fast":              "grok-4.1-fast",
+	"glm-5":                      "glm-5",
+	"kimi-k2.5":                  "kimi-k2.5",
 }
 
 func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {
@@ -163,6 +163,36 @@ func extractUserText(messages []prompt.Message) string {
 		return strings.TrimSpace(strings.Join(parts, "\n"))
 	}
 	return ""
+}
+
+func lastUserIsToolResultOnly(messages []prompt.Message) bool {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "user" {
+			continue
+		}
+		if msg.Content.IsString() {
+			return false
+		}
+		blocks := msg.Content.GetBlocks()
+		hasToolResult := false
+		for _, block := range blocks {
+			switch block.Type {
+			case "tool_result":
+				hasToolResult = true
+			case "text":
+				if strings.TrimSpace(block.Text) != "" {
+					return false
+				}
+			default:
+				if strings.TrimSpace(block.Type) != "" {
+					return false
+				}
+			}
+		}
+		return hasToolResult
+	}
+	return false
 }
 
 func isSuggestionMode(messages []prompt.Message) bool {
