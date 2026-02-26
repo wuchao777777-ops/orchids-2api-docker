@@ -61,74 +61,47 @@ func channelFromPath(path string) string {
 }
 
 // mapModel 根据请求的 model 名称映射到 orchids 上游实际支持的模型
-// orchids 支持: claude-opus-4-6, claude-opus-4-6-thinking, claude-sonnet-4-5, claude-opus-4-5,
-//
-//	claude-sonnet-4-5-thinking, claude-opus-4-5-thinking, claude-haiku-4-5,
-//	claude-sonnet-4-20250514, claude-3-7-sonnet-20250219
+// 以当前 Orchids 公共模型为准（会随上游更新）：claude-sonnet-4-6 / claude-opus-4.6 / claude-haiku-4-5 等。
 func mapModel(requestModel string) string {
-	lower := strings.ToLower(requestModel)
-	isThinking := strings.Contains(lower, "thinking")
-
-	switch {
-	// opus-4-6 / opus-4.6 / 4-6-opus 系列
-	case strings.Contains(lower, "opus-4-6") || strings.Contains(lower, "opus-4.6") || strings.Contains(lower, "4-6-opus"):
-		if isThinking {
-			return "claude-opus-4-6-thinking"
-		}
-		return "claude-opus-4-6"
-
-	// opus-4-5 / opus-4.5 / 4-5-opus 系列
-	case strings.Contains(lower, "opus-4-5") || strings.Contains(lower, "opus-4.5") || strings.Contains(lower, "4-5-opus"):
-		if isThinking {
-			return "claude-opus-4-5-thinking"
-		}
-		return "claude-opus-4-5"
-
-	// opus 通配 → 最新 4.6
-	case strings.Contains(lower, "opus"):
-		if isThinking {
-			return "claude-opus-4-6-thinking"
-		}
-		return "claude-opus-4-6"
-
-	// sonnet-3-7 / sonnet-3.7 / 3-7-sonnet 系列
-	case strings.Contains(lower, "sonnet-3-7") || strings.Contains(lower, "sonnet-3.7") || strings.Contains(lower, "3-7-sonnet"):
-		return "claude-3-7-sonnet-20250219"
-
-	// sonnet-3-5 / sonnet-3.5 / 3-5-sonnet 旧版 → 映射到最新 sonnet
-	case strings.Contains(lower, "sonnet-3-5") || strings.Contains(lower, "sonnet-3.5") || strings.Contains(lower, "3-5-sonnet"):
-		return "claude-sonnet-4-5"
-
-	// sonnet-4-5 / sonnet-4.5 / 4-5-sonnet 系列
-	case strings.Contains(lower, "sonnet-4-5") || strings.Contains(lower, "sonnet-4.5") || strings.Contains(lower, "4-5-sonnet"):
-		if isThinking {
-			return "claude-sonnet-4-5-thinking"
-		}
-		return "claude-sonnet-4-5"
-
-	// sonnet-4-20250514 精确匹配
-	case strings.Contains(lower, "sonnet-4-20250514"):
-		return "claude-sonnet-4-20250514"
-
-	// sonnet-4 / sonnet 通配 → claude-sonnet-4-20250514
-	case strings.Contains(lower, "sonnet-4") || strings.Contains(lower, "sonnet"):
-		if isThinking {
-			return "claude-sonnet-4-5-thinking"
-		}
-		return "claude-sonnet-4-20250514"
-
-	// haiku-4-5 / haiku-4.5 / 4-5-haiku 系列
-	case strings.Contains(lower, "haiku-4-5") || strings.Contains(lower, "haiku-4.5") || strings.Contains(lower, "4-5-haiku"):
-		return "claude-haiku-4-5"
-
-	// haiku 通配
-	case strings.Contains(lower, "haiku"):
-		return "claude-haiku-4-5"
-
-	// 默认
-	default:
-		return "claude-sonnet-4-5"
+	normalized := normalizeOrchidsModelKey(requestModel)
+	if normalized == "" {
+		return "claude-sonnet-4-6"
 	}
+	if mapped, ok := orchidsModelMap[normalized]; ok {
+		return mapped
+	}
+	return "claude-sonnet-4-6"
+}
+
+func normalizeOrchidsModelKey(model string) string {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(normalized, "claude-") {
+		normalized = strings.ReplaceAll(normalized, "4.6", "4-6")
+		normalized = strings.ReplaceAll(normalized, "4.5", "4-5")
+	}
+	return normalized
+}
+
+var orchidsModelMap = map[string]string{
+	"claude-sonnet-4-5":           "claude-sonnet-4-6",
+	"claude-sonnet-4-6":           "claude-sonnet-4-6",
+	"claude-sonnet-4-5-thinking":  "claude-sonnet-4-5-thinking",
+	"claude-sonnet-4-6-thinking":  "claude-sonnet-4-6",
+	"claude-opus-4-6":             "claude-opus-4-6",
+	"claude-opus-4-5":             "claude-opus-4-6",
+	"claude-opus-4-5-thinking":    "claude-opus-4-5-thinking",
+	"claude-opus-4-6-thinking":    "claude-opus-4-6",
+	"claude-haiku-4-5":            "claude-haiku-4-5",
+	"claude-sonnet-4-20250514":    "claude-sonnet-4-20250514",
+	"claude-3-7-sonnet-20250219":  "claude-3-7-sonnet-20250219",
+	"gemini-3-flash":              "gemini-3-flash",
+	"gemini-3-pro":                "gemini-3-pro",
+	"gpt-5.3-codex":               "gpt-5.3-codex",
+	"gpt-5.2-codex":               "gpt-5.2-codex",
+	"gpt-5.2":                     "gpt-5.2",
+	"grok-4.1-fast":               "grok-4.1-fast",
+	"glm-5":                       "glm-5",
+	"kimi-k2.5":                   "kimi-k2.5",
 }
 
 func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {

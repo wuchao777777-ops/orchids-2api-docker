@@ -969,106 +969,53 @@ func warpSchemaJSONLen(schema map[string]interface{}) int {
 }
 
 func normalizeModel(model string) string {
-	model = strings.ToLower(strings.TrimSpace(model))
-	if model == "" {
+	normalized := normalizeWarpModelKey(model)
+	if normalized == "" {
 		return defaultModel
 	}
+	if mapped, ok := warpModelMap[normalized]; ok {
+		return mapped
+	}
+	return defaultModel
+}
 
-	known := map[string]struct{}{
-		"auto":                       {},
-		"auto-efficient":             {},
-		"auto-genius":                {},
-		"warp-basic":                 {},
-		"claude-4-sonnet":            {},
-		"claude-4-5-sonnet":          {},
-		"claude-4-5-sonnet-thinking": {},
-		"claude-4-5-opus":            {},
-		"claude-4-5-opus-thinking":   {},
-		"claude-4-6-opus-high":       {},
-		"claude-4-6-opus-max":        {},
-		"claude-4-5-haiku":           {},
-		"claude-4-opus":              {},
-		"claude-4.1-opus":            {},
-		"gpt-5":                      {},
-		"gpt-5-low":                  {},
-		"gpt-5-medium":               {},
-		"gpt-5-high":                 {},
-		"gpt-5-1-low":                {},
-		"gpt-5-1-medium":             {},
-		"gpt-5-1-high":               {},
-		"gpt-5-1-codex-low":          {},
-		"gpt-5-1-codex-medium":       {},
-		"gpt-5-1-codex-high":         {},
-		"gpt-5-1-codex-max-low":      {},
-		"gpt-4o":                     {},
-		"gpt-4.1":                    {},
-		"o3":                         {},
-		"o4-mini":                    {},
-		"gemini-2-5-pro":             {},
-		"gemini-2.5-pro":             {},
-		"gemini-3-pro":               {},
+func normalizeWarpModelKey(model string) string {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if normalized == "" {
+		return ""
 	}
-	if _, ok := known[model]; ok {
-		return model
+	replacements := map[string]string{
+		"4.6": "4-6",
+		"4.5": "4-5",
+		"2.5": "2-5",
+		"5.1": "5-1",
+		"5.2": "5-2",
 	}
+	for from, to := range replacements {
+		normalized = strings.ReplaceAll(normalized, from, to)
+	}
+	return normalized
+}
 
-	if strings.Contains(model, "sonnet-4-5") || strings.Contains(model, "sonnet 4.5") {
-		if strings.Contains(model, "thinking") {
-			return "claude-4-5-sonnet-thinking"
-		}
-		return "claude-4-5-sonnet"
-	}
-	if strings.Contains(model, "opus-4-6") || strings.Contains(model, "opus 4.6") {
-		if strings.Contains(model, "max") {
-			return "claude-4-6-opus-max"
-		}
-		return "claude-4-6-opus-high"
-	}
-	if strings.Contains(model, "opus-4-5") || strings.Contains(model, "opus 4.5") {
-		if strings.Contains(model, "thinking") {
-			return "claude-4-5-opus-thinking"
-		}
-		return "claude-4-5-opus"
-	}
-	if strings.Contains(model, "haiku-4-5") || strings.Contains(model, "haiku 4.5") {
-		return "claude-4-5-haiku"
-	}
-	if strings.Contains(model, "sonnet-4") {
-		return "claude-4-sonnet"
-	}
-	if strings.Contains(model, "opus-4") || strings.Contains(model, "opus 4") {
-		return "claude-4-opus"
-	}
-
-	// Gemini 模糊匹配
-	if strings.Contains(model, "gemini-3") || strings.Contains(model, "gemini 3") {
-		return "gemini-3-pro"
-	}
-	if strings.Contains(model, "gemini-2-5") || strings.Contains(model, "gemini-2.5") || strings.Contains(model, "gemini 2.5") {
-		return "gemini-2-5-pro"
-	}
-
-	// GPT-5.1 Codex Max 模糊匹配
-	if strings.Contains(model, "gpt-5-1-codex-max") || strings.Contains(model, "gpt-5.1-codex-max") {
-		return "gpt-5-1-codex-max-low"
-	}
-
-	// Haiku / Sonnet / Opus 通配
-	if strings.Contains(model, "haiku") {
-		return "claude-4-5-haiku"
-	}
-	if strings.Contains(model, "sonnet") {
-		if strings.Contains(model, "thinking") {
-			return "claude-4-5-sonnet-thinking"
-		}
-		return "claude-4-5-sonnet"
-	}
-	if strings.Contains(model, "opus") {
-		if strings.Contains(model, "thinking") {
-			return "claude-4-5-opus-thinking"
-		}
-		return "claude-4-5-opus"
-	}
-
-	return "auto"
+var warpModelMap = map[string]string{
+	"claude-4-sonnet":              "claude-4-sonnet",
+	"claude-4-5-sonnet":            "claude-4-5-sonnet",
+	"claude-4-5-sonnet-thinking":   "claude-4-5-sonnet-thinking",
+	"claude-4-6-opus-high":         "claude-4-6-opus-high",
+	"claude-4-6-opus-max":          "claude-4-6-opus-max",
+	"claude-4-6-sonnet-high":       "claude-4-6-sonnet-high",
+	"claude-4-6-sonnet-max":        "claude-4-6-sonnet-max",
+	"claude-4-5-opus-thinking":     "claude-4-5-opus-thinking",
+	"gemini-2-5-pro":               "gemini-2-5-pro",
+	"gemini-3-pro":                 "gemini-3-pro",
+	"claude-4-5-haiku":             "claude-4-5-haiku",
+	"claude-4-5-opus":              "claude-4-5-opus",
+	"gpt-5-1-codex-low":            "gpt-5-1-codex-low",
+	"gpt-5-1-codex-medium":         "gpt-5-1-codex-medium",
+	"gpt-5-1-codex-high":           "gpt-5-1-codex-high",
+	"gpt-5-1-codex-max-low":        "gpt-5-1-codex-max-low",
+	"gpt-5-1-codex-max-medium":     "gpt-5-1-codex-max-medium",
+	"gpt-5-1-codex-max-high":       "gpt-5-1-codex-max-high",
+	"gpt-5-1-codex-max-xhigh":      "gpt-5-1-codex-max-xhigh",
+	"gpt-5-2-codex-low":            "gpt-5-2-codex-low",
 }

@@ -17,15 +17,17 @@ type PublicModelChoice struct {
 	Name string
 }
 
-var publicModelPattern = regexp.MustCompile(`value:"([^"]+)"[^}]*?label:"([^"]+)"[^}]*?supportsOrchids:!0`)
+var publicModelPattern = regexp.MustCompile(`value:"([^"]+)"[^}]*?label:"([^"]+)"[^}]*?supportsOrchids\s*:\s*(?:!0|true)`)
 
 var fallbackPublicModels = []PublicModelChoice{
 	{ID: "auto", Name: "Auto"},
 	{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"},
 	{ID: "claude-opus-4.6", Name: "Claude Opus 4.6"},
 	{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5"},
+	{ID: "gemini-3.1-pro", Name: "Gemini 3.1 Pro"},
 	{ID: "gemini-3-flash", Name: "Gemini 3 Flash"},
 	{ID: "gemini-3-pro", Name: "Gemini 3 Pro"},
+	{ID: "gpt-5.3-codex", Name: "GPT-5.3 Codex"},
 	{ID: "gpt-5.2-codex", Name: "GPT-5.2 Codex"},
 	{ID: "gpt-5.2", Name: "GPT-5.2"},
 	{ID: "grok-4.1-fast", Name: "Grok 4.1 Fast"},
@@ -57,10 +59,10 @@ func FetchPublicModelChoicesWithProxy(ctx context.Context, proxyFunc func(*http.
 	}
 	publicModelCache.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
+	htmlCtx, cancelHTML := context.WithTimeout(ctx, 12*time.Second)
+	defer cancelHTML()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", orchidsAppURL, nil)
+	req, err := http.NewRequestWithContext(htmlCtx, "GET", orchidsAppURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -84,17 +86,17 @@ func FetchPublicModelChoicesWithProxy(ctx context.Context, proxyFunc func(*http.
 		return fallbackPublicModels, fmt.Errorf("no script urls found")
 	}
 
+	scriptCtx, cancelScripts := context.WithTimeout(ctx, 25*time.Second)
+	defer cancelScripts()
+
 	seen := map[string]struct{}{}
 	out := make([]PublicModelChoice, 0, 16)
 	for _, src := range scriptURLs {
 		if !strings.Contains(src, "/_next/static/chunks/") {
 			continue
 		}
-		js, err := fetchText(ctx, src, proxyFunc)
+		js, err := fetchText(scriptCtx, src, proxyFunc)
 		if err != nil {
-			continue
-		}
-		if !strings.Contains(js, "supportsOrchids") {
 			continue
 		}
 		matches := publicModelPattern.FindAllStringSubmatch(js, -1)

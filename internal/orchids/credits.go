@@ -265,7 +265,7 @@ func discoverOrchidsActionID(ctx context.Context, proxyFunc func(*http.Request) 
 }
 
 func extractScriptURLs(html string) []string {
-	matches := regexp.MustCompile(`src=["']([^"']+\\.js[^"']*)["']`).FindAllStringSubmatch(html, -1)
+	matches := regexp.MustCompile(`src=["']([^"']+\.js[^"']*)["']`).FindAllStringSubmatch(html, -1)
 	if len(matches) == 0 {
 		return nil
 	}

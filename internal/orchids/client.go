@@ -502,6 +502,9 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 	if req.NoTools {
 		payloadTools = nil
 	}
+	if strings.TrimSpace(agentMode) == "" || strings.EqualFold(agentMode, "auto") {
+		agentMode = normalizeAIClientModel(req.Model)
+	}
 
 	payload := AgentRequest{
 		Prompt:        req.Prompt,

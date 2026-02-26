@@ -19,24 +19,29 @@ import (
 	"orchids-api/internal/util"
 )
 
-var orchidsAIClientModels = []string{
-	"claude-sonnet-4-5",
-	"claude-opus-4-6",
-	"claude-opus-4.6",
-	"claude-opus-4-5",
-	"claude-opus-4.5",
-	"claude-haiku-4-5",
-	"claude-opus-4-6-thinking",
-	"claude-opus-4.6-thinking",
-	"claude-sonnet-4-5-thinking",
-	"claude-opus-4-5-thinking",
-	"claude-sonnet-4-20250514",
-	"claude-3-7-sonnet-20250219",
-	"gemini-3-flash",
-	"gpt-5.2",
+var orchidsAIClientModelMap = map[string]string{
+	"claude-sonnet-4-5":           "claude-sonnet-4-6",
+	"claude-sonnet-4-6":           "claude-sonnet-4-6",
+	"claude-sonnet-4-5-thinking":  "claude-sonnet-4-5-thinking",
+	"claude-sonnet-4-6-thinking":  "claude-sonnet-4-6",
+	"claude-opus-4-6":             "claude-opus-4-6",
+	"claude-opus-4-5":             "claude-opus-4-6",
+	"claude-opus-4-5-thinking":    "claude-opus-4-5-thinking",
+	"claude-opus-4-6-thinking":    "claude-opus-4-6",
+	"claude-haiku-4-5":            "claude-haiku-4-5",
+	"claude-sonnet-4-20250514":    "claude-sonnet-4-20250514",
+	"claude-3-7-sonnet-20250219":  "claude-3-7-sonnet-20250219",
+	"gemini-3-flash":              "gemini-3-flash",
+	"gemini-3-pro":                "gemini-3-pro",
+	"gpt-5.3-codex":               "gpt-5.3-codex",
+	"gpt-5.2-codex":               "gpt-5.2-codex",
+	"gpt-5.2":                     "gpt-5.2",
+	"grok-4.1-fast":               "grok-4.1-fast",
+	"glm-5":                       "glm-5",
+	"kimi-k2.5":                   "kimi-k2.5",
 }
 
-const orchidsAIClientDefaultModel = "claude-sonnet-4-5"
+const orchidsAIClientDefaultModel = "claude-sonnet-4-6"
 
 // Orchids Event Types
 const (
@@ -876,41 +881,23 @@ func isSuggestionModeText(text string) bool {
 }
 
 func normalizeAIClientModel(model string) string {
-	mapped := strings.TrimSpace(model)
+	mapped := normalizeOrchidsModelKey(model)
 	if mapped == "" {
-		mapped = orchidsAIClientDefaultModel
-	}
-	switch mapped {
-	case "claude-haiku-4-5":
-		// Orchids 不支持 haiku，降级到 sonnet
-		mapped = "claude-sonnet-4-5"
-	case "claude-opus-4-6", "claude-opus-4.6":
-		// 兼容 4.6 的点号/横杠写法
-		mapped = "claude-opus-4-6"
-	case "claude-opus-4-6-thinking", "claude-opus-4.6-thinking":
-		mapped = "claude-opus-4-6-thinking"
-	case "claude-opus-4-5":
-		mapped = "claude-opus-4.5"
-	case "claude-sonnet-4-5-thinking":
-		// thinking 变体保持原名
-	case "claude-opus-4-5-thinking":
-		// thinking 变体保持原名
-	case "claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219":
-		// 旧版模型保持原名
-	}
-	if !containsString(orchidsAIClientModels, mapped) {
 		return orchidsAIClientDefaultModel
 	}
-	return mapped
+	if resolved, ok := orchidsAIClientModelMap[mapped]; ok {
+		return resolved
+	}
+	return orchidsAIClientDefaultModel
 }
 
-func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
+func normalizeOrchidsModelKey(model string) string {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(normalized, "claude-") {
+		normalized = strings.ReplaceAll(normalized, "4.6", "4-6")
+		normalized = strings.ReplaceAll(normalized, "4.5", "4-5")
 	}
-	return false
+	return normalized
 }
 
 func extractUserMessageAIClient(messages []prompt.Message) (string, []orchidsToolResult) {

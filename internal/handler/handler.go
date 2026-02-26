@@ -396,10 +396,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		isOrchidsAIClient = true
 	}
 
+	// 映射模型（用于上游请求与提示一致）
+	mappedModel := mapModel(req.Model)
+	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
+		mappedModel = req.Model
+	}
+
 	var aiClientHistory []map[string]string
 	var builtPrompt string
 	var promptMeta orchids.AIClientPromptMeta
-	builtPrompt, aiClientHistory, promptMeta = orchids.BuildAIClientPromptAndHistoryWithMeta(req.Messages, req.System, req.Model, noThinking, effectiveWorkdir, h.config.ContextMaxTokens)
+	builtPrompt, aiClientHistory, promptMeta = orchids.BuildAIClientPromptAndHistoryWithMeta(req.Messages, req.System, mappedModel, noThinking, effectiveWorkdir, h.config.ContextMaxTokens)
 	buildDuration := time.Since(startBuild)
 	slog.Debug("Prompt build completed", "duration", buildDuration)
 	if h.config.DebugEnabled {
@@ -408,11 +414,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		// Project context injection is deprecated (non-AIClient path removed).
 	}
 
-	// 映射模型
-	mappedModel := mapModel(req.Model)
-	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
-		mappedModel = req.Model
-	}
 	slog.Info("Model mapping", "original", req.Model, "mapped", mappedModel)
 
 	isStream := req.Stream
