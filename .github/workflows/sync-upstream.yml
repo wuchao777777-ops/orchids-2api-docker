@@ -1,0 +1,103 @@
+name: Sync Upstream And Build ARM64
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: "Build image even when no upstream changes"
+        required: false
+        default: "false"
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: sync-upstream-and-build
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      upstream_sha: ${{ steps.sync.outputs.upstream_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync files from upstream
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git clone --depth 1 https://github.com/zhangdailin/Orchids-2api.git /tmp/upstream
+          upstream_sha="$(git -C /tmp/upstream rev-parse --short HEAD)"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+
+          rsync -a --delete \
+            --exclude '.git/' \
+            --exclude '.github/workflows/' \
+            --exclude 'Dockerfile' \
+            --exclude 'docker-compose.yml' \
+            --exclude 'config.docker.json' \
+            --exclude '.dockerignore' \
+            /tmp/upstream/ ./
+
+          if git diff --quiet --ignore-submodules --; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No upstream changes."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "sync: zhangdailin/Orchids-2api@$upstream_sha"
+          git push
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_build == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push arm64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/arm64
+          build-args: |
+            TARGETOS=linux
+            TARGETARCH=arm64
+          no-cache: true
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/orchids-2api:latest
+            ghcr.io/${{ github.repository_owner }}/orchids-2api:arm64
