@@ -112,16 +112,75 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			if strings.EqualFold(acc.AccountType, "grok") {
 				continue
 			}
-			if strings.TrimSpace(acc.ClientCookie) == "" {
-				continue
-			}
 			proxyFunc := http.ProxyFromEnvironment
 			if cfg != nil {
 				proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
 			}
+			if strings.TrimSpace(acc.ClientCookie) == "" {
+				jwt := strings.TrimSpace(acc.Token)
+				if jwt == "" {
+					continue
+				}
+				if sid, sub := clerk.ParseSessionInfoFromJWT(jwt); sub != "" {
+					if acc.SessionID == "" && sid != "" {
+						acc.SessionID = sid
+					}
+					if acc.UserID == "" {
+						acc.UserID = sub
+					}
+				}
+				creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(context.Background(), jwt, acc.UserID, proxyFunc)
+				if creditsErr != nil {
+					slog.Warn("Orchids credits sync failed (token-only)", "account", acc.Name, "error", creditsErr)
+					continue
+				}
+				if creditsInfo != nil {
+					acc.Subscription = strings.ToLower(creditsInfo.Plan)
+					acc.UsageCurrent = creditsInfo.Credits
+					acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
+					slog.Debug("Orchids credits synced (token-only)", "account", acc.Name, "credits", acc.UsageCurrent, "limit", acc.UsageLimit, "plan", acc.Subscription)
+				}
+				if err := s.UpdateAccount(context.Background(), acc); err != nil {
+					slog.Warn("Auto refresh token: update account failed (token-only)", "account", acc.Name, "error", err)
+				}
+				continue
+			}
 			info, err := clerk.FetchAccountInfoWithSessionProxy(acc.ClientCookie, acc.SessionCookie, proxyFunc)
 			if err != nil {
 				errLower := strings.ToLower(err.Error())
+				if strings.Contains(errLower, "no active sessions") {
+					jwt := strings.TrimSpace(acc.Token)
+					if jwt == "" {
+						orchidsClient := orchids.NewFromAccount(acc, cfg)
+						if refreshed, jwtErr := orchidsClient.GetToken(); jwtErr == nil {
+							jwt = strings.TrimSpace(refreshed)
+						}
+					}
+					if jwt != "" {
+						acc.Token = jwt
+						if sid, sub := clerk.ParseSessionInfoFromJWT(jwt); sub != "" {
+							if acc.SessionID == "" && sid != "" {
+								acc.SessionID = sid
+							}
+							if acc.UserID == "" {
+								acc.UserID = sub
+							}
+						}
+						creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(context.Background(), jwt, acc.UserID, proxyFunc)
+						if creditsErr != nil {
+							slog.Warn("Orchids credits sync failed (fallback)", "account", acc.Name, "error", creditsErr)
+						} else if creditsInfo != nil {
+							acc.Subscription = strings.ToLower(creditsInfo.Plan)
+							acc.UsageCurrent = creditsInfo.Credits
+							acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
+							slog.Debug("Orchids credits synced (fallback)", "account", acc.Name, "credits", acc.UsageCurrent, "limit", acc.UsageLimit, "plan", acc.Subscription)
+						}
+						if err := s.UpdateAccount(context.Background(), acc); err != nil {
+							slog.Warn("Auto refresh token: update account failed (fallback)", "account", acc.Name, "error", err)
+						}
+						continue
+					}
+				}
 				switch {
 				case strings.Contains(errLower, "status code 401") || strings.Contains(errLower, "unauthorized"):
 					lb.MarkAccountStatus(context.Background(), acc, "401")

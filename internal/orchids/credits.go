@@ -12,11 +12,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"orchids-api/internal/clerk"
 )
 
 const (
 	orchidsAppURL          = "https://www.orchids.app/"
-	defaultOrchidsActionID = "7f876a6c1a4d682f106ecd67a0f77f2aa2d035257c"
+	defaultOrchidsActionID = "7fa6497f4f85c246c01099bca9dec5897c0a85f210"
 	orchidsUserAgent       = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
 
 	// Legacy fallback. Real value is fetched dynamically via an RSC GET.
@@ -263,7 +265,7 @@ func discoverOrchidsActionID(ctx context.Context, proxyFunc func(*http.Request) 
 }
 
 func extractScriptURLs(html string) []string {
-	matches := regexp.MustCompile(`src=\"([^\"]+\\.js[^\"]*)\"`).FindAllStringSubmatch(html, -1)
+	matches := regexp.MustCompile(`src=["']([^"']+\\.js[^"']*)["']`).FindAllStringSubmatch(html, -1)
 	if len(matches) == 0 {
 		return nil
 	}
@@ -323,6 +325,11 @@ func FetchCreditsWithProxy(ctx context.Context, sessionJWT string, userID string
 	userID = strings.TrimSpace(userID)
 	if sessionJWT == "" {
 		return nil, fmt.Errorf("empty session JWT")
+	}
+	if userID == "" {
+		if _, sub := clerk.ParseSessionInfoFromJWT(sessionJWT); sub != "" {
+			userID = sub
+		}
 	}
 	if userID == "" {
 		return nil, fmt.Errorf("empty user id")
@@ -386,12 +393,22 @@ func FetchCreditsWithProxy(ctx context.Context, sessionJWT string, userID string
 // parseRSCCredits parses the RSC text/x-component response to extract credits info.
 // RSC format has lines like: 0:{"credits":96571,"plan":"PRO",...}
 // or the JSON may be embedded in various RSC chunk formats.
+func isValidCreditsInfo(info CreditsInfo) bool {
+	if info.Credits < 0 {
+		return false
+	}
+	if info.Credits == 0 {
+		return strings.TrimSpace(info.Plan) != "" || strings.TrimSpace(info.LastFreeCreditsRedeem) != ""
+	}
+	return true
+}
+
 func parseRSCCredits(body string) (*CreditsInfo, error) {
 	// Strategy 1: Look for JSON objects containing "credits" field
 	matches := jsonObjectPattern.FindAllString(body, -1)
 	for _, match := range matches {
 		var info CreditsInfo
-		if err := json.Unmarshal([]byte(match), &info); err == nil && info.Credits > 0 {
+		if err := json.Unmarshal([]byte(match), &info); err == nil && isValidCreditsInfo(info) {
 			return &info, nil
 		}
 	}
@@ -409,14 +426,14 @@ func parseRSCCredits(body string) (*CreditsInfo, error) {
 			data := line[idx+1:]
 			// Try direct JSON parse
 			var info CreditsInfo
-			if err := json.Unmarshal([]byte(data), &info); err == nil && info.Credits > 0 {
+			if err := json.Unmarshal([]byte(data), &info); err == nil && isValidCreditsInfo(info) {
 				return &info, nil
 			}
 			// Try parsing as array element
 			var arr []json.RawMessage
 			if err := json.Unmarshal([]byte(data), &arr); err == nil {
 				for _, elem := range arr {
-					if err := json.Unmarshal(elem, &info); err == nil && info.Credits > 0 {
+					if err := json.Unmarshal(elem, &info); err == nil && isValidCreditsInfo(info) {
 						return &info, nil
 					}
 				}
@@ -437,7 +454,7 @@ func parseRSCCredits(body string) (*CreditsInfo, error) {
 							if depth == 0 {
 								candidate := line[i : j+1]
 								var info CreditsInfo
-								if err := json.Unmarshal([]byte(candidate), &info); err == nil && info.Credits > 0 {
+								if err := json.Unmarshal([]byte(candidate), &info); err == nil && isValidCreditsInfo(info) {
 									return &info, nil
 								}
 								break

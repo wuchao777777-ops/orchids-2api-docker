@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +16,50 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
+
+var modelVersionHyphenAlias = regexp.MustCompile(`-(\d{1,2})-(\d{1,2})`)
+var modelVersionDotAlias = regexp.MustCompile(`-(\d{1,2})\.(\d{1,2})`)
+
+func resolveModelAliasCandidates(modelID string) []string {
+	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	if modelID == "" {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	add := func(v string, out *[]string) {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		*out = append(*out, v)
+	}
+
+	out := make([]string, 0, 3)
+	add(modelID, &out)
+	add(modelVersionHyphenAlias.ReplaceAllString(modelID, "-$1.$2"), &out)
+	add(modelVersionDotAlias.ReplaceAllString(modelID, "-$1-$2"), &out)
+	return out
+}
+
+func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) string {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		return modelID
+	}
+	candidates := resolveModelAliasCandidates(modelID)
+	if len(candidates) == 0 {
+		return modelID
+	}
+	for _, cand := range candidates {
+		if m, err := h.loadBalancer.Store.GetModelByModelID(ctx, cand); err == nil && m != nil {
+			return cand
+		}
+	}
+	return modelID
+}
 
 // resolveWorkdir determines the working directory from headers, system prompt, or session.
 // 返回当前 workdir、上一轮 workdir、以及是否发生变更。

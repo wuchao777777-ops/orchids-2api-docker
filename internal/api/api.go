@@ -584,6 +584,40 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				if cfg != nil {
 					proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
 				}
+				if strings.TrimSpace(acc.ClientCookie) == "" {
+					jwt := strings.TrimSpace(acc.Token)
+					if jwt == "" {
+						http.Error(w, "Failed to refresh account: missing client cookie", http.StatusBadRequest)
+						return
+					}
+					if sid, sub := clerk.ParseSessionInfoFromJWT(jwt); sub != "" {
+						if acc.SessionID == "" && sid != "" {
+							acc.SessionID = sid
+						}
+						if acc.UserID == "" {
+							acc.UserID = sub
+						}
+					}
+					creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(r.Context(), jwt, acc.UserID, proxyFunc)
+					if creditsErr != nil {
+						http.Error(w, "Failed to refresh account: "+creditsErr.Error(), http.StatusBadRequest)
+						return
+					}
+					if creditsInfo != nil {
+						acc.Subscription = strings.ToLower(creditsInfo.Plan)
+						acc.UsageCurrent = creditsInfo.Credits
+						acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
+					}
+					acc.StatusCode = ""
+					acc.LastAttempt = time.Time{}
+					checkOK = true
+					if err := a.store.UpdateAccount(r.Context(), acc); err != nil {
+						http.Error(w, "Failed to save checked account: "+err.Error(), http.StatusInternalServerError)
+						return
+					}
+					json.NewEncoder(w).Encode(normalizeAccountOutput(acc))
+					return
+				}
 				info, err := clerk.FetchAccountInfoWithSessionProxy(acc.ClientCookie, acc.SessionCookie, proxyFunc)
 				if err != nil {
 					refreshErr := err
@@ -593,6 +627,24 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 						jwt, jwtErr := orchidsClient.GetToken()
 						if jwtErr == nil && strings.TrimSpace(jwt) != "" {
 							acc.Token = jwt
+							if sid, sub := clerk.ParseSessionInfoFromJWT(jwt); sub != "" {
+								if acc.SessionID == "" && sid != "" {
+									acc.SessionID = sid
+								}
+								if acc.UserID == "" {
+									acc.UserID = sub
+								}
+							}
+							if strings.TrimSpace(acc.UserID) != "" {
+								creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(r.Context(), jwt, acc.UserID, proxyFunc)
+								if creditsErr != nil {
+									slog.Warn("Orchids credits sync failed on fallback refresh", "account", acc.Name, "error", creditsErr)
+								} else if creditsInfo != nil {
+									acc.Subscription = strings.ToLower(creditsInfo.Plan)
+									acc.UsageCurrent = creditsInfo.Credits
+									acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
+								}
+							}
 							refreshErr = nil
 							slog.Warn("Orchids refresh: no active sessions, fallback token refresh succeeded", "account_id", id)
 						} else if jwtErr != nil {

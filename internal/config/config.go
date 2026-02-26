@@ -216,6 +216,7 @@ func ApplyHardcoded(cfg *Config) {
 	vTrue := true
 	cfg.Stream = &vTrue
 	cfg.ImageNSFW = &vTrue
+	cfg.PublicEnabled = &vTrue
 	cfg.ImageFinalMinBytes = 100000
 	cfg.ImageMediumMinBytes = 30000
 	cfg.MaxRetries = 3
