@@ -172,6 +172,8 @@ func (s *Store) seedModels() error {
 		{ID: "85", Channel: "Warp", ModelID: "gpt-5-1-codex-high", Name: "GPT-5.1 Codex High (Warp)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 20},
 		{ID: "86", Channel: "Warp", ModelID: "gpt-5-1-codex-max-low", Name: "GPT-5.1 Codex Max Low (Warp)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 21},
 		{ID: "70", Channel: "Warp", ModelID: "warp-basic", Name: "Warp Basic", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 22},
+		{ID: "87", Channel: "Warp", ModelID: "claude-4-6-sonnet-high", Name: "Claude 4.6 Sonnet High (Warp)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 23},
+		{ID: "88", Channel: "Warp", ModelID: "claude-4-6-sonnet-max", Name: "Claude 4.6 Sonnet Max (Warp)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 24},
 		// Grok 模型
 		{ID: "90", Channel: "Grok", ModelID: "grok-3", Name: "Grok 3", Status: ModelStatusAvailable, IsDefault: true, SortOrder: 0},
 		{ID: "91", Channel: "Grok", ModelID: "grok-3-mini", Name: "Grok 3 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 1},

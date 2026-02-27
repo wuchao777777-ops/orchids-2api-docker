@@ -47,6 +47,7 @@ type Config struct {
 	BaseURL        string
 	Mode           Mode
 	Channel        Channel
+	Model          string
 	Duration       time.Duration
 	Concurrency    int
 	TargetRPM      float64
@@ -100,6 +101,7 @@ func DefaultConfig() Config {
 	return Config{
 		Mode:           ModeExternal,
 		Channel:        ChannelBoth,
+		Model:          "claude-sonnet-4-6",
 		Duration:       60 * time.Second,
 		Concurrency:    20,
 		TargetRPM:      600, // ~10 RPS
@@ -118,6 +120,7 @@ type runner struct {
 	rng   *rand.Rand
 	res   *Result
 	latMu sync.Mutex
+	nonce uint64
 }
 
 func Run(ctx context.Context, cfg Config) (*Result, error) {
@@ -138,6 +141,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 120 * time.Second
+	}
+	if strings.TrimSpace(cfg.Model) == "" {
+		cfg.Model = "claude-sonnet-4-6"
 	}
 	if cfg.LargeBytes <= 0 {
 		cfg.LargeBytes = 64 * 1024
@@ -328,7 +334,10 @@ func (r *runner) randFloat() float64 {
 }
 
 func (r *runner) buildRequest(sc Scenario, stream bool) []byte {
-	model := "claude-3-5-sonnet"
+	model := strings.TrimSpace(r.cfg.Model)
+	if model == "" {
+		model = "claude-sonnet-4-6"
+	}
 	convID := ""
 	messages := make([]map[string]any, 0, 32)
 
@@ -361,6 +370,9 @@ func (r *runner) buildRequest(sc Scenario, stream bool) []byte {
 		messages = append(messages, mkMsg("user", "hi"))
 	}
 
+	nonce := r.nextNonce()
+	messages = addNonceToLastUser(messages, nonce)
+
 	payload := map[string]any{
 		"model":           model,
 		"messages":        messages,
@@ -370,6 +382,35 @@ func (r *runner) buildRequest(sc Scenario, stream bool) []byte {
 	}
 	b, _ := json.Marshal(payload)
 	return b
+}
+
+func (r *runner) nextNonce() string {
+	n := atomic.AddUint64(&r.nonce, 1)
+	return fmt.Sprintf("lt_nonce:%d", n)
+}
+
+func addNonceToLastUser(messages []map[string]any, nonce string) []map[string]any {
+	nonce = strings.TrimSpace(nonce)
+	if nonce == "" {
+		return messages
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		role, _ := messages[i]["role"].(string)
+		if !strings.EqualFold(role, "user") {
+			continue
+		}
+		if content, ok := messages[i]["content"].(string); ok {
+			if strings.TrimSpace(content) == "" {
+				messages[i]["content"] = nonce
+			} else {
+				messages[i]["content"] = content + "\n\n" + nonce
+			}
+			return messages
+		}
+		messages[i]["content"] = fmt.Sprintf("%v\n\n%s", messages[i]["content"], nonce)
+		return messages
+	}
+	return append(messages, map[string]any{"role": "user", "content": nonce})
 }
 
 func (r *runner) randID() string {

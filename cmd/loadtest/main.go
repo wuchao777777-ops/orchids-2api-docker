@@ -18,6 +18,7 @@ func main() {
 	baseURL := flag.String("base", "", "Base URL (default: auto-detect via ORCHIDS_BASE_URL/config.json)")
 	mode := flag.String("mode", string(loadtest.ModeExternal), "Mode: external|self (self not yet implemented)")
 	channel := flag.String("channel", string(loadtest.ChannelBoth), "Channel: orchids|warp|both")
+	model := flag.String("model", cfg.Model, "Model ID")
 	dur := flag.Duration("duration", cfg.Duration, "Run duration")
 	conc := flag.Int("c", cfg.Concurrency, "Concurrency")
 	rpm := flag.Float64("rpm", cfg.TargetRPM, "Target RPM")
@@ -30,6 +31,7 @@ func main() {
 
 	cfg.Mode = loadtest.Mode(strings.ToLower(strings.TrimSpace(*mode)))
 	cfg.Channel = loadtest.Channel(strings.ToLower(strings.TrimSpace(*channel)))
+	cfg.Model = strings.TrimSpace(*model)
 	cfg.Duration = *dur
 	cfg.Concurrency = *conc
 	cfg.TargetRPM = *rpm

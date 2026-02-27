@@ -155,6 +155,12 @@ func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forced
 	if modelID == "" {
 		return nil
 	}
+	modelID = h.resolveModelAlias(ctx, modelID)
+	if strings.EqualFold(forcedChannel, "warp") {
+		if mapped := warp.ResolveModelAlias(modelID); mapped != "" {
+			modelID = mapped
+		}
+	}
 	m, err := h.loadBalancer.Store.GetModelByModelID(ctx, modelID)
 	if err != nil || m == nil {
 		return fmt.Errorf("model not found")

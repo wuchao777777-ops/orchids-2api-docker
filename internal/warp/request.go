@@ -979,6 +979,19 @@ func normalizeModel(model string) string {
 	return defaultModel
 }
 
+// ResolveModelAlias maps a user-facing model ID to a Warp upstream model ID.
+// Returns empty string if no known mapping exists.
+func ResolveModelAlias(model string) string {
+	normalized := normalizeWarpModelKey(model)
+	if normalized == "" {
+		return ""
+	}
+	if mapped, ok := warpModelMap[normalized]; ok {
+		return mapped
+	}
+	return ""
+}
+
 func normalizeWarpModelKey(model string) string {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	if normalized == "" {
@@ -998,24 +1011,28 @@ func normalizeWarpModelKey(model string) string {
 }
 
 var warpModelMap = map[string]string{
-	"claude-4-sonnet":              "claude-4-sonnet",
-	"claude-4-5-sonnet":            "claude-4-5-sonnet",
-	"claude-4-5-sonnet-thinking":   "claude-4-5-sonnet-thinking",
-	"claude-4-6-opus-high":         "claude-4-6-opus-high",
-	"claude-4-6-opus-max":          "claude-4-6-opus-max",
-	"claude-4-6-sonnet-high":       "claude-4-6-sonnet-high",
-	"claude-4-6-sonnet-max":        "claude-4-6-sonnet-max",
-	"claude-4-5-opus-thinking":     "claude-4-5-opus-thinking",
-	"gemini-2-5-pro":               "gemini-2-5-pro",
-	"gemini-3-pro":                 "gemini-3-pro",
-	"claude-4-5-haiku":             "claude-4-5-haiku",
-	"claude-4-5-opus":              "claude-4-5-opus",
-	"gpt-5-1-codex-low":            "gpt-5-1-codex-low",
-	"gpt-5-1-codex-medium":         "gpt-5-1-codex-medium",
-	"gpt-5-1-codex-high":           "gpt-5-1-codex-high",
-	"gpt-5-1-codex-max-low":        "gpt-5-1-codex-max-low",
-	"gpt-5-1-codex-max-medium":     "gpt-5-1-codex-max-medium",
-	"gpt-5-1-codex-max-high":       "gpt-5-1-codex-max-high",
-	"gpt-5-1-codex-max-xhigh":      "gpt-5-1-codex-max-xhigh",
-	"gpt-5-2-codex-low":            "gpt-5-2-codex-low",
+	"claude-4-sonnet":            "claude-4-sonnet",
+	"claude-4-5-sonnet":          "claude-4-5-sonnet",
+	"claude-4-5-sonnet-thinking": "claude-4-5-sonnet-thinking",
+	"claude-4-6-sonnet":          "claude-4-6-sonnet-high",
+	"claude-sonnet-4-6":          "claude-4-6-sonnet-high",
+	"claude-4-6-opus-high":       "claude-4-6-opus-high",
+	"claude-4-6-opus-max":        "claude-4-6-opus-max",
+	"claude-4-6-sonnet-high":     "claude-4-6-sonnet-high",
+	"claude-4-6-sonnet-max":      "claude-4-6-sonnet-max",
+	"claude-4-6-opus":            "claude-4-6-opus-high",
+	"claude-opus-4-6":            "claude-4-6-opus-high",
+	"claude-4-5-opus-thinking":   "claude-4-5-opus-thinking",
+	"gemini-2-5-pro":             "gemini-2-5-pro",
+	"gemini-3-pro":               "gemini-3-pro",
+	"claude-4-5-haiku":           "claude-4-5-haiku",
+	"claude-4-5-opus":            "claude-4-5-opus",
+	"gpt-5-1-codex-low":          "gpt-5-1-codex-low",
+	"gpt-5-1-codex-medium":       "gpt-5-1-codex-medium",
+	"gpt-5-1-codex-high":         "gpt-5-1-codex-high",
+	"gpt-5-1-codex-max-low":      "gpt-5-1-codex-max-low",
+	"gpt-5-1-codex-max-medium":   "gpt-5-1-codex-max-medium",
+	"gpt-5-1-codex-max-high":     "gpt-5-1-codex-max-high",
+	"gpt-5-1-codex-max-xhigh":    "gpt-5-1-codex-max-xhigh",
+	"gpt-5-2-codex-low":          "gpt-5-2-codex-low",
 }
