@@ -451,6 +451,24 @@ func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
 	return jwt, nil
 }
 
+// EnsureLogin validates that the session can successfully log in.
+// It refreshes the JWT if needed and then performs the login call.
+func (c *Client) EnsureLogin(ctx context.Context) error {
+	if c.session == nil {
+		return fmt.Errorf("warp session not initialized")
+	}
+	cid := clientID
+	if c.account != nil && c.account.SessionID != "" {
+		cid = c.account.SessionID
+	} else if c.account != nil {
+		cid = fmt.Sprintf("warp-%d", c.account.ID)
+	}
+	if err := c.session.ensureToken(ctx, c.httpClient, cid); err != nil {
+		return err
+	}
+	return c.session.ensureLogin(ctx, c.httpClient, cid)
+}
+
 // SyncAccountState 同步内存会话中的 JWT 和 refresh_token 到账号信息，返回是否有变更。
 func (c *Client) SyncAccountState() bool {
 	if c == nil || c.session == nil || c.account == nil {

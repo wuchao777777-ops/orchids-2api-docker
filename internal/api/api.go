@@ -513,6 +513,25 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				acc.Token = jwt
 				warpClient.SyncAccountState()
 
+				loginCtx, loginCancel := context.WithTimeout(r.Context(), 15*time.Second)
+				loginErr := warpClient.EnsureLogin(loginCtx)
+				loginCancel()
+				if loginErr != nil {
+					status := http.StatusBadRequest
+					if code := warp.HTTPStatusCode(loginErr); code >= 400 {
+						status = code
+					}
+					if status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusTooManyRequests {
+						acc.StatusCode = strconv.Itoa(status)
+						acc.LastAttempt = time.Now()
+						if updateErr := a.store.UpdateAccount(r.Context(), acc); updateErr != nil {
+							slog.Warn("Failed to persist warp login status", "account_id", acc.ID, "error", updateErr)
+						}
+					}
+					http.Error(w, "Failed to login warp account: "+loginErr.Error(), status)
+					return
+				}
+
 				limitCtx, limitCancel := context.WithTimeout(r.Context(), 15*time.Second)
 				limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
 				limitCancel()

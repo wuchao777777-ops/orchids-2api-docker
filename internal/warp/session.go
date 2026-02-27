@@ -430,7 +430,7 @@ func (s *session) doLogin(ctx context.Context, httpClient *http.Client, cid, jwt
 
 	if resp.StatusCode != http.StatusNoContent {
 		slog.Warn("Warp AI: Login failed", "cid", cid, "status", resp.StatusCode, "body", string(body))
-		return fmt.Errorf("warp login failed: HTTP %d", resp.StatusCode)
+		return &HTTPStatusError{Operation: "login", StatusCode: resp.StatusCode}
 	}
 
 	s.mu.Lock()
