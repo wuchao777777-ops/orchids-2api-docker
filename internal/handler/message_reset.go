@@ -55,7 +55,7 @@ func buildWorkdirChangeSummary(messages []prompt.Message) string {
 
 	var parts []string
 	for _, msg := range messages {
-		text := extractMessageText(msg)
+		text := msg.ExtractText()
 		if text == "" {
 			continue
 		}
@@ -78,15 +78,4 @@ func buildWorkdirChangeSummary(messages []prompt.Message) string {
 	return strings.Join(parts, "\n")
 }
 
-// extractMessageText 从消息中提取纯文本内容。
-func extractMessageText(msg prompt.Message) string {
-	if msg.Content.Text != "" {
-		return strings.TrimSpace(msg.Content.Text)
-	}
-	for _, block := range msg.Content.Blocks {
-		if block.Type == "text" && block.Text != "" {
-			return strings.TrimSpace(block.Text)
-		}
-	}
-	return ""
-}
+

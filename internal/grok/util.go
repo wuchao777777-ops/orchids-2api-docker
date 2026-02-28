@@ -5,9 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/url"
@@ -217,7 +217,7 @@ func extractToolUsageCardText(raw string) string {
 
 	var payload map[string]interface{}
 	if strings.TrimSpace(argsRaw) != "" {
-		_ = json.Unmarshal([]byte(argsRaw), &payload)
+		json.Unmarshal([]byte(argsRaw), &payload)
 	}
 	read := func(keys ...string) string {
 		for _, key := range keys {

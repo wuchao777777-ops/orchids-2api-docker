@@ -7,19 +7,23 @@ import (
 	"time"
 )
 
-// RateLimiter implements a sliding-window rate limiter keyed by IP.
+// RateLimiter implements a scalable token-bucket rate limiter keyed by IP.
 type RateLimiter struct {
-	mu          sync.Mutex
-	attempts    map[string][]time.Time
+	entries     sync.Map
 	maxAttempts int
 	window      time.Duration
+}
+
+type limiterEntry struct {
+	mu        sync.Mutex
+	tokens    float64
+	lastVisit time.Time
 }
 
 // NewRateLimiter creates a rate limiter that allows maxAttempts within the
 // given window duration per IP address.
 func NewRateLimiter(maxAttempts int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
-		attempts:    make(map[string][]time.Time),
 		maxAttempts: maxAttempts,
 		window:      window,
 	}
@@ -28,36 +32,46 @@ func NewRateLimiter(maxAttempts int, window time.Duration) *RateLimiter {
 }
 
 // Allow reports whether the given IP is allowed to make another attempt.
-// It records the current time as an attempt regardless of the result.
 func (rl *RateLimiter) Allow(ip string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+	val, ok := rl.entries.Load(ip)
+	if !ok {
+		// New IP
+		entry := &limiterEntry{
+			tokens:    float64(rl.maxAttempts - 1), // Consume 1 token
+			lastVisit: time.Now(),
+		}
+		rl.entries.Store(ip, entry)
+		return true
+	}
+
+	entry := val.(*limiterEntry)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 
 	now := time.Now()
-	cutoff := now.Add(-rl.window)
+	elapsed := now.Sub(entry.lastVisit)
 
-	// Prune expired entries for this IP.
-	entries := rl.attempts[ip]
-	valid := entries[:0]
-	for _, t := range entries {
-		if t.After(cutoff) {
-			valid = append(valid, t)
-		}
+	// Replenish tokens based on elapsed time
+	ratePerSec := float64(rl.maxAttempts) / rl.window.Seconds()
+	entry.tokens += elapsed.Seconds() * ratePerSec
+	if entry.tokens > float64(rl.maxAttempts) {
+		entry.tokens = float64(rl.maxAttempts)
 	}
 
-	if len(valid) >= rl.maxAttempts {
-		rl.attempts[ip] = valid
-		return false
+	entry.lastVisit = now
+
+	if entry.tokens >= 1 {
+		entry.tokens--
+		return true
 	}
 
-	rl.attempts[ip] = append(valid, now)
-	return true
+	return false
 }
 
 // cleanupLoop periodically removes expired entries to prevent unbounded
 // memory growth.
 func (rl *RateLimiter) cleanupLoop() {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(5 * time.Minute) // Less frequent cleanup needed
 	defer ticker.Stop()
 	for range ticker.C {
 		rl.cleanup()
@@ -65,23 +79,21 @@ func (rl *RateLimiter) cleanupLoop() {
 }
 
 func (rl *RateLimiter) cleanup() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+	now := time.Now()
+	// TTL is twice the window size to ensure we don't prematurely delete active entries
+	ttl := rl.window * 2
 
-	cutoff := time.Now().Add(-rl.window)
-	for ip, entries := range rl.attempts {
-		valid := entries[:0]
-		for _, t := range entries {
-			if t.After(cutoff) {
-				valid = append(valid, t)
-			}
+	rl.entries.Range(func(key, value interface{}) bool {
+		entry := value.(*limiterEntry)
+		entry.mu.Lock()
+		lastVisit := entry.lastVisit
+		entry.mu.Unlock()
+
+		if now.Sub(lastVisit) > ttl {
+			rl.entries.Delete(key)
 		}
-		if len(valid) == 0 {
-			delete(rl.attempts, ip)
-		} else {
-			rl.attempts[ip] = valid
-		}
-	}
+		return true
+	})
 }
 
 // ExtractIP returns the client IP from the request, checking

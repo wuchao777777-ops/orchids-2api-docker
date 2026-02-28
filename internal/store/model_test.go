@@ -1,7 +1,7 @@
 package store
 
 import (
-	"encoding/json"
+	"github.com/goccy/go-json"
 	"testing"
 )
 
@@ -9,10 +9,10 @@ func TestModelStatus_UnmarshalJSON(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		input    string
-		want     ModelStatus
-		enabled  bool
+		name    string
+		input   string
+		want    ModelStatus
+		enabled bool
 	}{
 		{name: "bool true", input: `true`, want: ModelStatusAvailable, enabled: true},
 		{name: "bool false", input: `false`, want: ModelStatusOffline, enabled: false},
@@ -52,4 +52,3 @@ func TestModelStatus_MarshalJSON(t *testing.T) {
 		t.Fatalf("got %s want %s", string(b), `"available"`)
 	}
 }
-

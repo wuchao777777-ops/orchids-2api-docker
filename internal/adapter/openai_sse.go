@@ -1,6 +1,6 @@
 package adapter
 
-import "encoding/json"
+import "github.com/goccy/go-json"
 
 // BuildOpenAIChunk 将 Anthropic SSE 事件转换为 OpenAI chunk。
 func BuildOpenAIChunk(msgID string, created int64, event string, data []byte) ([]byte, bool) {

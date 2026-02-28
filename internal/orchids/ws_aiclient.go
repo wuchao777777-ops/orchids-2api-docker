@@ -2,9 +2,9 @@ package orchids
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -20,25 +20,25 @@ import (
 )
 
 var orchidsAIClientModelMap = map[string]string{
-	"claude-sonnet-4-5":           "claude-sonnet-4-6",
-	"claude-sonnet-4-6":           "claude-sonnet-4-6",
-	"claude-sonnet-4-5-thinking":  "claude-sonnet-4-5-thinking",
-	"claude-sonnet-4-6-thinking":  "claude-sonnet-4-6",
-	"claude-opus-4-6":             "claude-opus-4-6",
-	"claude-opus-4-5":             "claude-opus-4-6",
-	"claude-opus-4-5-thinking":    "claude-opus-4-5-thinking",
-	"claude-opus-4-6-thinking":    "claude-opus-4-6",
-	"claude-haiku-4-5":            "claude-haiku-4-5",
-	"claude-sonnet-4-20250514":    "claude-sonnet-4-20250514",
-	"claude-3-7-sonnet-20250219":  "claude-3-7-sonnet-20250219",
-	"gemini-3-flash":              "gemini-3-flash",
-	"gemini-3-pro":                "gemini-3-pro",
-	"gpt-5.3-codex":               "gpt-5.3-codex",
-	"gpt-5.2-codex":               "gpt-5.2-codex",
-	"gpt-5.2":                     "gpt-5.2",
-	"grok-4.1-fast":               "grok-4.1-fast",
-	"glm-5":                       "glm-5",
-	"kimi-k2.5":                   "kimi-k2.5",
+	"claude-sonnet-4-5":          "claude-sonnet-4-6",
+	"claude-sonnet-4-6":          "claude-sonnet-4-6",
+	"claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
+	"claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
+	"claude-opus-4-6":            "claude-opus-4-6",
+	"claude-opus-4-5":            "claude-opus-4-6",
+	"claude-opus-4-5-thinking":   "claude-opus-4-5-thinking",
+	"claude-opus-4-6-thinking":   "claude-opus-4-6",
+	"claude-haiku-4-5":           "claude-haiku-4-5",
+	"claude-sonnet-4-20250514":   "claude-sonnet-4-20250514",
+	"claude-3-7-sonnet-20250219": "claude-3-7-sonnet-20250219",
+	"gemini-3-flash":             "gemini-3-flash",
+	"gemini-3-pro":               "gemini-3-pro",
+	"gpt-5.3-codex":              "gpt-5.3-codex",
+	"gpt-5.2-codex":              "gpt-5.2-codex",
+	"gpt-5.2":                    "gpt-5.2",
+	"grok-4.1-fast":              "grok-4.1-fast",
+	"glm-5":                      "glm-5",
+	"kimi-k2.5":                  "kimi-k2.5",
 }
 
 const orchidsAIClientDefaultModel = "claude-sonnet-4-6"
@@ -961,8 +961,7 @@ func extractMessageTextAIClient(content prompt.MessageContent) (string, []orchid
 	return strings.TrimSpace(strings.Join(parts, "\n")), toolResults
 }
 
-// maxHistoryContentLen 单条 chatHistory 消息的最大字符数，防止上游超时或截断
-const maxHistoryContentLen = 8000
+
 
 func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string, []orchidsToolResult) {
 	var history []map[string]string

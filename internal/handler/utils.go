@@ -145,22 +145,11 @@ func headerValue(r *http.Request, keys ...string) string {
 func extractUserText(messages []prompt.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
-		if msg.Role != "user" {
-			continue
-		}
-		if msg.Content.IsString() {
-			return strings.TrimSpace(msg.Content.GetText())
-		}
-		var parts []string
-		for _, block := range msg.Content.GetBlocks() {
-			if block.Type == "text" {
-				text := strings.TrimSpace(block.Text)
-				if text != "" {
-					parts = append(parts, text)
-				}
+		if msg.Role == "user" {
+			if text := msg.ExtractText(); text != "" {
+				return text
 			}
 		}
-		return strings.TrimSpace(strings.Join(parts, "\n"))
 	}
 	return ""
 }
@@ -198,19 +187,13 @@ func lastUserIsToolResultOnly(messages []prompt.Message) bool {
 func isSuggestionMode(messages []prompt.Message) bool {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
-		if msg.Role != "user" {
-			continue
-		}
-		if msg.Content.IsString() {
-			return containsSuggestionMode(msg.Content.GetText())
-		}
-		for _, block := range msg.Content.GetBlocks() {
-			if block.Type == "text" {
-				return containsSuggestionMode(block.Text)
+		if msg.Role == "user" {
+			text := msg.ExtractText()
+			if text != "" {
+				return containsSuggestionMode(text)
 			}
+			return false
 		}
-		// 最近一条 user 消息没有文本内容，避免回溯旧的 suggestion prompt 误判
-		return false
 	}
 	return false
 }
@@ -277,26 +260,9 @@ func extractUserTexts(messages []prompt.Message) []string {
 		if strings.ToLower(strings.TrimSpace(msg.Role)) != "user" {
 			continue
 		}
-		if msg.Content.IsString() {
-			text := strings.TrimSpace(stripSystemRemindersForMode(msg.Content.GetText()))
-			if text != "" {
-				texts = append(texts, text)
-			}
-			continue
-		}
-		var parts []string
-		for _, block := range msg.Content.GetBlocks() {
-			if strings.ToLower(strings.TrimSpace(block.Type)) != "text" {
-				continue
-			}
-			text := strings.TrimSpace(stripSystemRemindersForMode(block.Text))
-			if text != "" {
-				parts = append(parts, text)
-			}
-		}
-		merged := strings.TrimSpace(strings.Join(parts, "\n"))
-		if merged != "" {
-			texts = append(texts, merged)
+		text := strings.TrimSpace(stripSystemRemindersForMode(msg.ExtractText()))
+		if text != "" {
+			texts = append(texts, text)
 		}
 	}
 	return texts

@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"io"
 	"math/rand"
 	"net/http"
@@ -895,16 +895,6 @@ func getProxyField(cfg *config.Config, kind string) string {
 	}
 }
 
-func resolveFallbackProxy(cfg *config.Config) *url.URL {
-	if cfg == nil {
-		return nil
-	}
-	proxyAddr := strings.TrimSpace(cfg.ProxyHTTPS)
-	if proxyAddr == "" {
-		proxyAddr = strings.TrimSpace(cfg.ProxyHTTP)
-	}
-	return resolveGrokProxy(cfg, proxyAddr)
-}
 
 func resolveGrokProxy(cfg *config.Config, proxyAddr string) *url.URL {
 	proxyAddr = strings.TrimSpace(proxyAddr)
@@ -922,26 +912,19 @@ func resolveGrokProxy(cfg *config.Config, proxyAddr string) *url.URL {
 }
 
 func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.MaxIdleConns = 100
-	transport.MaxIdleConnsPerHost = 20
-	transport.IdleConnTimeout = 90 * time.Second
-	if proxyFunc != nil {
-		transport.Proxy = proxyFunc
-	}
 	if cfg != nil && cfg.GrokUseUTLS {
-		transport = nil
+		return &http.Client{
+			Timeout:   timeout,
+			Transport: newUTLSTransport(proxyFunc),
+		}
 	}
-	var rt http.RoundTripper
-	if cfg != nil && cfg.GrokUseUTLS {
-		rt = newUTLSTransport(proxyFunc)
-	} else {
-		rt = transport
+
+	proxyKey := "direct"
+	if cfg != nil {
+		proxyKey = util.GenerateProxyKey(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser)
 	}
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: rt,
-	}
+
+	return util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc)
 }
 
 func parseRetryAfter(raw string) time.Duration {

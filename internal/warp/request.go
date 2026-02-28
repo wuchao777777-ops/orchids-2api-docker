@@ -2,8 +2,8 @@ package warp
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"html"
 	"strings"
 	"time"

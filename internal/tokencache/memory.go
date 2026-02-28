@@ -19,13 +19,13 @@ type Cache interface {
 }
 
 type MemoryCache struct {
-	mu           sync.RWMutex
-	ttl          time.Duration
-	maxEntries   int
-	items        map[string]cacheItem
-	sizeBytes    int64
-	done         chan struct{}
-	accessCount  atomic.Uint64
+	mu          sync.RWMutex
+	ttl         time.Duration
+	maxEntries  int
+	items       map[string]cacheItem
+	sizeBytes   int64
+	done        chan struct{}
+	accessCount atomic.Uint64
 }
 
 type cacheItem struct {
@@ -34,7 +34,6 @@ type cacheItem struct {
 	accessedAt time.Time
 	size       int64
 }
-
 
 func NewMemoryCache(ttl time.Duration, maxEntries ...int) *MemoryCache {
 	if ttl < 0 {
@@ -164,7 +163,6 @@ func (c *MemoryCache) evictLRULocked() {
 		delete(c.items, lruKey)
 	}
 }
-
 
 func (c *MemoryCache) GetStats(ctx context.Context) (int64, int64, error) {
 	if c == nil {

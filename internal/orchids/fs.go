@@ -3,9 +3,9 @@ package orchids
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/goccy/go-json"
 	"io"
 	"log"
 	"log/slog"

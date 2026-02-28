@@ -1,7 +1,7 @@
 package grok
 
 import (
-	"encoding/json"
+	"github.com/goccy/go-json"
 	"net/url"
 	"regexp"
 	"sort"

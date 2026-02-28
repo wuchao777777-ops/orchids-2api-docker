@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"hash/fnv"
 	"log/slog"
 	"net/http"
@@ -380,7 +380,7 @@ func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Messag
 		if strings.ToLower(strings.TrimSpace(msg.Role)) != "user" {
 			continue
 		}
-		if strings.TrimSpace(messagePlainText(msg.Content)) != "" {
+		if strings.TrimSpace(msg.ExtractText()) != "" {
 			lastUserTextIdx = i
 		}
 	}
@@ -414,26 +414,7 @@ func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Messag
 	}
 }
 
-func messagePlainText(content prompt.MessageContent) string {
-	if content.IsString() {
-		return content.GetText()
-	}
-	blocks := content.GetBlocks()
-	if len(blocks) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	for _, block := range blocks {
-		if block.Type != "text" || block.Text == "" {
-			continue
-		}
-		if sb.Len() > 0 {
-			sb.WriteByte('\n')
-		}
-		sb.WriteString(block.Text)
-	}
-	return sb.String()
-}
+
 
 func stringifyToolInput(input interface{}) string {
 	switch v := input.(type) {

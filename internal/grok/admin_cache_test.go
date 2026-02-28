@@ -2,8 +2,8 @@ package grok
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
 	"os"

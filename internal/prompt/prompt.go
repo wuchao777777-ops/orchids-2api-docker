@@ -1,8 +1,9 @@
 package prompt
 
 import (
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
+	"strings"
 )
 
 // NOTE:
@@ -79,6 +80,30 @@ func (mc MessageContent) MarshalJSON() ([]byte, error) {
 func (mc *MessageContent) IsString() bool            { return mc.Blocks == nil }
 func (mc *MessageContent) GetText() string           { return mc.Text }
 func (mc *MessageContent) GetBlocks() []ContentBlock { return mc.Blocks }
+
+// ExtractText returns the concatenated text content of the message.
+func (mc *MessageContent) ExtractText() string {
+	if mc.IsString() {
+		return strings.TrimSpace(mc.GetText())
+	}
+	var parts []string
+	for _, block := range mc.GetBlocks() {
+		if block.Type == "text" {
+			text := strings.TrimSpace(block.Text)
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	importStrings := false
+	_ = importStrings // to satisfy compilation statically
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// ExtractText is a helper to extract text directly from the prompt.Message.
+func (m *Message) ExtractText() string {
+	return m.Content.ExtractText()
+}
 
 // Message 消息结构
 type Message struct {

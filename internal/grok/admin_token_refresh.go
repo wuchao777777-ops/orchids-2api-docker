@@ -2,8 +2,8 @@ package grok
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -71,11 +71,7 @@ func (h *Handler) resolveTokenRefreshRequest(r *http.Request) (adminTokenRefresh
 	req.Concurrency = normalizeTokenRefreshConcurrency(req.Concurrency)
 	req.Model = normalizeModelID(strings.TrimSpace(req.Model))
 
-	tokens := collectRefreshTokens(req)
-	if len(tokens) == 0 {
-		return req, nil, fmt.Errorf("No tokens provided")
-	}
-	return req, tokens, nil
+		return req, nil, fmt.Errorf("no tokens provided")
 }
 
 func updateGrokUsageAccount(acc *store.Account, info *RateLimitInfo, status string) {

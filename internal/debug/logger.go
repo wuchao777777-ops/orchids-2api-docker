@@ -3,8 +3,8 @@ package debug
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"os"
 	"path/filepath"
 	"sync"

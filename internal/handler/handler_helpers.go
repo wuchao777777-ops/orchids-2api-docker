@@ -207,9 +207,9 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient, s
 		if warpClient, ok := client.(*warp.Client); ok {
 			changed = warpClient.SyncAccountState()
 		}
-	} else if orchidsClient, ok := client.(*orchids.Client); ok {
+	} else if _, ok := client.(*orchids.Client); ok {
 		// Orchids 账号：通过快照比较检测 forceRefreshToken 是否更新了账号信息
-		changed = orchidsClient.SyncAccountState(snapshot)
+		changed = account.SyncState(snapshot)
 	}
 
 	if changed {
@@ -221,11 +221,7 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient, s
 	}
 }
 
-// cleanupSessionWorkdirs delegates to the SessionStore's cleanup.
-// For Redis this is a no-op (EXPIRE handles it); for memory it removes stale entries.
-func (h *Handler) cleanupSessionWorkdirs() {
-	h.sessionStore.Cleanup(context.Background())
-}
+
 
 // upstreamErrorClass is a local alias for the centralized type.
 type upstreamErrorClass = apperrors.UpstreamErrorClass

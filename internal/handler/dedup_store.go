@@ -2,7 +2,7 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/goccy/go-json"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -20,9 +20,9 @@ type DedupStore interface {
 
 // RedisDedupStore uses Lua scripts for atomic dedup checks with auto-expiring keys.
 type RedisDedupStore struct {
-	client       *redis.Client
-	prefix       string
-	window       time.Duration
+	client         *redis.Client
+	prefix         string
+	window         time.Duration
 	registerScript *redis.Script
 	finishScript   *redis.Script
 }

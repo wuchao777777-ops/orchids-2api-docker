@@ -1,9 +1,11 @@
 package handler
 
 import (
-	"encoding/json"
+	"github.com/goccy/go-json"
 	"net/http"
 	"strings"
+
+	apperrors "orchids-api/internal/errors"
 )
 
 type PublicModelResponse struct {
@@ -20,7 +22,7 @@ type PublicModelsListResponse struct {
 
 func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		h.writeErrorResponse(w, "invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed)
+		apperrors.New("invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed).WriteResponse(w)
 		return
 	}
 
@@ -31,12 +33,12 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	if h.loadBalancer == nil || h.loadBalancer.Store == nil {
-		h.writeErrorResponse(w, "api_error", "Model store not configured", http.StatusServiceUnavailable)
+		apperrors.New("api_error", "Model store not configured", http.StatusServiceUnavailable).WriteResponse(w)
 		return
 	}
 	allModels, err := h.loadBalancer.Store.ListModels(ctx)
 	if err != nil {
-		h.writeErrorResponse(w, "api_error", "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
+		apperrors.New("api_error", "Failed to fetch models: "+err.Error(), http.StatusInternalServerError).WriteResponse(w)
 		return
 	}
 
@@ -72,14 +74,14 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		h.writeErrorResponse(w, "api_error", "Failed to encode response", http.StatusInternalServerError)
+		apperrors.New("api_error", "Failed to encode response", http.StatusInternalServerError).WriteResponse(w)
 	}
 }
 
 // HandleModelByID is optional for public API but good for completeness
 func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		h.writeErrorResponse(w, "invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed)
+		apperrors.New("invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed).WriteResponse(w)
 		return
 	}
 
@@ -100,19 +102,19 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if id == "" {
-		h.writeErrorResponse(w, "invalid_request_error", "Model ID required", http.StatusBadRequest)
+		apperrors.New("invalid_request_error", "Model ID required", http.StatusBadRequest).WriteResponse(w)
 		return
 	}
 
 	ctx := r.Context()
 	if h.loadBalancer == nil || h.loadBalancer.Store == nil {
-		h.writeErrorResponse(w, "api_error", "Model store not configured", http.StatusServiceUnavailable)
+		apperrors.New("api_error", "Model store not configured", http.StatusServiceUnavailable).WriteResponse(w)
 		return
 	}
 
 	m, err := h.loadBalancer.Store.GetModelByModelID(ctx, id)
 	if err != nil {
-		h.writeErrorResponse(w, "invalid_request_error", "Model not found", http.StatusNotFound)
+		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}
 
@@ -124,7 +126,7 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 			mChannel = "orchids"
 		}
 		if !strings.EqualFold(mChannel, filterChannel) {
-			h.writeErrorResponse(w, "invalid_request_error", "Model not found in this channel", http.StatusNotFound)
+			apperrors.New("invalid_request_error", "Model not found in this channel", http.StatusNotFound).WriteResponse(w)
 			return
 		}
 	}
@@ -137,6 +139,6 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		h.writeErrorResponse(w, "api_error", "Failed to encode response", http.StatusInternalServerError)
+		apperrors.New("api_error", "Failed to encode response", http.StatusInternalServerError).WriteResponse(w)
 	}
 }

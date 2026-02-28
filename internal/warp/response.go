@@ -1,9 +1,9 @@
 package warp
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/goccy/go-json"
 	"hash/fnv"
 	"io"
 	"math"

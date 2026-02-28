@@ -5,9 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +19,7 @@ import (
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
@@ -118,17 +119,7 @@ func (h *Handler) SetClientFactory(f ClientFactory) {
 	h.clientFactory = f
 }
 
-func (h *Handler) writeErrorResponse(w http.ResponseWriter, errType string, message string, code int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"type": "error",
-		"error": map[string]string{
-			"type":    errType,
-			"message": message,
-		},
-	})
-}
+
 
 func (h *Handler) computeRequestHash(r *http.Request, body []byte) string {
 	hasher := sha256.New()
@@ -208,13 +199,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					f.Flush()
 				}
 			} else {
-				h.writeErrorResponse(w, "server_error", "Internal Server Error", http.StatusInternalServerError)
+				apperrors.New("server_error", "Internal Server Error", http.StatusInternalServerError).WriteResponse(w)
 			}
 		}
 	}()
 
 	if r.Method != http.MethodPost {
-		h.writeErrorResponse(w, "invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed)
+		apperrors.New("invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed).WriteResponse(w)
 		return
 	}
 
@@ -227,15 +218,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if maxRequestBytes > 0 {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
-				h.writeErrorResponse(w, "invalid_request_error", "Request body too large", http.StatusRequestEntityTooLarge)
+				apperrors.New("invalid_request_error", "Request body too large", http.StatusRequestEntityTooLarge).WriteResponse(w)
 				return
 			}
 		}
-		h.writeErrorResponse(w, "invalid_request_error", "Invalid request body", http.StatusBadRequest)
+		apperrors.New("invalid_request_error", "Invalid request body", http.StatusBadRequest).WriteResponse(w)
 		return
 	}
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
-		h.writeErrorResponse(w, "invalid_request_error", "Invalid request body", http.StatusBadRequest)
+		apperrors.New("invalid_request_error", "Invalid request body", http.StatusBadRequest).WriteResponse(w)
 		return
 	}
 
@@ -296,7 +287,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	forcedChannel := channelFromPath(r.URL.Path)
 	if err := h.validateModelAvailability(r.Context(), req.Model, forcedChannel); err != nil {
-		h.writeErrorResponse(w, "invalid_request_error", err.Error(), http.StatusBadRequest)
+		apperrors.New("invalid_request_error", err.Error(), http.StatusBadRequest).WriteResponse(w)
 		return
 	}
 	effectiveWorkdir, prevWorkdir, workdirChanged := h.resolveWorkdir(r, req, conversationKey)
@@ -321,7 +312,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			"model":   req.Model,
 			"channel": forcedChannel,
 		})
-		h.writeErrorResponse(w, "overloaded_error", err.Error(), http.StatusServiceUnavailable)
+		apperrors.New("overloaded_error", err.Error(), http.StatusServiceUnavailable).WriteResponse(w)
 		return
 	}
 	slog.Debug("Checkpoint: selectAccount success")
@@ -432,7 +423,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		streamingStarted = true
 
 		if _, ok := w.(http.Flusher); !ok {
-			h.writeErrorResponse(w, "api_error", "Streaming not supported by underlying connection", http.StatusInternalServerError)
+			apperrors.New("api_error", "Streaming not supported by underlying connection", http.StatusInternalServerError).WriteResponse(w)
 			return
 		}
 	} else {

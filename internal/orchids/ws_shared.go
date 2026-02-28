@@ -2,8 +2,8 @@ package orchids
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"hash/fnv"
 	"io"
 	"net/http"

@@ -2,7 +2,7 @@ package audit
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/goccy/go-json"
 	"log/slog"
 	"time"
 
@@ -145,7 +145,7 @@ func (l *RedisLogger) writeLoop() {
 // NopLogger discards all audit events.
 type NopLogger struct{}
 
-func NewNopLogger() *NopLogger                                           { return &NopLogger{} }
-func (l *NopLogger) Log(_ context.Context, _ Event)                      {}
+func NewNopLogger() *NopLogger                                             { return &NopLogger{} }
+func (l *NopLogger) Log(_ context.Context, _ Event)                        {}
 func (l *NopLogger) Query(_ context.Context, _ QueryOpts) ([]Event, error) { return nil, nil }
-func (l *NopLogger) Close()                                              {}
+func (l *NopLogger) Close()                                                {}

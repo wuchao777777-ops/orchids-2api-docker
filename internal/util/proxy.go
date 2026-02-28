@@ -105,9 +105,7 @@ func shouldBypass(host string, bypass []string) bool {
 		if entry == "*" {
 			return true
 		}
-		if strings.HasPrefix(entry, "*.") {
-			entry = strings.TrimPrefix(entry, "*.")
-		}
+		entry = strings.TrimPrefix(entry, "*.")
 		if strings.Contains(entry, "/") {
 			if hostIP == nil {
 				continue

@@ -27,31 +27,31 @@ type CacheOperation struct {
 func TestLRUEvictionCorrectness(t *testing.T) {
 	property := func(seed uint8) bool {
 		ctx := context.Background()
-		
+
 		// Create a cache with max 3 entries and no TTL
 		cache := NewMemoryCache(0, 3)
 		defer cache.Clear(ctx)
-		
+
 		// Use seed to generate deterministic but varied test cases
 		numOps := int(seed%5) + 4 // 4-8 operations
-		
+
 		// Track last access time for each key
 		keyLastAccessTime := make(map[string]int)
 		currentKeys := make(map[string]bool)
-		
+
 		for i := 0; i < numOps; i++ {
 			key := fmt.Sprintf("key%d", (seed+uint8(i))%5)
-			value := int(seed) * 100 + i
-			
+			value := int(seed)*100 + i
+
 			// Alternate between Put and Get operations
 			if i%2 == 0 || !currentKeys[key] {
 				// Put operation
 				cache.Put(ctx, key, value)
-				
+
 				// Update last access time
 				keyLastAccessTime[key] = i
 				currentKeys[key] = true
-				
+
 				// If we exceed capacity, find which key should have been evicted
 				if len(currentKeys) > 3 {
 					// Find the key with the earliest access time
@@ -63,11 +63,11 @@ func TestLRUEvictionCorrectness(t *testing.T) {
 							lruKey = k
 						}
 					}
-					
+
 					// Remove from tracking
 					delete(currentKeys, lruKey)
 					delete(keyLastAccessTime, lruKey)
-					
+
 					// Verify the LRU key was actually evicted from cache
 					if _, ok := cache.Get(ctx, lruKey); ok {
 						return false // LRU key should have been evicted
@@ -84,16 +84,16 @@ func TestLRUEvictionCorrectness(t *testing.T) {
 					keyLastAccessTime[key] = i
 				}
 			}
-			
+
 			// Small delay to ensure different access times
 			time.Sleep(time.Millisecond)
 		}
-		
+
 		// Verify cache size doesn't exceed max
 		count, _, _ := cache.GetStats(ctx)
 		return count <= 3
 	}
-	
+
 	if err := quick.Check(property, &quick.Config{MaxCount: 100}); err != nil {
 		t.Errorf("LRU eviction correctness property failed: %v", err)
 	}
@@ -103,17 +103,17 @@ func TestLRUEvictionCorrectness(t *testing.T) {
 func TestLRUAccessTimeUpdate(t *testing.T) {
 	property := func(seed uint8) bool {
 		ctx := context.Background()
-		
+
 		// Create a cache with max 2 entries
 		cache := NewMemoryCache(0, 2)
 		defer cache.Clear(ctx)
-		
+
 		// Add two items
 		cache.Put(ctx, "first", 100)
 		time.Sleep(5 * time.Millisecond)
 		cache.Put(ctx, "second", 200)
 		time.Sleep(5 * time.Millisecond)
-		
+
 		// Access the first item multiple times to ensure accessedAt is updated (sampled LRU)
 		for i := 0; i < 8; i++ {
 			if _, ok := cache.Get(ctx, "first"); !ok {
@@ -121,28 +121,28 @@ func TestLRUAccessTimeUpdate(t *testing.T) {
 			}
 		}
 		time.Sleep(5 * time.Millisecond)
-		
+
 		// Add a third item - should evict "second" (not "first" since we just accessed it)
 		cache.Put(ctx, "third", 300)
-		
+
 		// Verify "first" still exists (was accessed recently)
 		if _, ok := cache.Get(ctx, "first"); !ok {
 			return false
 		}
-		
+
 		// Verify "second" was evicted (least recently accessed)
 		if _, ok := cache.Get(ctx, "second"); ok {
 			return false // "second" should have been evicted
 		}
-		
+
 		// Verify "third" exists
 		if _, ok := cache.Get(ctx, "third"); !ok {
 			return false
 		}
-		
+
 		return true
 	}
-	
+
 	if err := quick.Check(property, &quick.Config{MaxCount: 100}); err != nil {
 		t.Errorf("LRU access time update property failed: %v", err)
 	}
@@ -154,21 +154,21 @@ func TestLRUEvictionWithRandomAccess(t *testing.T) {
 		if len(accessPattern) < 5 {
 			return true // Skip too short patterns
 		}
-		
+
 		ctx := context.Background()
-		
+
 		// Create a cache with max 3 entries
 		cache := NewMemoryCache(0, 3)
 		defer cache.Clear(ctx)
-		
+
 		// Track which keys exist and their last access index
 		keyLastAccess := make(map[string]int)
 		keyExists := make(map[string]bool)
-		
+
 		for i, pattern := range accessPattern {
 			key := fmt.Sprintf("k%d", pattern%5) // 5 possible keys
 			value := i * 10
-			
+
 			// Perform operation based on pattern
 			if pattern%3 == 0 && keyExists[key] {
 				// Get operation - do 8 Gets to ensure sampled LRU updates accessedAt
@@ -183,43 +183,43 @@ func TestLRUEvictionWithRandomAccess(t *testing.T) {
 				cache.Put(ctx, key, value)
 				keyLastAccess[key] = i
 				keyExists[key] = true
-				
+
 				// If we have more than 3 keys tracked, find and remove LRU
 				if len(keyExists) > 3 {
 					var lruKey string
 					lruIndex := len(accessPattern)
-					
+
 					for k := range keyExists {
 						if keyLastAccess[k] < lruIndex {
 							lruIndex = keyLastAccess[k]
 							lruKey = k
 						}
 					}
-					
+
 					delete(keyExists, lruKey)
 					delete(keyLastAccess, lruKey)
 				}
 			}
-			
+
 			time.Sleep(time.Millisecond)
 		}
-		
+
 		// Verify cache size
 		count, _, _ := cache.GetStats(ctx)
 		if count > 3 {
 			return false
 		}
-		
+
 		// Verify all tracked keys exist in cache
 		for key := range keyExists {
 			if _, ok := cache.Get(ctx, key); !ok {
 				return false
 			}
 		}
-		
+
 		return true
 	}
-	
+
 	if err := quick.Check(property, &quick.Config{MaxCount: 50}); err != nil {
 		t.Errorf("LRU eviction with random access property failed: %v", err)
 	}
@@ -229,25 +229,25 @@ func TestLRUEvictionWithRandomAccess(t *testing.T) {
 func TestLRUEvictionSequential(t *testing.T) {
 	property := func(count uint8) bool {
 		n := int(count%10) + 4 // 4-13 items
-		
+
 		ctx := context.Background()
-		
+
 		// Create a cache with max 3 entries
 		cache := NewMemoryCache(0, 3)
 		defer cache.Clear(ctx)
-		
+
 		// Add items sequentially
 		for i := 0; i < n; i++ {
 			key := fmt.Sprintf("item%d", i)
 			cache.Put(ctx, key, i*100)
 			time.Sleep(time.Millisecond)
 		}
-		
+
 		// Only the last 3 items should exist
 		for i := 0; i < n; i++ {
 			key := fmt.Sprintf("item%d", i)
 			_, exists := cache.Get(ctx, key)
-			
+
 			if i < n-3 {
 				// Older items should be evicted
 				if exists {
@@ -260,10 +260,10 @@ func TestLRUEvictionSequential(t *testing.T) {
 				}
 			}
 		}
-		
+
 		return true
 	}
-	
+
 	if err := quick.Check(property, &quick.Config{MaxCount: 100}); err != nil {
 		t.Errorf("LRU sequential eviction property failed: %v", err)
 	}
@@ -273,42 +273,42 @@ func TestLRUEvictionSequential(t *testing.T) {
 func TestLRUEvictionWithUpdates(t *testing.T) {
 	property := func(seed uint8) bool {
 		ctx := context.Background()
-		
+
 		// Create a cache with max 2 entries
 		cache := NewMemoryCache(0, 2)
 		defer cache.Clear(ctx)
-		
+
 		// Add two items
 		cache.Put(ctx, "a", 1)
 		time.Sleep(5 * time.Millisecond)
 		cache.Put(ctx, "b", 2)
 		time.Sleep(5 * time.Millisecond)
-		
+
 		// Update "a" (this should update its access time)
 		cache.Put(ctx, "a", 10)
 		time.Sleep(5 * time.Millisecond)
-		
+
 		// Add a third item - should evict "b" (not "a" since we just updated it)
 		cache.Put(ctx, "c", 3)
-		
+
 		// Verify "a" still exists with updated value
 		if val, ok := cache.Get(ctx, "a"); !ok || val != 10 {
 			return false
 		}
-		
+
 		// Verify "b" was evicted
 		if _, ok := cache.Get(ctx, "b"); ok {
 			return false
 		}
-		
+
 		// Verify "c" exists
 		if val, ok := cache.Get(ctx, "c"); !ok || val != 3 {
 			return false
 		}
-		
+
 		return true
 	}
-	
+
 	if err := quick.Check(property, &quick.Config{MaxCount: 100}); err != nil {
 		t.Errorf("LRU eviction with updates property failed: %v", err)
 	}
@@ -320,35 +320,35 @@ func TestLRUCacheSizeInvariant(t *testing.T) {
 		if len(operations) == 0 {
 			return true
 		}
-		
+
 		ctx := context.Background()
 		maxSize := 5
-		
+
 		cache := NewMemoryCache(0, maxSize)
 		defer cache.Clear(ctx)
-		
+
 		for i, op := range operations {
 			key := fmt.Sprintf("k%d", op%10)
 			value := i * 100
-			
+
 			if op%2 == 0 {
 				cache.Put(ctx, key, value)
 			} else {
 				cache.Get(ctx, key)
 			}
-			
+
 			// Verify size invariant
 			count, _, _ := cache.GetStats(ctx)
 			if count > int64(maxSize) {
 				return false
 			}
-			
+
 			time.Sleep(time.Millisecond)
 		}
-		
+
 		return true
 	}
-	
+
 	if err := quick.Check(property, &quick.Config{MaxCount: 50}); err != nil {
 		t.Errorf("LRU cache size invariant property failed: %v", err)
 	}

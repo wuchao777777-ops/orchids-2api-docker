@@ -41,6 +41,19 @@ type Account struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// SyncState compares this account against a snapshot and returns true if key session/auth fields differ.
+func (a *Account) SyncState(snapshot *Account) bool {
+	if a == nil || snapshot == nil {
+		return false
+	}
+	return a.SessionID != snapshot.SessionID ||
+		a.ClientUat != snapshot.ClientUat ||
+		a.ProjectID != snapshot.ProjectID ||
+		a.UserID != snapshot.UserID ||
+		a.Email != snapshot.Email ||
+		a.ClientCookie != snapshot.ClientCookie
+}
+
 type Settings struct {
 	ID    int64  `json:"id"`
 	Key   string `json:"key"`

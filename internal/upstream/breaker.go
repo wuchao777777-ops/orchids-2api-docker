@@ -13,7 +13,7 @@ type breakerEntry struct {
 // upstreamBreakers holds circuit breakers per account.
 var upstreamBreakers = struct {
 	sync.RWMutex
-	breakers   map[string]*breakerEntry
+	breakers    map[string]*breakerEntry
 	lastCleanup time.Time
 }{
 	breakers: make(map[string]*breakerEntry),

@@ -6,8 +6,8 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -81,6 +81,9 @@ func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 		proxyFunc = http.ProxyFromEnvironment
 	}
 
+	// Warp currently forces UTLS, meaning we create a fresh RoundTripper per request.
+	// UTLS transports manage their own dialed connections, so connection pooling
+	// relies on the internal implementation of utls.RoundTripper.
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: newUTLSTransport(proxyFunc),

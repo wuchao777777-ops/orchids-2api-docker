@@ -40,7 +40,7 @@ func (c *AsyncCleaner) Start(cleanFn func()) {
 					return
 				default:
 				}
-				
+
 				// 使用 recover 防止 cleanFn panic 导致 goroutine 退出
 				func() {
 					defer func() {

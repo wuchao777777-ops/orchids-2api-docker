@@ -5,9 +5,9 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/goccy/go-json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -17,17 +17,17 @@ import (
 
 type Config struct {
 	// ── Configurable fields (read from config.json / Redis) ──
-	Port          string `json:"port"`
-	DebugEnabled  bool   `json:"debug_enabled"`
-	AdminUser     string `json:"admin_user"`
-	AdminPass     string `json:"admin_pass"`
-	AdminPath     string `json:"admin_path"`
-	AdminToken    string `json:"admin_token"`
-	StoreMode     string `json:"store_mode"`
-	RedisAddr     string `json:"redis_addr"`
-	RedisPassword string `json:"redis_password"`
-	RedisDB       int    `json:"redis_db"`
-	RedisPrefix   string `json:"redis_prefix"`
+	Port            string `json:"port"`
+	DebugEnabled    bool   `json:"debug_enabled"`
+	AdminUser       string `json:"admin_user"`
+	AdminPass       string `json:"admin_pass"`
+	AdminPath       string `json:"admin_path"`
+	AdminToken      string `json:"admin_token"`
+	StoreMode       string `json:"store_mode"`
+	RedisAddr       string `json:"redis_addr"`
+	RedisPassword   string `json:"redis_password"`
+	RedisDB         int    `json:"redis_db"`
+	RedisPrefix     string `json:"redis_prefix"`
 	CacheTokenCount bool   `json:"cache_token_count"`
 	CacheTTL        int    `json:"cache_ttl"`
 	CacheStrategy   string `json:"cache_strategy"`
@@ -286,11 +286,17 @@ func (c *Config) Save(path string) error {
 }
 
 func generateRandomPassword(length int) (string, error) {
-	b := make([]byte, length)
+	// hex encoding doubles the length, so we only need half the bytes
+	byteLen := (length + 1) / 2
+	b := make([]byte, byteLen)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(b)[:length], nil
+	encoded := hex.EncodeToString(b)
+	if len(encoded) > length {
+		encoded = encoded[:length]
+	}
+	return encoded, nil
 }
 
 func parseYAMLFlat(data []byte) (map[string]interface{}, error) {

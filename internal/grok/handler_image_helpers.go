@@ -11,44 +11,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 )
 
-func inferRequestedImageCount(s string, def int) int {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return def
-	}
-	// Common Chinese numerals.
-	s = strings.ReplaceAll(s, "两张", "2张")
-	s = strings.ReplaceAll(s, "二张", "2张")
-	s = strings.ReplaceAll(s, "俩张", "2张")
-	s = strings.ReplaceAll(s, "三张", "3张")
-	s = strings.ReplaceAll(s, "四张", "4张")
-	s = strings.ReplaceAll(s, "五张", "5张")
-	s = strings.ReplaceAll(s, "六张", "6张")
-	s = strings.ReplaceAll(s, "七张", "7张")
-	s = strings.ReplaceAll(s, "八张", "8张")
-	s = strings.ReplaceAll(s, "九张", "9张")
-	s = strings.ReplaceAll(s, "十张", "10张")
 
-	// Match any "<number>张".
-	if m := regexp.MustCompile(`(?i)(\d{1,3})\s*张`).FindStringSubmatch(s); len(m) == 2 {
-		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
-			return n
-		}
-	}
-	// English: "<number> images" or "<number> image".
-	if m := regexp.MustCompile(`(?i)(\d{1,3})\s*images?`).FindStringSubmatch(s); len(m) == 2 {
-		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
-			return n
-		}
-	}
-
-	return def
-}
 
 func normalizeImageResponseFormat(format string) string {
 	switch strings.ToLower(strings.TrimSpace(format)) {

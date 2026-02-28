@@ -2,8 +2,8 @@ package clerk
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/url"

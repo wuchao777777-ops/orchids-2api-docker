@@ -3,8 +3,8 @@ package grok
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"net/http"
 	"os"
 	"path/filepath"

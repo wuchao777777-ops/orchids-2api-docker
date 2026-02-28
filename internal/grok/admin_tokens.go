@@ -1,8 +1,8 @@
 package grok
 
 import (
-	"encoding/json"
 	"fmt"
+	"github.com/goccy/go-json"
 	"net/http"
 	"sort"
 	"strconv"
