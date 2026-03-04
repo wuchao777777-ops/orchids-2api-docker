@@ -202,7 +202,7 @@ func (s *Store) seedModels() error {
 		{ID: "101", Channel: "Grok", ModelID: "grok-4.1-expert", Name: "Grok 4.1 Expert", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 11},
 		{ID: "102", Channel: "Grok", ModelID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 12},
 		{ID: "103", Channel: "Grok", ModelID: "grok-4.1", Name: "Grok 4.1", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 13},
-		{ID: "107", Channel: "Grok", ModelID: "grok-4.20-beta", Name: "Grok 4.20 Beta", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 14},
+		{ID: "107", Channel: "Grok", ModelID: "grok-420", Name: "Grok 420", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 14},
 		{ID: "104", Channel: "Grok", ModelID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 15},
 		{ID: "108", Channel: "Grok", ModelID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 16},
 		{ID: "105", Channel: "Grok", ModelID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 17},
@@ -221,7 +221,7 @@ func (s *Store) seedModels() error {
 		}
 	}
 
-	deprecatedModelIDs := []string{"grok-4.2"}
+	deprecatedModelIDs := []string{"grok-4.2", "grok-4.20-beta"}
 	for _, modelID := range deprecatedModelIDs {
 		m, err := s.GetModelByModelID(ctx, modelID)
 		if err != nil || m == nil {

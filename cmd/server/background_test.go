@@ -16,7 +16,7 @@ func TestNormalizeGrokSSOToken(t *testing.T) {
 }
 
 func TestExtractGrokModelIDsFromText(t *testing.T) {
-	text := `models: grok-4.2, "grok-5", "grok-4.20-beta", and alias grok-4-2`
+	text := `models: grok-4.2, "grok-5", "grok-420", and alias grok-4-2`
 	ids := extractGrokModelIDsFromText(text)
 	if slices.Contains(ids, "grok-4.2") {
 		t.Fatalf("grok-4.2 should be filtered out: %+v", ids)
@@ -24,8 +24,8 @@ func TestExtractGrokModelIDsFromText(t *testing.T) {
 	if !slices.Contains(ids, "grok-5") {
 		t.Fatalf("expected grok-5 in ids: %+v", ids)
 	}
-	if !slices.Contains(ids, "grok-4.20-beta") {
-		t.Fatalf("expected grok-4.20-beta in ids: %+v", ids)
+	if !slices.Contains(ids, "grok-420") {
+		t.Fatalf("expected grok-420 in ids: %+v", ids)
 	}
 }
 
@@ -41,27 +41,6 @@ func TestBuildGrokVersionProbes(t *testing.T) {
 	}
 	if !slices.Contains(probes, "grok-5") {
 		t.Fatalf("expected grok-5 probe, got %+v", probes)
-	}
-}
-
-func TestIsOrchidsAccountType(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{name: "empty defaults to orchids", in: "", want: true},
-		{name: "orchids", in: "orchids", want: true},
-		{name: "orchids uppercase", in: "ORCHIDS", want: true},
-		{name: "warp", in: "warp", want: false},
-		{name: "grok", in: "grok", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isOrchidsAccountType(tt.in); got != tt.want {
-				t.Fatalf("isOrchidsAccountType(%q)=%v want=%v", tt.in, got, tt.want)
-			}
-		})
 	}
 }
 

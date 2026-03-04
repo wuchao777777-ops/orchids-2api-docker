@@ -33,6 +33,21 @@ func detectPublicBaseURL(r *http.Request) string {
 	return proto + "://" + host
 }
 
+func isThinkingResponse(resp map[string]interface{}) bool {
+	if resp == nil {
+		return false
+	}
+	raw, ok := resp["isThinking"]
+	if !ok {
+		return false
+	}
+	val, err := parseLooseBoolAnyForField(raw, "isThinking")
+	if err != nil {
+		return false
+	}
+	return val
+}
+
 func (h *Handler) defaultChatStream() bool {
 	if h == nil || h.cfg == nil {
 		return true
@@ -632,6 +647,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			sentRole = true
 		}
 		if tokenDelta, ok := resp["token"].(string); ok && tokenDelta != "" {
+			if isThinkingResponse(resp) {
+				// Suppress thinking tokens to avoid leaking chain-of-thought.
+				return nil
+			}
 			rawAll.WriteString(tokenDelta)
 			if mf == nil {
 				// Vision Q/A path: keep text intact but strip full tool/render blocks when present.
@@ -796,14 +815,17 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, userPrompt string, body io.Reader) {
 	id := "chatcmpl_" + randomHex(8)
 	lastMessage := ""
-	sawToken := false
 	videoURL := ""
 	var imageCandidates []string
 	var tokenContent strings.Builder
 
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
+		isThinking := isThinkingResponse(resp)
 		if tokenDelta, ok := resp["token"].(string); ok && tokenDelta != "" {
-			sawToken = true
+			if isThinking {
+				// Suppress thinking tokens to avoid leaking chain-of-thought in OpenAI-compatible output.
+				return nil
+			}
 			tokenContent.WriteString(tokenDelta)
 		}
 		if mr, ok := resp["modelResponse"].(map[string]interface{}); ok {
@@ -832,12 +854,9 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 	tokenClean := stripLeadingAngleNoise(sanitizeText(stripToolAndRenderMarkup(tokenContent.String())))
 	modelClean := stripLeadingAngleNoise(sanitizeText(stripToolAndRenderMarkup(lastMessage)))
 
-	finalContent := tokenClean
-	if modelClean != "" && (finalContent == "" || len(modelClean) > len(finalContent)) {
-		finalContent = modelClean
-	}
-	if !sawToken && modelClean != "" {
-		finalContent = modelClean
+	finalContent := modelClean
+	if strings.TrimSpace(finalContent) == "" {
+		finalContent = tokenClean
 	}
 
 	if videoURL != "" {

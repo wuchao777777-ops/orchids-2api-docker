@@ -131,9 +131,9 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		NextProtos: []string{"h2", "http/1.1"},
 	}
 
-	// Use Chrome 120 spec with natural ALPN (h2 + http/1.1) to avoid
+	// Use Chrome 131 spec with natural ALPN (h2 + http/1.1) to avoid
 	// CDN fingerprint detection that drops connections with mismatched ALPN.
-	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_120)
+	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_131)
 
 	uconn := utls.UClient(tlsConn, config, utls.HelloCustom)
 	if err == nil {

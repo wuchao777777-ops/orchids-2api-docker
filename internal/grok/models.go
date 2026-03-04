@@ -28,7 +28,7 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.1-expert", Name: "Grok 4.1 Expert", UpstreamModel: "grok-4.1-expert", ModelMode: "MODEL_MODE_EXPERT"},
 	{ID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", UpstreamModel: "grok-4.1-thinking", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
 	{ID: "grok-4-1-thinking-1129", Name: "Grok 4.1 Thinking 1129 (Legacy/System)", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
-	{ID: "grok-4.20-beta", Name: "Grok 4.20 Beta", UpstreamModel: "grok-4.20-beta"},
+	{ID: "grok-420", Name: "Grok 420", UpstreamModel: "grok-420", ModelMode: "MODEL_MODE_GROK_420"},
 	{ID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", UpstreamModel: "grok-imagine-1.0", ModelMode: "MODEL_MODE_FAST", IsImage: true},
 	{ID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", UpstreamModel: "grok-imagine-1.0-fast", ModelMode: "MODEL_MODE_FAST", IsImage: true},
 	{ID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", UpstreamModel: "grok-imagine-1.0-edit", ModelMode: "MODEL_MODE_FAST", IsImage: true},
@@ -44,7 +44,9 @@ var modelByID = func() map[string]ModelSpec {
 }()
 
 var deprecatedModelIDSet = map[string]struct{}{
-	"grok-4.2": {},
+	"grok-4.2":       {},
+	"grok-4.20":      {},
+	"grok-4.20-beta": {},
 }
 
 func IsDeprecatedModelID(modelID string) bool {
@@ -54,15 +56,6 @@ func IsDeprecatedModelID(modelID string) bool {
 	}
 	_, deprecated := deprecatedModelIDSet[id]
 	return deprecated
-}
-
-func IsSupportedModelID(modelID string) bool {
-	id := normalizeModelID(modelID)
-	if id == "" {
-		return false
-	}
-	_, ok := modelByID[id]
-	return ok
 }
 
 func normalizeModelID(modelID string) string {

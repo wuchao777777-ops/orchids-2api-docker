@@ -52,13 +52,26 @@ func TestResolveModelOrDynamic_AcceptsUnknownGrokTextModel(t *testing.T) {
 	}
 }
 
-func TestResolveModel_Grok420BetaMapping(t *testing.T) {
+func TestResolveModel_Grok420Mapping(t *testing.T) {
+	spec, ok := ResolveModel("grok-420")
+	if !ok {
+		t.Fatalf("ResolveModel(grok-420) should succeed")
+	}
+	if spec.UpstreamModel != "grok-420" {
+		t.Fatalf("spec.UpstreamModel=%q want grok-420", spec.UpstreamModel)
+	}
+	if spec.ModelMode != "MODEL_MODE_GROK_420" {
+		t.Fatalf("spec.ModelMode=%q want MODEL_MODE_GROK_420", spec.ModelMode)
+	}
+}
+
+func TestResolveModel_Grok420BetaRejected(t *testing.T) {
 	if _, ok := ResolveModel("grok-4.20-beta"); ok {
 		t.Fatalf("ResolveModel(grok-4.20-beta) should fail")
 	}
 }
 
-func TestResolveModel_Grok420BetaHyphenAlias(t *testing.T) {
+func TestResolveModel_Grok420BetaHyphenAliasRejected(t *testing.T) {
 	if _, ok := ResolveModel("grok-4-20-beta"); ok {
 		t.Fatalf("ResolveModel(grok-4-20-beta) should fail")
 	}

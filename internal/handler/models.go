@@ -32,7 +32,7 @@ var grok2apiModelAllowlist = map[string]struct{}{
 	"grok-4.1-fast":          {},
 	"grok-4.1-expert":        {},
 	"grok-4.1-thinking":      {},
-	"grok-4.20-beta":         {},
+	"grok-420":               {},
 	"grok-imagine-1.0":       {},
 	"grok-imagine-1.0-fast":  {},
 	"grok-imagine-1.0-edit":  {},
