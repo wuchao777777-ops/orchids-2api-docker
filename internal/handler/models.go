@@ -20,6 +20,34 @@ type PublicModelsListResponse struct {
 	Data   []PublicModelResponse `json:"data"`
 }
 
+var grok2apiModelAllowlist = map[string]struct{}{
+	"grok-3":                 {},
+	"grok-3-mini":            {},
+	"grok-3-thinking":        {},
+	"grok-4":                 {},
+	"grok-4-mini":            {},
+	"grok-4-thinking":        {},
+	"grok-4-heavy":           {},
+	"grok-4.1-mini":          {},
+	"grok-4.1-fast":          {},
+	"grok-4.1-expert":        {},
+	"grok-4.1-thinking":      {},
+	"grok-4.20-beta":         {},
+	"grok-imagine-1.0":       {},
+	"grok-imagine-1.0-fast":  {},
+	"grok-imagine-1.0-edit":  {},
+	"grok-imagine-1.0-video": {},
+}
+
+func isGrok2APISupportedModelID(modelID string) bool {
+	id := strings.ToLower(strings.TrimSpace(modelID))
+	if id == "" {
+		return false
+	}
+	_, ok := grok2apiModelAllowlist[id]
+	return ok
+}
+
 func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		apperrors.New("invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed).WriteResponse(w)
@@ -44,12 +72,16 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 
 	var publicModels []PublicModelResponse
 	for _, m := range allModels {
+		mChannel := m.Channel
+		if strings.TrimSpace(mChannel) == "" {
+			mChannel = "orchids" // Default assumption
+		}
+		if strings.EqualFold(mChannel, "grok") && !isGrok2APISupportedModelID(m.ModelID) {
+			continue
+		}
+
 		// If filtering is active (e.g. /orchids/v1/models), skip models from other channels
 		if filterChannel != "" {
-			mChannel := m.Channel
-			if strings.TrimSpace(mChannel) == "" {
-				mChannel = "orchids" // Default assumption
-			}
 			if !strings.EqualFold(mChannel, filterChannel) {
 				continue
 			}

@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"github.com/goccy/go-json"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -16,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/auth"
 	"orchids-api/internal/clerk"
@@ -51,6 +52,26 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func normalizeGrokVerifyModelID(raw string) string {
+	model := strings.TrimSpace(raw)
+	if model == "" {
+		return "grok-3"
+	}
+	lower := strings.ToLower(model)
+	if lower == "grok" || !strings.HasPrefix(lower, "grok-") {
+		return "grok-3"
+	}
+	return model
+}
+
+func isGrokModelNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "model is not found") || strings.Contains(lower, "model not found")
 }
 
 func normalizeWarpTokenInput(acc *store.Account) {
@@ -563,10 +584,24 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				cfg := a.config.Load()
 				client := grok.New(cfg)
 
+				modelID := normalizeGrokVerifyModelID(acc.AgentMode)
+				if modelID != "" && modelID != acc.AgentMode {
+					acc.AgentMode = modelID
+				}
+
 				verifyCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-				info, verifyErr := client.VerifyToken(verifyCtx, acc.ClientCookie, acc.AgentMode)
+				info, verifyErr := client.VerifyToken(verifyCtx, acc.ClientCookie, modelID)
 				cancel()
+				if verifyErr != nil && isGrokModelNotFound(verifyErr) && modelID != "grok-3" {
+					// Fallback to a known-good model if upstream rejects the provided model ID.
+					modelID = "grok-3"
+					acc.AgentMode = modelID
+					verifyCtx, cancel = context.WithTimeout(r.Context(), 20*time.Second)
+					info, verifyErr = client.VerifyToken(verifyCtx, acc.ClientCookie, modelID)
+					cancel()
+				}
 				if verifyErr != nil {
+					slog.Warn("Grok account verify failed", "account_id", acc.ID, "error", verifyErr)
 					status := classifyAccountStatusFromError(verifyErr.Error())
 					if status != "" {
 						checkErrStatus = status
@@ -590,8 +625,12 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 						limit = remaining
 					}
 					if limit > 0 {
+						used := limit - remaining
+						if used < 0 {
+							used = 0
+						}
 						acc.UsageLimit = float64(limit)
-						acc.UsageCurrent = float64(remaining)
+						acc.UsageCurrent = float64(used)
 					}
 					if !info.ResetAt.IsZero() {
 						acc.QuotaResetAt = info.ResetAt

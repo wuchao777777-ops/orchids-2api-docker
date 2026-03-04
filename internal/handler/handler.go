@@ -7,13 +7,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
 	rtdebug "runtime/debug"
 	"strings"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/audit"
@@ -118,8 +119,6 @@ func (h *Handler) SetAuditLogger(al audit.Logger) {
 func (h *Handler) SetClientFactory(f ClientFactory) {
 	h.clientFactory = f
 }
-
-
 
 func (h *Handler) computeRequestHash(r *http.Request, body []byte) string {
 	hasher := sha256.New()
@@ -377,15 +376,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
-
-	summaryKey := conversationKey
-	if strings.TrimSpace(effectiveWorkdir) != "" {
-		summaryKey = conversationKey + "|" + strings.TrimSpace(effectiveWorkdir)
-	}
-	// NOTE: AIClient mode handles its own context budgeting; legacy PromptOptions are deprecated.
-	_ = summaryKey
-	_ = effectiveWorkdir
-
 	slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
 	// Orchids: always use AIClient mode (other implementations are deprecated/removed).
 	isOrchidsAIClient := false
@@ -420,12 +410,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		streamingStarted = true
 
 		if _, ok := w.(http.Flusher); !ok {
 			apperrors.New("api_error", "Streaming not supported by underlying connection", http.StatusInternalServerError).WriteResponse(w)
 			return
 		}
+		streamingStarted = true
 	} else {
 		w.Header().Set("Content-Type", "application/json")
 	}
@@ -566,14 +556,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			NoThinking:    noThinking,
 			ChatSessionID: chatSessionID,
 		}
+		var attempt int
 		for {
-			if retriesRemaining < maxRetries {
+			if attempt > 0 {
 				// 非首次尝试：向客户端发送重试提示，避免前一次不完整内容造成混淆
 				sh.emitTextBlock("\n\n[Retrying request...]\n\n")
 			}
 			sh.resetRoundState()
 			var err error
-			slog.Debug("Calling Upstream Client...", "attempt", maxRetries-retriesRemaining+1)
+			slog.Debug("Calling Upstream Client...", "attempt", attempt+1)
 
 			slog.Info("Interface check", "type", fmt.Sprintf("%T", apiClient))
 			if sender, ok := apiClient.(UpstreamPayloadClient); ok {
@@ -721,13 +712,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if retryDelay > 0 {
-				attempt := maxRetries - retriesRemaining + 1
-				delay := computeRetryDelay(retryDelay, attempt, errClass.Category)
+				delay := computeRetryDelay(retryDelay, attempt+1, errClass.Category)
 				if delay > 0 && !util.SleepWithContext(r.Context(), delay) {
 					sh.finishResponse("end_turn")
 					return
 				}
 			}
+			attempt++
 		}
 	}
 

@@ -115,10 +115,10 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	host, _, _ := net.SplitHostPort(addr)
 	config := &utls.Config{
 		ServerName: host,
-		NextProtos: []string{"h2", "http/1.1"},
+		NextProtos: []string{"http/1.1"},
 	}
 
-	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_120)
+	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_131)
 	uconn := utls.UClient(tlsConn, config, utls.HelloCustom)
 	if err == nil {
 		uconn.ApplyPreset(&spec)

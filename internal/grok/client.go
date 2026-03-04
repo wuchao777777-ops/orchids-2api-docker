@@ -5,14 +5,16 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/util"
@@ -105,20 +107,22 @@ func (c *Client) userAgent() string {
 var baseHeaders = http.Header{
 	"Accept":             []string{"*/*"},
 	"Accept-Language":    []string{"zh-CN,zh;q=0.9,en;q=0.8"},
+	"Baggage":            []string{"sentry-environment=production,sentry-release=d6add6fb0460641fd482d767a335ef72b9b6abb8,sentry-public_key=b311e0f2690c81f25e2c4cf6d4f7ce1c"},
 	"Cache-Control":      []string{"no-cache"},
 	"Content-Type":       []string{"application/json"},
 	"Origin":             []string{"https://grok.com"},
 	"Pragma":             []string{"no-cache"},
 	"Referer":            []string{"https://grok.com/"},
 	"Priority":           []string{"u=1, i"},
+	"Sec-Ch-Ua-Arch":     []string{`"arm"`},
+	"Sec-Ch-Ua-Bitness":  []string{`"64"`},
 	"Sec-Ch-Ua":          []string{`"Google Chrome";v="136", "Chromium";v="136", "Not(A:Brand";v="24"`},
+	"Sec-Ch-Ua-Model":    []string{`""`},
+	"Sec-Ch-Ua-Mobile":   []string{"?0"},
 	"Sec-Ch-Ua-Platform": []string{`"macOS"`},
 	"Sec-Fetch-Dest":     []string{"empty"},
 	"Sec-Fetch-Mode":     []string{"cors"},
 	"Sec-Fetch-Site":     []string{"same-origin"},
-	"sec-ch-ua":          []string{`"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"`},
-	"sec-ch-ua-mobile":   []string{"?0"},
-	"sec-ch-ua-platform": []string{`"Windows"`},
 }
 
 func (c *Client) headers(token string) http.Header {
@@ -152,20 +156,26 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 		cnt = 2
 	}
 	payload := map[string]interface{}{
-		"temporary":             true,
-		"modelName":             spec.UpstreamModel,
-		"message":               text,
-		"fileAttachments":       []string{},
-		"imageAttachments":      []string{},
-		"disableSearch":         false,
-		"enableImageGeneration": true,
-		"returnImageBytes":      false,
-		"enableImageStreaming":  true,
-		"imageGenerationCount":  cnt,
-		"forceConcise":          false,
-		"toolOverrides":         map[string]interface{}{},
-		"enableSideBySide":      true,
-		"sendFinalMetadata":     true,
+		"temporary":                   true,
+		"modelName":                   spec.UpstreamModel,
+		"message":                     text,
+		"fileAttachments":             []string{},
+		"imageAttachments":            []string{},
+		"disableSearch":               false,
+		"enableImageGeneration":       true,
+		"returnImageBytes":            false,
+		"enableImageStreaming":        true,
+		"imageGenerationCount":        cnt,
+		"forceConcise":                false,
+		"forceSideBySide":             false,
+		"isAsyncChat":                 false,
+		"isReasoning":                 false,
+		"disableSelfHarmShortCircuit": false,
+		"disableTextFollowUps":        false,
+		"returnRawGrokInXaiRequest":   false,
+		"toolOverrides":               map[string]interface{}{},
+		"enableSideBySide":            true,
+		"sendFinalMetadata":           true,
 		"responseMetadata": map[string]interface{}{
 			"modelConfigOverride": map[string]interface{}{
 				"modelMap": map[string]interface{}{},
@@ -205,7 +215,7 @@ func (c *Client) doRequest(ctx context.Context, reqURL string, method string, bo
 	if c.cfg != nil && c.cfg.MaxRetries > 0 {
 		maxRetries = c.cfg.MaxRetries
 	}
-	retryStatuses := map[int]struct{}{http.StatusUnauthorized: {}, http.StatusForbidden: {}, http.StatusTooManyRequests: {}}
+	retryStatuses := map[int]struct{}{http.StatusTooManyRequests: {}}
 	baseDelay := 1 * time.Second
 	if c.cfg != nil && c.cfg.RetryDelay > 0 {
 		baseDelay = time.Duration(c.cfg.RetryDelay) * time.Millisecond
@@ -256,6 +266,8 @@ func (c *Client) doRequest(ctx context.Context, reqURL string, method string, bo
 			return nil, fmt.Errorf("grok upstream status=%d body=%s", lastStatus, lastBody)
 		}
 
+		slog.Debug("doRequest retry triggered", "status", lastStatus, "attempt", attempt, "body", lastBody)
+
 		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, lastStatus, retryAfter)
 		lastDelay = delay
@@ -285,14 +297,15 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 	if err == nil {
 		return info, nil
 	}
+	slog.Warn("GetUsage failed in VerifyToken, failing back to doChat", "error", err)
 
 	model := strings.TrimSpace(modelID)
 	if model == "" {
-		model = "grok-4.1-fast"
+		model = "grok-3"
 	}
 	spec, ok := ResolveModelOrDynamic(model)
 	if !ok {
-		spec, ok = ResolveModel("grok-4.1-fast")
+		spec, ok = ResolveModel("grok-3")
 		if !ok {
 			return nil, fmt.Errorf("grok default model not available")
 		}
@@ -303,18 +316,17 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 		return nil, chatErr
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return parseRateLimitInfo(resp.Header), nil
 }
 
 func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {
 	model := strings.TrimSpace(modelID)
 	if model == "" {
-		model = "grok-4.1-fast"
+		model = "grok-4-1-thinking-1129"
 	}
 	spec, ok := ResolveModelOrDynamic(model)
 	if !ok {
-		spec, ok = ResolveModel("grok-4.1-fast")
+		spec, ok = ResolveModel("grok-4-1-thinking-1129")
 		if !ok {
 			return nil, fmt.Errorf("grok default model not available")
 		}
@@ -325,7 +337,7 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 		"modelName":   strings.TrimSpace(spec.UpstreamModel),
 	}
 	if strings.TrimSpace(spec.UpstreamModel) == "" {
-		payload["modelName"] = "grok-4-1-thinking-1129"
+		payload["modelName"] = "grok-3-thinking"
 	}
 
 	raw, err := json.Marshal(payload)
@@ -894,7 +906,6 @@ func getProxyField(cfg *config.Config, kind string) string {
 		return ""
 	}
 }
-
 
 func resolveGrokProxy(cfg *config.Config, proxyAddr string) *url.URL {
 	proxyAddr = strings.TrimSpace(proxyAddr)

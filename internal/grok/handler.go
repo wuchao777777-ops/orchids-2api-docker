@@ -175,7 +175,7 @@ func (h *Handler) doChatWithAutoSwitch(ctx context.Context, sess *chatAccountSes
 	sess.Close()
 	next, err2 := h.openChatAccountSession(ctx)
 	if err2 != nil {
-		return nil, err
+		return nil, fmt.Errorf("account switch failed: %w (original: %v)", err2, err)
 	}
 	sess.acc = next.acc
 	sess.token = next.token
@@ -276,8 +276,12 @@ func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 	if limit <= 0 && remaining > 0 {
 		limit = remaining
 	}
+	used := limit - remaining
+	if used < 0 {
+		used = 0
+	}
 	acc.UsageLimit = float64(limit)
-	acc.UsageCurrent = float64(remaining)
+	acc.UsageCurrent = float64(used)
 	if !info.ResetAt.IsZero() {
 		acc.QuotaResetAt = info.ResetAt
 	}

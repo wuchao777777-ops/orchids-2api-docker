@@ -3,11 +3,16 @@ package handler
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
 )
+
+// accountStatusMu 保护并发的 markAccountStatus 调用，
+// 避免多个 goroutine 同时修改同一 Account 的 StatusCode/LastAttempt。
+var accountStatusMu sync.Mutex
 
 // classifyAccountStatus delegates to the centralized errors package.
 func classifyAccountStatus(errStr string) string {
@@ -19,7 +24,8 @@ func markAccountStatus(ctx context.Context, store *store.Store, acc *store.Accou
 		return
 	}
 
-	now := time.Now()
+	accountStatusMu.Lock()
+	defer accountStatusMu.Unlock()
 
 	// 避免重复标记同一状态，防止冷却计时器被反复重置
 	if acc.StatusCode == status {
@@ -27,6 +33,7 @@ func markAccountStatus(ctx context.Context, store *store.Store, acc *store.Accou
 		return
 	}
 
+	now := time.Now()
 	acc.StatusCode = status
 	acc.LastAttempt = now
 

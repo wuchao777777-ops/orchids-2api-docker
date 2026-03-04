@@ -42,8 +42,7 @@ func (s *RedisSessionStore) key(k string) string {
 	return s.prefix + k
 }
 
-func (s *RedisSessionStore) GetWorkdir(_ context.Context, key string) (string, bool) {
-	ctx := context.Background()
+func (s *RedisSessionStore) GetWorkdir(ctx context.Context, key string) (string, bool) {
 	val, err := s.client.HGet(ctx, s.key(key), "workdir").Result()
 	if err != nil {
 		return "", false
@@ -51,16 +50,14 @@ func (s *RedisSessionStore) GetWorkdir(_ context.Context, key string) (string, b
 	return val, true
 }
 
-func (s *RedisSessionStore) SetWorkdir(_ context.Context, key, workdir string) {
-	ctx := context.Background()
+func (s *RedisSessionStore) SetWorkdir(ctx context.Context, key, workdir string) {
 	pipe := s.client.Pipeline()
 	pipe.HSet(ctx, s.key(key), "workdir", workdir)
 	pipe.Expire(ctx, s.key(key), s.ttl)
 	pipe.Exec(ctx)
 }
 
-func (s *RedisSessionStore) GetConvID(_ context.Context, key string) (string, bool) {
-	ctx := context.Background()
+func (s *RedisSessionStore) GetConvID(ctx context.Context, key string) (string, bool) {
 	val, err := s.client.HGet(ctx, s.key(key), "conv_id").Result()
 	if err != nil {
 		return "", false
@@ -68,21 +65,18 @@ func (s *RedisSessionStore) GetConvID(_ context.Context, key string) (string, bo
 	return val, true
 }
 
-func (s *RedisSessionStore) SetConvID(_ context.Context, key, convID string) {
-	ctx := context.Background()
+func (s *RedisSessionStore) SetConvID(ctx context.Context, key, convID string) {
 	pipe := s.client.Pipeline()
 	pipe.HSet(ctx, s.key(key), "conv_id", convID)
 	pipe.Expire(ctx, s.key(key), s.ttl)
 	pipe.Exec(ctx)
 }
 
-func (s *RedisSessionStore) DeleteSession(_ context.Context, key string) {
-	ctx := context.Background()
+func (s *RedisSessionStore) DeleteSession(ctx context.Context, key string) {
 	s.client.Del(ctx, s.key(key))
 }
 
-func (s *RedisSessionStore) Touch(_ context.Context, key string) {
-	ctx := context.Background()
+func (s *RedisSessionStore) Touch(ctx context.Context, key string) {
 	s.client.Expire(ctx, s.key(key), s.ttl)
 }
 
@@ -117,6 +111,20 @@ func NewMemorySessionStore(ttl time.Duration, maxSize int) *MemorySessionStore {
 func (s *MemorySessionStore) getOrCreate(key string) *memorySession {
 	sess, ok := s.sessions[key]
 	if !ok {
+		// 容量超限时，驱逐最久未访问的 session
+		if s.maxSize > 0 && len(s.sessions) >= s.maxSize {
+			var oldestKey string
+			var oldestTime time.Time
+			for k, v := range s.sessions {
+				if oldestKey == "" || v.lastAccess.Before(oldestTime) {
+					oldestKey = k
+					oldestTime = v.lastAccess
+				}
+			}
+			if oldestKey != "" {
+				delete(s.sessions, oldestKey)
+			}
+		}
 		sess = &memorySession{}
 		s.sessions[key] = sess
 	}

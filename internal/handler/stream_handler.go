@@ -2,13 +2,14 @@ package handler
 
 import (
 	"fmt"
-	"github.com/goccy/go-json"
 	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
@@ -413,8 +414,6 @@ func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Messag
 		}
 	}
 }
-
-
 
 func stringifyToolInput(input interface{}) string {
 	switch v := input.(type) {
@@ -989,8 +988,10 @@ func (h *streamHandler) emitWriteChunkFallbackIfNeeded(write func(event, data st
 }
 
 func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
+	h.mu.Lock()
 	h.pendingToolCalls = append(h.pendingToolCalls, call)
 	h.toolCallCount++
+	h.mu.Unlock()
 }
 
 func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {

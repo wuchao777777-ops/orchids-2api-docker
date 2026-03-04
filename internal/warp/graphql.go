@@ -5,11 +5,12 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/goccy/go-json"
 )
 
 const graphqlURL = "https://app.warp.dev/graphql/v2"
@@ -377,7 +378,7 @@ func doGraphQL(ctx context.Context, client *http.Client, jwt, operationName stri
 		defer reader.Close()
 	}
 
-	respBody, err := io.ReadAll(reader)
+	respBody, err := io.ReadAll(io.LimitReader(reader, 2<<20)) // 2 MB max
 	if err != nil {
 		return nil, fmt.Errorf("warp graphql %s: read body: %w", operationName, err)
 	}

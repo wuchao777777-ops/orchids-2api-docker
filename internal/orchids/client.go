@@ -3,10 +3,8 @@ package orchids
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"math/rand/v2"
@@ -15,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
@@ -807,42 +807,5 @@ func InvalidateCachedToken(sessionID string) {
 }
 
 func tokenExpiry(token string) time.Time {
-	firstDot := strings.IndexByte(token, '.')
-	if firstDot < 0 {
-		return time.Time{}
-	}
-	rest := token[firstDot+1:]
-	secondDot := strings.IndexByte(rest, '.')
-	if secondDot < 0 {
-		return time.Time{}
-	}
-
-	payload, err := base64.RawURLEncoding.DecodeString(rest[:secondDot])
-	if err != nil {
-		return time.Time{}
-	}
-
-	var claims map[string]interface{}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return time.Time{}
-	}
-
-	expValue, ok := claims["exp"]
-	if !ok {
-		return time.Time{}
-	}
-
-	var exp int64
-	switch v := expValue.(type) {
-	case float64:
-		exp = int64(v)
-	case json.Number:
-		exp, _ = v.Int64() // Error ignored as we return 0 on failure anyway
-	}
-
-	if exp == 0 {
-		return time.Time{}
-	}
-
-	return time.Unix(exp, 0).Add(-tokenExpirySkew)
+	return util.JWTExpiry(token, tokenExpirySkew)
 }

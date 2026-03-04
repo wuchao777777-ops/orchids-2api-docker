@@ -33,18 +33,18 @@ func NewRateLimiter(maxAttempts int, window time.Duration) *RateLimiter {
 
 // Allow reports whether the given IP is allowed to make another attempt.
 func (rl *RateLimiter) Allow(ip string) bool {
-	val, ok := rl.entries.Load(ip)
-	if !ok {
-		// New IP
-		entry := &limiterEntry{
-			tokens:    float64(rl.maxAttempts - 1), // Consume 1 token
-			lastVisit: time.Now(),
-		}
-		rl.entries.Store(ip, entry)
+	entry := &limiterEntry{
+		tokens:    float64(rl.maxAttempts - 1), // Pre-consume 1 token for this request
+		lastVisit: time.Now(),
+	}
+	val, loaded := rl.entries.LoadOrStore(ip, entry)
+	if !loaded {
+		// New entry was stored — first request from this IP, already consumed 1 token
 		return true
 	}
 
-	entry := val.(*limiterEntry)
+	// Existing entry found
+	entry = val.(*limiterEntry)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 

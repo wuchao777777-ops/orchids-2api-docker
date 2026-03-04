@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -244,7 +243,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if logger != nil {
 			logger.LogUpstreamHTTPError(aiURL, resp.StatusCode, string(body), nil)
 		}
@@ -477,14 +476,20 @@ func (c *Client) SyncAccountState() bool {
 	if c == nil || c.session == nil || c.account == nil {
 		return false
 	}
-	changed := false
+	// 先读取值（这些方法内部会加锁/解锁）
 	jwt := strings.TrimSpace(c.session.currentJWT())
+	newRefresh := strings.TrimSpace(c.session.currentRefreshToken())
+
+	// 加锁保护对 account 字段的写入，防止与其他 goroutine 并发读取时发生数据竞争
+	c.session.mu.Lock()
+	defer c.session.mu.Unlock()
+
+	changed := false
 	if jwt != "" && jwt != c.account.Token {
 		c.account.Token = jwt
 		changed = true
 	}
 	// 同步 refresh_token，防止服务重启后使用已轮换的旧令牌
-	newRefresh := strings.TrimSpace(c.session.currentRefreshToken())
 	if newRefresh != "" && newRefresh != c.account.RefreshToken {
 		c.account.RefreshToken = newRefresh
 		changed = true
@@ -494,28 +499,5 @@ func (c *Client) SyncAccountState() bool {
 
 // jwtExpiry parses the exp claim from a JWT token and returns the expiry time.
 func jwtExpiry(token string) time.Time {
-	firstDot := strings.IndexByte(token, '.')
-	if firstDot < 0 {
-		return time.Time{}
-	}
-	rest := token[firstDot+1:]
-	secondDot := strings.IndexByte(rest, '.')
-	if secondDot < 0 {
-		return time.Time{}
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(rest[:secondDot])
-	if err != nil {
-		return time.Time{}
-	}
-	var claims struct {
-		Exp json.Number `json:"exp"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return time.Time{}
-	}
-	exp, err := claims.Exp.Int64()
-	if err != nil || exp <= 0 {
-		return time.Time{}
-	}
-	return time.Unix(exp, 0)
+	return util.JWTExpiry(token, 0)
 }

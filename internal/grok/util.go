@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	apperrors "orchids-api/internal/errors"
 )
@@ -33,7 +34,11 @@ func randomHex(n int) string {
 }
 
 func buildStatsigID() string {
-	msg := "e:TypeError: Cannot read properties of undefined (reading 'childNodes')"
+	// Base64 encode a fake JS error string similar to AIClient-2-API StatsigGenerator
+	msg := fmt.Sprintf("e:TypeError: Cannot read properties of null (reading 'children['%s']')", randomHex(5))
+	if time.Now().UnixNano()%2 == 0 {
+		msg = fmt.Sprintf("e:TypeError: Cannot read properties of undefined (reading '%s')", randomHex(10))
+	}
 	return base64.StdEncoding.EncodeToString([]byte(msg))
 }
 

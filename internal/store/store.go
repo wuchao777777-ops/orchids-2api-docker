@@ -204,8 +204,9 @@ func (s *Store) seedModels() error {
 		{ID: "103", Channel: "Grok", ModelID: "grok-4.1", Name: "Grok 4.1", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 13},
 		{ID: "107", Channel: "Grok", ModelID: "grok-4.20-beta", Name: "Grok 4.20 Beta", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 14},
 		{ID: "104", Channel: "Grok", ModelID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 15},
-		{ID: "105", Channel: "Grok", ModelID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 16},
-		{ID: "106", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 17},
+		{ID: "108", Channel: "Grok", ModelID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 16},
+		{ID: "105", Channel: "Grok", ModelID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 17},
+		{ID: "106", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 18},
 	}
 
 	for _, m := range models {
@@ -380,7 +381,9 @@ func (s *Store) CreateModel(ctx context.Context, m *Model) error {
 				for _, other := range models {
 					if other.Channel == m.Channel && other.IsDefault {
 						other.IsDefault = false
-						s.models.UpdateModel(ctx, other)
+						if err := s.models.UpdateModel(ctx, other); err != nil {
+							slog.Warn("Failed to clear default flag on model", "model_id", other.ModelID, "error", err)
+						}
 					}
 				}
 			}
@@ -398,7 +401,9 @@ func (s *Store) UpdateModel(ctx context.Context, m *Model) error {
 				for _, other := range models {
 					if other.Channel == m.Channel && other.ID != m.ID && other.IsDefault {
 						other.IsDefault = false
-						s.models.UpdateModel(ctx, other)
+						if err := s.models.UpdateModel(ctx, other); err != nil {
+							slog.Warn("Failed to clear default flag on model", "model_id", other.ModelID, "error", err)
+						}
 					}
 				}
 			}

@@ -7,12 +7,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/goccy/go-json"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/goccy/go-json"
 )
 
 type Config struct {
@@ -207,6 +208,7 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.OrchidsFSIgnore = []string{"debug-logs", "data", ".claude"}
 	cfg.GrokAPIBaseURL = "https://grok.com"
 	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+	cfg.GrokUseUTLS = true
 	v := false
 	cfg.WarpDisableTools = &v
 	cfg.WarpMaxToolResults = 10

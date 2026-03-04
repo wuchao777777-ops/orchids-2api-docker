@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/goccy/go-json"
 )
 
 type session struct {
@@ -151,46 +152,43 @@ func (s *session) tokenValid() bool {
 }
 
 func (s *session) ensureToken(ctx context.Context, httpClient *http.Client, cid string) error {
-	s.mu.Lock()
-	if s.tokenValid() {
-		s.mu.Unlock()
-		return nil
-	}
-	// If another goroutine is already refreshing, wait for it
-	if s.refreshing {
-		ch := s.refreshDone
-		s.mu.Unlock()
-		if ch != nil {
-			select {
-			case <-ch:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		// After waiting, check if token is now valid
+	const maxRefreshAttempts = 3
+	for attempt := 0; attempt < maxRefreshAttempts; attempt++ {
 		s.mu.Lock()
-		valid := s.tokenValid()
-		s.mu.Unlock()
-		if valid {
+		if s.tokenValid() {
+			s.mu.Unlock()
 			return nil
 		}
-		// If still invalid, fall through to try refresh ourselves
-		return s.ensureToken(ctx, httpClient, cid)
+		// If another goroutine is already refreshing, wait for it
+		if s.refreshing {
+			ch := s.refreshDone
+			s.mu.Unlock()
+			if ch != nil {
+				select {
+				case <-ch:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			// After waiting, loop to re-check token
+			continue
+		}
+		// Mark that we are refreshing
+		s.refreshing = true
+		s.refreshDone = make(chan struct{})
+		s.mu.Unlock()
+
+		err := s.refreshTokenRequest(ctx, httpClient, cid)
+
+		s.mu.Lock()
+		s.refreshing = false
+		close(s.refreshDone)
+		s.refreshDone = nil
+		s.mu.Unlock()
+
+		return err
 	}
-	// Mark that we are refreshing
-	s.refreshing = true
-	s.refreshDone = make(chan struct{})
-	s.mu.Unlock()
-
-	err := s.refreshTokenRequest(ctx, httpClient, cid)
-
-	s.mu.Lock()
-	s.refreshing = false
-	close(s.refreshDone)
-	s.refreshDone = nil
-	s.mu.Unlock()
-
-	return err
+	return fmt.Errorf("ensureToken: max refresh attempts (%d) exceeded", maxRefreshAttempts)
 }
 
 func isTransientNetworkError(err error) bool {

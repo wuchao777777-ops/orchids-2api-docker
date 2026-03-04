@@ -3,13 +3,14 @@ package grok
 import (
 	"context"
 	"fmt"
-	"github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/store"
 )
@@ -71,7 +72,30 @@ func (h *Handler) resolveTokenRefreshRequest(r *http.Request) (adminTokenRefresh
 	req.Concurrency = normalizeTokenRefreshConcurrency(req.Concurrency)
 	req.Model = normalizeModelID(strings.TrimSpace(req.Model))
 
+	tokens := collectRefreshTokens(req)
+	if len(tokens) == 0 {
+		// If no explicit tokens given, load all grok accounts
+		if h.lb != nil && h.lb.Store != nil {
+			accounts, err := h.lb.Store.ListAccounts(r.Context())
+			if err != nil {
+				return req, nil, fmt.Errorf("failed to list accounts: %w", err)
+			}
+			for _, acc := range accounts {
+				if !isGrokAccount(acc) {
+					continue
+				}
+				token := grokAccountToken(acc)
+				if token != "" {
+					tokens = append(tokens, token)
+				}
+			}
+			tokens = uniqueStrings(tokens)
+		}
+	}
+	if len(tokens) == 0 {
 		return req, nil, fmt.Errorf("no tokens provided")
+	}
+	return req, tokens, nil
 }
 
 func updateGrokUsageAccount(acc *store.Account, info *RateLimitInfo, status string) {
@@ -89,8 +113,12 @@ func updateGrokUsageAccount(acc *store.Account, info *RateLimitInfo, status stri
 			limit = remaining
 		}
 		if limit > 0 || remaining > 0 {
+			used := limit - remaining
+			if used < 0 {
+				used = 0
+			}
 			acc.UsageLimit = float64(limit)
-			acc.UsageCurrent = float64(remaining)
+			acc.UsageCurrent = float64(used)
 		}
 		if !info.ResetAt.IsZero() {
 			acc.QuotaResetAt = info.ResetAt
