@@ -318,6 +318,9 @@ type streamHandler struct {
 	currentTextIndex      int
 	pendingThinkingSig    string
 	hasTextOutput         bool
+	lastTextDelta         string
+	lastTextDeltaSource   string
+	lastTextDeltaAt       time.Time
 
 	// Tool Handling (proxy mode only)
 	toolBlocks         map[string]int
@@ -608,6 +611,9 @@ func (h *streamHandler) resetRoundState() {
 	h.useUpstreamUsage = false
 	h.finalStopReason = ""
 	h.hasTextOutput = false
+	h.lastTextDelta = ""
+	h.lastTextDeltaSource = ""
+	h.lastTextDeltaAt = time.Time{}
 }
 
 func (h *streamHandler) shouldEmitToolCalls(stopReason string) bool {
@@ -1469,17 +1475,53 @@ func (h *streamHandler) shouldSkipIntroDelta(delta string) bool {
 	return exists
 }
 
+func (h *streamHandler) shouldSkipCrossChannelDuplicateDelta(source, delta string) bool {
+	if strings.TrimSpace(delta) == "" || source == "" {
+		return false
+	}
+	now := time.Now()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	skip := h.lastTextDelta == delta &&
+		h.lastTextDeltaSource != "" &&
+		h.lastTextDeltaSource != source &&
+		now.Sub(h.lastTextDeltaAt) <= 2*time.Second
+
+	h.lastTextDelta = delta
+	h.lastTextDeltaSource = source
+	h.lastTextDeltaAt = now
+	return skip
+}
+
 func normalizeIntroKey(delta string) string {
 	text := strings.TrimSpace(delta)
 	if text == "" {
 		return ""
 	}
 	lower := strings.ToLower(text)
+	compactLower := strings.Join(strings.Fields(strings.ReplaceAll(lower, "👋", "")), " ")
 	switch lower {
 	case "hi! how can i help you today?",
 		"hello! how can i help you today?",
 		"hi! how can i help you today!",
 		"hello! how can i help you today!":
+		return "intro:en:greet"
+	}
+	switch compactLower {
+	case "hi! what's up? how can i help today?",
+		"hello! what's up? how can i help today?",
+		"hi! how can i help today?",
+		"hello! how can i help today?",
+		"hi! how can i help you today?",
+		"hello! how can i help you today?",
+		"hi! how can i help you today!",
+		"hello! how can i help you today!":
+		return "intro:en:greet"
+	}
+	if (strings.HasPrefix(compactLower, "hi!") || strings.HasPrefix(compactLower, "hello!") || strings.HasPrefix(compactLower, "hey!")) &&
+		(strings.Contains(compactLower, "how can i help today") || strings.Contains(compactLower, "how can i help you today")) {
 		return "intro:en:greet"
 	}
 	if strings.HasPrefix(text, "你好") || strings.HasPrefix(text, "您好") {
@@ -1492,6 +1534,23 @@ func normalizeIntroKey(delta string) string {
 		return "intro:zh:claude"
 	}
 	return ""
+}
+
+func collapseDuplicatedIntroDelta(delta string) string {
+	text := strings.TrimSpace(delta)
+	if text == "" || len(text)%2 != 0 {
+		return delta
+	}
+	half := len(text) / 2
+	first := strings.TrimSpace(text[:half])
+	second := strings.TrimSpace(text[half:])
+	if first == "" || second == "" || first != second {
+		return delta
+	}
+	if normalizeIntroKey(first) == "" {
+		return delta
+	}
+	return first
 }
 
 // extractThinkingSignature 尝试从上游事件中提取 signature（优先 event.signature，其次 event.data.signature）
@@ -1687,6 +1746,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	case "model.text-delta", "coding_agent.output_text.delta":
 		delta := ""
+		source := eventKey
 		if msg.Type == "model" {
 			delta, _ = msg.Event["delta"].(string)
 		} else {
@@ -1696,7 +1756,14 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		if delta == "" {
 			return
 		}
+		delta = collapseDuplicatedIntroDelta(delta)
 		if h.shouldSkipIntroDelta(delta) {
+			return
+		}
+		if h.shouldSkipCrossChannelDuplicateDelta(source, delta) {
+			if h.config != nil && h.config.DebugEnabled {
+				slog.Debug("skip cross-channel duplicate delta", "source", source, "delta_len", len(delta))
+			}
 			return
 		}
 		h.markTextOutput()

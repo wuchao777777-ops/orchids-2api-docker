@@ -26,6 +26,63 @@ var (
 	reToolUsageCardBlock      = regexp.MustCompile(`(?is)<?xai:tool_usage_card[^>]*>.*?</xai:tool_usage_card>`)
 	reToolUsageCardIncomplete = regexp.MustCompile(`(?is)<?xai:tool_usage_card.*?(?:</xai:tool_usage_card>|\z)`)
 	reGrokRenderBlock         = regexp.MustCompile(`(?is)<?grok:render.*?</grok:render>`)
+
+	rateLimitLimitKeys = map[string]struct{}{
+		"limit":          {},
+		"limit_tokens":   {},
+		"limittokens":    {},
+		"max_tokens":     {},
+		"maxtokens":      {},
+		"max_queries":    {},
+		"maxqueries":     {},
+		"query_limit":    {},
+		"querylimit":     {},
+		"queries_limit":  {},
+		"querieslimit":   {},
+		"token_limit":    {},
+		"tokenlimit":     {},
+		"tokens_limit":   {},
+		"tokenslimit":    {},
+		"total_tokens":   {},
+		"totaltokens":    {},
+		"total_queries":  {},
+		"totalqueries":   {},
+		"quota":          {},
+		"quota_limit":    {},
+		"quotalimit":     {},
+		"request_limit":  {},
+		"requestlimit":   {},
+		"requests_limit": {},
+		"requestslimit":  {},
+	}
+	rateLimitRemainingKeys = map[string]struct{}{
+		"remaining":          {},
+		"remaining_tokens":   {},
+		"remainingtokens":    {},
+		"tokens_remaining":   {},
+		"tokensremaining":    {},
+		"remaining_queries":  {},
+		"remainingqueries":   {},
+		"queries_remaining":  {},
+		"queriesremaining":   {},
+		"quota_remaining":    {},
+		"quotaremaining":     {},
+		"remaining_requests": {},
+		"remainingrequests":  {},
+	}
+	rateLimitResetKeys = map[string]struct{}{
+		"reset":           {},
+		"reset_at":        {},
+		"resetat":         {},
+		"reset_at_ms":     {},
+		"resetatms":       {},
+		"reset_time":      {},
+		"resettime":       {},
+		"reset_timestamp": {},
+		"resettimestamp":  {},
+		"next_reset":      {},
+		"nextreset":       {},
+	}
 )
 
 func randomHex(n int) string {
@@ -572,12 +629,26 @@ func NormalizeSSOToken(raw string) string {
 	if token == "" {
 		return ""
 	}
-	lower := strings.ToLower(token)
-	if idx := strings.Index(lower, "sso="); idx >= 0 {
-		token = token[idx+len("sso="):]
-		if semi := strings.Index(token, ";"); semi >= 0 {
-			token = token[:semi]
+
+	// Cookie-style input: scan pairs and prefer exact "sso" key.
+	if strings.Contains(token, ";") {
+		parts := strings.Split(token, ";")
+		for _, part := range parts {
+			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(kv[0]), "sso") {
+				return strings.TrimSpace(kv[1])
+			}
 		}
+		return strings.TrimSpace(token)
+	}
+
+	// Plain "sso=<token>" input.
+	lower := strings.ToLower(strings.TrimSpace(token))
+	if strings.HasPrefix(lower, "sso=") {
+		return strings.TrimSpace(token[len("sso="):])
 	}
 	return strings.TrimSpace(token)
 }
@@ -633,67 +704,9 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 		return nil
 	}
 
-	limitKeys := map[string]struct{}{
-		"limit":            {},
-		"limit_tokens":     {},
-		"limittokens":      {},
-		"max_tokens":       {},
-		"maxtokens":        {},
-		"max_queries":      {},
-		"maxqueries":       {},
-		"query_limit":      {},
-		"querylimit":       {},
-		"queries_limit":    {},
-		"querieslimit":     {},
-		"token_limit":      {},
-		"tokenlimit":       {},
-		"tokens_limit":     {},
-		"tokenslimit":      {},
-		"total_tokens":     {},
-		"totaltokens":      {},
-		"total_queries":    {},
-		"totalqueries":     {},
-		"quota":            {},
-		"quota_limit":      {},
-		"quotalimit":       {},
-		"request_limit":    {},
-		"requestlimit":     {},
-		"requests_limit":   {},
-		"requestslimit":    {},
-		"request_limiters": {},
-	}
-	remainingKeys := map[string]struct{}{
-		"remaining":          {},
-		"remaining_tokens":   {},
-		"remainingtokens":    {},
-		"tokens_remaining":   {},
-		"tokensremaining":    {},
-		"remaining_queries":  {},
-		"remainingqueries":   {},
-		"queries_remaining":  {},
-		"queriesremaining":   {},
-		"quota_remaining":    {},
-		"quotaremaining":     {},
-		"remaining_requests": {},
-		"remainingrequests":  {},
-	}
-	resetKeys := map[string]struct{}{
-		"reset":           {},
-		"reset_at":        {},
-		"resetat":         {},
-		"reset_at_ms":     {},
-		"resetatms":       {},
-		"reset_time":      {},
-		"resettime":       {},
-		"reset_timestamp": {},
-		"resettimestamp":  {},
-		"next_reset":      {},
-		"nextreset":       {},
-	}
-
-	limit, okLimit := findNumberByKeys(payload, limitKeys)
-	remaining, okRemaining := findNumberByKeys(payload, remainingKeys)
-	resetRaw, okReset := findValueByKeys(payload, resetKeys)
+	limit, okLimit := findNumberByKeys(payload, rateLimitLimitKeys)
+	remaining, okRemaining := findNumberByKeys(payload, rateLimitRemainingKeys)
+	resetAt, okReset := findResetByKeys(payload, rateLimitResetKeys)
 
 	if !okLimit && !okRemaining && !okReset {
 		return nil
@@ -704,7 +717,7 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 		Remaining: remaining,
 	}
 	if okReset {
-		info.ResetAt = parseRateLimitReset(fmt.Sprint(resetRaw))
+		info.ResetAt = resetAt
 	}
 	return info
 }
@@ -715,15 +728,56 @@ func classifyAccountStatusFromError(errStr string) string {
 }
 
 func findNumberByKeys(value interface{}, keys map[string]struct{}) (int64, bool) {
-	raw, ok := findValueByKeys(value, keys)
-	if !ok {
-		return 0, false
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for k, item := range v {
+			if _, ok := keys[normalizeRateKey(k)]; !ok {
+				continue
+			}
+			if n, ok := parseNumberAny(item); ok {
+				return n, true
+			}
+		}
+		for _, item := range v {
+			if out, ok := findNumberByKeys(item, keys); ok {
+				return out, true
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if out, ok := findNumberByKeys(item, keys); ok {
+				return out, true
+			}
+		}
 	}
+	return 0, false
+}
+
+func parseNumberAny(raw interface{}) (int64, bool) {
 	switch v := raw.(type) {
 	case int:
 		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
 	case int64:
 		return v, true
+	case uint:
+		return int64(v), true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint64:
+		if v > uint64(1<<63-1) {
+			return 0, false
+		}
+		return int64(v), true
 	case float64:
 		return int64(v), true
 	case float32:
@@ -738,32 +792,37 @@ func findNumberByKeys(value interface{}, keys map[string]struct{}) (int64, bool)
 		return 0, false
 	case string:
 		return parseRateLimitValue(v)
+	case map[string]interface{}, []interface{}:
+		return 0, false
 	default:
 		return parseRateLimitValue(fmt.Sprint(v))
 	}
 }
 
-func findValueByKeys(value interface{}, keys map[string]struct{}) (interface{}, bool) {
+func findResetByKeys(value interface{}, keys map[string]struct{}) (time.Time, bool) {
 	switch v := value.(type) {
 	case map[string]interface{}:
 		for k, item := range v {
-			if _, ok := keys[normalizeRateKey(k)]; ok {
-				return item, true
+			if _, ok := keys[normalizeRateKey(k)]; !ok {
+				continue
+			}
+			if t := parseRateLimitReset(fmt.Sprint(item)); !t.IsZero() {
+				return t, true
 			}
 		}
 		for _, item := range v {
-			if out, ok := findValueByKeys(item, keys); ok {
+			if out, ok := findResetByKeys(item, keys); ok {
 				return out, true
 			}
 		}
 	case []interface{}:
 		for _, item := range v {
-			if out, ok := findValueByKeys(item, keys); ok {
+			if out, ok := findResetByKeys(item, keys); ok {
 				return out, true
 			}
 		}
 	}
-	return nil, false
+	return time.Time{}, false
 }
 
 func normalizeRateKey(key string) string {
@@ -790,19 +849,129 @@ func parseRateLimitValue(raw string) (int64, bool) {
 	if raw == "" {
 		return 0, false
 	}
-	if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+	if v, ok := parseNumericToken(raw); ok {
 		return v, true
 	}
-	if f, err := strconv.ParseFloat(raw, 64); err == nil {
-		return int64(f), true
+	if token := extractFirstNumberToken(raw); token != "" {
+		if v, ok := parseNumericToken(token); ok {
+			return v, true
+		}
 	}
 	return 0, false
+}
+
+func parseNumericToken(token string) (int64, bool) {
+	if token == "" {
+		return 0, false
+	}
+	i := 0
+	if token[0] == '+' || token[0] == '-' {
+		i = 1
+	}
+	if i >= len(token) {
+		return 0, false
+	}
+
+	hasDigit := false
+	hasDot := false
+	for ; i < len(token); i++ {
+		c := token[i]
+		if isDigit(c) {
+			hasDigit = true
+			continue
+		}
+		if c == '.' && !hasDot {
+			hasDot = true
+			continue
+		}
+		return 0, false
+	}
+	if !hasDigit {
+		return 0, false
+	}
+
+	if hasDot {
+		f, err := strconv.ParseFloat(token, 64)
+		if err != nil {
+			return 0, false
+		}
+		return int64(f), true
+	}
+
+	v, err := strconv.ParseInt(token, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func extractFirstNumberToken(raw string) string {
+	start := -1
+	end := -1
+	seenDot := false
+	seenDigit := false
+
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if start < 0 {
+			if c == '+' || c == '-' {
+				if i+1 < len(raw) && (isDigit(raw[i+1]) || raw[i+1] == '.') {
+					start = i
+					continue
+				}
+				continue
+			}
+			if c == '.' {
+				if i+1 < len(raw) && isDigit(raw[i+1]) {
+					start = i
+					seenDot = true
+					continue
+				}
+				continue
+			}
+			if isDigit(c) {
+				start = i
+				seenDigit = true
+				continue
+			}
+			continue
+		}
+
+		if isDigit(c) {
+			seenDigit = true
+			end = i + 1
+			continue
+		}
+		if c == '.' && !seenDot {
+			seenDot = true
+			if end < 0 {
+				end = i + 1
+			}
+			continue
+		}
+		break
+	}
+
+	if start < 0 || !seenDigit {
+		return ""
+	}
+	if end < 0 {
+		end = len(raw)
+	}
+	return raw[start:end]
+}
+
+func isDigit(c byte) bool {
+	return c >= '0' && c <= '9'
 }
 
 func parseRateLimitReset(raw string) time.Time {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t
 	}
 	if v, ok := parseRateLimitValue(raw); ok {
 		// Treat large values as milliseconds.
@@ -812,9 +981,6 @@ func parseRateLimitReset(raw string) time.Time {
 		if v > 0 {
 			return time.Unix(v, 0)
 		}
-	}
-	if t, err := time.Parse(time.RFC3339, raw); err == nil {
-		return t
 	}
 	return time.Time{}
 }

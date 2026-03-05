@@ -78,8 +78,19 @@ func TestNormalizeIntroKey(t *testing.T) {
 	if got := normalizeIntroKey("  Hello! How can I help you today? "); got != "intro:en:greet" {
 		t.Fatalf("unexpected: %q", got)
 	}
+	if got := normalizeIntroKey("Hi! 👋 What's up? How can I help today?"); got != "intro:en:greet" {
+		t.Fatalf("unexpected english variant: %q", got)
+	}
 	if got := normalizeIntroKey("你好，我能帮你什么"); got != "intro:zh:greet" {
 		t.Fatalf("unexpected: %q", got)
+	}
+}
+
+func TestCollapseDuplicatedIntroDelta(t *testing.T) {
+	in := "Hi! 👋 What's up? How can I help today?Hi! 👋 What's up? How can I help today?"
+	out := collapseDuplicatedIntroDelta(in)
+	if out != "Hi! 👋 What's up? How can I help today?" {
+		t.Fatalf("unexpected collapse result: %q", out)
 	}
 }
 

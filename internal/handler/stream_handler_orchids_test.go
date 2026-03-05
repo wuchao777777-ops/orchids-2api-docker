@@ -372,3 +372,39 @@ func TestWriteToolInputSanitizesOverwrite(t *testing.T) {
 		t.Fatalf("expected sanitized write input to keep file_path/content, got: %s", body)
 	}
 }
+
+func TestCrossChannelDuplicateTextDeltaSkipped(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		rec,
+		debug.New(false, false),
+		false,
+		true,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model",
+		Event: map[string]interface{}{
+			"type":  "text-delta",
+			"delta": "hello",
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type: "coding_agent.output_text.delta",
+		Event: map[string]interface{}{
+			"delta": "hello",
+		},
+	})
+	h.finishResponse("end_turn")
+
+	body := rec.Body.String()
+	if strings.Count(body, `"type":"text_delta","text":"hello"`) != 1 {
+		t.Fatalf("expected duplicated cross-channel delta to be emitted once, got: %s", body)
+	}
+}

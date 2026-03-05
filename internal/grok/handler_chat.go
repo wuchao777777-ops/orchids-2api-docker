@@ -243,10 +243,10 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	hasAttachments := len(attachments) > 0
 	if req.Stream {
-		h.streamChat(w, req.Model, spec, sess.token, publicBase, hasAttachments, text, resp.Body)
+		h.streamChat(w, req.Model, spec, sess.token, publicBase, hasAttachments, resp.Body)
 		return
 	}
-	h.collectChat(w, req.Model, spec, sess.token, publicBase, hasAttachments, text, resp.Body)
+	h.collectChat(w, req.Model, spec, sess.token, publicBase, resp.Body)
 }
 
 func (h *Handler) buildChatPayload(
@@ -562,9 +562,101 @@ func validUTF8Prefix(s string) string {
 	return ""
 }
 
+func collapseDuplicatedLongChunk(text string) string {
+	original := strings.TrimSpace(stripZeroWidth(text))
+	if original == "" {
+		return text
+	}
+	current := original
+	for {
+		next, ok := collapseDuplicatedLongChunkOnce(current)
+		if !ok {
+			break
+		}
+		current = next
+	}
+	if current == original {
+		return text
+	}
+	return current
+}
+
+func collapseDuplicatedLongChunkOnce(trimmed string) (string, bool) {
+	runes := []rune(trimmed)
+	if len(runes) < 24 {
+		return "", false
+	}
+
+	for sep := 0; sep <= 3; sep++ {
+		total := len(runes) - sep
+		if total <= 0 || total%2 != 0 {
+			continue
+		}
+		half := total / 2
+		first := strings.TrimSpace(stripZeroWidth(string(runes[:half])))
+		second := strings.TrimSpace(stripZeroWidth(string(runes[half+sep:])))
+		mid := strings.TrimSpace(stripZeroWidth(string(runes[half : half+sep])))
+		if first == "" || second == "" || first != second || mid != "" {
+			continue
+		}
+		if utf8.RuneCountInString(first) < 12 {
+			return "", false
+		}
+		return first, true
+	}
+	return "", false
+}
+
+func stripZeroWidth(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\u200b', '\u200c', '\u200d', '\ufeff':
+			return -1
+		default:
+			return r
+		}
+	}, s)
+}
+
+func emitImageCandidatesFromValue(value interface{}, assetLimit int, emitURL func(string)) {
+	if emitURL == nil {
+		return
+	}
+	for _, u := range extractImageURLs(value) {
+		emitURL(u)
+	}
+	for _, u := range extractRenderableImageLinks(value) {
+		emitURL(u)
+	}
+	for _, p := range collectAssetLikeStrings(value, assetLimit) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if isLikelyImageURL(p) {
+			emitURL(p)
+			continue
+		}
+		if isLikelyImageAssetPath(p) {
+			emitURL("https://assets.grok.com/" + strings.TrimPrefix(p, "/"))
+		}
+	}
+}
+
+func appendImageCandidatesFromValue(dst []string, value interface{}, includeStructured bool) []string {
+	if includeStructured {
+		dst = append(dst, extractImageURLs(value)...)
+	}
+	dst = append(dst, extractRenderableImageLinks(value)...)
+	return dst
+}
+
 // NOTE: streamMarkupFilter.feed is implemented earlier in this file.
 
-func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, userPrompt string, body io.Reader) {
+func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, body io.Reader) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -581,6 +673,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	emitted := map[string]bool{}
 	sawModelMessage := false
 	emittedFromToken := false
+	lastTextChunkNorm := ""
+	var emittedText strings.Builder
 
 	var mf *streamMarkupFilter
 	if !hasAttachments {
@@ -607,6 +701,34 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			flusher.Flush()
 		}
 		sentAny = true
+	}
+
+	emitTextChunk := func(content string) {
+		collapsed := collapseDuplicatedLongChunk(content)
+		if collapsed != content && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
+			slog.Debug("grok stream collapsed duplicated text chunk",
+				"before_chars", utf8.RuneCountInString(strings.TrimSpace(content)),
+				"after_chars", utf8.RuneCountInString(strings.TrimSpace(collapsed)))
+		}
+		content = collapsed
+		norm := strings.TrimSpace(content)
+		if norm == "" {
+			return
+		}
+
+		if norm == lastTextChunkNorm && utf8.RuneCountInString(norm) >= 12 {
+			if h != nil && h.cfg != nil && h.cfg.DebugEnabled {
+				slog.Debug("grok stream skip duplicate text chunk", "chars", utf8.RuneCountInString(norm))
+			}
+			return
+		}
+		emitChunk(map[string]interface{}{"content": content}, nil)
+		emittedText.WriteString(content)
+		if utf8.RuneCountInString(norm) >= 12 {
+			lastTextChunkNorm = norm
+		} else {
+			lastTextChunkNorm = ""
+		}
 	}
 
 	emitImageURL := func(raw string) {
@@ -657,14 +779,14 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				cleaned := stripToolAndRenderMarkup(tokenDelta)
 				cleaned = stripLeadingAngleNoise(sanitizeText(cleaned))
 				if cleaned != "" {
-					emitChunk(map[string]interface{}{"content": cleaned}, nil)
+					emitTextChunk(cleaned)
 				}
 			} else if !sawModelMessage {
 				// Fallback path: use token deltas only until we observe modelResponse.
 				if cleaned := mf.feed(tokenDelta); cleaned != "" {
 					cleaned = stripLeadingAngleNoise(cleaned)
 					if cleaned != "" {
-						emitChunk(map[string]interface{}{"content": cleaned}, nil)
+						emitTextChunk(cleaned)
 						emittedFromToken = true
 					}
 				}
@@ -679,14 +801,14 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					cleaned := stripToolAndRenderMarkup(msg)
 					cleaned = stripLeadingAngleNoise(sanitizeText(cleaned))
 					if cleaned != "" {
-						emitChunk(map[string]interface{}{"content": cleaned}, nil)
+						emitTextChunk(cleaned)
 					}
 				} else if !emittedFromToken {
 					// Text streaming path: feed full messages into the filter (handles tool/render blocks) and emit the cleaned text.
 					if cleaned := mf.feed(msg); cleaned != "" {
 						cleaned = stripLeadingAngleNoise(cleaned)
 						if cleaned != "" {
-							emitChunk(map[string]interface{}{"content": cleaned}, nil)
+							emitTextChunk(cleaned)
 						}
 					}
 				}
@@ -694,50 +816,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
 				}
 			}
-			for _, u := range extractImageURLs(mr) {
-				emitImageURL(u)
-			}
-			// Fallback: tool/card payloads may include image URLs outside of the known keys.
-			for _, u := range extractRenderableImageLinks(mr) {
-				emitImageURL(u)
-			}
-			// Extra fallback: scan for asset-like strings inside cards / embedded JSON.
-			for _, p := range collectAssetLikeStrings(mr, 80) {
-				p = strings.TrimSpace(p)
-				if p == "" {
-					continue
-				}
-				if isLikelyImageURL(p) {
-					emitImageURL(p)
-					continue
-				}
-				if isLikelyImageAssetPath(p) {
-					emitImageURL("https://assets.grok.com/" + strings.TrimPrefix(p, "/"))
-					continue
-				}
-			}
+			emitImageCandidatesFromValue(mr, 80, emitImageURL)
 		}
 		// Broader fallback: sometimes URLs live outside modelResponse.
-		for _, u := range extractImageURLs(resp) {
-			emitImageURL(u)
-		}
-		for _, u := range extractRenderableImageLinks(resp) {
-			emitImageURL(u)
-		}
-		for _, p := range collectAssetLikeStrings(resp, 120) {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			if isLikelyImageURL(p) {
-				emitImageURL(p)
-				continue
-			}
-			if isLikelyImageAssetPath(p) {
-				emitImageURL("https://assets.grok.com/" + strings.TrimPrefix(p, "/"))
-				continue
-			}
-		}
+		emitImageCandidatesFromValue(resp, 120, emitImageURL)
 		if spec.IsVideo {
 			if progress, videoURL, _, ok := extractVideoProgress(resp); ok {
 				if progress > 0 && progress < 100 {
@@ -768,7 +850,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		if tail := mf.flush(); tail != "" {
 			tail = stripLeadingAngleNoise(tail)
 			if tail != "" {
-				emitChunk(map[string]interface{}{"content": tail}, nil)
+				emitTextChunk(tail)
 			}
 		}
 		if emittedFromToken && !sawModelMessage && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
@@ -812,7 +894,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	}
 }
 
-func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, userPrompt string, body io.Reader) {
+func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, body io.Reader) {
 	id := "chatcmpl_" + randomHex(8)
 	lastMessage := ""
 	videoURL := ""
@@ -835,10 +917,9 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
 				}
 			}
-			imageCandidates = append(imageCandidates, extractImageURLs(mr)...)
-			imageCandidates = append(imageCandidates, extractRenderableImageLinks(mr)...)
+			imageCandidates = appendImageCandidatesFromValue(imageCandidates, mr, true)
 		}
-		imageCandidates = append(imageCandidates, extractRenderableImageLinks(resp)...)
+		imageCandidates = appendImageCandidatesFromValue(imageCandidates, resp, false)
 		if spec.IsVideo {
 			if progress, vurl, _, ok := extractVideoProgress(resp); ok && progress >= 100 && strings.TrimSpace(vurl) != "" {
 				videoURL = strings.TrimSpace(vurl)
@@ -858,6 +939,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 	if strings.TrimSpace(finalContent) == "" {
 		finalContent = tokenClean
 	}
+	finalContent = collapseDuplicatedLongChunk(finalContent)
 
 	if videoURL != "" {
 		if name, err := h.cacheMediaURL(context.Background(), token, videoURL, "video"); err == nil && name != "" {

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"orchids-api/internal/prompt"
 )
 
 func TestComputeRequestHash_ChangesWithAuthPathBody(t *testing.T) {
@@ -34,6 +36,44 @@ func TestComputeRequestHash_ChangesWithAuthPathBody(t *testing.T) {
 	}
 	if h1 == h.computeRequestHash(mkReq("/v1/messages", "Bearer x"), bodyB) {
 		t.Fatalf("expected body to affect hash")
+	}
+}
+
+func TestComputeSemanticRequestHash_StableAndScoped(t *testing.T) {
+	h := &Handler{}
+	mkReq := func(path, auth string) *http.Request {
+		r, _ := http.NewRequest(http.MethodPost, "http://example.com"+path, bytes.NewReader([]byte("{}")))
+		if auth != "" {
+			r.Header.Set("Authorization", auth)
+		}
+		return r
+	}
+	base := ClaudeRequest{
+		Model:  "claude-3-5-sonnet",
+		Stream: true,
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "Hi!   there"}},
+		},
+	}
+
+	h1 := h.computeSemanticRequestHash(mkReq("/v1/messages", "Bearer x"), base)
+	h2 := h.computeSemanticRequestHash(mkReq("/v1/messages", "Bearer x"), base)
+	if h1 == "" || h1 != h2 {
+		t.Fatalf("expected stable semantic hash, got %q vs %q", h1, h2)
+	}
+
+	withConversation := base
+	withConversation.ConversationID = "conv-1"
+	if h1 == h.computeSemanticRequestHash(mkReq("/v1/messages", "Bearer x"), withConversation) {
+		t.Fatalf("expected conversation to affect semantic hash")
+	}
+
+	withDifferentUserText := base
+	withDifferentUserText.Messages = []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "Different question"}},
+	}
+	if h1 == h.computeSemanticRequestHash(mkReq("/v1/messages", "Bearer x"), withDifferentUserText) {
+		t.Fatalf("expected user text to affect semantic hash")
 	}
 }
 

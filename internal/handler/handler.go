@@ -132,6 +132,45 @@ func (h *Handler) computeRequestHash(r *http.Request, body []byte) string {
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
+func (h *Handler) computeSemanticRequestHash(r *http.Request, req ClaudeRequest) string {
+	userText := normalizeTopicText(extractUserText(req.Messages))
+	if userText == "" {
+		return ""
+	}
+	if len(userText) > 4096 {
+		userText = userText[:4096]
+	}
+
+	mode := "chat"
+	if isTopicClassifierRequest(req) {
+		mode = "topic_classifier"
+	} else if ok, _ := isCommandPrefixRequest(req); ok {
+		mode = "command_prefix"
+	}
+
+	hasher := sha256.New()
+	hasher.Write([]byte(r.URL.Path))
+	hasher.Write([]byte{0})
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		hasher.Write([]byte(auth))
+	}
+	hasher.Write([]byte{0})
+	hasher.Write([]byte(strings.ToLower(strings.TrimSpace(req.Model))))
+	hasher.Write([]byte{0})
+	hasher.Write([]byte(strings.ToLower(strings.TrimSpace(conversationKeyForRequest(r, req)))))
+	hasher.Write([]byte{0})
+	hasher.Write([]byte(mode))
+	hasher.Write([]byte{0})
+	if req.Stream {
+		hasher.Write([]byte{1})
+	} else {
+		hasher.Write([]byte{0})
+	}
+	hasher.Write([]byte{0})
+	hasher.Write([]byte(userText))
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
 func (h *Handler) registerRequest(hash string) (bool, bool) {
 	return h.dedupStore.Register(context.Background(), hash)
 }
@@ -237,18 +276,47 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	logger.LogIncomingRequest(req)
 
 	reqHash := h.computeRequestHash(r, bodyBytes)
-	slog.Debug("Request fingerprint", "hash", reqHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", r.Header.Get("X-Stainless-Retry-Count"))
-	if dup, inFlight := h.registerRequest(reqHash); dup {
+	semanticHash := h.computeSemanticRequestHash(r, req)
+	slog.Debug("Request fingerprint", "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", r.Header.Get("X-Stainless-Retry-Count"))
+
+	exactKey := "exact:" + reqHash
+	registeredKeys := []string{}
+	if dup, inFlight := h.registerRequest(exactKey); dup {
 		slog.Warn("Duplicate request suppressed", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
 		logger.LogEarlyExit("duplicate_request", map[string]interface{}{
-			"hash":      reqHash,
+			"hash":      exactKey,
 			"in_flight": inFlight,
 			"path":      r.URL.Path,
+			"kind":      "exact",
 		})
 		h.writeDuplicateResponse(w, req)
 		return
 	}
-	defer h.finishRequest(reqHash)
+	registeredKeys = append(registeredKeys, exactKey)
+
+	if semanticHash != "" {
+		semanticKey := "semantic:" + semanticHash
+		if dup, inFlight := h.registerRequest(semanticKey); dup {
+			for i := len(registeredKeys) - 1; i >= 0; i-- {
+				h.finishRequest(registeredKeys[i])
+			}
+			slog.Warn("Semantic duplicate request suppressed", "hash", semanticHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
+			logger.LogEarlyExit("duplicate_request", map[string]interface{}{
+				"hash":      semanticKey,
+				"in_flight": inFlight,
+				"path":      r.URL.Path,
+				"kind":      "semantic",
+			})
+			h.writeDuplicateResponse(w, req)
+			return
+		}
+		registeredKeys = append(registeredKeys, semanticKey)
+	}
+	defer func() {
+		for i := len(registeredKeys) - 1; i >= 0; i-- {
+			h.finishRequest(registeredKeys[i])
+		}
+	}()
 
 	// ...
 	if ok, command := isCommandPrefixRequest(req); ok {
