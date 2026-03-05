@@ -2,9 +2,10 @@ package handler
 
 import (
 	"fmt"
-	"hash/fnv"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,22 @@ import (
 	"orchids-api/internal/upstream"
 )
 
+const (
+	fnv64Offset = uint64(14695981039346656037)
+	fnv64Prime  = uint64(1099511628211)
+)
+
+const (
+	sseEventPrefix = "event: "
+	sseDataPrefix  = "data: "
+	sseLineBreak   = "\n\n"
+	sseDataJoin    = "\ndata: "
+	sseDoneLine    = "data: [DONE]\n\n"
+	sseKeepAlive   = ": keep-alive\n\n"
+)
+
+var rawJSONEmptyObject = json.RawMessage("{}")
+
 func mapKeys(m map[string]interface{}) []string {
 	if m == nil {
 		return nil
@@ -31,6 +48,233 @@ func mapKeys(m map[string]interface{}) []string {
 	}
 	// Order isn't critical; keep lightweight (avoid importing sort).
 	return keys
+}
+
+type sseToolUseContentBlock struct {
+	Type  string          `json:"type"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+type sseTextContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type sseThinkingContentBlock struct {
+	Type      string `json:"type"`
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
+}
+
+type sseContentBlockStartToolUse struct {
+	Type         string                 `json:"type"`
+	Index        int                    `json:"index"`
+	ContentBlock sseToolUseContentBlock `json:"content_block"`
+}
+
+type sseContentBlockStartText struct {
+	Type         string              `json:"type"`
+	Index        int                 `json:"index"`
+	ContentBlock sseTextContentBlock `json:"content_block"`
+}
+
+type sseContentBlockStartThinking struct {
+	Type         string                  `json:"type"`
+	Index        int                     `json:"index"`
+	ContentBlock sseThinkingContentBlock `json:"content_block"`
+}
+
+type sseInputJSONDelta struct {
+	Type        string `json:"type"`
+	PartialJSON string `json:"partial_json"`
+}
+
+type sseTextDelta struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type sseThinkingDelta struct {
+	Type     string `json:"type"`
+	Thinking string `json:"thinking"`
+}
+
+type sseContentBlockDeltaInputJSON struct {
+	Type  string            `json:"type"`
+	Index int               `json:"index"`
+	Delta sseInputJSONDelta `json:"delta"`
+}
+
+type sseContentBlockDeltaText struct {
+	Type  string       `json:"type"`
+	Index int          `json:"index"`
+	Delta sseTextDelta `json:"delta"`
+}
+
+type sseContentBlockDeltaThinking struct {
+	Type  string           `json:"type"`
+	Index int              `json:"index"`
+	Delta sseThinkingDelta `json:"delta"`
+}
+
+type sseContentBlockStop struct {
+	Type  string `json:"type"`
+	Index int    `json:"index"`
+}
+
+type sseMessageDeltaDetail struct {
+	StopReason string `json:"stop_reason"`
+}
+
+type sseMessageUsage struct {
+	OutputTokens int `json:"output_tokens"`
+}
+
+type sseMessageDelta struct {
+	Type  string                `json:"type"`
+	Delta sseMessageDeltaDetail `json:"delta"`
+	Usage sseMessageUsage       `json:"usage"`
+}
+
+type sseMessageStop struct {
+	Type string `json:"type"`
+}
+
+func marshalJSONString(v interface{}) (string, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func marshalEventPayload(msg upstream.SSEMessage) (string, error) {
+	if len(msg.RawJSON) > 0 {
+		return string(msg.RawJSON), nil
+	}
+	return marshalJSONString(msg.Event)
+}
+
+func writeSSEFrame(w io.Writer, event, data string) error {
+	if _, err := io.WriteString(w, sseEventPrefix); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, event); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, sseDataJoin); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, data); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, sseLineBreak)
+	return err
+}
+
+func writeOpenAIFrame(w io.Writer, payload []byte) error {
+	if _, err := io.WriteString(w, sseDataPrefix); err != nil {
+		return err
+	}
+	if _, err := w.Write(payload); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, sseLineBreak)
+	return err
+}
+
+func marshalSSEContentBlockStartToolUse(index int, id, name string) (string, error) {
+	return marshalJSONString(sseContentBlockStartToolUse{
+		Type:  "content_block_start",
+		Index: index,
+		ContentBlock: sseToolUseContentBlock{
+			Type:  "tool_use",
+			ID:    id,
+			Name:  name,
+			Input: rawJSONEmptyObject,
+		},
+	})
+}
+
+func marshalSSEContentBlockStartText(index int) (string, error) {
+	return marshalJSONString(sseContentBlockStartText{
+		Type:  "content_block_start",
+		Index: index,
+		ContentBlock: sseTextContentBlock{
+			Type: "text",
+			Text: "",
+		},
+	})
+}
+
+func marshalSSEContentBlockStartThinking(index int, signature string) (string, error) {
+	return marshalJSONString(sseContentBlockStartThinking{
+		Type:  "content_block_start",
+		Index: index,
+		ContentBlock: sseThinkingContentBlock{
+			Type:      "thinking",
+			Thinking:  "",
+			Signature: signature,
+		},
+	})
+}
+
+func marshalSSEContentBlockDeltaInputJSON(index int, partialJSON string) (string, error) {
+	return marshalJSONString(sseContentBlockDeltaInputJSON{
+		Type:  "content_block_delta",
+		Index: index,
+		Delta: sseInputJSONDelta{
+			Type:        "input_json_delta",
+			PartialJSON: partialJSON,
+		},
+	})
+}
+
+func marshalSSEContentBlockDeltaText(index int, text string) (string, error) {
+	return marshalJSONString(sseContentBlockDeltaText{
+		Type:  "content_block_delta",
+		Index: index,
+		Delta: sseTextDelta{
+			Type: "text_delta",
+			Text: text,
+		},
+	})
+}
+
+func marshalSSEContentBlockDeltaThinking(index int, thinking string) (string, error) {
+	return marshalJSONString(sseContentBlockDeltaThinking{
+		Type:  "content_block_delta",
+		Index: index,
+		Delta: sseThinkingDelta{
+			Type:     "thinking_delta",
+			Thinking: thinking,
+		},
+	})
+}
+
+func marshalSSEContentBlockStop(index int) (string, error) {
+	return marshalJSONString(sseContentBlockStop{
+		Type:  "content_block_stop",
+		Index: index,
+	})
+}
+
+func marshalSSEMessageDelta(stopReason string, outputTokens int) (string, error) {
+	return marshalJSONString(sseMessageDelta{
+		Type: "message_delta",
+		Delta: sseMessageDeltaDetail{
+			StopReason: stopReason,
+		},
+		Usage: sseMessageUsage{
+			OutputTokens: outputTokens,
+		},
+	})
+}
+
+func marshalSSEMessageStop() (string, error) {
+	return marshalJSONString(sseMessageStop{Type: "message_stop"})
 }
 
 type streamHandler struct {
@@ -193,7 +437,7 @@ func (h *streamHandler) writeSSE(event, data string) {
 		return
 	}
 
-	if _, err := fmt.Fprintf(h.w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+	if err := writeSSEFrame(h.w, event, data); err != nil {
 		h.markWriteErrorLocked(event, err)
 		return
 	}
@@ -209,7 +453,7 @@ func (h *streamHandler) writeOpenAISSE(event, data string) error {
 	if !ok {
 		return nil
 	}
-	if _, err := fmt.Fprintf(h.w, "data: %s\n\n", string(bytes)); err != nil {
+	if err := writeOpenAIFrame(h.w, bytes); err != nil {
 		return err
 	}
 	if h.flusher != nil {
@@ -232,7 +476,7 @@ func (h *streamHandler) writeFinalSSE(event, data string) {
 		}
 		// Send [DONE] at the very end
 		if event == "message_stop" {
-			if _, err := fmt.Fprintf(h.w, "data: [DONE]\n\n"); err != nil {
+			if _, err := io.WriteString(h.w, sseDoneLine); err != nil {
 				h.markWriteErrorLocked(event, err)
 				return
 			}
@@ -243,7 +487,7 @@ func (h *streamHandler) writeFinalSSE(event, data string) {
 		return
 	}
 
-	if _, err := fmt.Fprintf(h.w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+	if err := writeSSEFrame(h.w, event, data); err != nil {
 		h.markWriteErrorLocked(event, err)
 		return
 	}
@@ -263,7 +507,7 @@ func (h *streamHandler) writeKeepAlive() {
 	if h.hasReturn {
 		return
 	}
-	if _, err := fmt.Fprintf(h.w, ": keep-alive\n\n"); err != nil {
+	if _, err := io.WriteString(h.w, sseKeepAlive); err != nil {
 		h.markWriteErrorLocked("keep-alive", err)
 		return
 	}
@@ -438,12 +682,18 @@ func sanitizeToolInput(name, input string) string {
 		return input
 	}
 
+	nameKey := strings.ToLower(strings.TrimSpace(name))
+	switch nameKey {
+	case "write", "edit", "read", "bash", "glob":
+	default:
+		return input
+	}
+
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
 		return input
 	}
 
-	nameKey := strings.ToLower(strings.TrimSpace(name))
 	changed := false
 	mapField := func(from, to string) {
 		v, ok := payload[from]
@@ -537,43 +787,14 @@ func (h *streamHandler) emitToolCallStream(call toolCall, idx int, write func(ev
 		inputJSON = "{}"
 	}
 
-	startMap := perf.AcquireMap()
-	startMap["type"] = "content_block_start"
-	startMap["index"] = idx
+	startData, _ := marshalSSEContentBlockStartToolUse(idx, call.id, call.name)
+	write("content_block_start", startData)
 
-	contentBlock := perf.AcquireMap()
-	contentBlock["type"] = "tool_use"
-	contentBlock["id"] = call.id
-	contentBlock["name"] = call.name
-	contentBlock["input"] = perf.AcquireMap() // Empty map
-	startMap["content_block"] = contentBlock
+	deltaData, _ := marshalSSEContentBlockDeltaInputJSON(idx, inputJSON)
+	write("content_block_delta", deltaData)
 
-	startData, _ := json.Marshal(startMap)
-	perf.ReleaseMap(contentBlock["input"].(map[string]interface{}))
-	perf.ReleaseMap(contentBlock)
-	perf.ReleaseMap(startMap)
-	write("content_block_start", string(startData))
-
-	deltaMap := perf.AcquireMap()
-	deltaMap["type"] = "content_block_delta"
-	deltaMap["index"] = idx
-
-	deltaContent := perf.AcquireMap()
-	deltaContent["type"] = "input_json_delta"
-	deltaContent["partial_json"] = inputJSON
-	deltaMap["delta"] = deltaContent
-
-	deltaData, _ := json.Marshal(deltaMap)
-	perf.ReleaseMap(deltaContent)
-	perf.ReleaseMap(deltaMap)
-	write("content_block_delta", string(deltaData))
-
-	stopMap := perf.AcquireMap()
-	stopMap["type"] = "content_block_stop"
-	stopMap["index"] = idx
-	stopData, _ := json.Marshal(stopMap)
-	perf.ReleaseMap(stopMap)
-	write("content_block_stop", string(stopData))
+	stopData, _ := marshalSSEContentBlockStop(idx)
+	write("content_block_stop", stopData)
 }
 
 // emitToolUseFromInput 在工具输入结束时一次性输出 tool_use，避免无后续 tool_result 的悬挂调用
@@ -601,40 +822,14 @@ func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) 
 	idx := h.blockIndex
 	h.mu.Unlock()
 
-	startMap := perf.AcquireMap()
-	startMap["type"] = "content_block_start"
-	startMap["index"] = idx
-	startContent := perf.AcquireMap()
-	startContent["type"] = "tool_use"
-	startContent["id"] = toolID
-	startContent["name"] = toolName
-	startInput := perf.AcquireMap()
-	startContent["input"] = startInput
-	startMap["content_block"] = startContent
-	startData, _ := json.Marshal(startMap)
-	perf.ReleaseMap(startInput)
-	perf.ReleaseMap(startContent)
-	perf.ReleaseMap(startMap)
-	h.writeSSE("content_block_start", string(startData))
+	startData, _ := marshalSSEContentBlockStartToolUse(idx, toolID, toolName)
+	h.writeSSE("content_block_start", startData)
 
-	deltaMap := perf.AcquireMap()
-	deltaMap["type"] = "content_block_delta"
-	deltaMap["index"] = idx
-	deltaContent := perf.AcquireMap()
-	deltaContent["type"] = "input_json_delta"
-	deltaContent["partial_json"] = inputJSON
-	deltaMap["delta"] = deltaContent
-	deltaData, _ := json.Marshal(deltaMap)
-	perf.ReleaseMap(deltaContent)
-	perf.ReleaseMap(deltaMap)
-	h.writeSSE("content_block_delta", string(deltaData))
+	deltaData, _ := marshalSSEContentBlockDeltaInputJSON(idx, inputJSON)
+	h.writeSSE("content_block_delta", deltaData)
 
-	stopMap := perf.AcquireMap()
-	stopMap["type"] = "content_block_stop"
-	stopMap["index"] = idx
-	stopData, _ := json.Marshal(stopMap)
-	perf.ReleaseMap(stopMap)
-	h.writeSSE("content_block_stop", string(stopData))
+	stopData, _ := marshalSSEContentBlockStop(idx)
+	h.writeSSE("content_block_stop", stopData)
 }
 
 func (h *streamHandler) flushPendingToolCalls(stopReason string, write func(event, data string)) {
@@ -692,33 +887,19 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		}
 		h.flushPendingToolCalls(stopReason, h.writeFinalSSE)
 		h.finalizeOutputTokens()
-		deltaMap := perf.AcquireMap()
-		deltaMap["type"] = "message_delta"
-		deltaDelta := perf.AcquireMap()
-		deltaDelta["stop_reason"] = stopReason
-		deltaUsage := perf.AcquireMap()
-		deltaUsage["output_tokens"] = h.outputTokens
-		deltaMap["delta"] = deltaDelta
-		deltaMap["usage"] = deltaUsage
-		deltaData, err := json.Marshal(deltaMap)
+		deltaData, err := marshalSSEMessageDelta(stopReason, h.outputTokens)
 		if err != nil {
 			slog.Error("Failed to marshal message_delta", "error", err)
 		} else {
-			h.writeFinalSSE("message_delta", string(deltaData))
+			h.writeFinalSSE("message_delta", deltaData)
 		}
-		perf.ReleaseMap(deltaUsage)
-		perf.ReleaseMap(deltaDelta)
-		perf.ReleaseMap(deltaMap)
 
-		stopMap := perf.AcquireMap()
-		stopMap["type"] = "message_stop"
-		stopData, err := json.Marshal(stopMap)
+		stopData, err := marshalSSEMessageStop()
 		if err != nil {
 			slog.Error("Failed to marshal message_stop", "error", err)
 		} else {
-			h.writeFinalSSE("message_stop", string(stopData))
+			h.writeFinalSSE("message_stop", stopData)
 		}
-		perf.ReleaseMap(stopMap)
 	} else {
 		if stopReason != "tool_use" {
 			h.emitWriteChunkFallbackIfNeeded(h.writeFinalSSE)
@@ -769,7 +950,7 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 	sseIdx := h.blockIndex
 	h.activeBlockType = blockType
 
-	var startData []byte
+	var startDataString string
 	switch blockType {
 	case "thinking":
 		signature := h.pendingThinkingSig
@@ -784,19 +965,7 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 		h.thinkingBlockBuilders[internalIdx] = perf.AcquireStringBuilder()
 		h.thinkingBlockSigs[internalIdx] = signature
 
-		m := perf.AcquireMap()
-		m["type"] = "content_block_start"
-		m["index"] = sseIdx
-
-		cb := perf.AcquireMap()
-		cb["type"] = "thinking"
-		cb["thinking"] = ""
-		cb["signature"] = signature
-		m["content_block"] = cb
-
-		startData, _ = json.Marshal(m)
-		perf.ReleaseMap(cb)
-		perf.ReleaseMap(m)
+		startDataString, _ = marshalSSEContentBlockStartThinking(sseIdx, signature)
 	case "text":
 		h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
 			"type": "text",
@@ -806,22 +975,11 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 		h.activeTextSSEIndex = sseIdx
 		h.textBlockBuilders[internalIdx] = perf.AcquireStringBuilder()
 
-		m := perf.AcquireMap()
-		m["type"] = "content_block_start"
-		m["index"] = sseIdx
-
-		cb := perf.AcquireMap()
-		cb["type"] = "text"
-		cb["text"] = ""
-		m["content_block"] = cb
-
-		startData, _ = json.Marshal(m)
-		perf.ReleaseMap(cb)
-		perf.ReleaseMap(m)
+		startDataString, _ = marshalSSEContentBlockStartText(sseIdx)
 	}
 
-	if len(startData) > 0 {
-		h.writeSSELocked("content_block_start", string(startData))
+	if startDataString != "" {
+		h.writeSSELocked("content_block_start", startDataString)
 	}
 
 	return sseIdx
@@ -856,18 +1014,14 @@ func (h *streamHandler) popActiveBlockStopDataLocked() (string, bool) {
 
 	h.activeBlockType = ""
 
-	m := perf.AcquireMap()
-	m["type"] = "content_block_stop"
-	m["index"] = sseIdx
-	stopData, err := json.Marshal(m)
+	stopData, err := marshalSSEContentBlockStop(sseIdx)
 	if err != nil {
 		slog.Error("Failed to marshal content_block_stop", "error", err)
 	}
-	perf.ReleaseMap(m)
 	if err != nil {
 		return "", false
 	}
-	return string(stopData), true
+	return stopData, true
 }
 
 func (h *streamHandler) closeActiveBlockLocked() {
@@ -891,7 +1045,7 @@ func (h *streamHandler) writeSSELocked(event, data string) {
 		}
 		return
 	}
-	if _, err := fmt.Fprintf(h.w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+	if err := writeSSEFrame(h.w, event, data); err != nil {
 		h.markWriteErrorLocked(event, err)
 		return
 	}
@@ -922,36 +1076,14 @@ func (h *streamHandler) emitTextBlockWithWriter(text string, write func(event, d
 	idx := h.blockIndex
 	h.mu.Unlock()
 
-	startMap := perf.AcquireMap()
-	startMap["type"] = "content_block_start"
-	startMap["index"] = idx
-	startContent := perf.AcquireMap()
-	startContent["type"] = "text"
-	startContent["text"] = ""
-	startMap["content_block"] = startContent
-	startData, _ := json.Marshal(startMap)
-	perf.ReleaseMap(startContent)
-	perf.ReleaseMap(startMap)
-	write("content_block_start", string(startData))
+	startData, _ := marshalSSEContentBlockStartText(idx)
+	write("content_block_start", startData)
 
-	deltaMap := perf.AcquireMap()
-	deltaMap["type"] = "content_block_delta"
-	deltaMap["index"] = idx
-	deltaContent := perf.AcquireMap()
-	deltaContent["type"] = "text_delta"
-	deltaContent["text"] = text
-	deltaMap["delta"] = deltaContent
-	deltaData, _ := json.Marshal(deltaMap)
-	perf.ReleaseMap(deltaContent)
-	perf.ReleaseMap(deltaMap)
-	write("content_block_delta", string(deltaData))
+	deltaData, _ := marshalSSEContentBlockDeltaText(idx, text)
+	write("content_block_delta", deltaData)
 
-	stopMap := perf.AcquireMap()
-	stopMap["type"] = "content_block_stop"
-	stopMap["index"] = idx
-	stopData, _ := json.Marshal(stopMap)
-	perf.ReleaseMap(stopMap)
-	write("content_block_stop", string(stopData))
+	stopData, _ := marshalSSEContentBlockStop(idx)
+	write("content_block_stop", stopData)
 }
 
 func (h *streamHandler) markTextOutput() {
@@ -995,17 +1127,14 @@ func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
 }
 
 func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
-	nameKey := strings.ToLower(strings.TrimSpace(call.name))
-	if nameKey == "" {
-		return false
-	}
-	if !hasRequiredToolInput(call.name, call.input) {
+	_, key, ok := evaluateToolCallInput(call.name, call.input)
+	if !ok {
 		if h.config != nil && h.config.DebugEnabled {
 			slog.Debug("invalid tool call suppressed", "tool", call.name, "input", call.input)
 		}
 		return false
 	}
-	if key := sideEffectToolDedupKey(nameKey, call.input); key != "" {
+	if key != "" {
 		maskedKey := maskDedupKey(key)
 		h.mu.Lock()
 		if _, ok := h.bashCallDedup[key]; ok {
@@ -1030,79 +1159,24 @@ func maskDedupKey(key string) string {
 	if idx := strings.IndexByte(tool, ':'); idx > 0 {
 		tool = tool[:idx]
 	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(key))
-	return fmt.Sprintf("%s#%x", tool, h.Sum64())
+	sum := fnv1a64String(key)
+	out := make([]byte, 0, len(tool)+1+16)
+	out = append(out, tool...)
+	out = append(out, '#')
+	out = strconv.AppendUint(out, sum, 16)
+	return string(out)
 }
 
-func sideEffectToolDedupKey(nameKey, input string) string {
-	switch nameKey {
-	case "bash", "write", "edit":
-	default:
+func sideEffectToolDedupKey(name, input string) string {
+	nameKey := normalizeToolNameKey(name)
+	if !isSideEffectToolName(nameKey) {
 		return ""
 	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+	fields, ok := decodeToolInputFields(input)
+	if !ok {
 		return ""
 	}
-	switch nameKey {
-	case "bash":
-		command, _ := payload["command"].(string)
-		if strings.TrimSpace(command) == "" {
-			command, _ = payload["cmd"].(string)
-		}
-		command = strings.TrimSpace(command)
-		if command == "" {
-			return ""
-		}
-		return "bash:" + command
-	case "write":
-		path := extractPathFromInput(payload)
-		if path == "" {
-			return ""
-		}
-		content, ok := payload["content"]
-		if !ok {
-			return ""
-		}
-		return "write:" + path + "\x00" + canonicalToolValue(content)
-	case "edit":
-		path := extractPathFromInput(payload)
-		if path == "" {
-			return ""
-		}
-		oldV, hasOld := payload["old_string"]
-		newV, hasNew := payload["new_string"]
-		if !hasOld || !hasNew {
-			return ""
-		}
-		return "edit:" + path + "\x00" + canonicalToolValue(oldV) + "\x00" + canonicalToolValue(newV)
-	default:
-		return ""
-	}
-}
-
-func extractPathFromInput(payload map[string]interface{}) string {
-	if v, ok := payload["file_path"].(string); ok && strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v)
-	}
-	if v, ok := payload["path"].(string); ok && strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v)
-	}
-	return ""
-}
-
-func canonicalToolValue(v interface{}) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	default:
-		raw, err := json.Marshal(x)
-		if err != nil {
-			return fmt.Sprintf("%v", x)
-		}
-		return string(raw)
-	}
+	return sideEffectToolDedupKeyFromFields(nameKey, fields)
 }
 
 func fallbackToolCallID(toolName, input string) string {
@@ -1114,57 +1188,199 @@ func fallbackToolCallID(toolName, input string) string {
 	if normalizedInput == "" {
 		normalizedInput = "{}"
 	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(nameKey))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(normalizedInput))
-	return fmt.Sprintf("tool_anon_%x", h.Sum64())
+	sum := fnv1a64Pair(nameKey, normalizedInput)
+	out := make([]byte, 0, len("tool_anon_")+16)
+	out = append(out, "tool_anon_"...)
+	out = strconv.AppendUint(out, sum, 16)
+	return string(out)
 }
 
 func hasRequiredToolInput(name, input string) bool {
-	nameKey := strings.ToLower(strings.TrimSpace(name))
+	nameKey := normalizeToolNameKey(name)
 	if nameKey == "" {
 		return false
 	}
-	if input == "" {
-		input = "{}"
+	if !isStructuredToolName(nameKey) {
+		return true
 	}
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		// For known structured tools, malformed JSON should be treated as invalid.
-		switch nameKey {
-		case "edit", "write", "bash", "read", "glob", "grep":
-			return false
-		default:
-			return true
-		}
+	fields, ok := decodeToolInputFields(input)
+	if !ok {
+		return false
 	}
+	return hasRequiredToolInputFields(nameKey, fields)
+}
 
-	requireString := func(key string) bool {
-		v, ok := payload[key].(string)
-		return ok && strings.TrimSpace(v) != ""
+func evaluateToolCallInput(name, input string) (nameKey string, dedupKey string, ok bool) {
+	nameKey = normalizeToolNameKey(name)
+	if nameKey == "" {
+		return "", "", false
 	}
+	if !isStructuredToolName(nameKey) {
+		return nameKey, "", true
+	}
+	fields, parsed := decodeToolInputFields(input)
+	if !parsed {
+		return nameKey, "", false
+	}
+	if !hasRequiredToolInputFields(nameKey, fields) {
+		return nameKey, "", false
+	}
+	return nameKey, sideEffectToolDedupKeyFromFields(nameKey, fields), true
+}
 
+func normalizeToolNameKey(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func isStructuredToolName(nameKey string) bool {
+	switch nameKey {
+	case "edit", "write", "bash", "read", "glob", "grep":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSideEffectToolName(nameKey string) bool {
+	switch nameKey {
+	case "bash", "write", "edit":
+		return true
+	default:
+		return false
+	}
+}
+
+type toolInputFields struct {
+	Command  string          `json:"command"`
+	Cmd      string          `json:"cmd"`
+	FilePath string          `json:"file_path"`
+	Path     string          `json:"path"`
+	Content  json.RawMessage `json:"content"`
+	Old      json.RawMessage `json:"old_string"`
+	New      json.RawMessage `json:"new_string"`
+}
+
+func decodeToolInputFields(input string) (toolInputFields, bool) {
+	raw := strings.TrimSpace(input)
+	if raw == "" {
+		raw = "{}"
+	}
+	var fields toolInputFields
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		return toolInputFields{}, false
+	}
+	return fields, true
+}
+
+func resolveToolPath(filePath, path string) string {
+	if s := strings.TrimSpace(filePath); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(path); s != "" {
+		return s
+	}
+	return ""
+}
+
+func hasRequiredToolInputFields(nameKey string, fields toolInputFields) bool {
 	switch nameKey {
 	case "edit":
-		_, hasOld := payload["old_string"]
-		_, hasNew := payload["new_string"]
-		hasPath := requireString("file_path") || requireString("path")
-		return hasPath && hasOld && hasNew
+		path := resolveToolPath(fields.FilePath, fields.Path)
+		return path != "" && len(fields.Old) > 0 && len(fields.New) > 0
 	case "write":
 		// Warp sometimes sends "path" instead of "file_path", or we might have mapped it.
 		// Also strict checking might fail if "content" is empty string (though rare for meaningful write).
-		_, hasContent := payload["content"]
-		hasPath := requireString("file_path") || requireString("path")
-		return hasPath && hasContent
+		path := resolveToolPath(fields.FilePath, fields.Path)
+		return path != "" && len(fields.Content) > 0
 	case "bash":
-		return requireString("command") || requireString("cmd")
+		return strings.TrimSpace(fields.Command) != "" || strings.TrimSpace(fields.Cmd) != ""
 	case "read":
-		return requireString("file_path") || requireString("path")
+		return resolveToolPath(fields.FilePath, fields.Path) != ""
 	default:
 		return true
 	}
+}
+
+func canonicalToolRawValue(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return ""
+	}
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return asString
+	}
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return trimmed
+	}
+	normalized, err := json.Marshal(decoded)
+	if err != nil {
+		return trimmed
+	}
+	return string(normalized)
+}
+
+func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields) string {
+	if !isSideEffectToolName(nameKey) {
+		return ""
+	}
+	switch nameKey {
+	case "bash":
+		command := strings.TrimSpace(fields.Command)
+		if strings.TrimSpace(command) == "" {
+			command = strings.TrimSpace(fields.Cmd)
+		}
+		command = strings.TrimSpace(command)
+		if command == "" {
+			return ""
+		}
+		return "bash:" + command
+	case "write":
+		path := resolveToolPath(fields.FilePath, fields.Path)
+		if path == "" {
+			return ""
+		}
+		if len(fields.Content) == 0 {
+			return ""
+		}
+		return "write:" + path + "\x00" + canonicalToolRawValue(fields.Content)
+	case "edit":
+		path := resolveToolPath(fields.FilePath, fields.Path)
+		if path == "" {
+			return ""
+		}
+		if len(fields.Old) == 0 || len(fields.New) == 0 {
+			return ""
+		}
+		return "edit:" + path + "\x00" + canonicalToolRawValue(fields.Old) + "\x00" + canonicalToolRawValue(fields.New)
+	default:
+		return ""
+	}
+}
+
+func fnv1a64String(s string) uint64 {
+	h := fnv64Offset
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= fnv64Prime
+	}
+	return h
+}
+
+func fnv1a64Pair(a, b string) uint64 {
+	h := fnv64Offset
+	for i := 0; i < len(a); i++ {
+		h ^= uint64(a[i])
+		h *= fnv64Prime
+	}
+	h ^= 0
+	h *= fnv64Prime
+	for i := 0; i < len(b); i++ {
+		h ^= uint64(b[i])
+		h *= fnv64Prime
+	}
+	return h
 }
 
 func (h *streamHandler) markWriteErrorLocked(event string, err error) {
@@ -1202,16 +1418,8 @@ func (h *streamHandler) forceFinishIfMissing() {
 
 		emptyMsg := "No response from upstream. The request may not be supported in this mode."
 		if h.isStream {
-			deltaMap := map[string]interface{}{
-				"type":  "content_block_delta",
-				"index": sseIdx,
-				"delta": map[string]interface{}{
-					"type": "text_delta",
-					"text": emptyMsg,
-				},
-			}
-			deltaData, _ := json.Marshal(deltaMap)
-			h.writeSSE("content_block_delta", string(deltaData))
+			deltaData, _ := marshalSSEContentBlockDeltaText(sseIdx, emptyMsg)
+			h.writeSSE("content_block_delta", deltaData)
 		} else {
 			h.responseText.WriteString(emptyMsg)
 			if builder, ok := h.textBlockBuilders[internalIdx]; ok {
@@ -1468,17 +1676,8 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			builder.WriteString(delta)
 		}
 		h.mu.Unlock()
-		m := perf.AcquireMap()
-		m["type"] = "content_block_delta"
-		m["index"] = sseIdx
-		deltaMap := perf.AcquireMap()
-		deltaMap["type"] = "thinking_delta"
-		deltaMap["thinking"] = delta
-		m["delta"] = deltaMap
-		data, _ := json.Marshal(m)
-		h.writeSSE("content_block_delta", string(data))
-		perf.ReleaseMap(deltaMap)
-		perf.ReleaseMap(m)
+		data, _ := marshalSSEContentBlockDeltaThinking(sseIdx, delta)
+		h.writeSSE("content_block_delta", data)
 
 	case "model.reasoning-end":
 		h.closeActiveBlock()
@@ -1528,17 +1727,8 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			builder.WriteString(delta)
 		}
 		h.mu.Unlock()
-		m := perf.AcquireMap()
-		m["type"] = "content_block_delta"
-		m["index"] = sseIdx
-		deltaMap := perf.AcquireMap()
-		deltaMap["type"] = "text_delta"
-		deltaMap["text"] = delta
-		m["delta"] = deltaMap
-		data, _ := json.Marshal(m)
-		h.writeSSE("content_block_delta", string(data))
-		perf.ReleaseMap(deltaMap)
-		perf.ReleaseMap(m)
+		data, _ := marshalSSEContentBlockDeltaText(sseIdx, delta)
+		h.writeSSE("content_block_delta", data)
 
 	case "model.text-end":
 		h.closeActiveBlock()
@@ -1552,8 +1742,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			h.ensureBlock("thinking")
 		}
 		if h.isStream {
-			data, _ := json.Marshal(msg.Event)
-			h.writeSSE(msg.Type, string(data))
+			payload, err := marshalEventPayload(msg)
+			if err == nil {
+				h.writeSSE(msg.Type, payload)
+			}
 		}
 		return
 
@@ -1576,8 +1768,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 				h.ensureBlock("thinking")
 				h.emitThinkingDelta(fmt.Sprintf("\n[%s %s...]\n", op, path))
 
-				rawData, _ := json.Marshal(msg.Event)
-				h.writeSSE(msg.Type, string(rawData))
+				payload, err := marshalEventPayload(msg)
+				if err == nil {
+					h.writeSSE(msg.Type, payload)
+				}
 			}
 		}
 		return
@@ -1602,8 +1796,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 				}
 			}
 			if !h.suppressThinking {
-				rawData, _ := json.Marshal(msg.Event)
-				h.writeSSE(msg.Type, string(rawData))
+				payload, err := marshalEventPayload(msg)
+				if err == nil {
+					h.writeSSE(msg.Type, payload)
+				}
 			}
 		}
 		return
@@ -1612,8 +1808,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		if h.isStream {
 			if !h.suppressThinking {
 				h.emitThinkingDelta("\n[Done]\n")
-				data, _ := json.Marshal(msg.Event)
-				h.writeSSE(msg.Type, string(data))
+				payload, err := marshalEventPayload(msg)
+				if err == nil {
+					h.writeSSE(msg.Type, payload)
+				}
 			}
 		}
 		return
@@ -1632,8 +1830,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			slog.Debug("Upstream active", "op", msg.Event["operation"])
 		}
 		if h.isStream {
-			data, _ := json.Marshal(msg.Event)
-			h.writeSSE(msg.Type, string(data))
+			payload, err := marshalEventPayload(msg)
+			if err == nil {
+				h.writeSSE(msg.Type, payload)
+			}
 		} else {
 			h.writeKeepAlive()
 		}
@@ -1857,17 +2057,8 @@ func (h *streamHandler) emitThinkingDelta(delta string) {
 	}
 	h.mu.Unlock()
 
-	m := perf.AcquireMap()
-	m["type"] = "content_block_delta"
-	m["index"] = sseIdx
-	deltaMap := perf.AcquireMap()
-	deltaMap["type"] = "thinking_delta"
-	deltaMap["thinking"] = delta
-	m["delta"] = deltaMap
-	data, _ := json.Marshal(m)
-	h.writeSSE("content_block_delta", string(data))
-	perf.ReleaseMap(deltaMap)
-	perf.ReleaseMap(m)
+	data, _ := marshalSSEContentBlockDeltaThinking(sseIdx, delta)
+	h.writeSSE("content_block_delta", data)
 }
 
 func (h *streamHandler) emitTextDelta(delta string) {
@@ -1901,17 +2092,8 @@ func (h *streamHandler) emitTextDelta(delta string) {
 	}
 	h.mu.Unlock()
 
-	m := perf.AcquireMap()
-	m["type"] = "content_block_delta"
-	m["index"] = sseIdx
-	deltaMap := perf.AcquireMap()
-	deltaMap["type"] = "text_delta"
-	deltaMap["text"] = delta
-	m["delta"] = deltaMap
-	data, _ := json.Marshal(m)
-	h.writeSSE("content_block_delta", string(data))
-	perf.ReleaseMap(deltaMap)
-	perf.ReleaseMap(m)
+	data, _ := marshalSSEContentBlockDeltaText(sseIdx, delta)
+	h.writeSSE("content_block_delta", data)
 }
 
 // InjectErrorText injects an error message as a text delta into the stream or buffer.
@@ -1924,20 +2106,8 @@ func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
 	internalIdx := h.activeTextBlockIndex
 
 	if h.isStream {
-		m := perf.AcquireMap()
-		m["type"] = "content_block_delta"
-		m["index"] = idx
-
-		delta := perf.AcquireMap()
-		delta["type"] = "text_delta"
-		delta["text"] = errorMsg
-		m["delta"] = delta
-
-		data, _ := json.Marshal(m)
-		h.writeSSE("content_block_delta", string(data))
-
-		perf.ReleaseMap(delta)
-		perf.ReleaseMap(m)
+		data, _ := marshalSSEContentBlockDeltaText(idx, errorMsg)
+		h.writeSSE("content_block_delta", data)
 	} else {
 		h.mu.Lock()
 		if builder, ok := h.textBlockBuilders[internalIdx]; ok {

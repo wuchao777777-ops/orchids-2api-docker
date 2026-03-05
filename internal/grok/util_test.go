@@ -129,3 +129,24 @@ func TestStripToolAndRenderMarkup_ExtractsToolCardText(t *testing.T) {
 		t.Fatalf("final content missing, got=%q", out)
 	}
 }
+
+func BenchmarkExtractToolUsageCardText(b *testing.B) {
+	raw := `<xai:tool_usage_card><xai:tool_name>web_search</xai:tool_name><xai:tool_args>{"query":"特朗普头像","q":"特朗普头像"}</xai:tool_args></xai:tool_usage_card>`
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = extractToolUsageCardText(raw)
+	}
+}
+
+func BenchmarkStripToolAndRenderMarkup(b *testing.B) {
+	in := strings.Join([]string{
+		`<xai:tool_usage_card><xai:tool_name>web_search</xai:tool_name><xai:tool_args>{"query":"特朗普头像"}</xai:tool_args></xai:tool_usage_card>`,
+		`<xai:tool_usage_card><xai:tool_name>chatroom_send</xai:tool_name><xai:tool_args><![CDATA[{"message":"分析结果"}]]></xai:tool_args></xai:tool_usage_card>`,
+		`<grok:render card_id="x">ignore</grok:render>`,
+		`结论`,
+	}, "\n")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = stripToolAndRenderMarkup(in)
+	}
+}

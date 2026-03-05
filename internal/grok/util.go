@@ -22,6 +22,12 @@ import (
 	apperrors "orchids-api/internal/errors"
 )
 
+var (
+	reToolUsageCardBlock      = regexp.MustCompile(`(?is)<?xai:tool_usage_card[^>]*>.*?</xai:tool_usage_card>`)
+	reToolUsageCardIncomplete = regexp.MustCompile(`(?is)<?xai:tool_usage_card.*?(?:</xai:tool_usage_card>|\z)`)
+	reGrokRenderBlock         = regexp.MustCompile(`(?is)<?grok:render.*?</grok:render>`)
+)
+
 func randomHex(n int) string {
 	if n <= 0 {
 		return ""
@@ -186,7 +192,7 @@ func stripToolAndRenderMarkup(text string) string {
 		return text
 	}
 	// Convert xai tool cards into readable text.
-	text = regexp.MustCompile(`(?is)<?xai:tool_usage_card[^>]*>.*?</xai:tool_usage_card>`).ReplaceAllStringFunc(text, func(raw string) string {
+	text = reToolUsageCardBlock.ReplaceAllStringFunc(text, func(raw string) string {
 		line := extractToolUsageCardText(raw)
 		if line == "" {
 			return ""
@@ -194,9 +200,9 @@ func stripToolAndRenderMarkup(text string) string {
 		return "\n" + line + "\n"
 	})
 	// Drop incomplete tool cards.
-	text = regexp.MustCompile(`(?is)<?xai:tool_usage_card.*?(?:</xai:tool_usage_card>|\z)`).ReplaceAllString(text, "")
+	text = reToolUsageCardIncomplete.ReplaceAllString(text, "")
 	// Remove grok render tags (allow optional leading '<')
-	text = regexp.MustCompile(`(?is)<?grok:render.*?</grok:render>`).ReplaceAllString(text, "")
+	text = reGrokRenderBlock.ReplaceAllString(text, "")
 	return strings.TrimSpace(text)
 }
 
@@ -206,33 +212,18 @@ func extractToolUsageCardText(raw string) string {
 		return ""
 	}
 
-	tagText := func(input, tag string) string {
-		pat := fmt.Sprintf(`(?is)<%s>(.*?)</%s>`, regexp.QuoteMeta(tag), regexp.QuoteMeta(tag))
-		m := regexp.MustCompile(pat).FindStringSubmatch(input)
-		if len(m) < 2 {
-			return ""
-		}
-		val := strings.TrimSpace(m[1])
-		// unwrap <![CDATA[...]]>
-		val = regexp.MustCompile(`(?is)<!\[CDATA\[(.*?)\]\]>`).ReplaceAllString(val, "$1")
-		return strings.TrimSpace(val)
-	}
-	name := tagText(raw, "xai:tool_name")
-	argsRaw := tagText(raw, "xai:tool_args")
+	name := extractToolUsageTagValue(raw, "xai:tool_name")
+	argsRaw := extractToolUsageTagValue(raw, "xai:tool_args")
 
-	var payload map[string]interface{}
-	if strings.TrimSpace(argsRaw) != "" {
-		json.Unmarshal([]byte(argsRaw), &payload)
+	var payload struct {
+		Query            string `json:"query"`
+		Q                string `json:"q"`
+		ImageDescription string `json:"image_description"`
+		Description      string `json:"description"`
+		Message          string `json:"message"`
 	}
-	read := func(keys ...string) string {
-		for _, key := range keys {
-			v := payload[key]
-			s := strings.TrimSpace(fmt.Sprint(v))
-			if s != "" && s != "<nil>" {
-				return s
-			}
-		}
-		return ""
+	if argsRaw != "" {
+		_ = json.Unmarshal([]byte(argsRaw), &payload)
 	}
 
 	label := strings.TrimSpace(name)
@@ -240,17 +231,17 @@ func extractToolUsageCardText(raw string) string {
 	switch label {
 	case "web_search":
 		label = "[WebSearch]"
-		if s := read("query", "q"); s != "" {
+		if s := firstNonEmpty(payload.Query, payload.Q); s != "" {
 			text = s
 		}
 	case "search_images":
 		label = "[SearchImage]"
-		if s := read("image_description", "description", "query"); s != "" {
+		if s := firstNonEmpty(payload.ImageDescription, payload.Description, payload.Query); s != "" {
 			text = s
 		}
 	case "chatroom_send":
 		label = "[AgentThink]"
-		if s := read("message"); s != "" {
+		if s := payload.Message; s != "" {
 			text = s
 		}
 	}
@@ -264,8 +255,75 @@ func extractToolUsageCardText(raw string) string {
 		return text
 	default:
 		// Fallback: strip tags and return plain text if any.
-		return strings.TrimSpace(regexp.MustCompile(`(?is)<[^>]+>`).ReplaceAllString(raw, ""))
+		return strings.TrimSpace(stripAngleTags(raw))
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func extractToolUsageTagValue(raw, tag string) string {
+	if raw == "" || tag == "" {
+		return ""
+	}
+	lower := strings.ToLower(raw)
+	openTag := "<" + strings.ToLower(tag) + ">"
+	closeTag := "</" + strings.ToLower(tag) + ">"
+	start := strings.Index(lower, openTag)
+	if start < 0 {
+		return ""
+	}
+	start += len(openTag)
+	if start >= len(raw) {
+		return ""
+	}
+	endRel := strings.Index(lower[start:], closeTag)
+	if endRel < 0 {
+		return ""
+	}
+	val := strings.TrimSpace(raw[start : start+endRel])
+	if val == "" {
+		return ""
+	}
+	trimmed := strings.TrimSpace(val)
+	lowerTrimmed := strings.ToLower(trimmed)
+	if strings.HasPrefix(lowerTrimmed, "<![cdata[") && strings.HasSuffix(lowerTrimmed, "]]>") && len(trimmed) >= len("<![CDATA[]]>") {
+		trimmed = strings.TrimSpace(trimmed[len("<![CDATA[") : len(trimmed)-len("]]>")])
+	}
+	return strings.TrimSpace(trimmed)
+}
+
+func stripAngleTags(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	inTag := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch ch {
+		case '<':
+			inTag = true
+		case '>':
+			if inTag {
+				inTag = false
+			} else {
+				b.WriteByte(ch)
+			}
+		default:
+			if !inTag {
+				b.WriteByte(ch)
+			}
+		}
+	}
+	return b.String()
 }
 
 func extractRenderableImageLinks(value interface{}) []string {

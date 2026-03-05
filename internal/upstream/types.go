@@ -1,6 +1,10 @@
 package upstream
 
-import "orchids-api/internal/prompt"
+import (
+	"github.com/goccy/go-json"
+
+	"orchids-api/internal/prompt"
+)
 
 // UpstreamRequest 统一上游请求结构（Warp/Orchids 复用）
 type UpstreamRequest struct {
@@ -19,7 +23,8 @@ type UpstreamRequest struct {
 
 // SSEMessage 统一上游 SSE 消息结构（Warp/Orchids 复用）
 type SSEMessage struct {
-	Type  string                 `json:"type"`
-	Event map[string]interface{} `json:"event,omitempty"`
-	Raw   map[string]interface{} `json:"-"`
+	Type    string                 `json:"type"`
+	Event   map[string]interface{} `json:"event,omitempty"`
+	Raw     map[string]interface{} `json:"-"`
+	RawJSON json.RawMessage        `json:"-"`
 }

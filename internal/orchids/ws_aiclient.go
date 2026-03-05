@@ -93,6 +93,13 @@ type fileWriterState struct {
 	buf  strings.Builder
 }
 
+func cloneRawJSON(data []byte) json.RawMessage {
+	if len(data) == 0 {
+		return nil
+	}
+	return json.RawMessage(data)
+}
+
 func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	slog.Info("sendRequestWSAIClient called", "workdir", req.Workdir, "model", req.Model)
 	parentCtx := ctx
@@ -378,7 +385,7 @@ func (c *Client) handleOrchidsMessage(
 			return false
 		}
 		state.preferCodingAgent = true
-		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg})
+		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg, RawJSON: cloneRawJSON(rawData)})
 		return false
 
 	case EventCodingAgentTokens:
@@ -410,7 +417,7 @@ func (c *Client) handleOrchidsMessage(
 		return c.handleCompletionEvent(msgType, msg, state, onMessage)
 
 	case EventFS:
-		c.dispatchFSOperation(msg, onMessage, conn, fsWG, workdir)
+		c.dispatchFSOperation(msg, onMessage, conn, fsWG, workdir, rawData)
 		state.hasFSOps = true
 		return false
 
@@ -465,7 +472,7 @@ func (c *Client) handleOrchidsMessage(
 			}
 			state.activeWrites[path] = &fileWriterState{path: path}
 		}
-		onMessage(upstream.SSEMessage{Type: msgType, Event: msg})
+		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg, RawJSON: cloneRawJSON(rawData)})
 		return false
 
 	case EventWriteChunk, EventEditChunk:
@@ -478,7 +485,7 @@ func (c *Client) handleOrchidsMessage(
 				w.buf.WriteString(text)
 			}
 		}
-		onMessage(upstream.SSEMessage{Type: msgType, Event: msg})
+		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg, RawJSON: cloneRawJSON(rawData)})
 		return false
 
 	case EventWriteCompleted:
@@ -493,12 +500,12 @@ func (c *Client) handleOrchidsMessage(
 					"path":      path,
 					"content":   content,
 					"id":        fmt.Sprintf("stream_%d", time.Now().UnixMilli()),
-				}, onMessage, conn, fsWG, workdir)
+				}, onMessage, conn, fsWG, workdir, nil)
 				delete(state.activeWrites, path)
 				state.hasFSOps = true
 			}
 		}
-		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg})
+		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg, RawJSON: cloneRawJSON(rawData)})
 		return false
 
 	case EventEditCompleted, EventEditFileCompleted:
@@ -510,7 +517,7 @@ func (c *Client) handleOrchidsMessage(
 				delete(state.activeWrites, path)
 			}
 		}
-		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg})
+		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg, RawJSON: cloneRawJSON(rawData)})
 		return false
 
 	case EventModel:
@@ -652,8 +659,14 @@ func (c *Client) dispatchFSOperation(
 	conn *websocket.Conn,
 	wg *sync.WaitGroup,
 	workdir string,
+	rawData []byte,
 ) {
-	onMessage(upstream.SSEMessage{Type: "fs_operation", Event: msg})
+	onMessage(upstream.SSEMessage{
+		Type:    "fs_operation",
+		Event:   msg,
+		Raw:     msg,
+		RawJSON: cloneRawJSON(rawData),
+	})
 	wg.Add(1)
 	go func(m map[string]interface{}) {
 		defer wg.Done()
@@ -960,8 +973,6 @@ func extractMessageTextAIClient(content prompt.MessageContent) (string, []orchid
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n")), toolResults
 }
-
-
 
 func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string, []orchidsToolResult) {
 	var history []map[string]string

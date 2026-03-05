@@ -4,10 +4,10 @@ import (
 	"crypto/rand"
 	"fmt"
 	"github.com/goccy/go-json"
-	"hash/fnv"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -935,11 +935,30 @@ func fallbackOrchidsToolCallID(toolName, toolInput string) string {
 	if input == "" {
 		input = "{}"
 	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(name))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(input))
-	return fmt.Sprintf("orchids_anon_%x", h.Sum64())
+	sum := fnv1a64Pair(name, input)
+	out := make([]byte, 0, len("orchids_anon_")+16)
+	out = append(out, "orchids_anon_"...)
+	out = strconv.AppendUint(out, sum, 16)
+	return string(out)
+}
+
+func fnv1a64Pair(a, b string) uint64 {
+	const (
+		offset = uint64(14695981039346656037)
+		prime  = uint64(1099511628211)
+	)
+	h := offset
+	for i := 0; i < len(a); i++ {
+		h ^= uint64(a[i])
+		h *= prime
+	}
+	h ^= 0
+	h *= prime
+	for i := 0; i < len(b); i++ {
+		h ^= uint64(b[i])
+		h *= prime
+	}
+	return h
 }
 
 func extractToolCallsFromResponse(msg map[string]interface{}) []orchidsToolCall {
