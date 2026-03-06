@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -211,6 +212,9 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 	}
 
 	now := time.Now()
+	// #region agent log
+	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H5\",\"location\":\"loadbalancer.go:isAccountAvailable\",\"message\":\"checking account availability\",\"data\":{\"id\":%d,\"status\":\"%s\",\"last_attempt\":\"%s\",\"since_last_attempt_sec\":%.0f,\"cooldown_sec\":%.0f},\"timestamp\":%d}\n", acc.ID, status, acc.LastAttempt.Format(time.RFC3339), now.Sub(acc.LastAttempt).Seconds(), retry401Default.Seconds(), time.Now().UnixMilli()) }()
+	// #endregion
 	switch status {
 	case "401":
 		// 401 表示 token 过期或会话失效，短时间冷却后自动恢复尝试

@@ -6,7 +6,7 @@ const (
 	aiURL      = "https://app.warp.dev/ai/multi-agent"
 
 	clientID      = "warp-app"
-	clientVersion = "v0.2026.01.14.08.15.stable_04"
+	clientVersion = "v0.2026.02.25.08.24.stable_02"
 	osCategory    = "macOS"
 	osName        = "macOS"
 	osVersion     = "26.3"

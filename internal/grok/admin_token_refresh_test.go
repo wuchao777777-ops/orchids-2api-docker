@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"orchids-api/internal/store"
 )
 
 func TestCollectRefreshTokens(t *testing.T) {
@@ -47,5 +50,50 @@ func TestHandleAdminTokensRefreshAsync_MethodNotAllowed(t *testing.T) {
 	h.HandleAdminTokensRefreshAsync(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status=%d want=%d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestUpdateGrokUsageAccount_SuccessClearsStatus(t *testing.T) {
+	resetAt := time.Now().Add(10 * time.Minute).UTC().Truncate(time.Second)
+	acc := &store.Account{
+		StatusCode:   "429",
+		LastAttempt:  time.Now().Add(-time.Minute),
+		UsageLimit:   1,
+		UsageCurrent: 1,
+	}
+	info := &RateLimitInfo{
+		Limit:     120,
+		Remaining: 25,
+		ResetAt:   resetAt,
+	}
+
+	updateGrokUsageAccount(acc, info, "")
+
+	if acc.StatusCode != "" {
+		t.Fatalf("status=%q want empty", acc.StatusCode)
+	}
+	if !acc.LastAttempt.IsZero() {
+		t.Fatalf("last_attempt=%v want zero", acc.LastAttempt)
+	}
+	if acc.UsageLimit != 120 {
+		t.Fatalf("usage_limit=%v want=120", acc.UsageLimit)
+	}
+	if acc.UsageCurrent != 95 {
+		t.Fatalf("usage_current=%v want=95", acc.UsageCurrent)
+	}
+	if !acc.QuotaResetAt.Equal(resetAt) {
+		t.Fatalf("quota_reset_at=%v want=%v", acc.QuotaResetAt, resetAt)
+	}
+}
+
+func TestUpdateGrokUsageAccount_FailureSetsStatusAndAttempt(t *testing.T) {
+	acc := &store.Account{}
+	updateGrokUsageAccount(acc, nil, "500")
+
+	if acc.StatusCode != "500" {
+		t.Fatalf("status=%q want=500", acc.StatusCode)
+	}
+	if acc.LastAttempt.IsZero() {
+		t.Fatalf("last_attempt should be set on failure")
 	}
 }

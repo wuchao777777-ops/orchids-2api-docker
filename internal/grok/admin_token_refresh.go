@@ -102,7 +102,6 @@ func updateGrokUsageAccount(acc *store.Account, info *RateLimitInfo, status stri
 	if acc == nil {
 		return
 	}
-	now := time.Now()
 	if info != nil {
 		limit := info.Limit
 		remaining := info.Remaining
@@ -124,10 +123,14 @@ func updateGrokUsageAccount(acc *store.Account, info *RateLimitInfo, status stri
 			acc.QuotaResetAt = info.ResetAt
 		}
 	}
-	acc.LastAttempt = now
-	if strings.TrimSpace(status) != "" {
-		acc.StatusCode = status
+	status = strings.TrimSpace(status)
+	if status == "" {
+		acc.StatusCode = ""
+		acc.LastAttempt = time.Time{}
+		return
 	}
+	acc.StatusCode = status
+	acc.LastAttempt = time.Now()
 }
 
 func (h *Handler) runTokenRefreshBatch(
@@ -169,9 +172,9 @@ func (h *Handler) runTokenRefreshBatch(
 			callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 
-			info, err := h.client.GetUsage(callCtx, token, model)
+			info, err := h.client.VerifyToken(callCtx, token, model)
 			success := err == nil
-			statusCode := "200"
+			statusCode := ""
 			if !success {
 				statusCode = classifyAccountStatusFromError(err.Error())
 				if statusCode == "" {
