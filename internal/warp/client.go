@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
+
 	"strings"
 	"time"
 
@@ -201,31 +201,16 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 
 		if strings.Contains(bodyStr, "blocked from using AI features") {
 			slog.Warn("Warp AI: account blocked, attempting anonymous fallback", "cid", cid)
-			// #region agent log
-			func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"FIX\",\"location\":\"client.go:anon-fallback\",\"message\":\"attempting anonymous fallback\",\"data\":{\"cid\":\"%s\"},\"timestamp\":%d}\n", cid, time.Now().UnixMilli()) }()
-			// #endregion
+
 
 			anonJWT, aErr := AcquireAnonymousJWT(ctx)
 			if aErr != nil {
 				slog.Warn("Warp AI: anonymous fallback failed", "error", aErr)
-				// #region agent log
-				func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H17\",\"location\":\"client.go:anon-fallback-fail\",\"message\":\"AcquireAnonymousJWT failed\",\"data\":{\"error\":\"%s\"},\"timestamp\":%d}\n", strings.ReplaceAll(aErr.Error(), "\"", "'"), time.Now().UnixMilli()) }()
-				// #endregion
+
 				return fmt.Errorf("warp api error: HTTP 403 (account blocked, anonymous fallback failed: %v): %s", aErr, strings.TrimSpace(bodyStr))
 			}
 
-			// #region agent log
-			func() {
-				f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close()
-				quotaInfo := "unknown"
-				if li, _, qErr := FetchRequestLimitInfo(ctx, anonHTTPClient, anonJWT); qErr == nil {
-					quotaInfo = fmt.Sprintf("limit=%d,used=%d,unlimited=%v", li.RequestLimit, li.RequestsUsedSinceLastRefresh, li.IsUnlimited)
-				} else {
-					quotaInfo = "error:" + strings.ReplaceAll(qErr.Error(), "\"", "'")[:min(100, len(qErr.Error()))]
-				}
-				fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H17\",\"location\":\"client.go:anon-retry\",\"message\":\"retrying with anonymous JWT (no login)\",\"data\":{\"jwt_len\":%d,\"quota\":\"%s\"},\"timestamp\":%d}\n", len(anonJWT), quotaInfo, time.Now().UnixMilli())
-			}()
-			// #endregion
+
 
 			resp, err = c.doAIRequest(ctx, "warp-anon", anonJWT, payload, logger)
 			if err != nil {
@@ -240,9 +225,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		if logger != nil {
 			logger.LogUpstreamHTTPError(aiURL, resp.StatusCode, string(body), nil)
 		}
-		// #region agent log
-		func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); bs := strings.ReplaceAll(strings.TrimSpace(string(body)), "\"", "'"); if len(bs) > 200 { bs = bs[:200] }; fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"FIX\",\"location\":\"client.go:final-error\",\"message\":\"AI request failed\",\"data\":{\"status\":%d,\"body\":\"%s\"},\"timestamp\":%d}\n", resp.StatusCode, bs, time.Now().UnixMilli()) }()
-		// #endregion
+
 		bodyStr := string(body)
 		if resp.StatusCode == http.StatusTooManyRequests && strings.Contains(bodyStr, "No remaining quota") {
 			InvalidateAnonymousToken()
@@ -267,7 +250,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	}
 
 	bufReader := bufio.NewReader(reader)
-	var dataLines []string
+	var dataBuilder strings.Builder
 	dataEventCount := 0
 	parsedEventCount := 0
 	toolCallSeen := false
@@ -297,11 +280,11 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
-			if len(dataLines) == 0 {
+			if dataBuilder.Len() == 0 {
 				continue
 			}
-			data := strings.Join(dataLines, "")
-			dataLines = nil
+			data := dataBuilder.String()
+			dataBuilder.Reset()
 			dataEventCount++
 			if logger != nil {
 				logger.LogUpstreamSSE("warp_data", data)
@@ -360,7 +343,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 			continue
 		}
 		if strings.HasPrefix(line, "data:") {
-			dataLines = append(dataLines, strings.TrimSpace(line[5:]))
+			dataBuilder.WriteString(strings.TrimSpace(line[5:]))
 			continue
 		}
 		// ignore event: or other lines

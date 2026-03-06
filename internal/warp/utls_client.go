@@ -11,16 +11,26 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/http2"
 )
 
+type h2ConnEntry struct {
+	mu      sync.Mutex
+	conn    *http2.ClientConn
+	created time.Time
+}
+
+const h2ConnMaxAge = 5 * time.Minute
+
 type utlsTransport struct {
 	proxyFunc func(*http.Request) (*url.URL, error)
 	h2Trans   *http2.Transport
 	h1Trans   *http.Transport
+	h2Pool    sync.Map // host -> *h2ConnEntry
 }
 
 func newUTLSTransport(proxyFunc func(*http.Request) (*url.URL, error)) http.RoundTripper {
@@ -48,6 +58,32 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 	return c.br.Read(b)
 }
 
+// tryPooledH2 tries to reuse a cached H2 connection for the given address.
+// Returns (nil, nil) if no usable connection is cached.
+func (t *utlsTransport) tryPooledH2(req *http.Request, addr string) (*http.Response, error) {
+	val, ok := t.h2Pool.Load(addr)
+	if !ok {
+		return nil, nil
+	}
+	entry := val.(*h2ConnEntry)
+	entry.mu.Lock()
+	cc := entry.conn
+	created := entry.created
+	entry.mu.Unlock()
+
+	if cc == nil || time.Since(created) > h2ConnMaxAge || !cc.CanTakeNewRequest() {
+		t.h2Pool.Delete(addr)
+		return nil, nil
+	}
+	resp, err := cc.RoundTrip(req)
+	if err != nil {
+		// Connection might be dead, evict and let caller create a new one
+		t.h2Pool.Delete(addr)
+		return nil, nil
+	}
+	return resp, nil
+}
+
 func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != "https" {
 		return t.h1Trans.RoundTrip(req)
@@ -58,12 +94,7 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		addr += ":443"
 	}
 
-	dialer := &net.Dialer{Timeout: 30 * time.Second}
-	ctx := req.Context()
-
-	var tlsConn net.Conn // the connection to pass to TLS (may be buffered)
-	var err error
-
+	// Try cached H2 connection first (no proxy only for simplicity)
 	var proxyURL *url.URL
 	if t.proxyFunc != nil {
 		parsed, err := t.proxyFunc(req)
@@ -72,6 +103,19 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		proxyURL = parsed
 	}
+
+	if proxyURL == nil {
+		if resp, err := t.tryPooledH2(req, addr); resp != nil || err != nil {
+			return resp, err
+		}
+	}
+
+	// No pooled connection available, create a new one
+	ctx := req.Context()
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+
+	var tlsConn net.Conn // the connection to pass to TLS (may be buffered)
+	var err error
 
 	if proxyURL != nil {
 		slog.Debug("Warp AI: Dialing proxy", "proxy", proxyURL.Host)
@@ -149,11 +193,16 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	slog.Debug("Warp AI: uTLS handshake successful", "protocol", protocol)
 
 	if protocol == "h2" {
-		// Use http2 Transport
+		// Use http2 Transport and cache the connection for reuse
 		clientConn, err := t.h2Trans.NewClientConn(uconn)
 		if err != nil {
 			uconn.Close()
 			return nil, fmt.Errorf("h2 new client conn: %w", err)
+		}
+		// Cache for reuse (no proxy only)
+		if proxyURL == nil {
+			entry := &h2ConnEntry{conn: clientConn, created: time.Now()}
+			t.h2Pool.Store(addr, entry)
 		}
 		return clientConn.RoundTrip(req)
 	}

@@ -7,7 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
+
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +33,7 @@ type anonToken struct {
 	expiresAt    time.Time
 	acquiring    bool
 	acquireDone  chan struct{}
+	backoffUntil time.Time // 遇到 429 后的冷却截止时间
 }
 
 var globalAnonToken anonToken
@@ -49,6 +50,12 @@ func AcquireAnonymousJWT(ctx context.Context) (string, error) {
 		jwt := globalAnonToken.accessToken
 		globalAnonToken.mu.Unlock()
 		return jwt, nil
+	}
+	// 如果还在退避冷却期内（之前遇到过 429），直接返回错误
+	if !globalAnonToken.backoffUntil.IsZero() && time.Now().Before(globalAnonToken.backoffUntil) {
+		remaining := time.Until(globalAnonToken.backoffUntil).Round(time.Second)
+		globalAnonToken.mu.Unlock()
+		return "", fmt.Errorf("anonymous user creation rate limited, retry after %s", remaining)
 	}
 	if globalAnonToken.acquiring {
 		ch := globalAnonToken.acquireDone
@@ -97,6 +104,7 @@ func AcquireAnonymousJWT(ctx context.Context) (string, error) {
 	globalAnonToken.acquireDone = nil
 	if err == nil {
 		globalAnonToken.accessToken = jwt
+		globalAnonToken.backoffUntil = time.Time{} // 成功后清除退避
 		if newRefresh != "" {
 			globalAnonToken.refreshToken = newRefresh
 		}
@@ -105,6 +113,10 @@ func AcquireAnonymousJWT(ctx context.Context) (string, error) {
 		} else {
 			globalAnonToken.expiresAt = time.Now().Add(50 * time.Minute)
 		}
+	} else if strings.Contains(err.Error(), "429") {
+		// 遇到 429 限速，设置 5 分钟退避冷却
+		globalAnonToken.backoffUntil = time.Now().Add(5 * time.Minute)
+		slog.Warn("Anonymous user creation rate limited (429), backoff for 5 minutes")
 	}
 	globalAnonToken.mu.Unlock()
 
@@ -180,58 +192,48 @@ func createAnonymousUser(ctx context.Context) (string, error) {
 	req.Header.Set("x-warp-os-version", osVersion)
 	req.Header.Set("user-agent", "")
 
-	// #region agent log
-	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H14,H16\",\"location\":\"anonymous.go:createAnonymousUser\",\"message\":\"sending CreateAnonymousUser via UTLS\",\"data\":{\"url\":\"%s\",\"has_client_id\":true},\"timestamp\":%d}\n", anonGraphQLURL, time.Now().UnixMilli()) }()
-	// #endregion
+
 
 	resp, err := anonHTTPClient.Do(req)
 	if err != nil {
-		// #region agent log
-		func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H14\",\"location\":\"anonymous.go:createAnonymousUser-err\",\"message\":\"UTLS request failed\",\"data\":{\"error\":\"%s\"},\"timestamp\":%d}\n", strings.ReplaceAll(err.Error(), "\"", "'"), time.Now().UnixMilli()) }()
-		// #endregion
 		return "", err
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 
-	// #region agent log
-	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); bs := strings.ReplaceAll(string(respBody), "\"", "'"); if len(bs) > 300 { bs = bs[:300] }; fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H14,H16\",\"location\":\"anonymous.go:createAnonymousUser-resp\",\"message\":\"CreateAnonymousUser response\",\"data\":{\"status\":%d,\"body\":\"%s\"},\"timestamp\":%d}\n", resp.StatusCode, bs, time.Now().UnixMilli()) }()
-	// #endregion
-
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("CreateAnonymousUser HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 
-	var result map[string]interface{}
+	var result struct {
+		Data struct {
+			CreateAnonymousUser struct {
+				Typename string `json:"__typename"`
+				IdToken  string `json:"idToken"`
+				Error    *struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			} `json:"createAnonymousUser"`
+		} `json:"data"`
+	}
+
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", fmt.Errorf("parse response: %w", err)
 	}
 
-	dataObj, _ := result["data"].(map[string]interface{})
-	if dataObj == nil {
-		return "", fmt.Errorf("missing data in response")
-	}
-	createAnon, _ := dataObj["createAnonymousUser"].(map[string]interface{})
-	if createAnon == nil {
-		return "", fmt.Errorf("missing createAnonymousUser in response")
-	}
-
-	if typeName, _ := createAnon["__typename"].(string); typeName == "UserFacingError" {
-		errObj, _ := createAnon["error"].(map[string]interface{})
+	anonData := result.Data.CreateAnonymousUser
+	if anonData.Typename == "UserFacingError" {
 		msg := "unknown"
-		if errObj != nil {
-			if m, ok := errObj["message"].(string); ok {
-				msg = m
-			}
+		if anonData.Error != nil && anonData.Error.Message != "" {
+			msg = anonData.Error.Message
 		}
 		return "", fmt.Errorf("UserFacingError: %s", msg)
 	}
 
-	idToken, _ := createAnon["idToken"].(string)
-	if idToken == "" {
+	if anonData.IdToken == "" {
 		return "", fmt.Errorf("no idToken in response")
 	}
-	return idToken, nil
+	return anonData.IdToken, nil
 }
 
 func exchangeIDTokenForRefresh(ctx context.Context, idToken string) (string, error) {
@@ -255,9 +257,7 @@ func exchangeIDTokenForRefresh(ctx context.Context, idToken string) (string, err
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
-	// #region agent log
-	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H14\",\"location\":\"anonymous.go:exchangeIDToken-resp\",\"message\":\"exchangeIDToken response\",\"data\":{\"status\":%d},\"timestamp\":%d}\n", resp.StatusCode, time.Now().UnixMilli()) }()
-	// #endregion
+
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("signInWithCustomToken HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
@@ -295,9 +295,7 @@ func refreshWarpToken(ctx context.Context, refreshToken string) (string, int64, 
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
-	// #region agent log
-	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H14\",\"location\":\"anonymous.go:refreshWarpToken-resp\",\"message\":\"refreshWarpToken response\",\"data\":{\"status\":%d},\"timestamp\":%d}\n", resp.StatusCode, time.Now().UnixMilli()) }()
-	// #endregion
+
 
 	if resp.StatusCode != http.StatusOK {
 		return "", 0, fmt.Errorf("refresh token HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))

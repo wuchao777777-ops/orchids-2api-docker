@@ -33,6 +33,13 @@ func NewRateLimiter(maxAttempts int, window time.Duration) *RateLimiter {
 
 // Allow reports whether the given IP is allowed to make another attempt.
 func (rl *RateLimiter) Allow(ip string) bool {
+	// Optimistic fast path: check if entry already exists
+	if val, ok := rl.entries.Load(ip); ok {
+		entry := val.(*limiterEntry)
+		return rl.processExistingEntry(entry)
+	}
+
+	// Slow path: allocation and store
 	entry := &limiterEntry{
 		tokens:    float64(rl.maxAttempts - 1), // Pre-consume 1 token for this request
 		lastVisit: time.Now(),
@@ -43,8 +50,11 @@ func (rl *RateLimiter) Allow(ip string) bool {
 		return true
 	}
 
-	// Existing entry found
-	entry = val.(*limiterEntry)
+	// Existing entry found (race condition during LoadOrStore)
+	return rl.processExistingEntry(val.(*limiterEntry))
+}
+
+func (rl *RateLimiter) processExistingEntry(entry *limiterEntry) bool {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 

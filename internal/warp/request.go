@@ -1,6 +1,7 @@
 package warp
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"github.com/goccy/go-json"
@@ -89,7 +90,7 @@ func encodeVarint(value int) []byte {
 		return []byte{0}
 	}
 	x := uint64(value)
-	var out []byte
+	out := make([]byte, 0, 10) // varint max 10 bytes
 	for x >= 0x80 {
 		out = append(out, byte(x)|0x80)
 		x >>= 7
@@ -694,12 +695,7 @@ func findBytes(haystack, needle []byte) int {
 	if len(needle) == 0 {
 		return -1
 	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if string(haystack[i:i+len(needle)]) == string(needle) {
-			return i
-		}
-	}
-	return -1
+	return bytes.Index(haystack, needle)
 }
 
 func encodeBytesField(field int, value []byte) []byte {
@@ -992,20 +988,18 @@ func ResolveModelAlias(model string) string {
 	return ""
 }
 
+var modelKeyReplacements = [][2]string{
+	{"4.6", "4-6"}, {"4.5", "4-5"}, {"2.5", "2-5"},
+	{"5.1", "5-1"}, {"5.2", "5-2"},
+}
+
 func normalizeWarpModelKey(model string) string {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	if normalized == "" {
 		return ""
 	}
-	replacements := map[string]string{
-		"4.6": "4-6",
-		"4.5": "4-5",
-		"2.5": "2-5",
-		"5.1": "5-1",
-		"5.2": "5-2",
-	}
-	for from, to := range replacements {
-		normalized = strings.ReplaceAll(normalized, from, to)
+	for _, r := range modelKeyReplacements {
+		normalized = strings.ReplaceAll(normalized, r[0], r[1])
 	}
 	return normalized
 }

@@ -14,7 +14,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"os"
+
 	"strings"
 	"sync"
 	"time"
@@ -80,7 +80,24 @@ func getSession(accountID int64, refreshToken string) *session {
 
 	key := sessionKey(accountID, refreshToken)
 
-	// Use LoadOrStore to atomically check-and-insert, preventing race conditions
+	// Optimistic check to avoid allocating cookiejar & struct if cached
+	if val, ok := sessionCache.Load(key); ok {
+		sess := val.(*session)
+		sess.mu.Lock()
+		sess.lastUsed = time.Now()
+		if refreshToken != "" && sess.refreshToken != refreshToken {
+			// refresh_token 变更时更新会话，避免旧令牌导致认证异常
+			sess.refreshToken = refreshToken
+			sess.jwt = ""
+			sess.expiresAt = time.Time{}
+			sess.loggedIn = false
+			sess.lastLogin = time.Time{}
+		}
+		sess.mu.Unlock()
+		return sess
+	}
+
+	// Session not found, allocate fully and try inserting
 	jar, _ := cookiejar.New(nil)
 	newSess := &session{
 		refreshToken:  refreshToken,
@@ -95,11 +112,10 @@ func getSession(accountID int64, refreshToken string) *session {
 	sess := val.(*session)
 
 	if loaded {
-		// Existing session found — update refresh token if changed
+		// Another goroutine inserted it between our Load and LoadOrStore
 		sess.mu.Lock()
 		sess.lastUsed = time.Now()
 		if refreshToken != "" && sess.refreshToken != refreshToken {
-			// refresh_token 变更时更新会话，避免旧令牌导致认证异常
 			sess.refreshToken = refreshToken
 			sess.jwt = ""
 			sess.expiresAt = time.Time{}
@@ -255,15 +271,11 @@ func (s *session) doRefreshTokenRequest(ctx context.Context, httpClient *http.Cl
 	req.Header.Set("accept", "*/*")
 	req.Header.Set("accept-encoding", "gzip")
 
-	// #region agent log
-	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H1,H3,H4\",\"location\":\"session.go:doRefreshTokenRequest-pre\",\"message\":\"sending refresh request\",\"data\":{\"url\":\"%s\",\"client_version\":\"%s\",\"payload_len\":%d},\"timestamp\":%d}\n", refreshURL, clientVersion, len(payload), time.Now().UnixMilli()) }()
-	// #endregion
+
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		// #region agent log
-		func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H4\",\"location\":\"session.go:doRefreshTokenRequest-network-err\",\"message\":\"network error on refresh\",\"data\":{\"error\":\"%s\"},\"timestamp\":%d}\n", strings.ReplaceAll(err.Error(), "\"", "'"), time.Now().UnixMilli()) }()
-		// #endregion
+
 		slog.Warn("Warp AI: Refresh request failed", "cid", cid, "error", err)
 		return err
 	}
@@ -284,9 +296,7 @@ func (s *session) doRefreshTokenRequest(ctx context.Context, httpClient *http.Cl
 		return err
 	}
 
-	// #region agent log
-	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); bodySnippet := string(body); if len(bodySnippet) > 500 { bodySnippet = bodySnippet[:500] }; fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H1,H2,H3\",\"location\":\"session.go:doRefreshTokenRequest-response\",\"message\":\"refresh response received\",\"data\":{\"status_code\":%d,\"body_snippet\":\"%s\"},\"timestamp\":%d}\n", resp.StatusCode, strings.ReplaceAll(strings.ReplaceAll(bodySnippet, "\"", "'"), "\n", " "), time.Now().UnixMilli()) }()
-	// #endregion
+
 
 	if resp.StatusCode != http.StatusOK {
 		retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now())
@@ -416,15 +426,11 @@ func (s *session) doLogin(ctx context.Context, httpClient *http.Client, cid, jwt
 	re.Header.Set("accept-encoding", "gzip")
 	re.Header.Set("content-length", "0")
 
-	// #region agent log
-	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); jwtSnippet := jwt; if len(jwtSnippet) > 50 { jwtSnippet = jwtSnippet[:20] + "..." + jwtSnippet[len(jwtSnippet)-20:] }; fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H6\",\"location\":\"session.go:doLogin-pre\",\"message\":\"sending login request\",\"data\":{\"url\":\"%s\",\"client_version\":\"%s\",\"jwt_snippet\":\"%s\",\"experiment_id\":\"%s\"},\"timestamp\":%d}\n", loginURL, clientVersion, jwtSnippet, experimentID, time.Now().UnixMilli()) }()
-	// #endregion
+
 
 	resp, err := httpClient.Do(re)
 	if err != nil {
-		// #region agent log
-		func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H6\",\"location\":\"session.go:doLogin-network-err\",\"message\":\"login network error\",\"data\":{\"error\":\"%s\"},\"timestamp\":%d}\n", strings.ReplaceAll(err.Error(), "\"", "'"), time.Now().UnixMilli()) }()
-		// #endregion
+
 		slog.Warn("Warp AI: Login request failed", "cid", cid, "error", err)
 		return err
 	}
@@ -445,9 +451,7 @@ func (s *session) doLogin(ctx context.Context, httpClient *http.Client, cid, jwt
 		return err
 	}
 
-	// #region agent log
-	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); respHeaders := ""; for k, v := range resp.Header { respHeaders += k + "=" + strings.Join(v, ",") + "; " }; bodySnippet := string(body); if len(bodySnippet) > 300 { bodySnippet = bodySnippet[:300] }; fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H6\",\"location\":\"session.go:doLogin-response\",\"message\":\"login response received\",\"data\":{\"status_code\":%d,\"body\":\"%s\",\"headers\":\"%s\"},\"timestamp\":%d}\n", resp.StatusCode, strings.ReplaceAll(strings.ReplaceAll(bodySnippet, "\"", "'"), "\n", " "), strings.ReplaceAll(respHeaders, "\"", "'"), time.Now().UnixMilli()) }()
-	// #endregion
+
 
 	if resp.StatusCode != http.StatusNoContent {
 		slog.Warn("Warp AI: Login failed", "cid", cid, "status", resp.StatusCode, "body", string(body))

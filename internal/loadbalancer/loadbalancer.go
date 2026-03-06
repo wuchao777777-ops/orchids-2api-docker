@@ -104,24 +104,23 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, ex
 	return account, nil
 }
 
-// deepCopyAccounts 深拷贝账号切片，避免并发请求共享同一指针导致数据竞争
-func deepCopyAccounts(src []*store.Account) []*store.Account {
-	dst := make([]*store.Account, len(src))
-	for i, acc := range src {
-		copied := *acc
-		dst[i] = &copied
-	}
-	return dst
-}
-
 func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Account, error) {
 	now := time.Now()
 
+	lb.mu.RLock()
+	if len(lb.cachedAccounts) > 0 && now.Before(lb.cacheExpires) {
+		accounts := lb.cachedAccounts
+		lb.mu.RUnlock()
+		return accounts, nil
+	}
+	lb.mu.RUnlock()
+
 	// Use singleflight to prevent cache stampede
 	val, err, _ := lb.sfGroup.Do("getEnabledAccounts", func() (interface{}, error) {
+		// Double check after acquiring singleflight lock
 		lb.mu.RLock()
 		if len(lb.cachedAccounts) > 0 && now.Before(lb.cacheExpires) {
-			accounts := deepCopyAccounts(lb.cachedAccounts)
+			accounts := lb.cachedAccounts
 			lb.mu.RUnlock()
 			return accounts, nil
 		}
@@ -137,7 +136,7 @@ func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Accoun
 		lb.cacheExpires = time.Now().Add(lb.cacheTTL)
 		lb.mu.Unlock()
 
-		return deepCopyAccounts(accounts), nil
+		return accounts, nil
 	})
 
 	if err != nil {
@@ -264,10 +263,19 @@ func (lb *LoadBalancer) clearAccountStatus(ctx context.Context, acc *store.Accou
 	if strings.EqualFold(acc.AccountType, "warp") && acc.ID > 0 {
 		warp.InvalidateSession(acc.ID)
 	}
+	// Find and update the account in the cached slice so the change reflects immediately
 	lb.mu.Lock()
 	acc.StatusCode = ""
 	acc.LastAttempt = time.Time{}
 	acc.QuotaResetAt = time.Time{}
+	for _, cached := range lb.cachedAccounts {
+		if cached.ID == acc.ID {
+			cached.StatusCode = ""
+			cached.LastAttempt = time.Time{}
+			cached.QuotaResetAt = time.Time{}
+			break
+		}
+	}
 	lb.mu.Unlock()
 	lb.persistAccountStatus(ctx, acc, reason)
 }
@@ -278,12 +286,22 @@ func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Accoun
 		return
 	}
 	lb.mu.Lock()
+	// Early exit if the incoming reference already has the status
 	if acc.StatusCode == status {
 		lb.mu.Unlock()
 		return
 	}
 	acc.StatusCode = status
 	acc.LastAttempt = time.Now()
+	
+	// Ensure the cache is updated as well
+	for _, cached := range lb.cachedAccounts {
+		if cached.ID == acc.ID {
+			cached.StatusCode = status
+			cached.LastAttempt = acc.LastAttempt
+			break
+		}
+	}
 	lb.mu.Unlock()
 	lb.persistAccountStatus(ctx, acc, "后台刷新失败: "+status)
 }

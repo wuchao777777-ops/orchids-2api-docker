@@ -156,6 +156,30 @@ const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContex
   }
 }`
 
+type graphqlResponse struct {
+	Data struct {
+		User struct {
+			Typename string `json:"__typename"`
+			User     struct {
+				RequestLimitInfo *RequestLimitInfo `json:"requestLimitInfo"`
+				BonusGrants      []BonusGrant      `json:"bonusGrants"`
+				Workspaces       []struct {
+					FeatureModelChoice struct {
+						AgentMode *FeatureModelCategory `json:"agentMode"`
+						Planning  *FeatureModelCategory `json:"planning"`
+						Coding    *FeatureModelCategory `json:"coding"`
+						CliAgent  *FeatureModelCategory `json:"cliAgent"`
+					} `json:"featureModelChoice"`
+				} `json:"workspaces"`
+			} `json:"user"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"user"`
+	} `json:"data"`
+	Errors []interface{} `json:"errors"`
+}
+
 // FetchRequestLimitInfo queries the Warp GraphQL API for the user's request
 // limit info and bonus grants.
 func FetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string) (*RequestLimitInfo, []BonusGrant, error) {
@@ -166,63 +190,24 @@ func FetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string)
 		},
 	}
 
-	raw, err := doGraphQL(ctx, client, jwt, "GetRequestLimitInfo", body)
-	if err != nil {
+	var resp graphqlResponse
+	if err := doGraphQL(ctx, client, jwt, "GetRequestLimitInfo", body, &resp); err != nil {
 		return nil, nil, err
 	}
 
-	// Navigate: data.user.user
-	data, _ := raw["data"].(map[string]interface{})
-	if data == nil {
-		return nil, nil, fmt.Errorf("warp graphql: missing data in response")
-	}
-	userWrapper, _ := data["user"].(map[string]interface{})
-	if userWrapper == nil {
-		return nil, nil, fmt.Errorf("warp graphql: missing user in response")
-	}
-
-	// Check for UserFacingError
-	if typename, _ := userWrapper["__typename"].(string); typename == "UserFacingError" {
-		errObj, _ := userWrapper["error"].(map[string]interface{})
+	if resp.Data.User.Typename == "UserFacingError" {
 		msg := "unknown error"
-		if errObj != nil {
-			if m, ok := errObj["message"].(string); ok {
-				msg = m
-			}
+		if resp.Data.User.Error != nil && resp.Data.User.Error.Message != "" {
+			msg = resp.Data.User.Error.Message
 		}
 		return nil, nil, fmt.Errorf("warp graphql: %s", msg)
 	}
 
-	userObj, _ := userWrapper["user"].(map[string]interface{})
-	if userObj == nil {
-		return nil, nil, fmt.Errorf("warp graphql: missing user object in response")
+	limitInfo := resp.Data.User.User.RequestLimitInfo
+	if limitInfo == nil {
+		limitInfo = &RequestLimitInfo{}
 	}
-
-	// Parse requestLimitInfo
-	var limitInfo RequestLimitInfo
-	if rli, ok := userObj["requestLimitInfo"]; ok && rli != nil {
-		b, err := json.Marshal(rli)
-		if err != nil {
-			return nil, nil, fmt.Errorf("warp graphql: marshal requestLimitInfo: %w", err)
-		}
-		if err := json.Unmarshal(b, &limitInfo); err != nil {
-			return nil, nil, fmt.Errorf("warp graphql: unmarshal requestLimitInfo: %w", err)
-		}
-	}
-
-	// Parse bonusGrants
-	var bonuses []BonusGrant
-	if bg, ok := userObj["bonusGrants"]; ok && bg != nil {
-		b, err := json.Marshal(bg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("warp graphql: marshal bonusGrants: %w", err)
-		}
-		if err := json.Unmarshal(b, &bonuses); err != nil {
-			return nil, nil, fmt.Errorf("warp graphql: unmarshal bonusGrants: %w", err)
-		}
-	}
-
-	return &limitInfo, bonuses, nil
+	return limitInfo, resp.Data.User.User.BonusGrants, nil
 }
 
 // FetchFeatureModelChoices queries the Warp GraphQL API for available model
@@ -235,109 +220,40 @@ func FetchFeatureModelChoices(ctx context.Context, client *http.Client, jwt stri
 		},
 	}
 
-	raw, err := doGraphQL(ctx, client, jwt, "GetFeatureModelChoices", body)
-	if err != nil {
+	var resp graphqlResponse
+	if err := doGraphQL(ctx, client, jwt, "GetFeatureModelChoices", body, &resp); err != nil {
 		return nil, err
 	}
 
-	// Navigate: data.user.user.workspaces[0].featureModelChoice
-	data, _ := raw["data"].(map[string]interface{})
-	if data == nil {
-		return nil, fmt.Errorf("warp graphql: missing data in response")
-	}
-	userWrapper, _ := data["user"].(map[string]interface{})
-	if userWrapper == nil {
-		return nil, fmt.Errorf("warp graphql: missing user in response")
-	}
-
-	// Check for UserFacingError
-	if typename, _ := userWrapper["__typename"].(string); typename == "UserFacingError" {
-		errObj, _ := userWrapper["error"].(map[string]interface{})
+	if resp.Data.User.Typename == "UserFacingError" {
 		msg := "unknown error"
-		if errObj != nil {
-			if m, ok := errObj["message"].(string); ok {
-				msg = m
-			}
+		if resp.Data.User.Error != nil && resp.Data.User.Error.Message != "" {
+			msg = resp.Data.User.Error.Message
 		}
 		return nil, fmt.Errorf("warp graphql: UserFacingError: %s", msg)
 	}
 
-	userObj, _ := userWrapper["user"].(map[string]interface{})
-	if userObj == nil {
-		return nil, fmt.Errorf("warp graphql: missing user object in response")
-	}
-
-	workspaces, _ := userObj["workspaces"].([]interface{})
-	if len(workspaces) == 0 {
+	if len(resp.Data.User.User.Workspaces) == 0 {
 		return nil, fmt.Errorf("warp graphql: no workspaces found")
 	}
 
-	ws, _ := workspaces[0].(map[string]interface{})
-	if ws == nil {
-		return nil, fmt.Errorf("warp graphql: invalid workspace object")
-	}
-
-	fmc, _ := ws["featureModelChoice"].(map[string]interface{})
-	if fmc == nil {
-		return nil, fmt.Errorf("warp graphql: missing featureModelChoice")
-	}
-
-	result := &FeatureModelChoices{}
-
-	if v, ok := fmc["agentMode"]; ok && v != nil {
-		cat, err := parseFeatureModelCategory(v)
-		if err != nil {
-			slog.Warn("warp graphql: parse agentMode failed", "error", err)
-		} else {
-			result.AgentMode = cat
-		}
-	}
-	if v, ok := fmc["planning"]; ok && v != nil {
-		cat, err := parseFeatureModelCategory(v)
-		if err != nil {
-			slog.Warn("warp graphql: parse planning failed", "error", err)
-		} else {
-			result.Planning = cat
-		}
-	}
-	if v, ok := fmc["coding"]; ok && v != nil {
-		cat, err := parseFeatureModelCategory(v)
-		if err != nil {
-			slog.Warn("warp graphql: parse coding failed", "error", err)
-		} else {
-			result.Coding = cat
-		}
-	}
-	if v, ok := fmc["cliAgent"]; ok && v != nil {
-		cat, err := parseFeatureModelCategory(v)
-		if err != nil {
-			slog.Warn("warp graphql: parse cliAgent failed", "error", err)
-		} else {
-			result.CliAgent = cat
-		}
+	fmc := resp.Data.User.User.Workspaces[0].FeatureModelChoice
+	result := &FeatureModelChoices{
+		AgentMode: fmc.AgentMode,
+		Planning:  fmc.Planning,
+		Coding:    fmc.Coding,
+		CliAgent:  fmc.CliAgent,
 	}
 
 	return result, nil
 }
 
-func parseFeatureModelCategory(v interface{}) (*FeatureModelCategory, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	var cat FeatureModelCategory
-	if err := json.Unmarshal(b, &cat); err != nil {
-		return nil, err
-	}
-	return &cat, nil
-}
-
-// doGraphQL sends a GraphQL request to the Warp API and returns the parsed
-// JSON response.
-func doGraphQL(ctx context.Context, client *http.Client, jwt, operationName string, body graphqlRequest) (map[string]interface{}, error) {
+// doGraphQL sends a GraphQL request to the Warp API and unmarshals the
+// JSON response into the target struct.
+func doGraphQL(ctx context.Context, client *http.Client, jwt, operationName string, body graphqlRequest, target interface{}) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("warp graphql: marshal request: %w", err)
+		return fmt.Errorf("warp graphql: marshal request: %w", err)
 	}
 
 	reqURL := graphqlURL + "?op=" + operationName
@@ -347,7 +263,7 @@ func doGraphQL(ctx context.Context, client *http.Client, jwt, operationName stri
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("warp graphql: create request: %w", err)
+		return fmt.Errorf("warp graphql: create request: %w", err)
 	}
 
 	req.Header.Set("authorization", "Bearer "+jwt)
@@ -365,7 +281,7 @@ func doGraphQL(ctx context.Context, client *http.Client, jwt, operationName stri
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("warp graphql %s: %w", operationName, err)
+		return fmt.Errorf("warp graphql %s: %w", operationName, err)
 	}
 	defer resp.Body.Close()
 
@@ -373,36 +289,34 @@ func doGraphQL(ctx context.Context, client *http.Client, jwt, operationName stri
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		reader, err = gzip.NewReader(resp.Body)
 		if err != nil {
-			return nil, fmt.Errorf("warp graphql: gzip decode: %w", err)
+			return fmt.Errorf("warp graphql: gzip decode: %w", err)
 		}
 		defer reader.Close()
 	}
 
 	respBody, err := io.ReadAll(io.LimitReader(reader, 2<<20)) // 2 MB max
 	if err != nil {
-		return nil, fmt.Errorf("warp graphql %s: read body: %w", operationName, err)
+		return fmt.Errorf("warp graphql %s: read body: %w", operationName, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Warn("warp graphql request failed", "op", operationName, "status", resp.StatusCode, "body", string(respBody))
-		return nil, fmt.Errorf("warp graphql %s: HTTP %d: %s", operationName, resp.StatusCode, string(respBody))
+		return fmt.Errorf("warp graphql %s: HTTP %d: %s", operationName, resp.StatusCode, string(respBody))
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("warp graphql %s: unmarshal response: %w", operationName, err)
+	if err := json.Unmarshal(respBody, target); err != nil {
+		return fmt.Errorf("warp graphql %s: unmarshal response: %w", operationName, err)
 	}
 
-	// Check for top-level GraphQL errors
-	if errs, ok := result["errors"]; ok {
-		// An empty errors array is not an error
-		if errSlice, isSlice := errs.([]interface{}); !isSlice || len(errSlice) > 0 {
-			b, _ := json.Marshal(errs)
-			return nil, fmt.Errorf("warp graphql %s: errors: %s", operationName, string(b))
+	// Check if target is graphqlResponse to handle generic errors
+	if gr, ok := target.(*graphqlResponse); ok {
+		if len(gr.Errors) > 0 {
+			b, _ := json.Marshal(gr.Errors)
+			return fmt.Errorf("warp graphql %s: errors: %s", operationName, string(b))
 		}
 	}
 
-	return result, nil
+	return nil
 }
 
 // GetRequestLimitInfo fetches the user's request limit info using the
