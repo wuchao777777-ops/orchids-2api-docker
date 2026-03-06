@@ -1022,7 +1022,8 @@ func validateChatMessages(messages []ChatMessage) error {
 	}
 
 	for _, msg := range messages {
-		role := strings.TrimSpace(msg.Role)
+		roleRaw := strings.TrimSpace(msg.Role)
+		role := strings.ToLower(roleRaw)
 		if _, ok := allowedRoles[role]; !ok {
 			return fmt.Errorf("role must be one of [assistant developer system user]")
 		}
@@ -1047,17 +1048,18 @@ func validateChatMessages(messages []ChatMessage) error {
 				if !hasType {
 					return fmt.Errorf("content block must have a 'type' field")
 				}
-				blockType := strings.TrimSpace(fmt.Sprint(rawType))
+				blockTypeRaw := strings.TrimSpace(fmt.Sprint(rawType))
+				blockType := strings.ToLower(blockTypeRaw)
 				if blockType == "" {
 					return fmt.Errorf("content block 'type' cannot be empty")
 				}
 
 				if role == "user" {
 					if _, ok := userContentTypes[blockType]; !ok {
-						return fmt.Errorf("invalid content block type: '%s'", blockType)
+						return fmt.Errorf("invalid content block type: '%s'", blockTypeRaw)
 					}
 				} else if blockType != "text" {
-					return fmt.Errorf("the '%s' role only supports 'text' type, got '%s'", role, blockType)
+					return fmt.Errorf("the '%s' role only supports 'text' type, got '%s'", role, blockTypeRaw)
 				}
 
 				switch blockType {
@@ -1094,7 +1096,7 @@ func validateChatMessages(messages []ChatMessage) error {
 						return err
 					}
 				default:
-					return fmt.Errorf("invalid content block type: '%s'", blockType)
+					return fmt.Errorf("invalid content block type: '%s'", blockTypeRaw)
 				}
 
 			}

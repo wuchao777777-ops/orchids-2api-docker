@@ -66,6 +66,28 @@ func TestExtractMessageAndAttachments(t *testing.T) {
 	}
 }
 
+func TestValidateChatMessages_AcceptsCaseInsensitiveRoleAndType(t *testing.T) {
+	messages := []ChatMessage{
+		{
+			Role: "User",
+			Content: []interface{}{
+				map[string]interface{}{"type": "Text", "text": "hello"},
+				map[string]interface{}{"type": "Image_URL", "image_url": map[string]interface{}{"url": "https://a/b.png"}},
+			},
+		},
+		{
+			Role: "ASSISTANT",
+			Content: []interface{}{
+				map[string]interface{}{"type": "TEXT", "text": "ok"},
+			},
+		},
+	}
+
+	if err := validateChatMessages(messages); err != nil {
+		t.Fatalf("validateChatMessages() error = %v", err)
+	}
+}
+
 func TestResolveAspectRatio(t *testing.T) {
 	if got := resolveAspectRatio("1024x1024"); got != "1:1" {
 		t.Fatalf("resolveAspectRatio(1024x1024)=%q want=1:1", got)
