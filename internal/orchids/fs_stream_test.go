@@ -3,10 +3,13 @@ package orchids
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/goccy/go-json"
 )
 
 func TestTrimTrailingLineBreakBytes(t *testing.T) {
@@ -114,5 +117,93 @@ func BenchmarkBufferedLineRead_Bytes(b *testing.B) {
 			}
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestAppendGrepMatchLineMatchesFmt(t *testing.T) {
+	path := `C:/repo/project/file.txt`
+	lineNum := 42
+	line := []byte("alpha beta gamma needle delta")
+	got := string(appendGrepMatchLine(nil, path, lineNum, line))
+	want := path + ":42:" + string(line)
+	if got != want {
+		t.Fatalf("appendGrepMatchLine = %q, want %q", got, want)
+	}
+}
+
+func BenchmarkAppendGrepMatchLine_Fmt(b *testing.B) {
+	path := `C:/repo/project/file.txt`
+	lineNum := 42
+	line := "alpha beta gamma needle delta"
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = fmt.Sprintf("%s:%d:%s", path, lineNum, line)
+	}
+}
+
+func BenchmarkAppendGrepMatchLine_Bytes(b *testing.B) {
+	path := `C:/repo/project/file.txt`
+	lineNum := 42
+	line := []byte("alpha beta gamma needle delta")
+	buf := make([]byte, 0, len(path)+len(line)+16)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		buf = appendGrepMatchLine(buf[:0], path, lineNum, line)
+	}
+}
+
+func legacyDecodeFSOperation(msg map[string]interface{}) fsOperation {
+	raw, _ := json.Marshal(msg)
+	var op fsOperation
+	_ = json.Unmarshal(raw, &op)
+	return op
+}
+
+func sampleFSOperationMap() map[string]interface{} {
+	return map[string]interface{}{
+		"id":            "fs_123",
+		"operation":     "grep",
+		"path":          "/repo",
+		"pattern":       "needle",
+		"command":       "echo hi",
+		"content":       map[string]interface{}{"text": "hello"},
+		"is_background": true,
+		"bash_id":       "bash_1",
+		"globParameters": map[string]interface{}{
+			"path":       "/repo",
+			"pattern":    "*.go",
+			"maxResults": 20,
+		},
+		"ripgrepParameters": map[string]interface{}{
+			"path":    "/repo",
+			"pattern": "needle",
+		},
+	}
+}
+
+func TestDecodeFSOperationMatchesLegacy(t *testing.T) {
+	msg := sampleFSOperationMap()
+	got := decodeFSOperation(msg)
+	want := legacyDecodeFSOperation(msg)
+	gotJSON, _ := json.Marshal(got)
+	wantJSON, _ := json.Marshal(want)
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("decodeFSOperation=%s want=%s", gotJSON, wantJSON)
+	}
+}
+
+func BenchmarkDecodeFSOperation_Legacy(b *testing.B) {
+	msg := sampleFSOperationMap()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = legacyDecodeFSOperation(msg)
+	}
+}
+
+func BenchmarkDecodeFSOperation_Current(b *testing.B) {
+	msg := sampleFSOperationMap()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = decodeFSOperation(msg)
 	}
 }

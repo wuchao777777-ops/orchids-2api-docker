@@ -306,6 +306,19 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 			break
 		}
 
+		handled, shouldBreak := c.handleOrchidsRawMessage(data, &state, onMessage, logger)
+		if handled {
+			receivedAnyMessage = true
+			if !firstReceived && c.config.DebugEnabled {
+				firstReceived = true
+				slog.Info("[Performance] WS First response received (TTFT)", "duration", time.Since(startFirstToken))
+			}
+			if shouldBreak {
+				break
+			}
+			continue
+		}
+
 		var msg map[string]interface{}
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
@@ -317,7 +330,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 			slog.Info("[Performance] WS First response received (TTFT)", "duration", time.Since(startFirstToken))
 		}
 
-		shouldBreak := c.handleOrchidsMessage(msg, data, &state, onMessage, logger, conn, &fsWG, req.Workdir)
+		shouldBreak = c.handleOrchidsMessage(msg, data, &state, onMessage, logger, conn, &fsWG, req.Workdir)
 		if shouldBreak {
 			break
 		}
@@ -634,22 +647,7 @@ func (c *Client) handleCompletionEvent(
 			return true // Break loop
 		}
 	}
-
-	if state.textStarted {
-		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-end", "id": "0"}})
-	}
-	if state.reasoningStarted {
-		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "reasoning-end", "id": "0"}})
-		state.reasoningStarted = false
-	}
-	if !state.finishSent {
-		finishReason := "stop"
-		if state.sawToolCall {
-			finishReason = "tool-calls"
-		}
-		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "finish", "finishReason": finishReason}})
-		state.finishSent = true
-	}
+	emitOrchidsCompletionTail(state, onMessage)
 	return true // Break loop
 }
 

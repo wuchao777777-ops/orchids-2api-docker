@@ -45,19 +45,9 @@ type fsOperation struct {
 }
 
 func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interface{}, onResult func(success bool, data interface{}, errMsg string), overrideWorkdir string) error {
-	operation, _ := msg["operation"].(string)
-	path, _ := msg["path"].(string)
-	slog.Debug("Orchids FS request", "op", operation, "path", path, "overrideWorkdir", overrideWorkdir)
+	op := decodeFSOperation(msg)
+	slog.Debug("Orchids FS request", "op", op.Operation, "path", op.Path, "overrideWorkdir", overrideWorkdir)
 	start := time.Now()
-	raw, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
-	var op fsOperation
-	if err := json.Unmarshal(raw, &op); err != nil {
-		return err
-	}
 
 	respond := func(success bool, data interface{}, errMsg string) error {
 		if c.config.DebugEnabled {
@@ -83,7 +73,7 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 		return conn.WriteJSON(payload)
 	}
 
-	operation = strings.ToLower(strings.TrimSpace(operation))
+	operation := strings.ToLower(strings.TrimSpace(op.Operation))
 	if operation == "" {
 		return respond(false, nil, "missing operation")
 	}
@@ -306,6 +296,42 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 	default:
 		return respond(false, nil, fmt.Sprintf("unknown operation: %s", operation))
 	}
+}
+
+func decodeFSOperation(msg map[string]interface{}) fsOperation {
+	if msg == nil {
+		return fsOperation{}
+	}
+	op := fsOperation{
+		ID:        mapStringValue(msg, "id"),
+		Operation: mapStringValue(msg, "operation"),
+		Path:      mapStringValue(msg, "path"),
+		Content:   msg["content"],
+		Command:   mapStringValue(msg, "command"),
+		Pattern:   mapStringValue(msg, "pattern"),
+		BashID:    mapStringValue(msg, "bash_id", "bashId"),
+	}
+	if v, ok := msg["is_background"].(bool); ok {
+		op.IsBackground = v
+	} else if v, ok := msg["isBackground"].(bool); ok {
+		op.IsBackground = v
+	}
+	if params, ok := msg["globParameters"].(map[string]interface{}); ok {
+		op.GlobParameters = params
+	}
+	if params, ok := msg["ripgrepParameters"].(map[string]interface{}); ok {
+		op.RipgrepParams = params
+	}
+	return op
+}
+
+func mapStringValue(msg map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := msg[key].(string); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 func resolvePath(baseDir, input string) (string, error) {
@@ -620,6 +646,7 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 		defer perf.ReleaseBufioReader(reader)
 		lineNum := 0
 		var lineScratch []byte
+		var matchScratch []byte
 		for {
 			line, nextScratch, err := readLineBytes(reader, lineScratch)
 			lineScratch = nextScratch[:0]
@@ -632,7 +659,8 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 			lineNum++
 			line = trimTrailingLineBreakBytes(line)
 			if re.Match(line) {
-				lines = append(lines, fmt.Sprintf("%s:%d:%s", path, lineNum, string(line)))
+				matchScratch = appendGrepMatchLine(matchScratch[:0], path, lineNum, line)
+				lines = append(lines, string(matchScratch))
 				count++
 				if fsMaxLines > 0 && count >= fsMaxLines {
 					break
@@ -655,6 +683,15 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 		output = output[:fsMaxOutputSize]
 	}
 	return output, nil
+}
+
+func appendGrepMatchLine(dst []byte, path string, lineNum int, line []byte) []byte {
+	dst = append(dst, path...)
+	dst = append(dst, ':')
+	dst = strconv.AppendInt(dst, int64(lineNum), 10)
+	dst = append(dst, ':')
+	dst = append(dst, line...)
+	return dst
 }
 
 func readLineBytes(reader *bufio.Reader, scratch []byte) ([]byte, []byte, error) {
