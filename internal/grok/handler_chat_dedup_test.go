@@ -40,6 +40,62 @@ func TestStreamChat_DedupsGreetingRepeat(t *testing.T) {
 	}
 }
 
+func TestStreamMarkupFilter_CaseInsensitiveToolCard(t *testing.T) {
+	filter := &streamMarkupFilter{}
+	in := `<XAI:TOOL_USAGE_CARD><XAI:TOOL_NAME>web_search</XAI:TOOL_NAME><XAI:TOOL_ARGS>{"query":"hello"}</XAI:TOOL_ARGS></XAI:TOOL_USAGE_CARD>`
+	out := filter.feed(in) + filter.flush()
+	if !strings.Contains(out, "[WebSearch] hello") {
+		t.Fatalf("expected parsed tool card text, got=%q", out)
+	}
+}
+
+func TestIndexFoldASCII(t *testing.T) {
+	if got := indexFoldASCII("abc<GROK:RENDER>x", "<grok:render"); got != 3 {
+		t.Fatalf("indexFoldASCII case-insensitive mismatch got=%d want=3", got)
+	}
+	if got := indexFoldASCII("abc", "xyz"); got != -1 {
+		t.Fatalf("indexFoldASCII should return -1, got=%d", got)
+	}
+}
+
+func TestStreamTextImageRefCollector_CrossChunkAndDedup(t *testing.T) {
+	c := newStreamTextImageRefCollector()
+	c.feed("prefix https://assets.grok.com/users/u-1/generated/a1/image.p")
+	c.feed("ng?x=1 middle users/u-2/generated/a2/image.we")
+	c.feed("bp suffix https://assets.grok.com/users/u-1/generated/a1/image.png?x=1")
+
+	out := make([]string, 0, 4)
+	c.emit(func(u string) {
+		out = append(out, u)
+	})
+
+	wantDirect := "https://assets.grok.com/users/u-1/generated/a1/image.png?x=1"
+	wantAsset := "https://assets.grok.com/users/u-2/generated/a2/image.webp"
+
+	hasDirect := false
+	hasAsset := false
+	directCount := 0
+	for _, u := range out {
+		if u == wantDirect {
+			hasDirect = true
+			directCount++
+		}
+		if u == wantAsset {
+			hasAsset = true
+		}
+	}
+
+	if !hasDirect {
+		t.Fatalf("missing direct url, out=%v", out)
+	}
+	if !hasAsset {
+		t.Fatalf("missing asset url, out=%v", out)
+	}
+	if directCount != 1 {
+		t.Fatalf("direct url should be deduped, count=%d out=%v", directCount, out)
+	}
+}
+
 func extractStreamTextContents(t *testing.T, raw string) []string {
 	t.Helper()
 	lines := strings.Split(raw, "\n")

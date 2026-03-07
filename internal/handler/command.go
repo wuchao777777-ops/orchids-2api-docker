@@ -69,48 +69,90 @@ func writeCommandPrefixResponse(w http.ResponseWriter, req ClaudeRequest, prefix
 			}
 		}
 
-		startData, _ := json.Marshal(map[string]interface{}{
-			"type": "message_start",
-			"message": map[string]interface{}{
-				"id":      msgID,
-				"type":    "message",
-				"role":    "assistant",
-				"content": []interface{}{},
-				"model":   req.Model,
-				"usage":   map[string]int{"input_tokens": inputTokens, "output_tokens": 0},
+		// Define constants for fully static messages
+		const (
+			sseContentBlockStart = `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
+			sseContentBlockStop  = `{"type":"content_block_stop","index":0}`
+			sseMessageStop       = `{"type":"message_stop"}`
+		)
+
+		startData, _ := json.Marshal(struct {
+			Type    string `json:"type"`
+			Message struct {
+				ID      string        `json:"id"`
+				Type    string        `json:"type"`
+				Role    string        `json:"role"`
+				Content []interface{} `json:"content"`
+				Model   string        `json:"model"`
+				Usage   struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}{
+			Type: "message_start",
+			Message: struct {
+				ID      string        `json:"id"`
+				Type    string        `json:"type"`
+				Role    string        `json:"role"`
+				Content []interface{} `json:"content"`
+				Model   string        `json:"model"`
+				Usage   struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}{
+				ID:      msgID,
+				Type:    "message",
+				Role:    "assistant",
+				Content: []interface{}{},
+				Model:   req.Model,
+				Usage: struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				}{InputTokens: inputTokens, OutputTokens: 0},
 			},
 		})
 		write("message_start", string(startData))
+		write("content_block_start", sseContentBlockStart)
 
-		blockStart, _ := json.Marshal(map[string]interface{}{
-			"type":          "content_block_start",
-			"index":         0,
-			"content_block": map[string]string{"type": "text", "text": ""},
-		})
-		write("content_block_start", string(blockStart))
-
-		blockDelta, _ := json.Marshal(map[string]interface{}{
-			"type":  "content_block_delta",
-			"index": 0,
-			"delta": map[string]string{"type": "text_delta", "text": prefix},
+		blockDelta, _ := json.Marshal(struct {
+			Type  string `json:"type"`
+			Index int    `json:"index"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		}{
+			Type:  "content_block_delta",
+			Index: 0,
+			Delta: struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}{Type: "text_delta", Text: prefix},
 		})
 		write("content_block_delta", string(blockDelta))
+		write("content_block_stop", sseContentBlockStop)
 
-		blockStop, _ := json.Marshal(map[string]interface{}{
-			"type":  "content_block_stop",
-			"index": 0,
-		})
-		write("content_block_stop", string(blockStop))
-
-		msgDelta, _ := json.Marshal(map[string]interface{}{
-			"type":  "message_delta",
-			"delta": map[string]string{"stop_reason": "end_turn"},
-			"usage": map[string]int{"output_tokens": outputTokens},
+		msgDelta, _ := json.Marshal(struct {
+			Type  string `json:"type"`
+			Delta struct {
+				StopReason string `json:"stop_reason"`
+			} `json:"delta"`
+			Usage struct {
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}{
+			Type: "message_delta",
+			Delta: struct {
+				StopReason string `json:"stop_reason"`
+			}{StopReason: "end_turn"},
+			Usage: struct {
+				OutputTokens int `json:"output_tokens"`
+			}{OutputTokens: outputTokens},
 		})
 		write("message_delta", string(msgDelta))
-
-		msgStop, _ := json.Marshal(map[string]string{"type": "message_stop"})
-		write("message_stop", string(msgStop))
+		write("message_stop", sseMessageStop)
 		if logger != nil {
 			logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
 		}
@@ -118,18 +160,30 @@ func writeCommandPrefixResponse(w http.ResponseWriter, req ClaudeRequest, prefix
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
-		"id":            msgID,
-		"type":          "message",
-		"role":          "assistant",
-		"content":       []map[string]string{{"type": "text", "text": prefix}},
-		"model":         req.Model,
-		"stop_reason":   "end_turn",
-		"stop_sequence": nil,
-		"usage": map[string]int{
-			"input_tokens":  inputTokens,
-			"output_tokens": outputTokens,
-		},
+	response := struct {
+		ID           string              `json:"id"`
+		Type         string              `json:"type"`
+		Role         string              `json:"role"`
+		Content      []map[string]string `json:"content"`
+		Model        string              `json:"model"`
+		StopReason   string              `json:"stop_reason"`
+		StopSequence interface{}         `json:"stop_sequence"`
+		Usage        struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}{
+		ID:           msgID,
+		Type:         "message",
+		Role:         "assistant",
+		Content:      []map[string]string{{"type": "text", "text": prefix}},
+		Model:        req.Model,
+		StopReason:   "end_turn",
+		StopSequence: nil,
+		Usage: struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		}{InputTokens: inputTokens, OutputTokens: outputTokens},
 	}
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		if logger != nil {
@@ -176,48 +230,90 @@ func writeTopicClassifierResponse(w http.ResponseWriter, req ClaudeRequest, star
 			}
 		}
 
-		startData, _ := json.Marshal(map[string]interface{}{
-			"type": "message_start",
-			"message": map[string]interface{}{
-				"id":      msgID,
-				"type":    "message",
-				"role":    "assistant",
-				"content": []interface{}{},
-				"model":   req.Model,
-				"usage":   map[string]int{"input_tokens": inputTokens, "output_tokens": 0},
+		// Pre-defined static portions of the SSE stream
+		const (
+			sseContentBlockStart = `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
+			sseContentBlockStop  = `{"type":"content_block_stop","index":0}`
+			sseMessageStop       = `{"type":"message_stop"}`
+		)
+
+		startData, _ := json.Marshal(struct {
+			Type    string `json:"type"`
+			Message struct {
+				ID      string        `json:"id"`
+				Type    string        `json:"type"`
+				Role    string        `json:"role"`
+				Content []interface{} `json:"content"`
+				Model   string        `json:"model"`
+				Usage   struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}{
+			Type: "message_start",
+			Message: struct {
+				ID      string        `json:"id"`
+				Type    string        `json:"type"`
+				Role    string        `json:"role"`
+				Content []interface{} `json:"content"`
+				Model   string        `json:"model"`
+				Usage   struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}{
+				ID:      msgID,
+				Type:    "message",
+				Role:    "assistant",
+				Content: []interface{}{},
+				Model:   req.Model,
+				Usage: struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				}{InputTokens: inputTokens, OutputTokens: 0},
 			},
 		})
 		write("message_start", string(startData))
+		write("content_block_start", sseContentBlockStart)
 
-		blockStart, _ := json.Marshal(map[string]interface{}{
-			"type":          "content_block_start",
-			"index":         0,
-			"content_block": map[string]string{"type": "text", "text": ""},
-		})
-		write("content_block_start", string(blockStart))
-
-		blockDelta, _ := json.Marshal(map[string]interface{}{
-			"type":  "content_block_delta",
-			"index": 0,
-			"delta": map[string]string{"type": "text_delta", "text": text},
+		blockDelta, _ := json.Marshal(struct {
+			Type  string `json:"type"`
+			Index int    `json:"index"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		}{
+			Type:  "content_block_delta",
+			Index: 0,
+			Delta: struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}{Type: "text_delta", Text: text},
 		})
 		write("content_block_delta", string(blockDelta))
+		write("content_block_stop", sseContentBlockStop)
 
-		blockStop, _ := json.Marshal(map[string]interface{}{
-			"type":  "content_block_stop",
-			"index": 0,
-		})
-		write("content_block_stop", string(blockStop))
-
-		msgDelta, _ := json.Marshal(map[string]interface{}{
-			"type":  "message_delta",
-			"delta": map[string]string{"stop_reason": "end_turn"},
-			"usage": map[string]int{"output_tokens": outputTokens},
+		msgDelta, _ := json.Marshal(struct {
+			Type  string `json:"type"`
+			Delta struct {
+				StopReason string `json:"stop_reason"`
+			} `json:"delta"`
+			Usage struct {
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}{
+			Type: "message_delta",
+			Delta: struct {
+				StopReason string `json:"stop_reason"`
+			}{StopReason: "end_turn"},
+			Usage: struct {
+				OutputTokens int `json:"output_tokens"`
+			}{OutputTokens: outputTokens},
 		})
 		write("message_delta", string(msgDelta))
-
-		msgStop, _ := json.Marshal(map[string]string{"type": "message_stop"})
-		write("message_stop", string(msgStop))
+		write("message_stop", sseMessageStop)
 		if logger != nil {
 			logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
 		}
@@ -225,18 +321,30 @@ func writeTopicClassifierResponse(w http.ResponseWriter, req ClaudeRequest, star
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
-		"id":            msgID,
-		"type":          "message",
-		"role":          "assistant",
-		"content":       []map[string]string{{"type": "text", "text": text}},
-		"model":         req.Model,
-		"stop_reason":   "end_turn",
-		"stop_sequence": nil,
-		"usage": map[string]int{
-			"input_tokens":  inputTokens,
-			"output_tokens": outputTokens,
-		},
+	response := struct {
+		ID           string              `json:"id"`
+		Type         string              `json:"type"`
+		Role         string              `json:"role"`
+		Content      []map[string]string `json:"content"`
+		Model        string              `json:"model"`
+		StopReason   string              `json:"stop_reason"`
+		StopSequence interface{}         `json:"stop_sequence"`
+		Usage        struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}{
+		ID:           msgID,
+		Type:         "message",
+		Role:         "assistant",
+		Content:      []map[string]string{{"type": "text", "text": text}},
+		Model:        req.Model,
+		StopReason:   "end_turn",
+		StopSequence: nil,
+		Usage: struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		}{InputTokens: inputTokens, OutputTokens: outputTokens},
 	}
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		if logger != nil {

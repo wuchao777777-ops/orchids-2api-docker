@@ -125,14 +125,43 @@ var baseHeaders = http.Header{
 	"Sec-Fetch-Site":     []string{"same-origin"},
 }
 
+func cloneHeaderShallow(src http.Header, extraCapacity int) http.Header {
+	if extraCapacity < 0 {
+		extraCapacity = 0
+	}
+	if len(src) == 0 {
+		return make(http.Header, extraCapacity)
+	}
+	dst := make(http.Header, len(src)+extraCapacity)
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func buildGrokCookie(token, cfClearance, cfBM string) string {
+	var b strings.Builder
+	b.Grow(len(token)*2 + len(cfClearance) + len(cfBM) + 32)
+	b.WriteString("sso=")
+	b.WriteString(token)
+	b.WriteString("; sso-rw=")
+	b.WriteString(token)
+	if cfClearance != "" {
+		b.WriteString("; cf_clearance=")
+		b.WriteString(cfClearance)
+	}
+	if cfBM != "" {
+		b.WriteString("; __cf_bm=")
+		b.WriteString(cfBM)
+	}
+	return b.String()
+}
+
 func (c *Client) headers(token string) http.Header {
 	token = NormalizeSSOToken(token)
 
-	// 从预分配的模板克隆请求头
-	h := make(http.Header, len(baseHeaders))
-	for k, v := range baseHeaders {
-		h[k] = v
-	}
+	// 从预分配的模板浅克隆请求头；固定值切片复用，动态字段再覆盖。
+	h := cloneHeaderShallow(baseHeaders, 4)
 
 	// 添加动态请求头
 	h.Set("User-Agent", c.userAgent())
@@ -140,14 +169,13 @@ func (c *Client) headers(token string) http.Header {
 	h.Set("x-xai-request-id", randomHex(16))
 
 	// 构建 Cookie
-	cookie := "sso=" + token + "; sso-rw=" + token
-	if c.cfg != nil && strings.TrimSpace(c.cfg.GrokCFClearance) != "" {
-		cookie += "; cf_clearance=" + strings.TrimSpace(c.cfg.GrokCFClearance)
+	cfClearance := ""
+	cfBM := ""
+	if c.cfg != nil {
+		cfClearance = strings.TrimSpace(c.cfg.GrokCFClearance)
+		cfBM = strings.TrimSpace(c.cfg.GrokCFBM)
 	}
-	if c.cfg != nil && strings.TrimSpace(c.cfg.GrokCFBM) != "" {
-		cookie += "; __cf_bm=" + strings.TrimSpace(c.cfg.GrokCFBM)
-	}
-	h.Set("Cookie", cookie)
+	h.Set("Cookie", buildGrokCookie(token, cfClearance, cfBM))
 
 	return h
 }
@@ -217,7 +245,6 @@ func (c *Client) doRequest(ctx context.Context, reqURL string, method string, bo
 	if c.cfg != nil && c.cfg.MaxRetries > 0 {
 		maxRetries = c.cfg.MaxRetries
 	}
-	retryStatuses := map[int]struct{}{http.StatusTooManyRequests: {}}
 	baseDelay := 1 * time.Second
 	if c.cfg != nil && c.cfg.RetryDelay > 0 {
 		baseDelay = time.Duration(c.cfg.RetryDelay) * time.Millisecond
@@ -239,8 +266,9 @@ func (c *Client) doRequest(ctx context.Context, reqURL string, method string, bo
 		if err != nil {
 			return nil, err
 		}
-		req.Header = headers.Clone()
-		req.Header.Set("x-xai-request-id", randomHex(16))
+		reqHeaders := cloneHeaderShallow(headers, 1)
+		reqHeaders.Set("x-xai-request-id", randomHex(16))
+		req.Header = reqHeaders
 
 		resp, err := c.clientForAsset(asset).Do(req)
 		if err == nil && resp.StatusCode == okStatus {
@@ -264,7 +292,7 @@ func (c *Client) doRequest(ctx context.Context, reqURL string, method string, bo
 		_ = resp.Body.Close()
 		lastBody = string(raw)
 
-		if _, ok := retryStatuses[lastStatus]; !ok || attempt >= maxRetries {
+		if lastStatus != http.StatusTooManyRequests || attempt >= maxRetries {
 			return nil, fmt.Errorf("grok upstream status=%d body=%s", lastStatus, lastBody)
 		}
 

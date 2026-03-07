@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,49 @@ func TestExtractLastUserText(t *testing.T) {
 	}
 }
 
+func TestParseUpstreamLines_CollectAndSkip(t *testing.T) {
+	raw := strings.Join([]string{
+		`{"result":{"response":{"token":"hello"}}}`,
+		`{"result":{"other":1}}`,
+		`{"other":2}`,
+		`{"result":{"response":{"token":"world"}}}`,
+	}, "")
+
+	got := make([]string, 0, 2)
+	err := parseUpstreamLines(strings.NewReader(raw), func(line map[string]interface{}) error {
+		token, _ := line["token"].(string)
+		got = append(got, token)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("parseUpstreamLines() error: %v", err)
+	}
+	if len(got) != 2 || got[0] != "hello" || got[1] != "world" {
+		t.Fatalf("unexpected tokens: %v", got)
+	}
+}
+
+func TestParseUpstreamLines_CallbackError(t *testing.T) {
+	expectErr := errors.New("stop")
+	raw := `{"result":{"response":{"token":"hello"}}}`
+	err := parseUpstreamLines(strings.NewReader(raw), func(line map[string]interface{}) error {
+		return expectErr
+	})
+	if !errors.Is(err, expectErr) {
+		t.Fatalf("parseUpstreamLines error=%v want=%v", err, expectErr)
+	}
+}
+
+func TestParseUpstreamLines_InvalidJSON(t *testing.T) {
+	raw := `{"result":{"response":{"token":"hello"}}`
+	err := parseUpstreamLines(strings.NewReader(raw), func(line map[string]interface{}) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatalf("expected invalid json error")
+	}
+}
+
 func TestParseRateLimitPayload_AcceptsQueriesFields(t *testing.T) {
 	payload := map[string]interface{}{
 		"maxQueries":       140,
@@ -158,6 +202,54 @@ func TestParseRateLimitPayload_SkipsNonNumericMatchedField(t *testing.T) {
 		if info.Remaining != 23 {
 			t.Fatalf("remaining=%d want=23 iter=%d", info.Remaining, i)
 		}
+	}
+}
+
+func TestParseRateLimitPayload_CollectsNestedResetAndNumbers(t *testing.T) {
+	rawReset := "2026-03-05T19:00:00Z"
+	wantReset, _ := time.Parse(time.RFC3339, rawReset)
+	payload := map[string]interface{}{
+		"quota_limit": "not-a-number",
+		"meta": map[string]interface{}{
+			"limits": map[string]interface{}{
+				"maxQueries":       140,
+				"remainingQueries": "23",
+			},
+			"resetAt": rawReset,
+		},
+	}
+
+	info := parseRateLimitPayload(payload)
+	if info == nil {
+		t.Fatalf("parseRateLimitPayload returned nil")
+	}
+	if info.Limit != 140 {
+		t.Fatalf("limit=%d want=140", info.Limit)
+	}
+	if info.Remaining != 23 {
+		t.Fatalf("remaining=%d want=23", info.Remaining)
+	}
+	if !info.ResetAt.Equal(wantReset) {
+		t.Fatalf("reset=%v want=%v", info.ResetAt, wantReset)
+	}
+}
+
+func TestParseRateLimitPayload_SkipsInvalidResetAndFindsNested(t *testing.T) {
+	const resetMS int64 = 1730000000000
+	wantReset := time.UnixMilli(resetMS)
+	payload := map[string]interface{}{
+		"reset": "invalid-time",
+		"meta": map[string]interface{}{
+			"reset_at_ms": resetMS,
+		},
+	}
+
+	info := parseRateLimitPayload(payload)
+	if info == nil {
+		t.Fatalf("parseRateLimitPayload returned nil")
+	}
+	if !info.ResetAt.Equal(wantReset) {
+		t.Fatalf("reset=%v want=%v", info.ResetAt, wantReset)
 	}
 }
 
@@ -249,6 +341,24 @@ func BenchmarkParseRateLimitPayload_Nested(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = parseRateLimitPayload(payload)
+	}
+}
+
+func BenchmarkParseUpstreamLines(b *testing.B) {
+	raw := strings.Join([]string{
+		`{"result":{"response":{"token":"hello","progress":10}}}`,
+		`{"result":{"response":{"token":"world","progress":90}}}`,
+		`{"result":{"other":1}}`,
+		`{"other":2}`,
+	}, "")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if err := parseUpstreamLines(strings.NewReader(raw), func(line map[string]interface{}) error {
+			_, _ = line["token"].(string)
+			return nil
+		}); err != nil {
+			b.Fatalf("parseUpstreamLines error: %v", err)
+		}
 	}
 }
 

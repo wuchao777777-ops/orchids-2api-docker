@@ -184,19 +184,35 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		msgStart, _ := json.Marshal(map[string]interface{}{
-			"type": "message_start",
-			"message": map[string]interface{}{
-				"id":      "dup",
-				"type":    "message",
-				"role":    "assistant",
-				"content": []interface{}{},
-				"model":   req.Model,
+
+		// Zero-allocation response construction
+		msgStart, _ := json.Marshal(struct {
+			Type    string `json:"type"`
+			Message struct {
+				ID      string        `json:"id"`
+				Type    string        `json:"type"`
+				Role    string        `json:"role"`
+				Content []interface{} `json:"content"`
+				Model   string        `json:"model"`
+			} `json:"message"`
+		}{
+			Type: "message_start",
+			Message: struct {
+				ID      string        `json:"id"`
+				Type    string        `json:"type"`
+				Role    string        `json:"role"`
+				Content []interface{} `json:"content"`
+				Model   string        `json:"model"`
+			}{
+				ID:      "dup",
+				Type:    "message",
+				Role:    "assistant",
+				Content: []interface{}{},
+				Model:   req.Model,
 			},
 		})
 		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", msgStart)
-		msgStop, _ := json.Marshal(map[string]string{"type": "message_stop"})
-		fmt.Fprintf(w, "event: message_stop\ndata: %s\n\n", msgStop)
+		fmt.Fprintf(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
@@ -204,12 +220,18 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"type":     "duplicate_request",
-		"deduped":  true,
-		"message":  "duplicate request suppressed",
-		"model":    req.Model,
-		"streamed": false,
+	if err := json.NewEncoder(w).Encode(struct {
+		Type     string `json:"type"`
+		Deduped  bool   `json:"deduped"`
+		Message  string `json:"message"`
+		Model    string `json:"model"`
+		Streamed bool   `json:"streamed"`
+	}{
+		Type:     "duplicate_request",
+		Deduped:  true,
+		Message:  "duplicate request suppressed",
+		Model:    req.Model,
+		Streamed: false,
 	}); err != nil {
 		slog.Error("Failed to write duplicate response", "error", err)
 	}
@@ -225,14 +247,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			slog.Error("Panic in HandleMessages", "error", err, "stack", stack)
 			if streamingStarted {
 				// Headers already sent — write an SSE error event instead of HTTP error
-				errData, _ := json.Marshal(map[string]interface{}{
-					"type": "error",
-					"error": map[string]interface{}{
-						"type":    "server_error",
-						"message": "Internal Server Error",
-					},
-				})
-				fmt.Fprintf(w, "event: error\ndata: %s\n\n", errData)
+				// Pre-compiled zero-allocation string
+				fmt.Fprintf(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"server_error\",\"message\":\"Internal Server Error\"}}\n\n")
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}

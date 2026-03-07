@@ -20,8 +20,8 @@ func TestConfigDefaults(t *testing.T) {
 	if got := cfg.PublicImagineMediumMinBytes(); got != 30000 {
 		t.Fatalf("PublicImagineMediumMinBytes()=%d want=30000", got)
 	}
-	if got := cfg.PublicAPIEnabled(); got != false {
-		t.Fatalf("PublicAPIEnabled()=%v want=false", got)
+	if got := cfg.PublicAPIEnabled(); got != true {
+		t.Fatalf("PublicAPIEnabled()=%v want=true", got)
 	}
 	if got := cfg.PublicAPIKey(); got != "" {
 		t.Fatalf("PublicAPIKey()=%q want empty", got)

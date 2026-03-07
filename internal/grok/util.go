@@ -83,6 +83,31 @@ var (
 		"next_reset":      {},
 		"nextreset":       {},
 	}
+	renderableImageExtensions = []string{".png", ".jpg", ".jpeg", ".webp", ".gif"}
+	allowedMessageRoles       = map[string]struct{}{
+		"developer": {},
+		"system":    {},
+		"user":      {},
+		"assistant": {},
+	}
+	userContentTypes = map[string]struct{}{
+		"text":        {},
+		"image_url":   {},
+		"input_audio": {},
+		"file":        {},
+	}
+	videoAspectRatioMap = map[string]string{
+		"1280x720":  "16:9",
+		"720x1280":  "9:16",
+		"1792x1024": "3:2",
+		"1024x1792": "2:3",
+		"1024x1024": "1:1",
+		"16:9":      "16:9",
+		"9:16":      "9:16",
+		"3:2":       "3:2",
+		"2:3":       "2:3",
+		"1:1":       "1:1",
+	}
 )
 
 func randomHex(n int) string {
@@ -107,20 +132,22 @@ func buildStatsigID() string {
 
 func parseUpstreamLines(body io.Reader, onLine func(map[string]interface{}) error) error {
 	decoder := json.NewDecoder(body)
+	type upstreamLineEnvelope struct {
+		Result struct {
+			Response map[string]interface{} `json:"response"`
+		} `json:"result"`
+	}
+
 	for {
-		var raw map[string]interface{}
-		if err := decoder.Decode(&raw); err != nil {
+		var line upstreamLineEnvelope
+		if err := decoder.Decode(&line); err != nil {
 			if err == io.EOF {
 				return nil
 			}
 			return err
 		}
-		result, ok := raw["result"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		resp, ok := result["response"].(map[string]interface{})
-		if !ok {
+		resp := line.Result.Response
+		if resp == nil {
 			continue
 		}
 		if err := onLine(resp); err != nil {
@@ -397,7 +424,7 @@ func extractRenderableImageLinks(value interface{}) []string {
 		if strings.Contains(ls, "assets.grok.com") {
 			return true
 		}
-		for _, ext := range []string{".png", ".jpg", ".jpeg", ".webp", ".gif"} {
+		for _, ext := range renderableImageExtensions {
 			if strings.Contains(ls, ext) {
 				return true
 			}
@@ -704,20 +731,19 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 		return nil
 	}
 
-	limit, okLimit := findNumberByKeys(payload, rateLimitLimitKeys)
-	remaining, okRemaining := findNumberByKeys(payload, rateLimitRemainingKeys)
-	resetAt, okReset := findResetByKeys(payload, rateLimitResetKeys)
+	var state rateLimitScanState
+	scanRateLimitPayloadValue(payload, &state)
 
-	if !okLimit && !okRemaining && !okReset {
+	if !state.okLimit && !state.okRemaining && !state.okReset {
 		return nil
 	}
 
 	info := &RateLimitInfo{
-		Limit:     limit,
-		Remaining: remaining,
+		Limit:     state.limit,
+		Remaining: state.remaining,
 	}
-	if okReset {
-		info.ResetAt = resetAt
+	if state.okReset {
+		info.ResetAt = state.resetAt
 	}
 	return info
 }
@@ -727,30 +753,69 @@ func classifyAccountStatusFromError(errStr string) string {
 	return apperrors.ClassifyAccountStatus(errStr)
 }
 
-func findNumberByKeys(value interface{}, keys map[string]struct{}) (int64, bool) {
+type rateLimitScanState struct {
+	limit       int64
+	remaining   int64
+	resetAt     time.Time
+	okLimit     bool
+	okRemaining bool
+	okReset     bool
+}
+
+func (s *rateLimitScanState) done() bool {
+	return s != nil && s.okLimit && s.okRemaining && s.okReset
+}
+
+func scanRateLimitPayloadValue(value interface{}, state *rateLimitScanState) {
+	if state == nil {
+		return
+	}
 	switch v := value.(type) {
 	case map[string]interface{}:
 		for k, item := range v {
-			if _, ok := keys[normalizeRateKey(k)]; !ok {
-				continue
+			key := normalizeRateKey(k)
+			if !state.okLimit {
+				if _, ok := rateLimitLimitKeys[key]; ok {
+					if n, ok := parseNumberAny(item); ok {
+						state.limit = n
+						state.okLimit = true
+					}
+				}
 			}
-			if n, ok := parseNumberAny(item); ok {
-				return n, true
+			if !state.okRemaining {
+				if _, ok := rateLimitRemainingKeys[key]; ok {
+					if n, ok := parseNumberAny(item); ok {
+						state.remaining = n
+						state.okRemaining = true
+					}
+				}
+			}
+			if !state.okReset {
+				if _, ok := rateLimitResetKeys[key]; ok {
+					if t := parseRateLimitReset(fmt.Sprint(item)); !t.IsZero() {
+						state.resetAt = t
+						state.okReset = true
+					}
+				}
 			}
 		}
+		if state.done() {
+			return
+		}
 		for _, item := range v {
-			if out, ok := findNumberByKeys(item, keys); ok {
-				return out, true
+			scanRateLimitPayloadValue(item, state)
+			if state.done() {
+				return
 			}
 		}
 	case []interface{}:
 		for _, item := range v {
-			if out, ok := findNumberByKeys(item, keys); ok {
-				return out, true
+			scanRateLimitPayloadValue(item, state)
+			if state.done() {
+				return
 			}
 		}
 	}
-	return 0, false
 }
 
 func parseNumberAny(raw interface{}) (int64, bool) {
@@ -797,32 +862,6 @@ func parseNumberAny(raw interface{}) (int64, bool) {
 	default:
 		return parseRateLimitValue(fmt.Sprint(v))
 	}
-}
-
-func findResetByKeys(value interface{}, keys map[string]struct{}) (time.Time, bool) {
-	switch v := value.(type) {
-	case map[string]interface{}:
-		for k, item := range v {
-			if _, ok := keys[normalizeRateKey(k)]; !ok {
-				continue
-			}
-			if t := parseRateLimitReset(fmt.Sprint(item)); !t.IsZero() {
-				return t, true
-			}
-		}
-		for _, item := range v {
-			if out, ok := findResetByKeys(item, keys); ok {
-				return out, true
-			}
-		}
-	case []interface{}:
-		for _, item := range v {
-			if out, ok := findResetByKeys(item, keys); ok {
-				return out, true
-			}
-		}
-	}
-	return time.Time{}, false
 }
 
 func normalizeRateKey(key string) string {
@@ -1008,23 +1047,10 @@ func normalizeMessageRole(role string) string {
 }
 
 func validateChatMessages(messages []ChatMessage) error {
-	allowedRoles := map[string]struct{}{
-		"developer": {},
-		"system":    {},
-		"user":      {},
-		"assistant": {},
-	}
-	userContentTypes := map[string]struct{}{
-		"text":        {},
-		"image_url":   {},
-		"input_audio": {},
-		"file":        {},
-	}
-
 	for _, msg := range messages {
 		roleRaw := strings.TrimSpace(msg.Role)
 		role := strings.ToLower(roleRaw)
-		if _, ok := allowedRoles[role]; !ok {
+		if _, ok := allowedMessageRoles[role]; !ok {
 			return fmt.Errorf("role must be one of [assistant developer system user]")
 		}
 		switch content := msg.Content.(type) {
@@ -1376,23 +1402,11 @@ func validateVideoConfig(cfg *VideoConfig) (*VideoConfig, error) {
 	}
 	cfg.Normalize()
 
-	aspectRatioMap := map[string]string{
-		"1280x720":  "16:9",
-		"720x1280":  "9:16",
-		"1792x1024": "3:2",
-		"1024x1792": "2:3",
-		"1024x1024": "1:1",
-		"16:9":      "16:9",
-		"9:16":      "9:16",
-		"3:2":       "3:2",
-		"2:3":       "2:3",
-		"1:1":       "1:1",
-	}
 	ar := strings.TrimSpace(cfg.AspectRatio)
 	if ar == "" {
 		ar = "3:2"
 	}
-	mapped, ok := aspectRatioMap[ar]
+	mapped, ok := videoAspectRatioMap[ar]
 	if !ok {
 		return nil, fmt.Errorf("aspect_ratio must be one of [1280x720 720x1280 1792x1024 1024x1792 1024x1024 16:9 9:16 3:2 2:3 1:1]")
 	}
