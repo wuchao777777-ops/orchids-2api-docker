@@ -90,6 +90,7 @@ func main() {
 
 	apiHandler := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
 	h := handler.NewWithLoadBalancer(cfg, lb)
+	defer h.Close()
 	grokHandler := grok.NewHandler(cfg, lb)
 
 	// Token cache: use Redis when available, fall back to memory

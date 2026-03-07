@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/goccy/go-json"
@@ -554,14 +555,14 @@ func (h *Handler) HandleAdminBatchTask(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "keep-alive")
 		flusher, _ := w.(http.Flusher)
 
-		lastPayload := ""
+		var lastPayload []byte
 		send := func(payload map[string]interface{}) bool {
-			raw := encodeJSON(payload)
-			if raw == lastPayload {
+			raw := encodeJSONBytes(payload)
+			if bytes.Equal(raw, lastPayload) {
 				return true
 			}
-			lastPayload = raw
-			writeSSE(w, "", raw)
+			lastPayload = append(lastPayload[:0], raw...)
+			writeSSEBytes(w, "", raw)
 			if flusher != nil {
 				flusher.Flush()
 			}

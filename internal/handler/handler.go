@@ -39,6 +39,7 @@ type Handler struct {
 	config        *config.Config
 	client        UpstreamClient
 	clientFactory ClientFactory
+	clientCache   *accountClientCache
 	loadBalancer  *loadbalancer.LoadBalancer
 	tokenCache    tokencache.Cache
 	auditLogger   audit.Logger
@@ -85,6 +86,7 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 	h := &Handler{
 		config:       cfg,
 		loadBalancer: lb,
+		clientCache:  newAccountClientCache(),
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
 		dedupStore:   NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
 		auditLogger:  audit.NewNopLogger(),
@@ -185,34 +187,9 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		// Zero-allocation response construction
-		msgStart, _ := json.Marshal(struct {
-			Type    string `json:"type"`
-			Message struct {
-				ID      string        `json:"id"`
-				Type    string        `json:"type"`
-				Role    string        `json:"role"`
-				Content []interface{} `json:"content"`
-				Model   string        `json:"model"`
-			} `json:"message"`
-		}{
-			Type: "message_start",
-			Message: struct {
-				ID      string        `json:"id"`
-				Type    string        `json:"type"`
-				Role    string        `json:"role"`
-				Content []interface{} `json:"content"`
-				Model   string        `json:"model"`
-			}{
-				ID:      "dup",
-				Type:    "message",
-				Role:    "assistant",
-				Content: []interface{}{},
-				Model:   req.Model,
-			},
-		})
-		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", msgStart)
-		fmt.Fprintf(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		msgStart, _ := marshalSSEMessageStartNoUsageBytes("dup", req.Model)
+		_ = writeSSEFrameBytes(w, "message_start", msgStart)
+		_ = writeSSEFrameBytes(w, "message_stop", sseMessageStopBytes)
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
@@ -369,9 +346,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	conversationKey := conversationKeyForRequest(r, req)
 
 	forcedChannel := channelFromPath(r.URL.Path)
-	if err := h.validateModelAvailability(r.Context(), req.Model, forcedChannel); err != nil {
+	validatedModel, err := h.validateModelAvailability(r.Context(), req.Model, forcedChannel)
+	if err != nil {
 		apperrors.New("invalid_request_error", err.Error(), http.StatusBadRequest).WriteResponse(w)
 		return
+	}
+	targetChannel := strings.TrimSpace(forcedChannel)
+	if targetChannel == "" && validatedModel != nil {
+		targetChannel = strings.TrimSpace(validatedModel.Channel)
+		if targetChannel == "" {
+			targetChannel = "orchids"
+		}
 	}
 	effectiveWorkdir, prevWorkdir, workdirChanged := h.resolveWorkdir(r, req, conversationKey)
 	if workdirChanged {
@@ -387,13 +372,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	failedAccountIDs := []int64{}
 	failedAccountSet := make(map[int64]struct{})
 
-	apiClient, currentAccount, err := h.selectAccount(r.Context(), req.Model, forcedChannel, failedAccountIDs)
+	apiClient, currentAccount, err := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
 	if err != nil {
-		slog.Error("selectAccount failed", "error", err)
+		slog.Error("selectAccount failed", "error", err, "channel", targetChannel)
 		logger.LogEarlyExit("select_account_failed", map[string]interface{}{
 			"error":   err.Error(),
 			"model":   req.Model,
-			"channel": forcedChannel,
+			"channel": targetChannel,
 		})
 		apperrors.New("overloaded_error", err.Error(), http.StatusServiceUnavailable).WriteResponse(w)
 		return
@@ -485,7 +470,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		// Project context injection is deprecated (non-AIClient path removed).
 	}
 
-	slog.Info("Model mapping", "original", req.Model, "mapped", mappedModel)
+	slog.Debug("Model mapping", "original", req.Model, "mapped", mappedModel)
 
 	isStream := req.Stream
 
@@ -512,9 +497,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Pre-allocate chatHistory
 	if isOrchidsAIClient {
-		chatHistory = make([]interface{}, 0, len(aiClientHistory))
-		for _, item := range aiClientHistory {
-			chatHistory = append(chatHistory, item)
+		chatHistory = make([]interface{}, len(aiClientHistory))
+		for i := range aiClientHistory {
+			chatHistory[i] = aiClientHistory[i]
 		}
 	} else {
 		chatHistory = make([]interface{}, 0, 10)
@@ -529,7 +514,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	logger.LogConvertedPrompt(builtPrompt)
 
 	breakdown := estimateInputTokenBreakdown(builtPrompt, aiClientHistory, effectiveTools)
-	slog.Info(
+	slog.Debug(
 		"Input token breakdown (estimated)",
 		"prompt_profile", promptMeta.Profile,
 		"base_prompt_tokens", breakdown.BasePromptTokens,
@@ -565,18 +550,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	defer sh.release()
 
 	// 发送 message_start
-	startData, _ := json.Marshal(map[string]interface{}{
-		"type": "message_start",
-		"message": map[string]interface{}{
-			"id":      sh.msgID,
-			"type":    "message",
-			"role":    "assistant",
-			"content": []interface{}{},
-			"model":   req.Model,
-			"usage":   map[string]int{"input_tokens": inputTokens, "output_tokens": 0},
-		},
-	})
-	sh.writeSSE("message_start", string(startData))
+	sh.writeSSEMessageStart(req.Model, inputTokens, 0)
 
 	slog.Debug("New request received")
 
@@ -650,9 +624,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			var err error
 			slog.Debug("Calling Upstream Client...", "attempt", attempt+1)
 
-			slog.Info("Interface check", "type", fmt.Sprintf("%T", apiClient))
+			if h.config != nil && h.config.DebugEnabled {
+				slog.Debug("Interface check", "type", fmt.Sprintf("%T", apiClient))
+			}
 			if sender, ok := apiClient.(UpstreamPayloadClient); ok {
-				slog.Info("Using SendRequestWithPayload")
+				slog.Debug("Using SendRequestWithPayload")
 				warpBatches := [][]prompt.Message{upstreamMessages}
 				if isWarpRequest {
 					// Enforce hard token budget for Warp requests to avoid runaway context cost.
@@ -663,7 +639,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						}
 						trimmed, before, after, compressed, summarized, dropped := enforceWarpBudget(builtPrompt, upstreamMessages, budget)
 						if before.Total != after.Total || compressed > 0 || summarized > 0 || dropped > 0 {
-							slog.Info(
+							slog.Debug(
 								"Warp budget applied",
 								"budget", budget,
 								"tokens_before", before.Total,
@@ -683,7 +659,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						if _, isWarp := apiClient.(*warp.Client); isWarp {
 							batches, total := splitWarpToolResults(upstreamMessages, 1)
 							if len(batches) > 1 {
-								slog.Info("Warp 工具结果分批发送", "total_tool_results", total, "batches", len(batches))
+								slog.Debug("Warp tool results split", "total_tool_results", total, "batches", len(batches))
 							}
 							warpBatches = batches
 						}
@@ -779,7 +755,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 
 				var retryErr error
-				apiClient, currentAccount, retryErr = h.selectAccount(r.Context(), req.Model, forcedChannel, failedAccountIDs)
+				apiClient, currentAccount, retryErr = h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
 				if retryErr == nil {
 					if currentAccount != nil {
 						h.loadBalancer.AcquireConnection(currentAccount.ID)

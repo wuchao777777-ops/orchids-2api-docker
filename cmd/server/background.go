@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -14,10 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/auth"
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/orchids"
@@ -50,14 +49,8 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			slog.Error("Auto refresh token: list accounts failed", "error", err)
 			return
 		}
-		// #region agent log
-		func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H1\",\"location\":\"background.go:refreshAccounts\",\"message\":\"refreshAccounts called\",\"data\":{\"account_count\":%d},\"timestamp\":%d}\n", len(accounts), time.Now().UnixMilli()) }()
-		// #endregion
 		for _, acc := range accounts {
 			if strings.EqualFold(acc.AccountType, "warp") {
-				// #region agent log
-				func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H1,H5\",\"location\":\"background.go:warp-pre-refresh\",\"message\":\"warp account pre-refresh state\",\"data\":{\"id\":%d,\"status_code\":\"%s\",\"last_attempt\":\"%s\",\"quota_reset_at\":\"%s\",\"has_refresh_token\":%t,\"has_cookie\":%t},\"timestamp\":%d}\n", acc.ID, acc.StatusCode, acc.LastAttempt.Format(time.RFC3339), acc.QuotaResetAt.Format(time.RFC3339), strings.TrimSpace(acc.RefreshToken)!="", strings.TrimSpace(acc.ClientCookie)!="", time.Now().UnixMilli()) }()
-				// #endregion
 				if !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
 					continue
 				}
@@ -69,9 +62,6 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				if err != nil {
 					retryAfter := warp.RetryAfter(err)
 					httpStatus := warp.HTTPStatusCode(err)
-					// #region agent log
-					func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H1,H2,H3,H4\",\"location\":\"background.go:warp-refresh-error\",\"message\":\"warp refresh failed\",\"data\":{\"id\":%d,\"http_status\":%d,\"retry_after\":\"%s\",\"error\":\"%s\"},\"timestamp\":%d}\n", acc.ID, httpStatus, retryAfter.String(), strings.ReplaceAll(err.Error(), "\"", "'"), time.Now().UnixMilli()) }()
-					// #endregion
 					if httpStatus == 401 || httpStatus == 403 {
 						lb.MarkAccountStatus(context.Background(), acc, fmt.Sprintf("%d", httpStatus))
 					} else if retryAfter > 0 {

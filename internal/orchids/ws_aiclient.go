@@ -101,7 +101,7 @@ func cloneRawJSON(data []byte) json.RawMessage {
 }
 
 func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	slog.Info("sendRequestWSAIClient called", "workdir", req.Workdir, "model", req.Model)
+	slog.Debug("sendRequestWSAIClient called", "workdir", req.Workdir, "model", req.Model)
 	parentCtx := ctx
 	timeout := orchidsWSRequestTimeout
 	if c.config != nil && c.config.RequestTimeout > 0 {

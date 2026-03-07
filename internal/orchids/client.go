@@ -26,6 +26,8 @@ import (
 	"orchids-api/internal/util"
 )
 
+const orchidsSSEDataPrefix = "data: "
+
 const defaultUpstreamBaseURL = "https://orchids-server.calmstone-6964e08a.westeurope.azurecontainerapps.io"
 const upstreamURL = defaultUpstreamBaseURL + "/agent/coding-agent"
 
@@ -178,6 +180,18 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 	}
 	c.wsPool = upstream.NewWSPool(c.createWSConnection, 5, 20)
 	return c
+}
+
+func (c *Client) Close() {
+	if c == nil {
+		return
+	}
+	if c.wsPool != nil {
+		c.wsPool.Close()
+	}
+	if c.fsCache != nil {
+		c.fsCache.Close()
+	}
 }
 
 func (c *Client) GetToken() (string, error) {
@@ -576,9 +590,6 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 	reader := perf.AcquireBufioReader(limitedBody)
 	defer perf.ReleaseBufioReader(reader)
 
-	buffer := perf.AcquireStringBuilder()
-	defer perf.ReleaseStringBuilder(buffer)
-
 	var state requestState
 	var fsWG sync.WaitGroup
 
@@ -597,27 +608,18 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 			return err
 		}
 
-		buffer.WriteString(line)
+		rawData, ok := orchidsSSEDataPayload(line)
+		if !ok {
+			continue
+		}
 
-		if line == "\n" {
-			eventData := buffer.String()
-			buffer.Reset()
+		var msg map[string]interface{}
+		if err := json.Unmarshal([]byte(rawData), &msg); err != nil {
+			continue
+		}
 
-			lines := strings.Split(eventData, "\n")
-			for _, l := range lines {
-				if strings.HasPrefix(l, "data: ") {
-					rawData := strings.TrimPrefix(l, "data: ")
-
-					var msg map[string]interface{}
-					if err := json.Unmarshal([]byte(rawData), &msg); err != nil {
-						continue
-					}
-
-					if shouldBreak := c.handleOrchidsMessage(msg, []byte(rawData), &state, onMessage, logger, nil, &fsWG, req.Workdir); shouldBreak {
-						goto done
-					}
-				}
-			}
+		if shouldBreak := c.handleOrchidsMessage(msg, []byte(rawData), &state, onMessage, logger, nil, &fsWG, req.Workdir); shouldBreak {
+			goto done
 		}
 	}
 
@@ -651,6 +653,19 @@ done:
 	}
 
 	return nil
+}
+
+func orchidsSSEDataPayload(line string) (string, bool) {
+	if !strings.HasPrefix(line, orchidsSSEDataPrefix) {
+		return "", false
+	}
+	raw := line[len(orchidsSSEDataPrefix):]
+	raw = strings.TrimSuffix(raw, "\n")
+	raw = strings.TrimSuffix(raw, "\r")
+	if raw == "" {
+		return "", false
+	}
+	return raw, true
 }
 
 type UpstreamModel struct {

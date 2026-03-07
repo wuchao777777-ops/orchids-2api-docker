@@ -7,12 +7,43 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"orchids-api/internal/util"
 )
+
+func appendChatCompletionChunk(dst []byte, id string, created int64, model, role, content string, finish string, hasFinish bool) []byte {
+	dst = append(dst, `{"id":`...)
+	dst = strconv.AppendQuote(dst, id)
+	dst = append(dst, `,"object":"chat.completion.chunk","created":`...)
+	dst = strconv.AppendInt(dst, created, 10)
+	dst = append(dst, `,"model":`...)
+	dst = strconv.AppendQuote(dst, model)
+	dst = append(dst, `,"choices":[{"index":0,"delta":`...)
+	switch {
+	case role != "":
+		dst = append(dst, `{"role":`...)
+		dst = strconv.AppendQuote(dst, role)
+		dst = append(dst, '}')
+	case content != "":
+		dst = append(dst, `{"content":`...)
+		dst = strconv.AppendQuote(dst, content)
+		dst = append(dst, '}')
+	default:
+		dst = append(dst, `{}`...)
+	}
+	dst = append(dst, `,"logprobs":null,"finish_reason":`...)
+	if hasFinish {
+		dst = strconv.AppendQuote(dst, finish)
+	} else {
+		dst = append(dst, `null`...)
+	}
+	dst = append(dst, `}]}`...)
+	return dst
+}
 
 func detectPublicBaseURL(r *http.Request) string {
 	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
@@ -817,23 +848,12 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		mf = &streamMarkupFilter{}
 	}
 	textRefCollector := newStreamTextImageRefCollector()
+	chunkScratch := make([]byte, 0, 256)
 
-	emitChunk := func(delta map[string]interface{}, finish interface{}) {
-		chunk := map[string]interface{}{
-			"id":      id,
-			"object":  "chat.completion.chunk",
-			"created": time.Now().Unix(),
-			"model":   model,
-			"choices": []map[string]interface{}{
-				{
-					"index":         0,
-					"delta":         delta,
-					"logprobs":      nil,
-					"finish_reason": finish,
-				},
-			},
-		}
-		writeSSE(w, "", encodeJSON(chunk))
+	emitChunk := func(role, content string, finish string, hasFinish bool) {
+		raw := appendChatCompletionChunk(chunkScratch[:0], id, time.Now().Unix(), model, role, content, finish, hasFinish)
+		chunkScratch = raw[:0]
+		writeSSEBytes(w, "", raw)
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -859,7 +879,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			}
 			return
 		}
-		emitChunk(map[string]interface{}{"content": content}, nil)
+		emitChunk("", content, "", false)
 		if utf8.RuneCountInString(norm) >= 12 {
 			lastTextChunkNorm = norm
 		} else {
@@ -894,14 +914,14 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			val = publicBase + val
 		}
 		if md := formatImageMarkdown(val); md != "" {
-			emitChunk(map[string]interface{}{"content": md}, nil)
+			emitChunk("", md, "", false)
 			emitted[raw] = true
 		}
 	}
 
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
 		if !sentRole {
-			emitChunk(map[string]interface{}{"role": "assistant"}, nil)
+			emitChunk("assistant", "", "", false)
 			sentRole = true
 		}
 		if tokenDelta, ok := resp["token"].(string); ok && tokenDelta != "" {
@@ -957,14 +977,14 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		if spec.IsVideo {
 			if progress, videoURL, _, ok := extractVideoProgress(resp); ok {
 				if progress > 0 && progress < 100 {
-					emitChunk(map[string]interface{}{"content": fmt.Sprintf("正在生成视频中，当前进度%d%%\n", progress)}, nil)
+					emitChunk("", fmt.Sprintf("正在生成视频中，当前进度%d%%\n", progress), "", false)
 				}
 				if progress >= 100 && strings.TrimSpace(videoURL) != "" {
 					finalURL := strings.TrimSpace(videoURL)
 					if name, err := h.cacheMediaURL(context.Background(), token, finalURL, "video"); err == nil && name != "" {
 						finalURL = "/grok/v1/files/video/" + name
 					}
-					emitChunk(map[string]interface{}{"content": finalURL}, nil)
+					emitChunk("", finalURL, "", false)
 				}
 			}
 		}
@@ -976,7 +996,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
 			return
 		}
-		emitChunk(map[string]interface{}{"content": "\n[上游响应解析失败]\n"}, nil)
+		emitChunk("", "\n[上游响应解析失败]\n", "", false)
 	}
 
 	// Flush any remaining buffered text (avoids "no content" when stream ends quickly).
@@ -1004,7 +1024,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				val = publicBase + val
 			}
 			if md := formatImageMarkdown(val); md != "" {
-				emitChunk(map[string]interface{}{"content": md}, nil)
+				emitChunk("", md, "", false)
 			}
 			continue
 		}
@@ -1015,8 +1035,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	// Final pass: emit URL/path candidates found in incremental text collector.
 	textRefCollector.emit(emitImageURL)
 
-	emitChunk(map[string]interface{}{}, "stop")
-	writeSSE(w, "", "[DONE]")
+	emitChunk("", "", "stop", true)
+	writeSSEBytes(w, "", []byte("[DONE]"))
 	if flusher != nil {
 		flusher.Flush()
 	}

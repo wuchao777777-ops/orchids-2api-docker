@@ -133,7 +133,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 
 		// 记录请求完成
 		duration := time.Since(start)
-		level := slog.LevelInfo
+		level := slog.LevelDebug
 		if wrapped.StatusCode >= 500 {
 			level = slog.LevelError
 		} else if wrapped.StatusCode >= 400 {

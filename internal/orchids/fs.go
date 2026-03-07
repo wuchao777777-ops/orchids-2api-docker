@@ -1,6 +1,7 @@
 package orchids
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -442,7 +443,7 @@ func writeFile(path string, content string) error {
 	if len(snippet) > 200 {
 		snippet = snippet[:200]
 	}
-	slog.Info("Orchids FS: writeFile", "path", path, "content_len", len(content), "snippet", snippet)
+	slog.Debug("Orchids FS: writeFile", "path", path, "content_len", len(content), "snippet", snippet)
 
 	// Safeguard: Don't overwrite an existing non-empty file with empty content
 	if content == "" {
@@ -618,8 +619,10 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 		reader := perf.AcquireBufioReader(file)
 		defer perf.ReleaseBufioReader(reader)
 		lineNum := 0
+		var lineScratch []byte
 		for {
-			line, err := reader.ReadString('\n')
+			line, nextScratch, err := readLineBytes(reader, lineScratch)
+			lineScratch = nextScratch[:0]
 			if err != nil && !errors.Is(err, io.EOF) {
 				break
 			}
@@ -627,10 +630,9 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 				break
 			}
 			lineNum++
-			text := strings.TrimSuffix(line, "\n")
-			text = strings.TrimSuffix(text, "\r")
-			if re.MatchString(text) {
-				lines = append(lines, fmt.Sprintf("%s:%d:%s", path, lineNum, text))
+			line = trimTrailingLineBreakBytes(line)
+			if re.Match(line) {
+				lines = append(lines, fmt.Sprintf("%s:%d:%s", path, lineNum, string(line)))
 				count++
 				if fsMaxLines > 0 && count >= fsMaxLines {
 					break
@@ -653,6 +655,42 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 		output = output[:fsMaxOutputSize]
 	}
 	return output, nil
+}
+
+func readLineBytes(reader *bufio.Reader, scratch []byte) ([]byte, []byte, error) {
+	scratch = scratch[:0]
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		switch {
+		case err == nil:
+			if len(scratch) == 0 {
+				return fragment, scratch, nil
+			}
+			scratch = append(scratch, fragment...)
+			return scratch, scratch, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			scratch = append(scratch, fragment...)
+		case errors.Is(err, io.EOF):
+			if len(fragment) == 0 && len(scratch) == 0 {
+				return nil, scratch, io.EOF
+			}
+			scratch = append(scratch, fragment...)
+			return scratch, scratch, io.EOF
+		default:
+			return nil, scratch, err
+		}
+	}
+}
+
+func trimTrailingLineBreakBytes(line []byte) []byte {
+	for len(line) > 0 {
+		last := line[len(line)-1]
+		if last != '\n' && last != '\r' {
+			break
+		}
+		line = line[:len(line)-1]
+	}
+	return line
 }
 
 func runShellCommand(baseDir, command string) (string, error) {

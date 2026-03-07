@@ -2,6 +2,7 @@ package grok
 
 import (
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -367,5 +368,78 @@ func BenchmarkParseRateLimitValue_CompoundHeader(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_, _ = parseRateLimitValue(raw)
+	}
+}
+
+func TestEncodeJSONBytesMatchesEncodeJSON(t *testing.T) {
+	payload := map[string]interface{}{
+		"type": "chunk",
+		"data": map[string]interface{}{
+			"text": "hello <world>",
+			"n":    1,
+		},
+	}
+	if got, want := string(encodeJSONBytes(payload)), encodeJSON(payload); got != want {
+		t.Fatalf("got=%q want=%q", got, want)
+	}
+}
+
+func TestWriteSSEBytesMatchesWriteSSE(t *testing.T) {
+	stringRec := httptest.NewRecorder()
+	writeSSE(stringRec, "demo", `{"ok":true}`)
+
+	bytesRec := httptest.NewRecorder()
+	writeSSEBytes(bytesRec, "demo", []byte(`{"ok":true}`))
+
+	if bytesRec.Body.String() != stringRec.Body.String() {
+		t.Fatalf("bytes=%q want=%q", bytesRec.Body.String(), stringRec.Body.String())
+	}
+}
+
+func BenchmarkEncodeJSON_String(b *testing.B) {
+	payload := map[string]interface{}{
+		"id": "msg_1",
+		"choices": []map[string]interface{}{{
+			"index": 0,
+			"delta": map[string]interface{}{"content": "hello world"},
+		}},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = encodeJSON(payload)
+	}
+}
+
+func BenchmarkEncodeJSON_Bytes(b *testing.B) {
+	payload := map[string]interface{}{
+		"id": "msg_1",
+		"choices": []map[string]interface{}{{
+			"index": 0,
+			"delta": map[string]interface{}{"content": "hello world"},
+		}},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = encodeJSONBytes(payload)
+	}
+}
+
+func BenchmarkWriteSSE_String(b *testing.B) {
+	writer := httptest.NewRecorder()
+	data := `{"ok":true}`
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		writer.Body.Reset()
+		writeSSE(writer, "demo", data)
+	}
+}
+
+func BenchmarkWriteSSE_Bytes(b *testing.B) {
+	writer := httptest.NewRecorder()
+	data := []byte(`{"ok":true}`)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		writer.Body.Reset()
+		writeSSEBytes(writer, "demo", data)
 	}
 }

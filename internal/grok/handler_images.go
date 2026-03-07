@@ -39,7 +39,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 				"index":    outIndex,
 				"progress": progress,
 			}
-			writeSSE(w, "image_generation.partial_image", encodeJSON(data))
+			writeSSEBytes(w, "image_generation.partial_image", encodeJSONBytes(data))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -66,7 +66,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 			"index": i,
 			"usage": imageUsagePayload(),
 		}
-		writeSSE(w, "image_generation.completed", encodeJSON(data))
+		writeSSEBytes(w, "image_generation.completed", encodeJSONBytes(data))
 		if flusher != nil {
 			flusher.Flush()
 		}

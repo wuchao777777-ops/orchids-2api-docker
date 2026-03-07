@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -95,10 +94,16 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, ex
 
 	account := lb.selectAccount(accounts)
 
-	slog.Info("Selected account", "name", account.Name, "email", account.Email, "session", auth.MaskSensitive(account.SessionID))
+	slog.Debug("Selected account", "id", account.ID, "name", account.Name, "type", account.AccountType, "session", auth.MaskSensitive(account.SessionID))
 
-	if err := lb.Store.IncrementRequestCount(ctx, account.ID); err != nil {
-		return nil, err
+	if lb.Store != nil && account.ID != 0 {
+		go func(accountID int64) {
+			statsCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := lb.Store.IncrementRequestCount(statsCtx, accountID); err != nil {
+				slog.Warn("Failed to increment request count", "account_id", accountID, "error", err)
+			}
+		}(account.ID)
 	}
 
 	return account, nil
@@ -211,9 +216,6 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 	}
 
 	now := time.Now()
-	// #region agent log
-	func() { f, e := os.OpenFile("debug-a666ec.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); if e != nil { return }; defer f.Close(); fmt.Fprintf(f, "{\"sessionId\":\"a666ec\",\"hypothesisId\":\"H5\",\"location\":\"loadbalancer.go:isAccountAvailable\",\"message\":\"checking account availability\",\"data\":{\"id\":%d,\"status\":\"%s\",\"last_attempt\":\"%s\",\"since_last_attempt_sec\":%.0f,\"cooldown_sec\":%.0f},\"timestamp\":%d}\n", acc.ID, status, acc.LastAttempt.Format(time.RFC3339), now.Sub(acc.LastAttempt).Seconds(), retry401Default.Seconds(), time.Now().UnixMilli()) }()
-	// #endregion
 	switch status {
 	case "401":
 		// 401 表示 token 过期或会话失效，短时间冷却后自动恢复尝试
@@ -293,7 +295,7 @@ func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Accoun
 	}
 	acc.StatusCode = status
 	acc.LastAttempt = time.Now()
-	
+
 	// Ensure the cache is updated as well
 	for _, cached := range lb.cachedAccounts {
 		if cached.ID == acc.ID {

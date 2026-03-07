@@ -33,6 +33,30 @@ type utlsTransport struct {
 	h2Pool    sync.Map // host -> *h2ConnEntry
 }
 
+func (t *utlsTransport) CloseIdleConnections() {
+	if t == nil {
+		return
+	}
+	if t.h1Trans != nil {
+		t.h1Trans.CloseIdleConnections()
+	}
+	t.h2Pool.Range(func(key, value interface{}) bool {
+		entry, ok := value.(*h2ConnEntry)
+		if !ok || entry == nil {
+			t.h2Pool.Delete(key)
+			return true
+		}
+		entry.mu.Lock()
+		if entry.conn != nil {
+			_ = entry.conn.Close()
+			entry.conn = nil
+		}
+		entry.mu.Unlock()
+		t.h2Pool.Delete(key)
+		return true
+	})
+}
+
 func newUTLSTransport(proxyFunc func(*http.Request) (*url.URL, error)) http.RoundTripper {
 	return &utlsTransport{
 		proxyFunc: proxyFunc,

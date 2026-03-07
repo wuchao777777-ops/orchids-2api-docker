@@ -45,20 +45,20 @@ func resolveModelAliasCandidates(modelID string) []string {
 	return out
 }
 
-func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) string {
+func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) (string, *store.Model) {
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
-		return modelID
+		return modelID, nil
 	}
 	candidates := resolveModelAliasCandidates(modelID)
 	if len(candidates) == 0 {
-		return modelID
+		return modelID, nil
 	}
 	for _, cand := range candidates {
 		if m, err := h.loadBalancer.Store.GetModelByModelID(ctx, cand); err == nil && m != nil {
-			return cand
+			return cand, m
 		}
 	}
-	return modelID
+	return modelID, nil
 }
 
 // resolveWorkdir determines the working directory from headers, system prompt, or session.
@@ -85,7 +85,7 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 	if dynamicWorkdir == "" && hasExplicitSession && prevWorkdir != "" {
 		dynamicWorkdir = prevWorkdir
 		source = "session"
-		slog.Info("Recovered workdir from session", "workdir", dynamicWorkdir, "session", conversationKey)
+		slog.Debug("Recovered workdir from session", "workdir", dynamicWorkdir, "session", conversationKey)
 	}
 
 	// Persist for future turns in this session
@@ -95,7 +95,7 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 	}
 
 	if dynamicWorkdir != "" {
-		slog.Info("Using dynamic workdir", "workdir", dynamicWorkdir, "source", source)
+		slog.Debug("Using dynamic workdir", "workdir", dynamicWorkdir, "source", source)
 	}
 	rawPrev := strings.TrimSpace(prevWorkdir)
 	rawNext := strings.TrimSpace(dynamicWorkdir)
@@ -112,33 +112,25 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 }
 
 // selectAccount logic extracted from HandleMessages
-func (h *Handler) selectAccount(ctx context.Context, model, forcedChannel string, failedAccountIDs []int64) (UpstreamClient, *store.Account, error) {
+func (h *Handler) selectAccount(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64) (UpstreamClient, *store.Account, error) {
 	if h.loadBalancer != nil {
-		targetChannel := forcedChannel
-		if targetChannel == "" {
-			targetChannel = h.loadBalancer.GetModelChannel(ctx, model)
-		}
 		if targetChannel != "" {
-			slog.Info("Model recognition", "model", model, "channel", targetChannel)
+			slog.Debug("Account channel selection", "channel", targetChannel, "channel_required", channelRequired)
 		}
 		account, err := h.loadBalancer.GetNextAccountExcludingByChannel(ctx, failedAccountIDs, targetChannel)
 		if err != nil {
-			if forcedChannel != "" {
+			if channelRequired {
 				return nil, nil, err
 			}
 			if h.client != nil {
-				slog.Info("Load balancer: no available accounts for channel, using default config", "channel", targetChannel)
+				slog.Debug("Load balancer: no available accounts for channel, using default config", "channel", targetChannel)
 				return h.client, nil, nil
 			}
 			return nil, nil, err
 		}
-		var client UpstreamClient
-		if h.clientFactory != nil {
-			client = h.clientFactory(account, h.config)
-		} else if strings.EqualFold(account.AccountType, "warp") {
-			client = warp.NewFromAccount(account, h.config)
-		} else {
-			client = orchids.NewFromAccount(account, h.config)
+		client := h.getOrCreateAccountClient(account)
+		if client == nil {
+			return nil, nil, errors.New("no client configured")
 		}
 		return client, account, nil
 	} else if h.client != nil {
@@ -147,26 +139,31 @@ func (h *Handler) selectAccount(ctx context.Context, model, forcedChannel string
 	return nil, nil, errors.New("no client configured")
 }
 
-func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forcedChannel string) error {
+func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forcedChannel string) (*store.Model, error) {
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
-		return nil
+		return nil, nil
 	}
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
-		return nil
+		return nil, nil
 	}
-	modelID = h.resolveModelAlias(ctx, modelID)
+	resolvedModelID, m := h.resolveModelAlias(ctx, modelID)
 	if strings.EqualFold(forcedChannel, "warp") {
-		if mapped := warp.ResolveModelAlias(modelID); mapped != "" {
-			modelID = mapped
+		if mapped := warp.ResolveModelAlias(resolvedModelID); mapped != "" {
+			resolvedModelID = mapped
+			if m == nil || !strings.EqualFold(strings.TrimSpace(m.ModelID), resolvedModelID) {
+				resolved, err := h.loadBalancer.Store.GetModelByModelID(ctx, resolvedModelID)
+				if err == nil {
+					m = resolved
+				}
+			}
 		}
 	}
-	m, err := h.loadBalancer.Store.GetModelByModelID(ctx, modelID)
-	if err != nil || m == nil {
-		return fmt.Errorf("model not found")
+	if m == nil {
+		return nil, fmt.Errorf("model not found")
 	}
 	if !m.Status.Enabled() {
-		return fmt.Errorf("model not available")
+		return nil, fmt.Errorf("model not available")
 	}
 	if forcedChannel != "" {
 		mChannel := strings.TrimSpace(m.Channel)
@@ -174,10 +171,10 @@ func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forced
 			mChannel = "orchids"
 		}
 		if !strings.EqualFold(mChannel, forcedChannel) {
-			return fmt.Errorf("model not found")
+			return nil, fmt.Errorf("model not found")
 		}
 	}
-	return nil
+	return m, nil
 }
 
 func (h *Handler) updateAccountStats(account *store.Account, inputTokens, outputTokens int) {
@@ -220,8 +217,6 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient, s
 		}
 	}
 }
-
-
 
 // upstreamErrorClass is a local alias for the centralized type.
 type upstreamErrorClass = apperrors.UpstreamErrorClass

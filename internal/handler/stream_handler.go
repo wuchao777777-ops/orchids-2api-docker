@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/goccy/go-json"
 
@@ -28,15 +30,38 @@ const (
 )
 
 const (
-	sseEventPrefix = "event: "
-	sseDataPrefix  = "data: "
-	sseLineBreak   = "\n\n"
-	sseDataJoin    = "\ndata: "
-	sseDoneLine    = "data: [DONE]\n\n"
-	sseKeepAlive   = ": keep-alive\n\n"
+	sseEventPrefix                 = "event: "
+	sseDataPrefix                  = "data: "
+	sseLineBreak                   = "\n\n"
+	sseDataJoin                    = "\ndata: "
+	sseDoneLine                    = "data: [DONE]\n\n"
+	sseKeepAlive                   = ": keep-alive\n\n"
+	sseDeferredFlushFrameThreshold = 4
+	sseDeferredFlushByteThreshold  = 2048
+	sseBufferedWriteMax            = 4096
+	jsonHexDigits                  = "0123456789abcdef"
 )
 
-var rawJSONEmptyObject = json.RawMessage("{}")
+var (
+	rawJSONEmptyObject  = json.RawMessage("{}")
+	sseMessageStopBytes = []byte(`{"type":"message_stop"}`)
+	sseTextDeltaMarker  = []byte(`"type":"text_delta"`)
+	sseDoneLineBytes    = []byte(sseDoneLine)
+	sseKeepAliveBytes   = []byte(sseKeepAlive)
+	sseEventPrefixBytes = []byte(sseEventPrefix)
+	sseDataPrefixBytes  = []byte(sseDataPrefix)
+	sseLineBreakBytes   = []byte(sseLineBreak)
+	sseDataJoinBytes    = []byte(sseDataJoin)
+	sseEventBytesByName = map[string][]byte{
+		"message_start":       []byte("message_start"),
+		"message_delta":       []byte("message_delta"),
+		"message_stop":        []byte("message_stop"),
+		"content_block_start": []byte("content_block_start"),
+		"content_block_delta": []byte("content_block_delta"),
+		"content_block_stop":  []byte("content_block_stop"),
+		"fs_operation":        []byte("fs_operation"),
+	}
+)
 
 func mapKeys(m map[string]interface{}) []string {
 	if m == nil {
@@ -150,11 +175,19 @@ func marshalJSONString(v interface{}) (string, error) {
 	return string(raw), nil
 }
 
-func marshalEventPayload(msg upstream.SSEMessage) (string, error) {
+func marshalEventPayloadBytes(msg upstream.SSEMessage) ([]byte, error) {
 	if len(msg.RawJSON) > 0 {
-		return string(msg.RawJSON), nil
+		return msg.RawJSON, nil
 	}
-	return marshalJSONString(msg.Event)
+	return json.Marshal(msg.Event)
+}
+
+func marshalEventPayload(msg upstream.SSEMessage) (string, error) {
+	raw, err := marshalEventPayloadBytes(msg)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func writeSSEFrame(w io.Writer, event, data string) error {
@@ -175,106 +208,520 @@ func writeSSEFrame(w io.Writer, event, data string) error {
 }
 
 func writeOpenAIFrame(w io.Writer, payload []byte) error {
-	if _, err := io.WriteString(w, sseDataPrefix); err != nil {
+	if _, err := w.Write(sseDataPrefixBytes); err != nil {
 		return err
 	}
 	if _, err := w.Write(payload); err != nil {
 		return err
 	}
-	_, err := io.WriteString(w, sseLineBreak)
+	_, err := w.Write(sseLineBreakBytes)
 	return err
 }
 
+func writeSSEEventName(w io.Writer, event string) error {
+	if raw, ok := sseEventBytesByName[event]; ok {
+		_, err := w.Write(raw)
+		return err
+	}
+	if sw, ok := w.(io.StringWriter); ok {
+		_, err := sw.WriteString(event)
+		return err
+	}
+	_, err := w.Write([]byte(event))
+	return err
+}
+
+func writeSSEFrameBytes(w io.Writer, event string, data []byte) error {
+	if _, err := w.Write(sseEventPrefixBytes); err != nil {
+		return err
+	}
+	if err := writeSSEEventName(w, event); err != nil {
+		return err
+	}
+	if _, err := w.Write(sseDataJoinBytes); err != nil {
+		return err
+	}
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	_, err := w.Write(sseLineBreakBytes)
+	return err
+}
+
+func shouldFlushSSEImmediately(event, data string) bool {
+	switch event {
+	case "message_start", "message_delta", "message_stop", "content_block_start", "content_block_stop":
+		return true
+	case "content_block_delta":
+		return strings.Contains(data, `"type":"text_delta"`)
+	case "fs_operation":
+		return false
+	}
+	return !strings.HasPrefix(event, "coding_agent.")
+}
+
+func (h *streamHandler) flushSSEWithLenLocked(event string, dataLen int, immediate bool, force bool) {
+	if h.flusher == nil {
+		return
+	}
+	if force || immediate {
+		h.deferredFlushFrames = 0
+		h.deferredFlushBytes = 0
+		h.flusher.Flush()
+		return
+	}
+	h.deferredFlushFrames++
+	h.deferredFlushBytes += len(event) + dataLen + len(sseEventPrefix) + len(sseDataJoin) + len(sseLineBreak)
+	if h.deferredFlushFrames >= sseDeferredFlushFrameThreshold || h.deferredFlushBytes >= sseDeferredFlushByteThreshold {
+		h.deferredFlushFrames = 0
+		h.deferredFlushBytes = 0
+		h.flusher.Flush()
+	}
+}
+
+func (h *streamHandler) flushSSELocked(event, data string, force bool) {
+	h.flushSSEWithLenLocked(event, len(data), shouldFlushSSEImmediately(event, data), force)
+}
+
+func shouldFlushSSEImmediatelyBytes(event string, data []byte) bool {
+	switch event {
+	case "message_start", "message_delta", "message_stop", "content_block_start", "content_block_stop":
+		return true
+	case "content_block_delta":
+		return bytes.Contains(data, sseTextDeltaMarker)
+	case "fs_operation":
+		return false
+	}
+	return !strings.HasPrefix(event, "coding_agent.")
+}
+
+func (h *streamHandler) flushSSEBytesLocked(event string, data []byte, force bool) {
+	h.flushSSEWithLenLocked(event, len(data), shouldFlushSSEImmediatelyBytes(event, data), force)
+}
+
+func (h *streamHandler) flushSSEBytesLockedWithHint(event string, dataLen int, immediate bool, force bool) {
+	h.flushSSEWithLenLocked(event, dataLen, immediate, force)
+}
+
+func canAppendJSONRawString(value string) bool {
+	for i := 0; i < len(value); {
+		b := value[i]
+		if b < utf8.RuneSelf {
+			if b < 0x20 || b == '\\' || b == '"' || b == '<' || b == '>' || b == '&' {
+				return false
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(value[i:])
+		if r == utf8.RuneError && size == 1 {
+			return false
+		}
+		if r == '\u2028' || r == '\u2029' {
+			return false
+		}
+		i += size
+	}
+	return true
+}
+
+func appendJSONString(builder *strings.Builder, value string) error {
+	if canAppendJSONRawString(value) {
+		builder.Grow(len(value) + 2)
+		builder.WriteByte('"')
+		builder.WriteString(value)
+		builder.WriteByte('"')
+		return nil
+	}
+	if !utf8.ValidString(value) {
+		quoted, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		_, _ = builder.Write(quoted)
+		return nil
+	}
+
+	builder.Grow(len(value) + 2)
+	builder.WriteByte('"')
+	start := 0
+	for i := 0; i < len(value); {
+		b := value[i]
+		if b < utf8.RuneSelf {
+			if b >= 0x20 && b != '\\' && b != '"' && b != '<' && b != '>' && b != '&' {
+				i++
+				continue
+			}
+			if start < i {
+				builder.WriteString(value[start:i])
+			}
+			switch b {
+			case '\\', '"':
+				builder.WriteByte('\\')
+				builder.WriteByte(b)
+			case '\b':
+				builder.WriteByte('\\')
+				builder.WriteByte('b')
+			case '\f':
+				builder.WriteByte('\\')
+				builder.WriteByte('f')
+			case '\n':
+				builder.WriteByte('\\')
+				builder.WriteByte('n')
+			case '\r':
+				builder.WriteByte('\\')
+				builder.WriteByte('r')
+			case '\t':
+				builder.WriteByte('\\')
+				builder.WriteByte('t')
+			default:
+				builder.WriteString("\\u00")
+				builder.WriteByte(jsonHexDigits[b>>4])
+				builder.WriteByte(jsonHexDigits[b&0x0f])
+			}
+			i++
+			start = i
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(value[i:])
+		if r == '\u2028' || r == '\u2029' {
+			if start < i {
+				builder.WriteString(value[start:i])
+			}
+			if r == '\u2028' {
+				builder.WriteString("\\u2028")
+			} else {
+				builder.WriteString("\\u2029")
+			}
+			i += size
+			start = i
+			continue
+		}
+		i += size
+	}
+	if start < len(value) {
+		builder.WriteString(value[start:])
+	}
+	builder.WriteByte('"')
+	return nil
+}
+
+func appendJSONBytes(dst []byte, value string) ([]byte, error) {
+	if canAppendJSONRawString(value) {
+		dst = append(dst, '"')
+		dst = append(dst, value...)
+		dst = append(dst, '"')
+		return dst, nil
+	}
+
+	originLen := len(dst)
+	dst = append(dst, '"')
+	start := 0
+	for i := 0; i < len(value); {
+		b := value[i]
+		if b < utf8.RuneSelf {
+			if b >= 0x20 && b != '\\' && b != '"' && b != '<' && b != '>' && b != '&' {
+				i++
+				continue
+			}
+			if start < i {
+				dst = append(dst, value[start:i]...)
+			}
+			switch b {
+			case '\\', '"':
+				dst = append(dst, '\\', b)
+			case '\b':
+				dst = append(dst, '\\', 'b')
+			case '\f':
+				dst = append(dst, '\\', 'f')
+			case '\n':
+				dst = append(dst, '\\', 'n')
+			case '\r':
+				dst = append(dst, '\\', 'r')
+			case '\t':
+				dst = append(dst, '\\', 't')
+			default:
+				dst = append(dst, '\\', 'u', '0', '0')
+				dst = append(dst, jsonHexDigits[b>>4], jsonHexDigits[b&0x0f])
+			}
+			i++
+			start = i
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(value[i:])
+		if r == utf8.RuneError && size == 1 {
+			dst = dst[:originLen]
+			quoted, err := json.Marshal(value)
+			if err != nil {
+				return nil, err
+			}
+			return append(dst, quoted...), nil
+		}
+		if r == '\u2028' || r == '\u2029' {
+			if start < i {
+				dst = append(dst, value[start:i]...)
+			}
+			if r == '\u2028' {
+				dst = append(dst, '\\', 'u', '2', '0', '2', '8')
+			} else {
+				dst = append(dst, '\\', 'u', '2', '0', '2', '9')
+			}
+			i += size
+			start = i
+			continue
+		}
+		i += size
+	}
+	if start < len(value) {
+		dst = append(dst, value[start:]...)
+	}
+	dst = append(dst, '"')
+	return dst, nil
+}
+
+func appendSSEContentBlockStartToolUse(dst []byte, index int, id, name string) ([]byte, error) {
+	dst = append(dst, `{"type":"content_block_start","index":`...)
+	dst = strconv.AppendInt(dst, int64(index), 10)
+	dst = append(dst, `,"content_block":{"type":"tool_use","id":`...)
+	var err error
+	dst, err = appendJSONBytes(dst, id)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `,"name":`...)
+	dst, err = appendJSONBytes(dst, name)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `,"input":{}}}`...)
+	return dst, nil
+}
+
+func appendSSEMessageStart(dst []byte, msgID, model string, inputTokens, outputTokens int) ([]byte, error) {
+	dst = append(dst, `{"type":"message_start","message":{"id":`...)
+	var err error
+	dst, err = appendJSONBytes(dst, msgID)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `,"type":"message","role":"assistant","content":[],"model":`...)
+	dst, err = appendJSONBytes(dst, model)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `,"usage":{"input_tokens":`...)
+	dst = strconv.AppendInt(dst, int64(inputTokens), 10)
+	dst = append(dst, `,"output_tokens":`...)
+	dst = strconv.AppendInt(dst, int64(outputTokens), 10)
+	dst = append(dst, `}}}`...)
+	return dst, nil
+}
+
+func appendSSEMessageStartNoUsage(dst []byte, msgID, model string) ([]byte, error) {
+	dst = append(dst, `{"type":"message_start","message":{"id":`...)
+	var err error
+	dst, err = appendJSONBytes(dst, msgID)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `,"type":"message","role":"assistant","content":[],"model":`...)
+	dst, err = appendJSONBytes(dst, model)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `}}`...)
+	return dst, nil
+}
+
+func appendSSEContentBlockStartText(dst []byte, index int) ([]byte, error) {
+	dst = append(dst, `{"type":"content_block_start","index":`...)
+	dst = strconv.AppendInt(dst, int64(index), 10)
+	dst = append(dst, `,"content_block":{"type":"text","text":""}}`...)
+	return dst, nil
+}
+
+func appendSSEContentBlockStartThinking(dst []byte, index int, signature string) ([]byte, error) {
+	dst = append(dst, `{"type":"content_block_start","index":`...)
+	dst = strconv.AppendInt(dst, int64(index), 10)
+	dst = append(dst, `,"content_block":{"type":"thinking","thinking":"","signature":`...)
+	var err error
+	dst, err = appendJSONBytes(dst, signature)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `}}`...)
+	return dst, nil
+}
+
+func appendSSEContentBlockDeltaInputJSON(dst []byte, index int, partialJSON string) ([]byte, error) {
+	dst = append(dst, `{"type":"content_block_delta","index":`...)
+	dst = strconv.AppendInt(dst, int64(index), 10)
+	dst = append(dst, `,"delta":{"type":"input_json_delta","partial_json":`...)
+	var err error
+	dst, err = appendJSONBytes(dst, partialJSON)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `}}`...)
+	return dst, nil
+}
+
+func appendSSEContentBlockDeltaText(dst []byte, index int, text string) ([]byte, error) {
+	dst = append(dst, `{"type":"content_block_delta","index":`...)
+	dst = strconv.AppendInt(dst, int64(index), 10)
+	dst = append(dst, `,"delta":{"type":"text_delta","text":`...)
+	var err error
+	dst, err = appendJSONBytes(dst, text)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `}}`...)
+	return dst, nil
+}
+
+func appendSSEContentBlockDeltaThinking(dst []byte, index int, thinking string) ([]byte, error) {
+	dst = append(dst, `{"type":"content_block_delta","index":`...)
+	dst = strconv.AppendInt(dst, int64(index), 10)
+	dst = append(dst, `,"delta":{"type":"thinking_delta","thinking":`...)
+	var err error
+	dst, err = appendJSONBytes(dst, thinking)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `}}`...)
+	return dst, nil
+}
+
+func appendSSEContentBlockStop(dst []byte, index int) ([]byte, error) {
+	dst = append(dst, `{"type":"content_block_stop","index":`...)
+	dst = strconv.AppendInt(dst, int64(index), 10)
+	dst = append(dst, '}')
+	return dst, nil
+}
+
+func appendSSEMessageDelta(dst []byte, stopReason string, outputTokens int) ([]byte, error) {
+	dst = append(dst, `{"type":"message_delta","delta":{"stop_reason":`...)
+	var err error
+	dst, err = appendJSONBytes(dst, stopReason)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst, `},"usage":{"output_tokens":`...)
+	dst = strconv.AppendInt(dst, int64(outputTokens), 10)
+	dst = append(dst, `}}`...)
+	return dst, nil
+}
+
+func marshalSSEContentBlockStartToolUseBytes(index int, id, name string) ([]byte, error) {
+	return appendSSEContentBlockStartToolUse(make([]byte, 0, 128+len(id)+len(name)), index, id, name)
+}
+
+func marshalSSEMessageStartBytes(msgID, model string, inputTokens, outputTokens int) ([]byte, error) {
+	return appendSSEMessageStart(make([]byte, 0, 192+len(msgID)+len(model)), msgID, model, inputTokens, outputTokens)
+}
+
+func marshalSSEMessageStartNoUsageBytes(msgID, model string) ([]byte, error) {
+	return appendSSEMessageStartNoUsage(make([]byte, 0, 128+len(msgID)+len(model)), msgID, model)
+}
+
 func marshalSSEContentBlockStartToolUse(index int, id, name string) (string, error) {
-	return marshalJSONString(sseContentBlockStartToolUse{
-		Type:  "content_block_start",
-		Index: index,
-		ContentBlock: sseToolUseContentBlock{
-			Type:  "tool_use",
-			ID:    id,
-			Name:  name,
-			Input: rawJSONEmptyObject,
-		},
-	})
+	raw, err := marshalSSEContentBlockStartToolUseBytes(index, id, name)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func marshalSSEContentBlockStartTextBytes(index int) ([]byte, error) {
+	return appendSSEContentBlockStartText(make([]byte, 0, 96), index)
 }
 
 func marshalSSEContentBlockStartText(index int) (string, error) {
-	return marshalJSONString(sseContentBlockStartText{
-		Type:  "content_block_start",
-		Index: index,
-		ContentBlock: sseTextContentBlock{
-			Type: "text",
-			Text: "",
-		},
-	})
+	raw, err := marshalSSEContentBlockStartTextBytes(index)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func marshalSSEContentBlockStartThinkingBytes(index int, signature string) ([]byte, error) {
+	return appendSSEContentBlockStartThinking(make([]byte, 0, 112+len(signature)), index, signature)
 }
 
 func marshalSSEContentBlockStartThinking(index int, signature string) (string, error) {
-	return marshalJSONString(sseContentBlockStartThinking{
-		Type:  "content_block_start",
-		Index: index,
-		ContentBlock: sseThinkingContentBlock{
-			Type:      "thinking",
-			Thinking:  "",
-			Signature: signature,
-		},
-	})
+	raw, err := marshalSSEContentBlockStartThinkingBytes(index, signature)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func marshalSSEContentBlockDeltaInputJSONBytes(index int, partialJSON string) ([]byte, error) {
+	return appendSSEContentBlockDeltaInputJSON(make([]byte, 0, 96+len(partialJSON)*2), index, partialJSON)
 }
 
 func marshalSSEContentBlockDeltaInputJSON(index int, partialJSON string) (string, error) {
-	return marshalJSONString(sseContentBlockDeltaInputJSON{
-		Type:  "content_block_delta",
-		Index: index,
-		Delta: sseInputJSONDelta{
-			Type:        "input_json_delta",
-			PartialJSON: partialJSON,
-		},
-	})
+	raw, err := marshalSSEContentBlockDeltaInputJSONBytes(index, partialJSON)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func marshalSSEContentBlockDeltaTextBytes(index int, text string) ([]byte, error) {
+	return appendSSEContentBlockDeltaText(make([]byte, 0, 80+len(text)), index, text)
 }
 
 func marshalSSEContentBlockDeltaText(index int, text string) (string, error) {
-	return marshalJSONString(sseContentBlockDeltaText{
-		Type:  "content_block_delta",
-		Index: index,
-		Delta: sseTextDelta{
-			Type: "text_delta",
-			Text: text,
-		},
-	})
+	raw, err := marshalSSEContentBlockDeltaTextBytes(index, text)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func marshalSSEContentBlockDeltaThinkingBytes(index int, thinking string) ([]byte, error) {
+	return appendSSEContentBlockDeltaThinking(make([]byte, 0, 88+len(thinking)), index, thinking)
 }
 
 func marshalSSEContentBlockDeltaThinking(index int, thinking string) (string, error) {
-	return marshalJSONString(sseContentBlockDeltaThinking{
-		Type:  "content_block_delta",
-		Index: index,
-		Delta: sseThinkingDelta{
-			Type:     "thinking_delta",
-			Thinking: thinking,
-		},
-	})
+	raw, err := marshalSSEContentBlockDeltaThinkingBytes(index, thinking)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func marshalSSEContentBlockStopBytes(index int) ([]byte, error) {
+	return appendSSEContentBlockStop(make([]byte, 0, 48), index)
 }
 
 func marshalSSEContentBlockStop(index int) (string, error) {
-	return marshalJSONString(sseContentBlockStop{
-		Type:  "content_block_stop",
-		Index: index,
-	})
+	raw, err := marshalSSEContentBlockStopBytes(index)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func marshalSSEMessageDeltaBytes(stopReason string, outputTokens int) ([]byte, error) {
+	return appendSSEMessageDelta(make([]byte, 0, 88+len(stopReason)), stopReason, outputTokens)
 }
 
 func marshalSSEMessageDelta(stopReason string, outputTokens int) (string, error) {
-	return marshalJSONString(sseMessageDelta{
-		Type: "message_delta",
-		Delta: sseMessageDeltaDetail{
-			StopReason: stopReason,
-		},
-		Usage: sseMessageUsage{
-			OutputTokens: outputTokens,
-		},
-	})
+	raw, err := marshalSSEMessageDeltaBytes(stopReason, outputTokens)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func marshalSSEMessageStopBytes() ([]byte, error) {
+	return sseMessageStopBytes, nil
 }
 
 func marshalSSEMessageStop() (string, error) {
-	return marshalJSONString(sseMessageStop{Type: "message_stop"})
+	return string(sseMessageStopBytes), nil
 }
 
 type streamHandler struct {
@@ -309,7 +756,7 @@ type streamHandler struct {
 
 	// Buffers and Builders
 	responseText          *strings.Builder
-	outputBuilder         *strings.Builder
+	outputEstimator       tiktoken.Estimator
 	writeChunkBuffer      *strings.Builder
 	textBlockBuilders     map[int]*strings.Builder
 	thinkingBlockBuilders map[int]*strings.Builder
@@ -321,6 +768,10 @@ type streamHandler struct {
 	lastTextDelta         string
 	lastTextDeltaSource   string
 	lastTextDeltaAt       time.Time
+	deferredFlushFrames   int
+	deferredFlushBytes    int
+	openAIChunkScratch    []byte
+	ssePayloadScratch     []byte
 
 	// Tool Handling (proxy mode only)
 	toolBlocks         map[string]int
@@ -342,8 +793,7 @@ type streamHandler struct {
 	lastScanTime time.Time
 
 	// Callbacks
-	onConversationID func(string) // 上游返回 conversationID 时回调
-
+	onConversationID func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
 	// Logger
 	logger *debug.Logger
 }
@@ -383,7 +833,6 @@ func newStreamHandler(
 		blockIndex:               -1,
 		toolBlocks:               make(map[string]int),
 		responseText:             perf.AcquireStringBuilder(),
-		outputBuilder:            perf.AcquireStringBuilder(),
 		writeChunkBuffer:         perf.AcquireStringBuilder(),
 		textBlockBuilders:        make(map[int]*strings.Builder),
 		thinkingBlockBuilders:    make(map[int]*strings.Builder),
@@ -405,13 +854,14 @@ func newStreamHandler(
 		activeTextBlockIndex:     -1,
 		activeTextSSEIndex:       -1,
 		activeBlockType:          "",
+		openAIChunkScratch:       make([]byte, 0, 512),
+		ssePayloadScratch:        make([]byte, 0, 512),
 	}
 	return h
 }
 
 func (h *streamHandler) release() {
 	perf.ReleaseStringBuilder(h.responseText)
-	perf.ReleaseStringBuilder(h.outputBuilder)
 	perf.ReleaseStringBuilder(h.writeChunkBuffer)
 	for _, sb := range h.textBlockBuilders {
 		perf.ReleaseStringBuilder(sb)
@@ -434,8 +884,13 @@ func (h *streamHandler) writeSSE(event, data string) {
 		return
 	}
 	if h.responseFormat == adapter.FormatOpenAI {
-		if err := h.writeOpenAISSE(event, data); err != nil {
+		written, err := h.writeOpenAISSE(event, data)
+		if err != nil {
 			h.markWriteErrorLocked(event, err)
+			return
+		}
+		if written {
+			h.flushSSELocked(event, data, false)
 		}
 		return
 	}
@@ -444,25 +899,57 @@ func (h *streamHandler) writeSSE(event, data string) {
 		h.markWriteErrorLocked(event, err)
 		return
 	}
-	if h.flusher != nil {
-		h.flusher.Flush()
-	}
+	h.flushSSELocked(event, data, false)
 
-	h.logger.LogOutputSSE(event, data)
+	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
+		h.logger.LogOutputSSE(event, data)
+	}
 }
 
-func (h *streamHandler) writeOpenAISSE(event, data string) error {
-	bytes, ok := adapter.BuildOpenAIChunk(h.msgID, h.startTime.Unix(), event, []byte(data))
+func (h *streamHandler) writeSSEBytes(event string, data []byte) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.hasReturn {
+		return
+	}
+	if h.responseFormat == adapter.FormatOpenAI {
+		written, err := h.writeOpenAISSEBytes(event, data)
+		if err != nil {
+			h.markWriteErrorLocked(event, err)
+			return
+		}
+		if written {
+			h.flushSSEBytesLocked(event, data, false)
+		}
+		return
+	}
+
+	if err := writeSSEFrameBytes(h.w, event, data); err != nil {
+		h.markWriteErrorLocked(event, err)
+		return
+	}
+	h.flushSSEBytesLocked(event, data, false)
+	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
+		h.logger.LogOutputSSE(event, string(data))
+	}
+}
+
+func (h *streamHandler) writeOpenAISSE(event, data string) (bool, error) {
+	return h.writeOpenAISSEBytes(event, []byte(data))
+}
+func (h *streamHandler) writeOpenAISSEBytes(event string, data []byte) (bool, error) {
+	raw, ok := adapter.AppendOpenAIChunk(h.openAIChunkScratch[:0], h.msgID, h.startTime.Unix(), event, data)
 	if !ok {
-		return nil
+		return false, nil
 	}
-	if err := writeOpenAIFrame(h.w, bytes); err != nil {
-		return err
+	h.openAIChunkScratch = raw[:0]
+	if err := writeOpenAIFrame(h.w, raw); err != nil {
+		return false, err
 	}
-	if h.flusher != nil {
-		h.flusher.Flush()
-	}
-	return nil
+	return true, nil
 }
 
 func (h *streamHandler) writeFinalSSE(event, data string) {
@@ -473,19 +960,21 @@ func (h *streamHandler) writeFinalSSE(event, data string) {
 	defer h.mu.Unlock()
 
 	if h.responseFormat == adapter.FormatOpenAI {
-		if err := h.writeOpenAISSE(event, data); err != nil {
+		written, err := h.writeOpenAISSE(event, data)
+		if err != nil {
 			h.markWriteErrorLocked(event, err)
 			return
 		}
+		if written {
+			h.flushSSELocked(event, data, true)
+		}
 		// Send [DONE] at the very end
 		if event == "message_stop" {
-			if _, err := io.WriteString(h.w, sseDoneLine); err != nil {
+			if _, err := h.w.Write(sseDoneLineBytes); err != nil {
 				h.markWriteErrorLocked(event, err)
 				return
 			}
-			if h.flusher != nil {
-				h.flusher.Flush()
-			}
+			h.flushSSELocked(event, sseDoneLine, true)
 		}
 		return
 	}
@@ -494,11 +983,265 @@ func (h *streamHandler) writeFinalSSE(event, data string) {
 		h.markWriteErrorLocked(event, err)
 		return
 	}
-	if h.flusher != nil {
-		h.flusher.Flush()
+	h.flushSSELocked(event, data, true)
+
+	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
+		h.logger.LogOutputSSE(event, data)
+	}
+}
+
+func (h *streamHandler) writeFinalSSEBytes(event string, data []byte) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeFinalSSEBytesLocked(event, data)
+}
+
+func (h *streamHandler) writeFinalSSEBytesLocked(event string, data []byte) {
+	h.writeFinalSSEBytesLockedWithHint(event, data, false)
+}
+
+func (h *streamHandler) writeFinalSSEBytesLockedWithHint(event string, data []byte, immediate bool) {
+	if !h.isStream {
+		return
 	}
 
-	h.logger.LogOutputSSE(event, data)
+	if h.responseFormat == adapter.FormatOpenAI {
+		written, err := h.writeOpenAISSEBytes(event, data)
+		if err != nil {
+			h.markWriteErrorLocked(event, err)
+			return
+		}
+		if written {
+			h.flushSSEBytesLockedWithHint(event, len(data), immediate, true)
+		}
+		if event == "message_stop" {
+			if _, err := h.w.Write(sseDoneLineBytes); err != nil {
+				h.markWriteErrorLocked(event, err)
+				return
+			}
+			h.flushSSELocked(event, sseDoneLine, true)
+		}
+		return
+	}
+
+	if err := writeSSEFrameBytes(h.w, event, data); err != nil {
+		h.markWriteErrorLocked(event, err)
+		return
+	}
+	h.flushSSEBytesLockedWithHint(event, len(data), immediate, true)
+	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
+		h.logger.LogOutputSSE(event, string(data))
+	}
+}
+
+func (h *streamHandler) writeSSEBytesLockedWithHint(event string, data []byte, immediate bool) {
+	if !h.isStream {
+		return
+	}
+	if h.hasReturn {
+		return
+	}
+	if h.responseFormat == adapter.FormatOpenAI {
+		written, err := h.writeOpenAISSEBytes(event, data)
+		if err != nil {
+			h.markWriteErrorLocked(event, err)
+			return
+		}
+		if written {
+			h.flushSSEBytesLockedWithHint(event, len(data), immediate, false)
+		}
+		return
+	}
+	if err := writeSSEFrameBytes(h.w, event, data); err != nil {
+		h.markWriteErrorLocked(event, err)
+		return
+	}
+	h.flushSSEBytesLockedWithHint(event, len(data), immediate, false)
+	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
+		h.logger.LogOutputSSE(event, string(data))
+	}
+	if h.config != nil && h.config.DebugEnabled {
+		slog.Debug("SSE Out", "event", event, "data_len", len(data))
+	}
+}
+
+func (h *streamHandler) writeSSEContentBlockStartToolUseLocked(index int, id, name string, final bool) {
+	raw, err := appendSSEContentBlockStartToolUse(h.ssePayloadScratch[:0], index, id, name)
+	if err != nil {
+		h.markWriteErrorLocked("content_block_start", err)
+		return
+	}
+	h.ssePayloadScratch = raw[:0]
+	if final {
+		h.writeFinalSSEBytesLockedWithHint("content_block_start", raw, true)
+		return
+	}
+	h.writeSSEBytesLockedWithHint("content_block_start", raw, true)
+}
+
+func (h *streamHandler) writeSSEContentBlockStartToolUse(index int, id, name string, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockStartToolUseLocked(index, id, name, final)
+}
+
+func (h *streamHandler) writeSSEContentBlockStartTextLocked(index int, final bool) {
+	raw, err := appendSSEContentBlockStartText(h.ssePayloadScratch[:0], index)
+	if err != nil {
+		h.markWriteErrorLocked("content_block_start", err)
+		return
+	}
+	h.ssePayloadScratch = raw[:0]
+	if final {
+		h.writeFinalSSEBytesLockedWithHint("content_block_start", raw, true)
+		return
+	}
+	h.writeSSEBytesLockedWithHint("content_block_start", raw, true)
+}
+
+func (h *streamHandler) writeSSEContentBlockStartText(index int, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockStartTextLocked(index, final)
+}
+
+func (h *streamHandler) writeSSEContentBlockDeltaInputJSONLocked(index int, partialJSON string, final bool) {
+	raw, err := appendSSEContentBlockDeltaInputJSON(h.ssePayloadScratch[:0], index, partialJSON)
+	if err != nil {
+		h.markWriteErrorLocked("content_block_delta", err)
+		return
+	}
+	h.ssePayloadScratch = raw[:0]
+	if final {
+		h.writeFinalSSEBytesLockedWithHint("content_block_delta", raw, false)
+		return
+	}
+	h.writeSSEBytesLockedWithHint("content_block_delta", raw, false)
+}
+
+func (h *streamHandler) writeSSEContentBlockDeltaInputJSON(index int, partialJSON string, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockDeltaInputJSONLocked(index, partialJSON, final)
+}
+
+func (h *streamHandler) writeSSEContentBlockDeltaTextLocked(index int, text string, final bool) {
+	raw, err := appendSSEContentBlockDeltaText(h.ssePayloadScratch[:0], index, text)
+	if err != nil {
+		h.markWriteErrorLocked("content_block_delta", err)
+		return
+	}
+	h.ssePayloadScratch = raw[:0]
+	if final {
+		h.writeFinalSSEBytesLockedWithHint("content_block_delta", raw, true)
+		return
+	}
+	h.writeSSEBytesLockedWithHint("content_block_delta", raw, true)
+}
+
+func (h *streamHandler) writeSSEContentBlockDeltaText(index int, text string, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockDeltaTextLocked(index, text, final)
+}
+
+func (h *streamHandler) writeSSEContentBlockDeltaThinkingLocked(index int, thinking string, final bool) {
+	raw, err := appendSSEContentBlockDeltaThinking(h.ssePayloadScratch[:0], index, thinking)
+	if err != nil {
+		h.markWriteErrorLocked("content_block_delta", err)
+		return
+	}
+	h.ssePayloadScratch = raw[:0]
+	if final {
+		h.writeFinalSSEBytesLockedWithHint("content_block_delta", raw, false)
+		return
+	}
+	h.writeSSEBytesLockedWithHint("content_block_delta", raw, false)
+}
+
+func (h *streamHandler) writeSSEContentBlockDeltaThinking(index int, thinking string, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockDeltaThinkingLocked(index, thinking, final)
+}
+
+func (h *streamHandler) writeSSEContentBlockStopLocked(index int, final bool) {
+	raw, err := appendSSEContentBlockStop(h.ssePayloadScratch[:0], index)
+	if err != nil {
+		h.markWriteErrorLocked("content_block_stop", err)
+		return
+	}
+	h.ssePayloadScratch = raw[:0]
+	if final {
+		h.writeFinalSSEBytesLockedWithHint("content_block_stop", raw, true)
+		return
+	}
+	h.writeSSEBytesLockedWithHint("content_block_stop", raw, true)
+}
+
+func (h *streamHandler) writeSSEContentBlockStop(index int, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockStopLocked(index, final)
+}
+
+func (h *streamHandler) writeSSEMessageDeltaLocked(stopReason string, outputTokens int, final bool) {
+	raw, err := appendSSEMessageDelta(h.ssePayloadScratch[:0], stopReason, outputTokens)
+	if err != nil {
+		h.markWriteErrorLocked("message_delta", err)
+		return
+	}
+	h.ssePayloadScratch = raw[:0]
+	if final {
+		h.writeFinalSSEBytesLockedWithHint("message_delta", raw, true)
+		return
+	}
+	h.writeSSEBytesLockedWithHint("message_delta", raw, true)
+}
+
+func (h *streamHandler) writeSSEMessageDelta(stopReason string, outputTokens int, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEMessageDeltaLocked(stopReason, outputTokens, final)
+}
+
+func (h *streamHandler) writeSSEMessageStart(model string, inputTokens, outputTokens int) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	raw, err := appendSSEMessageStart(h.ssePayloadScratch[:0], h.msgID, model, inputTokens, outputTokens)
+	if err != nil {
+		h.markWriteErrorLocked("message_start", err)
+		return
+	}
+	h.ssePayloadScratch = raw[:0]
+	h.writeSSEBytesLockedWithHint("message_start", raw, true)
 }
 
 func (h *streamHandler) writeKeepAlive() {
@@ -510,13 +1253,11 @@ func (h *streamHandler) writeKeepAlive() {
 	if h.hasReturn {
 		return
 	}
-	if _, err := io.WriteString(h.w, sseKeepAlive); err != nil {
+	if _, err := h.w.Write(sseKeepAliveBytes); err != nil {
 		h.markWriteErrorLocked("keep-alive", err)
 		return
 	}
-	if h.flusher != nil {
-		h.flusher.Flush()
-	}
+	h.flushSSELocked("keep-alive", sseKeepAlive, true)
 }
 
 func (h *streamHandler) addOutputTokens(text string) {
@@ -525,7 +1266,7 @@ func (h *streamHandler) addOutputTokens(text string) {
 	}
 	h.outputMu.Lock()
 	if !h.useUpstreamUsage {
-		h.outputBuilder.WriteString(text)
+		h.outputEstimator.Add(text)
 	}
 	h.outputMu.Unlock()
 }
@@ -537,9 +1278,7 @@ func (h *streamHandler) finalizeOutputTokens() {
 	if h.useUpstreamUsage {
 		return
 	}
-
-	text := h.outputBuilder.String()
-	h.outputTokens = tiktoken.EstimateTextTokens(text)
+	h.outputTokens = h.outputEstimator.Count()
 }
 
 func (h *streamHandler) setUsageTokens(input, output int) {
@@ -561,9 +1300,7 @@ func (h *streamHandler) resetRoundState() {
 	// Ensure any currently open block is closed before resetting state
 	h.closeActiveBlockLocked()
 
-	// 不要在这里重置 h.blockIndex。
-	// 保留索引递增可避免重试时索引回绕，导致客户端报错 "Mismatched content block type"。
-
+	// 濠电姷鏁搁崑鐐哄垂閸洖绠伴柛婵勫劤閻捇鏌ｉ幋婵愭綗闁逞屽墮閹虫﹢寮崘顔肩＜婵﹩鍘肩粊鍫曟⒒娓氣偓濞佳団€﹂崼銉ョ閹艰揪绲挎稉宥囨喐閻楀牆绗氶柍閿嬪灴閺岀喓绱掑Ο铏诡儌闂佺粯甯楅幃鍌炲蓟濞戙垺鏅查柛娑卞枟閸犳劗绱?h.blockIndex闂?	// 濠电姷鏁搁崕鎴犲緤閽樺娲晜閻愵剙搴婇梺鍛婃处閸ㄦ澘效閺屻儲鐓冪憸婊堝礈濞戞碍顫曢柟鐑樻尵閻熷綊鏌涢…鎴濇灓濞寸姾鍋愮槐鎾存媴閻熼偊鏆㈤梺鍝勬噽婵炩偓鐎殿喖顭峰畷銊╁级閹寸媭鍞洪梻浣筋潐閹矂宕㈤挊澶樼唵闁哄啫鐗婇埛鎴︽煕濞戞﹫鍔熼柟铏姍閺屾盯濡搁妸銉у帿闁诲酣娼ч妶鎼佸春閿熺姴宸濇い鎾跺濡差垶鏌ｆ惔锛勭暛闁稿酣浜惰棟妞ゆ牗鍩冮弸宥夋煏韫囧鈧牠宕戦敐澶嬬厱闁靛绲芥俊鐣岀磼閳ь剟宕橀埡鈧换鍡涙煟閹邦厼绲婚柍褜鍓濋褍宓勯梺鍦濠㈡﹢锝為崨瀛樼厽婵☆垰鍚嬮弳鈺呮煃鐟欏嫮娲存慨濠冩そ楠炴牠鎮欓幓鎺懶戦梻浣侯焾椤戝洭宕伴幘璇茬闁圭儤顨忛弫鍐煥閺冨洤袚婵炲懏鐗犻弻锝堢疀閺囩偘鎴烽梺鐑╁墲濡啫鐣烽悽绋课у璺侯儑閸橀箖姊绘担鍝ヤ虎妞ゆ垵妫涚槐鐐哄箣閻愵亙绨婚梺瑙勫劤绾绢厾绮旈悜姗嗘闁绘劕妯婇崕鎰亜閿旀儳顣奸柟顖涙椤㈡瑩鎳￠妶鍥风闯闂傚倸鍊烽懗鍫曘€佹繝鍕濞村吋娼欑壕鍧楁煟閵忋埄鐒鹃柡?"Mismatched content block type"闂?
 	h.activeThinkingBlockIndex = -1
 	h.activeThinkingSSEIndex = -1
 	h.activeTextBlockIndex = -1
@@ -606,7 +1343,7 @@ func (h *streamHandler) resetRoundState() {
 	h.currentToolInputID = ""
 	h.toolCallCount = 0
 	h.outputTokens = 0
-	h.outputBuilder.Reset()
+	h.outputEstimator.Reset()
 	h.writeChunkBuffer.Reset()
 	h.useUpstreamUsage = false
 	h.finalStopReason = ""
@@ -614,14 +1351,15 @@ func (h *streamHandler) resetRoundState() {
 	h.lastTextDelta = ""
 	h.lastTextDeltaSource = ""
 	h.lastTextDeltaAt = time.Time{}
+	h.deferredFlushFrames = 0
+	h.deferredFlushBytes = 0
 }
 
 func (h *streamHandler) shouldEmitToolCalls(stopReason string) bool {
 	return true
 }
 
-// seedSideEffectDedupFromMessages 预热跨轮去重键，避免工具结果回传后的下一轮重复执行同一副作用命令。
-// 仅采集“最近一条含文本用户消息之后”的 assistant tool_use，避免污染更早轮次。
+// seedSideEffectDedupFromMessages pre-seeds dedup keys from prior assistant tool_use blocks.
 func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Message) {
 	if len(messages) == 0 {
 		return
@@ -665,6 +1403,17 @@ func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Messag
 	}
 }
 
+func (h *streamHandler) writeUpstreamEventSSE(msg upstream.SSEMessage) {
+	if !h.isStream {
+		return
+	}
+	payload, err := marshalEventPayloadBytes(msg)
+	if err != nil {
+		return
+	}
+	h.writeSSEBytes(msg.Type, payload)
+}
+
 func stringifyToolInput(input interface{}) string {
 	switch v := input.(type) {
 	case nil:
@@ -693,6 +1442,25 @@ func sanitizeToolInput(name, input string) string {
 	case "write", "edit", "read", "bash", "glob":
 	default:
 		return input
+	}
+
+	switch nameKey {
+	case "write":
+		if !strings.Contains(trimmed, `"path"`) && !strings.Contains(trimmed, `"overwrite"`) {
+			return input
+		}
+	case "edit", "read":
+		if !strings.Contains(trimmed, `"path"`) {
+			return input
+		}
+	case "bash":
+		if !strings.Contains(trimmed, `"cmd"`) {
+			return input
+		}
+	case "glob":
+		if !strings.Contains(trimmed, `"path"`) || strings.Contains(trimmed, `"pattern"`) {
+			return input
+		}
 	}
 
 	var payload map[string]interface{}
@@ -775,15 +1543,9 @@ func (h *streamHandler) emitToolCallNonStream(call toolCall) {
 	})
 }
 
-func (h *streamHandler) emitToolCallStream(call toolCall, idx int, write func(event, data string)) {
+func (h *streamHandler) emitToolCallStream(call toolCall, idx int, final bool) {
 	if call.id == "" {
 		return
-	}
-	if idx < 0 {
-		h.mu.Lock()
-		h.blockIndex++
-		idx = h.blockIndex
-		h.mu.Unlock()
 	}
 
 	h.addOutputTokens(call.name)
@@ -793,17 +1555,18 @@ func (h *streamHandler) emitToolCallStream(call toolCall, idx int, write func(ev
 		inputJSON = "{}"
 	}
 
-	startData, _ := marshalSSEContentBlockStartToolUse(idx, call.id, call.name)
-	write("content_block_start", startData)
-
-	deltaData, _ := marshalSSEContentBlockDeltaInputJSON(idx, inputJSON)
-	write("content_block_delta", deltaData)
-
-	stopData, _ := marshalSSEContentBlockStop(idx)
-	write("content_block_stop", stopData)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if idx < 0 {
+		h.blockIndex++
+		idx = h.blockIndex
+	}
+	h.writeSSEContentBlockStartToolUseLocked(idx, call.id, call.name, final)
+	h.writeSSEContentBlockDeltaInputJSONLocked(idx, inputJSON, final)
+	h.writeSSEContentBlockStopLocked(idx, final)
 }
 
-// emitToolUseFromInput 在工具输入结束时一次性输出 tool_use，避免无后续 tool_result 的悬挂调用
+// emitToolUseFromInput emits a single tool_use block once the full input is available.
 func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) {
 	if toolID == "" || toolName == "" {
 		return
@@ -813,10 +1576,6 @@ func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) 
 	}
 	h.toolCallEmitted[toolID] = struct{}{}
 
-	h.mu.Lock()
-	h.toolCallCount++
-	h.mu.Unlock()
-
 	h.addOutputTokens(toolName)
 	inputJSON := strings.TrimSpace(inputStr)
 	if inputJSON == "" {
@@ -824,21 +1583,16 @@ func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) 
 	}
 
 	h.mu.Lock()
+	h.toolCallCount++
 	h.blockIndex++
 	idx := h.blockIndex
+	h.writeSSEContentBlockStartToolUseLocked(idx, toolID, toolName, false)
+	h.writeSSEContentBlockDeltaInputJSONLocked(idx, inputJSON, false)
+	h.writeSSEContentBlockStopLocked(idx, false)
 	h.mu.Unlock()
-
-	startData, _ := marshalSSEContentBlockStartToolUse(idx, toolID, toolName)
-	h.writeSSE("content_block_start", startData)
-
-	deltaData, _ := marshalSSEContentBlockDeltaInputJSON(idx, inputJSON)
-	h.writeSSE("content_block_delta", deltaData)
-
-	stopData, _ := marshalSSEContentBlockStop(idx)
-	h.writeSSE("content_block_stop", stopData)
 }
 
-func (h *streamHandler) flushPendingToolCalls(stopReason string, write func(event, data string)) {
+func (h *streamHandler) flushPendingToolCalls(stopReason string) {
 	if !h.shouldEmitToolCalls(stopReason) {
 		return
 	}
@@ -851,7 +1605,7 @@ func (h *streamHandler) flushPendingToolCalls(stopReason string, write func(even
 
 	for _, call := range calls {
 		if h.isStream {
-			h.emitToolCallStream(call, -1, write)
+			h.emitToolCallStream(call, -1, true)
 		} else {
 			h.emitToolCallNonStream(call)
 		}
@@ -879,42 +1633,39 @@ func (h *streamHandler) finishResponse(stopReason string) {
 	h.mu.Unlock()
 
 	if h.isStream {
-		var blockStopData string
+		var blockStopData []byte
 		h.mu.Lock()
 		if stopData, ok := h.popActiveBlockStopDataLocked(); ok {
 			blockStopData = stopData
 		}
 		h.mu.Unlock()
-		if blockStopData != "" {
-			h.writeFinalSSE("content_block_stop", blockStopData)
+		if len(blockStopData) > 0 {
+			h.writeFinalSSEBytes("content_block_stop", blockStopData)
 		}
 		if stopReason != "tool_use" {
-			h.emitWriteChunkFallbackIfNeeded(h.writeFinalSSE)
+			h.emitWriteChunkFallbackIfNeeded()
 		}
-		h.flushPendingToolCalls(stopReason, h.writeFinalSSE)
+		h.flushPendingToolCalls(stopReason)
 		h.finalizeOutputTokens()
-		deltaData, err := marshalSSEMessageDelta(stopReason, h.outputTokens)
-		if err != nil {
-			slog.Error("Failed to marshal message_delta", "error", err)
-		} else {
-			h.writeFinalSSE("message_delta", deltaData)
-		}
+		h.mu.Lock()
+		h.writeSSEMessageDeltaLocked(stopReason, h.outputTokens, true)
+		h.mu.Unlock()
 
-		stopData, err := marshalSSEMessageStop()
+		stopData, err := marshalSSEMessageStopBytes()
 		if err != nil {
 			slog.Error("Failed to marshal message_stop", "error", err)
 		} else {
-			h.writeFinalSSE("message_stop", stopData)
+			h.writeFinalSSEBytes("message_stop", stopData)
 		}
 	} else {
 		if stopReason != "tool_use" {
-			h.emitWriteChunkFallbackIfNeeded(h.writeFinalSSE)
+			h.emitWriteChunkFallbackIfNeeded()
 		}
-		h.flushPendingToolCalls(stopReason, h.writeFinalSSE)
+		h.flushPendingToolCalls(stopReason)
 		h.finalizeOutputTokens()
 	}
 
-	// 记录摘要
+	// 闂傚倷娴囧畷鍨叏閹惰姤鍊块柨鏇楀亾妞ゎ厼鐏濊灒闁兼祴鏅濋ˇ顖炴倵楠炲灝鍔氭い锔诲灣缁鎮滃Ο鍦畾濡炪倖鐗楁笟妤呭磿閵夛妇绠?
 	h.mu.Lock()
 	suppressedDedup := h.toolDedupCount
 	dedupKeys := make(map[string]int, len(h.toolDedupKeys))
@@ -956,7 +1707,6 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 	sseIdx := h.blockIndex
 	h.activeBlockType = blockType
 
-	var startDataString string
 	switch blockType {
 	case "thinking":
 		signature := h.pendingThinkingSig
@@ -971,7 +1721,13 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 		h.thinkingBlockBuilders[internalIdx] = perf.AcquireStringBuilder()
 		h.thinkingBlockSigs[internalIdx] = signature
 
-		startDataString, _ = marshalSSEContentBlockStartThinking(sseIdx, signature)
+		raw, err := appendSSEContentBlockStartThinking(h.ssePayloadScratch[:0], sseIdx, signature)
+		if err != nil {
+			h.markWriteErrorLocked("content_block_start", err)
+			break
+		}
+		h.ssePayloadScratch = raw[:0]
+		h.writeSSEBytesLockedWithHint("content_block_start", raw, true)
 	case "text":
 		h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
 			"type": "text",
@@ -981,11 +1737,7 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 		h.activeTextSSEIndex = sseIdx
 		h.textBlockBuilders[internalIdx] = perf.AcquireStringBuilder()
 
-		startDataString, _ = marshalSSEContentBlockStartText(sseIdx)
-	}
-
-	if startDataString != "" {
-		h.writeSSELocked("content_block_start", startDataString)
+		h.writeSSEContentBlockStartTextLocked(sseIdx, false)
 	}
 
 	return sseIdx
@@ -997,9 +1749,9 @@ func (h *streamHandler) closeActiveBlock() {
 	h.closeActiveBlockLocked()
 }
 
-func (h *streamHandler) popActiveBlockStopDataLocked() (string, bool) {
+func (h *streamHandler) popActiveBlockStopDataLocked() ([]byte, bool) {
 	if h.activeBlockType == "" {
-		return "", false
+		return nil, false
 	}
 
 	var sseIdx int
@@ -1015,17 +1767,17 @@ func (h *streamHandler) popActiveBlockStopDataLocked() (string, bool) {
 	default:
 		// tool_use and others are usually handled as single-event blocks or managed separately
 		h.activeBlockType = ""
-		return "", false
+		return nil, false
 	}
 
 	h.activeBlockType = ""
 
-	stopData, err := marshalSSEContentBlockStop(sseIdx)
+	stopData, err := marshalSSEContentBlockStopBytes(sseIdx)
 	if err != nil {
 		slog.Error("Failed to marshal content_block_stop", "error", err)
 	}
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 	return stopData, true
 }
@@ -1035,7 +1787,7 @@ func (h *streamHandler) closeActiveBlockLocked() {
 	if !ok {
 		return
 	}
-	h.writeSSELocked("content_block_stop", stopData)
+	h.writeSSEBytesLocked("content_block_stop", stopData)
 }
 
 func (h *streamHandler) writeSSELocked(event, data string) {
@@ -1046,8 +1798,13 @@ func (h *streamHandler) writeSSELocked(event, data string) {
 		return
 	}
 	if h.responseFormat == adapter.FormatOpenAI {
-		if err := h.writeOpenAISSE(event, data); err != nil {
+		written, err := h.writeOpenAISSE(event, data)
+		if err != nil {
 			h.markWriteErrorLocked(event, err)
+			return
+		}
+		if written {
+			h.flushSSELocked(event, data, false)
 		}
 		return
 	}
@@ -1055,10 +1812,42 @@ func (h *streamHandler) writeSSELocked(event, data string) {
 		h.markWriteErrorLocked(event, err)
 		return
 	}
-	if h.flusher != nil {
-		h.flusher.Flush()
+	h.flushSSELocked(event, data, false)
+	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
+		h.logger.LogOutputSSE(event, data)
 	}
-	h.logger.LogOutputSSE(event, data)
+	// Log to slog only when debug enabled
+	if h.config != nil && h.config.DebugEnabled {
+		slog.Debug("SSE Out", "event", event, "data_len", len(data))
+	}
+}
+
+func (h *streamHandler) writeSSEBytesLocked(event string, data []byte) {
+	if !h.isStream {
+		return
+	}
+	if h.hasReturn {
+		return
+	}
+	if h.responseFormat == adapter.FormatOpenAI {
+		written, err := h.writeOpenAISSEBytes(event, data)
+		if err != nil {
+			h.markWriteErrorLocked(event, err)
+			return
+		}
+		if written {
+			h.flushSSEBytesLocked(event, data, false)
+		}
+		return
+	}
+	if err := writeSSEFrameBytes(h.w, event, data); err != nil {
+		h.markWriteErrorLocked(event, err)
+		return
+	}
+	h.flushSSEBytesLocked(event, data, false)
+	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
+		h.logger.LogOutputSSE(event, string(data))
+	}
 	// Log to slog only when debug enabled
 	if h.config != nil && h.config.DebugEnabled {
 		slog.Debug("SSE Out", "event", event, "data_len", len(data))
@@ -1068,28 +1857,21 @@ func (h *streamHandler) writeSSELocked(event, data string) {
 // Event Handlers
 
 func (h *streamHandler) emitTextBlock(text string) {
-	h.emitTextBlockWithWriter(text, h.writeSSE)
+	h.emitTextBlockWithMode(text, false)
 }
 
-func (h *streamHandler) emitTextBlockWithWriter(text string, write func(event, data string)) {
+func (h *streamHandler) emitTextBlockWithMode(text string, final bool) {
 	if !h.isStream || text == "" {
 		return
 	}
-	h.markTextOutput()
-
 	h.mu.Lock()
+	h.hasTextOutput = true
 	h.blockIndex++
 	idx := h.blockIndex
+	h.writeSSEContentBlockStartTextLocked(idx, final)
+	h.writeSSEContentBlockDeltaTextLocked(idx, text, final)
+	h.writeSSEContentBlockStopLocked(idx, final)
 	h.mu.Unlock()
-
-	startData, _ := marshalSSEContentBlockStartText(idx)
-	write("content_block_start", startData)
-
-	deltaData, _ := marshalSSEContentBlockDeltaText(idx, text)
-	write("content_block_delta", deltaData)
-
-	stopData, _ := marshalSSEContentBlockStop(idx)
-	write("content_block_stop", stopData)
 }
 
 func (h *streamHandler) markTextOutput() {
@@ -1098,7 +1880,7 @@ func (h *streamHandler) markTextOutput() {
 	h.mu.Unlock()
 }
 
-func (h *streamHandler) emitWriteChunkFallbackIfNeeded(write func(event, data string)) {
+func (h *streamHandler) emitWriteChunkFallbackIfNeeded() {
 	if h.writeChunkBuffer == nil {
 		return
 	}
@@ -1113,7 +1895,7 @@ func (h *streamHandler) emitWriteChunkFallbackIfNeeded(write func(event, data st
 	h.mu.Unlock()
 
 	if h.isStream {
-		h.emitTextBlockWithWriter(text, write)
+		h.emitTextBlockWithMode(text, true)
 		return
 	}
 
@@ -1398,7 +2180,7 @@ func (h *streamHandler) markWriteErrorLocked(event string, err error) {
 	}
 	h.hasReturn = true
 	h.finalStopReason = "write_error"
-	slog.Warn("SSE 写入失败，已终止输出", "event", event, "error", err)
+	slog.Warn("SSE write failed", "event", event, "error", err)
 }
 
 func (h *streamHandler) forceFinishIfMissing() {
@@ -1410,12 +2192,12 @@ func (h *streamHandler) forceFinishIfMissing() {
 	hasToolCalls := h.toolCallCount > 0 ||
 		len(h.pendingToolCalls) > 0 ||
 		len(h.toolCallEmitted) > 0
-	hasOutput := h.outputBuilder.Len() > 0 || h.responseText.Len() > 0 || len(h.contentBlocks) > 0
+	hasOutput := h.hasTextOutput || h.responseText.Len() > 0 || len(h.contentBlocks) > 0
 	h.mu.Unlock()
 
-	// 上游无任何有效输出时，注入空响应提示避免客户端收到完全空的回复
+	// Inject a fallback text block if upstream produced nothing.
 	if !hasToolCalls && !hasOutput {
-		slog.Warn("上游未返回有效内容，注入空响应提示")
+		slog.Warn("Upstream returned no output; injecting fallback text block")
 		h.ensureBlock("text")
 		h.mu.Lock()
 		internalIdx := h.activeTextBlockIndex
@@ -1424,8 +2206,8 @@ func (h *streamHandler) forceFinishIfMissing() {
 
 		emptyMsg := "No response from upstream. The request may not be supported in this mode."
 		if h.isStream {
-			deltaData, _ := marshalSSEContentBlockDeltaText(sseIdx, emptyMsg)
-			h.writeSSE("content_block_delta", deltaData)
+			deltaData, _ := marshalSSEContentBlockDeltaTextBytes(sseIdx, emptyMsg)
+			h.writeSSEBytes("content_block_delta", deltaData)
 		} else {
 			h.responseText.WriteString(emptyMsg)
 			if builder, ok := h.textBlockBuilders[internalIdx]; ok {
@@ -1438,7 +2220,7 @@ func (h *streamHandler) forceFinishIfMissing() {
 	if hasToolCalls {
 		stopReason = "tool_use"
 	}
-	slog.Warn("上游未发送结束标记，强制结束响应", "stop_reason", stopReason)
+	slog.Warn("Upstream stream ended without explicit stop marker; forcing response finish", "stop_reason", stopReason)
 	h.finishResponse(stopReason)
 }
 
@@ -1456,7 +2238,7 @@ func (h *streamHandler) hasAnyOutput() bool {
 	}
 
 	h.outputMu.Lock()
-	has = h.outputBuilder.Len() > 0 || h.outputTokens > 0
+	has = h.outputEstimator.HasText() || h.outputTokens > 0
 	h.outputMu.Unlock()
 	return has
 }
@@ -1501,7 +2283,7 @@ func normalizeIntroKey(delta string) string {
 		return ""
 	}
 	lower := strings.ToLower(text)
-	compactLower := strings.Join(strings.Fields(strings.ReplaceAll(lower, "👋", "")), " ")
+	compactLower := strings.Join(strings.Fields(strings.ReplaceAll(lower, "\U0001F44B", "")), " ")
 	switch lower {
 	case "hi! how can i help you today?",
 		"hello! how can i help you today?",
@@ -1524,13 +2306,13 @@ func normalizeIntroKey(delta string) string {
 		(strings.Contains(compactLower, "how can i help today") || strings.Contains(compactLower, "how can i help you today")) {
 		return "intro:en:greet"
 	}
-	if strings.HasPrefix(text, "你好") || strings.HasPrefix(text, "您好") {
+	if strings.HasPrefix(text, "\u4f60\u597d") || strings.HasPrefix(text, "\u60a8\u597d") || strings.Contains(text, "\u6211\u80fd\u5e2e\u4f60") {
 		return "intro:zh:greet"
 	}
-	if strings.HasPrefix(lower, "我是 warp") || strings.HasPrefix(lower, "我是 warp agent mode") || strings.HasPrefix(lower, "我是 warp 智能代理模式") {
+	if strings.Contains(lower, "warp") && (strings.HasPrefix(text, "\u6211\u662f") || strings.Contains(text, "agent mode")) {
 		return "intro:zh:warp"
 	}
-	if strings.HasPrefix(lower, "我是 claude") || strings.HasPrefix(lower, "我是 claude 4.5") || strings.HasPrefix(lower, "我是 claude 4") {
+	if strings.Contains(lower, "claude") && (strings.HasPrefix(text, "\u6211\u662f") || strings.Contains(lower, "claude 4")) {
 		return "intro:zh:claude"
 	}
 	return ""
@@ -1553,7 +2335,7 @@ func collapseDuplicatedIntroDelta(delta string) string {
 	return first
 }
 
-// extractThinkingSignature 尝试从上游事件中提取 signature（优先 event.signature，其次 event.data.signature）
+// extractThinkingSignature extracts a signature from event or event.data.
 func extractThinkingSignature(event map[string]interface{}) string {
 	if event == nil {
 		return ""
@@ -1735,8 +2517,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			builder.WriteString(delta)
 		}
 		h.mu.Unlock()
-		data, _ := marshalSSEContentBlockDeltaThinking(sseIdx, delta)
-		h.writeSSE("content_block_delta", data)
+		h.writeSSEContentBlockDeltaThinking(sseIdx, delta, false)
 
 	case "model.reasoning-end":
 		h.closeActiveBlock()
@@ -1794,8 +2575,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			builder.WriteString(delta)
 		}
 		h.mu.Unlock()
-		data, _ := marshalSSEContentBlockDeltaText(sseIdx, delta)
-		h.writeSSE("content_block_delta", data)
+		h.writeSSEContentBlockDeltaText(sseIdx, delta, false)
 
 	case "model.text-end":
 		h.closeActiveBlock()
@@ -1808,12 +2588,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		if hasThinkingBlock || h.pendingThinkingSig != "" {
 			h.ensureBlock("thinking")
 		}
-		if h.isStream {
-			payload, err := marshalEventPayload(msg)
-			if err == nil {
-				h.writeSSE(msg.Type, payload)
-			}
-		}
+		h.writeUpstreamEventSSE(msg)
 		return
 
 	case "coding_agent.credits_exhausted":
@@ -1835,10 +2610,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 				h.ensureBlock("thinking")
 				h.emitThinkingDelta(fmt.Sprintf("\n[%s %s...]\n", op, path))
 
-				payload, err := marshalEventPayload(msg)
-				if err == nil {
-					h.writeSSE(msg.Type, payload)
-				}
+				h.writeUpstreamEventSSE(msg)
 			}
 		}
 		return
@@ -1863,10 +2635,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 				}
 			}
 			if !h.suppressThinking {
-				payload, err := marshalEventPayload(msg)
-				if err == nil {
-					h.writeSSE(msg.Type, payload)
-				}
+				h.writeUpstreamEventSSE(msg)
 			}
 		}
 		return
@@ -1875,10 +2644,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		if h.isStream {
 			if !h.suppressThinking {
 				h.emitThinkingDelta("\n[Done]\n")
-				payload, err := marshalEventPayload(msg)
-				if err == nil {
-					h.writeSSE(msg.Type, payload)
-				}
+				h.writeUpstreamEventSSE(msg)
 			}
 		}
 		return
@@ -1897,10 +2663,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			slog.Debug("Upstream active", "op", msg.Event["operation"])
 		}
 		if h.isStream {
-			payload, err := marshalEventPayload(msg)
-			if err == nil {
-				h.writeSSE(msg.Type, payload)
-			}
+			h.writeUpstreamEventSSE(msg)
 		} else {
 			h.writeKeepAlive()
 		}
@@ -1922,8 +2685,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		h.toolInputNames[toolID] = toolName
 		h.toolInputBuffers[toolID] = perf.AcquireStringBuilder()
 		h.toolInputHadDelta[toolID] = false
-		// 注意：不要在 tool-input-start 就发送 tool_use，避免上游中断导致无 tool_result。
-		return
+		// 婵犵數濮烽弫鎼佸磻濞戔懞鍥敇閵忕姷顦悗骞垮劚椤︻垳绮堥崼婢濆綊鎮℃惔锝嗘喖闂佸搫鎷嬮崜姘跺箞閵娿儺娼ㄩ柛鈩冦仦缁ㄤ粙姊洪懡銈呮瀾缂佽鐗撻獮鍐倻閽樺宓嗗┑顔斤耿绾危椤斿皷鏀介柣姗嗗亜娴?tool-input-start 闂傚倷娴囬褏鎹㈤幇顔藉床闁归偊鍓涢弳锔姐亜閹烘垵鏆斿ù婊冪秺閺屾稑鐣濋埀顒勫磻閻愮儤鍊?tool_use闂傚倸鍊烽悞锔锯偓绗涘懐鐭欓柟杈鹃檮閸庢鏌涚仦鍓р槈妞ゆ洟浜堕弻宥夊传閸曨剙娅ｇ紓浣插亾闁稿本澹曢崑鎾荤嵁閸喖濮庨柣搴㈠嚬閸ｏ綁骞冮悜钘夌疀妞ゆ挾濮烽鏇㈡⒑閻熸澘鈷旂紒顕呭灠閳诲秴顭ㄩ崼鐔哄幘闂佸壊鐓堥崑鍕倶鐎电硶鍋撳▓鍨珮闁告挾鍠栭妴浣割潨閳ь剟骞冨鍫濆耿婵°倓绶￠崯宀勬⒒閸屾瑨鍏岄柛妯犲洤搴婇柡灞诲劜閸嬨倝鏌曟繛鍨壔?tool_result闂?		return
 
 	case "model.tool-input-delta":
 		toolID, _ := msg.Event["id"].(string)
@@ -2124,8 +2886,7 @@ func (h *streamHandler) emitThinkingDelta(delta string) {
 	}
 	h.mu.Unlock()
 
-	data, _ := marshalSSEContentBlockDeltaThinking(sseIdx, delta)
-	h.writeSSE("content_block_delta", data)
+	h.writeSSEContentBlockDeltaThinking(sseIdx, delta, false)
 }
 
 func (h *streamHandler) emitTextDelta(delta string) {
@@ -2159,8 +2920,7 @@ func (h *streamHandler) emitTextDelta(delta string) {
 	}
 	h.mu.Unlock()
 
-	data, _ := marshalSSEContentBlockDeltaText(sseIdx, delta)
-	h.writeSSE("content_block_delta", data)
+	h.writeSSEContentBlockDeltaText(sseIdx, delta, false)
 }
 
 // InjectErrorText injects an error message as a text delta into the stream or buffer.
@@ -2173,8 +2933,8 @@ func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
 	internalIdx := h.activeTextBlockIndex
 
 	if h.isStream {
-		data, _ := marshalSSEContentBlockDeltaText(idx, errorMsg)
-		h.writeSSE("content_block_delta", data)
+		data, _ := marshalSSEContentBlockDeltaTextBytes(idx, errorMsg)
+		h.writeSSEBytes("content_block_delta", data)
 	} else {
 		h.mu.Lock()
 		if builder, ok := h.textBlockBuilders[internalIdx]; ok {

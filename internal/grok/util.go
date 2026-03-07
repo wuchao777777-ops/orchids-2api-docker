@@ -23,6 +23,11 @@ import (
 )
 
 var (
+	grokJSONEmptyObjectBytes  = []byte("{}")
+	grokSSEEventPrefixBytes   = []byte("event: ")
+	grokSSEDataPrefixBytes    = []byte("data: ")
+	grokSSENewlineBytes       = []byte("\n")
+	grokSSEFrameSuffixBytes   = []byte("\n\n")
 	reToolUsageCardBlock      = regexp.MustCompile(`(?is)<?xai:tool_usage_card[^>]*>.*?</xai:tool_usage_card>`)
 	reToolUsageCardIncomplete = regexp.MustCompile(`(?is)<?xai:tool_usage_card.*?(?:</xai:tool_usage_card>|\z)`)
 	reGrokRenderBlock         = regexp.MustCompile(`(?is)<?grok:render.*?</grok:render>`)
@@ -644,10 +649,26 @@ func extractContentText(content interface{}) string {
 }
 
 func writeSSE(w http.ResponseWriter, event, data string) {
-	if event != "" {
-		fmt.Fprintf(w, "event: %s\n", event)
+	writeSSEBytes(w, event, []byte(data))
+}
+
+func writeSSEEventName(w http.ResponseWriter, event string) {
+	if sw, ok := interface{}(w).(io.StringWriter); ok {
+		_, _ = sw.WriteString(event)
+		return
 	}
-	fmt.Fprintf(w, "data: %s\n\n", data)
+	_, _ = w.Write([]byte(event))
+}
+
+func writeSSEBytes(w http.ResponseWriter, event string, data []byte) {
+	if event != "" {
+		_, _ = w.Write(grokSSEEventPrefixBytes)
+		writeSSEEventName(w, event)
+		_, _ = w.Write(grokSSENewlineBytes)
+	}
+	_, _ = w.Write(grokSSEDataPrefixBytes)
+	_, _ = w.Write(data)
+	_, _ = w.Write(grokSSEFrameSuffixBytes)
 }
 
 // NormalizeSSOToken extracts the raw SSO token from a cookie-like string.
@@ -1025,13 +1046,21 @@ func parseRateLimitReset(raw string) time.Time {
 }
 
 func encodeJSON(v interface{}) string {
+	return string(encodeJSONBytes(v))
+}
+
+func encodeJSONBytes(v interface{}) []byte {
 	buf := bytes.Buffer{}
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
-		return "{}"
+		return grokJSONEmptyObjectBytes
 	}
-	return strings.TrimSpace(buf.String())
+	raw := buf.Bytes()
+	if n := len(raw); n > 0 && raw[n-1] == '\n' {
+		return raw[:n-1]
+	}
+	return raw
 }
 
 func normalizeMessageRole(role string) string {

@@ -15,8 +15,10 @@ import (
 )
 
 type redisStore struct {
-	client *redis.Client
-	prefix string
+	client                      *redis.Client
+	prefix                      string
+	incrementRequestCountScript *redis.Script
+	incrementAccountStatsScript *redis.Script
 }
 
 type apiKeyRecord struct {
@@ -61,6 +63,49 @@ func newRedisStore(addr, password string, db int, prefix string) (*redisStore, e
 	return &redisStore{
 		client: client,
 		prefix: prefix,
+		incrementRequestCountScript: redis.NewScript(`
+			local key = KEYS[1]
+			local now_str = ARGV[1]
+
+			local val = redis.call("GET", key)
+			if not val then return nil end
+
+			local acc = cjson.decode(val)
+			acc.request_count = (acc.request_count or 0) + 1
+			acc.last_used_at = now_str
+			acc.updated_at = now_str
+
+			redis.call("SET", key, cjson.encode(acc))
+			return "OK"
+		`),
+		incrementAccountStatsScript: redis.NewScript(`
+			local key = KEYS[1]
+			local usage = tonumber(ARGV[1])
+			local count = tonumber(ARGV[2])
+			local now_str = ARGV[3]
+
+			local val = redis.call("GET", key)
+			if not val then return redis.error_reply("account not found") end
+
+			local acc = cjson.decode(val)
+
+			local acc_type = ""
+			if acc.account_type ~= nil then
+				acc_type = string.lower(tostring(acc.account_type))
+			end
+
+			if acc_type ~= "warp" and acc_type ~= "orchids" then
+				acc.usage_current = (acc.usage_current or 0) + usage
+			end
+			acc.usage_total = (acc.usage_total or 0) + usage
+			acc.request_count = (acc.request_count or 0) + count
+			acc.last_used_at = now_str
+			acc.updated_at = now_str
+
+			local new_val = cjson.encode(acc)
+			redis.call("SET", key, new_val)
+			return "OK"
+		`),
 	}, nil
 }
 
@@ -232,25 +277,26 @@ func (s *redisStore) IncrementRequestCount(ctx context.Context, id int64) error 
 	if id == 0 {
 		return nil
 	}
+	if s.incrementRequestCountScript == nil {
+		s.incrementRequestCountScript = redis.NewScript(`
+			local key = KEYS[1]
+			local now_str = ARGV[1]
 
-	script := redis.NewScript(`
-		local key = KEYS[1]
-		local now_str = ARGV[1]
+			local val = redis.call("GET", key)
+			if not val then return nil end
 
-		local val = redis.call("GET", key)
-		if not val then return nil end
+			local acc = cjson.decode(val)
+			acc.request_count = (acc.request_count or 0) + 1
+			acc.last_used_at = now_str
+			acc.updated_at = now_str
 
-		local acc = cjson.decode(val)
-		acc.request_count = (acc.request_count or 0) + 1
-		acc.last_used_at = now_str
-		acc.updated_at = now_str
-
-		redis.call("SET", key, cjson.encode(acc))
-		return "OK"
-	`)
+			redis.call("SET", key, cjson.encode(acc))
+			return "OK"
+		`)
+	}
 
 	nowStr := time.Now().Format(time.RFC3339Nano)
-	err := script.Run(ctx, s.client, []string{s.accountsKey(id)}, nowStr).Err()
+	err := s.incrementRequestCountScript.Run(ctx, s.client, []string{s.accountsKey(id)}, nowStr).Err()
 	if err != nil && err != redis.Nil {
 		return err
 	}
@@ -269,21 +315,21 @@ func (s *redisStore) IncrementUsage(ctx context.Context, id int64, usage float64
 	}
 
 	script := redis.NewScript(`
-		local key = KEYS[1]
-		local usage = tonumber(ARGV[1])
-		local now_str = ARGV[2]
+	local key = KEYS[1]
+	local usage = tonumber(ARGV[1])
+	local now_str = ARGV[2]
 
-		local val = redis.call("GET", key)
-		if not val then return nil end
+	local val = redis.call("GET", key)
+	if not val then return nil end
 
-		local acc = cjson.decode(val)
-		acc.usage_current = (acc.usage_current or 0) + usage
-		acc.usage_total = (acc.usage_total or 0) + usage
-		acc.last_used_at = now_str
-		acc.updated_at = now_str
+	local acc = cjson.decode(val)
+	acc.usage_current = (acc.usage_current or 0) + usage
+	acc.usage_total = (acc.usage_total or 0) + usage
+	acc.last_used_at = now_str
+	acc.updated_at = now_str
 
-		redis.call("SET", key, cjson.encode(acc))
-		return "OK"
+	redis.call("SET", key, cjson.encode(acc))
+	return "OK"
 	`)
 
 	nowStr := time.Now().Format(time.RFC3339Nano)
@@ -304,44 +350,42 @@ func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage 
 	if usage <= 0 && count <= 0 {
 		return nil
 	}
+	if s.incrementAccountStatsScript == nil {
+		s.incrementAccountStatsScript = redis.NewScript(`
+			local key = KEYS[1]
+			local usage = tonumber(ARGV[1])
+			local count = tonumber(ARGV[2])
+			local now_str = ARGV[3]
 
-	script := redis.NewScript(`
-		local key = KEYS[1]
-		local usage = tonumber(ARGV[1])
-		local count = tonumber(ARGV[2])
-		local now_str = ARGV[3]
-		
-		local val = redis.call("GET", key)
-		if not val then return redis.error_reply("account not found") end
-		
-		local acc = cjson.decode(val)
-		
-		local acc_type = ""
-		if acc.account_type ~= nil then
-			acc_type = string.lower(tostring(acc.account_type))
-		end
+			local val = redis.call("GET", key)
+			if not val then return redis.error_reply("account not found") end
 
-		-- Warp 的 usage_current 保存请求配额（由上游同步），
-		-- Orchids 的 usage_current 保存 credits（由 RSC 同步）。
-		-- 不能叠加 token 用量，否则会污染配额显示。
-		if acc_type ~= "warp" and acc_type ~= "orchids" then
-			acc.usage_current = (acc.usage_current or 0) + usage
-		end
-		acc.usage_total = (acc.usage_total or 0) + usage
-		acc.request_count = (acc.request_count or 0) + count
-		acc.last_used_at = now_str
-		acc.updated_at = now_str
-		
-		local new_val = cjson.encode(acc)
-		redis.call("SET", key, new_val)
-		return "OK"
-	`)
+			local acc = cjson.decode(val)
+
+			local acc_type = ""
+			if acc.account_type ~= nil then
+				acc_type = string.lower(tostring(acc.account_type))
+			end
+
+			if acc_type ~= "warp" and acc_type ~= "orchids" then
+				acc.usage_current = (acc.usage_current or 0) + usage
+			end
+			acc.usage_total = (acc.usage_total or 0) + usage
+			acc.request_count = (acc.request_count or 0) + count
+			acc.last_used_at = now_str
+			acc.updated_at = now_str
+
+			local new_val = cjson.encode(acc)
+			redis.call("SET", key, new_val)
+			return "OK"
+		`)
+	}
 
 	nowStr := time.Now().Format(time.RFC3339Nano)
 	keys := []string{s.accountsKey(id)}
 	args := []interface{}{usage, count, nowStr}
 
-	err := script.Run(ctx, s.client, keys, args...).Err()
+	err := s.incrementAccountStatsScript.Run(ctx, s.client, keys, args...).Err()
 	if err != nil && err != redis.Nil {
 		return err
 	}

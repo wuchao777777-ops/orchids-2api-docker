@@ -494,7 +494,7 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 	flusher, _ := w.(http.Flusher)
 
 	emit := func(payload map[string]interface{}) bool {
-		writeSSE(w, "", encodeJSON(payload))
+		writeSSEBytes(w, "", encodeJSONBytes(payload))
 		if flusher != nil {
 			flusher.Flush()
 		}

@@ -67,6 +67,15 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	}
 }
 
+func (c *Client) Close() {
+	if c == nil || c.httpClient == nil || c.httpClient.Transport == nil {
+		return
+	}
+	if closer, ok := c.httpClient.Transport.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
 const defaultRequestTimeout = 120 * time.Second
 
 func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
@@ -202,15 +211,12 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		if strings.Contains(bodyStr, "blocked from using AI features") {
 			slog.Warn("Warp AI: account blocked, attempting anonymous fallback", "cid", cid)
 
-
 			anonJWT, aErr := AcquireAnonymousJWT(ctx)
 			if aErr != nil {
 				slog.Warn("Warp AI: anonymous fallback failed", "error", aErr)
 
 				return fmt.Errorf("warp api error: HTTP 403 (account blocked, anonymous fallback failed: %v): %s", aErr, strings.TrimSpace(bodyStr))
 			}
-
-
 
 			resp, err = c.doAIRequest(ctx, "warp-anon", anonJWT, payload, logger)
 			if err != nil {

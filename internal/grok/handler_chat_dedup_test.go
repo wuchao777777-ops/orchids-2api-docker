@@ -3,8 +3,10 @@ package grok
 import (
 	"github.com/goccy/go-json"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCollapseDuplicatedLongChunk(t *testing.T) {
@@ -130,4 +132,87 @@ func extractStreamTextContents(t *testing.T, raw string) []string {
 		}
 	}
 	return out
+}
+
+func TestAppendChatCompletionChunkMatchesMapEncoding(t *testing.T) {
+	tests := []struct {
+		name      string
+		role      string
+		content   string
+		finish    string
+		hasFinish bool
+	}{
+		{name: "role", role: "assistant"},
+		{name: "content", content: "hello world"},
+		{name: "stop", finish: "stop", hasFinish: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := appendChatCompletionChunk(make([]byte, 0, 256), "chatcmpl_1", 123, "grok-4", tt.role, tt.content, tt.finish, tt.hasFinish)
+			var got map[string]interface{}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("unmarshal got: %v", err)
+			}
+
+			delta := map[string]interface{}{}
+			if tt.role != "" {
+				delta["role"] = tt.role
+			}
+			if tt.content != "" {
+				delta["content"] = tt.content
+			}
+			finish := interface{}(nil)
+			if tt.hasFinish {
+				finish = tt.finish
+			}
+			wantRaw := encodeJSONBytes(map[string]interface{}{
+				"id":      "chatcmpl_1",
+				"object":  "chat.completion.chunk",
+				"created": int64(123),
+				"model":   "grok-4",
+				"choices": []map[string]interface{}{{
+					"index":         0,
+					"delta":         delta,
+					"logprobs":      nil,
+					"finish_reason": finish,
+				}},
+			})
+			var want map[string]interface{}
+			if err := json.Unmarshal(wantRaw, &want); err != nil {
+				t.Fatalf("unmarshal want: %v", err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got=%#v want=%#v", got, want)
+			}
+		})
+	}
+}
+
+func BenchmarkAppendChatCompletionChunk_Content(b *testing.B) {
+	buf := make([]byte, 0, 256)
+	created := time.Now().Unix()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		raw := appendChatCompletionChunk(buf[:0], "chatcmpl_1", created, "grok-4", "", "hello world", "", false)
+		buf = raw[:0]
+	}
+}
+
+func BenchmarkEncodeChatCompletionChunk_Map(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = encodeJSONBytes(map[string]interface{}{
+			"id":      "chatcmpl_1",
+			"object":  "chat.completion.chunk",
+			"created": int64(123),
+			"model":   "grok-4",
+			"choices": []map[string]interface{}{{
+				"index":         0,
+				"delta":         map[string]interface{}{"content": "hello world"},
+				"logprobs":      nil,
+				"finish_reason": nil,
+			}},
+		})
+	}
 }

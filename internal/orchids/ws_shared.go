@@ -715,7 +715,9 @@ func EstimateCompactedToolsTokens(tools []interface{}) int {
 	if err != nil {
 		return 0
 	}
-	return tiktoken.EstimateTextTokens(string(raw))
+	var estimator tiktoken.Estimator
+	estimator.AddBytes(raw)
+	return estimator.Count()
 }
 
 func compactToolDescription(description string) string {
