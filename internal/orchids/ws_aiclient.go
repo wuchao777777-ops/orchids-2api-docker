@@ -101,7 +101,7 @@ func cloneRawJSON(data []byte) json.RawMessage {
 }
 
 func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	slog.Debug("sendRequestWSAIClient called", "workdir", req.Workdir, "model", req.Model)
+	slog.Debug("sendRequestWSAIClient called", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "workdir", req.Workdir, "model", req.Model)
 	parentCtx := ctx
 	timeout := orchidsWSRequestTimeout
 	if c.config != nil && c.config.RequestTimeout > 0 {
@@ -200,6 +200,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 	}
 
 	startWrite := time.Now()
+	requestWritten := false
 
 	wsPayload, err := c.buildWSRequestAIClient(req)
 	if err != nil {
@@ -220,11 +221,14 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 	if writeErr != nil {
 		if parentCtx.Err() == nil {
 			returnToPool = false
+			slog.Warn("Orchids WS write failed before first message", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", req.ChatSessionID, "request_written", requestWritten, "error", writeErr)
 			return wsFallbackError{err: fmt.Errorf("ws write failed: %w", writeErr)}
 		}
 		returnToPool = false
 		return fmt.Errorf("ws write failed: %w", writeErr)
 	}
+	requestWritten = true
+	slog.Info("Orchids WS request sent", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", req.ChatSessionID, "model", req.Model)
 
 	if c.config.DebugEnabled {
 		slog.Info("[Performance] WS WriteJSON completed", "duration", time.Since(startWrite))
@@ -282,6 +286,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 			}
 			if parentCtx.Err() == nil && !receivedAnyMessage {
 				returnToPool = false
+				slog.Warn("Orchids WS fallback before first message", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", req.ChatSessionID, "request_written", requestWritten, "stage", "set_read_deadline", "error", err)
 				return wsFallbackError{err: err}
 			}
 			returnToPool = false
@@ -300,6 +305,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 			}
 			if parentCtx.Err() == nil && !receivedAnyMessage {
 				returnToPool = false
+				slog.Warn("Orchids WS fallback before first message", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", req.ChatSessionID, "request_written", requestWritten, "stage", "read_message", "error", err)
 				return wsFallbackError{err: err}
 			}
 			returnToPool = false
@@ -309,10 +315,14 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 		handled, shouldBreak := c.handleOrchidsRawMessage(data, &state, onMessage, logger)
 		if handled {
 			receivedAnyMessage = true
+			if !firstReceived {
+				slog.Info("Orchids WS first upstream message received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", req.ChatSessionID)
+			}
 			if !firstReceived && c.config.DebugEnabled {
 				firstReceived = true
 				slog.Info("[Performance] WS First response received (TTFT)", "duration", time.Since(startFirstToken))
 			}
+			firstReceived = true
 			if shouldBreak {
 				break
 			}
@@ -324,11 +334,15 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 			continue
 		}
 		receivedAnyMessage = true
+		if !firstReceived {
+			slog.Info("Orchids WS first upstream message received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", req.ChatSessionID)
+		}
 
 		if !firstReceived && c.config.DebugEnabled {
 			firstReceived = true
 			slog.Info("[Performance] WS First response received (TTFT)", "duration", time.Since(startFirstToken))
 		}
+		firstReceived = true
 
 		shouldBreak = c.handleOrchidsMessage(msg, data, &state, onMessage, logger, conn, &fsWG, req.Workdir)
 		if shouldBreak {
@@ -337,6 +351,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 	}
 
 	if state.errorMsg != "" {
+		slog.Warn("Orchids WS stream ended with upstream error", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", req.ChatSessionID, "error", state.errorMsg)
 		return fmt.Errorf("orchids upstream error: %s", state.errorMsg)
 	}
 
@@ -363,6 +378,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 		}
 	}
 
+	slog.Info("Orchids WS request completed", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", req.ChatSessionID, "saw_tool_call", state.sawToolCall, "response_started", state.responseStarted)
 	return nil
 }
 
@@ -755,6 +771,7 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 	}
 	userText, currentToolResults := extractUserMessageAIClient(req.Messages)
 	currentUserIdx := findCurrentUserMessageIndex(req.Messages)
+	userText = resolveCurrentUserTurnText(req.Messages, currentUserIdx, userText)
 	var historyMessages []prompt.Message
 	if currentUserIdx >= 0 {
 		historyMessages = req.Messages[:currentUserIdx]
@@ -1002,7 +1019,7 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 						hasValidContent = true
 					}
 				case "tool_result":
-					contentText := formatToolResultContentLocal(block.Content)
+					contentText := formatToolResultContentLocalForHistory(block.Content)
 					contentText = strings.ReplaceAll(contentText, "<tool_use_error>", "")
 					contentText = strings.ReplaceAll(contentText, "</tool_use_error>", "")
 					contentText = stripSystemReminders(contentText)

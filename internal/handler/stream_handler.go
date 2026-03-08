@@ -1516,12 +1516,93 @@ func sanitizeToolInput(name, input string) string {
 	return string(normalized)
 }
 
+func normalizeUpstreamToolCall(name, input, workdir string) (string, string) {
+	rawName := strings.TrimSpace(name)
+	if rawName == "" {
+		return rawName, input
+	}
+	if bashInput, ok := rewriteDirectoryListToolInput(rawName, input, workdir); ok {
+		return "Bash", bashInput
+	}
+	normalizedName := normalizeUpstreamToolName(rawName)
+	return normalizedName, sanitizeToolInput(normalizedName, input)
+}
+
 func normalizeUpstreamToolName(name string) string {
 	mapped := orchids.NormalizeToolName(name)
 	if strings.TrimSpace(mapped) == "" {
 		return name
 	}
 	return mapped
+}
+
+func rewriteDirectoryListToolInput(name, input, workdir string) (string, bool) {
+	if !isDirectoryListToolName(name) {
+		return "", false
+	}
+	path := extractDirectoryListPath(input)
+	if isPlaceholderDirectoryListPath(path) && strings.TrimSpace(workdir) != "" {
+		path = strings.TrimSpace(workdir)
+	}
+	if strings.TrimSpace(path) == "" {
+		path = strings.TrimSpace(workdir)
+	}
+	if strings.TrimSpace(path) == "" {
+		path = "."
+	}
+	payload := map[string]string{
+		"command":     "ls -1A -- " + strconv.Quote(path),
+		"description": "List top-level directory entries",
+	}
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return "", false
+	}
+	return string(normalized), true
+}
+
+func isDirectoryListToolName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "ls", "listdir", "list_dir", "list_directory":
+		return true
+	default:
+		return false
+	}
+}
+
+func extractDirectoryListPath(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return ""
+	}
+	for _, key := range []string{"path", "file_path", "directory", "dir"} {
+		if raw, ok := payload[key]; ok {
+			if path, ok := raw.(string); ok {
+				return strings.TrimSpace(path)
+			}
+		}
+	}
+	return ""
+}
+
+func isPlaceholderDirectoryListPath(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false
+	}
+	for len(trimmed) > 1 && strings.HasSuffix(trimmed, "/") {
+		trimmed = strings.TrimSuffix(trimmed, "/")
+	}
+	switch trimmed {
+	case "/home/user/app":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *streamHandler) emitToolCallNonStream(call toolCall) {
@@ -2677,7 +2758,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		h.closeActiveBlock() // Tool input starts a separate block mechanism
 		toolID, _ := msg.Event["id"].(string)
 		toolName, _ := msg.Event["toolName"].(string)
-		toolName = normalizeUpstreamToolName(toolName)
+		toolName = strings.TrimSpace(toolName)
 		if toolID == "" || toolName == "" {
 			return
 		}
@@ -2724,7 +2805,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			inputStr = strings.TrimSpace(buf.String())
 			perf.ReleaseStringBuilder(buf)
 		}
-		inputStr = sanitizeToolInput(name, inputStr)
+		name, inputStr = normalizeUpstreamToolCall(name, inputStr, h.workdir)
 		delete(h.toolInputBuffers, toolID)
 		delete(h.toolInputHadDelta, toolID)
 		delete(h.toolInputNames, toolID)
@@ -2748,9 +2829,8 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	case "model.tool-call":
 		toolID, _ := msg.Event["toolCallId"].(string)
 		toolName, _ := msg.Event["toolName"].(string)
-		toolName = normalizeUpstreamToolName(toolName)
 		inputStr, _ := msg.Event["input"].(string)
-		inputStr = sanitizeToolInput(toolName, inputStr)
+		toolName, inputStr = normalizeUpstreamToolCall(toolName, inputStr, h.workdir)
 		if toolID == "" {
 			toolID = fallbackToolCallID(toolName, inputStr)
 			if toolID == "" {

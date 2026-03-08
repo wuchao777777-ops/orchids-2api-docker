@@ -16,6 +16,8 @@ type UpstreamRequest struct {
 	Tools         []interface{}
 	NoTools       bool
 	NoThinking    bool
+	TraceID       string
+	Attempt       int
 	ChatSessionID string
 	Workdir       string // Dynamic local workdir override
 	ProjectID     string

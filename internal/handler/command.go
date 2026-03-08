@@ -212,6 +212,90 @@ func writeTopicClassifierResponse(w http.ResponseWriter, req ClaudeRequest, star
 	}
 }
 
+func writeSuggestionModeResponse(w http.ResponseWriter, req ClaudeRequest, startTime time.Time, logger *debug.Logger) {
+	suggestion := buildLocalSuggestion(req.Messages)
+	inputTokens := tiktoken.EstimateTextTokens(extractUserText(req.Messages))
+	outputTokens := tiktoken.EstimateTextTokens(suggestion)
+	msgID := fmt.Sprintf("msg_%d", time.Now().UnixMilli())
+
+	if req.Stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		write := func(event string, data []byte) {
+			_ = writeSSEFrameBytes(w, event, data)
+			flusher.Flush()
+			if logger != nil {
+				logger.LogOutputSSE(event, string(data))
+			}
+		}
+
+		startData, _ := marshalSSEMessageStartBytes(msgID, req.Model, inputTokens, 0)
+		msgDelta, _ := marshalSSEMessageDeltaBytes("end_turn", outputTokens)
+		write("message_start", startData)
+		if suggestion != "" {
+			blockStart, _ := marshalSSEContentBlockStartTextBytes(0)
+			blockDelta, _ := marshalSSEContentBlockDeltaTextBytes(0, suggestion)
+			blockStop, _ := marshalSSEContentBlockStopBytes(0)
+			write("content_block_start", blockStart)
+			write("content_block_delta", blockDelta)
+			write("content_block_stop", blockStop)
+		}
+		write("message_delta", msgDelta)
+		write("message_stop", sseMessageStopBytes)
+		if logger != nil {
+			logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	content := []map[string]string{}
+	if suggestion != "" {
+		content = []map[string]string{{"type": "text", "text": suggestion}}
+	}
+	response := struct {
+		ID           string              `json:"id"`
+		Type         string              `json:"type"`
+		Role         string              `json:"role"`
+		Content      []map[string]string `json:"content"`
+		Model        string              `json:"model"`
+		StopReason   string              `json:"stop_reason"`
+		StopSequence interface{}         `json:"stop_sequence"`
+		Usage        struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}{
+		ID:           msgID,
+		Type:         "message",
+		Role:         "assistant",
+		Content:      content,
+		Model:        req.Model,
+		StopReason:   "end_turn",
+		StopSequence: nil,
+		Usage: struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		}{InputTokens: inputTokens, OutputTokens: outputTokens},
+	}
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		if logger != nil {
+			logger.LogOutputSSE("error", fmt.Sprintf("failed to encode response: %v", err))
+		}
+	}
+	if logger != nil {
+		logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
+	}
+}
+
 func detectCommandPrefix(command string) string {
 	trimmed := strings.TrimSpace(command)
 	if trimmed == "" {

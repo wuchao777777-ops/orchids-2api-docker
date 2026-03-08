@@ -281,6 +281,48 @@ func TestSanitizeToolInput_FieldMapping(t *testing.T) {
 	}
 }
 
+func TestNormalizeUpstreamToolCall_ListDirUsesTopLevelBash(t *testing.T) {
+	name, input := normalizeUpstreamToolCall("LS", `{"path":"/tmp/project"}`, "/Users/dailin/Documents/GitHub/TEST")
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("expected json input, got %v", err)
+	}
+	if payload["command"] != `ls -1A -- "/tmp/project"` {
+		t.Fatalf("expected top-level ls command, got %s", payload["command"])
+	}
+	if payload["description"] != "List top-level directory entries" {
+		t.Fatalf("expected directory list description, got %s", payload["description"])
+	}
+}
+
+func TestNormalizeUpstreamToolCall_ListDirPlaceholderPathFallsBackToWorkdir(t *testing.T) {
+	workdir := "/Users/dailin/Documents/GitHub/TEST"
+	name, input := normalizeUpstreamToolCall("LS", `{"path":"/home/user/app"}`, workdir)
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("expected json input, got %v", err)
+	}
+	if payload["command"] != `ls -1A -- "`+workdir+`"` {
+		t.Fatalf("expected workdir fallback command, got %s", payload["command"])
+	}
+}
+
+func TestNormalizeUpstreamToolCall_GlobPreservesGlob(t *testing.T) {
+	name, input := normalizeUpstreamToolCall("Glob", `{"path":"/tmp/project"}`, "/Users/dailin/Documents/GitHub/TEST")
+	if name != "Glob" {
+		t.Fatalf("expected Glob, got %q", name)
+	}
+	if !strings.Contains(input, `"pattern":"*"`) {
+		t.Fatalf("expected glob pattern injection, got %s", input)
+	}
+}
+
 func TestHasRequiredToolInput_Validations(t *testing.T) {
 	if hasRequiredToolInput("write", `{}`) {
 		t.Fatalf("write should require path+content")
@@ -374,6 +416,28 @@ func TestStreamHandler_ToolInput_EndEmitsToolUse(t *testing.T) {
 	}
 	if !strings.Contains(out, "echo 1") {
 		t.Fatalf("expected command in tool input, got: %s", out)
+	}
+}
+
+func TestStreamHandler_ListDirToolInput_EndEmitsBashTopLevelList(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	workdir := "/Users/dailin/Documents/GitHub/TEST"
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, workdir)
+	defer sh.release()
+
+	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-start", "id": "t1", "toolName": "LS"}})
+	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-delta", "id": "t1", "delta": `{"path":"/home/user/app"}`}})
+	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-end", "id": "t1"}})
+
+	out := rec.buf.String()
+	if !strings.Contains(out, `"name":"Bash"`) {
+		t.Fatalf("expected LS to emit Bash tool_use, got: %s", out)
+	}
+	if !strings.Contains(out, `ls -1A -- \\\"`+workdir+`\\\"`) {
+		t.Fatalf("expected workdir top-level ls command, got: %s", out)
 	}
 }
 

@@ -53,10 +53,21 @@ func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) (string
 	if len(candidates) == 0 {
 		return modelID, nil
 	}
+	var fallbackID string
+	var fallbackModel *store.Model
 	for _, cand := range candidates {
 		if m, err := h.loadBalancer.Store.GetModelByModelID(ctx, cand); err == nil && m != nil {
-			return cand, m
+			if m.Status.Enabled() {
+				return cand, m
+			}
+			if fallbackModel == nil {
+				fallbackID = cand
+				fallbackModel = m
+			}
 		}
+	}
+	if fallbackModel != nil {
+		return fallbackID, fallbackModel
 	}
 	return modelID, nil
 }

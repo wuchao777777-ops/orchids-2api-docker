@@ -173,6 +173,14 @@ func (h *Handler) computeSemanticRequestHash(r *http.Request, req ClaudeRequest)
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
+func shortRequestTrace(hash string) string {
+	hash = strings.TrimSpace(hash)
+	if len(hash) <= 12 {
+		return hash
+	}
+	return hash[:12]
+}
+
 func (h *Handler) registerRequest(hash string) (bool, bool) {
 	return h.dedupStore.Register(context.Background(), hash)
 }
@@ -270,7 +278,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	reqHash := h.computeRequestHash(r, bodyBytes)
 	semanticHash := h.computeSemanticRequestHash(r, req)
-	slog.Debug("Request fingerprint", "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", r.Header.Get("X-Stainless-Retry-Count"))
+	traceID := shortRequestTrace(reqHash)
+	slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", r.Header.Get("X-Stainless-Retry-Count"))
 
 	exactKey := "exact:" + reqHash
 	registeredKeys := []string{}
@@ -344,6 +353,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Context and Conversation Key
 	conversationKey := conversationKeyForRequest(r, req)
+	slog.Info("Request dispatch initialized", "trace_id", traceID, "path", r.URL.Path, "conversation_id", conversationKey, "model", req.Model, "stream", req.Stream)
 
 	forcedChannel := channelFromPath(r.URL.Path)
 	validatedModel, err := h.validateModelAvailability(r.Context(), req.Model, forcedChannel)
@@ -366,6 +376,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if conversationKey != "" {
 			h.sessionStore.DeleteSession(r.Context(), conversationKey)
 		}
+	}
+	if isSuggestionMode(req.Messages) {
+		suggestion := buildLocalSuggestion(req.Messages)
+		slog.Debug("Handling suggestion mode request locally", "suggestion", suggestion)
+		logger.LogEarlyExit("suggestion_mode", map[string]interface{}{
+			"mode":       "local",
+			"suggestion": suggestion,
+		})
+		writeSuggestionModeResponse(w, req, startTime, logger)
+		return
 	}
 
 	// 选择账号 (Initial Selection)
@@ -612,6 +632,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			Tools:         effectiveTools,
 			NoTools:       gateNoTools,
 			NoThinking:    noThinking,
+			TraceID:       traceID,
 			ChatSessionID: chatSessionID,
 		}
 		var attempt int
@@ -622,7 +643,28 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 			sh.resetRoundState()
 			var err error
-			slog.Debug("Calling Upstream Client...", "attempt", attempt+1)
+			upstreamReq.Attempt = attempt + 1
+			accountID := int64(0)
+			accountType := ""
+			accountName := ""
+			if currentAccount != nil {
+				accountID = currentAccount.ID
+				accountType = currentAccount.AccountType
+				accountName = currentAccount.Name
+			}
+			slog.Info(
+				"Calling upstream client",
+				"trace_id", traceID,
+				"attempt", upstreamReq.Attempt,
+				"max_attempts", maxRetries+1,
+				"channel", targetChannel,
+				"model", mappedModel,
+				"conversation_id", conversationKey,
+				"chat_session_id", chatSessionID,
+				"account_id", accountID,
+				"account_type", accountType,
+				"account_name", accountName,
+			)
 
 			if h.config != nil && h.config.DebugEnabled {
 				slog.Debug("Interface check", "type", fmt.Sprintf("%T", apiClient))
@@ -687,14 +729,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Warn("Falling back to legacy SendRequest (Workdir lost!)", "type", fmt.Sprintf("%T", apiClient))
 				err = apiClient.SendRequest(r.Context(), builtPrompt, chatHistory, mappedModel, sh.handleMessage, logger)
 			}
-			slog.Debug("Upstream Client Returned", "error", err)
+			slog.Info("Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 
 			if err == nil {
 				sh.forceFinishIfMissing()
+				slog.Info("Upstream attempt completed", "trace_id", traceID, "attempt", upstreamReq.Attempt)
 				break
 			}
 			if sh.hasAnyOutput() {
-				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "error", err)
+				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 				sh.finishResponse("end_turn")
 				return
 			}
@@ -702,7 +745,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			// Check for non-retriable errors
 			errStr := err.Error()
 			errClass := classifyUpstreamError(errStr)
-			slog.Error("Request error", "error", err, "category", errClass.Category, "retryable", errClass.Retryable)
+			slog.Error("Request error", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err, "category", errClass.Category, "retryable", errClass.Retryable)
 			// 标记账号状态（auth 类错误始终标记，无论是否可重试）
 			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
 				if status := classifyAccountStatus(errStr); status != "" {
@@ -741,6 +784,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			retriesRemaining--
+			slog.Warn(
+				"Retrying upstream request without prior output",
+				"trace_id", traceID,
+				"attempt", upstreamReq.Attempt,
+				"category", errClass.Category,
+				"switch_account", errClass.SwitchAccount,
+				"retries_remaining", retriesRemaining,
+			)
 			if errClass.SwitchAccount && currentAccount != nil && h.loadBalancer != nil {
 				if _, ok := failedAccountSet[currentAccount.ID]; !ok {
 					failedAccountSet[currentAccount.ID] = struct{}{}

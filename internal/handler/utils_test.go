@@ -214,3 +214,47 @@ func TestClassifyTopicRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildLocalSuggestion(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []prompt.Message
+		want     string
+	}{
+		{
+			name: "chinese follow up offer returns chinese suggestion",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "继续处理这个问题"}},
+				{Role: "assistant", Content: prompt.MessageContent{Text: "已经定位完了。如果你要，我下一步可以直接帮你提交修复。"}},
+				{Role: "user", Content: prompt.MessageContent{Text: "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]"}},
+			},
+			want: "可以",
+		},
+		{
+			name: "non obvious next step stays silent",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "当前运行的目录"}},
+				{Role: "assistant", Content: prompt.MessageContent{Text: "当前运行目录：`/Users/dailin/Documents/GitHub/TEST`"}},
+				{Role: "user", Content: prompt.MessageContent{Text: "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]"}},
+			},
+			want: "",
+		},
+		{
+			name: "english follow up offer returns english suggestion",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "check the logs"}},
+				{Role: "assistant", Content: prompt.MessageContent{Text: "I found the issue. If you'd like, I can restart the server and verify it."}},
+				{Role: "user", Content: prompt.MessageContent{Text: "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]"}},
+			},
+			want: "go ahead",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildLocalSuggestion(tt.messages); got != tt.want {
+				t.Fatalf("buildLocalSuggestion() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
