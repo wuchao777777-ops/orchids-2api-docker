@@ -411,8 +411,24 @@ func generateTopicTitle(text string) string {
 // stripSystemRemindersForMode 移除 <system-reminder>...</system-reminder>，避免误判 plan/suggestion 模式
 // 使用 LastIndex 查找结束标签，正确处理嵌套的字面量标签
 func stripSystemRemindersForMode(text string) string {
-	const startTag = "<system-reminder>"
-	const endTag = "</system-reminder>"
+	text = stripNestedModeTaggedBlock(text, "system-reminder")
+	for _, tag := range []string{
+		"local-command-caveat",
+		"command-name",
+		"command-message",
+		"command-args",
+		"local-command-stdout",
+		"local-command-stderr",
+		"local-command-exit-code",
+	} {
+		text = stripSimpleModeTaggedBlock(text, tag)
+	}
+	return text
+}
+
+func stripNestedModeTaggedBlock(text string, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
 	if !strings.Contains(text, startTag) {
 		return text
 	}
@@ -429,6 +445,34 @@ func stripSystemRemindersForMode(text string) string {
 		blockStart := i + start
 		endStart := blockStart + len(startTag)
 		end := strings.LastIndex(text[endStart:], endTag)
+		if end == -1 {
+			sb.WriteString(text[blockStart:])
+			break
+		}
+		i = endStart + end + len(endTag)
+	}
+	return sb.String()
+}
+
+func stripSimpleModeTaggedBlock(text string, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
+	if !strings.Contains(text, startTag) {
+		return text
+	}
+	var sb strings.Builder
+	sb.Grow(len(text))
+	i := 0
+	for i < len(text) {
+		start := strings.Index(text[i:], startTag)
+		if start == -1 {
+			sb.WriteString(text[i:])
+			break
+		}
+		sb.WriteString(text[i : i+start])
+		blockStart := i + start
+		endStart := blockStart + len(startTag)
+		end := strings.Index(text[endStart:], endTag)
 		if end == -1 {
 			sb.WriteString(text[blockStart:])
 			break

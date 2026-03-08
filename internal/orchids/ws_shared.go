@@ -35,7 +35,8 @@ const (
 )
 
 type AIClientPromptMeta struct {
-	Profile string `json:"profile"`
+	Profile    string `json:"profile"`
+	NoThinking bool   `json:"no_thinking"`
 }
 
 type orchidsWSRequest struct {
@@ -172,6 +173,17 @@ func selectPromptProfile(userText string) string {
 	return promptProfileDefault
 }
 
+func selectPromptProfileForTurn(userText string, toolResultOnly bool) string {
+	if toolResultOnly {
+		return promptProfileUltraMin
+	}
+	return selectPromptProfile(userText)
+}
+
+func shouldDisableThinkingForProfile(profile string) bool {
+	return strings.EqualFold(strings.TrimSpace(profile), promptProfileUltraMin)
+}
+
 func isLikelyQnARequest(text string) bool {
 	if runeLen(text) > 260 || strings.Count(text, "\n") > 4 {
 		return false
@@ -269,6 +281,7 @@ func BuildAIClientPromptAndHistoryWithMeta(messages []prompt.Message, system []p
 	userText = stripSystemReminders(userText)
 	currentUserIdx := findCurrentUserMessageIndex(messages)
 	userText = resolveCurrentUserTurnText(messages, currentUserIdx, userText)
+	currentTurnToolResultOnly := isToolResultOnlyUserMessage(messages, currentUserIdx)
 
 	var historyMessages []prompt.Message
 	if currentUserIdx >= 0 {
@@ -277,10 +290,14 @@ func BuildAIClientPromptAndHistoryWithMeta(messages []prompt.Message, system []p
 		historyMessages = messages
 	}
 	chatHistory, _ := convertChatHistoryAIClient(historyMessages)
+	if currentTurnToolResultOnly {
+		chatHistory = nil
+	}
 
-	meta.Profile = selectPromptProfile(userText)
+	meta.Profile = selectPromptProfileForTurn(userText, currentTurnToolResultOnly)
+	meta.NoThinking = noThinking || currentTurnToolResultOnly || shouldDisableThinkingForProfile(meta.Profile)
 	promptText := buildLocalAssistantPromptWithProfile(systemText, userText, model, workdir, maxTokens, meta.Profile)
-	if !noThinking && !isSuggestionModeText(userText) {
+	if !meta.NoThinking && !isSuggestionModeText(userText) {
 		promptText = injectThinkingPrefix(promptText)
 	}
 
@@ -477,10 +494,26 @@ func containsAnyFold(text string, needles ...string) bool {
 // stripSystemReminders 移除 <system-reminder>...</system-reminder>，避免污染上游提示
 // 使用 LastIndex 查找结束标签，正确处理嵌套的字面量标签
 func stripSystemReminders(text string) string {
-	const startTag = "<system-reminder>"
-	const endTag = "</system-reminder>"
+	text = stripNestedTaggedBlock(text, "system-reminder")
+	for _, tag := range []string{
+		"local-command-caveat",
+		"command-name",
+		"command-message",
+		"command-args",
+		"local-command-stdout",
+		"local-command-stderr",
+		"local-command-exit-code",
+	} {
+		text = stripSimpleTaggedBlock(text, tag)
+	}
+	return strings.TrimSpace(text)
+}
+
+func stripNestedTaggedBlock(text string, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
 	if !strings.Contains(text, startTag) {
-		return strings.TrimSpace(text)
+		return text
 	}
 	var sb strings.Builder
 	sb.Grow(len(text))
@@ -502,7 +535,35 @@ func stripSystemReminders(text string) string {
 		}
 		i = endStart + end + len(endTag)
 	}
-	return strings.TrimSpace(sb.String())
+	return sb.String()
+}
+
+func stripSimpleTaggedBlock(text string, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
+	if !strings.Contains(text, startTag) {
+		return text
+	}
+	var sb strings.Builder
+	sb.Grow(len(text))
+	i := 0
+	for i < len(text) {
+		start := strings.Index(text[i:], startTag)
+		if start == -1 {
+			sb.WriteString(text[i:])
+			break
+		}
+		sb.WriteString(text[i : i+start])
+		blockStart := i + start
+		endStart := blockStart + len(startTag)
+		end := strings.Index(text[endStart:], endTag)
+		if end == -1 {
+			sb.WriteString(text[blockStart:])
+			break
+		}
+		i = endStart + end + len(endTag)
+	}
+	return sb.String()
 }
 
 func hasUserPlainText(msg prompt.Message) bool {
@@ -616,8 +677,12 @@ func buildToolResultFollowUpUserText(previousText string, toolResultText string)
 	b.WriteString(toolResultText)
 	if isDirectoryListingLikeText(toolResultText) {
 		b.WriteString("\n\nInterpret the directory listing from the root entries first. Do not assume the largest nested subdirectory is the whole project.")
+		b.WriteString(" Ignore OS metadata like .DS_Store and focus on the most meaningful project files or directories.")
 	}
 	b.WriteString("\n\nUse the tool result above to answer the original user request directly.")
+	b.WriteString(" Keep the answer concise: at most 2-3 short sentences.")
+	b.WriteString(" Do not enumerate every visible entry unless the user explicitly asked for a full listing.")
+	b.WriteString(" If the visible structure is insufficient to determine the purpose confidently, say so briefly instead of guessing details.")
 	return b.String()
 }
 
@@ -673,6 +738,39 @@ func findCurrentUserMessageIndex(messages []prompt.Message) int {
 		}
 	}
 	return -1
+}
+
+func isToolResultOnlyUserMessage(messages []prompt.Message, idx int) bool {
+	if idx < 0 || idx >= len(messages) {
+		return false
+	}
+	msg := messages[idx]
+	if msg.Role != "user" {
+		return false
+	}
+	if msg.Content.IsString() {
+		return false
+	}
+	blocks := msg.Content.GetBlocks()
+	if len(blocks) == 0 {
+		return false
+	}
+	hasToolResult := false
+	for _, block := range blocks {
+		switch block.Type {
+		case "tool_result":
+			hasToolResult = true
+		case "text":
+			if strings.TrimSpace(stripSystemReminders(block.Text)) != "" {
+				return false
+			}
+		default:
+			if strings.TrimSpace(block.Type) != "" {
+				return false
+			}
+		}
+	}
+	return hasToolResult
 }
 
 func mergeToolResults(first, second []orchidsToolResult) []orchidsToolResult {
@@ -1362,13 +1460,22 @@ func looksLikeDirectoryListing(text string) bool {
 	if len(lines) < 4 {
 		return false
 	}
-	pathLike := 0
+	entryLike := 0
+	strongSignals := 0
 	for _, line := range lines {
 		if looksLikePathLine(line) {
-			pathLike++
+			entryLike++
+			strongSignals++
+			continue
+		}
+		if looksLikeBareDirectoryEntryLine(line) {
+			entryLike++
+			if hasDirectoryEntrySignal(line) {
+				strongSignals++
+			}
 		}
 	}
-	return pathLike*100/len(lines) >= 70
+	return entryLike*100/len(lines) >= 70 && strongSignals > 0
 }
 
 func isDirectoryListingLikeText(text string) bool {
@@ -1387,6 +1494,47 @@ func looksLikePathLine(line string) bool {
 		return true
 	}
 	return len(line) >= 3 && ((line[1] == ':' && line[2] == '\\') || (line[1] == ':' && line[2] == '/'))
+}
+
+func looksLikeBareDirectoryEntryLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+	if strings.ContainsAny(line, "\r\n\t") {
+		return false
+	}
+	lower := strings.ToLower(line)
+	if strings.Contains(lower, "results are truncated") {
+		return false
+	}
+	if strings.HasPrefix(line, "[") || strings.HasPrefix(line, "<") {
+		return false
+	}
+	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "• ") {
+		return false
+	}
+	if strings.Contains(line, ": ") || strings.ContainsAny(line, "{}<>|`") {
+		return false
+	}
+	if strings.HasSuffix(line, ".") || strings.HasSuffix(line, "。") || strings.HasSuffix(line, ":") {
+		return false
+	}
+	if strings.Count(line, " ") > 2 {
+		return false
+	}
+	return hasDirectoryEntrySignal(line)
+}
+
+func hasDirectoryEntrySignal(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+	if strings.HasPrefix(line, ".") {
+		return true
+	}
+	return strings.ContainsAny(line, "._-/\\")
 }
 
 func compactDirectoryListingResult(text string, historyMode bool) string {
@@ -1450,14 +1598,26 @@ func shouldDropDirectoryListingLine(line string) bool {
 	if line == "" {
 		return false
 	}
-	return strings.Contains(line, "/.git/") || strings.HasSuffix(line, "/.git")
+	if strings.Contains(line, "/.git/") || strings.HasSuffix(line, "/.git") {
+		return true
+	}
+	base := line
+	if idx := strings.LastIndexAny(base, `/\`); idx >= 0 {
+		base = base[idx+1:]
+	}
+	switch base {
+	case ".DS_Store", "Thumbs.db", "desktop.ini":
+		return true
+	default:
+		return false
+	}
 }
 
 func splitDirectoryListingLines(lines []string) ([]string, int) {
 	pathLines := make([]string, 0, len(lines))
 	nonPathCount := 0
 	for _, line := range lines {
-		if looksLikePathLine(line) {
+		if looksLikePathLine(line) || looksLikeBareDirectoryEntryLine(line) {
 			pathLines = append(pathLines, line)
 			continue
 		}

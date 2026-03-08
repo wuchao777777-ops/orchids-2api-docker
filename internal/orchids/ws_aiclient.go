@@ -772,6 +772,7 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 	userText, currentToolResults := extractUserMessageAIClient(req.Messages)
 	currentUserIdx := findCurrentUserMessageIndex(req.Messages)
 	userText = resolveCurrentUserTurnText(req.Messages, currentUserIdx, userText)
+	currentTurnToolResultOnly := isToolResultOnlyUserMessage(req.Messages, currentUserIdx)
 	var historyMessages []prompt.Message
 	if currentUserIdx >= 0 {
 		historyMessages = req.Messages[:currentUserIdx]
@@ -779,6 +780,9 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 		historyMessages = req.Messages
 	}
 	chatHistory, historyToolResults := convertChatHistoryAIClient(historyMessages)
+	if currentTurnToolResultOnly {
+		chatHistory = nil
+	}
 	if provided := normalizeProvidedChatHistory(req.ChatHistory); len(provided) > 0 {
 		// Prefer caller-provided history (already budgeted by handler) to avoid WS re-expanding context.
 		chatHistory = provided
@@ -797,8 +801,10 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 	if req.Prompt != "" {
 		promptText = req.Prompt
 	} else {
-		promptText = buildLocalAssistantPrompt(systemText, userText, req.Model, req.Workdir, maxTokens)
-		if !req.NoThinking && !isSuggestionModeText(userText) {
+		profile := selectPromptProfileForTurn(userText, currentTurnToolResultOnly)
+		disableThinking := req.NoThinking || currentTurnToolResultOnly || shouldDisableThinkingForProfile(profile)
+		promptText = buildLocalAssistantPromptWithProfile(systemText, userText, req.Model, req.Workdir, maxTokens, profile)
+		if !disableThinking && !isSuggestionModeText(userText) {
 			promptText = injectThinkingPrefix(promptText)
 		}
 	}

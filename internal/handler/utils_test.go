@@ -258,3 +258,14 @@ func TestBuildLocalSuggestion(t *testing.T) {
 		})
 	}
 }
+
+func TestStripSystemRemindersForMode_StripsLocalCommandMetadata(t *testing.T) {
+	text := "<local-command-caveat>Caveat</local-command-caveat>\n<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>\n<local-command-stdout>Set model to opus</local-command-stdout>\n[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]"
+	got := stripSystemRemindersForMode(text)
+	if strings.Contains(got, "<local-command-caveat>") || strings.Contains(got, "/model") || strings.Contains(got, "Set model to opus") {
+		t.Fatalf("stripSystemRemindersForMode() should strip local command metadata, got %q", got)
+	}
+	if !strings.Contains(got, "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]") {
+		t.Fatalf("stripSystemRemindersForMode() should keep suggestion marker, got %q", got)
+	}
+}

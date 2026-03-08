@@ -353,6 +353,7 @@ func TestFormatToolResultContentLocal_CompactsDirectoryListing(t *testing.T) {
 
 func TestFormatToolResultContentLocal_SummarizesNestedWorkspaceListing(t *testing.T) {
 	input := strings.Join([]string{
+		"/Users/dailin/Documents/GitHub/TEST/.DS_Store",
 		"/Users/dailin/Documents/GitHub/TEST/.claude/settings.local.json",
 		"/Users/dailin/Documents/GitHub/TEST/everything-claude-code/.git/info/exclude",
 		"/Users/dailin/Documents/GitHub/TEST/everything-claude-code/.git/hooks/pre-commit.sample",
@@ -386,8 +387,34 @@ func TestFormatToolResultContentLocal_SummarizesNestedWorkspaceListing(t *testin
 	if strings.Contains(got, "/.git/") {
 		t.Fatalf("workspace summary unexpectedly kept git metadata: %q", got)
 	}
+	if strings.Contains(got, ".DS_Store") {
+		t.Fatalf("workspace summary unexpectedly kept OS metadata: %q", got)
+	}
 	if strings.Contains(got, "/Users/dailin/Documents/GitHub/TEST/everything-claude-code/") {
 		t.Fatalf("workspace summary should not keep absolute nested paths: %q", got)
+	}
+}
+
+func TestFormatToolResultContentLocal_CompactsBareLSListing(t *testing.T) {
+	input := strings.Join([]string{
+		".DS_Store",
+		".claude",
+		"everything-claude-code",
+		"orchids_accounts.txt",
+		"test.py",
+	}, "\n")
+
+	got := formatToolResultContentLocal(input)
+	for _, want := range []string{".claude", "everything-claude-code", "orchids_accounts.txt", "test.py"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bare ls listing missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, ".DS_Store") {
+		t.Fatalf("bare ls listing unexpectedly kept OS metadata: %q", got)
+	}
+	if !strings.Contains(got, "[directory listing trimmed:") {
+		t.Fatalf("bare ls listing missing trim summary in %q", got)
 	}
 }
 
@@ -463,7 +490,7 @@ func TestResolveCurrentUserTurnText_ToolResultOnlyKeepsOriginalQuestion(t *testi
 			Role: "user",
 			Content: prompt.MessageContent{
 				Blocks: []prompt.ContentBlock{
-					{Type: "text", Text: "当前运行的目录"},
+					{Type: "text", Text: "当前运行的目录是什么？"},
 				},
 			},
 		},
@@ -515,6 +542,15 @@ func TestBuildToolResultFollowUpUserText_DirectoryListingAddsRootHint(t *testing
 	if !strings.Contains(got, "Do not assume the largest nested subdirectory is the whole project.") {
 		t.Fatalf("follow-up prompt missing nested directory warning in %q", got)
 	}
+	if !strings.Contains(got, "Ignore OS metadata like .DS_Store") {
+		t.Fatalf("follow-up prompt missing OS metadata guidance in %q", got)
+	}
+	if !strings.Contains(got, "at most 2-3 short sentences") {
+		t.Fatalf("follow-up prompt missing concise answer guidance in %q", got)
+	}
+	if !strings.Contains(got, "Do not enumerate every visible entry") {
+		t.Fatalf("follow-up prompt missing enumeration guard in %q", got)
+	}
 }
 
 func TestBuildAIClientPromptAndHistoryWithMeta_ToolResultOnlyPromptIncludesQuestionAndResult(t *testing.T) {
@@ -523,7 +559,7 @@ func TestBuildAIClientPromptAndHistoryWithMeta_ToolResultOnlyPromptIncludesQuest
 			Role: "user",
 			Content: prompt.MessageContent{
 				Blocks: []prompt.ContentBlock{
-					{Type: "text", Text: "当前运行的目录"},
+					{Type: "text", Text: "当前运行的目录是什么？"},
 				},
 			},
 		},
@@ -545,7 +581,7 @@ func TestBuildAIClientPromptAndHistoryWithMeta_ToolResultOnlyPromptIncludesQuest
 		},
 	}
 
-	promptText, _, _ := BuildAIClientPromptAndHistoryWithMeta(messages, nil, "claude-opus-4-6", false, "/Users/dailin/Documents/GitHub/TEST", 12000)
+	promptText, chatHistory, meta := BuildAIClientPromptAndHistoryWithMeta(messages, nil, "claude-opus-4-6", false, "/Users/dailin/Documents/GitHub/TEST", 12000)
 	for _, want := range []string{
 		"<user>",
 		"Original user request:",
@@ -556,5 +592,65 @@ func TestBuildAIClientPromptAndHistoryWithMeta_ToolResultOnlyPromptIncludesQuest
 		if !strings.Contains(promptText, want) {
 			t.Fatalf("prompt missing %q in %q", want, promptText)
 		}
+	}
+	if strings.Contains(promptText, orchidsThinkingModeTag) {
+		t.Fatalf("tool-result follow-up should not include thinking prefix: %q", promptText)
+	}
+	if len(chatHistory) != 0 {
+		t.Fatalf("tool-result follow-up should drop redundant chat history, got %#v", chatHistory)
+	}
+	if meta.Profile != promptProfileUltraMin {
+		t.Fatalf("tool-result follow-up should force ultra-min profile, got %#v", meta)
+	}
+	if !meta.NoThinking {
+		t.Fatalf("tool-result follow-up should disable thinking, got %#v", meta)
+	}
+}
+
+func TestBuildAIClientPromptAndHistoryWithMeta_UltraMinDisablesThinking(t *testing.T) {
+	messages := []prompt.Message{
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "text", Text: "当前运行的目录是什么？"},
+				},
+			},
+		},
+	}
+
+	promptText, _, meta := BuildAIClientPromptAndHistoryWithMeta(messages, nil, "claude-opus-4-6", false, "/Users/dailin/Documents/GitHub/TEST", 12000)
+	if meta.Profile != promptProfileUltraMin {
+		t.Fatalf("expected ultra-min profile, got %#v", meta)
+	}
+	if !meta.NoThinking {
+		t.Fatalf("expected ultra-min prompt to disable thinking, got %#v", meta)
+	}
+	if strings.Contains(promptText, orchidsThinkingModeTag) || strings.Contains(promptText, orchidsThinkingLenTag) {
+		t.Fatalf("ultra-min prompt should not include thinking prefix: %q", promptText)
+	}
+}
+
+func TestBuildAIClientPromptAndHistoryWithMeta_StripsLocalCommandMetadata(t *testing.T) {
+	messages := []prompt.Message{
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "text", Text: "<local-command-caveat>Caveat</local-command-caveat>\n<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>\n<local-command-stdout>Set model to opus</local-command-stdout>\n这个项目是干什么的"},
+				},
+			},
+		},
+	}
+
+	promptText, _, meta := BuildAIClientPromptAndHistoryWithMeta(messages, nil, "claude-opus-4-6", false, "/Users/dailin/Documents/GitHub/TEST", 12000)
+	if strings.Contains(promptText, "<local-command-caveat>") || strings.Contains(promptText, "/model") || strings.Contains(promptText, "Set model to opus") {
+		t.Fatalf("prompt should strip local command metadata: %q", promptText)
+	}
+	if !strings.Contains(promptText, "这个项目是干什么的") {
+		t.Fatalf("prompt should keep actual user question: %q", promptText)
+	}
+	if meta.Profile != promptProfileUltraMin {
+		t.Fatalf("expected ultra-min profile after stripping local command metadata, got %#v", meta)
 	}
 }

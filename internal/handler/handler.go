@@ -482,6 +482,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	var builtPrompt string
 	var promptMeta orchids.AIClientPromptMeta
 	builtPrompt, aiClientHistory, promptMeta = orchids.BuildAIClientPromptAndHistoryWithMeta(req.Messages, req.System, mappedModel, noThinking, effectiveWorkdir, h.config.ContextMaxTokens)
+	noThinking = promptMeta.NoThinking
+	suppressThinking = promptMeta.NoThinking
 	buildDuration := time.Since(startBuild)
 	slog.Debug("Prompt build completed", "duration", buildDuration)
 	if h.config.DebugEnabled {
