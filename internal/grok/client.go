@@ -238,6 +238,10 @@ func (c *Client) clientForAsset(asset bool) *http.Client {
 }
 
 func (c *Client) doRequest(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, okStatus int, asset bool) (*http.Response, error) {
+	return c.doRequestWith429Retry(ctx, reqURL, method, body, headers, okStatus, asset, true)
+}
+
+func (c *Client) doRequestWith429Retry(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, okStatus int, asset bool, retry429 bool) (*http.Response, error) {
 	if okStatus == 0 {
 		okStatus = http.StatusOK
 	}
@@ -292,7 +296,7 @@ func (c *Client) doRequest(ctx context.Context, reqURL string, method string, bo
 		_ = resp.Body.Close()
 		lastBody = string(raw)
 
-		if lastStatus != http.StatusTooManyRequests || attempt >= maxRetries {
+		if lastStatus != http.StatusTooManyRequests || !retry429 || attempt >= maxRetries {
 			return nil, fmt.Errorf("grok upstream status=%d body=%s", lastStatus, lastBody)
 		}
 
@@ -319,7 +323,7 @@ func (c *Client) doChat(ctx context.Context, token string, payload map[string]in
 	}
 
 	reqURL := c.baseURL() + defaultChatPath
-	return c.doRequest(ctx, reqURL, http.MethodPost, body, c.headers(token), http.StatusOK, false)
+	return c.doRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.headers(token), http.StatusOK, false, false)
 }
 
 func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {

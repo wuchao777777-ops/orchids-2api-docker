@@ -139,25 +139,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				}
 
 				if info != nil {
-					limit := info.Limit
-					remaining := info.Remaining
-					if remaining < 0 {
-						remaining = 0
-					}
-					if limit <= 0 && remaining > 0 {
-						limit = remaining
-					}
-					if limit > 0 || remaining > 0 {
-						used := limit - remaining
-						if used < 0 {
-							used = 0
-						}
-						acc.UsageLimit = float64(limit)
-						acc.UsageCurrent = float64(used)
-					}
-					if !info.ResetAt.IsZero() {
-						acc.QuotaResetAt = info.ResetAt
-					}
+					grok.ApplyQuotaInfo(acc, info)
 				}
 				acc.StatusCode = ""
 				acc.LastAttempt = time.Time{}

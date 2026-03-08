@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -216,6 +217,211 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 	}
 
 	return fields
+}
+
+func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (string, int, error) {
+	if acc == nil {
+		return "", http.StatusBadRequest, fmt.Errorf("account is nil")
+	}
+
+	if strings.EqualFold(acc.AccountType, "warp") {
+		cfg := a.config.Load()
+		warpClient := warp.NewFromAccount(acc, cfg)
+		jwt, err := warpClient.RefreshAccount(ctx)
+		if err != nil {
+			httpStatus := http.StatusBadRequest
+			if code := warp.HTTPStatusCode(err); code >= 400 {
+				httpStatus = code
+			}
+			accountStatus := ""
+			if httpStatus == http.StatusUnauthorized || httpStatus == http.StatusForbidden || httpStatus == http.StatusTooManyRequests {
+				accountStatus = strconv.Itoa(httpStatus)
+			}
+			return accountStatus, httpStatus, fmt.Errorf("Failed to refresh warp account: %w", err)
+		}
+		acc.Token = jwt
+		warpClient.SyncAccountState()
+
+		loginCtx, loginCancel := context.WithTimeout(ctx, 15*time.Second)
+		loginErr := warpClient.EnsureLogin(loginCtx)
+		loginCancel()
+		if loginErr != nil {
+			httpStatus := http.StatusBadRequest
+			if code := warp.HTTPStatusCode(loginErr); code >= 400 {
+				httpStatus = code
+			}
+			accountStatus := ""
+			if httpStatus == http.StatusUnauthorized || httpStatus == http.StatusForbidden || httpStatus == http.StatusTooManyRequests {
+				accountStatus = strconv.Itoa(httpStatus)
+			}
+			return accountStatus, httpStatus, fmt.Errorf("Failed to login warp account: %w", loginErr)
+		}
+
+		limitCtx, limitCancel := context.WithTimeout(ctx, 15*time.Second)
+		limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
+		limitCancel()
+		if limitErr == nil && limitInfo != nil {
+			if limitInfo.IsUnlimited {
+				acc.Subscription = "unlimited"
+			} else {
+				acc.Subscription = "free"
+			}
+			totalLimit := float64(limitInfo.RequestLimit)
+			for _, bg := range bonuses {
+				totalLimit += float64(bg.RequestCreditsRemaining)
+			}
+			usedRequests := float64(limitInfo.RequestsUsedSinceLastRefresh)
+			acc.UsageLimit = totalLimit
+			acc.UsageCurrent = usedRequests
+			if limitInfo.NextRefreshTime != "" {
+				if t, err := time.Parse(time.RFC3339, limitInfo.NextRefreshTime); err == nil {
+					acc.QuotaResetAt = t
+				}
+			}
+		}
+		return "", 0, nil
+	}
+
+	if strings.EqualFold(acc.AccountType, "grok") {
+		if strings.TrimSpace(acc.ClientCookie) == "" {
+			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify grok account: missing sso token")
+		}
+
+		cfg := a.config.Load()
+		client := grok.New(cfg)
+
+		modelID := normalizeGrokVerifyModelID(acc.AgentMode)
+		if modelID != "" && modelID != acc.AgentMode {
+			acc.AgentMode = modelID
+		}
+
+		verifyCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		info, verifyErr := client.VerifyToken(verifyCtx, acc.ClientCookie, modelID)
+		cancel()
+		if verifyErr != nil && isGrokModelNotFound(verifyErr) && modelID != "grok-3" {
+			modelID = "grok-3"
+			acc.AgentMode = modelID
+			verifyCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
+			info, verifyErr = client.VerifyToken(verifyCtx, acc.ClientCookie, modelID)
+			cancel()
+		}
+		if verifyErr != nil {
+			status := classifyAccountStatusFromError(verifyErr.Error())
+			return status, httpStatusFromAccountStatus(status), fmt.Errorf("Failed to verify grok account: %w", verifyErr)
+		}
+
+		if info != nil {
+			grok.ApplyQuotaInfo(acc, info)
+		}
+		return "", 0, nil
+	}
+
+	cfg := a.config.Load()
+	proxyFunc := http.ProxyFromEnvironment
+	if cfg != nil {
+		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+	}
+
+	if strings.TrimSpace(acc.ClientCookie) == "" {
+		jwt := strings.TrimSpace(acc.Token)
+		if jwt == "" {
+			return "", http.StatusBadRequest, fmt.Errorf("Failed to refresh account: missing client cookie")
+		}
+		if sid, sub := clerk.ParseSessionInfoFromJWT(jwt); sub != "" {
+			if acc.SessionID == "" && sid != "" {
+				acc.SessionID = sid
+			}
+			if acc.UserID == "" {
+				acc.UserID = sub
+			}
+		}
+		creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(ctx, jwt, acc.UserID, proxyFunc)
+		if creditsErr != nil {
+			status := classifyAccountStatusFromError(creditsErr.Error())
+			httpStatus := http.StatusBadRequest
+			if status != "" {
+				httpStatus = httpStatusFromAccountStatus(status)
+			}
+			return status, httpStatus, fmt.Errorf("Failed to refresh account: %w", creditsErr)
+		}
+		if creditsInfo != nil {
+			acc.Subscription = strings.ToLower(creditsInfo.Plan)
+			acc.UsageCurrent = creditsInfo.Credits
+			acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
+		}
+		return "", 0, nil
+	}
+
+	info, err := clerk.FetchAccountInfoWithSessionProxy(acc.ClientCookie, acc.SessionCookie, proxyFunc)
+	if err != nil {
+		refreshErr := err
+		if strings.Contains(strings.ToLower(err.Error()), "no active sessions found") && strings.TrimSpace(acc.SessionID) != "" {
+			orchidsClient := orchids.NewFromAccount(acc, cfg)
+			jwt, jwtErr := orchidsClient.GetToken()
+			if jwtErr == nil && strings.TrimSpace(jwt) != "" {
+				acc.Token = jwt
+				if sid, sub := clerk.ParseSessionInfoFromJWT(jwt); sub != "" {
+					if acc.SessionID == "" && sid != "" {
+						acc.SessionID = sid
+					}
+					if acc.UserID == "" {
+						acc.UserID = sub
+					}
+				}
+				if strings.TrimSpace(acc.UserID) != "" {
+					creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(ctx, jwt, acc.UserID, proxyFunc)
+					if creditsErr != nil {
+						slog.Warn("Orchids credits sync failed on fallback refresh", "account", acc.Name, "error", creditsErr)
+					} else if creditsInfo != nil {
+						acc.Subscription = strings.ToLower(creditsInfo.Plan)
+						acc.UsageCurrent = creditsInfo.Credits
+						acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
+					}
+				}
+				refreshErr = nil
+				slog.Warn("Orchids refresh: no active sessions, fallback token refresh succeeded", "account_id", acc.ID)
+			} else if jwtErr != nil {
+				refreshErr = errors.New(err.Error() + "; fallback token error: " + jwtErr.Error())
+			}
+		}
+
+		if refreshErr != nil {
+			status := classifyAccountStatusFromError(refreshErr.Error())
+			httpStatus := http.StatusBadRequest
+			if status != "" {
+				httpStatus = httpStatusFromAccountStatus(status)
+			}
+			return status, httpStatus, fmt.Errorf("Failed to refresh account: %w", refreshErr)
+		}
+	} else {
+		slog.Info("Orchids refresh: clerk info", "account_id", acc.ID, "has_jwt", info.JWT != "", "email", info.Email)
+		acc.SessionID = info.SessionID
+		acc.ClientUat = info.ClientUat
+		acc.ProjectID = info.ProjectID
+		acc.UserID = info.UserID
+		acc.Email = info.Email
+		acc.Token = info.JWT
+		if info.ClientCookie != "" {
+			acc.ClientCookie = info.ClientCookie
+		}
+
+		if info.JWT != "" {
+			uid := info.UserID
+			if strings.TrimSpace(uid) == "" {
+				uid = acc.UserID
+			}
+			creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(ctx, info.JWT, uid, proxyFunc)
+			if creditsErr != nil {
+				slog.Warn("Orchids credits sync failed on refresh", "account", acc.Name, "error", creditsErr)
+			} else if creditsInfo != nil {
+				acc.Subscription = strings.ToLower(creditsInfo.Plan)
+				acc.UsageCurrent = creditsInfo.Credits
+				acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
+			}
+		}
+	}
+
+	return "", 0, nil
 }
 
 type ExportData struct {
@@ -469,6 +675,25 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if acc.Enabled {
+			syncCtx, syncCancel := context.WithTimeout(r.Context(), 25*time.Second)
+			accountStatus, _, syncErr := a.refreshAccountState(syncCtx, &acc)
+			syncCancel()
+			if syncErr != nil {
+				slog.Warn("Initial account sync failed", "account_id", acc.ID, "type", acc.AccountType, "error", syncErr)
+				if accountStatus != "" {
+					acc.StatusCode = accountStatus
+					acc.LastAttempt = time.Now()
+				}
+			} else {
+				acc.StatusCode = ""
+				acc.LastAttempt = time.Time{}
+			}
+			if updateErr := a.store.UpdateAccount(r.Context(), &acc); updateErr != nil {
+				slog.Warn("Failed to persist initial account sync", "account_id", acc.ID, "type", acc.AccountType, "error", updateErr)
+			}
+		}
+
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(normalizeAccountOutput(&acc))
 
@@ -584,226 +809,21 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				a.checkNextAllowed[id] = time.Now().Add(d)
 			}()
 
-			if strings.EqualFold(acc.AccountType, "warp") {
-				cfg := a.config.Load()
-				warpClient := warp.NewFromAccount(acc, cfg)
-				jwt, err := warpClient.RefreshAccount(r.Context())
-				if err != nil {
-					status := http.StatusBadRequest
-					if code := warp.HTTPStatusCode(err); code >= 400 {
-						status = code
-					}
-					if status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusTooManyRequests {
-						acc.StatusCode = strconv.Itoa(status)
-						acc.LastAttempt = time.Now()
-						if updateErr := a.store.UpdateAccount(r.Context(), acc); updateErr != nil {
-							slog.Warn("Failed to persist warp refresh status", "account_id", acc.ID, "error", updateErr)
-						}
-					}
-					http.Error(w, "Failed to refresh warp account: "+err.Error(), status)
-					return
-				}
-				acc.Token = jwt
-				warpClient.SyncAccountState()
-
-				loginCtx, loginCancel := context.WithTimeout(r.Context(), 15*time.Second)
-				loginErr := warpClient.EnsureLogin(loginCtx)
-				loginCancel()
-				if loginErr != nil {
-					status := http.StatusBadRequest
-					if code := warp.HTTPStatusCode(loginErr); code >= 400 {
-						status = code
-					}
-					if status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusTooManyRequests {
-						acc.StatusCode = strconv.Itoa(status)
-						acc.LastAttempt = time.Now()
-						if updateErr := a.store.UpdateAccount(r.Context(), acc); updateErr != nil {
-							slog.Warn("Failed to persist warp login status", "account_id", acc.ID, "error", updateErr)
-						}
-					}
-					http.Error(w, "Failed to login warp account: "+loginErr.Error(), status)
-					return
-				}
-
-				limitCtx, limitCancel := context.WithTimeout(r.Context(), 15*time.Second)
-				limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
-				limitCancel()
-				if limitErr == nil && limitInfo != nil {
-					if limitInfo.IsUnlimited {
-						acc.Subscription = "unlimited"
-					} else {
-						acc.Subscription = "free"
-					}
-					totalLimit := float64(limitInfo.RequestLimit)
-					for _, bg := range bonuses {
-						totalLimit += float64(bg.RequestCreditsRemaining)
-					}
-					usedRequests := float64(limitInfo.RequestsUsedSinceLastRefresh)
-					acc.UsageLimit = totalLimit
-					acc.UsageCurrent = usedRequests
-					if limitInfo.NextRefreshTime != "" {
-						if t, err := time.Parse(time.RFC3339, limitInfo.NextRefreshTime); err == nil {
-							acc.QuotaResetAt = t
-						}
+			accountStatus, httpStatus, refreshErr := a.refreshAccountState(r.Context(), acc)
+			if refreshErr != nil {
+				checkErrStatus = accountStatus
+				if accountStatus != "" {
+					acc.StatusCode = accountStatus
+					acc.LastAttempt = time.Now()
+					if updateErr := a.store.UpdateAccount(r.Context(), acc); updateErr != nil {
+						slog.Warn("Failed to persist account refresh status", "account_id", acc.ID, "error", updateErr)
 					}
 				}
-			} else if strings.EqualFold(acc.AccountType, "grok") {
-				if strings.TrimSpace(acc.ClientCookie) == "" {
-					http.Error(w, "Failed to verify grok account: missing sso token", http.StatusBadRequest)
-					return
+				if httpStatus == 0 {
+					httpStatus = http.StatusBadRequest
 				}
-
-				cfg := a.config.Load()
-				client := grok.New(cfg)
-
-				modelID := normalizeGrokVerifyModelID(acc.AgentMode)
-				if modelID != "" && modelID != acc.AgentMode {
-					acc.AgentMode = modelID
-				}
-
-				verifyCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-				info, verifyErr := client.VerifyToken(verifyCtx, acc.ClientCookie, modelID)
-				cancel()
-				if verifyErr != nil && isGrokModelNotFound(verifyErr) && modelID != "grok-3" {
-					// Fallback to a known-good model if upstream rejects the provided model ID.
-					modelID = "grok-3"
-					acc.AgentMode = modelID
-					verifyCtx, cancel = context.WithTimeout(r.Context(), 20*time.Second)
-					info, verifyErr = client.VerifyToken(verifyCtx, acc.ClientCookie, modelID)
-					cancel()
-				}
-				if verifyErr != nil {
-					slog.Warn("Grok account verify failed", "account_id", acc.ID, "error", verifyErr)
-					status := classifyAccountStatusFromError(verifyErr.Error())
-					if status != "" {
-						checkErrStatus = status
-						acc.StatusCode = status
-						acc.LastAttempt = time.Now()
-						if updateErr := a.store.UpdateAccount(r.Context(), acc); updateErr != nil {
-							slog.Warn("Failed to persist grok verify status", "account_id", acc.ID, "error", updateErr)
-						}
-					}
-					http.Error(w, "Failed to verify grok account: "+verifyErr.Error(), httpStatusFromAccountStatus(status))
-					return
-				}
-
-				if info != nil {
-					grok.ApplyQuotaInfo(acc, info)
-				}
-			} else {
-				cfg := a.config.Load()
-				proxyFunc := http.ProxyFromEnvironment
-				if cfg != nil {
-					proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
-				}
-				if strings.TrimSpace(acc.ClientCookie) == "" {
-					jwt := strings.TrimSpace(acc.Token)
-					if jwt == "" {
-						http.Error(w, "Failed to refresh account: missing client cookie", http.StatusBadRequest)
-						return
-					}
-					if sid, sub := clerk.ParseSessionInfoFromJWT(jwt); sub != "" {
-						if acc.SessionID == "" && sid != "" {
-							acc.SessionID = sid
-						}
-						if acc.UserID == "" {
-							acc.UserID = sub
-						}
-					}
-					creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(r.Context(), jwt, acc.UserID, proxyFunc)
-					if creditsErr != nil {
-						http.Error(w, "Failed to refresh account: "+creditsErr.Error(), http.StatusBadRequest)
-						return
-					}
-					if creditsInfo != nil {
-						acc.Subscription = strings.ToLower(creditsInfo.Plan)
-						acc.UsageCurrent = creditsInfo.Credits
-						acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
-					}
-					acc.StatusCode = ""
-					acc.LastAttempt = time.Time{}
-					checkOK = true
-					if err := a.store.UpdateAccount(r.Context(), acc); err != nil {
-						http.Error(w, "Failed to save checked account: "+err.Error(), http.StatusInternalServerError)
-						return
-					}
-					json.NewEncoder(w).Encode(normalizeAccountOutput(acc))
-					return
-				}
-				info, err := clerk.FetchAccountInfoWithSessionProxy(acc.ClientCookie, acc.SessionCookie, proxyFunc)
-				if err != nil {
-					refreshErr := err
-					// Fallback: when Clerk cannot enumerate active sessions, try session-id token endpoint.
-					if strings.Contains(strings.ToLower(err.Error()), "no active sessions found") && strings.TrimSpace(acc.SessionID) != "" {
-						orchidsClient := orchids.NewFromAccount(acc, cfg)
-						jwt, jwtErr := orchidsClient.GetToken()
-						if jwtErr == nil && strings.TrimSpace(jwt) != "" {
-							acc.Token = jwt
-							if sid, sub := clerk.ParseSessionInfoFromJWT(jwt); sub != "" {
-								if acc.SessionID == "" && sid != "" {
-									acc.SessionID = sid
-								}
-								if acc.UserID == "" {
-									acc.UserID = sub
-								}
-							}
-							if strings.TrimSpace(acc.UserID) != "" {
-								creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(r.Context(), jwt, acc.UserID, proxyFunc)
-								if creditsErr != nil {
-									slog.Warn("Orchids credits sync failed on fallback refresh", "account", acc.Name, "error", creditsErr)
-								} else if creditsInfo != nil {
-									acc.Subscription = strings.ToLower(creditsInfo.Plan)
-									acc.UsageCurrent = creditsInfo.Credits
-									acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
-								}
-							}
-							refreshErr = nil
-							slog.Warn("Orchids refresh: no active sessions, fallback token refresh succeeded", "account_id", id)
-						} else if jwtErr != nil {
-							refreshErr = errors.New(err.Error() + "; fallback token error: " + jwtErr.Error())
-						}
-					}
-
-					if refreshErr != nil {
-						status := classifyAccountStatusFromError(refreshErr.Error())
-						if status != "" {
-							acc.StatusCode = status
-							acc.LastAttempt = time.Now()
-							if updateErr := a.store.UpdateAccount(r.Context(), acc); updateErr != nil {
-								slog.Warn("Failed to persist orchids refresh status", "account_id", acc.ID, "error", updateErr)
-							}
-						}
-						http.Error(w, "Failed to refresh account: "+refreshErr.Error(), http.StatusBadRequest)
-						return
-					}
-				} else {
-					slog.Info("Orchids refresh: clerk info", "account_id", id, "has_jwt", info.JWT != "", "email", info.Email)
-					acc.SessionID = info.SessionID
-					acc.ClientUat = info.ClientUat
-					acc.ProjectID = info.ProjectID
-					acc.UserID = info.UserID
-					acc.Email = info.Email
-					acc.Token = info.JWT // Update Token/JWT
-					if info.ClientCookie != "" {
-						acc.ClientCookie = info.ClientCookie
-					}
-
-					// Sync Orchids credits
-					if info.JWT != "" {
-						uid := info.UserID
-						if strings.TrimSpace(uid) == "" {
-							uid = acc.UserID
-						}
-						creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(r.Context(), info.JWT, uid, proxyFunc)
-						if creditsErr != nil {
-							slog.Warn("Orchids credits sync failed on refresh", "account", acc.Name, "error", creditsErr)
-						} else if creditsInfo != nil {
-							acc.Subscription = strings.ToLower(creditsInfo.Plan)
-							acc.UsageCurrent = creditsInfo.Credits
-							acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
-						}
-					}
-				}
+				http.Error(w, refreshErr.Error(), httpStatus)
+				return
 			}
 
 			// 刷新/验证成功后清理账号状态

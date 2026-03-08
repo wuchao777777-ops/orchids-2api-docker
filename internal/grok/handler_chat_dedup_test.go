@@ -9,6 +9,28 @@ import (
 	"time"
 )
 
+func TestStreamMessageDelta(t *testing.T) {
+	tests := []struct {
+		name     string
+		previous string
+		current  string
+		want     string
+	}{
+		{name: "initial", previous: "", current: "你好", want: "你好"},
+		{name: "append", previous: "你", current: "你好！", want: "好！"},
+		{name: "rewrite prefix", previous: "你！rok，", current: "你好！我是 Grok，xAI AI 助手。", want: "好！我是 Grok，xAI AI 助手。"},
+		{name: "shrink", previous: "你好世界", current: "你好", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := streamMessageDelta(tt.previous, tt.current); got != tt.want {
+				t.Fatalf("streamMessageDelta(%q,%q)=%q want=%q", tt.previous, tt.current, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCollapseDuplicatedLongChunk(t *testing.T) {
 	dup := "Hi! How can I help you today?Hi! How can I help you today?"
 	if got := collapseDuplicatedLongChunk(dup); got != "Hi! How can I help you today?" {
@@ -31,7 +53,7 @@ func TestStreamChat_DedupsGreetingRepeat(t *testing.T) {
 			`{"result":{"response":{"token":"` + dup + `"}}}`,
 	)
 
-	h.streamChat(rec, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, body)
+	h.streamChat(rec, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, body, nil)
 	contents := extractStreamTextContents(t, rec.Body.String())
 	combined := strings.Join(contents, "")
 	if strings.Count(combined, "Hi! How can I help you today?") != 1 {
@@ -39,6 +61,42 @@ func TestStreamChat_DedupsGreetingRepeat(t *testing.T) {
 	}
 	if strings.Contains(combined, dup) {
 		t.Fatalf("unexpected duplicated greeting in stream, combined=%q", combined)
+	}
+}
+
+func TestStreamChat_PrefersModelResponseOverNoisyTokens(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(
+		`{"result":{"response":{"token":"你！rok，"}}}` +
+			`{"result":{"response":{"modelResponse":{"message":"你好！我是 Grok，xAI AI 助手。"}}}}` +
+			`{"result":{"response":{"modelResponse":{"message":"你好！我是 Grok，xAI AI 助手，不是之前提到的那个。"}}}}`,
+	)
+
+	h.streamChat(rec, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, body, nil)
+	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
+	if strings.Contains(combined, "你！rok，") {
+		t.Fatalf("unexpected noisy token leak, combined=%q raw=%q", combined, rec.Body.String())
+	}
+	if !strings.Contains(combined, "你好！我是 Grok，xAI AI 助手，不是之前提到的那个。") {
+		t.Fatalf("expected final modelResponse text, combined=%q raw=%q", combined, rec.Body.String())
+	}
+}
+
+func TestStreamChat_FallsBackToTokenWhenModelResponseMissing(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(
+		`{"result":{"response":{"token":"你好"}}}` +
+			`{"result":{"response":{"token":"！我是 Grok。"}}}`,
+	)
+
+	h.streamChat(rec, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, body, nil)
+	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
+	if !strings.Contains(combined, "你好！我是 Grok。") {
+		t.Fatalf("expected token fallback text, combined=%q raw=%q", combined, rec.Body.String())
 	}
 }
 

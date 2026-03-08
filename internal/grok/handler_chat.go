@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -111,6 +112,11 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	debugEnabled := h != nil && h.cfg != nil && h.cfg.DebugEnabled
+	debugLogSSE := h != nil && h.cfg != nil && h.cfg.DebugLogSSE
+	logger := debug.New(debugEnabled, debugLogSSE)
+	defer logger.Close()
+	logger.LogIncomingRequest(req)
 	req.Model = normalizeModelID(req.Model)
 	if req.ImageConfig != nil {
 		req.ImageConfig.Normalize()
@@ -263,6 +269,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	logger.LogUpstreamRequest(h.client.baseURL()+defaultChatPath, debugHeaderMap(h.client.headers(sess.token)), payload)
 
 	resp, err := h.doChatWithAutoSwitchRebuild(r.Context(), sess, &payload, buildPayload)
 	if err != nil {
@@ -274,10 +281,10 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	hasAttachments := len(attachments) > 0
 	if req.Stream {
-		h.streamChat(w, req.Model, spec, sess.token, publicBase, hasAttachments, resp.Body)
+		h.streamChat(w, req.Model, spec, sess.token, publicBase, hasAttachments, resp.Body, logger)
 		return
 	}
-	h.collectChat(w, req.Model, spec, sess.token, publicBase, resp.Body)
+	h.collectChat(w, req.Model, spec, sess.token, publicBase, resp.Body, logger)
 }
 
 func (h *Handler) buildChatPayload(
@@ -825,7 +832,65 @@ func forEachImageCandidateFromValue(value interface{}, includeStructured bool, i
 
 // NOTE: streamMarkupFilter.feed is implemented earlier in this file.
 
-func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, body io.Reader) {
+func debugHeaderMap(headers http.Header) map[string]string {
+	out := make(map[string]string, len(headers))
+	for k, values := range headers {
+		if strings.EqualFold(k, "Cookie") {
+			out[k] = "[redacted]"
+			continue
+		}
+		out[k] = strings.Join(values, ", ")
+	}
+	return out
+}
+
+func streamMessageDelta(previous, current string) string {
+	if current == "" || current == previous {
+		return ""
+	}
+	if previous == "" {
+		return current
+	}
+	if strings.HasPrefix(current, previous) {
+		return current[len(previous):]
+	}
+	prevRunes := []rune(previous)
+	currRunes := []rune(current)
+	maxPrefix := len(prevRunes)
+	if len(currRunes) < maxPrefix {
+		maxPrefix = len(currRunes)
+	}
+	prefix := 0
+	for prefix < maxPrefix && prevRunes[prefix] == currRunes[prefix] {
+		prefix++
+	}
+	if prefix >= len(currRunes) {
+		return ""
+	}
+	return string(currRunes[prefix:])
+}
+
+func commonPrefixText(a, b string) string {
+	if a == "" || b == "" {
+		return ""
+	}
+	ar := []rune(a)
+	br := []rune(b)
+	limit := len(ar)
+	if len(br) < limit {
+		limit = len(br)
+	}
+	idx := 0
+	for idx < limit && ar[idx] == br[idx] {
+		idx++
+	}
+	if idx == 0 {
+		return ""
+	}
+	return string(ar[:idx])
+}
+
+func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, body io.Reader, logger *debug.Logger) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -840,8 +905,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	pendingPart := map[string]string{}
 	emitted := map[string]bool{}
 	sawModelMessage := false
-	emittedFromToken := false
 	lastTextChunkNorm := ""
+	var tokenFallback strings.Builder
+	emittedModelMessage := ""
+	pendingModelMessage := ""
 
 	var mf *streamMarkupFilter
 	if !hasAttachments {
@@ -854,13 +921,17 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		raw := appendChatCompletionChunk(chunkScratch[:0], id, time.Now().Unix(), model, role, content, finish, hasFinish)
 		chunkScratch = raw[:0]
 		writeSSEBytes(w, "", raw)
+		if logger != nil {
+			logger.LogOutputSSE("", string(raw))
+		}
 		if flusher != nil {
 			flusher.Flush()
 		}
 		sentAny = true
 	}
 
-	emitTextChunk := func(content string) {
+	var emitTextChunk func(string)
+	emitTextChunk = func(content string) {
 		collapsed := collapseDuplicatedLongChunk(content)
 		if collapsed != content && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
 			slog.Debug("grok stream collapsed duplicated text chunk",
@@ -884,6 +955,24 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			lastTextChunkNorm = norm
 		} else {
 			lastTextChunkNorm = ""
+		}
+	}
+
+	emitCleanText := func(raw string) {
+		if raw == "" {
+			return
+		}
+		if mf == nil {
+			if cleaned := sanitizeUpstreamText(raw); cleaned != "" {
+				emitTextChunk(cleaned)
+			}
+			return
+		}
+		if cleaned := mf.feed(raw); cleaned != "" {
+			cleaned = stripLeadingAngleNoise(cleaned)
+			if cleaned != "" {
+				emitTextChunk(cleaned)
+			}
 		}
 	}
 
@@ -920,6 +1009,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	}
 
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
+		if logger != nil {
+			if raw, err := json.Marshal(resp); err == nil {
+				logger.LogUpstreamSSE("response", string(raw))
+			}
+		}
 		if !sentRole {
 			emitChunk("assistant", "", "", false)
 			sentRole = true
@@ -930,21 +1024,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				return nil
 			}
 			textRefCollector.feed(tokenDelta)
-			if mf == nil {
-				// Vision Q/A path: keep text intact but strip full tool/render blocks when present.
-				cleaned := sanitizeUpstreamText(tokenDelta)
-				if cleaned != "" {
-					emitTextChunk(cleaned)
-				}
-			} else if !sawModelMessage {
-				// Fallback path: use token deltas only until we observe modelResponse.
-				if cleaned := mf.feed(tokenDelta); cleaned != "" {
-					cleaned = stripLeadingAngleNoise(cleaned)
-					if cleaned != "" {
-						emitTextChunk(cleaned)
-						emittedFromToken = true
-					}
-				}
+			if !sawModelMessage {
+				tokenFallback.WriteString(tokenDelta)
 			}
 		}
 		if mr, ok := resp["modelResponse"].(map[string]interface{}); ok {
@@ -952,20 +1033,16 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				lastMessage = msg
 				sawModelMessage = true
 				textRefCollector.feed(msg)
-				if mf == nil {
-					cleaned := sanitizeUpstreamText(msg)
-					if cleaned != "" {
-						emitTextChunk(cleaned)
-					}
-				} else if !emittedFromToken {
-					// Text streaming path: feed full messages into the filter (handles tool/render blocks) and emit the cleaned text.
-					if cleaned := mf.feed(msg); cleaned != "" {
-						cleaned = stripLeadingAngleNoise(cleaned)
-						if cleaned != "" {
-							emitTextChunk(cleaned)
+				if pendingModelMessage != "" {
+					stable := commonPrefixText(pendingModelMessage, msg)
+					if stable != "" && stable != emittedModelMessage {
+						if delta := streamMessageDelta(emittedModelMessage, stable); delta != "" {
+							emitCleanText(delta)
+							emittedModelMessage = stable
 						}
 					}
 				}
+				pendingModelMessage = msg
 				if strings.Contains(msg, "<grok:render") || strings.Contains(msg, "tool_usage_card") {
 					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
 				}
@@ -1001,14 +1078,34 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 
 	// Flush any remaining buffered text (avoids "no content" when stream ends quickly).
 	if mf != nil {
+		if pendingModelMessage != "" && pendingModelMessage != emittedModelMessage {
+			if delta := streamMessageDelta(emittedModelMessage, pendingModelMessage); delta != "" {
+				emitCleanText(delta)
+			}
+		}
+		if !sawModelMessage && tokenFallback.Len() > 0 {
+			emitCleanText(tokenFallback.String())
+		}
 		if tail := mf.flush(); tail != "" {
 			tail = stripLeadingAngleNoise(tail)
 			if tail != "" {
 				emitTextChunk(tail)
 			}
 		}
-		if emittedFromToken && !sawModelMessage && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
+		if tokenFallback.Len() > 0 && !sawModelMessage && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
 			slog.Debug("grok stream fallback used token deltas (no modelResponse)", "model", model)
+		}
+	} else {
+		if pendingModelMessage != "" && pendingModelMessage != emittedModelMessage {
+			if delta := streamMessageDelta(emittedModelMessage, pendingModelMessage); delta != "" {
+				if cleaned := sanitizeUpstreamText(delta); cleaned != "" {
+					emitTextChunk(cleaned)
+				}
+			}
+		} else if !sawModelMessage && tokenFallback.Len() > 0 {
+			if cleaned := sanitizeUpstreamText(tokenFallback.String()); cleaned != "" {
+				emitTextChunk(cleaned)
+			}
 		}
 	}
 	// Emit any pending part-0 previews only if we never saw a full variant.
@@ -1037,12 +1134,15 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 
 	emitChunk("", "", "stop", true)
 	writeSSEBytes(w, "", []byte("[DONE]"))
+	if logger != nil {
+		logger.LogOutputSSE("", "[DONE]")
+	}
 	if flusher != nil {
 		flusher.Flush()
 	}
 }
 
-func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, body io.Reader) {
+func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, body io.Reader, logger *debug.Logger) {
 	id := "chatcmpl_" + randomHex(8)
 	lastMessage := ""
 	videoURL := ""
@@ -1062,6 +1162,11 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 	}
 
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
+		if logger != nil {
+			if raw, err := json.Marshal(resp); err == nil {
+				logger.LogUpstreamSSE("response", string(raw))
+			}
+		}
 		isThinking := isThinkingResponse(resp)
 		if tokenDelta, ok := resp["token"].(string); ok && tokenDelta != "" {
 			if isThinking {

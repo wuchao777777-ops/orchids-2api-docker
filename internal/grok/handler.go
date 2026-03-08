@@ -139,9 +139,24 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 }
 
 func (h *Handler) openChatAccountSession(ctx context.Context) (*chatAccountSession, error) {
-	acc, token, err := h.selectAccount(ctx)
+	return h.openChatAccountSessionExcluding(ctx, nil)
+}
+
+func (h *Handler) openChatAccountSessionExcluding(ctx context.Context, excludeIDs []int64) (*chatAccountSession, error) {
+	if h.lb == nil {
+		return nil, fmt.Errorf("load balancer not configured")
+	}
+	acc, err := h.lb.GetNextAccountExcludingByChannel(ctx, excludeIDs, "grok")
 	if err != nil {
 		return nil, err
+	}
+	raw := strings.TrimSpace(acc.ClientCookie)
+	if raw == "" {
+		raw = strings.TrimSpace(acc.RefreshToken)
+	}
+	token := NormalizeSSOToken(raw)
+	if token == "" {
+		return nil, fmt.Errorf("grok account token is empty")
 	}
 	return &chatAccountSession{
 		acc:     acc,
@@ -163,30 +178,38 @@ func (h *Handler) doChatWithAutoSwitch(ctx context.Context, sess *chatAccountSes
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
 	}
-	resp, err := h.client.doChat(ctx, sess.token, payload)
-	if err == nil {
-		return resp, nil
+	maxAttempts := 2
+	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
+		maxAttempts = h.cfg.AccountSwitchCount
 	}
-	h.markAccountStatus(ctx, sess.acc, err)
-	if !shouldSwitchGrokAccount(err) {
-		return nil, err
+	if maxAttempts < 1 {
+		maxAttempts = 1
 	}
-
-	sess.Close()
-	next, err2 := h.openChatAccountSession(ctx)
-	if err2 != nil {
-		return nil, fmt.Errorf("account switch failed: %w (original: %v)", err2, err)
+	used := make([]int64, 0, maxAttempts)
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if sess.acc != nil && sess.acc.ID != 0 {
+			used = append(used, sess.acc.ID)
+		}
+		resp, err := h.client.doChat(ctx, sess.token, payload)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		h.markAccountStatus(ctx, sess.acc, err)
+		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
+			return nil, err
+		}
+		sess.Close()
+		next, err2 := h.openChatAccountSessionExcluding(ctx, used)
+		if err2 != nil {
+			return nil, fmt.Errorf("account switch failed: %w (original: %v)", err2, err)
+		}
+		sess.acc = next.acc
+		sess.token = next.token
+		sess.release = next.release
 	}
-	sess.acc = next.acc
-	sess.token = next.token
-	sess.release = next.release
-
-	resp2, err3 := h.client.doChat(ctx, sess.token, payload)
-	if err3 == nil {
-		return resp2, nil
-	}
-	h.markAccountStatus(ctx, sess.acc, err3)
-	return nil, err3
+	return nil, lastErr
 }
 
 // doChatWithAutoSwitchRebuild retries once with a switched account and rebuilds payload for the new token.
@@ -202,38 +225,47 @@ func (h *Handler) doChatWithAutoSwitchRebuild(
 	if payload == nil {
 		return nil, fmt.Errorf("empty payload")
 	}
-	resp, err := h.client.doChat(ctx, sess.token, *payload)
-	if err == nil {
-		return resp, nil
+	maxAttempts := 2
+	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
+		maxAttempts = h.cfg.AccountSwitchCount
 	}
-	h.markAccountStatus(ctx, sess.acc, err)
-	if !shouldSwitchGrokAccount(err) {
-		return nil, err
+	if maxAttempts < 1 {
+		maxAttempts = 1
 	}
-
-	sess.Close()
-	next, err2 := h.openChatAccountSession(ctx)
-	if err2 != nil {
-		return nil, err
-	}
-	sess.acc = next.acc
-	sess.token = next.token
-	sess.release = next.release
-
-	if rebuild != nil {
-		newPayload, rbErr := rebuild(sess.token)
-		if rbErr != nil {
-			return nil, rbErr
+	used := make([]int64, 0, maxAttempts)
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if sess.acc != nil && sess.acc.ID != 0 {
+			used = append(used, sess.acc.ID)
 		}
-		*payload = newPayload
-	}
+		resp, err := h.client.doChat(ctx, sess.token, *payload)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		h.markAccountStatus(ctx, sess.acc, err)
+		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
+			return nil, err
+		}
 
-	resp2, err3 := h.client.doChat(ctx, sess.token, *payload)
-	if err3 == nil {
-		return resp2, nil
+		sess.Close()
+		next, err2 := h.openChatAccountSessionExcluding(ctx, used)
+		if err2 != nil {
+			return nil, err
+		}
+		sess.acc = next.acc
+		sess.token = next.token
+		sess.release = next.release
+
+		if rebuild != nil {
+			newPayload, rbErr := rebuild(sess.token)
+			if rbErr != nil {
+				return nil, rbErr
+			}
+			*payload = newPayload
+		}
 	}
-	h.markAccountStatus(ctx, sess.acc, err3)
-	return nil, err3
+	return nil, lastErr
 }
 
 func shouldSwitchGrokAccount(err error) bool {
