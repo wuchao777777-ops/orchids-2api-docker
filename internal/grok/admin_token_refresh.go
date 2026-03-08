@@ -102,27 +102,7 @@ func updateGrokUsageAccount(acc *store.Account, info *RateLimitInfo, status stri
 	if acc == nil {
 		return
 	}
-	if info != nil {
-		limit := info.Limit
-		remaining := info.Remaining
-		if remaining < 0 {
-			remaining = 0
-		}
-		if limit <= 0 && remaining > 0 {
-			limit = remaining
-		}
-		if limit > 0 || remaining > 0 {
-			used := limit - remaining
-			if used < 0 {
-				used = 0
-			}
-			acc.UsageLimit = float64(limit)
-			acc.UsageCurrent = float64(used)
-		}
-		if !info.ResetAt.IsZero() {
-			acc.QuotaResetAt = info.ResetAt
-		}
-	}
+	ApplyQuotaInfo(acc, info)
 	status = strings.TrimSpace(status)
 	if status == "" {
 		acc.StatusCode = ""

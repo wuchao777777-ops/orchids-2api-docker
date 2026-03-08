@@ -49,6 +49,9 @@ func TestGetUsage_DefaultModelFallbackToGrok3(t *testing.T) {
 	if info.Limit != 120 || info.Remaining != 33 {
 		t.Fatalf("unexpected info: limit=%d remaining=%d", info.Limit, info.Remaining)
 	}
+	if !info.HasLimit || !info.HasRemaining || info.Unit != "requests" {
+		t.Fatalf("unexpected usage metadata: %#v", info)
+	}
 	if len(requestedModels) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(requestedModels))
 	}

@@ -1,6 +1,10 @@
 package grok
 
-import "testing"
+import (
+	"testing"
+
+	"orchids-api/internal/store"
+)
 
 func TestCollectAdminTokenEntries(t *testing.T) {
 	payload := map[string]interface{}{
@@ -48,5 +52,29 @@ func TestNormalizeAdminTokenStatus(t *testing.T) {
 	}
 	if got := normalizeAdminTokenStatus("anything"); got != "active" {
 		t.Fatalf("unknown status=%q want active", got)
+	}
+}
+
+func TestApplyTokenEntryToAccount_QuotaIsRemaining(t *testing.T) {
+	acc := &store.Account{}
+	entry := adminTokenEntry{Token: "t-basic", Pool: "ssoBasic", Quota: 35}
+	applyTokenEntryToAccount(acc, entry)
+	if acc.UsageLimit != 80 {
+		t.Fatalf("usage_limit=%v want=80", acc.UsageLimit)
+	}
+	if acc.UsageCurrent != 35 {
+		t.Fatalf("usage_current=%v want=35", acc.UsageCurrent)
+	}
+}
+
+func TestApplyTokenEntryToAccount_SuperPoolUses140DefaultQuota(t *testing.T) {
+	acc := &store.Account{}
+	entry := adminTokenEntry{Token: "t-super", Pool: "ssoSuper", Quota: 120}
+	applyTokenEntryToAccount(acc, entry)
+	if acc.UsageLimit != 140 {
+		t.Fatalf("usage_limit=%v want=140", acc.UsageLimit)
+	}
+	if acc.UsageCurrent != 120 {
+		t.Fatalf("usage_current=%v want=120", acc.UsageCurrent)
 	}
 }

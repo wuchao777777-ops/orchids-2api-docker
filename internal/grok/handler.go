@@ -265,25 +265,11 @@ func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 		return
 	}
 	info := parseRateLimitInfo(headers)
-	if info == nil || (info.Limit <= 0 && info.Remaining <= 0) {
+	if info == nil {
 		return
 	}
-	limit := info.Limit
-	remaining := info.Remaining
-	if remaining < 0 {
-		remaining = 0
-	}
-	if limit <= 0 && remaining > 0 {
-		limit = remaining
-	}
-	used := limit - remaining
-	if used < 0 {
-		used = 0
-	}
-	acc.UsageLimit = float64(limit)
-	acc.UsageCurrent = float64(used)
-	if !info.ResetAt.IsZero() {
-		acc.QuotaResetAt = info.ResetAt
+	if !ApplyQuotaInfo(acc, info) {
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

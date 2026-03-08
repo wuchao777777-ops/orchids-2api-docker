@@ -296,9 +296,12 @@ func (r *ImagesGenerationsRequest) UnmarshalJSON(data []byte) error {
 }
 
 type RateLimitInfo struct {
-	Limit     int64
-	Remaining int64
-	ResetAt   time.Time
+	Limit        int64
+	HasLimit     bool
+	Remaining    int64
+	HasRemaining bool
+	ResetAt      time.Time
+	Unit         string
 }
 
 func (r *ChatCompletionsRequest) Validate() error {

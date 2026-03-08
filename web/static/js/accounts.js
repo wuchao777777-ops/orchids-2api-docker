@@ -215,6 +215,15 @@ function normalizeAccountType(acc) {
 
 function getQuotaStats(acc) {
   if (!acc) return null;
+  const explicitLimit = Math.floor(acc.quota_limit || 0);
+  const hasExplicitRemaining = acc.quota_remaining !== undefined && acc.quota_remaining !== null;
+  if (explicitLimit > 0 && hasExplicitRemaining) {
+    const remaining = Math.max(0, Math.floor(acc.quota_remaining || 0));
+    const used = Math.max(0, explicitLimit - remaining);
+    const pctRemaining = explicitLimit > 0 ? Math.min(100, Math.round((remaining / explicitLimit) * 100)) : 0;
+    return { limit: explicitLimit, remaining, used, pctRemaining };
+  }
+
   const limit = Math.floor(acc.usage_limit || 0);
   if (limit <= 0) return null;
   const type = normalizeAccountType(acc);

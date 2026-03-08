@@ -150,6 +150,74 @@ func normalizeAccountOutput(acc *store.Account) *store.Account {
 	return out
 }
 
+func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
+	fields := map[string]interface{}{
+		"quota_limit":     0.0,
+		"quota_used":      0.0,
+		"quota_remaining": 0.0,
+		"quota_mode":      "remaining",
+		"quota_unit":      "credits",
+	}
+	if acc == nil {
+		return fields
+	}
+
+	limit := acc.UsageLimit
+	current := acc.UsageCurrent
+	if limit < 0 {
+		limit = 0
+	}
+	if current < 0 {
+		current = 0
+	}
+
+	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "grok":
+		limit = grok.InferQuotaLimit(acc)
+		remaining := current
+		if remaining > limit && limit > 0 {
+			limit = remaining
+		}
+		used := limit - remaining
+		if used < 0 {
+			used = 0
+		}
+		fields["quota_limit"] = limit
+		fields["quota_used"] = used
+		fields["quota_remaining"] = remaining
+		fields["quota_mode"] = "remaining"
+		fields["quota_unit"] = "requests"
+	case "warp":
+		fields["quota_limit"] = limit
+		used := current
+		if used > limit && limit > 0 {
+			used = limit
+		}
+		remaining := limit - used
+		if remaining < 0 {
+			remaining = 0
+		}
+		fields["quota_used"] = used
+		fields["quota_remaining"] = remaining
+		fields["quota_mode"] = "used"
+		fields["quota_unit"] = "requests"
+	default:
+		fields["quota_limit"] = limit
+		remaining := current
+		if remaining > limit && limit > 0 {
+			remaining = limit
+		}
+		used := limit - remaining
+		if used < 0 {
+			used = 0
+		}
+		fields["quota_used"] = used
+		fields["quota_remaining"] = remaining
+	}
+
+	return fields
+}
+
 type ExportData struct {
 	Version  int             `json:"version"`
 	ExportAt time.Time       `json:"export_at"`
@@ -437,7 +505,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusNotFound)
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			resp := map[string]interface{}{
 				"account_id":     acc.ID,
 				"name":           acc.Name,
 				"account_type":   acc.AccountType,
@@ -446,7 +514,11 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				"usage_limit":    acc.UsageLimit,
 				"usage_total":    acc.UsageTotal,
 				"quota_reset_at": acc.QuotaResetAt,
-			})
+			}
+			for k, v := range buildQuotaResponseFields(acc) {
+				resp[k] = v
+			}
+			json.NewEncoder(w).Encode(resp)
 			return
 		}
 		if isCheck {
@@ -616,25 +688,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				}
 
 				if info != nil {
-					limit := info.Limit
-					remaining := info.Remaining
-					if remaining < 0 {
-						remaining = 0
-					}
-					if limit <= 0 && remaining > 0 {
-						limit = remaining
-					}
-					if limit > 0 {
-						used := limit - remaining
-						if used < 0 {
-							used = 0
-						}
-						acc.UsageLimit = float64(limit)
-						acc.UsageCurrent = float64(used)
-					}
-					if !info.ResetAt.IsZero() {
-						acc.QuotaResetAt = info.ResetAt
-					}
+					grok.ApplyQuotaInfo(acc, info)
 				}
 			} else {
 				cfg := a.config.Load()

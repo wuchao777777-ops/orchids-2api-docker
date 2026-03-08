@@ -66,7 +66,7 @@ func inferTokenPool(acc *store.Account) string {
 	if strings.Contains(sub, "super") || strings.Contains(sub, "pro") {
 		return "ssoSuper"
 	}
-	if acc.UsageLimit >= 120 {
+	if InferQuotaLimit(acc) >= superDefaultQuota {
 		return "ssoSuper"
 	}
 	return "ssoBasic"
@@ -203,7 +203,15 @@ func applyTokenEntryToAccount(acc *store.Account, entry adminTokenEntry) {
 	}
 
 	if entry.Quota >= 0 {
-		acc.UsageLimit = float64(entry.Quota)
+		remaining := float64(entry.Quota)
+		limit := InferQuotaLimit(acc)
+		if remaining > limit {
+			limit = remaining
+		}
+		acc.UsageLimit = limit
+		acc.UsageCurrent = remaining
+	} else if acc.UsageLimit <= 0 {
+		acc.UsageLimit = InferQuotaLimit(acc)
 	}
 	if entry.UseCount >= 0 {
 		acc.RequestCount = entry.UseCount
@@ -265,10 +273,14 @@ func (h *Handler) handleAdminTokensList(w http.ResponseWriter, r *http.Request) 
 		seen[token] = struct{}{}
 
 		pool := inferTokenPool(acc)
+		remaining := acc.UsageCurrent
+		if remaining < 0 {
+			remaining = 0
+		}
 		item := map[string]interface{}{
 			"token":      token,
 			"status":     adminTokenStatusFromAccount(acc),
-			"quota":      int64(acc.UsageLimit),
+			"quota":      int64(remaining),
 			"note":       strings.TrimSpace(acc.Name),
 			"fail_count": 0,
 			"use_count":  acc.RequestCount,

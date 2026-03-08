@@ -179,6 +179,12 @@ func TestParseRateLimitPayload_AcceptsQueriesFields(t *testing.T) {
 	if info.Remaining != 23 {
 		t.Fatalf("remaining=%d want=23", info.Remaining)
 	}
+	if !info.HasLimit || !info.HasRemaining {
+		t.Fatalf("expected complete quota pair, got %#v", info)
+	}
+	if info.Unit != "requests" {
+		t.Fatalf("unit=%q want=requests", info.Unit)
+	}
 }
 
 func TestParseRateLimitPayload_SkipsNonNumericMatchedField(t *testing.T) {
@@ -232,6 +238,73 @@ func TestParseRateLimitPayload_CollectsNestedResetAndNumbers(t *testing.T) {
 	}
 	if !info.ResetAt.Equal(wantReset) {
 		t.Fatalf("reset=%v want=%v", info.ResetAt, wantReset)
+	}
+}
+
+func TestParseRateLimitPayload_PrefersTokenPairOverRequestPair(t *testing.T) {
+	payload := map[string]interface{}{
+		"limits": map[string]interface{}{
+			"maxTokens":        500000,
+			"remainingTokens":  499000,
+			"maxQueries":       140,
+			"remainingQueries": 23,
+		},
+	}
+
+	info := parseRateLimitPayload(payload)
+	if info == nil {
+		t.Fatalf("parseRateLimitPayload returned nil")
+	}
+	if info.Limit != 500000 || info.Remaining != 499000 {
+		t.Fatalf("unexpected info: %#v", info)
+	}
+	if info.Unit != "tokens" {
+		t.Fatalf("unit=%q want=tokens", info.Unit)
+	}
+}
+
+func TestParseRateLimitPayload_PrefersTokensWhenQueriesAreZero(t *testing.T) {
+	payload := map[string]interface{}{
+		"windowSizeSeconds": 72000,
+		"remainingQueries":  0,
+		"totalQueries":      0,
+		"remainingTokens":   80,
+		"totalTokens":       80,
+		"lowEffortRateLimits": map[string]interface{}{
+			"cost":             1,
+			"remainingQueries": 80,
+		},
+	}
+
+	info := parseRateLimitPayload(payload)
+	if info == nil {
+		t.Fatalf("parseRateLimitPayload returned nil")
+	}
+	if info.Limit != 80 || info.Remaining != 80 {
+		t.Fatalf("unexpected info: %#v", info)
+	}
+	if info.Unit != "tokens" {
+		t.Fatalf("unit=%q want=tokens", info.Unit)
+	}
+}
+
+func TestParseRateLimitPayload_IncompletePairKeepsPresenceFlags(t *testing.T) {
+	payload := map[string]interface{}{
+		"maxQueries": 80,
+	}
+
+	info := parseRateLimitPayload(payload)
+	if info == nil {
+		t.Fatalf("parseRateLimitPayload returned nil")
+	}
+	if !info.HasLimit || info.HasRemaining {
+		t.Fatalf("expected incomplete info with limit only, got %#v", info)
+	}
+	if info.Limit != 80 || info.Remaining != 0 {
+		t.Fatalf("unexpected values: %#v", info)
+	}
+	if info.Unit != "requests" {
+		t.Fatalf("unit=%q want=requests", info.Unit)
 	}
 }
 

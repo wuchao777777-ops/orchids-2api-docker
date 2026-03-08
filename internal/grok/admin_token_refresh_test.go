@@ -62,9 +62,11 @@ func TestUpdateGrokUsageAccount_SuccessClearsStatus(t *testing.T) {
 		UsageCurrent: 1,
 	}
 	info := &RateLimitInfo{
-		Limit:     120,
-		Remaining: 25,
-		ResetAt:   resetAt,
+		Limit:        120,
+		HasLimit:     true,
+		Remaining:    25,
+		HasRemaining: true,
+		ResetAt:      resetAt,
 	}
 
 	updateGrokUsageAccount(acc, info, "")
@@ -78,11 +80,28 @@ func TestUpdateGrokUsageAccount_SuccessClearsStatus(t *testing.T) {
 	if acc.UsageLimit != 120 {
 		t.Fatalf("usage_limit=%v want=120", acc.UsageLimit)
 	}
-	if acc.UsageCurrent != 95 {
-		t.Fatalf("usage_current=%v want=95", acc.UsageCurrent)
+	if acc.UsageCurrent != 25 {
+		t.Fatalf("usage_current=%v want=25", acc.UsageCurrent)
 	}
 	if !acc.QuotaResetAt.Equal(resetAt) {
 		t.Fatalf("quota_reset_at=%v want=%v", acc.QuotaResetAt, resetAt)
+	}
+}
+
+func TestUpdateGrokUsageAccount_IncompleteInfoDoesNotOverwriteQuota(t *testing.T) {
+	acc := &store.Account{
+		UsageLimit:   80,
+		UsageCurrent: 12,
+	}
+	info := &RateLimitInfo{
+		Limit:    120,
+		HasLimit: true,
+	}
+
+	updateGrokUsageAccount(acc, info, "")
+
+	if acc.UsageLimit != 80 || acc.UsageCurrent != 12 {
+		t.Fatalf("quota should remain unchanged on incomplete info, got limit=%v current=%v", acc.UsageLimit, acc.UsageCurrent)
 	}
 }
 
@@ -95,5 +114,22 @@ func TestUpdateGrokUsageAccount_FailureSetsStatusAndAttempt(t *testing.T) {
 	}
 	if acc.LastAttempt.IsZero() {
 		t.Fatalf("last_attempt should be set on failure")
+	}
+}
+
+func TestUpdateGrokUsageAccount_RemainingOnlyUsesDefaultQuota(t *testing.T) {
+	acc := &store.Account{Subscription: "super"}
+	info := &RateLimitInfo{
+		Remaining:    118,
+		HasRemaining: true,
+	}
+
+	updateGrokUsageAccount(acc, info, "")
+
+	if acc.UsageLimit != 140 {
+		t.Fatalf("usage_limit=%v want=140", acc.UsageLimit)
+	}
+	if acc.UsageCurrent != 118 {
+		t.Fatalf("usage_current=%v want=118", acc.UsageCurrent)
 	}
 }

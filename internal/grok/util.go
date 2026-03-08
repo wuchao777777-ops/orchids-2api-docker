@@ -32,50 +32,70 @@ var (
 	reToolUsageCardIncomplete = regexp.MustCompile(`(?is)<?xai:tool_usage_card.*?(?:</xai:tool_usage_card>|\z)`)
 	reGrokRenderBlock         = regexp.MustCompile(`(?is)<?grok:render.*?</grok:render>`)
 
-	rateLimitLimitKeys = map[string]struct{}{
-		"limit":          {},
-		"limit_tokens":   {},
-		"limittokens":    {},
-		"max_tokens":     {},
-		"maxtokens":      {},
-		"max_queries":    {},
-		"maxqueries":     {},
-		"query_limit":    {},
-		"querylimit":     {},
-		"queries_limit":  {},
-		"querieslimit":   {},
-		"token_limit":    {},
-		"tokenlimit":     {},
-		"tokens_limit":   {},
-		"tokenslimit":    {},
-		"total_tokens":   {},
-		"totaltokens":    {},
-		"total_queries":  {},
-		"totalqueries":   {},
-		"quota":          {},
-		"quota_limit":    {},
-		"quotalimit":     {},
-		"request_limit":  {},
-		"requestlimit":   {},
-		"requests_limit": {},
-		"requestslimit":  {},
+	rateLimitFamilies = []rateLimitFieldFamily{
+		{
+			unit: "tokens",
+			limitKeys: []string{
+				"limit_tokens",
+				"limittokens",
+				"max_tokens",
+				"maxtokens",
+				"token_limit",
+				"tokenlimit",
+				"tokens_limit",
+				"tokenslimit",
+				"total_tokens",
+				"totaltokens",
+			},
+			remainingKeys: []string{
+				"remaining_tokens",
+				"remainingtokens",
+				"tokens_remaining",
+				"tokensremaining",
+			},
+		},
+		{
+			unit: "requests",
+			limitKeys: []string{
+				"max_queries",
+				"maxqueries",
+				"query_limit",
+				"querylimit",
+				"queries_limit",
+				"querieslimit",
+				"total_queries",
+				"totalqueries",
+				"request_limit",
+				"requestlimit",
+				"requests_limit",
+				"requestslimit",
+			},
+			remainingKeys: []string{
+				"remaining_queries",
+				"remainingqueries",
+				"queries_remaining",
+				"queriesremaining",
+				"remaining_requests",
+				"remainingrequests",
+			},
+		},
+		{
+			unit: "",
+			limitKeys: []string{
+				"limit",
+				"quota",
+				"quota_limit",
+				"quotalimit",
+			},
+			remainingKeys: []string{
+				"remaining",
+				"quota_remaining",
+				"quotaremaining",
+			},
+		},
 	}
-	rateLimitRemainingKeys = map[string]struct{}{
-		"remaining":          {},
-		"remaining_tokens":   {},
-		"remainingtokens":    {},
-		"tokens_remaining":   {},
-		"tokensremaining":    {},
-		"remaining_queries":  {},
-		"remainingqueries":   {},
-		"queries_remaining":  {},
-		"queriesremaining":   {},
-		"quota_remaining":    {},
-		"quotaremaining":     {},
-		"remaining_requests": {},
-		"remainingrequests":  {},
-	}
-	rateLimitResetKeys = map[string]struct{}{
+	rateLimitNumericKeys = buildRateLimitNumericKeySet(rateLimitFamilies)
+	rateLimitResetKeys   = map[string]struct{}{
 		"reset":           {},
 		"reset_at":        {},
 		"resetat":         {},
@@ -114,6 +134,25 @@ var (
 		"1:1":       "1:1",
 	}
 )
+
+type rateLimitFieldFamily struct {
+	unit          string
+	limitKeys     []string
+	remainingKeys []string
+}
+
+func buildRateLimitNumericKeySet(families []rateLimitFieldFamily) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, family := range families {
+		for _, key := range family.limitKeys {
+			out[key] = struct{}{}
+		}
+		for _, key := range family.remainingKeys {
+			out[key] = struct{}{}
+		}
+	}
+	return out
+}
 
 func randomHex(n int) string {
 	if n <= 0 {
@@ -740,9 +779,12 @@ func parseRateLimitInfo(headers http.Header) *RateLimitInfo {
 	}
 
 	info := &RateLimitInfo{
-		Limit:     limit,
-		Remaining: remaining,
-		ResetAt:   resetAt,
+		Limit:        limit,
+		HasLimit:     okLimit,
+		Remaining:    remaining,
+		HasRemaining: okRemaining,
+		ResetAt:      resetAt,
+		Unit:         "requests",
 	}
 	return info
 }
@@ -752,19 +794,13 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 		return nil
 	}
 
-	var state rateLimitScanState
-	scanRateLimitPayloadValue(payload, &state)
+	numericFields := make(map[string]int64)
+	resetFields := make(map[string]time.Time)
+	collectRateLimitPayloadFields(payload, numericFields, resetFields)
 
-	if !state.okLimit && !state.okRemaining && !state.okReset {
+	info := buildRateLimitInfoFromFields(numericFields, resetFields)
+	if info == nil {
 		return nil
-	}
-
-	info := &RateLimitInfo{
-		Limit:     state.limit,
-		Remaining: state.remaining,
-	}
-	if state.okReset {
-		info.ResetAt = state.resetAt
 	}
 	return info
 }
@@ -774,69 +810,119 @@ func classifyAccountStatusFromError(errStr string) string {
 	return apperrors.ClassifyAccountStatus(errStr)
 }
 
-type rateLimitScanState struct {
-	limit       int64
-	remaining   int64
-	resetAt     time.Time
-	okLimit     bool
-	okRemaining bool
-	okReset     bool
-}
-
-func (s *rateLimitScanState) done() bool {
-	return s != nil && s.okLimit && s.okRemaining && s.okReset
-}
-
-func scanRateLimitPayloadValue(value interface{}, state *rateLimitScanState) {
-	if state == nil {
-		return
-	}
+func collectRateLimitPayloadFields(value interface{}, numericFields map[string]int64, resetFields map[string]time.Time) {
 	switch v := value.(type) {
 	case map[string]interface{}:
-		for k, item := range v {
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			item := v[k]
 			key := normalizeRateKey(k)
-			if !state.okLimit {
-				if _, ok := rateLimitLimitKeys[key]; ok {
+			if _, ok := rateLimitNumericKeys[key]; ok {
+				if _, seen := numericFields[key]; !seen {
 					if n, ok := parseNumberAny(item); ok {
-						state.limit = n
-						state.okLimit = true
+						numericFields[key] = n
 					}
 				}
 			}
-			if !state.okRemaining {
-				if _, ok := rateLimitRemainingKeys[key]; ok {
-					if n, ok := parseNumberAny(item); ok {
-						state.remaining = n
-						state.okRemaining = true
-					}
-				}
-			}
-			if !state.okReset {
-				if _, ok := rateLimitResetKeys[key]; ok {
+			if _, ok := rateLimitResetKeys[key]; ok {
+				if _, seen := resetFields[key]; !seen {
 					if t := parseRateLimitReset(fmt.Sprint(item)); !t.IsZero() {
-						state.resetAt = t
-						state.okReset = true
+						resetFields[key] = t
 					}
 				}
 			}
 		}
-		if state.done() {
-			return
-		}
-		for _, item := range v {
-			scanRateLimitPayloadValue(item, state)
-			if state.done() {
-				return
-			}
+		for _, k := range keys {
+			collectRateLimitPayloadFields(v[k], numericFields, resetFields)
 		}
 	case []interface{}:
 		for _, item := range v {
-			scanRateLimitPayloadValue(item, state)
-			if state.done() {
-				return
-			}
+			collectRateLimitPayloadFields(item, numericFields, resetFields)
 		}
 	}
+}
+
+func buildRateLimitInfoFromFields(numericFields map[string]int64, resetFields map[string]time.Time) *RateLimitInfo {
+	var (
+		best         *RateLimitInfo
+		bestRank     = -1
+		bestComplete bool
+	)
+
+	for idx, family := range rateLimitFamilies {
+		limit, hasLimit := firstRateLimitNumeric(numericFields, family.limitKeys)
+		remaining, hasRemaining := firstRateLimitNumeric(numericFields, family.remainingKeys)
+		if !hasLimit && !hasRemaining {
+			continue
+		}
+		complete := hasLimit && hasRemaining
+		if best != nil {
+			if bestComplete && !complete {
+				continue
+			}
+			if bestComplete == complete && bestRank <= idx {
+				continue
+			}
+		}
+		best = &RateLimitInfo{
+			Limit:        limit,
+			HasLimit:     hasLimit,
+			Remaining:    remaining,
+			HasRemaining: hasRemaining,
+			Unit:         family.unit,
+		}
+		bestRank = idx
+		bestComplete = complete
+		if complete && idx == 0 {
+			break
+		}
+	}
+
+	resetAt, hasReset := firstRateLimitReset(resetFields)
+	if best == nil {
+		if !hasReset {
+			return nil
+		}
+		return &RateLimitInfo{ResetAt: resetAt}
+	}
+	if hasReset {
+		best.ResetAt = resetAt
+	}
+	return best
+}
+
+func firstRateLimitNumeric(fields map[string]int64, keys []string) (int64, bool) {
+	for _, key := range keys {
+		if v, ok := fields[key]; ok {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func firstRateLimitReset(fields map[string]time.Time) (time.Time, bool) {
+	for _, key := range []string{
+		"reset",
+		"reset_at",
+		"resetat",
+		"reset_at_ms",
+		"resetatms",
+		"reset_time",
+		"resettime",
+		"reset_timestamp",
+		"resettimestamp",
+		"next_reset",
+		"nextreset",
+	} {
+		if t, ok := fields[key]; ok && !t.IsZero() {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func parseNumberAny(raw interface{}) (int64, bool) {
