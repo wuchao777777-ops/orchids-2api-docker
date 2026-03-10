@@ -269,3 +269,38 @@ func TestStripSystemRemindersForMode_StripsLocalCommandMetadata(t *testing.T) {
 		t.Fatalf("stripSystemRemindersForMode() should keep suggestion marker, got %q", got)
 	}
 }
+
+func TestShouldKeepToolsForWarpToolResultFollowup(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []prompt.Message
+		want     bool
+	}{
+		{
+			name: "keeps tools for project optimization follow-up",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目怎么优化"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README content"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "does not keep tools for simple directory answer",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "当前运行的目录"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "pwd"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "/tmp/project"}}}},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldKeepToolsForWarpToolResultFollowup(tt.messages); got != tt.want {
+				t.Fatalf("shouldKeepToolsForWarpToolResultFollowup() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

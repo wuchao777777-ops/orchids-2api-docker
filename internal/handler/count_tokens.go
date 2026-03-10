@@ -25,24 +25,35 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 	defer logger.Close()
 	logger.LogIncomingRequest(req)
 
-	maxTokens := 12000
-	if h.config != nil && h.config.ContextMaxTokens > 0 {
-		maxTokens = h.config.ContextMaxTokens
+	breakdown := inputTokenBreakdown{}
+	profile := ""
+	if channelFromPath(r.URL.Path) == "warp" {
+		if warpBD, warpProfile, err := estimateWarpInputTokenBreakdown("", req.Model, req.Messages, req.Tools, len(req.Tools) == 0); err == nil {
+			breakdown = warpBD
+			profile = warpProfile
+		}
 	}
-	builtPrompt, aiClientHistory, meta := orchids.BuildAIClientPromptAndHistoryWithMeta(
-		req.Messages,
-		req.System,
-		req.Model,
-		true, /* noThinking */
-		"",   /* workdir */
-		maxTokens,
-	)
-	breakdown := estimateInputTokenBreakdown(builtPrompt, aiClientHistory, req.Tools)
+	if breakdown.Total == 0 {
+		maxTokens := 12000
+		if h.config != nil && h.config.ContextMaxTokens > 0 {
+			maxTokens = h.config.ContextMaxTokens
+		}
+		builtPrompt, aiClientHistory, meta := orchids.BuildAIClientPromptAndHistoryWithMeta(
+			req.Messages,
+			req.System,
+			req.Model,
+			true, /* noThinking */
+			"",   /* workdir */
+			maxTokens,
+		)
+		breakdown = estimateInputTokenBreakdown(builtPrompt, aiClientHistory, req.Tools)
+		profile = meta.Profile
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
 		"input_tokens":   breakdown.Total,
-		"prompt_profile": meta.Profile,
+		"prompt_profile": profile,
 		"breakdown": map[string]int{
 			"base_prompt_tokens":    breakdown.BasePromptTokens,
 			"system_context_tokens": breakdown.SystemContextTokens,

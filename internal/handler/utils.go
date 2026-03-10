@@ -184,6 +184,77 @@ func lastUserIsToolResultOnly(messages []prompt.Message) bool {
 	return false
 }
 
+func shouldKeepToolsForWarpToolResultFollowup(messages []prompt.Message) bool {
+	if !lastUserIsToolResultOnly(messages) {
+		return false
+	}
+	original := lastNonToolResultUserText(messages)
+	if original == "" {
+		return false
+	}
+	return looksLikeWarpExploratoryRequest(original)
+}
+
+func lastNonToolResultUserText(messages []prompt.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
+			continue
+		}
+		if msg.Content.IsString() {
+			text := strings.TrimSpace(stripSystemRemindersForMode(msg.Content.GetText()))
+			if text != "" && !containsSuggestionMode(text) {
+				return text
+			}
+			continue
+		}
+		blocks := msg.Content.GetBlocks()
+		var parts []string
+		hasToolResult := false
+		for _, block := range blocks {
+			switch block.Type {
+			case "tool_result":
+				hasToolResult = true
+			case "text":
+				text := strings.TrimSpace(stripSystemRemindersForMode(block.Text))
+				if text != "" && !containsSuggestionMode(text) {
+					parts = append(parts, text)
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return strings.TrimSpace(strings.Join(parts, "\n"))
+		}
+		if hasToolResult {
+			continue
+		}
+	}
+	return ""
+}
+
+func looksLikeWarpExploratoryRequest(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
+	if lower == "" {
+		return false
+	}
+	keywords := []string{
+		"项目", "工程", "仓库", "代码", "文件", "结构", "架构",
+		"优化", "改进", "重构", "分析", "查看", "检查", "排查", "修复",
+		"错误", "异常", "日志", "实现", "用途", "干什么", "做什么",
+		"project", "repo", "repository", "codebase", "source", "file", "files",
+		"structure", "architecture", "optimize", "optimization",
+		"improve", "refactor", "analyze", "analysis", "inspect", "check",
+		"review", "debug", "fix", "error", "bug", "issue", "implement",
+		"purpose", "what does this project do", "what is this project",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(lower, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
 func isSuggestionMode(messages []prompt.Message) bool {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]

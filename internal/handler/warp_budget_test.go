@@ -25,7 +25,7 @@ func TestEnforceWarpBudget_SummarizesOlderMessagesBeforeDropping(t *testing.T) {
 		})
 	}
 
-	trimmed, _, after, _, summarized, dropped := enforceWarpBudget("prompt", messages, 2600)
+	trimmed, _, after, _, summarized, dropped := enforceWarpBudget("auto-efficient", messages, nil, true, 2600)
 	if len(trimmed) == 0 {
 		t.Fatalf("expected non-empty trimmed messages")
 	}
@@ -52,7 +52,7 @@ func TestEnforceWarpBudget_FallsBackToWindowWhenStillOverBudget(t *testing.T) {
 		{Role: "user", Content: prompt.MessageContent{Text: "u2 " + strings.Repeat("x", 4000)}},
 	}
 
-	trimmed, _, after, compressed, summarized, dropped := enforceWarpBudget("prompt", messages, 350)
+	trimmed, _, after, compressed, summarized, dropped := enforceWarpBudget("auto-efficient", messages, nil, true, 350)
 	if len(trimmed) == 0 {
 		t.Fatalf("expected at least one message")
 	}
@@ -72,7 +72,7 @@ func TestEnforceWarpBudget_NoChangeWhenUnderBudget(t *testing.T) {
 		{Role: "assistant", Content: prompt.MessageContent{Text: "world"}},
 	}
 
-	trimmed, before, after, compressed, summarized, dropped := enforceWarpBudget("prompt", messages, 12000)
+	trimmed, before, after, compressed, summarized, dropped := enforceWarpBudget("auto-efficient", messages, nil, true, 12000)
 	if len(trimmed) != len(messages) {
 		t.Fatalf("expected message count unchanged, got %d", len(trimmed))
 	}

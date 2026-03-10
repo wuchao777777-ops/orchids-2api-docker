@@ -449,9 +449,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		gateNoTools = true
 	}
 	if lastUserIsToolResultOnly(req.Messages) {
-		gateNoTools = true
-		if h.config.DebugEnabled {
-			slog.Debug("tool_gate: disabled tools for tool_result-only follow-up")
+		if isWarpRequest && shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
+			if h.config.DebugEnabled {
+				slog.Debug("tool_gate: keeping tools for warp exploratory tool_result follow-up")
+			}
+		} else {
+			gateNoTools = true
+			if h.config.DebugEnabled {
+				slog.Debug("tool_gate: disabled tools for tool_result-only follow-up")
+			}
 		}
 	}
 	effectiveTools := req.Tools
@@ -535,10 +541,22 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("Checkpoint: LogConvertedPrompt")
 	logger.LogConvertedPrompt(builtPrompt)
 
-	breakdown := estimateInputTokenBreakdown(builtPrompt, aiClientHistory, effectiveTools)
+	breakdown := inputTokenBreakdown{}
+	breakdownProfile := promptMeta.Profile
+	if isWarpRequest {
+		if warpBD, profile, err := estimateWarpInputTokenBreakdown(builtPrompt, mappedModel, upstreamMessages, effectiveTools, gateNoTools); err == nil {
+			breakdown = warpBD
+			breakdownProfile = profile
+		} else {
+			slog.Warn("Warp token estimation fallback to generic breakdown", "error", err)
+			breakdown = estimateInputTokenBreakdown(builtPrompt, aiClientHistory, effectiveTools)
+		}
+	} else {
+		breakdown = estimateInputTokenBreakdown(builtPrompt, aiClientHistory, effectiveTools)
+	}
 	slog.Debug(
 		"Input token breakdown (estimated)",
-		"prompt_profile", promptMeta.Profile,
+		"prompt_profile", breakdownProfile,
 		"base_prompt_tokens", breakdown.BasePromptTokens,
 		"system_context_tokens", breakdown.SystemContextTokens,
 		"history_tokens", breakdown.HistoryTokens,
@@ -681,7 +699,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						if budget <= 0 || budget > 12000 {
 							budget = 12000
 						}
-						trimmed, before, after, compressed, summarized, dropped := enforceWarpBudget(builtPrompt, upstreamMessages, budget)
+						trimmed, before, after, compressed, summarized, dropped := enforceWarpBudget(mappedModel, upstreamMessages, effectiveTools, gateNoTools, budget)
 						if before.Total != after.Total || compressed > 0 || summarized > 0 || dropped > 0 {
 							slog.Debug(
 								"Warp budget applied",

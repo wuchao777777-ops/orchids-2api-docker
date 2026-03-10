@@ -4,7 +4,9 @@ import (
 	"strings"
 
 	"orchids-api/internal/orchids"
+	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
+	"orchids-api/internal/warp"
 )
 
 type inputTokenBreakdown struct {
@@ -42,6 +44,21 @@ func estimateInputTokenBreakdown(promptText string, history []map[string]string,
 
 	bd.Total = bd.BasePromptTokens + bd.SystemContextTokens + bd.HistoryTokens + bd.ToolsTokens
 	return bd
+}
+
+func estimateWarpInputTokenBreakdown(promptText, model string, messages []prompt.Message, tools []interface{}, disableWarpTools bool) (inputTokenBreakdown, string, error) {
+	estimate, err := warp.EstimateInputTokens(promptText, model, messages, tools, disableWarpTools)
+	if err != nil {
+		return inputTokenBreakdown{}, "", err
+	}
+
+	return inputTokenBreakdown{
+		BasePromptTokens:    estimate.BasePromptTokens,
+		SystemContextTokens: 0,
+		HistoryTokens:       estimate.HistoryTokens + estimate.ToolResultTokens,
+		ToolsTokens:         estimate.ToolSchemaTokens,
+		Total:               estimate.Total,
+	}, estimate.Profile, nil
 }
 
 func extractTaggedContent(text string, tag string) string {

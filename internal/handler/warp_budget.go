@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"orchids-api/internal/prompt"
-	"orchids-api/internal/tiktoken"
+	warpclient "orchids-api/internal/warp"
 )
 
 const (
@@ -30,7 +30,7 @@ type warpTokenBreakdown struct {
 	Total          int
 }
 
-func enforceWarpBudget(builtPrompt string, messages []prompt.Message, maxTokens int) (trimmed []prompt.Message, before warpTokenBreakdown, after warpTokenBreakdown, compressedBlocks int, summarizedMessages int, droppedMessages int) {
+func enforceWarpBudget(model string, messages []prompt.Message, tools []interface{}, disableWarpTools bool, maxTokens int) (trimmed []prompt.Message, before warpTokenBreakdown, after warpTokenBreakdown, compressedBlocks int, summarizedMessages int, droppedMessages int) {
 	budget := maxTokens
 	if budget <= 0 {
 		budget = 12000
@@ -39,7 +39,7 @@ func enforceWarpBudget(builtPrompt string, messages []prompt.Message, maxTokens 
 		budget = 12000
 	}
 	if len(messages) == 0 {
-		empty := estimateWarpTokensBreakdown(builtPrompt, nil)
+		empty := estimateWarpTokensBreakdown(model, nil, tools, disableWarpTools)
 		return nil, empty, empty, 0, 0, 0
 	}
 
@@ -53,7 +53,7 @@ func enforceWarpBudget(builtPrompt string, messages []prompt.Message, maxTokens 
 		compressedCount += count
 	}
 
-	beforeBD := estimateWarpTokensBreakdown(builtPrompt, working)
+	beforeBD := estimateWarpTokensBreakdown(model, working, tools, disableWarpTools)
 	if beforeBD.Total <= budget {
 		return working, beforeBD, beforeBD, compressedCount, 0, 0
 	}
@@ -77,7 +77,7 @@ func enforceWarpBudget(builtPrompt string, messages []prompt.Message, maxTokens 
 		}
 		working = next
 		summarizedMessages += merged
-		beforeBD = estimateWarpTokensBreakdown(builtPrompt, working)
+		beforeBD = estimateWarpTokensBreakdown(model, working, tools, disableWarpTools)
 		if beforeBD.Total <= budget {
 			return working, beforeBD, beforeBD, compressedCount, summarizedMessages, 0
 		}
@@ -90,7 +90,7 @@ func enforceWarpBudget(builtPrompt string, messages []prompt.Message, maxTokens 
 	if harder, count := compressWarpMessages(working, warpMessageHardLimit); count > 0 {
 		working = harder
 		compressedCount += count
-		beforeBD = estimateWarpTokensBreakdown(builtPrompt, working)
+		beforeBD = estimateWarpTokensBreakdown(model, working, tools, disableWarpTools)
 		if beforeBD.Total <= budget {
 			return working, beforeBD, beforeBD, compressedCount, summarizedMessages, 0
 		}
@@ -115,7 +115,7 @@ func enforceWarpBudget(builtPrompt string, messages []prompt.Message, maxTokens 
 	start := 0
 	for start < lastUser && len(work[start:]) > 1 {
 		testMsgs := work[start+1:]
-		bd := estimateWarpTokensBreakdown(builtPrompt, testMsgs)
+		bd := estimateWarpTokensBreakdown(model, testMsgs, tools, disableWarpTools)
 		if bd.Total <= budget {
 			start++
 			break
@@ -126,38 +126,21 @@ func enforceWarpBudget(builtPrompt string, messages []prompt.Message, maxTokens 
 	if len(trimmed) == 0 {
 		trimmed = work[len(work)-1:]
 	}
-	afterTokens := estimateWarpTokensBreakdown(builtPrompt, trimmed)
+	afterTokens := estimateWarpTokensBreakdown(model, trimmed, tools, disableWarpTools)
 	return trimmed, beforeTokens, afterTokens, compressedCount, summarizedMessages, start
 }
 
-func estimateWarpTokensBreakdown(builtPrompt string, messages []prompt.Message) warpTokenBreakdown {
-	bd := warpTokenBreakdown{}
-	bd.PromptTokens = tiktoken.EstimateTextTokens(builtPrompt)
-	// Conservative wrapper overhead.
-	overhead := 200
-
-	for _, m := range messages {
-		if m.Content.IsString() {
-			bd.MessagesTokens += tiktoken.EstimateTextTokens(strings.TrimSpace(m.Content.GetText())) + 15
-			continue
-		}
-		for _, b := range m.Content.GetBlocks() {
-			switch b.Type {
-			case "text":
-				bd.MessagesTokens += tiktoken.EstimateTextTokens(strings.TrimSpace(b.Text)) + 10
-			case "tool_result":
-				if s, ok := b.Content.(string); ok {
-					bd.ToolTokens += tiktoken.EstimateTextTokens(s) + 10
-				} else {
-					bd.ToolTokens += 200
-				}
-			default:
-				bd.ToolTokens += 50
-			}
-		}
+func estimateWarpTokensBreakdown(model string, messages []prompt.Message, tools []interface{}, disableWarpTools bool) warpTokenBreakdown {
+	estimate, err := warpclient.EstimateInputTokens("", model, messages, tools, disableWarpTools)
+	if err != nil {
+		return warpTokenBreakdown{}
 	}
-	bd.Total = bd.PromptTokens + bd.MessagesTokens + bd.ToolTokens + overhead
-	return bd
+	return warpTokenBreakdown{
+		PromptTokens:   estimate.BasePromptTokens,
+		MessagesTokens: estimate.HistoryTokens + estimate.ToolResultTokens,
+		ToolTokens:     estimate.ToolSchemaTokens,
+		Total:          estimate.Total,
+	}
 }
 
 func compressWarpMessages(messages []prompt.Message, targetChars int) ([]prompt.Message, int) {

@@ -14,6 +14,7 @@ import (
 
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/tiktoken"
 )
 
 type encoder struct {
@@ -70,6 +71,17 @@ type warpHistoryMessage struct {
 type warpToolResult struct {
 	ToolCallID string
 	Content    string
+}
+
+type InputTokenEstimate struct {
+	Profile          string
+	QueryTokens      int
+	BasePromptTokens int
+	HistoryTokens    int
+	ToolResultTokens int
+	ToolSchemaTokens int
+	ToolCount        int
+	Total            int
 }
 
 var realRequestTemplate = mustDecodeHex("0a00125a0a430a1e0a0d2f55736572732f6c6f66796572120d2f55736572732f6c6f6679657212070a054d61634f531a0a0a037a73681203352e39220c08eeb8d3cb0610908ef0bd0232130a110a0f0a09e4bda0e5a5bde591801a0020011a660a210a0f636c617564652d342d352d6f707573220e636c692d6167656e742d6175746f1001180120013001380140014a1306070c08090f0e000b100a141113120203010d500158016001680170017801800101880101a80101b201070a1406070c0201b801012264121e0a0a656e747279706f696e7412101a0e555345525f494e4954494154454412200a1a69735f6175746f5f726573756d655f61667465725f6572726f721202200012200a1a69735f6175746f64657465637465645f757365725f717565727912022001")
@@ -205,7 +217,7 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 					}
 					toolResultSeen[key] = struct{}{}
 				}
-				if lastUserTextIdx == -1 || i > lastUserTextIdx || (i == lastUserTextIdx && !hasText) {
+				if lastUserTextIdx == -1 || i >= lastUserTextIdx {
 					toolResults = append(toolResults, toolResult)
 				} else {
 					history = append(history, warpHistoryMessage{
@@ -405,7 +417,11 @@ func formatWarpToolUse(call warpToolCall) string {
 }
 
 func formatWarpToolResult(id, content string) string {
-	content = strings.TrimSpace(content)
+	return formatWarpToolResultWithMode(id, content, false)
+}
+
+func formatWarpToolResultWithMode(id, content string, historyMode bool) string {
+	content = compactWarpToolResultContent(content, historyMode)
 	if id == "" {
 		return fmt.Sprintf("<tool_result>\n%s\n</tool_result>", content)
 	}
@@ -429,12 +445,12 @@ func stringifyWarpValue(value interface{}) string {
 
 func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults []warpToolResult, disableWarpTools bool) (string, bool) {
 	parts := []string{singleResultPrompt}
-	if disableWarpTools {
-		parts = append(parts, noWarpToolsPrompt)
-	}
 
 	if len(toolResults) > 0 {
-		parts = append(parts, formatWarpHistory(history)...)
+		if disableWarpTools {
+			parts = append(parts, noWarpToolsPrompt)
+		}
+		parts = append(parts, formatWarpFollowupHistory(history)...)
 		for _, tr := range toolResults {
 			parts = append(parts, formatWarpToolResult(tr.ToolCallID, tr.Content))
 		}
@@ -444,6 +460,10 @@ func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults [
 			parts = append(parts, "User: Please analyze the tool results above and provide your response.")
 		}
 		return strings.Join(parts, "\n\n"), false
+	}
+
+	if disableWarpTools {
+		parts = append(parts, noWarpToolsPrompt)
 	}
 
 	if len(history) > 0 {
@@ -483,10 +503,123 @@ func formatWarpHistory(history []warpHistoryMessage) []string {
 				}
 			}
 		case "tool":
-			parts = append(parts, formatWarpToolResult(msg.ToolCallID, msg.Content))
+			parts = append(parts, formatWarpToolResultWithMode(msg.ToolCallID, msg.Content, true))
 		}
 	}
 	return parts
+}
+
+func formatWarpFollowupHistory(history []warpHistoryMessage) []string {
+	if len(history) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(history))
+	for _, msg := range history {
+		switch msg.Role {
+		case "user":
+			if msg.Content != "" {
+				parts = append(parts, "User: "+msg.Content)
+			}
+		case "assistant":
+			if msg.Content != "" {
+				parts = append(parts, "Assistant: "+msg.Content)
+			}
+		}
+	}
+	return parts
+}
+
+func EstimateInputTokens(promptText, model string, messages []prompt.Message, tools []interface{}, disableWarpTools bool) (InputTokenEstimate, error) {
+	userText, history, toolResults, err := extractWarpConversation(messages, promptText)
+	if err != nil {
+		return InputTokenEstimate{}, err
+	}
+
+	fullQuery, _ := buildWarpQuery(userText, history, toolResults, disableWarpTools)
+	if strings.TrimSpace(fullQuery) == "" {
+		return InputTokenEstimate{}, fmt.Errorf("empty warp query")
+	}
+
+	defs := convertTools(tools)
+	toolSchemaTokens := estimateWarpToolSchemaTokens(defs)
+	historyParts := formatWarpHistory(history)
+	if len(toolResults) > 0 {
+		historyParts = formatWarpFollowupHistory(history)
+	}
+	historyTokens := estimateWarpTextTokens(historyParts)
+	toolResultTokens := estimateWarpToolResultTokens(toolResults)
+	queryTokens := tiktoken.EstimateTextTokens(fullQuery)
+	baseTokens := queryTokens - historyTokens - toolResultTokens
+	if baseTokens < 0 {
+		baseTokens = queryTokens
+	}
+
+	return InputTokenEstimate{
+		Profile:          classifyWarpProfile(history, toolResults, disableWarpTools, len(defs)),
+		QueryTokens:      queryTokens,
+		BasePromptTokens: baseTokens,
+		HistoryTokens:    historyTokens,
+		ToolResultTokens: toolResultTokens,
+		ToolSchemaTokens: toolSchemaTokens,
+		ToolCount:        len(defs),
+		Total:            queryTokens + toolSchemaTokens,
+	}, nil
+}
+
+func classifyWarpProfile(history []warpHistoryMessage, toolResults []warpToolResult, disableWarpTools bool, toolCount int) string {
+	switch {
+	case len(toolResults) > 0:
+		return "warp-tool-result"
+	case len(history) > 0:
+		return "warp-history"
+	case toolCount > 0 && !disableWarpTools:
+		return "warp-tools"
+	case disableWarpTools:
+		return "warp-no-tools"
+	default:
+		return "warp"
+	}
+}
+
+func estimateWarpTextTokens(parts []string) int {
+	if len(parts) == 0 {
+		return 0
+	}
+	return tiktoken.EstimateTextTokens(strings.Join(parts, "\n\n"))
+}
+
+func estimateWarpToolResultTokens(results []warpToolResult) int {
+	if len(results) == 0 {
+		return 0
+	}
+	parts := make([]string, 0, len(results))
+	for _, tr := range results {
+		parts = append(parts, formatWarpToolResult(tr.ToolCallID, tr.Content))
+	}
+	return estimateWarpTextTokens(parts)
+}
+
+func estimateWarpToolSchemaTokens(defs []toolDef) int {
+	if len(defs) == 0 {
+		return 0
+	}
+	parts := make([]string, 0, len(defs))
+	for _, def := range defs {
+		var sb strings.Builder
+		sb.WriteString(def.Name)
+		if desc := strings.TrimSpace(def.Description); desc != "" {
+			sb.WriteString("\n")
+			sb.WriteString(desc)
+		}
+		if len(def.Schema) > 0 {
+			if raw, err := json.Marshal(def.Schema); err == nil && len(raw) > 0 {
+				sb.WriteString("\n")
+				sb.Write(raw)
+			}
+		}
+		parts = append(parts, sb.String())
+	}
+	return estimateWarpTextTokens(parts)
 }
 
 func buildRequestBytesFromTemplate(userText, model string, isNew bool, disableWarpTools bool, workdir string) ([]byte, error) {
@@ -772,10 +905,69 @@ type toolDef struct {
 }
 
 const (
-	maxWarpToolCount         = 24
-	maxWarpToolDescLen       = 512
-	maxWarpToolSchemaJSONLen = 4096
+	maxWarpToolCount         = 8
+	maxWarpToolDescLen       = 128
+	maxWarpToolSchemaJSONLen = 1024
 )
+
+var supportedWarpTools = map[string]struct{}{
+	"Bash":      {},
+	"Read":      {},
+	"Edit":      {},
+	"Write":     {},
+	"Glob":      {},
+	"Grep":      {},
+	"TodoWrite": {},
+}
+
+var warpToolAllowedProps = map[string]map[string]struct{}{
+	"Bash": {
+		"command":           {},
+		"description":       {},
+		"run_in_background": {},
+		"timeout":           {},
+	},
+	"Read": {
+		"file_path": {},
+		"offset":    {},
+		"limit":     {},
+		"pages":     {},
+	},
+	"Edit": {
+		"file_path":   {},
+		"old_string":  {},
+		"new_string":  {},
+		"replace_all": {},
+	},
+	"Write": {
+		"file_path": {},
+		"content":   {},
+	},
+	"Glob": {
+		"pattern": {},
+		"path":    {},
+	},
+	"Grep": {
+		"pattern":     {},
+		"path":        {},
+		"glob":        {},
+		"type":        {},
+		"output_mode": {},
+		"-i":          {},
+		"multiline":   {},
+		"head_limit":  {},
+		"offset":      {},
+		"context":     {},
+	},
+	"TodoWrite": {
+		"todos": {},
+	},
+}
+
+func isSupportedWarpTool(name string) bool {
+	_, ok := supportedWarpTools[name]
+	return ok
+}
 
 func convertTools(tools []interface{}) []toolDef {
 	if len(tools) == 0 {
@@ -795,8 +987,11 @@ func convertTools(tools []interface{}) []toolDef {
 					continue
 				}
 				name = orchids.NormalizeToolName(name)
+				if !isSupportedWarpTool(name) {
+					continue
+				}
 				description, _ := fn["description"].(string)
-				schema := compactWarpSchema(schemaMap(fn["parameters"]))
+				schema := compactWarpSchemaForTool(name, schemaMap(fn["parameters"]))
 				if name != "" {
 					key := strings.ToLower(strings.TrimSpace(name))
 					if key == "" {
@@ -819,12 +1014,15 @@ func convertTools(tools []interface{}) []toolDef {
 			continue
 		}
 		name = orchids.NormalizeToolName(name)
+		if !isSupportedWarpTool(name) {
+			continue
+		}
 		description, _ := m["description"].(string)
 		schema := schemaMap(m["input_schema"])
 		if schema == nil {
 			schema = schemaMap(m["parameters"])
 		}
-		schema = compactWarpSchema(schema)
+		schema = compactWarpSchemaForTool(name, schema)
 		if name != "" {
 			key := strings.ToLower(strings.TrimSpace(name))
 			if key == "" {
@@ -858,14 +1056,19 @@ func compactWarpDescription(description string) string {
 	if description == "" {
 		return ""
 	}
+	const suffix = "...[truncated]"
 	runes := []rune(description)
 	if len(runes) <= maxWarpToolDescLen {
 		return description
 	}
-	return string(runes[:maxWarpToolDescLen]) + "...[truncated]"
+	keep := maxWarpToolDescLen - len([]rune(suffix))
+	if keep <= 0 {
+		return suffix
+	}
+	return string(runes[:keep]) + suffix
 }
 
-func compactWarpSchema(schema map[string]interface{}) map[string]interface{} {
+func compactWarpSchemaForTool(name string, schema map[string]interface{}) map[string]interface{} {
 	if schema == nil {
 		return nil
 	}
@@ -873,6 +1076,11 @@ func compactWarpSchema(schema map[string]interface{}) map[string]interface{} {
 	if cleaned == nil {
 		return nil
 	}
+	filtered := filterWarpSchemaProperties(name, cleaned)
+	if filtered == nil {
+		return nil
+	}
+	cleaned = filtered
 	if warpSchemaJSONLen(cleaned) <= maxWarpToolSchemaJSONLen {
 		return cleaned
 	}
@@ -884,6 +1092,48 @@ func compactWarpSchema(schema map[string]interface{}) map[string]interface{} {
 		"type":       "object",
 		"properties": map[string]interface{}{},
 	}
+}
+
+func filterWarpSchemaProperties(name string, schema map[string]interface{}) map[string]interface{} {
+	allowed, ok := warpToolAllowedProps[name]
+	if !ok || schema == nil {
+		return schema
+	}
+	props, ok := schema["properties"].(map[string]interface{})
+	if !ok || len(props) == 0 {
+		return schema
+	}
+	filtered := make(map[string]interface{}, len(props))
+	for key, value := range props {
+		if _, keep := allowed[key]; keep {
+			filtered[key] = value
+		}
+	}
+	out := make(map[string]interface{}, len(schema))
+	for key, value := range schema {
+		switch key {
+		case "properties":
+			out[key] = filtered
+		case "required":
+			if raw, ok := value.([]interface{}); ok {
+				req := make([]interface{}, 0, len(raw))
+				for _, item := range raw {
+					name, _ := item.(string)
+					if _, keep := allowed[name]; keep {
+						req = append(req, item)
+					}
+				}
+				if len(req) > 0 {
+					out[key] = req
+				}
+			} else {
+				out[key] = value
+			}
+		default:
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func cleanWarpSchema(schema map[string]interface{}) map[string]interface{} {
