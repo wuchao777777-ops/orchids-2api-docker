@@ -6,6 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +64,7 @@ var (
 		"content_block_stop":  []byte("content_block_stop"),
 		"fs_operation":        []byte("fs_operation"),
 	}
+	quotedPathRegex = regexp.MustCompile(`"([^"\n\r]+)"`)
 )
 
 func mapKeys(m map[string]interface{}) []string {
@@ -726,13 +730,14 @@ func marshalSSEMessageStop() (string, error) {
 
 type streamHandler struct {
 	// Configuration
-	config           *config.Config
-	workdir          string
-	isStream         bool
-	suppressThinking bool
-	useUpstreamUsage bool
-	outputTokenMode  string
-	responseFormat   adapter.ResponseFormat
+	config            *config.Config
+	workdir           string
+	isStream          bool
+	suppressThinking  bool
+	useUpstreamUsage  bool
+	outputTokenMode   string
+	responseFormat    adapter.ResponseFormat
+	disallowToolCalls bool
 
 	// HTTP Response
 	w       http.ResponseWriter
@@ -774,20 +779,22 @@ type streamHandler struct {
 	ssePayloadScratch     []byte
 
 	// Tool Handling (proxy mode only)
-	toolBlocks         map[string]int
-	pendingToolCalls   []toolCall
-	toolInputNames     map[string]string
-	toolInputBuffers   map[string]*strings.Builder
-	toolInputHadDelta  map[string]bool
-	toolCallHandled    map[string]bool
-	toolCallEmitted    map[string]struct{}
-	currentToolInputID string
-	toolCallCount      int
-	bashCallDedup      map[string]struct{}
-	seedToolDedup      map[string]struct{}
-	toolDedupCount     int
-	toolDedupKeys      map[string]int
-	introDedup         map[string]struct{}
+	toolBlocks          map[string]int
+	pendingToolCalls    []toolCall
+	toolInputNames      map[string]string
+	toolInputBuffers    map[string]*strings.Builder
+	toolInputHadDelta   map[string]bool
+	toolCallHandled     map[string]bool
+	toolCallEmitted     map[string]struct{}
+	currentToolInputID  string
+	toolCallCount       int
+	suppressedToolCalls int
+	bashCallDedup       map[string]struct{}
+	seedToolDedup       map[string]struct{}
+	toolDedupCount      int
+	toolDedupKeys       map[string]int
+	introDedup          map[string]struct{}
+	noToolsFallbackText string
 
 	// Throttling
 	lastScanTime time.Time
@@ -858,6 +865,18 @@ func newStreamHandler(
 		ssePayloadScratch:        make([]byte, 0, 512),
 	}
 	return h
+}
+
+func (h *streamHandler) setNoToolsFallbackText(text string) {
+	h.mu.Lock()
+	h.noToolsFallbackText = strings.TrimSpace(text)
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) setDisallowToolCalls(disallow bool) {
+	h.mu.Lock()
+	h.disallowToolCalls = disallow
+	h.mu.Unlock()
 }
 
 func (h *streamHandler) release() {
@@ -1525,7 +1544,13 @@ func normalizeUpstreamToolCall(name, input, workdir string) (string, string) {
 		return "Bash", bashInput
 	}
 	normalizedName := normalizeUpstreamToolName(rawName)
-	return normalizedName, sanitizeToolInput(normalizedName, input)
+	sanitized := sanitizeToolInput(normalizedName, input)
+	sanitized = rewriteForeignBashReadCommandInput(normalizedName, sanitized, workdir)
+	sanitized = rewriteForeignAbsoluteToolPathInput(normalizedName, sanitized, workdir)
+	if bashInput, ok := rewriteAbsoluteReadToBashFallback(normalizedName, sanitized, workdir); ok {
+		return "Bash", bashInput
+	}
+	return normalizedName, sanitized
 }
 
 func normalizeUpstreamToolName(name string) string {
@@ -1587,6 +1612,388 @@ func extractDirectoryListPath(input string) string {
 		}
 	}
 	return ""
+}
+
+func rewriteForeignAbsoluteToolPathInput(name, input, workdir string) string {
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return input
+	}
+	nameKey := strings.ToLower(strings.TrimSpace(name))
+	switch nameKey {
+	case "read", "edit", "write", "glob", "grep":
+	default:
+		return input
+	}
+
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return input
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return input
+	}
+
+	changed := false
+	for _, key := range []string{"file_path", "path", "directory", "dir"} {
+		raw, ok := payload[key]
+		if !ok {
+			continue
+		}
+		path, ok := raw.(string)
+		if !ok {
+			continue
+		}
+		rewritten := rebaseAbsolutePathToWorkdir(path, workdir)
+		if rewritten != path {
+			payload[key] = rewritten
+			changed = true
+		}
+	}
+	if !changed {
+		return input
+	}
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return input
+	}
+	return string(normalized)
+}
+
+func rewriteForeignBashReadCommandInput(name, input, workdir string) string {
+	if !strings.EqualFold(strings.TrimSpace(name), "bash") {
+		return input
+	}
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return input
+	}
+
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return input
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return input
+	}
+
+	command, _ := payload["command"].(string)
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return input
+	}
+	if localized, ok := rewriteBashReadCandidatesToLocalSearch(command, workdir); ok {
+		payload["command"] = localized
+		normalized, err := json.Marshal(payload)
+		if err != nil {
+			return input
+		}
+		return string(normalized)
+	}
+
+	changed := false
+	rewrittenCommand := quotedPathRegex.ReplaceAllStringFunc(command, func(match string) string {
+		if len(match) < 2 {
+			return match
+		}
+		pathValue := match[1 : len(match)-1]
+		rewritten := rebaseCandidatePathToWorkdir(pathValue, workdir)
+		if rewritten == pathValue {
+			return match
+		}
+		changed = true
+		return strconv.Quote(rewritten)
+	})
+	if !changed {
+		return input
+	}
+	payload["command"] = rewrittenCommand
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return input
+	}
+	return string(normalized)
+}
+
+func rewriteBashReadCandidatesToLocalSearch(command, workdir string) (string, bool) {
+	command = strings.TrimSpace(command)
+	workdir = strings.TrimSpace(workdir)
+	if command == "" || workdir == "" {
+		return "", false
+	}
+	if !strings.Contains(command, "[ -f ") || !strings.Contains(command, "sed -n '1,240p'") {
+		return "", false
+	}
+
+	matches := quotedPathRegex.FindAllStringSubmatch(command, -1)
+	if len(matches) == 0 {
+		return "", false
+	}
+
+	var basenames []string
+	var exactCandidates []string
+	seenBase := map[string]struct{}{}
+	seenExact := map[string]struct{}{}
+	needsLocalization := false
+
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		pathValue := strings.TrimSpace(match[1])
+		if pathValue == "" {
+			continue
+		}
+		base := filepath.Base(pathValue)
+		if base == "" || base == "." || base == string(filepath.Separator) {
+			continue
+		}
+
+		if filepath.IsAbs(pathValue) || strings.Contains(pathValue, string(filepath.Separator)) {
+			if !sameOrWithinPath(pathValue, workdir) {
+				needsLocalization = true
+			}
+		}
+
+		rewritten := rebaseCandidatePathToWorkdir(pathValue, workdir)
+		if rewritten != pathValue {
+			needsLocalization = true
+		}
+		if strings.TrimSpace(rewritten) != "" && pathExists(rewritten) && sameOrWithinPath(rewritten, workdir) {
+			if _, ok := seenExact[rewritten]; !ok {
+				seenExact[rewritten] = struct{}{}
+				exactCandidates = append(exactCandidates, rewritten)
+			}
+		}
+		if _, ok := seenBase[base]; !ok {
+			seenBase[base] = struct{}{}
+			basenames = append(basenames, base)
+		}
+	}
+
+	if !needsLocalization || len(basenames) == 0 {
+		return "", false
+	}
+
+	var parts []string
+	for _, candidate := range exactCandidates {
+		quoted := strconv.Quote(candidate)
+		parts = append(parts, "if [ -f "+quoted+" ]; then sed -n '1,240p' < "+quoted+"; exit 0; fi")
+	}
+	for _, base := range basenames {
+		quotedBase := strconv.Quote(base)
+		parts = append(parts, "found=$(find . -type f -name "+quotedBase+" | head -n 1)")
+		parts = append(parts, "if [ -n \"$found\" ]; then sed -n '1,240p' < \"$found\"; exit 0; fi")
+	}
+	parts = append(parts, "echo 'File does not exist.'; exit 1")
+	return strings.Join(parts, "; "), true
+}
+
+func rewriteAbsoluteReadToBashFallback(name, input, workdir string) (string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(name), "read") {
+		return "", false
+	}
+
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", false
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return "", false
+	}
+	rawPath, _ := payload["file_path"].(string)
+	rawPath = strings.TrimSpace(rawPath)
+	if rawPath == "" || !filepath.IsAbs(rawPath) {
+		return "", false
+	}
+	if strings.TrimSpace(workdir) == "" {
+		return "", false
+	}
+	if sameOrWithinPath(rawPath, workdir) {
+		return "", false
+	}
+
+	candidates := relativeReadCandidates(rawPath)
+	if len(candidates) == 0 {
+		return "", false
+	}
+
+	var parts []string
+	for _, candidate := range candidates {
+		quoted := strconv.Quote(candidate)
+		parts = append(parts, "if [ -f "+quoted+" ]; then sed -n '1,240p' < "+quoted+"; exit 0; fi")
+	}
+	command := strings.Join(parts, "; ") + "; echo 'File does not exist.'; exit 1"
+	normalized, err := json.Marshal(map[string]string{
+		"command":     command,
+		"description": "Read likely local file by relative candidates",
+	})
+	if err != nil {
+		return "", false
+	}
+	return string(normalized), true
+}
+
+func relativeReadCandidates(pathValue string) []string {
+	parts := splitPathSegments(pathValue)
+	if len(parts) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 6)
+	maxKeep := 4
+	if len(parts) < maxKeep {
+		maxKeep = len(parts)
+	}
+	for keep := maxKeep; keep >= 1; keep-- {
+		candidate := filepath.Join(parts[len(parts)-keep:]...)
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func rebaseCandidatePathToWorkdir(pathValue, workdir string) string {
+	pathValue = strings.TrimSpace(pathValue)
+	workdir = strings.TrimSpace(workdir)
+	if pathValue == "" || workdir == "" {
+		return pathValue
+	}
+	if filepath.IsAbs(pathValue) {
+		return rebaseAbsolutePathToWorkdir(pathValue, workdir)
+	}
+
+	cleanWorkdir := filepath.Clean(workdir)
+	projectBase := filepath.Base(cleanWorkdir)
+	parts := splitPathSegments(pathValue)
+	if len(parts) == 0 {
+		return pathValue
+	}
+
+	for i, part := range parts {
+		if !strings.EqualFold(strings.TrimSpace(part), projectBase) {
+			continue
+		}
+		if i+1 >= len(parts) {
+			break
+		}
+		candidate := filepath.Join(cleanWorkdir, filepath.Join(parts[i+1:]...))
+		if pathExists(candidate) {
+			return candidate
+		}
+	}
+
+	maxKeep := 4
+	if len(parts) < maxKeep {
+		maxKeep = len(parts)
+	}
+	for keep := maxKeep; keep >= 1; keep-- {
+		candidate := filepath.Join(cleanWorkdir, filepath.Join(parts[len(parts)-keep:]...))
+		if pathExists(candidate) {
+			return candidate
+		}
+	}
+
+	base := filepath.Base(pathValue)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return pathValue
+	}
+	candidate := filepath.Join(cleanWorkdir, base)
+	if pathExists(candidate) {
+		return candidate
+	}
+	return pathValue
+}
+
+func rebaseAbsolutePathToWorkdir(pathValue, workdir string) string {
+	pathValue = strings.TrimSpace(pathValue)
+	workdir = strings.TrimSpace(workdir)
+	if pathValue == "" || workdir == "" {
+		return pathValue
+	}
+	if isPlaceholderDirectoryListPath(pathValue) {
+		return workdir
+	}
+	if !filepath.IsAbs(pathValue) {
+		return pathValue
+	}
+
+	cleanWorkdir := filepath.Clean(workdir)
+	cleanPath := filepath.Clean(pathValue)
+	if sameOrWithinPath(cleanPath, cleanWorkdir) {
+		return pathValue
+	}
+
+	parts := splitPathSegments(cleanPath)
+	maxKeep := 4
+	if len(parts) < maxKeep {
+		maxKeep = len(parts)
+	}
+	for keep := maxKeep; keep >= 1; keep-- {
+		tail := filepath.Join(parts[len(parts)-keep:]...)
+		candidate := filepath.Join(cleanWorkdir, tail)
+		if pathExists(candidate) {
+			return candidate
+		}
+	}
+
+	base := filepath.Base(cleanPath)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return pathValue
+	}
+	candidate := filepath.Join(cleanWorkdir, base)
+	if pathExists(candidate) {
+		return candidate
+	}
+	return pathValue
+}
+
+func sameOrWithinPath(pathValue, root string) bool {
+	pathValue = filepath.Clean(pathValue)
+	root = filepath.Clean(root)
+	if pathValue == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, pathValue)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func splitPathSegments(pathValue string) []string {
+	pathValue = filepath.Clean(pathValue)
+	parts := strings.FieldsFunc(pathValue, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func pathExists(pathValue string) bool {
+	if strings.TrimSpace(pathValue) == "" {
+		return false
+	}
+	_, err := os.Stat(pathValue)
+	return err == nil
 }
 
 func isPlaceholderDirectoryListPath(path string) bool {
@@ -1725,6 +2132,7 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		}
 		if stopReason != "tool_use" {
 			h.emitWriteChunkFallbackIfNeeded()
+			h.emitNoToolsFallbackIfNeeded()
 		}
 		h.flushPendingToolCalls(stopReason)
 		h.finalizeOutputTokens()
@@ -1741,6 +2149,7 @@ func (h *streamHandler) finishResponse(stopReason string) {
 	} else {
 		if stopReason != "tool_use" {
 			h.emitWriteChunkFallbackIfNeeded()
+			h.emitNoToolsFallbackIfNeeded()
 		}
 		h.flushPendingToolCalls(stopReason)
 		h.finalizeOutputTokens()
@@ -1988,6 +2397,140 @@ func (h *streamHandler) emitWriteChunkFallbackIfNeeded() {
 	h.mu.Unlock()
 }
 
+func (h *streamHandler) emitNoToolsFallbackIfNeeded() {
+	h.mu.Lock()
+	text := strings.TrimSpace(h.noToolsFallbackText)
+	currentText := strings.TrimSpace(h.currentTextForNoToolsFallbackLocked())
+	shouldEmit := text != "" &&
+		h.suppressedToolCalls > 0 &&
+		!h.hasTextOutput &&
+		h.responseText.Len() == 0
+	shouldAppend := text != "" &&
+		looksLikeWeakNoToolsPreface(currentText) &&
+		!strings.Contains(currentText, text)
+	if shouldEmit {
+		h.hasTextOutput = true
+	}
+	h.mu.Unlock()
+	if !shouldEmit && !shouldAppend {
+		return
+	}
+
+	if shouldAppend {
+		if h.isStream {
+			h.emitTextBlockWithMode(text, true)
+			return
+		}
+
+		if h.responseText.Len() > 0 {
+			h.responseText.WriteString("\n\n")
+		}
+		h.responseText.WriteString(text)
+		h.mu.Lock()
+		h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
+			"type": "text",
+			"text": text,
+		})
+		h.mu.Unlock()
+		return
+	}
+
+	if h.isStream {
+		h.emitTextBlockWithMode(text, true)
+		return
+	}
+
+	h.responseText.WriteString(text)
+	h.mu.Lock()
+	h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
+		"type": "text",
+		"text": text,
+	})
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) currentTextForNoToolsFallbackLocked() string {
+	if !h.isStream && h.responseText.Len() > 0 {
+		return h.responseText.String()
+	}
+
+	var parts []string
+	for idx, block := range h.contentBlocks {
+		blockType, _ := block["type"].(string)
+		if blockType != "text" {
+			continue
+		}
+		if builder, ok := h.textBlockBuilders[idx]; ok {
+			if text := strings.TrimSpace(builder.String()); text != "" {
+				parts = append(parts, text)
+				continue
+			}
+		}
+		if text, ok := block["text"].(string); ok {
+			text = strings.TrimSpace(text)
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func looksLikeWeakNoToolsPreface(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	if len([]rune(text)) > 220 {
+		return false
+	}
+
+	lower := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	intro := []string{
+		"let me",
+		"i'll first",
+		"i will first",
+		"让我先",
+		"我先",
+		"let我先",
+	}
+	action := []string{
+		"look",
+		"read",
+		"explore",
+		"examine",
+		"analyze",
+		"identify",
+		"understand",
+		"inspect",
+		"check",
+		"learn",
+		"看看",
+		"看一下",
+		"了解",
+		"阅读",
+		"读取",
+		"理解",
+	}
+
+	hasIntro := false
+	for _, marker := range intro {
+		if strings.Contains(lower, marker) {
+			hasIntro = true
+			break
+		}
+	}
+	if !hasIntro {
+		return false
+	}
+	for _, marker := range action {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
 	h.mu.Lock()
 	h.pendingToolCalls = append(h.pendingToolCalls, call)
@@ -1996,8 +2539,24 @@ func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
 }
 
 func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
+	h.mu.Lock()
+	disallowToolCalls := h.disallowToolCalls
+	if disallowToolCalls {
+		h.suppressedToolCalls++
+	}
+	h.mu.Unlock()
+	if disallowToolCalls {
+		if h.config != nil && h.config.DebugEnabled {
+			slog.Debug("tool call suppressed by no-tools gate", "tool", call.name, "input", call.input)
+		}
+		return false
+	}
+
 	_, key, ok := evaluateToolCallInput(call.name, call.input)
 	if !ok {
+		h.mu.Lock()
+		h.suppressedToolCalls++
+		h.mu.Unlock()
 		if h.config != nil && h.config.DebugEnabled {
 			slog.Debug("invalid tool call suppressed", "tool", call.name, "input", call.input)
 		}
@@ -2009,6 +2568,7 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 		if _, ok := h.bashCallDedup[key]; ok {
 			h.toolDedupCount++
 			h.toolDedupKeys[maskedKey]++
+			h.suppressedToolCalls++
 			suppressed := h.toolDedupCount
 			h.mu.Unlock()
 			if h.config != nil && h.config.DebugEnabled {

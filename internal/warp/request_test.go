@@ -140,12 +140,15 @@ func TestBuildWarpQuery_CompactsDirectoryToolResults(t *testing.T) {
 	query, isNew := buildWarpQuery("这个项目是干什么的", nil, []warpToolResult{{
 		ToolCallID: "tool_1",
 		Content:    listing,
-	}}, true)
+	}}, true, "")
 	if isNew {
 		t.Fatalf("expected tool-result follow-up to reuse conversation context")
 	}
 	if strings.Contains(query, ".DS_Store") {
 		t.Fatalf("directory summary unexpectedly kept .DS_Store: %q", query)
+	}
+	if strings.Contains(query, "orchids_accounts.txt") {
+		t.Fatalf("directory summary unexpectedly kept sensitive token file: %q", query)
 	}
 	if strings.Contains(query, "/.git/") {
 		t.Fatalf("directory summary unexpectedly kept git metadata: %q", query)
@@ -161,6 +164,38 @@ func TestBuildWarpQuery_CompactsDirectoryToolResults(t *testing.T) {
 	}
 	if !strings.Contains(query, "TOOL RULES:") {
 		t.Fatalf("expected tool rules in %q", query)
+	}
+}
+
+func TestBuildWarpQuery_CompactsLsLongDirectoryToolResults(t *testing.T) {
+	t.Parallel()
+
+	listing := strings.Join([]string{
+		"drwxr-xr-x@ 15 dailin  staff    480 Mar  7 20:26 .",
+		"drwxr-xr-x@  7 dailin  staff    224 Mar 10 21:26 ..",
+		"drwxr-xr-x@ 12 dailin  staff    384 Mar  5 21:41 .git",
+		"drwxr-xr-x@  9 dailin  staff    288 Mar  5 22:27 .venv",
+		"-rw-r--r--@  1 dailin  staff   7191 Mar  5 21:41 README.md",
+		"-rw-r--r--@  1 dailin  staff  54313 Mar  5 21:56 api.py",
+		"-rw-r--r--@  1 dailin  staff    401 Mar  5 21:41 requirements.txt",
+		"drwxr-xr-x@ 15 dailin  staff    480 Mar  7 20:26 web-ui",
+	}, "\n")
+
+	query, isNew := buildWarpQuery("帮我优化这个项目", nil, []warpToolResult{{
+		ToolCallID: "tool_1",
+		Content:    listing,
+	}}, true, "")
+	if isNew {
+		t.Fatalf("expected tool-result follow-up to reuse conversation context")
+	}
+	if strings.Contains(query, "drwxr-xr-x") || strings.Contains(query, "-rw-r--r--") {
+		t.Fatalf("expected ls -la metadata to be compacted out: %q", query)
+	}
+	if strings.Contains(query, "./.git") {
+		t.Fatalf("expected git metadata to be dropped: %q", query)
+	}
+	if !strings.Contains(query, "README.md") || !strings.Contains(query, "web-ui") {
+		t.Fatalf("expected top-level entries to remain: %q", query)
 	}
 }
 
@@ -187,6 +222,7 @@ func TestBuildWarpQuery_FollowupStripsHistoricalToolCalls(t *testing.T) {
 			Content:    "./README.md\n./main.go",
 		}},
 		true,
+		"",
 	)
 	if isNew {
 		t.Fatalf("expected follow-up query, got new conversation")
@@ -202,6 +238,36 @@ func TestBuildWarpQuery_FollowupStripsHistoricalToolCalls(t *testing.T) {
 	}
 	if !strings.Contains(query, "<tool_result id=\"call_2\">") {
 		t.Fatalf("expected current tool_result to remain in follow-up query: %q", query)
+	}
+}
+
+func TestBuildWarpQuery_InterpretsAbstractOptimizationAsCurrentProject(t *testing.T) {
+	t.Parallel()
+
+	query, isNew := buildWarpQuery("帮我优化这个方案", nil, nil, false, "/Users/dailin/Documents/GitHub/truth_social_scraper")
+	if !isNew {
+		t.Fatalf("expected initial request to remain a new conversation")
+	}
+	if !strings.Contains(query, "Treat \"this plan/design/implementation\" as the current local project/codebase") {
+		t.Fatalf("expected current-project interpretation hint, got %q", query)
+	}
+	if !strings.Contains(query, "/Users/dailin/Documents/GitHub/truth_social_scraper") {
+		t.Fatalf("expected working directory in interpretation hint, got %q", query)
+	}
+}
+
+func TestBuildWarpQuery_InterpretsAbstractOptimizationWithoutWorkdir(t *testing.T) {
+	t.Parallel()
+
+	query, isNew := buildWarpQuery("帮我优化这个方案", nil, nil, false, "")
+	if !isNew {
+		t.Fatalf("expected initial request to remain a new conversation")
+	}
+	if !strings.Contains(query, "Treat \"this plan/design/implementation\" as the current local project/codebase.") {
+		t.Fatalf("expected current-project interpretation hint without workdir, got %q", query)
+	}
+	if !strings.Contains(query, "inspect the current local repository with client tools") {
+		t.Fatalf("expected client-tool inspection hint, got %q", query)
 	}
 }
 
@@ -274,6 +340,37 @@ func TestEstimateInputTokens_TreatsLastUserToolResultAsFollowup(t *testing.T) {
 	}
 	if estimate.Profile != "warp-tool-result" {
 		t.Fatalf("expected warp-tool-result profile, got %+v", estimate)
+	}
+}
+
+func TestExtractWarpConversation_SkipsSyntheticClaudeContextUserMessage(t *testing.T) {
+	t.Parallel()
+
+	userText, history, toolResults, err := extractWarpConversation([]prompt.Message{
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Text: "You are an interactive agent that helps users with software engineering tasks.\n# auto memory\n# Environment\n - Primary working directory: /Users/dailin/Documents/GitHub/truth_social_scraper\ngitStatus:\nCurrent branch: main",
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Text: "这个项目使用了哪些技术架构",
+			},
+		},
+	}, "")
+	if err != nil {
+		t.Fatalf("extractWarpConversation: %v", err)
+	}
+	if userText != "这个项目使用了哪些技术架构" {
+		t.Fatalf("unexpected userText: %q", userText)
+	}
+	if len(history) != 0 {
+		t.Fatalf("expected synthetic context to be dropped from history, got %#v", history)
+	}
+	if len(toolResults) != 0 {
+		t.Fatalf("expected no tool results, got %#v", toolResults)
 	}
 }
 

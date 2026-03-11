@@ -448,15 +448,25 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if suggestionMode {
 		gateNoTools = true
 	}
-	if lastUserIsToolResultOnly(req.Messages) {
+	if lastUserIsToolResultFollowup(req.Messages) {
 		if isWarpRequest && shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
 			if h.config.DebugEnabled {
 				slog.Debug("tool_gate: keeping tools for warp exploratory tool_result follow-up")
 			}
 		} else {
-			gateNoTools = true
-			if h.config.DebugEnabled {
-				slog.Debug("tool_gate: disabled tools for tool_result-only follow-up")
+			// For optimization requests, never gate tools — let the LLM
+			// keep reading files until it is satisfied. Without this the
+			// upstream tool calls get suppressed and the LLM loops.
+			original := lastNonToolResultUserText(req.Messages)
+			if looksLikeOptimizationRequest(original) || explicitlyRequestsDeepAnalysis(original) {
+				if h.config.DebugEnabled {
+					slog.Debug("tool_gate: keeping tools for optimization/deep-analysis request (no gate)")
+				}
+			} else {
+				gateNoTools = true
+				if h.config.DebugEnabled {
+					slog.Debug("tool_gate: disabled tools for tool_result-only follow-up")
+				}
 			}
 		}
 	}
@@ -576,6 +586,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh := newStreamHandler(
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
 	)
+	sh.setDisallowToolCalls(gateNoTools)
+	if gateNoTools && lastUserIsToolResultFollowup(upstreamMessages) {
+		sh.setNoToolsFallbackText(buildToolResultNoToolsFallback(upstreamMessages))
+	}
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	// 捕获上游返回的 conversationID，持久化到 session 以便后续请求复用

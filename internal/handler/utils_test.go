@@ -67,7 +67,7 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 					"user_id": "u1",
 				},
 			},
-			want: "",
+			want: "u1",
 		},
 		{
 			name: "no fallback to host and user agent",
@@ -124,8 +124,33 @@ func TestExtractWorkdirFromRequestPriority(t *testing.T) {
 		},
 		{
 			name: "system fallback",
-			req:  ClaudeRequest{System: SystemItems{{Type: "text", Text: "Primary working directory: /system/path"}}},
+			req:  ClaudeRequest{System: SystemItems{{Type: "text", Text: "cwd: /system/path"}}},
 			want: "/system/path",
+			src:  "system",
+		},
+		{
+			name: "message environment fallback",
+			req: ClaudeRequest{Messages: []prompt.Message{
+				{
+					Role: "user",
+					Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+						{
+							Type: "text",
+							Text: "<system-reminder>\n# Environment\n - Primary working directory: /Users/dailin/Documents/GitHub/truth_social_scraper\n# auto memory\ngitStatus: dirty\nCurrent branch: main",
+						},
+					}},
+				},
+			}},
+			want: "/Users/dailin/Documents/GitHub/truth_social_scraper",
+			src:  "messages",
+		},
+		{
+			name: "extract claude environment primary working directory block",
+			req: ClaudeRequest{System: SystemItems{{
+				Type: "text",
+				Text: "# Environment\n - Primary working directory: /stale/project\n# auto memory\ngitStatus:",
+			}}},
+			want: "/stale/project",
 			src:  "system",
 		},
 	}
@@ -277,11 +302,20 @@ func TestShouldKeepToolsForWarpToolResultFollowup(t *testing.T) {
 		want     bool
 	}{
 		{
-			name: "keeps tools for project optimization follow-up",
+			name: "keeps tools for project optimization after directory listing",
 			messages: []prompt.Message{
 				{Role: "user", Content: prompt.MessageContent{Text: "这个项目怎么优化"}},
 				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}}}}},
-				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README content"}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "1→README.md\n2→src/\n3→docs/\n4→test.py"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "keeps tools for project optimization after ls long listing",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "drwxr-xr-x@ 15 dailin  staff    480 Mar  7 20:26 .\ndrwxr-xr-x@  7 dailin  staff    224 Mar 10 21:26 ..\n-rw-r--r--@  1 dailin  staff   7191 Mar  5 21:41 README.md\n-rw-r--r--@  1 dailin  staff  54313 Mar  5 21:56 api.py\n-rw-r--r--@  1 dailin  staff    401 Mar  5 21:41 requirements.txt\ndrwxr-xr-x@ 15 dailin  staff    480 Mar  7 20:26 web-ui"}}}},
 			},
 			want: true,
 		},
@@ -294,12 +328,577 @@ func TestShouldKeepToolsForWarpToolResultFollowup(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "keeps tools after first shallow file read for optimization follow-up",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目怎么优化"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "test.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "1→import time\n2→def main():\n3→    return 1"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "keeps tools for optimization even after 5 file reads (limit is 15)",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\nrequirements.txt\nweb-ui/"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "# truth_social_scraper\nFastAPI\nweb-ui"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_3", Content: "import json\nimport requests\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_4", Name: "Read", Input: map[string]interface{}{"file_path": "dashboard.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_4", Content: "def render_dashboard():\n    return load_json('dashboard_data.json')"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_5", Name: "Read", Input: map[string]interface{}{"file_path": "utils.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_5", Content: "def load_json(path):\n    with open(path) as f:\n        return json.load(f)"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "keeps tools up to 15 times for deep analysis requests",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "仔细看，深入分析怎么优化这里"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\nrequirements.txt"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "# truth_social_scraper\nFastAPI\nweb-ui"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_3", Content: "import json\nimport requests\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_4", Name: "Read", Input: map[string]interface{}{"file_path": "dashboard.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_4", Content: "import streamlit as st\nimport pandas as pd"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_5", Name: "Read", Input: map[string]interface{}{"file_path": "requirements.txt"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_5", Content: "requests\nfastapi"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "does not keep tools for project purpose questions that can be answered locally",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目是干什么的"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\ndashboard.py\nweb-ui/\nweb-ui/package.json\nweb-ui/src/\nrequirements.txt"}}}},
+			},
+			want: false,
+		},
+		{
+			name: "does not keep tools for testing questions that can be answered locally",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目如何测试"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "tests/\npytest.ini\nplaywright.config.ts\n.github/workflows/test.yml"}}}},
+			},
+			want: false,
+		},
+		{
+			name: "does not keep tools for dependency risk questions that can be answered locally",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些依赖风险"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "requirements.txt"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "requirements.txt\nrequests>=2.0\nflask==2.3.0\npackage-lock.json"}}}},
+			},
+			want: false,
+		},
+		{
+			name: "keeps tools for performance bottleneck question after directory listing",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些性能瓶颈"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\nsrc/\napi.py\nrequirements.txt"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "keeps tools for config risk question after directory listing",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些配置风险"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: ".env\nconfig/\nconfig.yaml\nREADME.md"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "keeps tools for observability gap question after directory listing",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些可观测性缺口"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "api.py\nDockerfile\n.github/workflows/\nREADME.md"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "keeps tools for release risk question after directory listing",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些发布风险"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "Dockerfile\n.github/\ndeploy/\nREADME.md"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "keeps tools for compatibility risk question after directory listing",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些兼容性风险"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "scripts/\nrequirements.txt\nREADME.md\nDockerfile"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "keeps tools for operational risk question after directory listing",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些运维风险"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "scripts/\ndeploy/\nDockerfile\nREADME.md"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "keeps tools for recovery risk question after directory listing",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些恢复与回滚风险"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "deploy/\nmigrations/\nDockerfile\nREADME.md"}}}},
+			},
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := shouldKeepToolsForWarpToolResultFollowup(tt.messages); got != tt.want {
 				t.Fatalf("shouldKeepToolsForWarpToolResultFollowup() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildToolResultNoToolsFallback(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目怎么优化"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\nsrc/\ndocs/\ntest.go"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if got != "" {
+		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_TechStackAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目使用了哪些技术架构"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "utils.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "1→import json\n2→import os\n3→from urllib.request import Request\n4→import socks\n5→def load_media_mapping():\n6→    with open(MEDIA_MAPPING_FILE, \"r\") as f:\n7→        return json.load(f)\n8→ALERTS_FILE = os.path.join(PROJECT_ROOT, \"market_alerts.json\")"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "Python") {
+		t.Fatalf("expected Python signal in fallback, got %q", got)
+	}
+	if !strings.Contains(got, "JSON") {
+		t.Fatalf("expected JSON storage signal in fallback, got %q", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "socks") && !strings.Contains(got, "代理") {
+		t.Fatalf("expected networking/proxy signal in fallback, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_WebImplementationAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "网页是如何实现的"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\ndashboard.py\nweb-ui/\nweb-ui/src/\nweb-ui/public/\nweb-ui/dist/\nweb-ui/index.html\nweb-ui/package.json\nweb-ui/vite.config.js\nweb-ui/tailwind.config.js\nweb-ui/postcss.config.js"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "web-ui") {
+		t.Fatalf("expected web-ui signal, got %q", got)
+	}
+	if !strings.Contains(got, "Vite") {
+		t.Fatalf("expected Vite signal, got %q", got)
+	}
+	if !strings.Contains(got, "Tailwind") {
+		t.Fatalf("expected Tailwind signal, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_ProjectPurposeAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目是干什么的"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\ndashboard.py\nweb-ui/\nweb-ui/package.json\nweb-ui/src/\nrequirements.txt"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "前端目录") && !strings.Contains(got, "前端") {
+		t.Fatalf("expected frontend-app purpose signal, got %q", got)
+	}
+	if !strings.Contains(got, "后端") && !strings.Contains(got, "脚本层") {
+		t.Fatalf("expected backend/script purpose signal, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_BackendImplementationAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "后端是如何实现的"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "api.py\nrequirements.txt\nroutes/\ncontrollers/\nfastapi\nuvicorn\nredis"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "FastAPI") {
+		t.Fatalf("expected FastAPI signal, got %q", got)
+	}
+	if !strings.Contains(got, "API") && !strings.Contains(strings.ToLower(got), "backend") {
+		t.Fatalf("expected backend/API role signal, got %q", got)
+	}
+	if !strings.Contains(got, "Redis") && !strings.Contains(got, "依赖") {
+		t.Fatalf("expected storage or dependency signal, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_DataLayerAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "数据层是如何实现的"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "models.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "models/\nprisma/schema.prisma\nmigrations/\nredis\npostgresql\ntypeorm"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "Redis") && !strings.Contains(got, "PostgreSQL") {
+		t.Fatalf("expected storage signal, got %q", got)
+	}
+	if !strings.Contains(got, "schema") && !strings.Contains(got, "migration") && !strings.Contains(got, "结构") {
+		t.Fatalf("expected schema or migration signal, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_TestingAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目如何测试"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "tests/\npytest.ini\nplaywright.config.ts\n.github/workflows/test.yml"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "pytest") && !strings.Contains(got, "Playwright") {
+		t.Fatalf("expected testing framework signal, got %q", got)
+	}
+	if !strings.Contains(got, "CI") && !strings.Contains(got, "测试目录") && !strings.Contains(got, "tests") {
+		t.Fatalf("expected test layout signal, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_DeploymentAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目怎么部署"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "Dockerfile\ndocker-compose.yml\n.github/workflows/deploy.yml\npackage.json\nvite.config.js\nrequirements.txt"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "Docker") && !strings.Contains(got, "Compose") {
+		t.Fatalf("expected docker deployment signal, got %q", got)
+	}
+	if !strings.Contains(got, "GitHub Actions") && !strings.Contains(got, "工作流") && !strings.Contains(got, "构建发布") {
+		t.Fatalf("expected workflow signal, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_OptimizationAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目怎么优化"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "utils.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "import json\nimport os\nfrom urllib.request import Request\nimport socks\nfastapi\napi.py\nmarket_alerts.json"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if got != "" {
+		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_OptimizationAnswerFromSpecificFileContent(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "test_caption_cloud.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "# test_caption_cloud.py\nfrom monitor_trump import hf_caption_image\n\nif __name__ == \"__main__\":\n    img = r\"D:\\Github Code HUB\\truth_social_scraper\\media\\images\\769d347258b5.jpg\"\n    print(hf_caption_image(img, timeout=20))"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if got != "" {
+		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_OptimizationAnswerFromDirectoryOverview(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "total 512\ndrwxr-xr-x@ 15 dailin  staff    480 Mar  7 20:26 .\ndrwxr-xr-x@  7 dailin  staff    224 Mar 10 21:44 ..\n-rw-r--r--@  1 dailin  staff   7191 Mar  5 21:41 README.md\n-rw-r--r--@  1 dailin  staff  54313 Mar  5 21:56 api.py\n-rw-r--r--@  1 dailin  staff  75989 Mar  5 21:45 dashboard.py\ndrwxr-xr-x@  9 dailin  staff    288 Mar  5 22:27 web-ui\n-rw-r--r--@  1 dailin  staff   2137 Mar  5 21:41 requirements.txt\n-rw-r--r--@  1 dailin  staff   3024 Mar  5 21:41 dashboard_data.json"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if got != "" {
+		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_DeepAnalysisSkipsFallback(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我深入分析这个项目，然后给出优化建议"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "total 512\ndrwxr-xr-x@ 15 dailin  staff    480 Mar  7 20:26 .\ndrwxr-xr-x@  7 dailin  staff    224 Mar 10 21:44 ..\n-rw-r--r--@  1 dailin  staff   7191 Mar  5 21:41 README.md\n-rw-r--r--@  1 dailin  staff  54313 Mar  5 21:56 api.py\n-rw-r--r--@  1 dailin  staff  75989 Mar  5 21:45 dashboard.py"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if got != "" {
+		t.Fatalf("expected empty fallback for deep analysis request, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_OptimizationRecoversFromForeignFileMiss(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}},
+			{Type: "text", Text: "Let me first understand the project structure."},
+		}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "total 512\ndrwxr-xr-x@ 15 dailin  staff    480 Mar  7 20:26 .\ndrwxr-xr-x@  7 dailin  staff    224 Mar 10 21:44 ..\n-rw-r--r--@  1 dailin  staff   7191 Mar  5 21:41 README.md\n-rw-r--r--@  1 dailin  staff  54313 Mar  5 21:56 api.py\n-rw-r--r--@  1 dailin  staff  75989 Mar  5 21:45 dashboard.py\ndrwxr-xr-x@  9 dailin  staff    288 Mar  5 22:27 web-ui\n-rw-r--r--@  1 dailin  staff   2137 Mar  5 21:41 requirements.txt\n-rw-r--r--@  1 dailin  staff   3024 Mar  5 21:41 dashboard_data.json"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "text", Text: "Let me first understand the project structure and code."},
+			{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/jianxinhe/projects/trump-monitor/test_caption_cloud.py"}},
+		}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "File does not exist. Note: your current working directory is /Users/dailin/Documents/GitHub/truth_social_scraper."}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if got != "" {
+		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_SecurityRiskAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些安全风险"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "app.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: ".env\napi_key=\nverify=False\nyaml.load(data)\nDEBUG=True"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "安全风险") && !strings.Contains(strings.ToLower(got), "security") {
+		t.Fatalf("expected security-risk phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "TLS") && !strings.Contains(got, "密钥") {
+		t.Fatalf("expected concrete security signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_PermissionRiskAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些权限风险"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "Dockerfile"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "USER root\nchmod 777 /app\n--privileged"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "权限") && !strings.Contains(strings.ToLower(got), "permission") {
+		t.Fatalf("expected permission-risk phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "root") && !strings.Contains(got, "权限过宽") {
+		t.Fatalf("expected concrete permission signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_DependencyRiskAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些依赖风险"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "requirements.txt"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "requirements.txt\nrequests>=2.0\ngit+https://example.com/pkg.git#egg=test\nlatest\npackage-lock.json"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "依赖") && !strings.Contains(strings.ToLower(got), "dependency") {
+		t.Fatalf("expected dependency-risk phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "未严格锁定") && !strings.Contains(got, "远程源") && !strings.Contains(got, "锁文件") {
+		t.Fatalf("expected concrete dependency signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_PerformanceBottleneckAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些性能瓶颈"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "worker.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "for item in items:\n    resp = requests.get(url)\n    data = json.load(open(path))\n    time.sleep(1)"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "性能") && !strings.Contains(strings.ToLower(got), "performance") {
+		t.Fatalf("expected performance phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "同步网络请求") && !strings.Contains(got, "阻塞") && !strings.Contains(got, "JSON 文件读写") {
+		t.Fatalf("expected concrete performance signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_CodeSmellAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些代码异味"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "app.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "import requests\nimport json\nTARGET_URL = 'http://example.com'\nprint('debug')\nexcept Exception:\nTODO: clean this up\njson.load(open(path))"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "代码异味") && !strings.Contains(strings.ToLower(got), "code smell") {
+		t.Fatalf("expected code-smell phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "错误处理过宽") && !strings.Contains(got, "硬编码") && !strings.Contains(got, "调试输出") {
+		t.Fatalf("expected concrete code-smell signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_MaintainabilityRiskAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些可维护性风险"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "service.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "global STATE\napi_key = os.getenv('API_KEY')\nrequests.get(url)\njson.load(open(path))\nexcept Exception:\nBASE_URL = 'http://internal.example'"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "可维护性") && !strings.Contains(strings.ToLower(got), "maintainability") {
+		t.Fatalf("expected maintainability phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "分层边界不清") && !strings.Contains(got, "共享可变状态") && !strings.Contains(got, "硬编码") {
+		t.Fatalf("expected concrete maintainability signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_ConfigRiskAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些配置风险"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": ".env"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "DEBUG=true\nAPI_KEY=abc\nBASE_URL=http://internal.example\nverify=False"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "配置") && !strings.Contains(strings.ToLower(got), "config") {
+		t.Fatalf("expected config-risk phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "调试配置") && !strings.Contains(got, "敏感配置") && !strings.Contains(got, "硬编码") {
+		t.Fatalf("expected concrete config-risk signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_ObservabilityGapAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些可观测性缺口"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "fastapi\nprint('start')\nrequests.get(url)\nexcept Exception:"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "可观测性") && !strings.Contains(strings.ToLower(got), "observability") {
+		t.Fatalf("expected observability phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "print/console") && !strings.Contains(got, "metrics") && !strings.Contains(got, "trace") {
+		t.Fatalf("expected concrete observability signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_ReleaseRiskAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些发布风险"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": ".github/workflows/release.yml"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "FROM node:latest\non: push\nkubectl apply -f deploy.yaml\ncurl | bash"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "发布") && !strings.Contains(strings.ToLower(got), "release") {
+		t.Fatalf("expected release-risk phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "可变标签") && !strings.Contains(got, "主干提交") && !strings.Contains(got, "远程脚本") {
+		t.Fatalf("expected concrete release-risk signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_CompatibilityRiskAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些兼容性风险"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "setup.sh"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "#!/bin/bash\nbrew install ffmpeg\npython3.8\nC:\\\\app\\\\data\nplugin.dylib"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "兼容性") && !strings.Contains(strings.ToLower(got), "compatibility") {
+		t.Fatalf("expected compatibility-risk phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "平台假设") && !strings.Contains(got, "版本绑定") && !strings.Contains(got, "平台相关二进制") {
+		t.Fatalf("expected concrete compatibility signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_OperationalRiskAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些运维风险"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "deploy.sh"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "nohup python app.py &\nssh prod\nrsync -av . prod:/srv/app\nkill -9 1234\ncrontab -e"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "运维") && !strings.Contains(strings.ToLower(got), "operational") {
+		t.Fatalf("expected operational-risk phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "人工方式") && !strings.Contains(got, "人工远程命令") && !strings.Contains(got, "计划任务") {
+		t.Fatalf("expected concrete operational signals, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_RecoveryRollbackRiskAnswer(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "这个项目有哪些恢复与回滚风险"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": ".github/workflows/release.yml"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "kubectl apply -f deploy.yaml\nalembic upgrade head\nDROP TABLE users"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "恢复与回滚") && !strings.Contains(strings.ToLower(got), "rollback") {
+		t.Fatalf("expected recovery/rollback phrasing, got %q", got)
+	}
+	if !strings.Contains(got, "破坏性变更") && !strings.Contains(got, "回滚") && !strings.Contains(got, "备份") {
+		t.Fatalf("expected concrete recovery/rollback signals, got %q", got)
+	}
+}
+
+func TestLastUserIsToolResultFollowup_AllowsTextAlongsideToolResult(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "utils.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "tool_result", ToolUseID: "tool_1", Content: "import flask"},
+			{Type: "text", Text: "这个项目使用了哪些技术架构"},
+		}}},
+	}
+
+	if !lastUserIsToolResultFollowup(messages) {
+		t.Fatalf("expected tool_result+text to be recognized as follow-up")
+	}
+}
+
+func TestExplicitlyRequestsDeepAnalysis(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"matches chinese keywords", "请帮我深入分析这个项目", true},
+		{"matches english keywords", "can you do a deep analysis", true},
+		{"does not match normal opt", "帮我优化这个项目", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := explicitlyRequestsDeepAnalysis(tt.input); got != tt.want {
+				t.Fatalf("explicitlyRequestsDeepAnalysis(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}

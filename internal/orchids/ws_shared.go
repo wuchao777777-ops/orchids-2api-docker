@@ -290,9 +290,11 @@ func BuildAIClientPromptAndHistoryWithMeta(messages []prompt.Message, system []p
 		historyMessages = messages
 	}
 	chatHistory, _ := convertChatHistoryAIClient(historyMessages)
-	if currentTurnToolResultOnly {
-		chatHistory = nil
-	}
+	// Do NOT wipe chat history even if it's a tool result follow-up.
+	// Wiping history causes the LLM to forget previous turns (and previous file reads), leading to infinite loops.
+	// if currentTurnToolResultOnly {
+	// 	chatHistory = nil
+	// }
 
 	meta.Profile = selectPromptProfileForTurn(userText, currentTurnToolResultOnly)
 	meta.NoThinking = noThinking || currentTurnToolResultOnly || shouldDisableThinkingForProfile(meta.Profile)
@@ -679,11 +681,42 @@ func buildToolResultFollowUpUserText(previousText string, toolResultText string)
 		b.WriteString("\n\nInterpret the directory listing from the root entries first. Do not assume the largest nested subdirectory is the whole project.")
 		b.WriteString(" Ignore OS metadata like .DS_Store and focus on the most meaningful project files or directories.")
 	}
-	b.WriteString("\n\nUse the tool result above to answer the original user request directly.")
-	b.WriteString(" Keep the answer concise: at most 2-3 short sentences.")
-	b.WriteString(" Do not enumerate every visible entry unless the user explicitly asked for a full listing.")
-	b.WriteString(" If the visible structure is insufficient to determine the purpose confidently, say so briefly instead of guessing details.")
+
+	// For optimization/deep-analysis requests, allow the LLM to do thorough analysis
+	// instead of constraining it to 2-3 short sentences.
+	if looksLikeOptimizationUserText(previousText) {
+		b.WriteString("\n\nUse the tool result and your tools to conduct a thorough analysis of the project.")
+		b.WriteString(" Read relevant source files and provide comprehensive optimization suggestions.")
+	} else {
+		b.WriteString("\n\nUse the tool result above to answer the original user request directly.")
+		b.WriteString(" Keep the answer concise: at most 2-3 short sentences.")
+		b.WriteString(" Do not enumerate every visible entry unless the user explicitly asked for a full listing.")
+		b.WriteString(" If the visible structure is insufficient to determine the purpose confidently, say so briefly instead of guessing details.")
+	}
 	return b.String()
+}
+
+// looksLikeOptimizationUserText checks if the user's original text is an
+// optimization or deep-analysis request. Duplicated from handler/utils.go
+// because orchids and handler are separate packages.
+func looksLikeOptimizationUserText(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"怎么优化", "如何优化", "优化建议", "性能怎么优化", "重构建议", "改进建议",
+		"帮我优化", "优化这个项目", "项目优化", "优化下这个项目", "帮我改进这个项目",
+		"优化这个方案", "帮我优化这个方案", "优化这个设计", "帮我优化这个设计",
+		"how to optimize", "optimization advice", "performance optimization",
+		"refactor suggestions", "improvement suggestions",
+		"深入分析", "深层分析", "deep analysis", "in-depth analysis",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) getWSToken() (string, error) {

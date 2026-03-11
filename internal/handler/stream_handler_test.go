@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"github.com/goccy/go-json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -320,6 +322,118 @@ func TestNormalizeUpstreamToolCall_GlobPreservesGlob(t *testing.T) {
 	}
 	if !strings.Contains(input, `"pattern":"*"`) {
 		t.Fatalf("expected glob pattern injection, got %s", input)
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RebasesForeignReadPathToWorkdir(t *testing.T) {
+	workdir := t.TempDir()
+	target := filepath.Join(workdir, "dashboard_data.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	name, input := normalizeUpstreamToolCall("Read", `{"file_path":"/Users/junchaoli/monitor_trump/dashboard_data.json"}`, workdir)
+	if name != "Read" {
+		t.Fatalf("expected Read, got %q", name)
+	}
+	if !strings.Contains(input, target) {
+		t.Fatalf("expected foreign path to rebase to %q, got %s", target, input)
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RebasesForeignGlobPathToWorkdir(t *testing.T) {
+	workdir := t.TempDir()
+	targetDir := filepath.Join(workdir, "web-ui")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+
+	name, input := normalizeUpstreamToolCall("Glob", `{"path":"/Users/dailin/dev/caption-cloud/web-ui","pattern":"*"}`, workdir)
+	if name != "Glob" {
+		t.Fatalf("expected Glob, got %q", name)
+	}
+	if !strings.Contains(input, targetDir) {
+		t.Fatalf("expected foreign glob path to rebase to %q, got %s", targetDir, input)
+	}
+}
+
+func TestNormalizeUpstreamToolCall_ForeignAbsoluteReadFallsBackToBashWhenWorkdirUnknown(t *testing.T) {
+	name, input := normalizeUpstreamToolCall("Read", `{"file_path":"/Users/jianxinwei/workspace/cursor-monitor/README.md"}`, "/home/dailin")
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+	if !strings.Contains(input, "README.md") {
+		t.Fatalf("expected basename candidate in bash fallback, got %s", input)
+	}
+	if !strings.Contains(input, "sed -n '1,240p'") {
+		t.Fatalf("expected bash read fallback command, got %s", input)
+	}
+	if strings.Contains(input, " -- ") {
+		t.Fatalf("expected BSD-compatible sed fallback without --, got %s", input)
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RewritesForeignBashReadCandidatesToWorkdir(t *testing.T) {
+	workdir := t.TempDir()
+	target := filepath.Join(workdir, "dashboard_data.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	name, input := normalizeUpstreamToolCall("Bash", `{"command":"if [ -f \"jinyaozhang/Projects/truth_social_scraper/dashboard_data.json\" ]; then sed -n '1,240p' < \"jinyaozhang/Projects/truth_social_scraper/dashboard_data.json\"; exit 0; fi; if [ -f \"dashboard_data.json\" ]; then sed -n '1,240p' < \"dashboard_data.json\"; exit 0; fi"}`, workdir)
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+	if !strings.Contains(input, target) {
+		t.Fatalf("expected bash read candidate to rebase to %q, got %s", target, input)
+	}
+	if strings.Contains(input, "jinyaozhang/Projects/truth_social_scraper") {
+		t.Fatalf("expected foreign path to be removed from localized bash command, got %s", input)
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RewritesForeignRelativeReadTailToWorkdir(t *testing.T) {
+	workdir := t.TempDir()
+	target := filepath.Join(workdir, "test_caption_cloud.py")
+	if err := os.WriteFile(target, []byte("print('ok')"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	name, input := normalizeUpstreamToolCall("Bash", `{"command":"if [ -f \"jianxinwei/workspace/monitor_trump/test_caption_cloud.py\" ]; then sed -n '1,240p' < \"jianxinwei/workspace/monitor_trump/test_caption_cloud.py\"; exit 0; fi"}`, workdir)
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+	if !strings.Contains(input, target) {
+		t.Fatalf("expected relative foreign path to rebase to %q, got %s", target, input)
+	}
+	if strings.Contains(input, "jianxinwei/workspace/monitor_trump") {
+		t.Fatalf("expected foreign path to be removed from localized bash command, got %s", input)
+	}
+}
+
+func TestNormalizeUpstreamToolCall_LocalizesForeignBashReadCandidatesToFindInWorkdir(t *testing.T) {
+	workdir := t.TempDir()
+	nested := filepath.Join(workdir, "src", "dashboard_data.json")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	if err := os.WriteFile(nested, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write nested: %v", err)
+	}
+
+	name, input := normalizeUpstreamToolCall("Bash", `{"command":"if [ -f \"jinyaozhang/Projects/truth_social_scraper/dashboard_data.json\" ]; then sed -n '1,240p' < \"jinyaozhang/Projects/truth_social_scraper/dashboard_data.json\"; exit 0; fi; if [ -f \"truth_social_scraper/dashboard_data.json\" ]; then sed -n '1,240p' < \"truth_social_scraper/dashboard_data.json\"; exit 0; fi"}`, workdir)
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if !strings.Contains(payload["command"], "find . -type f -name \"dashboard_data.json\"") {
+		t.Fatalf("expected localized find-based lookup, got %s", input)
+	}
+	if strings.Contains(input, "jinyaozhang/Projects/truth_social_scraper") {
+		t.Fatalf("expected foreign path to be removed, got %s", input)
 	}
 }
 
@@ -694,5 +808,144 @@ func TestStreamHandler_CoalescesNonTextFlushes_Bytes(t *testing.T) {
 	sh.writeSSEBytes("content_block_delta", textData)
 	if rec.flushes != 3 {
 		t.Fatalf("expected text delta to flush immediately, got %d", rec.flushes)
+	}
+}
+
+func TestStreamHandler_FinishResponse_InjectsNoToolsFallbackWhenOnlySuppressedToolsRemain(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setNoToolsFallbackText("当前只拿到目录概览，还不足以继续分析。")
+	sh.suppressedToolCalls = 1
+	sh.finishResponse("end_turn")
+
+	out := rec.buf.String()
+	if !strings.Contains(out, "当前只拿到目录概览，还不足以继续分析。") {
+		t.Fatalf("expected no-tools fallback text in SSE output, got: %s", out)
+	}
+	if !strings.Contains(out, `"output_tokens":`) {
+		t.Fatalf("expected message_delta usage, got: %s", out)
+	}
+}
+
+func TestStreamHandler_FinishResponse_InjectsNoToolsFallbackDespiteInternalBlocks(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setNoToolsFallbackText("当前已根据已有文件内容给出本地结论。")
+	sh.suppressedToolCalls = 2
+	sh.contentBlocks = append(sh.contentBlocks, map[string]any{"type": "thinking", "text": "internal"})
+	sh.finishResponse("end_turn")
+
+	out := rec.buf.String()
+	if !strings.Contains(out, "当前已根据已有文件内容给出本地结论。") {
+		t.Fatalf("expected no-tools fallback text in SSE output, got: %s", out)
+	}
+}
+
+func TestStreamHandler_FinishResponse_AppendsNoToolsFallbackAfterWeakPreface(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setNoToolsFallbackText("从当前已读取内容看，这是一个 Python 项目，包含 Flask、urllib 和本地 JSON 文件。")
+	sh.suppressedToolCalls = 1
+	sh.hasTextOutput = true
+	sh.responseText.WriteString("Let me explore the project structure to understand the technical architecture.")
+	sh.contentBlocks = append(sh.contentBlocks, map[string]any{
+		"type": "text",
+		"text": "Let me explore the project structure to understand the technical architecture.",
+	})
+
+	sh.finishResponse("end_turn")
+
+	if !strings.Contains(sh.responseText.String(), "Flask") {
+		t.Fatalf("expected appended no-tools fallback, got: %s", sh.responseText.String())
+	}
+}
+
+func TestStreamHandler_FinishResponse_AppendsNoToolsFallbackAfterWeakPrefaceWithoutSuppressedTools(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setNoToolsFallbackText("基于当前已读取内容，优先可做这几项优化：统一超时与错误处理；抽离数据访问层；补最小测试。")
+	sh.hasTextOutput = true
+	sh.responseText.WriteString("让我先了解一下项目的结构和代码。")
+	sh.contentBlocks = append(sh.contentBlocks, map[string]any{
+		"type": "text",
+		"text": "让我先了解一下项目的结构和代码。",
+	})
+
+	sh.finishResponse("end_turn")
+
+	if !strings.Contains(sh.responseText.String(), "统一超时与错误处理") {
+		t.Fatalf("expected appended no-tools fallback without suppressed tools, got: %s", sh.responseText.String())
+	}
+}
+
+func TestStreamHandler_FinishResponse_AppendsNoToolsFallbackAfterExaminePrefaceWithoutSuppressedTools(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setNoToolsFallbackText("从当前已读取内容看，可维护性风险主要在：同一模块同时承担网络、存储和业务职责，分层边界不清。")
+	sh.hasTextOutput = true
+	sh.responseText.WriteString("Let me examine the project structure and code to identify maintainability risks.")
+	sh.contentBlocks = append(sh.contentBlocks, map[string]any{
+		"type": "text",
+		"text": "Let me examine the project structure and code to identify maintainability risks.",
+	})
+
+	sh.finishResponse("end_turn")
+
+	if !strings.Contains(sh.responseText.String(), "可维护性风险") {
+		t.Fatalf("expected appended no-tools fallback for examine preface, got: %s", sh.responseText.String())
+	}
+}
+
+func TestStreamHandler_NoToolsGateSuppressesValidToolCall(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setDisallowToolCalls(true)
+	sh.handleMessage(upstream.SSEMessage{
+		Type: "model",
+		Event: map[string]any{
+			"type":       "tool-call",
+			"toolCallId": "tool_1",
+			"toolName":   "Read",
+			"input":      `{"file_path":"README.md"}`,
+		},
+	})
+	sh.finishResponse("tool_use")
+
+	out := rec.buf.String()
+	if strings.Contains(out, `"type":"tool_use"`) {
+		t.Fatalf("expected tool_use to be suppressed, got: %s", out)
+	}
+	if !strings.Contains(out, `"stop_reason":"end_turn"`) {
+		t.Fatalf("expected end_turn after suppressing tool call, got: %s", out)
 	}
 }

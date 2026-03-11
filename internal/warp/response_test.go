@@ -21,3 +21,13 @@ func TestNormalizeToolInputForToolName_ReadKeepsValidPath(t *testing.T) {
 		t.Fatalf("normalizeToolInputForToolName(Read) = %q, want %q", got, want)
 	}
 }
+
+func TestNormalizeToolInputForToolName_ReadPrefersStableProjectFilesFromList(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeToolInputForToolName("Read", `{"files":["/Users/jianxinwei/workspace/cursor-monitor/test_caption_cloud.py","/Users/jianxinwei/workspace/cursor-monitor/README.md","/Users/jianxinwei/workspace/cursor-monitor/requirements.txt"]}`)
+	want := `{"file_path":"/Users/jianxinwei/workspace/cursor-monitor/README.md"}`
+	if got != want {
+		t.Fatalf("normalizeToolInputForToolName(Read) = %q, want %q", got, want)
+	}
+}

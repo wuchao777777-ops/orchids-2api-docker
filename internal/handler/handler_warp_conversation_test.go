@@ -231,3 +231,53 @@ func TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
 		t.Fatalf("expected cc_entrypoint to be preserved for warp, got %q", calls[0].System[1].Text)
 	}
 }
+
+func TestWarpToolResultFollowupWithText_DisablesTools(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"stream":false,
+		"messages":[
+			{
+				"role":"user",
+				"content":[
+					{"type":"text","text":"You are an interactive agent that helps users with software engineering tasks.\n# Environment\nPrimary working directory: /Users/dailin/Documents/GitHub/truth_social_scraper\n# auto memory\ngitStatus: dirty\nRecent commits: abcdef"}
+				]
+			},
+			{
+				"role":"assistant",
+				"content":[
+					{"type":"tool_use","id":"tool_1","name":"Read","input":{"file_path":"utils.py"}}
+				]
+			},
+			{
+				"role":"user",
+				"content":[
+					{"type":"tool_result","tool_use_id":"tool_1","content":"1→import json\n2→import os\n3→from urllib.request import Request\n4→import socks\n5→from flask import Flask\n6→def load_media_mapping():\n7→    with open(MEDIA_MAPPING_FILE, \"r\") as f:\n8→        return json.load(f)\n9→ALERTS_FILE = os.path.join(PROJECT_ROOT, \"market_alerts.json\")"},
+					{"type":"text","text":"这个项目使用了哪些技术架构"}
+				]
+			}
+		],
+		"tools":[]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 upstream call, got %d", len(calls))
+	}
+	if !calls[0].NoTools {
+		t.Fatalf("expected follow-up with tool_result+text to disable tools")
+	}
+}

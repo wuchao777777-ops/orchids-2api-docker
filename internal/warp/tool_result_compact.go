@@ -47,7 +47,7 @@ func looksLikeWarpDirectoryListing(text string) bool {
 }
 
 func looksLikeWarpPathLine(line string) bool {
-	line = strings.TrimSpace(line)
+	line = normalizeWarpDirectoryCandidateLine(line)
 	if line == "" {
 		return false
 	}
@@ -58,7 +58,7 @@ func looksLikeWarpPathLine(line string) bool {
 }
 
 func looksLikeWarpBareDirectoryEntryLine(line string) bool {
-	line = strings.TrimSpace(line)
+	line = normalizeWarpDirectoryCandidateLine(line)
 	if line == "" {
 		return false
 	}
@@ -88,7 +88,7 @@ func looksLikeWarpBareDirectoryEntryLine(line string) bool {
 }
 
 func hasWarpDirectoryEntrySignal(line string) bool {
-	line = strings.TrimSpace(line)
+	line = normalizeWarpDirectoryCandidateLine(line)
 	if line == "" {
 		return false
 	}
@@ -157,13 +157,53 @@ func splitWarpDirectoryListingLines(lines []string) ([]string, int) {
 	pathLines := make([]string, 0, len(lines))
 	nonPathCount := 0
 	for _, line := range lines {
-		if looksLikeWarpPathLine(line) || looksLikeWarpBareDirectoryEntryLine(line) {
-			pathLines = append(pathLines, line)
+		normalized := normalizeWarpDirectoryCandidateLine(line)
+		if looksLikeWarpPathLine(normalized) || looksLikeWarpBareDirectoryEntryLine(normalized) {
+			pathLines = append(pathLines, normalized)
 			continue
 		}
 		nonPathCount++
 	}
 	return pathLines, nonPathCount
+}
+
+func normalizeWarpDirectoryCandidateLine(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	if entry, ok := extractWarpLongLsEntry(line); ok {
+		return entry
+	}
+	return line
+}
+
+func extractWarpLongLsEntry(line string) (string, bool) {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) < 9 {
+		return "", false
+	}
+	mode := fields[0]
+	if len(mode) < 10 {
+		return "", false
+	}
+	switch mode[0] {
+	case '-', 'd', 'l', 'b', 'c', 'p', 's':
+	default:
+		return "", false
+	}
+	if !strings.ContainsAny(mode, "rwx-") {
+		return "", false
+	}
+	entry := strings.Join(fields[8:], " ")
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return "", false
+	}
+	if idx := strings.Index(entry, " -> "); idx >= 0 {
+		entry = strings.TrimSpace(entry[:idx])
+	}
+	return entry, entry != ""
 }
 
 func shouldDropWarpDirectoryLine(line string) bool {
@@ -178,12 +218,34 @@ func shouldDropWarpDirectoryLine(line string) bool {
 	if idx := strings.LastIndexAny(base, `/\`); idx >= 0 {
 		base = base[idx+1:]
 	}
+	lowerBase := strings.ToLower(base)
 	switch base {
 	case ".DS_Store", "Thumbs.db", "desktop.ini":
 		return true
 	default:
+		return looksLikeSensitiveWarpDirectoryBase(lowerBase)
+	}
+}
+
+func looksLikeSensitiveWarpDirectoryBase(base string) bool {
+	if base == "" {
 		return false
 	}
+	switch {
+	case base == ".env",
+		strings.HasPrefix(base, ".env."),
+		base == "secrets.json",
+		base == "orchids_accounts.txt",
+		strings.HasSuffix(base, ".pem"),
+		strings.HasSuffix(base, ".key"):
+		return true
+	}
+	for _, marker := range []string{"token", "cookie", "credential", "secret"} {
+		if strings.Contains(base, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func sharedWarpDirectoryPrefix(lines []string) string {

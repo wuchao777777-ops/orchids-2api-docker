@@ -182,7 +182,7 @@ func TestReadToolCallDifferentIDsSameInput_BothAccepted(t *testing.T) {
 	})
 
 	if len(h.contentBlocks) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d", len(h.contentBlocks))
+		t.Fatalf("expected 2 content blocks, got %d: %v", len(h.contentBlocks), h.contentBlocks)
 	}
 }
 

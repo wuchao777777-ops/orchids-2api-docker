@@ -118,7 +118,7 @@ func buildRequestBytes(promptText, model string, messages []prompt.Message, mcpC
 	}
 	normalizedModel := normalizeModel(model)
 
-	fullQuery, isNew := buildWarpQuery(userText, history, toolResults, disableWarpTools)
+	fullQuery, isNew := buildWarpQuery(userText, history, toolResults, disableWarpTools, workdir)
 	if fullQuery == "" {
 		return nil, fmt.Errorf("empty prompt")
 	}
@@ -168,6 +168,9 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 		}
 		text, toolUses, toolResults := splitWarpContent(msg.Content)
 		text = strings.TrimSpace(stripWarpMetaTags(text))
+		if role == "user" && len(toolUses) == 0 && len(toolResults) == 0 && shouldDropWarpSyntheticUserContext(text) {
+			continue
+		}
 		parsed = append(parsed, parsedWarpMessage{
 			role:        role,
 			text:        text,
@@ -308,6 +311,27 @@ func filterWarpLogLines(text string) string {
 	return strings.Join(out, "\n")
 }
 
+func shouldDropWarpSyntheticUserContext(text string) bool {
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	markers := 0
+	for _, marker := range []string{
+		"you are an interactive agent that helps users with software engineering tasks",
+		"# environment",
+		"primary working directory:",
+		"# auto memory",
+		"gitstatus:",
+		"recent commits:",
+	} {
+		if strings.Contains(lower, marker) {
+			markers++
+		}
+	}
+	return markers >= 3
+}
+
 func isNoiseToolResult(content string) bool {
 	if content == "" {
 		return false
@@ -443,8 +467,9 @@ func stringifyWarpValue(value interface{}) string {
 	return string(encoded)
 }
 
-func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults []warpToolResult, disableWarpTools bool) (string, bool) {
+func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults []warpToolResult, disableWarpTools bool, workdir string) (string, bool) {
 	parts := []string{singleResultPrompt}
+	userText = normalizeWarpUserText(userText, history, toolResults, workdir)
 
 	if len(toolResults) > 0 {
 		if disableWarpTools {
@@ -482,6 +507,30 @@ func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults [
 		return strings.Join(parts, "\n\n"), true
 	}
 	return userText, true
+}
+
+func normalizeWarpUserText(userText string, history []warpHistoryMessage, toolResults []warpToolResult, workdir string) string {
+	userText = strings.TrimSpace(userText)
+	workdir = strings.TrimSpace(workdir)
+	if userText == "" {
+		return userText
+	}
+	if len(history) > 0 || len(toolResults) > 0 {
+		return userText
+	}
+
+	lower := strings.ToLower(userText)
+	hasOptimizeVerb := strings.Contains(lower, "优化") || strings.Contains(lower, "改进") || strings.Contains(lower, "重构") ||
+		strings.Contains(lower, "optimize") || strings.Contains(lower, "improve") || strings.Contains(lower, "refactor")
+	hasAbstractTarget := strings.Contains(lower, "方案") || strings.Contains(lower, "设计") || strings.Contains(lower, "实现") ||
+		strings.Contains(lower, "plan") || strings.Contains(lower, "design") || strings.Contains(lower, "implementation")
+	if !hasOptimizeVerb || !hasAbstractTarget {
+		return userText
+	}
+	if workdir != "" {
+		return userText + "\n\n[Interpretation: Treat \"this plan/design/implementation\" as the current local project/codebase in the working directory " + workdir + ". Inspect the repository and propose concrete codebase optimizations instead of asking for a separate plan document.]"
+	}
+	return userText + "\n\n[Interpretation: Treat \"this plan/design/implementation\" as the current local project/codebase. If more context is needed, inspect the current local repository with client tools instead of asking for a separate plan document.]"
 }
 
 func formatWarpHistory(history []warpHistoryMessage) []string {
@@ -535,7 +584,7 @@ func EstimateInputTokens(promptText, model string, messages []prompt.Message, to
 		return InputTokenEstimate{}, err
 	}
 
-	fullQuery, _ := buildWarpQuery(userText, history, toolResults, disableWarpTools)
+	fullQuery, _ := buildWarpQuery(userText, history, toolResults, disableWarpTools, "")
 	if strings.TrimSpace(fullQuery) == "" {
 		return InputTokenEstimate{}, fmt.Errorf("empty warp query")
 	}

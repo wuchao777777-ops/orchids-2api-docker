@@ -780,9 +780,10 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 		historyMessages = req.Messages
 	}
 	chatHistory, historyToolResults := convertChatHistoryAIClient(historyMessages)
-	if currentTurnToolResultOnly {
-		chatHistory = nil
-	}
+	// Do NOT wipe chat history even if it's a tool result follow-up.
+	// if currentTurnToolResultOnly {
+	// 	chatHistory = nil
+	// }
 	if provided := normalizeProvidedChatHistory(req.ChatHistory); len(provided) > 0 {
 		// Prefer caller-provided history (already budgeted by handler) to avoid WS re-expanding context.
 		chatHistory = provided

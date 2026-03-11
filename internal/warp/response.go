@@ -463,6 +463,23 @@ func parseToolCall(data []byte, out *parsedEvent) {
 				toolName = name
 				toolInput = input
 			}
+		case 5: // read_files — always parse, even if toolName was set by an earlier field
+			if wire != 2 {
+				_ = d.skip(wire)
+				continue
+			}
+			payload, err := d.readBytes()
+			if err != nil {
+				return
+			}
+			resolvedName, resolvedInput := parseFallbackToolInput("read_files", payload)
+			if resolvedInput != "" && resolvedInput != "{}" {
+				// Only set toolName/toolInput when read_files actually contains file paths.
+				// The warp server sends an initial empty placeholder event, followed by
+				// a separate event with the real file paths — skip the placeholder.
+				toolName = resolvedName
+				toolInput = resolvedInput
+			}
 		default:
 			if toolName == "" && wire == 2 {
 				payload, err := d.readBytes()
@@ -609,12 +626,81 @@ func extractWarpReadPath(payload map[string]interface{}) string {
 			}
 		}
 	}
+	for _, key := range []string{"files", "file_paths", "paths"} {
+		if raw, ok := payload[key]; ok {
+			if paths := extractWarpPathList(raw); len(paths) > 0 {
+				return pickWarpPreferredReadPath(paths)
+			}
+		}
+	}
 	for _, raw := range payload {
 		if path := extractWarpPathLikeString(raw); path != "" {
 			return path
 		}
 	}
 	return ""
+}
+
+func extractWarpPathList(raw interface{}) []string {
+	switch v := raw.(type) {
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if path := extractWarpPathLikeString(item); path != "" {
+				out = append(out, path)
+			}
+		}
+		return out
+	default:
+		if path := extractWarpPathLikeString(raw); path != "" {
+			return []string{path}
+		}
+		return nil
+	}
+}
+
+func pickWarpPreferredReadPath(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	score := func(path string) int {
+		base := strings.ToLower(strings.TrimSpace(path))
+		switch {
+		case strings.HasSuffix(base, "/readme.md"), base == "readme.md":
+			return 0
+		case strings.HasSuffix(base, "/pyproject.toml"), base == "pyproject.toml":
+			return 1
+		case strings.HasSuffix(base, "/requirements.txt"), base == "requirements.txt":
+			return 2
+		case strings.HasSuffix(base, "/package.json"), base == "package.json":
+			return 3
+		case strings.HasSuffix(base, "/go.mod"), base == "go.mod":
+			return 4
+		case strings.HasSuffix(base, "/api.py"), base == "api.py":
+			return 5
+		case strings.HasSuffix(base, "/main.py"), base == "main.py":
+			return 6
+		case strings.HasSuffix(base, "/app.py"), base == "app.py":
+			return 7
+		case strings.HasSuffix(base, "/main.go"), base == "main.go":
+			return 8
+		default:
+			return 100
+		}
+	}
+	best := strings.TrimSpace(paths[0])
+	bestScore := score(best)
+	for _, path := range paths[1:] {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if s := score(path); s < bestScore {
+			best = path
+			bestScore = s
+		}
+	}
+	return best
 }
 
 func extractWarpPathLikeString(raw interface{}) string {
@@ -812,6 +898,41 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 		return toolName, string(b)
 	case "apply_file_diffs":
 		return parseApplyFileDiffsPayload(payload)
+	case "read_files":
+		// Proto schema: field 1 = repeated string (file paths)
+		var files []string
+		d := decoder{data: payload}
+		for !d.eof() {
+			field, wire, err := d.readKey()
+			if err != nil {
+				break
+			}
+			if field == 1 && wire == 2 {
+				b, err := d.readBytes()
+				if err != nil {
+					break
+				}
+				if path := strings.TrimSpace(string(b)); path != "" {
+					files = append(files, path)
+				}
+			} else {
+				_ = d.skip(wire)
+			}
+		}
+		if len(files) == 0 {
+			return "Read", "{}"
+		}
+		// Pick the best file to read (prefer project-relevant files)
+		path := pickWarpPreferredReadPath(files)
+		if path == "" {
+			path = files[0]
+		}
+		input := map[string]string{"file_path": path}
+		b, err := json.Marshal(input)
+		if err != nil {
+			return "Read", "{}"
+		}
+		return "Read", string(b)
 	default:
 		// Generic protobuf extraction: pull all string fields so non-shell
 		// tools don't receive empty input.
