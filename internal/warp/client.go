@@ -208,7 +208,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		resp.Body.Close()
 		bodyStr := string(body403)
 
-		if strings.Contains(bodyStr, "blocked from using AI features") {
+		if strings.Contains(bodyStr, "blocked from using AI features") || strings.Contains(bodyStr, "please upgrade to a paid plan") {
 			slog.Warn("Warp AI: account blocked, attempting anonymous fallback", "cid", cid)
 
 			anonJWT, aErr := AcquireAnonymousJWT(ctx)
@@ -222,6 +222,15 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 			if err != nil {
 				return err
 			}
+		} else {
+			// Non-blocked 403: body is already read and closed above.
+			// Return the error immediately using the captured body content to
+			// avoid re-reading from a closed response body further down.
+			if logger != nil {
+				logger.LogUpstreamHTTPError(aiURL, resp.StatusCode, bodyStr, nil)
+			}
+			slog.Warn("Warp AI request failed", "status", resp.StatusCode, "body", bodyStr)
+			return fmt.Errorf("warp api error: HTTP 403: %s", strings.TrimSpace(bodyStr))
 		}
 	}
 

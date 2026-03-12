@@ -2,6 +2,7 @@ package warp
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -192,14 +193,24 @@ func createAnonymousUser(ctx context.Context) (string, error) {
 	req.Header.Set("x-warp-os-version", osVersion)
 	req.Header.Set("user-agent", "")
 
-
-
 	resp, err := anonHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	var anonBodyReader io.ReadCloser = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gr, gzErr := gzip.NewReader(resp.Body)
+		if gzErr != nil {
+			return "", fmt.Errorf("gzip decode createAnonymousUser: %w", gzErr)
+		}
+		defer gr.Close()
+		anonBodyReader = gr
+	}
+	respBody, err := io.ReadAll(anonBodyReader)
+	if err != nil {
+		return "", fmt.Errorf("read createAnonymousUser response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("CreateAnonymousUser HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 200))
@@ -255,9 +266,19 @@ func exchangeIDTokenForRefresh(ctx context.Context, idToken string) (string, err
 		return "", err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-
-
+	var exchBodyReader io.ReadCloser = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gr, gzErr := gzip.NewReader(resp.Body)
+		if gzErr != nil {
+			return "", fmt.Errorf("gzip decode exchangeIDTokenForRefresh: %w", gzErr)
+		}
+		defer gr.Close()
+		exchBodyReader = gr
+	}
+	body, err := io.ReadAll(exchBodyReader)
+	if err != nil {
+		return "", fmt.Errorf("read exchangeIDTokenForRefresh response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("signInWithCustomToken HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
@@ -293,9 +314,19 @@ func refreshWarpToken(ctx context.Context, refreshToken string) (string, int64, 
 		return "", 0, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-
-
+	var refreshBodyReader io.ReadCloser = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gr, gzErr := gzip.NewReader(resp.Body)
+		if gzErr != nil {
+			return "", 0, fmt.Errorf("gzip decode refreshWarpToken: %w", gzErr)
+		}
+		defer gr.Close()
+		refreshBodyReader = gr
+	}
+	body, err := io.ReadAll(refreshBodyReader)
+	if err != nil {
+		return "", 0, fmt.Errorf("read refreshWarpToken response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", 0, fmt.Errorf("refresh token HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))

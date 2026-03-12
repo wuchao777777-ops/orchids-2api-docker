@@ -223,10 +223,18 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			uconn.Close()
 			return nil, fmt.Errorf("h2 new client conn: %w", err)
 		}
-		// Cache for reuse (no proxy only)
+		// Cache for reuse (no proxy only); close any stale connection being replaced.
 		if proxyURL == nil {
 			entry := &h2ConnEntry{conn: clientConn, created: time.Now()}
-			t.h2Pool.Store(addr, entry)
+			if old, loaded := t.h2Pool.Swap(addr, entry); loaded {
+				oldEntry := old.(*h2ConnEntry)
+				oldEntry.mu.Lock()
+				if oldEntry.conn != nil {
+					_ = oldEntry.conn.Close()
+					oldEntry.conn = nil
+				}
+				oldEntry.mu.Unlock()
+			}
 		}
 		return clientConn.RoundTrip(req)
 	}
