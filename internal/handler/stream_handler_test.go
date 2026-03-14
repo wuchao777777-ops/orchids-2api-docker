@@ -832,6 +832,26 @@ func TestStreamHandler_FinishResponse_InjectsNoToolsFallbackWhenOnlySuppressedTo
 	}
 }
 
+func TestStreamHandler_FinishResponse_SuppressesGenericEmptyFallbackWhenRequested(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setSuppressEmptyOutputFallback(true)
+	sh.finishResponse("end_turn")
+
+	out := rec.buf.String()
+	if strings.Contains(out, "No output was presented to the user") {
+		t.Fatalf("expected generic empty fallback to stay suppressed, got: %s", out)
+	}
+	if !strings.Contains(out, "event: message_stop") {
+		t.Fatalf("expected message_stop even when empty fallback is suppressed, got: %s", out)
+	}
+}
+
 func TestStreamHandler_FinishResponse_InjectsNoToolsFallbackDespiteInternalBlocks(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()

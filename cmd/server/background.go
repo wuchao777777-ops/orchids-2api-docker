@@ -51,6 +51,9 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			return
 		}
 		for _, acc := range accounts {
+			if strings.TrimSpace(acc.Name) == "" {
+				continue
+			}
 			if strings.EqualFold(acc.AccountType, "warp") {
 				if !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
 					continue
@@ -606,7 +609,10 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 				cancel()
 				checked++
 				if verifyErr != nil {
-					slog.Debug("Grok 模型同步: 候选模型校验失败", "model_id", modelID, "error", verifyErr)
+					// Suppress expected 404 Model not found logs to reduce debug noise.
+					if !strings.Contains(verifyErr.Error(), "status=404") {
+						slog.Debug("Grok 模型同步: 候选模型校验失败", "model_id", modelID, "error", verifyErr)
+					}
 					continue
 				}
 

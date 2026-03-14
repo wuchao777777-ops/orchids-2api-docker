@@ -72,6 +72,26 @@ type toolCall struct {
 	input string
 }
 
+func cloneSSEMessage(msg upstream.SSEMessage) upstream.SSEMessage {
+	cloned := msg
+	if msg.Event != nil {
+		cloned.Event = make(map[string]interface{}, len(msg.Event))
+		for k, v := range msg.Event {
+			cloned.Event[k] = v
+		}
+	}
+	if msg.Raw != nil {
+		cloned.Raw = make(map[string]interface{}, len(msg.Raw))
+		for k, v := range msg.Raw {
+			cloned.Raw[k] = v
+		}
+	}
+	if len(msg.RawJSON) > 0 {
+		cloned.RawJSON = append(json.RawMessage(nil), msg.RawJSON...)
+	}
+	return cloned
+}
+
 const keepAliveInterval = 15 * time.Second
 const maxRequestBytes = 50 * 1024 * 1024 // 50MB
 const duplicateWindow = 2 * time.Second
@@ -135,6 +155,9 @@ func (h *Handler) computeRequestHash(r *http.Request, body []byte) string {
 }
 
 func (h *Handler) computeSemanticRequestHash(r *http.Request, req ClaudeRequest) string {
+	if lastUserIsToolResultFollowup(req.Messages) {
+		return ""
+	}
 	userText := normalizeTopicText(extractUserText(req.Messages))
 	if userText == "" {
 		return ""
@@ -444,29 +467,29 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	suggestionMode := isSuggestionMode(req.Messages)
 	noThinking := suggestionMode || h.config.SuppressThinking
 	gateNoTools := false
+	toolGateReasons := make([]string, 0, 2)
+	toolGateMessage := ""
 	suppressThinking := noThinking
 	if suggestionMode {
 		gateNoTools = true
+		toolGateReasons = append(toolGateReasons, "suggestion_mode")
+		toolGateMessage = buildToolGateMessage(req.Messages, true)
 	}
 	if lastUserIsToolResultFollowup(req.Messages) {
-		if isWarpRequest && shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
+		if isWarpRequest {
 			if h.config.DebugEnabled {
-				slog.Debug("tool_gate: keeping tools for warp exploratory tool_result follow-up")
+				slog.Debug("tool_gate: keeping tools for warp tool_result follow-up passthrough")
+			}
+		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
+			if h.config.DebugEnabled {
+				slog.Debug("tool_gate: keeping tools for exploratory tool_result follow-up", "warp", isWarpRequest)
 			}
 		} else {
-			// For optimization requests, never gate tools — let the LLM
-			// keep reading files until it is satisfied. Without this the
-			// upstream tool calls get suppressed and the LLM loops.
-			original := lastNonToolResultUserText(req.Messages)
-			if looksLikeOptimizationRequest(original) || explicitlyRequestsDeepAnalysis(original) {
-				if h.config.DebugEnabled {
-					slog.Debug("tool_gate: keeping tools for optimization/deep-analysis request (no gate)")
-				}
-			} else {
-				gateNoTools = true
-				if h.config.DebugEnabled {
-					slog.Debug("tool_gate: disabled tools for tool_result-only follow-up")
-				}
+			gateNoTools = true
+			toolGateReasons = append(toolGateReasons, "tool_result_followup")
+			toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
+			if h.config.DebugEnabled {
+				slog.Debug("tool_gate: disabled tools for tool_result-only follow-up", "warp", isWarpRequest)
 			}
 		}
 	}
@@ -476,7 +499,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if gateNoTools {
 		effectiveTools = nil
-		slog.Debug("tool_gate: disabled tools for short non-code request")
+		slog.Debug("tool_gate: disabled tools", "warp", isWarpRequest, "reasons", toolGateReasons)
 	}
 
 	// 构建 prompt（V2 Markdown 格式）
@@ -497,7 +520,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	var aiClientHistory []map[string]string
 	var builtPrompt string
 	var promptMeta orchids.AIClientPromptMeta
-	builtPrompt, aiClientHistory, promptMeta = orchids.BuildAIClientPromptAndHistoryWithMeta(req.Messages, req.System, mappedModel, noThinking, effectiveWorkdir, h.config.ContextMaxTokens)
+	builtPrompt, aiClientHistory, promptMeta = orchids.BuildAIClientPromptAndHistoryWithMetaAndTools(req.Messages, req.System, mappedModel, noThinking, effectiveWorkdir, h.config.ContextMaxTokens, effectiveTools)
 	noThinking = promptMeta.NoThinking
 	suppressThinking = promptMeta.NoThinking
 	buildDuration := time.Since(startBuild)
@@ -544,7 +567,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if gateNoTools {
-		builtPrompt = injectToolGate(builtPrompt, "This is a short, non-code request. Do NOT call tools or perform any file operations. Answer directly.")
+		builtPrompt = injectToolGate(builtPrompt, toolGateMessage)
 	}
 
 	// 2. 记录转换后的 prompt
@@ -587,9 +610,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
 	)
 	sh.setDisallowToolCalls(gateNoTools)
-	if gateNoTools && lastUserIsToolResultFollowup(upstreamMessages) {
-		sh.setNoToolsFallbackText(buildToolResultNoToolsFallback(upstreamMessages))
-	}
+	sh.setAllowedToolNames(orchids.SupportedToolNames(effectiveTools))
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	// 捕获上游返回的 conversationID，持久化到 session 以便后续请求复用
@@ -705,7 +726,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 			if sender, ok := apiClient.(UpstreamPayloadClient); ok {
 				slog.Debug("Using SendRequestWithPayload")
-				warpBatches := [][]prompt.Message{upstreamMessages}
+				warpBatches := []warpToolResultBatch{{Messages: upstreamMessages}}
 				if isWarpRequest {
 					// Enforce hard token budget for Warp requests to avoid runaway context cost.
 					if _, isWarp := apiClient.(*warp.Client); isWarp {
@@ -731,29 +752,68 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						upstreamMessages = trimmed
 					}
 
-					if h.config.WarpSplitToolResults {
-						if _, isWarp := apiClient.(*warp.Client); isWarp {
-							batches, total := splitWarpToolResults(upstreamMessages, 1)
-							if len(batches) > 1 {
-								slog.Debug("Warp tool results split", "total_tool_results", total, "batches", len(batches))
-							}
-							warpBatches = batches
+					if h.config.WarpSplitToolResults || lastUserIsToolResultFollowup(upstreamMessages) {
+						batches, total := splitWarpToolResults(upstreamMessages, 1)
+						if len(batches) > 1 {
+							slog.Debug("Warp tool results split", "total_tool_results", total, "batches", len(batches))
 						}
+						warpBatches = batches
 					}
 				}
-				noopHandler := func(msg upstream.SSEMessage) {
-					if msg.Type == "error" {
-						slog.Warn("Warp intermediate batch error", "event", msg.Event)
-					}
-				}
+				latestChatSessionID := upstreamReq.ChatSessionID
 				for i, batch := range warpBatches {
 					batchReq := upstreamReq
-					batchReq.Messages = batch
+					batchReq.Messages = batch.Messages
+					batchReq.ChatSessionID = latestChatSessionID
 					isLast := i == len(warpBatches)-1
 					if isLast {
 						err = sender.SendRequestWithPayload(r.Context(), batchReq, sh.handleMessage, logger)
 					} else {
-						err = sender.SendRequestWithPayload(r.Context(), batchReq, noopHandler, nil)
+						intermediateConversationID := ""
+						intermediateTextDeltas := 0
+						intermediateToolCalls := 0
+						bufferedIntermediate := make([]upstream.SSEMessage, 0, 8)
+						noopHandler := func(msg upstream.SSEMessage) {
+							switch msg.Type {
+							case "model.conversation_id":
+								if id, ok := msg.Event["id"].(string); ok && strings.TrimSpace(id) != "" {
+									intermediateConversationID = id
+									latestChatSessionID = id
+									if conversationKey != "" {
+										h.sessionStore.SetConvID(r.Context(), conversationKey, id)
+										h.sessionStore.Touch(r.Context(), conversationKey)
+									}
+									slog.Debug("Warp intermediate conversationID captured", "key", conversationKey, "id", id)
+								}
+								bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
+							case "model.text-delta", "coding_agent.output_text.delta":
+								intermediateTextDeltas++
+								bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
+							case "model.tool-call":
+								intermediateToolCalls++
+								bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
+							case "model.finish", "model.tokens-used":
+								bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
+							case "error":
+								slog.Warn("Warp intermediate batch error", "event", msg.Event)
+							}
+						}
+						err = sender.SendRequestWithPayload(r.Context(), batchReq, noopHandler, logger)
+						if err == nil && intermediateConversationID == "" {
+							slog.Debug("Warp intermediate batch completed without conversationID update", "batch", i+1)
+						}
+						if err == nil && (intermediateTextDeltas > 0 || intermediateToolCalls > 0) {
+							slog.Debug(
+								"Warp intermediate batch produced visible output",
+								"batch", i+1,
+								"text_deltas", intermediateTextDeltas,
+								"tool_calls", intermediateToolCalls,
+							)
+							for _, buffered := range bufferedIntermediate {
+								sh.handleMessage(buffered)
+							}
+							break
+						}
 					}
 					if err != nil {
 						break
@@ -797,11 +857,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				if errClass.Category == "auth_blocked" || errClass.Category == "auth" {
 					sh.InjectAuthError(errClass.Category, errStr)
 				}
+				if errClass.Category == "canceled" {
+					sh.setSuppressEmptyOutputFallback(true)
+				}
 				sh.finishResponse("end_turn")
 				return
 			}
 
 			if r.Context().Err() != nil {
+				sh.setSuppressEmptyOutputFallback(true)
 				sh.finishResponse("end_turn")
 				return
 			}

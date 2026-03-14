@@ -77,6 +77,44 @@ func TestComputeSemanticRequestHash_StableAndScoped(t *testing.T) {
 	}
 }
 
+func TestComputeSemanticRequestHash_SkipsToolResultFollowup(t *testing.T) {
+	h := &Handler{}
+	req, _ := http.NewRequest(http.MethodPost, "http://example.com/v1/messages", bytes.NewReader([]byte("{}")))
+
+	followup := ClaudeRequest{
+		Model:  "claude-3-5-sonnet",
+		Stream: true,
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{
+						Type:  "tool_use",
+						ID:    "tool_1",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "/tmp/api.py"},
+					},
+				}},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{
+						Type:      "tool_result",
+						ToolUseID: "tool_1",
+						Content:   "file one",
+					},
+				}},
+			},
+		},
+	}
+
+	if got := h.computeSemanticRequestHash(req, followup); got != "" {
+		t.Fatalf("expected empty semantic hash for tool_result follow-up, got %q", got)
+	}
+}
+
 func TestRegisterRequest_DedupWindowAndInFlight(t *testing.T) {
 	h := &Handler{
 		dedupStore: NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),

@@ -433,6 +433,7 @@ func parseToolCall(data []byte, out *parsedEvent) {
 	toolID := ""
 	toolName := ""
 	toolInput := ""
+	var readFilesPaths []string
 	for !d.eof() {
 		field, wire, err := d.readKey()
 		if err != nil {
@@ -472,13 +473,10 @@ func parseToolCall(data []byte, out *parsedEvent) {
 			if err != nil {
 				return
 			}
-			resolvedName, resolvedInput := parseFallbackToolInput("read_files", payload)
-			if resolvedInput != "" && resolvedInput != "{}" {
-				// Only set toolName/toolInput when read_files actually contains file paths.
+			if paths := decodeWarpReadFilesPayload(payload); len(paths) > 0 {
 				// The warp server sends an initial empty placeholder event, followed by
 				// a separate event with the real file paths — skip the placeholder.
-				toolName = resolvedName
-				toolInput = resolvedInput
+				readFilesPaths = append(readFilesPaths[:0], paths...)
 			}
 		default:
 			if toolName == "" && wire == 2 {
@@ -500,6 +498,13 @@ func parseToolCall(data []byte, out *parsedEvent) {
 			}
 			_ = d.skip(wire)
 		}
+	}
+	if len(readFilesPaths) > 0 {
+		calls := buildWarpReadFileToolCalls(toolID, readFilesPaths)
+		if len(calls) > 0 {
+			out.ToolCalls = append(out.ToolCalls, calls...)
+		}
+		return
 	}
 	if toolName == "" {
 		return
@@ -899,26 +904,7 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 	case "apply_file_diffs":
 		return parseApplyFileDiffsPayload(payload)
 	case "read_files":
-		// Proto schema: field 1 = repeated string (file paths)
-		var files []string
-		d := decoder{data: payload}
-		for !d.eof() {
-			field, wire, err := d.readKey()
-			if err != nil {
-				break
-			}
-			if field == 1 && wire == 2 {
-				b, err := d.readBytes()
-				if err != nil {
-					break
-				}
-				if path := strings.TrimSpace(string(b)); path != "" {
-					files = append(files, path)
-				}
-			} else {
-				_ = d.skip(wire)
-			}
-		}
+		files := decodeWarpReadFilesPayload(payload)
 		if len(files) == 0 {
 			return "Read", "{}"
 		}
@@ -971,6 +957,156 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 		}
 		return toolName, string(b)
 	}
+}
+
+func decodeWarpReadFilesPayload(payload []byte) []string {
+	var files []string
+	d := decoder{data: payload}
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			break
+		}
+		if field == 1 && wire == 2 {
+			b, err := d.readBytes()
+			if err != nil {
+				break
+			}
+			if path := decodeWarpReadFilePath(b); path != "" {
+				files = append(files, path)
+			}
+			continue
+		}
+		_ = d.skip(wire)
+	}
+	return uniqueWarpPaths(files)
+}
+
+func decodeWarpReadFilePath(raw []byte) string {
+	for _, candidate := range []string{
+		unwrapWarpLengthPrefixedString(raw),
+		strings.TrimSpace(string(raw)),
+	} {
+		if path := normalizeWarpReadFilePathCandidate(candidate); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func unwrapWarpLengthPrefixedString(raw []byte) string {
+	if len(raw) < 2 {
+		return ""
+	}
+	d := decoder{data: raw}
+	length, err := d.readVarint()
+	if err != nil {
+		return ""
+	}
+	if length == 0 || d.pos >= len(raw) || int(length) != len(raw[d.pos:]) {
+		return ""
+	}
+	candidate := string(raw[d.pos:])
+	if !utf8.ValidString(candidate) {
+		return ""
+	}
+	return strings.TrimSpace(candidate)
+}
+
+func normalizeWarpReadFilePathCandidate(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return ""
+	}
+	if path := findWarpPathInString(candidate); path != "" {
+		return path
+	}
+	candidate = strings.Trim(candidate, "\"'")
+	candidate = strings.TrimRight(candidate, ",")
+	candidate = strings.TrimRight(candidate, "]})")
+	if looksLikeWarpRelativePathCandidate(candidate) {
+		return candidate
+	}
+	return ""
+}
+
+func looksLikeWarpRelativePathCandidate(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if looksLikeWarpPathCandidate(s) {
+		return true
+	}
+	if strings.ContainsAny(s, "\n\r\t{}[]<>|`") {
+		return false
+	}
+	if strings.Count(s, " ") > 1 {
+		return false
+	}
+	lower := strings.ToLower(s)
+	for _, suffix := range []string{
+		".md", ".txt", ".py", ".go", ".js", ".jsx", ".ts", ".tsx",
+		".json", ".yaml", ".yml", ".toml", ".lock", ".ini", ".cfg",
+	} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	switch lower {
+	case "readme", "makefile", "dockerfile":
+		return true
+	}
+	return strings.Contains(s, "/") || strings.Contains(s, "\\")
+}
+
+func buildWarpReadFileToolCalls(toolID string, files []string) []toolCall {
+	files = uniqueWarpPaths(files)
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]toolCall, 0, len(files))
+	for idx, path := range files {
+		if normalized := normalizeWarpReadFilePathCandidate(path); normalized != "" {
+			path = normalized
+		}
+		inputBytes, err := json.Marshal(map[string]string{"file_path": path})
+		if err != nil {
+			continue
+		}
+		callID := strings.TrimSpace(toolID)
+		if callID == "" {
+			callID = fallbackToolCallID("Read", string(inputBytes))
+		} else if len(files) > 1 {
+			callID = fmt.Sprintf("%s_%d", callID, idx+1)
+		}
+		out = append(out, toolCall{
+			ID:    callID,
+			Name:  "Read",
+			Input: string(inputBytes),
+		})
+	}
+	return out
+}
+
+func uniqueWarpPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
 }
 
 func parseApplyFileDiffsPayload(payload []byte) (string, string) {

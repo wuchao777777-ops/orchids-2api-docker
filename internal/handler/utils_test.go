@@ -338,7 +338,20 @@ func TestShouldKeepToolsForWarpToolResultFollowup(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "keeps tools for optimization even after 5 file reads (limit is 15)",
+			name: "keeps tools for optimization after readme and requirements without source reads",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\nrequirements.txt\nmonitor_trump.py\ndashboard.py"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "# Truth Social Monitor\nFastAPI\nStreamlit"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "requirements.txt"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_3", Content: "fastapi\nstreamlit\nrequests\nhttpx\npandas"}}}},
+			},
+			want: true,
+		},
+		{
+			name: "stops tools for optimization once directory and core files are covered",
 			messages: []prompt.Message{
 				{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
 				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
@@ -352,10 +365,25 @@ func TestShouldKeepToolsForWarpToolResultFollowup(t *testing.T) {
 				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_5", Name: "Read", Input: map[string]interface{}{"file_path": "utils.py"}}}}},
 				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_5", Content: "def load_json(path):\n    with open(path) as f:\n        return json.load(f)"}}}},
 			},
+			want: false,
+		},
+		{
+			name: "keeps tools for optimization after readme requirements and one core source file",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\ndashboard.py\nmonitor_trump.py\nrequirements.txt\nutils.py"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "# Truth Social Monitor\nFastAPI\nStreamlit"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "requirements.txt"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_3", Content: "fastapi\nstreamlit\nrequests\nhttpx\npandas"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_4", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_4", Content: "import json\nimport requests\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+			},
 			want: true,
 		},
 		{
-			name: "keeps tools up to 15 times for deep analysis requests",
+			name: "stops tools for deep optimization analysis once enough files are covered",
 			messages: []prompt.Message{
 				{Role: "user", Content: prompt.MessageContent{Text: "仔细看，深入分析怎么优化这里"}},
 				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
@@ -369,7 +397,39 @@ func TestShouldKeepToolsForWarpToolResultFollowup(t *testing.T) {
 				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_5", Name: "Read", Input: map[string]interface{}{"file_path": "requirements.txt"}}}}},
 				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_5", Content: "requests\nfastapi"}}}},
 			},
+			want: false,
+		},
+		{
+			name: "keeps tools when optimization follow-up only repeats one core file",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\nrequirements.txt\nweb-ui/"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "# truth_social_scraper\nFastAPI\nweb-ui"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_3", Content: "import json\nimport requests\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_4", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_4", Content: "import json\nimport requests\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+			},
 			want: true,
+		},
+		{
+			name: "stops tools when optimization repeats after multiple implementation files are covered",
+			messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\ndashboard.py\nrequirements.txt\nutils.py"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "# truth_social_scraper\nFastAPI\nweb-ui"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_3", Content: "import json\nimport requests\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_4", Name: "Read", Input: map[string]interface{}{"file_path": "utils.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_4", Content: "import json\nimport requests\n\ndef fetch(url):\n    return requests.get(url).json()"}}}},
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_5", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_5", Content: "import json\nimport requests\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+			},
+			want: false,
 		},
 		{
 			name: "does not keep tools for project purpose questions that can be answered locally",
@@ -480,8 +540,8 @@ func TestBuildToolResultNoToolsFallback(t *testing.T) {
 	}
 
 	got := buildToolResultNoToolsFallback(messages)
-	if got != "" {
-		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	if !strings.Contains(got, "核心源码") && !strings.Contains(strings.ToLower(got), "core source") {
+		t.Fatalf("expected request to read core source files first, got %q", got)
 	}
 }
 
@@ -614,8 +674,8 @@ func TestBuildToolResultNoToolsFallback_OptimizationAnswer(t *testing.T) {
 	}
 
 	got := buildToolResultNoToolsFallback(messages)
-	if got != "" {
-		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	if !strings.Contains(got, "优化") && !strings.Contains(strings.ToLower(got), "optimiz") {
+		t.Fatalf("expected optimization guidance, got %q", got)
 	}
 }
 
@@ -627,8 +687,8 @@ func TestBuildToolResultNoToolsFallback_OptimizationAnswerFromSpecificFileConten
 	}
 
 	got := buildToolResultNoToolsFallback(messages)
-	if got != "" {
-		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	if !strings.Contains(got, "少量核心源码") && !strings.Contains(strings.ToLower(got), "small slice of the core source") {
+		t.Fatalf("expected request for more implementation context, got %q", got)
 	}
 }
 
@@ -640,8 +700,8 @@ func TestBuildToolResultNoToolsFallback_OptimizationAnswerFromDirectoryOverview(
 	}
 
 	got := buildToolResultNoToolsFallback(messages)
-	if got != "" {
-		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	if !strings.Contains(got, "核心源码") && !strings.Contains(strings.ToLower(got), "core source") {
+		t.Fatalf("expected request to inspect core source files first, got %q", got)
 	}
 }
 
@@ -653,8 +713,8 @@ func TestBuildToolResultNoToolsFallback_DeepAnalysisSkipsFallback(t *testing.T) 
 	}
 
 	got := buildToolResultNoToolsFallback(messages)
-	if got != "" {
-		t.Fatalf("expected empty fallback for deep analysis request, got %q", got)
+	if !strings.Contains(got, "核心源码") && !strings.Contains(strings.ToLower(got), "core source") {
+		t.Fatalf("expected request to inspect core source files first, got %q", got)
 	}
 }
 
@@ -674,8 +734,134 @@ func TestBuildToolResultNoToolsFallback_OptimizationRecoversFromForeignFileMiss(
 	}
 
 	got := buildToolResultNoToolsFallback(messages)
-	if got != "" {
-		t.Fatalf("expected empty fallback for optimization request (should let LLM handle), got %q", got)
+	if !strings.Contains(got, "核心源码") && !strings.Contains(strings.ToLower(got), "core source") {
+		t.Fatalf("expected request to inspect core source files after recovery, got %q", got)
+	}
+}
+
+func TestShouldKeepToolsForWarpToolResultFollowup_RecoversMalformedReadPaths(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\nrequirements.txt\nutils.py\nmonitor_trump.py\ndashboard.py"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": ":/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}},
+			{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "</Users/dailin/Documents/GitHub/truth_social_scraper/utils.py"}},
+		}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "tool_result", ToolUseID: "tool_2", Content: "File does not exist. Note: your current working directory is /Users/dailin/Documents/GitHub/truth_social_scraper."},
+			{Type: "tool_result", ToolUseID: "tool_3", Content: "File does not exist. Note: your current working directory is /Users/dailin/Documents/GitHub/truth_social_scraper."},
+		}}},
+	}
+
+	if !shouldKeepToolsForWarpToolResultFollowup(messages) {
+		t.Fatalf("expected malformed read path failures to keep tools for recovery")
+	}
+}
+
+func TestShouldKeepToolsForWarpToolResultFollowup_OptimizationKeepsToolsAfterExploratoryPreface(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "text", Text: "Let me first understand the project structure and codebase."},
+			{Type: "tool_use", ID: "tool_ls", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}},
+		}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "tool_result", ToolUseID: "tool_ls", Content: "README.md\napi.py\nmonitor_trump.py\nutils.py\ndashboard.py\nrequirements.txt\nweb-ui"},
+		}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "text", Text: "Let me first thoroughly understand the codebase before proposing optimizations."},
+			{Type: "tool_use", ID: "tool_readme", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}},
+			{Type: "tool_use", ID: "tool_api", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}},
+			{Type: "tool_use", ID: "tool_monitor", Name: "Read", Input: map[string]interface{}{"file_path": "monitor_trump.py"}},
+			{Type: "tool_use", ID: "tool_utils", Name: "Read", Input: map[string]interface{}{"file_path": "utils.py"}},
+			{Type: "tool_use", ID: "tool_dashboard", Name: "Read", Input: map[string]interface{}{"file_path": "dashboard.py"}},
+			{Type: "tool_use", ID: "tool_req", Name: "Read", Input: map[string]interface{}{"file_path": "requirements.txt"}},
+		}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "tool_result", ToolUseID: "tool_readme", Content: "# Truth Social Monitor\nFastAPI\nStreamlit"},
+			{Type: "tool_result", ToolUseID: "tool_api", Content: "import json\nimport requests\nfrom fastapi import FastAPI\napp = FastAPI()"},
+			{Type: "tool_result", ToolUseID: "tool_monitor", Content: "from openai import OpenAI\nfrom huggingface_hub import InferenceClient\nimport requests"},
+			{Type: "tool_result", ToolUseID: "tool_utils", Content: "import json\nimport os\nALERTS_FILE = 'alerts.json'\ndef load_json(path):\n    with open(path) as f:\n        return json.load(f)"},
+			{Type: "tool_result", ToolUseID: "tool_dashboard", Content: "import streamlit as st\ndef render_dashboard():\n    return st.title('dashboard')"},
+			{Type: "tool_result", ToolUseID: "tool_req", Content: "fastapi\nstreamlit\nrequests\nopenai"},
+		}}},
+	}
+
+	if !shouldKeepToolsForWarpToolResultFollowup(messages) {
+		t.Fatalf("expected exploratory optimization preface to keep tools even after several file reads")
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_OptimizationUsesAggregatedEvidence(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\nrequirements.txt\nweb-ui/\ndashboard.py"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "import requests\nfrom fastapi import FastAPI\nimport json\n\ndef load_data(path):\n    with open(path) as f:\n        return json.load(f)"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "requirements.txt"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_3", Content: "fastapi\nrequests"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_4", Name: "Read", Input: map[string]interface{}{"file_path": "utils.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_4", Content: "import json\nimport requests\n\ndef fetch(url):\n    return requests.get(url).json()\n\ndef load_data(path):\n    return json.load(open(path))"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	if !strings.Contains(got, "统一超时") && !strings.Contains(got, "数据读写") && !strings.Contains(got, "边界") {
+		t.Fatalf("expected aggregated optimization guidance, got %q", got)
+	}
+}
+
+func TestBuildToolResultNoToolsFallback_OptimizationUsesProjectSpecificFileSuggestions(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_ls", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_ls", Content: "README.md\napi.py\nmonitor_trump.py\nutils.py\ndashboard.py\ntest_caption_cloud.py\nweb-ui\nrequirements.txt"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_api", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_api", Content: "from fastapi import FastAPI\nfrom threading import Thread\nfrom utils import ALERTS_FILE, DASHBOARD_JSON_FILE\n@app.get('/api/alerts')\ndef list_alerts():\n    with open(ALERTS_FILE, 'r') as f:\n        return json.load(f)\nThread(target=_analyze_media_background, daemon=True).start()"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_utils", Name: "Read", Input: map[string]interface{}{"file_path": "utils.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_utils", Content: "ALERTS_FILE = os.path.join(PROJECT_ROOT, 'market_alerts.json')\nMEDIA_MAPPING_FILE = os.path.join(PROJECT_ROOT, 'media_mapping.json')\nDASHBOARD_JSON_FILE = os.path.join(PROJECT_ROOT, 'dashboard_data.json')\nwith open(ALERTS_FILE, 'r', encoding='utf-8') as f:\n    alerts_data = json.load(f)\nwith open(MEDIA_MAPPING_FILE, 'w', encoding='utf-8') as f:\n    json.dump(mapping, f, indent=2, ensure_ascii=False)"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_monitor", Name: "Read", Input: map[string]interface{}{"file_path": "monitor_trump.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_monitor", Content: "from openai import OpenAI\nfrom huggingface_hub import InferenceClient\nresponse_chat = requests.post(api_url_chat, headers=headers_chat, json=payload_chat, timeout=timeout)\nwith urlopen(req, timeout=timeout) as resp:\n    return resp.read()\nexcept Exception as e:\n    print(f'[AI][HF] caption failed: {e}')"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_dashboard", Name: "Read", Input: map[string]interface{}{"file_path": "dashboard.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_dashboard", Content: "import streamlit as st\nst.components.v1.html('<script>sessionStorage.setItem(\\'api_url_detected\\', \\'true\\')</script>')\nif 'api_base_url' not in st.session_state:\n    st.session_state['api_base_url'] = 'http://localhost:8000'"}}}},
+	}
+
+	got := buildToolResultNoToolsFallback(messages)
+	for _, marker := range []string{"`api.py`", "`monitor_trump.py`", "`dashboard.py`", "`utils.py`"} {
+		if !strings.Contains(got, marker) {
+			t.Fatalf("expected project-specific optimization guidance mentioning %s, got %q", marker, got)
+		}
+	}
+	if !strings.Contains(got, "结构化日志") && !strings.Contains(strings.ToLower(got), "structured logging") {
+		t.Fatalf("expected concrete client/error-handling suggestion, got %q", got)
+	}
+}
+
+func TestBuildToolGateMessage_OptimizationFollowupAvoidsShortNonCodeFraming(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "api.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "import requests\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+	}
+
+	got := buildToolGateMessage(messages, false)
+	if strings.Contains(strings.ToLower(got), "short, non-code request") {
+		t.Fatalf("expected project-specific tool-gate wording, got %q", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "project optimization") {
+		t.Fatalf("expected optimization-specific tool-gate wording, got %q", got)
+	}
+	for _, want := range []string{
+		"Tool access is unavailable for this turn",
+		"will be ignored",
+		"Do NOT call tools",
+		"do not describe a plan",
+		"do not say you will first analyze or review the codebase",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected stronger direct-answer tool-gate guidance %q, got %q", want, got)
+		}
 	}
 }
 

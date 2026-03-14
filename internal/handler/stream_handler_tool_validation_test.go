@@ -227,6 +227,48 @@ func TestWriteToolCallDifferentIDsDifferentContent_BothAccepted(t *testing.T) {
 	}
 }
 
+func TestToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+	h.setAllowedToolNames([]string{"Read", "Bash"})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "readfolder_1",
+			"toolName":   "ReadFolder",
+			"input":      `{"path":"/tmp"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected undeclared tool call to be suppressed and fallback text, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
+		t.Fatalf("expected fallback text block, got %q", got)
+	}
+	if h.suppressedToolCalls != 1 {
+		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
+	}
+	if h.finalStopReason != "end_turn" {
+		t.Fatalf("finalStopReason=%q want end_turn", h.finalStopReason)
+	}
+}
+
 func TestBashToolCallDifferentIDsSameCommand_Deduped(t *testing.T) {
 	t.Parallel()
 
@@ -418,8 +460,11 @@ func TestSeedSideEffectDedupFromMessages_SuppressRepeatDeleteAcrossTurns(t *test
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 0 {
-		t.Fatalf("expected repeated delete tool call to be suppressed, got %d blocks", len(h.contentBlocks))
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected repeated delete tool call to be suppressed and fallback text injected, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
+		t.Fatalf("expected fallback text block, got %q", got)
 	}
 	if h.toolDedupCount != 1 {
 		t.Fatalf("expected dedup count 1, got %d", h.toolDedupCount)
@@ -474,6 +519,70 @@ func TestSeedSideEffectDedupFromMessages_DoesNotUseOlderTurnBeforeLatestUserText
 
 	if len(h.contentBlocks) != 1 {
 		t.Fatalf("expected old-turn command not pre-deduped, got %d blocks", len(h.contentBlocks))
+	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
+		t.Fatalf("expected Bash tool call, got %q", got)
+	}
+}
+
+func TestRepeatedReadOnlyBashToolCall_IsNotDeduped(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	history := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "优化这个项目"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:  "tool_use",
+						ID:    "tool_old_1",
+						Name:  "Bash",
+						Input: map[string]interface{}{"command": "find /Users/dailin/Documents/GitHub/truth_social_scraper -type f | sort"},
+					},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_old_1", Content: "./api.py"},
+				},
+			},
+		},
+	}
+	h.seedSideEffectDedupFromMessages(history)
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "tool_new_1",
+			"toolName":   "Bash",
+			"input":      `{"command":"find /Users/dailin/Documents/GitHub/truth_social_scraper -type f | sort"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if h.toolDedupCount != 0 {
+		t.Fatalf("expected read-only bash command not to be deduped, got %d", h.toolDedupCount)
+	}
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected repeated read-only bash tool call to be emitted, got %d blocks", len(h.contentBlocks))
 	}
 	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
 		t.Fatalf("expected Bash tool call, got %q", got)

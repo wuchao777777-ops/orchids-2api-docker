@@ -19,6 +19,10 @@ type mockUpstreamEdge struct {
 	events []upstream.SSEMessage
 }
 
+type errorUpstreamEdge struct {
+	err error
+}
+
 type blockingUpstreamEdge struct {
 	events    []upstream.SSEMessage
 	entered   chan struct{}
@@ -36,6 +40,14 @@ func (m *mockUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstr
 		onMessage(e)
 	}
 	return nil
+}
+
+func (m *errorUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	return m.err
+}
+
+func (m *errorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	return m.err
 }
 
 func (m *blockingUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -214,5 +226,174 @@ func TestHandleMessages_Dedup_SemanticBodyDriftWhileInFlight(t *testing.T) {
 	}
 	if !strings.Contains(rec1.Body.String(), "ok") {
 		t.Fatalf("expected first request to complete normally, got: %s", rec1.Body.String())
+	}
+}
+
+func TestHandleMessages_Dedup_DoesNotSuppressToolResultFollowup(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
+		{Type: "model", Event: map[string]any{"type": "text-start"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "ok"}},
+		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+	}}
+
+	payloadWithToolResult := func(content string) map[string]any {
+		return map[string]any{
+			"model": "claude-3-5-sonnet",
+			"messages": []map[string]any{
+				{"role": "user", "content": "帮我优化这个项目"},
+				{"role": "assistant", "content": []map[string]any{
+					{
+						"type":  "tool_use",
+						"id":    "tool_1",
+						"name":  "Read",
+						"input": map[string]any{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"},
+					},
+				}},
+				{"role": "user", "content": []map[string]any{
+					{
+						"type":        "tool_result",
+						"tool_use_id": "tool_1",
+						"content":     content,
+					},
+				}},
+			},
+			"system": []any{},
+			"stream": false,
+		}
+	}
+
+	bodyA, _ := json.Marshal(payloadWithToolResult("file one"))
+	bodyB, _ := json.Marshal(payloadWithToolResult("file two"))
+
+	rec1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(bodyA))
+	h.HandleMessages(rec1, req1)
+	if rec1.Code != 200 {
+		t.Fatalf("expected first request 200, got %d", rec1.Code)
+	}
+	if !strings.Contains(rec1.Body.String(), "ok") {
+		t.Fatalf("expected first request to complete normally, got: %s", rec1.Body.String())
+	}
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(bodyB))
+	h.HandleMessages(rec2, req2)
+	if rec2.Code != 200 {
+		t.Fatalf("expected second request 200, got %d", rec2.Code)
+	}
+	if strings.Contains(rec2.Body.String(), "duplicate_request") {
+		t.Fatalf("expected tool_result follow-up to bypass semantic dedup, got: %s", rec2.Body.String())
+	}
+	if !strings.Contains(rec2.Body.String(), "ok") {
+		t.Fatalf("expected second request to complete normally, got: %s", rec2.Body.String())
+	}
+}
+
+func TestHandleMessages_ToolResultFollowup_DoesNotInjectLocalFallbackText(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
+		{Type: "model", Event: map[string]any{"type": "text-start"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "Let me first understand the project structure and code."}},
+		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+	}}
+
+	payload := map[string]any{
+		"model": "claude-3-5-sonnet",
+		"messages": []map[string]any{
+			{"role": "user", "content": "这个项目使用了哪些技术架构"},
+			{"role": "assistant", "content": []map[string]any{
+				{
+					"type":  "tool_use",
+					"id":    "tool_1",
+					"name":  "Read",
+					"input": map[string]any{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/utils.py"},
+				},
+			}},
+			{"role": "user", "content": []map[string]any{
+				{
+					"type":        "tool_result",
+					"tool_use_id": "tool_1",
+					"content":     "import json\nimport os\nALERTS_FILE='alerts.json'\ndef load_json(path):\n    return json.load(open(path))",
+				},
+				{
+					"type": "text",
+					"text": "请直接回答",
+				},
+			}},
+		},
+		"system": []any{},
+		"stream": false,
+	}
+	body, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	out := rec.Body.String()
+	if !strings.Contains(out, "Let me first understand the project structure and code.") {
+		t.Fatalf("expected upstream text to be preserved, got: %s", out)
+	}
+	for _, unwanted := range []string{
+		"Python",
+		"JSON",
+		"基于当前已读取内容",
+		"当前只拿到目录概览",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("did not expect local fallback text %q in %s", unwanted, out)
+		}
+	}
+}
+
+func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &errorUpstreamEdge{err: context.Canceled}
+
+	payload := map[string]any{
+		"model": "claude-3-5-sonnet",
+		"messages": []map[string]any{
+			{"role": "user", "content": "帮我优化这个项目"},
+			{"role": "assistant", "content": []map[string]any{
+				{
+					"type":  "tool_use",
+					"id":    "tool_1",
+					"name":  "Read",
+					"input": map[string]any{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"},
+				},
+			}},
+			{"role": "user", "content": []map[string]any{
+				{
+					"type":        "tool_result",
+					"tool_use_id": "tool_1",
+					"content":     "1->import os",
+				},
+			}},
+		},
+		"system": []any{},
+		"stream": true,
+	}
+	body, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	out := rec.Body.String()
+	if strings.Contains(out, "No output was presented to the user") {
+		t.Fatalf("did not expect generic empty fallback after canceled upstream, got: %s", out)
+	}
+	if !strings.Contains(out, "event: message_stop") {
+		t.Fatalf("expected stream to terminate cleanly, got: %s", out)
 	}
 }

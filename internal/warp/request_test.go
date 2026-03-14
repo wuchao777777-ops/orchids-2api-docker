@@ -1,6 +1,9 @@
 package warp
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -220,6 +223,8 @@ func TestBuildWarpQuery_FollowupStripsHistoricalToolCalls(t *testing.T) {
 		[]warpToolResult{{
 			ToolCallID: "call_2",
 			Content:    "./README.md\n./main.go",
+			ToolName:   "Glob",
+			Arguments:  `{"path":".","pattern":"*"}`,
 		}},
 		true,
 		"",
@@ -227,7 +232,7 @@ func TestBuildWarpQuery_FollowupStripsHistoricalToolCalls(t *testing.T) {
 	if isNew {
 		t.Fatalf("expected follow-up query, got new conversation")
 	}
-	if strings.Contains(query, "<tool_use") {
+	if strings.Contains(query, "<tool_use id=\"call_1\"") {
 		t.Fatalf("expected historical tool_use to be stripped from follow-up query: %q", query)
 	}
 	if strings.Contains(query, "<tool_result tool_call_id=\"call_1\">") {
@@ -238,6 +243,37 @@ func TestBuildWarpQuery_FollowupStripsHistoricalToolCalls(t *testing.T) {
 	}
 	if !strings.Contains(query, "<tool_result id=\"call_2\">") {
 		t.Fatalf("expected current tool_result to remain in follow-up query: %q", query)
+	}
+	if !strings.Contains(query, "<tool_use id=\"call_2\" name=\"Glob\">") {
+		t.Fatalf("expected current tool provenance to remain in follow-up query: %q", query)
+	}
+}
+
+func TestBuildWarpQuery_FollowupPrunesExploratoryAssistantPrefaces(t *testing.T) {
+	t.Parallel()
+
+	query, isNew := buildWarpQuery(
+		"",
+		[]warpHistoryMessage{
+			{Role: "user", Content: "帮我优化一下这个项目"},
+			{Role: "assistant", Content: "Let me first do a thorough review of the codebase to identify optimization opportunities."},
+			{Role: "assistant", Content: "api.py exposes FastAPI routes and also performs background analysis work."},
+		},
+		[]warpToolResult{{
+			ToolCallID: "tool_1",
+			Content:    "from fastapi import FastAPI",
+		}},
+		true,
+		"",
+	)
+	if isNew {
+		t.Fatalf("expected tool-result follow-up to stay in follow-up mode")
+	}
+	if strings.Contains(query, "Let me first do a thorough review") {
+		t.Fatalf("expected exploratory assistant preface to be pruned from follow-up history, got %q", query)
+	}
+	if !strings.Contains(query, "api.py exposes FastAPI routes") {
+		t.Fatalf("expected meaningful assistant history to remain, got %q", query)
 	}
 }
 
@@ -305,8 +341,73 @@ func TestExtractWarpConversation_LastUserTextAndToolResultRemainCurrent(t *testi
 	if len(toolResults) != 1 {
 		t.Fatalf("expected current tool_result, got %d", len(toolResults))
 	}
+	if toolResults[0].ToolName != "Glob" {
+		t.Fatalf("expected tool provenance to be preserved, got %#v", toolResults[0])
+	}
+	if !strings.Contains(toolResults[0].Arguments, `"pattern":"*"`) {
+		t.Fatalf("expected tool arguments to be preserved, got %#v", toolResults[0])
+	}
 	if len(history) != 1 || history[0].Role != "assistant" {
 		t.Fatalf("expected only assistant tool_use in history, got %#v", history)
+	}
+}
+
+func TestExtractWarpConversation_ToolResultOnlyCurrentTurnDoesNotReuseOlderUserText(t *testing.T) {
+	t.Parallel()
+
+	userText, history, toolResults, err := extractWarpConversation([]prompt.Message{
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Text: "帮我优化一下这个项目",
+			},
+		},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:  "tool_use",
+						ID:    "tool_api",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "api.py"},
+					},
+					{
+						Type:  "tool_use",
+						ID:    "tool_utils",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "utils.py"},
+					},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_api", Content: "from fastapi import FastAPI"},
+					{Type: "tool_result", ToolUseID: "tool_utils", Content: "import json"},
+				},
+			},
+		},
+	}, "")
+	if err != nil {
+		t.Fatalf("extractWarpConversation: %v", err)
+	}
+	if userText != "" {
+		t.Fatalf("expected current tool_result-only turn to keep empty userText, got %q", userText)
+	}
+	if len(toolResults) != 2 {
+		t.Fatalf("expected 2 current tool results, got %d", len(toolResults))
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected prior user question and assistant tool_use in history, got %#v", history)
+	}
+	if history[0].Role != "user" || history[0].Content != "帮我优化一下这个项目" {
+		t.Fatalf("expected original user request to stay in history, got %#v", history)
+	}
+	if history[1].Role != "assistant" || len(history[1].ToolCalls) != 2 {
+		t.Fatalf("expected assistant tool calls to stay in history, got %#v", history)
 	}
 }
 
@@ -396,5 +497,171 @@ func TestFormatWarpHistory_CompactsHistoricalToolResults(t *testing.T) {
 	}
 	if strings.Count(parts[0], "line ") >= len(lines) {
 		t.Fatalf("expected historical tool_result to be compacted, got %q", parts[0])
+	}
+}
+
+func TestExtractWarpConversation_ExpandsPersistedToolResult(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	toolResultPath := filepath.Join(tmp, ".claude", "projects", "session", "tool-results", "toolu_1.txt")
+	if err := os.MkdirAll(filepath.Dir(toolResultPath), 0o755); err != nil {
+		t.Fatalf("mkdir tool results: %v", err)
+	}
+
+	fullContent := strings.Join([]string{
+		"1→import os",
+		"2→import json",
+		"3→from fastapi import FastAPI",
+		"4→app = FastAPI()",
+		"5→",
+		"40→@app.get(\"/health\")",
+		"41→def health():",
+		"42→    return {\"ok\": True}",
+	}, "\n")
+	if err := os.WriteFile(toolResultPath, []byte(fullContent), 0o644); err != nil {
+		t.Fatalf("write tool result: %v", err)
+	}
+
+	placeholder := strings.Join([]string{
+		"<persisted-output>",
+		"Output too large (57.9KB). Full output saved to: " + toolResultPath,
+		"",
+		"Preview (first 2KB):",
+		"1→import os",
+		"2→import json",
+		"...",
+		"</persisted-output>",
+	}, "\n")
+
+	_, _, toolResults, err := extractWarpConversation([]prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+				Type:  "tool_use",
+				ID:    "tool_1",
+				Name:  "Read",
+				Input: map[string]interface{}{"file_path": "api.py"},
+			}}},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+				Type:      "tool_result",
+				ToolUseID: "tool_1",
+				Content:   placeholder,
+			}}},
+		},
+	}, "")
+	if err != nil {
+		t.Fatalf("extractWarpConversation: %v", err)
+	}
+	if len(toolResults) != 1 {
+		t.Fatalf("expected 1 tool result, got %d", len(toolResults))
+	}
+	if strings.Contains(toolResults[0].Content, "Output too large") {
+		t.Fatalf("expected persisted-output wrapper to be expanded, got %q", toolResults[0].Content)
+	}
+	if !strings.Contains(toolResults[0].Content, `40→@app.get("/health")`) {
+		t.Fatalf("expected expanded content to include later lines, got %q", toolResults[0].Content)
+	}
+}
+
+func TestCompactWarpToolResultContent_UsesStructuralCodeLinesForReadOutput(t *testing.T) {
+	t.Parallel()
+
+	lines := make([]string, 0, 80)
+	for i := 1; i <= 80; i++ {
+		switch i {
+		case 1:
+			lines = append(lines, "1→import os")
+		case 2:
+			lines = append(lines, "2→import json")
+		case 30:
+			lines = append(lines, `30→@app.get("/health")`)
+		case 31:
+			lines = append(lines, "31→def health():")
+		case 60:
+			lines = append(lines, "60→class Service:")
+		case 61:
+			lines = append(lines, "61→    def run(self):")
+		default:
+			lines = append(lines, fmt.Sprintf("%d→value_%d = %d // %s", i, i, i, strings.Repeat("x", 48)))
+		}
+	}
+
+	compacted := compactWarpToolResultContent(strings.Join(lines, "\n"), false)
+	if !strings.Contains(compacted, `30→@app.get("/health")`) {
+		t.Fatalf("expected route definition to survive compaction, got %q", compacted)
+	}
+	if !strings.Contains(compacted, "60→class Service:") {
+		t.Fatalf("expected later class definition to survive compaction, got %q", compacted)
+	}
+	if !strings.Contains(compacted, "[read output summary: omitted") {
+		t.Fatalf("expected read-output summary markers, got %q", compacted)
+	}
+}
+
+func TestExtractWarpConversation_DedupsRepeatedLargeReadToolResults(t *testing.T) {
+	t.Parallel()
+
+	lines := make([]string, 0, 64)
+	for i := 1; i <= 64; i++ {
+		switch i {
+		case 1:
+			lines = append(lines, "1→import os")
+		case 20:
+			lines = append(lines, "20→@app.get(\"/health\")")
+		case 21:
+			lines = append(lines, "21→def health():")
+		default:
+			lines = append(lines, fmt.Sprintf("%d→value_%d = %d", i, i, i))
+		}
+	}
+	largeContent := strings.Join(lines, "\n")
+
+	_, _, toolResults, err := extractWarpConversation([]prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+				Type:  "tool_use",
+				ID:    "tool_1",
+				Name:  "Read",
+				Input: map[string]interface{}{"file_path": "api.py"},
+			}}},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+				Type:      "tool_result",
+				ToolUseID: "tool_1",
+				Content:   largeContent,
+			}}},
+		},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+				Type:  "tool_use",
+				ID:    "tool_2",
+				Name:  "Read",
+				Input: map[string]interface{}{"file_path": "api.py"},
+			}}},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+				Type:      "tool_result",
+				ToolUseID: "tool_2",
+				Content:   largeContent,
+			}}},
+		},
+	}, "")
+	if err != nil {
+		t.Fatalf("extractWarpConversation: %v", err)
+	}
+	if len(toolResults) != 1 {
+		t.Fatalf("expected repeated large read output to be deduped, got %d results", len(toolResults))
 	}
 }

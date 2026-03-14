@@ -14,49 +14,90 @@ type toolResultRef struct {
 	blockIndex int
 }
 
-func splitWarpToolResults(messages []prompt.Message, batchSize int) ([][]prompt.Message, int) {
+type warpToolResultBatch struct {
+	Messages []prompt.Message
+}
+
+func splitWarpToolResults(messages []prompt.Message, batchSize int) ([]warpToolResultBatch, int) {
 	if batchSize <= 0 {
-		return [][]prompt.Message{cloneMessages(messages)}, 0
+		return []warpToolResultBatch{{Messages: cloneMessages(messages)}}, 0
 	}
 
-	refs := collectToolResultRefs(messages)
+	turnIndex := lastToolResultTurnIndex(messages)
+	if turnIndex < 0 {
+		return []warpToolResultBatch{{Messages: cloneMessages(messages)}}, 0
+	}
+
+	refs := collectToolResultRefsForTurn(messages, turnIndex)
 	total := len(refs)
 	if total <= batchSize {
-		return [][]prompt.Message{cloneMessages(messages)}, total
+		return []warpToolResultBatch{{Messages: cloneMessages(messages)}}, total
 	}
 
-	var batches [][]prompt.Message
-	for start := 0; start < total; start += batchSize {
-		end := start + batchSize
+	var batches []warpToolResultBatch
+	for end := batchSize; end <= total; end += batchSize {
 		if end > total {
 			end = total
 		}
-		keep := make(map[toolResultRef]struct{}, end-start)
-		for _, ref := range refs[start:end] {
+		keep := make(map[toolResultRef]struct{}, end)
+		for _, ref := range refs[:end] {
 			keep[ref] = struct{}{}
 		}
-		batches = append(batches, filterToolResults(messages, keep))
+		keepUserText := end == total
+		batches = append(batches, warpToolResultBatch{
+			Messages: filterToolResults(messages, turnIndex, keep, keepUserText),
+		})
+	}
+	if total%batchSize != 0 {
+		end := total
+		if end > total {
+			end = total
+		}
+		keep := make(map[toolResultRef]struct{}, end)
+		for _, ref := range refs[:end] {
+			keep[ref] = struct{}{}
+		}
+		batches = append(batches, warpToolResultBatch{
+			Messages: filterToolResults(messages, turnIndex, keep, true),
+		})
 	}
 
 	return batches, total
 }
 
-func collectToolResultRefs(messages []prompt.Message) []toolResultRef {
-	var refs []toolResultRef
-	for i, msg := range messages {
-		if msg.Content.Blocks == nil {
+func lastToolResultTurnIndex(messages []prompt.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "user" || msg.Content.Blocks == nil {
 			continue
 		}
-		for j, block := range msg.Content.Blocks {
+		for _, block := range msg.Content.Blocks {
 			if block.Type == "tool_result" {
-				refs = append(refs, toolResultRef{msgIndex: i, blockIndex: j})
+				return i
 			}
+		}
+	}
+	return -1
+}
+
+func collectToolResultRefsForTurn(messages []prompt.Message, turnIndex int) []toolResultRef {
+	if turnIndex < 0 || turnIndex >= len(messages) {
+		return nil
+	}
+	var refs []toolResultRef
+	msg := messages[turnIndex]
+	if msg.Content.Blocks == nil {
+		return nil
+	}
+	for j, block := range msg.Content.Blocks {
+		if block.Type == "tool_result" {
+			refs = append(refs, toolResultRef{msgIndex: turnIndex, blockIndex: j})
 		}
 	}
 	return refs
 }
 
-func filterToolResults(messages []prompt.Message, keep map[toolResultRef]struct{}) []prompt.Message {
+func filterToolResults(messages []prompt.Message, turnIndex int, keep map[toolResultRef]struct{}, keepUserText bool) []prompt.Message {
 	trimmed := cloneMessages(messages)
 	kept := make([]prompt.Message, 0, len(trimmed))
 
@@ -68,10 +109,13 @@ func filterToolResults(messages []prompt.Message, keep map[toolResultRef]struct{
 		blocks := msg.Content.Blocks
 		newBlocks := make([]prompt.ContentBlock, 0, len(blocks))
 		for j, block := range blocks {
-			if block.Type == "tool_result" {
+			if i == turnIndex && block.Type == "tool_result" {
 				if _, ok := keep[toolResultRef{msgIndex: i, blockIndex: j}]; !ok {
 					continue
 				}
+			}
+			if i == turnIndex && block.Type == "text" && !keepUserText {
+				continue
 			}
 			newBlocks = append(newBlocks, block)
 		}

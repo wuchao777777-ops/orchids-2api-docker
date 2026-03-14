@@ -38,13 +38,14 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 		if h.config != nil && h.config.ContextMaxTokens > 0 {
 			maxTokens = h.config.ContextMaxTokens
 		}
-		builtPrompt, aiClientHistory, meta := orchids.BuildAIClientPromptAndHistoryWithMeta(
+		builtPrompt, aiClientHistory, meta := orchids.BuildAIClientPromptAndHistoryWithMetaAndTools(
 			req.Messages,
 			req.System,
 			req.Model,
 			true, /* noThinking */
 			"",   /* workdir */
 			maxTokens,
+			req.Tools,
 		)
 		breakdown = estimateInputTokenBreakdown(builtPrompt, aiClientHistory, req.Tools)
 		profile = meta.Profile

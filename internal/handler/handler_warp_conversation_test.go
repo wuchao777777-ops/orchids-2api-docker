@@ -22,6 +22,7 @@ type fakePayloadClient struct {
 	mu                  sync.Mutex
 	calls               []upstream.UpstreamRequest
 	conversationIDsByOp []string
+	eventsByOp          [][]upstream.SSEMessage
 }
 
 func (f *fakePayloadClient) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -36,7 +37,18 @@ func (f *fakePayloadClient) SendRequestWithPayload(ctx context.Context, req upst
 	if idx >= 0 && idx < len(f.conversationIDsByOp) {
 		convID = f.conversationIDsByOp[idx]
 	}
+	var events []upstream.SSEMessage
+	if idx >= 0 && idx < len(f.eventsByOp) {
+		events = f.eventsByOp[idx]
+	}
 	f.mu.Unlock()
+
+	if len(events) > 0 {
+		for _, event := range events {
+			onMessage(event)
+		}
+		return nil
+	}
 
 	if convID != "" {
 		onMessage(upstream.SSEMessage{
@@ -277,7 +289,157 @@ func TestWarpToolResultFollowupWithText_DisablesTools(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 upstream call, got %d", len(calls))
 	}
-	if !calls[0].NoTools {
-		t.Fatalf("expected follow-up with tool_result+text to disable tools")
+	if calls[0].NoTools {
+		t.Fatalf("expected warp follow-up with tool_result+text to keep passthrough tools enabled")
+	}
+}
+
+func TestWarpToolResultFollowup_SplitsCurrentTurnAndChainsConversationIDs(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{
+		conversationIDsByOp: []string{"warp_conv_batch_1", "warp_conv_batch_2"},
+	}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"stream":false,
+		"conversation_id":"local_conversation_key_split",
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"帮我优化一下这个项目"}]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_ls","name":"Bash","input":{"command":"ls -la /Users/dailin/Documents/GitHub/truth_social_scraper"}},
+				{"type":"tool_use","id":"tool_api","name":"Read","input":{"file_path":"/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}},
+				{"type":"tool_use","id":"tool_utils","name":"Read","input":{"file_path":"/Users/dailin/Documents/GitHub/truth_social_scraper/utils.py"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_ls","content":"README.md\napi.py\nutils.py"},
+				{"type":"tool_result","tool_use_id":"tool_api","content":"from fastapi import FastAPI\napp = FastAPI()"},
+				{"type":"tool_result","tool_use_id":"tool_utils","content":"import json\nALERTS_FILE='alerts.json'"},
+				{"type":"text","text":"帮我优化一下这个项目"}
+			]}
+		],
+		"tools":[]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 3 {
+		t.Fatalf("expected 3 upstream calls, got %d", len(calls))
+	}
+	if calls[1].ChatSessionID != "warp_conv_batch_1" {
+		t.Fatalf("second batch ChatSessionID = %q, want %q", calls[1].ChatSessionID, "warp_conv_batch_1")
+	}
+	if calls[2].ChatSessionID != "warp_conv_batch_2" {
+		t.Fatalf("third batch ChatSessionID = %q, want %q", calls[2].ChatSessionID, "warp_conv_batch_2")
+	}
+
+	countToolResults := func(msgs []prompt.Message) int {
+		total := 0
+		for _, msg := range msgs {
+			for _, block := range msg.Content.Blocks {
+				if block.Type == "tool_result" {
+					total++
+				}
+			}
+		}
+		return total
+	}
+
+	if got := countToolResults(calls[0].Messages); got != 1 {
+		t.Fatalf("first batch tool_results = %d, want %d", got, 1)
+	}
+	if got := countToolResults(calls[1].Messages); got != 2 {
+		t.Fatalf("second batch tool_results = %d, want %d", got, 2)
+	}
+	if got := countToolResults(calls[2].Messages); got != 3 {
+		t.Fatalf("third batch tool_results = %d, want %d", got, 3)
+	}
+
+	for i := 0; i < 2; i++ {
+		lastMsg := calls[i].Messages[len(calls[i].Messages)-1]
+		if got := strings.TrimSpace(lastMsg.ExtractText()); got != "" {
+			t.Fatalf("batch %d unexpectedly kept current-turn user text: %q", i+1, got)
+		}
+	}
+	if got := strings.TrimSpace(calls[2].Messages[len(calls[2].Messages)-1].ExtractText()); got != "帮我优化一下这个项目" {
+		t.Fatalf("last batch user text = %q, want final user request", got)
+	}
+}
+
+func TestWarpToolResultFollowup_ReplaysVisibleIntermediateBatch(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{
+		eventsByOp: [][]upstream.SSEMessage{
+			{
+				{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp_conv_batch_1"}},
+				{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn"}},
+			},
+			{
+				{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp_conv_batch_2"}},
+				{Type: "model.text-delta", Event: map[string]interface{}{"delta": "Let me dig into the rest of the codebase first."}},
+				{
+					Type: "model.tool-call",
+					Event: map[string]interface{}{
+						"toolCallId": "tool_visible",
+						"toolName":   "Read",
+						"input":      `{"file_path":"/Users/dailin/Documents/GitHub/truth_social_scraper/monitor_trump.py"}`,
+					},
+				},
+				{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}},
+			},
+		},
+	}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"stream":true,
+		"conversation_id":"local_conversation_key_intermediate",
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"帮我优化一下这个项目"}]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_ls","name":"Bash","input":{"command":"ls -la /Users/dailin/Documents/GitHub/truth_social_scraper"}},
+				{"type":"tool_use","id":"tool_api","name":"Read","input":{"file_path":"/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}},
+				{"type":"tool_use","id":"tool_utils","name":"Read","input":{"file_path":"/Users/dailin/Documents/GitHub/truth_social_scraper/utils.py"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_ls","content":"README.md\napi.py\nutils.py"},
+				{"type":"tool_result","tool_use_id":"tool_api","content":"from fastapi import FastAPI\napp = FastAPI()"},
+				{"type":"tool_result","tool_use_id":"tool_utils","content":"import json\nALERTS_FILE='alerts.json'"},
+				{"type":"text","text":"帮我优化一下这个项目"}
+			]}
+		],
+		"tools":[]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 2 {
+		t.Fatalf("expected batching to stop after visible intermediate output, got %d calls", len(calls))
+	}
+
+	out := rec.Body.String()
+	if !strings.Contains(out, "Let me dig into the rest of the codebase first.") {
+		t.Fatalf("expected intermediate text to be replayed, got: %s", out)
+	}
+	if !strings.Contains(out, "monitor_trump.py") {
+		t.Fatalf("expected intermediate tool call to be replayed, got: %s", out)
 	}
 }

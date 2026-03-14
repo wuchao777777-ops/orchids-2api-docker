@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/goccy/go-json"
 
@@ -26,6 +25,8 @@ import (
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/upstream"
 )
+
+var orchidsToolMarkerRegex = regexp.MustCompile(`Used tool: (\w+)\s+with input: (\{.*\})`)
 
 const (
 	fnv64Offset = uint64(14695981039346656037)
@@ -42,12 +43,10 @@ const (
 	sseDeferredFlushFrameThreshold = 4
 	sseDeferredFlushByteThreshold  = 2048
 	sseBufferedWriteMax            = 4096
-	jsonHexDigits                  = "0123456789abcdef"
 )
 
 var (
 	rawJSONEmptyObject  = json.RawMessage("{}")
-	sseMessageStopBytes = []byte(`{"type":"message_stop"}`)
 	sseTextDeltaMarker  = []byte(`"type":"text_delta"`)
 	sseDoneLineBytes    = []byte(sseDoneLine)
 	sseKeepAliveBytes   = []byte(sseKeepAlive)
@@ -79,93 +78,7 @@ func mapKeys(m map[string]interface{}) []string {
 	return keys
 }
 
-type sseToolUseContentBlock struct {
-	Type  string          `json:"type"`
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
-}
-
-type sseTextContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type sseThinkingContentBlock struct {
-	Type      string `json:"type"`
-	Thinking  string `json:"thinking"`
-	Signature string `json:"signature"`
-}
-
-type sseContentBlockStartToolUse struct {
-	Type         string                 `json:"type"`
-	Index        int                    `json:"index"`
-	ContentBlock sseToolUseContentBlock `json:"content_block"`
-}
-
-type sseContentBlockStartText struct {
-	Type         string              `json:"type"`
-	Index        int                 `json:"index"`
-	ContentBlock sseTextContentBlock `json:"content_block"`
-}
-
-type sseContentBlockStartThinking struct {
-	Type         string                  `json:"type"`
-	Index        int                     `json:"index"`
-	ContentBlock sseThinkingContentBlock `json:"content_block"`
-}
-
-type sseInputJSONDelta struct {
-	Type        string `json:"type"`
-	PartialJSON string `json:"partial_json"`
-}
-
-type sseTextDelta struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type sseThinkingDelta struct {
-	Type     string `json:"type"`
-	Thinking string `json:"thinking"`
-}
-
-type sseContentBlockDeltaInputJSON struct {
-	Type  string            `json:"type"`
-	Index int               `json:"index"`
-	Delta sseInputJSONDelta `json:"delta"`
-}
-
-type sseContentBlockDeltaText struct {
-	Type  string       `json:"type"`
-	Index int          `json:"index"`
-	Delta sseTextDelta `json:"delta"`
-}
-
-type sseContentBlockDeltaThinking struct {
-	Type  string           `json:"type"`
-	Index int              `json:"index"`
-	Delta sseThinkingDelta `json:"delta"`
-}
-
-type sseContentBlockStop struct {
-	Type  string `json:"type"`
-	Index int    `json:"index"`
-}
-
-type sseMessageDeltaDetail struct {
-	StopReason string `json:"stop_reason"`
-}
-
-type sseMessageUsage struct {
-	OutputTokens int `json:"output_tokens"`
-}
-
-type sseMessageDelta struct {
-	Type  string                `json:"type"`
-	Delta sseMessageDeltaDetail `json:"delta"`
-	Usage sseMessageUsage       `json:"usage"`
-}
+// --- sse_frame structs removed ---
 
 type sseMessageStop struct {
 	Type string `json:"type"`
@@ -307,426 +220,9 @@ func (h *streamHandler) flushSSEBytesLockedWithHint(event string, dataLen int, i
 	h.flushSSEWithLenLocked(event, dataLen, immediate, force)
 }
 
-func canAppendJSONRawString(value string) bool {
-	for i := 0; i < len(value); {
-		b := value[i]
-		if b < utf8.RuneSelf {
-			if b < 0x20 || b == '\\' || b == '"' || b == '<' || b == '>' || b == '&' {
-				return false
-			}
-			i++
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(value[i:])
-		if r == utf8.RuneError && size == 1 {
-			return false
-		}
-		if r == '\u2028' || r == '\u2029' {
-			return false
-		}
-		i += size
-	}
-	return true
-}
+// --- json helper functions removed ---
 
-func appendJSONString(builder *strings.Builder, value string) error {
-	if canAppendJSONRawString(value) {
-		builder.Grow(len(value) + 2)
-		builder.WriteByte('"')
-		builder.WriteString(value)
-		builder.WriteByte('"')
-		return nil
-	}
-	if !utf8.ValidString(value) {
-		quoted, err := json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		_, _ = builder.Write(quoted)
-		return nil
-	}
-
-	builder.Grow(len(value) + 2)
-	builder.WriteByte('"')
-	start := 0
-	for i := 0; i < len(value); {
-		b := value[i]
-		if b < utf8.RuneSelf {
-			if b >= 0x20 && b != '\\' && b != '"' && b != '<' && b != '>' && b != '&' {
-				i++
-				continue
-			}
-			if start < i {
-				builder.WriteString(value[start:i])
-			}
-			switch b {
-			case '\\', '"':
-				builder.WriteByte('\\')
-				builder.WriteByte(b)
-			case '\b':
-				builder.WriteByte('\\')
-				builder.WriteByte('b')
-			case '\f':
-				builder.WriteByte('\\')
-				builder.WriteByte('f')
-			case '\n':
-				builder.WriteByte('\\')
-				builder.WriteByte('n')
-			case '\r':
-				builder.WriteByte('\\')
-				builder.WriteByte('r')
-			case '\t':
-				builder.WriteByte('\\')
-				builder.WriteByte('t')
-			default:
-				builder.WriteString("\\u00")
-				builder.WriteByte(jsonHexDigits[b>>4])
-				builder.WriteByte(jsonHexDigits[b&0x0f])
-			}
-			i++
-			start = i
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(value[i:])
-		if r == '\u2028' || r == '\u2029' {
-			if start < i {
-				builder.WriteString(value[start:i])
-			}
-			if r == '\u2028' {
-				builder.WriteString("\\u2028")
-			} else {
-				builder.WriteString("\\u2029")
-			}
-			i += size
-			start = i
-			continue
-		}
-		i += size
-	}
-	if start < len(value) {
-		builder.WriteString(value[start:])
-	}
-	builder.WriteByte('"')
-	return nil
-}
-
-func appendJSONBytes(dst []byte, value string) ([]byte, error) {
-	if canAppendJSONRawString(value) {
-		dst = append(dst, '"')
-		dst = append(dst, value...)
-		dst = append(dst, '"')
-		return dst, nil
-	}
-
-	originLen := len(dst)
-	dst = append(dst, '"')
-	start := 0
-	for i := 0; i < len(value); {
-		b := value[i]
-		if b < utf8.RuneSelf {
-			if b >= 0x20 && b != '\\' && b != '"' && b != '<' && b != '>' && b != '&' {
-				i++
-				continue
-			}
-			if start < i {
-				dst = append(dst, value[start:i]...)
-			}
-			switch b {
-			case '\\', '"':
-				dst = append(dst, '\\', b)
-			case '\b':
-				dst = append(dst, '\\', 'b')
-			case '\f':
-				dst = append(dst, '\\', 'f')
-			case '\n':
-				dst = append(dst, '\\', 'n')
-			case '\r':
-				dst = append(dst, '\\', 'r')
-			case '\t':
-				dst = append(dst, '\\', 't')
-			default:
-				dst = append(dst, '\\', 'u', '0', '0')
-				dst = append(dst, jsonHexDigits[b>>4], jsonHexDigits[b&0x0f])
-			}
-			i++
-			start = i
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(value[i:])
-		if r == utf8.RuneError && size == 1 {
-			dst = dst[:originLen]
-			quoted, err := json.Marshal(value)
-			if err != nil {
-				return nil, err
-			}
-			return append(dst, quoted...), nil
-		}
-		if r == '\u2028' || r == '\u2029' {
-			if start < i {
-				dst = append(dst, value[start:i]...)
-			}
-			if r == '\u2028' {
-				dst = append(dst, '\\', 'u', '2', '0', '2', '8')
-			} else {
-				dst = append(dst, '\\', 'u', '2', '0', '2', '9')
-			}
-			i += size
-			start = i
-			continue
-		}
-		i += size
-	}
-	if start < len(value) {
-		dst = append(dst, value[start:]...)
-	}
-	dst = append(dst, '"')
-	return dst, nil
-}
-
-func appendSSEContentBlockStartToolUse(dst []byte, index int, id, name string) ([]byte, error) {
-	dst = append(dst, `{"type":"content_block_start","index":`...)
-	dst = strconv.AppendInt(dst, int64(index), 10)
-	dst = append(dst, `,"content_block":{"type":"tool_use","id":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, id)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `,"name":`...)
-	dst, err = appendJSONBytes(dst, name)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `,"input":{}}}`...)
-	return dst, nil
-}
-
-func appendSSEMessageStart(dst []byte, msgID, model string, inputTokens, outputTokens int) ([]byte, error) {
-	dst = append(dst, `{"type":"message_start","message":{"id":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, msgID)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `,"type":"message","role":"assistant","content":[],"model":`...)
-	dst, err = appendJSONBytes(dst, model)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `,"usage":{"input_tokens":`...)
-	dst = strconv.AppendInt(dst, int64(inputTokens), 10)
-	dst = append(dst, `,"output_tokens":`...)
-	dst = strconv.AppendInt(dst, int64(outputTokens), 10)
-	dst = append(dst, `}}}`...)
-	return dst, nil
-}
-
-func appendSSEMessageStartNoUsage(dst []byte, msgID, model string) ([]byte, error) {
-	dst = append(dst, `{"type":"message_start","message":{"id":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, msgID)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `,"type":"message","role":"assistant","content":[],"model":`...)
-	dst, err = appendJSONBytes(dst, model)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `}}`...)
-	return dst, nil
-}
-
-func appendSSEContentBlockStartText(dst []byte, index int) ([]byte, error) {
-	dst = append(dst, `{"type":"content_block_start","index":`...)
-	dst = strconv.AppendInt(dst, int64(index), 10)
-	dst = append(dst, `,"content_block":{"type":"text","text":""}}`...)
-	return dst, nil
-}
-
-func appendSSEContentBlockStartThinking(dst []byte, index int, signature string) ([]byte, error) {
-	dst = append(dst, `{"type":"content_block_start","index":`...)
-	dst = strconv.AppendInt(dst, int64(index), 10)
-	dst = append(dst, `,"content_block":{"type":"thinking","thinking":"","signature":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, signature)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `}}`...)
-	return dst, nil
-}
-
-func appendSSEContentBlockDeltaInputJSON(dst []byte, index int, partialJSON string) ([]byte, error) {
-	dst = append(dst, `{"type":"content_block_delta","index":`...)
-	dst = strconv.AppendInt(dst, int64(index), 10)
-	dst = append(dst, `,"delta":{"type":"input_json_delta","partial_json":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, partialJSON)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `}}`...)
-	return dst, nil
-}
-
-func appendSSEContentBlockDeltaText(dst []byte, index int, text string) ([]byte, error) {
-	dst = append(dst, `{"type":"content_block_delta","index":`...)
-	dst = strconv.AppendInt(dst, int64(index), 10)
-	dst = append(dst, `,"delta":{"type":"text_delta","text":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, text)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `}}`...)
-	return dst, nil
-}
-
-func appendSSEContentBlockDeltaThinking(dst []byte, index int, thinking string) ([]byte, error) {
-	dst = append(dst, `{"type":"content_block_delta","index":`...)
-	dst = strconv.AppendInt(dst, int64(index), 10)
-	dst = append(dst, `,"delta":{"type":"thinking_delta","thinking":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, thinking)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `}}`...)
-	return dst, nil
-}
-
-func appendSSEContentBlockStop(dst []byte, index int) ([]byte, error) {
-	dst = append(dst, `{"type":"content_block_stop","index":`...)
-	dst = strconv.AppendInt(dst, int64(index), 10)
-	dst = append(dst, '}')
-	return dst, nil
-}
-
-func appendSSEMessageDelta(dst []byte, stopReason string, outputTokens int) ([]byte, error) {
-	dst = append(dst, `{"type":"message_delta","delta":{"stop_reason":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, stopReason)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `},"usage":{"output_tokens":`...)
-	dst = strconv.AppendInt(dst, int64(outputTokens), 10)
-	dst = append(dst, `}}`...)
-	return dst, nil
-}
-
-func marshalSSEContentBlockStartToolUseBytes(index int, id, name string) ([]byte, error) {
-	return appendSSEContentBlockStartToolUse(make([]byte, 0, 128+len(id)+len(name)), index, id, name)
-}
-
-func marshalSSEMessageStartBytes(msgID, model string, inputTokens, outputTokens int) ([]byte, error) {
-	return appendSSEMessageStart(make([]byte, 0, 192+len(msgID)+len(model)), msgID, model, inputTokens, outputTokens)
-}
-
-func marshalSSEMessageStartNoUsageBytes(msgID, model string) ([]byte, error) {
-	return appendSSEMessageStartNoUsage(make([]byte, 0, 128+len(msgID)+len(model)), msgID, model)
-}
-
-func marshalSSEContentBlockStartToolUse(index int, id, name string) (string, error) {
-	raw, err := marshalSSEContentBlockStartToolUseBytes(index, id, name)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func marshalSSEContentBlockStartTextBytes(index int) ([]byte, error) {
-	return appendSSEContentBlockStartText(make([]byte, 0, 96), index)
-}
-
-func marshalSSEContentBlockStartText(index int) (string, error) {
-	raw, err := marshalSSEContentBlockStartTextBytes(index)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func marshalSSEContentBlockStartThinkingBytes(index int, signature string) ([]byte, error) {
-	return appendSSEContentBlockStartThinking(make([]byte, 0, 112+len(signature)), index, signature)
-}
-
-func marshalSSEContentBlockStartThinking(index int, signature string) (string, error) {
-	raw, err := marshalSSEContentBlockStartThinkingBytes(index, signature)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func marshalSSEContentBlockDeltaInputJSONBytes(index int, partialJSON string) ([]byte, error) {
-	return appendSSEContentBlockDeltaInputJSON(make([]byte, 0, 96+len(partialJSON)*2), index, partialJSON)
-}
-
-func marshalSSEContentBlockDeltaInputJSON(index int, partialJSON string) (string, error) {
-	raw, err := marshalSSEContentBlockDeltaInputJSONBytes(index, partialJSON)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func marshalSSEContentBlockDeltaTextBytes(index int, text string) ([]byte, error) {
-	return appendSSEContentBlockDeltaText(make([]byte, 0, 80+len(text)), index, text)
-}
-
-func marshalSSEContentBlockDeltaText(index int, text string) (string, error) {
-	raw, err := marshalSSEContentBlockDeltaTextBytes(index, text)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func marshalSSEContentBlockDeltaThinkingBytes(index int, thinking string) ([]byte, error) {
-	return appendSSEContentBlockDeltaThinking(make([]byte, 0, 88+len(thinking)), index, thinking)
-}
-
-func marshalSSEContentBlockDeltaThinking(index int, thinking string) (string, error) {
-	raw, err := marshalSSEContentBlockDeltaThinkingBytes(index, thinking)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func marshalSSEContentBlockStopBytes(index int) ([]byte, error) {
-	return appendSSEContentBlockStop(make([]byte, 0, 48), index)
-}
-
-func marshalSSEContentBlockStop(index int) (string, error) {
-	raw, err := marshalSSEContentBlockStopBytes(index)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func marshalSSEMessageDeltaBytes(stopReason string, outputTokens int) ([]byte, error) {
-	return appendSSEMessageDelta(make([]byte, 0, 88+len(stopReason)), stopReason, outputTokens)
-}
-
-func marshalSSEMessageDelta(stopReason string, outputTokens int) (string, error) {
-	raw, err := marshalSSEMessageDeltaBytes(stopReason, outputTokens)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func marshalSSEMessageStopBytes() ([]byte, error) {
-	return sseMessageStopBytes, nil
-}
-
-func marshalSSEMessageStop() (string, error) {
-	return string(sseMessageStopBytes), nil
-}
+// --- sse framing functions removed ---
 
 type streamHandler struct {
 	// Configuration
@@ -738,6 +234,7 @@ type streamHandler struct {
 	outputTokenMode   string
 	responseFormat    adapter.ResponseFormat
 	disallowToolCalls bool
+	allowedToolNames  map[string]struct{}
 
 	// HTTP Response
 	w       http.ResponseWriter
@@ -752,6 +249,7 @@ type streamHandler struct {
 	hasReturn                bool
 	finalStopReason          string
 	outputTokens             int
+	thinkingTokens           int
 	inputTokens              int
 	activeThinkingBlockIndex int
 	activeThinkingSSEIndex   int
@@ -779,22 +277,23 @@ type streamHandler struct {
 	ssePayloadScratch     []byte
 
 	// Tool Handling (proxy mode only)
-	toolBlocks          map[string]int
-	pendingToolCalls    []toolCall
-	toolInputNames      map[string]string
-	toolInputBuffers    map[string]*strings.Builder
-	toolInputHadDelta   map[string]bool
-	toolCallHandled     map[string]bool
-	toolCallEmitted     map[string]struct{}
-	currentToolInputID  string
-	toolCallCount       int
-	suppressedToolCalls int
-	bashCallDedup       map[string]struct{}
-	seedToolDedup       map[string]struct{}
-	toolDedupCount      int
-	toolDedupKeys       map[string]int
-	introDedup          map[string]struct{}
-	noToolsFallbackText string
+	toolBlocks                  map[string]int
+	pendingToolCalls            []toolCall
+	toolInputNames              map[string]string
+	toolInputBuffers            map[string]*strings.Builder
+	toolInputHadDelta           map[string]bool
+	toolCallHandled             map[string]bool
+	toolCallEmitted             map[string]struct{}
+	currentToolInputID          string
+	toolCallCount               int
+	suppressedToolCalls         int
+	bashCallDedup               map[string]struct{}
+	seedToolDedup               map[string]struct{}
+	toolDedupCount              int
+	toolDedupKeys               map[string]int
+	introDedup                  map[string]struct{}
+	noToolsFallbackText         string
+	suppressEmptyOutputFallback bool
 
 	// Throttling
 	lastScanTime time.Time
@@ -853,6 +352,7 @@ func newStreamHandler(
 		seedToolDedup:            make(map[string]struct{}),
 		toolDedupKeys:            make(map[string]int),
 		introDedup:               make(map[string]struct{}),
+		allowedToolNames:         make(map[string]struct{}),
 		msgID:                    fmt.Sprintf("msg_%d", time.Now().UnixMilli()),
 		startTime:                time.Now(),
 		currentTextIndex:         -1,
@@ -873,9 +373,28 @@ func (h *streamHandler) setNoToolsFallbackText(text string) {
 	h.mu.Unlock()
 }
 
+func (h *streamHandler) setSuppressEmptyOutputFallback(suppress bool) {
+	h.mu.Lock()
+	h.suppressEmptyOutputFallback = suppress
+	h.mu.Unlock()
+}
+
 func (h *streamHandler) setDisallowToolCalls(disallow bool) {
 	h.mu.Lock()
 	h.disallowToolCalls = disallow
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) setAllowedToolNames(names []string) {
+	h.mu.Lock()
+	clear(h.allowedToolNames)
+	for _, name := range names {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			continue
+		}
+		h.allowedToolNames[key] = struct{}{}
+	}
 	h.mu.Unlock()
 }
 
@@ -1279,6 +798,20 @@ func (h *streamHandler) writeKeepAlive() {
 	h.flushSSELocked("keep-alive", sseKeepAlive, true)
 }
 
+func (h *streamHandler) addThinkingTokens(text string) {
+	if text == "" {
+		return
+	}
+	h.outputMu.Lock()
+	if !h.useUpstreamUsage {
+		// we skip the estimator for thinking to keep it for billing/output only
+		// or we can add to thinkingTokens directly if we use an estimator
+		h.thinkingTokens += tiktoken.EstimateTextTokens(text)
+		h.outputTokens += tiktoken.EstimateTextTokens(text)
+	}
+	h.outputMu.Unlock()
+}
+
 func (h *streamHandler) addOutputTokens(text string) {
 	if text == "" {
 		return
@@ -1362,6 +895,7 @@ func (h *streamHandler) resetRoundState() {
 	h.currentToolInputID = ""
 	h.toolCallCount = 0
 	h.outputTokens = 0
+	h.thinkingTokens = 0
 	h.outputEstimator.Reset()
 	h.writeChunkBuffer.Reset()
 	h.useUpstreamUsage = false
@@ -2111,6 +1645,24 @@ func (h *streamHandler) finishResponse(stopReason string) {
 			stopReason = "end_turn"
 		}
 	}
+
+	// Ensure there's some text output before closing if we return end_turn with no output
+	if stopReason != "tool_use" && h.noToolsFallbackText == "" && !h.suppressEmptyOutputFallback && !h.hasAnyOutput() {
+		emptyMsg := "No output was presented to the user. This may be due to tool calls being suppressed or the model producing no text content."
+		if h.isStream {
+			h.emitTextBlockWithMode(emptyMsg, false)
+		} else {
+			h.mu.Lock()
+			h.responseText.WriteString(emptyMsg)
+			h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
+				"type": "text",
+				"text": emptyMsg,
+			})
+			h.hasTextOutput = true
+			h.mu.Unlock()
+		}
+	}
+
 	h.mu.Lock()
 	if h.hasReturn {
 		h.mu.Unlock()
@@ -2541,13 +2093,34 @@ func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
 func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 	h.mu.Lock()
 	disallowToolCalls := h.disallowToolCalls
+	allowedTool := true
+	if len(h.allowedToolNames) > 0 {
+		lowerName := strings.ToLower(strings.TrimSpace(call.name))
+		_, allowedTool = h.allowedToolNames[lowerName]
+		if !allowedTool {
+			// Auto-allow meta tools
+			if lowerName == "todowrite" || lowerName == "taskoutput" || lowerName == "taskstop" ||
+				lowerName == "write" || lowerName == "read" || lowerName == "ls" || lowerName == "grep" {
+				allowedTool = true
+			}
+		}
+	}
 	if disallowToolCalls {
+		h.suppressedToolCalls++
+	}
+	if !allowedTool {
 		h.suppressedToolCalls++
 	}
 	h.mu.Unlock()
 	if disallowToolCalls {
 		if h.config != nil && h.config.DebugEnabled {
 			slog.Debug("tool call suppressed by no-tools gate", "tool", call.name, "input", call.input)
+		}
+		return false
+	}
+	if !allowedTool {
+		if h.config != nil && h.config.DebugEnabled {
+			slog.Debug("tool call suppressed because it is not declared in the current request", "tool", call.name, "input", call.input)
 		}
 		return false
 	}
@@ -2680,13 +2253,15 @@ func isSideEffectToolName(nameKey string) bool {
 }
 
 type toolInputFields struct {
-	Command  string          `json:"command"`
-	Cmd      string          `json:"cmd"`
-	FilePath string          `json:"file_path"`
-	Path     string          `json:"path"`
-	Content  json.RawMessage `json:"content"`
-	Old      json.RawMessage `json:"old_string"`
-	New      json.RawMessage `json:"new_string"`
+	Command    string          `json:"command"`
+	Cmd        string          `json:"cmd"`
+	FilePath   string          `json:"file_path"`
+	Path       string          `json:"path"`
+	Content    json.RawMessage `json:"content"`
+	Old        json.RawMessage `json:"old_string"`
+	New        json.RawMessage `json:"new_string"`
+	IsReadOnly *bool           `json:"is_read_only"`
+	IsRisky    *bool           `json:"is_risky"`
 }
 
 func decodeToolInputFields(input string) (toolInputFields, bool) {
@@ -2764,6 +2339,9 @@ func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields) st
 		if command == "" {
 			return ""
 		}
+		if isReadOnlyBashCommand(command, fields.IsReadOnly, fields.IsRisky) {
+			return ""
+		}
 		return "bash:" + command
 	case "write":
 		path := resolveToolPath(fields.FilePath, fields.Path)
@@ -2786,6 +2364,50 @@ func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields) st
 	default:
 		return ""
 	}
+}
+
+func isReadOnlyBashCommand(command string, isReadOnly, isRisky *bool) bool {
+	if isRisky != nil && *isRisky {
+		return false
+	}
+	if isReadOnly != nil {
+		return *isReadOnly
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(command))
+	if lower == "" {
+		return false
+	}
+	if strings.Contains(lower, " -exec ") || strings.Contains(lower, " -delete") {
+		return false
+	}
+	if strings.Contains(lower, "&&") || strings.Contains(lower, "||") || strings.Contains(lower, ";") {
+		return false
+	}
+	if strings.Contains(lower, ">") || strings.Contains(lower, "<") {
+		return false
+	}
+
+	segments := strings.Split(lower, "|")
+	for _, segment := range segments {
+		fields := strings.Fields(strings.TrimSpace(segment))
+		if len(fields) == 0 {
+			return false
+		}
+		cmd := fields[0]
+		switch cmd {
+		case "find", "sort", "ls", "pwd", "cat", "head", "tail", "grep", "rg", "wc", "stat", "file", "tree", "du", "basename", "dirname", "realpath", "readlink", "which", "type", "fd":
+			continue
+		case "sed":
+			if len(fields) > 1 && fields[1] == "-n" {
+				continue
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func fnv1a64String(s string) uint64 {
@@ -2872,14 +2494,15 @@ func (h *streamHandler) hasAnyOutput() bool {
 		len(h.pendingToolCalls) > 0 ||
 		len(h.toolCallEmitted) > 0 ||
 		len(h.contentBlocks) > 0 ||
-		h.responseText.Len() > 0
+		h.responseText.Len() > 0 ||
+		h.writeChunkBuffer.Len() > 0
 	h.mu.Unlock()
 	if has {
 		return true
 	}
 
 	h.outputMu.Lock()
-	has = h.outputEstimator.HasText() || h.outputTokens > 0
+	has = h.outputEstimator.HasText() || (h.outputTokens-h.thinkingTokens) > 0
 	h.outputMu.Unlock()
 	return has
 }
@@ -3145,7 +2768,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			h.mu.Unlock()
 		}
 		if h.isStream {
-			h.addOutputTokens(delta)
+			h.addThinkingTokens(delta)
 		}
 		// Always update internal state for history
 		h.mu.Lock()
@@ -3179,6 +2802,34 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			return
 		}
 		delta = collapseDuplicatedIntroDelta(delta)
+
+		// Parse Orchids tool markers hidden in the text delta
+		if matches := orchidsToolMarkerRegex.FindStringSubmatch(delta); len(matches) > 2 {
+			toolName := matches[1]
+			toolInput := matches[2]
+			if h.config != nil && h.config.DebugEnabled {
+				slog.Debug("Orchids tool marker detected in text delta", "tool", toolName, "input", toolInput)
+			}
+			// Emit it as a structured tool call
+			h.handleMessage(upstream.SSEMessage{
+				Type: "model.tool-call",
+				Event: map[string]interface{}{
+					"toolName":   toolName,
+					"toolCallId": fmt.Sprintf("call_%d", time.Now().UnixNano()),
+					"input":      toolInput,
+				},
+			})
+			// If it's the exact content of the delta, we can skip the text delta entirely
+			if strings.TrimSpace(delta) == strings.TrimSpace(matches[0]) {
+				return
+			}
+			// Otherwise, remove the marker from the text
+			delta = strings.ReplaceAll(delta, matches[0], "")
+			if strings.TrimSpace(delta) == "" {
+				return
+			}
+		}
+
 		if h.shouldSkipIntroDelta(delta) {
 			return
 		}

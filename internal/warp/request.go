@@ -71,6 +71,8 @@ type warpHistoryMessage struct {
 type warpToolResult struct {
 	ToolCallID string
 	Content    string
+	ToolName   string
+	Arguments  string
 }
 
 type InputTokenEstimate struct {
@@ -179,10 +181,10 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 		})
 	}
 
-	lastUserTextIdx := -1
+	lastUserIdx := -1
 	for i, msg := range parsed {
-		if msg.role == "user" && strings.TrimSpace(msg.text) != "" {
-			lastUserTextIdx = i
+		if msg.role == "user" {
+			lastUserIdx = i
 		}
 	}
 
@@ -191,14 +193,17 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 		history     []warpHistoryMessage
 		toolResults []warpToolResult
 	)
-	toolResultSeen := map[string]struct{}{}
+	currentToolResultSeen := map[string]struct{}{}
+	historyToolResultSeen := map[string]struct{}{}
+	toolCallsByID := map[string]warpToolCall{}
 
 	for i, msg := range parsed {
 		switch msg.role {
 		case "user":
 			hasText := strings.TrimSpace(msg.text) != ""
+			isCurrentTurn := i == lastUserIdx
 			if hasText {
-				if i == lastUserTextIdx {
+				if isCurrentTurn {
 					userText = msg.text
 				} else {
 					history = append(history, warpHistoryMessage{Role: "user", Content: msg.text})
@@ -206,21 +211,31 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 			}
 
 			for _, block := range msg.toolResults {
+				call := toolCallsByID[block.ToolUseID]
 				toolResult := warpToolResult{
 					ToolCallID: block.ToolUseID,
-					Content:    strings.TrimSpace(stripWarpMetaTags(stringifyWarpValue(block.Content))),
+					Content:    normalizeWarpToolResultContent(stringifyWarpValue(block.Content)),
+					ToolName:   call.Name,
+					Arguments:  call.Arguments,
 				}
 				if isNoiseToolResult(toolResult.Content) {
 					continue
 				}
 				key := toolResultDedupKey(toolResult)
 				if key != "" {
-					if _, ok := toolResultSeen[key]; ok {
-						continue
+					if isCurrentTurn {
+						if _, ok := currentToolResultSeen[key]; ok {
+							continue
+						}
+						currentToolResultSeen[key] = struct{}{}
+					} else {
+						if _, ok := historyToolResultSeen[key]; ok {
+							continue
+						}
+						historyToolResultSeen[key] = struct{}{}
 					}
-					toolResultSeen[key] = struct{}{}
 				}
-				if lastUserTextIdx == -1 || i >= lastUserTextIdx {
+				if lastUserIdx == -1 || isCurrentTurn {
 					toolResults = append(toolResults, toolResult)
 				} else {
 					history = append(history, warpHistoryMessage{
@@ -232,8 +247,14 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 			}
 
 		case "assistant":
-			if lastUserTextIdx == -1 || i < lastUserTextIdx {
-				toolCalls := convertWarpToolCalls(msg.toolUses)
+			toolCalls := convertWarpToolCalls(msg.toolUses)
+			for _, tc := range toolCalls {
+				if strings.TrimSpace(tc.ID) == "" {
+					continue
+				}
+				toolCallsByID[tc.ID] = tc
+			}
+			if lastUserIdx == -1 || i < lastUserIdx {
 				content := strings.TrimSpace(stripWarpMetaTags(msg.text))
 				if content != "" || len(toolCalls) > 0 {
 					history = append(history, warpHistoryMessage{
@@ -366,7 +387,10 @@ func toolResultDedupKey(result warpToolResult) string {
 
 func shouldDedupToolResultByContent(content string) bool {
 	lower := strings.ToLower(content)
-	return strings.Contains(lower, "eoferror: eof when reading a line")
+	if strings.Contains(lower, "eoferror: eof when reading a line") {
+		return true
+	}
+	return looksLikeWarpLargeReadOutput(content)
 }
 
 func isBenignNoopShellError(lower string) bool {
@@ -477,6 +501,13 @@ func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults [
 		}
 		parts = append(parts, formatWarpFollowupHistory(history)...)
 		for _, tr := range toolResults {
+			if formatted := formatWarpToolUse(warpToolCall{
+				ID:        tr.ToolCallID,
+				Name:      tr.ToolName,
+				Arguments: tr.Arguments,
+			}); formatted != "" {
+				parts = append(parts, formatted)
+			}
 			parts = append(parts, formatWarpToolResult(tr.ToolCallID, tr.Content))
 		}
 		if strings.TrimSpace(userText) != "" {
@@ -570,12 +601,86 @@ func formatWarpFollowupHistory(history []warpHistoryMessage) []string {
 				parts = append(parts, "User: "+msg.Content)
 			}
 		case "assistant":
-			if msg.Content != "" {
-				parts = append(parts, "Assistant: "+msg.Content)
+			content := stripWarpExploratoryAssistantText(msg.Content)
+			if content != "" {
+				parts = append(parts, "Assistant: "+content)
 			}
 		}
 	}
 	return parts
+}
+
+func stripWarpExploratoryAssistantText(content string) string {
+	lines := strings.Split(content, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if isWeakWarpExplorationAssistantLine(trimmed) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+func isWeakWarpExplorationAssistantLine(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || strings.HasPrefix(text, "[Used tool:") {
+		return false
+	}
+	if len([]rune(text)) > 240 {
+		return false
+	}
+
+	lower := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	intro := []string{
+		"let me",
+		"i'll first",
+		"i will first",
+		"让我先",
+		"我先",
+	}
+	action := []string{
+		"look",
+		"read",
+		"explore",
+		"examine",
+		"analyze",
+		"identify",
+		"understand",
+		"inspect",
+		"check",
+		"review",
+		"learn",
+		"看看",
+		"看一下",
+		"了解",
+		"阅读",
+		"读取",
+		"理解",
+		"分析",
+		"审查",
+	}
+
+	hasIntro := false
+	for _, marker := range intro {
+		if strings.Contains(lower, marker) {
+			hasIntro = true
+			break
+		}
+	}
+	if !hasIntro {
+		return false
+	}
+	for _, marker := range action {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func EstimateInputTokens(promptText, model string, messages []prompt.Message, tools []interface{}, disableWarpTools bool) (InputTokenEstimate, error) {
@@ -643,6 +748,13 @@ func estimateWarpToolResultTokens(results []warpToolResult) int {
 	}
 	parts := make([]string, 0, len(results))
 	for _, tr := range results {
+		if formatted := formatWarpToolUse(warpToolCall{
+			ID:        tr.ToolCallID,
+			Name:      tr.ToolName,
+			Arguments: tr.Arguments,
+		}); formatted != "" {
+			parts = append(parts, formatted)
+		}
 		parts = append(parts, formatWarpToolResult(tr.ToolCallID, tr.Content))
 	}
 	return estimateWarpTextTokens(parts)

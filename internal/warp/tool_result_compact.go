@@ -2,18 +2,26 @@ package warp
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
 const (
-	warpCurrentToolResultLimit = 900
-	warpHistoryToolResultLimit = 500
+	warpCurrentToolResultLimit      = 900
+	warpHistoryToolResultLimit      = 500
+	warpCurrentReadOutputLimit      = 3200
+	warpHistoryReadOutputLimit      = 1800
+	warpDedupLargeReadLineCount     = 40
+	warpDedupLargeReadRuneThreshold = 4096
 )
 
 func compactWarpToolResultContent(text string, historyMode bool) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
+	}
+	if looksLikeWarpNumberedReadOutput(text) && looksLikeWarpCodeReadOutput(text) {
+		return compactWarpCodeReadOutput(text, historyMode)
 	}
 	if looksLikeWarpDirectoryListing(text) {
 		return compactWarpDirectoryListing(text, historyMode)
@@ -389,6 +397,174 @@ func compactWarpToolResultLines(text string, maxChars int, head, tail int) strin
 	return strings.Join(lines, "\n")
 }
 
+func looksLikeWarpNumberedReadOutput(text string) bool {
+	lines := nonEmptyWarpLines(text)
+	if len(lines) < 8 {
+		return false
+	}
+	numbered := 0
+	for _, line := range lines {
+		if _, ok := splitWarpNumberedLine(line); ok {
+			numbered++
+		}
+	}
+	return numbered*100/len(lines) >= 70
+}
+
+func looksLikeWarpCodeReadOutput(text string) bool {
+	lines := nonEmptyWarpLines(text)
+	if len(lines) == 0 {
+		return false
+	}
+	sample := minWarpInt(len(lines), 80)
+	signals := 0
+	for _, line := range lines[:sample] {
+		if isWarpCodeStructureLine(warpLineContent(line)) {
+			signals++
+		}
+	}
+	return signals >= 4 || signals*100/sample >= 20
+}
+
+func compactWarpCodeReadOutput(text string, historyMode bool) string {
+	lines := nonEmptyWarpLines(text)
+	if len(lines) == 0 {
+		return ""
+	}
+
+	maxChars := warpCurrentReadOutputLimit
+	head := 18
+	tail := 4
+	maxStructure := 24
+	if historyMode {
+		maxChars = warpHistoryReadOutputLimit
+		head = 10
+		tail = 2
+		maxStructure = 12
+	}
+	if warpResultRuneLen(text) <= maxChars {
+		return strings.Join(lines, "\n")
+	}
+
+	indices := make([]int, 0, head+tail+maxStructure)
+	seen := make(map[int]struct{}, head+tail+maxStructure)
+	add := func(idx int) {
+		if idx < 0 || idx >= len(lines) {
+			return
+		}
+		if _, ok := seen[idx]; ok {
+			return
+		}
+		seen[idx] = struct{}{}
+		indices = append(indices, idx)
+	}
+
+	for i := 0; i < minWarpInt(head, len(lines)); i++ {
+		add(i)
+	}
+
+	structural := 0
+	for i := head; i < len(lines)-tail && structural < maxStructure; i++ {
+		if !isWarpCodeStructureLine(warpLineContent(lines[i])) {
+			continue
+		}
+		add(i)
+		structural++
+	}
+
+	startTail := len(lines) - tail
+	if startTail < 0 {
+		startTail = 0
+	}
+	for i := startTail; i < len(lines); i++ {
+		add(i)
+	}
+
+	if len(indices) <= head+tail {
+		if historyMode {
+			return compactHistoricalWarpToolResult(text)
+		}
+		return compactCurrentWarpToolResult(text)
+	}
+
+	sort.Ints(indices)
+
+	compacted := make([]string, 0, len(indices)+4)
+	prev := -1
+	for _, idx := range indices {
+		if prev >= 0 && idx > prev+1 {
+			compacted = append(compacted, fmt.Sprintf("[read output summary: omitted %d lines]", idx-prev-1))
+		}
+		compacted = append(compacted, lines[idx])
+		prev = idx
+	}
+	if omitted := len(lines) - len(indices); omitted > 0 {
+		compacted = append(compacted, fmt.Sprintf("[read output summary: kept %d header lines, %d structural lines, and %d tail lines; omitted %d other lines]", minWarpInt(head, len(lines)), structural, minWarpInt(tail, len(lines)), omitted))
+	}
+
+	return truncateWarpResultWithEllipsis(strings.Join(compacted, "\n"), maxChars)
+}
+
+func splitWarpNumberedLine(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", false
+	}
+	idx := strings.IndexRune(line, '→')
+	if idx <= 0 {
+		return line, false
+	}
+	prefix := strings.TrimSpace(line[:idx])
+	if prefix == "" {
+		return strings.TrimSpace(line[idx+len("→"):]), false
+	}
+	for _, r := range prefix {
+		if r < '0' || r > '9' {
+			return strings.TrimSpace(line[idx+len("→"):]), false
+		}
+	}
+	return strings.TrimSpace(line[idx+len("→"):]), true
+}
+
+func warpLineContent(line string) string {
+	content, ok := splitWarpNumberedLine(line)
+	if !ok {
+		return strings.TrimSpace(line)
+	}
+	return strings.TrimSpace(content)
+}
+
+func isWarpCodeStructureLine(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	if lower == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"import ", "from ", "package ", "func ", "type ", "interface ", "class ",
+		"struct ", "enum ", "const ", "var ", "let ", "def ", "async def ", "fn ",
+		"pub ", "impl ", "trait ", "export ", "@", "router.", "app.", "bp.",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	for _, marker := range []string{
+		".get(", ".post(", ".put(", ".delete(", ".patch(", ".route(",
+		"if __name__ == ", "todo", "fixme",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	trimmed := strings.TrimSpace(line)
+	if strings.Contains(trimmed, "(") && strings.Contains(trimmed, ")") {
+		if strings.HasSuffix(trimmed, ":") || strings.HasSuffix(trimmed, "{") {
+			return true
+		}
+	}
+	return false
+}
+
 func nonEmptyWarpLines(text string) []string {
 	rawLines := strings.Split(text, "\n")
 	lines := make([]string, 0, len(rawLines))
@@ -416,6 +592,14 @@ func minWarpInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func looksLikeWarpLargeReadOutput(text string) bool {
+	if !looksLikeWarpNumberedReadOutput(text) {
+		return false
+	}
+	lines := nonEmptyWarpLines(text)
+	return len(lines) >= warpDedupLargeReadLineCount || warpResultRuneLen(text) >= warpDedupLargeReadRuneThreshold
 }
 
 func compactWarpResultText(text string, targetChars int) string {

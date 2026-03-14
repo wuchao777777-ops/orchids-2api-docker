@@ -1,6 +1,8 @@
 package orchids
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -219,6 +221,53 @@ func TestCompactIncomingTools_FiltersUnsupportedAndMinimizesSupportedSchemas(t *
 	}
 }
 
+func TestBuildAIClientPromptAndHistoryWithMetaAndTools_UsesDeclaredToolList(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我看一下项目结构"}},
+	}
+	tools := []interface{}{
+		map[string]interface{}{
+			"name":        "Read",
+			"description": "read file",
+			"input_schema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"file_path": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		map[string]interface{}{
+			"name":        "Bash",
+			"description": "run shell command",
+			"input_schema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"command": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+
+	promptText, _, _ := BuildAIClientPromptAndHistoryWithMetaAndTools(messages, nil, "claude-opus-4-6", true, "/tmp/project", 12000, tools)
+	if !strings.Contains(promptText, "Allowed tools only: Read, Bash.") {
+		t.Fatalf("expected prompt to list only declared tools, got: %s", promptText)
+	}
+	if strings.Contains(promptText, "TodoWrite") {
+		t.Fatalf("did not expect undeclared TodoWrite in prompt: %s", promptText)
+	}
+}
+
+func TestFormatToolResultContentLocalForHistory_RedactsJWT(t *testing.T) {
+	jwt := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0Iiwic2NvcGUiOiJhZG1pbiJ9.c2lnbmF0dXJlLXRva2VuLXZhbHVl"
+	got := formatToolResultContentLocalForHistory("token=" + jwt + "\nnext")
+	if strings.Contains(got, jwt) {
+		t.Fatalf("expected JWT to be redacted, got: %s", got)
+	}
+	if !strings.Contains(got, "[redacted_jwt]") {
+		t.Fatalf("expected redaction marker, got: %s", got)
+	}
+}
+
 func TestEstimateCompactedToolsTokens_IgnoresUnsupportedTools(t *testing.T) {
 	supported := []interface{}{
 		map[string]interface{}{
@@ -418,6 +467,32 @@ func TestFormatToolResultContentLocal_CompactsBareLSListing(t *testing.T) {
 	}
 }
 
+func TestFormatToolResultContentLocal_ExpandsPersistedOutput(t *testing.T) {
+	base := filepath.Join(t.TempDir(), ".claude", "projects", "demo", "tool-results")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(base, "tool.txt")
+	body := "1→import requests\n2→from fastapi import FastAPI\n3→app = FastAPI()"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	input := strings.Join([]string{
+		"<persisted-output>",
+		"Output too large (57.9KB). Full output saved to: " + path,
+		"",
+		"Preview (first 2KB):",
+		"1→placeholder",
+		"</persisted-output>",
+	}, "\n")
+
+	got := formatToolResultContentLocal(input)
+	if got != body {
+		t.Fatalf("expected persisted output body, got %q", got)
+	}
+}
+
 func TestFormatToolResultContentLocalForHistory_SummarizesLongText(t *testing.T) {
 	lines := make([]string, 0, 18)
 	for i := 0; i < 18; i++ {
@@ -526,6 +601,43 @@ func TestResolveCurrentUserTurnText_ToolResultOnlyKeepsOriginalQuestion(t *testi
 	}
 }
 
+func TestResolveCurrentUserTurnText_ToolResultOnlyIncludesToolProvenance(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_use", ID: "tool-1", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}},
+					{Type: "tool_use", ID: "tool-2", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/utils.py"}},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool-1", Content: "\"\"\"\nTruth Social Monitor API\n\"\"\"\nfrom fastapi import FastAPI"},
+					{Type: "tool_result", ToolUseID: "tool-2", Content: "import json\nimport os"},
+				},
+			},
+		},
+	}
+
+	got := resolveCurrentUserTurnText(messages, 2, "\"\"\"\nTruth Social Monitor API\n\"\"\"\nfrom fastapi import FastAPI\nimport json\nimport os")
+	for _, want := range []string{
+		"Original user request:",
+		"帮我优化这个项目",
+		"Tool result:",
+		"[Read /Users/dailin/Documents/GitHub/truth_social_scraper/api.py]",
+		"[Read /Users/dailin/Documents/GitHub/truth_social_scraper/utils.py]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("resolved current user text missing %q in %q", want, got)
+		}
+	}
+}
+
 func TestBuildToolResultFollowUpUserText_DirectoryListingAddsRootHint(t *testing.T) {
 	toolResult := strings.Join([]string{
 		"./.claude/ (sample: settings.local.json)",
@@ -550,6 +662,72 @@ func TestBuildToolResultFollowUpUserText_DirectoryListingAddsRootHint(t *testing
 	}
 	if !strings.Contains(got, "Do not enumerate every visible entry") {
 		t.Fatalf("follow-up prompt missing enumeration guard in %q", got)
+	}
+}
+
+func TestBuildAIClientPromptAndHistoryWithMeta_OptimizationFollowUpDirectAnswersWithoutFurtherReads(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\ndashboard.py\nmonitor_trump.py\nrequirements.txt\nutils.py"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/requirements.txt"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "fastapi\nstreamlit\nrequests"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_3", Content: "from fastapi import FastAPI\napp = FastAPI()"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_4", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_4", Content: "from fastapi import FastAPI\napp = FastAPI()"}}}},
+	}
+
+	promptText, _, _ := BuildAIClientPromptAndHistoryWithMeta(messages, nil, "claude-opus-4-6", false, "/Users/dailin/Documents/GitHub/truth_social_scraper", 12000)
+	for _, want := range []string{
+		"Base your answer only on the files already shown, provide concrete optimization suggestions directly, and do not ask to read more files.",
+		"Use the files already shown to provide the best concrete optimization advice you can now.",
+	} {
+		if !strings.Contains(promptText, want) {
+			t.Fatalf("prompt missing direct-answer guidance %q: %q", want, promptText)
+		}
+	}
+	for _, unwanted := range []string{
+		"You already read api.py multiple times.",
+		"Next inspect unread key implementation files",
+	} {
+		if strings.Contains(promptText, unwanted) {
+			t.Fatalf("prompt should not steer further reads via %q: %q", unwanted, promptText)
+		}
+	}
+}
+
+func TestBuildAIClientPromptAndHistoryWithMeta_OptimizationFollowUpHandlesRawLsListingWithoutFurtherReads(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目、"}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la /Users/dailin/Documents/GitHub/truth_social_scraper"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "total 512\ndrwxr-xr-x@ 16 dailin  staff    512 Mar 14 11:05 .\ndrwxr-xr-x@  7 dailin  staff    224 Mar 14 12:13 ..\ndrwxr-xr-x@  3 dailin  staff     96 Mar  5 22:27 .cursor\ndrwxr-xr-x@ 12 dailin  staff    384 Mar  5 21:41 .git\n-rw-r--r--@  1 dailin  staff   7191 Mar  5 21:41 README.md\n-rw-r--r--@  1 dailin  staff  54313 Mar  5 21:56 api.py\n-rw-r--r--@  1 dailin  staff  75989 Mar  5 21:45 dashboard.py\n-rw-r--r--@  1 dailin  staff  93645 Mar  5 21:48 monitor_trump.py\n-rw-r--r--@  1 dailin  staff    401 Mar  5 21:41 requirements.txt\n-rw-r--r--@  1 dailin  staff  12074 Mar  5 21:41 utils.py\ndrwxr-xr-x@ 15 dailin  staff    480 Mar  7 20:26 web-ui"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/README.md"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_2", Content: "Truth Social Monitor / Scraper"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_3", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/requirements.txt"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_3", Content: "fastapi\nstreamlit\nopenai"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_4", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_4", Content: "\"\"\"\nTruth Social Monitor API\n\"\"\"\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_5", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_5", Content: "\"\"\"\nTruth Social Monitor API\n\"\"\"\nfrom fastapi import FastAPI\napp = FastAPI()"}}}},
+	}
+
+	promptText, _, _ := BuildAIClientPromptAndHistoryWithMeta(messages, nil, "claude-opus-4-6", false, "/Users/dailin/Documents/GitHub/truth_social_scraper", 12000)
+	for _, want := range []string{
+		"Base your answer only on the files already shown, provide concrete optimization suggestions directly, and do not ask to read more files.",
+		"Use the files already shown to provide the best concrete optimization advice you can now.",
+	} {
+		if !strings.Contains(promptText, want) {
+			t.Fatalf("prompt missing direct-answer guidance for raw ls listing %q: %q", want, promptText)
+		}
+	}
+	for _, unwanted := range []string{
+		"You already read api.py multiple times.",
+		"Next inspect unread key implementation files",
+	} {
+		if strings.Contains(promptText, unwanted) {
+			t.Fatalf("prompt should not steer further reads for raw ls listing via %q: %q", unwanted, promptText)
+		}
 	}
 }
 
@@ -596,14 +774,200 @@ func TestBuildAIClientPromptAndHistoryWithMeta_ToolResultOnlyPromptIncludesQuest
 	if strings.Contains(promptText, orchidsThinkingModeTag) {
 		t.Fatalf("tool-result follow-up should not include thinking prefix: %q", promptText)
 	}
-	if len(chatHistory) != 0 {
-		t.Fatalf("tool-result follow-up should drop redundant chat history, got %#v", chatHistory)
+	if len(chatHistory) != 2 {
+		t.Fatalf("tool-result follow-up should keep prior turns for continuity, got %#v", chatHistory)
+	}
+	if chatHistory[0]["role"] != "user" || !strings.Contains(chatHistory[0]["content"], "当前运行的目录") {
+		t.Fatalf("unexpected preserved user history: %#v", chatHistory[0])
+	}
+	if chatHistory[1]["role"] != "assistant" || !strings.Contains(chatHistory[1]["content"], "[Used tool: Bash") {
+		t.Fatalf("unexpected preserved assistant history: %#v", chatHistory[1])
 	}
 	if meta.Profile != promptProfileUltraMin {
 		t.Fatalf("tool-result follow-up should force ultra-min profile, got %#v", meta)
 	}
 	if !meta.NoThinking {
 		t.Fatalf("tool-result follow-up should disable thinking, got %#v", meta)
+	}
+}
+
+func TestBuildAIClientPromptAndHistoryWithMeta_ToolResultOnlyPromptPreservesReadLabels(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}},
+					{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/monitor_trump.py"}},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_1", Content: "\"\"\"\nTruth Social Monitor API\n\"\"\"\nfrom fastapi import FastAPI"},
+					{Type: "tool_result", ToolUseID: "tool_2", Content: "import requests\nfrom openai import OpenAI"},
+				},
+			},
+		},
+	}
+
+	promptText, _, _ := BuildAIClientPromptAndHistoryWithMeta(messages, nil, "claude-opus-4-6", false, "/Users/dailin/Documents/GitHub/truth_social_scraper", 12000)
+	for _, want := range []string{
+		"[Read /Users/dailin/Documents/GitHub/truth_social_scraper/api.py]",
+		"[Read /Users/dailin/Documents/GitHub/truth_social_scraper/monitor_trump.py]",
+	} {
+		if !strings.Contains(promptText, want) {
+			t.Fatalf("prompt missing read label %q in %q", want, promptText)
+		}
+	}
+}
+
+func TestRewriteToolResultFollowUpForDirectAnswer_RemovesToolSeekingGuidance(t *testing.T) {
+	input := strings.TrimSpace(`Original user request:
+帮我优化这个项目
+
+Tool result:
+[Read /Users/dailin/Documents/GitHub/truth_social_scraper/api.py]
+from fastapi import FastAPI
+
+Use the tool result and your tools to conduct a thorough analysis of the project. Read relevant source files and provide comprehensive optimization suggestions.
+
+You already read api.py multiple times. Do not read it again unless you need a missing section that is not already shown. Next inspect unread key implementation files such as utils.py, monitor_trump.py before giving project-wide optimization advice.`)
+
+	got := rewriteToolResultFollowUpForDirectAnswer(input)
+	for _, unwanted := range []string{
+		"your tools",
+		"Read relevant source files",
+		"Next inspect unread key implementation files",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("rewritten follow-up still contains %q in %q", unwanted, got)
+		}
+	}
+	for _, want := range []string{
+		"Answer the project request directly using only the labeled file excerpts already shown.",
+		"Base your answer only on the files already shown, provide concrete optimization suggestions directly, and do not ask to read more files.",
+		"Use the files already shown to provide the best concrete optimization advice you can now.",
+		"Tool access is unavailable for this turn.",
+		"Any request to read, inspect, search, or review more files will be ignored.",
+		"Do not describe a plan, do not say you will first analyze or review the project",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rewritten follow-up missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestBuildAIClientPromptAndHistoryWithMeta_NoToolsToolResultFollowUpAvoidsFurtherReads(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_1", Content: "\"\"\"\nTruth Social Monitor API\n\"\"\"\nfrom fastapi import FastAPI"},
+				},
+			},
+		},
+	}
+
+	promptText, _, _ := BuildAIClientPromptAndHistoryWithMetaAndTools(messages, nil, "claude-opus-4-6", false, "/Users/dailin/Documents/GitHub/truth_social_scraper", 12000, nil)
+	for _, unwanted := range []string{"your tools", "Read relevant source files", "Next inspect unread key implementation files"} {
+		if strings.Contains(promptText, unwanted) {
+			t.Fatalf("no-tools prompt still encourages more reads via %q in %q", unwanted, promptText)
+		}
+	}
+	if !strings.Contains(promptText, "do not ask to read more files") {
+		t.Fatalf("no-tools prompt should explicitly forbid more reads: %q", promptText)
+	}
+	for _, want := range []string{
+		"Tool access is unavailable for this turn.",
+		"will be ignored",
+		"Do not describe a plan",
+		"do not include prefaces like 'Let me first...'",
+	} {
+		if !strings.Contains(promptText, want) {
+			t.Fatalf("no-tools prompt missing strong direct-answer guidance %q in %q", want, promptText)
+		}
+	}
+}
+
+func TestBuildAIClientPromptAndHistoryWithMeta_NoToolsToolResultFollowUpPrunesExploratoryAssistantHistory(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "text", Text: "Let me first understand the project structure and codebase."},
+					{Type: "tool_use", ID: "tool_1", Name: "Bash", Input: map[string]interface{}{"command": "ls -la /Users/dailin/Documents/GitHub/truth_social_scraper"}},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md\napi.py\nmonitor_trump.py\nutils.py\ndashboard.py\nrequirements.txt"},
+				},
+			},
+		},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "text", Text: "Let me first do a thorough review of the full codebase to identify optimization opportunities."},
+					{Type: "tool_use", ID: "tool_2", Name: "Read", Input: map[string]interface{}{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_2", Content: "\"\"\"\nTruth Social Monitor API\n\"\"\"\nfrom fastapi import FastAPI"},
+				},
+			},
+		},
+	}
+
+	_, chatHistory, _ := BuildAIClientPromptAndHistoryWithMetaAndTools(messages, nil, "claude-opus-4-6", false, "/Users/dailin/Documents/GitHub/truth_social_scraper", 12000, nil)
+	if len(chatHistory) == 0 {
+		t.Fatalf("expected non-empty chat history")
+	}
+
+	joined := make([]string, 0, len(chatHistory))
+	for _, item := range chatHistory {
+		joined = append(joined, item["content"])
+	}
+	historyText := strings.Join(joined, "\n")
+	for _, unwanted := range []string{
+		"Let me first understand the project structure and codebase.",
+		"Let me first do a thorough review of the full codebase to identify optimization opportunities.",
+	} {
+		if strings.Contains(historyText, unwanted) {
+			t.Fatalf("expected exploratory assistant preface to be pruned from history: %q", historyText)
+		}
+	}
+	for _, want := range []string{
+		"[Used tool: Bash",
+		"[Used tool: Read",
+		"README.md",
+	} {
+		if !strings.Contains(historyText, want) {
+			t.Fatalf("expected history to keep %q in %q", want, historyText)
+		}
 	}
 }
 

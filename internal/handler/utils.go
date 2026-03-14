@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/util"
 )
 
 var explicitEnvWorkdirRegex = regexp.MustCompile(`(?im)^\s*(?:cwd|working directory)\s*:\s*([^\n\r]+)\s*$`)
@@ -258,16 +259,17 @@ func shouldKeepToolsForWarpToolResultFollowup(messages []prompt.Message) bool {
 	}
 	toolResult := lastToolResultText(messages)
 	if looksLikeToolResultFailure(toolResult) {
-		return false
+		return shouldKeepToolsForRecoverableWarpToolFailure(messages, original)
 	}
 
 	if looksLikeOptimizationRequest(original) {
+		if looksLikeExploratoryAssistantPreface(lastAssistantText(messages)) {
+			return true
+		}
 		if looksLikeWarpExplorationSeed(toolResult) {
 			return true
 		}
-		// Always allow up to 15 file reads for optimization requests so the
-		// upstream LLM can perform a thorough analysis.
-		return countSuccessfulWarpFileToolResults(messages) < 15
+		return !hasSufficientOptimizationEvidence(messages, explicitlyRequestsDeepAnalysis(original))
 	}
 
 	if looksLikeTechStackRequest(original) ||
@@ -286,6 +288,412 @@ func shouldKeepToolsForWarpToolResultFollowup(messages []prompt.Message) bool {
 		return false
 	}
 	return looksLikeWarpExploratoryRequest(original)
+}
+
+func shouldKeepToolsForRecoverableWarpToolFailure(messages []prompt.Message, original string) bool {
+	if !looksLikeWarpExploratoryRequest(original) {
+		return false
+	}
+
+	malformedReads := countMalformedReadToolUsesInLatestAssistant(messages)
+	if malformedReads == 0 {
+		return false
+	}
+
+	totalResults, failedResults := latestToolResultTurnFailureCount(messages)
+	if totalResults == 0 || failedResults == 0 || failedResults != totalResults {
+		return false
+	}
+	if failedResults < malformedReads {
+		return false
+	}
+
+	for _, item := range collectSuccessfulToolResultEvidence(messages) {
+		if looksLikeWarpExplorationSeed(item.Content) || looksLikeImplementationReadEvidence(item) {
+			return true
+		}
+	}
+	return false
+}
+
+type toolResultEvidence struct {
+	ToolName string
+	FilePath string
+	Command  string
+	Content  string
+}
+
+func hasSufficientOptimizationEvidence(messages []prompt.Message, allowDeeperExploration bool) bool {
+	evidence := collectSuccessfulToolResultEvidence(messages)
+	if len(evidence) == 0 {
+		return false
+	}
+
+	corpus := buildToolResultFallbackCorpus(messages)
+	signals := inspectTechStackSignals(corpus)
+	hasSignals := !signals.isEmpty()
+
+	hasDirectoryOverview := false
+	hasReadme := false
+	hasDependencyManifest := false
+	hasCoreFile := false
+	implementationReadPaths := make(map[string]struct{})
+	readCounts := make(map[string]int)
+	totalReadResults := 0
+
+	for _, item := range evidence {
+		if looksLikeWarpExplorationSeed(item.Content) {
+			hasDirectoryOverview = true
+		}
+		if !strings.EqualFold(strings.TrimSpace(item.ToolName), "Read") {
+			continue
+		}
+
+		totalReadResults++
+		pathKey := normalizeToolInputPath(item.FilePath)
+		if pathKey == "" {
+			pathKey = fmt.Sprintf("unnamed-read-%d", totalReadResults)
+		}
+		readCounts[pathKey]++
+		hasReadme = hasReadme || looksLikeReadmePath(pathKey)
+		hasDependencyManifest = hasDependencyManifest || looksLikeDependencyManifestPath(pathKey)
+		hasCoreFile = hasCoreFile || looksLikeCoreImplementationPath(pathKey)
+		if looksLikeImplementationReadEvidence(item) {
+			implementationReadPaths[pathKey] = struct{}{}
+		}
+	}
+
+	uniqueReadCount := len(readCounts)
+	if uniqueReadCount == 0 {
+		return false
+	}
+	uniqueImplementationReadCount := len(implementationReadPaths)
+
+	latestRepeatedRead := false
+	last := evidence[len(evidence)-1]
+	if strings.EqualFold(strings.TrimSpace(last.ToolName), "Read") {
+		if lastPath := normalizeToolInputPath(last.FilePath); lastPath != "" && readCounts[lastPath] > 1 {
+			latestRepeatedRead = true
+		}
+	}
+
+	if allowDeeperExploration {
+		if latestRepeatedRead && uniqueImplementationReadCount >= 2 && hasCoreFile && hasSignals {
+			return true
+		}
+		if hasReadme && hasDependencyManifest && hasCoreFile && uniqueImplementationReadCount >= 2 {
+			return true
+		}
+		if hasDirectoryOverview && uniqueImplementationReadCount >= 3 && hasSignals {
+			return true
+		}
+		return uniqueImplementationReadCount >= 3 && hasSignals
+	}
+
+	if latestRepeatedRead && uniqueImplementationReadCount >= 2 && hasCoreFile && hasSignals &&
+		(hasReadme || hasDependencyManifest || hasDirectoryOverview) {
+		return true
+	}
+	if hasCoreFile && uniqueImplementationReadCount >= 2 && hasSignals &&
+		(hasReadme || hasDependencyManifest) {
+		return true
+	}
+	return uniqueImplementationReadCount >= 2 && hasSignals &&
+		(hasReadme || hasDependencyManifest || hasDirectoryOverview)
+}
+
+func collectSuccessfulToolResultEvidence(messages []prompt.Message) []toolResultEvidence {
+	toolUses := make(map[string]toolResultEvidence)
+	var evidence []toolResultEvidence
+
+	for _, msg := range messages {
+		role := strings.TrimSpace(msg.Role)
+		if strings.EqualFold(role, "assistant") && !msg.Content.IsString() {
+			for _, block := range msg.Content.GetBlocks() {
+				if block.Type != "tool_use" {
+					continue
+				}
+				toolUses[block.ID] = toolResultEvidence{
+					ToolName: strings.TrimSpace(block.Name),
+					FilePath: extractToolUseInputString(block.Input, "file_path", "path"),
+					Command:  extractToolUseInputString(block.Input, "command", "cmd"),
+				}
+			}
+			continue
+		}
+
+		if !strings.EqualFold(role, "user") || msg.Content.IsString() {
+			continue
+		}
+		for _, block := range msg.Content.GetBlocks() {
+			if block.Type != "tool_result" {
+				continue
+			}
+			text := strings.TrimSpace(extractToolResultContent(block.Content))
+			if text == "" || looksLikeToolResultFailure(text) {
+				continue
+			}
+			item := toolUses[block.ToolUseID]
+			item.Content = text
+			evidence = append(evidence, item)
+		}
+	}
+
+	return evidence
+}
+
+func countMalformedReadToolUsesInLatestAssistant(messages []prompt.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") || msg.Content.IsString() {
+			continue
+		}
+		count := 0
+		for _, block := range msg.Content.GetBlocks() {
+			if block.Type != "tool_use" || !strings.EqualFold(strings.TrimSpace(block.Name), "Read") {
+				continue
+			}
+			path := extractToolUseInputString(block.Input, "file_path", "path")
+			if isRecoverableMalformedReadPath(path) {
+				count++
+			}
+		}
+		return count
+	}
+	return 0
+}
+
+func latestToolResultTurnFailureCount(messages []prompt.Message) (total int, failures int) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") || msg.Content.IsString() {
+			continue
+		}
+		for _, block := range msg.Content.GetBlocks() {
+			if block.Type != "tool_result" {
+				continue
+			}
+			total++
+			if looksLikeToolResultFailure(extractToolResultContent(block.Content)) {
+				failures++
+			}
+		}
+		if total > 0 {
+			return total, failures
+		}
+	}
+	return 0, 0
+}
+
+func isRecoverableMalformedReadPath(path string) bool {
+	recovered := recoverMalformedReadPath(path)
+	return recovered != "" && recovered != strings.TrimSpace(path)
+}
+
+func recoverMalformedReadPath(path string) string {
+	path = strings.TrimSpace(strings.Trim(path, "\"'"))
+	if path == "" || looksLikeNormalToolPath(path) {
+		return ""
+	}
+	if idx := strings.Index(path, "/"); idx > 0 {
+		candidate := strings.TrimSpace(path[idx:])
+		if looksLikeNormalToolPath(candidate) {
+			return candidate
+		}
+	}
+	if idx := findWindowsToolPathStart(path); idx > 0 {
+		candidate := strings.TrimSpace(path[idx:])
+		if looksLikeNormalToolPath(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func looksLikeNormalToolPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") {
+		return true
+	}
+	return findWindowsToolPathStart(path) == 0
+}
+
+func findWindowsToolPathStart(s string) int {
+	for i := 0; i+2 < len(s); i++ {
+		ch := s[i]
+		if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) && s[i+1] == ':' && (s[i+2] == '\\' || s[i+2] == '/') {
+			return i
+		}
+	}
+	return -1
+}
+
+func buildToolResultFallbackCorpus(messages []prompt.Message) string {
+	evidence := collectSuccessfulToolResultEvidence(messages)
+	if len(evidence) == 0 {
+		return ""
+	}
+
+	const maxEntries = 6
+	const maxChars = 12000
+
+	seen := make(map[string]struct{}, len(evidence))
+	parts := make([]string, 0, len(evidence))
+	totalChars := 0
+
+	for _, item := range evidence {
+		text := strings.TrimSpace(item.Content)
+		if text == "" {
+			continue
+		}
+		key := strings.ToLower(text)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		part := text
+		if base := toolInputBaseName(item.FilePath); base != "" && !strings.Contains(strings.ToLower(text), base) {
+			part = base + "\n" + text
+		}
+		if totalChars+len(part) > maxChars {
+			break
+		}
+		parts = append(parts, part)
+		totalChars += len(part)
+		if len(parts) >= maxEntries {
+			break
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+func extractToolUseInputString(input interface{}, keys ...string) string {
+	switch v := input.(type) {
+	case map[string]interface{}:
+		for _, key := range keys {
+			if raw, ok := v[key]; ok {
+				if text, ok := raw.(string); ok {
+					return strings.TrimSpace(text)
+				}
+			}
+		}
+	case map[string]string:
+		for _, key := range keys {
+			if text := strings.TrimSpace(v[key]); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func normalizeToolInputPath(path string) string {
+	path = strings.TrimSpace(strings.ReplaceAll(path, "\\", "/"))
+	path = strings.TrimSuffix(path, "/")
+	return strings.ToLower(path)
+}
+
+func toolInputBaseName(path string) string {
+	path = normalizeToolInputPath(path)
+	if path == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		return path[idx+1:]
+	}
+	return path
+}
+
+func looksLikeReadmePath(path string) bool {
+	base := toolInputBaseName(path)
+	return strings.HasPrefix(base, "readme")
+}
+
+func looksLikeDependencyManifestPath(path string) bool {
+	switch toolInputBaseName(path) {
+	case "requirements.txt", "pyproject.toml", "poetry.lock", "pipfile", "pipfile.lock",
+		"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
+		"go.mod", "go.sum", "cargo.toml", "cargo.lock", "composer.json", "gemfile":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeCoreImplementationPath(path string) bool {
+	switch toolInputBaseName(path) {
+	case "main.py", "app.py", "api.py", "server.py", "dashboard.py",
+		"main.go", "server.go", "main.ts", "index.ts", "index.tsx", "index.js", "index.jsx":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeImplementationReadEvidence(item toolResultEvidence) bool {
+	if !strings.EqualFold(strings.TrimSpace(item.ToolName), "Read") {
+		return false
+	}
+	if looksLikeCoreImplementationPath(item.FilePath) || looksLikeSourceFilePath(item.FilePath) {
+		return true
+	}
+	return looksLikeSourceLikeContent(item.Content)
+}
+
+func looksLikeSourceFilePath(path string) bool {
+	switch {
+	case strings.HasSuffix(toolInputBaseName(path), ".py"),
+		strings.HasSuffix(toolInputBaseName(path), ".go"),
+		strings.HasSuffix(toolInputBaseName(path), ".js"),
+		strings.HasSuffix(toolInputBaseName(path), ".jsx"),
+		strings.HasSuffix(toolInputBaseName(path), ".ts"),
+		strings.HasSuffix(toolInputBaseName(path), ".tsx"),
+		strings.HasSuffix(toolInputBaseName(path), ".java"),
+		strings.HasSuffix(toolInputBaseName(path), ".kt"),
+		strings.HasSuffix(toolInputBaseName(path), ".rs"),
+		strings.HasSuffix(toolInputBaseName(path), ".rb"),
+		strings.HasSuffix(toolInputBaseName(path), ".php"),
+		strings.HasSuffix(toolInputBaseName(path), ".cs"),
+		strings.HasSuffix(toolInputBaseName(path), ".cpp"),
+		strings.HasSuffix(toolInputBaseName(path), ".c"),
+		strings.HasSuffix(toolInputBaseName(path), ".h"):
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeSourceLikeContent(text string) bool {
+	lower := strings.ToLower(text)
+	for _, marker := range []string{
+		"\ndef ", "\nclass ", "\nfunc ", "\nconst ", "\nlet ", "\nvar ",
+		"import ", "from ", "return ", "if __name__ ==",
+		"app = fastapi()", "router =",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasImplementationReadEvidence(messages []prompt.Message) bool {
+	return countImplementationReadEvidence(messages) > 0
+}
+
+func countImplementationReadEvidence(messages []prompt.Message) int {
+	count := 0
+	for _, item := range collectSuccessfulToolResultEvidence(messages) {
+		if looksLikeImplementationReadEvidence(item) {
+			count++
+		}
+	}
+	return count
 }
 
 func countSuccessfulWarpFileToolResults(messages []prompt.Message) int {
@@ -334,7 +742,9 @@ func buildToolResultNoToolsFallback(messages []prompt.Message) string {
 		return answer
 	}
 
-	if explicitlyRequestsDeepAnalysis(original) || looksLikeOptimizationRequest(original) {
+	optimizationRequest := looksLikeOptimizationRequest(original)
+	deepAnalysisRequest := explicitlyRequestsDeepAnalysis(original)
+	if deepAnalysisRequest && !optimizationRequest {
 		return ""
 	}
 
@@ -428,7 +838,33 @@ func buildToolResultNoToolsFallback(messages []prompt.Message) string {
 			return finalize(answer)
 		}
 	}
-	if looksLikeOptimizationRequest(original) {
+	if optimizationRequest {
+		optimizationReady := hasSufficientOptimizationEvidence(messages, deepAnalysisRequest)
+		if optimizationReady {
+			if answer := buildProjectSpecificOptimizationFallback(messages, preferChinese); answer != "" {
+				return finalize(answer)
+			}
+			optimizationContext := toolResult
+			if corpus := buildToolResultFallbackCorpus(messages); corpus != "" {
+				optimizationContext = corpus
+			}
+			if answer := buildLocalOptimizationFallback(optimizationContext, preferChinese); answer != "" {
+				return finalize(answer)
+			}
+		}
+		implementationReads := countImplementationReadEvidence(messages)
+		if implementationReads == 0 {
+			if preferChinese {
+				return finalize("当前只读到了目录、README 或依赖清单，还没读到核心源码。请继续查看主入口或关键实现文件（例如 api.py、monitor_trump.py、dashboard.py）后再给优化建议。")
+			}
+			return finalize("So far I only have the directory, README, or dependency manifest, but not the core source files yet. Read the entrypoint or key implementation files first (for example api.py, monitor_trump.py, or dashboard.py) before giving optimization advice.")
+		}
+		if !optimizationReady {
+			if preferChinese {
+				return finalize("当前只读到了少量核心源码，还不足以给出可靠的项目级优化建议。请继续查看其他关键实现文件，例如主流程、共享工具层、后台任务或 dashboard 相关代码，然后再收口分析。")
+			}
+			return finalize("So far I only have a small slice of the core source, which is not enough for reliable project-wide optimization advice. Continue reading other key implementation files such as the main workflow, shared utilities, background tasks, or dashboard code before closing with recommendations.")
+		}
 		if answer := buildLocalOptimizationFallback(toolResult, preferChinese); answer != "" {
 			return finalize(answer)
 		}
@@ -498,18 +934,18 @@ func selectToolResultForFallback(messages []prompt.Message) (string, bool) {
 func extractToolResultContent(content interface{}) string {
 	switch v := content.(type) {
 	case string:
-		return strings.TrimSpace(v)
+		return util.NormalizePersistedToolResultText(v)
 	case []interface{}:
 		var parts []string
 		for _, item := range v {
 			if s, ok := item.(string); ok {
-				s = strings.TrimSpace(s)
+				s = util.NormalizePersistedToolResultText(s)
 				if s != "" {
 					parts = append(parts, s)
 				}
 			}
 		}
-		return strings.TrimSpace(strings.Join(parts, "\n"))
+		return util.NormalizePersistedToolResultText(strings.Join(parts, "\n"))
 	default:
 		return ""
 	}
@@ -771,6 +1207,20 @@ func lastNonSuggestionUserText(messages []prompt.Message) string {
 	return ""
 }
 
+func buildToolGateMessage(messages []prompt.Message, suggestionMode bool) string {
+	if suggestionMode {
+		return "This is a suggestion-mode follow-up. Answer directly without calling tools or performing any file operations."
+	}
+	if lastUserIsToolResultFollowup(messages) {
+		original := lastNonToolResultUserText(messages)
+		if looksLikeOptimizationRequest(original) {
+			return "Use the provided tool results to answer the user's project optimization request directly. Tool access is unavailable for this turn, and any request to read, inspect, search, or review more files will be ignored. Stay specific to the current project and available code context. Do NOT call tools, do not describe a plan, and do not say you will first analyze or review the codebase. Give the best concrete project-specific recommendations now."
+		}
+		return "Use the provided tool results to answer the user's follow-up directly. Tool access is unavailable for this turn, and any request to read, inspect, search, or review more files will be ignored. Stay specific to the current project and available code context. Do NOT call tools, do not describe a plan, and answer now based only on the provided results."
+	}
+	return "Answer directly without calling tools or performing any file operations."
+}
+
 func lastAssistantText(messages []prompt.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
@@ -783,6 +1233,64 @@ func lastAssistantText(messages []prompt.Message) string {
 		}
 	}
 	return ""
+}
+
+func looksLikeExploratoryAssistantPreface(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	if len([]rune(text)) > 260 {
+		return false
+	}
+
+	lower := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	intro := []string{
+		"let me",
+		"i'll first",
+		"i will first",
+		"让我先",
+		"我先",
+	}
+	action := []string{
+		"look",
+		"read",
+		"explore",
+		"examine",
+		"analyze",
+		"identify",
+		"understand",
+		"inspect",
+		"review",
+		"check",
+		"learn",
+		"看看",
+		"看一下",
+		"了解",
+		"阅读",
+		"读取",
+		"理解",
+		"分析",
+		"检查",
+		"审查",
+	}
+
+	hasIntro := false
+	for _, marker := range intro {
+		if strings.Contains(lower, marker) {
+			hasIntro = true
+			break
+		}
+	}
+	if !hasIntro {
+		return false
+	}
+	for _, marker := range action {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasExplicitNextStepOffer(text string) bool {
@@ -2183,6 +2691,128 @@ func buildLocalOptimizationFallback(toolResult string, preferChinese bool) strin
 		return "基于当前已读取内容，优先可做这几项优化：" + strings.Join(suggestions, "；") + "。"
 	}
 	return "Based on the files already read, the highest-value optimizations are: " + strings.Join(suggestions, "; ") + "."
+}
+
+func buildProjectSpecificOptimizationFallback(messages []prompt.Message, preferChinese bool) string {
+	evidence := collectSuccessfulToolResultEvidence(messages)
+	if len(evidence) == 0 {
+		return ""
+	}
+
+	fileContents := make(map[string]string)
+	keys := make([]string, 0, len(evidence))
+	var corpusParts []string
+
+	for _, item := range evidence {
+		if !strings.EqualFold(strings.TrimSpace(item.ToolName), "Read") {
+			continue
+		}
+		base := toolInputBaseName(item.FilePath)
+		if base == "" {
+			continue
+		}
+		key := strings.ToLower(base)
+		text := strings.TrimSpace(item.Content)
+		if text == "" {
+			continue
+		}
+		if _, ok := fileContents[key]; ok {
+			continue
+		}
+		fileContents[key] = text
+		keys = append(keys, key)
+	}
+
+	if len(fileContents) == 0 {
+		return ""
+	}
+
+	sort.Strings(keys)
+	for _, key := range keys {
+		corpusParts = append(corpusParts, strings.ToLower(fileContents[key]))
+	}
+	corpus := strings.Join(corpusParts, "\n\n")
+
+	var suggestions []string
+
+	entryFiles := collectOptimizationFiles(fileContents, "api.py", "monitor_trump.py", "dashboard.py")
+	if len(entryFiles) >= 2 && containsAnyLower(corpus, "fastapi", "streamlit", "openai", "huggingface", "@app.get", "st.components.v1.html") {
+		if preferChinese {
+			suggestions = append(suggestions, "把 "+strings.Join(entryFiles, "、")+" 这些入口文件按 API 路由、抓取/AI、页面渲染拆成更小模块，避免单文件同时承担接口、媒体处理和 UI 逻辑")
+		} else {
+			suggestions = append(suggestions, "Split "+strings.Join(entryFiles, ", ")+" into smaller API, ingestion/AI, and UI modules so one file no longer owns routes, media handling, and presentation logic at the same time")
+		}
+	}
+
+	utilsContent := strings.ToLower(fileContents["utils.py"])
+	if utilsContent != "" && containsAnyLower(utilsContent, "alerts_file", "media_mapping_file", "dashboard_json_file", "json.load(", "json.dump(", "with open(") {
+		if preferChinese {
+			suggestions = append(suggestions, "把 `utils.py` 里围绕 `ALERTS_FILE`、`MEDIA_MAPPING_FILE`、`dashboard_data.json` 的 JSON 读写收口成仓储层，并补原子写、文件锁和 schema 校验")
+		} else {
+			suggestions = append(suggestions, "Turn the JSON reads and writes around `ALERTS_FILE`, `MEDIA_MAPPING_FILE`, and `dashboard_data.json` in `utils.py` into a repository layer with atomic writes, file locking, and schema validation")
+		}
+	}
+
+	networkingCorpus := strings.ToLower(fileContents["monitor_trump.py"] + "\n" + fileContents["api.py"])
+	if containsAnyLower(networkingCorpus, "openai", "huggingface", "siliconflow", "requests.post", "urlopen(", "except exception", "print(") {
+		if preferChinese {
+			suggestions = append(suggestions, "把 `monitor_trump.py` 和 `api.py` 里的 Truth Social、HuggingFace、SiliconFlow、OCR/下载调用抽成独立 client 或 adapter，统一 timeout、retry、错误分类和结构化日志，替换散落的 `print`/宽泛异常处理")
+		} else {
+			suggestions = append(suggestions, "Extract the Truth Social, HuggingFace, SiliconFlow, OCR, and download calls in `monitor_trump.py` and `api.py` into dedicated clients or adapters with shared timeout, retry, error classification, and structured logging instead of scattered prints and broad exception handling")
+		}
+	}
+
+	dashboardContent := strings.ToLower(fileContents["dashboard.py"])
+	if dashboardContent != "" && containsAnyLower(dashboardContent, "streamlit as st", "st.components.v1.html", "sessionstorage", "api_base_url", "<script>") {
+		if preferChinese {
+			suggestions = append(suggestions, "把 `dashboard.py` 里的内联 HTML/JavaScript 和 API 地址探测逻辑迁到 `web-ui` 或独立前端资源，让 Streamlit 层只保留状态管理和渲染")
+		} else {
+			suggestions = append(suggestions, "Move the inline HTML/JavaScript and API URL detection in `dashboard.py` into `web-ui` or dedicated frontend assets so the Streamlit layer only handles state and rendering")
+		}
+	}
+
+	testContent := strings.ToLower(fileContents["test_caption_cloud.py"])
+	if testContent != "" && containsAnyLower(testContent, `d:\github`, `media\\images`, "if __name__ == \"__main__\"", "print(") {
+		if preferChinese {
+			suggestions = append(suggestions, "把 `test_caption_cloud.py` 里的硬编码本地图片路径改成命令行参数、fixture 或临时文件，避免测试依赖单机目录")
+		} else {
+			suggestions = append(suggestions, "Replace the hard-coded local image path in `test_caption_cloud.py` with CLI arguments, fixtures, or temp files so the test does not depend on one machine-specific directory")
+		}
+	}
+
+	suggestions = uniqueStrings(suggestions)
+	if len(suggestions) < 2 {
+		return ""
+	}
+	suggestions = limitTechStackList(suggestions, 4)
+	if len(suggestions) == 0 {
+		return ""
+	}
+
+	if preferChinese {
+		return "基于当前已读取的关键文件，优先可做这几项优化：" + strings.Join(suggestions, "；") + "。"
+	}
+	return "Based on the key files already read, the highest-value improvements are: " + strings.Join(suggestions, "; ") + "."
+}
+
+func collectOptimizationFiles(fileContents map[string]string, keys ...string) []string {
+	files := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if strings.TrimSpace(fileContents[strings.ToLower(key)]) == "" {
+			continue
+		}
+		files = append(files, "`"+key+"`")
+	}
+	return files
+}
+
+func containsAnyLower(text string, markers ...string) bool {
+	for _, marker := range markers {
+		if marker != "" && strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildLocalWebImplementationFallback(toolResult string, preferChinese bool) string {
