@@ -18,7 +18,7 @@ import (
 
 const (
 	orchidsAppURL          = "https://www.orchids.app/"
-	defaultOrchidsActionID = "7fa6497f4f85c246c01099bca9dec5897c0a85f210"
+	defaultOrchidsActionID = "4035e3dc50d904a44a767852f9103263f9bf34fe5d"
 	orchidsUserAgent       = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
 
 	// Legacy fallback. Real value is fetched dynamically via an RSC GET.
