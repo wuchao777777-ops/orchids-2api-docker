@@ -15,6 +15,11 @@ type OrchidsConversationMessage struct {
 	Content     interface{}
 }
 
+type orchidsExtractedToolContent struct {
+	toolResults    []ToolResult
+	toolResultOnly bool
+}
+
 func buildOrchidsConversationMessages(messages []prompt.Message) []OrchidsConversationMessage {
 	if len(messages) == 0 {
 		return nil
@@ -66,7 +71,7 @@ func buildOrchidsConversationHistory(messages []OrchidsConversationMessage, curr
 		if role != "user" && role != "assistant" {
 			continue
 		}
-		text, _ := extractOrchidsMessageContent(msg.Content, msg.ContentType)
+		text := extractOrchidsHistoryContent(msg.Content, msg.ContentType)
 		text = strings.TrimSpace(text)
 		if text == "" {
 			continue
@@ -81,6 +86,73 @@ func buildOrchidsConversationHistory(messages []OrchidsConversationMessage, curr
 		return nil
 	}
 	return history
+}
+
+func extractOrchidsHistoryContent(content interface{}, contentType string) string {
+	switch contentType {
+	case "string":
+		if text, ok := content.(string); ok {
+			return strings.TrimSpace(text)
+		}
+		return ""
+	case "slice":
+		blocks, ok := content.([]interface{})
+		if !ok {
+			return ""
+		}
+
+		var parts []string
+
+		for _, raw := range blocks {
+			block, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			blockType, _ := block["type"].(string)
+			switch strings.TrimSpace(blockType) {
+			case "thinking", "reasoning", "input_text":
+				continue
+			case "text":
+				text, _ := block["text"].(string)
+				text = strings.TrimSpace(text)
+				if strings.Contains(text, "<search_quality_reflection>") || text == "" {
+					continue
+				}
+				parts = append(parts, text)
+			case "image":
+				if formatted := formatOrchidsConversationMediaBlock(block, "image"); formatted != "" {
+					parts = append(parts, formatted)
+				}
+			case "document":
+				if formatted := formatOrchidsConversationMediaBlock(block, "document"); formatted != "" {
+					parts = append(parts, formatted)
+				}
+			case "tool_use":
+				id, _ := block["id"].(string)
+				name, _ := block["name"].(string)
+				inputStr := ""
+				if input, ok := block["input"]; ok {
+					if rawInput, err := json.Marshal(input); err == nil {
+						inputStr = string(rawInput)
+					}
+				}
+				parts = append(parts, fmt.Sprintf(`<tool_use id="%s" name="%s" input="%s">`, id, name, inputStr))
+			case "tool_result":
+				toolResult := parseOrchidsToolResult(block)
+				if toolResult == nil {
+					continue
+				}
+				if strings.TrimSpace(toolResult.Name) == "" || strings.TrimSpace(toolResult.ToolUseID) == "" {
+					continue
+				}
+				parts = append(parts, fmt.Sprintf(`<tool_result name="%s" tool_use_id="%s">`, toolResult.Name, toolResult.ToolUseID))
+			}
+		}
+
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	default:
+		return ""
+	}
 }
 
 func extractOrchidsUserMessage(messages []OrchidsConversationMessage) (string, bool) {
@@ -133,15 +205,9 @@ func promptContentBlockToOrchidsMap(block prompt.ContentBlock) map[string]interf
 			if strings.TrimSpace(block.Source.Data) != "" {
 				source["data"] = block.Source.Data
 			}
-			if strings.TrimSpace(block.Source.URL) != "" {
-				source["url"] = block.Source.URL
-			}
 		}
 		if len(source) > 0 {
 			m["source"] = source
-		}
-		if strings.TrimSpace(block.URL) != "" {
-			m["url"] = block.URL
 		}
 	case "tool_use":
 		m["id"] = block.ID
@@ -149,9 +215,15 @@ func promptContentBlockToOrchidsMap(block prompt.ContentBlock) map[string]interf
 		m["input"] = block.Input
 	case "tool_result":
 		m["tool_use_id"] = block.ToolUseID
+		if strings.TrimSpace(block.Name) != "" {
+			m["name"] = block.Name
+		}
 		m["content"] = block.Content
 		if block.IsError {
 			m["is_error"] = true
+		}
+		if block.HasInput {
+			m["has_input"] = true
 		}
 	}
 
@@ -172,8 +244,8 @@ func extractOrchidsMessageContent(content interface{}, contentType string) (stri
 		}
 
 		var parts []string
-		hasToolResult := false
 		hasNonToolText := false
+		toolContent := extractOrchidsToolContent(blocks)
 
 		for _, raw := range blocks {
 			block, ok := raw.(map[string]interface{})
@@ -213,15 +285,79 @@ func extractOrchidsMessageContent(content interface{}, contentType string) (stri
 				}
 				parts = append(parts, fmt.Sprintf(`<tool_use id="%s" name="%s" input="%s">`, id, name, inputStr))
 				hasNonToolText = true
-			case "tool_result":
-				hasToolResult = true
 			}
 		}
 
-		return strings.TrimSpace(strings.Join(parts, "\n")), hasToolResult && !hasNonToolText
+		return strings.TrimSpace(strings.Join(parts, "\n")), toolContent.toolResultOnly && !hasNonToolText
 	default:
 		return "", false
 	}
+}
+
+func extractOrchidsToolResults(content interface{}, contentType string) []ToolResult {
+	if contentType != "slice" {
+		return nil
+	}
+	blocks, ok := content.([]interface{})
+	if !ok {
+		return nil
+	}
+	return extractOrchidsToolContent(blocks).toolResults
+}
+
+func extractOrchidsToolContent(blocks []interface{}) orchidsExtractedToolContent {
+	if len(blocks) == 0 {
+		return orchidsExtractedToolContent{}
+	}
+
+	toolResults := make([]ToolResult, 0, len(blocks))
+	for _, raw := range blocks {
+		block, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		blockType, _ := block["type"].(string)
+		if strings.TrimSpace(blockType) != "tool_result" {
+			continue
+		}
+		toolResult := parseOrchidsToolResult(block)
+		if toolResult == nil {
+			continue
+		}
+		toolResults = append(toolResults, *toolResult)
+	}
+
+	if len(toolResults) == 0 {
+		return orchidsExtractedToolContent{}
+	}
+	return orchidsExtractedToolContent{
+		toolResults:    toolResults,
+		toolResultOnly: true,
+	}
+}
+
+func parseOrchidsToolResult(block map[string]interface{}) *ToolResult {
+	if len(block) == 0 {
+		return nil
+	}
+
+	toolResult := &ToolResult{}
+	if value, ok := block["tool_use_id"].(string); ok {
+		toolResult.ToolUseID = value
+	}
+	if value, ok := block["name"].(string); ok {
+		toolResult.Name = value
+	}
+	if value, ok := block["content"]; ok {
+		toolResult.Content = value
+	}
+	if value, ok := block["is_error"].(bool); ok {
+		toolResult.IsError = value
+	}
+	if value, ok := block["has_input"].(bool); ok {
+		toolResult.HasInput = value
+	}
+	return toolResult
 }
 
 func formatOrchidsConversationMediaBlock(block map[string]interface{}, kind string) string {
@@ -234,44 +370,9 @@ func formatOrchidsConversationMediaBlock(block map[string]interface{}, kind stri
 			if kind == "image" {
 				return fmt.Sprintf("![image](data:%s;base64,%s)", mediaType, data)
 			}
-			return fmt.Sprintf("[document](data:%s)", data)
+			return fmt.Sprintf("[document](%s)", data)
 		}
 	}
 
 	return ""
-}
-
-func extractOrchidsAttachmentURLs(messages []prompt.Message) []string {
-	seen := make(map[string]struct{})
-	urls := make([]string, 0, 4)
-	for _, msg := range messages {
-		if msg.Content.IsString() {
-			continue
-		}
-		for _, block := range msg.Content.GetBlocks() {
-			blockType := strings.TrimSpace(block.Type)
-			if blockType != "image" && blockType != "document" {
-				continue
-			}
-			url := ""
-			if block.Source != nil {
-				url = strings.TrimSpace(block.Source.URL)
-			}
-			if url == "" {
-				url = strings.TrimSpace(block.URL)
-			}
-			if url == "" {
-				continue
-			}
-			if _, ok := seen[url]; ok {
-				continue
-			}
-			seen[url] = struct{}{}
-			urls = append(urls, url)
-		}
-	}
-	if len(urls) == 0 {
-		return nil
-	}
-	return urls
 }

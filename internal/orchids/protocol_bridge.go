@@ -42,5 +42,9 @@ func orchidsChatSessionID(req upstream.UpstreamRequest) string {
 }
 
 func (c *Client) buildSSEAgentRequest(req upstream.UpstreamRequest) OrchidsRequest {
-	return buildOrchidsRequest(req, c.config)
+	request := buildChatCompletionRequest(req, c.config)
+	payload := ConvertToOrchidsRequest(request)
+	payload.Model = request.Model
+	payload.System = request.System
+	return payload
 }

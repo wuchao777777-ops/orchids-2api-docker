@@ -47,6 +47,9 @@ func TestBuildSSEAgentRequestCarriesProtocolContext(t *testing.T) {
 	if got := payload.Config["thinkingMode"]; got != "enabled" {
 		t.Fatalf("Config[thinkingMode]=%#v want enabled", got)
 	}
+	if got := payload.Config["system"]; got != "system rules" {
+		t.Fatalf("Config[system]=%#v want system rules", got)
+	}
 	if len(payload.Messages) != 2 {
 		t.Fatalf("len(Messages)=%d want 2", len(payload.Messages))
 	}
@@ -78,6 +81,9 @@ func TestBuildSSEAgentRequestOmitsPromptWhenProtocolContextIsPresent(t *testing.
 	}
 
 	payload := client.buildSSEAgentRequest(req)
+	if got := payload.Config["system"]; got != "system rules" {
+		t.Fatalf("Config[system]=%#v want system rules", got)
+	}
 	assertBareOrchidsRequestJSON(t, payload)
 }
 
@@ -100,10 +106,59 @@ func TestBuildSSEAgentRequestKeepsPromptWithoutProtocolContext(t *testing.T) {
 	if len(payload.Messages) != 1 {
 		t.Fatalf("len(Messages)=%d want 1", len(payload.Messages))
 	}
+	if got := payload.Config["system"]; got != "" {
+		t.Fatalf("Config[system]=%#v want empty string", got)
+	}
 	if got := extractRequestMessageText(t, payload.Messages[0]); got != "hello from prompt only" {
 		t.Fatalf("prompt fallback=%q want prompt-only fallback", got)
 	}
 	assertBareOrchidsRequestJSON(t, payload)
+}
+
+func TestBuildSSEAgentRequestNormalizesModelAliases(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		config: &config.Config{
+			ProjectID: "proj_cfg",
+		},
+	}
+
+	req := upstream.UpstreamRequest{
+		Prompt: "hello",
+		Model:  "claude-opus-4.5",
+	}
+
+	payload := client.buildSSEAgentRequest(req)
+	if payload.ModelName != "claude-opus-4-6" {
+		t.Fatalf("ModelName=%q want claude-opus-4-6", payload.ModelName)
+	}
+	if payload.Model != "claude-opus-4-6" {
+		t.Fatalf("Model=%#v want claude-opus-4-6", payload.Model)
+	}
+}
+
+func TestBuildSSEAgentRequestFallsBackUnknownModelToDefault(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		config: &config.Config{
+			ProjectID: "proj_cfg",
+		},
+	}
+
+	req := upstream.UpstreamRequest{
+		Prompt: "hello",
+		Model:  "unknown-model",
+	}
+
+	payload := client.buildSSEAgentRequest(req)
+	if payload.ModelName != orchidsAgentDefaultModel {
+		t.Fatalf("ModelName=%q want %q", payload.ModelName, orchidsAgentDefaultModel)
+	}
+	if payload.Model != orchidsAgentDefaultModel {
+		t.Fatalf("Model=%#v want %q", payload.Model, orchidsAgentDefaultModel)
+	}
 }
 
 func TestBuildWSRequestIncludesProtocolContext(t *testing.T) {
@@ -139,6 +194,9 @@ func TestBuildWSRequestIncludesProtocolContext(t *testing.T) {
 	if got := payload.Config["thinkingMode"]; got != "disabled" {
 		t.Fatalf("Config[thinkingMode]=%#v want disabled", got)
 	}
+	if got := payload.Config["system"]; got != "system rules" {
+		t.Fatalf("Config[system]=%#v want system rules", got)
+	}
 	if payload.MaxTokens != 2048 {
 		t.Fatalf("maxTokens=%d want 2048", payload.MaxTokens)
 	}
@@ -146,13 +204,16 @@ func TestBuildWSRequestIncludesProtocolContext(t *testing.T) {
 	if len(msgs) != 2 || extractRequestMessageText(t, msgs[1]) != "ok" {
 		t.Fatalf("messages=%#v want original protocol messages", msgs)
 	}
-	if payload.System != "system rules" {
-		t.Fatalf("system=%q want original system text", payload.System)
+	if payload.System != "" {
+		t.Fatalf("system=%q want empty for bare WS request", payload.System)
+	}
+	if payload.Model != nil {
+		t.Fatalf("model=%#v want nil for bare WS request", payload.Model)
 	}
 	if payload.ModelName != "claude-sonnet-4-6" {
 		t.Fatalf("modelName=%q want claude-sonnet-4-6", payload.ModelName)
 	}
-	assertBareOrchidsRequestJSON(t, *payload)
+	assertBareOrchidsWSRequestJSON(t, *payload)
 }
 
 func TestBuildWSRequestSkipsSyntheticToolResultsForProtocolMessages(t *testing.T) {
@@ -182,7 +243,72 @@ func TestBuildWSRequestSkipsSyntheticToolResultsForProtocolMessages(t *testing.T
 	if len(payload.Messages) != 3 {
 		t.Fatalf("len(Messages)=%d want 3", len(payload.Messages))
 	}
-	assertBareOrchidsRequestJSON(t, *payload)
+	if got := len(payload.Messages[2].ToolResults); got != 1 {
+		t.Fatalf("len(Messages[2].ToolResults)=%d want 1", got)
+	}
+	assertBareOrchidsWSRequestJSON(t, *payload)
+}
+
+func TestBuildWSRequestPreservesStructuredToolResultFields(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		config: &config.Config{
+			ProjectID: "proj_ws",
+		},
+	}
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-sonnet-4-6",
+		Messages: []prompt.Message{
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{Type: "text", Text: "check demo"},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{Type: "tool_result", ToolUseID: "tool_1", Name: "Read", Content: "demo result", IsError: true, HasInput: true},
+					},
+				},
+			},
+		},
+	}
+
+	payload, err := client.buildWSRequest(req)
+	if err != nil {
+		t.Fatalf("buildWSRequest() error = %v", err)
+	}
+
+	if len(payload.Messages) != 2 {
+		t.Fatalf("len(Messages)=%d want 2", len(payload.Messages))
+	}
+	if len(payload.Messages[1].ToolResults) != 1 {
+		t.Fatalf("len(Messages[1].ToolResults)=%d want 1", len(payload.Messages[1].ToolResults))
+	}
+
+	toolResult := payload.Messages[1].ToolResults[0]
+	if toolResult.Name != "Read" {
+		t.Fatalf("ToolResults[0].Name=%q want Read", toolResult.Name)
+	}
+	if toolResult.ToolUseID != "tool_1" {
+		t.Fatalf("ToolResults[0].ToolUseID=%q want tool_1", toolResult.ToolUseID)
+	}
+	if toolResult.Content != "demo result" {
+		t.Fatalf("ToolResults[0].Content=%#v want demo result", toolResult.Content)
+	}
+	if !toolResult.IsError {
+		t.Fatal("ToolResults[0].IsError=false want true")
+	}
+	if !toolResult.HasInput {
+		t.Fatal("ToolResults[0].HasInput=false want true")
+	}
+	assertBareOrchidsWSRequestJSON(t, *payload)
 }
 
 func sampleProtocolMessages() []prompt.Message {
@@ -288,6 +414,26 @@ func assertBareOrchidsRequestJSON(t *testing.T, req OrchidsRequest) {
 	for _, forbidden := range []string{"projectId", "chatSessionId", "prompt", "tools", "type", "data"} {
 		if _, exists := top[forbidden]; exists {
 			t.Fatalf("request json=%s unexpectedly contains top-level key %s", string(raw), forbidden)
+		}
+	}
+}
+
+func assertBareOrchidsWSRequestJSON(t *testing.T, req OrchidsRequest) {
+	t.Helper()
+	assertBareOrchidsRequestJSON(t, req)
+
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var top map[string]interface{}
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	for _, forbidden := range []string{"model", "system"} {
+		if _, exists := top[forbidden]; exists {
+			t.Fatalf("ws request json=%s unexpectedly contains top-level key %s", string(raw), forbidden)
 		}
 	}
 }

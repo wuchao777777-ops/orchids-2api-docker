@@ -1,6 +1,10 @@
 package orchids
 
-import "testing"
+import (
+	"testing"
+
+	"orchids-api/internal/upstream"
+)
 
 func TestSnapshotOrchidsCompletionResetsActiveState(t *testing.T) {
 	t.Parallel()
@@ -15,8 +19,8 @@ func TestSnapshotOrchidsCompletionResetsActiveState(t *testing.T) {
 	if !snapshot.emitTextEnd || !snapshot.emitReasoningEnd || !snapshot.emitFinish {
 		t.Fatalf("snapshot=%+v want text/reasoning/finish emissions", snapshot)
 	}
-	if snapshot.finishReason != "tool-calls" {
-		t.Fatalf("finishReason=%q want tool-calls", snapshot.finishReason)
+	if snapshot.finishReason != "tool_use" {
+		t.Fatalf("finishReason=%q want tool_use", snapshot.finishReason)
 	}
 	if state.textStarted || state.reasoningStarted {
 		t.Fatalf("state should clear active blocks, got %+v", state)
@@ -59,5 +63,17 @@ func TestApplyOrchidsModelStateFinishClearsOpenBlocks(t *testing.T) {
 	}
 	if state.textBlockIndex != -1 || state.reasoningBlockIndex != -1 {
 		t.Fatalf("state block indexes should reset, got %+v", state)
+	}
+}
+
+func TestNewOrchidsRequestStateNormalizesModelName(t *testing.T) {
+	t.Parallel()
+
+	state := newOrchidsRequestState(upstream.UpstreamRequest{
+		Model: "claude-opus-4.5",
+	})
+
+	if state.modelName != "claude-opus-4-6" {
+		t.Fatalf("modelName=%q want claude-opus-4-6", state.modelName)
 	}
 }

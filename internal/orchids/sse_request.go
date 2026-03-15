@@ -85,16 +85,14 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("User-Agent", orchidsWSUserAgent)
 		httpReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-		httpReq.Header.Set("X-Orchids-Api-Version", "2")
 
 		if logger != nil {
 			headers := map[string]string{
-				"Accept":                "text/event-stream",
-				"Authorization":         "Bearer [REDACTED]",
-				"Content-Type":          "application/json",
-				"User-Agent":            orchidsWSUserAgent,
-				"X-Requested-With":      "XMLHttpRequest",
-				"X-Orchids-Api-Version": "2",
+				"Accept":           "text/event-stream",
+				"Authorization":    "Bearer [REDACTED]",
+				"Content-Type":     "application/json",
+				"User-Agent":       orchidsWSUserAgent,
+				"X-Requested-With": "XMLHttpRequest",
 			}
 			logger.LogUpstreamRequest(url, headers, orchidsReq)
 		}

@@ -13,15 +13,10 @@ type orchidsCompletionState struct {
 
 func markOrchidsResponseStarted(state *requestState) bool {
 	if state.responseStarted {
-		state.suppressStarts = true
 		return false
 	}
 	state.responseStarted = true
 	return true
-}
-
-func markOrchidsCodingAgent(state *requestState) {
-	state.preferCodingAgent = true
 }
 
 func beginOrchidsReasoning(state *requestState) bool {
@@ -66,18 +61,6 @@ func nextOrchidsBlockIndex(state *requestState) int {
 	return idx
 }
 
-func acceptOrchidsTextDelta(state *requestState, eventType, text string) bool {
-	if text == "" {
-		return false
-	}
-	if text == state.lastTextDelta && state.lastTextEvent != eventType {
-		return false
-	}
-	state.lastTextDelta = text
-	state.lastTextEvent = eventType
-	return true
-}
-
 func recordOrchidsToolCalls(state *requestState, count int) bool {
 	if count <= 0 {
 		return false
@@ -89,10 +72,12 @@ func recordOrchidsToolCalls(state *requestState, count int) bool {
 func snapshotOrchidsCompletion(state *requestState) orchidsCompletionState {
 	finishReason := strings.TrimSpace(state.finishReason)
 	if finishReason == "" {
-		finishReason = "stop"
+		finishReason = "end_turn"
 		if state.sawToolCall {
-			finishReason = "tool-calls"
+			finishReason = "tool_use"
 		}
+	} else {
+		finishReason = orchidsNormalizeFinishReason(finishReason)
 	}
 
 	snapshot := orchidsCompletionState{
@@ -116,14 +101,15 @@ func snapshotOrchidsCompletion(state *requestState) orchidsCompletionState {
 	return snapshot
 }
 
-func shouldSuppressOrchidsModelEvent(state *requestState, eventType string) bool {
-	if state.suppressStarts && eventType == "stream-start" {
-		return true
+func orchidsNormalizeFinishReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "tool-calls", "tool_use":
+		return "tool_use"
+	case "stop", "end_turn":
+		return "end_turn"
+	default:
+		return "end_turn"
 	}
-	if state.preferCodingAgent && orchidsShouldSuppressCodingAgentDuplicate(eventType) {
-		return true
-	}
-	return false
 }
 
 func applyOrchidsModelState(state *requestState, eventType string) {

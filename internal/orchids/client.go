@@ -17,7 +17,6 @@ import (
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
-	"orchids-api/internal/perf"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
@@ -98,8 +97,6 @@ type Client struct {
 	config     *config.Config
 	account    *store.Account
 	httpClient *http.Client
-	fsCache    *perf.TTLCache
-	wsWriteMu  sync.Mutex
 }
 
 type TokenResponse struct {
@@ -175,7 +172,6 @@ func New(cfg *config.Config) *Client {
 	c := &Client{
 		config:     cfg,
 		httpClient: newHTTPClient(cfg),
-		fsCache:    perf.NewTTLCache(60*time.Second, 5000),
 	}
 	return c
 }
@@ -233,7 +229,6 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 		config:     cfg,
 		account:    acc,
 		httpClient: newHTTPClient(cfg),
-		fsCache:    perf.NewTTLCache(60*time.Second, 5000),
 	}
 	return c
 }
@@ -241,9 +236,6 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 func (c *Client) Close() {
 	if c == nil {
 		return
-	}
-	if c.fsCache != nil {
-		c.fsCache.Close()
 	}
 }
 

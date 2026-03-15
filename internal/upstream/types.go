@@ -6,6 +6,16 @@ import (
 	"orchids-api/internal/prompt"
 )
 
+type DirectSSEEmitter interface {
+	WriteDirectSSE(event string, payload []byte, final bool)
+	ObserveTextDelta(text string)
+	ObserveThinkingDelta(text string)
+	ObserveToolCall(name, input string)
+	ObserveUsage(inputTokens, outputTokens int)
+	ObserveStopReason(stopReason string)
+	FinishDirectSSE(stopReason string)
+}
+
 // UpstreamRequest 统一上游请求结构（Warp/Orchids 复用）
 type UpstreamRequest struct {
 	Prompt        string
@@ -22,6 +32,7 @@ type UpstreamRequest struct {
 	ChatSessionID string
 	Workdir       string // Dynamic local workdir override
 	ProjectID     string
+	DirectSSE     DirectSSEEmitter
 }
 
 // SSEMessage 统一上游 SSE 消息结构（Warp/Orchids 复用）

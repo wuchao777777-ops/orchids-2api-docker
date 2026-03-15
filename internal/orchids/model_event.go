@@ -41,15 +41,6 @@ func orchidsModelEventType(event map[string]interface{}) string {
 	return ""
 }
 
-func orchidsShouldSuppressCodingAgentDuplicate(eventType string) bool {
-	switch eventType {
-	case "text-start", "text-delta", "text-end", "reasoning-start", "reasoning-delta", "reasoning-end":
-		return true
-	default:
-		return false
-	}
-}
-
 func normalizeOrchidsUsage(usage map[string]interface{}) map[string]interface{} {
 	if len(usage) == 0 {
 		return nil
@@ -97,7 +88,7 @@ func orchidsToolInputString(payload map[string]interface{}) string {
 	return ""
 }
 
-func normalizeOrchidsModelEvent(event map[string]interface{}, clientTools []interface{}) map[string]interface{} {
+func normalizeOrchidsModelEvent(event map[string]interface{}, clientTools []interface{}, toolMapper *ToolMapper) map[string]interface{} {
 	payload := orchidsModelPayload(event)
 	if len(payload) == 0 {
 		return nil
@@ -141,7 +132,7 @@ func normalizeOrchidsModelEvent(event map[string]interface{}, clientTools []inte
 			toolName, _ = payload["name"].(string)
 		}
 		if strings.TrimSpace(toolName) != "" {
-			normalized["toolName"] = MapToolNameToClient(toolName, clientTools)
+			normalized["toolName"] = MapToolNameToClient(toolName, clientTools, toolMapper)
 		}
 
 	case "tool-input-end":
@@ -164,12 +155,9 @@ func normalizeOrchidsModelEvent(event map[string]interface{}, clientTools []inte
 		if strings.TrimSpace(toolName) == "" {
 			toolName, _ = payload["name"].(string)
 		}
-		clientName := MapToolNameToClient(toolName, clientTools)
+		clientName := MapToolNameToClient(toolName, clientTools, toolMapper)
 		input := orchidsToolInputString(payload)
 		input = transformToolInputJSON(toolName, clientName, input)
-		if strings.TrimSpace(toolID) == "" {
-			toolID = fallbackOrchidsToolCallID(clientName, input)
-		}
 		if strings.TrimSpace(toolID) != "" {
 			normalized["toolCallId"] = strings.TrimSpace(toolID)
 		}
@@ -194,9 +182,9 @@ func normalizeOrchidsModelEvent(event map[string]interface{}, clientTools []inte
 
 	case "finish":
 		if finishReason, ok := payload["finishReason"].(string); ok && strings.TrimSpace(finishReason) != "" {
-			normalized["finishReason"] = strings.TrimSpace(finishReason)
+			normalized["finishReason"] = orchidsNormalizeFinishReason(finishReason)
 		} else if stopReason, ok := payload["stop_reason"].(string); ok && strings.TrimSpace(stopReason) != "" {
-			normalized["finishReason"] = strings.TrimSpace(stopReason)
+			normalized["finishReason"] = orchidsNormalizeFinishReason(stopReason)
 		}
 		if usage, ok := payload["usage"].(map[string]interface{}); ok && len(usage) > 0 {
 			normalized["usage"] = normalizeOrchidsUsage(usage)
@@ -225,17 +213,22 @@ func emitOrchidsModelEvent(
 	if eventType == "" {
 		return false
 	}
-	if shouldSuppressOrchidsModelEvent(state, eventType) {
-		return false
-	}
 
-	normalized := normalizeOrchidsModelEvent(rawEvent, clientTools)
+	var toolMapper *ToolMapper
+	if state != nil {
+		toolMapper = state.toolMapper
+	}
+	normalized := normalizeOrchidsModelEvent(rawEvent, clientTools, toolMapper)
 	if len(normalized) == 0 {
 		return false
 	}
 
 	if usage, ok := normalized["usage"].(map[string]interface{}); ok {
 		recordOrchidsUsage(state, usage)
+	}
+
+	if orchidsWriterHandlesModelEvent(eventType) {
+		return emitOrchidsDirectModelEvent(normalized, state, onMessage)
 	}
 
 	if eventType == "finish" {
@@ -256,6 +249,89 @@ func emitOrchidsModelEvent(
 	}
 
 	return eventType == "finish"
+}
+
+func orchidsWriterHandlesModelEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "text-start",
+		"text-delta",
+		"text-end",
+		"reasoning-start",
+		"reasoning-delta",
+		"reasoning-end",
+		"tool-input-start",
+		"tool-input-delta",
+		"tool-input-end",
+		"tool-call",
+		"tokens-used",
+		"finish":
+		return true
+	default:
+		return false
+	}
+}
+
+func emitOrchidsDirectModelEvent(
+	normalized map[string]interface{},
+	state *requestState,
+	onMessage func(upstream.SSEMessage),
+) bool {
+	eventType, _ := normalized["type"].(string)
+	writer := NewSSEWriter(state, onMessage)
+
+	switch strings.TrimSpace(eventType) {
+	case "text-start":
+		writer.WriteTextStart()
+		return false
+	case "text-delta":
+		delta, _ := normalized["delta"].(string)
+		writer.WriteTextDelta(EventOutputTextDelta, delta)
+		return false
+	case "text-end":
+		writer.WriteTextEnd()
+		return false
+	case "reasoning-start":
+		writer.WriteReasoningStart()
+		return false
+	case "reasoning-delta":
+		delta, _ := normalized["delta"].(string)
+		writer.WriteThinkingDelta(delta)
+		return false
+	case "reasoning-end":
+		writer.WriteReasoningEnd()
+		return false
+	case "tool-input-start":
+		id, _ := normalized["id"].(string)
+		name, _ := normalized["toolName"].(string)
+		writer.WriteToolInputStart(id, name)
+		return false
+	case "tool-input-delta":
+		id, _ := normalized["id"].(string)
+		delta, _ := normalized["delta"].(string)
+		writer.WriteToolInputDelta(id, delta)
+		return false
+	case "tool-input-end":
+		id, _ := normalized["id"].(string)
+		writer.WriteToolInputEnd(id)
+		return false
+	case "tool-call":
+		id, _ := normalized["toolCallId"].(string)
+		name, _ := normalized["toolName"].(string)
+		input, _ := normalized["input"].(string)
+		writer.WriteToolUseBlock(orchidsToolCall{id: id, name: name, input: input})
+		return false
+	case "tokens-used":
+		emitOrchidsUsageMapEvent(state, normalized, onMessage)
+		return false
+	case "finish":
+		if finishReason, ok := normalized["finishReason"].(string); ok {
+			state.finishReason = strings.TrimSpace(finishReason)
+		}
+		emitOrchidsCompletionTail(state, onMessage)
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeOrchidsModelEvent(raw json.RawMessage) map[string]interface{} {

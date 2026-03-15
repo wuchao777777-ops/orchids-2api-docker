@@ -36,9 +36,7 @@ func dispatchOrchidsFastEvent(
 			logger.LogUpstreamSSE(envelope.Type, string(rawData))
 		}
 		markOrchidsCodingAgent(state)
-		if endOrchidsReasoning(state) {
-			onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "reasoning-end", "id": "0"}})
-		}
+		NewSSEWriter(state, onMessage).WriteReasoningEnd()
 		return true, false
 	case EventCodingAgentTokens:
 		var msg orchidsFastTokensMessage
@@ -48,7 +46,7 @@ func dispatchOrchidsFastEvent(
 		if logger != nil {
 			logger.LogUpstreamSSE(msg.Type, string(rawData))
 		}
-		emitOrchidsUsageEvent(msg.Data, onMessage)
+		emitOrchidsUsageEvent(state, msg.Data, onMessage)
 		return true, false
 	case EventReasoningChunk, EventOutputTextDelta, EventResponseChunk:
 		var msg orchidsFastTextMessage
@@ -111,7 +109,7 @@ func dispatchOrchidsFastEvent(
 		}
 		slog.Warn("Orchids upstream error event", "code", errCode, "message", errMsg)
 		setOrchidsErrorState(state, errCode, errMsg, false)
-		emitOrchidsErrorEvent(onMessage, errCode, errMsg)
+		emitOrchidsErrorEvent(state, onMessage, errCode, errMsg)
 		return true, true
 	default:
 		return false, false
@@ -144,10 +142,9 @@ func dispatchOrchidsDecodedEvent(
 			return false
 		}
 		markOrchidsCodingAgent(state)
-		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg, RawJSON: cloneRawJSON(rawData)})
 		return false
 	case EventCodingAgentTokens:
-		emitOrchidsTokensFromMessage(msg, onMessage)
+		emitOrchidsTokensFromMessage(state, msg, onMessage)
 		return false
 	case EventCreditsExhausted:
 		errCode, errMsg := extractOrchidsErrorPayload(msg)
@@ -159,21 +156,17 @@ func dispatchOrchidsDecodedEvent(
 		}
 		slog.Warn("Orchids credits exhausted", "code", errCode, "message", errMsg)
 		setOrchidsErrorState(state, errCode, errMsg, true)
-		emitOrchidsErrorEvent(onMessage, errCode, errMsg)
+		emitOrchidsErrorEvent(state, onMessage, errCode, errMsg)
 		return true
 	case EventResponseDone, EventCodingAgentEnd, EventComplete:
 		return handleOrchidsCompletionMessage(msgType, msg, state, onMessage, clientTools)
-	case EventFS:
-		return false
 	case EventReasoningChunk:
 		markOrchidsCodingAgent(state)
 		emitOrchidsReasoningDelta(state, onMessage, extractOrchidsText(msg))
 		return false
 	case EventReasoningCompleted:
 		markOrchidsCodingAgent(state)
-		if endOrchidsReasoning(state) {
-			onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "reasoning-end", "id": "0"}})
-		}
+		NewSSEWriter(state, onMessage).WriteReasoningEnd()
 		return false
 	case EventOutputTextDelta, EventResponseChunk:
 		markOrchidsCodingAgent(state)
@@ -196,7 +189,7 @@ func dispatchOrchidsDecodedEvent(
 		}
 		slog.Warn("Orchids upstream error event", "code", errCode, "message", errMsg)
 		setOrchidsErrorState(state, errCode, errMsg, false)
-		emitOrchidsErrorEvent(onMessage, errCode, errMsg)
+		emitOrchidsErrorEvent(state, onMessage, errCode, errMsg)
 		return true
 	case EventTodoWriteStart, EventRunItemStream, EventToolCallOutput:
 		return false

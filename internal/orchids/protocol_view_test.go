@@ -96,3 +96,37 @@ func TestBuildCodeFreeMaxPromptAndHistoryWithMeta_ToolResultOnlyTurnStaysRaw(t *
 		t.Fatalf("promptText=%q want empty raw prompt for tool-result-only current turn", promptText)
 	}
 }
+
+func TestBuildCodeFreeMaxPromptAndHistoryWithMeta_HistoryPreservesNamedToolResultMarker(t *testing.T) {
+	t.Parallel()
+
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "first request"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_use", ID: "tool_1", Name: "Read", Input: map[string]interface{}{"file_path": "/tmp/demo.txt"}},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_1", Name: "Read", Content: "demo result"},
+				},
+			},
+		},
+		{Role: "user", Content: prompt.MessageContent{Text: "second request"}},
+	}
+
+	_, history, _ := BuildCodeFreeMaxPromptAndHistoryWithMeta(messages, nil, false)
+
+	if len(history) < 3 {
+		t.Fatalf("history len=%d want at least 3", len(history))
+	}
+	if !strings.Contains(history[2]["content"], `<tool_result name="Read" tool_use_id="tool_1">`) {
+		t.Fatalf("user history=%q want tool_result marker", history[2]["content"])
+	}
+}

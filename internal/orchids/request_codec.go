@@ -9,8 +9,19 @@ import (
 )
 
 type OrchidsMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role        string       `json:"role"`
+	Content     interface{}  `json:"content"`
+	ToolResults []ToolResult `json:",omitempty"`
+}
+
+type ToolResult struct {
+	Name      string      `json:",omitempty"`
+	ToolUseID string      `json:",omitempty"`
+	Content   interface{} `json:",omitempty"`
+	IsError   bool        `json:",omitempty"`
+	HasInput  bool        `json:",omitempty"`
+	Flag1     bool        `json:",omitempty"`
+	Flag2     bool        `json:",omitempty"`
 }
 
 type OrchidsRequest struct {
@@ -42,9 +53,11 @@ func convertToOrchidsRequestMessages(messages []OrchidsConversationMessage) []Or
 		if role == "" {
 			continue
 		}
+		toolResults := extractOrchidsToolResults(msg.Content, msg.ContentType)
 		out = append(out, OrchidsMessage{
-			Role:    role,
-			Content: msg.Content,
+			Role:        role,
+			Content:     msg.Content,
+			ToolResults: toolResults,
 		})
 	}
 	if len(out) == 0 {
@@ -58,10 +71,7 @@ func buildChatCompletionRequest(req upstream.UpstreamRequest, cfg *config.Config
 	if len(conversation) == 0 {
 		conversation = buildLegacyOrchidsConversationMessages(req.ChatHistory, req.Prompt)
 	}
-	modelName := strings.TrimSpace(req.Model)
-	if modelName == "" {
-		modelName = normalizeOrchidsAgentModel(req.Model)
-	}
+	modelName := normalizeOrchidsAgentModel(req.Model)
 
 	request := &ChatCompletionRequest{
 		Model:        modelName,
@@ -70,10 +80,11 @@ func buildChatCompletionRequest(req upstream.UpstreamRequest, cfg *config.Config
 		MaxTokens:    orchidsMaxTokens(cfg),
 		ThinkingMode: orchidsThinkingMode(req),
 	}
+	request.Config = map[string]interface{}{
+		"system": request.System,
+	}
 	if request.ThinkingMode != "" {
-		request.Config = map[string]interface{}{
-			"thinkingMode": request.ThinkingMode,
-		}
+		request.Config["thinkingMode"] = request.ThinkingMode
 	}
 	return request
 }
@@ -85,9 +96,7 @@ func ConvertToOrchidsRequest(req *ChatCompletionRequest) OrchidsRequest {
 
 	return OrchidsRequest{
 		Messages:  convertToOrchidsRequestMessages(req.Messages),
-		Model:     req.Model,
 		ModelName: req.Model,
-		System:    req.System,
 		MaxTokens: req.MaxTokens,
 		Config:    req.Config,
 	}

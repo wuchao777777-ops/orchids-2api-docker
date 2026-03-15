@@ -9,17 +9,13 @@ import (
 )
 
 type requestState struct {
-	preferCodingAgent   bool
 	textStarted         bool
 	reasoningStarted    bool
 	nextBlockIndex      int
 	textBlockIndex      int
 	reasoningBlockIndex int
-	lastTextDelta       string
-	lastTextEvent       string
 	finishSent          bool
 	sawToolCall         bool
-	hasFSOps            bool
 	stream              bool
 	responseStarted     bool
 	messageStarted      bool
@@ -27,14 +23,18 @@ type requestState struct {
 	finishReason        string
 	inputTokens         int
 	outputTokens        int
-	suppressStarts      bool
-	activeWrites        map[string]*fileWriterState
 	errorMsg            string
+	directSSE           upstream.DirectSSEEmitter
+	toolMapper          *ToolMapper
+	lastPendingToolID   string
+	pendingToolInputs   map[string]*orchidsPendingToolInput
+	emittedToolCallIDs  map[string]struct{}
 }
 
-type fileWriterState struct {
-	path string
-	buf  strings.Builder
+type orchidsPendingToolInput struct {
+	name       string
+	blockIndex int
+	buf        strings.Builder
 }
 
 func cloneRawJSON(data []byte) json.RawMessage {
@@ -45,14 +45,13 @@ func cloneRawJSON(data []byte) json.RawMessage {
 }
 
 func newOrchidsRequestState(req upstream.UpstreamRequest) requestState {
-	modelName := strings.TrimSpace(req.Model)
-	if modelName == "" {
-		modelName = normalizeOrchidsAgentModel(req.Model)
-	}
+	modelName := normalizeOrchidsAgentModel(req.Model)
 	return requestState{
 		stream:              req.Stream,
 		modelName:           modelName,
 		textBlockIndex:      -1,
 		reasoningBlockIndex: -1,
+		directSSE:           req.DirectSSE,
+		toolMapper:          buildClientToolMapper(req.Tools),
 	}
 }

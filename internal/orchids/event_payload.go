@@ -40,12 +40,12 @@ func extractOrchidsFastErrorPayload(msg orchidsFastErrorMessage) (code string, m
 	return code, message
 }
 
-func emitOrchidsTokensFromMessage(msg map[string]interface{}, onMessage func(upstream.SSEMessage)) {
+func emitOrchidsTokensFromMessage(state *requestState, msg map[string]interface{}, onMessage func(upstream.SSEMessage)) {
 	data, _ := msg["data"].(map[string]interface{})
 	if data == nil {
 		return
 	}
-	emitOrchidsUsageMapEvent(data, onMessage)
+	emitOrchidsUsageMapEvent(state, data, onMessage)
 }
 
 func dispatchOrchidsModelMessage(

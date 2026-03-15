@@ -3,7 +3,6 @@ package handler
 import (
 	"strings"
 
-	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/warp"
@@ -40,7 +39,7 @@ func estimateInputTokenBreakdown(promptText string, history []map[string]string,
 		bd.HistoryTokens += tiktoken.EstimateTextTokens(content) + 15
 	}
 
-	bd.ToolsTokens = orchids.EstimateCompactedToolsTokens(tools)
+	bd.ToolsTokens = estimateCompactedToolsTokens(tools)
 
 	bd.Total = bd.BasePromptTokens + bd.SystemContextTokens + bd.HistoryTokens + bd.ToolsTokens
 	return bd

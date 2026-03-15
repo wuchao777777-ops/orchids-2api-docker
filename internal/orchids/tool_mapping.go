@@ -1,31 +1,38 @@
-// Package client provides tool name mapping between Claude Code and Orchids.
 package orchids
 
 import (
-	"github.com/goccy/go-json"
 	"strings"
-	"sync"
+
+	"github.com/goccy/go-json"
 )
 
-// ToolMapper handles bidirectional tool name mapping.
-type ToolMapper struct {
-	// Claude Code → Orchids 标准名
+type canonicalToolMapper struct {
 	toOrchids   map[string]string
 	fromOrchids map[string]string
-	mu          sync.RWMutex
 }
 
-// DefaultToolMapper is the global tool mapper instance.
-var DefaultToolMapper = NewToolMapper()
+// ToolMapper mirrors CodeFreeMax's per-request client tool index.
+type ToolMapper struct {
+	Tools []map[string]interface{}
+	index map[string]map[string]interface{}
+}
 
-// NewToolMapper creates a new ToolMapper with default mappings.
-func NewToolMapper() *ToolMapper {
-	tm := &ToolMapper{
+// NormalizedTool mirrors CodeFreeMax's tool-name normalization tuple.
+type NormalizedTool struct {
+	Original  string
+	Lowercase string
+	SnakeCase string
+}
+
+// DefaultToolMapper remains the thin repo-compatibility bridge used outside the Orchids stream path.
+var DefaultToolMapper = newCanonicalToolMapper()
+
+func newCanonicalToolMapper() *canonicalToolMapper {
+	tm := &canonicalToolMapper{
 		toOrchids:   make(map[string]string),
 		fromOrchids: make(map[string]string),
 	}
 
-	// Claude Code → Orchids 映射
 	tm.addMapping("Str_Replace_Editor", "Edit")
 	tm.addMapping("str_replace_editor", "Edit")
 	tm.addMapping("View", "Read")
@@ -58,7 +65,6 @@ func NewToolMapper() *ToolMapper {
 	tm.addMapping("save-file", "Write")
 	tm.addMapping("Write", "Write")
 
-	// Warp 内置工具名 → 标准工具名
 	tm.addMapping("run_shell_command", "Bash")
 	tm.addMapping("write_to_long_running_shell_command", "Bash")
 	tm.addMapping("search_codebase", "Grep")
@@ -68,7 +74,6 @@ func NewToolMapper() *ToolMapper {
 	tm.addMapping("read_files", "Read")
 	tm.addMapping("apply_file_diffs", "Edit")
 
-	// 计划与任务工具
 	tm.addMapping("update_todo_list", "TodoWrite")
 	tm.addMapping("todo", "TodoWrite")
 	tm.addMapping("todo_write", "TodoWrite")
@@ -83,12 +88,10 @@ func NewToolMapper() *ToolMapper {
 	tm.addMapping("use_skill", "Skill")
 	tm.addMapping("skill", "Skill")
 
-	// Web 工具
 	tm.addMapping("web_fetch", "WebFetch")
 	tm.addMapping("webfetch", "WebFetch")
 	tm.addMapping("fetch", "WebFetch")
 
-	// MCP 工具
 	tm.addMapping("query-docs", "mcp__context7__query-docs")
 	tm.addMapping("resolve-library-id", "mcp__context7__resolve-library-id")
 	tm.addMapping("mcp__context7__query-docs", "mcp__context7__query-docs")
@@ -115,113 +118,121 @@ func NewToolMapper() *ToolMapper {
 	return tm
 }
 
-func (tm *ToolMapper) addMapping(from, to string) {
+func (tm *canonicalToolMapper) addMapping(from, to string) {
 	tm.toOrchids[from] = to
 	tm.toOrchids[strings.ToLower(from)] = to
 }
 
-func (tm *ToolMapper) addCanonical(name string) {
+func (tm *canonicalToolMapper) addCanonical(name string) {
 	if strings.TrimSpace(name) == "" {
 		return
 	}
 	tm.fromOrchids[strings.ToLower(name)] = name
 }
 
-// ToOrchids maps a Claude Code tool name to Orchids standard name.
-func (tm *ToolMapper) ToOrchids(name string) string {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-
+func (tm *canonicalToolMapper) ToOrchids(name string) string {
 	if mapped, ok := tm.toOrchids[name]; ok {
 		return mapped
 	}
-	if mapped, ok := tm.toOrchids[strings.ToLower(name)]; ok {
+	if mapped, ok := tm.toOrchids[strings.ToLower(strings.TrimSpace(name))]; ok {
 		return mapped
 	}
-	return name // 未知工具保持原名
+	return name
 }
 
-func (tm *ToolMapper) FromOrchids(name string) string {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-
+func (tm *canonicalToolMapper) FromOrchids(name string) string {
 	if mapped, ok := tm.fromOrchids[strings.ToLower(strings.TrimSpace(name))]; ok {
 		return mapped
 	}
 	return name
 }
 
-// NormalizeToolName standardizes tool name for consistent handling.
+func (tm *canonicalToolMapper) IsBlocked(string) bool {
+	return false
+}
+
+func buildClientToolMapper(clientTools []interface{}) *ToolMapper {
+	tools := toolMapsFromInterfaces(clientTools)
+	if len(tools) == 0 {
+		return nil
+	}
+	tm := &ToolMapper{Tools: tools}
+	tm.buildIndex()
+	return tm
+}
+
+func (tm *ToolMapper) buildIndex() {
+	if tm == nil {
+		return
+	}
+	tm.index = make(map[string]map[string]interface{}, len(tm.Tools))
+	for _, tool := range tm.Tools {
+		name := toolSpecName(tool)
+		if name == "" {
+			continue
+		}
+		tm.index[strings.ToLower(name)] = tool
+	}
+}
+
 func NormalizeToolName(name string) string {
 	return DefaultToolMapper.ToOrchids(name)
 }
 
-func (tm *ToolMapper) IsBlocked(string) bool {
-	return false
+func normalizeToolMatchName(name string) *NormalizedTool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return &NormalizedTool{}
+	}
+	lower := strings.ToLower(name)
+	return &NormalizedTool{
+		Original:  name,
+		Lowercase: lower,
+		SnakeCase: toSnakeCase(lower),
+	}
 }
 
-func MapToolNameToClient(orchidsName string, clientTools []interface{}) string {
-	rawName := strings.TrimSpace(orchidsName)
-	if rawName == "" {
-		return rawName
+func MapToolNameToClient(orchidsName string, clientTools []interface{}, toolMapper *ToolMapper) string {
+	normalized := normalizeToolMatchName(orchidsName)
+	if normalized.Original == "" {
+		return orchidsName
 	}
 
-	standardName := NormalizeToolName(rawName)
-	rawLower := strings.ToLower(rawName)
-	rawSnake := toSnakeCase(rawLower)
-	tools := toolMapsFromInterfaces(clientTools)
+	tools := toolMapperClientTools(clientTools, toolMapper)
 	if len(tools) == 0 {
-		return MapOrchidsToolToAnthropic(rawName)
+		return MapOrchidsToolToAnthropic(orchidsName)
 	}
 
 	for _, tool := range tools {
-		name, _, _ := extractToolSpecFields(tool)
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		if name == rawName {
+		name := toolSpecName(tool)
+		if name == normalized.Original {
 			return name
 		}
 	}
 
 	for _, tool := range tools {
-		name, _, _ := extractToolSpecFields(tool)
-		name = strings.TrimSpace(name)
+		name := toolSpecName(tool)
 		if name == "" {
 			continue
 		}
-		if strings.EqualFold(name, rawName) {
+		if strings.ToLower(name) == normalized.Lowercase {
 			return name
 		}
 	}
 
 	for _, tool := range tools {
-		name, _, _ := extractToolSpecFields(tool)
-		name = strings.TrimSpace(name)
+		name := toolSpecName(tool)
 		if name == "" {
 			continue
 		}
-		if strings.ToLower(name) == rawLower {
+		if toSnakeCase(strings.ToLower(name)) == normalized.SnakeCase {
 			return name
 		}
 	}
 
-	for _, tool := range tools {
-		name, _, _ := extractToolSpecFields(tool)
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		if toSnakeCase(strings.ToLower(name)) == rawSnake {
-			return name
-		}
-	}
-
-	if aliases, ok := orchidsToolAliases[rawSnake]; ok {
+	if aliases, ok := orchidsToolAliases[normalized.SnakeCase]; ok {
 		for _, tool := range tools {
-			name, _, _ := extractToolSpecFields(tool)
-			name = strings.TrimSpace(name)
+			name := toolSpecName(tool)
 			if name == "" {
 				continue
 			}
@@ -235,25 +246,23 @@ func MapToolNameToClient(orchidsName string, clientTools []interface{}) string {
 	}
 
 	for _, tool := range tools {
-		name, _, _ := extractToolSpecFields(tool)
-		name = strings.TrimSpace(name)
+		name := toolSpecName(tool)
 		if name == "" {
 			continue
 		}
 		toolSnake := toSnakeCase(strings.ToLower(name))
 		if aliases, ok := orchidsToolAliases[toolSnake]; ok {
 			for _, alias := range aliases {
-				if alias == rawSnake || alias == rawLower {
+				if alias == normalized.SnakeCase || alias == normalized.Lowercase {
 					return name
 				}
 			}
 		}
 	}
 
-	if aliases, ok := orchidsToolAliases[rawSnake]; ok {
+	if aliases, ok := orchidsToolAliases[normalized.SnakeCase]; ok {
 		for _, tool := range tools {
-			name, _, _ := extractToolSpecFields(tool)
-			name = strings.TrimSpace(name)
+			name := toolSpecName(tool)
 			if name == "" {
 				continue
 			}
@@ -265,18 +274,71 @@ func MapToolNameToClient(orchidsName string, clientTools []interface{}) string {
 		}
 	}
 
-	for _, tool := range tools {
-		name, _, _ := extractToolSpecFields(tool)
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
+	if toolMapper != nil && len(toolMapper.Tools) > 0 {
+		type candidate struct {
+			name       string
+			matchCount int
+			distance   int
 		}
-		if strings.EqualFold(NormalizeToolName(name), standardName) {
-			return name
+
+		aliasKeys := collectAliasKeys(toolMapper)
+		var candidates []candidate
+
+		for _, tool := range tools {
+			name := toolSpecName(tool)
+			if name == "" {
+				continue
+			}
+			toolAliases := getToolAliases(tool)
+			if len(toolAliases) == 0 {
+				continue
+			}
+
+			matchCount := 0
+			for _, key := range aliasKeys {
+				if _, found := toolMapper.index[key]; found {
+					break
+				}
+				matchCount++
+			}
+			if matchCount < len(aliasKeys) || len(aliasKeys) == 0 {
+				continue
+			}
+
+			candidates = append(candidates, candidate{
+				name:       name,
+				matchCount: matchCount,
+				distance:   len(toolAliases) - matchCount,
+			})
+		}
+
+		if len(candidates) > 0 {
+			best := candidates[0]
+			for _, candidate := range candidates[1:] {
+				if candidate.matchCount > best.matchCount ||
+					(candidate.matchCount == best.matchCount && candidate.distance < best.distance) {
+					best = candidate
+				}
+			}
+			return best.name
 		}
 	}
 
-	return MapOrchidsToolToAnthropic(rawName)
+	// This last bridge is intentionally repo-local: our client tool names are not Orchids-native.
+	canonical := strings.TrimSpace(DefaultToolMapper.ToOrchids(normalized.Original))
+	if canonical != "" {
+		for _, tool := range tools {
+			name := toolSpecName(tool)
+			if name == "" {
+				continue
+			}
+			if strings.EqualFold(DefaultToolMapper.ToOrchids(name), canonical) {
+				return name
+			}
+		}
+	}
+
+	return MapOrchidsToolToAnthropic(orchidsName)
 }
 
 func TransformToolInput(toolName, clientName string, input map[string]interface{}) map[string]interface{} {
@@ -286,9 +348,6 @@ func TransformToolInput(toolName, clientName string, input map[string]interface{
 
 	lowerTool := strings.ToLower(strings.TrimSpace(toolName))
 	lowerClient := strings.ToLower(strings.TrimSpace(clientName))
-	if lowerTool == "" {
-		lowerTool = strings.ToLower(strings.TrimSpace(NormalizeToolName(clientName)))
-	}
 	if lowerTool == "" {
 		return copyToolInput(input)
 	}
@@ -351,11 +410,7 @@ func MapOrchidsToolToAnthropic(orchidsName string) string {
 	if mapped, ok := orchidsToAnthropicMap[strings.TrimSpace(orchidsName)]; ok {
 		return mapped
 	}
-	normalized := NormalizeToolName(orchidsName)
-	if mapped, ok := orchidsToAnthropicMap[strings.TrimSpace(normalized)]; ok {
-		return mapped
-	}
-	return DefaultToolMapper.FromOrchids(normalized)
+	return orchidsName
 }
 
 func transformToolInputJSON(toolName, clientName, raw string) string {
@@ -387,11 +442,20 @@ func toolMapsFromInterfaces(clientTools []interface{}) []map[string]interface{} 
 
 	out := make([]map[string]interface{}, 0, len(clientTools))
 	for _, raw := range clientTools {
-		if tool, ok := raw.(map[string]interface{}); ok {
-			out = append(out, tool)
+		tool, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
 		}
+		out = append(out, tool)
 	}
 	return out
+}
+
+func toolMapperClientTools(clientTools []interface{}, toolMapper *ToolMapper) []map[string]interface{} {
+	if toolMapper != nil && len(toolMapper.Tools) > 0 {
+		return toolMapper.Tools
+	}
+	return toolMapsFromInterfaces(clientTools)
 }
 
 func copyToolInput(input map[string]interface{}) map[string]interface{} {
@@ -403,6 +467,15 @@ func copyToolInput(input map[string]interface{}) map[string]interface{} {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func toolSpecName(tool map[string]interface{}) string {
+	return strings.TrimSpace(extractToolName(tool))
+}
+
+func extractToolName(tool map[string]interface{}) string {
+	name, _, _ := extractToolSpecFields(tool)
+	return name
 }
 
 var orchidsToolAliases = map[string][]string{
@@ -440,4 +513,46 @@ func toSnakeCase(value string) string {
 		out.WriteRune(r)
 	}
 	return out.String()
+}
+
+func collectAliasKeys(tm *ToolMapper) []string {
+	if tm == nil || len(tm.index) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(tm.index))
+	for key := range tm.index {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func getToolAliases(tool map[string]interface{}) []string {
+	if len(tool) == 0 {
+		return nil
+	}
+	if aliases := extractAliasStrings(tool["aliases"]); len(aliases) > 0 {
+		return aliases
+	}
+	if fn, ok := tool["function"].(map[string]interface{}); ok {
+		if aliases := extractAliasStrings(fn["aliases"]); len(aliases) > 0 {
+			return aliases
+		}
+	}
+	return nil
+}
+
+func extractAliasStrings(raw interface{}) []string {
+	aliases, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		value, ok := alias.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }

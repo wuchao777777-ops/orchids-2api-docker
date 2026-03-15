@@ -990,6 +990,89 @@ func (h *streamHandler) writeUpstreamEventSSE(msg upstream.SSEMessage) {
 	h.writeSSEBytes(msg.Type, payload)
 }
 
+func directSSEImmediate(event string, payload []byte) bool {
+	if event != "content_block_delta" {
+		return true
+	}
+	return bytes.Contains(payload, sseTextDeltaMarker)
+}
+
+func (h *streamHandler) WriteDirectSSE(event string, payload []byte, final bool) {
+	if !h.isStream || len(payload) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !final && h.hasReturn {
+		return
+	}
+	immediate := directSSEImmediate(event, payload)
+	if final {
+		h.writeFinalSSEBytesLockedWithHint(event, payload, immediate)
+		return
+	}
+	h.writeSSEBytesLockedWithHint(event, payload, immediate)
+}
+
+func (h *streamHandler) ObserveTextDelta(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	h.markTextOutput()
+	h.addOutputTokens(text)
+}
+
+func (h *streamHandler) ObserveThinkingDelta(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	h.addThinkingTokens(text)
+}
+
+func (h *streamHandler) ObserveToolCall(name, input string) {
+	h.addOutputTokens(name)
+	h.addOutputTokens(input)
+	h.mu.Lock()
+	h.toolCallCount++
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) ObserveUsage(inputTokens, outputTokens int) {
+	h.setUsageTokens(inputTokens, outputTokens)
+}
+
+func (h *streamHandler) ObserveStopReason(stopReason string) {
+	stopReason = strings.TrimSpace(stopReason)
+	if stopReason == "" {
+		return
+	}
+	h.mu.Lock()
+	h.finalStopReason = stopReason
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) FinishDirectSSE(stopReason string) {
+	stopReason = strings.TrimSpace(stopReason)
+	if stopReason == "" {
+		stopReason = "end_turn"
+	}
+
+	h.mu.Lock()
+	if h.hasReturn {
+		h.mu.Unlock()
+		return
+	}
+	h.hasReturn = true
+	if strings.TrimSpace(h.finalStopReason) == "" {
+		h.finalStopReason = stopReason
+	}
+	stopReason = h.finalStopReason
+	h.mu.Unlock()
+
+	h.finalizeOutputTokens()
+	h.finalizeCompletion(stopReason)
+}
+
 func directSSEEventType(event map[string]interface{}) string {
 	if event == nil {
 		return ""

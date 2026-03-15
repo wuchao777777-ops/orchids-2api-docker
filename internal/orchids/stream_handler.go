@@ -6,12 +6,12 @@ func emitOrchidsMessageStart(state *requestState, onMessage func(upstream.SSEMes
 	NewSSEWriter(state, onMessage).WriteMessageStart()
 }
 
-func emitOrchidsUsageEvent(usage orchidsFastUsage, onMessage func(upstream.SSEMessage)) {
-	NewSSEWriter(nil, onMessage).WriteUsage(usage)
+func emitOrchidsUsageEvent(state *requestState, usage orchidsFastUsage, onMessage func(upstream.SSEMessage)) {
+	NewSSEWriter(state, onMessage).WriteUsage(usage)
 }
 
-func emitOrchidsUsageMapEvent(usage map[string]interface{}, onMessage func(upstream.SSEMessage)) {
-	NewSSEWriter(nil, onMessage).WriteUsageMap(usage)
+func emitOrchidsUsageMapEvent(state *requestState, usage map[string]interface{}, onMessage func(upstream.SSEMessage)) {
+	NewSSEWriter(state, onMessage).WriteUsageMap(usage)
 }
 
 func emitOrchidsCompletionTail(state *requestState, onMessage func(upstream.SSEMessage)) {
@@ -42,6 +42,6 @@ func setOrchidsErrorState(state *requestState, code, message string, quota bool)
 	state.errorMsg = message
 }
 
-func emitOrchidsErrorEvent(onMessage func(upstream.SSEMessage), code, message string) {
-	NewSSEWriter(nil, onMessage).WriteError(code, message)
+func emitOrchidsErrorEvent(state *requestState, onMessage func(upstream.SSEMessage), code, message string) {
+	NewSSEWriter(state, onMessage).WriteError(code, message)
 }

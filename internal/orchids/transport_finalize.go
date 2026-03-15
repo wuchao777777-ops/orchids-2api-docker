@@ -9,9 +9,9 @@ import (
 
 func orchidsFinishReason(state *requestState) string {
 	if state.sawToolCall {
-		return "tool-calls"
+		return "tool_use"
 	}
-	return "stop"
+	return "end_turn"
 }
 
 func finalizeOrchidsTransport(

@@ -49,7 +49,6 @@ const (
 	EventResponseDone       = "response_done"
 	EventCodingAgentEnd     = "coding_agent.end"
 	EventComplete           = "complete"
-	EventFS                 = "fs_operation"
 	EventTodoWriteStart     = "coding_agent.todo_write.started"
 	EventRunItemStream      = "run_item_stream_event"
 	EventToolCallOutput     = "tool_call_output_item"

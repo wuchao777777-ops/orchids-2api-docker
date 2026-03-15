@@ -1,7 +1,6 @@
 package orchids
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/goccy/go-json"
@@ -24,42 +23,7 @@ type orchidsResponseOutput struct {
 	Input     interface{}
 }
 
-func fallbackOrchidsToolCallID(toolName, toolInput string) string {
-	name := strings.ToLower(strings.TrimSpace(toolName))
-	if name == "" {
-		return ""
-	}
-	input := strings.TrimSpace(toolInput)
-	if input == "" {
-		input = "{}"
-	}
-	sum := fnv1a64Pair(name, input)
-	out := make([]byte, 0, len("orchids_anon_")+16)
-	out = append(out, "orchids_anon_"...)
-	out = strconv.AppendUint(out, sum, 16)
-	return string(out)
-}
-
-func fnv1a64Pair(a, b string) uint64 {
-	const (
-		offset = uint64(14695981039346656037)
-		prime  = uint64(1099511628211)
-	)
-	h := offset
-	for i := 0; i < len(a); i++ {
-		h ^= uint64(a[i])
-		h *= prime
-	}
-	h ^= 0
-	h *= prime
-	for i := 0; i < len(b); i++ {
-		h ^= uint64(b[i])
-		h *= prime
-	}
-	return h
-}
-
-func extractToolCallsFromFastResponse(msg orchidsFastResponseDone, clientTools []interface{}) []orchidsToolCall {
+func extractToolCallsFromFastResponse(msg orchidsFastResponseDone, clientTools []interface{}, toolMapper *ToolMapper) []orchidsToolCall {
 	if len(msg.Response.Output) == 0 {
 		return nil
 	}
@@ -75,10 +39,10 @@ func extractToolCallsFromFastResponse(msg orchidsFastResponseDone, clientTools [
 			Input:     item.Input,
 		})
 	}
-	return extractToolCallsFromOutputs(outputs, clientTools)
+	return extractToolCallsFromOutputs(outputs, clientTools, toolMapper)
 }
 
-func extractToolCallsFromResponse(msg map[string]interface{}, clientTools []interface{}) []orchidsToolCall {
+func extractToolCallsFromResponse(msg map[string]interface{}, clientTools []interface{}, toolMapper *ToolMapper) []orchidsToolCall {
 	resp, ok := msg["response"].(map[string]interface{})
 	if !ok {
 		return nil
@@ -108,10 +72,10 @@ func extractToolCallsFromResponse(msg map[string]interface{}, clientTools []inte
 			Input:     m["input"],
 		})
 	}
-	return extractToolCallsFromOutputs(outputs, clientTools)
+	return extractToolCallsFromOutputs(outputs, clientTools, toolMapper)
 }
 
-func extractToolCallsFromOutputs(outputs []orchidsResponseOutput, clientTools []interface{}) []orchidsToolCall {
+func extractToolCallsFromOutputs(outputs []orchidsResponseOutput, clientTools []interface{}, toolMapper *ToolMapper) []orchidsToolCall {
 	if len(outputs) == 0 {
 		return nil
 	}
@@ -120,19 +84,16 @@ func extractToolCallsFromOutputs(outputs []orchidsResponseOutput, clientTools []
 	for _, item := range outputs {
 		switch item.Type {
 		case "function_call":
-			clientName := MapToolNameToClient(item.Name, clientTools)
+			clientName := MapToolNameToClient(item.Name, clientTools, toolMapper)
 			args := transformToolInputJSON(item.Name, clientName, item.Arguments)
 			id := item.CallID
-			if id == "" {
-				id = fallbackOrchidsToolCallID(clientName, args)
-			}
 			if id == "" || clientName == "" {
 				continue
 			}
 			calls = append(calls, orchidsToolCall{id: id, name: clientName, input: args})
 
 		case "tool_use":
-			clientName := MapToolNameToClient(item.Name, clientTools)
+			clientName := MapToolNameToClient(item.Name, clientTools, toolMapper)
 			if clientName == "" {
 				continue
 			}
@@ -142,9 +103,6 @@ func extractToolCallsFromOutputs(outputs []orchidsResponseOutput, clientTools []
 			}
 			inputStr = transformToolInputJSON(item.Name, clientName, inputStr)
 			id := item.ID
-			if id == "" {
-				id = fallbackOrchidsToolCallID(clientName, inputStr)
-			}
 			if id == "" {
 				continue
 			}
@@ -174,8 +132,12 @@ func handleOrchidsFastCompletion(
 	onMessage func(upstream.SSEMessage),
 	clientTools []interface{},
 ) bool {
-	emitOrchidsUsageEvent(msg.Response.Usage, onMessage)
-	toolCalls := extractToolCallsFromFastResponse(msg, clientTools)
+	emitOrchidsUsageEvent(state, msg.Response.Usage, onMessage)
+	var toolMapper *ToolMapper
+	if state != nil {
+		toolMapper = state.toolMapper
+	}
+	toolCalls := extractToolCallsFromFastResponse(msg, clientTools, toolMapper)
 	emitOrchidsToolCalls(toolCalls, state, onMessage)
 	emitOrchidsCompletionTail(state, onMessage)
 	return true
@@ -191,10 +153,14 @@ func handleOrchidsCompletionMessage(
 	if msgType == EventResponseDone {
 		if usage, ok := msg["response"].(map[string]interface{}); ok {
 			if u, ok := usage["usage"].(map[string]interface{}); ok {
-				emitOrchidsUsageMapEvent(u, onMessage)
+				emitOrchidsUsageMapEvent(state, u, onMessage)
 			}
 		}
-		toolCalls := extractToolCallsFromResponse(msg, clientTools)
+		var toolMapper *ToolMapper
+		if state != nil {
+			toolMapper = state.toolMapper
+		}
+		toolCalls := extractToolCallsFromResponse(msg, clientTools, toolMapper)
 		emitOrchidsToolCalls(toolCalls, state, onMessage)
 	}
 	emitOrchidsCompletionTail(state, onMessage)

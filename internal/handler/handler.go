@@ -633,7 +633,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	)
 	sh.setDisallowToolCalls(gateNoTools)
 	if !isOrchidsProtocol {
-		sh.setAllowedToolNames(orchids.SupportedToolNames(effectiveTools))
+		sh.setAllowedToolNames(supportedToolNames(effectiveTools))
 	}
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
@@ -718,6 +718,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			NoThinking:    noThinking,
 			TraceID:       traceID,
 			ChatSessionID: chatSessionID,
+			DirectSSE:     nil,
+		}
+		if orchidsOwnsFinalSSE {
+			upstreamReq.DirectSSE = sh
 		}
 		var attempt int
 		for {
