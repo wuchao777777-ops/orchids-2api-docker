@@ -34,20 +34,12 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if breakdown.Total == 0 {
-		maxTokens := 12000
-		if h.config != nil && h.config.ContextMaxTokens > 0 {
-			maxTokens = h.config.ContextMaxTokens
-		}
-		builtPrompt, aiClientHistory, meta := orchids.BuildAIClientPromptAndHistoryWithMetaAndTools(
+		builtPrompt, promptHistory, meta := orchids.BuildCodeFreeMaxPromptAndHistoryWithMeta(
 			req.Messages,
 			req.System,
-			req.Model,
 			true, /* noThinking */
-			"",   /* workdir */
-			maxTokens,
-			req.Tools,
 		)
-		breakdown = estimateInputTokenBreakdown(builtPrompt, aiClientHistory, req.Tools)
+		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
 		profile = meta.Profile
 	}
 

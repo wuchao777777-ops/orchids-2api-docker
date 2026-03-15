@@ -1,4 +1,4 @@
-package orchids
+package promptbuilder
 
 import (
 	"fmt"
@@ -8,22 +8,16 @@ import (
 )
 
 const (
-	aiClientMessageSoftLimit  = 2200
-	aiClientMessageHardLimit  = 900
-	aiClientSummaryKeepRecent = 8
-	aiClientSummaryMaxChars   = 2600
-	aiClientSummaryItemChars  = 220
-	aiClientSummaryMaxDepth   = 2
+	warpPromptMessageSoftLimit  = 2200
+	warpPromptMessageHardLimit  = 900
+	warpPromptSummaryKeepRecent = 8
+	warpPromptSummaryMaxChars   = 2600
+	warpPromptSummaryItemChars  = 220
+	warpPromptSummaryMaxDepth   = 2
 )
 
-// enforceAIClientBudget enforces a hard max token budget for prompt+chatHistory.
-// It tries "compress first, trim last":
-// 1) compress single long messages,
-// 2) summarize older history while keeping recent raw turns,
-// 3) only if still over budget, keep the most recent window.
-func enforceAIClientBudget(promptText string, history []map[string]string, maxTokens int) (string, []map[string]string) {
+func enforceWarpPromptBudget(promptText string, history []map[string]string, maxTokens int) (string, []map[string]string) {
 	budget := maxTokens
-	// Default + hard cap as per user requirement.
 	if budget <= 0 {
 		budget = 12000
 	}
@@ -31,14 +25,14 @@ func enforceAIClientBudget(promptText string, history []map[string]string, maxTo
 		budget = 12000
 	}
 
-	working := normalizeAIClientHistory(history)
+	working := normalizeWarpPromptHistory(history)
 	if len(working) == 0 {
 		return promptText, nil
 	}
 
 	promptTokens := tiktoken.EstimateTextTokens(promptText)
-	overhead := 200 // conservative wrapper/messaging overhead
-	total, itemTokens := estimateAIClientHistoryTokens(promptTokens, overhead, working)
+	overhead := 200
+	total, itemTokens := estimateWarpPromptHistoryTokens(promptTokens, overhead, working)
 	if total <= budget {
 		return promptText, working
 	}
@@ -46,16 +40,16 @@ func enforceAIClientBudget(promptText string, history []map[string]string, maxTo
 	compressionApplied := false
 	summarizedMessages := 0
 
-	if compressed, changed := compressAIClientMessages(working, aiClientMessageSoftLimit); changed {
+	if compressed, changed := compressWarpPromptMessages(working, warpPromptMessageSoftLimit); changed {
 		working = compressed
 		compressionApplied = true
-		total, itemTokens = estimateAIClientHistoryTokens(promptTokens, overhead, working)
+		total, itemTokens = estimateWarpPromptHistoryTokens(promptTokens, overhead, working)
 		if total <= budget {
-			return appendAIClientBudgetNote(promptText, false, summarizedMessages), working
+			return appendWarpPromptBudgetNote(promptText, false, summarizedMessages), working
 		}
 	}
 
-	keepRecent := aiClientSummaryKeepRecent
+	keepRecent := warpPromptSummaryKeepRecent
 	if keepRecent > len(working) {
 		keepRecent = len(working)
 	}
@@ -63,7 +57,7 @@ func enforceAIClientBudget(promptText string, history []map[string]string, maxTo
 		if keepRecent < 2 {
 			keepRecent = 2
 		}
-		next, merged, changed := summarizeOlderAIClientHistory(working, keepRecent, aiClientSummaryMaxChars)
+		next, merged, changed := summarizeOlderWarpPromptHistory(working, keepRecent, warpPromptSummaryMaxChars)
 		if !changed {
 			if keepRecent > 2 {
 				keepRecent--
@@ -74,9 +68,9 @@ func enforceAIClientBudget(promptText string, history []map[string]string, maxTo
 		working = next
 		summarizedMessages += merged
 		compressionApplied = true
-		total, itemTokens = estimateAIClientHistoryTokens(promptTokens, overhead, working)
+		total, itemTokens = estimateWarpPromptHistoryTokens(promptTokens, overhead, working)
 		if total <= budget {
-			return appendAIClientBudgetNote(promptText, false, summarizedMessages), working
+			return appendWarpPromptBudgetNote(promptText, false, summarizedMessages), working
 		}
 		if keepRecent > 2 {
 			keepRecent--
@@ -84,17 +78,16 @@ func enforceAIClientBudget(promptText string, history []map[string]string, maxTo
 	}
 
 	if total > budget {
-		if compressed, changed := compressAIClientMessages(working, aiClientMessageHardLimit); changed {
+		if compressed, changed := compressWarpPromptMessages(working, warpPromptMessageHardLimit); changed {
 			working = compressed
 			compressionApplied = true
-			total, itemTokens = estimateAIClientHistoryTokens(promptTokens, overhead, working)
+			total, itemTokens = estimateWarpPromptHistoryTokens(promptTokens, overhead, working)
 			if total <= budget {
-				return appendAIClientBudgetNote(promptText, false, summarizedMessages), working
+				return appendWarpPromptBudgetNote(promptText, false, summarizedMessages), working
 			}
 		}
 	}
 
-	// Hard fallback: keep the most recent messages that fit.
 	kept := make([]map[string]string, 0, len(working))
 	keptTokens := 0
 	for i := len(working) - 1; i >= 0; i-- {
@@ -104,31 +97,27 @@ func enforceAIClientBudget(promptText string, history []map[string]string, maxTo
 		keptTokens += itemTokens[i]
 		kept = append(kept, working[i])
 	}
-	// reverse to restore order
 	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
 		kept[i], kept[j] = kept[j], kept[i]
 	}
 
-	// If we kept nothing, keep the last user message at minimum.
 	if len(kept) == 0 && len(working) > 0 {
 		last := working[len(working)-1]
-		last["content"] = compactAIClientContent(last["content"], aiClientMessageHardLimit)
+		last["content"] = compactWarpPromptContent(last["content"], warpPromptMessageHardLimit)
 		kept = append(kept, last)
 	}
 
-	// Add a minimal note to avoid confusion on compressed/windowed history.
 	if len(kept) < len(working) || compressionApplied {
-		promptText = appendAIClientBudgetNote(promptText, true, summarizedMessages)
+		promptText = appendWarpPromptBudgetNote(promptText, true, summarizedMessages)
 	}
 	return promptText, kept
 }
 
-func estimateAIClientHistoryTokens(promptTokens int, overhead int, history []map[string]string) (int, []int) {
+func estimateWarpPromptHistoryTokens(promptTokens int, overhead int, history []map[string]string) (int, []int) {
 	historyTokens := 0
 	itemTokens := make([]int, len(history))
 	for i, it := range history {
 		c := strings.TrimSpace(it["content"])
-		// Add a small per-message overhead.
 		t := tiktoken.EstimateTextTokens(c) + 15
 		itemTokens[i] = t
 		historyTokens += t
@@ -136,7 +125,7 @@ func estimateAIClientHistoryTokens(promptTokens int, overhead int, history []map
 	return promptTokens + historyTokens + overhead, itemTokens
 }
 
-func normalizeAIClientHistory(history []map[string]string) []map[string]string {
+func normalizeWarpPromptHistory(history []map[string]string) []map[string]string {
 	if len(history) == 0 {
 		return nil
 	}
@@ -150,15 +139,12 @@ func normalizeAIClientHistory(history []map[string]string) []map[string]string {
 		if content == "" {
 			continue
 		}
-		out = append(out, map[string]string{
-			"role":    role,
-			"content": content,
-		})
+		out = append(out, map[string]string{"role": role, "content": content})
 	}
 	return out
 }
 
-func compressAIClientMessages(history []map[string]string, targetChars int) ([]map[string]string, bool) {
+func compressWarpPromptMessages(history []map[string]string, targetChars int) ([]map[string]string, bool) {
 	if len(history) == 0 || targetChars <= 0 {
 		return history, false
 	}
@@ -167,19 +153,16 @@ func compressAIClientMessages(history []map[string]string, targetChars int) ([]m
 	for _, item := range history {
 		role := item["role"]
 		before := strings.TrimSpace(item["content"])
-		after := compactAIClientContent(before, targetChars)
+		after := compactWarpPromptContent(before, targetChars)
 		if after != before {
 			changed = true
 		}
-		out = append(out, map[string]string{
-			"role":    role,
-			"content": after,
-		})
+		out = append(out, map[string]string{"role": role, "content": after})
 	}
 	return out, changed
 }
 
-func summarizeOlderAIClientHistory(history []map[string]string, keepRecent int, maxChars int) ([]map[string]string, int, bool) {
+func summarizeOlderWarpPromptHistory(history []map[string]string, keepRecent int, maxChars int) ([]map[string]string, int, bool) {
 	if len(history) <= keepRecent+1 {
 		return history, 0, false
 	}
@@ -197,21 +180,18 @@ func summarizeOlderAIClientHistory(history []map[string]string, keepRecent int, 
 		return history, 0, false
 	}
 
-	summary := buildAIClientHistorySummary(older, maxChars)
+	summary := buildWarpPromptHistorySummary(older, maxChars)
 	if summary == "" {
 		return history, 0, false
 	}
 
 	out := make([]map[string]string, 0, 1+len(recent))
-	out = append(out, map[string]string{
-		"role":    "assistant",
-		"content": summary,
-	})
+	out = append(out, map[string]string{"role": "assistant", "content": summary})
 	out = append(out, recent...)
 	return out, len(older), true
 }
 
-func buildAIClientHistorySummary(history []map[string]string, maxChars int) string {
+func buildWarpPromptHistorySummary(history []map[string]string, maxChars int) string {
 	if len(history) == 0 {
 		return ""
 	}
@@ -222,17 +202,15 @@ func buildAIClientHistorySummary(history []map[string]string, maxChars int) stri
 		if item["role"] == "assistant" {
 			roleTag = "A"
 		}
-		snippet := compactAIClientContent(item["content"], aiClientSummaryItemChars)
-		if snippet == "" {
-			continue
+		snippet := compactWarpPromptContent(item["content"], warpPromptSummaryItemChars)
+		if snippet != "" {
+			lines = append(lines, fmt.Sprintf("%s: %s", roleTag, snippet))
 		}
-		lines = append(lines, fmt.Sprintf("%s: %s", roleTag, snippet))
 	}
 	if len(lines) == 1 {
 		return ""
 	}
-	summary := strings.Join(lines, "\n")
-	return recursivelyCompactHistorySummary(summary, maxChars, 0)
+	return recursivelyCompactHistorySummary(strings.Join(lines, "\n"), maxChars, 0)
 }
 
 func recursivelyCompactHistorySummary(summary string, maxChars int, depth int) string {
@@ -242,17 +220,16 @@ func recursivelyCompactHistorySummary(summary string, maxChars int, depth int) s
 	if runeLen(summary) <= maxChars {
 		return summary
 	}
-	if depth >= aiClientSummaryMaxDepth {
+	if depth >= warpPromptSummaryMaxDepth {
 		return truncateTextWithEllipsis(summary, maxChars)
 	}
 	rawLines := strings.Split(summary, "\n")
 	lines := make([]string, 0, len(rawLines))
 	for _, line := range rawLines {
 		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+		if line != "" {
+			lines = append(lines, line)
 		}
-		lines = append(lines, line)
 	}
 	if len(lines) <= 2 {
 		return truncateTextWithEllipsis(summary, maxChars)
@@ -266,12 +243,12 @@ func recursivelyCompactHistorySummary(summary string, maxChars int, depth int) s
 			end = len(lines)
 		}
 		chunk := strings.Join(lines[i:end], " | ")
-		compacted = append(compacted, compactAIClientContent(chunk, aiClientSummaryItemChars))
+		compacted = append(compacted, compactWarpPromptContent(chunk, warpPromptSummaryItemChars))
 	}
 	return recursivelyCompactHistorySummary(strings.Join(compacted, "\n"), maxChars, depth+1)
 }
 
-func compactAIClientContent(text string, targetChars int) string {
+func compactWarpPromptContent(text string, targetChars int) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
@@ -286,7 +263,6 @@ func compactAIClientContent(text string, targetChars int) string {
 		"错误", "失败", "修复", "约束", "必须", "结论", "决定", "下一步", "风险",
 		"tool", "read", "write", "edit", "bash", "path", "file",
 	}
-
 	selected := make([]string, 0, 8)
 	seen := make(map[string]struct{})
 	add := func(line string) {
@@ -295,7 +271,7 @@ func compactAIClientContent(text string, targetChars int) string {
 			return
 		}
 		line = collapseWhitespace(line)
-		line = truncateTextWithEllipsis(line, aiClientSummaryItemChars)
+		line = truncateTextWithEllipsis(line, warpPromptSummaryItemChars)
 		if _, ok := seen[line]; ok {
 			return
 		}
@@ -315,7 +291,6 @@ func compactAIClientContent(text string, targetChars int) string {
 			break
 		}
 	}
-
 	for _, line := range lines {
 		if len(selected) >= 6 {
 			break
@@ -325,7 +300,6 @@ func compactAIClientContent(text string, targetChars int) string {
 	if len(lines) > 0 {
 		add(lines[len(lines)-1])
 	}
-
 	if len(selected) == 0 {
 		return truncateTextWithEllipsis(text, targetChars)
 	}
@@ -334,7 +308,7 @@ func compactAIClientContent(text string, targetChars int) string {
 	return fmt.Sprintf("[compressed %d chars] %s", runeLen(text), joined)
 }
 
-func appendAIClientBudgetNote(promptText string, fallbackWindow bool, summarizedMessages int) string {
+func appendWarpPromptBudgetNote(promptText string, fallbackWindow bool, summarizedMessages int) string {
 	var sb strings.Builder
 	sb.WriteString(promptText)
 	sb.WriteString("\n\n<context_budget_note>\n")

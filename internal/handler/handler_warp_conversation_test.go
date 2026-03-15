@@ -144,6 +144,51 @@ func TestWarpConversationID_NotPersistedWithoutConversationKey(t *testing.T) {
 	}
 }
 
+func TestOrchidsPayload_UsesProtocolPromptView(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{}
+	h := newTestHandler(client)
+
+	reqPayload := ClaudeRequest{
+		Model: "claude-sonnet-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "hi"}},
+		},
+		System: []prompt.SystemItem{
+			{Type: "text", Text: "system rules"},
+		},
+		Stream: false,
+		Tools:  []interface{}{},
+	}
+
+	body, err := json.Marshal(reqPayload)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/orchids/v1/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("calls len=%d want 1", len(calls))
+	}
+	if strings.Contains(calls[0].Prompt, "<env>") || strings.Contains(calls[0].Prompt, "<rules>") {
+		t.Fatalf("prompt=%q want protocol prompt without legacy wrapper", calls[0].Prompt)
+	}
+	if !strings.Contains(calls[0].Prompt, "<user>") || !strings.Contains(calls[0].Prompt, "hi") {
+		t.Fatalf("prompt=%q want protocol user block", calls[0].Prompt)
+	}
+	if len(calls[0].ChatHistory) != 0 {
+		t.Fatalf("chatHistory=%#v want empty for orchids protocol mode", calls[0].ChatHistory)
+	}
+}
+
 func TestWarpConversationID_PersistedWithConversationKey(t *testing.T) {
 	t.Parallel()
 

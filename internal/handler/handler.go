@@ -29,6 +29,7 @@ import (
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
+	warpprompt "orchids-api/internal/warp/promptbuilder"
 )
 
 // ClientFactory creates an UpstreamClient for a given account.
@@ -54,6 +55,10 @@ type UpstreamClient interface {
 
 type UpstreamPayloadClient interface {
 	SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error
+}
+
+type FinalSSELifecycleOwner interface {
+	OwnsFinalSSELifecycle() bool
 }
 
 type ClaudeRequest struct {
@@ -152,6 +157,11 @@ func (h *Handler) computeRequestHash(r *http.Request, body []byte) string {
 	hasher.Write([]byte{0})
 	hasher.Write(body)
 	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+func ownsFinalSSELifecycle(client UpstreamClient) bool {
+	owner, ok := client.(FinalSSELifecycleOwner)
+	return ok && owner.OwnsFinalSSELifecycle()
 }
 
 func (h *Handler) computeSemanticRequestHash(r *http.Request, req ClaudeRequest) string {
@@ -505,11 +515,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
 	slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
-	// Orchids: always use AIClient mode (other implementations are deprecated/removed).
-	isOrchidsAIClient := false
-	if _, ok := apiClient.(*orchids.Client); ok {
-		isOrchidsAIClient = true
-	}
+	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest
 
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
@@ -517,18 +523,32 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		mappedModel = req.Model
 	}
 
-	var aiClientHistory []map[string]string
+	var promptHistory []map[string]string
 	var builtPrompt string
-	var promptMeta orchids.AIClientPromptMeta
-	builtPrompt, aiClientHistory, promptMeta = orchids.BuildAIClientPromptAndHistoryWithMetaAndTools(req.Messages, req.System, mappedModel, noThinking, effectiveWorkdir, h.config.ContextMaxTokens, effectiveTools)
+	var promptMeta orchids.PromptBuildMeta
+	if isOrchidsProtocol {
+		builtPrompt, promptHistory, promptMeta = orchids.BuildCodeFreeMaxPromptAndHistoryWithMeta(req.Messages, req.System, noThinking)
+	} else {
+		var warpMeta warpprompt.Meta
+		builtPrompt, promptHistory, warpMeta = warpprompt.BuildWithMetaAndTools(req.Messages, req.System, mappedModel, noThinking, effectiveWorkdir, h.config.ContextMaxTokens, effectiveTools)
+		promptMeta = orchids.PromptBuildMeta{
+			Profile:    warpMeta.Profile,
+			NoThinking: warpMeta.NoThinking,
+		}
+	}
 	noThinking = promptMeta.NoThinking
 	suppressThinking = promptMeta.NoThinking
 	buildDuration := time.Since(startBuild)
 	slog.Debug("Prompt build completed", "duration", buildDuration)
 	if h.config.DebugEnabled {
-		buildLabel := "BuildAIClientPromptAndHistory"
+		buildLabel := "BuildPromptAndHistory"
+		if isOrchidsProtocol {
+			buildLabel = "BuildCodeFreeMaxPromptAndHistory"
+		} else {
+			buildLabel = "BuildWarpPromptAndHistory"
+		}
 		slog.Info("[Performance] "+buildLabel, "duration", buildDuration)
-		// Project context injection is deprecated (non-AIClient path removed).
+		// Project context injection is deprecated for non-Orchids channels.
 	}
 
 	slog.Debug("Model mapping", "original", req.Model, "mapped", mappedModel)
@@ -557,10 +577,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	upstreamMessages := append([]prompt.Message(nil), req.Messages...)
 
 	// Pre-allocate chatHistory
-	if isOrchidsAIClient {
-		chatHistory = make([]interface{}, len(aiClientHistory))
-		for i := range aiClientHistory {
-			chatHistory[i] = aiClientHistory[i]
+	if !isOrchidsProtocol {
+		chatHistory = make([]interface{}, len(promptHistory))
+		for i := range promptHistory {
+			chatHistory[i] = promptHistory[i]
 		}
 	} else {
 		chatHistory = make([]interface{}, 0, 10)
@@ -582,10 +602,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			breakdownProfile = profile
 		} else {
 			slog.Warn("Warp token estimation fallback to generic breakdown", "error", err)
-			breakdown = estimateInputTokenBreakdown(builtPrompt, aiClientHistory, effectiveTools)
+			breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 		}
+	} else if isOrchidsProtocol {
+		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
 	} else {
-		breakdown = estimateInputTokenBreakdown(builtPrompt, aiClientHistory, effectiveTools)
+		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	}
 	slog.Debug(
 		"Input token breakdown (estimated)",
@@ -610,7 +632,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
 	)
 	sh.setDisallowToolCalls(gateNoTools)
-	sh.setAllowedToolNames(orchids.SupportedToolNames(effectiveTools))
+	if !isOrchidsProtocol {
+		sh.setAllowedToolNames(orchids.SupportedToolNames(effectiveTools))
+	}
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	// 捕获上游返回的 conversationID，持久化到 session 以便后续请求复用
@@ -624,8 +648,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sh.release()
 
-	// 发送 message_start
-	sh.writeSSEMessageStart(req.Model, inputTokens, 0)
+	orchidsOwnsFinalSSE := isOrchidsProtocol && isStream && ownsFinalSSELifecycle(apiClient)
+
+	// Real Orchids client owns final SSE lifecycle like CodeFreeMax, including message_start.
+	if !orchidsOwnsFinalSSE {
+		sh.writeSSEMessageStart(req.Model, inputTokens, 0)
+	}
 
 	slog.Debug("New request received")
 
@@ -682,6 +710,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			ChatHistory:   chatHistory,
 			Workdir:       effectiveWorkdir,
 			Model:         mappedModel,
+			Stream:        req.Stream,
 			Messages:      payloadMessages,
 			System:        payloadSystem,
 			Tools:         effectiveTools,

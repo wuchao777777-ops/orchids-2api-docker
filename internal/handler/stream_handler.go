@@ -84,6 +84,12 @@ type sseMessageStop struct {
 	Type string `json:"type"`
 }
 
+type directToolUseState struct {
+	id    string
+	name  string
+	input *strings.Builder
+}
+
 func marshalJSONString(v interface{}) (string, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
@@ -247,6 +253,7 @@ type streamHandler struct {
 	msgID                    string
 	startTime                time.Time
 	hasReturn                bool
+	completionLogged         bool
 	finalStopReason          string
 	outputTokens             int
 	thinkingTokens           int
@@ -282,10 +289,12 @@ type streamHandler struct {
 	toolInputNames              map[string]string
 	toolInputBuffers            map[string]*strings.Builder
 	toolInputHadDelta           map[string]bool
+	pendingDirectToolUses       map[int]*directToolUseState
 	toolCallHandled             map[string]bool
 	toolCallEmitted             map[string]struct{}
 	currentToolInputID          string
 	toolCallCount               int
+	skippedDirectBlockIndices   map[int]struct{}
 	suppressedToolCalls         int
 	bashCallDedup               map[string]struct{}
 	seedToolDedup               map[string]struct{}
@@ -336,33 +345,35 @@ func newStreamHandler(
 		outputTokenMode:  outputTokenMode,
 		responseFormat:   responseFormat,
 
-		blockIndex:               -1,
-		toolBlocks:               make(map[string]int),
-		responseText:             perf.AcquireStringBuilder(),
-		writeChunkBuffer:         perf.AcquireStringBuilder(),
-		textBlockBuilders:        make(map[int]*strings.Builder),
-		thinkingBlockBuilders:    make(map[int]*strings.Builder),
-		thinkingBlockSigs:        make(map[int]string),
-		toolInputNames:           make(map[string]string),
-		toolInputBuffers:         make(map[string]*strings.Builder),
-		toolInputHadDelta:        make(map[string]bool),
-		toolCallHandled:          make(map[string]bool),
-		toolCallEmitted:          make(map[string]struct{}),
-		bashCallDedup:            make(map[string]struct{}),
-		seedToolDedup:            make(map[string]struct{}),
-		toolDedupKeys:            make(map[string]int),
-		introDedup:               make(map[string]struct{}),
-		allowedToolNames:         make(map[string]struct{}),
-		msgID:                    fmt.Sprintf("msg_%d", time.Now().UnixMilli()),
-		startTime:                time.Now(),
-		currentTextIndex:         -1,
-		activeThinkingBlockIndex: -1,
-		activeThinkingSSEIndex:   -1,
-		activeTextBlockIndex:     -1,
-		activeTextSSEIndex:       -1,
-		activeBlockType:          "",
-		openAIChunkScratch:       make([]byte, 0, 512),
-		ssePayloadScratch:        make([]byte, 0, 512),
+		blockIndex:                -1,
+		toolBlocks:                make(map[string]int),
+		responseText:              perf.AcquireStringBuilder(),
+		writeChunkBuffer:          perf.AcquireStringBuilder(),
+		textBlockBuilders:         make(map[int]*strings.Builder),
+		thinkingBlockBuilders:     make(map[int]*strings.Builder),
+		thinkingBlockSigs:         make(map[int]string),
+		toolInputNames:            make(map[string]string),
+		toolInputBuffers:          make(map[string]*strings.Builder),
+		toolInputHadDelta:         make(map[string]bool),
+		pendingDirectToolUses:     make(map[int]*directToolUseState),
+		toolCallHandled:           make(map[string]bool),
+		toolCallEmitted:           make(map[string]struct{}),
+		skippedDirectBlockIndices: make(map[int]struct{}),
+		bashCallDedup:             make(map[string]struct{}),
+		seedToolDedup:             make(map[string]struct{}),
+		toolDedupKeys:             make(map[string]int),
+		introDedup:                make(map[string]struct{}),
+		allowedToolNames:          make(map[string]struct{}),
+		msgID:                     fmt.Sprintf("msg_%d", time.Now().UnixMilli()),
+		startTime:                 time.Now(),
+		currentTextIndex:          -1,
+		activeThinkingBlockIndex:  -1,
+		activeThinkingSSEIndex:    -1,
+		activeTextBlockIndex:      -1,
+		activeTextSSEIndex:        -1,
+		activeBlockType:           "",
+		openAIChunkScratch:        make([]byte, 0, 512),
+		ssePayloadScratch:         make([]byte, 0, 512),
 	}
 	return h
 }
@@ -409,6 +420,11 @@ func (h *streamHandler) release() {
 	}
 	for _, sb := range h.toolInputBuffers {
 		perf.ReleaseStringBuilder(sb)
+	}
+	for _, item := range h.pendingDirectToolUses {
+		if item != nil && item.input != nil {
+			perf.ReleaseStringBuilder(item.input)
+		}
 	}
 }
 
@@ -882,6 +898,12 @@ func (h *streamHandler) resetRoundState() {
 		perf.ReleaseStringBuilder(sb)
 	}
 	clear(h.toolInputBuffers)
+	for _, item := range h.pendingDirectToolUses {
+		if item != nil && item.input != nil {
+			perf.ReleaseStringBuilder(item.input)
+		}
+	}
+	clear(h.pendingDirectToolUses)
 
 	clear(h.toolInputHadDelta)
 	clear(h.toolCallHandled)
@@ -896,6 +918,7 @@ func (h *streamHandler) resetRoundState() {
 	h.toolCallCount = 0
 	h.outputTokens = 0
 	h.thinkingTokens = 0
+	h.completionLogged = false
 	h.outputEstimator.Reset()
 	h.writeChunkBuffer.Reset()
 	h.useUpstreamUsage = false
@@ -965,6 +988,279 @@ func (h *streamHandler) writeUpstreamEventSSE(msg upstream.SSEMessage) {
 		return
 	}
 	h.writeSSEBytes(msg.Type, payload)
+}
+
+func directSSEEventType(event map[string]interface{}) string {
+	if event == nil {
+		return ""
+	}
+	if value, ok := event["type"].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func directSSEIndex(event map[string]interface{}) int {
+	if event == nil {
+		return -1
+	}
+	switch value := event["index"].(type) {
+	case int:
+		return value
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		if n, err := value.Int64(); err == nil {
+			return int(n)
+		}
+	}
+	return -1
+}
+
+func (h *streamHandler) handleDirectFinalSSEEvent(msg upstream.SSEMessage) bool {
+	switch msg.Type {
+	case "message_start":
+		event := msg.Event
+		if directSSEEventType(event) != "message_start" {
+			return false
+		}
+		h.writeUpstreamEventSSE(msg)
+		return true
+
+	case "message_delta":
+		event := msg.Event
+		if directSSEEventType(event) != "message_delta" {
+			return false
+		}
+		if delta, ok := event["delta"].(map[string]interface{}); ok {
+			if stopReason, ok := delta["stop_reason"].(string); ok && strings.TrimSpace(stopReason) != "" {
+				h.mu.Lock()
+				h.finalStopReason = strings.TrimSpace(stopReason)
+				h.mu.Unlock()
+			}
+		}
+		if usage, ok := event["usage"].(map[string]interface{}); ok {
+			if raw, ok := usage["output_tokens"]; ok {
+				switch value := raw.(type) {
+				case int:
+					h.setUsageTokens(-1, value)
+				case float64:
+					h.setUsageTokens(-1, int(value))
+				}
+			}
+		}
+		h.writeUpstreamEventSSE(msg)
+		return true
+
+	case "message_stop":
+		event := msg.Event
+		if directSSEEventType(event) != "message_stop" {
+			return false
+		}
+		h.writeUpstreamEventSSE(msg)
+		stopReason := "end_turn"
+		h.mu.Lock()
+		if !h.hasReturn {
+			h.hasReturn = true
+			if strings.TrimSpace(h.finalStopReason) == "" {
+				h.finalStopReason = "end_turn"
+			}
+			stopReason = h.finalStopReason
+		} else if strings.TrimSpace(h.finalStopReason) != "" {
+			stopReason = h.finalStopReason
+		}
+		h.mu.Unlock()
+		h.finalizeOutputTokens()
+		h.finalizeCompletion(stopReason)
+		return true
+
+	case "content_block_start":
+		event := msg.Event
+		if directSSEEventType(event) != "content_block_start" {
+			return false
+		}
+		index := directSSEIndex(event)
+		if index < 0 {
+			return false
+		}
+		contentBlock, _ := event["content_block"].(map[string]interface{})
+		blockType, _ := contentBlock["type"].(string)
+		blockType = strings.TrimSpace(blockType)
+		if blockType == "thinking" && h.suppressThinking {
+			h.mu.Lock()
+			h.suppressEmptyOutputFallback = true
+			h.skippedDirectBlockIndices[index] = struct{}{}
+			h.mu.Unlock()
+			return true
+		}
+		if blockType == "tool_use" {
+			toolID, _ := contentBlock["id"].(string)
+			toolName, _ := contentBlock["name"].(string)
+			toolID = strings.TrimSpace(toolID)
+			toolName = strings.TrimSpace(toolName)
+			if toolID == "" || toolName == "" {
+				return true
+			}
+
+			h.mu.Lock()
+			if index > h.blockIndex {
+				h.blockIndex = index
+			}
+			state, exists := h.pendingDirectToolUses[index]
+			if !exists || state == nil {
+				state = &directToolUseState{input: perf.AcquireStringBuilder()}
+				h.pendingDirectToolUses[index] = state
+			}
+			state.id = toolID
+			state.name = toolName
+			h.mu.Unlock()
+			return true
+		}
+
+		h.mu.Lock()
+		if index > h.blockIndex {
+			h.blockIndex = index
+		}
+		switch blockType {
+		case "thinking":
+			h.activeThinkingSSEIndex = index
+			h.activeBlockType = "thinking"
+		case "text":
+			h.activeTextSSEIndex = index
+			h.activeBlockType = "text"
+		}
+		h.mu.Unlock()
+
+		h.writeUpstreamEventSSE(msg)
+		return true
+
+	case "content_block_delta":
+		event := msg.Event
+		if directSSEEventType(event) != "content_block_delta" {
+			return false
+		}
+		index := directSSEIndex(event)
+		if index < 0 {
+			return false
+		}
+
+		h.mu.Lock()
+		_, skipped := h.skippedDirectBlockIndices[index]
+		directToolUse := h.pendingDirectToolUses[index]
+		h.mu.Unlock()
+		if skipped {
+			return true
+		}
+		if directToolUse != nil {
+			delta, _ := event["delta"].(map[string]interface{})
+			deltaType, _ := delta["type"].(string)
+			if strings.TrimSpace(deltaType) != "input_json_delta" {
+				return true
+			}
+			partialJSON, _ := delta["partial_json"].(string)
+			if partialJSON == "" {
+				return true
+			}
+			h.mu.Lock()
+			if current := h.pendingDirectToolUses[index]; current != nil && current.input != nil {
+				current.input.WriteString(partialJSON)
+			}
+			h.mu.Unlock()
+			return true
+		}
+
+		delta, _ := event["delta"].(map[string]interface{})
+		deltaType, _ := delta["type"].(string)
+		switch strings.TrimSpace(deltaType) {
+		case "text_delta":
+			text, _ := delta["text"].(string)
+			if text != "" {
+				h.markTextOutput()
+				h.addOutputTokens(text)
+			}
+		case "thinking_delta":
+			text, _ := delta["thinking"].(string)
+			if text != "" && h.isStream {
+				h.addThinkingTokens(text)
+			}
+		}
+
+		h.writeUpstreamEventSSE(msg)
+		return true
+
+	case "content_block_stop":
+		event := msg.Event
+		if directSSEEventType(event) != "content_block_stop" {
+			return false
+		}
+		index := directSSEIndex(event)
+		if index < 0 {
+			return false
+		}
+
+		h.mu.Lock()
+		if _, skipped := h.skippedDirectBlockIndices[index]; skipped {
+			delete(h.skippedDirectBlockIndices, index)
+			h.mu.Unlock()
+			return true
+		}
+		if pending := h.pendingDirectToolUses[index]; pending != nil {
+			delete(h.pendingDirectToolUses, index)
+			h.mu.Unlock()
+
+			inputStr := ""
+			if pending.input != nil {
+				inputStr = strings.TrimSpace(pending.input.String())
+				perf.ReleaseStringBuilder(pending.input)
+			}
+			toolID := strings.TrimSpace(pending.id)
+			toolName, normalizedInput := normalizeUpstreamToolCall(pending.name, inputStr, h.workdir)
+			if toolID == "" {
+				toolID = fallbackToolCallID(toolName, normalizedInput)
+			}
+			if toolID == "" || toolName == "" {
+				return true
+			}
+			if h.toolCallHandled[toolID] {
+				return true
+			}
+			call := toolCall{id: toolID, name: toolName, input: normalizedInput}
+			h.toolCallHandled[toolID] = true
+			if h.isStream {
+				if _, ok := h.toolCallEmitted[toolID]; ok {
+					return true
+				}
+				h.toolCallEmitted[toolID] = struct{}{}
+				h.toolCallCount++
+				h.emitToolCallStream(call, index, false)
+				return true
+			}
+			h.handleToolCallAfterChecks(call)
+			return true
+		}
+		if h.activeTextSSEIndex == index {
+			h.activeTextSSEIndex = -1
+			if h.activeBlockType == "text" {
+				h.activeBlockType = ""
+			}
+		}
+		if h.activeThinkingSSEIndex == index {
+			h.activeThinkingSSEIndex = -1
+			if h.activeBlockType == "thinking" {
+				h.activeBlockType = ""
+			}
+		}
+		h.mu.Unlock()
+
+		h.writeUpstreamEventSSE(msg)
+		return true
+	}
+
+	return false
 }
 
 func stringifyToolInput(input interface{}) string {
@@ -1706,6 +2002,18 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		h.flushPendingToolCalls(stopReason)
 		h.finalizeOutputTokens()
 	}
+
+	h.finalizeCompletion(stopReason)
+}
+
+func (h *streamHandler) finalizeCompletion(stopReason string) {
+	h.mu.Lock()
+	if h.completionLogged {
+		h.mu.Unlock()
+		return
+	}
+	h.completionLogged = true
+	h.mu.Unlock()
 
 	// 闂傚倷娴囧畷鍨叏閹惰姤鍊块柨鏇楀亾妞ゎ厼鐏濊灒闁兼祴鏅濋ˇ顖炴倵楠炲灝鍔氭い锔诲灣缁鎮滃Ο鍦畾濡炪倖鐗楁笟妤呭磿閵夛妇绠?
 	h.mu.Lock()
@@ -2698,6 +3006,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			}
 		}
 		return 0, false
+	}
+
+	if h.handleDirectFinalSSEEvent(msg) {
+		return
 	}
 
 	switch eventKey {

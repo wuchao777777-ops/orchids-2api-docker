@@ -195,11 +195,11 @@ func ApplyDefaults(cfg *Config) {
 // to ensure these values cannot be overridden.
 func ApplyHardcoded(cfg *Config) {
 	cfg.OutputTokenMode = "final"
-	cfg.UpstreamMode = "sse"
+	cfg.UpstreamMode = "ws"
 	cfg.ContextMaxTokens = 100000
 	cfg.ContextSummaryMaxTokens = 800
 	cfg.ContextKeepTurns = 6
-	cfg.OrchidsAPIBaseURL = "https://orchids-server.calmstone-6964e08a.westeurope.azurecontainerapps.io"
+	cfg.OrchidsAPIBaseURL = "https://orchids-v2-alpha-108292236521.europe-west1.run.app"
 	cfg.OrchidsWSURL = "wss://orchids-v2-alpha-108292236521.europe-west1.run.app/agent/ws/coding-agent"
 	cfg.OrchidsAPIVersion = "2"
 	cfg.OrchidsAllowRunCommand = true

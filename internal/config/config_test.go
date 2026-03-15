@@ -67,6 +67,15 @@ func TestApplyHardcodedOverridesValues(t *testing.T) {
 	if cfg.RequestTimeout != 600 {
 		t.Fatalf("RequestTimeout=%d want=600", cfg.RequestTimeout)
 	}
+	if cfg.UpstreamMode != "ws" {
+		t.Fatalf("UpstreamMode=%q want=ws", cfg.UpstreamMode)
+	}
+	if cfg.OrchidsAPIBaseURL != "https://orchids-v2-alpha-108292236521.europe-west1.run.app" {
+		t.Fatalf("OrchidsAPIBaseURL=%q want run.app endpoint", cfg.OrchidsAPIBaseURL)
+	}
+	if cfg.OrchidsWSURL != "wss://orchids-v2-alpha-108292236521.europe-west1.run.app/agent/ws/coding-agent" {
+		t.Fatalf("OrchidsWSURL=%q want websocket endpoint", cfg.OrchidsWSURL)
+	}
 }
 
 func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {

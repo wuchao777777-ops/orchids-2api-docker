@@ -11,6 +11,7 @@ type UpstreamRequest struct {
 	Prompt        string
 	ChatHistory   []interface{}
 	Model         string
+	Stream        bool
 	Messages      []prompt.Message
 	System        []prompt.SystemItem
 	Tools         []interface{}
