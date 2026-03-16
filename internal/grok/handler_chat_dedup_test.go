@@ -1,7 +1,9 @@
 package grok
 
 import (
+	"bytes"
 	"github.com/goccy/go-json"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -31,6 +33,85 @@ func TestStreamMessageDelta(t *testing.T) {
 	}
 }
 
+func TestCollectChat_EmitsOpenAIParityMetadata(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(
+		`{"result":{"response":{"llmInfo":{"modelHash":"hash-1"}}}}` +
+			`{"result":{"response":{"modelResponse":{"responseId":"resp_123","message":"hello","metadata":{"llm_info":{"modelHash":"hash-2"}}}}}}`,
+	)
+
+	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello world"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", nil, nil, body, nil)
+
+	var obj map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
+		t.Fatalf("json.Unmarshal() error=%v body=%q", err, rec.Body.String())
+	}
+	if got, _ := obj["id"].(string); got != "resp_123" {
+		t.Fatalf("id=%q want=%q", got, "resp_123")
+	}
+	if got, _ := obj["system_fingerprint"].(string); got != "hash-1" && got != "hash-2" {
+		t.Fatalf("system_fingerprint=%q want non-empty upstream hash", got)
+	}
+	choices, ok := obj["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		t.Fatalf("choices missing: %#v", obj["choices"])
+	}
+	choice, _ := choices[0].(map[string]interface{})
+	message, _ := choice["message"].(map[string]interface{})
+	if _, ok := message["refusal"]; !ok {
+		t.Fatalf("message.refusal missing: %#v", message)
+	}
+	if _, ok := message["annotations"].([]interface{}); !ok {
+		t.Fatalf("message.annotations missing: %#v", message)
+	}
+	usage, ok := obj["usage"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("usage missing: %#v", obj["usage"])
+	}
+	if _, ok := usage["prompt_tokens_details"].(map[string]interface{}); !ok {
+		t.Fatalf("prompt_tokens_details missing: %#v", usage)
+	}
+	if _, ok := usage["completion_tokens_details"].(map[string]interface{}); !ok {
+		t.Fatalf("completion_tokens_details missing: %#v", usage)
+	}
+	if got, _ := usage["prompt_tokens"].(float64); got <= 0 {
+		t.Fatalf("expected positive prompt_tokens, usage=%#v", usage)
+	}
+	if got, _ := usage["completion_tokens"].(float64); got <= 0 {
+		t.Fatalf("expected positive completion_tokens, usage=%#v", usage)
+	}
+}
+
+func TestCollectChat_PrependsPublicBaseForCachedVideoURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(bytes.Repeat([]byte{1, 2, 3, 4}, 1024))
+	}))
+	defer server.Close()
+
+	h := &Handler{client: New(nil)}
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(
+		`{"result":{"response":{"streamingVideoGenerationResponse":{"progress":100,"videoUrl":"` + server.URL + `/demo.mp4"}}}}`,
+	)
+
+	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-420", ModelSpec{ID: "grok-420", IsVideo: true}, "", "https://example.com", nil, nil, body, nil)
+
+	var obj map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
+		t.Fatalf("json.Unmarshal() error=%v body=%q", err, rec.Body.String())
+	}
+	choices, _ := obj["choices"].([]interface{})
+	choice, _ := choices[0].(map[string]interface{})
+	message, _ := choice["message"].(map[string]interface{})
+	content, _ := message["content"].(string)
+	if !strings.Contains(content, "https://example.com/grok/v1/files/video/") {
+		t.Fatalf("expected public base prefixed cached video url, content=%q", content)
+	}
+}
+
 func TestCollapseDuplicatedLongChunk(t *testing.T) {
 	dup := "Hi! How can I help you today?Hi! How can I help you today?"
 	if got := collapseDuplicatedLongChunk(dup); got != "Hi! How can I help you today?" {
@@ -53,7 +134,7 @@ func TestStreamChat_DedupsGreetingRepeat(t *testing.T) {
 			`{"result":{"response":{"token":"` + dup + `"}}}`,
 	)
 
-	h.streamChat(rec, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "Hi"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, nil, nil, body, nil)
 	contents := extractStreamTextContents(t, rec.Body.String())
 	combined := strings.Join(contents, "")
 	if strings.Count(combined, "Hi! How can I help you today?") != 1 {
@@ -74,7 +155,7 @@ func TestStreamChat_PrefersModelResponseOverNoisyTokens(t *testing.T) {
 			`{"result":{"response":{"modelResponse":{"message":"你好！我是 Grok，xAI AI 助手，不是之前提到的那个。"}}}}`,
 	)
 
-	h.streamChat(rec, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, nil, nil, body, nil)
 	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
 	if strings.Contains(combined, "你！rok，") {
 		t.Fatalf("unexpected noisy token leak, combined=%q raw=%q", combined, rec.Body.String())
@@ -93,10 +174,178 @@ func TestStreamChat_FallsBackToTokenWhenModelResponseMissing(t *testing.T) {
 			`{"result":{"response":{"token":"！我是 Grok。"}}}`,
 	)
 
-	h.streamChat(rec, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, nil, nil, body, nil)
 	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
 	if !strings.Contains(combined, "你好！我是 Grok。") {
 		t.Fatalf("expected token fallback text, combined=%q raw=%q", combined, rec.Body.String())
+	}
+}
+
+func TestStreamChat_EmitsToolCallsChunk(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(
+		`{"result":{"response":{"modelResponse":{"message":"<tool_call>{\"name\":\"weather\",\"arguments\":{\"city\":\"shanghai\"}}</tool_call>"}}}}`,
+	)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "weather?"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, []ToolDef{{
+		Type: "function",
+		Function: map[string]interface{}{
+			"name": "weather",
+		},
+	}}, "required", body, nil)
+
+	raw := rec.Body.String()
+	if strings.Contains(raw, "<tool_call>") {
+		t.Fatalf("raw tool markup leaked: %q", raw)
+	}
+	if !strings.Contains(raw, `"tool_calls"`) {
+		t.Fatalf("expected tool_calls chunk, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"finish_reason":"tool_calls"`) {
+		t.Fatalf("expected tool_calls finish reason, raw=%q", raw)
+	}
+}
+
+func TestStreamChat_EmitsToolCallsBeforeDone(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(
+		`{"result":{"response":{"modelResponse":{"message":"checking\n<tool_call>{\"name\":\"weather\",\"arguments\":{\"city\":\"shanghai\"}}</tool_call>"}}}}` +
+			`{"result":{"response":{"token":"ignored"}}}`,
+	)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "weather?"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, []ToolDef{{
+		Type: "function",
+		Function: map[string]interface{}{
+			"name": "weather",
+		},
+	}}, "required", body, nil)
+
+	raw := rec.Body.String()
+	idxTool := strings.Index(raw, `"tool_calls"`)
+	idxDone := strings.LastIndex(raw, `[DONE]`)
+	if idxTool < 0 || idxDone < 0 {
+		t.Fatalf("expected tool_calls and DONE, raw=%q", raw)
+	}
+	if idxTool > idxDone {
+		t.Fatalf("tool_calls should be emitted before DONE, raw=%q", raw)
+	}
+}
+
+func TestStreamChat_ParsesSplitToolCallsFromTokenStream(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(
+		`{"result":{"response":{"token":"before <tool_"}}}` +
+			`{"result":{"response":{"token":"call>{\"name\":\"weather\","}}}` +
+			`{"result":{"response":{"token":"\"arguments\":{\"city\":\"shanghai\"}}</tool_call> after"}}}`,
+	)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "weather?"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, []ToolDef{{
+		Type: "function",
+		Function: map[string]interface{}{
+			"name": "weather",
+		},
+	}}, "required", body, nil)
+
+	raw := rec.Body.String()
+	if strings.Contains(raw, "<tool_call>") {
+		t.Fatalf("raw tool markup leaked: %q", raw)
+	}
+	if !strings.Contains(raw, `"tool_calls"`) {
+		t.Fatalf("expected streamed tool_calls chunk, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"index":0`) {
+		t.Fatalf("expected indexed tool_calls chunk, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"content":"before `) {
+		t.Fatalf("expected text before tool call to stream, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"content":" after"`) {
+		t.Fatalf("expected trailing text after tool call to stream, raw=%q", raw)
+	}
+}
+
+func TestStreamChat_EmitsSystemFingerprint(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(
+		`{"result":{"response":{"llmInfo":{"modelHash":"hash-123"},"token":"hello"}}}`,
+	)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	raw := rec.Body.String()
+	if !strings.Contains(raw, `"system_fingerprint":"hash-123"`) {
+		t.Fatalf("expected stream fingerprint, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"role":"assistant","content":""`) {
+		t.Fatalf("expected assistant role chunk with empty content, raw=%q", raw)
+	}
+}
+
+func TestStreamChat_AcceptsAlternateUpstreamEventShape(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(
+		`{"result":{"response":{"llm_info":{"model_hash":"hash-alt"},"response_id":"resp_alt","delta":"hello "}}}` +
+			`{"result":{"response":{"model_response":{"response_id":"resp_alt_2","text":"hello world"}}}}`,
+	)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	raw := rec.Body.String()
+	if !strings.Contains(raw, `"system_fingerprint":"hash-alt"`) {
+		t.Fatalf("expected alternate fingerprint to be accepted, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"id":"resp_alt"`) && !strings.Contains(raw, `"id":"resp_alt_2"`) {
+		t.Fatalf("expected alternate response id to be accepted, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"content":"hello world"`) {
+		t.Fatalf("expected alternate text shape to stream, raw=%q", raw)
+	}
+}
+
+func TestStreamChat_ParseErrorUsesSSEErrorEvent(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(`{"result":{"response":{"token":"hello"}}`)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	raw := rec.Body.String()
+	if !strings.Contains(raw, "event: error") {
+		t.Fatalf("expected SSE error event, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"code":"stream_error"`) {
+		t.Fatalf("expected stream_error code, raw=%q", raw)
+	}
+	if !strings.Contains(raw, "[DONE]") {
+		t.Fatalf("expected DONE after error, raw=%q", raw)
+	}
+}
+
+func TestStreamChat_PrependsPublicBaseForCachedVideoURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(bytes.Repeat([]byte{5, 6, 7, 8}, 1024))
+	}))
+	defer server.Close()
+
+	h := &Handler{client: New(nil)}
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(
+		`{"result":{"response":{"streamingVideoGenerationResponse":{"progress":100,"videoUrl":"` + server.URL + `/demo.mp4"}}}}`,
+	)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-420", ModelSpec{ID: "grok-420", IsVideo: true}, "", "https://example.com", false, nil, nil, body, nil)
+	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
+	if !strings.Contains(combined, "https://example.com/grok/v1/files/video/") {
+		t.Fatalf("expected public base prefixed cached video url, combined=%q raw=%q", combined, rec.Body.String())
 	}
 }
 
@@ -207,7 +456,7 @@ func TestAppendChatCompletionChunkMatchesMapEncoding(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			raw := appendChatCompletionChunk(make([]byte, 0, 256), "chatcmpl_1", 123, "grok-4", tt.role, tt.content, tt.finish, tt.hasFinish)
+			raw := appendChatCompletionChunk(make([]byte, 0, 256), "chatcmpl_1", 123, "grok-4", "fp-1", tt.role, tt.content, tt.finish, tt.hasFinish)
 			var got map[string]interface{}
 			if err := json.Unmarshal(raw, &got); err != nil {
 				t.Fatalf("unmarshal got: %v", err)
@@ -216,6 +465,7 @@ func TestAppendChatCompletionChunkMatchesMapEncoding(t *testing.T) {
 			delta := map[string]interface{}{}
 			if tt.role != "" {
 				delta["role"] = tt.role
+				delta["content"] = ""
 			}
 			if tt.content != "" {
 				delta["content"] = tt.content
@@ -225,10 +475,12 @@ func TestAppendChatCompletionChunkMatchesMapEncoding(t *testing.T) {
 				finish = tt.finish
 			}
 			wantRaw := encodeJSONBytes(map[string]interface{}{
-				"id":      "chatcmpl_1",
-				"object":  "chat.completion.chunk",
-				"created": int64(123),
-				"model":   "grok-4",
+				"id":                 "chatcmpl_1",
+				"object":             "chat.completion.chunk",
+				"created":            int64(123),
+				"model":              "grok-4",
+				"service_tier":       nil,
+				"system_fingerprint": "fp-1",
 				"choices": []map[string]interface{}{{
 					"index":         0,
 					"delta":         delta,
@@ -236,6 +488,29 @@ func TestAppendChatCompletionChunkMatchesMapEncoding(t *testing.T) {
 					"finish_reason": finish,
 				}},
 			})
+			if tt.hasFinish {
+				var wantObj map[string]interface{}
+				if err := json.Unmarshal(wantRaw, &wantObj); err != nil {
+					t.Fatalf("unmarshal wantRaw: %v", err)
+				}
+				wantObj["usage"] = map[string]interface{}{
+					"prompt_tokens":     float64(0),
+					"completion_tokens": float64(0),
+					"total_tokens":      float64(0),
+					"prompt_tokens_details": map[string]interface{}{
+						"cached_tokens": float64(0),
+						"text_tokens":   float64(0),
+						"audio_tokens":  float64(0),
+						"image_tokens":  float64(0),
+					},
+					"completion_tokens_details": map[string]interface{}{
+						"text_tokens":      float64(0),
+						"audio_tokens":     float64(0),
+						"reasoning_tokens": float64(0),
+					},
+				}
+				wantRaw = encodeJSONBytes(wantObj)
+			}
 			var want map[string]interface{}
 			if err := json.Unmarshal(wantRaw, &want); err != nil {
 				t.Fatalf("unmarshal want: %v", err)
@@ -247,12 +522,57 @@ func TestAppendChatCompletionChunkMatchesMapEncoding(t *testing.T) {
 	}
 }
 
+func TestAppendChatCompletionToolCallsChunk_FinalIncludesUsage(t *testing.T) {
+	raw := appendChatCompletionToolCallsChunk(make([]byte, 0, 512), "chatcmpl_1", 123, "grok-4", "fp-1", []map[string]interface{}{{
+		"index": 0,
+		"id":    "call_1",
+		"type":  "function",
+		"function": map[string]interface{}{
+			"name":      "weather",
+			"arguments": `{"city":"shanghai"}`,
+		},
+	}}, "tool_calls", true)
+	var got map[string]interface{}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal got: %v", err)
+	}
+	if _, ok := got["usage"].(map[string]interface{}); !ok {
+		t.Fatalf("usage missing: %#v", got)
+	}
+	if _, ok := got["service_tier"]; !ok {
+		t.Fatalf("service_tier missing: %#v", got)
+	}
+}
+
+func TestBuildChatUsagePayload_TracksPromptAndCompletionTokens(t *testing.T) {
+	req := &ChatCompletionsRequest{
+		Messages: []ChatMessage{
+			{Role: "system", Content: "you are helpful"},
+			{Role: "user", Content: []interface{}{
+				map[string]interface{}{"type": "text", "text": "describe this"},
+				map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/a.png"}},
+			}},
+		},
+	}
+	usage := buildChatUsagePayload(req, "here is the answer", nil)
+	if got, _ := usage["prompt_tokens"].(int); got <= 0 {
+		t.Fatalf("expected prompt tokens > 0, usage=%#v", usage)
+	}
+	promptDetails, _ := usage["prompt_tokens_details"].(map[string]interface{})
+	if got, _ := promptDetails["image_tokens"].(int); got <= 0 {
+		t.Fatalf("expected image prompt tokens > 0, usage=%#v", usage)
+	}
+	if got, _ := usage["completion_tokens"].(int); got <= 0 {
+		t.Fatalf("expected completion tokens > 0, usage=%#v", usage)
+	}
+}
+
 func BenchmarkAppendChatCompletionChunk_Content(b *testing.B) {
 	buf := make([]byte, 0, 256)
 	created := time.Now().Unix()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		raw := appendChatCompletionChunk(buf[:0], "chatcmpl_1", created, "grok-4", "", "hello world", "", false)
+		raw := appendChatCompletionChunk(buf[:0], "chatcmpl_1", created, "grok-4", "fp-1", "", "hello world", "", false)
 		buf = raw[:0]
 	}
 }
@@ -261,10 +581,11 @@ func BenchmarkEncodeChatCompletionChunk_Map(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = encodeJSONBytes(map[string]interface{}{
-			"id":      "chatcmpl_1",
-			"object":  "chat.completion.chunk",
-			"created": int64(123),
-			"model":   "grok-4",
+			"id":                 "chatcmpl_1",
+			"object":             "chat.completion.chunk",
+			"created":            int64(123),
+			"model":              "grok-4",
+			"system_fingerprint": "fp-1",
 			"choices": []map[string]interface{}{{
 				"index":         0,
 				"delta":         map[string]interface{}{"content": "hello world"},

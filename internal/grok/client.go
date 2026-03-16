@@ -185,8 +185,13 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 	if cnt <= 0 {
 		cnt = 2
 	}
+	temporary := true
+	if c != nil && c.cfg != nil {
+		temporary = c.cfg.GrokChatTemporary()
+		noMemory = c.cfg.GrokChatDisableMemory(noMemory)
+	}
 	payload := map[string]interface{}{
-		"temporary":                   true,
+		"temporary":                   temporary,
 		"modelName":                   spec.UpstreamModel,
 		"message":                     text,
 		"fileAttachments":             []string{},
@@ -226,6 +231,14 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 	}
 	if strings.TrimSpace(spec.ModelMode) != "" {
 		payload["modelMode"] = spec.ModelMode
+	}
+	if strings.EqualFold(strings.TrimSpace(spec.UpstreamModel), "grok-420") {
+		payload["enable420"] = true
+	}
+	if c != nil && c.cfg != nil {
+		if customPersonality := c.cfg.GrokChatCustomInstruction(); customPersonality != "" {
+			payload["customPersonality"] = customPersonality
+		}
 	}
 	return payload
 }

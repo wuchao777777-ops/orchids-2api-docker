@@ -16,19 +16,41 @@ import (
 	"orchids-api/internal/util"
 )
 
-func appendChatCompletionChunk(dst []byte, id string, created int64, model, role, content string, finish string, hasFinish bool) []byte {
+func appendUsage(dst []byte, usage map[string]interface{}) []byte {
+	if len(usage) == 0 {
+		dst = append(dst, `,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"prompt_tokens_details":{"cached_tokens":0,"text_tokens":0,"audio_tokens":0,"image_tokens":0},"completion_tokens_details":{"text_tokens":0,"audio_tokens":0,"reasoning_tokens":0}}`...)
+		return dst
+	}
+	raw, err := json.Marshal(usage)
+	if err != nil {
+		dst = append(dst, `,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"prompt_tokens_details":{"cached_tokens":0,"text_tokens":0,"audio_tokens":0,"image_tokens":0},"completion_tokens_details":{"text_tokens":0,"audio_tokens":0,"reasoning_tokens":0}}`...)
+		return dst
+	}
+	dst = append(dst, `,"usage":`...)
+	dst = append(dst, raw...)
+	return dst
+}
+
+func appendChatCompletionChunk(dst []byte, id string, created int64, model, fingerprint, role, content string, finish string, hasFinish bool) []byte {
+	return appendChatCompletionChunkWithUsage(dst, id, created, model, fingerprint, role, content, finish, hasFinish, nil)
+}
+
+func appendChatCompletionChunkWithUsage(dst []byte, id string, created int64, model, fingerprint, role, content string, finish string, hasFinish bool, usage map[string]interface{}) []byte {
 	dst = append(dst, `{"id":`...)
 	dst = strconv.AppendQuote(dst, id)
 	dst = append(dst, `,"object":"chat.completion.chunk","created":`...)
 	dst = strconv.AppendInt(dst, created, 10)
 	dst = append(dst, `,"model":`...)
 	dst = strconv.AppendQuote(dst, model)
+	dst = append(dst, `,"service_tier":null`...)
+	dst = append(dst, `,"system_fingerprint":`...)
+	dst = strconv.AppendQuote(dst, fingerprint)
 	dst = append(dst, `,"choices":[{"index":0,"delta":`...)
 	switch {
 	case role != "":
 		dst = append(dst, `{"role":`...)
 		dst = strconv.AppendQuote(dst, role)
-		dst = append(dst, '}')
+		dst = append(dst, `,"content":""}`...)
 	case content != "":
 		dst = append(dst, `{"content":`...)
 		dst = strconv.AppendQuote(dst, content)
@@ -42,7 +64,47 @@ func appendChatCompletionChunk(dst []byte, id string, created int64, model, role
 	} else {
 		dst = append(dst, `null`...)
 	}
-	dst = append(dst, `}]}`...)
+	dst = append(dst, `}]`...)
+	if hasFinish {
+		dst = appendUsage(dst, usage)
+	}
+	dst = append(dst, '}')
+	return dst
+}
+
+func appendChatCompletionToolCallsChunk(dst []byte, id string, created int64, model, fingerprint string, toolCalls []map[string]interface{}, finish string, hasFinish bool) []byte {
+	return appendChatCompletionToolCallsChunkWithUsage(dst, id, created, model, fingerprint, toolCalls, finish, hasFinish, nil)
+}
+
+func appendChatCompletionToolCallsChunkWithUsage(dst []byte, id string, created int64, model, fingerprint string, toolCalls []map[string]interface{}, finish string, hasFinish bool, usage map[string]interface{}) []byte {
+	dst = append(dst, `{"id":`...)
+	dst = strconv.AppendQuote(dst, id)
+	dst = append(dst, `,"object":"chat.completion.chunk","created":`...)
+	dst = strconv.AppendInt(dst, created, 10)
+	dst = append(dst, `,"model":`...)
+	dst = strconv.AppendQuote(dst, model)
+	dst = append(dst, `,"service_tier":null`...)
+	dst = append(dst, `,"system_fingerprint":`...)
+	dst = strconv.AppendQuote(dst, fingerprint)
+	dst = append(dst, `,"choices":[{"index":0,"delta":{"tool_calls":`...)
+	if len(toolCalls) == 0 {
+		dst = append(dst, `[]`...)
+	} else if raw, err := json.Marshal(toolCalls); err == nil {
+		dst = append(dst, raw...)
+	} else {
+		dst = append(dst, `[]`...)
+	}
+	dst = append(dst, `},"logprobs":null,"finish_reason":`...)
+	if hasFinish {
+		dst = strconv.AppendQuote(dst, finish)
+	} else {
+		dst = append(dst, `null`...)
+	}
+	dst = append(dst, `}]`...)
+	if hasFinish {
+		dst = appendUsage(dst, usage)
+	}
+	dst = append(dst, '}')
 	return dst
 }
 
@@ -198,7 +260,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			if len(editInputs) > 1 {
 				editInputs = editInputs[len(editInputs)-1:]
 			}
-			h.handleChatImageEdit(r.Context(), w, req, spec, prompt, editInputs)
+			h.handleChatImageEdit(r.Context(), w, req, spec, prompt, editInputs, publicBase)
 			return
 		}
 
@@ -214,7 +276,11 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	text, attachments, err := extractMessageAndAttachments(req.Messages, spec.IsVideo)
+	parallelToolCalls := true
+	if req.ParallelToolCalls != nil {
+		parallelToolCalls = *req.ParallelToolCalls
+	}
+	text, attachments, err := extractMessageAndAttachmentsWithTools(req.Messages, spec.IsVideo, req.Tools, req.ToolChoice, parallelToolCalls)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -281,10 +347,10 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	hasAttachments := len(attachments) > 0
 	if req.Stream {
-		h.streamChat(w, req.Model, spec, sess.token, publicBase, hasAttachments, resp.Body, logger)
+		h.streamChat(w, &req, req.Model, spec, sess.token, publicBase, hasAttachments, req.Tools, req.ToolChoice, resp.Body, logger)
 		return
 	}
-	h.collectChat(w, req.Model, spec, sess.token, publicBase, resp.Body, logger)
+	h.collectChat(w, &req, req.Model, spec, sess.token, publicBase, req.Tools, req.ToolChoice, resp.Body, logger)
 }
 
 func (h *Handler) buildChatPayload(
@@ -378,12 +444,34 @@ func (h *Handler) buildChatPayload(
 		message = strings.TrimSpace(message + " " + modeFlag)
 	}
 
-	return map[string]interface{}{
-		"temporary":        true,
-		"modelName":        spec.UpstreamModel,
-		"message":          message,
-		"toolOverrides":    map[string]interface{}{"videoGen": true},
-		"enableSideBySide": true,
+	temporary := true
+	disableMemory := false
+	if h != nil && h.cfg != nil {
+		temporary = h.cfg.GrokChatTemporary()
+		disableMemory = h.cfg.GrokChatDisableMemory(false)
+	}
+
+	payload = map[string]interface{}{
+		"temporary":                   temporary,
+		"modelName":                   spec.UpstreamModel,
+		"message":                     message,
+		"fileAttachments":             []string{},
+		"imageAttachments":            []string{},
+		"disableSearch":               false,
+		"enableImageGeneration":       true,
+		"returnImageBytes":            false,
+		"enableImageStreaming":        true,
+		"imageGenerationCount":        2,
+		"forceConcise":                false,
+		"forceSideBySide":             false,
+		"isAsyncChat":                 false,
+		"isReasoning":                 false,
+		"disableSelfHarmShortCircuit": false,
+		"disableTextFollowUps":        false,
+		"returnRawGrokInXaiRequest":   false,
+		"sendFinalMetadata":           true,
+		"toolOverrides":               map[string]interface{}{"videoGen": true},
+		"enableSideBySide":            true,
 		"deviceEnvInfo": map[string]interface{}{
 			"darkModeEnabled":  false,
 			"devicePixelRatio": 2,
@@ -403,8 +491,24 @@ func (h *Handler) buildChatPayload(
 					},
 				},
 			},
+			"requestModelDetails": map[string]interface{}{
+				"modelId": spec.UpstreamModel,
+			},
 		},
-	}, nil
+		"disableMemory": disableMemory,
+	}
+	if strings.TrimSpace(spec.ModelMode) != "" {
+		payload["modelMode"] = spec.ModelMode
+	}
+	if strings.EqualFold(strings.TrimSpace(spec.UpstreamModel), "grok-420") {
+		payload["enable420"] = true
+	}
+	if h != nil && h.cfg != nil {
+		if customPersonality := h.cfg.GrokChatCustomInstruction(); customPersonality != "" {
+			payload["customPersonality"] = customPersonality
+		}
+	}
+	return payload, nil
 }
 
 func videoPresetFlag(preset string) string {
@@ -890,16 +994,44 @@ func commonPrefixText(a, b string) string {
 	return string(ar[:idx])
 }
 
-func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, body io.Reader, logger *debug.Logger) {
+func toolCallsEnabled(tools []ToolDef, toolChoice interface{}) bool {
+	if len(tools) == 0 {
+		return false
+	}
+	if s, ok := toolChoice.(string); ok && strings.EqualFold(strings.TrimSpace(s), "none") {
+		return false
+	}
+	return true
+}
+
+func suffixPrefixOverlap(text, tag string) int {
+	if text == "" || tag == "" {
+		return 0
+	}
+	maxKeep := len(text)
+	if limit := len(tag) - 1; maxKeep > limit {
+		maxKeep = limit
+	}
+	for keep := maxKeep; keep > 0; keep-- {
+		if strings.HasSuffix(text, tag[:keep]) {
+			return keep
+		}
+	}
+	return 0
+}
+
+func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, tools []ToolDef, toolChoice interface{}, body io.Reader, logger *debug.Logger) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	flusher, _ := w.(http.Flusher)
 
 	id := "chatcmpl_" + randomHex(8)
+	fingerprint := ""
 	sentRole := false
 	lastMessage := ""
 	sentAny := false
+	var finalUsage map[string]interface{}
 	// Image URL stream handling: prefer full image variants over -part-0 previews.
 	seenFull := map[string]bool{}
 	pendingPart := map[string]string{}
@@ -909,16 +1041,23 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	var tokenFallback strings.Builder
 	emittedModelMessage := ""
 	pendingModelMessage := ""
+	toolStreamMode := toolCallsEnabled(tools, toolChoice)
+	emittedToolCalls := false
+	toolCallIndex := 0
+	toolStreamState := "text"
+	toolStreamBuffer := ""
+	toolStreamPartial := ""
+	toolStreamSawEvents := false
 
 	var mf *streamMarkupFilter
-	if !hasAttachments {
+	if !hasAttachments && !toolStreamMode {
 		mf = &streamMarkupFilter{}
 	}
 	textRefCollector := newStreamTextImageRefCollector()
 	chunkScratch := make([]byte, 0, 256)
 
 	emitChunk := func(role, content string, finish string, hasFinish bool) {
-		raw := appendChatCompletionChunk(chunkScratch[:0], id, time.Now().Unix(), model, role, content, finish, hasFinish)
+		raw := appendChatCompletionChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, role, content, finish, hasFinish, finalUsage)
 		chunkScratch = raw[:0]
 		writeSSEBytes(w, "", raw)
 		if logger != nil {
@@ -932,6 +1071,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 
 	var emitTextChunk func(string)
 	emitTextChunk = func(content string) {
+		if toolStreamMode {
+			return
+		}
 		collapsed := collapseDuplicatedLongChunk(content)
 		if collapsed != content && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
 			slog.Debug("grok stream collapsed duplicated text chunk",
@@ -960,6 +1102,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 
 	emitCleanText := func(raw string) {
 		if raw == "" {
+			return
+		}
+		if toolStreamMode {
 			return
 		}
 		if mf == nil {
@@ -1008,28 +1153,158 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		}
 	}
 
+	emitToolCallsChunk := func(content string, toolCalls []map[string]interface{}, finish string, hasFinish bool) {
+		if strings.TrimSpace(content) != "" {
+			emitChunk("", strings.TrimSpace(content), "", false)
+		}
+		if len(toolCalls) == 0 {
+			return
+		}
+		indexedToolCalls := make([]map[string]interface{}, 0, len(toolCalls))
+		for _, tc := range toolCalls {
+			if tc == nil {
+				continue
+			}
+			cp := make(map[string]interface{}, len(tc)+1)
+			for k, v := range tc {
+				cp[k] = v
+			}
+			if _, ok := cp["index"]; !ok {
+				cp["index"] = toolCallIndex
+			}
+			toolCallIndex++
+			indexedToolCalls = append(indexedToolCalls, cp)
+		}
+		if len(indexedToolCalls) == 0 {
+			return
+		}
+		raw := appendChatCompletionToolCallsChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, indexedToolCalls, finish, hasFinish, finalUsage)
+		chunkScratch = raw[:0]
+		writeSSEBytes(w, "", raw)
+		if logger != nil {
+			logger.LogOutputSSE("", string(raw))
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		sentAny = true
+	}
+
+	handleToolStreamChunk := func(chunk string) {
+		if !toolStreamMode || chunk == "" {
+			return
+		}
+		const startTag = "<tool_call>"
+		const endTag = "</tool_call>"
+		data := toolStreamPartial + chunk
+		toolStreamPartial = ""
+
+		for data != "" {
+			if toolStreamState == "text" {
+				startIdx := strings.Index(data, startTag)
+				if startIdx < 0 {
+					keep := suffixPrefixOverlap(data, startTag)
+					emit := data
+					if keep > 0 {
+						emit = data[:len(data)-keep]
+						toolStreamPartial = data[len(data)-keep:]
+					}
+					if strings.TrimSpace(emit) != "" {
+						emitChunk("", emit, "", false)
+						toolStreamSawEvents = true
+					}
+					break
+				}
+				if before := data[:startIdx]; strings.TrimSpace(before) != "" {
+					emitChunk("", before, "", false)
+					toolStreamSawEvents = true
+				}
+				data = data[startIdx+len(startTag):]
+				toolStreamState = "tool"
+				continue
+			}
+
+			endIdx := strings.Index(data, endTag)
+			if endIdx < 0 {
+				keep := suffixPrefixOverlap(data, endTag)
+				appendPart := data
+				if keep > 0 {
+					appendPart = data[:len(data)-keep]
+					toolStreamPartial = data[len(data)-keep:]
+				}
+				toolStreamBuffer += appendPart
+				break
+			}
+
+			toolStreamBuffer += data[:endIdx]
+			if toolCall := parseToolCallBlock(toolStreamBuffer, tools, toolChoice); toolCall != nil {
+				emitToolCallsChunk("", []map[string]interface{}{toolCall}, "", false)
+				emittedToolCalls = true
+				toolStreamSawEvents = true
+			}
+			toolStreamBuffer = ""
+			data = data[endIdx+len(endTag):]
+			toolStreamState = "text"
+		}
+	}
+
+	flushToolStreamChunk := func() {
+		if !toolStreamMode {
+			return
+		}
+		if toolStreamState == "text" {
+			if strings.TrimSpace(toolStreamPartial) != "" {
+				emitChunk("", toolStreamPartial, "", false)
+				toolStreamSawEvents = true
+			}
+			toolStreamPartial = ""
+			return
+		}
+		raw := toolStreamBuffer + toolStreamPartial
+		if toolCall := parseToolCallBlock(raw, tools, toolChoice); toolCall != nil {
+			emitToolCallsChunk("", []map[string]interface{}{toolCall}, "", false)
+			emittedToolCalls = true
+			toolStreamSawEvents = true
+		} else if strings.TrimSpace(raw) != "" {
+			emitChunk("", "<tool_call>"+raw, "", false)
+			toolStreamSawEvents = true
+		}
+		toolStreamBuffer = ""
+		toolStreamPartial = ""
+		toolStreamState = "text"
+	}
+
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
 		if logger != nil {
 			if raw, err := json.Marshal(resp); err == nil {
 				logger.LogUpstreamSSE("response", string(raw))
 			}
 		}
+		mr := extractUpstreamModelResponse(resp)
+		if fingerprint == "" {
+			fingerprint = extractUpstreamFingerprint(resp, mr)
+		}
+		if rid := extractUpstreamResponseID(resp, mr); rid != "" {
+			id = rid
+		}
 		if !sentRole {
 			emitChunk("assistant", "", "", false)
 			sentRole = true
 		}
-		if tokenDelta, ok := resp["token"].(string); ok && tokenDelta != "" {
+		if tokenDelta := extractUpstreamTokenDelta(resp, mr); tokenDelta != "" {
 			if isThinkingResponse(resp) {
 				// Suppress thinking tokens to avoid leaking chain-of-thought.
 				return nil
 			}
 			textRefCollector.feed(tokenDelta)
-			if !sawModelMessage {
+			if toolStreamMode {
+				handleToolStreamChunk(tokenDelta)
+			} else if !sawModelMessage {
 				tokenFallback.WriteString(tokenDelta)
 			}
 		}
-		if mr, ok := resp["modelResponse"].(map[string]interface{}); ok {
-			if msg, ok := mr["message"].(string); ok && strings.TrimSpace(msg) != "" && msg != lastMessage {
+		if mr != nil {
+			if msg := extractUpstreamMessage(mr); strings.TrimSpace(msg) != "" && msg != lastMessage {
 				lastMessage = msg
 				sawModelMessage = true
 				textRefCollector.feed(msg)
@@ -1043,6 +1318,14 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					}
 				}
 				pendingModelMessage = msg
+				if toolStreamMode && !toolStreamSawEvents && !emittedToolCalls {
+					textContent, toolCalls := parseToolCalls(strings.TrimSpace(msg), tools, toolChoice)
+					if len(toolCalls) > 0 {
+						emitToolCallsChunk(textContent, toolCalls, "", false)
+						emittedToolCalls = true
+						emittedModelMessage = msg
+					}
+				}
 				if strings.Contains(msg, "<grok:render") || strings.Contains(msg, "tool_usage_card") {
 					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
 				}
@@ -1061,6 +1344,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					if name, err := h.cacheMediaURL(context.Background(), token, finalURL, "video"); err == nil && name != "" {
 						finalURL = "/grok/v1/files/video/" + name
 					}
+					if publicBase != "" && strings.HasPrefix(finalURL, "/") {
+						finalURL = publicBase + finalURL
+					}
 					emitChunk("", finalURL, "", false)
 				}
 			}
@@ -1070,12 +1356,30 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	if err != nil {
 		slog.Warn("grok stream parse failed", "error", err)
 		if !sentAny {
-			http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
+			writeSSEError(w, "stream parse error: "+err.Error(), "server_error", "stream_error")
+			writeSSEBytes(w, "", []byte("[DONE]"))
+			if logger != nil {
+				logger.LogOutputSSE("error", "stream parse error: "+err.Error())
+				logger.LogOutputSSE("", "[DONE]")
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
 			return
 		}
-		emitChunk("", "\n[上游响应解析失败]\n", "", false)
+		writeSSEError(w, "stream parse error: "+err.Error(), "server_error", "stream_error")
+		writeSSEBytes(w, "", []byte("[DONE]"))
+		if logger != nil {
+			logger.LogOutputSSE("error", "stream parse error: "+err.Error())
+			logger.LogOutputSSE("", "[DONE]")
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
 	}
 
+	finalBufferedText := ""
 	// Flush any remaining buffered text (avoids "no content" when stream ends quickly).
 	if mf != nil {
 		if pendingModelMessage != "" && pendingModelMessage != emittedModelMessage {
@@ -1099,12 +1403,20 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		if pendingModelMessage != "" && pendingModelMessage != emittedModelMessage {
 			if delta := streamMessageDelta(emittedModelMessage, pendingModelMessage); delta != "" {
 				if cleaned := sanitizeUpstreamText(delta); cleaned != "" {
-					emitTextChunk(cleaned)
+					if toolStreamMode {
+						finalBufferedText += cleaned
+					} else {
+						emitTextChunk(cleaned)
+					}
 				}
 			}
 		} else if !sawModelMessage && tokenFallback.Len() > 0 {
 			if cleaned := sanitizeUpstreamText(tokenFallback.String()); cleaned != "" {
-				emitTextChunk(cleaned)
+				if toolStreamMode {
+					finalBufferedText += cleaned
+				} else {
+					emitTextChunk(cleaned)
+				}
 			}
 		}
 	}
@@ -1132,6 +1444,37 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	// Final pass: emit URL/path candidates found in incremental text collector.
 	textRefCollector.emit(emitImageURL)
 
+	if toolStreamMode {
+		flushToolStreamChunk()
+		if emittedToolCalls {
+			finalUsage = buildChatUsagePayload(req, strings.TrimSpace(finalBufferedText), []map[string]interface{}{{"type": "function"}})
+			emitChunk("", "", "tool_calls", true)
+			writeSSEBytes(w, "", []byte("[DONE]"))
+			if logger != nil {
+				logger.LogOutputSSE("", "[DONE]")
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+		textContent, toolCalls := parseToolCalls(strings.TrimSpace(finalBufferedText), tools, toolChoice)
+		textContent = strings.TrimSpace(textContent)
+		if len(toolCalls) > 0 {
+			finalUsage = buildChatUsagePayload(req, textContent, toolCalls)
+			emitToolCallsChunk(textContent, toolCalls, "tool_calls", true)
+			writeSSEBytes(w, "", []byte("[DONE]"))
+			if logger != nil {
+				logger.LogOutputSSE("", "[DONE]")
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+	}
+
+	finalUsage = buildChatUsagePayload(req, strings.TrimSpace(finalBufferedText), nil)
 	emitChunk("", "", "stop", true)
 	writeSSEBytes(w, "", []byte("[DONE]"))
 	if logger != nil {
@@ -1142,10 +1485,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	}
 }
 
-func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, body io.Reader, logger *debug.Logger) {
+func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest, model string, spec ModelSpec, token string, publicBase string, tools []ToolDef, toolChoice interface{}, body io.Reader, logger *debug.Logger) {
 	id := "chatcmpl_" + randomHex(8)
 	lastMessage := ""
 	videoURL := ""
+	fingerprint := ""
 	imageCandidates := make([]string, 0, 8)
 	imageCandidateSet := map[string]struct{}{}
 	var tokenContent strings.Builder
@@ -1167,16 +1511,23 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 				logger.LogUpstreamSSE("response", string(raw))
 			}
 		}
+		mr := extractUpstreamModelResponse(resp)
+		if fingerprint == "" {
+			fingerprint = extractUpstreamFingerprint(resp, mr)
+		}
+		if rid := extractUpstreamResponseID(resp, mr); rid != "" {
+			id = rid
+		}
 		isThinking := isThinkingResponse(resp)
-		if tokenDelta, ok := resp["token"].(string); ok && tokenDelta != "" {
+		if tokenDelta := extractUpstreamTokenDelta(resp, mr); tokenDelta != "" {
 			if isThinking {
 				// Suppress thinking tokens to avoid leaking chain-of-thought in OpenAI-compatible output.
 				return nil
 			}
 			tokenContent.WriteString(tokenDelta)
 		}
-		if mr, ok := resp["modelResponse"].(map[string]interface{}); ok {
-			if msg, ok := mr["message"].(string); ok && strings.TrimSpace(msg) != "" && msg != lastMessage {
+		if mr != nil {
+			if msg := extractUpstreamMessage(mr); strings.TrimSpace(msg) != "" && msg != lastMessage {
 				lastMessage = msg
 				if strings.Contains(msg, "<grok:render") || strings.Contains(msg, "tool_usage_card") {
 					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
@@ -1206,9 +1557,19 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 	}
 	finalContent = collapseDuplicatedLongChunk(finalContent)
 
+	var toolCalls []map[string]interface{}
+	if toolCallsEnabled(tools, toolChoice) {
+		textContent, parsedToolCalls := parseToolCalls(finalContent, tools, toolChoice)
+		finalContent = strings.TrimSpace(textContent)
+		toolCalls = parsedToolCalls
+	}
+
 	if videoURL != "" {
 		if name, err := h.cacheMediaURL(context.Background(), token, videoURL, "video"); err == nil && name != "" {
 			videoURL = "/grok/v1/files/video/" + name
+		}
+		if publicBase != "" && strings.HasPrefix(videoURL, "/") {
+			videoURL = publicBase + videoURL
 		}
 		if strings.TrimSpace(finalContent) != "" {
 			finalContent += "\n"
@@ -1229,25 +1590,34 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 		finalContent += formatImageMarkdown(val)
 	}
 	resp := map[string]interface{}{
-		"id":      id,
-		"object":  "chat.completion",
-		"created": time.Now().Unix(),
-		"model":   model,
+		"id":                 id,
+		"object":             "chat.completion",
+		"created":            time.Now().Unix(),
+		"model":              model,
+		"service_tier":       nil,
+		"system_fingerprint": fingerprint,
 		"choices": []map[string]interface{}{
 			{
 				"index": 0,
 				"message": map[string]interface{}{
-					"role":    "assistant",
-					"content": finalContent,
+					"role":        "assistant",
+					"content":     finalContent,
+					"refusal":     nil,
+					"annotations": []interface{}{},
 				},
 				"finish_reason": "stop",
 			},
 		},
-		"usage": map[string]interface{}{
-			"prompt_tokens":     0,
-			"completion_tokens": 0,
-			"total_tokens":      0,
-		},
+		"usage": buildChatUsagePayload(req, finalContent, toolCalls),
+	}
+	if len(toolCalls) > 0 {
+		choice := resp["choices"].([]map[string]interface{})[0]
+		message := choice["message"].(map[string]interface{})
+		message["tool_calls"] = toolCalls
+		if strings.TrimSpace(finalContent) == "" {
+			message["content"] = nil
+		}
+		choice["finish_reason"] = "tool_calls"
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

@@ -114,6 +114,7 @@ var (
 		"system":    {},
 		"user":      {},
 		"assistant": {},
+		"tool":      {},
 	}
 	userContentTypes = map[string]struct{}{
 		"text":        {},
@@ -340,6 +341,7 @@ func extractToolUsageCardText(raw string) string {
 		return ""
 	}
 
+	rolloutID := strings.TrimSpace(extractToolUsageTagValue(raw, "rolloutId"))
 	name := extractToolUsageTagValue(raw, "xai:tool_name")
 	argsRaw := extractToolUsageTagValue(raw, "xai:tool_args")
 
@@ -356,21 +358,29 @@ func extractToolUsageCardText(raw string) string {
 
 	label := strings.TrimSpace(name)
 	text := strings.TrimSpace(argsRaw)
+	prefix := ""
+	if rolloutID != "" {
+		prefix = "[" + rolloutID + "]"
+	}
 	switch label {
 	case "web_search":
-		label = "[WebSearch]"
+		label = prefix + "[WebSearch]"
 		if s := firstNonEmpty(payload.Query, payload.Q); s != "" {
 			text = s
 		}
 	case "search_images":
-		label = "[SearchImage]"
+		label = prefix + "[SearchImage]"
 		if s := firstNonEmpty(payload.ImageDescription, payload.Description, payload.Query); s != "" {
 			text = s
 		}
 	case "chatroom_send":
-		label = "[AgentThink]"
+		label = prefix + "[AgentThink]"
 		if s := payload.Message; s != "" {
 			text = s
+		}
+	default:
+		if label != "" && prefix != "" {
+			label = prefix + label
 		}
 	}
 
@@ -537,6 +547,13 @@ type AttachmentInput struct {
 }
 
 func extractMessageAndAttachments(messages []ChatMessage, isVideo bool) (string, []AttachmentInput, error) {
+	return extractMessageAndAttachmentsWithTools(messages, isVideo, nil, nil, true)
+}
+
+func extractMessageAndAttachmentsWithTools(messages []ChatMessage, isVideo bool, tools []ToolDef, toolChoice interface{}, parallelToolCalls bool) (string, []AttachmentInput, error) {
+	if len(tools) > 0 {
+		messages = formatToolHistory(messages)
+	}
 	flatten := make([]struct {
 		Role string
 		Text string
@@ -628,7 +645,18 @@ func extractMessageAndAttachments(messages []ChatMessage, isVideo bool) (string,
 		}
 		parts = append(parts, fmt.Sprintf("%s: %s", role, item.Text))
 	}
-	return strings.Join(parts, "\n\n"), attachments, nil
+	combined := strings.Join(parts, "\n\n")
+	if strings.TrimSpace(combined) == "" && len(attachments) > 0 {
+		combined = "Refer to the following content:"
+	}
+	if prompt := buildToolPrompt(tools, toolChoice, parallelToolCalls); prompt != "" {
+		if strings.TrimSpace(combined) != "" {
+			combined = prompt + "\n\n" + combined
+		} else {
+			combined = prompt
+		}
+	}
+	return combined, attachments, nil
 }
 
 func extractLastUserText(messages []ChatMessage) string {
@@ -689,6 +717,17 @@ func extractContentText(content interface{}) string {
 
 func writeSSE(w http.ResponseWriter, event, data string) {
 	writeSSEBytes(w, event, []byte(data))
+}
+
+func writeSSEError(w http.ResponseWriter, message, errType, code string) {
+	payload := map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": strings.TrimSpace(message),
+			"type":    strings.TrimSpace(errType),
+			"code":    strings.TrimSpace(code),
+		},
+	}
+	writeSSEBytes(w, "error", encodeJSONBytes(payload))
 }
 
 func writeSSEEventName(w http.ResponseWriter, event string) {
@@ -1166,11 +1205,21 @@ func validateChatMessages(messages []ChatMessage) error {
 		roleRaw := strings.TrimSpace(msg.Role)
 		role := strings.ToLower(roleRaw)
 		if _, ok := allowedMessageRoles[role]; !ok {
-			return fmt.Errorf("role must be one of [assistant developer system user]")
+			return fmt.Errorf("role must be one of [assistant developer system tool user]")
+		}
+		if role == "assistant" && len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				if strings.TrimSpace(fmt.Sprint(tc.Function["name"])) == "" {
+					return fmt.Errorf("assistant tool_calls.function.name cannot be empty")
+				}
+			}
+		}
+		if role == "tool" && strings.TrimSpace(msg.ToolCallID) == "" {
+			return fmt.Errorf("tool messages must include tool_call_id")
 		}
 		switch content := msg.Content.(type) {
 		case string:
-			if strings.TrimSpace(content) == "" {
+			if strings.TrimSpace(content) == "" && !(role == "assistant" && len(msg.ToolCalls) > 0) {
 				return fmt.Errorf("message content cannot be empty")
 			}
 		case []interface{}:
@@ -1242,6 +1291,9 @@ func validateChatMessages(messages []ChatMessage) error {
 
 			}
 		default:
+			if role == "assistant" && len(msg.ToolCalls) > 0 && msg.Content == nil {
+				continue
+			}
 			return fmt.Errorf("message content must be a string or array")
 		}
 	}
@@ -1560,19 +1612,64 @@ func normalizeImageSize(size string) (string, error) {
 }
 
 func extractImageProgress(resp map[string]interface{}) (index int, progress int, ok bool) {
-	raw, ok := resp["streamingImageGenerationResponse"].(map[string]interface{})
-	if !ok {
+	raw := mapAtAnyPath(resp,
+		[]string{"streamingImageGenerationResponse"},
+		[]string{"streaming_image_generation_response"},
+		[]string{"imageGenerationProgress"},
+		[]string{"image_generation_progress"},
+		[]string{"modelResponse", "streamingImageGenerationResponse"},
+		[]string{"modelResponse", "streaming_image_generation_response"},
+	)
+	if raw == nil {
 		return 0, 0, false
 	}
-	return interfaceToInt(raw["imageIndex"]), interfaceToInt(raw["progress"]), true
+	return intAtAnyPath(raw,
+			[]string{"imageIndex"},
+			[]string{"image_index"},
+			[]string{"index"},
+		),
+		intAtAnyPath(raw,
+			[]string{"progress"},
+			[]string{"percent"},
+			[]string{"percentage"},
+			[]string{"completedPercentage"},
+		), true
 }
 
 func extractVideoProgress(resp map[string]interface{}) (progress int, videoURL, thumbnailURL string, ok bool) {
-	raw, ok := resp["streamingVideoGenerationResponse"].(map[string]interface{})
-	if !ok {
+	raw := mapAtAnyPath(resp,
+		[]string{"streamingVideoGenerationResponse"},
+		[]string{"streaming_video_generation_response"},
+		[]string{"videoGenerationProgress"},
+		[]string{"video_generation_progress"},
+		[]string{"modelResponse", "streamingVideoGenerationResponse"},
+		[]string{"modelResponse", "streaming_video_generation_response"},
+	)
+	if raw == nil {
 		return 0, "", "", false
 	}
-	return interfaceToInt(raw["progress"]), strings.TrimSpace(fmt.Sprint(raw["videoUrl"])), strings.TrimSpace(fmt.Sprint(raw["thumbnailImageUrl"])), true
+	return intAtAnyPath(raw,
+			[]string{"progress"},
+			[]string{"percent"},
+			[]string{"percentage"},
+			[]string{"completedPercentage"},
+		),
+		stringAtAnyPath(raw,
+			[]string{"videoUrl"},
+			[]string{"videoURL"},
+			[]string{"video_url"},
+			[]string{"resultUrl"},
+			[]string{"result_url"},
+			[]string{"url"},
+		),
+		stringAtAnyPath(raw,
+			[]string{"thumbnailImageUrl"},
+			[]string{"thumbnailURL"},
+			[]string{"thumbnail_image_url"},
+			[]string{"thumbnailUrl"},
+			[]string{"posterUrl"},
+			[]string{"poster_url"},
+		), true
 }
 
 func interfaceToInt(v interface{}) int {
@@ -1593,4 +1690,147 @@ func interfaceToInt(v interface{}) int {
 		}
 	}
 	return 0
+}
+
+func valueAtPath(root interface{}, path ...string) interface{} {
+	cur := root
+	for _, key := range path {
+		m, ok := cur.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		cur, ok = m[key]
+		if !ok {
+			return nil
+		}
+	}
+	return cur
+}
+
+func mapAtAnyPath(root interface{}, paths ...[]string) map[string]interface{} {
+	for _, path := range paths {
+		if len(path) == 0 {
+			continue
+		}
+		if m, ok := valueAtPath(root, path...).(map[string]interface{}); ok && len(m) > 0 {
+			return m
+		}
+	}
+	return nil
+}
+
+func stringAtAnyPath(root interface{}, paths ...[]string) string {
+	for _, path := range paths {
+		if len(path) == 0 {
+			continue
+		}
+		v := strings.TrimSpace(fmt.Sprint(valueAtPath(root, path...)))
+		if v != "" && v != "<nil>" {
+			return v
+		}
+	}
+	return ""
+}
+
+func intAtAnyPath(root interface{}, paths ...[]string) int {
+	for _, path := range paths {
+		if len(path) == 0 {
+			continue
+		}
+		if v := interfaceToInt(valueAtPath(root, path...)); v != 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func extractUpstreamModelResponse(resp map[string]interface{}) map[string]interface{} {
+	return mapAtAnyPath(resp,
+		[]string{"modelResponse"},
+		[]string{"model_response"},
+		[]string{"messageResponse"},
+		[]string{"message_response"},
+		[]string{"output"},
+	)
+}
+
+func extractUpstreamFingerprint(resp map[string]interface{}, modelResp map[string]interface{}) string {
+	if fp := stringAtAnyPath(resp,
+		[]string{"llmInfo", "modelHash"},
+		[]string{"llm_info", "modelHash"},
+		[]string{"llm_info", "model_hash"},
+		[]string{"metadata", "llm_info", "modelHash"},
+		[]string{"metadata", "llm_info", "model_hash"},
+	); fp != "" {
+		return fp
+	}
+	return stringAtAnyPath(modelResp,
+		[]string{"metadata", "llm_info", "modelHash"},
+		[]string{"metadata", "llm_info", "model_hash"},
+		[]string{"metadata", "llmInfo", "modelHash"},
+		[]string{"llmInfo", "modelHash"},
+	)
+}
+
+func extractUpstreamResponseID(resp map[string]interface{}, modelResp map[string]interface{}) string {
+	if rid := stringAtAnyPath(resp,
+		[]string{"responseId"},
+		[]string{"response_id"},
+		[]string{"id"},
+		[]string{"messageId"},
+		[]string{"message_id"},
+	); rid != "" {
+		return rid
+	}
+	return stringAtAnyPath(modelResp,
+		[]string{"responseId"},
+		[]string{"response_id"},
+		[]string{"id"},
+		[]string{"messageId"},
+		[]string{"message_id"},
+	)
+}
+
+func extractUpstreamMessage(modelResp map[string]interface{}) string {
+	if modelResp == nil {
+		return ""
+	}
+	if msg := stringAtAnyPath(modelResp,
+		[]string{"message"},
+		[]string{"content"},
+		[]string{"text"},
+		[]string{"outputText"},
+		[]string{"output_text"},
+	); msg != "" {
+		return msg
+	}
+	if raw := mapAtAnyPath(modelResp, []string{"message"}, []string{"content"}, []string{"text"}); raw != nil {
+		return stringAtAnyPath(raw,
+			[]string{"text"},
+			[]string{"content"},
+			[]string{"value"},
+			[]string{"body"},
+		)
+	}
+	return ""
+}
+
+func extractUpstreamTokenDelta(resp map[string]interface{}, modelResp map[string]interface{}) string {
+	if token := stringAtAnyPath(resp,
+		[]string{"token"},
+		[]string{"delta"},
+		[]string{"text"},
+		[]string{"contentDelta"},
+		[]string{"content_delta"},
+		[]string{"messageDelta"},
+		[]string{"message_delta"},
+	); token != "" {
+		return token
+	}
+	return stringAtAnyPath(modelResp,
+		[]string{"token"},
+		[]string{"delta"},
+		[]string{"textDelta"},
+		[]string{"text_delta"},
+	)
 }

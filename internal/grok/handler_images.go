@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, token, format string, n int) {
+func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, token, prompt, format string, n int, publicBase string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -21,7 +21,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 	var urls []string
 	targetIndex := -1
 
-	_ = parseUpstreamLines(body, func(resp map[string]interface{}) error {
+	if err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
 		if index, progress, ok := extractImageProgress(resp); ok {
 			outIndex := index
 			if n == 1 {
@@ -44,13 +44,28 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 				flusher.Flush()
 			}
 		}
-		if mr, ok := resp["modelResponse"].(map[string]interface{}); ok {
+		if mr := extractUpstreamModelResponse(resp); mr != nil {
 			urls = append(urls, extractImageURLs(mr)...)
 		}
 		return nil
-	})
+	}); err != nil {
+		writeSSEError(w, "stream parse error: "+err.Error(), "server_error", "stream_error")
+		writeSSEBytes(w, "", []byte("[DONE]"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
 
 	urls = normalizeGeneratedImageURLs(urls, n)
+	if len(urls) == 0 {
+		writeSSEError(w, "no image generated", "server_error", "no_image_generated")
+		writeSSEBytes(w, "", []byte("[DONE]"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
 
 	for i, u := range urls {
 		val, err := h.imageOutputValue(context.Background(), token, u, format)
@@ -60,16 +75,24 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 				val = u
 			}
 		}
+		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
+			val = publicBase + val
+		}
 		data := map[string]interface{}{
-			"type":  "image_generation.completed",
-			field:   val,
-			"index": i,
-			"usage": imageUsagePayload(),
+			"type":           "image_generation.completed",
+			field:            val,
+			"index":          i,
+			"revised_prompt": nil,
+			"usage":          buildImageUsagePayload(prompt, len(urls)),
 		}
 		writeSSEBytes(w, "image_generation.completed", encodeJSONBytes(data))
 		if flusher != nil {
 			flusher.Flush()
 		}
+	}
+	writeSSEBytes(w, "", []byte("[DONE]"))
+	if flusher != nil {
+		flusher.Flush()
 	}
 }
 
@@ -151,7 +174,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		}
 		defer resp.Body.Close()
 		h.syncGrokQuota(sess.acc, resp.Header)
-		h.streamImageGeneration(w, resp.Body, sess.token, req.ResponseFormat, req.N)
+		h.streamImageGeneration(w, resp.Body, sess.token, req.Prompt, req.ResponseFormat, req.N, publicBase)
 		return
 	}
 
@@ -185,7 +208,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)
 		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
-			if mr, ok := line["modelResponse"].(map[string]interface{}); ok {
+			if mr := extractUpstreamModelResponse(line); mr != nil {
 				urls = append(urls, extractImageURLs(mr)...)
 				debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 50)...)
 				debugAsset = append(debugAsset, collectAssetLikeStrings(mr, 100)...)
@@ -226,13 +249,16 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
 			val = publicBase + val
 		}
-		data = append(data, map[string]interface{}{field: val})
+		data = append(data, map[string]interface{}{
+			field:            val,
+			"revised_prompt": nil,
+		})
 	}
 
 	out := map[string]interface{}{
 		"created": time.Now().Unix(),
 		"data":    data,
-		"usage":   imageUsagePayload(),
+		"usage":   buildImageUsagePayload(req.Prompt, len(data)),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)

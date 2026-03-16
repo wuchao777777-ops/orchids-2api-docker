@@ -32,9 +32,52 @@
     eventSource: null,
   };
 
+  const videoState = {
+    taskID: "",
+    stream: null,
+    running: false,
+    fileDataURL: "",
+    startAt: 0,
+    elapsedTimer: null,
+    contentBuffer: "",
+  };
+
+  const voiceState = {
+    running: false,
+    room: null,
+    localTracks: [],
+    visualizerTimer: null,
+  };
+
+  const chatState = {
+    sessions: [],
+    activeId: "",
+    sending: false,
+    abortController: null,
+    pendingFile: null,
+    sidebarOpen: false,
+    model: "grok-420",
+    models: [
+      "grok-3",
+      "grok-3-mini",
+      "grok-3-thinking",
+      "grok-4",
+      "grok-4-mini",
+      "grok-4-thinking",
+      "grok-4-heavy",
+      "grok-4.1-mini",
+      "grok-4.1-fast",
+      "grok-4.1-expert",
+      "grok-4.1-thinking",
+      "grok-420",
+    ],
+  };
+  const chatStorageKey = "grok_tools_chat_sessions_v1";
+  const grokToolsUIStorageKey = "grok_tools_ui_v1";
+
   function handleUnauthorized(res) {
     if (res && res.status === 401) {
-      window.location.href = "./login.html";
+      window.location.href = "/admin/login.html?next=" + encodeURIComponent("/admin/?tab=grok-tools");
       return true;
     }
     return false;
@@ -71,6 +114,70 @@
     const num = Number(ms || 0);
     if (!Number.isFinite(num) || num <= 0) return "-";
     return new Date(num).toLocaleString();
+  }
+
+  function relativeTime(ms) {
+    const num = Number(ms || 0);
+    if (!Number.isFinite(num) || num <= 0) return "-";
+    const diff = Math.max(0, Math.round((Date.now() - num) / 1000));
+    if (diff < 60) return "刚刚";
+    if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+    return `${Math.floor(diff / 86400)} 天前`;
+  }
+
+  function loadGrokToolsUIState() {
+    try {
+      const raw = localStorage.getItem(grokToolsUIStorageKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function saveGrokToolsUIState(patch) {
+    try {
+      const current = loadGrokToolsUIState();
+      localStorage.setItem(grokToolsUIStorageKey, JSON.stringify({ ...current, ...patch }));
+    } catch (err) {
+      // ignore storage failures
+    }
+  }
+
+  function setChatSendButtonState(sending) {
+    const btn = document.getElementById("grokSendBtn");
+    if (!btn) return;
+    btn.disabled = false;
+    if (sending) {
+      btn.title = "停止生成";
+      btn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+        </svg>
+      `;
+      return;
+    }
+    btn.title = "发送";
+    btn.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M22 2L11 13"></path>
+        <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+      </svg>
+    `;
+  }
+
+  function closeChatSidebar() {
+    chatState.sidebarOpen = false;
+    document.getElementById("grokChatSidebar")?.classList.remove("show");
+    document.getElementById("grokChatSidebarOverlay")?.classList.remove("show");
+  }
+
+  function openChatSidebar() {
+    chatState.sidebarOpen = true;
+    document.getElementById("grokChatSidebar")?.classList.add("show");
+    document.getElementById("grokChatSidebarOverlay")?.classList.add("show");
   }
 
   function resolveOnlineStatusText(status) {
@@ -258,11 +365,27 @@
     if (el) el.textContent = String(text || "");
   }
 
+  function syncImagineModeUI(mode) {
+    const normalized = String(mode || "auto").toLowerCase();
+    const select = document.getElementById("imagineMode");
+    if (select) select.value = normalized;
+    document.querySelectorAll("[data-imagine-mode]").forEach((btn) => {
+      const active = String(btn.dataset.imagineMode || "").toLowerCase() === normalized;
+      btn.classList.toggle("active", active);
+    });
+  }
+
   function setImagineButtons(running) {
     const startBtn = document.getElementById("imagineStartBtn");
     const stopBtn = document.getElementById("imagineStopBtn");
     if (startBtn) startBtn.disabled = !!running;
     if (stopBtn) stopBtn.disabled = !running;
+  }
+
+  function imagineOptionEnabled(id, fallback) {
+    const input = document.getElementById(id);
+    if (!input) return !!fallback;
+    return !!input.checked;
   }
 
   function updateImagineActiveCount() {
@@ -311,6 +434,17 @@
     const openURL = fileURL || src;
     img.addEventListener("click", () => window.open(openURL, "_blank", "noopener"));
 
+    if (imagineOptionEnabled("imagineAutoFilter", false) && b64) {
+      const raw = String(b64 || "").replace(/\s/g, "");
+      let padding = 0;
+      if (raw.endsWith("==")) padding = 2;
+      else if (raw.endsWith("=")) padding = 1;
+      const estimatedBytes = Math.max(0, Math.floor((raw.length * 3) / 4) - padding);
+      if (estimatedBytes > 0 && estimatedBytes < 100000) {
+        return;
+      }
+    }
+
     const meta = document.createElement("div");
     meta.className = "imagine-meta";
     const left = document.createElement("span");
@@ -322,7 +456,22 @@
 
     card.appendChild(img);
     card.appendChild(meta);
-    grid.prepend(card);
+    if (imagineOptionEnabled("imagineReverseInsert", true)) {
+      grid.prepend(card);
+    } else {
+      grid.appendChild(card);
+    }
+    if (imagineOptionEnabled("imagineAutoDownload", false)) {
+      const link = document.createElement("a");
+      link.href = openURL;
+      link.download = `grok-imagine-${seq || Date.now()}.${fileURL && /\.png(\?|$)/i.test(fileURL) ? "png" : fileURL && /\.webp(\?|$)/i.test(fileURL) ? "webp" : "jpg"}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+    if (imagineOptionEnabled("imagineAutoScroll", true)) {
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
   }
 
   function handleImagineMessage(payload) {
@@ -407,6 +556,7 @@
       body: JSON.stringify({
         prompt,
         aspect_ratio: aspectRatio,
+        nsfw: true,
       }),
     });
     if (handleUnauthorized(res)) {
@@ -593,23 +743,1143 @@
     resetImagineMetrics();
   }
 
+  function createChatSession() {
+    return {
+      id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+      title: "新会话",
+      isDefaultTitle: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messages: [],
+      model: chatState.model,
+    };
+  }
+
+  function isImageFileName(name) {
+    return /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(String(name || "").trim());
+  }
+
+  function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function saveChatSessions() {
+    try {
+      const sessions = chatState.sessions.map((session) => ({
+        ...session,
+        messages: Array.isArray(session.messages)
+          ? session.messages.map((msg) => ({
+              ...msg,
+              attachment: msg?.attachment
+                ? {
+                    name: String(msg.attachment.name || ""),
+                    type: String(msg.attachment.type || ""),
+                  }
+                : undefined,
+            }))
+          : [],
+      }));
+      localStorage.setItem(chatStorageKey, JSON.stringify({
+        activeId: chatState.activeId,
+        model: chatState.model,
+        sessions,
+      }));
+    } catch (err) {
+      // ignore storage failures
+    }
+  }
+
+  function loadChatSessions() {
+    try {
+      const raw = localStorage.getItem(chatStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.sessions)) {
+          chatState.sessions = parsed.sessions;
+          chatState.activeId = String(parsed.activeId || "");
+          if (typeof parsed.model === "string" && parsed.model.trim()) {
+            chatState.model = parsed.model.trim();
+          }
+        }
+      }
+    } catch (err) {
+      chatState.sessions = [];
+      chatState.activeId = "";
+    }
+    if (!Array.isArray(chatState.sessions) || chatState.sessions.length === 0) {
+      const session = createChatSession();
+      chatState.sessions = [session];
+      chatState.activeId = session.id;
+    }
+    if (!chatState.sessions.find((item) => item && item.id === chatState.activeId)) {
+      chatState.activeId = chatState.sessions[0].id;
+    }
+    chatState.sessions.forEach((session) => {
+      if (session && typeof session.isDefaultTitle === "undefined") {
+        session.isDefaultTitle = !session.title || session.title === "新会话";
+      }
+    });
+  }
+
+  function activeChatSession() {
+    return chatState.sessions.find((item) => item && item.id === chatState.activeId) || null;
+  }
+
+  function updateChatStatus(text, type) {
+    const el = document.getElementById("grokChatStatus");
+    if (!el) return;
+    el.textContent = String(text || "");
+    el.classList.remove("connected", "connecting", "error");
+    if (type === "ok") el.classList.add("connected");
+    if (type === "connecting") el.classList.add("connecting");
+    if (type === "error") el.classList.add("error");
+  }
+
+  function escapeHTML(text) {
+    const div = document.createElement("div");
+    div.textContent = String(text == null ? "" : text);
+    return div.innerHTML;
+  }
+
+  function renderAssistantContent(raw) {
+    const safe = escapeHTML(raw);
+    let html = safe.replace(/```([\s\S]*?)```/g, (_m, code) => `<pre>${code}</pre>`);
+    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+    html = html.replace(/\n/g, "<br>");
+    return html;
+  }
+
+  function renderUserContent(content, attachment) {
+    const wrapper = document.createElement("div");
+    const text = document.createElement("div");
+    text.className = "message-content";
+    text.textContent = String(content || "");
+    wrapper.appendChild(text);
+    if (attachment && attachment.name) {
+      const badge = document.createElement("div");
+      badge.className = "message-attachment";
+      badge.textContent = `附件: ${attachment.name}`;
+      wrapper.appendChild(badge);
+    }
+    return wrapper;
+  }
+
+  function appendChatMessage(role, content, attachment) {
+    const log = document.getElementById("grokChatLog");
+    const empty = document.getElementById("grokChatEmpty");
+    if (!log) return null;
+    if (empty) empty.style.display = "none";
+    const row = document.createElement("div");
+    row.className = `message-row ${role}`;
+    const bubble = document.createElement("div");
+    bubble.className = "message-bubble";
+    let contentEl = document.createElement("div");
+    contentEl.className = role === "assistant" ? "message-content rendered" : "message-content";
+    if (role === "assistant") {
+      contentEl.innerHTML = renderAssistantContent(content || "");
+      bubble.appendChild(contentEl);
+    } else {
+      contentEl = renderUserContent(content, attachment);
+      bubble.appendChild(contentEl);
+    }
+    row.appendChild(bubble);
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
+    return contentEl;
+  }
+
+  function rerenderChatThread() {
+    const log = document.getElementById("grokChatLog");
+    const empty = document.getElementById("grokChatEmpty");
+    if (!log) return;
+    log.innerHTML = "";
+    const session = activeChatSession();
+    const messages = Array.isArray(session?.messages) ? session.messages : [];
+    if (messages.length === 0) {
+      if (empty) {
+        empty.style.display = "block";
+        log.appendChild(empty);
+      }
+      return;
+    }
+    messages.forEach((msg) => appendChatMessage(msg.role, msg.content, msg.attachment));
+  }
+
+  function renderChatSessions() {
+    const list = document.getElementById("grokSessionList");
+    if (!list) return;
+    list.innerHTML = "";
+    chatState.sessions.forEach((session) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = `session-item${session.id === chatState.activeId ? " active" : ""}`;
+      item.dataset.id = session.id;
+
+      const title = document.createElement("span");
+      title.className = "session-title";
+      title.textContent = session.title || "新会话";
+      title.addEventListener("dblclick", (event) => {
+        event.stopPropagation();
+        startRenameChatSession(session.id, title);
+      });
+
+      const meta = document.createElement("span");
+      meta.className = "session-meta";
+      meta.textContent = relativeTime(session.updatedAt);
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "session-delete";
+      delBtn.title = "删除";
+      delBtn.textContent = "×";
+      delBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        deleteChatSession(session.id);
+      });
+
+      item.addEventListener("click", () => {
+        switchChatSession(session.id);
+        closeChatSidebar();
+      });
+
+      item.appendChild(title);
+      item.appendChild(meta);
+      item.appendChild(delBtn);
+      list.appendChild(item);
+    });
+  }
+
+  function syncChatModelUI() {
+    const label = document.getElementById("grokModelLabel");
+    if (label) label.textContent = chatState.model;
+    const session = activeChatSession();
+    if (session) {
+      session.model = chatState.model;
+    }
+  }
+
+  function renderChatModelDropdown() {
+    const dropdown = document.getElementById("grokModelDropdown");
+    if (!dropdown) return;
+    dropdown.innerHTML = "";
+    chatState.models.forEach((model) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `model-option${model === chatState.model ? " active" : ""}`;
+      btn.textContent = model;
+      btn.dataset.model = model;
+      dropdown.appendChild(btn);
+    });
+  }
+
+  async function loadChatModels() {
+    try {
+      const res = await fetch("/grok/v1/models");
+      if (handleUnauthorized(res)) return;
+      if (!res.ok) return;
+      const data = await res.json();
+      const models = Array.isArray(data?.data)
+        ? data.data
+            .map((item) => String(item?.id || "").trim())
+            .filter((id) => id && !id.includes("imagine"))
+        : [];
+      if (models.length === 0) return;
+      chatState.models = models;
+      if (!models.includes(chatState.model)) {
+        chatState.model = models.includes("grok-420")
+          ? "grok-420"
+          : models.includes("grok-4")
+            ? "grok-4"
+            : models[0];
+      }
+    } catch (err) {
+      // ignore model fetch failures and keep fallback list
+    }
+  }
+
+  function ensureChatTitle(session) {
+    if (!session || !Array.isArray(session.messages) || session.messages.length === 0) return;
+    if (session.isDefaultTitle === false) return;
+    const firstUser = session.messages.find((msg) => msg && msg.role === "user" && String(msg.content || "").trim());
+    if (!firstUser) return;
+    session.title = String(firstUser.content || "").replace(/\s+/g, " ").trim().slice(0, 20) || "新会话";
+    session.isDefaultTitle = false;
+  }
+
+  function renameChatSession(id, newTitle) {
+    const session = chatState.sessions.find((item) => item && item.id === id);
+    if (!session) return;
+    const trimmed = String(newTitle || "").trim();
+    session.title = trimmed || "新会话";
+    session.isDefaultTitle = !trimmed;
+    session.updatedAt = Date.now();
+    saveChatSessions();
+    renderChatSessions();
+  }
+
+  function deleteChatSession(id) {
+    const idx = chatState.sessions.findIndex((item) => item && item.id === id);
+    if (idx < 0) return;
+    chatState.sessions.splice(idx, 1);
+    if (chatState.sessions.length === 0) {
+      const session = createChatSession();
+      chatState.sessions = [session];
+      chatState.activeId = session.id;
+    } else if (chatState.activeId === id) {
+      chatState.activeId = chatState.sessions[Math.max(0, idx - 1)].id;
+    }
+    renderChatSessions();
+    rerenderChatThread();
+    saveChatSessions();
+  }
+
+  function startRenameChatSession(sessionId, titleEl) {
+    const session = chatState.sessions.find((item) => item && item.id === sessionId);
+    if (!session || !titleEl || !titleEl.parentNode) return;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "session-rename-input";
+    input.value = String(session.title || "");
+    input.maxLength = 40;
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+    const commit = () => renameChatSession(sessionId, input.value);
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        input.blur();
+      }
+      if (event.key === "Escape") {
+        input.value = session.title || "新会话";
+        input.blur();
+      }
+    });
+  }
+
+  function switchChatSession(id) {
+    if (!id || id === chatState.activeId) return;
+    chatState.activeId = id;
+    const session = activeChatSession();
+    if (session && session.model) {
+      chatState.model = session.model;
+    }
+    syncChatModelUI();
+    renderChatModelDropdown();
+    renderChatSessions();
+    rerenderChatThread();
+    saveChatSessions();
+  }
+
+  function newChatSession() {
+    const session = createChatSession();
+    chatState.sessions.unshift(session);
+    chatState.activeId = session.id;
+    syncChatModelUI();
+    renderChatModelDropdown();
+    renderChatSessions();
+    rerenderChatThread();
+    saveChatSessions();
+    updateChatStatus("就绪");
+  }
+
+  function buildChatPayload() {
+    const session = activeChatSession();
+    if (!session) {
+      throw new Error("missing chat session");
+    }
+    const systemPrompt = String(document.getElementById("grokSystemInput")?.value || "").trim();
+    const messages = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+    session.messages.forEach((msg) => {
+      if (msg.role !== "user" || !msg.attachment?.dataUrl) {
+        messages.push({ role: msg.role, content: msg.content });
+        return;
+      }
+      const parts = [{ type: "text", text: String(msg.content || "") }];
+      if (isImageFileName(msg.attachment.name)) {
+        parts.push({
+          type: "image_url",
+          image_url: { url: msg.attachment.dataUrl },
+        });
+      } else {
+        parts.push({
+          type: "file",
+          file: {
+            filename: String(msg.attachment.name || "upload.bin"),
+            file_data: msg.attachment.dataUrl,
+          },
+        });
+      }
+      messages.push({ role: msg.role, content: parts });
+    });
+    return {
+      model: chatState.model,
+      stream: true,
+      temperature: Number(document.getElementById("grokTempRange")?.value || 0.8),
+      top_p: Number(document.getElementById("grokTopPRange")?.value || 0.95),
+      messages,
+    };
+  }
+
+  async function sendChatMessage() {
+    if (chatState.sending) return;
+    const input = document.getElementById("grokPromptInput");
+    const prompt = String(input?.value || "").trim();
+    if (!prompt) return;
+    const attachment = chatState.pendingFile ? { ...chatState.pendingFile } : null;
+    const session = activeChatSession();
+    if (!session) return;
+    session.messages.push({ role: "user", content: prompt, attachment });
+    session.updatedAt = Date.now();
+    ensureChatTitle(session);
+    renderChatSessions();
+    rerenderChatThread();
+    if (input) {
+      input.value = "";
+      input.style.height = "40px";
+    }
+
+    clearPendingChatFile();
+    const bubble = appendChatMessage("assistant", "");
+    let assistantText = "";
+    chatState.sending = true;
+    chatState.abortController = new AbortController();
+    setChatSendButtonState(true);
+    updateChatStatus("连接中...", "connecting");
+
+    try {
+      const payload = buildChatPayload();
+      const res = await fetch("/grok/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: chatState.abortController.signal,
+      });
+      if (handleUnauthorized(res)) return;
+      if (!res.ok || !res.body) {
+        throw new Error(await res.text());
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx = buffer.indexOf("\n\n");
+        while (idx >= 0) {
+          const chunk = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const lines = chunk.split("\n");
+          let data = "";
+          lines.forEach((line) => {
+            if (line.startsWith("data:")) {
+              data += line.slice(5).trimStart();
+            }
+          });
+          if (!data) {
+            idx = buffer.indexOf("\n\n");
+            continue;
+          }
+          if (data === "[DONE]") {
+            idx = buffer.indexOf("\n\n");
+            continue;
+          }
+          let payloadChunk = null;
+          try {
+            payloadChunk = JSON.parse(data);
+          } catch (err) {
+            idx = buffer.indexOf("\n\n");
+            continue;
+          }
+          const choice = payloadChunk?.choices?.[0];
+          const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
+          const finalContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
+          if (delta) {
+            assistantText += delta;
+          } else if (finalContent) {
+            assistantText = finalContent;
+          }
+          if (bubble) {
+            bubble.innerHTML = renderAssistantContent(assistantText);
+            const log = document.getElementById("grokChatLog");
+            if (log) log.scrollTop = log.scrollHeight;
+          }
+          idx = buffer.indexOf("\n\n");
+        }
+      }
+      session.messages.push({ role: "assistant", content: assistantText.trim() });
+      session.updatedAt = Date.now();
+      saveChatSessions();
+      updateChatStatus("完成", "ok");
+    } catch (err) {
+      if (err && err.name === "AbortError") {
+        if (bubble && !assistantText.trim()) {
+          bubble.innerHTML = renderAssistantContent("[stopped]");
+        }
+        updateChatStatus("已停止", "error");
+        return;
+      }
+      if (bubble) {
+        bubble.innerHTML = renderAssistantContent(`[error] ${err.message || err}`);
+      }
+      updateChatStatus(err.message || "发送失败", "error");
+    } finally {
+      chatState.sending = false;
+      chatState.abortController = null;
+      setChatSendButtonState(false);
+      renderChatSessions();
+      saveChatSessions();
+    }
+  }
+
+  function bindChatEvents() {
+    const newBtn = document.getElementById("grokChatNewBtn");
+    const list = document.getElementById("grokSessionList");
+    const sendBtn = document.getElementById("grokSendBtn");
+    const input = document.getElementById("grokPromptInput");
+    const modelChip = document.getElementById("grokModelChip");
+    const modelDropdown = document.getElementById("grokModelDropdown");
+    const settingsToggle = document.getElementById("grokSettingsToggle");
+    const settingsPanel = document.getElementById("grokSettingsPanel");
+    const attachBtn = document.getElementById("grokAttachBtn");
+    const fileInput = document.getElementById("grokFileInput");
+    const fileRemoveBtn = document.getElementById("grokFileRemoveBtn");
+    const sidebarToggle = document.getElementById("grokChatSidebarToggle");
+    const sidebarOverlay = document.getElementById("grokChatSidebarOverlay");
+    const collapseBtn = document.getElementById("grokChatCollapseBtn");
+    const expandBtn = document.getElementById("grokChatExpandBtn");
+    const tempRange = document.getElementById("grokTempRange");
+    const tempValue = document.getElementById("grokTempValue");
+    const topPRange = document.getElementById("grokTopPRange");
+    const topPValue = document.getElementById("grokTopPValue");
+
+    if (newBtn) newBtn.addEventListener("click", () => {
+      newChatSession();
+      closeChatSidebar();
+    });
+    if (sendBtn) {
+      sendBtn.addEventListener("click", () => {
+        if (chatState.sending && chatState.abortController) {
+          chatState.abortController.abort();
+          return;
+        }
+        sendChatMessage().catch(() => {});
+      });
+    }
+    if (attachBtn && fileInput) {
+      attachBtn.addEventListener("click", () => fileInput.click());
+    }
+    if (fileInput) {
+      fileInput.addEventListener("change", async () => {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        try {
+          const dataUrl = await readFileAsDataURL(file);
+          chatState.pendingFile = {
+            name: file.name || "upload.bin",
+            type: file.type || "",
+            dataUrl,
+          };
+          renderPendingChatFile();
+        } catch (err) {
+          showToast(err?.message || "读取文件失败", "error");
+        } finally {
+          fileInput.value = "";
+        }
+      });
+    }
+    if (fileRemoveBtn) {
+      fileRemoveBtn.addEventListener("click", () => clearPendingChatFile());
+    }
+    if (input) {
+      input.addEventListener("input", () => {
+        input.style.height = "40px";
+        input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+      });
+      input.addEventListener("keydown", (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          event.preventDefault();
+          sendChatMessage().catch(() => {});
+        }
+      });
+    }
+    if (sidebarToggle) sidebarToggle.addEventListener("click", () => openChatSidebar());
+    if (expandBtn) expandBtn.addEventListener("click", () => openChatSidebar());
+    if (collapseBtn) collapseBtn.addEventListener("click", () => closeChatSidebar());
+    if (sidebarOverlay) sidebarOverlay.addEventListener("click", () => closeChatSidebar());
+    if (modelChip && modelDropdown) {
+      modelChip.addEventListener("click", (event) => {
+        event.stopPropagation();
+        modelDropdown.classList.toggle("show");
+      });
+      modelDropdown.addEventListener("click", (event) => {
+        const btn = event.target.closest(".model-option");
+        if (!btn || !modelDropdown.contains(btn)) return;
+        chatState.model = String(btn.dataset.model || chatState.model);
+        syncChatModelUI();
+        renderChatModelDropdown();
+        saveChatSessions();
+        modelDropdown.classList.remove("show");
+      });
+    }
+    if (settingsToggle && settingsPanel) {
+      settingsToggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        settingsPanel.classList.toggle("show");
+      });
+    }
+    document.addEventListener("click", () => {
+      modelDropdown?.classList.remove("show");
+      settingsPanel?.classList.remove("show");
+    });
+    if (tempRange && tempValue) {
+      tempRange.addEventListener("input", () => {
+        tempValue.textContent = String(Number(tempRange.value).toFixed(2)).replace(/\.00$/, "");
+        saveGrokToolsUIState({ chatTemperature: Number(tempRange.value) });
+      });
+    }
+    if (topPRange && topPValue) {
+      topPRange.addEventListener("input", () => {
+        topPValue.textContent = String(Number(topPRange.value).toFixed(2)).replace(/\.00$/, "");
+        saveGrokToolsUIState({ chatTopP: Number(topPRange.value) });
+      });
+    }
+    const systemInput = document.getElementById("grokSystemInput");
+    if (systemInput) {
+      systemInput.addEventListener("input", () => {
+        saveGrokToolsUIState({ chatSystemPrompt: String(systemInput.value || "") });
+      });
+    }
+  }
+
+  async function initChat() {
+    await loadChatModels();
+    loadChatSessions();
+    const uiState = loadGrokToolsUIState();
+    if (!chatState.models.includes(chatState.model)) {
+      chatState.model = chatState.models.includes("grok-420")
+        ? "grok-420"
+        : chatState.models.includes("grok-4")
+          ? "grok-4"
+          : (chatState.models[0] || chatState.model);
+    }
+    const tempRange = document.getElementById("grokTempRange");
+    const tempValue = document.getElementById("grokTempValue");
+    const topPRange = document.getElementById("grokTopPRange");
+    const topPValue = document.getElementById("grokTopPValue");
+    const systemInput = document.getElementById("grokSystemInput");
+    if (tempRange && typeof uiState.chatTemperature === "number") {
+      tempRange.value = String(uiState.chatTemperature);
+    }
+    if (tempValue && tempRange) {
+      tempValue.textContent = String(Number(tempRange.value).toFixed(2)).replace(/\.00$/, "");
+    }
+    if (topPRange && typeof uiState.chatTopP === "number") {
+      topPRange.value = String(uiState.chatTopP);
+    }
+    if (topPValue && topPRange) {
+      topPValue.textContent = String(Number(topPRange.value).toFixed(2)).replace(/\.00$/, "");
+    }
+    if (systemInput && typeof uiState.chatSystemPrompt === "string") {
+      systemInput.value = uiState.chatSystemPrompt;
+    }
+    syncChatModelUI();
+    renderChatModelDropdown();
+    renderChatSessions();
+    rerenderChatThread();
+    renderPendingChatFile();
+    setChatSendButtonState(false);
+    bindChatEvents();
+    closeChatSidebar();
+  }
+
+  function renderPendingChatFile() {
+    const badge = document.getElementById("grokFileBadge");
+    const name = document.getElementById("grokFileName");
+    if (!badge || !name) return;
+    if (!chatState.pendingFile?.name) {
+      badge.classList.add("hidden");
+      name.textContent = "";
+      return;
+    }
+    badge.classList.remove("hidden");
+    name.textContent = chatState.pendingFile.name;
+  }
+
+  function clearPendingChatFile() {
+    chatState.pendingFile = null;
+    renderPendingChatFile();
+  }
+
+  function setVoiceStatus(text, type) {
+    const el = document.getElementById("voiceStatus");
+    if (!el) return;
+    el.textContent = String(text || "");
+    el.style.color = type === "error" ? "var(--accent-red)" : type === "ok" ? "var(--accent-green)" : "var(--text-primary)";
+  }
+
+  function appendVoiceLog(line) {
+    const el = document.getElementById("voiceLogOutput");
+    if (!el) return;
+    const time = new Date().toLocaleTimeString();
+    el.textContent += `[${time}] ${String(line || "")}\n`;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function clearVoiceLog() {
+    const el = document.getElementById("voiceLogOutput");
+    if (el) el.textContent = "";
+  }
+
+  function setVoiceButtons(running) {
+    const start = document.getElementById("voiceStartBtn");
+    const stop = document.getElementById("voiceStopBtn");
+    if (start) start.disabled = !!running;
+    if (stop) stop.disabled = !running;
+  }
+
+  function updateVoiceMeta() {
+    const voice = String(document.getElementById("voiceName")?.value || "ara").trim() || "ara";
+    const personality = String(document.getElementById("voicePersonality")?.value || "assistant").trim() || "assistant";
+    const speed = Math.max(0.1, Number(document.getElementById("voiceSpeed")?.value || 1));
+    const statusVoice = document.getElementById("voiceStatusVoice");
+    const statusPersonality = document.getElementById("voiceStatusPersonality");
+    const statusSpeed = document.getElementById("voiceStatusSpeed");
+    const speedValue = document.getElementById("voiceSpeedValue");
+    if (statusVoice) statusVoice.textContent = voice;
+    if (statusPersonality) statusPersonality.textContent = personality;
+    if (statusSpeed) statusSpeed.textContent = `${speed}x`;
+    if (speedValue) speedValue.textContent = speed.toFixed(1);
+  }
+
+  function initVoiceVisualizer() {
+    const root = document.getElementById("voiceVisualizer");
+    if (!root || root.childElementCount > 0) return;
+    for (let i = 0; i < 18; i += 1) {
+      const bar = document.createElement("span");
+      bar.style.flex = "1";
+      bar.style.background = "linear-gradient(180deg,var(--accent-cyan),var(--accent-green))";
+      bar.style.borderRadius = "999px";
+      bar.style.height = "8%";
+      root.appendChild(bar);
+    }
+  }
+
+  function stopVoiceVisualizer() {
+    if (voiceState.visualizerTimer) {
+      clearInterval(voiceState.visualizerTimer);
+      voiceState.visualizerTimer = null;
+    }
+    const root = document.getElementById("voiceVisualizer");
+    if (!root) return;
+    Array.from(root.children).forEach((bar) => {
+      bar.style.height = "8%";
+    });
+  }
+
+  function startVoiceVisualizer() {
+    initVoiceVisualizer();
+    stopVoiceVisualizer();
+    const root = document.getElementById("voiceVisualizer");
+    if (!root) return;
+    voiceState.visualizerTimer = window.setInterval(() => {
+      Array.from(root.children).forEach((bar) => {
+        bar.style.height = `${10 + Math.floor(Math.random() * 80)}%`;
+      });
+    }, 180);
+  }
+
+  function resetVoiceAudio() {
+    const root = document.getElementById("voiceAudioRoot");
+    if (root) root.innerHTML = "";
+  }
+
   async function fetchVoiceToken() {
+    updateVoiceMeta();
     const voice = String(document.getElementById("voiceName")?.value || "ara").trim() || "ara";
     const personality = String(document.getElementById("voicePersonality")?.value || "assistant").trim() || "assistant";
     const speed = Number(document.getElementById("voiceSpeed")?.value || 1);
     const url = `/api/v1/admin/voice/token?voice=${encodeURIComponent(voice)}&personality=${encodeURIComponent(personality)}&speed=${encodeURIComponent(speed > 0 ? speed : 1)}`;
 
     const res = await fetch(url);
-    if (handleUnauthorized(res)) return;
+    if (handleUnauthorized(res)) return null;
     if (!res.ok) {
       throw new Error(await res.text());
     }
     const data = await res.json();
+    const token = String(data.token || "");
+    const livekitURL = String(data.url || "");
     const tokenOutput = document.getElementById("voiceTokenOutput");
     const urlOutput = document.getElementById("voiceUrlOutput");
-    if (tokenOutput) tokenOutput.value = String(data.token || "");
-    if (urlOutput) urlOutput.value = String(data.url || "");
+    const urlStatus = document.getElementById("voiceStatusURL");
+    if (tokenOutput) tokenOutput.value = token;
+    if (urlOutput) urlOutput.value = livekitURL;
+    if (urlStatus) urlStatus.textContent = livekitURL || "-";
+    appendVoiceLog("Fetched voice token");
     showToast("Voice Token 获取成功", "success");
+    return { token, url: livekitURL };
+  }
+
+  async function stopVoiceSession() {
+    if (voiceState.room && typeof voiceState.room.disconnect === "function") {
+      try {
+        await voiceState.room.disconnect();
+      } catch (err) {
+        // ignore
+      }
+    }
+    voiceState.room = null;
+    voiceState.localTracks = [];
+    voiceState.running = false;
+    setVoiceButtons(false);
+    stopVoiceVisualizer();
+    resetVoiceAudio();
+    setVoiceStatus("已停止");
+    appendVoiceLog("Voice session stopped");
+  }
+
+  async function startVoiceSession() {
+    if (voiceState.running) {
+      showToast("Voice 会话已在运行中", "info");
+      return;
+    }
+    if (!window.LiveKitClient) {
+      throw new Error("LiveKit SDK 未加载");
+    }
+    setVoiceButtons(true);
+    setVoiceStatus("连接中...");
+    updateVoiceMeta();
+    const payload = await fetchVoiceToken();
+    if (!payload || !payload.token || !payload.url) {
+      throw new Error("voice token unavailable");
+    }
+
+    const room = new window.LiveKitClient.Room();
+    voiceState.room = room;
+    voiceState.running = true;
+    room.on(window.LiveKitClient.RoomEvent.TrackSubscribed, (track) => {
+      if (!track || track.kind !== "audio") return;
+      const root = document.getElementById("voiceAudioRoot");
+      if (!root) return;
+      root.innerHTML = "";
+      try {
+        const el = track.attach();
+        el.autoplay = true;
+        el.controls = true;
+        root.appendChild(el);
+      } catch (err) {
+        appendVoiceLog(`Attach audio failed: ${err.message || err}`);
+      }
+    });
+    room.on(window.LiveKitClient.RoomEvent.Disconnected, () => {
+      stopVoiceSession().catch(() => {});
+    });
+
+    try {
+      await room.connect(payload.url, payload.token);
+      await room.localParticipant.setMicrophoneEnabled(true);
+      setVoiceStatus("已连接", "ok");
+      appendVoiceLog("Voice session connected");
+      startVoiceVisualizer();
+    } catch (err) {
+      await stopVoiceSession();
+      setVoiceStatus(err.message || "连接失败", "error");
+      throw err;
+    }
+  }
+
+  function setVideoStatus(text, type) {
+    const el = document.getElementById("videoStatus");
+    if (!el) return;
+    el.textContent = String(text || "");
+    el.style.color = type === "error" ? "var(--accent-red)" : type === "ok" ? "var(--accent-green)" : "var(--text-primary)";
+  }
+
+  function appendVideoLog(line) {
+    const el = document.getElementById("videoLogOutput");
+    if (!el) return;
+    el.textContent += `${String(line || "")}\n`;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function setVideoButtons(running) {
+    const start = document.getElementById("videoStartBtn");
+    const stop = document.getElementById("videoStopBtn");
+    if (start) start.disabled = !!running;
+    if (stop) stop.disabled = !running;
+  }
+
+  function setVideoProgress(value) {
+    const safe = Math.max(0, Math.min(100, Number(value) || 0));
+    const fill = document.getElementById("videoProgressFill");
+    const text = document.getElementById("videoProgressText");
+    if (fill) fill.style.width = `${safe}%`;
+    if (text) text.textContent = `${safe}%`;
+  }
+
+  function stopVideoElapsedTimer() {
+    if (videoState.elapsedTimer) {
+      clearInterval(videoState.elapsedTimer);
+      videoState.elapsedTimer = null;
+    }
+  }
+
+  function startVideoElapsedTimer() {
+    stopVideoElapsedTimer();
+    const duration = document.getElementById("videoDurationValue");
+    videoState.elapsedTimer = window.setInterval(() => {
+      if (!videoState.startAt || !duration) return;
+      const seconds = Math.max(0, Math.round((Date.now() - videoState.startAt) / 1000));
+      duration.textContent = `${seconds}s`;
+    }, 1000);
+  }
+
+  function clearVideoOutput() {
+    const stage = document.getElementById("videoStage");
+    const empty = document.getElementById("videoEmpty");
+    const log = document.getElementById("videoLogOutput");
+    if (stage) stage.innerHTML = "";
+    if (empty) empty.style.display = "block";
+    if (log) log.textContent = "";
+    setVideoProgress(0);
+    const duration = document.getElementById("videoDurationValue");
+    if (duration) duration.textContent = "-";
+    videoState.contentBuffer = "";
+  }
+
+  function renderVideoPreview(url) {
+    const stage = document.getElementById("videoStage");
+    const empty = document.getElementById("videoEmpty");
+    if (!stage) return;
+    if (empty) empty.style.display = "none";
+    stage.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.style.display = "grid";
+    wrap.style.gap = "12px";
+    const video = document.createElement("video");
+    video.controls = true;
+    video.preload = "metadata";
+    video.src = url;
+    video.style.width = "100%";
+    video.style.borderRadius = "14px";
+    video.style.background = "#000";
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.gap = "8px";
+    const open = document.createElement("a");
+    open.className = "btn btn-outline";
+    open.href = url;
+    open.target = "_blank";
+    open.rel = "noopener";
+    open.textContent = "打开";
+    const download = document.createElement("a");
+    download.className = "btn btn-outline";
+    download.href = url;
+    download.download = "";
+    download.textContent = "下载";
+    actions.appendChild(open);
+    actions.appendChild(download);
+    wrap.appendChild(video);
+    wrap.appendChild(actions);
+    stage.appendChild(wrap);
+  }
+
+  function extractVideoURL(raw) {
+    const text = String(raw || "");
+    const patterns = [
+      /<source[^>]*src=["']([^"']+)["']/i,
+      /<video[^>]*src=["']([^"']+)["']/i,
+      /\[video\]\(([^)]+)\)/i,
+      /(https?:\/\/[^\s"'`)<]+)/i,
+      /(\/grok\/v1\/files\/video\/[^\s"'`)<]+)/i,
+      /(\/v1\/files\/video\/[^\s"'`)<]+)/i,
+    ];
+    const sanitize = (candidate) => {
+      const input = String(candidate || "").trim().replace(/[),.;]+$/g, "");
+      if (!input) return "";
+      const extMatch = input.match(/\.(mp4|webm)(?:[?#][^\s"'`)<]*)?/i);
+      if (!extMatch || extMatch.index == null) return "";
+      const end = extMatch.index + extMatch[0].length;
+      return input.slice(0, end);
+    };
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match && match[1]) {
+        const clean = sanitize(match[1]);
+        if (clean) return clean;
+      }
+    }
+    return "";
+  }
+
+  function extractVideoProgress(raw) {
+    const text = String(raw || "");
+    const match = text.match(/(\d{1,3})\s*%/);
+    if (!match || !match[1]) return null;
+    const value = Number(match[1]);
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null;
+  }
+
+  async function createVideoTask(payload) {
+    const res = await fetch("/api/v1/admin/video/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (handleUnauthorized(res)) return "";
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    const data = await res.json();
+    return String(data.task_id || "").trim();
+  }
+
+  async function stopVideoTask() {
+    if (!videoState.taskID) return;
+    const res = await fetch("/api/v1/admin/video/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_ids: [videoState.taskID] }),
+    });
+    if (handleUnauthorized(res)) return;
+  }
+
+  function closeVideoStream() {
+    if (!videoState.stream) return;
+    try {
+      videoState.stream.close();
+    } catch (err) {
+      // ignore
+    }
+    videoState.stream = null;
+  }
+
+  function openVideoSSE(taskID) {
+    const url = `/api/v1/admin/video/sse?task_id=${encodeURIComponent(taskID)}&t=${Date.now()}`;
+    const es = new EventSource(url);
+    videoState.stream = es;
+    es.onmessage = (event) => {
+      const text = String(event.data || "");
+      if (!text) return;
+      appendVideoLog(text);
+      if (text === "[DONE]") {
+        closeVideoStream();
+        stopVideoElapsedTimer();
+        setVideoButtons(false);
+        setVideoStatus("已完成", "ok");
+        setVideoProgress(100);
+        return;
+      }
+      let payload = null;
+      try {
+        payload = JSON.parse(text);
+      } catch (err) {
+        payload = null;
+      }
+      const errorMsg = payload && (payload.error || payload?.error?.message);
+      if (errorMsg) {
+        closeVideoStream();
+        stopVideoElapsedTimer();
+        setVideoButtons(false);
+        setVideoStatus(String(errorMsg), "error");
+        return;
+      }
+      const choice = payload?.choices?.[0];
+      const deltaContent = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
+      const messageContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
+      const content = deltaContent || messageContent || text;
+      videoState.contentBuffer += content;
+      const progress = extractVideoProgress(content);
+      if (progress !== null) {
+        setVideoProgress(progress);
+      }
+      const videoURL = extractVideoURL(content) || extractVideoURL(videoState.contentBuffer);
+      if (videoURL) {
+        renderVideoPreview(videoURL);
+        setVideoProgress(100);
+      }
+    };
+    es.onerror = () => {
+      closeVideoStream();
+      stopVideoElapsedTimer();
+      setVideoButtons(false);
+      if (videoState.running) {
+        setVideoStatus("连接中断", "error");
+      }
+    };
+  }
+
+  async function startVideo() {
+    if (videoState.running) {
+      showToast("Video 任务已在运行中", "info");
+      return;
+    }
+    const prompt = String(document.getElementById("videoPrompt")?.value || "").trim();
+    if (!prompt) {
+      showToast("请输入 Video Prompt", "error");
+      return;
+    }
+    const payload = {
+      prompt,
+      aspect_ratio: String(document.getElementById("videoRatio")?.value || "3:2"),
+      video_length: Number(document.getElementById("videoLength")?.value || 6),
+      resolution_name: String(document.getElementById("videoResolution")?.value || "480p"),
+      preset: String(document.getElementById("videoPreset")?.value || "normal"),
+      image_url: videoState.fileDataURL || String(document.getElementById("videoImageUrl")?.value || "").trim(),
+      reasoning_effort: String(document.getElementById("videoEffort")?.value || "").trim(),
+    };
+    const aspectValue = document.getElementById("videoAspectValue");
+    const lengthValue = document.getElementById("videoLengthValue");
+    const resolutionValue = document.getElementById("videoResolutionValue");
+    const presetValue = document.getElementById("videoPresetValue");
+    if (aspectValue) aspectValue.textContent = payload.aspect_ratio || "-";
+    if (lengthValue) lengthValue.textContent = `${payload.video_length || "-"}s`;
+    if (resolutionValue) resolutionValue.textContent = payload.resolution_name || "-";
+    if (presetValue) presetValue.textContent = payload.preset || "-";
+    clearVideoOutput();
+    setVideoButtons(true);
+    setVideoStatus("创建任务中...");
+    videoState.running = true;
+    try {
+      const taskID = await createVideoTask(payload);
+      if (!taskID) {
+        throw new Error("创建任务失败：空 task_id");
+      }
+      videoState.taskID = taskID;
+      videoState.startAt = Date.now();
+      startVideoElapsedTimer();
+      setVideoStatus("运行中", "ok");
+      openVideoSSE(taskID);
+    } catch (err) {
+      videoState.running = false;
+      setVideoButtons(false);
+      setVideoStatus(err.message || "启动失败", "error");
+      throw err;
+    }
+  }
+
+  async function stopVideo() {
+    videoState.running = false;
+    closeVideoStream();
+    stopVideoElapsedTimer();
+    setVideoButtons(false);
+    setVideoStatus("已停止");
+    try {
+      await stopVideoTask();
+    } catch (err) {
+      // ignore
+    }
+    videoState.taskID = "";
   }
 
   function normalizeOnlineAccounts(rawAccounts) {
@@ -1153,15 +2423,22 @@
   }
 
   function switchGrokToolTab(tab) {
+    closeChatSidebar();
     const sections = {
+      chat: document.getElementById("grokChatSection"),
       imagine: document.getElementById("grokImagineSection"),
+      video: document.getElementById("grokVideoSection"),
       voice: document.getElementById("grokVoiceSection"),
       cache: document.getElementById("grokCacheSection"),
     };
     Object.keys(sections).forEach((key) => {
       const section = sections[key];
       if (!section) return;
-      section.style.display = key === tab ? "grid" : "none";
+      if (key !== tab) {
+        section.style.display = "none";
+        return;
+      }
+      section.style.display = "block";
     });
 
     const tabs = document.querySelectorAll("#grokToolsTabs .tab-item");
@@ -1169,17 +2446,96 @@
       const active = String(btn.dataset.tab || "").toLowerCase() === String(tab || "").toLowerCase();
       btn.classList.toggle("active", active);
     });
+    saveGrokToolsUIState({ activeToolTab: String(tab || "chat") });
   }
 
   window.switchGrokToolTab = switchGrokToolTab;
 
   function bindEvents() {
+    document.querySelectorAll("[data-imagine-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mode = String(btn.dataset.imagineMode || "auto").toLowerCase();
+        syncImagineModeUI(mode);
+      });
+    });
     const startBtn = document.getElementById("imagineStartBtn");
     const stopBtn = document.getElementById("imagineStopBtn");
     const clearBtn = document.getElementById("imagineClearBtn");
     if (startBtn) startBtn.addEventListener("click", () => startImagine());
     if (stopBtn) stopBtn.addEventListener("click", () => stopImagine());
     if (clearBtn) clearBtn.addEventListener("click", () => clearImagineGrid());
+
+    const videoStartBtn = document.getElementById("videoStartBtn");
+    if (videoStartBtn) {
+      videoStartBtn.addEventListener("click", async () => {
+        try {
+          await startVideo();
+        } catch (err) {
+          showToast(`启动失败: ${err.message || err}`, "error");
+        }
+      });
+    }
+    const videoStopBtn = document.getElementById("videoStopBtn");
+    if (videoStopBtn) {
+      videoStopBtn.addEventListener("click", async () => {
+        try {
+          await stopVideo();
+        } catch (err) {
+          showToast(`停止失败: ${err.message || err}`, "error");
+        }
+      });
+    }
+    const videoClearBtn = document.getElementById("videoClearBtn");
+    if (videoClearBtn) {
+      videoClearBtn.addEventListener("click", () => {
+        clearVideoOutput();
+        setVideoStatus("未启动");
+      });
+    }
+    const videoSelectImageBtn = document.getElementById("videoSelectImageBtn");
+    const videoImageFileInput = document.getElementById("videoImageFileInput");
+    const videoClearImageBtn = document.getElementById("videoClearImageBtn");
+    const videoImageUrl = document.getElementById("videoImageUrl");
+    if (videoSelectImageBtn && videoImageFileInput) {
+      videoSelectImageBtn.addEventListener("click", () => videoImageFileInput.click());
+      videoImageFileInput.addEventListener("change", () => {
+        const file = videoImageFileInput.files && videoImageFileInput.files[0];
+        const fileName = document.getElementById("videoImageFileName");
+        if (!file) {
+          videoState.fileDataURL = "";
+          if (fileName) fileName.textContent = "未选择文件";
+          return;
+        }
+        if (videoImageUrl) videoImageUrl.value = "";
+        if (fileName) fileName.textContent = file.name;
+        const reader = new FileReader();
+        reader.onload = () => {
+          videoState.fileDataURL = typeof reader.result === "string" ? reader.result : "";
+        };
+        reader.onerror = () => {
+          videoState.fileDataURL = "";
+          showToast("读取参考图失败", "error");
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+    if (videoClearImageBtn) {
+      videoClearImageBtn.addEventListener("click", () => {
+        videoState.fileDataURL = "";
+        if (videoImageFileInput) videoImageFileInput.value = "";
+        const fileName = document.getElementById("videoImageFileName");
+        if (fileName) fileName.textContent = "未选择文件";
+      });
+    }
+    if (videoImageUrl) {
+      videoImageUrl.addEventListener("input", () => {
+        if (!videoImageUrl.value.trim()) return;
+        videoState.fileDataURL = "";
+        if (videoImageFileInput) videoImageFileInput.value = "";
+        const fileName = document.getElementById("videoImageFileName");
+        if (fileName) fileName.textContent = "未选择文件";
+      });
+    }
 
     const voiceFetchBtn = document.getElementById("voiceFetchBtn");
     if (voiceFetchBtn) {
@@ -1188,6 +2544,27 @@
           await fetchVoiceToken();
         } catch (err) {
           showToast(`获取失败: ${err.message || err}`, "error");
+        }
+      });
+    }
+    const voiceStartBtn = document.getElementById("voiceStartBtn");
+    if (voiceStartBtn) {
+      voiceStartBtn.addEventListener("click", async () => {
+        try {
+          await startVoiceSession();
+        } catch (err) {
+          appendVoiceLog(err.message || "Voice start failed");
+          showToast(`Voice 启动失败: ${err.message || err}`, "error");
+        }
+      });
+    }
+    const voiceStopBtn = document.getElementById("voiceStopBtn");
+    if (voiceStopBtn) {
+      voiceStopBtn.addEventListener("click", async () => {
+        try {
+          await stopVoiceSession();
+        } catch (err) {
+          showToast(`Voice 停止失败: ${err.message || err}`, "error");
         }
       });
     }
@@ -1202,6 +2579,18 @@
         copyToClipboard(token);
       });
     }
+    const voiceClearLogBtn = document.getElementById("voiceClearLogBtn");
+    if (voiceClearLogBtn) {
+      voiceClearLogBtn.addEventListener("click", () => clearVoiceLog());
+    }
+    const voiceName = document.getElementById("voiceName");
+    const voicePersonality = document.getElementById("voicePersonality");
+    const voiceSpeed = document.getElementById("voiceSpeed");
+    [voiceName, voicePersonality, voiceSpeed].forEach((input) => {
+      if (!input) return;
+      input.addEventListener("change", updateVoiceMeta);
+      input.addEventListener("input", updateVoiceMeta);
+    });
 
     const cacheRefreshBtn = document.getElementById("cacheRefreshBtn");
     if (cacheRefreshBtn) {
@@ -1344,6 +2733,7 @@
   }
 
   async function init() {
+    await initChat();
     bindEvents();
     window.addEventListener("beforeunload", () => {
       if (Array.isArray(imagineState.taskIDs) && imagineState.taskIDs.length > 0) {
@@ -1358,12 +2748,36 @@
           // ignore unload errors
         }
       }
+      closeVideoStream();
+      stopVideoElapsedTimer();
+      if (videoState.taskID) {
+        try {
+          const payload = JSON.stringify({ task_ids: [videoState.taskID] });
+          navigator.sendBeacon(
+            "/api/v1/admin/video/stop",
+            new Blob([payload], { type: "application/json" }),
+          );
+        } catch (err) {
+          // ignore
+        }
+      }
+      stopVoiceSession().catch(() => {});
       closeCacheBatchStream();
     });
-    switchGrokToolTab("imagine");
+    const uiState = loadGrokToolsUIState();
+    switchGrokToolTab(String(uiState.activeToolTab || "chat"));
     resetImagineMetrics();
     updateImagineActiveCount();
+    clearVideoOutput();
+    setVideoButtons(false);
+    setVideoStatus("未启动");
+    updateVoiceMeta();
+    initVoiceVisualizer();
+    stopVoiceVisualizer();
+    setVoiceButtons(false);
+    setVoiceStatus("未连接");
     updateCacheBatchUI();
+    syncImagineModeUI(document.getElementById("imagineMode")?.value || "auto");
     try {
       await refreshCacheView();
     } catch (err) {

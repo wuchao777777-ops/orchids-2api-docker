@@ -9,22 +9,39 @@ import (
 )
 
 type ChatCompletionsRequest struct {
-	Model           string          `json:"model"`
-	Messages        []ChatMessage   `json:"messages"`
-	Stream          bool            `json:"stream"`
-	StreamProvided  bool            `json:"-"`
-	Thinking        *string         `json:"thinking,omitempty"`
-	ReasoningEffort *string         `json:"reasoning_effort,omitempty"`
-	Temperature     *float64        `json:"temperature,omitempty"`
-	TopP            *float64        `json:"top_p,omitempty"`
-	VideoConfig     *VideoConfig    `json:"video_config,omitempty"`
-	ImageConfig     *ImageConfig    `json:"image_config,omitempty"`
-	Raw             json.RawMessage `json:"-"`
+	Model             string          `json:"model"`
+	Messages          []ChatMessage   `json:"messages"`
+	Stream            bool            `json:"stream"`
+	StreamProvided    bool            `json:"-"`
+	Thinking          *string         `json:"thinking,omitempty"`
+	ReasoningEffort   *string         `json:"reasoning_effort,omitempty"`
+	Temperature       *float64        `json:"temperature,omitempty"`
+	TopP              *float64        `json:"top_p,omitempty"`
+	VideoConfig       *VideoConfig    `json:"video_config,omitempty"`
+	ImageConfig       *ImageConfig    `json:"image_config,omitempty"`
+	Tools             []ToolDef       `json:"tools,omitempty"`
+	ToolChoice        interface{}     `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+	Raw               json.RawMessage `json:"-"`
 }
 
 type ChatMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role       string      `json:"role"`
+	Content    interface{} `json:"content"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Name       string      `json:"name,omitempty"`
+}
+
+type ToolDef struct {
+	Type     string                 `json:"type"`
+	Function map[string]interface{} `json:"function,omitempty"`
+}
+
+type ToolCall struct {
+	ID       string                 `json:"id,omitempty"`
+	Type     string                 `json:"type,omitempty"`
+	Function map[string]interface{} `json:"function,omitempty"`
 }
 
 type VideoConfig struct {
@@ -203,16 +220,19 @@ func (c *ImageConfig) UnmarshalJSON(data []byte) error {
 
 func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	type rawChatRequest struct {
-		Model           string          `json:"model"`
-		Messages        []ChatMessage   `json:"messages"`
-		Stream          interface{}     `json:"stream"`
-		Thinking        *string         `json:"thinking,omitempty"`
-		ReasoningEffort *string         `json:"reasoning_effort,omitempty"`
-		Temperature     interface{}     `json:"temperature,omitempty"`
-		TopP            interface{}     `json:"top_p,omitempty"`
-		VideoConfig     *VideoConfig    `json:"video_config,omitempty"`
-		ImageConfig     *ImageConfig    `json:"image_config,omitempty"`
-		Raw             json.RawMessage `json:"-"`
+		Model             string          `json:"model"`
+		Messages          []ChatMessage   `json:"messages"`
+		Stream            interface{}     `json:"stream"`
+		Thinking          *string         `json:"thinking,omitempty"`
+		ReasoningEffort   *string         `json:"reasoning_effort,omitempty"`
+		Temperature       interface{}     `json:"temperature,omitempty"`
+		TopP              interface{}     `json:"top_p,omitempty"`
+		VideoConfig       *VideoConfig    `json:"video_config,omitempty"`
+		ImageConfig       *ImageConfig    `json:"image_config,omitempty"`
+		Tools             []ToolDef       `json:"tools,omitempty"`
+		ToolChoice        interface{}     `json:"tool_choice,omitempty"`
+		ParallelToolCalls interface{}     `json:"parallel_tool_calls,omitempty"`
+		Raw               json.RawMessage `json:"-"`
 	}
 
 	var raw rawChatRequest
@@ -240,6 +260,10 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	parallelToolCalls, err := parseLooseBoolAnyForField(raw.ParallelToolCalls, "parallel_tool_calls")
+	if err != nil {
+		return err
+	}
 
 	r.Model = raw.Model
 	r.Messages = raw.Messages
@@ -251,6 +275,11 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	r.TopP = topP
 	r.VideoConfig = raw.VideoConfig
 	r.ImageConfig = raw.ImageConfig
+	r.Tools = raw.Tools
+	r.ToolChoice = raw.ToolChoice
+	if _, ok := rawMap["parallel_tool_calls"]; ok {
+		r.ParallelToolCalls = &parallelToolCalls
+	}
 	r.Raw = append(r.Raw[:0], data...)
 	return nil
 }
@@ -313,6 +342,49 @@ func (r *ChatCompletionsRequest) Validate() error {
 	}
 	if err := validateChatMessages(r.Messages); err != nil {
 		return err
+	}
+	if len(r.Tools) > 0 {
+		for i, tool := range r.Tools {
+			if !strings.EqualFold(strings.TrimSpace(tool.Type), "function") {
+				return fmt.Errorf("tools.%d.type must be function", i)
+			}
+			if strings.TrimSpace(fmt.Sprint(tool.Function["name"])) == "" {
+				return fmt.Errorf("tools.%d.function.name is required", i)
+			}
+		}
+	}
+	if r.ToolChoice != nil {
+		switch v := r.ToolChoice.(type) {
+		case string:
+			switch strings.ToLower(strings.TrimSpace(v)) {
+			case "auto", "required", "none":
+			default:
+				return fmt.Errorf("tool_choice must be auto, required, none, or a specific function object")
+			}
+		case map[string]interface{}:
+			if strings.TrimSpace(fmt.Sprint(v["type"])) != "function" {
+				return fmt.Errorf("tool_choice object must have type=function and function.name")
+			}
+			fn, _ := v["function"].(map[string]interface{})
+			name := strings.TrimSpace(fmt.Sprint(fn["name"]))
+			if name == "" {
+				return fmt.Errorf("tool_choice object must have type=function and function.name")
+			}
+			if len(r.Tools) > 0 {
+				found := false
+				for _, tool := range r.Tools {
+					if strings.EqualFold(strings.TrimSpace(fmt.Sprint(tool.Function["name"])), name) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("tool_choice.function.name must reference a defined tool")
+				}
+			}
+		default:
+			return fmt.Errorf("tool_choice must be auto, required, none, or a specific function object")
+		}
 	}
 	if r.Temperature == nil {
 		v := 0.8

@@ -18,10 +18,22 @@ func (h *Handler) buildImageEditPayload(spec ModelSpec, prompt string, imageURLs
 	if strings.TrimSpace(parentPostID) != "" {
 		imageEditCfg["parentPostId"] = strings.TrimSpace(parentPostID)
 	}
-	return map[string]interface{}{
-		"temporary":                 true,
+	temporary := true
+	disableMemory := false
+	customPersonality := ""
+	if h != nil && h.cfg != nil {
+		temporary = h.cfg.GrokChatTemporary()
+		disableMemory = h.cfg.GrokChatDisableMemory(false)
+		customPersonality = h.cfg.GrokChatCustomInstruction()
+	}
+	payload := map[string]interface{}{
+		"temporary":                 temporary,
 		"modelName":                 spec.UpstreamModel,
+		"modelMode":                 spec.ModelMode,
 		"message":                   strings.TrimSpace(prompt),
+		"fileAttachments":           []string{},
+		"imageAttachments":          []string{},
+		"disableSearch":             false,
 		"enableImageGeneration":     true,
 		"returnImageBytes":          false,
 		"returnRawGrokInXaiRequest": false,
@@ -40,10 +52,25 @@ func (h *Handler) buildImageEditPayload(spec ModelSpec, prompt string, imageURLs
 					"imageEditModelConfig": imageEditCfg,
 				},
 			},
+			"requestModelDetails": map[string]interface{}{
+				"modelId": spec.UpstreamModel,
+			},
 		},
-		"disableMemory":   false,
+		"disableMemory":   disableMemory,
 		"forceSideBySide": false,
+		"deviceEnvInfo": map[string]interface{}{
+			"darkModeEnabled":  false,
+			"devicePixelRatio": 2,
+			"screenWidth":      2056,
+			"screenHeight":     1329,
+			"viewportWidth":    2056,
+			"viewportHeight":   1083,
+		},
 	}
+	if customPersonality != "" {
+		payload["customPersonality"] = customPersonality
+	}
+	return payload
 }
 
 func (h *Handler) buildImageEditRequestPayload(
@@ -127,6 +154,7 @@ func (h *Handler) handleChatImageEdit(
 	spec ModelSpec,
 	prompt string,
 	imageURLs []string,
+	publicBase string,
 ) {
 	if len(imageURLs) == 0 {
 		http.Error(w, "image_url is required for image edits", http.StatusBadRequest)
@@ -176,7 +204,7 @@ func (h *Handler) handleChatImageEdit(
 		}
 		defer resp.Body.Close()
 		h.syncGrokQuota(sess.acc, resp.Header)
-		h.streamImageGeneration(w, resp.Body, sess.token, responseFormat, n)
+		h.streamImageGeneration(w, resp.Body, sess.token, prompt, responseFormat, n, publicBase)
 		return
 	}
 
@@ -194,7 +222,7 @@ func (h *Handler) handleChatImageEdit(
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)
 		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
-			if mr, ok := line["modelResponse"].(map[string]interface{}); ok {
+			if mr := extractUpstreamModelResponse(line); mr != nil {
 				urls = append(urls, extractImageURLs(mr)...)
 			}
 			return nil
@@ -224,13 +252,19 @@ func (h *Handler) handleChatImageEdit(
 				val = ""
 			}
 		}
-		data = append(data, map[string]interface{}{field: val})
+		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
+			val = publicBase + val
+		}
+		data = append(data, map[string]interface{}{
+			field:            val,
+			"revised_prompt": nil,
+		})
 	}
 
 	out := map[string]interface{}{
 		"created": time.Now().Unix(),
 		"data":    data,
-		"usage":   imageUsagePayload(),
+		"usage":   buildImageUsagePayload(prompt, len(data)),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
@@ -284,6 +318,7 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	responseFormat := normalizeImageResponseFormat(r.FormValue("response_format"))
+	publicBase := detectPublicBaseURL(r)
 
 	spec, ok := ResolveModel(model)
 	if !ok || !spec.IsImage || spec.ID != "grok-imagine-1.0-edit" {
@@ -374,7 +409,7 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		}
 		defer resp.Body.Close()
 		h.syncGrokQuota(sess.acc, resp.Header)
-		h.streamImageGeneration(w, resp.Body, sess.token, responseFormat, n)
+		h.streamImageGeneration(w, resp.Body, sess.token, prompt, responseFormat, n, publicBase)
 		return
 	}
 
@@ -392,7 +427,7 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)
 		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
-			if mr, ok := line["modelResponse"].(map[string]interface{}); ok {
+			if mr := extractUpstreamModelResponse(line); mr != nil {
 				urls = append(urls, extractImageURLs(mr)...)
 			}
 			return nil
@@ -420,13 +455,19 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 				val = u
 			}
 		}
-		data = append(data, map[string]interface{}{field: val})
+		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
+			val = publicBase + val
+		}
+		data = append(data, map[string]interface{}{
+			field:            val,
+			"revised_prompt": nil,
+		})
 	}
 
 	out := map[string]interface{}{
 		"created": time.Now().Unix(),
 		"data":    data,
-		"usage":   imageUsagePayload(),
+		"usage":   buildImageUsagePayload(prompt, len(data)),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)

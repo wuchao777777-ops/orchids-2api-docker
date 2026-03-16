@@ -376,6 +376,14 @@ func TestStripToolAndRenderMarkup_ExtractsToolCardText(t *testing.T) {
 	}
 }
 
+func TestExtractToolUsageCardText_PrefixesRolloutID(t *testing.T) {
+	raw := `<rolloutId>abc123</rolloutId><xai:tool_usage_card><xai:tool_name>web_search</xai:tool_name><xai:tool_args>{"query":"hello"}</xai:tool_args></xai:tool_usage_card>`
+	got := extractToolUsageCardText(raw)
+	if got != "[abc123][WebSearch] hello" {
+		t.Fatalf("extractToolUsageCardText()=%q want=%q", got, "[abc123][WebSearch] hello")
+	}
+}
+
 func BenchmarkExtractToolUsageCardText(b *testing.B) {
 	raw := `<xai:tool_usage_card><xai:tool_name>web_search</xai:tool_name><xai:tool_args>{"query":"特朗普头像","q":"特朗普头像"}</xai:tool_args></xai:tool_usage_card>`
 	b.ReportAllocs()

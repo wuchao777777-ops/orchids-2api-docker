@@ -11,9 +11,86 @@ import (
 )
 
 type imagesGenerationsResp struct {
-	Data []struct {
-		URL string `json:"url"`
-	} `json:"data"`
+	Data []map[string]interface{} `json:"data"`
+}
+
+func nestedStringValue(v interface{}, keys ...string) string {
+	m, ok := v.(map[string]interface{})
+	if !ok || len(keys) == 0 {
+		return ""
+	}
+	cur := m
+	for i, key := range keys {
+		raw, ok := cur[key]
+		if !ok {
+			return ""
+		}
+		if i == len(keys)-1 {
+			return strings.TrimSpace(fmt.Sprint(raw))
+		}
+		next, ok := raw.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		cur = next
+	}
+	return ""
+}
+
+func pickLocalImageValue(item map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		raw, ok := item[key]
+		if !ok {
+			continue
+		}
+		if s, ok := raw.(string); ok {
+			if v := strings.TrimSpace(s); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+func extractLocalImageGenerationValues(resp imagesGenerationsResp, responseFormat string) []string {
+	field := imageResponseField(responseFormat)
+	values := make([]string, 0, len(resp.Data))
+	for _, item := range resp.Data {
+		var v string
+		if field == "b64_json" {
+			v = pickLocalImageValue(item, "b64_json", "base64", "base64_data", "b64")
+			if v == "" {
+				v = nestedStringValue(item["image"], "b64_json")
+			}
+			if v == "" {
+				v = nestedStringValue(item["image"], "base64")
+			}
+			if v == "" {
+				v = nestedStringValue(item["image"], "base64_data")
+			}
+		} else {
+			v = pickLocalImageValue(item, "url", "image_url", "imageUrl", "file_url", "fileUrl")
+			if v == "" {
+				v = nestedStringValue(item["image_url"], "url")
+			}
+			if v == "" {
+				v = nestedStringValue(item["imageUrl"], "url")
+			}
+			if v == "" {
+				v = nestedStringValue(item["image"], "url")
+			}
+			if v == "" {
+				v = nestedStringValue(item["image"], "file_url")
+			}
+			if v == "" {
+				v = nestedStringValue(item["image"], "fileUrl")
+			}
+		}
+		if v != "" {
+			values = append(values, v)
+		}
+	}
+	return values
 }
 
 func (h *Handler) callLocalImagesGenerationsWithOptions(
@@ -75,12 +152,5 @@ func (h *Handler) callLocalImagesGenerationsWithOptions(
 	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, fmt.Errorf("decode images response: %w", err)
 	}
-	urls := make([]string, 0, len(out.Data))
-	for _, d := range out.Data {
-		u := strings.TrimSpace(d.URL)
-		if u != "" {
-			urls = append(urls, u)
-		}
-	}
-	return urls, nil
+	return extractLocalImageGenerationValues(out, responseFormat), nil
 }

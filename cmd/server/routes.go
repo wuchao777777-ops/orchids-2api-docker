@@ -105,6 +105,9 @@ func registerRoutes(
 		{"/imagine/stop", grokHandler.HandleAdminImagineStop},
 		{"/imagine/sse", grokHandler.HandleAdminImagineSSE},
 		{"/imagine/ws", grokHandler.HandleAdminImagineWS},
+		{"/video/start", grokHandler.HandlePublicVideoStart},
+		{"/video/stop", grokHandler.HandlePublicVideoStop},
+		{"/video/sse", grokHandler.HandlePublicVideoSSE},
 	}
 	for _, rt := range adminRoutes {
 		registerWithPrefixes(mux, adminPrefixes, rt.path, sessionAuth(rt.handler))
@@ -146,29 +149,16 @@ func registerRoutes(
 	staticRootHandler := web.StaticHandler()
 	mux.Handle("/static/", http.StripPrefix("/static/", staticRootHandler))
 
-	serveStaticPath := func(w http.ResponseWriter, r *http.Request, path string) {
-		target := "/" + strings.TrimPrefix(strings.TrimSpace(path), "/")
-		if target == "/" || strings.Contains(target, "..") {
-			http.NotFound(w, r)
-			return
-		}
-		rr := r.Clone(r.Context())
-		rr.URL.Path = target
-		staticRootHandler.ServeHTTP(w, rr)
+	grokToolsURL := func() string {
+		return cfg.AdminPath + "/?tab=grok-tools"
 	}
 
-	servePublicPage := func(path string) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet {
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			if !cfg.PublicAPIEnabled() {
-				http.NotFound(w, r)
-				return
-			}
-			serveStaticPath(w, r, path)
+	redirectToGrokTools := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
 		}
+		http.Redirect(w, r, grokToolsURL(), http.StatusFound)
 	}
 
 	// --- Root + public pages ---
@@ -178,15 +168,15 @@ func registerRoutes(
 			return
 		}
 		if cfg.PublicAPIEnabled() {
-			http.Redirect(w, r, "/login", http.StatusFound)
+			http.Redirect(w, r, grokToolsURL(), http.StatusFound)
 			return
 		}
 		http.Redirect(w, r, cfg.AdminPath+"/login.html", http.StatusFound)
 	})
-	mux.HandleFunc("/login", servePublicPage("public/pages/login.html"))
-	mux.HandleFunc("/imagine", servePublicPage("public/pages/imagine.html"))
-	mux.HandleFunc("/voice", servePublicPage("public/pages/voice.html"))
-	mux.HandleFunc("/video", servePublicPage("public/pages/video.html"))
+	mux.HandleFunc("/login", redirectToGrokTools)
+	mux.HandleFunc("/imagine", redirectToGrokTools)
+	mux.HandleFunc("/voice", redirectToGrokTools)
+	mux.HandleFunc("/video", redirectToGrokTools)
 
 	// Public page aliases (dual prefix)
 	redirectPublicRoot := func(w http.ResponseWriter, r *http.Request) {
@@ -198,7 +188,7 @@ func registerRoutes(
 			http.NotFound(w, r)
 			return
 		}
-		http.Redirect(w, r, "/login", http.StatusFound)
+		http.Redirect(w, r, grokToolsURL(), http.StatusFound)
 	}
 	publicPagePrefixes := []string{"/v1/public", "/api/v1/public"}
 	for _, prefix := range publicPagePrefixes {
@@ -207,15 +197,14 @@ func registerRoutes(
 	}
 	publicPages := []struct {
 		path string
-		file string
 	}{
-		{"/login", "public/pages/login.html"},
-		{"/imagine", "public/pages/imagine.html"},
-		{"/voice", "public/pages/voice.html"},
-		{"/video", "public/pages/video.html"},
+		{"/login"},
+		{"/imagine"},
+		{"/voice"},
+		{"/video"},
 	}
 	for _, page := range publicPages {
-		registerWithPrefixes(mux, publicPagePrefixes, page.path, servePublicPage(page.file))
+		registerWithPrefixes(mux, publicPagePrefixes, page.path, redirectToGrokTools)
 	}
 
 	// --- Admin Web UI ---

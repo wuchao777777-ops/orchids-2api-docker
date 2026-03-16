@@ -67,6 +67,9 @@ type Config struct {
 	GrokBaseProxyURL          string   `json:"-"`
 	GrokAssetProxyURL         string   `json:"-"`
 	GrokUseUTLS               bool     `json:"-"`
+	GrokTemporary             *bool    `json:"grok_temporary,omitempty"`
+	GrokDisableMemory         *bool    `json:"grok_disable_memory,omitempty"`
+	GrokCustomInstruction     string   `json:"grok_custom_instruction,omitempty"`
 	WarpDisableTools          *bool    `json:"-"`
 	WarpMaxToolResults        int      `json:"-"`
 	WarpMaxHistoryMessages    int      `json:"-"`
@@ -242,6 +245,27 @@ func (c *Config) ChatDefaultStream() bool {
 		return true
 	}
 	return *c.Stream
+}
+
+func (c *Config) GrokChatTemporary() bool {
+	if c == nil || c.GrokTemporary == nil {
+		return true
+	}
+	return *c.GrokTemporary
+}
+
+func (c *Config) GrokChatDisableMemory(defaultValue bool) bool {
+	if c == nil || c.GrokDisableMemory == nil {
+		return defaultValue
+	}
+	return *c.GrokDisableMemory
+}
+
+func (c *Config) GrokChatCustomInstruction() string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.GrokCustomInstruction)
 }
 
 func (c *Config) PublicImagineNSFW() bool {

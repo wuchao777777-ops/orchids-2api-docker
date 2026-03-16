@@ -14,8 +14,6 @@ import (
 	"strings"
 )
 
-
-
 func normalizeImageResponseFormat(format string) string {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "b64_json", "base64":
@@ -32,18 +30,6 @@ func imageResponseField(format string) string {
 		return "b64_json"
 	}
 	return "url"
-}
-
-func imageUsagePayload() map[string]interface{} {
-	return map[string]interface{}{
-		"total_tokens":  0,
-		"input_tokens":  0,
-		"output_tokens": 0,
-		"input_tokens_details": map[string]interface{}{
-			"text_tokens":  0,
-			"image_tokens": 0,
-		},
-	}
 }
 
 func mediaExtFromMime(mediaType, mimeType, rawURL string) string {
