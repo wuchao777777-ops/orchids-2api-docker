@@ -252,20 +252,66 @@ function applyTokenLabels(type) {
   const label = document.getElementById("tokenLabel");
   const input = document.getElementById("clientCookie");
   const hint = document.getElementById("tokenHint");
+  const batchRow = document.getElementById("grokBatchToggleRow");
+  const batchToggle = document.getElementById("grokBatchToggle");
+  const batchBlock = document.getElementById("grokBatchBlock");
+  const accountId = String(document.getElementById("accountId")?.value || "");
   if (!label || !input || !hint) return;
   if (type === 'warp') {
     label.textContent = "Refresh Token";
     input.placeholder = "粘贴 refresh_token";
     hint.textContent = "Warp 只需要 refresh_token";
+    if (batchRow) batchRow.style.display = "none";
+    if (batchBlock) batchBlock.style.display = "none";
+    if (batchToggle) batchToggle.checked = false;
+    input.required = true;
   } else if (type === 'grok') {
     label.textContent = "SSO Token";
     input.placeholder = "粘贴 sso token（或包含 sso= 的 Cookie）";
     hint.textContent = "Grok 使用 sso token（支持纯 token 或 Cookie 片段）";
+    if (batchRow) batchRow.style.display = accountId ? "none" : "block";
+    if (batchToggle && accountId) batchToggle.checked = false;
+    if (batchBlock) {
+      batchBlock.style.display = batchToggle && batchToggle.checked ? "block" : "none";
+    }
+    input.required = !(batchToggle && batchToggle.checked);
   } else {
     label.textContent = "Client Cookie / JWT";
     input.placeholder = "粘贴 Clerk Cookie 或 JWT";
     hint.textContent = "支持完整 Cookie（含 __session）或纯 JWT；运行时自动获取";
+    if (batchRow) batchRow.style.display = "none";
+    if (batchBlock) batchBlock.style.display = "none";
+    if (batchToggle) batchToggle.checked = false;
+    input.required = true;
   }
+}
+
+function getGrokBatchTokens() {
+  const textarea = document.getElementById("grokBatchTokens");
+  if (!textarea) return [];
+  return String(textarea.value || "")
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
+function syncGrokBatchUI() {
+  const type = String(document.getElementById("accountType")?.value || "");
+  const batchRow = document.getElementById("grokBatchToggleRow");
+  const batchToggle = document.getElementById("grokBatchToggle");
+  const batchBlock = document.getElementById("grokBatchBlock");
+  const accountId = String(document.getElementById("accountId")?.value || "");
+  const input = document.getElementById("clientCookie");
+  if (type !== "grok") {
+    if (batchRow) batchRow.style.display = "none";
+    if (batchBlock) batchBlock.style.display = "none";
+    if (batchToggle) batchToggle.checked = false;
+    if (input) input.required = true;
+    return;
+  }
+  if (batchRow) batchRow.style.display = accountId ? "none" : "block";
+  if (batchBlock) batchBlock.style.display = (batchToggle && batchToggle.checked && !accountId) ? "block" : "none";
+  if (input) input.required = !(batchToggle && batchToggle.checked);
 }
 
 // Render platform filter tabs
@@ -898,6 +944,7 @@ function openModal(account = null) {
 
   const finalizeModal = () => {
     applyTokenLabels(typeEl ? typeEl.value : "orchids");
+    syncGrokBatchUI();
     if (modeEl) modeEl.disabled = false;
     modal.classList.add("active");
     modal.style.display = "flex";
@@ -911,6 +958,10 @@ function openModal(account = null) {
       document.getElementById("clientCookie").value = getAccountToken(account);
       document.getElementById("weight").value = account.weight || 1;
       document.getElementById("enabled").checked = account.enabled;
+      const batchToggle = document.getElementById("grokBatchToggle");
+      const batchTokens = document.getElementById("grokBatchTokens");
+      if (batchToggle) batchToggle.checked = false;
+      if (batchTokens) batchTokens.value = "";
       renderAgentModeOptions(document.getElementById("accountType").value, account.agent_mode || "");
     } else {
       title.textContent = "添加账号";
@@ -919,6 +970,10 @@ function openModal(account = null) {
       document.getElementById("weight").value = "1";
       document.getElementById("accountType").value = "orchids";
       document.getElementById("enabled").checked = true;
+      const batchToggle = document.getElementById("grokBatchToggle");
+      const batchTokens = document.getElementById("grokBatchTokens");
+      if (batchToggle) batchToggle.checked = false;
+      if (batchTokens) batchTokens.value = "";
       renderAgentModeOptions("orchids", "");
     }
   };
@@ -943,19 +998,49 @@ async function saveAccount(e) {
   const id = document.getElementById("accountId").value;
   const type = document.getElementById("accountType").value;
   const token = document.getElementById("clientCookie").value;
+  const batchToggle = document.getElementById("grokBatchToggle");
+  const useBatch = !id && type === "grok" && batchToggle && batchToggle.checked;
+  const batchTokens = useBatch ? getGrokBatchTokens() : [];
   const data = {
     account_type: type,
     agent_mode: document.getElementById("agentMode").value,
     weight: parseInt(document.getElementById("weight").value) || 1,
     enabled: document.getElementById("enabled").checked,
   };
-  if (type === 'warp') {
-    data.refresh_token = token;
-  } else {
-    data.client_cookie = token;
+  if (!useBatch) {
+    if (type === 'warp') {
+      data.refresh_token = token;
+    } else {
+      data.client_cookie = token;
+    }
   }
 
   try {
+    if (useBatch) {
+      if (batchTokens.length === 0) {
+        showToast("请填写批量 SSO Token", "error");
+        return;
+      }
+      let success = 0;
+      let failed = 0;
+      for (const item of batchTokens) {
+        const payload = { ...data, client_cookie: item };
+        const res = await fetch("/api/accounts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          success += 1;
+        } else {
+          failed += 1;
+        }
+      }
+      closeModal();
+      loadAccounts();
+      showToast(`批量添加完成：成功 ${success}，失败 ${failed}`);
+      return;
+    }
     const url = id ? `/api/accounts/${id}` : "/api/accounts";
     const method = id ? "PUT" : "POST";
     const res = await fetch(url, {
@@ -1101,8 +1186,16 @@ document.addEventListener('DOMContentLoaded', () => {
     typeSelect.addEventListener("change", () => {
       applyTokenLabels(typeSelect.value);
       renderAgentModeOptions(typeSelect.value, "");
+      syncGrokBatchUI();
     });
     applyTokenLabels(typeSelect.value);
     renderAgentModeOptions(typeSelect.value, "");
+    syncGrokBatchUI();
+  }
+  const batchToggle = document.getElementById("grokBatchToggle");
+  if (batchToggle) {
+    batchToggle.addEventListener("change", () => {
+      syncGrokBatchUI();
+    });
   }
 });

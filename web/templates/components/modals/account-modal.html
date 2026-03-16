@@ -20,6 +20,20 @@
         <input type="text" class="form-input" id="clientCookie" required placeholder="粘贴 Token / Cookie / JWT" />
         <small id="tokenHint" style="color: var(--text-muted); font-size: 12px">Warp 使用 refresh_token；Orchids 支持完整 Cookie（含 __session）或纯 JWT</small>
       </div>
+      <div class="form-group" id="grokBatchToggleRow" style="display:none;">
+        <label class="form-label">
+          <label class="toggle">
+            <input type="checkbox" id="grokBatchToggle" />
+            <span class="toggle-slider"></span>
+          </label>
+          &nbsp;&nbsp;批量添加 Grok 账号
+        </label>
+      </div>
+      <div class="form-group" id="grokBatchBlock" style="display:none;">
+        <label class="form-label">批量 SSO Token</label>
+        <textarea id="grokBatchTokens" class="form-input" rows="6" placeholder="每行一个 sso token 或包含 sso= 的 Cookie"></textarea>
+        <small style="color: var(--text-muted); font-size: 12px">仅在新增时生效，空行会被忽略</small>
+      </div>
       <div class="form-group">
         <label class="form-label">权重</label>
         <input type="number" class="form-input" id="weight" value="1" min="1" />

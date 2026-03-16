@@ -11,6 +11,14 @@
     latencyCount: 0,
     fallbackTimer: null,
   };
+  let imagineDirectoryHandle = null;
+  let imagineUseFileSystemAPI = false;
+  let imagineSelectionMode = false;
+  let imagineLightboxIndex = -1;
+  let imagineFinalMinBytes = 100000;
+  let imagineStreamSequence = 0;
+  const imagineSelectedImages = new Set();
+  const imagineStreamImageMap = new Map();
 
   const cacheOnlineState = {
     selectedTokens: new Set(),
@@ -40,10 +48,16 @@
     startAt: 0,
     elapsedTimer: null,
     contentBuffer: "",
+    progressBuffer: "",
+    collectingContent: false,
+    lastProgress: 0,
+    currentPreviewItem: null,
+    previewCount: 0,
   };
 
   const voiceState = {
     running: false,
+    stopping: false,
     room: null,
     localTracks: [],
     visualizerTimer: null,
@@ -73,7 +87,40 @@
     ],
   };
   const chatStorageKey = "grok_tools_chat_sessions_v1";
+  const MAX_CHAT_MESSAGES = 5;
+  const chatSidebarStateKey = "grok_tools_chat_sidebar_collapsed";
   const grokToolsUIStorageKey = "grok_tools_ui_v1";
+  const i18nMap = {
+    "common.notConnected": "未连接",
+    "common.connecting": "连接中...",
+    "common.generating": "生成中",
+    "common.done": "已完成",
+    "common.connectionError": "连接中断",
+    "common.createTaskFailed": "创建任务失败",
+    "common.enterPrompt": "请输入 Prompt",
+    "video.alreadyRunning": "Video 任务已在运行中",
+    "video.enterPrompt": "请输入 Video Prompt",
+    "video.superResolution": "超分辨率处理中...",
+    "video.downloadFailed": "视频下载失败",
+    "video.taskEmpty": "创建任务失败：空 task_id",
+    "video.startFailed": "启动失败",
+    "video.generatingPlaceholder": "视频生成中...",
+    "voice.alreadyRunning": "Voice 会话已在运行中",
+    "voice.tokenUnavailable": "voice token unavailable",
+    "voice.connected": "已连接",
+    "voice.stopped": "未连接",
+    "voice.connectFailed": "连接失败",
+  };
+
+  function t(key, vars) {
+    let text = i18nMap[key] || key;
+    if (vars && typeof vars === "object") {
+      Object.keys(vars).forEach((name) => {
+        text = text.replace(new RegExp(`\\{${name}\\}`, "g"), String(vars[name]));
+      });
+    }
+    return text;
+  }
 
   function handleUnauthorized(res) {
     if (res && res.status === 401) {
@@ -168,16 +215,96 @@
     `;
   }
 
+  function setChatSidebarCollapsed(collapsed) {
+    const layout = document.querySelector("#grokChatSection .chat-layout");
+    if (!layout) return;
+    layout.classList.toggle("collapsed", collapsed);
+    try {
+      localStorage.setItem(chatSidebarStateKey, collapsed ? "1" : "0");
+    } catch (err) {
+      // ignore storage failures
+    }
+  }
+
   function closeChatSidebar() {
-    chatState.sidebarOpen = false;
-    document.getElementById("grokChatSidebar")?.classList.remove("show");
-    document.getElementById("grokChatSidebarOverlay")?.classList.remove("show");
+    if (isMobileChatSidebar()) {
+      chatState.sidebarOpen = false;
+      const sidebar = document.getElementById("grokChatSidebar");
+      const overlay = document.getElementById("grokChatSidebarOverlay");
+      sidebar?.classList.remove("open");
+      sidebar?.classList.remove("show");
+      overlay?.classList.remove("open");
+      overlay?.classList.remove("show");
+      return;
+    }
+    setChatSidebarCollapsed(true);
+    const expandBtn = document.getElementById("grokChatExpandBtn");
+    if (expandBtn) expandBtn.style.display = "inline-flex";
   }
 
   function openChatSidebar() {
-    chatState.sidebarOpen = true;
-    document.getElementById("grokChatSidebar")?.classList.add("show");
-    document.getElementById("grokChatSidebarOverlay")?.classList.add("show");
+    if (isMobileChatSidebar()) {
+      chatState.sidebarOpen = true;
+      const sidebar = document.getElementById("grokChatSidebar");
+      const overlay = document.getElementById("grokChatSidebarOverlay");
+      sidebar?.classList.add("open");
+      sidebar?.classList.add("show");
+      overlay?.classList.add("open");
+      overlay?.classList.add("show");
+      return;
+    }
+    setChatSidebarCollapsed(false);
+    const expandBtn = document.getElementById("grokChatExpandBtn");
+    if (expandBtn) expandBtn.style.display = "none";
+  }
+
+  function toggleChatSidebar() {
+    if (isMobileChatSidebar()) {
+      const sidebar = document.getElementById("grokChatSidebar");
+      if (sidebar?.classList.contains("open") || sidebar?.classList.contains("show")) {
+        closeChatSidebar();
+      } else {
+        openChatSidebar();
+      }
+      return;
+    }
+    const layout = document.querySelector("#grokChatSection .chat-layout");
+    if (!layout) return;
+    if (layout.classList.contains("collapsed")) {
+      openChatSidebar();
+    } else {
+      closeChatSidebar();
+    }
+  }
+
+  function isMobileChatSidebar() {
+    return window.matchMedia("(max-width: 1024px)").matches;
+  }
+
+  function syncChatSidebarState() {
+    if (isMobileChatSidebar()) {
+      if (chatState.sidebarOpen) {
+        openChatSidebar();
+      } else {
+        closeChatSidebar();
+      }
+      return;
+    }
+    const sidebar = document.getElementById("grokChatSidebar");
+    const overlay = document.getElementById("grokChatSidebarOverlay");
+    sidebar?.classList.remove("open");
+    sidebar?.classList.remove("show");
+    overlay?.classList.remove("open");
+    overlay?.classList.remove("show");
+    let collapsed = false;
+    try {
+      collapsed = localStorage.getItem(chatSidebarStateKey) === "1";
+    } catch (err) {
+      collapsed = false;
+    }
+    setChatSidebarCollapsed(collapsed);
+    const expandBtn = document.getElementById("grokChatExpandBtn");
+    if (expandBtn) expandBtn.style.display = collapsed ? "inline-flex" : "none";
   }
 
   function resolveOnlineStatusText(status) {
@@ -365,7 +492,19 @@
     if (el) el.textContent = String(text || "");
   }
 
-  function syncImagineModeUI(mode) {
+  function bindPersistedCheckbox(id, storageKey) {
+    const input = document.getElementById(id);
+    if (!input) return;
+    const uiState = loadGrokToolsUIState();
+    if (typeof uiState[storageKey] === "boolean") {
+      input.checked = uiState[storageKey];
+    }
+    input.addEventListener("change", () => {
+      saveGrokToolsUIState({ [storageKey]: !!input.checked });
+    });
+  }
+
+  function syncImagineModeUI(mode, persist = true) {
     const normalized = String(mode || "auto").toLowerCase();
     const select = document.getElementById("imagineMode");
     if (select) select.value = normalized;
@@ -373,13 +512,22 @@
       const active = String(btn.dataset.imagineMode || "").toLowerCase() === normalized;
       btn.classList.toggle("active", active);
     });
+    if (persist) {
+      saveGrokToolsUIState({ imagineMode: normalized });
+    }
   }
 
   function setImagineButtons(running) {
     const startBtn = document.getElementById("imagineStartBtn");
     const stopBtn = document.getElementById("imagineStopBtn");
-    if (startBtn) startBtn.disabled = !!running;
-    if (stopBtn) stopBtn.disabled = !running;
+    if (startBtn) {
+      startBtn.disabled = false;
+      startBtn.classList.toggle("hidden", !!running);
+    }
+    if (stopBtn) {
+      stopBtn.disabled = false;
+      stopBtn.classList.toggle("hidden", !running);
+    }
   }
 
   function imagineOptionEnabled(id, fallback) {
@@ -410,72 +558,355 @@
     if (latency) latency.textContent = "-";
   }
 
-  function appendImagineImage(b64, seq, elapsedMS, fileURL) {
-    const grid = document.getElementById("imagineGrid");
+  function isLikelyBase64(raw) {
+    if (!raw) return false;
+    if (raw.startsWith("data:")) return true;
+    if (raw.startsWith("http://") || raw.startsWith("https://")) return false;
+    const head = raw.slice(0, 16);
+    if (head.startsWith("/9j/") || head.startsWith("iVBOR") || head.startsWith("R0lGOD")) return true;
+    return /^[A-Za-z0-9+/=\s]+$/.test(raw);
+  }
+
+  function inferMime(base64) {
+    if (!base64) return "image/jpeg";
+    if (base64.startsWith("data:")) {
+      const match = base64.match(/data:(.*?);base64/);
+      return match ? match[1] : "image/jpeg";
+    }
+    return detectImageMime(base64);
+  }
+
+  function estimateBase64Bytes(raw) {
+    if (!raw) return null;
+    if (raw.startsWith("http://") || raw.startsWith("https://")) {
+      return null;
+    }
+    if (raw.startsWith("/") && !isLikelyBase64(raw)) {
+      return null;
+    }
+    let base64 = raw;
+    if (raw.startsWith("data:")) {
+      const comma = raw.indexOf(",");
+      base64 = comma >= 0 ? raw.slice(comma + 1) : "";
+    }
+    base64 = base64.replace(/\s/g, "");
+    if (!base64) return 0;
+    let padding = 0;
+    if (base64.endsWith("==")) padding = 2;
+    else if (base64.endsWith("=")) padding = 1;
+    return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+  }
+
+  function getFinalMinBytes() {
+    return Number.isFinite(imagineFinalMinBytes) && imagineFinalMinBytes >= 0 ? imagineFinalMinBytes : 100000;
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    const parts = String(dataUrl || "").split(",");
+    if (parts.length < 2) return null;
+    const header = parts[0];
+    const b64 = parts.slice(1).join(",");
+    const match = header.match(/data:(.*?);base64/);
+    const mime = match ? match[1] : "application/octet-stream";
+    try {
+      const byteString = atob(b64);
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+      }
+      return new Blob([ab], { type: mime });
+    } catch (err) {
+      return null;
+    }
+  }
+
+  async function saveToFileSystem(base64, filename) {
+    try {
+      if (!imagineDirectoryHandle) {
+        return false;
+      }
+      const mime = inferMime(base64);
+      const ext = mime === "image/png" ? "png" : "jpg";
+      const finalFilename = filename.endsWith(`.${ext}`) ? filename : `${filename}.${ext}`;
+      const fileHandle = await imagineDirectoryHandle.getFileHandle(finalFilename, { create: true });
+      const writable = await fileHandle.createWritable();
+      const byteString = atob(base64);
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+      }
+      const blob = new Blob([ab], { type: mime });
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function downloadImage(raw, filename) {
+    if (!raw) return;
+    let href = raw;
+    if (!href.startsWith("data:") && !/^https?:/i.test(href) && !href.startsWith("/")) {
+      const mime = inferMime(raw);
+      href = `data:${mime};base64,${raw}`;
+    }
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = filename;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  function setImagineImageStatus(item, state, label) {
+    if (!item) return;
+    const statusEl = item.querySelector(".image-status");
+    if (!statusEl) return;
+    statusEl.textContent = label;
+    statusEl.classList.remove("running", "done", "error");
+    if (state) {
+      statusEl.classList.add(state);
+    }
+  }
+
+  function appendImagineImage(b64, meta, fileURL) {
+    const waterfall = document.getElementById("imagineGrid");
     const empty = document.getElementById("imagineEmpty");
-    if (!grid) return;
+    if (!waterfall) return;
     if (empty) empty.style.display = "none";
 
-    const card = document.createElement("div");
-    card.className = "imagine-card";
-
-    const img = document.createElement("img");
-    let src = "";
-    if (fileURL) {
-      src = fileURL;
-    } else if (b64) {
-      const mime = detectImageMime(b64);
-      src = `data:${mime};base64,${b64}`;
-    }
-    if (!src) return;
-    img.src = src;
-    img.alt = `imagine-${seq || 0}`;
-    img.loading = "lazy";
-    const openURL = fileURL || src;
-    img.addEventListener("click", () => window.open(openURL, "_blank", "noopener"));
-
-    if (imagineOptionEnabled("imagineAutoFilter", false) && b64) {
-      const raw = String(b64 || "").replace(/\s/g, "");
-      let padding = 0;
-      if (raw.endsWith("==")) padding = 2;
-      else if (raw.endsWith("=")) padding = 1;
-      const estimatedBytes = Math.max(0, Math.floor((raw.length * 3) / 4) - padding);
-      if (estimatedBytes > 0 && estimatedBytes < 100000) {
+    if (imagineOptionEnabled("imagineAutoFilter", false)) {
+      const bytes = estimateBase64Bytes(b64 || "");
+      const minBytes = getFinalMinBytes();
+      if (bytes !== null && bytes < minBytes) {
         return;
       }
     }
 
-    const meta = document.createElement("div");
-    meta.className = "imagine-meta";
-    const left = document.createElement("span");
-    left.textContent = `#${seq || 0}`;
-    const right = document.createElement("span");
-    right.textContent = formatTimeMS(elapsedMS);
-    meta.appendChild(left);
-    meta.appendChild(right);
+    const item = document.createElement("div");
+    item.className = "waterfall-item";
 
-    card.appendChild(img);
-    card.appendChild(meta);
-    if (imagineOptionEnabled("imagineReverseInsert", true)) {
-      grid.prepend(card);
+    const checkbox = document.createElement("div");
+    checkbox.className = "image-checkbox";
+
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.alt = meta && meta.sequence ? `image-${meta.sequence}` : "image";
+    const mime = inferMime(b64);
+    const dataUrl = fileURL || (b64.startsWith("data:") ? b64 : (b64 ? `data:${mime};base64,${b64}` : ""));
+    if (!dataUrl) return;
+    img.src = dataUrl;
+
+    const metaBar = document.createElement("div");
+    metaBar.className = "waterfall-meta";
+    const left = document.createElement("div");
+    left.textContent = meta && meta.sequence ? `#${meta.sequence}` : "#";
+    const rightWrap = document.createElement("div");
+    rightWrap.className = "meta-right";
+    const status = document.createElement("span");
+    status.className = "image-status done";
+    status.textContent = "完成";
+    const right = document.createElement("span");
+    if (meta && meta.elapsed_ms) {
+      right.textContent = `${meta.elapsed_ms}ms`;
     } else {
-      grid.appendChild(card);
+      right.textContent = "";
     }
-    if (imagineOptionEnabled("imagineAutoDownload", false)) {
-      const link = document.createElement("a");
-      link.href = openURL;
-      link.download = `grok-imagine-${seq || Date.now()}.${fileURL && /\.png(\?|$)/i.test(fileURL) ? "png" : fileURL && /\.webp(\?|$)/i.test(fileURL) ? "webp" : "jpg"}`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+    rightWrap.appendChild(status);
+    rightWrap.appendChild(right);
+    metaBar.appendChild(left);
+    metaBar.appendChild(rightWrap);
+
+    item.appendChild(checkbox);
+    item.appendChild(img);
+    item.appendChild(metaBar);
+
+    const prompt = meta && meta.prompt ? String(meta.prompt) : String(document.getElementById("imaginePrompt")?.value || "").trim();
+    item.dataset.imageUrl = dataUrl;
+    item.dataset.prompt = prompt || "image";
+    if (imagineSelectionMode) {
+      item.classList.add("selection-mode");
     }
+
+    if (imagineOptionEnabled("imagineReverseInsert", true)) {
+      waterfall.prepend(item);
+    } else {
+      waterfall.appendChild(item);
+    }
+
     if (imagineOptionEnabled("imagineAutoScroll", true)) {
-      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      if (imagineOptionEnabled("imagineReverseInsert", true)) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+      }
+    }
+
+    if (imagineOptionEnabled("imagineAutoDownload", false)) {
+      const timestamp = Date.now();
+      const seq = meta && meta.sequence ? meta.sequence : "unknown";
+      const ext = mime === "image/png" ? "png" : "jpg";
+      const filename = `imagine_${timestamp}_${seq}.${ext}`;
+      if (imagineUseFileSystemAPI && imagineDirectoryHandle && b64 && !b64.startsWith("data:")) {
+        saveToFileSystem(b64, filename).catch(() => {
+          downloadImage(dataUrl, filename);
+        });
+      } else {
+        downloadImage(dataUrl, filename);
+      }
+    }
+  }
+
+  function upsertStreamImage(raw, meta, imageId, isFinal) {
+    const waterfall = document.getElementById("imagineGrid");
+    const empty = document.getElementById("imagineEmpty");
+    if (!waterfall || !raw) return;
+    if (empty) empty.style.display = "none";
+
+    if (isFinal && imagineOptionEnabled("imagineAutoFilter", false)) {
+      const bytes = estimateBase64Bytes(raw);
+      const minBytes = getFinalMinBytes();
+      if (bytes !== null && bytes < minBytes) {
+        const existing = imageId ? imagineStreamImageMap.get(imageId) : null;
+        if (existing) {
+          if (imagineSelectedImages.has(existing)) {
+            imagineSelectedImages.delete(existing);
+            updateImagineSelectedCount();
+          }
+          existing.remove();
+          imagineStreamImageMap.delete(imageId);
+          if (imagineState.imageCount > 0) {
+            imagineState.imageCount -= 1;
+            const count = document.getElementById("imagineCount");
+            if (count) count.textContent = String(imagineState.imageCount);
+          }
+        }
+        return;
+      }
+    }
+
+    const isDataUrl = typeof raw === "string" && raw.startsWith("data:");
+    const looksLikeBase64 = typeof raw === "string" && isLikelyBase64(raw);
+    const isHttpUrl = typeof raw === "string" && (raw.startsWith("http://") || raw.startsWith("https://") || (raw.startsWith("/") && !looksLikeBase64));
+    const mime = isDataUrl || isHttpUrl ? "" : inferMime(raw);
+    const dataUrl = isDataUrl || isHttpUrl ? raw : `data:${mime};base64,${raw}`;
+
+    let item = imageId ? imagineStreamImageMap.get(imageId) : null;
+    let isNew = false;
+    if (!item) {
+      isNew = true;
+      imagineStreamSequence += 1;
+      const sequence = imagineStreamSequence;
+
+      item = document.createElement("div");
+      item.className = "waterfall-item";
+
+      const checkbox = document.createElement("div");
+      checkbox.className = "image-checkbox";
+
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.alt = imageId ? `image-${imageId}` : "image";
+      img.src = dataUrl;
+
+      const metaBar = document.createElement("div");
+      metaBar.className = "waterfall-meta";
+      const left = document.createElement("div");
+      left.textContent = `#${sequence}`;
+      const rightWrap = document.createElement("div");
+      rightWrap.className = "meta-right";
+      const status = document.createElement("span");
+      status.className = `image-status ${isFinal ? "done" : "running"}`;
+      status.textContent = isFinal ? "完成" : "生成中";
+      const right = document.createElement("span");
+      right.textContent = "";
+      if (meta && meta.elapsed_ms) {
+        right.textContent = `${meta.elapsed_ms}ms`;
+      }
+      rightWrap.appendChild(status);
+      rightWrap.appendChild(right);
+      metaBar.appendChild(left);
+      metaBar.appendChild(rightWrap);
+
+      item.appendChild(checkbox);
+      item.appendChild(img);
+      item.appendChild(metaBar);
+
+      const prompt = meta && meta.prompt ? String(meta.prompt) : String(document.getElementById("imaginePrompt")?.value || "").trim();
+      item.dataset.imageUrl = dataUrl;
+      item.dataset.prompt = prompt || "image";
+
+      if (imagineSelectionMode) {
+        item.classList.add("selection-mode");
+      }
+
+      if (imagineOptionEnabled("imagineReverseInsert", true)) {
+        waterfall.prepend(item);
+      } else {
+        waterfall.appendChild(item);
+      }
+
+      if (imageId) {
+        imagineStreamImageMap.set(imageId, item);
+      }
+
+      imagineState.imageCount += 1;
+      const count = document.getElementById("imagineCount");
+      if (count) count.textContent = String(imagineState.imageCount);
+    } else {
+      const img = item.querySelector("img");
+      if (img) {
+        img.src = dataUrl;
+      }
+      item.dataset.imageUrl = dataUrl;
+      const right = item.querySelector(".waterfall-meta .meta-right span:last-child");
+      if (right && meta && meta.elapsed_ms) {
+        right.textContent = `${meta.elapsed_ms}ms`;
+      }
+    }
+
+    setImagineImageStatus(item, isFinal ? "done" : "running", isFinal ? "完成" : "生成中");
+
+    if (isNew && imagineOptionEnabled("imagineAutoScroll", true)) {
+      if (imagineOptionEnabled("imagineReverseInsert", true)) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+      }
+    }
+
+    if (isFinal && imagineOptionEnabled("imagineAutoDownload", false)) {
+      const timestamp = Date.now();
+      const ext = mime === "image/png" ? "png" : "jpg";
+      const filename = `imagine_${timestamp}_${imageId || imagineStreamSequence}.${ext}`;
+      if (imagineUseFileSystemAPI && imagineDirectoryHandle && !isHttpUrl && !isDataUrl) {
+        saveToFileSystem(raw, filename).catch(() => {
+          downloadImage(raw, filename);
+        });
+      } else {
+        downloadImage(dataUrl, filename);
+      }
     }
   }
 
   function handleImagineMessage(payload) {
     if (!payload || typeof payload !== "object") return;
+
+    if (payload.type === "image_generation.partial_image" || payload.type === "image_generation.completed") {
+      const imageId = payload.image_id || payload.imageId;
+      const raw = payload.b64_json || payload.url || payload.image;
+      if (!raw || !imageId) return;
+      const isFinal = payload.type === "image_generation.completed" || payload.stage === "final";
+      upsertStreamImage(raw, payload, imageId, isFinal);
+      return;
+    }
+
     if (payload.type === "image") {
       const b64 = String(payload.b64_json || "");
       const fileURL = String(payload.file_url || payload.url || "");
@@ -492,7 +923,7 @@
         const latency = document.getElementById("imagineLatency");
         if (latency) latency.textContent = `${avg} ms`;
       }
-      appendImagineImage(b64, payload.sequence, payload.elapsed_ms, fileURL);
+      appendImagineImage(b64, payload, fileURL);
       return;
     }
 
@@ -507,10 +938,210 @@
       return;
     }
 
-    if (payload.type === "error") {
-      const msg = String(payload.message || "Imagine 运行出错");
-      showToast(msg, "error");
+    if (payload.type === "error" || payload.error) {
+      const message = payload.message || (payload.error && payload.error.message) || "Imagine 运行出错";
+      const errorImageId = payload.image_id || payload.imageId;
+      if (errorImageId && imagineStreamImageMap.has(errorImageId)) {
+        setImagineImageStatus(imagineStreamImageMap.get(errorImageId), "error", "失败");
+      }
+      showToast(String(message || "Imagine 运行出错"), "error");
       setImagineStatus("错误");
+    }
+  }
+
+  function updateImagineSelectedCount() {
+    const countSpan = document.getElementById("selectedCount");
+    if (countSpan) {
+      countSpan.textContent = String(imagineSelectedImages.size);
+    }
+    const downloadBtn = document.getElementById("downloadSelectedBtn");
+    if (downloadBtn) {
+      downloadBtn.disabled = imagineSelectedImages.size === 0;
+    }
+    const toggleBtn = document.getElementById("toggleSelectAllBtn");
+    if (toggleBtn) {
+      const items = document.querySelectorAll("#imagineGrid .waterfall-item");
+      const allSelected = items.length > 0 && imagineSelectedImages.size === items.length;
+      toggleBtn.textContent = allSelected ? "取消全选" : "全选";
+    }
+  }
+
+  function enterImagineSelectionMode() {
+    imagineSelectionMode = true;
+    imagineSelectedImages.clear();
+    const toolbar = document.getElementById("selectionToolbar");
+    if (toolbar) toolbar.classList.remove("hidden");
+    const items = document.querySelectorAll("#imagineGrid .waterfall-item");
+    items.forEach((item) => {
+      item.classList.add("selection-mode");
+    });
+    updateImagineSelectedCount();
+  }
+
+  function exitImagineSelectionMode() {
+    imagineSelectionMode = false;
+    imagineSelectedImages.clear();
+    const toolbar = document.getElementById("selectionToolbar");
+    if (toolbar) toolbar.classList.add("hidden");
+    const items = document.querySelectorAll("#imagineGrid .waterfall-item");
+    items.forEach((item) => {
+      item.classList.remove("selection-mode", "selected");
+    });
+    updateImagineSelectedCount();
+  }
+
+  function toggleImagineSelectionMode() {
+    if (imagineSelectionMode) {
+      exitImagineSelectionMode();
+    } else {
+      enterImagineSelectionMode();
+    }
+  }
+
+  function toggleImagineItemSelection(item) {
+    if (!imagineSelectionMode) return;
+    if (item.classList.contains("selected")) {
+      item.classList.remove("selected");
+      imagineSelectedImages.delete(item);
+    } else {
+      item.classList.add("selected");
+      imagineSelectedImages.add(item);
+    }
+    updateImagineSelectedCount();
+  }
+
+  function toggleImagineSelectAll() {
+    const items = document.querySelectorAll("#imagineGrid .waterfall-item");
+    const allSelected = items.length > 0 && imagineSelectedImages.size === items.length;
+    if (allSelected) {
+      items.forEach((item) => item.classList.remove("selected"));
+      imagineSelectedImages.clear();
+    } else {
+      items.forEach((item) => {
+        item.classList.add("selected");
+        imagineSelectedImages.add(item);
+      });
+    }
+    updateImagineSelectedCount();
+  }
+
+  async function downloadSelectedImages() {
+    if (imagineSelectedImages.size === 0) {
+      showToast("未选择图片", "info");
+      return;
+    }
+    if (typeof JSZip === "undefined") {
+      showToast("JSZip 未加载", "error");
+      return;
+    }
+    const downloadBtn = document.getElementById("downloadSelectedBtn");
+    if (downloadBtn) {
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = "打包中...";
+    }
+    const zip = new JSZip();
+    const imgFolder = zip.folder("images");
+    let processed = 0;
+
+    try {
+      for (const item of imagineSelectedImages) {
+        const url = item.dataset.imageUrl || "";
+        const prompt = item.dataset.prompt || "image";
+        try {
+          let blob = null;
+          if (url.startsWith("data:")) {
+            blob = dataUrlToBlob(url);
+          } else if (url) {
+            const response = await fetch(url);
+            blob = await response.blob();
+          }
+          if (!blob) {
+            throw new Error("empty blob");
+          }
+          const safeName = String(prompt).substring(0, 30).replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, "_") || "image";
+          const filename = `${safeName}_${processed + 1}.png`;
+          imgFolder.file(filename, blob);
+          processed += 1;
+          if (downloadBtn) {
+            downloadBtn.textContent = `打包中 ${processed}/${imagineSelectedImages.size}`;
+          }
+        } catch (err) {
+          // ignore individual failures
+        }
+      }
+
+      if (processed === 0) {
+        showToast("没有可下载的图片", "error");
+        return;
+      }
+
+      if (downloadBtn) downloadBtn.textContent = "生成压缩包...";
+      const content = await zip.generateAsync({ type: "blob" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(content);
+      link.download = `imagine_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+
+      showToast(`已打包 ${processed} 张图片`, "success");
+      exitImagineSelectionMode();
+    } catch (err) {
+      showToast("打包失败", "error");
+    } finally {
+      if (downloadBtn) {
+        downloadBtn.disabled = false;
+        downloadBtn.innerHTML = `下载 <span id="selectedCount" class="selected-count">${imagineSelectedImages.size}</span>`;
+      }
+    }
+  }
+
+  function getImagineAllImages() {
+    return Array.from(document.querySelectorAll("#imagineGrid .waterfall-item img"));
+  }
+
+  function updateImagineLightbox(index) {
+    const images = getImagineAllImages();
+    if (index < 0 || index >= images.length) return;
+    imagineLightboxIndex = index;
+    const lightboxImg = document.getElementById("lightboxImg");
+    if (lightboxImg) {
+      lightboxImg.src = images[index].src;
+    }
+    const prevBtn = document.getElementById("lightboxPrev");
+    const nextBtn = document.getElementById("lightboxNext");
+    if (prevBtn) prevBtn.disabled = index === 0;
+    if (nextBtn) nextBtn.disabled = index === images.length - 1;
+  }
+
+  function showImaginePrevImage() {
+    if (imagineLightboxIndex > 0) {
+      updateImagineLightbox(imagineLightboxIndex - 1);
+    }
+  }
+
+  function showImagineNextImage() {
+    const images = getImagineAllImages();
+    if (imagineLightboxIndex < images.length - 1) {
+      updateImagineLightbox(imagineLightboxIndex + 1);
+    }
+  }
+
+  async function loadImagineConfig() {
+    try {
+      const res = await fetch("/v1/public/imagine/config", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      const value = parseInt(data && data.final_min_bytes, 10);
+      if (Number.isFinite(value) && value >= 0) {
+        imagineFinalMinBytes = value;
+      }
+      const nsfwSelect = document.getElementById("imagineNSFW");
+      const uiState = loadGrokToolsUIState();
+      if (nsfwSelect && typeof data.nsfw === "boolean" && !uiState.imagineNSFW) {
+        nsfwSelect.value = data.nsfw ? "true" : "false";
+      }
+    } catch (err) {
+      // ignore
     }
   }
 
@@ -549,14 +1180,14 @@
     updateImagineActiveCount();
   }
 
-  async function createImagineTask(prompt, aspectRatio) {
+  async function createImagineTask(prompt, aspectRatio, nsfwEnabled) {
     const res = await fetch("/api/v1/admin/imagine/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt,
         aspect_ratio: aspectRatio,
-        nsfw: true,
+        nsfw: !!nsfwEnabled,
       }),
     });
     if (handleUnauthorized(res)) {
@@ -683,7 +1314,12 @@
     }
     const ratio = String(document.getElementById("imagineRatio")?.value || "2:3");
     const concurrent = Math.max(1, Math.min(3, Number(document.getElementById("imagineConcurrent")?.value || 1)));
+    const nsfw = String(document.getElementById("imagineNSFW")?.value || "true") === "true";
     const mode = String(document.getElementById("imagineMode")?.value || "auto").toLowerCase();
+    saveGrokToolsUIState({
+      imagineRatio: ratio,
+      imagineConcurrent: concurrent,
+    });
 
     imagineState.running = true;
     imagineState.mode = mode;
@@ -693,7 +1329,7 @@
     const taskIDs = [];
     try {
       for (let i = 0; i < concurrent; i++) {
-        const taskID = await createImagineTask(prompt, ratio);
+        const taskID = await createImagineTask(prompt, ratio, nsfw);
         if (!taskID) {
           throw new Error("创建任务失败：空 task_id");
         }
@@ -740,6 +1376,13 @@
     const empty = document.getElementById("imagineEmpty");
     if (grid) grid.innerHTML = "";
     if (empty) empty.style.display = "block";
+    imagineStreamImageMap.clear();
+    imagineStreamSequence = 0;
+    imagineSelectedImages.clear();
+    imagineSelectionMode = false;
+    imagineLightboxIndex = -1;
+    const toolbar = document.getElementById("selectionToolbar");
+    if (toolbar) toolbar.classList.add("hidden");
     resetImagineMetrics();
   }
 
@@ -753,6 +1396,15 @@
       messages: [],
       model: chatState.model,
     };
+  }
+
+  function trimChatSessionMessages(session) {
+    if (!session || !Array.isArray(session.messages)) return 0;
+    const overflow = session.messages.length - MAX_CHAT_MESSAGES;
+    if (overflow <= 0) return 0;
+    session.messages = session.messages.slice(-MAX_CHAT_MESSAGES);
+    session.updatedAt = Date.now();
+    return overflow;
   }
 
   function isImageFileName(name) {
@@ -823,6 +1475,7 @@
       if (session && typeof session.isDefaultTitle === "undefined") {
         session.isDefaultTitle = !session.title || session.title === "新会话";
       }
+      trimChatSessionMessages(session);
     });
   }
 
@@ -846,12 +1499,566 @@
     return div.innerHTML;
   }
 
+  async function copyToClipboard(text) {
+    const value = String(text || "").trim();
+    if (!value) {
+      showToast("暂无可复制内容", "info");
+      return;
+    }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const temp = document.createElement("textarea");
+        temp.value = value;
+        temp.style.position = "fixed";
+        temp.style.opacity = "0";
+        document.body.appendChild(temp);
+        temp.select();
+        document.execCommand("copy");
+        document.body.removeChild(temp);
+      }
+      showToast("已复制到剪贴板", "success");
+    } catch (err) {
+      showToast("复制失败", "error");
+    }
+  }
+
+  function setRenderedHTML(el, html) {
+    el.innerHTML = html;
+  }
+
+  function isSafeLinkURL(url) {
+    const value = String(url || "").trim().toLowerCase();
+    if (!value) return false;
+    return /^(https?:|mailto:|tel:|\/(?!\/)|\.\.?\/|#)/.test(value);
+  }
+
+  function isSafeImageURL(url) {
+    const value = String(url || "").trim().toLowerCase();
+    if (!value) return false;
+    return /^(https?:|data:image\/(?:png|jpe?g|gif|webp|bmp|ico);base64,|\/(?!\/)|\.\.?\/)/.test(value);
+  }
+
+  function renderBasicMarkdown(rawText) {
+    const text = String(rawText || "").replace(/\\n/g, "\n");
+    const escaped = escapeHTML(text);
+    const codeBlocks = [];
+    const fenced = escaped.replace(/```([a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g, (_match, lang, code) => {
+      const safeLang = lang ? escapeHTML(lang) : "";
+      const html = `<pre class="code-block"><code${safeLang ? ` class="language-${safeLang}"` : ""}>${code}</code></pre>`;
+      const token = `@@CODEBLOCK_${codeBlocks.length}@@`;
+      codeBlocks.push(html);
+      return token;
+    });
+
+    const renderInline = (value) => {
+      const inlineCodes = [];
+      let output = value.replace(/`([^`]+)`/g, (_m, code) => {
+        const token = `@@INLINE_${inlineCodes.length}@@`;
+        inlineCodes.push(`<code class="inline-code">${code}</code>`);
+        return token;
+      });
+      output = output
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+        .replace(/~~([^~]+)~~/g, "<del>$1</del>");
+      output = output.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+        const safeAlt = escapeHTML(alt || "image");
+        if (!isSafeImageURL(url)) return safeAlt;
+        return `<img src="${escapeHTML(url || "")}" alt="${safeAlt}" loading="lazy">`;
+      });
+      output = output.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
+        const safeLabel = escapeHTML(label || "");
+        if (!isSafeLinkURL(url)) return safeLabel;
+        return `<a href="${escapeHTML(url || "")}" target="_blank" rel="noopener">${safeLabel}</a>`;
+      });
+      output = output.replace(/(data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+)/g, (uri) => {
+        if (!isSafeImageURL(uri)) return "";
+        return `<img src="${escapeHTML(uri)}" alt="image" loading="lazy">`;
+      });
+      inlineCodes.forEach((html, index) => {
+        output = output.replace(new RegExp(`@@INLINE_${index}@@`, "g"), html);
+      });
+      return output;
+    };
+
+    const lines = fenced.split(/\r?\n/);
+    const htmlParts = [];
+    let inUl = false;
+    let inTaskUl = false;
+    let inOl = false;
+    let inTable = false;
+    let paragraphLines = [];
+
+    const closeLists = () => {
+      if (inUl) {
+        htmlParts.push("</ul>");
+        inUl = false;
+        inTaskUl = false;
+      }
+      if (inOl) {
+        htmlParts.push("</ol>");
+        inOl = false;
+      }
+    };
+    const closeTable = () => {
+      if (inTable) {
+        htmlParts.push("</tbody></table></div>");
+        inTable = false;
+      }
+    };
+    const flushParagraph = () => {
+      if (!paragraphLines.length) return;
+      htmlParts.push(`<p>${renderInline(paragraphLines.join("<br>"))}</p>`);
+      paragraphLines = [];
+    };
+    const isTableSeparator = (line) => /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*$/.test(line);
+    const splitTableRow = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (!trimmed) {
+        flushParagraph();
+        closeLists();
+        closeTable();
+        continue;
+      }
+
+      const codeTokenMatch = trimmed.match(/^@@CODEBLOCK_(\d+)@@$/);
+      if (codeTokenMatch) {
+        flushParagraph();
+        closeLists();
+        closeTable();
+        htmlParts.push(trimmed);
+        continue;
+      }
+
+      const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+      if (headingMatch) {
+        flushParagraph();
+        closeLists();
+        closeTable();
+        const level = headingMatch[1].length;
+        htmlParts.push(`<h${level}>${renderInline(headingMatch[2])}</h${level}>`);
+        continue;
+      }
+
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+        flushParagraph();
+        closeLists();
+        closeTable();
+        htmlParts.push("<hr>");
+        continue;
+      }
+
+      if (/^\s*>/.test(line)) {
+        flushParagraph();
+        closeLists();
+        closeTable();
+        const quoteLines = [];
+        let j = i;
+        for (; j < lines.length; j += 1) {
+          const currentLine = lines[j];
+          if (!/^\s*>/.test(currentLine)) break;
+          quoteLines.push(currentLine.replace(/^\s*>\s?/, ""));
+        }
+        i = j - 1;
+        htmlParts.push(`<blockquote>${renderBasicMarkdown(quoteLines.join("\n"))}</blockquote>`);
+        continue;
+      }
+
+      if (trimmed.includes("|")) {
+        const nextLine = lines[i + 1] || "";
+        if (!inTable && isTableSeparator(nextLine.trim())) {
+          flushParagraph();
+          closeLists();
+          const headers = splitTableRow(trimmed);
+          htmlParts.push('<div class="table-wrap"><table><thead><tr>');
+          headers.forEach((cell) => htmlParts.push(`<th>${renderInline(cell)}</th>`));
+          htmlParts.push("</tr></thead><tbody>");
+          inTable = true;
+          i += 1;
+          continue;
+        }
+        if (inTable && !isTableSeparator(trimmed)) {
+          const cells = splitTableRow(trimmed);
+          htmlParts.push("<tr>");
+          cells.forEach((cell) => htmlParts.push(`<td>${renderInline(cell)}</td>`));
+          htmlParts.push("</tr>");
+          continue;
+        }
+      }
+
+      const taskMatch = trimmed.match(/^[-*+•·]\s+\[([ xX])\]\s+(.*)$/);
+      if (taskMatch) {
+        flushParagraph();
+        if (inUl && !inTaskUl) closeLists();
+        if (!inUl) {
+          closeLists();
+          closeTable();
+          htmlParts.push('<ul class="task-list">');
+          inUl = true;
+          inTaskUl = true;
+        }
+        const checked = taskMatch[1].toLowerCase() === "x";
+        htmlParts.push(`<li class="task-item"><input type="checkbox" disabled${checked ? " checked" : ""}>${renderInline(taskMatch[2])}</li>`);
+        continue;
+      }
+
+      const ulMatch = trimmed.match(/^[-*+•·]\s+(.*)$/);
+      if (ulMatch) {
+        flushParagraph();
+        if (!inUl) {
+          closeLists();
+          closeTable();
+          htmlParts.push("<ul>");
+          inUl = true;
+          inTaskUl = false;
+        }
+        htmlParts.push(`<li>${renderInline(ulMatch[1])}</li>`);
+        continue;
+      }
+
+      const olMatch = trimmed.match(/^\d+[.)、]\s+(.*)$/);
+      if (olMatch) {
+        flushParagraph();
+        if (!inOl) {
+          closeLists();
+          closeTable();
+          htmlParts.push("<ol>");
+          inOl = true;
+        }
+        htmlParts.push(`<li>${renderInline(olMatch[1])}</li>`);
+        continue;
+      }
+
+      paragraphLines.push(trimmed);
+    }
+
+    flushParagraph();
+    closeLists();
+    closeTable();
+
+    let output = htmlParts.join("");
+    codeBlocks.forEach((html, index) => {
+      output = output.replace(`@@CODEBLOCK_${index}@@`, html);
+    });
+    return output;
+  }
+
+  function parseThinkSections(raw) {
+    const input = String(raw || "");
+    const parts = [];
+    let cursor = 0;
+    while (cursor < input.length) {
+      const start = input.indexOf("<think>", cursor);
+      if (start === -1) {
+        parts.push({ type: "text", value: input.slice(cursor) });
+        break;
+      }
+      if (start > cursor) {
+        parts.push({ type: "text", value: input.slice(cursor, start) });
+      }
+      const thinkStart = start + 7;
+      const end = input.indexOf("</think>", thinkStart);
+      if (end === -1) {
+        parts.push({ type: "think", value: input.slice(thinkStart), open: true });
+        cursor = input.length;
+      } else {
+        parts.push({ type: "think", value: input.slice(thinkStart, end), open: false });
+        cursor = end + 8;
+      }
+    }
+    return parts;
+  }
+
+  function parseRolloutBlocks(text) {
+    const lines = String(text || "").split(/\r?\n/);
+    const blocks = [];
+    let current = null;
+    for (const line of lines) {
+      const match = line.match(/^\s*\[([^\]]+)\]\[([^\]]+)\]\s*(.*)$/);
+      if (match) {
+        if (current) blocks.push(current);
+        current = { id: match[1], type: match[2], lines: [] };
+        if (match[3]) current.lines.push(match[3]);
+        continue;
+      }
+      if (current) {
+        current.lines.push(line);
+      }
+    }
+    if (current) blocks.push(current);
+    return blocks;
+  }
+
+  function parseAgentSections(text) {
+    const lines = String(text || "").split(/\r?\n/);
+    const sections = [];
+    let current = { title: null, lines: [] };
+    let hasAgentHeading = false;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        current.lines.push(line);
+        continue;
+      }
+      const agentMatch = trimmed.match(/^(Grok\s+Leader|(?:Grok\s+)?Agent\s*\d+)$/i);
+      if (agentMatch) {
+        hasAgentHeading = true;
+        if (current.lines.length) {
+          sections.push(current);
+        }
+        current = { title: agentMatch[1], lines: [] };
+        continue;
+      }
+      current.lines.push(line);
+    }
+    if (current.lines.length) {
+      sections.push(current);
+    }
+    if (!hasAgentHeading) {
+      return [{ title: null, lines }];
+    }
+    return sections;
+  }
+
+  const toolTypeMap = {
+    websearch: { icon: "", label: "网页搜索" },
+    searchimage: { icon: "", label: "图片搜索" },
+    agentthink: { icon: "", label: "Agent Think" },
+  };
+  const defaultToolType = { icon: "", label: "工具" };
+
+  function getToolMeta(typeStr) {
+    const key = String(typeStr || "").trim().toLowerCase().replace(/\s+/g, "");
+    return toolTypeMap[key] || defaultToolType;
+  }
+
+  function renderThinkContent(text, openAll) {
+    const sections = parseAgentSections(text);
+    if (!sections.length) {
+      return renderBasicMarkdown(text);
+    }
+    const renderGroups = (blocks, openAllGroups) => {
+      const groups = [];
+      const map = new Map();
+      for (const block of blocks) {
+        const key = block.id;
+        let group = map.get(key);
+        if (!group) {
+          group = { id: key, items: [] };
+          map.set(key, group);
+          groups.push(group);
+        }
+        group.items.push(block);
+      }
+      return groups.map((group) => {
+        const items = group.items.map((item) => {
+          const body = renderBasicMarkdown(item.lines.join("\n").trim());
+          const typeKey = String(item.type || "").trim().toLowerCase().replace(/\s+/g, "");
+          const typeAttr = escapeHTML(typeKey);
+          const meta = getToolMeta(item.type);
+          const iconHtml = meta.icon ? `<span class="think-tool-icon">${meta.icon}</span>` : "";
+          const typeLabel = `${iconHtml}${escapeHTML(meta.label)}`;
+          return `<div class="think-item-row think-tool-card" data-tool-type="${typeAttr}"><div class="think-item-type" data-type="${typeAttr}">${typeLabel}</div><div class="think-item-body">${body || "<em>空</em>"}</div></div>`;
+        }).join("");
+        const title = escapeHTML(group.id);
+        const openAttr = openAllGroups ? " open" : "";
+        return `<details class="think-rollout-group"${openAttr}><summary><span class="think-rollout-title">${title}</span></summary><div class="think-rollout-body">${items}</div></details>`;
+      }).join("");
+    };
+
+    const agentBlocks = sections.map((section, idx) => {
+      const blocks = parseRolloutBlocks(section.lines.join("\n"));
+      const inner = blocks.length
+        ? renderGroups(blocks, openAll)
+        : `<div class="think-rollout-body">${renderBasicMarkdown(section.lines.join("\n").trim())}</div>`;
+      if (!section.title) {
+        return `<div class="think-agent-items">${inner}</div>`;
+      }
+      const title = escapeHTML(section.title);
+      const openAttr = openAll ? " open" : (idx === 0 ? " open" : "");
+      return `<details class="think-agent"${openAttr}><summary>${title}</summary><div class="think-agent-items">${inner}</div></details>`;
+    });
+    return `<div class="think-agents">${agentBlocks.join("")}</div>`;
+  }
+
   function renderAssistantContent(raw) {
-    const safe = escapeHTML(raw);
-    let html = safe.replace(/```([\s\S]*?)```/g, (_m, code) => `<pre>${code}</pre>`);
-    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-    html = html.replace(/\n/g, "<br>");
-    return html;
+    const parts = parseThinkSections(String(raw || ""));
+    return parts.map((part) => {
+      if (part.type === "think") {
+        const body = renderThinkContent(part.value.trim(), part.open);
+        const openAttr = part.open ? " open" : "";
+        return `<details class="think-block" data-think="true"${openAttr}><summary class="think-summary">思考过程</summary><div class="think-content">${body || "<em>空</em>"}</div></details>`;
+      }
+      return renderBasicMarkdown(part.value);
+    }).join("");
+  }
+
+  function applyImageGrid(root) {
+    if (!root) return;
+    const isIgnorable = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return !node.textContent.trim();
+      }
+      return node.nodeType === Node.ELEMENT_NODE && node.tagName === "BR";
+    };
+
+    const isImageLink = (node) => {
+      if (!node || node.nodeType !== Node.ELEMENT_NODE || node.tagName !== "A") return false;
+      const children = Array.from(node.childNodes);
+      if (!children.length) return false;
+      return children.every((child) => {
+        if (child.nodeType === Node.TEXT_NODE) {
+          return !child.textContent.trim();
+        }
+        return child.nodeType === Node.ELEMENT_NODE && child.tagName === "IMG";
+      });
+    };
+
+    const extractImageItems = (node) => {
+      if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
+      if (node.classList && node.classList.contains("img-grid")) return null;
+      if (node.tagName === "IMG") {
+        return { items: [node], removeNode: null };
+      }
+      if (isImageLink(node)) {
+        return { items: [node], removeNode: null };
+      }
+      if (node.tagName === "P") {
+        const items = [];
+        const children = Array.from(node.childNodes);
+        if (!children.length) return null;
+        for (const child of children) {
+          if (child.nodeType === Node.TEXT_NODE) {
+            if (!child.textContent.trim()) continue;
+            return null;
+          }
+          if (child.nodeType === Node.ELEMENT_NODE) {
+            if (child.tagName === "IMG" || isImageLink(child)) {
+              items.push(child);
+              continue;
+            }
+            if (child.tagName === "BR") continue;
+            return null;
+          }
+          return null;
+        }
+        if (!items.length) return null;
+        return { items, removeNode: node };
+      }
+      return null;
+    };
+
+    const wrapImagesInContainer = (container) => {
+      const children = Array.from(container.childNodes);
+      let group = [];
+      let groupStart = null;
+      let removeNodes = [];
+
+      const flush = () => {
+        if (group.length < 2) {
+          group = [];
+          groupStart = null;
+          removeNodes = [];
+          return;
+        }
+        const wrapper = document.createElement("div");
+        wrapper.className = "img-grid";
+        const cols = Math.min(4, group.length);
+        wrapper.style.setProperty("--cols", String(cols));
+        if (groupStart) {
+          container.insertBefore(wrapper, groupStart);
+        } else {
+          container.appendChild(wrapper);
+        }
+        group.forEach((img) => wrapper.appendChild(img));
+        removeNodes.forEach((n) => n.parentNode && n.parentNode.removeChild(n));
+        group = [];
+        groupStart = null;
+        removeNodes = [];
+      };
+
+      children.forEach((node) => {
+        if (group.length && isIgnorable(node)) {
+          removeNodes.push(node);
+          return;
+        }
+        const extracted = extractImageItems(node);
+        if (extracted && extracted.items.length) {
+          if (!groupStart) groupStart = node;
+          group.push(...extracted.items);
+          if (extracted.removeNode) {
+            removeNodes.push(extracted.removeNode);
+          }
+          return;
+        }
+        flush();
+      });
+      flush();
+    };
+
+    const containers = [root, ...root.querySelectorAll(".think-content, .think-item-body, .think-rollout-body, .think-agent-items")];
+    containers.forEach((container) => {
+      if (!container || container.closest(".img-grid")) return;
+      if (!container.querySelector || !container.querySelector("img")) return;
+      wrapImagesInContainer(container);
+    });
+  }
+
+  function enhanceBrokenImages(root) {
+    if (!root) return;
+    const images = root.querySelectorAll("img");
+    images.forEach((img) => {
+      if (img.dataset.retryBound) return;
+      img.dataset.retryBound = "1";
+      img.addEventListener("error", () => {
+        if (img.dataset.failed) return;
+        img.dataset.failed = "1";
+        const wrapper = document.createElement("button");
+        wrapper.type = "button";
+        wrapper.className = "img-retry";
+        wrapper.textContent = "点击重试";
+        wrapper.addEventListener("click", () => {
+          wrapper.classList.add("loading");
+          const original = img.getAttribute("src") || "";
+          const cacheBust = original.includes("?") ? "&" : "?";
+          img.dataset.failed = "";
+          img.src = `${original}${cacheBust}t=${Date.now()}`;
+        });
+        img.replaceWith(wrapper);
+      });
+      img.addEventListener("load", () => {
+        if (img.dataset.failed) {
+          img.dataset.failed = "";
+        }
+      });
+    });
+  }
+
+  function updateThinkSummary(root, elapsedSec) {
+    if (!root) return;
+    const summaries = root.querySelectorAll(".think-summary");
+    if (!summaries.length) return;
+    let text = "思考过程";
+    if (typeof elapsedSec === "number") {
+      text = elapsedSec > 0 ? `思考 ${elapsedSec}s` : "思考完成";
+    } else {
+      text = "思考中";
+    }
+    summaries.forEach((node) => {
+      node.textContent = text;
+      const block = node.closest(".think-block");
+      if (!block) return;
+      if (typeof elapsedSec === "number") {
+        block.removeAttribute("data-thinking");
+      } else {
+        block.setAttribute("data-thinking", "true");
+      }
+    });
   }
 
   function renderUserContent(content, attachment) {
@@ -881,16 +2088,354 @@
     let contentEl = document.createElement("div");
     contentEl.className = role === "assistant" ? "message-content rendered" : "message-content";
     if (role === "assistant") {
-      contentEl.innerHTML = renderAssistantContent(content || "");
+      setRenderedHTML(contentEl, renderAssistantContent(content || ""));
+      applyImageGrid(contentEl);
+      if (String(content || "").includes("<think>")) {
+        updateThinkSummary(contentEl, 0);
+      }
+      enhanceBrokenImages(contentEl);
       bubble.appendChild(contentEl);
     } else {
       contentEl = renderUserContent(content, attachment);
       bubble.appendChild(contentEl);
     }
     row.appendChild(bubble);
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "action-btn";
+    copyBtn.textContent = "复制";
+    copyBtn.addEventListener("click", () => {
+      const text = role === "assistant"
+        ? String(bubble.innerText || "").trim()
+        : String(content || "");
+      copyToClipboard(text);
+    });
+    actions.appendChild(copyBtn);
+    if (role === "user") {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "action-btn";
+      editBtn.textContent = "编辑";
+      editBtn.addEventListener("click", () => startEditChatMessage(row, content, attachment));
+      actions.appendChild(editBtn);
+    } else {
+      const retryBtn = document.createElement("button");
+      retryBtn.type = "button";
+      retryBtn.className = "action-btn";
+      retryBtn.textContent = "重试";
+      retryBtn.addEventListener("click", () => retryAssistantMessage(row));
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "action-btn";
+      editBtn.textContent = "编辑";
+      editBtn.addEventListener("click", () => startEditAssistantMessage(row));
+      actions.appendChild(retryBtn);
+      actions.appendChild(editBtn);
+    }
+    row.appendChild(actions);
     log.appendChild(row);
     log.scrollTop = log.scrollHeight;
     return contentEl;
+  }
+
+  function startEditChatMessage(row, content, attachment) {
+    const session = activeChatSession();
+    if (!row || !session) return;
+    const messages = Array.isArray(session.messages) ? session.messages : [];
+    const targetIndex = messages.findIndex((msg) => msg && msg.role === "user" && String(msg.content || "") === String(content || ""));
+    if (targetIndex < 0) return;
+
+    const bubble = row.querySelector(".message-bubble");
+    const actions = row.querySelector(".message-actions");
+    if (!bubble || !actions) return;
+    bubble.innerHTML = "";
+    actions.innerHTML = "";
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "edit-msg-input";
+    textarea.value = String(content || "");
+    const actionWrap = document.createElement("div");
+    actionWrap.className = "edit-msg-actions";
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "btn btn-primary";
+    saveBtn.textContent = "保存";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "btn btn-outline";
+    cancelBtn.textContent = "取消";
+
+    const cancel = () => rerenderChatThread();
+    saveBtn.addEventListener("click", () => {
+      const next = String(textarea.value || "").trim();
+      if (!next) {
+        showToast("消息不能为空", "info");
+        return;
+      }
+      messages[targetIndex].content = next;
+      if (attachment) {
+        messages[targetIndex].attachment = attachment;
+      }
+      session.updatedAt = Date.now();
+      saveChatSessions();
+      renderChatSessions();
+      rerenderChatThread();
+    });
+    cancelBtn.addEventListener("click", cancel);
+    textarea.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        saveBtn.click();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancel();
+      }
+    });
+
+    bubble.appendChild(textarea);
+    actionWrap.appendChild(saveBtn);
+    actionWrap.appendChild(cancelBtn);
+    bubble.appendChild(actionWrap);
+    textarea.focus();
+    textarea.select();
+  }
+
+  function startEditAssistantMessage(row) {
+    const session = activeChatSession();
+    if (!row || !session) return;
+    const rows = Array.from(document.querySelectorAll("#grokChatLog .message-row"));
+    const rowIndex = rows.indexOf(row);
+    const messages = Array.isArray(session.messages) ? session.messages : [];
+    if (rowIndex < 0 || rowIndex >= messages.length) return;
+    const msg = messages[rowIndex];
+    if (!msg || msg.role !== "assistant") return;
+
+    const bubble = row.querySelector(".message-bubble");
+    const actions = row.querySelector(".message-actions");
+    if (!bubble || !actions) return;
+    bubble.innerHTML = "";
+    actions.classList.add("hidden");
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "edit-msg-input";
+    textarea.value = String(msg.content || "");
+    const actionWrap = document.createElement("div");
+    actionWrap.className = "edit-msg-actions";
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "btn btn-primary";
+    saveBtn.textContent = "保存";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "btn btn-outline";
+    cancelBtn.textContent = "取消";
+    const cancel = () => rerenderChatThread();
+    saveBtn.addEventListener("click", () => {
+      const next = String(textarea.value || "").trim();
+      if (!next) {
+        showToast("消息不能为空", "info");
+        return;
+      }
+      msg.content = next;
+      session.updatedAt = Date.now();
+      saveChatSessions();
+      renderChatSessions();
+      rerenderChatThread();
+    });
+    cancelBtn.addEventListener("click", cancel);
+    textarea.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        saveBtn.click();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancel();
+      }
+    });
+    bubble.appendChild(textarea);
+    actionWrap.appendChild(saveBtn);
+    actionWrap.appendChild(cancelBtn);
+    bubble.appendChild(actionWrap);
+    textarea.focus();
+    textarea.select();
+  }
+
+  async function requestChatCompletion(session, contentEl) {
+    let assistantText = "";
+    let hasThink = false;
+    let thinkStartAt = null;
+    let thinkElapsed = null;
+    let thinkAutoCollapsed = false;
+    chatState.sending = true;
+    chatState.abortController = new AbortController();
+    setChatSendButtonState(true);
+    updateChatStatus("连接中...", "connecting");
+
+    const updateAssistantView = () => {
+      if (!contentEl) return;
+      let savedThinkStates = null;
+      if (hasThink && thinkAutoCollapsed) {
+        const blocks = contentEl.querySelectorAll(".think-block[data-think=\"true\"]");
+        if (blocks.length) {
+          savedThinkStates = Array.from(blocks).map((b) => b.hasAttribute("open"));
+        }
+      }
+      setRenderedHTML(contentEl, renderAssistantContent(assistantText));
+      if (hasThink) {
+        updateThinkSummary(contentEl, typeof thinkElapsed === "number" ? thinkElapsed : null);
+        const blocks = contentEl.querySelectorAll(".think-block[data-think=\"true\"]");
+        blocks.forEach((block, index) => {
+          if (savedThinkStates && index < savedThinkStates.length) {
+            if (savedThinkStates[index]) {
+              block.setAttribute("open", "");
+            } else {
+              block.removeAttribute("open");
+            }
+          } else if (thinkElapsed === null || thinkElapsed === undefined) {
+            block.setAttribute("open", "");
+          } else if (!thinkAutoCollapsed) {
+            block.removeAttribute("open");
+            thinkAutoCollapsed = true;
+          }
+        });
+      }
+      applyImageGrid(contentEl);
+      enhanceBrokenImages(contentEl);
+      if (hasThink) {
+        const thinkNodes = contentEl.querySelectorAll(".think-content");
+        thinkNodes.forEach((node) => {
+          node.scrollTop = node.scrollHeight;
+        });
+      }
+      const log = document.getElementById("grokChatLog");
+      if (log) log.scrollTop = log.scrollHeight;
+    };
+
+    try {
+      const payload = buildChatPayload();
+      const res = await fetch("/grok/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: chatState.abortController.signal,
+      });
+      if (handleUnauthorized(res)) return { aborted: false, text: "" };
+      if (!res.ok || !res.body) {
+        throw new Error(await res.text());
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx = buffer.indexOf("\n\n");
+        while (idx >= 0) {
+          const chunk = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const lines = chunk.split("\n");
+          let data = "";
+          lines.forEach((line) => {
+            if (line.startsWith("data:")) {
+              data += line.slice(5).trimStart();
+            }
+          });
+          if (!data || data === "[DONE]") {
+            idx = buffer.indexOf("\n\n");
+            continue;
+          }
+          let payloadChunk = null;
+          try {
+            payloadChunk = JSON.parse(data);
+          } catch (err) {
+            idx = buffer.indexOf("\n\n");
+            continue;
+          }
+          const choice = payloadChunk?.choices?.[0];
+          const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
+          const finalContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
+          if (delta) {
+            assistantText += delta;
+          } else if (finalContent) {
+            assistantText = finalContent;
+          }
+          if (!hasThink && assistantText.includes("<think>")) {
+            hasThink = true;
+            thinkStartAt = Date.now();
+            thinkElapsed = null;
+          }
+          if (hasThink && thinkStartAt && thinkElapsed === null && assistantText.includes("</think>")) {
+            thinkElapsed = Math.max(1, Math.round((Date.now() - thinkStartAt) / 1000));
+          }
+          updateAssistantView();
+          idx = buffer.indexOf("\n\n");
+        }
+      }
+      session.messages.push({ role: "assistant", content: assistantText.trim() });
+      session.updatedAt = Date.now();
+      const trimmed = trimChatSessionMessages(session);
+      if (trimmed > 0) {
+        rerenderChatThread();
+      }
+      saveChatSessions();
+      updateChatStatus("完成", "ok");
+      return { aborted: false, text: assistantText.trim() };
+    } catch (err) {
+      if (err && err.name === "AbortError") {
+        if (contentEl && !assistantText.trim()) {
+          assistantText = "[stopped]";
+          updateAssistantView();
+        }
+        updateChatStatus("已停止", "error");
+        return { aborted: true, text: assistantText.trim() };
+      }
+      if (contentEl) {
+        assistantText = `[error] ${err.message || err}`;
+        updateAssistantView();
+      }
+      updateChatStatus(err.message || "发送失败", "error");
+      return { aborted: false, text: "" };
+    } finally {
+      chatState.sending = false;
+      chatState.abortController = null;
+      setChatSendButtonState(false);
+      renderChatSessions();
+      saveChatSessions();
+    }
+  }
+
+  async function retryAssistantMessage(row) {
+    if (chatState.sending) return;
+    const session = activeChatSession();
+    if (!row || !session) return;
+    const rows = Array.from(document.querySelectorAll("#grokChatLog .message-row"));
+    const rowIndex = rows.indexOf(row);
+    const messages = Array.isArray(session.messages) ? session.messages : [];
+    if (rowIndex < 0 || rowIndex >= messages.length) return;
+    if (messages[rowIndex]?.role !== "assistant") return;
+
+    let lastUserIndex = -1;
+    for (let i = rowIndex - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === "user") {
+        lastUserIndex = i;
+        break;
+      }
+    }
+    if (lastUserIndex < 0) {
+      showToast("没有可重试的上文", "info");
+      return;
+    }
+
+    session.messages = messages.slice(0, lastUserIndex + 1);
+    session.updatedAt = Date.now();
+    saveChatSessions();
+    renderChatSessions();
+    rerenderChatThread();
+    const contentEl = appendChatMessage("assistant", "");
+    await requestChatCompletion(session, contentEl);
   }
 
   function rerenderChatThread() {
@@ -944,7 +2489,7 @@
 
       item.addEventListener("click", () => {
         switchChatSession(session.id);
-        closeChatSidebar();
+        if (isMobileChatSidebar()) closeChatSidebar();
       });
 
       item.appendChild(title);
@@ -1104,21 +2649,16 @@
         messages.push({ role: msg.role, content: msg.content });
         return;
       }
-      const parts = [{ type: "text", text: String(msg.content || "") }];
-      if (isImageFileName(msg.attachment.name)) {
-        parts.push({
-          type: "image_url",
-          image_url: { url: msg.attachment.dataUrl },
-        });
-      } else {
-        parts.push({
-          type: "file",
-          file: {
-            filename: String(msg.attachment.name || "upload.bin"),
-            file_data: msg.attachment.dataUrl,
-          },
-        });
+      const parts = [];
+      if (msg.content) {
+        parts.push({ type: "text", text: String(msg.content || "") });
       }
+      parts.push({
+        type: "file",
+        file: {
+          file_data: msg.attachment.dataUrl,
+        },
+      });
       messages.push({ role: msg.role, content: parts });
     });
     return {
@@ -1140,6 +2680,7 @@
     if (!session) return;
     session.messages.push({ role: "user", content: prompt, attachment });
     session.updatedAt = Date.now();
+    trimChatSessionMessages(session);
     ensureChatTitle(session);
     renderChatSessions();
     rerenderChatThread();
@@ -1149,97 +2690,8 @@
     }
 
     clearPendingChatFile();
-    const bubble = appendChatMessage("assistant", "");
-    let assistantText = "";
-    chatState.sending = true;
-    chatState.abortController = new AbortController();
-    setChatSendButtonState(true);
-    updateChatStatus("连接中...", "connecting");
-
-    try {
-      const payload = buildChatPayload();
-      const res = await fetch("/grok/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: chatState.abortController.signal,
-      });
-      if (handleUnauthorized(res)) return;
-      if (!res.ok || !res.body) {
-        throw new Error(await res.text());
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let idx = buffer.indexOf("\n\n");
-        while (idx >= 0) {
-          const chunk = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          const lines = chunk.split("\n");
-          let data = "";
-          lines.forEach((line) => {
-            if (line.startsWith("data:")) {
-              data += line.slice(5).trimStart();
-            }
-          });
-          if (!data) {
-            idx = buffer.indexOf("\n\n");
-            continue;
-          }
-          if (data === "[DONE]") {
-            idx = buffer.indexOf("\n\n");
-            continue;
-          }
-          let payloadChunk = null;
-          try {
-            payloadChunk = JSON.parse(data);
-          } catch (err) {
-            idx = buffer.indexOf("\n\n");
-            continue;
-          }
-          const choice = payloadChunk?.choices?.[0];
-          const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
-          const finalContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
-          if (delta) {
-            assistantText += delta;
-          } else if (finalContent) {
-            assistantText = finalContent;
-          }
-          if (bubble) {
-            bubble.innerHTML = renderAssistantContent(assistantText);
-            const log = document.getElementById("grokChatLog");
-            if (log) log.scrollTop = log.scrollHeight;
-          }
-          idx = buffer.indexOf("\n\n");
-        }
-      }
-      session.messages.push({ role: "assistant", content: assistantText.trim() });
-      session.updatedAt = Date.now();
-      saveChatSessions();
-      updateChatStatus("完成", "ok");
-    } catch (err) {
-      if (err && err.name === "AbortError") {
-        if (bubble && !assistantText.trim()) {
-          bubble.innerHTML = renderAssistantContent("[stopped]");
-        }
-        updateChatStatus("已停止", "error");
-        return;
-      }
-      if (bubble) {
-        bubble.innerHTML = renderAssistantContent(`[error] ${err.message || err}`);
-      }
-      updateChatStatus(err.message || "发送失败", "error");
-    } finally {
-      chatState.sending = false;
-      chatState.abortController = null;
-      setChatSendButtonState(false);
-      renderChatSessions();
-      saveChatSessions();
-    }
+    const contentEl = appendChatMessage("assistant", "");
+    await requestChatCompletion(session, contentEl);
   }
 
   function bindChatEvents() {
@@ -1302,21 +2754,30 @@
       fileRemoveBtn.addEventListener("click", () => clearPendingChatFile());
     }
     if (input) {
+      let composing = false;
+      input.addEventListener("compositionstart", () => {
+        composing = true;
+      });
+      input.addEventListener("compositionend", () => {
+        composing = false;
+      });
       input.addEventListener("input", () => {
         input.style.height = "40px";
         input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
       });
       input.addEventListener("keydown", (event) => {
-        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        if (event.key === "Enter" && !event.shiftKey) {
+          if (composing || event.isComposing) return;
           event.preventDefault();
           sendChatMessage().catch(() => {});
         }
       });
     }
-    if (sidebarToggle) sidebarToggle.addEventListener("click", () => openChatSidebar());
+    if (sidebarToggle) sidebarToggle.addEventListener("click", () => toggleChatSidebar());
     if (expandBtn) expandBtn.addEventListener("click", () => openChatSidebar());
     if (collapseBtn) collapseBtn.addEventListener("click", () => closeChatSidebar());
     if (sidebarOverlay) sidebarOverlay.addEventListener("click", () => closeChatSidebar());
+    window.addEventListener("resize", syncChatSidebarState);
     if (modelChip && modelDropdown) {
       modelChip.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -1401,6 +2862,7 @@
     setChatSendButtonState(false);
     bindChatEvents();
     closeChatSidebar();
+    syncChatSidebarState();
   }
 
   function renderPendingChatFile() {
@@ -1425,15 +2887,18 @@
     const el = document.getElementById("voiceStatus");
     if (!el) return;
     el.textContent = String(text || "");
-    el.style.color = type === "error" ? "var(--accent-red)" : type === "ok" ? "var(--accent-green)" : "var(--text-primary)";
+    el.classList.remove("connected", "connecting", "error");
+    if (type === "ok") el.classList.add("connected");
+    if (type === "warn" || type === "connecting") el.classList.add("connecting");
+    if (type === "error") el.classList.add("error");
   }
 
   function appendVoiceLog(line) {
     const el = document.getElementById("voiceLogOutput");
     if (!el) return;
     const time = new Date().toLocaleTimeString();
-    el.textContent += `[${time}] ${String(line || "")}\n`;
-    el.scrollTop = el.scrollHeight;
+    el.textContent = `[${time}] ${String(line || "")}\n` + el.textContent;
+    el.scrollTop = 0;
   }
 
   function clearVoiceLog() {
@@ -1444,8 +2909,14 @@
   function setVoiceButtons(running) {
     const start = document.getElementById("voiceStartBtn");
     const stop = document.getElementById("voiceStopBtn");
-    if (start) start.disabled = !!running;
-    if (stop) stop.disabled = !running;
+    if (start) {
+      start.disabled = false;
+      start.classList.toggle("hidden", !!running);
+    }
+    if (stop) {
+      stop.disabled = false;
+      stop.classList.toggle("hidden", !running);
+    }
   }
 
   function updateVoiceMeta() {
@@ -1460,48 +2931,209 @@
     if (statusPersonality) statusPersonality.textContent = personality;
     if (statusSpeed) statusSpeed.textContent = `${speed}x`;
     if (speedValue) speedValue.textContent = speed.toFixed(1);
+    updateVoiceRangeProgress();
   }
 
-  function initVoiceVisualizer() {
+  function updateVoiceRangeProgress() {
+    const speedRange = document.getElementById("voiceSpeed");
+    if (!speedRange) return;
+    const min = Number(speedRange.min || 0);
+    const max = Number(speedRange.max || 100);
+    const val = Number(speedRange.value || 0);
+    const pct = max === min ? 0 : ((val - min) / (max - min)) * 100;
+    speedRange.style.setProperty("--range-progress", `${pct}%`);
+  }
+
+  function buildVoiceVisualizerBars() {
     const root = document.getElementById("voiceVisualizer");
-    if (!root || root.childElementCount > 0) return;
-    for (let i = 0; i < 18; i += 1) {
-      const bar = document.createElement("span");
-      bar.style.flex = "1";
-      bar.style.background = "linear-gradient(180deg,var(--accent-cyan),var(--accent-green))";
-      bar.style.borderRadius = "999px";
-      bar.style.height = "8%";
+    if (!root) return;
+    root.innerHTML = "";
+    const targetCount = Math.max(36, Math.floor(root.offsetWidth / 7));
+    for (let i = 0; i < targetCount; i += 1) {
+      const bar = document.createElement("div");
+      bar.className = "bar";
       root.appendChild(bar);
     }
   }
 
   function stopVoiceVisualizer() {
-    if (voiceState.visualizerTimer) {
-      clearInterval(voiceState.visualizerTimer);
-      voiceState.visualizerTimer = null;
-    }
     const root = document.getElementById("voiceVisualizer");
     if (!root) return;
-    Array.from(root.children).forEach((bar) => {
-      bar.style.height = "8%";
+    const bars = root.querySelectorAll(".bar");
+    bars.forEach((bar) => {
+      bar.style.height = "6px";
     });
   }
 
   function startVoiceVisualizer() {
-    initVoiceVisualizer();
-    stopVoiceVisualizer();
     const root = document.getElementById("voiceVisualizer");
     if (!root) return;
+    buildVoiceVisualizerBars();
+    if (voiceState.visualizerTimer) return;
     voiceState.visualizerTimer = window.setInterval(() => {
-      Array.from(root.children).forEach((bar) => {
-        bar.style.height = `${10 + Math.floor(Math.random() * 80)}%`;
+      const bars = root.querySelectorAll(".bar");
+      const status = document.getElementById("voiceStatus");
+      const connected = status && status.classList.contains("connected");
+      bars.forEach((bar) => {
+        bar.style.height = connected ? `${Math.random() * 32 + 6}px` : "6px";
       });
-    }, 180);
+    }, 150);
   }
 
   function resetVoiceAudio() {
     const root = document.getElementById("voiceAudioRoot");
     if (root) root.innerHTML = "";
+  }
+
+  async function releaseVoiceLocalTracks() {
+    if (!Array.isArray(voiceState.localTracks) || voiceState.localTracks.length === 0) {
+      voiceState.localTracks = [];
+      return;
+    }
+    for (const track of voiceState.localTracks) {
+      try {
+        if (track && typeof track.stop === "function") {
+          track.stop();
+        }
+      } catch (err) {
+        // ignore track cleanup failures
+      }
+      try {
+        if (track && typeof track.detach === "function") {
+          track.detach();
+        }
+      } catch (err) {
+        // ignore detach failures
+      }
+    }
+    voiceState.localTracks = [];
+  }
+
+  async function resetVoiceSession(reason, opts) {
+    const options = opts || {};
+    const skipDisconnect = !!options.skipDisconnect;
+    const statusText = options.statusText === undefined ? t("common.notConnected") : options.statusText;
+    const statusType = options.statusType || "";
+    const logLine = options.logLine === undefined
+      ? (reason ? `Voice session stopped: ${reason}` : "Voice session stopped")
+      : options.logLine;
+
+    if (!skipDisconnect && voiceState.room && typeof voiceState.room.disconnect === "function") {
+      try {
+        await voiceState.room.disconnect();
+      } catch (err) {
+        // ignore disconnect failures during reset
+      }
+    }
+    await releaseVoiceLocalTracks();
+    voiceState.room = null;
+    voiceState.running = false;
+    voiceState.stopping = false;
+    setVoiceButtons(false);
+    stopVoiceVisualizer();
+    resetVoiceAudio();
+    setVoiceStatus(statusText, statusType);
+    if (logLine) appendVoiceLog(logLine);
+  }
+
+  function resolveLiveKitClient() {
+    return window.LivekitClient || window.LiveKitClient || null;
+  }
+
+  function ensureLiveKitClient() {
+    const sdk = resolveLiveKitClient();
+    if (sdk) return sdk;
+    appendVoiceLog("LiveKit SDK 未加载");
+    showToast("LiveKit SDK 未加载", "error");
+    throw new Error("LiveKit SDK 未加载");
+  }
+
+  function ensureVoiceMicSupport() {
+    const hasMediaDevices = typeof navigator !== "undefined" && navigator.mediaDevices;
+    const hasGetUserMedia = !!(hasMediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
+    if (hasGetUserMedia) return;
+    const isLocalhost = typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
+    const secureHint = (typeof window !== "undefined" && window.isSecureContext) || isLocalhost
+      ? "当前浏览器未暴露麦克风接口"
+      : "当前页面不是 HTTPS 或 localhost，浏览器不会开放麦克风";
+    throw new Error(secureHint);
+  }
+
+  async function requestVoiceMicrophonePermission() {
+    ensureVoiceMicSupport();
+    const isLocalhost = typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
+    if (!window.isSecureContext && !isLocalhost) {
+      throw new Error("当前页面不是 HTTPS 或 localhost，浏览器会拒绝麦克风");
+    }
+    const policy = document.permissionsPolicy || document.featurePolicy;
+    if (policy && typeof policy.allowsFeature === "function" && !policy.allowsFeature("microphone")) {
+      throw new Error("当前页面权限策略禁止麦克风（Permissions-Policy）");
+    }
+    try {
+      if (navigator.permissions && typeof navigator.permissions.query === "function") {
+        const status = await navigator.permissions.query({ name: "microphone" });
+        if (status && status.state === "denied") {
+          throw new Error("麦克风权限被拒绝，请在浏览器设置中允许麦克风后重试");
+        }
+      }
+    } catch (err) {
+      if (err && err.message) {
+        throw err;
+      }
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    if (stream && typeof stream.getTracks === "function") {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  }
+
+  function formatVoiceMicError(err) {
+    const raw = String(err?.message || err || "");
+    if (/permission denied|notallowederror/i.test(raw)) {
+      return "麦克风权限被拒绝，请在浏览器设置中允许麦克风后重试";
+    }
+    if (/notfounderror|devicesnotfounderror/i.test(raw)) {
+      return "未检测到麦克风设备";
+    }
+    if (/notreadableerror|trackstarterror/i.test(raw)) {
+      return "麦克风被占用或不可用";
+    }
+    return raw || "麦克风不可用";
+  }
+
+  function isVoiceMicLikeError(err) {
+    const raw = String(err?.message || err || "");
+    return /permission denied|notallowederror|notfounderror|devicesnotfounderror|notreadableerror|trackstarterror|microphone/i.test(raw);
+  }
+
+  async function logVoiceMicDiagnostics(err) {
+    try {
+      const protocol = window.location?.protocol || "";
+      const host = window.location?.host || "";
+      const secure = !!window.isSecureContext;
+      const isLocalhost = typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
+      let policyAllowed = "unknown";
+      const policy = document.permissionsPolicy || document.featurePolicy;
+      if (policy && typeof policy.allowsFeature === "function") {
+        policyAllowed = policy.allowsFeature("microphone") ? "yes" : "no";
+      }
+      let permState = "unknown";
+      try {
+        if (navigator.permissions && typeof navigator.permissions.query === "function") {
+          const status = await navigator.permissions.query({ name: "microphone" });
+          permState = status?.state || "unknown";
+        }
+      } catch (err2) {
+        permState = "unsupported";
+      }
+      const errName = err?.name || "";
+      const errMsg = err?.message || String(err || "");
+      appendVoiceLog(
+        `Mic diagnostics: secure=${secure} localhost=${isLocalhost} protocol=${protocol} host=${host} policy=${policyAllowed} perm=${permState} error=${errName || errMsg}`
+      );
+    } catch (err3) {
+      // ignore diagnostics failures
+    }
   }
 
   async function fetchVoiceToken() {
@@ -1519,55 +3151,51 @@
     const data = await res.json();
     const token = String(data.token || "");
     const livekitURL = String(data.url || "");
-    const tokenOutput = document.getElementById("voiceTokenOutput");
-    const urlOutput = document.getElementById("voiceUrlOutput");
     const urlStatus = document.getElementById("voiceStatusURL");
-    if (tokenOutput) tokenOutput.value = token;
-    if (urlOutput) urlOutput.value = livekitURL;
     if (urlStatus) urlStatus.textContent = livekitURL || "-";
     appendVoiceLog("Fetched voice token");
-    showToast("Voice Token 获取成功", "success");
     return { token, url: livekitURL };
   }
 
-  async function stopVoiceSession() {
-    if (voiceState.room && typeof voiceState.room.disconnect === "function") {
-      try {
-        await voiceState.room.disconnect();
-      } catch (err) {
-        // ignore
-      }
-    }
-    voiceState.room = null;
-    voiceState.localTracks = [];
-    voiceState.running = false;
-    setVoiceButtons(false);
-    stopVoiceVisualizer();
-    resetVoiceAudio();
-    setVoiceStatus("已停止");
-    appendVoiceLog("Voice session stopped");
+  async function stopVoiceSession(reason) {
+    if (voiceState.stopping) return;
+    voiceState.stopping = true;
+    await resetVoiceSession(reason, {
+      skipDisconnect: false,
+      statusText: t("common.notConnected"),
+      statusType: "",
+    });
   }
 
   async function startVoiceSession() {
     if (voiceState.running) {
-      showToast("Voice 会话已在运行中", "info");
+      showToast(t("voice.alreadyRunning"), "info");
       return;
     }
-    if (!window.LiveKitClient) {
-      throw new Error("LiveKit SDK 未加载");
-    }
-    setVoiceButtons(true);
-    setVoiceStatus("连接中...");
+    const startBtn = document.getElementById("voiceStartBtn");
+    if (startBtn) startBtn.disabled = true;
+    setVoiceStatus(t("common.connecting"), "connecting");
     updateVoiceMeta();
+
+    const LiveKitSDK = await ensureLiveKitClient();
     const payload = await fetchVoiceToken();
     if (!payload || !payload.token || !payload.url) {
-      throw new Error("voice token unavailable");
+      throw new Error(t("voice.tokenUnavailable"));
     }
 
-    const room = new window.LiveKitClient.Room();
+    const room = new LiveKitSDK.Room({
+      adaptiveStream: true,
+      dynacast: true,
+    });
     voiceState.room = room;
     voiceState.running = true;
-    room.on(window.LiveKitClient.RoomEvent.TrackSubscribed, (track) => {
+    room.on(LiveKitSDK.RoomEvent.ParticipantConnected, (participant) => {
+      appendVoiceLog(`Participant connected: ${participant?.identity || "unknown"}`);
+    });
+    room.on(LiveKitSDK.RoomEvent.ParticipantDisconnected, (participant) => {
+      appendVoiceLog(`Participant disconnected: ${participant?.identity || "unknown"}`);
+    });
+    room.on(LiveKitSDK.RoomEvent.TrackSubscribed, (track) => {
       if (!track || track.kind !== "audio") return;
       const root = document.getElementById("voiceAudioRoot");
       if (!root) return;
@@ -1581,19 +3209,62 @@
         appendVoiceLog(`Attach audio failed: ${err.message || err}`);
       }
     });
-    room.on(window.LiveKitClient.RoomEvent.Disconnected, () => {
-      stopVoiceSession().catch(() => {});
+    room.on(LiveKitSDK.RoomEvent.Reconnecting, () => {
+      appendVoiceLog("Voice reconnecting");
+      setVoiceStatus("重连中...", "warn");
+    });
+    room.on(LiveKitSDK.RoomEvent.Reconnected, () => {
+      appendVoiceLog("Voice reconnected");
+      setVoiceStatus("已连接", "ok");
+    });
+    room.on(LiveKitSDK.RoomEvent.ConnectionStateChanged, (state) => {
+      appendVoiceLog(`Connection state: ${String(state || "unknown")}`);
+    });
+    if (LiveKitSDK.RoomEvent.MediaDevicesError) {
+      room.on(LiveKitSDK.RoomEvent.MediaDevicesError, (err) => {
+        appendVoiceLog(`Media devices error: ${err?.message || err}`);
+      });
+    }
+    room.on(LiveKitSDK.RoomEvent.Disconnected, (reason) => {
+      resetVoiceSession(reason || "disconnected", {
+        skipDisconnect: true,
+        statusText: t("common.notConnected"),
+        statusType: "",
+      }).catch(() => {});
     });
 
     try {
       await room.connect(payload.url, payload.token);
-      await room.localParticipant.setMicrophoneEnabled(true);
-      setVoiceStatus("已连接", "ok");
+      appendVoiceLog("Connected to LiveKit signaling server");
+      ensureVoiceMicSupport();
+      if (typeof LiveKitSDK.createLocalTracks === "function") {
+        const tracks = await LiveKitSDK.createLocalTracks({ audio: true, video: false });
+        for (const track of tracks) {
+          await room.localParticipant.publishTrack(track);
+        }
+        voiceState.localTracks = tracks;
+      } else {
+        await room.localParticipant.setMicrophoneEnabled(true);
+      }
+      setVoiceStatus(t("voice.connected"), "ok");
+      setVoiceButtons(true);
       appendVoiceLog("Voice session connected");
       startVoiceVisualizer();
     } catch (err) {
-      await stopVoiceSession();
-      setVoiceStatus(err.message || "连接失败", "error");
+      appendVoiceLog(`Voice connect failed: ${err?.message || err}`);
+      await resetVoiceSession("connect failed", {
+        skipDisconnect: false,
+        statusText: t("voice.connectFailed"),
+        statusType: "error",
+        logLine: null,
+      });
+      if (!err?._voiceLogged) {
+        const message = isVoiceMicLikeError(err) ? formatVoiceMicError(err) : String(err?.message || err || "连接失败");
+        appendVoiceLog(message);
+        setVoiceStatus(message || t("voice.connectFailed"), "error");
+        throw Object.assign(new Error(message), { _voiceLogged: true });
+      }
+      setVoiceStatus(err.message || t("voice.connectFailed"), "error");
       throw err;
     }
   }
@@ -1602,29 +3273,53 @@
     const el = document.getElementById("videoStatus");
     if (!el) return;
     el.textContent = String(text || "");
-    el.style.color = type === "error" ? "var(--accent-red)" : type === "ok" ? "var(--accent-green)" : "var(--text-primary)";
-  }
-
-  function appendVideoLog(line) {
-    const el = document.getElementById("videoLogOutput");
-    if (!el) return;
-    el.textContent += `${String(line || "")}\n`;
-    el.scrollTop = el.scrollHeight;
+    el.classList.remove("connected", "connecting", "error");
+    if (type === "ok") el.classList.add("connected");
+    if (type === "warn" || type === "connecting") el.classList.add("connecting");
+    if (type === "error") el.classList.add("error");
   }
 
   function setVideoButtons(running) {
     const start = document.getElementById("videoStartBtn");
     const stop = document.getElementById("videoStopBtn");
-    if (start) start.disabled = !!running;
-    if (stop) stop.disabled = !running;
+    if (start) {
+      start.disabled = false;
+      start.classList.toggle("hidden", !!running);
+    }
+    if (stop) {
+      stop.disabled = false;
+      stop.classList.toggle("hidden", !running);
+    }
+  }
+
+  function updateVideoMeta() {
+    const aspectValue = document.getElementById("videoAspectValue");
+    const lengthValue = document.getElementById("videoLengthValue");
+    const resolutionValue = document.getElementById("videoResolutionValue");
+    const presetValue = document.getElementById("videoPresetValue");
+    const ratioInput = document.getElementById("videoRatio");
+    const lengthInput = document.getElementById("videoLength");
+    const resolutionInput = document.getElementById("videoResolution");
+    const presetInput = document.getElementById("videoPreset");
+    if (aspectValue && ratioInput) aspectValue.textContent = ratioInput.value || "-";
+    if (lengthValue && lengthInput) lengthValue.textContent = `${lengthInput.value || "-"}s`;
+    if (resolutionValue && resolutionInput) resolutionValue.textContent = resolutionInput.value || "-";
+    if (presetValue && presetInput) presetValue.textContent = presetInput.value || "-";
   }
 
   function setVideoProgress(value) {
     const safe = Math.max(0, Math.min(100, Number(value) || 0));
+    videoState.lastProgress = safe;
     const fill = document.getElementById("videoProgressFill");
     const text = document.getElementById("videoProgressText");
     if (fill) fill.style.width = `${safe}%`;
     if (text) text.textContent = `${safe}%`;
+  }
+
+  function setVideoIndeterminate(active) {
+    const bar = document.getElementById("videoProgressBar");
+    if (!bar) return;
+    bar.classList.toggle("indeterminate", !!active);
   }
 
   function stopVideoElapsedTimer() {
@@ -1644,90 +3339,249 @@
     }, 1000);
   }
 
-  function clearVideoOutput() {
+  function resetVideoOutput(keepPreview) {
     const stage = document.getElementById("videoStage");
     const empty = document.getElementById("videoEmpty");
-    const log = document.getElementById("videoLogOutput");
-    if (stage) stage.innerHTML = "";
-    if (empty) empty.style.display = "block";
-    if (log) log.textContent = "";
+    videoState.contentBuffer = "";
+    videoState.progressBuffer = "";
+    videoState.collectingContent = false;
+    videoState.lastProgress = 0;
+    videoState.currentPreviewItem = null;
     setVideoProgress(0);
+    setVideoIndeterminate(false);
+    if (!keepPreview) {
+      if (stage) {
+        stage.innerHTML = "";
+        stage.classList.add("hidden");
+      }
+      if (empty) {
+        empty.classList.remove("hidden");
+      }
+      videoState.previewCount = 0;
+    }
     const duration = document.getElementById("videoDurationValue");
     if (duration) duration.textContent = "-";
-    videoState.contentBuffer = "";
   }
 
-  function renderVideoPreview(url) {
+  function initVideoPreviewSlot() {
     const stage = document.getElementById("videoStage");
-    const empty = document.getElementById("videoEmpty");
     if (!stage) return;
-    if (empty) empty.style.display = "none";
-    stage.innerHTML = "";
-    const wrap = document.createElement("div");
-    wrap.style.display = "grid";
-    wrap.style.gap = "12px";
-    const video = document.createElement("video");
-    video.controls = true;
-    video.preload = "metadata";
-    video.src = url;
-    video.style.width = "100%";
-    video.style.borderRadius = "14px";
-    video.style.background = "#000";
+    videoState.previewCount += 1;
+    const item = document.createElement("div");
+    item.className = "video-item is-pending";
+    item.dataset.index = String(videoState.previewCount);
+
+    const header = document.createElement("div");
+    header.className = "video-item-bar";
+
+    const title = document.createElement("div");
+    title.className = "video-item-title";
+    title.textContent = `Video #${videoState.previewCount}`;
+
     const actions = document.createElement("div");
-    actions.style.display = "flex";
-    actions.style.gap = "8px";
-    const open = document.createElement("a");
-    open.className = "btn btn-outline";
-    open.href = url;
-    open.target = "_blank";
-    open.rel = "noopener";
-    open.textContent = "打开";
-    const download = document.createElement("a");
-    download.className = "btn btn-outline";
-    download.href = url;
-    download.download = "";
-    download.textContent = "下载";
-    actions.appendChild(open);
-    actions.appendChild(download);
-    wrap.appendChild(video);
-    wrap.appendChild(actions);
-    stage.appendChild(wrap);
+    actions.className = "video-item-actions";
+
+    const openBtn = document.createElement("a");
+    openBtn.className = "btn btn-outline video-open hidden";
+    openBtn.target = "_blank";
+    openBtn.rel = "noopener";
+    openBtn.textContent = "打开";
+
+    const downloadBtn = document.createElement("button");
+    downloadBtn.type = "button";
+    downloadBtn.className = "btn btn-outline video-download";
+    downloadBtn.textContent = "下载";
+    downloadBtn.disabled = true;
+
+    actions.appendChild(openBtn);
+    actions.appendChild(downloadBtn);
+    header.appendChild(title);
+    header.appendChild(actions);
+
+    const body = document.createElement("div");
+    body.className = "video-item-body";
+    body.innerHTML = `<div class="video-item-placeholder">${t("video.generatingPlaceholder")}</div>`;
+
+    const link = document.createElement("div");
+    link.className = "video-item-link";
+
+    item.appendChild(header);
+    item.appendChild(body);
+    item.appendChild(link);
+    stage.appendChild(item);
+    stage.classList.remove("hidden");
+    const empty = document.getElementById("videoEmpty");
+    if (empty) empty.classList.add("hidden");
+    videoState.currentPreviewItem = item;
   }
 
-  function extractVideoURL(raw) {
-    const text = String(raw || "");
-    const patterns = [
-      /<source[^>]*src=["']([^"']+)["']/i,
-      /<video[^>]*src=["']([^"']+)["']/i,
-      /\[video\]\(([^)]+)\)/i,
-      /(https?:\/\/[^\s"'`)<]+)/i,
-      /(\/grok\/v1\/files\/video\/[^\s"'`)<]+)/i,
-      /(\/v1\/files\/video\/[^\s"'`)<]+)/i,
-    ];
-    const sanitize = (candidate) => {
-      const input = String(candidate || "").trim().replace(/[),.;]+$/g, "");
-      if (!input) return "";
-      const extMatch = input.match(/\.(mp4|webm)(?:[?#][^\s"'`)<]*)?/i);
-      if (!extMatch || extMatch.index == null) return "";
-      const end = extMatch.index + extMatch[0].length;
-      return input.slice(0, end);
-    };
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (match && match[1]) {
-        const clean = sanitize(match[1]);
-        if (clean) return clean;
+  function ensureVideoPreviewSlot() {
+    if (!videoState.currentPreviewItem) {
+      initVideoPreviewSlot();
+    }
+    return videoState.currentPreviewItem;
+  }
+
+  function updateVideoItemLinks(item, url) {
+    if (!item) return;
+    const openBtn = item.querySelector(".video-open");
+    const downloadBtn = item.querySelector(".video-download");
+    const link = item.querySelector(".video-item-link");
+    const safeUrl = url || "";
+    item.dataset.url = safeUrl;
+    if (link) {
+      link.textContent = safeUrl;
+      link.classList.toggle("has-url", !!safeUrl);
+    }
+    if (openBtn) {
+      if (safeUrl) {
+        openBtn.href = safeUrl;
+        openBtn.classList.remove("hidden");
+      } else {
+        openBtn.classList.add("hidden");
+        openBtn.removeAttribute("href");
       }
     }
-    return "";
+    if (downloadBtn) {
+      downloadBtn.dataset.url = safeUrl;
+      downloadBtn.disabled = !safeUrl;
+    }
+    if (safeUrl) {
+      item.classList.remove("is-pending");
+    }
   }
 
-  function extractVideoProgress(raw) {
-    const text = String(raw || "");
-    const match = text.match(/(\d{1,3})\s*%/);
-    if (!match || !match[1]) return null;
-    const value = Number(match[1]);
-    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null;
+  function extractVideoInfo(buffer) {
+    if (!buffer) return null;
+    if (buffer.includes("<video")) {
+      const matches = buffer.match(/<video[\s\S]*?<\/video>/gi);
+      if (matches && matches.length) {
+        return { html: matches[matches.length - 1] };
+      }
+    }
+    const mdMatches = buffer.match(/\[video\]\(([^)]+)\)/g);
+    if (mdMatches && mdMatches.length) {
+      const last = mdMatches[mdMatches.length - 1];
+      const urlMatch = last.match(/\[video\]\(([^)]+)\)/);
+      if (urlMatch) {
+        return { url: urlMatch[1] };
+      }
+    }
+    const urlMatches = buffer.match(/(?:https?:\/\/|\/grok\/v1\/files\/video\/|\/v1\/files\/video\/)[^\s<)]+/g);
+    if (urlMatches && urlMatches.length) {
+      return { url: urlMatches[urlMatches.length - 1] };
+    }
+    return null;
+  }
+
+  function renderVideoFromHtml(html) {
+    const container = ensureVideoPreviewSlot();
+    if (!container) return;
+    const body = container.querySelector(".video-item-body");
+    if (!body) return;
+    body.innerHTML = html;
+    const videoEl = body.querySelector("video");
+    let videoUrl = "";
+    if (videoEl) {
+      videoEl.controls = true;
+      videoEl.preload = "metadata";
+      const source = videoEl.querySelector("source");
+      if (source && source.getAttribute("src")) {
+        videoUrl = source.getAttribute("src");
+      } else if (videoEl.getAttribute("src")) {
+        videoUrl = videoEl.getAttribute("src");
+      }
+    }
+    updateVideoItemLinks(container, videoUrl);
+  }
+
+  function renderVideoFromUrl(url) {
+    const container = ensureVideoPreviewSlot();
+    if (!container) return;
+    const body = container.querySelector(".video-item-body");
+    if (!body) return;
+    const safeUrl = url || "";
+    body.innerHTML = `
+      <video controls preload="metadata">
+        <source src="${safeUrl}" type="video/mp4">
+      </video>
+    `;
+    updateVideoItemLinks(container, safeUrl);
+  }
+
+  function handleVideoDelta(text) {
+    if (!text) return;
+    if (text.includes("<think>") || text.includes("</think>")) {
+      return;
+    }
+    if (/超分辨率|super\s+resolution/i.test(text)) {
+      setVideoStatus(t("video.superResolution"), "connecting");
+      setVideoIndeterminate(true);
+      const progressText = document.getElementById("videoProgressText");
+      if (progressText) progressText.textContent = t("video.superResolution");
+      return;
+    }
+
+    if (!videoState.collectingContent) {
+      const maybeVideo = text.includes("<video")
+        || text.includes("[video](")
+        || text.includes("http://")
+        || text.includes("https://")
+        || text.includes("/grok/v1/files/video/")
+        || text.includes("/v1/files/video/");
+      if (maybeVideo) {
+        videoState.collectingContent = true;
+      }
+    }
+
+    if (videoState.collectingContent) {
+      videoState.contentBuffer += text;
+      const info = extractVideoInfo(videoState.contentBuffer);
+      if (info) {
+        if (info.html) {
+          renderVideoFromHtml(info.html);
+        } else if (info.url) {
+          renderVideoFromUrl(info.url);
+        }
+      }
+      return;
+    }
+
+    videoState.progressBuffer += text;
+    const progressText = document.getElementById("videoProgressText");
+    const roundMatches = [...videoState.progressBuffer.matchAll(/\[round=(\d+)\/(\d+)\]\s*progress=([0-9]+(?:\.[0-9]+)?)%/g)];
+    if (roundMatches.length) {
+      const last = roundMatches[roundMatches.length - 1];
+      const round = parseInt(last[1], 10);
+      const total = parseInt(last[2], 10);
+      const value = parseFloat(last[3]);
+      setVideoIndeterminate(false);
+      setVideoProgress(value);
+      if (progressText && Number.isFinite(round) && Number.isFinite(total) && total > 0) {
+        progressText.textContent = `${Math.round(value)}% · ${round}/${total}`;
+      }
+      videoState.progressBuffer = videoState.progressBuffer.slice(Math.max(0, videoState.progressBuffer.length - 300));
+      return;
+    }
+
+    const genericProgressMatches = [...videoState.progressBuffer.matchAll(/progress=([0-9]+(?:\.[0-9]+)?)%/g)];
+    if (genericProgressMatches.length) {
+      const last = genericProgressMatches[genericProgressMatches.length - 1];
+      const value = parseFloat(last[1]);
+      setVideoIndeterminate(false);
+      setVideoProgress(value);
+      videoState.progressBuffer = videoState.progressBuffer.slice(Math.max(0, videoState.progressBuffer.length - 240));
+      return;
+    }
+
+    const matches = [...videoState.progressBuffer.matchAll(/进度\s*(\d+)%/g)];
+    if (matches.length) {
+      const last = matches[matches.length - 1];
+      const value = parseInt(last[1], 10);
+      setVideoIndeterminate(false);
+      setVideoProgress(value);
+      videoState.progressBuffer = videoState.progressBuffer.slice(Math.max(0, videoState.progressBuffer.length - 200));
+    }
   }
 
   async function createVideoTask(payload) {
@@ -1764,20 +3618,36 @@
     videoState.stream = null;
   }
 
+  function finishVideoRun(hasError) {
+    if (!videoState.running) return;
+    closeVideoStream();
+    videoState.running = false;
+    setVideoButtons(false);
+    stopVideoElapsedTimer();
+    setVideoIndeterminate(false);
+    if (!hasError) {
+      setVideoStatus(t("common.done"), "ok");
+      setVideoProgress(100);
+    }
+    const duration = document.getElementById("videoDurationValue");
+    if (duration && videoState.startAt) {
+      const seconds = Math.max(0, Math.round((Date.now() - videoState.startAt) / 1000));
+      duration.textContent = `${seconds}s`;
+    }
+  }
+
   function openVideoSSE(taskID) {
     const url = `/api/v1/admin/video/sse?task_id=${encodeURIComponent(taskID)}&t=${Date.now()}`;
     const es = new EventSource(url);
     videoState.stream = es;
+    es.onopen = () => {
+      setVideoStatus(t("common.generating"), "ok");
+    };
     es.onmessage = (event) => {
       const text = String(event.data || "");
       if (!text) return;
-      appendVideoLog(text);
       if (text === "[DONE]") {
-        closeVideoStream();
-        stopVideoElapsedTimer();
-        setVideoButtons(false);
-        setVideoStatus("已完成", "ok");
-        setVideoProgress(100);
+        finishVideoRun(false);
         return;
       }
       let payload = null;
@@ -1788,47 +3658,37 @@
       }
       const errorMsg = payload && (payload.error || payload?.error?.message);
       if (errorMsg) {
-        closeVideoStream();
-        stopVideoElapsedTimer();
-        setVideoButtons(false);
         setVideoStatus(String(errorMsg), "error");
+        finishVideoRun(true);
         return;
       }
       const choice = payload?.choices?.[0];
       const deltaContent = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
       const messageContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
       const content = deltaContent || messageContent || text;
-      videoState.contentBuffer += content;
-      const progress = extractVideoProgress(content);
-      if (progress !== null) {
-        setVideoProgress(progress);
-      }
-      const videoURL = extractVideoURL(content) || extractVideoURL(videoState.contentBuffer);
-      if (videoURL) {
-        renderVideoPreview(videoURL);
-        setVideoProgress(100);
+      handleVideoDelta(content);
+      if (choice && choice.finish_reason === "stop") {
+        finishVideoRun(false);
       }
     };
     es.onerror = () => {
-      closeVideoStream();
-      stopVideoElapsedTimer();
-      setVideoButtons(false);
-      if (videoState.running) {
-        setVideoStatus("连接中断", "error");
-      }
+      if (!videoState.running) return;
+      setVideoStatus(t("common.connectionError"), "error");
+      finishVideoRun(true);
     };
   }
 
   async function startVideo() {
     if (videoState.running) {
-      showToast("Video 任务已在运行中", "info");
+      showToast(t("video.alreadyRunning"), "info");
       return;
     }
     const prompt = String(document.getElementById("videoPrompt")?.value || "").trim();
     if (!prompt) {
-      showToast("请输入 Video Prompt", "error");
+      showToast(t("video.enterPrompt"), "error");
       return;
     }
+    const effort = String(document.getElementById("videoEffort")?.value || "").trim();
     const payload = {
       prompt,
       aspect_ratio: String(document.getElementById("videoRatio")?.value || "3:2"),
@@ -1836,34 +3696,31 @@
       resolution_name: String(document.getElementById("videoResolution")?.value || "480p"),
       preset: String(document.getElementById("videoPreset")?.value || "normal"),
       image_url: videoState.fileDataURL || String(document.getElementById("videoImageUrl")?.value || "").trim(),
-      reasoning_effort: String(document.getElementById("videoEffort")?.value || "").trim(),
+      reasoning_effort: effort || "low",
     };
-    const aspectValue = document.getElementById("videoAspectValue");
-    const lengthValue = document.getElementById("videoLengthValue");
-    const resolutionValue = document.getElementById("videoResolutionValue");
-    const presetValue = document.getElementById("videoPresetValue");
-    if (aspectValue) aspectValue.textContent = payload.aspect_ratio || "-";
-    if (lengthValue) lengthValue.textContent = `${payload.video_length || "-"}s`;
-    if (resolutionValue) resolutionValue.textContent = payload.resolution_name || "-";
-    if (presetValue) presetValue.textContent = payload.preset || "-";
-    clearVideoOutput();
+    updateVideoMeta();
+    resetVideoOutput(true);
+    initVideoPreviewSlot();
     setVideoButtons(true);
-    setVideoStatus("创建任务中...");
+    const startBtn = document.getElementById("videoStartBtn");
+    if (startBtn) startBtn.disabled = true;
+    setVideoStatus(t("common.connecting"), "connecting");
     videoState.running = true;
     try {
       const taskID = await createVideoTask(payload);
       if (!taskID) {
-        throw new Error("创建任务失败：空 task_id");
+        throw new Error(t("video.taskEmpty"));
       }
       videoState.taskID = taskID;
       videoState.startAt = Date.now();
       startVideoElapsedTimer();
-      setVideoStatus("运行中", "ok");
+      setVideoStatus(t("common.generating"), "ok");
+      setVideoIndeterminate(true);
       openVideoSSE(taskID);
     } catch (err) {
       videoState.running = false;
       setVideoButtons(false);
-      setVideoStatus(err.message || "启动失败", "error");
+      setVideoStatus(err.message || t("video.startFailed"), "error");
       throw err;
     }
   }
@@ -1873,7 +3730,8 @@
     closeVideoStream();
     stopVideoElapsedTimer();
     setVideoButtons(false);
-    setVideoStatus("已停止");
+    setVideoStatus(t("common.notConnected"));
+    setVideoIndeterminate(false);
     try {
       await stopVideoTask();
     } catch (err) {
@@ -2423,7 +4281,12 @@
   }
 
   function switchGrokToolTab(tab) {
-    closeChatSidebar();
+    const nextTab = String(tab || "").toLowerCase();
+    if (nextTab !== "chat") {
+      closeChatSidebar();
+    } else if (!isMobileChatSidebar()) {
+      openChatSidebar();
+    }
     const sections = {
       chat: document.getElementById("grokChatSection"),
       imagine: document.getElementById("grokImagineSection"),
@@ -2456,14 +4319,140 @@
       btn.addEventListener("click", () => {
         const mode = String(btn.dataset.imagineMode || "auto").toLowerCase();
         syncImagineModeUI(mode);
+        imagineState.mode = mode;
+        if (imagineState.running && Array.isArray(imagineState.taskIDs) && imagineState.taskIDs.length > 0) {
+          const prompt = String(document.getElementById("imaginePrompt")?.value || "").trim();
+          const ratio = String(document.getElementById("imagineRatio")?.value || "2:3");
+          if (mode === "sse") {
+            startImagineSSE(imagineState.taskIDs);
+          } else if (mode === "ws") {
+            startImagineWS(imagineState.taskIDs, prompt, ratio, false);
+          } else {
+            startImagineWS(imagineState.taskIDs, prompt, ratio, true);
+          }
+        }
       });
     });
+    const imaginePrompt = document.getElementById("imaginePrompt");
+    if (imaginePrompt) {
+      imaginePrompt.addEventListener("keydown", async (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          try {
+            await startImagine();
+          } catch (err) {
+            showToast(`启动失败: ${err.message || err}`, "error");
+          }
+        }
+      });
+    }
+    [
+      ["imagineRatio", "imagineRatio"],
+      ["imagineConcurrent", "imagineConcurrent"],
+      ["imagineNSFW", "imagineNSFW"],
+    ].forEach(([id, key]) => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      const sync = () => {
+        const raw = input.value;
+        saveGrokToolsUIState({ [key]: id === "imagineConcurrent" ? Number(raw || 1) : String(raw || "") });
+      };
+      input.addEventListener("change", sync);
+      input.addEventListener("input", sync);
+    });
+    bindPersistedCheckbox("imagineAutoScroll", "imagineAutoScroll");
+    bindPersistedCheckbox("imagineAutoDownload", "imagineAutoDownload");
+    bindPersistedCheckbox("imagineAutoFilter", "imagineAutoFilter");
+    bindPersistedCheckbox("imagineReverseInsert", "imagineReverseInsert");
+    const folderBtn = document.getElementById("imagineSelectFolderBtn");
+    const folderPath = document.getElementById("imagineFolderPath");
+    const autoDownloadToggle = document.getElementById("imagineAutoDownload");
+    if ("showDirectoryPicker" in window && folderBtn) {
+      folderBtn.disabled = !(autoDownloadToggle && autoDownloadToggle.checked);
+      folderBtn.addEventListener("click", async () => {
+        try {
+          imagineDirectoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+          imagineUseFileSystemAPI = true;
+          if (folderPath) {
+            folderPath.textContent = imagineDirectoryHandle.name;
+            folderBtn.style.color = "#059669";
+          }
+          showToast(`已选择保存位置: ${imagineDirectoryHandle.name}`, "success");
+        } catch (err) {
+          if (err && err.name !== "AbortError") {
+            showToast("选择保存位置失败", "error");
+          }
+        }
+      });
+    }
+    if (autoDownloadToggle && folderBtn) {
+      autoDownloadToggle.addEventListener("change", () => {
+        if (autoDownloadToggle.checked && "showDirectoryPicker" in window) {
+          folderBtn.disabled = false;
+        } else {
+          folderBtn.disabled = true;
+        }
+      });
+    }
     const startBtn = document.getElementById("imagineStartBtn");
     const stopBtn = document.getElementById("imagineStopBtn");
     const clearBtn = document.getElementById("imagineClearBtn");
     if (startBtn) startBtn.addEventListener("click", () => startImagine());
     if (stopBtn) stopBtn.addEventListener("click", () => stopImagine());
     if (clearBtn) clearBtn.addEventListener("click", () => clearImagineGrid());
+    const batchDownloadBtn = document.getElementById("batchDownloadBtn");
+    const toggleSelectAllBtn = document.getElementById("toggleSelectAllBtn");
+    const downloadSelectedBtn = document.getElementById("downloadSelectedBtn");
+    const exitSelectionBtn = document.getElementById("exitSelectionBtn");
+    if (batchDownloadBtn) batchDownloadBtn.addEventListener("click", toggleImagineSelectionMode);
+    if (toggleSelectAllBtn) toggleSelectAllBtn.addEventListener("click", toggleImagineSelectAll);
+    if (downloadSelectedBtn) downloadSelectedBtn.addEventListener("click", downloadSelectedImages);
+    if (exitSelectionBtn) exitSelectionBtn.addEventListener("click", exitImagineSelectionMode);
+    const imagineGrid = document.getElementById("imagineGrid");
+    if (imagineGrid) {
+      imagineGrid.addEventListener("click", (event) => {
+        const item = event.target.closest(".waterfall-item");
+        if (!item) return;
+        if (imagineSelectionMode) {
+          toggleImagineItemSelection(item);
+          return;
+        }
+        const img = event.target.closest(".waterfall-item img");
+        if (img) {
+          const images = getImagineAllImages();
+          const index = images.indexOf(img);
+          if (index !== -1) {
+            updateImagineLightbox(index);
+            const lightbox = document.getElementById("lightbox");
+            if (lightbox) lightbox.classList.add("active");
+          }
+        }
+      });
+    }
+    const lightbox = document.getElementById("lightbox");
+    const lightboxImg = document.getElementById("lightboxImg");
+    if (lightbox) {
+      lightbox.addEventListener("click", () => {
+        lightbox.classList.remove("active");
+        imagineLightboxIndex = -1;
+      });
+      if (lightboxImg) {
+        lightboxImg.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+      }
+      document.addEventListener("keydown", (event) => {
+        if (!lightbox.classList.contains("active")) return;
+        if (event.key === "Escape") {
+          lightbox.classList.remove("active");
+          imagineLightboxIndex = -1;
+        } else if (event.key === "ArrowLeft") {
+          showImaginePrevImage();
+        } else if (event.key === "ArrowRight") {
+          showImagineNextImage();
+        }
+      });
+    }
 
     const videoStartBtn = document.getElementById("videoStartBtn");
     if (videoStartBtn) {
@@ -2488,8 +4477,38 @@
     const videoClearBtn = document.getElementById("videoClearBtn");
     if (videoClearBtn) {
       videoClearBtn.addEventListener("click", () => {
-        clearVideoOutput();
-        setVideoStatus("未启动");
+        resetVideoOutput();
+        setVideoStatus(t("common.notConnected"));
+      });
+    }
+    const videoStage = document.getElementById("videoStage");
+    if (videoStage) {
+      videoStage.addEventListener("click", async (event) => {
+        const target = event.target.closest(".video-download");
+        if (!target || !videoStage.contains(target)) return;
+        event.preventDefault();
+        const item = target.closest(".video-item");
+        if (!item) return;
+        const url = item.dataset.url || target.dataset.url || "";
+        if (!url) return;
+        try {
+          const response = await fetch(url, { mode: "cors" });
+          if (!response.ok) {
+            throw new Error("download_failed");
+          }
+          const blob = await response.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = blobUrl;
+          const index = item.dataset.index || "";
+          anchor.download = index ? `grok_video_${index}.mp4` : "grok_video.mp4";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          URL.revokeObjectURL(blobUrl);
+        } catch (err) {
+          showToast(t("video.downloadFailed"), "error");
+        }
       });
     }
     const videoSelectImageBtn = document.getElementById("videoSelectImageBtn");
@@ -2536,24 +4555,45 @@
         if (fileName) fileName.textContent = "未选择文件";
       });
     }
-
-    const voiceFetchBtn = document.getElementById("voiceFetchBtn");
-    if (voiceFetchBtn) {
-      voiceFetchBtn.addEventListener("click", async () => {
-        try {
-          await fetchVoiceToken();
-        } catch (err) {
-          showToast(`获取失败: ${err.message || err}`, "error");
+    const videoPrompt = document.getElementById("videoPrompt");
+    if (videoPrompt) {
+      videoPrompt.addEventListener("keydown", async (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          try {
+            await startVideo();
+          } catch (err) {
+            showToast(`启动失败: ${err.message || err}`, "error");
+          }
         }
       });
     }
+    [
+      ["videoRatio", "videoRatio"],
+      ["videoLength", "videoLength"],
+      ["videoResolution", "videoResolution"],
+      ["videoPreset", "videoPreset"],
+      ["videoEffort", "videoEffort"],
+    ].forEach(([id, key]) => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      const sync = () => {
+        saveGrokToolsUIState({ [key]: String(input.value || "") });
+        if (id !== "videoEffort") updateVideoMeta();
+      };
+      input.addEventListener("change", sync);
+      input.addEventListener("input", sync);
+    });
+
     const voiceStartBtn = document.getElementById("voiceStartBtn");
     if (voiceStartBtn) {
       voiceStartBtn.addEventListener("click", async () => {
         try {
           await startVoiceSession();
         } catch (err) {
-          appendVoiceLog(err.message || "Voice start failed");
+          if (!err?._voiceLogged) {
+            appendVoiceLog(err.message || "Voice start failed");
+          }
           showToast(`Voice 启动失败: ${err.message || err}`, "error");
         }
       });
@@ -2568,28 +4608,36 @@
         }
       });
     }
-    const voiceCopyBtn = document.getElementById("voiceCopyBtn");
-    if (voiceCopyBtn) {
-      voiceCopyBtn.addEventListener("click", () => {
-        const token = String(document.getElementById("voiceTokenOutput")?.value || "");
-        if (!token) {
-          showToast("暂无可复制 Token", "info");
-          return;
-        }
-        copyToClipboard(token);
-      });
-    }
     const voiceClearLogBtn = document.getElementById("voiceClearLogBtn");
     if (voiceClearLogBtn) {
       voiceClearLogBtn.addEventListener("click", () => clearVoiceLog());
+    }
+    const voiceCopyLogBtn = document.getElementById("voiceCopyLogBtn");
+    if (voiceCopyLogBtn) {
+      voiceCopyLogBtn.addEventListener("click", () => {
+        const content = String(document.getElementById("voiceLogOutput")?.textContent || "").trim();
+        if (!content) {
+          showToast("暂无可复制日志", "info");
+          return;
+        }
+        copyToClipboard(content);
+      });
     }
     const voiceName = document.getElementById("voiceName");
     const voicePersonality = document.getElementById("voicePersonality");
     const voiceSpeed = document.getElementById("voiceSpeed");
     [voiceName, voicePersonality, voiceSpeed].forEach((input) => {
       if (!input) return;
-      input.addEventListener("change", updateVoiceMeta);
-      input.addEventListener("input", updateVoiceMeta);
+      const sync = () => {
+        updateVoiceMeta();
+        saveGrokToolsUIState({
+          voiceName: String(document.getElementById("voiceName")?.value || "ara"),
+          voicePersonality: String(document.getElementById("voicePersonality")?.value || "assistant"),
+          voiceSpeed: Number(document.getElementById("voiceSpeed")?.value || 1),
+        });
+      };
+      input.addEventListener("change", sync);
+      input.addEventListener("input", sync);
     });
 
     const cacheRefreshBtn = document.getElementById("cacheRefreshBtn");
@@ -2765,19 +4813,50 @@
       closeCacheBatchStream();
     });
     const uiState = loadGrokToolsUIState();
+    await loadImagineConfig();
     switchGrokToolTab(String(uiState.activeToolTab || "chat"));
+    syncImagineModeUI(String(uiState.imagineMode || document.getElementById("imagineMode")?.value || "auto"), false);
+    const imagineRatio = document.getElementById("imagineRatio");
+    const imagineConcurrent = document.getElementById("imagineConcurrent");
+    const imagineNSFW = document.getElementById("imagineNSFW");
+    if (imagineRatio && typeof uiState.imagineRatio === "string" && uiState.imagineRatio) {
+      imagineRatio.value = uiState.imagineRatio;
+    }
+    if (imagineConcurrent && typeof uiState.imagineConcurrent === "number" && Number.isFinite(uiState.imagineConcurrent)) {
+      imagineConcurrent.value = String(uiState.imagineConcurrent);
+    }
+    if (imagineNSFW && typeof uiState.imagineNSFW === "string" && uiState.imagineNSFW) {
+      imagineNSFW.value = uiState.imagineNSFW;
+    }
     resetImagineMetrics();
     updateImagineActiveCount();
-    clearVideoOutput();
+    const videoRatio = document.getElementById("videoRatio");
+    const videoLength = document.getElementById("videoLength");
+    const videoResolution = document.getElementById("videoResolution");
+    const videoPreset = document.getElementById("videoPreset");
+    const videoEffort = document.getElementById("videoEffort");
+    if (videoRatio && typeof uiState.videoRatio === "string") videoRatio.value = uiState.videoRatio;
+    if (videoLength && typeof uiState.videoLength === "string") videoLength.value = uiState.videoLength;
+    if (videoResolution && typeof uiState.videoResolution === "string") videoResolution.value = uiState.videoResolution;
+    if (videoPreset && typeof uiState.videoPreset === "string") videoPreset.value = uiState.videoPreset;
+    if (videoEffort && typeof uiState.videoEffort === "string") videoEffort.value = uiState.videoEffort;
+    resetVideoOutput();
+    updateVideoMeta();
     setVideoButtons(false);
-    setVideoStatus("未启动");
+    setVideoStatus(t("common.notConnected"));
+    const voiceName = document.getElementById("voiceName");
+    const voicePersonality = document.getElementById("voicePersonality");
+    const voiceSpeed = document.getElementById("voiceSpeed");
+    if (voiceName && typeof uiState.voiceName === "string" && uiState.voiceName) voiceName.value = uiState.voiceName;
+    if (voicePersonality && typeof uiState.voicePersonality === "string" && uiState.voicePersonality) voicePersonality.value = uiState.voicePersonality;
+    if (voiceSpeed && typeof uiState.voiceSpeed === "number" && Number.isFinite(uiState.voiceSpeed)) voiceSpeed.value = String(uiState.voiceSpeed);
     updateVoiceMeta();
-    initVoiceVisualizer();
+    startVoiceVisualizer();
     stopVoiceVisualizer();
+    window.addEventListener("resize", buildVoiceVisualizerBars);
     setVoiceButtons(false);
-    setVoiceStatus("未连接");
+    setVoiceStatus(t("common.notConnected"));
     updateCacheBatchUI();
-    syncImagineModeUI(document.getElementById("imagineMode")?.value || "auto");
     try {
       await refreshCacheView();
     } catch (err) {
