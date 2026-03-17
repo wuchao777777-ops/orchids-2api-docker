@@ -139,7 +139,7 @@ func TestRefreshAccountState_OrchidsTokenRefreshFailureMarksUnauthorized(t *test
 	}
 }
 
-func TestRefreshAccountState_OrchidsTokenRefreshFailureStillSyncsQuotaFromSession(t *testing.T) {
+func TestRefreshAccountState_OrchidsTokenRefreshFailureWithQuotaFallbackReturnsSuccess(t *testing.T) {
 	prevGetToken := orchidsGetAccountToken
 	prevFetchCredits := orchidsFetchCredits
 	t.Cleanup(func() {
@@ -168,14 +168,14 @@ func TestRefreshAccountState_OrchidsTokenRefreshFailureStillSyncsQuotaFromSessio
 	}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err == nil {
-		t.Fatal("expected error")
+	if err != nil {
+		t.Fatalf("refreshAccountState() error: %v", err)
 	}
-	if status != "429" {
-		t.Fatalf("status=%q want 429", status)
+	if status != "" {
+		t.Fatalf("status=%q want empty", status)
 	}
-	if httpStatus != http.StatusTooManyRequests {
-		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusTooManyRequests)
+	if httpStatus != 0 {
+		t.Fatalf("httpStatus=%d want 0", httpStatus)
 	}
 	if acc.SessionID != "sess_quota" {
 		t.Fatalf("SessionID=%q want sess_quota", acc.SessionID)

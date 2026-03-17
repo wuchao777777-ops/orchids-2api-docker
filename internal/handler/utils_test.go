@@ -95,6 +95,24 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 	}
 }
 
+func TestChannelFromPath(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "/orchids/v1/messages", want: "orchids"},
+		{path: "/warp/v1/messages", want: "warp"},
+		{path: "/bolt/v1/messages", want: "bolt"},
+		{path: "/grok/v1/chat/completions", want: "grok"},
+		{path: "/v1/messages", want: ""},
+	}
+	for _, tt := range tests {
+		if got := channelFromPath(tt.path); got != tt.want {
+			t.Fatalf("channelFromPath(%q)=%q want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
 func TestExtractWorkdirFromRequestPriority(t *testing.T) {
 	baseReq := func() *http.Request {
 		r := httptest.NewRequest(http.MethodPost, "http://example.com/warp/v1/messages", nil)

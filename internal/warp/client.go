@@ -102,7 +102,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("warp session not initialized")
 	}
 
-	ctx, cancel := withDefaultTimeout(ctx, c.requestTimeout())
+	ctx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout())
 	defer cancel()
 
 	authClient := c.authHTTPClient()
@@ -242,7 +242,7 @@ func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
 	if c == nil || c.session == nil {
 		return "", fmt.Errorf("warp session not initialized")
 	}
-	ctx, cancel := withDefaultTimeout(ctx, c.requestTimeout())
+	ctx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout())
 	defer cancel()
 
 	if err := c.session.ensureToken(ctx, c.authHTTPClient()); err != nil {
@@ -251,12 +251,11 @@ func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
 	return c.session.currentJWT(), nil
 }
 
-
 func (c *Client) ForceRefreshAccount(ctx context.Context) (string, error) {
 	if c == nil || c.session == nil {
 		return "", fmt.Errorf("warp session not initialized")
 	}
-	ctx, cancel := withDefaultTimeout(ctx, c.requestTimeout())
+	ctx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout())
 	defer cancel()
 
 	c.session.clearToken()
@@ -309,14 +308,4 @@ func (c *Client) authHTTPClient() *http.Client {
 		return c.httpClient
 	}
 	return nil
-}
-
-func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		return ctx, func() {}
-	}
-	if _, ok := ctx.Deadline(); ok {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, timeout)
 }

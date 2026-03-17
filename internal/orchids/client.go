@@ -442,7 +442,7 @@ func (c *Client) fetchToken() (string, error) {
 	url := fmt.Sprintf("%s/v1/client/sessions/%s/tokens?__clerk_api_version=%s&_clerk_js_version=%s",
 		clerk.ClerkBaseURL, sid, clerk.ClerkAPIVersion, clerk.ClerkJSVersion)
 
-	ctx, cancel := withDefaultTimeout(context.Background(), c.requestTimeout())
+	ctx, cancel := util.WithDefaultTimeout(context.Background(), c.requestTimeout())
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader("organization_id="))
@@ -671,7 +671,7 @@ func (c *Client) FetchUpstreamModels(ctx context.Context) ([]UpstreamModel, erro
 		return nil, fmt.Errorf("failed to get token: %w", err)
 	}
 
-	ctx, cancel := withDefaultTimeout(ctx, c.requestTimeout())
+	ctx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout())
 	defer cancel()
 
 	// Replace /agent/coding-agent with /v1/models if needed, or just append /v1/models if base is different
@@ -740,16 +740,6 @@ func (c *Client) requestTimeout() time.Duration {
 		return time.Duration(c.config.RequestTimeout) * time.Second
 	}
 	return 30 * time.Second
-}
-
-func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		return context.WithCancel(ctx)
-	}
-	if _, ok := ctx.Deadline(); ok {
-		return context.WithCancel(ctx)
-	}
-	return context.WithTimeout(ctx, timeout)
 }
 
 func isWSFallback(err error) bool {

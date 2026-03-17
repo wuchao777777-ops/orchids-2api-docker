@@ -39,6 +39,11 @@ const fallbackAgentModes = {
     "claude-4-6-opus-high",
     "claude-4-6-opus-max",
   ],
+  bolt: [
+    "claude-opus-4-6",
+    "claude-sonnet-4-5",
+    "claude-3-7-sonnet-20250219",
+  ],
   grok: [
     "grok-3",
     "grok-3-mini",
@@ -180,6 +185,9 @@ function getAccountToken(acc) {
   if (type === 'orchids') {
     return acc.client_cookie || acc.session_cookie || acc.token || '';
   }
+  if (type === 'bolt') {
+    return acc.session_cookie || acc.client_cookie || acc.token || '';
+  }
   return acc.client_cookie || acc.token || '';
 }
 
@@ -187,8 +195,15 @@ function applyTokenLabels(type) {
   const label = document.getElementById("tokenLabel");
   const input = document.getElementById("clientCookie");
   const hint = document.getElementById("tokenHint");
+  const projectGroup = document.getElementById("projectIdGroup");
+  const projectInput = document.getElementById("projectId");
   const accountId = String(document.getElementById("accountId")?.value || "");
   if (!label || !input || !hint) return;
+  if (projectGroup && projectInput) {
+    const boltMode = type === "bolt";
+    projectGroup.style.display = boltMode ? "" : "none";
+    projectInput.required = boltMode;
+  }
   if (type === 'warp') {
     label.textContent = "Refresh Token";
     input.placeholder = "每行一个 refresh_token";
@@ -202,6 +217,13 @@ function applyTokenLabels(type) {
     hint.textContent = accountId
       ? "编辑时仅保存第一行 SSO Token"
       : "支持批量添加 Grok。每行一个 sso token 或 Cookie 片段";
+  } else if (type === 'bolt') {
+    label.textContent = "__session";
+    input.placeholder = "每行一个 Bolt __session";
+    hint.textContent = accountId
+      ? "Bolt 编辑时仅保存第一行 __session，并保留当前 project_id"
+      : "支持批量添加 Bolt。每行一个 __session，project_id 共用下方输入";
+    input.required = true;
   } else {
     label.textContent = "__session";
     input.placeholder = "每行一个 __session";
@@ -240,7 +262,7 @@ function resolveAgentMode(type, preferredValue = "") {
 function renderPlatformTabs() {
   const container = document.getElementById("platformFilters");
   if (!container) return;
-  const defaultTypes = ["orchids", "warp", "grok"];
+  const defaultTypes = ["orchids", "warp", "bolt", "grok"];
   const types = new Set([...defaultTypes, ...accounts.map(normalizeAccountType)]);
   const sorted = Array.from(types).sort();
   const tabs = [...sorted];
@@ -311,6 +333,10 @@ function evaluateAccountStatus(acc) {
   } else if (type === 'grok') {
     if (!getAccountToken(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 SSO Token' };
+    }
+  } else if (type === 'bolt') {
+    if (!getAccountToken(acc) || !acc.project_id) {
+      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Bolt __session 或 project_id' };
     }
   } else if (!acc.session_id && !acc.session_cookie) {
     return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少会话信息' };
@@ -878,6 +904,7 @@ function openModal(account = null) {
       document.getElementById("accountId").value = account.id;
       document.getElementById("accountType").value = normalizeAccountType(account);
       document.getElementById("clientCookie").value = getAccountToken(account);
+      document.getElementById("projectId").value = account.project_id || "";
       document.getElementById("enabled").checked = account.enabled;
     } else {
       title.textContent = "添加账号";
@@ -886,6 +913,7 @@ function openModal(account = null) {
       document.getElementById("accountType").value = "orchids";
       document.getElementById("enabled").checked = true;
       document.getElementById("clientCookie").value = "";
+      document.getElementById("projectId").value = "";
     }
   };
 
@@ -909,6 +937,7 @@ async function saveAccount(e) {
   const id = document.getElementById("accountId").value;
   const type = document.getElementById("accountType").value;
   const token = document.getElementById("clientCookie").value;
+  const projectId = String(document.getElementById("projectId")?.value || "").trim();
   const credentials = splitBatchCredentialInput(token);
   const existing = id ? accounts.find((a) => String(a.id) === String(id)) : null;
   const data = {
@@ -922,12 +951,19 @@ async function saveAccount(e) {
     showToast("请填写至少一个账号凭证", "error");
     return;
   }
+  if (type === "bolt" && !projectId) {
+    showToast("请填写 Bolt project_id", "error");
+    return;
+  }
 
   try {
     if (id) {
       const payload = { ...data };
       if (type === 'warp') {
         payload.refresh_token = credentials[0];
+      } else if (type === 'bolt') {
+        payload.session_cookie = credentials[0];
+        payload.project_id = projectId;
       } else {
         payload.client_cookie = credentials[0];
       }
@@ -950,6 +986,9 @@ async function saveAccount(e) {
         const payload = { ...data };
         if (type === 'warp') {
           payload.refresh_token = item;
+        } else if (type === 'bolt') {
+          payload.session_cookie = item;
+          payload.project_id = projectId;
         } else {
           payload.client_cookie = item;
         }
@@ -973,6 +1012,9 @@ async function saveAccount(e) {
     const payload = { ...data };
     if (type === 'warp') {
       payload.refresh_token = credentials[0];
+    } else if (type === 'bolt') {
+      payload.session_cookie = credentials[0];
+      payload.project_id = projectId;
     } else {
       payload.client_cookie = credentials[0];
     }
@@ -1066,6 +1108,10 @@ function formatTokenDisplay(acc) {
   if (type === 'warp' && getAccountToken(acc)) {
     const rt = getAccountToken(acc);
     return rt.length > 30 ? rt.substring(0, 10) + '...' + rt.substring(rt.length - 10) : rt;
+  }
+  if (type === 'bolt' && getAccountToken(acc)) {
+    const session = getAccountToken(acc);
+    return session.length > 24 ? session.substring(0, 8) + '...' + session.substring(session.length - 8) : session;
   }
   if (acc.session_id) {
     return acc.session_id.substring(0, 30) + '...';

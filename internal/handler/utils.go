@@ -116,6 +116,9 @@ func channelFromPath(path string) string {
 	if strings.HasPrefix(path, "/warp/") {
 		return "warp"
 	}
+	if strings.HasPrefix(path, "/bolt/") {
+		return "bolt"
+	}
 	if strings.HasPrefix(path, "/grok/v1/") {
 		return "grok"
 	}
@@ -2180,7 +2183,7 @@ func buildLocalSecurityRiskFallback(toolResult string, preferChinese bool) strin
 			findings = append(findings, "生产环境误开调试模式")
 		}
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2209,7 +2212,7 @@ func buildLocalPermissionRiskFallback(toolResult string, preferChinese bool) str
 			findings = append(findings, "权限授予范围偏大")
 		}
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2241,11 +2244,11 @@ func buildLocalDependencyRiskFallback(toolResult string, preferChinese bool) str
 			findings = append(findings, "依赖集中在清单文件里管理")
 		}
 	}
-	findings = uniqueStrings(findings)
+	findings = util.UniqueStrings(findings)
 	if hasLockfile {
 		findings = append(findings, "已存在锁文件，供应链漂移风险相对可控")
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2276,7 +2279,7 @@ func buildLocalConfigRiskFallback(toolResult string, preferChinese bool) string 
 			findings = append(findings, "跨域等运行配置放得过宽")
 		}
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2327,7 +2330,7 @@ func buildLocalObservabilityGapFallback(toolResult string, preferChinese bool) s
 	if !hasHealthcheck {
 		findings = append(findings, "当前片段里看不到 health/ready 这类探针入口")
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2356,7 +2359,7 @@ func buildLocalReleaseRiskFallback(toolResult string, preferChinese bool) string
 			findings = append(findings, "发布过程中存在直接执行远程脚本的步骤")
 		}
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2385,7 +2388,7 @@ func buildLocalCompatibilityRiskFallback(toolResult string, preferChinese bool) 
 			findings = append(findings, "依赖平台相关二进制，跨系统兼容性要额外验证")
 		}
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2414,7 +2417,7 @@ func buildLocalOperationalRiskFallback(toolResult string, preferChinese bool) st
 			findings = append(findings, "运行调度依赖宿主机进程/计划任务配置，环境漂移风险较高")
 		}
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2461,7 +2464,7 @@ func buildLocalRecoveryRollbackRiskFallback(toolResult string, preferChinese boo
 	if hasReleaseSignal && !hasBackupSignal {
 		findings = append(findings, "当前片段里看不到备份或快照信号")
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2518,7 +2521,7 @@ func buildLocalPerformanceBottleneckFallback(toolResult string, preferChinese bo
 	if len(findings) == 0 {
 		return ""
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if preferChinese {
 		return "从当前已读取内容看，比较明显的性能瓶颈信号有：" + strings.Join(findings, "；") + "。"
 	}
@@ -2558,7 +2561,7 @@ func buildLocalCodeSmellFallback(toolResult string, preferChinese bool) string {
 	if hasDebugPrint {
 		findings = append(findings, "调试输出仍散落在业务路径里")
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2601,7 +2604,7 @@ func buildLocalMaintainabilityRiskFallback(toolResult string, preferChinese bool
 	if hasGlobals {
 		findings = append(findings, "存在共享可变状态，后续扩展和测试成本会升高")
 	}
-	findings = limitTechStackList(uniqueStrings(findings), 3)
+	findings = limitTechStackList(util.UniqueStrings(findings), 3)
 	if len(findings) == 0 {
 		return ""
 	}
@@ -2633,7 +2636,7 @@ func buildLocalOptimizationFallback(toolResult string, preferChinese bool) strin
 		if len(signals.frameworks) > 0 || len(signals.libraries) > 0 {
 			suggestions = append(suggestions, "先补 README、依赖清单和主入口的最小约定，再继续做性能或结构优化")
 		}
-		suggestions = limitTechStackList(uniqueStrings(suggestions), 3)
+		suggestions = limitTechStackList(util.UniqueStrings(suggestions), 3)
 		if len(suggestions) == 0 {
 			return ""
 		}
@@ -2780,7 +2783,7 @@ func buildProjectSpecificOptimizationFallback(messages []prompt.Message, preferC
 		}
 	}
 
-	suggestions = uniqueStrings(suggestions)
+	suggestions = util.UniqueStrings(suggestions)
 	if len(suggestions) < 2 {
 		return ""
 	}
@@ -3355,24 +3358,4 @@ func stripSimpleModeTaggedBlock(text string, tag string) string {
 		i = endStart + end + len(endTag)
 	}
 	return sb.String()
-}
-
-func uniqueStrings(input []string) []string {
-	if len(input) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(input))
-	out := make([]string, 0, len(input))
-	for _, item := range input {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		if _, ok := seen[item]; ok {
-			continue
-		}
-		seen[item] = struct{}{}
-		out = append(out, item)
-	}
-	return out
 }

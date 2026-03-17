@@ -72,6 +72,57 @@ func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) (string
 	return modelID, nil
 }
 
+func uniqueModelCandidates(values ...string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func (h *Handler) resolveModelAliasForChannel(ctx context.Context, channel, modelID string) (string, *store.Model) {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		return modelID, nil
+	}
+
+	candidates := resolveModelAliasCandidates(modelID)
+	if strings.EqualFold(channel, "warp") {
+		if mapped := warp.ResolveModelAlias(modelID); mapped != "" {
+			candidates = append(resolveModelAliasCandidates(mapped), candidates...)
+		}
+	}
+	candidates = uniqueModelCandidates(candidates...)
+
+	var fallbackID string
+	var fallbackModel *store.Model
+	for _, cand := range candidates {
+		m, err := h.loadBalancer.Store.GetModelByChannelAndModelID(ctx, channel, cand)
+		if err != nil || m == nil {
+			continue
+		}
+		if m.Status.Enabled() {
+			return cand, m
+		}
+		if fallbackModel == nil {
+			fallbackID = cand
+			fallbackModel = m
+		}
+	}
+	if fallbackModel != nil {
+		return fallbackID, fallbackModel
+	}
+	return modelID, nil
+}
+
 // resolveWorkdir determines the working directory from headers, system prompt, or session.
 // 返回当前 workdir、上一轮 workdir、以及是否发生变更。
 func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversationKey string) (string, string, bool) {
@@ -158,14 +209,22 @@ func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forced
 	if modelID == "" {
 		return nil, nil
 	}
-	resolvedModelID, m := h.resolveModelAlias(ctx, modelID)
-	if strings.EqualFold(forcedChannel, "warp") {
-		if mapped := warp.ResolveModelAlias(resolvedModelID); mapped != "" {
-			resolvedModelID = mapped
-			if m == nil || !strings.EqualFold(strings.TrimSpace(m.ModelID), resolvedModelID) {
-				resolved, err := h.loadBalancer.Store.GetModelByModelID(ctx, resolvedModelID)
-				if err == nil {
-					m = resolved
+	var (
+		resolvedModelID string
+		m               *store.Model
+	)
+	if forcedChannel != "" {
+		resolvedModelID, m = h.resolveModelAliasForChannel(ctx, forcedChannel, modelID)
+	} else {
+		resolvedModelID, m = h.resolveModelAlias(ctx, modelID)
+		if strings.EqualFold(forcedChannel, "warp") {
+			if mapped := warp.ResolveModelAlias(resolvedModelID); mapped != "" {
+				resolvedModelID = mapped
+				if m == nil || !strings.EqualFold(strings.TrimSpace(m.ModelID), resolvedModelID) {
+					resolved, err := h.loadBalancer.Store.GetModelByModelID(ctx, resolvedModelID)
+					if err == nil {
+						m = resolved
+					}
 				}
 			}
 		}

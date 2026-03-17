@@ -105,13 +105,15 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// Extract ID from path
-	// Paths could be: /v1/models/{id}, /orchids/v1/models/{id}, /warp/v1/models/{id}, /grok/v1/models/{id}
+	// Paths could be: /v1/models/{id}, /orchids/v1/models/{id}, /warp/v1/models/{id}, /bolt/v1/models/{id}, /grok/v1/models/{id}
 	path := r.URL.Path
 	var id string
 	if strings.HasPrefix(path, "/orchids/v1/models/") {
 		id = strings.TrimPrefix(path, "/orchids/v1/models/")
 	} else if strings.HasPrefix(path, "/warp/v1/models/") {
 		id = strings.TrimPrefix(path, "/warp/v1/models/")
+	} else if strings.HasPrefix(path, "/bolt/v1/models/") {
+		id = strings.TrimPrefix(path, "/bolt/v1/models/")
 	} else if strings.HasPrefix(path, "/grok/v1/models/") {
 		id = strings.TrimPrefix(path, "/grok/v1/models/")
 	} else {
@@ -129,13 +131,20 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	m, err := h.loadBalancer.Store.GetModelByModelID(ctx, id)
+	filterChannel := channelFromPath(path)
+	var (
+		m   *store.Model
+		err error
+	)
+	if filterChannel != "" {
+		m, err = h.loadBalancer.Store.GetModelByChannelAndModelID(ctx, filterChannel, id)
+	} else {
+		m, err = h.loadBalancer.Store.GetModelByModelID(ctx, id)
+	}
 	if err != nil {
 		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}
-
-	filterChannel := channelFromPath(path)
 	mChannel, ok := isVisiblePublicModel(m, filterChannel)
 	if !ok {
 		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)

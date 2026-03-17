@@ -123,6 +123,7 @@ type modelStore interface {
 	GetModel(ctx context.Context, id string) (*Model, error)
 	ListModels(ctx context.Context) ([]*Model, error)
 	GetModelByModelID(ctx context.Context, modelID string) (*Model, error)
+	GetModelByChannelAndModelID(ctx context.Context, channel, modelID string) (*Model, error)
 }
 
 type redisClientStore interface {
@@ -189,6 +190,13 @@ func (s *Store) seedModels() error {
 		{ID: "70", Channel: "Warp", ModelID: "warp-basic", Name: "Warp Basic", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 22},
 		{ID: "87", Channel: "Warp", ModelID: "claude-4-6-sonnet-high", Name: "Claude 4.6 Sonnet High (Warp)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 23},
 		{ID: "88", Channel: "Warp", ModelID: "claude-4-6-sonnet-max", Name: "Claude 4.6 Sonnet Max (Warp)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 24},
+		// Bolt 模型
+		// 这里采用保守收录策略：
+		// 只放前端主模型切换器明确出现、且当前 bundle 能稳定确认的模型。
+		// Growthbook 实验默认值、活动文案或其他隐含字符串不直接视为稳定公开模型。
+		{ID: "120", Channel: "Bolt", ModelID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6 (Bolt)", Status: ModelStatusAvailable, IsDefault: true, SortOrder: 0},
+		{ID: "121", Channel: "Bolt", ModelID: "claude-opus-4-6", Name: "Claude Opus 4.6 (Bolt)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 1},
+		{ID: "122", Channel: "Bolt", ModelID: "claude-opus-4-5-20251101", Name: "Claude Opus 4.5 (Bolt)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 2},
 		// Grok 模型
 		{ID: "90", Channel: "Grok", ModelID: "grok-3", Name: "Grok 3", Status: ModelStatusAvailable, IsDefault: true, SortOrder: 0},
 		{ID: "91", Channel: "Grok", ModelID: "grok-3-mini", Name: "Grok 3 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 1},
@@ -212,7 +220,7 @@ func (s *Store) seedModels() error {
 	}
 
 	for _, m := range models {
-		_, err := s.GetModelByModelID(ctx, m.ModelID)
+		_, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID)
 		if err != nil {
 			// Model doesn't exist, create it
 			if err := s.CreateModel(ctx, &m); err != nil {
@@ -432,6 +440,13 @@ func (s *Store) GetModel(ctx context.Context, id string) (*Model, error) {
 func (s *Store) GetModelByModelID(ctx context.Context, modelID string) (*Model, error) {
 	if s.models != nil {
 		return s.models.GetModelByModelID(ctx, modelID)
+	}
+	return nil, fmt.Errorf("models store not configured")
+}
+
+func (s *Store) GetModelByChannelAndModelID(ctx context.Context, channel, modelID string) (*Model, error) {
+	if s.models != nil {
+		return s.models.GetModelByChannelAndModelID(ctx, channel, modelID)
 	}
 	return nil, fmt.Errorf("models store not configured")
 }

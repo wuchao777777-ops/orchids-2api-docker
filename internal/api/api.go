@@ -20,6 +20,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/auth"
+	"orchids-api/internal/bolt"
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
@@ -59,11 +60,10 @@ var orchidsGetAccountChatToken = func(acc *store.Account, cfg *config.Config) (s
 
 var orchidsFetchCredits = orchids.FetchCreditsWithProxy
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+var boltFetchRootData = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*bolt.RootData, error) {
+	client := bolt.NewFromAccount(acc, cfg)
+	defer client.Close()
+	return client.FetchRootData(ctx)
 }
 
 func normalizeGrokVerifyModelID(raw string) string {
@@ -410,6 +410,27 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		return "", 0, nil
 	}
 
+	if strings.EqualFold(acc.AccountType, "bolt") {
+		if strings.TrimSpace(acc.SessionCookie) == "" && strings.TrimSpace(acc.ClientCookie) == "" {
+			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify bolt account: missing session token")
+		}
+		if strings.TrimSpace(acc.ProjectID) == "" {
+			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify bolt account: missing project id")
+		}
+
+		rootData, err := boltFetchRootData(ctx, acc, a.config.Load())
+		if err != nil {
+			status := classifyAccountStatusFromError(err.Error())
+			httpStatus := http.StatusBadGateway
+			if status != "" {
+				httpStatus = httpStatusFromAccountStatus(status)
+			}
+			return status, httpStatus, fmt.Errorf("Failed to verify bolt account: %w", err)
+		}
+		bolt.ApplyRootData(acc, rootData)
+		return "", 0, nil
+	}
+
 	cfg := a.config.Load()
 	proxyFunc := http.ProxyFromEnvironment
 	if cfg != nil {
@@ -432,6 +453,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		// Keep quota display usable for session-only Orchids accounts:
 		// even when chat auth cannot be established, the Clerk session JWT may
 		// still be enough to read credits.
+		quotaSynced := false
 		if creditsJWT := orchidsCreditsToken(acc); creditsJWT != "" {
 			if sid, sub := clerk.ParseSessionInfoFromJWT(creditsJWT); sub != "" {
 				if acc.SessionID == "" && sid != "" {
@@ -444,10 +466,15 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			if strings.TrimSpace(acc.UserID) != "" {
 				if creditsInfo, creditsErr := orchidsFetchCredits(ctx, creditsJWT, acc.UserID, proxyFunc); creditsErr == nil {
 					applyOrchidsQuotaFromCredits(acc, creditsInfo)
+					quotaSynced = true
 				} else {
 					slog.Warn("Orchids quota fallback failed after chat auth failure", "account_id", acc.ID, "error", creditsErr)
 				}
 			}
+		}
+		if quotaSynced {
+			slog.Warn("Orchids chat auth refresh failed but quota sync succeeded; keeping account refresh successful", "account_id", acc.ID, "status", status, "error", err)
+			return "", 0, nil
 		}
 		return status, httpStatus, fmt.Errorf("Failed to refresh account: %w", err)
 	}
@@ -864,7 +891,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				}
 				fails := a.checkFailCount[id] + 1
 				a.checkFailCount[id] = fails
-				d := time.Duration(1<<minInt(fails, 8)) * time.Second
+				d := time.Duration(1<<util.MinInt(fails, 8)) * time.Second
 				// For CF/rate-limit style failures, start with a bigger cooldown.
 				if checkErrStatus == "403" || checkErrStatus == "429" {
 					if d < 60*time.Second {

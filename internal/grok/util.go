@@ -20,6 +20,7 @@ import (
 	"github.com/goccy/go-json"
 
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/util"
 )
 
 var (
@@ -1507,20 +1508,7 @@ func mimeFromFilename(name string) string {
 }
 
 func uniqueStrings(input []string) []string {
-	seen := make(map[string]struct{}, len(input))
-	out := make([]string, 0, len(input))
-	for _, s := range input {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			continue
-		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	return out
+	return util.UniqueStrings(input)
 }
 
 func parseBoolLoose(raw string, fallback bool) bool {

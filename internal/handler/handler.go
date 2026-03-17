@@ -78,6 +78,42 @@ type toolCall struct {
 	input string
 }
 
+type openAINonStreamToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type openAINonStreamMessage struct {
+	Role      string                    `json:"role"`
+	Content   interface{}               `json:"content"`
+	ToolCalls []openAINonStreamToolCall `json:"tool_calls,omitempty"`
+}
+
+type openAINonStreamChoice struct {
+	Index        int                    `json:"index"`
+	Message      openAINonStreamMessage `json:"message"`
+	FinishReason *string                `json:"finish_reason"`
+}
+
+type openAINonStreamUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type openAINonStreamResponse struct {
+	ID      string                  `json:"id"`
+	Object  string                  `json:"object"`
+	Created int64                   `json:"created"`
+	Model   string                  `json:"model"`
+	Choices []openAINonStreamChoice `json:"choices"`
+	Usage   openAINonStreamUsage    `json:"usage"`
+}
+
 func cloneSSEMessage(msg upstream.SSEMessage) upstream.SSEMessage {
 	cloned := msg
 	if msg.Event != nil {
@@ -167,6 +203,101 @@ func (h *Handler) computeRequestHash(r *http.Request, body []byte) string {
 func ownsFinalSSELifecycle(client UpstreamClient) bool {
 	owner, ok := client.(FinalSSELifecycleOwner)
 	return ok && owner.OwnsFinalSSELifecycle()
+}
+
+func mapStopReasonToOpenAIFinishReason(stopReason string) *string {
+	switch strings.TrimSpace(stopReason) {
+	case "", "end_turn", "stop":
+		reason := "stop"
+		return &reason
+	case "tool_use":
+		reason := "tool_calls"
+		return &reason
+	case "max_tokens":
+		reason := "length"
+		return &reason
+	case "refusal":
+		reason := "content_filter"
+		return &reason
+	default:
+		reason := stopReason
+		return &reason
+	}
+}
+
+func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason string) openAINonStreamResponse {
+	textParts := make([]string, 0, len(sh.contentBlocks))
+	toolCalls := make([]openAINonStreamToolCall, 0)
+
+	for i := range sh.contentBlocks {
+		blockType, _ := sh.contentBlocks[i]["type"].(string)
+		switch blockType {
+		case "text":
+			if builder, ok := sh.textBlockBuilders[i]; ok {
+				if text := builder.String(); text != "" {
+					textParts = append(textParts, text)
+					continue
+				}
+			}
+			if text, ok := sh.contentBlocks[i]["text"].(string); ok && text != "" {
+				textParts = append(textParts, text)
+			}
+		case "tool_use":
+			call := openAINonStreamToolCall{
+				Type: "function",
+			}
+			if id, ok := sh.contentBlocks[i]["id"].(string); ok {
+				call.ID = id
+			}
+			if name, ok := sh.contentBlocks[i]["name"].(string); ok {
+				call.Function.Name = name
+			}
+			switch input := sh.contentBlocks[i]["input"].(type) {
+			case string:
+				call.Function.Arguments = input
+			case nil:
+				call.Function.Arguments = "{}"
+			default:
+				raw, err := json.Marshal(input)
+				if err != nil {
+					call.Function.Arguments = "{}"
+				} else {
+					call.Function.Arguments = string(raw)
+				}
+			}
+			toolCalls = append(toolCalls, call)
+		}
+	}
+
+	content := strings.Join(textParts, "")
+	if strings.TrimSpace(content) == "" && len(toolCalls) > 0 {
+		content = ""
+	}
+
+	message := openAINonStreamMessage{
+		Role:    "assistant",
+		Content: content,
+	}
+	if len(toolCalls) > 0 {
+		message.ToolCalls = toolCalls
+	}
+
+	return openAINonStreamResponse{
+		ID:      sh.msgID,
+		Object:  "chat.completion",
+		Created: sh.startTime.Unix(),
+		Model:   model,
+		Choices: []openAINonStreamChoice{{
+			Index:        0,
+			Message:      message,
+			FinishReason: mapStopReasonToOpenAIFinishReason(stopReason),
+		}},
+		Usage: openAINonStreamUsage{
+			PromptTokens:     sh.inputTokens,
+			CompletionTokens: sh.outputTokens,
+			TotalTokens:      sh.inputTokens + sh.outputTokens,
+		},
+	}
 }
 
 func upstreamMessageHandler(sh *streamHandler, orchidsOwnsFinalSSE bool) func(upstream.SSEMessage) {
@@ -461,9 +592,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		isWarpRequest = true
 	}
+	isBoltRequest := strings.EqualFold(forcedChannel, "bolt")
+	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "bolt") {
+		isBoltRequest = true
+	}
 	if isWarpRequest {
 		// Warp passthrough mode: do not trim history/tool results.
 		slog.Debug("Checkpoint: warp passthrough, skip trim/sanitize")
+	} else if isBoltRequest {
+		slog.Debug("Checkpoint: bolt passthrough, skip context trimming")
 	} else {
 		// Orchids: do not trim message/tool_result content to preserve full context.
 		slog.Debug("Checkpoint: orchids passthrough, skip context trimming")
@@ -527,12 +664,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
 	slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
-	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest
+	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isBoltRequest
 
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		mappedModel = req.Model
+	} else if isBoltRequest {
+		mappedModel = strings.TrimSpace(req.Model)
 	}
 
 	var promptHistory []map[string]string
@@ -540,6 +679,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	var promptMeta orchids.PromptBuildMeta
 	if isOrchidsProtocol {
 		builtPrompt, promptHistory, promptMeta = orchids.BuildCodeFreeMaxPromptAndHistoryWithMeta(req.Messages, req.System, noThinking)
+	} else if isBoltRequest {
+		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
+		if builtPrompt == "" {
+			builtPrompt = "bolt request"
+		}
+		promptMeta = orchids.PromptBuildMeta{
+			Profile:    "bolt",
+			NoThinking: noThinking,
+		}
 	} else {
 		var warpMeta warpprompt.Meta
 		builtPrompt, promptHistory, warpMeta = warpprompt.BuildWithMetaAndTools(req.Messages, req.System, mappedModel, noThinking, effectiveWorkdir, h.config.ContextMaxTokens, effectiveTools)
@@ -616,6 +764,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("Warp token estimation fallback to generic breakdown", "error", err)
 			breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 		}
+	} else if isBoltRequest {
+		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	} else if isOrchidsProtocol {
 		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
 	} else {
@@ -661,8 +811,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		)
 		cacheReadTokens = rTokens
 		cacheCreationTokens = crTokens
-		
-		// Subtract cacheReadTokens from the base inputTokens 
+
+		// Subtract cacheReadTokens from the base inputTokens
 		// if simulating prompt caching billing behavior
 		if inputTokens >= cacheReadTokens {
 			inputTokens -= cacheReadTokens
@@ -763,7 +913,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			NoThinking:    noThinking,
 			TraceID:       traceID,
 			ChatSessionID: chatSessionID,
+			ProjectID:     "",
 			DirectSSE:     nil,
+		}
+		if isBoltRequest && currentAccount != nil {
+			upstreamReq.ProjectID = strings.TrimSpace(currentAccount.ProjectID)
 		}
 		if orchidsOwnsFinalSSE {
 			upstreamReq.DirectSSE = sh
@@ -1055,18 +1209,23 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		response := map[string]interface{}{
-			"id":            sh.msgID,
-			"type":          "message",
-			"role":          "assistant",
-			"content":       sh.contentBlocks,
-			"model":         req.Model,
-			"stop_reason":   stopReason,
-			"stop_sequence": nil,
-			"usage": map[string]int{
-				"input_tokens":  sh.inputTokens,
-				"output_tokens": sh.outputTokens,
-			},
+		var response interface{}
+		if responseFormat == adapter.FormatOpenAI {
+			response = buildOpenAINonStreamResponse(sh, req.Model, stopReason)
+		} else {
+			response = map[string]interface{}{
+				"id":            sh.msgID,
+				"type":          "message",
+				"role":          "assistant",
+				"content":       sh.contentBlocks,
+				"model":         req.Model,
+				"stop_reason":   stopReason,
+				"stop_sequence": nil,
+				"usage": map[string]int{
+					"input_tokens":  sh.inputTokens,
+					"output_tokens": sh.outputTokens,
+				},
+			}
 		}
 
 		if err := json.NewEncoder(w).Encode(response); err != nil {

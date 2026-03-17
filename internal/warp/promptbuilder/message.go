@@ -1026,7 +1026,7 @@ func summarizeDirectoryListingTopLevel(lines []string, historyMode bool) ([]stri
 		}
 	}
 
-	out := make([]string, 0, minInt(len(order), maxRoots))
+	out := make([]string, 0, util.MinInt(len(order), maxRoots))
 	omitted := 0
 	for idx, key := range order {
 		if idx >= maxRoots {
@@ -1040,7 +1040,7 @@ func summarizeDirectoryListingTopLevel(lines []string, historyMode bool) ([]stri
 			out = append(out, fmt.Sprintf("%s (sample: %s)", summary.label, strings.Join(summary.samples, ", ")))
 		}
 	}
-	return out, minInt(len(order), maxRoots), omitted
+	return out, util.MinInt(len(order), maxRoots), omitted
 }
 
 func shortenDirectoryListingLine(line string, prefix string) string {
@@ -1136,11 +1136,4 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

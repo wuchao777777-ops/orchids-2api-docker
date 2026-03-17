@@ -1,8 +1,11 @@
 package store
 
 import (
+	"context"
 	"github.com/goccy/go-json"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 func TestModelStatus_UnmarshalJSON(t *testing.T) {
@@ -50,5 +53,45 @@ func TestModelStatus_MarshalJSON(t *testing.T) {
 	}
 	if string(b) != `"available"` {
 		t.Fatalf("got %s want %s", string(b), `"available"`)
+	}
+}
+
+func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	s, err := New(Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	ctx := context.Background()
+
+	orchidsModel, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID(orchids) error = %v", err)
+	}
+	if orchidsModel.Channel != "Orchids" {
+		t.Fatalf("orchids model channel = %q, want Orchids", orchidsModel.Channel)
+	}
+
+	boltModel, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-opus-4-6")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID(bolt) error = %v", err)
+	}
+	if boltModel.Channel != "Bolt" {
+		t.Fatalf("bolt model channel = %q, want Bolt", boltModel.Channel)
+	}
+	if boltModel.ID == orchidsModel.ID {
+		t.Fatalf("expected different records for shared model id, got same id %q", boltModel.ID)
 	}
 }

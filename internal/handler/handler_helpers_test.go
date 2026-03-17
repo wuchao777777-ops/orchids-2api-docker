@@ -63,7 +63,7 @@ func TestValidateModelAvailability_PrefersEnabledAliasOverOfflineExactMatch(t *t
 
 	ctx := context.Background()
 
-	exact, err := s.GetModelByModelID(ctx, "claude-opus-4-6")
+	exact, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6")
 	if err != nil {
 		t.Fatalf("GetModelByModelID(exact) error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestValidateModelAvailability_FallsBackToOfflineWhenNoEnabledAliasExists(t 
 
 	ctx := context.Background()
 
-	exact, err := s.GetModelByModelID(ctx, "claude-opus-4-6")
+	exact, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6")
 	if err != nil {
 		t.Fatalf("GetModelByModelID(exact) error = %v", err)
 	}
@@ -134,5 +134,29 @@ func TestValidateModelAvailability_FallsBackToOfflineWhenNoEnabledAliasExists(t 
 	}
 	if err.Error() != "model not available" {
 		t.Fatalf("validateModelAvailability() error = %q, want %q", err.Error(), "model not available")
+	}
+}
+
+func TestValidateModelAvailability_BoltUsesChannelSpecificModel(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+
+	got, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "bolt")
+	if err != nil {
+		t.Fatalf("validateModelAvailability() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("validateModelAvailability() returned nil model")
+	}
+	if got.Channel != "Bolt" {
+		t.Fatalf("validateModelAvailability() channel = %q, want %q", got.Channel, "Bolt")
+	}
+	if got.ModelID != "claude-opus-4-6" {
+		t.Fatalf("validateModelAvailability() model = %q, want %q", got.ModelID, "claude-opus-4-6")
 	}
 }

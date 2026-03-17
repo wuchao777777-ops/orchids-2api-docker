@@ -102,7 +102,7 @@ func (c *Client) bootstrapClientCookieFromSession() error {
 		return fmt.Errorf("signed out: missing orchids session cookie")
 	}
 
-	ctx, cancel := withDefaultTimeout(context.Background(), c.requestTimeout())
+	ctx, cancel := util.WithDefaultTimeout(context.Background(), c.requestTimeout())
 	defer cancel()
 
 	reqURL := fmt.Sprintf("%s/v1/client?__clerk_api_version=%s&_clerk_js_version=%s",
