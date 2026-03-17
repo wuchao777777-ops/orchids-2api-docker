@@ -2,6 +2,7 @@
 
 let apiKeys = [];
 let createdKeys = [];
+const TOKEN_CACHE_TTL_PRESETS = ["60", "300", "900", "1800", "3600", "86400", "259200", "604800"];
 
 // Switch between config tabs
 function switchConfigTab(tab) {
@@ -47,17 +48,86 @@ function normalizeProxyBypass(value) {
   return [];
 }
 
+function normalizeTokenCacheTTLValue(raw) {
+  const value = parseInt(raw, 10);
+  if (Number.isFinite(value) && value > 0) {
+    return String(value);
+  }
+  return "300";
+}
+
+function normalizeFlagValue(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") return true;
+    if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") return false;
+  }
+  return !!value;
+}
+
+function syncTokenCacheTTLControls(raw) {
+  const normalized = normalizeTokenCacheTTLValue(raw);
+  const hiddenInput = document.getElementById("cfg_token_cache_ttl");
+  const presetInput = document.getElementById("cfg_token_cache_ttl_preset");
+  const customInput = document.getElementById("cfg_token_cache_ttl_custom");
+  const customWrap = document.getElementById("cfg_token_cache_ttl_custom_wrap");
+  if (!hiddenInput || !presetInput || !customInput || !customWrap) return;
+
+  hiddenInput.value = normalized;
+  customInput.value = normalized;
+  const isPreset = TOKEN_CACHE_TTL_PRESETS.includes(normalized);
+  presetInput.value = isPreset ? normalized : "custom";
+  customWrap.style.display = isPreset ? "none" : "block";
+}
+
+function getTokenCacheTTLValue() {
+  const hiddenInput = document.getElementById("cfg_token_cache_ttl");
+  return normalizeTokenCacheTTLValue(hiddenInput?.value);
+}
+
+function handleTokenCacheTTLPresetChange() {
+  const hiddenInput = document.getElementById("cfg_token_cache_ttl");
+  const presetInput = document.getElementById("cfg_token_cache_ttl_preset");
+  const customInput = document.getElementById("cfg_token_cache_ttl_custom");
+  const customWrap = document.getElementById("cfg_token_cache_ttl_custom_wrap");
+  if (!hiddenInput || !presetInput || !customInput || !customWrap) return;
+
+  if (presetInput.value === "custom") {
+    customWrap.style.display = "block";
+    hiddenInput.value = normalizeTokenCacheTTLValue(customInput.value);
+  } else {
+    customWrap.style.display = "none";
+    hiddenInput.value = normalizeTokenCacheTTLValue(presetInput.value);
+  }
+  updateMemoryEstimation();
+}
+
+function handleTokenCacheTTLCustomInput() {
+  const presetInput = document.getElementById("cfg_token_cache_ttl_preset");
+  const hiddenInput = document.getElementById("cfg_token_cache_ttl");
+  const customInput = document.getElementById("cfg_token_cache_ttl_custom");
+  if (!presetInput || !hiddenInput || !customInput || presetInput.value !== "custom") return;
+
+  hiddenInput.value = normalizeTokenCacheTTLValue(customInput.value);
+  updateMemoryEstimation();
+}
+
 // Load configuration from API
 async function loadConfiguration() {
   try {
-    const res = await fetch("/api/config");
+    const res = await fetch("/api/config/list");
     if (res.status === 401) {
       window.location.href = "./login.html";
       return;
     }
-    const cfg = await res.json();
+    const payload = await res.json();
+    if (payload && typeof payload.code !== "undefined" && payload.code !== 0) {
+      throw new Error(payload.message || payload.msg || "加载配置失败");
+    }
+    const cfg = payload && payload.data ? payload.data : payload;
 
-    document.getElementById("cfg_admin_pass").value = cfg.admin_pass || "";
+    document.getElementById("cfg_admin_pass").value = cfg.admin_password || cfg.admin_pass || "";
     document.getElementById("cfg_admin_token").value = cfg.admin_token || "";
     document.getElementById("cfg_proxy_http").value = cfg.proxy_http || "";
     document.getElementById("cfg_proxy_https").value = cfg.proxy_https || "";
@@ -67,9 +137,9 @@ async function loadConfiguration() {
     document.getElementById("cfg_proxy_bypass").value = proxyBypass.join("\n");
 
     const cacheTokenCount = document.getElementById("cfg_enable_token_cache");
-    cacheTokenCount.checked = !!cfg.enable_token_cache;
+    cacheTokenCount.checked = normalizeFlagValue(cfg.enable_token_cache);
 
-    document.getElementById("cfg_token_cache_ttl").value = cfg.token_cache_ttl || 300;
+    syncTokenCacheTTLControls(cfg.token_cache_ttl || 300);
     document.getElementById("cfg_token_cache_strategy").value = cfg.token_cache_strategy || "1";
 
   } catch (err) {
@@ -81,25 +151,29 @@ async function loadConfiguration() {
 async function saveConfiguration() {
   const proxyBypassRaw = document.getElementById("cfg_proxy_bypass").value;
   const data = {
-    admin_pass: document.getElementById("cfg_admin_pass").value,
+    admin_password: document.getElementById("cfg_admin_pass").value,
     admin_token: document.getElementById("cfg_admin_token").value,
     proxy_http: document.getElementById("cfg_proxy_http").value.trim(),
     proxy_https: document.getElementById("cfg_proxy_https").value.trim(),
     proxy_user: document.getElementById("cfg_proxy_user").value.trim(),
     proxy_pass: document.getElementById("cfg_proxy_pass").value,
     proxy_bypass: parseProxyBypass(proxyBypassRaw),
-    enable_token_cache: document.getElementById("cfg_enable_token_cache").checked,
-    token_cache_ttl: parseInt(document.getElementById("cfg_token_cache_ttl").value, 10) || 300,
+    enable_token_cache: document.getElementById("cfg_enable_token_cache").checked ? "true" : "false",
+    token_cache_ttl: getTokenCacheTTLValue(),
     token_cache_strategy: document.getElementById("cfg_token_cache_strategy").value,
   };
 
   try {
-    const res = await fetch("/api/config", {
+    const res = await fetch("/api/config/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data)
     });
     if (!res.ok) throw new Error(await res.text());
+    const payload = await res.json();
+    if (payload.code !== 0) {
+      throw new Error(payload.message || payload.msg || "保存失败");
+    }
     showToast("配置保存成功");
   } catch (err) {
     showToast("保存失败: " + err.message, "error");
@@ -478,14 +552,12 @@ function toggleCacheConfig(checked) {
 }
 
 function updateMemoryEstimation() {
-  const ttlInput = document.getElementById("cfg_token_cache_ttl");
   const strategyInput = document.getElementById("cfg_token_cache_strategy");
-  if (!ttlInput || !strategyInput) return;
+  if (!strategyInput) return;
 
-  const ttlMin = parseInt(ttlInput.value, 10) || 300;
+  const ttlSec = parseInt(getTokenCacheTTLValue(), 10) || 300;
   const strategy = strategyInput.value;
   const mult = (strategy === "1" || strategy === "0") ? 2 : 1;
-  const ttlSec = ttlMin; // Already in seconds now
 
   const ttlEl = document.getElementById("estTTLSeconds");
   const multEl = document.getElementById("estStrategyMult");
@@ -493,7 +565,7 @@ function updateMemoryEstimation() {
   if (ttlEl) ttlEl.textContent = String(ttlSec);
   if (multEl) multEl.textContent = mult === 2 ? "× 2" : "× 1";
   if (titleEl) {
-    titleEl.textContent = `内存估算 (当前: TTL=${ttlMin}秒, 系数=${mult})`;
+    titleEl.textContent = `内存估算 (当前: TTL=${ttlSec}秒, 系数=${mult})`;
   }
 
   const calc = (qps) => {
@@ -537,7 +609,12 @@ async function clearCache() {
   try {
     const res = await fetch("/api/token-cache/clear", { method: "POST" });
     if (!res.ok) throw new Error(await res.text());
-    showToast("缓存已清空");
+    const data = await res.json();
+    if (data.code !== 0) {
+      throw new Error(data.message || data.msg || "清空失败");
+    }
+    const deleted = Number(data?.data?.deleted) || 0;
+    showToast(`已清空 ${deleted} 条缓存`);
     loadCacheStats();
   } catch (err) {
     showToast("清空失败: " + err.message, "error");

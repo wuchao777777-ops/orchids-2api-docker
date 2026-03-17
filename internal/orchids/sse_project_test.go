@@ -26,6 +26,7 @@ func TestCreateProjectUsesClerkCookiesAndUpdatesState(t *testing.T) {
 			ClientCookie:  "client_cookie",
 			SessionCookie: "session_cookie",
 			ClientUat:     "1739251200",
+			SessionID:     "sess_project",
 		},
 		account: acc,
 		httpClient: &http.Client{
@@ -36,8 +37,8 @@ func TestCreateProjectUsesClerkCookiesAndUpdatesState(t *testing.T) {
 				if got := req.URL.String(); got != orchidsProjectCreateURL {
 					t.Fatalf("url=%q want %q", got, orchidsProjectCreateURL)
 				}
-				if got := req.Header.Get("Cookie"); !strings.Contains(got, "__client=client_cookie") || !strings.Contains(got, "__session=session_cookie") || !strings.Contains(got, "__client_uat=1739251200") {
-					t.Fatalf("cookie=%q want __client/__session/__client_uat", got)
+				if got := req.Header.Get("Cookie"); !strings.Contains(got, "__client=client_cookie") || !strings.Contains(got, "__session=session_cookie") || !strings.Contains(got, "__client_uat=1739251200") || !strings.Contains(got, "clerk_active_context=sess_project:") {
+					t.Fatalf("cookie=%q want __client/__session/__client_uat/clerk_active_context", got)
 				}
 				if got := req.Header.Get("Origin"); got != orchidsWSOrigin {
 					t.Fatalf("origin=%q want %q", got, orchidsWSOrigin)
@@ -84,6 +85,66 @@ func TestCreateProjectRequiresClerkCookieMaterial(t *testing.T) {
 	}
 	if err != errOrchidsProjectBootstrapUnavailable {
 		t.Fatalf("err=%v want %v", err, errOrchidsProjectBootstrapUnavailable)
+	}
+}
+
+func TestCreateProjectBootstrapsClientCookieFromSession(t *testing.T) {
+	t.Parallel()
+
+	acc := &store.Account{SessionID: "sess_bootstrap"}
+	callCount := 0
+	client := &Client{
+		config: &config.Config{
+			SessionID:      "sess_bootstrap",
+			SessionCookie:  "session_cookie",
+			RequestTimeout: 5,
+		},
+		account: acc,
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				callCount++
+				switch callCount {
+				case 1:
+					if req.URL.Path != "/v1/client" {
+						t.Fatalf("bootstrap path=%q want /v1/client", req.URL.Path)
+					}
+					resp := &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(`{"response":{"sessions":[]}}`)),
+						Header:     make(http.Header),
+					}
+					resp.Header.Add("Set-Cookie", "__client=bootstrapped-client; Path=/; HttpOnly")
+					resp.Header.Add("Set-Cookie", "__client_uat=1773712060; Path=/")
+					return resp, nil
+				case 2:
+					if req.URL.String() != orchidsProjectCreateURL {
+						t.Fatalf("url=%q want %q", req.URL.String(), orchidsProjectCreateURL)
+					}
+					if got := req.Header.Get("Cookie"); !strings.Contains(got, "__client=bootstrapped-client") || !strings.Contains(got, "__session=session_cookie") || !strings.Contains(got, "__client_uat=1773712060") || !strings.Contains(got, "clerk_active_context=sess_bootstrap:") {
+						t.Fatalf("cookie=%q want bootstrapped cookies", got)
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(`{"project":{"id":"proj_bootstrap"}}`)),
+						Header:     make(http.Header),
+					}, nil
+				default:
+					t.Fatalf("unexpected extra request #%d to %s", callCount, req.URL.String())
+					return nil, nil
+				}
+			}),
+		},
+	}
+
+	projectID, err := client.createProject(context.Background())
+	if err != nil {
+		t.Fatalf("createProject() error = %v", err)
+	}
+	if projectID != "proj_bootstrap" {
+		t.Fatalf("projectID=%q want proj_bootstrap", projectID)
+	}
+	if client.config.ClientCookie != "bootstrapped-client" {
+		t.Fatalf("ClientCookie=%q want bootstrapped-client", client.config.ClientCookie)
 	}
 }
 

@@ -21,7 +21,11 @@ func (c *Client) createProject(ctx context.Context) (string, error) {
 		return "", errOrchidsProjectBootstrapUnavailable
 	}
 
-	cookieHeader, ok := orchidsProjectCookieHeader(c.config.ClientCookie, c.config.SessionCookie, c.config.ClientUat)
+	if strings.TrimSpace(c.config.ClientCookie) == "" && strings.TrimSpace(c.config.SessionCookie) != "" {
+		_ = c.bootstrapClientCookieFromSession()
+	}
+
+	cookieHeader, ok := orchidsProjectCookieHeader(c.config.ClientCookie, c.config.SessionCookie, c.config.ClientUat, c.config.SessionID)
 	if !ok {
 		return "", errOrchidsProjectBootstrapUnavailable
 	}
@@ -61,26 +65,19 @@ func (c *Client) createProject(ctx context.Context) (string, error) {
 	return projectID, nil
 }
 
-func orchidsProjectCookieHeader(clientCookie, sessionCookie, clientUat string) (string, bool) {
+func orchidsProjectCookieHeader(clientCookie, sessionCookie, clientUat, sessionID string) (string, bool) {
 	clientCookie = strings.TrimSpace(clientCookie)
 	sessionCookie = strings.TrimSpace(sessionCookie)
 	clientUat = strings.TrimSpace(clientUat)
+	sessionID = strings.TrimSpace(sessionID)
 
 	if clientCookie == "" {
 		return "", false
 	}
-
-	parts := []string{"__client=" + clientCookie}
-	if sessionCookie != "" {
-		parts = append(parts, "__session="+sessionCookie)
-	}
-	if clientUat != "" {
-		parts = append(parts, "__client_uat="+clientUat)
-	}
-	if len(parts) == 1 {
+	if sessionCookie == "" && clientUat == "" {
 		return "", false
 	}
-	return strings.Join(parts, "; "), true
+	return orchidsClerkCookieHeader(clientCookie, sessionCookie, clientUat, sessionID), true
 }
 
 func decodeOrchidsProjectCreateResponse(body []byte) (string, error) {

@@ -98,74 +98,6 @@ function getModelsForAccountType(type) {
   }));
 }
 
-function setSelectOptions(select, options) {
-  if (!select) return;
-  select.innerHTML = "";
-  options.forEach((opt) => {
-    const el = document.createElement("option");
-    el.value = opt.value;
-    el.textContent = opt.label;
-    if (opt.selected) el.selected = true;
-    if (opt.disabled) el.disabled = true;
-    select.appendChild(el);
-  });
-}
-
-function renderAgentModeOptions(accountType, preferredValue = "") {
-  const select = document.getElementById("agentMode");
-  if (!select) return;
-
-  const models = getModelsForAccountType(accountType);
-  const preferred = String(preferredValue || "").trim();
-  const modelIDs = new Set(models.map((m) => String(m.model_id || "")));
-
-  const options = [];
-  let selectedValue = "";
-
-  if (preferred && !modelIDs.has(preferred)) {
-    options.push({
-      value: preferred,
-      label: `${preferred}（当前配置）`,
-      selected: true,
-    });
-    selectedValue = preferred;
-  }
-
-  models.forEach((m) => {
-    const modelID = String(m.model_id || "").trim();
-    if (!modelID) return;
-    const labelName = String(m.name || modelID).trim();
-    const label = labelName === modelID ? modelID : `${labelName} (${modelID})`;
-    options.push({
-      value: modelID,
-      label,
-    });
-  });
-
-  if (!selectedValue) {
-    if (preferred && modelIDs.has(preferred)) {
-      selectedValue = preferred;
-    } else {
-      const defaultModel = models.find((m) => m.is_default) || models[0];
-      selectedValue = defaultModel ? String(defaultModel.model_id || "") : "";
-    }
-  }
-
-  if (options.length === 0) {
-    options.push({ value: "", label: "暂无可用模型", selected: true, disabled: true });
-  } else {
-    const found = options.some((opt) => opt.value === selectedValue);
-    if (!found) {
-      selectedValue = String(options[0].value || "");
-    }
-    options.forEach((opt) => {
-      if (opt.value === selectedValue) opt.selected = true;
-    });
-  }
-
-  setSelectOptions(select, options);
-}
-
 async function loadModelCatalog() {
   try {
     const res = await fetch("/api/models");
@@ -245,73 +177,63 @@ function getAccountToken(acc) {
   if (type === 'warp') {
     return acc.refresh_token || acc.token || acc.client_cookie || '';
   }
-  return acc.client_cookie || '';
+  if (type === 'orchids') {
+    return acc.client_cookie || acc.session_cookie || acc.token || '';
+  }
+  return acc.client_cookie || acc.token || '';
 }
 
 function applyTokenLabels(type) {
   const label = document.getElementById("tokenLabel");
   const input = document.getElementById("clientCookie");
   const hint = document.getElementById("tokenHint");
-  const batchRow = document.getElementById("grokBatchToggleRow");
-  const batchToggle = document.getElementById("grokBatchToggle");
-  const batchBlock = document.getElementById("grokBatchBlock");
   const accountId = String(document.getElementById("accountId")?.value || "");
   if (!label || !input || !hint) return;
   if (type === 'warp') {
     label.textContent = "Refresh Token";
-    input.placeholder = "粘贴 refresh_token";
-    hint.textContent = "Warp 只需要 refresh_token";
-    if (batchRow) batchRow.style.display = "none";
-    if (batchBlock) batchBlock.style.display = "none";
-    if (batchToggle) batchToggle.checked = false;
+    input.placeholder = "每行一个 refresh_token";
+    hint.textContent = accountId
+      ? "编辑时仅保存第一行 refresh_token"
+      : "支持批量添加 Warp。每行一个 refresh_token";
     input.required = true;
   } else if (type === 'grok') {
     label.textContent = "SSO Token";
-    input.placeholder = "粘贴 sso token（或包含 sso= 的 Cookie）";
-    hint.textContent = "Grok 使用 sso token（支持纯 token 或 Cookie 片段）";
-    if (batchRow) batchRow.style.display = accountId ? "none" : "block";
-    if (batchToggle && accountId) batchToggle.checked = false;
-    if (batchBlock) {
-      batchBlock.style.display = batchToggle && batchToggle.checked ? "block" : "none";
-    }
-    input.required = !(batchToggle && batchToggle.checked);
+    input.placeholder = "每行一个 sso token（或包含 sso= 的 Cookie）";
+    hint.textContent = accountId
+      ? "编辑时仅保存第一行 SSO Token"
+      : "支持批量添加 Grok。每行一个 sso token 或 Cookie 片段";
   } else {
-    label.textContent = "Client Cookie / JWT";
-    input.placeholder = "粘贴 Clerk Cookie 或 JWT";
-    hint.textContent = "支持完整 Cookie（含 __session）或纯 JWT；运行时自动获取";
-    if (batchRow) batchRow.style.display = "none";
-    if (batchBlock) batchBlock.style.display = "none";
-    if (batchToggle) batchToggle.checked = false;
+    label.textContent = "__session";
+    input.placeholder = "每行一个 __session";
+    hint.textContent = accountId
+      ? "Orchids 当前仅支持 __session，编辑时仅保存第一行"
+      : "Orchids 当前仅支持 __session。支持批量添加，每行一个 __session";
     input.required = true;
   }
 }
 
-function getGrokBatchTokens() {
-  const textarea = document.getElementById("grokBatchTokens");
-  if (!textarea) return [];
-  return String(textarea.value || "")
+function splitBatchCredentialInput(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return [];
+  if (/^[\[{]/.test(text)) {
+    return [text];
+  }
+  const lines = text
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(Boolean);
+  if (lines.length > 1) {
+    return lines;
+  }
+  return [text];
 }
 
-function syncGrokBatchUI() {
-  const type = String(document.getElementById("accountType")?.value || "");
-  const batchRow = document.getElementById("grokBatchToggleRow");
-  const batchToggle = document.getElementById("grokBatchToggle");
-  const batchBlock = document.getElementById("grokBatchBlock");
-  const accountId = String(document.getElementById("accountId")?.value || "");
-  const input = document.getElementById("clientCookie");
-  if (type !== "grok") {
-    if (batchRow) batchRow.style.display = "none";
-    if (batchBlock) batchBlock.style.display = "none";
-    if (batchToggle) batchToggle.checked = false;
-    if (input) input.required = true;
-    return;
-  }
-  if (batchRow) batchRow.style.display = accountId ? "none" : "block";
-  if (batchBlock) batchBlock.style.display = (batchToggle && batchToggle.checked && !accountId) ? "block" : "none";
-  if (input) input.required = !(batchToggle && batchToggle.checked);
+function resolveAgentMode(type, preferredValue = "") {
+  const preferred = String(preferredValue || "").trim();
+  if (preferred) return preferred;
+  const models = getModelsForAccountType(type);
+  const defaultModel = models.find((m) => m.is_default) || models[0];
+  return defaultModel ? String(defaultModel.model_id || "").trim() : "";
 }
 
 // Render platform filter tabs
@@ -360,7 +282,7 @@ function normalizeStatusCode(statusCode) {
 function evaluateAccountStatus(acc) {
   const health = accountHealth[acc.id];
   if (health && !health.ok) {
-    return { normal: false, text: '异常', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: health.msg || '检测失败' };
+    return { normal: false, text: '异常', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: health.msg || '状态同步失败' };
   }
   if (!acc.enabled) {
     return { normal: false, text: '禁用', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '账号已禁用' };
@@ -411,11 +333,9 @@ function statusBadge(acc) {
   return evaluateAccountStatus(acc);
 }
 
-// Check single account
-async function checkAccount(id, silent = false) {
-  const acc = accounts.find((a) => a.id === id);
+// Refresh single account via the shared check endpoint.
+async function checkAccount(id, silent = false, actionText = "刷新") {
   const action = "check";
-  const actionText = "检查";
   try {
     const res = await fetch(`/api/accounts/${id}/${action}`);
     if (!res.ok) {
@@ -426,7 +346,18 @@ async function checkAccount(id, silent = false) {
     updateAccountHealth(id, true);
     if (!silent) showToast(`账号 ${updated.name || updated.email || id} ${actionText}完成`, "success");
   } catch (err) {
-    updateAccountHealth(id, false, err.message || String(err));
+    try {
+      const latestRes = await fetch(`/api/accounts/${id}`);
+      if (latestRes.ok) {
+        const latest = await latestRes.json();
+        accounts = accounts.map(a => (a.id === id ? latest : a));
+        delete accountHealth[id];
+      } else {
+        updateAccountHealth(id, false, err.message || String(err));
+      }
+    } catch (_) {
+      updateAccountHealth(id, false, err.message || String(err));
+    }
     if (!silent) showToast(`账号 ${id} ${actionText}失败`, "error");
   } finally {
     renderAccounts();
@@ -753,7 +684,7 @@ function renderAccounts() {
     refresh.className = "action-icon";
     refresh.dataset.action = "refresh";
     refresh.dataset.id = encodeData(acc.id);
-    refresh.title = "检查";
+    refresh.title = "刷新";
     refresh.textContent = "🔄";
 
     const del = document.createElement("i");
@@ -934,18 +865,9 @@ function openModal(account = null) {
   const title = document.getElementById("modalTitle");
   const form = document.getElementById("accountForm");
   const typeEl = document.getElementById("accountType");
-  const modeEl = document.getElementById("agentMode");
-
-  // 进入弹窗时先渲染一次占位，避免空白。
-  if (modeEl) {
-    modeEl.disabled = true;
-    setSelectOptions(modeEl, [{ value: "", label: "加载模型中...", selected: true, disabled: true }]);
-  }
 
   const finalizeModal = () => {
     applyTokenLabels(typeEl ? typeEl.value : "orchids");
-    syncGrokBatchUI();
-    if (modeEl) modeEl.disabled = false;
     modal.classList.add("active");
     modal.style.display = "flex";
   };
@@ -956,25 +878,14 @@ function openModal(account = null) {
       document.getElementById("accountId").value = account.id;
       document.getElementById("accountType").value = normalizeAccountType(account);
       document.getElementById("clientCookie").value = getAccountToken(account);
-      document.getElementById("weight").value = account.weight || 1;
       document.getElementById("enabled").checked = account.enabled;
-      const batchToggle = document.getElementById("grokBatchToggle");
-      const batchTokens = document.getElementById("grokBatchTokens");
-      if (batchToggle) batchToggle.checked = false;
-      if (batchTokens) batchTokens.value = "";
-      renderAgentModeOptions(document.getElementById("accountType").value, account.agent_mode || "");
     } else {
       title.textContent = "添加账号";
       form.reset();
       document.getElementById("accountId").value = "";
-      document.getElementById("weight").value = "1";
       document.getElementById("accountType").value = "orchids";
       document.getElementById("enabled").checked = true;
-      const batchToggle = document.getElementById("grokBatchToggle");
-      const batchTokens = document.getElementById("grokBatchTokens");
-      if (batchToggle) batchToggle.checked = false;
-      if (batchTokens) batchTokens.value = "";
-      renderAgentModeOptions("orchids", "");
+      document.getElementById("clientCookie").value = "";
     }
   };
 
@@ -998,33 +909,50 @@ async function saveAccount(e) {
   const id = document.getElementById("accountId").value;
   const type = document.getElementById("accountType").value;
   const token = document.getElementById("clientCookie").value;
-  const batchToggle = document.getElementById("grokBatchToggle");
-  const useBatch = !id && type === "grok" && batchToggle && batchToggle.checked;
-  const batchTokens = useBatch ? getGrokBatchTokens() : [];
+  const credentials = splitBatchCredentialInput(token);
+  const existing = id ? accounts.find((a) => String(a.id) === String(id)) : null;
   const data = {
     account_type: type,
-    agent_mode: document.getElementById("agentMode").value,
-    weight: parseInt(document.getElementById("weight").value) || 1,
+    agent_mode: resolveAgentMode(type, existing ? existing.agent_mode : ""),
+    weight: existing ? (parseInt(existing.weight, 10) || 1) : 1,
     enabled: document.getElementById("enabled").checked,
   };
-  if (!useBatch) {
-    if (type === 'warp') {
-      data.refresh_token = token;
-    } else {
-      data.client_cookie = token;
-    }
+
+  if (credentials.length === 0) {
+    showToast("请填写至少一个账号凭证", "error");
+    return;
   }
 
   try {
-    if (useBatch) {
-      if (batchTokens.length === 0) {
-        showToast("请填写批量 SSO Token", "error");
-        return;
+    if (id) {
+      const payload = { ...data };
+      if (type === 'warp') {
+        payload.refresh_token = credentials[0];
+      } else {
+        payload.client_cookie = credentials[0];
       }
+      const res = await fetch(`/api/accounts/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      closeModal();
+      loadAccounts();
+      showToast("保存成功");
+      return;
+    }
+
+    if (credentials.length > 1) {
       let success = 0;
       let failed = 0;
-      for (const item of batchTokens) {
-        const payload = { ...data, client_cookie: item };
+      for (const item of credentials) {
+        const payload = { ...data };
+        if (type === 'warp') {
+          payload.refresh_token = item;
+        } else {
+          payload.client_cookie = item;
+        }
         const res = await fetch("/api/accounts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1041,12 +969,17 @@ async function saveAccount(e) {
       showToast(`批量添加完成：成功 ${success}，失败 ${failed}`);
       return;
     }
-    const url = id ? `/api/accounts/${id}` : "/api/accounts";
-    const method = id ? "PUT" : "POST";
-    const res = await fetch(url, {
-      method,
+
+    const payload = { ...data };
+    if (type === 'warp') {
+      payload.refresh_token = credentials[0];
+    } else {
+      payload.client_cookie = credentials[0];
+    }
+    const res = await fetch("/api/accounts", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error(await res.text());
     closeModal();
@@ -1065,10 +998,9 @@ function editAccount(id) {
 
 // Refresh token
 async function refreshToken(id) {
-  const acc = accounts.find((a) => a.id === id);
-  const actionText = "检查";
+  const actionText = "刷新";
   showToast(`正在${actionText}账号信息...`, "info");
-  await checkAccount(id, false);
+  await checkAccount(id, false, actionText);
 }
 
 // Delete account
@@ -1185,17 +1117,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (typeSelect) {
     typeSelect.addEventListener("change", () => {
       applyTokenLabels(typeSelect.value);
-      renderAgentModeOptions(typeSelect.value, "");
-      syncGrokBatchUI();
     });
     applyTokenLabels(typeSelect.value);
-    renderAgentModeOptions(typeSelect.value, "");
-    syncGrokBatchUI();
-  }
-  const batchToggle = document.getElementById("grokBatchToggle");
-  if (batchToggle) {
-    batchToggle.addEventListener("change", () => {
-      syncGrokBatchUI();
-    });
   }
 });

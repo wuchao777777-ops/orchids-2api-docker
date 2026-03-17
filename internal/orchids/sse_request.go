@@ -36,7 +36,7 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	token, err := c.GetToken()
+	token, err := c.getChatToken()
 	if err != nil {
 		return fmt.Errorf("failed to get token: %w", err)
 	}
@@ -85,6 +85,9 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("User-Agent", orchidsWSUserAgent)
 		httpReq.Header.Set("X-Requested-With", "XMLHttpRequest")
+		if cookieHeader := c.buildUpstreamCookieHeader(); cookieHeader != "" {
+			httpReq.Header.Set("Cookie", cookieHeader)
+		}
 
 		if logger != nil {
 			headers := map[string]string{
@@ -93,6 +96,9 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 				"Content-Type":     "application/json",
 				"User-Agent":       orchidsWSUserAgent,
 				"X-Requested-With": "XMLHttpRequest",
+			}
+			if cookieHeader := c.buildUpstreamCookieHeader(); cookieHeader != "" {
+				headers["Cookie"] = "[REDACTED]"
 			}
 			logger.LogUpstreamRequest(url, headers, orchidsReq)
 		}

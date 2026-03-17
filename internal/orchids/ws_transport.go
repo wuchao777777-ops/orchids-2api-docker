@@ -12,10 +12,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"orchids-api/internal/clerk"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/upstream"
-	"orchids-api/internal/util"
 )
 
 var orchidsAgentModelMap = map[string]string{
@@ -96,19 +94,7 @@ func (c *Client) getWSToken() (string, error) {
 	if c.config != nil && strings.TrimSpace(c.config.UpstreamToken) != "" {
 		return c.config.UpstreamToken, nil
 	}
-
-	if c.config != nil && strings.TrimSpace(c.config.ClientCookie) != "" {
-		proxyFunc := http.ProxyFromEnvironment
-		if c.config != nil {
-			proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
-		}
-		info, err := clerk.FetchAccountInfoWithProjectAndSessionProxy(c.config.ClientCookie, c.config.SessionCookie, c.config.ProjectID, proxyFunc)
-		if err == nil && info.JWT != "" {
-			return info.JWT, nil
-		}
-	}
-
-	return c.GetToken()
+	return c.getChatToken()
 }
 
 func (c *Client) dialWSConnection(ctx context.Context) (*websocket.Conn, error) {
@@ -130,15 +116,13 @@ func (c *Client) dialWSConnection(ctx context.Context) (*websocket.Conn, error) 
 		"User-Agent": []string{orchidsWSUserAgent},
 		"Origin":     []string{orchidsWSOrigin},
 	}
-
-	proxyFunc := http.ProxyFromEnvironment
-	if c.config != nil {
-		proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
+	if cookieHeader := c.buildUpstreamCookieHeader(); cookieHeader != "" {
+		headers.Set("Cookie", cookieHeader)
 	}
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: orchidsWSConnectTimeout,
-		Proxy:            proxyFunc,
+		Proxy:            orchidsProxyFunc(c.config),
 	}
 
 	conn, _, err := dialer.DialContext(ctx, wsURL, headers)

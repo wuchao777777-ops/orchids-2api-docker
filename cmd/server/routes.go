@@ -75,6 +75,8 @@ func registerRoutes(
 	mux.HandleFunc("/api/export", sessionAuth(apiHandler.HandleExport))
 	mux.HandleFunc("/api/import", sessionAuth(apiHandler.HandleImport))
 	mux.HandleFunc("/api/config", sessionAuth(apiHandler.HandleConfig))
+	mux.HandleFunc("/api/config/list", sessionAuth(apiHandler.HandleConfigList))
+	mux.HandleFunc("/api/config/save", sessionAuth(apiHandler.HandleConfigSave))
 	mux.HandleFunc("/api/config/cache/clear", sessionAuth(apiHandler.HandleCacheClear))
 	mux.HandleFunc("/api/token-cache/stats", sessionAuth(apiHandler.HandleTokenCacheStats))
 	mux.HandleFunc("/api/token-cache/clear", sessionAuth(apiHandler.HandleTokenCacheClear))

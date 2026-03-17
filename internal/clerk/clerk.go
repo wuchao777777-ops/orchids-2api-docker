@@ -56,6 +56,12 @@ type AccountInfo struct {
 	JWT          string
 }
 
+type ParsedOrchidsCookies struct {
+	ClientCookie  string
+	SessionCookie string
+	ClientUat     string
+}
+
 func FetchAccountInfoWithSessionProxy(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
 	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, sessionCookie, "", proxyFunc)
 }
@@ -172,6 +178,102 @@ func ParseClientCookies(input string) (clientJWT string, sessionJWT string, err 
 	}
 
 	return "", "", fmt.Errorf("unsupported client cookie format")
+}
+
+func ParseOrchidsCookies(input string) (ParsedOrchidsCookies, bool, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ParsedOrchidsCookies{}, false, nil
+	}
+
+	if strings.HasPrefix(trimmed, "[") {
+		var cookies []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal([]byte(trimmed), &cookies); err != nil {
+			return ParsedOrchidsCookies{}, false, err
+		}
+		parsed := collectOrchidsCookies(func(yield func(string, string)) {
+			for _, cookie := range cookies {
+				yield(cookie.Name, cookie.Value)
+			}
+		})
+		return parsed, parsed.hasAny(), nil
+	}
+
+	if strings.Contains(trimmed, "=") {
+		parts := strings.FieldsFunc(trimmed, func(r rune) bool {
+			return r == ';' || r == '\n'
+		})
+		parsed := collectOrchidsCookies(func(yield func(string, string)) {
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				kv := strings.SplitN(part, "=", 2)
+				if len(kv) != 2 {
+					continue
+				}
+				yield(strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]))
+			}
+		})
+		return parsed, parsed.hasAny(), nil
+	}
+
+	return ParsedOrchidsCookies{}, false, nil
+}
+
+func (p ParsedOrchidsCookies) hasAny() bool {
+	return strings.TrimSpace(p.ClientCookie) != "" || strings.TrimSpace(p.SessionCookie) != "" || strings.TrimSpace(p.ClientUat) != ""
+}
+
+func collectOrchidsCookies(iter func(func(string, string))) ParsedOrchidsCookies {
+	var parsed ParsedOrchidsCookies
+	var exactClient bool
+	var exactSession bool
+	var exactClientUat bool
+
+	iter(func(name, value string) {
+		name = strings.TrimSpace(name)
+		value = normalizeCookieTokenValue(value)
+		if name == "" || value == "" {
+			return
+		}
+
+		switch {
+		case name == "__client":
+			parsed.ClientCookie = value
+			exactClient = true
+		case isNamespacedClientCookie(name) && !exactClient && parsed.ClientCookie == "":
+			parsed.ClientCookie = value
+		case name == "__session":
+			parsed.SessionCookie = value
+			exactSession = true
+		case isNamespacedSessionCookie(name) && !exactSession && parsed.SessionCookie == "":
+			parsed.SessionCookie = value
+		case name == "__client_uat":
+			parsed.ClientUat = value
+			exactClientUat = true
+		case isNamespacedClientUatCookie(name) && !exactClientUat && parsed.ClientUat == "":
+			parsed.ClientUat = value
+		}
+	})
+
+	return parsed
+}
+
+func isNamespacedClientCookie(name string) bool {
+	return name != "__client_uat" && strings.HasPrefix(name, "__client_") && !isNamespacedClientUatCookie(name)
+}
+
+func isNamespacedSessionCookie(name string) bool {
+	return strings.HasPrefix(name, "__session_")
+}
+
+func isNamespacedClientUatCookie(name string) bool {
+	return strings.HasPrefix(name, "__client_uat_")
 }
 
 func extractCookieValue(input string, name string) (string, error) {

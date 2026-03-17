@@ -36,6 +36,16 @@ func TestClassifyAccountStatus(t *testing.T) {
 			expected: "401",
 		},
 		{
+			name:     "No active Clerk sessions",
+			errStr:   "no active sessions found",
+			expected: "401",
+		},
+		{
+			name:     "Missing Orchids client cookie",
+			errStr:   "signed out: missing orchids client cookie",
+			expected: "401",
+		},
+		{
 			name:     "Forbidden message",
 			errStr:   "Access forbidden",
 			expected: "403",

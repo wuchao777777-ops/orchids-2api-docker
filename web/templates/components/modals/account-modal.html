@@ -16,32 +16,9 @@
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label" id="tokenLabel">Token</label>
-        <input type="text" class="form-input" id="clientCookie" required placeholder="粘贴 Token / Cookie / JWT" />
-        <small id="tokenHint" style="color: var(--text-muted); font-size: 12px">Warp 使用 refresh_token；Orchids 支持完整 Cookie（含 __session）或纯 JWT</small>
-      </div>
-      <div class="form-group" id="grokBatchToggleRow" style="display:none;">
-        <label class="form-label">
-          <label class="toggle">
-            <input type="checkbox" id="grokBatchToggle" />
-            <span class="toggle-slider"></span>
-          </label>
-          &nbsp;&nbsp;批量添加 Grok 账号
-        </label>
-      </div>
-      <div class="form-group" id="grokBatchBlock" style="display:none;">
-        <label class="form-label">批量 SSO Token</label>
-        <textarea id="grokBatchTokens" class="form-input" rows="6" placeholder="每行一个 sso token 或包含 sso= 的 Cookie"></textarea>
-        <small style="color: var(--text-muted); font-size: 12px">仅在新增时生效，空行会被忽略</small>
-      </div>
-      <div class="form-group">
-        <label class="form-label">权重</label>
-        <input type="number" class="form-input" id="weight" value="1" min="1" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Agent Mode</label>
-        <select class="form-input" id="agentMode"></select>
-        <small style="color: var(--text-muted); font-size: 12px">按账号类型自动展示该渠道支持的模型</small>
+        <label class="form-label" id="tokenLabel">__session</label>
+        <textarea class="form-input" id="clientCookie" rows="8" required placeholder="每行一个 __session"></textarea>
+        <small id="tokenHint" style="color: var(--text-muted); font-size: 12px">Orchids 当前仅支持 __session。新增时每行一个；编辑时只使用第一行</small>
       </div>
       <div class="form-group">
         <label class="form-label">

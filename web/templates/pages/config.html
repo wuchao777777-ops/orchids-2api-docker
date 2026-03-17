@@ -56,11 +56,7 @@
         <div
           style="padding: 20px; background: rgba(139, 146, 168, 0.05); border: 1px solid var(--border-color); border-radius: 12px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <h3 style="font-size: 1rem; color: var(--text-main); margin: 0;">Token 用量缓存</h3>
-              <span
-                style="font-size: 0.8rem; color: var(--accent-blue); background: rgba(34, 211, 238, 0.1); padding: 2px 6px; border-radius: 4px;">Beta</span>
-            </div>
+            <h3 style="font-size: 1rem; color: var(--text-main); margin: 0;">Token 用量缓存</h3>
             <label class="toggle">
               <input type="checkbox" id="cfg_enable_token_cache" onchange="toggleCacheConfig(this.checked)">
               <span class="toggle-slider"></span>
@@ -70,16 +66,32 @@
           <div id="cacheConfigDetails" style="display: none;">
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
               <div>
-                <label class="form-label">缓存有效期 (秒)</label>
-                <input type="number" id="cfg_token_cache_ttl" class="form-input" value="300" oninput="updateMemoryEstimation()">
+                <label class="form-label">缓存有效期</label>
+                <input type="hidden" id="cfg_token_cache_ttl" value="300">
+                <select id="cfg_token_cache_ttl_preset" class="form-input" onchange="handleTokenCacheTTLPresetChange()">
+                  <option value="60">1 分钟</option>
+                  <option value="300">5 分钟</option>
+                  <option value="900">15 分钟</option>
+                  <option value="1800">30 分钟</option>
+                  <option value="3600">1 小时</option>
+                  <option value="86400">1 天</option>
+                  <option value="259200">3 天</option>
+                  <option value="604800">1 周</option>
+                  <option value="custom">自定义</option>
+                </select>
+                <div id="cfg_token_cache_ttl_custom_wrap" style="display: none; margin-top: 12px;">
+                  <label class="form-label">自定义 TTL (秒)</label>
+                  <input type="number" id="cfg_token_cache_ttl_custom" class="form-input" min="1" value="300"
+                    oninput="handleTokenCacheTTLCustomInput()">
+                </div>
               </div>
               <div>
                 <label class="form-label">缓存策略</label>
                 <select id="cfg_token_cache_strategy" class="form-input" onchange="updateMemoryEstimation()">
-                  <option value="0">System + Tools 整体缓存</option>
-                  <option value="1">System / Tools 分离缓存</option>
-                  <option value="2">仅缓存 System Prompt</option>
-                  <option value="3">仅缓存 Tools 定义</option>
+                  <option value="0">完整匹配 (System + Tools)</option>
+                  <option value="1">分离缓存 (推荐)</option>
+                  <option value="2">仅缓存 System</option>
+                  <option value="3">仅缓存 Tools</option>
                 </select>
               </div>
             </div>

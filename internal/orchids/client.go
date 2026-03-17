@@ -124,6 +124,9 @@ var noActiveSessionLogState = struct {
 
 const noActiveSessionLogInterval = 5 * time.Minute
 
+var orchidsFetchClerkInfoWithSession = clerk.FetchAccountInfoWithSessionProxy
+var orchidsFetchClerkInfoWithProjectAndSession = clerk.FetchAccountInfoWithProjectAndSessionProxy
+
 func traceIDForLog(req upstream.UpstreamRequest) string {
 	traceID := strings.TrimSpace(req.TraceID)
 	if traceID == "" {
@@ -276,26 +279,43 @@ func (c *Client) GetToken() (string, error) {
 		return c.config.UpstreamToken, nil
 	}
 
+	var accountClerkInfoAttempted bool
+	var accountClerkInfoErr error
+
 	// Orchids OAuth: if we have a legacy __client cookie, prefer fetching
 	// Clerk /v1/client and using sessions[0].last_active_token.jwt.
 	// That token is typically short-lived, so we cache by sessionID using its exp claim.
 	if c.account != nil {
-		if strings.TrimSpace(c.account.ClientCookie) != "" {
-			// If we already have a cached token for this session, use it.
-			if cached, ok := getCachedToken(strings.TrimSpace(c.account.SessionID)); ok {
-				return cached, nil
+		c.syncConfigFromStoredAccount()
+		if strings.TrimSpace(c.account.ClientCookie) == "" && strings.TrimSpace(c.account.SessionCookie) != "" {
+			_ = c.bootstrapClientCookieFromSession()
+			c.syncConfigFromStoredAccount()
+		}
+		if cached, ok := getCachedToken(strings.TrimSpace(c.account.SessionID)); ok {
+			return cached, nil
+		}
+		if tok := strings.TrimSpace(c.account.Token); tok != "" && tokenStillUsable(tok) {
+			if sid := strings.TrimSpace(c.account.SessionID); sid != "" {
+				setCachedToken(sid, tok)
 			}
+			return tok, nil
+		}
 
-			proxyFunc := http.ProxyFromEnvironment
-			if c.config != nil {
-				proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
-			}
-			info, err := clerk.FetchAccountInfoWithSessionProxy(c.account.ClientCookie, c.account.SessionCookie, proxyFunc)
+		if strings.TrimSpace(c.account.ClientCookie) != "" {
+			accountClerkInfoAttempted = true
+			info, err := orchidsFetchClerkInfoWithSession(c.account.ClientCookie, c.account.SessionCookie, orchidsProxyFunc(c.config))
 			if err == nil && info != nil {
 				// Update runtime config (used by some upstream payload fields)
 				c.applyAccountInfo(info)
 				// Persist rotated __client and identity fields back to store account snapshot
 				c.persistAccountInfo(info)
+				if jwt := strings.TrimSpace(info.JWT); jwt != "" {
+					if sid := strings.TrimSpace(info.SessionID); sid != "" {
+						setCachedToken(sid, jwt)
+					}
+					slog.Debug("Orchids token source", "source", "clerk_client_last_active_token", "session_id", info.SessionID, "has_session_cookie", strings.TrimSpace(c.account.SessionCookie) != "")
+					return jwt, nil
+				}
 				if strings.TrimSpace(info.SessionID) != "" {
 					// Ensure config has the latest session id/cookies then fetch a bearer token
 					// via the official Clerk tokens endpoint.
@@ -313,6 +333,7 @@ func (c *Client) GetToken() (string, error) {
 				// Info returned but missing JWT/sessionID.
 				slog.Warn("Orchids token fetch: clerk info missing jwt/session", "has_jwt", strings.TrimSpace(info.JWT) != "", "session_id", info.SessionID)
 			} else if err != nil {
+				accountClerkInfoErr = err
 				lower := strings.ToLower(err.Error())
 				if strings.Contains(lower, "no active sessions found") {
 					logKey := "clerk_info"
@@ -333,9 +354,19 @@ func (c *Client) GetToken() (string, error) {
 		if tok := strings.TrimSpace(c.account.Token); tok != "" {
 			return tok, nil
 		}
+
+		c.syncConfigFromStoredAccount()
 	}
 
 	if c.config.AutoRefreshToken {
+		if accountClerkInfoAttempted {
+			if strings.TrimSpace(c.config.SessionID) != "" {
+				return c.fetchToken()
+			}
+			if accountClerkInfoErr != nil {
+				return "", accountClerkInfoErr
+			}
+		}
 		return c.forceRefreshToken()
 	}
 
@@ -343,7 +374,18 @@ func (c *Client) GetToken() (string, error) {
 		return cached, nil
 	}
 
+	if accountClerkInfoErr != nil && strings.TrimSpace(c.config.SessionID) == "" {
+		return "", accountClerkInfoErr
+	}
+
 	return c.fetchToken()
+}
+
+func (c *Client) GetChatToken() (string, error) {
+	if c == nil || c.config == nil {
+		return "", errors.New("missing config")
+	}
+	return c.getChatToken()
 }
 
 func (c *Client) forceRefreshToken() (string, error) {
@@ -352,11 +394,7 @@ func (c *Client) forceRefreshToken() (string, error) {
 	}
 
 	if strings.TrimSpace(c.config.ClientCookie) != "" {
-		proxyFunc := http.ProxyFromEnvironment
-		if c.config != nil {
-			proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
-		}
-		info, err := clerk.FetchAccountInfoWithProjectAndSessionProxy(c.config.ClientCookie, c.config.SessionCookie, c.config.ProjectID, proxyFunc)
+		info, err := orchidsFetchClerkInfoWithProjectAndSession(c.config.ClientCookie, c.config.SessionCookie, c.config.ProjectID, orchidsProxyFunc(c.config))
 		if err == nil && info.JWT != "" {
 			c.applyAccountInfo(info)
 			c.persistAccountInfo(info)
@@ -413,10 +451,8 @@ func (c *Client) fetchToken() (string, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if strings.TrimSpace(c.config.SessionCookie) != "" {
-		req.Header.Set("Cookie", "__client="+c.config.ClientCookie+"; __session="+c.config.SessionCookie)
-	} else {
-		req.Header.Set("Cookie", "__client="+c.config.ClientCookie+"; __client_uat="+c.config.ClientUat)
+	if cookieHeader := orchidsClerkCookieHeader(c.config.ClientCookie, c.config.SessionCookie, c.config.ClientUat, c.config.SessionID); cookieHeader != "" {
+		req.Header.Set("Cookie", cookieHeader)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -466,6 +502,33 @@ func (c *Client) applyAccountInfo(info *clerk.AccountInfo) {
 	}
 }
 
+func (c *Client) syncConfigFromStoredAccount() {
+	if c == nil || c.config == nil || c.account == nil {
+		return
+	}
+	if strings.TrimSpace(c.config.SessionID) == "" && strings.TrimSpace(c.account.SessionID) != "" {
+		c.config.SessionID = strings.TrimSpace(c.account.SessionID)
+	}
+	if strings.TrimSpace(c.config.ClientCookie) == "" && strings.TrimSpace(c.account.ClientCookie) != "" {
+		c.config.ClientCookie = strings.TrimSpace(c.account.ClientCookie)
+	}
+	if strings.TrimSpace(c.config.SessionCookie) == "" && strings.TrimSpace(c.account.SessionCookie) != "" {
+		c.config.SessionCookie = strings.TrimSpace(c.account.SessionCookie)
+	}
+	if strings.TrimSpace(c.config.ClientUat) == "" && strings.TrimSpace(c.account.ClientUat) != "" {
+		c.config.ClientUat = strings.TrimSpace(c.account.ClientUat)
+	}
+	if strings.TrimSpace(c.config.ProjectID) == "" && strings.TrimSpace(c.account.ProjectID) != "" {
+		c.config.ProjectID = strings.TrimSpace(c.account.ProjectID)
+	}
+	if strings.TrimSpace(c.config.UserID) == "" && strings.TrimSpace(c.account.UserID) != "" {
+		c.config.UserID = strings.TrimSpace(c.account.UserID)
+	}
+	if strings.TrimSpace(c.config.Email) == "" && strings.TrimSpace(c.account.Email) != "" {
+		c.config.Email = strings.TrimSpace(c.account.Email)
+	}
+}
+
 // persistAccountInfo 将刷新后的账号信息同步回 store，防止重启后丢失。
 func (c *Client) persistAccountInfo(info *clerk.AccountInfo) {
 	if c.account == nil || info == nil {
@@ -488,6 +551,9 @@ func (c *Client) persistAccountInfo(info *clerk.AccountInfo) {
 	}
 	if strings.TrimSpace(info.ClientCookie) != "" {
 		c.account.ClientCookie = info.ClientCookie
+	}
+	if strings.TrimSpace(info.JWT) != "" {
+		c.account.Token = info.JWT
 	}
 }
 
@@ -746,4 +812,13 @@ func InvalidateCachedToken(sessionID string) {
 
 func tokenExpiry(token string) time.Time {
 	return util.JWTExpiry(token, tokenExpirySkew)
+}
+
+func tokenStillUsable(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	expiresAt := tokenExpiry(token)
+	return expiresAt.IsZero() || time.Now().Before(expiresAt)
 }
