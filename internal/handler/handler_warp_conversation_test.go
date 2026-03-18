@@ -144,6 +144,104 @@ func TestWarpConversationID_NotPersistedWithoutConversationKey(t *testing.T) {
 	}
 }
 
+func TestBoltToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":false,
+		"conversation_id":"bolt_followup_recover",
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"这个项目是干什么的"}]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_ls","name":"Bash","input":{"command":"ls /tmp/cc-agent/sb1-fxjxbmvk/project","description":"List project files"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_ls","content":"Exit code 2\nls: cannot access '/tmp/cc-agent/sb1-fxjxbmvk/project': No such file or directory"},
+				{"type":"text","text":"这个项目是干什么的"}
+			]}
+		],
+		"tools":[
+			{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}},
+			{"name":"Bash","input_schema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}
+		]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/bolt/v1/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 upstream call, got %d", len(calls))
+	}
+	if calls[0].NoTools {
+		t.Fatalf("expected bolt follow-up after sandbox path miss to keep tools enabled")
+	}
+}
+
+func TestBoltToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{
+		eventsByOp: [][]upstream.SSEMessage{{
+			{Type: "model", Event: map[string]any{"type": "text-start"}},
+			{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "Let me first understand the project structure and code."}},
+			{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+		}},
+	}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":false,
+		"conversation_id":"bolt_followup_local_fallback",
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"这个项目是干什么的"}]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_ls","name":"Bash","input":{"command":"ls -la","description":"List project files"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_ls","content":"README.md\napi.py\ndashboard.py\nweb-ui/\nweb-ui/package.json\nweb-ui/src/\nrequirements.txt"}
+			]}
+		],
+		"tools":[
+			{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}},
+			{"name":"Bash","input_schema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}
+		]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/bolt/v1/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected upstream passthrough call, got %d", len(calls))
+	}
+
+	out := rec.Body.String()
+	if !strings.Contains(out, "Let me first understand the project structure and code.") {
+		t.Fatalf("expected upstream text to be preserved, got: %s", out)
+	}
+	for _, unwanted := range []string{"前端", "后端", "脚本层", "当前只拿到目录概览", "基于当前已读取内容"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("did not expect local fallback text %q in %s", unwanted, out)
+		}
+	}
+}
+
 func TestOrchidsPayload_UsesProtocolPromptView(t *testing.T) {
 	t.Parallel()
 

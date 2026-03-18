@@ -49,8 +49,10 @@ func TestRefreshAccountState_BoltRequiresProjectID(t *testing.T) {
 
 func TestRefreshAccountState_BoltAcceptsCompleteCredentials(t *testing.T) {
 	prevFetch := boltFetchRootData
+	prevFetchRateLimits := boltFetchRateLimits
 	t.Cleanup(func() {
 		boltFetchRootData = prevFetch
+		boltFetchRateLimits = prevFetchRateLimits
 	})
 
 	boltFetchRootData = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*bolt.RootData, error) {
@@ -62,6 +64,9 @@ func TestRefreshAccountState_BoltAcceptsCompleteCredentials(t *testing.T) {
 				TotalBoltTokenPurchases: 1_000_000,
 			},
 		}, nil
+	}
+	boltFetchRateLimits = func(ctx context.Context, acc *store.Account, cfg *config.Config, organizationID int64) (*bolt.RateLimits, error) {
+		return nil, nil
 	}
 
 	a := New(nil, "", "", &config.Config{})
@@ -84,8 +89,10 @@ func TestRefreshAccountState_BoltAcceptsCompleteCredentials(t *testing.T) {
 
 func TestRefreshAccountState_BoltSyncsPaidTierQuota(t *testing.T) {
 	prevFetch := boltFetchRootData
+	prevFetchRateLimits := boltFetchRateLimits
 	t.Cleanup(func() {
 		boltFetchRootData = prevFetch
+		boltFetchRateLimits = prevFetchRateLimits
 	})
 
 	boltFetchRootData = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*bolt.RootData, error) {
@@ -99,6 +106,9 @@ func TestRefreshAccountState_BoltSyncsPaidTierQuota(t *testing.T) {
 				},
 			},
 		}, nil
+	}
+	boltFetchRateLimits = func(ctx context.Context, acc *store.Account, cfg *config.Config, organizationID int64) (*bolt.RateLimits, error) {
+		return nil, nil
 	}
 
 	a := New(nil, "", "", &config.Config{})
@@ -118,12 +128,17 @@ func TestRefreshAccountState_BoltSyncsPaidTierQuota(t *testing.T) {
 
 func TestRefreshAccountState_BoltPropagatesUpstreamStatus(t *testing.T) {
 	prevFetch := boltFetchRootData
+	prevFetchRateLimits := boltFetchRateLimits
 	t.Cleanup(func() {
 		boltFetchRootData = prevFetch
+		boltFetchRateLimits = prevFetchRateLimits
 	})
 
 	boltFetchRootData = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*bolt.RootData, error) {
 		return nil, errors.New("unexpected status code 401: unauthorized")
+	}
+	boltFetchRateLimits = func(ctx context.Context, acc *store.Account, cfg *config.Config, organizationID int64) (*bolt.RateLimits, error) {
+		return nil, nil
 	}
 
 	a := New(nil, "", "", &config.Config{})
@@ -138,5 +153,69 @@ func TestRefreshAccountState_BoltPropagatesUpstreamStatus(t *testing.T) {
 	}
 	if httpStatus != http.StatusUnauthorized {
 		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusUnauthorized)
+	}
+}
+
+func TestRefreshAccountState_BoltUsesRateLimitsWhenAvailable(t *testing.T) {
+	prevFetch := boltFetchRootData
+	prevFetchRateLimits := boltFetchRateLimits
+	t.Cleanup(func() {
+		boltFetchRootData = prevFetch
+		boltFetchRateLimits = prevFetchRateLimits
+	})
+
+	boltFetchRootData = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*bolt.RootData, error) {
+		return &bolt.RootData{
+			User: &bolt.RootUser{
+				ID:    "user_paid",
+				Email: "bolt@example.com",
+				Membership: &bolt.Membership{
+					Paid: true,
+					Tier: float64(1),
+				},
+			},
+		}, nil
+	}
+	boltFetchRateLimits = func(ctx context.Context, acc *store.Account, cfg *config.Config, organizationID int64) (*bolt.RateLimits, error) {
+		if organizationID != 0 {
+			t.Fatalf("organizationID=%d want 0", organizationID)
+		}
+		return &bolt.RateLimits{
+			MaxPerMonth: 10_000_000,
+			RegularTokens: &bolt.TokenBalance{
+				Available: 10_000_000,
+				Used:      255_061,
+			},
+			Purchased: &bolt.TokenBalance{
+				Available: 1_000_000,
+				Used:      0,
+			},
+			RewardTokens:  &bolt.TokenBalance{},
+			SpecialTokens: &bolt.TokenBalance{},
+			ReferralTokens: &bolt.ReferralTokens{
+				Free: &bolt.TokenBalance{},
+				Paid: &bolt.TokenBalance{},
+			},
+		}, nil
+	}
+
+	a := New(nil, "", "", &config.Config{})
+	acc := &store.Account{AccountType: "bolt", SessionCookie: "sess", ProjectID: "sb1-demo"}
+
+	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
+	if err != nil {
+		t.Fatalf("refreshAccountState() error = %v", err)
+	}
+	if status != "" || httpStatus != 0 {
+		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
+	}
+	if acc.Subscription != "pro-1" {
+		t.Fatalf("subscription=%q want pro-1", acc.Subscription)
+	}
+	if acc.UsageCurrent != 10_744_939 {
+		t.Fatalf("usage_current=%v want 10744939", acc.UsageCurrent)
+	}
+	if acc.UsageLimit != 11_000_000 {
+		t.Fatalf("usage_limit=%v want 11000000", acc.UsageLimit)
 	}
 }

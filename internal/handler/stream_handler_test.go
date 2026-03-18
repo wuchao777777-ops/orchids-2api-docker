@@ -336,8 +336,12 @@ func TestNormalizeUpstreamToolCall_RebasesForeignReadPathToWorkdir(t *testing.T)
 	if name != "Read" {
 		t.Fatalf("expected Read, got %q", name)
 	}
-	if !strings.Contains(input, target) {
-		t.Fatalf("expected foreign path to rebase to %q, got %s", target, input)
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if payload["file_path"] != target {
+		t.Fatalf("expected foreign path to rebase to %q, got %q", target, payload["file_path"])
 	}
 }
 
@@ -352,8 +356,57 @@ func TestNormalizeUpstreamToolCall_RebasesForeignGlobPathToWorkdir(t *testing.T)
 	if name != "Glob" {
 		t.Fatalf("expected Glob, got %q", name)
 	}
-	if !strings.Contains(input, targetDir) {
-		t.Fatalf("expected foreign glob path to rebase to %q, got %s", targetDir, input)
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if payload["path"] != targetDir {
+		t.Fatalf("expected foreign glob path to rebase to %q, got %q", targetDir, payload["path"])
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RebasesForeignWritePathToWorkdirWhenFileMissing(t *testing.T) {
+	workdir := t.TempDir()
+
+	name, input := normalizeUpstreamToolCall("Write", `{"file_path":"/tmp/cc-agent/sb1-fxjxbmvk/project/calculator.py","content":"print('ok')"}`, workdir)
+	if name != "Write" {
+		t.Fatalf("expected Write, got %q", name)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	want := filepath.Join(workdir, "calculator.py")
+	if payload["file_path"] != want {
+		t.Fatalf("expected foreign write path to rebase to %q, got %q", want, payload["file_path"])
+	}
+	if payload["content"] != "print('ok')" {
+		t.Fatalf("expected content preserved, got %q", payload["content"])
+	}
+	if strings.Contains(payload["file_path"], "/tmp/cc-agent/") {
+		t.Fatalf("expected placeholder write path removed, got %q", payload["file_path"])
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RebasesForeignNestedWritePathWhenLocalParentExists(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workdir, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+
+	name, input := normalizeUpstreamToolCall("Write", `{"file_path":"/tmp/cc-agent/sb1-fxjxbmvk/project/src/calculator.py","content":"print('ok')"}`, workdir)
+	if name != "Write" {
+		t.Fatalf("expected Write, got %q", name)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	want := filepath.Join(workdir, "src", "calculator.py")
+	if payload["file_path"] != want {
+		t.Fatalf("expected nested foreign write path to rebase to %q, got %q", want, payload["file_path"])
 	}
 }
 
@@ -384,8 +437,17 @@ func TestNormalizeUpstreamToolCall_RewritesForeignBashReadCandidatesToWorkdir(t 
 	if name != "Bash" {
 		t.Fatalf("expected Bash, got %q", name)
 	}
-	if !strings.Contains(input, target) {
-		t.Fatalf("expected bash read candidate to rebase to %q, got %s", target, input)
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	normalizedCommand := strings.ToLower(strings.ReplaceAll(payload["command"], `\`, `/`))
+	normalizedTarget := strings.ToLower(strings.ReplaceAll(target, `\`, `/`))
+	for strings.Contains(normalizedCommand, "//") {
+		normalizedCommand = strings.ReplaceAll(normalizedCommand, "//", "/")
+	}
+	if !strings.Contains(normalizedCommand, normalizedTarget) {
+		t.Fatalf("expected bash read candidate to rebase to %q, got %s", target, payload["command"])
 	}
 	if strings.Contains(input, "jinyaozhang/Projects/truth_social_scraper") {
 		t.Fatalf("expected foreign path to be removed from localized bash command, got %s", input)
@@ -403,8 +465,17 @@ func TestNormalizeUpstreamToolCall_RewritesForeignRelativeReadTailToWorkdir(t *t
 	if name != "Bash" {
 		t.Fatalf("expected Bash, got %q", name)
 	}
-	if !strings.Contains(input, target) {
-		t.Fatalf("expected relative foreign path to rebase to %q, got %s", target, input)
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	normalizedCommand := strings.ToLower(strings.ReplaceAll(payload["command"], `\`, `/`))
+	normalizedTarget := strings.ToLower(strings.ReplaceAll(target, `\`, `/`))
+	for strings.Contains(normalizedCommand, "//") {
+		normalizedCommand = strings.ReplaceAll(normalizedCommand, "//", "/")
+	}
+	if !strings.Contains(normalizedCommand, normalizedTarget) {
+		t.Fatalf("expected relative foreign path to rebase to %q, got %s", target, payload["command"])
 	}
 	if strings.Contains(input, "jianxinwei/workspace/monitor_trump") {
 		t.Fatalf("expected foreign path to be removed from localized bash command, got %s", input)
@@ -434,6 +505,28 @@ func TestNormalizeUpstreamToolCall_LocalizesForeignBashReadCandidatesToFindInWor
 	}
 	if strings.Contains(input, "jinyaozhang/Projects/truth_social_scraper") {
 		t.Fatalf("expected foreign path to be removed, got %s", input)
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RewritesProjectRootProbeCommandToRelativeList(t *testing.T) {
+	workdir := `d:\Code\Orchids-2api`
+	name, input := normalizeUpstreamToolCall("Bash", `{"command":"ls /mnt/d/Code/Orchids-2api 2>/dev/null || ls ~/Orchids-2api 2>/dev/null || echo \"cannot access windows path\"","description":"Try to access Windows project path"}`, workdir)
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("expected json input, got %v", err)
+	}
+	if payload["command"] != `ls -1A -- "."` {
+		t.Fatalf("expected relative root list command, got %s", payload["command"])
+	}
+	if payload["description"] != "List project root directory entries" {
+		t.Fatalf("expected localized description, got %s", payload["description"])
+	}
+	if strings.Contains(input, "/mnt/d/Code/Orchids-2api") || strings.Contains(input, "~/Orchids-2api") {
+		t.Fatalf("expected foreign probe paths removed, got %s", input)
 	}
 }
 

@@ -35,36 +35,23 @@ type ProjectFiles struct {
 }
 
 type Message struct {
-	ID              string           `json:"id"`
-	Role            string           `json:"role"`
-	Content         string           `json:"content"`
-	RawContent      string           `json:"rawContent,omitempty"`
-	Cache           bool             `json:"cache"`
-	Parts           []Part           `json:"parts"`
-	Annotations     []Annotation     `json:"annotations,omitempty"`
-	ToolInvocations []ToolInvocation `json:"toolInvocations,omitempty"`
+	ID          string       `json:"id"`
+	Role        string       `json:"role"`
+	Content     string       `json:"content"`
+	RawContent  string       `json:"rawContent,omitempty"`
+	Cache       bool         `json:"cache"`
+	Parts       []Part       `json:"parts"`
+	Annotations []Annotation `json:"annotations,omitempty"`
 }
 
 type Part struct {
-	Type           string          `json:"type"`
-	Text           string          `json:"text,omitempty"`
-	ToolInvocation *ToolInvocation `json:"toolInvocation,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
 }
 
 type Annotation struct {
 	Type          string `json:"type"`
 	UserMessageID string `json:"userMessageId"`
-}
-
-type ToolInvocation struct {
-	State           string          `json:"state"`
-	Step            int             `json:"step"`
-	ToolCallID      string          `json:"toolCallId"`
-	ToolName        string          `json:"toolName"`
-	Args            json.RawMessage `json:"args"`
-	StartTime       int64           `json:"startTime"`
-	ParentToolUseID *string         `json:"parentToolUseId"`
-	Result          string          `json:"result"`
 }
 
 type EndEvent struct {
@@ -83,22 +70,38 @@ type ToolCall struct {
 	Parameters json.RawMessage `json:"parameters"`
 }
 
-type SimpleToolCall struct {
-	Tool       string          `json:"tool"`
-	Parameters json.RawMessage `json:"parameters"`
-}
-
-type ToolCallWrapper struct {
-	ToolCall *ToolCall `json:"toolCall,omitempty"`
-}
-
-type ToolCallsWrapper struct {
-	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
-}
-
 type RootData struct {
 	User  *RootUser `json:"user"`
 	Token string    `json:"token"`
+}
+
+type RateLimits struct {
+	BillingPeriod  *BillingPeriod  `json:"billingPeriod"`
+	MaxPerDay      float64         `json:"maxPerDay"`
+	MaxPerMonth    float64         `json:"maxPerMonth"`
+	RegularTokens  *TokenBalance   `json:"regularTokens"`
+	RewardTokens   *TokenBalance   `json:"rewardTokens"`
+	Overflow       *TokenBalance   `json:"overflow"`
+	Purchased      *TokenBalance   `json:"purchased"`
+	ReferralTokens *ReferralTokens `json:"referralTokens"`
+	SpecialTokens  *TokenBalance   `json:"specialTokens"`
+	TotalThisMonth float64         `json:"totalThisMonth"`
+	TotalToday     float64         `json:"totalToday"`
+}
+
+type BillingPeriod struct {
+	From int64 `json:"from"`
+	To   int64 `json:"to"`
+}
+
+type TokenBalance struct {
+	Available float64 `json:"available"`
+	Used      float64 `json:"used"`
+}
+
+type ReferralTokens struct {
+	Free *TokenBalance `json:"free"`
+	Paid *TokenBalance `json:"paid"`
 }
 
 type RootUser struct {
@@ -144,6 +147,7 @@ type Subscription struct {
 }
 
 type TokenAllocation struct {
+	Kind      string  `json:"kind"`
 	Tokens    float64 `json:"tokens"`
 	Remaining float64 `json:"remaining"`
 	Amount    float64 `json:"amount"`

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"orchids-api/internal/store"
 )
@@ -58,16 +59,8 @@ func ApplyRootData(acc *store.Account, data *RootData) {
 		acc.Token = strings.TrimSpace(data.Token)
 	}
 
-	remaining := user.TotalBoltTokenPurchases
-	if remaining <= 0 {
-		remaining = firstPositiveTokenValue(user.TokenAllocations)
-	}
-	if remaining <= 0 {
-		remaining = firstPositiveTokenValue(user.ExpirableBoltTokenPurchases)
-	}
-
 	subscription := "free"
-	limit := remaining
+	inferredLimit := 0.0
 
 	if org := activeOrganization(user); org != nil && org.Billing != nil {
 		if tier := formatTier(org.Billing.Tier); tier != "" {
@@ -76,7 +69,7 @@ func ApplyRootData(acc *store.Account, data *RootData) {
 			subscription = "teams"
 		}
 		if inferred := inferTierLimit("teams", org.Billing.Tier); inferred > 0 {
-			limit = inferred
+			inferredLimit = inferred
 		}
 	} else if user.Membership != nil {
 		if tier := formatTier(user.Membership.Tier); tier != "" {
@@ -85,8 +78,62 @@ func ApplyRootData(acc *store.Account, data *RootData) {
 			subscription = "pro"
 		}
 		if inferred := inferTierLimit("pro", user.Membership.Tier); inferred > 0 {
-			limit = inferred
+			inferredLimit = inferred
 		}
+	}
+
+	remaining, limit := deriveQuota(user, inferredLimit)
+
+	acc.Subscription = subscription
+	acc.UsageCurrent = remaining
+	acc.UsageTotal = remaining
+	acc.UsageLimit = limit
+}
+
+func ApplyRateLimits(acc *store.Account, limits *RateLimits) {
+	if acc == nil || limits == nil {
+		return
+	}
+
+	remaining, limit := deriveRemainingQuota(limits, acc.Subscription)
+	if limit <= 0 {
+		limit = maxPositive(limits.MaxPerMonth, remaining)
+	}
+	if remaining > limit {
+		limit = remaining
+	}
+
+	acc.UsageCurrent = remaining
+	acc.UsageTotal = remaining
+	acc.UsageLimit = limit
+
+	if limits.BillingPeriod != nil && limits.BillingPeriod.To > 0 {
+		acc.QuotaResetAt = time.UnixMilli(limits.BillingPeriod.To)
+	}
+}
+
+func deriveQuota(user *RootUser, inferredLimit float64) (float64, float64) {
+	if user == nil {
+		return 0, 0
+	}
+
+	recurringRemaining, recurringTotal := sumTokenAllocations(user.TokenAllocations, true)
+	oneOffRemaining, oneOffTotal := sumTokenAllocations(user.TokenAllocations, false)
+	expirableRemaining, expirableTotal := sumAllocationValues(user.ExpirableBoltTokenPurchases)
+
+	purchaseRemaining := maxPositive(user.TotalBoltTokenPurchases, expirableRemaining)
+	purchaseTotal := maxPositive(user.TotalBoltTokenPurchases, expirableTotal)
+	extraRemaining := purchaseRemaining + oneOffRemaining
+	extraTotal := purchaseTotal + oneOffTotal
+
+	remaining := 0.0
+	limit := 0.0
+	if recurringRemaining > 0 || recurringTotal > 0 {
+		remaining = recurringRemaining + extraRemaining
+		limit = maxPositive(recurringTotal, inferredLimit) + extraTotal
+	} else {
+		remaining = maxPositive(user.TotalBoltTokenPurchases, oneOffRemaining, expirableRemaining)
+		limit = maxPositive(inferredLimit, purchaseTotal, oneOffTotal)
 	}
 
 	if remaining > limit {
@@ -95,11 +142,37 @@ func ApplyRootData(acc *store.Account, data *RootData) {
 	if limit <= 0 && remaining > 0 {
 		limit = remaining
 	}
+	return remaining, limit
+}
 
-	acc.Subscription = subscription
-	acc.UsageCurrent = remaining
-	acc.UsageTotal = remaining
-	acc.UsageLimit = limit
+func deriveRemainingQuota(limits *RateLimits, subscription string) (float64, float64) {
+	if limits == nil {
+		return 0, 0
+	}
+
+	plan := subscriptionPlan(subscription)
+	regular := regularTokenBalance(limits)
+	referrals := referralTokenBalance(limits, plan)
+	reward := includedRewardBalance(limits, plan)
+	purchased := includedPurchasedBalance(limits, plan)
+	special := limits.SpecialTokens
+
+	remaining := remainingBalance(regular) +
+		remainingBalance(referrals) +
+		remainingBalance(reward) +
+		remainingBalance(purchased) +
+		remainingBalance(special)
+
+	limit := totalBalance(regular) +
+		totalBalance(referrals) +
+		totalBalance(reward) +
+		totalBalance(purchased) +
+		totalBalance(special)
+
+	if limit <= 0 {
+		limit = maxPositive(limits.MaxPerMonth, remaining)
+	}
+	return remaining, limit
 }
 
 func activeOrganization(user *RootUser) *Organization {
@@ -167,13 +240,137 @@ func formatTier(value interface{}) string {
 	}
 }
 
-func firstPositiveTokenValue(items []TokenAllocation) float64 {
+func sumTokenAllocations(items []TokenAllocation, recurring bool) (float64, float64) {
+	remaining := 0.0
+	total := 0.0
 	for _, item := range items {
-		for _, value := range []float64{item.Remaining, item.Balance, item.Tokens, item.Amount} {
-			if value > 0 {
-				return value
-			}
+		isRecurring := strings.EqualFold(strings.TrimSpace(item.Kind), "recurring")
+		if isRecurring != recurring {
+			continue
+		}
+		itemRemaining, itemTotal := quotaValue(item)
+		remaining += itemRemaining
+		total += itemTotal
+	}
+	return remaining, total
+}
+
+func sumAllocationValues(items []TokenAllocation) (float64, float64) {
+	remaining := 0.0
+	total := 0.0
+	for _, item := range items {
+		itemRemaining, itemTotal := quotaValue(item)
+		remaining += itemRemaining
+		total += itemTotal
+	}
+	return remaining, total
+}
+
+func quotaValue(item TokenAllocation) (float64, float64) {
+	remaining := maxPositive(item.Remaining, item.Balance, item.Tokens, item.Amount)
+	total := maxPositive(item.Amount, item.Tokens, item.Remaining, item.Balance)
+	if total < remaining {
+		total = remaining
+	}
+	return remaining, total
+}
+
+func subscriptionPlan(subscription string) string {
+	subscription = strings.ToLower(strings.TrimSpace(subscription))
+	if subscription == "" {
+		return ""
+	}
+	if idx := strings.Index(subscription, "-"); idx > 0 {
+		return strings.TrimSpace(subscription[:idx])
+	}
+	return subscription
+}
+
+func regularTokenBalance(limits *RateLimits) *TokenBalance {
+	if limits == nil {
+		return nil
+	}
+	if limits.RegularTokens != nil {
+		return limits.RegularTokens
+	}
+	return &TokenBalance{
+		Available: limits.MaxPerMonth,
+		Used:      limits.TotalThisMonth,
+	}
+}
+
+func referralTokenBalance(limits *RateLimits, plan string) *TokenBalance {
+	if limits == nil || limits.ReferralTokens == nil {
+		return nil
+	}
+	balance := TokenBalance{}
+	if limits.ReferralTokens.Free != nil {
+		balance.Available += limits.ReferralTokens.Free.Available
+		balance.Used += limits.ReferralTokens.Free.Used
+	}
+	if limits.ReferralTokens.Paid != nil && strings.EqualFold(plan, "pro") {
+		balance.Available += limits.ReferralTokens.Paid.Available
+		balance.Used += limits.ReferralTokens.Paid.Used
+	}
+	if balance.Available <= 0 && balance.Used <= 0 {
+		return nil
+	}
+	return &balance
+}
+
+func includedRewardBalance(limits *RateLimits, plan string) *TokenBalance {
+	if limits == nil || limits.RewardTokens == nil {
+		return nil
+	}
+	if strings.EqualFold(plan, "personal") {
+		return nil
+	}
+	return limits.RewardTokens
+}
+
+func includedPurchasedBalance(limits *RateLimits, plan string) *TokenBalance {
+	if limits == nil || limits.Purchased == nil {
+		return nil
+	}
+	if strings.EqualFold(plan, "personal") {
+		return nil
+	}
+	return limits.Purchased
+}
+
+func remainingBalance(balance *TokenBalance) float64 {
+	if balance == nil {
+		return 0
+	}
+	return maxPositive(balance.Available - minPositive(balance.Used, balance.Available))
+}
+
+func totalBalance(balance *TokenBalance) float64 {
+	if balance == nil {
+		return 0
+	}
+	return maxPositive(balance.Available)
+}
+
+func minPositive(values ...float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	minValue := values[0]
+	for _, value := range values[1:] {
+		if value < minValue {
+			minValue = value
 		}
 	}
-	return 0
+	return minValue
+}
+
+func maxPositive(values ...float64) float64 {
+	maxValue := 0.0
+	for _, value := range values {
+		if value > maxValue {
+			maxValue = value
+		}
+	}
+	return maxValue
 }

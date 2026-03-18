@@ -600,13 +600,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "puter") {
 		isPuterRequest = true
 	}
-	if isWarpRequest {
-		// Warp passthrough mode: do not trim history/tool results.
-		slog.Debug("Checkpoint: warp passthrough, skip trim/sanitize")
-	} else if isBoltRequest {
-		slog.Debug("Checkpoint: bolt passthrough, skip context trimming")
-	} else if isPuterRequest {
-		slog.Debug("Checkpoint: puter passthrough, skip context trimming")
+	isPassthroughRequest := isWarpRequest || isBoltRequest || isPuterRequest
+	if isPassthroughRequest {
+		channel := "warp"
+		switch {
+		case isBoltRequest:
+			channel = "bolt"
+		case isPuterRequest:
+			channel = "puter"
+		}
+		// Passthrough channels do not trim history/tool results.
+		slog.Debug("Checkpoint: passthrough, skip context trimming", "channel", channel)
 	} else {
 		// Orchids: do not trim message/tool_result content to preserve full context.
 		slog.Debug("Checkpoint: orchids passthrough, skip context trimming")
@@ -641,13 +645,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		toolGateMessage = buildToolGateMessage(req.Messages, true)
 	}
 	if lastUserIsToolResultFollowup(req.Messages) {
-		if isWarpRequest {
+		if isPassthroughRequest && !isPuterRequest {
 			if h.config.DebugEnabled {
-				slog.Debug("tool_gate: keeping tools for warp tool_result follow-up passthrough")
+				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest)
 			}
 		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
 			if h.config.DebugEnabled {
-				slog.Debug("tool_gate: keeping tools for exploratory tool_result follow-up", "warp", isWarpRequest)
+				slog.Debug("tool_gate: keeping tools for exploratory tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest)
 			}
 		} else {
 			gateNoTools = true
@@ -1150,6 +1154,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				"retries_remaining", retriesRemaining,
 			)
 			if errClass.SwitchAccount && currentAccount != nil && h.loadBalancer != nil {
+				prevClient := apiClient
+				prevAccount := currentAccount
 				if _, ok := failedAccountSet[currentAccount.ID]; !ok {
 					failedAccountSet[currentAccount.ID] = struct{}{}
 					failedAccountIDs = append(failedAccountIDs, currentAccount.ID)
@@ -1162,9 +1168,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					trackedAccountID = 0
 				}
 
-				var retryErr error
-				apiClient, currentAccount, retryErr = h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
+				nextClient, nextAccount, retryErr := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
 				if retryErr == nil {
+					apiClient = nextClient
+					currentAccount = nextAccount
 					if currentAccount != nil {
 						h.loadBalancer.AcquireConnection(currentAccount.ID)
 						trackedAccountID = currentAccount.ID
@@ -1173,10 +1180,25 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						slog.Debug("Switched to default upstream config")
 					}
 				} else {
-					slog.Error("No more accounts available", "error", retryErr)
-					sh.InjectNoAvailableAccountError(errStr, retryErr)
-					sh.finishResponse("end_turn")
-					return
+					if shouldRetryCurrentAccountWhenNoAlternative(errClass.Category) && prevAccount != nil {
+						apiClient = prevClient
+						currentAccount = prevAccount
+						h.loadBalancer.AcquireConnection(currentAccount.ID)
+						trackedAccountID = currentAccount.ID
+						slog.Warn(
+							"No alternate accounts available; retrying current account",
+							"trace_id", traceID,
+							"attempt", upstreamReq.Attempt,
+							"account_id", currentAccount.ID,
+							"category", errClass.Category,
+							"retry_error", retryErr,
+						)
+					} else {
+						slog.Error("No more accounts available", "error", retryErr)
+						sh.InjectNoAvailableAccountError(errStr, retryErr)
+						sh.finishResponse("end_turn")
+						return
+					}
 				}
 			}
 			if retryDelay > 0 {

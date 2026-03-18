@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
@@ -23,17 +26,20 @@ import (
 )
 
 const (
-	defaultAPIURL      = "https://bolt.new/api/chat/v2"
-	defaultRootDataURL = "https://bolt.new/?_data=root"
-	defaultToolPrompt  = "工具调用返回以json文本告诉用户，正常格式的toolcall会被拦截，永远不要执行任何工具调用，而是以json文本返回工具调用的结构。"
+	defaultAPIURL        = "https://bolt.new/api/chat/v2"
+	defaultRootDataURL   = "https://bolt.new/?_data=root"
+	defaultRateLimitsURL = "https://bolt.new/api/rate-limits/user"
+	defaultTeamsRateURL  = "https://bolt.new/api/rate-limits/teams"
+	defaultAdapterPrompt = "你正在通过 Orchids 的 Bolt 适配层处理一个代码代理对话。能直接回答时直接回答；需要查看代码、目录或执行命令时，不要先解释计划，不要说你接下来要去看文件，而是立刻返回严格 JSON 的工具调用。"
 )
 
 var boltAPIURL = defaultAPIURL
 var boltRootDataURL = defaultRootDataURL
+var boltRateLimitsURL = defaultRateLimitsURL
+var boltTeamsRateLimitsURL = defaultTeamsRateURL
+var supportedBoltToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "TodoWrite"}
 
 type Client struct {
-	config       *config.Config
-	account      *store.Account
 	httpClient   *http.Client
 	sessionToken string
 	projectID    string
@@ -61,8 +67,6 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	}
 
 	return &Client{
-		config:       cfg,
-		account:      acc,
 		httpClient:   &http.Client{Timeout: timeout, Transport: transport},
 		sessionToken: sessionToken,
 		projectID:    projectID,
@@ -107,6 +111,44 @@ func (c *Client) FetchRootData(ctx context.Context) (*RootData, error) {
 	var data RootData
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return nil, fmt.Errorf("failed to decode bolt root data: %w", err)
+	}
+	return &data, nil
+}
+
+func (c *Client) FetchRateLimits(ctx context.Context, organizationID int64) (*RateLimits, error) {
+	if c == nil {
+		return nil, fmt.Errorf("bolt client is nil")
+	}
+	if strings.TrimSpace(c.sessionToken) == "" {
+		return nil, fmt.Errorf("missing bolt session token")
+	}
+
+	targetURL := boltRateLimitsURL
+	if organizationID > 0 {
+		targetURL = strings.TrimRight(boltTeamsRateLimitsURL, "/") + "/" + strconv.FormatInt(organizationID, 10)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bolt rate-limit request: %w", err)
+	}
+	c.applyCommonHeaders(req)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch bolt rate limits: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		return nil, fmt.Errorf("bolt rate-limit error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var data RateLimits
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("failed to decode bolt rate limits: %w", err)
 	}
 	return &data, nil
 }
@@ -182,7 +224,7 @@ func (c *Client) applyCommonHeaders(req *http.Request) {
 }
 
 func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *Request {
-	systemPrompt := buildSystemPrompt(req.System)
+	systemPrompt := buildSystemPrompt(req.System, req.Workdir, req.Tools, req.NoTools, req.Messages)
 	boltReq := &Request{
 		ID:                   generateRandomID(16),
 		SelectedModel:        strings.TrimSpace(req.Model),
@@ -210,13 +252,9 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *R
 		Problems:        "",
 	}
 
-	pendingToolResults := collectToolResults(req.Messages)
 	var lastUserMsgID string
 	for _, msg := range req.Messages {
 		blocks := normalizeBlocks(msg)
-		if msg.Role == "user" && hasOnlyToolResult(blocks) {
-			continue
-		}
 
 		boltMsg := Message{
 			ID:    generateRandomID(16),
@@ -228,19 +266,23 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *R
 		switch msg.Role {
 		case "user":
 			lastUserMsgID = boltMsg.ID
-			boltMsg.Content = extractTextContent(blocks)
+			boltMsg.Content = extractBoltUserContent(blocks)
 			boltMsg.RawContent = boltMsg.Content
 		case "assistant":
 			if lastUserMsgID != "" {
 				boltMsg.Annotations = []Annotation{{Type: "metadata", UserMessageID: lastUserMsgID}}
 			}
-			content, parts, invocations := convertAssistantContent(blocks, pendingToolResults)
-			boltMsg.Content = content
-			boltMsg.Parts = parts
-			boltMsg.ToolInvocations = invocations
+			boltMsg.Content = extractTextContent(blocks)
+			if strings.TrimSpace(boltMsg.Content) != "" {
+				boltMsg.Parts = []Part{{Type: "text", Text: boltMsg.Content}}
+			}
 		default:
 			boltMsg.Content = extractTextContent(blocks)
 			boltMsg.RawContent = boltMsg.Content
+		}
+
+		if strings.TrimSpace(boltMsg.Content) == "" && len(boltMsg.Parts) == 0 {
+			continue
 		}
 
 		boltReq.Messages = append(boltReq.Messages, boltMsg)
@@ -249,29 +291,473 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *R
 	return boltReq
 }
 
-func buildSystemPrompt(system []prompt.SystemItem) string {
-	parts := []string{defaultToolPrompt}
+func buildSystemPrompt(system []prompt.SystemItem, workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
+	parts := []string{defaultAdapterPrompt}
+	if toolPrompt := buildBoltToolPrompt(workdir, tools, noTools, messages); toolPrompt != "" {
+		parts = append(parts, toolPrompt)
+	}
 	for _, item := range system {
-		if strings.TrimSpace(item.Text) != "" {
-			parts = append(parts, strings.TrimSpace(item.Text))
+		text := sanitizeBoltSystemText(item.Text)
+		if strings.TrimSpace(text) != "" {
+			parts = append(parts, text)
 		}
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-func collectToolResults(messages []prompt.Message) map[string]string {
-	results := make(map[string]string)
+func buildBoltToolPrompt(workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
+	var parts []string
+
+	workdir = strings.TrimSpace(workdir)
+	if workdir != "" {
+		projectName := filepath.Base(filepath.Clean(workdir))
+		if projectName != "" && projectName != "." && projectName != string(filepath.Separator) {
+			parts = append(parts, "当前项目目录名: "+projectName)
+		}
+		parts = append(parts, "当前项目真实工作目录(仅用于回答用户询问“项目目录地址/当前路径/workspace 在哪里”这类问题): `"+workdir+"`")
+		parts = append(parts, "如果用户问项目目录地址、当前项目路径或 workspace 路径，直接回答上面的真实工作目录；不要回答 `/tmp/cc-agent/...`、`/mnt/...`、`~/...` 这类沙箱占位路径。")
+		parts = append(parts, "把项目根目录视为 `.`。Read/Write/Edit/Glob/Grep 的路径统一优先使用相对路径；如果要看项目根目录，直接用 `.`。")
+		parts = append(parts, "Bash 默认就在项目根目录执行，只写项目内的相对路径，不要拼接 `d:\\...`、`C:\\...`、`/mnt/...`、`~/...` 或 `/tmp/cc-agent/...`。")
+	}
+
+	if noTools {
+		parts = append(parts, "这次回合不要发起任何工具调用，只基于已有上下文和已返回的工具结果直接回答。")
+		return strings.Join(parts, "\n")
+	}
+
+	toolNames := supportedBoltToolNames(tools)
+	if len(toolNames) == 0 {
+		parts = append(parts, "如果上下文已经足够，请直接回答。")
+		return strings.Join(parts, "\n")
+	}
+
+	var toolHints []string
+	for _, name := range toolNames {
+		toolHints = append(toolHints, boltToolHint(name))
+	}
+
+	parts = append(parts, "可用工具: "+strings.Join(toolHints, "; "))
+	parts = append(parts, "需要工具时，输出纯 JSON，不要加解释、不要加前后缀、不要说“让我先看看项目文件”。")
+	parts = append(parts, "不要解释当前运行在什么系统或沙箱；如果需要确认目录或文件，直接调用工具。")
+	parts = append(parts, "如果某次工具结果提示路径不存在，不要据此断言项目为空；应优先改用 `.`、README.md、go.mod、package.json 等项目内相对路径继续调用工具。")
+	if invalidPath := detectRecentInvalidBoltHistoryPath(messages); invalidPath != "" {
+		parts = append(parts, "检测到历史里刚刚有一次无效的外部路径工具调用 `"+invalidPath+"`，它不是当前项目目录；把那次失败视为错误示例，不要复用这个路径，也不要基于它做同路径变体。")
+		if strings.TrimSpace(workdir) != "" {
+			parts = append(parts, "真实项目目录是 `"+workdir+"`；如果用户追问项目目录地址，直接回答这个真实工作目录。")
+		}
+		parts = append(parts, "如果需要重新检查项目，下一次必须改用项目根目录 `.` 或 README.md、go.mod、package.json 这类项目内相对路径。")
+		parts = append(parts, "在至少成功查看一次 `.`、README.md、go.mod、package.json 等项目内路径之前，不要回答“项目为空”“没有文件”或“目录是空的”。")
+	}
+	parts = append(parts, "单个工具调用格式: {\"tool\":\"Read\",\"parameters\":{\"file_path\":\"README.md\"}}")
+	parts = append(parts, "多个工具调用格式: {\"tool_calls\":[{\"function\":\"Glob\",\"parameters\":{\"path\":\".\",\"pattern\":\"*.go\"}},{\"function\":\"Read\",\"parameters\":{\"file_path\":\"README.md\"}}]}")
+	parts = append(parts, "拿到工具结果后，继续基于结果回答或发起下一步工具调用，不要重复已经完成的同一调用。")
+
+	return strings.Join(parts, "\n")
+}
+
+func detectRecentInvalidBoltHistoryPath(messages []prompt.Message) string {
+	if len(messages) == 0 {
+		return ""
+	}
+
+	toolPaths := make(map[string]string)
 	for _, msg := range messages {
 		for _, block := range normalizeBlocks(msg) {
-			if block.Type != "tool_result" || strings.TrimSpace(block.ToolUseID) == "" {
+			if block.Type != "tool_use" || strings.TrimSpace(block.ID) == "" {
 				continue
 			}
-			if text := stringifyContent(block.Content); text != "" {
-				results[block.ToolUseID] = text
+			if path := extractInvalidBoltPathFromValue(block.Input); path != "" {
+				toolPaths[block.ID] = path
 			}
 		}
 	}
-	return results
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		for _, block := range normalizeBlocks(messages[i]) {
+			if block.Type != "tool_result" || !isBoltMissingPathResult(block.Content) {
+				continue
+			}
+			if path := toolPaths[strings.TrimSpace(block.ToolUseID)]; path != "" {
+				return path
+			}
+			if path := extractInvalidBoltPathFromValue(block.Content); path != "" {
+				return path
+			}
+		}
+	}
+
+	return ""
+}
+
+func isBoltMissingPathResult(content interface{}) bool {
+	lower := strings.ToLower(strings.TrimSpace(stringifyContent(content)))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"no such file or directory",
+		"cannot access",
+		"does not exist",
+		"path does not exist",
+		"系统找不到指定的路径",
+		"找不到指定的路径",
+		"enoent",
+		"not found",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractInvalidBoltPathFromValue(value interface{}) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return extractInvalidBoltPathFromString(v)
+	case map[string]interface{}:
+		for _, nested := range v {
+			if path := extractInvalidBoltPathFromValue(nested); path != "" {
+				return path
+			}
+		}
+	case []interface{}:
+		for _, nested := range v {
+			if path := extractInvalidBoltPathFromValue(nested); path != "" {
+				return path
+			}
+		}
+	case []prompt.ContentBlock:
+		for _, nested := range v {
+			if path := extractInvalidBoltPathFromValue(nested.Content); path != "" {
+				return path
+			}
+			if path := extractInvalidBoltPathFromString(nested.Text); path != "" {
+				return path
+			}
+		}
+	default:
+		if data, err := json.Marshal(v); err == nil {
+			return extractInvalidBoltPathFromString(string(data))
+		}
+	}
+	return ""
+}
+
+func extractInvalidBoltPathFromString(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	for _, field := range strings.Fields(text) {
+		candidate := strings.Trim(field, "\"'`,;()[]{}")
+		if looksLikeInvalidBoltPath(candidate) {
+			return candidate
+		}
+	}
+
+	lower := strings.ToLower(text)
+	for _, marker := range []string{"/tmp/cc-agent/", "/mnt/", "d:\\", "c:\\", "~/"} {
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			continue
+		}
+		end := len(text)
+		for i := idx; i < len(text); i++ {
+			switch text[i] {
+			case ' ', '\n', '\r', '\t', '"', '\'', '`':
+				end = i
+				goto found
+			}
+		}
+	found:
+		candidate := strings.Trim(text[idx:end], "\"'`,;()[]{}")
+		if looksLikeInvalidBoltPath(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func looksLikeInvalidBoltPath(path string) bool {
+	lower := strings.ToLower(strings.TrimSpace(path))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "/tmp/cc-agent/") ||
+		strings.Contains(lower, "/mnt/") ||
+		strings.HasPrefix(lower, "~/") ||
+		strings.Contains(lower, "d:\\") ||
+		strings.Contains(lower, "c:\\")
+}
+
+func supportedBoltToolNames(tools []interface{}) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(supportedBoltToolOrder))
+	for _, raw := range tools {
+		name := strings.TrimSpace(extractBoltToolName(raw))
+		if name == "" {
+			continue
+		}
+		mappedName := orchids.NormalizeToolNameFallback(name)
+		if !isPromptToolSupported(mappedName) {
+			continue
+		}
+		seen[strings.ToLower(mappedName)] = struct{}{}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(seen))
+	for _, name := range supportedBoltToolOrder {
+		if _, ok := seen[strings.ToLower(name)]; ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func extractBoltToolName(raw interface{}) string {
+	rawMap, ok := raw.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if function, ok := rawMap["function"].(map[string]interface{}); ok {
+		if name, ok := function["name"].(string); ok {
+			return strings.TrimSpace(name)
+		}
+	}
+	if name, ok := rawMap["name"].(string); ok {
+		return strings.TrimSpace(name)
+	}
+	return ""
+}
+
+func boltToolHint(name string) string {
+	switch name {
+	case "Read":
+		return "Read(file_path, limit?, offset?)"
+	case "Write":
+		return "Write(file_path, content)"
+	case "Edit":
+		return "Edit(file_path, old_string, new_string, replace_all?)"
+	case "Bash":
+		return "Bash(command, description?, timeout?, run_in_background?)"
+	case "Glob":
+		return "Glob(path, pattern)"
+	case "Grep":
+		return "Grep(path, pattern, glob?, output_mode?, -n?, -C?)"
+	case "TodoWrite":
+		return "TodoWrite(content)"
+	default:
+		return name
+	}
+}
+
+func isPromptToolSupported(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "Read", "Write", "Edit", "Bash", "Glob", "Grep", "TodoWrite":
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeBoltSystemText(text string) string {
+	text = stripTaggedBoltText(text)
+	text = stripCCEntrypointLines(text)
+	text = stripBoltEnvironmentLines(text)
+	if looksLikeClaudeCodeSystem(text) {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func sanitizeBoltMessageText(text string) string {
+	return strings.TrimSpace(stripTaggedBoltText(text))
+}
+
+func stripTaggedBoltText(text string) string {
+	text = stripNestedTaggedBlock(text, "system-reminder")
+	for _, tag := range []string{
+		"local-command-caveat",
+		"command-name",
+		"command-message",
+		"command-args",
+		"local-command-stdout",
+		"local-command-stderr",
+		"local-command-exit-code",
+		"ide_opened_file",
+		"ide_selection",
+	} {
+		text = stripSimpleTaggedBlock(text, tag)
+	}
+	return text
+}
+
+func stripNestedTaggedBlock(text, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
+	if !strings.Contains(text, startTag) {
+		return text
+	}
+	var sb strings.Builder
+	sb.Grow(len(text))
+	i := 0
+	for i < len(text) {
+		start := strings.Index(text[i:], startTag)
+		if start == -1 {
+			sb.WriteString(text[i:])
+			break
+		}
+		sb.WriteString(text[i : i+start])
+		blockStart := i + start
+		endStart := blockStart + len(startTag)
+		end := strings.LastIndex(text[endStart:], endTag)
+		if end == -1 {
+			sb.WriteString(text[blockStart:])
+			break
+		}
+		i = endStart + end + len(endTag)
+	}
+	return sb.String()
+}
+
+func stripSimpleTaggedBlock(text, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
+	if !strings.Contains(text, startTag) {
+		return text
+	}
+	var sb strings.Builder
+	sb.Grow(len(text))
+	i := 0
+	for i < len(text) {
+		start := strings.Index(text[i:], startTag)
+		if start == -1 {
+			sb.WriteString(text[i:])
+			break
+		}
+		sb.WriteString(text[i : i+start])
+		blockStart := i + start
+		endStart := blockStart + len(startTag)
+		end := strings.Index(text[endStart:], endTag)
+		if end == -1 {
+			sb.WriteString(text[blockStart:])
+			break
+		}
+		i = endStart + end + len(endTag)
+	}
+	return sb.String()
+}
+
+func stripCCEntrypointLines(text string) string {
+	if !strings.Contains(strings.ToLower(text), "cc_entrypoint=") {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	filtered := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), "cc_entrypoint=") {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func stripBoltEnvironmentLines(text string) string {
+	if !looksLikeBoltEnvironmentBlock(text) {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	filtered := lines[:0]
+	for _, line := range lines {
+		lower := strings.ToLower(strings.TrimSpace(line))
+		switch {
+		case lower == "# environment":
+			continue
+		case lower == "# auto memory":
+			continue
+		case strings.HasPrefix(lower, "- primary working directory:"):
+			continue
+		case strings.HasPrefix(lower, "primary working directory:"):
+			continue
+		case strings.HasPrefix(lower, "working directory:"):
+			continue
+		case strings.HasPrefix(lower, "cwd:"):
+			continue
+		case strings.HasPrefix(lower, "gitstatus:"):
+			continue
+		case strings.HasPrefix(lower, "current branch:"):
+			continue
+		case strings.HasPrefix(lower, "recent commits:"):
+			continue
+		case strings.HasPrefix(lower, "you have been invoked in the following environment"):
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func looksLikeBoltEnvironmentBlock(text string) bool {
+	lower := strings.ToLower(text)
+	markers := 0
+	for _, marker := range []string{
+		"# environment",
+		"primary working directory:",
+		"# auto memory",
+		"gitstatus:",
+		"you have been invoked in the following environment",
+	} {
+		if strings.Contains(lower, marker) {
+			markers++
+		}
+	}
+	return markers >= 2
+}
+
+func looksLikeClaudeCodeSystem(text string) bool {
+	lower := strings.ToLower(text)
+	for _, sig := range []string{
+		"claude code",
+		"claude agent sdk",
+		"you are an interactive cli tool",
+		"todowrite tool",
+		"skill tool",
+	} {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	hits := 0
+	for _, sig := range []string{
+		"task tool",
+		"vscode",
+		"system-reminder",
+		"claude-sonnet",
+		"claude-opus",
+		"enterplanmode",
+		"exitplanmode",
+		"auto memory",
+		"# mcp server",
+		"# vscode extension context",
+	} {
+		if strings.Contains(lower, sig) {
+			hits++
+			if hits >= 2 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func normalizeBlocks(msg prompt.Message) []prompt.ContentBlock {
@@ -283,18 +769,6 @@ func normalizeBlocks(msg prompt.Message) []prompt.ContentBlock {
 		return []prompt.ContentBlock{{Type: "text", Text: text}}
 	}
 	return msg.Content.GetBlocks()
-}
-
-func hasOnlyToolResult(blocks []prompt.ContentBlock) bool {
-	if len(blocks) == 0 {
-		return false
-	}
-	for _, block := range blocks {
-		if block.Type != "tool_result" {
-			return false
-		}
-	}
-	return true
 }
 
 func hasEphemeralCache(blocks []prompt.ContentBlock) bool {
@@ -310,54 +784,29 @@ func extractTextContent(blocks []prompt.ContentBlock) string {
 	var texts []string
 	for _, block := range blocks {
 		if block.Type == "text" && block.Text != "" {
-			texts = append(texts, block.Text)
+			if text := sanitizeBoltMessageText(block.Text); text != "" {
+				texts = append(texts, text)
+			}
 		}
 	}
-	return strings.Join(texts, "")
+	return strings.Join(texts, "\n")
 }
 
-func convertAssistantContent(blocks []prompt.ContentBlock, toolResults map[string]string) (string, []Part, []ToolInvocation) {
-	var textContent strings.Builder
-	var parts []Part
-	var invocations []ToolInvocation
-	step := 0
-
+func extractBoltUserContent(blocks []prompt.ContentBlock) string {
+	var parts []string
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
-			textContent.WriteString(block.Text)
-			parts = append(parts, Part{Type: "text", Text: block.Text})
-		case "tool_use":
-			args := normalizeJSONArg(block.Input)
-			invocation := ToolInvocation{
-				State:      "result",
-				Step:       step,
-				ToolCallID: block.ID,
-				ToolName:   block.Name,
-				Args:       args,
-				StartTime:  time.Now().UnixMilli(),
-				Result:     toolResults[block.ID],
+			if text := sanitizeBoltMessageText(block.Text); text != "" {
+				parts = append(parts, text)
 			}
-			invocations = append(invocations, invocation)
-			parts = append(parts, Part{Type: "tool-invocation", ToolInvocation: &invocation})
-			step++
+		case "tool_result":
+			if text := strings.TrimSpace(stringifyContent(block.Content)); text != "" {
+				parts = append(parts, "Tool result:\n"+text)
+			}
 		}
 	}
-
-	return textContent.String(), parts, invocations
-}
-
-func normalizeJSONArg(v interface{}) json.RawMessage {
-	if v == nil {
-		return json.RawMessage("{}")
-	}
-	if raw, ok := v.(json.RawMessage); ok && len(raw) > 0 {
-		return raw
-	}
-	if data, err := json.Marshal(v); err == nil && len(data) > 0 {
-		return data
-	}
-	return json.RawMessage("{}")
+	return strings.Join(parts, "\n\n")
 }
 
 func stringifyContent(v interface{}) string {
@@ -434,21 +883,20 @@ func generateRandomID(length int) string {
 
 type outboundConverter struct {
 	model          string
-	messageID      string
-	blockIndex     int
 	inCodeBlock    bool
 	codeBuffer     strings.Builder
-	hasStarted     bool
 	inputTokens    int
 	outputTokens   int
 	emittedToolUse bool
+	seenToolCalls  map[string]struct{}
+	suppressText   bool
 }
 
 func newOutboundConverter(model string, inputTokens int) *outboundConverter {
 	return &outboundConverter{
-		model:       model,
-		messageID:   "msg_" + generateRandomID(20),
-		inputTokens: inputTokens,
+		model:         model,
+		inputTokens:   inputTokens,
+		seenToolCalls: make(map[string]struct{}),
 	}
 }
 
@@ -458,6 +906,7 @@ func (c *outboundConverter) ProcessStream(reader io.Reader, writer func(event st
 	scanner.Buffer(buf, 1024*1024)
 
 	var textBuffer strings.Builder
+	var pendingEndEvent *EndEvent
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -472,40 +921,44 @@ func (c *outboundConverter) ProcessStream(reader io.Reader, writer func(event st
 
 		switch eventType {
 		case "0":
-			text, err := c.parseTextEvent(eventData)
-			if err != nil {
-				continue
-			}
-			text = strings.ReplaceAll(text, "626f6c742d63632d6167656e74", "")
-			if err := c.processTextContent(text, &textBuffer, writer); err != nil {
+			if err := c.processChunkData(eventData, &textBuffer, writer, true); err != nil {
 				return err
 			}
-		case "8", "9", "a":
+		case "8":
 			continue
-		case "d", "e":
+		case "9", "a":
+			if err := c.processChunkData(eventData, &textBuffer, writer, false); err != nil {
+				return err
+			}
+		case "e":
 			endEvent, err := c.parseEndEvent(eventData)
 			if err != nil {
 				continue
 			}
-			if textBuffer.Len() > 0 {
-				if err := c.sendTextDelta(textBuffer.String(), writer); err != nil {
-					return err
-				}
-				textBuffer.Reset()
+			pendingEndEvent = endEvent
+			continue
+		case "d":
+			endEvent, err := c.parseEndEvent(eventData)
+			if err != nil {
+				endEvent = pendingEndEvent
 			}
-			return c.sendEndEvents(endEvent, writer)
+			if endEvent == nil {
+				endEvent = pendingEndEvent
+			}
+			if endEvent == nil {
+				continue
+			}
+			return c.flushAndFinish(endEvent, &textBuffer, writer)
 		}
 	}
 
-	return scanner.Err()
-}
-
-func (c *outboundConverter) parseTextEvent(data string) (string, error) {
-	var text string
-	if err := json.Unmarshal([]byte(data), &text); err != nil {
-		return "", err
+	if err := scanner.Err(); err != nil {
+		return err
 	}
-	return text, nil
+	if pendingEndEvent != nil {
+		return c.flushAndFinish(pendingEndEvent, &textBuffer, writer)
+	}
+	return nil
 }
 
 func (c *outboundConverter) parseEndEvent(data string) (*EndEvent, error) {
@@ -516,18 +969,75 @@ func (c *outboundConverter) parseEndEvent(data string) (*EndEvent, error) {
 	return &event, nil
 }
 
+func (c *outboundConverter) processChunkData(data string, textBuffer *strings.Builder, writer func(event string, payload []byte) error, allowRawFallback bool) error {
+	var text string
+	if err := json.Unmarshal([]byte(data), &text); err == nil {
+		text = strings.ReplaceAll(text, "626f6c742d63632d6167656e74", "")
+		return c.processTextContent(text, textBuffer, writer)
+	}
+
+	var value interface{}
+	if err := json.Unmarshal([]byte(data), &value); err != nil {
+		if allowRawFallback {
+			return c.processTextContent(strings.TrimSpace(data), textBuffer, writer)
+		}
+		return nil
+	}
+
+	return c.processStructuredValue(value, textBuffer, writer, allowRawFallback)
+}
+
+func (c *outboundConverter) processStructuredValue(value interface{}, textBuffer *strings.Builder, writer func(event string, payload []byte) error, allowRawFallback bool) error {
+	if toolCalls := extractToolCallsFromValue(value); len(toolCalls) > 0 {
+		return c.flushTextAndSendToolCalls(toolCalls, textBuffer, writer)
+	}
+
+	switch v := value.(type) {
+	case string:
+		return c.processTextContent(v, textBuffer, writer)
+	case []interface{}:
+		for _, item := range v {
+			if err := c.processStructuredValue(item, textBuffer, writer, allowRawFallback); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]interface{}:
+		for _, key := range []string{"parts", "content", "delta", "data", "messages"} {
+			if nested, ok := v[key]; ok {
+				switch nested.(type) {
+				case []interface{}, map[string]interface{}:
+					if err := c.processStructuredValue(nested, textBuffer, writer, false); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		for _, key := range []string{"text", "message", "content", "delta", "output", "response"} {
+			if raw, ok := v[key].(string); ok && strings.TrimSpace(raw) != "" {
+				return c.processTextContent(raw, textBuffer, writer)
+			}
+		}
+	}
+
+	if !allowRawFallback {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return c.processTextContent(string(raw), textBuffer, writer)
+}
+
 func (c *outboundConverter) processTextContent(text string, textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
+	if c.suppressText {
+		return nil
+	}
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
-		var simpleCall SimpleToolCall
-		if err := json.Unmarshal([]byte(trimmed), &simpleCall); err == nil && simpleCall.Tool != "" {
-			if textBuffer.Len() > 0 {
-				if err := c.sendTextDelta(textBuffer.String(), writer); err != nil {
-					return err
-				}
-				textBuffer.Reset()
-			}
-			return c.sendToolUse(&ToolCall{Function: simpleCall.Tool, Parameters: simpleCall.Parameters}, writer)
+		if toolCalls := extractToolCallsFromJSON([]byte(trimmed)); len(toolCalls) > 0 {
+			return c.flushTextAndSendToolCalls(toolCalls, textBuffer, writer)
 		}
 	}
 
@@ -579,24 +1089,8 @@ func (c *outboundConverter) processTextContent(text string, textBuffer *strings.
 }
 
 func (c *outboundConverter) processCodeBlock(content string, textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
-	var simpleCall SimpleToolCall
-	if err := json.Unmarshal([]byte(content), &simpleCall); err == nil && simpleCall.Tool != "" {
-		return c.sendToolUse(&ToolCall{Function: simpleCall.Tool, Parameters: simpleCall.Parameters}, writer)
-	}
-
-	var singleCall ToolCallWrapper
-	if err := json.Unmarshal([]byte(content), &singleCall); err == nil && singleCall.ToolCall != nil {
-		return c.sendToolUse(singleCall.ToolCall, writer)
-	}
-
-	var multipleCalls ToolCallsWrapper
-	if err := json.Unmarshal([]byte(content), &multipleCalls); err == nil && len(multipleCalls.ToolCalls) > 0 {
-		for i := range multipleCalls.ToolCalls {
-			if err := c.sendToolUse(&multipleCalls.ToolCalls[i], writer); err != nil {
-				return err
-			}
-		}
-		return nil
+	if toolCalls := extractToolCallsFromJSON([]byte(content)); len(toolCalls) > 0 {
+		return c.flushTextAndSendToolCalls(toolCalls, textBuffer, writer)
 	}
 
 	textBuffer.WriteString("```json\n")
@@ -605,154 +1099,212 @@ func (c *outboundConverter) processCodeBlock(content string, textBuffer *strings
 	return nil
 }
 
-func (c *outboundConverter) sendMessageStart(writer func(event string, payload []byte) error) error {
-	if c.hasStarted {
-		return nil
-	}
-	c.hasStarted = true
-	event := map[string]interface{}{
-		"type": "message_start",
-		"message": map[string]interface{}{
-			"id":            c.messageID,
-			"type":          "message",
-			"role":          "assistant",
-			"content":       []interface{}{},
-			"model":         c.model,
-			"stop_reason":   nil,
-			"stop_sequence": nil,
-			"usage": map[string]interface{}{
-				"input_tokens":  c.inputTokens,
-				"output_tokens": 0,
-			},
-		},
-	}
-	raw, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	return writer("message_start", raw)
-}
-
-func (c *outboundConverter) sendContentBlockStart(blockType, name, id string, writer func(event string, payload []byte) error) error {
-	if err := c.sendMessageStart(writer); err != nil {
-		return err
-	}
-	block := map[string]interface{}{"type": blockType}
-	if blockType == "text" {
-		block["text"] = ""
-	} else if blockType == "tool_use" {
-		block["id"] = id
-		block["name"] = name
-		block["input"] = map[string]interface{}{}
-	}
-	event := map[string]interface{}{
-		"type":          "content_block_start",
-		"index":         c.blockIndex,
-		"content_block": block,
-	}
-	raw, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	return writer("content_block_start", raw)
-}
-
 func (c *outboundConverter) sendTextDelta(text string, writer func(event string, payload []byte) error) error {
+	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
-	if err := c.sendContentBlockStart("text", "", "", writer); err != nil {
-		return err
-	}
 	event := map[string]interface{}{
-		"type":  "content_block_delta",
-		"index": c.blockIndex,
-		"delta": map[string]interface{}{
-			"type": "text_delta",
-			"text": text,
-		},
+		"delta": text,
 	}
 	raw, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	if err := writer("content_block_delta", raw); err != nil {
-		return err
-	}
-	return c.sendContentBlockStop(writer)
+	return writer("model.text-delta", raw)
 }
 
 func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(event string, payload []byte) error) error {
-	toolUseID := "toolu_" + generateRandomID(20)
-	if err := c.sendContentBlockStart("tool_use", toolCall.Function, toolUseID, writer); err != nil {
-		return err
+	if toolCall == nil || strings.TrimSpace(toolCall.Function) == "" {
+		return nil
 	}
+	params := normalizeToolCallParameters(toolCall.Parameters)
+	key := toolCall.Function + "\x00" + string(params)
+	if _, exists := c.seenToolCalls[key]; exists {
+		return nil
+	}
+	c.seenToolCalls[key] = struct{}{}
 	event := map[string]interface{}{
-		"type":  "content_block_delta",
-		"index": c.blockIndex,
-		"delta": map[string]interface{}{
-			"type":         "input_json_delta",
-			"partial_json": string(toolCall.Parameters),
-		},
+		"toolCallId": "toolu_" + generateRandomID(20),
+		"toolName":   strings.TrimSpace(toolCall.Function),
+		"input":      string(params),
 	}
 	raw, err := json.Marshal(event)
 	if err != nil {
-		return err
-	}
-	if err := writer("content_block_delta", raw); err != nil {
 		return err
 	}
 	c.emittedToolUse = true
-	return c.sendContentBlockStop(writer)
+	c.suppressText = true
+	return writer("model.tool-call", raw)
 }
 
-func (c *outboundConverter) sendContentBlockStop(writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) flushTextAndSendToolCalls(toolCalls []ToolCall, textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
+	if err := c.flushTextBuffer(textBuffer, writer); err != nil {
+		return err
+	}
+	for i := range toolCalls {
+		if err := c.sendToolUse(&toolCalls[i], writer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *outboundConverter) flushTextBuffer(textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
+	if textBuffer == nil || textBuffer.Len() == 0 {
+		return nil
+	}
+	if err := c.sendTextDelta(textBuffer.String(), writer); err != nil {
+		return err
+	}
+	textBuffer.Reset()
+	return nil
+}
+
+func extractToolCallsFromJSON(data []byte) []ToolCall {
+	var value interface{}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil
+	}
+	return extractToolCallsFromValue(value)
+}
+
+func extractToolCallsFromValue(value interface{}) []ToolCall {
+	switch v := value.(type) {
+	case []interface{}:
+		var calls []ToolCall
+		for _, item := range v {
+			calls = append(calls, extractToolCallsFromValue(item)...)
+		}
+		return calls
+	case map[string]interface{}:
+		for _, key := range []string{"tool_calls", "toolCalls", "calls", "tool_call", "toolCall"} {
+			if nested, ok := v[key]; ok {
+				if calls := extractToolCallsFromValue(nested); len(calls) > 0 {
+					return calls
+				}
+			}
+		}
+		if call, ok := parseToolCallValue(v); ok {
+			return []ToolCall{call}
+		}
+	}
+	return nil
+}
+
+func parseToolCallValue(v map[string]interface{}) (ToolCall, bool) {
+	typeHint := strings.ToLower(strings.TrimSpace(stringValue(v["type"])))
+
+	if toolName := strings.TrimSpace(stringValue(v["tool"])); toolName != "" {
+		return ToolCall{Function: toolName, Parameters: normalizeToolCallParameters(firstNonNil(v["parameters"], v["params"], v["arguments"], v["args"], v["input"]))}, true
+	}
+
+	if functionValue, ok := v["function"].(map[string]interface{}); ok {
+		if toolName := strings.TrimSpace(stringValue(functionValue["name"])); toolName != "" {
+			args := firstNonNil(functionValue["parameters"], functionValue["arguments"], v["parameters"], v["arguments"], v["args"], v["input"])
+			return ToolCall{Function: toolName, Parameters: normalizeToolCallParameters(args)}, true
+		}
+	}
+
+	name := strings.TrimSpace(stringValue(v["name"]))
+	if name == "" {
+		name = strings.TrimSpace(stringValue(v["function"]))
+	}
+	if name == "" {
+		name = strings.TrimSpace(stringValue(v["toolName"]))
+	}
+	if name == "" {
+		return ToolCall{}, false
+	}
+
+	args := firstNonNil(v["parameters"], v["params"], v["arguments"], v["args"], v["input"])
+	if args == nil && typeHint != "tool_use" && typeHint != "tool_call" && typeHint != "function" {
+		return ToolCall{}, false
+	}
+
+	return ToolCall{Function: name, Parameters: normalizeToolCallParameters(args)}, true
+}
+
+func firstNonNil(values ...interface{}) interface{} {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func stringValue(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return ""
+	}
+}
+
+func normalizeToolCallParameters(value interface{}) json.RawMessage {
+	switch v := value.(type) {
+	case nil:
+		return json.RawMessage("{}")
+	case json.RawMessage:
+		if len(v) == 0 {
+			return json.RawMessage("{}")
+		}
+		return v
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return json.RawMessage("{}")
+		}
+		if json.Valid([]byte(trimmed)) {
+			return json.RawMessage(trimmed)
+		}
+	}
+
+	data, err := json.Marshal(value)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(data)
+}
+
+func (c *outboundConverter) sendEndEvents(endEvent *EndEvent, writer func(event string, payload []byte) error) error {
+	c.outputTokens = endEvent.Usage.CompletionTokens
+	finishReason := "end_turn"
+	if c.emittedToolUse || strings.EqualFold(strings.TrimSpace(endEvent.FinishReason), "tool_use") {
+		finishReason = "tool_use"
+	}
+
 	event := map[string]interface{}{
-		"type":  "content_block_stop",
-		"index": c.blockIndex,
+		"finishReason": finishReason,
+		"usage": map[string]interface{}{
+			"inputTokens":   c.inputTokens,
+			"outputTokens":  c.outputTokens,
+			"input_tokens":  c.inputTokens,
+			"output_tokens": c.outputTokens,
+		},
 	}
 	raw, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	if err := writer("content_block_stop", raw); err != nil {
-		return err
-	}
-	c.blockIndex++
-	return nil
+	return writer("model.finish", raw)
 }
 
-func (c *outboundConverter) sendEndEvents(endEvent *EndEvent, writer func(event string, payload []byte) error) error {
-	stopReason := "end_turn"
-	switch endEvent.FinishReason {
-	case "length":
-		stopReason = "max_tokens"
-	case "tool_use":
-		stopReason = "tool_use"
+func (c *outboundConverter) flushAndFinish(endEvent *EndEvent, textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
+	if c.inCodeBlock && c.codeBuffer.Len() > 0 {
+		codeContent := strings.TrimSpace(c.codeBuffer.String())
+		c.codeBuffer.Reset()
+		c.inCodeBlock = false
+		if err := c.processCodeBlock(codeContent, textBuffer, writer); err != nil {
+			return err
+		}
 	}
-	if c.emittedToolUse && stopReason == "end_turn" {
-		stopReason = "tool_use"
-	}
-	c.outputTokens = endEvent.Usage.CompletionTokens
-
-	deltaEvent := map[string]interface{}{
-		"type": "message_delta",
-		"delta": map[string]interface{}{
-			"stop_reason":   stopReason,
-			"stop_sequence": nil,
-		},
-		"usage": map[string]interface{}{
-			"output_tokens": c.outputTokens,
-		},
-	}
-	deltaRaw, err := json.Marshal(deltaEvent)
-	if err != nil {
+	if err := c.flushTextBuffer(textBuffer, writer); err != nil {
 		return err
 	}
-	if err := writer("message_delta", deltaRaw); err != nil {
-		return err
-	}
-
-	stopRaw := []byte(`{"type":"message_stop"}`)
-	return writer("message_stop", stopRaw)
+	return c.sendEndEvents(endEvent, writer)
 }

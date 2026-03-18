@@ -67,6 +67,12 @@ var boltFetchRootData = func(ctx context.Context, acc *store.Account, cfg *confi
 	return client.FetchRootData(ctx)
 }
 
+var boltFetchRateLimits = func(ctx context.Context, acc *store.Account, cfg *config.Config, organizationID int64) (*bolt.RateLimits, error) {
+	client := bolt.NewFromAccount(acc, cfg)
+	defer client.Close()
+	return client.FetchRateLimits(ctx, organizationID)
+}
+
 var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
 	client := puter.NewFromAccount(acc, cfg)
 	defer client.Close()
@@ -443,6 +449,14 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			return status, httpStatus, fmt.Errorf("Failed to verify bolt account: %w", err)
 		}
 		bolt.ApplyRootData(acc, rootData)
+		if rootData != nil && rootData.User != nil {
+			rateLimits, rateErr := boltFetchRateLimits(ctx, acc, a.config.Load(), rootData.User.ActiveOrganizationID)
+			if rateErr != nil {
+				slog.Warn("Bolt quota sync fallback to root data", "account_id", acc.ID, "error", rateErr)
+			} else {
+				bolt.ApplyRateLimits(acc, rateLimits)
+			}
+		}
 		return "", 0, nil
 	}
 

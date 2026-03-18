@@ -469,6 +469,36 @@ func countMalformedReadToolUsesInLatestAssistant(messages []prompt.Message) int 
 	return 0
 }
 
+func countProjectDriftToolUsesInLatestAssistant(messages []prompt.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") || msg.Content.IsString() {
+			continue
+		}
+		count := 0
+		for _, block := range msg.Content.GetBlocks() {
+			if block.Type != "tool_use" {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSpace(block.Name))
+			switch name {
+			case "read", "write", "edit", "glob", "grep":
+				path := extractToolUseInputString(block.Input, "file_path", "path", "directory", "dir")
+				if looksLikeProjectDriftPath(path) {
+					count++
+				}
+			case "bash":
+				command := extractToolUseInputString(block.Input, "command", "cmd")
+				if looksLikeProjectDriftCommand(command) {
+					count++
+				}
+			}
+		}
+		return count
+	}
+	return 0
+}
+
 func latestToolResultTurnFailureCount(messages []prompt.Message) (total int, failures int) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
@@ -494,6 +524,47 @@ func latestToolResultTurnFailureCount(messages []prompt.Message) (total int, fai
 func isRecoverableMalformedReadPath(path string) bool {
 	recovered := recoverMalformedReadPath(path)
 	return recovered != "" && recovered != strings.TrimSpace(path)
+}
+
+func looksLikeProjectDriftPath(path string) bool {
+	path = strings.TrimSpace(strings.Trim(path, "\"'"))
+	if path == "" {
+		return false
+	}
+	if isRecoverableMalformedReadPath(path) {
+		return true
+	}
+	lower := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
+	for _, marker := range []string{
+		"/tmp/cc-agent/",
+		"/home/user/app",
+		"/mnt/",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeProjectDriftCommand(command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false
+	}
+	lower := strings.ToLower(command)
+	for _, marker := range []string{
+		"/tmp/cc-agent/",
+		"/home/user/app",
+		"/mnt/",
+		"cannot access windows path",
+		"~/",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return findWindowsToolPathStart(command) >= 0
 }
 
 func recoverMalformedReadPath(path string) string {

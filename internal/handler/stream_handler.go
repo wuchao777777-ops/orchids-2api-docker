@@ -63,7 +63,8 @@ var (
 		"content_block_stop":  []byte("content_block_stop"),
 		"fs_operation":        []byte("fs_operation"),
 	}
-	quotedPathRegex = regexp.MustCompile(`"([^"\n\r]+)"`)
+	quotedPathRegex       = regexp.MustCompile(`"([^"\n\r]+)"`)
+	windowsDrivePathRegex = regexp.MustCompile(`(?i)\b[a-z]:[\\/]`)
 )
 
 func mapKeys(m map[string]interface{}) []string {
@@ -1468,6 +1469,7 @@ func normalizeUpstreamToolCall(name, input, workdir string) (string, string) {
 	normalizedName := normalizeUpstreamToolName(rawName)
 	sanitized := sanitizeToolInput(normalizedName, input)
 	sanitized = rewriteForeignBashReadCommandInput(normalizedName, sanitized, workdir)
+	sanitized = rewriteBashProjectRootProbeCommandInput(normalizedName, sanitized, workdir)
 	sanitized = rewriteForeignAbsoluteToolPathInput(normalizedName, sanitized, workdir)
 	if bashInput, ok := rewriteAbsoluteReadToBashFallback(normalizedName, sanitized, workdir); ok {
 		return "Bash", bashInput
@@ -1568,6 +1570,9 @@ func rewriteForeignAbsoluteToolPathInput(name, input, workdir string) string {
 			continue
 		}
 		rewritten := rebaseAbsolutePathToWorkdir(path, workdir)
+		if rewritten == path && nameKey == "write" {
+			rewritten = rebaseAbsoluteWritePathToWorkdir(path, workdir)
+		}
 		if rewritten != path {
 			payload[key] = rewritten
 			changed = true
@@ -1581,6 +1586,76 @@ func rewriteForeignAbsoluteToolPathInput(name, input, workdir string) string {
 		return input
 	}
 	return string(normalized)
+}
+
+func rewriteBashProjectRootProbeCommandInput(name, input, workdir string) string {
+	if !strings.EqualFold(strings.TrimSpace(name), "bash") {
+		return input
+	}
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return input
+	}
+
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return input
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return input
+	}
+
+	command, _ := payload["command"].(string)
+	command = strings.TrimSpace(command)
+	if !looksLikeProjectRootProbeCommand(command, workdir) {
+		return input
+	}
+
+	payload["command"] = `ls -1A -- "."`
+	payload["description"] = "List project root directory entries"
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return input
+	}
+	return string(normalized)
+}
+
+func looksLikeProjectRootProbeCommand(command, workdir string) bool {
+	command = strings.TrimSpace(command)
+	workdir = strings.TrimSpace(workdir)
+	if command == "" || workdir == "" {
+		return false
+	}
+	lower := strings.ToLower(command)
+	if !strings.Contains(lower, "ls") {
+		return false
+	}
+	if strings.Contains(lower, "sed -n '1,240p'") {
+		return false
+	}
+
+	projectBase := strings.ToLower(filepath.Base(filepath.Clean(workdir)))
+	markers := 0
+	for _, marker := range []string{
+		"/mnt/",
+		"/tmp/cc-agent/",
+		"~/",
+		"cannot access windows path",
+		"2>/dev/null",
+	} {
+		if strings.Contains(lower, marker) {
+			markers++
+		}
+	}
+	if projectBase != "" && projectBase != "." && projectBase != string(filepath.Separator) && strings.Contains(lower, projectBase) {
+		markers++
+	}
+	if windowsDrivePathRegex.MatchString(command) {
+		markers++
+	}
+	return markers >= 2
 }
 
 func rewriteForeignBashReadCommandInput(name, input, workdir string) string {
@@ -1674,7 +1749,7 @@ func rewriteBashReadCandidatesToLocalSearch(command, workdir string) (string, bo
 			continue
 		}
 
-		if filepath.IsAbs(pathValue) || strings.Contains(pathValue, string(filepath.Separator)) {
+		if isToolAbsolutePath(pathValue) || containsPathSeparator(pathValue) {
 			if !sameOrWithinPath(pathValue, workdir) {
 				needsLocalization = true
 			}
@@ -1729,7 +1804,7 @@ func rewriteAbsoluteReadToBashFallback(name, input, workdir string) (string, boo
 	}
 	rawPath, _ := payload["file_path"].(string)
 	rawPath = strings.TrimSpace(rawPath)
-	if rawPath == "" || !filepath.IsAbs(rawPath) {
+	if rawPath == "" || !isToolAbsolutePath(rawPath) {
 		return "", false
 	}
 	if strings.TrimSpace(workdir) == "" {
@@ -1792,7 +1867,7 @@ func rebaseCandidatePathToWorkdir(pathValue, workdir string) string {
 	if pathValue == "" || workdir == "" {
 		return pathValue
 	}
-	if filepath.IsAbs(pathValue) {
+	if isToolAbsolutePath(pathValue) {
 		return rebaseAbsolutePathToWorkdir(pathValue, workdir)
 	}
 
@@ -1847,7 +1922,7 @@ func rebaseAbsolutePathToWorkdir(pathValue, workdir string) string {
 	if isPlaceholderDirectoryListPath(pathValue) {
 		return workdir
 	}
-	if !filepath.IsAbs(pathValue) {
+	if !isToolAbsolutePath(pathValue) {
 		return pathValue
 	}
 
@@ -1881,6 +1956,62 @@ func rebaseAbsolutePathToWorkdir(pathValue, workdir string) string {
 	return pathValue
 }
 
+func rebaseAbsoluteWritePathToWorkdir(pathValue, workdir string) string {
+	pathValue = strings.TrimSpace(pathValue)
+	workdir = strings.TrimSpace(workdir)
+	if pathValue == "" || workdir == "" || !isToolAbsolutePath(pathValue) {
+		return pathValue
+	}
+
+	cleanWorkdir := filepath.Clean(workdir)
+	cleanPath := filepath.Clean(pathValue)
+	if sameOrWithinPath(cleanPath, cleanWorkdir) {
+		return pathValue
+	}
+
+	parts := splitPathSegments(cleanPath)
+	if len(parts) == 0 {
+		return pathValue
+	}
+
+	projectBase := strings.TrimSpace(filepath.Base(cleanWorkdir))
+	if candidate := rebaseWritePathAfterSegment(parts, cleanWorkdir, projectBase); candidate != "" {
+		return candidate
+	}
+	if candidate := rebaseWritePathAfterSegment(parts, cleanWorkdir, "project"); candidate != "" {
+		return candidate
+	}
+
+	base := filepath.Base(cleanPath)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return pathValue
+	}
+	return filepath.Join(cleanWorkdir, base)
+}
+
+func rebaseWritePathAfterSegment(parts []string, workdir, segment string) string {
+	segment = strings.TrimSpace(segment)
+	if segment == "" || len(parts) == 0 {
+		return ""
+	}
+	for i, part := range parts {
+		if !strings.EqualFold(strings.TrimSpace(part), segment) {
+			continue
+		}
+		if i+1 >= len(parts) {
+			return ""
+		}
+		tail := filepath.Join(parts[i+1:]...)
+		candidate := filepath.Join(workdir, tail)
+		parent := filepath.Dir(candidate)
+		if pathExists(parent) || pathExists(candidate) {
+			return candidate
+		}
+		return ""
+	}
+	return ""
+}
+
 func sameOrWithinPath(pathValue, root string) bool {
 	pathValue = filepath.Clean(pathValue)
 	root = filepath.Clean(root)
@@ -1908,6 +2039,21 @@ func splitPathSegments(pathValue string) []string {
 		out = append(out, part)
 	}
 	return out
+}
+
+func isToolAbsolutePath(pathValue string) bool {
+	trimmed := strings.TrimSpace(pathValue)
+	if trimmed == "" {
+		return false
+	}
+	if filepath.IsAbs(trimmed) {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "/") || windowsDrivePathRegex.MatchString(trimmed)
+}
+
+func containsPathSeparator(pathValue string) bool {
+	return strings.Contains(pathValue, "/") || strings.Contains(pathValue, "\\")
 }
 
 func pathExists(pathValue string) bool {
