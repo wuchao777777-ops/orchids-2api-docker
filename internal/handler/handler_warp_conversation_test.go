@@ -187,6 +187,49 @@ func TestBoltToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *
 	}
 }
 
+func TestPuterToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":false,
+		"conversation_id":"puter_followup_recover",
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"这个项目是干什么的"}]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_ls","name":"Bash","input":{"command":"ls /tmp/cc-agent/sb1-fxjxbmvk/project","description":"List project files"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_ls","content":"Exit code 2\nls: cannot access '/tmp/cc-agent/sb1-fxjxbmvk/project': No such file or directory"},
+				{"type":"text","text":"这个项目是干什么的"}
+			]}
+		],
+		"tools":[
+			{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}},
+			{"name":"Bash","input_schema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}
+		]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 upstream call, got %d", len(calls))
+	}
+	if calls[0].NoTools {
+		t.Fatalf("expected puter follow-up after sandbox path miss to keep tools enabled")
+	}
+}
+
 func TestBoltToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *testing.T) {
 	t.Parallel()
 

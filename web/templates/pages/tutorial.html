@@ -13,67 +13,81 @@
   <main class="main-content">
     <section class="header-section" id="tutorialHeader">
       <h1>使用教程</h1>
-      <p>了解如何使用 API 接口</p>
+      <p>快速理解接入地址、路由区别、模型说明和渠道配置要求。</p>
     </section>
 
-    <div class="content-card" style="padding: 24px;">
-      <div style="margin-bottom: 32px; background: rgba(34, 211, 238, 0.05); border: 1px solid rgba(34, 211, 238, 0.15); border-radius: 12px; padding: 20px;">
-        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
-          <div style="width: 32px; height: 32px; background: var(--accent-cyan); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white;">
-            🔗
-          </div>
-          <h3 style="font-size: 1.1rem; font-weight: 700;">API 地址格式</h3>
+    <section class="page-intro-grid">
+      <article class="page-intro-card page-intro-card-primary">
+        <div class="page-intro-kicker">Guide</div>
+        <h2>先确认路由，再开始接入</h2>
+        <p>这一页不只是文档摘录，而是把最常见的接入错误提前挡掉，尤其是 Claude Code、Bolt 和 Puter 的路径与凭证差异。</p>
+      </article>
+      <article class="page-intro-card">
+        <div class="page-intro-meta">You usually need</div>
+        <ul class="page-checklist">
+          <li>确认 API 基地址和是否带 `/v1`</li>
+          <li>根据渠道准备正确的账号字段</li>
+          <li>核对公开模型与当前支持协议</li>
+        </ul>
+      </article>
+    </section>
+
+    <div class="content-card doc-shell">
+      <div class="doc-callout doc-callout-cyan">
+        <div class="doc-callout-head">
+          <div class="doc-mark doc-mark-cyan">API</div>
+          <h3 class="doc-title">API 地址格式</h3>
         </div>
-        <div style="background: rgba(12, 14, 26, 0.4); padding: 12px 16px; border-radius: 8px; font-family: monospace; font-size: 1.1rem; color: var(--accent-cyan); border: 1px solid var(--border-color);">
+        <div class="doc-code-block">
           Orchids/Warp/Bolt/Puter: <span data-api-base></span>/{渠道}/v1
           <br />
           Grok: <span data-api-base></span>/grok/v1
         </div>
       </div>
 
-      <div style="margin-bottom: 32px; background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
-        <span style="font-size: 1.2rem;">⚠️</span>
+      <div class="doc-callout doc-callout-amber doc-callout-inline">
+        <span class="doc-mark doc-mark-amber">NOTE</span>
         <div>
-          <span style="font-weight: 700; color: var(--accent-orange);">Claude Code 用户注意:</span> 配置 API 地址时请使用
-          <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);"><span data-api-base></span>/{渠道}</code>，
-          <span style="color: var(--accent-red); font-weight: 700;">不要</span>添加
-          <code style="background: rgba(248, 113, 113, 0.1); padding: 2px 6px; border-radius: 4px; color: var(--accent-red);">/v1</code> 后缀
+          <span class="doc-strong doc-strong-amber">Claude Code 用户注意:</span> 配置 API 地址时请使用
+          <code class="doc-inline-code doc-inline-code-amber"><span data-api-base></span>/{渠道}</code>，
+          <span class="doc-strong doc-strong-red">不要</span>添加
+          <code class="doc-inline-code doc-inline-code-red">/v1</code> 后缀
           <br />
-          <span style="font-weight: 700; color: var(--accent-orange);">Grok 路由说明:</span>
-          Grok 与其他渠道保持一致，使用 <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);">/grok/v1</code> 前缀。
+          <span class="doc-strong doc-strong-amber">Grok 路由说明:</span>
+          Grok 与其他渠道保持一致，使用 <code class="doc-inline-code doc-inline-code-amber">/grok/v1</code> 前缀。
           <br />
-          <span style="font-weight: 700; color: var(--accent-orange);">Bolt 账号说明:</span>
-          Bolt 账号需要同时填写 <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);">__session</code>
-          和 <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);">project_id</code>。
+          <span class="doc-strong doc-strong-amber">Bolt 账号说明:</span>
+          Bolt 账号需要同时填写 <code class="doc-inline-code doc-inline-code-amber">__session</code>
+          和 <code class="doc-inline-code doc-inline-code-amber">project_id</code>。
           <br />
-          <span style="font-weight: 700; color: var(--accent-orange);">Puter 账号说明:</span>
-          Puter 账号当前只需要填写 <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);">auth_token</code>。
+          <span class="doc-strong doc-strong-amber">Puter 账号说明:</span>
+          Puter 账号当前只需要填写 <code class="doc-inline-code doc-inline-code-amber">auth_token</code>。
         </div>
       </div>
 
-      <div style="margin-bottom: 32px; background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.2); border-radius: 12px; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
-        <span style="font-size: 1.2rem;">🧭</span>
+      <div class="doc-callout doc-callout-green doc-callout-inline">
+        <span class="doc-mark doc-mark-green">INFO</span>
         <div>
-          <span style="font-weight: 700; color: var(--accent-green);">Bolt 模型说明:</span>
+          <span class="doc-strong doc-strong-green">Bolt 模型说明:</span>
           目前文档和模型管理里的 Bolt 模型采用“保守收录”策略，只放入前端主模型切换器里明确出现、且我们已在 bundle 中确认的模型：
-          <code style="background: rgba(34, 197, 94, 0.12); padding: 2px 6px; border-radius: 4px; color: var(--accent-green);">claude-sonnet-4-6</code>、
-          <code style="background: rgba(34, 197, 94, 0.12); padding: 2px 6px; border-radius: 4px; color: var(--accent-green);">claude-opus-4-6</code>、
-          <code style="background: rgba(34, 197, 94, 0.12); padding: 2px 6px; border-radius: 4px; color: var(--accent-green);">claude-opus-4-5-20251101</code>。
+          <code class="doc-inline-code doc-inline-code-green">claude-sonnet-4-6</code>、
+          <code class="doc-inline-code doc-inline-code-green">claude-opus-4-6</code>、
+          <code class="doc-inline-code doc-inline-code-green">claude-opus-4-5-20251101</code>。
           <br />
           前端配置里还会出现实验默认值或活动文案，但这些信息不等于“稳定公开可选模型”，所以不会直接并入公开模型列表。
           <br />
-          <span style="font-weight: 700; color: var(--accent-green);">Puter 模型说明:</span>
+          <span class="doc-strong doc-strong-green">Puter 模型说明:</span>
           Puter 当前采用参考仓库里的“无前缀主模型”清单，已包含 Claude / OpenAI / Gemini / Grok / DeepSeek / Mistral 等主模型族；
-          但像 <code style="background: rgba(34, 197, 94, 0.12); padding: 2px 6px; border-radius: 4px; color: var(--accent-green);">openrouter:</code>、
-          <code style="background: rgba(34, 197, 94, 0.12); padding: 2px 6px; border-radius: 4px; color: var(--accent-green);">togetherai:</code>
+          但像 <code class="doc-inline-code doc-inline-code-green">openrouter:</code>、
+          <code class="doc-inline-code doc-inline-code-green">togetherai:</code>
           这类聚合源前缀模型暂时不直接暴露到模型管理里。
         </div>
       </div>
 
-      <div class="table-wrap" style="background: rgba(12, 14, 26, 0.5); border-radius: 12px; border: 1px solid var(--border-color);">
+      <div class="table-wrap doc-table-wrap">
         <table>
           <thead>
-            <tr style="background: var(--bg-elevated);">
+            <tr>
               <th>渠道</th>
               <th>API 地址</th>
               <th>默认模型</th>
@@ -83,52 +97,52 @@
           <tbody>
             <tr>
               <td><span class="tag badge-orchids">Orchids</span></td>
-              <td><code style="color: var(--accent-cyan);" data-api-path="/orchids/v1"></code></td>
-              <td><code style="color: var(--accent-green);">claude-sonnet-4-5</code> <span class="tag badge-orchids" style="font-size: 0.7rem;">Orchids</span></td>
+              <td><code class="doc-link-code" data-api-path="/orchids/v1"></code></td>
+              <td><code class="doc-model-code">claude-sonnet-4-5</code> <span class="tag badge-orchids tag-mini">Orchids</span></td>
               <td>
-                <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
-                <span class="tag" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-orange); border: 1px solid rgba(251, 191, 36, 0.3);">OpenAI</span>
+                <span class="tag protocol-tag protocol-tag-claude">Claude</span>
+                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
               </td>
             </tr>
             <tr>
-              <td><span class="tag badge-warp" style="background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); border: 1px solid rgba(34, 211, 238, 0.3);">Warp</span></td>
-              <td><code style="color: var(--accent-cyan);" data-api-path="/warp/v1"></code></td>
-              <td><code style="color: var(--accent-green);">claude-4-5-sonnet</code> <span class="tag badge-warp" style="background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); border: 1px solid rgba(34, 211, 238, 0.3); font-size: 0.7rem;">Warp</span></td>
+              <td><span class="tag badge-warp">Warp</span></td>
+              <td><code class="doc-link-code" data-api-path="/warp/v1"></code></td>
+              <td><code class="doc-model-code">claude-4-5-sonnet</code> <span class="tag badge-warp tag-mini">Warp</span></td>
               <td>
-                <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
-                <span class="tag" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-orange); border: 1px solid rgba(251, 191, 36, 0.3);">OpenAI</span>
+                <span class="tag protocol-tag protocol-tag-claude">Claude</span>
+                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
               </td>
             </tr>
             <tr>
-              <td><span class="tag badge-grok" style="background: rgba(244, 114, 182, 0.15); color: var(--accent-pink); border: 1px solid rgba(244, 114, 182, 0.3);">Grok</span></td>
-              <td><code style="color: var(--accent-cyan);" data-api-path="/grok/v1"></code></td>
-              <td><code style="color: var(--accent-green);">grok-3</code> <span class="tag badge-grok" style="background: rgba(244, 114, 182, 0.15); color: var(--accent-pink); border: 1px solid rgba(244, 114, 182, 0.3); font-size: 0.7rem;">Grok</span></td>
+              <td><span class="tag badge-grok">Grok</span></td>
+              <td><code class="doc-link-code" data-api-path="/grok/v1"></code></td>
+              <td><code class="doc-model-code">grok-3</code> <span class="tag badge-grok tag-mini">Grok</span></td>
               <td>
-                <span class="tag" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-orange); border: 1px solid rgba(251, 191, 36, 0.3);">OpenAI</span>
+                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
               </td>
             </tr>
             <tr>
-              <td><span class="tag" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3);">Bolt</span></td>
-              <td><code style="color: var(--accent-cyan);" data-api-path="/bolt/v1"></code></td>
+              <td><span class="tag badge-bolt">Bolt</span></td>
+              <td><code class="doc-link-code" data-api-path="/bolt/v1"></code></td>
               <td>
-                <code style="color: var(--accent-green);">claude-sonnet-4-6</code>
-                <span class="tag" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.7rem;">Bolt</span>
+                <code class="doc-model-code">claude-sonnet-4-6</code>
+                <span class="tag badge-bolt tag-mini">Bolt</span>
               </td>
               <td>
-                <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
-                <span class="tag" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-orange); border: 1px solid rgba(251, 191, 36, 0.3);">OpenAI</span>
+                <span class="tag protocol-tag protocol-tag-claude">Claude</span>
+                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
               </td>
             </tr>
             <tr>
-              <td><span class="tag" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3);">Puter</span></td>
-              <td><code style="color: var(--accent-cyan);" data-api-path="/puter/v1"></code></td>
+              <td><span class="tag badge-puter">Puter</span></td>
+              <td><code class="doc-link-code" data-api-path="/puter/v1"></code></td>
               <td>
-                <code style="color: var(--accent-green);">claude-opus-4-5</code>
-                <span class="tag" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 0.7rem;">Puter</span>
+                <code class="doc-model-code">claude-opus-4-5</code>
+                <span class="tag badge-puter tag-mini">Puter</span>
               </td>
               <td>
-                <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
-                <span class="tag" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-orange); border: 1px solid rgba(251, 191, 36, 0.3);">OpenAI</span>
+                <span class="tag protocol-tag protocol-tag-claude">Claude</span>
+                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
               </td>
             </tr>
           </tbody>

@@ -62,6 +62,11 @@
     localTracks: [],
     visualizerTimer: null,
   };
+  const grokLazyState = {
+    imagineReady: false,
+    cacheReady: false,
+    livekitPromise: null,
+  };
 
   const chatState = {
     sessions: [],
@@ -3040,9 +3045,39 @@
     return window.LivekitClient || window.LiveKitClient || null;
   }
 
-  function ensureLiveKitClient() {
+  async function ensureLiveKitClient() {
     const sdk = resolveLiveKitClient();
     if (sdk) return sdk;
+    if (!grokLazyState.livekitPromise) {
+      grokLazyState.livekitPromise = new Promise((resolve, reject) => {
+        const existing = document.querySelector('script[data-livekit-client="1"]');
+        if (existing) {
+          existing.addEventListener("load", () => resolve(resolveLiveKitClient()), { once: true });
+          existing.addEventListener("error", () => reject(new Error("LiveKit SDK 加载失败")), { once: true });
+          return;
+        }
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js";
+        script.async = true;
+        script.dataset.livekitClient = "1";
+        script.onload = () => {
+          const loaded = resolveLiveKitClient();
+          if (loaded) {
+            appendVoiceLog("LiveKit SDK 已按需加载");
+            resolve(loaded);
+            return;
+          }
+          reject(new Error("LiveKit SDK 未挂载到 window"));
+        };
+        script.onerror = () => reject(new Error("LiveKit SDK 加载失败"));
+        document.head.appendChild(script);
+      }).catch((err) => {
+        grokLazyState.livekitPromise = null;
+        throw err;
+      });
+    }
+    const loaded = await grokLazyState.livekitPromise;
+    if (loaded) return loaded;
     appendVoiceLog("LiveKit SDK 未加载");
     showToast("LiveKit SDK 未加载", "error");
     throw new Error("LiveKit SDK 未加载");
@@ -4280,8 +4315,26 @@
     await refreshCacheView();
   }
 
-  function switchGrokToolTab(tab) {
+  async function ensureGrokTabReady(tab) {
     const nextTab = String(tab || "").toLowerCase();
+    if (nextTab === "imagine" && !grokLazyState.imagineReady) {
+      await loadImagineConfig();
+      grokLazyState.imagineReady = true;
+      return;
+    }
+    if (nextTab === "cache" && !grokLazyState.cacheReady) {
+      await refreshCacheView();
+      grokLazyState.cacheReady = true;
+    }
+  }
+
+  async function switchGrokToolTab(tab) {
+    const nextTab = String(tab || "").toLowerCase();
+    try {
+      await ensureGrokTabReady(nextTab);
+    } catch (err) {
+      showToast(`加载 ${nextTab} 失败: ${err.message || err}`, "error");
+    }
     if (nextTab !== "chat") {
       closeChatSidebar();
     } else if (!isMobileChatSidebar()) {
@@ -4813,8 +4866,7 @@
       closeCacheBatchStream();
     });
     const uiState = loadGrokToolsUIState();
-    await loadImagineConfig();
-    switchGrokToolTab(String(uiState.activeToolTab || "chat"));
+    await switchGrokToolTab(String(uiState.activeToolTab || "chat"));
     syncImagineModeUI(String(uiState.imagineMode || document.getElementById("imagineMode")?.value || "auto"), false);
     const imagineRatio = document.getElementById("imagineRatio");
     const imagineConcurrent = document.getElementById("imagineConcurrent");
@@ -4857,11 +4909,6 @@
     setVoiceButtons(false);
     setVoiceStatus(t("common.notConnected"));
     updateCacheBatchUI();
-    try {
-      await refreshCacheView();
-    } catch (err) {
-      showToast(`缓存加载失败: ${err.message || err}`, "error");
-    }
   }
 
   document.addEventListener("DOMContentLoaded", init);

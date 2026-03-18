@@ -112,3 +112,65 @@ func TestDriverForModel(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildRequest_IncludesWorkdirToolPrompt(t *testing.T) {
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
+	req := upstream.UpstreamRequest{
+		Model:   "claude-sonnet-4-6",
+		Workdir: `d:\Code\Orchids-2api`,
+		Tools: []interface{}{
+			map[string]interface{}{
+				"name":        "Read",
+				"description": "Read a file",
+				"input_schema": map[string]interface{}{
+					"type": "object",
+				},
+			},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "这个项目是干什么的"}},
+		},
+	}
+
+	built := client.buildRequest(req)
+	if len(built.Args.Messages) == 0 || built.Args.Messages[0].Role != "system" {
+		t.Fatalf("expected leading system prompt, got %#v", built.Args.Messages)
+	}
+	systemPrompt := built.Args.Messages[0].Content
+	for _, want := range []string{
+		"The real local project working directory is `d:\\Code\\Orchids-2api`.",
+		"Treat the project root as `.`",
+		"# Tools",
+		"<tool_call>",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
+		}
+	}
+}
+
+func TestBuildRequest_NoToolsPromptDisablesToolCalls(t *testing.T) {
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
+	req := upstream.UpstreamRequest{
+		Model:   "claude-sonnet-4-6",
+		Workdir: `d:\Code\Orchids-2api`,
+		NoTools: true,
+		Tools: []interface{}{
+			map[string]interface{}{
+				"name": "Read",
+			},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "总结刚才的工具结果"}},
+		},
+	}
+
+	built := client.buildRequest(req)
+	systemPrompt := built.Args.Messages[0].Content
+	if !strings.Contains(systemPrompt, "This turn must not make any tool calls.") {
+		t.Fatalf("expected no-tools instruction, got:\n%s", systemPrompt)
+	}
+	if strings.Contains(systemPrompt, "# Tools") {
+		t.Fatalf("did not expect tool catalog when no-tools gate is enabled, got:\n%s", systemPrompt)
+	}
+}

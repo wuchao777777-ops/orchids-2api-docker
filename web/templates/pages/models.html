@@ -17,24 +17,24 @@
       position: relative;
       overflow: hidden;
       padding: 24px;
-      border: 1px solid rgba(125, 211, 252, 0.14);
-      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 24px;
       background:
-        radial-gradient(circle at top left, rgba(14, 165, 233, 0.16), transparent 36%),
-        radial-gradient(circle at top right, rgba(96, 165, 250, 0.12), transparent 28%),
-        linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(15, 23, 42, 0.84));
-      box-shadow: 0 20px 50px rgba(2, 6, 23, 0.28);
+        radial-gradient(circle at top left, rgba(215, 255, 100, 0.12), transparent 34%),
+        radial-gradient(circle at top right, rgba(125, 211, 252, 0.12), transparent 24%),
+        linear-gradient(180deg, rgba(15, 19, 24, 0.96), rgba(15, 19, 24, 0.9));
+      box-shadow: var(--shadow-sm);
     }
 
     .models-overview::after {
       content: "";
       position: absolute;
-      inset: auto -80px -100px auto;
-      width: 240px;
-      height: 240px;
+      inset: auto -12px -28px auto;
+      width: 148px;
+      height: 148px;
       border-radius: 999px;
-      background: rgba(56, 189, 248, 0.08);
-      filter: blur(12px);
+      background: radial-gradient(circle, rgba(215, 255, 100, 0.12), transparent 70%);
+      filter: blur(10px);
       pointer-events: none;
     }
 
@@ -62,22 +62,22 @@
       border-radius: 999px;
       background: rgba(59, 130, 246, 0.12);
       border: 1px solid rgba(96, 165, 250, 0.18);
-      color: #93c5fd;
+      color: #e8ffac;
       font-size: 0.78rem;
       font-weight: 700;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }
 
     .models-overview-copy h2 {
       margin: 0 0 8px;
       font-size: 1.35rem;
-      color: #f8fafc;
+      color: var(--text-main);
     }
 
     .models-overview-copy p {
       margin: 0;
-      color: #cbd5e1;
+      color: var(--text-secondary);
       line-height: 1.6;
       font-size: 0.95rem;
     }
@@ -86,10 +86,10 @@
       min-width: 172px;
       padding: 10px 18px;
       border: none;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #38bdf8, #2563eb);
-      color: white;
-      box-shadow: 0 14px 30px rgba(37, 99, 235, 0.24);
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--primary), #b6f86a);
+      color: #10150f;
+      box-shadow: 0 10px 24px rgba(215, 255, 100, 0.16);
     }
 
     .models-summary-grid {
@@ -104,21 +104,21 @@
       min-width: 0;
       padding: 16px;
       border-radius: 16px;
-      border: 1px solid rgba(148, 163, 184, 0.12);
-      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.03);
       backdrop-filter: blur(6px);
     }
 
     .models-stat-label {
       margin-bottom: 8px;
-      color: #94a3b8;
+      color: var(--text-secondary);
       font-size: 0.78rem;
       letter-spacing: 0.03em;
       text-transform: uppercase;
     }
 
     .models-stat-value {
-      color: #f8fafc;
+      color: var(--text-main);
       font-size: 1.4rem;
       font-weight: 700;
       line-height: 1;
@@ -126,15 +126,15 @@
 
     .models-stat-note {
       margin-top: 8px;
-      color: #cbd5e1;
+      color: var(--text-secondary);
       font-size: 0.82rem;
     }
 
     .models-filter-panel {
       padding: 18px 20px;
       border: 1px solid var(--border-color);
-      border-radius: 18px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015));
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.025);
       box-shadow: var(--shadow-sm);
     }
 
@@ -193,7 +193,7 @@
 
     .models-filter-row {
       display: grid;
-      grid-template-columns: minmax(0, 1.8fr) repeat(2, minmax(160px, 0.65fr));
+      grid-template-columns: minmax(0, 1.55fr) repeat(2, minmax(150px, 0.72fr));
       gap: 12px;
       align-items: end;
     }
@@ -220,7 +220,7 @@
 
     .models-table {
       table-layout: fixed;
-      min-width: 1180px;
+      min-width: 1080px;
     }
 
     .models-table thead th {
@@ -228,7 +228,7 @@
       top: 0;
       z-index: 1;
       backdrop-filter: blur(8px);
-      background: rgba(15, 23, 42, 0.92);
+      background: rgba(15, 19, 24, 0.96);
     }
 
     .models-table th,
@@ -243,7 +243,7 @@
     }
 
     .models-table .col-default {
-      width: 96px;
+      width: 104px;
     }
 
     .models-table .col-status {
@@ -251,12 +251,17 @@
     }
 
     .models-table .col-sort {
-      width: 88px;
+      width: 78px;
+    }
+
+    .models-table .col-toggle {
+      width: 92px;
+      text-align: center;
     }
 
     .models-table .col-actions {
-      width: 150px;
-      text-align: right;
+      width: 132px;
+      text-align: center;
     }
 
     .models-cell-main {
@@ -323,9 +328,10 @@
 
     .models-actions {
       display: flex;
-      justify-content: flex-end;
+      justify-content: center;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
+      min-width: 0;
     }
 
     .models-default-btn {
@@ -336,7 +342,7 @@
 
     .models-results-card {
       overflow: hidden;
-      border-radius: 20px;
+      border-radius: 24px;
     }
 
     .models-results-head {
@@ -347,7 +353,7 @@
       padding: 18px 20px;
       border-bottom: 1px solid var(--border-color);
       background:
-        linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.02)),
+        linear-gradient(180deg, rgba(215, 255, 100, 0.08), rgba(215, 255, 100, 0.015)),
         var(--bg-elevated);
       flex-wrap: wrap;
     }
@@ -388,6 +394,8 @@
 
     .models-table-wrap {
       max-height: 68vh;
+      overflow-x: auto;
+      overflow-y: auto;
     }
 
     .models-footer {
@@ -430,9 +438,9 @@
       justify-content: center;
       border-radius: 20px;
       background: rgba(56, 189, 248, 0.1);
-      color: #7dd3fc;
+      color: #e8ffac;
       font-size: 2rem;
-      box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.15);
+      box-shadow: inset 0 0 0 1px rgba(215, 255, 100, 0.12);
     }
 
     @media (max-width: 900px) {
@@ -472,7 +480,23 @@
   <main class="main-content models-page">
     <section class="header-section" id="modelsHeader">
       <h1>模型管理</h1>
-      <p>管理各渠道的可用模型列表</p>
+      <p>维护公开模型、默认模型和状态切换，先按渠道看概览，再处理具体条目。</p>
+    </section>
+
+    <section class="page-intro-grid">
+      <article class="page-intro-card page-intro-card-primary">
+        <div class="page-intro-kicker">Models</div>
+        <h2>把模型维护拆成概览、筛选和动作三层</h2>
+        <p>上面先确认当前渠道和状态分布，中间用筛选缩小范围，下面的表格只负责具体修改，减少“信息太满但不好操作”的感觉。</p>
+      </article>
+      <article class="page-intro-card">
+        <div class="page-intro-meta">Typical actions</div>
+        <ul class="page-checklist">
+          <li>先按渠道切换，再按状态筛选</li>
+          <li>默认模型只保留一个，避免混淆</li>
+          <li>右侧操作区只保留编辑、删除和启停</li>
+        </ul>
+      </article>
     </section>
 
     <section class="models-overview">

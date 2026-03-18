@@ -349,6 +349,74 @@ func TestHandleMessages_Puter_StreamAndJSON(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_Puter_DirectSSE_NonStreamJSON(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstream{events: []upstream.SSEMessage{
+		{Type: "message_start", Event: map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id":    "msg_test",
+				"type":  "message",
+				"role":  "assistant",
+				"model": "claude-sonnet-4-6",
+			},
+		}},
+		{Type: "content_block_start", Event: map[string]any{
+			"type":  "content_block_start",
+			"index": 0,
+			"content_block": map[string]any{
+				"type": "text",
+				"text": "",
+			},
+		}},
+		{Type: "content_block_delta", Event: map[string]any{
+			"type":  "content_block_delta",
+			"index": 0,
+			"delta": map[string]any{
+				"type": "text_delta",
+				"text": "puter-direct",
+			},
+		}},
+		{Type: "content_block_stop", Event: map[string]any{
+			"type":  "content_block_stop",
+			"index": 0,
+		}},
+		{Type: "message_delta", Event: map[string]any{
+			"type": "message_delta",
+			"delta": map[string]any{
+				"stop_reason": "end_turn",
+			},
+			"usage": map[string]any{
+				"output_tokens": 3,
+			},
+		}},
+		{Type: "message_stop", Event: map[string]any{
+			"type": "message_stop",
+		}},
+	}}
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "claude-sonnet-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   false,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "puter-direct") {
+		t.Fatalf("expected direct SSE text in response, got: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"content":null`) {
+		t.Fatalf("did not expect null content, got: %s", rec.Body.String())
+	}
+}
+
 func TestHandleMessages_SuggestionMode_LocalResponse(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

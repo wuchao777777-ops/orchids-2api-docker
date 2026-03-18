@@ -15,7 +15,23 @@
   <main class="main-content">
     <section class="header-section" id="accountsHeader">
       <h1 id="pageTitle">账号管理</h1>
-      <p id="pageSubtitle">管理您的 Orchids API 凭证</p>
+      <p id="pageSubtitle">统一维护渠道账号、状态和可用性，快速完成导入、清理和批量操作。</p>
+    </section>
+
+    <section class="page-intro-grid">
+      <article class="page-intro-card page-intro-card-primary">
+        <div class="page-intro-kicker">Operations</div>
+        <h2>把账号维护变成一件顺手的事</h2>
+        <p>这里聚合了账户导入、批量删除、异常清理和分页管理。上面的统计卡看总量，下面的列表处理具体动作。</p>
+      </article>
+      <article class="page-intro-card">
+        <div class="page-intro-meta">Recommended flow</div>
+        <ul class="page-checklist">
+          <li>先按渠道筛选，再做状态排查</li>
+          <li>异常账户优先批量清理，减少噪音</li>
+          <li>大批量导入后立刻复查可用状态</li>
+        </ul>
+      </article>
     </section>
 
     <section class="stats-grid" id="statsGrid">
@@ -29,74 +45,69 @@
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">状态正常</span>
-          <span class="value" style="color: var(--accent-green)" id="enabledAccounts">0</span>
+          <span class="value metric-positive" id="enabledAccounts">0</span>
         </div>
         <div class="stat-icon normal">✅</div>
       </div>
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">状态异常</span>
-          <span class="value" style="color: var(--accent-red)" id="disabledAccounts">0</span>
+          <span class="value metric-negative" id="disabledAccounts">0</span>
         </div>
         <div class="stat-icon abnormal">⚠️</div>
       </div>
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">已选中</span>
-          <span class="value" style="color: var(--accent-purple)" id="selectedCount">0</span>
+          <span class="value metric-accent" id="selectedCount">0</span>
         </div>
         <div class="stat-icon selected">📋</div>
       </div>
     </section>
 
     <div id="accountsTabContent">
-      <div class="toolbar" style="padding: 16px; gap: 16px; flex-wrap: wrap;">
+      <div class="toolbar toolbar-compact">
         <div class="filter-tabs" id="platformFilters"></div>
 
-        <div
-          style="flex: 1; display: flex; gap: 12px; align-items: center; justify-content: flex-end; flex-wrap: wrap;">
-          <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+        <div class="toolbar-actions toolbar-actions-spread">
+          <div class="inline-actions">
             <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">📤 导入</button>
             <button class="btn btn-outline" onclick="exportAccounts()">📥 导出</button>
             <input type="file" id="importFile" accept=".json" style="display: none" onchange="importAccounts(event)" />
           </div>
-          <div style="width: 1px; height: 24px; background: var(--border-highlight); margin: 0 4px;"></div>
-          <div style="display: flex; gap: 8px;">
+          <div class="toolbar-divider"></div>
+          <div class="inline-actions">
             <button class="btn btn-outline" id="batchDeleteBtn" disabled onclick="batchDeleteAccounts()">🗑️
               批量删除</button>
             <button class="btn btn-danger-outline" onclick="clearAbnormalAccounts()">🧹 清空异常</button>
           </div>
-          <button class="btn btn-primary" style="background: var(--primary); border: none; padding: 8px 20px;"
-            onclick="openModal()">+ 添加账号</button>
+          <button class="btn btn-primary" onclick="openModal()">+ 添加账号</button>
         </div>
       </div>
 
       <div class="content-card">
         <div id="accountsList">
-          <div class="empty-state"
-            style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: var(--text-secondary);">
-            <span style="font-size: 3rem; margin-bottom: 16px;">📂</span>
+          <div class="empty-state empty-state-panel">
+            <span class="empty-state-mark">AC</span>
             <p>暂无账号数据</p>
           </div>
         </div>
       </div>
 
-      <div
-        style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px; color: var(--text-secondary); font-size: 0.9rem;">
+      <div class="pagination-shell">
         <div id="paginationInfo">共 0 条记录，第 1/1 页</div>
-        <div style="display: flex; gap: 12px; align-items: center;">
-          <select class="form-input" style="width: auto; margin: 0;" onchange="updatePageSize(this.value)">
+        <div class="inline-actions">
+          <select class="form-input compact-select" onchange="updatePageSize(this.value)">
             <option value="20">20 条/页</option>
             <option value="50">50 条/页</option>
             <option value="100">100 条/页</option>
           </select>
-          <div style="display: flex; gap: 4px;" id="paginationControls">
-            <button class="btn btn-outline" style="padding: 4px 10px;">首页</button>
-            <button class="btn btn-outline" style="padding: 4px 10px;">上一页</button>
-            <button class="btn btn-primary"
-              style="padding: 4px 10px; min-width: 32px; justify-content: center;">1</button>
-            <button class="btn btn-outline" style="padding: 4px 10px;">下一页</button>
-            <button class="btn btn-outline" style="padding: 4px 10px;">末页</button>
+          <div class="pagination-controls" id="paginationControls">
+            <button class="btn btn-outline btn-page">首页</button>
+            <button class="btn btn-outline btn-page">上一页</button>
+            <button class="btn btn-primary btn-page btn-page-current">1</button>
+            <button class="btn btn-outline btn-page">下一页</button>
+            <button class="btn btn-outline btn-page">末页</button>
           </div>
         </div>
       </div>

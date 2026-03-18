@@ -979,7 +979,7 @@ func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Messag
 			if input == "" {
 				input = "{}"
 			}
-			key := sideEffectToolDedupKey(nameKey, input)
+			key := sideEffectToolDedupKey(nameKey, input, h.workdir)
 			if key == "" {
 				continue
 			}
@@ -1215,18 +1215,39 @@ func (h *streamHandler) handleDirectFinalSSEEvent(msg upstream.SSEMessage) bool 
 		}
 
 		h.mu.Lock()
-		if index > h.blockIndex {
-			h.blockIndex = index
-		}
-		switch blockType {
-		case "thinking":
-			h.activeThinkingSSEIndex = index
-			h.activeBlockType = "thinking"
-		case "text":
-			h.activeTextSSEIndex = index
-			h.activeBlockType = "text"
-		}
 		h.mu.Unlock()
+		if !h.isStream && (blockType == "thinking" || blockType == "text") {
+			ensuredIdx := h.ensureBlock(blockType)
+			if ensuredIdx >= 0 {
+				h.mu.Lock()
+				if index > h.blockIndex {
+					h.blockIndex = index
+				}
+				switch blockType {
+				case "thinking":
+					h.activeThinkingSSEIndex = index
+					h.activeBlockType = "thinking"
+				case "text":
+					h.activeTextSSEIndex = index
+					h.activeBlockType = "text"
+				}
+				h.mu.Unlock()
+			}
+		} else {
+			h.mu.Lock()
+			if index > h.blockIndex {
+				h.blockIndex = index
+			}
+			switch blockType {
+			case "thinking":
+				h.activeThinkingSSEIndex = index
+				h.activeBlockType = "thinking"
+			case "text":
+				h.activeTextSSEIndex = index
+				h.activeBlockType = "text"
+			}
+			h.mu.Unlock()
+		}
 
 		h.writeUpstreamEventSSE(msg)
 		return true
@@ -1274,11 +1295,38 @@ func (h *streamHandler) handleDirectFinalSSEEvent(msg upstream.SSEMessage) bool 
 			if text != "" {
 				h.markTextOutput()
 				h.addOutputTokens(text)
+				if !h.isStream {
+					h.mu.Lock()
+					internalIdx := h.activeTextBlockIndex
+					if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
+						builder, ok := h.textBlockBuilders[internalIdx]
+						if !ok {
+							builder = perf.AcquireStringBuilder()
+							h.textBlockBuilders[internalIdx] = builder
+						}
+						builder.WriteString(text)
+					}
+					h.responseText.WriteString(text)
+					h.mu.Unlock()
+				}
 			}
 		case "thinking_delta":
 			text, _ := delta["thinking"].(string)
 			if text != "" && h.isStream {
 				h.addThinkingTokens(text)
+			}
+			if text != "" && !h.isStream {
+				h.mu.Lock()
+				internalIdx := h.activeThinkingBlockIndex
+				if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
+					builder, ok := h.thinkingBlockBuilders[internalIdx]
+					if !ok {
+						builder = perf.AcquireStringBuilder()
+						h.thinkingBlockBuilders[internalIdx] = builder
+					}
+					builder.WriteString(text)
+				}
+				h.mu.Unlock()
 			}
 		}
 
@@ -2671,7 +2719,7 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 		return false
 	}
 
-	_, key, ok := evaluateToolCallInput(call.name, call.input)
+	_, key, ok := evaluateToolCallInput(call.name, call.input, h.workdir)
 	if !ok {
 		h.mu.Lock()
 		h.suppressedToolCalls++
@@ -2715,7 +2763,7 @@ func maskDedupKey(key string) string {
 	return string(out)
 }
 
-func sideEffectToolDedupKey(name, input string) string {
+func sideEffectToolDedupKey(name, input string, workdir ...string) string {
 	nameKey := normalizeToolNameKey(name)
 	if !isSideEffectToolName(nameKey) {
 		return ""
@@ -2724,7 +2772,7 @@ func sideEffectToolDedupKey(name, input string) string {
 	if !ok {
 		return ""
 	}
-	return sideEffectToolDedupKeyFromFields(nameKey, fields)
+	return sideEffectToolDedupKeyFromFields(nameKey, fields, firstOptionalString(workdir...))
 }
 
 func fallbackToolCallID(toolName, input string) string {
@@ -2758,7 +2806,7 @@ func hasRequiredToolInput(name, input string) bool {
 	return hasRequiredToolInputFields(nameKey, fields)
 }
 
-func evaluateToolCallInput(name, input string) (nameKey string, dedupKey string, ok bool) {
+func evaluateToolCallInput(name, input string, workdir ...string) (nameKey string, dedupKey string, ok bool) {
 	nameKey = normalizeToolNameKey(name)
 	if nameKey == "" {
 		return "", "", false
@@ -2773,7 +2821,14 @@ func evaluateToolCallInput(name, input string) (nameKey string, dedupKey string,
 	if !hasRequiredToolInputFields(nameKey, fields) {
 		return nameKey, "", false
 	}
-	return nameKey, sideEffectToolDedupKeyFromFields(nameKey, fields), true
+	return nameKey, sideEffectToolDedupKeyFromFields(nameKey, fields, firstOptionalString(workdir...)), true
+}
+
+func firstOptionalString(values ...string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 func normalizeToolNameKey(name string) string {
@@ -2871,7 +2926,7 @@ func canonicalToolRawValue(raw json.RawMessage) string {
 	return string(normalized)
 }
 
-func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields) string {
+func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields, workdir string) string {
 	if !isSideEffectToolName(nameKey) {
 		return ""
 	}
@@ -2890,7 +2945,7 @@ func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields) st
 		}
 		return "bash:" + command
 	case "write":
-		path := resolveToolPath(fields.FilePath, fields.Path)
+		path := canonicalToolPathForDedup(resolveToolPath(fields.FilePath, fields.Path), workdir)
 		if path == "" {
 			return ""
 		}
@@ -2899,7 +2954,7 @@ func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields) st
 		}
 		return "write:" + path + "\x00" + canonicalToolRawValue(fields.Content)
 	case "edit":
-		path := resolveToolPath(fields.FilePath, fields.Path)
+		path := canonicalToolPathForDedup(resolveToolPath(fields.FilePath, fields.Path), workdir)
 		if path == "" {
 			return ""
 		}
@@ -2910,6 +2965,28 @@ func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields) st
 	default:
 		return ""
 	}
+}
+
+func canonicalToolPathForDedup(pathValue, workdir string) string {
+	pathValue = strings.TrimSpace(pathValue)
+	if pathValue == "" {
+		return ""
+	}
+	cleanPath := filepath.Clean(pathValue)
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return filepath.ToSlash(cleanPath)
+	}
+	cleanWorkdir := filepath.Clean(workdir)
+	if filepath.IsAbs(cleanPath) {
+		if sameOrWithinPath(cleanPath, cleanWorkdir) {
+			if rel, err := filepath.Rel(cleanWorkdir, cleanPath); err == nil {
+				return filepath.ToSlash(filepath.Clean(rel))
+			}
+		}
+		return filepath.ToSlash(cleanPath)
+	}
+	return filepath.ToSlash(filepath.Clean(cleanPath))
 }
 
 func isReadOnlyBashCommand(command string, isReadOnly, isRisky *bool) bool {

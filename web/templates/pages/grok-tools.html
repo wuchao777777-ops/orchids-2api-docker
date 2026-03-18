@@ -7,9 +7,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="{{.AdminPath}}/css/main.css">
-  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-mono/style.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js"></script>
   <style>
     .main-content.grok-tools-page {
       padding-top: 16px;
@@ -2464,6 +2461,581 @@
     .grok-tools-page #grokVoiceSection .voice-debug {
       display: none;
     }
+    .grok-tools-page {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      background: transparent;
+      color: var(--text-main);
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    .grok-tools-page .header-section {
+      padding: 0;
+      margin-bottom: 0;
+    }
+
+    .grok-tools-page .header-section h1 {
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .header-section p {
+      color: var(--text-secondary);
+      max-width: 860px;
+      line-height: 1.65;
+    }
+
+    .grok-tools-overview {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.95fr);
+      gap: 16px;
+    }
+
+    .grok-tools-overview .page-intro-card {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .grok-tools-overview .page-intro-card-primary::before {
+      content: "";
+      position: absolute;
+      inset: auto auto -42px -18px;
+      width: 160px;
+      height: 160px;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(125, 211, 252, 0.12), transparent 68%);
+      pointer-events: none;
+    }
+
+    .grok-tools-signal-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .grok-tools-signal {
+      position: relative;
+      z-index: 1;
+      min-width: 0;
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(6px);
+    }
+
+    .grok-tools-signal-label {
+      margin-bottom: 8px;
+      color: var(--text-secondary);
+      font-size: 0.78rem;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .grok-tools-signal-value {
+      color: var(--text-main);
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .grok-tools-signal-note {
+      margin-top: 6px;
+      color: var(--text-secondary);
+      font-size: 0.84rem;
+      line-height: 1.55;
+    }
+
+    .grok-tools-page .grok-function-card {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)),
+        rgba(15, 19, 24, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 24px;
+      box-shadow: var(--shadow-sm);
+      padding: 18px;
+    }
+
+    .grok-tools-page .platform-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      margin-bottom: 16px !important;
+    }
+
+    .grok-tools-page .platform-tabs .tab-item {
+      min-width: 92px;
+      padding: 10px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+    }
+
+    .grok-tools-page .platform-tabs .tab-item:hover {
+      color: var(--text-main);
+      border-color: rgba(125, 211, 252, 0.24);
+      background: rgba(125, 211, 252, 0.08);
+    }
+
+    .grok-tools-page .platform-tabs .tab-item.active {
+      background: linear-gradient(135deg, var(--primary), #b6f86a);
+      border-color: transparent;
+      color: #10150f;
+      box-shadow: 0 10px 24px rgba(215, 255, 100, 0.18);
+    }
+
+    .grok-tools-page .grok-panel,
+    .grok-tools-page .chat-sidebar,
+    .grok-tools-page .chat-shell,
+    .grok-tools-page .imagine-card,
+    .grok-tools-page .video-card,
+    .grok-tools-page .voice-card {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.018)),
+        rgba(13, 17, 22, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .grok-tools-page .grok-panel h3,
+    .grok-tools-page .card-title,
+    .grok-tools-page .function-title,
+    .grok-tools-page .chat-title-text,
+    .grok-tools-page .sidebar-title {
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .grok-panel p,
+    .grok-tools-page .function-subtitle,
+    .grok-tools-page .chat-subtitle,
+    .grok-tools-page .voice-hint,
+    .grok-tools-page .empty-subtitle,
+    .grok-tools-page .imagine-meta,
+    .grok-tools-page .progress-meta,
+    .grok-tools-page .video-item-link,
+    .grok-tools-page .video-item-placeholder,
+    .grok-tools-page .meta-label,
+    .grok-tools-page .grok-kv span {
+      color: var(--text-secondary);
+    }
+
+    .grok-tools-page .sidebar-header,
+    .grok-tools-page .chat-title,
+    .grok-tools-page .status-header,
+    .grok-tools-page .voice-log-header,
+    .grok-tools-page .video-preview-header,
+    .grok-tools-page .status-header-row {
+      border-color: rgba(255, 255, 255, 0.08);
+    }
+
+    .grok-tools-page .function-divider {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .grok-tools-page .form-label,
+    .grok-tools-page .field-label,
+    .grok-tools-page .range-value {
+      color: var(--text-secondary);
+    }
+
+    .grok-tools-page .form-input,
+    .grok-tools-page textarea.form-input,
+    .grok-tools-page .composer-input,
+    .grok-tools-page .composer-textarea,
+    .grok-tools-page pre.form-input {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-main);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: none;
+    }
+
+    .grok-tools-page .form-input:focus,
+    .grok-tools-page .composer-input:focus-within,
+    .grok-tools-page .composer-textarea:focus {
+      border-color: rgba(215, 255, 100, 0.48);
+      box-shadow: 0 0 0 3px rgba(215, 255, 100, 0.12);
+      outline: none;
+    }
+
+    .grok-tools-page .btn-outline,
+    .grok-tools-page .btn-danger-outline {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-main);
+      border-color: rgba(255, 255, 255, 0.08);
+    }
+
+    .grok-tools-page .btn-outline:hover,
+    .grok-tools-page .btn-danger-outline:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .grok-tools-page .btn-primary {
+      background: linear-gradient(135deg, var(--primary), #b6f86a);
+      border-color: transparent;
+      color: #10150f;
+    }
+
+    .grok-tools-page .grok-kv,
+    .grok-tools-page .meta-item,
+    .grok-tools-page .empty-state,
+    .grok-tools-page .video-empty,
+    .grok-tools-page .imagine-empty,
+    .grok-tools-page .video-item,
+    .grok-tools-page .voice-log,
+    .grok-tools-page .audio-root,
+    .grok-tools-page .cache-list table,
+    .grok-tools-page .video-stage,
+    .grok-tools-page .preview-stage {
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .grok-kv strong,
+    .grok-tools-page .meta-value,
+    .grok-tools-page .empty-title,
+    .grok-tools-page .selected-count {
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .message-bubble,
+    .grok-tools-page .message-row.user .message-bubble {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .message-row.user .message-bubble {
+      background: linear-gradient(135deg, rgba(215, 255, 100, 0.16), rgba(125, 211, 252, 0.12));
+      border-color: rgba(215, 255, 100, 0.18);
+    }
+
+    .grok-tools-page .status-text {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-secondary);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .grok-tools-page .status-text.connected {
+      color: #8df3cc;
+      background: rgba(16, 185, 129, 0.14);
+    }
+
+    .grok-tools-page .status-text.connecting {
+      color: #facc15;
+      background: rgba(250, 204, 21, 0.14);
+    }
+
+    .grok-tools-page .status-text.error {
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.14);
+    }
+
+    .grok-tools-page .composer-shell,
+    .grok-tools-page .composer-input {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.015)),
+        rgba(13, 17, 22, 0.96);
+      border-color: rgba(255, 255, 255, 0.08);
+      box-shadow: none;
+    }
+
+    .grok-tools-page .composer-textarea {
+      background: transparent;
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .composer-textarea::placeholder {
+      color: var(--text-secondary);
+    }
+
+    .grok-tools-page .model-chip {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .model-dropdown {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)),
+        rgba(13, 17, 22, 0.98);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.32);
+    }
+
+    .grok-tools-page .model-option {
+      color: var(--text-main);
+      background: transparent;
+    }
+
+    .grok-tools-page .model-option:hover,
+    .grok-tools-page .model-option.active {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .grok-tools-page .tag {
+      background: rgba(125, 211, 252, 0.12);
+      color: #d8f3ff;
+      border: 1px solid rgba(125, 211, 252, 0.16);
+    }
+
+    .grok-tools-page .progress-bar {
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .grok-tools-page .progress-fill {
+      background: linear-gradient(90deg, #b6f86a, #7dd3fc);
+    }
+
+    .grok-tools-page .cache-list {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      overflow: auto;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .grok-tools-page .cache-list table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .grok-tools-page .cache-list th,
+    .grok-tools-page .cache-list td {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .cache-list th {
+      color: var(--text-secondary);
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .grok-tools-page #grokImagineSection .grok-panel.imagine-card,
+    .grok-tools-page #grokVideoSection .video-card,
+    .grok-tools-page #grokVoiceSection .voice-card {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)),
+        rgba(13, 17, 22, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 20px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .grok-tools-page #grokImagineSection .waterfall-item,
+    .grok-tools-page #grokVideoSection .video-item,
+    .grok-tools-page #grokVoiceSection .meta-item,
+    .grok-tools-page #grokVoiceSection .voice-log,
+    .grok-tools-page #grokVoiceSection .audio-root,
+    .grok-tools-page #grokVideoSection .video-empty,
+    .grok-tools-page #grokVideoSection .video-stage,
+    .grok-tools-page #grokImagineSection .imagine-empty {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      box-shadow: none;
+    }
+
+    .grok-tools-page #grokImagineSection .waterfall-item {
+      border-radius: 18px;
+      overflow: hidden;
+    }
+
+    .grok-tools-page #grokImagineSection .waterfall-item:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 14px 28px rgba(0, 0, 0, 0.18);
+    }
+
+    .grok-tools-page #grokImagineSection .waterfall-meta,
+    .grok-tools-page #grokImagineSection .imagine-meta,
+    .grok-tools-page #grokVideoSection .video-item-bar,
+    .grok-tools-page #grokVideoSection .video-item-title,
+    .grok-tools-page #grokVideoSection .video-item-link,
+    .grok-tools-page #grokVideoSection .video-item-placeholder,
+    .grok-tools-page #grokVoiceSection .meta-label,
+    .grok-tools-page #grokVoiceSection .voice-hint {
+      color: var(--text-secondary);
+    }
+
+    .grok-tools-page #grokImagineSection .empty-title,
+    .grok-tools-page #grokVideoSection .video-card .card-title,
+    .grok-tools-page #grokVoiceSection .card-title,
+    .grok-tools-page #grokVoiceSection .meta-value {
+      color: var(--text-main);
+    }
+
+    .grok-tools-page #grokImagineSection .image-status,
+    .grok-tools-page #grokImagineSection .selected-count {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .grok-tools-page #grokImagineSection .image-status.done {
+      background: rgba(16, 185, 129, 0.14);
+      color: #8df3cc;
+      border-color: rgba(16, 185, 129, 0.2);
+    }
+
+    .grok-tools-page #grokImagineSection .image-status.running {
+      background: rgba(250, 204, 21, 0.14);
+      color: #facc15;
+      border-color: rgba(250, 204, 21, 0.18);
+    }
+
+    .grok-tools-page #grokImagineSection .image-checkbox {
+      background: rgba(16, 21, 27, 0.92);
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    .grok-tools-page #grokImagineSection .toggle-row,
+    .grok-tools-page #grokImagineSection .mode-switch {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      box-shadow: none;
+    }
+
+    .grok-tools-page #grokImagineSection .toggle-row .toggle-title,
+    .grok-tools-page #grokImagineSection .toggle-row .toggle-hint,
+    .grok-tools-page #grokImagineSection .mode-switch button,
+    .grok-tools-page #grokImagineSection .mode-switch .btn {
+      color: var(--text-main);
+    }
+
+    .grok-tools-page #grokImagineSection .mode-switch button,
+    .grok-tools-page #grokImagineSection .mode-switch .btn {
+      background: transparent;
+      border-color: transparent;
+    }
+
+    .grok-tools-page #grokImagineSection .mode-switch button.active,
+    .grok-tools-page #grokImagineSection .mode-switch .btn.active {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+    }
+
+    .grok-tools-page #grokImagineSection .imagine-mode-item {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .grok-tools-page #grokImagineSection .imagine-mode-item .mode-label {
+      margin-bottom: 0;
+    }
+
+    .grok-tools-page #grokImagineSection .mode-switch {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      width: 100%;
+      gap: 6px;
+      padding: 6px;
+      border-radius: 14px;
+    }
+
+    .grok-tools-page #grokImagineSection .mode-btn {
+      width: 100%;
+      padding: 8px 0;
+      text-align: center;
+      border-radius: 10px;
+    }
+
+    .grok-tools-page #grokImagineSection .toggle-track {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .grok-tools-page #grokImagineSection .toggle input:checked + .toggle-track {
+      background: linear-gradient(135deg, var(--primary), #b6f86a);
+    }
+
+    .grok-tools-page #grokImagineSection .waterfall-item.selected .image-checkbox {
+      background: linear-gradient(135deg, var(--primary), #b6f86a);
+      border-color: transparent;
+      color: #10150f;
+    }
+
+    .grok-tools-page #grokVideoSection .video-stage {
+      min-height: 240px;
+    }
+
+    .grok-tools-page #grokVideoSection .video-item-body,
+    .grok-tools-page #grokVideoSection .video-item video {
+      background: #0a0d11;
+      border-radius: 12px;
+    }
+
+    .grok-tools-page #grokVideoSection .video-item-actions .btn {
+      border-color: rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .grok-tools-page #grokVoiceSection .visualizer {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .grok-tools-page #grokVoiceSection .visualizer .bar {
+      background: linear-gradient(180deg, #b6f86a, #7dd3fc);
+      opacity: 0.9;
+    }
+
+    .grok-tools-page #grokVoiceSection .range-input::-webkit-slider-thumb {
+      background: #b6f86a;
+    }
+
+    .grok-tools-page #grokVoiceSection .range-input::-webkit-slider-runnable-track {
+      background: linear-gradient(90deg, #b6f86a 0%, #b6f86a var(--range-progress, 50%), rgba(255, 255, 255, 0.12) var(--range-progress, 50%), rgba(255, 255, 255, 0.12) 100%);
+    }
+
+    .grok-tools-page #grokVoiceSection .range-input::-moz-range-thumb {
+      background: #b6f86a;
+    }
+
+    .grok-tools-page #grokVoiceSection .range-input::-moz-range-track {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .grok-tools-page #grokVoiceSection .range-input::-moz-range-progress {
+      background: #b6f86a;
+    }
+
+    .grok-tools-page select option,
+    .grok-tools-page select optgroup {
+      color: var(--text-main);
+      background: #10151b;
+    }
+
+    .grok-tools-page .sidebar-list,
+    .grok-tools-page .voice-log {
+      scrollbar-color: rgba(125, 211, 252, 0.35) transparent;
+    }
+
+    @media (max-width: 1100px) {
+      .grok-tools-overview {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .grok-tools-signal-list {
+        grid-template-columns: 1fr;
+      }
+
+      .grok-tools-page .platform-tabs .tab-item {
+        flex: 1 1 calc(50% - 8px);
+      }
+    }
   </style>
 </head>
 
@@ -2473,7 +3045,36 @@
   <main class="main-content grok-tools-page">
     <section class="header-section">
       <h1>Grok 工具</h1>
-      <p>把 Grok 的功能玩法统一收进后台页签，集中管理 Imagine、Video、Voice 与缓存。</p>
+      <p>把 Grok 的对话、生成、语音和缓存能力收进一套统一控制台，让调试、切换和排障都在同一个工作台里完成。</p>
+    </section>
+
+    <section class="grok-tools-overview">
+      <article class="page-intro-card page-intro-card-primary">
+        <div class="page-intro-kicker">Unified Grok Workspace</div>
+        <h2>像管理一个产品面板一样管理 Grok 能力</h2>
+        <p>这里不只是一个工具入口集合。聊天、图片、视频、语音和缓存被组织成连续的操作链路，适合在同一会话里快速验证模型行为、追踪状态并保留必要的运行上下文。</p>
+        <div class="grok-tools-signal-list">
+          <div class="grok-tools-signal">
+            <div class="grok-tools-signal-label">Chat First</div>
+            <div class="grok-tools-signal-value">先对话，再延伸到生成</div>
+            <div class="grok-tools-signal-note">首屏优先保留会话工作台，适合快速确认可用模型、提示词和工具行为。</div>
+          </div>
+          <div class="grok-tools-signal">
+            <div class="grok-tools-signal-label">On Demand</div>
+            <div class="grok-tools-signal-value">Imagine / Cache 按需加载</div>
+            <div class="grok-tools-signal-note">较重的模块延后加载，减少进入页面时的等待感。</div>
+          </div>
+        </div>
+      </article>
+      <aside class="page-intro-card">
+        <div class="page-intro-meta">Workflow Notes</div>
+        <h2>建议的使用节奏</h2>
+        <ul class="page-checklist">
+          <li>先在 Chat 里确认模型、系统提示词和输出风格。</li>
+          <li>再切到 Imagine / Video，把已验证的提示词迁移为生成任务。</li>
+          <li>Voice 适合做连接态检查，Cache 适合做清理与诊断收尾。</li>
+        </ul>
+      </aside>
     </section>
 
     <div class="content-card grok-function-card" style="padding: 16px;">
@@ -2696,8 +3297,8 @@
               <span id="imagineStatus" class="status-text">未连接</span>
             </div>
             <div class="meta-grid" style="margin-bottom:16px;">
-              <div class="meta-item">
-                <div class="meta-label">连接模式</div>
+              <div class="meta-item imagine-mode-item">
+                <div class="meta-label mode-label">连接模式</div>
                 <div class="mode-switch" role="group" aria-label="Connection mode">
                   <button class="mode-btn active" data-imagine-mode="auto" type="button">Auto</button>
                   <button class="mode-btn" data-imagine-mode="ws" type="button">WS</button>

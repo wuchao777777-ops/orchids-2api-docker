@@ -645,9 +645,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		toolGateMessage = buildToolGateMessage(req.Messages, true)
 	}
 	if lastUserIsToolResultFollowup(req.Messages) {
-		if isPassthroughRequest && !isPuterRequest {
+		if isPassthroughRequest {
 			if h.config.DebugEnabled {
-				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest)
+				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest, "puter", isPuterRequest)
 			}
 		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
 			if h.config.DebugEnabled {

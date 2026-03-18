@@ -306,19 +306,8 @@ func buildSystemPrompt(system []prompt.SystemItem, workdir string, tools []inter
 }
 
 func buildBoltToolPrompt(workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
-	var parts []string
-
 	workdir = strings.TrimSpace(workdir)
-	if workdir != "" {
-		projectName := filepath.Base(filepath.Clean(workdir))
-		if projectName != "" && projectName != "." && projectName != string(filepath.Separator) {
-			parts = append(parts, "当前项目目录名: "+projectName)
-		}
-		parts = append(parts, "当前项目真实工作目录(仅用于回答用户询问“项目目录地址/当前路径/workspace 在哪里”这类问题): `"+workdir+"`")
-		parts = append(parts, "如果用户问项目目录地址、当前项目路径或 workspace 路径，直接回答上面的真实工作目录；不要回答 `/tmp/cc-agent/...`、`/mnt/...`、`~/...` 这类沙箱占位路径。")
-		parts = append(parts, "把项目根目录视为 `.`。Read/Write/Edit/Glob/Grep 的路径统一优先使用相对路径；如果要看项目根目录，直接用 `.`。")
-		parts = append(parts, "Bash 默认就在项目根目录执行，只写项目内的相对路径，不要拼接 `d:\\...`、`C:\\...`、`/mnt/...`、`~/...` 或 `/tmp/cc-agent/...`。")
-	}
+	parts := append([]string{}, buildBoltWorkspacePrompt(workdir)...)
 
 	if noTools {
 		parts = append(parts, "这次回合不要发起任何工具调用，只基于已有上下文和已返回的工具结果直接回答。")
@@ -331,28 +320,61 @@ func buildBoltToolPrompt(workdir string, tools []interface{}, noTools bool, mess
 		return strings.Join(parts, "\n")
 	}
 
-	var toolHints []string
-	for _, name := range toolNames {
-		toolHints = append(toolHints, boltToolHint(name))
-	}
-
-	parts = append(parts, "可用工具: "+strings.Join(toolHints, "; "))
-	parts = append(parts, "需要工具时，输出纯 JSON，不要加解释、不要加前后缀、不要说“让我先看看项目文件”。")
-	parts = append(parts, "不要解释当前运行在什么系统或沙箱；如果需要确认目录或文件，直接调用工具。")
-	parts = append(parts, "如果某次工具结果提示路径不存在，不要据此断言项目为空；应优先改用 `.`、README.md、go.mod、package.json 等项目内相对路径继续调用工具。")
-	if invalidPath := detectRecentInvalidBoltHistoryPath(messages); invalidPath != "" {
-		parts = append(parts, "检测到历史里刚刚有一次无效的外部路径工具调用 `"+invalidPath+"`，它不是当前项目目录；把那次失败视为错误示例，不要复用这个路径，也不要基于它做同路径变体。")
-		if strings.TrimSpace(workdir) != "" {
-			parts = append(parts, "真实项目目录是 `"+workdir+"`；如果用户追问项目目录地址，直接回答这个真实工作目录。")
-		}
-		parts = append(parts, "如果需要重新检查项目，下一次必须改用项目根目录 `.` 或 README.md、go.mod、package.json 这类项目内相对路径。")
-		parts = append(parts, "在至少成功查看一次 `.`、README.md、go.mod、package.json 等项目内路径之前，不要回答“项目为空”“没有文件”或“目录是空的”。")
-	}
+	parts = append(parts, buildBoltToolUsagePrompt(toolNames)...)
+	parts = append(parts, buildBoltHistoryRecoveryPrompt(workdir, messages)...)
 	parts = append(parts, "单个工具调用格式: {\"tool\":\"Read\",\"parameters\":{\"file_path\":\"README.md\"}}")
 	parts = append(parts, "多个工具调用格式: {\"tool_calls\":[{\"function\":\"Glob\",\"parameters\":{\"path\":\".\",\"pattern\":\"*.go\"}},{\"function\":\"Read\",\"parameters\":{\"file_path\":\"README.md\"}}]}")
 	parts = append(parts, "拿到工具结果后，继续基于结果回答或发起下一步工具调用，不要重复已经完成的同一调用。")
 
 	return strings.Join(parts, "\n")
+}
+
+func buildBoltWorkspacePrompt(workdir string) []string {
+	if strings.TrimSpace(workdir) == "" {
+		return nil
+	}
+
+	parts := make([]string, 0, 5)
+	projectName := filepath.Base(filepath.Clean(workdir))
+	if projectName != "" && projectName != "." && projectName != string(filepath.Separator) {
+		parts = append(parts, "当前项目目录名: "+projectName)
+	}
+	parts = append(parts, "当前项目真实工作目录(仅用于回答用户询问“项目目录地址/当前路径/workspace 在哪里”这类问题): `"+workdir+"`")
+	parts = append(parts, "如果用户问项目目录地址、当前项目路径或 workspace 路径，直接回答上面的真实工作目录；不要回答 `/tmp/cc-agent/...`、`/mnt/...`、`~/...` 这类沙箱占位路径。")
+	parts = append(parts, "把项目根目录视为 `.`。Read/Write/Edit/Glob/Grep 的路径统一优先使用相对路径；如果要看项目根目录，直接用 `.`。")
+	parts = append(parts, "Bash 默认就在项目根目录执行，只写项目内的相对路径，不要拼接 `d:\\...`、`C:\\...`、`/mnt/...`、`~/...` 或 `/tmp/cc-agent/...`。")
+	return parts
+}
+
+func buildBoltToolUsagePrompt(toolNames []string) []string {
+	toolHints := make([]string, 0, len(toolNames))
+	for _, name := range toolNames {
+		toolHints = append(toolHints, boltToolHint(name))
+	}
+
+	return []string{
+		"可用工具: " + strings.Join(toolHints, "; "),
+		"需要工具时，输出纯 JSON，不要加解释、不要加前后缀、不要说“让我先看看项目文件”。",
+		"不要解释当前运行在什么系统或沙箱；如果需要确认目录或文件，直接调用工具。",
+		"如果某次工具结果提示路径不存在，不要据此断言项目为空；应优先改用 `.`、README.md、go.mod、package.json 等项目内相对路径继续调用工具。",
+	}
+}
+
+func buildBoltHistoryRecoveryPrompt(workdir string, messages []prompt.Message) []string {
+	invalidPath := detectRecentInvalidBoltHistoryPath(messages)
+	if invalidPath == "" {
+		return nil
+	}
+
+	parts := []string{
+		"检测到历史里刚刚有一次无效的外部路径工具调用 `" + invalidPath + "`，它不是当前项目目录；把那次失败视为错误示例，不要复用这个路径，也不要基于它做同路径变体。",
+	}
+	if strings.TrimSpace(workdir) != "" {
+		parts = append(parts, "真实项目目录是 `"+workdir+"`；如果用户追问项目目录地址，直接回答这个真实工作目录。")
+	}
+	parts = append(parts, "如果需要重新检查项目，下一次必须改用项目根目录 `.` 或 README.md、go.mod、package.json 这类项目内相对路径。")
+	parts = append(parts, "在至少成功查看一次 `.`、README.md、go.mod、package.json 等项目内路径之前，不要回答“项目为空”“没有文件”或“目录是空的”。")
+	return parts
 }
 
 func detectRecentInvalidBoltHistoryPath(messages []prompt.Message) string {

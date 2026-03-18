@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -30,8 +31,11 @@ const (
 )
 
 var (
-	puterAPIURL     = defaultAPIURL
-	toolCallPattern = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
+	puterAPIURL         = defaultAPIURL
+	toolCallPattern     = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
+	tmpPathHintPattern  = regexp.MustCompile(`(?i)(/tmp/[^\s"'` + "`" + `]+)`)
+	unixPathHintPattern = regexp.MustCompile(`(?i)(/[^\s"'` + "`" + `]+)`)
+	winPathHintPattern  = regexp.MustCompile(`(?i)([a-z]:\\[^\r\n"'` + "`" + `]+)`)
 )
 
 type Client struct {
@@ -163,7 +167,7 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest) *Request {
 		TestMode:  false,
 		Method:    defaultMethod,
 		Args: RequestArgs{
-			Messages: convertMessages(req.Messages, buildSystemPrompt(req.System, req.Tools)),
+			Messages: convertMessages(req.Messages, buildSystemPrompt(req.System, req.Workdir, req.Tools, req.NoTools, req.Messages)),
 			Model:    modelID,
 			Stream:   true,
 		},
@@ -213,19 +217,129 @@ func driverForModel(modelID string) string {
 	}
 }
 
-func buildSystemPrompt(system []prompt.SystemItem, tools []interface{}) string {
-	parts := make([]string, 0, len(system)+2)
+func buildSystemPrompt(system []prompt.SystemItem, workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
+	parts := []string{}
+	if toolPrompt := buildPuterToolPrompt(workdir, tools, noTools, messages); toolPrompt != "" {
+		parts = append(parts, toolPrompt)
+	}
 	for _, item := range system {
 		if text := strings.TrimSpace(item.Text); text != "" {
 			parts = append(parts, text)
 		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func buildPuterToolPrompt(workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
+	parts := append([]string{}, buildPuterWorkspacePrompt(workdir)...)
+	if noTools {
+		parts = append(parts, "This turn must not make any tool calls. Answer directly using the existing context and prior tool results.")
+		return strings.Join(parts, "\n")
 	}
 
 	toolPrompt := buildToolPrompt(tools)
 	if toolPrompt != "" {
 		parts = append(parts, toolPrompt)
 	}
+	parts = append(parts, buildPuterHistoryRecoveryPrompt(workdir, messages)...)
 	return strings.Join(parts, "\n\n")
+}
+
+func buildPuterWorkspacePrompt(workdir string) []string {
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return nil
+	}
+
+	parts := make([]string, 0, 5)
+	projectName := filepath.Base(filepath.Clean(workdir))
+	if projectName != "" && projectName != "." && projectName != string(filepath.Separator) {
+		parts = append(parts, "Current project directory name: "+projectName)
+	}
+	parts = append(parts, "The real local project working directory is `"+workdir+"`.")
+	parts = append(parts, "If the user asks for the project directory, current path, or workspace path, answer with that real working directory directly.")
+	parts = append(parts, "Treat the project root as `.` and prefer project-relative paths for Read, Write, Edit, Glob, Grep, and Bash.")
+	parts = append(parts, "Do not assume the project is empty just because a sandbox path like `/tmp/...`, `/mnt/...`, or `~/...` fails.")
+	return parts
+}
+
+func buildPuterHistoryRecoveryPrompt(workdir string, messages []prompt.Message) []string {
+	invalidPath := detectRecentPuterInvalidPath(messages)
+	if invalidPath == "" {
+		return nil
+	}
+
+	parts := []string{
+		"Recent history contains a failed external path access `" + invalidPath + "`. Treat it as a bad example and do not reuse that path.",
+	}
+	if strings.TrimSpace(workdir) != "" {
+		parts = append(parts, "The real project directory is `"+workdir+"`.")
+	}
+	parts = append(parts, "If you need to inspect the project again, retry with `.` or project-relative files such as `README.md`, `go.mod`, or `package.json`.")
+	return parts
+}
+
+func detectRecentPuterInvalidPath(messages []prompt.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		for _, block := range puterBlocks(messages[i]) {
+			if block.Type != "tool_result" {
+				continue
+			}
+			content := strings.TrimSpace(stringifyToolResult(block.Content))
+			if content == "" || !looksLikeMissingPath(content) {
+				continue
+			}
+			if path := extractRecentPathHint(content); path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+func looksLikeMissingPath(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"no such file or directory",
+		"cannot access",
+		"does not exist",
+		"path does not exist",
+		"enoent",
+		"not found",
+		"找不到指定的路径",
+		"系统找不到指定的路径",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractRecentPathHint(text string) string {
+	if text == "" {
+		return ""
+	}
+	for _, pattern := range []*regexp.Regexp{tmpPathHintPattern, unixPathHintPattern, winPathHintPattern} {
+		if matches := pattern.FindStringSubmatch(text); len(matches) > 1 {
+			return strings.TrimSpace(matches[1])
+		}
+	}
+	return ""
+}
+
+func puterBlocks(msg prompt.Message) []prompt.ContentBlock {
+	if msg.Content.IsString() {
+		text := strings.TrimSpace(msg.Content.GetText())
+		if text == "" {
+			return nil
+		}
+		return []prompt.ContentBlock{{Type: "text", Text: text}}
+	}
+	return msg.Content.GetBlocks()
 }
 
 func buildToolPrompt(tools []interface{}) string {

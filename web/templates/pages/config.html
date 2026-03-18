@@ -15,48 +15,59 @@
   <main class="main-content">
     <section class="header-section" id="configHeader">
       <h1>配置管理</h1>
-      <p>管理系统基础配置和 API Key</p>
+      <p>集中管理安全参数、缓存策略、代理网络和后台访问控制。</p>
+    </section>
+
+    <section class="page-intro-grid">
+      <article class="page-intro-card page-intro-card-primary">
+        <div class="page-intro-kicker">Control</div>
+        <h2>先管住入口，再优化运行细节</h2>
+        <p>基础配置区负责密码、管理 Token 和网络代理；API Key 区负责外部访问授权。建议先完成安全项，再调整缓存策略。</p>
+      </article>
+      <article class="page-intro-card">
+        <div class="page-intro-meta">What changes here</div>
+        <ul class="page-checklist">
+          <li>管理员密码与管理 Token</li>
+          <li>Token 缓存时效与内存占用</li>
+          <li>代理直连、旁路规则与接口访问</li>
+        </ul>
+      </article>
     </section>
 
     <div class="content-card">
       <!-- Tabs Navigation -->
-      <div id="configTabs" class="platform-tabs"
-        style="padding: 16px 24px 0; border-bottom: 1px solid var(--border-color);">
+      <div id="configTabs" class="platform-tabs config-tabs-shell">
         <button class="tab-item active" onclick="switchConfigTab('basic')">基础配置</button>
         <button class="tab-item" onclick="switchConfigTab('auth')">API Key 管理</button>
       </div>
 
       <!-- Configuration Sections -->
-      <div id="basicConfig" class="config-section" style="padding: 24px;">
+      <div id="basicConfig" class="config-section config-section-shell">
         <!-- Admin Settings -->
-        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; margin-bottom: 32px;">
+        <div class="config-grid config-grid-two">
           <div>
             <label class="form-label">管理员密码</label>
-            <div style="position: relative;">
+            <div class="input-wrapper">
               <input type="password" id="cfg_admin_pass" class="form-input" placeholder="留空则不修改">
-              <span
-                style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer; color: var(--text-secondary);"
-                onclick="togglePassword('cfg_admin_pass')">👁️</span>
+              <button type="button" class="btn-icon password-toggle" onclick="togglePassword('cfg_admin_pass')">••</button>
             </div>
           </div>
           <div>
             <label class="form-label">API 管理 Token</label>
-            <div style="position: relative;">
+            <div class="input-wrapper">
               <input type="password" id="cfg_admin_token" class="form-input" placeholder="用于调用管理接口">
-              <div
-                style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: flex; gap: 8px;">
-                <span style="cursor: pointer; color: var(--text-secondary);" onclick="togglePassword('cfg_admin_token')">👁️</span>
-                <span style="cursor: pointer; color: var(--text-secondary);" onclick="copyFieldValue('cfg_admin_token')">📋</span>
+              <div class="input-actions">
+                <button type="button" class="btn-icon" onclick="togglePassword('cfg_admin_token')">••</button>
+                <button type="button" class="btn-icon" onclick="copyFieldValue('cfg_admin_token')">CP</button>
               </div>
             </div>
           </div>
         </div>
 
         <!-- Token Usage Cache Config -->
-        <div
-          style="padding: 20px; background: rgba(139, 146, 168, 0.05); border: 1px solid var(--border-color); border-radius: 12px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <h3 style="font-size: 1rem; color: var(--text-main); margin: 0;">Token 用量缓存</h3>
+        <div class="settings-panel">
+          <div class="settings-panel-head">
+            <h3 class="settings-panel-title">Token 用量缓存</h3>
             <label class="toggle">
               <input type="checkbox" id="cfg_enable_token_cache" onchange="toggleCacheConfig(this.checked)">
               <span class="toggle-slider"></span>
@@ -64,7 +75,7 @@
           </div>
 
           <div id="cacheConfigDetails" style="display: none;">
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+            <div class="config-grid config-grid-two config-grid-gap-sm">
               <div>
                 <label class="form-label">缓存有效期</label>
                 <input type="hidden" id="cfg_token_cache_ttl" value="300">
@@ -79,7 +90,7 @@
                   <option value="604800">1 周</option>
                   <option value="custom">自定义</option>
                 </select>
-                <div id="cfg_token_cache_ttl_custom_wrap" style="display: none; margin-top: 12px;">
+                <div id="cfg_token_cache_ttl_custom_wrap" class="config-subsection" style="display: none;">
                   <label class="form-label">自定义 TTL (秒)</label>
                   <input type="number" id="cfg_token_cache_ttl_custom" class="form-input" min="1" value="300"
                     oninput="handleTokenCacheTTLCustomInput()">
@@ -96,54 +107,46 @@
               </div>
             </div>
 
-            <div style="padding: 12px; background: rgba(12, 14, 26, 0.5); border-radius: 8px;">
-              <div id="memoryEstTitle"
-                style="font-size: 0.85rem; color: var(--text-main); margin-bottom: 8px; font-weight: 600;">内存估算</div>
-              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align: center;">
-                <div
-                  style="padding: 8px; background: rgba(52, 211, 153, 0.05); border-radius: 6px; border: 1px solid rgba(52, 211, 153, 0.1);">
-                  <div style="font-size: 0.75rem; color: var(--text-secondary);">10 QPS</div>
-                  <div id="estLow" style="font-weight: bold; color: var(--accent-green);">~1.5MB</div>
+            <div class="estimate-panel">
+              <div id="memoryEstTitle" class="estimate-title">内存估算</div>
+              <div class="estimate-grid">
+                <div class="estimate-card estimate-card-green">
+                  <div class="estimate-caption">10 QPS</div>
+                  <div id="estLow" class="estimate-value estimate-value-green">~1.5MB</div>
                 </div>
-                <div
-                  style="padding: 8px; background: rgba(34, 211, 238, 0.05); border-radius: 6px; border: 1px solid rgba(34, 211, 238, 0.1);">
-                  <div style="font-size: 0.75rem; color: var(--text-secondary);">50 QPS</div>
-                  <div id="estMid" style="font-weight: bold; color: var(--accent-blue);">~7.5MB</div>
+                <div class="estimate-card estimate-card-blue">
+                  <div class="estimate-caption">50 QPS</div>
+                  <div id="estMid" class="estimate-value estimate-value-blue">~7.5MB</div>
                 </div>
-                <div
-                  style="padding: 8px; background: rgba(167, 139, 250, 0.05); border-radius: 6px; border: 1px solid rgba(167, 139, 250, 0.1);">
-                  <div style="font-size: 0.75rem; color: var(--text-secondary);">100 QPS</div>
-                  <div id="estHigh" style="font-weight: bold; color: var(--accent-purple);">~15MB</div>
+                <div class="estimate-card estimate-card-purple">
+                  <div class="estimate-caption">100 QPS</div>
+                  <div id="estHigh" class="estimate-value estimate-value-purple">~15MB</div>
                 </div>
               </div>
-              <div
-                style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 8px; display: flex; justify-content: space-between;">
+              <div class="estimate-meta">
                 <span>TTL: <span id="estTTLSeconds">300</span>s</span>
                 <span>系数: <span id="estStrategyMult">× 2</span></span>
               </div>
             </div>
 
-            <div style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
-              <div id="cacheStatsText" style="font-size: 0.85rem; color: var(--text-secondary);">正在统计缓存...</div>
-              <button class="btn btn-outline" style="padding: 4px 12px; font-size: 0.8rem;"
-                onclick="clearCache()">清空缓存</button>
+            <div class="settings-panel-foot">
+              <div id="cacheStatsText" class="meta-text">正在统计缓存...</div>
+              <button class="btn btn-outline btn-xs" onclick="clearCache()">清空缓存</button>
             </div>
           </div>
         </div>
 
         <!-- Proxy Config -->
-        <div
-          style="margin-top: 24px; padding: 20px; background: rgba(139, 146, 168, 0.05); border: 1px solid var(--border-color); border-radius: 12px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <h3 style="font-size: 1rem; color: var(--text-main); margin: 0;">代理配置</h3>
-              <span
-                style="font-size: 0.8rem; color: var(--accent-blue); background: rgba(34, 211, 238, 0.1); padding: 2px 6px; border-radius: 4px;">HTTP/HTTPS</span>
+        <div class="settings-panel settings-panel-spaced">
+          <div class="settings-panel-head">
+            <div class="inline-actions">
+              <h3 class="settings-panel-title">代理配置</h3>
+              <span class="mini-badge">HTTP/HTTPS</span>
             </div>
-            <span style="font-size: 0.8rem; color: var(--text-secondary);">留空表示直连</span>
+            <span class="meta-text meta-text-xs">留空表示直连</span>
           </div>
 
-          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 16px;">
+          <div class="config-grid config-grid-two config-grid-gap-sm">
             <div>
               <label class="form-label">HTTP 代理</label>
               <input type="text" id="cfg_proxy_http" class="form-input" placeholder="http://host:port">
@@ -158,11 +161,9 @@
             </div>
             <div>
               <label class="form-label">代理密码</label>
-              <div style="position: relative;">
+              <div class="input-wrapper">
                 <input type="password" id="cfg_proxy_pass" class="form-input" placeholder="可选">
-                <span
-                  style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer; color: var(--text-secondary);"
-                  onclick="togglePassword('cfg_proxy_pass')">👁️</span>
+                <button type="button" class="btn-icon password-toggle" onclick="togglePassword('cfg_proxy_pass')">••</button>
               </div>
             </div>
           </div>
@@ -174,19 +175,17 @@
         </div>
       </div>
 
-      <div id="authConfig" class="config-section" style="padding: 24px; display: none;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-          <h2 style="font-size: 1.25rem; font-weight: 700;">API Key 管理</h2>
+      <div id="authConfig" class="config-section config-section-shell" style="display: none;">
+        <div class="section-head">
+          <h2 class="section-title">API Key 管理</h2>
           <button class="btn btn-primary" onclick="openCreateKeyModal()">+ 创建 API Key</button>
         </div>
         <div id="keysList"></div>
       </div>
 
       <!-- Global Save Footer -->
-      <div
-        style="padding: 16px 24px; background: var(--bg-elevated); border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end;">
-        <button class="btn btn-primary" onclick="saveConfiguration()"
-          style="padding: 10px 48px; font-weight: 600;">保存配置</button>
+      <div class="save-footer">
+        <button class="btn btn-primary btn-save" onclick="saveConfiguration()">保存配置</button>
       </div>
     </div>
   </main>

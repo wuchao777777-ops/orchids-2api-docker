@@ -1,32 +1,40 @@
 <aside class="sidebar">
   <div class="sidebar-header">
-    <div class="logo">C</div>
-    <div class="title">CodeFreeMax</div>
+    <div class="logo">O</div>
+    <div>
+      <div class="title">Orchids Console</div>
+      <div class="sidebar-subtitle">Control center</div>
+    </div>
   </div>
   <ul class="sidebar-menu">
     <li class="sidebar-item">
       <a href="#" class="sidebar-link {{if eq .ActiveTab "accounts"}}active{{end}}" onclick="switchTab('accounts')">
-        <span>👤</span> 账号管理
+        <span class="nav-glyph">AC</span>
+        <span>账号管理</span>
       </a>
     </li>
     <li class="sidebar-item">
       <a href="#" class="sidebar-link {{if eq .ActiveTab "keys"}}active{{end}}" onclick="switchTab('keys')">
-        <span>⚙️</span> 配置管理
+        <span class="nav-glyph">CF</span>
+        <span>配置管理</span>
       </a>
     </li>
     <li class="sidebar-item">
       <a href="#" class="sidebar-link {{if eq .ActiveTab "models"}}active{{end}}" onclick="switchTab('models')">
-        <span>📁</span> 模型管理
+        <span class="nav-glyph">ML</span>
+        <span>模型管理</span>
       </a>
     </li>
     <li class="sidebar-item">
       <a href="#" class="sidebar-link {{if eq .ActiveTab "grok-tools"}}active{{end}}" onclick="switchTab('grok-tools')">
-        <span>🧠</span> Grok 工具
+        <span class="nav-glyph">GT</span>
+        <span>Grok 工具</span>
       </a>
     </li>
     <li class="sidebar-item">
       <a href="#" class="sidebar-link {{if eq .ActiveTab "tutorial"}}active{{end}}" onclick="switchTab('tutorial')">
-        <span>📖</span> 使用教程
+        <span class="nav-glyph">DOC</span>
+        <span>使用教程</span>
       </a>
     </li>
   </ul>
@@ -45,10 +53,9 @@
         <span class="footer-stat-value abnormal" id="footerAbnormal">{{.Stats.AbnormalAccounts}}</span>
       </div>
     </div>
-    <button class="btn"
-      style="width: 100%; margin-top: 16px; background: rgba(255,255,255,0.04); border: 1px solid var(--border-color); color: white; justify-content: center;"
-      onclick="logout()">
-      🚪 退出登录
+    <button class="btn btn-outline sidebar-logout" onclick="logout()">
+      <span class="nav-glyph nav-glyph-small">EX</span>
+      <span>退出登录</span>
     </button>
   </div>
 </aside>

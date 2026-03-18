@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -191,13 +191,6 @@ func (s *Store) seedModels() error {
 		{ID: "70", Channel: "Warp", ModelID: "warp-basic", Name: "Warp Basic", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 22},
 		{ID: "87", Channel: "Warp", ModelID: "claude-4-6-sonnet-high", Name: "Claude 4.6 Sonnet High (Warp)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 23},
 		{ID: "88", Channel: "Warp", ModelID: "claude-4-6-sonnet-max", Name: "Claude 4.6 Sonnet Max (Warp)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 24},
-		// Bolt 模型
-		// 这里采用保守收录策略：
-		// 只放前端主模型切换器明确出现、且当前 bundle 能稳定确认的模型。
-		// Growthbook 实验默认值、活动文案或其他隐含字符串不直接视为稳定公开模型。
-		{ID: "120", Channel: "Bolt", ModelID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6 (Bolt)", Status: ModelStatusAvailable, IsDefault: true, SortOrder: 0},
-		{ID: "121", Channel: "Bolt", ModelID: "claude-opus-4-6", Name: "Claude Opus 4.6 (Bolt)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 1},
-		{ID: "122", Channel: "Bolt", ModelID: "claude-opus-4-5-20251101", Name: "Claude Opus 4.5 (Bolt)", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 2},
 		// Puter 模型
 		// 这里采用“无前缀主模型”策略：
 		// 参考 puter2api 仓库附带的 model.json，只收录不带 provider 前缀的主模型，
@@ -224,126 +217,27 @@ func (s *Store) seedModels() error {
 		{ID: "106", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 18},
 	}
 
-	puterModelIDs := []string{
-		"gpt-5.1",
-		"gpt-5.1-codex",
-		"gpt-5.1-codex-mini",
-		"gpt-5.1-chat-latest",
-		"gpt-5-2025-08-07",
-		"gpt-5",
-		"gpt-5-mini-2025-08-07",
-		"gpt-5-mini",
-		"gpt-5-nano-2025-08-07",
-		"gpt-5-nano",
-		"gpt-5-chat-latest",
-		"gpt-4o",
-		"gpt-4o-mini",
-		"o1",
-		"o1-mini",
-		"o1-pro",
-		"o3",
-		"o3-mini",
-		"o4-mini",
-		"gpt-4.1",
-		"gpt-4.1-mini",
-		"gpt-4.1-nano",
-		"gpt-4.5-preview",
-		"claude-opus-4-5",
-		"claude-opus-4-5-latest",
-		"claude-opus-4.5",
-		"claude-haiku-4-5-20251001",
-		"claude-haiku-4.5",
-		"claude-haiku-4-5",
-		"claude-sonnet-4-5-20250929",
-		"claude-sonnet-4.5",
-		"claude-sonnet-4-5",
-		"claude-opus-4-1-20250805",
-		"claude-opus-4-1",
-		"claude-opus-4-20250514",
-		"claude-opus-4",
-		"claude-opus-4-latest",
-		"claude-sonnet-4-20250514",
-		"claude-sonnet-4",
-		"claude-sonnet-4-latest",
-		"claude-3-7-sonnet-20250219",
-		"claude-3-7-sonnet-latest",
-		"claude-3-5-sonnet-20241022",
-		"claude-3-5-sonnet-latest",
-		"claude-3-5-sonnet-20240620",
-		"claude-3-haiku-20240307",
-		"mistral-large-latest",
-		"mistral-medium-2508",
-		"mistral-medium-latest",
-		"mistral-medium",
-		"ministral-3b-2410",
-		"ministral-3b-latest",
-		"ministral-8b-2410",
-		"ministral-8b-latest",
-		"open-mistral-7b",
-		"mistral-tiny",
-		"mistral-tiny-2312",
-		"open-mistral-nemo",
-		"open-mistral-nemo-2407",
-		"mistral-tiny-2407",
-		"mistral-tiny-latest",
-		"pixtral-large-2411",
-		"pixtral-large-latest",
-		"mistral-large-pixtral-2411",
-		"codestral-2508",
-		"codestral-latest",
-		"devstral-small-2507",
-		"devstral-small-latest",
-		"pixtral-12b-2409",
-		"pixtral-12b",
-		"pixtral-12b-latest",
-		"mistral-small-2506",
-		"mistral-small-latest",
-		"magistral-medium-2509",
-		"magistral-medium-latest",
-		"magistral-small-2509",
-		"magistral-small-latest",
-		"mistral-moderation-2411",
-		"mistral-moderation-latest",
-		"mistral-ocr-2505",
-		"mistral-ocr-latest",
-		"grok-beta",
-		"grok-vision-beta",
-		"grok-3",
-		"grok-3-fast",
-		"grok-3-mini",
-		"grok-3-mini-fast",
-		"grok-2-vision",
-		"grok-2",
-		"deepseek-chat",
-		"deepseek-reasoner",
-		"gemini-1.5-flash",
-		"gemini-2.0-flash",
-		"gemini-2.0-flash-lite",
-		"gemini-2.5-flash",
-		"gemini-2.5-flash-lite",
-		"gemini-2.5-pro",
-		"gemini-3-pro-preview",
-	}
-	for i, modelID := range puterModelIDs {
-		models = append(models, Model{
-			ID:        strconv.Itoa(130 + i),
-			Channel:   "Puter",
-			ModelID:   modelID,
-			Name:      modelID,
-			Status:    ModelStatusAvailable,
-			IsDefault: i == 0,
-			SortOrder: i,
-		})
-	}
+	models = append(models, buildBoltSeedModels(ctx)...)
 
 	for _, m := range models {
-		_, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID)
+		existing, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID)
 		if err != nil {
 			// Model doesn't exist, create it
 			if err := s.CreateModel(ctx, &m); err != nil {
 				slog.Warn("Failed to seed model", "model_id", m.ModelID, "error", err)
 			} else {
 				slog.Info("Seeded model", "model_id", m.ModelID)
+			}
+			continue
+		}
+
+		if strings.EqualFold(m.Channel, "Bolt") {
+			existing.Name = m.Name
+			existing.Status = m.Status
+			existing.IsDefault = m.IsDefault
+			existing.SortOrder = m.SortOrder
+			if err := s.UpdateModel(ctx, existing); err != nil {
+				slog.Warn("Failed to refresh bolt model", "model_id", m.ModelID, "error", err)
 			}
 		}
 	}

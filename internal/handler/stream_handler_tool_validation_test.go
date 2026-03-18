@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -141,6 +142,54 @@ func TestWriteToolCallDifferentIDsSameInput_Deduped(t *testing.T) {
 	}
 	if got, _ := block["name"].(string); got != "Write" {
 		t.Fatalf("expected Write tool call, got %q", got)
+	}
+}
+
+func TestWriteToolCallDifferentIDsSameWorkdirTarget_Deduped(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		workdir,
+	)
+	defer h.release()
+
+	relativeInput := `{"file_path":"calculator.py","content":"x"}`
+	absoluteInput := `{"file_path":"` + strings.ReplaceAll(filepath.Join(workdir, "calculator.py"), `\`, `\\`) + `","content":"x"}`
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "tool_rel",
+			"toolName":   "Write",
+			"input":      relativeInput,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "tool_abs",
+			"toolName":   "Write",
+			"input":      absoluteInput,
+		},
+	})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected 1 deduped content block, got %d: %v", len(h.contentBlocks), h.contentBlocks)
+	}
+	if h.toolDedupCount != 1 {
+		t.Fatalf("expected dedup count 1, got %d", h.toolDedupCount)
 	}
 }
 

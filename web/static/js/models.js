@@ -215,7 +215,7 @@ function renderModels() {
           <span class="models-status-badge" style="background:${status.bg};color:${status.color};border-color:${status.border};">${status.label}</span>
         </td>
         <td class="col-sort">${escapeHtml(String(m.sort_order ?? 0))}</td>
-        <td>
+        <td class="col-toggle">
           <label class="toggle" title="${normalizeModelStatus(m.status) === "available" ? "点击下线" : "点击启用"}">
             <input type="checkbox" data-action="toggle-status" data-id="${encodeData(m.id)}" ${normalizeModelStatus(m.status) === "available" ? "checked" : ""} />
             <span class="toggle-slider"></span>
@@ -243,7 +243,7 @@ function renderModels() {
             <th class="col-default">默认</th>
             <th class="col-status">状态</th>
             <th class="col-sort">排序</th>
-            <th>启用</th>
+            <th class="col-toggle">启用</th>
             <th class="col-actions">操作</th>
           </tr>
         </thead>

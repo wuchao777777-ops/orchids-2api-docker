@@ -12,24 +12,29 @@
     <div class="ambient-bg">
         <div class="blob blob-1"></div>
         <div class="blob blob-2"></div>
+        <div class="grid-orbit"></div>
     </div>
 
     <div class="login-card">
-        <div class="sidebar-header" style="justify-content: center; padding: 0; margin-bottom: 32px;">
-            <div class="logo">C</div>
-            <div class="title" style="font-size: 1.5rem;">CodeFreeMax</div>
+        <div class="login-brand">
+            <div class="logo">O</div>
+            <div>
+                <div class="title">Orchids Console</div>
+                <div class="login-brand-subtitle">Secure admin access</div>
+            </div>
         </div>
 
-        <div style="text-align: center; margin-bottom: 32px;">
-            <h1 style="font-size: 1.75rem; margin-bottom: 8px;">管理员登录</h1>
-            <p style="color: var(--text-secondary);">请控制您的 API 凭证管理面板</p>
+        <div class="login-hero">
+            <div class="login-kicker">Admin access</div>
+            <h1>管理员登录</h1>
+            <p>进入 Orchids 控制台，统一管理渠道账号、模型配置和运行状态。</p>
         </div>
 
         <form id="loginForm">
             <div class="form-group">
                 <label class="form-label">用户名</label>
                 <div class="input-wrapper">
-                    <span class="input-icon">👤</span>
+                    <span class="input-icon">ID</span>
                     <input type="text" id="username" class="form-input" placeholder="请输入用户名" required autocomplete="username">
                 </div>
             </div>
@@ -37,30 +42,28 @@
             <div class="form-group">
                 <label class="form-label">管理员密码</label>
                 <div class="input-wrapper">
-                    <span class="input-icon">🔒</span>
+                    <span class="input-icon">PW</span>
                     <input type="password" id="password" class="form-input" placeholder="请输入密码" required autocomplete="current-password">
-                    <span class="btn-icon" id="passwordToggle" style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer;">
-                        👁️
-                    </span>
+                    <button type="button" class="btn-icon password-toggle" id="passwordToggle" aria-label="切换密码可见性">••</button>
                 </div>
             </div>
 
-            <button type="submit" class="btn btn-primary" id="loginBtn" style="width: 100%; justify-content: center; padding: 14px;">
+            <button type="submit" class="btn btn-primary login-submit" id="loginBtn">
                 <div class="loading-spinner" id="spinner" style="display: none; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
                 <span>登录</span>
             </button>
         </form>
 
-        <div style="text-align: center; margin-top: 32px; font-size: 0.85rem; color: var(--text-secondary);">
-            <a href="https://github.com/zhangdailin/Orchids-2api" target="_blank" style="color: var(--primary); margin-right: 8px;">GitHub</a>
+        <div class="login-links">
+            <a href="https://github.com/zhangdailin/Orchids-2api" target="_blank">GitHub</a>
             <span>•</span>
-            <a href="#" style="margin-left: 8px;">文档教程</a>
+            <a href="#">文档教程</a>
         </div>
     </div>
 
     <!-- Toast Notification -->
     <div id="toast" class="toast">
-        <span>❌</span>
+        <span class="toast-mark">ER</span>
         <span id="toastMessage">登录失败，请检查账号密码</span>
     </div>
 
@@ -82,8 +85,7 @@
         passwordToggle.addEventListener('click', () => {
             const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
             passwordInput.setAttribute('type', type);
-            // Simple text toggle
-            passwordToggle.textContent = type === 'password' ? '👁️' : '🙈';
+            passwordToggle.textContent = type === 'password' ? '••' : 'ON';
         });
 
         function showToast(msg) {
