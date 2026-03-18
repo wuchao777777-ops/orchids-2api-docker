@@ -383,6 +383,96 @@ func TestHandleMessages_Dedup_Stream(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_Dedup_OpenAIStream(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
+		{Type: "model", Event: map[string]any{"type": "text-start"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "ok"}},
+		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+	}}
+
+	payload := map[string]any{
+		"model":    "gpt-5.4-low",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   true,
+	}
+	b, _ := json.Marshal(payload)
+
+	rec1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/grok/v1/chat/completions", bytes.NewReader(b))
+	h.HandleMessages(rec1, req1)
+	if rec1.Code != 200 {
+		t.Fatalf("expected 200, got %d", rec1.Code)
+	}
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/grok/v1/chat/completions", bytes.NewReader(b))
+	h.HandleMessages(rec2, req2)
+	if rec2.Code != 200 {
+		t.Fatalf("expected 200, got %d", rec2.Code)
+	}
+	out := rec2.Body.String()
+	if strings.Contains(out, "event: message_start") {
+		t.Fatalf("did not expect Anthropic SSE in OpenAI stream duplicate, got: %s", out)
+	}
+	if !strings.Contains(out, `"choices"`) || !strings.Contains(out, `data: [DONE]`) {
+		t.Fatalf("expected OpenAI SSE duplicate response, got: %s", out)
+	}
+}
+
+func TestHandleMessages_Dedup_OpenAINonStream(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
+		{Type: "model", Event: map[string]any{"type": "text-start"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "ok"}},
+		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+	}}
+
+	payload := map[string]any{
+		"model":    "gpt-5.4-low",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   false,
+	}
+	b, _ := json.Marshal(payload)
+
+	rec1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/grok/v1/chat/completions", bytes.NewReader(b))
+	h.HandleMessages(rec1, req1)
+	if rec1.Code != 200 {
+		t.Fatalf("expected 200, got %d", rec1.Code)
+	}
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/grok/v1/chat/completions", bytes.NewReader(b))
+	h.HandleMessages(rec2, req2)
+	if rec2.Code != 200 {
+		t.Fatalf("expected 200, got %d", rec2.Code)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(rec2.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal duplicate response: %v; body=%s", err, rec2.Body.String())
+	}
+	if got["object"] != "chat.completion" {
+		t.Fatalf("expected chat.completion object, got %#v", got["object"])
+	}
+	choices, ok := got["choices"].([]any)
+	if !ok || len(choices) != 1 {
+		t.Fatalf("expected one choice, got %#v", got["choices"])
+	}
+	choice, ok := choices[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected choice object, got %#v", choices[0])
+	}
+	if choice["finish_reason"] != "stop" {
+		t.Fatalf("expected stop finish_reason, got %#v", choice["finish_reason"])
+	}
+}
+
 func TestHandleMessages_Dedup_SemanticBodyDriftWhileInFlight(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

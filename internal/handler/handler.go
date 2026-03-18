@@ -365,8 +365,76 @@ func (h *Handler) finishRequest(hash string) {
 	h.dedupStore.Finish(context.Background(), hash)
 }
 
-func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeRequest) {
+func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat) {
 	if req.Stream {
+		if responseFormat == adapter.FormatOpenAI {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+
+			type openAIStreamChoice struct {
+				Index        int `json:"index"`
+				Delta        struct {
+					Role string `json:"role,omitempty"`
+				} `json:"delta"`
+				FinishReason *string `json:"finish_reason,omitempty"`
+			}
+			type openAIStreamChunk struct {
+				ID      string `json:"id"`
+				Object  string `json:"object"`
+				Created int64  `json:"created"`
+				Model   string `json:"model"`
+				Choices []openAIStreamChoice `json:"choices"`
+			}
+			startChunk := openAIStreamChunk{
+				ID:      "dup",
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   req.Model,
+				Choices: []openAIStreamChoice{{
+					Index: 0,
+					Delta: struct {
+						Role string `json:"role,omitempty"`
+					}{Role: "assistant"},
+				}},
+			}
+			stopReason := "stop"
+			stopChunk := struct {
+				ID      string `json:"id"`
+				Object  string `json:"object"`
+				Created int64  `json:"created"`
+				Model   string `json:"model"`
+				Choices []struct {
+					Index        int            `json:"index"`
+					Delta        map[string]any `json:"delta"`
+					FinishReason *string `json:"finish_reason,omitempty"`
+				} `json:"choices"`
+			}{
+				ID:      "dup",
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   req.Model,
+				Choices: []struct {
+					Index        int            `json:"index"`
+					Delta        map[string]any `json:"delta"`
+					FinishReason *string `json:"finish_reason,omitempty"`
+				}{{
+					Index:        0,
+					Delta:        map[string]any{},
+					FinishReason: &stopReason,
+				}},
+			}
+			rawStart, _ := json.Marshal(startChunk)
+			rawStop, _ := json.Marshal(stopChunk)
+			_ = writeOpenAIFrame(w, rawStart)
+			_ = writeOpenAIFrame(w, rawStop)
+			_, _ = w.Write(sseDoneLineBytes)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			return
+		}
+
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -381,6 +449,29 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	if responseFormat == adapter.FormatOpenAI {
+		emptyMsg := openAINonStreamMessage{
+			Role:    "assistant",
+			Content: "",
+		}
+		stopReason := "stop"
+		resp := openAINonStreamResponse{
+			ID:      "dup",
+			Object:  "chat.completion",
+			Created: time.Now().Unix(),
+			Model:   req.Model,
+			Choices: []openAINonStreamChoice{{
+				Index:        0,
+				Message:      emptyMsg,
+				FinishReason: &stopReason,
+			}},
+			Usage: openAINonStreamUsage{},
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			slog.Error("Failed to write duplicate response", "error", err)
+		}
+		return
+	}
 	if err := json.NewEncoder(w).Encode(struct {
 		Type     string `json:"type"`
 		Deduped  bool   `json:"deduped"`
@@ -444,6 +535,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		apperrors.New("invalid_request_error", "Invalid request body", http.StatusBadRequest).WriteResponse(w)
 		return
 	}
+	responseFormat := adapter.DetectResponseFormat(r.URL.Path)
 
 	// 初始化调试日志
 	logger := debug.New(h.config.DebugEnabled, h.config.DebugLogSSE)
@@ -467,7 +559,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			"path":      r.URL.Path,
 			"kind":      "exact",
 		})
-		h.writeDuplicateResponse(w, req)
+		h.writeDuplicateResponse(w, req, responseFormat)
 		return
 	}
 	registeredKeys = append(registeredKeys, exactKey)
@@ -485,7 +577,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				"path":      r.URL.Path,
 				"kind":      "semantic",
 			})
-			h.writeDuplicateResponse(w, req)
+			h.writeDuplicateResponse(w, req, responseFormat)
 			return
 		}
 		registeredKeys = append(registeredKeys, semanticKey)
@@ -841,9 +933,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			inputTokens -= cacheReadTokens
 		}
 	}
-
-	// Detect Response Format (Anthropic vs OpenAI)
-	responseFormat := adapter.DetectResponseFormat(r.URL.Path)
 
 	sh := newStreamHandler(
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
