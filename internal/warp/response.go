@@ -10,6 +10,7 @@ import (
 	"hash/fnv"
 	"io"
 	"math"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -923,8 +924,6 @@ func sanitizeResponsePreview(data []byte) string {
 	return text
 }
 
-
-
 func looksLikeDisplayStringBytes(data []byte) bool {
 	if len(data) == 0 || !utf8.Valid(data) {
 		return false
@@ -1240,10 +1239,18 @@ func marshalToolInput(input map[string]interface{}) string {
 }
 
 func sanitizeFileName(name string) string {
-	name = strings.ReplaceAll(name, "\x00", "")
-	name = filepath.Clean(name)
-	name = strings.TrimSpace(name)
-	return name
+	name = strings.TrimSpace(strings.ReplaceAll(name, "\x00", ""))
+	if name == "" {
+		return ""
+	}
+
+	hadDotPrefix := strings.HasPrefix(name, "./")
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = path.Clean(name)
+	if hadDotPrefix && name != "." && !strings.HasPrefix(name, "./") && !strings.HasPrefix(name, "../") {
+		name = "./" + name
+	}
+	return filepath.ToSlash(name)
 }
 
 var lineNumberPrefixRe = regexp.MustCompile(`(?m)^\s*\d+\t`)

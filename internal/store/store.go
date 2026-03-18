@@ -218,6 +218,7 @@ func (s *Store) seedModels() error {
 	}
 
 	models = append(models, buildBoltSeedModels(ctx)...)
+	models = append(models, buildPuterSeedModels()...)
 
 	for _, m := range models {
 		existing, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID)
