@@ -23,11 +23,11 @@ type Meta struct {
 	NoThinking bool
 }
 
-func BuildWithMeta(messages []prompt.Message, system []prompt.SystemItem, model string, noThinking bool, workdir string, maxTokens int) (string, []map[string]string, Meta) {
-	return BuildWithMetaAndTools(messages, system, model, noThinking, workdir, maxTokens, nil)
+func BuildWithMeta(messages []prompt.Message, system []prompt.SystemItem, model string, noThinking bool, workdir string) (string, []map[string]string, Meta) {
+	return BuildWithMetaAndTools(messages, system, model, noThinking, workdir, nil)
 }
 
-func BuildWithMetaAndTools(messages []prompt.Message, system []prompt.SystemItem, model string, noThinking bool, workdir string, maxTokens int, tools []interface{}) (string, []map[string]string, Meta) {
+func BuildWithMetaAndTools(messages []prompt.Message, system []prompt.SystemItem, model string, noThinking bool, workdir string, tools []interface{}) (string, []map[string]string, Meta) {
 	meta := Meta{Profile: profileDefault}
 
 	systemText := extractSystemPrompt(messages)
@@ -65,11 +65,29 @@ func BuildWithMetaAndTools(messages []prompt.Message, system []prompt.SystemItem
 	meta.Profile = selectPromptProfileForTurn(userText, currentTurnToolResultOnly)
 	meta.NoThinking = noThinking || currentTurnToolResultOnly || shouldDisableThinkingForProfile(meta.Profile)
 
-	promptText := buildLocalAssistantPromptWithProfileAndTools(systemText, userText, model, workdir, maxTokens, meta.Profile, tools)
+	promptText := buildLocalAssistantPromptWithProfileAndTools(systemText, userText, model, workdir, meta.Profile, tools)
 	if !meta.NoThinking && !isSuggestionModeText(userText) {
 		promptText = injectThinkingPrefix(promptText)
 	}
 
-	promptText, chatHistory = enforceWarpPromptBudget(promptText, chatHistory, maxTokens)
-	return promptText, chatHistory, meta
+	return promptText, normalizeWarpPromptHistory(chatHistory), meta
+}
+
+func normalizeWarpPromptHistory(history []map[string]string) []map[string]string {
+	if len(history) == 0 {
+		return nil
+	}
+	out := make([]map[string]string, 0, len(history))
+	for _, item := range history {
+		role := strings.ToLower(strings.TrimSpace(item["role"]))
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		content := strings.TrimSpace(item["content"])
+		if content == "" {
+			continue
+		}
+		out = append(out, map[string]string{"role": role, "content": content})
+	}
+	return out
 }

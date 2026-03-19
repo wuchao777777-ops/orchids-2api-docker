@@ -23,8 +23,6 @@ const (
 
 const defaultModel = "auto"
 
-
-
 var canonicalModelAliases = map[string]string{
 	"claude-4-sonnet":            "claude-4-sonnet",
 	"claude-sonnet-4":            "claude-4-sonnet",
@@ -103,36 +101,6 @@ var canonicalModelAliases = map[string]string{
 	"grok-3-mini":                "grok-3-mini",
 }
 
-var upstreamModelMap = map[string]string{
-	"claude-3-5-sonnet":          "claude_3_5_sonnet",
-	"claude-3-5-haiku":           "claude_3_5_haiku",
-	"claude-3-opus":              "claude_3_opus",
-	"claude-4-sonnet":            "claude_sonnet_4",
-	"claude-4-5-sonnet":          "claude_sonnet_4",
-	"claude-4-5-sonnet-thinking": "claude_sonnet_4",
-	"claude-4-5-haiku":           "claude_3_5_haiku",
-	"claude-4-5-opus":            "claude_opus_4",
-	"claude-4-5-opus-thinking":   "claude_opus_4",
-	"claude-4-6-sonnet-high":     "claude_sonnet_4",
-	"claude-4-6-sonnet-max":      "claude_sonnet_4",
-	"claude-4-6-opus-high":       "claude_opus_4",
-	"claude-4-6-opus-max":        "claude_opus_4",
-	"gpt-4o":                     "gpt_4o",
-	"gpt-4o-mini":                "gpt_4o_mini",
-	"gpt-4-turbo":                "gpt_4_turbo",
-	"o1":                         "o1",
-	"o1-mini":                    "o1_mini",
-	"o1-preview":                 "o1_preview",
-	"o3-mini":                    "o3_mini",
-	"gemini-2-0-flash":           "gemini_2_0_flash",
-	"gemini-2-5-pro":             "gemini_2_5_pro",
-	"gemini-2-5-flash":           "gemini_2_5_flash",
-	"deepseek-r1":                "deepseek_r1",
-	"deepseek-v3":                "deepseek_v3",
-	"grok-3":                     "grok_3",
-	"grok-3-mini":                "grok_3_mini",
-}
-
 var warpToClientToolMap = map[string]string{
 	"grep":           "Grep",
 	"subagent":       "Task",
@@ -156,15 +124,4 @@ func canonicalModelID(model string) string {
 		return mapped
 	}
 	return key
-}
-
-func upstreamModelID(model string) string {
-	canonical := canonicalModelID(model)
-	if canonical == "" {
-		return upstreamModelMap["claude-3-5-sonnet"]
-	}
-	if mapped, ok := upstreamModelMap[canonical]; ok {
-		return mapped
-	}
-	return canonical
 }

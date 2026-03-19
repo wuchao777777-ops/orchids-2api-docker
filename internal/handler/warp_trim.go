@@ -1,13 +1,6 @@
 package handler
 
-import (
-	"fmt"
-	"github.com/goccy/go-json"
-	"log/slog"
-	"unicode/utf8"
-
-	"orchids-api/internal/prompt"
-)
+import "orchids-api/internal/prompt"
 
 type toolResultRef struct {
 	msgIndex   int
@@ -143,62 +136,4 @@ func cloneMessages(messages []prompt.Message) []prompt.Message {
 		out[i].Content.Blocks = blocks
 	}
 	return out
-}
-
-func compressToolResults(messages []prompt.Message, maxLen int, channel string) ([]prompt.Message, int) {
-	if maxLen <= 0 {
-		return messages, 0
-	}
-	compressed := cloneMessages(messages)
-	compressedCount := 0
-
-	for i := range compressed {
-		msg := &compressed[i]
-		if msg.Role != "user" || msg.Content.Blocks == nil {
-			continue
-		}
-
-		for j := range msg.Content.Blocks {
-			block := &msg.Content.Blocks[j]
-			if block.Type == "tool_result" {
-				switch content := block.Content.(type) {
-				case string:
-					if len(content) > maxLen {
-						cutPoint := truncateUTF8(content, maxLen)
-						block.Content = content[:cutPoint] + fmt.Sprintf("\n... [truncated %d bytes]", len(content)-cutPoint)
-						compressedCount++
-					}
-				case []interface{}:
-					// tool_result content can be []ContentBlock (decoded as []interface{})
-					// Serialize to measure total size, truncate if needed
-					raw, err := json.Marshal(content)
-					if err == nil && len(raw) > maxLen {
-						// Convert to string and truncate at a valid UTF-8 boundary
-						s := string(raw)
-						cutPoint := truncateUTF8(s, maxLen)
-						block.Content = s[:cutPoint] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-cutPoint)
-						compressedCount++
-					}
-				}
-			}
-		}
-	}
-
-	if compressedCount > 0 {
-		slog.Info("Context compressed", "channel", channel, "compressed_blocks", compressedCount)
-	}
-
-	return compressed, compressedCount
-}
-
-// truncateUTF8 returns the largest index <= maxLen that does not split a UTF-8 character.
-func truncateUTF8(s string, maxLen int) int {
-	if maxLen >= len(s) {
-		return len(s)
-	}
-	// Walk backwards from maxLen to find a valid UTF-8 boundary
-	for maxLen > 0 && !utf8.RuneStart(s[maxLen]) {
-		maxLen--
-	}
-	return maxLen
 }
