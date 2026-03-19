@@ -271,6 +271,36 @@ func TestBuildRequest_AddsWorkspaceAndToolInstructions(t *testing.T) {
 	}
 }
 
+func TestBuildRequest_PreservesMCPSystemContext(t *testing.T) {
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		System: []prompt.SystemItem{
+			{Type: "text", Text: "You are Claude Code, Anthropic's official CLI for Claude."},
+			{Type: "text", Text: "# MCP Server\n- filesystem\n# VSCode Extension Context\nkeep this custom instruction"},
+		},
+	}
+
+	boltReq := client.buildRequest(req, "sb1-demo")
+	if strings.Contains(strings.ToLower(boltReq.GlobalSystemPrompt), "anthropic's official cli for claude") {
+		t.Fatalf("system prompt should strip claude code boilerplate: %s", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "# MCP Server") {
+		t.Fatalf("system prompt should preserve MCP context: %s", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "# VSCode Extension Context") {
+		t.Fatalf("system prompt should preserve VSCode context: %s", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "keep this custom instruction") {
+		t.Fatalf("system prompt should preserve custom instruction: %s", boltReq.GlobalSystemPrompt)
+	}
+}
+
 func TestBuildRequest_AddsHistoryAwarePathRecoveryInstructions(t *testing.T) {
 	client := NewFromAccount(&store.Account{
 		AccountType:   "bolt",

@@ -618,10 +618,45 @@ func sanitizeBoltSystemText(text string) string {
 	text = stripTaggedBoltText(text)
 	text = stripCCEntrypointLines(text)
 	text = stripBoltEnvironmentLines(text)
-	if looksLikeClaudeCodeSystem(text) {
+	return condenseBoltSystemText(text)
+}
+
+func condenseBoltSystemText(text string) string {
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	return strings.TrimSpace(text)
+	lines := strings.Split(text, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if shouldDropBoltSystemLine(trimmed) {
+			continue
+		}
+		kept = append(kept, trimmed)
+	}
+	return strings.Join(kept, "\n")
+}
+
+func shouldDropBoltSystemLine(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	switch {
+	case lower == "":
+		return true
+	case strings.Contains(lower, "anthropic's official cli for claude"):
+		return true
+	case strings.Contains(lower, "you are claude code"):
+		return true
+	case strings.Contains(lower, "you are an interactive cli tool"):
+		return true
+	case strings.Contains(lower, "claude agent sdk"):
+		return true
+	case strings.Contains(lower, "claude code system prompt"):
+		return true
+	}
+	return false
 }
 
 func sanitizeBoltMessageText(text string) string {
