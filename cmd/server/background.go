@@ -782,8 +782,10 @@ var grokModelIDPattern = regexp.MustCompile(`\bgrok-[a-z0-9][a-z0-9.-]*\b`)
 
 func fetchPublicGrokModelIDs(ctx context.Context) ([]string, error) {
 	urls := []string{
-		"https://x.ai/api",
-		"https://docs.x.ai/docs/models",
+		"https://docs.x.ai/llms.txt",
+		"https://docs.x.ai/developers/models",
+		"https://docs.x.ai/developers/advanced-api-usage/use-with-code-editors",
+		"https://docs.x.ai/developers/tools/x-search",
 	}
 
 	client := &http.Client{Timeout: 20 * time.Second}
@@ -814,11 +816,7 @@ func fetchPublicGrokModelIDs(ctx context.Context) ([]string, error) {
 			continue
 		}
 
-		text := string(body)
-		// Unescape common JS-escaped variants: grok-4\.2 / grok\u002d4.2
-		text = strings.ReplaceAll(text, `\.`, ".")
-		text = strings.ReplaceAll(text, `\u002d`, "-")
-		text = strings.ReplaceAll(text, `\u002D`, "-")
+		text := normalizeGrokPublicSourceText(string(body))
 
 		for _, id := range extractGrokModelIDsFromText(text) {
 			found[id] = struct{}{}
@@ -838,6 +836,14 @@ func fetchPublicGrokModelIDs(ctx context.Context) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+func normalizeGrokPublicSourceText(text string) string {
+	// Unescape common JS-escaped variants: grok-4\.2 / grok\u002d4.2
+	text = strings.ReplaceAll(text, `\.`, ".")
+	text = strings.ReplaceAll(text, `\u002d`, "-")
+	text = strings.ReplaceAll(text, `\u002D`, "-")
+	return text
 }
 
 func extractGrokModelIDsFromText(text string) []string {
@@ -862,6 +868,9 @@ func extractGrokModelIDsFromText(text string) []string {
 		if grok.IsDeprecatedModelID(id) {
 			continue
 		}
+		if !isLikelyDiscoveredGrokTextModelID(id) {
+			continue
+		}
 		out[id] = struct{}{}
 	}
 	ids := make([]string, 0, len(out))
@@ -870,6 +879,41 @@ func extractGrokModelIDsFromText(text string) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func isLikelyDiscoveredGrokTextModelID(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if id == "" || !strings.HasPrefix(id, "grok-") {
+		return false
+	}
+	if strings.HasPrefix(id, "grok-imagine-") {
+		return false
+	}
+	for _, needle := range []string{
+		"-image",
+		"-video",
+		"-vision",
+		"prompt-engineering",
+		"connected-apps",
+		"conv-id",
+		"models-with",
+	} {
+		if strings.Contains(id, needle) {
+			return false
+		}
+	}
+	switch id {
+	case "grok-beta", "grok-business", "grok-client", "grok-code-models":
+		return false
+	}
+	if strings.HasPrefix(id, "grok-code-") {
+		return true
+	}
+	rest := strings.TrimPrefix(id, "grok-")
+	if rest == "" {
+		return false
+	}
+	return rest[0] >= '0' && rest[0] <= '9'
 }
 
 func buildGrokVersionProbes(models []*store.Model) []string {

@@ -280,19 +280,34 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		fields["quota_mode"] = "remaining"
 		fields["quota_unit"] = "requests"
 	case "warp":
-		fields["quota_limit"] = limit
+		baseLimit := limit
+		if acc.WarpMonthlyLimit > 0 {
+			baseLimit = acc.WarpMonthlyLimit
+		}
 		used := current
-		if used > limit && limit > 0 {
-			used = limit
+		if used > baseLimit && baseLimit > 0 {
+			used = baseLimit
 		}
-		remaining := limit - used
-		if remaining < 0 {
-			remaining = 0
+		baseRemaining := acc.WarpMonthlyRemaining
+		if baseRemaining <= 0 && baseLimit > 0 {
+			baseRemaining = baseLimit - current
 		}
+		if baseRemaining < 0 {
+			baseRemaining = 0
+		}
+		bonusRemaining := acc.WarpBonusRemaining
+		if bonusRemaining < 0 {
+			bonusRemaining = 0
+		}
+		remaining := baseRemaining + bonusRemaining
+		fields["quota_limit"] = baseLimit
 		fields["quota_used"] = used
 		fields["quota_remaining"] = remaining
-		fields["quota_mode"] = "used"
+		fields["quota_mode"] = "warp_split"
 		fields["quota_unit"] = "requests"
+		fields["quota_base_limit"] = baseLimit
+		fields["quota_base_remaining"] = baseRemaining
+		fields["quota_bonus_remaining"] = bonusRemaining
 	case "puter":
 		fields["quota_limit"] = 0.0
 		fields["quota_used"] = 0.0
@@ -379,13 +394,23 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			} else if strings.TrimSpace(acc.Subscription) == "" {
 				acc.Subscription = "free"
 			}
-			totalLimit := float64(limitInfo.RequestLimit)
+			monthlyLimit := float64(limitInfo.RequestLimit)
+			bonusRemaining := 0.0
 			for _, bg := range bonuses {
-				totalLimit += float64(bg.RequestCreditsRemaining)
+				if bg.RequestCreditsRemaining > 0 {
+					bonusRemaining += float64(bg.RequestCreditsRemaining)
+				}
 			}
 			usedRequests := float64(limitInfo.RequestsUsedSinceLastRefresh)
-			acc.UsageLimit = totalLimit
+			monthlyRemaining := monthlyLimit - usedRequests
+			if monthlyRemaining < 0 {
+				monthlyRemaining = 0
+			}
+			acc.UsageLimit = monthlyLimit
 			acc.UsageCurrent = usedRequests
+			acc.WarpMonthlyLimit = monthlyLimit
+			acc.WarpMonthlyRemaining = monthlyRemaining
+			acc.WarpBonusRemaining = bonusRemaining
 			if limitInfo.NextRefreshTime != "" {
 				if t, err := time.Parse(time.RFC3339, limitInfo.NextRefreshTime); err == nil {
 					acc.QuotaResetAt = t

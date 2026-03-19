@@ -229,7 +229,7 @@ func parseBoltBundleModelChoices(js string) ([]boltModelChoice, bool) {
 	return out, len(out) > 0
 }
 
-func buildBoltSeedModels(ctx context.Context) []Model {
+func BuildBoltSeedModels(ctx context.Context) []Model {
 	choices, err := fetchBoltModelChoices(ctx)
 	if err != nil {
 		slog.Warn("Bolt 模型同步: 官网 bundle 解析失败，回退到内置列表", "error", err)
@@ -249,6 +249,10 @@ func buildBoltSeedModels(ctx context.Context) []Model {
 		})
 	}
 	return models
+}
+
+func buildBoltSeedModels(ctx context.Context) []Model {
+	return BuildBoltSeedModels(ctx)
 }
 
 func chooseBoltDefaultModelID(choices []boltModelChoice) string {

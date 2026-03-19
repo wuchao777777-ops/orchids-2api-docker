@@ -223,6 +223,9 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	updated.UsageCurrent = acc.UsageCurrent
 	updated.UsageTotal = acc.UsageTotal
 	updated.UsageLimit = acc.UsageLimit
+	updated.WarpMonthlyLimit = acc.WarpMonthlyLimit
+	updated.WarpMonthlyRemaining = acc.WarpMonthlyRemaining
+	updated.WarpBonusRemaining = acc.WarpBonusRemaining
 	updated.StatusCode = acc.StatusCode
 	updated.LastAttempt = acc.LastAttempt
 	updated.QuotaResetAt = acc.QuotaResetAt

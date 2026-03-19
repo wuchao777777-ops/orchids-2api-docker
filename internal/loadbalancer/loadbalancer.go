@@ -96,16 +96,6 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, ex
 
 	slog.Debug("Selected account", "id", account.ID, "name", account.Name, "type", account.AccountType, "session", auth.MaskSensitive(account.SessionID))
 
-	if lb.Store != nil && account.ID != 0 {
-		go func(accountID int64) {
-			statsCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			if err := lb.Store.IncrementRequestCount(statsCtx, accountID); err != nil {
-				slog.Warn("Failed to increment request count", "account_id", accountID, "error", err)
-			}
-		}(account.ID)
-	}
-
 	return account, nil
 }
 

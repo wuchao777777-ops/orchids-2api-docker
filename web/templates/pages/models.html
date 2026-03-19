@@ -92,6 +92,18 @@
       box-shadow: 0 10px 24px rgba(215, 255, 100, 0.16);
     }
 
+    .models-overview-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .models-refresh-action {
+      min-width: 172px;
+      border-radius: 14px;
+    }
+
     .models-summary-grid {
       position: relative;
       z-index: 1;
@@ -506,7 +518,10 @@
           <h2>按渠道维护模型清单，先看概览，再做筛选和调整</h2>
           <p>这里会汇总当前渠道的可用状态、默认模型和分页结果。模型数量变多后，也能快速定位到要处理的那一条。</p>
         </div>
-        <button class="btn btn-primary models-primary-action" onclick="openModelModal()">+ 添加模型</button>
+        <div class="models-overview-actions">
+          <button class="btn btn-outline models-refresh-action" id="refreshModelsButton" type="button" onclick="refreshModelsForCurrentChannel()">刷新当前渠道</button>
+          <button class="btn btn-primary models-primary-action" onclick="openModelModal()">+ 添加模型</button>
+        </div>
       </div>
       <div class="models-summary-grid">
         <div class="models-stat-card">
@@ -605,7 +620,7 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js"></script>
+  <script src="{{.AdminPath}}/js/common.js?v=20260319-1"></script>
   <script src="{{.AdminPath}}/js/models.js"></script>
 </body>
 </html>

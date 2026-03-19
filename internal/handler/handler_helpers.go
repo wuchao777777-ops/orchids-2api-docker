@@ -248,18 +248,17 @@ func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forced
 }
 
 func (h *Handler) updateAccountStats(account *store.Account, inputTokens, outputTokens int) {
-	if account == nil || h.loadBalancer == nil {
+	if account == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return
 	}
 	go func(accountID int64, inputTokens, outputTokens int) {
 		usage := float64(inputTokens + outputTokens)
-		if usage > 0 {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			// Use the new batched method
-			if err := h.loadBalancer.Store.IncrementAccountStats(ctx, accountID, usage, 1); err != nil {
-				slog.Error("Failed to update account stats", "account_id", accountID, "error", err)
-			}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		// Count each completed request exactly once here. This avoids the old
+		// pre-selection increment plus post-response stats update double-counting.
+		if err := h.loadBalancer.Store.IncrementAccountStats(ctx, accountID, usage, 1); err != nil {
+			slog.Error("Failed to update account stats", "account_id", accountID, "error", err)
 		}
 	}(account.ID, inputTokens, outputTokens)
 }

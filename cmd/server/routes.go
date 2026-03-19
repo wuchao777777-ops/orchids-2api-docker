@@ -77,6 +77,7 @@ func registerRoutes(
 	mux.HandleFunc("/api/keys", sessionAuth(apiHandler.HandleKeys))
 	mux.HandleFunc("/api/keys/", sessionAuth(apiHandler.HandleKeyByID))
 	mux.HandleFunc("/api/models", sessionAuth(apiHandler.HandleModels))
+	mux.HandleFunc("/api/models/refresh", sessionAuth(makeModelRefreshHandler(cfg, s)))
 	mux.HandleFunc("/api/models/", sessionAuth(apiHandler.HandleModelByID))
 	mux.HandleFunc("/api/export", sessionAuth(apiHandler.HandleExport))
 	mux.HandleFunc("/api/import", sessionAuth(apiHandler.HandleImport))

@@ -11,6 +11,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 )
@@ -566,5 +567,32 @@ func TestFetchRateLimits_UsesTeamPathWhenOrganizationSelected(t *testing.T) {
 	}
 	if data.MaxPerMonth != 26_000_000 {
 		t.Fatalf("maxPerMonth=%v want 26000000", data.MaxPerMonth)
+	}
+}
+
+func TestNewFromAccount_ReusesSharedHTTPClient(t *testing.T) {
+	cfg := &config.Config{
+		RequestTimeout: 30,
+		ProxyHTTP:      "http://proxy.local:3128",
+		ProxyUser:      "user",
+		ProxyPass:      "pass",
+	}
+
+	clientA := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-a",
+		ProjectID:     "sb1-a",
+	}, cfg)
+	clientB := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-b",
+		ProjectID:     "sb1-b",
+	}, cfg)
+
+	if clientA.httpClient != clientB.httpClient {
+		t.Fatal("expected bolt clients with same transport config to reuse shared http client")
+	}
+	if !clientA.sharedHTTPClient || !clientB.sharedHTTPClient {
+		t.Fatal("expected sharedHTTPClient flag to be set")
 	}
 }

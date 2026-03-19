@@ -54,6 +54,36 @@ func TestRefreshAccountState_GrokSyncsRemainingQuota(t *testing.T) {
 	}
 }
 
+func TestBuildQuotaResponseFields_WarpSplitQuota(t *testing.T) {
+	t.Parallel()
+
+	acc := &store.Account{
+		AccountType:          "warp",
+		UsageCurrent:         1429,
+		UsageLimit:           1550,
+		WarpMonthlyLimit:     1550,
+		WarpMonthlyRemaining: 121,
+		WarpBonusRemaining:   1000,
+	}
+
+	fields := buildQuotaResponseFields(acc)
+	if got := fields["quota_limit"].(float64); got != 1550 {
+		t.Fatalf("quota_limit=%v want 1550", got)
+	}
+	if got := fields["quota_remaining"].(float64); got != 1121 {
+		t.Fatalf("quota_remaining=%v want 1121", got)
+	}
+	if got := fields["quota_base_remaining"].(float64); got != 121 {
+		t.Fatalf("quota_base_remaining=%v want 121", got)
+	}
+	if got := fields["quota_bonus_remaining"].(float64); got != 1000 {
+		t.Fatalf("quota_bonus_remaining=%v want 1000", got)
+	}
+	if got := fields["quota_mode"].(string); got != "warp_split" {
+		t.Fatalf("quota_mode=%q want warp_split", got)
+	}
+}
+
 func TestRefreshAccountState_GrokMissingToken(t *testing.T) {
 	t.Parallel()
 

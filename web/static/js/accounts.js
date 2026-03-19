@@ -161,6 +161,30 @@ function getQuotaStats(acc) {
   if (type === "puter") {
     return { supported: false, unknown: true };
   }
+  if (type === "warp") {
+    const monthlyLimit = Math.max(0, Math.floor(acc.warp_monthly_limit || acc.usage_limit || 0));
+    const monthlyRemainingRaw = acc.warp_monthly_remaining !== undefined && acc.warp_monthly_remaining !== null
+      ? acc.warp_monthly_remaining
+      : (monthlyLimit > 0 ? monthlyLimit - Math.floor(acc.usage_current || 0) : 0);
+    const monthlyRemaining = Math.max(0, Math.floor(monthlyRemainingRaw || 0));
+    const bonusRemaining = Math.max(0, Math.floor(acc.warp_bonus_remaining || 0));
+    const remaining = monthlyRemaining + bonusRemaining;
+    if (monthlyLimit > 0 || bonusRemaining > 0) {
+      const displayTotal = monthlyLimit + bonusRemaining;
+      const pctRemaining = displayTotal > 0 ? Math.min(100, Math.round((remaining / displayTotal) * 100)) : 0;
+      return {
+        supported: true,
+        limit: monthlyLimit,
+        remaining,
+        used: Math.max(0, Math.floor(acc.usage_current || 0)),
+        pctRemaining,
+        monthlyLimit,
+        monthlyRemaining,
+        bonusRemaining,
+        splitBonus: bonusRemaining > 0,
+      };
+    }
+  }
   const explicitLimit = Math.floor(acc.quota_limit || 0);
   const hasExplicitRemaining = acc.quota_remaining !== undefined && acc.quota_remaining !== null;
   if (explicitLimit > 0 && hasExplicitRemaining) {
@@ -668,7 +692,11 @@ function renderAccounts() {
     } else if (quota) {
       const pct = quota.pctRemaining;
       const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
-      tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>`;
+      if (normalizeAccountType(acc) === "warp" && quota.splitBonus) {
+        tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span><div style="color:#64748b;font-size:0.75rem">${quota.monthlyRemaining.toLocaleString()} 月度 + ${quota.bonusRemaining.toLocaleString()} 赠送</div>`;
+      } else {
+        tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>`;
+      }
     } else {
       tdQuota.style.color = "#64748b";
       tdQuota.textContent = "-";

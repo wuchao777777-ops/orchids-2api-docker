@@ -510,7 +510,9 @@
   }
 
   function syncImagineModeUI(mode, persist = true) {
-    const normalized = String(mode || "auto").toLowerCase();
+    const normalized = ["auto", "ws", "sse"].includes(String(mode || "").toLowerCase())
+      ? String(mode || "").toLowerCase()
+      : "auto";
     const select = document.getElementById("imagineMode");
     if (select) select.value = normalized;
     document.querySelectorAll("[data-imagine-mode]").forEach((btn) => {
@@ -519,6 +521,25 @@
     });
     if (persist) {
       saveGrokToolsUIState({ imagineMode: normalized });
+    }
+  }
+
+  function applyImagineMode(mode, persist = true) {
+    const normalized = ["auto", "ws", "sse"].includes(String(mode || "").toLowerCase())
+      ? String(mode || "").toLowerCase()
+      : "auto";
+    syncImagineModeUI(normalized, persist);
+    imagineState.mode = normalized;
+    if (imagineState.running && Array.isArray(imagineState.taskIDs) && imagineState.taskIDs.length > 0) {
+      const prompt = String(document.getElementById("imaginePrompt")?.value || "").trim();
+      const ratio = String(document.getElementById("imagineRatio")?.value || "2:3");
+      if (normalized === "sse") {
+        startImagineSSE(imagineState.taskIDs);
+      } else if (normalized === "ws") {
+        startImagineWS(imagineState.taskIDs, prompt, ratio, false);
+      } else {
+        startImagineWS(imagineState.taskIDs, prompt, ratio, true);
+      }
     }
   }
 
@@ -4371,21 +4392,15 @@
     document.querySelectorAll("[data-imagine-mode]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const mode = String(btn.dataset.imagineMode || "auto").toLowerCase();
-        syncImagineModeUI(mode);
-        imagineState.mode = mode;
-        if (imagineState.running && Array.isArray(imagineState.taskIDs) && imagineState.taskIDs.length > 0) {
-          const prompt = String(document.getElementById("imaginePrompt")?.value || "").trim();
-          const ratio = String(document.getElementById("imagineRatio")?.value || "2:3");
-          if (mode === "sse") {
-            startImagineSSE(imagineState.taskIDs);
-          } else if (mode === "ws") {
-            startImagineWS(imagineState.taskIDs, prompt, ratio, false);
-          } else {
-            startImagineWS(imagineState.taskIDs, prompt, ratio, true);
-          }
-        }
+        applyImagineMode(mode);
       });
     });
+    const imagineModeSelect = document.getElementById("imagineMode");
+    if (imagineModeSelect) {
+      imagineModeSelect.addEventListener("change", () => {
+        applyImagineMode(imagineModeSelect.value);
+      });
+    }
     const imaginePrompt = document.getElementById("imaginePrompt");
     if (imaginePrompt) {
       imaginePrompt.addEventListener("keydown", async (event) => {

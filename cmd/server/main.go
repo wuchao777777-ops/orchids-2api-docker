@@ -180,7 +180,6 @@ func main() {
 
 	startTokenRefreshLoop(ctx, cfg, s, lb)
 	startAuthCleanupLoop(ctx)
-	startModelSyncLoop(ctx, cfg, s)
 
 	// Graceful shutdown
 	idleConnsClosed := make(chan struct{})

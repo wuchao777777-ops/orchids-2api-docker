@@ -40,9 +40,10 @@ var boltTeamsRateLimitsURL = defaultTeamsRateURL
 var supportedBoltToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "TodoWrite"}
 
 type Client struct {
-	httpClient   *http.Client
-	sessionToken string
-	projectID    string
+	httpClient        *http.Client
+	sessionToken      string
+	projectID         string
+	sharedHTTPClient  bool
 }
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
@@ -51,9 +52,11 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		timeout = time.Duration(cfg.RequestTimeout) * time.Second
 	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	proxyFunc := http.ProxyFromEnvironment
+	proxyKey := "direct"
 	if cfg != nil {
-		transport.Proxy = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+		proxyKey = util.GenerateProxyKey(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser)
 	}
 
 	sessionToken := ""
@@ -67,14 +70,15 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	}
 
 	return &Client{
-		httpClient:   &http.Client{Timeout: timeout, Transport: transport},
-		sessionToken: sessionToken,
-		projectID:    projectID,
+		httpClient:       util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
+		sessionToken:     sessionToken,
+		projectID:        projectID,
+		sharedHTTPClient: true,
 	}
 }
 
 func (c *Client) Close() {
-	if c == nil || c.httpClient == nil || c.httpClient.Transport == nil {
+	if c == nil || c.sharedHTTPClient || c.httpClient == nil || c.httpClient.Transport == nil {
 		return
 	}
 	if closer, ok := c.httpClient.Transport.(interface{ CloseIdleConnections() }); ok {

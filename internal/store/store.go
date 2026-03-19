@@ -13,35 +13,38 @@ import (
 var ErrNoRows = fmt.Errorf("no rows in result set")
 
 type Account struct {
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	AccountType   string    `json:"account_type"`
-	NSFWEnabled   bool      `json:"nsfw_enabled"`
-	SessionID     string    `json:"session_id"`
-	ClientCookie  string    `json:"client_cookie"`
-	RefreshToken  string    `json:"refresh_token,omitempty"`
-	DeviceID      string    `json:"device_id,omitempty"`
-	RequestID     string    `json:"request_id,omitempty"`
-	SessionCookie string    `json:"session_cookie"`
-	ClientUat     string    `json:"client_uat"`
-	ProjectID     string    `json:"project_id"`
-	UserID        string    `json:"user_id"`
-	AgentMode     string    `json:"agent_mode"`
-	Email         string    `json:"email"`
-	Weight        int       `json:"weight"`
-	Enabled       bool      `json:"enabled"`
-	Token         string    `json:"token"`        // Truncated display token
-	Subscription  string    `json:"subscription"` // "free", "pro", etc.
-	UsageCurrent  float64   `json:"usage_current"`
-	UsageTotal    float64   `json:"usage_total"` // Used as lifetime usage
-	UsageLimit    float64   `json:"usage_limit"` // Daily limit
-	StatusCode    string    `json:"status_code"`
-	LastAttempt   time.Time `json:"last_attempt"`
-	QuotaResetAt  time.Time `json:"quota_reset_at"`
-	RequestCount  int64     `json:"request_count"`
-	LastUsedAt    time.Time `json:"last_used_at"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                   int64     `json:"id"`
+	Name                 string    `json:"name"`
+	AccountType          string    `json:"account_type"`
+	NSFWEnabled          bool      `json:"nsfw_enabled"`
+	SessionID            string    `json:"session_id"`
+	ClientCookie         string    `json:"client_cookie"`
+	RefreshToken         string    `json:"refresh_token,omitempty"`
+	DeviceID             string    `json:"device_id,omitempty"`
+	RequestID            string    `json:"request_id,omitempty"`
+	SessionCookie        string    `json:"session_cookie"`
+	ClientUat            string    `json:"client_uat"`
+	ProjectID            string    `json:"project_id"`
+	UserID               string    `json:"user_id"`
+	AgentMode            string    `json:"agent_mode"`
+	Email                string    `json:"email"`
+	Weight               int       `json:"weight"`
+	Enabled              bool      `json:"enabled"`
+	Token                string    `json:"token"`        // Truncated display token
+	Subscription         string    `json:"subscription"` // "free", "pro", etc.
+	UsageCurrent         float64   `json:"usage_current"`
+	UsageTotal           float64   `json:"usage_total"` // Used as lifetime usage
+	UsageLimit           float64   `json:"usage_limit"` // Daily limit
+	WarpMonthlyLimit     float64   `json:"warp_monthly_limit,omitempty"`
+	WarpMonthlyRemaining float64   `json:"warp_monthly_remaining,omitempty"`
+	WarpBonusRemaining   float64   `json:"warp_bonus_remaining,omitempty"`
+	StatusCode           string    `json:"status_code"`
+	LastAttempt          time.Time `json:"last_attempt"`
+	QuotaResetAt         time.Time `json:"quota_reset_at"`
+	RequestCount         int64     `json:"request_count"`
+	LastUsedAt           time.Time `json:"last_used_at"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 // SyncState compares this account against a snapshot and returns true if key session/auth fields differ.

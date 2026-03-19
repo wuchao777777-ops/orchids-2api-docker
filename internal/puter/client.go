@@ -39,10 +39,11 @@ var (
 )
 
 type Client struct {
-	config     *config.Config
-	account    *store.Account
-	httpClient *http.Client
-	authToken  string
+	config           *config.Config
+	account          *store.Account
+	httpClient       *http.Client
+	authToken        string
+	sharedHTTPClient bool
 }
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
@@ -54,16 +55,19 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		}
 	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	proxyFunc := http.ProxyFromEnvironment
+	proxyKey := "direct"
 	if cfg != nil {
-		transport.Proxy = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+		proxyKey = util.GenerateProxyKey(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser)
 	}
 
 	return &Client{
-		config:     cfg,
-		account:    acc,
-		httpClient: &http.Client{Timeout: timeout, Transport: transport},
-		authToken:  resolveAuthToken(acc),
+		config:           cfg,
+		account:          acc,
+		httpClient:       util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
+		authToken:        resolveAuthToken(acc),
+		sharedHTTPClient: true,
 	}
 }
 
@@ -80,7 +84,7 @@ func resolveAuthToken(acc *store.Account) string {
 }
 
 func (c *Client) Close() {
-	if c == nil || c.httpClient == nil || c.httpClient.Transport == nil {
+	if c == nil || c.sharedHTTPClient || c.httpClient == nil || c.httpClient.Transport == nil {
 		return
 	}
 	if closer, ok := c.httpClient.Transport.(interface{ CloseIdleConnections() }); ok {

@@ -1468,27 +1468,45 @@
       justify-content: space-between;
       gap: 8px;
       padding: 4px 6px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
       border-radius: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-main);
       cursor: pointer;
+      transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
     }
 
     .grok-tools-page .session-item:hover {
-      background: #f1f0ed;
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.08);
     }
 
     .grok-tools-page .session-item.active {
-      background: rgba(17, 17, 17, 0.06);
+      background: linear-gradient(135deg, rgba(215, 255, 100, 0.12), rgba(103, 232, 249, 0.08));
+      border-color: rgba(215, 255, 100, 0.22);
+      color: var(--text-main);
     }
 
     .grok-tools-page .session-title {
       flex: 1;
       min-width: 0;
       font-size: 11px;
-      color: #111;
+      color: inherit;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       line-height: 1;
+    }
+
+    .grok-tools-page .session-meta {
+      font-size: 11px;
+      color: var(--text-secondary);
+      opacity: .92;
+      flex: 0 0 auto;
+    }
+
+    .grok-tools-page .session-item.active .session-meta {
+      color: rgba(244, 247, 242, 0.78);
     }
 
     .grok-tools-page .session-delete {
@@ -1496,7 +1514,7 @@
       height: 22px;
       border: none;
       background: transparent;
-      color: var(--accents-4);
+      color: var(--text-secondary);
       border-radius: 6px;
       cursor: pointer;
       opacity: 0;
@@ -1511,20 +1529,24 @@
       opacity: 1;
     }
 
+    .grok-tools-page .session-item.active .session-delete {
+      color: rgba(244, 247, 242, 0.78);
+    }
+
     .grok-tools-page .session-delete:hover {
-      color: #b91c1c;
-      background: rgba(185, 28, 28, 0.08);
+      color: #fecaca;
+      background: rgba(185, 28, 28, 0.16);
     }
 
     .grok-tools-page .session-rename-input {
       flex: 1;
       min-width: 0;
       font-size: 12px;
-      color: #111;
-      border: 1px solid #e7e5e4;
+      color: var(--text-main);
+      border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 6px;
       padding: 2px 6px;
-      background: #fff;
+      background: rgba(255, 255, 255, 0.06);
       outline: none;
     }
 
@@ -1751,52 +1773,72 @@
     }
 
     .grok-tools-page #grokImagineSection .settings-grid {
-      --row-gap: 10px;
       display: grid;
-      grid-template-columns: 2.2fr 1fr;
-      grid-template-rows: calc(52px * 2 + var(--row-gap)) 52px 52px 52px;
+      grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1fr);
+      grid-template-areas:
+        "prompt duo"
+        "row2 row2b"
+        "row3 row3b";
       column-gap: 16px;
-      row-gap: var(--row-gap);
-      align-items: stretch;
+      row-gap: 12px;
+      align-items: start;
     }
 
     .grok-tools-page #grokImagineSection .settings-block-prompt {
-      grid-column: 1;
-      grid-row: 1;
+      grid-area: prompt;
     }
 
     .grok-tools-page #grokImagineSection .settings-block-duo {
-      grid-column: 2;
-      grid-row: 1;
+      grid-area: duo;
       display: grid;
-      grid-template-rows: 1fr 1fr;
+      grid-template-rows: repeat(2, minmax(0, 1fr));
       gap: 10px;
+      align-self: stretch;
     }
 
     .grok-tools-page #grokImagineSection .settings-block-row2 {
-      grid-column: 1;
-      grid-row: 2;
+      grid-area: row2;
     }
 
     .grok-tools-page #grokImagineSection .settings-block-row2b {
-      grid-column: 2;
-      grid-row: 2;
+      grid-area: row2b;
     }
 
     .grok-tools-page #grokImagineSection .settings-block-row3 {
-      grid-column: 1;
-      grid-row: 3;
+      grid-area: row3;
     }
 
     .grok-tools-page #grokImagineSection .settings-block-row3b {
-      grid-column: 2;
-      grid-row: 3;
+      grid-area: row3b;
     }
 
     .grok-tools-page #grokImagineSection .settings-row {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
       gap: 12px;
-      align-items: stretch;
+      align-items: start;
+    }
+
+    .grok-tools-page #grokImagineSection .settings-field {
+      min-width: 0;
+    }
+
+    .grok-tools-page #grokImagineSection #imagineSelectFolderBtn {
+      width: 100%;
+      min-height: 40px;
+      padding: 0 12px;
+      justify-content: flex-start;
+      gap: 8px;
+      overflow: hidden;
+    }
+
+    .grok-tools-page #grokImagineSection #imagineFolderPath {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: left;
     }
 
     .grok-tools-page #grokImagineSection .toggle-row-fill {
@@ -2035,6 +2077,19 @@
     @media (max-width: 1024px) {
       .grok-tools-page #grokImagineSection .function-top-grid.imagine-top-grid {
         grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 1100px) {
+      .grok-tools-page #grokImagineSection .settings-grid {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "prompt"
+          "duo"
+          "row2"
+          "row2b"
+          "row3"
+          "row3b";
       }
     }
 
@@ -2718,6 +2773,70 @@
       border-color: rgba(215, 255, 100, 0.18);
     }
 
+    .grok-tools-page .message-content,
+    .grok-tools-page .message-content.rendered,
+    .grok-tools-page .message-content.rendered p,
+    .grok-tools-page .message-content.rendered li,
+    .grok-tools-page .message-content.rendered th,
+    .grok-tools-page .message-content.rendered td,
+    .grok-tools-page .message-content.rendered h1,
+    .grok-tools-page .message-content.rendered h2,
+    .grok-tools-page .message-content.rendered h3,
+    .grok-tools-page .message-content.rendered h4,
+    .grok-tools-page .message-content.rendered h5,
+    .grok-tools-page .message-content.rendered h6 {
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .message-content.rendered .code-block,
+    .grok-tools-page .message-content.rendered .inline-code {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .message-content.rendered .code-block code {
+      color: var(--text-main);
+    }
+
+    .grok-tools-page .message-content.rendered blockquote {
+      background: rgba(255, 255, 255, 0.05);
+      border-left-color: rgba(215, 255, 100, 0.22);
+      color: var(--text-secondary);
+    }
+
+    .grok-tools-page .message-content.rendered hr,
+    .grok-tools-page .message-content.rendered th,
+    .grok-tools-page .message-content.rendered td,
+    .grok-tools-page .message-content.rendered img,
+    .grok-tools-page .message-content.rendered .img-grid img,
+    .grok-tools-page .img-retry {
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .grok-tools-page .message-content.rendered th {
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .grok-tools-page .img-retry {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-secondary);
+    }
+
+    .grok-tools-page .img-retry:hover {
+      color: var(--text-main);
+      border-color: rgba(215, 255, 100, 0.28);
+    }
+
+    .grok-tools-page .action-btn {
+      color: var(--text-secondary);
+    }
+
+    .grok-tools-page .action-btn:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
     .grok-tools-page .status-text {
       background: rgba(255, 255, 255, 0.05);
       color: var(--text-secondary);
@@ -2922,13 +3041,18 @@
       color: var(--text-main);
     }
 
-    .grok-tools-page #grokImagineSection .imagine-mode-item {
-      align-items: stretch;
+    .grok-tools-page #grokImagineSection .imagine-connection-block {
+      display: flex;
       flex-direction: column;
       gap: 10px;
+      margin-bottom: 16px;
+      padding: 14px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
     }
 
-    .grok-tools-page #grokImagineSection .imagine-mode-item .mode-label {
+    .grok-tools-page #grokImagineSection .mode-label {
       margin-bottom: 0;
     }
 
@@ -2943,9 +3067,25 @@
 
     .grok-tools-page #grokImagineSection .mode-btn {
       width: 100%;
-      padding: 8px 0;
+      min-height: 36px;
+      padding: 8px 12px;
       text-align: center;
       border-radius: 10px;
+      cursor: pointer;
+      position: relative;
+      z-index: 1;
+    }
+
+    .grok-tools-page #grokImagineSection .imagine-status-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grok-tools-page #grokImagineSection .imagine-mode-select-shell {
+      display: none;
+    }
+
+    .grok-tools-page #grokImagineSection .imagine-mode-select {
+      min-height: 40px;
     }
 
     .grok-tools-page #grokImagineSection .toggle-track {
@@ -2964,6 +3104,20 @@
 
     .grok-tools-page #grokVideoSection .video-stage {
       min-height: 240px;
+    }
+
+    @media (max-width: 640px) {
+      .grok-tools-page #grokImagineSection .imagine-status-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .grok-tools-page #grokImagineSection .mode-switch {
+        display: none;
+      }
+
+      .grok-tools-page #grokImagineSection .imagine-mode-select-shell {
+        display: block;
+      }
     }
 
     .grok-tools-page #grokVideoSection .video-item-body,
@@ -3296,20 +3450,22 @@
               <div class="card-title">连接状态</div>
               <span id="imagineStatus" class="status-text">未连接</span>
             </div>
-            <div class="meta-grid" style="margin-bottom:16px;">
-              <div class="meta-item imagine-mode-item">
-                <div class="meta-label mode-label">连接模式</div>
-                <div class="mode-switch" role="group" aria-label="Connection mode">
-                  <button class="mode-btn active" data-imagine-mode="auto" type="button">Auto</button>
-                  <button class="mode-btn" data-imagine-mode="ws" type="button">WS</button>
-                  <button class="mode-btn" data-imagine-mode="sse" type="button">SSE</button>
-                </div>
-                <select id="imagineMode" class="form-input" style="display:none;">
+            <div class="imagine-connection-block">
+              <div class="meta-label mode-label">连接模式</div>
+              <div class="mode-switch" role="group" aria-label="Connection mode">
+                <button class="mode-btn active" data-imagine-mode="auto" type="button">Auto</button>
+                <button class="mode-btn" data-imagine-mode="ws" type="button">WS</button>
+                <button class="mode-btn" data-imagine-mode="sse" type="button">SSE</button>
+              </div>
+              <div class="imagine-mode-select-shell">
+                <select id="imagineMode" class="form-input imagine-mode-select" aria-label="连接模式">
                   <option value="auto">Auto</option>
                   <option value="ws">WS</option>
                   <option value="sse">SSE</option>
                 </select>
               </div>
+            </div>
+            <div class="meta-grid imagine-status-grid" style="margin-bottom:16px;">
               <div class="meta-item"><div class="meta-label">图片数量</div><div id="imagineCount" class="meta-value">0</div></div>
               <div class="meta-item"><div class="meta-label">活跃任务</div><div id="imagineActive" class="meta-value">0</div></div>
               <div class="meta-item"><div class="meta-label">平均耗时</div><div id="imagineLatency" class="meta-value">-</div></div>
@@ -3654,8 +3810,8 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="{{.AdminPath}}/js/common.js?v=20260212"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260217"></script>
+  <script src="{{.AdminPath}}/js/common.js?v=20260319-1"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260319-2"></script>
 </body>
 
 </html>

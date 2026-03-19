@@ -181,7 +181,9 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 	writeString(acc.AgentMode)
 	writeString(acc.Email)
 	writeString(acc.Token)
-	writeInt64(acc.UpdatedAt.UnixNano())
+	// Do not include stats-only timestamps like UpdatedAt here.
+	// Request/usage accounting bumps UpdatedAt on every call, and using it in the
+	// fingerprint would force unnecessary client rebuilds and drop keep-alive pools.
 
 	if cfg != nil {
 		writeString(cfg.UpstreamMode)

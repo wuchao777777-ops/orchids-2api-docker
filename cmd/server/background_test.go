@@ -29,6 +29,35 @@ func TestExtractGrokModelIDsFromText(t *testing.T) {
 	}
 }
 
+func TestExtractGrokModelIDsFromText_FiltersDocsSlugs(t *testing.T) {
+	text := `grok-code-fast-1 grok-code-prompt-engineering grok-business grok-client grok-conv-id grok-imagine-image grok-4-1-fast-reasoning`
+	ids := extractGrokModelIDsFromText(text)
+	if !slices.Contains(ids, "grok-code-fast-1") {
+		t.Fatalf("expected grok-code-fast-1 in ids: %+v", ids)
+	}
+	if !slices.Contains(ids, "grok-4.1-fast-reasoning") {
+		t.Fatalf("expected grok-4.1-fast-reasoning in ids: %+v", ids)
+	}
+	for _, blocked := range []string{
+		"grok-code-prompt-engineering",
+		"grok-business",
+		"grok-client",
+		"grok-conv-id",
+		"grok-imagine-image",
+	} {
+		if slices.Contains(ids, blocked) {
+			t.Fatalf("%s should be filtered out: %+v", blocked, ids)
+		}
+	}
+}
+
+func TestNormalizeGrokPublicSourceText_UnescapesCommonSequences(t *testing.T) {
+	got := normalizeGrokPublicSourceText(`grok-4\.1-fast grok\u002d5`)
+	if got != "grok-4.1-fast grok-5" {
+		t.Fatalf("normalizeGrokPublicSourceText()=%q want %q", got, "grok-4.1-fast grok-5")
+	}
+}
+
 func TestBuildGrokVersionProbes(t *testing.T) {
 	models := []*store.Model{
 		{Channel: "Grok", ModelID: "grok-3"},

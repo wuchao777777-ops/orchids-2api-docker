@@ -6,6 +6,7 @@ let modelSearchTerm = "";
 let modelStatusFilter = "";
 let modelPageSize = 50;
 let modelCurrentPage = 1;
+let modelRefreshInFlight = false;
 
 function modelChannels() {
   const defaultChannels = ["Orchids", "Warp", "Bolt", "Puter", "Grok"];
@@ -108,6 +109,8 @@ function renderChannelTabs() {
     });
     container.appendChild(btn);
   });
+
+  updateRefreshButton();
 }
 
 function renderPagination(current, total) {
@@ -284,6 +287,7 @@ async function loadModels() {
     renderChannelTabs();
     updateModelChannelOptions();
     renderModels();
+    updateRefreshButton();
   } catch (err) {
     showToast("加载模型失败", "error");
   }
@@ -315,6 +319,7 @@ function filterModelsByChannel(channel) {
     btn.classList.toggle("active", btn.textContent === channel);
   });
   renderModels();
+  updateRefreshButton();
 }
 
 function updateModelChannelOptions() {
@@ -448,6 +453,68 @@ async function deleteModel(id) {
     await loadModels();
   } catch (err) {
     showToast(`删除失败: ${err.message}`, "error");
+  }
+}
+
+function updateRefreshButton() {
+  const button = document.getElementById("refreshModelsButton");
+  if (!button) return;
+
+  const channel = currentModelChannel || modelChannels()[0] || "";
+  button.disabled = modelRefreshInFlight || !channel;
+  if (!channel) {
+    button.textContent = "刷新当前渠道";
+    return;
+  }
+  button.textContent = modelRefreshInFlight
+    ? `正在刷新 ${channel}...`
+    : `刷新 ${channel} 列表`;
+}
+
+async function refreshModelsForCurrentChannel() {
+  const channel = currentModelChannel || modelChannels()[0] || "";
+  if (!channel || modelRefreshInFlight) return;
+
+  modelRefreshInFlight = true;
+  updateRefreshButton();
+
+  try {
+    const res = await fetch("/api/models/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel }),
+    });
+
+    const raw = await res.text();
+    let data = {};
+    if (raw) {
+      try {
+        data = JSON.parse(raw);
+      } catch (err) {
+        data = { message: raw };
+      }
+    }
+
+    if (!res.ok) {
+      throw new Error(data.message || raw || "刷新失败");
+    }
+
+    await loadModels();
+
+    const parts = [
+      `发现 ${data.discovered ?? 0}`,
+      `可用 ${data.verified ?? 0}`,
+      `新增 ${data.added ?? 0}`,
+      `更新 ${data.updated ?? 0}`,
+      `下线 ${data.offline ?? 0}`,
+      `删除 ${data.deleted ?? 0}`,
+    ];
+    showToast(`${channel} 刷新完成：${parts.join("，")}`);
+  } catch (err) {
+    showToast(`刷新失败: ${err.message}`, "error");
+  } finally {
+    modelRefreshInFlight = false;
+    updateRefreshButton();
   }
 }
 

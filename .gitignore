@@ -8,6 +8,8 @@ debug-logs
 orchids-api
 orchids-server
 server
+!cmd/server/
+!cmd/server/*.go
 
 # Test binary
 *.test

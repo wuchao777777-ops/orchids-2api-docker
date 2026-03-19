@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"orchids-api/internal/config"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
@@ -172,5 +173,24 @@ func TestBuildRequest_NoToolsPromptDisablesToolCalls(t *testing.T) {
 	}
 	if strings.Contains(systemPrompt, "# Tools") {
 		t.Fatalf("did not expect tool catalog when no-tools gate is enabled, got:\n%s", systemPrompt)
+	}
+}
+
+func TestNewFromAccount_ReusesSharedHTTPClient(t *testing.T) {
+	cfg := &config.Config{
+		RequestTimeout: 30,
+		ProxyHTTP:      "http://proxy.local:3128",
+		ProxyUser:      "user",
+		ProxyPass:      "pass",
+	}
+
+	clientA := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "token-a"}, cfg)
+	clientB := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "token-b"}, cfg)
+
+	if clientA.httpClient != clientB.httpClient {
+		t.Fatal("expected puter clients with same transport config to reuse shared http client")
+	}
+	if !clientA.sharedHTTPClient || !clientB.sharedHTTPClient {
+		t.Fatal("expected sharedHTTPClient flag to be set")
 	}
 }
