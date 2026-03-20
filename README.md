@@ -2,33 +2,40 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-一个基于 Go 的多通道代理服务，统一暴露兼容 Claude / OpenAI 风格接口，支持 `orchids`、`warp`、`grok` 三类上游账号池、负载均衡、自动切换，以及 Web 管理后台。
+一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `orchids`、`warp`、`bolt`、`puter`、`grok` 五类通道。
 
-## 项目概览
+## 当前状态
 
-Orchids-2api 的目标是把多个上游账号池封装成一套统一 API：
-
-- 对外暴露统一接口，减少客户端适配成本
-- 在账号池内自动选择账号，并在失败时切换
-- 统一管理模型、账号、配置、缓存和调试信息
-- 为 `grok` 补齐图片生成/编辑、本地媒体缓存与 OpenAI 兼容输出
+- `internal/handler` 统一处理 `orchids` / `warp` / `bolt` / `puter` 的 `/v1/messages` 与 `/v1/chat/completions`
+- `internal/grok` 独立处理 `grok` 的 `/v1/chat/completions`、`/v1/images/*`、`/v1/files/*`
+- 模型管理支持按通道刷新：`/api/models/refresh`
+- Puter 非流式 Claude Messages 已覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result` 回归
 
 ## 核心能力
 
-- 多账号池 + 负载均衡
-- 通道级模型管理与路由
+- 多账号池与按通道负载均衡
 - Claude Messages 兼容接口
 - OpenAI Chat Completions 兼容接口
-- Grok 图片生成、编辑、本地媒体缓存
+- 通道级模型管理、默认模型与排序
 - 管理后台与管理 API
-- Prometheus 指标、可选 `pprof`
 - Redis 持久化存储
+- Prometheus 指标与可选 `pprof`
+- Grok 图片生成、编辑和本地媒体缓存
 
-## 支持的上游通道
+## 支持通道
 
-- `orchids`
-- `warp`
-- `grok`
+| 通道 | 对外入口 |
+|---|---|
+| `orchids` | `/orchids/v1/messages`、`/orchids/v1/chat/completions` |
+| `warp` | `/warp/v1/messages`、`/warp/v1/chat/completions` |
+| `bolt` | `/bolt/v1/messages`、`/bolt/v1/chat/completions` |
+| `puter` | `/puter/v1/messages`、`/puter/v1/chat/completions` |
+| `grok` | `/grok/v1/chat/completions`、`/grok/v1/images/*`、`/grok/v1/files/*` |
+
+统一模型查询入口：
+
+- `GET /v1/models`
+- `GET /v1/models/{id}`
 
 ## 文档目录
 
@@ -37,14 +44,14 @@ Orchids-2api 的目标是把多个上游账号池封装成一套统一 API：
 - [API 参考](docs/api-reference.md)
 - [配置说明](docs/configuration.md)
 - [部署指南](docs/deployment.md)
-- [Orchids 请求流程](docs/ORCHIDS_API_FLOW.md)
-- [Grok 兼容性检查](docs/grok2api-parity-checklist.md)
+- [请求流程](docs/ORCHIDS_API_FLOW.md)
+- [Grok 与 grok2api 对齐清单](docs/grok2api-parity-checklist.md)
 
 ## 环境要求
 
-- Go `1.22+`
+- Go `1.24+`
 - Redis `7+`
-- Linux / macOS 任一可运行 Go 的环境
+- Windows / Linux / macOS
 
 ## 快速开始
 
@@ -56,7 +63,7 @@ docker run -d --name orchids-redis -p 6379:6379 redis:7
 
 ### 2. 准备配置
 
-最小可用 `config.json` 示例：
+最小可用 `config.json`：
 
 ```json
 {
@@ -64,17 +71,23 @@ docker run -d --name orchids-redis -p 6379:6379 redis:7
   "store_mode": "redis",
   "redis_addr": "127.0.0.1:6379",
   "admin_user": "admin",
-  "admin_pass": "admin123",
-  "admin_path": "/admin"
+  "admin_pass": "change-me",
+  "admin_path": "/admin",
+  "debug_enabled": true
 }
 ```
+
+说明：
+
+- 未设置 `admin_pass` 时，程序会在启动时自动生成随机密码并打印日志
+- 运行后若 Redis 中存在 `settings:config`，会覆盖文件配置
 
 ### 3. 启动服务
 
 开发模式：
 
 ```bash
-go run ./cmd/server/main.go -config ./config.json
+go run ./cmd/server -config ./config.json
 ```
 
 生产模式：
@@ -84,33 +97,62 @@ go build -o orchids-server ./cmd/server
 ./orchids-server -config ./config.json
 ```
 
-后台运行：
+Windows：
 
-```bash
-nohup ./orchids-server -config ./config.json > server.log 2>&1 &
+```powershell
+go build -o server.exe ./cmd/server
+.\server.exe -config .\config.json
 ```
 
 ## 常用命令
 
-重新编译并重启：
-
-```bash
-pkill -f "./orchids-server -config ./config.json" || true
-go build -o orchids-server ./cmd/server
-nohup ./orchids-server -config ./config.json > server.log 2>&1 &
-```
-
-查看日志：
-
-```bash
-tail -n 200 server.log
-```
-
-运行测试：
+运行全部测试：
 
 ```bash
 go test ./...
 ```
+
+只跑 Puter 相关回归：
+
+```bash
+go test ./internal/handler -run "Puter_"
+```
+
+重新编译：
+
+```bash
+go build -o orchids-server ./cmd/server
+```
+
+查看健康状态：
+
+```bash
+curl -s http://127.0.0.1:3002/health
+curl -s http://127.0.0.1:3002/v1/models
+```
+
+## 模型管理说明
+
+- 管理接口：`POST /api/models/refresh`
+- 请求体示例：`{"channel":"puter"}`
+- 当前刷新策略是“按来源同步”
+- 会把来源中新增的模型写入本地模型表
+- 会把本地已存在但来源已消失的模型删除
+- 不再对每个模型单独做逐个测活；`verified` 表示本轮成功纳入同步集合的数量
+
+当前各通道模型来源：
+
+- `orchids`：上游公开模型选择列表
+- `warp`：账号 GraphQL 发现结果，失败时退回内置种子
+- `bolt`：内置种子模型
+- `puter`：Puter 公开模型列表
+- `grok`：内置支持列表 + 现存模型 + 公共文档探测
+
+## Puter 当前对齐点
+
+- `/puter/v1/messages` 非流式响应会保留 `tool_use` content block，不再返回 `content: null`
+- `tool_result` follow-up 可以继续返回新的 `tool_use`，也可以正常收敛成最终文本
+- 已有回归测试覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result`
 
 ## 主要公开端点
 
@@ -118,65 +160,38 @@ go test ./...
 
 - `POST /orchids/v1/messages`
 - `POST /warp/v1/messages`
+- `POST /bolt/v1/messages`
+- `POST /puter/v1/messages`
 
 ### OpenAI Chat Completions 风格
 
 - `POST /orchids/v1/chat/completions`
 - `POST /warp/v1/chat/completions`
+- `POST /bolt/v1/chat/completions`
+- `POST /puter/v1/chat/completions`
 - `POST /grok/v1/chat/completions`
 
-### Grok 图片相关
+### Grok 图片与文件
 
 - `POST /grok/v1/images/generations`
 - `POST /grok/v1/images/edits`
 - `GET /grok/v1/files/{image|video}/{name}`
 
-### 通用接口
-
-- `GET /v1/models`
-- `GET /health`
-- `GET /metrics`
-
-详细请求与响应示例见 [API 参考](docs/api-reference.md)。
-
 ## 管理端
 
-- UI：`{admin_path}/`，默认 `/admin`
+- UI：`{admin_path}/`
 - 登录：`POST /api/login`
-- 账号、模型、配置、缓存等接口：`/api/*`
+- 账号管理：`/api/accounts*`
+- 模型管理：`/api/models*`
+- 配置管理：`/api/config*`
+- Token 缓存：`/api/token-cache/*`
 
-管理接口默认使用 session cookie，也支持：
+管理接口认证方式：
 
+- `session_token` cookie
 - `Authorization: Bearer <admin_token>`
 - `X-Admin-Token: <admin_token>`
-
-## Grok 图片链路说明
-
-- 生成/编辑结果会优先转为本地可访问地址：`/grok/v1/files/image/*`
-- 缓存目录：`data/tmp/image`、`data/tmp/video`
-- 即使 `assets.grok.com` 不可直连，也可以通过本地缓存地址展示
-
-## 常见问题
-
-### 1. `model not found`
-
-- 先调用 `GET /grok/v1/models` 或 `GET /v1/models` 确认模型名
-- 常见拼写错误：`gork-3`，正确写法应为 `grok-3`
-
-### 2. Grok 图片不显示
-
-- 检查返回是否为 `/grok/v1/files/image/...`
-- 检查本地缓存目录是否存在文件：`data/tmp/image`
-
-### 3. 服务启动后端口未监听
-
-```bash
-lsof -iTCP:3002 -sTCP:LISTEN -n -P
-```
-
-### 4. Grok 额度长期显示 `80 / 80`
-
-当前 Grok 额度显示依赖上游返回的 rate-limit 数据；如果上游始终返回 `remaining=80, total=80`，页面会忠实显示该值。需要结合本地 `request_count` 与实际请求日志一起判断真实使用情况。
+- Basic Auth，密码等于 `admin_pass`
 
 ## 许可证
 

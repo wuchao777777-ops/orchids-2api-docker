@@ -1126,10 +1126,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		primaryHandler := upstreamMessageHandler(sh, orchidsOwnsFinalSSE)
 		var attempt int
 		for {
-			if attempt > 0 {
-				// 非首次尝试：向客户端发送重试提示，避免前一次不完整内容造成混淆
-				sh.emitTextBlock("\n\n[Retrying request...]\n\n")
-			}
 			sh.resetRoundState()
 			var err error
 			upstreamReq.Attempt = attempt + 1

@@ -1,6 +1,7 @@
 # Grok2API Parity Checklist (Round 2)
 
-Date: 2026-02-17
+Date: 2026-03-21
+Scope: This file tracks Grok-only compatibility with `chenyme/grok2api`. The project also supports `orchids`, `warp`, `bolt`, and `puter`, but those channels are documented separately.
 Reference: `chenyme/grok2api` README + API behavior (`/v1/chat/completions`, `/v1/images/generations`, `/v1/images/edits`, `/v1/models`, `/v1/files/*`)
 
 ## Endpoint Compatibility

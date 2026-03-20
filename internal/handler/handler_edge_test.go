@@ -310,6 +310,88 @@ func TestHandleMessages_BoltSingleAccountNetworkErrorRetriesSameAccount(t *testi
 	}
 }
 
+func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedAccount(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	first := &store.Account{
+		AccountType: "puter",
+		Enabled:     true,
+		Weight:      1,
+	}
+	if err := s.CreateAccount(context.Background(), first); err != nil {
+		t.Fatalf("CreateAccount(first) error = %v", err)
+	}
+	second := &store.Account{
+		AccountType: "puter",
+		Enabled:     true,
+		Weight:      1,
+	}
+	if err := s.CreateAccount(context.Background(), second); err != nil {
+		t.Fatalf("CreateAccount(second) error = %v", err)
+	}
+
+	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
+	lb.AcquireConnection(second.ID)
+	defer lb.ReleaseConnection(second.ID)
+
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, lb)
+	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
+		if acc.ID == first.ID {
+			return &errorUpstreamEdge{err: errors.New("puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.")}
+		}
+		return &mockUpstreamEdge{events: []upstream.SSEMessage{
+			{Type: "model", Event: map[string]any{"type": "text-start"}},
+			{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "quota-ok"}},
+			{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+		}}
+	})
+
+	payload := map[string]any{
+		"model":    "claude-opus-4-5",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   true,
+	}
+	body, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/chat/completions", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, "quota-ok") {
+		t.Fatalf("expected successful retry output, got: %s", out)
+	}
+	if strings.Contains(out, "Retrying request") {
+		t.Fatalf("did not expect retry marker in streamed assistant output, got: %s", out)
+	}
+
+	storedFirst, err := s.GetAccount(context.Background(), first.ID)
+	if err != nil {
+		t.Fatalf("GetAccount(first) error = %v", err)
+	}
+	if storedFirst.StatusCode != "429" {
+		t.Fatalf("expected first account to be cooled down as 429, got %q", storedFirst.StatusCode)
+	}
+}
+
 func TestHandleMessages_Dedup_NonStream(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

@@ -2,28 +2,36 @@
 
 ## 1. 加载规则
 
-1. 启动参数 `-config` 指定配置文件（`.json` / `.yaml` / `.yml`）
-2. 若未指定，按顺序查找：`config.json` -> `config.yaml` -> `config.yml`
-3. 先读取文件，再应用默认值
-4. 若 Redis 中存在 `settings: config`，会覆盖文件配置并再次应用默认值
+配置加载顺序：
 
-说明：YAML 仅支持扁平 `key: value`（不支持嵌套对象）。
+1. 启动参数 `-config` 指定文件
+2. 若未指定，则按顺序查找 `config.json` -> `config.yaml` -> `config.yml`
+3. 读取文件并应用默认值
+4. 若 Redis 中存在 `settings:config`，则以 Redis 中保存的配置覆盖文件配置
+5. 最后始终执行 `config.ApplyHardcoded()`，把一批运行时固定值重新写入
 
-## 2. 核心配置项
+说明：
+
+- YAML 仅支持扁平 `key: value`
+- 不是所有历史字段都还能通过配置文件生效
+
+## 2. 配置文件可设置的字段
+
+下面这些字段会从配置文件或管理接口持久化到 Redis。
 
 ### 2.1 服务与管理端
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `port` | `3002` | 服务监听端口 |
-| `debug_enabled` | `false` | 开启调试日志与调试行为 |
-| `debug_log_sse` | `false` | 记录 SSE 明细 |
+| `debug_enabled` | `false` | 打开调试日志 |
+| `verbose_diagnostics` | `false` | 详细诊断日志 |
 | `admin_user` | `admin` | 管理端用户名 |
-| `admin_pass` | `admin123` | 管理端密码 |
-| `admin_path` | `/admin` | 管理界面路径 |
-| `admin_token` | 空 | 管理 API 静态 token（可选） |
+| `admin_pass` | 自动生成 | 管理端密码，建议显式设置 |
+| `admin_path` | `/admin` | 管理端路径 |
+| `admin_token` | 空 | 管理端静态 token |
 
-### 2.2 Redis 存储
+### 2.2 Redis
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -31,102 +39,20 @@
 | `redis_addr` | 空 | Redis 地址，例如 `127.0.0.1:6379` |
 | `redis_password` | 空 | Redis 密码 |
 | `redis_db` | `0` | Redis DB |
-| `redis_prefix` | `orchids:` | Key 前缀 |
+| `redis_prefix` | `orchids:` | Redis key 前缀 |
 
-### 2.3 请求与重试
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `max_retries` | `3` | 单请求最大重试次数 |
-| `retry_delay` | `1000` | 重试基准延迟（毫秒） |
-| `request_timeout` | `600` | 请求超时（秒） |
-| `retry_429_interval` | `60` | 429 重试间隔（秒） |
-| `account_switch_count` | `5` | 账号切换上限（历史兼容字段） |
-| `concurrency_limit` | `100` | 并发上限 |
-| `concurrency_timeout` | `300` | 并发等待超时（秒） |
-| `adaptive_timeout` | `false` | 自适应超时 |
-
-### 2.4 Token/缓存
+### 2.3 缓存
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `auto_refresh_token` | `false` | 是否自动刷新账号 token |
-| `token_refresh_interval` | `1` | 自动刷新间隔（分钟） |
-| `output_token_mode` | `final` | 输出 token 统计策略 |
-| `output_token_count` | `false` | 是否输出 token 数 |
 | `cache_token_count` | `false` | 是否缓存 token 计数 |
-| `cache_ttl` | `5` | token 缓存 TTL（分钟） |
-| `cache_strategy` | `mixed` | 上下文裁剪策略 |
-| `load_balancer_cache_ttl` | `5` | 负载均衡缓存 TTL（秒） |
+| `cache_ttl` | `5` | 通用缓存 TTL（分钟） |
+| `cache_strategy` | `mix` | 缓存策略 |
+| `enable_token_cache` | `false` | 是否启用 token cache |
+| `token_cache_ttl` | `300` | token cache TTL（秒） |
+| `token_cache_strategy` | `1` | token cache 策略 |
 
-### 2.5 上下文
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `context_max_tokens` | `8000` | 上下文 token 上限 |
-| `context_summary_max_tokens` | `800` | 摘要 token 上限 |
-| `context_keep_turns` | `6` | 会话保留轮数 |
-| `suppress_thinking` | `false` | 抑制 thinking 输出 |
-
-## 3. 通道相关配置
-
-### 3.1 Orchids
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `upstream_mode` | `sse` | 上游模式（历史字段） |
-| `orchids_api_base_url` | 代码内默认值 | Orchids API 地址 |
-| `orchids_ws_url` | 代码内默认值 | Orchids WS 地址 |
-| `orchids_api_version` | `2` | Orchids API 版本 |
-| `orchids_allow_run_command` | `false` | 是否允许 run_command |
-| `orchids_run_allowlist` | `["pwd","ls","find"]` | run_command 白名单 |
-| `orchids_cc_entrypoint_mode` | `auto` | cc_entrypoint 处理策略 |
-| `orchids_fs_ignore` | `["debug-logs","data",".claude"]` | 忽略路径段 |
-| `orchids_max_tool_results` | `10` | 每轮工具结果上限 |
-| `orchids_max_history_messages` | `20` | 历史消息上限 |
-
-### 3.2 Warp
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `warp_disable_tools` | `false` | 是否禁用 Warp 工具 |
-| `warp_max_tool_results` | `10` | 每轮工具结果上限 |
-| `warp_max_history_messages` | `20` | 历史消息上限 |
-| `warp_split_tool_results` | `false` | 是否拆分工具结果分批发送 |
-
-### 3.3 Grok
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `grok_api_base_url` | `https://grok.com` | Grok 站点地址 |
-| `grok_user_agent` | 代码内默认 UA | 请求 UA |
-| `grok_cf_clearance` | 空 | Cloudflare clearance（可选） |
-| `grok_cf_bm` | 空 | Cloudflare bm（可选） |
-| `grok_base_proxy_url` | 空 | Grok 基础请求代理 |
-| `grok_asset_proxy_url` | 空 | Grok 资源代理 |
-| `grok_use_utls` | `false` | 是否启用 uTLS |
-
-### 3.4 Grok2API 兼容键
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `stream` | `true` | chat/completions 默认是否流式 |
-| `app_stream` | 空 | 覆盖 `stream` |
-| `app.stream` | 空 | 最高优先级覆盖 `app_stream/stream` |
-| `image_nsfw` | `true` | public imagine 默认 NSFW 开关 |
-| `image.nsfw` | 空 | 覆盖 `image_nsfw` |
-| `image_final_min_bytes` | `100000` | public imagine 最终图过滤阈值 |
-| `image.final_min_bytes` | 空 | 覆盖 `image_final_min_bytes` |
-| `image_medium_min_bytes` | `30000` | public imagine 中等图过滤阈值 |
-| `image.medium_min_bytes` | 空 | 覆盖 `image_medium_min_bytes` |
-| `public_key` | 空 | public API 鉴权 key；为空时不做 public API 鉴权 |
-| `app_public_key` | 空 | 覆盖 `public_key` |
-| `app.public_key` | 空 | 最高优先级覆盖 `app_public_key/public_key` |
-| `public_enabled` | `false` | 是否公开 `/login` `/imagine` `/voice` `/video` 页面（仅页面开关） |
-| `app_public_enabled` | 空 | 覆盖 `public_enabled` |
-| `app.public_enabled` | 空 | 最高优先级覆盖 `app_public_enabled/public_enabled` |
-
-## 4. 代理配置
+### 2.4 代理
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -134,30 +60,47 @@
 | `proxy_https` | 空 | HTTPS 代理 |
 | `proxy_user` | 空 | 代理用户名 |
 | `proxy_pass` | 空 | 代理密码 |
-| `proxy_bypass` | 空数组 | 直连域名/网段 |
+| `proxy_bypass` | 空数组 | 直连域名或网段 |
 
-## 5. 自动注册（可选）
+## 3. 运行时硬编码默认值
 
-| 字段 | 默认值 | 说明 |
+这些值由 [config.go](/D:/Code/Orchids-2api/internal/config/config.go) 里的 `ApplyHardcoded()` 强制覆盖，不能指望仅靠配置文件改变。
+
+| 字段 | 当前值 | 说明 |
 |---|---|---|
-| `auto_reg_enabled` | `false` | 启用自动注册 |
-| `auto_reg_threshold` | `5` | 阈值 |
-| `auto_reg_script` | `scripts/autoreg.py` | 注册脚本路径 |
+| `output_token_mode` | `final` | 输出 token 统计模式 |
+| `context_max_tokens` | `100000` | 上下文上限 |
+| `context_summary_max_tokens` | `800` | 摘要上限 |
+| `context_keep_turns` | `6` | 会话保留轮数 |
+| `orchids_api_version` | `2` | Orchids API 版本 |
+| `orchids_allow_run_command` | `true` | Orchids 允许命令工具 |
+| `orchids_run_allowlist` | `["*"]` | Orchids 命令白名单 |
+| `orchids_cc_entrypoint_mode` | `auto` | 入口模式 |
+| `orchids_fs_ignore` | `["debug-logs","data",".claude"]` | 忽略目录 |
+| `grok_api_base_url` | `https://grok.com` | Grok 基础地址 |
+| `grok_use_utls` | `true` | Grok 默认启用 uTLS |
+| `warp_disable_tools` | `false` | Warp 工具默认开启 |
+| `warp_max_tool_results` | `10` | Warp 单轮工具结果上限 |
+| `warp_max_history_messages` | `20` | Warp 历史消息上限 |
+| `orchids_max_tool_results` | `10` | Orchids 单轮工具结果上限 |
+| `orchids_max_history_messages` | `20` | Orchids 历史消息上限 |
+| `stream` | `true` | Chat 默认流式 |
+| `image_nsfw` | `true` | 公共 imagine 默认 NSFW 开启 |
+| `public_enabled` | `true` | 公共页面默认开启 |
+| `image_final_min_bytes` | `100000` | imagine 最终图阈值 |
+| `image_medium_min_bytes` | `30000` | imagine 中间图阈值 |
+| `max_retries` | `3` | 请求最大重试次数 |
+| `retry_delay` | `1000` | 重试基准延迟（毫秒） |
+| `request_timeout` | `600` | 请求超时（秒） |
+| `retry_429_interval` | `60` | 429 重试间隔（秒） |
+| `token_refresh_interval` | `1` | token 自动刷新间隔（分钟） |
+| `auto_refresh_token` | `true` | 自动刷新账号 token |
+| `load_balancer_cache_ttl` | `5` | 负载均衡缓存 TTL（秒） |
+| `concurrency_limit` | `100` | 并发上限 |
+| `concurrency_timeout` | `300` | 并发等待超时（秒） |
+| `adaptive_timeout` | `true` | 自适应超时 |
 
-## 6. 账号默认值字段（可选）
-
-这些字段一般用于单账号直配或初始化：
-
-- `session_id`
-- `client_cookie`
-- `session_cookie`
-- `client_uat`
-- `project_id`
-- `user_id`
-- `agent_mode`
-- `email`
-
-## 7. 最小可用配置示例
+## 4. 最小可用配置
 
 ```json
 {
@@ -171,12 +114,29 @@
 }
 ```
 
-## 8. 已废弃/忽略字段说明
+## 5. 配置保存入口
 
-下列旧字段可能仍出现在历史 `config.json` 中，但当前版本不会实际生效或已被替代：
+管理端有两套常用配置接口：
 
-- `summary_cache_*`（摘要缓存相关）
-- `tool_call_mode`、`warp_tool_call_mode`、`disable_tool_filter`
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/api/config` | GET/POST | 直接读取 / 覆盖整个配置对象 |
+| `/api/config/list` | GET | 读取管理端表单配置 |
+| `/api/config/save` | POST | 以 patch 方式保存管理端表单配置 |
+
+## 6. 注意事项
+
+- `admin_pass` 若留空，会在启动时自动生成随机密码并写日志
+- 配置保存在 Redis 后，后续重启会优先使用 Redis 版本
+- `data/tmp`、`debug-logs` 等目录是运行期产物，不是配置项
+- 许多历史字段即使仍出现在旧配置里，也不会改变当前运行行为
+
+## 7. 建议清理的历史字段
+
+以下旧字段不建议继续保留在配置文件中：
+
+- `summary_cache_*`
+- `tool_call_mode`
+- `warp_tool_call_mode`
+- `disable_tool_filter`
 - `orchids_impl`
-
-建议清理旧字段，避免误判配置是否生效。

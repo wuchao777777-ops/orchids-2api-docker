@@ -2,6 +2,8 @@ package grok
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +11,12 @@ import (
 
 	"orchids-api/internal/config"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestCloneHeaderShallow_SetIsolation(t *testing.T) {
 	src := http.Header{
@@ -76,5 +84,78 @@ func TestDoRequest_DoesNotMutateInputHeaders(t *testing.T) {
 		if id == "" {
 			t.Fatalf("request %d missing x-xai-request-id", i+1)
 		}
+	}
+}
+
+func TestDoRequest_FallsBackWhenUTLSTransportSeesMalformedHTTP2Response(t *testing.T) {
+	t.Parallel()
+
+	primaryCalls := 0
+	fallbackCalls := 0
+	c := &Client{
+		cfg: &config.Config{MaxRetries: 0},
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				primaryCalls++
+				return nil, fmt.Errorf(`Post "https://grok.com/rest/app-chat/conversations/new": net/http: HTTP/1.x transport connection broken: malformed HTTP response "\x00\x00\x12\x04"`)
+			}),
+		},
+		fallbackHTTPClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				fallbackCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader("ok")),
+					Request:    req,
+				}, nil
+			}),
+		},
+	}
+
+	resp, err := c.doRequest(context.Background(), "https://grok.com/rest/app-chat/conversations/new", http.MethodPost, []byte(`{"message":"hi"}`), http.Header{}, http.StatusOK, false)
+	if err != nil {
+		t.Fatalf("doRequest() error = %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if primaryCalls != 1 {
+		t.Fatalf("primaryCalls=%d want 1", primaryCalls)
+	}
+	if fallbackCalls != 1 {
+		t.Fatalf("fallbackCalls=%d want 1", fallbackCalls)
+	}
+}
+
+func TestDoRequest_DoesNotFallbackForGenericTransportError(t *testing.T) {
+	t.Parallel()
+
+	primaryCalls := 0
+	fallbackCalls := 0
+	c := &Client{
+		cfg: &config.Config{MaxRetries: 0},
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				primaryCalls++
+				return nil, fmt.Errorf("dial tcp: connection refused")
+			}),
+		},
+		fallbackHTTPClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				fallbackCalls++
+				return nil, fmt.Errorf("unexpected fallback call")
+			}),
+		},
+	}
+
+	_, err := c.doRequest(context.Background(), "https://grok.com/rest/app-chat/conversations/new", http.MethodPost, []byte(`{"message":"hi"}`), http.Header{}, http.StatusOK, false)
+	if err == nil {
+		t.Fatal("expected doRequest() to fail")
+	}
+	if primaryCalls != 1 {
+		t.Fatalf("primaryCalls=%d want 1", primaryCalls)
+	}
+	if fallbackCalls != 0 {
+		t.Fatalf("fallbackCalls=%d want 0", fallbackCalls)
 	}
 }

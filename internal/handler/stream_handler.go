@@ -1201,14 +1201,20 @@ func (h *streamHandler) handleDirectFinalSSEEvent(msg upstream.SSEMessage) bool 
 		h.writeUpstreamEventSSE(msg)
 		stopReason := "end_turn"
 		h.mu.Lock()
+		if strings.TrimSpace(h.finalStopReason) != "" {
+			stopReason = h.finalStopReason
+		}
+		h.mu.Unlock()
+		if !h.isStream {
+			h.finishResponse(stopReason)
+			return true
+		}
+		h.mu.Lock()
 		if !h.hasReturn {
 			h.hasReturn = true
-			if strings.TrimSpace(h.finalStopReason) == "" {
-				h.finalStopReason = "end_turn"
-			}
-			stopReason = h.finalStopReason
-		} else if strings.TrimSpace(h.finalStopReason) != "" {
-			stopReason = h.finalStopReason
+			h.finalStopReason = stopReason
+		} else if strings.TrimSpace(h.finalStopReason) == "" {
+			h.finalStopReason = stopReason
 		}
 		h.mu.Unlock()
 		h.finalizeOutputTokens()
@@ -1414,6 +1420,9 @@ func (h *streamHandler) handleDirectFinalSSEEvent(msg upstream.SSEMessage) bool 
 				return true
 			}
 			call := toolCall{id: toolID, name: toolName, input: normalizedInput}
+			if !h.shouldAcceptDirectToolCall(call) {
+				return true
+			}
 			h.toolCallHandled[toolID] = true
 			if h.isStream {
 				if _, ok := h.toolCallEmitted[toolID]; ok {
@@ -2738,10 +2747,18 @@ func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
 }
 
 func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
+	return h.shouldAcceptToolCallWithFilter(call, true)
+}
+
+func (h *streamHandler) shouldAcceptDirectToolCall(call toolCall) bool {
+	return h.shouldAcceptToolCallWithFilter(call, false)
+}
+
+func (h *streamHandler) shouldAcceptToolCallWithFilter(call toolCall, enforceAllowedTools bool) bool {
 	h.mu.Lock()
 	disallowToolCalls := h.disallowToolCalls
 	allowedTool := true
-	if len(h.allowedToolNames) > 0 {
+	if enforceAllowedTools && len(h.allowedToolNames) > 0 {
 		lowerName := strings.ToLower(strings.TrimSpace(call.name))
 		_, allowedTool = h.allowedToolNames[lowerName]
 		if !allowedTool {
@@ -2765,7 +2782,7 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 		}
 		return false
 	}
-	if !allowedTool {
+	if enforceAllowedTools && !allowedTool {
 		if h.config != nil && h.config.DebugEnabled {
 			slog.Debug("tool call suppressed because it is not declared in the current request", "tool", call.name, "input", call.input)
 		}
@@ -3178,7 +3195,8 @@ func (h *streamHandler) hasAnyOutput() bool {
 	}
 
 	h.outputMu.Lock()
-	has = h.outputEstimator.HasText() || (h.outputTokens-h.thinkingTokens) > 0
+	// Upstream usage tokens alone do not mean the user saw any visible output.
+	has = h.outputEstimator.HasText()
 	h.outputMu.Unlock()
 	return has
 }

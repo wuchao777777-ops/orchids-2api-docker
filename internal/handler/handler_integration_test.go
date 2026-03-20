@@ -417,6 +417,174 @@ func TestHandleMessages_Puter_DirectSSE_NonStreamJSON(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_Puter_DirectSSE_NonStreamToolUseJSON(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstream{events: []upstream.SSEMessage{
+		{Type: "message_start", Event: map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id":    "msg_tool_use",
+				"type":  "message",
+				"role":  "assistant",
+				"model": "claude-sonnet-4-6",
+			},
+		}},
+		{Type: "content_block_start", Event: map[string]any{
+			"type":  "content_block_start",
+			"index": 0,
+			"content_block": map[string]any{
+				"type":  "tool_use",
+				"id":    "tool_write_1",
+				"name":  "Write",
+				"input": map[string]any{},
+			},
+		}},
+		{Type: "content_block_delta", Event: map[string]any{
+			"type":  "content_block_delta",
+			"index": 0,
+			"delta": map[string]any{
+				"type":         "input_json_delta",
+				"partial_json": `{"file_path":"note.txt","content":"alpha beta"}`,
+			},
+		}},
+		{Type: "content_block_stop", Event: map[string]any{
+			"type":  "content_block_stop",
+			"index": 0,
+		}},
+		{Type: "message_delta", Event: map[string]any{
+			"type": "message_delta",
+			"delta": map[string]any{
+				"stop_reason": "tool_use",
+			},
+			"usage": map[string]any{
+				"output_tokens": 7,
+			},
+		}},
+		{Type: "message_stop", Event: map[string]any{
+			"type": "message_stop",
+		}},
+	}}
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "claude-sonnet-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "use the Write tool"}},
+		"system":   []any{},
+		"stream":   false,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	if strings.Contains(out, `"content":null`) {
+		t.Fatalf("expected tool_use content blocks, got: %s", out)
+	}
+	if !strings.Contains(out, `"type":"tool_use"`) {
+		t.Fatalf("expected tool_use block in JSON body, got: %s", out)
+	}
+	if !strings.Contains(out, `"name":"Write"`) {
+		t.Fatalf("expected Write tool call in JSON body, got: %s", out)
+	}
+	if !strings.Contains(out, `"stop_reason":"tool_use"`) {
+		t.Fatalf("expected stop_reason tool_use, got: %s", out)
+	}
+}
+
+func TestHandleMessages_Puter_DirectSSE_NonStreamRepeatWriteFollowupReturnsFallback(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstream{events: []upstream.SSEMessage{
+		{Type: "message_start", Event: map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id":    "msg_repeat_write",
+				"type":  "message",
+				"role":  "assistant",
+				"model": "claude-opus-4-5",
+			},
+		}},
+		{Type: "content_block_start", Event: map[string]any{
+			"type":  "content_block_start",
+			"index": 0,
+			"content_block": map[string]any{
+				"type":  "tool_use",
+				"id":    "tool_write_repeat",
+				"name":  "Write",
+				"input": map[string]any{},
+			},
+		}},
+		{Type: "content_block_delta", Event: map[string]any{
+			"type":  "content_block_delta",
+			"index": 0,
+			"delta": map[string]any{
+				"type":         "input_json_delta",
+				"partial_json": `{"file_path":"note.txt","content":"alpha beta"}`,
+			},
+		}},
+		{Type: "content_block_stop", Event: map[string]any{
+			"type":  "content_block_stop",
+			"index": 0,
+		}},
+		{Type: "message_delta", Event: map[string]any{
+			"type": "message_delta",
+			"delta": map[string]any{
+				"stop_reason": "tool_use",
+			},
+			"usage": map[string]any{
+				"output_tokens": 5,
+			},
+		}},
+		{Type: "message_stop", Event: map[string]any{
+			"type": "message_stop",
+		}},
+	}}
+
+	body, _ := json.Marshal(map[string]any{
+		"model": "claude-opus-4-5",
+		"messages": []map[string]any{
+			{"role": "user", "content": "Use the Write tool to create note.txt with alpha beta"},
+			{"role": "assistant", "content": []map[string]any{
+				{
+					"type":  "tool_use",
+					"id":    "tool_write_1",
+					"name":  "Write",
+					"input": map[string]any{"file_path": "note.txt", "content": "alpha beta"},
+				},
+			}},
+			{"role": "user", "content": []map[string]any{
+				{
+					"type":        "tool_result",
+					"tool_use_id": "tool_write_1",
+					"content":     "Done",
+				},
+			}},
+		},
+		"system": []any{},
+		"stream": false,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	if strings.Contains(out, `"content":null`) {
+		t.Fatalf("expected duplicate-write fallback, got null content: %s", out)
+	}
+	if !strings.Contains(out, duplicateToolResultFallbackText) {
+		t.Fatalf("expected duplicate-write fallback text, got: %s", out)
+	}
+	if !strings.Contains(out, `"stop_reason":"end_turn"`) {
+		t.Fatalf("expected stop_reason end_turn after duplicate write suppression, got: %s", out)
+	}
+}
+
 func TestHandleMessages_SuggestionMode_LocalResponse(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

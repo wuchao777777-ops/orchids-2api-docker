@@ -1,140 +1,255 @@
-# API 接口文档
+# API 参考
 
-本文档以 `cmd/server/main.go` 当前路由为准。
+本文档以 [routes.go](/D:/Code/Orchids-2api/cmd/server/routes.go) 和 [model_refresh.go](/D:/Code/Orchids-2api/cmd/server/model_refresh.go) 当前实现为准。
 
 ## 1. 公开接口
 
+### 1.1 Claude Messages 风格
+
 | 路径 | 方法 | 说明 |
 |---|---|---|
-| `/orchids/v1/messages` | POST | Claude Messages 代理（Orchids 通道） |
-| `/orchids/v1/messages/count_tokens` | POST | 输入 Token 估算（Orchids 通道） |
-| `/warp/v1/messages` | POST | Claude Messages 代理（Warp 通道） |
-| `/warp/v1/messages/count_tokens` | POST | 输入 Token 估算（Warp 通道） |
-| `/bolt/v1/messages` | POST | Claude Messages 代理（Bolt 通道） |
-| `/bolt/v1/messages/count_tokens` | POST | 输入 Token 估算（Bolt 通道） |
-| `/puter/v1/messages` | POST | Claude Messages 代理（Puter 通道） |
-| `/puter/v1/messages/count_tokens` | POST | 输入 Token 估算（Puter 通道） |
-| `/orchids/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Orchids） |
-| `/warp/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Warp） |
-| `/bolt/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Bolt） |
-| `/puter/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Puter） |
-| `/grok/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Grok） |
-| `/grok/v1/images/generations` | POST | Grok 图片生成 |
-| `/grok/v1/images/edits` | POST | Grok 图片编辑（multipart） |
-| `/grok/v1/files/{image|video}/{name}` | GET | 读取本地缓存的图片/视频 |
-| `/v1/models` | GET | 全通道可用模型列表 |
-| `/v1/models/{id}` | GET | 查询单模型 |
-| `/orchids/v1/models` | GET | Orchids 可用模型 |
-| `/warp/v1/models` | GET | Warp 可用模型 |
-| `/bolt/v1/models` | GET | Bolt 可用模型 |
-| `/puter/v1/models` | GET | Puter 可用模型 |
-| `/grok/v1/models` | GET | Grok 可用模型 |
+| `/orchids/v1/messages` | POST | Orchids 通道 Claude Messages 代理 |
+| `/warp/v1/messages` | POST | Warp 通道 Claude Messages 代理 |
+| `/bolt/v1/messages` | POST | Bolt 通道 Claude Messages 代理 |
+| `/puter/v1/messages` | POST | Puter 通道 Claude Messages 代理 |
+| `/*/v1/messages/count_tokens` | POST | 输入 token 估算 |
+
+### 1.2 OpenAI Chat Completions 风格
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/orchids/v1/chat/completions` | POST | Orchids OpenAI 兼容入口 |
+| `/warp/v1/chat/completions` | POST | Warp OpenAI 兼容入口 |
+| `/bolt/v1/chat/completions` | POST | Bolt OpenAI 兼容入口 |
+| `/puter/v1/chat/completions` | POST | Puter OpenAI 兼容入口 |
+| `/grok/v1/chat/completions` | POST | Grok OpenAI 兼容入口 |
+| `/v1/chat/completions` | POST | Grok 兼容别名 |
+
+### 1.3 Grok 图片与文件
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/grok/v1/images/generations` | POST | 图片生成 |
+| `/grok/v1/images/edits` | POST | 图片编辑 |
+| `/v1/images/generations` | POST | Grok 图片生成别名 |
+| `/v1/images/edits` | POST | Grok 图片编辑别名 |
+| `/grok/v1/files/{image\|video}/{name}` | GET | 本地缓存媒体文件 |
+| `/v1/files/{image\|video}/{name}` | GET | Grok 文件别名 |
+
+### 1.4 模型、健康与指标
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/v1/models` | GET | 全通道模型列表 |
+| `/v1/models/{id}` | GET | 查询单个模型 |
+| `/orchids/v1/models` | GET | Orchids 模型列表 |
+| `/warp/v1/models` | GET | Warp 模型列表 |
+| `/bolt/v1/models` | GET | Bolt 模型列表 |
+| `/puter/v1/models` | GET | Puter 模型列表 |
+| `/grok/v1/models` | GET | Grok 模型列表 |
 | `/health` | GET | 健康检查 |
 | `/metrics` | GET | Prometheus 指标 |
 
-## 2. 管理接口（需认证）
+## 2. 管理接口
+
+### 2.1 `/api/*`
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
-| `/api/login` | POST | 管理端登录，写入 `session_token` cookie |
+| `/api/login` | POST | 管理端登录 |
 | `/api/logout` | POST | 管理端退出 |
 | `/api/accounts` | GET/POST | 账号列表 / 创建账号 |
-| `/api/accounts/{id}` | GET/PUT/DELETE | 单账号查询 / 更新 / 删除 |
-| `/api/accounts/{id}/check` | GET | 账号连通性与状态检查 |
-| `/api/accounts/{id}/usage` | GET | 账号用量信息 |
+| `/api/accounts/{id}` | GET/PUT/DELETE | 查询 / 更新 / 删除账号 |
+| `/api/accounts/{id}/check` | GET | 账号检查 |
+| `/api/accounts/{id}/usage` | GET | 账号用量 |
 | `/api/keys` | GET/POST | API Key 列表 / 创建 |
-| `/api/keys/{id}` | GET/PUT/DELETE | API Key 详情 / 启停 / 删除 |
-| `/api/models` | GET/POST | 模型配置列表 / 创建 |
-| `/api/models/{id}` | GET/PUT/DELETE | 模型配置详情 / 更新 / 删除 |
-| `/api/export` | GET | 导出账号与模型配置 |
-| `/api/import` | POST | 导入账号与模型配置 |
-| `/api/config` | GET/POST | 查看 / 更新运行配置（保存到 Redis） |
-| `/api/config/cache/stats` | GET | Token 缓存统计 |
-| `/api/config/cache/clear` | POST | 清空 Token 缓存 |
-| `/api/v1/admin/voice/token` | GET | 获取 Grok 语音 token |
-| `/api/v1/admin/imagine/start` | POST | 启动 imagine 连续生图 |
-| `/api/v1/admin/imagine/stop` | POST | 停止 imagine 任务 |
-| `/api/v1/admin/imagine/sse` | GET | imagine SSE 推送 |
-| `/api/v1/admin/imagine/ws` | GET | imagine WebSocket 推送 |
-| `/api/v1/admin/cache` | GET | Grok 媒体缓存摘要 |
-| `/api/v1/admin/cache/list` | GET | Grok 缓存列表 |
-| `/api/v1/admin/cache/clear` | POST | 清空 Grok 缓存 |
-| `/api/v1/admin/cache/item/delete` | POST | 删除单个缓存文件 |
+| `/api/keys/{id}` | GET/PUT/DELETE | API Key 详情 / 更新 / 删除 |
+| `/api/models` | GET/POST | 模型列表 / 创建模型 |
+| `/api/models/{id}` | GET/PUT/DELETE | 模型详情 / 更新 / 删除 |
+| `/api/models/refresh` | POST | 按通道刷新模型列表 |
+| `/api/export` | GET | 导出账号与模型 |
+| `/api/import` | POST | 导入账号与模型 |
+| `/api/config` | GET/POST | 查看 / 更新配置 |
+| `/api/config/list` | GET | 管理端表单配置读取 |
+| `/api/config/save` | POST | 管理端表单配置保存 |
+| `/api/config/cache/clear` | POST | 清空 prompt/token 缓存 |
+| `/api/token-cache/stats` | GET | Token 缓存统计 |
+| `/api/token-cache/clear` | POST | 清空 Token 缓存 |
+
+### 2.2 `/api/v1/admin/*` 和 `/v1/admin/*`
+
+这些路径是 Grok 管理能力和 grok2api 对齐别名，两个前缀都可用。
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/config` | GET/POST | 管理配置 |
+| `/verify` | GET | Grok 管理验证 |
+| `/storage` | GET | Grok 存储信息 |
+| `/tokens` | GET/POST | Grok token 池 |
+| `/tokens/refresh` | POST | 同步刷新 token |
+| `/tokens/refresh/async` | POST | 异步刷新 token |
+| `/tokens/nsfw/enable` | POST | 同步启用 NSFW |
+| `/tokens/nsfw/enable/async` | POST | 异步启用 NSFW |
+| `/batch/{task}` | GET/POST | 批任务流与取消 |
+| `/cache` | GET | 缓存摘要 |
+| `/cache/list` | GET | 缓存列表 |
+| `/cache/clear` | POST | 清空缓存 |
+| `/cache/item/delete` | POST | 删除单项缓存 |
+| `/cache/online/clear` | POST | 远端缓存清理 |
+| `/cache/online/clear/async` | POST | 远端缓存异步清理 |
+| `/cache/online/load/async` | POST | 远端缓存异步加载 |
+| `/voice/token` | GET | 语音 token |
+| `/imagine/start` | POST | imagine 开始 |
+| `/imagine/stop` | POST | imagine 停止 |
+| `/imagine/sse` | GET | imagine SSE |
+| `/imagine/ws` | GET | imagine WebSocket |
+| `/video/start` | POST | 视频任务开始 |
+| `/video/stop` | POST | 视频任务停止 |
+| `/video/sse` | GET | 视频 SSE |
+
+### 2.3 `/api/v1/public/*` 和 `/v1/public/*`
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/verify` | GET | 公共验证接口 |
+| `/voice/token` | GET | 公共语音 token |
+| `/imagine/config` | GET | imagine 配置 |
+| `/imagine/start` | POST | imagine 开始 |
+| `/imagine/stop` | POST | imagine 停止 |
+| `/imagine/sse` | GET | imagine SSE |
+| `/imagine/ws` | GET | imagine WebSocket |
+| `/video/start` | POST | 视频任务开始 |
+| `/video/stop` | POST | 视频任务停止 |
+| `/video/sse` | GET | 视频 SSE |
 
 ## 3. 认证方式
 
-### 3.1 公开接口
-
-默认不强制鉴权（通常由网关/反向代理做外层鉴权）。
-
-### 3.2 管理接口
+### 3.1 管理接口
 
 满足以下任一条件即可：
 
-1. `session_token` cookie（通过 `/api/login` 获取）
-2. `Authorization: Bearer <admin_token>` 或直接 `Authorization: <admin_token>`
+1. `session_token` cookie
+2. `Authorization: Bearer <admin_token>`
 3. `X-Admin-Token: <admin_token>`
-4. Basic Auth，且密码等于 `admin_pass`（用户名不参与校验）
+4. Basic Auth，密码等于 `admin_pass`
 
-## 4. 常用请求示例
+### 3.2 公共接口
 
-### 4.1 Claude Messages
+- 普通代理接口默认不强制鉴权，通常由上层网关控制
+- `/api/v1/public/*` 与 `/v1/public/*` 会按当前 `public_key` / `public_enabled` 逻辑鉴权
+
+## 4. 请求语义说明
+
+### 4.1 Claude Messages 非流式工具调用
+
+当模型要调用工具时，非流式响应会直接返回 `content` 数组中的 `tool_use` block，而不是空内容。
+
+当前已做回归覆盖的 Puter 场景：
+
+- `Read`
+- `Write`
+- `Edit`
+- `Delete`
+- 长上下文
+- 多轮 `tool_result`
+
+### 4.2 `tool_result` follow-up
+
+带有 `tool_result` 的 follow-up 请求有两种正常结果：
+
+1. 继续返回新的 `tool_use`
+2. 收敛为最终 `text`
+
+当前实现不会因为上游 usage token 已产生就把“空内容”误判成有效输出。
+
+### 4.3 模型刷新
+
+`POST /api/models/refresh` 示例：
+
+```bash
+curl -s http://127.0.0.1:3002/api/models/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"channel":"puter"}'
+```
+
+返回字段：
+
+| 字段 | 说明 |
+|---|---|
+| `channel` | 当前刷新通道 |
+| `source` | 模型发现来源 |
+| `discovered` | 来源中发现的模型数 |
+| `verified` | 纳入同步集合的模型数 |
+| `added` | 本轮新增数量 |
+| `updated` | 本轮更新数量 |
+| `deleted` | 本轮删除数量 |
+| `default_model_id` | 当前默认模型 |
+| `added_model_ids` | 新增模型 ID 列表 |
+| `deleted_model_ids` | 删除模型 ID 列表 |
+
+注意：
+
+- 当前刷新是“来源同步”，不是逐个模型测活
+- 来源拿不到的模型会被删除
+
+## 5. 常用请求示例
+
+### 5.1 Orchids Claude Messages
 
 ```bash
 curl -s http://127.0.0.1:3002/orchids/v1/messages \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "claude-sonnet-4-5",
+    "model": "claude-sonnet-4-6",
     "messages": [{"role":"user","content":"hello"}],
     "stream": false
   }'
 ```
 
-### 4.2 OpenAI Chat Completions（Grok）
+### 5.2 Puter Claude Messages 工具首轮
+
+```bash
+curl -s http://127.0.0.1:3002/puter/v1/messages \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "claude-opus-4-5",
+    "messages": [{"role":"user","content":"Read README.md"}],
+    "tools": [{
+      "name": "Read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_path": {"type": "string"}
+        },
+        "required": ["file_path"]
+      }
+    }],
+    "stream": false
+  }'
+```
+
+### 5.3 Grok Chat Completions
 
 ```bash
 curl -s http://127.0.0.1:3002/grok/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model":"grok-3",
-    "messages":[{"role":"user","content":"介绍一下你自己"}],
-    "stream":false
+    "model": "grok-4",
+    "messages": [{"role":"user","content":"介绍一下你自己"}],
+    "stream": false
   }'
 ```
 
-### 4.3 图片生成
+## 6. 错误约定
 
-```bash
-curl -s http://127.0.0.1:3002/grok/v1/images/generations \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model":"grok-imagine-1.0",
-    "prompt":"中国高速返程堵车，航拍，纪实风",
-    "n":2,
-    "response_format":"url",
-    "stream":false
-  }'
-```
-
-### 4.4 图片编辑（multipart）
-
-```bash
-curl -s http://127.0.0.1:3002/grok/v1/images/edits \
-  -F 'model=grok-imagine-1.0-edit' \
-  -F 'prompt=把天空改成黄昏' \
-  -F 'image=@./input.jpg' \
-  -F 'n=1' \
-  -F 'response_format=url'
-```
-
-## 5. 返回与错误约定
-
-- `4xx`：请求参数/模型/方法错误（例如 `model not found`）
-- `502`：上游 Grok/Warp/Orchids 异常或解析失败
-- `503`：账号池不可用（无可用账号或无可用 token）
+- `400`：请求参数错误、模型错误、方法错误
+- `401` / `403` / `429`：账号状态或鉴权状态错误
+- `502`：上游请求失败或流解析失败
+- `503`：当前通道无可用账号
 
 常见错误：
 
-- `model not found`：模型名错误或模型未启用（例如 `gork-3`）
-- `image model not supported`：图像接口使用了非图像模型
-- `no image generated`：上游成功但未产出可用图片
+- `model not found`
+- `puter API error: ...`
+- `Bad Gateway`
+- `stream parse error`

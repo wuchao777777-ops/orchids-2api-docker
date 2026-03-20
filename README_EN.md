@@ -2,52 +2,56 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-A Go-based multi-provider proxy that exposes Claude-style and OpenAI-compatible APIs on top of pooled upstream accounts for `orchids`, `warp`, and `grok`.
+A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-compatible APIs across five upstream channels: `orchids`, `warp`, `bolt`, `puter`, and `grok`.
 
-## Overview
+## Current Status
 
-Orchids-2api provides one unified API surface for multiple upstream account pools:
-
-- expose a consistent API to clients
-- select accounts from a pool automatically
-- fail over when an upstream account is unavailable
-- manage accounts, models, config, cache, and debug traces from one admin UI
-- extend `grok` with image generation/edit support, local media caching, and OpenAI-compatible output
+- `internal/handler` serves `orchids` / `warp` / `bolt` / `puter` for both `/v1/messages` and `/v1/chat/completions`
+- `internal/grok` handles `grok` chat, image, and local file endpoints
+- per-channel model sync is available through `POST /api/models/refresh`
+- Puter non-stream Claude Messages regressions are covered for `Read`, `Write`, `Edit`, `Delete`, long-context, and multi-round `tool_result`
 
 ## Core Features
 
-- multi-account pools with load balancing
-- per-channel model routing and model management
+- multi-account pools with per-channel load balancing
 - Claude Messages compatible endpoints
 - OpenAI Chat Completions compatible endpoints
-- Grok image generation, editing, and local media caching
+- model management, default model selection, and sorting
 - admin UI and admin API
-- Prometheus metrics and optional `pprof`
 - Redis-backed persistence
+- Prometheus metrics and optional `pprof`
+- Grok image generation, editing, and local media caching
 
-## Supported Upstream Channels
+## Supported Channels
 
-- `orchids`
-- `warp`
-- `grok`
+| Channel | Public routes |
+|---|---|
+| `orchids` | `/orchids/v1/messages`, `/orchids/v1/chat/completions` |
+| `warp` | `/warp/v1/messages`, `/warp/v1/chat/completions` |
+| `bolt` | `/bolt/v1/messages`, `/bolt/v1/chat/completions` |
+| `puter` | `/puter/v1/messages`, `/puter/v1/chat/completions` |
+| `grok` | `/grok/v1/chat/completions`, `/grok/v1/images/*`, `/grok/v1/files/*` |
+
+Unified model lookup:
+
+- `GET /v1/models`
+- `GET /v1/models/{id}`
 
 ## Documentation
-
-Detailed docs currently live under [`docs/`](docs) and are primarily Chinese-first:
 
 - [Architecture](docs/architecture.md)
 - [Architecture Review](docs/architecture-review.md)
 - [API Reference](docs/api-reference.md)
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
-- [Orchids Request Flow](docs/ORCHIDS_API_FLOW.md)
-- [Grok Parity Checklist](docs/grok2api-parity-checklist.md)
+- [Request Flow](docs/ORCHIDS_API_FLOW.md)
+- [Grok parity checklist](docs/grok2api-parity-checklist.md)
 
 ## Requirements
 
-- Go `1.22+`
+- Go `1.24+`
 - Redis `7+`
-- Linux or macOS environment capable of running Go
+- Windows / Linux / macOS
 
 ## Quick Start
 
@@ -59,127 +63,102 @@ docker run -d --name orchids-redis -p 6379:6379 redis:7
 
 ### 2. Create `config.json`
 
-Minimal working example:
-
 ```json
 {
   "port": "3002",
   "store_mode": "redis",
   "redis_addr": "127.0.0.1:6379",
   "admin_user": "admin",
-  "admin_pass": "admin123",
-  "admin_path": "/admin"
+  "admin_pass": "change-me",
+  "admin_path": "/admin",
+  "debug_enabled": true
 }
 ```
 
+Notes:
+
+- if `admin_pass` is omitted, the server generates a random password at startup and prints it to logs
+- if Redis already contains `settings:config`, that stored config overrides the file on boot
+
 ### 3. Start the server
 
-Development mode:
+Development:
 
 ```bash
-go run ./cmd/server/main.go -config ./config.json
+go run ./cmd/server -config ./config.json
 ```
 
-Production mode:
+Production:
 
 ```bash
 go build -o orchids-server ./cmd/server
 ./orchids-server -config ./config.json
 ```
 
-Run in background:
+Windows:
 
-```bash
-nohup ./orchids-server -config ./config.json > server.log 2>&1 &
+```powershell
+go build -o server.exe ./cmd/server
+.\server.exe -config .\config.json
 ```
 
 ## Common Commands
 
-Rebuild and restart:
-
-```bash
-pkill -f "./orchids-server -config ./config.json" || true
-go build -o orchids-server ./cmd/server
-nohup ./orchids-server -config ./config.json > server.log 2>&1 &
-```
-
-Tail logs:
-
-```bash
-tail -n 200 server.log
-```
-
-Run tests:
+Run all tests:
 
 ```bash
 go test ./...
 ```
 
-## Public Endpoints
+Run Puter-specific regressions:
 
-### Claude Messages style
+```bash
+go test ./internal/handler -run "Puter_"
+```
 
-- `POST /orchids/v1/messages`
-- `POST /warp/v1/messages`
+Rebuild:
 
-### OpenAI Chat Completions style
+```bash
+go build -o orchids-server ./cmd/server
+```
 
-- `POST /orchids/v1/chat/completions`
-- `POST /warp/v1/chat/completions`
-- `POST /grok/v1/chat/completions`
+Basic health checks:
 
-### Grok image endpoints
+```bash
+curl -s http://127.0.0.1:3002/health
+curl -s http://127.0.0.1:3002/v1/models
+```
 
-- `POST /grok/v1/images/generations`
-- `POST /grok/v1/images/edits`
-- `GET /grok/v1/files/{image|video}/{name}`
+## Model Sync Behavior
 
-### Generic endpoints
+- endpoint: `POST /api/models/refresh`
+- example body: `{"channel":"puter"}`
+- sync is source-driven, not per-model liveness probing
+- newly discovered models are inserted
+- locally stored models missing from the source are deleted
+- `verified` reports the number of models accepted into the synced set for that run
 
-- `GET /v1/models`
-- `GET /health`
-- `GET /metrics`
+## Puter Notes
 
-For request and response examples, see [API Reference](docs/api-reference.md).
+- `/puter/v1/messages` non-stream responses preserve `tool_use` content blocks
+- `tool_result` follow-ups can either continue the tool chain or converge to final text
+- regressions are covered for `Read`, `Write`, `Edit`, `Delete`, long context, and multi-round `tool_result`
 
 ## Admin
 
-- UI: `{admin_path}/`, default `/admin`
-- login endpoint: `POST /api/login`
-- account, model, config, and cache endpoints: `/api/*`
+- UI: `{admin_path}/`
+- login: `POST /api/login`
+- account management: `/api/accounts*`
+- model management: `/api/models*`
+- config management: `/api/config*`
+- token cache: `/api/token-cache/*`
 
-Admin endpoints use session cookies by default and also support:
+Auth methods:
 
+- `session_token` cookie
 - `Authorization: Bearer <admin_token>`
 - `X-Admin-Token: <admin_token>`
-
-## Grok Media Notes
-
-- generated or edited media is converted to locally reachable URLs when possible: `/grok/v1/files/image/*`
-- cache directories: `data/tmp/image` and `data/tmp/video`
-- if `assets.grok.com` is not directly reachable, clients can still render media through the local cache endpoint
-
-## FAQ
-
-### 1. `model not found`
-
-- call `GET /grok/v1/models` or `GET /v1/models` first to verify model IDs
-- common typo: `gork-3`; the correct model name is `grok-3`
-
-### 2. Grok images do not render
-
-- check whether the response contains `/grok/v1/files/image/...`
-- check whether cached files exist under `data/tmp/image`
-
-### 3. Port is not listening after startup
-
-```bash
-lsof -iTCP:3002 -sTCP:LISTEN -n -P
-```
-
-### 4. Grok quota stays at `80 / 80`
-
-Current Grok quota display depends on upstream rate-limit data. If upstream keeps returning `remaining=80` and `total=80`, the admin UI will display that value as-is. Use local request logs and `request_count` together when judging actual usage.
+- Basic Auth with password equal to `admin_pass`
 
 ## License
 

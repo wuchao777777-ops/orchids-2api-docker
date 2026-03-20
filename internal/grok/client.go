@@ -37,9 +37,11 @@ const (
 )
 
 type Client struct {
-	cfg         *config.Config
-	httpClient  *http.Client
-	assetClient *http.Client
+	cfg                *config.Config
+	httpClient         *http.Client
+	assetClient        *http.Client
+	fallbackHTTPClient *http.Client
+	fallbackAssetClient *http.Client
 }
 
 type NSFWEnableResult struct {
@@ -76,15 +78,29 @@ func New(cfg *config.Config) *Client {
 		assetProxyFunc = util.ProxyFuncFromURL(assetProxy, bypass)
 	}
 
-	baseClient := newHTTPClient(cfg, timeout, baseProxyFunc)
+	useUTLS := cfg != nil && cfg.GrokUseUTLS
+
+	baseClient := newHTTPClientWithMode(cfg, timeout, baseProxyFunc, useUTLS)
+	baseFallbackClient := (*http.Client)(nil)
+	if useUTLS {
+		baseFallbackClient = newHTTPClientWithMode(cfg, timeout, baseProxyFunc, false)
+	}
 	assetClient := baseClient
+	assetFallbackClient := baseFallbackClient
 	if assetProxy != nil && (baseProxy == nil || assetProxy.String() != baseProxy.String()) {
-		assetClient = newHTTPClient(cfg, timeout, assetProxyFunc)
+		assetClient = newHTTPClientWithMode(cfg, timeout, assetProxyFunc, useUTLS)
+		if useUTLS {
+			assetFallbackClient = newHTTPClientWithMode(cfg, timeout, assetProxyFunc, false)
+		} else {
+			assetFallbackClient = nil
+		}
 	}
 	return &Client{
-		cfg:         cfg,
-		httpClient:  baseClient,
-		assetClient: assetClient,
+		cfg:                 cfg,
+		httpClient:          baseClient,
+		assetClient:         assetClient,
+		fallbackHTTPClient:  baseFallbackClient,
+		fallbackAssetClient: assetFallbackClient,
 	}
 }
 
@@ -250,6 +266,13 @@ func (c *Client) clientForAsset(asset bool) *http.Client {
 	return c.httpClient
 }
 
+func (c *Client) fallbackClientForAsset(asset bool) *http.Client {
+	if asset && c.fallbackAssetClient != nil {
+		return c.fallbackAssetClient
+	}
+	return c.fallbackHTTPClient
+}
+
 func (c *Client) doRequest(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, okStatus int, asset bool) (*http.Response, error) {
 	return c.doRequestWith429Retry(ctx, reqURL, method, body, headers, okStatus, asset, true)
 }
@@ -288,6 +311,19 @@ func (c *Client) doRequestWith429Retry(ctx context.Context, reqURL string, metho
 		req.Header = reqHeaders
 
 		resp, err := c.clientForAsset(asset).Do(req)
+		if err != nil {
+			if fallback := c.fallbackClientForAsset(asset); fallback != nil && shouldRetryGrokWithoutUTLS(err) {
+				slog.Warn("Grok uTLS request failed; retrying with standard transport", "url", reqURL, "error", err)
+				fallbackReq, reqErr := http.NewRequestWithContext(ctx, method, reqURL, bytes.NewReader(body))
+				if reqErr != nil {
+					return nil, reqErr
+				}
+				fallbackHeaders := cloneHeaderShallow(headers, 1)
+				fallbackHeaders.Set("x-xai-request-id", randomHex(16))
+				fallbackReq.Header = fallbackHeaders
+				resp, err = fallback.Do(fallbackReq)
+			}
+		}
 		if err == nil && resp.StatusCode == okStatus {
 			return resp, nil
 		}
@@ -1011,7 +1047,11 @@ func resolveGrokProxy(cfg *config.Config, proxyAddr string) *url.URL {
 }
 
 func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
-	if cfg != nil && cfg.GrokUseUTLS {
+	return newHTTPClientWithMode(cfg, timeout, proxyFunc, cfg != nil && cfg.GrokUseUTLS)
+}
+
+func newHTTPClientWithMode(cfg *config.Config, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), useUTLS bool) *http.Client {
+	if useUTLS {
 		return &http.Client{
 			Timeout:   timeout,
 			Transport: newUTLSTransport(proxyFunc),
@@ -1024,6 +1064,15 @@ func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*ht
 	}
 
 	return util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc)
+}
+
+func shouldRetryGrokWithoutUTLS(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "http/1.x transport connection broken") &&
+		strings.Contains(lower, "malformed http response")
 }
 
 func parseRetryAfter(raw string) time.Duration {
