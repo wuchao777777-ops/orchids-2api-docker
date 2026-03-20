@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -220,29 +219,17 @@ func (s *Store) seedModels() error {
 		{ID: "106", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 18},
 	}
 
-	models = append(models, buildBoltSeedModels(ctx)...)
+	models = append(models, buildBoltBootstrapModels()...)
 	models = append(models, buildPuterSeedModels()...)
 
 	for _, m := range models {
-		existing, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID)
-		if err != nil {
-			// Model doesn't exist, create it
-			if err := s.CreateModel(ctx, &m); err != nil {
-				slog.Warn("Failed to seed model", "model_id", m.ModelID, "error", err)
-			} else {
-				slog.Info("Seeded model", "model_id", m.ModelID)
-			}
+		if _, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID); err == nil {
 			continue
 		}
-
-		if strings.EqualFold(m.Channel, "Bolt") {
-			existing.Name = m.Name
-			existing.Status = m.Status
-			existing.IsDefault = m.IsDefault
-			existing.SortOrder = m.SortOrder
-			if err := s.UpdateModel(ctx, existing); err != nil {
-				slog.Warn("Failed to refresh bolt model", "model_id", m.ModelID, "error", err)
-			}
+		if err := s.CreateModel(ctx, &m); err != nil {
+			slog.Warn("Failed to seed model", "model_id", m.ModelID, "error", err)
+		} else {
+			slog.Debug("Seeded model", "model_id", m.ModelID)
 		}
 	}
 
@@ -256,7 +243,7 @@ func (s *Store) seedModels() error {
 			slog.Warn("Failed to remove deprecated model", "model_id", modelID, "error", err)
 			continue
 		}
-		slog.Info("Removed deprecated model", "model_id", modelID)
+		slog.Debug("Removed deprecated model", "model_id", modelID)
 	}
 
 	return nil

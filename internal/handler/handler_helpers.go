@@ -333,7 +333,7 @@ func (h *Handler) refundWarpCredits(client UpstreamClient, category string) {
 		slog.Warn("Warp refund credits failed", "category", category, "reason", reason, "error", err)
 		return
 	}
-	slog.Info("Warp credits refunded", "category", category, "reason", reason)
+	slog.Debug("Warp credits refunded", "category", category, "reason", reason)
 }
 
 // upstreamErrorClass is a local alias for the centralized type.

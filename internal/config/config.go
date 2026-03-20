@@ -18,18 +18,19 @@ import (
 
 type Config struct {
 	// ── Configurable fields (read from config.json / Redis) ──
-	Port            string `json:"port"`
-	DebugEnabled    bool   `json:"debug_enabled"`
-	AdminUser       string `json:"admin_user"`
-	AdminPass       string `json:"admin_pass"`
-	AdminPath       string `json:"admin_path"`
-	AdminToken      string `json:"admin_token"`
-	StoreMode       string `json:"store_mode"`
-	RedisAddr       string `json:"redis_addr"`
-	RedisPassword   string `json:"redis_password"`
-	RedisDB         int    `json:"redis_db"`
-	RedisPrefix     string `json:"redis_prefix"`
-	CacheTokenCount bool   `json:"cache_token_count"`
+	Port               string `json:"port"`
+	DebugEnabled       bool   `json:"debug_enabled"`
+	VerboseDiagnostics bool   `json:"verbose_diagnostics,omitempty"`
+	AdminUser          string `json:"admin_user"`
+	AdminPass          string `json:"admin_pass"`
+	AdminPath          string `json:"admin_path"`
+	AdminToken         string `json:"admin_token"`
+	StoreMode          string `json:"store_mode"`
+	RedisAddr          string `json:"redis_addr"`
+	RedisPassword      string `json:"redis_password"`
+	RedisDB            int    `json:"redis_db"`
+	RedisPrefix        string `json:"redis_prefix"`
+	CacheTokenCount    bool   `json:"cache_token_count"`
 	CacheTTL           int    `json:"cache_ttl"`
 	CacheStrategy      string `json:"cache_strategy"`
 	EnableTokenCache   bool   `json:"enable_token_cache"`
@@ -246,7 +247,11 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.AdaptiveTimeout = true
 	cfg.AutoRegThreshold = 5
 	cfg.AutoRegScript = "scripts/autoreg.py"
-	cfg.DebugLogSSE = true
+	cfg.DebugLogSSE = false
+}
+
+func (c *Config) VerboseDiagnosticsEnabled() bool {
+	return c != nil && c.DebugEnabled && c.VerboseDiagnostics
 }
 
 func (c *Config) ChatDefaultStream() bool {

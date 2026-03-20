@@ -174,7 +174,7 @@ func (c *Client) getChatToken() (string, error) {
 		return "", fmt.Errorf("signed out: missing orchids client cookie")
 	}
 
-	info, err := orchidsFetchClerkInfoWithSession(c.config.ClientCookie, c.config.SessionCookie, orchidsProxyFunc(c.config))
+	info, err := orchidsFetchClerkInfoWithSession(c.config.ClientCookie, c.config.SessionCookie, c.config.ClientUat, c.config.SessionID, orchidsProxyFunc(c.config))
 	if err != nil {
 		return "", err
 	}

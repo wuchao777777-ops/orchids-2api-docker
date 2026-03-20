@@ -23,6 +23,7 @@ import (
 	"orchids-api/internal/debug"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/logutil"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
@@ -568,6 +569,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 初始化调试日志
 	logger := debug.New(h.config.DebugEnabled, h.config.DebugLogSSE)
 	defer logger.Close()
+	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 
 	// 1. 记录进入的 Claude 请求
 	logger.LogIncomingRequest(req)
@@ -576,7 +578,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	semanticHash := h.computeSemanticRequestHash(r, req)
 	traceID := shortRequestTrace(reqHash)
 	retryCount := stainlessRetryCount(r)
-	slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", retryCount)
+	if verboseDiagnostics {
+		slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", retryCount)
+	}
 
 	exactKey := "exact:" + reqHash
 	registeredKeys := []string{}
@@ -643,7 +647,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// ...
 	if ok, command := isCommandPrefixRequest(req); ok {
-		slog.Debug("Handling command prefix request", "command", command)
+		if verboseDiagnostics {
+			slog.Debug("Handling command prefix request", "command", command)
+		}
 		prefix := detectCommandPrefix(command)
 		logger.LogEarlyExit("command_prefix", map[string]interface{}{
 			"command": command,
@@ -654,7 +660,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isTopicClassifierRequest(req) {
-		slog.Debug("Handling topic classifier request locally")
+		if verboseDiagnostics {
+			slog.Debug("Handling topic classifier request locally")
+		}
 		logger.LogEarlyExit("topic_classifier", map[string]interface{}{
 			"mode": "local",
 		})
@@ -668,13 +676,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Debug: log all headers
-	for k, v := range r.Header {
-		slog.Debug("Incoming header V2 CHECK", "key", k, "value", v)
+	if verboseDiagnostics {
+		for k, v := range r.Header {
+			slog.Debug("Incoming header V2 CHECK", "key", k, "value", v)
+		}
 	}
 
 	// Context and Conversation Key
 	conversationKey := conversationKeyForRequest(r, req)
-	slog.Info("Request dispatch initialized", "trace_id", traceID, "path", r.URL.Path, "conversation_id", conversationKey, "model", req.Model, "stream", req.Stream)
+	if verboseDiagnostics {
+		slog.Debug("Request dispatch initialized", "trace_id", traceID, "path", r.URL.Path, "conversation_id", conversationKey, "model", req.Model, "stream", req.Stream)
+	}
 
 	forcedChannel := channelFromPath(r.URL.Path)
 	validatedModel, err := h.validateModelAvailability(r.Context(), req.Model, forcedChannel)
@@ -700,7 +712,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if isSuggestionMode(req.Messages) {
 		suggestion := buildLocalSuggestion(req.Messages)
-		slog.Debug("Handling suggestion mode request locally", "suggestion", suggestion)
+		if verboseDiagnostics {
+			slog.Debug("Handling suggestion mode request locally", "suggestion", suggestion)
+		}
 		logger.LogEarlyExit("suggestion_mode", map[string]interface{}{
 			"mode":       "local",
 			"suggestion": suggestion,
@@ -724,7 +738,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		apperrors.New("overloaded_error", err.Error(), http.StatusServiceUnavailable).WriteResponse(w)
 		return
 	}
-	slog.Debug("Checkpoint: selectAccount success")
+	if verboseDiagnostics {
+		slog.Debug("Checkpoint: selectAccount success")
+	}
 
 	// 捕获账号快照，用于请求结束后检测 forceRefreshToken 是否更新了账号信息
 	var accountSnapshot *store.Account
@@ -755,16 +771,24 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			channel = "puter"
 		}
 		// Passthrough channels do not trim history/tool results.
-		slog.Debug("Checkpoint: passthrough, skip context trimming", "channel", channel)
+		if verboseDiagnostics {
+			slog.Debug("Checkpoint: passthrough, skip context trimming", "channel", channel)
+		}
 	} else {
 		// Orchids: do not trim message/tool_result content to preserve full context.
-		slog.Debug("Checkpoint: orchids passthrough, skip context trimming")
+		if verboseDiagnostics {
+			slog.Debug("Checkpoint: orchids passthrough, skip context trimming")
+		}
 		if sanitized, changed := sanitizeSystemItems(req.System, false, h.config); changed {
 			req.System = sanitized
-			slog.Info("系统提示已移除 cc_entrypoint", "mode", h.config.OrchidsCCEntrypointMode, "warp", false)
+			if verboseDiagnostics {
+				slog.Debug("系统提示已移除 cc_entrypoint", "mode", h.config.OrchidsCCEntrypointMode, "warp", false)
+			}
 		}
 	}
-	slog.Debug("Checkpoint: message processing done")
+	if verboseDiagnostics {
+		slog.Debug("Checkpoint: message processing done")
+	}
 
 	// 手动管理连接计数，账号切换时需要释放旧账号、获取新账号
 	trackedAccountID := int64(0)
@@ -791,18 +815,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if lastUserIsToolResultFollowup(req.Messages) {
 		if isPassthroughRequest {
-			if h.config.DebugEnabled {
+			if verboseDiagnostics {
 				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest, "puter", isPuterRequest)
 			}
 		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
-			if h.config.DebugEnabled {
+			if verboseDiagnostics {
 				slog.Debug("tool_gate: keeping tools for exploratory tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest)
 			}
 		} else {
 			gateNoTools = true
 			toolGateReasons = append(toolGateReasons, "tool_result_followup")
 			toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
-			if h.config.DebugEnabled {
+			if verboseDiagnostics {
 				slog.Debug("tool_gate: disabled tools for tool_result-only follow-up", "warp", isWarpRequest)
 			}
 		}
@@ -813,12 +837,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if gateNoTools {
 		effectiveTools = nil
-		slog.Debug("tool_gate: disabled tools", "warp", isWarpRequest, "reasons", toolGateReasons)
+		if verboseDiagnostics {
+			slog.Debug("tool_gate: disabled tools", "warp", isWarpRequest, "reasons", toolGateReasons)
+		}
 	}
 
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
-	slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
+	if verboseDiagnostics {
+		slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
+	}
 	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isBoltRequest && !isPuterRequest
 
 	// 映射模型（用于上游请求与提示一致）
@@ -865,19 +893,21 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	noThinking = promptMeta.NoThinking
 	suppressThinking = promptMeta.NoThinking
 	buildDuration := time.Since(startBuild)
-	slog.Debug("Prompt build completed", "duration", buildDuration)
-	if h.config.DebugEnabled {
+	if verboseDiagnostics {
+		slog.Debug("Prompt build completed", "duration", buildDuration)
 		buildLabel := "BuildPromptAndHistory"
 		if isOrchidsProtocol {
 			buildLabel = "BuildCodeFreeMaxPromptAndHistory"
 		} else {
 			buildLabel = "BuildWarpPromptAndHistory"
 		}
-		slog.Info("[Performance] "+buildLabel, "duration", buildDuration)
+		slog.Debug("[Performance] "+buildLabel, "duration", buildDuration)
 		// Project context injection is deprecated for non-Orchids channels.
 	}
 
-	slog.Debug("Model mapping", "original", req.Model, "mapped", mappedModel)
+	if verboseDiagnostics {
+		slog.Debug("Model mapping", "original", req.Model, "mapped", mappedModel)
+	}
 
 	isStream := req.Stream
 
@@ -917,7 +947,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. 记录转换后的 prompt
-	slog.Debug("Checkpoint: LogConvertedPrompt")
+	if verboseDiagnostics {
+		slog.Debug("Checkpoint: LogConvertedPrompt")
+	}
 	logger.LogConvertedPrompt(builtPrompt)
 
 	breakdown := inputTokenBreakdown{}
@@ -939,15 +971,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	} else {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	}
-	slog.Debug(
-		"Input token breakdown (estimated)",
-		"prompt_profile", breakdownProfile,
-		"base_prompt_tokens", breakdown.BasePromptTokens,
-		"system_context_tokens", breakdown.SystemContextTokens,
-		"history_tokens", breakdown.HistoryTokens,
-		"tools_tokens", breakdown.ToolsTokens,
-		"estimated_total_input_tokens", breakdown.Total,
-	)
+	if verboseDiagnostics {
+		slog.Debug(
+			"Input token breakdown (estimated)",
+			"prompt_profile", breakdownProfile,
+			"base_prompt_tokens", breakdown.BasePromptTokens,
+			"system_context_tokens", breakdown.SystemContextTokens,
+			"history_tokens", breakdown.HistoryTokens,
+			"tools_tokens", breakdown.ToolsTokens,
+			"estimated_total_input_tokens", breakdown.Total,
+		)
+	}
 
 	// Token 计数（用于前置 usage 展示）
 	inputTokens := breakdown.Total
@@ -1005,7 +1039,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		h.sessionStore.SetConvID(r.Context(), conversationKey, id)
 		h.sessionStore.Touch(r.Context(), conversationKey)
-		slog.Debug("Warp conversationID captured", "key", conversationKey, "id", id)
+		if verboseDiagnostics {
+			slog.Debug("Warp conversationID captured", "key", conversationKey, "id", id)
+		}
 	}
 	defer sh.release()
 
@@ -1016,7 +1052,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		sh.writeSSEMessageStart(req.Model, inputTokens, 0)
 	}
 
-	slog.Debug("New request received")
+	if verboseDiagnostics {
+		slog.Debug("New request received")
+	}
 
 	// KeepAlive
 	var keepAliveStop chan struct{}
@@ -1106,30 +1144,34 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				accountType = currentAccount.AccountType
 				accountName = currentAccount.Name
 			}
-			slog.Info(
-				"Calling upstream client",
-				"trace_id", traceID,
-				"attempt", upstreamReq.Attempt,
-				"max_attempts", maxRetries+1,
-				"channel", targetChannel,
-				"model", mappedModel,
-				"conversation_id", conversationKey,
-				"chat_session_id", chatSessionID,
-				"account_id", accountID,
-				"account_type", accountType,
-				"account_name", accountName,
-			)
+			if verboseDiagnostics {
+				slog.Debug(
+					"Calling upstream client",
+					"trace_id", traceID,
+					"attempt", upstreamReq.Attempt,
+					"max_attempts", maxRetries+1,
+					"channel", targetChannel,
+					"model", mappedModel,
+					"conversation_id", conversationKey,
+					"chat_session_id", chatSessionID,
+					"account_id", accountID,
+					"account_type", accountType,
+					"account_name", accountName,
+				)
+			}
 
-			if h.config != nil && h.config.DebugEnabled {
+			if verboseDiagnostics {
 				slog.Debug("Interface check", "type", fmt.Sprintf("%T", apiClient))
 			}
 			if sender, ok := apiClient.(UpstreamPayloadClient); ok {
-				slog.Debug("Using SendRequestWithPayload")
+				if verboseDiagnostics {
+					slog.Debug("Using SendRequestWithPayload")
+				}
 				warpBatches := []warpToolResultBatch{{Messages: upstreamMessages}}
 				if isWarpRequest {
 					if h.config.WarpSplitToolResults || lastUserIsToolResultFollowup(upstreamMessages) {
 						batches, total := splitWarpToolResults(upstreamMessages, 1)
-						if len(batches) > 1 {
+						if verboseDiagnostics && len(batches) > 1 {
 							slog.Debug("Warp tool results split", "total_tool_results", total, "batches", len(batches))
 						}
 						warpBatches = batches
@@ -1158,7 +1200,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 										h.sessionStore.SetConvID(r.Context(), conversationKey, id)
 										h.sessionStore.Touch(r.Context(), conversationKey)
 									}
-									slog.Debug("Warp intermediate conversationID captured", "key", conversationKey, "id", id)
+									if verboseDiagnostics {
+										slog.Debug("Warp intermediate conversationID captured", "key", conversationKey, "id", id)
+									}
 								}
 								bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
 							case "model.text-delta", "coding_agent.output_text.delta":
@@ -1174,16 +1218,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 							}
 						}
 						err = sender.SendRequestWithPayload(r.Context(), batchReq, noopHandler, logger)
-						if err == nil && intermediateConversationID == "" {
+						if verboseDiagnostics && err == nil && intermediateConversationID == "" {
 							slog.Debug("Warp intermediate batch completed without conversationID update", "batch", i+1)
 						}
 						if err == nil && (intermediateTextDeltas > 0 || intermediateToolCalls > 0) {
-							slog.Debug(
-								"Warp intermediate batch produced visible output",
-								"batch", i+1,
-								"text_deltas", intermediateTextDeltas,
-								"tool_calls", intermediateToolCalls,
-							)
+							if verboseDiagnostics {
+								slog.Debug(
+									"Warp intermediate batch produced visible output",
+									"batch", i+1,
+									"text_deltas", intermediateTextDeltas,
+									"tool_calls", intermediateToolCalls,
+								)
+							}
 							for _, buffered := range bufferedIntermediate {
 								sh.handleMessage(buffered)
 							}
@@ -1198,11 +1244,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Warn("Falling back to legacy SendRequest (Workdir lost!)", "type", fmt.Sprintf("%T", apiClient))
 				err = apiClient.SendRequest(r.Context(), builtPrompt, chatHistory, mappedModel, primaryHandler, logger)
 			}
-			slog.Info("Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+			if verboseDiagnostics {
+				slog.Debug("Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+			}
 
 			if err == nil {
 				sh.forceFinishIfMissing()
-				slog.Info("Upstream attempt completed", "trace_id", traceID, "attempt", upstreamReq.Attempt)
+				if verboseDiagnostics {
+					slog.Debug("Upstream attempt completed", "trace_id", traceID, "attempt", upstreamReq.Attempt)
+				}
 				break
 			}
 			if orchidsOwnsFinalSSE && sh.hasReturnedResponse() {
@@ -1228,7 +1278,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					// Mark status if it's auth-related OR if it's a 429 (rate limit)
 					// We want to rotate accounts on 429 even if we retry the request on a new account
 					if !errClass.Retryable || errClass.Category == "auth" || status == "429" {
-						slog.Info("标记账号状态", "account_id", currentAccount.ID, "status", status, "category", errClass.Category)
+						if verboseDiagnostics {
+							slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", status, "category", errClass.Category)
+						}
 						markAccountStatus(r.Context(), h.loadBalancer.Store, currentAccount, status)
 					}
 				}
@@ -1294,9 +1346,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					if currentAccount != nil {
 						h.loadBalancer.AcquireConnection(currentAccount.ID)
 						trackedAccountID = currentAccount.ID
-						slog.Debug("Switched to account", "account", currentAccount.Name)
+						if verboseDiagnostics {
+							slog.Debug("Switched to account", "account", currentAccount.Name)
+						}
 					} else {
-						slog.Debug("Switched to default upstream config")
+						if verboseDiagnostics {
+							slog.Debug("Switched to default upstream config")
+						}
 					}
 				} else {
 					if shouldRetryCurrentAccountWhenNoAlternative(errClass.Category) && prevAccount != nil {

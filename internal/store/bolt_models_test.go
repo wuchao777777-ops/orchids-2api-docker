@@ -63,7 +63,7 @@ const asset="/assets/entry.client-ROOT.js";
 	}
 }
 
-func TestSeedModels_RefreshesBoltModelsFromBundle(t *testing.T) {
+func TestBuildBoltSeedModels_RefreshesBoltModelsFromBundle(t *testing.T) {
 	prev := fetchBoltModelChoices
 	fetchBoltModelChoices = func(ctx context.Context) ([]boltModelChoice, error) {
 		return []boltModelChoice{
@@ -73,6 +73,29 @@ func TestSeedModels_RefreshesBoltModelsFromBundle(t *testing.T) {
 			{ID: "claude-opus-4-5-20251101", Name: "Opus 4.5"},
 			{ID: "claude-opus-4-6", Name: "Opus 4.6"},
 		}, nil
+	}
+	t.Cleanup(func() {
+		fetchBoltModelChoices = prev
+	})
+
+	models := BuildBoltSeedModels(context.Background())
+	if len(models) != 5 {
+		t.Fatalf("len(models) = %d, want 5", len(models))
+	}
+	if !models[1].IsDefault {
+		t.Fatalf("models[1].IsDefault = false, want true")
+	}
+	if models[0].Name != "Claude Haiku 4.5 (Bolt)" {
+		t.Fatalf("models[0].Name = %q", models[0].Name)
+	}
+}
+
+func TestSeedModels_UsesStaticBoltFallbackWithoutFetchingBundle(t *testing.T) {
+	prev := fetchBoltModelChoices
+	called := false
+	fetchBoltModelChoices = func(ctx context.Context) ([]boltModelChoice, error) {
+		called = true
+		return nil, nil
 	}
 	t.Cleanup(func() {
 		fetchBoltModelChoices = prev
@@ -94,6 +117,9 @@ func TestSeedModels_RefreshesBoltModelsFromBundle(t *testing.T) {
 	})
 
 	ctx := context.Background()
+	if called {
+		t.Fatal("expected store.New() to avoid fetching bolt bundle on startup")
+	}
 
 	defaultModel, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-sonnet-4-5-20250929")
 	if err != nil {
@@ -117,5 +143,53 @@ func TestSeedModels_RefreshesBoltModelsFromBundle(t *testing.T) {
 	}
 	if oldDefault.IsDefault {
 		t.Fatalf("old default should have been cleared")
+	}
+}
+
+func TestSeedModels_DoesNotOverwriteExistingBoltModels(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := New(Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	ctx := context.Background()
+	model, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-sonnet-4-6")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
+	}
+
+	model.Name = "Custom Bolt Name"
+	model.IsDefault = true
+	model.SortOrder = 99
+	if err := s.UpdateModel(ctx, model); err != nil {
+		t.Fatalf("UpdateModel() error = %v", err)
+	}
+
+	if err := s.seedModels(); err != nil {
+		t.Fatalf("seedModels() error = %v", err)
+	}
+
+	reloaded, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-sonnet-4-6")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID(reloaded) error = %v", err)
+	}
+	if reloaded.Name != "Custom Bolt Name" {
+		t.Fatalf("reloaded.Name = %q, want %q", reloaded.Name, "Custom Bolt Name")
+	}
+	if !reloaded.IsDefault {
+		t.Fatal("reloaded.IsDefault = false, want true")
+	}
+	if reloaded.SortOrder != 99 {
+		t.Fatalf("reloaded.SortOrder = %d, want 99", reloaded.SortOrder)
 	}
 }

@@ -234,7 +234,14 @@ func BuildBoltSeedModels(ctx context.Context) []Model {
 	if err != nil {
 		slog.Warn("Bolt 模型同步: 官网 bundle 解析失败，回退到内置列表", "error", err)
 	}
+	return buildBoltModelsFromChoices(choices)
+}
 
+func buildBoltBootstrapModels() []Model {
+	return buildBoltModelsFromChoices(boltModelDiscoveryFallback)
+}
+
+func buildBoltModelsFromChoices(choices []boltModelChoice) []Model {
 	defaultModelID := chooseBoltDefaultModelID(choices)
 	models := make([]Model, 0, len(choices))
 	for i, choice := range choices {
@@ -249,10 +256,6 @@ func BuildBoltSeedModels(ctx context.Context) []Model {
 		})
 	}
 	return models
-}
-
-func buildBoltSeedModels(ctx context.Context) []Model {
-	return BuildBoltSeedModels(ctx)
 }
 
 func chooseBoltDefaultModelID(choices []boltModelChoice) string {

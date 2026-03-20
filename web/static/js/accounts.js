@@ -267,11 +267,11 @@ function applyTokenLabels(type) {
       : "支持批量添加 Puter。每行一个 auth_token";
     input.required = true;
   } else {
-    label.textContent = "__session";
-    input.placeholder = "每行一个 __session";
+    label.textContent = "Cookie / __client / __session";
+    input.placeholder = "支持原始 __client、完整 Cookie Header 或 Cookie JSON";
     hint.textContent = accountId
-      ? "Orchids 当前仅支持 __session，编辑时仅保存第一行"
-      : "Orchids 当前仅支持 __session。支持批量添加，每行一个 __session";
+      ? "支持直接粘贴 clerk.orchids.app 的原始 __client；完整 Cookie 成功率更高，只有 www.orchids.app 的 __session 通常不够"
+      : "支持原始 __client、完整 Cookie Header 或 Cookie JSON；推荐同时带上 __client_uat 以提高补全成功率";
     input.required = true;
   }
 }

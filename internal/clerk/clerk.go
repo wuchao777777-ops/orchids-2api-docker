@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/util"
 	"strings"
 	"time"
 )
@@ -63,10 +64,18 @@ type ParsedOrchidsCookies struct {
 }
 
 func FetchAccountInfoWithSessionProxy(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
-	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, sessionCookie, "", proxyFunc)
+	return FetchAccountInfoWithProjectAndSessionContextProxy(clientCookie, sessionCookie, "", "", "", proxyFunc)
 }
 
 func FetchAccountInfoWithProjectAndSessionProxy(clientCookie string, sessionCookie string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
+	return FetchAccountInfoWithProjectAndSessionContextProxy(clientCookie, sessionCookie, "", "", customProjectID, proxyFunc)
+}
+
+func FetchAccountInfoWithSessionContextProxy(clientCookie string, sessionCookie string, clientUat string, sessionID string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
+	return FetchAccountInfoWithProjectAndSessionContextProxy(clientCookie, sessionCookie, clientUat, sessionID, "", proxyFunc)
+}
+
+func FetchAccountInfoWithProjectAndSessionContextProxy(clientCookie string, sessionCookie string, clientUat string, sessionID string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
 	url := fmt.Sprintf("%s/v1/client?__clerk_api_version=%s&_clerk_js_version=%s", ClerkBaseURL, ClerkAPIVersion, ClerkJSVersion)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -78,16 +87,16 @@ func FetchAccountInfoWithProjectAndSessionProxy(clientCookie string, sessionCook
 	req.Header.Set("Accept-Language", "zh-CN")
 	req.Header.Set("Origin", "https://www.orchids.app")
 	req.Header.Set("Referer", "https://www.orchids.app/")
-	req.AddCookie(&http.Cookie{Name: "__client", Value: clientCookie})
-	if strings.TrimSpace(sessionCookie) != "" {
-		req.AddCookie(&http.Cookie{Name: "__session", Value: sessionCookie})
+	if sid, _ := ParseSessionInfoFromJWT(strings.TrimSpace(sessionCookie)); strings.TrimSpace(sessionID) == "" && sid != "" {
+		sessionID = sid
+	}
+	if cookieHeader := buildClerkCookieHeader(clientCookie, sessionCookie, clientUat, sessionID); cookieHeader != "" {
+		req.Header.Set("Cookie", cookieHeader)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	if proxyFunc != nil {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.Proxy = proxyFunc
-		client.Transport = transport
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: util.NewBrowserLikeTransport(proxyFunc),
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -132,12 +141,50 @@ func FetchAccountInfoWithProjectAndSessionProxy(clientCookie string, sessionCook
 	return &AccountInfo{
 		SessionID:    clientResp.Response.LastActiveSessionID,
 		ClientCookie: effectiveCookie,
-		ClientUat:    fmt.Sprintf("%d", time.Now().Unix()),
+		ClientUat:    firstNonEmptyClientUat(resp.Cookies(), clientUat),
 		ProjectID:    projectID,
 		UserID:       session.User.ID,
 		Email:        session.User.EmailAddresses[0].EmailAddress,
 		JWT:          session.LastActiveToken.JWT,
 	}, nil
+}
+
+func buildClerkCookieHeader(clientCookie string, sessionCookie string, clientUat string, sessionID string) string {
+	clientCookie = strings.TrimSpace(clientCookie)
+	sessionCookie = strings.TrimSpace(sessionCookie)
+	clientUat = strings.TrimSpace(clientUat)
+	sessionID = strings.TrimSpace(sessionID)
+
+	parts := make([]string, 0, 4)
+	if clientCookie != "" {
+		parts = append(parts, "__client="+clientCookie)
+	}
+	if sessionCookie != "" {
+		parts = append(parts, "__session="+sessionCookie)
+	}
+	if clientUat != "" {
+		parts = append(parts, "__client_uat="+clientUat)
+	}
+	if sessionID != "" {
+		parts = append(parts, "clerk_active_context="+sessionID+":")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func firstNonEmptyClientUat(cookies []*http.Cookie, fallback string) string {
+	for _, c := range cookies {
+		if c == nil || c.Name != "__client_uat" {
+			continue
+		}
+		if value := strings.TrimSpace(c.Value); value != "" {
+			return value
+		}
+	}
+	fallback = strings.TrimSpace(fallback)
+	if fallback != "" {
+		return fallback
+	}
+	return fmt.Sprintf("%d", time.Now().Unix())
 }
 
 func ParseClientCookies(input string) (clientJWT string, sessionJWT string, err error) {

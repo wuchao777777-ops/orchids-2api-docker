@@ -226,11 +226,11 @@ func registerRoutes(
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 	mux.Handle("/metrics", promhttp.Handler())
-	slog.Info("Prometheus metrics enabled", "path", "/metrics")
+	slog.Debug("Prometheus metrics enabled", "path", "/metrics")
 
 	if cfg.DebugEnabled {
 		mux.HandleFunc("/debug/pprof/", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, http.DefaultServeMux.ServeHTTP))
-		slog.Info("pprof enabled", "path", "/debug/pprof/")
+		slog.Debug("pprof enabled", "path", "/debug/pprof/")
 	}
 }
 

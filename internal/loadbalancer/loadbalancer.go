@@ -306,5 +306,5 @@ func (lb *LoadBalancer) persistAccountStatus(ctx context.Context, acc *store.Acc
 		slog.Warn("账号状态更新失败", "account_id", acc.ID, "reason", reason, "error", err)
 		return
 	}
-	slog.Info("账号状态已更新", "account_id", acc.ID, "status", acc.StatusCode, "reason", reason)
+	slog.Debug("账号状态已更新", "account_id", acc.ID, "status", acc.StatusCode, "reason", reason)
 }

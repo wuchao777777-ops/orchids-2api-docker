@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"orchids-api/internal/clerk"
+	"orchids-api/internal/util"
 )
 
 const (
 	orchidsAppURL          = "https://www.orchids.app/"
-	defaultOrchidsActionID = "4035e3dc50d904a44a767852f9103263f9bf34fe5d"
+	defaultOrchidsActionID = "4024929f98f58f3e813cf1e5f42d2e952b1dde0f40"
 	orchidsUserAgent       = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
 
 	// Legacy fallback. Real value is fetched dynamically via an RSC GET.
@@ -56,13 +57,10 @@ var actionCache = struct {
 const actionCacheTTL = 6 * time.Hour
 
 func newHTTPClientWithProxy(timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
-	client := &http.Client{Timeout: timeout}
-	if proxyFunc != nil {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.Proxy = proxyFunc
-		client.Transport = transport
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: util.NewBrowserLikeTransport(proxyFunc),
 	}
-	return client
 }
 
 func fetchDeploymentID(ctx context.Context, proxyFunc func(*http.Request) (*url.URL, error)) (string, error) {
@@ -189,6 +187,13 @@ func resolveOrchidsActionID(ctx context.Context, proxyFunc func(*http.Request) (
 	return id, nil
 }
 
+func invalidateOrchidsActionID() {
+	actionCache.mu.Lock()
+	actionCache.id = ""
+	actionCache.expires = time.Time{}
+	actionCache.mu.Unlock()
+}
+
 func discoverOrchidsActionID(ctx context.Context, proxyFunc func(*http.Request) (*url.URL, error)) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
@@ -313,6 +318,74 @@ func fetchText(ctx context.Context, url string, proxyFunc func(*http.Request) (*
 	return string(body), nil
 }
 
+func buildOrchidsCreditsRequest(ctx context.Context, sessionJWT string, userID string, actionID string, includeContext bool, proxyFunc func(*http.Request) (*url.URL, error)) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", orchidsAppURL, strings.NewReader(fmt.Sprintf(`["%s"]`, userID)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "text/x-component")
+	req.Header.Set("Content-Type", "text/plain;charset=UTF-8")
+	req.Header.Set("User-Agent", orchidsUserAgent)
+	req.Header.Set("Next-Action", actionID)
+	req.Header.Set("Origin", "https://www.orchids.app")
+	req.Header.Set("Referer", "https://www.orchids.app/")
+
+	if includeContext {
+		stateTree := defaultNextRouterStateTree
+		if tree, err := fetchNextRouterStateTree(ctx, proxyFunc); err == nil && strings.TrimSpace(tree) != "" {
+			stateTree = tree
+		}
+		req.Header.Set("Next-Router-State-Tree", stateTree)
+
+		// Some deployments still expect this Vercel header. Keep it as a retry-only
+		// hint because the lighter request path is currently the most reliable one.
+		if dpl, err := fetchDeploymentID(ctx, proxyFunc); err == nil && strings.TrimSpace(dpl) != "" {
+			req.Header.Set("x-deployment-id", dpl)
+		}
+	}
+
+	req.AddCookie(&http.Cookie{Name: "__session", Value: sessionJWT})
+	return req, nil
+}
+
+func isOrchidsActionNotFound(resp *http.Response, body string) bool {
+	if resp != nil && strings.TrimSpace(resp.Header.Get("x-nextjs-action-not-found")) == "1" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(body), "server action not found")
+}
+
+func fetchOrchidsCreditsAttempt(ctx context.Context, sessionJWT string, userID string, actionID string, includeContext bool, proxyFunc func(*http.Request) (*url.URL, error)) (*CreditsInfo, bool, error) {
+	req, err := buildOrchidsCreditsRequest(ctx, sessionJWT, userID, actionID, includeContext, proxyFunc)
+	if err != nil {
+		return nil, false, err
+	}
+
+	client := newHTTPClientWithProxy(15*time.Second, proxyFunc)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to fetch credits: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		bodyText := string(body)
+		return nil, isOrchidsActionNotFound(resp, bodyText), fmt.Errorf("credits request failed with status %d: %s", resp.StatusCode, bodyText)
+	}
+
+	info, err := parseRSCCredits(string(body))
+	if err != nil {
+		return nil, false, err
+	}
+	return info, false, nil
+}
+
 // FetchCreditsWithProxy fetches credits info using an optional proxy function.
 func FetchCreditsWithProxy(ctx context.Context, sessionJWT string, userID string, proxyFunc func(*http.Request) (*url.URL, error)) (*CreditsInfo, error) {
 	sessionJWT = strings.TrimSpace(sessionJWT)
@@ -332,56 +405,46 @@ func FetchCreditsWithProxy(ctx context.Context, sessionJWT string, userID string
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	// Server action expects an argument array. Current Orchids passes the userId.
-	req, err := http.NewRequestWithContext(ctx, "POST", orchidsAppURL, strings.NewReader(fmt.Sprintf(`["%s"]`, userID)))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Accept", "text/x-component")
-	req.Header.Set("Content-Type", "text/plain;charset=UTF-8")
-	req.Header.Set("User-Agent", orchidsUserAgent)
 	actionID, err := resolveOrchidsActionID(ctx, proxyFunc)
 	if err != nil {
 		slog.Warn("Orchids credits: action id discover failed, using fallback", "error", err)
 	}
-	req.Header.Set("Next-Action", actionID)
 
-	stateTree := defaultNextRouterStateTree
-	if tree, err := fetchNextRouterStateTree(ctx, proxyFunc); err == nil && strings.TrimSpace(tree) != "" {
-		stateTree = tree
+	// Current Orchids getUserProfile works with a minimal server-action POST.
+	// Keep the legacy router/deployment headers as a retry path only.
+	info, shouldRefreshAction, err := fetchOrchidsCreditsAttempt(ctx, sessionJWT, userID, actionID, false, proxyFunc)
+	if err == nil {
+		return info, nil
 	}
-	req.Header.Set("Next-Router-State-Tree", stateTree)
+	lastErr := err
 
-	// Orchids front-end sends an x-deployment-id header (Vercel). Without it, some
-	// server actions may fail with a generic 500 digest.
-	if dpl, err := fetchDeploymentID(ctx, proxyFunc); err == nil && strings.TrimSpace(dpl) != "" {
-		req.Header.Set("x-deployment-id", dpl)
-	}
-
-	req.Header.Set("Origin", "https://www.orchids.app")
-	req.Header.Set("Referer", "https://www.orchids.app/")
-	// Orchids RSC action seems to require cookies.
-	req.AddCookie(&http.Cookie{Name: "__session", Value: sessionJWT})
-
-	client := newHTTPClientWithProxy(15*time.Second, proxyFunc)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch credits: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("credits request failed with status %d: %s", resp.StatusCode, string(body))
+	if shouldRefreshAction {
+		invalidateOrchidsActionID()
+		if refreshedActionID, refreshErr := resolveOrchidsActionID(ctx, proxyFunc); strings.TrimSpace(refreshedActionID) != "" {
+			actionID = refreshedActionID
+			if refreshErr != nil {
+				slog.Warn("Orchids credits: action id refresh returned warning", "error", refreshErr)
+			}
+			info, _, err = fetchOrchidsCreditsAttempt(ctx, sessionJWT, userID, actionID, false, proxyFunc)
+			if err == nil {
+				return info, nil
+			}
+			lastErr = err
+		}
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+	info, _, err = fetchOrchidsCreditsAttempt(ctx, sessionJWT, userID, actionID, true, proxyFunc)
+	if err == nil {
+		return info, nil
 	}
+	return nil, errOr(lastErr, err)
+}
 
-	return parseRSCCredits(string(body))
+func errOr(primary error, fallback error) error {
+	if primary != nil {
+		return primary
+	}
+	return fallback
 }
 
 // parseRSCCredits parses the RSC text/x-component response to extract credits info.

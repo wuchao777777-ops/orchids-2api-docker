@@ -17,6 +17,7 @@ import (
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/logutil"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
@@ -124,8 +125,8 @@ var noActiveSessionLogState = struct {
 
 const noActiveSessionLogInterval = 5 * time.Minute
 
-var orchidsFetchClerkInfoWithSession = clerk.FetchAccountInfoWithSessionProxy
-var orchidsFetchClerkInfoWithProjectAndSession = clerk.FetchAccountInfoWithProjectAndSessionProxy
+var orchidsFetchClerkInfoWithSession = clerk.FetchAccountInfoWithSessionContextProxy
+var orchidsFetchClerkInfoWithProjectAndSession = clerk.FetchAccountInfoWithProjectAndSessionContextProxy
 
 func traceIDForLog(req upstream.UpstreamRequest) string {
 	traceID := strings.TrimSpace(req.TraceID)
@@ -303,7 +304,7 @@ func (c *Client) GetToken() (string, error) {
 
 		if strings.TrimSpace(c.account.ClientCookie) != "" {
 			accountClerkInfoAttempted = true
-			info, err := orchidsFetchClerkInfoWithSession(c.account.ClientCookie, c.account.SessionCookie, orchidsProxyFunc(c.config))
+			info, err := orchidsFetchClerkInfoWithSession(c.account.ClientCookie, c.account.SessionCookie, c.config.ClientUat, c.config.SessionID, orchidsProxyFunc(c.config))
 			if err == nil && info != nil {
 				// Update runtime config (used by some upstream payload fields)
 				c.applyAccountInfo(info)
@@ -394,7 +395,7 @@ func (c *Client) forceRefreshToken() (string, error) {
 	}
 
 	if strings.TrimSpace(c.config.ClientCookie) != "" {
-		info, err := orchidsFetchClerkInfoWithProjectAndSession(c.config.ClientCookie, c.config.SessionCookie, c.config.ProjectID, orchidsProxyFunc(c.config))
+		info, err := orchidsFetchClerkInfoWithProjectAndSession(c.config.ClientCookie, c.config.SessionCookie, c.config.ClientUat, c.config.SessionID, c.config.ProjectID, orchidsProxyFunc(c.config))
 		if err == nil && info.JWT != "" {
 			c.applyAccountInfo(info)
 			c.persistAccountInfo(info)
@@ -575,18 +576,18 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	}
 	cfg := c.config
 	timeout := 120
-	debugEnabled := false
 	if cfg != nil {
 		if cfg.RequestTimeout > 0 {
 			timeout = cfg.RequestTimeout
 		}
-		debugEnabled = cfg.DebugEnabled
 	}
 	transport := c.resolveTransport()
-	if debugEnabled {
+	if logutil.VerboseDiagnosticsEnabled() {
 		slog.Debug("Sending upstream request", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "transport", transport, "url", c.upstreamURL(), "timeout", timeout)
 	}
-	slog.Info("Orchids transport dispatch", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "transport", transport, "chat_session_id", req.ChatSessionID, "model", req.Model)
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("Orchids transport dispatch", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "transport", transport, "chat_session_id", req.ChatSessionID, "model", req.Model)
+	}
 	err := c.dispatchTransport(ctx, transport, req, onMessage, logger)
 	if err == nil {
 		return nil

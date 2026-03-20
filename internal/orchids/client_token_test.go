@@ -30,7 +30,7 @@ func TestGetTokenPrefersStoredAccountToken(t *testing.T) {
 		orchidsFetchClerkInfoWithSession = prevFetch
 	})
 
-	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
+	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, clientUat string, sessionID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
 		t.Fatal("expected stored Orchids token to be used before Clerk fetch")
 		return nil, nil
 	}
@@ -60,7 +60,13 @@ func TestGetTokenUsesClerkJWTWithoutTokensEndpoint(t *testing.T) {
 	})
 
 	token := "header." + encodeJWTClaims(`{"sid":"sess_456","sub":"user_456","exp":4102444800}`) + ".sig"
-	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
+	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, clientUat string, sessionID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
+		if clientUat != "" {
+			t.Fatalf("clientUat=%q want empty", clientUat)
+		}
+		if sessionID != "" {
+			t.Fatalf("sessionID=%q want empty", sessionID)
+		}
 		return &clerk.AccountInfo{
 			SessionID:    "sess_456",
 			ClientCookie: "rotated-client-cookie",
@@ -105,10 +111,10 @@ func TestGetTokenDoesNotDoubleHitClerkAfterAccountFetch429(t *testing.T) {
 		orchidsFetchClerkInfoWithProjectAndSession = prevRefresh
 	})
 
-	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
+	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, clientUat string, sessionID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
 		return nil, fmt.Errorf("unexpected status code 429: too many requests")
 	}
-	orchidsFetchClerkInfoWithProjectAndSession = func(clientCookie string, sessionCookie string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
+	orchidsFetchClerkInfoWithProjectAndSession = func(clientCookie string, sessionCookie string, clientUat string, sessionID string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
 		t.Fatal("expected GetToken to avoid a second Clerk refresh call")
 		return nil, nil
 	}
@@ -142,10 +148,10 @@ func TestGetTokenFallsBackToSessionTokensEndpointWhenSessionKnown(t *testing.T) 
 		orchidsFetchClerkInfoWithProjectAndSession = prevRefresh
 	})
 
-	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
+	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, clientUat string, sessionID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
 		return nil, fmt.Errorf("unexpected status code 429: too many requests")
 	}
-	orchidsFetchClerkInfoWithProjectAndSession = func(clientCookie string, sessionCookie string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
+	orchidsFetchClerkInfoWithProjectAndSession = func(clientCookie string, sessionCookie string, clientUat string, sessionID string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
 		t.Fatal("expected GetToken to use stored session via tokens endpoint instead of second Clerk refresh")
 		return nil, nil
 	}
@@ -226,9 +232,15 @@ func TestGetChatTokenRejectsSessionOnlyAccountWithoutActiveClerkSession(t *testi
 		orchidsFetchClerkInfoWithSession = prevFetch
 	})
 
-	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
+	orchidsFetchClerkInfoWithSession = func(clientCookie string, sessionCookie string, clientUat string, sessionID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
 		if clientCookie != "bootstrapped-client" {
 			t.Fatalf("clientCookie=%q want bootstrapped-client", clientCookie)
+		}
+		if clientUat != "1773712060" {
+			t.Fatalf("clientUat=%q want 1773712060", clientUat)
+		}
+		if sessionID != "sess_bootstrap" {
+			t.Fatalf("sessionID=%q want sess_bootstrap", sessionID)
 		}
 		return nil, fmt.Errorf("no active sessions found")
 	}

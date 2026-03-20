@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
@@ -141,6 +144,92 @@ func TestRefreshAccountState_OrchidsUsesTokenGetterAndCreditsFetcher(t *testing.
 	}
 	if acc.Subscription != "pro" || acc.UsageCurrent != 42 || acc.UsageLimit != orchids.PlanCreditLimit("PRO") {
 		t.Fatalf("unexpected orchids quota sync: subscription=%q current=%v limit=%v", acc.Subscription, acc.UsageCurrent, acc.UsageLimit)
+	}
+}
+
+func TestRefreshAccountState_OrchidsCreditsServerActionMismatchStillSucceeds(t *testing.T) {
+	prevGetToken := orchidsGetAccountToken
+	prevFetchCredits := orchidsFetchCredits
+	t.Cleanup(func() {
+		orchidsGetAccountToken = prevGetToken
+		orchidsFetchCredits = prevFetchCredits
+	})
+
+	sessionJWT := "header." + encodeJWTClaims(`{"sid":"sess_refresh_ok","sub":"user_refresh_ok","exp":4102444800}`) + ".sig"
+	orchidsGetAccountToken = func(acc *store.Account, cfg *config.Config) (string, error) {
+		return sessionJWT, nil
+	}
+	orchidsFetchCredits = func(ctx context.Context, sessionJWTArg string, userID string, proxyFunc func(*http.Request) (*url.URL, error)) (*orchids.CreditsInfo, error) {
+		if sessionJWTArg != sessionJWT {
+			t.Fatalf("sessionJWT=%q want %q", sessionJWTArg, sessionJWT)
+		}
+		if userID != "user_refresh_ok" {
+			t.Fatalf("userID=%q want user_refresh_ok", userID)
+		}
+		return nil, errors.New("credits request failed with status 404: Server action not found.")
+	}
+
+	a := New(nil, "", "", &config.Config{})
+	acc := &store.Account{ID: 77, AccountType: "orchids", ClientCookie: "client-cookie"}
+
+	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
+	if err != nil {
+		t.Fatalf("refreshAccountState() error: %v", err)
+	}
+	if status != "" || httpStatus != 0 {
+		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
+	}
+	if acc.Token != sessionJWT {
+		t.Fatalf("Token=%q want %q", acc.Token, sessionJWT)
+	}
+	if acc.SessionID != "sess_refresh_ok" {
+		t.Fatalf("SessionID=%q want sess_refresh_ok", acc.SessionID)
+	}
+	if acc.UserID != "user_refresh_ok" {
+		t.Fatalf("UserID=%q want user_refresh_ok", acc.UserID)
+	}
+}
+
+func TestRefreshAccountState_OrchidsCreditsTimeoutStillSucceeds(t *testing.T) {
+	prevGetToken := orchidsGetAccountToken
+	prevFetchCredits := orchidsFetchCredits
+	t.Cleanup(func() {
+		orchidsGetAccountToken = prevGetToken
+		orchidsFetchCredits = prevFetchCredits
+	})
+
+	sessionJWT := "header." + encodeJWTClaims(`{"sid":"sess_refresh_timeout","sub":"user_refresh_timeout","exp":4102444800}`) + ".sig"
+	orchidsGetAccountToken = func(acc *store.Account, cfg *config.Config) (string, error) {
+		return sessionJWT, nil
+	}
+	orchidsFetchCredits = func(ctx context.Context, sessionJWTArg string, userID string, proxyFunc func(*http.Request) (*url.URL, error)) (*orchids.CreditsInfo, error) {
+		if sessionJWTArg != sessionJWT {
+			t.Fatalf("sessionJWT=%q want %q", sessionJWTArg, sessionJWT)
+		}
+		if userID != "user_refresh_timeout" {
+			t.Fatalf("userID=%q want user_refresh_timeout", userID)
+		}
+		return nil, errors.New("failed to fetch credits: Post \"https://www.orchids.app/\": context deadline exceeded")
+	}
+
+	a := New(nil, "", "", &config.Config{})
+	acc := &store.Account{ID: 78, AccountType: "orchids", ClientCookie: "client-cookie"}
+
+	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
+	if err != nil {
+		t.Fatalf("refreshAccountState() error: %v", err)
+	}
+	if status != "" || httpStatus != 0 {
+		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
+	}
+	if acc.Token != sessionJWT {
+		t.Fatalf("Token=%q want %q", acc.Token, sessionJWT)
+	}
+	if acc.SessionID != "sess_refresh_timeout" {
+		t.Fatalf("SessionID=%q want sess_refresh_timeout", acc.SessionID)
+	}
+	if acc.UserID != "user_refresh_timeout" {
+		t.Fatalf("UserID=%q want user_refresh_timeout", acc.UserID)
 	}
 }
 
@@ -283,6 +372,32 @@ func TestNormalizeOrchidsCredentialInput_SessionJWT(t *testing.T) {
 	}
 }
 
+func TestNormalizeOrchidsCredentialInput_RawClientJWT(t *testing.T) {
+	t.Parallel()
+
+	clientJWT := encodeJWT(`{"id":"client_abc","rotating_token":"rotating_xyz","exp":4102444800}`)
+	acc := &store.Account{
+		AccountType:  "orchids",
+		ClientCookie: clientJWT,
+	}
+
+	if err := normalizeOrchidsCredentialInput(acc); err != nil {
+		t.Fatalf("normalizeOrchidsCredentialInput() error = %v", err)
+	}
+	if acc.ClientCookie != clientJWT {
+		t.Fatalf("ClientCookie=%q want %q", acc.ClientCookie, clientJWT)
+	}
+	if acc.SessionCookie != "" {
+		t.Fatalf("SessionCookie=%q want empty", acc.SessionCookie)
+	}
+	if acc.Token != "" {
+		t.Fatalf("Token=%q want empty", acc.Token)
+	}
+	if acc.SessionID != "" {
+		t.Fatalf("SessionID=%q want empty", acc.SessionID)
+	}
+}
+
 func TestNormalizeOrchidsCredentialInput_CookieJSON(t *testing.T) {
 	t.Parallel()
 
@@ -309,6 +424,246 @@ func TestNormalizeOrchidsCredentialInput_CookieJSON(t *testing.T) {
 	}
 	if acc.SessionID != "sess_json" || acc.UserID != "user_json" {
 		t.Fatalf("unexpected session info sid=%q user=%q", acc.SessionID, acc.UserID)
+	}
+}
+
+func TestHandleAccounts_PostOrchidsSessionInputHydratesAccountInfo(t *testing.T) {
+	prevGetToken := orchidsGetAccountToken
+	t.Cleanup(func() {
+		orchidsGetAccountToken = prevGetToken
+	})
+
+	sessionJWT := encodeJWT(`{"sid":"sess_create","sub":"user_create","exp":4102444800}`)
+	orchidsGetAccountToken = func(acc *store.Account, cfg *config.Config) (string, error) {
+		if acc.AccountType != "orchids" {
+			t.Fatalf("AccountType=%q want orchids", acc.AccountType)
+		}
+		if acc.SessionCookie != sessionJWT {
+			t.Fatalf("SessionCookie=%q want %q", acc.SessionCookie, sessionJWT)
+		}
+		if acc.SessionID != "sess_create" {
+			t.Fatalf("SessionID=%q want sess_create", acc.SessionID)
+		}
+		acc.ClientCookie = "bootstrapped-client"
+		acc.ClientUat = "1773712060"
+		acc.ProjectID = "proj_create"
+		acc.UserID = "user_create"
+		acc.Email = "create@example.com"
+		return sessionJWT, nil
+	}
+
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/accounts", strings.NewReader(`{"account_type":"orchids","client_cookie":"`+sessionJWT+`","enabled":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	a.HandleAccounts(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d want 201 body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp store.Account
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Email != "create@example.com" {
+		t.Fatalf("Email=%q want create@example.com", resp.Email)
+	}
+	if resp.UserID != "user_create" {
+		t.Fatalf("UserID=%q want user_create", resp.UserID)
+	}
+	if resp.ProjectID != "proj_create" {
+		t.Fatalf("ProjectID=%q want proj_create", resp.ProjectID)
+	}
+	if resp.ClientCookie != "bootstrapped-client" {
+		t.Fatalf("ClientCookie=%q want bootstrapped-client", resp.ClientCookie)
+	}
+
+	stored, err := s.GetAccount(req.Context(), resp.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if stored.Email != "create@example.com" {
+		t.Fatalf("stored.Email=%q want create@example.com", stored.Email)
+	}
+	if stored.ClientCookie != "bootstrapped-client" {
+		t.Fatalf("stored.ClientCookie=%q want bootstrapped-client", stored.ClientCookie)
+	}
+}
+
+func TestHandleAccounts_PostOrchidsClientInputHydratesAccountInfo(t *testing.T) {
+	prevGetToken := orchidsGetAccountToken
+	t.Cleanup(func() {
+		orchidsGetAccountToken = prevGetToken
+	})
+
+	clientJWT := encodeJWT(`{"id":"client_create","rotating_token":"rotating_create","exp":4102444800}`)
+	sessionJWT := encodeJWT(`{"sid":"sess_client_create","sub":"user_client_create","exp":4102444800}`)
+	orchidsGetAccountToken = func(acc *store.Account, cfg *config.Config) (string, error) {
+		if acc.AccountType != "orchids" {
+			t.Fatalf("AccountType=%q want orchids", acc.AccountType)
+		}
+		if acc.ClientCookie != clientJWT {
+			t.Fatalf("ClientCookie=%q want %q", acc.ClientCookie, clientJWT)
+		}
+		if acc.SessionCookie != "" {
+			t.Fatalf("SessionCookie=%q want empty", acc.SessionCookie)
+		}
+		acc.ClientUat = "1773712060"
+		acc.ProjectID = "proj_client_create"
+		acc.UserID = "user_client_create"
+		acc.Email = "client-create@example.com"
+		return sessionJWT, nil
+	}
+
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/accounts", strings.NewReader(`{"account_type":"orchids","client_cookie":"`+clientJWT+`","enabled":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	a.HandleAccounts(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d want 201 body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp store.Account
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Email != "client-create@example.com" {
+		t.Fatalf("Email=%q want client-create@example.com", resp.Email)
+	}
+	if resp.UserID != "user_client_create" {
+		t.Fatalf("UserID=%q want user_client_create", resp.UserID)
+	}
+	if resp.ProjectID != "proj_client_create" {
+		t.Fatalf("ProjectID=%q want proj_client_create", resp.ProjectID)
+	}
+	if resp.ClientCookie != clientJWT {
+		t.Fatalf("ClientCookie=%q want %q", resp.ClientCookie, clientJWT)
+	}
+	if resp.SessionID != "sess_client_create" {
+		t.Fatalf("SessionID=%q want sess_client_create", resp.SessionID)
+	}
+	if resp.Token != sessionJWT {
+		t.Fatalf("Token=%q want %q", resp.Token, sessionJWT)
+	}
+
+	stored, err := s.GetAccount(req.Context(), resp.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if stored.Email != "client-create@example.com" {
+		t.Fatalf("stored.Email=%q want client-create@example.com", stored.Email)
+	}
+	if stored.ClientCookie != clientJWT {
+		t.Fatalf("stored.ClientCookie=%q want %q", stored.ClientCookie, clientJWT)
+	}
+	if stored.ClientUat != "1773712060" {
+		t.Fatalf("stored.ClientUat=%q want %q", stored.ClientUat, "1773712060")
+	}
+}
+
+func TestHandleAccountByID_PutOrchidsSessionInputHydratesAccountInfo(t *testing.T) {
+	prevGetToken := orchidsGetAccountToken
+	t.Cleanup(func() {
+		orchidsGetAccountToken = prevGetToken
+	})
+
+	sessionJWT := encodeJWT(`{"sid":"sess_update","sub":"user_update","exp":4102444800}`)
+	orchidsGetAccountToken = func(acc *store.Account, cfg *config.Config) (string, error) {
+		if acc.SessionCookie != sessionJWT {
+			t.Fatalf("SessionCookie=%q want %q", acc.SessionCookie, sessionJWT)
+		}
+		acc.ClientCookie = "updated-client"
+		acc.ClientUat = "1773712099"
+		acc.ProjectID = "proj_update"
+		acc.UserID = "user_update"
+		acc.Email = "update@example.com"
+		return sessionJWT, nil
+	}
+
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	existing := &store.Account{
+		AccountType:   "orchids",
+		ClientCookie:  "old-client",
+		SessionCookie: "old-session",
+		SessionID:     "sess_old",
+		ClientUat:     "1773700000",
+		ProjectID:     "proj_old",
+		UserID:        "user_old",
+		Email:         "old@example.com",
+		Enabled:       true,
+		Weight:        1,
+	}
+	if err := s.CreateAccount(context.Background(), existing); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/accounts/"+strconv.FormatInt(existing.ID, 10), strings.NewReader(`{"account_type":"orchids","client_cookie":"`+sessionJWT+`","enabled":true,"weight":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	a.HandleAccountByID(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp store.Account
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Email != "update@example.com" {
+		t.Fatalf("Email=%q want update@example.com", resp.Email)
+	}
+	if resp.UserID != "user_update" {
+		t.Fatalf("UserID=%q want user_update", resp.UserID)
+	}
+	if resp.ProjectID != "proj_update" {
+		t.Fatalf("ProjectID=%q want proj_update", resp.ProjectID)
+	}
+	if resp.ClientCookie != "updated-client" {
+		t.Fatalf("ClientCookie=%q want updated-client", resp.ClientCookie)
+	}
+
+	stored, err := s.GetAccount(context.Background(), existing.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if stored.Email != "update@example.com" {
+		t.Fatalf("stored.Email=%q want update@example.com", stored.Email)
+	}
+	if stored.ClientCookie != "updated-client" {
+		t.Fatalf("stored.ClientCookie=%q want updated-client", stored.ClientCookie)
+	}
+}
+
+func newTestAPI(t *testing.T) (*API, *store.Store, func()) {
+	t.Helper()
+
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisPrefix: "api_test:",
+	})
+	if err != nil {
+		mini.Close()
+		t.Fatalf("store.New() error = %v", err)
+	}
+
+	return New(s, "", "", &config.Config{}), s, func() {
+		_ = s.Close()
+		mini.Close()
 	}
 }
 

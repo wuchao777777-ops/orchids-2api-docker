@@ -19,6 +19,7 @@ import (
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/logutil"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/perf"
 	"orchids-api/internal/prompt"
@@ -629,7 +630,7 @@ func (h *streamHandler) writeSSEBytesLockedWithHint(event string, data []byte, i
 	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
 		h.logger.LogOutputSSE(event, string(data))
 	}
-	if h.config != nil && h.config.DebugEnabled {
+	if logutil.VerboseDiagnosticsEnabled() {
 		slog.Debug("SSE Out", "event", event, "data_len", len(data))
 	}
 }
@@ -2352,8 +2353,8 @@ func (h *streamHandler) finalizeCompletion(stopReason string) {
 		dedupKeys[k] = v
 	}
 	h.mu.Unlock()
-	if suppressedDedup > 0 {
-		slog.Info("tool call dedup summary", "suppressed_count", suppressedDedup, "dedup_keys", dedupKeys)
+	if suppressedDedup > 0 && logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("tool call dedup summary", "suppressed_count", suppressedDedup, "dedup_keys", dedupKeys)
 	}
 	h.logger.LogSummary(h.inputTokens, h.outputTokens, time.Since(h.startTime), stopReason)
 	slog.Debug("Request completed", "input_tokens", h.inputTokens, "output_tokens", h.outputTokens, "duration", time.Since(h.startTime))
@@ -2496,7 +2497,7 @@ func (h *streamHandler) writeSSELocked(event, data string) {
 		h.logger.LogOutputSSE(event, data)
 	}
 	// Log to slog only when debug enabled
-	if h.config != nil && h.config.DebugEnabled {
+	if logutil.VerboseDiagnosticsEnabled() {
 		slog.Debug("SSE Out", "event", event, "data_len", len(data))
 	}
 }
@@ -2528,7 +2529,7 @@ func (h *streamHandler) writeSSEBytesLocked(event string, data []byte) {
 		h.logger.LogOutputSSE(event, string(data))
 	}
 	// Log to slog only when debug enabled
-	if h.config != nil && h.config.DebugEnabled {
+	if logutil.VerboseDiagnosticsEnabled() {
 		slog.Debug("SSE Out", "event", event, "data_len", len(data))
 	}
 }
@@ -3312,7 +3313,7 @@ func extractEventMessage(event map[string]interface{}, fallback string) string {
 }
 
 func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
-	if h.config.DebugEnabled && msg.Type != "content_block_delta" {
+	if logutil.VerboseDiagnosticsEnabled() && msg.Type != "content_block_delta" {
 		fields := []any{"type", msg.Type}
 		if msg.Event != nil {
 			// Avoid leaking secrets in logs: only log high-level shape.
@@ -3636,7 +3637,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		h.lastScanTime = time.Now()
 		h.mu.Unlock()
 
-		if h.config.DebugEnabled {
+		if logutil.VerboseDiagnosticsEnabled() {
 			slog.Debug("Upstream active", "op", msg.Event["operation"])
 		}
 		if h.isStream {
@@ -3901,8 +3902,8 @@ func (h *streamHandler) emitTextDelta(delta string) {
 
 // InjectErrorText injects an error message as a text delta into the stream or buffer.
 func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
-	if h.config != nil && h.config.DebugEnabled {
-		slog.Info(logMsg, "error_msg", errorMsg, "is_stream", h.isStream)
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug(logMsg, "error_msg", errorMsg, "is_stream", h.isStream)
 	}
 	h.markTextOutput()
 	idx := h.ensureBlock("text")

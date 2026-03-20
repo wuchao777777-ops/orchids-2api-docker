@@ -41,5 +41,5 @@ func markAccountStatus(ctx context.Context, store *store.Store, acc *store.Accou
 		slog.Warn("账号状态更新失败", "account_id", acc.ID, "status", status, "error", err)
 		return
 	}
-	slog.Info("账号状态已标记", "account_id", acc.ID, "status", status)
+	slog.Debug("账号状态已标记", "account_id", acc.ID, "status", status)
 }

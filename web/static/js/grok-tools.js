@@ -4435,16 +4435,36 @@
     const folderBtn = document.getElementById("imagineSelectFolderBtn");
     const folderPath = document.getElementById("imagineFolderPath");
     const autoDownloadToggle = document.getElementById("imagineAutoDownload");
-    if ("showDirectoryPicker" in window && folderBtn) {
-      folderBtn.disabled = !(autoDownloadToggle && autoDownloadToggle.checked);
+    const canPickDirectory = typeof window.showDirectoryPicker === "function";
+    const syncImagineFolderButtonState = () => {
+      if (!folderBtn) return;
+      folderBtn.disabled = false;
+      folderBtn.style.color = imagineDirectoryHandle ? "#059669" : "";
+      if (canPickDirectory) {
+        folderBtn.title = autoDownloadToggle && !autoDownloadToggle.checked
+          ? "选择保存位置并自动开启自动保存"
+          : "选择自动保存目录";
+        return;
+      }
+      folderBtn.title = "当前环境不支持自定义保存目录，将使用浏览器默认下载位置";
+    };
+    if (folderBtn) {
       folderBtn.addEventListener("click", async () => {
+        if (!canPickDirectory) {
+          showToast("当前环境不支持自定义保存目录，将使用浏览器默认下载位置", "info");
+          return;
+        }
         try {
           imagineDirectoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
           imagineUseFileSystemAPI = true;
+          if (autoDownloadToggle && !autoDownloadToggle.checked) {
+            autoDownloadToggle.checked = true;
+            autoDownloadToggle.dispatchEvent(new Event("change", { bubbles: true }));
+          }
           if (folderPath) {
             folderPath.textContent = imagineDirectoryHandle.name;
-            folderBtn.style.color = "#059669";
           }
+          syncImagineFolderButtonState();
           showToast(`已选择保存位置: ${imagineDirectoryHandle.name}`, "success");
         } catch (err) {
           if (err && err.name !== "AbortError") {
@@ -4452,15 +4472,10 @@
           }
         }
       });
+      syncImagineFolderButtonState();
     }
     if (autoDownloadToggle && folderBtn) {
-      autoDownloadToggle.addEventListener("change", () => {
-        if (autoDownloadToggle.checked && "showDirectoryPicker" in window) {
-          folderBtn.disabled = false;
-        } else {
-          folderBtn.disabled = true;
-        }
-      });
+      autoDownloadToggle.addEventListener("change", syncImagineFolderButtonState);
     }
     const startBtn = document.getElementById("imagineStartBtn");
     const stopBtn = document.getElementById("imagineStopBtn");

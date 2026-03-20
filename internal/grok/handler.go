@@ -137,7 +137,7 @@ func (h *Handler) tryAutoRegisterModel(ctx context.Context, modelID string) bool
 			slog.Warn("Auto verify grok model update failed", "model_id", id, "error", err)
 			return false
 		}
-		slog.Info("Auto verified grok model", "model_id", id)
+		slog.Debug("Auto verified grok model", "model_id", id)
 		return true
 	}
 
@@ -156,7 +156,7 @@ func (h *Handler) tryAutoRegisterModel(ctx context.Context, modelID string) bool
 		return false
 	}
 
-	slog.Info("Auto verified grok model", "model_id", id)
+	slog.Debug("Auto verified grok model", "model_id", id)
 	return true
 }
 

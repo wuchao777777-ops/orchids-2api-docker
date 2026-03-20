@@ -13,6 +13,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/debug"
+	"orchids-api/internal/logutil"
 	"orchids-api/internal/perf"
 	"orchids-api/internal/upstream"
 )
@@ -27,7 +28,6 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 	}
 	cfg := c.config
 	chatSessionID := orchidsChatSessionID(req)
-	debugEnabled := cfg != nil && cfg.DebugEnabled
 	timeout := 120 * time.Second
 	if cfg != nil && cfg.RequestTimeout > 0 {
 		timeout = time.Duration(cfg.RequestTimeout) * time.Second
@@ -69,7 +69,9 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 	}
 
 	url := c.upstreamURL()
-	slog.Info("Orchids SSE request start", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "project_id", projectID, "message_items", len(orchidsReq.Messages), "system_present", orchidsReq.System != "")
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("Orchids SSE request start", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "project_id", projectID, "message_items", len(orchidsReq.Messages), "system_present", orchidsReq.System != "")
+	}
 
 	breaker := upstream.GetAccountBreaker(breakerKey)
 	start := time.Now()
@@ -111,18 +113,20 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 			logger.LogUpstreamHTTPError(url, 0, "", err)
 		}
 		slog.Warn("Orchids SSE request failed before response", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "error", err)
-		if debugEnabled {
-			slog.Info("[Performance] Upstream Request Failed", "duration", time.Since(start), "error", err)
+		if logutil.VerboseDiagnosticsEnabled() {
+			slog.Debug("[Performance] Upstream Request Failed", "duration", time.Since(start), "error", err)
 		}
 		return err
 	}
-	if debugEnabled {
-		slog.Info("[Performance] Upstream Request Headers Received", "duration", time.Since(start))
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("[Performance] Upstream Request Headers Received", "duration", time.Since(start))
 	}
 
 	resp := result.(*http.Response)
 	defer resp.Body.Close()
-	slog.Info("Orchids SSE response headers received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "status_code", resp.StatusCode)
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("Orchids SSE response headers received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "status_code", resp.StatusCode)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, err := io.ReadAll(resp.Body)
@@ -138,7 +142,9 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		return err
 	}
 
-	slog.Info("Orchids SSE request completed", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "saw_tool_call", state.sawToolCall, "response_started", state.responseStarted)
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("Orchids SSE request completed", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "saw_tool_call", state.sawToolCall, "response_started", state.responseStarted)
+	}
 	return nil
 }
 

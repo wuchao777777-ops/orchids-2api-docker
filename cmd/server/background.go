@@ -41,7 +41,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 	if interval <= 0 {
 		interval = 30 * time.Minute
 	}
-	slog.Info("Auto refresh token enabled", "interval", interval.String())
+	slog.Debug("Auto refresh token enabled", "interval", interval.String())
 	grokClient := grok.New(cfg)
 
 	refreshAccounts := func() {
@@ -185,7 +185,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				}
 				continue
 			}
-			info, err := clerk.FetchAccountInfoWithSessionProxy(acc.ClientCookie, acc.SessionCookie, proxyFunc)
+			info, err := clerk.FetchAccountInfoWithSessionContextProxy(acc.ClientCookie, acc.SessionCookie, acc.ClientUat, acc.SessionID, proxyFunc)
 			if err != nil {
 				errLower := strings.ToLower(err.Error())
 				if strings.Contains(errLower, "no active sessions") {
@@ -392,7 +392,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 					continue
 				}
 				added++
-				slog.Info("上游模型同步: 新增模型", "model_id", modelID, "channel", "Orchids")
+				slog.Debug("上游模型同步: 新增模型", "model_id", modelID, "channel", "Orchids")
 			}
 
 			if existing, err := s.ListModels(context.Background()); err == nil {
@@ -418,7 +418,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 				}
 			}
 			if added > 0 {
-				slog.Info("上游模型同步完成", "source", source, "total_public", len(publicModels), "added", added, "updated", updated, "disabled", disabled)
+				slog.Debug("上游模型同步完成", "source", source, "total_public", len(publicModels), "added", added, "updated", updated, "disabled", disabled)
 			} else {
 				slog.Debug("上游模型同步完成，无新增", "source", source, "total_public", len(publicModels), "updated", updated, "disabled", disabled)
 			}
@@ -496,7 +496,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 					continue
 				}
 				added++
-				slog.Info("Puter 模型同步: 新增模型", "model_id", modelID)
+				slog.Debug("Puter 模型同步: 新增模型", "model_id", modelID)
 			}
 
 			if existingModels, err := s.ListModels(context.Background()); err == nil {
@@ -523,7 +523,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 			}
 
 			if added > 0 {
-				slog.Info("Puter 模型同步完成", "total_public", len(publicSet), "added", added, "updated", updated, "disabled", disabled)
+				slog.Debug("Puter 模型同步完成", "total_public", len(publicSet), "added", added, "updated", updated, "disabled", disabled)
 			} else {
 				slog.Debug("Puter 模型同步完成，无新增", "total_public", len(publicSet), "updated", updated, "disabled", disabled)
 			}
@@ -629,7 +629,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 
 			probeModelIDs, limited := limitProbeModelIDs(pendingModelIDs, grokModelProbeLimitPerRun)
 			if limited {
-				slog.Info("Grok 模型同步: 本轮探测限流", "pending", len(pendingModelIDs), "limit", len(probeModelIDs))
+				slog.Debug("Grok 模型同步: 本轮探测限流", "pending", len(pendingModelIDs), "limit", len(probeModelIDs))
 			}
 
 			grokClient := grok.New(cfg)
@@ -666,7 +666,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 						continue
 					}
 					added++
-					slog.Info("Grok 模型同步: 验证模型", "model_id", modelID)
+					slog.Debug("Grok 模型同步: 验证模型", "model_id", modelID)
 					continue
 				}
 				newModel := &store.Model{
@@ -685,11 +685,11 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 					continue
 				}
 				added++
-				slog.Info("Grok 模型同步: 新增模型", "model_id", modelID)
+				slog.Debug("Grok 模型同步: 新增模型", "model_id", modelID)
 			}
 
 			if added > 0 {
-				slog.Info("Grok 模型同步完成", "candidates", len(candidates), "pending", len(pendingModelIDs), "checked", checked, "added", added)
+				slog.Debug("Grok 模型同步完成", "candidates", len(candidates), "pending", len(pendingModelIDs), "checked", checked, "added", added)
 			} else {
 				slog.Debug("Grok 模型同步完成，无新增", "candidates", len(candidates), "pending", len(pendingModelIDs), "checked", checked)
 			}

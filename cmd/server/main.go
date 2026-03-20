@@ -20,6 +20,7 @@ import (
 	"orchids-api/internal/grok"
 	"orchids-api/internal/handler"
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/logutil"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/provider"
 	"orchids-api/internal/store"
@@ -37,21 +38,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 根据配置初始化日志级别
-	var level slog.Level = slog.LevelInfo
-	if cfg.DebugEnabled {
-		level = slog.LevelDebug
-	}
-
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
-	slog.SetDefault(logger)
+	configureRuntimeLogging(cfg)
 
 	// 启动时清空所有调试日志
 	if cfg.DebugEnabled {
 		if err := debug.CleanupAllLogs(); err != nil {
 			slog.Warn("清理调试日志失败", "error", err)
 		} else {
-			slog.Info("已清空调试日志目录")
+			slog.Debug("已清空调试日志目录")
 		}
 	}
 
@@ -68,15 +62,16 @@ func main() {
 	}
 	defer s.Close()
 
-	slog.Info("Store initialized", "mode", "redis", "addr", cfg.RedisAddr, "prefix", cfg.RedisPrefix)
+	slog.Debug("Store initialized", "mode", "redis", "addr", cfg.RedisAddr, "prefix", cfg.RedisPrefix)
 
 	// 从 Redis 加载已保存的配置（如果存在）
 	if savedConfig, err := s.GetSetting(context.Background(), "config"); err == nil && savedConfig != "" {
 		if err := json.Unmarshal([]byte(savedConfig), cfg); err != nil {
 			slog.Warn("Failed to load config from Redis, using file config", "error", err)
 		} else {
-			slog.Info("Config loaded from Redis")
 			config.ApplyDefaults(cfg)
+			configureRuntimeLogging(cfg)
+			slog.Debug("Config loaded from Redis")
 		}
 	}
 
@@ -85,7 +80,7 @@ func main() {
 	// Connection tracker: use Redis when available
 	if redisClient := s.RedisClient(); redisClient != nil {
 		lb.SetConnTracker(loadbalancer.NewRedisConnTracker(redisClient, s.RedisPrefix()))
-		slog.Info("Connection tracker initialized", "backend", "redis")
+		slog.Debug("Connection tracker initialized", "backend", "redis")
 	}
 
 	apiHandler := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
@@ -97,10 +92,10 @@ func main() {
 	var tokenCache tokencache.Cache
 	if redisClient := s.RedisClient(); redisClient != nil {
 		tokenCache = tokencache.NewRedisCache(redisClient, s.RedisPrefix(), time.Duration(cfg.CacheTTL)*time.Minute)
-		slog.Info("Token cache initialized", "backend", "redis")
+		slog.Debug("Token cache initialized", "backend", "redis")
 	} else {
 		tokenCache = tokencache.NewMemoryCache(time.Duration(cfg.CacheTTL)*time.Minute, 10000)
-		slog.Info("Token cache initialized", "backend", "memory")
+		slog.Debug("Token cache initialized", "backend", "memory")
 	}
 	h.SetTokenCache(tokenCache)
 	apiHandler.SetTokenCache(tokenCache)
@@ -109,22 +104,22 @@ func main() {
 	promptCache := tokencache.NewMemoryPromptCache(time.Duration(cfg.TokenCacheTTL)*time.Second, 10000)
 	h.SetPromptCache(promptCache)
 	apiHandler.SetPromptCache(promptCache)
-	slog.Info("Prompt cache initialized", "ttl", cfg.TokenCacheTTL)
+	slog.Debug("Prompt cache initialized", "ttl", cfg.TokenCacheTTL)
 
 	// Session store: use Redis when available, fall back to memory
 	if redisClient := s.RedisClient(); redisClient != nil {
 		sessionStore := handler.NewRedisSessionStore(redisClient, s.RedisPrefix(), 30*time.Minute)
 		h.SetSessionStore(sessionStore)
-		slog.Info("Session store initialized", "backend", "redis")
+		slog.Debug("Session store initialized", "backend", "redis")
 
 		dedupStore := handler.NewRedisDedupStore(redisClient, s.RedisPrefix(), 2*time.Second)
 		h.SetDedupStore(dedupStore)
-		slog.Info("Dedup store initialized", "backend", "redis")
+		slog.Debug("Dedup store initialized", "backend", "redis")
 
 		auditLogger := audit.NewRedisLogger(redisClient, s.RedisPrefix(), 10000)
 		h.SetAuditLogger(auditLogger)
 		defer auditLogger.Close()
-		slog.Info("Audit logger initialized", "backend", "redis")
+		slog.Debug("Audit logger initialized", "backend", "redis")
 	}
 
 	// Provider registry for decoupled client creation
@@ -154,7 +149,7 @@ func main() {
 		slog.Error("Failed to initialize template renderer", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("Template renderer initialized")
+	slog.Debug("Template renderer initialized")
 
 	// Register routes
 	mux := http.NewServeMux()
@@ -210,4 +205,19 @@ func main() {
 
 	<-idleConnsClosed
 	slog.Info("Server shutdown gracefully")
+}
+
+func configureRuntimeLogging(cfg *config.Config) {
+	level := slog.LevelInfo
+	verboseDiagnostics := false
+	if cfg != nil {
+		if cfg.DebugEnabled {
+			level = slog.LevelDebug
+		}
+		verboseDiagnostics = cfg.VerboseDiagnosticsEnabled()
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(logger)
+	logutil.SetVerboseDiagnostics(verboseDiagnostics)
 }

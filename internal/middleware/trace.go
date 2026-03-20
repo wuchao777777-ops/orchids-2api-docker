@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"orchids-api/internal/logutil"
 )
 
 // TraceIDHeader 是请求追踪 ID 的 HTTP 头名称
@@ -120,13 +122,14 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		// 包装 ResponseWriter
 		wrapped := NewTracedResponseWriter(w)
 
-		// 记录请求开始
-		slog.Debug("Request started",
-			"trace_id", traceID,
-			"method", r.Method,
-			"path", r.URL.Path,
-			"remote_addr", r.RemoteAddr,
-		)
+		if logutil.VerboseDiagnosticsEnabled() {
+			slog.Debug("Request started",
+				"trace_id", traceID,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
+			)
+		}
 
 		// 处理请求
 		next.ServeHTTP(wrapped, r)
@@ -138,6 +141,8 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			level = slog.LevelError
 		} else if wrapped.StatusCode >= 400 {
 			level = slog.LevelWarn
+		} else if !logutil.VerboseDiagnosticsEnabled() {
+			return
 		}
 
 		slog.Log(r.Context(), level, "Request completed",

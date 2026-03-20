@@ -155,6 +155,16 @@ func TestParseOrchidsCookies_CookieHeader_PrefersExactNames(t *testing.T) {
 	}
 }
 
+func TestBuildClerkCookieHeader_IncludesClientUatAndActiveContext(t *testing.T) {
+	t.Parallel()
+
+	got := buildClerkCookieHeader("client_cookie", "session_cookie", "1773712060", "sess_ctx")
+	want := "__client=client_cookie; __session=session_cookie; __client_uat=1773712060; clerk_active_context=sess_ctx:"
+	if got != want {
+		t.Fatalf("buildClerkCookieHeader()=%q want %q", got, want)
+	}
+}
+
 func TestParseSessionInfoFromJWT(t *testing.T) {
 	t.Parallel()
 

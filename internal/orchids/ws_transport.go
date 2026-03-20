@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"orchids-api/internal/debug"
+	"orchids-api/internal/logutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -134,7 +135,9 @@ func (c *Client) dialWSConnection(ctx context.Context) (*websocket.Conn, error) 
 }
 
 func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	slog.Debug("sendRequestWS called", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "workdir", req.Workdir, "model", req.Model)
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("sendRequestWS called", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "workdir", req.Workdir, "model", req.Model)
+	}
 	parentCtx := ctx
 	chatSessionID := orchidsChatSessionID(req)
 	timeout := orchidsWSRequestTimeout
@@ -164,8 +167,8 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 	pingDone := make(chan struct{})
 	defer close(pingDone)
 
-	if c.config.DebugEnabled {
-		slog.Info("[Performance] WS connection acquired", "duration", time.Since(startPool))
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("[Performance] WS connection acquired", "duration", time.Since(startPool))
 	}
 
 	startWrite := time.Now()
@@ -192,10 +195,12 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 		return fmt.Errorf("ws write failed: %w", err)
 	}
 	requestWritten = true
-	slog.Info("Orchids WS request sent", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "model", req.Model)
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("Orchids WS request sent", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "model", req.Model)
+	}
 
-	if c.config.DebugEnabled {
-		slog.Info("[Performance] WS WriteJSON completed", "duration", time.Since(startWrite))
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("[Performance] WS WriteJSON completed", "duration", time.Since(startWrite))
 	}
 
 	startFirstToken := time.Now()
@@ -260,12 +265,12 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 		handled, shouldBreak := runtime.handleRawMessage(data, logger, req.Tools)
 		if handled {
 			receivedAnyMessage = true
-			if !firstReceived {
-				slog.Info("Orchids WS first upstream message received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID)
+			if !firstReceived && logutil.VerboseDiagnosticsEnabled() {
+				slog.Debug("Orchids WS first upstream message received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID)
 			}
-			if !firstReceived && c.config.DebugEnabled {
+			if !firstReceived && logutil.VerboseDiagnosticsEnabled() {
 				firstReceived = true
-				slog.Info("[Performance] WS First response received (TTFT)", "duration", time.Since(startFirstToken))
+				slog.Debug("[Performance] WS First response received (TTFT)", "duration", time.Since(startFirstToken))
 			}
 			firstReceived = true
 			if shouldBreak {
@@ -279,13 +284,13 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 			continue
 		}
 		receivedAnyMessage = true
-		if !firstReceived {
-			slog.Info("Orchids WS first upstream message received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID)
+		if !firstReceived && logutil.VerboseDiagnosticsEnabled() {
+			slog.Debug("Orchids WS first upstream message received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID)
 		}
 
-		if !firstReceived && c.config.DebugEnabled {
+		if !firstReceived && logutil.VerboseDiagnosticsEnabled() {
 			firstReceived = true
-			slog.Info("[Performance] WS First response received (TTFT)", "duration", time.Since(startFirstToken))
+			slog.Debug("[Performance] WS First response received (TTFT)", "duration", time.Since(startFirstToken))
 		}
 		firstReceived = true
 
@@ -305,7 +310,9 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 		return err
 	}
 
-	slog.Info("Orchids WS request completed", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "saw_tool_call", state.sawToolCall, "response_started", state.responseStarted)
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("Orchids WS request completed", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "saw_tool_call", state.sawToolCall, "response_started", state.responseStarted)
+	}
 	return nil
 }
 
