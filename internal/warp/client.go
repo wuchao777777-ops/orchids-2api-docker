@@ -190,6 +190,9 @@ func (c *Client) handleStreamResponse(ctx context.Context, req upstream.Upstream
 	if resp == nil {
 		return fmt.Errorf("warp stream response is nil")
 	}
+	if onMessage == nil {
+		onMessage = func(upstream.SSEMessage) {}
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))

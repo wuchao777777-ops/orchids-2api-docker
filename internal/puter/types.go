@@ -1,6 +1,10 @@
 package puter
 
-import "github.com/goccy/go-json"
+import (
+	"strings"
+
+	"github.com/goccy/go-json"
+)
 
 type Request struct {
 	Interface string      `json:"interface"`
@@ -23,13 +27,15 @@ type Message struct {
 }
 
 type StreamChunk struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	Delta   string `json:"delta"`
+	Message string `json:"message"`
 }
 
 type ErrorResponse struct {
-	Success bool          `json:"success"`
-	Error   *ErrorPayload `json:"error"`
+	Success *bool      `json:"success,omitempty"`
+	Error   ErrorField `json:"error,omitempty"`
 }
 
 type ErrorPayload struct {
@@ -37,6 +43,51 @@ type ErrorPayload struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Status  int    `json:"status"`
+}
+
+type ErrorField struct {
+	Payload *ErrorPayload
+	Message string
+	raw     json.RawMessage
+}
+
+func (e *ErrorField) UnmarshalJSON(data []byte) error {
+	e.Payload = nil
+	e.Message = ""
+	e.raw = append(e.raw[:0], data...)
+
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+
+	var msg string
+	if err := json.Unmarshal(data, &msg); err == nil {
+		e.Message = strings.TrimSpace(msg)
+		return nil
+	}
+
+	var payload ErrorPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	e.Payload = &payload
+	return nil
+}
+
+func (e ErrorField) Present() bool {
+	trimmed := strings.TrimSpace(string(e.raw))
+	return trimmed != "" && trimmed != "null"
+}
+
+func (e ErrorField) AsPayload() *ErrorPayload {
+	if e.Payload != nil {
+		return e.Payload
+	}
+	if strings.TrimSpace(e.Message) == "" {
+		return nil
+	}
+	return &ErrorPayload{Message: strings.TrimSpace(e.Message)}
 }
 
 type ParsedToolCall struct {

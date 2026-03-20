@@ -57,6 +57,10 @@ func (lb *LoadBalancer) GetModelChannel(ctx context.Context, modelID string) str
 }
 
 func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, excludeIDs []int64, channel string) (*store.Account, error) {
+	return lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, channel, nil)
+}
+
+func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTracker(ctx context.Context, excludeIDs []int64, channel string, tracker ConnTracker) (*store.Account, error) {
 	accounts, err := lb.getEnabledAccounts(ctx)
 	if err != nil {
 		return nil, err
@@ -92,7 +96,7 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, ex
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s", channel)
 	}
 
-	account := lb.selectAccount(accounts)
+	account := lb.selectAccountWithTracker(accounts, tracker)
 
 	slog.Debug("Selected account", "id", account.ID, "name", account.Name, "type", account.AccountType, "session", auth.MaskSensitive(account.SessionID))
 
@@ -141,11 +145,21 @@ func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Accoun
 }
 
 func (lb *LoadBalancer) selectAccount(accounts []*store.Account) *store.Account {
+	return lb.selectAccountWithTracker(accounts, nil)
+}
+
+func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, tracker ConnTracker) *store.Account {
 	if len(accounts) == 0 {
 		return nil
 	}
 	if len(accounts) == 1 {
 		return accounts[0]
+	}
+	if tracker == nil {
+		tracker = lb.connTracker
+	}
+	if tracker == nil {
+		tracker = NewMemoryConnTracker()
 	}
 
 	// Batch-fetch connection counts
@@ -153,7 +167,7 @@ func (lb *LoadBalancer) selectAccount(accounts []*store.Account) *store.Account 
 	for i, acc := range accounts {
 		ids[i] = acc.ID
 	}
-	connCounts := lb.connTracker.GetCounts(ids)
+	connCounts := tracker.GetCounts(ids)
 
 	var bestAccounts []*store.Account
 	minScore := float64(-1)

@@ -3939,6 +3939,11 @@ func (h *streamHandler) InjectRetryExhaustedError(lastErr string) {
 	h.InjectErrorText("Injecting retry exhausted error to client", errorMsg)
 }
 
+func (h *streamHandler) InjectUpstreamError(errStr string) {
+	errorMsg := fmt.Sprintf("Request failed: %s", strings.TrimSpace(errStr))
+	h.InjectErrorText("Injecting upstream error to client", errorMsg)
+}
+
 func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr error) {
 	errorMsg := "Request failed: retries exhausted and no available accounts. Please check account statuses in Admin UI or add valid accounts."
 	if selectErr != nil {

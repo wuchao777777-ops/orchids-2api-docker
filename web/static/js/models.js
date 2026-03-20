@@ -7,6 +7,7 @@ let modelStatusFilter = "";
 let modelPageSize = 50;
 let modelCurrentPage = 1;
 let modelRefreshInFlight = false;
+let modelRefreshResults = {};
 
 function modelChannels() {
   const defaultChannels = ["Orchids", "Warp", "Bolt", "Puter", "Grok"];
@@ -91,21 +92,17 @@ function getFilteredModels() {
 }
 
 function updateModelSummary(channelModels, filtered) {
-  const available = channelModels.filter((m) => normalizeModelStatus(m.status) === "available").length;
-  const maintenance = channelModels.filter((m) => normalizeModelStatus(m.status) === "maintenance").length;
-  const offline = channelModels.filter((m) => normalizeModelStatus(m.status) === "offline").length;
   const channelLabel = currentModelChannel || "全部";
-  const defaultModel = channelModels.find((m) => !!m.is_default);
 
-  document.getElementById("totalModelCount").textContent = String(filtered.length);
-  document.getElementById("availableModelCount").textContent = String(available);
-  document.getElementById("maintenanceModelCount").textContent = String(maintenance);
-  document.getElementById("offlineModelCount").textContent = String(offline);
-  document.getElementById("currentChannelLabel").textContent = channelLabel;
-  document.getElementById("currentChannelPill").textContent = channelLabel;
-  document.getElementById("defaultModelLabel").textContent = defaultModel
-    ? String(defaultModel.name || defaultModel.model_id || "未命名模型")
-    : "未设置";
+  const totalModelCount = document.getElementById("totalModelCount");
+  if (totalModelCount) {
+    totalModelCount.textContent = String(filtered.length);
+  }
+
+  const currentChannelPill = document.getElementById("currentChannelPill");
+  if (currentChannelPill) {
+    currentChannelPill.textContent = channelLabel;
+  }
 
   const filterMeta = document.getElementById("modelsFilterMeta");
   if (filterMeta) {
@@ -123,6 +120,73 @@ function updateModelSummary(channelModels, filtered) {
       ? `当前筛选结果共有 ${filtered.length} 条，可直接在表格中编辑、删除或启停。默认模型请在编辑弹窗里维护。`
       : "当前筛选条件下没有命中的模型记录。";
   }
+}
+
+function refreshChannelKey(channel) {
+  return String(channel || "").trim().toLowerCase();
+}
+
+function sortTextValues(values) {
+  return values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+}
+
+function normalizeModelRefreshResult(data, fallbackChannel) {
+  return {
+    channel: String(data.channel || fallbackChannel || "").trim(),
+    discovered: Number(data.discovered ?? 0),
+    verified: Number(data.verified ?? 0),
+    added: Number(data.added ?? 0),
+    updated: Number(data.updated ?? 0),
+    deleted: Number(data.deleted ?? 0),
+    deletedModelIDs: sortTextValues(Array.isArray(data.deleted_model_ids) ? data.deleted_model_ids : []),
+  };
+}
+
+function renderModelRefreshSummary() {
+  const summary = document.getElementById("modelsRefreshSummary");
+  const title = document.getElementById("modelsRefreshSummaryTitle");
+  const meta = document.getElementById("modelsRefreshSummaryMeta");
+  const statGrid = document.getElementById("modelsRefreshStatGrid");
+  const deletedBlock = document.getElementById("modelsRefreshDeletedBlock");
+  const deletedList = document.getElementById("modelsRefreshDeletedList");
+  if (!summary || !title || !meta || !statGrid || !deletedBlock || !deletedList) return;
+
+  const channel = currentModelChannel || modelChannels()[0] || "";
+  const result = modelRefreshResults[refreshChannelKey(channel)];
+  if (!result) {
+    summary.hidden = true;
+    statGrid.innerHTML = "";
+    deletedList.innerHTML = "";
+    deletedBlock.hidden = true;
+    return;
+  }
+
+  summary.hidden = false;
+  title.textContent = `${result.channel || channel} 最近一次刷新结果`;
+  meta.textContent = `已按来源列表完成同步。发现到的模型会写入当前渠道，来源列表里消失的模型会直接删除。`;
+
+  const stats = [
+    { label: "发现", value: result.discovered },
+    { label: "同步", value: result.verified },
+    { label: "新增", value: result.added },
+    { label: "更新", value: result.updated },
+    { label: "删除", value: result.deleted },
+  ];
+  statGrid.innerHTML = stats.map((item) => `
+    <div class="models-refresh-stat">
+      <div class="models-refresh-stat-label">${escapeHtml(item.label)}</div>
+      <div class="models-refresh-stat-value">${escapeHtml(String(item.value))}</div>
+    </div>
+  `).join("");
+
+  const deletedItems = sortTextValues(result.deletedModelIDs || []);
+  deletedBlock.hidden = deletedItems.length === 0;
+  deletedList.innerHTML = deletedItems.map((item) => `
+    <span class="models-refresh-deleted-item">${escapeHtml(item)}</span>
+  `).join("");
 }
 
 function renderChannelTabs() {
@@ -198,6 +262,7 @@ function renderModels() {
   const channelModels = getChannelScopedModels();
   const filtered = getFilteredModels();
   updateModelSummary(channelModels, filtered);
+  renderModelRefreshSummary();
 
   const total = filtered.length;
   const totalPages = Math.max(1, Math.ceil(total / modelPageSize));
@@ -504,17 +569,22 @@ async function refreshModelsForCurrentChannel() {
       throw new Error(data.message || raw || "刷新失败");
     }
 
+    const normalized = normalizeModelRefreshResult(data, channel);
+    if (normalized.channel) {
+      modelRefreshResults[refreshChannelKey(normalized.channel)] = normalized;
+    }
+
     await loadModels();
 
     const parts = [
       `发现 ${data.discovered ?? 0}`,
-      `可用 ${data.verified ?? 0}`,
+      `同步 ${data.verified ?? 0}`,
       `新增 ${data.added ?? 0}`,
       `更新 ${data.updated ?? 0}`,
-      `下线 ${data.offline ?? 0}`,
       `删除 ${data.deleted ?? 0}`,
     ];
-    showToast(`${channel} 刷新完成：${parts.join("，")}`);
+    const hasDeleted = normalized.deletedModelIDs.length > 0;
+    showToast(`${channel} 刷新完成：${parts.join("，")}${hasDeleted ? "。已在下方列出删除模型" : ""}`);
   } catch (err) {
     showToast(`刷新失败: ${err.message}`, "error");
   } finally {

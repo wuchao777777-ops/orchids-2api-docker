@@ -342,14 +342,28 @@ func isSuggestionModeText(text string) bool {
 }
 
 func normalizeOrchidsAgentModel(model string) string {
+	if normalized, ok := ResolveOrchidsModelID(model); ok {
+		return normalized
+	}
 	mapped := normalizeOrchidsModelKey(model)
 	if mapped == "" {
 		return orchidsAgentDefaultModel
 	}
-	if resolved, ok := orchidsAgentModelMap[mapped]; ok {
-		return resolved
+	return mapped
+}
+
+// ResolveOrchidsModelID canonicalizes known Orchids model aliases.
+// It returns false when the model is empty or not in the alias map.
+func ResolveOrchidsModelID(model string) (string, bool) {
+	mapped := normalizeOrchidsModelKey(model)
+	if mapped == "" {
+		return "", false
 	}
-	return orchidsAgentDefaultModel
+	resolved, ok := orchidsAgentModelMap[mapped]
+	if !ok {
+		return "", false
+	}
+	return resolved, true
 }
 
 func normalizeOrchidsModelKey(model string) string {

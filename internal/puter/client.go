@@ -501,25 +501,50 @@ func readStreamText(body io.Reader) (string, error) {
 
 	var fullText strings.Builder
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		line := normalizePuterStreamLine(scanner.Text())
 		if line == "" {
 			continue
 		}
 
 		var apiErr ErrorResponse
-		if err := json.Unmarshal([]byte(line), &apiErr); err == nil && apiErr.Error != nil {
-			return "", formatPuterAPIError(apiErr.Error, line)
+		if err := json.Unmarshal([]byte(line), &apiErr); err == nil {
+			if apiErr.Error.Present() && (apiErr.Success == nil || !*apiErr.Success) {
+				return "", formatPuterAPIError(apiErr.Error.AsPayload(), line)
+			}
+			if apiErr.Error.Present() && apiErr.Error.AsPayload() != nil {
+				return "", formatPuterAPIError(apiErr.Error.AsPayload(), line)
+			}
 		}
 
 		var chunk StreamChunk
 		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
 			continue
 		}
-		if chunk.Text != "" {
-			fullText.WriteString(chunk.Text)
+		if text := firstNonEmpty(chunk.Text, chunk.Delta, chunk.Message); text != "" {
+			fullText.WriteString(text)
 		}
 	}
 	return fullText.String(), scanner.Err()
+}
+
+func normalizePuterStreamLine(line string) string {
+	line = strings.TrimSpace(line)
+	if strings.HasPrefix(strings.ToLower(line), "data:") {
+		line = strings.TrimSpace(line[5:])
+	}
+	if line == "[DONE]" {
+		return ""
+	}
+	return line
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func formatPuterAPIError(apiErr *ErrorPayload, raw string) error {

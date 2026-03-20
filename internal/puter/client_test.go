@@ -78,6 +78,42 @@ func TestSendRequestWithPayload_PropagatesAPIError(t *testing.T) {
 	}
 }
 
+func TestSendRequestWithPayload_PropagatesStringAPIError(t *testing.T) {
+	prevURL := puterAPIURL
+	t.Cleanup(func() { puterAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "{\"success\":false,\"error\":\"Model not found, please try one of the following models listed here: https://developer.puter.com/ai/models/\"}\n")
+	}))
+	defer srv.Close()
+	puterAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
+	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "hello"}},
+		},
+	}, nil, nil)
+	if err == nil {
+		t.Fatal("expected SendRequestWithPayload() to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "model not found") {
+		t.Fatalf("expected model not found error, got %v", err)
+	}
+}
+
+func TestReadStreamText_StripsDataPrefixAndUsesDelta(t *testing.T) {
+	text, err := readStreamText(strings.NewReader("data: {\"type\":\"text\",\"delta\":\"hello\"}\n\ndata: [DONE]\n"))
+	if err != nil {
+		t.Fatalf("readStreamText() error = %v", err)
+	}
+	if text != "hello" {
+		t.Fatalf("text = %q, want hello", text)
+	}
+}
+
 func TestParseToolCalls_StripsToolCallMarkup(t *testing.T) {
 	toolCalls, text := parseToolCalls("before <tool_call>{\"name\":\"Read\",\"input\":{\"path\":\"/tmp/a\"}}</tool_call> after")
 	if len(toolCalls) != 1 {

@@ -40,8 +40,8 @@ func main() {
 
 	configureRuntimeLogging(cfg)
 
-	// 启动时清空所有调试日志
-	if cfg.DebugEnabled {
+	// 仅在详细诊断模式下维护逐请求调试文件目录。
+	if cfg.VerboseDiagnosticsEnabled() {
 		if err := debug.CleanupAllLogs(); err != nil {
 			slog.Warn("清理调试日志失败", "error", err)
 		} else {

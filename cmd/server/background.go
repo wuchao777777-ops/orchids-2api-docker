@@ -732,13 +732,14 @@ func hasOrchidsModelSyncCredentials(acc *store.Account) bool {
 }
 
 func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.Store) ([]orchidsPublicModelChoice, string, error) {
+	probeCfg := refreshModelRequestConfig(cfg, "orchids")
 	accounts, err := s.GetEnabledAccounts(ctx)
 	if err == nil {
 		for _, acc := range accounts {
 			if !hasOrchidsModelSyncCredentials(acc) {
 				continue
 			}
-			client := orchids.NewFromAccount(acc, cfg)
+			client := orchids.NewFromAccount(acc, probeCfg)
 			upstreamModels, fetchErr := client.FetchUpstreamModels(ctx)
 			client.Close()
 			if fetchErr == nil && len(upstreamModels) > 0 {
@@ -754,7 +755,7 @@ func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.
 					})
 				}
 				if len(out) > 0 {
-					return out, "upstream_api", nil
+					return normalizeOrchidsModelChoices(out), "upstream_api", nil
 				}
 			}
 			if fetchErr != nil {
@@ -771,11 +772,43 @@ func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.
 	publicModels, fallbackErr := fetchOrchidsPublicModelChoicesWithProxy(ctx, proxyFunc)
 	if fallbackErr != nil {
 		if err != nil {
-			return publicModels, "public_page_fallback", fmt.Errorf("upstream api fetch failed: %v; fallback failed: %w", err, fallbackErr)
+			return normalizeOrchidsModelChoices(publicModels), "public_page_fallback", fmt.Errorf("upstream api fetch failed: %v; fallback failed: %w", err, fallbackErr)
 		}
-		return publicModels, "public_page_fallback", fallbackErr
+		return normalizeOrchidsModelChoices(publicModels), "public_page_fallback", fallbackErr
 	}
-	return publicModels, "public_page_fallback", err
+	return normalizeOrchidsModelChoices(publicModels), "public_page_fallback", err
+}
+
+func normalizeOrchidsModelChoices(items []orchidsPublicModelChoice) []orchidsPublicModelChoice {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]orchidsPublicModelChoice, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if resolved, ok := orchids.ResolveOrchidsModelID(id); ok {
+			id = resolved
+		} else {
+			id = strings.ToLower(id)
+		}
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = id
+		}
+		out = append(out, orchidsPublicModelChoice{
+			ID:   id,
+			Name: name,
+		})
+	}
+	return out
 }
 
 var grokModelIDPattern = regexp.MustCompile(`\bgrok-[a-z0-9][a-z0-9.-]*\b`)

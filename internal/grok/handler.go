@@ -20,10 +20,11 @@ const maxEditImageBytes = 50 * 1024 * 1024
 var cacheBaseDir = filepath.Join("data", "tmp")
 
 type Handler struct {
-	base   *handler.BaseHandler
-	cfg    *config.Config
-	lb     *loadbalancer.LoadBalancer
-	client *Client
+	base        *handler.BaseHandler
+	cfg         *config.Config
+	lb          *loadbalancer.LoadBalancer
+	client      *Client
+	connTracker loadbalancer.ConnTracker
 }
 
 type chatAccountSession struct {
@@ -39,10 +40,11 @@ type imageEditUploadInput struct {
 
 func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	return &Handler{
-		base:   handler.NewBaseHandler(lb),
-		cfg:    cfg,
-		lb:     lb,
-		client: New(cfg),
+		base:        handler.NewBaseHandler(lb),
+		cfg:         cfg,
+		lb:          lb,
+		client:      New(cfg),
+		connTracker: loadbalancer.NewMemoryConnTracker(),
 	}
 }
 
@@ -50,7 +52,7 @@ func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, er
 	if h.lb == nil {
 		return nil, "", fmt.Errorf("load balancer not configured")
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannel(ctx, nil, "grok")
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTracker(ctx, nil, "grok", h.connTracker)
 	if err != nil {
 		return nil, "", err
 	}
@@ -67,18 +69,31 @@ func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, er
 
 func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error {
 	id := normalizeModelID(modelID)
-	if h != nil && h.lb != nil && h.lb.Store != nil {
-		if m, err := h.lb.Store.GetModelByModelID(ctx, id); err == nil && m != nil {
-			if !modelpolicy.IsVisibleGrokModel(id, m.Verified) {
-				return fmt.Errorf("model not found")
-			}
-		} else if !modelpolicy.IsPublicGrokModelID(id) {
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		if !modelpolicy.IsPublicGrokModelID(id) {
 			return fmt.Errorf("model not found")
 		}
-	} else if !modelpolicy.IsPublicGrokModelID(id) {
+		return nil
+	}
+
+	m, err := h.lb.Store.GetModelByModelID(ctx, id)
+	if err != nil || m == nil {
 		return fmt.Errorf("model not found")
 	}
-	return h.base.EnsureModelEnabled(ctx, id, "grok")
+	if !modelpolicy.IsVisibleGrokModel(id, m.Verified) {
+		return fmt.Errorf("model not found")
+	}
+	if !m.Status.Enabled() {
+		return fmt.Errorf("model not available")
+	}
+	channel := strings.TrimSpace(m.Channel)
+	if channel == "" {
+		channel = "grok"
+	}
+	if !strings.EqualFold(channel, "grok") {
+		return fmt.Errorf("model not found")
+	}
+	return nil
 }
 
 func isAutoRegisterableGrokModel(modelID string) bool {
@@ -180,7 +195,13 @@ func modelValidationMessage(modelID string, err error) string {
 }
 
 func (h *Handler) trackAccount(acc *store.Account) func() {
-	return h.base.TrackAccount(acc)
+	if h == nil || h.connTracker == nil || acc == nil || acc.ID == 0 {
+		return h.base.TrackAccount(acc)
+	}
+	h.connTracker.Acquire(acc.ID)
+	return func() {
+		h.connTracker.Release(acc.ID)
+	}
 }
 
 func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err error) {
@@ -195,7 +216,7 @@ func (h *Handler) openChatAccountSessionExcluding(ctx context.Context, excludeID
 	if h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannel(ctx, excludeIDs, "grok")
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, "grok", h.connTracker)
 	if err != nil {
 		return nil, err
 	}
@@ -345,17 +366,22 @@ func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 	if acc == nil || h.lb == nil || h.lb.Store == nil {
 		return
 	}
-	info := parseRateLimitInfo(headers)
-	if info == nil {
-		return
-	}
-	if !ApplyQuotaInfo(acc, info) {
-		return
-	}
+	accCopy := *acc
+	headers = headers.Clone()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := h.lb.Store.UpdateAccount(ctx, acc); err != nil {
-		slog.Warn("grok quota update failed", "account_id", acc.ID, "error", err)
-	}
+	go func() {
+		info := parseRateLimitInfo(headers)
+		if info == nil {
+			return
+		}
+		if !ApplyQuotaInfo(&accCopy, info) {
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.lb.Store.UpdateAccount(ctx, &accCopy); err != nil {
+			slog.Warn("grok quota update failed", "account_id", accCopy.ID, "error", err)
+		}
+	}()
 }

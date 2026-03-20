@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/logutil"
 	"strconv"
 	"strings"
 	"time"
@@ -174,9 +175,9 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	debugEnabled := h != nil && h.cfg != nil && h.cfg.DebugEnabled
+	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 	debugLogSSE := h != nil && h.cfg != nil && h.cfg.DebugLogSSE
-	logger := debug.New(debugEnabled, debugLogSSE)
+	logger := debug.New(verboseDiagnostics, verboseDiagnostics && debugLogSSE)
 	defer logger.Close()
 	logger.LogIncomingRequest(req)
 	req.Model = normalizeModelID(req.Model)

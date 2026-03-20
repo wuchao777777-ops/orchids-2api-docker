@@ -69,6 +69,20 @@ func ClassifyAccountStatus(errStr string) string {
 	}
 }
 
+// IsAccountAuthFailure reports whether err represents an authentication or
+// authorization failure at the account level.
+func IsAccountAuthFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch ClassifyAccountStatus(err.Error()) {
+	case "401", "403":
+		return true
+	default:
+		return false
+	}
+}
+
 // UpstreamErrorClass describes the category and retry semantics of an upstream error.
 type UpstreamErrorClass struct {
 	Category      string
@@ -83,6 +97,10 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	switch {
 	case strings.Contains(lower, "context canceled") || strings.Contains(lower, "canceled"):
 		return UpstreamErrorClass{Category: "canceled", Retryable: false, SwitchAccount: false}
+	case strings.Contains(lower, "model is not found") ||
+		strings.Contains(lower, "model not found") ||
+		strings.Contains(lower, "no_implementation_available"):
+		return UpstreamErrorClass{Category: "client", Retryable: false, SwitchAccount: false}
 	case HasExplicitHTTPStatus(lower, "401") ||
 		strings.Contains(lower, "signed out") || strings.Contains(lower, "signed_out"):
 		return UpstreamErrorClass{Category: "auth", Retryable: true, SwitchAccount: true}
@@ -93,8 +111,11 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	case strings.Contains(lower, "input is too long") || HasExplicitHTTPStatus(lower, "400"):
 		return UpstreamErrorClass{Category: "client", Retryable: false, SwitchAccount: false}
 	case HasExplicitHTTPStatus(lower, "429") ||
+		HasExplicitHTTPStatus(lower, "402") ||
 		strings.Contains(lower, "too many requests") ||
 		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "insufficient_funds") ||
+		strings.Contains(lower, "insufficient funding") ||
 		strings.Contains(lower, "no remaining quota") ||
 		strings.Contains(lower, "out of credits") ||
 		strings.Contains(lower, "credits exhausted") ||

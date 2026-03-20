@@ -13,19 +13,6 @@
       gap: 18px;
     }
 
-    .models-overview {
-      position: relative;
-      overflow: hidden;
-      padding: 24px;
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      border-radius: 24px;
-      background:
-        radial-gradient(circle at top left, rgba(215, 255, 100, 0.12), transparent 34%),
-        radial-gradient(circle at top right, rgba(125, 211, 252, 0.12), transparent 24%),
-        linear-gradient(180deg, rgba(15, 19, 24, 0.96), rgba(15, 19, 24, 0.9));
-      box-shadow: var(--shadow-sm);
-    }
-
     .models-section-label {
       display: inline-flex;
       align-items: center;
@@ -40,89 +27,6 @@
       font-weight: 700;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-    }
-
-    .models-overview::after {
-      content: "";
-      position: absolute;
-      inset: auto -12px -28px auto;
-      width: 148px;
-      height: 148px;
-      border-radius: 999px;
-      background: radial-gradient(circle, rgba(215, 255, 100, 0.12), transparent 70%);
-      filter: blur(10px);
-      pointer-events: none;
-    }
-
-    .models-overview-top {
-      position: relative;
-      z-index: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 20px;
-    }
-
-    .models-overview-copy {
-      max-width: 760px;
-    }
-
-    .models-overview-copy h2 {
-      margin: 0 0 8px;
-      font-size: 1.35rem;
-      color: var(--text-main);
-    }
-
-    .models-overview-copy p {
-      margin: 0;
-      color: var(--text-secondary);
-      line-height: 1.6;
-      font-size: 0.95rem;
-    }
-
-    .models-summary-grid {
-      position: relative;
-      z-index: 1;
-      display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 12px;
-    }
-
-    .models-stat-card {
-      min-width: 0;
-      padding: 16px;
-      border-radius: 16px;
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      background: rgba(255, 255, 255, 0.03);
-      backdrop-filter: blur(6px);
-    }
-
-    .models-stat-label {
-      margin-bottom: 8px;
-      color: var(--text-secondary);
-      font-size: 0.78rem;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-    }
-
-    .models-stat-value {
-      color: var(--text-main);
-      font-size: 1.4rem;
-      font-weight: 700;
-      line-height: 1;
-      min-height: 1.4rem;
-      word-break: break-word;
-    }
-
-    .models-stat-note {
-      margin-top: 8px;
-      color: var(--text-secondary);
-      font-size: 0.82rem;
-    }
-
-    .models-stat-value.models-stat-value-compact {
-      font-size: 1.05rem;
-      line-height: 1.35;
     }
 
     .models-filter-panel {
@@ -417,6 +321,109 @@
       color: var(--text-main);
     }
 
+    .models-refresh-summary {
+      display: grid;
+      gap: 14px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border-color);
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .models-refresh-summary[hidden] {
+      display: none;
+    }
+
+    .models-refresh-summary-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .models-refresh-summary-copy h4 {
+      margin: 0;
+      color: var(--text-main);
+      font-size: 0.96rem;
+    }
+
+    .models-refresh-summary-copy p {
+      margin: 0;
+      color: var(--text-secondary);
+      font-size: 0.86rem;
+      line-height: 1.6;
+    }
+
+    .models-refresh-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .models-refresh-stat {
+      min-width: 0;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .models-refresh-stat-label {
+      margin-bottom: 6px;
+      color: var(--text-secondary);
+      font-size: 0.76rem;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .models-refresh-stat-value {
+      color: var(--text-main);
+      font-size: 1.05rem;
+      font-weight: 700;
+    }
+
+    .models-refresh-deleted {
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(248, 113, 113, 0.18);
+      background: rgba(127, 29, 29, 0.14);
+    }
+
+    .models-refresh-deleted[hidden] {
+      display: none;
+    }
+
+    .models-refresh-deleted-title {
+      color: #fecaca;
+      font-size: 0.84rem;
+      font-weight: 700;
+    }
+
+    .models-refresh-deleted-copy {
+      color: #fca5a5;
+      font-size: 0.82rem;
+      line-height: 1.55;
+    }
+
+    .models-refresh-deleted-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .models-refresh-deleted-item {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(248, 113, 113, 0.24);
+      background: rgba(0, 0, 0, 0.16);
+      color: #fee2e2;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8rem;
+      line-height: 1.2;
+    }
+
     .models-table-wrap {
       max-height: 68vh;
       overflow-x: auto;
@@ -469,8 +476,8 @@
     }
 
     @media (max-width: 900px) {
-      .models-summary-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+      .models-refresh-stat-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
       .models-filter-row {
@@ -479,12 +486,8 @@
     }
 
     @media (max-width: 700px) {
-      .models-overview {
-        padding: 18px;
-      }
-
-      .models-summary-grid {
-        grid-template-columns: 1fr;
+      .models-refresh-stat-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
       .models-primary-action {
@@ -514,43 +517,6 @@
     <section class="header-section" id="modelsHeader">
       <h1>模型管理</h1>
       <p>把模型维护收敛成概览、筛选和动作三层，先看渠道分布，再定位到具体模型。</p>
-    </section>
-
-    <section class="models-overview">
-      <div class="models-overview-top">
-        <div class="models-section-label">概览</div>
-        <div class="models-overview-copy">
-          <h2>先确认当前渠道和状态分布</h2>
-          <p>这里固定展示当前渠道、默认模型和状态分布。筛选条件变化时，这一层仍然保持对当前渠道的整体判断，不让你在局部结果里丢失全局感。</p>
-        </div>
-      </div>
-      <div class="models-summary-grid">
-        <div class="models-stat-card">
-          <div class="models-stat-label">当前渠道</div>
-          <div class="models-stat-value" id="currentChannelLabel">-</div>
-          <div class="models-stat-note">用于快速确认你正在维护哪一组模型</div>
-        </div>
-        <div class="models-stat-card">
-          <div class="models-stat-label">默认模型</div>
-          <div class="models-stat-value models-stat-value-compact" id="defaultModelLabel">未设置</div>
-          <div class="models-stat-note">同一渠道只保留一个默认模型，避免对外行为混淆</div>
-        </div>
-        <div class="models-stat-card">
-          <div class="models-stat-label">可用模型</div>
-          <div class="models-stat-value" id="availableModelCount">0</div>
-          <div class="models-stat-note">对外接口会优先暴露这部分模型</div>
-        </div>
-        <div class="models-stat-card">
-          <div class="models-stat-label">维护中</div>
-          <div class="models-stat-value" id="maintenanceModelCount">0</div>
-          <div class="models-stat-note">临时保留，但不建议在生产流量中继续放量</div>
-        </div>
-        <div class="models-stat-card">
-          <div class="models-stat-label">已下线</div>
-          <div class="models-stat-value" id="offlineModelCount">0</div>
-          <div class="models-stat-note">保留历史记录，默认不会进入公开模型列表</div>
-        </div>
-      </div>
     </section>
 
     <section class="models-filter-panel">
@@ -608,11 +574,24 @@
             <button class="btn btn-outline models-refresh-action" id="refreshModelsButton" type="button" onclick="refreshModelsForCurrentChannel()">刷新当前渠道</button>
             <button class="btn btn-primary models-primary-action" onclick="openModelModal()">+ 添加模型</button>
           </div>
-          <div class="models-results-meta">
-            <span class="models-meta-pill">当前渠道 <strong id="currentChannelPill">-</strong></span>
-            <span class="models-meta-pill">本页记录 <strong id="currentPageCount">0</strong></span>
-          </div>
+        <div class="models-results-meta">
+          <span class="models-meta-pill">当前渠道 <strong id="currentChannelPill">-</strong></span>
+          <span class="models-meta-pill">本页记录 <strong id="currentPageCount">0</strong></span>
         </div>
+      </div>
+      <div class="models-refresh-summary" id="modelsRefreshSummary" hidden>
+        <div class="models-refresh-summary-copy">
+          <div class="models-section-label">最近刷新</div>
+          <h4 id="modelsRefreshSummaryTitle">尚未执行刷新</h4>
+          <p id="modelsRefreshSummaryMeta">执行“刷新当前渠道”后，这里会展示最新一次同步结果。</p>
+        </div>
+        <div class="models-refresh-stat-grid" id="modelsRefreshStatGrid"></div>
+        <div class="models-refresh-deleted" id="modelsRefreshDeletedBlock" hidden>
+          <div class="models-refresh-deleted-title">本次被自动删除的模型</div>
+          <div class="models-refresh-deleted-copy">已按模型 ID 排序，便于你核对清理结果。</div>
+          <div class="models-refresh-deleted-list" id="modelsRefreshDeletedList"></div>
+        </div>
+      </div>
         <div id="modelsList">
           <div class="models-empty">
             <span class="models-empty-icon">◈</span>
@@ -634,7 +613,7 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <script src="{{.AdminPath}}/js/common.js?v=20260319-1"></script>
-  <script src="{{.AdminPath}}/js/models.js"></script>
+  <script src="{{.AdminPath}}/js/models.js?v=20260320-4"></script>
 </body>
 </html>
 {{end}}

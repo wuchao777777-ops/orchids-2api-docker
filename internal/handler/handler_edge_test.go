@@ -26,7 +26,8 @@ type mockUpstreamEdge struct {
 }
 
 type errorUpstreamEdge struct {
-	err error
+	err   error
+	calls int
 }
 
 type refundingErrorUpstreamEdge struct {
@@ -66,10 +67,12 @@ func (m *mockUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstr
 }
 
 func (m *errorUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	m.calls++
 	return m.err
 }
 
 func (m *errorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	m.calls++
 	return m.err
 }
 
@@ -797,5 +800,41 @@ func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *
 	}
 	if !strings.Contains(out, "event: message_stop") {
 		t.Fatalf("expected stream to terminate cleanly, got: %s", out)
+	}
+}
+
+func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 3, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	upstreamClient := &errorUpstreamEdge{err: errors.New("puter API error: message=Model not found, please try another model")}
+	h.client = upstreamClient
+
+	payload := map[string]any{
+		"model":    "claude-3-5-sonnet",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   false,
+	}
+	body, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if upstreamClient.calls != 1 {
+		t.Fatalf("expected exactly one upstream call, got %d", upstreamClient.calls)
+	}
+
+	out := rec.Body.String()
+	if !strings.Contains(out, "Request failed: puter API error: message=Model not found") {
+		t.Fatalf("expected explicit upstream error, got: %s", out)
+	}
+	if strings.Contains(out, genericEmptyOutputFallbackText) {
+		t.Fatalf("did not expect generic empty fallback, got: %s", out)
+	}
+	if strings.Contains(out, "retries exhausted") {
+		t.Fatalf("did not expect retry exhausted wrapper for non-retriable client error, got: %s", out)
 	}
 }

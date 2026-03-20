@@ -179,7 +179,7 @@ func (h *Handler) selectAccount(ctx context.Context, targetChannel string, chann
 		if targetChannel != "" {
 			slog.Debug("Account channel selection", "channel", targetChannel, "channel_required", channelRequired)
 		}
-		account, err := h.loadBalancer.GetNextAccountExcludingByChannel(ctx, failedAccountIDs, targetChannel)
+		account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
 		if err != nil {
 			if channelRequired {
 				return nil, nil, err
@@ -199,6 +199,34 @@ func (h *Handler) selectAccount(ctx context.Context, targetChannel string, chann
 		return h.client, nil, nil
 	}
 	return nil, nil, errors.New("no client configured")
+}
+
+func (h *Handler) acquireTrackedAccount(acc *store.Account) int64 {
+	if acc == nil || acc.ID == 0 {
+		return 0
+	}
+	if h != nil && h.connTracker != nil {
+		h.connTracker.Acquire(acc.ID)
+		return acc.ID
+	}
+	if h != nil && h.loadBalancer != nil {
+		h.loadBalancer.AcquireConnection(acc.ID)
+		return acc.ID
+	}
+	return 0
+}
+
+func (h *Handler) releaseTrackedAccount(accountID int64) {
+	if accountID == 0 {
+		return
+	}
+	if h != nil && h.connTracker != nil {
+		h.connTracker.Release(accountID)
+		return
+	}
+	if h != nil && h.loadBalancer != nil {
+		h.loadBalancer.ReleaseConnection(accountID)
+	}
 }
 
 func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forcedChannel string) (*store.Model, error) {

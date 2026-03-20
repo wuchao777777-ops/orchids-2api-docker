@@ -6,20 +6,12 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/goccy/go-json"
 
-	"orchids-api/internal/bolt"
 	"orchids-api/internal/config"
-	"orchids-api/internal/debug"
 	"orchids-api/internal/grok"
-	"orchids-api/internal/orchids"
-	"orchids-api/internal/prompt"
-	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
-	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
 )
@@ -35,23 +27,16 @@ type modelRefreshResult struct {
 	Verified        int      `json:"verified"`
 	Added           int      `json:"added"`
 	Updated         int      `json:"updated"`
-	Offline         int      `json:"offline"`
 	Deleted         int      `json:"deleted"`
 	DefaultModelID  string   `json:"default_model_id,omitempty"`
 	AddedModelIDs   []string `json:"added_model_ids,omitempty"`
 	DeletedModelIDs []string `json:"deleted_model_ids,omitempty"`
-	OfflineModelIDs []string `json:"offline_model_ids,omitempty"`
 }
 
 type discoveredModel struct {
 	ID        string
 	Name      string
 	SortOrder int
-}
-
-type verifiedModel struct {
-	discoveredModel
-	Available bool
 }
 
 var runModelRefresh = syncModelsForChannel
@@ -102,12 +87,7 @@ func syncModelsForChannel(ctx context.Context, cfg *config.Config, s *store.Stor
 		return nil, fmt.Errorf("%s has no discoverable models", channel)
 	}
 
-	verified, err := verifyModelsForChannel(ctx, cfg, s, channel, candidates)
-	if err != nil {
-		return nil, err
-	}
-
-	return applyModelRefresh(ctx, s, channel, source, candidates, verified)
+	return applyModelRefresh(ctx, s, channel, source, candidates)
 }
 
 func normalizeAdminModelChannel(channel string) string {
@@ -317,134 +297,26 @@ func joinWarpDiscoverySources(sourceSet map[string]struct{}) string {
 	return "warp_graphql_" + strings.Join(ordered, "+")
 }
 
-func verifyModelsForChannel(ctx context.Context, cfg *config.Config, s *store.Store, channel string, candidates []discoveredModel) (map[string]verifiedModel, error) {
-	verified := make(map[string]verifiedModel, len(candidates))
-	accountType := strings.ToLower(channel)
-	accounts, err := enabledAccountsByType(ctx, s, accountType)
-	if err != nil {
-		return nil, err
-	}
-	if len(accounts) == 0 {
-		return nil, fmt.Errorf("%s has no enabled accounts for verification", channel)
+func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Config {
+	if cfg == nil {
+		cfg = &config.Config{}
+	} else {
+		copyCfg := *cfg
+		cfg = &copyCfg
 	}
 
-	workers := refreshWorkersForChannel(channel, len(candidates))
-	type jobResult struct {
-		model discoveredModel
-		err   error
-	}
-
-	jobs := make(chan discoveredModel)
-	results := make(chan jobResult, len(candidates))
-	var wg sync.WaitGroup
-
-	verifyOne := func(ctx context.Context, model discoveredModel) error {
-		switch accountType {
-		case "orchids":
-			for _, acc := range accounts {
-				client := orchids.NewFromAccount(acc, cfg)
-				err := verifyTextModel(ctx, client, model.ID)
-				client.Close()
-				if err == nil {
-					return nil
-				}
-			}
-			return fmt.Errorf("all orchids accounts rejected model %s", model.ID)
-		case "warp":
-			for _, acc := range accounts {
-				client := warp.NewFromAccount(acc, cfg)
-				err := verifyTextModel(ctx, client, model.ID)
-				client.Close()
-				if err == nil {
-					return nil
-				}
-			}
-			return fmt.Errorf("all warp accounts rejected model %s", model.ID)
-		case "bolt":
-			for _, acc := range accounts {
-				client := bolt.NewFromAccount(acc, cfg)
-				err := verifyTextModel(ctx, client, model.ID)
-				client.Close()
-				if err == nil {
-					return nil
-				}
-			}
-			return fmt.Errorf("all bolt accounts rejected model %s", model.ID)
-		case "puter":
-			for _, acc := range accounts {
-				client := puter.NewFromAccount(acc, cfg)
-				err := verifyTextModel(ctx, client, model.ID)
-				client.Close()
-				if err == nil {
-					return nil
-				}
-			}
-			return fmt.Errorf("all puter accounts rejected model %s", model.ID)
-		case "grok":
-			if isGrokModelInstantlyVerifiable(model.ID) {
-				return nil
-			}
-			client := grok.New(cfg)
-			for _, acc := range accounts {
-				token := grok.NormalizeSSOToken(acc.ClientCookie)
-				if token == "" {
-					token = grok.NormalizeSSOToken(acc.RefreshToken)
-				}
-				if token == "" {
-					continue
-				}
-				if _, err := client.VerifyToken(ctx, token, model.ID); err == nil {
-					return nil
-				}
-			}
-			return fmt.Errorf("all grok accounts rejected model %s", model.ID)
-		default:
-			return fmt.Errorf("unsupported channel: %s", channel)
+	switch strings.ToLower(strings.TrimSpace(channel)) {
+	case "orchids":
+		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 10 {
+			cfg.RequestTimeout = 10
+		}
+	case "warp", "bolt", "puter":
+		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 15 {
+			cfg.RequestTimeout = 15
 		}
 	}
 
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for model := range jobs {
-				verifyCtx, cancel := context.WithTimeout(ctx, refreshTimeoutForChannel(channel))
-				err := verifyOne(verifyCtx, model)
-				cancel()
-				results <- jobResult{model: model, err: err}
-				if strings.EqualFold(channel, "grok") {
-					_ = util.SleepWithContext(ctx, 75*time.Millisecond)
-				}
-			}
-		}()
-	}
-
-	go func() {
-		for _, model := range candidates {
-			select {
-			case <-ctx.Done():
-				close(jobs)
-				return
-			case jobs <- model:
-			}
-		}
-		close(jobs)
-	}()
-
-	wg.Wait()
-	close(results)
-
-	for result := range results {
-		verified[result.model.ID] = verifiedModel{
-			discoveredModel: result.model,
-			Available:       result.err == nil,
-		}
-	}
-	if len(verified) != len(candidates) {
-		return nil, fmt.Errorf("model verification interrupted")
-	}
-
-	return verified, nil
+	return cfg
 }
 
 func enabledAccountsByType(ctx context.Context, s *store.Store, accountType string) ([]*store.Account, error) {
@@ -464,67 +336,7 @@ func enabledAccountsByType(ctx context.Context, s *store.Store, accountType stri
 	return out, nil
 }
 
-func refreshWorkersForChannel(channel string, count int) int {
-	if count <= 1 {
-		return 1
-	}
-	switch strings.ToLower(channel) {
-	case "puter":
-		if count < 6 {
-			return count
-		}
-		return 6
-	case "grok":
-		if count < 4 {
-			return count
-		}
-		return 4
-	default:
-		if count < 4 {
-			return count
-		}
-		return 4
-	}
-}
-
-func refreshTimeoutForChannel(channel string) time.Duration {
-	switch strings.ToLower(channel) {
-	case "puter":
-		return 25 * time.Second
-	case "grok":
-		return 6 * time.Second
-	default:
-		return 30 * time.Second
-	}
-}
-
-func isGrokModelInstantlyVerifiable(modelID string) bool {
-	spec, ok := grok.ResolveModel(modelID)
-	if !ok {
-		return false
-	}
-	return spec.IsImage || spec.IsVideo
-}
-
-func verifyTextModel(ctx context.Context, client interface {
-	SendRequestWithPayload(context.Context, upstream.UpstreamRequest, func(upstream.SSEMessage), *debug.Logger) error
-}, modelID string) error {
-	// The concrete logger type is irrelevant here, so pass nil.
-	return client.SendRequestWithPayload(ctx, upstream.UpstreamRequest{
-		Model: modelID,
-		Messages: []prompt.Message{
-			{
-				Role: "user",
-				Content: prompt.MessageContent{
-					Text: "Reply with exactly OK.",
-				},
-			},
-		},
-		NoTools: true,
-	}, nil, nil)
-}
-
-func applyModelRefresh(ctx context.Context, s *store.Store, channel string, source string, candidates []discoveredModel, verified map[string]verifiedModel) (*modelRefreshResult, error) {
+func applyModelRefresh(ctx context.Context, s *store.Store, channel string, source string, candidates []discoveredModel) (*modelRefreshResult, error) {
 	existingModels, err := s.ListModels(ctx)
 	if err != nil {
 		return nil, err
@@ -538,14 +350,10 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 
 	existingByID := make(map[string]*store.Model)
 	fetchedSet := make(map[string]discoveredModel, len(candidates))
-	verifiedIDs := make([]string, 0, len(candidates))
 	for _, model := range candidates {
 		fetchedSet[model.ID] = model
-		if verified[model.ID].Available {
-			verifiedIDs = append(verifiedIDs, model.ID)
-		}
 	}
-	result.Verified = len(verifiedIDs)
+	result.Verified = len(candidates)
 
 	for _, model := range existingModels {
 		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), channel) {
@@ -554,16 +362,12 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 		existingByID[model.ModelID] = model
 	}
 
-	defaultModelID := chooseRefreshedDefaultModel(existingByID, verified, candidates)
+	defaultModelID := chooseRefreshedDefaultModel(existingByID, candidates)
 	result.DefaultModelID = defaultModelID
 
 	for _, model := range candidates {
-		entry := verified[model.ID]
 		existing := existingByID[model.ID]
 		if existing == nil {
-			if !entry.Available {
-				continue
-			}
 			record := &store.Model{
 				Channel:   channel,
 				ModelID:   model.ID,
@@ -581,23 +385,6 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			continue
 		}
 
-		if shouldDeleteUnavailableVerifiedModel(channel, entry) {
-			if err := s.DeleteModel(ctx, existing.ID); err != nil {
-				return nil, err
-			}
-			delete(existingByID, model.ID)
-			result.Deleted++
-			result.DeletedModelIDs = append(result.DeletedModelIDs, model.ID)
-			continue
-		}
-
-		desiredStatus := store.ModelStatusOffline
-		desiredVerified := false
-		if entry.Available {
-			desiredStatus = store.ModelStatusAvailable
-			desiredVerified = true
-		}
-
 		needsUpdate := false
 		if !strings.EqualFold(existing.Channel, channel) {
 			existing.Channel = channel
@@ -611,19 +398,15 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			existing.SortOrder = model.SortOrder
 			needsUpdate = true
 		}
-		if existing.Status != desiredStatus {
-			existing.Status = desiredStatus
-			needsUpdate = true
-			if desiredStatus == store.ModelStatusOffline {
-				result.Offline++
-				result.OfflineModelIDs = append(result.OfflineModelIDs, model.ID)
-			}
-		}
-		if existing.Verified != desiredVerified {
-			existing.Verified = desiredVerified
+		if existing.Status != store.ModelStatusAvailable {
+			existing.Status = store.ModelStatusAvailable
 			needsUpdate = true
 		}
-		desiredDefault := entry.Available && model.ID == defaultModelID
+		if !existing.Verified {
+			existing.Verified = true
+			needsUpdate = true
+		}
+		desiredDefault := model.ID == defaultModelID
 		if existing.IsDefault != desiredDefault {
 			existing.IsDefault = desiredDefault
 			needsUpdate = true
@@ -649,36 +432,17 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 
 	sort.Strings(result.AddedModelIDs)
 	sort.Strings(result.DeletedModelIDs)
-	sort.Strings(result.OfflineModelIDs)
 	return result, nil
 }
 
-func shouldDeleteUnavailableVerifiedModel(channel string, entry verifiedModel) bool {
-	if entry.Available {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "puter":
-		return true
-	default:
-		return false
-	}
-}
-
-func chooseRefreshedDefaultModel(existing map[string]*store.Model, verified map[string]verifiedModel, ordered []discoveredModel) string {
+func chooseRefreshedDefaultModel(existing map[string]*store.Model, ordered []discoveredModel) string {
 	for _, model := range ordered {
-		entry := verified[model.ID]
-		if !entry.Available {
-			continue
-		}
 		if current := existing[model.ID]; current != nil && current.IsDefault {
 			return model.ID
 		}
 	}
 	for _, model := range ordered {
-		if verified[model.ID].Available {
-			return model.ID
-		}
+		return model.ID
 	}
 	return ""
 }

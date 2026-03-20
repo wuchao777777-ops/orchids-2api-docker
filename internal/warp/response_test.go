@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -164,6 +166,56 @@ func TestProcessStreamBody_FallsBackToLegacySSE(t *testing.T) {
 	}
 	if events[1].Type != "model.finish" {
 		t.Fatalf("second event=%#v want finish", events[1])
+	}
+}
+
+func TestProcessStreamBody_AllowsNilOnMessage(t *testing.T) {
+	payload := appendBytesField(2,
+		appendBytesField(1,
+			appendBytesField(1,
+				appendBytesField(1,
+					appendBytesField(5,
+						appendBytesField(3,
+							appendBytesField(1, []byte("hi")),
+						),
+					),
+				),
+			),
+		),
+	)
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	stream := "data: " + encoded + "\n\n"
+
+	if err := processStreamBody(context.Background(), strings.NewReader(stream), nil, nil); err != nil {
+		t.Fatalf("processStreamBody(nil onMessage) error: %v", err)
+	}
+}
+
+func TestHandleStreamResponse_AllowsNilOnMessageWithConversationID(t *testing.T) {
+	payload := appendBytesField(2,
+		appendBytesField(1,
+			appendBytesField(1,
+				appendBytesField(1,
+					appendBytesField(5,
+						appendBytesField(3,
+							appendBytesField(1, []byte("hi")),
+						),
+					),
+				),
+			),
+		),
+	)
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader("data: " + encoded + "\n\n")),
+	}
+	client := &Client{}
+	req := upstream.UpstreamRequest{ChatSessionID: "conv_123"}
+
+	if err := client.handleStreamResponse(context.Background(), req, resp, nil, nil); err != nil {
+		t.Fatalf("handleStreamResponse(nil onMessage) error: %v", err)
 	}
 }
 

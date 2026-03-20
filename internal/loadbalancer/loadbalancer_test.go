@@ -6,6 +6,29 @@ import (
 	"orchids-api/internal/store"
 )
 
+type fixedConnTracker struct {
+	counts map[int64]int64
+}
+
+func (t *fixedConnTracker) Acquire(accountID int64) {}
+
+func (t *fixedConnTracker) Release(accountID int64) {}
+
+func (t *fixedConnTracker) GetCount(accountID int64) int64 {
+	if t == nil {
+		return 0
+	}
+	return t.counts[accountID]
+}
+
+func (t *fixedConnTracker) GetCounts(accountIDs []int64) map[int64]int64 {
+	out := make(map[int64]int64, len(accountIDs))
+	for _, id := range accountIDs {
+		out[id] = t.GetCount(id)
+	}
+	return out
+}
+
 func TestSelectAccount_Distribution(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	accounts := []*store.Account{
@@ -77,6 +100,27 @@ func TestSelectAccount_ActiveConnections(t *testing.T) {
 		selected := lb.selectAccount(accounts)
 		if selected.ID != acc2.ID {
 			t.Errorf("Expected Acc2 to be selected, got %s", selected.Name)
+		}
+	}
+}
+
+func TestSelectAccountWithTracker_UsesProvidedTracker(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc1 := &store.Account{ID: 1, Name: "Acc1", Weight: 1}
+	acc2 := &store.Account{ID: 2, Name: "Acc2", Weight: 1}
+	accounts := []*store.Account{acc1, acc2}
+
+	custom := &fixedConnTracker{
+		counts: map[int64]int64{
+			acc1.ID: 5,
+			acc2.ID: 0,
+		},
+	}
+
+	for i := 0; i < 100; i++ {
+		selected := lb.selectAccountWithTracker(accounts, custom)
+		if selected == nil || selected.ID != acc2.ID {
+			t.Fatalf("expected Acc2 to be selected via custom tracker, got %#v", selected)
 		}
 	}
 }

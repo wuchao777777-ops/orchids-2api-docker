@@ -138,7 +138,7 @@ func TestBuildSSEAgentRequestNormalizesModelAliases(t *testing.T) {
 	}
 }
 
-func TestBuildSSEAgentRequestFallsBackUnknownModelToDefault(t *testing.T) {
+func TestBuildSSEAgentRequestPreservesUnknownModelInsteadOfFallingBack(t *testing.T) {
 	t.Parallel()
 
 	client := &Client{
@@ -149,15 +149,15 @@ func TestBuildSSEAgentRequestFallsBackUnknownModelToDefault(t *testing.T) {
 
 	req := upstream.UpstreamRequest{
 		Prompt: "hello",
-		Model:  "unknown-model",
+		Model:  "gpt-5.4",
 	}
 
 	payload := client.buildSSEAgentRequest(req)
-	if payload.ModelName != orchidsAgentDefaultModel {
-		t.Fatalf("ModelName=%q want %q", payload.ModelName, orchidsAgentDefaultModel)
+	if payload.ModelName != "gpt-5.4" {
+		t.Fatalf("ModelName=%q want gpt-5.4", payload.ModelName)
 	}
-	if payload.Model != orchidsAgentDefaultModel {
-		t.Fatalf("Model=%#v want %q", payload.Model, orchidsAgentDefaultModel)
+	if payload.Model != "gpt-5.4" {
+		t.Fatalf("Model=%#v want gpt-5.4", payload.Model)
 	}
 }
 

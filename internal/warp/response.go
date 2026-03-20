@@ -156,6 +156,9 @@ func (e *parsedEvent) hasSignals() bool {
 }
 
 func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	if onMessage == nil {
+		onMessage = func(upstream.SSEMessage) {}
+	}
 	if closer, ok := reader.(io.Closer); ok {
 		done := make(chan struct{})
 		go func() {

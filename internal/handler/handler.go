@@ -43,6 +43,7 @@ type Handler struct {
 	clientFactory ClientFactory
 	clientCache   *accountClientCache
 	loadBalancer  *loadbalancer.LoadBalancer
+	connTracker   loadbalancer.ConnTracker
 	tokenCache    tokencache.Cache
 	promptCache   tokencache.PromptCache
 	auditLogger   audit.Logger
@@ -149,6 +150,7 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 	h := &Handler{
 		config:       cfg,
 		loadBalancer: lb,
+		connTracker:  loadbalancer.NewMemoryConnTracker(),
 		clientCache:  newAccountClientCache(),
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
 		dedupStore:   NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
@@ -792,14 +794,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// 手动管理连接计数，账号切换时需要释放旧账号、获取新账号
 	trackedAccountID := int64(0)
-	if currentAccount != nil && h.loadBalancer != nil {
-		h.loadBalancer.AcquireConnection(currentAccount.ID)
-		trackedAccountID = currentAccount.ID
-	}
+	trackedAccountID = h.acquireTrackedAccount(currentAccount)
 	defer func() {
-		if trackedAccountID != 0 && h.loadBalancer != nil {
-			h.loadBalancer.ReleaseConnection(trackedAccountID)
-		}
+		h.releaseTrackedAccount(trackedAccountID)
 	}()
 
 	suggestionMode := isSuggestionMode(req.Messages)
@@ -1290,6 +1287,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Error("Aborting retries for non-retriable error", "error", err, "category", errClass.Category)
 				if errClass.Category == "auth_blocked" || errClass.Category == "auth" {
 					sh.InjectAuthError(errClass.Category, errStr)
+				} else if errClass.Category != "canceled" {
+					sh.InjectUpstreamError(errStr)
 				}
 				if errClass.Category == "canceled" {
 					sh.setSuppressEmptyOutputFallback(true)
@@ -1335,7 +1334,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 				// 释放旧账号的连接计数
 				if trackedAccountID != 0 {
-					h.loadBalancer.ReleaseConnection(trackedAccountID)
+					h.releaseTrackedAccount(trackedAccountID)
 					trackedAccountID = 0
 				}
 
@@ -1344,8 +1343,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					apiClient = nextClient
 					currentAccount = nextAccount
 					if currentAccount != nil {
-						h.loadBalancer.AcquireConnection(currentAccount.ID)
-						trackedAccountID = currentAccount.ID
+						trackedAccountID = h.acquireTrackedAccount(currentAccount)
 						if verboseDiagnostics {
 							slog.Debug("Switched to account", "account", currentAccount.Name)
 						}
@@ -1358,8 +1356,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					if shouldRetryCurrentAccountWhenNoAlternative(errClass.Category) && prevAccount != nil {
 						apiClient = prevClient
 						currentAccount = prevAccount
-						h.loadBalancer.AcquireConnection(currentAccount.ID)
-						trackedAccountID = currentAccount.ID
+						trackedAccountID = h.acquireTrackedAccount(currentAccount)
 						slog.Warn(
 							"No alternate accounts available; retrying current account",
 							"trace_id", traceID,

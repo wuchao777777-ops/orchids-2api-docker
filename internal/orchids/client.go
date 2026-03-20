@@ -17,6 +17,7 @@ import (
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
@@ -592,7 +593,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if err == nil {
 		return nil
 	}
-	if transport == orchidsTransportWS && isWSFallback(err) && ctx.Err() == nil {
+	if transport == orchidsTransportWS && isWSFallback(err) && ctx.Err() == nil && shouldFallbackFromWSToSSE(err) {
 		slog.Warn("Orchids transport fallback", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "from", orchidsTransportWS, "to", orchidsTransportSSE, "chat_session_id", req.ChatSessionID, "error", err)
 		if logger != nil {
 			logger.LogUpstreamSSE("ws_fallback", err.Error())
@@ -746,6 +747,10 @@ func (c *Client) requestTimeout() time.Duration {
 func isWSFallback(err error) bool {
 	var fallback wsFallbackError
 	return errors.As(err, &fallback)
+}
+
+func shouldFallbackFromWSToSSE(err error) bool {
+	return !apperrors.IsAccountAuthFailure(err)
 }
 
 func getCachedToken(sessionID string) (string, bool) {
