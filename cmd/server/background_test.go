@@ -35,15 +35,34 @@ func TestExtractGrokModelIDsFromText_FiltersDocsSlugs(t *testing.T) {
 	if !slices.Contains(ids, "grok-code-fast-1") {
 		t.Fatalf("expected grok-code-fast-1 in ids: %+v", ids)
 	}
-	if !slices.Contains(ids, "grok-4.1-fast-reasoning") {
-		t.Fatalf("expected grok-4.1-fast-reasoning in ids: %+v", ids)
-	}
 	for _, blocked := range []string{
 		"grok-code-prompt-engineering",
 		"grok-business",
 		"grok-client",
 		"grok-conv-id",
 		"grok-imagine-image",
+		"grok-4.1-fast-reasoning",
+	} {
+		if slices.Contains(ids, blocked) {
+			t.Fatalf("%s should be filtered out: %+v", blocked, ids)
+		}
+	}
+}
+
+func TestExtractGrokModelIDsFromText_FiltersVolatileVariants(t *testing.T) {
+	text := `grok-3-fast-beta grok-3-fast-latest grok-4.20-0309 grok-4.20-0309-reasoning grok-4.20-0309-non-reasoning grok-4.0709 grok-2.1212 grok-5 grok-5-fast`
+	ids := extractGrokModelIDsFromText(text)
+	for _, wanted := range []string{"grok-5", "grok-5-fast", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning"} {
+		if !slices.Contains(ids, wanted) {
+			t.Fatalf("expected %s in ids: %+v", wanted, ids)
+		}
+	}
+	for _, blocked := range []string{
+		"grok-3-fast-beta",
+		"grok-3-fast-latest",
+		"grok-4.20-0309",
+		"grok-4.0709",
+		"grok-2.1212",
 	} {
 		if slices.Contains(ids, blocked) {
 			t.Fatalf("%s should be filtered out: %+v", blocked, ids)
@@ -63,10 +82,14 @@ func TestBuildGrokVersionProbes(t *testing.T) {
 		{Channel: "Grok", ModelID: "grok-3"},
 		{Channel: "Grok", ModelID: "grok-4"},
 		{Channel: "Grok", ModelID: "grok-4.1-fast"},
+		{Channel: "Grok", ModelID: "grok-420"},
 	}
 	probes := buildGrokVersionProbes(models)
 	if slices.Contains(probes, "grok-4.2") {
 		t.Fatalf("grok-4.2 should be filtered out from probes, got %+v", probes)
+	}
+	if slices.Contains(probes, "grok-420.1") || slices.Contains(probes, "grok-421") {
+		t.Fatalf("marketing model grok-420 should not generate numeric probes, got %+v", probes)
 	}
 	if !slices.Contains(probes, "grok-5") {
 		t.Fatalf("expected grok-5 probe, got %+v", probes)

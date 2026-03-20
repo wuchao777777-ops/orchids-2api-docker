@@ -641,7 +641,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 				}
 
 				verifyCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-				_, verifyErr := grokClient.GetUsage(verifyCtx, token, modelID)
+				_, verifyErr := grokClient.VerifyToken(verifyCtx, token, modelID)
 				cancel()
 				checked++
 				if verifyErr != nil {
@@ -779,6 +779,9 @@ func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.
 }
 
 var grokModelIDPattern = regexp.MustCompile(`\bgrok-[a-z0-9][a-z0-9.-]*\b`)
+var grokStablePublicTextModelPattern = regexp.MustCompile(`^grok-(\d+(?:\.\d+)?)(?:-(mini|fast|thinking|expert|heavy))?$`)
+var grokStablePublicReleaseVariantPattern = regexp.MustCompile(`^grok-(\d+(?:\.\d+)?)-\d{4}-(reasoning|non-reasoning)$`)
+var grokCodeFastModelPattern = regexp.MustCompile(`^grok-code-fast(?:-\d+)?$`)
 
 func fetchPublicGrokModelIDs(ctx context.Context) ([]string, error) {
 	urls := []string{
@@ -886,6 +889,9 @@ func isLikelyDiscoveredGrokTextModelID(id string) bool {
 	if id == "" || !strings.HasPrefix(id, "grok-") {
 		return false
 	}
+	if modelpolicy.IsPublicGrokModelID(id) {
+		return !strings.HasPrefix(id, "grok-imagine-")
+	}
 	if strings.HasPrefix(id, "grok-imagine-") {
 		return false
 	}
@@ -907,13 +913,35 @@ func isLikelyDiscoveredGrokTextModelID(id string) bool {
 		return false
 	}
 	if strings.HasPrefix(id, "grok-code-") {
+		return grokCodeFastModelPattern.MatchString(id)
+	}
+	if grokStablePublicReleaseVariantPattern.MatchString(id) {
+		major, minor, ok := parseGrokMajorMinor(id)
+		if !ok {
+			return false
+		}
+		if major <= 0 || major > 20 {
+			return false
+		}
+		if minor < 0 || minor > 99 {
+			return false
+		}
 		return true
 	}
-	rest := strings.TrimPrefix(id, "grok-")
-	if rest == "" {
+	if !grokStablePublicTextModelPattern.MatchString(id) {
 		return false
 	}
-	return rest[0] >= '0' && rest[0] <= '9'
+	major, minor, ok := parseGrokMajorMinor(id)
+	if !ok {
+		return false
+	}
+	if major <= 0 || major > 20 {
+		return false
+	}
+	if minor < 0 || minor > 99 {
+		return false
+	}
+	return true
 }
 
 func buildGrokVersionProbes(models []*store.Model) []string {
@@ -929,6 +957,12 @@ func buildGrokVersionProbes(models []*store.Model) []string {
 		}
 		major, minor, ok := parseGrokMajorMinor(m.ModelID)
 		if !ok {
+			continue
+		}
+		if major <= 0 || major > 20 {
+			continue
+		}
+		if minor < 0 || minor > 99 {
 			continue
 		}
 		seenMajor[major] = struct{}{}

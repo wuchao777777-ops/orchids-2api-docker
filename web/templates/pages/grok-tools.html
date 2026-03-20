@@ -2540,68 +2540,6 @@
       line-height: 1.65;
     }
 
-    .grok-tools-overview {
-      display: grid;
-      grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.95fr);
-      gap: 16px;
-    }
-
-    .grok-tools-overview .page-intro-card {
-      position: relative;
-      overflow: hidden;
-    }
-
-    .grok-tools-overview .page-intro-card-primary::before {
-      content: "";
-      position: absolute;
-      inset: auto auto -42px -18px;
-      width: 160px;
-      height: 160px;
-      border-radius: 999px;
-      background: radial-gradient(circle, rgba(125, 211, 252, 0.12), transparent 68%);
-      pointer-events: none;
-    }
-
-    .grok-tools-signal-list {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 18px;
-    }
-
-    .grok-tools-signal {
-      position: relative;
-      z-index: 1;
-      min-width: 0;
-      padding: 14px 16px;
-      border-radius: 16px;
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      background: rgba(255, 255, 255, 0.03);
-      backdrop-filter: blur(6px);
-    }
-
-    .grok-tools-signal-label {
-      margin-bottom: 8px;
-      color: var(--text-secondary);
-      font-size: 0.78rem;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-    }
-
-    .grok-tools-signal-value {
-      color: var(--text-main);
-      font-size: 1.05rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-    }
-
-    .grok-tools-signal-note {
-      margin-top: 6px;
-      color: var(--text-secondary);
-      font-size: 0.84rem;
-      line-height: 1.55;
-    }
-
     .grok-tools-page .grok-function-card {
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)),
@@ -3175,17 +3113,7 @@
       scrollbar-color: rgba(125, 211, 252, 0.35) transparent;
     }
 
-    @media (max-width: 1100px) {
-      .grok-tools-overview {
-        grid-template-columns: 1fr;
-      }
-    }
-
     @media (max-width: 720px) {
-      .grok-tools-signal-list {
-        grid-template-columns: 1fr;
-      }
-
       .grok-tools-page .platform-tabs .tab-item {
         flex: 1 1 calc(50% - 8px);
       }
@@ -3200,35 +3128,6 @@
     <section class="header-section">
       <h1>Grok 工具</h1>
       <p>把 Grok 的对话、生成、语音和缓存能力收进一套统一控制台，让调试、切换和排障都在同一个工作台里完成。</p>
-    </section>
-
-    <section class="grok-tools-overview">
-      <article class="page-intro-card page-intro-card-primary">
-        <div class="page-intro-kicker">Unified Grok Workspace</div>
-        <h2>像管理一个产品面板一样管理 Grok 能力</h2>
-        <p>这里不只是一个工具入口集合。聊天、图片、视频、语音和缓存被组织成连续的操作链路，适合在同一会话里快速验证模型行为、追踪状态并保留必要的运行上下文。</p>
-        <div class="grok-tools-signal-list">
-          <div class="grok-tools-signal">
-            <div class="grok-tools-signal-label">Chat First</div>
-            <div class="grok-tools-signal-value">先对话，再延伸到生成</div>
-            <div class="grok-tools-signal-note">首屏优先保留会话工作台，适合快速确认可用模型、提示词和工具行为。</div>
-          </div>
-          <div class="grok-tools-signal">
-            <div class="grok-tools-signal-label">On Demand</div>
-            <div class="grok-tools-signal-value">Imagine / Cache 按需加载</div>
-            <div class="grok-tools-signal-note">较重的模块延后加载，减少进入页面时的等待感。</div>
-          </div>
-        </div>
-      </article>
-      <aside class="page-intro-card">
-        <div class="page-intro-meta">Workflow Notes</div>
-        <h2>建议的使用节奏</h2>
-        <ul class="page-checklist">
-          <li>先在 Chat 里确认模型、系统提示词和输出风格。</li>
-          <li>再切到 Imagine / Video，把已验证的提示词迁移为生成任务。</li>
-          <li>Voice 适合做连接态检查，Cache 适合做清理与诊断收尾。</li>
-        </ul>
-      </aside>
     </section>
 
     <div class="content-card grok-function-card" style="padding: 16px;">

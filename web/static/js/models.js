@@ -10,7 +10,27 @@ let modelRefreshInFlight = false;
 
 function modelChannels() {
   const defaultChannels = ["Orchids", "Warp", "Bolt", "Puter", "Grok"];
-  return Array.from(new Set([...defaultChannels, ...models.map((m) => String(m.channel || "").trim()).filter(Boolean)])).sort();
+  const seen = new Set();
+  const ordered = [];
+
+  defaultChannels.forEach((channel) => {
+    if (seen.has(channel.toLowerCase())) return;
+    seen.add(channel.toLowerCase());
+    ordered.push(channel);
+  });
+
+  models
+    .map((m) => String(m.channel || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+    .forEach((channel) => {
+      const key = channel.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      ordered.push(channel);
+    });
+
+  return ordered;
 }
 
 function normalizeModelStatus(status) {
@@ -30,12 +50,26 @@ function statusMeta(status) {
   }
 }
 
-function getFilteredModels() {
-  let filtered = models.slice();
+function sortModels(list) {
+  return list.sort((a, b) => {
+    const sortDiff = Number(a.sort_order || 0) - Number(b.sort_order || 0);
+    if (sortDiff !== 0) return sortDiff;
+    return String(a.model_id || "").localeCompare(String(b.model_id || ""));
+  });
+}
+
+function getChannelScopedModels() {
+  let scoped = models.slice();
 
   if (currentModelChannel) {
-    filtered = filtered.filter((m) => String(m.channel || "").toLowerCase() === currentModelChannel.toLowerCase());
+    scoped = scoped.filter((m) => String(m.channel || "").toLowerCase() === currentModelChannel.toLowerCase());
   }
+
+  return sortModels(scoped);
+}
+
+function getFilteredModels() {
+  let filtered = getChannelScopedModels().slice();
 
   if (modelStatusFilter) {
     filtered = filtered.filter((m) => normalizeModelStatus(m.status) === modelStatusFilter);
@@ -53,20 +87,15 @@ function getFilteredModels() {
     });
   }
 
-  filtered.sort((a, b) => {
-    const sortDiff = Number(a.sort_order || 0) - Number(b.sort_order || 0);
-    if (sortDiff !== 0) return sortDiff;
-    return String(a.model_id || "").localeCompare(String(b.model_id || ""));
-  });
-
   return filtered;
 }
 
-function updateModelSummary(filtered) {
-  const available = filtered.filter((m) => normalizeModelStatus(m.status) === "available").length;
-  const maintenance = filtered.filter((m) => normalizeModelStatus(m.status) === "maintenance").length;
-  const offline = filtered.filter((m) => normalizeModelStatus(m.status) === "offline").length;
+function updateModelSummary(channelModels, filtered) {
+  const available = channelModels.filter((m) => normalizeModelStatus(m.status) === "available").length;
+  const maintenance = channelModels.filter((m) => normalizeModelStatus(m.status) === "maintenance").length;
+  const offline = channelModels.filter((m) => normalizeModelStatus(m.status) === "offline").length;
   const channelLabel = currentModelChannel || "全部";
+  const defaultModel = channelModels.find((m) => !!m.is_default);
 
   document.getElementById("totalModelCount").textContent = String(filtered.length);
   document.getElementById("availableModelCount").textContent = String(available);
@@ -74,16 +103,24 @@ function updateModelSummary(filtered) {
   document.getElementById("offlineModelCount").textContent = String(offline);
   document.getElementById("currentChannelLabel").textContent = channelLabel;
   document.getElementById("currentChannelPill").textContent = channelLabel;
+  document.getElementById("defaultModelLabel").textContent = defaultModel
+    ? String(defaultModel.name || defaultModel.model_id || "未命名模型")
+    : "未设置";
+
+  const filterMeta = document.getElementById("modelsFilterMeta");
+  if (filterMeta) {
+    filterMeta.textContent = `当前渠道共 ${channelModels.length} 条，筛选后 ${filtered.length} 条。`;
+  }
 
   const panelTitle = document.getElementById("modelsPanelTitle");
   if (panelTitle) {
-    panelTitle.textContent = `${channelLabel} 模型列表`;
+    panelTitle.textContent = `${channelLabel} 动作区`;
   }
 
   const panelHint = document.getElementById("modelsPanelHint");
   if (panelHint) {
     panelHint.textContent = filtered.length > 0
-      ? `当前条件下共有 ${filtered.length} 条模型记录，可直接在列表中调整状态、默认项和排序。`
+      ? `当前筛选结果共有 ${filtered.length} 条，可直接在表格中编辑、删除或启停。默认模型请在编辑弹窗里维护。`
       : "当前筛选条件下没有命中的模型记录。";
   }
 }
@@ -158,8 +195,9 @@ function renderPagination(current, total) {
 
 function renderModels() {
   const container = document.getElementById("modelsList");
+  const channelModels = getChannelScopedModels();
   const filtered = getFilteredModels();
-  updateModelSummary(filtered);
+  updateModelSummary(channelModels, filtered);
 
   const total = filtered.length;
   const totalPages = Math.max(1, Math.ceil(total / modelPageSize));
@@ -191,29 +229,20 @@ function renderModels() {
 
   const rows = pageItems.map((m) => {
     const status = statusMeta(m.status);
-    const defaultBadge = m.is_default
-      ? `<span class="models-default-badge">默认</span>`
-      : `<button type="button" class="btn btn-outline models-default-btn" data-action="set-default" data-id="${encodeData(m.id)}">设为默认</button>`;
+    const defaultBadge = m.is_default ? `<span class="models-default-badge">默认</span>` : "";
 
     return `
       <tr>
-        <td class="col-id">${escapeHtml(m.id)}</td>
-        <td>
-          <span class="models-channel-tag">${escapeHtml(m.channel || "-")}</span>
-        </td>
-        <td>
+        <td class="col-model">
           <div class="models-cell-main">
-            <strong>${escapeHtml(m.name || m.model_id || "-")}</strong>
-            <span class="models-cell-sub">显示名称</span>
-          </div>
-        </td>
-        <td>
-          <div class="models-cell-main">
+            <div class="models-cell-title">
+              <strong>${escapeHtml(m.name || m.model_id || "-")}</strong>
+              ${defaultBadge}
+            </div>
             <span class="models-model-id">${escapeHtml(m.model_id || "-")}</span>
-            <span class="models-cell-sub">实际请求使用的模型 ID</span>
+            <span class="models-cell-sub">排序 ${escapeHtml(String(m.sort_order ?? 0))}</span>
           </div>
         </td>
-        <td class="col-default">${defaultBadge}</td>
         <td class="col-status">
           <span class="models-status-badge" style="background:${status.bg};color:${status.color};border-color:${status.border};">${status.label}</span>
         </td>
@@ -226,8 +255,8 @@ function renderModels() {
         </td>
         <td class="col-actions">
           <div class="models-actions">
-            <i class="action-icon" data-action="edit" data-id="${encodeData(m.id)}" title="编辑">✏️</i>
-            <i class="action-icon" data-action="delete" data-id="${encodeData(m.id)}" title="删除" style="color:#ef4444;">🗑️</i>
+            <button type="button" class="btn btn-outline models-action-btn" data-action="edit" data-id="${encodeData(m.id)}">编辑</button>
+            <button type="button" class="btn btn-outline models-action-btn models-action-btn-danger" data-action="delete" data-id="${encodeData(m.id)}">删除</button>
           </div>
         </td>
       </tr>
@@ -239,11 +268,7 @@ function renderModels() {
       <table class="models-table">
         <thead>
           <tr>
-            <th class="col-id">ID</th>
-            <th>渠道</th>
-            <th>显示名称</th>
-            <th>模型 ID</th>
-            <th class="col-default">默认</th>
+            <th class="col-model">模型</th>
             <th class="col-status">状态</th>
             <th class="col-sort">排序</th>
             <th class="col-toggle">启用</th>
@@ -263,7 +288,6 @@ function renderModels() {
     if (!id) return;
     if (action === "edit") editModel(id);
     if (action === "delete") deleteModel(id);
-    if (action === "set-default") setDefaultModel(id);
   };
 
   container.onchange = (event) => {
@@ -290,25 +314,6 @@ async function loadModels() {
     updateRefreshButton();
   } catch (err) {
     showToast("加载模型失败", "error");
-  }
-}
-
-async function setDefaultModel(id) {
-  const model = models.find((item) => item.id === id);
-  if (!model) return;
-
-  try {
-    const updatedModel = { ...model, is_default: true };
-    const res = await fetch(`/api/models/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updatedModel),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    showToast("设为默认成功");
-    await loadModels();
-  } catch (err) {
-    showToast(`设置失败: ${err.message}`, "error");
   }
 }
 

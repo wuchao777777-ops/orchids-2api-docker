@@ -26,6 +26,22 @@
       box-shadow: var(--shadow-sm);
     }
 
+    .models-section-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-secondary);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
     .models-overview::after {
       content: "";
       position: absolute;
@@ -42,31 +58,13 @@
       position: relative;
       z-index: 1;
       display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: flex-start;
-      flex-wrap: wrap;
+      flex-direction: column;
+      gap: 8px;
       margin-bottom: 20px;
     }
 
     .models-overview-copy {
-      max-width: 720px;
-    }
-
-    .models-overview-kicker {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 10px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: rgba(59, 130, 246, 0.12);
-      border: 1px solid rgba(96, 165, 250, 0.18);
-      color: #e8ffac;
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      max-width: 760px;
     }
 
     .models-overview-copy h2 {
@@ -82,33 +80,11 @@
       font-size: 0.95rem;
     }
 
-    .models-primary-action {
-      min-width: 172px;
-      padding: 10px 18px;
-      border: none;
-      border-radius: 14px;
-      background: linear-gradient(135deg, var(--primary), #b6f86a);
-      color: #10150f;
-      box-shadow: 0 10px 24px rgba(215, 255, 100, 0.16);
-    }
-
-    .models-overview-actions {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    .models-refresh-action {
-      min-width: 172px;
-      border-radius: 14px;
-    }
-
     .models-summary-grid {
       position: relative;
       z-index: 1;
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 12px;
     }
 
@@ -134,12 +110,19 @@
       font-size: 1.4rem;
       font-weight: 700;
       line-height: 1;
+      min-height: 1.4rem;
+      word-break: break-word;
     }
 
     .models-stat-note {
       margin-top: 8px;
       color: var(--text-secondary);
       font-size: 0.82rem;
+    }
+
+    .models-stat-value.models-stat-value-compact {
+      font-size: 1.05rem;
+      line-height: 1.35;
     }
 
     .models-filter-panel {
@@ -157,6 +140,12 @@
       align-items: center;
       flex-wrap: wrap;
       margin-bottom: 14px;
+    }
+
+    .models-filter-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
 
     .models-filter-copy h3 {
@@ -185,6 +174,11 @@
 
     .models-active-count strong {
       color: var(--text-main);
+    }
+
+    .models-filter-meta {
+      color: var(--text-secondary);
+      font-size: 0.82rem;
     }
 
     .models-toolbar {
@@ -232,7 +226,7 @@
 
     .models-table {
       table-layout: fixed;
-      min-width: 1080px;
+      min-width: 760px;
     }
 
     .models-table thead th {
@@ -249,13 +243,8 @@
       vertical-align: middle;
     }
 
-    .models-table .col-id {
-      width: 72px;
-      color: var(--text-secondary);
-    }
-
-    .models-table .col-default {
-      width: 104px;
+    .models-table .col-model {
+      min-width: 0;
     }
 
     .models-table .col-status {
@@ -288,6 +277,13 @@
       font-size: 0.95rem;
     }
 
+    .models-cell-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
     .models-cell-sub {
       color: var(--text-secondary);
       font-size: 0.82rem;
@@ -301,20 +297,6 @@
       word-break: break-all;
     }
 
-    .models-channel-tag {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--border-color);
-      background: rgba(255, 255, 255, 0.04);
-      color: var(--text-main);
-      font-size: 0.78rem;
-      font-weight: 600;
-      letter-spacing: 0.01em;
-    }
-
     .models-default-badge {
       display: inline-flex;
       align-items: center;
@@ -325,6 +307,28 @@
       color: #93c5fd;
       font-size: 0.78rem;
       font-weight: 600;
+    }
+
+    .models-results-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .models-primary-action {
+      min-width: 148px;
+      padding: 10px 18px;
+      border: none;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--primary), #b6f86a);
+      color: #10150f;
+      box-shadow: 0 10px 24px rgba(215, 255, 100, 0.16);
+    }
+
+    .models-refresh-action {
+      min-width: 156px;
+      border-radius: 14px;
     }
 
     .models-status-badge {
@@ -344,12 +348,19 @@
       align-items: center;
       gap: 8px;
       min-width: 0;
+      flex-wrap: wrap;
     }
 
-    .models-default-btn {
-      padding: 6px 12px;
+    .models-action-btn {
+      min-width: 54px;
+      padding: 6px 10px;
       font-size: 0.8rem;
       white-space: nowrap;
+    }
+
+    .models-action-btn-danger {
+      color: #fca5a5;
+      border-color: rgba(239, 68, 68, 0.28);
     }
 
     .models-results-card {
@@ -386,6 +397,8 @@
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+      margin-left: auto;
+      justify-content: flex-end;
     }
 
     .models-meta-pill {
@@ -478,6 +491,14 @@
         width: 100%;
       }
 
+      .models-results-actions {
+        width: 100%;
+      }
+
+      .models-refresh-action {
+        width: 100%;
+      }
+
       .models-results-head,
       .models-footer {
         padding-left: 16px;
@@ -492,35 +513,15 @@
   <main class="main-content models-page">
     <section class="header-section" id="modelsHeader">
       <h1>模型管理</h1>
-      <p>维护公开模型、默认模型和状态切换，先按渠道看概览，再处理具体条目。</p>
-    </section>
-
-    <section class="page-intro-grid">
-      <article class="page-intro-card page-intro-card-primary">
-        <div class="page-intro-kicker">Models</div>
-        <h2>把模型维护拆成概览、筛选和动作三层</h2>
-        <p>上面先确认当前渠道和状态分布，中间用筛选缩小范围，下面的表格只负责具体修改，减少“信息太满但不好操作”的感觉。</p>
-      </article>
-      <article class="page-intro-card">
-        <div class="page-intro-meta">Typical actions</div>
-        <ul class="page-checklist">
-          <li>先按渠道切换，再按状态筛选</li>
-          <li>默认模型只保留一个，避免混淆</li>
-          <li>右侧操作区只保留编辑、删除和启停</li>
-        </ul>
-      </article>
+      <p>把模型维护收敛成概览、筛选和动作三层，先看渠道分布，再定位到具体模型。</p>
     </section>
 
     <section class="models-overview">
       <div class="models-overview-top">
+        <div class="models-section-label">概览</div>
         <div class="models-overview-copy">
-          <div class="models-overview-kicker">Model Control Center</div>
-          <h2>按渠道维护模型清单，先看概览，再做筛选和调整</h2>
-          <p>这里会汇总当前渠道的可用状态、默认模型和分页结果。模型数量变多后，也能快速定位到要处理的那一条。</p>
-        </div>
-        <div class="models-overview-actions">
-          <button class="btn btn-outline models-refresh-action" id="refreshModelsButton" type="button" onclick="refreshModelsForCurrentChannel()">刷新当前渠道</button>
-          <button class="btn btn-primary models-primary-action" onclick="openModelModal()">+ 添加模型</button>
+          <h2>先确认当前渠道和状态分布</h2>
+          <p>这里固定展示当前渠道、默认模型和状态分布。筛选条件变化时，这一层仍然保持对当前渠道的整体判断，不让你在局部结果里丢失全局感。</p>
         </div>
       </div>
       <div class="models-summary-grid">
@@ -528,6 +529,11 @@
           <div class="models-stat-label">当前渠道</div>
           <div class="models-stat-value" id="currentChannelLabel">-</div>
           <div class="models-stat-note">用于快速确认你正在维护哪一组模型</div>
+        </div>
+        <div class="models-stat-card">
+          <div class="models-stat-label">默认模型</div>
+          <div class="models-stat-value models-stat-value-compact" id="defaultModelLabel">未设置</div>
+          <div class="models-stat-note">同一渠道只保留一个默认模型，避免对外行为混淆</div>
         </div>
         <div class="models-stat-card">
           <div class="models-stat-label">可用模型</div>
@@ -550,8 +556,10 @@
     <section class="models-filter-panel">
       <div class="models-filter-top">
         <div class="models-filter-copy">
-          <h3>筛选与定位</h3>
-          <p>先切渠道，再按状态或关键字缩小范围，适合数量很多时快速定位模型。</p>
+          <div class="models-section-label">筛选</div>
+          <h3>先切渠道，再按状态缩小范围</h3>
+          <p>先从渠道切到正确范围，再用状态和搜索快速缩小到你要处理的模型。</p>
+          <div class="models-filter-meta" id="modelsFilterMeta">当前渠道共 0 条，筛选后 0 条。</div>
         </div>
         <div class="models-active-count">当前筛选结果 <strong id="totalModelCount">0</strong></div>
       </div>
@@ -592,8 +600,13 @@
       <div class="content-card models-results-card">
         <div class="models-results-head">
           <div class="models-results-copy">
-            <h3 id="modelsPanelTitle">模型列表</h3>
-            <p id="modelsPanelHint">查看并调整当前筛选条件下的模型记录。</p>
+            <div class="models-section-label">动作</div>
+            <h3 id="modelsPanelTitle">动作区</h3>
+            <p id="modelsPanelHint">表格只负责具体修改，右侧只保留编辑、删除和启停。</p>
+          </div>
+          <div class="models-results-actions">
+            <button class="btn btn-outline models-refresh-action" id="refreshModelsButton" type="button" onclick="refreshModelsForCurrentChannel()">刷新当前渠道</button>
+            <button class="btn btn-primary models-primary-action" onclick="openModelModal()">+ 添加模型</button>
           </div>
           <div class="models-results-meta">
             <span class="models-meta-pill">当前渠道 <strong id="currentChannelPill">-</strong></span>

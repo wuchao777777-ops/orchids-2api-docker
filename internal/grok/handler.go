@@ -118,7 +118,7 @@ func (h *Handler) tryAutoRegisterModel(ctx context.Context, modelID string) bool
 
 	verifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if _, err := h.client.GetUsage(verifyCtx, sess.token, id); err != nil {
+	if _, err := h.client.VerifyToken(verifyCtx, sess.token, id); err != nil {
 		slog.Debug("Auto verify grok model failed", "model_id", id, "error", err)
 		return false
 	}

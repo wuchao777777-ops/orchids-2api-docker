@@ -381,6 +381,9 @@ func verifyModelsForChannel(ctx context.Context, cfg *config.Config, s *store.St
 			}
 			return fmt.Errorf("all puter accounts rejected model %s", model.ID)
 		case "grok":
+			if isGrokModelInstantlyVerifiable(model.ID) {
+				return nil
+			}
 			client := grok.New(cfg)
 			for _, acc := range accounts {
 				token := grok.NormalizeSSOToken(acc.ClientCookie)
@@ -390,7 +393,7 @@ func verifyModelsForChannel(ctx context.Context, cfg *config.Config, s *store.St
 				if token == "" {
 					continue
 				}
-				if _, err := client.GetUsage(ctx, token, model.ID); err == nil {
+				if _, err := client.VerifyToken(ctx, token, model.ID); err == nil {
 					return nil
 				}
 			}
@@ -410,7 +413,7 @@ func verifyModelsForChannel(ctx context.Context, cfg *config.Config, s *store.St
 				cancel()
 				results <- jobResult{model: model, err: err}
 				if strings.EqualFold(channel, "grok") {
-					_ = util.SleepWithContext(ctx, 200*time.Millisecond)
+					_ = util.SleepWithContext(ctx, 75*time.Millisecond)
 				}
 			}
 		}()
@@ -472,7 +475,10 @@ func refreshWorkersForChannel(channel string, count int) int {
 		}
 		return 6
 	case "grok":
-		return 2
+		if count < 4 {
+			return count
+		}
+		return 4
 	default:
 		if count < 4 {
 			return count
@@ -486,10 +492,18 @@ func refreshTimeoutForChannel(channel string) time.Duration {
 	case "puter":
 		return 25 * time.Second
 	case "grok":
-		return 15 * time.Second
+		return 6 * time.Second
 	default:
 		return 30 * time.Second
 	}
+}
+
+func isGrokModelInstantlyVerifiable(modelID string) bool {
+	spec, ok := grok.ResolveModel(modelID)
+	if !ok {
+		return false
+	}
+	return spec.IsImage || spec.IsVideo
 }
 
 func verifyTextModel(ctx context.Context, client interface {

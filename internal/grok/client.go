@@ -344,7 +344,6 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 	if err == nil {
 		return info, nil
 	}
-	slog.Warn("GetUsage failed in VerifyToken, failing back to doChat", "error", err)
 
 	model := strings.TrimSpace(modelID)
 	if model == "" {
@@ -360,9 +359,11 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 	payload := c.chatPayload(spec, "ping", true, 0)
 	resp, chatErr := c.doChat(ctx, token, payload)
 	if chatErr != nil {
+		slog.Warn("VerifyToken fallback failed", "usage_error", err, "chat_error", chatErr)
 		return nil, chatErr
 	}
 	defer resp.Body.Close()
+	slog.Debug("GetUsage failed in VerifyToken, fallback chat succeeded", "error", err)
 	return parseRateLimitInfo(resp.Header), nil
 }
 

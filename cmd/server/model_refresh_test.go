@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/goccy/go-json"
@@ -160,6 +161,27 @@ func TestApplyModelRefresh_OfflinesUnavailableVerifiedNonPuterModel(t *testing.T
 	}
 	if model.Verified {
 		t.Fatal("Verified=true want false")
+	}
+}
+
+func TestIsGrokModelInstantlyVerifiable(t *testing.T) {
+	if !isGrokModelInstantlyVerifiable("grok-imagine-1.0") {
+		t.Fatal("grok-imagine-1.0 should skip network verification")
+	}
+	if !isGrokModelInstantlyVerifiable("grok-imagine-1.0-video") {
+		t.Fatal("grok-imagine-1.0-video should skip network verification")
+	}
+	if isGrokModelInstantlyVerifiable("grok-4.1-fast") {
+		t.Fatal("grok-4.1-fast should still require usage verification")
+	}
+}
+
+func TestGrokRefreshBudgetIsBounded(t *testing.T) {
+	if got := refreshWorkersForChannel("Grok", 10); got != 4 {
+		t.Fatalf("refreshWorkersForChannel(Grok)= %d want 4", got)
+	}
+	if got := refreshTimeoutForChannel("Grok"); got != 6*time.Second {
+		t.Fatalf("refreshTimeoutForChannel(Grok)= %s want 6s", got)
 	}
 }
 
