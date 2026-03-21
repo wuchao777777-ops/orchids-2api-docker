@@ -10,8 +10,8 @@ import (
 
 	"github.com/goccy/go-json"
 
-	"orchids-api/internal/prompt"
 	"orchids-api/internal/config"
+	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 )
@@ -213,6 +213,139 @@ func TestSendRequestWithPayload_HandlesBoltToolInvocationFramesAndFinalDMarker(t
 	}
 	if got := events[1].Event["finishReason"]; got != "tool_use" {
 		t.Fatalf("finishReason=%v want tool_use", got)
+	}
+}
+
+func TestSendRequestWithPayload_UsesPreparedInputEstimateInFinishUsage(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "0:\"hello\"\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":7}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	req := upstream.UpstreamRequest{
+		Model:   "claude-opus-4-6",
+		Workdir: "d:\\Code\\Orchids-2api",
+		Tools: []interface{}{
+			map[string]interface{}{"name": "Read"},
+			map[string]interface{}{"name": "Bash"},
+		},
+		System: []prompt.SystemItem{
+			{Type: "text", Text: "keep this custom instruction"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "inspect project"}},
+		},
+	}
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	want := EstimateInputTokens(req)
+	var events []upstream.SSEMessage
+	if err := client.SendRequestWithPayload(context.Background(), req, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil); err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2", len(events))
+	}
+	usage, ok := events[1].Event["usage"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("finish usage=%#v", events[1].Event["usage"])
+	}
+	if got := usage["inputTokens"]; got != want.Total {
+		t.Fatalf("inputTokens=%v want %d", got, want.Total)
+	}
+}
+
+func TestSendRequestWithPayload_ParsesStructuredToolCallEnvelope(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "9:{\"tool_calls\":[{\"function\":\"Read\",\"parameters\":{\"file_path\":\"README.md\"}}]}\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "inspect readme"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2", len(events))
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event type=%q want model.tool-call", events[0].Type)
+	}
+	if got := events[0].Event["toolName"]; got != "Read" {
+		t.Fatalf("toolName=%v want Read", got)
+	}
+	if got := events[0].Event["input"]; got != `{"file_path":"README.md"}` {
+		t.Fatalf("input=%v want read input json", got)
+	}
+}
+
+func TestEstimateInputTokens_SplitsPromptBuckets(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model:   "claude-opus-4-6",
+		Workdir: "d:\\Code\\Orchids-2api",
+		Tools: []interface{}{
+			map[string]interface{}{"name": "Read"},
+			map[string]interface{}{"name": "Bash"},
+		},
+		System: []prompt.SystemItem{
+			{Type: "text", Text: "keep this custom instruction"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "inspect project"}},
+			{Role: "assistant", Content: prompt.MessageContent{Text: "I will inspect the repository."}},
+		},
+	}
+
+	got := EstimateInputTokens(req)
+	if got.BasePromptTokens <= 0 {
+		t.Fatalf("BasePromptTokens=%d want >0", got.BasePromptTokens)
+	}
+	if got.ToolsTokens <= 0 {
+		t.Fatalf("ToolsTokens=%d want >0", got.ToolsTokens)
+	}
+	if got.SystemContextTokens <= 0 {
+		t.Fatalf("SystemContextTokens=%d want >0", got.SystemContextTokens)
+	}
+	if got.HistoryTokens <= 0 {
+		t.Fatalf("HistoryTokens=%d want >0", got.HistoryTokens)
+	}
+	if got.Total != got.BasePromptTokens+got.SystemContextTokens+got.ToolsTokens+got.HistoryTokens {
+		t.Fatalf("Total=%d does not match bucket sum", got.Total)
 	}
 }
 

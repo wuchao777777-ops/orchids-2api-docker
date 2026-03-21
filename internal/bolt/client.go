@@ -21,6 +21,7 @@ import (
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
+	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 )
@@ -38,12 +39,70 @@ var boltRootDataURL = defaultRootDataURL
 var boltRateLimitsURL = defaultRateLimitsURL
 var boltTeamsRateLimitsURL = defaultTeamsRateURL
 var supportedBoltToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "TodoWrite"}
+var supportedBoltToolSet = map[string]struct{}{
+	"Read":      {},
+	"Write":     {},
+	"Edit":      {},
+	"Bash":      {},
+	"Glob":      {},
+	"Grep":      {},
+	"TodoWrite": {},
+}
+var boltStripTaggedNames = []string{
+	"local-command-caveat",
+	"command-name",
+	"command-message",
+	"command-args",
+	"local-command-stdout",
+	"local-command-stderr",
+	"local-command-exit-code",
+	"ide_opened_file",
+	"ide_selection",
+}
+var boltInvalidPathMarkers = []string{"/tmp/cc-agent/", "/mnt/", "d:\\", "c:\\", "~/"}
+var boltEnvironmentBlockMarkers = []string{
+	"# environment",
+	"primary working directory:",
+	"# auto memory",
+	"gitstatus:",
+	"you have been invoked in the following environment",
+}
+var boltStructuredNestedKeys = []string{"parts", "content", "delta", "data", "messages"}
+var boltStructuredStringKeys = []string{"text", "message", "content", "delta", "output", "response"}
+var boltToolCallCollectionKeys = []string{"tool_calls", "toolCalls", "calls", "tool_call", "toolCall"}
+var boltEmptyParts = make([]Part, 0)
+var boltEmptyInterfaces = make([]interface{}, 0)
+
+type InputTokenEstimate struct {
+	BasePromptTokens    int
+	SystemContextTokens int
+	HistoryTokens       int
+	ToolsTokens         int
+	Total               int
+}
+
+type preparedRequest struct {
+	Request       *Request
+	InputEstimate InputTokenEstimate
+}
+
+type builtMessages struct {
+	Items         []Message
+	HistoryTokens int
+}
+
+type systemPromptParts struct {
+	BasePrompt   string
+	ToolPrompt   string
+	SystemPrompt string
+	FullPrompt   string
+}
 
 type Client struct {
-	httpClient        *http.Client
-	sessionToken      string
-	projectID         string
-	sharedHTTPClient  bool
+	httpClient       *http.Client
+	sessionToken     string
+	projectID        string
+	sharedHTTPClient bool
 }
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
@@ -177,16 +236,13 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("missing bolt project id")
 	}
 
-	boltReq := c.buildRequest(req, projectID)
-	if logger != nil {
-		if raw, err := json.Marshal(boltReq); err == nil {
-			logger.LogUpstreamRequest(boltAPIURL, map[string]string{"provider": "bolt"}, raw)
-		}
-	}
-
-	body, err := json.Marshal(boltReq)
+	prepared := prepareRequest(req, projectID)
+	body, err := json.Marshal(prepared.Request)
 	if err != nil {
 		return fmt.Errorf("failed to marshal bolt request: %w", err)
+	}
+	if logger != nil {
+		logger.LogUpstreamRequest(boltAPIURL, map[string]string{"provider": "bolt"}, body)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, boltAPIURL, bytes.NewReader(body))
@@ -208,9 +264,12 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("bolt API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	converter := newOutboundConverter(req.Model, estimateInputTokens(req.Messages, req.System))
-	return converter.ProcessStream(resp.Body, func(event string, payload []byte) error {
-		return emitSSEMessage(onMessage, event, payload)
+	converter := newOutboundConverter(req.Model, prepared.InputEstimate.Total)
+	return converter.ProcessStream(resp.Body, func(msg upstream.SSEMessage) error {
+		if onMessage != nil {
+			onMessage(msg)
+		}
+		return nil
 	})
 }
 
@@ -227,40 +286,92 @@ func (c *Client) applyCommonHeaders(req *http.Request) {
 	req.Header.Set("Cookie", "__session="+c.sessionToken)
 }
 
+func EstimateInputTokens(req upstream.UpstreamRequest) InputTokenEstimate {
+	return prepareRequest(req, strings.TrimSpace(req.ProjectID)).InputEstimate
+}
+
+func prepareRequest(req upstream.UpstreamRequest, projectID string) preparedRequest {
+	promptParts := buildSystemPromptParts(req.System, req.Workdir, req.Tools, req.NoTools, req.Messages)
+	messages := buildBoltMessages(req.Messages)
+
+	prepared := preparedRequest{
+		Request: &Request{
+			ID:                   generateRandomID(16),
+			SelectedModel:        strings.TrimSpace(req.Model),
+			IsFirstPrompt:        false,
+			PromptMode:           "build",
+			EffortLevel:          "high",
+			ProjectID:            projectID,
+			GlobalSystemPrompt:   promptParts.FullPrompt,
+			ProjectPrompt:        promptParts.FullPrompt,
+			StripeStatus:         "not-configured",
+			HostingProvider:      "bolt",
+			SupportIntegrations:  true,
+			UsesInspectedElement: false,
+			ErrorReasoning:       nil,
+			FeaturePreviews: FeaturePreviews{
+				Reasoning: false,
+				Diffs:     false,
+			},
+			ProjectFiles: ProjectFiles{
+				Visible: boltEmptyInterfaces,
+				Hidden:  boltEmptyInterfaces,
+			},
+			RunningCommands: boltEmptyInterfaces,
+			Dependencies:    boltEmptyInterfaces,
+			Problems:        "",
+			Messages:        messages.Items,
+		},
+	}
+	prepared.InputEstimate = estimatePreparedRequestInput(promptParts, messages.HistoryTokens)
+	return prepared
+}
+
 func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *Request {
-	systemPrompt := buildSystemPrompt(req.System, req.Workdir, req.Tools, req.NoTools, req.Messages)
-	boltReq := &Request{
-		ID:                   generateRandomID(16),
-		SelectedModel:        strings.TrimSpace(req.Model),
-		IsFirstPrompt:        false,
-		PromptMode:           "build",
-		EffortLevel:          "high",
-		ProjectID:            projectID,
-		GlobalSystemPrompt:   systemPrompt,
-		ProjectPrompt:        systemPrompt,
-		StripeStatus:         "not-configured",
-		HostingProvider:      "bolt",
-		SupportIntegrations:  true,
-		UsesInspectedElement: false,
-		ErrorReasoning:       nil,
-		FeaturePreviews: FeaturePreviews{
-			Reasoning: false,
-			Diffs:     false,
-		},
-		ProjectFiles: ProjectFiles{
-			Visible: []interface{}{},
-			Hidden:  []interface{}{},
-		},
-		RunningCommands: []interface{}{},
-		Dependencies:    []interface{}{},
-		Problems:        "",
+	return prepareRequest(req, projectID).Request
+}
+
+func shouldSkipBoltMessage(role string) bool {
+	return strings.EqualFold(strings.TrimSpace(role), "tool")
+}
+
+func buildSystemPrompt(system []prompt.SystemItem, workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
+	return buildSystemPromptParts(system, workdir, tools, noTools, messages).FullPrompt
+}
+
+func buildSystemPromptParts(system []prompt.SystemItem, workdir string, tools []interface{}, noTools bool, messages []prompt.Message) systemPromptParts {
+	parts := systemPromptParts{
+		BasePrompt: defaultAdapterPrompt,
+		ToolPrompt: buildBoltToolPrompt(workdir, tools, noTools, messages),
 	}
 
-	var lastUserMsgID string
-	for _, msg := range req.Messages {
-		blocks := normalizeBlocks(msg)
+	custom := make([]string, 0, len(system))
+	for _, item := range system {
+		text := sanitizeBoltSystemText(item.Text)
+		if strings.TrimSpace(text) != "" {
+			custom = append(custom, text)
+		}
+	}
+	parts.SystemPrompt = strings.Join(custom, "\n\n")
 
-		if shouldSkipBoltMessage(msg.Role, blocks) {
+	combined := make([]string, 0, 3)
+	for _, part := range []string{parts.BasePrompt, parts.ToolPrompt, parts.SystemPrompt} {
+		if strings.TrimSpace(part) != "" {
+			combined = append(combined, part)
+		}
+	}
+	parts.FullPrompt = strings.Join(combined, "\n\n")
+	return parts
+}
+
+func buildBoltMessages(messages []prompt.Message) builtMessages {
+	built := builtMessages{
+		Items: make([]Message, 0, len(messages)),
+	}
+	var lastUserMsgID string
+	for _, msg := range messages {
+		blocks := normalizeBlocks(msg)
+		if shouldSkipBoltMessage(msg.Role) {
 			continue
 		}
 
@@ -268,7 +379,7 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *R
 			ID:    generateRandomID(16),
 			Role:  msg.Role,
 			Cache: hasEphemeralCache(blocks),
-			Parts: []Part{},
+			Parts: boltEmptyParts,
 		}
 
 		switch msg.Role {
@@ -292,38 +403,42 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *R
 		if strings.TrimSpace(boltMsg.Content) == "" && len(boltMsg.Parts) == 0 {
 			continue
 		}
-
-		boltReq.Messages = append(boltReq.Messages, boltMsg)
+		built.Items = append(built.Items, boltMsg)
+		built.HistoryTokens += estimateBoltMessageTokens(boltMsg)
 	}
-
-	return boltReq
+	return built
 }
 
-func shouldSkipBoltMessage(role string, blocks []prompt.ContentBlock) bool {
-	switch strings.TrimSpace(strings.ToLower(role)) {
-	case "tool":
-		text := strings.TrimSpace(extractTextContent(blocks))
-		if text == "" {
-			return true
-		}
-		return true
-	default:
-		return false
+func estimatePreparedRequestInput(parts systemPromptParts, historyTokens int) InputTokenEstimate {
+	estimate := InputTokenEstimate{
+		BasePromptTokens:    estimateBoltTextTokens(parts.BasePrompt),
+		SystemContextTokens: estimateBoltTextTokens(parts.SystemPrompt),
+		ToolsTokens:         estimateBoltTextTokens(parts.ToolPrompt),
+		HistoryTokens:       historyTokens,
 	}
+	estimate.Total = estimate.BasePromptTokens + estimate.SystemContextTokens + estimate.ToolsTokens + estimate.HistoryTokens
+	return estimate
 }
 
-func buildSystemPrompt(system []prompt.SystemItem, workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
-	parts := []string{defaultAdapterPrompt}
-	if toolPrompt := buildBoltToolPrompt(workdir, tools, noTools, messages); toolPrompt != "" {
-		parts = append(parts, toolPrompt)
+func estimateBoltTextTokens(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
 	}
-	for _, item := range system {
-		text := sanitizeBoltSystemText(item.Text)
-		if strings.TrimSpace(text) != "" {
-			parts = append(parts, text)
-		}
+	return tiktoken.EstimateTextTokens(text)
+}
+
+func estimateBoltMessageTokens(msg Message) int {
+	text := strings.TrimSpace(msg.Content)
+	if text == "" {
+		return 0
 	}
-	return strings.Join(parts, "\n\n")
+
+	overhead := 15
+	if len(msg.Annotations) > 0 {
+		overhead += 5 * len(msg.Annotations)
+	}
+	return tiktoken.EstimateTextTokens(text) + overhead
 }
 
 func buildBoltToolPrompt(workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
@@ -507,7 +622,7 @@ func extractInvalidBoltPathFromString(text string) string {
 	}
 
 	lower := strings.ToLower(text)
-	for _, marker := range []string{"/tmp/cc-agent/", "/mnt/", "d:\\", "c:\\", "~/"} {
+	for _, marker := range boltInvalidPathMarkers {
 		idx := strings.Index(lower, marker)
 		if idx < 0 {
 			continue
@@ -610,12 +725,8 @@ func boltToolHint(name string) string {
 }
 
 func isPromptToolSupported(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "Read", "Write", "Edit", "Bash", "Glob", "Grep", "TodoWrite":
-		return true
-	default:
-		return false
-	}
+	_, ok := supportedBoltToolSet[strings.TrimSpace(name)]
+	return ok
 }
 
 func sanitizeBoltSystemText(text string) string {
@@ -669,17 +780,7 @@ func sanitizeBoltMessageText(text string) string {
 
 func stripTaggedBoltText(text string) string {
 	text = stripNestedTaggedBlock(text, "system-reminder")
-	for _, tag := range []string{
-		"local-command-caveat",
-		"command-name",
-		"command-message",
-		"command-args",
-		"local-command-stdout",
-		"local-command-stderr",
-		"local-command-exit-code",
-		"ide_opened_file",
-		"ide_selection",
-	} {
+	for _, tag := range boltStripTaggedNames {
 		text = stripSimpleTaggedBlock(text, tag)
 	}
 	return text
@@ -794,54 +895,12 @@ func stripBoltEnvironmentLines(text string) string {
 func looksLikeBoltEnvironmentBlock(text string) bool {
 	lower := strings.ToLower(text)
 	markers := 0
-	for _, marker := range []string{
-		"# environment",
-		"primary working directory:",
-		"# auto memory",
-		"gitstatus:",
-		"you have been invoked in the following environment",
-	} {
+	for _, marker := range boltEnvironmentBlockMarkers {
 		if strings.Contains(lower, marker) {
 			markers++
 		}
 	}
 	return markers >= 2
-}
-
-func looksLikeClaudeCodeSystem(text string) bool {
-	lower := strings.ToLower(text)
-	for _, sig := range []string{
-		"claude code",
-		"claude agent sdk",
-		"you are an interactive cli tool",
-		"todowrite tool",
-		"skill tool",
-	} {
-		if strings.Contains(lower, sig) {
-			return true
-		}
-	}
-	hits := 0
-	for _, sig := range []string{
-		"task tool",
-		"vscode",
-		"system-reminder",
-		"claude-sonnet",
-		"claude-opus",
-		"enterplanmode",
-		"exitplanmode",
-		"auto memory",
-		"# mcp server",
-		"# vscode extension context",
-	} {
-		if strings.Contains(lower, sig) {
-			hits++
-			if hits >= 2 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func normalizeBlocks(msg prompt.Message) []prompt.ContentBlock {
@@ -865,32 +924,47 @@ func hasEphemeralCache(blocks []prompt.ContentBlock) bool {
 }
 
 func extractTextContent(blocks []prompt.ContentBlock) string {
-	var texts []string
+	var sb strings.Builder
+	first := true
 	for _, block := range blocks {
 		if block.Type == "text" && block.Text != "" {
 			if text := sanitizeBoltMessageText(block.Text); text != "" {
-				texts = append(texts, text)
+				if !first {
+					sb.WriteByte('\n')
+				}
+				sb.WriteString(text)
+				first = false
 			}
 		}
 	}
-	return strings.Join(texts, "\n")
+	return sb.String()
 }
 
 func extractBoltUserContent(blocks []prompt.ContentBlock) string {
-	var parts []string
+	var sb strings.Builder
+	first := true
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
 			if text := sanitizeBoltMessageText(block.Text); text != "" {
-				parts = append(parts, text)
+				if !first {
+					sb.WriteString("\n\n")
+				}
+				sb.WriteString(text)
+				first = false
 			}
 		case "tool_result":
 			if text := strings.TrimSpace(stringifyContent(block.Content)); text != "" {
-				parts = append(parts, "Tool result:\n"+text)
+				if !first {
+					sb.WriteString("\n\n")
+				}
+				sb.WriteString("Tool result:\n")
+				sb.WriteString(text)
+				first = false
 			}
 		}
 	}
-	return strings.Join(parts, "\n\n")
+	return sb.String()
 }
 
 func stringifyContent(v interface{}) string {
@@ -900,24 +974,34 @@ func stringifyContent(v interface{}) string {
 	case string:
 		return x
 	case []prompt.ContentBlock:
-		var parts []string
+		var sb strings.Builder
+		first := true
 		for _, block := range x {
 			if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-				parts = append(parts, block.Text)
+				if !first {
+					sb.WriteByte('\n')
+				}
+				sb.WriteString(block.Text)
+				first = false
 			}
 		}
-		if len(parts) > 0 {
-			return strings.Join(parts, "\n")
+		if !first {
+			return sb.String()
 		}
 	case []interface{}:
-		var parts []string
+		var sb strings.Builder
+		first := true
 		for _, item := range x {
 			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
-				parts = append(parts, text)
+				if !first {
+					sb.WriteByte('\n')
+				}
+				sb.WriteString(text)
+				first = false
 			}
 		}
-		if len(parts) > 0 {
-			return strings.Join(parts, "\n")
+		if !first {
+			return sb.String()
 		}
 	}
 	data, err := json.Marshal(v)
@@ -925,36 +1009,6 @@ func stringifyContent(v interface{}) string {
 		return ""
 	}
 	return string(data)
-}
-
-func emitSSEMessage(onMessage func(upstream.SSEMessage), event string, payload []byte) error {
-	if onMessage == nil {
-		return nil
-	}
-	var eventMap map[string]interface{}
-	if err := json.Unmarshal(payload, &eventMap); err != nil {
-		return err
-	}
-	onMessage(upstream.SSEMessage{
-		Type:    event,
-		Event:   eventMap,
-		RawJSON: append(json.RawMessage(nil), payload...),
-	})
-	return nil
-}
-
-func estimateInputTokens(messages []prompt.Message, system []prompt.SystemItem) int {
-	totalChars := 0
-	for _, item := range system {
-		totalChars += len(item.Text)
-	}
-	for _, msg := range messages {
-		totalChars += len(msg.ExtractText())
-	}
-	if totalChars <= 0 {
-		return 0
-	}
-	return totalChars / 4
 }
 
 func generateRandomID(length int) string {
@@ -984,7 +1038,7 @@ func newOutboundConverter(model string, inputTokens int) *outboundConverter {
 	}
 }
 
-func (c *outboundConverter) ProcessStream(reader io.Reader, writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) ProcessStream(reader io.Reader, writer func(upstream.SSEMessage) error) error {
 	scanner := bufio.NewScanner(reader)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
@@ -1053,25 +1107,36 @@ func (c *outboundConverter) parseEndEvent(data string) (*EndEvent, error) {
 	return &event, nil
 }
 
-func (c *outboundConverter) processChunkData(data string, textBuffer *strings.Builder, writer func(event string, payload []byte) error, allowRawFallback bool) error {
-	var text string
-	if err := json.Unmarshal([]byte(data), &text); err == nil {
+func (c *outboundConverter) processChunkData(data string, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error, allowRawFallback bool) error {
+	switch firstNonSpaceByte(data) {
+	case '"':
+		var text string
+		if err := json.Unmarshal([]byte(data), &text); err != nil {
+			if allowRawFallback {
+				return c.processTextContent(strings.TrimSpace(data), textBuffer, writer)
+			}
+			return nil
+		}
 		text = strings.ReplaceAll(text, "626f6c742d63632d6167656e74", "")
 		return c.processTextContent(text, textBuffer, writer)
-	}
-
-	var value interface{}
-	if err := json.Unmarshal([]byte(data), &value); err != nil {
+	case '{', '[':
+		var value interface{}
+		if err := json.Unmarshal([]byte(data), &value); err != nil {
+			if allowRawFallback {
+				return c.processTextContent(strings.TrimSpace(data), textBuffer, writer)
+			}
+			return nil
+		}
+		return c.processStructuredValue(value, textBuffer, writer, allowRawFallback)
+	default:
 		if allowRawFallback {
 			return c.processTextContent(strings.TrimSpace(data), textBuffer, writer)
 		}
 		return nil
 	}
-
-	return c.processStructuredValue(value, textBuffer, writer, allowRawFallback)
 }
 
-func (c *outboundConverter) processStructuredValue(value interface{}, textBuffer *strings.Builder, writer func(event string, payload []byte) error, allowRawFallback bool) error {
+func (c *outboundConverter) processStructuredValue(value interface{}, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error, allowRawFallback bool) error {
 	if toolCalls := extractToolCallsFromValue(value); len(toolCalls) > 0 {
 		return c.flushTextAndSendToolCalls(toolCalls, textBuffer, writer)
 	}
@@ -1087,7 +1152,7 @@ func (c *outboundConverter) processStructuredValue(value interface{}, textBuffer
 		}
 		return nil
 	case map[string]interface{}:
-		for _, key := range []string{"parts", "content", "delta", "data", "messages"} {
+		for _, key := range boltStructuredNestedKeys {
 			if nested, ok := v[key]; ok {
 				switch nested.(type) {
 				case []interface{}, map[string]interface{}:
@@ -1097,7 +1162,7 @@ func (c *outboundConverter) processStructuredValue(value interface{}, textBuffer
 				}
 			}
 		}
-		for _, key := range []string{"text", "message", "content", "delta", "output", "response"} {
+		for _, key := range boltStructuredStringKeys {
 			if raw, ok := v[key].(string); ok && strings.TrimSpace(raw) != "" {
 				return c.processTextContent(raw, textBuffer, writer)
 			}
@@ -1114,7 +1179,7 @@ func (c *outboundConverter) processStructuredValue(value interface{}, textBuffer
 	return c.processTextContent(string(raw), textBuffer, writer)
 }
 
-func (c *outboundConverter) processTextContent(text string, textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) processTextContent(text string, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
 	if c.suppressText {
 		return nil
 	}
@@ -1125,21 +1190,23 @@ func (c *outboundConverter) processTextContent(text string, textBuffer *strings.
 		}
 	}
 
-	if !c.inCodeBlock && strings.Contains(text, "```") {
+	if !c.inCodeBlock {
 		idx := strings.Index(text, "```")
-		beforeBlock := text[:idx]
-		afterMarker := text[idx+3:]
-		textBuffer.WriteString(beforeBlock)
-		if textBuffer.Len() > 0 {
-			if err := c.sendTextDelta(textBuffer.String(), writer); err != nil {
-				return err
+		if idx >= 0 {
+			beforeBlock := text[:idx]
+			afterMarker := text[idx+3:]
+			textBuffer.WriteString(beforeBlock)
+			if textBuffer.Len() > 0 {
+				if err := c.sendTextDelta(textBuffer.String(), writer); err != nil {
+					return err
+				}
+				textBuffer.Reset()
 			}
-			textBuffer.Reset()
+			c.inCodeBlock = true
+			afterMarker = strings.TrimPrefix(afterMarker, "json")
+			c.codeBuffer.WriteString(afterMarker)
+			return nil
 		}
-		c.inCodeBlock = true
-		afterMarker = strings.TrimPrefix(afterMarker, "json")
-		c.codeBuffer.WriteString(afterMarker)
-		return nil
 	}
 
 	if c.inCodeBlock {
@@ -1148,8 +1215,7 @@ func (c *outboundConverter) processTextContent(text string, textBuffer *strings.
 			text = strings.TrimPrefix(text, "JSON")
 			text = strings.TrimPrefix(text, "\n")
 		}
-		if strings.Contains(text, "```") {
-			idx := strings.Index(text, "```")
+		if idx := strings.Index(text, "```"); idx >= 0 {
 			beforeEnd := text[:idx]
 			afterEnd := text[idx+3:]
 			c.codeBuffer.WriteString(beforeEnd)
@@ -1172,7 +1238,7 @@ func (c *outboundConverter) processTextContent(text string, textBuffer *strings.
 	return nil
 }
 
-func (c *outboundConverter) processCodeBlock(content string, textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) processCodeBlock(content string, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
 	if toolCalls := extractToolCallsFromJSON([]byte(content)); len(toolCalls) > 0 {
 		return c.flushTextAndSendToolCalls(toolCalls, textBuffer, writer)
 	}
@@ -1183,22 +1249,17 @@ func (c *outboundConverter) processCodeBlock(content string, textBuffer *strings
 	return nil
 }
 
-func (c *outboundConverter) sendTextDelta(text string, writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) sendTextDelta(text string, writer func(upstream.SSEMessage) error) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
-	event := map[string]interface{}{
+	return writeBoltStreamMessage(writer, "model.text-delta", map[string]interface{}{
 		"delta": text,
-	}
-	raw, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	return writer("model.text-delta", raw)
+	})
 }
 
-func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(upstream.SSEMessage) error) error {
 	if toolCall == nil || strings.TrimSpace(toolCall.Function) == "" {
 		return nil
 	}
@@ -1208,21 +1269,16 @@ func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(event st
 		return nil
 	}
 	c.seenToolCalls[key] = struct{}{}
-	event := map[string]interface{}{
+	c.emittedToolUse = true
+	c.suppressText = true
+	return writeBoltStreamMessage(writer, "model.tool-call", map[string]interface{}{
 		"toolCallId": "toolu_" + generateRandomID(20),
 		"toolName":   strings.TrimSpace(toolCall.Function),
 		"input":      string(params),
-	}
-	raw, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	c.emittedToolUse = true
-	c.suppressText = true
-	return writer("model.tool-call", raw)
+	})
 }
 
-func (c *outboundConverter) flushTextAndSendToolCalls(toolCalls []ToolCall, textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) flushTextAndSendToolCalls(toolCalls []ToolCall, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
 	if err := c.flushTextBuffer(textBuffer, writer); err != nil {
 		return err
 	}
@@ -1234,7 +1290,7 @@ func (c *outboundConverter) flushTextAndSendToolCalls(toolCalls []ToolCall, text
 	return nil
 }
 
-func (c *outboundConverter) flushTextBuffer(textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) flushTextBuffer(textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
 	if textBuffer == nil || textBuffer.Len() == 0 {
 		return nil
 	}
@@ -1254,26 +1310,30 @@ func extractToolCallsFromJSON(data []byte) []ToolCall {
 }
 
 func extractToolCallsFromValue(value interface{}) []ToolCall {
+	var calls []ToolCall
+	appendToolCallsFromValue(&calls, value)
+	return calls
+}
+
+func appendToolCallsFromValue(calls *[]ToolCall, value interface{}) {
 	switch v := value.(type) {
 	case []interface{}:
-		var calls []ToolCall
 		for _, item := range v {
-			calls = append(calls, extractToolCallsFromValue(item)...)
+			appendToolCallsFromValue(calls, item)
 		}
-		return calls
 	case map[string]interface{}:
-		for _, key := range []string{"tool_calls", "toolCalls", "calls", "tool_call", "toolCall"} {
+		for _, key := range boltToolCallCollectionKeys {
 			if nested, ok := v[key]; ok {
-				if calls := extractToolCallsFromValue(nested); len(calls) > 0 {
-					return calls
+				appendToolCallsFromValue(calls, nested)
+				if len(*calls) > 0 {
+					return
 				}
 			}
 		}
 		if call, ok := parseToolCallValue(v); ok {
-			return []ToolCall{call}
+			*calls = append(*calls, call)
 		}
 	}
-	return nil
 }
 
 func parseToolCallValue(v map[string]interface{}) (ToolCall, bool) {
@@ -1355,14 +1415,14 @@ func normalizeToolCallParameters(value interface{}) json.RawMessage {
 	return json.RawMessage(data)
 }
 
-func (c *outboundConverter) sendEndEvents(endEvent *EndEvent, writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) sendEndEvents(endEvent *EndEvent, writer func(upstream.SSEMessage) error) error {
 	c.outputTokens = endEvent.Usage.CompletionTokens
 	finishReason := "end_turn"
 	if c.emittedToolUse || strings.EqualFold(strings.TrimSpace(endEvent.FinishReason), "tool_use") {
 		finishReason = "tool_use"
 	}
 
-	event := map[string]interface{}{
+	return writeBoltStreamMessage(writer, "model.finish", map[string]interface{}{
 		"finishReason": finishReason,
 		"usage": map[string]interface{}{
 			"inputTokens":   c.inputTokens,
@@ -1370,15 +1430,10 @@ func (c *outboundConverter) sendEndEvents(endEvent *EndEvent, writer func(event 
 			"input_tokens":  c.inputTokens,
 			"output_tokens": c.outputTokens,
 		},
-	}
-	raw, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	return writer("model.finish", raw)
+	})
 }
 
-func (c *outboundConverter) flushAndFinish(endEvent *EndEvent, textBuffer *strings.Builder, writer func(event string, payload []byte) error) error {
+func (c *outboundConverter) flushAndFinish(endEvent *EndEvent, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
 	if c.inCodeBlock && c.codeBuffer.Len() > 0 {
 		codeContent := strings.TrimSpace(c.codeBuffer.String())
 		c.codeBuffer.Reset()
@@ -1391,4 +1446,31 @@ func (c *outboundConverter) flushAndFinish(endEvent *EndEvent, textBuffer *strin
 		return err
 	}
 	return c.sendEndEvents(endEvent, writer)
+}
+
+func writeBoltStreamMessage(writer func(upstream.SSEMessage) error, eventType string, eventMap map[string]interface{}) error {
+	if writer == nil {
+		return nil
+	}
+	raw, err := json.Marshal(eventMap)
+	if err != nil {
+		return err
+	}
+	return writer(upstream.SSEMessage{
+		Type:    eventType,
+		Event:   eventMap,
+		RawJSON: raw,
+	})
+}
+
+func firstNonSpaceByte(text string) byte {
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case ' ', '\t', '\r', '\n':
+			continue
+		default:
+			return text[i]
+		}
+	}
+	return 0
 }

@@ -1,12 +1,14 @@
 package handler
 
 import (
-	"github.com/goccy/go-json"
 	"net/http"
-	"strings"
 
+	"github.com/goccy/go-json"
+
+	"orchids-api/internal/bolt"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/orchids"
+	"orchids-api/internal/upstream"
 )
 
 // HandleCountTokens handles /v1/messages/count_tokens requests.
@@ -35,9 +37,19 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 			profile = warpProfile
 		}
 	}
-	if breakdown.Total == 0 && (channel == "bolt" || channel == "puter") {
-		breakdown = estimateInputTokenBreakdown(strings.TrimSpace(extractUserText(req.Messages)), nil, req.Tools)
-		profile = channel
+	if breakdown.Total == 0 && channel == "bolt" {
+		breakdown = boltEstimateToBreakdown(bolt.EstimateInputTokens(upstream.UpstreamRequest{
+			Model:    req.Model,
+			Messages: req.Messages,
+			System:   req.System,
+			Tools:    req.Tools,
+			NoTools:  len(req.Tools) == 0,
+		}))
+		profile = "bolt"
+	}
+	if breakdown.Total == 0 && channel == "puter" {
+		breakdown = estimateInputTokenBreakdown(extractUserText(req.Messages), nil, req.Tools)
+		profile = "puter"
 	}
 	if breakdown.Total == 0 {
 		builtPrompt, promptHistory, meta := orchids.BuildCodeFreeMaxPromptAndHistoryWithMeta(

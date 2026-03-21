@@ -33,6 +33,7 @@ const (
 var (
 	puterAPIURL         = defaultAPIURL
 	toolCallPattern     = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
+	toolFencePattern    = regexp.MustCompile("(?s)^```[a-zA-Z0-9_-]*\\s*(.*?)\\s*```$")
 	tmpPathHintPattern  = regexp.MustCompile(`(?i)(/tmp/[^\s"'` + "`" + `]+)`)
 	unixPathHintPattern = regexp.MustCompile(`(?i)(/[^\s"'` + "`" + `]+)`)
 	winPathHintPattern  = regexp.MustCompile(`(?i)([a-z]:\\[^\r\n"'` + "`" + `]+)`)
@@ -573,124 +574,203 @@ func formatPuterAPIError(apiErr *ErrorPayload, raw string) error {
 
 func parseToolCalls(text string) ([]ParsedToolCall, string) {
 	matches := toolCallPattern.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 {
-		return nil, strings.TrimSpace(text)
+	if len(matches) > 0 {
+		var calls []ParsedToolCall
+		remaining := text
+		for i, match := range matches {
+			calls = append(calls, parseToolCallsFromJSON(match[1], i)...)
+			remaining = strings.Replace(remaining, match[0], "", 1)
+		}
+		if len(calls) > 0 {
+			return calls, strings.TrimSpace(remaining)
+		}
 	}
 
-	var calls []ParsedToolCall
-	remaining := text
-	for i, match := range matches {
-		var call ParsedToolCall
-		if err := json.Unmarshal([]byte(match[1]), &call); err == nil && strings.TrimSpace(call.Name) != "" {
-			if call.ID == "" {
-				call.ID = fmt.Sprintf("toolu_%d_%d", time.Now().UnixNano(), i)
-			}
-			if len(call.Input) == 0 {
-				call.Input = json.RawMessage("{}")
-			}
-			calls = append(calls, call)
-		}
-		remaining = strings.Replace(remaining, match[0], "", 1)
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil, ""
 	}
-	return calls, strings.TrimSpace(remaining)
+
+	if calls := parseToolCallsFromJSON(trimmed, 0); len(calls) > 0 {
+		return calls, ""
+	}
+
+	if fenced := stripPuterToolCodeFence(trimmed); fenced != trimmed {
+		if calls := parseToolCallsFromJSON(fenced, 0); len(calls) > 0 {
+			return calls, ""
+		}
+	}
+
+	return nil, trimmed
+}
+
+func stripPuterToolCodeFence(text string) string {
+	match := toolFencePattern.FindStringSubmatch(strings.TrimSpace(text))
+	if len(match) < 2 {
+		return strings.TrimSpace(text)
+	}
+	return strings.TrimSpace(match[1])
+}
+
+func parseToolCallsFromJSON(raw string, indexBase int) []ParsedToolCall {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	var value interface{}
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return nil
+	}
+
+	calls := extractParsedToolCalls(value)
+	for i := range calls {
+		if strings.TrimSpace(calls[i].ID) == "" {
+			calls[i].ID = fmt.Sprintf("toolu_%d_%d", time.Now().UnixNano(), indexBase+i)
+		}
+		if len(calls[i].Input) == 0 {
+			calls[i].Input = json.RawMessage("{}")
+		}
+	}
+	return calls
+}
+
+func extractParsedToolCalls(value interface{}) []ParsedToolCall {
+	switch v := value.(type) {
+	case []interface{}:
+		var calls []ParsedToolCall
+		for _, item := range v {
+			calls = append(calls, extractParsedToolCalls(item)...)
+		}
+		return calls
+	case map[string]interface{}:
+		for _, key := range []string{"tool_calls", "toolCalls", "calls", "tool_call", "toolCall"} {
+			if nested, ok := v[key]; ok {
+				if calls := extractParsedToolCalls(nested); len(calls) > 0 {
+					return calls
+				}
+			}
+		}
+		if call, ok := parseParsedToolCall(v); ok {
+			return []ParsedToolCall{call}
+		}
+	}
+	return nil
+}
+
+func parseParsedToolCall(payload map[string]interface{}) (ParsedToolCall, bool) {
+	typeHint := strings.ToLower(strings.TrimSpace(asString(payload["type"])))
+	id := strings.TrimSpace(asString(payload["id"]))
+
+	if fn, ok := payload["function"].(map[string]interface{}); ok {
+		name := strings.TrimSpace(asString(fn["name"]))
+		if name == "" {
+			return ParsedToolCall{}, false
+		}
+		input := normalizeParsedToolInput(firstNonNil(
+			fn["input"],
+			fn["arguments"],
+			fn["parameters"],
+			payload["input"],
+			payload["arguments"],
+			payload["parameters"],
+			payload["params"],
+		))
+		return ParsedToolCall{Name: name, ID: id, Input: input}, true
+	}
+
+	name := strings.TrimSpace(asString(payload["name"]))
+	if name == "" {
+		name = strings.TrimSpace(asString(payload["tool"]))
+	}
+	if name == "" {
+		name = strings.TrimSpace(asString(payload["toolName"]))
+	}
+	if name == "" {
+		return ParsedToolCall{}, false
+	}
+
+	rawInput := firstNonNil(payload["input"], payload["arguments"], payload["parameters"], payload["params"])
+	if rawInput == nil && typeHint != "tool_use" && typeHint != "tool_call" && typeHint != "function" {
+		return ParsedToolCall{}, false
+	}
+	return ParsedToolCall{Name: name, ID: id, Input: normalizeParsedToolInput(rawInput)}, true
+}
+
+func normalizeParsedToolInput(value interface{}) json.RawMessage {
+	switch v := value.(type) {
+	case nil:
+		return json.RawMessage("{}")
+	case json.RawMessage:
+		if len(v) == 0 {
+			return json.RawMessage("{}")
+		}
+		return v
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return json.RawMessage("{}")
+		}
+		if json.Valid([]byte(trimmed)) {
+			return json.RawMessage(trimmed)
+		}
+	}
+
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage("{}")
+	}
+	return raw
+}
+
+func firstNonNil(values ...interface{}) interface{} {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func emitResponseEvents(onMessage func(upstream.SSEMessage), model, text string, toolCalls []ParsedToolCall, inputTokens, outputTokens int) error {
 	if model == "" {
 		model = defaultModelID
 	}
-	msgID := fmt.Sprintf("msg_%d", time.Now().UnixMilli())
-
-	emit := func(event string, payload map[string]interface{}) {
-		onMessage(upstream.SSEMessage{Type: event, Event: payload})
-	}
-
-	emit("message_start", map[string]interface{}{
-		"type": "message_start",
-		"message": map[string]interface{}{
-			"id":            msgID,
-			"type":          "message",
-			"role":          "assistant",
-			"content":       []interface{}{},
-			"model":         model,
-			"stop_reason":   nil,
-			"stop_sequence": nil,
-			"usage": map[string]int{
-				"input_tokens":  inputTokens,
-				"output_tokens": 0,
-			},
-		},
-	})
-
-	blockIndex := 0
-	if text != "" || len(toolCalls) == 0 {
-		emit("content_block_start", map[string]interface{}{
-			"type":  "content_block_start",
-			"index": blockIndex,
-			"content_block": map[string]interface{}{
-				"type": "text",
-				"text": "",
-			},
-		})
-		if text != "" {
-			emit("content_block_delta", map[string]interface{}{
-				"type":  "content_block_delta",
-				"index": blockIndex,
-				"delta": map[string]interface{}{
-					"type": "text_delta",
-					"text": text,
-				},
-			})
-		}
-		emit("content_block_stop", map[string]interface{}{
-			"type":  "content_block_stop",
-			"index": blockIndex,
-		})
-		blockIndex++
-	}
-
-	for _, call := range toolCalls {
-		emit("content_block_start", map[string]interface{}{
-			"type":  "content_block_start",
-			"index": blockIndex,
-			"content_block": map[string]interface{}{
-				"type":  "tool_use",
-				"id":    call.ID,
-				"name":  call.Name,
-				"input": map[string]interface{}{},
-			},
-		})
-		emit("content_block_delta", map[string]interface{}{
-			"type":  "content_block_delta",
-			"index": blockIndex,
-			"delta": map[string]interface{}{
-				"type":         "input_json_delta",
-				"partial_json": string(call.Input),
-			},
-		})
-		emit("content_block_stop", map[string]interface{}{
-			"type":  "content_block_stop",
-			"index": blockIndex,
-		})
-		blockIndex++
-	}
-
 	stopReason := "end_turn"
 	if len(toolCalls) > 0 {
 		stopReason = "tool_use"
 	}
-	emit("message_delta", map[string]interface{}{
-		"type": "message_delta",
-		"delta": map[string]interface{}{
-			"stop_reason":   stopReason,
-			"stop_sequence": nil,
+	if trimmed := strings.TrimSpace(text); trimmed != "" {
+		onMessage(upstream.SSEMessage{
+			Type: "model.text-delta",
+			Event: map[string]interface{}{
+				"delta": trimmed,
+			},
+		})
+	}
+
+	for _, call := range toolCalls {
+		onMessage(upstream.SSEMessage{
+			Type: "model.tool-call",
+			Event: map[string]interface{}{
+				"toolCallId": call.ID,
+				"toolName":   call.Name,
+				"input":      string(call.Input),
+			},
+		})
+	}
+
+	onMessage(upstream.SSEMessage{
+		Type: "model.finish",
+		Event: map[string]interface{}{
+			"finishReason": stopReason,
+			"usage": map[string]int{
+				"inputTokens":   inputTokens,
+				"outputTokens":  outputTokens,
+				"input_tokens":  inputTokens,
+				"output_tokens": outputTokens,
+			},
 		},
-		"usage": map[string]int{
-			"output_tokens": outputTokens,
-		},
-	})
-	emit("message_stop", map[string]interface{}{
-		"type": "message_stop",
 	})
 	return nil
 }

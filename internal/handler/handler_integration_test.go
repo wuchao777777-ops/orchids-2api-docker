@@ -494,6 +494,147 @@ func TestHandleMessages_Puter_DirectSSE_NonStreamToolUseJSON(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_Puter_DirectSSE_StreamToolUseJSON(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstream{events: []upstream.SSEMessage{
+		{Type: "message_start", Event: map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id":    "msg_tool_use_stream",
+				"type":  "message",
+				"role":  "assistant",
+				"model": "claude-sonnet-4-6",
+			},
+		}},
+		{Type: "content_block_start", Event: map[string]any{
+			"type":  "content_block_start",
+			"index": 0,
+			"content_block": map[string]any{
+				"type":  "tool_use",
+				"id":    "tool_write_stream_1",
+				"name":  "Write",
+				"input": map[string]any{},
+			},
+		}},
+		{Type: "content_block_delta", Event: map[string]any{
+			"type":  "content_block_delta",
+			"index": 0,
+			"delta": map[string]any{
+				"type":         "input_json_delta",
+				"partial_json": `{"file_path":"note.txt","content":"alpha beta"}`,
+			},
+		}},
+		{Type: "content_block_stop", Event: map[string]any{
+			"type":  "content_block_stop",
+			"index": 0,
+		}},
+		{Type: "message_delta", Event: map[string]any{
+			"type": "message_delta",
+			"delta": map[string]any{
+				"stop_reason": "tool_use",
+			},
+			"usage": map[string]any{
+				"output_tokens": 7,
+			},
+		}},
+		{Type: "message_stop", Event: map[string]any{
+			"type": "message_stop",
+		}},
+	}}
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "claude-sonnet-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "use the Write tool"}},
+		"system":   []any{},
+		"stream":   true,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, `event: content_block_start`) {
+		t.Fatalf("expected content_block_start SSE, got: %s", out)
+	}
+	if !strings.Contains(out, `"type":"tool_use"`) {
+		t.Fatalf("expected tool_use block in SSE, got: %s", out)
+	}
+	if !strings.Contains(out, `"name":"Write"`) {
+		t.Fatalf("expected Write tool name in SSE, got: %s", out)
+	}
+	if !strings.Contains(out, `alpha beta`) {
+		t.Fatalf("expected write payload in SSE, got: %s", out)
+	}
+	if !strings.Contains(out, `"stop_reason":"tool_use"`) {
+		t.Fatalf("expected stop_reason tool_use in SSE, got: %s", out)
+	}
+}
+
+func TestHandleMessages_Puter_BoltStyleToolCall_StreamAndJSON(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstream{events: []upstream.SSEMessage{
+		{Type: "model.tool-call", Event: map[string]any{
+			"toolCallId": "tool_write_bolt_style_1",
+			"toolName":   "Write",
+			"input":      `{"file_path":"note.txt","content":"alpha beta"}`,
+		}},
+		{Type: "model.finish", Event: map[string]any{
+			"finishReason": "tool_use",
+			"usage": map[string]any{
+				"inputTokens":  12,
+				"outputTokens": 7,
+			},
+		}},
+	}}
+
+	mkBody := func(stream bool) []byte {
+		body, _ := json.Marshal(map[string]any{
+			"model":    "claude-opus-4-5",
+			"messages": []map[string]any{{"role": "user", "content": "use the Write tool"}},
+			"system":   []any{},
+			"stream":   stream,
+		})
+		return body
+	}
+
+	{
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(false)))
+		h.HandleMessages(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("non-stream expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		out := rec.Body.String()
+		if !strings.Contains(out, `"type":"tool_use"`) || !strings.Contains(out, `"name":"Write"`) {
+			t.Fatalf("expected Write tool_use in JSON, got: %s", out)
+		}
+		if !strings.Contains(out, `"stop_reason":"tool_use"`) {
+			t.Fatalf("expected stop_reason tool_use in JSON, got: %s", out)
+		}
+	}
+
+	{
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(true)))
+		h.HandleMessages(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("stream expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		out := rec.Body.String()
+		if !strings.Contains(out, `"type":"tool_use"`) || !strings.Contains(out, `"name":"Write"`) {
+			t.Fatalf("expected Write tool_use in SSE, got: %s", out)
+		}
+		if !strings.Contains(out, `alpha beta`) {
+			t.Fatalf("expected write payload in SSE, got: %s", out)
+		}
+	}
+}
+
 func TestHandleMessages_Puter_DirectSSE_NonStreamRepeatWriteFollowupReturnsFallback(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

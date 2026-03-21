@@ -19,6 +19,7 @@ import (
 
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/audit"
+	"orchids-api/internal/bolt"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	apperrors "orchids-api/internal/errors"
@@ -960,7 +961,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 		}
 	} else if isBoltRequest {
-		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
+		breakdown = boltEstimateToBreakdown(bolt.EstimateInputTokens(upstream.UpstreamRequest{
+			Model:    mappedModel,
+			Workdir:  effectiveWorkdir,
+			Messages: upstreamMessages,
+			System:   req.System,
+			Tools:    effectiveTools,
+			NoTools:  gateNoTools,
+		}))
+		breakdownProfile = "bolt"
 	} else if isPuterRequest {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	} else if isOrchidsProtocol {

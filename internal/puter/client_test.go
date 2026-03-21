@@ -8,13 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goccy/go-json"
+
 	"orchids-api/internal/config"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 )
 
-func TestSendRequestWithPayload_EmitsAnthropicEvents(t *testing.T) {
+func TestSendRequestWithPayload_EmitsModelEvents(t *testing.T) {
 	prevURL := puterAPIURL
 	t.Cleanup(func() { puterAPIURL = prevURL })
 
@@ -46,7 +48,7 @@ func TestSendRequestWithPayload_EmitsAnthropicEvents(t *testing.T) {
 		t.Fatalf("SendRequestWithPayload() error = %v", err)
 	}
 
-	want := []string{"message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"}
+	want := []string{"model.text-delta", "model.finish"}
 	if strings.Join(events, ",") != strings.Join(want, ",") {
 		t.Fatalf("events=%v want %v", events, want)
 	}
@@ -124,6 +126,96 @@ func TestParseToolCalls_StripsToolCallMarkup(t *testing.T) {
 	}
 	if text != "before  after" && text != "before after" {
 		t.Fatalf("text = %q", text)
+	}
+}
+
+func TestParseToolCalls_AcceptsArgumentsAlias(t *testing.T) {
+	toolCalls, text := parseToolCalls(`<tool_call>{"name":"Write","arguments":{"file_path":"note.txt","content":"alpha beta"}}</tool_call>`)
+	if len(toolCalls) != 1 {
+		t.Fatalf("toolCalls len = %d, want 1", len(toolCalls))
+	}
+	if toolCalls[0].Name != "Write" {
+		t.Fatalf("toolCalls[0].Name = %q, want Write", toolCalls[0].Name)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(toolCalls[0].Input, &input); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if input["file_path"] != "note.txt" || input["content"] != "alpha beta" {
+		t.Fatalf("toolCalls[0].Input = %#v", input)
+	}
+	if text != "" {
+		t.Fatalf("text = %q, want empty", text)
+	}
+}
+
+func TestParseToolCalls_AcceptsWholeToolUseJSON(t *testing.T) {
+	toolCalls, text := parseToolCalls("```json\n{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"note.txt\",\"content\":\"alpha beta\"}}\n```")
+	if len(toolCalls) != 1 {
+		t.Fatalf("toolCalls len = %d, want 1", len(toolCalls))
+	}
+	if toolCalls[0].Name != "Write" {
+		t.Fatalf("toolCalls[0].Name = %q, want Write", toolCalls[0].Name)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(toolCalls[0].Input, &input); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if input["file_path"] != "note.txt" || input["content"] != "alpha beta" {
+		t.Fatalf("toolCalls[0].Input = %#v", input)
+	}
+	if text != "" {
+		t.Fatalf("text = %q, want empty", text)
+	}
+}
+
+func TestSendRequestWithPayload_ParsesArgumentsAliasToolCall(t *testing.T) {
+	prevURL := puterAPIURL
+	t.Cleanup(func() { puterAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "{\"type\":\"text\",\"text\":\"<tool_call>{\\\"name\\\":\\\"Write\\\",\\\"arguments\\\":{\\\"file_path\\\":\\\"note.txt\\\",\\\"content\\\":\\\"alpha beta\\\"}}</tool_call>\"}\n")
+	}))
+	defer srv.Close()
+	puterAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-5",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "use Write"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("events len = %d, want 2", len(events))
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event type = %q, want model.tool-call", events[0].Type)
+	}
+	if got := events[0].Event["toolName"]; got != "Write" {
+		t.Fatalf("tool name = %v, want Write", got)
+	}
+	partialJSON, _ := events[0].Event["input"].(string)
+	var input map[string]any
+	if err := json.Unmarshal([]byte(partialJSON), &input); err != nil {
+		t.Fatalf("unmarshal partial_json: %v", err)
+	}
+	if input["file_path"] != "note.txt" || input["content"] != "alpha beta" {
+		t.Fatalf("partial_json = %#v", input)
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event type = %q, want model.finish", events[1].Type)
+	}
+	if got := events[1].Event["finishReason"]; got != "tool_use" {
+		t.Fatalf("finishReason = %v, want tool_use", got)
 	}
 }
 

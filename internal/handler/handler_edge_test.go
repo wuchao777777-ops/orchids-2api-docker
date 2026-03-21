@@ -344,11 +344,13 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 	}
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
-	lb.AcquireConnection(second.ID)
-	defer lb.ReleaseConnection(second.ID)
 
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, lb)
+	h.connTracker = newSpyConnTracker(map[int64]int64{
+		first.ID:  0,
+		second.ID: 1,
+	})
 	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
 		if acc.ID == first.ID {
 			return &errorUpstreamEdge{err: errors.New("puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.")}

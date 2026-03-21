@@ -196,7 +196,10 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 		ContextKeepTurns:        2,
 	}
 	h := NewWithLoadBalancer(cfg, lb)
-	localTracker := newSpyConnTracker(nil)
+	localTracker := newSpyConnTracker(map[int64]int64{
+		acc1.ID: 0,
+		acc2.ID: 1,
+	})
 	h.connTracker = localTracker
 	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
 		if acc != nil && acc.ID == acc1.ID {
