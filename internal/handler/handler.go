@@ -326,6 +326,8 @@ func (h *Handler) computeSemanticRequestHash(r *http.Request, req ClaudeRequest)
 	mode := "chat"
 	if isTopicClassifierRequest(req) {
 		mode = "topic_classifier"
+	} else if isTitleGenerationRequest(req) {
+		mode = "title_generation"
 	} else if ok, _ := isCommandPrefixRequest(req); ok {
 		mode = "command_prefix"
 	}
@@ -658,7 +660,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			"command": command,
 			"prefix":  prefix,
 		})
-		writeCommandPrefixResponse(w, req, prefix, startTime, logger)
+		writeCommandPrefixResponse(w, req, responseFormat, prefix, startTime, logger)
 		return
 	}
 
@@ -669,7 +671,20 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		logger.LogEarlyExit("topic_classifier", map[string]interface{}{
 			"mode": "local",
 		})
-		writeTopicClassifierResponse(w, req, startTime, logger)
+		writeTopicClassifierResponse(w, req, responseFormat, startTime, logger)
+		return
+	}
+
+	if isTitleGenerationRequest(req) {
+		title := generateTopicTitle(extractUserText(req.Messages))
+		if verboseDiagnostics {
+			slog.Debug("Handling title generation request locally", "title", title)
+		}
+		logger.LogEarlyExit("title_generation", map[string]interface{}{
+			"mode":  "local",
+			"title": title,
+		})
+		writeTitleGenerationResponse(w, req, responseFormat, startTime, logger)
 		return
 	}
 
@@ -713,6 +728,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			h.sessionStore.DeleteSession(r.Context(), conversationKey)
 		}
 	}
+	if isCurrentWorkdirRequest(req) {
+		logger.LogEarlyExit("current_workdir", map[string]interface{}{
+			"mode":    "local",
+			"workdir": effectiveWorkdir,
+			"path":    r.URL.Path,
+		})
+		writeCurrentWorkdirResponse(w, req, responseFormat, effectiveWorkdir, startTime, logger)
+		return
+	}
 	if isSuggestionMode(req.Messages) {
 		suggestion := buildLocalSuggestion(req.Messages)
 		if verboseDiagnostics {
@@ -722,7 +746,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			"mode":       "local",
 			"suggestion": suggestion,
 		})
-		writeSuggestionModeResponse(w, req, startTime, logger)
+		writeSuggestionModeResponse(w, req, responseFormat, startTime, logger)
 		return
 	}
 
@@ -764,6 +788,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "puter") {
 		isPuterRequest = true
 	}
+	freshBoltTask := false
+	if isBoltRequest {
+		freshBoltTask = shouldForceFreshBoltTask(req)
+		if freshBoltTask {
+			req.Messages = resetBoltMessagesForFreshTask(req.Messages)
+			if verboseDiagnostics {
+				slog.Debug("bolt: reset stale history for fresh top-level request")
+			}
+		}
+	}
 	isPassthroughRequest := isWarpRequest || isBoltRequest || isPuterRequest
 	if isPassthroughRequest {
 		channel := "warp"
@@ -800,6 +834,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.releaseTrackedAccount(trackedAccountID)
 	}()
 
+	boltProjectID := ""
+	if isBoltRequest && currentAccount != nil {
+		var err error
+		boltProjectID, err = h.resolveBoltProjectID(r.Context(), currentAccount, apiClient, effectiveWorkdir, freshBoltTask)
+		if err != nil {
+			apperrors.New("api_error", "Failed to initialize bolt project: "+err.Error(), http.StatusBadGateway).WriteResponse(w)
+			return
+		}
+	}
+
 	suggestionMode := isSuggestionMode(req.Messages)
 	noThinking := suggestionMode || h.config.SuppressThinking
 	gateNoTools := false
@@ -830,6 +874,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	effectiveTools := req.Tools
+	if isBoltRequest {
+		if len(effectiveTools) == 0 {
+			if restored := h.restoreBoltTools(r.Context(), conversationKey); len(restored) > 0 {
+				effectiveTools = restored
+				if verboseDiagnostics {
+					logBoltToolsRestored(conversationKey, effectiveTools)
+				}
+			}
+		} else {
+			h.persistBoltTools(r.Context(), conversationKey, effectiveTools)
+		}
+	}
 	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
 		effectiveTools = nil
 	}
@@ -1031,10 +1087,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
 	)
 	sh.setPreferPriorToolResultFallback(lastUserIsToolResultFollowup(upstreamMessages))
-	sh.setDisallowToolCalls(gateNoTools)
+	allowedToolNames := []string(nil)
 	if !isOrchidsProtocol {
-		sh.setAllowedToolNames(declaredToolNames(effectiveTools))
+		allowedToolNames = passthroughAllowedToolNames(effectiveTools, isBoltRequest)
+		sh.setAllowedToolNames(allowedToolNames)
 	}
+	if verboseDiagnostics && isBoltRequest && !gateNoTools && len(allowedToolNames) == 0 {
+		slog.Debug("tool_gate: bolt request has no declared tools after session restore", "conversation_id", conversationKey)
+	}
+	sh.setDisallowToolCalls(gateNoTools || (isBoltRequest && len(allowedToolNames) == 0))
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	sh.setCacheTokens(cacheReadTokens, cacheCreationTokens)
@@ -1127,7 +1188,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			DirectSSE:     nil,
 		}
 		if isBoltRequest && currentAccount != nil {
-			upstreamReq.ProjectID = strings.TrimSpace(currentAccount.ProjectID)
+			upstreamReq.ProjectID = strings.TrimSpace(boltProjectID)
 		}
 		if orchidsOwnsFinalSSE {
 			upstreamReq.DirectSSE = sh

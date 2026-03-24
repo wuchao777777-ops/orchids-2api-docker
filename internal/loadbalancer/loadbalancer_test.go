@@ -1,7 +1,10 @@
 package loadbalancer
 
 import (
+	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"orchids-api/internal/store"
 )
@@ -122,5 +125,46 @@ func TestSelectAccountWithTracker_UsesProvidedTracker(t *testing.T) {
 		if selected == nil || selected.ID != acc2.ID {
 			t.Fatalf("expected Acc2 to be selected via custom tracker, got %#v", selected)
 		}
+	}
+}
+
+func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfulError(t *testing.T) {
+	now := time.Now()
+	lb := &LoadBalancer{
+		connTracker: NewMemoryConnTracker(),
+		cachedAccounts: []*store.Account{
+			{ID: 1, Name: "Bolt1", AccountType: "bolt", Enabled: true, StatusCode: "429", LastAttempt: now},
+			{ID: 2, Name: "Bolt2", AccountType: "bolt", Enabled: true, StatusCode: "429", LastAttempt: now},
+		},
+		cacheExpires: now.Add(time.Minute),
+	}
+
+	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "bolt", nil)
+	if err == nil {
+		t.Fatal("expected rate-limited selector error, got nil")
+	}
+	if !strings.Contains(err.Error(), "all matching accounts are rate-limited or cooling down") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{
+		ID:           1,
+		AccountType:  "bolt",
+		StatusCode:   "429",
+		LastAttempt:  time.Now(),
+		QuotaResetAt: time.Now().Add(-time.Second),
+	}
+
+	if !lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected expired quota reset to re-enable account")
+	}
+	if acc.StatusCode != "" {
+		t.Fatalf("expected status to be cleared after cooldown, got %q", acc.StatusCode)
+	}
+	if !acc.QuotaResetAt.IsZero() {
+		t.Fatalf("expected quota reset timestamp to be cleared, got %v", acc.QuotaResetAt)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"orchids-api/internal/adapter"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/tiktoken"
 
@@ -41,106 +42,80 @@ func extractCommandFromPolicy(text string) string {
 	return ""
 }
 
-func writeCommandPrefixResponse(w http.ResponseWriter, req ClaudeRequest, prefix string, startTime time.Time, logger *debug.Logger) {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		prefix = "none"
+func isCurrentWorkdirRequest(req ClaudeRequest) bool {
+	if lastUserIsToolResultFollowup(req.Messages) {
+		return false
 	}
-	inputTokens := tiktoken.EstimateTextTokens(extractUserText(req.Messages))
-	outputTokens := tiktoken.EstimateTextTokens(prefix)
-	msgID := fmt.Sprintf("msg_%d", time.Now().UnixMilli())
+	text := strings.TrimSpace(stripSystemRemindersForMode(extractUserText(req.Messages)))
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	normalized := normalizeTopicText(text)
 
-	if req.Stream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-			return
-		}
-
-		write := func(event string, data []byte) {
-			_ = writeSSEFrameBytes(w, event, data)
-			flusher.Flush()
-			if logger != nil {
-				logger.LogOutputSSE(event, string(data))
-			}
-		}
-
-		// Define constants for fully static messages
-		startData, _ := marshalSSEMessageStartBytes(msgID, req.Model, inputTokens, 0)
-		blockStart, _ := marshalSSEContentBlockStartTextBytes(0)
-		blockDelta, _ := marshalSSEContentBlockDeltaTextBytes(0, prefix)
-		blockStop, _ := marshalSSEContentBlockStopBytes(0)
-		msgDelta, _ := marshalSSEMessageDeltaBytes("end_turn", outputTokens)
-		write("message_start", startData)
-		write("content_block_start", blockStart)
-		write("content_block_delta", blockDelta)
-		write("content_block_stop", blockStop)
-		write("message_delta", msgDelta)
-		write("message_stop", sseMessageStopBytes)
-		if logger != nil {
-			logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
-		}
-		return
+	switch {
+	case strings.EqualFold(strings.TrimSpace(text), "pwd"):
+		return true
+	case strings.Contains(lower, "current working directory"):
+		return true
+	case strings.Contains(lower, "what directory am i in"):
+		return true
+	case strings.Contains(lower, "workspace path"):
+		return true
+	case strings.Contains(lower, "project path"):
+		return true
+	case strings.Contains(lower, "where is the workspace"):
+		return true
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	response := struct {
-		ID           string              `json:"id"`
-		Type         string              `json:"type"`
-		Role         string              `json:"role"`
-		Content      []map[string]string `json:"content"`
-		Model        string              `json:"model"`
-		StopReason   string              `json:"stop_reason"`
-		StopSequence interface{}         `json:"stop_sequence"`
-		Usage        struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-	}{
-		ID:           msgID,
-		Type:         "message",
-		Role:         "assistant",
-		Content:      []map[string]string{{"type": "text", "text": prefix}},
-		Model:        req.Model,
-		StopReason:   "end_turn",
-		StopSequence: nil,
-		Usage: struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		}{InputTokens: inputTokens, OutputTokens: outputTokens},
+	switch normalized {
+	case "当前运行的目录", "当前工作目录", "当前路径", "当前项目路径", "项目目录地址", "pwd":
+		return true
 	}
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		if logger != nil {
-			logger.LogOutputSSE("error", fmt.Sprintf("failed to encode response: %v", err))
-		}
+
+	if strings.Contains(text, "当前运行的目录") || strings.Contains(text, "当前工作目录") {
+		return true
 	}
-	if logger != nil {
-		logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
+	if strings.Contains(text, "workspace") &&
+		(strings.Contains(lower, "path") || strings.Contains(lower, "directory") || strings.Contains(lower, "where") ||
+			strings.Contains(text, "路径") || strings.Contains(text, "目录") || strings.Contains(text, "在哪") || strings.Contains(text, "哪里")) {
+		return true
 	}
+	if strings.Contains(text, "工作区") &&
+		(strings.Contains(text, "路径") || strings.Contains(text, "目录") || strings.Contains(text, "在哪") || strings.Contains(text, "哪里")) {
+		return true
+	}
+	if strings.Contains(text, "当前路径") || strings.Contains(text, "项目路径") {
+		return true
+	}
+	if strings.Contains(text, "当前目录") &&
+		(strings.Contains(text, "路径") || strings.Contains(text, "地址") || strings.Contains(text, "在哪") ||
+			strings.Contains(text, "哪里") || strings.Contains(text, "是什么") || strings.Contains(text, "是啥")) {
+		return true
+	}
+	if strings.Contains(text, "项目目录") &&
+		(strings.Contains(text, "路径") || strings.Contains(text, "地址") || strings.Contains(text, "在哪") ||
+			strings.Contains(text, "哪里") || strings.Contains(text, "是什么") || strings.Contains(text, "是啥")) {
+		return true
+	}
+
+	return false
 }
 
-func writeTopicClassifierResponse(w http.ResponseWriter, req ClaudeRequest, startTime time.Time, logger *debug.Logger) {
-	isNewTopic, title := classifyTopicRequest(req)
-	payload := map[string]interface{}{
-		"isNewTopic": isNewTopic,
-		"title":      nil,
+func buildCurrentWorkdirAnswer(workdir string) string {
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return "当前工作目录未在本次请求中提供，暂时无法确定。"
 	}
-	if isNewTopic {
-		payload["title"] = title
-	}
-	raw, _ := json.Marshal(payload)
-	text := string(raw)
+	return "当前运行的目录是 `" + workdir + "`"
+}
 
+func writeLocalTextResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, text string, startTime time.Time, logger *debug.Logger) {
 	inputTokens := tiktoken.EstimateTextTokens(extractUserText(req.Messages))
 	outputTokens := tiktoken.EstimateTextTokens(text)
 	msgID := fmt.Sprintf("msg_%d", time.Now().UnixMilli())
 
 	if req.Stream {
-		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
@@ -150,6 +125,115 @@ func writeTopicClassifierResponse(w http.ResponseWriter, req ClaudeRequest, star
 			return
 		}
 
+		if responseFormat == adapter.FormatOpenAI {
+			w.Header().Set("Content-Type", "text/event-stream")
+
+			startChunk := struct {
+				ID      string `json:"id"`
+				Object  string `json:"object"`
+				Created int64  `json:"created"`
+				Model   string `json:"model"`
+				Choices []struct {
+					Index int `json:"index"`
+					Delta struct {
+						Role string `json:"role,omitempty"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}{
+				ID:      msgID,
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   req.Model,
+				Choices: []struct {
+					Index int `json:"index"`
+					Delta struct {
+						Role string `json:"role,omitempty"`
+					} `json:"delta"`
+				}{{
+					Index: 0,
+					Delta: struct {
+						Role string `json:"role,omitempty"`
+					}{Role: "assistant"},
+				}},
+			}
+			stopReason := "stop"
+			stopChunk := struct {
+				ID      string `json:"id"`
+				Object  string `json:"object"`
+				Created int64  `json:"created"`
+				Model   string `json:"model"`
+				Choices []struct {
+					Index        int            `json:"index"`
+					Delta        map[string]any `json:"delta"`
+					FinishReason *string        `json:"finish_reason,omitempty"`
+				} `json:"choices"`
+			}{
+				ID:      msgID,
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   req.Model,
+				Choices: []struct {
+					Index        int            `json:"index"`
+					Delta        map[string]any `json:"delta"`
+					FinishReason *string        `json:"finish_reason,omitempty"`
+				}{{
+					Index:        0,
+					Delta:        map[string]any{},
+					FinishReason: &stopReason,
+				}},
+			}
+			rawStart, _ := json.Marshal(startChunk)
+			_ = writeOpenAIFrame(w, rawStart)
+			if logger != nil {
+				logger.LogOutputSSE("message_start", string(rawStart))
+			}
+			if text != "" {
+				contentChunk := struct {
+					ID      string `json:"id"`
+					Object  string `json:"object"`
+					Created int64  `json:"created"`
+					Model   string `json:"model"`
+					Choices []struct {
+						Index int `json:"index"`
+						Delta struct {
+							Content string `json:"content,omitempty"`
+						} `json:"delta"`
+					} `json:"choices"`
+				}{
+					ID:      msgID,
+					Object:  "chat.completion.chunk",
+					Created: time.Now().Unix(),
+					Model:   req.Model,
+					Choices: []struct {
+						Index int `json:"index"`
+						Delta struct {
+							Content string `json:"content,omitempty"`
+						} `json:"delta"`
+					}{{
+						Index: 0,
+						Delta: struct {
+							Content string `json:"content,omitempty"`
+						}{Content: text},
+					}},
+				}
+				rawContent, _ := json.Marshal(contentChunk)
+				_ = writeOpenAIFrame(w, rawContent)
+				if logger != nil {
+					logger.LogOutputSSE("content_block_delta", string(rawContent))
+				}
+			}
+			rawStop, _ := json.Marshal(stopChunk)
+			_ = writeOpenAIFrame(w, rawStop)
+			_, _ = w.Write(sseDoneLineBytes)
+			flusher.Flush()
+			if logger != nil {
+				logger.LogOutputSSE("message_stop", string(rawStop))
+				logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
 		write := func(event string, data []byte) {
 			_ = writeSSEFrameBytes(w, event, data)
 			flusher.Flush()
@@ -158,7 +242,6 @@ func writeTopicClassifierResponse(w http.ResponseWriter, req ClaudeRequest, star
 			}
 		}
 
-		// Pre-defined static portions of the SSE stream
 		startData, _ := marshalSSEMessageStartBytes(msgID, req.Model, inputTokens, 0)
 		blockStart, _ := marshalSSEContentBlockStartTextBytes(0)
 		blockDelta, _ := marshalSSEContentBlockDeltaTextBytes(0, text)
@@ -177,6 +260,36 @@ func writeTopicClassifierResponse(w http.ResponseWriter, req ClaudeRequest, star
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if responseFormat == adapter.FormatOpenAI {
+		stopReason := "stop"
+		resp := openAINonStreamResponse{
+			ID:      msgID,
+			Object:  "chat.completion",
+			Created: time.Now().Unix(),
+			Model:   req.Model,
+			Choices: []openAINonStreamChoice{{
+				Index: 0,
+				Message: openAINonStreamMessage{
+					Role:    "assistant",
+					Content: text,
+				},
+				FinishReason: &stopReason,
+			}},
+			Usage: openAINonStreamUsage{
+				PromptTokens:     inputTokens,
+				CompletionTokens: outputTokens,
+				TotalTokens:      inputTokens + outputTokens,
+			},
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil && logger != nil {
+			logger.LogOutputSSE("error", fmt.Sprintf("failed to encode response: %v", err))
+		}
+		if logger != nil {
+			logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
+		}
+		return
+	}
+
 	response := struct {
 		ID           string              `json:"id"`
 		Type         string              `json:"type"`
@@ -202,182 +315,48 @@ func writeTopicClassifierResponse(w http.ResponseWriter, req ClaudeRequest, star
 			OutputTokens int `json:"output_tokens"`
 		}{InputTokens: inputTokens, OutputTokens: outputTokens},
 	}
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		if logger != nil {
-			logger.LogOutputSSE("error", fmt.Sprintf("failed to encode response: %v", err))
-		}
+	if err := json.NewEncoder(w).Encode(response); err != nil && logger != nil {
+		logger.LogOutputSSE("error", fmt.Sprintf("failed to encode response: %v", err))
 	}
 	if logger != nil {
 		logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
 	}
 }
 
-func writeSuggestionModeResponse(w http.ResponseWriter, req ClaudeRequest, startTime time.Time, logger *debug.Logger) {
-	suggestion := buildLocalSuggestion(req.Messages)
-	inputTokens := tiktoken.EstimateTextTokens(extractUserText(req.Messages))
-	outputTokens := tiktoken.EstimateTextTokens(suggestion)
-	msgID := fmt.Sprintf("msg_%d", time.Now().UnixMilli())
-
-	if req.Stream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-			return
-		}
-
-		write := func(event string, data []byte) {
-			_ = writeSSEFrameBytes(w, event, data)
-			flusher.Flush()
-			if logger != nil {
-				logger.LogOutputSSE(event, string(data))
-			}
-		}
-
-		startData, _ := marshalSSEMessageStartBytes(msgID, req.Model, inputTokens, 0)
-		msgDelta, _ := marshalSSEMessageDeltaBytes("end_turn", outputTokens)
-		write("message_start", startData)
-		if suggestion != "" {
-			blockStart, _ := marshalSSEContentBlockStartTextBytes(0)
-			blockDelta, _ := marshalSSEContentBlockDeltaTextBytes(0, suggestion)
-			blockStop, _ := marshalSSEContentBlockStopBytes(0)
-			write("content_block_start", blockStart)
-			write("content_block_delta", blockDelta)
-			write("content_block_stop", blockStop)
-		}
-		write("message_delta", msgDelta)
-		write("message_stop", sseMessageStopBytes)
-		if logger != nil {
-			logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
-		}
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	content := []map[string]string{}
-	if suggestion != "" {
-		content = []map[string]string{{"type": "text", "text": suggestion}}
-	}
-	response := struct {
-		ID           string              `json:"id"`
-		Type         string              `json:"type"`
-		Role         string              `json:"role"`
-		Content      []map[string]string `json:"content"`
-		Model        string              `json:"model"`
-		StopReason   string              `json:"stop_reason"`
-		StopSequence interface{}         `json:"stop_sequence"`
-		Usage        struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-	}{
-		ID:           msgID,
-		Type:         "message",
-		Role:         "assistant",
-		Content:      content,
-		Model:        req.Model,
-		StopReason:   "end_turn",
-		StopSequence: nil,
-		Usage: struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		}{InputTokens: inputTokens, OutputTokens: outputTokens},
-	}
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		if logger != nil {
-			logger.LogOutputSSE("error", fmt.Sprintf("failed to encode response: %v", err))
-		}
-	}
-	if logger != nil {
-		logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
-	}
+func writeCurrentWorkdirResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, workdir string, startTime time.Time, logger *debug.Logger) {
+	writeLocalTextResponse(w, req, responseFormat, buildCurrentWorkdirAnswer(workdir), startTime, logger)
 }
 
-func writeToolResultNoToolsFallbackResponse(w http.ResponseWriter, req ClaudeRequest, startTime time.Time, logger *debug.Logger) {
-	answer := buildToolResultNoToolsFallback(req.Messages)
-	inputTokens := tiktoken.EstimateTextTokens(extractUserText(req.Messages))
-	outputTokens := tiktoken.EstimateTextTokens(answer)
-	msgID := fmt.Sprintf("msg_%d", time.Now().UnixMilli())
-
-	if req.Stream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-			return
-		}
-
-		write := func(event string, data []byte) {
-			_ = writeSSEFrameBytes(w, event, data)
-			flusher.Flush()
-			if logger != nil {
-				logger.LogOutputSSE(event, string(data))
-			}
-		}
-
-		startData, _ := marshalSSEMessageStartBytes(msgID, req.Model, inputTokens, 0)
-		msgDelta, _ := marshalSSEMessageDeltaBytes("end_turn", outputTokens)
-		write("message_start", startData)
-		if answer != "" {
-			blockStart, _ := marshalSSEContentBlockStartTextBytes(0)
-			blockDelta, _ := marshalSSEContentBlockDeltaTextBytes(0, answer)
-			blockStop, _ := marshalSSEContentBlockStopBytes(0)
-			write("content_block_start", blockStart)
-			write("content_block_delta", blockDelta)
-			write("content_block_stop", blockStop)
-		}
-		write("message_delta", msgDelta)
-		write("message_stop", sseMessageStopBytes)
-		if logger != nil {
-			logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
-		}
-		return
+func writeCommandPrefixResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, prefix string, startTime time.Time, logger *debug.Logger) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = "none"
 	}
+	writeLocalTextResponse(w, req, responseFormat, prefix, startTime, logger)
+}
 
-	w.Header().Set("Content-Type", "application/json")
-	content := []map[string]string{}
-	if answer != "" {
-		content = []map[string]string{{"type": "text", "text": answer}}
+func writeTopicClassifierResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, startTime time.Time, logger *debug.Logger) {
+	isNewTopic, title := classifyTopicRequest(req)
+	payload := map[string]interface{}{
+		"isNewTopic": isNewTopic,
+		"title":      nil,
 	}
-	response := struct {
-		ID           string              `json:"id"`
-		Type         string              `json:"type"`
-		Role         string              `json:"role"`
-		Content      []map[string]string `json:"content"`
-		Model        string              `json:"model"`
-		StopReason   string              `json:"stop_reason"`
-		StopSequence interface{}         `json:"stop_sequence"`
-		Usage        struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-	}{
-		ID:           msgID,
-		Type:         "message",
-		Role:         "assistant",
-		Content:      content,
-		Model:        req.Model,
-		StopReason:   "end_turn",
-		StopSequence: nil,
-		Usage: struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		}{InputTokens: inputTokens, OutputTokens: outputTokens},
+	if isNewTopic {
+		payload["title"] = title
 	}
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		if logger != nil {
-			logger.LogOutputSSE("error", fmt.Sprintf("failed to encode response: %v", err))
-		}
-	}
-	if logger != nil {
-		logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
-	}
+	raw, _ := json.Marshal(payload)
+	writeLocalTextResponse(w, req, responseFormat, string(raw), startTime, logger)
+}
+
+func writeTitleGenerationResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, startTime time.Time, logger *debug.Logger) {
+	raw, _ := json.Marshal(map[string]string{
+		"title": generateTopicTitle(extractUserText(req.Messages)),
+	})
+	writeLocalTextResponse(w, req, responseFormat, string(raw), startTime, logger)
+}
+
+func writeSuggestionModeResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, startTime time.Time, logger *debug.Logger) {
+	writeLocalTextResponse(w, req, responseFormat, buildLocalSuggestion(req.Messages), startTime, logger)
 }
 
 func detectCommandPrefix(command string) string {

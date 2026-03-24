@@ -5,11 +5,10 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/bolt"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/tiktoken"
 )
-
-var supportedToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "TodoWrite"}
 
 const (
 	maxCompactToolCount         = 24
@@ -68,30 +67,16 @@ func supportedToolNames(tools []interface{}) []string {
 		return nil
 	}
 
-	seen := make(map[string]struct{}, len(supportedToolOrder))
+	rawNames := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		name, _, _ := extractIncomingToolSpecFields(tool)
 		if name == "" {
 			continue
 		}
-		mappedName := orchids.NormalizeToolNameFallback(name)
-		if !isPromptToolSupported(mappedName) {
-			continue
-		}
-		seen[strings.ToLower(strings.TrimSpace(mappedName))] = struct{}{}
+		rawNames = append(rawNames, name)
 	}
 
-	if len(seen) == 0 {
-		return nil
-	}
-
-	out := make([]string, 0, len(seen))
-	for _, name := range supportedToolOrder {
-		if _, ok := seen[strings.ToLower(name)]; ok {
-			out = append(out, name)
-		}
-	}
-	return out
+	return bolt.FilterSupportedToolNames(rawNames)
 }
 
 func declaredToolNames(tools []interface{}) []string {
@@ -132,6 +117,13 @@ func declaredToolNames(tools []interface{}) []string {
 	return out
 }
 
+func passthroughAllowedToolNames(tools []interface{}, supportedOnly bool) []string {
+	if supportedOnly {
+		return supportedToolNames(tools)
+	}
+	return declaredToolNames(tools)
+}
+
 func estimateCompactedToolsTokens(tools []interface{}) int {
 	if len(tools) == 0 {
 		return 0
@@ -169,7 +161,7 @@ func compactIncomingTools(tools []interface{}) []interface{} {
 		}
 
 		mappedName := orchids.NormalizeToolNameFallback(name)
-		if !isPromptToolSupported(mappedName) {
+		if !bolt.IsCoreTool(mappedName) {
 			continue
 		}
 
@@ -448,13 +440,4 @@ func cleanJSONSchemaValue(value interface{}) interface{} {
 		return out
 	}
 	return value
-}
-
-func isPromptToolSupported(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "read", "write", "edit", "bash", "glob", "grep", "todowrite":
-		return true
-	default:
-		return false
-	}
 }

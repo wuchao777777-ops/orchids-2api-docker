@@ -2,8 +2,10 @@ package handler
 
 import (
 	"bytes"
+	"errors"
 	"github.com/goccy/go-json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,6 +179,28 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	}
 	if got := escapedDelta["delta"].(map[string]any)["text"]; got != htmlEscaped {
 		t.Fatalf("unexpected escaped text delta: %#v", got)
+	}
+}
+
+func TestInjectNoAvailableAccountError_RateLimitUsesHelpfulMessage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
+
+	sh.InjectNoAvailableAccountError(
+		`bolt API error: status=429, body={"code":"rate-limited","message":"You have hit the rate limit."}`,
+		errors.New("no enabled accounts available for channel: bolt (all matching accounts are rate-limited or cooling down)"),
+	)
+
+	builder := sh.textBlockBuilders[sh.activeTextBlockIndex]
+	if builder == nil {
+		t.Fatal("expected text builder to be populated")
+	}
+	body := builder.String()
+	if !strings.Contains(body, "currently rate-limited") {
+		t.Fatalf("expected rate-limit-specific error text, got: %s", body)
+	}
+	if strings.Contains(body, "Please check account statuses in Admin UI") {
+		t.Fatalf("did not expect generic no-accounts guidance for rate limits, got: %s", body)
 	}
 }
 
@@ -365,6 +389,25 @@ func TestNormalizeUpstreamToolCall_RebasesForeignGlobPathToWorkdir(t *testing.T)
 	}
 }
 
+func TestNormalizeUpstreamToolCall_RebasesSandboxGlobRootToWorkdir(t *testing.T) {
+	workdir := t.TempDir()
+
+	name, input := normalizeUpstreamToolCall("Glob", `{"path":"/tmp/cc-agent/sb1-svtcktbo/project","pattern":"**/*.{tsx,ts,jsx,js}"}`, workdir)
+	if name != "Glob" {
+		t.Fatalf("expected Glob, got %q", name)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if payload["path"] != workdir {
+		t.Fatalf("expected sandbox glob root to rebase to %q, got %q", workdir, payload["path"])
+	}
+	if strings.Contains(payload["path"], "/tmp/cc-agent/") {
+		t.Fatalf("expected placeholder glob path removed, got %q", payload["path"])
+	}
+}
+
 func TestNormalizeUpstreamToolCall_RebasesForeignWritePathToWorkdirWhenFileMissing(t *testing.T) {
 	workdir := t.TempDir()
 
@@ -407,6 +450,22 @@ func TestNormalizeUpstreamToolCall_RebasesForeignNestedWritePathWhenLocalParentE
 	want := filepath.Join(workdir, "src", "calculator.py")
 	if payload["file_path"] != want {
 		t.Fatalf("expected nested foreign write path to rebase to %q, got %q", want, payload["file_path"])
+	}
+}
+
+func TestNormalizeUpstreamToolCall_DoesNotRebaseSandboxMetadataReadPath(t *testing.T) {
+	workdir := t.TempDir()
+	name, input := normalizeUpstreamToolCall("Read", `{"file_path":"/tmp/cc-agent/sb1-demo/.claude/.claude.json"}`, workdir)
+	if name != "Read" {
+		t.Fatalf("expected Read, got %q", name)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if payload["file_path"] != "/tmp/cc-agent/sb1-demo/.claude/.claude.json" {
+		t.Fatalf("expected sandbox metadata path preserved for suppression, got %q", payload["file_path"])
 	}
 }
 
@@ -527,6 +586,63 @@ func TestNormalizeUpstreamToolCall_RewritesProjectRootProbeCommandToRelativeList
 	}
 	if strings.Contains(input, "/mnt/d/Code/Orchids-2api") || strings.Contains(input, "~/Orchids-2api") {
 		t.Fatalf("expected foreign probe paths removed, got %s", input)
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RewritesForeignGitProjectPathToLocalGitCommand(t *testing.T) {
+	workdir := `d:\Code\Orchids-2api`
+	name, input := normalizeUpstreamToolCall("Bash", `{"command":"git -C /tmp/cc-agent/sb1-fxjxbmvk/project status --short 2>&1 || git status --short 2>&1","description":"Check git status in project directory"}`, workdir)
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("expected json input, got %v", err)
+	}
+	if payload["command"] != `git status --short 2>&1` {
+		t.Fatalf("expected localized git command, got %s", payload["command"])
+	}
+	if strings.Contains(payload["command"], "/tmp/cc-agent/") {
+		t.Fatalf("expected placeholder git path removed, got %s", payload["command"])
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RewritesSandboxBashRootListToDot(t *testing.T) {
+	workdir := `d:\Code\Orchids-2api`
+	name, input := normalizeUpstreamToolCall("Bash", `{"command":"ls -la /tmp/cc-agent/sb1-svtcktbo/project","description":"List project root"}`, workdir)
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("expected json input, got %v", err)
+	}
+	if payload["command"] != `ls -la .` {
+		t.Fatalf("expected sandbox root list to localize to dot, got %s", payload["command"])
+	}
+	if strings.Contains(payload["command"], "/tmp/cc-agent/") {
+		t.Fatalf("expected placeholder bash path removed, got %s", payload["command"])
+	}
+}
+
+func TestNormalizeUpstreamToolCall_RewritesSandboxFindProjectToDot(t *testing.T) {
+	workdir := `d:\Code\Orchids-2api`
+	name, input := normalizeUpstreamToolCall("Bash", `{"command":"find /tmp/cc-agent/sb1-svtcktbo/project -type f -name \"*.tsx\" -o -name \"*.ts\" -o -name \"*.jsx\" -o -name \"*.js\" | head -30"}`, workdir)
+	if name != "Bash" {
+		t.Fatalf("expected Bash, got %q", name)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("expected json input, got %v", err)
+	}
+	if !strings.Contains(payload["command"], `find . -type f`) {
+		t.Fatalf("expected sandbox find command localized to project root, got %s", payload["command"])
+	}
+	if strings.Contains(payload["command"], "/tmp/cc-agent/") {
+		t.Fatalf("expected placeholder find path removed, got %s", payload["command"])
 	}
 }
 
@@ -904,27 +1020,6 @@ func TestStreamHandler_CoalescesNonTextFlushes_Bytes(t *testing.T) {
 	}
 }
 
-func TestStreamHandler_FinishResponse_InjectsNoToolsFallbackWhenOnlySuppressedToolsRemain(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	sh.setNoToolsFallbackText("当前只拿到目录概览，还不足以继续分析。")
-	sh.suppressedToolCalls = 1
-	sh.finishResponse("end_turn")
-
-	out := rec.buf.String()
-	if !strings.Contains(out, "当前只拿到目录概览，还不足以继续分析。") {
-		t.Fatalf("expected no-tools fallback text in SSE output, got: %s", out)
-	}
-	if !strings.Contains(out, `"output_tokens":`) {
-		t.Fatalf("expected message_delta usage, got: %s", out)
-	}
-}
-
 func TestStreamHandler_FinishResponse_SuppressesGenericEmptyFallbackWhenRequested(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()
@@ -964,95 +1059,6 @@ func TestStreamHandler_FinishResponse_UsesPriorToolResultFallbackForSuppressedDu
 	}
 	if strings.Contains(out, genericEmptyOutputFallbackText) {
 		t.Fatalf("did not expect generic empty fallback when duplicate-tool fallback is preferred, got: %s", out)
-	}
-}
-
-func TestStreamHandler_FinishResponse_InjectsNoToolsFallbackDespiteInternalBlocks(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	sh.setNoToolsFallbackText("当前已根据已有文件内容给出本地结论。")
-	sh.suppressedToolCalls = 2
-	sh.contentBlocks = append(sh.contentBlocks, map[string]any{"type": "thinking", "text": "internal"})
-	sh.finishResponse("end_turn")
-
-	out := rec.buf.String()
-	if !strings.Contains(out, "当前已根据已有文件内容给出本地结论。") {
-		t.Fatalf("expected no-tools fallback text in SSE output, got: %s", out)
-	}
-}
-
-func TestStreamHandler_FinishResponse_AppendsNoToolsFallbackAfterWeakPreface(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	sh.setNoToolsFallbackText("从当前已读取内容看，这是一个 Python 项目，包含 Flask、urllib 和本地 JSON 文件。")
-	sh.suppressedToolCalls = 1
-	sh.hasTextOutput = true
-	sh.responseText.WriteString("Let me explore the project structure to understand the technical architecture.")
-	sh.contentBlocks = append(sh.contentBlocks, map[string]any{
-		"type": "text",
-		"text": "Let me explore the project structure to understand the technical architecture.",
-	})
-
-	sh.finishResponse("end_turn")
-
-	if !strings.Contains(sh.responseText.String(), "Flask") {
-		t.Fatalf("expected appended no-tools fallback, got: %s", sh.responseText.String())
-	}
-}
-
-func TestStreamHandler_FinishResponse_AppendsNoToolsFallbackAfterWeakPrefaceWithoutSuppressedTools(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	sh.setNoToolsFallbackText("基于当前已读取内容，优先可做这几项优化：统一超时与错误处理；抽离数据访问层；补最小测试。")
-	sh.hasTextOutput = true
-	sh.responseText.WriteString("让我先了解一下项目的结构和代码。")
-	sh.contentBlocks = append(sh.contentBlocks, map[string]any{
-		"type": "text",
-		"text": "让我先了解一下项目的结构和代码。",
-	})
-
-	sh.finishResponse("end_turn")
-
-	if !strings.Contains(sh.responseText.String(), "统一超时与错误处理") {
-		t.Fatalf("expected appended no-tools fallback without suppressed tools, got: %s", sh.responseText.String())
-	}
-}
-
-func TestStreamHandler_FinishResponse_AppendsNoToolsFallbackAfterExaminePrefaceWithoutSuppressedTools(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	sh.setNoToolsFallbackText("从当前已读取内容看，可维护性风险主要在：同一模块同时承担网络、存储和业务职责，分层边界不清。")
-	sh.hasTextOutput = true
-	sh.responseText.WriteString("Let me examine the project structure and code to identify maintainability risks.")
-	sh.contentBlocks = append(sh.contentBlocks, map[string]any{
-		"type": "text",
-		"text": "Let me examine the project structure and code to identify maintainability risks.",
-	})
-
-	sh.finishResponse("end_turn")
-
-	if !strings.Contains(sh.responseText.String(), "可维护性风险") {
-		t.Fatalf("expected appended no-tools fallback for examine preface, got: %s", sh.responseText.String())
 	}
 }
 

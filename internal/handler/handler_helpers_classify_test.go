@@ -16,3 +16,11 @@ func TestClassifyUpstreamErrorCreditsExhausted(t *testing.T) {
 		t.Fatal("expected credits exhausted to trigger account switch")
 	}
 }
+
+func TestShouldRetryCurrentAccountWhenNoAlternative_RateLimit(t *testing.T) {
+	t.Parallel()
+
+	if !shouldRetryCurrentAccountWhenNoAlternative("rate_limit") {
+		t.Fatal("expected rate_limit to retry current account when no alternative exists")
+	}
+}

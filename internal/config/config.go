@@ -245,7 +245,7 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.AdaptiveTimeout = true
 	cfg.AutoRegThreshold = 5
 	cfg.AutoRegScript = "scripts/autoreg.py"
-	cfg.DebugLogSSE = false
+	cfg.DebugLogSSE = cfg.DebugEnabled
 }
 
 func (c *Config) VerboseDiagnosticsEnabled() bool {

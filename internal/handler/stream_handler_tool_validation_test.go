@@ -318,6 +318,177 @@ func TestToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
 	}
 }
 
+func TestWriteToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+	h.setAllowedToolNames([]string{"Read", "Glob", "Grep"})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "write_undeclared_1",
+			"toolName":   "Write",
+			"input":      `{"file_path":"calculator.py","content":"print(1)"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected undeclared Write tool call to be suppressed and replaced with fallback text, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
+		t.Fatalf("expected fallback text block, got %q", got)
+	}
+	if h.suppressedToolCalls != 1 {
+		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
+	}
+	if h.finalStopReason != "end_turn" {
+		t.Fatalf("finalStopReason=%q want end_turn", h.finalStopReason)
+	}
+}
+
+func TestSandboxMetadataReadToolCall_IsSuppressed(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		`D:\Code\Orchids-2api`,
+	)
+	defer h.release()
+	h.setAllowedToolNames([]string{"Read", "Bash"})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "sandbox_meta_read",
+			"toolName":   "Read",
+			"input":      `{"file_path":"/tmp/cc-agent/sb1-demo/.claude/.claude.json"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected suppressed tool call to fall back to a single text block, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
+		t.Fatalf("expected fallback text block, got %q", got)
+	}
+	if h.suppressedToolCalls != 1 {
+		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
+	}
+	if h.finalStopReason != "end_turn" {
+		t.Fatalf("finalStopReason=%q want end_turn", h.finalStopReason)
+	}
+}
+
+func TestTodoWriteToolCall_IsSuppressedWhenNotDeclared(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+	h.setAllowedToolNames([]string{"Read", "Write", "Edit", "Bash", "Glob", "Grep"})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "todo_1",
+			"toolName":   "TodoWrite",
+			"input":      `{"todos":[{"content":"Create calculator app with scientific notation support","status":"in_progress"}]}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected TodoWrite tool call to be suppressed and replaced with fallback text, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
+		t.Fatalf("expected fallback text block, got %q", got)
+	}
+	if h.suppressedToolCalls != 1 {
+		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
+	}
+	if h.finalStopReason != "end_turn" {
+		t.Fatalf("finalStopReason=%q want end_turn", h.finalStopReason)
+	}
+}
+
+func TestTaskToolCall_IsAcceptedWhenClientDeclaredAgent(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	h.setAllowedToolNames(passthroughAllowedToolNames([]interface{}{
+		map[string]interface{}{"name": "Agent"},
+	}, true))
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "task_1",
+			"toolName":   "Task",
+			"input":      `{"description":"Explore calculator codebase","prompt":"Find calculator files","subagent_type":"Explore"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected Task tool call to pass through, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
+		t.Fatalf("expected tool_use block, got %q", got)
+	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != "Task" {
+		t.Fatalf("expected Task tool call, got %q", got)
+	}
+	if h.suppressedToolCalls != 0 {
+		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
+	}
+}
+
 func TestBashToolCallDifferentIDsSameCommand_Deduped(t *testing.T) {
 	t.Parallel()
 
@@ -729,6 +900,74 @@ func TestSeedSideEffectDedupFromMessages_DoesNotUseOlderTurnBeforeLatestUserText
 
 	if len(h.contentBlocks) != 1 {
 		t.Fatalf("expected old-turn command not pre-deduped, got %d blocks", len(h.contentBlocks))
+	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
+		t.Fatalf("expected Bash tool call, got %q", got)
+	}
+}
+
+func TestSeedSideEffectDedupFromMessages_DoesNotSuppressRepeatGitBashAcrossTurns(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	history := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "上传到 git"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:  "tool_use",
+						ID:    "tool_git_1",
+						Name:  "Bash",
+						Input: map[string]interface{}{"command": "git add -A && git status --short"},
+					},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:      "tool_result",
+						ToolUseID: "tool_git_1",
+						Content:   "M internal/bolt/client.go\nM internal/bolt/client_test.go",
+					},
+				},
+			},
+		},
+	}
+	h.seedSideEffectDedupFromMessages(history)
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "tool_git_2",
+			"toolName":   "Bash",
+			"input":      `{"command":"git add -A && git status --short"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if h.toolDedupCount != 0 {
+		t.Fatalf("expected repeated git bash command not to be deduped, got %d", h.toolDedupCount)
+	}
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected repeated git bash tool call to be emitted, got %d blocks", len(h.contentBlocks))
 	}
 	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
 		t.Fatalf("expected Bash tool call, got %q", got)

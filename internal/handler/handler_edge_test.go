@@ -310,6 +310,73 @@ func TestHandleMessages_BoltSingleAccountNetworkErrorRetriesSameAccount(t *testi
 	}
 }
 
+func TestHandleMessages_BoltSingleAccountRateLimitRetriesSameAccountBeforeFailing(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	acc := &store.Account{
+		AccountType:   "bolt",
+		ProjectID:     "sb1-demo",
+		SessionCookie: "sess",
+		AgentMode:     "claude-sonnet-4-6",
+		Enabled:       true,
+		Weight:        1,
+	}
+	if err := s.CreateAccount(context.Background(), acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, lb)
+	rateLimited := &errorUpstreamEdge{err: errors.New(`bolt API error: status=429, body={"code":"rate-limited","message":"You have hit the rate limit. Please upgrade to keep chatting."}`)}
+	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
+		return rateLimited
+	})
+
+	payload := map[string]any{
+		"model":    "claude-sonnet-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "列出项目的目录结果"}},
+		"system": []any{
+			map[string]any{"type": "text", "text": "# Environment\nPrimary working directory: D:\\Code\\NVIDIA_NETWORK_HEALTH_CHECK_PLATFORM"},
+		},
+		"stream": false,
+		"tools": []any{
+			map[string]any{"name": "Glob"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rateLimited.calls != 2 {
+		t.Fatalf("expected same-account rate-limit retry to make 2 upstream calls, got %d", rateLimited.calls)
+	}
+	if strings.Contains(rec.Body.String(), "no available accounts") {
+		t.Fatalf("did not expect no-available-account error after same-account rate-limit retry, got: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "retries exhausted") || !strings.Contains(rec.Body.String(), "status=429") {
+		t.Fatalf("expected retry-exhausted 429 response, got: %s", rec.Body.String())
+	}
+}
+
 func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedAccount(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{

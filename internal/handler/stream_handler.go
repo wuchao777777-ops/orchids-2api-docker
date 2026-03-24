@@ -28,6 +28,7 @@ import (
 )
 
 var orchidsToolMarkerRegex = regexp.MustCompile(`Used tool: (\w+)\s+with input: (\{.*\})`)
+var gitCPathRegex = regexp.MustCompile(`(?i)git\s+-C\s+((?:"[^"]+"|'[^']+'|[^\s;&|]+))\s+`)
 
 const (
 	fnv64Offset = uint64(14695981039346656037)
@@ -68,6 +69,7 @@ var (
 	}
 	quotedPathRegex       = regexp.MustCompile(`"([^"\n\r]+)"`)
 	windowsDrivePathRegex = regexp.MustCompile(`(?i)\b[a-z]:[\\/]`)
+	tmpAgentPathRegex     = regexp.MustCompile("(^|[\\s(=;&|])(/tmp/cc-agent/[^\\s\"';|&)]+)")
 )
 
 func mapKeys(m map[string]interface{}) []string {
@@ -307,7 +309,6 @@ type streamHandler struct {
 	toolDedupCount                int
 	toolDedupKeys                 map[string]int
 	introDedup                    map[string]struct{}
-	noToolsFallbackText           string
 	suppressEmptyOutputFallback   bool
 	preferPriorToolResultFallback bool
 
@@ -383,12 +384,6 @@ func newStreamHandler(
 		ssePayloadScratch:         make([]byte, 0, 512),
 	}
 	return h
-}
-
-func (h *streamHandler) setNoToolsFallbackText(text string) {
-	h.mu.Lock()
-	h.noToolsFallbackText = strings.TrimSpace(text)
-	h.mu.Unlock()
 }
 
 func (h *streamHandler) setSuppressEmptyOutputFallback(suppress bool) {
@@ -951,10 +946,6 @@ func (h *streamHandler) resetRoundState() {
 	h.deferredFlushBytes = 0
 }
 
-func (h *streamHandler) shouldEmitToolCalls(stopReason string) bool {
-	return true
-}
-
 // seedSideEffectDedupFromMessages pre-seeds dedup keys from prior assistant tool_use blocks.
 func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Message) {
 	if len(messages) == 0 {
@@ -993,6 +984,9 @@ func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Messag
 			input := strings.TrimSpace(stringifyToolInput(block.Input))
 			if input == "" {
 				input = "{}"
+			}
+			if !shouldPreseedSideEffectDedup(nameKey, input) {
+				continue
 			}
 			key := sideEffectToolDedupKey(nameKey, input, h.workdir)
 			if key == "" {
@@ -1571,6 +1565,8 @@ func normalizeUpstreamToolCall(name, input, workdir string) (string, string) {
 	sanitized := sanitizeToolInput(normalizedName, input)
 	sanitized = rewriteForeignBashReadCommandInput(normalizedName, sanitized, workdir)
 	sanitized = rewriteBashProjectRootProbeCommandInput(normalizedName, sanitized, workdir)
+	sanitized = rewriteBashGitProjectPathCommandInput(normalizedName, sanitized, workdir)
+	sanitized = rewriteForeignBashSandboxPathInput(normalizedName, sanitized, workdir)
 	sanitized = rewriteForeignAbsoluteToolPathInput(normalizedName, sanitized, workdir)
 	if bashInput, ok := rewriteAbsoluteReadToBashFallback(normalizedName, sanitized, workdir); ok {
 		return "Bash", bashInput
@@ -1723,6 +1719,43 @@ func rewriteBashProjectRootProbeCommandInput(name, input, workdir string) string
 	return string(normalized)
 }
 
+func rewriteBashGitProjectPathCommandInput(name, input, workdir string) string {
+	if !strings.EqualFold(strings.TrimSpace(name), "bash") {
+		return input
+	}
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return input
+	}
+
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return input
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return input
+	}
+
+	command, _ := payload["command"].(string)
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return input
+	}
+
+	rewritten, changed := rewriteForeignGitCCommand(command, workdir)
+	if !changed {
+		return input
+	}
+	payload["command"] = rewritten
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return input
+	}
+	return string(normalized)
+}
+
 func looksLikeProjectRootProbeCommand(command, workdir string) bool {
 	command = strings.TrimSpace(command)
 	workdir = strings.TrimSpace(workdir)
@@ -1757,6 +1790,65 @@ func looksLikeProjectRootProbeCommand(command, workdir string) bool {
 		markers++
 	}
 	return markers >= 2
+}
+
+func rewriteForeignGitCCommand(command, workdir string) (string, bool) {
+	matches := gitCPathRegex.FindAllStringSubmatchIndex(command, -1)
+	if len(matches) == 0 {
+		return "", false
+	}
+
+	var sb strings.Builder
+	last := 0
+	changed := false
+	for _, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		token := command[match[2]:match[3]]
+		pathValue := strings.Trim(strings.TrimSpace(token), "\"'")
+		if !looksLikeForeignGitProjectPath(pathValue, workdir) {
+			continue
+		}
+		sb.WriteString(command[last:match[0]])
+		sb.WriteString("git ")
+		last = match[1]
+		changed = true
+	}
+	if !changed {
+		return "", false
+	}
+	sb.WriteString(command[last:])
+	return collapseDuplicateGitFallback(strings.TrimSpace(sb.String())), true
+}
+
+func looksLikeForeignGitProjectPath(pathValue, workdir string) bool {
+	pathValue = strings.TrimSpace(pathValue)
+	workdir = strings.TrimSpace(workdir)
+	if pathValue == "" || workdir == "" {
+		return false
+	}
+	if sameOrWithinPath(pathValue, workdir) {
+		return false
+	}
+	lower := strings.ToLower(pathValue)
+	if strings.Contains(lower, "/tmp/cc-agent/") || strings.Contains(lower, "/mnt/") || strings.Contains(lower, "~/") {
+		return true
+	}
+	return windowsDrivePathRegex.MatchString(pathValue)
+}
+
+func collapseDuplicateGitFallback(command string) string {
+	parts := strings.Split(command, "||")
+	if len(parts) != 2 {
+		return command
+	}
+	left := strings.TrimSpace(parts[0])
+	right := strings.TrimSpace(parts[1])
+	if left == "" || right == "" || left != right {
+		return command
+	}
+	return left
 }
 
 func rewriteForeignBashReadCommandInput(name, input, workdir string) string {
@@ -1809,6 +1901,43 @@ func rewriteForeignBashReadCommandInput(name, input, workdir string) string {
 		return input
 	}
 	payload["command"] = rewrittenCommand
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return input
+	}
+	return string(normalized)
+}
+
+func rewriteForeignBashSandboxPathInput(name, input, workdir string) string {
+	if !strings.EqualFold(strings.TrimSpace(name), "bash") {
+		return input
+	}
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return input
+	}
+
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" || !strings.Contains(trimmed, "/tmp/cc-agent/") {
+		return input
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return input
+	}
+
+	command, _ := payload["command"].(string)
+	command = strings.TrimSpace(command)
+	if command == "" || !strings.Contains(command, "/tmp/cc-agent/") {
+		return input
+	}
+
+	rewritten, changed := rewriteForeignSandboxPathsInShellCommand(command, workdir)
+	if !changed {
+		return input
+	}
+	payload["command"] = rewritten
 	normalized, err := json.Marshal(payload)
 	if err != nil {
 		return input
@@ -1908,6 +2037,9 @@ func rewriteAbsoluteReadToBashFallback(name, input, workdir string) (string, boo
 	if rawPath == "" || !isToolAbsolutePath(rawPath) {
 		return "", false
 	}
+	if isNonProjectSandboxPath(rawPath) {
+		return "", false
+	}
 	if strings.TrimSpace(workdir) == "" {
 		return "", false
 	}
@@ -1968,6 +2100,9 @@ func rebaseCandidatePathToWorkdir(pathValue, workdir string) string {
 	if pathValue == "" || workdir == "" {
 		return pathValue
 	}
+	if rewritten, ok := rebaseSandboxPathToWorkdir(pathValue, workdir); ok {
+		return rewritten
+	}
 	if isToolAbsolutePath(pathValue) {
 		return rebaseAbsolutePathToWorkdir(pathValue, workdir)
 	}
@@ -2020,6 +2155,9 @@ func rebaseAbsolutePathToWorkdir(pathValue, workdir string) string {
 	if pathValue == "" || workdir == "" {
 		return pathValue
 	}
+	if rewritten, ok := rebaseSandboxPathToWorkdir(pathValue, workdir); ok {
+		return rewritten
+	}
 	if isPlaceholderDirectoryListPath(pathValue) {
 		return workdir
 	}
@@ -2062,6 +2200,9 @@ func rebaseAbsoluteWritePathToWorkdir(pathValue, workdir string) string {
 	workdir = strings.TrimSpace(workdir)
 	if pathValue == "" || workdir == "" || !isToolAbsolutePath(pathValue) {
 		return pathValue
+	}
+	if rewritten, ok := rebaseSandboxPathToWorkdir(pathValue, workdir); ok {
+		return rewritten
 	}
 
 	cleanWorkdir := filepath.Clean(workdir)
@@ -2181,6 +2322,152 @@ func isPlaceholderDirectoryListPath(path string) bool {
 	}
 }
 
+func rebaseSandboxPathToWorkdir(pathValue, workdir string) (string, bool) {
+	pathValue = strings.TrimSpace(strings.ReplaceAll(pathValue, "\\", "/"))
+	workdir = strings.TrimSpace(workdir)
+	if pathValue == "" || workdir == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(strings.ToLower(pathValue), "/tmp/cc-agent/") {
+		return "", false
+	}
+
+	parts := strings.Split(strings.Trim(pathValue, "/"), "/")
+	if len(parts) < 3 {
+		return "", false
+	}
+	if !strings.EqualFold(parts[0], "tmp") || !strings.EqualFold(parts[1], "cc-agent") {
+		return "", false
+	}
+
+	tail := parts[3:]
+	if len(tail) == 0 || !strings.EqualFold(strings.TrimSpace(tail[0]), "project") {
+		return "", false
+	}
+	tail = tail[1:]
+	if len(tail) == 0 {
+		return filepath.Clean(workdir), true
+	}
+
+	joined := filepath.Join(append([]string{workdir}, tail...)...)
+	return filepath.Clean(joined), true
+}
+
+func hasNonProjectSandboxToolPath(name, input string) bool {
+	switch normalizeToolNameKey(name) {
+	case "read", "edit", "write", "glob", "grep":
+	default:
+		return false
+	}
+
+	fields, ok := decodeToolInputFields(input)
+	if !ok {
+		return false
+	}
+	return isNonProjectSandboxPath(resolveToolPath(fields.FilePath, fields.Path))
+}
+
+func isNonProjectSandboxPath(pathValue string) bool {
+	pathValue = strings.TrimSpace(strings.ReplaceAll(pathValue, "\\", "/"))
+	if pathValue == "" || !strings.HasPrefix(strings.ToLower(pathValue), "/tmp/cc-agent/") {
+		return false
+	}
+
+	parts := strings.Split(strings.Trim(pathValue, "/"), "/")
+	if len(parts) < 3 {
+		return false
+	}
+	if !strings.EqualFold(parts[0], "tmp") || !strings.EqualFold(parts[1], "cc-agent") {
+		return false
+	}
+	if len(parts) == 3 {
+		return true
+	}
+	return !strings.EqualFold(strings.TrimSpace(parts[3]), "project")
+}
+
+func rewriteForeignSandboxPathsInShellCommand(command, workdir string) (string, bool) {
+	if strings.TrimSpace(command) == "" || strings.TrimSpace(workdir) == "" || !strings.Contains(command, "/tmp/cc-agent/") {
+		return command, false
+	}
+
+	changed := false
+	rewritten := quotedPathRegex.ReplaceAllStringFunc(command, func(match string) string {
+		if len(match) < 2 {
+			return match
+		}
+		pathValue := match[1 : len(match)-1]
+		relative, ok := relativeShellPathForSandboxPath(pathValue, workdir)
+		if !ok {
+			return match
+		}
+		changed = true
+		return strconv.Quote(relative)
+	})
+
+	matches := tmpAgentPathRegex.FindAllStringSubmatchIndex(rewritten, -1)
+	if len(matches) == 0 {
+		return rewritten, changed
+	}
+
+	var sb strings.Builder
+	last := 0
+	for _, match := range matches {
+		if len(match) < 6 {
+			continue
+		}
+		pathStart, pathEnd := match[4], match[5]
+		sb.WriteString(rewritten[last:pathStart])
+		pathValue := rewritten[pathStart:pathEnd]
+		relative, ok := relativeShellPathForSandboxPath(pathValue, workdir)
+		if ok {
+			sb.WriteString(quoteShellPathIfNeeded(relative))
+			changed = true
+		} else {
+			sb.WriteString(pathValue)
+		}
+		last = pathEnd
+	}
+	sb.WriteString(rewritten[last:])
+	if !changed {
+		return command, false
+	}
+	return sb.String(), true
+}
+
+func relativeShellPathForSandboxPath(pathValue, workdir string) (string, bool) {
+	localPath, ok := rebaseSandboxPathToWorkdir(pathValue, workdir)
+	if !ok {
+		return "", false
+	}
+
+	cleanWorkdir := filepath.Clean(workdir)
+	cleanLocalPath := filepath.Clean(localPath)
+	if sameOrWithinPath(cleanLocalPath, cleanWorkdir) {
+		rel, err := filepath.Rel(cleanWorkdir, cleanLocalPath)
+		if err == nil {
+			rel = filepath.ToSlash(strings.TrimSpace(rel))
+			switch rel {
+			case "", ".":
+				return ".", true
+			default:
+				if !strings.HasPrefix(rel, ".") {
+					rel = "./" + rel
+				}
+				return rel, true
+			}
+		}
+	}
+	return ".", true
+}
+
+func quoteShellPathIfNeeded(pathValue string) string {
+	if strings.ContainsAny(pathValue, " \t()") {
+		return strconv.Quote(pathValue)
+	}
+	return pathValue
+}
+
 func (h *streamHandler) emitToolCallNonStream(call toolCall) {
 	h.addOutputTokens(call.name)
 	h.addOutputTokens(call.input)
@@ -2250,10 +2537,6 @@ func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) 
 }
 
 func (h *streamHandler) flushPendingToolCalls(stopReason string) {
-	if !h.shouldEmitToolCalls(stopReason) {
-		return
-	}
-
 	h.mu.Lock()
 	calls := make([]toolCall, len(h.pendingToolCalls))
 	copy(calls, h.pendingToolCalls)
@@ -2282,7 +2565,7 @@ func (h *streamHandler) finishResponse(stopReason string) {
 	}
 
 	// Ensure there's some text output before closing if we return end_turn with no output
-	if stopReason != "tool_use" && h.noToolsFallbackText == "" && !h.suppressEmptyOutputFallback && !h.hasAnyOutput() {
+	if stopReason != "tool_use" && !h.suppressEmptyOutputFallback && !h.hasAnyOutput() {
 		emptyMsg := h.emptyOutputFallbackText()
 		if h.isStream {
 			h.emitTextBlockWithMode(emptyMsg, false)
@@ -2319,7 +2602,6 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		}
 		if stopReason != "tool_use" {
 			h.emitWriteChunkFallbackIfNeeded()
-			h.emitNoToolsFallbackIfNeeded()
 		}
 		h.flushPendingToolCalls(stopReason)
 		h.finalizeOutputTokens()
@@ -2336,7 +2618,6 @@ func (h *streamHandler) finishResponse(stopReason string) {
 	} else {
 		if stopReason != "tool_use" {
 			h.emitWriteChunkFallbackIfNeeded()
-			h.emitNoToolsFallbackIfNeeded()
 		}
 		h.flushPendingToolCalls(stopReason)
 		h.finalizeOutputTokens()
@@ -2605,140 +2886,6 @@ func (h *streamHandler) emitWriteChunkFallbackIfNeeded() {
 	h.mu.Unlock()
 }
 
-func (h *streamHandler) emitNoToolsFallbackIfNeeded() {
-	h.mu.Lock()
-	text := strings.TrimSpace(h.noToolsFallbackText)
-	currentText := strings.TrimSpace(h.currentTextForNoToolsFallbackLocked())
-	shouldEmit := text != "" &&
-		h.suppressedToolCalls > 0 &&
-		!h.hasTextOutput &&
-		h.responseText.Len() == 0
-	shouldAppend := text != "" &&
-		looksLikeWeakNoToolsPreface(currentText) &&
-		!strings.Contains(currentText, text)
-	if shouldEmit {
-		h.hasTextOutput = true
-	}
-	h.mu.Unlock()
-	if !shouldEmit && !shouldAppend {
-		return
-	}
-
-	if shouldAppend {
-		if h.isStream {
-			h.emitTextBlockWithMode(text, true)
-			return
-		}
-
-		if h.responseText.Len() > 0 {
-			h.responseText.WriteString("\n\n")
-		}
-		h.responseText.WriteString(text)
-		h.mu.Lock()
-		h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
-			"type": "text",
-			"text": text,
-		})
-		h.mu.Unlock()
-		return
-	}
-
-	if h.isStream {
-		h.emitTextBlockWithMode(text, true)
-		return
-	}
-
-	h.responseText.WriteString(text)
-	h.mu.Lock()
-	h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
-		"type": "text",
-		"text": text,
-	})
-	h.mu.Unlock()
-}
-
-func (h *streamHandler) currentTextForNoToolsFallbackLocked() string {
-	if !h.isStream && h.responseText.Len() > 0 {
-		return h.responseText.String()
-	}
-
-	var parts []string
-	for idx, block := range h.contentBlocks {
-		blockType, _ := block["type"].(string)
-		if blockType != "text" {
-			continue
-		}
-		if builder, ok := h.textBlockBuilders[idx]; ok {
-			if text := strings.TrimSpace(builder.String()); text != "" {
-				parts = append(parts, text)
-				continue
-			}
-		}
-		if text, ok := block["text"].(string); ok {
-			text = strings.TrimSpace(text)
-			if text != "" {
-				parts = append(parts, text)
-			}
-		}
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
-}
-
-func looksLikeWeakNoToolsPreface(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return false
-	}
-	if len([]rune(text)) > 220 {
-		return false
-	}
-
-	lower := strings.ToLower(strings.Join(strings.Fields(text), " "))
-	intro := []string{
-		"let me",
-		"i'll first",
-		"i will first",
-		"让我先",
-		"我先",
-		"let我先",
-	}
-	action := []string{
-		"look",
-		"read",
-		"explore",
-		"examine",
-		"analyze",
-		"identify",
-		"understand",
-		"inspect",
-		"check",
-		"learn",
-		"看看",
-		"看一下",
-		"了解",
-		"阅读",
-		"读取",
-		"理解",
-	}
-
-	hasIntro := false
-	for _, marker := range intro {
-		if strings.Contains(lower, marker) {
-			hasIntro = true
-			break
-		}
-	}
-	if !hasIntro {
-		return false
-	}
-	for _, marker := range action {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
 	h.mu.Lock()
 	h.pendingToolCalls = append(h.pendingToolCalls, call)
@@ -2762,9 +2909,9 @@ func (h *streamHandler) shouldAcceptToolCallWithFilter(call toolCall, enforceAll
 		lowerName := strings.ToLower(strings.TrimSpace(call.name))
 		_, allowedTool = h.allowedToolNames[lowerName]
 		if !allowedTool {
-			// Auto-allow meta tools
-			if lowerName == "todowrite" || lowerName == "taskoutput" || lowerName == "taskstop" ||
-				lowerName == "write" || lowerName == "read" || lowerName == "ls" || lowerName == "grep" {
+			// Task lifecycle helper events are emitted alongside Task even though
+			// they are not exposed as normal user-declared tools.
+			if lowerName == "taskoutput" || lowerName == "taskstop" {
 				allowedTool = true
 			}
 		}
@@ -2785,6 +2932,15 @@ func (h *streamHandler) shouldAcceptToolCallWithFilter(call toolCall, enforceAll
 	if enforceAllowedTools && !allowedTool {
 		if h.config != nil && h.config.DebugEnabled {
 			slog.Debug("tool call suppressed because it is not declared in the current request", "tool", call.name, "input", call.input)
+		}
+		return false
+	}
+	if hasNonProjectSandboxToolPath(call.name, call.input) {
+		h.mu.Lock()
+		h.suppressedToolCalls++
+		h.mu.Unlock()
+		if h.config != nil && h.config.DebugEnabled {
+			slog.Debug("sandbox metadata tool call suppressed", "tool", call.name, "input", call.input)
 		}
 		return false
 	}
@@ -2899,6 +3055,40 @@ func firstOptionalString(values ...string) string {
 		return ""
 	}
 	return values[0]
+}
+
+func shouldPreseedSideEffectDedup(nameKey, input string) bool {
+	nameKey = normalizeToolNameKey(nameKey)
+	if nameKey != "bash" {
+		return true
+	}
+	fields, ok := decodeToolInputFields(input)
+	if !ok {
+		return true
+	}
+	command := strings.TrimSpace(fields.Command)
+	if command == "" {
+		command = strings.TrimSpace(fields.Cmd)
+	}
+	// Git staging/status commands may legitimately repeat across turns before the
+	// model reaches commit/push, so don't suppress them from prior history.
+	return !looksLikeGitBashCommand(command)
+}
+
+func looksLikeGitBashCommand(command string) bool {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	if lower == "" {
+		return false
+	}
+	if strings.HasPrefix(lower, "git ") || strings.HasPrefix(lower, "git.exe ") {
+		return true
+	}
+	for _, marker := range []string{"&& git ", "&& git.exe ", "; git ", "; git.exe ", "|| git ", "|| git.exe ", "\ngit ", "\ngit.exe ", "\n git ", "\n git.exe "} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeToolNameKey(name string) string {
@@ -3964,6 +4154,13 @@ func (h *streamHandler) InjectUpstreamError(errStr string) {
 
 func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr error) {
 	errorMsg := "Request failed: retries exhausted and no available accounts. Please check account statuses in Admin UI or add valid accounts."
+	selectErrText := ""
+	if selectErr != nil {
+		selectErrText = strings.ToLower(selectErr.Error())
+	}
+	if classifyUpstreamError(lastErr).Category == "rate_limit" || strings.Contains(selectErrText, "rate-limited") {
+		errorMsg = "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account."
+	}
 	if selectErr != nil {
 		errorMsg = fmt.Sprintf("%s (selector: %v, last error: %s)", errorMsg, selectErr, lastErr)
 	}

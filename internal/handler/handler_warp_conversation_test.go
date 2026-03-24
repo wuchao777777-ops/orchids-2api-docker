@@ -187,6 +187,50 @@ func TestBoltToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *
 	}
 }
 
+func TestBoltCurrentWorkdirAfterToolTurn_ReturnsLocalResponse(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":false,
+		"conversation_id":"bolt_fresh_reset",
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"帮我用python写一个计算器"}]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_write","name":"Write","input":{"file_path":"calculator.py","content":"print(1)"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_write","content":"File created successfully at: calculator.py"}
+			]},
+			{"role":"user","content":[{"type":"text","text":"当前运行的目录"}]}
+		],
+		"tools":[
+			{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}},
+			{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}}
+		]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/bolt/v1/messages", bytes.NewReader(body))
+	req.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹`)
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 0 {
+		t.Fatalf("expected 0 upstream calls for local workdir response, got %d", len(calls))
+	}
+	if out := rec.Body.String(); !strings.Contains(out, `C:\\Users\\zhangdailin\\Desktop\\新建文件夹`) {
+		t.Fatalf("expected local response to include exact workdir, got: %s", out)
+	}
+}
+
 func TestPuterToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *testing.T) {
 	t.Parallel()
 
@@ -365,6 +409,61 @@ func TestBoltToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *t
 		if strings.Contains(out, unwanted) {
 			t.Fatalf("did not expect local fallback text %q in %s", unwanted, out)
 		}
+	}
+}
+
+func TestBoltMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":false,
+		"conversation_id":"bolt_multiturn_scientific_notation",
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"帮我用python写一个计算器"}]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_write","name":"Write","input":{"file_path":"calculator.py","content":"print(1)"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_write","content":"File created successfully at: calculator.py"}
+			]},
+			{"role":"assistant","content":[
+				{"type":"text","text":"完成！计算器已创建在项目目录中。"}
+			]},
+			{"role":"user","content":[{"type":"text","text":"帮我添加科学计数法"}]}
+		],
+		"tools":[
+			{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}},
+			{"name":"Edit","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"}},"required":["file_path","old_string","new_string"]}}
+		]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/bolt/v1/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 upstream call, got %d", len(calls))
+	}
+	if len(calls[0].Messages) != 5 {
+		t.Fatalf("messages len=%d want 5", len(calls[0].Messages))
+	}
+	if got := calls[0].Messages[0].ExtractText(); got != "帮我用python写一个计算器" {
+		t.Fatalf("first user text=%q want original create request", got)
+	}
+	if got := calls[0].Messages[3].ExtractText(); got != "完成！计算器已创建在项目目录中。" {
+		t.Fatalf("assistant completion=%q want preserved assistant summary", got)
+	}
+	if got := calls[0].Messages[4].ExtractText(); got != "帮我添加科学计数法" {
+		t.Fatalf("latest user text=%q want edit follow-up", got)
 	}
 }
 

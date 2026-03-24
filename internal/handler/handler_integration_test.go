@@ -15,7 +15,9 @@ import (
 )
 
 type mockUpstream struct {
-	events []upstream.SSEMessage
+	events       []upstream.SSEMessage
+	eventBatches [][]upstream.SSEMessage
+	capturedReqs []upstream.UpstreamRequest
 }
 
 type panicUpstream struct{}
@@ -28,7 +30,16 @@ func (m *mockUpstream) SendRequest(ctx context.Context, prompt string, chatHisto
 }
 
 func (m *mockUpstream) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	for _, e := range m.events {
+	m.capturedReqs = append(m.capturedReqs, req)
+	events := m.events
+	if len(m.eventBatches) > 0 {
+		idx := len(m.capturedReqs) - 1
+		if idx >= len(m.eventBatches) {
+			idx = len(m.eventBatches) - 1
+		}
+		events = m.eventBatches[idx]
+	}
+	for _, e := range events {
 		onMessage(e)
 	}
 	return nil
@@ -105,6 +116,73 @@ func TestHandleMessages_Orchids_StreamAndJSON(t *testing.T) {
 		if !strings.Contains(out, "event: message_stop") {
 			t.Fatalf("expected message_stop, got: %s", out)
 		}
+	}
+}
+
+func TestHandleMessages_CurrentWorkdir_LocalAnthropicJSON(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &panicUpstream{}
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "claude-3-5-sonnet",
+		"messages": []map[string]any{{"role": "user", "content": "当前运行的目录"}},
+		"system":   []any{},
+		"stream":   false,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(body))
+	req.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹`)
+	h.HandleMessages(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("expected json content type, got %q", rec.Header().Get("Content-Type"))
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, `"type":"message"`) {
+		t.Fatalf("expected anthropic message payload, got: %s", out)
+	}
+	if !strings.Contains(out, `C:\\Users\\zhangdailin\\Desktop\\新建文件夹`) {
+		t.Fatalf("expected exact workdir in response, got: %s", out)
+	}
+}
+
+func TestHandleMessages_CurrentWorkdir_LocalOpenAIStream(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &panicUpstream{}
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "claude-opus-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "workspace path"}},
+		"system":   []any{},
+		"stream":   true,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹 (2)`)
+	h.HandleMessages(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("expected sse content type, got %q", rec.Header().Get("Content-Type"))
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, "chat.completion.chunk") {
+		t.Fatalf("expected openai stream chunk, got: %s", out)
+	}
+	if !strings.Contains(out, `C:\\Users\\zhangdailin\\Desktop\\新建文件夹 (2)`) {
+		t.Fatalf("expected exact workdir in stream response, got: %s", out)
+	}
+	if !strings.Contains(out, "[DONE]") {
+		t.Fatalf("expected done marker, got: %s", out)
 	}
 }
 
@@ -227,7 +305,17 @@ func TestHandleMessages_Bolt_OpenAINonStreamJSON(t *testing.T) {
 		"model":    "claude-opus-4-6",
 		"messages": []map[string]any{{"role": "user", "content": "hi"}},
 		"system":   []any{},
-		"stream":   false,
+		"tools": []map[string]any{{
+			"name":        "Read",
+			"description": "read a file",
+			"input_schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string"},
+				},
+			},
+		}},
+		"stream": false,
 	})
 
 	rec := httptest.NewRecorder()
@@ -303,6 +391,89 @@ func TestHandleMessages_Bolt_OpenAINonStreamJSON(t *testing.T) {
 	}
 	if _, ok := usage["total_tokens"]; !ok {
 		t.Fatalf("expected total_tokens in usage, got %#v", usage)
+	}
+}
+
+func TestHandleMessages_BoltRestoresSessionToolsWhenFollowupOmitsTools(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	up := &mockUpstream{
+		eventBatches: [][]upstream.SSEMessage{
+			{
+				{Type: "model", Event: map[string]any{"type": "text-start"}},
+				{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "created"}},
+				{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+			},
+			{
+				{Type: "model.tool-call", Event: map[string]any{
+					"toolCallId": "tool_read_1",
+					"toolName":   "Read",
+					"input":      `{"file_path":"calculator.py"}`,
+				}},
+				{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "tool_use"}},
+			},
+		},
+	}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = up
+
+	firstBody, _ := json.Marshal(map[string]any{
+		"model":    "claude-opus-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "帮我用python写一个计算器"}},
+		"system":   []any{},
+		"tools": []map[string]any{
+			{"name": "Read"},
+			{"name": "Write"},
+			{"name": "Edit"},
+		},
+		"metadata": map[string]any{"user_id": "bolt-user-1"},
+		"stream":   false,
+	})
+
+	firstRec := httptest.NewRecorder()
+	firstReq := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(firstBody))
+	firstReq.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹 (2)`)
+	h.HandleMessages(firstRec, firstReq)
+	if firstRec.Code != 200 {
+		t.Fatalf("expected first request 200, got %d: %s", firstRec.Code, firstRec.Body.String())
+	}
+
+	secondBody, _ := json.Marshal(map[string]any{
+		"model":    "claude-opus-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "帮我添加科学计数法"}},
+		"system":   []any{},
+		"metadata": map[string]any{"user_id": "bolt-user-1"},
+		"stream":   false,
+	})
+
+	secondRec := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(secondBody))
+	secondReq.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹 (2)`)
+	h.HandleMessages(secondRec, secondReq)
+	if secondRec.Code != 200 {
+		t.Fatalf("expected second request 200, got %d: %s", secondRec.Code, secondRec.Body.String())
+	}
+
+	if len(up.capturedReqs) != 2 {
+		t.Fatalf("capturedReqs len=%d want 2", len(up.capturedReqs))
+	}
+	restored := supportedToolNames(up.capturedReqs[1].Tools)
+	want := []string{"Read", "Write", "Edit"}
+	if len(restored) != len(want) {
+		t.Fatalf("restored tools len=%d want %d (%#v)", len(restored), len(want), restored)
+	}
+	for i := range want {
+		if restored[i] != want[i] {
+			t.Fatalf("restored tools[%d]=%q want %q (%#v)", i, restored[i], want[i], restored)
+		}
+	}
+	if up.capturedReqs[1].NoTools {
+		t.Fatal("expected restored bolt follow-up to keep tools enabled")
+	}
+	if !strings.Contains(secondRec.Body.String(), `"type":"tool_use"`) {
+		t.Fatalf("expected second response to include tool_use after restoring tools, got: %s", secondRec.Body.String())
+	}
+	if !strings.Contains(secondRec.Body.String(), `"name":"Read"`) {
+		t.Fatalf("expected restored tool call to pass through, got: %s", secondRec.Body.String())
 	}
 }
 
@@ -775,5 +946,43 @@ func TestHandleMessages_SuggestionMode_LocalResponse(t *testing.T) {
 		if !strings.Contains(out, "可以") {
 			t.Fatalf("expected local suggestion in sse output, got: %s", out)
 		}
+	}
+}
+
+func TestHandleMessages_TitleGeneration_LocalResponse(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &panicUpstream{}
+
+	payload := map[string]any{
+		"model": "claude-haiku-4-5-20251001",
+		"messages": []map[string]any{
+			{"role": "user", "content": "添加科学计数法"},
+		},
+		"system": []map[string]any{
+			{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+			{
+				"type": "text",
+				"text": "Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session.\n\nReturn JSON with a single \"title\" field.",
+			},
+		},
+		"tools":  []any{},
+		"stream": true,
+	}
+	body, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	out := rec.Body.String()
+	if !strings.Contains(out, "event: message_start") || !strings.Contains(out, "event: message_stop") {
+		t.Fatalf("expected local SSE message start/stop, got: %s", out)
+	}
+	if !strings.Contains(out, "\"text\":\"{\\\"title\\\":\\\"添加科学计数法\\\"}\"") {
+		t.Fatalf("expected generated title JSON in local response, got: %s", out)
 	}
 }

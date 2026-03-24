@@ -68,15 +68,14 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTracker(ctx context.
 
 	var filtered []*store.Account
 	excludeSet := make(map[int64]bool)
+	channelMatched := 0
+	rateLimitedUnavailable := 0
 	for _, id := range excludeIDs {
 		excludeSet[id] = true
 	}
 
 	for _, acc := range accounts {
 		if excludeSet[acc.ID] {
-			continue
-		}
-		if !lb.isAccountAvailable(ctx, acc) {
 			continue
 		}
 		if channel != "" {
@@ -88,11 +87,21 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTracker(ctx context.
 				continue
 			}
 		}
+		channelMatched++
+		if !lb.isAccountAvailable(ctx, acc) {
+			if strings.TrimSpace(acc.StatusCode) == "429" {
+				rateLimitedUnavailable++
+			}
+			continue
+		}
 		filtered = append(filtered, acc)
 	}
 	accounts = filtered
 
 	if len(accounts) == 0 {
+		if channel != "" && channelMatched > 0 && rateLimitedUnavailable == channelMatched {
+			return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are rate-limited or cooling down)", channel)
+		}
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s", channel)
 	}
 
@@ -207,6 +216,8 @@ func (lb *LoadBalancer) ReleaseConnection(accountID int64) {
 const (
 	// 401 冷却时间：token 可能已刷新，较短间隔后重试
 	retry401Default = 5 * time.Minute
+	// 429 冷却时间：限流通常是暂时性的，优先等待较短窗口再恢复尝试
+	retry429Default = 1 * time.Minute
 	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试
 	retry403Default = 24 * time.Hour
 	// Grok 的 403 很多是 Cloudflare challenge/临时风控，不应长时间拉黑
@@ -228,6 +239,23 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		}
 		if now.Sub(acc.LastAttempt) >= retry401Default {
 			lb.clearAccountStatus(ctx, acc, "401 冷却完成，自动恢复尝试")
+			return true
+		}
+		return false
+	case "429":
+		// 429 优先尊重显式 quota reset 时间；没有 reset 信息时走较短冷却。
+		if !acc.QuotaResetAt.IsZero() {
+			if !now.Before(acc.QuotaResetAt) {
+				lb.clearAccountStatus(ctx, acc, "429 冷却完成，自动恢复尝试")
+				return true
+			}
+			return false
+		}
+		if acc.LastAttempt.IsZero() {
+			return false
+		}
+		if now.Sub(acc.LastAttempt) >= retry429Default {
+			lb.clearAccountStatus(ctx, acc, "429 冷却完成，自动恢复尝试")
 			return true
 		}
 		return false

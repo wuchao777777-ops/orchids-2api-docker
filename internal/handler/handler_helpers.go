@@ -394,7 +394,7 @@ func computeRetryDelay(base time.Duration, attempt int, category string) time.Du
 
 func shouldRetryCurrentAccountWhenNoAlternative(category string) bool {
 	switch strings.TrimSpace(category) {
-	case "network", "timeout", "server", "unknown":
+	case "network", "timeout", "server", "unknown", "rate_limit":
 		return true
 	default:
 		return false
