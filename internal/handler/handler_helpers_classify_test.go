@@ -20,7 +20,7 @@ func TestClassifyUpstreamErrorCreditsExhausted(t *testing.T) {
 func TestShouldRetryCurrentAccountWhenNoAlternative_RateLimit(t *testing.T) {
 	t.Parallel()
 
-	if !shouldRetryCurrentAccountWhenNoAlternative("rate_limit") {
-		t.Fatal("expected rate_limit to retry current account when no alternative exists")
+	if shouldRetryCurrentAccountWhenNoAlternative("rate_limit") {
+		t.Fatal("expected rate_limit to stop retrying the same account when no alternative exists")
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,10 +33,10 @@ const (
 	defaultRateLimitsURL    = "https://bolt.new/api/rate-limits/user"
 	defaultTeamsRateURL     = "https://bolt.new/api/rate-limits/teams"
 	defaultProjectsURL      = "https://stackblitz.com/api/projects/sb1/fork"
-	defaultAdapterPrompt    = "你正在通过 Orchids 的 Bolt 适配层处理一个代码代理对话。能直接回答时直接回答；当用户要求实际执行代码、修改文件、运行命令、提交或推送 git 时，应优先直接调用工具完成，不要只给步骤说明。需要查看代码、目录或执行命令时，不要先解释计划，不要说你接下来要去看文件，而是立刻返回严格 JSON 的工具调用。"
+	defaultAdapterPrompt    = "你正在通过 Orchids 的 Bolt 适配层处理代码代理对话。能直接回答时直接回答；需要改文件、运行命令或提交/推送 git 时，优先直接调用工具，不要只给步骤说明。要用工具时，直接返回严格 JSON，不要先解释计划。"
 	maxBoltFocusedFileCount = 2
 	maxBoltReadResultRunes  = 900
-	maxBoltFocusedReadRunes = 2400
+	maxBoltFocusedReadRunes = 6000
 	maxBoltShellResultRunes = 1100
 )
 
@@ -60,10 +61,15 @@ var boltAssistantCompletionMarkers = []string{
 	"已创建",
 	"创建完成",
 	"已经创建",
+	"已经完成",
+	"已完成",
+	"已成功完成",
 	"文件已成功创建",
 	"文件已经存在",
 	"项目中已经有一个",
 	"已在项目目录",
+	"已包含",
+	"无需重复修改",
 	"已更新",
 	"已经被更新",
 	"运行方式",
@@ -112,6 +118,14 @@ type systemPromptParts struct {
 	ToolPrompt   string
 	SystemPrompt string
 	FullPrompt   string
+}
+
+type boltFalseCompletionRetryContext struct {
+	HasRecentFailedMutation bool
+	HasRecentReadOnlyFollow bool
+	FailedPath              string
+	ReadPath                string
+	LastTask                string
 }
 
 type Client struct {
@@ -357,41 +371,78 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("missing bolt project id")
 	}
 
-	boltReq, inputEstimate := prepareRequest(req, projectID)
-	body, err := json.Marshal(boltReq)
-	if err != nil {
-		return fmt.Errorf("failed to marshal bolt request: %w", err)
-	}
-	if logger != nil {
-		logger.LogUpstreamRequest(boltAPIURL, map[string]string{"provider": "bolt"}, body)
-	}
+	retryContext := summarizeBoltFalseCompletionRetryContext(req.Messages)
+	currentReq := req
+	for attempt := 0; attempt < 3; attempt++ {
+		boltReq, inputEstimate := prepareRequest(currentReq, projectID)
+		body, err := json.Marshal(boltReq)
+		if err != nil {
+			return fmt.Errorf("failed to marshal bolt request: %w", err)
+		}
+		if logger != nil {
+			logger.LogUpstreamRequest(boltAPIURL, map[string]string{"provider": "bolt"}, body)
+		}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, boltAPIURL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("failed to create bolt request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Referer", "https://bolt.new/~/sb1-"+projectID)
-	c.applyCommonHeaders(httpReq)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, boltAPIURL, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("failed to create bolt request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Referer", "https://bolt.new/~/sb1-"+projectID)
+		c.applyCommonHeaders(httpReq)
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("failed to send bolt request: %w", err)
-	}
-	defer resp.Body.Close()
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			return fmt.Errorf("failed to send bolt request: %w", err)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return fmt.Errorf("bolt API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+			resp.Body.Close()
+			return fmt.Errorf("bolt API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
 
-	converter := newOutboundConverter(req.Model, inputEstimate.Total)
-	return converter.ProcessStream(resp.Body, logger, func(msg upstream.SSEMessage) error {
-		if onMessage != nil {
-			onMessage(msg)
+		converter := newOutboundConverter(currentReq.Model, inputEstimate.Total)
+		buffered := make([]upstream.SSEMessage, 0, 8)
+		err = converter.ProcessStream(resp.Body, logger, func(msg upstream.SSEMessage) error {
+			buffered = append(buffered, msg)
+			return nil
+		})
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		if attempt < 2 && shouldRetryBoltFalseCompletion(retryContext, converter) {
+			currentReq = buildBoltFalseCompletionRetryRequest(currentReq, retryContext)
+			continue
+		}
+		if attempt < 2 && shouldRetryBoltInvalidPathToolCall(retryContext, converter) {
+			currentReq = buildBoltInvalidPathRetryRequest(currentReq, retryContext, converter)
+			continue
+		}
+		if attempt < 2 && shouldRetryBoltRepeatedRead(retryContext, converter) {
+			currentReq = buildBoltRepeatedReadRetryRequest(currentReq, retryContext)
+			continue
+		}
+		if attempt < 2 && shouldRetryBoltProjectProbeAfterFailedMutation(retryContext, converter) {
+			currentReq = buildBoltProjectProbeAfterFailedMutationRetryRequest(currentReq, retryContext)
+			continue
+		}
+		if attempt < 2 && shouldRetryBoltEmptyTurnAfterRead(retryContext, converter) {
+			currentReq = buildBoltEmptyTurnRetryRequest(currentReq, retryContext)
+			continue
+		}
+
+		for _, msg := range buffered {
+			if onMessage != nil {
+				onMessage(msg)
+			}
 		}
 		return nil
-	})
+	}
+
+	return nil
 }
 
 func (c *Client) applyCommonHeaders(req *http.Request) {
@@ -413,21 +464,29 @@ func EstimateInputTokens(req upstream.UpstreamRequest) InputTokenEstimate {
 }
 
 func prepareRequest(req upstream.UpstreamRequest, projectID string) (*Request, InputTokenEstimate) {
+	req.Messages = trimBoltMessagesAfterMisleadingEmptyProjectProbe(req.Messages)
+	req.Messages = trimBoltMessagesAfterSupersededEmptyProjectProbe(req.Messages)
+	req.Messages = trimBoltMessagesAfterSupersededPositiveProjectProbe(req.Messages)
+	req.Messages = trimBoltMessagesAfterRedundantPositiveProjectProbe(req.Messages)
+	req.Messages = trimBoltMessagesForMissingWorkspaceTargets(req.Messages, req.Workdir)
 	req.Messages = trimBoltMessagesAfterSupersededEmptyProjectClarification(req.Messages)
+	req.Messages = trimBoltMessagesAfterSupersededInjectedFailure(req.Messages)
 	req.Messages = trimBoltMessagesAfterSupersededAssistantCompletion(req.Messages)
 	req.Messages = trimBoltMessagesAfterSupersededReadFollowup(req.Messages)
+	req.Messages = trimBoltMessagesAfterSupersededSuccessfulMutation(req.Messages)
+	req.Messages = trimBoltMessagesAfterSupersededMutationFailure(req.Messages)
 	promptParts := buildSystemPromptParts(req.System, req.Workdir, req.Tools, req.NoTools, req.Messages)
-	messages := buildBoltMessages(req.Messages)
+	messages := buildBoltMessages(req.Messages, req.Workdir)
 
 	boltReq := &Request{
 		ID:                   generateRandomID(16),
 		SelectedModel:        strings.TrimSpace(req.Model),
-		IsFirstPrompt:        false,
+		IsFirstPrompt:        req.IsFirstPrompt,
 		PromptMode:           "build",
 		EffortLevel:          "high",
 		ProjectID:            projectID,
 		GlobalSystemPrompt:   promptParts.FullPrompt,
-		ProjectPrompt:        promptParts.FullPrompt,
+		ProjectPrompt:        "",
 		StripeStatus:         "not-configured",
 		HostingProvider:      "bolt",
 		SupportIntegrations:  true,
@@ -478,13 +537,14 @@ func buildSystemPromptParts(system []prompt.SystemItem, workdir string, tools []
 	return parts
 }
 
-func buildBoltMessages(messages []prompt.Message) builtMessages {
+func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages {
 	built := builtMessages{
 		Items: make([]Message, 0, len(messages)),
 	}
 	toolUses := collectBoltToolUseMetadata(messages)
 	gitUploadIntent := detectRecentBoltGitUploadIntent(messages)
 	focusedFileAliases := collectFocusedBoltFileAliases(messages)
+	var latestSuccessfulMutationPath string
 	var lastUserMsgID string
 	var lastSubstantiveUserTask string
 	for _, msg := range messages {
@@ -502,11 +562,15 @@ func buildBoltMessages(messages []prompt.Message) builtMessages {
 
 		switch msg.Role {
 		case "user":
-			if standalone := extractBoltStandaloneUserText(msg); strings.TrimSpace(standalone) != "" && !LooksLikeContinuationOnlyText(standalone) {
+			standalone := extractBoltStandaloneUserText(msg)
+			if strings.TrimSpace(standalone) != "" && !LooksLikeContinuationOnlyText(standalone) {
 				lastSubstantiveUserTask = standalone
 			}
 			lastUserMsgID = boltMsg.ID
-			boltMsg.Content = extractBoltUserContent(blocks, toolUses, gitUploadIntent, focusedFileAliases, lastSubstantiveUserTask)
+			boltMsg.Content = extractBoltUserContent(blocks, toolUses, gitUploadIntent, focusedFileAliases, lastSubstantiveUserTask, workdir)
+			if shouldInjectBoltExistingFileMutationGuard(standalone, latestSuccessfulMutationPath) {
+				boltMsg.Content = appendBoltMutationGuard(boltMsg.Content, latestSuccessfulMutationPath)
+			}
 			boltMsg.RawContent = boltMsg.Content
 		case "assistant":
 			if lastUserMsgID != "" {
@@ -526,8 +590,64 @@ func buildBoltMessages(messages []prompt.Message) builtMessages {
 		}
 		built.Items = append(built.Items, boltMsg)
 		built.HistoryTokens += estimateBoltMessageTokens(boltMsg)
+		if path := latestBoltSuccessfulMutationPath(msg, toolUses); strings.TrimSpace(path) != "" {
+			latestSuccessfulMutationPath = path
+		}
 	}
 	return built
+}
+
+func latestBoltSuccessfulMutationPath(msg prompt.Message, toolUses map[string]boltToolUseMetadata) string {
+	for _, block := range normalizeBlocks(msg) {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+			continue
+		}
+		toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+		if !isBoltMutationTool(toolMeta.Name) || toolMeta.InvalidPath {
+			continue
+		}
+		rawText := sanitizeBoltToolResultText(stringifyContent(block.Content))
+		if rawText == "" || !isBoltToolResultSuccess(toolMeta.Name, rawText) {
+			continue
+		}
+		if strings.TrimSpace(toolMeta.Path) != "" {
+			return strings.TrimSpace(toolMeta.Path)
+		}
+	}
+	return ""
+}
+
+func shouldInjectBoltExistingFileMutationGuard(task string, latestSuccessfulMutationPath string) bool {
+	task = strings.TrimSpace(task)
+	if task == "" || LooksLikeContinuationOnlyText(task) {
+		return false
+	}
+	if strings.TrimSpace(latestSuccessfulMutationPath) == "" {
+		return false
+	}
+	lower := strings.ToLower(task)
+	for _, marker := range []string{
+		"添加", "修改", "更新", "完善", "实现", "重构", "补充", "优化", "修复",
+		"add ", "modify", "update", "implement", "edit ", "improve", "fix ", "refactor",
+	} {
+		if strings.Contains(lower, marker) || strings.Contains(task, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendBoltMutationGuard(content string, latestSuccessfulMutationPath string) string {
+	content = strings.TrimSpace(content)
+	path := strings.TrimSpace(latestSuccessfulMutationPath)
+	guard := "这是新的修改请求；更早的创建/更新成功只说明相关文件已存在，不代表这次新增功能已完成。不要直接总结，继续调用工具完成实际修改。"
+	if path != "" {
+		guard = "这是新的修改请求；更早对 `" + path + "` 的创建/更新成功只说明该文件已存在，不代表这次新增功能已完成。不要直接总结，继续调用工具完成实际修改。"
+	}
+	if content == "" {
+		return guard
+	}
+	return content + "\n\n" + guard
 }
 
 type boltToolUseMetadata struct {
@@ -667,8 +787,7 @@ func buildBoltToolPrompt(workdir string, tools []interface{}, noTools bool, mess
 	if hasBoltToolName(toolNames, "Bash") {
 		parts = append(parts, buildBoltGitExecutionPrompt(messages)...)
 	}
-	parts = append(parts, "单个工具调用格式: {\"tool\":\"Read\",\"parameters\":{\"file_path\":\"README.md\"}}")
-	parts = append(parts, "多个工具调用格式: {\"tool_calls\":[{\"function\":\"Glob\",\"parameters\":{\"path\":\".\",\"pattern\":\"*.go\"}},{\"function\":\"Read\",\"parameters\":{\"file_path\":\"README.md\"}}]}")
+	parts = append(parts, "工具调用只返回 JSON，例如 {\"tool\":\"Read\",\"parameters\":{\"file_path\":\"README.md\"}} 或 {\"tool_calls\":[...]}")
 	parts = append(parts, "拿到工具结果后，继续基于结果回答或发起下一步工具调用，不要重复已经完成的同一调用。")
 
 	return strings.Join(parts, "\n")
@@ -679,7 +798,7 @@ func buildBoltWorkspacePrompt(workdir string) []string {
 		return nil
 	}
 
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 4)
 	projectName := filepath.Base(filepath.Clean(workdir))
 	if strings.Contains(workdir, "\\") {
 		windowsPath := strings.ReplaceAll(workdir, "\\", "/")
@@ -690,12 +809,12 @@ func buildBoltWorkspacePrompt(workdir string) []string {
 	if projectName != "" && projectName != "." && projectName != string(filepath.Separator) {
 		parts = append(parts, "当前项目目录名: "+projectName)
 	}
-	parts = append(parts, "当前项目真实工作目录(仅用于回答用户询问“项目目录地址/当前路径/workspace 在哪里”这类问题): `"+workdir+"`")
-	parts = append(parts, "如果用户问项目目录地址、当前项目路径或 workspace 路径，直接回答上面的真实工作目录；不要回答 `/tmp/cc-agent/...`、`/mnt/...`、`~/...` 这类沙箱占位路径。")
-	parts = append(parts, "把项目根目录视为 `.`。Read/Write/Edit/Glob/Grep 的路径统一优先使用相对路径；如果要看项目根目录，直接用 `.`。")
-	parts = append(parts, "Bash 默认就在项目根目录执行，只写项目内的相对路径，不要拼接 `d:\\...`、`C:\\...`、`/mnt/...`、`~/...` 或 `/tmp/cc-agent/...`。")
+	parts = append(parts,
+		"当前项目真实工作目录: `"+workdir+"`。用户问当前路径时直接回答它，不要回答 `/tmp/cc-agent/...`、`/mnt/...`、`~/...`。",
+		"把项目根目录视为 `.`；Read/Write/Edit/Glob/Grep/Bash 优先用项目内相对路径。",
+	)
 	if isBoltGitRepository(workdir) {
-		parts = append(parts, "当前项目已经是一个 git 仓库；当用户要求上传到 git、提交或推送时，不要误判为没有 `.git` 仓库，应优先直接使用 Bash 执行 git status/add/commit/push。")
+		parts = append(parts, "当前项目已经是一个 git 仓库；用户要求上传到 git/提交/推送时，不要误判没有 `.git`，优先直接用 Bash 执行 git。")
 	}
 	return parts
 }
@@ -721,21 +840,23 @@ func buildBoltToolUsagePrompt(toolNames []string) []string {
 		"如果这回合决定调用工具，不要先输出“我来修改”“我先看一下”“让我读取后再改”之类说明文字；第一个非空输出字符应当直接是 `{`，避免浪费 token。",
 		"不要解释当前运行在什么系统或沙箱；如果需要确认目录或文件，直接调用工具。",
 		"如果某次工具结果提示路径不存在，不要据此断言项目为空；应优先改用 `.`、README.md、go.mod、package.json 等项目内相对路径继续调用工具。",
+		"如果文件名已经在用户话语、最近一次 Read/Write/Edit 结果或最近一次有效 Glob 结果里明确出现，优先直接对该路径 Read 或 Edit；不要先对 `.` 做宽泛 Glob。只有目标路径仍不明确时才使用 Glob/Grep。",
 		"如果目标文件已经存在，优先使用 Edit 做最小修改；只有在创建新文件，或你明确打算整文件重写且确实需要一次性替换全文时才使用 Write。",
-		"如果你刚刚已经 Read 了某个文件，接下来目标又是继续修改它，优先沿用同一路径继续 Edit；不要无故改成整文件 Write。",
-		"如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`，不要改写成 `/tmp/cc-agent/...` 之类的沙箱绝对路径重试；应继续坚持项目内相对路径，必要时先用 Read/Glob 确认再对同一路径继续操作。",
-		"如果最近一轮 Write/Edit 已经成功返回，不要仅为了确认结果就再次 Read 同一文件，更不要切到 `/tmp/cc-agent/...` 路径验证；优先直接向用户总结已经完成的修改。",
+		"对“添加支持/添加功能/X”这类请求，要让功能真正可用：至少同步补到受影响的解析/状态、核心逻辑、以及输出或交互层；不要只加显示开关、提示文案或空包装函数。",
+		"如果你刚刚已经 Read 了某个文件，接下来要继续修改它，优先沿用同一路径继续 Edit；除非出现明确冲突信号，否则不要重新从 Glob 开始。",
+		"如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`，继续坚持项目内相对路径，不要改写成 `/tmp/cc-agent/...` 之类的沙箱绝对路径。",
+		"如果最近一轮 Write/Edit 已经成功返回，优先直接总结已完成的修改；不要仅为了确认结果就再次 Read 同一文件。",
 		"如果最近一轮 Write/Edit 明确报错，或工具结果里包含 `<tool_use_error>`、`Error editing file`、`String to replace not found` 等失败信号，说明修改尚未完成；不要沿用更早的成功 Write/Edit 来声称已经更新完成，应继续基于最新错误和当前文件上下文调用工具修复，直到出现新的成功结果。",
-		"如果刚通过 Glob/Read/Bash 确认项目根目录为空，而用户目标已经足够具体，不要再次追问“要构建什么”；应直接在 `.` 创建最小可运行实现。",
+		"若 Glob/Read/Bash 已确认根目录为空且用户目标足够具体，直接在 `.` 创建最小可运行实现，不要再追问“要构建什么”。",
 		"空目录初始化时，优先直接使用 Write 创建首个文件，不要在 `No files found` 之后继续反复 Glob、ls 或再次输出空项目澄清。",
 		"如果用户明确要求修改、创建或继续完善代码，而历史里只有 Read/Glob/Grep/Bash 结果、还没有对应的成功 Write/Edit 结果，不要声称“已经完成”“文件已经包含该功能”或“无需进一步操作”；应继续调用工具完成实际修改。",
-		"如果你刚刚已经读过相关文件，用户随后又明确说“修改/改进/添加 X”，不要继续追问需求，也不要停在现状总结；直接基于已读内容继续 Edit/Write，只有缺少关键上下文时才补一次 Read。",
-		"在连续编程对话里，用户后续补充的技术说明、约束或示例，默认视为对当前实现的追加需求；如果需要落地到代码，继续调用工具修改，而不是只解释这段说明。",
+		"已读过相关文件后，用户再说“修改/改进/添加 X”时，直接基于已读内容继续 Edit/Write；仅缺关键片段时再补一次 Read。",
+		"连续编程对话里，用户后续补充的技术说明、约束或示例默认都是追加需求；要落地到代码时继续调用工具修改，不要只解释。",
 		"例如用户说“帮我用python写一个计算器”，默认直接在项目根目录创建 `calculator.py`。",
 	}
 	if hasBoltToolName(toolNames, "Task") {
 		parts = append(parts,
-			"只有在本地 Read/Glob/Grep/Bash 不足以完成广泛代码探索时才使用 `Task`；不要为了确认根目录、判断空项目或查单个文件就先发起子任务。",
+			"只有在本地 Read/Glob/Grep/Bash 不足以完成广泛探索时才使用 `Task`；不要为了确认根目录、空项目或单个文件就先发子任务。",
 			"如果客户端声明的是 `Agent`，上游 Bolt 可能会返回 `Task`；把它视为同一种子代理能力继续执行。",
 		)
 	}
@@ -748,13 +869,10 @@ func buildBoltGitExecutionPrompt(messages []prompt.Message) []string {
 	}
 	return []string{
 		"用户当前明确要求把当前代码上传到 git / 完成提交推送。这已经构成对本地 git add、git commit、git push 的明确授权。",
-		"这是一个基于已有工具结果继续推进的连续 git 流程；不要重新打招呼，不要把它当成新的空白任务重新开始。",
-		"只要已经收到 git status / git add / git diff 等工具结果，就说明这些结果来自用户本地真实仓库；不要再根据 `/tmp/cc-agent/...` 之类的沙箱占位路径声称“没有 .git 仓库”。",
-		"如果当前项目已经是 git 仓库，第一步优先直接使用 Bash 执行 git status 或 git status --short；不要先用 ls、Read、Glob 之类与 git 无关的检查替代。",
-		"这里的“当前代码”默认指当前工作区里的全部改动；除非用户明确说只提交部分文件，否则不要停下来追问“只提交已暂存的文件还是全部改动”。",
-		"如果已经确认当前项目是 git 仓库且 Bash 可用，不要只给用户输出命令步骤；应继续直接使用 Bash 执行 git status/add/commit/push，直到真正完成上传，或遇到真实命令错误再说明原因。",
-		"如果已经拿到 git status、git diff、git add 等结果，除非用户明确改变目标，否则不要在中间停下来改成文字建议。",
-		"如果上一轮某个 git 步骤已经成功返回结果，应直接继续下一步，不要重复已经成功完成的同一步；只有当最近一次工具结果明确报错时，才回退并重试。",
+		"这是连续 git 流程；不要重新打招呼，也不要再根据 `/tmp/cc-agent/...` 之类占位路径声称没有 `.git` 仓库。",
+		"如果当前项目已经是 git 仓库，第一步优先直接使用 Bash 执行 git status 或 git status --short；不要先用 ls、Read、Glob 替代。",
+		"这里的“当前代码”默认指当前工作区里的全部改动；除非用户明确只提交部分文件，否则不要只给用户输出命令步骤，应继续直接执行 git status/add/commit/push。",
+		"如果某个 git 步骤已经成功返回结果，不要重复已经成功完成的同一步。",
 	}
 }
 
@@ -817,19 +935,244 @@ func hasBoltToolName(toolNames []string, want string) bool {
 
 func buildBoltHistoryRecoveryPrompt(workdir string, messages []prompt.Message) []string {
 	invalidPath := detectRecentInvalidBoltHistoryPath(messages)
-	if invalidPath == "" {
+	missingPaths := detectMissingWorkspaceHistoryPaths(messages, workdir)
+	if invalidPath == "" && len(missingPaths) == 0 {
 		return nil
 	}
 
-	parts := []string{
-		"检测到历史里刚刚有一次无效的外部路径工具调用 `" + invalidPath + "`，它不是当前项目目录；把那次失败视为错误示例，不要复用这个路径，也不要基于它做同路径变体。",
+	parts := make([]string, 0, 6)
+	if invalidPath != "" {
+		parts = append(parts, "历史里刚出现过无效外部路径 `"+invalidPath+"`；它不在当前项目中，不要复用这个路径。")
 	}
 	if strings.TrimSpace(workdir) != "" {
-		parts = append(parts, "真实项目目录是 `"+workdir+"`；如果用户追问项目目录地址，直接回答这个真实工作目录。")
+		parts = append(parts, "真实项目目录是 `"+workdir+"`。")
 	}
-	parts = append(parts, "如果需要重新检查项目，下一次必须改用项目根目录 `.` 或 README.md、go.mod、package.json 这类项目内相对路径。")
-	parts = append(parts, "在至少成功查看一次 `.`、README.md、go.mod、package.json 等项目内路径之前，不要回答“项目为空”“没有文件”或“目录是空的”。")
+	if len(missingPaths) > 0 {
+		parts = append(parts, "历史里提到的 `"+strings.Join(missingPaths, "`, `")+"` 当前已不存在；更早的“已创建/已更新/已完成”都视为过期历史。")
+		parts = append(parts, "如果当前任务仍需要这些文件，以当前工作区状态重新创建或修改，不要沿用旧总结。")
+	}
+	parts = append(parts, "重新检查项目时用 `.`、README.md、go.mod、package.json 这类项目内相对路径；在至少成功查看一次 `.`、README.md、go.mod、package.json 等项目内路径之前，不要回答“项目为空”。")
 	return parts
+}
+
+func trimBoltMessagesForMissingWorkspaceTargets(messages []prompt.Message, workdir string) []prompt.Message {
+	missingPaths, missingAliases := collectMissingWorkspaceHistory(messages, workdir)
+	if len(missingAliases) == 0 {
+		return messages
+	}
+
+	toolUses := collectBoltToolUseMetadata(messages)
+	drop := make([]bool, len(messages))
+	dropped := false
+
+	for i, msg := range messages {
+		summary := summarizeBoltToolResultOnlyMessage(msg, toolUses)
+		if summary.IsToolResultOnly && (sharesBoltPathAlias(summary.ReadAliases, missingAliases) ||
+			sharesBoltPathAlias(summary.SuccessfulMutationAliases, missingAliases) ||
+			sharesBoltPathAlias(summary.FailedMutationAliases, missingAliases)) {
+			drop[i] = true
+			dropped = true
+			continue
+		}
+
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
+			text := extractBoltAssistantHistoryContent(normalizeBlocks(msg))
+			if looksLikeBoltAssistantCompletionSummary(text) || looksLikeBoltStaleFilePresenceSummary(text) {
+				prevIdx := previousBoltVisibleMessageIndex(messages, i-1)
+				if prevIdx >= 0 {
+					prevSummary := summarizeBoltToolResultOnlyMessage(messages[prevIdx], toolUses)
+					if prevSummary.IsToolResultOnly && (sharesBoltPathAlias(prevSummary.ReadAliases, missingAliases) ||
+						sharesBoltPathAlias(prevSummary.SuccessfulMutationAliases, missingAliases) ||
+						sharesBoltPathAlias(prevSummary.FailedMutationAliases, missingAliases)) {
+						drop[i] = true
+						dropped = true
+						continue
+					}
+				}
+				for _, path := range missingPaths {
+					if strings.Contains(text, path) || strings.Contains(text, filepath.Base(path)) {
+						drop[i] = true
+						dropped = true
+						break
+					}
+				}
+			}
+		}
+
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
+			text := extractBoltStandaloneUserText(msg)
+			if looksLikeBoltInjectedRetryPromptForMissingPaths(text, missingPaths) {
+				drop[i] = true
+				dropped = true
+			}
+		}
+	}
+
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
+func looksLikeBoltInjectedRetryPromptForMissingPaths(text string, missingPaths []string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || len(missingPaths) == 0 {
+		return false
+	}
+	matchedPath := false
+	for _, path := range missingPaths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if strings.Contains(text, "`"+path+"`") || strings.Contains(text, filepath.Base(path)) {
+			matchedPath = true
+			break
+		}
+	}
+	if !matchedPath {
+		return false
+	}
+	for _, marker := range []string{
+		"上一轮你在没有任何新的成功 Write/Edit 工具结果的情况下直接声称已经完成，这是错误的。",
+		"你刚刚已经成功 Read 过",
+		"上一轮在已经拿到",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeBoltStaleFilePresenceSummary(text string) bool {
+	text = sanitizeBoltAssistantText(text)
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"可直接运行",
+		"已经完整实现",
+		"已经存在",
+		"无需重复添加",
+		"功能已经存在",
+		"file is already created",
+		"already exists",
+	} {
+		if strings.Contains(lower, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
+func detectMissingWorkspaceHistoryPaths(messages []prompt.Message, workdir string) []string {
+	paths, _ := collectMissingWorkspaceHistory(messages, workdir)
+	return paths
+}
+
+func collectMissingWorkspaceHistory(messages []prompt.Message, workdir string) ([]string, map[string]struct{}) {
+	workdir = strings.Trim(strings.TrimSpace(workdir), "\"'`")
+	if workdir == "" || len(messages) == 0 {
+		return nil, nil
+	}
+
+	toolUses := collectBoltToolUseMetadata(messages)
+	pathSet := make(map[string]struct{})
+	aliasSet := make(map[string]struct{})
+
+	for _, msg := range messages {
+		for _, block := range normalizeBlocks(msg) {
+			if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+				continue
+			}
+			toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+			if toolMeta.InvalidPath || strings.TrimSpace(toolMeta.Path) == "" || len(toolMeta.Aliases) == 0 {
+				continue
+			}
+			rawText := sanitizeBoltToolResultText(stringifyContent(block.Content))
+			if strings.TrimSpace(rawText) == "" {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(toolMeta.Name), "Read") {
+				if isBoltToolResultError(block, rawText) {
+					continue
+				}
+			} else if isBoltMutationTool(toolMeta.Name) {
+				if !isBoltToolResultSuccess(toolMeta.Name, rawText) && !isBoltToolResultError(block, rawText) {
+					continue
+				}
+			} else {
+				continue
+			}
+
+			relativePath, ok := boltWorkspaceRelativePath(toolMeta.Path, workdir)
+			if !ok {
+				continue
+			}
+			if boltWorkspacePathExists(relativePath, workdir) {
+				continue
+			}
+			pathSet[relativePath] = struct{}{}
+			for alias := range toolMeta.Aliases {
+				aliasSet[alias] = struct{}{}
+			}
+		}
+	}
+
+	if len(pathSet) == 0 {
+		return nil, nil
+	}
+	paths := make([]string, 0, len(pathSet))
+	for path := range pathSet {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, aliasSet
+}
+
+func boltWorkspaceRelativePath(path, workdir string) (string, bool) {
+	path = strings.Trim(strings.TrimSpace(path), "\"'`")
+	workdir = strings.Trim(strings.TrimSpace(workdir), "\"'`")
+	if path == "" || workdir == "" || looksLikeInvalidBoltPath(path) {
+		return "", false
+	}
+
+	if filepath.IsAbs(path) {
+		rel, err := filepath.Rel(workdir, path)
+		if err != nil {
+			return "", false
+		}
+		rel = filepath.Clean(rel)
+		if rel == "." || strings.HasPrefix(rel, "..") {
+			return "", false
+		}
+		return filepath.ToSlash(rel), true
+	}
+
+	rel := filepath.Clean(path)
+	if rel == "." || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+func boltWorkspacePathExists(relativePath, workdir string) bool {
+	relativePath = strings.Trim(strings.TrimSpace(relativePath), "\"'`")
+	workdir = strings.Trim(strings.TrimSpace(workdir), "\"'`")
+	if relativePath == "" || workdir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(workdir, filepath.FromSlash(relativePath)))
+	return err == nil
 }
 
 func detectRecentInvalidBoltHistoryPath(messages []prompt.Message) string {
@@ -1532,6 +1875,41 @@ func trimBoltMessagesAfterSupersededAssistantCompletion(messages []prompt.Messag
 	return trimmed
 }
 
+func trimBoltMessagesAfterSupersededInjectedFailure(messages []prompt.Message) []prompt.Message {
+	if len(messages) < 3 {
+		return messages
+	}
+
+	drop := make([]bool, len(messages))
+	dropped := false
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
+			continue
+		}
+		text := extractBoltAssistantHistoryContent(normalizeBlocks(msg))
+		if !looksLikeBoltInjectedFailureText(text) {
+			continue
+		}
+		if nextBoltStandaloneUserMessageIndex(messages, i+1) < 0 {
+			continue
+		}
+		drop[i] = true
+		dropped = true
+	}
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
 func looksLikeBoltEmptyProjectClarification(text string) bool {
 	text = sanitizeBoltAssistantText(text)
 	if strings.TrimSpace(text) == "" {
@@ -1572,6 +1950,26 @@ func looksLikeBoltAssistantCompletionSummary(text string) bool {
 	return false
 }
 
+func looksLikeBoltInjectedFailureText(text string) bool {
+	text = sanitizeBoltAssistantText(text)
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"request failed:",
+		"request failed：",
+		"request exhausted:",
+		"authentication error:",
+		"access forbidden (403):",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func trimBoltMessagesAfterSupersededReadFollowup(messages []prompt.Message) []prompt.Message {
 	if len(messages) < 5 {
 		return messages
@@ -1592,10 +1990,53 @@ func trimBoltMessagesAfterSupersededReadFollowup(messages []prompt.Message) []pr
 				break
 			}
 			next := summarizeBoltToolResultOnlyMessage(messages[j], toolUses)
-			if !next.IsToolResultOnly || len(next.SuccessfulMutationAliases) == 0 {
+			if !next.IsToolResultOnly {
 				continue
 			}
-			if sharesBoltPathAlias(current.ReadAliases, next.SuccessfulMutationAliases) {
+			if sharesBoltPathAlias(current.ReadAliases, next.ReadAliases) ||
+				sharesBoltPathAlias(current.ReadAliases, next.SuccessfulMutationAliases) {
+				drop[i] = true
+				dropped = true
+				break
+			}
+		}
+	}
+
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
+func trimBoltMessagesAfterSupersededSuccessfulMutation(messages []prompt.Message) []prompt.Message {
+	if len(messages) < 5 {
+		return messages
+	}
+
+	toolUses := collectBoltToolUseMetadata(messages)
+	drop := make([]bool, len(messages))
+	dropped := false
+
+	for i := 0; i < len(messages); i++ {
+		current := summarizeBoltToolResultOnlyMessage(messages[i], toolUses)
+		if !current.IsToolResultOnly || len(current.SuccessfulMutationAliases) == 0 {
+			continue
+		}
+
+		for j := i + 1; j < len(messages); j++ {
+			next := summarizeBoltToolResultOnlyMessage(messages[j], toolUses)
+			if !next.IsToolResultOnly {
+				continue
+			}
+			if sharesBoltPathAlias(current.SuccessfulMutationAliases, next.ReadAliases) ||
+				sharesBoltPathAlias(current.SuccessfulMutationAliases, next.SuccessfulMutationAliases) {
 				drop[i] = true
 				dropped = true
 				break
@@ -1620,6 +2061,7 @@ type boltToolResultOnlySummary struct {
 	IsToolResultOnly          bool
 	ReadAliases               map[string]struct{}
 	SuccessfulMutationAliases map[string]struct{}
+	FailedMutationAliases     map[string]struct{}
 }
 
 func summarizeBoltToolResultOnlyMessage(msg prompt.Message, toolUses map[string]boltToolUseMetadata) boltToolResultOnlySummary {
@@ -1660,10 +2102,586 @@ func summarizeBoltToolResultOnlyMessage(msg prompt.Message, toolUses map[string]
 					summary.SuccessfulMutationAliases[alias] = struct{}{}
 				}
 			}
+			if isBoltToolResultError(block, rawText) {
+				if summary.FailedMutationAliases == nil {
+					summary.FailedMutationAliases = make(map[string]struct{})
+				}
+				for alias := range toolMeta.Aliases {
+					summary.FailedMutationAliases[alias] = struct{}{}
+				}
+			}
 		}
 	}
 
 	return summary
+}
+
+func trimBoltMessagesAfterSupersededMutationFailure(messages []prompt.Message) []prompt.Message {
+	if len(messages) < 5 {
+		return messages
+	}
+
+	toolUses := collectBoltToolUseMetadata(messages)
+	drop := make([]bool, len(messages))
+	dropped := false
+
+	for i := 0; i < len(messages); i++ {
+		current := summarizeBoltToolResultOnlyMessage(messages[i], toolUses)
+		if !current.IsToolResultOnly || len(current.FailedMutationAliases) == 0 {
+			continue
+		}
+
+		for j := i + 1; j < len(messages); j++ {
+			if extractBoltStandaloneUserText(messages[j]) != "" {
+				break
+			}
+			next := summarizeBoltToolResultOnlyMessage(messages[j], toolUses)
+			if !next.IsToolResultOnly {
+				continue
+			}
+			if sharesBoltPathAlias(current.FailedMutationAliases, next.ReadAliases) ||
+				sharesBoltPathAlias(current.FailedMutationAliases, next.FailedMutationAliases) ||
+				sharesBoltPathAlias(current.FailedMutationAliases, next.SuccessfulMutationAliases) {
+				drop[i] = true
+				dropped = true
+				break
+			}
+		}
+	}
+
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
+func trimBoltMessagesAfterMisleadingEmptyProjectProbe(messages []prompt.Message) []prompt.Message {
+	if len(messages) < 3 {
+		return messages
+	}
+
+	toolUses := collectBoltToolUseMetadata(messages)
+	drop := make([]bool, len(messages))
+	dropped := false
+	seenSuccessfulMutation := false
+
+	for i := 0; i < len(messages); i++ {
+		summary := summarizeBoltToolResultOnlyMessage(messages[i], toolUses)
+		if seenSuccessfulMutation && isBoltMisleadingEmptyProjectProbeMessage(messages[i], toolUses) {
+			drop[i] = true
+			dropped = true
+			continue
+		}
+		if len(summary.SuccessfulMutationAliases) > 0 {
+			seenSuccessfulMutation = true
+		}
+	}
+
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
+func trimBoltMessagesAfterSupersededEmptyProjectProbe(messages []prompt.Message) []prompt.Message {
+	if len(messages) < 5 {
+		return messages
+	}
+
+	toolUses := collectBoltToolUseMetadata(messages)
+	drop := make([]bool, len(messages))
+	dropped := false
+
+	for i := 0; i < len(messages); i++ {
+		if !isBoltMisleadingEmptyProjectProbeMessage(messages[i], toolUses) {
+			continue
+		}
+		for j := i + 1; j < len(messages); j++ {
+			if extractBoltStandaloneUserText(messages[j]) != "" {
+				break
+			}
+			if isBoltPositiveProjectProbeMessage(messages[j], toolUses) {
+				drop[i] = true
+				dropped = true
+				break
+			}
+		}
+	}
+
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
+func trimBoltMessagesAfterSupersededPositiveProjectProbe(messages []prompt.Message) []prompt.Message {
+	if len(messages) < 5 {
+		return messages
+	}
+
+	toolUses := collectBoltToolUseMetadata(messages)
+	drop := make([]bool, len(messages))
+	dropped := false
+
+	for i := 0; i < len(messages); i++ {
+		if !isBoltPositiveProjectProbeMessage(messages[i], toolUses) {
+			continue
+		}
+		for j := i + 1; j < len(messages); j++ {
+			if extractBoltStandaloneUserText(messages[j]) != "" {
+				break
+			}
+			next := summarizeBoltToolResultOnlyMessage(messages[j], toolUses)
+			if !next.IsToolResultOnly {
+				continue
+			}
+			if len(next.ReadAliases) > 0 && isBoltPositiveProjectProbeForAliases(messages[i], toolUses, next.ReadAliases) {
+				drop[i] = true
+				dropped = true
+				break
+			}
+			if len(next.SuccessfulMutationAliases) > 0 && isBoltPositiveProjectProbeForAliases(messages[i], toolUses, next.SuccessfulMutationAliases) {
+				drop[i] = true
+				dropped = true
+				break
+			}
+		}
+	}
+
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
+func trimBoltMessagesAfterRedundantPositiveProjectProbe(messages []prompt.Message) []prompt.Message {
+	if len(messages) < 5 {
+		return messages
+	}
+
+	toolUses := collectBoltToolUseMetadata(messages)
+	drop := make([]bool, len(messages))
+	dropped := false
+
+	for i := 0; i < len(messages); i++ {
+		if !isBoltPositiveProjectProbeMessage(messages[i], toolUses) {
+			continue
+		}
+		for j := i - 1; j >= 0; j-- {
+			if extractBoltStandaloneUserText(messages[j]) != "" {
+				break
+			}
+			prev := summarizeBoltToolResultOnlyMessage(messages[j], toolUses)
+			if !prev.IsToolResultOnly {
+				continue
+			}
+			if len(prev.ReadAliases) > 0 && isBoltPositiveProjectProbeForAliases(messages[i], toolUses, prev.ReadAliases) {
+				drop[i] = true
+				dropped = true
+				break
+			}
+			if len(prev.SuccessfulMutationAliases) > 0 && isBoltPositiveProjectProbeForAliases(messages[i], toolUses, prev.SuccessfulMutationAliases) {
+				drop[i] = true
+				dropped = true
+				break
+			}
+		}
+	}
+
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
+func isBoltMisleadingEmptyProjectProbeMessage(msg prompt.Message, toolUses map[string]boltToolUseMetadata) bool {
+	if !isBoltToolResultOnlyUserMessage(msg) {
+		return false
+	}
+
+	blocks := normalizeBlocks(msg)
+	hasProbe := false
+	for _, block := range blocks {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+			continue
+		}
+		rawText := strings.TrimSpace(sanitizeBoltToolResultText(stringifyContent(block.Content)))
+		if rawText == "" {
+			continue
+		}
+		toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+		if !isBoltEmptyProjectProbeResult(toolMeta, rawText) {
+			return false
+		}
+		hasProbe = true
+	}
+	return hasProbe
+}
+
+func isBoltPositiveProjectProbeMessage(msg prompt.Message, toolUses map[string]boltToolUseMetadata) bool {
+	if !isBoltToolResultOnlyUserMessage(msg) {
+		return false
+	}
+
+	blocks := normalizeBlocks(msg)
+	hasPositive := false
+	for _, block := range blocks {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+			continue
+		}
+		rawText := strings.TrimSpace(sanitizeBoltToolResultText(stringifyContent(block.Content)))
+		if rawText == "" {
+			continue
+		}
+		toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+		if !isBoltProjectProbeTool(toolMeta) {
+			return false
+		}
+		if isBoltToolResultError(block, rawText) || isBoltEmptyProjectProbeResult(toolMeta, rawText) {
+			return false
+		}
+		hasPositive = true
+	}
+	return hasPositive
+}
+
+func isBoltPositiveProjectProbeForAliases(msg prompt.Message, toolUses map[string]boltToolUseMetadata, aliases map[string]struct{}) bool {
+	if len(aliases) == 0 || !isBoltToolResultOnlyUserMessage(msg) {
+		return false
+	}
+
+	blocks := normalizeBlocks(msg)
+	hasPositive := false
+	for _, block := range blocks {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+			continue
+		}
+		rawText := strings.TrimSpace(sanitizeBoltToolResultText(stringifyContent(block.Content)))
+		if rawText == "" {
+			continue
+		}
+		toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+		if !isBoltProjectProbeTool(toolMeta) || isBoltToolResultError(block, rawText) || isBoltEmptyProjectProbeResult(toolMeta, rawText) {
+			return false
+		}
+		if !containsBoltPathAliasInText(rawText, aliases) {
+			return false
+		}
+		hasPositive = true
+	}
+	return hasPositive
+}
+
+func containsBoltPathAliasInText(text string, aliases map[string]struct{}) bool {
+	if len(aliases) == 0 {
+		return false
+	}
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(text), "\\", "/"))
+	if normalized == "" {
+		return false
+	}
+	for alias := range aliases {
+		if alias != "" && strings.Contains(normalized, strings.ToLower(strings.ReplaceAll(alias, "\\", "/"))) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBoltEmptyProjectProbeResult(toolMeta boltToolUseMetadata, rawText string) bool {
+	if strings.TrimSpace(rawText) != "No files found" {
+		return false
+	}
+	if !isBoltProjectProbeTool(toolMeta) {
+		return false
+	}
+	return true
+}
+
+func isBoltProjectProbeTool(toolMeta boltToolUseMetadata) bool {
+	switch strings.TrimSpace(toolMeta.Name) {
+	case "Glob", "Grep":
+	default:
+		return false
+	}
+	path := strings.Trim(strings.TrimSpace(toolMeta.Path), "\"'`")
+	return path == "" || path == "."
+}
+
+func summarizeBoltFalseCompletionRetryContext(messages []prompt.Message) boltFalseCompletionRetryContext {
+	if len(messages) == 0 {
+		return boltFalseCompletionRetryContext{}
+	}
+
+	toolUses := collectBoltToolUseMetadata(messages)
+	ctx := boltFalseCompletionRetryContext{}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if task := extractBoltStandaloneUserText(messages[i]); strings.TrimSpace(task) != "" && !LooksLikeContinuationOnlyText(task) {
+			ctx.LastTask = strings.TrimSpace(task)
+			break
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		summary := summarizeBoltToolResultOnlyMessage(messages[i], toolUses)
+		if !summary.IsToolResultOnly {
+			continue
+		}
+		if len(summary.FailedMutationAliases) > 0 {
+			ctx.HasRecentFailedMutation = true
+			ctx.FailedPath = firstBoltFailedMutationPath(messages[i], toolUses)
+			return ctx
+		}
+		if len(summary.ReadAliases) > 0 {
+			ctx.HasRecentReadOnlyFollow = true
+			ctx.ReadPath = firstBoltReadPath(messages[i], toolUses)
+			return ctx
+		}
+	}
+	return ctx
+}
+
+func firstBoltFailedMutationPath(msg prompt.Message, toolUses map[string]boltToolUseMetadata) string {
+	for _, block := range normalizeBlocks(msg) {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+			continue
+		}
+		toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+		if !isBoltMutationTool(toolMeta.Name) || toolMeta.InvalidPath {
+			continue
+		}
+		rawText := sanitizeBoltToolResultText(stringifyContent(block.Content))
+		if rawText == "" || !isBoltToolResultError(block, rawText) {
+			continue
+		}
+		if strings.TrimSpace(toolMeta.Path) != "" {
+			return strings.TrimSpace(toolMeta.Path)
+		}
+	}
+	return ""
+}
+
+func firstBoltReadPath(msg prompt.Message, toolUses map[string]boltToolUseMetadata) string {
+	for _, block := range normalizeBlocks(msg) {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+			continue
+		}
+		toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+		if !strings.EqualFold(strings.TrimSpace(toolMeta.Name), "Read") || toolMeta.InvalidPath {
+			continue
+		}
+		rawText := sanitizeBoltToolResultText(stringifyContent(block.Content))
+		if rawText == "" || isBoltToolResultError(block, rawText) {
+			continue
+		}
+		if strings.TrimSpace(toolMeta.Path) != "" {
+			return strings.TrimSpace(toolMeta.Path)
+		}
+	}
+	return ""
+}
+
+func shouldRetryBoltFalseCompletion(ctx boltFalseCompletionRetryContext, converter *outboundConverter) bool {
+	if converter == nil || converter.emittedToolUse {
+		return false
+	}
+	finalText := converter.FinalText()
+	if !looksLikeBoltAssistantCompletionSummary(finalText) && !looksLikeBoltStaleFilePresenceSummary(finalText) {
+		return false
+	}
+	if ctx.HasRecentFailedMutation {
+		return true
+	}
+	return ctx.HasRecentReadOnlyFollow && textIndicatesBoltCodeModification(ctx.LastTask)
+}
+
+func shouldRetryBoltInvalidPathToolCall(ctx boltFalseCompletionRetryContext, converter *outboundConverter) bool {
+	if converter == nil || !converter.emittedToolUse {
+		return false
+	}
+	if !textIndicatesBoltCodeModification(ctx.LastTask) {
+		return false
+	}
+	return looksLikeInvalidBoltPath(converter.FirstToolPath())
+}
+
+func shouldRetryBoltRepeatedRead(ctx boltFalseCompletionRetryContext, converter *outboundConverter) bool {
+	if converter == nil || !converter.emittedToolUse {
+		return false
+	}
+	if !ctx.HasRecentReadOnlyFollow || !textIndicatesBoltCodeModification(ctx.LastTask) {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(converter.FirstToolName()), "Read") {
+		return false
+	}
+	return sharesBoltPathAlias(buildBoltPathAliases(ctx.ReadPath), buildBoltPathAliases(converter.FirstToolPath()))
+}
+
+func shouldRetryBoltEmptyTurnAfterRead(ctx boltFalseCompletionRetryContext, converter *outboundConverter) bool {
+	if converter == nil || converter.emittedToolUse {
+		return false
+	}
+	if !ctx.HasRecentReadOnlyFollow || !textIndicatesBoltCodeModification(ctx.LastTask) {
+		return false
+	}
+	if strings.TrimSpace(converter.FinalText()) != "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(converter.FinishReason()), "end_turn")
+}
+
+func shouldRetryBoltProjectProbeAfterFailedMutation(ctx boltFalseCompletionRetryContext, converter *outboundConverter) bool {
+	if converter == nil || !converter.emittedToolUse {
+		return false
+	}
+	if !ctx.HasRecentFailedMutation || !textIndicatesBoltCodeModification(ctx.LastTask) {
+		return false
+	}
+	return isBoltRootProjectProbeToolCall(converter.FirstToolName(), converter.FirstToolPath())
+}
+
+func isBoltRootProjectProbeToolCall(name, path string) bool {
+	switch strings.TrimSpace(name) {
+	case "Glob", "Grep":
+	default:
+		return false
+	}
+	path = strings.Trim(strings.TrimSpace(path), "\"'`")
+	return path == "" || path == "."
+}
+
+func boltRetryPathHint(ctx boltFalseCompletionRetryContext) string {
+	if strings.TrimSpace(ctx.FailedPath) != "" {
+		return "`" + strings.TrimSpace(ctx.FailedPath) + "`"
+	}
+	if strings.TrimSpace(ctx.ReadPath) != "" {
+		return "`" + strings.TrimSpace(ctx.ReadPath) + "`"
+	}
+	return "目标文件"
+}
+
+func boltRetryCompletionGuard() string {
+	return "禁总结，先继续工具修改；若调用工具，首字必须是 `{`。"
+}
+
+func boltRetryTaskLead(ctx boltFalseCompletionRetryContext) string {
+	task := strings.TrimSpace(ctx.LastTask)
+	if task == "" {
+		return "继续当前明确任务。"
+	}
+	return "继续这个明确任务：" + task + "。"
+}
+
+func boltRetryAppend(req upstream.UpstreamRequest, correction string) upstream.UpstreamRequest {
+	retry := req
+	retry.Messages = append(append([]prompt.Message{}, req.Messages...), prompt.Message{
+		Role:    "user",
+		Content: prompt.MessageContent{Text: correction},
+	})
+	return retry
+}
+
+func buildBoltFalseCompletionRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext) upstream.UpstreamRequest {
+	pathHint := boltRetryPathHint(ctx)
+	correction := boltRetryTaskLead(ctx)
+	if ctx.HasRecentFailedMutation {
+		correction += " RETRY: 上次修改仍失败，别复用旧的 Edit 命中参数。对 " + pathHint + " 直接修复；若旧片段对不上，就改用整文件 Write。"
+	} else {
+		correction += " RETRY: 上次只有 Read、没有新的成功 Write/Edit，不能算完成。直接基于 " + pathHint + " 继续 Edit/Write，不要把旧成功或文件存在当成这次已完成。"
+	}
+	correction += " " + boltRetryCompletionGuard()
+	return boltRetryAppend(req, correction)
+}
+
+func buildBoltProjectProbeAfterFailedMutationRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext) upstream.UpstreamRequest {
+	pathHint := boltRetryPathHint(ctx)
+	correction := boltRetryTaskLead(ctx)
+	correction += " RETRY: 别再对根目录做 Glob/Grep 探路。直接把修改落到 " + pathHint + "；若 Edit 命不中，就改用 Write。"
+	correction += " " + boltRetryCompletionGuard()
+	return boltRetryAppend(req, correction)
+}
+
+func buildBoltRepeatedReadRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext) upstream.UpstreamRequest {
+	pathHint := boltRetryPathHint(ctx)
+	correction := boltRetryTaskLead(ctx)
+	correction += " RETRY: 刚读过 " + pathHint + "，不要重复 Read。同一路径直接继续 Edit/Write；仅在缺少马上要改的片段时再补读。"
+	correction += " " + boltRetryCompletionGuard()
+	return boltRetryAppend(req, correction)
+}
+
+func buildBoltInvalidPathRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext, converter *outboundConverter) upstream.UpstreamRequest {
+	badPath := ""
+	if converter != nil {
+		badPath = strings.TrimSpace(converter.FirstToolPath())
+	}
+	pathHint := boltRetryPathHint(ctx)
+	correction := boltRetryTaskLead(ctx)
+	if badPath != "" {
+		correction += " RETRY: 刚才用了无效沙箱路径 `" + badPath + "`。不要再用 `/tmp/cc-agent/...`、`/mnt/...`、盘符绝对路径；直接改回项目内相对路径，优先处理 " + pathHint + "。"
+	} else {
+		correction += " RETRY: 刚才用了无效沙箱路径。不要再用 `/tmp/cc-agent/...`、`/mnt/...`、盘符绝对路径；直接改回项目内相对路径，优先处理 " + pathHint + "。"
+	}
+	correction += " " + boltRetryCompletionGuard()
+	return boltRetryAppend(req, correction)
+}
+
+func buildBoltEmptyTurnRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext) upstream.UpstreamRequest {
+	pathHint := boltRetryPathHint(ctx)
+	correction := boltRetryTaskLead(ctx)
+	correction += " RETRY: 已拿到 " + pathHint + " 的内容，不要空结束。直接继续 Edit/Write，不要再读同一路径。"
+	correction += " " + boltRetryCompletionGuard()
+	return boltRetryAppend(req, correction)
+}
+
+func textIndicatesBoltCodeModification(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"添加", "修改", "更新", "完善", "实现", "重构", "创建", "写一个", "写个", "补充",
+		"add ", "modify", "update", "implement", "create", "write ", "edit ", "refactor", "improve",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func extractBoltStandaloneUserText(msg prompt.Message) string {
@@ -1825,7 +2843,7 @@ type boltSerializedToolResult struct {
 	Drop        bool
 }
 
-func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]boltToolUseMetadata, gitUploadIntent bool, focusedFileAliases map[string]struct{}, continuationTask string) string {
+func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]boltToolUseMetadata, gitUploadIntent bool, focusedFileAliases map[string]struct{}, continuationTask string, workdir string) string {
 	parts := make([]boltUserContentPart, 0, len(blocks))
 	results := make([]*boltSerializedToolResult, 0, len(blocks))
 	hasUserText := false
@@ -1842,6 +2860,7 @@ func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]bo
 				continue
 			}
 			toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+			rawText = relativizeBoltWorkdirPaths(rawText, workdir)
 			text := compactBoltToolResultText(toolMeta, rawText, focusedFileAliases)
 			result := &boltSerializedToolResult{
 				Text:        text,
@@ -1956,27 +2975,27 @@ func hasVisibleFailedMutationResult(results []*boltSerializedToolResult) bool {
 
 func formatBoltToolResultContinuation(gitUploadIntent bool, continuationTask string, mutationSucceeded bool, mutationFailed bool) string {
 	if gitUploadIntent {
-		return "继续完成当前的 git 提交与推送任务。以下内容是上一轮工具调用刚返回的结果，这些结果来自用户本地真实仓库，不是 `/tmp/cc-agent/...` 沙箱。请直接基于这些结果继续，不要重新打招呼，也不要把它当成新的空白任务。"
+		return "继续完成当前的 git 提交与推送任务。以下结果来自用户本地真实仓库，不是 `/tmp/cc-agent/...` 沙箱。"
 	}
 
 	task := truncateBoltContinuationTask(strings.TrimSpace(continuationTask), 120)
 	if mutationFailed {
 		if task != "" {
-			return "继续完成用户刚才明确提出的任务：" + task + "。以下内容是上一轮工具调用刚返回的失败结果，说明最近一次 Write/Edit 尚未完成请求的修改。不要声称已经完成，不要把更早的成功 Write/Edit 当成这次修改已经成功；应直接基于这些失败结果和已有上下文继续调用 Read/Edit/Write/Bash 修复，直到出现新的成功工具结果。如果目标文件已经存在或你刚刚读过它，优先继续调用 Edit 做最小修改；不要先输出说明文字，一旦决定调用工具，本回合第一个非空输出字符应当直接是 `{`。"
+			return "继续完成用户刚才明确提出的任务：" + task + "。以下是上一轮失败的工具结果。最近一次 Write/Edit 还没成功；不要声称已完成，也不要把更早的成功结果当成这次修改已完成。直接继续修复，优先对已读或已存在文件用 Edit；只有缺少马上要改的片段时才补 Read。若报 `String to replace not found` 且路径已知，不要再对 `.` 做 Glob/Grep，必要时直接改用 Write。若决定调用工具，首个非空输出字符直接是 `{`。"
 		}
-		return "以下内容是上一轮工具调用刚返回的失败结果，说明最近一次 Write/Edit 尚未完成请求的修改。不要声称已经完成，不要把更早的成功 Write/Edit 当成这次修改已经成功；应直接基于这些失败结果和已有上下文继续调用 Read/Edit/Write/Bash 修复，直到出现新的成功工具结果。如果目标文件已经存在或你刚刚读过它，优先继续调用 Edit 做最小修改；不要先输出说明文字，一旦决定调用工具，本回合第一个非空输出字符应当直接是 `{`。"
+		return "以下是上一轮失败的工具结果。最近一次 Write/Edit 还没成功；不要声称已完成，也不要把更早的成功结果当成这次修改已完成。直接继续修复，优先对已读或已存在文件用 Edit；只有缺少马上要改的片段时才补 Read。若报 `String to replace not found` 且路径已知，不要再对 `.` 做 Glob/Grep，必要时直接改用 Write。若决定调用工具，首个非空输出字符直接是 `{`。"
 	}
 	if mutationSucceeded {
 		if task != "" {
-			return "继续完成用户刚才明确提出的任务：" + task + "。以下内容是上一轮工具调用刚返回的成功结果。若 Write/Edit 已经成功，就优先直接向用户总结已完成的修改，不要仅为了确认结果而再次 Read 同一文件，更不要切到 `/tmp/cc-agent/...` 路径验证；只有结果本身明确报错或不完整时才继续调用工具。"
+			return "成功工具结果如下。只做最小确认：按“" + task + "”已创建/更新相应文件；不要补充文件内容细节。"
 		}
-		return "以下内容是上一轮工具调用刚返回的成功结果。若 Write/Edit 已经成功，就优先直接向用户总结已完成的修改，不要仅为了确认结果而再次 Read 同一文件，更不要切到 `/tmp/cc-agent/...` 路径验证；只有结果本身明确报错或不完整时才继续调用工具。"
+		return "成功工具结果如下。只做最小确认：说明相应文件已创建/更新成功；不要补充文件内容细节。"
 	}
 	if task != "" {
-		return "继续完成用户刚才明确提出的任务：" + task + "。以下内容是上一轮工具调用刚返回的结果。请直接基于这些结果继续执行；如果这个任务需要修改或创建代码，就继续调用 Edit/Write/Bash 完成，不要只停在现状总结，不要重新打招呼，也不要把它当成新的空白任务。如果目标文件已经存在或你刚刚读过它，优先继续调用 Edit 做最小修改；只有在创建新文件，或你明确要整文件重写时才使用 Write。不要先输出说明文字，一旦决定调用工具，本回合第一个非空输出字符应当直接是 `{`。"
+		return "继续完成用户刚才明确提出的任务：" + task + "。以下是上一轮工具结果，直接基于它继续；不要只停在现状总结或表面补丁。添加功能时要改到真正生效，不要只补显示或文案。如果需要改代码，优先沿用已读或已存在文件做 Edit；只有新建文件或明确整文件替换时才用 Write。除非缺少马上要改的片段，否则不要再次 Read 同一路径；路径已明确时也不要重新从 Glob 开始。若决定调用工具，首个非空输出字符直接是 `{`。"
 	}
 
-	return "以下内容是上一轮工具调用刚返回的结果。请直接基于这些结果继续当前任务；如果这个任务需要修改或创建代码，就继续调用 Edit/Write/Bash 完成，不要只停在现状总结，不要重新打招呼，也不要把它当成新的空白任务。如果目标文件已经存在或你刚刚读过它，优先继续调用 Edit 做最小修改；只有在创建新文件，或你明确要整文件重写时才使用 Write。不要先输出说明文字，一旦决定调用工具，本回合第一个非空输出字符应当直接是 `{`。"
+	return "以下是上一轮工具结果，直接基于它继续当前任务；不要只停在现状总结或表面补丁。添加功能时要改到真正生效，不要只补显示或文案。如果需要改代码，优先沿用已读或已存在文件做 Edit；只有新建文件或明确整文件替换时才用 Write。除非缺少马上要改的片段，否则不要再次 Read 同一路径；路径已明确时也不要重新从 Glob 开始。若决定调用工具，首个非空输出字符直接是 `{`。"
 }
 
 func truncateBoltContinuationTask(text string, limit int) string {
@@ -2009,6 +3028,33 @@ func extractBoltToolPath(input interface{}) string {
 		for _, key := range []string{"file_path", "path", "filePath"} {
 			if value := strings.TrimSpace(v[key]); value != "" {
 				return value
+			}
+		}
+	case json.RawMessage:
+		if len(v) == 0 {
+			return ""
+		}
+		var decoded interface{}
+		if err := json.Unmarshal(v, &decoded); err == nil {
+			return extractBoltToolPath(decoded)
+		}
+	case []byte:
+		if len(v) == 0 {
+			return ""
+		}
+		var decoded interface{}
+		if err := json.Unmarshal(v, &decoded); err == nil {
+			return extractBoltToolPath(decoded)
+		}
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return ""
+		}
+		if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+			var decoded interface{}
+			if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+				return extractBoltToolPath(decoded)
 			}
 		}
 	}
@@ -2101,14 +3147,43 @@ func compactBoltToolResultText(toolMeta boltToolUseMetadata, text string, focuse
 	switch strings.TrimSpace(toolMeta.Name) {
 	case "Read":
 		if sharesBoltPathAlias(toolMeta.Aliases, focusedFileAliases) {
-			return truncateBoltToolResultRunes(text, maxBoltFocusedReadRunes, "\n...[truncated read output for active file; call Read again if more context is needed]")
+			return truncateBoltToolResultRunes(text, maxBoltFocusedReadRunes, "\n...[truncated active file excerpt; prefer editing from the visible excerpt, and only Read again if a specific missing fragment is truly required]")
 		}
-		return truncateBoltToolResultRunes(text, maxBoltReadResultRunes, "\n...[truncated read output; call Read again if more context is needed]")
+		return truncateBoltToolResultRunes(text, maxBoltReadResultRunes, "\n...[truncated read output; only Read again if a specific missing fragment is truly required]")
 	case "Bash", "Grep":
 		return truncateBoltToolResultRunes(text, maxBoltShellResultRunes, "\n...[truncated command output; rerun the tool if more context is needed]")
 	default:
 		return text
 	}
+}
+
+func relativizeBoltWorkdirPaths(text, workdir string) string {
+	text = strings.TrimSpace(text)
+	workdir = strings.Trim(strings.TrimSpace(workdir), "\"'`")
+	if text == "" || workdir == "" {
+		return text
+	}
+
+	candidates := []string{
+		workdir,
+		strings.ReplaceAll(workdir, "\\", "/"),
+		strings.ReplaceAll(workdir, "/", "\\"),
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.Trim(strings.TrimSpace(candidate), "\"'`")
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		text = strings.ReplaceAll(text, candidate+"\\", "")
+		text = strings.ReplaceAll(text, candidate+"/", "")
+		text = strings.ReplaceAll(text, candidate, ".")
+	}
+	return strings.TrimSpace(text)
 }
 
 func truncateBoltToolResultRunes(text string, limit int, suffix string) string {
@@ -2202,6 +3277,10 @@ type outboundConverter struct {
 	emittedToolUse          bool
 	seenToolCalls           map[string]struct{}
 	suppressText            bool
+	finalText               strings.Builder
+	finishReason            string
+	firstToolName           string
+	firstToolPath           string
 }
 
 func newOutboundConverter(model string, inputTokens int) *outboundConverter {
@@ -2465,9 +3544,38 @@ func (c *outboundConverter) sendTextDelta(text string, writer func(upstream.SSEM
 	if text == "" {
 		return nil
 	}
+	c.finalText.WriteString(text)
 	return writeBoltStreamMessage(writer, "model.text-delta", map[string]interface{}{
 		"delta": text,
 	})
+}
+
+func (c *outboundConverter) FinalText() string {
+	if c == nil {
+		return ""
+	}
+	return c.finalText.String()
+}
+
+func (c *outboundConverter) FinishReason() string {
+	if c == nil {
+		return ""
+	}
+	return c.finishReason
+}
+
+func (c *outboundConverter) FirstToolName() string {
+	if c == nil {
+		return ""
+	}
+	return c.firstToolName
+}
+
+func (c *outboundConverter) FirstToolPath() string {
+	if c == nil {
+		return ""
+	}
+	return c.firstToolPath
 }
 
 func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(upstream.SSEMessage) error) error {
@@ -2482,6 +3590,10 @@ func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(upstream
 	c.seenToolCalls[key] = struct{}{}
 	c.emittedToolUse = true
 	c.suppressText = true
+	if c.firstToolName == "" {
+		c.firstToolName = strings.TrimSpace(toolCall.Function)
+		c.firstToolPath = extractBoltToolPath(toolCall.Parameters)
+	}
 	return writeBoltStreamMessage(writer, "model.tool-call", map[string]interface{}{
 		"toolCallId": "toolu_" + generateRandomID(20),
 		"toolName":   strings.TrimSpace(toolCall.Function),
@@ -2633,6 +3745,7 @@ func (c *outboundConverter) sendEndEvents(endEvent *EndEvent, writer func(upstre
 	if c.emittedToolUse || strings.EqualFold(strings.TrimSpace(endEvent.FinishReason), "tool_use") {
 		finishReason = "tool_use"
 	}
+	c.finishReason = finishReason
 
 	return writeBoltStreamMessage(writer, "model.finish", map[string]interface{}{
 		"finishReason": finishReason,
@@ -2646,6 +3759,7 @@ func (c *outboundConverter) sendEndEvents(endEvent *EndEvent, writer func(upstre
 }
 
 func (c *outboundConverter) finishImmediatelyAfterToolUse(writer func(upstream.SSEMessage) error) error {
+	c.finishReason = "tool_use"
 	return writeBoltStreamMessage(writer, "model.finish", map[string]interface{}{
 		"finishReason": "tool_use",
 		"usage": map[string]interface{}{

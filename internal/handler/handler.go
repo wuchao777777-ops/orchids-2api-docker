@@ -581,68 +581,71 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	reqHash := h.computeRequestHash(r, bodyBytes)
 	semanticHash := h.computeSemanticRequestHash(r, req)
+	bypassDedup := hasInterruptedRetryMarker(req.Messages)
 	traceID := shortRequestTrace(reqHash)
 	retryCount := stainlessRetryCount(r)
 	if verboseDiagnostics {
-		slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", retryCount)
+		slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", retryCount, "bypass_dedup", bypassDedup)
 	}
 
-	exactKey := "exact:" + reqHash
 	registeredKeys := []string{}
-	if dup, inFlight := h.registerRequest(exactKey); dup {
-		if retryCount > 0 {
-			slog.Warn("Duplicate retry request rejected", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent(), "retry_count", retryCount)
-			logger.LogEarlyExit("duplicate_retry_request", map[string]interface{}{
-				"hash":        exactKey,
-				"in_flight":   inFlight,
-				"path":        r.URL.Path,
-				"kind":        "exact",
-				"retry_count": retryCount,
-			})
-			writeRetryDedupError(w, inFlight)
-			return
-		}
-		slog.Warn("Duplicate request suppressed", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
-		logger.LogEarlyExit("duplicate_request", map[string]interface{}{
-			"hash":      exactKey,
-			"in_flight": inFlight,
-			"path":      r.URL.Path,
-			"kind":      "exact",
-		})
-		h.writeDuplicateResponse(w, req, responseFormat)
-		return
-	}
-	registeredKeys = append(registeredKeys, exactKey)
-
-	if semanticHash != "" {
-		semanticKey := "semantic:" + semanticHash
-		if dup, inFlight := h.registerRequest(semanticKey); dup {
-			for i := len(registeredKeys) - 1; i >= 0; i-- {
-				h.finishRequest(registeredKeys[i])
-			}
+	if !bypassDedup {
+		exactKey := "exact:" + reqHash
+		if dup, inFlight := h.registerRequest(exactKey); dup {
 			if retryCount > 0 {
-				slog.Warn("Semantic duplicate retry request rejected", "hash", semanticHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent(), "retry_count", retryCount)
+				slog.Warn("Duplicate retry request rejected", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent(), "retry_count", retryCount)
 				logger.LogEarlyExit("duplicate_retry_request", map[string]interface{}{
-					"hash":        semanticKey,
+					"hash":        exactKey,
 					"in_flight":   inFlight,
 					"path":        r.URL.Path,
-					"kind":        "semantic",
+					"kind":        "exact",
 					"retry_count": retryCount,
 				})
 				writeRetryDedupError(w, inFlight)
 				return
 			}
-			slog.Warn("Semantic duplicate request suppressed", "hash", semanticHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
+			slog.Warn("Duplicate request suppressed", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
 			logger.LogEarlyExit("duplicate_request", map[string]interface{}{
-				"hash":      semanticKey,
+				"hash":      exactKey,
 				"in_flight": inFlight,
 				"path":      r.URL.Path,
-				"kind":      "semantic",
+				"kind":      "exact",
 			})
 			h.writeDuplicateResponse(w, req, responseFormat)
 			return
 		}
-		registeredKeys = append(registeredKeys, semanticKey)
+		registeredKeys = append(registeredKeys, exactKey)
+
+		if semanticHash != "" {
+			semanticKey := "semantic:" + semanticHash
+			if dup, inFlight := h.registerRequest(semanticKey); dup {
+				for i := len(registeredKeys) - 1; i >= 0; i-- {
+					h.finishRequest(registeredKeys[i])
+				}
+				if retryCount > 0 {
+					slog.Warn("Semantic duplicate retry request rejected", "hash", semanticHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent(), "retry_count", retryCount)
+					logger.LogEarlyExit("duplicate_retry_request", map[string]interface{}{
+						"hash":        semanticKey,
+						"in_flight":   inFlight,
+						"path":        r.URL.Path,
+						"kind":        "semantic",
+						"retry_count": retryCount,
+					})
+					writeRetryDedupError(w, inFlight)
+					return
+				}
+				slog.Warn("Semantic duplicate request suppressed", "hash", semanticHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
+				logger.LogEarlyExit("duplicate_request", map[string]interface{}{
+					"hash":      semanticKey,
+					"in_flight": inFlight,
+					"path":      r.URL.Path,
+					"kind":      "semantic",
+				})
+				h.writeDuplicateResponse(w, req, responseFormat)
+				return
+			}
+			registeredKeys = append(registeredKeys, semanticKey)
+		}
 	}
 	defer func() {
 		for i := len(registeredKeys) - 1; i >= 0; i-- {
@@ -1185,6 +1188,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			TraceID:       traceID,
 			ChatSessionID: chatSessionID,
 			ProjectID:     "",
+			IsFirstPrompt: freshBoltTask,
 			DirectSSE:     nil,
 		}
 		if isBoltRequest && currentAccount != nil {

@@ -32,6 +32,32 @@ func TestShouldForceFreshBoltTask_FalseForMultiTurnEditFollowup(t *testing.T) {
 	}
 }
 
+func TestShouldForceFreshBoltTask_TrueForRecreatePromptAfterPriorBoltHistory(t *testing.T) {
+	req := ClaudeRequest{
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_use", ID: "tool_1", Name: "Write", Input: map[string]interface{}{"file_path": "calculator.py"}},
+				}},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_1", Content: "File created successfully at: calculator.py"},
+				}},
+			},
+			{Role: "assistant", Content: prompt.MessageContent{Text: "文件已创建完成。"}},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+		},
+	}
+
+	if !shouldForceFreshBoltTask(req) {
+		t.Fatalf("expected recreate prompt after prior bolt history to force a fresh task")
+	}
+}
+
 func TestResetBoltMessagesForFreshTask_UsesLatestUserTurn(t *testing.T) {
 	messages := []prompt.Message{
 		{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
@@ -57,6 +83,34 @@ func TestResetBoltMessagesForFreshTask_UsesLatestUserTurn(t *testing.T) {
 	}
 	if got := reset[0].ExtractText(); got != "帮我添加科学计数法" {
 		t.Fatalf("reset latest user text=%q want 帮我添加科学计数法", got)
+	}
+}
+
+func TestResetBoltMessagesForFreshTask_DropsOldCalculatorHistoryOnRecreate(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+				{Type: "tool_use", ID: "tool_1", Name: "Write", Input: map[string]interface{}{"file_path": "calculator.py"}},
+			}},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+				{Type: "tool_result", ToolUseID: "tool_1", Content: "File created successfully at: calculator.py"},
+			}},
+		},
+		{Role: "assistant", Content: prompt.MessageContent{Text: "计算器已创建完成。"}},
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+	}
+
+	reset := resetBoltMessagesForFreshTask(messages)
+	if len(reset) != 1 {
+		t.Fatalf("reset messages len=%d want 1", len(reset))
+	}
+	if got := reset[0].ExtractText(); got != "帮我用python写一个计算器" {
+		t.Fatalf("reset latest user text=%q want 帮我用python写一个计算器", got)
 	}
 }
 

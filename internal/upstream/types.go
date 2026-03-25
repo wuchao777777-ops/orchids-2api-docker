@@ -32,6 +32,7 @@ type UpstreamRequest struct {
 	ChatSessionID string
 	Workdir       string // Dynamic local workdir override
 	ProjectID     string
+	IsFirstPrompt bool
 	DirectSSE     DirectSSEEmitter
 }
 

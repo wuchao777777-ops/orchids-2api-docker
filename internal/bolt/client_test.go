@@ -494,6 +494,615 @@ func TestSendRequestWithPayload_UsesPreparedInputEstimateInFinishUsage(t *testin
 	}
 }
 
+func TestSendRequestWithPayload_RetriesFalseCompletionAfterFailedEdit(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	var requestBodies []string
+	attempt := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBodies = append(requestBodies, string(body))
+		w.WriteHeader(http.StatusOK)
+		switch attempt {
+		case 0:
+			chunk, _ := json.Marshal("科学计算器已更新完成，新增以下功能：科学计数法、sin、cos、log。")
+			_, _ = io.WriteString(w, "0:"+string(chunk)+"\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":9}}\n")
+		default:
+			_, _ = io.WriteString(w, "9:{\"toolName\":\"Read\",\"args\":{\"file_path\":\"calculator.py\"}}\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+		}
+		attempt++
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1→def add(a, b):\n2→    return a + b\n",
+					}},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_edit",
+						Name:  "Edit",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_edit",
+						Content:   "<tool_use_error>String to replace not found in file.</tool_use_error>",
+					}},
+				},
+			},
+		},
+	}
+
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), req, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(requestBodies) != 2 {
+		t.Fatalf("request count=%d want 2", len(requestBodies))
+	}
+	if !strings.Contains(requestBodies[1], "上一轮你在没有任何新的成功 Write/Edit 工具结果的情况下直接声称已经完成") {
+		t.Fatalf("second request missing false-completion correction, body=%s", requestBodies[1])
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2, events=%v", len(events), events)
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event type=%q want model.tool-call", events[0].Type)
+	}
+	if got := events[0].Event["toolName"]; got != "Read" {
+		t.Fatalf("toolName=%v want Read", got)
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event type=%q want model.finish", events[1].Type)
+	}
+	if got := events[1].Event["finishReason"]; got != "tool_use" {
+		t.Fatalf("finishReason=%v want tool_use", got)
+	}
+}
+
+func TestSendRequestWithPayload_RetriesFalseCompletionAfterReadOnlyFollowup(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	var requestBodies []string
+	attempt := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBodies = append(requestBodies, string(body))
+		w.WriteHeader(http.StatusOK)
+		switch attempt {
+		case 0:
+			chunk, _ := json.Marshal("上一轮已经完成了科学计算功能的添加，新版 calculator.py 已包含科学记数法输入。")
+			_, _ = io.WriteString(w, "0:"+string(chunk)+"\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":9}}\n")
+		default:
+			_, _ = io.WriteString(w, "9:{\"toolName\":\"Edit\",\"args\":{\"file_path\":\"calculator.py\",\"old_string\":\"return a + b\",\"new_string\":\"return add(a, b)\"}}\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+		}
+		attempt++
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_write",
+						Name:  "Write",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_write",
+						Content:   "File created successfully at: calculator.py",
+					}},
+				},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1→def add(a, b):\n2→    return a + b\n3→\n4→def subtract(a, b):\n",
+					}},
+				},
+			},
+		},
+	}
+
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), req, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(requestBodies) != 2 {
+		t.Fatalf("request count=%d want 2", len(requestBodies))
+	}
+	if !strings.Contains(requestBodies[1], "你上一轮只有 Read 结果，没有任何成功的 Write/Edit") {
+		t.Fatalf("second request missing read-only false-completion correction, body=%s", requestBodies[1])
+	}
+	if !strings.Contains(requestBodies[1], "calculator.py") {
+		t.Fatalf("second request missing read path hint, body=%s", requestBodies[1])
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2, events=%v", len(events), events)
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event type=%q want model.tool-call", events[0].Type)
+	}
+	if got := events[0].Event["toolName"]; got != "Edit" {
+		t.Fatalf("toolName=%v want Edit", got)
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event type=%q want model.finish", events[1].Type)
+	}
+	if got := events[1].Event["finishReason"]; got != "tool_use" {
+		t.Fatalf("finishReason=%v want tool_use", got)
+	}
+}
+
+func TestSendRequestWithPayload_RetriesFalseCompletionAfterRepeatedReadCorrection(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	var requestBodies []string
+	attempt := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBodies = append(requestBodies, string(body))
+		w.WriteHeader(http.StatusOK)
+		switch attempt {
+		case 0:
+			_, _ = io.WriteString(w, "9:{\"toolName\":\"Read\",\"args\":{\"file_path\":\"calculator.py\"}}\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+		case 1:
+			chunk, _ := json.Marshal("我没有再次读取 calculator.py。刚才的请求是创建该文件，已成功完成。")
+			_, _ = io.WriteString(w, "0:"+string(chunk)+"\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":9}}\n")
+		default:
+			_, _ = io.WriteString(w, "9:{\"toolName\":\"Edit\",\"args\":{\"file_path\":\"calculator.py\",\"old_string\":\"return a + b\",\"new_string\":\"return add_scientific(a, b)\"}}\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+		}
+		attempt++
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_glob",
+						Name:  "Glob",
+						Input: map[string]interface{}{"path": ".", "pattern": "**/*"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_glob",
+						Content:   "calculator.py",
+					}},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1→def add(a, b):\n2→    return a + b\n",
+					}},
+				},
+			},
+		},
+	}
+
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), req, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(requestBodies) != 3 {
+		t.Fatalf("request count=%d want 3", len(requestBodies))
+	}
+	if !strings.Contains(requestBodies[1], "不要再次 Read 同一路径") {
+		t.Fatalf("second request missing repeated-read correction, body=%s", requestBodies[1])
+	}
+	if !strings.Contains(requestBodies[2], "更早创建成功当成当前任务已经完成") {
+		t.Fatalf("third request missing create-success false-completion correction, body=%s", requestBodies[2])
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2, events=%v", len(events), events)
+	}
+	if got := events[0].Event["toolName"]; got != "Edit" {
+		t.Fatalf("toolName=%v want Edit", got)
+	}
+	if got := events[1].Event["finishReason"]; got != "tool_use" {
+		t.Fatalf("finishReason=%v want tool_use", got)
+	}
+}
+
+func TestSendRequestWithPayload_HidesRootProjectProbeAfterFailedMutation(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	var requestBodies []string
+	attempt := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBodies = append(requestBodies, string(body))
+		w.WriteHeader(http.StatusOK)
+		switch attempt {
+		case 0:
+			_, _ = io.WriteString(w, "9:{\"toolName\":\"Glob\",\"args\":{\"path\":\".\",\"pattern\":\"*.py\"}}\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+		default:
+			_, _ = io.WriteString(w, "9:{\"toolName\":\"Write\",\"args\":{\"file_path\":\"calculator.py\",\"content\":\"import math\\nprint(math.pi)\\n\"}}\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+		}
+		attempt++
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1→import ast\n2→\n3→def add(a, b):\n4→    return a + b\n",
+					}},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_edit",
+						Name:  "Edit",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_edit",
+						Content:   "<tool_use_error>String to replace not found in file.\nString: import ast\n</tool_use_error>",
+					}},
+				},
+			},
+		},
+	}
+
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), req, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(requestBodies) != 2 {
+		t.Fatalf("request count=%d want 2", len(requestBodies))
+	}
+	if !strings.Contains(requestBodies[1], "不要再用根目录 Glob/Grep 去搜索 `*.py`") {
+		t.Fatalf("second request missing root-probe correction, body=%s", requestBodies[1])
+	}
+	if !strings.Contains(requestBodies[1], "就直接改用 Write 一次性替换该文件") {
+		t.Fatalf("second request missing write fallback correction, body=%s", requestBodies[1])
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2, events=%v", len(events), events)
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event type=%q want model.tool-call", events[0].Type)
+	}
+	if got := events[0].Event["toolName"]; got != "Write" {
+		t.Fatalf("toolName=%v want Write", got)
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event type=%q want model.finish", events[1].Type)
+	}
+	if got := events[1].Event["finishReason"]; got != "tool_use" {
+		t.Fatalf("finishReason=%v want tool_use", got)
+	}
+}
+
+func TestSendRequestWithPayload_RetriesRepeatedReadAfterReadOnlyFollowup(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	var requestBodies []string
+	attempt := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBodies = append(requestBodies, string(body))
+		w.WriteHeader(http.StatusOK)
+		switch attempt {
+		case 0:
+			_, _ = io.WriteString(w, "9:{\"toolName\":\"Read\",\"args\":{\"file_path\":\"calculator.py\"}}\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+		default:
+			_, _ = io.WriteString(w, "9:{\"toolName\":\"Edit\",\"args\":{\"file_path\":\"calculator.py\",\"old_string\":\"return a + b\",\"new_string\":\"return parse_number(a) + parse_number(b)\"}}\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+		}
+		attempt++
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1→def add(a, b):\n2→    return a + b\n3→\n4→def subtract(a, b):\n",
+					}},
+				},
+			},
+		},
+	}
+
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), req, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(requestBodies) != 2 {
+		t.Fatalf("request count=%d want 2", len(requestBodies))
+	}
+	if !strings.Contains(requestBodies[1], "不要再次 Read 同一路径") {
+		t.Fatalf("second request missing repeated-read correction, body=%s", requestBodies[1])
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2, events=%v", len(events), events)
+	}
+	if got := events[0].Event["toolName"]; got != "Edit" {
+		t.Fatalf("toolName=%v want Edit", got)
+	}
+	if got := events[1].Event["finishReason"]; got != "tool_use" {
+		t.Fatalf("finishReason=%v want tool_use", got)
+	}
+}
+
+func TestSendRequestWithPayload_RetriesEmptyTurnAfterReadOnlyFollowup(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	var requestBodies []string
+	attempt := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBodies = append(requestBodies, string(body))
+		w.WriteHeader(http.StatusOK)
+		switch attempt {
+		case 0:
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"end_turn\",\"usage\":{\"promptTokens\":5,\"completionTokens\":0}}\n")
+		default:
+			_, _ = io.WriteString(w, "9:{\"toolName\":\"Edit\",\"args\":{\"file_path\":\"calculator.py\",\"old_string\":\"return a + b\",\"new_string\":\"return add(a, b)\"}}\n")
+			_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+		}
+		attempt++
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1→def add(a, b):\n2→    return a + b\n",
+					}},
+				},
+			},
+		},
+	}
+
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), req, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(requestBodies) != 2 {
+		t.Fatalf("request count=%d want 2", len(requestBodies))
+	}
+	if !strings.Contains(requestBodies[1], "不要再次 Read 同一路径，也不要空结束") {
+		t.Fatalf("second request missing empty-turn correction, body=%s", requestBodies[1])
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2, events=%v", len(events), events)
+	}
+	if got := events[0].Event["toolName"]; got != "Edit" {
+		t.Fatalf("toolName=%v want Edit", got)
+	}
+	if got := events[1].Event["finishReason"]; got != "tool_use" {
+		t.Fatalf("finishReason=%v want tool_use", got)
+	}
+}
+
 func TestSendRequestWithPayload_ParsesStructuredToolCallEnvelope(t *testing.T) {
 	prevURL := boltAPIURL
 	t.Cleanup(func() { boltAPIURL = prevURL })
@@ -942,6 +1551,282 @@ func TestPrepareRequest_TrimsSupersededEmptyProjectClarificationHistory(t *testi
 	}
 }
 
+func TestPrepareRequest_DropsMisleadingNoFilesFoundProbeAfterSuccessfulWrite(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_write",
+							Name:  "Write",
+							Input: map[string]interface{}{"file_path": "calculator.py", "content": "print(1)"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_write",
+							Content:   "File created successfully at: calculator.py",
+						},
+					},
+				},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_glob",
+							Name:  "Glob",
+							Input: map[string]interface{}{"path": ".", "pattern": "**/*.{js,ts,tsx,jsx,vue}"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_glob",
+							Content:   "No files found",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	for _, msg := range boltReq.Messages {
+		if strings.Contains(msg.Content, "No files found") {
+			t.Fatalf("expected misleading no-files-found probe to be trimmed, got messages=%#v", boltReq.Messages)
+		}
+	}
+	if got := boltReq.Messages[2].Content; got != "帮我添加科学计数法" {
+		t.Fatalf("last message content=%q want follow-up edit request", got)
+	}
+}
+
+func TestPrepareRequest_DropsSupersededNoFilesFoundProbeAfterLaterPositiveGlob(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model:   "claude-opus-4-6",
+		Workdir: "C:\\Users\\zhangdailin\\Desktop\\1212",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_glob_frontend",
+							Name:  "Glob",
+							Input: map[string]interface{}{"path": ".", "pattern": "**/*.{js,jsx,ts,tsx,vue}"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_glob_frontend",
+							Content:   "No files found",
+						},
+					},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_glob_all",
+							Name:  "Glob",
+							Input: map[string]interface{}{"path": ".", "pattern": "**/*"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_glob_all",
+							Content:   "C:\\Users\\zhangdailin\\Desktop\\1212\\calculator.py",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	if got := boltReq.Messages[1].Content; strings.Contains(got, "No files found") {
+		t.Fatalf("expected superseded empty probe to be trimmed, got: %q", got)
+	}
+	if got := boltReq.Messages[1].Content; !strings.Contains(got, "calculator.py") {
+		t.Fatalf("expected later positive glob result to remain, got: %q", got)
+	}
+}
+
+func TestPrepareRequest_DropsPositiveProjectProbeAfterLaterRead(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_glob",
+							Name:  "Glob",
+							Input: map[string]interface{}{"path": ".", "pattern": "**/*"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_glob",
+							Content:   "calculator.py",
+						},
+					},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_read",
+							Name:  "Read",
+							Input: map[string]interface{}{"file_path": "calculator.py"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_read",
+							Content:   "1→def add(a, b):\n2→    return a + b\n",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	if got := boltReq.Messages[1].Content; strings.Contains(got, "Tool result:\ncalculator.py") {
+		t.Fatalf("expected superseded positive probe to be trimmed after later read, got: %q", got)
+	}
+	if got := boltReq.Messages[1].Content; !strings.Contains(got, "1→def add(a, b):") {
+		t.Fatalf("expected later read result to remain, got: %q", got)
+	}
+}
+
+func TestPrepareRequest_DropsRedundantPositiveProjectProbeAfterEarlierRead(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "给 calculator.py 添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1→def add(a, b):\n2→    return a + b\n",
+					}},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_glob",
+						Name:  "Glob",
+						Input: map[string]interface{}{"path": ".", "pattern": "**/*"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_glob",
+						Content:   "calculator.py",
+					}},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	if got := boltReq.Messages[1].Content; strings.Contains(got, "Tool result:\ncalculator.py") {
+		t.Fatalf("expected redundant positive probe after earlier read to be trimmed, got: %q", got)
+	}
+	if got := boltReq.Messages[1].Content; !strings.Contains(got, "1→def add(a, b):") {
+		t.Fatalf("expected earlier read result to remain, got: %q", got)
+	}
+}
+
 func TestPrepareRequest_EncodesToolResultsAsUserContentAndDropsAssistantToolInvocations(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model: "claude-opus-4-6",
@@ -1110,25 +1995,84 @@ func TestPrepareRequest_DropsSupersededAssistantCompletionSummaryBeforeLaterEdit
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 4 {
-		t.Fatalf("messages len=%d want 4, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
 	}
 	for _, msg := range boltReq.Messages {
 		if strings.Contains(msg.Content, "计算器已创建完成") {
 			t.Fatalf("expected stale assistant completion summary to be trimmed, got messages=%#v", boltReq.Messages)
 		}
 	}
-	if got := boltReq.Messages[2].Content; got != "帮我添加科学计数法" {
-		t.Fatalf("third message content=%q want latest explicit edit request", got)
+	if got := boltReq.Messages[1].Content; got != "帮我添加科学计数法" {
+		t.Fatalf("second message content=%q want latest explicit edit request", got)
+	}
+	if got := boltReq.Messages[2].Content; !strings.Contains(got, "继续完成用户刚才明确提出的任务") {
+		t.Fatalf("third message content=%q want continuation marker for tool-result follow-up", got)
+	}
+	if got := boltReq.Messages[2].Content; !strings.Contains(got, "帮我添加科学计数法") {
+		t.Fatalf("third message content=%q want latest edit intent carried into continuation", got)
+	}
+	if got := boltReq.Messages[2].Content; !strings.Contains(got, "def add(a, b)") {
+		t.Fatalf("third message content=%q want latest read result", got)
+	}
+}
+
+func TestPrepareRequest_DropsInjectedFailureAssistantNoiseBeforeLaterBoltFollowup(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮他添加科学计数法"}},
+			{Role: "assistant", Content: prompt.MessageContent{Text: "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account. (selector: no enabled accounts available for channel: bolt, last error: bolt API error: status=429, body={\"code\":\"rate-limited\"})"}},
+			{Role: "user", Content: prompt.MessageContent{Text: "给他添加科学计数法"}},
+			{Role: "assistant", Content: prompt.MessageContent{Text: "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account. (selector: no enabled accounts available for channel: bolt, last error: bolt API error: status=429, body={\"code\":\"rate-limited\"})"}},
+			{Role: "user", Content: prompt.MessageContent{Text: "给他添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1→def add(a, b):\n2→    return a + b\n",
+					}},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 4 {
+		t.Fatalf("messages len=%d want 4, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	for _, msg := range boltReq.Messages {
+		if strings.Contains(msg.Content, "all available accounts for this channel are currently rate-limited") {
+			t.Fatalf("expected injected failure assistant text to be trimmed, got messages=%#v", boltReq.Messages)
+		}
+	}
+	if got := boltReq.Messages[0].Content; got != "帮他添加科学计数法" {
+		t.Fatalf("first message content=%q want original task", got)
+	}
+	if got := boltReq.Messages[1].Content; got != "给他添加科学计数法" {
+		t.Fatalf("second message content=%q want first retry task", got)
+	}
+	if got := boltReq.Messages[2].Content; got != "给他添加科学计数法" {
+		t.Fatalf("third message content=%q want latest retry task", got)
 	}
 	if got := boltReq.Messages[3].Content; !strings.Contains(got, "继续完成用户刚才明确提出的任务") {
-		t.Fatalf("fourth message content=%q want continuation marker for tool-result follow-up", got)
-	}
-	if got := boltReq.Messages[3].Content; !strings.Contains(got, "帮我添加科学计数法") {
-		t.Fatalf("fourth message content=%q want latest edit intent carried into continuation", got)
+		t.Fatalf("fourth message content=%q want continuation marker for read follow-up", got)
 	}
 	if got := boltReq.Messages[3].Content; !strings.Contains(got, "def add(a, b)") {
-		t.Fatalf("fourth message content=%q want latest read result", got)
+		t.Fatalf("fourth message content=%q want read result", got)
 	}
 }
 
@@ -1405,7 +2349,7 @@ func TestPrepareRequest_DropsEarlierReadFollowupAfterLaterWriteSuccessAcrossTurn
 	if !strings.Contains(got, "updated successfully") {
 		t.Fatalf("expected write success follow-up to remain, got: %q", got)
 	}
-	if !strings.Contains(got, "不要仅为了确认结果而再次 Read 同一文件") {
+	if !strings.Contains(got, "不要为了确认而再次 Read 同一文件") {
 		t.Fatalf("expected write success follow-up to discourage redundant reread, got: %q", got)
 	}
 }
@@ -1499,26 +2443,222 @@ func TestPrepareRequest_UsesFailureContinuationForFailedEditFollowup(t *testing.
 		t.Fatalf("messages len=%d want at least 1", len(boltReq.Messages))
 	}
 	got := boltReq.Messages[len(boltReq.Messages)-1].Content
-	if !strings.Contains(got, "上一轮工具调用刚返回的失败结果") {
+	if !strings.Contains(got, "以下是上一轮失败的工具结果") {
 		t.Fatalf("expected failed edit follow-up to be marked as failure, got: %q", got)
 	}
-	if !strings.Contains(got, "最近一次 Write/Edit 尚未完成请求的修改") {
+	if !strings.Contains(got, "最近一次 Write/Edit 还没成功") {
 		t.Fatalf("expected failed edit follow-up to emphasize unfinished mutation, got: %q", got)
 	}
-	if !strings.Contains(got, "不要声称已经完成") {
+	if !strings.Contains(got, "不要声称已完成") {
 		t.Fatalf("expected failed edit follow-up to forbid false completion summaries, got: %q", got)
 	}
 	if !strings.Contains(got, "String to replace not found in file.") {
 		t.Fatalf("expected failed edit follow-up to keep the upstream error detail, got: %q", got)
 	}
-	if !strings.Contains(got, "优先继续调用 Edit 做最小修改") {
+	if !strings.Contains(got, "优先对已读或已存在文件用 Edit") {
 		t.Fatalf("expected failed edit follow-up to prefer Edit after read/modify flows, got: %q", got)
 	}
-	if !strings.Contains(got, "第一个非空输出字符应当直接是 `{`") {
+	if !strings.Contains(got, "首个非空输出字符直接是 `{`") {
 		t.Fatalf("expected failed edit follow-up to require direct JSON tool call, got: %q", got)
 	}
 	if strings.Contains(got, "优先直接向用户总结已完成的修改") {
 		t.Fatalf("did not expect success-only continuation guidance after failed edit, got: %q", got)
+	}
+}
+
+func TestPrepareRequest_DropsSupersededEditFailureAfterLaterReadRetry(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_read_1",
+							Name:  "Read",
+							Input: map[string]interface{}{"file_path": "calculator.py"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_read_1",
+							Content:   "1→first snapshot\n2→return a + b\n",
+						},
+					},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_edit_1",
+							Name:  "Edit",
+							Input: map[string]interface{}{"file_path": "calculator.py"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_edit_1",
+							Content:   "<tool_use_error>String to replace not found in file.\nString: old attempt</tool_use_error>",
+						},
+					},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_read_2",
+							Name:  "Read",
+							Input: map[string]interface{}{"file_path": "calculator.py"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_read_2",
+							Content:   "1→second snapshot\n2→return add_scientific(a, b)\n",
+						},
+					},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_edit_2",
+							Name:  "Edit",
+							Input: map[string]interface{}{"file_path": "calculator.py"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_edit_2",
+							Content:   "<tool_use_error>String to replace not found in file.\nString: second attempt</tool_use_error>",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	if got := boltReq.Messages[1].Content; strings.Contains(got, "first snapshot") {
+		t.Fatalf("expected superseded read result to be trimmed, got: %q", got)
+	}
+	if got := boltReq.Messages[1].Content; !strings.Contains(got, "second snapshot") {
+		t.Fatalf("expected latest read result to remain, got: %q", got)
+	}
+	if got := boltReq.Messages[2].Content; strings.Contains(got, "old attempt") {
+		t.Fatalf("expected stale edit failure to be trimmed after later read retry, got: %q", got)
+	}
+	if got := boltReq.Messages[2].Content; !strings.Contains(got, "second attempt") {
+		t.Fatalf("expected latest edit failure to remain, got: %q", got)
+	}
+}
+
+func TestPrepareRequest_DropsEarlierRepeatedEditFailureForSameFile(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_edit_1",
+							Name:  "Edit",
+							Input: map[string]interface{}{"file_path": "calculator.py"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_edit_1",
+							Content:   "<tool_use_error>String to replace not found in file.\nString: stale-1</tool_use_error>",
+						},
+					},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_edit_2",
+							Name:  "Edit",
+							Input: map[string]interface{}{"file_path": "calculator.py"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_edit_2",
+							Content:   "<tool_use_error>String to replace not found in file.\nString: stale-2</tool_use_error>",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	if got := boltReq.Messages[1].Content; strings.Contains(got, "stale-1") {
+		t.Fatalf("expected earlier repeated edit failure to be trimmed, got: %q", got)
+	}
+	if got := boltReq.Messages[1].Content; !strings.Contains(got, "stale-2") {
+		t.Fatalf("expected latest repeated edit failure to remain, got: %q", got)
 	}
 }
 
@@ -1535,6 +2675,15 @@ func TestBuildBoltToolUsagePrompt_IncludesMutationFailureRecoveryRule(t *testing
 	}
 	if !strings.Contains(got, "第一个非空输出字符应当直接是 `{`") {
 		t.Fatalf("expected tool prompt to require direct JSON tool calls, got: %q", got)
+	}
+	if !strings.Contains(got, "不要先对 `.` 做宽泛 Glob") {
+		t.Fatalf("expected tool prompt to suppress broad first-turn glob when path is already clear, got: %q", got)
+	}
+	if !strings.Contains(got, "不要重新从 Glob 开始") {
+		t.Fatalf("expected tool prompt to keep following the same file across turns, got: %q", got)
+	}
+	if !strings.Contains(got, "功能真正可用") || !strings.Contains(got, "不要只加显示开关、提示文案或空包装函数") {
+		t.Fatalf("expected tool prompt to require substantive feature implementation, got: %q", got)
 	}
 }
 
@@ -1602,14 +2751,338 @@ func TestPrepareRequest_ReadFollowupContinuationPrefersEditAndNoPreamble(t *test
 		t.Fatalf("messages len=%d want at least 1", len(boltReq.Messages))
 	}
 	got := boltReq.Messages[len(boltReq.Messages)-1].Content
-	if !strings.Contains(got, "优先继续调用 Edit 做最小修改") {
+	if !strings.Contains(got, "优先沿用已读或已存在文件做 Edit") {
 		t.Fatalf("expected read follow-up continuation to prefer Edit, got: %q", got)
 	}
-	if !strings.Contains(got, "第一个非空输出字符应当直接是 `{`") {
+	if !strings.Contains(got, "首个非空输出字符直接是 `{`") {
 		t.Fatalf("expected read follow-up continuation to require direct JSON, got: %q", got)
+	}
+	if !strings.Contains(got, "路径已明确时也不要重新从 Glob 开始") {
+		t.Fatalf("expected read follow-up continuation to avoid restarting with glob, got: %q", got)
 	}
 	if strings.Contains(got, "我来重写") {
 		t.Fatalf("did not expect explanatory preamble in serialized continuation, got: %q", got)
+	}
+}
+
+func TestPrepareRequest_LeavesProjectPromptEmptyToAvoidDuplicatingGlobalPrompt(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model:   "claude-opus-4-6",
+		Workdir: "d:\\Code\\Orchids-2api",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+		},
+		Tools: []interface{}{
+			map[string]interface{}{"name": "Read"},
+			map[string]interface{}{"name": "Edit"},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if strings.TrimSpace(boltReq.GlobalSystemPrompt) == "" {
+		t.Fatal("expected global system prompt to remain populated")
+	}
+	if strings.TrimSpace(boltReq.ProjectPrompt) != "" {
+		t.Fatalf("expected project prompt to stay empty to avoid duplicating global prompt, got: %q", boltReq.ProjectPrompt)
+	}
+}
+
+func TestPrepareRequest_DropsSupersededSuccessfulMutationAfterLaterRead(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_write",
+						Name:  "Write",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_write",
+						Content:   "File created successfully at: calculator.py",
+					}},
+				},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1→def add(a, b):\n2→    return a + b\n",
+					}},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	if got := boltReq.Messages[1].Content; got != "帮我添加科学计数法" {
+		t.Fatalf("second message content=%q want latest standalone task", got)
+	}
+	if got := boltReq.Messages[2].Content; strings.Contains(got, "File created successfully at: calculator.py") {
+		t.Fatalf("expected stale successful write result to be trimmed after later read, got: %q", got)
+	}
+	if got := boltReq.Messages[2].Content; !strings.Contains(got, "def add(a, b)") {
+		t.Fatalf("expected latest read result to remain, got: %q", got)
+	}
+}
+
+func TestPrepareRequest_FollowupMutationAfterSuccessfulCreateGetsGuard(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_write",
+						Name:  "Write",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_write",
+						Content:   "File created successfully at: calculator.py",
+					}},
+				},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	got := boltReq.Messages[2].Content
+	if !strings.Contains(got, "帮我添加科学计数法") {
+		t.Fatalf("expected latest task to remain, got: %q", got)
+	}
+	if !strings.Contains(got, "这是新的修改请求") {
+		t.Fatalf("expected follow-up mutation task to include fresh-modification guard, got: %q", got)
+	}
+	if !strings.Contains(got, "`calculator.py`") {
+		t.Fatalf("expected guard to mention existing file path, got: %q", got)
+	}
+	if !strings.Contains(got, "不要直接总结") {
+		t.Fatalf("expected guard to forbid false completion summaries, got: %q", got)
+	}
+}
+
+func TestBuildBoltRetryRequests_KeepTaskLeadAndCompressedGuidance(t *testing.T) {
+	ctx := boltFalseCompletionRetryContext{
+		ReadPath: "calculator.py",
+		LastTask: "帮我添加科学计数法",
+	}
+
+	retry := buildBoltRepeatedReadRetryRequest(upstream.UpstreamRequest{}, ctx)
+	if len(retry.Messages) != 1 {
+		t.Fatalf("messages len=%d want 1", len(retry.Messages))
+	}
+	got := retry.Messages[0].Content.GetText()
+	if !strings.Contains(got, "继续这个明确任务：帮我添加科学计数法。") {
+		t.Fatalf("expected retry to preserve original task lead, got: %q", got)
+	}
+	if !strings.Contains(got, "RETRY: 刚读过 `calculator.py`") {
+		t.Fatalf("expected retry to use short repeated-read code, got: %q", got)
+	}
+	if !strings.Contains(got, "禁总结，先继续工具修改") {
+		t.Fatalf("expected retry to use compressed completion guard, got: %q", got)
+	}
+	if len([]rune(got)) > 140 {
+		t.Fatalf("expected compressed retry message to stay short, got len=%d content=%q", len([]rune(got)), got)
+	}
+}
+
+func TestShouldRetryBoltFalseCompletion_ForStalePresenceSummary(t *testing.T) {
+	ctx := boltFalseCompletionRetryContext{
+		HasRecentReadOnlyFollow: true,
+		LastTask:                "帮我添加科学计算法",
+	}
+	converter := &outboundConverter{}
+	converter.finalText.WriteString("科学计算功能已在上一轮成功写入 `calculator.py`，无需重复修改。")
+	if !shouldRetryBoltFalseCompletion(ctx, converter) {
+		t.Fatal("expected stale file-presence completion summary to trigger retry")
+	}
+}
+
+func TestShouldRetryBoltInvalidPathToolCall_ForSandboxRead(t *testing.T) {
+	ctx := boltFalseCompletionRetryContext{
+		ReadPath:  "calculator.py",
+		LastTask:  "帮我添加科学计算法",
+	}
+	converter := &outboundConverter{
+		emittedToolUse: true,
+		firstToolName:  "Read",
+		firstToolPath:  "/tmp/cc-agent/sb1-demo/project/calculator.py",
+	}
+	if !shouldRetryBoltInvalidPathToolCall(ctx, converter) {
+		t.Fatal("expected sandbox read path to trigger invalid-path retry")
+	}
+}
+
+func TestBuildBoltInvalidPathRetryRequest_UsesTaskLeadAndRelativePathHint(t *testing.T) {
+	ctx := boltFalseCompletionRetryContext{
+		ReadPath: "calculator.py",
+		LastTask: "帮我添加科学计算法",
+	}
+	converter := &outboundConverter{
+		firstToolPath: "/tmp/cc-agent/sb1-demo/project/calculator.py",
+	}
+	retry := buildBoltInvalidPathRetryRequest(upstream.UpstreamRequest{}, ctx, converter)
+	if len(retry.Messages) != 1 {
+		t.Fatalf("messages len=%d want 1", len(retry.Messages))
+	}
+	got := retry.Messages[0].Content.GetText()
+	if !strings.Contains(got, "继续这个明确任务：帮我添加科学计算法。") {
+		t.Fatalf("expected retry to keep task lead, got: %q", got)
+	}
+	if !strings.Contains(got, "无效沙箱路径") || !strings.Contains(got, "/tmp/cc-agent/sb1-demo/project/calculator.py") {
+		t.Fatalf("expected retry to mention invalid sandbox path, got: %q", got)
+	}
+	if !strings.Contains(got, "优先处理 `calculator.py`") {
+		t.Fatalf("expected retry to steer back to relative project path, got: %q", got)
+	}
+}
+
+func TestPrepareRequest_DropsStaleMissingWorkspaceHistory(t *testing.T) {
+	workdir := t.TempDir()
+	req := upstream.UpstreamRequest{
+		Model:   "claude-opus-4-6",
+		Workdir: workdir,
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_write",
+						Name:  "Write",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_write",
+						Content:   "The file calculator.py has been updated successfully.",
+					}},
+				},
+			},
+			{
+				Role:    "assistant",
+				Content: prompt.MessageContent{Text: "计算器已经完整实现，文件 `calculator.py` 可直接运行。"},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role:    "user",
+				Content: prompt.MessageContent{Text: "上一轮你在没有任何新的成功 Write/Edit 工具结果的情况下直接声称已经完成，这是错误的。你上一轮只有 Read 结果，没有任何成功的 Write/Edit，因此不能根据读取结果声称已经添加完功能。请直接基于刚读到的`calculator.py`内容继续调用 Edit/Write 完成修改；不要把“文件存在”、“Glob 找到了文件”、或更早创建成功当成当前任务已经完成。除非先出现新的成功 Write/Edit 工具结果，否则不要输出“已更新”“已完成”“可以运行”等完成总结。如果决定调用工具，本回合第一个非空输出字符必须直接是 `{`。"},
+			},
+			{
+				Role:    "user",
+				Content: prompt.MessageContent{Text: "你刚刚已经成功 Read 过`calculator.py`，但又再次请求 Read 同一路径，这属于无效重复读取。当前任务是继续修改代码，不是继续确认文件是否存在。除非上一份 Read 结果因为截断而确实缺少你马上要修改的那一小段必要文本，否则不要再次 Read 同一路径。请直接基于已经读到的`calculator.py`内容继续调用 Edit/Write 完成修改；如果文件已存在，优先 Edit。在出现新的成功 Write/Edit 工具结果之前，不要输出“已完成”“已更新”“可以运行”等总结。如果决定调用工具，本回合第一个非空输出字符必须直接是 `{`。"},
+			},
+		},
+		Tools: []interface{}{
+			map[string]interface{}{"name": "Read"},
+			map[string]interface{}{"name": "Write"},
+			map[string]interface{}{"name": "Edit"},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	if got := boltReq.Messages[0].Content; got != "帮我用python写一个计算器" {
+		t.Fatalf("first message content=%q want original create intent", got)
+	}
+	if got := boltReq.Messages[1].Content; got != "帮我添加科学计数法" {
+		t.Fatalf("second message content=%q want latest edit intent", got)
+	}
+	if got := strings.Join([]string{boltReq.Messages[0].Content, boltReq.Messages[1].Content}, "\n"); strings.Contains(got, "已更新") || strings.Contains(got, "可直接运行") || strings.Contains(got, "你刚刚已经成功 Read 过`calculator.py`") {
+		t.Fatalf("expected stale deleted-file history to be trimmed from remaining messages, got: %q", got)
+	}
+}
+
+func TestFormatBoltToolResultContinuation_CompressesGeneralFollowupPrompt(t *testing.T) {
+	got := formatBoltToolResultContinuation(false, "帮我添加科学计数法", false, false)
+	if !strings.Contains(got, "优先沿用已读或已存在文件做 Edit") {
+		t.Fatalf("expected continuation to prefer Edit, got: %q", got)
+	}
+	if !strings.Contains(got, "不要只停在现状总结或表面补丁") {
+		t.Fatalf("expected continuation to reject shallow patch summaries, got: %q", got)
+	}
+	if !strings.Contains(got, "不要只补显示或文案") {
+		t.Fatalf("expected continuation to require real feature wiring, got: %q", got)
+	}
+	if !strings.Contains(got, "路径已明确时也不要重新从 Glob 开始") {
+		t.Fatalf("expected continuation to suppress redundant glob, got: %q", got)
+	}
+	if !strings.Contains(got, "首个非空输出字符直接是 `{`") {
+		t.Fatalf("expected continuation to require direct JSON tool calls, got: %q", got)
+	}
+	if strings.Contains(got, "不要重新打招呼，也不要把它当成新的空白任务") {
+		t.Fatalf("expected compressed continuation without old verbose wording, got: %q", got)
+	}
+	if len([]rune(got)) > 260 {
+		t.Fatalf("expected compressed continuation to stay short, got len=%d content=%q", len([]rune(got)), got)
+	}
+}
+
+func TestFormatBoltToolResultContinuation_SuccessPromptAvoidsFeatureHallucination(t *testing.T) {
+	got := formatBoltToolResultContinuation(false, "帮我用python写一个计算器", true, false)
+	if !strings.Contains(got, "只做最小确认") {
+		t.Fatalf("expected success continuation to enforce minimal confirmation, got: %q", got)
+	}
+	if !strings.Contains(got, "不要补充文件内容细节") {
+		t.Fatalf("expected success continuation to forbid hallucinated file details, got: %q", got)
+	}
+	if !strings.Contains(got, "已创建/更新相应文件") {
+		t.Fatalf("expected success continuation to stay at coarse confirmation level, got: %q", got)
+	}
+	if strings.Contains(got, "继续完成用户刚才明确提出的任务") {
+		t.Fatalf("expected success continuation to avoid task-continuation framing, got: %q", got)
+	}
+	if len([]rune(got)) > 70 {
+		t.Fatalf("expected compressed success continuation to stay short, got len=%d content=%q", len([]rune(got)), got)
 	}
 }
 
@@ -1638,7 +3111,7 @@ func TestPrepareRequest_TruncatesLongReadResults(t *testing.T) {
 						{
 							Type:      "tool_result",
 							ToolUseID: "tool_read",
-							Content:   strings.Repeat("1234567890", 320),
+							Content:   strings.Repeat("1234567890", 800),
 						},
 					},
 				},
@@ -1651,11 +3124,14 @@ func TestPrepareRequest_TruncatesLongReadResults(t *testing.T) {
 		t.Fatalf("messages len=%d want 2", len(boltReq.Messages))
 	}
 	got := boltReq.Messages[1].Content
-	if !strings.Contains(got, "truncated read output") {
+	if !strings.Contains(got, "truncated read output") && !strings.Contains(got, "truncated active file excerpt") {
 		t.Fatalf("expected long read result to be truncated, got: %q", got)
 	}
-	if len([]rune(got)) >= len([]rune("Tool result:\n"+strings.Repeat("1234567890", 320))) {
+	if len([]rune(got)) >= len([]rune("Tool result:\n"+strings.Repeat("1234567890", 800))) {
 		t.Fatalf("expected truncated payload to be shorter, got len=%d", len([]rune(got)))
+	}
+	if strings.Contains(got, "call Read again") {
+		t.Fatalf("expected generic read truncation hint to avoid encouraging immediate reread, got: %q", got)
 	}
 }
 
@@ -1702,6 +3178,51 @@ func TestPrepareRequest_KeepsLargerReadWindowForFocusedFile(t *testing.T) {
 	}
 	if !strings.Contains(got, strings.Repeat("1234567890", 120)) {
 		t.Fatalf("expected focused file read result to retain long content, got: %q", got)
+	}
+}
+
+func TestPrepareRequest_TruncatedFocusedReadResultDoesNotEncourageImmediateReread(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我给 calculator.py 添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   strings.Repeat("1234567890", 700),
+					}},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2", len(boltReq.Messages))
+	}
+	got := boltReq.Messages[1].Content
+	if !strings.Contains(got, "truncated active file excerpt") {
+		t.Fatalf("expected focused file read result to still truncate when very long, got: %q", got)
+	}
+	if strings.Contains(got, "call Read again") {
+		t.Fatalf("expected focused read truncation hint to avoid encouraging immediate reread, got: %q", got)
+	}
+	if !strings.Contains(got, "prefer editing from the visible excerpt") {
+		t.Fatalf("expected focused read truncation hint to prefer editing visible excerpt, got: %q", got)
 	}
 }
 
@@ -1766,6 +3287,53 @@ func TestPrepareRequest_DropsInvalidPathResultsAndSupersededEditErrors(t *testin
 	}
 	if got := boltReq.Messages[0].Content; got != "添加科学计数法" {
 		t.Fatalf("first message content=%q want original user prompt only", got)
+	}
+}
+
+func TestPrepareRequest_RelativizesWorkspaceAbsoluteGlobResults(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model:   "claude-opus-4-6",
+		Workdir: "C:\\Users\\zhangdailin\\Desktop\\1212",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_glob",
+							Name:  "Glob",
+							Input: map[string]interface{}{"path": ".", "pattern": "**/*"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_glob",
+							Content:   "C:\\Users\\zhangdailin\\Desktop\\1212\\calculator.py",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	got := boltReq.Messages[1].Content
+	if strings.Contains(got, "C:\\Users\\zhangdailin\\Desktop\\1212\\calculator.py") {
+		t.Fatalf("expected workspace absolute path to be relativized, got: %q", got)
+	}
+	if !strings.Contains(got, "Tool result:\ncalculator.py") {
+		t.Fatalf("expected relativized workspace path to remain in history, got: %q", got)
 	}
 }
 
@@ -1923,6 +3491,21 @@ func TestPrepareRequest_AdvertisesTaskWhenClientDeclaresAgent(t *testing.T) {
 	}
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "客户端声明的是 `Agent`") {
 		t.Fatalf("global prompt missing Agent/Task relay guidance: %q", boltReq.GlobalSystemPrompt)
+	}
+}
+
+func TestPrepareRequest_PreservesFreshTaskFirstPromptSignal(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model:         "claude-sonnet-4-6",
+		IsFirstPrompt: true,
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if !boltReq.IsFirstPrompt {
+		t.Fatal("expected prepareRequest to keep upstream first-prompt signal")
 	}
 }
 
