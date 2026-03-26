@@ -105,7 +105,36 @@ func (c *Client) VerifyAuthToken(ctx context.Context) error {
 		System: nil,
 		Tools:  nil,
 	}
-	return c.SendRequestWithPayload(ctx, req, nil, nil)
+	puterReq := c.buildRequest(req, true)
+	body, err := json.Marshal(puterReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal puter verify request: %w", err)
+	}
+
+	reqCtx, cancel := util.WithDefaultTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, puterAPIURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create puter verify request: %w", err)
+	}
+	c.applyHeaders(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to send puter verify request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		return fmt.Errorf("puter API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	if _, err := readStreamText(resp.Body); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *Client) SendRequest(ctx context.Context, _ string, _ []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -120,7 +149,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("missing puter auth token")
 	}
 
-	puterReq := c.buildRequest(req)
+	puterReq := c.buildRequest(req, false)
 	body, err := json.Marshal(puterReq)
 	if err != nil {
 		return fmt.Errorf("failed to marshal puter request: %w", err)
@@ -161,7 +190,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	return emitResponseEvents(onMessage, strings.TrimSpace(req.Model), remainingText, toolCalls, estimateInputTokens(req.Messages, req.System), estimateOutputTokens(fullText))
 }
 
-func (c *Client) buildRequest(req upstream.UpstreamRequest) *Request {
+func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) *Request {
 	modelID := strings.TrimSpace(req.Model)
 	if modelID == "" {
 		modelID = defaultModelID
@@ -169,7 +198,7 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest) *Request {
 	return &Request{
 		Interface: defaultIface,
 		Driver:    driverForModel(modelID),
-		TestMode:  false,
+		TestMode:  testMode,
 		Method:    defaultMethod,
 		Args: RequestArgs{
 			Messages: convertMessages(req.Messages, buildSystemPrompt(req.System, req.Workdir, req.Tools, req.NoTools, req.Messages)),

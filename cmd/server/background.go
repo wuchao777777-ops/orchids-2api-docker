@@ -23,6 +23,7 @@ import (
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
+	"orchids-api/internal/v0"
 	"orchids-api/internal/warp"
 )
 
@@ -32,6 +33,29 @@ const (
 )
 
 var grokProbeCursor uint64
+
+func preserveLatestAccountStatus(ctx context.Context, s *store.Store, acc *store.Account) {
+	if s == nil || acc == nil || acc.ID == 0 {
+		return
+	}
+	latest, err := s.GetAccount(ctx, acc.ID)
+	if err != nil || latest == nil {
+		return
+	}
+
+	latestStatus := strings.TrimSpace(latest.StatusCode)
+	if latestStatus == "" {
+		return
+	}
+
+	// Auto refresh works on a snapshot loaded at loop start. Preserve newer
+	// request-path status markers so a successful token/quota sync does not
+	// accidentally clear a recent blocked/cooldown state in Redis.
+	if strings.TrimSpace(acc.StatusCode) == "" {
+		acc.StatusCode = latestStatus
+		acc.LastAttempt = latest.LastAttempt
+	}
+}
 
 func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Store, lb *loadbalancer.LoadBalancer) {
 	if !cfg.AutoRefreshToken {
@@ -109,6 +133,8 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					slog.Debug("Warp usage synced", "account", acc.Name, "limit", acc.UsageLimit, "used", acc.UsageCurrent, "subscription", acc.Subscription)
 				}
 
+				preserveLatestAccountStatus(context.Background(), s, acc)
+
 				if err := s.UpdateAccount(context.Background(), acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "type", "warp", "error", err)
 				}
@@ -149,6 +175,73 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				acc.LastAttempt = time.Time{}
 				if err := s.UpdateAccount(context.Background(), acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "type", "grok", "error", err)
+				}
+				continue
+			}
+			if strings.EqualFold(acc.AccountType, "v0") {
+				client := v0.NewFromAccount(acc, cfg)
+				verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				info, verifyErr := client.FetchScopedUser(verifyCtx)
+				verifyCancel()
+				if verifyErr != nil {
+					statusCode := apperrors.ClassifyAccountStatus(verifyErr.Error())
+					if statusCode == "" {
+						statusCode = "500"
+					}
+					acc.StatusCode = statusCode
+					acc.LastAttempt = time.Now()
+					if err := s.UpdateAccount(context.Background(), acc); err != nil {
+						slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "type", "v0", "error", err)
+					}
+					slog.Warn("Auto refresh token failed", "account", acc.Name, "type", "v0", "status", statusCode, "error", verifyErr)
+					continue
+				}
+
+				if info != nil {
+					acc.UserID = strings.TrimSpace(info.ID)
+					acc.Email = strings.TrimSpace(info.Email)
+					acc.Name = firstNonEmpty(info.Username, info.Name, info.TeamName, acc.Name)
+					acc.Subscription = strings.ToLower(firstNonEmpty(info.RealV0Plan, info.V0Plan, info.Plan, acc.Subscription))
+					acc.ProjectID = firstNonEmpty(info.Scope, info.TeamID, info.DefaultTeamID, acc.ProjectID)
+				}
+				if scopes, scopesErr := client.FetchScopes(context.Background()); scopesErr == nil {
+					scopeSlug := strings.TrimPrefix(strings.TrimSpace(acc.ProjectID), "team:")
+					if scopeSlug == "" && info != nil {
+						scopeSlug = strings.TrimPrefix(strings.TrimSpace(info.Scope), "team:")
+					}
+					if scopeSlug == "" && info != nil {
+						for _, scope := range scopes {
+							if strings.TrimSpace(scope.ID) == strings.TrimSpace(info.TeamID) || strings.TrimSpace(scope.ID) == strings.TrimSpace(info.DefaultTeamID) {
+								scopeSlug = strings.TrimSpace(scope.Slug)
+								break
+							}
+						}
+					}
+					if scopeSlug != "" {
+						if rateInfo, rateErr := client.FetchRateLimit(context.Background(), scopeSlug); rateErr == nil && rateInfo != nil {
+							acc.UsageLimit = rateInfo.Limit
+							acc.UsageCurrent = rateInfo.Remaining
+							if rateInfo.Reset > 0 {
+								acc.QuotaResetAt = time.UnixMilli(rateInfo.Reset)
+							}
+						}
+					}
+				}
+				if planInfo, planErr := client.FetchPlanInfo(context.Background()); planErr == nil && planInfo != nil {
+					acc.Subscription = strings.ToLower(firstNonEmpty(planInfo.RealPlan, planInfo.Plan, acc.Subscription))
+					if planInfo.Balance.Total > 0 {
+						acc.UsageLimit = planInfo.Balance.Total
+						acc.UsageCurrent = planInfo.Balance.Remaining
+					}
+					if planInfo.BillingCycle.End > 0 {
+						acc.QuotaResetAt = time.UnixMilli(planInfo.BillingCycle.End)
+					}
+				}
+
+				acc.StatusCode = ""
+				acc.LastAttempt = time.Time{}
+				if err := s.UpdateAccount(context.Background(), acc); err != nil {
+					slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "type", "v0", "error", err)
 				}
 				continue
 			}

@@ -268,11 +268,24 @@ func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forced
 		if mChannel == "" {
 			mChannel = "orchids"
 		}
-		if !strings.EqualFold(mChannel, forcedChannel) {
+		if !sameModelChannel(mChannel, forcedChannel) {
 			return nil, fmt.Errorf("model not found")
 		}
 	}
 	return m, nil
+}
+
+func sameModelChannel(a, b string) bool {
+	normalize := func(value string) string {
+		value = strings.ToLower(strings.TrimSpace(value))
+		value = strings.ReplaceAll(value, "_", "-")
+		value = strings.ReplaceAll(value, " ", "-")
+		if value == "" {
+			return "orchids"
+		}
+		return value
+	}
+	return normalize(a) == normalize(b)
 }
 
 func (h *Handler) updateAccountStats(account *store.Account, inputTokens, outputTokens int) {

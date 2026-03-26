@@ -58,7 +58,7 @@ func TestClassifyAccountStatus(t *testing.T) {
 		{
 			name:     "Puter insufficient funds maps to cooldown",
 			errStr:   "puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.",
-			expected: "429",
+			expected: "402",
 		},
 		{
 			name:     "Quota exceeded message",
@@ -73,7 +73,7 @@ func TestClassifyAccountStatus(t *testing.T) {
 		{
 			name:     "Credits exhausted message",
 			errStr:   "You have run out of credits. Please upgrade your plan to continue.",
-			expected: "429",
+			expected: "402",
 		},
 		{
 			name:     "Server error (ignored)",

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -13,6 +14,7 @@ import (
 	"orchids-api/internal/grok"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
+	"orchids-api/internal/v0"
 	"orchids-api/internal/warp"
 )
 
@@ -100,6 +102,8 @@ func normalizeAdminModelChannel(channel string) string {
 		return "Bolt"
 	case "puter":
 		return "Puter"
+	case "v0":
+		return "V0"
 	case "grok":
 		return "Grok"
 	default:
@@ -162,6 +166,39 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 			out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i})
 		}
 		return out, "puter_public_models", nil
+	case "v0":
+		accounts, err := enabledAccountsByType(ctx, s, "v0")
+		if err != nil {
+			return nil, "", err
+		}
+		for _, acc := range accounts {
+			client := v0.NewFromAccount(acc, refreshModelRequestConfig(cfg, channel))
+			discoveryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			items, source, discoverErr := client.FetchDiscoveredModelChoices(discoveryCtx)
+			cancel()
+			client.Close()
+			if discoverErr != nil {
+				continue
+			}
+
+			out := make([]discoveredModel, 0, len(items))
+			for i, item := range items {
+				id := strings.TrimSpace(item.ID)
+				if id == "" {
+					continue
+				}
+				name := strings.TrimSpace(item.Name)
+				if name == "" {
+					name = id
+				}
+				out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i})
+			}
+			if len(out) > 0 {
+				return out, source, nil
+			}
+		}
+
+		return v0SeedDiscoveredModels(), "v0_seed_fallback", nil
 	case "grok":
 		existing, err := s.ListModels(ctx)
 		if err != nil {
@@ -278,6 +315,19 @@ func warpSeedDiscoveredModels() []discoveredModel {
 	return out
 }
 
+func v0SeedDiscoveredModels() []discoveredModel {
+	items := store.BuildV0SeedModels()
+	out := make([]discoveredModel, 0, len(items))
+	for i, item := range items {
+		out = append(out, discoveredModel{
+			ID:        strings.TrimSpace(item.ModelID),
+			Name:      strings.TrimSpace(item.Name),
+			SortOrder: i,
+		})
+	}
+	return out
+}
+
 func joinWarpDiscoverySources(sourceSet map[string]struct{}) string {
 	if len(sourceSet) == 0 {
 		return "warp_graphql"
@@ -310,7 +360,7 @@ func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Confi
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 10 {
 			cfg.RequestTimeout = 10
 		}
-	case "warp", "bolt", "puter":
+	case "warp", "bolt", "puter", "v0":
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 15 {
 			cfg.RequestTimeout = 15
 		}

@@ -216,6 +216,8 @@ func (lb *LoadBalancer) ReleaseConnection(accountID int64) {
 const (
 	// 401 冷却时间：token 可能已刷新，较短间隔后重试
 	retry401Default = 5 * time.Minute
+	// 402 对 Puter 来说通常表示余额/credits 不足，不应很快重新参与调度
+	retry402Default = 6 * time.Hour
 	// 429 冷却时间：限流通常是暂时性的，优先等待较短窗口再恢复尝试
 	retry429Default = 1 * time.Minute
 	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试
@@ -256,6 +258,24 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		}
 		if now.Sub(acc.LastAttempt) >= retry429Default {
 			lb.clearAccountStatus(ctx, acc, "429 冷却完成，自动恢复尝试")
+			return true
+		}
+		return false
+	case "402":
+		// 402 通常表示余额/credits 不足。若上游给出 reset 时间则优先尊重，
+		// 否则使用更长的冷却，避免调度器持续撞到同一个无额度账号。
+		if !acc.QuotaResetAt.IsZero() {
+			if !now.Before(acc.QuotaResetAt) {
+				lb.clearAccountStatus(ctx, acc, "402 冷却完成，自动恢复尝试")
+				return true
+			}
+			return false
+		}
+		if acc.LastAttempt.IsZero() {
+			return false
+		}
+		if now.Sub(acc.LastAttempt) >= retry402Default {
+			lb.clearAccountStatus(ctx, acc, "402 冷却完成，自动恢复尝试")
 			return true
 		}
 		return false

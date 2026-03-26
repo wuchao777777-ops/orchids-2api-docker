@@ -456,8 +456,8 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 	if err != nil {
 		t.Fatalf("GetAccount(first) error = %v", err)
 	}
-	if storedFirst.StatusCode != "429" {
-		t.Fatalf("expected first account to be cooled down as 429, got %q", storedFirst.StatusCode)
+	if storedFirst.StatusCode != "402" {
+		t.Fatalf("expected first account to be cooled down as 402, got %q", storedFirst.StatusCode)
 	}
 }
 

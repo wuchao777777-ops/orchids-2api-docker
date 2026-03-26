@@ -350,7 +350,7 @@ func TestBuildRequest_IncludesWorkdirToolPrompt(t *testing.T) {
 		},
 	}
 
-	built := client.buildRequest(req)
+	built := client.buildRequest(req, false)
 	if len(built.Args.Messages) == 0 || built.Args.Messages[0].Role != "system" {
 		t.Fatalf("expected leading system prompt, got %#v", built.Args.Messages)
 	}
@@ -383,13 +383,31 @@ func TestBuildRequest_NoToolsPromptDisablesToolCalls(t *testing.T) {
 		},
 	}
 
-	built := client.buildRequest(req)
+	built := client.buildRequest(req, false)
 	systemPrompt := built.Args.Messages[0].Content
 	if !strings.Contains(systemPrompt, "This turn must not make any tool calls.") {
 		t.Fatalf("expected no-tools instruction, got:\n%s", systemPrompt)
 	}
 	if strings.Contains(systemPrompt, "# Tools") {
 		t.Fatalf("did not expect tool catalog when no-tools gate is enabled, got:\n%s", systemPrompt)
+	}
+}
+
+func TestBuildRequest_TestModeEnabledForVerification(t *testing.T) {
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
+	req := upstream.UpstreamRequest{
+		Model: "claude-sonnet-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "ping"}},
+		},
+	}
+
+	built := client.buildRequest(req, true)
+	if !built.TestMode {
+		t.Fatal("expected puter verify request to enable test_mode")
+	}
+	if built.Args.Model != "claude-sonnet-4-6" {
+		t.Fatalf("Args.Model=%q want claude-sonnet-4-6", built.Args.Model)
 	}
 }
 

@@ -15,7 +15,7 @@
   <main class="main-content">
     <section class="header-section" id="accountsHeader">
       <h1 id="pageTitle">账号管理</h1>
-      <p id="pageSubtitle">统一维护渠道账号、状态和可用性，快速完成导入、清理和批量操作。</p>
+      <p id="pageSubtitle">统一维护渠道账号、状态和可用性，快速完成导出、清理和批量操作。</p>
     </section>
 
     <section class="stats-grid" id="statsGrid">
@@ -55,9 +55,7 @@
 
         <div class="toolbar-actions toolbar-actions-spread">
           <div class="inline-actions">
-            <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">📤 导入</button>
             <button class="btn btn-outline" onclick="exportAccounts()">📥 导出</button>
-            <input type="file" id="importFile" accept=".json" style="display: none" onchange="importAccounts(event)" />
           </div>
           <div class="toolbar-divider"></div>
           <div class="inline-actions">

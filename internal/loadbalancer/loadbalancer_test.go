@@ -168,3 +168,25 @@ func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
 		t.Fatalf("expected quota reset timestamp to be cleared, got %v", acc.QuotaResetAt)
 	}
 }
+
+func TestIsAccountAvailable_402UsesLongCooldown(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{
+		ID:          1,
+		AccountType: "puter",
+		StatusCode:  "402",
+		LastAttempt: time.Now().Add(-2 * time.Hour),
+	}
+
+	if lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected 402 account to remain unavailable before long cooldown expires")
+	}
+
+	acc.LastAttempt = time.Now().Add(-(retry402Default + time.Minute))
+	if !lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected expired 402 cooldown to re-enable account")
+	}
+	if acc.StatusCode != "" {
+		t.Fatalf("expected status to be cleared after 402 cooldown, got %q", acc.StatusCode)
+	}
+}

@@ -128,6 +128,7 @@ func main() {
 	registry.Register("warp", provider.NewWarpProvider())
 	registry.Register("bolt", provider.NewBoltProvider())
 	registry.Register("puter", provider.NewPuterProvider())
+	registry.Register("v0", provider.NewV0Provider())
 	h.SetClientFactory(func(acc *store.Account, c *config.Config) handler.UpstreamClient {
 		if p := registry.Get(acc.AccountType); p != nil {
 			if client, ok := p.NewClient(acc, c).(handler.UpstreamClient); ok {

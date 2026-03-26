@@ -78,3 +78,26 @@ func TestRefreshAccountState_PuterPropagatesUpstreamStatus(t *testing.T) {
 		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusUnauthorized)
 	}
 }
+
+func TestRefreshAccountState_PuterInsufficientFundsReturns402(t *testing.T) {
+	prevVerify := puterVerifyAccount
+	t.Cleanup(func() { puterVerifyAccount = prevVerify })
+
+	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
+		return errors.New("puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.")
+	}
+
+	a := New(nil, "", "", &config.Config{})
+	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
+
+	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if status != "402" {
+		t.Fatalf("status=%q want 402", status)
+	}
+	if httpStatus != http.StatusPaymentRequired {
+		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusPaymentRequired)
+	}
+}

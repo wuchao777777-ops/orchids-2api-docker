@@ -791,6 +791,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "puter") {
 		isPuterRequest = true
 	}
+	isV0Request := strings.EqualFold(forcedChannel, "v0")
+	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "v0") {
+		isV0Request = true
+	}
 	freshBoltTask := false
 	if isBoltRequest {
 		freshBoltTask = shouldForceFreshBoltTask(req)
@@ -801,7 +805,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	isPassthroughRequest := isWarpRequest || isBoltRequest || isPuterRequest
+	isPassthroughRequest := isWarpRequest || isBoltRequest || isPuterRequest || isV0Request
 	if isPassthroughRequest {
 		channel := "warp"
 		switch {
@@ -809,6 +813,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			channel = "bolt"
 		case isPuterRequest:
 			channel = "puter"
+		case isV0Request:
+			channel = "v0"
 		}
 		// Passthrough channels do not trim history/tool results.
 		if verboseDiagnostics {
@@ -861,7 +867,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if lastUserIsToolResultFollowup(req.Messages) {
 		if isPassthroughRequest {
 			if verboseDiagnostics {
-				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest, "puter", isPuterRequest)
+				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest, "puter", isPuterRequest, "v0", isV0Request)
 			}
 		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
 			if verboseDiagnostics {
@@ -904,7 +910,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if verboseDiagnostics {
 		slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
 	}
-	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isBoltRequest && !isPuterRequest
+	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isBoltRequest && !isPuterRequest && !isV0Request
 
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
@@ -913,6 +919,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	} else if isBoltRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	} else if isPuterRequest {
+		mappedModel = strings.TrimSpace(req.Model)
+	} else if isV0Request {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
@@ -938,6 +946,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		promptMeta = orchids.PromptBuildMeta{
 			Profile:    "puter",
 			NoThinking: noThinking,
+		}
+	} else if isV0Request {
+		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
+		if builtPrompt == "" {
+			builtPrompt = "v0 request"
+		}
+		promptMeta = orchids.PromptBuildMeta{
+			Profile:    "v0",
+			NoThinking: true,
 		}
 	} else {
 		var warpMeta warpprompt.Meta
@@ -1030,6 +1047,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}))
 		breakdownProfile = "bolt"
 	} else if isPuterRequest {
+		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
+	} else if isV0Request {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	} else if isOrchidsProtocol {
 		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
@@ -1350,9 +1369,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			// 标记账号状态（auth 类错误始终标记，无论是否可重试）
 			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
 				if status := classifyAccountStatus(errStr); status != "" {
-					// Mark status if it's auth-related OR if it's a 429 (rate limit)
-					// We want to rotate accounts on 429 even if we retry the request on a new account
-					if !errClass.Retryable || errClass.Category == "auth" || status == "429" {
+					// Mark status if it's auth-related OR a quota/rate-limit style cooldown.
+					if !errClass.Retryable || errClass.Category == "auth" || errClass.Category == "auth_blocked" || status == "403" || status == "429" || status == "402" {
 						if verboseDiagnostics {
 							slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", status, "category", errClass.Category)
 						}

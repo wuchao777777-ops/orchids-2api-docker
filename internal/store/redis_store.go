@@ -1113,6 +1113,8 @@ func normalizeModelChannelKey(channel string) string {
 	if channel == "" {
 		return "orchids"
 	}
+	channel = strings.ReplaceAll(channel, "_", "-")
+	channel = strings.ReplaceAll(channel, " ", "-")
 	return channel
 }
 
