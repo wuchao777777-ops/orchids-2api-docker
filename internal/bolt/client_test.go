@@ -119,6 +119,73 @@ func TestSendRequestWithPayload_ConvertsJSONToolCallTextToModelToolCall(t *testi
 	}
 }
 
+func TestSendRequestWithPayload_ConvertsLeadingJSONToolCallsWithTrailingSummary(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	chunk, err := json.Marshal("{\n  \"tool_calls\": [\n    {\n      \"tool\": \"Edit\",\n      \"parameters\": {\n        \"file_path\": \"/tmp/cc-agent/sb1-sg78wfbc/project/calculator.py\",\n        \"old_string\": \"return a + b\",\n        \"new_string\": \"return add(a, b)\"\n      }\n    }\n  ]\n}\n\n完成！已添加科学计算功能。")
+	if err != nil {
+		t.Fatalf("marshal mixed chunk: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "0:"+string(chunk)+"\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	var events []upstream.SSEMessage
+	err = client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我添加科学计算功能"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2, events=%v", len(events), events)
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event type=%q want model.tool-call", events[0].Type)
+	}
+	if got := events[0].Event["toolName"]; got != "Edit" {
+		t.Fatalf("toolName=%v want Edit", got)
+	}
+	input, ok := events[0].Event["input"].(string)
+	if !ok {
+		t.Fatalf("input=%T want string", events[0].Event["input"])
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if payload["file_path"] != "/tmp/cc-agent/sb1-sg78wfbc/project/calculator.py" {
+		t.Fatalf("file_path=%q want sandbox calculator path", payload["file_path"])
+	}
+	if payload["old_string"] != "return a + b" {
+		t.Fatalf("old_string=%q want original code", payload["old_string"])
+	}
+	if payload["new_string"] != "return add(a, b)" {
+		t.Fatalf("new_string=%q want replacement code", payload["new_string"])
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event type=%q want model.finish", events[1].Type)
+	}
+}
+
 func TestSendRequestWithPayload_FlushesUnclosedJSONCodeFenceAsToolCall(t *testing.T) {
 	prevURL := boltAPIURL
 	t.Cleanup(func() { boltAPIURL = prevURL })

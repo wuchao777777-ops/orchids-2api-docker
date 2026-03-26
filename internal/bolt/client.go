@@ -836,6 +836,7 @@ func buildBoltToolUsagePrompt(toolNames []string) []string {
 
 	parts := []string{
 		"可用工具: " + strings.Join(toolHints, "; "),
+		"只能使用上面列出的工具；不要改用任何未声明的工具名，也不要擅自调用 `Task`、`Agent` 或其他额外工具。",
 		"需要工具时，输出纯 JSON，不要加解释、不要加前后缀、不要说“让我先看看项目文件”。",
 		"如果这回合决定调用工具，不要先输出“我来修改”“我先看一下”“让我读取后再改”之类说明文字；第一个非空输出字符应当直接是 `{`，避免浪费 token。",
 		"不要解释当前运行在什么系统或沙箱；如果需要确认目录或文件，直接调用工具。",
@@ -846,6 +847,7 @@ func buildBoltToolUsagePrompt(toolNames []string) []string {
 		"如果你刚刚已经 Read 了某个文件，接下来要继续修改它，优先沿用同一路径继续 Edit；除非出现明确冲突信号，否则不要重新从 Glob 开始。",
 		"如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`，继续坚持项目内相对路径，不要改写成 `/tmp/cc-agent/...` 之类的沙箱绝对路径。",
 		"如果最近一轮 Write/Edit 已经成功返回，优先直接总结已完成的修改；不要仅为了确认结果就再次 Read 同一文件。",
+		"如果最近一轮已经明确返回 `File created successfully at: ...` 或其他成功的 Write/Edit 结果，不要再用 Bash/ls 去 `/tmp/cc-agent/...`、`/mnt/...` 或其他占位目录确认文件是否存在；应直接基于该成功结果继续后续 Edit/Write。",
 		"如果最近一轮 Write/Edit 明确报错，或工具结果里包含 `<tool_use_error>`、`Error editing file`、`String to replace not found` 等失败信号，说明修改尚未完成；不要沿用更早的成功 Write/Edit 来声称已经更新完成，应继续基于最新错误和当前文件上下文调用工具修复，直到出现新的成功结果。",
 		"若 Glob/Read/Bash 已确认根目录为空且用户目标足够具体，直接在 `.` 创建最小可运行实现，不要再追问“要构建什么”。",
 		"空目录初始化时，优先直接使用 Write 创建首个文件，不要在 `No files found` 之后继续反复 Glob、ls 或再次输出空项目澄清。",
@@ -3446,8 +3448,8 @@ func (c *outboundConverter) processTextContent(text string, textBuffer *strings.
 		return nil
 	}
 	trimmed := strings.TrimSpace(text)
-	if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
-		if toolCalls := extractToolCallsFromJSON([]byte(trimmed)); len(toolCalls) > 0 {
+	if leadingJSON, _, ok := extractLeadingJSONValue(trimmed); ok {
+		if toolCalls := extractToolCallsFromJSON([]byte(leadingJSON)); len(toolCalls) > 0 {
 			return c.flushTextAndSendToolCalls(toolCalls, textBuffer, writer)
 		}
 	}
@@ -3814,4 +3816,60 @@ func firstNonSpaceByte(text string) byte {
 		}
 	}
 	return 0
+}
+
+func extractLeadingJSONValue(text string) (string, string, bool) {
+	text = strings.TrimLeft(text, " \t\r\n")
+	if text == "" {
+		return "", "", false
+	}
+
+	var stack []byte
+	inString := false
+	escaped := false
+
+	switch text[0] {
+	case '{', '[':
+		stack = append(stack, text[0])
+	default:
+		return "", "", false
+	}
+
+	for i := 1; i < len(text); i++ {
+		ch := text[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, ch)
+		case '}', ']':
+			if len(stack) == 0 || !jsonDelimitersMatch(stack[len(stack)-1], ch) {
+				return "", "", false
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				return text[:i+1], text[i+1:], true
+			}
+		}
+	}
+
+	return "", "", false
+}
+
+func jsonDelimitersMatch(open, close byte) bool {
+	return (open == '{' && close == '}') || (open == '[' && close == ']')
 }
