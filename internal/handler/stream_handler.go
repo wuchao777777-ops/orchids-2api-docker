@@ -2958,6 +2958,7 @@ func (h *streamHandler) shouldAcceptToolCallWithFilter(call toolCall, enforceAll
 	}
 	if key != "" {
 		maskedKey := maskDedupKey(key)
+		detail := summarizeToolCallDedupDetail(call.name, call.input, h.workdir)
 		h.mu.Lock()
 		if _, ok := h.bashCallDedup[key]; ok {
 			h.toolDedupCount++
@@ -2966,7 +2967,7 @@ func (h *streamHandler) shouldAcceptToolCallWithFilter(call toolCall, enforceAll
 			suppressed := h.toolDedupCount
 			h.mu.Unlock()
 			if h.config != nil && h.config.DebugEnabled {
-				slog.Debug("duplicate mutating tool call suppressed", "tool", call.name, "dedup_key", maskedKey, "suppressed_total", suppressed)
+				slog.Debug("duplicate mutating tool call suppressed", "tool", call.name, "dedup_key", maskedKey, "suppressed_total", suppressed, "detail", detail)
 			}
 			return false
 		}
@@ -3185,6 +3186,64 @@ func canonicalToolRawValue(raw json.RawMessage) string {
 		return trimmed
 	}
 	return string(normalized)
+}
+
+func summarizeToolCallDedupDetail(name, input, workdir string) string {
+	nameKey := normalizeToolNameKey(name)
+	fields, ok := decodeToolInputFields(input)
+	if !ok {
+		return ""
+	}
+	switch nameKey {
+	case "write":
+		path := canonicalToolPathForDedup(resolveToolPath(fields.FilePath, fields.Path), workdir)
+		content := canonicalToolRawValue(fields.Content)
+		return summarizeDedupPayload("path", path, content)
+	case "edit":
+		path := canonicalToolPathForDedup(resolveToolPath(fields.FilePath, fields.Path), workdir)
+		oldValue := canonicalToolRawValue(fields.Old)
+		newValue := canonicalToolRawValue(fields.New)
+		return "path=" + path +
+			" old_len=" + strconv.Itoa(len(oldValue)) +
+			" old_hash=" + strconv.FormatUint(fnv1a64String(oldValue), 16) +
+			" new_len=" + strconv.Itoa(len(newValue)) +
+			" new_hash=" + strconv.FormatUint(fnv1a64String(newValue), 16) +
+			" new_preview=" + strconv.Quote(shortDedupPreview(newValue, 48))
+	case "bash":
+		command := strings.TrimSpace(fields.Command)
+		if command == "" {
+			command = strings.TrimSpace(fields.Cmd)
+		}
+		return summarizeDedupPayload("command", "", command)
+	default:
+		return ""
+	}
+}
+
+func summarizeDedupPayload(label, path, value string) string {
+	parts := make([]string, 0, 5)
+	if strings.TrimSpace(path) != "" {
+		parts = append(parts, "path="+path)
+	}
+	parts = append(parts, label+"_len="+strconv.Itoa(len(value)))
+	parts = append(parts, label+"_hash="+strconv.FormatUint(fnv1a64String(value), 16))
+	parts = append(parts, label+"_preview="+strconv.Quote(shortDedupPreview(value, 48)))
+	return strings.Join(parts, " ")
+}
+
+func shortDedupPreview(value string, limit int) string {
+	value = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(value, "\r", " "), "\n", "\\n"))
+	if value == "" || limit <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
 }
 
 func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields, workdir string) string {
