@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
-	"path/filepath"
-	"runtime"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,9 +26,8 @@ const (
 	defaultPlanInfoURL   = "https://v0.app/chat/api/plan-info"
 	defaultScopesURL     = "https://v0.app/chat/api/scopes"
 	defaultRateLimitURL  = "https://v0.app/chat/api/rate-limit"
+	defaultSendURL       = "https://v0.app/chat/api/send"
 	defaultModelID       = "v0-max"
-	defaultBridgeScript  = "scripts/v0_web_bridge.cjs"
-	defaultModelScript   = "scripts/v0_model_bridge.cjs"
 )
 
 var (
@@ -37,6 +35,9 @@ var (
 	PlanInfoURLForTest   = defaultPlanInfoURL
 	ScopesURLForTest     = defaultScopesURL
 	RateLimitURLForTest  = defaultRateLimitURL
+	SendURLForTest       = defaultSendURL
+	v0ChatURLPattern     = regexp.MustCompile(`https://v0\.app/chat/([A-Za-z0-9_-]+)`)
+	v0FieldPattern       = regexp.MustCompile(`"(?:text|content|response|message|output|completion)"\s*:\s*"((?:[^"\\]|\\.)*)"`)
 )
 
 type Client struct {
@@ -100,36 +101,9 @@ type RateLimitInfo struct {
 	Limit     float64 `json:"limit"`
 }
 
-type bridgeRequest struct {
-	UserSession string `json:"userSession"`
-	Prompt      string `json:"prompt"`
-	Model       string `json:"model"`
-	ChatID      string `json:"chatId,omitempty"`
-	TimeoutMs   int    `json:"timeoutMs"`
-}
-
-type bridgeResponse struct {
-	OK       bool   `json:"ok"`
-	ChatID   string `json:"chatId"`
-	Model    string `json:"model"`
-	Response string `json:"response"`
-	Error    string `json:"error"`
-}
-
 type ModelChoice struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-}
-
-type modelBridgeRequest struct {
-	UserSession string `json:"userSession"`
-	TimeoutMs   int    `json:"timeoutMs"`
-}
-
-type modelBridgeResponse struct {
-	OK     bool          `json:"ok"`
-	Models []ModelChoice `json:"models"`
-	Error  string        `json:"error"`
 }
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
@@ -207,27 +181,13 @@ func (c *Client) FetchScopedUser(ctx context.Context) (*ScopedUser, error) {
 		return nil, fmt.Errorf("missing v0 user_session")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ScopedUserURLForTest, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build v0 scoped user request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Cookie", "user_session="+c.userSession)
-	req.Header.Set("User-Agent", "Orchids-2api/1.0")
-
-	resp, err := c.httpClient.Do(req)
+	raw, err := c.doRequest(ctx, http.MethodGet, ScopedUserURLForTest, nil, "https://v0.app/chat", "application/json")
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch v0 scoped user: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return nil, fmt.Errorf("v0 scoped user error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
 
 	var parsed scopedUserResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("failed to decode v0 scoped user response: %w", err)
 	}
 	if !parsed.OK {
@@ -244,26 +204,13 @@ func (c *Client) FetchPlanInfo(ctx context.Context) (*PlanInfo, error) {
 		return nil, fmt.Errorf("missing v0 user_session")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, PlanInfoURLForTest, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build v0 plan info request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Cookie", "user_session="+c.userSession)
-	req.Header.Set("User-Agent", "Orchids-2api/1.0")
-
-	resp, err := c.httpClient.Do(req)
+	raw, err := c.doRequest(ctx, http.MethodGet, PlanInfoURLForTest, nil, "https://v0.app/chat", "application/json")
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch v0 plan info: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return nil, fmt.Errorf("v0 plan info error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
 
 	var info PlanInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.Unmarshal(raw, &info); err != nil {
 		return nil, fmt.Errorf("failed to decode v0 plan info response: %w", err)
 	}
 	return &info, nil
@@ -277,26 +224,13 @@ func (c *Client) FetchScopes(ctx context.Context) ([]ScopeInfo, error) {
 		return nil, fmt.Errorf("missing v0 user_session")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ScopesURLForTest, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build v0 scopes request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Cookie", "user_session="+c.userSession)
-	req.Header.Set("User-Agent", "Orchids-2api/1.0")
-
-	resp, err := c.httpClient.Do(req)
+	raw, err := c.doRequest(ctx, http.MethodGet, ScopesURLForTest, nil, "https://v0.app/chat", "application/json")
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch v0 scopes: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return nil, fmt.Errorf("v0 scopes error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
 
 	var scopes []ScopeInfo
-	if err := json.NewDecoder(resp.Body).Decode(&scopes); err != nil {
+	if err := json.Unmarshal(raw, &scopes); err != nil {
 		return nil, fmt.Errorf("failed to decode v0 scopes response: %w", err)
 	}
 	return scopes, nil
@@ -314,26 +248,13 @@ func (c *Client) FetchRateLimit(ctx context.Context, scopeSlug string) (*RateLim
 		return nil, fmt.Errorf("missing v0 scope slug")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, RateLimitURLForTest+"?scope="+scopeSlug, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build v0 rate limit request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Cookie", "user_session="+c.userSession)
-	req.Header.Set("User-Agent", "Orchids-2api/1.0")
-
-	resp, err := c.httpClient.Do(req)
+	raw, err := c.doRequest(ctx, http.MethodGet, RateLimitURLForTest+"?scope="+url.QueryEscape(scopeSlug), nil, "https://v0.app/chat", "application/json")
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch v0 rate limit: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return nil, fmt.Errorf("v0 rate limit error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
 
 	var info RateLimitInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.Unmarshal(raw, &info); err != nil {
 		return nil, fmt.Errorf("failed to decode v0 rate limit response: %w", err)
 	}
 	return &info, nil
@@ -358,54 +279,41 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 			timeoutMs = 30000
 		}
 	}
-
-	payload := bridgeRequest{
-		UserSession: c.userSession,
-		Prompt:      c.buildPrompt(req),
-		Model:       normalizeWebModel(req.Model),
-		ChatID:      normalizeChatID(req.ChatSessionID),
-		TimeoutMs:   timeoutMs,
+	promptText := strings.TrimSpace(c.buildPrompt(req))
+	if promptText == "" {
+		promptText = "hello"
 	}
-	if payload.Prompt == "" {
-		payload.Prompt = "hello"
-	}
-
-	body, err := json.Marshal(payload)
+	modelID := normalizeWebModel(req.Model)
+	chatID := normalizeChatID(req.ChatSessionID)
+	sendBody, referer, path, err := buildSendRequestBody(promptText, modelID, chatID, estimateMessageIndex(req.Messages))
 	if err != nil {
-		return fmt.Errorf("failed to marshal v0 bridge request: %w", err)
+		return fmt.Errorf("failed to build v0 send request: %w", err)
 	}
 	if logger != nil {
-		logger.LogUpstreamRequest("node:"+defaultBridgeScript, map[string]string{"provider": "v0"}, body)
+		logger.LogUpstreamRequest(SendURLForTest, map[string]string{"provider": "v0"}, sendBody)
 	}
-
-	bridgeOut, bridgeErr, err := c.runScript(ctx, defaultBridgeScript, body)
+	raw, err := c.doRequest(ctx, http.MethodPost, SendURLForTest, sendBody, referer, "*/*")
 	if err != nil {
 		return err
 	}
-
-	var resp bridgeResponse
-	if err := json.Unmarshal(bridgeOut, &resp); err != nil {
-		return fmt.Errorf("failed to decode v0 bridge response: %w; stderr=%s; stdout=%s", err, strings.TrimSpace(string(bridgeErr)), strings.TrimSpace(string(bridgeOut)))
+	reply := extractSendResponseText(raw, promptText)
+	if reply == "" {
+		return fmt.Errorf("v0 send request succeeded but assistant reply could not be parsed")
 	}
-	if !resp.OK {
-		if strings.TrimSpace(resp.Error) != "" {
-			return fmt.Errorf("v0 bridge error: %s", strings.TrimSpace(resp.Error))
-		}
-		return fmt.Errorf("v0 bridge request failed")
-	}
+	resolvedChatID := firstNonEmpty(extractSendResponseChatID(raw), extractChatIDFromPath(path), chatID)
 
 	if onMessage != nil {
-		if chatID := strings.TrimSpace(resp.ChatID); chatID != "" {
+		if resolvedChatID != "" {
 			onMessage(upstream.SSEMessage{
 				Type:  "model.conversation_id",
-				Event: map[string]interface{}{"id": chatID},
+				Event: map[string]interface{}{"id": resolvedChatID},
 			})
 		}
-		if text := strings.TrimSpace(resp.Response); text != "" {
+		if text := strings.TrimSpace(reply); text != "" {
 			onMessage(upstream.SSEMessage{
 				Type: "model.text-delta",
 				Event: map[string]interface{}{
-					"delta": resp.Response,
+					"delta": text,
 				},
 			})
 		}
@@ -414,12 +322,12 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 			Event: map[string]interface{}{
 				"finishReason": "end_turn",
 				"usage": map[string]int{
-					"inputTokens":   estimateTokens(payload.Prompt),
-					"outputTokens":  estimateTokens(resp.Response),
-					"input_tokens":  estimateTokens(payload.Prompt),
-					"output_tokens": estimateTokens(resp.Response),
+					"inputTokens":   estimateTokens(promptText),
+					"outputTokens":  estimateTokens(reply),
+					"input_tokens":  estimateTokens(promptText),
+					"output_tokens": estimateTokens(reply),
 				},
-				"model": firstNonEmpty(resp.Model, payload.Model, defaultModelID),
+				"model": modelID,
 			},
 		})
 	}
@@ -434,41 +342,9 @@ func (c *Client) FetchDiscoveredModelChoices(ctx context.Context) ([]ModelChoice
 		return nil, "", fmt.Errorf("missing v0 user_session")
 	}
 
-	timeoutMs := 60000
-	if c.config != nil && c.config.RequestTimeout > 0 {
-		timeoutMs = c.config.RequestTimeout * 1000
-		if timeoutMs < 30000 {
-			timeoutMs = 30000
-		}
-	}
-
-	body, err := json.Marshal(modelBridgeRequest{
-		UserSession: c.userSession,
-		TimeoutMs:   timeoutMs,
-	})
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to marshal v0 model bridge request: %w", err)
-	}
-
-	stdout, stderr, err := c.runScript(ctx, defaultModelScript, body)
-	if err == nil {
-		var resp modelBridgeResponse
-		if decodeErr := json.Unmarshal(stdout, &resp); decodeErr != nil {
-			err = fmt.Errorf("failed to decode v0 model bridge response: %w; stderr=%s; stdout=%s", decodeErr, strings.TrimSpace(string(stderr)), strings.TrimSpace(string(stdout)))
-		} else if !resp.OK {
-			err = fmt.Errorf("v0 model bridge error: %s", strings.TrimSpace(resp.Error))
-		} else if normalized := normalizeDiscoveredModelChoices(resp.Models); len(normalized) > 0 {
-			return normalized, "v0_web_model_picker", nil
-		}
-	}
-
 	if _, scopedErr := c.FetchScopedUser(ctx); scopedErr != nil {
-		if err != nil {
-			return nil, "", err
-		}
 		return nil, "", scopedErr
 	}
-
 	return buildSeedModelChoices(), "v0_seed_fallback", nil
 }
 
@@ -524,31 +400,6 @@ func buildSeedModelChoices() []ModelChoice {
 		})
 	}
 	return out
-}
-
-func (c *Client) runScript(ctx context.Context, script string, body []byte) ([]byte, []byte, error) {
-	scriptPath, err := filepath.Abs(script)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to resolve v0 bridge path: %w", err)
-	}
-
-	nodeCmd := "node"
-	if runtime.GOOS == "windows" {
-		nodeCmd = "node.exe"
-	}
-
-	cmd := exec.CommandContext(ctx, nodeCmd, scriptPath)
-	cmd.Stdin = bytes.NewReader(body)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return stdout.Bytes(), stderr.Bytes(), fmt.Errorf("v0 bridge execution failed: %w; stderr=%s", err, strings.TrimSpace(stderr.String()))
-	}
-	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
 func (c *Client) buildPrompt(req upstream.UpstreamRequest) string {
@@ -688,6 +539,235 @@ func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
 			return trimmed
+		}
+	}
+	return ""
+}
+
+func (c *Client) doRequest(ctx context.Context, method, target string, body []byte, referer string, accept string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build v0 request: %w", err)
+	}
+	if accept == "" {
+		accept = "application/json"
+	}
+	req.Header.Set("Accept", accept)
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Origin", "https://v0.app")
+	req.Header.Set("Referer", referer)
+	req.Header.Set("Cookie", "user_session="+c.userSession)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("v0 request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("v0 request error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return raw, nil
+}
+
+func buildSendRequestBody(promptText, modelID, chatID string, index int) ([]byte, string, string, error) {
+	if index <= 0 {
+		index = 1
+	}
+	path := "/chat"
+	referer := "https://v0.app/chat"
+	genericRoute := "/chat"
+	var chatValue interface{}
+	if chatID != "" {
+		path = "/chat/" + chatID
+		referer = "https://v0.app/chat/" + chatID
+		genericRoute = "/[id]"
+		chatValue = chatID
+	}
+	metaRaw, err := json.Marshal(map[string]interface{}{
+		"text":        promptText + "\n",
+		"index":       index,
+		"imageOnly":   false,
+		"projectId":   nil,
+		"messageMode": "build",
+		"modelId":     modelID,
+	})
+	if err != nil {
+		return nil, "", "", err
+	}
+	payload := map[string]interface{}{
+		"action":         "SubmitNewUserMessage",
+		"meta":           string(metaRaw),
+		"referer":        referer,
+		"error_code":     nil,
+		"generic_route":  genericRoute,
+		"call_layer":     "client",
+		"chat_id":        chatValue,
+		"message_id":     nil,
+		"block_id":       nil,
+		"domain":         "v0.app",
+		"path":           path,
+		"query_string":   nil,
+		"browser_width":  1440,
+		"browser_height": 900,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return raw, referer, path, nil
+}
+
+func estimateMessageIndex(messages []prompt.Message) int {
+	index := 1
+	for _, msg := range messages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") && strings.TrimSpace(renderMessageForBridge(msg)) != "" {
+			index++
+		}
+	}
+	return index
+}
+
+func extractSendResponseText(raw []byte, promptText string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var parsed interface{}
+	if err := json.Unmarshal(raw, &parsed); err == nil {
+		if text := extractFirstMeaningfulText(parsed, promptText); text != "" {
+			return text
+		}
+	}
+	matches := v0FieldPattern.FindAllStringSubmatch(string(raw), -1)
+	best := ""
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		var decoded string
+		if err := json.Unmarshal([]byte(`"`+match[1]+`"`), &decoded); err != nil {
+			decoded = match[1]
+		}
+		decoded = strings.TrimSpace(decoded)
+		if isMeaningfulResponseText(decoded, promptText) && len(decoded) > len(best) {
+			best = decoded
+		}
+	}
+	return best
+}
+
+func extractFirstMeaningfulText(value interface{}, promptText string) string {
+	best := ""
+	var walk func(interface{})
+	walk = func(node interface{}) {
+		switch v := node.(type) {
+		case string:
+			text := strings.TrimSpace(v)
+			if isMeaningfulResponseText(text, promptText) && len(text) > len(best) {
+				best = text
+			}
+		case []interface{}:
+			for _, item := range v {
+				walk(item)
+			}
+		case map[string]interface{}:
+			for key, item := range v {
+				switch strings.ToLower(strings.TrimSpace(key)) {
+				case "text", "content", "response", "message", "output", "completion":
+					walk(item)
+				default:
+					switch nested := item.(type) {
+					case []interface{}, map[string]interface{}:
+						walk(nested)
+					}
+				}
+			}
+		}
+	}
+	walk(value)
+	return best
+}
+
+func isMeaningfulResponseText(text, promptText string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	if strings.EqualFold(text, strings.TrimSpace(promptText)) {
+		return false
+	}
+	switch strings.ToLower(text) {
+	case "submitnewusermessage", "build", "client", "v0.app":
+		return false
+	}
+	return len([]rune(text)) >= 2
+}
+
+func extractSendResponseChatID(raw []byte) string {
+	if match := v0ChatURLPattern.FindSubmatch(raw); len(match) > 1 {
+		return strings.TrimSpace(string(match[1]))
+	}
+	var parsed interface{}
+	if err := json.Unmarshal(raw, &parsed); err == nil {
+		if id := extractChatIDFromValue(parsed); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func extractChatIDFromValue(value interface{}) string {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, item := range v {
+			lower := strings.ToLower(strings.TrimSpace(key))
+			switch lower {
+			case "chatid", "chat_id", "id":
+				if text, ok := item.(string); ok {
+					if id := normalizeChatID(text); id != "" {
+						return id
+					}
+				}
+			case "referer", "url", "pathname", "path":
+				if text, ok := item.(string); ok {
+					if id := extractChatIDFromPath(text); id != "" {
+						return id
+					}
+				}
+			}
+			if id := extractChatIDFromValue(item); id != "" {
+				return id
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if id := extractChatIDFromValue(item); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+func extractChatIDFromPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "http://") {
+		if match := v0ChatURLPattern.FindStringSubmatch(value); len(match) > 1 {
+			return strings.TrimSpace(match[1])
+		}
+	}
+	parts := strings.Split(value, "/")
+	for i := 0; i < len(parts)-1; i++ {
+		if parts[i] == "chat" && strings.TrimSpace(parts[i+1]) != "" {
+			return strings.TrimSpace(parts[i+1])
 		}
 	}
 	return ""

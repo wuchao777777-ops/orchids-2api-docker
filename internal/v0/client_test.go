@@ -1,6 +1,13 @@
 package v0
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/goccy/go-json"
+
+	"orchids-api/internal/prompt"
+)
 
 func TestExtractUserSessionFromCookieHeader(t *testing.T) {
 	raw := "foo=bar; user_session=abc123; hello=world"
@@ -45,5 +52,64 @@ func TestBuildSeedModelChoicesReturnsAllKnownV0Models(t *testing.T) {
 		if got[i].Name == "" {
 			t.Fatalf("buildSeedModelChoices()[%d].Name is empty", i)
 		}
+	}
+}
+
+func TestBuildSendRequestBody_ForExistingChat(t *testing.T) {
+	raw, referer, path, err := buildSendRequestBody("hi", "v0-auto", "-chat123", 3)
+	if err != nil {
+		t.Fatalf("buildSendRequestBody() error = %v", err)
+	}
+	if referer != "https://v0.app/chat/-chat123" {
+		t.Fatalf("referer=%q want https://v0.app/chat/-chat123", referer)
+	}
+	if path != "/chat/-chat123" {
+		t.Fatalf("path=%q want /chat/-chat123", path)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["action"] != "SubmitNewUserMessage" {
+		t.Fatalf("action=%v want SubmitNewUserMessage", payload["action"])
+	}
+	if payload["chat_id"] != "-chat123" {
+		t.Fatalf("chat_id=%v want -chat123", payload["chat_id"])
+	}
+	if payload["generic_route"] != "/[id]" {
+		t.Fatalf("generic_route=%v want /[id]", payload["generic_route"])
+	}
+	meta, _ := payload["meta"].(string)
+	if !strings.Contains(meta, `"modelId":"v0-auto"`) {
+		t.Fatalf("meta=%q missing modelId", meta)
+	}
+	if !strings.Contains(meta, `"index":3`) {
+		t.Fatalf("meta=%q missing index", meta)
+	}
+}
+
+func TestExtractSendResponseTextPrefersAssistantText(t *testing.T) {
+	raw := []byte(`{"ok":true,"events":[{"role":"user","text":"hi"},{"role":"assistant","content":"hello from v0"}]}`)
+	if got := extractSendResponseText(raw, "hi"); got != "hello from v0" {
+		t.Fatalf("extractSendResponseText()=%q want hello from v0", got)
+	}
+}
+
+func TestExtractSendResponseChatID(t *testing.T) {
+	raw := []byte(`{"referer":"https://v0.app/chat/-abc123","message":"ok"}`)
+	if got := extractSendResponseChatID(raw); got != "-abc123" {
+		t.Fatalf("extractSendResponseChatID()=%q want -abc123", got)
+	}
+}
+
+func TestEstimateMessageIndexCountsUserTurns(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "hello"}},
+		{Role: "assistant", Content: prompt.MessageContent{Text: "world"}},
+		{Role: "user", Content: prompt.MessageContent{Text: "again"}},
+	}
+	if got := estimateMessageIndex(messages); got != 3 {
+		t.Fatalf("estimateMessageIndex()=%d want 3", got)
 	}
 }
