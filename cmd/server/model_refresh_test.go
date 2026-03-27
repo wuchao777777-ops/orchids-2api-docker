@@ -133,28 +133,6 @@ func TestDiscoverModelsForChannel_BoltReturnsSeedCatalog(t *testing.T) {
 	}
 }
 
-func TestDiscoverModelsForChannel_V0ReturnsSeedFallbackWithoutAccounts(t *testing.T) {
-	s, cleanup := setupModelRefreshStore(t)
-	defer cleanup()
-
-	items, source, err := discoverModelsForChannel(context.Background(), nil, s, "V0")
-	if err != nil {
-		t.Fatalf("discoverModelsForChannel() error = %v", err)
-	}
-	if source != "v0_seed_fallback" {
-		t.Fatalf("source=%q want %q", source, "v0_seed_fallback")
-	}
-	if len(items) != 5 {
-		t.Fatalf("len(items)=%d want 5", len(items))
-	}
-	want := []string{"v0-auto", "v0-mini", "v0-pro", "v0-max", "v0-max-fast"}
-	for i, modelID := range want {
-		if items[i].ID != modelID {
-			t.Fatalf("items[%d].ID=%q want %q", i, items[i].ID, modelID)
-		}
-	}
-}
-
 func TestDiscoverModelsForChannel_GrokUsesStableAllowlistAndVerifiedExisting(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()

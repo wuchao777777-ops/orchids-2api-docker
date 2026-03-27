@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/goccy/go-json"
@@ -18,7 +17,6 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
-	"orchids-api/internal/v0"
 )
 
 func TestRefreshAccountState_GrokSyncsRemainingQuota(t *testing.T) {
@@ -232,69 +230,6 @@ func TestRefreshAccountState_OrchidsCreditsTimeoutStillSucceeds(t *testing.T) {
 	}
 	if acc.UserID != "user_refresh_timeout" {
 		t.Fatalf("UserID=%q want user_refresh_timeout", acc.UserID)
-	}
-}
-
-func TestRefreshAccountState_V0SyncsQuotaFromRateLimitAndPlanInfo(t *testing.T) {
-	t.Parallel()
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/chat/scoped/user", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"value":{"id":"user_v0","username":"tester","email":"v0@example.com","plan":"hobby","v0plan":"v0-free","realv0Plan":"v0-free","teamId":"team_123","defaultTeamId":"team_123","scope":"team:demo-scope"}}`))
-	})
-	mux.HandleFunc("/chat/api/scopes", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"id":"team_123","slug":"demo-scope","name":"Demo Scope"}]`))
-	})
-	mux.HandleFunc("/chat/api/rate-limit", func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("scope"); got != "demo-scope" {
-			t.Fatalf("scope=%q want demo-scope", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"remaining":5,"reset":1774569600000,"limit":5}`))
-	})
-	mux.HandleFunc("/chat/api/plan-info", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"plan":"v0-free","realPlan":"v0-free","billingCycle":{"start":1773792000000,"end":1776470400000},"balance":{"remaining":4.5,"total":5}}`))
-	})
-
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	prevScoped := v0.ScopedUserURLForTest
-	prevScopes := v0.ScopesURLForTest
-	prevRateLimit := v0.RateLimitURLForTest
-	prevPlanInfo := v0.PlanInfoURLForTest
-	v0.ScopedUserURLForTest = srv.URL + "/api/chat/scoped/user"
-	v0.ScopesURLForTest = srv.URL + "/chat/api/scopes"
-	v0.RateLimitURLForTest = srv.URL + "/chat/api/rate-limit"
-	v0.PlanInfoURLForTest = srv.URL + "/chat/api/plan-info"
-	defer func() {
-		v0.ScopedUserURLForTest = prevScoped
-		v0.ScopesURLForTest = prevScopes
-		v0.RateLimitURLForTest = prevRateLimit
-		v0.PlanInfoURLForTest = prevPlanInfo
-	}()
-
-	a := New(nil, "", "", &config.Config{})
-	acc := &store.Account{AccountType: "v0", ClientCookie: "user_session=test"}
-
-	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("refreshAccountState() error: %v", err)
-	}
-	if status != "" || httpStatus != 0 {
-		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
-	}
-	if acc.Subscription != "v0-free" {
-		t.Fatalf("subscription=%q want v0-free", acc.Subscription)
-	}
-	if acc.UsageLimit != 5 || acc.UsageCurrent != 5 {
-		t.Fatalf("usage_current=%v usage_limit=%v want 5/5", acc.UsageCurrent, acc.UsageLimit)
-	}
-	if !acc.QuotaResetAt.Equal(time.UnixMilli(1774569600000)) {
-		t.Fatalf("quota_reset_at=%v want %v", acc.QuotaResetAt, time.UnixMilli(1774569600000))
 	}
 }
 

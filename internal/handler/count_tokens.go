@@ -51,10 +51,6 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 		breakdown = estimateInputTokenBreakdown(extractUserText(req.Messages), nil, req.Tools)
 		profile = "puter"
 	}
-	if breakdown.Total == 0 && channel == "v0" {
-		breakdown = estimateInputTokenBreakdown(extractUserText(req.Messages), nil, req.Tools)
-		profile = "v0"
-	}
 	if breakdown.Total == 0 {
 		builtPrompt, promptHistory, meta := orchids.BuildCodeFreeMaxPromptAndHistoryWithMeta(
 			req.Messages,

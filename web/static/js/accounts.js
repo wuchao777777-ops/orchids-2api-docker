@@ -49,9 +49,6 @@ const fallbackAgentModes = {
     "claude-sonnet-4-5",
     "claude-3-7-sonnet-20250219",
   ],
-  v0: [
-    "v0-max",
-  ],
   grok: [
     "grok-3",
     "grok-3-mini",
@@ -226,9 +223,6 @@ function getAccountToken(acc) {
   if (type === 'puter') {
     return acc.client_cookie || acc.token || acc.session_cookie || '';
   }
-  if (type === 'v0') {
-    return acc.client_cookie || acc.token || acc.session_cookie || '';
-  }
   return acc.client_cookie || acc.token || '';
 }
 
@@ -272,13 +266,6 @@ function applyTokenLabels(type) {
       ? "Puter 编辑时仅保存第一行 auth_token"
       : "支持批量添加 Puter。每行一个 auth_token";
     input.required = true;
-  } else if (type === 'v0') {
-    label.textContent = "Cookie / user_session";
-    input.placeholder = "优先粘贴完整 Cookie Header；至少包含 user_session";
-    hint.textContent = accountId
-      ? "v0 编辑时仅保存第一行。强烈建议使用浏览器完整 Cookie Header，只有裸 user_session 往往不足以发消息"
-      : "支持批量添加 v0。每行一个完整 Cookie Header；若只填 user_session，可能只能查信息，无法正常发消息";
-    input.required = true;
   } else {
     label.textContent = "Cookie / __client / __session";
     input.placeholder = "支持原始 __client、完整 Cookie Header 或 Cookie JSON";
@@ -317,7 +304,7 @@ function resolveAgentMode(type, preferredValue = "") {
 function renderPlatformTabs() {
   const container = document.getElementById("platformFilters");
   if (!container) return;
-  const defaultTypes = ["orchids", "warp", "bolt", "puter", "v0", "grok"];
+  const defaultTypes = ["orchids", "warp", "bolt", "puter", "grok"];
   const types = new Set([...defaultTypes, ...accounts.map(normalizeAccountType)]);
   const sorted = Array.from(types).sort();
   const tabs = [...sorted];
@@ -396,10 +383,6 @@ function evaluateAccountStatus(acc) {
   } else if (type === 'puter') {
     if (!getAccountToken(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Puter auth_token' };
-    }
-  } else if (type === 'v0') {
-    if (!getAccountToken(acc)) {
-      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 v0 user_session' };
     }
   } else if (!acc.session_id && !acc.session_cookie) {
     return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少会话信息' };
@@ -1034,7 +1017,7 @@ async function saveAccount(e) {
       } else if (type === 'bolt') {
         payload.session_cookie = credentials[0];
         payload.project_id = projectId;
-      } else if (type === 'puter' || type === 'v0') {
+      } else if (type === 'puter') {
         payload.client_cookie = credentials[0];
       } else {
         payload.client_cookie = credentials[0];
@@ -1061,7 +1044,7 @@ async function saveAccount(e) {
         } else if (type === 'bolt') {
           payload.session_cookie = item;
           payload.project_id = projectId;
-        } else if (type === 'puter' || type === 'v0') {
+        } else if (type === 'puter') {
           payload.client_cookie = item;
         } else {
           payload.client_cookie = item;
@@ -1089,7 +1072,7 @@ async function saveAccount(e) {
     } else if (type === 'bolt') {
       payload.session_cookie = credentials[0];
       payload.project_id = projectId;
-    } else if (type === 'puter' || type === 'v0') {
+    } else if (type === 'puter') {
       payload.client_cookie = credentials[0];
     } else {
       payload.client_cookie = credentials[0];
@@ -1190,10 +1173,6 @@ function formatTokenDisplay(acc) {
     return session.length > 24 ? session.substring(0, 8) + '...' + session.substring(session.length - 8) : session;
   }
   if (type === 'puter' && getAccountToken(acc)) {
-    const token = getAccountToken(acc);
-    return token.length > 24 ? token.substring(0, 8) + '...' + token.substring(token.length - 8) : token;
-  }
-  if (type === 'v0' && getAccountToken(acc)) {
     const token = getAccountToken(acc);
     return token.length > 24 ? token.substring(0, 8) + '...' + token.substring(token.length - 8) : token;
   }

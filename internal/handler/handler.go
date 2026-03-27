@@ -791,10 +791,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "puter") {
 		isPuterRequest = true
 	}
-	isV0Request := strings.EqualFold(forcedChannel, "v0")
-	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "v0") {
-		isV0Request = true
-	}
 	freshBoltTask := false
 	if isBoltRequest {
 		freshBoltTask = shouldForceFreshBoltTask(req)
@@ -805,7 +801,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	isPassthroughRequest := isWarpRequest || isBoltRequest || isPuterRequest || isV0Request
+	isPassthroughRequest := isWarpRequest || isBoltRequest || isPuterRequest
 	if isPassthroughRequest {
 		channel := "warp"
 		switch {
@@ -813,8 +809,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			channel = "bolt"
 		case isPuterRequest:
 			channel = "puter"
-		case isV0Request:
-			channel = "v0"
 		}
 		// Passthrough channels do not trim history/tool results.
 		if verboseDiagnostics {
@@ -867,7 +861,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if lastUserIsToolResultFollowup(req.Messages) {
 		if isPassthroughRequest {
 			if verboseDiagnostics {
-				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest, "puter", isPuterRequest, "v0", isV0Request)
+				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest, "puter", isPuterRequest)
 			}
 		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
 			if verboseDiagnostics {
@@ -910,7 +904,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if verboseDiagnostics {
 		slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
 	}
-	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isBoltRequest && !isPuterRequest && !isV0Request
+	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isBoltRequest && !isPuterRequest
 
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
@@ -919,8 +913,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	} else if isBoltRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	} else if isPuterRequest {
-		mappedModel = strings.TrimSpace(req.Model)
-	} else if isV0Request {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
@@ -946,15 +938,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		promptMeta = orchids.PromptBuildMeta{
 			Profile:    "puter",
 			NoThinking: noThinking,
-		}
-	} else if isV0Request {
-		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
-		if builtPrompt == "" {
-			builtPrompt = "v0 request"
-		}
-		promptMeta = orchids.PromptBuildMeta{
-			Profile:    "v0",
-			NoThinking: true,
 		}
 	} else {
 		var warpMeta warpprompt.Meta
@@ -1047,8 +1030,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}))
 		breakdownProfile = "bolt"
 	} else if isPuterRequest {
-		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
-	} else if isV0Request {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	} else if isOrchidsProtocol {
 		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
@@ -1194,6 +1175,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		maxRetries := h.config.MaxRetries
 		if maxRetries < 0 {
 			maxRetries = 0
+		}
+		if isBoltRequest && maxRetries > 1 {
+			maxRetries = 1
 		}
 		retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
 		retriesRemaining := maxRetries

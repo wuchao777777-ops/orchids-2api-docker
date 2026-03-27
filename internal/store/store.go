@@ -202,7 +202,6 @@ func (s *Store) seedModels() error {
 	models = append(models, buildGrokSeedModels()...)
 	models = append(models, buildBoltBootstrapModels()...)
 	models = append(models, buildPuterSeedModels()...)
-	models = append(models, BuildV0SeedModels()...)
 
 	for _, m := range models {
 		if _, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID); err == nil {

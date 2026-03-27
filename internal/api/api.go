@@ -31,7 +31,6 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/util"
-	"orchids-api/internal/v0"
 	"orchids-api/internal/warp"
 )
 
@@ -76,12 +75,6 @@ var boltFetchRateLimits = func(ctx context.Context, acc *store.Account, cfg *con
 
 var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
 	client := puter.NewFromAccount(acc, cfg)
-	defer client.Close()
-	return client.VerifyAuthToken(ctx)
-}
-
-var v0VerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-	client := v0.NewFromAccount(acc, cfg)
 	defer client.Close()
 	return client.VerifyAuthToken(ctx)
 }
@@ -169,40 +162,6 @@ func normalizeGrokTokenInput(acc *store.Account) {
 	acc.SessionID = ""
 	acc.ClientUat = ""
 	acc.ProjectID = ""
-}
-
-func normalizeV0TokenInput(acc *store.Account) {
-	if acc == nil || !strings.EqualFold(acc.AccountType, "v0") {
-		return
-	}
-	token := v0Token(acc)
-	acc.ClientCookie = token
-	acc.Token = ""
-	acc.SessionCookie = ""
-	acc.ClientUat = ""
-	acc.SessionID = ""
-}
-
-func v0Token(acc *store.Account) string {
-	if acc == nil {
-		return ""
-	}
-	for _, raw := range []string{acc.ClientCookie, acc.Token, acc.SessionCookie} {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		if strings.Contains(strings.ToLower(raw), "user_session=") {
-			for _, part := range strings.Split(raw, ";") {
-				part = strings.TrimSpace(part)
-				if strings.HasPrefix(strings.ToLower(part), "user_session=") {
-					return strings.TrimSpace(strings.TrimPrefix(part, "user_session="))
-				}
-			}
-		}
-		return strings.Trim(raw, "\"'")
-	}
-	return ""
 }
 
 func firstNonEmptyString(values ...string) string {
@@ -413,21 +372,6 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		fields["quota_mode"] = "unknown"
 		fields["quota_unit"] = "credits"
 		fields["quota_supported"] = false
-	case "v0":
-		fields["quota_limit"] = limit
-		remaining := current
-		if remaining > limit && limit > 0 {
-			remaining = limit
-		}
-		used := limit - remaining
-		if used < 0 {
-			used = 0
-		}
-		fields["quota_used"] = used
-		fields["quota_remaining"] = remaining
-		fields["quota_mode"] = "remaining"
-		fields["quota_unit"] = "messages"
-		fields["quota_supported"] = limit > 0
 	default:
 		fields["quota_limit"] = limit
 		remaining := current
@@ -623,66 +567,6 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 				httpStatus = httpStatusFromAccountStatus(status)
 			}
 			return status, httpStatus, fmt.Errorf("Failed to verify puter account: %w", err)
-		}
-		return "", 0, nil
-	}
-
-	if strings.EqualFold(acc.AccountType, "v0") {
-		if strings.TrimSpace(v0Token(acc)) == "" {
-			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify v0 account: missing user_session")
-		}
-		client := v0.NewFromAccount(acc, a.config.Load())
-		info, err := client.FetchScopedUser(ctx)
-		if err != nil {
-			status := classifyAccountStatusFromError(err.Error())
-			httpStatus := http.StatusBadGateway
-			if status != "" {
-				httpStatus = httpStatusFromAccountStatus(status)
-			}
-			return status, httpStatus, fmt.Errorf("Failed to verify v0 account: %w", err)
-		}
-		if info != nil {
-			acc.UserID = strings.TrimSpace(info.ID)
-			acc.Email = strings.TrimSpace(info.Email)
-			acc.Name = firstNonEmptyString(info.Username, info.Name, info.TeamName, acc.Name)
-			acc.Subscription = strings.ToLower(firstNonEmptyString(info.RealV0Plan, info.V0Plan, info.Plan, acc.Subscription))
-			acc.ProjectID = firstNonEmptyString(info.Scope, info.TeamID, info.DefaultTeamID, acc.ProjectID)
-			acc.StatusCode = ""
-			acc.LastAttempt = time.Time{}
-		}
-
-		if scopes, scopesErr := client.FetchScopes(ctx); scopesErr == nil {
-			scopeSlug := strings.TrimPrefix(strings.TrimSpace(info.Scope), "team:")
-			if scopeSlug == "" {
-				for _, scope := range scopes {
-					if strings.TrimSpace(scope.ID) == strings.TrimSpace(info.TeamID) || strings.TrimSpace(scope.ID) == strings.TrimSpace(info.DefaultTeamID) {
-						scopeSlug = strings.TrimSpace(scope.Slug)
-						break
-					}
-				}
-			}
-			if scopeSlug != "" {
-				if rateInfo, rateErr := client.FetchRateLimit(ctx, scopeSlug); rateErr == nil && rateInfo != nil {
-					if rateInfo.Limit > 0 {
-						acc.UsageLimit = rateInfo.Limit
-						acc.UsageCurrent = rateInfo.Remaining
-					}
-					if rateInfo.Reset > 0 {
-						acc.QuotaResetAt = time.UnixMilli(rateInfo.Reset)
-					}
-				}
-			}
-		}
-
-		if planInfo, planErr := client.FetchPlanInfo(ctx); planErr == nil && planInfo != nil {
-			acc.Subscription = strings.ToLower(firstNonEmptyString(planInfo.RealPlan, planInfo.Plan, acc.Subscription))
-			if planInfo.BillingCycle.End > 0 && acc.QuotaResetAt.IsZero() {
-				acc.QuotaResetAt = time.UnixMilli(planInfo.BillingCycle.End)
-			}
-			if planInfo.Balance.Total > 0 && acc.UsageLimit <= 0 {
-				acc.UsageLimit = planInfo.Balance.Total
-				acc.UsageCurrent = planInfo.Balance.Remaining
-			}
 		}
 		return "", 0, nil
 	}
@@ -991,8 +875,6 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			normalizeWarpTokenInput(&acc)
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
-		} else if strings.EqualFold(acc.AccountType, "v0") {
-			normalizeV0TokenInput(&acc)
 		} else if acc.ClientCookie != "" {
 			if err := normalizeOrchidsCredentialInput(&acc); err != nil {
 				http.Error(w, "Invalid client cookie: "+err.Error(), http.StatusBadRequest)
@@ -1207,8 +1089,6 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			normalizeWarpTokenInput(&acc)
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
-		} else if strings.EqualFold(acc.AccountType, "v0") {
-			normalizeV0TokenInput(&acc)
 		} else if acc.ClientCookie != "" {
 			if err := normalizeOrchidsCredentialInput(&acc); err != nil {
 				http.Error(w, "Invalid client cookie: "+err.Error(), http.StatusBadRequest)
@@ -1325,8 +1205,6 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 			normalizeWarpTokenInput(&acc)
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
-		} else if strings.EqualFold(acc.AccountType, "v0") {
-			normalizeV0TokenInput(&acc)
 		} else if acc.ClientCookie != "" {
 			if err := normalizeOrchidsCredentialInput(&acc); err != nil {
 				slog.Warn("Invalid client cookie in import", "name", acc.Name, "error", err)

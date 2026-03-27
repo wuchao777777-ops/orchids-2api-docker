@@ -185,6 +185,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	}
 
 	toolCalls, remainingText := parseToolCalls(fullText)
+	toolCalls = sanitizeParsedToolCalls(toolCalls, req.Workdir)
 	if onMessage == nil {
 		return nil
 	}
@@ -294,6 +295,7 @@ func buildPuterWorkspacePrompt(workdir string) []string {
 	parts = append(parts, "The real local project working directory is `"+workdir+"`.")
 	parts = append(parts, "If the user asks for the project directory, current path, or workspace path, answer with that real working directory directly.")
 	parts = append(parts, "Treat the project root as `.` and prefer project-relative paths for Read, Write, Edit, Glob, Grep, and Bash.")
+	parts = append(parts, "Never emit Windows absolute paths like `C:\\...` or any other absolute path in tool calls when the target is inside the current project; convert it to a project-relative path first.")
 	parts = append(parts, "Do not assume the project is empty just because a sandbox path like `/tmp/...`, `/mnt/...`, or `~/...` fails.")
 	return parts
 }
@@ -806,6 +808,142 @@ func normalizeParsedToolInput(value interface{}) json.RawMessage {
 		return json.RawMessage("{}")
 	}
 	return raw
+}
+
+func sanitizeParsedToolCalls(calls []ParsedToolCall, workdir string) []ParsedToolCall {
+	if len(calls) == 0 || strings.TrimSpace(workdir) == "" {
+		return calls
+	}
+
+	sanitized := make([]ParsedToolCall, len(calls))
+	copy(sanitized, calls)
+	for i := range sanitized {
+		sanitized[i].Input = sanitizeParsedToolInput(sanitized[i].Input, workdir)
+	}
+	return sanitized
+}
+
+func sanitizeParsedToolInput(raw json.RawMessage, workdir string) json.RawMessage {
+	if len(raw) == 0 || strings.TrimSpace(workdir) == "" {
+		return raw
+	}
+
+	var value interface{}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return raw
+	}
+	if !sanitizeParsedToolValue(&value, workdir) {
+		return raw
+	}
+
+	normalized, err := json.Marshal(value)
+	if err != nil || len(normalized) == 0 {
+		return raw
+	}
+	return normalized
+}
+
+func sanitizeParsedToolValue(value *interface{}, workdir string) bool {
+	if value == nil || *value == nil {
+		return false
+	}
+
+	changed := false
+	switch current := (*value).(type) {
+	case map[string]interface{}:
+		for key, child := range current {
+			lowerKey := strings.ToLower(strings.TrimSpace(key))
+			switch typed := child.(type) {
+			case string:
+				if shouldSanitizeToolPathKey(lowerKey) {
+					if relative, ok := relativizeWorkspacePath(typed, workdir); ok {
+						current[key] = relative
+						changed = true
+					}
+				}
+			case []interface{}:
+				if shouldSanitizeToolPathListKey(lowerKey) {
+					for i := range typed {
+						if text, ok := typed[i].(string); ok {
+							if relative, ok := relativizeWorkspacePath(text, workdir); ok {
+								typed[i] = relative
+								changed = true
+							}
+						}
+					}
+				}
+				for i := range typed {
+					childValue := typed[i]
+					if sanitizeParsedToolValue(&childValue, workdir) {
+						typed[i] = childValue
+						changed = true
+					}
+				}
+			default:
+				childValue := child
+				if sanitizeParsedToolValue(&childValue, workdir) {
+					current[key] = childValue
+					changed = true
+				}
+			}
+		}
+	case []interface{}:
+		for i := range current {
+			childValue := current[i]
+			if sanitizeParsedToolValue(&childValue, workdir) {
+				current[i] = childValue
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func shouldSanitizeToolPathKey(key string) bool {
+	switch key {
+	case "path", "filepath", "file_path", "filename", "file", "targetfile", "target_file", "sourcefile", "source_file":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldSanitizeToolPathListKey(key string) bool {
+	switch key {
+	case "paths", "filepaths", "file_paths", "files":
+		return true
+	default:
+		return false
+	}
+}
+
+func relativizeWorkspacePath(pathValue string, workdir string) (string, bool) {
+	trimmedPath := strings.TrimSpace(pathValue)
+	trimmedWorkdir := strings.TrimSpace(workdir)
+	if trimmedPath == "" || trimmedWorkdir == "" || !filepath.IsAbs(trimmedPath) {
+		return "", false
+	}
+
+	workspaceAbs, err := filepath.Abs(trimmedWorkdir)
+	if err != nil {
+		return "", false
+	}
+	targetAbs, err := filepath.Abs(trimmedPath)
+	if err != nil {
+		return "", false
+	}
+
+	workspaceClean := filepath.Clean(workspaceAbs)
+	targetClean := filepath.Clean(targetAbs)
+	rel, err := filepath.Rel(workspaceClean, targetClean)
+	if err != nil {
+		return "", false
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." || rel == "" || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
 }
 
 func firstNonNil(values ...interface{}) interface{} {

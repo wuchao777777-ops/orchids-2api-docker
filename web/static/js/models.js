@@ -10,7 +10,7 @@ let modelRefreshInFlight = false;
 let modelRefreshResults = {};
 
 function modelChannels() {
-  const defaultChannels = ["Orchids", "Warp", "Bolt", "Puter", "V0", "Grok"];
+  const defaultChannels = ["Orchids", "Warp", "Bolt", "Puter", "Grok"];
   const seen = new Set();
   const ordered = [];
 

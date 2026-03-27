@@ -382,6 +382,7 @@ func TestBuildRequest_IncludesWorkdirToolPrompt(t *testing.T) {
 	for _, want := range []string{
 		"The real local project working directory is `d:\\Code\\Orchids-2api`.",
 		"Treat the project root as `.`",
+		"Never emit Windows absolute paths like `C:\\...`",
 		"# Tools",
 		"<tool_call>",
 		"Never claim that a file was created, updated, or deleted unless you emitted the corresponding tool call.",
@@ -433,6 +434,50 @@ func TestBuildRequest_TestModeEnabledForVerification(t *testing.T) {
 	}
 	if built.Args.Model != "claude-sonnet-4-6" {
 		t.Fatalf("Args.Model=%q want claude-sonnet-4-6", built.Args.Model)
+	}
+}
+
+func TestSanitizeParsedToolCalls_RelativizesWorkspaceAbsolutePaths(t *testing.T) {
+	calls := []ParsedToolCall{
+		{
+			Name: "Write",
+			ID:   "toolu_1",
+			Input: json.RawMessage(`{
+				"file_path":"C:\\Users\\zhangdailin\\Desktop\\11112\\output.txt",
+				"content":"123123"
+			}`),
+		},
+	}
+
+	sanitized := sanitizeParsedToolCalls(calls, `C:\Users\zhangdailin\Desktop\11112`)
+	var input map[string]any
+	if err := json.Unmarshal(sanitized[0].Input, &input); err != nil {
+		t.Fatalf("unmarshal sanitized input: %v", err)
+	}
+	if got := input["file_path"]; got != "output.txt" {
+		t.Fatalf("file_path = %v, want output.txt", got)
+	}
+}
+
+func TestSanitizeParsedToolCalls_LeavesExternalAbsolutePathsUnchanged(t *testing.T) {
+	calls := []ParsedToolCall{
+		{
+			Name: "Write",
+			ID:   "toolu_1",
+			Input: json.RawMessage(`{
+				"file_path":"D:\\other\\place\\output.txt",
+				"content":"123123"
+			}`),
+		},
+	}
+
+	sanitized := sanitizeParsedToolCalls(calls, `C:\Users\zhangdailin\Desktop\11112`)
+	var input map[string]any
+	if err := json.Unmarshal(sanitized[0].Input, &input); err != nil {
+		t.Fatalf("unmarshal sanitized input: %v", err)
+	}
+	if got := input["file_path"]; got != `D:\other\place\output.txt` {
+		t.Fatalf("file_path = %v, want external path to remain unchanged", got)
 	}
 }
 

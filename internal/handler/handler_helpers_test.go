@@ -184,27 +184,3 @@ func TestValidateModelAvailability_PuterUsesChannelSpecificModel(t *testing.T) {
 		t.Fatalf("validateModelAvailability() model = %q, want %q", got.ModelID, "claude-opus-4-5")
 	}
 }
-
-func TestValidateModelAvailability_V0UsesChannelSpecificModel(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	ctx := context.Background()
-
-	got, err := h.validateModelAvailability(ctx, "v0-max", "v0")
-	if err != nil {
-		t.Fatalf("validateModelAvailability() error = %v", err)
-	}
-	if got == nil {
-		t.Fatal("validateModelAvailability() returned nil model")
-	}
-	if got.Channel != "V0" {
-		t.Fatalf("validateModelAvailability() channel = %q, want %q", got.Channel, "V0")
-	}
-	if got.ModelID != "v0-max" {
-		t.Fatalf("validateModelAvailability() model = %q, want %q", got.ModelID, "v0-max")
-	}
-}
