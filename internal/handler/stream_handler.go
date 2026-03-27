@@ -46,7 +46,6 @@ const (
 	sseDeferredFlushByteThreshold   = 2048
 	sseBufferedWriteMax             = 4096
 	genericEmptyOutputFallbackText  = "No output was presented to the user. This may be due to tool calls being suppressed or the model producing no text content."
-	duplicateToolResultFallbackText = "A duplicate mutating tool call was suppressed to avoid repeating a side effect. Treat the prior tool result as the final outcome."
 )
 
 var (
@@ -2567,17 +2566,19 @@ func (h *streamHandler) finishResponse(stopReason string) {
 	// Ensure there's some text output before closing if we return end_turn with no output
 	if stopReason != "tool_use" && !h.suppressEmptyOutputFallback && !h.hasAnyOutput() {
 		emptyMsg := h.emptyOutputFallbackText()
-		if h.isStream {
-			h.emitTextBlockWithMode(emptyMsg, false)
-		} else {
-			h.mu.Lock()
-			h.responseText.WriteString(emptyMsg)
-			h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
-				"type": "text",
-				"text": emptyMsg,
-			})
-			h.hasTextOutput = true
-			h.mu.Unlock()
+		if emptyMsg != "" {
+			if h.isStream {
+				h.emitTextBlockWithMode(emptyMsg, false)
+			} else {
+				h.mu.Lock()
+				h.responseText.WriteString(emptyMsg)
+				h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
+					"type": "text",
+					"text": emptyMsg,
+				})
+				h.hasTextOutput = true
+				h.mu.Unlock()
+			}
 		}
 	}
 
@@ -2834,7 +2835,7 @@ func (h *streamHandler) emptyOutputFallbackText() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.preferPriorToolResultFallback && h.toolDedupCount > 0 {
-		return duplicateToolResultFallbackText
+		return ""
 	}
 	return genericEmptyOutputFallbackText
 }

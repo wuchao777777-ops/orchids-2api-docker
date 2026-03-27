@@ -887,10 +887,13 @@ func TestHandleMessages_Puter_DirectSSE_NonStreamRepeatWriteFollowupReturnsFallb
 	}
 	out := rec.Body.String()
 	if strings.Contains(out, `"content":null`) {
-		t.Fatalf("expected duplicate-write fallback, got null content: %s", out)
+		t.Fatalf("expected silent duplicate-write suppression, got null content: %s", out)
 	}
-	if !strings.Contains(out, duplicateToolResultFallbackText) {
-		t.Fatalf("expected duplicate-write fallback text, got: %s", out)
+	if strings.Contains(out, genericEmptyOutputFallbackText) {
+		t.Fatalf("did not expect generic empty fallback after duplicate write suppression, got: %s", out)
+	}
+	if strings.Contains(out, "duplicate mutating tool call was suppressed") {
+		t.Fatalf("did not expect duplicate-write suppression text to leak to client, got: %s", out)
 	}
 	if !strings.Contains(out, `"stop_reason":"end_turn"`) {
 		t.Fatalf("expected stop_reason end_turn after duplicate write suppression, got: %s", out)

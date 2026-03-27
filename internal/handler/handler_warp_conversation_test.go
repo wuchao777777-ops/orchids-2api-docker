@@ -730,11 +730,11 @@ func TestWarpToolResultFollowup_DuplicateWriteFallsBackToPriorToolResult(t *test
 	}
 
 	out := rec.Body.String()
-	if !strings.Contains(out, duplicateToolResultFallbackText) {
-		t.Fatalf("expected duplicate-tool-result fallback in response, got: %s", out)
-	}
 	if strings.Contains(out, genericEmptyOutputFallbackText) {
 		t.Fatalf("did not expect generic empty fallback in response, got: %s", out)
+	}
+	if strings.Contains(out, "duplicate mutating tool call was suppressed") {
+		t.Fatalf("did not expect duplicate-tool-result fallback in response, got: %s", out)
 	}
 }
 

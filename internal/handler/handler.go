@@ -1517,6 +1517,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				"text": sh.responseText.String(),
 			})
 		}
+		if sh.contentBlocks == nil {
+			sh.contentBlocks = make([]map[string]interface{}, 0)
+		}
 
 		var response interface{}
 		if responseFormat == adapter.FormatOpenAI {

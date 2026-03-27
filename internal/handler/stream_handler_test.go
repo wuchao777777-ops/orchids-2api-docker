@@ -1040,7 +1040,7 @@ func TestStreamHandler_FinishResponse_SuppressesGenericEmptyFallbackWhenRequeste
 	}
 }
 
-func TestStreamHandler_FinishResponse_UsesPriorToolResultFallbackForSuppressedDuplicateMutations(t *testing.T) {
+func TestStreamHandler_FinishResponse_SilentlySuppressesFallbackForSuppressedDuplicateMutations(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
@@ -1054,11 +1054,14 @@ func TestStreamHandler_FinishResponse_UsesPriorToolResultFallbackForSuppressedDu
 	sh.finishResponse("end_turn")
 
 	out := rec.buf.String()
-	if !strings.Contains(out, duplicateToolResultFallbackText) {
-		t.Fatalf("expected duplicate-tool fallback text in SSE output, got: %s", out)
-	}
 	if strings.Contains(out, genericEmptyOutputFallbackText) {
 		t.Fatalf("did not expect generic empty fallback when duplicate-tool fallback is preferred, got: %s", out)
+	}
+	if strings.Contains(out, "duplicate mutating tool call was suppressed") {
+		t.Fatalf("did not expect duplicate-tool fallback text in SSE output, got: %s", out)
+	}
+	if !strings.Contains(out, "event: message_stop") {
+		t.Fatalf("expected message_stop even when duplicate-tool fallback is suppressed, got: %s", out)
 	}
 }
 
