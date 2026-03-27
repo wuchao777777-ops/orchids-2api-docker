@@ -54,6 +54,16 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	}
 }
 
+func (h *Handler) currentClient() *Client {
+	if h == nil {
+		return nil
+	}
+	if h.cfg != nil {
+		return New(h.cfg)
+	}
+	return h.client
+}
+
 func (h *Handler) isModelValidationCached(modelID string) bool {
 	if h == nil || strings.TrimSpace(modelID) == "" {
 		return false
@@ -149,7 +159,8 @@ func isAutoRegisterableGrokModel(modelID string) bool {
 }
 
 func (h *Handler) tryAutoRegisterModel(ctx context.Context, modelID string) bool {
-	if h == nil || h.lb == nil || h.lb.Store == nil || h.client == nil {
+	client := h.currentClient()
+	if h == nil || h.lb == nil || h.lb.Store == nil || client == nil {
 		return false
 	}
 	id := normalizeModelID(modelID)
@@ -175,7 +186,7 @@ func (h *Handler) tryAutoRegisterModel(ctx context.Context, modelID string) bool
 
 	verifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if _, err := h.client.VerifyToken(verifyCtx, sess.token, id); err != nil {
+	if _, err := client.VerifyToken(verifyCtx, sess.token, id); err != nil {
 		slog.Debug("Auto verify grok model failed", "model_id", id, "error", err)
 		return false
 	}
@@ -295,6 +306,10 @@ func (h *Handler) doChatWithAutoSwitch(ctx context.Context, sess *chatAccountSes
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
 	}
+	client := h.currentClient()
+	if client == nil {
+		return nil, fmt.Errorf("grok client not configured")
+	}
 	maxAttempts := 2
 	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
 		maxAttempts = h.cfg.AccountSwitchCount
@@ -308,7 +323,7 @@ func (h *Handler) doChatWithAutoSwitch(ctx context.Context, sess *chatAccountSes
 		if sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
 		}
-		resp, err := h.client.doChat(ctx, sess.token, payload)
+		resp, err := client.doChat(ctx, sess.token, payload)
 		if err == nil {
 			return resp, nil
 		}
@@ -342,6 +357,10 @@ func (h *Handler) doChatWithAutoSwitchRebuild(
 	if payload == nil {
 		return nil, fmt.Errorf("empty payload")
 	}
+	client := h.currentClient()
+	if client == nil {
+		return nil, fmt.Errorf("grok client not configured")
+	}
 	maxAttempts := 2
 	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
 		maxAttempts = h.cfg.AccountSwitchCount
@@ -355,7 +374,7 @@ func (h *Handler) doChatWithAutoSwitchRebuild(
 		if sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
 		}
-		resp, err := h.client.doChat(ctx, sess.token, *payload)
+		resp, err := client.doChat(ctx, sess.token, *payload)
 		if err == nil {
 			return resp, nil
 		}

@@ -129,10 +129,7 @@ async function loadConfiguration() {
 
     document.getElementById("cfg_admin_pass").value = cfg.admin_password || cfg.admin_pass || "";
     document.getElementById("cfg_admin_token").value = cfg.admin_token || "";
-    document.getElementById("cfg_proxy_http").value = cfg.proxy_http || "";
-    document.getElementById("cfg_proxy_https").value = cfg.proxy_https || "";
-    document.getElementById("cfg_proxy_user").value = cfg.proxy_user || "";
-    document.getElementById("cfg_proxy_pass").value = cfg.proxy_pass || "";
+    document.getElementById("cfg_proxy_url").value = cfg.proxy_url || "";
     const proxyBypass = normalizeProxyBypass(cfg.proxy_bypass);
     document.getElementById("cfg_proxy_bypass").value = proxyBypass.join("\n");
 
@@ -153,10 +150,7 @@ async function saveConfiguration() {
   const data = {
     admin_password: document.getElementById("cfg_admin_pass").value,
     admin_token: document.getElementById("cfg_admin_token").value,
-    proxy_http: document.getElementById("cfg_proxy_http").value.trim(),
-    proxy_https: document.getElementById("cfg_proxy_https").value.trim(),
-    proxy_user: document.getElementById("cfg_proxy_user").value.trim(),
-    proxy_pass: document.getElementById("cfg_proxy_pass").value,
+    proxy_url: document.getElementById("cfg_proxy_url").value.trim(),
     proxy_bypass: parseProxyBypass(proxyBypassRaw),
     enable_token_cache: document.getElementById("cfg_enable_token_cache").checked ? "true" : "false",
     token_cache_ttl: getTokenCacheTTLValue(),

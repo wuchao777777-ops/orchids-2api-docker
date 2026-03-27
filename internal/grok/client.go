@@ -64,10 +64,7 @@ func New(cfg *config.Config) *Client {
 	if cfg != nil {
 		bypass = cfg.ProxyBypass
 	}
-	baseProxyFunc := http.ProxyFromEnvironment
-	if cfg != nil {
-		baseProxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
-	}
+	baseProxyFunc := util.ProxyFuncFromConfig(cfg)
 	if baseProxy != nil {
 		baseProxyFunc = util.ProxyFuncFromURL(baseProxy, bypass)
 	}
@@ -1003,8 +1000,12 @@ func resolveGrokProxy(cfg *config.Config, proxyAddr string) *url.URL {
 	if err != nil {
 		return nil
 	}
-	if cfg != nil && u.User == nil && strings.TrimSpace(cfg.ProxyUser) != "" {
-		u.User = url.UserPassword(strings.TrimSpace(cfg.ProxyUser), strings.TrimSpace(cfg.ProxyPass))
+	if cfg != nil && u.User == nil {
+		if base := util.ProxyURLFromConfig(cfg); base != nil && base.User != nil {
+			u.User = base.User
+		} else if strings.TrimSpace(cfg.ProxyUser) != "" {
+			u.User = url.UserPassword(strings.TrimSpace(cfg.ProxyUser), strings.TrimSpace(cfg.ProxyPass))
+		}
 	}
 	return u
 }
@@ -1012,7 +1013,7 @@ func resolveGrokProxy(cfg *config.Config, proxyAddr string) *url.URL {
 func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
 	proxyKey := "direct"
 	if cfg != nil {
-		proxyKey = util.GenerateProxyKey(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser)
+		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
 	}
 
 	return util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc)

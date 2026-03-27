@@ -163,8 +163,8 @@ func newHTTPClient(cfg *config.Config) *http.Client {
 	proxyKey := "direct"
 
 	if cfg != nil {
-		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
-		proxyKey = util.GenerateProxyKey(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser)
+		proxyFunc = util.ProxyFuncFromConfig(cfg)
+		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
 	} else {
 		proxyFunc = http.ProxyFromEnvironment
 	}
@@ -223,6 +223,7 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 		cfg.OrchidsMaxHistoryMessages = base.OrchidsMaxHistoryMessages
 
 		// Copy Proxy Config
+		cfg.ProxyURL = base.ProxyURL
 		cfg.ProxyHTTP = base.ProxyHTTP
 		cfg.ProxyHTTPS = base.ProxyHTTPS
 		cfg.ProxyUser = base.ProxyUser
@@ -262,7 +263,7 @@ func (c *Client) wsConnectionKey() string {
 			parts = append(parts, "ws:"+wsURL)
 		}
 
-		if proxyKey := util.GenerateProxyKey(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser); proxyKey != "" {
+		if proxyKey := util.GenerateProxyKeyFromConfig(c.config); proxyKey != "" {
 			parts = append(parts, "proxy:"+proxyKey)
 		}
 	}

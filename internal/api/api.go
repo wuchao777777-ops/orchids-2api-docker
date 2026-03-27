@@ -676,7 +676,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 
 		if planInfo, planErr := client.FetchPlanInfo(ctx); planErr == nil && planInfo != nil {
 			acc.Subscription = strings.ToLower(firstNonEmptyString(planInfo.RealPlan, planInfo.Plan, acc.Subscription))
-			if planInfo.BillingCycle.End > 0 {
+			if planInfo.BillingCycle.End > 0 && acc.QuotaResetAt.IsZero() {
 				acc.QuotaResetAt = time.UnixMilli(planInfo.BillingCycle.End)
 			}
 			if planInfo.Balance.Total > 0 && acc.UsageLimit <= 0 {
@@ -688,10 +688,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 	}
 
 	cfg := a.config.Load()
-	proxyFunc := http.ProxyFromEnvironment
-	if cfg != nil {
-		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
-	}
+	proxyFunc := util.ProxyFuncFromConfig(cfg)
 
 	jwt, err := orchidsGetAccountToken(acc, cfg)
 	if err != nil {
@@ -1667,6 +1664,11 @@ func configPayload(cfg *config.Config) (map[string]interface{}, error) {
 	if v, ok := payload["admin_pass"]; ok {
 		payload["admin_password"] = v
 	}
+	if rawProxyURL, ok := payload["proxy_url"].(string); (!ok || strings.TrimSpace(rawProxyURL) == "") && cfg != nil {
+		if proxyURL := util.ProxyURLFromConfig(cfg); proxyURL != nil {
+			payload["proxy_url"] = proxyURL.String()
+		}
+	}
 	return payload, nil
 }
 
@@ -1693,6 +1695,12 @@ func buildConfigFromPatch(r *http.Request, current *config.Config) (*config.Conf
 
 	for key, value := range patch {
 		baseMap[key] = normalizeConfigPatchValue(key, value)
+	}
+	if _, ok := patch["proxy_url"]; ok {
+		baseMap["proxy_http"] = ""
+		baseMap["proxy_https"] = ""
+		baseMap["proxy_user"] = ""
+		baseMap["proxy_pass"] = ""
 	}
 
 	raw, err := json.Marshal(baseMap)
@@ -1727,6 +1735,8 @@ func normalizeConfigPatchValue(key string, value interface{}) interface{} {
 		}
 	case "proxy_bypass":
 		return normalizeProxyBypassValue(value)
+	case "proxy_url":
+		return strings.TrimSpace(fmt.Sprint(value))
 	}
 
 	return value
@@ -1830,7 +1840,16 @@ func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config)
 	if err != nil {
 		return err
 	}
-	a.config.Store(newCfg)
+
+	// Keep the original shared config pointer updated in place so long-lived
+	// components started with that pointer (handler/background loops/providers)
+	// observe runtime config changes such as proxy updates immediately.
+	storedCfg := newCfg
+	if current != nil {
+		*current = *newCfg
+		storedCfg = current
+	}
+	a.config.Store(storedCfg)
 	if err := a.store.SetSetting(ctx, "config", string(data)); err != nil {
 		return err
 	}

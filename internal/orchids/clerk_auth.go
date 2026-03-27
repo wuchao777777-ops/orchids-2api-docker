@@ -18,7 +18,7 @@ func orchidsProxyFunc(cfg *config.Config) func(*http.Request) (*url.URL, error) 
 	if cfg == nil {
 		return http.ProxyFromEnvironment
 	}
-	return util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+	return util.ProxyFuncFromConfig(cfg)
 }
 
 func orchidsClerkCookieHeader(clientCookie, sessionCookie, clientUat, sessionID string) string {

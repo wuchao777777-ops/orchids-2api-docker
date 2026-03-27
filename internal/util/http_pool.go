@@ -4,8 +4,11 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
+
+	"orchids-api/internal/config"
 )
 
 // HttpClientCache provides a thread-safe cache for http.Client instances
@@ -85,4 +88,22 @@ func GenerateProxyKey(proxyHTTP, proxyHTTPS, proxyUser string) string {
 	}
 	// Combine to strictly separate different proxy configurations
 	return proxyHTTP + "|" + proxyHTTPS + "|" + proxyUser
+}
+
+func GenerateProxyKeyFromConfig(cfg *config.Config) string {
+	if cfg == nil {
+		return "env"
+	}
+	if proxyURL := strings.TrimSpace(cfg.ProxyURL); proxyURL != "" {
+		key := proxyURL
+		if len(cfg.ProxyBypass) > 0 {
+			key += "|" + strings.Join(cfg.ProxyBypass, ",")
+		}
+		return key
+	}
+	key := GenerateProxyKey(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser)
+	if len(cfg.ProxyBypass) > 0 {
+		key += "|" + strings.Join(cfg.ProxyBypass, ",")
+	}
+	return key
 }

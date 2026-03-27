@@ -66,7 +66,6 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 		interval = 30 * time.Minute
 	}
 	slog.Debug("Auto refresh token enabled", "interval", interval.String())
-	grokClient := grok.New(cfg)
 
 	refreshAccounts := func() {
 		accounts, err := s.GetEnabledAccounts(context.Background())
@@ -142,6 +141,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			}
 			// Grok accounts store SSO tokens in ClientCookie and are not Clerk-backed.
 			if strings.EqualFold(acc.AccountType, "grok") {
+				grokClient := grok.New(cfg)
 				token := grok.NormalizeSSOToken(acc.ClientCookie)
 				if token == "" {
 					token = grok.NormalizeSSOToken(acc.RefreshToken)
@@ -229,11 +229,11 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				}
 				if planInfo, planErr := client.FetchPlanInfo(context.Background()); planErr == nil && planInfo != nil {
 					acc.Subscription = strings.ToLower(firstNonEmpty(planInfo.RealPlan, planInfo.Plan, acc.Subscription))
-					if planInfo.Balance.Total > 0 {
+					if planInfo.Balance.Total > 0 && acc.UsageLimit <= 0 {
 						acc.UsageLimit = planInfo.Balance.Total
 						acc.UsageCurrent = planInfo.Balance.Remaining
 					}
-					if planInfo.BillingCycle.End > 0 {
+					if planInfo.BillingCycle.End > 0 && acc.QuotaResetAt.IsZero() {
 						acc.QuotaResetAt = time.UnixMilli(planInfo.BillingCycle.End)
 					}
 				}
@@ -247,7 +247,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			}
 			proxyFunc := http.ProxyFromEnvironment
 			if cfg != nil {
-				proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+				proxyFunc = util.ProxyFuncFromConfig(cfg)
 			}
 			if strings.TrimSpace(acc.ClientCookie) == "" {
 				jwt := strings.TrimSpace(acc.Token)
@@ -524,7 +524,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 		syncPuterModels := func() {
 			proxyFunc := http.ProxyFromEnvironment
 			if cfg != nil {
-				proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+				proxyFunc = util.ProxyFuncFromConfig(cfg)
 			}
 
 			models, err := fetchPuterPublicModelChoices(context.Background(), proxyFunc)
@@ -860,7 +860,7 @@ func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.
 
 	proxyFunc := http.ProxyFromEnvironment
 	if cfg != nil {
-		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+		proxyFunc = util.ProxyFuncFromConfig(cfg)
 	}
 	publicModels, fallbackErr := fetchOrchidsPublicModelChoicesWithProxy(ctx, proxyFunc)
 	if fallbackErr != nil {

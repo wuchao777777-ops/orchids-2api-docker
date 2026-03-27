@@ -185,6 +185,30 @@ func TestParseToolCalls_AcceptsWholeToolUseJSON(t *testing.T) {
 	}
 }
 
+func TestParseToolCalls_AcceptsMixedProseAndFencedToolJSON(t *testing.T) {
+	raw := "I will use a tool now.\n```json\n{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"calculator.py\",\"content\":\"print(1)\"}}\n```\nI will wait for the result."
+	toolCalls, text := parseToolCalls(raw)
+	if len(toolCalls) != 1 {
+		t.Fatalf("toolCalls len = %d, want 1", len(toolCalls))
+	}
+	if toolCalls[0].Name != "Write" {
+		t.Fatalf("toolCalls[0].Name = %q, want Write", toolCalls[0].Name)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(toolCalls[0].Input, &input); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if input["file_path"] != "calculator.py" {
+		t.Fatalf("toolCalls[0].Input = %#v", input)
+	}
+	if !strings.Contains(text, "I will use a tool now.") || !strings.Contains(text, "I will wait for the result.") {
+		t.Fatalf("remaining text = %q", text)
+	}
+	if strings.Contains(text, "tool_use") {
+		t.Fatalf("expected fenced tool JSON to be removed from text, got %q", text)
+	}
+}
+
 func TestParseToolCalls_GeneratesToolCallIDWhenMissingOrNil(t *testing.T) {
 	tests := []struct {
 		name string
@@ -360,6 +384,7 @@ func TestBuildRequest_IncludesWorkdirToolPrompt(t *testing.T) {
 		"Treat the project root as `.`",
 		"# Tools",
 		"<tool_call>",
+		"Never claim that a file was created, updated, or deleted unless you emitted the corresponding tool call.",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)

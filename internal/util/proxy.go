@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"orchids-api/internal/config"
 )
 
 func ProxyFunc(httpProxy, httpsProxy, user, pass string, bypass []string) func(*http.Request) (*url.URL, error) {
@@ -71,8 +73,16 @@ func ProxyFunc(httpProxy, httpsProxy, user, pass string, bypass []string) func(*
 	}
 }
 
+func DirectProxyFunc() func(*http.Request) (*url.URL, error) {
+	return func(req *http.Request) (*url.URL, error) {
+		if req == nil || req.URL == nil {
+			return nil, nil
+		}
+		return nil, nil
+	}
+}
+
 func ProxyFuncFromURL(proxyURL *url.URL, bypass []string) func(*http.Request) (*url.URL, error) {
-	useEnv := proxyURL == nil
 	return func(req *http.Request) (*url.URL, error) {
 		if req == nil || req.URL == nil {
 			return nil, nil
@@ -83,11 +93,71 @@ func ProxyFuncFromURL(proxyURL *url.URL, bypass []string) func(*http.Request) (*
 		if proxyURL != nil {
 			return proxyURL, nil
 		}
-		if useEnv {
-			return http.ProxyFromEnvironment(req)
-		}
 		return nil, nil
 	}
+}
+
+func ParseProxyURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if u.Host == "" {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(u.Scheme)) {
+	case "http", "https", "socks5", "socks5h":
+		return u, nil
+	default:
+		return nil, nil
+	}
+}
+
+func ProxyURLFromConfig(cfg *config.Config) *url.URL {
+	if cfg == nil {
+		return nil
+	}
+	if u, err := ParseProxyURL(cfg.ProxyURL); err == nil && u != nil {
+		return u
+	}
+
+	httpProxy := strings.TrimSpace(cfg.ProxyHTTP)
+	httpsProxy := strings.TrimSpace(cfg.ProxyHTTPS)
+	user := strings.TrimSpace(cfg.ProxyUser)
+	pass := strings.TrimSpace(cfg.ProxyPass)
+
+	target := httpProxy
+	if target == "" {
+		target = httpsProxy
+	}
+	u, err := ParseProxyURL(target)
+	if err != nil || u == nil {
+		return nil
+	}
+	if user != "" && u.User == nil {
+		u.User = url.UserPassword(user, pass)
+	}
+	return u
+}
+
+func ProxyFuncFromConfig(cfg *config.Config) func(*http.Request) (*url.URL, error) {
+	if cfg == nil {
+		return http.ProxyFromEnvironment
+	}
+	if proxyURL, err := ParseProxyURL(cfg.ProxyURL); err == nil && proxyURL != nil {
+		return ProxyFuncFromURL(proxyURL, cfg.ProxyBypass)
+	}
+	if strings.TrimSpace(cfg.ProxyHTTP) != "" || strings.TrimSpace(cfg.ProxyHTTPS) != "" {
+		return ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+	}
+	return DirectProxyFunc()
 }
 
 func shouldBypass(host string, bypass []string) bool {

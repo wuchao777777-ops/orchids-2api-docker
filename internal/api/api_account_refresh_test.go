@@ -293,8 +293,8 @@ func TestRefreshAccountState_V0SyncsQuotaFromRateLimitAndPlanInfo(t *testing.T) 
 	if acc.UsageLimit != 5 || acc.UsageCurrent != 5 {
 		t.Fatalf("usage_current=%v usage_limit=%v want 5/5", acc.UsageCurrent, acc.UsageLimit)
 	}
-	if !acc.QuotaResetAt.Equal(time.UnixMilli(1776470400000)) {
-		t.Fatalf("quota_reset_at=%v want %v", acc.QuotaResetAt, time.UnixMilli(1776470400000))
+	if !acc.QuotaResetAt.Equal(time.UnixMilli(1774569600000)) {
+		t.Fatalf("quota_reset_at=%v want %v", acc.QuotaResetAt, time.UnixMilli(1774569600000))
 	}
 }
 

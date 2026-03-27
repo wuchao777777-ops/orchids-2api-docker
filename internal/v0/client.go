@@ -144,8 +144,8 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	proxyFunc := http.ProxyFromEnvironment
 	proxyKey := "direct"
 	if cfg != nil {
-		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
-		proxyKey = util.GenerateProxyKey(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser)
+		proxyFunc = util.ProxyFuncFromConfig(cfg)
+		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
 	}
 
 	return &Client{

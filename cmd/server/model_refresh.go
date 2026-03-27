@@ -147,7 +147,7 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 	case "puter":
 		proxyFunc := http.ProxyFromEnvironment
 		if cfg != nil {
-			proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+			proxyFunc = util.ProxyFuncFromConfig(cfg)
 		}
 		items, err := fetchPuterPublicModelChoices(ctx, proxyFunc)
 		if err != nil {

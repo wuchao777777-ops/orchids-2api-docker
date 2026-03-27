@@ -185,6 +185,9 @@ func (h *Handler) selectAccount(ctx context.Context, targetChannel string, chann
 				return nil, nil, err
 			}
 			if h.client != nil {
+				if _, ok := h.client.(*orchids.Client); ok && h.config != nil {
+					h.client = orchids.New(h.config)
+				}
 				slog.Debug("Load balancer: no available accounts for channel, using default config", "channel", targetChannel)
 				return h.client, nil, nil
 			}
@@ -196,6 +199,9 @@ func (h *Handler) selectAccount(ctx context.Context, targetChannel string, chann
 		}
 		return client, account, nil
 	} else if h.client != nil {
+		if _, ok := h.client.(*orchids.Client); ok && h.config != nil {
+			h.client = orchids.New(h.config)
+		}
 		return h.client, nil, nil
 	}
 	return nil, nil, errors.New("no client configured")

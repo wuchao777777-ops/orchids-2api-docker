@@ -63,7 +63,7 @@ func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 
 	var proxyFunc func(*http.Request) (*url.URL, error)
 	if cfg != nil {
-		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+		proxyFunc = util.ProxyFuncFromConfig(cfg)
 	} else {
 		proxyFunc = http.ProxyFromEnvironment
 	}

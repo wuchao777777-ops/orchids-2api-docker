@@ -192,6 +192,7 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		writeString(cfg.OrchidsAPIBaseURL)
 		writeString(cfg.OrchidsWSURL)
 		writeString(cfg.OrchidsAPIVersion)
+		writeString(cfg.ProxyURL)
 		writeString(cfg.ProxyHTTP)
 		writeString(cfg.ProxyHTTPS)
 		writeString(cfg.ProxyUser)

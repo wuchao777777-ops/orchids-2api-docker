@@ -95,6 +95,7 @@ type Config struct {
 	ConcurrencyLimit          int      `json:"-"`
 	ConcurrencyTimeout        int      `json:"-"`
 	AdaptiveTimeout           bool     `json:"-"`
+	ProxyURL                  string   `json:"proxy_url"`
 	ProxyHTTP                 string   `json:"proxy_http"`
 	ProxyHTTPS                string   `json:"proxy_https"`
 	ProxyUser                 string   `json:"proxy_user"`

@@ -4135,7 +4135,7 @@ func (h *streamHandler) InjectAuthError(category, errStr string) {
 	case strings.Contains(errStr, "401"):
 		errorMsg = "Authentication Error: Session expired (401). Please update your account credentials."
 	case strings.Contains(errStr, "403"):
-		errorMsg = "Access Forbidden (403): Your account might be flagged or blocked. Try re-enabling it in the Admin UI."
+		errorMsg = "Access Forbidden (403): This account cannot use the requested AI feature right now. It may be unavailable for the current plan, quota, or Warp AI feature status."
 	default:
 		errorMsg = fmt.Sprintf("Request Failed: %s. Please check your account status.", errStr)
 	}

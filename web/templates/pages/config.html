@@ -125,30 +125,16 @@
           <div class="settings-panel-head">
             <div class="inline-actions">
               <h3 class="settings-panel-title">代理配置</h3>
-              <span class="mini-badge">HTTP/HTTPS</span>
+              <span class="mini-badge">URL</span>
             </div>
             <span class="meta-text meta-text-xs">留空表示直连</span>
           </div>
 
-          <div class="config-grid config-grid-two config-grid-gap-sm">
+          <div class="config-grid config-grid-gap-sm">
             <div>
-              <label class="form-label">HTTP 代理</label>
-              <input type="text" id="cfg_proxy_http" class="form-input" placeholder="http://host:port">
-            </div>
-            <div>
-              <label class="form-label">HTTPS 代理</label>
-              <input type="text" id="cfg_proxy_https" class="form-input" placeholder="http://host:port">
-            </div>
-            <div>
-              <label class="form-label">代理用户名</label>
-              <input type="text" id="cfg_proxy_user" class="form-input" placeholder="可选">
-            </div>
-            <div>
-              <label class="form-label">代理密码</label>
-              <div class="input-wrapper">
-                <input type="password" id="cfg_proxy_pass" class="form-input" placeholder="可选">
-                <button type="button" class="btn-icon password-toggle" onclick="togglePassword('cfg_proxy_pass')">••</button>
-              </div>
+              <label class="form-label">代理 URL</label>
+              <input type="text" id="cfg_proxy_url" class="form-input" placeholder="http://user:pass@host:port/ 或 socks5://user:pass@host:port/">
+              <div class="meta-text meta-text-xs" style="margin-top: 8px;">支持 `http://`、`https://`、`socks5://`，留空则不使用代理。</div>
             </div>
           </div>
 

@@ -578,7 +578,7 @@ func (h *Handler) uploadSingleInput(ctx context.Context, token, input string) (s
 		var err error
 		proxyFunc := http.ProxyFromEnvironment
 		if h != nil && h.cfg != nil {
-			proxyFunc = util.ProxyFunc(h.cfg.ProxyHTTP, h.cfg.ProxyHTTPS, h.cfg.ProxyUser, h.cfg.ProxyPass, h.cfg.ProxyBypass)
+			proxyFunc = util.ProxyFuncFromConfig(h.cfg)
 		}
 		data, err = fetchRemoteAsDataURI(data, 30*time.Second, proxyFunc)
 		if err != nil {

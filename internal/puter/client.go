@@ -31,12 +31,13 @@ const (
 )
 
 var (
-	puterAPIURL         = defaultAPIURL
-	toolCallPattern     = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
-	toolFencePattern    = regexp.MustCompile("(?s)^```[a-zA-Z0-9_-]*\\s*(.*?)\\s*```$")
-	tmpPathHintPattern  = regexp.MustCompile(`(?i)(/tmp/[^\s"'` + "`" + `]+)`)
-	unixPathHintPattern = regexp.MustCompile(`(?i)(/[^\s"'` + "`" + `]+)`)
-	winPathHintPattern  = regexp.MustCompile(`(?i)([a-z]:\\[^\r\n"'` + "`" + `]+)`)
+	puterAPIURL          = defaultAPIURL
+	toolCallPattern      = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
+	toolFencePattern     = regexp.MustCompile("(?s)^```[a-zA-Z0-9_-]*\\s*(.*?)\\s*```$")
+	toolFenceFindPattern = regexp.MustCompile("(?s)```(?:json|javascript|js)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
+	tmpPathHintPattern   = regexp.MustCompile(`(?i)(/tmp/[^\s"'` + "`" + `]+)`)
+	unixPathHintPattern  = regexp.MustCompile(`(?i)(/[^\s"'` + "`" + `]+)`)
+	winPathHintPattern   = regexp.MustCompile(`(?i)([a-z]:\\[^\r\n"'` + "`" + `]+)`)
 )
 
 type Client struct {
@@ -59,8 +60,8 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	proxyFunc := http.ProxyFromEnvironment
 	proxyKey := "direct"
 	if cfg != nil {
-		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
-		proxyKey = util.GenerateProxyKey(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser)
+		proxyFunc = util.ProxyFuncFromConfig(cfg)
+		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
 	}
 
 	return &Client{
@@ -398,7 +399,13 @@ func buildToolPrompt(tools []interface{}) string {
 	if len(sections) == 0 {
 		return ""
 	}
-	return "# Tools\n\n" + defaultToolHint + "\n\nAvailable tools:\n\n" + strings.Join(sections, "\n\n")
+	rules := []string{
+		defaultToolHint,
+		"If the user asks you to create, modify, rename, or delete files, you must emit a tool call instead of only describing code in plain text.",
+		"Never claim that a file was created, updated, or deleted unless you emitted the corresponding tool call.",
+		"When a tool is required, do not answer with a prose-only solution and do not say that work is done before the tool_result confirms it.",
+	}
+	return "# Tools\n\n" + strings.Join(rules, "\n") + "\n\nAvailable tools:\n\n" + strings.Join(sections, "\n\n")
 }
 
 func extractToolDefinition(tool interface{}) (string, string, string) {
@@ -626,6 +633,10 @@ func parseToolCalls(text string) ([]ParsedToolCall, string) {
 		}
 	}
 
+	if toolCalls, remaining := parseToolCallsFromFencedJSON(text); len(toolCalls) > 0 {
+		return toolCalls, remaining
+	}
+
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return nil, ""
@@ -642,6 +653,40 @@ func parseToolCalls(text string) ([]ParsedToolCall, string) {
 	}
 
 	return nil, trimmed
+}
+
+func parseToolCallsFromFencedJSON(text string) ([]ParsedToolCall, string) {
+	matches := toolFenceFindPattern.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) == 0 {
+		return nil, strings.TrimSpace(text)
+	}
+
+	var calls []ParsedToolCall
+	var remaining strings.Builder
+	last := 0
+	for i, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		start, end := match[0], match[1]
+		jsonStart, jsonEnd := match[2], match[3]
+		if start > last {
+			remaining.WriteString(text[last:start])
+		}
+		if parsed := parseToolCallsFromJSON(text[jsonStart:jsonEnd], i); len(parsed) > 0 {
+			calls = append(calls, parsed...)
+		} else {
+			remaining.WriteString(text[start:end])
+		}
+		last = end
+	}
+	if last < len(text) {
+		remaining.WriteString(text[last:])
+	}
+	if len(calls) == 0 {
+		return nil, strings.TrimSpace(text)
+	}
+	return calls, strings.TrimSpace(remaining.String())
 }
 
 func stripPuterToolCodeFence(text string) string {
