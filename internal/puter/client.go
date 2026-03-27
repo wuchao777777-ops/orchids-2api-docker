@@ -920,10 +920,17 @@ func shouldSanitizeToolPathListKey(key string) bool {
 func relativizeWorkspacePath(pathValue string, workdir string) (string, bool) {
 	trimmedPath := strings.TrimSpace(pathValue)
 	trimmedWorkdir := strings.TrimSpace(workdir)
-	if trimmedPath == "" || trimmedWorkdir == "" || !filepath.IsAbs(trimmedPath) {
+	if trimmedPath == "" || trimmedWorkdir == "" {
 		return "", false
 	}
 
+	if rel, ok := relativizeWindowsWorkspacePath(trimmedPath, trimmedWorkdir); ok {
+		return rel, true
+	}
+
+	if !filepath.IsAbs(trimmedPath) {
+		return "", false
+	}
 	workspaceAbs, err := filepath.Abs(trimmedWorkdir)
 	if err != nil {
 		return "", false
@@ -944,6 +951,54 @@ func relativizeWorkspacePath(pathValue string, workdir string) (string, bool) {
 		return "", false
 	}
 	return rel, true
+}
+
+func relativizeWindowsWorkspacePath(pathValue string, workdir string) (string, bool) {
+	pathNorm, pathDrive, ok := normalizeWindowsAbsolutePath(pathValue)
+	if !ok {
+		return "", false
+	}
+	workdirNorm, workdirDrive, ok := normalizeWindowsAbsolutePath(workdir)
+	if !ok {
+		return "", false
+	}
+	if !strings.EqualFold(pathDrive, workdirDrive) {
+		return "", false
+	}
+	if !strings.HasPrefix(strings.ToLower(pathNorm), strings.ToLower(workdirNorm)) {
+		return "", false
+	}
+	if len(pathNorm) == len(workdirNorm) {
+		return "", false
+	}
+	next := pathNorm[len(workdirNorm)]
+	if next != '\\' && next != '/' {
+		return "", false
+	}
+	rel := strings.TrimLeft(pathNorm[len(workdirNorm):], `\/`)
+	rel = strings.ReplaceAll(rel, `\`, `/`)
+	rel = strings.TrimSpace(rel)
+	if rel == "" || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", false
+	}
+	return rel, true
+}
+
+func normalizeWindowsAbsolutePath(value string) (normalized string, drive string, ok bool) {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) < 3 || trimmed[1] != ':' {
+		return "", "", false
+	}
+	if trimmed[2] != '\\' && trimmed[2] != '/' {
+		return "", "", false
+	}
+	drive = strings.ToUpper(trimmed[:1])
+	rest := strings.ReplaceAll(trimmed[2:], `/`, `\`)
+	rest = strings.TrimRight(rest, `\`)
+	if rest == "" {
+		return drive + `:\`, drive, true
+	}
+	return drive + `:\` + rest, drive, true
 }
 
 func firstNonNil(values ...interface{}) interface{} {

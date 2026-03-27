@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -150,7 +151,21 @@ func New(opts Options) (*Store, error) {
 	if err := store.seedModels(); err != nil {
 		slog.Warn("failed to seed models in redis", "error", err)
 	}
+	if err := store.cleanupDeprecatedData(); err != nil {
+		slog.Warn("failed to cleanup deprecated data", "error", err)
+	}
 	return store, nil
+}
+
+func (s *Store) cleanupDeprecatedData() error {
+	ctx := context.Background()
+	if err := s.cleanupDeprecatedAccounts(ctx); err != nil {
+		return err
+	}
+	if err := s.cleanupDeprecatedModels(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) seedModels() error {
@@ -256,6 +271,51 @@ func (s *Store) seedModels() error {
 	}
 
 	return nil
+}
+
+func (s *Store) cleanupDeprecatedAccounts(ctx context.Context) error {
+	accounts, err := s.ListAccounts(ctx)
+	if err != nil {
+		return err
+	}
+	for _, acc := range accounts {
+		if acc == nil || !isDeprecatedChannelName(acc.AccountType) {
+			continue
+		}
+		if err := s.DeleteAccount(ctx, acc.ID); err != nil {
+			slog.Warn("Failed to remove deprecated account", "account_id", acc.ID, "account_type", acc.AccountType, "error", err)
+			continue
+		}
+		slog.Debug("Removed deprecated account", "account_id", acc.ID, "account_type", acc.AccountType)
+	}
+	return nil
+}
+
+func (s *Store) cleanupDeprecatedModels(ctx context.Context) error {
+	models, err := s.ListModels(ctx)
+	if err != nil {
+		return err
+	}
+	for _, model := range models {
+		if model == nil || !isDeprecatedChannelName(model.Channel) {
+			continue
+		}
+		if err := s.DeleteModel(ctx, model.ID); err != nil {
+			slog.Warn("Failed to remove deprecated model channel", "model_id", model.ModelID, "channel", model.Channel, "error", err)
+			continue
+		}
+		slog.Debug("Removed deprecated model channel", "model_id", model.ModelID, "channel", model.Channel)
+	}
+	return nil
+}
+
+func isDeprecatedChannelName(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "v0", "v0-web":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildGrokSeedModels() []Model {

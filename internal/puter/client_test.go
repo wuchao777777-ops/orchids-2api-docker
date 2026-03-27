@@ -459,6 +459,16 @@ func TestSanitizeParsedToolCalls_RelativizesWorkspaceAbsolutePaths(t *testing.T)
 	}
 }
 
+func TestRelativizeWorkspacePath_WindowsStyleOnNonWindowsHost(t *testing.T) {
+	got, ok := relativizeWorkspacePath(`C:\Users\zhangdailin\Desktop\11112\folder\output.txt`, `C:\Users\zhangdailin\Desktop\11112`)
+	if !ok {
+		t.Fatal("expected Windows-style path to be relativized")
+	}
+	if got != "folder/output.txt" {
+		t.Fatalf("rel = %q, want %q", got, "folder/output.txt")
+	}
+}
+
 func TestSanitizeParsedToolCalls_LeavesExternalAbsolutePathsUnchanged(t *testing.T) {
 	calls := []ParsedToolCall{
 		{
