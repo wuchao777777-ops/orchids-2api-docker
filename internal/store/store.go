@@ -197,28 +197,9 @@ func (s *Store) seedModels() error {
 		// 这里采用“无前缀主模型”策略：
 		// 参考 puter2api 仓库附带的 model.json，只收录不带 provider 前缀的主模型，
 		// 不直接暴露 openrouter:/togetherai: 这类聚合源模型，避免列表膨胀过大。
-		// Grok 模型
-		{ID: "90", Channel: "Grok", ModelID: "grok-3", Name: "Grok 3", Status: ModelStatusAvailable, IsDefault: true, SortOrder: 0},
-		{ID: "91", Channel: "Grok", ModelID: "grok-3-mini", Name: "Grok 3 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 1},
-		{ID: "92", Channel: "Grok", ModelID: "grok-3-thinking", Name: "Grok 3 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 2},
-		{ID: "93", Channel: "Grok", ModelID: "grok-3-fast", Name: "Grok 3 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 3},
-		{ID: "94", Channel: "Grok", ModelID: "grok-4", Name: "Grok 4", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 4},
-		{ID: "95", Channel: "Grok", ModelID: "grok-4-mini", Name: "Grok 4 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 5},
-		{ID: "96", Channel: "Grok", ModelID: "grok-4-thinking", Name: "Grok 4 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 6},
-		{ID: "97", Channel: "Grok", ModelID: "grok-4-fast", Name: "Grok 4 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 7},
-		{ID: "98", Channel: "Grok", ModelID: "grok-4-heavy", Name: "Grok 4 Heavy", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 8},
-		{ID: "99", Channel: "Grok", ModelID: "grok-4.1-mini", Name: "Grok 4.1 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 9},
-		{ID: "100", Channel: "Grok", ModelID: "grok-4.1-fast", Name: "Grok 4.1 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 10},
-		{ID: "101", Channel: "Grok", ModelID: "grok-4.1-expert", Name: "Grok 4.1 Expert", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 11},
-		{ID: "102", Channel: "Grok", ModelID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 12},
-		{ID: "103", Channel: "Grok", ModelID: "grok-4.1", Name: "Grok 4.1", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 13},
-		{ID: "107", Channel: "Grok", ModelID: "grok-420", Name: "Grok 420", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 14},
-		{ID: "104", Channel: "Grok", ModelID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 15},
-		{ID: "108", Channel: "Grok", ModelID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 16},
-		{ID: "105", Channel: "Grok", ModelID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 17},
-		{ID: "106", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 18},
 	}
 
+	models = append(models, buildGrokSeedModels()...)
 	models = append(models, buildBoltBootstrapModels()...)
 	models = append(models, buildPuterSeedModels()...)
 	models = append(models, BuildV0SeedModels()...)
@@ -234,7 +215,35 @@ func (s *Store) seedModels() error {
 		}
 	}
 
-	deprecatedModelIDs := []string{"grok-4.2", "grok-4.20-beta"}
+	deprecatedModelIDs := []string{
+		"grok-3",
+		"grok-3-thinking",
+		"grok-3-fast",
+		"grok-4",
+		"grok-4-mini",
+		"grok-4-fast",
+		"grok-4-heavy",
+		"grok-4.1-mini",
+		"grok-4.1-fast",
+		"grok-4.1-thinking",
+		"grok-4.1",
+		"grok-4-1-thinking-1129",
+		"grok-4.2",
+		"grok-4.20-beta",
+		"grok-4.20-0309-reasoning",
+		"grok-4.20-0309-non-reasoning",
+		"grok-imagine-1.0",
+		"grok-imagine-1.0-fast",
+		"grok-imagine-1.0-edit",
+		"grok-imagine-1.0-video",
+		"grok-code-fast",
+		"grok-code-fast-1",
+		"grok-2",
+		"grok-2.1",
+		"grok-3.1",
+		"grok-4.21",
+		"grok-5",
+	}
 	for _, modelID := range deprecatedModelIDs {
 		m, err := s.GetModelByModelID(ctx, modelID)
 		if err != nil || m == nil {
@@ -248,6 +257,15 @@ func (s *Store) seedModels() error {
 	}
 
 	return nil
+}
+
+func buildGrokSeedModels() []Model {
+	return []Model{
+		{ID: "107", Channel: "Grok", ModelID: "grok-420", Name: "Grok 420", Status: ModelStatusAvailable, IsDefault: true, SortOrder: 0},
+		{ID: "91", Channel: "Grok", ModelID: "grok-3-mini", Name: "Grok 3 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 1},
+		{ID: "96", Channel: "Grok", ModelID: "grok-4-thinking", Name: "Grok 4 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 2},
+		{ID: "101", Channel: "Grok", ModelID: "grok-4.1-expert", Name: "Grok 4.1 Expert", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 3},
+	}
 }
 
 func (s *Store) Close() error {

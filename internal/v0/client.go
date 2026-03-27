@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/goccy/go-json"
 
@@ -295,6 +296,9 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	raw, err := c.doRequest(ctx, http.MethodPost, SendURLForTest, sendBody, referer, "*/*")
 	if err != nil {
 		return err
+	}
+	if logger != nil {
+		logger.LogUpstreamHTTPError(SendURLForTest, http.StatusOK, string(raw), nil)
 	}
 	reply := extractSendResponseText(raw, promptText)
 	if reply == "" {
@@ -658,7 +662,10 @@ func extractSendResponseText(raw []byte, promptText string) string {
 			best = decoded
 		}
 	}
-	return best
+	if best != "" {
+		return best
+	}
+	return fallbackMeaningfulResponseText(string(raw), promptText)
 }
 
 func extractFirstMeaningfulText(value interface{}, promptText string) string {
@@ -668,7 +675,10 @@ func extractFirstMeaningfulText(value interface{}, promptText string) string {
 		switch v := node.(type) {
 		case string:
 			text := strings.TrimSpace(v)
-			if isMeaningfulResponseText(text, promptText) && len(text) > len(best) {
+			if nested := extractMeaningfulTextFromNestedString(text, promptText); nested != "" && len(nested) > len(best) {
+				best = nested
+			}
+			if !looksLikeStructuredPayload(text) && isMeaningfulResponseText(text, promptText) && len(text) > len(best) {
 				best = text
 			}
 		case []interface{}:
@@ -681,16 +691,40 @@ func extractFirstMeaningfulText(value interface{}, promptText string) string {
 				case "text", "content", "response", "message", "output", "completion":
 					walk(item)
 				default:
-					switch nested := item.(type) {
-					case []interface{}, map[string]interface{}:
-						walk(nested)
-					}
+					walk(item)
 				}
 			}
 		}
 	}
 	walk(value)
 	return best
+}
+
+func extractMeaningfulTextFromNestedString(text, promptText string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if !(strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") || strings.HasPrefix(text, "\"{") || strings.HasPrefix(text, "\"[")) {
+		return ""
+	}
+	unquoted := text
+	if strings.HasPrefix(unquoted, "\"") {
+		var decoded string
+		if err := json.Unmarshal([]byte(unquoted), &decoded); err == nil {
+			unquoted = strings.TrimSpace(decoded)
+		}
+	}
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(unquoted), &parsed); err != nil {
+		return ""
+	}
+	return extractFirstMeaningfulText(parsed, promptText)
+}
+
+func looksLikeStructuredPayload(text string) bool {
+	text = strings.TrimSpace(text)
+	return strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") || strings.HasPrefix(text, "\"{") || strings.HasPrefix(text, "\"[")
 }
 
 func isMeaningfulResponseText(text, promptText string) bool {
@@ -706,6 +740,41 @@ func isMeaningfulResponseText(text, promptText string) bool {
 		return false
 	}
 	return len([]rune(text)) >= 2
+}
+
+func fallbackMeaningfulResponseText(rawText, promptText string) string {
+	rawText = strings.TrimSpace(rawText)
+	if rawText == "" {
+		return ""
+	}
+	lines := strings.Split(rawText, "\n")
+	best := ""
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(line), "data:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		line = stripCommonResponseWrappers(line)
+		if isMeaningfulResponseText(line, promptText) && len([]rune(line)) > len([]rune(best)) {
+			best = line
+		}
+	}
+	return best
+}
+
+func stripCommonResponseWrappers(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.Trim(text, "`")
+	text = strings.Trim(text, "\"")
+	text = strings.TrimSpace(text)
+	if !utf8.ValidString(text) {
+		return ""
+	}
+	text = strings.ReplaceAll(text, "\\n", "\n")
+	text = strings.ReplaceAll(text, "\\t", "\t")
+	text = strings.ReplaceAll(text, "\\\"", "\"")
+	text = strings.TrimSpace(text)
+	return text
 }
 
 func extractSendResponseChatID(raw []byte) string {

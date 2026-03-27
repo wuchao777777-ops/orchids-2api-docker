@@ -654,29 +654,21 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 			}
 
 			candidateSet := map[string]struct{}{}
-			for _, m := range grok.SupportedModels {
-				if m.IsImage || m.IsVideo {
-					continue
-				}
-				id := strings.TrimSpace(m.ID)
+			for _, id := range modelpolicy.StableGrokTextModelIDs() {
 				if id != "" {
 					candidateSet[id] = struct{}{}
 				}
 			}
-			for _, probe := range buildGrokVersionProbes(existingModels) {
-				if probe != "" {
-					candidateSet[probe] = struct{}{}
+			for _, existing := range existingModels {
+				if existing == nil || !strings.EqualFold(strings.TrimSpace(existing.Channel), "grok") {
+					continue
 				}
-			}
-
-			publicCandidates, fetchErr := fetchPublicGrokModelIDs(context.Background())
-			if fetchErr != nil {
-				slog.Warn("Grok 模型同步: 公共模型源抓取失败", "error", fetchErr)
-			} else {
-				for _, id := range publicCandidates {
-					if id != "" {
-						candidateSet[id] = struct{}{}
-					}
+				if !existing.Verified {
+					continue
+				}
+				id := strings.TrimSpace(existing.ModelID)
+				if id != "" {
+					candidateSet[id] = struct{}{}
 				}
 			}
 

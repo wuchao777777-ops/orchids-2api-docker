@@ -12,6 +12,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
+	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 	"orchids-api/internal/v0"
@@ -205,7 +206,7 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 			return nil, "", err
 		}
 		seen := map[string]struct{}{}
-		out := make([]discoveredModel, 0, len(grok.SupportedModels)+8)
+		out := make([]discoveredModel, 0, len(modelpolicy.StableGrokTextModelIDs())+4)
 		appendCandidate := func(id, name string) {
 			id = strings.TrimSpace(id)
 			if id == "" {
@@ -220,29 +221,24 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 			}
 			out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
 		}
-		for _, spec := range grok.SupportedModels {
-			if spec.IsImage || spec.IsVideo {
-				continue
+
+		for _, id := range modelpolicy.StableGrokTextModelIDs() {
+			name := id
+			if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
+				name = spec.Name
 			}
-			appendCandidate(spec.ID, spec.Name)
+			appendCandidate(id, name)
 		}
 		for _, model := range existing {
 			if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
 				continue
 			}
+			if !model.Verified {
+				continue
+			}
 			appendCandidate(model.ModelID, model.Name)
 		}
-		for _, probe := range buildGrokVersionProbes(existing) {
-			appendCandidate(probe, probe)
-		}
-		source := "grok_supported_models"
-		if publicIDs, fetchErr := fetchPublicGrokModelIDs(ctx); fetchErr == nil {
-			for _, id := range publicIDs {
-				appendCandidate(id, id)
-			}
-			source = "grok_supported_models+public_docs"
-		}
-		return out, source, nil
+		return out, "grok_stable_allowlist+verified_existing", nil
 	default:
 		return nil, "", fmt.Errorf("unsupported channel: %s", channel)
 	}

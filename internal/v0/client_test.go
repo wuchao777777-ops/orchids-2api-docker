@@ -96,6 +96,20 @@ func TestExtractSendResponseTextPrefersAssistantText(t *testing.T) {
 	}
 }
 
+func TestExtractSendResponseText_ParsesNestedJSONString(t *testing.T) {
+	raw := []byte(`{"result":"{\"messages\":[{\"role\":\"assistant\",\"content\":\"hello from nested json\"}]}"}`)
+	if got := extractSendResponseText(raw, "hi"); got != "hello from nested json" {
+		t.Fatalf("extractSendResponseText()=%q want hello from nested json", got)
+	}
+}
+
+func TestExtractSendResponseText_FallsBackToDataLine(t *testing.T) {
+	raw := []byte("data: hello from data line\n\nevent: done\n")
+	if got := extractSendResponseText(raw, "hi"); got != "hello from data line" {
+		t.Fatalf("extractSendResponseText()=%q want hello from data line", got)
+	}
+}
+
 func TestExtractSendResponseChatID(t *testing.T) {
 	raw := []byte(`{"referer":"https://v0.app/chat/-abc123","message":"ok"}`)
 	if got := extractSendResponseChatID(raw); got != "-abc123" {

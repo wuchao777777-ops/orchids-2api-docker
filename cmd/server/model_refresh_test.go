@@ -11,6 +11,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 )
 
@@ -154,30 +155,61 @@ func TestDiscoverModelsForChannel_V0ReturnsSeedFallbackWithoutAccounts(t *testin
 	}
 }
 
-func TestDiscoverModelsForChannel_GrokIncludesSupportedCatalog(t *testing.T) {
+func TestDiscoverModelsForChannel_GrokUsesStableAllowlistAndVerifiedExisting(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
+
+	ctx := context.Background()
+	if err := s.CreateModel(ctx, &store.Model{
+		Channel:   "Grok",
+		ModelID:   "grok-5",
+		Name:      "grok-5",
+		Status:    store.ModelStatusAvailable,
+		Verified:  true,
+		IsDefault: false,
+		SortOrder: 99,
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+	if err := s.CreateModel(ctx, &store.Model{
+		Channel:   "Grok",
+		ModelID:   "grok-4",
+		Name:      "grok-4",
+		Status:    store.ModelStatusAvailable,
+		Verified:  false,
+		IsDefault: false,
+		SortOrder: 100,
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
 
 	items, source, err := discoverModelsForChannel(context.Background(), nil, s, "Grok")
 	if err != nil {
 		t.Fatalf("discoverModelsForChannel() error = %v", err)
 	}
 	if len(items) == 0 {
-		t.Fatal("expected grok discovery to return supported models")
+		t.Fatal("expected grok discovery to return stable models")
 	}
-	if !strings.HasPrefix(source, "grok_supported_models") {
-		t.Fatalf("source=%q want prefix grok_supported_models", source)
+	if source != "grok_stable_allowlist+verified_existing" {
+		t.Fatalf("source=%q want %q", source, "grok_stable_allowlist+verified_existing")
 	}
 
-	found := false
+	gotIDs := make([]string, 0, len(items))
+	gotSet := make(map[string]struct{}, len(items))
 	for _, item := range items {
-		if item.ID == "grok-3" {
-			found = true
-			break
+		gotIDs = append(gotIDs, item.ID)
+		gotSet[item.ID] = struct{}{}
+	}
+	for _, stableID := range modelpolicy.StableGrokTextModelIDs() {
+		if _, ok := gotSet[stableID]; !ok {
+			t.Fatalf("expected grok discovery to include stable model %q, got %+v", stableID, items)
 		}
 	}
-	if !found {
-		t.Fatalf("expected grok discovery to include grok-3, got %+v", items)
+	if _, ok := gotSet["grok-5"]; !ok {
+		t.Fatalf("expected grok discovery to include verified dynamic model grok-5, got %+v", items)
+	}
+	if _, ok := gotSet["grok-4"]; ok {
+		t.Fatalf("expected grok discovery to exclude unverified model grok-4, got %+v", items)
 	}
 }
 
