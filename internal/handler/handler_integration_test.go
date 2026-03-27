@@ -520,6 +520,54 @@ func TestHandleMessages_Puter_StreamAndJSON(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_Puter_SanitizesClaudeCodeContext(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	up := &mockUpstream{events: []upstream.SSEMessage{
+		{Type: "model", Event: map[string]any{"type": "text-start"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "ok"}},
+		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+	}}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = up
+
+	body, _ := json.Marshal(map[string]any{
+		"model": "claude-haiku-4-5-20251001",
+		"messages": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "text", "text": "<system-reminder>\n# currentDate\nToday's date is 2026-03-27.\n</system-reminder>"},
+					{"type": "text", "text": "帮我添加 我是大帅比"},
+				},
+			},
+		},
+		"system": []map[string]any{
+			{"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.85.351; cc_entrypoint=cli; cch=5e896;"},
+			{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+			{"type": "text", "text": "# Environment\n - Primary working directory: C:\\Users\\zhangdailin\\Desktop\\11112\n\ngitStatus:\nD .claude/settings.local.json\n D calculator.py\n?? test.txt\n\nRecent commits:\nd57a860 add .claude settings"},
+		},
+		"stream": false,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(up.capturedReqs) != 1 {
+		t.Fatalf("capturedReqs len=%d want 1", len(up.capturedReqs))
+	}
+	if got := up.capturedReqs[0].Messages[0].ExtractText(); got != "帮我添加 我是大帅比" {
+		t.Fatalf("sanitized user text = %q", got)
+	}
+	for _, item := range up.capturedReqs[0].System {
+		if strings.Contains(strings.ToLower(item.Text), "claude code") || strings.Contains(strings.ToLower(item.Text), "gitstatus:") {
+			t.Fatalf("unexpected forwarded puter system item: %q", item.Text)
+		}
+	}
+}
+
 func TestHandleMessages_Puter_DirectSSE_NonStreamJSON(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

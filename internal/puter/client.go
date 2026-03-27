@@ -406,6 +406,7 @@ func buildToolPrompt(tools []interface{}) string {
 		"If the user asks you to create, modify, rename, or delete files, you must emit a tool call instead of only describing code in plain text.",
 		"Never claim that a file was created, updated, or deleted unless you emitted the corresponding tool call.",
 		"When a tool is required, do not answer with a prose-only solution and do not say that work is done before the tool_result confirms it.",
+		"If a file already exists or a Read tool result shows existing content, do not try to create it again. Use Edit against the existing content, and do not leave old_string empty when updating an existing file.",
 	}
 	return "# Tools\n\n" + strings.Join(rules, "\n") + "\n\nAvailable tools:\n\n" + strings.Join(sections, "\n\n")
 }

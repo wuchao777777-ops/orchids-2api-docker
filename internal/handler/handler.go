@@ -819,12 +819,21 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if verboseDiagnostics {
 			slog.Debug("Checkpoint: orchids passthrough, skip context trimming")
 		}
-		if sanitized, changed := sanitizeSystemItems(req.System, false, h.config); changed {
+		if sanitized, changed := sanitizeSystemItems(req.System, false, false, h.config); changed {
 			req.System = sanitized
 			if verboseDiagnostics {
 				slog.Debug("系统提示已移除 cc_entrypoint", "mode", h.config.OrchidsCCEntrypointMode, "warp", false)
 			}
 		}
+	}
+	if isPuterRequest {
+		if sanitized, changed := sanitizeSystemItems(req.System, false, true, h.config); changed {
+			req.System = sanitized
+			if verboseDiagnostics {
+				slog.Debug("puter: sanitized forwarded system items")
+			}
+		}
+		req.Messages = sanitizePuterMessages(req.Messages)
 	}
 	if verboseDiagnostics {
 		slog.Debug("Checkpoint: message processing done")

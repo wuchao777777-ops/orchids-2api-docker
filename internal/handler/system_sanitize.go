@@ -13,7 +13,7 @@ const (
 )
 
 // sanitizeSystemItems 根据配置移除可能触发 coding agent 的 cc_entrypoint。
-func sanitizeSystemItems(system SystemItems, isWarp bool, cfg *config.Config) (SystemItems, bool) {
+func sanitizeSystemItems(system SystemItems, isWarp bool, isPuter bool, cfg *config.Config) (SystemItems, bool) {
 	if len(system) == 0 || cfg == nil {
 		return system, false
 	}
@@ -51,7 +51,15 @@ func sanitizeSystemItems(system SystemItems, isWarp bool, cfg *config.Config) (S
 	}
 
 	if isWarp {
-		filtered, dropped := filterWarpSystemItems(out)
+		filtered, dropped := filterWarpSystemItems(out, false)
+		if dropped {
+			out = filtered
+			changed = true
+		}
+	}
+
+	if isPuter {
+		filtered, dropped := filterWarpSystemItems(out, true)
 		if dropped {
 			out = filtered
 			changed = true
@@ -64,7 +72,7 @@ func sanitizeSystemItems(system SystemItems, isWarp bool, cfg *config.Config) (S
 	return out, true
 }
 
-func filterWarpSystemItems(system SystemItems) (SystemItems, bool) {
+func filterWarpSystemItems(system SystemItems, isPuter bool) (SystemItems, bool) {
 	if len(system) == 0 {
 		return system, false
 	}
@@ -75,7 +83,7 @@ func filterWarpSystemItems(system SystemItems) (SystemItems, bool) {
 			out = append(out, item)
 			continue
 		}
-		if isClaudeCodeSystem(item.Text) {
+		if isClaudeCodeSystem(item.Text) || (isPuter && isClaudeCodeEnvironment(item.Text)) {
 			dropped = true
 			continue
 		}
@@ -119,6 +127,25 @@ func isClaudeCodeSystem(text string) bool {
 		}
 	}
 	return false
+}
+
+func isClaudeCodeEnvironment(text string) bool {
+	lower := strings.ToLower(text)
+	signals := []string{
+		"# environment",
+		"primary working directory:",
+		"gitstatus:",
+		"recent commits:",
+		"you are powered by the model named",
+		"claude code is available as a cli",
+	}
+	hits := 0
+	for _, sig := range signals {
+		if strings.Contains(lower, sig) {
+			hits++
+		}
+	}
+	return hits >= 2
 }
 
 func stripCCEntrypoint(text string, stripAll bool) (string, bool) {
