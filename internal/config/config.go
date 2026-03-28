@@ -73,12 +73,6 @@ type Config struct {
 	GrokTemporary             *bool    `json:"grok_temporary,omitempty"`
 	GrokDisableMemory         *bool    `json:"grok_disable_memory,omitempty"`
 	GrokCustomInstruction     string   `json:"grok_custom_instruction,omitempty"`
-	WarpUseUTLS               bool     `json:"warp_use_utls,omitempty"`
-	WarpTransportProfile      string   `json:"warp_transport_profile,omitempty"`
-	WarpClientOSCategory      string   `json:"warp_client_os_category,omitempty"`
-	WarpClientOSName          string   `json:"warp_client_os_name,omitempty"`
-	WarpClientOSVersion       string   `json:"warp_client_os_version,omitempty"`
-	WarpUserAgent             string   `json:"warp_user_agent,omitempty"`
 	WarpDisableTools          *bool    `json:"-"`
 	WarpMaxToolResults        int      `json:"-"`
 	WarpMaxHistoryMessages    int      `json:"-"`

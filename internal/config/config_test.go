@@ -80,14 +80,11 @@ func TestApplyHardcodedOverridesValues(t *testing.T) {
 
 func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 	cfg := Config{
-		Port:                 "8080",
-		AdminUser:            "myuser",
-		AdminPass:            "mypass",
-		AdminPath:            "/myadmin",
-		RedisAddr:            "redis:6380",
-		WarpTransportProfile: "browser",
-		WarpClientOSName:     "Linux",
-		WarpUserAgent:        "Warp/Test",
+		Port:      "8080",
+		AdminUser: "myuser",
+		AdminPass: "mypass",
+		AdminPath: "/myadmin",
+		RedisAddr: "redis:6380",
 	}
 	ApplyDefaults(&cfg)
 
@@ -105,14 +102,5 @@ func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 	}
 	if cfg.RedisAddr != "redis:6380" {
 		t.Fatalf("RedisAddr=%q want=redis:6380", cfg.RedisAddr)
-	}
-	if cfg.WarpTransportProfile != "browser" {
-		t.Fatalf("WarpTransportProfile=%q want=browser", cfg.WarpTransportProfile)
-	}
-	if cfg.WarpClientOSName != "Linux" {
-		t.Fatalf("WarpClientOSName=%q want=Linux", cfg.WarpClientOSName)
-	}
-	if cfg.WarpUserAgent != "Warp/Test" {
-		t.Fatalf("WarpUserAgent=%q want=Warp/Test", cfg.WarpUserAgent)
 	}
 }

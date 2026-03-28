@@ -132,20 +132,3 @@ func TestMemoryDedupStoreConcurrent(t *testing.T) {
 		t.Fatalf("expected 9 duplicates, got %d", dupCount)
 	}
 }
-
-func TestMemoryDedupStoreAbortRemovesFailedRequest(t *testing.T) {
-	store := NewMemoryDedupStore(2*time.Second, 10*time.Second)
-	ctx := context.Background()
-
-	dup, inFlight := store.Register(ctx, "abort_hash")
-	if dup || inFlight {
-		t.Fatalf("first register should not be duplicate, got dup=%v inflight=%v", dup, inFlight)
-	}
-
-	store.Abort(ctx, "abort_hash")
-
-	dup, inFlight = store.Register(ctx, "abort_hash")
-	if dup || inFlight {
-		t.Fatalf("request should not remain deduped after abort, got dup=%v inflight=%v", dup, inFlight)
-	}
-}

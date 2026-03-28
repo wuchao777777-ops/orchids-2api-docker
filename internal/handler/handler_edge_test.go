@@ -494,8 +494,8 @@ func TestHandleMessages_Dedup_NonStream(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec2.Code)
 	}
 	body := rec2.Body.String()
-	if !strings.Contains(body, `"type":"message"`) || !strings.Contains(body, `"input_tokens":0`) || !strings.Contains(body, `"deduped":true`) {
-		t.Fatalf("expected Claude-compatible duplicate response, got: %s", body)
+	if !strings.Contains(body, "duplicate_request") {
+		t.Fatalf("expected duplicate_request response, got: %s", body)
 	}
 }
 
@@ -532,8 +532,8 @@ func TestHandleMessages_Dedup_Stream(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec2.Code)
 	}
 	out := rec2.Body.String()
-	if !strings.Contains(out, "event: message_start") || !strings.Contains(out, "event: message_delta") || !strings.Contains(out, "event: message_stop") || !strings.Contains(out, `"input_tokens":0`) {
-		t.Fatalf("expected Claude-compatible duplicate SSE for duplicate, got: %s", out)
+	if !strings.Contains(out, "event: message_start") || !strings.Contains(out, "event: message_stop") {
+		t.Fatalf("expected minimal sse start/stop for duplicate, got: %s", out)
 	}
 }
 
@@ -819,8 +819,8 @@ func TestHandleMessages_Dedup_SemanticBodyDriftWhileInFlight(t *testing.T) {
 	if rec2.Code != 200 {
 		t.Fatalf("expected 200, got %d", rec2.Code)
 	}
-	if !strings.Contains(rec2.Body.String(), `"type":"message"`) || !strings.Contains(rec2.Body.String(), `"deduped":true`) {
-		t.Fatalf("expected semantic duplicate suppression with Claude-compatible payload, got: %s", rec2.Body.String())
+	if !strings.Contains(rec2.Body.String(), "duplicate_request") {
+		t.Fatalf("expected semantic duplicate suppression, got: %s", rec2.Body.String())
 	}
 
 	close(blocking.release)

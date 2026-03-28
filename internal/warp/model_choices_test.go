@@ -48,7 +48,7 @@ func TestFetchUserAgentModeLLMChoices_NormalizesIDsAndDefault(t *testing.T) {
 	}))
 	defer server.Close()
 
-	choices, defaultID, err := fetchUserAgentModeLLMChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt", clientProfileFromConfig(nil))
+	choices, defaultID, err := fetchUserAgentModeLLMChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt")
 	if err != nil {
 		t.Fatalf("fetchUserAgentModeLLMChoices() error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestFetchWorkspaceAvailableLLMChoices_ReturnsChoices(t *testing.T) {
 	}))
 	defer server.Close()
 
-	choices, err := fetchWorkspaceAvailableLLMChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt", clientProfileFromConfig(nil))
+	choices, err := fetchWorkspaceAvailableLLMChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt")
 	if err != nil {
 		t.Fatalf("fetchWorkspaceAvailableLLMChoices() error: %v", err)
 	}

@@ -66,11 +66,6 @@ function normalizeFlagValue(value) {
   return !!value;
 }
 
-function normalizeTextValue(value) {
-  if (value === null || value === undefined) return "";
-  return String(value).trim();
-}
-
 function syncTokenCacheTTLControls(raw) {
   const normalized = normalizeTokenCacheTTLValue(raw);
   const hiddenInput = document.getElementById("cfg_token_cache_ttl");
@@ -137,12 +132,6 @@ async function loadConfiguration() {
     document.getElementById("cfg_proxy_url").value = cfg.proxy_url || "";
     const proxyBypass = normalizeProxyBypass(cfg.proxy_bypass);
     document.getElementById("cfg_proxy_bypass").value = proxyBypass.join("\n");
-    document.getElementById("cfg_warp_transport_profile").value = normalizeTextValue(cfg.warp_transport_profile);
-    document.getElementById("cfg_warp_use_utls").checked = normalizeFlagValue(cfg.warp_use_utls);
-    document.getElementById("cfg_warp_client_os_category").value = cfg.warp_client_os_category || "";
-    document.getElementById("cfg_warp_client_os_name").value = cfg.warp_client_os_name || "";
-    document.getElementById("cfg_warp_client_os_version").value = cfg.warp_client_os_version || "";
-    document.getElementById("cfg_warp_user_agent").value = cfg.warp_user_agent || "";
 
     const cacheTokenCount = document.getElementById("cfg_enable_token_cache");
     cacheTokenCount.checked = normalizeFlagValue(cfg.enable_token_cache);
@@ -163,12 +152,6 @@ async function saveConfiguration() {
     admin_token: document.getElementById("cfg_admin_token").value,
     proxy_url: document.getElementById("cfg_proxy_url").value.trim(),
     proxy_bypass: parseProxyBypass(proxyBypassRaw),
-    warp_transport_profile: normalizeTextValue(document.getElementById("cfg_warp_transport_profile").value),
-    warp_use_utls: document.getElementById("cfg_warp_use_utls").checked,
-    warp_client_os_category: document.getElementById("cfg_warp_client_os_category").value.trim(),
-    warp_client_os_name: document.getElementById("cfg_warp_client_os_name").value.trim(),
-    warp_client_os_version: document.getElementById("cfg_warp_client_os_version").value.trim(),
-    warp_user_agent: document.getElementById("cfg_warp_user_agent").value.trim(),
     enable_token_cache: document.getElementById("cfg_enable_token_cache").checked ? "true" : "false",
     token_cache_ttl: getTokenCacheTTLValue(),
     token_cache_strategy: document.getElementById("cfg_token_cache_strategy").value,

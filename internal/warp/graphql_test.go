@@ -28,7 +28,7 @@ func TestFetchRequestLimitInfo_UsesCodeFreeMaxGraphQLV2(t *testing.T) {
 		}),
 	}
 
-	info, bonuses, err := fetchRequestLimitInfo(context.Background(), client, "jwt", clientProfileFromConfig(nil))
+	info, bonuses, err := fetchRequestLimitInfo(context.Background(), client, "jwt")
 	if err != nil {
 		t.Fatalf("fetchRequestLimitInfo() error = %v", err)
 	}

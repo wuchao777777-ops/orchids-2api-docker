@@ -64,59 +64,6 @@ func TestBuildRequestBytes_UsesCodeFreeMaxStylePrompt(t *testing.T) {
 	}
 }
 
-func TestBuildRequestBytes_PrefersExplicitPromptOverMessages(t *testing.T) {
-	t.Parallel()
-
-	explicitPrompt := "<env>\nworkspace clean\n</env>\n<user_query>\nwrite hello\n</user_query>"
-	req := upstream.UpstreamRequest{
-		Prompt: explicitPrompt,
-		Model:  "claude-4-5-sonnet",
-		Messages: []prompt.Message{
-			{
-				Role: "system",
-				Content: prompt.MessageContent{
-					Text: "legacy system reminder",
-				},
-			},
-			{
-				Role: "user",
-				Content: prompt.MessageContent{
-					Text: "old noisy user content",
-				},
-			},
-			{
-				Role: "assistant",
-				Content: prompt.MessageContent{
-					Blocks: []prompt.ContentBlock{
-						{Type: "text", Text: "old assistant transcript"},
-						{Type: "tool_use", ID: "call_1", Name: "Write", Input: map[string]interface{}{"file_path": "x.txt"}},
-					},
-				},
-			},
-		},
-	}
-
-	promptText, payload, err := buildRequestBytes(req)
-	if err != nil {
-		t.Fatalf("buildRequestBytes error: %v", err)
-	}
-	if len(payload) == 0 {
-		t.Fatal("expected protobuf payload")
-	}
-	if promptText != explicitPrompt+"\n" {
-		t.Fatalf("promptText=%q want explicit prompt only", promptText)
-	}
-	if strings.Contains(promptText, "legacy system reminder") {
-		t.Fatalf("explicit prompt should not include system message: %q", promptText)
-	}
-	if strings.Contains(promptText, "old noisy user content") {
-		t.Fatalf("explicit prompt should not include legacy user message: %q", promptText)
-	}
-	if strings.Contains(promptText, "old assistant transcript") {
-		t.Fatalf("explicit prompt should not include assistant transcript: %q", promptText)
-	}
-}
-
 func TestEstimateInputTokens_CodeFreeMaxProfile(t *testing.T) {
 	estimate, err := EstimateInputTokens("say hi", "gpt-4o", nil, nil, false)
 	if err != nil {

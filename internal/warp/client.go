@@ -6,10 +6,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -26,16 +24,14 @@ type Client struct {
 	httpClient *http.Client
 	authClient *http.Client
 	session    *session
-	profile    clientProfile
 }
 
 const defaultRequestTimeout = 300 * time.Second
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
-	profile := clientProfileFromConfig(cfg)
 	if acc == nil {
 		httpClient := newHTTPClient(0, cfg)
-		return &Client{config: cfg, httpClient: httpClient, profile: profile}
+		return &Client{config: cfg, httpClient: httpClient}
 	}
 
 	refresh := ResolveRefreshToken(acc)
@@ -54,7 +50,6 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		httpClient: httpClient,
 		authClient: authClient,
 		session:    sess,
-		profile:    profile,
 	}
 }
 
@@ -67,28 +62,15 @@ func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 	}
 
 	var proxyFunc func(*http.Request) (*url.URL, error)
-	proxyKey := "direct"
 	if cfg != nil {
 		proxyFunc = util.ProxyFuncFromConfig(cfg)
-		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
 	} else {
 		proxyFunc = http.ProxyFromEnvironment
 	}
 
-	profile := clientProfileFromConfig(cfg)
-	switch profile.TransportProfile {
-	case warpTransportUTLS:
-		return util.GetSharedUTLSHTTPClient("warp|"+proxyKey, timeout, proxyFunc)
-	case warpTransportBrowser:
-		return &http.Client{
-			Timeout:   timeout,
-			Transport: util.NewBrowserLikeTransport(proxyFunc),
-		}
-	default:
-		return &http.Client{
-			Timeout:   timeout,
-			Transport: newWarpTransport(proxyFunc),
-		}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: newWarpTransport(proxyFunc),
 	}
 }
 
@@ -127,7 +109,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if err := c.session.ensureToken(ctx, authClient); err != nil {
 		return err
 	}
-	if err := c.session.ensureLogin(ctx, c.httpClient, c.profile); err != nil {
+	if err := c.session.ensureLogin(ctx, c.httpClient); err != nil {
 		return err
 	}
 
@@ -143,7 +125,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		if err := c.session.ensureToken(ctx, authClient); err != nil {
 			return err
 		}
-		return c.session.ensureLogin(ctx, c.httpClient, c.profile)
+		return c.session.ensureLogin(ctx, c.httpClient)
 	}
 	return c.streamWithRetry(ctx, payload, req, onMessage, logger, defaultRefresh)
 }
@@ -159,12 +141,16 @@ func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *de
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+jwt)
-	c.profile.applyWarpHeaders(req.Header)
+	req.Header.Set("X-Warp-Client-ID", clientID)
+	req.Header.Set("X-Warp-Client-Version", clientVersion)
+	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
+	req.Header.Set("X-Warp-OS-Name", clientOSName)
+	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-	c.profile.applyUserAgent(req.Header)
+	req.Header.Set("User-Agent", "")
 
 	if logger != nil {
 		headers := map[string]string{}
@@ -212,8 +198,6 @@ func (c *Client) handleStreamResponse(ctx context.Context, req upstream.Upstream
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		bodyText := strings.TrimSpace(string(body))
-		bodyPreview := summarizeWarpErrorBody(bodyText)
-		headerSummary := summarizeWarpResponseHeaders(resp.Header)
 		location := ""
 		if resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.String() != warpLegacyAIURL {
 			location = resp.Request.URL.String()
@@ -222,15 +206,7 @@ func (c *Client) handleStreamResponse(ctx context.Context, req upstream.Upstream
 			location = headerLocation
 		}
 		if logger != nil {
-			logger.LogUpstreamHTTPError(warpLegacyAIURL, resp.StatusCode, bodyPreview, nil)
-		}
-		if c != nil && c.config != nil && c.config.VerboseDiagnosticsEnabled() {
-			slog.Warn("warp upstream non-200 response",
-				"status", resp.StatusCode,
-				"location", location,
-				"headers", headerSummary,
-				"body_preview", bodyPreview,
-			)
+			logger.LogUpstreamHTTPError(warpLegacyAIURL, resp.StatusCode, bodyText, nil)
 		}
 		op := "stream request"
 		if location != "" {
@@ -263,71 +239,6 @@ func (c *Client) handleStreamResponse(ctx context.Context, req upstream.Upstream
 	defer resp.Body.Close()
 
 	return processStreamBody(ctx, body, onMessage, logger)
-}
-
-func summarizeWarpResponseHeaders(headers http.Header) map[string]string {
-	if len(headers) == 0 {
-		return nil
-	}
-
-	keys := make([]string, 0, len(headers))
-	for key := range headers {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	out := make(map[string]string, len(keys))
-	for _, key := range keys {
-		lowerKey := strings.ToLower(strings.TrimSpace(key))
-		switch lowerKey {
-		case "set-cookie", "cookie", "authorization", "proxy-authorization":
-			out[key] = "[redacted]"
-		default:
-			value := strings.Join(headers.Values(key), ", ")
-			value = strings.TrimSpace(value)
-			if value == "" {
-				continue
-			}
-			if len(value) > 256 {
-				value = value[:256] + "..."
-			}
-			out[key] = value
-		}
-	}
-	return out
-}
-
-func summarizeWarpErrorBody(body string) string {
-	trimmed := strings.TrimSpace(body)
-	if trimmed == "" {
-		return ""
-	}
-	compact := strings.Join(strings.Fields(trimmed), " ")
-	if title := extractHTMLTitle(compact); title != "" {
-		compact = "html_title=" + title + "; " + compact
-	}
-	if len(compact) > 512 {
-		return compact[:512] + "..."
-	}
-	return compact
-}
-
-func extractHTMLTitle(body string) string {
-	lower := strings.ToLower(body)
-	start := strings.Index(lower, "<title>")
-	if start < 0 {
-		return ""
-	}
-	start += len("<title>")
-	end := strings.Index(lower[start:], "</title>")
-	if end < 0 {
-		return ""
-	}
-	title := strings.TrimSpace(body[start : start+end])
-	if len(title) > 120 {
-		return title[:120] + "..."
-	}
-	return title
 }
 
 func (c *Client) RefreshAccount(ctx context.Context) (string, error) {

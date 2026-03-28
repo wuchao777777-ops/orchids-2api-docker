@@ -143,58 +143,6 @@
             <textarea id="cfg_proxy_bypass" class="form-input" rows="3" placeholder="每行一个域名或 CIDR，例如 example.com 或 10.0.0.0/8"></textarea>
           </div>
         </div>
-
-        <div class="settings-panel settings-panel-spaced">
-          <div class="settings-panel-head">
-            <div>
-              <h3 class="settings-panel-title">Warp 实验指纹</h3>
-              <div class="meta-text meta-text-xs">用于切换 Warp 的传输模式和环境画像，默认保持当前生产行为。</div>
-            </div>
-          </div>
-
-          <div class="config-grid config-grid-two config-grid-gap-sm">
-            <div>
-              <label class="form-label">传输模式</label>
-              <select id="cfg_warp_transport_profile" class="form-input">
-                <option value="">默认 standard</option>
-                <option value="standard">standard</option>
-                <option value="utls">uTLS</option>
-                <option value="browser">browser-like</option>
-              </select>
-              <div class="meta-text meta-text-xs" style="margin-top: 8px;">留空表示沿用默认标准传输。</div>
-            </div>
-            <div>
-              <label class="form-label">兼容开关</label>
-              <label class="toggle" style="margin-top: 10px;">
-                <input type="checkbox" id="cfg_warp_use_utls">
-                <span class="toggle-slider"></span>
-              </label>
-              <div class="meta-text meta-text-xs" style="margin-top: 8px;">旧开关。仅在“传输模式”留空时生效。</div>
-            </div>
-          </div>
-
-          <div class="config-grid config-grid-two config-grid-gap-sm">
-            <div>
-              <label class="form-label">OS Category</label>
-              <input type="text" id="cfg_warp_client_os_category" class="form-input" placeholder="例如 macOS / Linux / Windows">
-            </div>
-            <div>
-              <label class="form-label">OS Name</label>
-              <input type="text" id="cfg_warp_client_os_name" class="form-input" placeholder="例如 macOS / Ubuntu / Windows">
-            </div>
-          </div>
-
-          <div class="config-grid config-grid-two config-grid-gap-sm">
-            <div>
-              <label class="form-label">OS Version</label>
-              <input type="text" id="cfg_warp_client_os_version" class="form-input" placeholder="例如 15.6.1 / 24.04 / 11">
-            </div>
-            <div>
-              <label class="form-label">User-Agent</label>
-              <input type="text" id="cfg_warp_user_agent" class="form-input" placeholder="留空则按当前默认行为处理">
-            </div>
-          </div>
-        </div>
       </div>
 
       <div id="authConfig" class="config-section config-section-shell" style="display: none;">
@@ -218,7 +166,7 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <script src="{{.AdminPath}}/js/common.js?v=20260328-1"></script>
-  <script src="{{.AdminPath}}/js/config.js?v=20260328-2"></script>
+  <script src="{{.AdminPath}}/js/config.js?v=20260328-1"></script>
 </body>
 
 </html>
