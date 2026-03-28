@@ -1115,7 +1115,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if verboseDiagnostics && isBoltRequest && !gateNoTools && len(allowedToolNames) == 0 {
 		slog.Debug("tool_gate: bolt request has no declared tools after session restore", "conversation_id", conversationKey)
 	}
-	sh.setDisallowToolCalls(gateNoTools || (isBoltRequest && len(allowedToolNames) == 0))
+	sh.setDisallowToolCalls(gateNoTools)
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	sh.setCacheTokens(cacheReadTokens, cacheCreationTokens)

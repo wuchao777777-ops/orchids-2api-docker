@@ -246,10 +246,6 @@ func (s *Store) seedModels() error {
 		"grok-4.20-beta",
 		"grok-4.20-0309-reasoning",
 		"grok-4.20-0309-non-reasoning",
-		"grok-imagine-1.0",
-		"grok-imagine-1.0-fast",
-		"grok-imagine-1.0-edit",
-		"grok-imagine-1.0-video",
 		"grok-code-fast",
 		"grok-code-fast-1",
 		"grok-2",
@@ -324,6 +320,10 @@ func buildGrokSeedModels() []Model {
 		{ID: "91", Channel: "Grok", ModelID: "grok-3-mini", Name: "Grok 3 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 1},
 		{ID: "96", Channel: "Grok", ModelID: "grok-4-thinking", Name: "Grok 4 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 2},
 		{ID: "101", Channel: "Grok", ModelID: "grok-4.1-expert", Name: "Grok 4.1 Expert", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 3},
+		{ID: "108", Channel: "Grok", ModelID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 4},
+		{ID: "109", Channel: "Grok", ModelID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 5},
+		{ID: "110", Channel: "Grok", ModelID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 6},
+		{ID: "111", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 7},
 	}
 }
 

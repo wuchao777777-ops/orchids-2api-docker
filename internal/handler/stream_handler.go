@@ -2914,6 +2914,8 @@ func (h *streamHandler) shouldAcceptToolCallWithFilter(call toolCall, enforceAll
 			// they are not exposed as normal user-declared tools.
 			if lowerName == "taskoutput" || lowerName == "taskstop" {
 				allowedTool = true
+			} else if lowerName == "task" && h.taskDelegationAllowedLocked(call.input) {
+				allowedTool = true
 			}
 		}
 	}
@@ -2974,6 +2976,30 @@ func (h *streamHandler) shouldAcceptToolCallWithFilter(call toolCall, enforceAll
 		h.bashCallDedup[key] = struct{}{}
 		h.seedToolDedup[key] = struct{}{}
 		h.mu.Unlock()
+	}
+	return true
+}
+
+func (h *streamHandler) taskDelegationAllowedLocked(input string) bool {
+	type taskInput struct {
+		AllowedTools []string `json:"allowed_tools"`
+	}
+
+	var payload taskInput
+	if err := json.Unmarshal([]byte(strings.TrimSpace(input)), &payload); err != nil {
+		return false
+	}
+	if len(payload.AllowedTools) == 0 {
+		return false
+	}
+	for _, name := range payload.AllowedTools {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			return false
+		}
+		if _, ok := h.allowedToolNames[key]; !ok {
+			return false
+		}
 	}
 	return true
 }

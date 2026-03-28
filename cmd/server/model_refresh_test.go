@@ -133,7 +133,7 @@ func TestDiscoverModelsForChannel_BoltReturnsSeedCatalog(t *testing.T) {
 	}
 }
 
-func TestDiscoverModelsForChannel_GrokUsesStableAllowlistAndVerifiedExisting(t *testing.T) {
+func TestDiscoverModelsForChannel_GrokUsesPublicAllowlistAndVerifiedExisting(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 
@@ -168,8 +168,8 @@ func TestDiscoverModelsForChannel_GrokUsesStableAllowlistAndVerifiedExisting(t *
 	if len(items) == 0 {
 		t.Fatal("expected grok discovery to return stable models")
 	}
-	if source != "grok_stable_allowlist+verified_existing" {
-		t.Fatalf("source=%q want %q", source, "grok_stable_allowlist+verified_existing")
+	if source != "grok_public_allowlist+verified_existing" {
+		t.Fatalf("source=%q want %q", source, "grok_public_allowlist+verified_existing")
 	}
 
 	gotIDs := make([]string, 0, len(items))
@@ -178,9 +178,9 @@ func TestDiscoverModelsForChannel_GrokUsesStableAllowlistAndVerifiedExisting(t *
 		gotIDs = append(gotIDs, item.ID)
 		gotSet[item.ID] = struct{}{}
 	}
-	for _, stableID := range modelpolicy.StableGrokTextModelIDs() {
-		if _, ok := gotSet[stableID]; !ok {
-			t.Fatalf("expected grok discovery to include stable model %q, got %+v", stableID, items)
+	for _, publicID := range modelpolicy.PublicGrokModelIDs() {
+		if _, ok := gotSet[publicID]; !ok {
+			t.Fatalf("expected grok discovery to include public model %q, got %+v", publicID, items)
 		}
 	}
 	if _, ok := gotSet["grok-5"]; !ok {

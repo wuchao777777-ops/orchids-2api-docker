@@ -95,3 +95,37 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 		t.Fatalf("expected different records for shared model id, got same id %q", boltModel.ID)
 	}
 }
+
+func TestStoreNew_SeedsGrokImagineModels(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	s, err := New(Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	ctx := context.Background()
+	model, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-imagine-1.0")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID(grok, grok-imagine-1.0) error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("expected grok imagine model to be seeded")
+	}
+	if model.Channel != "Grok" {
+		t.Fatalf("model.Channel=%q want %q", model.Channel, "Grok")
+	}
+	if model.Status != ModelStatusAvailable {
+		t.Fatalf("model.Status=%q want %q", model.Status, ModelStatusAvailable)
+	}
+}

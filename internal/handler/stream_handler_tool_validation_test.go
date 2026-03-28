@@ -489,6 +489,89 @@ func TestTaskToolCall_IsAcceptedWhenClientDeclaredAgent(t *testing.T) {
 	}
 }
 
+func TestTaskToolCall_IsAcceptedWhenDelegatedToolsStayWithinAllowedSet(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	h.setAllowedToolNames([]string{"Read"})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "task_1",
+			"toolName":   "Task",
+			"input":      `{"description":"Get weather","prompt":"Read weather skill","allowed_tools":["Read"]}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected delegated Task tool call to pass through, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
+		t.Fatalf("expected tool_use block, got %q", got)
+	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != "Task" {
+		t.Fatalf("expected Task tool call, got %q", got)
+	}
+	if h.suppressedToolCalls != 0 {
+		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
+	}
+}
+
+func TestTaskToolCall_IsRejectedWhenDelegatedToolsExceedAllowedSet(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	h.setAllowedToolNames([]string{"Read"})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "task_1",
+			"toolName":   "Task",
+			"input":      `{"description":"Get weather","prompt":"Run shell","allowed_tools":["Bash"]}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected empty-output fallback text block after rejecting delegated Task, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["type"].(string); got != "text" {
+		t.Fatalf("expected text fallback block, got %q", got)
+	}
+	if h.suppressedToolCalls == 0 {
+		t.Fatalf("expected suppressed tool call count to increase")
+	}
+}
+
 func TestBashToolCallDifferentIDsSameCommand_Deduped(t *testing.T) {
 	t.Parallel()
 

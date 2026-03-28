@@ -169,7 +169,8 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 			return nil, "", err
 		}
 		seen := map[string]struct{}{}
-		out := make([]discoveredModel, 0, len(modelpolicy.StableGrokTextModelIDs())+4)
+		publicIDs := modelpolicy.PublicGrokModelIDs()
+		out := make([]discoveredModel, 0, len(publicIDs)+4)
 		appendCandidate := func(id, name string) {
 			id = strings.TrimSpace(id)
 			if id == "" {
@@ -185,7 +186,7 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 			out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
 		}
 
-		for _, id := range modelpolicy.StableGrokTextModelIDs() {
+		for _, id := range publicIDs {
 			name := id
 			if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
 				name = spec.Name
@@ -201,7 +202,7 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 			}
 			appendCandidate(model.ModelID, model.Name)
 		}
-		return out, "grok_stable_allowlist+verified_existing", nil
+		return out, "grok_public_allowlist+verified_existing", nil
 	default:
 		return nil, "", fmt.Errorf("unsupported channel: %s", channel)
 	}
