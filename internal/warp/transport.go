@@ -1,9 +1,13 @@
 package warp
 
 import (
+	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+
+	"orchids-api/internal/logutil"
 )
 
 // warpTransport keeps the proxy function inspectable in tests while delegating
@@ -33,7 +37,42 @@ func newWarpTransport(proxyFunc func(*http.Request) (*url.URL, error)) *warpTran
 }
 
 func (t *warpTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req != nil && req.URL != nil && logutil.VerboseDiagnosticsEnabled() {
+		proxyURL, proxyErr := t.resolveProxy(req)
+		fields := []any{
+			"target", req.URL.String(),
+			"method", req.Method,
+			"proxy", maskProxyURL(proxyURL),
+		}
+		if proxyErr != nil {
+			fields = append(fields, "proxy_error", proxyErr.Error())
+		}
+		slog.Debug("warp proxy dispatch", fields...)
+	}
 	return t.base.RoundTrip(req)
+}
+
+func (t *warpTransport) resolveProxy(req *http.Request) (*url.URL, error) {
+	if t == nil || t.proxyFunc == nil || req == nil {
+		return nil, nil
+	}
+	return t.proxyFunc(req)
+}
+
+func maskProxyURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	masked := *u
+	if masked.User != nil {
+		username := masked.User.Username()
+		if strings.TrimSpace(username) != "" {
+			masked.User = url.UserPassword(username, "****")
+		} else {
+			masked.User = url.User("****")
+		}
+	}
+	return masked.String()
 }
 
 func (t *warpTransport) CloseIdleConnections() {

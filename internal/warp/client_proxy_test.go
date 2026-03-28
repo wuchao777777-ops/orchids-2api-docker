@@ -166,6 +166,31 @@ func TestDoStreamRequest_SendsLegacyWarpHeaders(t *testing.T) {
 	}
 }
 
+func TestWarpTransport_ResolveProxy(t *testing.T) {
+	transport := newWarpTransport(func(req *http.Request) (*url.URL, error) {
+		if req == nil || req.URL == nil {
+			t.Fatal("expected request URL")
+		}
+		return url.Parse("socks5://user:pass@proxy.local:1080")
+	})
+
+	req, err := http.NewRequest(http.MethodGet, "https://app.warp.dev/ai/multi-agent", nil)
+	if err != nil {
+		t.Fatalf("NewRequest error: %v", err)
+	}
+
+	proxyURL, err := transport.resolveProxy(req)
+	if err != nil {
+		t.Fatalf("resolveProxy error: %v", err)
+	}
+	if proxyURL == nil {
+		t.Fatal("expected proxy URL")
+	}
+	if got := proxyURL.Host; got != "proxy.local:1080" {
+		t.Fatalf("proxy host=%q want proxy.local:1080", got)
+	}
+}
+
 func TestForceRefreshAccount_IgnoresSeededJWT(t *testing.T) {
 	client := &Client{
 		authClient: &http.Client{
