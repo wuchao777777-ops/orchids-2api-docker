@@ -1533,6 +1533,100 @@ func TestPrepareRequest_DropsMCPBoilerplateButKeepsUsefulContext(t *testing.T) {
 	}
 }
 
+func TestPrepareRequest_CompactsOpenClawSystemPrompt(t *testing.T) {
+	openClawSystem := strings.Join([]string{
+		"You are a personal assistant running inside OpenClaw.",
+		"## Tooling",
+		"Tool availability (filtered by policy):",
+		"- read: Read file contents",
+		"- write: Create or overwrite files",
+		"- edit: Make precise edits to files",
+		"## Safety",
+		"Prioritize safety and human oversight over completion.",
+		"## Current Date & Time",
+		"Current date: 2026-03-29",
+		"Current timezone: Asia/Shanghai",
+		"## Workspace",
+		"Primary workspace: /workspace/demo",
+		"Current workspace: /workspace/demo",
+		"## Skills (mandatory)",
+		"<skill>",
+		"<name>weather</name>",
+		"<description>Get current weather and forecasts via wttr.in or Open-Meteo.</description>",
+		"<location>/usr/lib/node_modules/openclaw/skills/weather/SKILL.md</location>",
+		"</skill>",
+		"# Project Context",
+		"## /home/zhangdailin/.openclaw/workspace/AGENTS.md",
+		"# AGENTS.md - Your Workspace",
+		strings.Repeat("workspace instructions\n", 600),
+		"## /home/zhangdailin/.openclaw/workspace/MEMORY.md",
+		"# MEMORY.md",
+		"## 输出风格偏好",
+		"默认使用简体中文，避免冗长。",
+	}, "\n")
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		System: []prompt.SystemItem{
+			{Type: "text", Text: openClawSystem},
+		},
+	}
+
+	before := estimateBoltTextTokens(openClawSystem)
+	boltReq, estimate := prepareRequest(req, "sb1-demo")
+	after := estimate.SystemContextTokens
+
+	if after <= 0 {
+		t.Fatalf("SystemContextTokens=%d want >0", after)
+	}
+	if after >= before/2 {
+		t.Fatalf("SystemContextTokens=%d want to be less than half of original %d; prompt=%s", after, before, boltReq.GlobalSystemPrompt)
+	}
+	if strings.Contains(boltReq.GlobalSystemPrompt, "## Skills (mandatory)") {
+		t.Fatalf("system prompt should drop OpenClaw skills catalog: %s", boltReq.GlobalSystemPrompt)
+	}
+	if strings.Contains(boltReq.GlobalSystemPrompt, "workspace instructions") {
+		t.Fatalf("system prompt should drop embedded workspace document dumps: %s", boltReq.GlobalSystemPrompt)
+	}
+	if strings.Contains(boltReq.GlobalSystemPrompt, "<skill>") {
+		t.Fatalf("system prompt should drop skill XML blocks: %s", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "Current date: 2026-03-29") {
+		t.Fatalf("system prompt should keep current date context: %s", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "Primary workspace: /workspace/demo") {
+		t.Fatalf("system prompt should keep workspace path context: %s", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "默认使用简体中文，避免冗长。") {
+		t.Fatalf("system prompt should preserve concise output preference: %s", boltReq.GlobalSystemPrompt)
+	}
+}
+
+func TestSanitizeBoltSystemText_TruncatesOversizedSystemContext(t *testing.T) {
+	text := strings.Join([]string{
+		"You are a personal assistant running inside OpenClaw.",
+		"## Safety",
+		"Keep the user safe.",
+		strings.Repeat("A", maxBoltSystemTextChars),
+		"## 输出风格偏好",
+		"保持简洁。",
+	}, "\n")
+
+	got := sanitizeBoltSystemText(text)
+	if len(got) > maxBoltSystemTextChars+64 {
+		t.Fatalf("len(got)=%d want bounded near %d", len(got), maxBoltSystemTextChars)
+	}
+	if !strings.Contains(got, "[system context truncated]") {
+		t.Fatalf("sanitized text should include truncation marker: %s", got)
+	}
+	if !strings.Contains(got, "Keep the user safe.") {
+		t.Fatalf("sanitized text should preserve head content: %s", got)
+	}
+	if !strings.Contains(got, "保持简洁。") {
+		t.Fatalf("sanitized text should preserve tail content: %s", got)
+	}
+}
+
 func TestPrepareRequest_AddsGitExecutionInstructionsForUploadIntent(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model:   "claude-opus-4-6",
@@ -3720,6 +3814,31 @@ func TestSupportedBoltToolNames_MapsAgentToTask(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("supportedBoltToolNames(agent)[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestSupportedBoltToolNames_MapsCommonOpenClawAliases(t *testing.T) {
+	tools := []interface{}{
+		map[string]interface{}{"name": "read"},
+		map[string]interface{}{"name": "write"},
+		map[string]interface{}{"name": "edit"},
+		map[string]interface{}{"name": "exec"},
+		map[string]interface{}{"name": "glob"},
+		map[string]interface{}{"name": "grep"},
+		map[string]interface{}{"name": "sessions_spawn"},
+		map[string]interface{}{"name": "use_skill"},
+		map[string]interface{}{"name": "browser"},
+	}
+
+	got := supportedBoltToolNames(tools)
+	want := []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "Task", "Skill"}
+	if len(got) != len(want) {
+		t.Fatalf("supportedBoltToolNames(common aliases) len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("supportedBoltToolNames(common aliases)[%d]=%q want %q (%#v)", i, got[i], want[i], got)
 		}
 	}
 }

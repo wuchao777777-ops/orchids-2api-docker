@@ -252,6 +252,71 @@ func normalizeAccountOutput(acc *store.Account) *store.Account {
 	return out
 }
 
+func normalizedAccountCredentialKey(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+
+	accountType := strings.ToLower(strings.TrimSpace(acc.AccountType))
+	var token string
+
+	switch accountType {
+	case "warp":
+		token = strings.TrimSpace(warp.ResolveRefreshToken(acc))
+	case "grok":
+		token = grok.NormalizeSSOToken(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token))
+	case "bolt":
+		token = strings.TrimSpace(firstNonEmptyString(acc.SessionCookie, acc.ClientCookie, acc.Token))
+	case "puter":
+		token = strings.TrimSpace(firstNonEmptyString(acc.SessionCookie, acc.ClientCookie, acc.Token))
+	case "orchids":
+		token = strings.TrimSpace(firstNonEmptyString(acc.SessionCookie, acc.ClientCookie, acc.Token))
+	default:
+		token = strings.TrimSpace(firstNonEmptyString(acc.RefreshToken, acc.SessionCookie, acc.ClientCookie, acc.Token))
+	}
+
+	if token == "" || accountType == "" {
+		return ""
+	}
+	return accountType + ":" + token
+}
+
+func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.Account, excludeID int64) (*store.Account, error) {
+	if a == nil || a.store == nil || acc == nil {
+		return nil, nil
+	}
+
+	key := normalizedAccountCredentialKey(acc)
+	if key == "" {
+		return nil, nil
+	}
+
+	accounts, err := a.store.ListAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, existing := range accounts {
+		if existing == nil || existing.ID == excludeID {
+			continue
+		}
+		if normalizedAccountCredentialKey(existing) == key {
+			return existing, nil
+		}
+	}
+	return nil, nil
+}
+
+func duplicateAccountError(existing *store.Account) error {
+	if existing == nil {
+		return fmt.Errorf("duplicate account token")
+	}
+	accountType := strings.TrimSpace(existing.AccountType)
+	if accountType == "" {
+		accountType = "account"
+	}
+	return fmt.Errorf("duplicate %s token already exists on account #%d", accountType, existing.ID)
+}
+
 func hasOrchidsCredentials(acc *store.Account) bool {
 	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "orchids") {
 		return false
@@ -894,6 +959,14 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 				slog.Warn("Failed to fetch account info, saving without session data", "error", err)
 			}
 		}
+		if existing, err := a.findDuplicateAccountByCredential(r.Context(), &acc, 0); err != nil {
+			slog.Error("Failed to detect duplicate account token", "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else if existing != nil {
+			http.Error(w, duplicateAccountError(existing).Error(), http.StatusConflict)
+			return
+		}
 
 		if err := a.store.CreateAccount(r.Context(), &acc); err != nil {
 			slog.Error("Failed to create account", "error", err)
@@ -1143,6 +1216,13 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				applyAccountStatusFromError(&acc, err)
 				slog.Warn("Failed to refresh Orchids account info during update", "account_id", acc.ID, "error", err)
 			}
+		}
+		if duplicate, err := a.findDuplicateAccountByCredential(r.Context(), &acc, id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else if duplicate != nil {
+			http.Error(w, duplicateAccountError(duplicate).Error(), http.StatusConflict)
+			return
 		}
 
 		if err := a.store.UpdateAccount(r.Context(), &acc); err != nil {

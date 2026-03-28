@@ -67,7 +67,7 @@ func NormalizeToolNameFallback(name string) string {
 		return "Glob"
 	case "ripgreptool", "ripgrep", "search_code", "search_codebase", "grep":
 		return "Grep"
-	case "execute", "execute_command", "execute-command", "run_command", "runcommand", "launch-process", "run_shell_command", "bash":
+	case "exec", "execute", "execute_command", "execute-command", "run_command", "runcommand", "launch-process", "run_shell_command", "shell", "bash":
 		return "Bash"
 	case "writefile", "write_file", "create_file", "createfile", "save-file", "write":
 		return "Write"

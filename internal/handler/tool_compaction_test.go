@@ -327,6 +327,28 @@ func TestValidationAllowedToolNames_BoltUsesOriginalDeclaredToolsWhenPresent(t *
 	}
 }
 
+func TestValidationAllowedToolNames_BoltTreatsExecAsBash(t *testing.T) {
+	effective := []interface{}{
+		map[string]interface{}{"name": "Read"},
+		map[string]interface{}{"name": "Bash"},
+	}
+	original := []interface{}{
+		map[string]interface{}{"name": "read"},
+		map[string]interface{}{"name": "exec"},
+	}
+
+	got := validationAllowedToolNames(effective, original, true)
+	want := []string{"read", "exec", "Bash"}
+	if len(got) != len(want) {
+		t.Fatalf("validationAllowedToolNames len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("validationAllowedToolNames[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestSupportedToolNames_MapsOpenClawSubagentsToTask(t *testing.T) {
 	tools := []interface{}{
 		map[string]interface{}{"name": "read"},
@@ -342,6 +364,50 @@ func TestSupportedToolNames_MapsOpenClawSubagentsToTask(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("supportedToolNames(subagents)[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestSupportedToolNames_MapsOpenClawExecToBash(t *testing.T) {
+	tools := []interface{}{
+		map[string]interface{}{"name": "read"},
+		map[string]interface{}{"name": "exec"},
+	}
+
+	got := supportedToolNames(tools)
+	want := []string{"Read", "Bash"}
+	if len(got) != len(want) {
+		t.Fatalf("supportedToolNames(exec) len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("supportedToolNames(exec)[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestSupportedToolNames_MapsCommonOpenClawAliases(t *testing.T) {
+	tools := []interface{}{
+		map[string]interface{}{"name": "read_files"},
+		map[string]interface{}{"name": "write"},
+		map[string]interface{}{"name": "edit"},
+		map[string]interface{}{"name": "shell"},
+		map[string]interface{}{"name": "glob"},
+		map[string]interface{}{"name": "grep"},
+		map[string]interface{}{"name": "sessions_spawn"},
+		map[string]interface{}{"name": "use_skill"},
+		map[string]interface{}{"name": "process"},
+		map[string]interface{}{"name": "browser"},
+	}
+
+	got := supportedToolNames(tools)
+	want := []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "Task", "Skill"}
+	if len(got) != len(want) {
+		t.Fatalf("supportedToolNames(common aliases) len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("supportedToolNames(common aliases)[%d]=%q want %q (%#v)", i, got[i], want[i], got)
 		}
 	}
 }

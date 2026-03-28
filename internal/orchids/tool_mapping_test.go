@@ -4,6 +4,34 @@ import (
 	"testing"
 )
 
+func TestNormalizeToolNameFallback_CommonOpenClawAliases(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{in: "read", want: "Read"},
+		{in: "read_files", want: "Read"},
+		{in: "edit", want: "Edit"},
+		{in: "write", want: "Write"},
+		{in: "exec", want: "Bash"},
+		{in: "shell", want: "Bash"},
+		{in: "run_command", want: "Bash"},
+		{in: "glob", want: "Glob"},
+		{in: "grep", want: "Grep"},
+		{in: "subagents", want: "Task"},
+		{in: "sessions_spawn", want: "Task"},
+		{in: "use_skill", want: "Skill"},
+	}
+
+	for _, tc := range cases {
+		if got := NormalizeToolNameFallback(tc.in); got != tc.want {
+			t.Fatalf("NormalizeToolNameFallback(%q) = %q want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestMapToolNameToClientPrefersOriginalToolDefinition(t *testing.T) {
 	t.Parallel()
 
@@ -76,5 +104,4 @@ func TestTransformToolInputNormalizesReadAliases(t *testing.T) {
 		t.Fatalf("expected path alias to be removed, got %#v", transformed)
 	}
 }
-
 

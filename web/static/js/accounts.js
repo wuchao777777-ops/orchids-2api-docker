@@ -294,6 +294,85 @@ function splitBatchCredentialInput(raw) {
   return [text];
 }
 
+function normalizeCredentialForType(type, credential) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  const raw = String(credential || "").trim();
+  if (!raw) return "";
+
+  if (normalizedType === "warp") {
+    const match = raw.match(/(?:^|[?&;\s])refresh_token=([^&;\s]+)/);
+    return (match ? match[1] : raw).trim();
+  }
+
+  if (normalizedType === "grok") {
+    const ssoMatch = raw.match(/(?:^|[;\s])sso=([^;\s]+)/i);
+    return (ssoMatch ? ssoMatch[1] : raw).trim();
+  }
+
+  return raw;
+}
+
+function buildCredentialFingerprint(type, credential) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  const normalizedCredential = normalizeCredentialForType(normalizedType, credential);
+  if (!normalizedType || !normalizedCredential) return "";
+  return `${normalizedType}:${normalizedCredential}`;
+}
+
+function collectExistingCredentialFingerprints(type, excludeId = "") {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  const excluded = String(excludeId || "").trim();
+  const seen = new Set();
+  (Array.isArray(accounts) ? accounts : []).forEach((acc) => {
+    if (!acc) return;
+    if (String(acc.id || "") === excluded) return;
+    if (normalizeAccountType(acc) !== normalizedType) return;
+    const token = getAccountToken(acc);
+    const key = buildCredentialFingerprint(normalizedType, token);
+    if (key) seen.add(key);
+  });
+  return seen;
+}
+
+function dedupeCredentialInputs(type, credentials) {
+  const unique = [];
+  const duplicates = [];
+  const seen = new Set();
+
+  (Array.isArray(credentials) ? credentials : []).forEach((credential) => {
+    const trimmed = String(credential || "").trim();
+    if (!trimmed) return;
+    const key = buildCredentialFingerprint(type, trimmed) || `raw:${trimmed}`;
+    if (seen.has(key)) {
+      duplicates.push(trimmed);
+      return;
+    }
+    seen.add(key);
+    unique.push(trimmed);
+  });
+
+  return { unique, duplicates };
+}
+
+function filterExistingCredentialConflicts(type, credentials, excludeId = "") {
+  const existing = collectExistingCredentialFingerprints(type, excludeId);
+  const accepted = [];
+  const conflicts = [];
+
+  (Array.isArray(credentials) ? credentials : []).forEach((credential) => {
+    const trimmed = String(credential || "").trim();
+    if (!trimmed) return;
+    const key = buildCredentialFingerprint(type, trimmed);
+    if (key && existing.has(key)) {
+      conflicts.push(trimmed);
+      return;
+    }
+    accepted.push(trimmed);
+  });
+
+  return { accepted, conflicts };
+}
+
 function getAccountImportStatusNode() {
   return domCache.accountImportStatus || document.getElementById("accountImportStatus");
 }
@@ -1209,7 +1288,9 @@ async function saveAccount(e) {
   const type = document.getElementById("accountType").value;
   const token = document.getElementById("clientCookie").value;
   const projectId = String(document.getElementById("projectId")?.value || "").trim();
-  const credentials = splitBatchCredentialInput(token);
+  const splitCredentials = splitBatchCredentialInput(token);
+  const { unique: dedupedCredentials, duplicates: duplicateInputs } = dedupeCredentialInputs(type, splitCredentials);
+  const { accepted: credentials, conflicts: existingConflicts } = filterExistingCredentialConflicts(type, dedupedCredentials, id);
   const existing = id ? accounts.find((a) => String(a.id) === String(id)) : null;
   const data = {
     account_type: type,
@@ -1219,7 +1300,15 @@ async function saveAccount(e) {
   };
 
   if (credentials.length === 0) {
-    showToast("请填写至少一个账号凭证", "error");
+    if (duplicateInputs.length > 0 || existingConflicts.length > 0) {
+      const details = []
+        .concat(duplicateInputs.slice(0, 4).map((item) => `输入重复: ${item}`))
+        .concat(existingConflicts.slice(0, 4).map((item) => `已存在: ${item}`));
+      renderAccountImportStatus("没有可添加的新凭证，重复项已全部过滤", "error", details);
+      showToast("没有可添加的新凭证，重复项已全部过滤", "error");
+    } else {
+      showToast("请填写至少一个账号凭证", "error");
+    }
     return;
   }
   if (type === "bolt" && !projectId) {
@@ -1229,6 +1318,16 @@ async function saveAccount(e) {
 
   try {
     clearAccountImportStatus();
+    if (duplicateInputs.length > 0 || existingConflicts.length > 0) {
+      const details = []
+        .concat(duplicateInputs.slice(0, 4).map((item) => `输入重复: ${item}`))
+        .concat(existingConflicts.slice(0, 4).map((item) => `账号已存在: ${item}`));
+      renderAccountImportStatus(
+        `已过滤重复凭证：输入重复 ${duplicateInputs.length}，库内重复 ${existingConflicts.length}`,
+        "info",
+        details,
+      );
+    }
     if (id) {
       const payload = buildAccountPayload(type, data, credentials[0], projectId);
       const res = await fetch(`/api/accounts/${id}`, {

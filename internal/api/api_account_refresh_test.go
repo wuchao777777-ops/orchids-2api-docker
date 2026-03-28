@@ -647,6 +647,117 @@ func TestHandleAccountByID_PutOrchidsSessionInputHydratesAccountInfo(t *testing.
 	}
 }
 
+func TestHandleAccounts_PostRejectsDuplicateWarpRefreshToken(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	existing := &store.Account{
+		AccountType:  "warp",
+		RefreshToken: "warp-token-1",
+		Enabled:      true,
+	}
+	normalizeWarpTokenInput(existing)
+	if err := s.CreateAccount(context.Background(), existing); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/accounts", strings.NewReader(`{"account_type":"warp","refresh_token":"warp-token-1","enabled":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	a.HandleAccounts(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d want 409 body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "duplicate warp token") {
+		t.Fatalf("body=%q want duplicate warp token", rec.Body.String())
+	}
+}
+
+func TestHandleAccounts_PostRejectsDuplicateBoltSessionToken(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	existing := &store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "bolt-session-1",
+		ProjectID:     "sb1-demo",
+		Enabled:       true,
+	}
+	if err := s.CreateAccount(context.Background(), existing); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/accounts", strings.NewReader(`{"account_type":"bolt","session_cookie":"bolt-session-1","project_id":"sb1-another","enabled":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	a.HandleAccounts(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d want 409 body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "duplicate bolt token") {
+		t.Fatalf("body=%q want duplicate bolt token", rec.Body.String())
+	}
+}
+
+func TestHandleAccountByID_PutRejectsDuplicateGrokToken(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	acc1 := &store.Account{AccountType: "grok", ClientCookie: "grok-token-a", Enabled: true}
+	normalizeGrokTokenInput(acc1)
+	if err := s.CreateAccount(context.Background(), acc1); err != nil {
+		t.Fatalf("CreateAccount(acc1) error = %v", err)
+	}
+
+	acc2 := &store.Account{AccountType: "grok", ClientCookie: "grok-token-b", Enabled: true}
+	normalizeGrokTokenInput(acc2)
+	if err := s.CreateAccount(context.Background(), acc2); err != nil {
+		t.Fatalf("CreateAccount(acc2) error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/accounts/"+strconv.FormatInt(acc2.ID, 10), strings.NewReader(`{"account_type":"grok","client_cookie":"grok-token-a","enabled":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	a.HandleAccountByID(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d want 409 body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "duplicate grok token") {
+		t.Fatalf("body=%q want duplicate grok token", rec.Body.String())
+	}
+}
+
+func TestHandleAccountByID_PutAllowsSameAccountCredential(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	acc := &store.Account{
+		AccountType:   "puter",
+		SessionCookie: "puter-token-1",
+		Enabled:       true,
+		Name:          "before",
+	}
+	if err := s.CreateAccount(context.Background(), acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/accounts/"+strconv.FormatInt(acc.ID, 10), strings.NewReader(`{"account_type":"puter","session_cookie":"puter-token-1","enabled":true,"name":"after"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	a.HandleAccountByID(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func newTestAPI(t *testing.T) (*API, *store.Store, func()) {
 	t.Helper()
 

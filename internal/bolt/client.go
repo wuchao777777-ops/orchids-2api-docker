@@ -1405,8 +1405,11 @@ func sanitizeBoltSystemText(text string) string {
 	text = stripCCEntrypointLines(text)
 	text = stripBoltEnvironmentLines(text)
 	text = trimBoltSystemBoilerplate(text)
-	return condenseBoltSystemText(text)
+	text = condenseBoltSystemText(text)
+	return compactBoltSystemText(text)
 }
+
+const maxBoltSystemTextChars = 6000
 
 func trimBoltSystemBoilerplate(text string) string {
 	if !looksLikeClaudeCodeBoilerplate(text) {
@@ -1533,6 +1536,210 @@ func condenseBoltSystemText(text string) string {
 		kept = append(kept, trimmed)
 	}
 	return strings.Join(kept, "\n")
+}
+
+func compactBoltSystemText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if looksLikeOpenClawSystemPrompt(text) {
+		text = compactOpenClawSystemText(text)
+	}
+	return truncateBoltSystemText(text, maxBoltSystemTextChars)
+}
+
+func looksLikeOpenClawSystemPrompt(text string) bool {
+	lower := strings.ToLower(text)
+	markers := 0
+	for _, marker := range []string{
+		"you are a personal assistant running inside openclaw",
+		"## skills (mandatory)",
+		"## openclaw cli quick reference",
+		"## current date & time",
+		"## authorized senders",
+		"# project context",
+		"/workspace/agents.md",
+		"/workspace/memory.md",
+	} {
+		if strings.Contains(lower, marker) {
+			markers++
+		}
+	}
+	return markers >= 2
+}
+
+func compactOpenClawSystemText(text string) string {
+	lines := strings.Split(text, "\n")
+	kept := make([]string, 0, len(lines))
+	currentHeading := ""
+	dropSection := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if isBoltMarkdownHeading(trimmed) {
+			currentHeading = trimmed
+			dropSection = shouldDropOpenClawSystemSection(trimmed)
+			if dropSection || shouldSuppressOpenClawSystemHeading(trimmed) {
+				continue
+			}
+			kept = append(kept, trimmed)
+			continue
+		}
+		if dropSection || shouldDropOpenClawSystemLine(trimmed, currentHeading) {
+			continue
+		}
+		kept = append(kept, trimmed)
+	}
+
+	return strings.Join(kept, "\n")
+}
+
+func shouldDropOpenClawSystemSection(heading string) bool {
+	lower := strings.ToLower(strings.TrimSpace(heading))
+	switch {
+	case lower == "## tooling":
+		return true
+	case lower == "## openclaw cli quick reference":
+		return true
+	case lower == "## skills (mandatory)":
+		return true
+	case lower == "## openclaw self-update":
+		return true
+	case lower == "## reply tags":
+		return true
+	case lower == "## messaging":
+		return true
+	case lower == "### message tool":
+		return true
+	case lower == "## group chat context":
+		return true
+	case lower == "## inbound context (trusted metadata)":
+		return true
+	case lower == "# project context":
+		return true
+	case strings.HasPrefix(lower, "## /home/"):
+		return true
+	case strings.HasPrefix(lower, "# agents.md"):
+		return true
+	case strings.HasPrefix(lower, "# soul.md"):
+		return true
+	case strings.HasPrefix(lower, "# tools.md"):
+		return true
+	case strings.HasPrefix(lower, "# identity.md"):
+		return true
+	case strings.HasPrefix(lower, "# user.md"):
+		return true
+	case strings.HasPrefix(lower, "# heartbeat.md"):
+		return true
+	}
+	return false
+}
+
+func shouldSuppressOpenClawSystemHeading(heading string) bool {
+	lower := strings.ToLower(strings.TrimSpace(heading))
+	switch lower {
+	case "## authorized senders":
+		return true
+	case "## current date & time":
+		return true
+	case "## workspace":
+		return true
+	case "## memory recall":
+		return true
+	}
+	return false
+}
+
+func shouldDropOpenClawSystemLine(line string, currentHeading string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	switch {
+	case strings.HasPrefix(lower, "<skill>"):
+		return true
+	case strings.HasPrefix(lower, "</skill>"):
+		return true
+	case strings.HasPrefix(lower, "<name>"):
+		return true
+	case strings.HasPrefix(lower, "<description>"):
+		return true
+	case strings.HasPrefix(lower, "<location>"):
+		return true
+	case strings.HasPrefix(lower, "</description>"):
+		return true
+	case strings.HasPrefix(lower, "</location>"):
+		return true
+	case strings.Contains(lower, "/usr/lib/node_modules/openclaw/skills/"):
+		return true
+	case strings.Contains(lower, "~/.openclaw/extensions/"):
+		return true
+	case strings.Contains(lower, "~/.openclaw/workspace/"):
+		return true
+	case strings.Contains(lower, "/home/zhangdailin/.openclaw/workspace/"):
+		return true
+	case strings.HasPrefix(lower, "- read:"):
+		return true
+	case strings.HasPrefix(lower, "- write:"):
+		return true
+	case strings.HasPrefix(lower, "- edit:"):
+		return true
+	case strings.HasPrefix(lower, "- exec:"):
+		return true
+	case strings.HasPrefix(lower, "- process:"):
+		return true
+	case strings.HasPrefix(lower, "- web_search:"):
+		return true
+	case strings.HasPrefix(lower, "- message:"):
+		return true
+	case strings.HasPrefix(lower, "- data_connectors:"):
+		return true
+	case strings.HasPrefix(lower, "- remember:"):
+		return true
+	case strings.HasPrefix(lower, "- recall:"):
+		return true
+	case strings.HasPrefix(lower, "tool availability (filtered by policy):"):
+		return true
+	case strings.HasPrefix(lower, "tool names are case-sensitive."):
+		return true
+	case strings.HasPrefix(lower, "for acp harness thread spawns"):
+		return true
+	case strings.HasPrefix(lower, "do not poll `subagents list`"):
+		return true
+	case strings.Contains(lower, "openclaw gateway"):
+		return true
+	case currentHeading == "## Workspace" && (strings.HasPrefix(lower, "primary workspace:") || strings.HasPrefix(lower, "current workspace:")):
+		return false
+	}
+	return false
+}
+
+func truncateBoltSystemText(text string, maxChars int) string {
+	text = strings.TrimSpace(text)
+	if text == "" || maxChars <= 0 || len(text) <= maxChars {
+		return text
+	}
+	if maxChars <= 200 {
+		return strings.TrimSpace(text[:maxChars])
+	}
+
+	headChars := maxChars * 2 / 3
+	tailChars := maxChars - headChars - len("\n[system context truncated]\n")
+	if tailChars < 120 {
+		tailChars = 120
+		headChars = maxChars - tailChars - len("\n[system context truncated]\n")
+	}
+	if headChars < 120 {
+		headChars = 120
+	}
+	if headChars+tailChars >= len(text) {
+		return text
+	}
+
+	head := strings.TrimSpace(text[:headChars])
+	tail := strings.TrimSpace(text[len(text)-tailChars:])
+	return head + "\n[system context truncated]\n" + tail
 }
 
 func shouldDropBoltSystemLine(line string) bool {
