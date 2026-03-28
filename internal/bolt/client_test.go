@@ -67,6 +67,45 @@ func TestSendRequestWithPayload_EmitsModelEvents(t *testing.T) {
 	}
 }
 
+func TestSendRequestWithPayload_IgnoresNoReplySentinel(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "0:\"NO_REPLY\"\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":7}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "hello"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("events len=%d want 1, events=%#v", len(events), events)
+	}
+	if events[0].Type != "model.finish" {
+		t.Fatalf("first event type=%q want model.finish", events[0].Type)
+	}
+}
+
 func TestSendRequestWithPayload_ConvertsJSONToolCallTextToModelToolCall(t *testing.T) {
 	prevURL := boltAPIURL
 	t.Cleanup(func() { boltAPIURL = prevURL })
@@ -3228,7 +3267,7 @@ func TestPrepareRequest_DropsStaleMissingWorkspaceHistory(t *testing.T) {
 }
 
 func TestFormatBoltToolResultContinuation_CompressesGeneralFollowupPrompt(t *testing.T) {
-	got := formatBoltToolResultContinuation(false, false, false)
+	got := formatBoltToolResultContinuation(false, false, false, nil)
 	if !strings.Contains(got, "基于这些结果继续回答") {
 		t.Fatalf("expected neutral continuation guidance, got: %q", got)
 	}
@@ -3249,8 +3288,18 @@ func TestFormatBoltToolResultContinuation_CompressesGeneralFollowupPrompt(t *tes
 	}
 }
 
+func TestFormatBoltToolResultContinuation_IncludesPriorToolContext(t *testing.T) {
+	got := formatBoltToolResultContinuation(false, false, false, &boltSerializedToolResult{
+		ToolName: "Read",
+		ToolPath: "/usr/lib/node_modules/openclaw/skills/weather/SKILL.md",
+	})
+	if !strings.Contains(got, "上一轮工具: Read(/usr/lib/node_modules/openclaw/skills/weather/SKILL.md)") {
+		t.Fatalf("expected prior tool context in continuation, got: %q", got)
+	}
+}
+
 func TestFormatBoltToolResultContinuation_SuccessPromptAvoidsFeatureHallucination(t *testing.T) {
-	got := formatBoltToolResultContinuation(false, true, false)
+	got := formatBoltToolResultContinuation(false, true, false, nil)
 	if !strings.Contains(got, "只做最小确认") {
 		t.Fatalf("expected success continuation to enforce minimal confirmation, got: %q", got)
 	}

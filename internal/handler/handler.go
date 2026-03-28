@@ -1115,7 +1115,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh.setPreferPriorToolResultFallback(lastUserIsToolResultFollowup(upstreamMessages))
 	allowedToolNames := []string(nil)
 	if !isOrchidsProtocol {
-		allowedToolNames = passthroughAllowedToolNames(effectiveTools, isBoltRequest)
+		allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, isBoltRequest)
 		sh.setAllowedToolNames(allowedToolNames)
 	}
 	if verboseDiagnostics && isBoltRequest && !gateNoTools && len(allowedToolNames) == 0 {

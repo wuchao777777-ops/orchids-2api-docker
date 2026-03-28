@@ -304,6 +304,29 @@ func TestPassthroughAllowedToolNames_BoltReturnsNilWhenRequestOmitsTools(t *test
 	}
 }
 
+func TestValidationAllowedToolNames_BoltUsesOriginalDeclaredToolsWhenPresent(t *testing.T) {
+	effective := []interface{}{
+		map[string]interface{}{"name": "Read"},
+		map[string]interface{}{"name": "Task"},
+	}
+	original := []interface{}{
+		map[string]interface{}{"name": "read"},
+		map[string]interface{}{"name": "web_search"},
+		map[string]interface{}{"name": "sessions_spawn"},
+	}
+
+	got := validationAllowedToolNames(effective, original, true)
+	want := []string{"read", "web_search", "sessions_spawn", "Task"}
+	if len(got) != len(want) {
+		t.Fatalf("validationAllowedToolNames len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("validationAllowedToolNames[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestSupportedToolNames_MapsOpenClawSubagentsToTask(t *testing.T) {
 	tools := []interface{}{
 		map[string]interface{}{"name": "read"},

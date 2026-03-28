@@ -124,6 +124,15 @@ func passthroughAllowedToolNames(tools []interface{}, supportedOnly bool) []stri
 	return declaredToolNames(tools)
 }
 
+func validationAllowedToolNames(effectiveTools []interface{}, originalTools []interface{}, supportedOnly bool) []string {
+	if supportedOnly && len(originalTools) > 0 {
+		if declared := declaredToolNames(originalTools); len(declared) > 0 {
+			return declared
+		}
+	}
+	return passthroughAllowedToolNames(effectiveTools, supportedOnly)
+}
+
 func estimateCompactedToolsTokens(tools []interface{}) int {
 	if len(tools) == 0 {
 		return 0
