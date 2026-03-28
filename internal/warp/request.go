@@ -74,6 +74,10 @@ func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 }
 
 func buildPrompt(promptText string, messages []prompt.Message, systemItems []prompt.SystemItem, _ []interface{}, _ bool, _ string) promptBuild {
+	if trimmedPrompt := sanitizeUTF8(strings.TrimSpace(promptText)); shouldPreferExplicitPrompt(trimmedPrompt, messages) {
+		return buildPromptFromExplicitText(trimmedPrompt)
+	}
+
 	systemText := buildSystemText(systemItems, messages)
 	rendered, queryText := renderConversation(messages, promptText)
 
@@ -104,6 +108,49 @@ func buildPrompt(promptText string, messages []prompt.Message, systemItems []pro
 		BasePrompt:      basePrompt,
 		HistoryText:     historyText.String(),
 		ToolResultsText: toolResultsText.String(),
+	}
+}
+
+func shouldPreferExplicitPrompt(promptText string, messages []prompt.Message) bool {
+	if strings.TrimSpace(promptText) == "" {
+		return false
+	}
+	if len(messages) == 0 {
+		return true
+	}
+
+	structuredMarkers := []string{
+		"<env>",
+		"<rules>",
+		"<sys>",
+		"<user>",
+		"<user_query>",
+		"<thinking_mode>",
+		"<max_thinking_length>",
+	}
+	for _, marker := range structuredMarkers {
+		if strings.Contains(promptText, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildPromptFromExplicitText(promptText string) promptBuild {
+	basePrompt := ""
+
+	var full strings.Builder
+	full.WriteString(promptText)
+	if !strings.HasSuffix(promptText, "\n") {
+		full.WriteByte('\n')
+	}
+
+	return promptBuild{
+		Full:            full.String(),
+		Query:           promptText,
+		BasePrompt:      basePrompt,
+		HistoryText:     promptText,
+		ToolResultsText: "",
 	}
 }
 
