@@ -209,6 +209,46 @@ func TestParseToolCalls_AcceptsMixedProseAndFencedToolJSON(t *testing.T) {
 	}
 }
 
+func TestSanitizeAssistantText_StripsProceduralTextWhenToolCallExists(t *testing.T) {
+	raw := strings.Join([]string{
+		"我来帮你在 test.txt 中添加内容。首先让我读取一下这个文件的当前内容。",
+		"",
+		`{"content":"     1\tHello World\n"}tool_call_result>`,
+		"",
+		"现在我将添加 \"我是大帅比\" 到文件中：",
+		"",
+		`{"content":"     1\tHello World\n     2\t我是大帅比\n"}tool_call_result>`,
+		"",
+		"完成！✅ 我已经成功在 test.txt 中添加了 \"我是大帅比\"。",
+	}, "\n")
+
+	out := sanitizeAssistantText(raw, []ParsedToolCall{{
+		Name: "Update",
+		ID:   "tool_update_1",
+		Input: json.RawMessage(
+			`{"file_path":"test.txt","old_string":"Hello World","new_string":"Hello World\n我是大帅比"}`,
+		),
+	}})
+	if out != "" {
+		t.Fatalf("sanitizeAssistantText() = %q, want empty", out)
+	}
+}
+
+func TestSanitizeAssistantText_KeepsSubstantiveTextWithToolCall(t *testing.T) {
+	raw := "我先检查配置文件，然后修复代理设置。\n\n代理认证字段的格式有误，我会继续修正。"
+	out := sanitizeAssistantText(raw, []ParsedToolCall{{
+		Name:  "Read",
+		ID:    "tool_read_1",
+		Input: json.RawMessage(`{"file_path":"config.json"}`),
+	}})
+	if !strings.Contains(out, "代理认证字段的格式有误") {
+		t.Fatalf("sanitizeAssistantText() = %q, want substantive summary kept", out)
+	}
+	if strings.Contains(out, "我先检查配置文件") {
+		t.Fatalf("sanitizeAssistantText() should drop procedural lead-in, got %q", out)
+	}
+}
+
 func TestParseToolCalls_GeneratesToolCallIDWhenMissingOrNil(t *testing.T) {
 	tests := []struct {
 		name string

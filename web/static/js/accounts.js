@@ -12,12 +12,14 @@ const domCache = {
     accountsList: null,
     paginationInfo: null,
     paginationControls: null,
+    accountImportStatus: null,
 };
 
 function initDOMCache() {
     domCache.accountsList = document.getElementById("accountsList");
     domCache.paginationInfo = document.getElementById("paginationInfo");
     domCache.paginationControls = document.getElementById("paginationControls");
+    domCache.accountImportStatus = document.getElementById("accountImportStatus");
 }
 
 const fallbackAgentModes = {
@@ -259,14 +261,14 @@ function applyTokenLabels(type) {
       ? "Bolt 编辑时仅保存第一行 __session，并保留当前 project_id"
       : "支持批量添加 Bolt。每行一个 __session，project_id 共用下方输入";
     input.required = true;
-  } else if (type === 'puter') {
-    label.textContent = "Auth Token";
-    input.placeholder = "每行一个 Puter auth_token";
-    hint.textContent = accountId
-      ? "Puter 编辑时仅保存第一行 auth_token"
-      : "支持批量添加 Puter。每行一个 auth_token";
-    input.required = true;
-  } else {
+    } else if (type === 'puter') {
+      label.textContent = "Auth Token";
+      input.placeholder = "每行一个 Puter auth_token";
+      hint.textContent = accountId
+        ? "Puter 编辑时仅保存第一行 auth_token。可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取"
+        : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
+      input.required = true;
+    } else {
     label.textContent = "Cookie / __client / __session";
     input.placeholder = "支持原始 __client、完整 Cookie Header 或 Cookie JSON";
     hint.textContent = accountId
@@ -290,6 +292,117 @@ function splitBatchCredentialInput(raw) {
     return lines;
   }
   return [text];
+}
+
+function getAccountImportStatusNode() {
+  return domCache.accountImportStatus || document.getElementById("accountImportStatus");
+}
+
+function escapeImportStatusText(text) {
+  return String(text || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function clearAccountImportStatus() {
+  const node = getAccountImportStatusNode();
+  if (!node) return;
+  node.hidden = true;
+  node.classList.remove("is-active", "is-error");
+  node.innerHTML = "";
+}
+
+function renderAccountImportStatus(message, type = "info", details = []) {
+  const node = getAccountImportStatusNode();
+  if (!node) return;
+
+  const safeMessage = escapeImportStatusText(message);
+  const rows = Array.isArray(details) ? details.filter(Boolean).slice(0, 8) : [];
+  const detailHTML = rows.length > 0
+    ? `<div style="margin-top:8px">${rows.map((item) => `<div><code>${escapeImportStatusText(item)}</code></div>`).join("")}</div>`
+    : "";
+
+  node.hidden = false;
+  node.classList.toggle("is-active", type === "info");
+  node.classList.toggle("is-error", type === "error");
+  node.innerHTML = `<strong>${safeMessage}</strong>${detailHTML}`;
+}
+
+function buildAccountPayload(type, baseData, credential, projectId) {
+  const payload = { ...baseData };
+  if (type === "warp") {
+    payload.refresh_token = credential;
+  } else if (type === "bolt") {
+    payload.session_cookie = credential;
+    payload.project_id = projectId;
+  } else {
+    payload.client_cookie = credential;
+  }
+  return payload;
+}
+
+async function createAccount(payload) {
+  const res = await fetch("/api/accounts", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Account-Sync": "async",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json();
+}
+
+function summarizeAccountCreateError(err) {
+  const message = String(err && err.message ? err.message : err || "").trim();
+  if (!message) return "未知错误";
+  const compact = message.replace(/\s+/g, " ");
+  return compact.length > 160 ? `${compact.slice(0, 157)}...` : compact;
+}
+
+async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null) {
+  let nextIndex = 0;
+  let success = 0;
+  let failed = 0;
+  let completed = 0;
+  const failures = [];
+  const size = Math.max(1, Math.min(concurrency, payloads.length || 1));
+
+  async function worker() {
+    while (nextIndex < payloads.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      const payload = payloads[currentIndex];
+      try {
+        await createAccount(payload);
+        success += 1;
+      } catch (err) {
+        failed += 1;
+        failures.push(`#${currentIndex + 1} ${summarizeAccountCreateError(err)}`);
+        console.error("Failed to create account:", err);
+      } finally {
+        completed += 1;
+        if (typeof onProgress === "function") {
+          onProgress({
+            total: payloads.length,
+            completed,
+            success,
+            failed,
+            currentIndex,
+            payload,
+            failures,
+          });
+        }
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: size }, () => worker()));
+  return { success, failed, failures };
 }
 
 function resolveAgentMode(type, preferredValue = "") {
@@ -400,6 +513,12 @@ function isAccountAbnormal(acc) {
   return !evaluateAccountStatus(acc).normal;
 }
 
+function matchesCurrentPlatform(acc) {
+  if (!currentPlatform) return true;
+  const key = String(currentPlatform || "").toLowerCase();
+  return normalizeAccountType(acc).includes(key);
+}
+
 // Get status badge for account
 function statusBadge(acc) {
   return evaluateAccountStatus(acc);
@@ -459,17 +578,18 @@ async function deleteAllAccounts() {
 
 // Clear abnormal accounts
 async function clearAbnormalAccounts() {
-  const abnormal = accounts.filter(isAccountAbnormal);
+  const abnormal = accounts.filter((acc) => matchesCurrentPlatform(acc) && isAccountAbnormal(acc));
   if (abnormal.length === 0) {
-    showToast("没有异常账号", "info");
+    showToast(currentPlatform ? `当前 ${currentPlatform} 页面没有异常账号` : "没有异常账号", "info");
     return;
   }
-  if (confirm(`确定要清空 ${abnormal.length} 个异常账号吗？`)) {
+  const scopeText = currentPlatform ? `当前 ${currentPlatform} 页面中的 ` : "";
+  if (confirm(`确定要清空 ${scopeText}${abnormal.length} 个异常账号吗？`)) {
     for (const acc of abnormal) {
       await fetch(`/api/accounts/${acc.id}`, { method: "DELETE" });
     }
     loadAccounts();
-    showToast("已清空异常账号");
+    showToast(`已清空${scopeText}异常账号`);
   }
 }
 
@@ -566,11 +686,7 @@ async function enableNSFW() {
 // Render accounts table
 function renderAccounts() {
   const container = domCache.accountsList || document.getElementById("accountsList");
-  const filtered = accounts.filter(acc => {
-    if (!currentPlatform) return true;
-    const key = currentPlatform.toLowerCase();
-    return normalizeAccountType(acc).includes(key);
-  });
+  const filtered = accounts.filter(matchesCurrentPlatform);
 
   const total = filtered.length;
   const totalPages = Math.ceil(total / pageSize) || 1;
@@ -584,16 +700,9 @@ function renderAccounts() {
   if (pageItems.length === 0) {
     container.innerHTML = "";
     const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.style.display = "flex";
-    empty.style.flexDirection = "column";
-    empty.style.alignItems = "center";
-    empty.style.justifyContent = "center";
-    empty.style.height = "300px";
-    empty.style.color = "#94a3b8";
+    empty.className = "empty-state empty-state-panel";
     const icon = document.createElement("span");
-    icon.style.fontSize = "3rem";
-    icon.style.marginBottom = "16px";
+    icon.className = "empty-state-mark";
     icon.textContent = "📂";
     const text = document.createElement("p");
     text.textContent = `暂无 ${currentPlatform ? currentPlatform : ''} 账号数据`;
@@ -603,6 +712,11 @@ function renderAccounts() {
     const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
     paginationInfo.textContent = `共 0 条记录，第 1/1 页`;
     renderPagination(1, 1);
+    return;
+  }
+
+  if (window.matchMedia("(max-width: 640px)").matches) {
+    renderAccountsMobile(container, pageItems, total, totalPages);
     return;
   }
 
@@ -819,6 +933,108 @@ function renderAccounts() {
   };
 }
 
+function buildQuotaMarkup(acc) {
+  const quota = getQuotaStats(acc);
+  if (quota && quota.unknown) {
+    return `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(Puter 暂无稳定额度接口)</span>`;
+  }
+  if (quota) {
+    const pct = quota.pctRemaining;
+    const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
+    if (normalizeAccountType(acc) === "warp" && quota.splitBonus) {
+      return `<span style="color:${color}">${quota.remaining.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span><div style="color:#64748b;font-size:0.75rem">${quota.monthlyRemaining.toLocaleString()} 月度 + ${quota.bonusRemaining.toLocaleString()} 赠送</div>`;
+    }
+    return `<span style="color:${color}">${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>`;
+  }
+  return `<span style="color:#64748b">-</span>`;
+}
+
+function buildStatusMarkup(acc, badge) {
+  const nsfwTag = normalizeAccountType(acc) === "grok" && acc.nsfw_enabled === true
+    ? `<span class="tag" style="background:rgba(239, 68, 68, 0.16);color:#fda4af;border:none;">NSFW</span>`
+    : "";
+  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${nsfwTag}`;
+}
+
+function renderAccountsMobile(container, pageItems, total, totalPages) {
+  container.innerHTML = "";
+  const list = document.createElement("div");
+  list.className = "accounts-mobile-list";
+
+  const fragment = document.createDocumentFragment();
+  pageItems.forEach((acc) => {
+    const badge = statusBadge(acc);
+    const tokenDisplay = formatTokenDisplay(acc);
+    const card = document.createElement("article");
+    card.className = "account-mobile-card";
+    card.innerHTML = `
+      <div class="account-mobile-head">
+        <label class="account-mobile-check">
+          <input type="checkbox" class="row-checkbox" data-action="row-select" data-id="${encodeData(acc.id)}">
+          <span>#${escapeHtml(acc.id === null || acc.id === undefined ? "" : String(acc.id))}</span>
+        </label>
+        <div class="account-mobile-actions">
+          <button type="button" class="action-icon" data-action="edit" data-id="${encodeData(acc.id)}" title="编辑">✏️</button>
+          <button type="button" class="action-icon" data-action="refresh" data-id="${encodeData(acc.id)}" title="刷新">🔄</button>
+          <button type="button" class="action-icon" data-action="delete" data-id="${encodeData(acc.id)}" title="删除">🗑️</button>
+        </div>
+      </div>
+      <div class="account-mobile-token">
+        <span class="token-text" title="${escapeHtml(tokenDisplay)}">${escapeHtml(tokenDisplay)}</span>
+      </div>
+      <div class="account-mobile-grid">
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">模型</span>
+          <span class="tag tag-free">${escapeHtml(acc.agent_mode || "auto")}</span>
+        </div>
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">状态</span>
+          <div class="account-mobile-inline">${buildStatusMarkup(acc, badge)}</div>
+        </div>
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">配额</span>
+          <div class="account-mobile-value">${buildQuotaMarkup(acc)}</div>
+        </div>
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">调用</span>
+          <span class="account-mobile-value">${escapeHtml(String(acc.request_count || 0))}</span>
+        </div>
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">最后调用</span>
+          <span class="account-mobile-value">${escapeHtml(acc.last_used_at && !acc.last_used_at.startsWith("0001") ? formatTime(acc.last_used_at) : "-")}</span>
+        </div>
+      </div>
+    `;
+    fragment.appendChild(card);
+  });
+
+  list.appendChild(fragment);
+  container.appendChild(list);
+
+  const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
+  paginationInfo.textContent = `共 ${total} 条记录，第 ${currentPage}/${totalPages} 页`;
+  renderPagination(currentPage, totalPages);
+  updateSelectedCount();
+
+  container.onclick = (e) => {
+    const actionEl = e.target.closest("[data-action]");
+    if (!actionEl || !container.contains(actionEl)) return;
+    const action = actionEl.dataset.action;
+    const id = parseDataId(actionEl.dataset.id || "");
+    if (action === "edit") editAccount(id);
+    if (action === "refresh") refreshToken(id);
+    if (action === "delete") deleteAccount(id);
+  };
+
+  container.onchange = (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.dataset.action === "row-select") {
+      updateSelectedCount();
+    }
+  };
+}
+
 function renderPagination(current, total) {
   const container = domCache.paginationControls || document.getElementById("paginationControls");
   if (!container) return;
@@ -944,6 +1160,7 @@ function openModal(account = null) {
   const title = document.getElementById("modalTitle");
   const form = document.getElementById("accountForm");
   const typeEl = document.getElementById("accountType");
+  clearAccountImportStatus();
 
   const finalizeModal = () => {
     applyTokenLabels(typeEl ? typeEl.value : "orchids");
@@ -982,6 +1199,7 @@ function closeModal() {
   const modal = document.getElementById("accountModal");
   modal.classList.remove("active");
   modal.style.display = "none";
+  clearAccountImportStatus();
 }
 
 // Save account
@@ -1010,18 +1228,9 @@ async function saveAccount(e) {
   }
 
   try {
+    clearAccountImportStatus();
     if (id) {
-      const payload = { ...data };
-      if (type === 'warp') {
-        payload.refresh_token = credentials[0];
-      } else if (type === 'bolt') {
-        payload.session_cookie = credentials[0];
-        payload.project_id = projectId;
-      } else if (type === 'puter') {
-        payload.client_cookie = credentials[0];
-      } else {
-        payload.client_cookie = credentials[0];
-      }
+      const payload = buildAccountPayload(type, data, credentials[0], projectId);
       const res = await fetch(`/api/accounts/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1035,54 +1244,32 @@ async function saveAccount(e) {
     }
 
     if (credentials.length > 1) {
-      let success = 0;
-      let failed = 0;
-      for (const item of credentials) {
-        const payload = { ...data };
-        if (type === 'warp') {
-          payload.refresh_token = item;
-        } else if (type === 'bolt') {
-          payload.session_cookie = item;
-          payload.project_id = projectId;
-        } else if (type === 'puter') {
-          payload.client_cookie = item;
-        } else {
-          payload.client_cookie = item;
-        }
-        const res = await fetch("/api/accounts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          success += 1;
-        } else {
-          failed += 1;
-        }
+      const payloads = credentials.map((item) => buildAccountPayload(type, data, item, projectId));
+      renderAccountImportStatus(`正在批量添加账号 0/${payloads.length}`, "info");
+      const { success, failed, failures } = await runAccountCreatePool(payloads, 6, (progress) => {
+        renderAccountImportStatus(
+          `正在批量添加账号 ${progress.completed}/${progress.total}，成功 ${progress.success}，失败 ${progress.failed}`,
+          progress.failed > 0 ? "error" : "info",
+          progress.failures,
+        );
+      });
+      if (failed > 0) {
+        renderAccountImportStatus(`批量添加完成：成功 ${success}，失败 ${failed}`, "error", failures);
+      } else {
+        renderAccountImportStatus(`批量添加完成：成功 ${success}，失败 ${failed}`, "info");
       }
-      closeModal();
       loadAccounts();
-      showToast(`批量添加完成：成功 ${success}，失败 ${failed}`);
+      if (failed === 0) {
+        closeModal();
+      }
+      showToast(
+        failed > 0 ? `批量添加完成：成功 ${success}，失败 ${failed}` : `批量添加完成：成功 ${success}`,
+        failed > 0 ? "error" : "success",
+      );
       return;
     }
 
-    const payload = { ...data };
-    if (type === 'warp') {
-      payload.refresh_token = credentials[0];
-    } else if (type === 'bolt') {
-      payload.session_cookie = credentials[0];
-      payload.project_id = projectId;
-    } else if (type === 'puter') {
-      payload.client_cookie = credentials[0];
-    } else {
-      payload.client_cookie = credentials[0];
-    }
-    const res = await fetch("/api/accounts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(await res.text());
+    await createAccount(buildAccountPayload(type, data, credentials[0], projectId));
     closeModal();
     loadAccounts();
     showToast("保存成功");

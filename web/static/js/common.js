@@ -124,6 +124,29 @@ async function refreshSidebarAccountStats() {
   }
 }
 
+function setSidebarOpen(open) {
+  const sidebar = document.getElementById("sidebar");
+  const overlay = document.querySelector(".sidebar-overlay");
+  const shouldOpen = Boolean(open);
+  if (sidebar) {
+    sidebar.classList.toggle("mobile-open", shouldOpen);
+  }
+  if (overlay) {
+    overlay.classList.toggle("active", shouldOpen);
+  }
+  document.body.classList.toggle("sidebar-open", shouldOpen);
+}
+
+function toggleSidebar(forceOpen) {
+  const sidebar = document.getElementById("sidebar");
+  if (!sidebar) return;
+  if (typeof forceOpen === "boolean") {
+    setSidebarOpen(forceOpen);
+    return;
+  }
+  setSidebarOpen(!sidebar.classList.contains("mobile-open"));
+}
+
 // Show toast notification
 function showToast(msg, type = 'success') {
   let container = document.getElementById("toastContainer");
@@ -183,6 +206,9 @@ async function logout() {
 
 // Switch between tabs (placeholder - will be implemented with proper routing)
 function switchTab(tabName, skipSidebar = false) {
+  if (!skipSidebar) {
+    setSidebarOpen(false);
+  }
   // This will be replaced with proper client-side routing or page reloads
   console.log("Switching to tab:", tabName);
 
@@ -194,4 +220,9 @@ function switchTab(tabName, skipSidebar = false) {
 
 document.addEventListener("DOMContentLoaded", () => {
   refreshSidebarAccountStats();
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      setSidebarOpen(false);
+    }
+  });
 });

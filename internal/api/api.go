@@ -902,21 +902,25 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if acc.Enabled && shouldSyncAccountOnCreate(&acc) {
-			syncCtx, syncCancel := context.WithTimeout(r.Context(), 25*time.Second)
-			accountStatus, _, syncErr := a.refreshAccountState(syncCtx, &acc)
-			syncCancel()
-			if syncErr != nil {
-				slog.Warn("Initial account sync failed", "account_id", acc.ID, "type", acc.AccountType, "error", syncErr)
-				if accountStatus != "" {
-					acc.StatusCode = accountStatus
-					acc.LastAttempt = time.Now()
-				}
+			if wantsAsyncAccountSync(r) {
+				a.syncAccountAfterCreate(acc)
 			} else {
-				acc.StatusCode = ""
-				acc.LastAttempt = time.Time{}
-			}
-			if updateErr := a.store.UpdateAccount(r.Context(), &acc); updateErr != nil {
-				slog.Warn("Failed to persist initial account sync", "account_id", acc.ID, "type", acc.AccountType, "error", updateErr)
+				syncCtx, syncCancel := context.WithTimeout(r.Context(), 25*time.Second)
+				accountStatus, _, syncErr := a.refreshAccountState(syncCtx, &acc)
+				syncCancel()
+				if syncErr != nil {
+					slog.Warn("Initial account sync failed", "account_id", acc.ID, "type", acc.AccountType, "error", syncErr)
+					if accountStatus != "" {
+						acc.StatusCode = accountStatus
+						acc.LastAttempt = time.Now()
+					}
+				} else {
+					acc.StatusCode = ""
+					acc.LastAttempt = time.Time{}
+				}
+				if updateErr := a.store.UpdateAccount(r.Context(), &acc); updateErr != nil {
+					slog.Warn("Failed to persist initial account sync", "account_id", acc.ID, "type", acc.AccountType, "error", updateErr)
+				}
 			}
 		}
 
@@ -1706,6 +1710,40 @@ func shouldSyncAccountOnCreate(acc *store.Account) bool {
 		return false
 	}
 	return !strings.EqualFold(strings.TrimSpace(acc.AccountType), "orchids")
+}
+
+func wantsAsyncAccountSync(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Account-Sync")), "async")
+}
+
+func (a *API) syncAccountAfterCreate(acc store.Account) {
+	if !acc.Enabled || !shouldSyncAccountOnCreate(&acc) {
+		return
+	}
+
+	go func(account store.Account) {
+		syncCtx, syncCancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer syncCancel()
+
+		accountStatus, _, syncErr := a.refreshAccountState(syncCtx, &account)
+		if syncErr != nil {
+			slog.Warn("Initial account sync failed", "account_id", account.ID, "type", account.AccountType, "error", syncErr)
+			if accountStatus != "" {
+				account.StatusCode = accountStatus
+				account.LastAttempt = time.Now()
+			}
+		} else {
+			account.StatusCode = ""
+			account.LastAttempt = time.Time{}
+		}
+
+		if updateErr := a.store.UpdateAccount(context.Background(), &account); updateErr != nil {
+			slog.Warn("Failed to persist initial account sync", "account_id", account.ID, "type", account.AccountType, "error", updateErr)
+		}
+	}(acc)
 }
 
 func applyAccountStatusFromError(acc *store.Account, err error) {

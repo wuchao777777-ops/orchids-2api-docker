@@ -284,11 +284,16 @@ function renderModels() {
 
   if (pageItems.length === 0) {
     container.innerHTML = `
-      <div class="models-empty">
-        <span class="models-empty-icon">◈</span>
+      <div class="models-empty empty-state-panel">
+        <span class="models-empty-icon empty-state-mark">◈</span>
         <p>当前筛选条件下暂无模型数据</p>
       </div>
     `;
+    return;
+  }
+
+  if (window.matchMedia("(max-width: 640px)").matches) {
+    renderModelsMobile(container, pageItems);
     return;
   }
 
@@ -344,6 +349,67 @@ function renderModels() {
       </table>
     </div>
   `;
+
+  container.onclick = (event) => {
+    const target = event.target.closest("[data-action]");
+    if (!target || !container.contains(target)) return;
+    const action = target.dataset.action;
+    const id = decodeData(target.dataset.id || "");
+    if (!id) return;
+    if (action === "edit") editModel(id);
+    if (action === "delete") deleteModel(id);
+  };
+
+  container.onchange = (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.dataset.action !== "toggle-status") return;
+    const id = decodeData(target.dataset.id || "");
+    if (!id) return;
+    toggleModelStatus(id, target.checked);
+  };
+}
+
+function renderModelsMobile(container, pageItems) {
+  const cards = pageItems.map((m) => {
+    const status = statusMeta(m.status);
+    const defaultBadge = m.is_default ? `<span class="models-default-badge">默认</span>` : "";
+    return `
+      <article class="models-mobile-card">
+        <div class="models-mobile-head">
+          <div class="models-cell-title">
+            <strong>${escapeHtml(m.name || m.model_id || "-")}</strong>
+            ${defaultBadge}
+          </div>
+          <span class="models-status-badge" style="background:${status.bg};color:${status.color};border-color:${status.border};">${status.label}</span>
+        </div>
+        <div class="models-model-id">${escapeHtml(m.model_id || "-")}</div>
+        <div class="models-mobile-grid">
+          <div class="models-mobile-item">
+            <span class="models-mobile-label">渠道</span>
+            <span>${escapeHtml(m.channel || "-")}</span>
+          </div>
+          <div class="models-mobile-item">
+            <span class="models-mobile-label">排序</span>
+            <span>${escapeHtml(String(m.sort_order ?? 0))}</span>
+          </div>
+          <div class="models-mobile-item">
+            <span class="models-mobile-label">启用</span>
+            <label class="toggle" title="${normalizeModelStatus(m.status) === "available" ? "点击下线" : "点击启用"}">
+              <input type="checkbox" data-action="toggle-status" data-id="${encodeData(m.id)}" ${normalizeModelStatus(m.status) === "available" ? "checked" : ""} />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="models-mobile-actions">
+          <button type="button" class="btn btn-outline models-action-btn" data-action="edit" data-id="${encodeData(m.id)}">编辑</button>
+          <button type="button" class="btn btn-outline models-action-btn models-action-btn-danger" data-action="delete" data-id="${encodeData(m.id)}">删除</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  container.innerHTML = `<div class="models-mobile-list">${cards}</div>`;
 
   container.onclick = (event) => {
     const target = event.target.closest("[data-action]");

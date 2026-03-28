@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-3">
   <style>
     .models-page {
       display: flex;
@@ -599,8 +599,8 @@
           </div>
         </div>
         <div class="models-footer">
-          <div class="models-footer-meta" id="modelsPaginationInfo">共 0 条记录，第 1/1 页</div>
-          <div class="models-pagination" id="modelsPaginationControls"></div>
+          <div class="models-footer-meta pagination-info" id="modelsPaginationInfo">共 0 条记录，第 1/1 页</div>
+          <div class="models-pagination pagination-controls" id="modelsPaginationControls"></div>
         </div>
       </div>
     </div>
@@ -612,8 +612,8 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js?v=20260319-1"></script>
-  <script src="{{.AdminPath}}/js/models.js?v=20260320-4"></script>
+  <script src="{{.AdminPath}}/js/common.js?v=20260328-1"></script>
+  <script src="{{.AdminPath}}/js/models.js?v=20260328-1"></script>
 </body>
 </html>
 {{end}}

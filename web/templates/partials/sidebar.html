@@ -1,4 +1,19 @@
-<aside class="sidebar">
+<div class="mobile-topbar">
+  <button class="mobile-menu-btn" type="button" onclick="toggleSidebar(true)" aria-label="打开导航菜单">
+    <span></span>
+    <span></span>
+    <span></span>
+  </button>
+  <div class="mobile-topbar-brand">
+    <div class="logo">O</div>
+    <div>
+      <div class="title">Orchids Console</div>
+      <div class="sidebar-subtitle">Control center</div>
+    </div>
+  </div>
+</div>
+<div class="sidebar-overlay" onclick="toggleSidebar(false)"></div>
+<aside class="sidebar" id="sidebar">
   <div class="sidebar-header">
     <div class="logo">O</div>
     <div>

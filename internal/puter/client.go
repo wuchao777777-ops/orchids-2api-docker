@@ -186,6 +186,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 
 	toolCalls, remainingText := parseToolCalls(fullText)
 	toolCalls = sanitizeParsedToolCalls(toolCalls, req.Workdir)
+	remainingText = sanitizeAssistantText(remainingText, toolCalls)
 	if onMessage == nil {
 		return nil
 	}
@@ -1052,6 +1053,123 @@ func emitResponseEvents(onMessage func(upstream.SSEMessage), model, text string,
 		},
 	})
 	return nil
+}
+
+func sanitizeAssistantText(text string, toolCalls []ParsedToolCall) string {
+	text = strings.ReplaceAll(text, "tool_call_result>", "")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	text = stripPseudoToolResultPayloads(text)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	if len(toolCalls) == 0 {
+		return text
+	}
+
+	paragraphs := splitAssistantParagraphs(text)
+	if len(paragraphs) == 0 {
+		return ""
+	}
+
+	kept := make([]string, 0, len(paragraphs))
+	for _, part := range paragraphs {
+		if shouldDropProceduralAssistantParagraph(part) {
+			continue
+		}
+		kept = append(kept, part)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n\n"))
+}
+
+func stripPseudoToolResultPayloads(text string) string {
+	lines := strings.Split(text, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			kept = append(kept, line)
+			continue
+		}
+		if strings.Contains(trimmed, "tool_call_result") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, `{"content":"`) && strings.HasSuffix(trimmed, `}`) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+func splitAssistantParagraphs(text string) []string {
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	parts := strings.Split(normalized, "\n\n")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func shouldDropProceduralAssistantParagraph(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return true
+	}
+
+	lower := strings.ToLower(trimmed)
+	for _, marker := range []string{
+		"read 1 file",
+		"update(",
+		"write(",
+		"create(",
+		"tool_call_result",
+		"error editing file",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+
+	for _, prefix := range []string{
+		"我先",
+		"我来",
+		"让我",
+		"现在我将",
+		"首先让我",
+		"接下来",
+		"我看到",
+		"完成！",
+		"完美！",
+		"已完成",
+		"已经成功",
+		"已成功",
+		"i will",
+		"let me",
+		"now i will",
+		"done!",
+		"completed!",
+	} {
+		if strings.HasPrefix(lower, strings.ToLower(prefix)) {
+			return true
+		}
+	}
+
+	if strings.HasPrefix(trimmed, "{") && strings.Contains(trimmed, `"content"`) {
+		return true
+	}
+	return false
 }
 
 func estimateInputTokens(messages []prompt.Message, system []prompt.SystemItem) int {
