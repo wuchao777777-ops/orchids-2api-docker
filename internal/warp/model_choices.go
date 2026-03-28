@@ -70,8 +70,8 @@ func (c *Client) FetchDiscoveredModelChoices(ctx context.Context) ([]ModelChoice
 	}
 
 	jwt := c.session.currentJWT()
-	agentChoices, defaultID, agentErr := fetchUserAgentModeLLMChoices(ctx, client, jwt)
-	workspaceChoices, workspaceErr := fetchWorkspaceAvailableLLMChoices(ctx, client, jwt)
+	agentChoices, defaultID, agentErr := fetchUserAgentModeLLMChoices(ctx, client, jwt, c.profile)
+	workspaceChoices, workspaceErr := fetchWorkspaceAvailableLLMChoices(ctx, client, jwt, c.profile)
 
 	if len(agentChoices) == 0 && len(workspaceChoices) == 0 {
 		switch {
@@ -97,12 +97,12 @@ func (c *Client) FetchDiscoveredModelChoices(ctx context.Context) ([]ModelChoice
 	return mergeWarpModelChoices(defaultID, agentChoices, workspaceChoices), strings.Join(sourceParts, "+"), nil
 }
 
-func fetchUserAgentModeLLMChoices(ctx context.Context, client *http.Client, jwt string) ([]ModelChoice, string, error) {
+func fetchUserAgentModeLLMChoices(ctx context.Context, client *http.Client, jwt string, profile clientProfile) ([]ModelChoice, string, error) {
 	payload := map[string]interface{}{
 		"query":         getUserAgentModeLLMsQuery,
 		"operationName": "GetUserAgentModeLlms",
 		"variables": map[string]interface{}{
-			"requestContext": requestContextPayload(),
+			"requestContext": profile.requestContextPayload(),
 		},
 	}
 
@@ -130,7 +130,7 @@ func fetchUserAgentModeLLMChoices(ctx context.Context, client *http.Client, jwt 
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetUserAgentModeLlms", payload, &resp); err != nil {
+	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetUserAgentModeLlms", payload, &resp, profile); err != nil {
 		return nil, "", err
 	}
 	if len(resp.Errors) > 0 {
@@ -152,12 +152,12 @@ func fetchUserAgentModeLLMChoices(ctx context.Context, client *http.Client, jwt 
 	return choices, canonicalModelID(resp.Data.User.User.LLMs.AgentMode.DefaultID), nil
 }
 
-func fetchWorkspaceAvailableLLMChoices(ctx context.Context, client *http.Client, jwt string) ([]ModelChoice, error) {
+func fetchWorkspaceAvailableLLMChoices(ctx context.Context, client *http.Client, jwt string, profile clientProfile) ([]ModelChoice, error) {
 	payload := map[string]interface{}{
 		"query":         getWorkspaceAvailableLLMsQuery,
 		"operationName": "GetWorkspaceLlmModelRoutingSettings",
 		"variables": map[string]interface{}{
-			"requestContext": requestContextPayload(),
+			"requestContext": profile.requestContextPayload(),
 		},
 	}
 
@@ -184,7 +184,7 @@ func fetchWorkspaceAvailableLLMChoices(ctx context.Context, client *http.Client,
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetWorkspaceLlmModelRoutingSettings", payload, &resp); err != nil {
+	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetWorkspaceLlmModelRoutingSettings", payload, &resp, profile); err != nil {
 		return nil, err
 	}
 	if len(resp.Errors) > 0 {

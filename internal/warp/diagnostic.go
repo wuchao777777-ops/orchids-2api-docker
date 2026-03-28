@@ -77,6 +77,7 @@ func RunDiagnostic(ctx context.Context, opts DiagnosticOptions) (*DiagnosticResu
 	}
 
 	sess := getSession(0, refreshToken, opts.DeviceID, opts.RequestID)
+	profile := clientProfileFromConfig(cfg)
 	httpClient := newDiagnosticHTTPClient(cfg, opts.UseUTLS)
 	authClient := newDiagnosticHTTPClient(cfg, opts.UseUTLS)
 	httpClient.Jar = sess.jar
@@ -98,19 +99,19 @@ func RunDiagnostic(ctx context.Context, opts DiagnosticOptions) (*DiagnosticResu
 		return result, nil
 	}
 
-	loginStep, err := runLoginStep(ctx, sess, httpClient, jwt, cfg)
+	loginStep, err := runLoginStep(ctx, sess, httpClient, jwt, cfg, profile)
 	result.Steps = append(result.Steps, loginStep)
 	if err != nil {
 		return result, nil
 	}
 
-	modelChoicesStep := runModelChoicesStep(ctx, authClient, jwt, cfg)
+	modelChoicesStep := runModelChoicesStep(ctx, authClient, jwt, cfg, profile)
 	result.Steps = append(result.Steps, modelChoicesStep)
 
-	limitInfoStep := runLimitInfoStep(ctx, authClient, jwt, cfg)
+	limitInfoStep := runLimitInfoStep(ctx, authClient, jwt, cfg, profile)
 	result.Steps = append(result.Steps, limitInfoStep)
 
-	aiStep := runAIStep(ctx, httpClient, jwt, model, promptText, cfg)
+	aiStep := runAIStep(ctx, httpClient, jwt, model, promptText, cfg, profile)
 	result.Steps = append(result.Steps, aiStep)
 	return result, nil
 }
@@ -193,7 +194,7 @@ func runRefreshStep(ctx context.Context, sess *session, client *http.Client, cfg
 	return finishDiagnosticStep(step, start), jwt, nil
 }
 
-func runLoginStep(ctx context.Context, sess *session, client *http.Client, jwt string, cfg *config.Config) (DiagnosticStep, error) {
+func runLoginStep(ctx context.Context, sess *session, client *http.Client, jwt string, cfg *config.Config, profile clientProfile) (DiagnosticStep, error) {
 	step := DiagnosticStep{Name: "login", Target: warpLegacyLoginURL}
 	step.Proxy = resolveDiagnosticProxy(cfg, warpLegacyLoginURL)
 	start := time.Now()
@@ -214,11 +215,7 @@ func runLoginStep(ctx context.Context, sess *session, client *http.Client, jwt s
 		step.Error = err.Error()
 		return finishDiagnosticStep(step, start), err
 	}
-	req.Header.Set("X-Warp-Client-ID", clientID)
-	req.Header.Set("X-Warp-Client-Version", clientVersion)
-	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
-	req.Header.Set("X-Warp-OS-Name", clientOSName)
-	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	profile.applyWarpHeaders(req.Header)
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("X-Warp-Experiment-Id", experimentID)
 	req.Header.Set("X-Warp-Experiment-Bucket", experimentBuck)
@@ -258,13 +255,13 @@ func runLoginStep(ctx context.Context, sess *session, client *http.Client, jwt s
 	return finishDiagnosticStep(step, start), nil
 }
 
-func runModelChoicesStep(ctx context.Context, client *http.Client, jwt string, cfg *config.Config) DiagnosticStep {
+func runModelChoicesStep(ctx context.Context, client *http.Client, jwt string, cfg *config.Config, profile clientProfile) DiagnosticStep {
 	step := DiagnosticStep{Name: "model_choices", Target: warpGraphQLV2URL}
 	step.Proxy = resolveDiagnosticProxy(cfg, warpGraphQLV2URL)
 	start := time.Now()
 
-	agentChoices, defaultID, agentErr := fetchUserAgentModeLLMChoices(ctx, client, jwt)
-	workspaceChoices, workspaceErr := fetchWorkspaceAvailableLLMChoices(ctx, client, jwt)
+	agentChoices, defaultID, agentErr := fetchUserAgentModeLLMChoices(ctx, client, jwt, profile)
+	workspaceChoices, workspaceErr := fetchWorkspaceAvailableLLMChoices(ctx, client, jwt, profile)
 
 	if agentErr != nil && workspaceErr != nil && len(agentChoices) == 0 && len(workspaceChoices) == 0 {
 		step.Error = fmt.Sprintf("agent_mode: %v; workspace: %v", agentErr, workspaceErr)
@@ -293,12 +290,12 @@ func runModelChoicesStep(ctx context.Context, client *http.Client, jwt string, c
 	return finishDiagnosticStep(step, start)
 }
 
-func runLimitInfoStep(ctx context.Context, client *http.Client, jwt string, cfg *config.Config) DiagnosticStep {
+func runLimitInfoStep(ctx context.Context, client *http.Client, jwt string, cfg *config.Config, profile clientProfile) DiagnosticStep {
 	step := DiagnosticStep{Name: "request_limit_info", Target: warpGraphQLV2URL}
 	step.Proxy = resolveDiagnosticProxy(cfg, warpGraphQLV2URL)
 	start := time.Now()
 
-	info, bonuses, err := fetchRequestLimitInfo(ctx, client, jwt)
+	info, bonuses, err := fetchRequestLimitInfo(ctx, client, jwt, profile)
 	if err != nil {
 		step.Error = err.Error()
 		return finishDiagnosticStep(step, start)
@@ -317,7 +314,7 @@ func runLimitInfoStep(ctx context.Context, client *http.Client, jwt string, cfg 
 	return finishDiagnosticStep(step, start)
 }
 
-func runAIStep(ctx context.Context, client *http.Client, jwt, model, promptText string, cfg *config.Config) DiagnosticStep {
+func runAIStep(ctx context.Context, client *http.Client, jwt, model, promptText string, cfg *config.Config, profile clientProfile) DiagnosticStep {
 	step := DiagnosticStep{Name: "ai", Target: warpLegacyAIURL}
 	step.Proxy = resolveDiagnosticProxy(cfg, warpLegacyAIURL)
 	start := time.Now()
@@ -339,16 +336,12 @@ func runAIStep(ctx context.Context, client *http.Client, jwt, model, promptText 
 		return finishDiagnosticStep(step, start)
 	}
 	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("X-Warp-Client-ID", clientID)
-	req.Header.Set("X-Warp-Client-Version", clientVersion)
-	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
-	req.Header.Set("X-Warp-OS-Name", clientOSName)
-	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	profile.applyWarpHeaders(req.Header)
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-	req.Header.Set("User-Agent", "")
+	profile.applyUserAgent(req.Header)
 
 	resp, err := client.Do(req)
 	if err != nil {

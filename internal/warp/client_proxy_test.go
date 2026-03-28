@@ -166,6 +166,44 @@ func TestDoStreamRequest_SendsLegacyWarpHeaders(t *testing.T) {
 	}
 }
 
+func TestDoStreamRequest_UsesConfiguredWarpProfile(t *testing.T) {
+	client := NewFromAccount(&store.Account{ID: 1, RefreshToken: "token-1"}, &config.Config{
+		WarpClientOSCategory: "Linux",
+		WarpClientOSName:     "Ubuntu",
+		WarpClientOSVersion:  "24.04",
+		WarpUserAgent:        "WarpDiag/Test",
+	})
+	client.session.mu.Lock()
+	client.session.jwt = "test-jwt"
+	client.session.expiresAt = time.Now().Add(time.Hour)
+	client.session.mu.Unlock()
+
+	var seenOSName string
+	var seenUserAgent string
+	client.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		seenOSName = req.Header.Get("X-Warp-OS-Name")
+		seenUserAgent = req.Header.Get("User-Agent")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	resp, err := client.doStreamRequest(t.Context(), []byte{0x0a, 0x00}, nil)
+	if err != nil {
+		t.Fatalf("doStreamRequest error: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if seenOSName != "Ubuntu" {
+		t.Fatalf("X-Warp-OS-Name=%q want Ubuntu", seenOSName)
+	}
+	if seenUserAgent != "WarpDiag/Test" {
+		t.Fatalf("User-Agent=%q want WarpDiag/Test", seenUserAgent)
+	}
+}
+
 func TestWarpTransport_ResolveProxy(t *testing.T) {
 	transport := newWarpTransport(func(req *http.Request) (*url.URL, error) {
 		if req == nil || req.URL == nil {
@@ -223,5 +261,22 @@ func TestForceRefreshAccount_IgnoresSeededJWT(t *testing.T) {
 	}
 	if client.session.currentRefreshToken() != "rotated-token" {
 		t.Fatalf("refresh=%q want rotated-token", client.session.currentRefreshToken())
+	}
+}
+
+func TestNewHTTPClient_UsesUTLSTransportProfile(t *testing.T) {
+	client := newHTTPClient(5*time.Second, &config.Config{
+		ProxyURL:             "http://proxy.local:8080",
+		WarpTransportProfile: warpTransportUTLS,
+	})
+	if client == nil || client.Transport == nil {
+		t.Fatal("expected http client transport")
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected transport type: %T", client.Transport)
+	}
+	if transport.DialTLSContext == nil {
+		t.Fatal("expected utls dialer to be configured")
 	}
 }

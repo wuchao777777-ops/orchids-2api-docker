@@ -26,14 +26,16 @@ type Client struct {
 	httpClient *http.Client
 	authClient *http.Client
 	session    *session
+	profile    clientProfile
 }
 
 const defaultRequestTimeout = 300 * time.Second
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
+	profile := clientProfileFromConfig(cfg)
 	if acc == nil {
 		httpClient := newHTTPClient(0, cfg)
-		return &Client{config: cfg, httpClient: httpClient}
+		return &Client{config: cfg, httpClient: httpClient, profile: profile}
 	}
 
 	refresh := ResolveRefreshToken(acc)
@@ -52,6 +54,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		httpClient: httpClient,
 		authClient: authClient,
 		session:    sess,
+		profile:    profile,
 	}
 }
 
@@ -64,15 +67,28 @@ func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 	}
 
 	var proxyFunc func(*http.Request) (*url.URL, error)
+	proxyKey := "direct"
 	if cfg != nil {
 		proxyFunc = util.ProxyFuncFromConfig(cfg)
+		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
 	} else {
 		proxyFunc = http.ProxyFromEnvironment
 	}
 
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: newWarpTransport(proxyFunc),
+	profile := clientProfileFromConfig(cfg)
+	switch profile.TransportProfile {
+	case warpTransportUTLS:
+		return util.GetSharedUTLSHTTPClient("warp|"+proxyKey, timeout, proxyFunc)
+	case warpTransportBrowser:
+		return &http.Client{
+			Timeout:   timeout,
+			Transport: util.NewBrowserLikeTransport(proxyFunc),
+		}
+	default:
+		return &http.Client{
+			Timeout:   timeout,
+			Transport: newWarpTransport(proxyFunc),
+		}
 	}
 }
 
@@ -111,7 +127,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if err := c.session.ensureToken(ctx, authClient); err != nil {
 		return err
 	}
-	if err := c.session.ensureLogin(ctx, c.httpClient); err != nil {
+	if err := c.session.ensureLogin(ctx, c.httpClient, c.profile); err != nil {
 		return err
 	}
 
@@ -127,7 +143,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		if err := c.session.ensureToken(ctx, authClient); err != nil {
 			return err
 		}
-		return c.session.ensureLogin(ctx, c.httpClient)
+		return c.session.ensureLogin(ctx, c.httpClient, c.profile)
 	}
 	return c.streamWithRetry(ctx, payload, req, onMessage, logger, defaultRefresh)
 }
@@ -143,16 +159,12 @@ func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *de
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("X-Warp-Client-ID", clientID)
-	req.Header.Set("X-Warp-Client-Version", clientVersion)
-	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
-	req.Header.Set("X-Warp-OS-Name", clientOSName)
-	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	c.profile.applyWarpHeaders(req.Header)
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-	req.Header.Set("User-Agent", "")
+	c.profile.applyUserAgent(req.Header)
 
 	if logger != nil {
 		headers := map[string]string{}

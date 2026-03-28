@@ -116,12 +116,12 @@ const refundCreditsMutation = `mutation RefundCredits($requestId: String!, $reas
   }
 }`
 
-func fetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string) (*RequestLimitInfo, []BonusGrant, error) {
+func fetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string, profile clientProfile) (*RequestLimitInfo, []BonusGrant, error) {
 	payload := map[string]interface{}{
 		"query":         getRequestLimitInfoQuery,
 		"operationName": "GetRequestLimitInfo",
 		"variables": map[string]interface{}{
-			"requestContext": requestContextPayload(),
+			"requestContext": profile.requestContextPayload(),
 		},
 	}
 
@@ -150,7 +150,7 @@ func fetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string)
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetRequestLimitInfo", payload, &resp); err != nil {
+	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetRequestLimitInfo", payload, &resp, profile); err != nil {
 		return nil, nil, err
 	}
 	if len(resp.Errors) > 0 {
@@ -197,7 +197,7 @@ func fetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string)
 	}, bonuses, nil
 }
 
-func refundCredits(ctx context.Context, client *http.Client, jwt, requestID, reason string) error {
+func refundCredits(ctx context.Context, client *http.Client, jwt, requestID, reason string, profile clientProfile) error {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return fmt.Errorf("warp request id is empty")
@@ -223,7 +223,7 @@ func refundCredits(ctx context.Context, client *http.Client, jwt, requestID, rea
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := doGraphQL(ctx, client, warpGraphQLURL, jwt, "RefundCredits", payload, &resp); err != nil {
+	if err := doGraphQL(ctx, client, warpGraphQLURL, jwt, "RefundCredits", payload, &resp, profile); err != nil {
 		return err
 	}
 	if len(resp.Errors) > 0 {
@@ -235,7 +235,7 @@ func refundCredits(ctx context.Context, client *http.Client, jwt, requestID, rea
 	return nil
 }
 
-func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, operationName string, body interface{}, target interface{}) error {
+func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, operationName string, body interface{}, target interface{}, profile clientProfile) error {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("warp graphql marshal request: %w", err)
@@ -257,15 +257,11 @@ func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, opera
 		return fmt.Errorf("warp graphql create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(jwt))
-	req.Header.Set("X-Warp-Client-ID", "warp-app")
-	req.Header.Set("X-Warp-Client-Version", clientVersion)
-	req.Header.Set("X-Warp-OS-Category", clientOSName)
-	req.Header.Set("X-Warp-OS-Name", clientOSName)
-	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	profile.applyWarpHeaders(req.Header)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Accept-Encoding", "gzip,br")
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", profile.graphQLUserAgent())
 
 	if client == nil {
 		client = http.DefaultClient
@@ -301,7 +297,7 @@ func (c *Client) GetRequestLimitInfo(ctx context.Context) (*RequestLimitInfo, []
 	if err := c.session.ensureToken(ctx, client); err != nil {
 		return nil, nil, err
 	}
-	return fetchRequestLimitInfo(ctx, client, c.session.currentJWT())
+	return fetchRequestLimitInfo(ctx, client, c.session.currentJWT(), c.profile)
 }
 
 func (c *Client) RefundCredits(ctx context.Context, reason string) error {
@@ -312,19 +308,5 @@ func (c *Client) RefundCredits(ctx context.Context, reason string) error {
 	if err := c.session.ensureToken(ctx, client); err != nil {
 		return err
 	}
-	return refundCredits(ctx, client, c.session.currentJWT(), c.session.currentRequestID(), reason)
-}
-
-func requestContextPayload() map[string]interface{} {
-	return map[string]interface{}{
-		"clientContext": map[string]interface{}{
-			"version": clientVersion,
-		},
-		"osContext": map[string]interface{}{
-			"category":           clientOSName,
-			"linuxKernelVersion": nil,
-			"name":               clientOSName,
-			"version":            clientOSVersion,
-		},
-	}
+	return refundCredits(ctx, client, c.session.currentJWT(), c.session.currentRequestID(), reason, c.profile)
 }

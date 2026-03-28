@@ -111,8 +111,6 @@ func mustNewCookieJar() http.CookieJar {
 	return jar
 }
 
-
-
 func normalizeRefreshToken(refreshToken string) string {
 	refreshToken = strings.TrimSpace(strings.Trim(refreshToken, "\"'"))
 	if refreshToken == "" {
@@ -424,7 +422,7 @@ func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
 	return nil
 }
 
-func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) error {
+func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client, profile clientProfile) error {
 	if s == nil {
 		return fmt.Errorf("warp session is nil")
 	}
@@ -457,11 +455,7 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Warp-Client-ID", clientID)
-	req.Header.Set("X-Warp-Client-Version", clientVersion)
-	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
-	req.Header.Set("X-Warp-OS-Name", clientOSName)
-	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	profile.applyWarpHeaders(req.Header)
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("X-Warp-Experiment-Id", experimentID)
 	req.Header.Set("X-Warp-Experiment-Bucket", experimentBuck)
