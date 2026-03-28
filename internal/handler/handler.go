@@ -371,6 +371,10 @@ func (h *Handler) finishRequest(hash string) {
 	h.dedupStore.Finish(context.Background(), hash)
 }
 
+func (h *Handler) abortRequest(hash string) {
+	h.dedupStore.Abort(context.Background(), hash)
+}
+
 func stainlessRetryCount(r *http.Request) int {
 	if r == nil {
 		return 0
@@ -473,8 +477,10 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		msgStart, _ := marshalSSEMessageStartNoUsageBytes("dup", req.Model)
+		msgStart, _ := marshalSSEMessageStartBytes("dup", req.Model, 0, 0)
+		msgDelta, _ := appendSSEMessageDelta(make([]byte, 0, 96), "end_turn", 0)
 		_ = writeSSEFrameBytes(w, "message_start", msgStart)
+		_ = writeSSEFrameBytes(w, "message_delta", msgDelta)
 		_ = writeSSEFrameBytes(w, "message_stop", sseMessageStopBytes)
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
@@ -507,17 +513,31 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 		return
 	}
 	if err := json.NewEncoder(w).Encode(struct {
-		Type     string `json:"type"`
-		Deduped  bool   `json:"deduped"`
-		Message  string `json:"message"`
-		Model    string `json:"model"`
-		Streamed bool   `json:"streamed"`
+		ID           string                 `json:"id"`
+		Type         string                 `json:"type"`
+		Role         string                 `json:"role"`
+		Content      []map[string]any       `json:"content"`
+		Model        string                 `json:"model"`
+		StopReason   string                 `json:"stop_reason"`
+		StopSequence interface{}            `json:"stop_sequence"`
+		Usage        map[string]int         `json:"usage"`
+		Metadata     map[string]interface{} `json:"metadata,omitempty"`
 	}{
-		Type:     "duplicate_request",
-		Deduped:  true,
-		Message:  "duplicate request suppressed",
-		Model:    req.Model,
-		Streamed: false,
+		ID:           "dup",
+		Type:         "message",
+		Role:         "assistant",
+		Content:      []map[string]any{},
+		Model:        req.Model,
+		StopReason:   "end_turn",
+		StopSequence: nil,
+		Usage: map[string]int{
+			"input_tokens":  0,
+			"output_tokens": 0,
+		},
+		Metadata: map[string]interface{}{
+			"deduped": true,
+			"message": "duplicate request suppressed",
+		},
 	}); err != nil {
 		slog.Error("Failed to write duplicate response", "error", err)
 	}
@@ -589,6 +609,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	registeredKeys := []string{}
+	keepDedupWindow := true
 	if !bypassDedup {
 		exactKey := "exact:" + reqHash
 		if dup, inFlight := h.registerRequest(exactKey); dup {
@@ -649,7 +670,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() {
 		for i := len(registeredKeys) - 1; i >= 0; i-- {
-			h.finishRequest(registeredKeys[i])
+			if keepDedupWindow {
+				h.finishRequest(registeredKeys[i])
+			} else {
+				h.abortRequest(registeredKeys[i])
+			}
 		}
 	}()
 
@@ -759,6 +784,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	apiClient, currentAccount, err := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
 	if err != nil {
+		keepDedupWindow = false
 		slog.Error("selectAccount failed", "error", err, "channel", targetChannel)
 		logger.LogEarlyExit("select_account_failed", map[string]interface{}{
 			"error":   err.Error(),
@@ -851,6 +877,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		var err error
 		boltProjectID, err = h.resolveBoltProjectID(r.Context(), currentAccount, apiClient, effectiveWorkdir, freshBoltTask)
 		if err != nil {
+			keepDedupWindow = false
 			apperrors.New("api_error", "Failed to initialize bolt project: "+err.Error(), http.StatusBadGateway).WriteResponse(w)
 			return
 		}
@@ -1374,6 +1401,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 			if !errClass.Retryable {
 				slog.Error("Aborting retries for non-retriable error", "error", err, "category", errClass.Category)
+				keepDedupWindow = false
 				if errClass.Category == "auth_blocked" || errClass.Category == "auth" {
 					sh.InjectAuthError(errClass.Category, errStr)
 				} else if errClass.Category != "canceled" {
@@ -1387,11 +1415,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if r.Context().Err() != nil {
+				keepDedupWindow = false
 				sh.setSuppressEmptyOutputFallback(true)
 				sh.finishResponse("end_turn")
 				return
 			}
 			if retriesRemaining <= 0 {
+				keepDedupWindow = false
 				if currentAccount != nil && h.loadBalancer != nil {
 					slog.Error("Account request failed, max retries reached", "account", currentAccount.Name)
 				}
@@ -1456,6 +1486,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						)
 					} else {
 						slog.Error("No more accounts available", "error", retryErr)
+						keepDedupWindow = false
 						sh.InjectNoAvailableAccountError(errStr, retryErr)
 						sh.finishResponse("end_turn")
 						return
