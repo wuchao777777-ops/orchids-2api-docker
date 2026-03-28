@@ -6,6 +6,86 @@ import (
 	"github.com/goccy/go-json"
 )
 
+var normalizedToolNameFallbacks = map[string]string{
+	"str_replace_editor": "Edit",
+	"edit":               "Edit",
+	"apply_file_diffs":   "Edit",
+
+	"view":       "Read",
+	"readfile":   "Read",
+	"read_file":  "Read",
+	"read_files": "Read",
+	"read":       "Read",
+
+	"listdir":        "Glob",
+	"list_dir":       "Glob",
+	"list_directory": "Glob",
+	"ls":             "Glob",
+	"globtool":       "Glob",
+	"glob":           "Glob",
+	"find_files":     "Glob",
+	"file_glob":      "Glob",
+	"file_glob_v2":   "Glob",
+
+	"ripgreptool":     "Grep",
+	"ripgrep":         "Grep",
+	"search_code":     "Grep",
+	"search_codebase": "Grep",
+	"grep":            "Grep",
+
+	"exec":              "Bash",
+	"execute":           "Bash",
+	"execute_command":   "Bash",
+	"execute-command":   "Bash",
+	"run_command":       "Bash",
+	"runcommand":        "Bash",
+	"launch-process":    "Bash",
+	"run_shell_command": "Bash",
+	"shell":             "Bash",
+	"bash":              "Bash",
+
+	"writefile":   "Write",
+	"write_file":  "Write",
+	"create_file": "Write",
+	"createfile":  "Write",
+	"save-file":   "Write",
+	"write":       "Write",
+
+	"update_todo_list": "TodoWrite",
+	"todo":             "TodoWrite",
+	"todo_write":       "TodoWrite",
+	"todowrite":        "TodoWrite",
+
+	"web_fetch":         "WebFetch",
+	"webfetch":          "WebFetch",
+	"fetch":             "WebFetch",
+	"mcp__fetch__fetch": "web_fetch",
+
+	"mcp__tavily__web_search": "web_search",
+	"mcp__brave__web_search":  "web_search",
+
+	"ask_followup_question": "AskUserQuestion",
+	"ask":                   "AskUserQuestion",
+
+	"enter_plan_mode": "EnterPlanMode",
+	"exit_plan_mode":  "ExitPlanMode",
+
+	"new_task":       "Task",
+	"agent":          "Task",
+	"subagent":       "Task",
+	"subagents":      "Task",
+	"spawn_agent":    "Task",
+	"spawn_subagent": "Task",
+	"session_spawn":  "Task",
+	"sessions_spawn": "Task",
+
+	"task_output": "TaskOutput",
+	"task_stop":   "TaskStop",
+
+	"use_skill": "Skill",
+	"skill":     "Skill",
+}
+
 func buildClientToolMapper(clientTools []interface{}) *ToolMapper {
 	tools := toolMapsFromInterfaces(clientTools)
 	if len(tools) == 0 {
@@ -58,44 +138,10 @@ func NormalizeToolName(name string) *NormalizedTool {
 
 // NormalizeToolNameFallback provides backward compatibility for the warp and handler packages.
 func NormalizeToolNameFallback(name string) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "str_replace_editor", "edit", "apply_file_diffs":
-		return "Edit"
-	case "view", "readfile", "read_file", "read_files", "read":
-		return "Read"
-	case "listdir", "list_dir", "list_directory", "ls", "globtool", "glob", "find_files", "file_glob", "file_glob_v2":
-		return "Glob"
-	case "ripgreptool", "ripgrep", "search_code", "search_codebase", "grep":
-		return "Grep"
-	case "exec", "execute", "execute_command", "execute-command", "run_command", "runcommand", "launch-process", "run_shell_command", "shell", "bash":
-		return "Bash"
-	case "writefile", "write_file", "create_file", "createfile", "save-file", "write":
-		return "Write"
-	case "update_todo_list", "todo", "todo_write", "todowrite":
-		return "TodoWrite"
-	case "web_fetch", "webfetch", "fetch":
-		return "WebFetch"
-	case "mcp__fetch__fetch":
-		return "web_fetch"
-	case "mcp__tavily__web_search", "mcp__brave__web_search":
-		return "web_search"
-	case "ask_followup_question", "ask":
-		return "AskUserQuestion"
-	case "enter_plan_mode":
-		return "EnterPlanMode"
-	case "exit_plan_mode":
-		return "ExitPlanMode"
-	case "new_task", "agent", "subagent", "subagents", "spawn_agent", "spawn_subagent", "session_spawn", "sessions_spawn":
-		return "Task"
-	case "task_output":
-		return "TaskOutput"
-	case "task_stop":
-		return "TaskStop"
-	case "use_skill", "skill":
-		return "Skill"
-	default:
-		return name
+	if mapped, ok := normalizedToolNameFallbacks[strings.ToLower(strings.TrimSpace(name))]; ok {
+		return mapped
 	}
+	return name
 }
 
 func MapToolNameToClient(orchidsName string, clientTools []interface{}, toolMapper *ToolMapper) string {
