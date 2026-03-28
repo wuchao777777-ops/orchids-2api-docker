@@ -572,6 +572,49 @@ func TestTaskToolCall_IsRejectedWhenDelegatedToolsExceedAllowedSet(t *testing.T)
 	}
 }
 
+func TestSkillToolCall_IsAcceptedWhenClientDeclaredSkill(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	h.setAllowedToolNames([]string{"Skill"})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "skill_1",
+			"toolName":   "Skill",
+			"input":      `{"skill":"weather","args":"Yangzhou, China"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected Skill tool call to pass through, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
+		t.Fatalf("expected tool_use block, got %q", got)
+	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != "Skill" {
+		t.Fatalf("expected Skill tool call, got %q", got)
+	}
+	if h.suppressedToolCalls != 0 {
+		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
+	}
+}
+
 func TestBashToolCallDifferentIDsSameCommand_Deduped(t *testing.T) {
 	t.Parallel()
 

@@ -3,6 +3,9 @@ package handler
 import (
 	"context"
 	"log/slog"
+	"strings"
+
+	"orchids-api/internal/prompt"
 )
 
 func (h *Handler) restoreBoltTools(ctx context.Context, conversationKey string) []interface{} {
@@ -46,10 +49,40 @@ func minimalIncomingToolsFromNames(names []string) []interface{} {
 	return normalized
 }
 
+func inferBoltToolsFromMessages(messages []prompt.Message) []interface{} {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, 8)
+	for _, msg := range messages {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
+			continue
+		}
+		for _, block := range msg.Content.GetBlocks() {
+			if block.Type != "tool_use" {
+				continue
+			}
+			if name := strings.TrimSpace(block.Name); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+
+	return minimalIncomingToolsFromNames(names)
+}
+
 func logBoltToolsRestored(conversationKey string, tools []interface{}) {
 	slog.Debug(
 		"bolt tools restored from session",
 		"conversation_id", conversationKey,
+		"tool_names", supportedToolNames(tools),
+	)
+}
+
+func logBoltToolsInferred(tools []interface{}) {
+	slog.Debug(
+		"bolt tools inferred from message history",
 		"tool_names", supportedToolNames(tools),
 	)
 }

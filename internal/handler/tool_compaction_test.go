@@ -240,11 +240,12 @@ func TestSupportedToolNames_NormalizesAndOrdersTools(t *testing.T) {
 		map[string]interface{}{"name": "run_command"},
 		map[string]interface{}{"name": "View"},
 		map[string]interface{}{"name": "Agent"},
+		map[string]interface{}{"name": "Skill"},
 		map[string]interface{}{"name": "Read"},
 	}
 
 	got := supportedToolNames(tools)
-	want := []string{"Read", "Bash", "Task"}
+	want := []string{"Read", "Bash", "Task", "Skill"}
 	if len(got) != len(want) {
 		t.Fatalf("supportedToolNames len=%d want=%d (%#v)", len(got), len(want), got)
 	}
@@ -279,12 +280,13 @@ func TestPassthroughAllowedToolNames_BoltDropsUnsupportedMetaTools(t *testing.T)
 		map[string]interface{}{"name": "Read"},
 		map[string]interface{}{"name": "run_command"},
 		map[string]interface{}{"name": "Agent"},
+		map[string]interface{}{"name": "Skill"},
 		map[string]interface{}{"name": "new_task"},
 		map[string]interface{}{"name": "task_output"},
 	}
 
 	got := passthroughAllowedToolNames(tools, true)
-	want := []string{"Read", "Bash", "Task"}
+	want := []string{"Read", "Bash", "Task", "Skill"}
 	if len(got) != len(want) {
 		t.Fatalf("passthroughAllowedToolNames len=%d want=%d (%#v)", len(got), len(want), got)
 	}
@@ -299,5 +301,24 @@ func TestPassthroughAllowedToolNames_BoltReturnsNilWhenRequestOmitsTools(t *test
 	got := passthroughAllowedToolNames(nil, true)
 	if got != nil {
 		t.Fatalf("passthroughAllowedToolNames(nil, true) = %#v want nil", got)
+	}
+}
+
+func TestSupportedToolNames_MapsOpenClawSubagentsToTask(t *testing.T) {
+	tools := []interface{}{
+		map[string]interface{}{"name": "read"},
+		map[string]interface{}{"name": "subagents"},
+		map[string]interface{}{"name": "sessions_spawn"},
+	}
+
+	got := supportedToolNames(tools)
+	want := []string{"Read", "Task"}
+	if len(got) != len(want) {
+		t.Fatalf("supportedToolNames(subagents) len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("supportedToolNames(subagents)[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
 	}
 }

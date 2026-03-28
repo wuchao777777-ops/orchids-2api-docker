@@ -152,7 +152,7 @@ func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{
 		ID:           1,
-		AccountType:  "bolt",
+		AccountType:  "warp",
 		StatusCode:   "429",
 		LastAttempt:  time.Now(),
 		QuotaResetAt: time.Now().Add(-time.Second),
@@ -166,6 +166,29 @@ func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
 	}
 	if !acc.QuotaResetAt.IsZero() {
 		t.Fatalf("expected quota reset timestamp to be cleared, got %v", acc.QuotaResetAt)
+	}
+}
+
+func TestIsAccountAvailable_Bolt429UsesTwelveHourCooldown(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{
+		ID:           1,
+		AccountType:  "bolt",
+		StatusCode:   "429",
+		LastAttempt:  time.Now().Add(-6 * time.Hour),
+		QuotaResetAt: time.Now().Add(-time.Second),
+	}
+
+	if lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected bolt 429 account to remain unavailable before 12 hour cooldown expires")
+	}
+
+	acc.LastAttempt = time.Now().Add(-(retry429Bolt + time.Minute))
+	if !lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected bolt 429 account to re-enable after 12 hour cooldown expires")
+	}
+	if acc.StatusCode != "" {
+		t.Fatalf("expected status to be cleared after bolt 429 cooldown, got %q", acc.StatusCode)
 	}
 }
 
@@ -188,5 +211,31 @@ func TestIsAccountAvailable_402UsesLongCooldown(t *testing.T) {
 	}
 	if acc.StatusCode != "" {
 		t.Fatalf("expected status to be cleared after 402 cooldown, got %q", acc.StatusCode)
+	}
+}
+
+func TestMarkAccountStatus_Repeated429RefreshesCooldownStart(t *testing.T) {
+	lb := &LoadBalancer{
+		Store:       &store.Store{},
+		connTracker: NewMemoryConnTracker(),
+		cachedAccounts: []*store.Account{
+			{ID: 1, Name: "Bolt1", AccountType: "bolt", Enabled: true},
+		},
+	}
+	acc := &store.Account{
+		ID:          1,
+		AccountType: "bolt",
+		StatusCode:  "429",
+		LastAttempt: time.Now().Add(-30 * time.Second),
+	}
+
+	before := acc.LastAttempt
+	lb.MarkAccountStatus(context.Background(), acc, "429")
+
+	if !acc.LastAttempt.After(before) {
+		t.Fatalf("expected repeated 429 to refresh cooldown start, before=%v after=%v", before, acc.LastAttempt)
+	}
+	if got := lb.cachedAccounts[0].LastAttempt; !got.After(before) {
+		t.Fatalf("expected cached repeated 429 to refresh cooldown start, before=%v after=%v", before, got)
 	}
 }

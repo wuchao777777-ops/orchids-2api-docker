@@ -893,6 +893,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				if verboseDiagnostics {
 					logBoltToolsRestored(conversationKey, effectiveTools)
 				}
+			} else if inferred := inferBoltToolsFromMessages(req.Messages); len(inferred) > 0 {
+				effectiveTools = inferred
+				if verboseDiagnostics {
+					logBoltToolsInferred(effectiveTools)
+				}
+				h.persistBoltTools(r.Context(), conversationKey, effectiveTools)
 			}
 		} else {
 			h.persistBoltTools(r.Context(), conversationKey, effectiveTools)

@@ -220,6 +220,8 @@ const (
 	retry402Default = 6 * time.Hour
 	// 429 冷却时间：限流通常是暂时性的，优先等待较短窗口再恢复尝试
 	retry429Default = 1 * time.Minute
+	// Bolt 的 429 在实际使用中恢复很慢，固定冷却更能避免反复撞限流账号
+	retry429Bolt = 12 * time.Hour
 	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试
 	retry403Default = 24 * time.Hour
 	// Grok 的 403 很多是 Cloudflare challenge/临时风控，不应长时间拉黑
@@ -245,18 +247,20 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		}
 		return false
 	case "429":
-		// 429 优先尊重显式 quota reset 时间；没有 reset 信息时走较短冷却。
-		if !acc.QuotaResetAt.IsZero() {
+		if acc.LastAttempt.IsZero() {
+			return false
+		}
+		cooldown := retry429Default
+		if strings.EqualFold(acc.AccountType, "bolt") {
+			cooldown = retry429Bolt
+		} else if !acc.QuotaResetAt.IsZero() {
 			if !now.Before(acc.QuotaResetAt) {
 				lb.clearAccountStatus(ctx, acc, "429 冷却完成，自动恢复尝试")
 				return true
 			}
 			return false
 		}
-		if acc.LastAttempt.IsZero() {
-			return false
-		}
-		if now.Sub(acc.LastAttempt) >= retry429Default {
+		if now.Sub(acc.LastAttempt) >= cooldown {
 			lb.clearAccountStatus(ctx, acc, "429 冷却完成，自动恢复尝试")
 			return true
 		}
@@ -340,19 +344,15 @@ func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Accoun
 		return
 	}
 	lb.mu.Lock()
-	// Early exit if the incoming reference already has the status
-	if acc.StatusCode == status {
-		lb.mu.Unlock()
-		return
-	}
+	now := time.Now()
 	acc.StatusCode = status
-	acc.LastAttempt = time.Now()
+	acc.LastAttempt = now
 
 	// Ensure the cache is updated as well
 	for _, cached := range lb.cachedAccounts {
 		if cached.ID == acc.ID {
 			cached.StatusCode = status
-			cached.LastAttempt = acc.LastAttempt
+			cached.LastAttempt = now
 			break
 		}
 	}

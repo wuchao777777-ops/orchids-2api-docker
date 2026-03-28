@@ -3631,12 +3631,29 @@ func TestSupportedBoltToolNames_DoesNotDefaultWhenRequestOmitsTools(t *testing.T
 
 func TestSupportedBoltToolNames_DoesNotInventCoreToolsWhenOnlyUnsupportedToolsExist(t *testing.T) {
 	tools := []interface{}{
-		map[string]interface{}{"name": "Skill"},
 		map[string]interface{}{"name": "TodoWrite"},
 	}
 
 	if got := supportedBoltToolNames(tools); got != nil {
 		t.Fatalf("supportedBoltToolNames(unsupported) = %#v want nil", got)
+	}
+}
+
+func TestSupportedBoltToolNames_AllowsSkill(t *testing.T) {
+	tools := []interface{}{
+		map[string]interface{}{"name": "Skill"},
+		map[string]interface{}{"name": "Read"},
+	}
+
+	got := supportedBoltToolNames(tools)
+	want := []string{"Read", "Skill"}
+	if len(got) != len(want) {
+		t.Fatalf("supportedBoltToolNames(skill) len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("supportedBoltToolNames(skill)[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
 	}
 }
 
@@ -3673,6 +3690,24 @@ func TestPrepareRequest_AdvertisesTaskWhenClientDeclaresAgent(t *testing.T) {
 	}
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "客户端声明的是 `Agent`") {
 		t.Fatalf("global prompt missing Agent/Task relay guidance: %q", boltReq.GlobalSystemPrompt)
+	}
+}
+
+func TestPrepareRequest_AdvertisesSkillWhenClientDeclaresSkill(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model:    "claude-sonnet-4-6",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "今天扬州天气怎么样"}}},
+		Tools: []interface{}{
+			map[string]interface{}{"name": "Skill"},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "Skill(skill, args)") {
+		t.Fatalf("global prompt missing Skill hint: %q", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "上游 Bolt 可能直接返回 `Skill(skill, args)`") {
+		t.Fatalf("global prompt missing Skill relay guidance: %q", boltReq.GlobalSystemPrompt)
 	}
 }
 

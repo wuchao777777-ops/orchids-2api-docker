@@ -898,6 +898,11 @@ func buildBoltToolUsagePrompt(toolNames []string, messages []prompt.Message) []s
 			"只有在本地 Read/Glob/Grep/Bash 不足以完成广泛探索时才使用 `Task`；如果客户端声明的是 `Agent`，上游 Bolt 可能会返回 `Task`，把它视为同一种子代理能力继续执行。",
 		)
 	}
+	if hasBoltToolName(toolNames, "Skill") {
+		parts = append(parts,
+			"如果客户端声明了 `Skill`，上游 Bolt 可能直接返回 `Skill(skill, args)`；把它视为合法工具调用继续执行，不要改写成普通文本解释。",
+		)
+	}
 	return parts
 }
 

@@ -24,7 +24,7 @@ var coreToolHints = map[string]string{
 	"Grep":  "Grep(path, pattern, glob?, output_mode?, -n?, -C?)",
 }
 
-var boltSupportedToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "Task"}
+var boltSupportedToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "Task", "Skill"}
 
 var boltSupportedToolSet = map[string]struct{}{
 	"Read":  {},
@@ -34,10 +34,12 @@ var boltSupportedToolSet = map[string]struct{}{
 	"Glob":  {},
 	"Grep":  {},
 	"Task":  {},
+	"Skill": {},
 }
 
 var boltSupportedToolHints = map[string]string{
-	"Task": "Task(description, prompt, subagent_type?)",
+	"Task":  "Task(description, prompt, subagent_type?)",
+	"Skill": "Skill(skill, args)",
 }
 
 var continuationOnlyTextSet = map[string]struct{}{
@@ -74,6 +76,8 @@ func CanonicalSupportedToolName(name string) string {
 	switch strings.ToLower(strings.TrimSpace(mappedName)) {
 	case "agent", "task":
 		return "Task"
+	case "skill":
+		return "Skill"
 	default:
 		return mappedName
 	}
