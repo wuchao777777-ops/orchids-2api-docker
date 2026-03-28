@@ -33,7 +33,7 @@ const (
 	defaultRateLimitsURL    = "https://bolt.new/api/rate-limits/user"
 	defaultTeamsRateURL     = "https://bolt.new/api/rate-limits/teams"
 	defaultProjectsURL      = "https://stackblitz.com/api/projects/sb1/fork"
-	defaultAdapterPrompt    = "你正在通过 Orchids 的 Bolt 适配层处理代码任务。能直接回答就直接回答；需要工具时直接返回 JSON，不要先解释计划。"
+	defaultAdapterPrompt    = "你正在通过 Orchids 的 Bolt 适配层转发对话。若已有上下文足够就直接回答；只有在当前请求确实需要已声明的工具时才返回 JSON 工具调用，不要先解释计划。"
 	maxBoltFocusedFileCount = 2
 	maxBoltReadResultRunes  = 480
 	maxBoltFocusedReadRunes = 2200
@@ -587,7 +587,6 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 	var latestSuccessfulMutationPath string
 	var sawAssistantCompletionAfterLatestMutation bool
 	var lastUserMsgID string
-	var lastSubstantiveUserTask string
 	for _, msg := range messages {
 		blocks := normalizeBlocks(msg)
 		if shouldSkipBoltMessage(msg.Role) {
@@ -604,11 +603,8 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 		switch msg.Role {
 		case "user":
 			standalone := extractBoltStandaloneUserText(msg)
-			if strings.TrimSpace(standalone) != "" && !LooksLikeContinuationOnlyText(standalone) {
-				lastSubstantiveUserTask = standalone
-			}
 			lastUserMsgID = boltMsg.ID
-			boltMsg.Content = extractBoltUserContent(blocks, toolUses, gitUploadIntent, focusedFileAliases, lastSubstantiveUserTask, workdir)
+			boltMsg.Content = extractBoltUserContent(blocks, toolUses, gitUploadIntent, focusedFileAliases, workdir)
 			if shouldInjectBoltExistingFileMutationGuard(standalone, latestSuccessfulMutationPath, sawAssistantCompletionAfterLatestMutation) {
 				boltMsg.Content = appendBoltMutationGuard(boltMsg.Content, latestSuccessfulMutationPath)
 			}
@@ -830,7 +826,7 @@ func buildBoltToolPrompt(workdir string, tools []interface{}, noTools bool, mess
 		return strings.Join(parts, "\n")
 	}
 
-	parts = append(parts, buildBoltToolUsagePrompt(toolNames)...)
+	parts = append(parts, buildBoltToolUsagePrompt(toolNames, messages)...)
 	parts = append(parts, buildBoltHistoryRecoveryPrompt(workdir, messages)...)
 	if hasBoltToolName(toolNames, "Bash") {
 		parts = append(parts, buildBoltGitExecutionPrompt(messages)...)
@@ -876,7 +872,7 @@ func isBoltGitRepository(workdir string) bool {
 	return err == nil
 }
 
-func buildBoltToolUsagePrompt(toolNames []string) []string {
+func buildBoltToolUsagePrompt(toolNames []string, messages []prompt.Message) []string {
 	toolHints := make([]string, 0, len(toolNames))
 	for _, name := range toolNames {
 		toolHints = append(toolHints, supportedToolHint(name))
@@ -885,11 +881,17 @@ func buildBoltToolUsagePrompt(toolNames []string) []string {
 	parts := []string{
 		"可用工具: " + strings.Join(toolHints, "; "),
 		"只能使用上面列出的工具；需要工具时输出纯 JSON，不要加解释、不要先解释计划；第一个非空输出字符应当直接是 `{`。",
-		"不要解释当前运行在什么系统或沙箱；路径优先用项目内相对路径。若某次工具结果提示路径不存在，不要据此断言项目为空；优先改用 `.`、README.md、go.mod、package.json 等项目内路径继续调用工具。",
-		"如果文件名已经明确出现，优先直接对该路径 Read 或 Edit；不要先对 `.` 做宽泛 Glob。若刚读过同一文件要继续修改，优先沿用同一路径继续 Edit，不要重新从 Glob 开始。路径已明确时也不要重新从 Glob 开始。",
-		"如果目标文件已经存在，优先使用 Edit 做最小修改；只有在创建新文件，或你明确打算整文件重写且确实需要一次性替换全文时才使用 Write。对“添加支持/添加功能/X”这类请求，要让功能真正可用，不要只加显示开关、提示文案或空包装函数；如果用户明确要求修改、创建或继续完善代码，不要声称“已经完成”，也不要停在现状总结。",
-		"如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`，继续坚持项目内相对路径，不要改写成 `/tmp/cc-agent/...` 之类的沙箱绝对路径。如果最近一轮 Write/Edit 已经成功返回，优先直接总结已完成的修改；不要仅为了确认结果就再次 Read 同一文件。若最近一轮 Write/Edit 明确报错，说明修改尚未完成；不要沿用更早的成功 Write/Edit 来声称已经更新完成。",
-		"连续编程对话里，用户后续补充的技术说明、约束或示例默认都是追加需求；要落地到代码时继续调用工具修改。若刚通过 Glob/Read/Bash 确认项目根目录为空，优先直接使用 Write 创建首个文件；例如用户说“帮我用python写一个计算器”，默认直接在项目根目录创建 `calculator.py`。",
+		"若当前问题不需要工具，直接正常回答；若当前问题需要的能力并不在上面的工具列表里，直接说明限制，不要假装已经完成。",
+		"不要解释当前运行在什么系统或沙箱；只有在确实需要工具时才调用，且优先复用已经明确给出的路径、文件名或参数。",
+	}
+	if shouldUseBoltCodingToolGuidance(toolNames, messages) {
+		parts = append(parts,
+			"若某次工具结果提示路径不存在，不要据此断言项目为空；优先改用 `.`、README.md、go.mod、package.json 等项目内路径继续调用工具。",
+			"如果文件名已经明确出现，优先直接对该路径 Read 或 Edit；不要先对 `.` 做宽泛 Glob。若刚读过同一文件要继续修改，优先沿用同一路径继续 Edit，不要重新从 Glob 开始。路径已明确时也不要重新从 Glob 开始。",
+			"如果目标文件已经存在，优先使用 Edit 做最小修改；只有在创建新文件，或你明确打算整文件重写且确实需要一次性替换全文时才使用 Write。对“添加支持/添加功能/X”这类请求，要让功能真正可用，不要只加显示开关、提示文案或空包装函数；如果用户明确要求修改、创建或继续完善代码，不要声称“已经完成”，也不要停在现状总结。",
+			"如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`，继续坚持项目内相对路径，不要改写成 `/tmp/cc-agent/...` 之类的沙箱绝对路径。如果最近一轮 Write/Edit 已经成功返回，优先直接总结已完成的修改；不要仅为了确认结果就再次 Read 同一文件。若最近一轮 Write/Edit 明确报错，说明修改尚未完成；不要沿用更早的成功 Write/Edit 来声称已经更新完成。",
+			"连续编程对话里，用户后续补充的技术说明、约束或示例默认都是追加需求；要落地到代码时继续调用工具修改。若刚通过 Glob/Read/Bash 确认项目根目录为空，优先直接使用 Write 创建首个文件；例如用户说“帮我用python写一个计算器”，默认直接在项目根目录创建 `calculator.py`。",
+		)
 	}
 	if hasBoltToolName(toolNames, "Task") {
 		parts = append(parts,
@@ -897,6 +899,20 @@ func buildBoltToolUsagePrompt(toolNames []string) []string {
 		)
 	}
 	return parts
+}
+
+func shouldUseBoltCodingToolGuidance(toolNames []string, messages []prompt.Message) bool {
+	if !hasBoltToolName(toolNames, "Write") && !hasBoltToolName(toolNames, "Edit") {
+		return false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		task := strings.TrimSpace(extractBoltStandaloneUserText(messages[i]))
+		if task == "" || LooksLikeContinuationOnlyText(task) {
+			continue
+		}
+		return textIndicatesBoltCodeModification(task)
+	}
+	return false
 }
 
 func buildBoltGitExecutionPrompt(messages []prompt.Message) []string {
@@ -2632,14 +2648,6 @@ func boltRetryCompletionGuard() string {
 	return "禁总结，先继续工具修改；若调用工具，首字必须是 `{`。"
 }
 
-func boltRetryTaskLead(ctx boltFalseCompletionRetryContext) string {
-	task := strings.TrimSpace(ctx.LastTask)
-	if task == "" {
-		return "继续当前明确任务。"
-	}
-	return "继续这个明确任务：" + task + "。"
-}
-
 func boltRetryAppend(req upstream.UpstreamRequest, correction string) upstream.UpstreamRequest {
 	retry := req
 	retry.Messages = append(append([]prompt.Message{}, req.Messages...), prompt.Message{
@@ -2651,7 +2659,7 @@ func boltRetryAppend(req upstream.UpstreamRequest, correction string) upstream.U
 
 func buildBoltFalseCompletionRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext) upstream.UpstreamRequest {
 	pathHint := boltRetryPathHint(ctx)
-	correction := boltRetryTaskLead(ctx)
+	correction := ""
 	if ctx.HasRecentFailedMutation {
 		correction += " RETRY: 上次修改仍失败，别复用旧的 Edit 命中参数。对 " + pathHint + " 直接修复；若旧片段对不上，就改用整文件 Write。"
 	} else {
@@ -2663,7 +2671,7 @@ func buildBoltFalseCompletionRetryRequest(req upstream.UpstreamRequest, ctx bolt
 
 func buildBoltProjectProbeAfterFailedMutationRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext) upstream.UpstreamRequest {
 	pathHint := boltRetryPathHint(ctx)
-	correction := boltRetryTaskLead(ctx)
+	correction := ""
 	correction += " RETRY: 别再对根目录做 Glob/Grep 探路。直接把修改落到 " + pathHint + "；若 Edit 命不中，就改用 Write。"
 	correction += " " + boltRetryCompletionGuard()
 	return boltRetryAppend(req, correction)
@@ -2671,7 +2679,7 @@ func buildBoltProjectProbeAfterFailedMutationRetryRequest(req upstream.UpstreamR
 
 func buildBoltRepeatedReadRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext) upstream.UpstreamRequest {
 	pathHint := boltRetryPathHint(ctx)
-	correction := boltRetryTaskLead(ctx)
+	correction := ""
 	correction += " RETRY: 刚读过 " + pathHint + "，不要重复 Read。同一路径直接继续 Edit/Write；仅在缺少马上要改的片段时再补读。"
 	correction += " " + boltRetryCompletionGuard()
 	return boltRetryAppend(req, correction)
@@ -2683,7 +2691,7 @@ func buildBoltInvalidPathRetryRequest(req upstream.UpstreamRequest, ctx boltFals
 		badPath = strings.TrimSpace(converter.FirstToolPath())
 	}
 	pathHint := boltRetryPathHint(ctx)
-	correction := boltRetryTaskLead(ctx)
+	correction := ""
 	if badPath != "" {
 		correction += " RETRY: 刚才用了无效沙箱路径 `" + badPath + "`。不要再用 `/tmp/cc-agent/...`、`/mnt/...`、盘符绝对路径；直接改回项目内相对路径，优先处理 " + pathHint + "。"
 	} else {
@@ -2695,7 +2703,7 @@ func buildBoltInvalidPathRetryRequest(req upstream.UpstreamRequest, ctx boltFals
 
 func buildBoltEmptyTurnRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext) upstream.UpstreamRequest {
 	pathHint := boltRetryPathHint(ctx)
-	correction := boltRetryTaskLead(ctx)
+	correction := ""
 	correction += " RETRY: 已拿到 " + pathHint + " 的内容，不要空结束。直接继续 Edit/Write，不要再读同一路径。"
 	correction += " " + boltRetryCompletionGuard()
 	return boltRetryAppend(req, correction)
@@ -2876,7 +2884,7 @@ type boltSerializedToolResult struct {
 	Drop        bool
 }
 
-func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]boltToolUseMetadata, gitUploadIntent bool, focusedFileAliases map[string]struct{}, continuationTask string, workdir string) string {
+func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]boltToolUseMetadata, gitUploadIntent bool, focusedFileAliases map[string]struct{}, workdir string) string {
 	parts := make([]boltUserContentPart, 0, len(blocks))
 	results := make([]*boltSerializedToolResult, 0, len(blocks))
 	hasUserText := false
@@ -2962,7 +2970,6 @@ func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]bo
 	if hasVisibleToolResult && !hasUserText {
 		sb.WriteString(formatBoltToolResultContinuation(
 			gitUploadIntent,
-			continuationTask,
 			hasSuccessfulMutation,
 			hasFailedMutation,
 		))
@@ -3014,42 +3021,17 @@ func hasVisibleFailedMutationResult(results []*boltSerializedToolResult) bool {
 	return false
 }
 
-func formatBoltToolResultContinuation(gitUploadIntent bool, continuationTask string, mutationSucceeded bool, mutationFailed bool) string {
+func formatBoltToolResultContinuation(gitUploadIntent bool, mutationSucceeded bool, mutationFailed bool) string {
 	if gitUploadIntent {
-		return "继续完成当前的 git 提交与推送任务。以下结果来自用户本地真实仓库，不是 `/tmp/cc-agent/...` 沙箱。"
+		return "下面是上一轮工具结果，来自用户本地真实仓库，不是 `/tmp/cc-agent/...` 沙箱。"
 	}
-
-	task := truncateBoltContinuationTask(strings.TrimSpace(continuationTask), 72)
 	if mutationFailed {
-		if task != "" {
-			return "继续任务：" + task + "。以下是上一轮失败的工具结果。最近一次 Write/Edit 还没成功；不要声称已完成。优先沿用已读或已存在文件做 Edit；若决定调用工具，首个非空输出字符直接是 `{`。"
-		}
-		return "以下是上一轮失败的工具结果。最近一次 Write/Edit 还没成功；不要声称已完成。优先沿用已读或已存在文件做 Edit；若决定调用工具，首个非空输出字符直接是 `{`。"
+		return "下面是上一轮失败的工具结果。最近一次 Write/Edit 还没成功；不要声称已完成。优先沿用已读或已存在文件做 Edit；若决定调用工具，首个非空输出字符直接是 `{`。"
 	}
 	if mutationSucceeded {
 		return "只做最小确认：已创建/更新相应文件；不要补充文件内容细节。"
 	}
-	if task != "" {
-		return "继续任务：" + task + "。不要只停在现状总结或表面补丁，不要只补显示或文案。优先沿用已读或已存在文件做 Edit；路径已明确时也不要重新从 Glob 开始；首个非空输出字符直接是 `{`。"
-	}
-
-	return "直接基于下面结果继续当前任务。优先沿用已读或已存在文件做 Edit；路径已明确时也不要重新从 Glob 开始；首个非空输出字符直接是 `{`。"
-}
-
-func truncateBoltContinuationTask(text string, limit int) string {
-	text = strings.TrimSpace(text)
-	if text == "" || limit <= 0 {
-		return text
-	}
-
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	if limit <= 3 {
-		return string(runes[:limit])
-	}
-	return string(runes[:limit-3]) + "..."
+	return "下面是上一轮工具结果。基于这些结果继续回答；只有在当前问题确实还需要已声明工具时才继续调用，若决定调用工具，首个非空输出字符直接是 `{`。"
 }
 
 func extractBoltToolPath(input interface{}) string {

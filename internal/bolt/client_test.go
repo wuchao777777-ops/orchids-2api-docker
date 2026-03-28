@@ -1387,11 +1387,11 @@ func TestPrepareRequest_AddsWorkspaceAndToolInstructions(t *testing.T) {
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "不要解释当前运行在什么系统或沙箱") {
 		t.Fatalf("system prompt missing no-sandbox-explanation instruction: %s", boltReq.GlobalSystemPrompt)
 	}
-	if !strings.Contains(boltReq.GlobalSystemPrompt, "若某次工具结果提示路径不存在，不要据此断言项目为空") {
-		t.Fatalf("system prompt missing path-miss recovery instruction: %s", boltReq.GlobalSystemPrompt)
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "若当前问题需要的能力并不在上面的工具列表里，直接说明限制") {
+		t.Fatalf("system prompt missing unavailable-capability guard: %s", boltReq.GlobalSystemPrompt)
 	}
-	if !strings.Contains(boltReq.GlobalSystemPrompt, "如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`") {
-		t.Fatalf("system prompt missing hook-denied retry guard: %s", boltReq.GlobalSystemPrompt)
+	if strings.Contains(boltReq.GlobalSystemPrompt, "如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`") {
+		t.Fatalf("system prompt should avoid coding-only mutation guidance when request is not a code-edit task: %s", boltReq.GlobalSystemPrompt)
 	}
 	if strings.Contains(strings.ToLower(boltReq.GlobalSystemPrompt), "anthropic's official cli for claude") {
 		t.Fatalf("system prompt should strip claude code system boilerplate: %s", boltReq.GlobalSystemPrompt)
@@ -2174,11 +2174,8 @@ func TestPrepareRequest_DropsSupersededAssistantCompletionSummaryBeforeLaterEdit
 	if got := boltReq.Messages[1].Content; got != "帮我添加科学计数法" {
 		t.Fatalf("second message content=%q want latest explicit edit request", got)
 	}
-	if got := boltReq.Messages[2].Content; !strings.Contains(got, "继续任务：") {
-		t.Fatalf("third message content=%q want continuation marker for tool-result follow-up", got)
-	}
-	if got := boltReq.Messages[2].Content; !strings.Contains(got, "帮我添加科学计数法") {
-		t.Fatalf("third message content=%q want latest edit intent carried into continuation", got)
+	if got := boltReq.Messages[2].Content; !strings.Contains(got, "下面是上一轮工具结果") {
+		t.Fatalf("third message content=%q want neutral tool-result marker for follow-up", got)
 	}
 	if got := boltReq.Messages[2].Content; !strings.Contains(got, "def add(a, b)") {
 		t.Fatalf("third message content=%q want latest read result", got)
@@ -2236,8 +2233,8 @@ func TestPrepareRequest_DropsInjectedFailureAssistantNoiseBeforeLaterBoltFollowu
 	if got := boltReq.Messages[2].Content; got != "给他添加科学计数法" {
 		t.Fatalf("third message content=%q want latest retry task", got)
 	}
-	if got := boltReq.Messages[3].Content; !strings.Contains(got, "继续任务：") {
-		t.Fatalf("fourth message content=%q want continuation marker for read follow-up", got)
+	if got := boltReq.Messages[3].Content; !strings.Contains(got, "下面是上一轮工具结果") {
+		t.Fatalf("fourth message content=%q want neutral tool-result marker for read follow-up", got)
 	}
 	if got := boltReq.Messages[3].Content; !strings.Contains(got, "def add(a, b)") {
 		t.Fatalf("fourth message content=%q want read result", got)
@@ -2331,8 +2328,8 @@ func TestPrepareRequest_MarksToolResultOnlyFollowupAsContinuation(t *testing.T) 
 	if len(boltReq.Messages) != 2 {
 		t.Fatalf("messages len=%d want 2", len(boltReq.Messages))
 	}
-	if !strings.Contains(boltReq.Messages[1].Content, "继续完成当前的 git 提交与推送任务") {
-		t.Fatalf("expected continuation marker in tool-result follow-up, got: %q", boltReq.Messages[1].Content)
+	if !strings.Contains(boltReq.Messages[1].Content, "下面是上一轮工具结果") {
+		t.Fatalf("expected neutral tool-result marker in tool-result follow-up, got: %q", boltReq.Messages[1].Content)
 	}
 	if !strings.Contains(boltReq.Messages[1].Content, "不是 `/tmp/cc-agent/...` 沙箱") {
 		t.Fatalf("expected local-repo marker in tool-result follow-up, got: %q", boltReq.Messages[1].Content)
@@ -2614,7 +2611,7 @@ func TestPrepareRequest_UsesFailureContinuationForFailedEditFollowup(t *testing.
 		t.Fatalf("messages len=%d want at least 1", len(boltReq.Messages))
 	}
 	got := boltReq.Messages[len(boltReq.Messages)-1].Content
-	if !strings.Contains(got, "以下是上一轮失败的工具结果") {
+	if !strings.Contains(got, "下面是上一轮失败的工具结果") {
 		t.Fatalf("expected failed edit follow-up to be marked as failure, got: %q", got)
 	}
 	if !strings.Contains(got, "最近一次 Write/Edit 还没成功") {
@@ -2834,7 +2831,9 @@ func TestPrepareRequest_DropsEarlierRepeatedEditFailureForSameFile(t *testing.T)
 }
 
 func TestBuildBoltToolUsagePrompt_IncludesMutationFailureRecoveryRule(t *testing.T) {
-	got := strings.Join(buildBoltToolUsagePrompt([]string{"Read", "Write", "Edit", "Bash"}), "\n")
+	got := strings.Join(buildBoltToolUsagePrompt([]string{"Read", "Write", "Edit", "Bash"}, []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
+	}), "\n")
 	if !strings.Contains(got, "若最近一轮 Write/Edit 明确报错") {
 		t.Fatalf("expected mutation failure recovery rule in tool prompt, got: %q", got)
 	}
@@ -2855,6 +2854,21 @@ func TestBuildBoltToolUsagePrompt_IncludesMutationFailureRecoveryRule(t *testing
 	}
 	if !strings.Contains(got, "不要只加显示开关、提示文案或空包装函数") {
 		t.Fatalf("expected tool prompt to require substantive feature implementation, got: %q", got)
+	}
+}
+
+func TestBuildBoltToolUsagePrompt_NonCodingRequestStaysNeutral(t *testing.T) {
+	got := strings.Join(buildBoltToolUsagePrompt([]string{"Read", "Write", "Edit"}, []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "现在上海的天气怎么样"}},
+	}), "\n")
+	if !strings.Contains(got, "若当前问题不需要工具，直接正常回答") {
+		t.Fatalf("expected neutral direct-answer guidance, got: %q", got)
+	}
+	if strings.Contains(got, "优先使用 Edit 做最小修改") {
+		t.Fatalf("expected non-coding request to avoid forced mutation guidance, got: %q", got)
+	}
+	if strings.Contains(got, "默认直接在项目根目录创建 `calculator.py`") {
+		t.Fatalf("expected non-coding request to avoid code-task bootstrap guidance, got: %q", got)
 	}
 }
 
@@ -2922,14 +2936,14 @@ func TestPrepareRequest_ReadFollowupContinuationPrefersEditAndNoPreamble(t *test
 		t.Fatalf("messages len=%d want at least 1", len(boltReq.Messages))
 	}
 	got := boltReq.Messages[len(boltReq.Messages)-1].Content
-	if !strings.Contains(got, "优先沿用已读或已存在文件做 Edit") {
-		t.Fatalf("expected read follow-up continuation to prefer Edit, got: %q", got)
+	if !strings.Contains(got, "基于这些结果继续回答") {
+		t.Fatalf("expected read follow-up continuation to stay neutral, got: %q", got)
 	}
 	if !strings.Contains(got, "首个非空输出字符直接是 `{`") {
 		t.Fatalf("expected read follow-up continuation to require direct JSON, got: %q", got)
 	}
-	if !strings.Contains(got, "路径已明确时也不要重新从 Glob 开始") {
-		t.Fatalf("expected read follow-up continuation to avoid restarting with glob, got: %q", got)
+	if strings.Contains(got, "优先沿用已读或已存在文件做 Edit") {
+		t.Fatalf("expected read follow-up continuation to avoid forced Edit bias, got: %q", got)
 	}
 	if strings.Contains(got, "我来重写") {
 		t.Fatalf("did not expect explanatory preamble in serialized continuation, got: %q", got)
@@ -3073,7 +3087,7 @@ func TestPrepareRequest_FollowupMutationAfterSuccessfulCreateGetsGuard(t *testin
 	}
 }
 
-func TestBuildBoltRetryRequests_KeepTaskLeadAndCompressedGuidance(t *testing.T) {
+func TestBuildBoltRetryRequests_UseNeutralCompressedGuidance(t *testing.T) {
 	ctx := boltFalseCompletionRetryContext{
 		ReadPath: "calculator.py",
 		LastTask: "帮我添加科学计数法",
@@ -3084,8 +3098,8 @@ func TestBuildBoltRetryRequests_KeepTaskLeadAndCompressedGuidance(t *testing.T) 
 		t.Fatalf("messages len=%d want 1", len(retry.Messages))
 	}
 	got := retry.Messages[0].Content.GetText()
-	if !strings.Contains(got, "继续这个明确任务：帮我添加科学计数法。") {
-		t.Fatalf("expected retry to preserve original task lead, got: %q", got)
+	if strings.Contains(got, "继续这个明确任务") {
+		t.Fatalf("expected retry to avoid task lead injection, got: %q", got)
 	}
 	if !strings.Contains(got, "RETRY: 刚读过 `calculator.py`") {
 		t.Fatalf("expected retry to use short repeated-read code, got: %q", got)
@@ -3125,7 +3139,7 @@ func TestShouldRetryBoltInvalidPathToolCall_ForSandboxRead(t *testing.T) {
 	}
 }
 
-func TestBuildBoltInvalidPathRetryRequest_UsesTaskLeadAndRelativePathHint(t *testing.T) {
+func TestBuildBoltInvalidPathRetryRequest_UsesNeutralRelativePathHint(t *testing.T) {
 	ctx := boltFalseCompletionRetryContext{
 		ReadPath: "calculator.py",
 		LastTask: "帮我添加科学计算法",
@@ -3138,8 +3152,8 @@ func TestBuildBoltInvalidPathRetryRequest_UsesTaskLeadAndRelativePathHint(t *tes
 		t.Fatalf("messages len=%d want 1", len(retry.Messages))
 	}
 	got := retry.Messages[0].Content.GetText()
-	if !strings.Contains(got, "继续这个明确任务：帮我添加科学计算法。") {
-		t.Fatalf("expected retry to keep task lead, got: %q", got)
+	if strings.Contains(got, "继续这个明确任务") {
+		t.Fatalf("expected retry to avoid task lead injection, got: %q", got)
 	}
 	if !strings.Contains(got, "无效沙箱路径") || !strings.Contains(got, "/tmp/cc-agent/sb1-demo/project/calculator.py") {
 		t.Fatalf("expected retry to mention invalid sandbox path, got: %q", got)
@@ -3214,18 +3228,15 @@ func TestPrepareRequest_DropsStaleMissingWorkspaceHistory(t *testing.T) {
 }
 
 func TestFormatBoltToolResultContinuation_CompressesGeneralFollowupPrompt(t *testing.T) {
-	got := formatBoltToolResultContinuation(false, "帮我添加科学计数法", false, false)
-	if !strings.Contains(got, "优先沿用已读或已存在文件做 Edit") {
-		t.Fatalf("expected continuation to prefer Edit, got: %q", got)
+	got := formatBoltToolResultContinuation(false, false, false)
+	if !strings.Contains(got, "基于这些结果继续回答") {
+		t.Fatalf("expected neutral continuation guidance, got: %q", got)
 	}
-	if !strings.Contains(got, "不要只停在现状总结或表面补丁") {
-		t.Fatalf("expected continuation to reject shallow patch summaries, got: %q", got)
+	if !strings.Contains(got, "下面是上一轮工具结果") {
+		t.Fatalf("expected continuation to stay neutral about prior tool results, got: %q", got)
 	}
-	if !strings.Contains(got, "不要只补显示或文案") {
-		t.Fatalf("expected continuation to require real feature wiring, got: %q", got)
-	}
-	if !strings.Contains(got, "路径已明确时也不要重新从 Glob 开始") {
-		t.Fatalf("expected continuation to suppress redundant glob, got: %q", got)
+	if strings.Contains(got, "优先沿用已读或已存在文件做 Edit") {
+		t.Fatalf("expected general continuation to avoid forced Edit bias, got: %q", got)
 	}
 	if !strings.Contains(got, "首个非空输出字符直接是 `{`") {
 		t.Fatalf("expected continuation to require direct JSON tool calls, got: %q", got)
@@ -3239,7 +3250,7 @@ func TestFormatBoltToolResultContinuation_CompressesGeneralFollowupPrompt(t *tes
 }
 
 func TestFormatBoltToolResultContinuation_SuccessPromptAvoidsFeatureHallucination(t *testing.T) {
-	got := formatBoltToolResultContinuation(false, "帮我用python写一个计算器", true, false)
+	got := formatBoltToolResultContinuation(false, true, false)
 	if !strings.Contains(got, "只做最小确认") {
 		t.Fatalf("expected success continuation to enforce minimal confirmation, got: %q", got)
 	}
