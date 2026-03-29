@@ -2016,8 +2016,8 @@ func TestPrepareRequest_DropsMisleadingNoFilesFoundProbeAfterSuccessfulWrite(t *
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 2 {
-		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
 	}
 	for _, msg := range boltReq.Messages {
 		if strings.Contains(msg.Content, "No files found") {
@@ -2403,8 +2403,8 @@ func TestPrepareRequest_DropsSupersededAssistantCompletionSummaryBeforeLaterEdit
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 2 {
-		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
 	}
 	for _, msg := range boltReq.Messages {
 		if strings.Contains(msg.Content, "计算器已创建完成") {
@@ -2983,8 +2983,8 @@ func TestPrepareRequest_DropsSupersededEditFailureAfterLaterReadRetry(t *testing
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 2 {
-		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
 	}
 	if got := boltReq.Messages[1].Content; strings.Contains(got, "first snapshot") {
 		t.Fatalf("expected superseded read result to be trimmed, got: %q", got)
@@ -3264,8 +3264,8 @@ func TestPrepareRequest_DropsSupersededSuccessfulMutationAfterLaterRead(t *testi
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 2 {
-		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
 	}
 	if got := boltReq.Messages[1].Content; got != "帮我添加科学计数法" {
 		t.Fatalf("second message content=%q want latest standalone task", got)
