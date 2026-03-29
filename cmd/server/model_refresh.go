@@ -12,6 +12,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/modelpolicy"
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
@@ -452,4 +453,93 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func hasOrchidsModelSyncCredentials(acc *store.Account) bool {
+	if acc == nil || !strings.EqualFold(acc.AccountType, "orchids") {
+		return false
+	}
+	return strings.TrimSpace(acc.Token) != "" ||
+		strings.TrimSpace(acc.ClientCookie) != "" ||
+		strings.TrimSpace(acc.SessionID) != ""
+}
+
+func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.Store) ([]orchidsPublicModelChoice, string, error) {
+	probeCfg := refreshModelRequestConfig(cfg, "orchids")
+	accounts, err := s.GetEnabledAccounts(ctx)
+	if err == nil {
+		for _, acc := range accounts {
+			if !hasOrchidsModelSyncCredentials(acc) {
+				continue
+			}
+			client := orchids.NewFromAccount(acc, probeCfg)
+			upstreamModels, fetchErr := client.FetchUpstreamModels(ctx)
+			client.Close()
+			if fetchErr == nil && len(upstreamModels) > 0 {
+				out := make([]orchidsPublicModelChoice, 0, len(upstreamModels))
+				for _, m := range upstreamModels {
+					id := strings.TrimSpace(m.ID)
+					if id == "" {
+						continue
+					}
+					out = append(out, orchidsPublicModelChoice{
+						ID:   id,
+						Name: id,
+					})
+				}
+				if len(out) > 0 {
+					return normalizeOrchidsModelChoices(out), "upstream_api", nil
+				}
+			}
+			if fetchErr != nil {
+				err = fetchErr
+				break
+			}
+		}
+	}
+
+	proxyFunc := http.ProxyFromEnvironment
+	if cfg != nil {
+		proxyFunc = util.ProxyFuncFromConfig(cfg)
+	}
+	publicModels, fallbackErr := fetchOrchidsPublicModelChoicesWithProxy(ctx, proxyFunc)
+	if fallbackErr != nil {
+		if err != nil {
+			return normalizeOrchidsModelChoices(publicModels), "public_page_fallback", fmt.Errorf("upstream api fetch failed: %v; fallback failed: %w", err, fallbackErr)
+		}
+		return normalizeOrchidsModelChoices(publicModels), "public_page_fallback", fallbackErr
+	}
+	return normalizeOrchidsModelChoices(publicModels), "public_page_fallback", err
+}
+
+func normalizeOrchidsModelChoices(items []orchidsPublicModelChoice) []orchidsPublicModelChoice {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]orchidsPublicModelChoice, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if resolved, ok := orchids.ResolveOrchidsModelID(id); ok {
+			id = resolved
+		} else {
+			id = strings.ToLower(id)
+		}
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = id
+		}
+		out = append(out, orchidsPublicModelChoice{
+			ID:   id,
+			Name: name,
+		})
+	}
+	return out
 }

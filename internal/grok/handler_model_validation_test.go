@@ -2,7 +2,6 @@ package grok
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -163,6 +162,6 @@ func TestTryAutoRegisterModel_RejectsUnverifiedModel(t *testing.T) {
 	if _, err := s.GetModelByModelID(context.Background(), "grok-5"); err == nil {
 		t.Fatal("unexpected created model grok-5")
 	} else if err.Error() == "" {
-		t.Fatal(fmt.Sprintf("unexpected error: %v", err))
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

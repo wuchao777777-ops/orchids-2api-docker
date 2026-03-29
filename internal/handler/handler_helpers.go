@@ -248,7 +248,7 @@ func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forced
 		m               *store.Model
 	)
 	if forcedChannel != "" {
-		resolvedModelID, m = h.resolveModelAliasForChannel(ctx, forcedChannel, modelID)
+		_, m = h.resolveModelAliasForChannel(ctx, forcedChannel, modelID)
 	} else {
 		resolvedModelID, m = h.resolveModelAlias(ctx, modelID)
 		if strings.EqualFold(forcedChannel, "warp") {

@@ -861,14 +861,7 @@ func buildBoltWorkspacePrompt(workdir string) []string {
 	return parts
 }
 
-func isBoltGitRepository(workdir string) bool {
-	workdir = strings.TrimSpace(workdir)
-	if workdir == "" {
-		return false
-	}
-	_, err := os.Stat(filepath.Join(workdir, ".git"))
-	return err == nil
-}
+
 
 func buildBoltToolUsagePrompt(toolNames []string, messages []prompt.Message) []string {
 	toolHints := make([]string, 0, len(toolNames))

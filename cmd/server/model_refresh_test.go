@@ -172,10 +172,8 @@ func TestDiscoverModelsForChannel_GrokUsesPublicAllowlistAndVerifiedExisting(t *
 		t.Fatalf("source=%q want %q", source, "grok_public_allowlist+verified_existing")
 	}
 
-	gotIDs := make([]string, 0, len(items))
 	gotSet := make(map[string]struct{}, len(items))
 	for _, item := range items {
-		gotIDs = append(gotIDs, item.ID)
 		gotSet[item.ID] = struct{}{}
 	}
 	for _, publicID := range modelpolicy.PublicGrokModelIDs() {

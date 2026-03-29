@@ -45,21 +45,6 @@ func (lb *LoadBalancer) SetConnTracker(ct ConnTracker) {
 	lb.connTracker = ct
 }
 
-func (lb *LoadBalancer) GetModelChannel(ctx context.Context, modelID string) string {
-	if lb.Store == nil {
-		return ""
-	}
-	m, err := lb.Store.GetModelByModelID(ctx, modelID)
-	if err != nil || m == nil {
-		return ""
-	}
-	return m.Channel
-}
-
-func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, excludeIDs []int64, channel string) (*store.Account, error) {
-	return lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, channel, nil)
-}
-
 func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTracker(ctx context.Context, excludeIDs []int64, channel string, tracker ConnTracker) (*store.Account, error) {
 	accounts, err := lb.getEnabledAccounts(ctx)
 	if err != nil {

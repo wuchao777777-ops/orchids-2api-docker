@@ -1,7 +1,7 @@
 package orchids
 
 import (
-	"github.com/goccy/go-json"
+
 
 	"orchids-api/internal/upstream"
 )
@@ -15,7 +15,7 @@ type requestState struct {
 	stream              bool
 	responseStarted     bool
 	messageStarted      bool
-	toolCallHasInput    bool
+
 	modelName           string
 	finishReason        string
 	pendingToolInput    string
@@ -27,7 +27,7 @@ type requestState struct {
 	errorMsg                 string
 	directSSE           upstream.DirectSSEEmitter
 	toolMapper          *ToolMapper
-	emittedToolCallIDs  map[string]struct{}
+
 }
 
 type orchidsToolCallState struct {
@@ -38,12 +38,7 @@ type orchidsToolCallState struct {
 	inputLength int64
 }
 
-func cloneRawJSON(data []byte) json.RawMessage {
-	if len(data) == 0 {
-		return nil
-	}
-	return json.RawMessage(data)
-}
+
 
 func newOrchidsRequestState(req upstream.UpstreamRequest) requestState {
 	modelName := normalizeOrchidsAgentModel(req.Model)
