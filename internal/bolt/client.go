@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/goccy/go-json"
 
@@ -504,6 +505,8 @@ func EstimateInputTokens(req upstream.UpstreamRequest) InputTokenEstimate {
 }
 
 func prepareRequest(req upstream.UpstreamRequest, projectID string) (*Request, InputTokenEstimate) {
+	req.Messages = trimBoltMessagesAfterSupersededBraveSearchFailure(req.Messages)
+	req.Messages = trimBoltMessagesAfterSpeculativeFailedSearchSummary(req.Messages)
 	req.Messages = trimBoltMessagesAfterMisleadingEmptyProjectProbe(req.Messages)
 	req.Messages = trimBoltMessagesAfterSupersededEmptyProjectProbe(req.Messages)
 	req.Messages = trimBoltMessagesAfterSupersededPositiveProjectProbe(req.Messages)
@@ -861,8 +864,6 @@ func buildBoltWorkspacePrompt(workdir string) []string {
 	return parts
 }
 
-
-
 func buildBoltToolUsagePrompt(toolNames []string, messages []prompt.Message) []string {
 	toolHints := make([]string, 0, len(toolNames))
 	for _, name := range toolNames {
@@ -889,12 +890,178 @@ func buildBoltToolUsagePrompt(toolNames []string, messages []prompt.Message) []s
 			"只有在本地 Read/Glob/Grep/Bash 不足以完成广泛探索时才使用 `Task`；如果客户端声明的是 `Agent`，上游 Bolt 可能会返回 `Task`，把它视为同一种子代理能力继续执行。",
 		)
 	}
+	if hasBoltToolName(toolNames, "web_search") || hasBoltToolName(toolNames, "web_fetch") {
+		parts = append(parts,
+			"`web_search` / `web_fetch` 在当前中继里是可用工具；遇到实时新闻、天气、人物最新表态等需要联网的问题，优先直接调用它们，不要因为旧对话里出现过某个搜索后端的报错就改成普通口头拒答或改走 `Task`。",
+			"对“特朗普最近的言论”“今天发生了什么”这类实时问题，只有在当前回合拿到了成功的联网工具结果后才能总结；如果当前回合搜索/抓取没有成功，不要写“搜索结果显示”或“我刚才已经查到”，而是继续调用联网工具或明确说明这次联网失败。",
+		)
+		if detectRecentBoltBraveSearchFailure(messages) {
+			parts = append(parts,
+				"如果历史里出现过 `missing_brave_api_key`、`Brave Search API key` 或“搜索工具未配置”，把它视为旧的/其他运行时的失败记录；本回合不要沿用这条结论，继续直接尝试 `web_search` 或 `web_fetch`。",
+			)
+		}
+	}
 	if hasBoltToolName(toolNames, "Skill") {
 		parts = append(parts,
 			"如果客户端声明了 `Skill`，上游 Bolt 可能直接返回 `Skill(skill, args)`；把它视为合法工具调用继续执行，不要改写成普通文本解释。",
 		)
 	}
 	return parts
+}
+
+func trimBoltMessagesAfterSupersededBraveSearchFailure(messages []prompt.Message) []prompt.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	drop := make([]bool, len(messages))
+	dropped := false
+
+	for i := range messages {
+		if !isBoltBraveSearchFailureMessage(messages[i]) {
+			continue
+		}
+		drop[i] = true
+		dropped = true
+		if next := nextBoltVisibleMessageIndex(messages, i+1); next >= 0 && isBoltSearchUnavailableAssistantMessage(messages[next]) {
+			drop[next] = true
+		}
+	}
+
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
+func detectRecentBoltBraveSearchFailure(messages []prompt.Message) bool {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if isBoltBraveSearchFailureMessage(messages[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBoltBraveSearchFailureMessage(msg prompt.Message) bool {
+	for _, block := range normalizeBlocks(msg) {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+			continue
+		}
+		if looksLikeBoltBraveSearchFailure(stringifyContent(block.Content)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBoltSearchUnavailableAssistantMessage(msg prompt.Message) bool {
+	if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
+		return false
+	}
+	return looksLikeBoltSearchUnavailableSummary(extractBoltAssistantHistoryContent(normalizeBlocks(msg)))
+}
+
+func looksLikeBoltBraveSearchFailure(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "missing_brave_api_key") ||
+		strings.Contains(lower, "brave search api key") ||
+		strings.Contains(lower, "tool mcp__tavily__web_search not found") ||
+		strings.Contains(lower, "tool web_search not found") ||
+		strings.Contains(lower, "tool builtin_web_search not found") ||
+		(strings.Contains(lower, "web_search") && strings.Contains(lower, "brave"))
+}
+
+func looksLikeBoltSearchUnavailableSummary(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"搜索工具未配置",
+		"无法获取实时新闻，因为搜索工具未配置",
+		"网络搜索工具目前不可用",
+		"无法获取实时信息",
+		"search tool is not configured",
+		"search tool is currently unavailable",
+		"cannot fetch real-time news because search tool is not configured",
+	} {
+		if strings.Contains(lower, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
+func trimBoltMessagesAfterSpeculativeFailedSearchSummary(messages []prompt.Message) []prompt.Message {
+	if len(messages) < 3 {
+		return messages
+	}
+
+	drop := make([]bool, len(messages))
+	dropped := false
+
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
+			continue
+		}
+
+		text := extractBoltAssistantHistoryContent(normalizeBlocks(msg))
+		if !looksLikeBoltSpeculativeSearchSummary(text) {
+			continue
+		}
+
+		if nextBoltStandaloneUserMessageIndex(messages, i+1) < 0 {
+			continue
+		}
+
+		drop[i] = true
+		dropped = true
+	}
+
+	if !dropped {
+		return messages
+	}
+
+	trimmed := make([]prompt.Message, 0, len(messages))
+	for i, msg := range messages {
+		if !drop[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed
+}
+
+func looksLikeBoltSpeculativeSearchSummary(text string) bool {
+	text = sanitizeBoltAssistantText(text)
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"搜索结果显示",
+		"我刚才已经为你检查了",
+		"我刚才已经查了",
+		"我已经为你检查了",
+		"search results show",
+		"i already checked",
+	} {
+		if strings.Contains(lower, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldUseBoltCodingToolGuidance(toolNames []string, messages []prompt.Message) bool {
@@ -2772,6 +2939,31 @@ func firstBoltReadPath(msg prompt.Message, toolUses map[string]boltToolUseMetada
 	return ""
 }
 
+func isBoltFailedSearchToolResultOnlyMessage(msg prompt.Message, toolUses map[string]boltToolUseMetadata) bool {
+	if !isBoltToolResultOnlyUserMessage(msg) {
+		return false
+	}
+
+	blocks := normalizeBlocks(msg)
+	hasFailedSearch := false
+	for _, block := range blocks {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+			continue
+		}
+		toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+		toolName := strings.ToLower(strings.TrimSpace(CanonicalSupportedToolName(toolMeta.Name)))
+		if toolName != "web_search" && toolName != "web_fetch" {
+			return false
+		}
+		rawText := strings.TrimSpace(sanitizeBoltToolResultText(stringifyContent(block.Content)))
+		if rawText == "" || !isBoltToolResultError(block, rawText) {
+			return false
+		}
+		hasFailedSearch = true
+	}
+	return hasFailedSearch
+}
+
 func shouldRetryBoltFalseCompletion(ctx boltFalseCompletionRetryContext, converter *outboundConverter) bool {
 	if converter == nil || converter.emittedToolUse {
 		return false
@@ -2998,6 +3190,16 @@ func isBoltToolResultOnlyUserMessage(msg prompt.Message) bool {
 
 func previousBoltVisibleMessageIndex(messages []prompt.Message, start int) int {
 	for i := start; i >= 0; i-- {
+		if shouldSkipBoltMessage(messages[i].Role) {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+func nextBoltVisibleMessageIndex(messages []prompt.Message, start int) int {
+	for i := start; i < len(messages); i++ {
 		if shouldSkipBoltMessage(messages[i].Role) {
 			continue
 		}
@@ -3863,7 +4065,11 @@ func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(upstream
 
 func (c *outboundConverter) flushTextAndSendToolCalls(toolCalls []ToolCall, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
 	if textBuffer != nil {
-		// Prefer a pure tool-use turn when Bolt mixes narration with tool calls.
+		if narration := filteredBoltNarrationBeforeToolCall(textBuffer.String(), toolCalls); narration != "" {
+			if err := c.sendTextDelta(narration, writer); err != nil {
+				return err
+			}
+		}
 		textBuffer.Reset()
 	}
 	for i := range toolCalls {
@@ -3874,9 +4080,130 @@ func (c *outboundConverter) flushTextAndSendToolCalls(toolCalls []ToolCall, text
 	return nil
 }
 
+func filteredBoltNarrationBeforeToolCall(text string, toolCalls []ToolCall) string {
+	if !shouldKeepBoltNarrationBeforeToolCalls(toolCalls) {
+		return ""
+	}
+
+	text = sanitizeBoltAssistantText(text)
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	if first := firstNonSpaceByte(trimmed); first == '{' || first == '[' {
+		return ""
+	}
+	if leadingJSON, _, ok := extractLeadingJSONValue(trimmed); ok && leadingJSON != "" {
+		return ""
+	}
+
+	paragraphs := splitBoltAssistantParagraphs(text)
+	if len(paragraphs) == 0 {
+		return ""
+	}
+
+	kept := make([]string, 0, 1)
+	for _, part := range paragraphs {
+		if shouldDropBoltProceduralParagraph(part) {
+			continue
+		}
+		kept = append(kept, part)
+		if len(kept) >= 1 {
+			break
+		}
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+
+	text = strings.TrimSpace(strings.Join(kept, "\n\n"))
+	if utf8.RuneCountInString(text) > 140 {
+		return ""
+	}
+	return text
+}
+
+func shouldKeepBoltNarrationBeforeToolCalls(toolCalls []ToolCall) bool {
+	if len(toolCalls) == 0 {
+		return false
+	}
+	for _, call := range toolCalls {
+		switch strings.TrimSpace(call.Function) {
+		case "Read", "Grep", "Glob", "web_search", "web_fetch":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func splitBoltAssistantParagraphs(text string) []string {
+	parts := strings.Split(text, "\n\n")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func shouldDropBoltProceduralParagraph(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return true
+	}
+
+	lower := strings.ToLower(trimmed)
+	for _, marker := range []string{
+		"tool_call_result",
+		"error editing file",
+		"read 1 file",
+		"update(",
+		"write(",
+		"create(",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+
+	for _, prefix := range []string{
+		"我先",
+		"我来",
+		"让我",
+		"现在直接",
+		"现在我将",
+		"首先让我",
+		"接下来",
+		"我已",
+		"已完成",
+		"已经完成",
+		"完成！",
+		"i will",
+		"let me",
+		"now i will",
+		"done!",
+		"completed!",
+	} {
+		if strings.HasPrefix(lower, strings.ToLower(prefix)) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *outboundConverter) flushTextBuffer(textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
 	if textBuffer == nil || textBuffer.Len() == 0 {
 		return nil
+	}
+	trimmed := strings.TrimSpace(textBuffer.String())
+	if leadingJSON, _, ok := extractLeadingJSONValue(trimmed); ok {
+		if toolCalls := extractToolCallsFromJSON([]byte(leadingJSON)); len(toolCalls) > 0 {
+			return c.flushTextAndSendToolCalls(toolCalls, textBuffer, writer)
+		}
 	}
 	if err := c.sendTextDelta(textBuffer.String(), writer); err != nil {
 		return err
@@ -3891,6 +4218,34 @@ func looksLikeBoltPendingLead(text string) bool {
 		return false
 	}
 	if strings.HasSuffix(trimmed, ":") || strings.HasSuffix(trimmed, "：") {
+		return true
+	}
+	if looksLikeIncompleteToolCallJSON(trimmed) {
+		return true
+	}
+	return false
+}
+
+func looksLikeIncompleteToolCallJSON(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	if first := firstNonSpaceByte(text); first != '{' && first != '[' {
+		return false
+	}
+	if _, _, ok := extractLeadingJSONValue(text); ok {
+		return false
+	}
+
+	// Keep buffering likely tool-call JSON prefixes until they close.
+	lower := strings.ToLower(text)
+	if strings.HasPrefix(text, "{") {
+		if strings.HasPrefix(text, "{\"") || strings.Contains(lower, "\"tool") || strings.Contains(lower, "\"function") || strings.Contains(lower, "\"parameters") || strings.Contains(lower, "\"args") {
+			return true
+		}
+	}
+	if strings.HasPrefix(text, "[") && (strings.Contains(lower, "{\"tool") || strings.Contains(lower, "\"tool_calls\"")) {
 		return true
 	}
 	return false

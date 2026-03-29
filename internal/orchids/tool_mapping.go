@@ -2,8 +2,6 @@ package orchids
 
 import (
 	"strings"
-
-
 )
 
 var normalizedToolNameFallbacks = map[string]string{
@@ -56,10 +54,16 @@ var normalizedToolNameFallbacks = map[string]string{
 	"todo_write":       "TodoWrite",
 	"todowrite":        "TodoWrite",
 
-	"web_fetch":         "WebFetch",
-	"webfetch":          "WebFetch",
-	"fetch":             "WebFetch",
-	"mcp__fetch__fetch": "web_fetch",
+	"web_fetch":                   "web_fetch",
+	"webfetch":                    "web_fetch",
+	"builtin_web_fetch":           "web_fetch",
+	"builtinwebfetch":             "web_fetch",
+	"fetch":                       "web_fetch",
+	"mcp__fetch__fetch":           "web_fetch",
+	"websearch":                   "web_search",
+	"builtin_web_search":          "web_search",
+	"builtinwebsearch":            "web_search",
+	"builtin_web_search_20250305": "web_search",
 
 	"mcp__tavily__web_search": "web_search",
 	"mcp__brave__web_search":  "web_search",
@@ -280,8 +284,6 @@ func MapOrchidsToolToAnthropic(orchidsName string) string {
 	return orchidsName
 }
 
-
-
 func toolMapsFromInterfaces(clientTools []interface{}) []map[string]interface{} {
 	if len(clientTools) == 0 {
 		return nil
@@ -361,8 +363,6 @@ func toSnakeCase(value string) string {
 	}
 	return out.String()
 }
-
-
 
 func getToolAliases(tool map[string]interface{}) []string {
 	if len(tool) == 0 {

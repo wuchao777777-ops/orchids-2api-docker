@@ -371,6 +371,13 @@ func (h *Handler) finishRequest(hash string) {
 	h.dedupStore.Finish(context.Background(), hash)
 }
 
+func (h *Handler) forgetRequest(hash string) {
+	if h == nil || h.dedupStore == nil {
+		return
+	}
+	h.dedupStore.Forget(context.Background(), hash)
+}
+
 func stainlessRetryCount(r *http.Request) int {
 	if r == nil {
 		return 0
@@ -589,6 +596,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	registeredKeys := []string{}
+	forgetRegisteredKeys := func() {
+		for i := len(registeredKeys) - 1; i >= 0; i-- {
+			h.forgetRequest(registeredKeys[i])
+		}
+		registeredKeys = nil
+	}
 	if !bypassDedup {
 		exactKey := "exact:" + reqHash
 		if dup, inFlight := h.registerRequest(exactKey); dup {
@@ -765,6 +778,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			"model":   req.Model,
 			"channel": targetChannel,
 		})
+		forgetRegisteredKeys()
 		apperrors.New("overloaded_error", err.Error(), http.StatusServiceUnavailable).WriteResponse(w)
 		return
 	}
@@ -1116,7 +1130,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	allowedToolNames := []string(nil)
 	if !isOrchidsProtocol {
 		allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, isBoltRequest)
+		if isBoltRequest {
+			allowedToolNames = expandBoltDeclaredToolNames(allowedToolNames)
+		}
 		sh.setAllowedToolNames(allowedToolNames)
+		preferredToolNames := collectIncomingToolNames(req.Tools)
+		if len(preferredToolNames) == 0 {
+			preferredToolNames = collectIncomingToolNames(effectiveTools)
+		}
+		sh.setPreferredToolNames(preferredToolNames)
 	}
 	if verboseDiagnostics && isBoltRequest && !gateNoTools && len(allowedToolNames) == 0 {
 		slog.Debug("tool_gate: bolt request has no declared tools after session restore", "conversation_id", conversationKey)

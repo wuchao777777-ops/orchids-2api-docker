@@ -349,6 +349,21 @@ func TestValidationAllowedToolNames_BoltTreatsExecAsBash(t *testing.T) {
 	}
 }
 
+func TestExpandBoltDeclaredToolNames_AddsTavilyAndFetchAliases(t *testing.T) {
+	t.Parallel()
+
+	got := expandBoltDeclaredToolNames([]string{"web_search", "web_fetch", "Read"})
+	want := []string{"web_search", "mcp__tavily__web_search", "web_fetch", "mcp__fetch__fetch", "Read"}
+	if len(got) != len(want) {
+		t.Fatalf("expandBoltDeclaredToolNames len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expandBoltDeclaredToolNames[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestSupportedToolNames_MapsOpenClawSubagentsToTask(t *testing.T) {
 	tools := []interface{}{
 		map[string]interface{}{"name": "read"},

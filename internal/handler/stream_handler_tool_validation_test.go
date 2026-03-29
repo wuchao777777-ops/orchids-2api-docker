@@ -532,6 +532,93 @@ func TestBoltCustomMCPWebSearchToolCall_MapsToDeclaredWebSearch(t *testing.T) {
 	}
 }
 
+func TestBoltPascalWebSearchToolCall_MapsArgsToDeclaredWebSearch(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	h.setAllowedToolNames([]string{"web_search"})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "ws_pascal_1",
+			"toolName":   "WebSearch",
+			"args": map[string]interface{}{
+				"query": "特朗普 2026年3月29日 言论",
+			},
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected mapped web_search tool call to pass through, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
+		t.Fatalf("expected tool_use block, got %q", got)
+	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != "web_search" {
+		t.Fatalf("expected mapped tool name web_search, got %q", got)
+	}
+	input, _ := h.contentBlocks[0]["input"].(map[string]interface{})
+	if got, _ := input["query"].(string); got != "特朗普 2026年3月29日 言论" {
+		t.Fatalf("expected args payload to survive normalization, got %#v", input)
+	}
+	if h.suppressedToolCalls != 0 {
+		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
+	}
+}
+
+func TestBoltWebSearchToolCall_PrefersDeclaredTavilyAlias(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	h.setAllowedToolNames([]string{"web_search", "mcp__tavily__web_search"})
+	h.setPreferredToolNames([]string{"mcp__tavily__web_search"})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "ws_tavily_1",
+			"toolName":   "web_search",
+			"input":      `{"query":"特朗普 今天 言论 2026年3月29日"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected tool call to pass through, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != "mcp__tavily__web_search" {
+		t.Fatalf("expected preferred Tavily alias, got %q", got)
+	}
+}
+
 func TestBoltCustomMCPFetchToolCall_MapsToDeclaredWebFetch(t *testing.T) {
 	t.Parallel()
 

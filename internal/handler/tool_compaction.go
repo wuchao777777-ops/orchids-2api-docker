@@ -136,6 +136,42 @@ func validationAllowedToolNames(effectiveTools []interface{}, originalTools []in
 	return passthroughAllowedToolNames(effectiveTools, supportedOnly)
 }
 
+func expandBoltDeclaredToolNames(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(names)+4)
+	seen := make(map[string]struct{}, len(names)+4)
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+	}
+
+	for _, name := range names {
+		add(name)
+		switch strings.ToLower(strings.TrimSpace(orchids.NormalizeToolNameFallback(name))) {
+		case "web_search":
+			add("mcp__tavily__web_search")
+		case "web_fetch":
+			add("mcp__fetch__fetch")
+		}
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func estimateCompactedToolsTokens(tools []interface{}) int {
 	if len(tools) == 0 {
 		return 0

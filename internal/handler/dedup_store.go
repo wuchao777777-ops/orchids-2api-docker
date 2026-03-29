@@ -14,6 +14,8 @@ type DedupStore interface {
 	Register(ctx context.Context, hash string) (isDuplicate bool, hasInFlight bool)
 	// Finish marks a request as completed (decrements in-flight count).
 	Finish(ctx context.Context, hash string)
+	// Forget removes a request record entirely so immediate retries are not suppressed.
+	Forget(ctx context.Context, hash string)
 }
 
 // --- Redis Implementation ---
@@ -98,6 +100,13 @@ func (s *RedisDedupStore) Finish(ctx context.Context, hash string) {
 	s.finishScript.Run(ctx, s.client, []string{s.prefix + hash}, nowMs)
 }
 
+func (s *RedisDedupStore) Forget(ctx context.Context, hash string) {
+	if s == nil || s.client == nil {
+		return
+	}
+	s.client.Del(ctx, s.prefix+hash)
+}
+
 // --- Memory Implementation ---
 
 // MemoryDedupStore wraps in-memory ShardedMap for backward compatibility.
@@ -153,4 +162,11 @@ func (s *MemoryDedupStore) Finish(_ context.Context, hash string) {
 		cur.last = now
 		return cur, true
 	})
+}
+
+func (s *MemoryDedupStore) Forget(_ context.Context, hash string) {
+	if s == nil || s.requests == nil {
+		return
+	}
+	s.requests.Delete(hash)
 }

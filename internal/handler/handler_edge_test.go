@@ -682,6 +682,89 @@ func TestHandleMessages_Dedup_Stream_StainlessRetryAfterFinishReturnsConflict(t 
 	}
 }
 
+func TestHandleMessages_SelectAccountFailureDoesNotDedupImmediateRetry(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := &Handler{
+		config:       cfg,
+		sessionStore: NewMemorySessionStore(30*time.Minute, 64),
+		dedupStore:   NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
+	}
+
+	payload := map[string]any{
+		"model":    "claude-sonnet-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "调用网络搜索工具 检查特朗普最近的言论"}},
+		"system":   []any{},
+		"stream":   true,
+	}
+	b, _ := json.Marshal(payload)
+
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(b))
+	rec1 := httptest.NewRecorder()
+	h.HandleMessages(rec1, req1)
+	if rec1.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected first request 503, got %d: %s", rec1.Code, rec1.Body.String())
+	}
+	if !strings.Contains(rec1.Body.String(), "overloaded_error") {
+		t.Fatalf("expected overloaded_error body, got: %s", rec1.Body.String())
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(b))
+	rec2 := httptest.NewRecorder()
+	h.HandleMessages(rec2, req2)
+	if rec2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected second request 503 instead of dedup suppression, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+	if strings.Contains(rec2.Body.String(), "duplicate request suppressed") {
+		t.Fatalf("did not expect duplicate suppression after selectAccount failure, got: %s", rec2.Body.String())
+	}
+	if !strings.Contains(rec2.Body.String(), "overloaded_error") {
+		t.Fatalf("expected overloaded_error body on immediate retry, got: %s", rec2.Body.String())
+	}
+}
+
+func TestHandleMessages_BoltWebSearchKeepsDeclaredCanonicalName(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
+		{
+			Type: "model.tool-call",
+			Event: map[string]any{
+				"toolCallId": "tool_web_1",
+				"toolName":   "web_search",
+				"input":      `{"query":"特朗普 最近 言论"}`,
+			},
+		},
+		{
+			Type:  "model.finish",
+			Event: map[string]any{"finishReason": "tool_use"},
+		},
+	}}
+
+	payload := map[string]any{
+		"model": "claude-sonnet-4-6",
+		"messages": []map[string]any{
+			{"role": "user", "content": "调用网络搜索工具 检查特朗普最近的言论"},
+		},
+		"tools": []map[string]any{
+			{"name": "web_search"},
+		},
+		"stream": true,
+	}
+	b, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(b))
+	h.HandleMessages(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"name":"web_search"`) {
+		t.Fatalf("expected canonical web_search tool name, got: %s", body)
+	}
+	if strings.Contains(body, `mcp__tavily__web_search`) {
+		t.Fatalf("did not expect synthesized tavily alias when client only declared web_search, got: %s", body)
+	}
+}
+
 func TestHandleMessages_Dedup_OpenAIStream(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

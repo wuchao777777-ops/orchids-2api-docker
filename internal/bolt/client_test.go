@@ -159,6 +159,56 @@ func TestSendRequestWithPayload_ConvertsJSONToolCallTextToModelToolCall(t *testi
 	}
 }
 
+func TestSendRequestWithPayload_ConvertsSplitJSONToolCallTextToModelToolCall(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "0:\"{\\\"\"\n")
+		_, _ = io.WriteString(w, "0:\"tool\\\":\\\"web_search\\\",\\\"parameters\\\":{\\\"query\\\":\\\"特朗普 今天 言论 2026年3月\\\"}\"\n")
+		_, _ = io.WriteString(w, "0:\"}\"\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "今天特朗普有什么言论"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2, events=%#v", len(events), events)
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event type=%q want model.tool-call", events[0].Type)
+	}
+	if got := events[0].Event["toolName"]; got != "web_search" {
+		t.Fatalf("toolName=%v want web_search", got)
+	}
+	if got := events[0].Event["input"]; got != `{"query":"特朗普 今天 言论 2026年3月"}` {
+		t.Fatalf("input=%v want split web_search input json", got)
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event type=%q want model.finish", events[1].Type)
+	}
+}
+
 func TestSendRequestWithPayload_ConvertsLeadingJSONToolCallsWithTrailingSummary(t *testing.T) {
 	prevURL := boltAPIURL
 	t.Cleanup(func() { boltAPIURL = prevURL })
@@ -327,6 +377,63 @@ func TestSendRequestWithPayload_DropsNarrationBeforeToolCall(t *testing.T) {
 	}
 	if got := events[1].Event["finishReason"]; got != "tool_use" {
 		t.Fatalf("finishReason=%v want tool_use", got)
+	}
+}
+
+func TestSendRequestWithPayload_PreservesConciseNarrationBeforeWebSearchToolCall(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	preamble, err := json.Marshal("我先联网搜索特朗普最近几天的公开言论。")
+	if err != nil {
+		t.Fatalf("marshal preamble: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "0:"+string(preamble)+"\n")
+		_, _ = io.WriteString(w, "9:{\"toolName\":\"web_search\",\"args\":{\"query\":\"特朗普 最近 言论\",\"timeRange\":\"week\"}}\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"tool_use\",\"usage\":{\"promptTokens\":5,\"completionTokens\":7}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	var events []upstream.SSEMessage
+	err = client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "调用网络搜索工具 检查特朗普最近的言论"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("events len=%d want 3, events=%v", len(events), events)
+	}
+	if events[0].Type != "model.text-delta" {
+		t.Fatalf("first event type=%q want model.text-delta", events[0].Type)
+	}
+	if got := events[0].Event["delta"]; got != "我先联网搜索特朗普最近几天的公开言论。" {
+		t.Fatalf("delta=%v want concise narration", got)
+	}
+	if events[1].Type != "model.tool-call" {
+		t.Fatalf("second event type=%q want model.tool-call", events[1].Type)
+	}
+	if got := events[1].Event["toolName"]; got != "web_search" {
+		t.Fatalf("toolName=%v want web_search", got)
+	}
+	if events[2].Type != "model.finish" {
+		t.Fatalf("third event type=%q want model.finish", events[2].Type)
 	}
 }
 
@@ -1909,8 +2016,8 @@ func TestPrepareRequest_DropsMisleadingNoFilesFoundProbeAfterSuccessfulWrite(t *
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 3 {
-		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
 	}
 	for _, msg := range boltReq.Messages {
 		if strings.Contains(msg.Content, "No files found") {
@@ -2296,8 +2403,8 @@ func TestPrepareRequest_DropsSupersededAssistantCompletionSummaryBeforeLaterEdit
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 3 {
-		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
 	}
 	for _, msg := range boltReq.Messages {
 		if strings.Contains(msg.Content, "计算器已创建完成") {
@@ -2876,8 +2983,8 @@ func TestPrepareRequest_DropsSupersededEditFailureAfterLaterReadRetry(t *testing
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 3 {
-		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
 	}
 	if got := boltReq.Messages[1].Content; strings.Contains(got, "first snapshot") {
 		t.Fatalf("expected superseded read result to be trimmed, got: %q", got)
@@ -3157,8 +3264,8 @@ func TestPrepareRequest_DropsSupersededSuccessfulMutationAfterLaterRead(t *testi
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 3 {
-		t.Fatalf("messages len=%d want 3, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
 	}
 	if got := boltReq.Messages[1].Content; got != "帮我添加科学计数法" {
 		t.Fatalf("second message content=%q want latest standalone task", got)
@@ -3828,11 +3935,13 @@ func TestSupportedBoltToolNames_MapsCommonOpenClawAliases(t *testing.T) {
 		map[string]interface{}{"name": "grep"},
 		map[string]interface{}{"name": "sessions_spawn"},
 		map[string]interface{}{"name": "use_skill"},
+		map[string]interface{}{"name": "mcp__tavily__web_search"},
+		map[string]interface{}{"name": "builtin_web_fetch"},
 		map[string]interface{}{"name": "browser"},
 	}
 
 	got := supportedBoltToolNames(tools)
-	want := []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "Task", "Skill"}
+	want := []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "web_search", "web_fetch", "Task", "Skill"}
 	if len(got) != len(want) {
 		t.Fatalf("supportedBoltToolNames(common aliases) len=%d want=%d (%#v)", len(got), len(want), got)
 	}
@@ -3858,6 +3967,40 @@ func TestPrepareRequest_AdvertisesTaskWhenClientDeclaresAgent(t *testing.T) {
 	}
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "客户端声明的是 `Agent`") {
 		t.Fatalf("global prompt missing Agent/Task relay guidance: %q", boltReq.GlobalSystemPrompt)
+	}
+}
+
+func TestPrepareRequest_AdvertisesWebToolsWhenDeclared(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model:    "claude-sonnet-4-6",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "今天特朗普有什么言论"}}},
+		Tools: []interface{}{
+			map[string]interface{}{"name": "mcp__tavily__web_search"},
+			map[string]interface{}{"name": "builtin_web_fetch"},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "web_search(query, domains?, timeRange?)") {
+		t.Fatalf("global prompt missing web_search hint: %q", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "web_fetch(url, prompt?)") {
+		t.Fatalf("global prompt missing web_fetch hint: %q", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "`web_search` / `web_fetch` 在当前中继里是可用工具") {
+		t.Fatalf("global prompt missing web tool guidance: %q", boltReq.GlobalSystemPrompt)
+	}
+}
+
+func TestMinimalSupportedToolSpecs_PrefersDeclaredSearchAlias(t *testing.T) {
+	t.Parallel()
+
+	specs := MinimalSupportedToolSpecs([]string{"web_search", "mcp__tavily__web_search"})
+	if len(specs) != 1 {
+		t.Fatalf("specs len=%d want 1 (%#v)", len(specs), specs)
+	}
+	if got, _ := specs[0]["name"].(string); got != "mcp__tavily__web_search" {
+		t.Fatalf("spec name=%q want mcp__tavily__web_search", got)
 	}
 }
 
@@ -3920,6 +4063,129 @@ func TestPrepareRequest_SkipsToolRoleMessages(t *testing.T) {
 		}
 		if strings.Contains(msg.Content, "unavailable tool") {
 			t.Fatalf("unexpected tool error content in bolt request: %#v", msg)
+		}
+	}
+}
+
+func TestPrepareRequest_DropsBraveSearchFailureHistory(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Tools: []interface{}{
+			map[string]interface{}{"name": "web_search"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "今天特朗普有什么言论"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_use", ID: "tool_web_1", Name: "web_search", Input: map[string]interface{}{"query": "特朗普 2026年3月29日 言论"}},
+				}},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_web_1", Content: "{\n  \"error\": \"missing_brave_api_key\",\n  \"message\": \"web_search (brave) needs a Brave Search API key.\"\n}"},
+				}},
+			},
+			{
+				Role:    "assistant",
+				Content: prompt.MessageContent{Text: "我无法获取实时新闻，因为搜索工具未配置。"},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "今天特朗普有什么言论"}},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	for _, msg := range boltReq.Messages {
+		if strings.Contains(msg.Content, "missing_brave_api_key") {
+			t.Fatalf("unexpected brave failure history in bolt request: %#v", msg)
+		}
+		if strings.Contains(msg.Content, "搜索工具未配置") {
+			t.Fatalf("unexpected stale search-unavailable summary in bolt request: %#v", msg)
+		}
+	}
+}
+
+func TestPrepareRequest_DropsSpeculativeSummaryAfterFailedSearch(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Tools: []interface{}{
+			map[string]interface{}{"name": "web_search"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "调用网络搜索工具 检查特朗普最近的言论"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_use", ID: "tool_web_1", Name: "web_search", Input: map[string]interface{}{"query": "特朗普最近言论 2026年3月"}},
+				}},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_web_1", Content: "{\n  \"error\": \"missing_brave_api_key\",\n  \"message\": \"web_search (brave) needs a Brave Search API key.\"\n}"},
+				}},
+			},
+			{
+				Role:    "assistant",
+				Content: prompt.MessageContent{Text: "我刚才已经为你检查了特朗普最近的言论。搜索结果显示了2026年3月的主要内容，包括伊朗谈判、对华关税和访华计划等。"},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "继续检查特朗普最近的言论"}},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	for _, msg := range boltReq.Messages {
+		if strings.Contains(msg.Content, "我刚才已经为你检查了") {
+			t.Fatalf("unexpected speculative search summary in bolt request: %#v", msg)
+		}
+		if strings.Contains(msg.Content, "搜索结果显示") {
+			t.Fatalf("unexpected speculative search summary in bolt request: %#v", msg)
+		}
+	}
+}
+
+func TestPrepareRequest_DropsMissingSearchToolHistory(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Tools: []interface{}{
+			map[string]interface{}{"name": "web_search"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "调用网络搜索工具 检查特朗普最近的言论"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_use", ID: "tool_web_1", Name: "mcp__tavily__web_search", Input: map[string]interface{}{"query": "特朗普最近言论 2026年3月"}},
+				}},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "tool_web_1", Content: "Tool mcp__tavily__web_search not found"},
+				}},
+			},
+			{
+				Role:    "assistant",
+				Content: prompt.MessageContent{Text: "看起来网络搜索工具目前不可用。我无法获取实时信息。"},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "继续调用网络搜索工具 检查特朗普最近的言论"}},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 2 {
+		t.Fatalf("messages len=%d want 2, messages=%#v", len(boltReq.Messages), boltReq.Messages)
+	}
+	for _, msg := range boltReq.Messages {
+		if strings.Contains(msg.Content, "mcp__tavily__web_search not found") {
+			t.Fatalf("unexpected stale missing-tool history in bolt request: %#v", msg)
+		}
+		if strings.Contains(msg.Content, "网络搜索工具目前不可用") {
+			t.Fatalf("unexpected stale search-unavailable summary in bolt request: %#v", msg)
 		}
 	}
 }
