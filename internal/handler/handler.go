@@ -929,7 +929,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 				h.persistBoltTools(r.Context(), conversationKey, effectiveTools)
 			}
-		} else {
+		}
+		if len(effectiveTools) > 0 {
+			minimalBoltTools := bolt.MinimalSupportedToolSpecs(collectIncomingToolNames(effectiveTools))
+			effectiveTools = make([]interface{}, 0, len(minimalBoltTools))
+			for _, spec := range minimalBoltTools {
+				effectiveTools = append(effectiveTools, spec)
+			}
 			h.persistBoltTools(r.Context(), conversationKey, effectiveTools)
 		}
 	}

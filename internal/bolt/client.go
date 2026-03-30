@@ -464,6 +464,9 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 				}
 			}
 		}
+		if !clientVisibleOutput && !converter.NoReplySentinel() && strings.TrimSpace(converter.FinalText()) == "" && strings.TrimSpace(converter.FirstToolName()) == "" {
+			return fmt.Errorf("bolt stream returned no assistant output")
+		}
 		return nil
 	}
 
@@ -3733,6 +3736,7 @@ type outboundConverter struct {
 	finishReason            string
 	firstToolName           string
 	firstToolPath           string
+	noReplySentinel         bool
 }
 
 func newOutboundConverter(model string, inputTokens int) *outboundConverter {
@@ -3907,6 +3911,10 @@ func (c *outboundConverter) processTextContent(text string, textBuffer *strings.
 	if c.suppressText {
 		return nil
 	}
+	if isBoltNoReplySentinel(text) {
+		c.noReplySentinel = true
+		return nil
+	}
 	trimmed := strings.TrimSpace(text)
 	if leadingJSON, _, ok := extractLeadingJSONValue(trimmed); ok {
 		if toolCalls := extractToolCallsFromJSON([]byte(leadingJSON)); len(toolCalls) > 0 {
@@ -4038,6 +4046,13 @@ func (c *outboundConverter) FirstToolPath() string {
 		return ""
 	}
 	return c.firstToolPath
+}
+
+func (c *outboundConverter) NoReplySentinel() bool {
+	if c == nil {
+		return false
+	}
+	return c.noReplySentinel
 }
 
 func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(upstream.SSEMessage) error) error {

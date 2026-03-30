@@ -136,3 +136,79 @@ func TestHandleMessages_BoltSanitizesBeforeForwarding(t *testing.T) {
 		t.Fatalf("expected forwarded bolt history to be sanitized, got %q", got)
 	}
 }
+
+func TestHandleMessages_BoltCompactsForwardedTools(t *testing.T) {
+	client := &fakePayloadClient{
+		eventsByOp: [][]upstream.SSEMessage{
+			puterDirectTextEvents("msg_bolt_tools", "claude-sonnet-4-6", "ok", 3),
+		},
+	}
+	h := newTestHandler(client)
+
+	body, err := json.Marshal(map[string]any{
+		"model":  "claude-sonnet-4-6",
+		"stream": false,
+		"messages": []map[string]any{
+			{"role": "user", "content": "append 112233"},
+		},
+		"tools": []map[string]any{
+			{
+				"name":        "Write",
+				"description": strings.Repeat("long write description ", 20),
+				"input_schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"file_path": map[string]any{"type": "string", "description": strings.Repeat("x", 200)},
+						"content":   map[string]any{"type": "string", "description": strings.Repeat("y", 200)},
+					},
+				},
+			},
+			{
+				"name":        "Read",
+				"description": strings.Repeat("long read description ", 20),
+				"input_schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"file_path": map[string]any{"type": "string", "description": strings.Repeat("z", 200)},
+					},
+				},
+			},
+			{
+				"name": "Agent",
+				"input_schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"prompt": map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/bolt/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 upstream call, got %d", len(calls))
+	}
+	if len(calls[0].Tools) != 3 {
+		t.Fatalf("expected compacted bolt tools to preserve supported names, got %d", len(calls[0].Tools))
+	}
+	for _, raw := range calls[0].Tools {
+		spec, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("tool spec type=%T want map", raw)
+		}
+		if len(spec) != 1 {
+			t.Fatalf("expected minimal bolt tool spec, got %#v", spec)
+		}
+	}
+}

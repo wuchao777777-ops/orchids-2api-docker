@@ -106,6 +106,40 @@ func TestSendRequestWithPayload_IgnoresNoReplySentinel(t *testing.T) {
 	}
 }
 
+func TestSendRequestWithPayload_ReturnsErrorOnEmptyAssistantOutput(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "8:[{\"type\":\"metadata\",\"userMessageId\":\"abc\"}]\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":0}}\n")
+		_, _ = io.WriteString(w, "d:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":0}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, &config.Config{})
+
+	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "append text"}},
+		},
+		ProjectID: "sb1-demo",
+	}, func(msg upstream.SSEMessage) {}, nil)
+	if err == nil {
+		t.Fatalf("expected empty bolt output to return error")
+	}
+	if !strings.Contains(err.Error(), "no assistant output") {
+		t.Fatalf("error=%v want no assistant output", err)
+	}
+}
+
 func TestSendRequestWithPayload_ConvertsJSONToolCallTextToModelToolCall(t *testing.T) {
 	prevURL := boltAPIURL
 	t.Cleanup(func() { boltAPIURL = prevURL })
