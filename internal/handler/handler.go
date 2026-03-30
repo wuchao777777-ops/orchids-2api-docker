@@ -848,6 +848,21 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		req.Messages = sanitizePuterMessages(req.Messages)
+	} else if isBoltRequest {
+		sanitized, stats := sanitizeBoltMessages(req.Messages)
+		req.Messages = sanitized
+		if verboseDiagnostics && stats.Changed {
+			slog.Debug(
+				"bolt: sanitized forwarded history",
+				"messages_before", stats.MessagesBefore,
+				"messages_after", stats.MessagesAfter,
+				"blocks_removed", stats.BlocksRemoved,
+				"tool_results_trimmed", stats.ToolResultsTrimmed,
+				"text_blocks_trimmed", stats.TextBlocksTrimmed,
+				"chars_before", stats.CharsBefore,
+				"chars_after", stats.CharsAfter,
+			)
+		}
 	}
 	if verboseDiagnostics {
 		slog.Debug("Checkpoint: message processing done")
