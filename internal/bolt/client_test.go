@@ -3507,6 +3507,52 @@ func TestBuildBoltInvalidPathRetryRequest_UsesNeutralRelativePathHint(t *testing
 	}
 }
 
+func TestPrepareRequest_AdditiveMutationAfterReadInjectsEditGuard(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "output.txt"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1\t123123\n",
+					}},
+				},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比"}},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) == 0 {
+		t.Fatal("expected prepared messages")
+	}
+	last := boltReq.Messages[len(boltReq.Messages)-1].Content
+	if !strings.Contains(last, "必须优先使用 Edit") {
+		t.Fatalf("expected additive edit guard, got: %q", last)
+	}
+	if !strings.Contains(last, "不要用 Write 把整文件改写成只包含新增片段") {
+		t.Fatalf("expected write-overwrite warning, got: %q", last)
+	}
+	if !strings.Contains(last, "`output.txt`") {
+		t.Fatalf("expected focused file path in guard, got: %q", last)
+	}
+}
+
 func TestSummarizeBoltFalseCompletionRetryContext_InfersMutationFromFocusedFileContinuation(t *testing.T) {
 	messages := []prompt.Message{
 		{Role: "user", Content: prompt.MessageContent{Text: "帮我生成一个txt 并写入 123123"}},

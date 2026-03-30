@@ -680,6 +680,7 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 	gitUploadIntent := detectRecentBoltGitUploadIntent(messages)
 	focusedFileAliases := collectFocusedBoltFileAliases(messages)
 	var latestSuccessfulMutationPath string
+	var latestReadPath string
 	var sawAssistantCompletionAfterLatestMutation bool
 	var lastUserMsgID string
 	for _, msg := range messages {
@@ -700,8 +701,8 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 			standalone := extractBoltStandaloneUserText(msg)
 			lastUserMsgID = boltMsg.ID
 			boltMsg.Content = extractBoltUserContent(blocks, toolUses, gitUploadIntent, focusedFileAliases, workdir)
-			if shouldInjectBoltExistingFileMutationGuard(standalone, latestSuccessfulMutationPath, sawAssistantCompletionAfterLatestMutation) {
-				boltMsg.Content = appendBoltMutationGuard(boltMsg.Content, latestSuccessfulMutationPath)
+			if shouldInjectBoltExistingFileMutationGuard(standalone, latestSuccessfulMutationPath, latestReadPath, sawAssistantCompletionAfterLatestMutation) {
+				boltMsg.Content = appendBoltMutationGuard(boltMsg.Content, latestSuccessfulMutationPath, latestReadPath, standalone)
 			}
 			boltMsg.RawContent = boltMsg.Content
 		case "assistant":
@@ -729,6 +730,9 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 			latestSuccessfulMutationPath = path
 			sawAssistantCompletionAfterLatestMutation = false
 		}
+		if path := latestBoltReadPath(msg, toolUses); strings.TrimSpace(path) != "" {
+			latestReadPath = path
+		}
 	}
 	return built
 }
@@ -753,15 +757,15 @@ func latestBoltSuccessfulMutationPath(msg prompt.Message, toolUses map[string]bo
 	return ""
 }
 
-func shouldInjectBoltExistingFileMutationGuard(task string, latestSuccessfulMutationPath string, sawAssistantCompletionAfterLatestMutation bool) bool {
+func shouldInjectBoltExistingFileMutationGuard(task string, latestSuccessfulMutationPath string, latestReadPath string, sawAssistantCompletionAfterLatestMutation bool) bool {
 	task = strings.TrimSpace(task)
 	if task == "" || LooksLikeContinuationOnlyText(task) {
 		return false
 	}
-	if strings.TrimSpace(latestSuccessfulMutationPath) == "" {
+	if strings.TrimSpace(latestSuccessfulMutationPath) == "" && strings.TrimSpace(latestReadPath) == "" {
 		return false
 	}
-	if sawAssistantCompletionAfterLatestMutation {
+	if strings.TrimSpace(latestSuccessfulMutationPath) != "" && sawAssistantCompletionAfterLatestMutation {
 		return false
 	}
 	lower := strings.ToLower(task)
@@ -776,17 +780,63 @@ func shouldInjectBoltExistingFileMutationGuard(task string, latestSuccessfulMuta
 	return false
 }
 
-func appendBoltMutationGuard(content string, latestSuccessfulMutationPath string) string {
+func appendBoltMutationGuard(content string, latestSuccessfulMutationPath string, latestReadPath string, task string) string {
 	content = strings.TrimSpace(content)
 	path := strings.TrimSpace(latestSuccessfulMutationPath)
+	if path == "" {
+		path = strings.TrimSpace(latestReadPath)
+	}
 	guard := "这是新的修改请求；更早的创建/更新成功只说明相关文件已存在，不代表这次新增功能已完成。不要直接总结，继续调用工具完成实际修改。"
 	if path != "" {
 		guard = "这是新的修改请求；更早对 `" + path + "` 的创建/更新成功只说明该文件已存在，不代表这次新增功能已完成。不要直接总结，继续调用工具完成实际修改。"
+	}
+	if textIndicatesBoltAdditiveMutation(task) {
+		additiveGuard := "这次是基于现有文件的添加/追加请求；如果 `" + path + "` 已存在且你已经读到内容，必须优先使用 Edit 基于现有内容做最小修改，不要用 Write 把整文件改写成只包含新增片段；只有用户明确要求整文件重写时才允许 Write。"
+		if path == "" {
+			additiveGuard = "这次是基于现有文件的添加/追加请求；如果目标文件已存在且你已经读到内容，必须优先使用 Edit 基于现有内容做最小修改，不要用 Write 把整文件改写成只包含新增片段；只有用户明确要求整文件重写时才允许 Write。"
+		}
+		guard += "\n" + additiveGuard
 	}
 	if content == "" {
 		return guard
 	}
 	return content + "\n\n" + guard
+}
+
+func latestBoltReadPath(msg prompt.Message, toolUses map[string]boltToolUseMetadata) string {
+	for _, block := range normalizeBlocks(msg) {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+			continue
+		}
+		toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+		if !strings.EqualFold(strings.TrimSpace(toolMeta.Name), "Read") || toolMeta.InvalidPath {
+			continue
+		}
+		rawText := sanitizeBoltToolResultText(stringifyContent(block.Content))
+		if rawText == "" || isBoltToolResultError(block, rawText) {
+			continue
+		}
+		if strings.TrimSpace(toolMeta.Path) != "" {
+			return strings.TrimSpace(toolMeta.Path)
+		}
+	}
+	return ""
+}
+
+func textIndicatesBoltAdditiveMutation(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"添加", "追加", "加上", "加在", "在下面添加", "附加",
+		"append", "add to", "add below", "insert below", "append to",
+	} {
+		if strings.Contains(lower, marker) || strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type boltToolUseMetadata struct {
