@@ -124,9 +124,13 @@ type systemPromptParts struct {
 type boltFalseCompletionRetryContext struct {
 	HasRecentFailedMutation bool
 	HasRecentReadOnlyFollow bool
+	HasRecentSuccessfulMutation bool
 	FailedPath              string
 	ReadPath                string
+	SuccessfulPath          string
 	LastTask                string
+	ReferencesFocusedFile   bool
+	LikelyMutationTask      bool
 }
 
 type Client struct {
@@ -2960,12 +2964,16 @@ func summarizeBoltFalseCompletionRetryContext(messages []prompt.Message) boltFal
 
 	toolUses := collectBoltToolUseMetadata(messages)
 	ctx := boltFalseCompletionRetryContext{}
+	lastTaskIdx := -1
 	for i := len(messages) - 1; i >= 0; i-- {
 		if task := extractBoltStandaloneUserText(messages[i]); strings.TrimSpace(task) != "" && !LooksLikeContinuationOnlyText(task) {
 			ctx.LastTask = strings.TrimSpace(task)
+			lastTaskIdx = i
 			break
 		}
 	}
+	ctx.SuccessfulPath = latestBoltSuccessfulMutationPathInMessages(messages, toolUses)
+	ctx.HasRecentSuccessfulMutation = strings.TrimSpace(ctx.SuccessfulPath) != ""
 	for i := len(messages) - 1; i >= 0; i-- {
 		summary := summarizeBoltToolResultOnlyMessage(messages[i], toolUses)
 		if !summary.IsToolResultOnly {
@@ -2974,15 +2982,27 @@ func summarizeBoltFalseCompletionRetryContext(messages []prompt.Message) boltFal
 		if len(summary.FailedMutationAliases) > 0 {
 			ctx.HasRecentFailedMutation = true
 			ctx.FailedPath = firstBoltFailedMutationPath(messages[i], toolUses)
-			return ctx
+			break
 		}
 		if len(summary.ReadAliases) > 0 {
 			ctx.HasRecentReadOnlyFollow = true
 			ctx.ReadPath = firstBoltReadPath(messages[i], toolUses)
-			return ctx
+			break
 		}
 	}
+	focusedAliases := boltRetryFocusedAliases(ctx)
+	ctx.ReferencesFocusedFile = boltTaskReferencesFocusedFile(ctx.LastTask, focusedAliases)
+	ctx.LikelyMutationTask = inferBoltLikelyMutationTask(messages, toolUses, lastTaskIdx, ctx, focusedAliases)
 	return ctx
+}
+
+func latestBoltSuccessfulMutationPathInMessages(messages []prompt.Message, toolUses map[string]boltToolUseMetadata) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if path := latestBoltSuccessfulMutationPath(messages[i], toolUses); strings.TrimSpace(path) != "" {
+			return strings.TrimSpace(path)
+		}
+	}
+	return ""
 }
 
 func firstBoltFailedMutationPath(msg prompt.Message, toolUses map[string]boltToolUseMetadata) string {
@@ -3061,14 +3081,14 @@ func shouldRetryBoltFalseCompletion(ctx boltFalseCompletionRetryContext, convert
 	if ctx.HasRecentFailedMutation {
 		return true
 	}
-	return ctx.HasRecentReadOnlyFollow && textIndicatesBoltCodeModification(ctx.LastTask)
+	return ctx.HasRecentReadOnlyFollow && ctx.LikelyMutationTask
 }
 
 func shouldRetryBoltInvalidPathToolCall(ctx boltFalseCompletionRetryContext, converter *outboundConverter) bool {
 	if converter == nil || !converter.emittedToolUse {
 		return false
 	}
-	if !textIndicatesBoltCodeModification(ctx.LastTask) {
+	if !ctx.LikelyMutationTask {
 		return false
 	}
 	return looksLikeInvalidBoltPath(converter.FirstToolPath())
@@ -3078,7 +3098,7 @@ func shouldRetryBoltRepeatedRead(ctx boltFalseCompletionRetryContext, converter 
 	if converter == nil || !converter.emittedToolUse {
 		return false
 	}
-	if !ctx.HasRecentReadOnlyFollow || !textIndicatesBoltCodeModification(ctx.LastTask) {
+	if !ctx.HasRecentReadOnlyFollow || !ctx.LikelyMutationTask {
 		return false
 	}
 	if !strings.EqualFold(strings.TrimSpace(converter.FirstToolName()), "Read") {
@@ -3091,7 +3111,7 @@ func shouldRetryBoltEmptyTurnAfterRead(ctx boltFalseCompletionRetryContext, conv
 	if converter == nil || converter.emittedToolUse {
 		return false
 	}
-	if !ctx.HasRecentReadOnlyFollow || !textIndicatesBoltCodeModification(ctx.LastTask) {
+	if !ctx.HasRecentReadOnlyFollow || !ctx.LikelyMutationTask {
 		return false
 	}
 	if strings.TrimSpace(converter.FinalText()) != "" {
@@ -3104,10 +3124,117 @@ func shouldRetryBoltProjectProbeAfterFailedMutation(ctx boltFalseCompletionRetry
 	if converter == nil || !converter.emittedToolUse {
 		return false
 	}
-	if !ctx.HasRecentFailedMutation || !textIndicatesBoltCodeModification(ctx.LastTask) {
+	if !ctx.HasRecentFailedMutation || !ctx.LikelyMutationTask {
 		return false
 	}
 	return isBoltRootProjectProbeToolCall(converter.FirstToolName(), converter.FirstToolPath())
+}
+
+func boltRetryFocusedAliases(ctx boltFalseCompletionRetryContext) map[string]struct{} {
+	focused := make(map[string]struct{})
+	add := func(path string) {
+		for alias := range buildBoltPathAliases(path) {
+			focused[alias] = struct{}{}
+		}
+	}
+	add(ctx.FailedPath)
+	add(ctx.ReadPath)
+	add(ctx.SuccessfulPath)
+	if len(focused) == 0 {
+		return nil
+	}
+	return focused
+}
+
+func inferBoltLikelyMutationTask(messages []prompt.Message, toolUses map[string]boltToolUseMetadata, lastTaskIdx int, ctx boltFalseCompletionRetryContext, focusedAliases map[string]struct{}) bool {
+	if textIndicatesBoltCodeModification(ctx.LastTask) {
+		return true
+	}
+	if strings.TrimSpace(ctx.LastTask) == "" {
+		return false
+	}
+	if LooksLikeContinuationOnlyText(ctx.LastTask) && (ctx.HasRecentReadOnlyFollow || ctx.HasRecentFailedMutation || ctx.HasRecentSuccessfulMutation) {
+		return true
+	}
+	if ctx.HasRecentSuccessfulMutation && ctx.ReferencesFocusedFile {
+		return true
+	}
+	if lastTaskIdx >= 0 && boltHasMutationActivityAfterTask(messages[lastTaskIdx+1:], toolUses) && ctx.ReferencesFocusedFile {
+		return true
+	}
+	if concreteBoltPathReferencedInText(ctx.LastTask, focusedAliases) && (ctx.HasRecentReadOnlyFollow || ctx.HasRecentSuccessfulMutation || ctx.HasRecentFailedMutation) {
+		return true
+	}
+	return false
+}
+
+func boltHasMutationActivityAfterTask(messages []prompt.Message, toolUses map[string]boltToolUseMetadata) bool {
+	for _, msg := range messages {
+		for _, block := range normalizeBlocks(msg) {
+			switch strings.TrimSpace(block.Type) {
+			case "tool_use":
+				switch strings.TrimSpace(block.Name) {
+				case "Write", "Edit":
+					return true
+				}
+			case "tool_result":
+				toolMeta := toolUses[strings.TrimSpace(block.ToolUseID)]
+				switch strings.TrimSpace(toolMeta.Name) {
+				case "Write", "Edit":
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func boltTaskReferencesFocusedFile(task string, aliases map[string]struct{}) bool {
+	if concreteBoltPathReferencedInText(task, aliases) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(task))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"这个文件", "该文件", "这个 txt", "这个txt", "该 txt", "该txt",
+		"这个脚本", "该脚本", "这个代码", "这段代码", "在这个文件", "在该文件",
+		"文件里", "文件中", "下面", "上面", "这里", "其中",
+		"this file", "the file", "in this file", "append below", "add below",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func concreteBoltPathReferencedInText(text string, aliases map[string]struct{}) bool {
+	if len(aliases) == 0 {
+		return false
+	}
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(text), "\\", "/"))
+	if normalized == "" {
+		return false
+	}
+	for alias := range aliases {
+		alias = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(alias), "\\", "/"))
+		if alias == "" {
+			continue
+		}
+		if strings.Contains(normalized, alias) {
+			return true
+		}
+		base := alias
+		if idx := strings.LastIndex(alias, "/"); idx >= 0 && idx+1 < len(alias) {
+			base = alias[idx+1:]
+		}
+		if base != "" && base != "." && strings.Contains(normalized, base) {
+			return true
+		}
+	}
+	return false
 }
 
 func isBoltRootProjectProbeToolCall(name, path string) bool {

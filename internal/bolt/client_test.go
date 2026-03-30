@@ -3422,6 +3422,7 @@ func TestShouldRetryBoltFalseCompletion_ForStalePresenceSummary(t *testing.T) {
 	ctx := boltFalseCompletionRetryContext{
 		HasRecentReadOnlyFollow: true,
 		LastTask:                "帮我添加科学计算法",
+		LikelyMutationTask:      true,
 	}
 	converter := &outboundConverter{}
 	converter.finalText.WriteString("科学计算功能已在上一轮成功写入 `calculator.py`，无需重复修改。")
@@ -3434,6 +3435,7 @@ func TestShouldRetryBoltInvalidPathToolCall_ForSandboxRead(t *testing.T) {
 	ctx := boltFalseCompletionRetryContext{
 		ReadPath: "calculator.py",
 		LastTask: "帮我添加科学计算法",
+		LikelyMutationTask: true,
 	}
 	converter := &outboundConverter{
 		emittedToolUse: true,
@@ -3466,6 +3468,111 @@ func TestBuildBoltInvalidPathRetryRequest_UsesNeutralRelativePathHint(t *testing
 	}
 	if !strings.Contains(got, "优先处理 `calculator.py`") {
 		t.Fatalf("expected retry to steer back to relative project path, got: %q", got)
+	}
+}
+
+func TestSummarizeBoltFalseCompletionRetryContext_InfersMutationFromFocusedFileContinuation(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我生成一个txt 并写入 123123"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{{
+					Type:  "tool_use",
+					ID:    "tool_write",
+					Name:  "Write",
+					Input: map[string]interface{}{"file_path": "output.txt", "content": "123123"},
+				}},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{{
+					Type:      "tool_result",
+					ToolUseID: "tool_write",
+					Content:   "File created successfully at: output.txt",
+				}},
+			},
+		},
+		{Role: "assistant", Content: prompt.MessageContent{Text: "已在项目根目录生成 `output.txt`，内容为 `123123`。"}},
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我在这个文件增加 222333"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{{
+					Type:  "tool_use",
+					ID:    "tool_read",
+					Name:  "Read",
+					Input: map[string]interface{}{"file_path": "output.txt"},
+				}},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{{
+					Type:      "tool_result",
+					ToolUseID: "tool_read",
+					Content:   "1\t123123",
+				}},
+			},
+		},
+	}
+
+	ctx := summarizeBoltFalseCompletionRetryContext(messages)
+	if !ctx.HasRecentSuccessfulMutation {
+		t.Fatal("expected prior successful mutation context")
+	}
+	if !ctx.HasRecentReadOnlyFollow {
+		t.Fatal("expected recent read-only follow-up")
+	}
+	if !ctx.ReferencesFocusedFile {
+		t.Fatal("expected task to reference focused file context")
+	}
+	if !ctx.LikelyMutationTask {
+		t.Fatal("expected focused-file continuation to infer mutation task without keyword dependence")
+	}
+	if ctx.SuccessfulPath != "output.txt" {
+		t.Fatalf("successful path=%q want output.txt", ctx.SuccessfulPath)
+	}
+	if ctx.ReadPath != "output.txt" {
+		t.Fatalf("read path=%q want output.txt", ctx.ReadPath)
+	}
+}
+
+func TestSummarizeBoltFalseCompletionRetryContext_DoesNotTreatFileAnalysisAsMutation(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我分析这个文件"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{{
+					Type:  "tool_use",
+					ID:    "tool_read",
+					Name:  "Read",
+					Input: map[string]interface{}{"file_path": "README.md"},
+				}},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{{
+					Type:      "tool_result",
+					ToolUseID: "tool_read",
+					Content:   "1\tHello World",
+				}},
+			},
+		},
+	}
+
+	ctx := summarizeBoltFalseCompletionRetryContext(messages)
+	if !ctx.HasRecentReadOnlyFollow {
+		t.Fatal("expected recent read-only follow-up")
+	}
+	if ctx.LikelyMutationTask {
+		t.Fatal("expected analysis task to stay non-mutation")
 	}
 }
 
