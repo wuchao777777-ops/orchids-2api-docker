@@ -539,7 +539,7 @@ func prepareRequest(req upstream.UpstreamRequest, projectID string) (*Request, I
 		UsesInspectedElement: false,
 		ErrorReasoning:       nil,
 		FeaturePreviews: FeaturePreviews{
-			Reasoning: false,
+			Reasoning: true,
 			Diffs:     false,
 		},
 		ProjectFiles: ProjectFiles{
