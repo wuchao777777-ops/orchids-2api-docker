@@ -6,6 +6,16 @@ let accountHealth = {};
 let pageSize = 20;
 let currentPage = 1;
 let modelCatalog = [];
+const accountsMobileMediaQuery = typeof window !== "undefined" && typeof window.matchMedia === "function"
+  ? window.matchMedia("(max-width: 640px)")
+  : null;
+const platformSubtitleMap = {
+  bolt: "当前聚焦 Bolt 账号，便于快速核对 project、会话状态和批量操作。",
+  grok: "当前聚焦 Grok 账号，便于快速核对状态、额度与批量导入清理。",
+  orchids: "当前聚焦 Orchids 账号，便于统一维护状态、模型与调用可用性。",
+  puter: "当前聚焦 Puter 账号，便于快速核对 auth token、状态与批量操作。",
+  warp: "当前聚焦 Warp 账号，便于快速核对 refresh token、可用性与批量操作。",
+};
 
 // DOM 缓存
 const domCache = {
@@ -20,6 +30,11 @@ function initDOMCache() {
     domCache.paginationInfo = document.getElementById("paginationInfo");
     domCache.paginationControls = document.getElementById("paginationControls");
     domCache.accountImportStatus = document.getElementById("accountImportStatus");
+}
+
+function isAccountsMobileViewport() {
+  if (accountsMobileMediaQuery) return accountsMobileMediaQuery.matches;
+  return window.innerWidth <= 640;
 }
 
 const fallbackAgentModes = {
@@ -777,24 +792,12 @@ function renderAccounts() {
   const pageItems = filtered.slice(start, end);
 
   if (pageItems.length === 0) {
-    container.innerHTML = "";
-    const empty = document.createElement("div");
-    empty.className = "empty-state empty-state-panel";
-    const icon = document.createElement("span");
-    icon.className = "empty-state-mark";
-    icon.textContent = "📂";
-    const text = document.createElement("p");
-    text.textContent = `暂无 ${currentPlatform ? currentPlatform : ''} 账号数据`;
-    empty.appendChild(icon);
-    empty.appendChild(text);
-    container.appendChild(empty);
-    const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
-    paginationInfo.textContent = `共 0 条记录，第 1/1 页`;
+    renderAccountsEmptyState(container);
     renderPagination(1, 1);
     return;
   }
 
-  if (window.matchMedia("(max-width: 640px)").matches) {
+  if (isAccountsMobileViewport()) {
     renderAccountsMobile(container, pageItems, total, totalPages);
     return;
   }
@@ -877,52 +880,12 @@ function renderAccounts() {
     tr.appendChild(tdModel);
 
     const tdQuota = document.createElement("td");
-    tdQuota.style.fontSize = "0.85rem";
-    const quota = getQuotaStats(acc);
-    if (quota && quota.unknown) {
-      tdQuota.style.color = "#64748b";
-      tdQuota.innerHTML = `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(Puter 暂无稳定额度接口)</span>`;
-    } else if (quota) {
-      const pct = quota.pctRemaining;
-      const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
-      if (normalizeAccountType(acc) === "warp" && quota.splitBonus) {
-        tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span><div style="color:#64748b;font-size:0.75rem">${quota.monthlyRemaining.toLocaleString()} 月度 + ${quota.bonusRemaining.toLocaleString()} 赠送</div>`;
-      } else {
-        tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>`;
-      }
-    } else {
-      tdQuota.style.color = "#64748b";
-      tdQuota.textContent = "-";
-    }
+    tdQuota.className = "account-quota-cell";
+    tdQuota.innerHTML = buildQuotaMarkup(acc);
     tr.appendChild(tdQuota);
 
     const tdStatus = document.createElement("td");
-    const statusWrap = document.createElement("div");
-    statusWrap.style.display = "flex";
-    statusWrap.style.alignItems = "center";
-    statusWrap.style.gap = "6px";
-
-    const statusSpan = document.createElement("span");
-    statusSpan.className = "tag tag-status-normal";
-    statusSpan.title = badge.tip || "";
-    statusSpan.style.background = badge.bg;
-    statusSpan.style.color = badge.color;
-    statusSpan.style.border = "none";
-    statusSpan.textContent = badge.text;
-    statusWrap.appendChild(statusSpan);
-
-    if (normalizeAccountType(acc) === "grok" && acc.nsfw_enabled === true) {
-      const nsfwSpan = document.createElement("span");
-      nsfwSpan.className = "tag";
-      nsfwSpan.title = "已开启 NSFW";
-      nsfwSpan.style.background = "rgba(239, 68, 68, 0.16)";
-      nsfwSpan.style.color = "#fda4af";
-      nsfwSpan.style.border = "none";
-      nsfwSpan.textContent = "NSFW";
-      statusWrap.appendChild(nsfwSpan);
-    }
-
-    tdStatus.appendChild(statusWrap);
+    tdStatus.innerHTML = `<div class="account-status-inline">${buildStatusMarkup(acc, badge)}</div>`;
     tr.appendChild(tdStatus);
 
     const tdCount = document.createElement("td");
@@ -982,34 +945,10 @@ function renderAccounts() {
   wrap.appendChild(table);
   container.appendChild(wrap);
 
-  const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
-  paginationInfo.textContent = `共 ${total} 条记录，第 ${currentPage}/${totalPages} 页`;
+  setAccountsPaginationInfo(total, totalPages);
   renderPagination(currentPage, totalPages);
   updateSelectedCount();
-
-  container.onclick = (e) => {
-    const actionEl = e.target.closest("[data-action]");
-    if (!actionEl || !container.contains(actionEl)) return;
-    const action = actionEl.dataset.action;
-    const idRaw = actionEl.dataset.id || "";
-    const id = parseDataId(idRaw);
-    if (action === "edit") editAccount(id);
-    if (action === "refresh") refreshToken(id);
-    if (action === "delete") deleteAccount(id);
-  };
-
-  container.onchange = (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLInputElement)) return;
-    const action = target.dataset.action;
-    if (action === "row-select") {
-      updateSelectedCount();
-      return;
-    }
-    if (action === "select-all") {
-      toggleSelectAll(target.checked);
-    }
-  };
+  bindAccountsListEvents(container);
 }
 
 function buildQuotaMarkup(acc) {
@@ -1090,11 +1029,33 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
   list.appendChild(fragment);
   container.appendChild(list);
 
-  const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
-  paginationInfo.textContent = `共 ${total} 条记录，第 ${currentPage}/${totalPages} 页`;
+  setAccountsPaginationInfo(total, totalPages);
   renderPagination(currentPage, totalPages);
   updateSelectedCount();
+  bindAccountsListEvents(container);
+}
 
+function renderAccountsEmptyState(container) {
+  container.innerHTML = "";
+  const empty = document.createElement("div");
+  empty.className = "empty-state empty-state-panel";
+  const icon = document.createElement("span");
+  icon.className = "empty-state-mark";
+  icon.textContent = "📂";
+  const text = document.createElement("p");
+  text.textContent = `暂无 ${currentPlatform ? currentPlatform : ""} 账号数据`;
+  empty.append(icon, text);
+  container.appendChild(empty);
+  setAccountsPaginationInfo(0, 1);
+}
+
+function setAccountsPaginationInfo(total, totalPages) {
+  const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
+  if (!paginationInfo) return;
+  paginationInfo.textContent = `共 ${total} 条记录，第 ${currentPage}/${totalPages} 页`;
+}
+
+function bindAccountsListEvents(container) {
   container.onclick = (e) => {
     const actionEl = e.target.closest("[data-action]");
     if (!actionEl || !container.contains(actionEl)) return;
@@ -1110,6 +1071,10 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
     if (!(target instanceof HTMLInputElement)) return;
     if (target.dataset.action === "row-select") {
       updateSelectedCount();
+      return;
+    }
+    if (target.dataset.action === "select-all") {
+      toggleSelectAll(target.checked);
     }
   };
 }
@@ -1178,7 +1143,8 @@ function filterByPlatform(platform) {
   });
   const subtitle = document.getElementById("pageSubtitle");
   if (subtitle) {
-    subtitle.textContent = currentPlatform ? `管理您的 ${currentPlatform} API 凭证` : "管理您的所有 API 凭证";
+    const key = String(currentPlatform || "").trim().toLowerCase();
+    subtitle.textContent = platformSubtitleMap[key] || "统一维护渠道账号、状态和可用性，快速完成导出、清理和批量操作。";
   }
   renderAccounts();
 }
@@ -1508,6 +1474,14 @@ async function importAccounts(event) {
 document.addEventListener('DOMContentLoaded', () => {
   initDOMCache();
   loadAccounts();
+  if (accountsMobileMediaQuery) {
+    const rerender = () => renderAccounts();
+    if (typeof accountsMobileMediaQuery.addEventListener === "function") {
+      accountsMobileMediaQuery.addEventListener("change", rerender);
+    } else if (typeof accountsMobileMediaQuery.addListener === "function") {
+      accountsMobileMediaQuery.addListener(rerender);
+    }
+  }
   const typeSelect = document.getElementById("accountType");
   if (typeSelect) {
     typeSelect.addEventListener("change", () => {

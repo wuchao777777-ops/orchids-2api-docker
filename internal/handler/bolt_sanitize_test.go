@@ -132,8 +132,11 @@ func TestHandleMessages_BoltSanitizesBeforeForwarding(t *testing.T) {
 	}
 
 	got := strings.TrimSpace(extractBoltBlockContentText(calls[0].Messages[2].Content.Blocks[0].Content))
-	if !strings.Contains(got, "historical web_fetch result omitted") {
-		t.Fatalf("expected forwarded bolt history to be sanitized, got %q", got)
+	if strings.Contains(got, "historical web_fetch result omitted") {
+		t.Fatalf("expected forwarded bolt history to remain uncompressed, got %q", got)
+	}
+	if !strings.Contains(got, "web snippet") {
+		t.Fatalf("expected forwarded bolt history to keep original content, got %q", got)
 	}
 }
 

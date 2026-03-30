@@ -23,31 +23,31 @@
   </div>
   <ul class="sidebar-menu">
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "accounts"}}active{{end}}" onclick="switchTab('accounts')">
+      <a href="{{.AdminPath}}/?tab=accounts" class="sidebar-link {{if eq .ActiveTab "accounts"}}active{{end}}" onclick="return switchTab('accounts')">
         <span class="nav-glyph">AC</span>
         <span>账号管理</span>
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "keys"}}active{{end}}" onclick="switchTab('keys')">
+      <a href="{{.AdminPath}}/?tab=keys" class="sidebar-link {{if eq .ActiveTab "keys"}}active{{end}}" onclick="return switchTab('keys')">
         <span class="nav-glyph">CF</span>
         <span>配置管理</span>
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "models"}}active{{end}}" onclick="switchTab('models')">
+      <a href="{{.AdminPath}}/?tab=models" class="sidebar-link {{if eq .ActiveTab "models"}}active{{end}}" onclick="return switchTab('models')">
         <span class="nav-glyph">ML</span>
         <span>模型管理</span>
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "grok-tools"}}active{{end}}" onclick="switchTab('grok-tools')">
+      <a href="{{.AdminPath}}/?tab=grok-tools" class="sidebar-link {{if eq .ActiveTab "grok-tools"}}active{{end}}" onclick="return switchTab('grok-tools')">
         <span class="nav-glyph">GT</span>
         <span>Grok 工具</span>
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "tutorial"}}active{{end}}" onclick="switchTab('tutorial')">
+      <a href="{{.AdminPath}}/?tab=tutorial" class="sidebar-link {{if eq .ActiveTab "tutorial"}}active{{end}}" onclick="return switchTab('tutorial')">
         <span class="nav-glyph">DOC</span>
         <span>使用教程</span>
       </a>

@@ -8,6 +8,14 @@ let modelPageSize = 50;
 let modelCurrentPage = 1;
 let modelRefreshInFlight = false;
 let modelRefreshResults = {};
+const modelsMobileMediaQuery = typeof window !== "undefined" && typeof window.matchMedia === "function"
+  ? window.matchMedia("(max-width: 640px)")
+  : null;
+
+function isModelsMobileViewport() {
+  if (modelsMobileMediaQuery) return modelsMobileMediaQuery.matches;
+  return window.innerWidth <= 640;
+}
 
 function modelChannels() {
   const defaultChannels = ["Orchids", "Warp", "Bolt", "Puter", "Grok"];
@@ -292,7 +300,7 @@ function renderModels() {
     return;
   }
 
-  if (window.matchMedia("(max-width: 640px)").matches) {
+  if (isModelsMobileViewport()) {
     renderModelsMobile(container, pageItems);
     return;
   }
@@ -679,6 +687,15 @@ function decodeData(value) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  if (modelsMobileMediaQuery) {
+    const rerender = () => renderModels();
+    if (typeof modelsMobileMediaQuery.addEventListener === "function") {
+      modelsMobileMediaQuery.addEventListener("change", rerender);
+    } else if (typeof modelsMobileMediaQuery.addListener === "function") {
+      modelsMobileMediaQuery.addListener(rerender);
+    }
+  }
+
   const searchInput = document.getElementById("modelSearchInput");
   const statusFilter = document.getElementById("modelStatusFilter");
   const pageSize = document.getElementById("modelPageSize");

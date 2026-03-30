@@ -91,6 +91,13 @@
       "grok-420",
     ],
   };
+  const eventState = {
+    chatBound: false,
+    rootBound: false,
+    chatDocumentClickHandler: null,
+    chatResizeHandler: null,
+    voiceResizeHandler: null,
+  };
   const chatStorageKey = "grok_tools_chat_sessions_v1";
   const MAX_CHAT_MESSAGES = 5;
   const chatSidebarStateKey = "grok_tools_chat_sidebar_collapsed";
@@ -522,6 +529,17 @@
     if (persist) {
       saveGrokToolsUIState({ imagineMode: normalized });
     }
+  }
+
+  function createRafThrottle(fn) {
+    let frameId = 0;
+    return () => {
+      if (frameId) return;
+      frameId = window.requestAnimationFrame(() => {
+        frameId = 0;
+        fn();
+      });
+    };
   }
 
   function applyImagineMode(mode, persist = true) {
@@ -2721,6 +2739,8 @@
   }
 
   function bindChatEvents() {
+    if (eventState.chatBound) return;
+    eventState.chatBound = true;
     const newBtn = document.getElementById("grokChatNewBtn");
     const list = document.getElementById("grokSessionList");
     const sendBtn = document.getElementById("grokSendBtn");
@@ -2803,7 +2823,8 @@
     if (expandBtn) expandBtn.addEventListener("click", () => openChatSidebar());
     if (collapseBtn) collapseBtn.addEventListener("click", () => closeChatSidebar());
     if (sidebarOverlay) sidebarOverlay.addEventListener("click", () => closeChatSidebar());
-    window.addEventListener("resize", syncChatSidebarState);
+    eventState.chatResizeHandler = eventState.chatResizeHandler || createRafThrottle(syncChatSidebarState);
+    window.addEventListener("resize", eventState.chatResizeHandler);
     if (modelChip && modelDropdown) {
       modelChip.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -2825,10 +2846,11 @@
         settingsPanel.classList.toggle("show");
       });
     }
-    document.addEventListener("click", () => {
+    eventState.chatDocumentClickHandler = eventState.chatDocumentClickHandler || (() => {
       modelDropdown?.classList.remove("show");
       settingsPanel?.classList.remove("show");
     });
+    document.addEventListener("click", eventState.chatDocumentClickHandler);
     if (tempRange && tempValue) {
       tempRange.addEventListener("input", () => {
         tempValue.textContent = String(Number(tempRange.value).toFixed(2)).replace(/\.00$/, "");
@@ -4371,7 +4393,7 @@
     Object.keys(sections).forEach((key) => {
       const section = sections[key];
       if (!section) return;
-      if (key !== tab) {
+      if (key !== nextTab) {
         section.style.display = "none";
         return;
       }
@@ -4389,6 +4411,8 @@
   window.switchGrokToolTab = switchGrokToolTab;
 
   function bindEvents() {
+    if (eventState.rootBound) return;
+    eventState.rootBound = true;
     document.querySelectorAll("[data-imagine-mode]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const mode = String(btn.dataset.imagineMode || "auto").toLowerCase();
@@ -4935,7 +4959,8 @@
     updateVoiceMeta();
     startVoiceVisualizer();
     stopVoiceVisualizer();
-    window.addEventListener("resize", buildVoiceVisualizerBars);
+    eventState.voiceResizeHandler = eventState.voiceResizeHandler || createRafThrottle(buildVoiceVisualizerBars);
+    window.addEventListener("resize", eventState.voiceResizeHandler);
     setVoiceButtons(false);
     setVoiceStatus(t("common.notConnected"));
     updateCacheBatchUI();

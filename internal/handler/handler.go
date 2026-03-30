@@ -807,13 +807,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	freshBoltTask := false
 	if isBoltRequest {
-		freshBoltTask = shouldForceFreshBoltTask(req)
-		if freshBoltTask {
-			req.Messages = resetBoltMessagesForFreshTask(req.Messages)
-			if verboseDiagnostics {
-				slog.Debug("bolt: reset stale history for fresh top-level request")
-			}
-		}
+		// User-requested behavior: keep full bolt history without forced reset.
+		freshBoltTask = false
 	}
 	isPassthroughRequest := isWarpRequest || isBoltRequest || isPuterRequest
 	if isPassthroughRequest {
@@ -849,19 +844,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Messages = sanitizePuterMessages(req.Messages)
 	} else if isBoltRequest {
-		sanitized, stats := sanitizeBoltMessages(req.Messages)
-		req.Messages = sanitized
-		if verboseDiagnostics && stats.Changed {
-			slog.Debug(
-				"bolt: sanitized forwarded history",
-				"messages_before", stats.MessagesBefore,
-				"messages_after", stats.MessagesAfter,
-				"blocks_removed", stats.BlocksRemoved,
-				"tool_results_trimmed", stats.ToolResultsTrimmed,
-				"text_blocks_trimmed", stats.TextBlocksTrimmed,
-				"chars_before", stats.CharsBefore,
-				"chars_after", stats.CharsAfter,
-			)
+		// User-requested behavior: disable bolt history compaction/sanitization.
+		if verboseDiagnostics {
+			slog.Debug("bolt: history compaction disabled; forwarding full message history")
 		}
 	}
 	if verboseDiagnostics {
