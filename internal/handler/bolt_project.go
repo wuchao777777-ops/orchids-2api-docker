@@ -43,6 +43,38 @@ func boltProjectSessionKey(accountID int64, workdir string) string {
 	return "bolt-project:" + strconv.FormatInt(accountID, 10) + ":" + hex.EncodeToString(sum[:16])
 }
 
+func boltAccountSessionKey(workdir string) string {
+	workdir = normalizeBoltProjectWorkdir(workdir)
+	if workdir == "" {
+		return ""
+	}
+
+	sum := sha256.Sum256([]byte(workdir))
+	return "bolt-account:" + hex.EncodeToString(sum[:16])
+}
+
+func (h *Handler) preferredBoltAccountID(ctx context.Context, workdir string) int64 {
+	key := boltAccountSessionKey(workdir)
+	if key == "" || h == nil || h.sessionStore == nil {
+		return 0
+	}
+	accountID, ok := h.sessionStore.GetBoltAccountID(ctx, key)
+	if !ok || accountID == 0 {
+		return 0
+	}
+	h.sessionStore.Touch(ctx, key)
+	return accountID
+}
+
+func (h *Handler) persistPreferredBoltAccountID(ctx context.Context, workdir string, accountID int64) {
+	key := boltAccountSessionKey(workdir)
+	if key == "" || accountID == 0 || h == nil || h.sessionStore == nil {
+		return
+	}
+	h.sessionStore.SetBoltAccountID(ctx, key, accountID)
+	h.sessionStore.Touch(ctx, key)
+}
+
 func (h *Handler) resolveBoltProjectID(ctx context.Context, acc *store.Account, client UpstreamClient, workdir string, forceNew bool) (string, error) {
 	if acc == nil {
 		return "", fmt.Errorf("bolt account is nil")
@@ -88,5 +120,6 @@ func (h *Handler) resolveBoltProjectID(ctx context.Context, acc *store.Account, 
 		h.sessionStore.SetBoltProjectID(ctx, cacheKey, projectID)
 		h.sessionStore.Touch(ctx, cacheKey)
 	}
+	h.persistPreferredBoltAccountID(ctx, workdir, acc.ID)
 	return projectID, nil
 }

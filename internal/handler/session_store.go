@@ -17,6 +17,8 @@ type SessionStore interface {
 	SetConvID(ctx context.Context, key, convID string)
 	GetBoltProjectID(ctx context.Context, key string) (string, bool)
 	SetBoltProjectID(ctx context.Context, key, projectID string)
+	GetBoltAccountID(ctx context.Context, key string) (int64, bool)
+	SetBoltAccountID(ctx context.Context, key string, accountID int64)
 	GetBoltToolNames(ctx context.Context, key string) ([]string, bool)
 	SetBoltToolNames(ctx context.Context, key string, toolNames []string)
 	DeleteSession(ctx context.Context, key string)
@@ -92,6 +94,24 @@ func (s *RedisSessionStore) SetBoltProjectID(ctx context.Context, key, projectID
 	pipe.Exec(ctx)
 }
 
+func (s *RedisSessionStore) GetBoltAccountID(ctx context.Context, key string) (int64, bool) {
+	val, err := s.client.HGet(ctx, s.key(key), "bolt_account_id").Int64()
+	if err != nil || val == 0 {
+		return 0, false
+	}
+	return val, true
+}
+
+func (s *RedisSessionStore) SetBoltAccountID(ctx context.Context, key string, accountID int64) {
+	if accountID == 0 {
+		return
+	}
+	pipe := s.client.Pipeline()
+	pipe.HSet(ctx, s.key(key), "bolt_account_id", accountID)
+	pipe.Expire(ctx, s.key(key), s.ttl)
+	pipe.Exec(ctx)
+}
+
 func (s *RedisSessionStore) GetBoltToolNames(ctx context.Context, key string) ([]string, bool) {
 	val, err := s.client.HGet(ctx, s.key(key), "bolt_tool_names").Result()
 	if err != nil {
@@ -133,6 +153,7 @@ type memorySession struct {
 	workdir    string
 	convID     string
 	boltProjID string
+	boltAcctID int64
 	boltTools  []string
 	lastAccess time.Time
 }
@@ -227,6 +248,27 @@ func (s *MemorySessionStore) SetBoltProjectID(_ context.Context, key, projectID 
 	defer s.mu.Unlock()
 	sess := s.getOrCreate(key)
 	sess.boltProjID = projectID
+	sess.lastAccess = time.Now()
+}
+
+func (s *MemorySessionStore) GetBoltAccountID(_ context.Context, key string) (int64, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess, ok := s.sessions[key]
+	if !ok || sess.boltAcctID == 0 {
+		return 0, false
+	}
+	return sess.boltAcctID, true
+}
+
+func (s *MemorySessionStore) SetBoltAccountID(_ context.Context, key string, accountID int64) {
+	if accountID == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.getOrCreate(key)
+	sess.boltAcctID = accountID
 	sess.lastAccess = time.Now()
 }
 

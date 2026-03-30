@@ -122,3 +122,19 @@ func TestResolveBoltProjectID_ForceNewReplacesCachedProjectForSameWorkdir(t *tes
 		t.Fatalf("calls=%d want 2", client.calls)
 	}
 }
+
+func TestResolveBoltProjectID_PersistsPreferredBoltAccountID(t *testing.T) {
+	h := &Handler{sessionStore: NewMemorySessionStore(30*time.Minute, 100)}
+	acc := &store.Account{ID: 42, ProjectID: "sb1-old"}
+	client := &fakeBoltProjectClient{projectIDs: []string{"sb1-new"}}
+
+	_, err := h.resolveBoltProjectID(context.Background(), acc, client, `C:\Users\Test\Repo`, false)
+	if err != nil {
+		t.Fatalf("resolveBoltProjectID() error = %v", err)
+	}
+
+	got := h.preferredBoltAccountID(context.Background(), `c:/users/test/repo`)
+	if got != 42 {
+		t.Fatalf("preferredBoltAccountID=%d want 42", got)
+	}
+}

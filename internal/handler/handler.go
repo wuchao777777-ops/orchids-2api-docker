@@ -785,6 +785,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if verboseDiagnostics {
 		slog.Debug("Checkpoint: selectAccount success")
 	}
+	requestedBoltChannel := strings.EqualFold(forcedChannel, "bolt")
+	if requestedBoltChannel && effectiveWorkdir != "" {
+		if pinnedClient, pinnedAccount, ok := h.tryPreferredBoltAccount(r.Context(), effectiveWorkdir, failedAccountIDs); ok {
+			apiClient = pinnedClient
+			currentAccount = pinnedAccount
+			if verboseDiagnostics {
+				slog.Debug("Pinned Bolt account restored for workdir", "workdir", effectiveWorkdir, "account_id", currentAccount.ID, "account_name", currentAccount.Name)
+			}
+		}
+	}
 
 	// 捕获账号快照，用于请求结束后检测 forceRefreshToken 是否更新了账号信息
 	var accountSnapshot *store.Account
@@ -1463,6 +1473,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 				nextClient, nextAccount, retryErr := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
 				if retryErr == nil {
+					if isBoltRequest && strings.TrimSpace(boltProjectID) != "" && effectiveWorkdir != "" && nextAccount != nil && nextAccount.ID != prevAccount.ID {
+						retryErr = fmt.Errorf("bolt project %s is pinned to account %d for workdir %s; refusing to switch to account %d", boltProjectID, prevAccount.ID, effectiveWorkdir, nextAccount.ID)
+					}
+				}
+				if retryErr == nil {
 					apiClient = nextClient
 					currentAccount = nextAccount
 					if currentAccount != nil {
@@ -1489,6 +1504,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 							"retry_error", retryErr,
 						)
 					} else {
+						if isBoltRequest && strings.TrimSpace(boltProjectID) != "" && effectiveWorkdir != "" {
+							slog.Warn(
+								"Bolt account switch suppressed to preserve project continuity",
+								"trace_id", traceID,
+								"attempt", upstreamReq.Attempt,
+								"account_id", prevAccount.ID,
+								"project_id", boltProjectID,
+								"workdir", effectiveWorkdir,
+								"category", errClass.Category,
+								"retry_error", retryErr,
+							)
+						}
 						slog.Error("No more accounts available", "error", retryErr)
 						sh.InjectNoAvailableAccountError(errStr, retryErr)
 						sh.finishResponse("end_turn")

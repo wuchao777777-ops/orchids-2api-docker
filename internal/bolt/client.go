@@ -376,10 +376,10 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("missing bolt project id")
 	}
 
-	retryContext := summarizeBoltFalseCompletionRetryContext(req.Messages)
 	currentReq := req
 	const maxBoltSelfCorrectAttempts = 3
 	for attempt := 0; attempt < maxBoltSelfCorrectAttempts; attempt++ {
+		retryContext := summarizeBoltFalseCompletionRetryContext(currentReq.Messages)
 		boltReq, inputEstimate := prepareRequest(currentReq, projectID)
 		body, err := json.Marshal(boltReq)
 		if err != nil {
@@ -439,25 +439,27 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		if err != nil {
 			return err
 		}
+		replayedReq := currentReq
+		replayedReq.Messages = appendBoltRetryReplayMessages(currentReq.Messages, converter)
 
 		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltFalseCompletion(retryContext, converter) {
-			currentReq = buildBoltFalseCompletionRetryRequest(currentReq, retryContext)
+			currentReq = buildBoltFalseCompletionRetryRequest(replayedReq, retryContext)
 			continue
 		}
 		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltInvalidPathToolCall(retryContext, converter) {
-			currentReq = buildBoltInvalidPathRetryRequest(currentReq, retryContext, converter)
+			currentReq = buildBoltInvalidPathRetryRequest(replayedReq, retryContext, converter)
 			continue
 		}
 		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltRepeatedRead(retryContext, converter) {
-			currentReq = buildBoltRepeatedReadRetryRequest(currentReq, retryContext)
+			currentReq = buildBoltRepeatedReadRetryRequest(replayedReq, retryContext)
 			continue
 		}
 		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltProjectProbeAfterFailedMutation(retryContext, converter) {
-			currentReq = buildBoltProjectProbeAfterFailedMutationRetryRequest(currentReq, retryContext)
+			currentReq = buildBoltProjectProbeAfterFailedMutationRetryRequest(replayedReq, retryContext)
 			continue
 		}
 		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltEmptyTurnAfterRead(retryContext, converter) {
-			currentReq = buildBoltEmptyTurnRetryRequest(currentReq, retryContext)
+			currentReq = buildBoltEmptyTurnRetryRequest(replayedReq, retryContext)
 			continue
 		}
 
@@ -3270,6 +3272,28 @@ func boltRetryAppend(req upstream.UpstreamRequest, correction string) upstream.U
 	return retry
 }
 
+func appendBoltRetryReplayMessages(messages []prompt.Message, converter *outboundConverter) []prompt.Message {
+	if converter == nil {
+		return append([]prompt.Message{}, messages...)
+	}
+
+	replayed := append([]prompt.Message{}, messages...)
+	if text := strings.TrimSpace(converter.FinalText()); text != "" {
+		replayed = append(replayed, prompt.Message{
+			Role:    "assistant",
+			Content: prompt.MessageContent{Text: text},
+		})
+	}
+
+	if pending := strings.TrimSpace(converter.PendingToolCallReplayText()); pending != "" {
+		replayed = append(replayed, prompt.Message{
+			Role:    "assistant",
+			Content: prompt.MessageContent{Text: pending},
+		})
+	}
+	return replayed
+}
+
 func buildBoltFalseCompletionRetryRequest(req upstream.UpstreamRequest, ctx boltFalseCompletionRetryContext) upstream.UpstreamRequest {
 	pathHint := boltRetryPathHint(ctx)
 	correction := ""
@@ -3947,6 +3971,7 @@ type outboundConverter struct {
 	firstToolName           string
 	firstToolPath           string
 	noReplySentinel         bool
+	emittedToolCalls        []ToolCall
 }
 
 func newOutboundConverter(model string, inputTokens int) *outboundConverter {
@@ -4340,6 +4365,35 @@ func (c *outboundConverter) NoReplySentinel() bool {
 	return c.noReplySentinel
 }
 
+func (c *outboundConverter) PendingToolCallReplayText() string {
+	if c == nil || len(c.emittedToolCalls) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(c.emittedToolCalls)+1)
+	lines = append(lines, "上一轮未完成的真实工具调用如下（这些调用尚未拿到 tool_result）：")
+	for _, call := range c.emittedToolCalls {
+		name := strings.TrimSpace(call.Function)
+		if name == "" {
+			continue
+		}
+		path := strings.TrimSpace(extractBoltToolPath(call.Parameters))
+		line := "- " + name
+		if path != "" {
+			line += " " + path
+		}
+		params := strings.TrimSpace(string(normalizeToolCallParameters(call.Parameters)))
+		if params != "" && params != "{}" {
+			line += " " + params
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 1 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(upstream.SSEMessage) error) error {
 	if toolCall == nil || strings.TrimSpace(toolCall.Function) == "" {
 		return nil
@@ -4352,6 +4406,10 @@ func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(upstream
 	c.seenToolCalls[key] = struct{}{}
 	c.emittedToolUse = true
 	c.suppressText = true
+	c.emittedToolCalls = append(c.emittedToolCalls, ToolCall{
+		Function:   strings.TrimSpace(toolCall.Function),
+		Parameters: append(json.RawMessage(nil), params...),
+	})
 	if c.firstToolName == "" {
 		c.firstToolName = strings.TrimSpace(toolCall.Function)
 		c.firstToolPath = extractBoltToolPath(toolCall.Parameters)

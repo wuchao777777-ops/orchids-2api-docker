@@ -1318,6 +1318,12 @@ func TestSendRequestWithPayload_RetriesRepeatedReadAfterReadOnlyFollowup(t *test
 	if !strings.Contains(requestBodies[1], "RETRY: 刚读过 `calculator.py`") {
 		t.Fatalf("second request missing repeated-read correction, body=%s", requestBodies[1])
 	}
+	if !strings.Contains(requestBodies[1], "上一轮未完成的真实工具调用如下") {
+		t.Fatalf("second request missing replayed pending tool call transcript, body=%s", requestBodies[1])
+	}
+	if !strings.Contains(requestBodies[1], "Read calculator.py") {
+		t.Fatalf("second request missing replayed tool call path, body=%s", requestBodies[1])
+	}
 	if len(events) != 2 {
 		t.Fatalf("events len=%d want 2, events=%v", len(events), events)
 	}
@@ -1326,6 +1332,36 @@ func TestSendRequestWithPayload_RetriesRepeatedReadAfterReadOnlyFollowup(t *test
 	}
 	if got := events[1].Event["finishReason"]; got != "tool_use" {
 		t.Fatalf("finishReason=%v want tool_use", got)
+	}
+}
+
+func TestAppendBoltRetryReplayMessages_IncludesPendingToolCalls(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比"}},
+	}
+
+	converter := newOutboundConverter("claude-sonnet-4-6", 0)
+	converter.emittedToolCalls = []ToolCall{{
+		Function:   "Read",
+		Parameters: json.RawMessage(`{"file_path":"./output.txt"}`),
+	}}
+
+	replayed := appendBoltRetryReplayMessages(messages, converter)
+	if len(replayed) != 2 {
+		t.Fatalf("messages len=%d want 2", len(replayed))
+	}
+	if got := replayed[1].Role; got != "assistant" {
+		t.Fatalf("replayed role=%q want assistant", got)
+	}
+	text := replayed[1].ExtractText()
+	if !strings.Contains(text, "上一轮未完成的真实工具调用如下") {
+		t.Fatalf("expected pending tool call transcript, got: %q", text)
+	}
+	if !strings.Contains(text, "Read ./output.txt") {
+		t.Fatalf("expected tool path in transcript, got: %q", text)
+	}
+	if !strings.Contains(text, `"file_path":"./output.txt"`) {
+		t.Fatalf("expected tool parameters in transcript, got: %q", text)
 	}
 }
 
