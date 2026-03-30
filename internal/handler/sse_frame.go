@@ -14,8 +14,6 @@ var (
 	sseMessageStopBytes = []byte(`{"type":"message_stop"}`)
 )
 
-
-
 func canAppendJSONRawString(value string) bool {
 	for i := 0; i < len(value); {
 		b := value[i]
@@ -37,8 +35,6 @@ func canAppendJSONRawString(value string) bool {
 	}
 	return true
 }
-
-
 
 func appendJSONBytes(dst []byte, value string) ([]byte, error) {
 	if canAppendJSONRawString(value) {
@@ -151,22 +147,6 @@ func appendSSEMessageStart(dst []byte, msgID, model string, inputTokens, outputT
 	return dst, nil
 }
 
-func appendSSEMessageStartNoUsage(dst []byte, msgID, model string) ([]byte, error) {
-	dst = append(dst, `{"type":"message_start","message":{"id":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, msgID)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `,"type":"message","role":"assistant","content":[],"model":`...)
-	dst, err = appendJSONBytes(dst, model)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `}}`...)
-	return dst, nil
-}
-
 func appendSSEContentBlockStartText(dst []byte, index int) ([]byte, error) {
 	dst = append(dst, `{"type":"content_block_start","index":`...)
 	dst = strconv.AppendInt(dst, int64(index), 10)
@@ -240,7 +220,7 @@ func appendSSEMessageDelta(dst []byte, stopReason string, outputTokens int) ([]b
 	if err != nil {
 		return nil, err
 	}
-	dst = append(dst, `},"usage":{"output_tokens":`...)
+	dst = append(dst, `,"stop_sequence":null},"usage":{"output_tokens":`...)
 	dst = strconv.AppendInt(dst, int64(outputTokens), 10)
 	dst = append(dst, `}}`...)
 	return dst, nil
@@ -252,10 +232,6 @@ func marshalSSEContentBlockStartToolUseBytes(index int, id, name string) ([]byte
 
 func marshalSSEMessageStartBytes(msgID, model string, inputTokens, outputTokens int) ([]byte, error) {
 	return appendSSEMessageStart(make([]byte, 0, 192+len(msgID)+len(model)), msgID, model, inputTokens, outputTokens)
-}
-
-func marshalSSEMessageStartNoUsageBytes(msgID, model string) ([]byte, error) {
-	return appendSSEMessageStartNoUsage(make([]byte, 0, 128+len(msgID)+len(model)), msgID, model)
 }
 
 func marshalSSEContentBlockStartToolUse(index int, id, name string) (string, error) {
@@ -353,5 +329,3 @@ func marshalSSEMessageDelta(stopReason string, outputTokens int) (string, error)
 func marshalSSEMessageStopBytes() ([]byte, error) {
 	return sseMessageStopBytes, nil
 }
-
-

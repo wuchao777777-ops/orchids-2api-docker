@@ -18,6 +18,7 @@ import (
 )
 
 const defaultCacheTTL = 5 * time.Second
+const recentSuccessWarmWindow = 30 * time.Minute
 
 type LoadBalancer struct {
 	Store          *store.Store
@@ -184,10 +185,46 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 	}
 
 	if len(bestAccounts) > 0 {
-		// Randomly select one from the best accounts to ensure load balancing
+		bestAccounts = preferRecentlyHealthyAccounts(bestAccounts)
+		// Randomly select one from the best accounts to ensure load balancing.
+		// When scores tie, we first narrow to accounts that have succeeded recently,
+		// which makes probe-style traffic less likely to randomly hit a stale account.
 		return bestAccounts[rand.IntN(len(bestAccounts))]
 	}
 	return accounts[0]
+}
+
+func preferRecentlyHealthyAccounts(accounts []*store.Account) []*store.Account {
+	if len(accounts) <= 1 {
+		return accounts
+	}
+
+	now := time.Now()
+	var preferred []*store.Account
+	var newest time.Time
+
+	for _, acc := range accounts {
+		if acc == nil || acc.LastUsedAt.IsZero() {
+			continue
+		}
+		age := now.Sub(acc.LastUsedAt)
+		if age < 0 || age > recentSuccessWarmWindow {
+			continue
+		}
+		if preferred == nil || acc.LastUsedAt.After(newest) {
+			preferred = []*store.Account{acc}
+			newest = acc.LastUsedAt
+			continue
+		}
+		if acc.LastUsedAt.Equal(newest) {
+			preferred = append(preferred, acc)
+		}
+	}
+
+	if len(preferred) > 0 {
+		return preferred
+	}
+	return accounts
 }
 
 func (lb *LoadBalancer) AcquireConnection(accountID int64) {

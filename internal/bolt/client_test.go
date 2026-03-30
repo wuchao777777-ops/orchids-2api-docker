@@ -1582,6 +1582,38 @@ func TestPrepareRequest_AddsWorkspaceAndToolInstructions(t *testing.T) {
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "keep this custom instruction") {
 		t.Fatalf("system prompt dropped custom instruction: %s", boltReq.GlobalSystemPrompt)
 	}
+	if strings.Contains(boltReq.GlobalSystemPrompt, "Orchids 的 Bolt 适配层") {
+		t.Fatalf("system prompt should avoid exposing adapter identity: %s", boltReq.GlobalSystemPrompt)
+	}
+}
+
+func TestBuildBoltBasePrompt_NonCodingRequestStaysNatural(t *testing.T) {
+	got := buildBoltBasePrompt([]interface{}{
+		map[string]interface{}{"name": "web_search"},
+	}, false, []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "今天上海天气怎么样"}},
+	})
+
+	if !strings.Contains(got, "优先像正常助手一样自然回答") {
+		t.Fatalf("expected natural-answer guidance, got: %q", got)
+	}
+	if strings.Contains(got, "Orchids 的 Bolt 适配层") {
+		t.Fatalf("base prompt should not expose adapter identity, got: %q", got)
+	}
+}
+
+func TestBuildBoltBasePrompt_CodingRequestKeepsExecutionBias(t *testing.T) {
+	got := buildBoltBasePrompt([]interface{}{
+		map[string]interface{}{"name": "Read"},
+		map[string]interface{}{"name": "Write"},
+		map[string]interface{}{"name": "Edit"},
+	}, false, []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我给 calculator.py 添加科学计数法"}},
+	})
+
+	if !strings.Contains(got, "在需要工具时直接进入执行") {
+		t.Fatalf("expected coding request to keep execution bias, got: %q", got)
+	}
 }
 
 func TestPrepareRequest_DoesNotAdvertiseBoltToolsWhenRequestOmitsTools(t *testing.T) {

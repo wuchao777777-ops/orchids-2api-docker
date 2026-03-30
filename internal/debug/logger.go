@@ -17,6 +17,7 @@ type Logger struct {
 	sseEnabled bool
 	dir        string
 	rawFile    *os.File
+	rawInspect *os.File
 	outFile    *os.File
 	mu         sync.Mutex
 	startTime  time.Time
@@ -147,6 +148,30 @@ func (l *Logger) LogUpstreamSSE(eventType string, data string) {
 	fmt.Fprintf(l.rawFile, "[%dms] %s: %s\n", elapsed, eventType, data)
 }
 
+// LogUpstreamSSEInspect 记录 4b. 上游 SSE 的结构化剖析，便于排查隐藏字段是否未被识别
+func (l *Logger) LogUpstreamSSEInspect(payload interface{}) {
+	if !l.enabled || !l.sseEnabled {
+		return
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.rawInspect == nil {
+		f, err := os.OpenFile(filepath.Join(l.dir, "4b_upstream_sse_inspect.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return
+		}
+		l.rawInspect = f
+	}
+
+	entry, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_, _ = l.rawInspect.Write(append(entry, '\n'))
+}
+
 // LogOutputSSE 记录 5. 转换给客户端的 SSE（追加写入）
 func (l *Logger) LogOutputSSE(event string, data string) {
 	if !l.enabled || !l.sseEnabled {
@@ -213,6 +238,10 @@ func (l *Logger) Close() {
 	if l.rawFile != nil {
 		l.rawFile.Close()
 		l.rawFile = nil
+	}
+	if l.rawInspect != nil {
+		l.rawInspect.Close()
+		l.rawInspect = nil
 	}
 	if l.outFile != nil {
 		l.outFile.Close()

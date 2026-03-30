@@ -128,6 +128,39 @@ func TestSelectAccountWithTracker_UsesProvidedTracker(t *testing.T) {
 	}
 }
 
+func TestSelectAccountWithTracker_PrefersRecentlyHealthyAccountOnTie(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	now := time.Now()
+	acc1 := &store.Account{ID: 1, Name: "cold", Weight: 1}
+	acc2 := &store.Account{ID: 2, Name: "warm", Weight: 1, LastUsedAt: now.Add(-2 * time.Minute)}
+	accounts := []*store.Account{acc1, acc2}
+
+	custom := &fixedConnTracker{
+		counts: map[int64]int64{
+			acc1.ID: 0,
+			acc2.ID: 0,
+		},
+	}
+
+	for i := 0; i < 50; i++ {
+		selected := lb.selectAccountWithTracker(accounts, custom)
+		if selected == nil || selected.ID != acc2.ID {
+			t.Fatalf("expected recently healthy account to win tie, got %#v", selected)
+		}
+	}
+}
+
+func TestPreferRecentlyHealthyAccounts_IgnoresStaleSuccess(t *testing.T) {
+	now := time.Now()
+	acc1 := &store.Account{ID: 1, Name: "stale", LastUsedAt: now.Add(-2 * time.Hour)}
+	acc2 := &store.Account{ID: 2, Name: "never"}
+
+	got := preferRecentlyHealthyAccounts([]*store.Account{acc1, acc2})
+	if len(got) != 2 {
+		t.Fatalf("expected stale accounts to keep original candidate set, got %d", len(got))
+	}
+}
+
 func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfulError(t *testing.T) {
 	now := time.Now()
 	lb := &LoadBalancer{

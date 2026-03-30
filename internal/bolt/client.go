@@ -34,7 +34,7 @@ const (
 	defaultRateLimitsURL    = "https://bolt.new/api/rate-limits/user"
 	defaultTeamsRateURL     = "https://bolt.new/api/rate-limits/teams"
 	defaultProjectsURL      = "https://stackblitz.com/api/projects/sb1/fork"
-	defaultAdapterPrompt    = "你正在通过 Orchids 的 Bolt 适配层转发对话。若已有上下文足够就直接回答；只有在当前请求确实需要已声明的工具时才返回 JSON 工具调用，不要先解释计划。"
+	defaultAdapterPrompt    = "保持回答自然、直接、贴合用户问题；有足够上下文时直接回答，只有在当前请求确实需要已声明工具时才调用工具。"
 	maxBoltFocusedFileCount = 2
 	maxBoltReadResultRunes  = 480
 	maxBoltFocusedReadRunes = 2200
@@ -560,7 +560,7 @@ func shouldSkipBoltMessage(role string) bool {
 
 func buildSystemPromptParts(system []prompt.SystemItem, workdir string, tools []interface{}, noTools bool, messages []prompt.Message) systemPromptParts {
 	parts := systemPromptParts{
-		BasePrompt: defaultAdapterPrompt,
+		BasePrompt: buildBoltBasePrompt(tools, noTools, messages),
 		ToolPrompt: buildBoltToolPrompt(workdir, tools, noTools, messages),
 	}
 
@@ -581,6 +581,89 @@ func buildSystemPromptParts(system []prompt.SystemItem, workdir string, tools []
 	}
 	parts.FullPrompt = strings.Join(combined, "\n\n")
 	return parts
+}
+
+func buildBoltBasePrompt(tools []interface{}, noTools bool, messages []prompt.Message) string {
+	base := []string{defaultAdapterPrompt}
+
+	if noTools {
+		base = append(base, "本回合禁止调用工具，只基于现有上下文直接回答。")
+		return strings.Join(base, "\n")
+	}
+
+	if detectRecentBoltStructuredOutputIntent(messages) {
+		base = append(base,
+			"当前请求明显要求结构化输出；如果用户要求 JSON、对象、数组、schema 字段、分阶段 JSON 或“只输出可解析内容”，就严格只输出满足要求的合法结构，不要补解释、前缀、后缀、代码围栏或额外自然语言。",
+			"如果用户要求分多个 stage/阶段分别输出 JSON，则每个阶段都必须各自保持完整、可解析；不要前两段是 JSON，第三段改成普通文本总结。",
+		)
+		return strings.Join(base, "\n")
+	}
+
+	toolNames := supportedBoltToolNames(tools)
+	if shouldUseBoltCodingToolGuidance(toolNames, messages) {
+		base = append(base,
+			"如果当前请求本质上是代码或文件修改任务，在需要工具时直接进入执行，不要把回答写成空泛计划或重复现状总结。",
+			"如果不是代码修改任务，保持普通助手式回答，不要主动暴露运行环境、适配层或额外工作流说明。",
+		)
+		return strings.Join(base, "\n")
+	}
+
+	base = append(base,
+		"如果问题是知识问答、实时信息、解释、翻译或普通聊天，优先像正常助手一样自然回答。",
+		"除非完成当前问题必须依赖工具，否则不要把回答写成工具规划、执行说明或环境说明。",
+	)
+	return strings.Join(base, "\n")
+}
+
+func detectRecentBoltStructuredOutputIntent(messages []prompt.Message) bool {
+	const maxScan = 6
+	seen := 0
+	for i := len(messages) - 1; i >= 0 && seen < maxScan; i-- {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
+			continue
+		}
+		seen++
+		text := strings.TrimSpace(extractBoltStandaloneUserText(msg))
+		if text == "" || LooksLikeContinuationOnlyText(text) {
+			continue
+		}
+		if textIndicatesBoltStructuredOutput(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func textIndicatesBoltStructuredOutput(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+
+	structuredMarkers := []string{
+		"json", "jsonl", "schema", "structured output", "structured response",
+		"valid json", "parseable json", "machine readable", "response_format",
+		"只输出json", "仅输出json", "输出json", "返回json", "合法json", "可解析json",
+		"结构化输出", "结构化响应", "机器可读", "不要解释", "不要输出解释",
+		"不要额外文字", "不要额外文本", "不要前缀", "不要后缀", "只返回对象", "只返回数组",
+	}
+	for _, marker := range structuredMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+
+	if strings.Contains(lower, "stage1") || strings.Contains(lower, "stage2") || strings.Contains(lower, "stage3") {
+		return true
+	}
+	if strings.Contains(text, "阶段") && strings.Contains(lower, "json") {
+		return true
+	}
+	if strings.Contains(text, "第1段") || strings.Contains(text, "第2段") || strings.Contains(text, "第3段") {
+		return true
+	}
+	return false
 }
 
 func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages {
@@ -3751,6 +3834,7 @@ func (c *outboundConverter) ProcessStream(reader io.Reader, logger *debug.Logger
 	scanner := bufio.NewScanner(reader)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
+	streamStart := time.Now()
 
 	var textBuffer strings.Builder
 	var pendingEndEvent *EndEvent
@@ -3767,6 +3851,7 @@ func (c *outboundConverter) ProcessStream(reader io.Reader, logger *debug.Logger
 		eventData := line[colonIdx+1:]
 		if logger != nil {
 			logger.LogUpstreamSSE(eventType, eventData)
+			logger.LogUpstreamSSEInspect(inspectBoltUpstreamChunk(time.Since(streamStart).Milliseconds(), eventType, eventData))
 		}
 
 		switch eventType {
@@ -3825,6 +3910,79 @@ func (c *outboundConverter) ProcessStream(reader io.Reader, logger *debug.Logger
 		return c.flushAndFinish(pendingEndEvent, &textBuffer, writer)
 	}
 	return nil
+}
+
+func inspectBoltUpstreamChunk(elapsedMs int64, eventType string, data string) map[string]interface{} {
+	trimmed := strings.TrimSpace(data)
+	entry := map[string]interface{}{
+		"elapsed_ms": elapsedMs,
+		"event_type": eventType,
+		"raw_len":    len(data),
+		"trimmed":    trimmed,
+	}
+	if trimmed == "" {
+		return entry
+	}
+
+	first := firstNonSpaceByte(trimmed)
+	entry["first_byte"] = string(first)
+	entry["looks_json"] = first == '{' || first == '[' || first == '"'
+	entry["contains_reasoning"] = strings.Contains(strings.ToLower(trimmed), "reasoning")
+	entry["contains_thinking"] = strings.Contains(strings.ToLower(trimmed), "thinking")
+	entry["contains_signature"] = strings.Contains(strings.ToLower(trimmed), "signature")
+
+	var decoded interface{}
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+		entry["json_parse_ok"] = true
+		entry["json_type"] = fmt.Sprintf("%T", decoded)
+		entry["top_level_keys"] = collectBoltInspectKeys(decoded)
+		entry["interesting_paths"] = collectBoltInterestingPaths(decoded, "")
+	} else {
+		entry["json_parse_ok"] = false
+		entry["json_error"] = err.Error()
+	}
+	return entry
+}
+
+func collectBoltInspectKeys(value interface{}) []string {
+	obj, ok := value.(map[string]interface{})
+	if !ok || len(obj) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func collectBoltInterestingPaths(value interface{}, prefix string) []string {
+	var out []string
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, nested := range v {
+			path := key
+			if prefix != "" {
+				path = prefix + "." + key
+			}
+			lower := strings.ToLower(key)
+			if strings.Contains(lower, "reason") || strings.Contains(lower, "think") || strings.Contains(lower, "sign") || strings.Contains(lower, "step") || strings.Contains(lower, "meta") {
+				out = append(out, path)
+			}
+			out = append(out, collectBoltInterestingPaths(nested, path)...)
+		}
+	case []interface{}:
+		for i, nested := range v {
+			path := fmt.Sprintf("%s[%d]", prefix, i)
+			out = append(out, collectBoltInterestingPaths(nested, path)...)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (c *outboundConverter) parseEndEvent(data string) (*EndEvent, error) {
