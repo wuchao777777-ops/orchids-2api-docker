@@ -4374,6 +4374,156 @@ func TestPrepareRequest_SuppressesTaskForFocusedFileMutation(t *testing.T) {
 	}
 }
 
+func TestPrepareRequest_TrimsSupersededExplorationDetourBeforeFocusedMutation(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-sonnet-4-6",
+		Tools: []interface{}{
+			map[string]interface{}{"name": "Read"},
+			map[string]interface{}{"name": "Edit"},
+			map[string]interface{}{"name": "Write"},
+			map[string]interface{}{"name": "Agent"},
+			map[string]interface{}{"name": "Glob"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比123123"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_glob",
+							Name:  "Glob",
+							Input: map[string]interface{}{"pattern": "**/output*"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_glob", Content: "output.txt"}},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type: "tool_use",
+							ID:   "tool_task",
+							Name: "Task",
+							Input: map[string]interface{}{
+								"description":   "Explore project structure",
+								"prompt":        "Explore the project at /tmp/cc-agent/sb1-demo/project and return all files",
+								"subagent_type": "Explore",
+							},
+						},
+						{
+							Type: "text",
+							Text: "I need to understand the current state of the project first.",
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_task", Content: `[{"text":"我已准备好继续工作。请告诉我你需要完成的任务，我会基于之前的工具结果继续进行。","type":"text"}]`}},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{Text: "我已准备好帮助你。请告诉我你需要做什么，我会立即开始工作。"},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比123123"}},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	var joined []string
+	for _, msg := range boltReq.Messages {
+		joined = append(joined, msg.Content)
+	}
+	all := strings.Join(joined, "\n")
+	if strings.Contains(all, "Explore the project at /tmp/cc-agent/sb1-demo/project") {
+		t.Fatalf("expected superseded exploration prompt to be trimmed, got: %q", all)
+	}
+	if strings.Contains(all, "I need to understand the current state of the project first.") {
+		t.Fatalf("expected superseded exploration text to be trimmed, got: %q", all)
+	}
+	if strings.Contains(all, "我已准备好帮助你。请告诉我你需要做什么") {
+		t.Fatalf("expected generic exploration follow-up to be trimmed, got: %q", all)
+	}
+	last := boltReq.Messages[len(boltReq.Messages)-1].Content
+	if !strings.Contains(last, "帮我在output文件中添加 我是大帅比123123") {
+		t.Fatalf("expected latest mutation request to remain, got: %q", last)
+	}
+}
+
+func TestPrepareRequest_TrimsFakeToolJSONAndReadyPromptBeforeRepeatedMutation(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-sonnet-4-6",
+		Tools: []interface{}{
+			map[string]interface{}{"name": "Read"},
+			map[string]interface{}{"name": "Edit"},
+			map[string]interface{}{"name": "Write"},
+			map[string]interface{}{"name": "Glob"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比123123"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{Text: "{\n  \"tool\": \"Edit\",\n  \"parameters\": {\n    \"file_path\": \"output.txt\",\n    \"old_string\": \"我是大帅比123123\",\n    \"new_string\": \"我是大帅比123123\\n新增内容\"\n  }\n}"},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比123123"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "output.txt"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1\t123123\n",
+					}},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{Text: "我准备好了。请提供你需要完成的任务，我会直接对 `output.txt` 进行操作。"},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比123123"}},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	all := make([]string, 0, len(boltReq.Messages))
+	for _, msg := range boltReq.Messages {
+		all = append(all, msg.Content)
+	}
+	joined := strings.Join(all, "\n")
+	if strings.Contains(joined, `"tool": "Edit"`) {
+		t.Fatalf("expected fake tool json assistant text to be trimmed, got: %q", joined)
+	}
+	if strings.Contains(joined, "我准备好了。请提供你需要完成的任务") {
+		t.Fatalf("expected ready-for-task assistant text to be trimmed, got: %q", joined)
+	}
+	last := boltReq.Messages[len(boltReq.Messages)-1].Content
+	if !strings.Contains(last, "帮我在output文件中添加 我是大帅比123123") {
+		t.Fatalf("expected latest mutation task to remain, got: %q", last)
+	}
+}
+
 func TestPrepareRequest_AdvertisesWebToolsWhenDeclared(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model:    "claude-sonnet-4-6",
