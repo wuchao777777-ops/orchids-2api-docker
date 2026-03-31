@@ -514,6 +514,9 @@ func EstimateInputTokens(req upstream.UpstreamRequest) InputTokenEstimate {
 }
 
 func prepareRequest(req upstream.UpstreamRequest, projectID string) (*Request, InputTokenEstimate) {
+	if suggestedPath := detectRecentBoltPathSuggestion(req.Messages); suggestedPath != "" {
+		req.Messages = injectBoltSuggestedPathGuard(req.Messages, suggestedPath)
+	}
 	req.Messages = trimBoltMessagesAfterSupersededBraveSearchFailure(req.Messages)
 	req.Messages = trimBoltMessagesAfterSpeculativeFailedSearchSummary(req.Messages)
 	req.Messages = trimBoltMessagesAfterMisleadingEmptyProjectProbe(req.Messages)
@@ -558,6 +561,61 @@ func prepareRequest(req upstream.UpstreamRequest, projectID string) (*Request, I
 		Messages:        messages.Items,
 	}
 	return boltReq, estimatePreparedRequestInput(promptParts, messages.HistoryTokens)
+}
+
+func injectBoltSuggestedPathGuard(messages []prompt.Message, suggestedPath string) []prompt.Message {
+	if len(messages) == 0 || strings.TrimSpace(suggestedPath) == "" {
+		return messages
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		task := extractBoltStandaloneUserText(messages[i])
+		if !shouldInjectBoltSuggestedPathGuard(task, suggestedPath) {
+			continue
+		}
+		guard := "上一轮工具结果已经明确指出应直接使用 `" + suggestedPath + "`；这次继续时不要再读 `.`、不要改成无扩展名别名，也不要重新探测项目是否为空。若需要工具，直接对 `" + suggestedPath + "` 继续 Read/Edit/Write。"
+		msg := messages[i]
+		if msg.Content.IsString() {
+			text := sanitizeBoltMessageText(msg.Content.GetText())
+			if !strings.Contains(text, guard) {
+				text = strings.TrimSpace(text)
+				if text == "" {
+					text = guard
+				} else {
+					text += "\n\n" + guard
+				}
+				msg.Content = prompt.MessageContent{Text: text}
+			}
+			messages[i] = msg
+			return messages
+		}
+		blocks := normalizeBlocks(msg)
+		inserted := false
+		for bi := range blocks {
+			if blocks[bi].Type != "text" {
+				continue
+			}
+			text := sanitizeBoltMessageText(blocks[bi].Text)
+			if strings.Contains(text, guard) {
+				inserted = true
+				break
+			}
+			text = strings.TrimSpace(text)
+			if text == "" {
+				blocks[bi].Text = guard
+			} else {
+				blocks[bi].Text = text + "\n\n" + guard
+			}
+			inserted = true
+			break
+		}
+		if !inserted {
+			blocks = append(blocks, prompt.ContentBlock{Type: "text", Text: guard})
+		}
+		msg.Content = prompt.MessageContent{Blocks: blocks}
+		messages[i] = msg
+		return messages
+	}
+	return messages
 }
 
 func shouldSkipBoltMessage(role string) bool {
@@ -735,6 +793,23 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 		}
 	}
 	return built
+}
+
+func shouldInjectBoltSuggestedPathGuard(task string, suggestedPath string) bool {
+	task = strings.ToLower(strings.TrimSpace(task))
+	suggestedPath = strings.TrimSpace(suggestedPath)
+	if task == "" || suggestedPath == "" {
+		return false
+	}
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(suggestedPath)))
+	stem := strings.TrimSuffix(base, strings.ToLower(filepath.Ext(base)))
+	if base != "" && strings.Contains(task, base) {
+		return true
+	}
+	if stem != "" && strings.Contains(task, stem) {
+		return true
+	}
+	return false
 }
 
 func latestBoltSuccessfulMutationPath(msg prompt.Message, toolUses map[string]boltToolUseMetadata) string {
@@ -1290,14 +1365,18 @@ func hasBoltToolName(toolNames []string, want string) bool {
 
 func buildBoltHistoryRecoveryPrompt(workdir string, messages []prompt.Message) []string {
 	invalidPath := detectRecentInvalidBoltHistoryPath(messages)
+	suggestedPath := detectRecentBoltPathSuggestion(messages)
 	missingPaths := detectMissingWorkspaceHistoryPaths(messages, workdir)
-	if invalidPath == "" && len(missingPaths) == 0 {
+	if invalidPath == "" && suggestedPath == "" && len(missingPaths) == 0 {
 		return nil
 	}
 
-	parts := make([]string, 0, 6)
+	parts := make([]string, 0, 7)
 	if invalidPath != "" {
 		parts = append(parts, "历史里刚出现过无效外部路径 `"+invalidPath+"`；它不在当前项目中，不要复用这个路径。")
+	}
+	if suggestedPath != "" {
+		parts = append(parts, "工具结果刚明确提示应使用 `"+suggestedPath+"` 这个项目内路径；后续 Read/Edit/Write 必须直接复用这个精确路径，不要把它退化成 `.`、目录名或去掉扩展名后的别名。")
 	}
 	if strings.TrimSpace(workdir) != "" {
 		parts = append(parts, "真实项目目录是 `"+workdir+"`。")
@@ -1307,6 +1386,61 @@ func buildBoltHistoryRecoveryPrompt(workdir string, messages []prompt.Message) [
 	}
 	parts = append(parts, "重新检查项目时用 `.`、README.md、go.mod、package.json 这类项目内相对路径；在至少成功查看一次 `.`、README.md、go.mod、package.json 等项目内路径之前，不要回答“项目为空”。")
 	return parts
+}
+
+func detectRecentBoltPathSuggestion(messages []prompt.Message) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		for _, block := range normalizeBlocks(messages[i]) {
+			if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
+				continue
+			}
+			if suggested := extractBoltSuggestedPath(stringifyContent(block.Content)); suggested != "" {
+				return suggested
+			}
+		}
+	}
+	return ""
+}
+
+func extractBoltSuggestedPath(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	lower := strings.ToLower(text)
+	marker := "did you mean "
+	idx := strings.Index(lower, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(text[idx+len(marker):])
+	if rest == "" {
+		return ""
+	}
+	end := len(rest)
+	for i, r := range rest {
+		switch r {
+		case '?', '\n', '\r', '\t':
+			end = i
+			goto found
+		}
+	}
+found:
+	candidate := strings.Trim(rest[:end], "\"'`.,;:()[]{}")
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return ""
+	}
+	if candidate == "." || candidate == ".." {
+		return ""
+	}
+	if looksLikeInvalidBoltPath(candidate) {
+		return ""
+	}
+	return candidate
 }
 
 func trimBoltMessagesForMissingWorkspaceTargets(messages []prompt.Message, workdir string) []prompt.Message {

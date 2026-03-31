@@ -3507,6 +3507,107 @@ func TestBuildBoltInvalidPathRetryRequest_UsesNeutralRelativePathHint(t *testing
 	}
 }
 
+func TestBuildBoltHistoryRecoveryPrompt_AddsSuggestedPathRecoveryInstructions(t *testing.T) {
+	messages := []prompt.Message{
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:  "tool_use",
+						ID:    "tool_read_1",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "./output"},
+					},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:      "tool_result",
+						ToolUseID: "tool_read_1",
+						Content:   "File does not exist. Note: your current working directory is C:\\Users\\zhangdailin\\Desktop\\123123. Did you mean output.txt?",
+					},
+				},
+			},
+		},
+	}
+
+	got := strings.Join(buildBoltHistoryRecoveryPrompt(`C:\Users\zhangdailin\Desktop\123123`, messages), "\n")
+	if !strings.Contains(got, "应使用 `output.txt` 这个项目内路径") {
+		t.Fatalf("recovery prompt missing suggested-path hint: %s", got)
+	}
+	if !strings.Contains(got, "不要把它退化成 `.`") {
+		t.Fatalf("recovery prompt missing suggested-path no-degrade hint: %s", got)
+	}
+}
+
+func TestPrepareRequest_AppendsSuggestedPathGuardToLatestUserTask(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model:   "claude-opus-4-6",
+		Workdir: `C:\Users\zhangdailin\Desktop\123123`,
+		Tools: []interface{}{
+			map[string]interface{}{"name": "Read"},
+			map[string]interface{}{"name": "Edit"},
+			map[string]interface{}{"name": "Write"},
+			map[string]interface{}{"name": "Glob"},
+		},
+		Messages: []prompt.Message{
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:  "tool_use",
+							ID:    "tool_read_1",
+							Name:  "Read",
+							Input: map[string]interface{}{"file_path": "./output"},
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type:      "tool_result",
+							ToolUseID: "tool_read_1",
+							Content:   "File does not exist. Note: your current working directory is C:\\Users\\zhangdailin\\Desktop\\123123. Did you mean output.txt?",
+						},
+					},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{
+						{
+							Type: "text",
+							Text: "帮我在output文件中添加 我是大帅比123123",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if len(boltReq.Messages) == 0 {
+		t.Fatal("expected prepared messages")
+	}
+	last := boltReq.Messages[len(boltReq.Messages)-1].Content
+	if !strings.Contains(last, "应直接使用 `output.txt`") {
+		t.Fatalf("latest user task missing suggested path guard: %s", last)
+	}
+	if !strings.Contains(last, "不要再读 `.`") {
+		t.Fatalf("latest user task missing no-root-reread guard: %s", last)
+	}
+}
+
 func TestPrepareRequest_AdditiveMutationAfterReadInjectsEditGuard(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model: "claude-opus-4-6",
