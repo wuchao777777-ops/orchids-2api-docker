@@ -4326,6 +4326,54 @@ func TestPrepareRequest_AdvertisesTaskWhenClientDeclaresAgent(t *testing.T) {
 	}
 }
 
+func TestPrepareRequest_SuppressesTaskForFocusedFileMutation(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-sonnet-4-6",
+		Tools: []interface{}{
+			map[string]interface{}{"name": "Read"},
+			map[string]interface{}{"name": "Edit"},
+			map[string]interface{}{"name": "Write"},
+			map[string]interface{}{"name": "Agent"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比123123"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "output.txt"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   "1\t123123\n",
+					}},
+				},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我在output文件中添加 我是大帅比123123"}},
+		},
+	}
+
+	boltReq, _ := prepareRequest(req, "sb1-demo")
+	if strings.Contains(boltReq.GlobalSystemPrompt, "Task(description, prompt, subagent_type?)") {
+		t.Fatalf("expected Task to be suppressed for focused mutation, got prompt: %q", boltReq.GlobalSystemPrompt)
+	}
+	if strings.Contains(boltReq.GlobalSystemPrompt, "客户端声明的是 `Agent`") {
+		t.Fatalf("expected Agent/Task relay guidance to be suppressed for focused mutation, got prompt: %q", boltReq.GlobalSystemPrompt)
+	}
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "优先沿用同一路径继续 Edit") {
+		t.Fatalf("expected focused mutation guidance to remain, got prompt: %q", boltReq.GlobalSystemPrompt)
+	}
+}
+
 func TestPrepareRequest_AdvertisesWebToolsWhenDeclared(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model:    "claude-sonnet-4-6",

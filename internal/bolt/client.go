@@ -563,6 +563,24 @@ func prepareRequest(req upstream.UpstreamRequest, projectID string) (*Request, I
 	return boltReq, estimatePreparedRequestInput(promptParts, messages.HistoryTokens)
 }
 
+func effectiveBoltToolNames(tools []interface{}, messages []prompt.Message) []string {
+	toolNames := supportedBoltToolNames(tools)
+	if len(toolNames) == 0 {
+		return nil
+	}
+	if shouldSuppressBoltTaskTool(toolNames, messages) {
+		filtered := make([]string, 0, len(toolNames))
+		for _, name := range toolNames {
+			if strings.EqualFold(strings.TrimSpace(name), "Task") {
+				continue
+			}
+			filtered = append(filtered, name)
+		}
+		return filtered
+	}
+	return toolNames
+}
+
 func injectBoltSuggestedPathGuard(messages []prompt.Message, suggestedPath string) []prompt.Message {
 	if len(messages) == 0 || strings.TrimSpace(suggestedPath) == "" {
 		return messages
@@ -812,6 +830,71 @@ func shouldInjectBoltSuggestedPathGuard(task string, suggestedPath string) bool 
 	return false
 }
 
+func shouldSuppressBoltTaskTool(toolNames []string, messages []prompt.Message) bool {
+	if !hasBoltToolName(toolNames, "Task") {
+		return false
+	}
+	if !hasBoltToolName(toolNames, "Edit") && !hasBoltToolName(toolNames, "Write") {
+		return false
+	}
+	task := latestStandaloneBoltUserTask(messages)
+	if task == "" || !textIndicatesBoltCodeModification(task) {
+		return false
+	}
+	if detectRecentBoltPathSuggestion(messages) != "" {
+		return true
+	}
+	if latestBoltConversationPathHint(messages) != "" {
+		return true
+	}
+	return looksLikeBoltExplicitFileTarget(task)
+}
+
+func latestStandaloneBoltUserTask(messages []prompt.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		task := strings.TrimSpace(extractBoltStandaloneUserText(messages[i]))
+		if task == "" || LooksLikeContinuationOnlyText(task) {
+			continue
+		}
+		return task
+	}
+	return ""
+}
+
+func latestBoltConversationPathHint(messages []prompt.Message) string {
+	toolUses := collectBoltToolUseMetadata(messages)
+	var latestReadPath string
+	var latestMutationPath string
+	for _, msg := range messages {
+		if path := latestBoltSuccessfulMutationPath(msg, toolUses); strings.TrimSpace(path) != "" {
+			latestMutationPath = strings.TrimSpace(path)
+		}
+		if path := latestBoltReadPath(msg, toolUses); strings.TrimSpace(path) != "" {
+			latestReadPath = strings.TrimSpace(path)
+		}
+	}
+	if latestMutationPath != "" {
+		return latestMutationPath
+	}
+	return latestReadPath
+}
+
+func looksLikeBoltExplicitFileTarget(task string) bool {
+	task = strings.ToLower(strings.TrimSpace(task))
+	if task == "" {
+		return false
+	}
+	for _, marker := range []string{
+		".txt", ".md", ".json", ".js", ".ts", ".tsx", ".jsx", ".go", ".py", ".java", ".css", ".html", ".yaml", ".yml",
+		"文件", "file", "readme", "package.json", "go.mod",
+	} {
+		if strings.Contains(task, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func latestBoltSuccessfulMutationPath(msg prompt.Message, toolUses map[string]boltToolUseMetadata) string {
 	for _, block := range normalizeBlocks(msg) {
 		if !strings.EqualFold(strings.TrimSpace(block.Type), "tool_result") {
@@ -1040,7 +1123,7 @@ func buildBoltToolPrompt(workdir string, tools []interface{}, noTools bool, mess
 		return strings.Join(parts, "\n")
 	}
 
-	toolNames := supportedBoltToolNames(tools)
+	toolNames := effectiveBoltToolNames(tools, messages)
 	if len(toolNames) == 0 {
 		parts = append(parts, "如果上下文已经足够，请直接回答。")
 		return strings.Join(parts, "\n")
