@@ -1474,7 +1474,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				nextClient, nextAccount, retryErr := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
 				if retryErr == nil {
 					if isBoltRequest && strings.TrimSpace(boltProjectID) != "" && effectiveWorkdir != "" && nextAccount != nil && nextAccount.ID != prevAccount.ID {
-						retryErr = fmt.Errorf("bolt project %s is pinned to account %d for workdir %s; refusing to switch to account %d", boltProjectID, prevAccount.ID, effectiveWorkdir, nextAccount.ID)
+						if !shouldAllowBoltAccountSwitch(errClass.Category) {
+							retryErr = fmt.Errorf("bolt project %s is pinned to account %d for workdir %s; refusing to switch to account %d for category %s", boltProjectID, prevAccount.ID, effectiveWorkdir, nextAccount.ID, errClass.Category)
+						} else {
+							nextProjectID, projectErr := h.resolveBoltProjectID(r.Context(), nextAccount, nextClient, effectiveWorkdir, true)
+							if projectErr != nil {
+								retryErr = fmt.Errorf("bolt switch to account %d failed to initialize project for workdir %s: %w", nextAccount.ID, effectiveWorkdir, projectErr)
+							} else {
+								boltProjectID = nextProjectID
+								upstreamReq.ProjectID = strings.TrimSpace(nextProjectID)
+							}
+						}
 					}
 				}
 				if retryErr == nil {

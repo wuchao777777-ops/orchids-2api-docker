@@ -30,6 +30,14 @@ type errorUpstreamEdge struct {
 	calls int
 }
 
+type boltSwitchTestClient struct {
+	err        error
+	events     []upstream.SSEMessage
+	projectIDs []string
+	calls      int
+	projects   []string
+}
+
 type refundingErrorUpstreamEdge struct {
 	err           error
 	refundReasons []string
@@ -74,6 +82,33 @@ func (m *errorUpstreamEdge) SendRequest(ctx context.Context, prompt string, chat
 func (m *errorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	m.calls++
 	return m.err
+}
+
+func (m *boltSwitchTestClient) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	return nil
+}
+
+func (m *boltSwitchTestClient) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	m.calls++
+	m.projects = append(m.projects, req.ProjectID)
+	if m.err != nil {
+		return m.err
+	}
+	for _, e := range m.events {
+		onMessage(e)
+	}
+	return nil
+}
+
+func (m *boltSwitchTestClient) CreateEmptyProject(context.Context) (string, error) {
+	idx := len(m.projects)
+	if idx >= len(m.projectIDs) {
+		idx = len(m.projectIDs) - 1
+	}
+	if idx < 0 {
+		return "", nil
+	}
+	return m.projectIDs[idx], nil
 }
 
 func (m *refundingErrorUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -374,6 +409,168 @@ func TestHandleMessages_BoltSingleAccountRateLimitRetriesSameAccountBeforeFailin
 	}
 	if !strings.Contains(rec.Body.String(), "currently rate-limited") || !strings.Contains(rec.Body.String(), "status=429") {
 		t.Fatalf("expected rate-limit-specific no-available-account response, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleMessages_BoltRateLimitSwitchesAccountWithFreshProject(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	first := &store.Account{AccountType: "bolt", ProjectID: "sb1-old-a", SessionCookie: "sess-a", AgentMode: "claude-sonnet-4-6", Enabled: true, Weight: 1}
+	second := &store.Account{AccountType: "bolt", ProjectID: "sb1-old-b", SessionCookie: "sess-b", AgentMode: "claude-sonnet-4-6", Enabled: true, Weight: 1}
+	if err := s.CreateAccount(context.Background(), first); err != nil {
+		t.Fatalf("CreateAccount(first) error = %v", err)
+	}
+	if err := s.CreateAccount(context.Background(), second); err != nil {
+		t.Fatalf("CreateAccount(second) error = %v", err)
+	}
+
+	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, lb)
+	h.persistPreferredBoltAccountID(context.Background(), `D:\Code\NVIDIA_NETWORK_HEALTH_CHECK_PLATFORM`, first.ID)
+
+	firstClient := &boltSwitchTestClient{
+		err:        errors.New(`bolt API error: status=429, body={"code":"rate-limited","message":"You have hit the rate limit. Please upgrade to keep chatting."}`),
+		projectIDs: []string{"sb1-fresh-a"},
+	}
+	secondClient := &boltSwitchTestClient{
+		events: []upstream.SSEMessage{
+			{Type: "model", Event: map[string]any{"type": "text-start"}},
+			{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "switched-ok"}},
+			{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+		},
+		projectIDs: []string{"sb1-fresh-b"},
+	}
+	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
+		if acc.ID == first.ID {
+			return firstClient
+		}
+		if acc.ID == second.ID {
+			return secondClient
+		}
+		return nil
+	})
+
+	payload := map[string]any{
+		"model":    "claude-sonnet-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "列出项目的目录结果"}},
+		"system": []any{
+			map[string]any{"type": "text", "text": "# Environment\nPrimary working directory: D:\\Code\\NVIDIA_NETWORK_HEALTH_CHECK_PLATFORM"},
+		},
+		"stream": false,
+		"tools": []any{
+			map[string]any{"name": "Glob"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if firstClient.calls != 1 {
+		t.Fatalf("expected first account to fail once, got %d calls", firstClient.calls)
+	}
+	if secondClient.calls != 1 {
+		t.Fatalf("expected switched account to be used once, got %d calls", secondClient.calls)
+	}
+	if len(secondClient.projects) != 1 || secondClient.projects[0] != "sb1-fresh-b" {
+		t.Fatalf("expected switched account to use fresh project id, got %#v", secondClient.projects)
+	}
+	if !strings.Contains(rec.Body.String(), "switched-ok") {
+		t.Fatalf("expected switched account response, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleMessages_BoltNetworkErrorStillPinsAccount(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	first := &store.Account{AccountType: "bolt", ProjectID: "sb1-old-a", SessionCookie: "sess-a", AgentMode: "claude-sonnet-4-6", Enabled: true, Weight: 1}
+	second := &store.Account{AccountType: "bolt", ProjectID: "sb1-old-b", SessionCookie: "sess-b", AgentMode: "claude-sonnet-4-6", Enabled: true, Weight: 1}
+	if err := s.CreateAccount(context.Background(), first); err != nil {
+		t.Fatalf("CreateAccount(first) error = %v", err)
+	}
+	if err := s.CreateAccount(context.Background(), second); err != nil {
+		t.Fatalf("CreateAccount(second) error = %v", err)
+	}
+
+	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, lb)
+	h.persistPreferredBoltAccountID(context.Background(), `D:\Code\NVIDIA_NETWORK_HEALTH_CHECK_PLATFORM`, first.ID)
+
+	firstClient := &boltSwitchTestClient{
+		err:        errors.New(`failed to send bolt request: Post "https://bolt.new/api/chat/v2": EOF`),
+		projectIDs: []string{"sb1-fresh-a"},
+	}
+	secondClient := &boltSwitchTestClient{projectIDs: []string{"sb1-fresh-b"}}
+	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
+		if acc.ID == first.ID {
+			return firstClient
+		}
+		if acc.ID == second.ID {
+			return secondClient
+		}
+		return nil
+	})
+
+	payload := map[string]any{
+		"model":    "claude-sonnet-4-6",
+		"messages": []map[string]any{{"role": "user", "content": "列出项目的目录结果"}},
+		"system": []any{
+			map[string]any{"type": "text", "text": "# Environment\nPrimary working directory: D:\\Code\\NVIDIA_NETWORK_HEALTH_CHECK_PLATFORM"},
+		},
+		"stream": false,
+		"tools": []any{
+			map[string]any{"name": "Glob"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if firstClient.calls != 2 {
+		t.Fatalf("expected pinned account to retry on same account, got %d calls", firstClient.calls)
+	}
+	if secondClient.calls != 0 {
+		t.Fatalf("expected second account to remain unused for network failure, got %d calls", secondClient.calls)
+	}
+	if !strings.Contains(rec.Body.String(), "retries exhausted") {
+		t.Fatalf("expected pinned-account retry exhaustion response, got: %s", rec.Body.String())
 	}
 }
 

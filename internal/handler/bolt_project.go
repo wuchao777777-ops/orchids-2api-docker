@@ -75,6 +75,15 @@ func (h *Handler) persistPreferredBoltAccountID(ctx context.Context, workdir str
 	h.sessionStore.Touch(ctx, key)
 }
 
+func shouldAllowBoltAccountSwitch(category string) bool {
+	switch strings.TrimSpace(category) {
+	case "rate_limit":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *Handler) resolveBoltProjectID(ctx context.Context, acc *store.Account, client UpstreamClient, workdir string, forceNew bool) (string, error) {
 	if acc == nil {
 		return "", fmt.Errorf("bolt account is nil")
