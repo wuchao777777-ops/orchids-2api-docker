@@ -55,7 +55,9 @@ var orchidsGetAccountToken = func(acc *store.Account, cfg *config.Config) (strin
 	return orchids.NewFromAccount(acc, cfg).GetToken()
 }
 
-
+var orchidsGetAccountChatToken = func(acc *store.Account, cfg *config.Config) (string, error) {
+	return orchids.NewFromAccount(acc, cfg).GetChatToken()
+}
 
 var orchidsFetchCredits = orchids.FetchCreditsWithProxy
 
@@ -508,7 +510,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			if httpStatus == http.StatusUnauthorized || httpStatus == http.StatusForbidden || httpStatus == http.StatusTooManyRequests {
 				accountStatus = strconv.Itoa(httpStatus)
 			}
-			return accountStatus, httpStatus, fmt.Errorf("failed to refresh warp account: %w", err)
+			return accountStatus, httpStatus, fmt.Errorf("Failed to refresh warp account: %w", err)
 		}
 		acc.Token = jwt
 		warpClient.SyncAccountState()
@@ -556,7 +558,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 
 	if strings.EqualFold(acc.AccountType, "grok") {
 		if strings.TrimSpace(acc.ClientCookie) == "" {
-			return "", http.StatusBadRequest, fmt.Errorf("failed to verify grok account: missing sso token")
+			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify grok account: missing sso token")
 		}
 
 		cfg := a.config.Load()
@@ -579,7 +581,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		}
 		if verifyErr != nil {
 			status := classifyAccountStatusFromError(verifyErr.Error())
-			return status, httpStatusFromAccountStatus(status), fmt.Errorf("failed to verify grok account: %w", verifyErr)
+			return status, httpStatusFromAccountStatus(status), fmt.Errorf("Failed to verify grok account: %w", verifyErr)
 		}
 
 		if info != nil {
@@ -590,10 +592,10 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 
 	if strings.EqualFold(acc.AccountType, "bolt") {
 		if strings.TrimSpace(acc.SessionCookie) == "" && strings.TrimSpace(acc.ClientCookie) == "" {
-			return "", http.StatusBadRequest, fmt.Errorf("failed to verify bolt account: missing session token")
+			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify bolt account: missing session token")
 		}
 		if strings.TrimSpace(acc.ProjectID) == "" {
-			return "", http.StatusBadRequest, fmt.Errorf("failed to verify bolt account: missing project id")
+			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify bolt account: missing project id")
 		}
 
 		rootData, err := boltFetchRootData(ctx, acc, a.config.Load())
@@ -603,7 +605,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			if status != "" {
 				httpStatus = httpStatusFromAccountStatus(status)
 			}
-			return status, httpStatus, fmt.Errorf("failed to verify bolt account: %w", err)
+			return status, httpStatus, fmt.Errorf("Failed to verify bolt account: %w", err)
 		}
 		bolt.ApplyRootData(acc, rootData)
 		if rootData != nil && rootData.User != nil {
@@ -621,7 +623,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		if strings.TrimSpace(acc.ClientCookie) == "" &&
 			strings.TrimSpace(acc.Token) == "" &&
 			strings.TrimSpace(acc.SessionCookie) == "" {
-			return "", http.StatusBadRequest, fmt.Errorf("failed to verify puter account: missing auth token")
+			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify puter account: missing auth token")
 		}
 		if err := puterVerifyAccount(ctx, acc, a.config.Load()); err != nil {
 			status := classifyAccountStatusFromError(err.Error())
@@ -629,7 +631,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			if status != "" {
 				httpStatus = httpStatusFromAccountStatus(status)
 			}
-			return status, httpStatus, fmt.Errorf("failed to verify puter account: %w", err)
+			return status, httpStatus, fmt.Errorf("Failed to verify puter account: %w", err)
 		}
 		return "", 0, nil
 	}
@@ -676,7 +678,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			slog.Warn("Orchids chat auth refresh failed but quota sync succeeded; keeping account refresh successful", "account_id", acc.ID, "status", status, "error", err)
 			return "", 0, nil
 		}
-		return status, httpStatus, fmt.Errorf("failed to refresh account: %w", err)
+		return status, httpStatus, fmt.Errorf("Failed to refresh account: %w", err)
 	}
 
 	acc.Token = strings.TrimSpace(jwt)
@@ -700,7 +702,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		if status != "" {
 			httpStatus = httpStatusFromAccountStatus(status)
 		}
-		return status, httpStatus, fmt.Errorf("failed to refresh account: %w", creditsErr)
+		return status, httpStatus, fmt.Errorf("Failed to refresh account: %w", creditsErr)
 	}
 	applyOrchidsQuotaFromCredits(acc, creditsInfo)
 	return "", 0, nil
@@ -1542,7 +1544,35 @@ func (a *API) SetTokenCache(c tokencache.Cache) {
 	a.tokenCache = c
 }
 
+func (a *API) HandleCacheStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
 
+	if !a.cacheTokenCountEnabled() || a.tokenCache == nil {
+		// No cache configured
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"count":      0,
+			"size_bytes": 0,
+			"status":     "disabled",
+		})
+		return
+	}
+
+	count, size, err := a.tokenCache.GetStats(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to get stats: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"count":      count,
+		"size_bytes": size,
+		"status":     "enabled",
+	})
+}
 
 func (a *API) HandleCacheClear(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1563,7 +1593,13 @@ func (a *API) HandleCacheClear(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-
+func (a *API) cacheTokenCountEnabled() bool {
+	cfg := a.config.Load()
+	if cfg == nil {
+		return false
+	}
+	return cfg.CacheTokenCount
+}
 
 func tokenCacheConfigChanged(before, after *config.Config) bool {
 	if before == nil || after == nil {

@@ -70,19 +70,6 @@ func TestRedisDedupStoreAutoExpiry(t *testing.T) {
 	}
 }
 
-func TestRedisDedupStoreForget(t *testing.T) {
-	store, _ := setupRedisDedupStore(t)
-	ctx := context.Background()
-
-	store.Register(ctx, "hash_forget")
-	store.Forget(ctx, "hash_forget")
-
-	dup, inFlight := store.Register(ctx, "hash_forget")
-	if dup || inFlight {
-		t.Fatalf("expected forgotten key to allow immediate retry, got dup=%v inflight=%v", dup, inFlight)
-	}
-}
-
 // --- Memory dedup tests ---
 
 func TestMemoryDedupStoreRegisterDuplicate(t *testing.T) {
@@ -143,18 +130,5 @@ func TestMemoryDedupStoreConcurrent(t *testing.T) {
 	// First one should succeed, rest should be duplicates
 	if dupCount != 9 {
 		t.Fatalf("expected 9 duplicates, got %d", dupCount)
-	}
-}
-
-func TestMemoryDedupStoreForget(t *testing.T) {
-	store := NewMemoryDedupStore(2*time.Second, 10*time.Second)
-	ctx := context.Background()
-
-	store.Register(ctx, "hash_forget")
-	store.Forget(ctx, "hash_forget")
-
-	dup, inFlight := store.Register(ctx, "hash_forget")
-	if dup || inFlight {
-		t.Fatalf("expected forgotten key to allow immediate retry, got dup=%v inflight=%v", dup, inFlight)
 	}
 }

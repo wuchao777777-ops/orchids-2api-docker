@@ -207,39 +207,6 @@ func (h *Handler) selectAccount(ctx context.Context, targetChannel string, chann
 	return nil, nil, errors.New("no client configured")
 }
 
-func (h *Handler) tryPreferredBoltAccount(ctx context.Context, workdir string, failedAccountIDs []int64) (UpstreamClient, *store.Account, bool) {
-	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
-		return nil, nil, false
-	}
-
-	preferredID := h.preferredBoltAccountID(ctx, workdir)
-	if preferredID == 0 {
-		return nil, nil, false
-	}
-	for _, failedID := range failedAccountIDs {
-		if failedID == preferredID {
-			return nil, nil, false
-		}
-	}
-
-	account, err := h.loadBalancer.Store.GetAccount(ctx, preferredID)
-	if err != nil || account == nil || !account.Enabled {
-		return nil, nil, false
-	}
-	accType := strings.TrimSpace(account.AccountType)
-	if accType == "" {
-		accType = "orchids"
-	}
-	if !strings.EqualFold(accType, "bolt") && !strings.EqualFold(strings.TrimSpace(account.AgentMode), "bolt") {
-		return nil, nil, false
-	}
-	client := h.getOrCreateAccountClient(account)
-	if client == nil {
-		return nil, nil, false
-	}
-	return client, account, true
-}
-
 func (h *Handler) acquireTrackedAccount(acc *store.Account) int64 {
 	if acc == nil || acc.ID == 0 {
 		return 0
@@ -281,7 +248,7 @@ func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forced
 		m               *store.Model
 	)
 	if forcedChannel != "" {
-		_, m = h.resolveModelAliasForChannel(ctx, forcedChannel, modelID)
+		resolvedModelID, m = h.resolveModelAliasForChannel(ctx, forcedChannel, modelID)
 	} else {
 		resolvedModelID, m = h.resolveModelAlias(ctx, modelID)
 		if strings.EqualFold(forcedChannel, "warp") {

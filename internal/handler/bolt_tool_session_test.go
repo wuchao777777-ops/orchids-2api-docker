@@ -54,23 +54,3 @@ func TestInferBoltToolsFromMessages_IgnoresNonAssistantBlocks(t *testing.T) {
 		t.Fatalf("inferBoltToolsFromMessages(user-only) = %#v want nil", got)
 	}
 }
-
-func TestSupportedDeclaredToolNames_PreservesTavilyAlias(t *testing.T) {
-	t.Parallel()
-
-	tools := []interface{}{
-		map[string]interface{}{"name": "web_search"},
-		map[string]interface{}{"name": "mcp__tavily__web_search"},
-	}
-
-	got := supportedDeclaredToolNames(tools)
-	want := []string{"web_search", "mcp__tavily__web_search"}
-	if len(got) != len(want) {
-		t.Fatalf("supportedDeclaredToolNames len=%d want=%d (%#v)", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("supportedDeclaredToolNames[%d]=%q want %q (%#v)", i, got[i], want[i], got)
-		}
-	}
-}

@@ -371,13 +371,6 @@ func (h *Handler) finishRequest(hash string) {
 	h.dedupStore.Finish(context.Background(), hash)
 }
 
-func (h *Handler) forgetRequest(hash string) {
-	if h == nil || h.dedupStore == nil {
-		return
-	}
-	h.dedupStore.Forget(context.Background(), hash)
-}
-
 func stainlessRetryCount(r *http.Request) int {
 	if r == nil {
 		return 0
@@ -480,7 +473,7 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		msgStart, _ := marshalSSEMessageStartBytes("dup", req.Model, 0, 0)
+		msgStart, _ := marshalSSEMessageStartNoUsageBytes("dup", req.Model)
 		_ = writeSSEFrameBytes(w, "message_start", msgStart)
 		_ = writeSSEFrameBytes(w, "message_stop", sseMessageStopBytes)
 		if flusher, ok := w.(http.Flusher); ok {
@@ -596,12 +589,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	registeredKeys := []string{}
-	forgetRegisteredKeys := func() {
-		for i := len(registeredKeys) - 1; i >= 0; i-- {
-			h.forgetRequest(registeredKeys[i])
-		}
-		registeredKeys = nil
-	}
 	if !bypassDedup {
 		exactKey := "exact:" + reqHash
 		if dup, inFlight := h.registerRequest(exactKey); dup {
@@ -778,22 +765,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			"model":   req.Model,
 			"channel": targetChannel,
 		})
-		forgetRegisteredKeys()
 		apperrors.New("overloaded_error", err.Error(), http.StatusServiceUnavailable).WriteResponse(w)
 		return
 	}
 	if verboseDiagnostics {
 		slog.Debug("Checkpoint: selectAccount success")
-	}
-	requestedBoltChannel := strings.EqualFold(forcedChannel, "bolt")
-	if requestedBoltChannel && effectiveWorkdir != "" {
-		if pinnedClient, pinnedAccount, ok := h.tryPreferredBoltAccount(r.Context(), effectiveWorkdir, failedAccountIDs); ok {
-			apiClient = pinnedClient
-			currentAccount = pinnedAccount
-			if verboseDiagnostics {
-				slog.Debug("Pinned Bolt account restored for workdir", "workdir", effectiveWorkdir, "account_id", currentAccount.ID, "account_name", currentAccount.Name)
-			}
-		}
 	}
 
 	// 捕获账号快照，用于请求结束后检测 forceRefreshToken 是否更新了账号信息
@@ -817,8 +793,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	freshBoltTask := false
 	if isBoltRequest {
-		// User-requested behavior: keep full bolt history without forced reset.
-		freshBoltTask = false
+		freshBoltTask = shouldForceFreshBoltTask(req)
+		if freshBoltTask {
+			req.Messages = resetBoltMessagesForFreshTask(req.Messages)
+			if verboseDiagnostics {
+				slog.Debug("bolt: reset stale history for fresh top-level request")
+			}
+		}
 	}
 	isPassthroughRequest := isWarpRequest || isBoltRequest || isPuterRequest
 	if isPassthroughRequest {
@@ -853,11 +834,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		req.Messages = sanitizePuterMessages(req.Messages)
-	} else if isBoltRequest {
-		// User-requested behavior: disable bolt history compaction/sanitization.
-		if verboseDiagnostics {
-			slog.Debug("bolt: history compaction disabled; forwarding full message history")
-		}
 	}
 	if verboseDiagnostics {
 		slog.Debug("Checkpoint: message processing done")
@@ -924,13 +900,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 				h.persistBoltTools(r.Context(), conversationKey, effectiveTools)
 			}
-		}
-		if len(effectiveTools) > 0 {
-			minimalBoltTools := bolt.MinimalSupportedToolSpecs(collectIncomingToolNames(effectiveTools))
-			effectiveTools = make([]interface{}, 0, len(minimalBoltTools))
-			for _, spec := range minimalBoltTools {
-				effectiveTools = append(effectiveTools, spec)
-			}
+		} else {
 			h.persistBoltTools(r.Context(), conversationKey, effectiveTools)
 		}
 	}
@@ -1146,15 +1116,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	allowedToolNames := []string(nil)
 	if !isOrchidsProtocol {
 		allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, isBoltRequest)
-		if isBoltRequest {
-			allowedToolNames = expandBoltDeclaredToolNames(allowedToolNames)
-		}
 		sh.setAllowedToolNames(allowedToolNames)
-		preferredToolNames := collectIncomingToolNames(req.Tools)
-		if len(preferredToolNames) == 0 {
-			preferredToolNames = collectIncomingToolNames(effectiveTools)
-		}
-		sh.setPreferredToolNames(preferredToolNames)
 	}
 	if verboseDiagnostics && isBoltRequest && !gateNoTools && len(allowedToolNames) == 0 {
 		slog.Debug("tool_gate: bolt request has no declared tools after session restore", "conversation_id", conversationKey)
@@ -1473,21 +1435,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 				nextClient, nextAccount, retryErr := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
 				if retryErr == nil {
-					if isBoltRequest && strings.TrimSpace(boltProjectID) != "" && effectiveWorkdir != "" && nextAccount != nil && nextAccount.ID != prevAccount.ID {
-						if !shouldAllowBoltAccountSwitch(errClass.Category) {
-							retryErr = fmt.Errorf("bolt project %s is pinned to account %d for workdir %s; refusing to switch to account %d for category %s", boltProjectID, prevAccount.ID, effectiveWorkdir, nextAccount.ID, errClass.Category)
-						} else {
-							nextProjectID, projectErr := h.resolveBoltProjectID(r.Context(), nextAccount, nextClient, effectiveWorkdir, true)
-							if projectErr != nil {
-								retryErr = fmt.Errorf("bolt switch to account %d failed to initialize project for workdir %s: %w", nextAccount.ID, effectiveWorkdir, projectErr)
-							} else {
-								boltProjectID = nextProjectID
-								upstreamReq.ProjectID = strings.TrimSpace(nextProjectID)
-							}
-						}
-					}
-				}
-				if retryErr == nil {
 					apiClient = nextClient
 					currentAccount = nextAccount
 					if currentAccount != nil {
@@ -1514,18 +1461,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 							"retry_error", retryErr,
 						)
 					} else {
-						if isBoltRequest && strings.TrimSpace(boltProjectID) != "" && effectiveWorkdir != "" {
-							slog.Warn(
-								"Bolt account switch suppressed to preserve project continuity",
-								"trace_id", traceID,
-								"attempt", upstreamReq.Attempt,
-								"account_id", prevAccount.ID,
-								"project_id", boltProjectID,
-								"workdir", effectiveWorkdir,
-								"category", errClass.Category,
-								"retry_error", retryErr,
-							)
-						}
 						slog.Error("No more accounts available", "error", retryErr)
 						sh.InjectNoAvailableAccountError(errStr, retryErr)
 						sh.finishResponse("end_turn")

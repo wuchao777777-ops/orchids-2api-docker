@@ -39,7 +39,58 @@ func TestExtractMessageAndAttachmentsWithToolsFormatsHistory(t *testing.T) {
 	}
 }
 
+func TestParseToolCalls(t *testing.T) {
+	text, toolCalls := parseToolCalls("before\n<tool_call>{\"name\":\"weather\",\"arguments\":{\"city\":\"shanghai\"}}</tool_call>\nafter", []ToolDef{{
+		Type: "function",
+		Function: map[string]interface{}{
+			"name": "weather",
+		},
+	}}, "auto")
+	if len(toolCalls) != 1 {
+		t.Fatalf("toolCalls=%d want 1", len(toolCalls))
+	}
+	if got := toolCalls[0]["function"].(map[string]interface{})["name"]; got != "weather" {
+		t.Fatalf("tool name=%v want weather", got)
+	}
+	if !contains(text, "before") || !contains(text, "after") {
+		t.Fatalf("text=%q want surrounding text preserved", text)
+	}
+}
 
+func TestParseToolCalls_RepairsJSONAndHonorsForcedTool(t *testing.T) {
+	text, toolCalls := parseToolCalls("before\n<tool_call>```json\n{\"name\":\"weather\",\"arguments\":{\"city\":\"shanghai\",}}\n```</tool_call>\nafter", []ToolDef{{
+		Type: "function",
+		Function: map[string]interface{}{
+			"name": "weather",
+		},
+	}}, map[string]interface{}{
+		"type": "function",
+		"function": map[string]interface{}{
+			"name": "weather",
+		},
+	})
+	if len(toolCalls) != 1 {
+		t.Fatalf("toolCalls=%d want 1", len(toolCalls))
+	}
+	if !contains(text, "before") || !contains(text, "after") {
+		t.Fatalf("text=%q want surrounding text preserved", text)
+	}
+
+	_, rejected := parseToolCalls("<tool_call>{\"name\":\"search\",\"arguments\":{}}</tool_call>", []ToolDef{{
+		Type: "function",
+		Function: map[string]interface{}{
+			"name": "weather",
+		},
+	}}, map[string]interface{}{
+		"type": "function",
+		"function": map[string]interface{}{
+			"name": "weather",
+		},
+	})
+	if len(rejected) != 0 {
+		t.Fatalf("forced tool choice should reject mismatched tool, got=%v", rejected)
+	}
+}
 
 func contains(s, sub string) bool {
 	return len(sub) == 0 || (len(s) >= len(sub) && (func() bool {

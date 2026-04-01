@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/loadbalancer"
@@ -39,7 +41,35 @@ func (b *BaseHandler) MarkAccountStatus(ctx context.Context, acc *store.Account,
 	b.LB.MarkAccountStatus(ctx, acc, status)
 }
 
-
+// EnsureModelEnabled checks that the given model ID exists, is enabled,
+// and belongs to the specified channel. Pass empty channel to skip the
+// channel check.
+func (b *BaseHandler) EnsureModelEnabled(ctx context.Context, modelID, channel string) error {
+	if b == nil || b.LB == nil || b.LB.Store == nil {
+		return nil
+	}
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return nil
+	}
+	m, err := b.LB.Store.GetModelByModelID(ctx, modelID)
+	if err != nil || m == nil {
+		return fmt.Errorf("model not found")
+	}
+	if !m.Status.Enabled() {
+		return fmt.Errorf("model not available")
+	}
+	if channel != "" {
+		mChannel := strings.TrimSpace(m.Channel)
+		if mChannel == "" {
+			mChannel = channel // default to expected channel
+		}
+		if !strings.EqualFold(mChannel, channel) {
+			return fmt.Errorf("model not found")
+		}
+	}
+	return nil
+}
 
 // NewBaseHandler creates a BaseHandler with the given load balancer.
 func NewBaseHandler(lb *loadbalancer.LoadBalancer) *BaseHandler {

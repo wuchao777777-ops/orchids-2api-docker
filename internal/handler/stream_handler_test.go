@@ -112,9 +112,6 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	if msg["delta"].(map[string]any)["stop_reason"] != expectedStopReason {
 		t.Fatalf("unexpected stop reason: %#v", msg)
 	}
-	if _, ok := msg["delta"].(map[string]any)["stop_sequence"]; !ok {
-		t.Fatalf("expected stop_sequence in message delta: %#v", msg)
-	}
 	if int(msg["usage"].(map[string]any)["output_tokens"].(float64)) != 42 {
 		t.Fatalf("unexpected output tokens: %#v", msg)
 	}
@@ -137,6 +134,19 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	usageObj := messageObj["usage"].(map[string]any)
 	if int(usageObj["input_tokens"].(float64)) != 12 || int(usageObj["output_tokens"].(float64)) != 0 {
 		t.Fatalf("unexpected usage object: %#v", usageObj)
+	}
+
+	msgStartNoUsageRaw, err := marshalSSEMessageStartNoUsageBytes("dup", "claude-test")
+	if err != nil {
+		t.Fatalf("marshal message start no usage: %v", err)
+	}
+	var msgStartNoUsage map[string]any
+	if err := json.Unmarshal(msgStartNoUsageRaw, &msgStartNoUsage); err != nil {
+		t.Fatalf("unmarshal message start no usage: %v", err)
+	}
+	messageNoUsageObj := msgStartNoUsage["message"].(map[string]any)
+	if _, ok := messageNoUsageObj["usage"]; ok {
+		t.Fatalf("expected no usage field, got: %#v", messageNoUsageObj)
 	}
 
 	plainText := "hello ??"

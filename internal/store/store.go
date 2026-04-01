@@ -398,6 +398,13 @@ func (s *Store) GetEnabledAccounts(ctx context.Context) ([]*Account, error) {
 	return nil, fmt.Errorf("store not configured")
 }
 
+func (s *Store) IncrementRequestCount(ctx context.Context, id int64) error {
+	if s.accounts != nil {
+		return s.accounts.IncrementRequestCount(ctx, id)
+	}
+	return fmt.Errorf("store not configured")
+}
+
 func (s *Store) IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error {
 	if s.accounts != nil {
 		return s.accounts.IncrementAccountStats(ctx, id, usage, count)

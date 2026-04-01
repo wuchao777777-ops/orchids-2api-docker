@@ -187,7 +187,10 @@ func repairToolCallJSON(text string) map[string]interface{} {
 	return parsed
 }
 
-
+func parseToolCallBlock(rawJSON string, tools []ToolDef, toolChoice interface{}) map[string]interface{} {
+	parser := newToolCallParser(tools, toolChoice)
+	return parser.parseBlock(rawJSON)
+}
 
 func (p toolCallParser) parseBlock(rawJSON string) map[string]interface{} {
 	if strings.TrimSpace(rawJSON) == "" {
@@ -294,7 +297,10 @@ func formatToolHistory(messages []ChatMessage) []ChatMessage {
 	return out
 }
 
-
+func parseToolCalls(content string, tools []ToolDef, toolChoice interface{}) (string, []map[string]interface{}) {
+	parser := newToolCallParser(tools, toolChoice)
+	return parser.parseCalls(content)
+}
 
 func (p toolCallParser) parseCalls(content string) (string, []map[string]interface{}) {
 	if strings.TrimSpace(content) == "" {

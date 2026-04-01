@@ -69,22 +69,6 @@ func TestRedisSessionStoreBoltProjectID(t *testing.T) {
 	}
 }
 
-func TestRedisSessionStoreBoltAccountID(t *testing.T) {
-	store, _ := setupRedisSessionStore(t)
-	ctx := context.Background()
-
-	_, ok := store.GetBoltAccountID(ctx, "bolt:acct")
-	if ok {
-		t.Fatal("expected miss")
-	}
-
-	store.SetBoltAccountID(ctx, "bolt:acct", 42)
-	accountID, ok := store.GetBoltAccountID(ctx, "bolt:acct")
-	if !ok || accountID != 42 {
-		t.Fatalf("expected 42, got %d (ok=%v)", accountID, ok)
-	}
-}
-
 func TestRedisSessionStoreBoltToolNames(t *testing.T) {
 	store, _ := setupRedisSessionStore(t)
 	ctx := context.Background()
@@ -207,22 +191,6 @@ func TestMemorySessionStoreBoltProjectID(t *testing.T) {
 	projectID, ok := store.GetBoltProjectID(ctx, "bolt:1")
 	if !ok || projectID != "sb1-demo" {
 		t.Fatalf("expected sb1-demo, got %q (ok=%v)", projectID, ok)
-	}
-}
-
-func TestMemorySessionStoreBoltAccountID(t *testing.T) {
-	store := NewMemorySessionStore(30*time.Minute, 100)
-	ctx := context.Background()
-
-	_, ok := store.GetBoltAccountID(ctx, "bolt:acct")
-	if ok {
-		t.Fatal("expected miss")
-	}
-
-	store.SetBoltAccountID(ctx, "bolt:acct", 42)
-	accountID, ok := store.GetBoltAccountID(ctx, "bolt:acct")
-	if !ok || accountID != 42 {
-		t.Fatalf("expected 42, got %d (ok=%v)", accountID, ok)
 	}
 }
 

@@ -158,21 +158,13 @@ function showToast(msg, type = 'success') {
   }
   const toast = document.createElement("div");
   toast.className = "toast";
-  const meta = type === "success"
-    ? { color: "#34d399", mark: "OK" }
-    : type === "info"
-      ? { color: "#38bdf8", mark: "FYI" }
-      : { color: "#fb7185", mark: "ERR" };
-  toast.style.borderLeft = `4px solid ${meta.color}`;
-  const mark = document.createElement("span");
-  mark.className = "toast-mark";
-  mark.textContent = meta.mark;
-  mark.style.background = `${meta.color}24`;
-  mark.style.color = meta.color;
-  const body = document.createElement("span");
-  body.className = "toast-body";
-  body.textContent = String(msg || "");
-  toast.append(mark, body);
+  const color = type === 'success' ? '#34d399' : type === 'info' ? '#38bdf8' : '#fb7185';
+  const icon = type === 'success' ? '✅' : type === 'info' ? 'ℹ️' : '❌';
+  toast.style.borderLeft = `4px solid ${color}`;
+  const iconSpan = document.createElement("span");
+  iconSpan.textContent = icon;
+  toast.appendChild(iconSpan);
+  toast.appendChild(document.createTextNode(` ${msg}`));
   container.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add("show"));
   setTimeout(() => {
@@ -224,7 +216,6 @@ function switchTab(tabName, skipSidebar = false) {
   const url = new URL(window.location);
   url.searchParams.set('tab', tabName);
   window.location.href = url.toString();
-  return false;
 }
 
 document.addEventListener("DOMContentLoaded", () => {

@@ -18,7 +18,6 @@ import (
 )
 
 const defaultCacheTTL = 5 * time.Second
-const recentSuccessWarmWindow = 30 * time.Minute
 
 type LoadBalancer struct {
 	Store          *store.Store
@@ -44,6 +43,21 @@ func NewWithCacheTTL(s *store.Store, cacheTTL time.Duration) *LoadBalancer {
 // SetConnTracker replaces the default in-memory connection tracker.
 func (lb *LoadBalancer) SetConnTracker(ct ConnTracker) {
 	lb.connTracker = ct
+}
+
+func (lb *LoadBalancer) GetModelChannel(ctx context.Context, modelID string) string {
+	if lb.Store == nil {
+		return ""
+	}
+	m, err := lb.Store.GetModelByModelID(ctx, modelID)
+	if err != nil || m == nil {
+		return ""
+	}
+	return m.Channel
+}
+
+func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, excludeIDs []int64, channel string) (*store.Account, error) {
+	return lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, channel, nil)
 }
 
 func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTracker(ctx context.Context, excludeIDs []int64, channel string, tracker ConnTracker) (*store.Account, error) {
@@ -185,46 +199,10 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 	}
 
 	if len(bestAccounts) > 0 {
-		bestAccounts = preferRecentlyHealthyAccounts(bestAccounts)
-		// Randomly select one from the best accounts to ensure load balancing.
-		// When scores tie, we first narrow to accounts that have succeeded recently,
-		// which makes probe-style traffic less likely to randomly hit a stale account.
+		// Randomly select one from the best accounts to ensure load balancing
 		return bestAccounts[rand.IntN(len(bestAccounts))]
 	}
 	return accounts[0]
-}
-
-func preferRecentlyHealthyAccounts(accounts []*store.Account) []*store.Account {
-	if len(accounts) <= 1 {
-		return accounts
-	}
-
-	now := time.Now()
-	var preferred []*store.Account
-	var newest time.Time
-
-	for _, acc := range accounts {
-		if acc == nil || acc.LastUsedAt.IsZero() {
-			continue
-		}
-		age := now.Sub(acc.LastUsedAt)
-		if age < 0 || age > recentSuccessWarmWindow {
-			continue
-		}
-		if preferred == nil || acc.LastUsedAt.After(newest) {
-			preferred = []*store.Account{acc}
-			newest = acc.LastUsedAt
-			continue
-		}
-		if acc.LastUsedAt.Equal(newest) {
-			preferred = append(preferred, acc)
-		}
-	}
-
-	if len(preferred) > 0 {
-		return preferred
-	}
-	return accounts
 }
 
 func (lb *LoadBalancer) AcquireConnection(accountID int64) {

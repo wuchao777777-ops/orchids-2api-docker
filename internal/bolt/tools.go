@@ -24,26 +24,22 @@ var coreToolHints = map[string]string{
 	"Grep":  "Grep(path, pattern, glob?, output_mode?, -n?, -C?)",
 }
 
-var boltSupportedToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "web_search", "web_fetch", "Task", "Skill"}
+var boltSupportedToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "Task", "Skill"}
 
 var boltSupportedToolSet = map[string]struct{}{
-	"Read":       {},
-	"Write":      {},
-	"Edit":       {},
-	"Bash":       {},
-	"Glob":       {},
-	"Grep":       {},
-	"web_search": {},
-	"web_fetch":  {},
-	"Task":       {},
-	"Skill":      {},
+	"Read":  {},
+	"Write": {},
+	"Edit":  {},
+	"Bash":  {},
+	"Glob":  {},
+	"Grep":  {},
+	"Task":  {},
+	"Skill": {},
 }
 
 var boltSupportedToolHints = map[string]string{
-	"web_search": "web_search(query, domains?, timeRange?)",
-	"web_fetch":  "web_fetch(url, prompt?)",
-	"Task":       "Task(description, prompt, subagent_type?)",
-	"Skill":      "Skill(skill, args)",
+	"Task":  "Task(description, prompt, subagent_type?)",
+	"Skill": "Skill(skill, args)",
 }
 
 var continuationOnlyTextSet = map[string]struct{}{
@@ -82,10 +78,6 @@ func CanonicalSupportedToolName(name string) string {
 		return "Task"
 	case "skill":
 		return "Skill"
-	case "websearch":
-		return "web_search"
-	case "webfetch":
-		return "web_fetch"
 	default:
 		return mappedName
 	}
@@ -118,57 +110,16 @@ func FilterSupportedToolNames(names []string) []string {
 }
 
 func MinimalSupportedToolSpecs(names []string) []map[string]interface{} {
-	if len(names) == 0 {
+	normalized := FilterSupportedToolNames(names)
+	if len(normalized) == 0 {
 		return nil
 	}
 
-	preferred := make(map[string]string, len(names))
-	for _, rawName := range names {
-		name := strings.TrimSpace(rawName)
-		if name == "" {
-			continue
-		}
-		canonical := CanonicalSupportedToolName(name)
-		if !IsSupportedTool(canonical) {
-			continue
-		}
-		key := strings.ToLower(canonical)
-		current := preferred[key]
-		if current == "" || shouldPreferSupportedAlias(current, name, canonical) {
-			preferred[key] = name
-		}
-	}
-	if len(preferred) == 0 {
-		return nil
-	}
-
-	specs := make([]map[string]interface{}, 0, len(preferred))
-	for _, canonical := range boltSupportedToolOrder {
-		name := strings.TrimSpace(preferred[strings.ToLower(canonical)])
-		if name == "" {
-			continue
-		}
+	specs := make([]map[string]interface{}, 0, len(normalized))
+	for _, name := range normalized {
 		specs = append(specs, map[string]interface{}{"name": name})
 	}
 	return specs
-}
-
-func shouldPreferSupportedAlias(current, candidate, canonical string) bool {
-	current = strings.TrimSpace(current)
-	candidate = strings.TrimSpace(candidate)
-	canonical = strings.TrimSpace(canonical)
-	if current == "" {
-		return candidate != ""
-	}
-	if candidate == "" {
-		return false
-	}
-	currentCanonical := strings.EqualFold(current, canonical)
-	candidateCanonical := strings.EqualFold(candidate, canonical)
-	if currentCanonical != candidateCanonical {
-		return !candidateCanonical
-	}
-	return false
 }
 
 func LooksLikeContinuationOnlyText(text string) bool {

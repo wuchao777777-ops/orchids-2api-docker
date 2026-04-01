@@ -1103,7 +1103,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		sentAny = true
 	}
 
-	emitTextChunk := func(content string) {
+	var emitTextChunk func(string)
+	emitTextChunk = func(content string) {
 		if toolStreamMode {
 			return
 		}

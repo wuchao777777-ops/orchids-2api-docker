@@ -24,11 +24,7 @@ func TestNormalizeToolNameFallback_CommonOpenClawAliases(t *testing.T) {
 		{in: "sessions_spawn", want: "Task"},
 		{in: "use_skill", want: "Skill"},
 		{in: "mcp__tavily__web_search", want: "web_search"},
-		{in: "WebSearch", want: "web_search"},
-		{in: "builtin_web_search", want: "web_search"},
 		{in: "mcp__fetch__fetch", want: "web_fetch"},
-		{in: "WebFetch", want: "web_fetch"},
-		{in: "builtin_web_fetch", want: "web_fetch"},
 	}
 
 	for _, tc := range cases {
@@ -43,11 +39,11 @@ func TestMapToolNameToClientPrefersOriginalToolDefinition(t *testing.T) {
 
 	clientTools := []interface{}{
 		map[string]interface{}{
-			"name":    "read_file",
+			"name": "read_file",
 			"aliases": []interface{}{"Read"},
 		},
 		map[string]interface{}{
-			"name":    "str_replace_editor",
+			"name": "str_replace_editor",
 			"aliases": []interface{}{"Edit"},
 		},
 	}
@@ -66,7 +62,7 @@ func TestMapToolNameToClientMatchesSnakeCaseAlias(t *testing.T) {
 
 	clientTools := []interface{}{
 		map[string]interface{}{
-			"name":    "run_command",
+			"name": "run_command",
 			"aliases": []interface{}{"Bash"},
 		},
 	}

@@ -24,7 +24,7 @@ func (h *Handler) persistBoltTools(ctx context.Context, conversationKey string, 
 	if h == nil || h.sessionStore == nil || conversationKey == "" {
 		return
 	}
-	names := supportedDeclaredToolNames(tools)
+	names := supportedToolNames(tools)
 	if len(names) == 0 {
 		return
 	}
@@ -79,29 +79,4 @@ func logBoltToolsInferred(tools []interface{}) {
 		"bolt tools inferred from message history",
 		"tool_names", supportedToolNames(tools),
 	)
-}
-
-func supportedDeclaredToolNames(tools []interface{}) []string {
-	rawNames := collectIncomingToolNames(tools)
-	if len(rawNames) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(rawNames))
-	seen := make(map[string]struct{}, len(rawNames))
-	for _, name := range rawNames {
-		name = strings.TrimSpace(name)
-		if name == "" || !bolt.IsSupportedTool(name) {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, name)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }

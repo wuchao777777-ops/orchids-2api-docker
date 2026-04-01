@@ -36,19 +36,20 @@ const (
 )
 
 const (
-	sseEventPrefix                 = "event: "
-	sseDataPrefix                  = "data: "
-	sseLineBreak                   = "\n\n"
-	sseDataJoin                    = "\ndata: "
-	sseDoneLine                    = "data: [DONE]\n\n"
-	sseKeepAlive                   = ": keep-alive\n\n"
-	sseDeferredFlushFrameThreshold = 4
-	sseDeferredFlushByteThreshold  = 2048
-	sseBufferedWriteMax            = 4096
-	genericEmptyOutputFallbackText = "No output was presented to the user. This may be due to tool calls being suppressed or the model producing no text content."
+	sseEventPrefix                  = "event: "
+	sseDataPrefix                   = "data: "
+	sseLineBreak                    = "\n\n"
+	sseDataJoin                     = "\ndata: "
+	sseDoneLine                     = "data: [DONE]\n\n"
+	sseKeepAlive                    = ": keep-alive\n\n"
+	sseDeferredFlushFrameThreshold  = 4
+	sseDeferredFlushByteThreshold   = 2048
+	sseBufferedWriteMax             = 4096
+	genericEmptyOutputFallbackText  = "No output was presented to the user. This may be due to tool calls being suppressed or the model producing no text content."
 )
 
 var (
+	rawJSONEmptyObject  = json.RawMessage("{}")
 	sseTextDeltaMarker  = []byte(`"type":"text_delta"`)
 	sseDoneLineBytes    = []byte(sseDoneLine)
 	sseKeepAliveBytes   = []byte(sseKeepAlive)
@@ -84,10 +85,22 @@ func mapKeys(m map[string]interface{}) []string {
 
 // --- sse_frame structs removed ---
 
+type sseMessageStop struct {
+	Type string `json:"type"`
+}
+
 type directToolUseState struct {
 	id    string
 	name  string
 	input *strings.Builder
+}
+
+func marshalJSONString(v interface{}) (string, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func marshalEventPayloadBytes(msg upstream.SSEMessage) ([]byte, error) {
@@ -233,7 +246,6 @@ type streamHandler struct {
 	responseFormat    adapter.ResponseFormat
 	disallowToolCalls bool
 	allowedToolNames  map[string]struct{}
-	preferredToolName map[string]string
 
 	// HTTP Response
 	w       http.ResponseWriter
@@ -359,7 +371,6 @@ func newStreamHandler(
 		toolDedupKeys:             make(map[string]int),
 		introDedup:                make(map[string]struct{}),
 		allowedToolNames:          make(map[string]struct{}),
-		preferredToolName:         make(map[string]string),
 		msgID:                     fmt.Sprintf("msg_%d", time.Now().UnixMilli()),
 		startTime:                 time.Now(),
 		currentTextIndex:          -1,
@@ -403,65 +414,6 @@ func (h *streamHandler) setAllowedToolNames(names []string) {
 		h.allowedToolNames[key] = struct{}{}
 	}
 	h.mu.Unlock()
-}
-
-func (h *streamHandler) setPreferredToolNames(names []string) {
-	h.mu.Lock()
-	clear(h.preferredToolName)
-	for _, name := range names {
-		raw := strings.TrimSpace(name)
-		if raw == "" {
-			continue
-		}
-		key := preferredToolNameKey(raw)
-		if key == "" {
-			continue
-		}
-		if current, ok := h.preferredToolName[key]; ok && !shouldPreferDeclaredToolAlias(current, raw, key) {
-			continue
-		}
-		h.preferredToolName[key] = raw
-	}
-	h.mu.Unlock()
-}
-
-func preferredToolNameKey(name string) string {
-	mapped := strings.TrimSpace(orchids.NormalizeToolNameFallback(name))
-	if mapped == "" {
-		mapped = strings.TrimSpace(name)
-	}
-	return strings.ToLower(mapped)
-}
-
-func shouldPreferDeclaredToolAlias(current, candidate, canonicalKey string) bool {
-	current = strings.TrimSpace(current)
-	candidate = strings.TrimSpace(candidate)
-	if current == "" {
-		return candidate != ""
-	}
-	if candidate == "" {
-		return false
-	}
-	currentCanonical := strings.EqualFold(current, canonicalKey)
-	candidateCanonical := strings.EqualFold(candidate, canonicalKey)
-	if currentCanonical != candidateCanonical {
-		return !candidateCanonical
-	}
-	return false
-}
-
-func (h *streamHandler) restorePreferredToolName(name string) string {
-	key := preferredToolNameKey(name)
-	if key == "" {
-		return strings.TrimSpace(name)
-	}
-	h.mu.Lock()
-	preferred := strings.TrimSpace(h.preferredToolName[key])
-	h.mu.Unlock()
-	if preferred != "" {
-		return preferred
-	}
-	return strings.TrimSpace(name)
 }
 
 func (h *streamHandler) release() {
@@ -561,6 +513,44 @@ func (h *streamHandler) writeOpenAISSEBytes(event string, data []byte) (bool, er
 	return true, nil
 }
 
+func (h *streamHandler) writeFinalSSE(event, data string) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.responseFormat == adapter.FormatOpenAI {
+		written, err := h.writeOpenAISSE(event, data)
+		if err != nil {
+			h.markWriteErrorLocked(event, err)
+			return
+		}
+		if written {
+			h.flushSSELocked(event, data, true)
+		}
+		// Send [DONE] at the very end
+		if event == "message_stop" {
+			if _, err := h.w.Write(sseDoneLineBytes); err != nil {
+				h.markWriteErrorLocked(event, err)
+				return
+			}
+			h.flushSSELocked(event, sseDoneLine, true)
+		}
+		return
+	}
+
+	if err := writeSSEFrame(h.w, event, data); err != nil {
+		h.markWriteErrorLocked(event, err)
+		return
+	}
+	h.flushSSELocked(event, data, true)
+
+	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
+		h.logger.LogOutputSSE(event, data)
+	}
+}
+
 func (h *streamHandler) writeFinalSSEBytes(event string, data []byte) {
 	if !h.isStream {
 		return
@@ -653,6 +643,15 @@ func (h *streamHandler) writeSSEContentBlockStartToolUseLocked(index int, id, na
 	h.writeSSEBytesLockedWithHint("content_block_start", raw, true)
 }
 
+func (h *streamHandler) writeSSEContentBlockStartToolUse(index int, id, name string, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockStartToolUseLocked(index, id, name, final)
+}
+
 func (h *streamHandler) writeSSEContentBlockStartTextLocked(index int, final bool) {
 	raw, err := appendSSEContentBlockStartText(h.ssePayloadScratch[:0], index)
 	if err != nil {
@@ -667,6 +666,15 @@ func (h *streamHandler) writeSSEContentBlockStartTextLocked(index int, final boo
 	h.writeSSEBytesLockedWithHint("content_block_start", raw, true)
 }
 
+func (h *streamHandler) writeSSEContentBlockStartText(index int, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockStartTextLocked(index, final)
+}
+
 func (h *streamHandler) writeSSEContentBlockDeltaInputJSONLocked(index int, partialJSON string, final bool) {
 	raw, err := appendSSEContentBlockDeltaInputJSON(h.ssePayloadScratch[:0], index, partialJSON)
 	if err != nil {
@@ -679,6 +687,15 @@ func (h *streamHandler) writeSSEContentBlockDeltaInputJSONLocked(index int, part
 		return
 	}
 	h.writeSSEBytesLockedWithHint("content_block_delta", raw, false)
+}
+
+func (h *streamHandler) writeSSEContentBlockDeltaInputJSON(index int, partialJSON string, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockDeltaInputJSONLocked(index, partialJSON, final)
 }
 
 func (h *streamHandler) writeSSEContentBlockDeltaTextLocked(index int, text string, final bool) {
@@ -741,6 +758,15 @@ func (h *streamHandler) writeSSEContentBlockStopLocked(index int, final bool) {
 	h.writeSSEBytesLockedWithHint("content_block_stop", raw, true)
 }
 
+func (h *streamHandler) writeSSEContentBlockStop(index int, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEContentBlockStopLocked(index, final)
+}
+
 func (h *streamHandler) writeSSEMessageDeltaLocked(stopReason string, outputTokens int, final bool) {
 	raw, err := appendSSEMessageDelta(h.ssePayloadScratch[:0], stopReason, outputTokens)
 	if err != nil {
@@ -753,6 +779,15 @@ func (h *streamHandler) writeSSEMessageDeltaLocked(stopReason string, outputToke
 		return
 	}
 	h.writeSSEBytesLockedWithHint("message_delta", raw, true)
+}
+
+func (h *streamHandler) writeSSEMessageDelta(stopReason string, outputTokens int, final bool) {
+	if !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.writeSSEMessageDeltaLocked(stopReason, outputTokens, final)
 }
 
 func (h *streamHandler) writeSSEMessageStart(model string, inputTokens, outputTokens int) {
@@ -1368,7 +1403,6 @@ func (h *streamHandler) handleDirectFinalSSEEvent(msg upstream.SSEMessage) bool 
 			}
 			toolID := strings.TrimSpace(pending.id)
 			toolName, normalizedInput := normalizeUpstreamToolCall(pending.name, inputStr, h.workdir)
-			toolName = h.restorePreferredToolName(toolName)
 			if toolID == "" {
 				toolID = fallbackToolCallID(toolName, normalizedInput)
 			}
@@ -1429,24 +1463,6 @@ func stringifyToolInput(input interface{}) string {
 		}
 		return string(raw)
 	}
-}
-
-func stringifyToolCallInputFromEvent(event map[string]interface{}) string {
-	if event == nil {
-		return ""
-	}
-	if input, ok := event["input"]; ok {
-		if raw := strings.TrimSpace(stringifyToolInput(input)); raw != "" {
-			return raw
-		}
-	}
-	if args, ok := event["args"]; ok {
-		return stringifyToolInput(args)
-	}
-	if arguments, ok := event["arguments"]; ok {
-		return stringifyToolInput(arguments)
-	}
-	return ""
 }
 
 // sanitizeToolInput normalizes upstream tool input for Claude Code compatibility.
@@ -2745,6 +2761,38 @@ func (h *streamHandler) closeActiveBlockLocked() {
 	h.writeSSEBytesLocked("content_block_stop", stopData)
 }
 
+func (h *streamHandler) writeSSELocked(event, data string) {
+	if !h.isStream {
+		return
+	}
+	if h.hasReturn {
+		return
+	}
+	if h.responseFormat == adapter.FormatOpenAI {
+		written, err := h.writeOpenAISSE(event, data)
+		if err != nil {
+			h.markWriteErrorLocked(event, err)
+			return
+		}
+		if written {
+			h.flushSSELocked(event, data, false)
+		}
+		return
+	}
+	if err := writeSSEFrame(h.w, event, data); err != nil {
+		h.markWriteErrorLocked(event, err)
+		return
+	}
+	h.flushSSELocked(event, data, false)
+	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
+		h.logger.LogOutputSSE(event, data)
+	}
+	// Log to slog only when debug enabled
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug("SSE Out", "event", event, "data_len", len(data))
+	}
+}
+
 func (h *streamHandler) writeSSEBytesLocked(event string, data []byte) {
 	if !h.isStream {
 		return
@@ -3949,7 +3997,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			perf.ReleaseStringBuilder(buf)
 		}
 		name, inputStr = normalizeUpstreamToolCall(name, inputStr, h.workdir)
-		name = h.restorePreferredToolName(name)
 		delete(h.toolInputBuffers, toolID)
 		delete(h.toolInputHadDelta, toolID)
 		delete(h.toolInputNames, toolID)
@@ -3973,9 +4020,8 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	case "model.tool-call":
 		toolID, _ := msg.Event["toolCallId"].(string)
 		toolName, _ := msg.Event["toolName"].(string)
-		inputStr := stringifyToolCallInputFromEvent(msg.Event)
+		inputStr, _ := msg.Event["input"].(string)
 		toolName, inputStr = normalizeUpstreamToolCall(toolName, inputStr, h.workdir)
-		toolName = h.restorePreferredToolName(toolName)
 		if toolID == "" {
 			toolID = fallbackToolCallID(toolName, inputStr)
 			if toolID == "" {
