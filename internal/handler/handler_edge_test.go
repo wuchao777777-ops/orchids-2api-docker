@@ -535,6 +535,9 @@ func TestHandleMessages_Dedup_Stream(t *testing.T) {
 	if !strings.Contains(out, "event: message_start") || !strings.Contains(out, "event: message_stop") {
 		t.Fatalf("expected minimal sse start/stop for duplicate, got: %s", out)
 	}
+	if !strings.Contains(out, `"input_tokens":0`) || !strings.Contains(out, `"output_tokens":0`) {
+		t.Fatalf("expected duplicate sse message_start to include zero-token usage, got: %s", out)
+	}
 }
 
 func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {

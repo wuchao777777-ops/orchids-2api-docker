@@ -473,7 +473,7 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		msgStart, _ := marshalSSEMessageStartNoUsageBytes("dup", req.Model)
+		msgStart, _ := marshalSSEMessageStartBytes("dup", req.Model, 0, 0)
 		_ = writeSSEFrameBytes(w, "message_start", msgStart)
 		_ = writeSSEFrameBytes(w, "message_stop", sseMessageStopBytes)
 		if flusher, ok := w.(http.Flusher); ok {
