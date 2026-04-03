@@ -665,11 +665,6 @@ func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]bo
 				hasUserText = true
 				parts = append(parts, boltUserContentPart{Text: text})
 			}
-		case "image", "document":
-			if text := formatBoltMediaHint(block); text != "" {
-				hasUserText = true
-				parts = append(parts, boltUserContentPart{Text: text})
-			}
 		case "tool_result":
 			rawText := sanitizeBoltToolResultText(stringifyContent(block.Content))
 			if rawText == "" {

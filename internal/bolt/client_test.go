@@ -1644,67 +1644,6 @@ func TestPrepareRequest_EncodesToolResultsAsUserContentAndDropsAssistantToolInvo
 	}
 }
 
-func TestPrepareRequest_PreservesAttachedDocumentHintInUserContent(t *testing.T) {
-	req := upstream.UpstreamRequest{
-		Model: "claude-opus-4-6",
-		Messages: []prompt.Message{
-			{
-				Role: "user",
-				Content: prompt.MessageContent{
-					Blocks: []prompt.ContentBlock{
-						{
-							Type: "document",
-							Source: &prompt.ImageSource{
-								Type:      "base64",
-								MediaType: "application/pdf",
-								Data:      "JVBERi0xLjQK",
-							},
-						},
-						{
-							Type: "text",
-							Text: "请总结这个 PDF",
-						},
-					},
-				},
-			},
-		},
-	}
-
-	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if len(boltReq.Messages) != 1 {
-		t.Fatalf("messages len=%d want 1, messages=%#v", len(boltReq.Messages), boltReq.Messages)
-	}
-
-	want := "[Attached document: application/pdf, source=base64]\n\n请总结这个 PDF"
-	if got := boltReq.Messages[0].Content; got != want {
-		t.Fatalf("message content=%q want %q", got, want)
-	}
-}
-
-func TestExtractBoltStandaloneUserText_PreservesDocumentOnlyHint(t *testing.T) {
-	msg := prompt.Message{
-		Role: "user",
-		Content: prompt.MessageContent{
-			Blocks: []prompt.ContentBlock{
-				{
-					Type: "document",
-					Source: &prompt.ImageSource{
-						Type:      "base64",
-						MediaType: "application/pdf",
-						Data:      "JVBERi0xLjQK",
-					},
-				},
-			},
-		},
-	}
-
-	got := extractBoltStandaloneUserText(msg)
-	want := "[Attached document: application/pdf, source=base64]"
-	if got != want {
-		t.Fatalf("extractBoltStandaloneUserText()=%q want %q", got, want)
-	}
-}
-
 func TestPrepareRequest_PreservesMultiTurnEditHistoryAfterWrite(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model: "claude-opus-4-6",
