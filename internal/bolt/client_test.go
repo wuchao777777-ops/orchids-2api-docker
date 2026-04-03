@@ -159,6 +159,53 @@ func TestSendRequestWithPayload_ConvertsJSONToolCallTextToModelToolCall(t *testi
 	}
 }
 
+func TestSendRequestWithPayload_RewritesWebToolCallToDeclaredClientToolName(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	toolJSON, err := json.Marshal(`{"tool":"WebFetch","parameters":{"url":"https://example.com"}}`)
+	if err != nil {
+		t.Fatalf("marshal tool json: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "0:"+string(toolJSON)+"\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":3}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	var events []upstream.SSEMessage
+	err = client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Tools: []interface{}{
+			map[string]interface{}{"name": "mcp__fetch__fetch"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "fetch https://example.com"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("events len=%d want 2", len(events))
+	}
+	if got := events[0].Event["toolName"]; got != "mcp__fetch__fetch" {
+		t.Fatalf("toolName=%v want mcp__fetch__fetch", got)
+	}
+}
+
 func TestSendRequestWithPayload_ConvertsSplitBufferedJSONToolCallToModelToolCall(t *testing.T) {
 	prevURL := boltAPIURL
 	t.Cleanup(func() { boltAPIURL = prevURL })
@@ -3526,6 +3573,25 @@ func TestSupportedBoltToolNames_MapsCommonOpenClawAliases(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("supportedBoltToolNames(common aliases)[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestSupportedBoltToolNames_AllowsWebAliases(t *testing.T) {
+	tools := []interface{}{
+		map[string]interface{}{"name": "builtin_web_search"},
+		map[string]interface{}{"name": "mcp__fetch__fetch"},
+		map[string]interface{}{"name": "mcp__tavily__web_extract"},
+	}
+
+	got := supportedBoltToolNames(tools)
+	want := []string{"web_search", "web_fetch"}
+	if len(got) != len(want) {
+		t.Fatalf("supportedBoltToolNames(web aliases) len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("supportedBoltToolNames(web aliases)[%d]=%q want %q (%#v)", i, got[i], want[i], got)
 		}
 	}
 }

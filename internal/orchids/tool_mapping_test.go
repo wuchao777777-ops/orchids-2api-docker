@@ -24,7 +24,10 @@ func TestNormalizeToolNameFallback_CommonOpenClawAliases(t *testing.T) {
 		{in: "sessions_spawn", want: "Task"},
 		{in: "use_skill", want: "Skill"},
 		{in: "mcp__tavily__web_search", want: "web_search"},
+		{in: "builtin_web_search", want: "web_search"},
 		{in: "mcp__fetch__fetch", want: "web_fetch"},
+		{in: "builtin_web_fetch", want: "web_fetch"},
+		{in: "mcp__tavily__web_extract", want: "web_fetch"},
 	}
 
 	for _, tc := range cases {
@@ -39,11 +42,11 @@ func TestMapToolNameToClientPrefersOriginalToolDefinition(t *testing.T) {
 
 	clientTools := []interface{}{
 		map[string]interface{}{
-			"name": "read_file",
+			"name":    "read_file",
 			"aliases": []interface{}{"Read"},
 		},
 		map[string]interface{}{
-			"name": "str_replace_editor",
+			"name":    "str_replace_editor",
 			"aliases": []interface{}{"Edit"},
 		},
 	}
@@ -62,7 +65,7 @@ func TestMapToolNameToClientMatchesSnakeCaseAlias(t *testing.T) {
 
 	clientTools := []interface{}{
 		map[string]interface{}{
-			"name": "run_command",
+			"name":    "run_command",
 			"aliases": []interface{}{"Bash"},
 		},
 	}
@@ -89,6 +92,23 @@ func TestMapToolNameToClientSupportsFunctionWrappedTools(t *testing.T) {
 
 	if got := MapToolNameToClient("Read", clientTools, toolMapper); got != "read_file" {
 		t.Fatalf("MapToolNameToClient(Read) = %q want read_file", got)
+	}
+}
+
+func TestMapToolNameToClientMatchesNormalizedWebAliases(t *testing.T) {
+	t.Parallel()
+
+	clientTools := []interface{}{
+		map[string]interface{}{"name": "builtin_web_fetch"},
+		map[string]interface{}{"name": "mcp__tavily__web_search"},
+	}
+	toolMapper := buildClientToolMapper(clientTools)
+
+	if got := MapToolNameToClient("web_fetch", clientTools, toolMapper); got != "builtin_web_fetch" {
+		t.Fatalf("MapToolNameToClient(web_fetch) = %q want builtin_web_fetch", got)
+	}
+	if got := MapToolNameToClient("web_search", clientTools, toolMapper); got != "mcp__tavily__web_search" {
+		t.Fatalf("MapToolNameToClient(web_search) = %q want mcp__tavily__web_search", got)
 	}
 }
 

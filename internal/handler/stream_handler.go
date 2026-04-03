@@ -36,16 +36,16 @@ const (
 )
 
 const (
-	sseEventPrefix                  = "event: "
-	sseDataPrefix                   = "data: "
-	sseLineBreak                    = "\n\n"
-	sseDataJoin                     = "\ndata: "
-	sseDoneLine                     = "data: [DONE]\n\n"
-	sseKeepAlive                    = ": keep-alive\n\n"
-	sseDeferredFlushFrameThreshold  = 4
-	sseDeferredFlushByteThreshold   = 2048
-	sseBufferedWriteMax             = 4096
-	genericEmptyOutputFallbackText  = "No output was presented to the user. This may be due to tool calls being suppressed or the model producing no text content."
+	sseEventPrefix                 = "event: "
+	sseDataPrefix                  = "data: "
+	sseLineBreak                   = "\n\n"
+	sseDataJoin                    = "\ndata: "
+	sseDoneLine                    = "data: [DONE]\n\n"
+	sseKeepAlive                   = ": keep-alive\n\n"
+	sseDeferredFlushFrameThreshold = 4
+	sseDeferredFlushByteThreshold  = 2048
+	sseBufferedWriteMax            = 4096
+	genericEmptyOutputFallbackText = "No output was presented to the user. This may be due to tool calls being suppressed or the model producing no text content."
 )
 
 var (
@@ -246,6 +246,7 @@ type streamHandler struct {
 	responseFormat    adapter.ResponseFormat
 	disallowToolCalls bool
 	allowedToolNames  map[string]struct{}
+	clientTools       []interface{}
 
 	// HTTP Response
 	w       http.ResponseWriter
@@ -414,6 +415,32 @@ func (h *streamHandler) setAllowedToolNames(names []string) {
 		h.allowedToolNames[key] = struct{}{}
 	}
 	h.mu.Unlock()
+}
+
+func (h *streamHandler) setClientTools(tools []interface{}) {
+	h.mu.Lock()
+	h.clientTools = tools
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) rewriteWebToolCallToClient(name, input string) (string, string) {
+	h.mu.Lock()
+	clientTools := h.clientTools
+	h.mu.Unlock()
+
+	canonical := strings.ToLower(strings.TrimSpace(orchids.NormalizeToolNameFallback(name)))
+	if canonical != "web_fetch" && canonical != "web_search" {
+		return name, input
+	}
+	if len(clientTools) == 0 {
+		return canonical, input
+	}
+
+	mapped := strings.TrimSpace(orchids.MapToolNameToClient(canonical, clientTools, nil))
+	if mapped == "" {
+		return canonical, input
+	}
+	return mapped, input
 }
 
 func (h *streamHandler) release() {
@@ -3997,6 +4024,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			perf.ReleaseStringBuilder(buf)
 		}
 		name, inputStr = normalizeUpstreamToolCall(name, inputStr, h.workdir)
+		name, inputStr = h.rewriteWebToolCallToClient(name, inputStr)
 		delete(h.toolInputBuffers, toolID)
 		delete(h.toolInputHadDelta, toolID)
 		delete(h.toolInputNames, toolID)
@@ -4022,6 +4050,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		toolName, _ := msg.Event["toolName"].(string)
 		inputStr, _ := msg.Event["input"].(string)
 		toolName, inputStr = normalizeUpstreamToolCall(toolName, inputStr, h.workdir)
+		toolName, inputStr = h.rewriteWebToolCallToClient(toolName, inputStr)
 		if toolID == "" {
 			toolID = fallbackToolCallID(toolName, inputStr)
 			if toolID == "" {

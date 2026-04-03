@@ -572,6 +572,49 @@ func TestBoltCustomMCPFetchToolCall_MapsToDeclaredWebFetch(t *testing.T) {
 	}
 }
 
+func TestBoltWebFetchToolCall_RewritesToDeclaredClientToolName(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	h.setAllowedToolNames([]string{"web_fetch", "mcp__tavily__web_extract"})
+	h.setClientTools([]interface{}{
+		map[string]interface{}{"name": "mcp__tavily__web_extract"},
+	})
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "wf_2",
+			"toolName":   "web_fetch",
+			"input":      `{"url":"https://linux.do/t/topic/1872670"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected rewritten web_fetch tool call to pass through, got %#v", h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != "mcp__tavily__web_extract" {
+		t.Fatalf("expected mapped tool name mcp__tavily__web_extract, got %q", got)
+	}
+	if h.suppressedToolCalls != 0 {
+		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
+	}
+}
+
 func TestTaskToolCall_IsAcceptedWhenDelegatedToolsStayWithinAllowedSet(t *testing.T) {
 	t.Parallel()
 

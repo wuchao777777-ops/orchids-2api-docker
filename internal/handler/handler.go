@@ -1118,6 +1118,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, isBoltRequest)
 		sh.setAllowedToolNames(allowedToolNames)
 	}
+	if len(req.Tools) > 0 {
+		sh.setClientTools(req.Tools)
+	} else if len(effectiveTools) > 0 {
+		sh.setClientTools(effectiveTools)
+	}
 	if verboseDiagnostics && isBoltRequest && !gateNoTools && len(allowedToolNames) == 0 {
 		slog.Debug("tool_gate: bolt request has no declared tools after session restore", "conversation_id", conversationKey)
 	}

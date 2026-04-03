@@ -56,11 +56,16 @@ var normalizedToolNameFallbacks = map[string]string{
 	"todo_write":       "TodoWrite",
 	"todowrite":        "TodoWrite",
 
-	"web_fetch":         "WebFetch",
-	"webfetch":          "WebFetch",
-	"fetch":             "WebFetch",
-	"mcp__fetch__fetch": "web_fetch",
+	"web_fetch":                "web_fetch",
+	"webfetch":                 "web_fetch",
+	"fetch":                    "web_fetch",
+	"builtin_web_fetch":        "web_fetch",
+	"mcp__fetch__fetch":        "web_fetch",
+	"mcp__tavily__web_extract": "web_fetch",
 
+	"web_search":              "web_search",
+	"websearch":               "web_search",
+	"builtin_web_search":      "web_search",
 	"mcp__tavily__web_search": "web_search",
 	"mcp__brave__web_search":  "web_search",
 
@@ -159,6 +164,13 @@ func MapToolNameToClient(orchidsName string, clientTools []interface{}, toolMapp
 				return name
 			}
 			if toSnakeCase(strings.ToLower(name)) == normalized.SnakeCase {
+				return name
+			}
+			fallbackName := NormalizeToolNameFallback(name)
+			if strings.ToLower(strings.TrimSpace(fallbackName)) == normalized.Lowercase {
+				return name
+			}
+			if toSnakeCase(strings.ToLower(strings.TrimSpace(fallbackName))) == normalized.SnakeCase {
 				return name
 			}
 		}

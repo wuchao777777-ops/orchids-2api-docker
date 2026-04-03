@@ -24,22 +24,26 @@ var coreToolHints = map[string]string{
 	"Grep":  "Grep(path, pattern, glob?, output_mode?, -n?, -C?)",
 }
 
-var boltSupportedToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "Task", "Skill"}
+var boltSupportedToolOrder = []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep", "web_search", "web_fetch", "Task", "Skill"}
 
 var boltSupportedToolSet = map[string]struct{}{
-	"Read":  {},
-	"Write": {},
-	"Edit":  {},
-	"Bash":  {},
-	"Glob":  {},
-	"Grep":  {},
-	"Task":  {},
-	"Skill": {},
+	"Read":       {},
+	"Write":      {},
+	"Edit":       {},
+	"Bash":       {},
+	"Glob":       {},
+	"Grep":       {},
+	"web_search": {},
+	"web_fetch":  {},
+	"Task":       {},
+	"Skill":      {},
 }
 
 var boltSupportedToolHints = map[string]string{
-	"Task":  "Task(description, prompt, subagent_type?)",
-	"Skill": "Skill(skill, args)",
+	"web_search": "web_search(query, domains?, timeRange?)",
+	"web_fetch":  "web_fetch(url, prompt?)",
+	"Task":       "Task(description, prompt, subagent_type?)",
+	"Skill":      "Skill(skill, args)",
 }
 
 var continuationOnlyTextSet = map[string]struct{}{
@@ -78,6 +82,10 @@ func CanonicalSupportedToolName(name string) string {
 		return "Task"
 	case "skill":
 		return "Skill"
+	case "websearch", "web_search":
+		return "web_search"
+	case "webfetch", "web_fetch":
+		return "web_fetch"
 	default:
 		return mappedName
 	}

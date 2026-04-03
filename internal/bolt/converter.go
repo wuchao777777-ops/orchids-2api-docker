@@ -9,6 +9,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/debug"
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/upstream"
 )
 
@@ -18,6 +19,7 @@ var boltToolCallCollectionKeys = []string{"tool_calls", "toolCalls", "calls", "t
 
 type outboundConverter struct {
 	model                   string
+	clientTools             []interface{}
 	inCodeBlock             bool
 	codeBuffer              strings.Builder
 	codeFenceHeader         strings.Builder
@@ -34,9 +36,10 @@ type outboundConverter struct {
 	firstToolInput          string
 }
 
-func newOutboundConverter(model string, inputTokens int) *outboundConverter {
+func newOutboundConverter(model string, inputTokens int, clientTools []interface{}) *outboundConverter {
 	return &outboundConverter{
 		model:         model,
+		clientTools:   clientTools,
 		inputTokens:   inputTokens,
 		seenToolCalls: make(map[string]struct{}),
 	}
@@ -340,7 +343,7 @@ func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(upstream
 		return nil
 	}
 	params := normalizeToolCallParameters(toolCall.Parameters)
-	toolName := strings.TrimSpace(toolCall.Function)
+	toolName := rewriteBoltWebToolNameToClient(toolCall.Function, c.clientTools)
 	params = sanitizeBoltEditLineNumbers(toolName, params)
 	key := toolCall.Function + "\x00" + string(params)
 	if _, exists := c.seenToolCalls[key]; exists {
@@ -359,6 +362,27 @@ func (c *outboundConverter) sendToolUse(toolCall *ToolCall, writer func(upstream
 		"toolName":   toolName,
 		"input":      string(params),
 	})
+}
+
+func rewriteBoltWebToolNameToClient(name string, clientTools []interface{}) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+
+	canonical := strings.ToLower(strings.TrimSpace(orchids.NormalizeToolNameFallback(name)))
+	if canonical != "web_fetch" && canonical != "web_search" {
+		return name
+	}
+	if len(clientTools) == 0 {
+		return canonical
+	}
+
+	mapped := strings.TrimSpace(orchids.MapToolNameToClient(canonical, clientTools, nil))
+	if mapped == "" {
+		return canonical
+	}
+	return mapped
 }
 
 func (c *outboundConverter) flushTextAndSendToolCalls(toolCalls []ToolCall, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {

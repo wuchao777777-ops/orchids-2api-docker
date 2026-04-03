@@ -344,7 +344,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("bolt API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	converter := newOutboundConverter(req.Model, inputEstimate.Total)
+	converter := newOutboundConverter(req.Model, inputEstimate.Total, req.Tools)
 	return converter.ProcessStream(resp.Body, logger, func(msg upstream.SSEMessage) error {
 		if onMessage != nil {
 			onMessage(msg)

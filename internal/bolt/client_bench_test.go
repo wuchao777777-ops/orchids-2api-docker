@@ -68,7 +68,7 @@ func BenchmarkOutboundConverterProcessStream_Text(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		converter := newOutboundConverter("claude-opus-4-6", 123)
+		converter := newOutboundConverter("claude-opus-4-6", 123, nil)
 		if err := converter.ProcessStream(strings.NewReader(payload), nil, func(msg upstream.SSEMessage) error {
 			return nil
 		}); err != nil {
@@ -85,7 +85,7 @@ func BenchmarkOutboundConverterProcessStream_StructuredToolCall(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		converter := newOutboundConverter("claude-opus-4-6", 123)
+		converter := newOutboundConverter("claude-opus-4-6", 123, nil)
 		if err := converter.ProcessStream(strings.NewReader(payload), nil, func(msg upstream.SSEMessage) error {
 			return nil
 		}); err != nil {
