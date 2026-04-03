@@ -454,6 +454,14 @@ func extractBoltStandaloneUserText(msg prompt.Message) string {
 				sb.WriteString(text)
 				first = false
 			}
+		case "image", "document":
+			if text := formatBoltMediaHint(block); text != "" {
+				if !first {
+					sb.WriteByte('\n')
+				}
+				sb.WriteString(text)
+				first = false
+			}
 		}
 	}
 	if hasToolResult {
