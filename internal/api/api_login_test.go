@@ -6,10 +6,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"orchids-api/internal/config"
 )
 
 func TestHandleLogin_SecureCookieDependsOnHTTPS(t *testing.T) {
+	cfg := &config.Config{AdminUser: "admin", AdminPass: "pass"}
 	a := &API{adminUser: "admin", adminPass: "pass"}
+	a.config.Store(cfg)
 
 	body := []byte(`{"username":"admin","password":"pass"}`)
 
@@ -37,5 +41,19 @@ func TestHandleLogin_SecureCookieDependsOnHTTPS(t *testing.T) {
 		if !strings.Contains(strings.ToLower(set), "secure") {
 			t.Fatalf("expected Secure attribute when forwarded proto is https, got %q", set)
 		}
+	}
+}
+
+func TestHandleLogin_UsesUpdatedConfigCredentials(t *testing.T) {
+	cfg := &config.Config{AdminUser: "admin", AdminPass: "new-pass"}
+	a := &API{adminUser: "admin", adminPass: "old-pass"}
+	a.config.Store(cfg)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/api/login", bytes.NewReader([]byte(`{"username":"admin","password":"new-pass"}`)))
+	a.HandleLogin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%q", rec.Code, http.StatusOK, rec.Body.String())
 	}
 }

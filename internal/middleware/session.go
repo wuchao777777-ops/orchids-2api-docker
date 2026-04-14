@@ -34,8 +34,10 @@ func writeBearerUnauthorized(w http.ResponseWriter, message string) {
 	})
 }
 
-func SessionAuth(adminPass, adminToken string, next http.HandlerFunc) http.HandlerFunc {
+func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		adminPass, adminToken := credentials()
+
 		cookie, err := r.Cookie("session_token")
 		if err == nil && auth.ValidateSessionToken(cookie.Value) {
 			next(w, r)
@@ -90,6 +92,12 @@ func SessionAuth(adminPass, adminToken string, next http.HandlerFunc) http.Handl
 
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
+}
+
+func SessionAuth(adminPass, adminToken string, next http.HandlerFunc) http.HandlerFunc {
+	return SessionAuthDynamic(func() (string, string) {
+		return adminPass, adminToken
+	}, next)
 }
 
 func PublicKeyAuth(publicKey string, _ bool, next http.HandlerFunc) http.HandlerFunc {

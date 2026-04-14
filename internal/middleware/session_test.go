@@ -84,6 +84,30 @@ func TestSessionAuth_Unauthorized(t *testing.T) {
 	}
 }
 
+func TestSessionAuthDynamic_UsesLatestCredentials(t *testing.T) {
+	called := false
+	adminPass := "old-pass"
+	handler := SessionAuthDynamic(func() (string, string) {
+		return adminPass, ""
+	}, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	adminPass = "new-pass"
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.Header.Set("Authorization", "Bearer new-pass")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if !called {
+		t.Fatalf("expected handler to be called")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d", rec.Code, http.StatusOK)
+	}
+}
+
 func TestPublicKeyAuth_ValidBearer(t *testing.T) {
 	called := false
 	handler := PublicKeyAuth("pub-123", false, func(w http.ResponseWriter, r *http.Request) {

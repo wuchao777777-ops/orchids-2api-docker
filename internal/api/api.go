@@ -781,7 +781,14 @@ func (a *API) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !secureCompare(req.Username, a.adminUser) || !secureCompare(req.Password, a.adminPass) {
+	adminUser := a.adminUser
+	adminPass := a.adminPass
+	if cfg := a.config.Load(); cfg != nil {
+		adminUser = cfg.AdminUser
+		adminPass = cfg.AdminPass
+	}
+
+	if !secureCompare(req.Username, adminUser) || !secureCompare(req.Password, adminPass) {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}

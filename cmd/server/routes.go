@@ -68,7 +68,9 @@ func registerRoutes(
 
 	// --- Admin API routes (session auth, dual prefix) ---
 	sessionAuth := func(h http.HandlerFunc) http.HandlerFunc {
-		return middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, h)
+		return middleware.SessionAuthDynamic(func() (string, string) {
+			return cfg.AdminPass, cfg.AdminToken
+		}, h)
 	}
 
 	// Admin routes under /api/* only (no dual prefix)
@@ -229,7 +231,9 @@ func registerRoutes(
 	slog.Debug("Prometheus metrics enabled", "path", "/metrics")
 
 	if cfg.DebugEnabled {
-		mux.HandleFunc("/debug/pprof/", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, http.DefaultServeMux.ServeHTTP))
+		mux.HandleFunc("/debug/pprof/", middleware.SessionAuthDynamic(func() (string, string) {
+			return cfg.AdminPass, cfg.AdminToken
+		}, http.DefaultServeMux.ServeHTTP))
 		slog.Debug("pprof enabled", "path", "/debug/pprof/")
 	}
 }
