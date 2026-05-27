@@ -6,6 +6,9 @@ import (
 )
 
 var stableGrokTextModelIDs = []string{
+	"grok-4.3",
+	"grok-4.3-latest",
+	"grok-latest",
 	"grok-420",
 	"grok-3-mini",
 	"grok-4-thinking",
@@ -13,12 +16,13 @@ var stableGrokTextModelIDs = []string{
 }
 
 var publicGrokModelIDs = []string{
+	"grok-4.3",
+	"grok-4.3-latest",
+	"grok-latest",
 	"grok-420",
 	"grok-3-mini",
 	"grok-4-thinking",
 	"grok-4.1-expert",
-	"grok-4.20-0309-reasoning",
-	"grok-4.20-0309-non-reasoning",
 	"grok-imagine-1.0",
 	"grok-imagine-1.0-fast",
 	"grok-imagine-1.0-edit",

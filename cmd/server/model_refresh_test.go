@@ -133,7 +133,26 @@ func TestDiscoverModelsForChannel_BoltReturnsSeedCatalog(t *testing.T) {
 	}
 }
 
-func TestDiscoverModelsForChannel_GrokUsesPublicAllowlistAndVerifiedExisting(t *testing.T) {
+func TestGrokCanonicalAcceptanceRejectsFallbackModels(t *testing.T) {
+	tests := []struct {
+		requested string
+		canonical string
+		want      bool
+	}{
+		{requested: "grok-4.3", canonical: "grok-4.3", want: true},
+		{requested: "grok-4.3-latest", canonical: "grok-4.3", want: true},
+		{requested: "grok-latest", canonical: "grok-4.3", want: true},
+		{requested: "grok-3-mini", canonical: "grok-4.3", want: false},
+		{requested: "grok-420", canonical: "grok-4.3", want: false},
+	}
+	for _, tt := range tests {
+		if got := isAcceptedGrokCanonical(tt.requested, tt.canonical); got != tt.want {
+			t.Fatalf("isAcceptedGrokCanonical(%q,%q)=%v want %v", tt.requested, tt.canonical, got, tt.want)
+		}
+	}
+}
+
+func TestGrokProbeCandidatesIncludesPolicyAndExistingModels(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 
@@ -149,45 +168,19 @@ func TestDiscoverModelsForChannel_GrokUsesPublicAllowlistAndVerifiedExisting(t *
 	}); err != nil {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
-	if err := s.CreateModel(ctx, &store.Model{
-		Channel:   "Grok",
-		ModelID:   "grok-4",
-		Name:      "grok-4",
-		Status:    store.ModelStatusAvailable,
-		Verified:  false,
-		IsDefault: false,
-		SortOrder: 100,
-	}); err != nil {
-		t.Fatalf("CreateModel() error = %v", err)
-	}
 
-	items, source, err := discoverModelsForChannel(context.Background(), nil, s, "Grok")
-	if err != nil {
-		t.Fatalf("discoverModelsForChannel() error = %v", err)
-	}
-	if len(items) == 0 {
-		t.Fatal("expected grok discovery to return stable models")
-	}
-	if source != "grok_public_allowlist+verified_existing" {
-		t.Fatalf("source=%q want %q", source, "grok_public_allowlist+verified_existing")
-	}
-
-	gotIDs := make([]string, 0, len(items))
+	items := grokProbeCandidateModels(context.Background(), s)
 	gotSet := make(map[string]struct{}, len(items))
 	for _, item := range items {
-		gotIDs = append(gotIDs, item.ID)
 		gotSet[item.ID] = struct{}{}
 	}
 	for _, publicID := range modelpolicy.PublicGrokModelIDs() {
 		if _, ok := gotSet[publicID]; !ok {
-			t.Fatalf("expected grok discovery to include public model %q, got %+v", publicID, items)
+			t.Fatalf("expected candidates to include public model %q, got %+v", publicID, items)
 		}
 	}
 	if _, ok := gotSet["grok-5"]; !ok {
-		t.Fatalf("expected grok discovery to include verified dynamic model grok-5, got %+v", items)
-	}
-	if _, ok := gotSet["grok-4"]; ok {
-		t.Fatalf("expected grok discovery to exclude unverified model grok-4, got %+v", items)
+		t.Fatalf("expected candidates to include existing model grok-5, got %+v", items)
 	}
 }
 

@@ -339,6 +339,11 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	defer sess.Close()
 
+	if strings.TrimSpace(spec.ConsoleModel) != "" && len(attachments) == 0 && len(req.Tools) == 0 {
+		h.serveConsoleChat(r.Context(), w, &req, spec, sess)
+		return
+	}
+
 	buildPayload := func(token string) (map[string]interface{}, error) {
 		fileAttachments := []string(nil)
 		if !spec.IsVideo {

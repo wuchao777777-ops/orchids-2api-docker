@@ -244,8 +244,13 @@ func (s *Store) seedModels() error {
 		"grok-4-1-thinking-1129",
 		"grok-4.2",
 		"grok-4.20-beta",
+		"grok-4.20",
+		"grok-4.20-reasoning",
+		"grok-4.20-non-reasoning",
+		"grok-4.20-multi-agent",
 		"grok-4.20-0309-reasoning",
 		"grok-4.20-0309-non-reasoning",
+		"grok-4.20-multi-agent-0309",
 		"grok-code-fast",
 		"grok-code-fast-1",
 		"grok-2",
@@ -316,14 +321,17 @@ func isDeprecatedChannelName(value string) bool {
 
 func buildGrokSeedModels() []Model {
 	return []Model{
-		{ID: "107", Channel: "Grok", ModelID: "grok-420", Name: "Grok 420", Status: ModelStatusAvailable, IsDefault: true, SortOrder: 0},
-		{ID: "91", Channel: "Grok", ModelID: "grok-3-mini", Name: "Grok 3 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 1},
-		{ID: "96", Channel: "Grok", ModelID: "grok-4-thinking", Name: "Grok 4 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 2},
-		{ID: "101", Channel: "Grok", ModelID: "grok-4.1-expert", Name: "Grok 4.1 Expert", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 3},
-		{ID: "108", Channel: "Grok", ModelID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 4},
-		{ID: "109", Channel: "Grok", ModelID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 5},
-		{ID: "110", Channel: "Grok", ModelID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 6},
-		{ID: "111", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 7},
+		{ID: "112", Channel: "Grok", ModelID: "grok-4.3", Name: "Grok 4.3", Status: ModelStatusAvailable, Verified: true, IsDefault: true, SortOrder: 0},
+		{ID: "113", Channel: "Grok", ModelID: "grok-4.3-latest", Name: "Grok 4.3 Latest", Status: ModelStatusAvailable, Verified: true, IsDefault: false, SortOrder: 1},
+		{ID: "114", Channel: "Grok", ModelID: "grok-latest", Name: "Grok Latest", Status: ModelStatusAvailable, Verified: true, IsDefault: false, SortOrder: 2},
+		{ID: "107", Channel: "Grok", ModelID: "grok-420", Name: "Grok 420", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 3},
+		{ID: "91", Channel: "Grok", ModelID: "grok-3-mini", Name: "Grok 3 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 4},
+		{ID: "96", Channel: "Grok", ModelID: "grok-4-thinking", Name: "Grok 4 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 5},
+		{ID: "101", Channel: "Grok", ModelID: "grok-4.1-expert", Name: "Grok 4.1 Expert", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 6},
+		{ID: "108", Channel: "Grok", ModelID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 7},
+		{ID: "109", Channel: "Grok", ModelID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 8},
+		{ID: "110", Channel: "Grok", ModelID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 9},
+		{ID: "111", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 10},
 	}
 }
 

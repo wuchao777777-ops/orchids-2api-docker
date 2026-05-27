@@ -10,6 +10,7 @@ type ModelSpec struct {
 	Name          string
 	UpstreamModel string
 	ModelMode     string
+	ConsoleModel  string
 	IsImage       bool
 	IsVideo       bool
 }
@@ -29,6 +30,9 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
 	{ID: "grok-4-1-thinking-1129", Name: "Grok 4.1 Thinking 1129 (Legacy/System)", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
 	{ID: "grok-420", Name: "Grok 420", UpstreamModel: "grok-420", ModelMode: "MODEL_MODE_GROK_420"},
+	{ID: "grok-4.3", Name: "Grok 4.3", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
+	{ID: "grok-4.3-latest", Name: "Grok 4.3 Latest", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
+	{ID: "grok-latest", Name: "Grok Latest", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
 	{ID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsImage: true},
 	{ID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsImage: true},
 	{ID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_FAST", IsImage: true},
@@ -114,7 +118,17 @@ func resolveDynamicTextModel(modelID string) (ModelSpec, bool) {
 		ID:            id,
 		Name:          id,
 		UpstreamModel: id,
+		ConsoleModel:  consoleModelForID(id),
 	}, true
+}
+
+func consoleModelForID(id string) string {
+	switch id {
+	case "grok-4.3", "grok-4.3-latest", "grok-latest":
+		return "grok-4.3"
+	default:
+		return ""
+	}
 }
 
 // ResolveModelOrDynamic first resolves built-in model specs, then falls back to

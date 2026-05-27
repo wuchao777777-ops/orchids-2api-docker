@@ -164,47 +164,143 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 		}
 		return out, "puter_public_models", nil
 	case "grok":
-		existing, err := s.ListModels(ctx)
-		if err != nil {
-			return nil, "", err
-		}
-		seen := map[string]struct{}{}
-		publicIDs := modelpolicy.PublicGrokModelIDs()
-		out := make([]discoveredModel, 0, len(publicIDs)+4)
-		appendCandidate := func(id, name string) {
-			id = strings.TrimSpace(id)
-			if id == "" {
-				return
-			}
-			if _, ok := seen[id]; ok {
-				return
-			}
-			seen[id] = struct{}{}
-			if strings.TrimSpace(name) == "" {
-				name = id
-			}
-			out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
-		}
-
-		for _, id := range publicIDs {
-			name := id
-			if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
-				name = spec.Name
-			}
-			appendCandidate(id, name)
-		}
-		for _, model := range existing {
-			if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
-				continue
-			}
-			if !model.Verified {
-				continue
-			}
-			appendCandidate(model.ModelID, model.Name)
-		}
-		return out, "grok_public_allowlist+verified_existing", nil
+		return discoverGrokModels(ctx, cfg, s)
 	default:
 		return nil, "", fmt.Errorf("unsupported channel: %s", channel)
+	}
+}
+
+func discoverGrokModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
+	accounts, err := enabledAccountsByType(ctx, s, "grok")
+	if err != nil {
+		return nil, "", err
+	}
+	if len(accounts) == 0 {
+		return nil, "", fmt.Errorf("no enabled grok accounts")
+	}
+
+	token := firstGrokToken(accounts)
+	if token == "" {
+		return nil, "", fmt.Errorf("no enabled grok account token")
+	}
+
+	candidates := grokProbeCandidateModels(ctx, s)
+	client := grok.New(refreshModelRequestConfig(cfg, "grok"))
+	out := make([]discoveredModel, 0, len(candidates))
+	for _, candidate := range candidates {
+		if spec, ok := grok.ResolveModel(candidate.ID); ok && (spec.IsImage || spec.IsVideo) {
+			out = append(out, discoveredModel{
+				ID:        candidate.ID,
+				Name:      candidate.Name,
+				SortOrder: len(out),
+			})
+			continue
+		}
+		result := client.ProbeConsoleModel(ctx, token, candidate.ID)
+		if !result.OK {
+			continue
+		}
+		if !isAcceptedGrokCanonical(candidate.ID, result.CanonicalModel) {
+			continue
+		}
+		out = append(out, discoveredModel{
+			ID:        candidate.ID,
+			Name:      candidate.Name,
+			SortOrder: len(out),
+		})
+	}
+	if len(out) == 0 {
+		return nil, "", fmt.Errorf("no grok models verified by console.x.ai")
+	}
+	return out, "grok_console_probe", nil
+}
+
+func firstGrokToken(accounts []*store.Account) string {
+	for _, acc := range accounts {
+		if acc == nil {
+			continue
+		}
+		token := grok.NormalizeSSOToken(firstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token))
+		if token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
+func grokProbeCandidateModels(ctx context.Context, s *store.Store) []discoveredModel {
+	seen := map[string]struct{}{}
+	out := make([]discoveredModel, 0, 16)
+	appendCandidate := func(id, name string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		if strings.TrimSpace(name) == "" {
+			name = id
+		}
+		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
+	}
+
+	for _, id := range modelpolicy.PublicGrokModelIDs() {
+		name := id
+		if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
+			name = spec.Name
+		}
+		appendCandidate(id, name)
+	}
+
+	for _, id := range []string{
+		"grok-4.3",
+		"grok-4.3-latest",
+		"grok-latest",
+		"grok-4.20",
+		"grok-4.20-0309-non-reasoning",
+		"grok-4.20-0309-reasoning",
+		"grok-420",
+		"grok-3-mini",
+		"grok-4-thinking",
+		"grok-4.1-expert",
+	} {
+		name := id
+		if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
+			name = spec.Name
+		}
+		appendCandidate(id, name)
+	}
+
+	if s != nil {
+		if existing, err := s.ListModels(ctx); err == nil {
+			for _, model := range existing {
+				if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
+					continue
+				}
+				appendCandidate(model.ModelID, model.Name)
+			}
+		}
+	}
+
+	return out
+}
+
+func isAcceptedGrokCanonical(requested, canonical string) bool {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	canonical = strings.ToLower(strings.TrimSpace(canonical))
+	if requested == "" || canonical == "" {
+		return false
+	}
+	if requested == canonical {
+		return true
+	}
+	switch requested {
+	case "grok-4.3-latest", "grok-latest":
+		return canonical == "grok-4.3"
+	default:
+		return false
 	}
 }
 
