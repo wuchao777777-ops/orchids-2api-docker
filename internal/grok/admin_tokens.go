@@ -63,6 +63,9 @@ func inferTokenPool(acc *store.Account) string {
 		return "ssoBasic"
 	}
 	sub := strings.ToLower(strings.TrimSpace(acc.Subscription))
+	if strings.Contains(sub, "heavy") {
+		return "ssoHeavy"
+	}
 	if strings.Contains(sub, "super") || strings.Contains(sub, "pro") {
 		return "ssoSuper"
 	}
@@ -70,6 +73,40 @@ func inferTokenPool(acc *store.Account) string {
 		return "ssoSuper"
 	}
 	return "ssoBasic"
+}
+
+func normalizeGrokPoolName(pool string) string {
+	switch strings.ToLower(strings.TrimSpace(pool)) {
+	case "ssoheavy", "heavy":
+		return "heavy"
+	case "ssosuper", "super", "pro":
+		return "super"
+	case "ssobasic", "basic", "":
+		return "basic"
+	default:
+		return strings.ToLower(strings.TrimSpace(pool))
+	}
+}
+
+func normalizeGrokPoolCandidates(pools []string) []string {
+	out := make([]string, 0, len(pools))
+	seen := map[string]struct{}{}
+	for _, raw := range pools {
+		pool := normalizeGrokPoolName(raw)
+		if pool == "" {
+			continue
+		}
+		if _, ok := seen[pool]; ok {
+			continue
+		}
+		seen[pool] = struct{}{}
+		out = append(out, pool)
+	}
+	return out
+}
+
+func grokAccountPool(acc *store.Account) string {
+	return normalizeGrokPoolName(inferTokenPool(acc))
 }
 
 func parseInt64FromAny(v interface{}) (int64, bool) {
@@ -178,7 +215,7 @@ func applyTokenEntryToAccount(acc *store.Account, entry adminTokenEntry) {
 	acc.RefreshToken = ""
 	acc.AccountType = "grok"
 	// Default to a valid Grok model for health checks.
-	acc.AgentMode = "grok-3"
+	acc.AgentMode = "grok-4.20-0309"
 	acc.Enabled = true
 	if acc.Weight <= 0 {
 		acc.Weight = 1
@@ -196,9 +233,12 @@ func applyTokenEntryToAccount(acc *store.Account, entry adminTokenEntry) {
 		acc.Name = "grok-" + mask
 	}
 
-	if strings.EqualFold(strings.TrimSpace(entry.Pool), "ssosuper") {
+	switch normalizeGrokPoolName(entry.Pool) {
+	case "heavy":
+		acc.Subscription = "heavy"
+	case "super":
 		acc.Subscription = "super"
-	} else if strings.TrimSpace(acc.Subscription) == "" {
+	default:
 		acc.Subscription = "basic"
 	}
 

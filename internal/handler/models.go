@@ -48,6 +48,58 @@ func isVisiblePublicModel(m *store.Model, filterChannel string) (string, bool) {
 	return mChannel, true
 }
 
+func publicGrokAccountPool(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+	sub := strings.ToLower(strings.TrimSpace(acc.Subscription))
+	switch {
+	case strings.Contains(sub, "heavy"):
+		return "heavy"
+	case strings.Contains(sub, "super"), strings.Contains(sub, "pro"):
+		return "super"
+	case strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok"):
+		return "basic"
+	default:
+		return ""
+	}
+}
+
+func modelAvailableForGrokPools(modelID string, pools map[string]struct{}) bool {
+	if len(pools) == 0 {
+		return false
+	}
+	candidates := modelpolicy.GrokModelPoolCandidates(modelID)
+	if len(candidates) == 0 {
+		return true
+	}
+	for _, pool := range candidates {
+		if _, ok := pools[pool]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func availableGrokPools(accounts []*store.Account) map[string]struct{} {
+	pools := map[string]struct{}{}
+	for _, acc := range accounts {
+		if acc == nil || !acc.Enabled {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") && !strings.EqualFold(strings.TrimSpace(acc.AgentMode), "grok") {
+			continue
+		}
+		if strings.TrimSpace(acc.StatusCode) != "" {
+			continue
+		}
+		if pool := publicGrokAccountPool(acc); pool != "" {
+			pools[pool] = struct{}{}
+		}
+	}
+	return pools
+}
+
 func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		apperrors.New("invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed).WriteResponse(w)
@@ -69,11 +121,22 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		apperrors.New("api_error", "Failed to fetch models: "+err.Error(), http.StatusInternalServerError).WriteResponse(w)
 		return
 	}
+	var grokPools map[string]struct{}
+	if filterChannel == "" || strings.EqualFold(filterChannel, "grok") {
+		if accounts, accErr := h.loadBalancer.Store.ListAccounts(ctx); accErr == nil {
+			grokPools = availableGrokPools(accounts)
+		} else {
+			grokPools = map[string]struct{}{}
+		}
+	}
 
 	var publicModels []PublicModelResponse
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
+			continue
+		}
+		if strings.EqualFold(mChannel, "grok") && !modelAvailableForGrokPools(m.ModelID, grokPools) {
 			continue
 		}
 
@@ -134,6 +197,14 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filterChannel := channelFromPath(path)
+	var grokPools map[string]struct{}
+	if filterChannel == "" || strings.EqualFold(filterChannel, "grok") {
+		if accounts, accErr := h.loadBalancer.Store.ListAccounts(ctx); accErr == nil {
+			grokPools = availableGrokPools(accounts)
+		} else {
+			grokPools = map[string]struct{}{}
+		}
+	}
 	var (
 		m   *store.Model
 		err error
@@ -149,6 +220,10 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 	mChannel, ok := isVisiblePublicModel(m, filterChannel)
 	if !ok {
+		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
+		return
+	}
+	if strings.EqualFold(mChannel, "grok") && !modelAvailableForGrokPools(m.ModelID, grokPools) {
 		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}

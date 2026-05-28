@@ -40,7 +40,9 @@ const (
 var puterChatCompletionProviders = map[string]struct{}{
 	"anthropic":  {},
 	"deepseek":   {},
+	"google":     {},
 	"mistralai":  {},
+	"openai":     {},
 	"openrouter": {},
 	"x-ai":       {},
 }

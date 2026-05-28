@@ -37,12 +37,37 @@ const LI=new Map([[Xt.ClaudeCode,[St["claude-haiku-4-5-20251001"],St["claude-son
 	}
 }
 
+func TestParseBoltBundleModelChoices_NewWireModelMapping(t *testing.T) {
+	t.Parallel()
+
+	js := `
+const X={BoltAgent:"claude-code",Codex:"codex",BoltV1:"bolt"};
+const re={standard:{value:"standard",label:"Standard"},"claude-haiku-4-5-20251001":{value:"claude-haiku-4-5-20251001",label:"Haiku 4.5"},"claude-opus-4-6":{value:"claude-opus-4-6",label:"Opus 4.6"},"claude-sonnet-4-6":{value:"claude-sonnet-4-6",label:"Sonnet 4.6"},"claude-opus-4-7":{value:"claude-opus-4-7",label:"Opus 4.7"}};
+function Fr(t){return t==="standard"?"claude-sonnet-4-6":t==="max"?"claude-opus-4-6":t}
+`
+
+	got, ok := parseBoltBundleModelChoices(js)
+	if !ok {
+		t.Fatalf("parseBoltBundleModelChoices() ok = false")
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2; got=%+v", len(got), got)
+	}
+	if got[0].ID != "claude-sonnet-4-6" || got[0].Name != "Sonnet 4.6" {
+		t.Fatalf("got[0] = %+v", got[0])
+	}
+	if got[1].ID != "claude-opus-4-6" || got[1].Name != "Opus 4.6" {
+		t.Fatalf("got[1] = %+v", got[1])
+	}
+}
+
 func TestExtractBoltAssetURLs_ResolvesRelativeImports(t *testing.T) {
 	t.Parallel()
 
 	text := `
 import "./index-ABC123.js";
 import{a as b}from"./components-XYZ789.js";
+import{c as d}from'./feature/Prompt-DEF456.js';
 const asset="/assets/entry.client-ROOT.js";
 `
 
@@ -51,6 +76,7 @@ const asset="/assets/entry.client-ROOT.js";
 		"https://bolt.new/assets/entry.client-ROOT.js",
 		"https://bolt.new/assets/index-ABC123.js",
 		"https://bolt.new/assets/components-XYZ789.js",
+		"https://bolt.new/assets/feature/Prompt-DEF456.js",
 	}
 
 	if len(got) != len(want) {
@@ -59,6 +85,54 @@ const asset="/assets/entry.client-ROOT.js";
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestSortBoltAssetURLs_PrioritizesModelCarryingAssets(t *testing.T) {
+	t.Parallel()
+
+	got := []string{
+		"https://bolt.new/assets/command-DKbHo7qM.js",
+		"https://bolt.new/assets/_chat-PURunFTM.js",
+		"https://bolt.new/assets/index-DSYXrLj-.js",
+		"https://bolt.new/assets/Prompt-uuX7KoKD.js",
+	}
+
+	sortBoltAssetURLs(got)
+
+	want := []string{
+		"https://bolt.new/assets/Prompt-uuX7KoKD.js",
+		"https://bolt.new/assets/index-DSYXrLj-.js",
+		"https://bolt.new/assets/_chat-PURunFTM.js",
+		"https://bolt.new/assets/command-DKbHo7qM.js",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got[%d] = %q, want %q; all=%v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestSortBoltNestedAssetURLs_PrioritizesPromptModelDependency(t *testing.T) {
+	t.Parallel()
+
+	got := []string{
+		"https://bolt.new/assets/command-DKbHo7qM.js",
+		"https://bolt.new/assets/settings-CDUP863_.js",
+		"https://bolt.new/assets/index-DSYXrLj-.js",
+	}
+
+	sortBoltNestedAssetURLs(got, "https://bolt.new/assets/Prompt-uuX7KoKD.js")
+
+	want := []string{
+		"https://bolt.new/assets/index-DSYXrLj-.js",
+		"https://bolt.new/assets/settings-CDUP863_.js",
+		"https://bolt.new/assets/command-DKbHo7qM.js",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got[%d] = %q, want %q; all=%v", i, got[i], want[i], got)
 		}
 	}
 }
@@ -82,8 +156,8 @@ func TestBuildBoltSeedModels_RefreshesBoltModelsFromBundle(t *testing.T) {
 	if len(models) != 5 {
 		t.Fatalf("len(models) = %d, want 5", len(models))
 	}
-	if !models[1].IsDefault {
-		t.Fatalf("models[1].IsDefault = false, want true")
+	if !models[2].IsDefault {
+		t.Fatalf("models[2].IsDefault = false, want true")
 	}
 	if models[0].Name != "Claude Haiku 4.5 (Bolt)" {
 		t.Fatalf("models[0].Name = %q", models[0].Name)
@@ -121,7 +195,7 @@ func TestSeedModels_UsesStaticBoltFallbackWithoutFetchingBundle(t *testing.T) {
 		t.Fatal("expected store.New() to avoid fetching bolt bundle on startup")
 	}
 
-	defaultModel, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-sonnet-4-5-20250929")
+	defaultModel, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID(default) error = %v", err)
 	}
@@ -129,20 +203,20 @@ func TestSeedModels_UsesStaticBoltFallbackWithoutFetchingBundle(t *testing.T) {
 		t.Fatalf("defaultModel.IsDefault = false, want true")
 	}
 
-	haikuModel, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-haiku-4-5-20251001")
+	opusModel, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-opus-4-6")
 	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(haiku) error = %v", err)
+		t.Fatalf("GetModelByChannelAndModelID(opus) error = %v", err)
 	}
-	if haikuModel.Name != "Claude Haiku 4.5 (Bolt)" {
-		t.Fatalf("haikuModel.Name = %q", haikuModel.Name)
+	if opusModel.Name != "Claude Opus 4.6 (Bolt)" {
+		t.Fatalf("opusModel.Name = %q", opusModel.Name)
 	}
 
-	oldDefault, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-sonnet-4-6")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(old default) error = %v", err)
+	oldModel, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-sonnet-4-5-20250929")
+	if err == nil && oldModel.Status == ModelStatusAvailable {
+		t.Fatalf("old model should not be seeded as available: %+v", oldModel)
 	}
-	if oldDefault.IsDefault {
-		t.Fatalf("old default should have been cleared")
+	if err == nil && oldModel.IsDefault {
+		t.Fatalf("old model should not be default: %+v", oldModel)
 	}
 }
 

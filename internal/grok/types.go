@@ -48,6 +48,35 @@ type VideoConfig struct {
 	VideoLength    int    `json:"video_length"`
 	ResolutionName string `json:"resolution_name"`
 	Preset         string `json:"preset"`
+	Size           string `json:"size,omitempty"`
+}
+
+type VideosRequest struct {
+	Model           string `json:"model"`
+	Prompt          string `json:"prompt"`
+	Seconds         int    `json:"seconds"`
+	Size            string `json:"size"`
+	ResolutionName  string `json:"resolution_name"`
+	Preset          string `json:"preset"`
+	InputReferences []string
+}
+
+type videoJob struct {
+	ID              string
+	Model           string
+	Prompt          string
+	Seconds         int
+	Size            string
+	Quality         string
+	CreatedAt       int64
+	Status          string
+	Progress        int
+	CompletedAt     int64
+	Error           map[string]interface{}
+	VideoURL        string
+	ContentPath     string
+	RemixedFromID   string
+	InputReferences []string
 }
 
 type ImageConfig struct {
@@ -175,12 +204,42 @@ func parseLooseStringAny(value interface{}) string {
 	}
 }
 
+func parseVideoInputReferences(value interface{}) []string {
+	var out []string
+	var walk func(interface{})
+	walk = func(v interface{}) {
+		switch x := v.(type) {
+		case nil:
+			return
+		case string:
+			if s := strings.TrimSpace(x); s != "" {
+				out = append(out, s)
+			}
+		case []interface{}:
+			for _, item := range x {
+				walk(item)
+			}
+		case map[string]interface{}:
+			for _, key := range []string{"image_url", "url", "data"} {
+				if s := parseLooseStringAny(x[key]); s != "" {
+					out = append(out, s)
+					return
+				}
+			}
+		}
+	}
+	walk(value)
+	return uniqueStrings(out)
+}
+
 func (v *VideoConfig) UnmarshalJSON(data []byte) error {
 	type rawVideoConfig struct {
 		AspectRatio    interface{} `json:"aspect_ratio"`
 		VideoLength    interface{} `json:"video_length"`
+		Seconds        interface{} `json:"seconds"`
 		ResolutionName interface{} `json:"resolution_name"`
 		Preset         interface{} `json:"preset"`
+		Size           interface{} `json:"size"`
 	}
 	var raw rawVideoConfig
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -190,10 +249,17 @@ func (v *VideoConfig) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	if videoLength == 0 {
+		videoLength, err = parseLooseIntAny(raw.Seconds)
+		if err != nil {
+			return err
+		}
+	}
 	v.AspectRatio = parseLooseStringAny(raw.AspectRatio)
 	v.VideoLength = videoLength
 	v.ResolutionName = parseLooseStringAny(raw.ResolutionName)
 	v.Preset = parseLooseStringAny(raw.Preset)
+	v.Size = parseLooseStringAny(raw.Size)
 	return nil
 }
 
@@ -321,6 +387,49 @@ func (r *ImagesGenerationsRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (r *VideosRequest) UnmarshalJSON(data []byte) error {
+	type rawVideosRequest struct {
+		Model           interface{} `json:"model"`
+		Prompt          interface{} `json:"prompt"`
+		Seconds         interface{} `json:"seconds"`
+		VideoLength     interface{} `json:"video_length"`
+		Size            interface{} `json:"size"`
+		AspectRatio     interface{} `json:"aspect_ratio"`
+		ResolutionName  interface{} `json:"resolution_name"`
+		Preset          interface{} `json:"preset"`
+		InputReference  interface{} `json:"input_reference"`
+		InputReferences interface{} `json:"input_references"`
+	}
+	var raw rawVideosRequest
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	seconds, err := parseLooseIntAny(raw.Seconds)
+	if err != nil {
+		return err
+	}
+	if seconds == 0 {
+		seconds, err = parseLooseIntAny(raw.VideoLength)
+		if err != nil {
+			return err
+		}
+	}
+	r.Model = parseLooseStringAny(raw.Model)
+	r.Prompt = parseLooseStringAny(raw.Prompt)
+	r.Seconds = seconds
+	r.Size = parseLooseStringAny(raw.Size)
+	if r.Size == "" {
+		r.Size = parseLooseStringAny(raw.AspectRatio)
+	}
+	r.ResolutionName = parseLooseStringAny(raw.ResolutionName)
+	r.Preset = parseLooseStringAny(raw.Preset)
+	r.InputReferences = parseVideoInputReferences(raw.InputReferences)
+	if len(r.InputReferences) == 0 {
+		r.InputReferences = parseVideoInputReferences(raw.InputReference)
+	}
+	return nil
+}
+
 type RateLimitInfo struct {
 	Limit        int64
 	HasLimit     bool
@@ -408,6 +517,13 @@ func (r *ChatCompletionsRequest) Validate() error {
 		if r.ImageConfig.N < 1 || r.ImageConfig.N > 10 {
 			return fmt.Errorf("image_config.n must be between 1 and 10")
 		}
+		modelID := normalizeModelID(r.Model)
+		if modelID == "grok-imagine-image-lite" && r.ImageConfig.N > 4 {
+			return fmt.Errorf("image_config.n must be between 1 and 4 for grok-imagine-image-lite")
+		}
+		if modelID == "grok-imagine-image-edit" && r.ImageConfig.N > 2 {
+			return fmt.Errorf("image_config.n must be between 1 and 2 for image edit")
+		}
 		if r.ImageConfig.ResponseFormat != "" {
 			switch normalizeImageResponseFormat(r.ImageConfig.ResponseFormat) {
 			case "b64_json", "url":
@@ -418,6 +534,9 @@ func (r *ChatCompletionsRequest) Validate() error {
 			r.ImageConfig.ResponseFormat = normalizeImageResponseFormat(r.ImageConfig.ResponseFormat)
 		}
 		size, err := normalizeImageSize(r.ImageConfig.Size)
+		if modelID == "grok-imagine-image-edit" {
+			size, err = normalizeImageEditSize(r.ImageConfig.Size)
+		}
 		if err != nil {
 			return err
 		}
@@ -466,14 +585,8 @@ func (v *VideoConfig) Normalize() {
 	if v == nil {
 		return
 	}
-	if strings.TrimSpace(v.AspectRatio) == "" {
-		v.AspectRatio = "3:2"
-	}
 	if v.VideoLength == 0 {
 		v.VideoLength = 6
-	}
-	if strings.TrimSpace(v.ResolutionName) == "" {
-		v.ResolutionName = "480p"
 	}
 	if strings.TrimSpace(v.Preset) == "" {
 		v.Preset = "custom"

@@ -82,11 +82,11 @@ var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *conf
 func normalizeGrokVerifyModelID(raw string) string {
 	model := strings.TrimSpace(raw)
 	if model == "" {
-		return "grok-3"
+		return "grok-4.20-0309"
 	}
 	lower := strings.ToLower(model)
 	if lower == "grok" || !strings.HasPrefix(lower, "grok-") {
-		return "grok-3"
+		return "grok-4.20-0309"
 	}
 	return model
 }
@@ -118,8 +118,8 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	verifyCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	info, verifyErr := client.VerifyToken(verifyCtx, token, modelID)
 	cancel()
-	if verifyErr != nil && isGrokModelNotFound(verifyErr) && modelID != "grok-3" {
-		modelID = "grok-3"
+	if verifyErr != nil && isGrokModelNotFound(verifyErr) && modelID != "grok-4.20-0309-non-reasoning" {
+		modelID = "grok-4.20-0309-non-reasoning"
 		acc.AgentMode = modelID
 		verifyCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
 		info, verifyErr = client.VerifyToken(verifyCtx, token, modelID)

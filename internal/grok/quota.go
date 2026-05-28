@@ -9,6 +9,7 @@ import (
 const (
 	basicDefaultQuota float64 = 80
 	superDefaultQuota float64 = 140
+	heavyDefaultQuota float64 = 140
 )
 
 func InferQuotaLimit(acc *store.Account) float64 {
@@ -19,6 +20,9 @@ func InferQuotaLimit(acc *store.Account) float64 {
 		return acc.UsageLimit
 	}
 	sub := strings.ToLower(strings.TrimSpace(acc.Subscription))
+	if strings.Contains(sub, "heavy") {
+		return heavyDefaultQuota
+	}
 	if strings.Contains(sub, "super") || strings.Contains(sub, "pro") {
 		return superDefaultQuota
 	}

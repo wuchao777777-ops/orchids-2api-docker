@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -19,12 +21,12 @@ func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
 	prev := runModelRefresh
 	defer func() { runModelRefresh = prev }()
 
-	runModelRefresh = func(ctx context.Context, cfg *config.Config, s *store.Store, channel string) (*modelRefreshResult, error) {
-		return &modelRefreshResult{Channel: channel, Source: "stub", Discovered: 3, Verified: 2}, nil
+	runModelRefresh = func(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (*modelRefreshResult, error) {
+		return &modelRefreshResult{Channel: channel, Source: "stub", Concurrency: concurrency, Discovered: 3, Verified: 2}, nil
 	}
 
 	handler := makeModelRefreshHandler(&config.Config{}, nil)
-	req := httptest.NewRequest(http.MethodPost, "/api/models/refresh", strings.NewReader(`{"channel":"puter"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=warp&concurrency=99", strings.NewReader(`{"channel":"puter","concurrency":8}`))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)
@@ -42,6 +44,48 @@ func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
 	}
 	if resp.Verified != 2 {
 		t.Fatalf("verified=%d want 2", resp.Verified)
+	}
+	if resp.Concurrency != 8 {
+		t.Fatalf("concurrency=%d want 8", resp.Concurrency)
+	}
+}
+
+func TestNormalizeModelRefreshConcurrency(t *testing.T) {
+	tests := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{name: "default on zero", in: 0, want: defaultModelRefreshConcurrency},
+		{name: "default on negative", in: -2, want: defaultModelRefreshConcurrency},
+		{name: "keeps valid", in: 8, want: 8},
+		{name: "clamps max", in: 99, want: maxModelRefreshConcurrency},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeModelRefreshConcurrency(tt.in); got != tt.want {
+				t.Fatalf("normalizeModelRefreshConcurrency(%d)=%d want %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseModelRefreshConcurrency(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want int
+		ok   bool
+	}{
+		{raw: "", want: 0, ok: false},
+		{raw: "2", want: 2, ok: true},
+		{raw: "99", want: maxModelRefreshConcurrency, ok: true},
+		{raw: "bad", want: defaultModelRefreshConcurrency, ok: true},
+	}
+	for _, tt := range tests {
+		got, ok := parseModelRefreshConcurrency(tt.raw)
+		if got != tt.want || ok != tt.ok {
+			t.Fatalf("parseModelRefreshConcurrency(%q)=(%d,%v) want (%d,%v)", tt.raw, got, ok, tt.want, tt.ok)
+		}
 	}
 }
 
@@ -61,6 +105,25 @@ func TestSyncModelsForChannel_SkipsVerificationAndUsesDiscoveryList(t *testing.T
 	}
 	if result.Verified != result.Discovered {
 		t.Fatalf("verified=%d want discovered=%d", result.Verified, result.Discovered)
+	}
+	if result.Concurrency != defaultModelRefreshConcurrency {
+		t.Fatalf("concurrency=%d want %d", result.Concurrency, defaultModelRefreshConcurrency)
+	}
+}
+
+func TestSyncModelsForChannelConcurrent_RecordsConcurrency(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	clearModelsForChannel(t, ctx, s, "Bolt")
+
+	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Bolt", 8)
+	if err != nil {
+		t.Fatalf("syncModelsForChannelConcurrent() error = %v", err)
+	}
+	if result.Concurrency != 8 {
+		t.Fatalf("concurrency=%d want 8", result.Concurrency)
 	}
 }
 
@@ -133,17 +196,88 @@ func TestDiscoverModelsForChannel_BoltReturnsSeedCatalog(t *testing.T) {
 	}
 }
 
+func TestVerifyPuterDiscoveredModelsConcurrent_KeepsUnknownProbeFailures(t *testing.T) {
+	prevVerify := verifyPuterModelForRefresh
+	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
+
+	var mu sync.Mutex
+	seen := map[string]int{}
+	verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
+		mu.Lock()
+		seen[modelID]++
+		mu.Unlock()
+		switch modelID {
+		case "stable":
+			return nil
+		case "flaky":
+			return errors.New("puter API error: status=429, body=too many requests")
+		case "missing":
+			return errors.New("puter API error: message=Model not found, please try one of the following models listed here")
+		default:
+			return errors.New("failed to send puter verify request: timeout")
+		}
+	}
+
+	got := verifyPuterDiscoveredModelsConcurrent(
+		context.Background(),
+		&config.Config{},
+		[]*store.Account{{ID: 1, AccountType: "puter"}, {ID: 2, AccountType: "puter"}},
+		[]discoveredModel{{ID: "stable"}, {ID: "flaky"}, {ID: "missing"}},
+		8,
+	)
+
+	gotIDs := make([]string, 0, len(got))
+	for _, item := range got {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	if strings.Join(gotIDs, ",") != "stable,flaky" {
+		t.Fatalf("verified IDs=%v want [stable flaky]", gotIDs)
+	}
+	if seen["missing"] != 2 {
+		t.Fatalf("missing probes=%d want 2", seen["missing"])
+	}
+}
+
+func TestVerifyPuterDiscoveredModelsSerial_KeepsUnknownProbeFailures(t *testing.T) {
+	prevVerify := verifyPuterModelForRefresh
+	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
+
+	verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
+		if modelID == "missing" {
+			return errors.New("puter API error: message=Model not found, please try one of the following models listed here")
+		}
+		return errors.New("failed to send puter verify request: EOF")
+	}
+
+	got := verifyPuterDiscoveredModelsConcurrent(
+		context.Background(),
+		&config.Config{},
+		[]*store.Account{{ID: 1, AccountType: "puter"}},
+		[]discoveredModel{{ID: "flaky"}, {ID: "missing"}},
+		1,
+	)
+
+	gotIDs := make([]string, 0, len(got))
+	for _, item := range got {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	if strings.Join(gotIDs, ",") != "flaky" {
+		t.Fatalf("verified IDs=%v want [flaky]", gotIDs)
+	}
+}
+
 func TestGrokCanonicalAcceptanceRejectsFallbackModels(t *testing.T) {
 	tests := []struct {
 		requested string
 		canonical string
 		want      bool
 	}{
-		{requested: "grok-4.3", canonical: "grok-4.3", want: true},
-		{requested: "grok-4.3-latest", canonical: "grok-4.3", want: true},
-		{requested: "grok-latest", canonical: "grok-4.3", want: true},
-		{requested: "grok-3-mini", canonical: "grok-4.3", want: false},
-		{requested: "grok-420", canonical: "grok-4.3", want: false},
+		{requested: "grok-4.20-0309", canonical: "grok-4.20-0309", want: true},
+		{requested: "grok-4.3-beta", canonical: "grok-4.3-beta", want: true},
+		{requested: "grok-4.3-latest", canonical: "grok-4.3", want: false},
+		{requested: "grok-latest", canonical: "grok-4.3", want: false},
+		{requested: "grok-3-mini", canonical: "grok-4.20-0309", want: false},
+		{requested: "grok-420", canonical: "grok-4.20-0309", want: false},
 	}
 	for _, tt := range tests {
 		if got := isAcceptedGrokCanonical(tt.requested, tt.canonical); got != tt.want {
@@ -184,7 +318,7 @@ func TestGrokProbeCandidatesIncludesPolicyAndExistingModels(t *testing.T) {
 	}
 }
 
-func TestApplyModelRefresh_DeletesModelsMissingFromDiscoveredList(t *testing.T) {
+func TestApplyModelRefresh_MarksModelsMissingFromDiscoveredListOffline(t *testing.T) {
 	testCases := []struct {
 		channel string
 		modelID string
@@ -219,21 +353,31 @@ func TestApplyModelRefresh_DeletesModelsMissingFromDiscoveredList(t *testing.T) 
 			if err != nil {
 				t.Fatalf("applyModelRefresh() error = %v", err)
 			}
-			if result.Deleted != 1 {
-				t.Fatalf("Deleted=%d want 1", result.Deleted)
+			if result.Deleted != 0 {
+				t.Fatalf("Deleted=%d want 0", result.Deleted)
 			}
-			if len(result.DeletedModelIDs) != 1 || result.DeletedModelIDs[0] != tc.modelID {
-				t.Fatalf("DeletedModelIDs=%v want [%s]", result.DeletedModelIDs, tc.modelID)
+			if result.Offline != 1 {
+				t.Fatalf("Offline=%d want 1", result.Offline)
+			}
+			if len(result.OfflineModelIDs) != 1 || result.OfflineModelIDs[0] != tc.modelID {
+				t.Fatalf("OfflineModelIDs=%v want [%s]", result.OfflineModelIDs, tc.modelID)
 			}
 
-			models, err := s.ListModels(ctx)
+			model, err := s.GetModelByChannelAndModelID(ctx, tc.channel, tc.modelID)
 			if err != nil {
-				t.Fatalf("ListModels() error = %v", err)
+				t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
 			}
-			for _, model := range models {
-				if model != nil && strings.EqualFold(model.Channel, tc.channel) && model.ModelID == tc.modelID {
-					t.Fatalf("expected %s to be deleted, got %+v", tc.modelID, model)
-				}
+			if model == nil {
+				t.Fatalf("expected %s to remain offline", tc.modelID)
+			}
+			if model.Status != store.ModelStatusOffline {
+				t.Fatalf("Status=%q want %q", model.Status, store.ModelStatusOffline)
+			}
+			if model.Verified {
+				t.Fatal("Verified=true want false")
+			}
+			if model.IsDefault {
+				t.Fatal("IsDefault=true want false")
 			}
 		})
 	}

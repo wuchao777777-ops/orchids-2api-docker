@@ -23,15 +23,14 @@ type boltModelChoice struct {
 var (
 	boltAbsoluteAssetPattern   = regexp.MustCompile(`/assets/[A-Za-z0-9._-]+\.js`)
 	boltRelativeAssetPattern   = regexp.MustCompile(`(?:\./)+[A-Za-z0-9._/-]+\.js`)
+	boltQuotedAssetPattern     = regexp.MustCompile(`["']((?:\./)+[A-Za-z0-9._/-]+\.js)["']`)
 	boltModelLabelPattern      = regexp.MustCompile(`"(claude-[^"]+)":\{[^}]*?label:"([^"]+)"`)
 	boltClaudeCodeListPattern  = regexp.MustCompile(`new Map\(\[\[[A-Za-z$_][\w$]*\.ClaudeCode,\[(.*?)\]\]\]\)`)
 	boltModelRefPattern        = regexp.MustCompile(`\["([^"]+)"\]`)
+	boltWireModelPattern       = regexp.MustCompile(`t==="([^"]+)"\?"(claude-[^"]+)"`)
 	fetchBoltModelChoices      = fetchBoltModelChoicesFromBundle
 	boltModelDiscoveryFallback = []boltModelChoice{
-		{ID: "claude-haiku-4-5-20251001", Name: "Haiku 4.5"},
-		{ID: "claude-sonnet-4-5-20250929", Name: "Sonnet 4.5"},
 		{ID: "claude-sonnet-4-6", Name: "Sonnet 4.6"},
-		{ID: "claude-opus-4-5-20251101", Name: "Opus 4.5"},
 		{ID: "claude-opus-4-6", Name: "Opus 4.6"},
 	}
 	boltModelDiscoveryCache = struct {
@@ -71,6 +70,7 @@ func fetchBoltModelChoicesFromBundle(ctx context.Context) ([]boltModelChoice, er
 		cacheBoltModelChoices(boltModelDiscoveryFallback)
 		return slices.Clone(boltModelDiscoveryFallback), fmt.Errorf("no bolt asset urls found")
 	}
+	sortBoltAssetURLs(queue)
 
 	seen := make(map[string]struct{}, len(queue))
 	for len(queue) > 0 {
@@ -90,11 +90,17 @@ func fetchBoltModelChoicesFromBundle(ctx context.Context) ([]boltModelChoice, er
 			return slices.Clone(models), nil
 		}
 
-		for _, nested := range extractBoltAssetURLs(js, assetURL) {
+		nestedAssets := extractBoltAssetURLs(js, assetURL)
+		sortBoltNestedAssetURLs(nestedAssets, assetURL)
+		newNested := make([]string, 0, len(nestedAssets))
+		for _, nested := range nestedAssets {
 			if _, ok := seen[nested]; ok {
 				continue
 			}
-			queue = append(queue, nested)
+			newNested = append(newNested, nested)
+		}
+		if len(newNested) > 0 {
+			queue = append(newNested, queue...)
 		}
 	}
 
@@ -107,6 +113,77 @@ func cacheBoltModelChoices(items []boltModelChoice) {
 	boltModelDiscoveryCache.items = slices.Clone(items)
 	boltModelDiscoveryCache.expires = time.Now().Add(boltModelCacheTTL)
 	boltModelDiscoveryCache.mu.Unlock()
+}
+
+func sortBoltAssetURLs(items []string) {
+	slices.SortStableFunc(items, func(a, b string) int {
+		aScore := boltAssetPriority(a)
+		bScore := boltAssetPriority(b)
+		if aScore != bScore {
+			return aScore - bScore
+		}
+		if len(a) != len(b) {
+			return len(a) - len(b)
+		}
+		return strings.Compare(a, b)
+	})
+}
+
+func sortBoltNestedAssetURLs(items []string, parentURL string) {
+	parentName := strings.ToLower(parentURL)
+	if !strings.Contains(parentName, "/prompt-") && !strings.Contains(parentName, "/chat.client-") {
+		sortBoltAssetURLs(items)
+		return
+	}
+	slices.SortStableFunc(items, func(a, b string) int {
+		aScore := boltNestedAssetPriority(a, parentName)
+		bScore := boltNestedAssetPriority(b, parentName)
+		if aScore != bScore {
+			return aScore - bScore
+		}
+		return 0
+	})
+}
+
+func boltNestedAssetPriority(assetURL, parentName string) int {
+	name := strings.ToLower(assetURL)
+	if strings.Contains(parentName, "/prompt-") {
+		switch {
+		case strings.Contains(name, "/index-"):
+			return 0
+		case strings.Contains(name, "/settings-"):
+			return 1
+		}
+	}
+	if strings.Contains(parentName, "/chat.client-") {
+		switch {
+		case strings.Contains(name, "/prompt-"):
+			return 0
+		case strings.Contains(name, "/index-"):
+			return 1
+		}
+	}
+	return boltAssetPriority(assetURL) + 10
+}
+
+func boltAssetPriority(assetURL string) int {
+	name := strings.ToLower(assetURL)
+	switch {
+	case strings.Contains(name, "/prompt-"):
+		return 0
+	case strings.Contains(name, "/chat.client-"):
+		return 1
+	case strings.Contains(name, "/index-"):
+		return 2
+	case strings.Contains(name, "/settings-"):
+		return 3
+	case strings.Contains(name, "/agent-"):
+		return 4
+	case strings.Contains(name, "/_chat"):
+		return 5
+	default:
+		return 20
+	}
 }
 
 func fetchBoltText(ctx context.Context, targetURL string) (string, error) {
@@ -157,6 +234,21 @@ func extractBoltAssetURLs(text string, baseURL string) []string {
 		seen[resolved] = struct{}{}
 		out = append(out, resolved)
 	}
+
+	for _, match := range boltQuotedAssetPattern.FindAllStringSubmatch(text, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		resolved := resolveBoltAssetURL(baseURL, match[1])
+		if resolved == "" {
+			continue
+		}
+		if _, ok := seen[resolved]; ok {
+			continue
+		}
+		seen[resolved] = struct{}{}
+		out = append(out, resolved)
+	}
 	return out
 }
 
@@ -195,6 +287,10 @@ func parseBoltBundleModelChoices(js string) ([]boltModelChoice, bool) {
 		labels[modelID] = label
 	}
 
+	if models := parseBoltWireModelChoices(js, labels); len(models) > 0 {
+		return models, true
+	}
+
 	listMatch := boltClaudeCodeListPattern.FindStringSubmatch(js)
 	if len(listMatch) < 2 {
 		return nil, false
@@ -229,6 +325,39 @@ func parseBoltBundleModelChoices(js string) ([]boltModelChoice, bool) {
 	return out, len(out) > 0
 }
 
+func parseBoltWireModelChoices(js string, labels map[string]string) []boltModelChoice {
+	wireMatches := boltWireModelPattern.FindAllStringSubmatch(js, -1)
+	if len(wireMatches) == 0 {
+		return nil
+	}
+
+	out := make([]boltModelChoice, 0, len(wireMatches))
+	seen := map[string]struct{}{}
+	for _, match := range wireMatches {
+		if len(match) < 3 {
+			continue
+		}
+		pickerID := strings.TrimSpace(match[1])
+		modelID := strings.TrimSpace(match[2])
+		if modelID == "" {
+			continue
+		}
+		if _, ok := seen[modelID]; ok {
+			continue
+		}
+		label := labels[modelID]
+		if label == "" {
+			label = labels[pickerID]
+		}
+		if label == "" {
+			continue
+		}
+		seen[modelID] = struct{}{}
+		out = append(out, boltModelChoice{ID: modelID, Name: label})
+	}
+	return out
+}
+
 func BuildBoltSeedModels(ctx context.Context) []Model {
 	choices, err := fetchBoltModelChoices(ctx)
 	if err != nil {
@@ -260,9 +389,8 @@ func buildBoltModelsFromChoices(choices []boltModelChoice) []Model {
 
 func chooseBoltDefaultModelID(choices []boltModelChoice) string {
 	preferred := []string{
-		"claude-sonnet-4-5-20250929",
 		"claude-sonnet-4-6",
-		"claude-haiku-4-5-20251001",
+		"claude-opus-4-6",
 	}
 	for _, candidate := range preferred {
 		for _, choice := range choices {

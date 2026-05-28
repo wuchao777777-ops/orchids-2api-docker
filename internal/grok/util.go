@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"path"
@@ -1401,6 +1402,54 @@ func extractPromptAndImageURLs(messages []ChatMessage) (string, []string) {
 	return prompt, imageURLs
 }
 
+func extractVideoPromptAndAttachments(messages []ChatMessage) (string, []AttachmentInput, error) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		content := msg.Content
+		switch c := content.(type) {
+		case string:
+			if text := strings.TrimSpace(c); text != "" {
+				return text, nil, nil
+			}
+		case []interface{}:
+			textParts := make([]string, 0)
+			refs := make([]AttachmentInput, 0)
+			for _, block := range c {
+				m, ok := block.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				blockType := strings.ToLower(strings.TrimSpace(fmt.Sprint(m["type"])))
+				switch blockType {
+				case "text":
+					if s, ok := m["text"].(string); ok && strings.TrimSpace(s) != "" {
+						textParts = append(textParts, strings.TrimSpace(s))
+					}
+				case "image_url":
+					if data := extractAttachmentURL(m["image_url"]); data != "" {
+						refs = append(refs, AttachmentInput{Type: "image", Data: data})
+					}
+				case "file":
+					return "", nil, fmt.Errorf("video model does not support file content blocks")
+				case "input_audio":
+					return "", nil, fmt.Errorf("video model does not support input_audio content blocks")
+				}
+			}
+			if len(textParts) > 0 {
+				if len(refs) > 7 {
+					refs = refs[:7]
+				}
+				return strings.Join(textParts, " "), refs, nil
+			}
+		default:
+			if text := strings.TrimSpace(extractContentText(content)); text != "" {
+				return text, nil, nil
+			}
+		}
+	}
+	return "", nil, fmt.Errorf("Video prompt cannot be empty")
+}
+
 func dataURIFromBytes(mime string, data []byte) string {
 	mime = strings.TrimSpace(mime)
 	if mime == "" {
@@ -1551,6 +1600,49 @@ func resolveAspectRatio(size string) string {
 	}
 }
 
+func resolveVideoSize(sizeOrRatio string) (aspectRatio string, resolutionName string, ok bool) {
+	s := strings.ToLower(strings.TrimSpace(sizeOrRatio))
+	if s == "" {
+		s = "720x1280"
+	}
+	switch s {
+	case "720x1280", "1024x1792", "9:16":
+		return "9:16", "720p", true
+	case "1280x720", "1792x1024", "16:9":
+		return "16:9", "720p", true
+	case "1024x1024", "1:1":
+		return "1:1", "720p", true
+	case "2:3":
+		return "2:3", "720p", true
+	case "3:2":
+		return "3:2", "720p", true
+	default:
+		return "", "", false
+	}
+}
+
+func canonicalVideoSize(sizeOrRatio string) string {
+	s := strings.ToLower(strings.TrimSpace(sizeOrRatio))
+	switch s {
+	case "", "720x1280", "9:16":
+		return "720x1280"
+	case "1280x720", "16:9":
+		return "1280x720"
+	case "1024x1024", "1:1":
+		return "1024x1024"
+	case "1024x1792":
+		return "1024x1792"
+	case "1792x1024":
+		return "1792x1024"
+	case "2:3":
+		return "1024x1792"
+	case "3:2":
+		return "1792x1024"
+	default:
+		return s
+	}
+}
+
 func validateVideoConfig(cfg *VideoConfig) (*VideoConfig, error) {
 	if cfg == nil {
 		cfg = &VideoConfig{}
@@ -1558,8 +1650,19 @@ func validateVideoConfig(cfg *VideoConfig) (*VideoConfig, error) {
 	cfg.Normalize()
 
 	ar := strings.TrimSpace(cfg.AspectRatio)
+	if ar == "" && strings.TrimSpace(cfg.Size) != "" {
+		var defaultResolution string
+		var ok bool
+		ar, defaultResolution, ok = resolveVideoSize(cfg.Size)
+		if !ok {
+			return nil, fmt.Errorf("size must be one of [720x1280 1280x720 1024x1024 1024x1792 1792x1024]")
+		}
+		if strings.TrimSpace(cfg.ResolutionName) == "" {
+			cfg.ResolutionName = defaultResolution
+		}
+	}
 	if ar == "" {
-		ar = "3:2"
+		ar = "720x1280"
 	}
 	mapped, ok := videoAspectRatioMap[ar]
 	if !ok {
@@ -1571,6 +1674,9 @@ func validateVideoConfig(cfg *VideoConfig) (*VideoConfig, error) {
 		return nil, fmt.Errorf("video_length must be one of [6, 10, 12, 16, 20] seconds")
 	}
 	resolution := strings.TrimSpace(cfg.ResolutionName)
+	if resolution == "" {
+		resolution = "720p"
+	}
 	if resolution != "480p" && resolution != "720p" {
 		return nil, fmt.Errorf("resolution_name must be one of ['480p', '720p']")
 	}
@@ -1583,7 +1689,33 @@ func validateVideoConfig(cfg *VideoConfig) (*VideoConfig, error) {
 		return nil, fmt.Errorf("preset must be one of ['fun', 'normal', 'spicy', 'custom']")
 	}
 	cfg.Preset = preset
+	if strings.TrimSpace(cfg.Size) == "" {
+		cfg.Size = canonicalVideoSize(ar)
+	} else {
+		cfg.Size = canonicalVideoSize(cfg.Size)
+	}
 	return cfg, nil
+}
+
+func videoSegmentLengths(seconds int) ([]int, error) {
+	switch seconds {
+	case 6:
+		return []int{6}, nil
+	case 10:
+		return []int{10}, nil
+	case 12:
+		return []int{6, 6}, nil
+	case 16:
+		return []int{10, 6}, nil
+	case 20:
+		return []int{10, 10}, nil
+	default:
+		return nil, fmt.Errorf("video_length must be one of [6, 10, 12, 16, 20] seconds")
+	}
+}
+
+func videoExtensionStartTime(seconds int) float64 {
+	return math.Round((float64(seconds)+1.0/24.0)*1e6) / 1e6
 }
 
 func normalizeImageSize(size string) (string, error) {
@@ -1597,6 +1729,17 @@ func normalizeImageSize(size string) (string, error) {
 	default:
 		return "", fmt.Errorf("size must be one of 1280x720/720x1280/1792x1024/1024x1792/1024x1024")
 	}
+}
+
+func normalizeImageEditSize(size string) (string, error) {
+	s := strings.ToLower(strings.TrimSpace(size))
+	if s == "" {
+		return "1024x1024", nil
+	}
+	if s != "1024x1024" {
+		return "", fmt.Errorf("image edit currently only supports size '1024x1024'")
+	}
+	return "1024x1024", nil
 }
 
 func extractImageProgress(resp map[string]interface{}) (index int, progress int, ok bool) {
@@ -1660,6 +1803,24 @@ func extractVideoProgress(resp map[string]interface{}) (progress int, videoURL, 
 		), true
 }
 
+func extractVideoPostID(resp map[string]interface{}) string {
+	raw := mapAtAnyPath(resp,
+		[]string{"streamingVideoGenerationResponse"},
+		[]string{"streaming_video_generation_response"},
+		[]string{"videoGenerationProgress"},
+		[]string{"video_generation_progress"},
+		[]string{"modelResponse", "streamingVideoGenerationResponse"},
+		[]string{"modelResponse", "streaming_video_generation_response"},
+	)
+	if raw == nil {
+		return ""
+	}
+	return stringAtAnyPath(raw,
+		[]string{"videoPostId"},
+		[]string{"video_post_id"},
+	)
+}
+
 func extractVideoAssetIDs(resp map[string]interface{}) []string {
 	seen := map[string]struct{}{}
 	var out []string
@@ -1717,6 +1878,82 @@ func videoURLFromAssetID(assetID string) string {
 		return defaultAssetsBaseURL + "/" + strings.TrimLeft(assetID, "/")
 	}
 	return defaultAssetsBaseURL + "/" + assetID + "/content"
+}
+
+func imageURLFromAssetID(assetID string) string {
+	assetID = strings.TrimSpace(assetID)
+	if assetID == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(assetID), "http://") || strings.HasPrefix(strings.ToLower(assetID), "https://") {
+		return assetID
+	}
+	if strings.Contains(assetID, "/") {
+		return defaultAssetsBaseURL + "/" + strings.TrimLeft(assetID, "/")
+	}
+	return defaultAssetsBaseURL + "/" + assetID + "/content"
+}
+
+func extractImageAssetIDs(resp map[string]interface{}) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(v interface{}) {
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if s == "" || s == "<nil>" {
+			return
+		}
+		if _, exists := seen[s]; exists {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	var walk func(interface{})
+	walk = func(v interface{}) {
+		switch x := v.(type) {
+		case map[string]interface{}:
+			for k, item := range x {
+				switch strings.ToLower(strings.TrimSpace(k)) {
+				case "assetid", "asset_id":
+					add(item)
+				case "fileattachments", "file_attachments":
+					if arr, ok := item.([]interface{}); ok {
+						for _, one := range arr {
+							add(one)
+						}
+						continue
+					}
+					add(item)
+				default:
+					walk(item)
+				}
+			}
+		case []interface{}:
+			for _, item := range x {
+				walk(item)
+			}
+		}
+	}
+	walk(resp)
+	return out
+}
+
+func appendImageResultURLs(urls []string, resp map[string]interface{}) []string {
+	if mr := extractUpstreamModelResponse(resp); mr != nil {
+		urls = append(urls, extractImageURLs(mr)...)
+		for _, assetID := range extractImageAssetIDs(mr) {
+			if u := imageURLFromAssetID(assetID); u != "" {
+				urls = append(urls, u)
+			}
+		}
+	}
+	urls = append(urls, extractImageURLs(resp)...)
+	for _, assetID := range extractImageAssetIDs(resp) {
+		if u := imageURLFromAssetID(assetID); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	return urls
 }
 
 func interfaceToInt(v interface{}) int {

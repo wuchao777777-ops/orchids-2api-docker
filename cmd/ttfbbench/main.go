@@ -67,7 +67,7 @@ func main() {
 	headers := headerFlags{}
 
 	flag.StringVar(&targetURL, "url", "http://127.0.0.1:3002/grok/v1/chat/completions", "target URL")
-	flag.StringVar(&model, "model", "grok-3", "model name used when body-file is not provided")
+	flag.StringVar(&model, "model", "grok-4.20-0309", "model name used when body-file is not provided")
 	flag.StringVar(&prompt, "prompt", "Reply with OK only.", "prompt used when body-file is not provided")
 	flag.IntVar(&requests, "requests", 5, "number of measured requests")
 	flag.IntVar(&concurrency, "concurrency", 1, "number of concurrent workers")

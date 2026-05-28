@@ -33,14 +33,20 @@ type Handler struct {
 }
 
 type chatAccountSession struct {
-	acc     *store.Account
-	token   string
-	release func()
+	acc            *store.Account
+	token          string
+	poolCandidates []string
+	release        func()
 }
 
 type imageEditUploadInput struct {
 	mime string
 	data []byte
+}
+
+type imageEditReference struct {
+	fileID     string
+	contentURL string
 }
 
 func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
@@ -271,12 +277,51 @@ func (h *Handler) openChatAccountSession(ctx context.Context) (*chatAccountSessi
 }
 
 func (h *Handler) openChatAccountSessionExcluding(ctx context.Context, excludeIDs []int64) (*chatAccountSession, error) {
+	return h.openChatAccountSessionExcludingWithPools(ctx, excludeIDs, nil)
+}
+
+func (h *Handler) openChatAccountSessionForModel(ctx context.Context, spec ModelSpec) (*chatAccountSession, error) {
+	return h.openChatAccountSessionForModelExcluding(ctx, nil, spec)
+}
+
+func (h *Handler) openChatAccountSessionForModelExcluding(ctx context.Context, excludeIDs []int64, spec ModelSpec) (*chatAccountSession, error) {
+	return h.openChatAccountSessionExcludingWithPools(ctx, excludeIDs, spec.PoolCandidates())
+}
+
+func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, excludeIDs []int64, poolCandidates []string) (*chatAccountSession, error) {
 	if h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, "grok", h.connTracker)
-	if err != nil {
-		return nil, err
+	var (
+		acc     *store.Account
+		err     error
+		lastErr error
+	)
+	candidates := normalizeGrokPoolCandidates(poolCandidates)
+	if len(candidates) == 0 {
+		acc, err = h.lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, "grok", h.connTracker)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		for _, pool := range candidates {
+			wantPool := pool
+			acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, func(acc *store.Account) bool {
+				return strings.EqualFold(grokAccountPool(acc), wantPool)
+			})
+			if err == nil && acc != nil {
+				break
+			}
+			if err != nil {
+				lastErr = err
+			}
+		}
+		if acc == nil {
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, fmt.Errorf("no enabled accounts available for channel: grok")
+		}
 	}
 	raw := strings.TrimSpace(acc.ClientCookie)
 	if raw == "" {
@@ -287,9 +332,10 @@ func (h *Handler) openChatAccountSessionExcluding(ctx context.Context, excludeID
 		return nil, fmt.Errorf("grok account token is empty")
 	}
 	return &chatAccountSession{
-		acc:     acc,
-		token:   token,
-		release: h.trackAccount(acc),
+		acc:            acc,
+		token:          token,
+		poolCandidates: candidates,
+		release:        h.trackAccount(acc),
 	}, nil
 }
 
@@ -333,12 +379,13 @@ func (h *Handler) doChatWithAutoSwitch(ctx context.Context, sess *chatAccountSes
 			return nil, err
 		}
 		sess.Close()
-		next, err2 := h.openChatAccountSessionExcluding(ctx, used)
+		next, err2 := h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
 		if err2 != nil {
 			return nil, fmt.Errorf("account switch failed: %w (original: %v)", err2, err)
 		}
 		sess.acc = next.acc
 		sess.token = next.token
+		sess.poolCandidates = next.poolCandidates
 		sess.release = next.release
 	}
 	return nil, lastErr
@@ -385,12 +432,13 @@ func (h *Handler) doChatWithAutoSwitchRebuild(
 		}
 
 		sess.Close()
-		next, err2 := h.openChatAccountSessionExcluding(ctx, used)
+		next, err2 := h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
 		if err2 != nil {
 			return nil, err
 		}
 		sess.acc = next.acc
 		sess.token = next.token
+		sess.poolCandidates = next.poolCandidates
 		sess.release = next.release
 
 		if rebuild != nil {

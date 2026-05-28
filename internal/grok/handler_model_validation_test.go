@@ -93,6 +93,63 @@ func TestEnsureModelEnabled_AllowsVerifiedDynamicGrokModel(t *testing.T) {
 	}
 }
 
+func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	for _, acc := range []*store.Account{
+		{AccountType: "grok", Enabled: true, ClientCookie: "sso=basic-token", Subscription: "basic", Weight: 1},
+		{AccountType: "grok", Enabled: true, ClientCookie: "sso=super-token", Subscription: "super", Weight: 1},
+		{AccountType: "grok", Enabled: true, ClientCookie: "sso=heavy-token", Subscription: "heavy", Weight: 1},
+	} {
+		if err := s.CreateAccount(context.Background(), acc); err != nil {
+			t.Fatalf("CreateAccount() error = %v", err)
+		}
+	}
+
+	superSpec, ok := ResolveModel("grok-4.20-0309")
+	if !ok {
+		t.Fatal("missing grok-4.20-0309 spec")
+	}
+	superSess, err := h.openChatAccountSessionForModel(context.Background(), superSpec)
+	if err != nil {
+		t.Fatalf("open super session error=%v", err)
+	}
+	if superSess.token != "super-token" {
+		t.Fatalf("super token=%q want super-token", superSess.token)
+	}
+	superSess.Close()
+
+	heavySpec, ok := ResolveModel("grok-4.20-heavy")
+	if !ok {
+		t.Fatal("missing grok-4.20-heavy spec")
+	}
+	heavySess, err := h.openChatAccountSessionForModel(context.Background(), heavySpec)
+	if err != nil {
+		t.Fatalf("open heavy session error=%v", err)
+	}
+	if heavySess.token != "heavy-token" {
+		t.Fatalf("heavy token=%q want heavy-token", heavySess.token)
+	}
+	heavySess.Close()
+
+	fastSpec, ok := ResolveModel("grok-4.20-fast")
+	if !ok {
+		t.Fatal("missing grok-4.20-fast spec")
+	}
+	fastSess, err := h.openChatAccountSessionForModel(context.Background(), fastSpec)
+	if err != nil {
+		t.Fatalf("open fast session error=%v", err)
+	}
+	if fastSess.token != "heavy-token" {
+		t.Fatalf("prefer-best fast token=%q want heavy-token", fastSess.token)
+	}
+	fastSess.Close()
+}
+
 func TestTryAutoRegisterModel_VerifiesBeforeCreate(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != defaultRateLimitsPath {

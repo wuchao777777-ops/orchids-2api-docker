@@ -45,7 +45,7 @@ func TestRefreshAccountState_GrokSyncsRemainingQuota(t *testing.T) {
 		ID:           1,
 		AccountType:  "grok",
 		ClientCookie: "token-abc",
-		AgentMode:    "grok-3",
+		AgentMode:    "grok-4.20-0309",
 	}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)

@@ -251,6 +251,14 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "image_config.n must be between 1 and 10", http.StatusBadRequest)
 			return
 		}
+		if isImageGenerationModel(req.Model) && normalizeModelID(req.Model) == "grok-imagine-image-lite" && imageCfg.N > 4 {
+			http.Error(w, "image_config.n must be between 1 and 4 for grok-imagine-image-lite", http.StatusBadRequest)
+			return
+		}
+		if isImageEditModel(req.Model) && imageCfg.N > 2 {
+			http.Error(w, "image_config.n must be between 1 and 2 for image edit", http.StatusBadRequest)
+			return
+		}
 		if req.Stream && imageCfg.N > 2 {
 			http.Error(w, "streaming is only supported when image_config.n=1 or n=2", http.StatusBadRequest)
 			return
@@ -262,7 +270,15 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			imageCfg.ResponseFormat = normalizeImageResponseFormat(imageCfg.ResponseFormat)
 		}
 		if imageCfg.Size != "" {
-			size, err := normalizeImageSize(imageCfg.Size)
+			var (
+				size string
+				err  error
+			)
+			if isImageEditModel(req.Model) {
+				size, err = normalizeImageEditSize(imageCfg.Size)
+			} else {
+				size, err = normalizeImageSize(imageCfg.Size)
+			}
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -277,10 +293,9 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				http.Error(w, "image_url is required for image edits", http.StatusBadRequest)
 				return
 			}
-			// Keep grok2api compatibility in chat mode: use the last provided image as edit source.
 			editInputs := imageURLs
-			if len(editInputs) > 1 {
-				editInputs = editInputs[len(editInputs)-1:]
+			if len(editInputs) > 7 {
+				editInputs = editInputs[len(editInputs)-7:]
 			}
 			h.handleChatImageEdit(r.Context(), w, req, spec, prompt, editInputs, publicBase)
 			return
@@ -330,9 +345,16 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		} else {
 			req.VideoConfig = cfg
 		}
+		videoPrompt, videoAttachments, err := extractVideoPromptAndAttachments(req.Messages)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.serveVideoChatCompletion(r.Context(), w, &req, spec, videoPrompt, videoAttachments, publicBase, logger)
+		return
 	}
 
-	sess, err := h.openChatAccountSession(r.Context())
+	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -427,7 +449,18 @@ func (h *Handler) buildChatPayload(
 	if !spec.IsVideo {
 		return payload, nil
 	}
+	return h.buildVideoCreatePayload(ctx, token, spec, text, attachmentInputs, videoCfg, req)
+}
 
+func (h *Handler) buildVideoCreatePayload(
+	ctx context.Context,
+	token string,
+	spec ModelSpec,
+	text string,
+	attachmentInputs []AttachmentInput,
+	videoCfg *VideoConfig,
+	req *ChatCompletionsRequest,
+) (map[string]interface{}, error) {
 	if videoCfg == nil {
 		videoCfg = &VideoConfig{}
 	}
@@ -436,9 +469,13 @@ func (h *Handler) buildChatPayload(
 	postType := "MEDIA_POST_TYPE_VIDEO"
 	postPrompt := text
 	postMediaURL := ""
+	imageReferences := make([]string, 0, 7)
 	for _, item := range attachmentInputs {
 		if !strings.EqualFold(strings.TrimSpace(item.Type), "image") {
 			continue
+		}
+		if len(imageReferences) >= 7 {
+			break
 		}
 		if strings.TrimSpace(item.Data) == "" {
 			continue
@@ -454,10 +491,12 @@ func (h *Handler) buildChatPayload(
 		if !strings.HasPrefix(strings.ToLower(u), "http://") && !strings.HasPrefix(strings.ToLower(u), "https://") {
 			u = "https://assets.grok.com/" + strings.TrimLeft(u, "/")
 		}
-		postType = "MEDIA_POST_TYPE_IMAGE"
-		postPrompt = ""
-		postMediaURL = u
-		break
+		if len(imageReferences) == 0 {
+			postType = "MEDIA_POST_TYPE_IMAGE"
+			postPrompt = ""
+			postMediaURL = u
+		}
+		imageReferences = append(imageReferences, u)
 	}
 
 	postID, err := h.client.createMediaPost(ctx, token, postType, postPrompt, postMediaURL)
@@ -478,7 +517,7 @@ func (h *Handler) buildChatPayload(
 		disableMemory = h.cfg.GrokChatDisableMemory(false)
 	}
 
-	payload = map[string]interface{}{
+	payload := map[string]interface{}{
 		"temporary":                   temporary,
 		"modelName":                   spec.UpstreamModel,
 		"message":                     message,
@@ -525,11 +564,14 @@ func (h *Handler) buildChatPayload(
 		},
 		"disableMemory": disableMemory,
 	}
+	if len(imageReferences) > 0 {
+		cfg := payload["responseMetadata"].(map[string]interface{})["modelConfigOverride"].(map[string]interface{})["modelMap"].(map[string]interface{})["videoGenModelConfig"].(map[string]interface{})
+		cfg["isVideoEdit"] = false
+		cfg["isReferenceToVideo"] = true
+		cfg["imageReferences"] = imageReferences
+	}
 	if strings.TrimSpace(spec.ModelMode) != "" {
 		payload["modelMode"] = spec.ModelMode
-	}
-	if strings.EqualFold(strings.TrimSpace(spec.UpstreamModel), "grok-420") {
-		payload["enable420"] = true
 	}
 	if h != nil && h.cfg != nil {
 		if customPersonality := h.cfg.GrokChatCustomInstruction(); customPersonality != "" {
@@ -537,6 +579,56 @@ func (h *Handler) buildChatPayload(
 		}
 	}
 	return payload, nil
+}
+
+func (h *Handler) buildVideoExtendPayload(spec ModelSpec, prompt string, parentPostID string, extendPostID string, videoCfg *VideoConfig, segmentLength int, elapsedSeconds int) map[string]interface{} {
+	if videoCfg == nil {
+		videoCfg = &VideoConfig{}
+	}
+	videoCfg.Normalize()
+	message := strings.TrimSpace(prompt)
+	if modeFlag := videoPresetFlag(videoCfg.Preset); modeFlag != "" {
+		message = strings.TrimSpace(message + " " + modeFlag)
+	}
+	temporary := true
+	if h != nil && h.cfg != nil {
+		temporary = h.cfg.GrokChatTemporary()
+	}
+	payload := map[string]interface{}{
+		"temporary":        temporary,
+		"modelName":        spec.UpstreamModel,
+		"message":          message,
+		"enableSideBySide": true,
+		"responseMetadata": map[string]interface{}{
+			"experiments": []interface{}{},
+			"modelConfigOverride": map[string]interface{}{
+				"modelMap": map[string]interface{}{
+					"videoGenModelConfig": map[string]interface{}{
+						"isVideoExtension":        true,
+						"videoExtensionStartTime": videoExtensionStartTime(elapsedSeconds),
+						"extendPostId":            strings.TrimSpace(extendPostID),
+						"stitchWithExtendPostId":  true,
+						"originalPrompt":          strings.TrimSpace(prompt),
+						"originalPostId":          strings.TrimSpace(parentPostID),
+						"originalRefType":         "ORIGINAL_REF_TYPE_VIDEO_EXTENSION",
+						"mode":                    strings.TrimSpace(videoCfg.Preset),
+						"aspectRatio":             videoCfg.AspectRatio,
+						"videoLength":             segmentLength,
+						"resolutionName":          videoCfg.ResolutionName,
+						"parentPostId":            strings.TrimSpace(parentPostID),
+						"isVideoEdit":             false,
+					},
+				},
+			},
+			"requestModelDetails": map[string]interface{}{
+				"modelId": spec.UpstreamModel,
+			},
+		},
+	}
+	if strings.TrimSpace(spec.ModelMode) != "" {
+		payload["modelMode"] = spec.ModelMode
+	}
+	return payload
 }
 
 func videoPresetFlag(preset string) string {

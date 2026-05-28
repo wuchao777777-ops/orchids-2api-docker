@@ -52,7 +52,7 @@ func TestExtractGrokModelIDsFromText_FiltersDocsSlugs(t *testing.T) {
 func TestExtractGrokModelIDsFromText_FiltersVolatileVariants(t *testing.T) {
 	text := `grok-3-fast-beta grok-3-fast-latest grok-4.20-0309 grok-4.20-0309-reasoning grok-4.20-0309-non-reasoning grok-4.0709 grok-2.1212 grok-5 grok-5-fast`
 	ids := extractGrokModelIDsFromText(text)
-	for _, wanted := range []string{"grok-5", "grok-5-fast", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning"} {
+	for _, wanted := range []string{"grok-5", "grok-5-fast", "grok-4.20-0309", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning"} {
 		if !slices.Contains(ids, wanted) {
 			t.Fatalf("expected %s in ids: %+v", wanted, ids)
 		}
@@ -60,7 +60,6 @@ func TestExtractGrokModelIDsFromText_FiltersVolatileVariants(t *testing.T) {
 	for _, blocked := range []string{
 		"grok-3-fast-beta",
 		"grok-3-fast-latest",
-		"grok-4.20-0309",
 		"grok-4.0709",
 		"grok-2.1212",
 	} {

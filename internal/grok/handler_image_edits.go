@@ -7,9 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
+
+var imageEditPlaceholderRE = regexp.MustCompile(`(?i)@IMAGE(\d+)\b`)
 
 func (h *Handler) buildImageEditPayload(spec ModelSpec, prompt string, imageURLs []string, parentPostID string) map[string]interface{} {
 	imageEditCfg := map[string]interface{}{
@@ -80,10 +84,10 @@ func (h *Handler) buildImageEditRequestPayload(
 	prompt string,
 	inputs []imageEditUploadInput,
 ) (map[string]interface{}, error) {
-	imageURLs := make([]string, 0, len(inputs))
+	refs := make([]imageEditReference, 0, len(inputs))
 	for _, in := range inputs {
 		dataURI := dataURIFromBytes(in.mime, in.data)
-		_, fileURI, err := h.uploadSingleInput(ctx, token, dataURI)
+		fileID, fileURI, err := h.uploadSingleInput(ctx, token, dataURI)
 		if err != nil {
 			return nil, fmt.Errorf("image upload failed: %w", err)
 		}
@@ -94,12 +98,17 @@ func (h *Handler) buildImageEditRequestPayload(
 		if !strings.HasPrefix(strings.ToLower(u), "http://") && !strings.HasPrefix(strings.ToLower(u), "https://") {
 			u = "https://assets.grok.com/" + strings.TrimLeft(u, "/")
 		}
-		imageURLs = append(imageURLs, u)
+		refs = append(refs, imageEditReference{
+			fileID:     strings.TrimSpace(fileID),
+			contentURL: u,
+		})
 	}
+	imageURLs := imageEditReferenceURLs(refs)
+	prompt = replaceImageEditPlaceholders(prompt, refs)
 
 	parentPostID := ""
 	if len(imageURLs) > 0 {
-		if postID, err := h.client.createMediaPost(ctx, token, "MEDIA_POST_TYPE_IMAGE", "", imageURLs[0]); err == nil {
+		if postID, err := h.client.createMediaPost(ctx, token, "MEDIA_POST_TYPE_IMAGE", prompt, ""); err == nil {
 			parentPostID = postID
 		} else {
 			slog.Warn("grok image edit create post failed, continue without parentPostId", "error", err)
@@ -115,13 +124,13 @@ func (h *Handler) buildImageEditPayloadFromInputs(
 	prompt string,
 	inputs []string,
 ) (map[string]interface{}, error) {
-	imageURLs := make([]string, 0, len(inputs))
+	refs := make([]imageEditReference, 0, len(inputs))
 	for _, in := range inputs {
 		raw := strings.TrimSpace(in)
 		if raw == "" {
 			continue
 		}
-		_, fileURI, err := h.uploadSingleInput(ctx, token, raw)
+		fileID, fileURI, err := h.uploadSingleInput(ctx, token, raw)
 		if err != nil {
 			return nil, fmt.Errorf("image upload failed: %w", err)
 		}
@@ -132,19 +141,56 @@ func (h *Handler) buildImageEditPayloadFromInputs(
 		if !strings.HasPrefix(strings.ToLower(u), "http://") && !strings.HasPrefix(strings.ToLower(u), "https://") {
 			u = "https://assets.grok.com/" + strings.TrimLeft(u, "/")
 		}
-		imageURLs = append(imageURLs, u)
+		refs = append(refs, imageEditReference{
+			fileID:     strings.TrimSpace(fileID),
+			contentURL: u,
+		})
 	}
+	imageURLs := imageEditReferenceURLs(refs)
 	if len(imageURLs) == 0 {
 		return nil, fmt.Errorf("image upload failed: empty image urls")
 	}
+	prompt = replaceImageEditPlaceholders(prompt, refs)
 
 	parentPostID := ""
-	if postID, err := h.client.createMediaPost(ctx, token, "MEDIA_POST_TYPE_IMAGE", "", imageURLs[0]); err == nil {
+	if postID, err := h.client.createMediaPost(ctx, token, "MEDIA_POST_TYPE_IMAGE", prompt, ""); err == nil {
 		parentPostID = postID
 	} else {
 		slog.Warn("grok image edit create post failed, continue without parentPostId", "error", err)
 	}
 	return h.buildImageEditPayload(spec, prompt, imageURLs, parentPostID), nil
+}
+
+func imageEditReferenceURLs(refs []imageEditReference) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		u := strings.TrimSpace(ref.contentURL)
+		if u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+func replaceImageEditPlaceholders(prompt string, refs []imageEditReference) string {
+	if len(refs) == 0 || !strings.Contains(strings.ToUpper(prompt), "@IMAGE") {
+		return prompt
+	}
+	return imageEditPlaceholderRE.ReplaceAllStringFunc(prompt, func(match string) string {
+		groups := imageEditPlaceholderRE.FindStringSubmatch(match)
+		if len(groups) != 2 {
+			return match
+		}
+		idx, err := strconv.Atoi(groups[1])
+		if err != nil || idx < 1 || idx > len(refs) {
+			return match
+		}
+		fileID := strings.TrimSpace(refs[idx-1].fileID)
+		if fileID == "" {
+			return match
+		}
+		return "@" + fileID
+	})
 }
 
 func (h *Handler) handleChatImageEdit(
@@ -160,8 +206,11 @@ func (h *Handler) handleChatImageEdit(
 		http.Error(w, "image_url is required for image edits", http.StatusBadRequest)
 		return
 	}
-	if len(imageURLs) > 16 {
-		http.Error(w, "too many images. maximum is 16", http.StatusBadRequest)
+	if len(imageURLs) > 7 {
+		imageURLs = imageURLs[len(imageURLs)-7:]
+	}
+	if len(imageURLs) == 0 {
+		http.Error(w, "image_url is required for image edits", http.StatusBadRequest)
 		return
 	}
 
@@ -174,12 +223,17 @@ func (h *Handler) handleChatImageEdit(
 	if n < 1 {
 		n = 1
 	}
-	if n > 10 {
-		n = 10
+	if n > 2 {
+		http.Error(w, "image_config.n must be between 1 and 2 for image edit", http.StatusBadRequest)
+		return
 	}
 	responseFormat := normalizeImageResponseFormat(imageCfg.ResponseFormat)
+	if _, err := normalizeImageEditSize(imageCfg.Size); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
-	sess, err := h.openChatAccountSession(ctx)
+	sess, err := h.openChatAccountSessionForModel(ctx, spec)
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -222,9 +276,7 @@ func (h *Handler) handleChatImageEdit(
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)
 		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
-			if mr := extractUpstreamModelResponse(line); mr != nil {
-				urls = append(urls, extractImageURLs(mr)...)
-			}
+			urls = appendImageResultURLs(urls, line)
 			return nil
 		})
 		resp.Body.Close()
@@ -303,12 +355,16 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The model `grok-imagine-image-edit` is required for image edits.", http.StatusBadRequest)
 		return
 	}
-	n := parseIntLoose(r.FormValue("n"), 1)
-	if n < 1 || n > 10 {
-		http.Error(w, "n must be between 1 and 10", http.StatusBadRequest)
+	if r.MultipartForm != nil && len(r.MultipartForm.File["mask"]) > 0 {
+		http.Error(w, "mask is not supported yet", http.StatusBadRequest)
 		return
 	}
-	if _, err := normalizeImageSize(r.FormValue("size")); err != nil {
+	n := parseIntLoose(r.FormValue("n"), 1)
+	if n < 1 || n > 2 {
+		http.Error(w, "n must be between 1 and 2 for image edit", http.StatusBadRequest)
+		return
+	}
+	if _, err := normalizeImageEditSize(r.FormValue("size")); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -338,12 +394,11 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "image is required", http.StatusBadRequest)
 		return
 	}
-	if len(files) > 16 {
-		http.Error(w, "too many images. maximum is 16", http.StatusBadRequest)
-		return
+	if len(files) > 7 {
+		files = files[len(files)-7:]
 	}
 
-	sess, err := h.openChatAccountSession(r.Context())
+	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -427,9 +482,7 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)
 		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
-			if mr := extractUpstreamModelResponse(line); mr != nil {
-				urls = append(urls, extractImageURLs(mr)...)
-			}
+			urls = appendImageResultURLs(urls, line)
 			return nil
 		})
 		resp.Body.Close()

@@ -11,7 +11,7 @@ import (
 	"orchids-api/internal/config"
 )
 
-func TestGetUsage_DefaultModelFallbackToGrok3(t *testing.T) {
+func TestGetUsage_DefaultModelFallbackToGrok420Fast(t *testing.T) {
 	t.Parallel()
 
 	var requestedModels []string
@@ -55,8 +55,8 @@ func TestGetUsage_DefaultModelFallbackToGrok3(t *testing.T) {
 	if len(requestedModels) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(requestedModels))
 	}
-	if requestedModels[1] != "grok-3" {
-		t.Fatalf("expected fallback model grok-3, got %q", requestedModels[1])
+	if requestedModels[1] != "grok-4.20-0309-non-reasoning" {
+		t.Fatalf("expected fallback model grok-4.20-0309-non-reasoning, got %q", requestedModels[1])
 	}
 }
 
@@ -79,14 +79,14 @@ func TestGetUsage_ExplicitModelDoesNotFallback(t *testing.T) {
 	defer srv.Close()
 
 	c := New(&config.Config{GrokAPIBaseURL: srv.URL})
-	_, err := c.GetUsage(context.Background(), "token-abc", "grok-4-1-thinking-1129")
+	_, err := c.GetUsage(context.Background(), "token-abc", "grok-4.20-0309-reasoning")
 	if err == nil {
 		t.Fatalf("expected error for explicit invalid model")
 	}
 	if len(requestedModels) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(requestedModels))
 	}
-	if requestedModels[0] != "grok-4.1-thinking-1129" {
+	if requestedModels[0] != "grok-4.20-0309-reasoning" {
 		t.Fatalf("expected request model to stay explicit, got=%v", requestedModels)
 	}
 }

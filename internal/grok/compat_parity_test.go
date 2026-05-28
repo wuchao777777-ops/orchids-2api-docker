@@ -12,12 +12,12 @@ import (
 )
 
 func TestResolveModel_AcceptsGorkAlias(t *testing.T) {
-	spec, ok := ResolveModel("gork-3")
+	spec, ok := ResolveModel("gork-4.20-0309")
 	if !ok {
-		t.Fatalf("ResolveModel(gork-3) should succeed")
+		t.Fatalf("ResolveModel(gork-4.20-0309) should succeed")
 	}
-	if spec.ID != "grok-3" {
-		t.Fatalf("spec.ID=%q want grok-3", spec.ID)
+	if spec.ID != "grok-4.20-0309" {
+		t.Fatalf("spec.ID=%q want grok-4.20-0309", spec.ID)
 	}
 }
 
@@ -67,11 +67,15 @@ func TestResolveModel_AliasBaseMappingsMatchGrok2API(t *testing.T) {
 		wantUpstream  string
 		wantModelMode string
 	}{
-		{modelID: "grok-3-mini", wantUpstream: "grok-3", wantModelMode: "MODEL_MODE_GROK_3_MINI_THINKING"},
-		{modelID: "grok-3-thinking", wantUpstream: "grok-3", wantModelMode: "MODEL_MODE_GROK_3_THINKING"},
-		{modelID: "grok-4-mini", wantUpstream: "grok-4", wantModelMode: "MODEL_MODE_GROK_4_MINI_THINKING"},
-		{modelID: "grok-4-heavy", wantUpstream: "grok-4", wantModelMode: "MODEL_MODE_HEAVY"},
-		{modelID: "grok-4.1-fast", wantUpstream: "grok-4-1-thinking-1129", wantModelMode: "MODEL_MODE_FAST"},
+		{modelID: "grok-4.20-0309-non-reasoning", wantUpstream: "grok-4.20-0309-non-reasoning", wantModelMode: "MODEL_MODE_FAST"},
+		{modelID: "grok-4.20-0309", wantUpstream: "grok-4.20-0309", wantModelMode: "MODEL_MODE_AUTO"},
+		{modelID: "grok-4.20-0309-reasoning", wantUpstream: "grok-4.20-0309-reasoning", wantModelMode: "MODEL_MODE_EXPERT"},
+		{modelID: "grok-4.20-multi-agent-0309", wantUpstream: "grok-4.20-multi-agent-0309", wantModelMode: "MODEL_MODE_HEAVY"},
+		{modelID: "grok-4.20-fast", wantUpstream: "grok-4.20-fast", wantModelMode: "MODEL_MODE_FAST"},
+		{modelID: "grok-4.20-auto", wantUpstream: "grok-4.20-auto", wantModelMode: "MODEL_MODE_AUTO"},
+		{modelID: "grok-4.20-expert", wantUpstream: "grok-4.20-expert", wantModelMode: "MODEL_MODE_EXPERT"},
+		{modelID: "grok-4.20-heavy", wantUpstream: "grok-4.20-heavy", wantModelMode: "MODEL_MODE_HEAVY"},
+		{modelID: "grok-4.3-beta", wantUpstream: "grok-4.3-beta", wantModelMode: "grok-420-computer-use-sa"},
 	}
 
 	for _, tc := range cases {
@@ -121,6 +125,17 @@ func TestResolveModel_Grok420BetaRejected(t *testing.T) {
 	}
 }
 
+func TestResolveModel_Grok420CurrentBaselineAccepted(t *testing.T) {
+	for _, id := range []string{"grok-4.20-0309", "grok-4.20-fast", "grok-4.3-beta"} {
+		if _, ok := ResolveModel(id); !ok {
+			t.Fatalf("ResolveModel(%s) should succeed", id)
+		}
+		if IsDeprecatedModelID(id) {
+			t.Fatalf("%s should not be deprecated", id)
+		}
+	}
+}
+
 func TestResolveModel_Grok420BetaHyphenAliasRejected(t *testing.T) {
 	if _, ok := ResolveModel("grok-4-20-beta"); ok {
 		t.Fatalf("ResolveModel(grok-4-20-beta) should fail")
@@ -138,7 +153,7 @@ func TestChatCompletionsRequestValidate_CompatFields(t *testing.T) {
 	topP := 0.9
 	effort := "high"
 	req := ChatCompletionsRequest{
-		Model: "grok-3",
+		Model: "grok-4.20-0309",
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: "hello",
@@ -159,7 +174,7 @@ func TestChatCompletionsRequestValidate_CompatFields(t *testing.T) {
 
 func TestChatCompletionsRequestValidate_DefaultSampling(t *testing.T) {
 	req := ChatCompletionsRequest{
-		Model: "grok-3",
+		Model: "grok-4.20-0309",
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: "hello",
@@ -178,7 +193,7 @@ func TestChatCompletionsRequestValidate_DefaultSampling(t *testing.T) {
 
 func TestChatCompletionsRequestValidate_ToolChoice(t *testing.T) {
 	req := ChatCompletionsRequest{
-		Model: "grok-3",
+		Model: "grok-4.20-0309",
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: "hello",
@@ -233,6 +248,29 @@ func TestNormalizeImageSize(t *testing.T) {
 	}
 }
 
+func TestNormalizeImageEditSize_MatchesGrok2API(t *testing.T) {
+	if got, err := normalizeImageEditSize(""); err != nil || got != "1024x1024" {
+		t.Fatalf("normalizeImageEditSize(empty)=(%q,%v) want (1024x1024,nil)", got, err)
+	}
+	if got, err := normalizeImageEditSize("1024x1024"); err != nil || got != "1024x1024" {
+		t.Fatalf("normalizeImageEditSize valid failed: got=%q err=%v", got, err)
+	}
+	if _, err := normalizeImageEditSize("1792x1024"); err == nil {
+		t.Fatalf("normalizeImageEditSize should reject non-square edit size")
+	}
+}
+
+func TestReplaceImageEditPlaceholders_MatchesGrok2API(t *testing.T) {
+	got := replaceImageEditPlaceholders("blend @IMAGE1 with @image2 and keep @IMAGE3", []imageEditReference{
+		{fileID: "file-a", contentURL: "https://assets.grok.com/a/content"},
+		{fileID: "file-b", contentURL: "https://assets.grok.com/b/content"},
+	})
+	want := "blend @file-a with @file-b and keep @IMAGE3"
+	if got != want {
+		t.Fatalf("replaceImageEditPlaceholders=%q want %q", got, want)
+	}
+}
+
 func TestBuildChatPayload_InjectsSamplingOverrides(t *testing.T) {
 	h := &Handler{client: New(nil)}
 	temp := 1.1
@@ -243,7 +281,7 @@ func TestBuildChatPayload_InjectsSamplingOverrides(t *testing.T) {
 		TopP:            &topP,
 		ReasoningEffort: &effort,
 	}
-	spec := ModelSpec{ID: "grok-3", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3"}
+	spec := ModelSpec{ID: "grok-4.20-0309", UpstreamModel: "grok-4.20-0309", ModelMode: "MODEL_MODE_AUTO"}
 
 	payload, err := h.buildChatPayload(context.Background(), "", spec, "hello", nil, nil, nil, req)
 	if err != nil {
@@ -269,19 +307,6 @@ func TestBuildChatPayload_InjectsSamplingOverrides(t *testing.T) {
 	}
 }
 
-func TestBuildChatPayload_Grok420SetsEnable420(t *testing.T) {
-	h := &Handler{client: New(nil)}
-	spec := ModelSpec{ID: "grok-420", UpstreamModel: "grok-420", ModelMode: "MODEL_MODE_GROK_420"}
-
-	payload, err := h.buildChatPayload(context.Background(), "", spec, "hello", nil, nil, nil, &ChatCompletionsRequest{})
-	if err != nil {
-		t.Fatalf("buildChatPayload error: %v", err)
-	}
-	if got, _ := payload["enable420"].(bool); !got {
-		t.Fatalf("enable420=%v want=true", payload["enable420"])
-	}
-}
-
 func TestBuildChatPayload_UsesGrokConfigFlags(t *testing.T) {
 	temporary := false
 	disableMemory := false
@@ -291,7 +316,7 @@ func TestBuildChatPayload_UsesGrokConfigFlags(t *testing.T) {
 		GrokCustomInstruction: "be concise",
 	}
 	h := &Handler{client: New(cfg), cfg: cfg}
-	spec := ModelSpec{ID: "grok-3", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3"}
+	spec := ModelSpec{ID: "grok-4.20-0309", UpstreamModel: "grok-4.20-0309", ModelMode: "MODEL_MODE_AUTO"}
 
 	payload, err := h.buildChatPayload(context.Background(), "", spec, "hello", nil, nil, nil, &ChatCompletionsRequest{})
 	if err != nil {
@@ -442,7 +467,7 @@ func TestDetectPublicBaseURL(t *testing.T) {
 
 func TestChatCompletionsRequest_UnmarshalLooseTypes(t *testing.T) {
 	raw := []byte(`{
-		"model":"grok-3",
+		"model":"grok-4.20-0309",
 		"messages":[{"role":"user","content":"hello"}],
 		"stream":"true",
 		"temperature":"1.2",
@@ -473,7 +498,7 @@ func TestChatCompletionsRequest_UnmarshalLooseTypes(t *testing.T) {
 
 func TestChatCompletionsRequest_UnmarshalInvalidStream(t *testing.T) {
 	raw := []byte(`{
-		"model":"grok-3",
+		"model":"grok-4.20-0309",
 		"messages":[{"role":"user","content":"hello"}],
 		"stream":"maybe"
 	}`)
@@ -485,7 +510,7 @@ func TestChatCompletionsRequest_UnmarshalInvalidStream(t *testing.T) {
 
 func TestChatCompletionsRequest_StreamProvidedFlagAndDefault(t *testing.T) {
 	rawNoStream := []byte(`{
-		"model":"grok-3",
+		"model":"grok-4.20-0309",
 		"messages":[{"role":"user","content":"hello"}]
 	}`)
 	var req ChatCompletionsRequest
@@ -505,7 +530,7 @@ func TestChatCompletionsRequest_StreamProvidedFlagAndDefault(t *testing.T) {
 	}
 
 	rawWithStream := []byte(`{
-		"model":"grok-3",
+		"model":"grok-4.20-0309",
 		"messages":[{"role":"user","content":"hello"}],
 		"stream":false
 	}`)
@@ -522,7 +547,7 @@ func TestChatCompletionsRequest_StreamProvidedFlagAndDefault(t *testing.T) {
 	}
 
 	rawWithNullStream := []byte(`{
-		"model":"grok-3",
+		"model":"grok-4.20-0309",
 		"messages":[{"role":"user","content":"hello"}],
 		"stream":null
 	}`)

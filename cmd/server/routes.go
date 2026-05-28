@@ -61,6 +61,14 @@ func registerRoutes(
 	registerWithPrefixes(mux, grokPrefixes, "/responses", limiter.Limit(grokHandler.HandleResponses))
 	registerWithPrefixes(mux, grokPrefixes, "/images/generations", limiter.Limit(grokHandler.HandleImagesGenerations))
 	registerWithPrefixes(mux, grokPrefixes, "/images/edits", limiter.Limit(grokHandler.HandleImagesEdits))
+	registerWithPrefixes(mux, grokPrefixes, "/videos", limiter.Limit(grokHandler.HandleVideosCreate))
+	registerWithPrefixes(mux, grokPrefixes, "/videos/", limiter.Limit(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/content") {
+			grokHandler.HandleVideosContent(w, r)
+			return
+		}
+		grokHandler.HandleVideosRetrieve(w, r)
+	}))
 	registerWithPrefixes(mux, grokPrefixes, "/files/", grokHandler.HandleFiles)
 
 	// --- Public auth/login (no prefix duplication) ---

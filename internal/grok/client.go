@@ -271,9 +271,6 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 	if strings.TrimSpace(spec.ModelMode) != "" {
 		payload["modelMode"] = spec.ModelMode
 	}
-	if strings.EqualFold(strings.TrimSpace(spec.UpstreamModel), "grok-420") {
-		payload["enable420"] = true
-	}
 	if c != nil && c.cfg != nil {
 		if customPersonality := c.cfg.GrokChatCustomInstruction(); customPersonality != "" {
 			payload["customPersonality"] = customPersonality
@@ -385,11 +382,11 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 
 	model := strings.TrimSpace(modelID)
 	if model == "" {
-		model = "grok-3"
+		model = "grok-4.20-0309"
 	}
 	spec, ok := ResolveModelOrDynamic(model)
 	if !ok {
-		spec, ok = ResolveModel("grok-3")
+		spec, ok = ResolveModel("grok-4.20-0309")
 		if !ok {
 			return nil, fmt.Errorf("grok default model not available")
 		}
@@ -414,11 +411,11 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 	model := strings.TrimSpace(modelID)
 	explicitModel := model != ""
 	if model == "" {
-		model = "grok-4-1-thinking-1129"
+		model = "grok-4.20-0309"
 	}
 	spec, ok := ResolveModelOrDynamic(model)
 	if !ok {
-		spec, ok = ResolveModel("grok-4-1-thinking-1129")
+		spec, ok = ResolveModel("grok-4.20-0309")
 		if !ok {
 			return nil, fmt.Errorf("grok default model not available")
 		}
@@ -429,7 +426,7 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 		return info, nil
 	}
 
-	// Keep explicit model deterministic. For implicit defaults, degrade to grok-3
+	// Keep explicit model deterministic. For implicit defaults, degrade to fast 4.20
 	// if upstream rejects the default model to preserve quota availability.
 	if explicitModel {
 		return nil, err
@@ -438,7 +435,7 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 	if status != http.StatusBadRequest && status != http.StatusNotFound && !isGrokModelNotFoundError(err) {
 		return nil, err
 	}
-	fallback, ok := ResolveModel("grok-3")
+	fallback, ok := ResolveModel("grok-4.20-0309-non-reasoning")
 	if !ok {
 		return nil, err
 	}
@@ -455,7 +452,7 @@ func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpe
 		"modelName":   strings.TrimSpace(spec.UpstreamModel),
 	}
 	if strings.TrimSpace(spec.UpstreamModel) == "" {
-		payload["modelName"] = "grok-3-thinking"
+		payload["modelName"] = "grok-4.20-0309"
 	}
 
 	raw, err := json.Marshal(payload)
@@ -535,10 +532,11 @@ func (c *Client) createMediaPost(ctx context.Context, token, mediaType, prompt, 
 	payload := map[string]string{
 		"mediaType": strings.TrimSpace(mediaType),
 	}
-	if strings.EqualFold(payload["mediaType"], "MEDIA_POST_TYPE_IMAGE") && strings.TrimSpace(mediaURL) != "" {
-		payload["mediaUrl"] = strings.TrimSpace(mediaURL)
-	} else {
-		payload["prompt"] = strings.TrimSpace(prompt)
+	if u := strings.TrimSpace(mediaURL); u != "" {
+		payload["mediaUrl"] = u
+	}
+	if p := strings.TrimSpace(prompt); p != "" {
+		payload["prompt"] = p
 	}
 	if payload["mediaType"] == "" {
 		payload["mediaType"] = "MEDIA_POST_TYPE_VIDEO"

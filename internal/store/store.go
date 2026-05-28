@@ -244,13 +244,9 @@ func (s *Store) seedModels() error {
 		"grok-4-1-thinking-1129",
 		"grok-4.2",
 		"grok-4.20-beta",
-		"grok-4.20",
 		"grok-4.20-reasoning",
 		"grok-4.20-non-reasoning",
 		"grok-4.20-multi-agent",
-		"grok-4.20-0309-reasoning",
-		"grok-4.20-0309-non-reasoning",
-		"grok-4.20-multi-agent-0309",
 		"grok-420",
 		"grok-code-fast",
 		"grok-code-fast-1",
@@ -325,19 +321,45 @@ func isDeprecatedChannelName(value string) bool {
 }
 
 func buildGrokSeedModels() []Model {
-	return []Model{
-		{ID: "112", Channel: "Grok", ModelID: "grok-4.3", Name: "Grok 4.3", Status: ModelStatusAvailable, Verified: true, IsDefault: true, SortOrder: 0},
-		{ID: "113", Channel: "Grok", ModelID: "grok-4.3-latest", Name: "Grok 4.3 Latest", Status: ModelStatusAvailable, Verified: true, IsDefault: false, SortOrder: 1},
-		{ID: "114", Channel: "Grok", ModelID: "grok-latest", Name: "Grok Latest", Status: ModelStatusAvailable, Verified: true, IsDefault: false, SortOrder: 2},
-		{ID: "91", Channel: "Grok", ModelID: "grok-3-mini", Name: "Grok 3 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 3},
-		{ID: "96", Channel: "Grok", ModelID: "grok-4-thinking", Name: "Grok 4 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 4},
-		{ID: "101", Channel: "Grok", ModelID: "grok-4.1-expert", Name: "Grok 4.1 Expert", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 5},
-		{ID: "108", Channel: "Grok", ModelID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 6},
-		{ID: "109", Channel: "Grok", ModelID: "grok-imagine-image", Name: "Grok Imagine Image", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 7},
-		{ID: "110", Channel: "Grok", ModelID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 8},
-		{ID: "111", Channel: "Grok", ModelID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 9},
-		{ID: "115", Channel: "Grok", ModelID: "grok-imagine-video", Name: "Grok Imagine Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 10},
+	items := []struct {
+		id   string
+		name string
+	}{
+		{"grok-4.20-0309-non-reasoning", "Grok 4.20 0309 Non-Reasoning"},
+		{"grok-4.20-0309", "Grok 4.20 0309"},
+		{"grok-4.20-0309-reasoning", "Grok 4.20 0309 Reasoning"},
+		{"grok-4.20-0309-non-reasoning-super", "Grok 4.20 0309 Non-Reasoning Super"},
+		{"grok-4.20-0309-super", "Grok 4.20 0309 Super"},
+		{"grok-4.20-0309-reasoning-super", "Grok 4.20 0309 Reasoning Super"},
+		{"grok-4.20-0309-non-reasoning-heavy", "Grok 4.20 0309 Non-Reasoning Heavy"},
+		{"grok-4.20-0309-heavy", "Grok 4.20 0309 Heavy"},
+		{"grok-4.20-0309-reasoning-heavy", "Grok 4.20 0309 Reasoning Heavy"},
+		{"grok-4.20-multi-agent-0309", "Grok 4.20 Multi-Agent 0309"},
+		{"grok-4.20-fast", "Grok 4.20 Fast"},
+		{"grok-4.20-auto", "Grok 4.20 Auto"},
+		{"grok-4.20-expert", "Grok 4.20 Expert"},
+		{"grok-4.20-heavy", "Grok 4.20 Heavy"},
+		{"grok-4.3-beta", "Grok 4.3 Beta"},
+		{"grok-imagine-image-lite", "Grok Imagine Image Lite"},
+		{"grok-imagine-image", "Grok Imagine Image"},
+		{"grok-imagine-image-pro", "Grok Imagine Image Pro"},
+		{"grok-imagine-image-edit", "Grok Imagine Image Edit"},
+		{"grok-imagine-video", "Grok Imagine Video"},
 	}
+	models := make([]Model, 0, len(items))
+	for i, item := range items {
+		models = append(models, Model{
+			ID:        fmt.Sprintf("grok-%03d", i+1),
+			Channel:   "Grok",
+			ModelID:   item.id,
+			Name:      item.name,
+			Status:    ModelStatusAvailable,
+			Verified:  true,
+			IsDefault: i == 1,
+			SortOrder: i,
+		})
+	}
+	return models
 }
 
 func (s *Store) Close() error {

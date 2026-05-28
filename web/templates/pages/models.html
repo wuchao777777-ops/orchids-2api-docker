@@ -103,7 +103,7 @@
 
     .models-filter-row {
       display: grid;
-      grid-template-columns: minmax(0, 1.55fr) repeat(2, minmax(150px, 0.72fr));
+      grid-template-columns: minmax(0, 1.55fr) repeat(3, minmax(140px, 0.72fr));
       gap: 12px;
       align-items: end;
     }
@@ -683,6 +683,16 @@
                 <option value="20">每页 20 条</option>
                 <option value="50" selected>每页 50 条</option>
                 <option value="100">每页 100 条</option>
+              </select>
+            </div>
+            <div class="models-control">
+              <label for="modelRefreshConcurrency">刷新并发</label>
+              <select id="modelRefreshConcurrency" class="form-input">
+                <option value="1">单线程</option>
+                <option value="2">2 线程</option>
+                <option value="4" selected>4 线程</option>
+                <option value="8">8 线程</option>
+                <option value="16">16 线程</option>
               </select>
             </div>
           </div>

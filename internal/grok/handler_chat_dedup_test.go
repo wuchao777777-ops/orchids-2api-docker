@@ -107,7 +107,7 @@ func TestConsoleInputFromMessages_ConvertsToolHistory(t *testing.T) {
 }
 
 func TestShouldServeConsoleChat_IgnoresOpenAIToolDefinitions(t *testing.T) {
-	spec := ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3"}
+	spec := ModelSpec{ID: "grok-4.3-beta", ConsoleModel: "grok-4.3"}
 	if !shouldServeConsoleChat(spec, nil) {
 		t.Fatal("expected console chat when there are no attachments")
 	}
@@ -125,14 +125,14 @@ func TestShouldServeConsoleChat_IgnoresOpenAIToolDefinitions(t *testing.T) {
 func TestConsolePayload_DefaultsWebSearchTool(t *testing.T) {
 	h := &Handler{}
 	req := &ChatCompletionsRequest{
-		Model: "grok-4.3",
+		Model: "grok-4.3-beta",
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: "今天有什么 AI 新闻",
 		}},
 	}
 
-	payload, err := h.consolePayload(ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3"}, req)
+	payload, err := h.consolePayload(ModelSpec{ID: "grok-4.3-beta", ConsoleModel: "grok-4.3"}, req)
 	if err != nil {
 		t.Fatalf("consolePayload() error: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestConsolePayload_DefaultsWebSearchTool(t *testing.T) {
 func TestConsolePayload_ConvertsOpenAIFunctionTools(t *testing.T) {
 	h := &Handler{}
 	req := &ChatCompletionsRequest{
-		Model: "grok-4.3",
+		Model: "grok-4.3-beta",
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: "上海天气",
@@ -170,7 +170,7 @@ func TestConsolePayload_ConvertsOpenAIFunctionTools(t *testing.T) {
 		},
 	}
 
-	payload, err := h.consolePayload(ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3"}, req)
+	payload, err := h.consolePayload(ModelSpec{ID: "grok-4.3-beta", ConsoleModel: "grok-4.3"}, req)
 	if err != nil {
 		t.Fatalf("consolePayload() error: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestCollectConsoleChat_EmitsCitationsAndUsageDetails(t *testing.T) {
 		"usage":{"input_tokens":10,"output_tokens":7,"total_tokens":17,"output_tokens_details":{"reasoning_tokens":2}}
 	}`)
 
-	h.collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
+	h.collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3-beta"}, body)
 
 	var obj map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
@@ -259,7 +259,7 @@ func TestCollectConsoleChat_EmitsFunctionToolCalls(t *testing.T) {
 		"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
 	}`)
 
-	h.collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
+	h.collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3-beta"}, body)
 
 	var obj map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
@@ -297,7 +297,7 @@ func TestStreamConsoleChat_EmitsFinalAnnotationsAndUpstreamUsage(t *testing.T) {
 			`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}` + "\n\n",
 	)
 
-	h.streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
+	h.streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3-beta"}, body)
 
 	raw := rec.Body.String()
 	if !strings.Contains(raw, `"content":"hello"`) {
@@ -325,7 +325,7 @@ func TestStreamConsoleChat_EmitsFunctionToolCalls(t *testing.T) {
 			`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}` + "\n\n",
 	)
 
-	h.streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
+	h.streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3-beta"}, body)
 
 	raw := rec.Body.String()
 	if !strings.Contains(raw, `"tool_calls"`) {
@@ -354,7 +354,7 @@ func TestCollectChat_EmitsOpenAIParityMetadata(t *testing.T) {
 			`{"result":{"response":{"modelResponse":{"responseId":"resp_123","message":"hello","metadata":{"llm_info":{"modelHash":"hash-2"}}}}}}`,
 	)
 
-	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello world"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello world"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
 
 	var obj map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
@@ -409,7 +409,7 @@ func TestCollectChat_PrependsPublicBaseForCachedVideoURL(t *testing.T) {
 		`{"result":{"response":{"streamingVideoGenerationResponse":{"progress":100,"videoUrl":"` + server.URL + `/demo.mp4"}}}}`,
 	)
 
-	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-420", ModelSpec{ID: "grok-420", IsVideo: true}, "", "https://example.com", false, nil, nil, body, nil)
+	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-imagine-video", ModelSpec{ID: "grok-imagine-video", IsVideo: true}, "", "https://example.com", false, nil, nil, body, nil)
 
 	var obj map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
@@ -468,7 +468,7 @@ func TestStreamChat_DedupsGreetingRepeat(t *testing.T) {
 			`{"result":{"response":{"token":"` + dup + `"}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "Hi"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "Hi"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", true, nil, nil, body, nil)
 	contents := extractStreamTextContents(t, rec.Body.String())
 	combined := strings.Join(contents, "")
 	if strings.Count(combined, "Hi! How can I help you today?") != 1 {
@@ -489,7 +489,7 @@ func TestStreamChat_PrefersModelResponseOverNoisyTokens(t *testing.T) {
 			`{"result":{"response":{"modelResponse":{"message":"你好！我是 Grok，xAI AI 助手，不是之前提到的那个。"}}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
 	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
 	if strings.Contains(combined, "你！rok，") {
 		t.Fatalf("unexpected noisy token leak, combined=%q raw=%q", combined, rec.Body.String())
@@ -512,7 +512,7 @@ func TestStreamChat_FallsBackToTokenWhenModelResponseMissing(t *testing.T) {
 			`{"result":{"response":{"token":"！我是 Grok。"}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
 	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
 	if !strings.Contains(combined, "你好！我是 Grok。") {
 		t.Fatalf("expected token fallback text, combined=%q raw=%q", combined, rec.Body.String())
@@ -533,7 +533,7 @@ func TestStreamChat_RewriteFallsBackToFinalSnapshot(t *testing.T) {
 			`{"result":{"response":{"modelResponse":{"message":"The result is 42"}}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "answer?"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "answer?"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
 	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
 	if strings.Contains(combined, "The answer is 4The result is 42") {
 		t.Fatalf("expected rewrite suffix to stay out of delta stream, combined=%q raw=%q", combined, rec.Body.String())
@@ -552,7 +552,7 @@ func TestStreamChat_EmitsToolCallsChunk(t *testing.T) {
 		`{"result":{"response":{"modelResponse":{"message":"<tool_call>{\"name\":\"weather\",\"arguments\":{\"city\":\"shanghai\"}}</tool_call>"}}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "weather?"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, []ToolDef{{
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "weather?"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", true, []ToolDef{{
 		Type: "function",
 		Function: map[string]interface{}{
 			"name": "weather",
@@ -580,7 +580,7 @@ func TestStreamChat_EmitsToolCallsBeforeDone(t *testing.T) {
 			`{"result":{"response":{"token":"ignored"}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "weather?"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, []ToolDef{{
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "weather?"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", true, []ToolDef{{
 		Type: "function",
 		Function: map[string]interface{}{
 			"name": "weather",
@@ -608,7 +608,7 @@ func TestStreamChat_ParsesSplitToolCallsFromTokenStream(t *testing.T) {
 			`{"result":{"response":{"token":"\"arguments\":{\"city\":\"shanghai\"}}</tool_call> after"}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "weather?"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, []ToolDef{{
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "weather?"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", true, []ToolDef{{
 		Type: "function",
 		Function: map[string]interface{}{
 			"name": "weather",
@@ -641,7 +641,7 @@ func TestStreamChat_EmitsSystemFingerprint(t *testing.T) {
 		`{"result":{"response":{"llmInfo":{"modelHash":"hash-123"},"token":"hello"}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
 	raw := rec.Body.String()
 	if !strings.Contains(raw, `"system_fingerprint":"hash-123"`) {
 		t.Fatalf("expected stream fingerprint, raw=%q", raw)
@@ -660,7 +660,7 @@ func TestStreamChat_AcceptsAlternateUpstreamEventShape(t *testing.T) {
 			`{"result":{"response":{"model_response":{"response_id":"resp_alt_2","text":"hello world"}}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
 	raw := rec.Body.String()
 	if !strings.Contains(raw, `"system_fingerprint":"hash-alt"`) {
 		t.Fatalf("expected alternate fingerprint to be accepted, raw=%q", raw)
@@ -679,7 +679,7 @@ func TestStreamChat_ParseErrorUsesSSEErrorEvent(t *testing.T) {
 
 	body := strings.NewReader(`{"result":{"response":{"token":"hello"}}`)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
 	raw := rec.Body.String()
 	if !strings.Contains(raw, "event: error") {
 		t.Fatalf("expected SSE error event, raw=%q", raw)
@@ -705,7 +705,7 @@ func TestStreamChat_PrependsPublicBaseForCachedVideoURL(t *testing.T) {
 		`{"result":{"response":{"streamingVideoGenerationResponse":{"progress":100,"videoUrl":"` + server.URL + `/demo.mp4"}}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-420", ModelSpec{ID: "grok-420", IsVideo: true}, "", "https://example.com", false, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-imagine-video", ModelSpec{ID: "grok-imagine-video", IsVideo: true}, "", "https://example.com", false, nil, nil, body, nil)
 	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
 	if !strings.Contains(combined, "https://example.com/grok/v1/files/video/") {
 		t.Fatalf("expected public base prefixed cached video url, combined=%q raw=%q", combined, rec.Body.String())

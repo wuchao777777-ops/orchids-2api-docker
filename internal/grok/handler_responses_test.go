@@ -14,7 +14,7 @@ func TestChatRequestFromResponses_ConvertsInputToolsAndReasoning(t *testing.T) {
 	effort := map[string]interface{}{"effort": "high"}
 	parallel := false
 	req := ResponsesCreateRequest{
-		Model:        "grok-4.3",
+		Model:        "grok-4.20-0309",
 		Instructions: "用中文回答",
 		Input: []interface{}{
 			map[string]interface{}{"type": "message", "role": "user", "content": []interface{}{
@@ -72,7 +72,7 @@ func TestChatRequestFromResponses_ConvertsInputToolsAndReasoning(t *testing.T) {
 
 func TestResponsesCreateRequest_AcceptsCompatibilityFields(t *testing.T) {
 	raw := []byte(`{
-		"model":"grok-4.3",
+		"model":"grok-4.20-0309",
 		"input":"hello",
 		"max_output_tokens":"128",
 		"previous_response_id":"resp_prev",
@@ -111,7 +111,7 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 	streamDefault := false
 	h := &Handler{cfg: &config.Config{Stream: &streamDefault}}
 	var decoded ResponsesCreateRequest
-	if err := json.Unmarshal([]byte(`{"model":"grok-4.3","input":"hello"}`), &decoded); err != nil {
+	if err := json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello"}`), &decoded); err != nil {
 		t.Fatalf("json.Unmarshal() error: %v", err)
 	}
 	if decoded.StreamProvided {
@@ -123,7 +123,7 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 	}
 
 	var provided ResponsesCreateRequest
-	if err := json.Unmarshal([]byte(`{"model":"grok-4.3","input":"hello","stream":true}`), &provided); err != nil {
+	if err := json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello","stream":true}`), &provided); err != nil {
 		t.Fatalf("json.Unmarshal() provided error: %v", err)
 	}
 	h.applyDefaultResponsesStream(&provided)
@@ -134,7 +134,7 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 
 func TestResponsesObjectFromChat_ConvertsMessageAndToolCalls(t *testing.T) {
 	chat := map[string]interface{}{
-		"model": "grok-4.3",
+		"model": "grok-4.20-0309",
 		"choices": []interface{}{map[string]interface{}{
 			"message": map[string]interface{}{
 				"role":    "assistant",
@@ -158,7 +158,7 @@ func TestResponsesObjectFromChat_ConvertsMessageAndToolCalls(t *testing.T) {
 		"usage": map[string]interface{}{"prompt_tokens": float64(3), "completion_tokens": float64(4), "total_tokens": float64(7)},
 	}
 
-	resp := responsesObjectFromChat("grok-4.3", chat)
+	resp := responsesObjectFromChat("grok-4.20-0309", chat)
 	if resp["object"] != "response" || resp["status"] != "completed" {
 		t.Fatalf("unexpected response metadata: %#v", resp)
 	}
@@ -210,7 +210,7 @@ func TestWriteResponsesStreamFromChat_ConvertsToolCallChunk(t *testing.T) {
 	b.WriteString("data: [DONE]\n\n")
 
 	rec := httptest.NewRecorder()
-	writeResponsesStreamFromChat(rec, "grok-4.3", b.String())
+	writeResponsesStreamFromChat(rec, "grok-4.20-0309", b.String())
 
 	out := rec.Body.String()
 	if !strings.Contains(out, "response.output_item.added") || !strings.Contains(out, "response.function_call_arguments.done") {

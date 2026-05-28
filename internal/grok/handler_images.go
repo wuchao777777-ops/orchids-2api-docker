@@ -44,9 +44,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 				flusher.Flush()
 			}
 		}
-		if mr := extractUpstreamModelResponse(resp); mr != nil {
-			urls = append(urls, extractImageURLs(mr)...)
-		}
+		urls = appendImageResultURLs(urls, resp)
 		return nil
 	}); err != nil {
 		writeSSEError(w, "stream parse error: "+err.Error(), "server_error", "stream_error")
@@ -236,8 +234,12 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
 	}
-	if req.N < 1 || req.N > 10 {
-		http.Error(w, "n must be between 1 and 10", http.StatusBadRequest)
+	maxN := 10
+	if normalizeModelID(req.Model) == "grok-imagine-image-lite" {
+		maxN = 4
+	}
+	if req.N < 1 || req.N > maxN {
+		http.Error(w, fmt.Sprintf("n must be between 1 and %d", maxN), http.StatusBadRequest)
 		return
 	}
 	if req.Stream && req.N > 2 {
@@ -259,7 +261,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	sess, err := h.openChatAccountSession(ctx)
+	sess, err := h.openChatAccountSessionForModel(ctx, spec)
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -326,11 +328,10 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		h.syncGrokQuota(sess.acc, resp.Header)
 		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
 			if mr := extractUpstreamModelResponse(line); mr != nil {
-				urls = append(urls, extractImageURLs(mr)...)
 				debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 50)...)
 				debugAsset = append(debugAsset, collectAssetLikeStrings(mr, 100)...)
 			}
-			urls = append(urls, extractImageURLs(line)...)
+			urls = appendImageResultURLs(urls, line)
 			debugHTTP = append(debugHTTP, collectHTTPStrings(line, 50)...)
 			debugAsset = append(debugAsset, collectAssetLikeStrings(line, 100)...)
 			return nil

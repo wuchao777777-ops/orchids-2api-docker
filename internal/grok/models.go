@@ -11,32 +11,40 @@ type ModelSpec struct {
 	UpstreamModel string
 	ModelMode     string
 	ConsoleModel  string
+	Tier          int
+	PreferBest    bool
 	IsImage       bool
 	IsVideo       bool
 }
 
+const (
+	grokTierBasic = iota
+	grokTierSuper
+	grokTierHeavy
+)
+
 // SupportedModels is the Go-native model table ported from grok2api behavior.
 var SupportedModels = []ModelSpec{
-	{ID: "grok-3", Name: "Grok 3", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3"},
-	{ID: "grok-3-mini", Name: "Grok 3 Mini", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3_MINI_THINKING"},
-	{ID: "grok-3-thinking", Name: "Grok 3 Thinking", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3_THINKING"},
-	{ID: "grok-4", Name: "Grok 4", UpstreamModel: "grok-4", ModelMode: "MODEL_MODE_GROK_4"},
-	{ID: "grok-4-mini", Name: "Grok 4 Mini", UpstreamModel: "grok-4", ModelMode: "MODEL_MODE_GROK_4_MINI_THINKING"},
-	{ID: "grok-4-thinking", Name: "Grok 4 Thinking", UpstreamModel: "grok-4", ModelMode: "MODEL_MODE_GROK_4_THINKING"},
-	{ID: "grok-4-heavy", Name: "Grok 4 Heavy", UpstreamModel: "grok-4", ModelMode: "MODEL_MODE_HEAVY"},
-	{ID: "grok-4.1-mini", Name: "Grok 4.1 Mini", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_MINI_THINKING"},
-	{ID: "grok-4.1-fast", Name: "Grok 4.1 Fast", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_FAST"},
-	{ID: "grok-4.1-expert", Name: "Grok 4.1 Expert", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_EXPERT"},
-	{ID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
-	{ID: "grok-4-1-thinking-1129", Name: "Grok 4.1 Thinking 1129 (Legacy/System)", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
-	{ID: "grok-4.3", Name: "Grok 4.3", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
-	{ID: "grok-4.3-latest", Name: "Grok 4.3 Latest", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
-	{ID: "grok-latest", Name: "Grok Latest", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
-	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsImage: true},
-	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", IsImage: true},
-	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", IsImage: true},
-	{ID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_AUTO", IsImage: true},
-	{ID: "grok-imagine-video", Name: "Grok Imagine Video", UpstreamModel: "imagine-video-gen", ModelMode: "MODEL_MODE_AUTO", IsVideo: true},
+	{ID: "grok-4.20-0309-non-reasoning", Name: "Grok 4.20 0309 Non-Reasoning", UpstreamModel: "grok-4.20-0309-non-reasoning", ModelMode: "MODEL_MODE_FAST", Tier: grokTierBasic},
+	{ID: "grok-4.20-0309", Name: "Grok 4.20 0309", UpstreamModel: "grok-4.20-0309", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper},
+	{ID: "grok-4.20-0309-reasoning", Name: "Grok 4.20 0309 Reasoning", UpstreamModel: "grok-4.20-0309-reasoning", ModelMode: "MODEL_MODE_EXPERT", Tier: grokTierSuper},
+	{ID: "grok-4.20-0309-non-reasoning-super", Name: "Grok 4.20 0309 Non-Reasoning Super", UpstreamModel: "grok-4.20-0309-non-reasoning-super", ModelMode: "MODEL_MODE_FAST", Tier: grokTierSuper},
+	{ID: "grok-4.20-0309-super", Name: "Grok 4.20 0309 Super", UpstreamModel: "grok-4.20-0309-super", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper},
+	{ID: "grok-4.20-0309-reasoning-super", Name: "Grok 4.20 0309 Reasoning Super", UpstreamModel: "grok-4.20-0309-reasoning-super", ModelMode: "MODEL_MODE_EXPERT", Tier: grokTierSuper},
+	{ID: "grok-4.20-0309-non-reasoning-heavy", Name: "Grok 4.20 0309 Non-Reasoning Heavy", UpstreamModel: "grok-4.20-0309-non-reasoning-heavy", ModelMode: "MODEL_MODE_FAST", Tier: grokTierHeavy},
+	{ID: "grok-4.20-0309-heavy", Name: "Grok 4.20 0309 Heavy", UpstreamModel: "grok-4.20-0309-heavy", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierHeavy},
+	{ID: "grok-4.20-0309-reasoning-heavy", Name: "Grok 4.20 0309 Reasoning Heavy", UpstreamModel: "grok-4.20-0309-reasoning-heavy", ModelMode: "MODEL_MODE_EXPERT", Tier: grokTierHeavy},
+	{ID: "grok-4.20-multi-agent-0309", Name: "Grok 4.20 Multi-Agent 0309", UpstreamModel: "grok-4.20-multi-agent-0309", ModelMode: "MODEL_MODE_HEAVY", Tier: grokTierHeavy},
+	{ID: "grok-4.20-fast", Name: "Grok 4.20 Fast", UpstreamModel: "grok-4.20-fast", ModelMode: "MODEL_MODE_FAST", Tier: grokTierBasic, PreferBest: true},
+	{ID: "grok-4.20-auto", Name: "Grok 4.20 Auto", UpstreamModel: "grok-4.20-auto", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, PreferBest: true},
+	{ID: "grok-4.20-expert", Name: "Grok 4.20 Expert", UpstreamModel: "grok-4.20-expert", ModelMode: "MODEL_MODE_EXPERT", Tier: grokTierSuper, PreferBest: true},
+	{ID: "grok-4.20-heavy", Name: "Grok 4.20 Heavy", UpstreamModel: "grok-4.20-heavy", ModelMode: "MODEL_MODE_HEAVY", Tier: grokTierHeavy, PreferBest: true},
+	{ID: "grok-4.3-beta", Name: "Grok 4.3 Beta", UpstreamModel: "grok-4.3-beta", ModelMode: "grok-420-computer-use-sa", ConsoleModel: "grok-4.3", Tier: grokTierSuper},
+	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", Tier: grokTierBasic, IsImage: true},
+	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
+	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
+	{ID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
+	{ID: "grok-imagine-video", Name: "Grok Imagine Video", UpstreamModel: "imagine-video-gen", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsVideo: true},
 }
 
 var modelByID = func() map[string]ModelSpec {
@@ -49,7 +57,6 @@ var modelByID = func() map[string]ModelSpec {
 
 var deprecatedModelIDSet = map[string]struct{}{
 	"grok-4.2":       {},
-	"grok-4.20":      {},
 	"grok-4.20-beta": {},
 	"grok-420":       {},
 }
@@ -135,10 +142,27 @@ func resolveDynamicTextModel(modelID string) (ModelSpec, bool) {
 
 func consoleModelForID(id string) string {
 	switch id {
-	case "grok-4.3", "grok-4.3-latest", "grok-latest":
+	case "grok-4.3-beta":
 		return "grok-4.3"
 	default:
 		return ""
+	}
+}
+
+func (m ModelSpec) PoolCandidates() []string {
+	switch {
+	case m.PreferBest && m.Tier == grokTierHeavy:
+		return []string{"heavy"}
+	case m.PreferBest && m.Tier == grokTierSuper:
+		return []string{"heavy", "super"}
+	case m.PreferBest:
+		return []string{"heavy", "super", "basic"}
+	case m.Tier == grokTierHeavy:
+		return []string{"heavy"}
+	case m.Tier == grokTierSuper:
+		return []string{"super", "heavy"}
+	default:
+		return []string{"basic", "super", "heavy"}
 	}
 }
 

@@ -61,6 +61,10 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, ex
 }
 
 func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTracker(ctx context.Context, excludeIDs []int64, channel string, tracker ConnTracker) (*store.Account, error) {
+	return lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, channel, tracker, nil)
+}
+
+func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx context.Context, excludeIDs []int64, channel string, tracker ConnTracker, filter func(*store.Account) bool) (*store.Account, error) {
 	accounts, err := lb.getEnabledAccounts(ctx)
 	if err != nil {
 		return nil, err
@@ -86,6 +90,9 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTracker(ctx context.
 			if !strings.EqualFold(accType, channel) && !strings.EqualFold(acc.AgentMode, channel) {
 				continue
 			}
+		}
+		if filter != nil && !filter(acc) {
+			continue
 		}
 		channelMatched++
 		if !lb.isAccountAvailable(ctx, acc) {

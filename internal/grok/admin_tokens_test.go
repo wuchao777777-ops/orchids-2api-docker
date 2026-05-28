@@ -24,12 +24,17 @@ func TestCollectAdminTokenEntries(t *testing.T) {
 				"status": "invalid",
 			},
 		},
+		"ssoHeavy": []interface{}{
+			map[string]interface{}{
+				"token": "t3",
+			},
+		},
 	}
 	entries := collectAdminTokenEntries(payload)
-	if len(entries) != 3 {
-		t.Fatalf("entries len=%d want=3", len(entries))
+	if len(entries) != 4 {
+		t.Fatalf("entries len=%d want=4", len(entries))
 	}
-	if entries[0].Token != "t0" || entries[1].Token != "t1" || entries[2].Token != "t2" {
+	if entries[0].Token != "t0" || entries[1].Token != "t1" || entries[2].Token != "t2" || entries[3].Token != "t3" {
 		t.Fatalf("unexpected tokens: %+v", entries)
 	}
 	if entries[1].Status != "cooling" || entries[1].Quota != 80 || entries[1].UseCount != 2 || entries[1].Note != "note-1" {
@@ -76,5 +81,20 @@ func TestApplyTokenEntryToAccount_SuperPoolUses140DefaultQuota(t *testing.T) {
 	}
 	if acc.UsageCurrent != 120 {
 		t.Fatalf("usage_current=%v want=120", acc.UsageCurrent)
+	}
+}
+
+func TestApplyTokenEntryToAccount_HeavyPool(t *testing.T) {
+	acc := &store.Account{}
+	entry := adminTokenEntry{Token: "t-heavy", Pool: "ssoHeavy", Quota: 100}
+	applyTokenEntryToAccount(acc, entry)
+	if acc.Subscription != "heavy" {
+		t.Fatalf("subscription=%q want heavy", acc.Subscription)
+	}
+	if got := inferTokenPool(acc); got != "ssoHeavy" {
+		t.Fatalf("inferTokenPool=%q want ssoHeavy", got)
+	}
+	if got := grokAccountPool(acc); got != "heavy" {
+		t.Fatalf("grokAccountPool=%q want heavy", got)
 	}
 }
