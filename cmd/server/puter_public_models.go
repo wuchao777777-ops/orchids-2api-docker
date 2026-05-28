@@ -33,8 +33,8 @@ type puterPublicModelChoice struct {
 }
 
 const (
-	puterPublicModelsURL       = "https://puter.com/puterai/chat/models"
-	puterPublicModelDetailsURL = "https://puter.com/puterai/chat/models/details"
+	puterPublicModelsURL       = "https://api.puter.com/puterai/chat/models"
+	puterPublicModelDetailsURL = "https://api.puter.com/puterai/chat/models/details"
 )
 
 var puterChatCompletionProviders = map[string]struct{}{
@@ -48,15 +48,17 @@ var puterChatCompletionProviders = map[string]struct{}{
 }
 
 var puterProviderAliases = map[string]string{
-	"claude":     "anthropic",
-	"deepseek":   "deepseek",
-	"gemini":     "google",
-	"google":     "google",
-	"mistral":    "mistralai",
-	"openai":     "openai",
-	"openrouter": "openrouter",
-	"xai":        "x-ai",
-	"x-ai":       "x-ai",
+	"claude":            "anthropic",
+	"deepseek":          "deepseek",
+	"gemini":            "google",
+	"google":            "google",
+	"mistral":           "mistralai",
+	"openai":            "openai",
+	"openai-completion": "openai",
+	"openai-responses":  "openai",
+	"openrouter":        "openrouter",
+	"xai":               "x-ai",
+	"x-ai":              "x-ai",
 }
 
 func fetchPuterPublicModelChoices(ctx context.Context, proxyFunc func(*http.Request) (*url.URL, error)) ([]puterPublicModelChoice, error) {

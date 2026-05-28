@@ -17,8 +17,11 @@ func TestNormalizePuterModelID(t *testing.T) {
 		{raw: "openrouter:openai/gpt-5.4", want: "gpt-5.4", ok: true},
 		{raw: "x-ai:x-ai/grok-4", want: "grok-4", ok: true},
 		{raw: "openai:openai/gpt-5.4", want: "gpt-5.4", ok: true},
+		{raw: "openai-completion:openai/gpt-5.4", want: "gpt-5.4", ok: true},
+		{raw: "openai-responses:openai/gpt-5.4-pro", want: "gpt-5.4-pro", ok: true},
 		{raw: "google:google/gemini-3.1-pro-preview", want: "gemini-3.1-pro-preview", ok: true},
-		{raw: "togetherai:qwen/qwen3.5-397b-a17b", want: "", ok: false},
+		{raw: "togetherai:meta-llama/Llama-3.3-70B-Instruct-Turbo", want: "", ok: false},
+		{raw: "alibaba:qwen/qwen3.5-397b-a17b", want: "", ok: false},
 	}
 
 	for _, tt := range tests {
@@ -58,7 +61,9 @@ func TestNormalizePuterPublicModelDetails_UsesDetailsPayload(t *testing.T) {
 		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Provider: "claude", PuterID: "anthropic:anthropic/claude-opus-4-6"},
 		{ID: "openrouter:openai/gpt-5.4", Name: "OpenRouter GPT-5.4", Provider: "openrouter", PuterID: "openrouter:openai/gpt-5.4"},
 		{ID: "gemini-3.1-pro-preview", Name: "Gemini 3.1 Pro Preview", Provider: "gemini", PuterID: "google:google/gemini-3.1-pro-preview"},
-		{ID: "gpt-5.4", Name: "GPT-5.4", Provider: "openai", PuterID: "openai:openai/gpt-5.4"},
+		{ID: "gpt-5.4", Name: "GPT-5.4", Provider: "openai-completion", PuterID: "openai:openai/gpt-5.4"},
+		{ID: "gpt-5.4-pro", Name: "GPT-5.4 Pro", Provider: "openai-responses", PuterID: "openai:openai/gpt-5.4-pro"},
+		{ID: "togetherai:meta-llama/Llama-3.3-70B-Instruct-Turbo", Name: "Llama 3.3", Provider: "together-ai", PuterID: ""},
 		{ID: "togetherai:qwen/qwen3.5-397b-a17b", Name: "Together Qwen", Provider: "together-ai", PuterID: "togetherai:qwen/qwen3.5-397b-a17b"},
 	})
 
@@ -67,11 +72,11 @@ func TestNormalizePuterPublicModelDetails_UsesDetailsPayload(t *testing.T) {
 		ids = append(ids, item.ID)
 	}
 
-	want := []string{"claude-opus-4-6", "gemini-3.1-pro-preview", "gpt-5.4", "openrouter:openai/gpt-5.4"}
+	want := []string{"claude-opus-4-6", "gemini-3.1-pro-preview", "gpt-5.4", "gpt-5.4-pro", "openrouter:openai/gpt-5.4"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("ids=%v want %v", ids, want)
 	}
-	if got[3].Name != "OpenRouter GPT-5.4" {
-		t.Fatalf("got[3].Name=%q want %q", got[3].Name, "OpenRouter GPT-5.4")
+	if got[4].Name != "OpenRouter GPT-5.4" {
+		t.Fatalf("got[4].Name=%q want %q", got[4].Name, "OpenRouter GPT-5.4")
 	}
 }

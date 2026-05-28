@@ -215,7 +215,6 @@ func (s *Store) seedModels() error {
 	}
 
 	models = append(models, buildGrokSeedModels()...)
-	models = append(models, buildBoltBootstrapModels()...)
 	models = append(models, buildPuterSeedModels()...)
 
 	for _, m := range models {
@@ -313,7 +312,7 @@ func (s *Store) cleanupDeprecatedModels(ctx context.Context) error {
 
 func isDeprecatedChannelName(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "v0", "v0-web":
+	case "bolt", "v0", "v0-web":
 		return true
 	default:
 		return false

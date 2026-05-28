@@ -84,15 +84,15 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 		t.Fatalf("orchids model channel = %q, want Orchids", orchidsModel.Channel)
 	}
 
-	boltModel, err := s.GetModelByChannelAndModelID(ctx, "bolt", "claude-opus-4-6")
+	warpModel, err := s.GetModelByChannelAndModelID(ctx, "warp", "claude-4-5-opus")
 	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(bolt) error = %v", err)
+		t.Fatalf("GetModelByChannelAndModelID(warp) error = %v", err)
 	}
-	if boltModel.Channel != "Bolt" {
-		t.Fatalf("bolt model channel = %q, want Bolt", boltModel.Channel)
+	if warpModel.Channel != "Warp" {
+		t.Fatalf("warp model channel = %q, want Warp", warpModel.Channel)
 	}
-	if boltModel.ID == orchidsModel.ID {
-		t.Fatalf("expected different records for shared model id, got same id %q", boltModel.ID)
+	if warpModel.ID == orchidsModel.ID {
+		t.Fatalf("expected different records across channels, got same id %q", warpModel.ID)
 	}
 }
 
@@ -115,9 +115,9 @@ func TestStoreNew_SeedsGrokImagineModels(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	model, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-imagine-1.0")
+	model, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-imagine-image")
 	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(grok, grok-imagine-1.0) error = %v", err)
+		t.Fatalf("GetModelByChannelAndModelID(grok, grok-imagine-image) error = %v", err)
 	}
 	if model == nil {
 		t.Fatal("expected grok imagine model to be seeded")
@@ -127,5 +127,56 @@ func TestStoreNew_SeedsGrokImagineModels(t *testing.T) {
 	}
 	if model.Status != ModelStatusAvailable {
 		t.Fatalf("model.Status=%q want %q", model.Status, ModelStatusAvailable)
+	}
+}
+
+func TestCleanupDeprecatedData_RemovesBoltAccountsAndModels(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	s, err := New(Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	ctx := context.Background()
+	acc := &Account{
+		Name:        "legacy bolt",
+		AccountType: "bolt",
+		Enabled:     true,
+	}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	model := &Model{
+		ID:      "legacy-bolt-model",
+		Channel: "Bolt",
+		ModelID: "claude-opus-4-6",
+		Name:    "Legacy Bolt Model",
+		Status:  ModelStatusAvailable,
+	}
+	if err := s.CreateModel(ctx, model); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+
+	if err := s.cleanupDeprecatedData(); err != nil {
+		t.Fatalf("cleanupDeprecatedData() error = %v", err)
+	}
+
+	if _, err := s.GetAccount(ctx, acc.ID); err == nil {
+		t.Fatalf("expected bolt account to be removed")
+	}
+	if _, err := s.GetModel(ctx, model.ID); err == nil {
+		t.Fatalf("expected bolt model to be removed")
 	}
 }

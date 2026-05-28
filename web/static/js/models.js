@@ -11,7 +11,7 @@ let modelRefreshResults = {};
 let modelRefreshConcurrency = 4;
 
 function modelChannels() {
-  const defaultChannels = ["Orchids", "Warp", "Bolt", "Puter", "Grok"];
+  const defaultChannels = ["Orchids", "Warp", "Puter", "Grok"];
   const seen = new Set();
   const ordered = [];
 
@@ -137,6 +137,7 @@ function sortTextValues(values) {
 function normalizeModelRefreshResult(data, fallbackChannel) {
   return {
     channel: String(data.channel || fallbackChannel || "").trim(),
+    source: String(data.source || "").trim(),
     concurrency: Number(data.concurrency ?? modelRefreshConcurrency),
     discovered: Number(data.discovered ?? 0),
     verified: Number(data.verified ?? 0),
@@ -147,6 +148,28 @@ function normalizeModelRefreshResult(data, fallbackChannel) {
     deletedModelIDs: sortTextValues(Array.isArray(data.deleted_model_ids) ? data.deleted_model_ids : []),
     offlineModelIDs: sortTextValues(Array.isArray(data.offline_model_ids) ? data.offline_model_ids : []),
   };
+}
+
+function modelRefreshSourceLabel(source) {
+  const value = String(source || "").trim();
+  if (!value) return "未知来源";
+  const labels = {
+    upstream_api: "账号上游 API",
+    orchids_public_page: "Orchids 公开页面",
+    orchids_static_catalog_fallback: "Orchids 内置列表",
+    warp_static_catalog: "Warp 内置列表",
+    warp_static_catalog_fallback: "Warp 内置列表",
+    puter_public_models: "Puter 公开模型 API",
+    puter_public_models_test_mode: "Puter 公开 API + 账号验证",
+    puter_public_models_unverified: "Puter 公开 API",
+    puter_static_catalog_fallback: "Puter 内置列表",
+    puter_static_catalog_fallback_test_mode: "Puter 内置列表 + 账号验证",
+    puter_static_catalog_fallback_unverified: "Puter 内置列表",
+    grok_console_probe: "Grok 账号探测",
+  };
+  if (labels[value]) return labels[value];
+  if (value.startsWith("warp_graphql")) return "Warp 账号 GraphQL";
+  return value;
 }
 
 function renderModelRefreshSummary() {
@@ -170,7 +193,7 @@ function renderModelRefreshSummary() {
 
   summary.hidden = false;
   title.textContent = `${result.channel || channel} 最近一次刷新结果`;
-  meta.textContent = `已按来源列表完成同步，并发数 ${result.concurrency || modelRefreshConcurrency}。发现到的模型会写入当前渠道，来源列表里暂时缺失的模型会标记为离线并保留记录。`;
+  meta.textContent = `来源：${modelRefreshSourceLabel(result.source)}。并发数 ${result.concurrency || modelRefreshConcurrency}。发现到的模型会写入当前渠道，来源列表里暂时缺失的模型会标记为离线并保留记录。`;
 
   const stats = [
     { label: "发现", value: result.discovered },
