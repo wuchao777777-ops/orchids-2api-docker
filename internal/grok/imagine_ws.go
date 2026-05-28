@@ -313,9 +313,9 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 			case "start_stage":
 				slot := &imagineWSSlot{
 					id:       imageID,
-					order:    intFromAny(msg["order"]),
-					width:    intFromAny(msg["width"]),
-					height:   intFromAny(msg["height"]),
+					order:    interfaceToInt(msg["order"]),
+					width:    interfaceToInt(msg["width"]),
+					height:   interfaceToInt(msg["height"]),
 					progress: 10,
 				}
 				slots[imageID] = slot
@@ -351,7 +351,7 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 			}
 			slot.lastURL = urlValue
 			slot.lastBlob = strings.TrimSpace(fmt.Sprint(msg["blob"]))
-			progress := clampImagineProgress(intFromAny(msg["percentage_complete"]))
+			progress := clampImagineProgress(interfaceToInt(msg["percentage_complete"]))
 			if progress > slot.progress {
 				slot.progress = progress
 				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID, Order: slot.order, Progress: progress}) {

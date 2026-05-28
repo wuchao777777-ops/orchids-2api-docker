@@ -58,6 +58,7 @@ func registerRoutes(
 
 	grokPrefixes := []string{"/grok/v1", "/v1"}
 	registerWithPrefixes(mux, grokPrefixes, "/chat/completions", limiter.Limit(grokHandler.HandleChatCompletions))
+	registerWithPrefixes(mux, grokPrefixes, "/responses", limiter.Limit(grokHandler.HandleResponses))
 	registerWithPrefixes(mux, grokPrefixes, "/images/generations", limiter.Limit(grokHandler.HandleImagesGenerations))
 	registerWithPrefixes(mux, grokPrefixes, "/images/edits", limiter.Limit(grokHandler.HandleImagesEdits))
 	registerWithPrefixes(mux, grokPrefixes, "/files/", grokHandler.HandleFiles)

@@ -52,16 +52,12 @@ func TestResolveModelOrDynamic_AcceptsUnknownGrokTextModel(t *testing.T) {
 	}
 }
 
-func TestResolveModel_Grok420Mapping(t *testing.T) {
-	spec, ok := ResolveModel("grok-420")
-	if !ok {
-		t.Fatalf("ResolveModel(grok-420) should succeed")
+func TestResolveModel_Grok420Rejected(t *testing.T) {
+	if _, ok := ResolveModel("grok-420"); ok {
+		t.Fatalf("ResolveModel(grok-420) should fail")
 	}
-	if spec.UpstreamModel != "grok-420" {
-		t.Fatalf("spec.UpstreamModel=%q want grok-420", spec.UpstreamModel)
-	}
-	if spec.ModelMode != "MODEL_MODE_GROK_420" {
-		t.Fatalf("spec.ModelMode=%q want MODEL_MODE_GROK_420", spec.ModelMode)
+	if _, ok := ResolveModelOrDynamic("grok-420"); ok {
+		t.Fatalf("ResolveModelOrDynamic(grok-420) should fail")
 	}
 }
 
@@ -76,6 +72,33 @@ func TestResolveModel_AliasBaseMappingsMatchGrok2API(t *testing.T) {
 		{modelID: "grok-4-mini", wantUpstream: "grok-4", wantModelMode: "MODEL_MODE_GROK_4_MINI_THINKING"},
 		{modelID: "grok-4-heavy", wantUpstream: "grok-4", wantModelMode: "MODEL_MODE_HEAVY"},
 		{modelID: "grok-4.1-fast", wantUpstream: "grok-4-1-thinking-1129", wantModelMode: "MODEL_MODE_FAST"},
+	}
+
+	for _, tc := range cases {
+		spec, ok := ResolveModel(tc.modelID)
+		if !ok {
+			t.Fatalf("ResolveModel(%s) should succeed", tc.modelID)
+		}
+		if spec.UpstreamModel != tc.wantUpstream {
+			t.Fatalf("%s upstream=%q want=%q", tc.modelID, spec.UpstreamModel, tc.wantUpstream)
+		}
+		if spec.ModelMode != tc.wantModelMode {
+			t.Fatalf("%s mode=%q want=%q", tc.modelID, spec.ModelMode, tc.wantModelMode)
+		}
+	}
+}
+
+func TestResolveModel_ImagineMappingsMatchGrok2API(t *testing.T) {
+	cases := []struct {
+		modelID       string
+		wantUpstream  string
+		wantModelMode string
+	}{
+		{modelID: "grok-imagine-image-lite", wantUpstream: "grok-3", wantModelMode: "MODEL_MODE_FAST"},
+		{modelID: "grok-imagine-image", wantUpstream: "grok-3", wantModelMode: "MODEL_MODE_AUTO"},
+		{modelID: "grok-imagine-image-pro", wantUpstream: "grok-3", wantModelMode: "MODEL_MODE_AUTO"},
+		{modelID: "grok-imagine-image-edit", wantUpstream: "imagine-image-edit", wantModelMode: "MODEL_MODE_AUTO"},
+		{modelID: "grok-imagine-video", wantUpstream: "imagine-video-gen", wantModelMode: "MODEL_MODE_AUTO"},
 	}
 
 	for _, tc := range cases {
@@ -350,7 +373,7 @@ func TestBuildVideoPayload_UsesGrokConfigFlags(t *testing.T) {
 		GrokAPIBaseURL:        server.URL,
 	}
 	h := &Handler{cfg: cfg, client: New(cfg)}
-	spec := ModelSpec{ID: "grok-imagine-1.0-video", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3", IsVideo: true}
+	spec := ModelSpec{ID: "grok-imagine-video", UpstreamModel: "imagine-video-gen", ModelMode: "MODEL_MODE_AUTO", IsVideo: true}
 	req := &ChatCompletionsRequest{}
 
 	payload, err := h.buildChatPayload(context.Background(), "", spec, "make a clip", nil, nil, &VideoConfig{
@@ -376,7 +399,7 @@ func TestBuildVideoPayload_UsesGrokConfigFlags(t *testing.T) {
 		t.Fatalf("responseMetadata missing")
 	}
 	reqDetails, ok := respMeta["requestModelDetails"].(map[string]interface{})
-	if !ok || reqDetails["modelId"] != "grok-3" {
+	if !ok || reqDetails["modelId"] != "imagine-video-gen" {
 		t.Fatalf("requestModelDetails=%#v", reqDetails)
 	}
 	if got, _ := payload["modelMode"].(string); got != spec.ModelMode {
@@ -390,6 +413,21 @@ func TestBuildVideoPayload_UsesGrokConfigFlags(t *testing.T) {
 	}
 	if got, _ := payload["disableSearch"].(bool); got {
 		t.Fatalf("disableSearch=%v want=false", got)
+	}
+	modelCfg, ok := respMeta["modelConfigOverride"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("modelConfigOverride missing")
+	}
+	modelMap, ok := modelCfg["modelMap"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("modelMap missing")
+	}
+	videoCfg, ok := modelMap["videoGenModelConfig"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("videoGenModelConfig missing")
+	}
+	if got := videoCfg["videoLength"]; got != 6 {
+		t.Fatalf("videoLength=%#v want=6", got)
 	}
 }
 

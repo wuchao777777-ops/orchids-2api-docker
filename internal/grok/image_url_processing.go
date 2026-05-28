@@ -342,8 +342,3 @@ func isLikelyImageAssetPath(p string) bool {
 	}
 	return false
 }
-
-// stripLeadingAngleNoise was an experimental cleanup for leaked markup fragments like '<<<'.
-// It proved unreliable in practice and could interfere with legitimate content.
-// Kept as a no-op for compatibility with older code paths.
-func stripLeadingAngleNoise(s string) string { return s }
