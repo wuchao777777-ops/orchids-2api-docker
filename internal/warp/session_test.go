@@ -22,6 +22,8 @@ func TestNormalizeRefreshToken_ExtractsCommonFormats(t *testing.T) {
 		{name: "cookie fragment", raw: "foo=1; refresh_token=token-123; Path=/", want: "token-123"},
 		{name: "json snake", raw: `{"refresh_token":"token-123"}`, want: "token-123"},
 		{name: "json camel", raw: `{"auth":{"refreshToken":"token-123"}}`, want: "token-123"},
+		{name: "warp persisted user", raw: `{"id_token":{"id_token":"runtime-jwt","refresh_token":"token-123","expiration_time":"2026-05-28T00:00:00+00:00"},"refresh_token":"legacy-empty"}`, want: "token-123"},
+		{name: "warp auth redirect url", raw: "warp://auth/desktop_redirect?refresh_token=token-123&state=abc", want: "token-123"},
 	}
 
 	for _, tt := range tests {
@@ -65,5 +67,47 @@ func TestSessionRefresh_UsesFirebaseWhenSuccessful(t *testing.T) {
 	}
 	if sess.currentRefreshToken() != "rotated-token" {
 		t.Fatalf("currentRefreshToken=%q want rotated-token", sess.currentRefreshToken())
+	}
+}
+
+func TestSessionRefresh_FallsBackToWarpTokenProxy(t *testing.T) {
+	t.Parallel()
+
+	sess := &session{refreshToken: "token-123"}
+	var seen []string
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			seen = append(seen, req.URL.String())
+			switch req.URL.String() {
+			case warpFirebaseURL:
+				return &http.Response{
+					StatusCode: http.StatusBadGateway,
+					Body:       io.NopCloser(bytes.NewBufferString(`{"error":"firebase unavailable"}`)),
+					Header:     make(http.Header),
+				}, nil
+			case warpTokenProxyURL:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBufferString(`{"id_token":"proxy-jwt","refresh_token":"proxy-rotated-token","expires_in":"3600"}`)),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				t.Fatalf("unexpected refresh URL: %s", req.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	if err := sess.refresh(context.Background(), client); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+	if len(seen) != 2 || seen[0] != warpFirebaseURL || seen[1] != warpTokenProxyURL {
+		t.Fatalf("seen refresh URLs=%v", seen)
+	}
+	if sess.currentJWT() != "proxy-jwt" {
+		t.Fatalf("currentJWT=%q want proxy-jwt", sess.currentJWT())
+	}
+	if sess.currentRefreshToken() != "proxy-rotated-token" {
+		t.Fatalf("currentRefreshToken=%q want proxy-rotated-token", sess.currentRefreshToken())
 	}
 }

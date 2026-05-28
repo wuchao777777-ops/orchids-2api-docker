@@ -300,6 +300,58 @@ func TestProcessStreamBody_PreservesSupportedNestedShellFallback(t *testing.T) {
 	}
 }
 
+func TestProcessStreamBody_ParsesReadShellCommandOutputFallback(t *testing.T) {
+	var events []upstream.SSEMessage
+
+	readOutputPayload := appendBytesField(1, []byte("cmd_123"))
+	readOutputPayload = append(readOutputPayload, appendBytesField(2,
+		appendVarintField(1, 2),
+	)...)
+	messagePayload := appendBytesField(4, appendBytesField(23, readOutputPayload))
+	toolFrame := wrapFrame(appendBytesField(2,
+		appendBytesField(1,
+			appendBytesField(1,
+				appendBytesField(1,
+					appendBytesField(5, messagePayload),
+				),
+			),
+		),
+	))
+	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(8, appendVarintField(2, 1))))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(append(toolFrame, finishFrame...)), func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("len(events)=%d want 2", len(events))
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event=%#v want tool call", events[0])
+	}
+	if got, _ := events[0].Event["toolName"].(string); got != "read_shell_command_output" {
+		t.Fatalf("toolName=%q want read_shell_command_output", got)
+	}
+	var input map[string]interface{}
+	rawInput, _ := events[0].Event["input"].(string)
+	if err := json.Unmarshal([]byte(rawInput), &input); err != nil {
+		t.Fatalf("tool input json: %v", err)
+	}
+	if got, _ := input["command_id"].(string); got != "cmd_123" {
+		t.Fatalf("command_id=%q want cmd_123", got)
+	}
+	duration, _ := input["duration"].(map[string]interface{})
+	if got := duration["seconds"]; got != float64(2) {
+		t.Fatalf("duration.seconds=%v want 2", got)
+	}
+	if got, _ := events[1].Event["finishReason"].(string); got != "tool_use" {
+		t.Fatalf("finishReason=%q want tool_use", got)
+	}
+}
+
 func TestExtractStringValue_IgnoresBinaryPayload(t *testing.T) {
 	if got := extractStringValue([]byte{0x02, 0x52, 0x00}); got != "" {
 		t.Fatalf("extractStringValue(binary)=%q want empty", got)

@@ -5,7 +5,6 @@ let currentPlatform = '';
 let accountHealth = {};
 let pageSize = 20;
 let currentPage = 1;
-let modelCatalog = [];
 
 // DOM 缓存
 const domCache = {
@@ -22,117 +21,10 @@ function initDOMCache() {
     domCache.accountImportStatus = document.getElementById("accountImportStatus");
 }
 
-const fallbackAgentModes = {
-  orchids: [
-    "claude-sonnet-4-5",
-    "claude-opus-4-6",
-    "claude-opus-4-6-thinking",
-    "claude-opus-4-5",
-    "claude-sonnet-4-5-thinking",
-  ],
-  warp: [
-    "auto",
-    "auto-efficient",
-    "auto-genius",
-    "claude-4-5-sonnet",
-    "claude-4-5-sonnet-thinking",
-    "claude-4-5-opus",
-    "claude-4-5-opus-thinking",
-    "claude-4-6-opus-high",
-    "claude-4-6-opus-max",
-  ],
-  bolt: [
-    "claude-opus-4-6",
-    "claude-sonnet-4-5",
-    "claude-3-7-sonnet-20250219",
-  ],
-  puter: [
-    "claude-opus-4-5",
-    "claude-sonnet-4-5",
-    "claude-3-7-sonnet-20250219",
-  ],
-  grok: [
-    "grok-3",
-    "grok-3-mini",
-    "grok-3-thinking",
-    "grok-4",
-    "grok-4-mini",
-    "grok-4-thinking",
-    "grok-4-heavy",
-    "grok-4.1-mini",
-    "grok-4.1-fast",
-    "grok-4.1-expert",
-    "grok-4.1-thinking",
-    "grok-imagine-image-lite",
-    "grok-imagine-image",
-    "grok-imagine-image-pro",
-    "grok-imagine-image-edit",
-    "grok-imagine-video",
-  ],
-};
-
-function normalizeChannel(channel) {
-  return String(channel || "orchids").trim().toLowerCase();
-}
-
-function isModelAvailable(model) {
-  if (!model) return false;
-  if (typeof model.status === "boolean") return model.status;
-  const status = String(model.status || "").toLowerCase();
-  if (!status) return true;
-  return status === "available";
-}
-
-function bySortOrder(a, b) {
-  const aOrderRaw = a && a.sort_order;
-  const bOrderRaw = b && b.sort_order;
-  const aOrder = Number.isFinite(Number(aOrderRaw)) ? Number(aOrderRaw) : 0;
-  const bOrder = Number.isFinite(Number(bOrderRaw)) ? Number(bOrderRaw) : 0;
-  if (aOrder !== bOrder) return aOrder - bOrder;
-  const aModelID = a && a.model_id ? a.model_id : "";
-  const bModelID = b && b.model_id ? b.model_id : "";
-  return String(aModelID).localeCompare(String(bModelID));
-}
-
-function getModelsForAccountType(type) {
-  const channel = normalizeChannel(type);
-  const active = modelCatalog
-    .filter((m) => normalizeChannel(m.channel) === channel)
-    .filter(isModelAvailable)
-    .sort(bySortOrder);
-
-  if (active.length > 0) return active;
-
-  const fallback = fallbackAgentModes[channel] || [];
-  return fallback.map((modelID, idx) => ({
-    model_id: modelID,
-    name: modelID,
-    sort_order: idx,
-    is_default: idx === 0,
-  }));
-}
-
-async function loadModelCatalog() {
-  try {
-    const res = await fetch("/api/models");
-    if (!res.ok) {
-      throw new Error(`status ${res.status}`);
-    }
-    const list = await res.json();
-    modelCatalog = Array.isArray(list) ? list : [];
-  } catch (err) {
-    console.error("Failed to load models:", err);
-    modelCatalog = [];
-  }
-}
-
 // Load accounts from API
 async function loadAccounts() {
   try {
-    const [res] = await Promise.all([
-      fetch("/api/accounts"),
-      loadModelCatalog(),
-    ]);
+    const res = await fetch("/api/accounts");
     if (res.status === 401) {
       window.location.href = "./login.html";
       return;
@@ -156,15 +48,15 @@ function sortAccounts() {
 
 // Normalize account type
 function normalizeAccountType(acc) {
-  return (acc.account_type || 'orchids').toLowerCase();
+  return normalizeSidebarAccountType(acc);
 }
 
 function getQuotaStats(acc) {
   if (!acc) return null;
+  const base = getSidebarQuotaStats(acc);
+  if (!base) return null;
+  if (base.unknown) return base;
   const type = normalizeAccountType(acc);
-  if (type === "puter") {
-    return { supported: false, unknown: true };
-  }
   if (type === "warp") {
     const monthlyLimit = Math.max(0, Math.floor(acc.warp_monthly_limit || acc.usage_limit || 0));
     const monthlyRemainingRaw = acc.warp_monthly_remaining !== undefined && acc.warp_monthly_remaining !== null
@@ -189,45 +81,15 @@ function getQuotaStats(acc) {
       };
     }
   }
-  const explicitLimit = Math.floor(acc.quota_limit || 0);
-  const hasExplicitRemaining = acc.quota_remaining !== undefined && acc.quota_remaining !== null;
-  if (explicitLimit > 0 && hasExplicitRemaining) {
-    const remaining = Math.max(0, Math.floor(acc.quota_remaining || 0));
-    const used = Math.max(0, explicitLimit - remaining);
-    const pctRemaining = explicitLimit > 0 ? Math.min(100, Math.round((remaining / explicitLimit) * 100)) : 0;
-    return { supported: true, limit: explicitLimit, remaining, used, pctRemaining };
-  }
-
-  const limit = Math.floor(acc.usage_limit || 0);
-  if (limit <= 0) return null;
-  const current = Math.floor(acc.usage_current || 0);
-  let remaining = 0;
-  if (type === "warp") {
-    remaining = Math.max(0, limit - current);
-  } else {
-    remaining = Math.max(0, current);
-  }
+  const limit = Math.max(0, Math.floor(base.limit || 0));
+  const remaining = Math.max(0, Math.floor(base.remaining || 0));
   const used = Math.max(0, limit - remaining);
   const pctRemaining = limit > 0 ? Math.min(100, Math.round((remaining / limit) * 100)) : 0;
-  return { supported: true, limit, remaining, used, pctRemaining };
+  return { ...base, limit, remaining, used, pctRemaining };
 }
 
 function getAccountToken(acc) {
-  if (!acc) return '';
-  const type = normalizeAccountType(acc);
-  if (type === 'warp') {
-    return acc.refresh_token || acc.token || acc.client_cookie || '';
-  }
-  if (type === 'orchids') {
-    return acc.client_cookie || acc.session_cookie || acc.token || '';
-  }
-  if (type === 'bolt') {
-    return acc.session_cookie || acc.client_cookie || acc.token || '';
-  }
-  if (type === 'puter') {
-    return acc.client_cookie || acc.token || acc.session_cookie || '';
-  }
-  return acc.client_cookie || acc.token || '';
+  return getSidebarAccountToken(acc);
 }
 
 function applyTokenLabels(type) {
@@ -236,19 +98,23 @@ function applyTokenLabels(type) {
   const hint = document.getElementById("tokenHint");
   const projectGroup = document.getElementById("projectIdGroup");
   const projectInput = document.getElementById("projectId");
+  const warpImportActions = document.getElementById("warpLocalImportActions");
   const accountId = String(document.getElementById("accountId")?.value || "");
   if (!label || !input || !hint) return;
+  if (warpImportActions) {
+    warpImportActions.hidden = type !== "warp";
+  }
   if (projectGroup && projectInput) {
     const boltMode = type === "bolt";
     projectGroup.style.display = boltMode ? "" : "none";
     projectInput.required = boltMode;
   }
   if (type === 'warp') {
-    label.textContent = "Refresh Token";
-    input.placeholder = "每行一个 refresh_token";
+    label.textContent = "Warp Auth";
+    input.placeholder = "每行一个 id_token.refresh_token、登录回跳 URL 或 User JSON";
     hint.textContent = accountId
-      ? "编辑时仅保存第一行 refresh_token"
-      : "支持批量添加 Warp。每行一个 refresh_token";
+      ? "编辑时仅保存第一行；可粘贴 warp://auth/... 回跳 URL / User JSON / id_token.refresh_token"
+      : "支持批量添加 Warp。可粘贴 warp://auth/... 回跳 URL / User JSON / id_token.refresh_token";
     input.required = true;
   } else if (type === 'grok') {
     label.textContent = "SSO Token";
@@ -280,6 +146,38 @@ function applyTokenLabels(type) {
   }
 }
 
+function selectWarpUserFile() {
+  const input = document.getElementById("warpUserFileInput");
+  if (!input) return;
+  input.value = "";
+  input.click();
+}
+
+async function importWarpUserFile(file) {
+  if (!file) return;
+  const typeEl = document.getElementById("accountType");
+  if (String(typeEl?.value || "").toLowerCase() !== "warp") return;
+
+  try {
+    renderAccountImportStatus("正在上传并解析 WARP User JSON / token...", "info", [file.name]);
+    const form = new FormData();
+    form.append("file", file, file.name || "dev.warp.Warp-User");
+    const res = await fetch("/api/warp/import-user-file", {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || "上传导入失败");
+    const account = await res.json();
+    renderAccountImportStatus("已解析并保存 Warp 账号", "info", [`账号 #${account.id || ""}`.trim()]);
+    showToast("已保存上传的 WARP 账号");
+    closeModal();
+    loadAccounts();
+  } catch (err) {
+    renderAccountImportStatus("上传 User JSON / token 失败", "error", [err.message || String(err)]);
+    showToast("上传导入失败: " + (err.message || String(err)), "error");
+  }
+}
+
 function splitBatchCredentialInput(raw) {
   const text = String(raw || "").trim();
   if (!text) return [];
@@ -302,8 +200,15 @@ function normalizeCredentialForType(type, credential) {
   if (!raw) return "";
 
   if (normalizedType === "warp") {
-    const match = raw.match(/(?:^|[?&;\s])refresh_token=([^&;\s]+)/);
-    return (match ? match[1] : raw).trim();
+    try {
+      const parsed = JSON.parse(raw);
+      const token = findNestedWarpRefreshToken(parsed);
+      if (token) return token;
+    } catch (_) {
+      // Not JSON; continue with URL/cookie/form extraction.
+    }
+    const match = raw.match(/(?:^|[?&;\s])refresh_token=([^&;\s]+)/i);
+    return (match ? decodeURIComponent(match[1]) : raw).trim();
   }
 
   if (normalizedType === "grok") {
@@ -312,6 +217,27 @@ function normalizeCredentialForType(type, credential) {
   }
 
   return raw;
+}
+
+function findNestedWarpRefreshToken(value) {
+  if (!value || typeof value !== "object") return "";
+  const preferred = ["id_token", "auth_tokens", "authTokens"];
+  for (const key of preferred) {
+    if (value[key]) {
+      const token = findNestedWarpRefreshToken(value[key]);
+      if (token) return token;
+    }
+  }
+  for (const [key, item] of Object.entries(value)) {
+    const normalizedKey = String(key || "").toLowerCase();
+    if (normalizedKey === "refresh_token" || normalizedKey === "refreshtoken") {
+      const token = String(item || "").trim();
+      if (token) return token;
+    }
+    const token = findNestedWarpRefreshToken(item);
+    if (token) return token;
+  }
+  return "";
 }
 
 function buildCredentialFingerprint(type, credential) {
@@ -486,14 +412,6 @@ async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null
   return { success, failed, failures };
 }
 
-function resolveAgentMode(type, preferredValue = "") {
-  const preferred = String(preferredValue || "").trim();
-  if (preferred) return preferred;
-  const models = getModelsForAccountType(type);
-  const defaultModel = models.find((m) => m.is_default) || models[0];
-  return defaultModel ? String(defaultModel.model_id || "").trim() : "";
-}
-
 // Render platform filter tabs
 function renderPlatformTabs() {
   const container = document.getElementById("platformFilters");
@@ -532,11 +450,6 @@ function updateAccountHealth(id, ok, msg = '') {
   };
 }
 
-function normalizeStatusCode(statusCode) {
-  if (statusCode === null || statusCode === undefined) return '';
-  return String(statusCode).trim();
-}
-
 function evaluateAccountStatus(acc) {
   const health = accountHealth[acc.id];
   if (health && !health.ok) {
@@ -545,7 +458,7 @@ function evaluateAccountStatus(acc) {
   if (!acc.enabled) {
     return { normal: false, text: '禁用', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '账号已禁用' };
   }
-  const statusCode = normalizeStatusCode(acc.status_code);
+  const statusCode = normalizeSidebarStatusCode(acc.status_code);
   if (statusCode) {
     switch (statusCode) {
       case '429':
@@ -812,7 +725,6 @@ function renderAccounts() {
     { label: "", style: "width: 40px;" },
     { label: "ID", style: "width: 60px;" },
     { label: "Token" },
-    { label: "模型" },
     { label: "配额", style: "width: 140px;" },
     { label: "状态" },
     { label: "调用" },
@@ -870,13 +782,6 @@ function renderAccounts() {
     tokenSpan.textContent = tokenDisplay;
     tdToken.appendChild(tokenSpan);
     tr.appendChild(tdToken);
-
-    const tdModel = document.createElement("td");
-    const modelSpan = document.createElement("span");
-    modelSpan.className = "tag tag-free";
-    modelSpan.textContent = acc.agent_mode || "auto";
-    tdModel.appendChild(modelSpan);
-    tr.appendChild(tdModel);
 
     const tdQuota = document.createElement("td");
     tdQuota.style.fontSize = "0.85rem";
@@ -1064,10 +969,6 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
         <span class="token-text" title="${escapeHtml(tokenDisplay)}">${escapeHtml(tokenDisplay)}</span>
       </div>
       <div class="account-mobile-grid">
-        <div class="account-mobile-item">
-          <span class="account-mobile-label">模型</span>
-          <span class="tag tag-free">${escapeHtml(acc.agent_mode || "auto")}</span>
-        </div>
         <div class="account-mobile-item">
           <span class="account-mobile-label">状态</span>
           <div class="account-mobile-inline">${buildStatusMarkup(acc, badge)}</div>
@@ -1268,11 +1169,8 @@ function openModal(account = null) {
     }
   };
 
-  loadModelCatalog()
-    .finally(() => {
-      applyValues();
-      finalizeModal();
-    });
+  applyValues();
+  finalizeModal();
 }
 
 // Close modal
@@ -1296,7 +1194,6 @@ async function saveAccount(e) {
   const existing = id ? accounts.find((a) => String(a.id) === String(id)) : null;
   const data = {
     account_type: type,
-    agent_mode: resolveAgentMode(type, existing ? existing.agent_mode : ""),
     weight: existing ? (parseInt(existing.weight, 10) || 1) : 1,
     enabled: document.getElementById("enabled").checked,
   };
@@ -1523,5 +1420,12 @@ document.addEventListener('DOMContentLoaded', () => {
       applyTokenLabels(typeSelect.value);
     });
     applyTokenLabels(typeSelect.value);
+  }
+  const warpUserFileInput = document.getElementById("warpUserFileInput");
+  if (warpUserFileInput) {
+    warpUserFileInput.addEventListener("change", () => {
+      const file = warpUserFileInput.files && warpUserFileInput.files[0];
+      importWarpUserFile(file);
+    });
   }
 });

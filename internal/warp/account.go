@@ -2,6 +2,7 @@ package warp
 
 import (
 	"strings"
+	"time"
 
 	"orchids-api/internal/store"
 )
@@ -52,4 +53,50 @@ func looksLikeJWT(s string) bool {
 		}
 	}
 	return true
+}
+
+// ApplyRequestLimitInfoToAccount copies Warp's official request limit response
+// into the account fields used by the admin UI and load balancer.
+func ApplyRequestLimitInfoToAccount(acc *store.Account, info *RequestLimitInfo, bonuses []BonusGrant) {
+	if acc == nil || info == nil {
+		return
+	}
+	switch {
+	case strings.TrimSpace(info.PlanTier) != "":
+		acc.Subscription = strings.ToLower(strings.TrimSpace(info.PlanTier))
+	case strings.TrimSpace(info.PlanName) != "":
+		acc.Subscription = strings.ToLower(strings.TrimSpace(info.PlanName))
+	case info.IsUnlimited:
+		acc.Subscription = "unlimited"
+	case strings.TrimSpace(acc.Subscription) == "":
+		acc.Subscription = "free"
+	}
+
+	monthlyLimit := float64(info.RequestLimit)
+	usedRequests := float64(info.RequestsUsedSinceLastRefresh)
+	if usedRequests < 0 {
+		usedRequests = 0
+	}
+	monthlyRemaining := monthlyLimit - usedRequests
+	if monthlyRemaining < 0 {
+		monthlyRemaining = 0
+	}
+
+	bonusRemaining := 0.0
+	for _, bg := range bonuses {
+		if bg.RequestCreditsRemaining > 0 {
+			bonusRemaining += float64(bg.RequestCreditsRemaining)
+		}
+	}
+
+	acc.UsageLimit = monthlyLimit
+	acc.UsageCurrent = usedRequests
+	acc.WarpMonthlyLimit = monthlyLimit
+	acc.WarpMonthlyRemaining = monthlyRemaining
+	acc.WarpBonusRemaining = bonusRemaining
+	if info.NextRefreshTime != "" {
+		if t, err := time.Parse(time.RFC3339, info.NextRefreshTime); err == nil {
+			acc.QuotaResetAt = t
+		}
+	}
 }

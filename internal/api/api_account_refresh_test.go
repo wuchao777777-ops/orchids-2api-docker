@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,6 +19,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
+	"orchids-api/internal/warp"
 )
 
 func TestRefreshAccountState_GrokSyncsRemainingQuota(t *testing.T) {
@@ -672,6 +675,107 @@ func TestHandleAccounts_PostRejectsDuplicateWarpRefreshToken(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "duplicate warp token") {
 		t.Fatalf("body=%q want duplicate warp token", rec.Body.String())
+	}
+}
+
+func TestHandleWarpUserFileImport_CreatesWarpAccount(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	restore := warp.SetLocalUserStorageTestHooks(nil, func(encrypted []byte) (string, error) {
+		if string(encrypted) != "encrypted-user-file" {
+			t.Fatalf("encrypted=%q want encrypted-user-file", encrypted)
+		}
+		return `{"id_token":{"id_token":"runtime-jwt","refresh_token":"warp-upload-token"},"refresh_token":""}`, nil
+	})
+	defer restore()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "dev.warp.Warp-User")
+	if err != nil {
+		t.Fatalf("CreateFormFile() error = %v", err)
+	}
+	if _, err := part.Write([]byte("encrypted-user-file")); err != nil {
+		t.Fatalf("part.Write() error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/warp/import-user-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	a.HandleWarpUserFileImport(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "runtime-jwt") {
+		t.Fatalf("response leaked persisted user JSON: %s", rec.Body.String())
+	}
+	var resp store.Account
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ID == 0 {
+		t.Fatal("response ID is empty")
+	}
+	if resp.RefreshToken != "warp-upload-token" {
+		t.Fatalf("RefreshToken=%q want warp-upload-token", resp.RefreshToken)
+	}
+	stored, err := s.GetAccount(context.Background(), resp.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if stored.RefreshToken != "warp-upload-token" || !stored.Enabled || stored.AccountType != "warp" {
+		t.Fatalf("stored account=%#v", stored)
+	}
+}
+
+func TestHandleWarpUserFileImport_CreatesWarpAccountFromPlaintextJSON(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	restore := warp.SetLocalUserStorageTestHooks(nil, func([]byte) (string, error) {
+		t.Fatal("decrypt hook should not be called for plaintext User JSON")
+		return "", nil
+	})
+	defer restore()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "user.json")
+	if err != nil {
+		t.Fatalf("CreateFormFile() error = %v", err)
+	}
+	if _, err := part.Write([]byte(`{"id_token":{"id_token":"runtime-jwt","refresh_token":"warp-plaintext-token"},"refresh_token":""}`)); err != nil {
+		t.Fatalf("part.Write() error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/warp/import-user-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	a.HandleWarpUserFileImport(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var resp store.Account
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	stored, err := s.GetAccount(context.Background(), resp.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if stored.RefreshToken != "warp-plaintext-token" || !stored.Enabled || stored.AccountType != "warp" {
+		t.Fatalf("stored account=%#v", stored)
 	}
 }
 

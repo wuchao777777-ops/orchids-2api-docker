@@ -1116,7 +1116,7 @@ func normalizeWarpFallbackToolName(name string) string {
 
 func shouldEmitWarpFallbackToolName(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(normalizeWarpFallbackToolName(name))) {
-	case "bash", "grep", "glob", "read", "edit", "write":
+	case "bash", "grep", "glob", "read", "edit", "write", "read_shell_command_output":
 		return true
 	default:
 		return false
@@ -1155,6 +1155,10 @@ func transformWarpToolCall(name string, args map[string]interface{}) (string, ma
 	case "run_command":
 		copyIfPresent(out, "command", args, "command")
 		copyIfPresent(out, "timeout", args, "timeout")
+	case "read_shell_command_output":
+		copyIfPresent(out, "command_id", args, "command_id")
+		copyIfPresent(out, "duration", args, "duration")
+		copyIfPresent(out, "on_completion", args, "on_completion")
 	case "list_directory":
 		copyIfPresent(out, "path", args, "path")
 	case "subagent":
@@ -1329,6 +1333,17 @@ func isIncompleteToolCall(toolName, toolInput string) bool {
 		}
 		command, _ := payload["command"].(string)
 		return strings.TrimSpace(command) == ""
+	case "read_shell_command_output":
+		input := strings.TrimSpace(toolInput)
+		if input == "" || input == "{}" {
+			return true
+		}
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(input), &payload); err != nil {
+			return false
+		}
+		commandID, _ := payload["command_id"].(string)
+		return strings.TrimSpace(commandID) == ""
 	case "write":
 		var payload map[string]interface{}
 		if err := json.Unmarshal([]byte(toolInput), &payload); err != nil {
@@ -1681,6 +1696,63 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 			return toolName, "{}"
 		}
 		return toolName, string(b)
+	case "read_shell_command_output":
+		input := map[string]interface{}{}
+		d := decoder{data: payload}
+		for !d.eof() {
+			field, wire, err := d.readKey()
+			if err != nil {
+				break
+			}
+			switch field {
+			case 1:
+				if wire != 2 {
+					_ = d.skip(wire)
+					continue
+				}
+				b, err := d.readBytes()
+				if err != nil {
+					break
+				}
+				if commandID := strings.TrimSpace(string(b)); commandID != "" {
+					input["command_id"] = commandID
+				}
+			case 2:
+				if wire != 2 {
+					_ = d.skip(wire)
+					continue
+				}
+				b, err := d.readBytes()
+				if err != nil {
+					break
+				}
+				if seconds, nanos, ok := parseWarpDuration(b); ok {
+					input["duration"] = map[string]interface{}{
+						"seconds": seconds,
+						"nanos":   nanos,
+					}
+				}
+			case 3:
+				if wire != 2 {
+					_ = d.skip(wire)
+					continue
+				}
+				if _, err := d.readBytes(); err != nil {
+					break
+				}
+				input["on_completion"] = true
+			default:
+				_ = d.skip(wire)
+			}
+		}
+		if len(input) == 0 {
+			return toolName, "{}"
+		}
+		b, err := json.Marshal(input)
+		if err != nil {
+			return toolName, "{}"
+		}
+		return toolName, string(b)
 	case "apply_file_diffs":
 		return parseApplyFileDiffsPayload(payload)
 	case "read_files":
@@ -1824,6 +1896,36 @@ func parseApplyFileDiffsPayload(payload []byte) (string, string) {
 	return "apply_file_diffs", "{}"
 }
 
+func parseWarpDuration(payload []byte) (int64, int32, bool) {
+	d := decoder{data: payload}
+	var seconds int64
+	var nanos int32
+	seen := false
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			break
+		}
+		if wire != 0 {
+			_ = d.skip(wire)
+			continue
+		}
+		v, err := d.readVarint()
+		if err != nil {
+			break
+		}
+		switch field {
+		case 1:
+			seconds = int64(v)
+			seen = true
+		case 2:
+			nanos = int32(v)
+			seen = true
+		}
+	}
+	return seconds, nanos, seen
+}
+
 func parseApplyFileDiffNewFile(payload []byte) (string, string) {
 	d := decoder{data: payload}
 	path := ""
@@ -1948,6 +2050,46 @@ func fallbackToolName(field int) string {
 		return "suggest_new_conversation"
 	case 15:
 		return "file_glob_v2"
+	case 16:
+		return "suggest_prompt"
+	case 17:
+		return "open_code_review"
+	case 18:
+		return "init_project"
+	case 19:
+		return "subagent"
+	case 20:
+		return "read_documents"
+	case 21:
+		return "edit_documents"
+	case 22:
+		return "create_documents"
+	case 23:
+		return "read_shell_command_output"
+	case 24:
+		return "use_computer"
+	case 25:
+		return "insert_review_comments"
+	case 26:
+		return "read_skill"
+	case 27:
+		return "request_computer_use"
+	case 28:
+		return "fetch_conversation"
+	case 29:
+		return "start_agent"
+	case 30:
+		return "send_message_to_agent"
+	case 31:
+		return "transfer_shell_command_control_to_user"
+	case 32:
+		return "ask_user_question"
+	case 33:
+		return "start_agent_v2"
+	case 34:
+		return "upload_file_artifact"
+	case 35:
+		return "run_agents"
 	default:
 		return "unknown_tool"
 	}

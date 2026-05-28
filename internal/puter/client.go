@@ -68,12 +68,12 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		config:           cfg,
 		account:          acc,
 		httpClient:       util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
-		authToken:        resolveAuthToken(acc),
+		authToken:        ResolveAuthToken(acc),
 		sharedHTTPClient: true,
 	}
 }
 
-func resolveAuthToken(acc *store.Account) string {
+func ResolveAuthToken(acc *store.Account) string {
 	if acc == nil {
 		return ""
 	}

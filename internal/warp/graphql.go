@@ -62,19 +62,6 @@ const getRequestLimitInfoQuery = `query GetRequestLimitInfo($requestContext: Req
           requestLimit
           requestsUsedSinceLastRefresh
           requestLimitRefreshDuration
-          isUnlimitedAutosuggestions
-          acceptedAutosuggestionsLimit
-          acceptedAutosuggestionsSinceLastRefresh
-          isUnlimitedVoice
-          voiceRequestLimit
-          voiceRequestsUsedSinceLastRefresh
-          voiceTokenLimit
-          voiceTokensUsedSinceLastRefresh
-          isUnlimitedCodebaseIndices
-          maxCodebaseIndices
-          maxFilesPerRepo
-          embeddingGenerationBatchSize
-          requestLimitPooling
         }
         bonusGrants {
           createdAt
@@ -259,7 +246,7 @@ func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, opera
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(jwt))
 	req.Header.Set("X-Warp-Client-ID", "warp-app")
 	req.Header.Set("X-Warp-Client-Version", clientVersion)
-	req.Header.Set("X-Warp-OS-Category", clientOSName)
+	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
 	req.Header.Set("X-Warp-OS-Name", clientOSName)
 	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
 	req.Header.Set("Content-Type", "application/json")
@@ -321,7 +308,7 @@ func requestContextPayload() map[string]interface{} {
 			"version": clientVersion,
 		},
 		"osContext": map[string]interface{}{
-			"category":           clientOSName,
+			"category":           clientOSCategory,
 			"linuxKernelVersion": nil,
 			"name":               clientOSName,
 			"version":            clientOSVersion,

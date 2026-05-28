@@ -112,23 +112,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				if limitErr != nil {
 					slog.Warn("Warp usage sync failed", "account", acc.Name, "error", limitErr)
 				} else if limitInfo != nil {
-					if limitInfo.IsUnlimited {
-						acc.Subscription = "unlimited"
-					} else {
-						acc.Subscription = "free"
-					}
-					totalLimit := float64(limitInfo.RequestLimit)
-					for _, bg := range bonuses {
-						totalLimit += float64(bg.RequestCreditsRemaining)
-					}
-					usedRequests := float64(limitInfo.RequestsUsedSinceLastRefresh)
-					acc.UsageLimit = totalLimit
-					acc.UsageCurrent = usedRequests
-					if limitInfo.NextRefreshTime != "" {
-						if t, err := time.Parse(time.RFC3339, limitInfo.NextRefreshTime); err == nil {
-							acc.QuotaResetAt = t
-						}
-					}
+					warp.ApplyRequestLimitInfoToAccount(acc, limitInfo, bonuses)
 					slog.Debug("Warp usage synced", "account", acc.Name, "limit", acc.UsageLimit, "used", acc.UsageCurrent, "subscription", acc.Subscription)
 				}
 
