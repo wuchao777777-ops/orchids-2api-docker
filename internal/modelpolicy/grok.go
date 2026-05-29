@@ -7,6 +7,7 @@ import (
 
 const (
 	grokTierBasic = iota
+	grokTierLite
 	grokTierSuper
 	grokTierHeavy
 )
@@ -101,6 +102,9 @@ func IsPublicGrokModelID(modelID string) bool {
 	if id == "" {
 		return false
 	}
+	if id == "grok-4.3" {
+		id = "grok-4.3-beta"
+	}
 	_, ok := publicGrokModelAllowlist[id]
 	return ok
 }
@@ -109,6 +113,9 @@ func IsStableGrokTextModelID(modelID string) bool {
 	id := strings.ToLower(strings.TrimSpace(modelID))
 	if id == "" {
 		return false
+	}
+	if id == "grok-4.3" {
+		id = "grok-4.3-beta"
 	}
 	_, ok := stableGrokTextModelAllowlist[id]
 	return ok
@@ -123,7 +130,11 @@ func PublicGrokModelIDs() []string {
 }
 
 func GrokModelPoolCandidates(modelID string) []string {
-	routing, ok := grokModelRoutingByID[strings.ToLower(strings.TrimSpace(modelID))]
+	id := strings.ToLower(strings.TrimSpace(modelID))
+	if id == "grok-4.3" {
+		id = "grok-4.3-beta"
+	}
+	routing, ok := grokModelRoutingByID[id]
 	if !ok {
 		return nil
 	}
@@ -131,15 +142,19 @@ func GrokModelPoolCandidates(modelID string) []string {
 	case routing.preferBest && routing.tier == grokTierHeavy:
 		return []string{"heavy"}
 	case routing.preferBest && routing.tier == grokTierSuper:
-		return []string{"heavy", "super"}
+		return []string{"heavy", "super", "lite"}
+	case routing.preferBest && routing.tier == grokTierLite:
+		return []string{"heavy", "super", "lite"}
 	case routing.preferBest:
-		return []string{"heavy", "super", "basic"}
+		return []string{"heavy", "super", "lite", "basic"}
 	case routing.tier == grokTierHeavy:
 		return []string{"heavy"}
 	case routing.tier == grokTierSuper:
-		return []string{"super", "heavy"}
+		return []string{"super", "lite", "heavy"}
+	case routing.tier == grokTierLite:
+		return []string{"lite", "super", "heavy"}
 	default:
-		return []string{"basic", "super", "heavy"}
+		return []string{"basic", "lite", "super", "heavy"}
 	}
 }
 

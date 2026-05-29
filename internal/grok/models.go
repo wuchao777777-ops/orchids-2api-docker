@@ -19,6 +19,7 @@ type ModelSpec struct {
 
 const (
 	grokTierBasic = iota
+	grokTierLite
 	grokTierSuper
 	grokTierHeavy
 )
@@ -40,9 +41,9 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.20-expert", Name: "Grok 4.20 Expert", UpstreamModel: "grok-4.20-expert", ModelMode: "MODEL_MODE_EXPERT", Tier: grokTierSuper, PreferBest: true},
 	{ID: "grok-4.20-heavy", Name: "Grok 4.20 Heavy", UpstreamModel: "grok-4.20-heavy", ModelMode: "MODEL_MODE_HEAVY", Tier: grokTierHeavy, PreferBest: true},
 	{ID: "grok-4.3-beta", Name: "Grok 4.3 Beta", UpstreamModel: "grok-4.3-beta", ModelMode: "grok-420-computer-use-sa", ConsoleModel: "grok-4.3", Tier: grokTierSuper},
-	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", Tier: grokTierBasic, IsImage: true},
-	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
-	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
+	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-imagine-image-lite", ModelMode: "MODEL_MODE_FAST", Tier: grokTierBasic, IsImage: true},
+	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-imagine-image", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
+	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-imagine-image-pro", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-video", Name: "Grok Imagine Video", UpstreamModel: "imagine-video-gen", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsVideo: true},
 }
@@ -77,6 +78,8 @@ func normalizeModelID(modelID string) string {
 		m = "grok-" + strings.TrimPrefix(m, "gork-")
 	}
 	switch m {
+	case "grok-4.3":
+		return "grok-4.3-beta"
 	case "grok-imagine-1.0":
 		return "grok-imagine-image"
 	case "grok-imagine-1.0-fast":
@@ -154,15 +157,19 @@ func (m ModelSpec) PoolCandidates() []string {
 	case m.PreferBest && m.Tier == grokTierHeavy:
 		return []string{"heavy"}
 	case m.PreferBest && m.Tier == grokTierSuper:
-		return []string{"heavy", "super"}
+		return []string{"heavy", "super", "lite"}
+	case m.PreferBest && m.Tier == grokTierLite:
+		return []string{"heavy", "super", "lite"}
 	case m.PreferBest:
-		return []string{"heavy", "super", "basic"}
+		return []string{"heavy", "super", "lite", "basic"}
 	case m.Tier == grokTierHeavy:
 		return []string{"heavy"}
 	case m.Tier == grokTierSuper:
-		return []string{"super", "heavy"}
+		return []string{"super", "lite", "heavy"}
+	case m.Tier == grokTierLite:
+		return []string{"lite", "super", "heavy"}
 	default:
-		return []string{"basic", "super", "heavy"}
+		return []string{"basic", "lite", "super", "heavy"}
 	}
 }
 

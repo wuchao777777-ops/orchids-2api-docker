@@ -2,6 +2,7 @@ package grok
 
 import (
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -72,5 +73,88 @@ func TestStreamImageGeneration_AcceptsAlternateProgressShape(t *testing.T) {
 	}
 	if !strings.Contains(raw, `"prompt_tokens":`) {
 		t.Fatalf("expected estimated usage to be included, raw=%q", raw)
+	}
+}
+
+func TestAppendImageResultURLs_AcceptsCardAttachmentImageChunk(t *testing.T) {
+	resp := map[string]interface{}{
+		"modelResponse": map[string]interface{}{
+			"cardAttachment": map[string]interface{}{
+				"jsonData": `{"image_chunk":{"imageUrl":"/users/u-1/generated/a1/image.jpg","progress":100}}`,
+			},
+		},
+	}
+
+	urls := appendImageResultURLs(nil, resp)
+	if len(urls) != 1 {
+		t.Fatalf("urls len=%d want 1: %#v", len(urls), urls)
+	}
+	if want := "https://assets.grok.com/users/u-1/generated/a1/image.jpg"; urls[0] != want {
+		t.Fatalf("url=%q want %q", urls[0], want)
+	}
+}
+
+func TestAppendImageResultURLs_AcceptsUserResponseCardAttachmentsJSON(t *testing.T) {
+	resp := map[string]interface{}{
+		"userResponse": map[string]interface{}{
+			"cardAttachmentsJson": `["{\"jsonData\":\"{\\\"image_chunk\\\":{\\\"imageUrl\\\":\\\"users/u-1/generated/a2/image.png\\\",\\\"progress\\\":100}}\"}"]`,
+		},
+	}
+
+	urls := appendImageResultURLs(nil, resp)
+	if len(urls) != 1 {
+		t.Fatalf("urls len=%d want 1: %#v", len(urls), urls)
+	}
+	if want := "https://assets.grok.com/users/u-1/generated/a2/image.png"; urls[0] != want {
+		t.Fatalf("url=%q want %q", urls[0], want)
+	}
+}
+
+func TestPrepareAppChatImageGenerationPayload_MatchesLiteImageShape(t *testing.T) {
+	payload := map[string]interface{}{
+		"responseMetadata": map[string]interface{}{
+			"requestModelDetails": map[string]interface{}{"modelId": "grok-imagine-image-lite"},
+		},
+		"toolOverrides": map[string]interface{}{"webSearch": true},
+	}
+
+	prepareAppChatImageGenerationPayload(payload, 1)
+
+	if !reflect.DeepEqual(payload["responseMetadata"], map[string]interface{}{}) {
+		t.Fatalf("responseMetadata=%#v want empty object", payload["responseMetadata"])
+	}
+	if got, _ := payload["imageGenerationCount"].(int); got != 1 {
+		t.Fatalf("imageGenerationCount=%d want 1", got)
+	}
+	for _, key := range []string{"modelName", "modelMode", "isReasoning"} {
+		if _, ok := payload[key]; ok {
+			t.Fatalf("%s should be removed for app-chat image payload", key)
+		}
+	}
+	toolOverrides := payload["toolOverrides"].(map[string]interface{})
+	if got, _ := toolOverrides["webSearch"].(bool); got {
+		t.Fatalf("webSearch=%v want false", got)
+	}
+}
+
+func TestGrokAppChatImagePrompt_PrefersDrawTrigger(t *testing.T) {
+	if got := grokAppChatImagePrompt("a red apple"); got != "Draw a red apple" {
+		t.Fatalf("prompt=%q", got)
+	}
+	if got := grokAppChatImagePrompt("Draw a red apple"); got != "Draw a red apple" {
+		t.Fatalf("prompt=%q", got)
+	}
+}
+
+func TestGrokAppChatImagePrompts_AddsSafePortraitFallbackForShortChinesePrompt(t *testing.T) {
+	got := grokAppChatImagePrompts("美女图片")
+	if len(got) != 2 {
+		t.Fatalf("len=%d want 2: %#v", len(got), got)
+	}
+	if got[0] != "Draw 美女图片" {
+		t.Fatalf("first=%q", got[0])
+	}
+	if !strings.Contains(got[1], "safe-for-work portrait photo of an adult woman") {
+		t.Fatalf("fallback=%q", got[1])
 	}
 }

@@ -134,6 +134,15 @@ func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error 
 
 	m, err := h.lb.Store.GetModelByModelID(ctx, id)
 	if err != nil || m == nil {
+		rawID := strings.ToLower(strings.TrimSpace(modelID))
+		if rawID != "" && rawID != id {
+			m, err = h.lb.Store.GetModelByModelID(ctx, rawID)
+		}
+	}
+	if (err != nil || m == nil || !m.Status.Enabled()) && id == "grok-4.3-beta" {
+		m, err = h.lb.Store.GetModelByModelID(ctx, "grok-4.3")
+	}
+	if err != nil || m == nil {
 		return fmt.Errorf("model not found")
 	}
 	if !modelpolicy.IsVisibleGrokModel(id, m.Verified) {
@@ -317,10 +326,16 @@ func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, 
 			}
 		}
 		if acc == nil {
-			if lastErr != nil {
+			fallbackAcc, fallbackErr := h.lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, "grok", h.connTracker)
+			if fallbackErr == nil && fallbackAcc != nil {
+				acc = fallbackAcc
+			} else if lastErr != nil {
 				return nil, lastErr
+			} else if fallbackErr != nil {
+				return nil, fallbackErr
+			} else {
+				return nil, fmt.Errorf("no enabled accounts available for channel: grok")
 			}
-			return nil, fmt.Errorf("no enabled accounts available for channel: grok")
 		}
 	}
 	raw := strings.TrimSpace(acc.ClientCookie)
@@ -389,6 +404,22 @@ func (h *Handler) doChatWithAutoSwitch(ctx context.Context, sess *chatAccountSes
 		sess.release = next.release
 	}
 	return nil, lastErr
+}
+
+func (h *Handler) doChatSingleAccount(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}) (*http.Response, error) {
+	if sess == nil || strings.TrimSpace(sess.token) == "" {
+		return nil, fmt.Errorf("empty chat session")
+	}
+	client := h.currentClient()
+	if client == nil {
+		return nil, fmt.Errorf("grok client not configured")
+	}
+	resp, err := client.doChat(ctx, sess.token, payload)
+	if err != nil {
+		h.markAccountStatus(ctx, sess.acc, err)
+		return nil, err
+	}
+	return resp, nil
 }
 
 // doChatWithAutoSwitchRebuild retries once with a switched account and rebuilds payload for the new token.

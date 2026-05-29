@@ -3,6 +3,7 @@ package grok
 import (
 	"github.com/goccy/go-json"
 	"net/url"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -206,7 +207,7 @@ func appendImageCandidates(urls []string, debugHTTP []string, debugAsset []strin
 		if p == "" || strings.Contains(p, "grok-3") || strings.Contains(p, "grok-4") {
 			continue
 		}
-		if strings.HasPrefix(p, "{") {
+		if strings.HasPrefix(p, "{") || strings.HasPrefix(p, "[") {
 			preferred := extractPreferredImageURLsFromJSONText(p)
 			if len(preferred) == 0 {
 				preferred = extractImageURLsFromText(p)
@@ -217,6 +218,17 @@ func appendImageCandidates(urls []string, debugHTTP []string, debugAsset []strin
 				}
 			}
 			continue
+		}
+
+		for _, u := range extractImageURLsFromText(p) {
+			if isLikelyImageURL(u) {
+				candidates = append(candidates, u)
+			}
+		}
+		for _, assetPath := range extractGrokAssetPathsFromText(p) {
+			if isLikelyImageAssetPath(assetPath) {
+				candidates = append(candidates, "https://assets.grok.com/"+strings.TrimPrefix(assetPath, "/"))
+			}
 		}
 
 		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
@@ -232,7 +244,7 @@ func appendImageCandidates(urls []string, debugHTTP []string, debugAsset []strin
 
 func extractPreferredImageURLsFromJSONText(s string) []string {
 	s = strings.TrimSpace(s)
-	if s == "" || !strings.HasPrefix(s, "{") {
+	if s == "" || (!strings.HasPrefix(s, "{") && !strings.HasPrefix(s, "[")) {
 		return nil
 	}
 	var v interface{}
@@ -254,6 +266,9 @@ func extractPreferredImageURLsFromJSONText(s string) []string {
 		case string:
 			u := strings.TrimSpace(t)
 			if !isLikelyImageURL(u) {
+				for _, assetPath := range extractGrokAssetPathsFromText(u) {
+					out = append(out, scoredURL{u: "https://assets.grok.com/" + strings.TrimPrefix(assetPath, "/"), score: 90})
+				}
 				return
 			}
 			lk := strings.ToLower(strings.TrimSpace(keyHint))
@@ -306,6 +321,13 @@ func isLikelyImageURL(u string) bool {
 	}
 	lu := strings.ToLower(u)
 	if strings.HasPrefix(lu, "http://") || strings.HasPrefix(lu, "https://") {
+		parsed, err := url.Parse(u)
+		if err == nil {
+			base := strings.TrimSpace(path.Base(parsed.EscapedPath()))
+			if strings.HasPrefix(base, ".") {
+				return false
+			}
+		}
 		// Quick allow if it clearly ends with an image extension (ignore query).
 		cut := lu
 		if q := strings.IndexByte(cut, '?'); q >= 0 {
@@ -326,6 +348,9 @@ func isLikelyImageURL(u string) bool {
 func isLikelyImageAssetPath(p string) bool {
 	p = strings.TrimSpace(p)
 	if p == "" {
+		return false
+	}
+	if strings.HasPrefix(path.Base(p), ".") {
 		return false
 	}
 	// Reject JSON blobs or echoed prompts.

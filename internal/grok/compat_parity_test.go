@@ -98,9 +98,9 @@ func TestResolveModel_ImagineMappingsMatchGrok2API(t *testing.T) {
 		wantUpstream  string
 		wantModelMode string
 	}{
-		{modelID: "grok-imagine-image-lite", wantUpstream: "grok-3", wantModelMode: "MODEL_MODE_FAST"},
-		{modelID: "grok-imagine-image", wantUpstream: "grok-3", wantModelMode: "MODEL_MODE_AUTO"},
-		{modelID: "grok-imagine-image-pro", wantUpstream: "grok-3", wantModelMode: "MODEL_MODE_AUTO"},
+		{modelID: "grok-imagine-image-lite", wantUpstream: "grok-imagine-image-lite", wantModelMode: "MODEL_MODE_FAST"},
+		{modelID: "grok-imagine-image", wantUpstream: "grok-imagine-image", wantModelMode: "MODEL_MODE_AUTO"},
+		{modelID: "grok-imagine-image-pro", wantUpstream: "grok-imagine-image-pro", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-image-edit", wantUpstream: "imagine-image-edit", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-video", wantUpstream: "imagine-video-gen", wantModelMode: "MODEL_MODE_AUTO"},
 	}

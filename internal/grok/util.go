@@ -206,30 +206,37 @@ func parseUpstreamLines(body io.Reader, onLine func(map[string]interface{}) erro
 func extractImageURLs(value interface{}) []string {
 	seen := map[string]struct{}{}
 	var out []string
+	add := func(raw string) {
+		s := normalizeGrokAssetURL(raw)
+		if s == "" {
+			return
+		}
+		if _, exists := seen[s]; exists {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
 	var walk func(interface{})
 	walk = func(v interface{}) {
 		switch x := v.(type) {
 		case map[string]interface{}:
 			for k, item := range x {
 				lk := strings.ToLower(k)
-				if lk == "generatedimageurls" || lk == "imageurls" || lk == "image_urls" || lk == "imageurl" {
+				if lk == "jsondata" || lk == "cardattachmentsjson" {
+					walk(parseGrokJSONData(item))
+					continue
+				}
+				if lk == "generatedimageurls" || lk == "imageurls" || lk == "image_urls" || lk == "imageurl" || lk == "image_url" {
 					switch vv := item.(type) {
 					case []interface{}:
 						for _, one := range vv {
 							if s, ok := one.(string); ok && s != "" {
-								if _, exists := seen[s]; !exists {
-									seen[s] = struct{}{}
-									out = append(out, s)
-								}
+								add(s)
 							}
 						}
 					case string:
-						if vv != "" {
-							if _, exists := seen[vv]; !exists {
-								seen[vv] = struct{}{}
-								out = append(out, vv)
-							}
-						}
+						add(vv)
 					}
 					continue
 				}
@@ -239,10 +246,66 @@ func extractImageURLs(value interface{}) []string {
 			for _, item := range x {
 				walk(item)
 			}
+		case string:
+			if parsed := parseGrokJSONText(x); parsed != nil {
+				walk(parsed)
+			}
 		}
 	}
 	walk(value)
 	return out
+}
+
+func parseGrokJSONData(v interface{}) interface{} {
+	switch x := v.(type) {
+	case map[string]interface{}, []interface{}:
+		return x
+	case string:
+		raw := strings.TrimSpace(x)
+		if raw == "" {
+			return nil
+		}
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			return parsed
+		}
+		return x
+	default:
+		return x
+	}
+}
+
+func parseGrokJSONText(raw string) interface{} {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	if !strings.HasPrefix(s, "{") && !strings.HasPrefix(s, "[") {
+		return nil
+	}
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(s), &parsed); err != nil {
+		return nil
+	}
+	return parsed
+}
+
+func normalizeGrokAssetURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" || s == "<nil>" {
+		return ""
+	}
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return s
+	}
+	if strings.HasPrefix(s, "/") {
+		return defaultAssetsBaseURL + s
+	}
+	if strings.HasPrefix(lower, "users/") || strings.HasPrefix(lower, "generated/") || strings.Contains(lower, "/generated/") || strings.Contains(lower, "/image/") {
+		return defaultAssetsBaseURL + "/" + strings.TrimLeft(s, "/")
+	}
+	return s
 }
 
 // extractRenderableImageLinks is a broad fallback for Grok tool/card payloads.
@@ -1927,21 +1990,99 @@ func extractImageAssetIDs(resp map[string]interface{}) []string {
 }
 
 func appendImageResultURLs(urls []string, resp map[string]interface{}) []string {
+	added := make(map[string]struct{}, len(urls)+8)
+	for _, u := range urls {
+		added[u] = struct{}{}
+	}
+	addURL := func(u string) {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			return
+		}
+		if _, exists := added[u]; exists {
+			return
+		}
+		added[u] = struct{}{}
+		urls = append(urls, u)
+	}
+	addURLs := func(items []string) {
+		for _, u := range items {
+			addURL(u)
+		}
+	}
 	if mr := extractUpstreamModelResponse(resp); mr != nil {
-		urls = append(urls, extractImageURLs(mr)...)
+		addURLs(extractImageURLs(mr))
 		for _, assetID := range extractImageAssetIDs(mr) {
 			if u := imageURLFromAssetID(assetID); u != "" {
-				urls = append(urls, u)
+				addURL(u)
 			}
 		}
 	}
-	urls = append(urls, extractImageURLs(resp)...)
+	addURLs(extractImageURLs(resp))
 	for _, assetID := range extractImageAssetIDs(resp) {
 		if u := imageURLFromAssetID(assetID); u != "" {
-			urls = append(urls, u)
+			addURL(u)
 		}
 	}
 	return urls
+}
+
+func imageDebugShape(resp map[string]interface{}) string {
+	if resp == nil {
+		return "nil"
+	}
+	var parts []string
+	var walk func(interface{}, string, int)
+	walk = func(v interface{}, prefix string, depth int) {
+		if depth > 4 || len(parts) >= 40 {
+			return
+		}
+		switch x := v.(type) {
+		case map[string]interface{}:
+			keys := make([]string, 0, len(x))
+			for k := range x {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			if prefix != "" {
+				parts = append(parts, prefix+"{"+strings.Join(keys, ",")+"}")
+			} else {
+				parts = append(parts, "{"+strings.Join(keys, ",")+"}")
+			}
+			for _, k := range keys {
+				lk := strings.ToLower(k)
+				if strings.Contains(lk, "image") ||
+					strings.Contains(lk, "card") ||
+					strings.Contains(lk, "error") ||
+					strings.Contains(lk, "message") ||
+					strings.Contains(lk, "moderation") ||
+					strings.Contains(lk, "progress") ||
+					strings.Contains(lk, "response") ||
+					strings.Contains(lk, "result") {
+					next := k
+					if prefix != "" {
+						next = prefix + "." + k
+					}
+					walk(x[k], next, depth+1)
+				}
+			}
+		case []interface{}:
+			parts = append(parts, prefix+"[]")
+			if len(x) > 0 {
+				walk(x[0], prefix+"[]", depth+1)
+			}
+		case string:
+			if prefix != "" {
+				parts = append(parts, prefix+"=string")
+			}
+		case float64, bool, nil:
+			if prefix != "" {
+				parts = append(parts, prefix+"="+fmt.Sprintf("%T", x))
+			}
+		}
+	}
+	walk(resp, "", 0)
+	return strings.Join(parts, " ")
 }
 
 func interfaceToInt(v interface{}) int {
@@ -2020,6 +2161,8 @@ func extractUpstreamModelResponse(resp map[string]interface{}) map[string]interf
 	return mapAtAnyPath(resp,
 		[]string{"modelResponse"},
 		[]string{"model_response"},
+		[]string{"userResponse"},
+		[]string{"user_response"},
 		[]string{"messageResponse"},
 		[]string{"message_response"},
 		[]string{"output"},

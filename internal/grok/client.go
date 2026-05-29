@@ -230,6 +230,8 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 		noMemory = c.cfg.GrokChatDisableMemory(noMemory)
 	}
 	payload := map[string]interface{}{
+		"collectionIds":               []string{},
+		"connectors":                  []string{},
 		"temporary":                   temporary,
 		"modelName":                   spec.UpstreamModel,
 		"message":                     text,
@@ -247,9 +249,17 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 		"disableSelfHarmShortCircuit": false,
 		"disableTextFollowUps":        false,
 		"returnRawGrokInXaiRequest":   false,
-		"toolOverrides":               map[string]interface{}{},
-		"enableSideBySide":            true,
-		"sendFinalMetadata":           true,
+		"searchAllConnectors":         false,
+		"toolOverrides": map[string]interface{}{
+			"imageGen":     false,
+			"webSearch":    imageCount <= 0,
+			"xSearch":      false,
+			"xMediaSearch": false,
+			"trendsSearch": false,
+			"xPostAnalyze": false,
+		},
+		"enableSideBySide":  true,
+		"sendFinalMetadata": true,
 		"responseMetadata": map[string]interface{}{
 			"modelConfigOverride": map[string]interface{}{
 				"modelMap": map[string]interface{}{},
@@ -271,12 +281,57 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 	if strings.TrimSpace(spec.ModelMode) != "" {
 		payload["modelMode"] = spec.ModelMode
 	}
+	if modeID := appChatModeID(spec); modeID != "" {
+		payload["modeId"] = modeID
+	}
+	if tier := appChatModelTier(spec); tier != "" {
+		payload["modelTier"] = tier
+	}
+	if spec.PreferBest {
+		payload["preferBest"] = true
+	}
 	if c != nil && c.cfg != nil {
 		if customPersonality := c.cfg.GrokChatCustomInstruction(); customPersonality != "" {
 			payload["customPersonality"] = customPersonality
 		}
 	}
 	return payload
+}
+
+func appChatModeID(spec ModelSpec) string {
+	mode := strings.TrimSpace(spec.ModelMode)
+	switch mode {
+	case "MODEL_MODE_FAST":
+		return "fast"
+	case "MODEL_MODE_AUTO":
+		return "auto"
+	case "MODEL_MODE_EXPERT":
+		return "expert"
+	case "MODEL_MODE_HEAVY":
+		return "heavy"
+	}
+	if mode != "" {
+		return mode
+	}
+	if upstream := strings.TrimSpace(spec.UpstreamModel); upstream != "" {
+		return upstream
+	}
+	return strings.TrimSpace(spec.ID)
+}
+
+func appChatModelTier(spec ModelSpec) string {
+	switch spec.Tier {
+	case grokTierBasic:
+		return "basic"
+	case grokTierLite:
+		return "lite"
+	case grokTierSuper:
+		return "super"
+	case grokTierHeavy:
+		return "heavy"
+	default:
+		return ""
+	}
 }
 
 func (c *Client) clientForAsset(asset bool) *http.Client {
@@ -449,10 +504,7 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpec) (*RateLimitInfo, error) {
 	payload := map[string]interface{}{
 		"requestKind": "DEFAULT",
-		"modelName":   strings.TrimSpace(spec.UpstreamModel),
-	}
-	if strings.TrimSpace(spec.UpstreamModel) == "" {
-		payload["modelName"] = "grok-4.20-0309"
+		"modelName":   rateLimitModelName(spec),
 	}
 
 	raw, err := json.Marshal(payload)
@@ -475,6 +527,28 @@ func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpe
 		return info, nil
 	}
 	return parseRateLimitInfo(resp.Header), nil
+}
+
+func rateLimitModelName(spec ModelSpec) string {
+	mode := strings.TrimSpace(spec.ModelMode)
+	switch mode {
+	case "MODEL_MODE_FAST":
+		return "fast"
+	case "MODEL_MODE_AUTO":
+		return "auto"
+	case "MODEL_MODE_EXPERT":
+		return "expert"
+	case "MODEL_MODE_HEAVY":
+		return "heavy"
+	}
+	if mode != "" {
+		return mode
+	}
+	upstream := strings.TrimSpace(spec.UpstreamModel)
+	if upstream != "" {
+		return upstream
+	}
+	return "fast"
 }
 
 func isGrokModelNotFoundError(err error) bool {

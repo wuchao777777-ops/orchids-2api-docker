@@ -266,7 +266,9 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	defer sess.Close()
+	defer func() {
+		sess.Close()
+	}()
 
 	nsfw := req.NSFW
 	if nsfw == nil {
@@ -283,10 +285,13 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	}
 
 	onePayload := h.client.chatPayload(spec, req.Prompt, true, req.N)
-	ensureImageAspectRatio(onePayload, resolveAspectRatio(req.Size))
-	ensureImageNSFW(onePayload, nsfw)
+	prepareAppChatImageGenerationPayload(onePayload, req.N)
+	if !imageModelUsesAppChatOnly(req.Model) {
+		ensureImageAspectRatio(onePayload, resolveAspectRatio(req.Size))
+		ensureImageNSFW(onePayload, nsfw)
+	}
 	if req.Stream {
-		resp, err := h.doChatWithAutoSwitch(ctx, sess, onePayload)
+		resp, err := h.doChatSingleAccount(ctx, sess, onePayload)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -300,11 +305,19 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	var urls []string
 	var debugHTTP []string
 	var debugAsset []string
+	var debugShapes []string
+	var retriedWithoutBasic bool
 
 	// Grok upstream may return only 2 images per call and may repeat.
 	// To reach N, request 1 image per call without rewriting the user's prompt.
 	maxAttempts := req.N * 4
-	if maxAttempts < 4 {
+	promptVariants := grokAppChatImagePrompts(req.Prompt)
+	if imageModelUsesAppChatOnly(req.Model) {
+		maxAttempts = len(promptVariants)
+		if maxAttempts < 1 {
+			maxAttempts = 1
+		}
+	} else if maxAttempts < 4 {
 		maxAttempts = 4
 	}
 	deadline := time.Now().Add(60 * time.Second)
@@ -317,16 +330,30 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		if time.Now().After(deadline) {
 			break
 		}
-		payload := h.client.chatPayload(spec, strings.TrimSpace(req.Prompt), true, 1)
-		ensureImageAspectRatio(payload, resolveAspectRatio(req.Size))
-		ensureImageNSFW(payload, nsfw)
-		resp, err := h.doChatWithAutoSwitch(ctx, sess, payload)
+		count := 1
+		if imageModelUsesAppChatOnly(req.Model) {
+			count = req.N
+		}
+		prompt := strings.TrimSpace(req.Prompt)
+		if imageModelUsesAppChatOnly(req.Model) {
+			prompt = promptVariants[promptVariantIndex(i, promptVariants)]
+		}
+		payload := h.client.chatPayload(spec, prompt, true, count)
+		prepareAppChatImageGenerationPayload(payload, count)
+		if !imageModelUsesAppChatOnly(req.Model) {
+			ensureImageAspectRatio(payload, resolveAspectRatio(req.Size))
+			ensureImageNSFW(payload, nsfw)
+		}
+		resp, err := h.doChatSingleAccount(ctx, sess, payload)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)
 		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
+			if len(debugShapes) < 20 {
+				debugShapes = append(debugShapes, imageDebugShape(line))
+			}
 			if mr := extractUpstreamModelResponse(line); mr != nil {
 				debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 50)...)
 				debugAsset = append(debugAsset, collectAssetLikeStrings(mr, 100)...)
@@ -347,7 +374,76 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	if len(urls) == 0 {
 		urls = appendImageCandidates(urls, uniqueStrings(debugHTTP), uniqueStrings(debugAsset), req.N)
 	}
+	if len(urls) == 0 && imageModelUsesAppChatOnly(req.Model) && !retriedWithoutBasic && strings.EqualFold(grokAccountPool(sess.acc), "basic") {
+		retriedWithoutBasic = true
+		excludeBasic := h.grokAccountIDsForPool(ctx, "basic")
+		if len(excludeBasic) > 0 {
+			fromAccountID := int64(0)
+			if sess.acc != nil {
+				fromAccountID = sess.acc.ID
+			}
+			sess.Close()
+			nextSess, switchErr := h.openChatAccountSessionForModelExcluding(ctx, excludeBasic, spec)
+			if switchErr == nil && nextSess != nil {
+				slog.Info("retrying grok image generation without basic pool",
+					"model", req.Model,
+					"from_account_id", fromAccountID,
+					"to_account_id", nextSess.acc.ID,
+					"to_pool", grokAccountPool(nextSess.acc),
+				)
+				sess = nextSess
+				urls = nil
+				debugHTTP = nil
+				debugAsset = nil
+				debugShapes = nil
+				for i := 0; i < maxAttempts; i++ {
+					count := req.N
+					prompt := promptVariants[promptVariantIndex(i, promptVariants)]
+					payload := h.client.chatPayload(spec, prompt, true, count)
+					prepareAppChatImageGenerationPayload(payload, count)
+					resp, err := h.doChatSingleAccount(ctx, sess, payload)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusBadGateway)
+						return
+					}
+					h.syncGrokQuota(sess.acc, resp.Header)
+					err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
+						if len(debugShapes) < 20 {
+							debugShapes = append(debugShapes, imageDebugShape(line))
+						}
+						if mr := extractUpstreamModelResponse(line); mr != nil {
+							debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 50)...)
+							debugAsset = append(debugAsset, collectAssetLikeStrings(mr, 100)...)
+						}
+						urls = appendImageResultURLs(urls, line)
+						debugHTTP = append(debugHTTP, collectHTTPStrings(line, 50)...)
+						debugAsset = append(debugAsset, collectAssetLikeStrings(line, 100)...)
+						return nil
+					})
+					resp.Body.Close()
+					if err != nil {
+						http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
+						return
+					}
+					urls = normalizeGeneratedImageURLs(urls, req.N)
+					if len(urls) > 0 {
+						break
+					}
+				}
+				if len(urls) == 0 {
+					urls = appendImageCandidates(urls, uniqueStrings(debugHTTP), uniqueStrings(debugAsset), req.N)
+				}
+			}
+		}
+	}
 	if len(urls) == 0 {
+		slog.Warn("grok image generation returned no images",
+			"model", req.Model,
+			"attempts", maxAttempts,
+			"event_shapes", uniqueStrings(debugShapes),
+			"http_candidates", len(uniqueStrings(debugHTTP)),
+			"asset_candidates", len(uniqueStrings(debugAsset)),
+		)
 		http.Error(w, "no image generated", http.StatusBadGateway)
 		return
 	}
@@ -380,4 +476,124 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (h *Handler) grokAccountIDsForPool(ctx context.Context, pool string) []int64 {
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		return nil
+	}
+	pool = normalizeGrokPoolName(pool)
+	if pool == "" {
+		return nil
+	}
+	accounts, err := h.lb.Store.GetEnabledAccounts(ctx)
+	if err != nil {
+		return nil
+	}
+	ids := make([]int64, 0)
+	for _, acc := range accounts {
+		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") {
+			continue
+		}
+		if normalizeGrokPoolName(grokAccountPool(acc)) == pool && acc.ID != 0 {
+			ids = append(ids, acc.ID)
+		}
+	}
+	return ids
+}
+
+func prepareAppChatImageGenerationPayload(payload map[string]interface{}, count int) {
+	if payload == nil {
+		return
+	}
+	if count < 1 {
+		count = 1
+	}
+	payload["enableImageGeneration"] = true
+	payload["enableImageStreaming"] = true
+	payload["imageGenerationCount"] = count
+	payload["responseMetadata"] = map[string]interface{}{}
+	delete(payload, "modelName")
+	delete(payload, "modelMode")
+	delete(payload, "isReasoning")
+	toolOverrides, _ := payload["toolOverrides"].(map[string]interface{})
+	if toolOverrides == nil {
+		toolOverrides = map[string]interface{}{}
+		payload["toolOverrides"] = toolOverrides
+	}
+	toolOverrides["imageGen"] = false
+	toolOverrides["webSearch"] = false
+	toolOverrides["xSearch"] = false
+	toolOverrides["xMediaSearch"] = false
+	toolOverrides["trendsSearch"] = false
+	toolOverrides["xPostAnalyze"] = false
+}
+
+func imageModelUsesAppChatOnly(modelID string) bool {
+	switch normalizeModelID(modelID) {
+	case "grok-imagine-image-lite", "grok-imagine-image", "grok-imagine-image-pro":
+		return true
+	default:
+		return false
+	}
+}
+
+func promptVariantIndex(i int, variants []string) int {
+	if len(variants) <= 1 || i <= 0 {
+		return 0
+	}
+	if i >= len(variants) {
+		return len(variants) - 1
+	}
+	return i
+}
+
+func grokAppChatImagePrompts(prompt string) []string {
+	first := grokAppChatImagePrompt(prompt)
+	if first == "" {
+		return nil
+	}
+	variants := []string{first}
+	if looksLikeShortChinesePortraitPrompt(prompt) {
+		variants = append(variants, "Draw a safe-for-work portrait photo of an adult woman, fully clothed, non-sexual, tasteful fashion style, natural lighting, high quality.")
+	}
+	return uniqueStrings(variants)
+}
+
+func looksLikeShortChinesePortraitPrompt(prompt string) bool {
+	p := strings.TrimSpace(prompt)
+	if p == "" || len([]rune(p)) > 18 {
+		return false
+	}
+	hasChinese := false
+	for _, r := range p {
+		if r >= '\u4e00' && r <= '\u9fff' {
+			hasChinese = true
+			break
+		}
+	}
+	if !hasChinese {
+		return false
+	}
+	lower := strings.ToLower(p)
+	return strings.Contains(lower, "美女") ||
+		strings.Contains(lower, "女生") ||
+		strings.Contains(lower, "女孩") ||
+		strings.Contains(lower, "女人") ||
+		strings.Contains(lower, "人像") ||
+		strings.Contains(lower, "照片")
+}
+
+func grokAppChatImagePrompt(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return prompt
+	}
+	lower := strings.ToLower(prompt)
+	for _, prefix := range []string{"draw ", "draw:", "paint ", "paint:", "sketch ", "sketch:"} {
+		if strings.HasPrefix(lower, prefix) {
+			return prompt
+		}
+	}
+	return "Draw " + prompt
 }

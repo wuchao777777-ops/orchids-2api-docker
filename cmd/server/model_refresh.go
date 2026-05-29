@@ -431,7 +431,7 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		return nil, "", fmt.Errorf("no enabled grok account token")
 	}
 
-	candidates := grokProbeCandidateModels(ctx, s)
+	candidates := canonicalizeDiscoveredModels(grokProbeCandidateModels(ctx, s), canonicalGrokRefreshModelID)
 	client := grok.New(refreshModelRequestConfig(cfg, "grok"))
 	accepted := make([]bool, len(candidates))
 	workerCount := boundedModelRefreshWorkers(len(candidates), concurrency)
@@ -439,6 +439,10 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		token := tokens[0]
 		for i, candidate := range candidates {
 			if spec, ok := grok.ResolveModel(candidate.ID); ok && (spec.IsImage || spec.IsVideo) {
+				accepted[i] = true
+				continue
+			}
+			if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
 				accepted[i] = true
 				continue
 			}
@@ -461,6 +465,10 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 						accepted[idx] = true
 						continue
 					}
+					if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
+						accepted[idx] = true
+						continue
+					}
 					if err := ctx.Err(); err != nil {
 						continue
 					}
@@ -475,6 +483,15 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		}
 		close(jobs)
 		wg.Wait()
+	}
+
+	for idx, candidate := range candidates {
+		if accepted[idx] {
+			continue
+		}
+		if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
+			accepted[idx] = true
+		}
 	}
 
 	out := make([]discoveredModel, 0, len(candidates))
@@ -492,6 +509,44 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		return nil, "", fmt.Errorf("no grok models verified by console.x.ai")
 	}
 	return out, "grok_console_probe", nil
+}
+
+func canonicalGrokRefreshModelID(modelID string) string {
+	id := strings.TrimSpace(modelID)
+	if id == "" {
+		return ""
+	}
+	if spec, ok := grok.ResolveModel(id); ok {
+		return spec.ID
+	}
+	return id
+}
+
+func canonicalizeDiscoveredModels(items []discoveredModel, normalize func(string) string) []discoveredModel {
+	seen := map[string]struct{}{}
+	out := make([]discoveredModel, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if normalize != nil {
+			id = strings.TrimSpace(normalize(id))
+		}
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		name := strings.TrimSpace(item.Name)
+		if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
+			name = strings.TrimSpace(spec.Name)
+		}
+		if name == "" {
+			name = id
+		}
+		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
+	}
+	return out
 }
 
 func grokAccountTokens(accounts []*store.Account) []string {

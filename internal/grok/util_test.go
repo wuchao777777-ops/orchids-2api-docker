@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"orchids-api/internal/store"
 )
 
 func TestNormalizeSSOToken(t *testing.T) {
@@ -184,6 +186,46 @@ func TestParseRateLimitPayload_AcceptsQueriesFields(t *testing.T) {
 	}
 	if info.Unit != "requests" {
 		t.Fatalf("unit=%q want=requests", info.Unit)
+	}
+}
+
+func TestApplyQuotaInfo_InfersLiteSubscription(t *testing.T) {
+	acc := &store.Account{Subscription: "basic"}
+	changed := ApplyQuotaInfo(acc, &RateLimitInfo{
+		Limit:        70,
+		HasLimit:     true,
+		Remaining:    63,
+		HasRemaining: true,
+		Unit:         "requests",
+	})
+	if !changed {
+		t.Fatal("ApplyQuotaInfo changed=false, want true")
+	}
+	if acc.Subscription != "lite" {
+		t.Fatalf("subscription=%q want lite", acc.Subscription)
+	}
+	if acc.UsageLimit != 70 || acc.UsageCurrent != 63 {
+		t.Fatalf("unexpected quota: limit=%v current=%v", acc.UsageLimit, acc.UsageCurrent)
+	}
+}
+
+func TestApplyQuotaInfo_InfersBasicFromFreeAutoWindow(t *testing.T) {
+	acc := &store.Account{}
+	changed := ApplyQuotaInfo(acc, &RateLimitInfo{
+		Limit:        7,
+		HasLimit:     true,
+		Remaining:    7,
+		HasRemaining: true,
+		Unit:         "requests",
+	})
+	if !changed {
+		t.Fatal("ApplyQuotaInfo changed=false, want true")
+	}
+	if acc.Subscription != "basic" {
+		t.Fatalf("subscription=%q want basic", acc.Subscription)
+	}
+	if acc.UsageLimit != 7 || acc.UsageCurrent != 7 {
+		t.Fatalf("unexpected quota: limit=%v current=%v", acc.UsageLimit, acc.UsageCurrent)
 	}
 }
 
