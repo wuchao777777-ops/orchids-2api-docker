@@ -55,21 +55,44 @@ func looksLikeJWT(s string) bool {
 	return true
 }
 
+// InferSubscriptionFromRequestLimit maps Warp's official monthly credit quota
+// to the public pricing tiers. Build and Business both expose 1,500 credits,
+// so the quota alone cannot distinguish them.
+func InferSubscriptionFromRequestLimit(info *RequestLimitInfo) string {
+	if info == nil {
+		return ""
+	}
+	if strings.TrimSpace(info.PlanTier) != "" {
+		return strings.ToLower(strings.TrimSpace(info.PlanTier))
+	}
+	if strings.TrimSpace(info.PlanName) != "" {
+		return strings.ToLower(strings.TrimSpace(info.PlanName))
+	}
+	if info.IsUnlimited {
+		return "enterprise"
+	}
+
+	limit := info.RequestLimit
+	switch {
+	case limit >= 18000:
+		return "max"
+	case limit >= 1500:
+		return "build/business"
+	case limit > 0:
+		return "free"
+	default:
+		return "unknown"
+	}
+}
+
 // ApplyRequestLimitInfoToAccount copies Warp's official request limit response
 // into the account fields used by the admin UI and load balancer.
 func ApplyRequestLimitInfoToAccount(acc *store.Account, info *RequestLimitInfo, bonuses []BonusGrant) {
 	if acc == nil || info == nil {
 		return
 	}
-	switch {
-	case strings.TrimSpace(info.PlanTier) != "":
-		acc.Subscription = strings.ToLower(strings.TrimSpace(info.PlanTier))
-	case strings.TrimSpace(info.PlanName) != "":
-		acc.Subscription = strings.ToLower(strings.TrimSpace(info.PlanName))
-	case info.IsUnlimited:
-		acc.Subscription = "unlimited"
-	case strings.TrimSpace(acc.Subscription) == "":
-		acc.Subscription = "free"
+	if tier := InferSubscriptionFromRequestLimit(info); tier != "" {
+		acc.Subscription = tier
 	}
 
 	monthlyLimit := float64(info.RequestLimit)

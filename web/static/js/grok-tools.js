@@ -19,6 +19,8 @@
   let imagineStreamSequence = 0;
   const imagineSelectedImages = new Set();
   const imagineStreamImageMap = new Map();
+  const IMAGINE_BATCH_SIZE = 6;
+  const IMAGINE_BATCH_PARALLELISM = 2;
 
   const cacheOnlineState = {
     selectedTokens: new Set(),
@@ -53,6 +55,7 @@
     lastProgress: 0,
     currentPreviewItem: null,
     previewCount: 0,
+    pollTimer: null,
   };
 
   const voiceState = {
@@ -550,12 +553,27 @@
     const stopBtn = document.getElementById("imagineStopBtn");
     if (startBtn) {
       startBtn.disabled = false;
-      startBtn.classList.toggle("hidden", !!running);
+      startBtn.classList.remove("hidden");
+      startBtn.innerHTML = running
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 7v10"></path><path d="M14 7v10"></path></svg>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="m6 11 6-6 6 6"></path></svg>';
+      startBtn.setAttribute("aria-label", running ? "停止" : "生成");
+      startBtn.setAttribute("title", running ? "停止" : "生成");
     }
     if (stopBtn) {
-      stopBtn.disabled = false;
-      stopBtn.classList.toggle("hidden", !running);
+      stopBtn.disabled = !running;
+      stopBtn.classList.add("hidden");
     }
+  }
+
+  function setImagineControlsDisabled(disabled) {
+    const prompt = document.getElementById("imaginePrompt");
+    if (prompt) prompt.disabled = !!disabled;
+    const ratio = document.getElementById("imagineRatio");
+    if (ratio) ratio.disabled = !!disabled;
+    document.querySelectorAll("#imagineRunModeToggle button, #imagineQualityToggle button").forEach((btn) => {
+      btn.disabled = !!disabled;
+    });
   }
 
   function imagineOptionEnabled(id, fallback) {
@@ -627,6 +645,320 @@
 
   function getFinalMinBytes() {
     return Number.isFinite(imagineFinalMinBytes) && imagineFinalMinBytes >= 0 ? imagineFinalMinBytes : 100000;
+  }
+
+  function imagineAspectRatioCss(value) {
+    const ratio = String(value || "1:1").trim();
+    if (!ratio.includes(":")) return "1 / 1";
+    const parts = ratio.split(":");
+    const width = Math.max(1, Number(parts[0]) || 1);
+    const height = Math.max(1, Number(parts[1]) || 1);
+    return `${width} / ${height}`;
+  }
+
+  function imagineSizeForRatio(value) {
+    switch (String(value || "").trim()) {
+      case "16:9":
+      case "3:2":
+        return "1792x1024";
+      case "9:16":
+      case "2:3":
+        return "1024x1792";
+      case "1:1":
+      default:
+        return "1024x1024";
+    }
+  }
+
+  function imagineReadToggle(selector, attr, fallback) {
+    const active = document.querySelector(`${selector} .is-active`);
+    return String(active?.dataset?.[attr] || fallback || "").trim();
+  }
+
+  function imagineSetToggle(selector, attr, value) {
+    document.querySelectorAll(`${selector} [data-${attr.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)}]`).forEach((btn) => {
+      const active = String(btn.dataset[attr] || "") === String(value || "");
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
+
+  function imagineQualityModel(quality) {
+    return quality === "quality" ? "grok-imagine-image" : "grok-imagine-image-lite";
+  }
+
+  function imagineQualityModels(quality) {
+    return quality === "quality"
+      ? ["grok-imagine-image"]
+      : ["grok-imagine-image-lite", "grok-imagine-image"];
+  }
+
+  function syncImagineRatioUI() {
+    const ratio = String(document.getElementById("imagineRatio")?.value || "2:3");
+    const wrap = document.getElementById("imagineRatioWrap");
+    if (wrap) wrap.dataset.ratio = ratio;
+  }
+
+  function resizeImaginePrompt() {
+    const input = document.getElementById("imaginePrompt");
+    if (!input) return;
+    input.style.height = "52px";
+    input.style.height = `${Math.min(Math.max(input.scrollHeight, 52), 160)}px`;
+    input.style.overflowY = input.scrollHeight > 160 ? "auto" : "hidden";
+  }
+
+  function setImagineEmptyState() {
+    const grid = document.getElementById("imagineGrid");
+    const empty = document.getElementById("imagineEmpty");
+    if (!grid || !empty) return;
+    const hasBatch = grid.querySelector(".imagine-masonry-batch") !== null;
+    empty.hidden = hasBatch;
+    empty.style.display = hasBatch ? "none" : "";
+  }
+
+  function createImagineBatch(prompt, ratio, quality, round) {
+    const grid = document.getElementById("imagineGrid");
+    if (!grid) return null;
+
+    const batch = document.createElement("section");
+    batch.className = "imagine-masonry-batch";
+
+    const head = document.createElement("header");
+    head.className = "imagine-masonry-batch-head";
+
+    const promptEl = document.createElement("div");
+    promptEl.className = "imagine-masonry-batch-prompt";
+    promptEl.textContent = prompt;
+
+    const meta = document.createElement("div");
+    meta.className = "imagine-masonry-batch-meta";
+    const chips = [
+      ["is-round", `第 ${round} 轮`],
+      ["is-param", ratio],
+      ["is-param", quality === "quality" ? "Quality" : "Speed"],
+      ["is-count", `0/${IMAGINE_BATCH_SIZE}`],
+      ["is-state", "正在生成"],
+    ];
+    chips.forEach(([cls, text]) => {
+      const chip = document.createElement("span");
+      chip.className = `imagine-masonry-batch-chip ${cls}`;
+      chip.textContent = text;
+      if (cls === "is-state") chip.dataset.state = "generating";
+      meta.appendChild(chip);
+    });
+
+    head.appendChild(promptEl);
+    head.appendChild(meta);
+
+    const slotGrid = document.createElement("div");
+    slotGrid.className = "imagine-masonry-grid";
+    slotGrid.style.setProperty("--tile-aspect", imagineAspectRatioCss(ratio));
+
+    const slots = Array.from({ length: IMAGINE_BATCH_SIZE }, (_, idx) => {
+      const tile = document.createElement("article");
+      tile.className = "imagine-masonry-tile waterfall-item is-pending";
+      tile.dataset.prompt = prompt;
+
+      const checkbox = document.createElement("div");
+      checkbox.className = "image-checkbox";
+
+      const badge = document.createElement("div");
+      badge.className = "imagine-masonry-tile-badge";
+      badge.textContent = String(idx + 1);
+
+      const body = document.createElement("div");
+      body.className = "imagine-masonry-tile-body";
+
+      const progress = document.createElement("div");
+      progress.className = "imagine-masonry-tile-progress";
+      progress.innerHTML = '<div class="imagine-masonry-tile-progress-value">0%</div><div class="imagine-masonry-tile-progress-track"><div class="imagine-masonry-tile-progress-fill"></div></div>';
+      body.appendChild(progress);
+
+      tile.appendChild(checkbox);
+      tile.appendChild(badge);
+      tile.appendChild(body);
+      slotGrid.appendChild(tile);
+      return { tile, body, progress: 0, url: "", status: "pending" };
+    });
+
+    batch.appendChild(head);
+    batch.appendChild(slotGrid);
+    grid.prepend(batch);
+    setImagineEmptyState();
+
+    return {
+      el: batch,
+      countEl: meta.querySelector(".is-count"),
+      stateEl: meta.querySelector(".is-state"),
+      slots,
+      ready: 0,
+      failed: 0,
+      round,
+    };
+  }
+
+  function updateImagineBatchMeta(batch, final) {
+    if (!batch) return;
+    if (batch.countEl) batch.countEl.textContent = `${batch.ready}/${IMAGINE_BATCH_SIZE}`;
+    if (!batch.stateEl) return;
+    if (!final) {
+      batch.stateEl.dataset.state = "generating";
+      batch.stateEl.textContent = "正在生成";
+      return;
+    }
+    if (batch.ready >= IMAGINE_BATCH_SIZE) {
+      batch.stateEl.dataset.state = "success";
+      batch.stateEl.textContent = "生成成功";
+    } else if (batch.ready > 0) {
+      batch.stateEl.dataset.state = "partial";
+      batch.stateEl.textContent = "部分失败";
+    } else {
+      batch.stateEl.dataset.state = "failed";
+      batch.stateEl.textContent = "生成失败";
+    }
+  }
+
+  function setImagineSlotProgress(slot, value) {
+    if (!slot || slot.status !== "pending") return;
+    const progress = Math.max(0, Math.min(99, Number(value) || 0));
+    slot.progress = progress;
+    const text = slot.tile.querySelector(".imagine-masonry-tile-progress-value");
+    const fill = slot.tile.querySelector(".imagine-masonry-tile-progress-fill");
+    if (text) text.textContent = `${progress}%`;
+    if (fill) fill.style.width = `${progress}%`;
+  }
+
+  function finishImagineSlot(slot, raw, meta) {
+    if (!slot || slot.status !== "pending") return;
+    const value = String(raw || "");
+    if (!value) {
+      failImagineSlot(slot, "失败");
+      return;
+    }
+    const isURL = value.startsWith("http://") || value.startsWith("https://") || value.startsWith("/") || value.startsWith("data:");
+    const src = isURL ? value : `data:${inferMime(value)};base64,${value}`;
+    slot.status = "ready";
+    slot.url = src;
+    slot.tile.classList.remove("is-pending", "is-filtered");
+    slot.tile.classList.add("is-ready");
+    slot.tile.dataset.imageUrl = src;
+    if (imagineSelectionMode) slot.tile.classList.add("selection-mode");
+
+    const link = document.createElement("div");
+    link.className = "imagine-masonry-tile-link";
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.alt = meta && meta.sequence ? `image-${meta.sequence}` : "image";
+    img.src = src;
+    link.appendChild(img);
+    slot.body.replaceChildren(link);
+
+    imagineState.imageCount += 1;
+    const count = document.getElementById("imagineCount");
+    if (count) count.textContent = String(imagineState.imageCount);
+  }
+
+  function failImagineSlot(slot, label) {
+    if (!slot || slot.status !== "pending") return;
+    slot.status = "failed";
+    slot.tile.classList.remove("is-pending", "is-ready");
+    slot.tile.classList.add("is-filtered");
+    const message = document.createElement("div");
+    message.className = "imagine-masonry-tile-label";
+    message.textContent = label || "失败";
+    slot.body.replaceChildren(message);
+  }
+
+  function extractImagineImageValue(data) {
+    const list = Array.isArray(data?.data) ? data.data : [];
+    const item = list[0] || {};
+    return String(item.url || item.b64_json || item.base64 || item.b64 || "");
+  }
+
+  async function requestImagineImage(prompt, ratio, model, nsfw, signal) {
+    const res = await fetch("/grok/v1/images/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model,
+        prompt,
+        n: 1,
+        size: imagineSizeForRatio(ratio),
+        response_format: "url",
+        nsfw,
+      }),
+    });
+    if (handleUnauthorized(res)) throw new Error("unauthorized");
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    const image = extractImagineImageValue(data);
+    if (!image) throw new Error("no image generated");
+    return image;
+  }
+
+  async function runImagineSlot(batch, slot, prompt, ratio, models, nsfw, signal) {
+    const startedAt = Date.now();
+    let tick = 0;
+    const timer = window.setInterval(() => {
+      tick += 1;
+      setImagineSlotProgress(slot, Math.min(92, 8 + tick * 7));
+    }, 900);
+    try {
+      const candidates = Array.isArray(models) && models.length ? models : [String(models || "grok-imagine-image-lite")];
+      let image = "";
+      let lastErr = null;
+      for (let i = 0; i < candidates.length; i += 1) {
+        try {
+          image = await requestImagineImage(prompt, ratio, candidates[i], nsfw, signal);
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (signal?.aborted || String(err?.message || err) === "unauthorized") throw err;
+          if (i < candidates.length - 1) {
+            setImagineSlotProgress(slot, Math.max(slot.progress || 0, 35));
+          }
+        }
+      }
+      if (!image) throw lastErr || new Error("no image generated");
+      finishImagineSlot(slot, image, { elapsed_ms: Date.now() - startedAt });
+      if (batch) {
+        batch.ready += 1;
+        updateImagineBatchMeta(batch, false);
+      }
+      return true;
+    } catch (err) {
+      if (signal?.aborted) {
+        failImagineSlot(slot, "已停止");
+      } else {
+        failImagineSlot(slot, "失败");
+      }
+      if (batch) {
+        batch.failed += 1;
+        updateImagineBatchMeta(batch, false);
+      }
+      return false;
+    } finally {
+      window.clearInterval(timer);
+    }
+  }
+
+  async function runImagineBatchSlots(batch, prompt, ratio, models, nsfw, signal) {
+    if (!batch || !Array.isArray(batch.slots)) return [];
+    const results = new Array(batch.slots.length).fill(false);
+    let cursor = 0;
+    const workerCount = Math.min(IMAGINE_BATCH_PARALLELISM, batch.slots.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (cursor < batch.slots.length) {
+        if (signal?.aborted) break;
+        const index = cursor;
+        cursor += 1;
+        results[index] = await runImagineSlot(batch, batch.slots[index], prompt, ratio, models, nsfw, signal);
+      }
+    });
+    await Promise.all(workers);
+    return results;
   }
 
   function dataUrlToBlob(dataUrl) {
@@ -993,7 +1325,7 @@
     }
     const toggleBtn = document.getElementById("toggleSelectAllBtn");
     if (toggleBtn) {
-      const items = document.querySelectorAll("#imagineGrid .waterfall-item");
+      const items = document.querySelectorAll("#imagineGrid .waterfall-item.is-ready");
       const allSelected = items.length > 0 && imagineSelectedImages.size === items.length;
       toggleBtn.textContent = allSelected ? "取消全选" : "全选";
     }
@@ -1004,7 +1336,14 @@
     imagineSelectedImages.clear();
     const toolbar = document.getElementById("selectionToolbar");
     if (toolbar) toolbar.classList.remove("hidden");
-    const items = document.querySelectorAll("#imagineGrid .waterfall-item");
+    const items = document.querySelectorAll("#imagineGrid .waterfall-item.is-ready");
+    if (items.length === 0) {
+      imagineSelectionMode = false;
+      if (toolbar) toolbar.classList.add("hidden");
+      showToast("暂无可下载图片", "info");
+      updateImagineSelectedCount();
+      return;
+    }
     items.forEach((item) => {
       item.classList.add("selection-mode");
     });
@@ -1044,7 +1383,7 @@
   }
 
   function toggleImagineSelectAll() {
-    const items = document.querySelectorAll("#imagineGrid .waterfall-item");
+    const items = document.querySelectorAll("#imagineGrid .waterfall-item.is-ready");
     const allSelected = items.length > 0 && imagineSelectedImages.size === items.length;
     if (allSelected) {
       items.forEach((item) => item.classList.remove("selected"));
@@ -1060,8 +1399,11 @@
 
   async function downloadSelectedImages() {
     if (imagineSelectedImages.size === 0) {
-      showToast("未选择图片", "info");
-      return;
+      toggleImagineSelectAll();
+      if (imagineSelectedImages.size === 0) {
+        showToast("未选择图片", "info");
+        return;
+      }
     }
     if (typeof JSZip === "undefined") {
       showToast("JSZip 未加载", "error");
@@ -1125,37 +1467,6 @@
         downloadBtn.disabled = false;
         downloadBtn.innerHTML = `下载 <span id="selectedCount" class="selected-count">${imagineSelectedImages.size}</span>`;
       }
-    }
-  }
-
-  function getImagineAllImages() {
-    return Array.from(document.querySelectorAll("#imagineGrid .waterfall-item img"));
-  }
-
-  function updateImagineLightbox(index) {
-    const images = getImagineAllImages();
-    if (index < 0 || index >= images.length) return;
-    imagineLightboxIndex = index;
-    const lightboxImg = document.getElementById("lightboxImg");
-    if (lightboxImg) {
-      lightboxImg.src = images[index].src;
-    }
-    const prevBtn = document.getElementById("lightboxPrev");
-    const nextBtn = document.getElementById("lightboxNext");
-    if (prevBtn) prevBtn.disabled = index === 0;
-    if (nextBtn) nextBtn.disabled = index === images.length - 1;
-  }
-
-  function showImaginePrevImage() {
-    if (imagineLightboxIndex > 0) {
-      updateImagineLightbox(imagineLightboxIndex - 1);
-    }
-  }
-
-  function showImagineNextImage() {
-    const images = getImagineAllImages();
-    if (imagineLightboxIndex < images.length - 1) {
-      updateImagineLightbox(imagineLightboxIndex + 1);
     }
   }
 
@@ -1344,56 +1655,77 @@
 
   async function startImagine() {
     if (imagineState.running) {
-      showToast("Imagine 已在运行中", "info");
+      await stopImagine();
       return;
     }
-    const prompt = String(document.getElementById("imaginePrompt")?.value || "").trim();
+    const promptInput = document.getElementById("imaginePrompt");
+    const prompt = String(promptInput?.value || "").trim();
     if (!prompt) {
       showToast("请输入 Prompt", "error");
       return;
     }
     const ratio = String(document.getElementById("imagineRatio")?.value || "2:3");
-    const model = String(document.getElementById("imagineModel")?.value || "grok-imagine-image-lite").trim() || "grok-imagine-image-lite";
-    const concurrent = 1;
+    const runMode = imagineReadToggle("#imagineRunModeToggle", "imagineRunMode", "single");
+    const quality = imagineReadToggle("#imagineQualityToggle", "imagineQuality", "speed");
+    const models = imagineQualityModels(quality);
+    const model = models[0];
     const nsfw = String(document.getElementById("imagineNSFW")?.value || "true") === "true";
-    const mode = String(document.getElementById("imagineMode")?.value || "auto").toLowerCase();
+
     saveGrokToolsUIState({
       imagineRatio: ratio,
       imagineModel: model,
-      imagineConcurrent: concurrent,
+      imagineRunMode: runMode,
+      imagineQuality: quality,
+      imagineConcurrent: IMAGINE_BATCH_SIZE,
     });
 
     imagineState.running = true;
-    imagineState.mode = mode;
+    imagineState.mode = runMode;
+    imagineState.effectiveMode = "masonry";
+    imagineState.abortController = new AbortController();
+    imagineState.taskIDs = [];
     setImagineButtons(true);
-    setImagineStatus("创建任务中");
+    setImagineControlsDisabled(true);
+    setImagineStatus("生成中");
 
-    const taskIDs = [];
+    let round = 0;
     try {
-      for (let i = 0; i < concurrent; i++) {
-        const taskID = await createImagineTask(prompt, ratio, nsfw);
-        if (!taskID) {
-          throw new Error("创建任务失败：空 task_id");
-        }
-        taskIDs.push(taskID);
-      }
+      while (imagineState.running) {
+        round += 1;
+        const batch = createImagineBatch(prompt, ratio, quality, round);
+        if (!batch) throw new Error("瀑布流容器不存在");
+        setImagineStatus(`生成中 · 第 ${round} 轮`);
+        const signal = imagineState.abortController?.signal;
+        const results = await runImagineBatchSlots(batch, prompt, ratio, models, nsfw, signal);
+        batch.ready = results.filter(Boolean).length;
+        batch.failed = results.length - batch.ready;
+        updateImagineBatchMeta(batch, true);
 
-      imagineState.taskIDs = taskIDs;
-      if (mode === "sse") {
-        startImagineSSE(taskIDs);
-      } else if (mode === "ws") {
-        startImagineWS(taskIDs, prompt, ratio, false);
-      } else {
-        startImagineWS(taskIDs, prompt, ratio, true);
+        const elapsed = batch.slots.reduce((sum, slot) => sum + (slot.status === "ready" ? 1 : 0), 0);
+        const active = document.getElementById("imagineActive");
+        if (active) active.textContent = imagineState.running ? "1" : "0";
+        if (elapsed > 0) {
+          const latency = document.getElementById("imagineLatency");
+          if (latency) latency.textContent = "-";
+        }
+
+        if (!imagineState.running || runMode !== "continuous") break;
       }
-      showToast(`Imagine 已启动 (${taskIDs.length} 并发)`, "success");
+      if (imagineState.running) {
+        setImagineStatus("完成");
+      }
     } catch (err) {
+      if (!imagineState.abortController?.signal?.aborted) {
+        setImagineStatus("错误");
+        showToast(`启动失败: ${err.message || err}`, "error");
+      }
+    } finally {
       imagineState.running = false;
+      imagineState.abortController = null;
       setImagineButtons(false);
-      setImagineStatus("启动失败");
-      await stopImagineTasks(taskIDs);
-      imagineState.taskIDs = [];
-      showToast(`启动失败: ${err.message || err}`, "error");
+      setImagineControlsDisabled(false);
+      updateImagineActiveCount();
+      if (document.activeElement !== promptInput) promptInput?.focus();
     }
   }
 
@@ -1401,7 +1733,12 @@
     const taskIDs = imagineState.taskIDs.slice();
     imagineState.running = false;
     setImagineButtons(false);
+    setImagineControlsDisabled(false);
     setImagineStatus("停止中");
+    if (imagineState.abortController) {
+      imagineState.abortController.abort();
+      imagineState.abortController = null;
+    }
     closeImagineConnections(true);
     imagineState.taskIDs = [];
     try {
@@ -1417,7 +1754,11 @@
     const grid = document.getElementById("imagineGrid");
     const empty = document.getElementById("imagineEmpty");
     if (grid) grid.innerHTML = "";
-    if (empty) empty.style.display = "block";
+    if (empty) {
+      empty.hidden = false;
+      empty.style.display = "";
+      if (grid) grid.appendChild(empty);
+    }
     imagineStreamImageMap.clear();
     imagineStreamSequence = 0;
     imagineSelectedImages.clear();
@@ -2763,7 +3104,9 @@
 
     if (newBtn) newBtn.addEventListener("click", () => {
       newChatSession();
-      closeChatSidebar();
+      if (isMobileChatSidebar()) {
+        closeChatSidebar();
+      }
     });
     if (sendBtn) {
       sendBtn.addEventListener("click", () => {
@@ -3435,6 +3778,37 @@
     if (duration) duration.textContent = "-";
   }
 
+  function normalizeVideoURL(raw) {
+    let url = String(raw || "").trim();
+    if (!url) return "";
+    url = url.replace(/^["'`(<\[]+/, "").replace(/["'`)>\\],.;:]+$/g, "");
+    try {
+      return new URL(url, window.location.origin).toString();
+    } catch (err) {
+      return url;
+    }
+  }
+
+  function videoSizeForRatio(value) {
+    switch (String(value || "").trim()) {
+      case "16:9":
+      case "3:2":
+      case "1792x1024":
+      case "1280x720":
+        return "1792x1024";
+      case "9:16":
+      case "2:3":
+      case "1024x1792":
+      case "720x1280":
+        return "1024x1792";
+      case "1:1":
+      case "1024x1024":
+        return "1024x1024";
+      default:
+        return "720x1280";
+    }
+  }
+
   function initVideoPreviewSlot() {
     const stage = document.getElementById("videoStage");
     if (!stage) return;
@@ -3499,7 +3873,7 @@
     const openBtn = item.querySelector(".video-open");
     const downloadBtn = item.querySelector(".video-download");
     const link = item.querySelector(".video-item-link");
-    const safeUrl = url || "";
+    const safeUrl = normalizeVideoURL(url);
     item.dataset.url = safeUrl;
     if (link) {
       link.textContent = safeUrl;
@@ -3536,12 +3910,12 @@
       const last = mdMatches[mdMatches.length - 1];
       const urlMatch = last.match(/\[video\]\(([^)]+)\)/);
       if (urlMatch) {
-        return { url: urlMatch[1] };
+        return { url: normalizeVideoURL(urlMatch[1]) };
       }
     }
-    const urlMatches = buffer.match(/(?:https?:\/\/|\/grok\/v1\/files\/video\/|\/v1\/files\/video\/)[^\s<)]+/g);
+    const urlMatches = buffer.match(/(?:https?:\/\/|\/grok\/v1\/files\/video\/|\/v1\/files\/video\/|\/grok\/v1\/videos\/|\/v1\/videos\/)[^\s<)]+/g);
     if (urlMatches && urlMatches.length) {
-      return { url: urlMatches[urlMatches.length - 1] };
+      return { url: normalizeVideoURL(urlMatches[urlMatches.length - 1]) };
     }
     return null;
   }
@@ -3572,7 +3946,7 @@
     if (!container) return;
     const body = container.querySelector(".video-item-body");
     if (!body) return;
-    const safeUrl = url || "";
+    const safeUrl = normalizeVideoURL(url);
     body.innerHTML = `
       <video controls preload="metadata">
         <source src="${safeUrl}" type="video/mp4">
@@ -3657,7 +4031,7 @@
   }
 
   async function createVideoTask(payload) {
-    const res = await fetch("/api/v1/admin/video/start", {
+    const res = await fetch("/grok/v1/videos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -3667,7 +4041,7 @@
       throw new Error(await res.text());
     }
     const data = await res.json();
-    return String(data.task_id || "").trim();
+    return String(data.id || data.task_id || "").trim();
   }
 
   async function stopVideoTask() {
@@ -3690,9 +4064,17 @@
     videoState.stream = null;
   }
 
+  function stopVideoPoll() {
+    if (videoState.pollTimer) {
+      clearTimeout(videoState.pollTimer);
+      videoState.pollTimer = null;
+    }
+  }
+
   function finishVideoRun(hasError) {
     if (!videoState.running) return;
     closeVideoStream();
+    stopVideoPoll();
     videoState.running = false;
     setVideoButtons(false);
     stopVideoElapsedTimer();
@@ -3706,6 +4088,50 @@
       const seconds = Math.max(0, Math.round((Date.now() - videoState.startAt) / 1000));
       duration.textContent = `${seconds}s`;
     }
+  }
+
+  async function fetchVideoJob(taskID) {
+    const res = await fetch(`/grok/v1/videos/${encodeURIComponent(taskID)}?t=${Date.now()}`, { cache: "no-store" });
+    if (handleUnauthorized(res)) return null;
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    return await res.json();
+  }
+
+  function videoContentURL(taskID) {
+    return normalizeVideoURL(`/grok/v1/videos/${encodeURIComponent(taskID)}/content`);
+  }
+
+  function pollVideoTask(taskID) {
+    stopVideoPoll();
+    videoState.pollTimer = window.setTimeout(async () => {
+      if (!videoState.running || videoState.taskID !== taskID) return;
+      try {
+        const job = await fetchVideoJob(taskID);
+        if (!job) return;
+        const progress = Number(job.progress || 0);
+        setVideoIndeterminate(false);
+        setVideoProgress(progress);
+        if (job.status === "completed") {
+          renderVideoFromUrl(job.content_url || videoContentURL(taskID));
+          finishVideoRun(false);
+          return;
+        }
+        if (job.status === "failed") {
+          const message = job.error?.message || "视频生成失败";
+          setVideoStatus(String(message), "error");
+          finishVideoRun(true);
+          return;
+        }
+        setVideoStatus(t("common.generating"), "ok");
+        pollVideoTask(taskID);
+      } catch (err) {
+        if (!videoState.running) return;
+        setVideoStatus(err.message || t("common.connectionError"), "error");
+        finishVideoRun(true);
+      }
+    }, 1500);
   }
 
   function openVideoSSE(taskID) {
@@ -3762,14 +4188,17 @@
     }
     const effort = String(document.getElementById("videoEffort")?.value || "").trim();
     const payload = {
+      model: "grok-imagine-video",
       prompt,
-      aspect_ratio: String(document.getElementById("videoRatio")?.value || "3:2"),
-      video_length: Number(document.getElementById("videoLength")?.value || 6),
+      size: videoSizeForRatio(document.getElementById("videoRatio")?.value || "3:2"),
+      seconds: Number(document.getElementById("videoLength")?.value || 6),
       resolution_name: String(document.getElementById("videoResolution")?.value || "480p"),
-      preset: String(document.getElementById("videoPreset")?.value || "normal"),
-      image_url: videoState.fileDataURL || String(document.getElementById("videoImageUrl")?.value || "").trim(),
-      reasoning_effort: effort || "low",
+      preset: String(document.getElementById("videoPreset")?.value || "custom"),
+      input_references: [],
     };
+    const imageRef = videoState.fileDataURL || String(document.getElementById("videoImageUrl")?.value || "").trim();
+    if (imageRef) payload.input_references = [imageRef];
+    if (effort) payload.reasoning_effort = effort;
     updateVideoMeta();
     resetVideoOutput(true);
     initVideoPreviewSlot();
@@ -3788,7 +4217,7 @@
       startVideoElapsedTimer();
       setVideoStatus(t("common.generating"), "ok");
       setVideoIndeterminate(true);
-      openVideoSSE(taskID);
+      pollVideoTask(taskID);
     } catch (err) {
       videoState.running = false;
       setVideoButtons(false);
@@ -3800,6 +4229,7 @@
   async function stopVideo() {
     videoState.running = false;
     closeVideoStream();
+    stopVideoPoll();
     stopVideoElapsedTimer();
     setVideoButtons(false);
     setVideoStatus(t("common.notConnected"));
@@ -4419,10 +4849,27 @@
         applyImagineMode(imagineModeSelect.value);
       });
     }
+    document.querySelectorAll("[data-imagine-run-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const value = String(btn.dataset.imagineRunMode || "single");
+        imagineSetToggle("#imagineRunModeToggle", "imagineRunMode", value);
+        saveGrokToolsUIState({ imagineRunMode: value });
+      });
+    });
+    document.querySelectorAll("[data-imagine-quality]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const value = String(btn.dataset.imagineQuality || "speed");
+        imagineSetToggle("#imagineQualityToggle", "imagineQuality", value);
+        const model = imagineQualityModel(value);
+        const modelSelect = document.getElementById("imagineModel");
+        if (modelSelect) modelSelect.value = model;
+        saveGrokToolsUIState({ imagineQuality: value, imagineModel: model });
+      });
+    });
     const imaginePrompt = document.getElementById("imaginePrompt");
     if (imaginePrompt) {
       imaginePrompt.addEventListener("keydown", async (event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           try {
             await startImagine();
@@ -4431,6 +4878,8 @@
           }
         }
       });
+      imaginePrompt.addEventListener("input", resizeImaginePrompt);
+      resizeImaginePrompt();
     }
     [
       ["imagineRatio", "imagineRatio"],
@@ -4447,6 +4896,11 @@
       input.addEventListener("change", sync);
       input.addEventListener("input", sync);
     });
+    const imagineRatioSelect = document.getElementById("imagineRatio");
+    if (imagineRatioSelect) {
+      imagineRatioSelect.addEventListener("change", syncImagineRatioUI);
+      syncImagineRatioUI();
+    }
     bindPersistedCheckbox("imagineAutoScroll", "imagineAutoScroll");
     bindPersistedCheckbox("imagineAutoDownload", "imagineAutoDownload");
     bindPersistedCheckbox("imagineAutoFilter", "imagineAutoFilter");
@@ -4515,43 +4969,10 @@
       imagineGrid.addEventListener("click", (event) => {
         const item = event.target.closest(".waterfall-item");
         if (!item) return;
+        if (!item.classList.contains("is-ready")) return;
         if (imagineSelectionMode) {
           toggleImagineItemSelection(item);
           return;
-        }
-        const img = event.target.closest(".waterfall-item img");
-        if (img) {
-          const images = getImagineAllImages();
-          const index = images.indexOf(img);
-          if (index !== -1) {
-            updateImagineLightbox(index);
-            const lightbox = document.getElementById("lightbox");
-            if (lightbox) lightbox.classList.add("active");
-          }
-        }
-      });
-    }
-    const lightbox = document.getElementById("lightbox");
-    const lightboxImg = document.getElementById("lightboxImg");
-    if (lightbox) {
-      lightbox.addEventListener("click", () => {
-        lightbox.classList.remove("active");
-        imagineLightboxIndex = -1;
-      });
-      if (lightboxImg) {
-        lightboxImg.addEventListener("click", (event) => {
-          event.stopPropagation();
-        });
-      }
-      document.addEventListener("keydown", (event) => {
-        if (!lightbox.classList.contains("active")) return;
-        if (event.key === "Escape") {
-          lightbox.classList.remove("active");
-          imagineLightboxIndex = -1;
-        } else if (event.key === "ArrowLeft") {
-          showImaginePrevImage();
-        } else if (event.key === "ArrowRight") {
-          showImagineNextImage();
         }
       });
     }
@@ -4927,6 +5348,11 @@
     if (imagineModel && typeof uiState.imagineModel === "string" && uiState.imagineModel) {
       imagineModel.value = uiState.imagineModel;
     }
+    const savedQuality = typeof uiState.imagineQuality === "string" ? uiState.imagineQuality : "";
+    const quality = savedQuality || (imagineModel?.value === "grok-imagine-image" ? "quality" : "speed");
+    imagineSetToggle("#imagineQualityToggle", "imagineQuality", quality);
+    const savedRunMode = typeof uiState.imagineRunMode === "string" ? uiState.imagineRunMode : "single";
+    imagineSetToggle("#imagineRunModeToggle", "imagineRunMode", savedRunMode === "continuous" ? "continuous" : "single");
     if (imagineConcurrent && typeof uiState.imagineConcurrent === "number" && Number.isFinite(uiState.imagineConcurrent)) {
       imagineConcurrent.value = String(uiState.imagineConcurrent);
     }
@@ -4935,6 +5361,8 @@
     }
     resetImagineMetrics();
     updateImagineActiveCount();
+    syncImagineRatioUI();
+    resizeImaginePrompt();
     const videoRatio = document.getElementById("videoRatio");
     const videoLength = document.getElementById("videoLength");
     const videoResolution = document.getElementById("videoResolution");

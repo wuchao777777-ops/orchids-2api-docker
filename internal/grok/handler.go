@@ -362,50 +362,6 @@ func (s *chatAccountSession) Close() {
 	s.release = nil
 }
 
-// doChatWithAutoSwitch runs one chat request and switches account once on 403/429.
-func (h *Handler) doChatWithAutoSwitch(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}) (*http.Response, error) {
-	if sess == nil || strings.TrimSpace(sess.token) == "" {
-		return nil, fmt.Errorf("empty chat session")
-	}
-	client := h.currentClient()
-	if client == nil {
-		return nil, fmt.Errorf("grok client not configured")
-	}
-	maxAttempts := 2
-	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
-		maxAttempts = h.cfg.AccountSwitchCount
-	}
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
-	used := make([]int64, 0, maxAttempts)
-	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if sess.acc != nil && sess.acc.ID != 0 {
-			used = append(used, sess.acc.ID)
-		}
-		resp, err := client.doChat(ctx, sess.token, payload)
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
-		h.markAccountStatus(ctx, sess.acc, err)
-		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
-			return nil, err
-		}
-		sess.Close()
-		next, err2 := h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
-		if err2 != nil {
-			return nil, fmt.Errorf("account switch failed: %w (original: %v)", err2, err)
-		}
-		sess.acc = next.acc
-		sess.token = next.token
-		sess.poolCandidates = next.poolCandidates
-		sess.release = next.release
-	}
-	return nil, lastErr
-}
-
 func (h *Handler) doChatSingleAccount(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}) (*http.Response, error) {
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")

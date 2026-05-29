@@ -736,6 +736,378 @@
   background: #fff !important;
 }
 
+.grok-tools-page #grokImagineSection .imagine-header-row {
+  align-items: flex-start !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-header-actions {
+  flex-wrap: wrap !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-shell {
+  display: grid !important;
+  grid-template-rows: minmax(360px, 1fr) auto !important;
+  gap: 16px !important;
+  min-height: calc(100vh - 260px) !important;
+}
+
+.grok-tools-page #grokImagineSection #imagineGrid.imagine-masonry-feed {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  align-content: start !important;
+  gap: 24px !important;
+  min-height: 360px !important;
+}
+
+.grok-tools-page #grokImagineSection #imagineGrid.imagine-masonry-feed.waterfall {
+  grid-template-columns: 1fr !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-empty {
+  min-height: 360px !important;
+  display: grid !important;
+  place-items: center !important;
+  color: var(--text-secondary) !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-empty[hidden] {
+  display: none !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-empty-card {
+  display: grid !important;
+  gap: 10px !important;
+  width: min(100%, 540px) !important;
+  text-align: center !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-batch {
+  display: grid !important;
+  gap: 14px !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-batch-head {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-batch-prompt {
+  max-width: 760px !important;
+  color: var(--text-primary) !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  line-height: 1.55 !important;
+  word-break: break-word !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-batch-meta {
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 6px !important;
+  flex-wrap: wrap !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip {
+  min-height: 22px !important;
+  padding: 2px 9px !important;
+  border: 1px solid #ece7dd !important;
+  border-radius: 999px !important;
+  background: #faf9f5 !important;
+  color: #615a51 !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  white-space: nowrap !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-round,
+.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-state[data-state="generating"] {
+  background: #111 !important;
+  border-color: #111 !important;
+  color: #fff !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-state[data-state="success"] {
+  background: #ecfdf5 !important;
+  border-color: #bbf7d0 !important;
+  color: #047857 !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-state[data-state="partial"] {
+  background: #fff7ed !important;
+  border-color: #fed7aa !important;
+  color: #c2410c !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-state[data-state="failed"] {
+  background: #fef2f2 !important;
+  border-color: #fecaca !important;
+  color: #dc2626 !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-grid {
+  --tile-aspect: 1 / 1;
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(152px, 1fr)) !important;
+  gap: 12px !important;
+}
+
+.grok-tools-page #grokImagineSection #imagineGrid .imagine-masonry-tile {
+  position: relative !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile-body {
+  display: grid !important;
+  place-items: center !important;
+  aspect-ratio: var(--tile-aspect, 1 / 1) !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.52), rgba(255,255,255,.12) 36%, rgba(255,255,255,.34) 64%, rgba(255,255,255,.08)),
+    linear-gradient(180deg, #f2ede4 0%, #e9e2d6 100%) !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile.is-pending .imagine-masonry-tile-body {
+  background-size: 200% 200%, 100% 100% !important;
+  animation: imagine-masonry-pending 5.6s ease-in-out infinite !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile.is-ready .imagine-masonry-tile-body {
+  background: transparent !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile.is-filtered .imagine-masonry-tile-body {
+  background: #ede8df !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile-link,
+.grok-tools-page #grokImagineSection .imagine-masonry-tile img {
+  display: block !important;
+  width: 100% !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile img {
+  height: auto !important;
+  aspect-ratio: var(--tile-aspect, auto) !important;
+  object-fit: cover !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile-badge {
+  position: absolute !important;
+  top: 10px !important;
+  left: 10px !important;
+  z-index: 2 !important;
+  color: rgba(78,72,64,.72) !important;
+  font-size: 10px !important;
+  font-weight: 800 !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile-progress {
+  width: min(72%, 124px) !important;
+  display: grid !important;
+  gap: 7px !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile-progress-value {
+  color: #4f493f !important;
+  font-size: 16px !important;
+  font-weight: 800 !important;
+  line-height: 1 !important;
+  text-align: center !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile-progress-track {
+  height: 3px !important;
+  overflow: hidden !important;
+  border-radius: 999px !important;
+  background: rgba(17,17,17,.08) !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile-progress-fill {
+  width: 0;
+  height: 100% !important;
+  border-radius: 999px !important;
+  background: linear-gradient(90deg, #514b42 0%, #82786b 100%) !important;
+  transition: width .25s ease !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-tile-label {
+  color: #6b6459 !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+
+@keyframes imagine-masonry-pending {
+  0%, 100% { background-position: 0% 50%, 0 0; }
+  50% { background-position: 100% 50%, 0 0; }
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-composer {
+  position: sticky !important;
+  bottom: 0 !important;
+  z-index: 5 !important;
+  padding-top: 10px !important;
+  background: linear-gradient(180deg, rgba(253,252,248,0), #fdfcf8 38%) !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-input-shell {
+  width: min(100%, 920px) !important;
+  margin: 0 auto !important;
+  display: grid !important;
+  gap: 12px !important;
+  padding: 14px !important;
+  border: 1px solid #ece7dd !important;
+  border-radius: 24px !important;
+  background: #fff !important;
+  box-shadow: 0 10px 30px rgba(24,22,20,.05) !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-textarea {
+  min-height: 52px !important;
+  max-height: 160px !important;
+  padding: 8px 4px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  resize: none !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-controls,
+.grok-tools-page #grokImagineSection .imagine-masonry-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-toggle {
+  height: 32px !important;
+  padding: 3px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 1px !important;
+  border-radius: 999px !important;
+  background: #faf9f5 !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-toggle-btn {
+  min-width: 56px !important;
+  height: 26px !important;
+  padding: 0 9px !important;
+  border-radius: 999px !important;
+  color: #7d786f !important;
+  font-size: 10px !important;
+  font-weight: 800 !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-toggle-btn.is-active {
+  background: #111 !important;
+  color: #fff !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-ratio {
+  width: 96px !important;
+  height: 32px !important;
+  display: grid !important;
+  grid-template-columns: 1fr 2fr !important;
+  align-items: center !important;
+  column-gap: 6px !important;
+  padding: 0 10px !important;
+  border-radius: 999px !important;
+  background: #faf9f5 !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-ratio-icon {
+  width: 11px !important;
+  height: 18px !important;
+  display: block !important;
+  justify-self: center !important;
+  border-radius: 4px !important;
+  background: #111 !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-ratio[data-ratio="1:1"] .imagine-masonry-ratio-icon { width: 15px !important; height: 15px !important; }
+.grok-tools-page #grokImagineSection .imagine-masonry-ratio[data-ratio="3:2"] .imagine-masonry-ratio-icon { width: 18px !important; height: 12px !important; }
+.grok-tools-page #grokImagineSection .imagine-masonry-ratio[data-ratio="16:9"] .imagine-masonry-ratio-icon { width: 19px !important; height: 11px !important; }
+.grok-tools-page #grokImagineSection .imagine-masonry-ratio[data-ratio="9:16"] .imagine-masonry-ratio-icon { width: 10px !important; height: 19px !important; }
+
+.grok-tools-page #grokImagineSection .imagine-masonry-ratio .form-input {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 26px !important;
+  padding: 0 14px 0 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  color: #111 !important;
+  font-size: 10px !important;
+  font-weight: 800 !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-send {
+  width: 34px !important;
+  min-width: 34px !important;
+  height: 34px !important;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-send svg {
+  width: 14px !important;
+  height: 14px !important;
+  fill: none !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-masonry-send path {
+  stroke: currentColor !important;
+  stroke-width: 2.1 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-hidden-compat {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+}
+
+.grok-tools-page #grokImagineSection .imagine-selection-toolbar {
+  position: sticky !important;
+  bottom: 92px !important;
+  z-index: 6 !important;
+  width: max-content !important;
+  max-width: 100% !important;
+  margin-left: auto !important;
+  padding: 8px !important;
+  border: 1px solid #ece7dd !important;
+  border-radius: 999px !important;
+  background: #fff !important;
+  box-shadow: 0 10px 30px rgba(24,22,20,.08) !important;
+}
+
 .grok-tools-page .image-checkbox {
   border: 1px solid #ece7dd !important;
   background: #fff !important;
@@ -831,27 +1203,6 @@
   font-weight: 700 !important;
 }
 
-.grok-tools-page .image-lightbox {
-  position: fixed !important;
-  inset: 0 !important;
-  z-index: 100 !important;
-  display: none !important;
-  align-items: center !important;
-  justify-content: center !important;
-  padding: 24px !important;
-  background: rgba(17, 17, 17, 0.72) !important;
-}
-
-.grok-tools-page .image-lightbox.active {
-  display: flex !important;
-}
-
-.grok-tools-page .image-lightbox img {
-  max-width: min(90vw, 1080px) !important;
-  max-height: 82vh !important;
-  border-radius: 12px !important;
-}
-
 .grok-tools-page #grokChatSection.section-hidden,
 .grok-tools-page #grokImagineSection.section-hidden,
 .grok-tools-page #grokVideoSection.section-hidden,
@@ -930,6 +1281,44 @@
 
   .grok-tools-page #grokImagineSection #imagineGrid.waterfall {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)) !important;
+  }
+
+  .grok-tools-page #grokImagineSection .imagine-masonry-shell {
+    min-height: calc(100vh - 220px) !important;
+  }
+
+  .grok-tools-page #grokImagineSection .imagine-masonry-batch-head {
+    display: grid !important;
+  }
+
+  .grok-tools-page #grokImagineSection .imagine-masonry-grid {
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)) !important;
+    gap: 10px !important;
+  }
+
+  .grok-tools-page #grokImagineSection .imagine-masonry-toolbar {
+    flex-wrap: nowrap !important;
+    gap: 8px !important;
+  }
+
+  .grok-tools-page #grokImagineSection .imagine-masonry-controls {
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .grok-tools-page #grokImagineSection .imagine-masonry-controls::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  .grok-tools-page #grokImagineSection .imagine-masonry-toggle-btn {
+    min-width: 52px !important;
+    padding: 0 7px !important;
+  }
+
+  .grok-tools-page #grokImagineSection .imagine-masonry-actions .status-text {
+    display: none !important;
   }
 
   .grok-tools-page .composer-input {

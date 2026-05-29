@@ -86,3 +86,21 @@ func TestNormalizeWarpTokenOutput_HidesRuntimeJWT(t *testing.T) {
 		t.Fatalf("Token=%q want empty", normalized.Token)
 	}
 }
+
+func TestNormalizeAccountOutput_InfersWarpTierFromStoredQuota(t *testing.T) {
+	t.Parallel()
+
+	acc := &store.Account{
+		AccountType:      "warp",
+		Subscription:     "free",
+		WarpMonthlyLimit: 1500,
+	}
+
+	normalized := normalizeAccountOutput(acc)
+	if normalized == nil {
+		t.Fatal("normalizeAccountOutput returned nil")
+	}
+	if normalized.Subscription != "build/business" {
+		t.Fatalf("Subscription=%q want build/business", normalized.Subscription)
+	}
+}

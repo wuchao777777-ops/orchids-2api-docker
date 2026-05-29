@@ -95,6 +95,15 @@ function getAccountToken(acc) {
 function normalizeAccountSubscription(acc) {
   const raw = String(acc?.subscription || "").trim().toLowerCase();
   if (!raw) return "";
+  if (normalizeAccountType(acc) === "warp") {
+    if (raw.includes("enterprise") || raw.includes("unlimited")) return "enterprise";
+    if (raw.includes("max")) return "max";
+    if (raw.includes("business")) return "build/business";
+    if (raw.includes("build")) return "build/business";
+    if (raw.includes("free")) return "free";
+    if (raw.includes("unknown")) return "unknown";
+    return raw;
+  }
   if (raw.includes("heavy")) return "heavy";
   if (raw.includes("super") || raw.includes("pro")) return "super";
   if (raw.includes("lite")) return "lite";
@@ -107,6 +116,22 @@ function subscriptionBadge(acc) {
   const level = normalizeAccountSubscription(acc);
   if (!level) {
     return { text: "-", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "暂无订阅等级" };
+  }
+  if (type === "warp") {
+    switch (level) {
+      case "enterprise":
+        return { text: "Enterprise", bg: "rgba(251, 191, 36, 0.16)", color: "#fbbf24", tip: "Warp Enterprise / Unlimited 额度档" };
+      case "max":
+        return { text: "Max", bg: "rgba(56, 189, 248, 0.16)", color: "#38bdf8", tip: "Warp Max 额度档" };
+      case "build/business":
+        return { text: "Build/Business", bg: "rgba(167, 139, 250, 0.16)", color: "#c4b5fd", tip: "Warp 1,500 credits/月，Build 与 Business 额度相同" };
+      case "free":
+        return { text: "Free", bg: "rgba(52, 211, 153, 0.14)", color: "#34d399", tip: "Warp Free 额度档" };
+      case "unknown":
+        return { text: "Unknown", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "暂未识别 Warp 额度档" };
+      default:
+        return { text: level, bg: "rgba(100, 116, 139, 0.12)", color: "#cbd5e1", tip: `Warp 额度档: ${level}` };
+    }
   }
   if (type !== "grok") {
     return { text: level, bg: "rgba(100, 116, 139, 0.12)", color: "#cbd5e1", tip: `订阅等级: ${level}` };

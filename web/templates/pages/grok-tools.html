@@ -2126,28 +2126,6 @@
       color: #b45309;
     }
 
-    .grok-tools-page .image-lightbox {
-      position: fixed;
-      inset: 0;
-      background: rgba(15, 15, 15, 0.8);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 100;
-      padding: 24px;
-    }
-
-    .grok-tools-page .image-lightbox.active {
-      display: flex;
-    }
-
-    .grok-tools-page .image-lightbox img {
-      max-width: min(90vw, 1080px);
-      max-height: 80vh;
-      border-radius: 16px;
-      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
-    }
-
     .grok-tools-page #grokImagineSection .imagine-meta {
       display: flex;
       align-items: center;
@@ -3923,7 +3901,7 @@
       }
     }
   </style>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260528-1">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260529-1">
 </head>
 
 <body >
@@ -4061,150 +4039,89 @@
       </section>
 
       <section id="grokImagineSection" class="function-stack">
-        <div>
-          <h2 class="function-title">Imagine 瀑布流</h2>
-          <p class="function-subtitle">通过 WebSocket 或 SSE 持续生成图片，实时展示在后台页签。</p>
+        <div class="function-header-row imagine-header-row">
+          <div>
+            <h2 class="function-title">Imagine 瀑布流</h2>
+            <p class="function-subtitle">按 grok2api Masonry 方式每轮生成 6 张图，支持单轮与循环出图。</p>
+          </div>
+          <div class="function-actions imagine-header-actions">
+            <button id="batchDownloadBtn" class="btn btn-outline" type="button">批量下载</button>
+            <button id="imagineClearBtn" class="btn btn-outline" type="button">清空</button>
+          </div>
         </div>
         <div class="function-divider"></div>
-        <div class="function-top-grid imagine-top-grid">
-          <div class="grok-panel imagine-card settings-card">
-            <h3 class="card-title">生成设置</h3>
-            <div class="function-settings-grid settings-grid">
-              <div class="function-settings-block settings-block settings-block-prompt">
-                <label class="field-label">提示词</label>
-                <textarea id="imaginePrompt" class="form-input" rows="5" placeholder="描述你想要的画面，例如：未来城市霓虹雨夜，广角摄影"></textarea>
-              </div>
-              <div class="toggle-grid settings-block settings-block-duo">
-                <div class="toggle-row">
-                  <div>
-                    <div class="toggle-title">自动跟随</div>
-                    <div class="toggle-desc">滚动到最新</div>
-                  </div>
-                  <label class="toggle"><input id="imagineAutoScroll" type="checkbox" checked><span class="toggle-track"></span></label>
-                </div>
-                <div class="toggle-row">
-                  <div>
-                    <div class="toggle-title">自动保存</div>
-                    <div class="toggle-desc">自动下载生成图片</div>
-                  </div>
-                  <label class="toggle"><input id="imagineAutoDownload" type="checkbox"><span class="toggle-track"></span></label>
-                </div>
-              </div>
-              <div class="function-settings-row settings-block settings-block-row2 settings-row">
-                <div class="function-settings-block settings-field">
-                  <label class="field-label">宽高比</label>
-                  <select id="imagineRatio" class="form-input">
-                    <option value="2:3">2:3 竖图</option>
-                    <option value="1:1">1:1 方图</option>
-                    <option value="3:2">3:2 横图</option>
-                    <option value="16:9">16:9 宽屏</option>
-                    <option value="9:16">9:16 竖屏</option>
-                  </select>
-                </div>
-                <div class="function-settings-block settings-field">
-                  <label class="field-label">并发数量</label>
-                  <select id="imagineConcurrent" class="form-input">
-                    <option value="1">1 个任务</option>
-                  </select>
-                </div>
-              </div>
-              <div class="function-settings-row settings-block settings-block-row2b settings-row">
-                <div class="function-settings-block settings-field">
-                  <label class="field-label">模型</label>
-                  <select id="imagineModel" class="form-input">
-                    <option value="grok-imagine-image-lite">Lite</option>
-                    <option value="grok-imagine-image">Auto</option>
-                    <option value="grok-imagine-image-pro">Pro</option>
-                  </select>
-                </div>
-                <div class="toggle-row toggle-row-fill">
-                  <div>
-                    <div class="toggle-title">自动过滤</div>
-                    <div class="toggle-desc">过滤低质量图片</div>
-                  </div>
-                  <label class="toggle"><input id="imagineAutoFilter" type="checkbox"><span class="toggle-track"></span></label>
-                </div>
-              </div>
-              <div class="function-settings-row settings-block settings-block-row3 settings-row">
-                <div class="function-settings-block settings-field">
-                  <label class="field-label">是否 NSFW</label>
-                  <select id="imagineNSFW" class="form-input">
-                    <option value="true">开启</option>
-                    <option value="false">关闭</option>
-                  </select>
-                </div>
-                <div class="function-settings-block settings-field">
-                  <label class="field-label">保存位置</label>
-                  <button id="imagineSelectFolderBtn" class="btn btn-outline" type="button">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                    </svg>
-                    <span id="imagineFolderPath">浏览器默认位置</span>
-                  </button>
-                </div>
-              </div>
-              <div class="function-settings-row settings-block settings-block-row3b settings-row">
-                <div class="toggle-row toggle-row-fill">
-                  <div>
-                    <div class="toggle-title">反向新增</div>
-                    <div class="toggle-desc">最新显示在上方</div>
-                  </div>
-                  <label class="toggle"><input id="imagineReverseInsert" type="checkbox" checked><span class="toggle-track"></span></label>
-                </div>
+        <div class="imagine-masonry-shell">
+          <section id="imagineGrid" class="imagine-masonry-feed waterfall">
+            <div id="imagineEmpty" class="imagine-masonry-empty">
+              <div class="imagine-masonry-empty-card">
+                <div class="empty-title">从一句提示词开始</div>
+                <div class="empty-subtitle">每轮固定生成 6 张图，并持续出图直到你停止。</div>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div class="grok-panel imagine-card imagine-card-collapsible">
-            <div class="status-header status-header-row">
-              <div class="card-title">连接状态</div>
-              <span id="imagineStatus" class="status-text">未连接</span>
-            </div>
-            <div class="imagine-connection-block">
-              <div class="meta-label mode-label">连接模式</div>
-              <div class="mode-switch" role="group" aria-label="Connection mode">
-                <button class="mode-btn active" data-imagine-mode="auto" type="button">Auto</button>
-                <button class="mode-btn" data-imagine-mode="ws" type="button">WS</button>
-                <button class="mode-btn" data-imagine-mode="sse" type="button">SSE</button>
+          <section class="imagine-masonry-composer">
+            <div class="imagine-masonry-input-shell">
+              <textarea id="imaginePrompt" class="form-input imagine-masonry-textarea" rows="2" placeholder="描述你想生成的画面，Enter 生成，Shift+Enter 换行"></textarea>
+              <div class="imagine-masonry-toolbar">
+                <div class="imagine-masonry-controls">
+                  <div id="imagineRunModeToggle" class="imagine-masonry-toggle" role="tablist" aria-label="生成轮次">
+                    <button type="button" class="imagine-masonry-toggle-btn is-active" data-imagine-run-mode="single">Rounds</button>
+                    <button type="button" class="imagine-masonry-toggle-btn" data-imagine-run-mode="continuous">Cycles</button>
+                  </div>
+                  <div id="imagineQualityToggle" class="imagine-masonry-toggle" role="tablist" aria-label="生成质量">
+                    <button type="button" class="imagine-masonry-toggle-btn is-active" data-imagine-quality="speed">Speed</button>
+                    <button type="button" class="imagine-masonry-toggle-btn" data-imagine-quality="quality">Quality</button>
+                  </div>
+                  <label id="imagineRatioWrap" class="imagine-masonry-ratio" data-ratio="2:3" aria-label="宽高比">
+                    <span class="imagine-masonry-ratio-icon" aria-hidden="true"></span>
+                    <select id="imagineRatio" class="form-input">
+                      <option value="2:3">2:3</option>
+                      <option value="3:2">3:2</option>
+                      <option value="1:1">1:1</option>
+                      <option value="16:9">16:9</option>
+                      <option value="9:16">9:16</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="imagine-masonry-actions">
+                  <span id="imagineStatus" class="status-text">未连接</span>
+                  <button class="btn btn-primary imagine-masonry-send" id="imagineStartBtn" type="button" aria-label="生成" title="生成">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 5v14"></path>
+                      <path d="m6 11 6-6 6 6"></path>
+                    </svg>
+                  </button>
+                  <button class="btn btn-outline hidden" id="imagineStopBtn" type="button">停止</button>
+                </div>
               </div>
-              <div class="imagine-mode-select-shell">
-                <select id="imagineMode" class="form-input imagine-mode-select" aria-label="连接模式">
-                  <option value="auto">Auto</option>
-                  <option value="ws">WS</option>
-                  <option value="sse">SSE</option>
-                </select>
-              </div>
             </div>
-            <div class="meta-grid imagine-status-grid meta-grid-spaced">
-              <div class="meta-item"><div class="meta-label">图片数量</div><div id="imagineCount" class="meta-value">0</div></div>
-              <div class="meta-item"><div class="meta-label">活跃任务</div><div id="imagineActive" class="meta-value">0</div></div>
-              <div class="meta-item"><div class="meta-label">平均耗时</div><div id="imagineLatency" class="meta-value">-</div></div>
-            </div>
-            <div class="function-actions">
-              <button class="btn btn-primary" id="imagineStartBtn">开始</button>
-              <button class="btn btn-outline" id="imagineStopBtn" disabled>停止</button>
-              <button class="btn btn-outline" id="imagineClearBtn">清空</button>
-            </div>
-          </div>
+          </section>
         </div>
 
-        <div class="grok-panel imagine-card panel-overflow-hidden">
-          <div class="waterfall-header">
-            <div class="card-title">瀑布流</div>
-            <div class="waterfall-actions">
-              <button id="batchDownloadBtn" class="btn btn-outline">批量下载</button>
-              <div id="selectionToolbar" class="selection-toolbar hidden">
-                <button id="toggleSelectAllBtn" class="btn btn-outline">全选</button>
-                <button id="downloadSelectedBtn" class="btn btn-primary" disabled>下载 <span id="selectedCount" class="selected-count">0</span></button>
-                <button id="exitSelectionBtn" class="btn btn-outline">退出</button>
-              </div>
-            </div>
-          </div>
-          <div id="imagineEmpty" class="imagine-empty">
-            <div class="empty-title">等待连接中</div>
-            <div class="empty-subtitle">启动任务后，生成的图片会自动汇聚到这里</div>
-          </div>
-          <div id="imagineGrid" class="waterfall"></div>
+        <div class="imagine-hidden-compat" aria-hidden="true">
+          <select id="imagineModel" class="form-input" tabindex="-1">
+            <option value="grok-imagine-image-lite">Lite</option>
+            <option value="grok-imagine-image">Auto</option>
+            <option value="grok-imagine-image-pro">Pro</option>
+          </select>
+          <select id="imagineConcurrent" class="form-input" tabindex="-1"><option value="1">1</option></select>
+          <select id="imagineNSFW" class="form-input" tabindex="-1"><option value="true">true</option><option value="false">false</option></select>
+          <select id="imagineMode" class="form-input imagine-mode-select" tabindex="-1"><option value="auto">Auto</option><option value="ws">WS</option><option value="sse">SSE</option></select>
+          <label><input id="imagineAutoScroll" type="checkbox" checked></label>
+          <label><input id="imagineAutoDownload" type="checkbox"></label>
+          <label><input id="imagineAutoFilter" type="checkbox"></label>
+          <label><input id="imagineReverseInsert" type="checkbox" checked></label>
+          <button id="imagineSelectFolderBtn" type="button"><span id="imagineFolderPath">浏览器默认位置</span></button>
+          <div id="imagineCount">0</div>
+          <div id="imagineActive">0</div>
+          <div id="imagineLatency">-</div>
+        </div>
+
+        <div id="selectionToolbar" class="selection-toolbar hidden imagine-selection-toolbar">
+          <button id="toggleSelectAllBtn" class="btn btn-outline" type="button">全选</button>
+          <button id="downloadSelectedBtn" class="btn btn-primary" type="button" disabled>下载 <span id="selectedCount" class="selected-count">0</span></button>
+          <button id="exitSelectionBtn" class="btn btn-outline" type="button">退出</button>
         </div>
       </section>
 
@@ -4261,10 +4178,10 @@
               <div class="settings-block preset-block">
                 <label class="field-label">风格预设</label>
                 <select id="videoPreset" class="form-input">
-                  <option value="normal">Normal</option>
-                  <option value="fun">Fun</option>
-                  <option value="spicy">Spicy</option>
                   <option value="custom">Custom</option>
+                  <option value="fun">Fun</option>
+                  <option value="normal">Normal</option>
+                  <option value="spicy">Spicy</option>
                 </select>
               </div>
               <div class="settings-block upload-block">
@@ -4513,15 +4430,11 @@
     </div>
   </main>
 
-  <div id="lightbox" class="image-lightbox">
-    <img id="lightboxImg" src="" alt="">
-  </div>
-
   <div class="toast-container" id="toastContainer"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="{{.AdminPath}}/js/common.js?v=20260328-1"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260528-1"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260529-1"></script>
 </body>
 
 </html>

@@ -1,9 +1,10 @@
 package handler
 
 import (
-	"github.com/goccy/go-json"
 	"net/http"
 	"strings"
+
+	"github.com/goccy/go-json"
 
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/modelpolicy"
@@ -46,57 +47,6 @@ func isVisiblePublicModel(m *store.Model, filterChannel string) (string, bool) {
 		return mChannel, false
 	}
 	return mChannel, true
-}
-
-func publicGrokAccountPool(acc *store.Account) string {
-	if acc == nil {
-		return ""
-	}
-	sub := strings.ToLower(strings.TrimSpace(acc.Subscription))
-	switch {
-	case strings.Contains(sub, "heavy"):
-		return "heavy"
-	case strings.Contains(sub, "super"), strings.Contains(sub, "pro"):
-		return "super"
-	case strings.Contains(sub, "lite"):
-		return "lite"
-	case strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok"):
-		return "basic"
-	default:
-		return ""
-	}
-}
-
-func modelAvailableForGrokPools(modelID string, pools map[string]struct{}) bool {
-	if len(pools) == 0 {
-		return true
-	}
-	candidates := modelpolicy.GrokModelPoolCandidates(modelID)
-	if len(candidates) == 0 {
-		return true
-	}
-	for _, pool := range candidates {
-		if _, ok := pools[pool]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-func availableGrokPools(accounts []*store.Account) map[string]struct{} {
-	pools := map[string]struct{}{}
-	for _, acc := range accounts {
-		if acc == nil || !acc.Enabled {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") && !strings.EqualFold(strings.TrimSpace(acc.AgentMode), "grok") {
-			continue
-		}
-		if pool := publicGrokAccountPool(acc); pool != "" {
-			pools[pool] = struct{}{}
-		}
-	}
-	return pools
 }
 
 func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {

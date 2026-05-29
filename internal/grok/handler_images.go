@@ -99,33 +99,63 @@ func (h *Handler) serveImagineWSImages(ctx context.Context, w http.ResponseWrite
 		h.streamImagineWSImageGeneration(ctx, w, sess, req, publicBase, nsfw, pro)
 		return
 	}
-	events, errs := h.streamImagineWSImages(ctx, sess, req.Prompt, resolveAspectRatio(req.Size), req.N, nsfw, pro)
 	field := imageResponseField(req.ResponseFormat)
 	data := make([]map[string]interface{}, 0, req.N)
-	for ev := range events {
-		if !ev.Final {
+	used := make([]int64, 0, 3)
+	maxAttempts := 2
+	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
+		maxAttempts = h.cfg.AccountSwitchCount
+	}
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if sess != nil && sess.acc != nil && sess.acc.ID != 0 {
+			used = append(used, sess.acc.ID)
+		}
+		events, errs := h.streamImagineWSImages(ctx, sess, req.Prompt, resolveAspectRatio(req.Size), req.N, nsfw, pro)
+		data = data[:0]
+		for ev := range events {
+			if !ev.Final {
+				continue
+			}
+			val, err := h.imagineImageOutputValue(ctx, sess.token, ev, req.ResponseFormat)
+			if err != nil {
+				slog.Warn("grok imagine ws convert failed", "url", ev.URL, "image_id", ev.ImageID, "error", err)
+				if field == "url" {
+					val = ev.URL
+				} else {
+					val = ""
+				}
+			}
+			if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
+				val = publicBase + val
+			}
+			data = append(data, map[string]interface{}{
+				field:            val,
+				"revised_prompt": nil,
+			})
+		}
+		if err := <-errs; err != nil {
+			if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			spec, ok := ResolveModel(req.Model)
+			if !ok {
+				http.Error(w, "image generation model not found", http.StatusBadRequest)
+				return
+			}
+			nextSess, switchErr := h.openChatAccountSessionForModelExcluding(ctx, used, spec)
+			if switchErr != nil {
+				http.Error(w, fmt.Sprintf("account switch failed: %v (original: %v)", switchErr, err), http.StatusBadGateway)
+				return
+			}
+			sess.Close()
+			sess = nextSess
 			continue
 		}
-		val, err := h.imagineImageOutputValue(ctx, sess.token, ev, req.ResponseFormat)
-		if err != nil {
-			slog.Warn("grok imagine ws convert failed", "url", ev.URL, "image_id", ev.ImageID, "error", err)
-			if field == "url" {
-				val = ev.URL
-			} else {
-				val = ""
-			}
-		}
-		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
-			val = publicBase + val
-		}
-		data = append(data, map[string]interface{}{
-			field:            val,
-			"revised_prompt": nil,
-		})
-	}
-	if err := <-errs; err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		break
 	}
 	if len(data) == 0 {
 		http.Error(w, "no image generated", http.StatusBadGateway)

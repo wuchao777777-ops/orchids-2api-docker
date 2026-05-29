@@ -263,6 +263,11 @@ func normalizeAccountOutput(acc *store.Account) *store.Account {
 	if out == nil {
 		return nil
 	}
+	if strings.EqualFold(out.AccountType, "warp") && out.WarpMonthlyLimit > 0 {
+		out.Subscription = warp.InferSubscriptionFromRequestLimit(&warp.RequestLimitInfo{
+			RequestLimit: int(out.WarpMonthlyLimit),
+		})
+	}
 	if strings.EqualFold(out.AccountType, "grok") {
 		out.RefreshToken = ""
 		out.SessionCookie = ""
