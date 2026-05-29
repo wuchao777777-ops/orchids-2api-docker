@@ -7,6 +7,7 @@ let modelStatusFilter = "";
 let modelPageSize = 50;
 let modelCurrentPage = 1;
 let modelRefreshInFlight = false;
+let modelDeleteOfflineInFlight = false;
 let modelRefreshResults = {};
 let modelRefreshConcurrency = 4;
 
@@ -193,7 +194,7 @@ function renderModelRefreshSummary() {
 
   summary.hidden = false;
   title.textContent = `${result.channel || channel} 最近一次刷新结果`;
-  meta.textContent = `来源：${modelRefreshSourceLabel(result.source)}。并发数 ${result.concurrency || modelRefreshConcurrency}。发现到的模型会写入当前渠道，来源列表里暂时缺失的模型会标记为离线并保留记录。`;
+  meta.textContent = `来源：${modelRefreshSourceLabel(result.source)}。并发数 ${result.concurrency || modelRefreshConcurrency}。刷新只会补充新模型，已有模型的状态、名称、排序和默认项会保持不变。`;
 
   const stats = [
     { label: "发现", value: result.discovered },
@@ -621,17 +622,28 @@ async function deleteModel(id) {
 
 function updateRefreshButton() {
   const button = document.getElementById("refreshModelsButton");
-  if (!button) return;
+  const deleteButton = document.getElementById("deleteOfflineModelsButton");
 
   const channel = currentModelChannel || modelChannels()[0] || "";
-  button.disabled = modelRefreshInFlight || !channel;
-  if (!channel) {
-    button.textContent = "刷新当前渠道";
-    return;
+  if (button) {
+    button.disabled = modelRefreshInFlight || modelDeleteOfflineInFlight || !channel;
+    if (!channel) {
+      button.textContent = "刷新当前渠道";
+    } else {
+      button.textContent = modelRefreshInFlight
+        ? `正在刷新 ${channel}...`
+        : `刷新 ${channel} 列表`;
+    }
   }
-  button.textContent = modelRefreshInFlight
-    ? `正在刷新 ${channel}...`
-    : `刷新 ${channel} 列表`;
+  if (deleteButton) {
+    const offlineCount = getChannelScopedModels()
+      .filter((m) => normalizeModelStatus(m.status) === "offline")
+      .length;
+    deleteButton.disabled = modelRefreshInFlight || modelDeleteOfflineInFlight || !channel || offlineCount === 0;
+    deleteButton.textContent = modelDeleteOfflineInFlight
+      ? "正在删除..."
+      : `删除已下线${offlineCount > 0 ? ` (${offlineCount})` : ""}`;
+  }
 }
 
 async function refreshModelsForCurrentChannel() {
@@ -683,6 +695,48 @@ async function refreshModelsForCurrentChannel() {
     showToast(`刷新失败: ${err.message}`, "error");
   } finally {
     modelRefreshInFlight = false;
+    updateRefreshButton();
+  }
+}
+
+async function deleteOfflineModelsForCurrentChannel() {
+  const channel = currentModelChannel || modelChannels()[0] || "";
+  if (!channel || modelDeleteOfflineInFlight) return;
+
+  const targets = getChannelScopedModels()
+    .filter((m) => normalizeModelStatus(m.status) === "offline");
+  if (targets.length === 0) {
+    showToast(`${channel} 没有已下线模型`, "info");
+    updateRefreshButton();
+    return;
+  }
+  if (!confirm(`确定删除 ${channel} 渠道的 ${targets.length} 个已下线模型吗？`)) {
+    return;
+  }
+
+  modelDeleteOfflineInFlight = true;
+  updateRefreshButton();
+  let deleted = 0;
+  const failures = [];
+  try {
+    for (const model of targets) {
+      try {
+        const res = await fetch(`/api/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(await res.text());
+        deleted += 1;
+      } catch (err) {
+        failures.push(`${model.model_id || model.id}: ${err.message || err}`);
+      }
+    }
+    await loadModels();
+    if (failures.length > 0) {
+      showToast(`已删除 ${deleted} 个，失败 ${failures.length} 个`, "error");
+      console.warn("delete offline models failures", failures);
+    } else {
+      showToast(`已删除 ${deleted} 个已下线模型`);
+    }
+  } finally {
+    modelDeleteOfflineInFlight = false;
     updateRefreshButton();
   }
 }

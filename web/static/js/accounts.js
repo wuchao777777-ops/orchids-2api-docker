@@ -395,6 +395,34 @@ function buildAccountPayload(type, baseData, credential) {
   return payload;
 }
 
+function accountTypeLabel(type) {
+  switch (String(type || "").trim().toLowerCase()) {
+    case "warp":
+      return "Warp";
+    case "puter":
+      return "Puter";
+    case "grok":
+      return "Grok";
+    case "orchids":
+    default:
+      return "Orchids";
+  }
+}
+
+function getActiveAccountType() {
+  const platform = String(currentPlatform || "").trim().toLowerCase();
+  return platform || "orchids";
+}
+
+function setAccountModalType(type) {
+  const normalized = String(type || "orchids").trim().toLowerCase() || "orchids";
+  const typeEl = document.getElementById("accountType");
+  const displayEl = document.getElementById("accountTypeDisplay");
+  if (typeEl) typeEl.value = normalized;
+  if (displayEl) displayEl.value = accountTypeLabel(normalized);
+  applyTokenLabels(normalized);
+}
+
 async function createAccount(payload) {
   const res = await fetch("/api/accounts", {
     method: "POST",
@@ -1196,7 +1224,7 @@ function openModal(account = null) {
   clearAccountImportStatus();
 
   const finalizeModal = () => {
-    applyTokenLabels(typeEl ? typeEl.value : "orchids");
+    applyTokenLabels(typeEl ? typeEl.value : getActiveAccountType());
     modal.classList.add("active");
     modal.style.display = "flex";
   };
@@ -1205,14 +1233,14 @@ function openModal(account = null) {
     if (account) {
       title.textContent = "编辑账号";
       document.getElementById("accountId").value = account.id;
-      document.getElementById("accountType").value = normalizeAccountType(account);
+      setAccountModalType(normalizeAccountType(account));
       document.getElementById("clientCookie").value = getAccountToken(account);
       document.getElementById("enabled").checked = account.enabled;
     } else {
       title.textContent = "添加账号";
       form.reset();
       document.getElementById("accountId").value = "";
-      document.getElementById("accountType").value = "orchids";
+      setAccountModalType(getActiveAccountType());
       document.getElementById("enabled").checked = true;
       document.getElementById("clientCookie").value = "";
     }
@@ -1455,9 +1483,6 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAccounts();
   const typeSelect = document.getElementById("accountType");
   if (typeSelect) {
-    typeSelect.addEventListener("change", () => {
-      applyTokenLabels(typeSelect.value);
-    });
     applyTokenLabels(typeSelect.value);
   }
   const warpUserFileInput = document.getElementById("warpUserFileInput");

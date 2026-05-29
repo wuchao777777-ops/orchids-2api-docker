@@ -335,7 +335,7 @@ func TestGrokConsoleModelsRemainAcceptedAfterProbeFallback(t *testing.T) {
 	}
 }
 
-func TestApplyModelRefresh_MarksModelsMissingFromDiscoveredListOffline(t *testing.T) {
+func TestApplyModelRefresh_PreservesModelsMissingFromDiscoveredList(t *testing.T) {
 	testCases := []struct {
 		channel string
 		modelID string
@@ -372,11 +372,11 @@ func TestApplyModelRefresh_MarksModelsMissingFromDiscoveredListOffline(t *testin
 			if result.Deleted != 0 {
 				t.Fatalf("Deleted=%d want 0", result.Deleted)
 			}
-			if result.Offline != 1 {
-				t.Fatalf("Offline=%d want 1", result.Offline)
+			if result.Offline != 0 {
+				t.Fatalf("Offline=%d want 0", result.Offline)
 			}
-			if len(result.OfflineModelIDs) != 1 || result.OfflineModelIDs[0] != tc.modelID {
-				t.Fatalf("OfflineModelIDs=%v want [%s]", result.OfflineModelIDs, tc.modelID)
+			if len(result.OfflineModelIDs) != 0 {
+				t.Fatalf("OfflineModelIDs=%v want empty", result.OfflineModelIDs)
 			}
 
 			model, err := s.GetModelByChannelAndModelID(ctx, tc.channel, tc.modelID)
@@ -386,20 +386,20 @@ func TestApplyModelRefresh_MarksModelsMissingFromDiscoveredListOffline(t *testin
 			if model == nil {
 				t.Fatalf("expected %s to remain offline", tc.modelID)
 			}
-			if model.Status != store.ModelStatusOffline {
-				t.Fatalf("Status=%q want %q", model.Status, store.ModelStatusOffline)
+			if model.Status != store.ModelStatusAvailable {
+				t.Fatalf("Status=%q want %q", model.Status, store.ModelStatusAvailable)
 			}
-			if model.Verified {
-				t.Fatal("Verified=true want false")
+			if !model.Verified {
+				t.Fatal("Verified=false want true")
 			}
-			if model.IsDefault {
-				t.Fatal("IsDefault=true want false")
+			if !model.IsDefault {
+				t.Fatal("IsDefault=false want true")
 			}
 		})
 	}
 }
 
-func TestApplyModelRefresh_UpdatesExistingModelFromDiscoveredList(t *testing.T) {
+func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 
@@ -426,6 +426,9 @@ func TestApplyModelRefresh_UpdatesExistingModelFromDiscoveredList(t *testing.T) 
 	if result.Deleted != 0 {
 		t.Fatalf("Deleted=%d want 0", result.Deleted)
 	}
+	if result.Updated != 0 {
+		t.Fatalf("Updated=%d want 0", result.Updated)
+	}
 
 	model, err := s.GetModelByChannelAndModelID(ctx, "Warp", "claude-4-5-sonnet")
 	if err != nil {
@@ -434,17 +437,17 @@ func TestApplyModelRefresh_UpdatesExistingModelFromDiscoveredList(t *testing.T) 
 	if model == nil {
 		t.Fatal("expected model to remain in store")
 	}
-	if model.Status != store.ModelStatusAvailable {
-		t.Fatalf("Status=%q want %q", model.Status, store.ModelStatusAvailable)
+	if model.Status != store.ModelStatusOffline {
+		t.Fatalf("Status=%q want %q", model.Status, store.ModelStatusOffline)
 	}
-	if !model.Verified {
-		t.Fatal("Verified=false want true")
+	if model.Verified {
+		t.Fatal("Verified=true want false")
 	}
-	if model.Name != "Claude 4.5 Sonnet (Warp)" {
-		t.Fatalf("Name=%q want %q", model.Name, "Claude 4.5 Sonnet (Warp)")
+	if model.Name != "Old Name" {
+		t.Fatalf("Name=%q want %q", model.Name, "Old Name")
 	}
-	if model.SortOrder != 0 {
-		t.Fatalf("SortOrder=%d want 0", model.SortOrder)
+	if model.SortOrder != 999 {
+		t.Fatalf("SortOrder=%d want 999", model.SortOrder)
 	}
 }
 

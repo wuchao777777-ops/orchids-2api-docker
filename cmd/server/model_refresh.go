@@ -855,65 +855,6 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			result.AddedModelIDs = append(result.AddedModelIDs, model.ID)
 			continue
 		}
-
-		needsUpdate := false
-		if !strings.EqualFold(existing.Channel, channel) {
-			existing.Channel = channel
-			needsUpdate = true
-		}
-		if existing.Name != firstNonEmpty(model.Name, model.ID) {
-			existing.Name = firstNonEmpty(model.Name, model.ID)
-			needsUpdate = true
-		}
-		if existing.SortOrder != model.SortOrder {
-			existing.SortOrder = model.SortOrder
-			needsUpdate = true
-		}
-		if existing.Status != store.ModelStatusAvailable {
-			existing.Status = store.ModelStatusAvailable
-			needsUpdate = true
-		}
-		if !existing.Verified {
-			existing.Verified = true
-			needsUpdate = true
-		}
-		desiredDefault := model.ID == defaultModelID
-		if existing.IsDefault != desiredDefault {
-			existing.IsDefault = desiredDefault
-			needsUpdate = true
-		}
-		if needsUpdate {
-			if err := s.UpdateModel(ctx, existing); err != nil {
-				return nil, err
-			}
-			result.Updated++
-		}
-	}
-
-	for modelID, existing := range existingByID {
-		if _, ok := fetchedSet[modelID]; ok {
-			continue
-		}
-		needsUpdate := false
-		if existing.Status != store.ModelStatusOffline {
-			existing.Status = store.ModelStatusOffline
-			needsUpdate = true
-		}
-		if existing.Verified {
-			existing.Verified = false
-			needsUpdate = true
-		}
-		if existing.IsDefault {
-			existing.IsDefault = false
-			needsUpdate = true
-		}
-		if needsUpdate {
-			if err := s.UpdateModel(ctx, existing); err != nil {
-				return nil, err
-			}
-			result.Offline++
-			result.OfflineModelIDs = append(result.OfflineModelIDs, modelID)
-		}
 	}
 
 	sort.Strings(result.AddedModelIDs)

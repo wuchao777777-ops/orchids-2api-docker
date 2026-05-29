@@ -130,6 +130,45 @@ func TestStoreNew_SeedsGrokImagineModels(t *testing.T) {
 	}
 }
 
+func TestStoreNew_PreservesExistingModelList(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	opts := Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	}
+	s, err := New(opts)
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+
+	ctx := context.Background()
+	model, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-imagine-image")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
+	}
+	if err := s.DeleteModel(ctx, model.ID); err != nil {
+		t.Fatalf("DeleteModel() error = %v", err)
+	}
+	_ = s.Close()
+
+	s, err = New(opts)
+	if err != nil {
+		t.Fatalf("store.New() second error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	if _, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-imagine-image"); err == nil {
+		t.Fatal("expected deleted model to stay deleted after store restart")
+	}
+}
+
 func TestCleanupDeprecatedData_RemovesBoltAccountsAndModels(t *testing.T) {
 	t.Parallel()
 

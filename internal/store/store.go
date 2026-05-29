@@ -170,6 +170,14 @@ func (s *Store) cleanupDeprecatedData() error {
 
 func (s *Store) seedModels() error {
 	ctx := context.Background()
+	existing, err := s.ListModels(ctx)
+	if err == nil && len(existing) > 0 {
+		slog.Debug("Model seed skipped; existing model records preserved", "count", len(existing))
+		return nil
+	}
+	if err != nil {
+		slog.Warn("failed to inspect existing models before seed", "error", err)
+	}
 
 	models := []Model{
 		// Orchids 模型
