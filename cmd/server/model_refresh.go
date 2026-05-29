@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -56,6 +57,14 @@ type discoveredModel struct {
 	ID        string
 	Name      string
 	SortOrder int
+}
+
+type warpAccountDiscovery struct {
+	index   int
+	id      int64
+	choices []warp.ModelChoice
+	source  string
+	ok      bool
 }
 
 type modelRefreshFunc func(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (*modelRefreshResult, error)
@@ -668,13 +677,6 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		})
 	}
 
-	type warpAccountDiscovery struct {
-		index   int
-		choices []warp.ModelChoice
-		source  string
-		ok      bool
-	}
-
 	workerCount := boundedModelRefreshWorkers(len(accounts), concurrency)
 	if workerCount > 0 {
 		jobs := make(chan int, len(accounts))
@@ -692,8 +694,10 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 					if discoverErr != nil {
 						continue
 					}
+					choices = warp.FilterUnavailableModels(ctx, s, acc.ID, choices, time.Now())
 					results <- warpAccountDiscovery{
 						index:   idx,
+						id:      acc.ID,
 						choices: choices,
 						source:  source,
 						ok:      true,
@@ -728,12 +732,40 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 				appendChoice(choice)
 			}
 		}
+		if len(out) > 0 {
+			saveWarpAccountModelChoices(ctx, s, ordered)
+		}
 	}
 
 	if len(out) > 0 {
 		return out, joinWarpDiscoverySources(sourceSet), nil
 	}
 	return warpSeedDiscoveredModels(), "warp_static_catalog_fallback", nil
+}
+
+func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoveries []warpAccountDiscovery) {
+	if s == nil {
+		return
+	}
+	accountChoices := &warp.AccountModelChoices{Accounts: make(map[string][]string)}
+	for _, result := range discoveries {
+		if !result.ok || result.id == 0 || len(result.choices) == 0 {
+			continue
+		}
+		models := make([]string, 0, len(result.choices))
+		for _, choice := range result.choices {
+			models = append(models, choice.ID)
+		}
+		accountChoices.Accounts[strconv.FormatInt(result.id, 10)] = models
+	}
+	if len(accountChoices.Accounts) == 0 {
+		return
+	}
+	if err := warp.SaveAccountModelChoices(ctx, s, accountChoices); err != nil {
+		// Model refresh should still succeed when the advisory account/model
+		// cache cannot be written.
+		return
+	}
 }
 
 func warpSeedDiscoveredModels() []discoveredModel {
@@ -833,7 +865,7 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 		existingByID[model.ModelID] = model
 	}
 
-	defaultModelID := chooseRefreshedDefaultModel(existingByID, candidates)
+	defaultModelID := chooseRefreshedDefaultModel(channel, existingByID, candidates)
 	result.DefaultModelID = defaultModelID
 
 	for _, model := range candidates {
@@ -856,6 +888,32 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			continue
 		}
 	}
+	if shouldForceWarpDefault(channel, defaultModelID) {
+		if existing := existingByID[defaultModelID]; existing != nil && !existing.IsDefault {
+			updated := *existing
+			updated.IsDefault = true
+			if err := s.UpdateModel(ctx, &updated); err != nil {
+				return nil, err
+			}
+			result.Updated++
+		}
+	}
+
+	if shouldDeleteMissingModelsOnRefresh(channel, source) {
+		for modelID, existing := range existingByID {
+			if _, ok := fetchedSet[modelID]; ok {
+				continue
+			}
+			if existing == nil || existing.ID == "" {
+				continue
+			}
+			if err := s.DeleteModel(ctx, existing.ID); err != nil {
+				return nil, err
+			}
+			result.Deleted++
+			result.DeletedModelIDs = append(result.DeletedModelIDs, modelID)
+		}
+	}
 
 	sort.Strings(result.AddedModelIDs)
 	sort.Strings(result.DeletedModelIDs)
@@ -863,7 +921,15 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 	return result, nil
 }
 
-func chooseRefreshedDefaultModel(existing map[string]*store.Model, ordered []discoveredModel) string {
+func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
+	return strings.EqualFold(strings.TrimSpace(channel), "warp") &&
+		strings.Contains(strings.TrimSpace(source), "agent_mode_llms")
+}
+
+func chooseRefreshedDefaultModel(channel string, existing map[string]*store.Model, ordered []discoveredModel) string {
+	if strings.EqualFold(strings.TrimSpace(channel), "warp") && discoveredModelsContain(ordered, warpDefaultModelID()) {
+		return warpDefaultModelID()
+	}
 	for _, model := range ordered {
 		if current := existing[model.ID]; current != nil && current.IsDefault {
 			return model.ID
@@ -873,6 +939,23 @@ func chooseRefreshedDefaultModel(existing map[string]*store.Model, ordered []dis
 		return model.ID
 	}
 	return ""
+}
+
+func warpDefaultModelID() string {
+	return "auto-open"
+}
+
+func shouldForceWarpDefault(channel, modelID string) bool {
+	return strings.EqualFold(strings.TrimSpace(channel), "warp") && modelID == warpDefaultModelID()
+}
+
+func discoveredModelsContain(models []discoveredModel, id string) bool {
+	for _, model := range models {
+		if model.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmpty(values ...string) string {

@@ -132,6 +132,117 @@ func TestProcessStreamBody_ParsesNestedWarpFrames(t *testing.T) {
 	}
 }
 
+func TestProcessStreamBody_HandlesDoneFinishReason(t *testing.T) {
+	var events []upstream.SSEMessage
+
+	finishPayload := appendBytesField(2, nil)
+	finishPayload = append(finishPayload, appendBytesField(8, appendVarintField(2, 3))...)
+	finishPayload = append(finishPayload, appendBytesField(8, appendVarintField(3, 5))...)
+	finishFrame := wrapFrame(appendBytesField(3, finishPayload))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(finishFrame), func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != "model.finish" {
+		t.Fatalf("events=%#v want one finish event", events)
+	}
+	if got, _ := events[0].Event["finishReason"].(string); got != "end_turn" {
+		t.Fatalf("finishReason=%q want end_turn", got)
+	}
+	usage, _ := events[0].Event["usage"].(map[string]interface{})
+	if usage["inputTokens"] != 3 || usage["outputTokens"] != 5 {
+		t.Fatalf("usage=%#v want inputTokens=3 outputTokens=5", usage)
+	}
+}
+
+func TestProcessStreamBody_ExposesShouldRefreshModelConfig(t *testing.T) {
+	var events []upstream.SSEMessage
+
+	finishPayload := appendBytesField(2, nil)
+	finishPayload = append(finishPayload, appendVarintField(9, 1)...)
+	finishFrame := wrapFrame(appendBytesField(3, finishPayload))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(finishFrame), func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != "model.finish" {
+		t.Fatalf("events=%#v want one finish event", events)
+	}
+	if got, _ := events[0].Event["shouldRefreshModelConfig"].(bool); !got {
+		t.Fatalf("shouldRefreshModelConfig=%v want true", events[0].Event["shouldRefreshModelConfig"])
+	}
+}
+
+func TestProcessStreamBody_ReturnsQuotaLimitFinishReason(t *testing.T) {
+	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(4, nil)))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(finishFrame), func(upstream.SSEMessage) {}, nil)
+	if err == nil {
+		t.Fatal("expected quota limit error")
+	}
+	if got := err.Error(); !strings.Contains(got, "quota_limit") || !strings.Contains(got, "no remaining quota") {
+		t.Fatalf("error=%q want quota_limit with no remaining quota", got)
+	}
+}
+
+func TestProcessStreamBody_ReturnsContextWindowFinishReason(t *testing.T) {
+	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(5, nil)))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(finishFrame), func(upstream.SSEMessage) {}, nil)
+	if err == nil {
+		t.Fatal("expected context window error")
+	}
+	if got := err.Error(); !strings.Contains(got, "context_window_exceeded") || !strings.Contains(got, "input is too long") {
+		t.Fatalf("error=%q want context_window_exceeded with input too long", got)
+	}
+}
+
+func TestProcessStreamBody_ReturnsInternalErrorFinishMessage(t *testing.T) {
+	finishFrame := wrapFrame(appendBytesField(3,
+		appendBytesField(7, appendBytesField(1, []byte("upstream blew up"))),
+	))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(finishFrame), func(upstream.SSEMessage) {}, nil)
+	if err == nil {
+		t.Fatal("expected internal error")
+	}
+	if got := err.Error(); !strings.Contains(got, "internal_error") || !strings.Contains(got, "upstream blew up") {
+		t.Fatalf("error=%q want internal_error message", got)
+	}
+}
+
+func TestProcessStreamBody_ReturnsInvalidAPIKeyFinishMessage(t *testing.T) {
+	payload := appendVarintField(1, 2)
+	payload = append(payload, appendBytesField(2, []byte("gpt-test"))...)
+	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(12, payload)))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(finishFrame), func(upstream.SSEMessage) {}, nil)
+	if err == nil {
+		t.Fatal("expected invalid api key error")
+	}
+	if got := err.Error(); !strings.Contains(got, "invalid_api_key") ||
+		!strings.Contains(got, "provider=openai") ||
+		!strings.Contains(got, "model=gpt-test") {
+		t.Fatalf("error=%q want invalid_api_key provider/model", got)
+	}
+}
+
+func TestProcessStreamBody_ErrorsWhenFramesHaveNoParsedEvents(t *testing.T) {
+	err := processStreamBody(context.Background(), bytes.NewReader(wrapFrame(appendBytesField(99, nil))), func(upstream.SSEMessage) {}, nil)
+	if err == nil {
+		t.Fatal("expected no parsed events error")
+	}
+	if got := err.Error(); !strings.Contains(got, "without parsed response events") {
+		t.Fatalf("error=%q want without parsed response events", got)
+	}
+}
+
 func TestProcessStreamBody_FallsBackToLegacySSE(t *testing.T) {
 	var events []upstream.SSEMessage
 

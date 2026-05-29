@@ -55,6 +55,55 @@ func TestClassifyUpstreamError(t *testing.T) {
 			wantRetry:    true,
 			wantSwitch:   true,
 		},
+		{
+			name:         "warp quota limit switches account",
+			errStr:       "warp stream finished with quota_limit: no remaining quota",
+			wantCategory: "rate_limit",
+			wantRetry:    true,
+			wantSwitch:   true,
+		},
+		{
+			name:         "warp context window is client error",
+			errStr:       "warp stream finished with context_window_exceeded: input is too long",
+			wantCategory: "client",
+			wantRetry:    false,
+			wantSwitch:   false,
+		},
+		{
+			name:         "warp invalid api key switches account",
+			errStr:       "warp stream finished with invalid_api_key: provider=openai model=gpt-test",
+			wantCategory: "auth",
+			wantRetry:    true,
+			wantSwitch:   true,
+		},
+		{
+			name:         "warp llm unavailable is server error",
+			errStr:       "warp stream finished with llm_unavailable: model unavailable",
+			wantCategory: "model_unavailable",
+			wantRetry:    true,
+			wantSwitch:   true,
+		},
+		{
+			name:         "warp 400 model not allowed switches account",
+			errStr:       `warp stream request failed: HTTP 400: {"error":"Invalid request: the requested base model (claude-4-5-opus) is not allowed for your account"}`,
+			wantCategory: "model_unavailable",
+			wantRetry:    true,
+			wantSwitch:   true,
+		},
+		{
+			name:         "warp 400 no model available switches account",
+			errStr:       `warp stream request failed: HTTP 400: {"error":"Invalid request: the requested base model (gemini-3-1-pro) has no model available"}`,
+			wantCategory: "model_unavailable",
+			wantRetry:    true,
+			wantSwitch:   true,
+		},
+		{
+			name:         "warp max token limit is client error",
+			errStr:       "warp stream finished with max_token_limit: maximum output tokens reached",
+			wantCategory: "client",
+			wantRetry:    false,
+			wantSwitch:   false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -14,6 +14,7 @@ type HTTPStatusError struct {
 	Operation  string
 	StatusCode int
 	RetryAfter time.Duration
+	Body       string
 }
 
 func (e *HTTPStatusError) Error() string {
@@ -26,6 +27,12 @@ func (e *HTTPStatusError) Error() string {
 	}
 	if e.RetryAfter > 0 {
 		return fmt.Sprintf("warp %s failed: HTTP %d (retry after %s)", op, e.StatusCode, e.RetryAfter.Round(time.Second))
+	}
+	if body := strings.TrimSpace(e.Body); body != "" {
+		if len(body) > 512 {
+			body = body[:512] + "...[truncated]"
+		}
+		return fmt.Sprintf("warp %s failed: HTTP %d: %s", op, e.StatusCode, body)
 	}
 	return fmt.Sprintf("warp %s failed: HTTP %d", op, e.StatusCode)
 }
@@ -45,8 +52,6 @@ func RetryAfter(err error) time.Duration {
 	}
 	return 0
 }
-
-
 
 func parseRetryAfterHeader(value string, now time.Time) time.Duration {
 	v := strings.TrimSpace(value)

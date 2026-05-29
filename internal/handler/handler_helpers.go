@@ -174,12 +174,12 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 }
 
 // selectAccount logic extracted from HandleMessages
-func (h *Handler) selectAccount(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64) (UpstreamClient, *store.Account, error) {
+func (h *Handler) selectAccount(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, modelID ...string) (UpstreamClient, *store.Account, error) {
 	if h.loadBalancer != nil {
 		if targetChannel != "" {
 			slog.Debug("Account channel selection", "channel", targetChannel, "channel_required", channelRequired)
 		}
-		account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
+		account, err := h.selectAccountRecord(ctx, targetChannel, failedAccountIDs, firstString(modelID...))
 		if err != nil {
 			if channelRequired {
 				return nil, nil, err
@@ -205,6 +205,60 @@ func (h *Handler) selectAccount(ctx context.Context, targetChannel string, chann
 		return h.client, nil, nil
 	}
 	return nil, nil, errors.New("no client configured")
+}
+
+func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string, failedAccountIDs []int64, modelID string) (*store.Account, error) {
+	if h == nil || h.loadBalancer == nil {
+		return nil, errors.New("load balancer not configured")
+	}
+	if !strings.EqualFold(strings.TrimSpace(targetChannel), "warp") {
+		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
+	}
+
+	requestedModel := warp.ResolveModelAlias(modelID)
+	if requestedModel == "" {
+		requestedModel = strings.TrimSpace(modelID)
+	}
+	if requestedModel == "" || requestedModel == warp.DefaultModel() {
+		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
+	}
+
+	choices, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
+	if err != nil || choices == nil {
+		return h.selectWarpAccountAvoidingUnavailable(ctx, targetChannel, failedAccountIDs, requestedModel)
+	}
+
+	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
+		return warp.AccountSupportsModel(choices, acc.ID, requestedModel) &&
+			!warp.AccountModelTemporarilyUnavailable(ctx, h.loadBalancer.Store, acc.ID, requestedModel, time.Now())
+	})
+	if err == nil {
+		return account, nil
+	}
+
+	slog.Warn("Warp model-aware account selection found no matching account; falling back to unavailable-aware channel selection", "model", requestedModel, "error", err)
+	return h.selectWarpAccountAvoidingUnavailable(ctx, targetChannel, failedAccountIDs, requestedModel)
+}
+
+func (h *Handler) selectWarpAccountAvoidingUnavailable(ctx context.Context, targetChannel string, failedAccountIDs []int64, requestedModel string) (*store.Account, error) {
+	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
+		return !warp.AccountModelTemporarilyUnavailable(ctx, h.loadBalancer.Store, acc.ID, requestedModel, time.Now())
+	})
+	if err == nil {
+		return account, nil
+	}
+	slog.Warn("Warp unavailable-aware account selection found no matching account; falling back to channel selection", "model", requestedModel, "error", err)
+	return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
+}
+
+func firstString(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (h *Handler) acquireTrackedAccount(acc *store.Account) int64 {
@@ -399,7 +453,7 @@ func computeRetryDelay(base time.Duration, attempt int, category string) time.Du
 
 func shouldRetryCurrentAccountWhenNoAlternative(category string) bool {
 	switch strings.TrimSpace(category) {
-	case "network", "timeout", "server", "unknown":
+	case "network", "timeout", "server", "model_unavailable", "unknown":
 		return true
 	default:
 		return false

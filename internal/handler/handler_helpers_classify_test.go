@@ -24,3 +24,11 @@ func TestShouldRetryCurrentAccountWhenNoAlternative_RateLimit(t *testing.T) {
 		t.Fatal("expected rate_limit to stop retrying the same account when no alternative exists")
 	}
 }
+
+func TestShouldRetryCurrentAccountWhenNoAlternative_ModelUnavailable(t *testing.T) {
+	t.Parallel()
+
+	if !shouldRetryCurrentAccountWhenNoAlternative("model_unavailable") {
+		t.Fatal("expected model_unavailable to retry the current account when no alternative exists")
+	}
+}

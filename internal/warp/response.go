@@ -33,8 +33,11 @@ type toolCall struct {
 }
 
 type finishInfo struct {
-	InputTokens  int
-	OutputTokens int
+	InputTokens              int
+	OutputTokens             int
+	Reason                   string
+	Message                  string
+	ShouldRefreshModelConfig bool
 }
 
 type nonProtobufStreamError struct {
@@ -173,6 +176,7 @@ func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(ups
 
 	br := bufio.NewReaderSize(reader, 64*1024)
 	sawFrame := false
+	handledFrame := false
 	sawToolCall := false
 	toolCallIndex := 0
 
@@ -195,9 +199,12 @@ func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(ups
 		if logger != nil {
 			logger.LogUpstreamSSE("warp_frame", fmt.Sprintf("bytes=%d", len(frame)))
 		}
-		_, done, err := emitWarpPayload(frame, onMessage, &sawToolCall, &toolCallIndex)
+		handled, done, err := emitWarpPayload(frame, onMessage, &sawToolCall, &toolCallIndex)
 		if err != nil {
 			return err
+		}
+		if handled {
+			handledFrame = true
 		}
 		if done {
 			return nil
@@ -206,6 +213,9 @@ func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(ups
 
 	if !sawFrame {
 		return fmt.Errorf("warp stream ended without protobuf frames")
+	}
+	if !handledFrame {
+		return fmt.Errorf("warp stream ended without parsed response events")
 	}
 
 	reason := "end_turn"
@@ -368,6 +378,9 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolC
 			return true, false, fmt.Errorf("warp stream error: %s", parsed.Error)
 		}
 		if parsed.Finish != nil {
+			if err := parsed.Finish.terminalError(); err != nil {
+				return true, false, err
+			}
 			finish := map[string]interface{}{
 				"finishReason": "end_turn",
 			}
@@ -379,6 +392,9 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolC
 					"inputTokens":  parsed.Finish.InputTokens,
 					"outputTokens": parsed.Finish.OutputTokens,
 				}
+			}
+			if parsed.Finish.ShouldRefreshModelConfig {
+				finish["shouldRefreshModelConfig"] = true
 			}
 			onMessage(upstream.SSEMessage{Type: "model.finish", Event: finish})
 			return true, true, nil
@@ -2097,26 +2113,180 @@ func fallbackToolName(field int) string {
 
 func parseNestedStreamFinished(data []byte, out *parsedEvent) {
 	d := decoder{data: data}
-	inputTokens := 0
-	outputTokens := 0
+	finish := &finishInfo{}
 	for !d.eof() {
 		field, wire, err := d.readKey()
 		if err != nil {
 			break
 		}
-		if field == 8 && wire == 2 {
-			payload, err := d.readBytes()
+		if field == 9 {
+			if wire != 0 {
+				_ = d.skip(wire)
+				continue
+			}
+			v, err := d.readVarint()
 			if err != nil {
 				break
 			}
-			in, outTok := parseNestedTokenUsage(payload)
-			inputTokens += in
-			outputTokens += outTok
+			finish.ShouldRefreshModelConfig = v != 0
 			continue
+		}
+		if wire != 2 {
+			_ = d.skip(wire)
+			continue
+		}
+		payload, err := d.readBytes()
+		if err != nil {
+			break
+		}
+		switch field {
+		case 1:
+			finish.Reason = "other"
+		case 2:
+			finish.Reason = "done"
+		case 3:
+			finish.Reason = "max_token_limit"
+		case 4:
+			finish.Reason = "quota_limit"
+		case 5:
+			finish.Reason = "context_window_exceeded"
+		case 6:
+			finish.Reason = "llm_unavailable"
+		case 7:
+			finish.Reason = "internal_error"
+			if msg := parseInternalErrorMessage(payload); msg != "" {
+				finish.Message = msg
+			}
+		case 8:
+			in, outTok := parseNestedTokenUsage(payload)
+			finish.InputTokens += in
+			finish.OutputTokens += outTok
+		case 12:
+			finish.Reason = "invalid_api_key"
+			if msg := parseInvalidAPIKeyMessage(payload); msg != "" {
+				finish.Message = msg
+			}
+		default:
+			// Ignore cost and conversation metadata fields. They are useful for
+			// telemetry, but not needed to decide stream success/failure.
+		}
+	}
+	out.Finish = finish
+}
+
+func (f *finishInfo) terminalError() error {
+	if f == nil {
+		return nil
+	}
+	reason := strings.TrimSpace(f.Reason)
+	switch reason {
+	case "", "done", "other":
+		return nil
+	case "max_token_limit":
+		return fmt.Errorf("warp stream finished with max_token_limit: maximum output tokens reached")
+	case "quota_limit":
+		return fmt.Errorf("warp stream finished with quota_limit: no remaining quota")
+	case "context_window_exceeded":
+		return fmt.Errorf("warp stream finished with context_window_exceeded: input is too long")
+	case "llm_unavailable":
+		return fmt.Errorf("warp stream finished with llm_unavailable: model unavailable")
+	case "internal_error":
+		if f.Message != "" {
+			return fmt.Errorf("warp stream finished with internal_error: %s", f.Message)
+		}
+		return fmt.Errorf("warp stream finished with internal_error")
+	case "invalid_api_key":
+		if f.Message != "" {
+			return fmt.Errorf("warp stream finished with invalid_api_key: %s", f.Message)
+		}
+		return fmt.Errorf("warp stream finished with invalid_api_key")
+	default:
+		return fmt.Errorf("warp stream finished with %s", reason)
+	}
+}
+
+func parseInternalErrorMessage(data []byte) string {
+	d := decoder{data: data}
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			return ""
+		}
+		if field == 1 && wire == 2 {
+			payload, err := d.readBytes()
+			if err != nil {
+				return ""
+			}
+			return string(payload)
 		}
 		_ = d.skip(wire)
 	}
-	out.Finish = &finishInfo{InputTokens: inputTokens, OutputTokens: outputTokens}
+	return ""
+}
+
+func parseInvalidAPIKeyMessage(data []byte) string {
+	d := decoder{data: data}
+	provider := ""
+	model := ""
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			break
+		}
+		switch field {
+		case 1:
+			if wire != 0 {
+				_ = d.skip(wire)
+				continue
+			}
+			v, err := d.readVarint()
+			if err != nil {
+				return ""
+			}
+			provider = warpLLMProviderName(int(v))
+		case 2:
+			if wire != 2 {
+				_ = d.skip(wire)
+				continue
+			}
+			payload, err := d.readBytes()
+			if err != nil {
+				return ""
+			}
+			model = string(payload)
+		default:
+			_ = d.skip(wire)
+		}
+	}
+	switch {
+	case provider != "" && model != "":
+		return fmt.Sprintf("provider=%s model=%s", provider, model)
+	case provider != "":
+		return fmt.Sprintf("provider=%s", provider)
+	case model != "":
+		return fmt.Sprintf("model=%s", model)
+	default:
+		return ""
+	}
+}
+
+func warpLLMProviderName(provider int) string {
+	switch provider {
+	case 1:
+		return "anthropic"
+	case 2:
+		return "openai"
+	case 3:
+		return "google"
+	case 4:
+		return "xai"
+	case 5:
+		return "openrouter"
+	case 6:
+		return "aws_bedrock"
+	default:
+		return ""
+	}
 }
 
 func parseNestedTokenUsage(data []byte) (int, int) {

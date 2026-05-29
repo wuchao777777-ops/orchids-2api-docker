@@ -73,6 +73,17 @@ func (c *Client) FetchDiscoveredModelChoices(ctx context.Context) ([]ModelChoice
 	agentChoices, defaultID, agentErr := fetchUserAgentModeLLMChoices(ctx, client, jwt)
 	workspaceChoices, workspaceErr := fetchWorkspaceAvailableLLMChoices(ctx, client, jwt)
 
+	if len(agentChoices) > 0 {
+		return mergeWarpModelChoices(defaultID, agentChoices), "agent_mode_llms", nil
+	}
+
+	// Workspace availableLlms is a broad configuration surface. In live tests it
+	// can include models that are visible but not callable by the current
+	// account, so only use it when agentMode does not return any model choices.
+	if len(workspaceChoices) > 0 {
+		return mergeWarpModelChoices("", workspaceChoices), "workspace_available_llms_fallback", nil
+	}
+
 	if len(agentChoices) == 0 && len(workspaceChoices) == 0 {
 		switch {
 		case agentErr != nil && workspaceErr != nil:
@@ -85,16 +96,7 @@ func (c *Client) FetchDiscoveredModelChoices(ctx context.Context) ([]ModelChoice
 			return nil, "", fmt.Errorf("warp model discovery returned no choices")
 		}
 	}
-
-	sourceParts := make([]string, 0, 2)
-	if len(agentChoices) > 0 {
-		sourceParts = append(sourceParts, "agent_mode_llms")
-	}
-	if len(workspaceChoices) > 0 {
-		sourceParts = append(sourceParts, "workspace_available_llms")
-	}
-
-	return mergeWarpModelChoices(defaultID, agentChoices, workspaceChoices), strings.Join(sourceParts, "+"), nil
+	return nil, "", fmt.Errorf("warp model discovery returned no choices")
 }
 
 func fetchUserAgentModeLLMChoices(ctx context.Context, client *http.Client, jwt string) ([]ModelChoice, string, error) {

@@ -62,7 +62,8 @@ func ClassifyAccountStatus(errStr string) string {
 		strings.Contains(lower, "available funding is insufficient") ||
 		strings.Contains(lower, "out of credits") ||
 		strings.Contains(lower, "credits exhausted") ||
-		strings.Contains(lower, "run out of credits"):
+		strings.Contains(lower, "run out of credits") ||
+		strings.Contains(lower, "quota_limit"):
 		return "402"
 	case
 		HasExplicitHTTPStatus(lower, "429") ||
@@ -107,15 +108,21 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "canceled", Retryable: false, SwitchAccount: false}
 	case strings.Contains(lower, "model is not found") ||
 		strings.Contains(lower, "model not found") ||
-		strings.Contains(lower, "no_implementation_available"):
+		strings.Contains(lower, "no_implementation_available") ||
+		strings.Contains(lower, "context_window_exceeded") ||
+		strings.Contains(lower, "max_token_limit"):
 		return UpstreamErrorClass{Category: "client", Retryable: false, SwitchAccount: false}
 	case HasExplicitHTTPStatus(lower, "401") ||
-		strings.Contains(lower, "signed out") || strings.Contains(lower, "signed_out"):
+		strings.Contains(lower, "signed out") ||
+		strings.Contains(lower, "signed_out") ||
+		strings.Contains(lower, "invalid_api_key"):
 		return UpstreamErrorClass{Category: "auth", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "403"):
 		return UpstreamErrorClass{Category: "auth_blocked", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "404"):
 		return UpstreamErrorClass{Category: "auth_blocked", Retryable: false, SwitchAccount: false}
+	case isWarpModelUnavailableError(lower):
+		return UpstreamErrorClass{Category: "model_unavailable", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "input is too long") || HasExplicitHTTPStatus(lower, "400"):
 		return UpstreamErrorClass{Category: "client", Retryable: false, SwitchAccount: false}
 	case HasExplicitHTTPStatus(lower, "429") ||
@@ -126,6 +133,7 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		strings.Contains(lower, "insufficient_funds") ||
 		strings.Contains(lower, "insufficient funding") ||
 		strings.Contains(lower, "no remaining quota") ||
+		strings.Contains(lower, "quota_limit") ||
 		strings.Contains(lower, "out of credits") ||
 		strings.Contains(lower, "credits exhausted") ||
 		strings.Contains(lower, "run out of credits"):
@@ -136,9 +144,22 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		strings.Contains(lower, "unexpected eof") || strings.Contains(lower, "use of closed") ||
 		strings.Contains(lower, "broken pipe") || strings.HasSuffix(lower, ": eof") || lower == "eof":
 		return UpstreamErrorClass{Category: "network", Retryable: true, SwitchAccount: true}
-	case HasExplicitHTTPStatus(lower, "500") || HasExplicitHTTPStatus(lower, "502") || HasExplicitHTTPStatus(lower, "503") || HasExplicitHTTPStatus(lower, "504"):
+	case HasExplicitHTTPStatus(lower, "500") || HasExplicitHTTPStatus(lower, "502") || HasExplicitHTTPStatus(lower, "503") || HasExplicitHTTPStatus(lower, "504") ||
+		strings.Contains(lower, "llm_unavailable") ||
+		strings.Contains(lower, "internal_error"):
 		return UpstreamErrorClass{Category: "server", Retryable: true, SwitchAccount: true}
 	default:
 		return UpstreamErrorClass{Category: "unknown", Retryable: true, SwitchAccount: true}
 	}
+}
+
+func isWarpModelUnavailableError(lower string) bool {
+	if !strings.Contains(lower, "warp") {
+		return false
+	}
+	if strings.Contains(lower, "requested base model") &&
+		(strings.Contains(lower, "not allowed") || strings.Contains(lower, "no model available")) {
+		return true
+	}
+	return strings.Contains(lower, "llm_unavailable") || strings.Contains(lower, "model unavailable")
 }
