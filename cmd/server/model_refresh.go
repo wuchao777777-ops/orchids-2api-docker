@@ -338,7 +338,7 @@ func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Conf
 
 	verified := make([]discoveredModel, 0, len(candidates))
 	for idx, candidate := range candidates {
-		if results[idx] == puterModelProbeRejected {
+		if results[idx] != puterModelProbeAccepted {
 			continue
 		}
 		candidate.SortOrder = len(verified)
@@ -355,10 +355,8 @@ func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, 
 			continue
 		}
 		ok := false
-		allDefinitiveRejects := true
 		for attempt := 0; attempt < len(accounts); attempt++ {
 			if err := ctx.Err(); err != nil {
-				allDefinitiveRejects = false
 				break
 			}
 			acc := accounts[(accountIndex+attempt)%len(accounts)]
@@ -368,11 +366,8 @@ func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, 
 				accountIndex = (accountIndex + attempt + 1) % len(accounts)
 				break
 			}
-			if !isPuterModelDefinitiveReject(err) {
-				allDefinitiveRejects = false
-			}
 		}
-		if ok || !allDefinitiveRejects {
+		if ok {
 			candidate.SortOrder = len(verified)
 			verified = append(verified, candidate)
 		}

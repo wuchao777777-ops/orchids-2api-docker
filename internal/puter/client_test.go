@@ -57,6 +57,39 @@ func TestSendRequestWithPayload_EmitsModelEvents(t *testing.T) {
 	}
 }
 
+func TestSendRequestWithPayload_DoesNotFallbackModel(t *testing.T) {
+	prevURL := puterAPIURL
+	t.Cleanup(func() { puterAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"model":"missing-model"`) {
+			t.Fatalf("request body missing requested model: %s", string(body))
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "{\"success\":false,\"error\":\"Model not found, please try one of the following models listed here: https://developer.puter.com/ai/models/\"}\n")
+	}))
+	defer srv.Close()
+	puterAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
+	var events []string
+	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "missing-model",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "hello"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg.Type)
+	}, nil)
+	if err == nil {
+		t.Fatal("expected SendRequestWithPayload() to fail")
+	}
+	if strings.Contains(strings.Join(events, ","), "actual_model") {
+		t.Fatalf("puter should not emit fallback actual_model events, got %v", events)
+	}
+}
+
 func TestVerifyModel_UsesTestModeAndRequestedModel(t *testing.T) {
 	prevURL := puterAPIURL
 	t.Cleanup(func() { puterAPIURL = prevURL })

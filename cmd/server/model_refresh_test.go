@@ -198,7 +198,7 @@ func TestDiscoverModelsForChannel_OrchidsUsesUpstreamAPI(t *testing.T) {
 	}
 }
 
-func TestVerifyPuterDiscoveredModelsConcurrent_KeepsUnknownProbeFailures(t *testing.T) {
+func TestVerifyPuterDiscoveredModelsConcurrent_RequiresAcceptedProbe(t *testing.T) {
 	prevVerify := verifyPuterModelForRefresh
 	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
 
@@ -232,15 +232,15 @@ func TestVerifyPuterDiscoveredModelsConcurrent_KeepsUnknownProbeFailures(t *test
 	for _, item := range got {
 		gotIDs = append(gotIDs, item.ID)
 	}
-	if strings.Join(gotIDs, ",") != "stable,flaky" {
-		t.Fatalf("verified IDs=%v want [stable flaky]", gotIDs)
+	if strings.Join(gotIDs, ",") != "stable" {
+		t.Fatalf("verified IDs=%v want [stable]", gotIDs)
 	}
 	if seen["missing"] != 2 {
 		t.Fatalf("missing probes=%d want 2", seen["missing"])
 	}
 }
 
-func TestVerifyPuterDiscoveredModelsSerial_KeepsUnknownProbeFailures(t *testing.T) {
+func TestVerifyPuterDiscoveredModelsSerial_RequiresAcceptedProbe(t *testing.T) {
 	prevVerify := verifyPuterModelForRefresh
 	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
 
@@ -263,8 +263,8 @@ func TestVerifyPuterDiscoveredModelsSerial_KeepsUnknownProbeFailures(t *testing.
 	for _, item := range got {
 		gotIDs = append(gotIDs, item.ID)
 	}
-	if strings.Join(gotIDs, ",") != "flaky" {
-		t.Fatalf("verified IDs=%v want [flaky]", gotIDs)
+	if strings.Join(gotIDs, ",") != "" {
+		t.Fatalf("verified IDs=%v want []", gotIDs)
 	}
 }
 
