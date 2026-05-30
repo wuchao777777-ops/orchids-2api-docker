@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"orchids-api/internal/store"
 )
 
 func resetImagineSessionsForTest() {
@@ -136,6 +138,18 @@ func TestNormalizeImagineModel_DefaultsToLite(t *testing.T) {
 		if got := normalizeImagineModel(tt.in); got != tt.want {
 			t.Fatalf("normalizeImagineModel(%q)=%q want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestImageModelUsesImagineWSForAccountByPool(t *testing.T) {
+	if imageModelUsesImagineWSForAccount("grok-imagine-image-lite", &store.Account{Subscription: "basic"}) {
+		t.Fatal("basic grok-imagine-image-lite should use app-chat")
+	}
+	if !imageModelUsesImagineWSForAccount("grok-imagine-image-lite", &store.Account{Subscription: "lite"}) {
+		t.Fatal("lite grok-imagine-image-lite should use imagine websocket")
+	}
+	if imageModelUsesProImagineWS("grok-imagine-image-lite") {
+		t.Fatal("grok-imagine-image-lite should not enable pro websocket mode")
 	}
 }
 
