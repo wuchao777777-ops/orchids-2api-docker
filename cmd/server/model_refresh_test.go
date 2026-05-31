@@ -514,6 +514,46 @@ func TestSaveWarpAccountModelChoices(t *testing.T) {
 	if warp.AccountSupportsModel(choices, 1, "gemini-3-pro") {
 		t.Fatal("expected account 1 not to support uncached Gemini model")
 	}
+	if choices.Sources["1"] != "" {
+		t.Fatalf("source=%q want empty", choices.Sources["1"])
+	}
+}
+
+func TestProbeWarpFreeOnlyModelChoices_UsesSmallPreferredSet(t *testing.T) {
+	prevProbe := probeWarpModelForRefresh
+	t.Cleanup(func() { probeWarpModelForRefresh = prevProbe })
+
+	var seen []string
+	probeWarpModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
+		seen = append(seen, modelID)
+		if modelID == "auto-open" || modelID == "claude-4-5-sonnet" || modelID == "gpt-5-2-low" {
+			return nil
+		}
+		return errors.New("model not allowed")
+	}
+
+	choices, source := probeWarpFreeOnlyModelChoices(context.Background(), &config.Config{}, &store.Account{ID: 1, AccountType: "warp"}, []warp.ModelChoice{
+		{ID: "auto-open"},
+		{ID: "gpt-5-2-low"},
+		{ID: "gpt-5-2-medium"},
+	})
+
+	if source != "free_probe" {
+		t.Fatalf("source=%q want free_probe", source)
+	}
+	got := make([]string, 0, len(choices))
+	for _, choice := range choices {
+		got = append(got, choice.ID)
+	}
+	if strings.Join(got, ",") != "auto-open,claude-4-5-sonnet,gpt-5-2-low" {
+		t.Fatalf("choices=%v want auto-open,claude-4-5-sonnet,gpt-5-2-low", got)
+	}
+	if !strings.Contains(strings.Join(seen, ","), "claude-4-5-opus") {
+		t.Fatalf("expected forced probe for opus even when absent from GraphQL choices, seen=%v", seen)
+	}
+	if strings.Contains(strings.Join(seen, ","), "gpt-5-2-medium") {
+		t.Fatalf("probe set should skip medium paid candidate, seen=%v", seen)
+	}
 }
 
 func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {

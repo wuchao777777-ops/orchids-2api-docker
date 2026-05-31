@@ -1,1333 +1,904 @@
-/* Grok tools page: keep local layout, inherit the shared admin visual system. */
-.main-content.grok-tools-page {
-  display: block;
-  padding-top: 78px;
-  padding-bottom: 28px;
-  background: transparent !important;
-  color: var(--text-main) !important;
-  font-family: var(--font-sans, 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
-}
+/* Grok tools: page-specific layout only. Visual primitives come from main.css. */
 
-.grok-tools-page,
-.grok-tools-page * {
-  scrollbar-width: auto !important;
-  -ms-overflow-style: auto !important;
-}
-
-.grok-tools-page *::-webkit-scrollbar {
-  width: 8px !important;
-  height: 8px !important;
-}
-
-.grok-tools-page *::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.16) !important;
-  border-radius: 999px !important;
+.grok-tools-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
 .grok-tools-page .header-section {
-  padding: 0 !important;
-  margin-bottom: 20px !important;
-  display: flex !important;
-  align-items: flex-start !important;
-  justify-content: space-between !important;
-  gap: 16px !important;
+  margin-bottom: 6px;
 }
 
-.grok-tools-page .header-section h1 {
-  margin: 0 0 5px !important;
-  color: var(--text-main) !important;
-  font-size: 1.42rem !important;
-  font-weight: 800 !important;
-  letter-spacing: 0 !important;
-  line-height: 1.2 !important;
+.grok-tools-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
 }
 
-.grok-tools-page .header-section p {
-  max-width: 720px !important;
-  margin: 0 !important;
-  color: var(--text-secondary) !important;
-  font-size: 0.86rem !important;
-  line-height: 1.5 !important;
+.grok-tools-toolbar {
+  align-items: center;
 }
 
-.grok-tools-page .grok-function-card {
-  width: 100% !important;
-  max-width: none !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: visible !important;
-  border: 0 !important;
-  border-radius: var(--radius-lg) !important;
-  background: transparent !important;
-  background-image: none !important;
-  box-shadow: none !important;
+.grok-tabs {
+  min-width: 0;
 }
 
-.grok-tools-page .platform-tabs.grok-tabs {
-  display: flex !important;
-  flex-wrap: wrap !important;
-  gap: 8px !important;
-  padding: 0 !important;
-  margin: 0 0 8px !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
+.grok-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  overflow: visible;
 }
 
-.grok-tools-page .platform-tabs .tab-item {
-  min-width: 78px !important;
-  height: 30px !important;
-  padding: 0 12px !important;
-  border: 0 !important;
-  border-radius: 999px !important;
-  background: #f5f5f5 !important;
-  color: #8f8f8f !important;
-  font-size: 0.76rem !important;
-  font-weight: 600 !important;
-  box-shadow: none !important;
-}
-
-.grok-tools-page .platform-tabs .tab-item:hover {
-  background: #f1f1f1 !important;
-  color: #555 !important;
-}
-
-.grok-tools-page .platform-tabs .tab-item.active {
-  background: #111 !important;
-  color: #fff !important;
-  border-color: #111 !important;
-}
-
-.grok-tools-page .section-hidden {
+.grok-tools-page .section-hidden,
+.grok-tools-page .hidden,
+.grok-tools-page .is-hidden {
   display: none !important;
 }
 
-.grok-tools-page .function-stack,
-.grok-tools-page .grok-tools-grid {
+.grok-panel,
+.chat-shell,
+.chat-sidebar,
+.composer-shell,
+.settings-panel,
+.model-dropdown,
+.imagine-card,
+.video-card,
+.voice-card {
+  min-width: 0;
+}
+
+.grok-panel {
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+.grok-panel h3,
+.card-title,
+.function-title,
+.chat-title-text,
+.sidebar-title {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.grok-panel p,
+.function-subtitle,
+.chat-subtitle,
+.voice-hint,
+.empty-subtitle,
+.meta-label,
+.grok-kv span,
+.progress-meta,
+.ref-name,
+.cache-progress-text {
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.function-stack,
+.grok-tools-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.function-header-row,
+.chat-title,
+.sidebar-header,
+.status-header,
+.status-header-row,
+.voice-log-header,
+.video-preview-header,
+.waterfall-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.inline-flex-row,
+.function-actions,
+.composer-actions,
+.sidebar-actions,
+.video-actions,
+.voice-actions,
+.preview-actions,
+.cache-batch-actions,
+.cache-batch-progress,
+.cache-inline-actions,
+.selection-toolbar,
+.waterfall-actions,
+.voice-log-actions,
+.ref-actions,
+.imagine-header-actions,
+.imagine-masonry-actions,
+.imagine-masonry-controls,
+.imagine-masonry-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.function-divider {
+  height: 1px;
+  width: 100%;
+  background: var(--border-color);
+}
+
+.function-top-grid,
+.video-top-grid,
+.voice-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+  min-width: 0;
+}
+
+.function-settings-grid,
+.settings-grid {
   display: grid;
   gap: 12px;
 }
 
-.grok-tools-page .grok-panel,
-.grok-tools-page .chat-shell,
-.grok-tools-page .chat-sidebar,
-.grok-tools-page .composer-shell,
-.grok-tools-page .settings-panel,
-.grok-tools-page .model-dropdown,
-.grok-tools-page .imagine-card,
-.grok-tools-page .video-card,
-.grok-tools-page .voice-card {
-  border: 0 !important;
-  border-radius: 14px !important;
-  background: #fff !important;
-  background-image: none !important;
-  color: var(--text-main) !important;
-  box-shadow: none !important;
-}
-
-.grok-tools-page .grok-panel,
-.grok-tools-page .chat-shell,
-.grok-tools-page .chat-sidebar,
-.grok-tools-page .video-card,
-.grok-tools-page .voice-card,
-.grok-tools-page .imagine-card {
-  padding: 16px !important;
-}
-
-.grok-tools-page .chat-shell {
-  min-height: calc(100vh - 180px) !important;
-}
-
-.grok-tools-page .chat-layout {
-  display: grid !important;
-  grid-template-columns: 210px minmax(0, 1fr) !important;
-  gap: 12px !important;
-  align-items: stretch !important;
-}
-
-.grok-tools-page .chat-sidebar {
-  position: sticky !important;
-  top: 70px !important;
-  left: auto !important;
-  bottom: auto !important;
-  z-index: 10 !important;
-  width: auto !important;
-  height: calc(100vh - 102px) !important;
-  max-height: calc(100vh - 102px) !important;
-  transform: none !important;
-  opacity: 1 !important;
-}
-
-.grok-tools-page .sidebar-overlay {
-  background: rgba(17, 17, 17, 0.32) !important;
-}
-
-.grok-tools-page .chat-layout.collapsed {
-  grid-template-columns: auto minmax(0, 1fr) !important;
-}
-
-.grok-tools-page .chat-layout.collapsed .chat-sidebar {
-  width: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-}
-
-.grok-tools-page .chat-title,
-.grok-tools-page .function-header-row,
-.grok-tools-page .status-header,
-.grok-tools-page .voice-log-header,
-.grok-tools-page .video-preview-header,
-.grok-tools-page .waterfall-header {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  gap: 12px !important;
-  flex-wrap: wrap !important;
-}
-
-.grok-tools-page .function-title,
-.grok-tools-page .chat-title-text {
-  margin: 0 !important;
-  color: var(--text-main) !important;
-  font-size: 1.05rem !important;
-  font-weight: 700 !important;
-  letter-spacing: 0 !important;
-  line-height: 1.25 !important;
-}
-
-.grok-tools-page .card-title,
-.grok-tools-page .grok-panel h3,
-.grok-tools-page .sidebar-title,
-.grok-tools-page .toggle-title,
-.grok-tools-page .meta-value,
-.grok-tools-page .grok-kv strong {
-  color: var(--text-main) !important;
-  font-size: 0.86rem !important;
-  font-weight: 700 !important;
-  letter-spacing: 0 !important;
-}
-
-.grok-tools-page .function-subtitle,
-.grok-tools-page .chat-subtitle,
-.grok-tools-page .grok-panel p,
-.grok-tools-page .toggle-desc,
-.grok-tools-page .meta-label,
-.grok-tools-page .grok-kv span,
-.grok-tools-page .imagine-meta,
-.grok-tools-page .waterfall-meta,
-.grok-tools-page .voice-hint,
-.grok-tools-page .progress-meta,
-.grok-tools-page .table-empty-cell,
-.grok-tools-page .session-meta,
-.grok-tools-page .ref-name,
-.grok-tools-page .empty-subtitle {
-  color: var(--text-secondary) !important;
-  font-size: 0.78rem !important;
-  letter-spacing: 0 !important;
-}
-
-.grok-tools-page .function-divider {
-  height: 1px !important;
-  margin: 0 !important;
-  border: 0 !important;
-  background: #f1ece2 !important;
-}
-
-.grok-tools-page .function-top-grid,
-.grok-tools-page #grokImagineSection .function-top-grid.imagine-top-grid,
-.grok-tools-page #grokVideoSection .video-top-grid,
-.grok-tools-page #grokVoiceSection .voice-grid {
-  display: grid !important;
-  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr) !important;
-  gap: 12px !important;
-  align-items: start !important;
-}
-
-.grok-tools-page .function-settings-grid,
-.grok-tools-page .settings-grid {
-  display: grid !important;
-  gap: 12px !important;
-}
-
-.grok-tools-page .function-settings-row {
-  display: grid !important;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  gap: 12px !important;
-}
-
-.grok-tools-page #grokImagineSection .settings-grid,
-.grok-tools-page #grokVideoSection .settings-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  grid-template-areas: none !important;
-  grid-template-rows: none !important;
-}
-
-.grok-tools-page #grokImagineSection .settings-block,
-.grok-tools-page #grokVideoSection .settings-block {
-  grid-area: auto !important;
-  grid-column: auto !important;
-  grid-row: auto !important;
-}
-
-.grok-tools-page #grokImagineSection .settings-block-prompt,
-.grok-tools-page #grokVideoSection .prompt-block,
-.grok-tools-page #grokVideoSection .ref-block {
-  grid-column: 1 / -1 !important;
-}
-
-.grok-tools-page .function-settings-block,
-.grok-tools-page .settings-block,
-.grok-tools-page .settings-field {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 6px !important;
-  min-width: 0 !important;
-}
-
-.grok-tools-page .field-label,
-.grok-tools-page .form-label {
-  margin: 0 !important;
-  color: #6f6f6f !important;
-  font-size: 0.78rem !important;
-  font-weight: 700 !important;
-  letter-spacing: 0 !important;
-}
-
-.grok-tools-page .form-input,
-.grok-tools-page input,
-.grok-tools-page textarea,
-.grok-tools-page select,
-.grok-tools-page .composer-textarea,
-.grok-tools-page .session-rename-input {
-  min-height: 34px !important;
-  padding: 0 10px !important;
-  border: 1px solid #e5e5e5 !important;
-  border-radius: 8px !important;
-  background: #fff !important;
-  color: #171717 !important;
-  font-family: inherit !important;
-  font-size: 0.84rem !important;
-  box-shadow: none !important;
-  outline: none !important;
-}
-
-.grok-tools-page textarea,
-.grok-tools-page textarea.form-input,
-.grok-tools-page .composer-textarea {
-  padding-top: 10px !important;
-  padding-bottom: 10px !important;
-  line-height: 1.5 !important;
-  resize: vertical !important;
-}
-
-.grok-tools-page .form-input:focus,
-.grok-tools-page input:focus,
-.grok-tools-page textarea:focus,
-.grok-tools-page select:focus,
-.grok-tools-page .composer-input:focus-within {
-  border-color: #bbb !important;
-  background: #fff !important;
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04) !important;
-}
-
-.grok-tools-page .btn,
-.grok-tools-page .send-btn,
-.grok-tools-page .icon-btn,
-.grok-tools-page .sidebar-expand-btn,
-.grok-tools-page .action-btn {
-  min-height: 32px !important;
-  padding: 0 14px !important;
-  border-radius: 999px !important;
-  font-size: 0.82rem !important;
-  font-weight: 700 !important;
-  letter-spacing: 0 !important;
-  box-shadow: none !important;
-  transform: none !important;
-}
-
-.grok-tools-page .icon-btn,
-.grok-tools-page .send-btn,
-.grok-tools-page .sidebar-expand-btn {
-  width: 32px !important;
-  min-width: 32px !important;
-  height: 32px !important;
-  padding: 0 !important;
-}
-
-.grok-tools-page .btn-primary,
-.grok-tools-page .send-btn {
-  border-color: #111 !important;
-  background: #111 !important;
-  color: #fff !important;
-}
-
-.grok-tools-page .btn-outline,
-.grok-tools-page .icon-btn,
-.grok-tools-page .model-chip,
-.grok-tools-page .session-item,
-.grok-tools-page .file-badge {
-  border: 0 !important;
-  background: #f1ece2 !important;
-  color: #554f45 !important;
-}
-
-.grok-tools-page .btn-outline:hover,
-.grok-tools-page .icon-btn:hover,
-.grok-tools-page .model-chip:hover,
-.grok-tools-page .session-item:hover {
-  background: #ebe4d8 !important;
-  color: #222 !important;
-}
-
-.grok-tools-page .btn-danger-outline {
-  border: 0 !important;
-  background: #fbf3f2 !important;
-  color: #92514b !important;
-}
-
-.grok-tools-page .session-item.active,
-.grok-tools-page .mode-btn.active {
-  background: #111 !important;
-  color: #fff !important;
-}
-
-.grok-tools-page .status-text,
-.grok-tools-page .tag,
-.grok-tools-page .image-status,
-.grok-tools-page .selected-count {
-  min-height: 24px !important;
-  padding: 4px 8px !important;
-  border: 0 !important;
-  border-radius: 999px !important;
-  background: #f7f7f7 !important;
-  color: #666 !important;
-  font-size: 0.72rem !important;
-  font-weight: 700 !important;
-}
-
-.grok-tools-page .status-text.connected,
-.grok-tools-page .image-status.done {
-  background: rgba(62, 143, 105, 0.12) !important;
-  color: var(--accent-green) !important;
-}
-
-.grok-tools-page .status-text.connecting,
-.grok-tools-page .image-status.running {
-  background: rgba(180, 122, 61, 0.12) !important;
-  color: var(--accent-orange) !important;
-}
-
-.grok-tools-page .status-text.error {
-  background: rgba(182, 106, 99, 0.12) !important;
-  color: var(--accent-red) !important;
-}
-
-.grok-tools-page .grok-kv,
-.grok-tools-page .meta-item,
-.grok-tools-page .toggle-row,
-.grok-tools-page .mode-switch,
-.grok-tools-page .imagine-connection-block,
-.grok-tools-page .chat-thread,
-.grok-tools-page .voice-log,
-.grok-tools-page .raw-log,
-.grok-tools-page .visualizer,
-.grok-tools-page .audio-root,
-.grok-tools-page .video-empty,
-.grok-tools-page .preview-stage,
-.grok-tools-page .video-stage,
-.grok-tools-page .cache-list,
-.grok-tools-page .message-row.user .message-bubble,
-.grok-tools-page .message-content.rendered .code-block,
-.grok-tools-page .message-content.rendered .inline-code,
-.grok-tools-page .message-content.rendered blockquote,
-.grok-tools-page .img-retry {
-  border: 1px solid #ece7dd !important;
-  border-radius: 8px !important;
-  background: #faf9f5 !important;
-  background-image: none !important;
-  color: var(--text-main) !important;
-  box-shadow: none !important;
-}
-
-.grok-tools-page .meta-grid,
-.grok-tools-page .grok-form-grid {
-  display: grid !important;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  gap: 12px !important;
-}
-
-.grok-tools-page .grok-form-grid .full {
-  grid-column: 1 / -1 !important;
-}
-
-.grok-tools-page .grok-kv,
-.grok-tools-page .meta-item,
-.grok-tools-page .toggle-row {
-  min-height: 58px !important;
-  padding: 10px 12px !important;
-}
-
-.grok-tools-page .mode-switch {
-  display: inline-flex !important;
-  gap: 4px !important;
-  padding: 4px !important;
-}
-
-.grok-tools-page .mode-btn {
-  min-height: 28px !important;
-  padding: 0 10px !important;
-  border: 0 !important;
-  border-radius: 999px !important;
-  background: transparent !important;
-  color: var(--text-secondary) !important;
-  font-weight: 700 !important;
-}
-
-.grok-tools-page .toggle {
-  position: relative !important;
-  width: 38px !important;
-  height: 22px !important;
-  flex: 0 0 auto !important;
-}
-
-.grok-tools-page .toggle input {
-  opacity: 0 !important;
-}
-
-.grok-tools-page .toggle-track {
-  position: absolute !important;
-  inset: 0 !important;
-  border-radius: 999px !important;
-  background: #e6e2da !important;
-}
-
-.grok-tools-page .toggle-track::after {
-  content: "" !important;
-  position: absolute !important;
-  top: 2px !important;
-  left: 2px !important;
-  width: 18px !important;
-  height: 18px !important;
-  border-radius: 50% !important;
-  background: #fff !important;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14) !important;
-  transition: transform 0.2s ease !important;
-}
-
-.grok-tools-page .toggle input:checked + .toggle-track {
-  background: #111 !important;
-}
-
-.grok-tools-page .toggle input:checked + .toggle-track::after {
-  transform: translateX(16px) !important;
-}
-
-.grok-tools-page .composer-shell {
-  position: sticky !important;
-  bottom: 12px !important;
-  padding: 0 !important;
-  margin-top: auto !important;
-  background: transparent !important;
-}
-
-.grok-tools-page .composer-input {
-  display: flex !important;
-  align-items: flex-end !important;
-  gap: 8px !important;
-  padding: 8px !important;
-  border: 1px solid #ece7dd !important;
-  border-radius: 14px !important;
-  background: #fff !important;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06) !important;
-}
-
-.grok-tools-page .composer-textarea {
-  min-height: 42px !important;
-  max-height: 180px !important;
-  flex: 1 1 auto !important;
-  border: 0 !important;
-  box-shadow: none !important;
-}
-
-.grok-tools-page .composer-actions,
-.grok-tools-page .function-actions,
-.grok-tools-page .waterfall-actions,
-.grok-tools-page .selection-toolbar,
-.grok-tools-page .cache-batch-actions,
-.grok-tools-page .cache-batch-progress,
-.grok-tools-page .cache-inline-actions,
-.grok-tools-page .voice-log-actions,
-.grok-tools-page .video-actions {
-  display: flex !important;
-  align-items: center !important;
-  gap: 8px !important;
-  flex-wrap: wrap !important;
-}
-
-.grok-tools-page .model-chip {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 6px !important;
-  min-height: 32px !important;
-  padding: 0 10px !important;
-  border-radius: 999px !important;
-  position: relative !important;
-  cursor: pointer !important;
-}
-
-.grok-tools-page .model-dropdown,
-.grok-tools-page .settings-panel {
-  border: 1px solid #ece7dd !important;
-  border-radius: 12px !important;
-  padding: 8px !important;
-  box-shadow: var(--shadow-md) !important;
-  z-index: 30 !important;
-}
-
-.grok-tools-page .model-option {
-  padding: 7px 9px !important;
-  border-radius: 8px !important;
-  color: var(--text-main) !important;
-}
-
-.grok-tools-page .model-option:hover,
-.grok-tools-page .model-option.active {
-  background: #f1ece2 !important;
-}
-
-.grok-tools-page .message-bubble {
-  color: var(--text-main) !important;
-  font-size: 0.9rem !important;
-  line-height: 1.6 !important;
-}
-
-.grok-tools-page .message-row.user .message-bubble {
-  max-width: min(88%, 720px) !important;
-  padding: 8px 12px !important;
-}
-
-.grok-tools-page .message-row.assistant .message-bubble {
-  background: transparent !important;
-  border: 0 !important;
-}
-
-.grok-tools-page .message-content.rendered img,
-.grok-tools-page .message-content.rendered .img-grid img {
-  border-color: #ece7dd !important;
-  border-radius: 8px !important;
-}
-
-.grok-tools-page .think-summary,
-.grok-tools-page .think-content,
-.grok-tools-page .think-agent summary,
-.grok-tools-page .think-rollout-group summary,
-.grok-tools-page .think-item-body {
-  color: var(--text-secondary) !important;
-}
-
-.grok-tools-page .think-summary::before,
-.grok-tools-page .think-agent summary::before,
-.grok-tools-page .think-rollout-title::before {
-  background: #f1ece2 !important;
-  border-color: #ece7dd !important;
-  box-shadow: none !important;
-}
-
-.grok-tools-page .waterfall,
-.grok-tools-page #grokImagineSection #imagineGrid.waterfall {
-  display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
-  gap: 12px !important;
-}
-
-.grok-tools-page #grokImagineSection .function-top-grid.imagine-top-grid {
-  grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.72fr) !important;
-  gap: 12px !important;
-  align-items: stretch !important;
-}
-
-.grok-tools-page #grokImagineSection .settings-card,
-.grok-tools-page #grokImagineSection .imagine-card {
-  height: 100% !important;
-}
-
-.grok-tools-page #grokImagineSection .settings-grid {
-  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.8fr) !important;
-  align-items: stretch !important;
-}
-
-.grok-tools-page #grokImagineSection .settings-block-prompt textarea {
-  min-height: 118px !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-card {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 12px !important;
-}
-
-.grok-tools-page #grokImagineSection .status-header-row {
-  margin-bottom: 0 !important;
-  justify-content: space-between !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-connection-block {
-  display: grid !important;
-  grid-template-columns: auto minmax(0, 1fr) !important;
-  gap: 8px !important;
-  align-items: center !important;
-  min-height: 48px !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-mode-select-shell {
+.function-settings-row,
+.meta-grid,
+.grok-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.function-settings-row.triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.grok-form-grid .full,
+.settings-block-full,
+.prompt-block,
+.ref-block {
+  grid-column: 1 / -1;
+}
+
+.function-settings-block,
+.settings-block,
+.settings-field,
+.voice-primary,
+.voice-side,
+.preview-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.grok-kv,
+.meta-item,
+.toggle-row,
+.mode-switch,
+.imagine-connection-block,
+.chat-thread,
+.voice-log,
+.raw-log,
+.visualizer,
+.audio-root,
+.video-empty,
+.preview-stage,
+.video-stage,
+.cache-list {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-hover);
+}
+
+.grok-kv,
+.meta-item,
+.toggle-row {
+  min-height: 58px;
+  padding: 12px;
+}
+
+.grok-kv {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.grok-kv strong,
+.meta-value {
+  color: var(--text-main);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.status-text,
+.image-status,
+.selected-count {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.status-text.connected,
+.image-status.done {
+  color: var(--accent-green);
+  background: rgba(52, 211, 153, 0.1);
+}
+
+.status-text.connecting,
+.image-status.running {
+  color: var(--accent-orange);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.status-text.error,
+.image-status.error {
+  color: var(--accent-red);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.icon-btn,
+.send-btn,
+.sidebar-expand-btn,
+.action-btn {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: #f7f7f7;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.icon-btn:hover,
+.send-btn:hover,
+.sidebar-expand-btn:hover,
+.action-btn:hover {
+  color: var(--text-main);
+  background: #efefef;
+}
+
+.send-btn {
+  color: #fff;
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.model-chip,
+.file-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-main);
+}
+
+.file-input,
+.ref-file-input {
+  display: none;
+}
+
+.file-remove {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.model-dropdown,
+.settings-panel {
+  position: absolute;
+  z-index: 40;
+  display: none;
+  min-width: 220px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+
+.model-dropdown.show,
+.settings-panel.show,
+.popover.open .settings-panel {
+  display: block;
+}
+
+.model-option {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.model-option:hover,
+.model-option.active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.range-row input[type="range"],
+.range-input {
+  width: 100%;
+}
+
+.range-value {
+  min-width: 42px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.chat-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.chat-layout.collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-layout.collapsed .chat-sidebar,
+.chat-layout.collapsed .sidebar-overlay {
+  display: none;
+}
+
+.sidebar-expand-btn {
+  display: none;
+}
+
+.chat-sidebar {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100vh - 160px);
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.sidebar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.session-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: #fff;
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-item.active {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
+.session-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.session-delete:hover {
+  background: #f3f3f3;
+  color: var(--text-main);
+}
+
+.session-rename-input {
+  width: calc(100% - 30px);
+  min-height: 24px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-highlight);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--text-main);
+  font: inherit;
+  font-weight: 700;
+}
+
+.session-title {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.session-meta {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.chat-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: calc(100vh - 230px);
+}
+
+.chat-title-main {
+  min-width: 0;
+}
+
+.chat-thread {
+  flex: 1 1 auto;
+  min-height: 360px;
+  padding: 16px;
+  overflow: auto;
+}
+
+.chat-empty,
+.empty-title {
+  color: var(--text-secondary);
+}
+
+.message-row {
+  display: flex;
+  margin: 12px 0;
+}
+
+.message-row.user {
+  justify-content: flex-end;
+}
+
+.message-bubble {
+  max-width: min(88%, 760px);
+  color: var(--text-main);
+  line-height: 1.6;
+}
+
+.message-row.user .message-bubble {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+
+.message-content.rendered img,
+.message-content.rendered .img-grid img {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+}
+
+.composer-shell {
+  position: sticky;
+  bottom: 16px;
+  z-index: 5;
+}
+
+.composer-input {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+
+.composer-textarea {
+  min-height: 42px;
+  max-height: 180px;
+  flex: 1 1 auto;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-main);
+  resize: none;
+  outline: none;
+}
+
+.imagine-masonry-shell {
+  display: grid;
+  grid-template-rows: minmax(360px, 1fr) auto;
+  gap: 16px;
+  min-height: calc(100vh - 270px);
+}
+
+.imagine-masonry-feed,
+.waterfall {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 18px;
+}
+
+.imagine-masonry-empty {
+  display: grid;
+  place-items: center;
+  min-height: 280px;
+}
+
+.imagine-masonry-empty[hidden] {
+  display: none;
+}
+
+.imagine-masonry-empty-card {
+  padding: 24px;
+  text-align: center;
+  border: 1px dashed var(--border-highlight);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+}
+
+.imagine-masonry-batch {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.imagine-masonry-batch-head,
+.imagine-masonry-batch-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.imagine-masonry-grid,
+#imagineGrid .imagine-masonry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.waterfall-item,
+.imagine-masonry-tile {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.waterfall-item img,
+.imagine-masonry-tile img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+
+.waterfall-meta,
+.imagine-masonry-tile-label {
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.imagine-masonry-composer {
+  position: sticky;
+  bottom: 16px;
+  z-index: 6;
+}
+
+.imagine-masonry-input-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+
+.imagine-masonry-textarea {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.imagine-masonry-toolbar {
+  justify-content: space-between;
+}
+
+.imagine-masonry-toggle {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.imagine-masonry-toggle-btn,
+.mode-btn {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.imagine-masonry-toggle-btn.is-active,
+.mode-btn.active {
+  color: #fff;
+  background: var(--primary);
+}
+
+.imagine-masonry-ratio {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.imagine-masonry-ratio .form-input {
+  width: auto;
+  min-width: 86px;
+  padding: 8px 10px;
+}
+
+.imagine-masonry-send svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+.imagine-hidden-compat {
   display: none !important;
 }
 
-.grok-tools-page #grokImagineSection .imagine-status-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+.image-checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
 }
 
-.grok-tools-page #grokImagineSection .function-actions {
-  margin-top: auto !important;
+.video-stage,
+.video-empty,
+.audio-root,
+.visualizer,
+.voice-log,
+.raw-log {
+  padding: 14px;
 }
 
-.grok-tools-page #grokImagineSection .waterfall-header {
-  position: sticky !important;
-  top: 0 !important;
-  z-index: 3 !important;
-  padding: 8px 0 !important;
-  background: rgba(253, 252, 248, 0.92) !important;
-  backdrop-filter: blur(8px) !important;
+.video-stage {
+  display: grid;
+  gap: 12px;
 }
 
-.grok-tools-page #grokImagineSection #imagineGrid.waterfall {
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important;
-  align-items: start !important;
+.video-stage.hidden {
+  display: none;
 }
 
-.grok-tools-page .waterfall-item,
-.grok-tools-page #grokImagineSection #imagineGrid .waterfall-item {
-  overflow: hidden !important;
-  border: 1px solid #ece7dd !important;
-  border-radius: 10px !important;
-  background: #fff !important;
-  box-shadow: none !important;
-  transform: none !important;
+.video-item,
+.video-item-body {
+  min-width: 0;
 }
 
-.grok-tools-page .waterfall-item:hover {
-  transform: none !important;
-  box-shadow: none !important;
+.video-item video,
+.video-stage video {
+  width: 100%;
+  max-height: 640px;
+  border-radius: var(--radius-md);
+  background: #000;
 }
 
-.grok-tools-page .waterfall-item img {
-  display: block !important;
-  width: 100% !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: #f1ece2 !important;
+.voice-log,
+.raw-log {
+  min-height: 220px;
+  white-space: pre-wrap;
+  overflow: auto;
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  font-size: 0.82rem;
 }
 
-.grok-tools-page .waterfall-meta,
-.grok-tools-page #grokImagineSection #imagineGrid .waterfall-meta {
-  padding: 8px 10px !important;
-  border-top: 1px solid #ece7dd !important;
-  background: #fff !important;
+.visualizer {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 80px;
 }
 
-.grok-tools-page #grokImagineSection .imagine-header-row {
-  align-items: flex-start !important;
+.visualizer .bar {
+  width: 8px;
+  min-height: 4px;
+  border-radius: 999px;
+  background: var(--primary);
 }
 
-.grok-tools-page #grokImagineSection .imagine-header-actions {
-  flex-wrap: wrap !important;
+.audio-root audio {
+  display: block;
+  width: 100%;
 }
 
-.grok-tools-page #grokImagineSection .imagine-masonry-shell {
-  display: grid !important;
-  grid-template-rows: minmax(360px, 1fr) auto !important;
-  gap: 16px !important;
-  min-height: calc(100vh - 260px) !important;
+.progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.grok-tools-page #grokImagineSection #imagineGrid.imagine-masonry-feed {
-  display: grid !important;
-  grid-template-columns: 1fr !important;
-  align-content: start !important;
-  gap: 24px !important;
-  min-height: 360px !important;
+.progress-bar {
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(139, 146, 168, 0.12);
 }
 
-.grok-tools-page #grokImagineSection #imagineGrid.imagine-masonry-feed.waterfall {
-  grid-template-columns: 1fr !important;
+.progress-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary), var(--accent-cyan));
+  transition: width 0.2s ease;
 }
 
-.grok-tools-page #grokImagineSection .imagine-masonry-empty {
-  min-height: 360px !important;
-  display: grid !important;
-  place-items: center !important;
-  color: var(--text-secondary) !important;
+.progress-bar.indeterminate .progress-fill {
+  width: 40%;
+  animation: grok-progress-indeterminate 1.2s ease-in-out infinite;
 }
 
-.grok-tools-page #grokImagineSection .imagine-masonry-empty[hidden] {
-  display: none !important;
+@keyframes grok-progress-indeterminate {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(220%); }
 }
 
-.grok-tools-page #grokImagineSection .imagine-masonry-empty-card {
-  display: grid !important;
-  gap: 10px !important;
-  width: min(100%, 540px) !important;
-  text-align: center !important;
+.cache-list {
+  overflow: auto;
 }
 
-.grok-tools-page #grokImagineSection .imagine-masonry-batch {
-  display: grid !important;
-  gap: 14px !important;
+.cache-list table {
+  min-width: 760px;
 }
 
-.grok-tools-page #grokImagineSection .imagine-masonry-batch-head {
-  display: flex !important;
-  align-items: flex-start !important;
-  justify-content: space-between !important;
-  gap: 16px !important;
+.table-empty-cell {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 24px;
 }
 
-.grok-tools-page #grokImagineSection .imagine-masonry-batch-prompt {
-  max-width: 760px !important;
-  color: var(--text-primary) !important;
-  font-size: 15px !important;
-  font-weight: 700 !important;
-  line-height: 1.55 !important;
-  word-break: break-word !important;
+.table-checkbox-cell {
+  width: 40px;
+  text-align: center;
 }
 
-.grok-tools-page #grokImagineSection .imagine-masonry-batch-meta {
-  display: flex !important;
-  justify-content: flex-end !important;
-  gap: 6px !important;
-  flex-wrap: wrap !important;
+.cache-progress-bar {
+  width: 180px;
+  height: 8px;
 }
 
-.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip {
-  min-height: 22px !important;
-  padding: 2px 9px !important;
-  border: 1px solid #ece7dd !important;
-  border-radius: 999px !important;
-  background: #faf9f5 !important;
-  color: #615a51 !important;
-  font-size: 11px !important;
-  font-weight: 700 !important;
-  line-height: 1.2 !important;
-  white-space: nowrap !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-round,
-.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-state[data-state="generating"] {
-  background: #111 !important;
-  border-color: #111 !important;
-  color: #fff !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-state[data-state="success"] {
-  background: #ecfdf5 !important;
-  border-color: #bbf7d0 !important;
-  color: #047857 !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-state[data-state="partial"] {
-  background: #fff7ed !important;
-  border-color: #fed7aa !important;
-  color: #c2410c !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-batch-chip.is-state[data-state="failed"] {
-  background: #fef2f2 !important;
-  border-color: #fecaca !important;
-  color: #dc2626 !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-grid {
-  --tile-aspect: 1 / 1;
-  display: grid !important;
-  grid-template-columns: repeat(auto-fit, minmax(152px, 1fr)) !important;
-  gap: 12px !important;
-}
-
-.grok-tools-page #grokImagineSection #imagineGrid .imagine-masonry-tile {
-  position: relative !important;
-  overflow: hidden !important;
-  border: 0 !important;
-  border-radius: 12px !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile-body {
-  display: grid !important;
-  place-items: center !important;
-  aspect-ratio: var(--tile-aspect, 1 / 1) !important;
-  min-height: 0 !important;
-  overflow: hidden !important;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.52), rgba(255,255,255,.12) 36%, rgba(255,255,255,.34) 64%, rgba(255,255,255,.08)),
-    linear-gradient(180deg, #f2ede4 0%, #e9e2d6 100%) !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile.is-pending .imagine-masonry-tile-body {
-  background-size: 200% 200%, 100% 100% !important;
-  animation: imagine-masonry-pending 5.6s ease-in-out infinite !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile.is-ready .imagine-masonry-tile-body {
-  background: transparent !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile.is-filtered .imagine-masonry-tile-body {
-  background: #ede8df !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile-link,
-.grok-tools-page #grokImagineSection .imagine-masonry-tile img {
-  display: block !important;
-  width: 100% !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile img {
-  height: auto !important;
-  aspect-ratio: var(--tile-aspect, auto) !important;
-  object-fit: cover !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile-badge {
-  position: absolute !important;
-  top: 10px !important;
-  left: 10px !important;
-  z-index: 2 !important;
-  color: rgba(78,72,64,.72) !important;
-  font-size: 10px !important;
-  font-weight: 800 !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile-progress {
-  width: min(72%, 124px) !important;
-  display: grid !important;
-  gap: 7px !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile-progress-value {
-  color: #4f493f !important;
-  font-size: 16px !important;
-  font-weight: 800 !important;
-  line-height: 1 !important;
-  text-align: center !important;
-  font-variant-numeric: tabular-nums !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile-progress-track {
-  height: 3px !important;
-  overflow: hidden !important;
-  border-radius: 999px !important;
-  background: rgba(17,17,17,.08) !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile-progress-fill {
-  width: 0;
-  height: 100% !important;
-  border-radius: 999px !important;
-  background: linear-gradient(90deg, #514b42 0%, #82786b 100%) !important;
-  transition: width .25s ease !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-tile-label {
-  color: #6b6459 !important;
-  font-size: 12px !important;
-  font-weight: 700 !important;
-}
-
-@keyframes imagine-masonry-pending {
-  0%, 100% { background-position: 0% 50%, 0 0; }
-  50% { background-position: 100% 50%, 0 0; }
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-composer {
-  position: sticky !important;
-  bottom: 0 !important;
-  z-index: 5 !important;
-  padding-top: 10px !important;
-  background: linear-gradient(180deg, rgba(253,252,248,0), #fdfcf8 38%) !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-input-shell {
-  width: min(100%, 920px) !important;
-  margin: 0 auto !important;
-  display: grid !important;
-  gap: 12px !important;
-  padding: 14px !important;
-  border: 1px solid #ece7dd !important;
-  border-radius: 24px !important;
-  background: #fff !important;
-  box-shadow: 0 10px 30px rgba(24,22,20,.05) !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-textarea {
-  min-height: 52px !important;
-  max-height: 160px !important;
-  padding: 8px 4px !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  resize: none !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-toolbar {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  gap: 12px !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-controls,
-.grok-tools-page #grokImagineSection .imagine-masonry-actions {
-  display: flex !important;
-  align-items: center !important;
-  gap: 8px !important;
-  min-width: 0 !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-toggle {
-  height: 32px !important;
-  padding: 3px !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 1px !important;
-  border-radius: 999px !important;
-  background: #faf9f5 !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-toggle-btn {
-  min-width: 56px !important;
-  height: 26px !important;
-  padding: 0 9px !important;
-  border-radius: 999px !important;
-  color: #7d786f !important;
-  font-size: 10px !important;
-  font-weight: 800 !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-toggle-btn.is-active {
-  background: #111 !important;
-  color: #fff !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-ratio {
-  width: 96px !important;
-  height: 32px !important;
-  display: grid !important;
-  grid-template-columns: 1fr 2fr !important;
-  align-items: center !important;
-  column-gap: 6px !important;
-  padding: 0 10px !important;
-  border-radius: 999px !important;
-  background: #faf9f5 !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-ratio-icon {
-  width: 11px !important;
-  height: 18px !important;
-  display: block !important;
-  justify-self: center !important;
-  border-radius: 4px !important;
-  background: #111 !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-ratio[data-ratio="1:1"] .imagine-masonry-ratio-icon { width: 15px !important; height: 15px !important; }
-.grok-tools-page #grokImagineSection .imagine-masonry-ratio[data-ratio="3:2"] .imagine-masonry-ratio-icon { width: 18px !important; height: 12px !important; }
-.grok-tools-page #grokImagineSection .imagine-masonry-ratio[data-ratio="16:9"] .imagine-masonry-ratio-icon { width: 19px !important; height: 11px !important; }
-.grok-tools-page #grokImagineSection .imagine-masonry-ratio[data-ratio="9:16"] .imagine-masonry-ratio-icon { width: 10px !important; height: 19px !important; }
-
-.grok-tools-page #grokImagineSection .imagine-masonry-ratio .form-input {
-  width: 100% !important;
-  min-width: 0 !important;
-  height: 26px !important;
-  padding: 0 14px 0 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background-color: transparent !important;
-  box-shadow: none !important;
-  color: #111 !important;
-  font-size: 10px !important;
-  font-weight: 800 !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-send {
-  width: 34px !important;
-  min-width: 34px !important;
-  height: 34px !important;
-  padding: 0 !important;
-  border-radius: 999px !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-send svg {
-  width: 14px !important;
-  height: 14px !important;
-  fill: none !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-masonry-send path {
-  stroke: currentColor !important;
-  stroke-width: 2.1 !important;
-  stroke-linecap: round !important;
-  stroke-linejoin: round !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-hidden-compat {
-  position: absolute !important;
-  width: 1px !important;
-  height: 1px !important;
-  overflow: hidden !important;
-  clip: rect(0 0 0 0) !important;
-  clip-path: inset(50%) !important;
-}
-
-.grok-tools-page #grokImagineSection .imagine-selection-toolbar {
-  position: sticky !important;
-  bottom: 92px !important;
-  z-index: 6 !important;
-  width: max-content !important;
-  max-width: 100% !important;
-  margin-left: auto !important;
-  padding: 8px !important;
-  border: 1px solid #ece7dd !important;
-  border-radius: 999px !important;
-  background: #fff !important;
-  box-shadow: 0 10px 30px rgba(24,22,20,.08) !important;
-}
-
-.grok-tools-page .image-checkbox {
-  border: 1px solid #ece7dd !important;
-  background: #fff !important;
-}
-
-.grok-tools-page .waterfall-item.selected .image-checkbox {
-  background: #111 !important;
-  color: #fff !important;
-}
-
-.grok-tools-page .video-stage,
-.grok-tools-page #grokVideoSection .video-stage,
-.grok-tools-page .video-item,
-.grok-tools-page #grokVideoSection .video-item,
-.grok-tools-page .video-item-body,
-.grok-tools-page #grokVideoSection .video-item-body {
-  background: #111 !important;
-  color: #e2e8f0 !important;
-  border-color: #111 !important;
-}
-
-.grok-tools-page .video-item video,
-.grok-tools-page #grokVideoSection .video-item video {
-  background: #000 !important;
-}
-
-.grok-tools-page .voice-log,
-.grok-tools-page .raw-log {
-  min-height: 160px !important;
-  max-height: 280px !important;
-  overflow: auto !important;
-  font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace !important;
-  font-size: 0.78rem !important;
-  white-space: pre-wrap !important;
-}
-
-.grok-tools-page .visualizer {
-  display: flex !important;
-  align-items: flex-end !important;
-  gap: 4px !important;
-  height: 64px !important;
-}
-
-.grok-tools-page .visualizer .bar {
-  width: 4px !important;
-  min-height: 6px !important;
-  border-radius: 999px !important;
-  background: #111 !important;
-}
-
-.grok-tools-page .progress-bar {
-  height: 8px !important;
-  border-radius: 999px !important;
-  overflow: hidden !important;
-  background: #f1ece2 !important;
-}
-
-.grok-tools-page .progress-fill,
-.grok-tools-page progress::-webkit-progress-value,
-.grok-tools-page progress::-moz-progress-bar {
-  background: #111 !important;
-}
-
-.grok-tools-page .range-input {
-  width: 100% !important;
-  accent-color: #111 !important;
-}
-
-.grok-tools-page .cache-list {
-  overflow: auto !important;
-  padding: 0 !important;
-}
-
-.grok-tools-page .cache-list table {
-  min-width: 760px !important;
-  width: 100% !important;
-  border-collapse: collapse !important;
-  background: #fff !important;
-}
-
-.grok-tools-page .cache-list th,
-.grok-tools-page .cache-list td {
-  padding: 11px 16px !important;
-  border: 0 !important;
-  border-bottom: 1px solid #f1ece2 !important;
-  background: #fff !important;
-  color: var(--text-main) !important;
-  font-size: 0.8rem !important;
-}
-
-.grok-tools-page .cache-list th {
-  color: #9b9b9b !important;
-  font-weight: 700 !important;
-}
-
-.grok-tools-page #grokChatSection.section-hidden,
-.grok-tools-page #grokImagineSection.section-hidden,
-.grok-tools-page #grokVideoSection.section-hidden,
-.grok-tools-page #grokVoiceSection.section-hidden,
-.grok-tools-page #grokCacheSection.section-hidden {
-  display: none !important;
-}
-
-@media (max-width: 1024px) {
-  .grok-tools-page .chat-layout {
-    grid-template-columns: 1fr !important;
+@media (max-width: 1080px) {
+  .function-top-grid,
+  .video-top-grid,
+  .voice-grid,
+  .chat-layout {
+    grid-template-columns: 1fr;
   }
 
-  .grok-tools-page .chat-sidebar {
-    position: fixed !important;
-    top: 54px !important;
-    left: 0 !important;
-    bottom: 0 !important;
-    z-index: 60 !important;
-    width: min(300px, 84vw) !important;
-    height: calc(100dvh - 54px) !important;
-    max-height: none !important;
-    transform: translateX(-110%) !important;
-    transition: transform 0.2s ease !important;
+  .chat-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 70;
+    width: min(320px, 86vw);
+    max-height: none;
+    border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
   }
 
-  .grok-tools-page .chat-sidebar.open,
-  .grok-tools-page .chat-sidebar.show {
-    transform: translateX(0) !important;
+  .chat-sidebar.open,
+  .chat-sidebar.show {
+    transform: translateX(0);
   }
 
-  .grok-tools-page .sidebar-toggle {
-    display: inline-flex !important;
+  .chat-layout.collapsed .chat-sidebar {
+    display: flex;
   }
 
-  .grok-tools-page .function-top-grid,
-  .grok-tools-page #grokImagineSection .function-top-grid.imagine-top-grid,
-  .grok-tools-page #grokVideoSection .video-top-grid,
-  .grok-tools-page #grokVoiceSection .voice-grid {
-    grid-template-columns: 1fr !important;
-  }
-}
-
-@media (max-width: 640px) {
-  .main-content.grok-tools-page {
-    padding: 22px 16px 24px;
+  .grok-tools-page .sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 65;
+    display: none;
+    background: rgba(0, 0, 0, 0.38);
   }
 
-  .grok-tools-page .header-section {
-    margin-bottom: 16px !important;
+  .grok-tools-page .sidebar-overlay.open,
+  .grok-tools-page .sidebar-overlay.show {
+    display: block;
   }
 
-  .grok-tools-page .header-section h1 {
-    font-size: 1.2rem !important;
-  }
-
-  .grok-tools-page .platform-tabs .tab-item {
-    flex: 1 1 calc(50% - 8px) !important;
-  }
-
-  .grok-tools-page .function-settings-row,
-  .grok-tools-page .meta-grid,
-  .grok-tools-page .grok-form-grid,
-  .grok-tools-page #grokImagineSection .settings-grid,
-  .grok-tools-page #grokVideoSection .settings-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .grok-tools-page #grokImagineSection .imagine-status-grid {
-    grid-template-columns: 1fr !important;
-  }
-
-  .grok-tools-page #grokImagineSection .imagine-connection-block {
-    grid-template-columns: 1fr !important;
-  }
-
-  .grok-tools-page #grokImagineSection #imagineGrid.waterfall {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)) !important;
-  }
-
-  .grok-tools-page #grokImagineSection .imagine-masonry-shell {
-    min-height: calc(100vh - 220px) !important;
-  }
-
-  .grok-tools-page #grokImagineSection .imagine-masonry-batch-head {
-    display: grid !important;
-  }
-
-  .grok-tools-page #grokImagineSection .imagine-masonry-grid {
-    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)) !important;
-    gap: 10px !important;
-  }
-
-  .grok-tools-page #grokImagineSection .imagine-masonry-toolbar {
-    flex-wrap: nowrap !important;
-    gap: 8px !important;
-  }
-
-  .grok-tools-page #grokImagineSection .imagine-masonry-controls {
-    overflow-x: auto !important;
-    overflow-y: hidden !important;
-    scrollbar-width: none !important;
-    flex-wrap: nowrap !important;
-  }
-
-  .grok-tools-page #grokImagineSection .imagine-masonry-controls::-webkit-scrollbar {
+  .sidebar-expand-btn {
     display: none !important;
   }
+}
 
-  .grok-tools-page #grokImagineSection .imagine-masonry-toggle-btn {
-    min-width: 52px !important;
-    padding: 0 7px !important;
+@media (max-width: 760px) {
+  .grok-tools-toolbar {
+    align-items: stretch;
   }
 
-  .grok-tools-page #grokImagineSection .imagine-masonry-actions .status-text {
-    display: none !important;
+  .function-settings-row,
+  .function-settings-row.triple,
+  .meta-grid,
+  .grok-form-grid {
+    grid-template-columns: 1fr;
   }
 
-  .grok-tools-page .composer-input {
-    align-items: stretch !important;
-    flex-wrap: wrap !important;
+  .imagine-masonry-toolbar,
+  .composer-input {
+    align-items: stretch;
   }
 
-  .grok-tools-page .composer-textarea {
-    flex-basis: 100% !important;
-    order: -1 !important;
+  .composer-actions,
+  .imagine-masonry-actions,
+  .imagine-masonry-controls {
+    width: 100%;
+  }
+
+  .imagine-masonry-grid,
+  #imagineGrid .imagine-masonry-grid {
+    grid-template-columns: 1fr;
   }
 }

@@ -32,6 +32,12 @@ var verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, a
 	return client.VerifyModel(ctx, modelID)
 }
 
+var probeWarpModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
+	client := warp.NewFromAccount(acc, refreshModelRequestConfig(cfg, "warp"))
+	defer client.Close()
+	return client.ProbeModel(ctx, modelID)
+}
+
 type modelRefreshRequest struct {
 	Channel     string `json:"channel"`
 	Concurrency int    `json:"concurrency,omitempty"`
@@ -691,6 +697,13 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 						continue
 					}
 					choices = warp.FilterUnavailableModels(ctx, s, acc.ID, choices, time.Now())
+					if warp.AccountFreeOnly(acc) {
+						choices, source = probeWarpFreeOnlyModelChoices(ctx, cfg, acc, choices)
+						if len(choices) == 0 {
+							choices = []warp.ModelChoice{{ID: warp.DefaultModel(), Name: "Warp Auto Open"}}
+							source = "free_probe_fallback"
+						}
+					}
 					results <- warpAccountDiscovery{
 						index:   idx,
 						id:      acc.ID,
@@ -739,11 +752,94 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 	return warpSeedDiscoveredModels(), "warp_static_catalog_fallback", nil
 }
 
+func probeWarpFreeOnlyModelChoices(ctx context.Context, cfg *config.Config, acc *store.Account, discovered []warp.ModelChoice) ([]warp.ModelChoice, string) {
+	candidates := warpFreeOnlyProbeCandidates(discovered)
+	out := make([]warp.ModelChoice, 0, len(candidates))
+	for _, choice := range candidates {
+		if err := probeWarpModelForRefresh(ctx, cfg, acc, choice.ID); err != nil {
+			continue
+		}
+		out = append(out, choice)
+	}
+	if len(out) == 0 {
+		return nil, "free_probe"
+	}
+	return out, "free_probe"
+}
+
+func warpFreeOnlyProbeCandidates(discovered []warp.ModelChoice) []warp.ModelChoice {
+	preferred := []string{
+		warp.DefaultModel(),
+		"claude-4-5-haiku",
+		"claude-4-5-sonnet",
+		"claude-4-5-opus",
+		"gpt-5-2-low",
+		"gpt-5-1-low",
+		"gemini-3-5-flash",
+	}
+	byID := make(map[string]warp.ModelChoice, len(discovered)+len(preferred))
+	for _, choice := range discovered {
+		id := warp.NormalizeModelID(choice.ID)
+		if id == "" {
+			continue
+		}
+		choice.ID = id
+		if strings.TrimSpace(choice.Name) == "" {
+			choice.Name = id
+		}
+		byID[id] = choice
+	}
+	out := make([]warp.ModelChoice, 0, len(preferred))
+	seen := map[string]struct{}{}
+	for _, id := range preferred {
+		id = warp.NormalizeModelID(id)
+		if id == "" {
+			continue
+		}
+		choice, ok := byID[id]
+		if !ok {
+			choice = warp.ModelChoice{ID: id, Name: warpProbeModelName(id)}
+			ok = true
+		}
+		if !ok {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, choice)
+	}
+	return out
+}
+
+func warpProbeModelName(id string) string {
+	switch id {
+	case warp.DefaultModel():
+		return "Warp Auto Open"
+	case "claude-4-5-haiku":
+		return "Claude 4.5 Haiku"
+	case "claude-4-5-sonnet":
+		return "Claude 4.5 Sonnet"
+	case "claude-4-5-opus":
+		return "Claude 4.5 Opus"
+	case "gpt-5-2-low":
+		return "GPT-5.2 Low"
+	case "gpt-5-1-low":
+		return "GPT-5.1 Low"
+	case "gemini-3-5-flash":
+		return "Gemini 3.5 Flash"
+	default:
+		return id
+	}
+}
+
 func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoveries []warpAccountDiscovery) {
 	if s == nil {
 		return
 	}
 	accountChoices := &warp.AccountModelChoices{Accounts: make(map[string][]string)}
+	accountChoices.Sources = make(map[string]string)
 	for _, result := range discoveries {
 		if !result.ok || result.id == 0 || len(result.choices) == 0 {
 			continue
@@ -752,7 +848,11 @@ func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoverie
 		for _, choice := range result.choices {
 			models = append(models, choice.ID)
 		}
-		accountChoices.Accounts[strconv.FormatInt(result.id, 10)] = models
+		key := strconv.FormatInt(result.id, 10)
+		accountChoices.Accounts[key] = models
+		if source := strings.TrimSpace(result.source); source != "" {
+			accountChoices.Sources[key] = source
+		}
 	}
 	if len(accountChoices.Accounts) == 0 {
 		return

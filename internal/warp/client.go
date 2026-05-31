@@ -103,6 +103,41 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 	return c.SendRequestWithPayload(ctx, req, onMessage, logger)
 }
 
+func (c *Client) ProbeModel(ctx context.Context, model string) error {
+	if c == nil || c.session == nil {
+		return fmt.Errorf("warp session not initialized")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	req := upstream.UpstreamRequest{
+		Prompt:  "Reply with ok.",
+		Model:   model,
+		NoTools: true,
+	}
+
+	authClient := c.authHTTPClient()
+	if err := c.session.ensureToken(ctx, authClient); err != nil {
+		return err
+	}
+	if err := c.session.ensureLogin(ctx, c.httpClient); err != nil {
+		return err
+	}
+
+	_, payload, err := buildRequestBytes(req)
+	if err != nil {
+		return err
+	}
+
+	refresh := func() error {
+		if err := c.session.ensureToken(ctx, authClient); err != nil {
+			return err
+		}
+		return c.session.ensureLogin(ctx, c.httpClient)
+	}
+	return c.streamWithRetry(ctx, payload, req, func(upstream.SSEMessage) {}, nil, refresh)
+}
+
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	if c == nil || c.session == nil {
 		return fmt.Errorf("warp session not initialized")
