@@ -73,12 +73,36 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 	return s.SetSetting(ctx, accountModelChoicesSettingKey, string(payload))
 }
 
+func SaveAccountModelChoicesForAccount(ctx context.Context, s *store.Store, accountID int64, models []string) error {
+	if s == nil || accountID == 0 {
+		return nil
+	}
+	existing, err := LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		existing = &AccountModelChoices{Accounts: map[string][]string{}}
+	}
+	if existing.Accounts == nil {
+		existing.Accounts = map[string][]string{}
+	}
+	key := strconv.FormatInt(accountID, 10)
+	normalized := normalizeAccountModelIDs(models)
+	if len(normalized) == 0 {
+		delete(existing.Accounts, key)
+	} else {
+		existing.Accounts[key] = normalized
+	}
+	return SaveAccountModelChoices(ctx, s, existing)
+}
+
 func AccountSupportsModel(choices *AccountModelChoices, accountID int64, modelID string) bool {
 	if choices == nil || len(choices.Accounts) == 0 || accountID == 0 {
 		return true
 	}
 	modelID = canonicalModelID(modelID)
-	if modelID == "" || modelID == defaultModel {
+	if modelID == "" {
 		return true
 	}
 	models := choices.Accounts[strconv.FormatInt(accountID, 10)]
@@ -88,6 +112,24 @@ func AccountSupportsModel(choices *AccountModelChoices, accountID int64, modelID
 	for _, model := range models {
 		if model == modelID {
 			return true
+		}
+	}
+	return false
+}
+
+func ChoicesSupportModel(choices *AccountModelChoices, modelID string) bool {
+	if choices == nil || len(choices.Accounts) == 0 {
+		return true
+	}
+	modelID = canonicalModelID(modelID)
+	if modelID == "" {
+		return true
+	}
+	for _, models := range choices.Accounts {
+		for _, model := range models {
+			if model == modelID {
+				return true
+			}
 		}
 	}
 	return false

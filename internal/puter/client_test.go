@@ -57,6 +57,36 @@ func TestSendRequestWithPayload_EmitsModelEvents(t *testing.T) {
 	}
 }
 
+func TestFetchMonthlyUsage(t *testing.T) {
+	prevURL := puterMeteringUsageURL
+	t.Cleanup(func() { puterMeteringUsageURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method=%s want GET", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer puter-token" {
+			t.Fatalf("Authorization=%q want bearer token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"usage":{"total":{"cost":42,"count":2,"units":7}},"appTotals":{"app-1":{"count":3,"total":123.5}},"allowanceInfo":{"remaining":13494935.4,"monthUsageAllowance":25000000,"addons":{}}}`)
+	}))
+	defer srv.Close()
+	puterMeteringUsageURL = srv.URL
+
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
+	usage, err := client.FetchMonthlyUsage(context.Background())
+	if err != nil {
+		t.Fatalf("FetchMonthlyUsage() error = %v", err)
+	}
+	if usage.AllowanceInfo.Remaining != 13494935.4 || usage.AllowanceInfo.MonthUsageAllowance != 25000000 {
+		t.Fatalf("unexpected allowance: %+v", usage.AllowanceInfo)
+	}
+	if usage.AppTotals["app-1"].Count != 3 || usage.AppTotals["app-1"].Total != 123.5 {
+		t.Fatalf("unexpected app totals: %+v", usage.AppTotals)
+	}
+}
+
 func TestSendRequestWithPayload_DoesNotFallbackModel(t *testing.T) {
 	prevURL := puterAPIURL
 	t.Cleanup(func() { puterAPIURL = prevURL })

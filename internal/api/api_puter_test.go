@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 )
 
@@ -33,9 +34,16 @@ func TestRefreshAccountState_PuterRequiresAuthToken(t *testing.T) {
 
 func TestRefreshAccountState_PuterAcceptsValidToken(t *testing.T) {
 	prevVerify := puterVerifyAccount
-	t.Cleanup(func() { puterVerifyAccount = prevVerify })
+	prevUsage := puterFetchMonthlyUsage
+	t.Cleanup(func() {
+		puterVerifyAccount = prevVerify
+		puterFetchMonthlyUsage = prevUsage
+	})
 
 	called := false
+	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
+		return nil, errors.New("usage endpoint unavailable")
+	}
 	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
 		called = true
 		return nil
@@ -56,10 +64,92 @@ func TestRefreshAccountState_PuterAcceptsValidToken(t *testing.T) {
 	}
 }
 
+func TestRefreshAccountState_PuterSyncsMonthlyUsage(t *testing.T) {
+	prevVerify := puterVerifyAccount
+	prevUsage := puterFetchMonthlyUsage
+	t.Cleanup(func() {
+		puterVerifyAccount = prevVerify
+		puterFetchMonthlyUsage = prevUsage
+	})
+
+	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
+		return &puter.MonthlyUsage{
+			AllowanceInfo: puter.UsageAllowanceInfo{
+				Remaining:           13494935.4,
+				MonthUsageAllowance: 25000000,
+			},
+		}, nil
+	}
+	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
+		t.Fatal("verification ping should not run when usage sync succeeds")
+		return nil
+	}
+
+	a := New(nil, "", "", &config.Config{})
+	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
+
+	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
+	if err != nil {
+		t.Fatalf("refreshAccountState() error = %v", err)
+	}
+	if status != "" || httpStatus != 0 {
+		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
+	}
+	if acc.UsageCurrent != 13494935.4 || acc.UsageLimit != 25000000 {
+		t.Fatalf("unexpected usage current=%v limit=%v", acc.UsageCurrent, acc.UsageLimit)
+	}
+}
+
+func TestRefreshAccountState_PuterMonthlyUsageExhaustedReturns402(t *testing.T) {
+	prevVerify := puterVerifyAccount
+	prevUsage := puterFetchMonthlyUsage
+	t.Cleanup(func() {
+		puterVerifyAccount = prevVerify
+		puterFetchMonthlyUsage = prevUsage
+	})
+
+	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
+		return &puter.MonthlyUsage{
+			AllowanceInfo: puter.UsageAllowanceInfo{
+				Remaining:           0,
+				MonthUsageAllowance: 25000000,
+			},
+		}, nil
+	}
+	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
+		t.Fatal("verification ping should not run when usage sync succeeds")
+		return nil
+	}
+
+	a := New(nil, "", "", &config.Config{})
+	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
+
+	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
+	if err == nil {
+		t.Fatal("expected exhausted usage error")
+	}
+	if status != "402" {
+		t.Fatalf("status=%q want 402", status)
+	}
+	if httpStatus != http.StatusPaymentRequired {
+		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusPaymentRequired)
+	}
+	if acc.UsageCurrent != 0 || acc.UsageLimit != 25000000 {
+		t.Fatalf("unexpected usage current=%v limit=%v", acc.UsageCurrent, acc.UsageLimit)
+	}
+}
+
 func TestRefreshAccountState_PuterPropagatesUpstreamStatus(t *testing.T) {
 	prevVerify := puterVerifyAccount
-	t.Cleanup(func() { puterVerifyAccount = prevVerify })
+	prevUsage := puterFetchMonthlyUsage
+	t.Cleanup(func() {
+		puterVerifyAccount = prevVerify
+		puterFetchMonthlyUsage = prevUsage
+	})
 
+	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
+		return nil, errors.New("usage endpoint unavailable")
+	}
 	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
 		return errors.New("unexpected status code 401: unauthorized")
 	}
@@ -81,8 +171,15 @@ func TestRefreshAccountState_PuterPropagatesUpstreamStatus(t *testing.T) {
 
 func TestRefreshAccountState_PuterInsufficientFundsReturns402(t *testing.T) {
 	prevVerify := puterVerifyAccount
-	t.Cleanup(func() { puterVerifyAccount = prevVerify })
+	prevUsage := puterFetchMonthlyUsage
+	t.Cleanup(func() {
+		puterVerifyAccount = prevVerify
+		puterFetchMonthlyUsage = prevUsage
+	})
 
+	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
+		return nil, errors.New("usage endpoint unavailable")
+	}
 	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
 		return errors.New("puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.")
 	}

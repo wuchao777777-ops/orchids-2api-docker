@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
+	"orchids-api/internal/warp"
 )
 
 func TestResolveWorkdir_NoSessionFallbackWithoutExplicitConversation(t *testing.T) {
@@ -158,5 +160,33 @@ func TestValidateModelAvailability_PuterUsesChannelSpecificModel(t *testing.T) {
 	}
 	if got.ModelID != "claude-opus-4-5" {
 		t.Fatalf("validateModelAvailability() model = %q, want %q", got.ModelID, "claude-opus-4-5")
+	}
+}
+
+func TestSelectAccountRecord_WarpRejectsModelOutsideCurrentPool(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+	if err := s.CreateAccount(ctx, &store.Account{
+		AccountType:  "warp",
+		RefreshToken: "warp-free-token",
+		Enabled:      true,
+	}); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+	if err := warp.SaveAccountModelChoicesForAccount(ctx, s, 1, []string{"auto-open"}); err != nil {
+		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
+	}
+
+	_, err := h.selectAccountRecord(ctx, "warp", nil, "gpt-5-2-medium")
+	if err == nil {
+		t.Fatal("selectAccountRecord() error = nil, want unavailable model error")
+	}
+	if !strings.Contains(err.Error(), "not available in the current Warp account pool") {
+		t.Fatalf("selectAccountRecord() error = %q", err.Error())
 	}
 }

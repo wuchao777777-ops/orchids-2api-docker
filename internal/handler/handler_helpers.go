@@ -227,6 +227,9 @@ func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string,
 	if err != nil || choices == nil {
 		return h.selectWarpAccountAvoidingUnavailable(ctx, targetChannel, failedAccountIDs, requestedModel)
 	}
+	if !warp.ChoicesSupportModel(choices, requestedModel) {
+		return nil, fmt.Errorf("no enabled accounts available for channel: %s (model %s is not available in the current Warp account pool)", targetChannel, requestedModel)
+	}
 
 	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
 		return warp.AccountSupportsModel(choices, acc.ID, requestedModel) &&

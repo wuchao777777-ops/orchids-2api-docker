@@ -62,14 +62,22 @@ var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *conf
 	return client.VerifyAuthToken(ctx)
 }
 
+var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
+	client := puter.NewFromAccount(acc, cfg)
+	defer client.Close()
+	return client.FetchMonthlyUsage(ctx)
+}
+
+const defaultGrokVerifyModelID = "grok-4.20-0309"
+
 func normalizeGrokVerifyModelID(raw string) string {
 	model := strings.TrimSpace(raw)
 	if model == "" {
-		return "grok-4.20-0309"
+		return defaultGrokVerifyModelID
 	}
 	lower := strings.ToLower(model)
 	if lower == "grok" || !strings.HasPrefix(lower, "grok-") {
-		return "grok-4.20-0309"
+		return defaultGrokVerifyModelID
 	}
 	return model
 }
@@ -93,19 +101,16 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	acc.ClientCookie = token
 
 	client := grok.New(cfg)
-	modelID := normalizeGrokVerifyModelID(acc.AgentMode)
-	if modelID != "" && modelID != acc.AgentMode {
+	if modelID := normalizeGrokVerifyModelID(acc.AgentMode); modelID != "" && modelID != acc.AgentMode {
 		acc.AgentMode = modelID
 	}
 
 	verifyCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	info, verifyErr := client.VerifyToken(verifyCtx, token, modelID)
+	info, verifyErr := client.VerifyToken(verifyCtx, token, "")
 	cancel()
-	if verifyErr != nil && isGrokModelNotFound(verifyErr) && modelID != "grok-4.20-0309-non-reasoning" {
-		modelID = "grok-4.20-0309-non-reasoning"
-		acc.AgentMode = modelID
+	if verifyErr != nil && isGrokModelNotFound(verifyErr) {
 		verifyCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
-		info, verifyErr = client.VerifyToken(verifyCtx, token, modelID)
+		info, verifyErr = client.VerifyToken(verifyCtx, token, "grok-4.20-0309-non-reasoning")
 		cancel()
 	}
 	if verifyErr != nil {
@@ -452,12 +457,28 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		fields["quota_base_remaining"] = baseRemaining
 		fields["quota_bonus_remaining"] = bonusRemaining
 	case "puter":
-		fields["quota_limit"] = 0.0
-		fields["quota_used"] = 0.0
-		fields["quota_remaining"] = 0.0
-		fields["quota_mode"] = "unknown"
+		if limit <= 0 {
+			fields["quota_limit"] = 0.0
+			fields["quota_used"] = 0.0
+			fields["quota_remaining"] = 0.0
+			fields["quota_mode"] = "unknown"
+			fields["quota_unit"] = "credits"
+			fields["quota_supported"] = false
+			break
+		}
+		remaining := current
+		if remaining > limit {
+			remaining = limit
+		}
+		used := limit - remaining
+		if used < 0 {
+			used = 0
+		}
+		fields["quota_limit"] = limit
+		fields["quota_used"] = used
+		fields["quota_remaining"] = remaining
+		fields["quota_mode"] = "remaining"
 		fields["quota_unit"] = "credits"
-		fields["quota_supported"] = false
 	default:
 		fields["quota_limit"] = limit
 		remaining := current
@@ -473,6 +494,25 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 	}
 
 	return fields
+}
+
+func applyPuterMonthlyUsage(acc *store.Account, usage *puter.MonthlyUsage) {
+	if acc == nil || usage == nil {
+		return
+	}
+	limit := usage.AllowanceInfo.MonthUsageAllowance
+	remaining := usage.AllowanceInfo.Remaining
+	if limit < 0 {
+		limit = 0
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	if limit > 0 && remaining > limit {
+		remaining = limit
+	}
+	acc.UsageCurrent = remaining
+	acc.UsageLimit = limit
 }
 
 func orchidsCreditsToken(acc *store.Account) string {
@@ -544,6 +584,22 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		} else if limitErr != nil {
 			slog.Warn("Warp quota sync failed after refresh; keeping account available", "account_id", acc.ID, "error", limitErr)
 		}
+		if a.store != nil && acc.ID != 0 {
+			modelCtx, modelCancel := context.WithTimeout(ctx, 15*time.Second)
+			choices, source, modelErr := warpClient.FetchDiscoveredModelChoices(modelCtx)
+			modelCancel()
+			if modelErr == nil && len(choices) > 0 {
+				models := make([]string, 0, len(choices))
+				for _, choice := range choices {
+					models = append(models, choice.ID)
+				}
+				if err := warp.SaveAccountModelChoicesForAccount(ctx, a.store, acc.ID, models); err != nil {
+					slog.Warn("Warp model choices sync failed after refresh", "account_id", acc.ID, "source", source, "error", err)
+				}
+			} else if modelErr != nil {
+				slog.Warn("Warp model choices fetch failed after refresh", "account_id", acc.ID, "error", modelErr)
+			}
+		}
 		return "", 0, nil
 	}
 
@@ -562,6 +618,19 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		if puter.ResolveAuthToken(acc) == "" {
 			return "", http.StatusBadRequest, fmt.Errorf("failed to verify puter account: missing auth token")
 		}
+		usage, usageErr := puterFetchMonthlyUsage(ctx, acc, a.config.Load())
+		if usageErr == nil {
+			applyPuterMonthlyUsage(acc, usage)
+			if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
+				return "402", http.StatusPaymentRequired, fmt.Errorf("failed to verify puter account: no remaining monthly usage")
+			}
+			return "", 0, nil
+		}
+		usageStatus := classifyAccountStatusFromError(usageErr.Error())
+		if usageStatus == "401" || usageStatus == "403" {
+			return usageStatus, httpStatusFromAccountStatus(usageStatus), fmt.Errorf("failed to fetch puter usage: %w", usageErr)
+		}
+		slog.Warn("Puter usage sync failed; falling back to verification ping", "account_id", acc.ID, "error", usageErr)
 		if err := puterVerifyAccount(ctx, acc, a.config.Load()); err != nil {
 			status := classifyAccountStatusFromError(err.Error())
 			httpStatus := http.StatusBadGateway

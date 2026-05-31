@@ -54,11 +54,17 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 	if AccountSupportsModel(choices, 1, "gemini-3-pro") {
 		t.Fatal("expected account not to support missing model")
 	}
+	if !ChoicesSupportModel(choices, "gpt-5.2-medium") {
+		t.Fatal("expected choices to support cached model")
+	}
+	if ChoicesSupportModel(choices, "gemini-3-pro") {
+		t.Fatal("expected choices not to support model missing from every account")
+	}
 	if !AccountSupportsModel(choices, 2, "gemini-3-pro") {
 		t.Fatal("expected missing account cache to fall back open")
 	}
-	if !AccountSupportsModel(choices, 1, DefaultModel()) {
-		t.Fatal("expected default model to remain always selectable")
+	if AccountSupportsModel(choices, 1, DefaultModel()) {
+		t.Fatal("expected default model to require explicit account support when choices are cached")
 	}
 }
 

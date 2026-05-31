@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -257,7 +258,7 @@ func TestSelectAccount_WarpSkipsTemporarilyUnavailableModel(t *testing.T) {
 	}
 }
 
-func TestSelectAccount_WarpFallbackStillAvoidsTemporarilyUnavailableModel(t *testing.T) {
+func TestSelectAccount_WarpRejectsModelMissingFromCachedPool(t *testing.T) {
 	s, mini := setupConnTrackerHandlerTest(t)
 	defer func() {
 		_ = s.Close()
@@ -274,10 +275,6 @@ func TestSelectAccount_WarpFallbackStillAvoidsTemporarilyUnavailableModel(t *tes
 	}); err != nil {
 		t.Fatalf("SaveAccountModelChoices() error = %v", err)
 	}
-	if err := warp.MarkAccountModelUnavailable(context.Background(), s, acc1.ID, "claude-4-7-opus-xhigh-fast", time.Now()); err != nil {
-		t.Fatalf("MarkAccountModelUnavailable() error = %v", err)
-	}
-
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
 	h := NewWithLoadBalancer(&config.Config{}, lb)
 	h.connTracker = newSpyConnTracker(map[int64]int64{
@@ -289,14 +286,14 @@ func TestSelectAccount_WarpFallbackStillAvoidsTemporarilyUnavailableModel(t *tes
 	})
 
 	_, selected, err := h.selectAccount(context.Background(), "warp", true, nil, "claude-4-7-opus-xhigh-fast")
-	if err != nil {
-		t.Fatalf("selectAccount() error = %v", err)
+	if err == nil {
+		t.Fatal("selectAccount() error = nil, want unavailable model error")
 	}
-	if selected == nil {
-		t.Fatal("selectAccount() returned nil account")
+	if selected != nil {
+		t.Fatalf("selectAccount() selected account %d, want nil", selected.ID)
 	}
-	if selected.ID != acc2.ID {
-		t.Fatalf("selectAccount() picked account %d, want %d", selected.ID, acc2.ID)
+	if !strings.Contains(err.Error(), "not available in the current Warp account pool") {
+		t.Fatalf("selectAccount() error = %q", err.Error())
 	}
 }
 

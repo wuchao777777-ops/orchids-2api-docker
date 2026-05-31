@@ -223,8 +223,9 @@ func (lb *LoadBalancer) ReleaseConnection(accountID int64) {
 const (
 	// 401 冷却时间：token 可能已刷新，较短间隔后重试
 	retry401Default = 5 * time.Minute
-	// 402 对 Puter 来说通常表示余额/credits 不足，不应很快重新参与调度
-	retry402Default = 6 * time.Hour
+	// 402 对 Puter 来说通常表示余额/credits 不足。Puter 暂无稳定额度/重置时间接口，
+	// 默认按日冷却，避免无额度账号反复撞上游。
+	retry402Default = 24 * time.Hour
 	// 429 冷却时间：限流通常是暂时性的，优先等待较短窗口再恢复尝试
 	retry429Default = 1 * time.Minute
 	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试

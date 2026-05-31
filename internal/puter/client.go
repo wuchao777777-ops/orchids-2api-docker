@@ -23,21 +23,23 @@ import (
 )
 
 const (
-	defaultAPIURL   = "https://api.puter.com/drivers/call"
-	defaultModelID  = "claude-opus-4-5"
-	defaultMethod   = "complete"
-	defaultIface    = "puter-chat-completion"
-	defaultToolHint = "When you need to use a tool, output it in this exact format: <tool_call>{\"name\":\"tool_name\",\"input\":{\"param\":\"value\"}}</tool_call>"
+	defaultAPIURL           = "https://api.puter.com/drivers/call"
+	defaultMeteringUsageURL = "https://api.puter.com/metering/usage"
+	defaultModelID          = "claude-opus-4-5"
+	defaultMethod           = "complete"
+	defaultIface            = "puter-chat-completion"
+	defaultToolHint         = "When you need to use a tool, output it in this exact format: <tool_call>{\"name\":\"tool_name\",\"input\":{\"param\":\"value\"}}</tool_call>"
 )
 
 var (
-	puterAPIURL          = defaultAPIURL
-	toolCallPattern      = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
-	toolFencePattern     = regexp.MustCompile("(?s)^```[a-zA-Z0-9_-]*\\s*(.*?)\\s*```$")
-	toolFenceFindPattern = regexp.MustCompile("(?s)```(?:json|javascript|js)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
-	tmpPathHintPattern   = regexp.MustCompile(`(?i)(/tmp/[^\s"'` + "`" + `]+)`)
-	unixPathHintPattern  = regexp.MustCompile(`(?i)(/[^\s"'` + "`" + `]+)`)
-	winPathHintPattern   = regexp.MustCompile(`(?i)([a-z]:\\[^\r\n"'` + "`" + `]+)`)
+	puterAPIURL           = defaultAPIURL
+	puterMeteringUsageURL = defaultMeteringUsageURL
+	toolCallPattern       = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
+	toolFencePattern      = regexp.MustCompile("(?s)^```[a-zA-Z0-9_-]*\\s*(.*?)\\s*```$")
+	toolFenceFindPattern  = regexp.MustCompile("(?s)```(?:json|javascript|js)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
+	tmpPathHintPattern    = regexp.MustCompile(`(?i)(/tmp/[^\s"'` + "`" + `]+)`)
+	unixPathHintPattern   = regexp.MustCompile(`(?i)(/[^\s"'` + "`" + `]+)`)
+	winPathHintPattern    = regexp.MustCompile(`(?i)([a-z]:\\[^\r\n"'` + "`" + `]+)`)
 )
 
 type Client struct {
@@ -172,6 +174,42 @@ func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
 	return nil
 }
 
+func (c *Client) FetchMonthlyUsage(ctx context.Context) (*MonthlyUsage, error) {
+	if c == nil {
+		return nil, fmt.Errorf("puter client is nil")
+	}
+	if strings.TrimSpace(c.authToken) == "" {
+		return nil, fmt.Errorf("missing puter auth token")
+	}
+
+	reqCtx, cancel := util.WithDefaultTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, puterMeteringUsageURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create puter usage request: %w", err)
+	}
+	c.applyUsageHeaders(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send puter usage request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		return nil, fmt.Errorf("puter usage API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var usage MonthlyUsage
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 8<<20))
+	if err := decoder.Decode(&usage); err != nil {
+		return nil, fmt.Errorf("failed to decode puter usage response: %w", err)
+	}
+	return &usage, nil
+}
+
 func (c *Client) SendRequest(ctx context.Context, _ string, _ []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	return c.SendRequestWithPayload(ctx, upstream.UpstreamRequest{Model: model}, onMessage, logger)
 }
@@ -252,6 +290,23 @@ func (c *Client) applyHeaders(req *http.Request) {
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Content-Type", "text/plain;actually=json")
+	req.Header.Set("Origin", "https://docs.puter.com")
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("Referer", "https://docs.puter.com/")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Site", "same-site")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36")
+	req.Header.Set("sec-ch-ua", `"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"`)
+	req.Header.Set("sec-ch-ua-mobile", "?0")
+	req.Header.Set("sec-ch-ua-platform", `"macOS"`)
+}
+
+func (c *Client) applyUsageHeaders(req *http.Request) {
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Authorization", "Bearer "+c.authToken)
+	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Origin", "https://docs.puter.com")
 	req.Header.Set("Pragma", "no-cache")
 	req.Header.Set("Referer", "https://docs.puter.com/")

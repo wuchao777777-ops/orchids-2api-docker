@@ -60,6 +60,57 @@ func TestRefreshAccountState_GrokSyncsRemainingQuota(t *testing.T) {
 	}
 }
 
+func TestRefreshAccountState_GrokQuotaIgnoresStaleAgentMode(t *testing.T) {
+	t.Parallel()
+
+	var requestedModels []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/rate-limits" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		model, _ := payload["modelName"].(string)
+		requestedModels = append(requestedModels, model)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"remainingQueries": 7,
+			"totalQueries":     7,
+		})
+	}))
+	defer srv.Close()
+
+	a := New(nil, "", "", &config.Config{GrokAPIBaseURL: srv.URL})
+	acc := &store.Account{
+		ID:           23,
+		AccountType:  "grok",
+		ClientCookie: "token-abc",
+		AgentMode:    "grok-3",
+		Subscription: "basic",
+		UsageCurrent: 30,
+		UsageLimit:   30,
+	}
+
+	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
+	if err != nil {
+		t.Fatalf("refreshAccountState() error: %v", err)
+	}
+	if status != "" || httpStatus != 0 {
+		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
+	}
+	if len(requestedModels) != 1 || requestedModels[0] != "auto" {
+		t.Fatalf("requestedModels=%v want [auto]", requestedModels)
+	}
+	if acc.AgentMode != "grok-3" {
+		t.Fatalf("AgentMode=%q want grok-3", acc.AgentMode)
+	}
+	if acc.UsageCurrent != 7 || acc.UsageLimit != 7 {
+		t.Fatalf("unexpected quota current=%v limit=%v", acc.UsageCurrent, acc.UsageLimit)
+	}
+}
+
 func TestBuildQuotaResponseFields_WarpSplitQuota(t *testing.T) {
 	t.Parallel()
 
@@ -87,6 +138,33 @@ func TestBuildQuotaResponseFields_WarpSplitQuota(t *testing.T) {
 	}
 	if got := fields["quota_mode"].(string); got != "warp_split" {
 		t.Fatalf("quota_mode=%q want warp_split", got)
+	}
+}
+
+func TestBuildQuotaResponseFields_PuterMonthlyUsage(t *testing.T) {
+	t.Parallel()
+
+	acc := &store.Account{
+		AccountType:  "puter",
+		UsageCurrent: 13494935.4,
+		UsageLimit:   25000000,
+	}
+
+	fields := buildQuotaResponseFields(acc)
+	if got := fields["quota_supported"].(bool); !got {
+		t.Fatal("quota_supported=false want true")
+	}
+	if got := fields["quota_limit"].(float64); got != 25000000 {
+		t.Fatalf("quota_limit=%v want 25000000", got)
+	}
+	if got := fields["quota_remaining"].(float64); got != 13494935.4 {
+		t.Fatalf("quota_remaining=%v want 13494935.4", got)
+	}
+	if got := fields["quota_used"].(float64); got != 11505064.6 {
+		t.Fatalf("quota_used=%v want 11505064.6", got)
+	}
+	if got := fields["quota_unit"].(string); got != "credits" {
+		t.Fatalf("quota_unit=%q want credits", got)
 	}
 }
 

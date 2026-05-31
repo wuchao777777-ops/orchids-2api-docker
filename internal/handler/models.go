@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/goccy/go-json"
@@ -9,6 +11,7 @@ import (
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
+	"orchids-api/internal/warp"
 )
 
 type PublicModelResponse struct {
@@ -49,6 +52,48 @@ func isVisiblePublicModel(m *store.Model, filterChannel string) (string, bool) {
 	return mChannel, true
 }
 
+func (h *Handler) visibleWarpModelSet(ctx context.Context) map[string]struct{} {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		return nil
+	}
+	accounts, err := h.loadBalancer.Store.GetEnabledAccounts(ctx)
+	if err != nil || len(accounts) == 0 {
+		return nil
+	}
+	choices, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
+	if err != nil || choices == nil || len(choices.Accounts) == 0 {
+		return nil
+	}
+	out := map[string]struct{}{}
+	for _, acc := range accounts {
+		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
+			continue
+		}
+		for _, modelID := range choices.Accounts[strconv.FormatInt(acc.ID, 10)] {
+			if modelID = strings.TrimSpace(modelID); modelID != "" {
+				out[modelID] = struct{}{}
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (h *Handler) warpModelVisible(ctx context.Context, modelID string) bool {
+	visible := h.visibleWarpModelSet(ctx)
+	if visible == nil {
+		return true
+	}
+	modelID = warp.ResolveModelAlias(modelID)
+	if modelID == "" {
+		return true
+	}
+	_, ok := visible[modelID]
+	return ok
+}
+
 func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		apperrors.New("invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed).WriteResponse(w)
@@ -70,11 +115,24 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		apperrors.New("api_error", "Failed to fetch models: "+err.Error(), http.StatusInternalServerError).WriteResponse(w)
 		return
 	}
+	var warpVisible map[string]struct{}
+	if filterChannel == "" || strings.EqualFold(filterChannel, "warp") {
+		warpVisible = h.visibleWarpModelSet(ctx)
+	}
 	var publicModels []PublicModelResponse
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
 			continue
+		}
+		if strings.EqualFold(mChannel, "warp") && warpVisible != nil {
+			modelID := warp.ResolveModelAlias(m.ModelID)
+			if modelID == "" {
+				modelID = strings.TrimSpace(m.ModelID)
+			}
+			if _, ok := warpVisible[modelID]; !ok {
+				continue
+			}
 		}
 
 		publicModels = append(publicModels, PublicModelResponse{
@@ -147,6 +205,10 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 	mChannel, ok := isVisiblePublicModel(m, filterChannel)
 	if !ok {
+		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
+		return
+	}
+	if strings.EqualFold(mChannel, "warp") && !h.warpModelVisible(ctx, m.ModelID) {
 		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}

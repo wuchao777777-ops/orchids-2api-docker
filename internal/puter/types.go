@@ -38,6 +38,29 @@ type ErrorResponse struct {
 	Error   ErrorField `json:"error,omitempty"`
 }
 
+type MonthlyUsage struct {
+	Usage         map[string]json.RawMessage `json:"usage"`
+	AppTotals     map[string]AppUsageTotal   `json:"appTotals"`
+	AllowanceInfo UsageAllowanceInfo         `json:"allowanceInfo"`
+}
+
+type UsageMetric struct {
+	Cost  float64 `json:"cost"`
+	Count int64   `json:"count"`
+	Units float64 `json:"units"`
+}
+
+type AppUsageTotal struct {
+	Count int64   `json:"count"`
+	Total float64 `json:"total"`
+}
+
+type UsageAllowanceInfo struct {
+	Remaining           float64                `json:"remaining"`
+	MonthUsageAllowance float64                `json:"monthUsageAllowance"`
+	Addons              map[string]interface{} `json:"addons"`
+}
+
 type ErrorPayload struct {
 	Iface   string `json:"iface"`
 	Code    string `json:"code"`
