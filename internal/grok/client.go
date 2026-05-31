@@ -685,7 +685,7 @@ func (c *Client) downloadAsset(ctx context.Context, token, rawURL string) ([]byt
 	return data, mime, nil
 }
 
-func (c *Client) getVoiceToken(ctx context.Context, token, voice, personality string, speed float64) (map[string]interface{}, error) {
+func (c *Client) getVoiceToken(ctx context.Context, token, voice, personality string, speed float64, instruction string) (map[string]interface{}, error) {
 	if strings.TrimSpace(voice) == "" {
 		voice = "ara"
 	}
@@ -696,13 +696,21 @@ func (c *Client) getVoiceToken(ctx context.Context, token, voice, personality st
 		speed = 1.0
 	}
 
-	sessionPayload, err := json.Marshal(map[string]interface{}{
+	session := map[string]interface{}{
 		"voice":          strings.TrimSpace(voice),
-		"personality":    strings.TrimSpace(personality),
+		"personality":    nil,
 		"playback_speed": speed,
 		"enable_vision":  false,
 		"turn_detection": map[string]interface{}{"type": "server_vad"},
-	})
+	}
+	if customInstruction := strings.TrimSpace(instruction); customInstruction != "" {
+		session["instructions"] = customInstruction
+		session["is_raw_instructions"] = true
+	} else {
+		session["personality"] = strings.TrimSpace(personality)
+	}
+
+	sessionPayload, err := json.Marshal(session)
 	if err != nil {
 		return nil, err
 	}

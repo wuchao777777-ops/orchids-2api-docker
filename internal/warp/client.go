@@ -94,15 +94,6 @@ func (c *Client) Close() {
 	}
 }
 
-func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	req := upstream.UpstreamRequest{
-		Prompt:      prompt,
-		ChatHistory: chatHistory,
-		Model:       model,
-	}
-	return c.SendRequestWithPayload(ctx, req, onMessage, logger)
-}
-
 func (c *Client) ProbeModel(ctx context.Context, model string) error {
 	if c == nil || c.session == nil {
 		return fmt.Errorf("warp session not initialized")

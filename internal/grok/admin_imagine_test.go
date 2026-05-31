@@ -127,7 +127,6 @@ func TestNormalizeImagineModel_DefaultsToLite(t *testing.T) {
 		{"fast", "grok-imagine-image-lite"},
 		{"quality", "grok-imagine-image-pro"},
 		{"pro", "grok-imagine-image-pro"},
-		{"grok-imagine-1.0-fast", "grok-imagine-image-lite"},
 		{"grok-imagine-image", "grok-imagine-image"},
 		{"grok-imagine-image-pro", "grok-imagine-image-pro"},
 		{"grok-4.20-auto", "grok-imagine-image-lite"},

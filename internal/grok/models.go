@@ -2,6 +2,8 @@ package grok
 
 import (
 	"strings"
+
+	"orchids-api/internal/modelpolicy"
 )
 
 // ModelSpec defines one public model and how it maps to Grok upstream fields.
@@ -57,62 +59,13 @@ var modelByID = func() map[string]ModelSpec {
 	return out
 }()
 
-var deprecatedModelIDSet = map[string]struct{}{
-	"grok-4.2":       {},
-	"grok-4.20-beta": {},
-	"grok-4.3-beta":  {},
-	"grok-420":       {},
-}
-
 func IsDeprecatedModelID(modelID string) bool {
-	id := normalizeModelID(modelID)
-	if id == "" {
-		return false
-	}
-	_, deprecated := deprecatedModelIDSet[id]
-	return deprecated
+	return modelpolicy.IsDeprecatedGrokModelID(normalizeModelID(modelID))
 }
 
 func normalizeModelID(modelID string) string {
 	m := strings.ToLower(strings.TrimSpace(modelID))
-	// Common typo compatibility: gork-* -> grok-*
-	if strings.HasPrefix(m, "gork-") {
-		m = "grok-" + strings.TrimPrefix(m, "gork-")
-	}
-	switch m {
-	case "grok-imagine-1.0":
-		return "grok-imagine-image"
-	case "grok-imagine-1.0-fast":
-		return "grok-imagine-image-lite"
-	case "grok-imagine-1.0-edit":
-		return "grok-imagine-image-edit"
-	case "grok-imagine-1.0-video":
-		return "grok-imagine-video"
-	}
-	// Version alias compatibility: grok-4-2 -> grok-4.2, grok-4-1-thinking -> grok-4.1-thinking.
-	if strings.HasPrefix(m, "grok-") {
-		rest := strings.TrimPrefix(m, "grok-")
-		parts := strings.SplitN(rest, "-", 3)
-		if len(parts) >= 2 && isDigits(parts[0]) && isDigits(parts[1]) {
-			if len(parts) == 2 {
-				return "grok-" + parts[0] + "." + parts[1]
-			}
-			return "grok-" + parts[0] + "." + parts[1] + "-" + parts[2]
-		}
-	}
 	return m
-}
-
-func isDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func ResolveModel(modelID string) (ModelSpec, bool) {

@@ -89,8 +89,8 @@ func TestHandleModelByID_ReturnsVerifiedDynamicGrokModel(t *testing.T) {
 
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel:  "Grok",
-		ModelID:  "grok-5",
-		Name:     "grok-5",
+		ModelID:  "grok-future-6",
+		Name:     "grok-future-6",
 		Status:   store.ModelStatusAvailable,
 		Verified: true,
 	}); err != nil {
@@ -105,7 +105,7 @@ func TestHandleModelByID_ReturnsVerifiedDynamicGrokModel(t *testing.T) {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models/grok-5", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models/grok-future-6", nil)
 	rec := httptest.NewRecorder()
 
 	h.HandleModelByID(rec, req)

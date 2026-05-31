@@ -25,10 +25,6 @@ type fakePayloadClient struct {
 	eventsByOp          [][]upstream.SSEMessage
 }
 
-func (f *fakePayloadClient) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	return nil
-}
-
 func (f *fakePayloadClient) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, req)

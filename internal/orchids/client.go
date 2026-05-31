@@ -518,16 +518,6 @@ func (c *Client) persistAccountInfo(info *clerk.AccountInfo) {
 
 // (method SyncAccountState removed to use store.Account.SyncState logic)
 
-func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	req := upstream.UpstreamRequest{
-		Prompt:      prompt,
-		ChatHistory: chatHistory,
-		Model:       model,
-		Messages:    nil, // SendRequest is legacy, use SendRequestWithPayload for full objects
-	}
-	return c.SendRequestWithPayload(ctx, req, onMessage, logger)
-}
-
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	if c == nil {
 		return errors.New("orchids client is nil")

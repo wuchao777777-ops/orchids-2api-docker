@@ -938,9 +938,6 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			if acc == nil {
 				continue
 			}
-			if strings.EqualFold(strings.TrimSpace(acc.AccountType), "v0") || strings.EqualFold(strings.TrimSpace(acc.AccountType), "v0-web") {
-				continue
-			}
 			normalized = append(normalized, normalizeAccountOutput(acc))
 		}
 		json.NewEncoder(w).Encode(normalized)
@@ -1529,9 +1526,6 @@ func (a *API) HandleModels(w http.ResponseWriter, r *http.Request) {
 		filtered := make([]*store.Model, 0, len(models))
 		for _, model := range models {
 			if model == nil {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(model.Channel), "v0") || strings.EqualFold(strings.TrimSpace(model.Channel), "v0-web") {
 				continue
 			}
 			filtered = append(filtered, model)

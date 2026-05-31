@@ -48,11 +48,6 @@ type blockingUpstreamEdge struct {
 	enterOnce sync.Once
 }
 
-func (m *mockUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	// not used
-	return nil
-}
-
 func (m *mockUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	for _, e := range m.events {
 		onMessage(e)
@@ -60,17 +55,8 @@ func (m *mockUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstr
 	return nil
 }
 
-func (m *errorUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	m.calls++
-	return m.err
-}
-
 func (m *errorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	m.calls++
-	return m.err
-}
-
-func (m *refundingErrorUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	return m.err
 }
 
@@ -81,10 +67,6 @@ func (m *refundingErrorUpstreamEdge) SendRequestWithPayload(ctx context.Context,
 func (m *refundingErrorUpstreamEdge) RefundCredits(ctx context.Context, reason string) error {
 	m.refundReasons = append(m.refundReasons, reason)
 	return nil
-}
-
-func (m *directErrorUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	return m.err
 }
 
 func (m *directErrorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -100,10 +82,6 @@ func (m *directErrorUpstreamEdge) SendRequestWithPayload(ctx context.Context, re
 
 func (m *directErrorUpstreamEdge) OwnsFinalSSELifecycle() bool {
 	return true
-}
-
-func (m *blockingUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	return nil
 }
 
 func (m *blockingUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {

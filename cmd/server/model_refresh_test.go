@@ -295,8 +295,8 @@ func TestGrokProbeCandidatesIncludesPolicyAndExistingModels(t *testing.T) {
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &store.Model{
 		Channel:   "Grok",
-		ModelID:   "grok-5",
-		Name:      "grok-5",
+		ModelID:   "grok-future-6",
+		Name:      "grok-future-6",
 		Status:    store.ModelStatusAvailable,
 		Verified:  true,
 		IsDefault: false,
@@ -315,8 +315,8 @@ func TestGrokProbeCandidatesIncludesPolicyAndExistingModels(t *testing.T) {
 			t.Fatalf("expected candidates to include public model %q, got %+v", publicID, items)
 		}
 	}
-	if _, ok := gotSet["grok-5"]; !ok {
-		t.Fatalf("expected candidates to include existing model grok-5, got %+v", items)
+	if _, ok := gotSet["grok-future-6"]; !ok {
+		t.Fatalf("expected candidates to include existing model grok-future-6, got %+v", items)
 	}
 }
 

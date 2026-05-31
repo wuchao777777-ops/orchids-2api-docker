@@ -485,7 +485,6 @@ func appChatImagePayloadVariants() []string {
 	return []string{
 		"webchat2api",
 		"tool_image_gen",
-		"legacy_model_fields",
 		"response_metadata_override",
 	}
 }
@@ -499,16 +498,6 @@ func applyAppChatImagePayloadVariant(payload map[string]interface{}, spec ModelS
 	case "tool_image_gen":
 		if toolOverrides != nil {
 			toolOverrides["imageGen"] = true
-		}
-	case "legacy_model_fields":
-		if toolOverrides != nil {
-			toolOverrides["imageGen"] = true
-		}
-		if model := strings.TrimSpace(spec.UpstreamModel); model != "" {
-			payload["modelName"] = model
-		}
-		if mode := strings.TrimSpace(spec.ModelMode); mode != "" {
-			payload["modelMode"] = mode
 		}
 	case "response_metadata_override":
 		if toolOverrides != nil {

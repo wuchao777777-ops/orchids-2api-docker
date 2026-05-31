@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Voice Session</title>
   <link rel="stylesheet" href="/static/public/css/public.css">
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.11.4/dist/livekit-client.umd.min.js"></script>
 </head>
 <body>
   <main class="page stack">
@@ -56,6 +56,10 @@
           <label for="speed">Speed</label>
           <input id="speed" type="number" min="0.1" step="0.1" value="1">
         </div>
+      </div>
+      <div class="field">
+        <label for="instruction">Instruction</label>
+        <textarea id="instruction" placeholder="Optional raw instructions. When set, Personality is ignored."></textarea>
       </div>
       <div class="row">
         <button id="startBtn" class="btn" type="button">Start Session</button>

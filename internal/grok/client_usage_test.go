@@ -180,3 +180,86 @@ func TestAppChatModeID_UsesCustomModeID(t *testing.T) {
 		t.Fatalf("appChatModelTier()=%q want super", got)
 	}
 }
+
+func TestGetVoiceToken_UsesPersonalityWhenInstructionEmpty(t *testing.T) {
+	t.Parallel()
+
+	var session map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != defaultLivekitPath {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if got, _ := payload["livekitUrl"].(string); got != "wss://livekit.grok.com" {
+			t.Fatalf("livekitUrl=%q", got)
+		}
+		rawSession, _ := payload["sessionPayload"].(string)
+		if err := json.Unmarshal([]byte(rawSession), &session); err != nil {
+			t.Fatalf("decode sessionPayload: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"lk-token","livekitUrl":"wss://custom.livekit"}`))
+	}))
+	defer srv.Close()
+
+	c := New(&config.Config{GrokAPIBaseURL: srv.URL})
+	data, err := c.getVoiceToken(context.Background(), "token-abc", "eve", "therapist", 1.2, "")
+	if err != nil {
+		t.Fatalf("getVoiceToken() error: %v", err)
+	}
+	if got, _ := data["token"].(string); got != "lk-token" {
+		t.Fatalf("token=%q", got)
+	}
+	if got, _ := session["voice"].(string); got != "eve" {
+		t.Fatalf("voice=%q", got)
+	}
+	if got, _ := session["personality"].(string); got != "therapist" {
+		t.Fatalf("personality=%q", got)
+	}
+	if _, ok := session["instructions"]; ok {
+		t.Fatalf("instructions should be omitted: %#v", session)
+	}
+	if _, ok := session["is_raw_instructions"]; ok {
+		t.Fatalf("is_raw_instructions should be omitted: %#v", session)
+	}
+}
+
+func TestGetVoiceToken_UsesRawInstructionsWhenProvided(t *testing.T) {
+	t.Parallel()
+
+	var session map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		rawSession, _ := payload["sessionPayload"].(string)
+		if err := json.Unmarshal([]byte(rawSession), &session); err != nil {
+			t.Fatalf("decode sessionPayload: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"lk-token"}`))
+	}))
+	defer srv.Close()
+
+	c := New(&config.Config{GrokAPIBaseURL: srv.URL})
+	_, err := c.getVoiceToken(context.Background(), "token-abc", "ara", "assistant", 1, "  speak Chinese  ")
+	if err != nil {
+		t.Fatalf("getVoiceToken() error: %v", err)
+	}
+	if session["personality"] != nil {
+		t.Fatalf("personality=%#v want nil", session["personality"])
+	}
+	if got, _ := session["instructions"].(string); got != "speak Chinese" {
+		t.Fatalf("instructions=%q", got)
+	}
+	if got, _ := session["is_raw_instructions"].(bool); !got {
+		t.Fatalf("is_raw_instructions=%v", got)
+	}
+}

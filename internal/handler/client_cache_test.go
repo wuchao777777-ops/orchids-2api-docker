@@ -15,7 +15,7 @@ type testCachedClient struct {
 	id int
 }
 
-func (c *testCachedClient) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+func (c *testCachedClient) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	return nil
 }
 

@@ -77,16 +77,6 @@ type trackerTestUpstream struct {
 	events []upstream.SSEMessage
 }
 
-func (m *trackerTestUpstream) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	if m.err != nil {
-		return m.err
-	}
-	for _, e := range m.events {
-		onMessage(e)
-	}
-	return nil
-}
-
 func (m *trackerTestUpstream) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	if m.err != nil {
 		return m.err

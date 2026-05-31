@@ -28,13 +28,6 @@ type mockUpstream struct {
 
 type panicUpstream struct{}
 
-func (m *mockUpstream) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	for _, e := range m.events {
-		onMessage(e)
-	}
-	return nil
-}
-
 func (m *mockUpstream) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	m.capturedReqs = append(m.capturedReqs, req)
 	events := m.events
@@ -49,10 +42,6 @@ func (m *mockUpstream) SendRequestWithPayload(ctx context.Context, req upstream.
 		onMessage(e)
 	}
 	return nil
-}
-
-func (p *panicUpstream) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	panic("unexpected upstream request")
 }
 
 func (p *panicUpstream) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {

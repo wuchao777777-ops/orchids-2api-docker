@@ -2,6 +2,7 @@
   const voiceEl = document.getElementById("voice");
   const personalityEl = document.getElementById("personality");
   const speedEl = document.getElementById("speed");
+  const instructionEl = document.getElementById("instruction");
 
   const startBtn = document.getElementById("startBtn");
   const stopBtn = document.getElementById("stopBtn");
@@ -31,7 +32,6 @@
     analyser: null,
     analyserSource: null,
     analyserData: null,
-    localTracks: [],
   };
 
   function setStatus(message, level) {
@@ -284,15 +284,11 @@
     const voice = String(voiceEl.value || "ara").trim() || "ara";
     const personality = String(personalityEl.value || "assistant").trim() || "assistant";
     const speed = Math.max(0.1, Number(speedEl.value || 1));
+    const instruction = String(instructionEl?.value || "").trim();
 
-    const params = new URLSearchParams({
-      voice,
-      personality,
-      speed: String(speed),
-    });
-
-    const data = await window.PublicApp.requestJSON(`/v1/public/voice/token?${params.toString()}`, {
-      method: "GET",
+    const data = await window.PublicApp.requestJSON("/v1/public/voice/token", {
+      method: "POST",
+      body: JSON.stringify({ voice, personality, speed, instruction }),
     });
 
     const token = String(data.token || "").trim();
@@ -340,39 +336,33 @@
       room = new lk.Room({
         adaptiveStream: true,
         dynacast: true,
+        audioCaptureDefaults: {
+          autoGainControl: true,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
       });
 
-      const roomEvent = lk.RoomEvent || {};
-      const trackObj = lk.Track || {};
-      const audioKind = trackObj.Kind && trackObj.Kind.Audio ? trackObj.Kind.Audio : "audio";
-      const evParticipantConnected = roomEvent.ParticipantConnected || "participantConnected";
-      const evParticipantDisconnected = roomEvent.ParticipantDisconnected || "participantDisconnected";
-      const evTrackSubscribed = roomEvent.TrackSubscribed || "trackSubscribed";
-      const evDisconnected = roomEvent.Disconnected || "disconnected";
-
-      room.on(evParticipantConnected, (participant) => {
+      room.on(lk.RoomEvent.ParticipantConnected, (participant) => {
         appendLog(`Participant connected: ${participant.identity || "unknown"}`);
       });
 
-      room.on(evParticipantDisconnected, (participant) => {
+      room.on(lk.RoomEvent.ParticipantDisconnected, (participant) => {
         appendLog(`Participant disconnected: ${participant.identity || "unknown"}`);
       });
 
-      room.on(evTrackSubscribed, (track) => {
-        if (track.kind !== audioKind && track.kind !== "audio") {
-          return;
-        }
+      room.on(lk.RoomEvent.TrackSubscribed, (track) => {
+        if (!track || track.kind !== "audio") return;
         const element = track.attach();
         element.autoplay = true;
         audioRootEl.appendChild(element);
         appendLog("Subscribed audio track");
       });
 
-      room.on(evDisconnected, () => {
+      room.on(lk.RoomEvent.Disconnected, () => {
         appendLog("Room disconnected");
         if (state.room === room) {
           state.room = null;
-          state.localTracks = [];
           setRunning(false);
           setStatus("Disconnected");
           stopVisualizer();
@@ -383,20 +373,20 @@
       await room.connect(payload.url, payload.token);
       appendLog("Connected to LiveKit");
 
-      const createLocalTracks = lk.createLocalTracks;
-      if (typeof createLocalTracks !== "function") {
-        throw new Error("LiveKit createLocalTracks is unavailable");
-      }
-
       appendLog("Enabling microphone...");
-      const tracks = await createLocalTracks({ audio: true, video: false });
-      state.localTracks = tracks;
       let meterTrack = null;
-      for (const localTrack of tracks) {
-        await room.localParticipant.publishTrack(localTrack);
-        if (!meterTrack && localTrack && localTrack.kind === "audio" && localTrack.mediaStreamTrack) {
-          meterTrack = localTrack.mediaStreamTrack;
-        }
+      if (!room.localParticipant || typeof room.localParticipant.setMicrophoneEnabled !== "function") {
+        throw new Error("LiveKit microphone API is unavailable");
+      }
+      await room.localParticipant.setMicrophoneEnabled(true);
+      const publications = room.localParticipant.audioTrackPublications;
+      if (publications && typeof publications.forEach === "function") {
+        publications.forEach((pub) => {
+          const track = pub && (pub.track || pub.audioTrack);
+          if (!meterTrack && track && track.mediaStreamTrack) {
+            meterTrack = track.mediaStreamTrack;
+          }
+        });
       }
       await startVisualizer(meterTrack);
 
@@ -412,7 +402,6 @@
         }
       }
       state.room = null;
-      state.localTracks = [];
       setRunning(false);
       stopVisualizer();
       appendLog(err.message || "Start session failed", true);
@@ -434,20 +423,6 @@
         // ignore
       }
     }
-
-    for (const track of state.localTracks) {
-      if (!track) continue;
-      try {
-        if (typeof track.stop === "function") {
-          track.stop();
-        } else if (track.mediaStreamTrack && typeof track.mediaStreamTrack.stop === "function") {
-          track.mediaStreamTrack.stop();
-        }
-      } catch (err) {
-        // ignore
-      }
-    }
-    state.localTracks = [];
 
     resetAudio();
     setRunning(false);
@@ -488,6 +463,7 @@
     voiceEl.addEventListener("change", updateMeta);
     personalityEl.addEventListener("change", updateMeta);
     speedEl.addEventListener("change", updateMeta);
+    if (instructionEl) instructionEl.addEventListener("input", updateMeta);
 
     window.addEventListener("beforeunload", () => {
       if (!state.room) return;

@@ -62,8 +62,8 @@
     running: false,
     stopping: false,
     room: null,
-    localTracks: [],
     visualizerTimer: null,
+    outputMuted: false,
   };
   const grokLazyState = {
     imagineReady: false,
@@ -3370,28 +3370,15 @@
     if (root) root.innerHTML = "";
   }
 
-  async function releaseVoiceLocalTracks() {
-    if (!Array.isArray(voiceState.localTracks) || voiceState.localTracks.length === 0) {
-      voiceState.localTracks = [];
-      return;
+  function syncVoiceOutputMute() {
+    const root = document.getElementById("voiceAudioRoot");
+    if (root) {
+      root.querySelectorAll("audio").forEach((audio) => {
+        audio.muted = !!voiceState.outputMuted;
+      });
     }
-    for (const track of voiceState.localTracks) {
-      try {
-        if (track && typeof track.stop === "function") {
-          track.stop();
-        }
-      } catch (err) {
-        // ignore track cleanup failures
-      }
-      try {
-        if (track && typeof track.detach === "function") {
-          track.detach();
-        }
-      } catch (err) {
-        // ignore detach failures
-      }
-    }
-    voiceState.localTracks = [];
+    const btn = document.getElementById("voiceMuteOutputBtn");
+    if (btn) btn.textContent = voiceState.outputMuted ? "恢复输出" : "静音输出";
   }
 
   async function resetVoiceSession(reason, opts) {
@@ -3410,7 +3397,6 @@
         // ignore disconnect failures during reset
       }
     }
-    await releaseVoiceLocalTracks();
     voiceState.room = null;
     voiceState.running = false;
     voiceState.stopping = false;
@@ -3437,7 +3423,7 @@
           return;
         }
         const script = document.createElement("script");
-        script.src = "https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js";
+        script.src = "https://cdn.jsdelivr.net/npm/livekit-client@2.11.4/dist/livekit-client.umd.min.js";
         script.async = true;
         script.dataset.livekitClient = "1";
         script.onload = () => {
@@ -3472,34 +3458,6 @@
       ? "当前浏览器未暴露麦克风接口"
       : "当前页面不是 HTTPS 或 localhost，浏览器不会开放麦克风";
     throw new Error(secureHint);
-  }
-
-  async function requestVoiceMicrophonePermission() {
-    ensureVoiceMicSupport();
-    const isLocalhost = typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
-    if (!window.isSecureContext && !isLocalhost) {
-      throw new Error("当前页面不是 HTTPS 或 localhost，浏览器会拒绝麦克风");
-    }
-    const policy = document.permissionsPolicy || document.featurePolicy;
-    if (policy && typeof policy.allowsFeature === "function" && !policy.allowsFeature("microphone")) {
-      throw new Error("当前页面权限策略禁止麦克风（Permissions-Policy）");
-    }
-    try {
-      if (navigator.permissions && typeof navigator.permissions.query === "function") {
-        const status = await navigator.permissions.query({ name: "microphone" });
-        if (status && status.state === "denied") {
-          throw new Error("麦克风权限被拒绝，请在浏览器设置中允许麦克风后重试");
-        }
-      }
-    } catch (err) {
-      if (err && err.message) {
-        throw err;
-      }
-    }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    if (stream && typeof stream.getTracks === "function") {
-      stream.getTracks().forEach((track) => track.stop());
-    }
   }
 
   function formatVoiceMicError(err) {
@@ -3556,9 +3514,18 @@
     const voice = String(document.getElementById("voiceName")?.value || "ara").trim() || "ara";
     const personality = String(document.getElementById("voicePersonality")?.value || "assistant").trim() || "assistant";
     const speed = Number(document.getElementById("voiceSpeed")?.value || 1);
-    const url = `/api/v1/admin/voice/token?voice=${encodeURIComponent(voice)}&personality=${encodeURIComponent(personality)}&speed=${encodeURIComponent(speed > 0 ? speed : 1)}`;
+    const instruction = String(document.getElementById("voiceInstruction")?.value || "").trim();
 
-    const res = await fetch(url);
+    const res = await fetch("/api/v1/admin/voice/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        voice,
+        personality,
+        speed: speed > 0 ? speed : 1,
+        instruction,
+      }),
+    });
     if (handleUnauthorized(res)) return null;
     if (!res.ok) {
       throw new Error(await res.text());
@@ -3601,6 +3568,11 @@
     const room = new LiveKitSDK.Room({
       adaptiveStream: true,
       dynacast: true,
+      audioCaptureDefaults: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
     });
     voiceState.room = room;
     voiceState.running = true;
@@ -3619,7 +3591,9 @@
         const el = track.attach();
         el.autoplay = true;
         el.controls = true;
+        el.muted = !!voiceState.outputMuted;
         root.appendChild(el);
+        syncVoiceOutputMute();
       } catch (err) {
         appendVoiceLog(`Attach audio failed: ${err.message || err}`);
       }
@@ -3652,15 +3626,10 @@
       await room.connect(payload.url, payload.token);
       appendVoiceLog("Connected to LiveKit signaling server");
       ensureVoiceMicSupport();
-      if (typeof LiveKitSDK.createLocalTracks === "function") {
-        const tracks = await LiveKitSDK.createLocalTracks({ audio: true, video: false });
-        for (const track of tracks) {
-          await room.localParticipant.publishTrack(track);
-        }
-        voiceState.localTracks = tracks;
-      } else {
-        await room.localParticipant.setMicrophoneEnabled(true);
+      if (!room.localParticipant || typeof room.localParticipant.setMicrophoneEnabled !== "function") {
+        throw new Error("LiveKit microphone API is unavailable");
       }
+      await room.localParticipant.setMicrophoneEnabled(true);
       setVoiceStatus(t("voice.connected"), "ok");
       setVoiceButtons(true);
       appendVoiceLog("Voice session connected");
@@ -5156,7 +5125,8 @@
     const voiceName = document.getElementById("voiceName");
     const voicePersonality = document.getElementById("voicePersonality");
     const voiceSpeed = document.getElementById("voiceSpeed");
-    [voiceName, voicePersonality, voiceSpeed].forEach((input) => {
+    const voiceInstruction = document.getElementById("voiceInstruction");
+    [voiceName, voicePersonality, voiceSpeed, voiceInstruction].forEach((input) => {
       if (!input) return;
       const sync = () => {
         updateVoiceMeta();
@@ -5164,11 +5134,19 @@
           voiceName: String(document.getElementById("voiceName")?.value || "ara"),
           voicePersonality: String(document.getElementById("voicePersonality")?.value || "assistant"),
           voiceSpeed: Number(document.getElementById("voiceSpeed")?.value || 1),
+          voiceInstruction: String(document.getElementById("voiceInstruction")?.value || ""),
         });
       };
       input.addEventListener("change", sync);
       input.addEventListener("input", sync);
     });
+    const voiceMuteOutputBtn = document.getElementById("voiceMuteOutputBtn");
+    if (voiceMuteOutputBtn) {
+      voiceMuteOutputBtn.addEventListener("click", () => {
+        voiceState.outputMuted = !voiceState.outputMuted;
+        syncVoiceOutputMute();
+      });
+    }
 
     const cacheRefreshBtn = document.getElementById("cacheRefreshBtn");
     if (cacheRefreshBtn) {
@@ -5394,15 +5372,18 @@
     const voiceName = document.getElementById("voiceName");
     const voicePersonality = document.getElementById("voicePersonality");
     const voiceSpeed = document.getElementById("voiceSpeed");
+    const voiceInstruction = document.getElementById("voiceInstruction");
     if (voiceName && typeof uiState.voiceName === "string" && uiState.voiceName) voiceName.value = uiState.voiceName;
     if (voicePersonality && typeof uiState.voicePersonality === "string" && uiState.voicePersonality) voicePersonality.value = uiState.voicePersonality;
     if (voiceSpeed && typeof uiState.voiceSpeed === "number" && Number.isFinite(uiState.voiceSpeed)) voiceSpeed.value = String(uiState.voiceSpeed);
+    if (voiceInstruction && typeof uiState.voiceInstruction === "string") voiceInstruction.value = uiState.voiceInstruction;
     updateVoiceMeta();
     startVoiceVisualizer();
     stopVoiceVisualizer();
     window.addEventListener("resize", buildVoiceVisualizerBars);
     setVoiceButtons(false);
     setVoiceStatus(t("common.notConnected"));
+    syncVoiceOutputMute();
     updateCacheBatchUI();
   }
 

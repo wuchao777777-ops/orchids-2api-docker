@@ -11,22 +11,14 @@ import (
 	"orchids-api/internal/config"
 )
 
-func TestResolveModel_AcceptsGorkAlias(t *testing.T) {
-	spec, ok := ResolveModel("gork-4.20-0309")
-	if !ok {
-		t.Fatalf("ResolveModel(gork-4.20-0309) should succeed")
-	}
-	if spec.ID != "grok-4.20-0309" {
-		t.Fatalf("spec.ID=%q want grok-4.20-0309", spec.ID)
-	}
-}
-
-func TestNormalizeModelID_AcceptsHyphenVersionAlias(t *testing.T) {
-	if got := normalizeModelID("grok-4-2"); got != "grok-4.2" {
-		t.Fatalf("normalizeModelID(grok-4-2)=%q want grok-4.2", got)
-	}
-	if got := normalizeModelID("grok-4-1-thinking"); got != "grok-4.1-thinking" {
-		t.Fatalf("normalizeModelID(grok-4-1-thinking)=%q want grok-4.1-thinking", got)
+func TestResolveModel_RejectsRemovedAliases(t *testing.T) {
+	for _, id := range []string{"gork-4.20-0309", "grok-4-1-thinking", "grok-imagine-1.0"} {
+		if _, ok := ResolveModel(id); ok {
+			t.Fatalf("ResolveModel(%s) should fail", id)
+		}
+		if _, ok := ResolveModelOrDynamic(id); ok {
+			t.Fatalf("ResolveModelOrDynamic(%s) should fail", id)
+		}
 	}
 }
 
@@ -351,7 +343,7 @@ func TestBuildImageEditPayload_UsesGrokConfigFlags(t *testing.T) {
 		GrokCustomInstruction: "image mode",
 	}
 	h := &Handler{cfg: cfg}
-	spec := ModelSpec{ID: "grok-imagine-1.0-edit", UpstreamModel: "imagine-image-edit"}
+	spec := ModelSpec{ID: "grok-imagine-image-edit", UpstreamModel: "imagine-image-edit"}
 
 	payload := h.buildImageEditPayload(spec, "edit this", []string{"https://assets.grok.com/demo.png"}, "post-1")
 	if got, _ := payload["temporary"].(bool); got {
@@ -591,7 +583,7 @@ func TestApplyDefaultChatStream_StreamFalseOverride(t *testing.T) {
 
 func TestImagesGenerationsRequest_UnmarshalLooseTypes(t *testing.T) {
 	raw := []byte(`{
-		"model":"grok-imagine-1.0",
+		"model":"grok-imagine-image",
 		"prompt":"hello",
 		"n":"2",
 		"size":"1024x1024",

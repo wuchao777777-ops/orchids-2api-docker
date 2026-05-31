@@ -210,10 +210,6 @@ func (c *Client) FetchMonthlyUsage(ctx context.Context) (*MonthlyUsage, error) {
 	return &usage, nil
 }
 
-func (c *Client) SendRequest(ctx context.Context, _ string, _ []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	return c.SendRequestWithPayload(ctx, upstream.UpstreamRequest{Model: model}, onMessage, logger)
-}
-
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	if c == nil {
 		return fmt.Errorf("puter client is nil")

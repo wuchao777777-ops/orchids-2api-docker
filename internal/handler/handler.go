@@ -34,7 +34,7 @@ import (
 	warpprompt "orchids-api/internal/warp/promptbuilder"
 )
 
-// ClientFactory creates an UpstreamClient for a given account.
+// ClientFactory creates an upstream client for a given account.
 // Used to decouple provider-specific client construction from the handler.
 type ClientFactory func(acc *store.Account, cfg *config.Config) UpstreamClient
 
@@ -54,10 +54,6 @@ type Handler struct {
 }
 
 type UpstreamClient interface {
-	SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error
-}
-
-type UpstreamPayloadClient interface {
 	SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error
 }
 
@@ -1202,88 +1198,80 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if verboseDiagnostics {
-				slog.Debug("Interface check", "type", fmt.Sprintf("%T", apiClient))
+				slog.Debug("Using SendRequestWithPayload")
 			}
-			if sender, ok := apiClient.(UpstreamPayloadClient); ok {
-				if verboseDiagnostics {
-					slog.Debug("Using SendRequestWithPayload")
-				}
-				warpBatches := []warpToolResultBatch{{Messages: upstreamMessages}}
-				if isWarpRequest {
-					if h.config.WarpSplitToolResults || lastUserIsToolResultFollowup(upstreamMessages) {
-						batches, total := splitWarpToolResults(upstreamMessages, 1)
-						if verboseDiagnostics && len(batches) > 1 {
-							slog.Debug("Warp tool results split", "total_tool_results", total, "batches", len(batches))
-						}
-						warpBatches = batches
+			warpBatches := []warpToolResultBatch{{Messages: upstreamMessages}}
+			if isWarpRequest {
+				if h.config.WarpSplitToolResults || lastUserIsToolResultFollowup(upstreamMessages) {
+					batches, total := splitWarpToolResults(upstreamMessages, 1)
+					if verboseDiagnostics && len(batches) > 1 {
+						slog.Debug("Warp tool results split", "total_tool_results", total, "batches", len(batches))
 					}
+					warpBatches = batches
 				}
-				latestChatSessionID := upstreamReq.ChatSessionID
-				for i, batch := range warpBatches {
-					batchReq := upstreamReq
-					batchReq.Messages = batch.Messages
-					batchReq.ChatSessionID = latestChatSessionID
-					isLast := i == len(warpBatches)-1
-					if isLast {
-						err = sender.SendRequestWithPayload(r.Context(), batchReq, primaryHandler, logger)
-					} else {
-						intermediateConversationID := ""
-						intermediateTextDeltas := 0
-						intermediateToolCalls := 0
-						bufferedIntermediate := make([]upstream.SSEMessage, 0, 8)
-						noopHandler := func(msg upstream.SSEMessage) {
-							switch msg.Type {
-							case "model.conversation_id":
-								if id, ok := msg.Event["id"].(string); ok && strings.TrimSpace(id) != "" {
-									intermediateConversationID = id
-									latestChatSessionID = id
-									if conversationKey != "" {
-										h.sessionStore.SetConvID(r.Context(), conversationKey, id)
-										h.sessionStore.Touch(r.Context(), conversationKey)
-									}
-									if verboseDiagnostics {
-										slog.Debug("Warp intermediate conversationID captured", "key", conversationKey, "id", id)
-									}
+			}
+			latestChatSessionID := upstreamReq.ChatSessionID
+			for i, batch := range warpBatches {
+				batchReq := upstreamReq
+				batchReq.Messages = batch.Messages
+				batchReq.ChatSessionID = latestChatSessionID
+				isLast := i == len(warpBatches)-1
+				if isLast {
+					err = apiClient.SendRequestWithPayload(r.Context(), batchReq, primaryHandler, logger)
+				} else {
+					intermediateConversationID := ""
+					intermediateTextDeltas := 0
+					intermediateToolCalls := 0
+					bufferedIntermediate := make([]upstream.SSEMessage, 0, 8)
+					noopHandler := func(msg upstream.SSEMessage) {
+						switch msg.Type {
+						case "model.conversation_id":
+							if id, ok := msg.Event["id"].(string); ok && strings.TrimSpace(id) != "" {
+								intermediateConversationID = id
+								latestChatSessionID = id
+								if conversationKey != "" {
+									h.sessionStore.SetConvID(r.Context(), conversationKey, id)
+									h.sessionStore.Touch(r.Context(), conversationKey)
 								}
-								bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
-							case "model.text-delta", "coding_agent.output_text.delta":
-								intermediateTextDeltas++
-								bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
-							case "model.tool-call":
-								intermediateToolCalls++
-								bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
-							case "model.finish", "model.tokens-used":
-								bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
-							case "error":
-								slog.Warn("Warp intermediate batch error", "event", msg.Event)
+								if verboseDiagnostics {
+									slog.Debug("Warp intermediate conversationID captured", "key", conversationKey, "id", id)
+								}
 							}
-						}
-						err = sender.SendRequestWithPayload(r.Context(), batchReq, noopHandler, logger)
-						if verboseDiagnostics && err == nil && intermediateConversationID == "" {
-							slog.Debug("Warp intermediate batch completed without conversationID update", "batch", i+1)
-						}
-						if err == nil && (intermediateTextDeltas > 0 || intermediateToolCalls > 0) {
-							if verboseDiagnostics {
-								slog.Debug(
-									"Warp intermediate batch produced visible output",
-									"batch", i+1,
-									"text_deltas", intermediateTextDeltas,
-									"tool_calls", intermediateToolCalls,
-								)
-							}
-							for _, buffered := range bufferedIntermediate {
-								sh.handleMessage(buffered)
-							}
-							break
+							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
+						case "model.text-delta", "coding_agent.output_text.delta":
+							intermediateTextDeltas++
+							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
+						case "model.tool-call":
+							intermediateToolCalls++
+							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
+						case "model.finish", "model.tokens-used":
+							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
+						case "error":
+							slog.Warn("Warp intermediate batch error", "event", msg.Event)
 						}
 					}
-					if err != nil {
+					err = apiClient.SendRequestWithPayload(r.Context(), batchReq, noopHandler, logger)
+					if verboseDiagnostics && err == nil && intermediateConversationID == "" {
+						slog.Debug("Warp intermediate batch completed without conversationID update", "batch", i+1)
+					}
+					if err == nil && (intermediateTextDeltas > 0 || intermediateToolCalls > 0) {
+						if verboseDiagnostics {
+							slog.Debug(
+								"Warp intermediate batch produced visible output",
+								"batch", i+1,
+								"text_deltas", intermediateTextDeltas,
+								"tool_calls", intermediateToolCalls,
+							)
+						}
+						for _, buffered := range bufferedIntermediate {
+							sh.handleMessage(buffered)
+						}
 						break
 					}
 				}
-			} else {
-				slog.Warn("Falling back to legacy SendRequest (Workdir lost!)", "type", fmt.Sprintf("%T", apiClient))
-				err = apiClient.SendRequest(r.Context(), builtPrompt, chatHistory, mappedModel, primaryHandler, logger)
+				if err != nil {
+					break
+				}
 			}
 			if verboseDiagnostics {
 				slog.Debug("Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
