@@ -104,6 +104,12 @@ func imagineImageB64FromURL(raw string) string {
 	return base64.StdEncoding.EncodeToString(data)
 }
 
+func isLocalImagineImageURL(raw string) bool {
+	u := normalizeImagineImageURL(raw)
+	mediaType, fileName, ok := parseFilesPath(u)
+	return ok && mediaType == "image" && strings.TrimSpace(fileName) != ""
+}
+
 func cleanupImagineSessionsLocked(now time.Time) {
 	for id, session := range imagineSessions {
 		if now.Sub(session.CreatedAt) > imagineSessionTTL {
@@ -281,9 +287,18 @@ func ensureImageNSFW(payload map[string]interface{}, modelID string, nsfw *bool)
 	if imageGenCfg == nil {
 		return
 	}
+	if !supportsAppChatImageNSFW(modelID) {
+		delete(imageGenCfg, "enableNsfw")
+		delete(imageGenCfg, "enable_nsfw")
+		return
+	}
 	// Keep both key styles for compatibility with different upstream parsers.
 	imageGenCfg["enableNsfw"] = *nsfw
 	imageGenCfg["enable_nsfw"] = *nsfw
+}
+
+func supportsAppChatImageNSFW(modelID string) bool {
+	return normalizeModelID(modelID) != "grok-imagine-image-lite"
 }
 
 func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio, model string, n int, nsfw *bool) ([]imagineImage, int, error) {
@@ -313,17 +328,26 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 	if err != nil {
 		return nil, 0, err
 	}
-	urls = normalizeGeneratedImageURLs(urls, n)
 	if len(urls) == 0 {
 		return nil, 0, fmt.Errorf("no image generated")
 	}
 
 	images := make([]imagineImage, 0, len(urls))
-	for _, u := range urls {
-		imgURL := normalizeImagineImageURL(u)
-		if imgURL != "" {
-			images = append(images, imagineImage{URL: imgURL})
+	for _, raw := range urls {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
 		}
+		if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "/") {
+			if imgURL := normalizeImagineImageURL(raw); imgURL != "" {
+				if !isLocalImagineImageURL(imgURL) {
+					return nil, 0, fmt.Errorf("image was not cached locally")
+				}
+				images = append(images, imagineImage{URL: imgURL})
+			}
+			continue
+		}
+		images = append(images, imagineImage{B64: raw})
 	}
 	if len(images) == 0 {
 		return nil, 0, fmt.Errorf("no usable image generated")

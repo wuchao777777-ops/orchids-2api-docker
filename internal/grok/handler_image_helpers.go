@@ -8,6 +8,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -73,6 +76,27 @@ func imageDimsFromBytes(data []byte) (int, int) {
 	return cfg.Width, cfg.Height
 }
 
+func isLikelyRasterImageBytes(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
+		return true
+	}
+	if len(data) >= 8 &&
+		data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' &&
+		data[4] == '\r' && data[5] == '\n' && data[6] == 0x1a && data[7] == '\n' {
+		return true
+	}
+	if len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a") {
+		return true
+	}
+	if len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+		return true
+	}
+	return false
+}
+
 func (h *Handler) cacheMediaURL(ctx context.Context, token, rawURL, mediaType string) (string, error) {
 	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
 	if mediaType != "video" {
@@ -94,7 +118,15 @@ func (h *Handler) cacheMediaURL(ctx context.Context, token, rawURL, mediaType st
 	}
 	// Heuristic: avoid caching tiny/low-res images (often thumbnails/previews).
 	if mediaType == "image" {
+		if !isRasterImageMime(mimeType) {
+			return "", fmt.Errorf("unsupported image mime type: %s", strings.TrimSpace(mimeType))
+		}
 		w, hgt := imageDimsFromBytes(data)
+		if w <= 0 || hgt <= 0 {
+			if !forceCache || !isLikelyRasterImageBytes(data) {
+				return "", fmt.Errorf("unsupported image data")
+			}
+		}
 		// For assets.grok.com, caching is required for display (clients may not reach grok CDN).
 		if forceCache {
 			// Always cache (even previews). We already avoid emitting -part-0 when full exists.
@@ -108,19 +140,43 @@ func (h *Handler) cacheMediaURL(ctx context.Context, token, rawURL, mediaType st
 	return h.cacheMediaBytes(rawURL, mediaType, data, mimeType)
 }
 
+func isRasterImageMime(mimeType string) bool {
+	switch strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0])) {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		return true
+	default:
+		return false
+	}
+}
+
+func mustCacheImageURL(rawURL string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(rawURL)), "assets.grok.com/")
+}
+
 func (h *Handler) imageOutputValue(ctx context.Context, token, url, format string) (string, error) {
 	if normalizeImageResponseFormat(format) == "url" {
 		trim := strings.TrimSpace(url)
+		var cacheErr error
 		// Stable contract: prefer full over -part-0. If we only got a preview URL,
 		// try the full variant first.
 		if strings.Contains(trim, "-part-0/") {
 			full := strings.ReplaceAll(trim, "-part-0/", "/")
 			if name, err := h.cacheMediaURL(ctx, token, full, "image"); err == nil && name != "" {
 				return "/grok/v1/files/image/" + name, nil
+			} else if err != nil {
+				cacheErr = err
 			}
 		}
 		if name, err := h.cacheMediaURL(ctx, token, trim, "image"); err == nil && name != "" {
 			return "/grok/v1/files/image/" + name, nil
+		} else if err != nil {
+			cacheErr = err
+		}
+		if mustCacheImageURL(trim) {
+			if cacheErr != nil {
+				return "", fmt.Errorf("cache grok image locally: %w", cacheErr)
+			}
+			return "", fmt.Errorf("cache grok image locally failed")
 		}
 		return trim, nil
 	}

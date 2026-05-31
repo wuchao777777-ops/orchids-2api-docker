@@ -69,8 +69,15 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 		val, err := h.imageOutputValue(context.Background(), token, u, format)
 		if err != nil {
 			slog.Warn("grok image stream convert failed", "url", u, "error", err)
-			if field == "url" {
+			if field == "url" && !mustCacheImageURL(u) {
 				val = u
+			} else {
+				writeSSEError(w, "image cache failed: "+err.Error(), "server_error", "image_cache_failed")
+				writeSSEBytes(w, "", []byte("[DONE]"))
+				if flusher != nil {
+					flusher.Flush()
+				}
+				return
 			}
 		}
 		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
@@ -122,7 +129,7 @@ func (h *Handler) serveImagineWSImages(ctx context.Context, w http.ResponseWrite
 			val, err := h.imagineImageOutputValue(ctx, sess.token, ev, req.ResponseFormat)
 			if err != nil {
 				slog.Warn("grok imagine ws convert failed", "url", ev.URL, "image_id", ev.ImageID, "error", err)
-				if field == "url" {
+				if field == "url" && !mustCacheImageURL(ev.URL) {
 					val = ev.URL
 				} else {
 					val = ""
@@ -196,10 +203,15 @@ func (h *Handler) streamImagineWSImageGeneration(ctx context.Context, w http.Res
 			val, err := h.imagineImageOutputValue(ctx, sess.token, ev, req.ResponseFormat)
 			if err != nil {
 				slog.Warn("grok imagine ws stream convert failed", "url", ev.URL, "image_id", ev.ImageID, "error", err)
-				if field == "url" {
+				if field == "url" && !mustCacheImageURL(ev.URL) {
 					val = ev.URL
 				} else {
-					val = ""
+					writeSSEError(w, "image cache failed: "+err.Error(), "server_error", "image_cache_failed")
+					writeSSEBytes(w, "", []byte("[DONE]"))
+					if flusher != nil {
+						flusher.Flush()
+					}
+					return
 				}
 			}
 			if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
@@ -329,10 +341,14 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	var debugHTTP []string
 	var debugAsset []string
 	var debugShapes []string
+	var debugNoImage []string
+	var debugVariants []string
+	var successVariant string
 
 	// Grok upstream may return only 2 images per call and may repeat.
 	// To reach N, request 1 image per call without rewriting the user's prompt.
-	maxAttempts := req.N * 4
+	payloadVariants := appChatImagePayloadVariants()
+	maxAttempts := req.N * len(payloadVariants) * 2
 	promptVariants := grokAppChatImagePrompts(req.Prompt)
 	if maxAttempts < 4 {
 		maxAttempts = 4
@@ -350,12 +366,15 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		count := req.N
 		prompt := strings.TrimSpace(req.Prompt)
 		if len(promptVariants) > 0 {
-			prompt = promptVariants[promptVariantIndex(i, promptVariants)]
+			prompt = promptVariants[promptVariantIndex(i/len(payloadVariants), promptVariants)]
 		}
+		variant := payloadVariants[i%len(payloadVariants)]
+		debugVariants = append(debugVariants, variant)
 		payload := h.client.chatPayload(spec, prompt, true, count)
 		prepareAppChatImageGenerationPayload(payload, count)
 		ensureImageAspectRatio(payload, spec.UpstreamModel, resolveAspectRatio(req.Size))
 		ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
+		applyAppChatImagePayloadVariant(payload, spec, variant)
 		resp, err := h.doChatSingleAccount(ctx, sess, payload)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -366,6 +385,9 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 			if len(debugShapes) < 20 {
 				debugShapes = append(debugShapes, imageDebugShape(line))
 			}
+			if len(debugNoImage) < 20 {
+				debugNoImage = append(debugNoImage, appChatImageNoImageDiagnostics(line)...)
+			}
 			urls = append(urls, extractAppChatImageURLs(line)...)
 			return nil
 		})
@@ -375,18 +397,29 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 			return
 		}
 		urls = normalizeGeneratedImageURLs(urls, 0)
+		if len(urls) > 0 && successVariant == "" {
+			successVariant = variant
+		}
 	}
 	urls = normalizeGeneratedImageURLs(urls, req.N)
 	if len(urls) == 0 {
 		slog.Warn("grok image generation returned no images",
 			"model", req.Model,
 			"attempts", maxAttempts,
+			"variants", uniqueStrings(debugVariants),
 			"event_shapes", uniqueStrings(debugShapes),
+			"diagnostics", uniqueStrings(debugNoImage),
 			"http_candidates", len(uniqueStrings(debugHTTP)),
 			"asset_candidates", len(uniqueStrings(debugAsset)),
 		)
 		http.Error(w, "no image generated", http.StatusBadGateway)
 		return
+	}
+	if successVariant != "" && successVariant != "webchat2api" {
+		slog.Info("grok image generation succeeded with fallback payload",
+			"model", req.Model,
+			"variant", successVariant,
+		)
 	}
 
 	field := imageResponseField(req.ResponseFormat)
@@ -395,10 +428,11 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		val, err := h.imageOutputValue(ctx, sess.token, u, req.ResponseFormat)
 		if err != nil {
 			slog.Warn("grok image convert failed", "url", u, "error", err)
-			if field == "url" {
+			if field == "url" && !mustCacheImageURL(u) {
 				val = u
 			} else {
-				val = ""
+				http.Error(w, "image cache failed: "+err.Error(), http.StatusBadGateway)
+				return
 			}
 		}
 		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
@@ -445,6 +479,48 @@ func prepareAppChatImageGenerationPayload(payload map[string]interface{}, count 
 	toolOverrides["xMediaSearch"] = false
 	toolOverrides["trendsSearch"] = false
 	toolOverrides["xPostAnalyze"] = false
+}
+
+func appChatImagePayloadVariants() []string {
+	return []string{
+		"webchat2api",
+		"tool_image_gen",
+		"legacy_model_fields",
+		"response_metadata_override",
+	}
+}
+
+func applyAppChatImagePayloadVariant(payload map[string]interface{}, spec ModelSpec, variant string) {
+	if payload == nil {
+		return
+	}
+	toolOverrides, _ := payload["toolOverrides"].(map[string]interface{})
+	switch variant {
+	case "tool_image_gen":
+		if toolOverrides != nil {
+			toolOverrides["imageGen"] = true
+		}
+	case "legacy_model_fields":
+		if toolOverrides != nil {
+			toolOverrides["imageGen"] = true
+		}
+		if model := strings.TrimSpace(spec.UpstreamModel); model != "" {
+			payload["modelName"] = model
+		}
+		if mode := strings.TrimSpace(spec.ModelMode); mode != "" {
+			payload["modelMode"] = mode
+		}
+	case "response_metadata_override":
+		if toolOverrides != nil {
+			toolOverrides["imageGen"] = true
+		}
+		if override, ok := payload["modelConfigOverride"].(map[string]interface{}); ok && len(override) > 0 {
+			payload["responseMetadata"] = map[string]interface{}{
+				"modelConfigOverride": override,
+			}
+			delete(payload, "modelConfigOverride")
+		}
+	}
 }
 
 func promptVariantIndex(i int, variants []string) int {
@@ -498,11 +574,5 @@ func grokAppChatImagePrompt(prompt string) string {
 	if prompt == "" {
 		return prompt
 	}
-	lower := strings.ToLower(prompt)
-	for _, prefix := range []string{"draw ", "draw:", "paint ", "paint:", "sketch ", "sketch:"} {
-		if strings.HasPrefix(lower, prefix) {
-			return prompt
-		}
-	}
-	return "Draw " + prompt
+	return prompt
 }

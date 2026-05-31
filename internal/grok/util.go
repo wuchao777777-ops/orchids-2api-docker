@@ -1938,6 +1938,78 @@ func extractAppChatImageURLs(resp map[string]interface{}) []string {
 	return urls
 }
 
+func appChatImageNoImageDiagnostics(resp map[string]interface{}) []string {
+	if resp == nil {
+		return nil
+	}
+	response := resp
+	if nested := mapAtAnyPath(resp, []string{"result", "response"}); nested != nil {
+		response = nested
+	}
+	var out []string
+	if msg := firstNonEmptyStringAtAnyPath(response,
+		[]string{"userResponse", "message"},
+		[]string{"modelResponse", "message"},
+		[]string{"message"},
+		[]string{"error", "message"},
+	); msg != "" {
+		out = append(out, "message="+truncateDiagnosticText(msg, 220))
+	}
+	for _, path := range [][]string{
+		{"userResponse", "streamErrors"},
+		{"modelResponse", "streamErrors"},
+		{"streamErrors"},
+		{"errors"},
+	} {
+		if v := valueAtPath(response, path...); v != nil {
+			if s := diagnosticValueSummary(v); s != "" {
+				out = append(out, strings.Join(path, ".")+"="+s)
+			}
+		}
+	}
+	return out
+}
+
+func firstNonEmptyStringAtAnyPath(root interface{}, paths ...[]string) string {
+	for _, path := range paths {
+		if s := strings.TrimSpace(fmt.Sprint(valueAtPath(root, path...))); s != "" && s != "<nil>" {
+			return s
+		}
+	}
+	return ""
+}
+
+func diagnosticValueSummary(v interface{}) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return truncateDiagnosticText(x, 220)
+	case []interface{}:
+		if len(x) == 0 {
+			return "[]"
+		}
+		return fmt.Sprintf("len=%d first=%s", len(x), truncateDiagnosticText(fmt.Sprint(x[0]), 180))
+	case map[string]interface{}:
+		if len(x) == 0 {
+			return "{}"
+		}
+		b, _ := json.Marshal(x)
+		return truncateDiagnosticText(string(b), 220)
+	default:
+		return truncateDiagnosticText(fmt.Sprint(x), 220)
+	}
+}
+
+func truncateDiagnosticText(s string, max int) string {
+	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+	if max <= 0 || len([]rune(s)) <= max {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:max]) + "..."
+}
+
 func extractVideoProgress(resp map[string]interface{}) (progress int, videoURL, thumbnailURL string, ok bool) {
 	raw := mapAtAnyPath(resp,
 		[]string{"streamingVideoGenerationResponse"},
