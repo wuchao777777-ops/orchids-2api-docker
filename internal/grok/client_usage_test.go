@@ -108,11 +108,6 @@ func TestRateLimitModelName_UsesModeAcceptedByUpstream(t *testing.T) {
 			want: "auto",
 		},
 		{
-			name: "grok 4.3 custom mode",
-			spec: ModelSpec{UpstreamModel: "grok-4.3-beta", ModelMode: "grok-420-computer-use-sa"},
-			want: "grok-420-computer-use-sa",
-		},
-		{
 			name: "fallback upstream",
 			spec: ModelSpec{UpstreamModel: "custom-model"},
 			want: "custom-model",
@@ -162,12 +157,23 @@ func TestChatPayload_UsesCurrentAppChatModelFields(t *testing.T) {
 	if got, _ := toolOverrides["webSearch"].(bool); got {
 		t.Fatalf("webSearch=%v want false for image generation", got)
 	}
+	if got, _ := toolOverrides["xSearch"].(bool); got {
+		t.Fatalf("xSearch=%v want false for image generation", got)
+	}
+	textPayload := c.chatPayload(ModelSpec{ID: "grok-4.20-fast", UpstreamModel: "grok-4.20-fast"}, "hello", true, 0)
+	textOverrides := textPayload["toolOverrides"].(map[string]interface{})
+	if got, _ := textOverrides["webSearch"].(bool); !got {
+		t.Fatalf("webSearch=%v want true for text chat", got)
+	}
+	if got, _ := textOverrides["xSearch"].(bool); !got {
+		t.Fatalf("xSearch=%v want true for text chat", got)
+	}
 }
 
 func TestAppChatModeID_UsesCustomModeID(t *testing.T) {
-	spec := ModelSpec{ID: "grok-4.3-beta", UpstreamModel: "grok-4.3-beta", ModelMode: "grok-420-computer-use-sa", Tier: grokTierSuper}
+	spec := ModelSpec{ID: "grok-custom-app-chat", UpstreamModel: "grok-custom-app-chat", ModelMode: "grok-custom-mode", Tier: grokTierSuper}
 
-	if got := appChatModeID(spec); got != "grok-420-computer-use-sa" {
+	if got := appChatModeID(spec); got != "grok-custom-mode" {
 		t.Fatalf("appChatModeID()=%q want custom mode", got)
 	}
 	if got := appChatModelTier(spec); got != "super" {
