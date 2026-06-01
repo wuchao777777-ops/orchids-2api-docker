@@ -45,7 +45,7 @@ func GetSharedUTLSHTTPClient(proxyKey string, timeout time.Duration, proxyFunc f
 	if proxyKey == "" {
 		proxyKey = "direct"
 	}
-	cacheKey := "utls|" + proxyKey
+	cacheKey := "utls|" + sharedHTTPClientCacheKey(proxyKey, timeout)
 
 	utlsClientCache.mu.RLock()
 	client, ok := utlsClientCache.clients[cacheKey]
@@ -82,7 +82,7 @@ func GetSharedUTLSHTTPClient(proxyKey string, timeout time.Duration, proxyFunc f
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: responseHeaderTimeoutForClient(timeout),
 	}
 
 	newClient := &http.Client{

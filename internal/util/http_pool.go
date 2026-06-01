@@ -2,6 +2,7 @@ package util
 
 import (
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,19 +32,12 @@ func GetSharedHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(
 	if proxyKey == "" {
 		proxyKey = "direct"
 	}
+	cacheKey := sharedHTTPClientCacheKey(proxyKey, timeout)
 
 	httpClientCache.mu.RLock()
-	client, ok := httpClientCache.clients[proxyKey]
+	client, ok := httpClientCache.clients[cacheKey]
 	httpClientCache.mu.RUnlock()
 	if ok {
-		// Just ensure timeout matches (though we generally expect it to be consistent per application)
-		if client.Timeout != timeout {
-			// If timeout differs (rare), we return a shallow copy of the client with the new timeout,
-			// sharing the same underlying Transport (which holds the connection pool).
-			clone := *client
-			clone.Timeout = timeout
-			return &clone
-		}
 		return client
 	}
 
@@ -51,12 +45,7 @@ func GetSharedHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(
 	defer httpClientCache.mu.Unlock()
 
 	// Double check
-	if client, ok = httpClientCache.clients[proxyKey]; ok {
-		if client.Timeout != timeout {
-			clone := *client
-			clone.Timeout = timeout
-			return &clone
-		}
+	if client, ok = httpClientCache.clients[cacheKey]; ok {
 		return client
 	}
 
@@ -67,7 +56,7 @@ func GetSharedHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: responseHeaderTimeoutForClient(timeout),
 		Proxy:                 proxyFunc,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: false},
 	}
@@ -77,8 +66,29 @@ func GetSharedHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(
 		Timeout:   timeout,
 	}
 
-	httpClientCache.clients[proxyKey] = newClient
+	httpClientCache.clients[cacheKey] = newClient
 	return newClient
+}
+
+func sharedHTTPClientCacheKey(proxyKey string, timeout time.Duration) string {
+	return fmt.Sprintf("%s|timeout=%d", proxyKey, int64(timeout/time.Second))
+}
+
+func responseHeaderTimeoutForClient(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return 30 * time.Second
+	}
+	if timeout <= 30*time.Second {
+		return timeout
+	}
+	headerTimeout := timeout / 2
+	if headerTimeout < 60*time.Second {
+		headerTimeout = 60 * time.Second
+	}
+	if headerTimeout > 120*time.Second {
+		headerTimeout = 120 * time.Second
+	}
+	return headerTimeout
 }
 
 // generateProxyKey generates a string key based on the proxy config.
