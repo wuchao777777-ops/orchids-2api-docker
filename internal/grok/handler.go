@@ -361,6 +361,12 @@ func shouldSwitchGrokAccount(err error) bool {
 	if status == "403" || status == "429" {
 		return true
 	}
+	if upstreamStatus := parseUpstreamStatus(err); upstreamStatus == http.StatusBadGateway ||
+		upstreamStatus == http.StatusServiceUnavailable ||
+		upstreamStatus == http.StatusGatewayTimeout ||
+		upstreamStatus == http.StatusInternalServerError {
+		return true
+	}
 
 	lower := strings.ToLower(err.Error())
 	switch {

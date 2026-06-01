@@ -350,7 +350,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	defer sess.Close()
 
 	if shouldServeConsoleChat(spec, attachments) {
-		h.serveConsoleChat(r.Context(), w, &req, spec, sess)
+		h.serveConsoleChat(r.Context(), w, &req, spec, sess, logger)
 		return
 	}
 	if requiresConsoleResponses(spec) {

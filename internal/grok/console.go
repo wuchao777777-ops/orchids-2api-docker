@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/debug"
 )
 
 const consoleResponsesURL = "https://console.x.ai/v1/responses"
@@ -557,25 +559,72 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 	}
 }
 
-func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession) {
+func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger) {
 	payload, err := h.consolePayload(spec, req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp, err := h.doConsole(ctx, sess.token, payload)
+	resp, err := h.doConsoleWithAutoSwitch(ctx, sess, payload)
 	if err != nil {
+		if logger != nil {
+			logger.LogUpstreamHTTPError(consoleResponsesURL, parseUpstreamStatus(err), "", err)
+		}
 		h.markAccountStatus(ctx, sess.acc, err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
+	if logger != nil {
+		logger.LogUpstreamRequest(consoleResponsesURL, debugHeaderMap(h.client.consoleHeaders(sess.token)), payload)
+	}
 	h.syncGrokQuota(sess.acc, resp.Header)
 	if req.Stream {
 		h.streamConsoleChat(w, req, resp.Body)
 		return
 	}
 	h.collectConsoleChat(w, req, resp.Body)
+}
+
+func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}) (*http.Response, error) {
+	if sess == nil || strings.TrimSpace(sess.token) == "" {
+		return nil, fmt.Errorf("empty chat session")
+	}
+	maxAttempts := 2
+	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
+		maxAttempts = h.cfg.AccountSwitchCount
+	}
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+
+	used := make([]int64, 0, maxAttempts)
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if sess.acc != nil && sess.acc.ID != 0 {
+			used = append(used, sess.acc.ID)
+		}
+		resp, err := h.doConsole(ctx, sess.token, payload)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		h.markAccountStatus(ctx, sess.acc, err)
+		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
+			return nil, err
+		}
+
+		sess.Close()
+		next, switchErr := h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
+		if switchErr != nil {
+			return nil, err
+		}
+		sess.acc = next.acc
+		sess.token = next.token
+		sess.poolCandidates = next.poolCandidates
+		sess.release = next.release
+	}
+	return nil, lastErr
 }
 
 func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) {
