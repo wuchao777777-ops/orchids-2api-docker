@@ -326,7 +326,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	ensureImageAspectRatio(onePayload, spec.UpstreamModel, resolveAspectRatio(req.Size))
 	ensureImageNSFW(onePayload, spec.UpstreamModel, nsfw)
 	if req.Stream {
-		resp, err := h.doChatSingleAccount(ctx, sess, onePayload)
+		resp, err := h.doChatWithAutoSwitchRebuild(ctx, sess, &onePayload, nil)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -375,7 +375,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		ensureImageAspectRatio(payload, spec.UpstreamModel, resolveAspectRatio(req.Size))
 		ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
 		applyAppChatImagePayloadVariant(payload, spec, variant)
-		resp, err := h.doChatSingleAccount(ctx, sess, payload)
+		resp, err := h.doChatWithAutoSwitchRebuild(ctx, sess, &payload, nil)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -483,8 +483,8 @@ func prepareAppChatImageGenerationPayload(payload map[string]interface{}, count 
 
 func appChatImagePayloadVariants() []string {
 	return []string{
-		"webchat2api",
 		"tool_image_gen",
+		"webchat2api",
 		"response_metadata_override",
 	}
 }
@@ -495,6 +495,10 @@ func applyAppChatImagePayloadVariant(payload map[string]interface{}, spec ModelS
 	}
 	toolOverrides, _ := payload["toolOverrides"].(map[string]interface{})
 	switch variant {
+	case "webchat2api":
+		if toolOverrides != nil {
+			toolOverrides["imageGen"] = true
+		}
 	case "tool_image_gen":
 		if toolOverrides != nil {
 			toolOverrides["imageGen"] = true

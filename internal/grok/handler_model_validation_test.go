@@ -91,6 +91,37 @@ func TestEnsureModelEnabled_AllowsVerifiedDynamicGrokModel(t *testing.T) {
 	}
 }
 
+func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	if err := s.CreateModel(context.Background(), &store.Model{
+		Channel:  "Puter",
+		ModelID:  "grok-shared-id",
+		Name:     "Puter shared",
+		Status:   store.ModelStatusAvailable,
+		Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel(puter) error = %v", err)
+	}
+	if err := s.CreateModel(context.Background(), &store.Model{
+		Channel:  "Grok",
+		ModelID:  "grok-shared-id",
+		Name:     "Grok shared",
+		Status:   store.ModelStatusAvailable,
+		Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel(grok) error = %v", err)
+	}
+
+	if err := h.ensureModelEnabled(context.Background(), "grok-shared-id"); err != nil {
+		t.Fatalf("ensureModelEnabled() error = %v", err)
+	}
+}
+
 func TestResolveModel_AcceptsOfficialGrok43(t *testing.T) {
 	spec, ok := ResolveModel("grok-4.3")
 	if !ok {
@@ -157,6 +188,36 @@ func TestEnsureModelEnabled_RejectsRemovedGrok43BetaEvenWhenStored(t *testing.T)
 
 	if err := h.ensureModelEnabled(context.Background(), "grok-4.3-beta"); err == nil {
 		t.Fatal("ensureModelEnabled(grok-4.3-beta) succeeded, want error")
+	}
+}
+
+func TestHandleChatCompletions_Grok43NeverFallsBackToAppChat(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	if err := s.CreateAccount(context.Background(), &store.Account{
+		AccountType:  "grok",
+		ClientCookie: "sso=super-token",
+		Subscription: "super",
+		Enabled:      true,
+	}); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	body := `{"model":"grok-4.3","messages":[{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "console.x.ai") {
+		t.Fatalf("body=%q want console.x.ai guidance", rec.Body.String())
 	}
 }
 

@@ -286,6 +286,10 @@ func shouldServeConsoleChat(spec ModelSpec, attachments []AttachmentInput) bool 
 	return strings.TrimSpace(spec.ConsoleModel) != "" && len(attachments) == 0
 }
 
+func requiresConsoleResponses(spec ModelSpec) bool {
+	return strings.TrimSpace(spec.ConsoleModel) != ""
+}
+
 type ConsoleProbeResult struct {
 	RequestedModel string
 	CanonicalModel string
