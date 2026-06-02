@@ -2,6 +2,8 @@ package grok
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -14,7 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/goccy/go-json"
+	"github.com/klauspost/compress/zstd"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/util"
@@ -26,7 +30,10 @@ const (
 	defaultAssetsListPath   = "/rest/assets"
 	defaultAssetsDeletePath = "/rest/assets-metadata"
 	defaultChatPath         = "/rest/app-chat/conversations/new"
+	defaultConversationPath = "/rest/app-chat/conversations"
 	defaultUploadFilePath   = "/rest/app-chat/upload-file"
+	defaultCanvasCreatePath = "/rest/media/canvas/create"
+	defaultMediaConvoPath   = "/rest/media/conversation/create"
 	defaultCreatePostPath   = "/rest/media/post/create"
 	defaultLivekitPath      = "/rest/livekit/tokens"
 	defaultRateLimitsPath   = "/rest/rate-limits"
@@ -34,6 +41,9 @@ const (
 	defaultSetBirthPath     = "/rest/auth/set-birth-date"
 	defaultNSFWMgmtPath     = "/auth_mgmt.AuthManagement/UpdateUserFeatureControls"
 	defaultUA               = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+	defaultAppChatUA        = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+	defaultAppChatSecCHUA   = `"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"`
+	defaultAppChatStatsigID = "0196a8f6-0501-79f8-8d74-a2f2c0f5f5f5"
 )
 
 type Client struct {
@@ -122,6 +132,24 @@ var baseHeaders = http.Header{
 	"Sec-Fetch-Site":     []string{"same-origin"},
 }
 
+var appChatHeaders = http.Header{
+	"Accept":             []string{"*/*"},
+	"Accept-Encoding":    []string{"gzip, deflate, br, zstd"},
+	"Accept-Language":    []string{"zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7"},
+	"Cache-Control":      []string{"no-cache"},
+	"Content-Type":       []string{"application/json"},
+	"Origin":             []string{"https://grok.com"},
+	"Pragma":             []string{"no-cache"},
+	"Priority":           []string{"u=1, i"},
+	"Referer":            []string{"https://grok.com/"},
+	"Sec-Ch-Ua":          []string{defaultAppChatSecCHUA},
+	"Sec-Ch-Ua-Mobile":   []string{"?0"},
+	"Sec-Ch-Ua-Platform": []string{`"Windows"`},
+	"Sec-Fetch-Dest":     []string{"empty"},
+	"Sec-Fetch-Mode":     []string{"cors"},
+	"Sec-Fetch-Site":     []string{"same-origin"},
+}
+
 func cloneHeaderShallow(src http.Header, extraCapacity int) http.Header {
 	if extraCapacity < 0 {
 		extraCapacity = 0
@@ -136,27 +164,110 @@ func cloneHeaderShallow(src http.Header, extraCapacity int) http.Header {
 	return dst
 }
 
-func buildGrokCookie(token, cfClearance, cfBM string) string {
-	var b strings.Builder
-	b.Grow(len(token)*2 + len(cfClearance) + len(cfBM) + 32)
-	b.WriteString("sso=")
-	b.WriteString(token)
-	b.WriteString("; sso-rw=")
-	b.WriteString(token)
-	if cfClearance != "" {
-		b.WriteString("; cf_clearance=")
-		b.WriteString(cfClearance)
+type grokCookieItem struct {
+	name  string
+	value string
+}
+
+func grokCookieItems(raw string) []grokCookieItem {
+	parts := strings.Split(strings.TrimSpace(raw), ";")
+	out := make([]grokCookieItem, 0, len(parts))
+	for _, part := range parts {
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		name = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
+		value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+		if name == "" {
+			continue
+		}
+		out = append(out, grokCookieItem{name: name, value: value})
 	}
-	if cfBM != "" {
-		b.WriteString("; __cf_bm=")
-		b.WriteString(cfBM)
+	return out
+}
+
+func isSetCookieAttribute(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "path", "domain", "expires", "max-age", "secure", "httponly", "samesite", "partitioned", "priority":
+		return true
+	default:
+		return false
+	}
+}
+
+func setGrokCookieItem(items *[]grokCookieItem, name, value string) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	value = strings.TrimSpace(value)
+	if name == "" || value == "" {
+		return
+	}
+	for i := range *items {
+		if (*items)[i].name == name {
+			(*items)[i].value = value
+			return
+		}
+	}
+	*items = append(*items, grokCookieItem{name: name, value: value})
+}
+
+func joinGrokCookieItems(items []grokCookieItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, item := range items {
+		if strings.TrimSpace(item.name) == "" || strings.TrimSpace(item.value) == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(item.name)
+		b.WriteString("=")
+		b.WriteString(item.value)
 	}
 	return b.String()
 }
 
-func (c *Client) headers(token string) http.Header {
-	token = NormalizeSSOToken(token)
+func buildGrokCookie(token, cfClearance, cfBM string) string {
+	raw := strings.TrimSpace(token)
+	parsed := grokCookieItems(raw)
+	sso := ""
+	for _, item := range parsed {
+		if item.name == "sso" {
+			sso = item.value
+			break
+		}
+	}
+	if sso == "" && raw != "" && !strings.Contains(raw, "=") {
+		sso = strings.Join(strings.Fields(raw), " ")
+	}
 
+	items := make([]grokCookieItem, 0, len(parsed)+4)
+	if sso != "" {
+		setGrokCookieItem(&items, "sso", sso)
+		setGrokCookieItem(&items, "sso-rw", sso)
+		for _, item := range parsed {
+			if item.name == "sso" || item.name == "sso-rw" || isSetCookieAttribute(item.name) {
+				continue
+			}
+			setGrokCookieItem(&items, item.name, item.value)
+		}
+	} else {
+		for _, item := range parsed {
+			if isSetCookieAttribute(item.name) {
+				continue
+			}
+			setGrokCookieItem(&items, item.name, item.value)
+		}
+	}
+	setGrokCookieItem(&items, "cf_clearance", cfClearance)
+	setGrokCookieItem(&items, "__cf_bm", cfBM)
+	return joinGrokCookieItems(items)
+}
+
+func (c *Client) headers(token string) http.Header {
 	// 从预分配的模板浅克隆请求头；固定值切片复用，动态字段再覆盖。
 	h := cloneHeaderShallow(baseHeaders, 4)
 
@@ -172,8 +283,38 @@ func (c *Client) headers(token string) http.Header {
 		cfClearance = strings.TrimSpace(c.cfg.GrokCFClearance)
 		cfBM = strings.TrimSpace(c.cfg.GrokCFBM)
 	}
-	h.Set("Cookie", buildGrokCookie(token, cfClearance, cfBM))
+	if cookie := buildGrokCookie(token, cfClearance, cfBM); cookie != "" {
+		h.Set("Cookie", cookie)
+	}
 
+	return h
+}
+
+func (c *Client) appChatHeaders(token string) http.Header {
+	return c.appChatHeadersWithReferer(token, "")
+}
+
+func (c *Client) appChatHeadersWithReferer(token, referer string) http.Header {
+	h := cloneHeaderShallow(appChatHeaders, 4)
+	h.Set("User-Agent", defaultAppChatUA)
+	if c != nil && c.cfg != nil && strings.TrimSpace(c.cfg.GrokUserAgent) != "" {
+		h.Set("User-Agent", strings.TrimSpace(c.cfg.GrokUserAgent))
+	}
+	if referer = strings.TrimSpace(referer); referer != "" {
+		h.Set("Referer", referer)
+	}
+	h.Set("x-statsig-id", defaultAppChatStatsigID)
+	h.Set("x-xai-request-id", randomUUID())
+
+	cfClearance := ""
+	cfBM := ""
+	if c != nil && c.cfg != nil {
+		cfClearance = strings.TrimSpace(c.cfg.GrokCFClearance)
+		cfBM = strings.TrimSpace(c.cfg.GrokCFBM)
+	}
+	if cookie := buildGrokCookie(token, cfClearance, cfBM); cookie != "" {
+		h.Set("Cookie", cookie)
+	}
 	return h
 }
 
@@ -298,6 +439,30 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 	return payload
 }
 
+func (c *Client) appChatImagePayload(spec ModelSpec, prompt, _ string, _ int) map[string]interface{} {
+	message := strings.TrimSpace(prompt)
+	modeID := appChatModeID(spec)
+	if modeID == "" {
+		modeID = "fast"
+	}
+	payload := map[string]interface{}{
+		"message":                           message,
+		"modeId":                            modeID,
+		"parentResponseId":                  "",
+		"enableImageGeneration":             true,
+		"enableImageStreaming":              true,
+		"sendFinalMetadata":                 true,
+		"disableMemory":                     false,
+		"disableSearch":                     false,
+		"disableTextFollowUps":              true,
+		"enableSideBySide":                  false,
+		"imageAttachments":                  []string{},
+		"fileAttachments":                   []string{},
+		"skipCancelCurrentInflightRequests": false,
+	}
+	return payload
+}
+
 func appChatModeID(spec ModelSpec) string {
 	mode := strings.TrimSpace(spec.ModelMode)
 	switch mode {
@@ -341,13 +506,107 @@ func (c *Client) clientForAsset(asset bool) *http.Client {
 	return c.httpClient
 }
 
+func (c *Client) clientForAppChat() *http.Client {
+	if c != nil && c.httpClient != nil {
+		return c.httpClient
+	}
+	return http.DefaultClient
+}
+
+type responseBodyCloser struct {
+	io.Reader
+	closers []io.Closer
+}
+
+type closeFunc func() error
+
+func (fn closeFunc) Close() error {
+	return fn()
+}
+
+func (r responseBodyCloser) Close() error {
+	var firstErr error
+	for _, closer := range r.closers {
+		if closer == nil {
+			continue
+		}
+		if err := closer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func decodeHTTPResponseBody(resp *http.Response) error {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	encoding := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
+	if idx := strings.Index(encoding, ","); idx >= 0 {
+		encoding = strings.TrimSpace(encoding[:idx])
+	}
+	if encoding == "" || encoding == "identity" {
+		return nil
+	}
+
+	original := resp.Body
+	var (
+		reader  io.Reader
+		closers []io.Closer
+	)
+	switch encoding {
+	case "gzip":
+		gz, err := gzip.NewReader(original)
+		if err != nil {
+			return err
+		}
+		reader = gz
+		closers = append(closers, gz)
+	case "deflate":
+		fr := flate.NewReader(original)
+		reader = fr
+		closers = append(closers, fr)
+	case "br":
+		reader = brotli.NewReader(original)
+	case "zstd":
+		zr, err := zstd.NewReader(original)
+		if err != nil {
+			return err
+		}
+		reader = zr
+		closers = append(closers, closeFunc(func() error {
+			zr.Close()
+			return nil
+		}))
+	default:
+		return nil
+	}
+	closers = append(closers, original)
+	resp.Body = responseBodyCloser{Reader: reader, closers: closers}
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
+	return nil
+}
+
 func (c *Client) doRequest(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, okStatus int, asset bool) (*http.Response, error) {
 	return c.doRequestWith429Retry(ctx, reqURL, method, body, headers, okStatus, asset, true)
 }
 
 func (c *Client) doRequestWith429Retry(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, okStatus int, asset bool, retry429 bool) (*http.Response, error) {
+	return c.doRequestWithHTTPClient(ctx, c.clientForAsset(asset), reqURL, method, body, headers, okStatus, retry429)
+}
+
+func (c *Client) doAppChatRequestWith429Retry(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, okStatus int, retry429 bool) (*http.Response, error) {
+	return c.doRequestWithHTTPClient(ctx, c.clientForAppChat(), reqURL, method, body, headers, okStatus, retry429)
+}
+
+func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.Client, reqURL string, method string, body []byte, headers http.Header, okStatus int, retry429 bool) (*http.Response, error) {
 	if okStatus == 0 {
 		okStatus = http.StatusOK
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
 	}
 	maxRetries := 0
 	if c.cfg != nil && c.cfg.MaxRetries > 0 {
@@ -378,10 +637,22 @@ func (c *Client) doRequestWith429Retry(ctx context.Context, reqURL string, metho
 		reqHeaders.Set("x-xai-request-id", randomUUID())
 		req.Header = reqHeaders
 
-		resp, err := c.clientForAsset(asset).Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			if attempt >= maxRetries {
 				return nil, err
+			}
+			delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, 0, 0)
+			lastDelay = delay
+			if !sleepWithContext(ctx, delay) {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		if err := decodeHTTPResponseBody(resp); err != nil {
+			_ = resp.Body.Close()
+			if attempt >= maxRetries {
+				return nil, fmt.Errorf("grok upstream decode failed: %w", err)
 			}
 			delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, 0, 0)
 			lastDelay = delay
@@ -426,7 +697,174 @@ func (c *Client) doChat(ctx context.Context, token string, payload map[string]in
 	}
 
 	reqURL := c.baseURL() + defaultChatPath
-	return c.doRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.headers(token), http.StatusOK, false, false)
+	return c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeaders(token), http.StatusOK, false)
+}
+
+func (c *Client) doAppChatCreateAndRespond(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
+	canvasID, err := c.createAppChatCanvas(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	referer := c.appChatImagineReferer(canvasID)
+	conversationID, err := c.createAppChatConversation(ctx, token, referer)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.linkAppChatConversationToCanvas(ctx, token, conversationID, canvasID); err != nil {
+		return nil, err
+	}
+	return c.doAppChatAddResponse(ctx, token, conversationID, canvasID, payload)
+}
+
+func (c *Client) appChatImagineReferer(canvasID string) string {
+	id := strings.TrimSpace(canvasID)
+	if id == "" {
+		return c.baseURL() + "/imagine/agent"
+	}
+	return c.baseURL() + "/imagine/agent/" + url.PathEscape(id)
+}
+
+func (c *Client) createAppChatCanvas(ctx context.Context, token string) (string, error) {
+	body, err := json.Marshal(map[string]interface{}{
+		"name": "",
+	})
+	if err != nil {
+		return "", err
+	}
+	reqURL := c.baseURL() + defaultCanvasCreatePath
+	resp, err := c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer("")), http.StatusOK, false)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var payload map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", fmt.Errorf("grok app-chat create canvas decode failed: %w", err)
+	}
+	canvasID := extractAppChatCanvasID(payload)
+	if canvasID == "" {
+		return "", fmt.Errorf("grok app-chat create canvas returned no canvas id")
+	}
+	return canvasID, nil
+}
+
+func (c *Client) createAppChatConversation(ctx context.Context, token, referer string) (string, error) {
+	body, err := json.Marshal(map[string]interface{}{
+		"systemPromptName": "",
+		"temporary":        false,
+	})
+	if err != nil {
+		return "", err
+	}
+	reqURL := c.baseURL() + defaultConversationPath
+	resp, err := c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeadersWithReferer(token, referer), http.StatusOK, false)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var payload map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", fmt.Errorf("grok app-chat create conversation decode failed: %w", err)
+	}
+	conversationID := extractAppChatConversationID(payload)
+	if conversationID == "" {
+		return "", fmt.Errorf("grok app-chat create conversation returned no conversation id")
+	}
+	return conversationID, nil
+}
+
+func (c *Client) linkAppChatConversationToCanvas(ctx context.Context, token, conversationID, canvasID string) error {
+	conversationID = strings.TrimSpace(conversationID)
+	canvasID = strings.TrimSpace(canvasID)
+	if conversationID == "" {
+		return fmt.Errorf("empty app-chat conversation id")
+	}
+	if canvasID == "" {
+		return fmt.Errorf("empty app-chat canvas id")
+	}
+	body, err := json.Marshal(map[string]interface{}{
+		"conversationId": conversationID,
+		"canvasId":       canvasID,
+	})
+	if err != nil {
+		return err
+	}
+	reqURL := c.baseURL() + defaultMediaConvoPath
+	resp, err := c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer(canvasID)), http.StatusOK, false)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+func (c *Client) doAppChatAddResponse(ctx context.Context, token, conversationID, canvasID string, payload map[string]interface{}) (*http.Response, error) {
+	id := strings.TrimSpace(conversationID)
+	if id == "" {
+		return nil, fmt.Errorf("empty app-chat conversation id")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	reqURL := c.baseURL() + defaultConversationPath + "/" + url.PathEscape(id) + "/responses"
+	return c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer(canvasID)), http.StatusOK, false)
+}
+
+func extractAppChatCanvasID(v interface{}) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(x)
+	case map[string]interface{}:
+		for _, key := range []string{"canvasId", "canvas_id", "documentId", "document_id", "id"} {
+			if id := extractAppChatCanvasID(x[key]); id != "" {
+				return id
+			}
+		}
+		for _, key := range []string{"document", "canvas", "result", "data"} {
+			if id := extractAppChatCanvasID(x[key]); id != "" {
+				return id
+			}
+		}
+	case []interface{}:
+		for _, item := range x {
+			if id := extractAppChatCanvasID(item); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+func extractAppChatConversationID(v interface{}) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(x)
+	case map[string]interface{}:
+		for _, key := range []string{"conversationId", "conversation_id"} {
+			if id := extractAppChatConversationID(x[key]); id != "" {
+				return id
+			}
+		}
+		for _, key := range []string{"conversation", "result", "data"} {
+			if id := extractAppChatConversationID(x[key]); id != "" {
+				return id
+			}
+		}
+	case []interface{}:
+		for _, item := range x {
+			if id := extractAppChatConversationID(item); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
 }
 
 func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {
@@ -434,8 +872,8 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 }
 
 func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {
-	token = NormalizeSSOToken(token)
-	if strings.TrimSpace(token) == "" {
+	token = strings.TrimSpace(token)
+	if NormalizeSSOToken(token) == "" {
 		return nil, fmt.Errorf("empty token")
 	}
 
@@ -692,8 +1130,8 @@ func (c *Client) getVoiceToken(ctx context.Context, token, voice, personality st
 }
 
 func (c *Client) listAssets(ctx context.Context, token string) ([]string, error) {
-	token = NormalizeSSOToken(token)
-	if strings.TrimSpace(token) == "" {
+	token = strings.TrimSpace(token)
+	if NormalizeSSOToken(token) == "" {
 		return nil, fmt.Errorf("empty token")
 	}
 
@@ -769,9 +1207,9 @@ func (c *Client) countAssets(ctx context.Context, token string) (int, error) {
 }
 
 func (c *Client) deleteAsset(ctx context.Context, token string, assetID string) error {
-	token = NormalizeSSOToken(token)
+	token = strings.TrimSpace(token)
 	assetID = strings.TrimSpace(assetID)
-	if token == "" {
+	if NormalizeSSOToken(token) == "" {
 		return fmt.Errorf("empty token")
 	}
 	if assetID == "" {

@@ -1,10 +1,16 @@
 (() => {
-  const BATCH_SIZE = 6;
-  const PARALLELISM = 2;
+  const BATCH_SIZE = 2;
+  const PARALLELISM = 1;
   const STORAGE_KEY = "grok_tools_ui_v1";
   const QUALITY_MODELS = {
-    speed: "grok-imagine-image-lite",
+    basic: "",
+    lite: "grok-imagine-image-lite",
     quality: "grok-imagine-image-pro",
+  };
+  const QUALITY_ROUTES = {
+    basic: "app_chat",
+    lite: "ws",
+    quality: "ws",
   };
 
   const state = {
@@ -66,19 +72,25 @@
   }
 
   function qualityModel(quality) {
-    return QUALITY_MODELS[quality] || QUALITY_MODELS.speed;
+    return QUALITY_MODELS[quality] || QUALITY_MODELS.lite;
   }
 
   function normalizeQuality(value) {
-    return String(value || "").toLowerCase() === "quality" ? "quality" : "speed";
+    const raw = String(value || "").toLowerCase();
+    if (raw === "basic" || raw === "quality") return raw;
+    return "lite";
+  }
+
+  function qualityRoute(quality) {
+    return QUALITY_ROUTES[normalizeQuality(quality)] || "ws";
   }
 
   function syncQualityModel() {
-    const quality = normalizeQuality(readToggle("#imagineQualityToggle", "imagineQuality", "speed"));
+    const quality = normalizeQuality(readToggle("#imagineQualityToggle", "imagineQuality", "lite"));
     const model = qualityModel(quality);
     const modelSelect = $("imagineModel");
     if (modelSelect) modelSelect.value = model;
-    return { quality, model };
+    return { quality, model, route: qualityRoute(quality) };
   }
 
   function aspectRatioCss(value) {
@@ -114,6 +126,11 @@
     if (!value) return "";
     if (/^(https?:|data:|\/)/i.test(value)) return value;
     return `data:${inferMime(value)};base64,${value}`;
+  }
+
+  function authHeaders() {
+    const token = localStorage.getItem("admin_token") || sessionStorage.getItem("admin_token") || "";
+    return token ? { "X-Admin-Token": token } : {};
   }
 
   function resizePrompt() {
@@ -181,7 +198,7 @@
     [
       ["is-round", `第 ${round} 轮`],
       ["is-param", ratio],
-      ["is-param", quality === "quality" ? "Quality" : "Speed"],
+      ["is-param", quality === "basic" ? "Basic" : quality === "quality" ? "Quality" : "Lite"],
       ["is-count", `0/${BATCH_SIZE}`],
       ["is-state", "正在生成"],
     ].forEach(([cls, text]) => {
@@ -301,19 +318,19 @@
     return String(item?.url || item?.b64_json || item?.base64 || item?.b64 || "");
   }
 
-  async function requestImage(prompt, ratio, model, nsfw, signal) {
-    const res = await fetch("/grok/v1/images/generations", {
+  async function createTask(prompt, ratio, model, route, nsfw, signal) {
+    const body = {
+      prompt,
+      aspect_ratio: ratio,
+      route,
+      nsfw,
+    };
+    if (String(model || "").trim()) body.model = model;
+    const res = await fetch("/api/v1/admin/imagine/start", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       signal,
-      body: JSON.stringify({
-        model,
-        prompt,
-        n: 1,
-        size: sizeForRatio(ratio),
-        response_format: "url",
-        nsfw,
-      }),
+      body: JSON.stringify(body),
     });
     if (res.status === 401) {
       window.location.href = "/admin/login.html?next=" + encodeURIComponent("/admin/?tab=grok-tools");
@@ -321,19 +338,117 @@
     }
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
-    const image = extractImageValue(data);
-    if (!image) throw new Error("no image generated");
-    return image;
+    const taskID = String(data?.task_id || "").trim();
+    if (!taskID) throw new Error("imagine task not created");
+    return taskID;
   }
 
-  async function runSlot(batch, slot, prompt, ratio, model, nsfw, signal) {
+  async function stopTasks(taskIDs) {
+    const ids = Array.isArray(taskIDs) ? taskIDs.filter(Boolean) : [];
+    if (!ids.length) return;
+    try {
+      await fetch("/api/v1/admin/imagine/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ task_ids: ids }),
+      });
+    } catch (err) {
+      // Best-effort cleanup only.
+    }
+  }
+
+  function imageFromImagineEvent(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    if (payload.type === "image") {
+      return String(payload.file_url || payload.url || payload.b64_json || "");
+    }
+    if (payload.type === "image_generation.completed") {
+      return String(payload.url || payload.image || payload.b64_json || "");
+    }
+    return "";
+  }
+
+  function isRetryableImagineError(message) {
+    const lower = String(message || "").toLowerCase();
+    return lower.includes("rate_limit_exceeded") ||
+      lower.includes("rate limit") ||
+      lower.includes("cooling down") ||
+      lower.includes("429") ||
+      lower.includes("no image generated");
+  }
+
+  async function requestImage(prompt, ratio, model, route, nsfw, signal) {
+    const taskID = await createTask(prompt, ratio, model, route, nsfw, signal);
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      let lastError = "";
+      let cleanup = () => {
+        try {
+          es.close();
+        } catch (err) {
+          // ignore
+        }
+        stopTasks([taskID]);
+      };
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn(value);
+      };
+      const url = `/api/v1/admin/imagine/sse?task_id=${encodeURIComponent(taskID)}&t=${Date.now()}`;
+      const es = new EventSource(url);
+      const abort = () => finish(reject, new DOMException("aborted", "AbortError"));
+      if (signal) {
+        if (signal.aborted) {
+          abort();
+          return;
+        }
+        signal.addEventListener("abort", abort, { once: true });
+      }
+      const timeout = window.setTimeout(() => {
+        finish(reject, new Error(lastError || "image generation timed out"));
+      }, 150000);
+      const originalCleanup = cleanup;
+      cleanup = () => {
+        window.clearTimeout(timeout);
+        if (signal) signal.removeEventListener("abort", abort);
+        originalCleanup();
+      };
+      es.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          const image = imageFromImagineEvent(payload);
+          if (image) {
+            finish(resolve, image);
+            return;
+          }
+          if (payload?.type === "error" || payload?.error) {
+            const message = String(payload.message || payload.error?.message || payload.error || "");
+            lastError = message || lastError;
+            if (!isRetryableImagineError(message)) {
+              finish(reject, new Error(message || "image generation failed"));
+            }
+          }
+        } catch (err) {
+          // ignore malformed SSE frames
+        }
+      };
+      es.onerror = () => {
+        if (settled) return;
+        lastError = lastError || "image stream disconnected";
+      };
+    });
+  }
+
+  async function runSlot(batch, slot, prompt, ratio, model, route, nsfw, signal) {
     let tick = 0;
     const timer = window.setInterval(() => {
       tick += 1;
       setSlotProgress(slot, Math.min(92, 8 + tick * 7));
     }, 900);
     try {
-      const image = await requestImage(prompt, ratio, model, nsfw, signal);
+      const image = await requestImage(prompt, ratio, model, route, nsfw, signal);
       finishSlot(slot, image, { prompt });
       batch.ready += 1;
       updateBatch(batch, false);
@@ -348,7 +463,7 @@
     }
   }
 
-  async function runBatch(batch, prompt, ratio, model, nsfw, signal) {
+  async function runBatch(batch, prompt, ratio, model, route, nsfw, signal) {
     const results = new Array(batch.slots.length).fill(false);
     let cursor = 0;
     const workers = Array.from({ length: Math.min(PARALLELISM, batch.slots.length) }, async () => {
@@ -356,7 +471,7 @@
         if (signal?.aborted) break;
         const index = cursor;
         cursor += 1;
-        results[index] = await runSlot(batch, batch.slots[index], prompt, ratio, model, nsfw, signal);
+        results[index] = await runSlot(batch, batch.slots[index], prompt, ratio, model, route, nsfw, signal);
       }
     });
     await Promise.all(workers);
@@ -376,12 +491,13 @@
     }
     const ratio = String($("imagineRatio")?.value || "2:3");
     const runMode = readToggle("#imagineRunModeToggle", "imagineRunMode", "single") === "continuous" ? "continuous" : "single";
-    const { quality, model } = syncQualityModel();
+    const { quality, model, route } = syncQualityModel();
     const nsfw = String($("imagineNSFW")?.value || "true") === "true";
 
     saveState({
       imagineRatio: ratio,
       imagineModel: model,
+      imagineRoute: route,
       imagineRunMode: runMode,
       imagineQuality: quality,
       imagineConcurrent: BATCH_SIZE,
@@ -399,7 +515,7 @@
         const batch = createBatch(prompt, ratio, quality, round);
         if (!batch) throw new Error("瀑布流容器不存在");
         setStatus(`生成中 · 第 ${round} 轮`);
-        await runBatch(batch, prompt, ratio, model, nsfw, state.abortController.signal);
+        await runBatch(batch, prompt, ratio, model, route, nsfw, state.abortController.signal);
         updateBatch(batch, true);
         if (!state.running || runMode !== "continuous") break;
       }
@@ -620,7 +736,7 @@
         const model = qualityModel(value);
         const modelSelect = $("imagineModel");
         if (modelSelect) modelSelect.value = model;
-        saveState({ imagineQuality: value, imagineModel: model });
+        saveState({ imagineQuality: value, imagineModel: model, imagineRoute: qualityRoute(value) });
       });
     });
     const prompt = $("imaginePrompt");
@@ -663,7 +779,7 @@
     state.showToast = options.showToast || null;
     const ui = options.uiState || loadState();
     if ($("imagineRatio") && typeof ui.imagineRatio === "string" && ui.imagineRatio) $("imagineRatio").value = ui.imagineRatio;
-    const quality = normalizeQuality(ui.imagineQuality || (ui.imagineModel === QUALITY_MODELS.quality ? "quality" : "speed"));
+    const quality = normalizeQuality(ui.imagineQuality || (ui.imagineRoute === "app_chat" ? "basic" : ui.imagineModel === QUALITY_MODELS.quality ? "quality" : "lite"));
     setToggle("#imagineQualityToggle", "imagineQuality", quality);
     setToggle("#imagineRunModeToggle", "imagineRunMode", ui.imagineRunMode === "continuous" ? "continuous" : "single");
     const modelSelect = $("imagineModel");
