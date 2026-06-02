@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
@@ -215,6 +216,43 @@ func TestInjectConsoleSearchTools_DoesNotDuplicate(t *testing.T) {
 	}
 	if got := tools[1]["search_context_size"]; got != "low" {
 		t.Fatalf("preserved option=%#v want low", got)
+	}
+}
+
+func TestConsolePayload_DeduplicatesOpenAISearchFunctionTools(t *testing.T) {
+	h := &Handler{}
+	req := &ChatCompletionsRequest{
+		Model: "grok-4.3",
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: "search the web",
+		}},
+		Tools: []ToolDef{{
+			Type: "function",
+			Function: map[string]interface{}{
+				"name":        "web_search",
+				"description": "Search the web",
+			},
+		}},
+	}
+
+	payload, err := h.consolePayload(ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3"}, req)
+	if err != nil {
+		t.Fatalf("consolePayload() error: %v", err)
+	}
+	tools, ok := payload["tools"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("tools type=%T want []map[string]interface{}", payload["tools"])
+	}
+	if len(tools) != 2 {
+		t.Fatalf("tools len=%d want web_search + x_search: %#v", len(tools), tools)
+	}
+	seen := map[string]int{}
+	for _, tool := range tools {
+		seen[fmt.Sprint(tool["type"])]++
+	}
+	if seen["web_search"] != 1 || seen["x_search"] != 1 {
+		t.Fatalf("tool counts=%#v want one web_search and one x_search", seen)
 	}
 }
 

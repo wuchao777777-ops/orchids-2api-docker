@@ -1669,7 +1669,7 @@
     const quality = imagineReadToggle("#imagineQualityToggle", "imagineQuality", "speed");
     const models = imagineQualityModels(quality);
     const model = models[0];
-    const nsfw = String(document.getElementById("imagineNSFW")?.value || "false") === "true";
+    const nsfw = String(document.getElementById("imagineNSFW")?.value || "true") === "true";
 
     saveGrokToolsUIState({
       imagineRatio: ratio,

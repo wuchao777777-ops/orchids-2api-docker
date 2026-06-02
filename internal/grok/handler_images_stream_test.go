@@ -240,26 +240,8 @@ func TestPrepareAppChatImageGenerationPayload_MatchesLiteImageShape(t *testing.T
 	if got, _ := toolOverrides["webSearch"].(bool); got {
 		t.Fatalf("webSearch=%v want false", got)
 	}
-}
-
-func TestAppChatImagePayloadVariants_EnableImageGenBeforeFallback(t *testing.T) {
-	variants := appChatImagePayloadVariants()
-	if len(variants) == 0 || variants[0] != "tool_image_gen" {
-		t.Fatalf("variants=%v want tool_image_gen first", variants)
-	}
-
-	for _, variant := range []string{"webchat2api", "tool_image_gen", "response_metadata_override"} {
-		payload := map[string]interface{}{
-			"toolOverrides": map[string]interface{}{"imageGen": false},
-			"modelConfigOverride": map[string]interface{}{
-				"modelMap": map[string]interface{}{},
-			},
-		}
-		applyAppChatImagePayloadVariant(payload, ModelSpec{ID: "grok-imagine-image-lite"}, variant)
-		toolOverrides := payload["toolOverrides"].(map[string]interface{})
-		if got, _ := toolOverrides["imageGen"].(bool); !got {
-			t.Fatalf("%s imageGen=%v want true", variant, got)
-		}
+	if got, _ := toolOverrides["imageGen"].(bool); got {
+		t.Fatalf("imageGen=%v want false to match app-chat browser payload", got)
 	}
 }
 
@@ -288,8 +270,11 @@ func TestEnsureImageConfig_UsesTopLevelModelOverride(t *testing.T) {
 	if got := cfg["aspectRatio"]; got != "3:2" {
 		t.Fatalf("aspectRatio=%v want 3:2", got)
 	}
-	if got := cfg["enableNsfw"]; got != true {
-		t.Fatalf("enableNsfw=%v want true", got)
+	if _, ok := cfg["enableNsfw"]; ok {
+		t.Fatalf("image payload should not include enableNsfw: %#v", cfg)
+	}
+	if _, ok := cfg["enable_nsfw"]; ok {
+		t.Fatalf("image payload should not include enable_nsfw: %#v", cfg)
 	}
 	if _, ok := payload["responseMetadata"]; ok {
 		t.Fatalf("responseMetadata should not be created for image config: %#v", payload["responseMetadata"])

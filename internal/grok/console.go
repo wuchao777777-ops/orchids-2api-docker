@@ -206,6 +206,14 @@ func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
 		if name == "" {
 			continue
 		}
+		switch consoleBuiltinToolName(name) {
+		case "web_search":
+			out = append(out, map[string]interface{}{"type": "web_search"})
+			continue
+		case "x_search":
+			out = append(out, map[string]interface{}{"type": "x_search"})
+			continue
+		}
 		item := map[string]interface{}{
 			"type":        "function",
 			"name":        name,
@@ -260,7 +268,7 @@ func injectConsoleSearchTools(tools []map[string]interface{}) []map[string]inter
 		for k, v := range tool {
 			copied[k] = v
 		}
-		switch strings.ToLower(strings.TrimSpace(fmt.Sprint(copied["type"]))) {
+		switch consoleToolName(copied) {
 		case "web_search":
 			hasWebSearch = true
 		case "x_search":
@@ -275,6 +283,28 @@ func injectConsoleSearchTools(tools []map[string]interface{}) []map[string]inter
 		out = append(out, map[string]interface{}{"type": "x_search"})
 	}
 	return out
+}
+
+func consoleToolName(tool map[string]interface{}) string {
+	if tool == nil {
+		return ""
+	}
+	toolType := strings.ToLower(strings.TrimSpace(fmt.Sprint(tool["type"])))
+	if toolType == "function" {
+		return consoleBuiltinToolName(fmt.Sprint(tool["name"]))
+	}
+	return consoleBuiltinToolName(toolType)
+}
+
+func consoleBuiltinToolName(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "web_search":
+		return "web_search"
+	case "x_search":
+		return "x_search"
+	default:
+		return ""
+	}
 }
 
 func (h *Handler) doConsole(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {

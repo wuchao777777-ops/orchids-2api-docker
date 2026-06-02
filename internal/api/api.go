@@ -959,6 +959,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			normalizeWarpTokenInput(&acc)
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
+			acc.NSFWEnabled = true
 		} else if acc.ClientCookie != "" {
 			if err := normalizeOrchidsCredentialInput(&acc); err != nil {
 				http.Error(w, "Invalid client cookie: "+err.Error(), http.StatusBadRequest)
@@ -1271,9 +1272,6 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if acc.Email == "" {
 			acc.Email = existing.Email
-		}
-		if !acc.NSFWEnabled && existing.NSFWEnabled {
-			acc.NSFWEnabled = true
 		}
 		if strings.EqualFold(acc.AccountType, "orchids") {
 			if err := hydrateOrchidsAccountInfo(&acc, a.config.Load(), orchidsCredentialInput); err != nil {

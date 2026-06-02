@@ -29,3 +29,28 @@ func TestShouldSwitchGrokAccount(t *testing.T) {
 		})
 	}
 }
+
+func TestSkipAppChatImageGrokAccountStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantMark   bool
+		wantSwitch bool
+	}{
+		{name: "plain 403", err: errors.New("grok upstream status=403 body=forbidden"), wantMark: false, wantSwitch: true},
+		{name: "anti bot 403", err: errors.New("grok upstream status=403 body=Request rejected by anti-bot rules"), wantMark: false, wantSwitch: true},
+		{name: "401", err: errors.New("grok upstream status=401 body=unauthorized"), wantMark: true, wantSwitch: false},
+		{name: "429", err: errors.New("grok upstream status=429 body=too many requests"), wantMark: true, wantSwitch: true},
+		{name: "network", err: errors.New("read: connection reset by peer"), wantMark: true, wantSwitch: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := skipAppChatImageGrokAccountStatus(tt.err); got != tt.wantMark {
+				t.Fatalf("skipAppChatImageGrokAccountStatus()=%v want mark=%v", got, tt.wantMark)
+			}
+			if got := shouldSwitchGrokAccount(tt.err); got != tt.wantSwitch {
+				t.Fatalf("shouldSwitchGrokAccount()=%v want %v", got, tt.wantSwitch)
+			}
+		})
+	}
+}

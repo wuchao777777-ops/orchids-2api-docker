@@ -377,7 +377,7 @@
     const ratio = String($("imagineRatio")?.value || "2:3");
     const runMode = readToggle("#imagineRunModeToggle", "imagineRunMode", "single") === "continuous" ? "continuous" : "single";
     const { quality, model } = syncQualityModel();
-    const nsfw = String($("imagineNSFW")?.value || "false") === "true";
+    const nsfw = String($("imagineNSFW")?.value || "true") === "true";
 
     saveState({
       imagineRatio: ratio,
