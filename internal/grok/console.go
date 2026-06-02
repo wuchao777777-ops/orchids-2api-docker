@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -281,7 +282,7 @@ func (h *Handler) doConsole(ctx context.Context, token string, payload map[strin
 	if err != nil {
 		return nil, err
 	}
-	return h.client.doRequestWith429Retry(ctx, consoleResponsesURL, http.MethodPost, body, h.client.consoleHeaders(token), http.StatusOK, false, true)
+	return h.client.doRequestWith429Retry(ctx, consoleResponsesURL, http.MethodPost, body, h.client.consoleHeaders(token), http.StatusOK, false, false)
 }
 
 func shouldServeConsoleChat(spec ModelSpec, attachments []AttachmentInput) bool {
@@ -567,6 +568,7 @@ func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, r
 	}
 	resp, err := h.doConsoleWithAutoSwitch(ctx, sess, payload)
 	if err != nil {
+		slog.Error("console chat upstream failed", "url", consoleResponsesURL, "status", parseUpstreamStatus(err), "error", err)
 		if logger != nil {
 			logger.LogUpstreamHTTPError(consoleResponsesURL, parseUpstreamStatus(err), "", err)
 		}
