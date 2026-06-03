@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Voice Session</title>
   <link rel="stylesheet" href="/static/public/css/public.css">
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.11.4/dist/livekit-client.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.19.1/dist/livekit-client.umd.min.js"></script>
 </head>
 <body>
   <main class="page stack">
@@ -29,10 +29,11 @@
           <select id="voice">
             <option value="ara" selected>ara</option>
             <option value="eve">eve</option>
-            <option value="leo">leo</option>
             <option value="rex">rex</option>
             <option value="sal">sal</option>
+            <option value="leo">leo</option>
             <option value="gork">gork</option>
+            <option value="custom">custom voice_id</option>
           </select>
         </div>
         <div class="field compact">
@@ -42,6 +43,8 @@
             <option value="custom">custom</option>
             <option value="therapist">therapist</option>
             <option value="storyteller">storyteller</option>
+            <option value="kids_story_time">kids_story_time</option>
+            <option value="kids_trivia_game">kids_trivia_game</option>
             <option value="meditation">meditation</option>
             <option value="doc">doc</option>
             <option value="unhinged">unhinged</option>
@@ -56,6 +59,10 @@
           <label for="speed">Speed</label>
           <input id="speed" type="number" min="0.1" step="0.1" value="1">
         </div>
+      </div>
+      <div id="customVoiceField" class="field hidden">
+        <label for="customVoice">Custom voice_id</label>
+        <input id="customVoice" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a custom voice_id">
       </div>
       <div class="field">
         <label for="instruction">Instruction</label>

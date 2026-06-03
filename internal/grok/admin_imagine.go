@@ -174,19 +174,11 @@ func normalizeImagineModel(model string) string {
 }
 
 func normalizeImagineSessionModel(model, route string) string {
-	if normalizeImagineRoute(route) == "app_chat" {
-		return ""
-	}
 	return normalizeImagineModel(model)
 }
 
 func normalizeImagineRoute(route string) string {
-	switch strings.ToLower(strings.TrimSpace(route)) {
-	case "app_chat", "app-chat", "basic", "chat":
-		return "app_chat"
-	default:
-		return "ws"
-	}
+	return "ws"
 }
 
 func createImagineSession(prompt, aspectRatio string, model string, route string, nsfw *bool) string {
@@ -277,30 +269,14 @@ func ensureImageNSFW(payload map[string]interface{}, modelID string, nsfw *bool)
 	delete(imageGenCfg, "enable_nsfw")
 }
 
-func supportsAppChatImageNSFW(modelID string) bool {
-	return normalizeModelID(modelID) != "grok-imagine-image-lite"
-}
-
-func basicAppChatImagineSpec() ModelSpec {
-	if spec, ok := ResolveModel("grok-imagine-image-lite"); ok {
-		return spec
-	}
-	return ModelSpec{ID: "grok-imagine-image-lite", UpstreamModel: "grok-imagine-image-lite", ModelMode: "MODEL_MODE_FAST", Tier: grokTierBasic, IsImage: true}
-}
-
 func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio, model string, route string, n int, nsfw *bool) ([]imagineImage, int, error) {
-	imagineRoute := normalizeImagineRoute(route)
-	imagineModel := normalizeImagineSessionModel(model, imagineRoute)
-	spec := basicAppChatImagineSpec()
-	if imagineRoute != "app_chat" {
-		if err := h.ensureModelEnabled(ctx, imagineModel); err != nil {
-			return nil, 0, err
-		}
-		var ok bool
-		spec, ok = ResolveModel(imagineModel)
-		if !ok || !spec.IsImage {
-			return nil, 0, fmt.Errorf("image model not supported")
-		}
+	imagineModel := normalizeImagineSessionModel(model, route)
+	if err := h.ensureModelEnabled(ctx, imagineModel); err != nil {
+		return nil, 0, err
+	}
+	spec, ok := ResolveModel(imagineModel)
+	if !ok || !spec.IsImage {
+		return nil, 0, fmt.Errorf("image model not supported")
 	}
 	if n < 1 {
 		n = 1
@@ -325,20 +301,13 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 	used := make([]int64, 0, maxAttempts)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		sessionSpec := spec
-		if imagineRoute == "ws" && imagineModel == "grok-imagine-image-lite" {
+		if imagineModel == "grok-imagine-image-lite" {
 			sessionSpec.Tier = grokTierLite
 		}
 		var sess *chatAccountSession
 		var err error
-		if imagineRoute == "app_chat" {
-			sess, err = h.openAppChatImageAccountSessionForModelExcluding(ctx, used, sessionSpec)
-		} else {
-			sess, err = h.openChatAccountSessionForModelExcluding(ctx, used, sessionSpec)
-		}
+		sess, err = h.openChatAccountSessionForModelExcluding(ctx, used, sessionSpec)
 		if err != nil {
-			if imagineRoute == "app_chat" && strings.Contains(err.Error(), "no enabled accounts available") {
-				err = fmt.Errorf("no app-chat browser-cookie grok account available; import a full grok.com browser cookie with sso, sso-rw and x-userid/grok_device_id")
-			}
 			if lastErr != nil {
 				return nil, 0, fmt.Errorf("account switch failed: %v (original: %v)", err, lastErr)
 			}
@@ -346,19 +315,6 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 		}
 		if sess != nil && sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
-		}
-
-		if imagineRoute == "app_chat" {
-			images, elapsedMS, appChatErr := h.generateAppChatImagineBatch(ctx, sess, spec, prompt, aspectRatio, n, nsfw)
-			sess.Close()
-			if appChatErr != nil {
-				lastErr = appChatErr
-				if shouldSwitchGrokAccount(appChatErr) && attempt < maxAttempts-1 {
-					continue
-				}
-				return nil, 0, appChatErr
-			}
-			return images, elapsedMS, nil
 		}
 
 		images := make([]imagineImage, 0, n)
@@ -399,39 +355,6 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 		return nil, 0, lastErr
 	}
 	return nil, 0, fmt.Errorf("no image generated")
-}
-
-func (h *Handler) generateAppChatImagineBatch(ctx context.Context, sess *chatAccountSession, spec ModelSpec, prompt, aspectRatio string, n int, nsfw *bool) ([]imagineImage, int, error) {
-	startedAt := time.Now()
-	req := ImagesGenerationsRequest{
-		Model:          "",
-		Prompt:         strings.TrimSpace(prompt),
-		N:              n,
-		Size:           imagineImageSizeFromAspectRatio(aspectRatio),
-		ResponseFormat: "url",
-		NSFW:           nsfw,
-	}
-	values, err := h.collectAppChatImageURLs(ctx, sess, spec, req, nsfw, false)
-	if err != nil {
-		return nil, 0, err
-	}
-	images := make([]imagineImage, 0, len(values))
-	for _, raw := range values {
-		val, convErr := h.imageOutputValue(ctx, sess.token, raw, "url")
-		if convErr != nil {
-			return nil, 0, fmt.Errorf("image cache failed: %w", convErr)
-		}
-		raw = val
-		u := normalizeImagineImageURL(raw)
-		if !isLocalImagineImageURL(u) {
-			return nil, 0, fmt.Errorf("image was not cached locally")
-		}
-		images = append(images, imagineImage{URL: u})
-	}
-	if len(images) == 0 {
-		return nil, 0, fmt.Errorf("no image generated")
-	}
-	return images, int(time.Since(startedAt) / time.Millisecond), nil
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) bool {

@@ -1,5 +1,7 @@
 (function () {
   const voiceEl = document.getElementById("voice");
+  const customVoiceEl = document.getElementById("customVoice");
+  const customVoiceFieldEl = document.getElementById("customVoiceField");
   const personalityEl = document.getElementById("personality");
   const speedEl = document.getElementById("speed");
   const instructionEl = document.getElementById("instruction");
@@ -81,10 +83,13 @@
   }
 
   function updateMeta() {
-    const voice = String(voiceEl.value || "-");
+    const voiceSelect = String(voiceEl.value || "-");
+    const customVoice = String(customVoiceEl?.value || "").trim();
+    const voice = voiceSelect === "custom" ? (customVoice || "custom") : voiceSelect;
     const personality = String(personalityEl.value || "-");
     const speed = Math.max(0.1, Number(speedEl.value || 1));
 
+    if (customVoiceFieldEl) customVoiceFieldEl.classList.toggle("hidden", voiceSelect !== "custom");
     statusVoiceEl.textContent = voice;
     statusPersonalityEl.textContent = personality;
     statusSpeedEl.textContent = `${speed}x`;
@@ -281,10 +286,15 @@
   }
 
   async function fetchTokenPayload() {
-    const voice = String(voiceEl.value || "ara").trim() || "ara";
+    const voiceSelect = String(voiceEl.value || "ara").trim() || "ara";
+    const customVoice = String(customVoiceEl?.value || "").trim();
+    const voice = voiceSelect === "custom" ? customVoice : voiceSelect;
     const personality = String(personalityEl.value || "assistant").trim() || "assistant";
     const speed = Math.max(0.1, Number(speedEl.value || 1));
     const instruction = String(instructionEl?.value || "").trim();
+    if (!voice) {
+      throw new Error("Custom voice_id is required");
+    }
 
     const data = await window.PublicApp.requestJSON("/v1/public/voice/token", {
       method: "POST",
@@ -461,6 +471,9 @@
     });
 
     voiceEl.addEventListener("change", updateMeta);
+    if (customVoiceEl) {
+      customVoiceEl.addEventListener("input", updateMeta);
+    }
     personalityEl.addEventListener("change", updateMeta);
     speedEl.addEventListener("change", updateMeta);
     if (instructionEl) instructionEl.addEventListener("input", updateMeta);

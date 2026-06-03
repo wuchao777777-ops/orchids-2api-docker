@@ -3,6 +3,7 @@ package grok
 import (
 	"bytes"
 	"context"
+	"github.com/goccy/go-json"
 	"image"
 	"image/color"
 	"image/png"
@@ -13,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"orchids-api/internal/config"
 )
 
 func testPNGBytes(t *testing.T) []byte {
@@ -283,6 +286,89 @@ func TestAppChatImagePayload_MatchesGrokImagineAgentShape(t *testing.T) {
 	}
 	if _, ok := payload["deviceEnvInfo"].(map[string]interface{}); !ok {
 		t.Fatalf("deviceEnvInfo missing: %#v", payload["deviceEnvInfo"])
+	}
+}
+
+func TestCollectAppChatImageURLs_LiteUsesNewConversationEndpoint(t *testing.T) {
+	var upstreamPaths []string
+	var upstreamPayload map[string]interface{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPaths = append(upstreamPaths, r.URL.Path)
+		if r.URL.Path != defaultChatPath {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&upstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		resp := map[string]interface{}{
+			"result": map[string]interface{}{
+				"response": map[string]interface{}{
+					"cardAttachment": map[string]interface{}{
+						"jsonData": `{"id":"card-1","image_chunk":{"progress":100,"imageUuid":"img-1","imageUrl":"users/u/generated/a/image.png"}}`,
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream.Close()
+
+	h := NewHandler(&config.Config{GrokAPIBaseURL: upstream.URL}, nil)
+	sess := &chatAccountSession{token: "basic-token"}
+	spec := ModelSpec{
+		ID:            "grok-imagine-image-lite",
+		UpstreamModel: "grok-imagine-image-lite",
+		ModelMode:     "MODEL_MODE_FAST",
+		Tier:          grokTierBasic,
+		IsImage:       true,
+	}
+	req := ImagesGenerationsRequest{
+		Model:          "grok-imagine-image-lite",
+		Prompt:         "apple",
+		Size:           "1024x1024",
+		N:              1,
+		ResponseFormat: "url",
+	}
+
+	urls, err := h.collectAppChatImageURLs(context.Background(), sess, spec, req, nil, false)
+	if err != nil {
+		t.Fatalf("collectAppChatImageURLs error: %v", err)
+	}
+	if len(urls) != 1 || urls[0] != "https://assets.grok.com/users/u/generated/a/image.png" {
+		t.Fatalf("urls=%#v", urls)
+	}
+	if len(upstreamPaths) != 1 || upstreamPaths[0] != defaultChatPath {
+		t.Fatalf("upstream paths=%#v want only %s", upstreamPaths, defaultChatPath)
+	}
+	if got, _ := upstreamPayload["message"].(string); got != "Drawing: apple" {
+		t.Fatalf("message=%q want Drawing: apple", got)
+	}
+	if got, _ := upstreamPayload["modeId"].(string); got != "fast" {
+		t.Fatalf("modeId=%q want fast", got)
+	}
+}
+
+func TestIsAppChatImageLimitResponse(t *testing.T) {
+	resp := map[string]interface{}{
+		"result": map[string]interface{}{
+			"response": map[string]interface{}{
+				"modelResponse": map[string]interface{}{
+					"streamErrors": []interface{}{
+						map[string]interface{}{
+							"message": "Unable to render: You've reached your image generation limit. Please try again later.",
+							"renderToolRateLimited": map[string]interface{}{
+								"rateLimitedCount": 1,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if !isAppChatImageLimitResponse(resp) {
+		t.Fatalf("limit response was not detected")
 	}
 }
 

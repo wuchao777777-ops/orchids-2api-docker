@@ -1,16 +1,11 @@
 (() => {
-  const BATCH_SIZE = 2;
-  const PARALLELISM = 1;
+  const BATCH_SIZE = 6;
+  const PARALLELISM = 2;
   const STORAGE_KEY = "grok_tools_ui_v1";
   const QUALITY_MODELS = {
-    basic: "",
+    basic: "grok-imagine-image-lite",
     lite: "grok-imagine-image-lite",
     quality: "grok-imagine-image-pro",
-  };
-  const QUALITY_ROUTES = {
-    basic: "app_chat",
-    lite: "ws",
-    quality: "ws",
   };
 
   const state = {
@@ -81,16 +76,12 @@
     return "lite";
   }
 
-  function qualityRoute(quality) {
-    return QUALITY_ROUTES[normalizeQuality(quality)] || "ws";
-  }
-
   function syncQualityModel() {
     const quality = normalizeQuality(readToggle("#imagineQualityToggle", "imagineQuality", "lite"));
     const model = qualityModel(quality);
     const modelSelect = $("imagineModel");
     if (modelSelect) modelSelect.value = model;
-    return { quality, model, route: qualityRoute(quality) };
+    return { quality, model };
   }
 
   function aspectRatioCss(value) {
@@ -377,7 +368,28 @@
       lower.includes("no image generated");
   }
 
-  async function requestImage(prompt, ratio, model, route, nsfw, signal) {
+  async function requestImage(prompt, ratio, model, quality, nsfw, signal) {
+    if (normalizeQuality(quality) === "basic") {
+      const res = await fetch("/grok/v1/images/generations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal,
+        body: JSON.stringify({
+          model: String(model || "").trim() || "grok-imagine-image-lite",
+          prompt,
+          n: 1,
+          size: sizeForRatio(ratio),
+          response_format: "url",
+          nsfw,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const image = extractImageValue(data);
+      if (!image) throw new Error("no image generated");
+      return image;
+    }
+    const route = "ws";
     const taskID = await createTask(prompt, ratio, model, route, nsfw, signal);
     return await new Promise((resolve, reject) => {
       let settled = false;
@@ -441,14 +453,14 @@
     });
   }
 
-  async function runSlot(batch, slot, prompt, ratio, model, route, nsfw, signal) {
+  async function runSlot(batch, slot, prompt, ratio, model, quality, nsfw, signal) {
     let tick = 0;
     const timer = window.setInterval(() => {
       tick += 1;
       setSlotProgress(slot, Math.min(92, 8 + tick * 7));
     }, 900);
     try {
-      const image = await requestImage(prompt, ratio, model, route, nsfw, signal);
+      const image = await requestImage(prompt, ratio, model, quality, nsfw, signal);
       finishSlot(slot, image, { prompt });
       batch.ready += 1;
       updateBatch(batch, false);
@@ -463,7 +475,7 @@
     }
   }
 
-  async function runBatch(batch, prompt, ratio, model, route, nsfw, signal) {
+  async function runBatch(batch, prompt, ratio, model, quality, nsfw, signal) {
     const results = new Array(batch.slots.length).fill(false);
     let cursor = 0;
     const workers = Array.from({ length: Math.min(PARALLELISM, batch.slots.length) }, async () => {
@@ -471,7 +483,7 @@
         if (signal?.aborted) break;
         const index = cursor;
         cursor += 1;
-        results[index] = await runSlot(batch, batch.slots[index], prompt, ratio, model, route, nsfw, signal);
+        results[index] = await runSlot(batch, batch.slots[index], prompt, ratio, model, quality, nsfw, signal);
       }
     });
     await Promise.all(workers);
@@ -491,13 +503,12 @@
     }
     const ratio = String($("imagineRatio")?.value || "2:3");
     const runMode = readToggle("#imagineRunModeToggle", "imagineRunMode", "single") === "continuous" ? "continuous" : "single";
-    const { quality, model, route } = syncQualityModel();
+    const { quality, model } = syncQualityModel();
     const nsfw = String($("imagineNSFW")?.value || "true") === "true";
 
     saveState({
       imagineRatio: ratio,
       imagineModel: model,
-      imagineRoute: route,
       imagineRunMode: runMode,
       imagineQuality: quality,
       imagineConcurrent: BATCH_SIZE,
@@ -515,7 +526,7 @@
         const batch = createBatch(prompt, ratio, quality, round);
         if (!batch) throw new Error("瀑布流容器不存在");
         setStatus(`生成中 · 第 ${round} 轮`);
-        await runBatch(batch, prompt, ratio, model, route, nsfw, state.abortController.signal);
+        await runBatch(batch, prompt, ratio, model, quality, nsfw, state.abortController.signal);
         updateBatch(batch, true);
         if (!state.running || runMode !== "continuous") break;
       }
@@ -736,7 +747,7 @@
         const model = qualityModel(value);
         const modelSelect = $("imagineModel");
         if (modelSelect) modelSelect.value = model;
-        saveState({ imagineQuality: value, imagineModel: model, imagineRoute: qualityRoute(value) });
+        saveState({ imagineQuality: value, imagineModel: model });
       });
     });
     const prompt = $("imaginePrompt");
@@ -779,7 +790,7 @@
     state.showToast = options.showToast || null;
     const ui = options.uiState || loadState();
     if ($("imagineRatio") && typeof ui.imagineRatio === "string" && ui.imagineRatio) $("imagineRatio").value = ui.imagineRatio;
-    const quality = normalizeQuality(ui.imagineQuality || (ui.imagineRoute === "app_chat" ? "basic" : ui.imagineModel === QUALITY_MODELS.quality ? "quality" : "lite"));
+    const quality = normalizeQuality(ui.imagineQuality || (ui.imagineModel === QUALITY_MODELS.quality ? "quality" : "lite"));
     setToggle("#imagineQualityToggle", "imagineQuality", quality);
     setToggle("#imagineRunModeToggle", "imagineRunMode", ui.imagineRunMode === "continuous" ? "continuous" : "single");
     const modelSelect = $("imagineModel");

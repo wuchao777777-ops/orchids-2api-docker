@@ -3330,13 +3330,17 @@
   }
 
   function updateVoiceMeta() {
-    const voice = String(document.getElementById("voiceName")?.value || "ara").trim() || "ara";
+    const voiceSelect = String(document.getElementById("voiceName")?.value || "ara").trim() || "ara";
+    const customVoice = String(document.getElementById("voiceCustomID")?.value || "").trim();
+    const voice = voiceSelect === "custom" ? (customVoice || "custom") : voiceSelect;
     const personality = String(document.getElementById("voicePersonality")?.value || "assistant").trim() || "assistant";
     const speed = Math.max(0.1, Number(document.getElementById("voiceSpeed")?.value || 1));
+    const customBlock = document.getElementById("voiceCustomBlock");
     const statusVoice = document.getElementById("voiceStatusVoice");
     const statusPersonality = document.getElementById("voiceStatusPersonality");
     const statusSpeed = document.getElementById("voiceStatusSpeed");
     const speedValue = document.getElementById("voiceSpeedValue");
+    if (customBlock) customBlock.classList.toggle("hidden", voiceSelect !== "custom");
     if (statusVoice) statusVoice.textContent = voice;
     if (statusPersonality) statusPersonality.textContent = personality;
     if (statusSpeed) statusSpeed.textContent = `${speed}x`;
@@ -3448,7 +3452,7 @@
           return;
         }
         const script = document.createElement("script");
-        script.src = "https://cdn.jsdelivr.net/npm/livekit-client@2.11.4/dist/livekit-client.umd.min.js";
+        script.src = "https://cdn.jsdelivr.net/npm/livekit-client@2.19.1/dist/livekit-client.umd.min.js";
         script.async = true;
         script.dataset.livekitClient = "1";
         script.onload = () => {
@@ -3536,10 +3540,15 @@
 
   async function fetchVoiceToken() {
     updateVoiceMeta();
-    const voice = String(document.getElementById("voiceName")?.value || "ara").trim() || "ara";
+    const voiceSelect = String(document.getElementById("voiceName")?.value || "ara").trim() || "ara";
+    const customVoice = String(document.getElementById("voiceCustomID")?.value || "").trim();
+    const voice = voiceSelect === "custom" ? customVoice : voiceSelect;
     const personality = String(document.getElementById("voicePersonality")?.value || "assistant").trim() || "assistant";
     const speed = Number(document.getElementById("voiceSpeed")?.value || 1);
     const instruction = String(document.getElementById("voiceInstruction")?.value || "").trim();
+    if (!voice) {
+      throw new Error("请选择声音，或填写自定义 voice_id");
+    }
 
     const res = await fetch("/api/v1/admin/voice/token", {
       method: "POST",
@@ -5148,15 +5157,17 @@
       });
     }
     const voiceName = document.getElementById("voiceName");
+    const voiceCustomID = document.getElementById("voiceCustomID");
     const voicePersonality = document.getElementById("voicePersonality");
     const voiceSpeed = document.getElementById("voiceSpeed");
     const voiceInstruction = document.getElementById("voiceInstruction");
-    [voiceName, voicePersonality, voiceSpeed, voiceInstruction].forEach((input) => {
+    [voiceName, voiceCustomID, voicePersonality, voiceSpeed, voiceInstruction].forEach((input) => {
       if (!input) return;
       const sync = () => {
         updateVoiceMeta();
         saveGrokToolsUIState({
           voiceName: String(document.getElementById("voiceName")?.value || "ara"),
+          voiceCustomID: String(document.getElementById("voiceCustomID")?.value || ""),
           voicePersonality: String(document.getElementById("voicePersonality")?.value || "assistant"),
           voiceSpeed: Number(document.getElementById("voiceSpeed")?.value || 1),
           voiceInstruction: String(document.getElementById("voiceInstruction")?.value || ""),
@@ -5399,10 +5410,12 @@
     setVideoButtons(false);
     setVideoStatus(t("common.notConnected"));
     const voiceName = document.getElementById("voiceName");
+    const voiceCustomID = document.getElementById("voiceCustomID");
     const voicePersonality = document.getElementById("voicePersonality");
     const voiceSpeed = document.getElementById("voiceSpeed");
     const voiceInstruction = document.getElementById("voiceInstruction");
     if (voiceName && typeof uiState.voiceName === "string" && uiState.voiceName) voiceName.value = uiState.voiceName;
+    if (voiceCustomID && typeof uiState.voiceCustomID === "string") voiceCustomID.value = uiState.voiceCustomID;
     if (voicePersonality && typeof uiState.voicePersonality === "string" && uiState.voicePersonality) voicePersonality.value = uiState.voicePersonality;
     if (voiceSpeed && typeof uiState.voiceSpeed === "number" && Number.isFinite(uiState.voiceSpeed)) voiceSpeed.value = String(uiState.voiceSpeed);
     if (voiceInstruction && typeof uiState.voiceInstruction === "string") voiceInstruction.value = uiState.voiceInstruction;

@@ -43,7 +43,6 @@ const (
 	defaultUA               = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 	defaultAppChatUA        = defaultUA
 	defaultAppChatSecCHUA   = `"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"`
-	defaultAppChatStatsigID = "0196a8f6-0501-79f8-8d74-a2f2c0f5f5f5"
 )
 
 type Client struct {
@@ -111,9 +110,11 @@ func (c *Client) userAgent() string {
 
 func (c *Client) statsigID() string {
 	if c != nil && c.cfg != nil && strings.TrimSpace(c.cfg.GrokStatsigID) != "" {
-		return strings.TrimSpace(c.cfg.GrokStatsigID)
+		if configured := strings.TrimSpace(c.cfg.GrokStatsigID); isBrowserStatsigID(configured) {
+			return configured
+		}
 	}
-	return defaultAppChatStatsigID
+	return buildStatsigID()
 }
 
 func (c *Client) cloudflareCookies() (string, string) {

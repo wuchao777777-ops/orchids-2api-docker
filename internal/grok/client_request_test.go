@@ -2,6 +2,7 @@ package grok
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -63,6 +64,17 @@ func TestBuildGrokCookie_PreservesAppChatCookieFields(t *testing.T) {
 	}
 }
 
+func assertBrowserStatsigID(t *testing.T, got string) {
+	t.Helper()
+	decoded, err := base64.StdEncoding.DecodeString(got)
+	if err != nil {
+		t.Fatalf("x-statsig-id=%q is not base64: %v", got, err)
+	}
+	if !strings.HasPrefix(string(decoded), "x1:TypeError: Cannot read properties of ") {
+		t.Fatalf("x-statsig-id decoded=%q", string(decoded))
+	}
+}
+
 func TestAppChatHeaders_MatchBrowserProfile(t *testing.T) {
 	c := New(nil)
 	headers := c.appChatHeaders("plain-token")
@@ -85,17 +97,16 @@ func TestAppChatHeaders_MatchBrowserProfile(t *testing.T) {
 	if got := headers.Get("Sec-Ch-Ua-Platform"); got != `"macOS"` {
 		t.Fatalf("Sec-Ch-Ua-Platform=%q", got)
 	}
-	if got := headers.Get("x-statsig-id"); got != defaultAppChatStatsigID {
-		t.Fatalf("x-statsig-id=%q", got)
-	}
+	assertBrowserStatsigID(t, headers.Get("x-statsig-id"))
 	if got := headers.Get("Cookie"); got != "sso=plain-token; sso-rw=plain-token" {
 		t.Fatalf("Cookie=%q", got)
 	}
 }
 
 func TestGrokHeaders_UseConfiguredStatsigAndCloudflareCookies(t *testing.T) {
+	statsigID := base64.StdEncoding.EncodeToString([]byte("x1:TypeError: Cannot read properties of undefined (reading 'children')"))
 	c := New(&config.Config{
-		GrokStatsigID:         "browser-statsig-id",
+		GrokStatsigID:         statsigID,
 		GrokConfigCFClearance: "cf-clear",
 		GrokConfigCFBM:        "bm-token",
 	})
@@ -105,8 +116,8 @@ func TestGrokHeaders_UseConfiguredStatsigAndCloudflareCookies(t *testing.T) {
 		"appChat": c.appChatHeaders("plain-token"),
 		"console": c.consoleHeaders("plain-token"),
 	} {
-		if got := headers.Get("x-statsig-id"); got != "browser-statsig-id" {
-			t.Fatalf("%s x-statsig-id=%q want browser-statsig-id", name, got)
+		if got := headers.Get("x-statsig-id"); got != statsigID {
+			t.Fatalf("%s x-statsig-id=%q want configured browser statsig", name, got)
 		}
 		cookie := headers.Get("Cookie")
 		for _, want := range []string{"sso=plain-token", "sso-rw=plain-token", "cf_clearance=cf-clear", "__cf_bm=bm-token"} {
@@ -115,6 +126,11 @@ func TestGrokHeaders_UseConfiguredStatsigAndCloudflareCookies(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestGrokHeaders_IgnoreStaleConfiguredStatsig(t *testing.T) {
+	c := New(&config.Config{GrokStatsigID: "0196a8f6-0501-79f8-8d74-a2f2c0f5f5f5"})
+	assertBrowserStatsigID(t, c.appChatHeaders("plain-token").Get("x-statsig-id"))
 }
 
 func TestDoRequest_DoesNotMutateInputHeaders(t *testing.T) {

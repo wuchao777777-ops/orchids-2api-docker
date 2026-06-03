@@ -372,12 +372,13 @@
                 <div class="function-settings-block">
                   <label class="field-label">声音</label>
                   <select id="voiceName" class="form-input">
-                    <option value="ara">Ara (Upbeat Female)</option>
-                    <option value="eve">Eve (Soothing Female)</option>
-                    <option value="leo">Leo (British Male)</option>
-                    <option value="rex">Rex (Calm Male)</option>
-                    <option value="sal">Sal (Smooth Male)</option>
+                    <option value="ara">Ara (Warm Female)</option>
+                    <option value="eve">Eve (Energetic Female)</option>
+                    <option value="rex">Rex (Confident Male)</option>
+                    <option value="sal">Sal (Smooth Neutral)</option>
+                    <option value="leo">Leo (Authoritative Male)</option>
                     <option value="gork">Gork (Lazy Male)</option>
+                    <option value="custom">Custom voice_id</option>
                   </select>
                 </div>
                 <div class="function-settings-block">
@@ -387,6 +388,8 @@
                     <option value="custom">Custom</option>
                     <option value="therapist">Therapist</option>
                     <option value="storyteller">Storyteller</option>
+                    <option value="kids_story_time">Kids Story Time</option>
+                    <option value="kids_trivia_game">Kids Trivia Game</option>
                     <option value="meditation">Meditation</option>
                     <option value="doc">Grok "Doc"</option>
                     <option value="unhinged">Unhinged 18+</option>
@@ -397,6 +400,10 @@
                     <option value="argumentative">Argumentative 18+</option>
                   </select>
                 </div>
+              </div>
+              <div id="voiceCustomBlock" class="function-settings-block hidden">
+                <label class="field-label" for="voiceCustomID">自定义 voice_id</label>
+                <input id="voiceCustomID" class="form-input" type="text" autocomplete="off" spellcheck="false" placeholder="粘贴 xAI Custom Voice 返回的 voice_id">
               </div>
               <div class="function-settings-block voice-speed-block">
                 <div class="function-header-row function-header-row-tight">
@@ -409,7 +416,7 @@
                 <label class="field-label" for="voiceInstruction">自定义指令</label>
                 <textarea id="voiceInstruction" class="form-input voice-instruction-input" rows="4" placeholder="可选。填写后会按 Grok 原生 raw instructions 发送，优先于 Personality。"></textarea>
               </div>
-              <p class="voice-hint voice-hint-spaced">提示：自定义指令为空时使用 Personality；填写后会使用 raw instructions。</p>
+              <p class="voice-hint voice-hint-spaced">提示：自定义指令为空时使用 Personality；填写后会使用 raw instructions。选择 Custom voice_id 后会把输入值作为 voice 发送。</p>
             </div>
 
             <div class="grok-panel voice-card">
@@ -550,8 +557,8 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="{{.AdminPath}}/js/common.js?v=20260328-1"></script>
-  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260602-basic-lite-ws"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260601-3"></script>
+  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260604-masonry-1to1"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260604-1"></script>
 </body>
 
 </html>
