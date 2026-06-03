@@ -683,14 +683,39 @@
     });
   }
 
+  function normalizeImagineQuality(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (raw === "basic" || raw === "speed") return "basic";
+    if (raw === "quality") return "quality";
+    return "lite";
+  }
+
   function imagineQualityModel(quality) {
-    return quality === "quality" ? "grok-imagine-image" : "grok-imagine-image-lite";
+    switch (normalizeImagineQuality(quality)) {
+      case "basic":
+        return "grok-imagine-image-lite";
+      case "quality":
+        return "grok-imagine-image-pro";
+      case "lite":
+      default:
+        return "grok-imagine-image";
+    }
   }
 
   function imagineQualityModels(quality) {
-    return quality === "quality"
-      ? ["grok-imagine-image"]
-      : ["grok-imagine-image-lite", "grok-imagine-image"];
+    return [imagineQualityModel(quality)];
+  }
+
+  function imagineQualityLabel(quality) {
+    switch (normalizeImagineQuality(quality)) {
+      case "basic":
+        return "Basic";
+      case "quality":
+        return "Quality";
+      case "lite":
+      default:
+        return "Lite";
+    }
   }
 
   function syncImagineRatioUI() {
@@ -735,7 +760,7 @@
     const chips = [
       ["is-round", `第 ${round} 轮`],
       ["is-param", ratio],
-      ["is-param", quality === "quality" ? "Quality" : "Speed"],
+      ["is-param", imagineQualityLabel(quality)],
       ["is-count", `0/${IMAGINE_BATCH_SIZE}`],
       ["is-state", "正在生成"],
     ];
@@ -1666,7 +1691,7 @@
     }
     const ratio = String(document.getElementById("imagineRatio")?.value || "2:3");
     const runMode = imagineReadToggle("#imagineRunModeToggle", "imagineRunMode", "single");
-    const quality = imagineReadToggle("#imagineQualityToggle", "imagineQuality", "speed");
+    const quality = normalizeImagineQuality(imagineReadToggle("#imagineQualityToggle", "imagineQuality", "lite"));
     const models = imagineQualityModels(quality);
     const model = models[0];
     const nsfw = String(document.getElementById("imagineNSFW")?.value || "true") === "true";
@@ -4833,7 +4858,7 @@
     });
     document.querySelectorAll("[data-imagine-quality]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const value = String(btn.dataset.imagineQuality || "speed");
+        const value = normalizeImagineQuality(btn.dataset.imagineQuality || "lite");
         imagineSetToggle("#imagineQualityToggle", "imagineQuality", value);
         const model = imagineQualityModel(value);
         const modelSelect = document.getElementById("imagineModel");
@@ -5340,7 +5365,11 @@
       imagineModel.value = uiState.imagineModel;
     }
     const savedQuality = typeof uiState.imagineQuality === "string" ? uiState.imagineQuality : "";
-    const quality = savedQuality || (imagineModel?.value === "grok-imagine-image" ? "quality" : "speed");
+    const quality = savedQuality
+      ? normalizeImagineQuality(savedQuality)
+      : (imagineModel?.value === "grok-imagine-image-lite"
+        ? "basic"
+        : (imagineModel?.value === "grok-imagine-image-pro" ? "quality" : "lite"));
     imagineSetToggle("#imagineQualityToggle", "imagineQuality", quality);
     const savedRunMode = typeof uiState.imagineRunMode === "string" ? uiState.imagineRunMode : "single";
     imagineSetToggle("#imagineRunModeToggle", "imagineRunMode", savedRunMode === "continuous" ? "continuous" : "single");

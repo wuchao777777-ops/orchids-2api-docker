@@ -224,35 +224,29 @@ func TestAppChatImagePayload_MatchesGrokImagineAgentShape(t *testing.T) {
 	payload := c.appChatImagePayload(spec, "apple", "1024x1792", 1)
 
 	for _, key := range []string{
-		"modelName",
-		"modelMode",
-		"modelTier",
 		"preferBest",
-		"isReasoning",
-		"responseMetadata",
 		"modelConfigOverride",
-		"searchAllConnectors",
-		"toolOverrides",
-		"temporary",
-		"imageGenerationCount",
-		"deviceEnvInfo",
-		"returnImageBytes",
-		"returnRawGrokInXaiRequest",
-		"forceConcise",
-		"forceSideBySide",
+		"parentResponseId",
+		"skipCancelCurrentInflightRequests",
 	} {
 		if _, ok := payload[key]; ok {
 			t.Fatalf("%s should not be present: %#v", key, payload)
 		}
 	}
+	if got, _ := payload["modelName"].(string); got != "grok-imagine-image-lite" {
+		t.Fatalf("modelName=%q want grok-imagine-image-lite", got)
+	}
+	if got, _ := payload["modelMode"].(string); got != "MODEL_MODE_FAST" {
+		t.Fatalf("modelMode=%q want MODEL_MODE_FAST", got)
+	}
+	if got, _ := payload["modelTier"].(string); got != "basic" {
+		t.Fatalf("modelTier=%q want basic", got)
+	}
 	if got, _ := payload["modeId"].(string); got != "fast" {
 		t.Fatalf("modeId=%q want fast", got)
 	}
-	if got, _ := payload["message"].(string); got != "apple" {
-		t.Fatalf("message=%q want apple", got)
-	}
-	if got, _ := payload["parentResponseId"].(string); got != "" {
-		t.Fatalf("parentResponseId=%q want empty", got)
+	if got, _ := payload["message"].(string); got != "Drawing: apple" {
+		t.Fatalf("message=%q want Drawing: apple", got)
 	}
 	if got, _ := payload["enableImageGeneration"].(bool); !got {
 		t.Fatalf("enableImageGeneration=%v want true", got)
@@ -269,20 +263,26 @@ func TestAppChatImagePayload_MatchesGrokImagineAgentShape(t *testing.T) {
 	if got, _ := payload["disableSearch"].(bool); got {
 		t.Fatalf("disableSearch=%v want false", got)
 	}
-	if got, _ := payload["disableTextFollowUps"].(bool); !got {
-		t.Fatalf("disableTextFollowUps=%v want true", got)
+	if got, _ := payload["disableTextFollowUps"].(bool); got {
+		t.Fatalf("disableTextFollowUps=%v want false", got)
 	}
-	if got, _ := payload["enableSideBySide"].(bool); got {
-		t.Fatalf("enableSideBySide=%v want false", got)
+	if got, _ := payload["enableSideBySide"].(bool); !got {
+		t.Fatalf("enableSideBySide=%v want true", got)
 	}
-	if got, _ := payload["skipCancelCurrentInflightRequests"].(bool); got {
-		t.Fatalf("skipCancelCurrentInflightRequests=%v want false", got)
+	if got, _ := payload["imageGenerationCount"].(int); got != 2 {
+		t.Fatalf("imageGenerationCount=%v want 2", payload["imageGenerationCount"])
 	}
 	if got, ok := payload["imageAttachments"].([]string); !ok || len(got) != 0 {
 		t.Fatalf("imageAttachments=%#v want empty string slice", payload["imageAttachments"])
 	}
 	if got, ok := payload["fileAttachments"].([]string); !ok || len(got) != 0 {
 		t.Fatalf("fileAttachments=%#v want empty string slice", payload["fileAttachments"])
+	}
+	if _, ok := payload["responseMetadata"].(map[string]interface{}); !ok {
+		t.Fatalf("responseMetadata missing: %#v", payload["responseMetadata"])
+	}
+	if _, ok := payload["deviceEnvInfo"].(map[string]interface{}); !ok {
+		t.Fatalf("deviceEnvInfo missing: %#v", payload["deviceEnvInfo"])
 	}
 }
 

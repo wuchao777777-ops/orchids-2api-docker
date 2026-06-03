@@ -461,25 +461,12 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 
 func (c *Client) appChatImagePayload(spec ModelSpec, prompt, _ string, _ int) map[string]interface{} {
 	message := strings.TrimSpace(prompt)
-	modeID := appChatModeID(spec)
-	if modeID == "" {
-		modeID = "fast"
+	if message != "" && !strings.HasPrefix(strings.ToLower(message), "drawing:") {
+		message = "Drawing: " + message
 	}
-	payload := map[string]interface{}{
-		"message":                           message,
-		"modeId":                            modeID,
-		"parentResponseId":                  "",
-		"enableImageGeneration":             true,
-		"enableImageStreaming":              true,
-		"sendFinalMetadata":                 true,
-		"disableMemory":                     false,
-		"disableSearch":                     false,
-		"disableTextFollowUps":              true,
-		"enableSideBySide":                  false,
-		"imageAttachments":                  []string{},
-		"fileAttachments":                   []string{},
-		"skipCancelCurrentInflightRequests": false,
-	}
+	payload := c.chatPayload(spec, message, false, 2)
+	payload["modeId"] = "fast"
+	payload["imageGenerationCount"] = 2
 	return payload
 }
 

@@ -292,13 +292,16 @@ func TestGenerateAppChatImagineBatch_ReturnsLocalCachedURL(t *testing.T) {
 	if len(upstreamPaths) != len(wantPaths) {
 		t.Fatalf("upstream paths=%#v", upstreamPaths)
 	}
-	if _, ok := upstreamPayload["modelName"]; ok {
-		t.Fatalf("basic app-chat payload should not include modelName: %#v", upstreamPayload)
+	if got, _ := upstreamPayload["modelName"].(string); got != "grok-imagine-image-lite" {
+		t.Fatalf("modelName=%q want grok-imagine-image-lite", got)
 	}
-	if _, ok := upstreamPayload["modelMode"]; ok {
-		t.Fatalf("basic app-chat payload should not include modelMode: %#v", upstreamPayload)
+	if got, _ := upstreamPayload["modelMode"].(string); got != "MODEL_MODE_FAST" {
+		t.Fatalf("modelMode=%q want MODEL_MODE_FAST", got)
 	}
-	for _, key := range []string{"modelTier", "modelConfigOverride", "searchAllConnectors", "toolOverrides", "responseMetadata", "imageGenerationCount"} {
+	if got, _ := upstreamPayload["modelTier"].(string); got != "basic" {
+		t.Fatalf("modelTier=%q want basic", got)
+	}
+	for _, key := range []string{"modelConfigOverride", "parentResponseId", "skipCancelCurrentInflightRequests"} {
 		if _, ok := upstreamPayload[key]; ok {
 			t.Fatalf("basic app-chat payload should not include %s: %#v", key, upstreamPayload)
 		}
@@ -306,16 +309,22 @@ func TestGenerateAppChatImagineBatch_ReturnsLocalCachedURL(t *testing.T) {
 	if got, _ := upstreamPayload["modeId"].(string); got != "fast" {
 		t.Fatalf("modeId=%q want fast", got)
 	}
-	if got, _ := upstreamPayload["parentResponseId"].(string); got != "" {
-		t.Fatalf("parentResponseId=%q want empty", got)
+	if got, _ := upstreamPayload["message"].(string); got != "Drawing: apple" {
+		t.Fatalf("message=%q want Drawing: apple", got)
 	}
 	if got, _ := upstreamPayload["enableImageGeneration"].(bool); !got {
 		t.Fatalf("enableImageGeneration=%v want true", got)
 	}
-	if got, _ := upstreamPayload["disableTextFollowUps"].(bool); !got {
-		t.Fatalf("disableTextFollowUps=%v want true", got)
+	if got, _ := upstreamPayload["disableTextFollowUps"].(bool); got {
+		t.Fatalf("disableTextFollowUps=%v want false", got)
 	}
-	if got, _ := upstreamPayload["enableSideBySide"].(bool); got {
-		t.Fatalf("enableSideBySide=%v want false", got)
+	if got, _ := upstreamPayload["enableSideBySide"].(bool); !got {
+		t.Fatalf("enableSideBySide=%v want true", got)
+	}
+	if got, _ := upstreamPayload["imageGenerationCount"].(float64); got != 2 {
+		t.Fatalf("imageGenerationCount=%#v want 2", upstreamPayload["imageGenerationCount"])
+	}
+	if _, ok := upstreamPayload["responseMetadata"].(map[string]interface{}); !ok {
+		t.Fatalf("responseMetadata missing: %#v", upstreamPayload["responseMetadata"])
 	}
 }

@@ -306,10 +306,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	var sess *chatAccountSession
 	var err error
 	if spec.ID == "grok-imagine-image-lite" {
-		sess, err = h.openAppChatImageAccountSessionForModelExcluding(ctx, nil, spec)
-		if err != nil && strings.Contains(err.Error(), "no enabled accounts available") {
-			err = fmt.Errorf("no app-chat browser-cookie grok account available; import a full grok.com browser cookie with sso, sso-rw and x-userid/grok_device_id")
-		}
+		sess, err = h.openChatAccountSessionForModel(ctx, spec)
 	} else {
 		sess, err = h.openChatAccountSessionForModel(ctx, spec)
 	}
