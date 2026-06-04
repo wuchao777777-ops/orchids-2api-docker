@@ -289,7 +289,7 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	fastSess.Close()
 }
 
-func TestOpenChatAccountSessionForImageLiteSkipsBasicPool(t *testing.T) {
+func TestOpenChatAccountSessionForImageLitePrefersBasicPool(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -314,22 +314,50 @@ func TestOpenChatAccountSessionForImageLiteSkipsBasicPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open image lite session error=%v", err)
 	}
-	if NormalizeSSOToken(sess.token) != "lite-token" {
-		t.Fatalf("token=%q want sso lite-token", sess.token)
+	if NormalizeSSOToken(sess.token) != "basic-token" {
+		t.Fatalf("token=%q want sso basic-token", sess.token)
 	}
 	sess.Close()
+}
 
+func TestOpenChatAccountSessionForImagineLiteSkipsBasicPool(t *testing.T) {
 	h2, s2, mini2 := setupValidationHandler(t)
 	defer func() {
 		_ = s2.Close()
 		mini2.Close()
 	}()
-	if err := s2.CreateAccount(context.Background(), &store.Account{
+	for _, acc := range []*store.Account{
+		{AccountType: "grok", Enabled: true, ClientCookie: "sso=basic-token", Subscription: "basic", Weight: 1},
+		{AccountType: "grok", Enabled: true, ClientCookie: "sso=lite-token", Subscription: "lite", Weight: 1},
+	} {
+		if err := s2.CreateAccount(context.Background(), acc); err != nil {
+			t.Fatalf("CreateAccount() error = %v", err)
+		}
+	}
+	spec, ok := ResolveModel("grok-imagine-image-lite")
+	if !ok {
+		t.Fatal("missing grok-imagine-image-lite spec")
+	}
+	sess, err := h2.openChatAccountSessionForImagineLite(context.Background(), nil, spec)
+	if err != nil {
+		t.Fatalf("open imagine lite session error=%v", err)
+	}
+	if NormalizeSSOToken(sess.token) != "lite-token" {
+		t.Fatalf("token=%q want sso lite-token", sess.token)
+	}
+	sess.Close()
+
+	h3, s3, mini3 := setupValidationHandler(t)
+	defer func() {
+		_ = s3.Close()
+		mini3.Close()
+	}()
+	if err := s3.CreateAccount(context.Background(), &store.Account{
 		AccountType: "grok", Enabled: true, ClientCookie: "sso=basic-only-token", Subscription: "basic", Weight: 1,
 	}); err != nil {
 		t.Fatalf("CreateAccount(basic only) error = %v", err)
 	}
-	next, err := h2.openChatAccountSessionForModel(context.Background(), spec)
+	next, err := h3.openChatAccountSessionForImagineLite(context.Background(), nil, spec)
 	if err == nil {
 		defer next.Close()
 		t.Fatalf("open image lite with only basic unexpectedly succeeded token=%q", next.token)
@@ -398,7 +426,7 @@ func TestOpenChatAccountSessionForImageLiteLitePoolDoesNotRequireFullBrowserCook
 	}
 }
 
-func TestOpenChatAccountSessionForImageLiteSkipsCoolingLiteWithoutBasicFallback(t *testing.T) {
+func TestOpenChatAccountSessionForImagineLiteSkipsCoolingLiteWithoutBasicFallback(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -418,7 +446,7 @@ func TestOpenChatAccountSessionForImageLiteSkipsCoolingLiteWithoutBasicFallback(
 	if !ok {
 		t.Fatal("missing grok-imagine-image-lite spec")
 	}
-	sess, err := h.openChatAccountSessionForModel(context.Background(), spec)
+	sess, err := h.openChatAccountSessionForImagineLite(context.Background(), nil, spec)
 	if err == nil {
 		defer sess.Close()
 		t.Fatalf("open image lite with cooling lite and basic unexpectedly succeeded token=%q", sess.token)

@@ -300,13 +300,13 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 	var lastErr error
 	used := make([]int64, 0, maxAttempts)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		sessionSpec := spec
-		if imagineModel == "grok-imagine-image-lite" {
-			sessionSpec.Tier = grokTierLite
-		}
 		var sess *chatAccountSession
 		var err error
-		sess, err = h.openChatAccountSessionForModelExcluding(ctx, used, sessionSpec)
+		if imagineModel == "grok-imagine-image-lite" {
+			sess, err = h.openChatAccountSessionForImagineLite(ctx, used, spec)
+		} else {
+			sess, err = h.openChatAccountSessionForModelExcluding(ctx, used, spec)
+		}
 		if err != nil {
 			if lastErr != nil {
 				return nil, 0, fmt.Errorf("account switch failed: %v (original: %v)", err, lastErr)
