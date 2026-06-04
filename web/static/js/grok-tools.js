@@ -1,4 +1,6 @@
 (() => {
+  const LIVEKIT_CLIENT_URL = "https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js";
+
   const imagineState = {
     running: false,
     mode: "auto",
@@ -64,6 +66,7 @@
     room: null,
     visualizerTimer: null,
     outputMuted: false,
+    reconnecting: false,
   };
   const grokLazyState = {
     imagineReady: false,
@@ -3429,6 +3432,7 @@
     voiceState.room = null;
     voiceState.running = false;
     voiceState.stopping = false;
+    voiceState.reconnecting = false;
     setVoiceButtons(false);
     stopVoiceVisualizer();
     resetVoiceAudio();
@@ -3452,13 +3456,13 @@
           return;
         }
         const script = document.createElement("script");
-        script.src = "https://cdn.jsdelivr.net/npm/livekit-client@2.19.1/dist/livekit-client.umd.min.js";
+        script.src = LIVEKIT_CLIENT_URL;
         script.async = true;
         script.dataset.livekitClient = "1";
         script.onload = () => {
           const loaded = resolveLiveKitClient();
           if (loaded) {
-            appendVoiceLog("LiveKit SDK 已按需加载");
+            appendVoiceLog("LiveKit SDK 已按需加载: 2.7.3");
             resolve(loaded);
             return;
           }
@@ -3508,6 +3512,20 @@
     return /permission denied|notallowederror|notfounderror|devicesnotfounderror|notreadableerror|trackstarterror|microphone/i.test(raw);
   }
 
+  async function enableVoiceMicrophone(LiveKitSDK, room) {
+    if (room?.localParticipant && typeof room.localParticipant.setMicrophoneEnabled === "function") {
+      await room.localParticipant.setMicrophoneEnabled(true);
+      return;
+    }
+    if (typeof LiveKitSDK.createLocalTracks !== "function") {
+      throw new Error("LiveKit microphone API is unavailable");
+    }
+    const tracks = await LiveKitSDK.createLocalTracks({ audio: true, video: false });
+    for (const track of tracks) {
+      await room.localParticipant.publishTrack(track);
+    }
+  }
+
   async function logVoiceMicDiagnostics(err) {
     try {
       const protocol = window.location?.protocol || "";
@@ -3545,7 +3563,6 @@
     const voice = voiceSelect === "custom" ? customVoice : voiceSelect;
     const personality = String(document.getElementById("voicePersonality")?.value || "assistant").trim() || "assistant";
     const speed = Number(document.getElementById("voiceSpeed")?.value || 1);
-    const instruction = String(document.getElementById("voiceInstruction")?.value || "").trim();
     if (!voice) {
       throw new Error("请选择声音，或填写自定义 voice_id");
     }
@@ -3557,7 +3574,6 @@
         voice,
         personality,
         speed: speed > 0 ? speed : 1,
-        instruction,
       }),
     });
     if (handleUnauthorized(res)) return null;
@@ -3610,6 +3626,7 @@
     });
     voiceState.room = room;
     voiceState.running = true;
+    voiceState.reconnecting = false;
     room.on(LiveKitSDK.RoomEvent.ParticipantConnected, (participant) => {
       appendVoiceLog(`Participant connected: ${participant?.identity || "unknown"}`);
     });
@@ -3633,10 +3650,14 @@
       }
     });
     room.on(LiveKitSDK.RoomEvent.Reconnecting, () => {
+      if (voiceState.room !== room || voiceState.stopping) return;
+      voiceState.reconnecting = true;
       appendVoiceLog("Voice reconnecting");
       setVoiceStatus("重连中...", "warn");
     });
     room.on(LiveKitSDK.RoomEvent.Reconnected, () => {
+      if (voiceState.room !== room || voiceState.stopping) return;
+      voiceState.reconnecting = false;
       appendVoiceLog("Voice reconnected");
       setVoiceStatus("已连接", "ok");
     });
@@ -3649,6 +3670,17 @@
       });
     }
     room.on(LiveKitSDK.RoomEvent.Disconnected, (reason) => {
+      const text = String(reason || "disconnected");
+      if (voiceState.room !== room) return;
+      if (voiceState.stopping) {
+        appendVoiceLog(`Voice disconnected after stop: ${text}`);
+        return;
+      }
+      appendVoiceLog(`Voice disconnected: ${text}`);
+      if (voiceState.reconnecting) {
+        setVoiceStatus("重连中...", "warn");
+        return;
+      }
       resetVoiceSession(reason || "disconnected", {
         skipDisconnect: true,
         statusText: t("common.notConnected"),
@@ -3660,10 +3692,7 @@
       await room.connect(payload.url, payload.token);
       appendVoiceLog("Connected to LiveKit signaling server");
       ensureVoiceMicSupport();
-      if (!room.localParticipant || typeof room.localParticipant.setMicrophoneEnabled !== "function") {
-        throw new Error("LiveKit microphone API is unavailable");
-      }
-      await room.localParticipant.setMicrophoneEnabled(true);
+      await enableVoiceMicrophone(LiveKitSDK, room);
       setVoiceStatus(t("voice.connected"), "ok");
       setVoiceButtons(true);
       appendVoiceLog("Voice session connected");

@@ -1313,8 +1313,29 @@
     border-radius: 12px;
   }
 
+  .chat-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .chat-sidebar {
     top: 0;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 70;
+    width: min(320px, 86vw);
+    max-height: none;
+    border-radius: 0 10px 10px 0;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+
+  .chat-sidebar.open,
+  .chat-sidebar.show {
+    transform: translateX(0);
+  }
+
+  .chat-layout.collapsed .chat-sidebar {
+    display: flex;
   }
 }
 
@@ -1334,6 +1355,47 @@
   .composer-input,
   .imagine-masonry-toolbar {
     gap: 8px;
+  }
+
+  .chat-shell {
+    min-height: calc(100dvh - 190px);
+  }
+
+  .chat-thread {
+    min-height: 0;
+    max-height: calc(100dvh - 300px);
+    padding: 12px;
+  }
+
+  .chat-title {
+    align-items: flex-start;
+  }
+
+  .chat-subtitle {
+    display: none;
+  }
+
+  .message-bubble {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .composer-shell {
+    bottom: 10px;
+  }
+
+  .composer-input {
+    flex-wrap: wrap;
+    padding: 8px;
+  }
+
+  .composer-textarea {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .composer-actions {
+    justify-content: space-between;
   }
 
   .imagine-masonry-controls,
