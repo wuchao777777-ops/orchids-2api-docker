@@ -4,10 +4,6 @@
       label: "2.7.3",
       url: "https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js",
     },
-    latest: {
-      label: "2.19.1",
-      url: "https://cdn.jsdelivr.net/npm/livekit-client@2.19.1/dist/livekit-client.umd.min.js",
-    },
   };
 
   const imagineState = {
@@ -76,6 +72,10 @@
     visualizerTimer: null,
     outputMuted: false,
     reconnecting: false,
+    startedAt: 0,
+    agentDisconnects: 0,
+    sdkVersion: "stable",
+    sdkLabel: "",
   };
   const grokLazyState = {
     imagineReady: false,
@@ -3442,6 +3442,10 @@
     voiceState.running = false;
     voiceState.stopping = false;
     voiceState.reconnecting = false;
+    voiceState.startedAt = 0;
+    voiceState.agentDisconnects = 0;
+    voiceState.sdkVersion = "stable";
+    voiceState.sdkLabel = "";
     setVoiceButtons(false);
     stopVoiceVisualizer();
     resetVoiceAudio();
@@ -3460,6 +3464,10 @@
 
   function selectedLiveKitClientConfig() {
     return LIVEKIT_CLIENT_VERSIONS[selectedLiveKitClientVersion()] || LIVEKIT_CLIENT_VERSIONS.stable;
+  }
+
+  function isActiveVoiceRoom(room) {
+    return voiceState.room === room && !voiceState.stopping;
   }
 
   async function ensureLiveKitClient() {
@@ -3543,13 +3551,17 @@
     if (typeof LiveKitSDK.createLocalTracks === "function" && typeof room.localParticipant.publishTrack === "function") {
       const tracks = await LiveKitSDK.createLocalTracks({ audio: true, video: false });
       for (const track of tracks) {
+        if (!isActiveVoiceRoom(room)) return;
         await room.localParticipant.publishTrack(track);
       }
+      if (!isActiveVoiceRoom(room)) return;
       appendVoiceLog("Microphone published with createLocalTracks");
       return;
     }
     if (typeof room.localParticipant.setMicrophoneEnabled === "function") {
+      if (!isActiveVoiceRoom(room)) return;
       await room.localParticipant.setMicrophoneEnabled(true);
+      if (!isActiveVoiceRoom(room)) return;
       appendVoiceLog("Microphone enabled with setMicrophoneEnabled");
       return;
     }
@@ -3657,6 +3669,10 @@
     voiceState.room = room;
     voiceState.running = true;
     voiceState.reconnecting = false;
+    voiceState.startedAt = Date.now();
+    voiceState.agentDisconnects = 0;
+    voiceState.sdkVersion = selectedLiveKitClientVersion();
+    voiceState.sdkLabel = window.__orchidsLiveKitVersion || selectedLiveKitClientConfig().label;
     appendVoiceLog(`LiveKit session using SDK: ${window.__orchidsLiveKitVersion || selectedLiveKitClientConfig().label}`);
     room.on(LiveKitSDK.RoomEvent.ParticipantConnected, (participant) => {
       appendVoiceLog(`Participant connected: ${participant?.identity || "unknown"} sid=${participant?.sid || "-"}`);
@@ -3681,19 +3697,21 @@
       }
     });
     room.on(LiveKitSDK.RoomEvent.Reconnecting, () => {
-      if (voiceState.room !== room || voiceState.stopping) return;
+      if (!isActiveVoiceRoom(room)) return;
       voiceState.reconnecting = true;
       appendVoiceLog("Voice reconnecting");
       setVoiceStatus("重连中...", "warn");
     });
     room.on(LiveKitSDK.RoomEvent.Reconnected, () => {
-      if (voiceState.room !== room || voiceState.stopping) return;
+      if (!isActiveVoiceRoom(room)) return;
       voiceState.reconnecting = false;
       appendVoiceLog("Voice reconnected");
       setVoiceStatus("已连接", "ok");
     });
     room.on(LiveKitSDK.RoomEvent.ConnectionStateChanged, (state) => {
-      appendVoiceLog(`Connection state: ${String(state || "unknown")}`);
+      const stateText = String(state || "unknown");
+      if (!isActiveVoiceRoom(room) && stateText !== "disconnected") return;
+      appendVoiceLog(`Connection state: ${stateText}`);
     });
     if (LiveKitSDK.RoomEvent.MediaDevicesError) {
       room.on(LiveKitSDK.RoomEvent.MediaDevicesError, (err) => {
@@ -3724,6 +3742,7 @@
       appendVoiceLog("Connected to LiveKit signaling server");
       ensureVoiceMicSupport();
       await enableVoiceMicrophone(LiveKitSDK, room);
+      if (!isActiveVoiceRoom(room)) return;
       setVoiceStatus(t("voice.connected"), "ok");
       setVoiceButtons(true);
       appendVoiceLog("Voice session connected");
