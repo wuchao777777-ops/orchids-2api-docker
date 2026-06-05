@@ -126,13 +126,6 @@
     return false;
   }
 
-
-  function formatTimeMS(ms) {
-    const num = Number(ms || 0);
-    if (!Number.isFinite(num) || num <= 0) return "-";
-    return `${Math.round(num)} ms`;
-  }
-
   function formatDateTime(ms) {
     const num = Number(ms || 0);
     if (!Number.isFinite(num) || num <= 0) return "-";
@@ -483,10 +476,6 @@
     session.messages = session.messages.slice(-MAX_CHAT_MESSAGES);
     session.updatedAt = Date.now();
     return overflow;
-  }
-
-  function isImageFileName(name) {
-    return /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(String(name || "").trim());
   }
 
   function readFileAsDataURL(file) {
@@ -2184,36 +2173,6 @@
     throw new Error("LiveKit microphone API is unavailable");
   }
 
-  async function logVoiceMicDiagnostics(err) {
-    try {
-      const protocol = window.location?.protocol || "";
-      const host = window.location?.host || "";
-      const secure = !!window.isSecureContext;
-      const isLocalhost = typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
-      let policyAllowed = "unknown";
-      const policy = document.permissionsPolicy || document.featurePolicy;
-      if (policy && typeof policy.allowsFeature === "function") {
-        policyAllowed = policy.allowsFeature("microphone") ? "yes" : "no";
-      }
-      let permState = "unknown";
-      try {
-        if (navigator.permissions && typeof navigator.permissions.query === "function") {
-          const status = await navigator.permissions.query({ name: "microphone" });
-          permState = status?.state || "unknown";
-        }
-      } catch (err2) {
-        permState = "unsupported";
-      }
-      const errName = err?.name || "";
-      const errMsg = err?.message || String(err || "");
-      appendVoiceLog(
-        `Mic diagnostics: secure=${secure} localhost=${isLocalhost} protocol=${protocol} host=${host} policy=${policyAllowed} perm=${permState} error=${errName || errMsg}`
-      );
-    } catch (err3) {
-      // ignore diagnostics failures
-    }
-  }
-
   async function fetchVoiceToken() {
     updateVoiceMeta();
     const voiceSelect = String(document.getElementById("voiceName")?.value || "ara").trim() || "ara";
@@ -2826,48 +2785,6 @@
         finishVideoRun(true);
       }
     }, 1500);
-  }
-
-  function openVideoSSE(taskID) {
-    const url = `/api/v1/admin/video/sse?task_id=${encodeURIComponent(taskID)}&t=${Date.now()}`;
-    const es = new EventSource(url);
-    videoState.stream = es;
-    es.onopen = () => {
-      setVideoStatus(t("common.generating"), "ok");
-    };
-    es.onmessage = (event) => {
-      const text = String(event.data || "");
-      if (!text) return;
-      if (text === "[DONE]") {
-        finishVideoRun(false);
-        return;
-      }
-      let payload = null;
-      try {
-        payload = JSON.parse(text);
-      } catch (err) {
-        payload = null;
-      }
-      const errorMsg = payload && (payload.error || payload?.error?.message);
-      if (errorMsg) {
-        setVideoStatus(String(errorMsg), "error");
-        finishVideoRun(true);
-        return;
-      }
-      const choice = payload?.choices?.[0];
-      const deltaContent = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
-      const messageContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
-      const content = deltaContent || messageContent || text;
-      handleVideoDelta(content);
-      if (choice && choice.finish_reason === "stop") {
-        finishVideoRun(false);
-      }
-    };
-    es.onerror = () => {
-      if (!videoState.running) return;
-      setVideoStatus(t("common.connectionError"), "error");
-      finishVideoRun(true);
-    };
   }
 
   async function startVideo() {

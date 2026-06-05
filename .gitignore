@@ -3,7 +3,6 @@
 *.exe~
 *.dll
 *.so
-debug-logs
 *.dylib
 orchids-api
 orchids-server
@@ -41,10 +40,10 @@ internal/grok/.omc/
 .DS_Store
 Thumbs.db
 
-# Debug logs
-
-
-# Config
+# Runtime data
+debug-logs/
+data/tmp/
+internal/grok/data/
 
 # Database
 *.db
@@ -53,7 +52,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
-internal/grok/data/
 
 # Build
 build/
