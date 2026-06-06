@@ -30,7 +30,7 @@ import (
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
-	warpprompt "orchids-api/internal/warp/promptbuilder"
+	"orchids-api/internal/warp"
 )
 
 // ClientFactory creates an upstream client for a given account.
@@ -865,6 +865,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("tool_gate: disabled tools", "warp", isWarpRequest, "reasons", toolGateReasons)
 		}
 	}
+	chatSessionID := ""
+	if isWarpRequest && conversationKey != "" {
+		chatSessionID, _ = h.sessionStore.GetConvID(r.Context(), conversationKey)
+		h.sessionStore.Touch(r.Context(), conversationKey)
+	}
 
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
@@ -896,11 +901,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			NoThinking: noThinking,
 		}
 	} else {
-		var warpMeta warpprompt.Meta
-		builtPrompt, promptHistory, warpMeta = warpprompt.BuildWithMetaAndTools(req.Messages, req.System, mappedModel, noThinking, effectiveWorkdir, effectiveTools)
+		builtPrompt = warp.PreviewUserQuery("", req.Messages, req.System, chatSessionID)
 		promptMeta = orchids.PromptBuildMeta{
-			Profile:    warpMeta.Profile,
-			NoThinking: warpMeta.NoThinking,
+			Profile:    "warp-official-proto",
+			NoThinking: noThinking,
+		}
+		if strings.TrimSpace(builtPrompt) == "" {
+			builtPrompt = "warp request"
 		}
 	}
 	noThinking = promptMeta.NoThinking
@@ -968,7 +975,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	breakdown := inputTokenBreakdown{}
 	breakdownProfile := promptMeta.Profile
 	if isWarpRequest {
-		if warpBD, profile, err := estimateWarpInputTokenBreakdown(builtPrompt, mappedModel, upstreamMessages, effectiveTools, gateNoTools); err == nil {
+		if warpBD, profile, err := estimateWarpInputTokenBreakdown(builtPrompt, mappedModel, upstreamMessages, req.System, effectiveTools, gateNoTools, chatSessionID); err == nil {
 			breakdown = warpBD
 			breakdownProfile = profile
 		} else {
@@ -1112,11 +1119,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// Main execution
 	run := func() {
 		// 复用上游返回的 conversationID，保持会话连续性
-		chatSessionID := ""
-		if conversationKey != "" {
-			chatSessionID, _ = h.sessionStore.GetConvID(r.Context(), conversationKey)
-			h.sessionStore.Touch(r.Context(), conversationKey)
-		}
 		if chatSessionID == "" {
 			chatSessionID = "chat_" + randomSessionID()
 		}

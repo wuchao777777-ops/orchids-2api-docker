@@ -2902,6 +2902,7 @@
           pool: String(acc.pool || "-"),
           count,
           status,
+          account_status: String(acc.status || ""),
           last_asset_clear_at: lastClear,
         });
       }
@@ -2949,6 +2950,8 @@
       const checked = cacheOnlineState.selectedTokens.has(row.token) ? "checked" : "";
       const countText = row.count === null ? "-" : String(row.count);
       const statusText = resolveOnlineStatusText(row.status);
+      const accountStatus = String(row.account_status || "").trim();
+      const accountStatusText = accountStatus && accountStatus !== "active" ? `账号: ${accountStatus}` : "";
       const lastClear = formatDateTime(row.last_asset_clear_at);
       return `
         <tr>
@@ -2958,7 +2961,7 @@
           <td><code>${row.token_masked || formatTokenMask(row.token)}</code></td>
           <td><span class="tag">${row.pool || "-"}</span></td>
           <td>${countText}</td>
-          <td>${statusText}</td>
+          <td>${statusText}${accountStatusText ? `<br><small>${accountStatusText}</small>` : ""}</td>
           <td>${lastClear}</td>
           <td>
             <button class="btn btn-danger-outline cache-online-clear-btn" data-token="${encodeURIComponent(row.token)}" style="padding:4px 8px;">清理</button>
@@ -2970,7 +2973,11 @@
   }
 
   function applyCacheOnlineData(data) {
-    const online = (data && typeof data === "object") ? (data.online || {}) : {};
+    const rawOnline = (data && typeof data === "object") ? (data.online || {}) : {};
+    const online = {
+      ...rawOnline,
+      token: normalizeOnlineToken(rawOnline.token),
+    };
     const onlineScope = String(data?.online_scope || "none");
     const accounts = normalizeOnlineAccounts(data?.online_accounts);
     const details = normalizeOnlineDetails(data?.online_details);

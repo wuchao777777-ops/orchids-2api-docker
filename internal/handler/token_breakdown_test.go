@@ -5,7 +5,6 @@ import (
 	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"orchids-api/internal/config"
@@ -133,7 +132,7 @@ func TestHandleCountTokens_ReturnsBreakdown(t *testing.T) {
 	}
 }
 
-func TestHandleCountTokens_WarpUsesWarpEstimator(t *testing.T) {
+func TestHandleCountTokens_WarpUsesOfficialProtoEstimator(t *testing.T) {
 	t.Parallel()
 
 	h := NewWithLoadBalancer(&config.Config{
@@ -179,15 +178,15 @@ func TestHandleCountTokens_WarpUsesWarpEstimator(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if profile, _ := resp["prompt_profile"].(string); !strings.HasPrefix(profile, "warp") {
-		t.Fatalf("expected warp profile, got %#v", resp["prompt_profile"])
+	if profile, _ := resp["prompt_profile"].(string); profile != "warp-official-proto" {
+		t.Fatalf("expected warp official proto profile, got %#v", resp["prompt_profile"])
 	}
 	breakdown, ok := resp["breakdown"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("expected breakdown object, got %#v", resp["breakdown"])
 	}
-	if v, ok := breakdown["tools_tokens"].(float64); !ok || v != 0 {
-		t.Fatalf("expected warp tools_tokens = 0 in CodeFreeMax mode, got %#v", breakdown["tools_tokens"])
+	if v, ok := breakdown["tools_tokens"].(float64); !ok || v <= 0 {
+		t.Fatalf("expected warp tools_tokens > 0 for MCP schema, got %#v", breakdown["tools_tokens"])
 	}
 	if v, ok := breakdown["system_context_tokens"].(float64); !ok || v != 0 {
 		t.Fatalf("expected warp system_context_tokens = 0, got %#v", breakdown["system_context_tokens"])

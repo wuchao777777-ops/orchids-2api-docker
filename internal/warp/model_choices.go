@@ -12,40 +12,19 @@ type ModelChoice struct {
 	Name string
 }
 
-const getUserAgentModeLLMsQuery = `query GetUserAgentModeLlms($requestContext: RequestContext!) {
-  user(requestContext: $requestContext) {
-    __typename
-    ... on UserOutput {
-      user {
-        llms {
-          agentMode {
-            defaultId
-            choices {
-              id
-              displayName
-            }
-          }
-        }
-      }
-    }
-    ... on UserFacingError {
-      error {
-        message
-      }
-    }
-  }
-}`
-
-const getWorkspaceAvailableLLMsQuery = `query GetWorkspaceLlmModelRoutingSettings($requestContext: RequestContext!) {
+const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContext: RequestContext!) {
   user(requestContext: $requestContext) {
     __typename
     ... on UserOutput {
       user {
         workspaces {
-          availableLlms(includeAllConfigurableLlms: true) {
-            choices {
-              id
-              displayName
+          featureModelChoice {
+            agentMode {
+              defaultId
+              choices {
+                id
+                displayName
+              }
             }
           }
         }
@@ -70,94 +49,21 @@ func (c *Client) FetchDiscoveredModelChoices(ctx context.Context) ([]ModelChoice
 	}
 
 	jwt := c.session.currentJWT()
-	agentChoices, defaultID, agentErr := fetchUserAgentModeLLMChoices(ctx, client, jwt)
-	workspaceChoices, workspaceErr := fetchWorkspaceAvailableLLMChoices(ctx, client, jwt)
+	agentChoices, defaultID, err := fetchFeatureAgentModeModelChoices(ctx, client, jwt)
 
 	if len(agentChoices) > 0 {
-		return mergeWarpModelChoices(defaultID, agentChoices), "agent_mode_llms", nil
+		return mergeWarpModelChoices(defaultID, agentChoices), "feature_model_choice_agent_mode", nil
 	}
-
-	// Workspace availableLlms is a broad configuration surface. In live tests it
-	// can include models that are visible but not callable by the current
-	// account, so only use it when agentMode does not return any model choices.
-	if len(workspaceChoices) > 0 {
-		return mergeWarpModelChoices("", workspaceChoices), "workspace_available_llms_fallback", nil
-	}
-
-	if len(agentChoices) == 0 && len(workspaceChoices) == 0 {
-		switch {
-		case agentErr != nil && workspaceErr != nil:
-			return nil, "", fmt.Errorf("warp model discovery failed: agent mode: %v; workspace llms: %w", agentErr, workspaceErr)
-		case agentErr != nil:
-			return nil, "", fmt.Errorf("warp model discovery failed: %w", agentErr)
-		case workspaceErr != nil:
-			return nil, "", fmt.Errorf("warp model discovery failed: %w", workspaceErr)
-		default:
-			return nil, "", fmt.Errorf("warp model discovery returned no choices")
-		}
+	if err != nil {
+		return nil, "", fmt.Errorf("warp model discovery failed: %w", err)
 	}
 	return nil, "", fmt.Errorf("warp model discovery returned no choices")
 }
 
-func fetchUserAgentModeLLMChoices(ctx context.Context, client *http.Client, jwt string) ([]ModelChoice, string, error) {
+func fetchFeatureAgentModeModelChoices(ctx context.Context, client *http.Client, jwt string) ([]ModelChoice, string, error) {
 	payload := map[string]interface{}{
-		"query":         getUserAgentModeLLMsQuery,
-		"operationName": "GetUserAgentModeLlms",
-		"variables": map[string]interface{}{
-			"requestContext": requestContextPayload(),
-		},
-	}
-
-	var resp struct {
-		Data struct {
-			User struct {
-				Type  string `json:"__typename"`
-				Error struct {
-					Message string `json:"message"`
-				} `json:"error"`
-				User struct {
-					LLMs struct {
-						AgentMode struct {
-							DefaultID string `json:"defaultId"`
-							Choices   []struct {
-								ID          string `json:"id"`
-								DisplayName string `json:"displayName"`
-							} `json:"choices"`
-						} `json:"agentMode"`
-					} `json:"llms"`
-				} `json:"user"`
-			} `json:"user"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetUserAgentModeLlms", payload, &resp); err != nil {
-		return nil, "", err
-	}
-	if len(resp.Errors) > 0 {
-		return nil, "", fmt.Errorf("warp graphql: %s", resp.Errors[0].Message)
-	}
-	if !strings.EqualFold(strings.TrimSpace(resp.Data.User.Type), "UserOutput") {
-		if msg := strings.TrimSpace(resp.Data.User.Error.Message); msg != "" {
-			return nil, "", fmt.Errorf("warp graphql: %s", msg)
-		}
-		return nil, "", fmt.Errorf("warp graphql returned %q for agent mode llms", strings.TrimSpace(resp.Data.User.Type))
-	}
-
-	choices := make([]ModelChoice, 0, len(resp.Data.User.User.LLMs.AgentMode.Choices))
-	for _, choice := range resp.Data.User.User.LLMs.AgentMode.Choices {
-		if normalized, ok := normalizeWarpModelChoice(choice.ID, choice.DisplayName); ok {
-			choices = append(choices, normalized)
-		}
-	}
-	return choices, canonicalModelID(resp.Data.User.User.LLMs.AgentMode.DefaultID), nil
-}
-
-func fetchWorkspaceAvailableLLMChoices(ctx context.Context, client *http.Client, jwt string) ([]ModelChoice, error) {
-	payload := map[string]interface{}{
-		"query":         getWorkspaceAvailableLLMsQuery,
-		"operationName": "GetWorkspaceLlmModelRoutingSettings",
+		"query":         getFeatureModelChoicesQuery,
+		"operationName": "GetFeatureModelChoices",
 		"variables": map[string]interface{}{
 			"requestContext": requestContextPayload(),
 		},
@@ -172,12 +78,15 @@ func fetchWorkspaceAvailableLLMChoices(ctx context.Context, client *http.Client,
 				} `json:"error"`
 				User struct {
 					Workspaces []struct {
-						AvailableLLMs struct {
-							Choices []struct {
-								ID          string `json:"id"`
-								DisplayName string `json:"displayName"`
-							} `json:"choices"`
-						} `json:"availableLlms"`
+						FeatureModelChoice struct {
+							AgentMode struct {
+								DefaultID string `json:"defaultId"`
+								Choices   []struct {
+									ID          string `json:"id"`
+									DisplayName string `json:"displayName"`
+								} `json:"choices"`
+							} `json:"agentMode"`
+						} `json:"featureModelChoice"`
 					} `json:"workspaces"`
 				} `json:"user"`
 			} `json:"user"`
@@ -186,28 +95,33 @@ func fetchWorkspaceAvailableLLMChoices(ctx context.Context, client *http.Client,
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetWorkspaceLlmModelRoutingSettings", payload, &resp); err != nil {
-		return nil, err
+	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetFeatureModelChoices", payload, &resp); err != nil {
+		return nil, "", err
 	}
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("warp graphql: %s", resp.Errors[0].Message)
+		return nil, "", fmt.Errorf("warp graphql: %s", resp.Errors[0].Message)
 	}
 	if !strings.EqualFold(strings.TrimSpace(resp.Data.User.Type), "UserOutput") {
 		if msg := strings.TrimSpace(resp.Data.User.Error.Message); msg != "" {
-			return nil, fmt.Errorf("warp graphql: %s", msg)
+			return nil, "", fmt.Errorf("warp graphql: %s", msg)
 		}
-		return nil, fmt.Errorf("warp graphql returned %q for workspace llms", strings.TrimSpace(resp.Data.User.Type))
+		return nil, "", fmt.Errorf("warp graphql returned %q for feature model choices", strings.TrimSpace(resp.Data.User.Type))
 	}
 
 	var choices []ModelChoice
+	defaultID := ""
 	for _, workspace := range resp.Data.User.User.Workspaces {
-		for _, choice := range workspace.AvailableLLMs.Choices {
+		agentMode := workspace.FeatureModelChoice.AgentMode
+		if defaultID == "" {
+			defaultID = canonicalModelID(agentMode.DefaultID)
+		}
+		for _, choice := range agentMode.Choices {
 			if normalized, ok := normalizeWarpModelChoice(choice.ID, choice.DisplayName); ok {
 				choices = append(choices, normalized)
 			}
 		}
 	}
-	return choices, nil
+	return choices, defaultID, nil
 }
 
 func normalizeWarpModelChoice(id, name string) (ModelChoice, bool) {

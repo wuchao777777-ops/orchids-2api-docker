@@ -244,15 +244,10 @@ func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, opera
 		return fmt.Errorf("warp graphql create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(jwt))
-	req.Header.Set("X-Warp-Client-ID", "warp-app")
-	req.Header.Set("X-Warp-Client-Version", clientVersion)
-	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
-	req.Header.Set("X-Warp-OS-Name", clientOSName)
-	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	applyWarpClientHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Encoding", "gzip,br")
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept-Encoding", "gzip")
 
 	if client == nil {
 		client = http.DefaultClient
@@ -308,10 +303,10 @@ func requestContextPayload() map[string]interface{} {
 			"version": clientVersion,
 		},
 		"osContext": map[string]interface{}{
-			"category":           clientOSCategory,
+			"category":           warpOSCategory(),
 			"linuxKernelVersion": nil,
-			"name":               clientOSName,
-			"version":            clientOSVersion,
+			"name":               warpOSName(),
+			"version":            warpOSVersion(),
 		},
 	}
 }

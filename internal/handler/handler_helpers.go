@@ -168,13 +168,20 @@ func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices 
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil || choices == nil || len(choices.Accounts) == 0 {
 		return true
 	}
-	visible := h.visibleWarpModelSet(ctx)
-	if visible == nil {
-		return warp.ChoicesSupportModel(choices, modelID)
-	}
 	resolvedModelID := normalizeRequestedModelID(modelID)
 	if resolvedModelID == "" {
 		return true
+	}
+	visible := h.visibleWarpModelSet(ctx)
+	if visible == nil {
+		for _, models := range choices.Accounts {
+			for _, cachedModel := range models {
+				if normalizeRequestedModelID(cachedModel) == resolvedModelID {
+					return true
+				}
+			}
+		}
+		return false
 	}
 	_, ok := visible[resolvedModelID]
 	return ok

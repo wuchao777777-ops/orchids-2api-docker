@@ -173,16 +173,11 @@ func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *de
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("X-Warp-Client-ID", clientID)
-	req.Header.Set("X-Warp-Client-Version", clientVersion)
-	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
-	req.Header.Set("X-Warp-OS-Name", clientOSName)
-	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	applyWarpClientHeaders(req)
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-	req.Header.Set("User-Agent", "")
 
 	if logger != nil {
 		headers := map[string]string{}

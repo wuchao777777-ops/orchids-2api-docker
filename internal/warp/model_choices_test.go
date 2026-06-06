@@ -12,19 +12,19 @@ import (
 	"time"
 )
 
-func TestFetchUserAgentModeLLMChoices_NormalizesIDsAndDefault(t *testing.T) {
+func TestFetchFeatureAgentModeModelChoices_NormalizesIDsAndDefault(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/graphql/v2" {
 			t.Fatalf("path=%q want /graphql/v2", got)
 		}
-		if got := r.URL.Query().Get("op"); got != "GetUserAgentModeLlms" {
-			t.Fatalf("op=%q want GetUserAgentModeLlms", got)
+		if got := r.URL.Query().Get("op"); got != "GetFeatureModelChoices" {
+			t.Fatalf("op=%q want GetFeatureModelChoices", got)
 		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("read body: %v", err)
 		}
-		if !strings.Contains(string(body), "\"operationName\":\"GetUserAgentModeLlms\"") {
+		if !strings.Contains(string(body), "\"operationName\":\"GetFeatureModelChoices\"") {
 			t.Fatalf("request body missing operation name: %s", string(body))
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -33,15 +33,19 @@ func TestFetchUserAgentModeLLMChoices_NormalizesIDsAndDefault(t *testing.T) {
 				"user": {
 					"__typename": "UserOutput",
 					"user": {
-						"llms": {
-							"agentMode": {
-								"defaultId": "gpt-5.1-medium",
-								"choices": [
-									{"id": "claude-4.6-sonnet", "displayName": "Claude 4.6 Sonnet"},
-									{"id": "gpt-5.1-medium", "displayName": "GPT 5.1 Medium"}
-								]
+						"workspaces": [
+							{
+								"featureModelChoice": {
+									"agentMode": {
+										"defaultId": "gpt-5.1-medium",
+										"choices": [
+											{"id": "claude-4.6-sonnet", "displayName": "Claude 4.6 Sonnet"},
+											{"id": "gpt-5.1-medium", "displayName": "GPT 5.1 Medium"}
+										]
+									}
+								}
 							}
-						}
+						]
 					}
 				}
 			}
@@ -49,9 +53,9 @@ func TestFetchUserAgentModeLLMChoices_NormalizesIDsAndDefault(t *testing.T) {
 	}))
 	defer server.Close()
 
-	choices, defaultID, err := fetchUserAgentModeLLMChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt")
+	choices, defaultID, err := fetchFeatureAgentModeModelChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt")
 	if err != nil {
-		t.Fatalf("fetchUserAgentModeLLMChoices() error: %v", err)
+		t.Fatalf("fetchFeatureAgentModeModelChoices() error: %v", err)
 	}
 	if defaultID != "gpt-5.1-medium" {
 		t.Fatalf("defaultID=%q want gpt-5.1-medium", defaultID)
@@ -63,69 +67,11 @@ func TestFetchUserAgentModeLLMChoices_NormalizesIDsAndDefault(t *testing.T) {
 	}
 }
 
-func TestFetchWorkspaceAvailableLLMChoices_ReturnsChoices(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("op"); got != "GetWorkspaceLlmModelRoutingSettings" {
-			t.Fatalf("op=%q want GetWorkspaceLlmModelRoutingSettings", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": {
-				"user": {
-					"__typename": "UserOutput",
-					"user": {
-						"workspaces": [
-							{
-								"availableLlms": {
-									"choices": [
-										{"id": "auto", "displayName": "Auto"},
-										{"id": "gpt-5.1-codex-medium", "displayName": "GPT 5.1 Codex Medium"}
-									]
-								}
-							}
-						]
-					}
-				}
-			}
-		}`))
-	}))
-	defer server.Close()
-
-	choices, err := fetchWorkspaceAvailableLLMChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt")
-	if err != nil {
-		t.Fatalf("fetchWorkspaceAvailableLLMChoices() error: %v", err)
-	}
-	gotIDs := []string{choices[0].ID, choices[1].ID}
-	wantIDs := []string{"auto", "gpt-5.1-codex-medium"}
-	if !slices.Equal(gotIDs, wantIDs) {
-		t.Fatalf("choice ids=%+v want %+v", gotIDs, wantIDs)
-	}
-}
-
-func TestFetchDiscoveredModelChoices_PrefersAgentModeOverWorkspaceCatalog(t *testing.T) {
+func TestFetchDiscoveredModelChoices_UsesFeatureAgentMode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Query().Get("op") {
-		case "GetUserAgentModeLlms":
-			_, _ = w.Write([]byte(`{
-				"data": {
-					"user": {
-						"__typename": "UserOutput",
-						"user": {
-							"llms": {
-								"agentMode": {
-									"defaultId": "auto",
-									"choices": [
-										{"id": "auto", "displayName": "Auto"},
-										{"id": "gpt-5.2-medium", "displayName": "GPT 5.2 Medium"}
-									]
-								}
-							}
-						}
-					}
-				}
-			}`))
-		case "GetWorkspaceLlmModelRoutingSettings":
+		case "GetFeatureModelChoices":
 			_, _ = w.Write([]byte(`{
 				"data": {
 					"user": {
@@ -133,11 +79,14 @@ func TestFetchDiscoveredModelChoices_PrefersAgentModeOverWorkspaceCatalog(t *tes
 						"user": {
 							"workspaces": [
 								{
-									"availableLlms": {
-										"choices": [
-											{"id": "claude-4.6-opus-high", "displayName": "Claude 4.6 Opus"},
-											{"id": "gemini-3.1-pro", "displayName": "Gemini 3.1 Pro"}
-										]
+									"featureModelChoice": {
+										"agentMode": {
+											"defaultId": "auto",
+											"choices": [
+												{"id": "auto", "displayName": "Auto"},
+												{"id": "gpt-5.2-medium", "displayName": "GPT 5.2 Medium"}
+											]
+										}
 									}
 								}
 							]
@@ -163,8 +112,8 @@ func TestFetchDiscoveredModelChoices_PrefersAgentModeOverWorkspaceCatalog(t *tes
 	if err != nil {
 		t.Fatalf("FetchDiscoveredModelChoices() error: %v", err)
 	}
-	if source != "agent_mode_llms" {
-		t.Fatalf("source=%q want agent_mode_llms", source)
+	if source != "feature_model_choice_agent_mode" {
+		t.Fatalf("source=%q want feature_model_choice_agent_mode", source)
 	}
 	gotIDs := []string{choices[0].ID, choices[1].ID}
 	wantIDs := []string{"auto", "gpt-5.2-medium"}

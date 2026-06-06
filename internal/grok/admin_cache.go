@@ -161,7 +161,8 @@ func (h *Handler) listCacheOnlineAccounts(r *http.Request) []map[string]interfac
 		if !isGrokAccount(acc) || acc == nil || !acc.Enabled {
 			continue
 		}
-		token := strings.TrimSpace(grokAccountToken(acc))
+		rawToken := strings.TrimSpace(grokAccountToken(acc))
+		token := normalizeOnlineToken(rawToken)
 		if token == "" {
 			continue
 		}
@@ -171,6 +172,7 @@ func (h *Handler) listCacheOnlineAccounts(r *http.Request) []map[string]interfac
 		seen[token] = struct{}{}
 		out = append(out, map[string]interface{}{
 			"token":               token,
+			"raw_token":           rawToken,
 			"token_masked":        maskCacheToken(token),
 			"pool":                inferTokenPool(acc),
 			"status":              adminTokenStatusFromAccount(acc),
@@ -183,6 +185,19 @@ func (h *Handler) listCacheOnlineAccounts(r *http.Request) []map[string]interfac
 		right, _ := out[j]["token"].(string)
 		return left < right
 	})
+	return out
+}
+
+func cacheOnlineAccountMap(onlineAccounts []map[string]interface{}) map[string]map[string]interface{} {
+	out := make(map[string]map[string]interface{}, len(onlineAccounts))
+	for _, item := range onlineAccounts {
+		token, _ := item["token"].(string)
+		token = normalizeOnlineToken(token)
+		if token == "" {
+			continue
+		}
+		out[token] = item
+	}
 	return out
 }
 
@@ -424,15 +439,7 @@ func (h *Handler) HandleAdminCache(w http.ResponseWriter, r *http.Request) {
 	}
 
 	onlineAccounts := h.listCacheOnlineAccounts(r)
-	accountByToken := make(map[string]map[string]interface{}, len(onlineAccounts))
-	for _, item := range onlineAccounts {
-		token, _ := item["token"].(string)
-		token = strings.TrimSpace(token)
-		if token == "" {
-			continue
-		}
-		accountByToken[token] = item
-	}
+	accountByToken := cacheOnlineAccountMap(onlineAccounts)
 
 	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
 	selectedToken := normalizeOnlineToken(r.URL.Query().Get("token"))
@@ -827,15 +834,7 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 		return
 	}
 
-	accountByToken := make(map[string]map[string]interface{}, len(onlineAccounts))
-	for _, item := range onlineAccounts {
-		token, _ := item["token"].(string)
-		token = normalizeOnlineToken(token)
-		if token == "" {
-			continue
-		}
-		accountByToken[token] = item
-	}
+	accountByToken := cacheOnlineAccountMap(onlineAccounts)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	task := newNSFWBatchTask(len(tokens), cancel)

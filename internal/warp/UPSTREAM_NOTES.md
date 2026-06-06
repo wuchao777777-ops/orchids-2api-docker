@@ -1,7 +1,8 @@
 # WARP Upstream Notes
 
-These notes track facts verified against WARP's open-source client and the pinned
-`warp-proto-apis` revision used by that client.
+These notes track facts verified against WARP's open-source client at
+`warpdotdev/warp@1c2d4cc` and the pinned `warp-proto-apis` revision used by
+that client.
 
 ## Auth Storage
 
@@ -29,9 +30,14 @@ WARP currently pins:
 `https://github.com/warpdotdev/warp-proto-apis.git@c67de64fc4949f693a679552dc88cebc9f7d0180`
 
 The public `warpdotdev/warp` repository currently points at this same proto
-revision. A shallow checkout of that repository did not include the Rust
-application sources that consume the multi-agent API, so the reliable comparison
-surface is the pinned proto API, not a visible client implementation.
+revision and includes Rust application sources that consume the multi-agent API.
+The most relevant upstream comparison points are:
+
+- `app/src/ai/agent/api/impl.rs`
+- `app/src/server/server_api.rs`
+- `app/src/server/server_api/ai.rs`
+- `crates/graphql/src/api/queries/get_feature_model_choices.rs`
+- `crates/warp_graphql_schema/api/schema.graphql`
 
 The useful files are under `apis/multi_agent/v1`:
 
@@ -39,40 +45,51 @@ The useful files are under `apis/multi_agent/v1`:
 - `response.proto`
 - `task.proto`
 
-The generated Go code in that repository is not published as an importable Go
-module. Importing it directly would require vendoring/generated code or adding a
-local generation step. A generated-proto request builder was tested and reverted
-after live requests started failing with HTTP 400; production currently keeps
-the byte template because that shape is known to be accepted by Warp.
+The generated Go package is importable through
+`github.com/warpdotdev/warp-proto-apis/apis/multi_agent/v1/gen/go`. Production
+now marshals this official request type directly; the previous captured
+hex/byte-template builder has been removed.
 
 ## Borrowed Behaviors
 
 - Prefer nested persisted tokens such as `id_token.refresh_token`.
 - Match official WARP headers for client version and OS metadata.
+- Suppress `User-Agent` and rely on `X-Warp-Client-ID`, matching Warp's custom
+  client-role header behavior.
 - Parse SSE base64 protobuf response events.
 - Keep fallback tool field numbers aligned with `task.proto`.
 
 ## Current Request Shape
 
-Decoded with the pinned `request.proto`, `realRequestTemplate` is a valid
-`warp.multi_agent.v1.Request` with:
+Orchids-2api now imports the same generated Go proto module used by the pinned
+`warp-proto-apis` revision and marshals a structured
+`warp.multi_agent.v1.Request` instead of patching a captured hex template.
 
-- `settings.model_config.base = "claude-4-5-opus"`
-- `settings.model_config.cli_agent = "cli-agent-auto"`
+Current request construction mirrors upstream's `api::Request` shape:
+
+- `task_context` is present with an empty task list.
+- `input.context` includes directory, OS, shell, and current timestamp.
+- `input.type = user_inputs`.
+- `user_inputs.inputs[].user_query.query` carries the current user turn.
+- The handler logs the same `UserQuery.query` preview that the request builder
+  marshals, instead of generating a separate local Warp prompt.
+- `metadata.conversation_id` is populated only for server-issued Warp
+  conversation IDs, not local `chat_*` placeholders.
+- `settings.model_config.base` is the requested model.
+- `settings.model_config.cli_agent = "cli-agent-auto"`.
+- `settings.model_config.computer_use_agent = "computer-use-agent-auto"`.
+- `settings.model_config.coding` is left empty because official Warp no longer
+  sends this deprecated role field.
+- `settings.model_config.base_model_context_window_limit = 0`.
 - `settings.supports_parallel_tool_calls = true`
 - `settings.supports_reasoning_message = true`
 - `settings.web_search_enabled = true`
 - `settings.supports_v4a_file_diffs = true`
-- `settings.supported_tools` includes shell, file, grep, MCP, subagent,
-  document, and prompt-suggestion tool types.
-- `settings.supported_cli_agent_tools` includes long-running shell output,
-  grep, glob, read files, and search codebase.
-
-The request builder patches only the `model_config.base` value in this template.
-It does not currently populate the newer `coding`, `computer_use_agent`,
-`base_model_context_window_limit`, `custom_model_providers`,
-`supports_bundled_skills`, `supports_research_agent`, or
-`supports_orchestration_v2` fields.
+- `settings.supported_tools` follows upstream local-session defaults for shell,
+  file, grep, MCP, subagent, document, prompt-suggestion, apply-diff, and
+  search-codebase tools when tools are enabled.
+- `settings.supported_cli_agent_tools` follows upstream local-session defaults.
+- `mcp_context.servers` groups request-declared tools under an Orchids server.
 
 ## Model Discovery and Availability
 
@@ -86,11 +103,18 @@ such as Claude/Gemini variants that later fail at `/ai/multi-agent` with errors
 like `the requested base model (...) is not allowed for your account` or `No
 model available`.
 
+Upstream behavior:
+
+- Fetch feature-specific model choices with `GetFeatureModelChoices`.
+- Use `workspaces[].featureModelChoice.agentMode` for agent-mode callable
+  choices.
+- `workspace.availableLlms(includeAllConfigurableLlms: true)` remains a broad
+  catalog surface, not the current agent-mode routing source.
+
 Current behavior:
 
-- Prefer `user.llms.agentMode.choices` as the trusted callable model source.
-- Use `workspace.availableLlms` only as a fallback when agentMode returns no
-choices.
+- Prefer `workspaces[].featureModelChoice.agentMode.choices` as the trusted
+  callable model source.
 - Keep `auto-open` as the default Warp model.
 - Map old auto aliases (`auto`, `auto-efficient`, `auto-genius`) to `auto-open`.
 - Retry Warp HTTP 400 model-availability failures once with `auto-open`.
@@ -100,27 +124,25 @@ choices.
 
 ## Known Differences
 
-- Official `Request.Settings.ModelConfig` is role-specific. We send one patched
-  base model and retain the template's `cli_agent = "cli-agent-auto"`.
-- Official `MCPContext.resources` and `MCPContext.tools` are deprecated in favor
-  of grouped `MCPContext.servers`. We still send top-level tools for
-  compatibility.
+- Official `RequestParams` can send separate coding, CLI-agent, computer-use,
+  BYO key, custom provider, research-agent, bundled-skills, and orchestration
+  settings. Orchids-2api currently uses official default role models and leaves
+  those optional advanced settings disabled.
+- Official client converts native Warp conversation state into separate
+  `UserInputs` and action-result inputs. Orchids-2api receives OpenAI/Claude
+  style chat history, so it bridges the current user/tool-result turn into one
+  `UserQuery.query` until a full action-result mapper is implemented.
 - Official `ResponseEvent.StreamFinished.should_refresh_model_config` tells the
   client when its model config is stale. We now parse and log this signal, but
   do not yet trigger an automatic model refresh.
 - Official `StreamFinished` contains request cost and conversation usage
   metadata. We currently keep token usage only.
 - Official model refresh is tied to a single user's current model configuration.
-  We still need a per-account allowedness cache/probe layer if we want the
-  model page to represent every pooled account precisely.
-- The public client repository's full multi-agent consumer code is not present,
-  so further behavioral parity should be validated by generated proto round-trip
-  tests and live debug traces.
+  Orchids-2api keeps a per-account model-choice cache because it routes over a
+  pooled Warp account set.
 
 ## Recommended Next Step
 
-Do not replace `realRequestTemplate` wholesale until we can capture an official
-accepted request for the same client version and verify byte-for-byte parity.
 The safer next step is a low-concurrency per-account model probe/cache:
 
 - Probe only selected/default candidate models, not the full configurable
@@ -130,3 +152,6 @@ The safer next step is a low-concurrency per-account model probe/cache:
   an account known to allow it.
 - Consume `should_refresh_model_config` by scheduling a serialized Warp refresh
   and invalidating the relevant allowedness cache.
+- Add a full mapper from incoming tool-result messages to official
+  `Request.Input.UserInputs.UserInput.ToolCallResult` when we want tighter
+  multi-turn parity with Warp's native conversation state.

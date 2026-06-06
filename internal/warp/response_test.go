@@ -474,16 +474,25 @@ func TestExtractStringValue_IgnoresBinaryPayload(t *testing.T) {
 
 func appendBytesField(fieldNum int, payload []byte) []byte {
 	var buf []byte
-	buf = appendVarint(buf, uint64(fieldNum<<3|2))
-	buf = appendVarint(buf, uint64(len(payload)))
+	buf = appendTestVarint(buf, uint64(fieldNum<<3|2))
+	buf = appendTestVarint(buf, uint64(len(payload)))
 	buf = append(buf, payload...)
 	return buf
 }
 
 func appendVarintField(fieldNum int, value uint64) []byte {
 	var buf []byte
-	buf = appendVarint(buf, uint64(fieldNum<<3))
-	buf = appendVarint(buf, value)
+	buf = appendTestVarint(buf, uint64(fieldNum<<3))
+	buf = appendTestVarint(buf, value)
+	return buf
+}
+
+func appendTestVarint(buf []byte, v uint64) []byte {
+	for v >= 0x80 {
+		buf = append(buf, byte(v)|0x80)
+		v >>= 7
+	}
+	buf = append(buf, byte(v))
 	return buf
 }
 

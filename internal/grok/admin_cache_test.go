@@ -240,6 +240,38 @@ func TestHandleAdminCache_OnlineSelectedRealtimeCount(t *testing.T) {
 	}
 }
 
+func TestCacheOnlineAccountMap_NormalizesTokens(t *testing.T) {
+	accounts := []map[string]interface{}{
+		{
+			"token":               "sso=t1",
+			"token_masked":        "masked-t1",
+			"last_asset_clear_at": int64(123),
+		},
+		{
+			"token":               "foo=1; sso=t2; bar=2",
+			"token_masked":        "masked-t2",
+			"last_asset_clear_at": int64(456),
+		},
+	}
+
+	accountByToken := cacheOnlineAccountMap(accounts)
+	if _, ok := accountByToken["sso=t1"]; ok {
+		t.Fatalf("map should not keep cookie-style key")
+	}
+	if _, ok := accountByToken["foo=1; sso=t2; bar=2"]; ok {
+		t.Fatalf("map should not keep full cookie key")
+	}
+
+	masked, lastClear := onlineAccountInfo(accountByToken, "t1")
+	if masked != "masked-t1" || lastClear != int64(123) {
+		t.Fatalf("t1 info mismatch masked=%q lastClear=%v", masked, lastClear)
+	}
+	masked, lastClear = onlineAccountInfo(accountByToken, "t2")
+	if masked != "masked-t2" || lastClear != int64(456) {
+		t.Fatalf("t2 info mismatch masked=%q lastClear=%v", masked, lastClear)
+	}
+}
+
 func TestHandleAdminCacheOnlineClear(t *testing.T) {
 	type state struct {
 		assets map[string][]string

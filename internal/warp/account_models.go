@@ -19,10 +19,6 @@ type AccountModelChoices struct {
 	Sources  map[string]string   `json:"sources,omitempty"`
 }
 
-func FreeOnlyModelIDs() []string {
-	return []string{defaultModel}
-}
-
 func LoadAccountModelChoices(ctx context.Context, s *store.Store) (*AccountModelChoices, error) {
 	if s == nil {
 		return nil, nil
@@ -110,32 +106,12 @@ func EffectiveAccountModelIDs(acc *store.Account, choices *AccountModelChoices) 
 				return models
 			}
 		}
-		return FreeOnlyModelIDs()
+		return []string{defaultModel}
 	}
 	if choices == nil || acc == nil || acc.ID == 0 {
 		return nil
 	}
 	return choices.Accounts[strconv.FormatInt(acc.ID, 10)]
-}
-
-func AccountSupportsModel(choices *AccountModelChoices, accountID int64, modelID string) bool {
-	if choices == nil || len(choices.Accounts) == 0 || accountID == 0 {
-		return true
-	}
-	modelID = canonicalModelID(modelID)
-	if modelID == "" {
-		return true
-	}
-	models := choices.Accounts[strconv.FormatInt(accountID, 10)]
-	if len(models) == 0 {
-		return true
-	}
-	for _, model := range models {
-		if model == modelID {
-			return true
-		}
-	}
-	return false
 }
 
 func AccountSupportsModelForAccount(choices *AccountModelChoices, acc *store.Account, modelID string) bool {
@@ -158,24 +134,6 @@ func AccountSupportsModelForAccount(choices *AccountModelChoices, acc *store.Acc
 	for _, model := range models {
 		if model == modelID {
 			return true
-		}
-	}
-	return false
-}
-
-func ChoicesSupportModel(choices *AccountModelChoices, modelID string) bool {
-	if choices == nil || len(choices.Accounts) == 0 {
-		return true
-	}
-	modelID = canonicalModelID(modelID)
-	if modelID == "" {
-		return true
-	}
-	for _, models := range choices.Accounts {
-		for _, model := range models {
-			if model == modelID {
-				return true
-			}
 		}
 	}
 	return false

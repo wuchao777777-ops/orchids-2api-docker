@@ -1,6 +1,10 @@
 package warp
 
-import "strings"
+import (
+	"net/http"
+	"runtime"
+	"strings"
+)
 
 const (
 	warpAPIBaseURL     = "https://app.warp.dev"
@@ -14,12 +18,9 @@ const (
 	warpFirebaseURL   = "https://securetoken.googleapis.com/v1/token?key=" + warpFirebaseKey
 	warpTokenProxyURL = warpAPIBaseURL + "/proxy/token?key=" + warpFirebaseKey
 	clientVersion     = "v0.2026.05.06.15.42.stable_03"
-	userAgent         = "Warp/" + clientVersion
 	clientID          = "warp-app"
-	clientOSCategory  = "Windows"
-	clientOSName      = "Windows"
-	clientOSVersion   = "10.0.26200"
 	identifier        = "cli-agent-auto"
+	computerUseModel  = "computer-use-agent-auto"
 )
 
 const defaultModel = "auto-open"
@@ -47,4 +48,43 @@ func canonicalModelID(model string) string {
 
 func NormalizeModelID(model string) string {
 	return canonicalModelID(model)
+}
+
+func applyWarpClientHeaders(req *http.Request) {
+	if req == nil {
+		return
+	}
+	req.Header.Set("X-Warp-Client-ID", clientID)
+	req.Header.Set("X-Warp-Client-Version", clientVersion)
+	if category := warpOSCategory(); category != "" {
+		req.Header.Set("X-Warp-OS-Category", category)
+	}
+	if name := warpOSName(); name != "" {
+		req.Header.Set("X-Warp-OS-Name", name)
+	}
+	if version := warpOSVersion(); version != "" {
+		req.Header.Set("X-Warp-OS-Version", version)
+	}
+	req.Header.Set("User-Agent", "")
+}
+
+func warpOSCategory() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "MacOS"
+	case "windows":
+		return "Windows"
+	case "linux":
+		return "Linux"
+	default:
+		return runtime.GOOS
+	}
+}
+
+func warpOSName() string {
+	return warpOSCategory()
+}
+
+func warpOSVersion() string {
+	return ""
 }

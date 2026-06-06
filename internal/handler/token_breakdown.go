@@ -49,8 +49,8 @@ func estimateOrchidsInputTokenBreakdown(promptText string, history []map[string]
 	return estimateInputTokenBreakdown(promptText, history, nil)
 }
 
-func estimateWarpInputTokenBreakdown(promptText, model string, messages []prompt.Message, tools []interface{}, disableWarpTools bool) (inputTokenBreakdown, string, error) {
-	estimate, err := warp.EstimateInputTokens(promptText, model, messages, tools, disableWarpTools)
+func estimateWarpInputTokenBreakdown(promptText, model string, messages []prompt.Message, systemItems []prompt.SystemItem, tools []interface{}, disableWarpTools bool, conversationID string) (inputTokenBreakdown, string, error) {
+	estimate, err := warp.EstimateInputTokens(promptText, model, messages, systemItems, tools, disableWarpTools, conversationID)
 	if err != nil {
 		return inputTokenBreakdown{}, "", err
 	}

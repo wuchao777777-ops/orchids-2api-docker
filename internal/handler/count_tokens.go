@@ -30,7 +30,7 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 	profile := ""
 	channel := channelFromPath(r.URL.Path)
 	if channel == "warp" {
-		if warpBD, warpProfile, err := estimateWarpInputTokenBreakdown("", req.Model, req.Messages, req.Tools, len(req.Tools) == 0); err == nil {
+		if warpBD, warpProfile, err := estimateWarpInputTokenBreakdown("", req.Model, req.Messages, req.System, req.Tools, len(req.Tools) == 0, ""); err == nil {
 			breakdown = warpBD
 			profile = warpProfile
 		}

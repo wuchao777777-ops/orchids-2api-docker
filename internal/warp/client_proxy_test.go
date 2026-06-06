@@ -134,7 +134,7 @@ func TestNewHTTPClient_ProxyBypassAndHTTPS(t *testing.T) {
 	}
 }
 
-func TestDoStreamRequest_SendsLegacyWarpHeaders(t *testing.T) {
+func TestDoStreamRequest_SendsOfficialWarpHeaders(t *testing.T) {
 	client := NewFromAccount(&store.Account{ID: 1, RefreshToken: "token-1"}, &config.Config{})
 	client.session.mu.Lock()
 	client.session.jwt = "test-jwt"
@@ -143,9 +143,13 @@ func TestDoStreamRequest_SendsLegacyWarpHeaders(t *testing.T) {
 
 	var seenAccept string
 	var seenClientID string
+	var seenOSCategory string
+	var seenUserAgent string
 	client.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		seenAccept = req.Header.Get("Accept")
 		seenClientID = req.Header.Get("X-Warp-Client-ID")
+		seenOSCategory = req.Header.Get("X-Warp-OS-Category")
+		seenUserAgent = req.Header.Get("User-Agent")
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewReader(nil)),
@@ -164,6 +168,12 @@ func TestDoStreamRequest_SendsLegacyWarpHeaders(t *testing.T) {
 	}
 	if seenClientID != clientID {
 		t.Fatalf("X-Warp-Client-ID=%q want %q", seenClientID, clientID)
+	}
+	if seenOSCategory != warpOSCategory() {
+		t.Fatalf("X-Warp-OS-Category=%q want %q", seenOSCategory, warpOSCategory())
+	}
+	if seenUserAgent != "" {
+		t.Fatalf("User-Agent=%q want empty", seenUserAgent)
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestFetchRequestLimitInfo_UsesCodeFreeMaxGraphQLV2(t *testing.T) {
+func TestFetchRequestLimitInfo_UsesOfficialWarpGraphQLHeaders(t *testing.T) {
 	t.Parallel()
 
 	client := &http.Client{
@@ -18,6 +18,15 @@ func TestFetchRequestLimitInfo_UsesCodeFreeMaxGraphQLV2(t *testing.T) {
 			}
 			if got := req.Header.Get("X-Warp-Client-ID"); got != "warp-app" {
 				t.Fatalf("unexpected client id header: %q", got)
+			}
+			if got := req.Header.Get("X-Warp-OS-Category"); got != warpOSCategory() {
+				t.Fatalf("unexpected os category header: %q", got)
+			}
+			if got := req.Header.Get("User-Agent"); got != "" {
+				t.Fatalf("unexpected user agent header: %q", got)
+			}
+			if got := req.Header.Get("Accept-Encoding"); got != "gzip" {
+				t.Fatalf("unexpected accept encoding header: %q", got)
 			}
 			body := `{"data":{"user":{"__typename":"UserOutput","user":{"workspaces":[{"uid":"ws-1","bonusGrantsInfo":{"grants":[]}}],"requestLimitInfo":{"isUnlimited":false,"nextRefreshTime":"2026-03-15T00:00:00Z","requestLimit":100,"requestsUsedSinceLastRefresh":25,"requestLimitRefreshDuration":"MONTHLY"},"bonusGrants":[{"requestCreditsGranted":7,"requestCreditsRemaining":7,"expiration":"2026-03-20T00:00:00Z","reason":"bonus","userFacingMessage":"bonus"}]}}},"errors":[]}`
 			return &http.Response{

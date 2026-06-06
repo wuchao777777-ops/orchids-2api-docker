@@ -47,22 +47,17 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 			t.Fatalf("models=%v want %v", got, want)
 		}
 	}
-	if AccountSupportsModel(choices, 1, "claude-4.6-opus") {
+	paid := &store.Account{ID: 1, AccountType: "warp", WarpMonthlyLimit: 1500, WarpMonthlyRemaining: 100}
+	if AccountSupportsModelForAccount(choices, paid, "claude-4.6-opus") {
 		t.Fatal("expected account to reject missing claude alias")
 	}
-	if AccountSupportsModel(choices, 1, "gemini-3-pro") {
+	if AccountSupportsModelForAccount(choices, paid, "gemini-3-pro") {
 		t.Fatal("expected account not to support missing model")
 	}
-	if !ChoicesSupportModel(choices, "gpt-5.2-medium") {
-		t.Fatal("expected choices to support cached model")
-	}
-	if ChoicesSupportModel(choices, "gemini-3-pro") {
-		t.Fatal("expected choices not to support model missing from every account")
-	}
-	if !AccountSupportsModel(choices, 2, "gemini-3-pro") {
+	if !AccountSupportsModelForAccount(choices, &store.Account{ID: 2, AccountType: "warp"}, "gemini-3-pro") {
 		t.Fatal("expected missing account cache to fall back open")
 	}
-	if AccountSupportsModel(choices, 1, DefaultModel()) {
+	if AccountSupportsModelForAccount(choices, paid, DefaultModel()) {
 		t.Fatal("expected default model to require explicit account support when choices are cached")
 	}
 	exhausted := &store.Account{

@@ -484,11 +484,7 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Warp-Client-ID", clientID)
-	req.Header.Set("X-Warp-Client-Version", clientVersion)
-	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
-	req.Header.Set("X-Warp-OS-Name", clientOSName)
-	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	applyWarpClientHeaders(req)
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("X-Warp-Experiment-Id", experimentID)
 	req.Header.Set("X-Warp-Experiment-Bucket", experimentBuck)

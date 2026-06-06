@@ -919,8 +919,8 @@ func joinWarpDiscoverySources(sourceSet map[string]struct{}) string {
 	if len(sourceSet) == 0 {
 		return "warp_graphql"
 	}
-	ordered := make([]string, 0, 2)
-	for _, part := range []string{"agent_mode_llms", "workspace_available_llms"} {
+	ordered := make([]string, 0, 1)
+	for _, part := range []string{"feature_model_choice_agent_mode"} {
 		if _, ok := sourceSet[part]; ok {
 			ordered = append(ordered, part)
 		}
@@ -1056,8 +1056,11 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 }
 
 func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
-	return strings.EqualFold(strings.TrimSpace(channel), "warp") &&
-		strings.Contains(strings.TrimSpace(source), "agent_mode_llms")
+	if !strings.EqualFold(strings.TrimSpace(channel), "warp") {
+		return false
+	}
+	source = strings.TrimSpace(source)
+	return strings.Contains(source, "feature_model_choice_agent_mode")
 }
 
 func chooseRefreshedDefaultModel(channel string, existing map[string]*store.Model, ordered []discoveredModel) string {
