@@ -105,6 +105,19 @@ a {
   color: inherit;
 }
 
+:focus-visible {
+  outline: 2px solid rgba(17, 17, 17, 0.42);
+  outline-offset: 3px;
+}
+
+button,
+input,
+select,
+textarea,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
 h1,
 h2,
 h3,
@@ -185,6 +198,11 @@ h6 {
   height: 2px;
   border-radius: 999px;
   background: var(--text-main);
+}
+
+.mobile-menu-btn[aria-expanded="true"] {
+  border-color: rgba(17, 17, 17, 0.22);
+  background: rgba(17, 17, 17, 0.08);
 }
 
 .sidebar-overlay {
@@ -2825,6 +2843,38 @@ tr:hover td {
   .table-wrap {
     display: none;
   }
+
+  .main-content {
+    padding: 18px 14px 24px;
+  }
+
+  .filter-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .filter-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .filter-tabs .tab-item {
+    flex: 0 0 auto;
+  }
+
+  .toast-container {
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    right: 12px;
+    left: 12px;
+    align-items: stretch;
+    transform: none;
+  }
+
+  .toast {
+    min-width: 0;
+    max-width: none;
+  }
 }
 
 @media (max-width: 420px) {
@@ -3261,6 +3311,7 @@ body::before,
   border-radius: 0;
   background: transparent;
   flex-wrap: wrap;
+  scroll-padding-inline: 8px;
 }
 
 .tab-item {
@@ -3643,6 +3694,37 @@ textarea.form-input {
   background: #fff;
   color: #171717;
   box-shadow: var(--shadow-md);
+}
+
+.toast[data-type="success"] {
+  border-left-color: #3f8f63;
+}
+
+.toast[data-type="info"] {
+  border-left-color: #3d7ea6;
+}
+
+.toast[data-type="error"] {
+  border-left-color: #b45b53;
+}
+
+.toast-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #f1ece2;
+  color: #554f45;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.toast-message {
+  min-width: 0;
 }
 
 .doc-shell {

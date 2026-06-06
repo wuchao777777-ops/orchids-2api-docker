@@ -23,6 +23,17 @@
 
 .grok-tabs {
   min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+
+.grok-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.grok-tabs .tab-item {
+  white-space: nowrap;
 }
 
 .grok-section {
@@ -702,10 +713,6 @@
   stroke-width: 2;
 }
 
-.imagine-hidden-compat {
-  display: none !important;
-}
-
 .image-checkbox {
   position: absolute;
   top: 8px;
@@ -1342,6 +1349,7 @@
 @media (max-width: 760px) {
   .grok-tools-page .header-section {
     flex-direction: column;
+    gap: 8px;
   }
 
   .grok-tabs {
@@ -1358,12 +1366,12 @@
   }
 
   .chat-shell {
-    min-height: calc(100dvh - 190px);
+    min-height: calc(100dvh - 172px);
   }
 
   .chat-thread {
     min-height: 0;
-    max-height: calc(100dvh - 300px);
+    max-height: calc(100dvh - 292px);
     padding: 12px;
   }
 
@@ -1381,25 +1389,49 @@
   }
 
   .composer-shell {
-    bottom: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   }
 
   .composer-input {
     flex-wrap: wrap;
     padding: 8px;
+    border-radius: 12px;
   }
 
   .composer-textarea {
     flex-basis: 100%;
     min-width: 0;
+    min-height: 44px;
   }
 
   .composer-actions {
+    width: 100%;
     justify-content: space-between;
+  }
+
+  .model-chip {
+    max-width: calc(100vw - 128px);
   }
 
   .imagine-masonry-controls,
   .imagine-masonry-actions {
+    width: 100%;
     justify-content: space-between;
+  }
+
+  .imagine-masonry-toggle {
+    flex: 1 1 auto;
+  }
+
+  .imagine-masonry-toggle-btn {
+    flex: 1 1 auto;
+  }
+
+  .imagine-masonry-ratio {
+    flex: 1 1 104px;
+  }
+
+  .imagine-masonry-ratio .form-input {
+    width: 100%;
   }
 }

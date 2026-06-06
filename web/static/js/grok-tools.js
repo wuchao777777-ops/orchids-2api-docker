@@ -3443,13 +3443,40 @@
     tabs.forEach((btn) => {
       const active = String(btn.dataset.tab || "").toLowerCase() === nextTab;
       btn.classList.toggle("active", active);
+      btn.setAttribute("aria-selected", active ? "true" : "false");
+      btn.setAttribute("tabindex", active ? "0" : "-1");
+      if (active && typeof btn.scrollIntoView === "function") {
+        btn.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+      }
     });
     saveGrokToolsUIState({ activeToolTab: nextTab });
   }
 
   window.switchGrokToolTab = switchGrokToolTab;
 
+  function bindGrokTabs() {
+    const tablist = document.getElementById("grokToolsTabs");
+    if (!tablist) return;
+    tablist.setAttribute("role", "tablist");
+    tablist.querySelectorAll(".tab-item").forEach((btn) => {
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("type", "button");
+    });
+    tablist.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const tabs = Array.from(tablist.querySelectorAll(".tab-item"));
+      if (!tabs.length) return;
+      event.preventDefault();
+      const current = Math.max(0, tabs.findIndex((btn) => btn.classList.contains("active")));
+      const step = event.key === "ArrowRight" ? 1 : -1;
+      const next = tabs[(current + step + tabs.length) % tabs.length];
+      next.focus();
+      switchGrokToolTab(next.dataset.tab).catch(() => {});
+    });
+  }
+
   function bindEvents() {
+    bindGrokTabs();
 
     const videoStartBtn = document.getElementById("videoStartBtn");
     if (videoStartBtn) {

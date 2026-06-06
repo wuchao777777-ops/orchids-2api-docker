@@ -138,6 +138,8 @@ async function loadConfiguration() {
 
     const cacheTokenCount = document.getElementById("cfg_enable_token_cache");
     cacheTokenCount.checked = normalizeFlagValue(cfg.enable_token_cache);
+    const estimateTokenCache = document.getElementById("cfg_cache_token_count");
+    if (estimateTokenCache) estimateTokenCache.checked = normalizeFlagValue(cfg.cache_token_count);
 
     syncTokenCacheTTLControls(cfg.token_cache_ttl || 300);
     document.getElementById("cfg_token_cache_strategy").value = cfg.token_cache_strategy || "1";
@@ -159,6 +161,7 @@ async function saveConfiguration() {
     proxy_url: document.getElementById("cfg_proxy_url").value.trim(),
     proxy_bypass: parseProxyBypass(proxyBypassRaw),
     enable_token_cache: document.getElementById("cfg_enable_token_cache").checked ? "true" : "false",
+    cache_token_count: document.getElementById("cfg_cache_token_count")?.checked ? "true" : "false",
     token_cache_ttl: getTokenCacheTTLValue(),
     token_cache_strategy: document.getElementById("cfg_token_cache_strategy").value,
   };
@@ -628,7 +631,8 @@ function updateMemoryEstimation() {
 
 async function loadCacheStats() {
   const statsEl = document.getElementById("cacheStatsText");
-  if (!statsEl) return;
+  const estimateStatsEl = document.getElementById("estimateCacheStatsText");
+  if (!statsEl && !estimateStatsEl) return;
 
   try {
     const res = await fetch("/api/token-cache/stats");
@@ -636,15 +640,27 @@ async function loadCacheStats() {
       throw new Error(await res.text());
     }
     const data = await res.json();
+    const prompt = data?.data?.prompt_cache || {};
+    const estimate = data?.data?.estimate_cache || {};
 
-    if (data.code !== 0 || !data.data.connected) {
-      statsEl.textContent = "缓存未启用";
-      return;
+    if (statsEl) {
+      if (data.code !== 0 || !prompt.connected) {
+        statsEl.textContent = "Prompt 缓存未启用";
+      } else {
+        statsEl.textContent = `Prompt 缓存: ${Number(prompt.key_count) || 0} 条，占用内存: ${prompt.memory_used_str || "0 B"}`;
+      }
     }
 
-    statsEl.textContent = `缓存条目: ${Number(data.data.key_count) || 0} 条，占用内存: ${data.data.memory_used_str || "0 B"}`;
+    if (estimateStatsEl) {
+      if (data.code !== 0 || !estimate.connected) {
+        estimateStatsEl.textContent = "Token 估算缓存未启用";
+      } else {
+        estimateStatsEl.textContent = `Token 估算缓存: ${Number(estimate.key_count) || 0} 条，占用内存: ${estimate.memory_used_str || "0 B"}`;
+      }
+    }
   } catch (err) {
-    statsEl.textContent = "缓存统计加载失败";
+    if (statsEl) statsEl.textContent = "缓存统计加载失败";
+    if (estimateStatsEl) estimateStatsEl.textContent = "缓存统计加载失败";
   }
 }
 
@@ -671,9 +687,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const cacheEnabled = !!document.getElementById("cfg_enable_token_cache")?.checked;
     toggleCacheConfig(cacheEnabled);
     updateMemoryEstimation();
-    if (cacheEnabled) {
-      loadCacheStats();
-    }
+    loadCacheStats();
     loadApiKeys();
   });
 });

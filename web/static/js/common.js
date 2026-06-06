@@ -144,12 +144,18 @@ async function refreshSidebarAccountStats() {
 function setSidebarOpen(open) {
   const sidebar = document.getElementById("sidebar");
   const overlay = document.querySelector(".sidebar-overlay");
+  const menuBtn = document.querySelector(".mobile-menu-btn");
   const shouldOpen = Boolean(open);
   if (sidebar) {
     sidebar.classList.toggle("mobile-open", shouldOpen);
+    sidebar.setAttribute("aria-hidden", shouldOpen ? "false" : "true");
   }
   if (overlay) {
     overlay.classList.toggle("active", shouldOpen);
+    overlay.setAttribute("aria-hidden", shouldOpen ? "false" : "true");
+  }
+  if (menuBtn) {
+    menuBtn.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
   }
   document.body.classList.toggle("sidebar-open", shouldOpen);
 }
@@ -173,15 +179,27 @@ function showToast(msg, type = 'success') {
     container.className = "toast-container";
     document.body.appendChild(container);
   }
+  container.setAttribute("aria-live", type === "error" ? "assertive" : "polite");
+  container.setAttribute("aria-atomic", "true");
+
+  const visibleToasts = Array.from(container.querySelectorAll(".toast"));
+  while (visibleToasts.length >= 4) {
+    visibleToasts.shift()?.remove();
+  }
+
   const toast = document.createElement("div");
   toast.className = "toast";
-  const color = type === 'success' ? '#34d399' : type === 'info' ? '#38bdf8' : '#fb7185';
-  const icon = type === 'success' ? '✅' : type === 'info' ? 'ℹ️' : '❌';
-  toast.style.borderLeft = `4px solid ${color}`;
+  toast.dataset.type = type;
+  toast.setAttribute("role", type === "error" ? "alert" : "status");
   const iconSpan = document.createElement("span");
-  iconSpan.textContent = icon;
+  iconSpan.className = "toast-mark";
+  iconSpan.setAttribute("aria-hidden", "true");
+  iconSpan.textContent = type === "success" ? "OK" : type === "info" ? "i" : "!";
   toast.appendChild(iconSpan);
-  toast.appendChild(document.createTextNode(` ${msg}`));
+  const message = document.createElement("span");
+  message.className = "toast-message";
+  message.textContent = String(msg || "");
+  toast.appendChild(message);
   container.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add("show"));
   setTimeout(() => {
@@ -227,11 +245,13 @@ function switchTab(tabName, skipSidebar = false) {
     setSidebarOpen(false);
   }
   const url = new URL(window.location);
+  if (url.searchParams.get('tab') === tabName) return;
   url.searchParams.set('tab', tabName);
   window.location.href = url.toString();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  setSidebarOpen(false);
   refreshSidebarAccountStats();
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {

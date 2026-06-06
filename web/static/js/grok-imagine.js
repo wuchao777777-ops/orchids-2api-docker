@@ -15,8 +15,8 @@
     abortController: null,
     selectionMode: false,
     selected: new Set(),
-    imageCount: 0,
     finalMinBytes: 100000,
+    nsfwEnabled: true,
     saveState: null,
     showToast: null,
   };
@@ -79,8 +79,6 @@
   function syncQualityModel() {
     const quality = normalizeQuality(readToggle("#imagineQualityToggle", "imagineQuality", "lite"));
     const model = qualityModel(quality);
-    const modelSelect = $("imagineModel");
-    if (modelSelect) modelSelect.value = model;
     return { quality, model };
   }
 
@@ -158,7 +156,7 @@
     document.querySelectorAll("#imagineRunModeToggle button, #imagineQualityToggle button").forEach((btn) => {
       btn.disabled = running;
     });
-    ["imaginePrompt", "imagineRatio", "imagineNSFW"].forEach((id) => {
+    ["imaginePrompt", "imagineRatio"].forEach((id) => {
       const el = $(id);
       if (el) el.disabled = running;
     });
@@ -299,9 +297,6 @@
     img.src = src;
     link.appendChild(img);
     slot.body.replaceChildren(link);
-    state.imageCount += 1;
-    const count = $("imagineCount");
-    if (count) count.textContent = String(state.imageCount);
   }
 
   function extractImageValue(data) {
@@ -504,14 +499,11 @@
     const ratio = String($("imagineRatio")?.value || "2:3");
     const runMode = readToggle("#imagineRunModeToggle", "imagineRunMode", "single") === "continuous" ? "continuous" : "single";
     const { quality, model } = syncQualityModel();
-    const nsfw = String($("imagineNSFW")?.value || "true") === "true";
 
     saveState({
       imagineRatio: ratio,
-      imagineModel: model,
       imagineRunMode: runMode,
       imagineQuality: quality,
-      imagineConcurrent: BATCH_SIZE,
     });
 
     state.running = true;
@@ -526,7 +518,7 @@
         const batch = createBatch(prompt, ratio, quality, round);
         if (!batch) throw new Error("瀑布流容器不存在");
         setStatus(`生成中 · 第 ${round} 轮`);
-        await runBatch(batch, prompt, ratio, model, quality, nsfw, state.abortController.signal);
+        await runBatch(batch, prompt, ratio, model, quality, state.nsfwEnabled, state.abortController.signal);
         updateBatch(batch, true);
         if (!state.running || runMode !== "continuous") break;
       }
@@ -565,11 +557,8 @@
     }
     state.selected.clear();
     state.selectionMode = false;
-    state.imageCount = 0;
     const toolbar = $("selectionToolbar");
     if (toolbar) toolbar.classList.add("hidden");
-    const count = $("imagineCount");
-    if (count) count.textContent = "0";
     setStatus("未连接");
   }
 
@@ -720,11 +709,7 @@
         const data = await res.json();
         const value = parseInt(data?.final_min_bytes, 10);
         if (Number.isFinite(value) && value >= 0) state.finalMinBytes = value;
-        const nsfw = $("imagineNSFW");
-        const ui = loadState();
-        if (nsfw && typeof data?.nsfw === "boolean" && !ui.imagineNSFW) {
-          nsfw.value = data.nsfw ? "true" : "false";
-        }
+        if (typeof data?.nsfw === "boolean") state.nsfwEnabled = data.nsfw;
       }
     } catch (err) {
       // config is optional for the page
@@ -745,9 +730,7 @@
         const value = normalizeQuality(btn.dataset.imagineQuality);
         setToggle("#imagineQualityToggle", "imagineQuality", value);
         const model = qualityModel(value);
-        const modelSelect = $("imagineModel");
-        if (modelSelect) modelSelect.value = model;
-        saveState({ imagineQuality: value, imagineModel: model });
+        saveState({ imagineQuality: value });
       });
     });
     const prompt = $("imaginePrompt");
@@ -767,8 +750,6 @@
         saveState({ imagineRatio: String(ratio.value || "") });
       });
     }
-    const nsfw = $("imagineNSFW");
-    if (nsfw) nsfw.addEventListener("change", () => saveState({ imagineNSFW: String(nsfw.value || "") }));
     $("imagineStartBtn")?.addEventListener("click", () => start());
     $("imagineStopBtn")?.addEventListener("click", () => stop());
     $("imagineClearBtn")?.addEventListener("click", () => clearGrid());
@@ -793,8 +774,6 @@
     const quality = normalizeQuality(ui.imagineQuality || (ui.imagineModel === QUALITY_MODELS.quality ? "quality" : "lite"));
     setToggle("#imagineQualityToggle", "imagineQuality", quality);
     setToggle("#imagineRunModeToggle", "imagineRunMode", ui.imagineRunMode === "continuous" ? "continuous" : "single");
-    const modelSelect = $("imagineModel");
-    if (modelSelect) modelSelect.value = qualityModel(quality);
     bindEvents();
     syncRatioUI();
     resizePrompt();

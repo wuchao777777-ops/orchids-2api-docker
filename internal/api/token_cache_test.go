@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 
@@ -73,6 +74,15 @@ func TestHandleTokenCacheStatsEnabledReturnsCountsAndSize(t *testing.T) {
 			Count         int64  `json:"count"`
 			Size          int64  `json:"size"`
 			Status        string `json:"status"`
+			PromptCache   struct {
+				Connected     bool   `json:"connected"`
+				KeyCount      int64  `json:"key_count"`
+				MemoryUsedStr string `json:"memory_used_str"`
+			} `json:"prompt_cache"`
+			EstimateCache struct {
+				Connected bool  `json:"connected"`
+				KeyCount  int64 `json:"key_count"`
+			} `json:"estimate_cache"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -99,6 +109,56 @@ func TestHandleTokenCacheStatsEnabledReturnsCountsAndSize(t *testing.T) {
 	}
 	if resp.Data.Status != "enabled" {
 		t.Fatalf("expected enabled status, got %q", resp.Data.Status)
+	}
+	if !resp.Data.PromptCache.Connected || resp.Data.PromptCache.KeyCount != 2 || resp.Data.PromptCache.MemoryUsedStr == "" {
+		t.Fatalf("unexpected prompt cache stats: %+v", resp.Data.PromptCache)
+	}
+	if resp.Data.EstimateCache.Connected || resp.Data.EstimateCache.KeyCount != 0 {
+		t.Fatalf("unexpected estimate cache stats: %+v", resp.Data.EstimateCache)
+	}
+}
+
+func TestHandleTokenCacheStatsIncludesEstimateCache(t *testing.T) {
+	api := New(nil, "", "", &config.Config{CacheTokenCount: true})
+	cache := tokencache.NewMemoryCache(0)
+	cache.Put(context.Background(), "estimate-key", 42)
+	api.SetTokenCache(cache)
+
+	req := httptest.NewRequest("GET", "/api/token-cache/stats", nil)
+	rec := httptest.NewRecorder()
+	api.HandleTokenCacheStats(rec, req)
+
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Connected     bool `json:"connected"`
+			EstimateCache struct {
+				Connected     bool   `json:"connected"`
+				KeyCount      int64  `json:"key_count"`
+				MemoryUsed    int64  `json:"memory_used"`
+				MemoryUsedStr string `json:"memory_used_str"`
+			} `json:"estimate_cache"`
+			PromptCache struct {
+				Connected bool  `json:"connected"`
+				KeyCount  int64 `json:"key_count"`
+			} `json:"prompt_cache"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if resp.Code != 0 {
+		t.Fatalf("expected code 0, got %d", resp.Code)
+	}
+	if resp.Data.Connected {
+		t.Fatalf("legacy connected should describe prompt cache only")
+	}
+	if resp.Data.PromptCache.Connected || resp.Data.PromptCache.KeyCount != 0 {
+		t.Fatalf("unexpected prompt cache stats: %+v", resp.Data.PromptCache)
+	}
+	if !resp.Data.EstimateCache.Connected || resp.Data.EstimateCache.KeyCount != 1 || resp.Data.EstimateCache.MemoryUsed <= 0 || resp.Data.EstimateCache.MemoryUsedStr == "" {
+		t.Fatalf("unexpected estimate cache stats: %+v", resp.Data.EstimateCache)
 	}
 }
 

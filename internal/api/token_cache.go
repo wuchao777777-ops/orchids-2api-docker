@@ -23,21 +23,33 @@ func formatTokenCacheBytes(size int64) string {
 	}
 }
 
-func writeTokenCacheStats(w http.ResponseWriter, connected bool, count, size int64) {
+func writeTokenCacheStats(w http.ResponseWriter, promptConnected bool, promptCount, promptSize int64, estimateConnected bool, estimateCount, estimateSize int64) {
 	status := "disabled"
-	if connected {
+	if promptConnected || estimateConnected {
 		status = "enabled"
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code": 0,
 		"data": map[string]interface{}{
-			"key_count":       count,
-			"memory_used":     size,
-			"memory_used_str": formatTokenCacheBytes(size),
-			"connected":       connected,
-			"count":           count,
-			"size":            size,
+			"key_count":       promptCount,
+			"memory_used":     promptSize,
+			"memory_used_str": formatTokenCacheBytes(promptSize),
+			"connected":       promptConnected,
+			"count":           promptCount,
+			"size":            promptSize,
 			"status":          status,
+			"prompt_cache": map[string]interface{}{
+				"connected":       promptConnected,
+				"key_count":       promptCount,
+				"memory_used":     promptSize,
+				"memory_used_str": formatTokenCacheBytes(promptSize),
+			},
+			"estimate_cache": map[string]interface{}{
+				"connected":       estimateConnected,
+				"key_count":       estimateCount,
+				"memory_used":     estimateSize,
+				"memory_used_str": formatTokenCacheBytes(estimateSize),
+			},
 		},
 	})
 }
@@ -46,13 +58,21 @@ func writeTokenCacheStats(w http.ResponseWriter, connected bool, count, size int
 func (a *API) HandleTokenCacheStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if !a.tokenCacheFeatureEnabled() || a.promptCache == nil {
-		writeTokenCacheStats(w, false, 0, 0)
-		return
+	cfg := a.config.Load()
+	promptConnected := cfg != nil && cfg.EnableTokenCache && a.promptCache != nil
+	estimateConnected := cfg != nil && cfg.CacheTokenCount && a.tokenCache != nil
+
+	var promptCount, promptBytes int64
+	if promptConnected {
+		promptCount, promptBytes, _ = a.promptCache.GetStats(r.Context())
 	}
 
-	count, memBytes, _ := a.promptCache.GetStats(r.Context())
-	writeTokenCacheStats(w, true, count, memBytes)
+	var estimateCount, estimateBytes int64
+	if estimateConnected {
+		estimateCount, estimateBytes, _ = a.tokenCache.GetStats(r.Context())
+	}
+
+	writeTokenCacheStats(w, promptConnected, promptCount, promptBytes, estimateConnected, estimateCount, estimateBytes)
 }
 
 // HandleTokenCacheClear handles POST /api/token-cache/clear

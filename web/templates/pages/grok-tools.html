@@ -208,25 +208,6 @@
           </section>
         </div>
 
-        <div class="imagine-hidden-compat" aria-hidden="true">
-          <select id="imagineModel" class="form-input" tabindex="-1">
-            <option value="grok-imagine-image-lite">Lite</option>
-            <option value="grok-imagine-image">Auto</option>
-            <option value="grok-imagine-image-pro">Pro</option>
-          </select>
-          <select id="imagineConcurrent" class="form-input" tabindex="-1"><option value="1">1</option></select>
-          <select id="imagineNSFW" class="form-input" tabindex="-1"><option value="true" selected>true</option><option value="false">false</option></select>
-          <select id="imagineMode" class="form-input imagine-mode-select" tabindex="-1"><option value="auto">Auto</option><option value="ws">WS</option><option value="sse">SSE</option></select>
-          <label><input id="imagineAutoScroll" type="checkbox" checked></label>
-          <label><input id="imagineAutoDownload" type="checkbox"></label>
-          <label><input id="imagineAutoFilter" type="checkbox"></label>
-          <label><input id="imagineReverseInsert" type="checkbox" checked></label>
-          <button id="imagineSelectFolderBtn" type="button"><span id="imagineFolderPath">浏览器默认位置</span></button>
-          <div id="imagineCount">0</div>
-          <div id="imagineActive">0</div>
-          <div id="imagineLatency">-</div>
-        </div>
-
         <div id="selectionToolbar" class="selection-toolbar hidden imagine-selection-toolbar">
           <button id="toggleSelectAllBtn" class="btn btn-outline" type="button">全选</button>
           <button id="downloadSelectedBtn" class="btn btn-primary" type="button" disabled>下载 <span id="selectedCount" class="selected-count">0</span></button>
@@ -562,7 +543,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="{{.AdminPath}}/js/common.js?v=20260605-2"></script>
   <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260605-1"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260605-2"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260606-1"></script>
 </body>
 
 </html>

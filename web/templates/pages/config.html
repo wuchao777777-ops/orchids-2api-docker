@@ -79,7 +79,7 @@
         <!-- Token Usage Cache Config -->
         <div class="settings-panel">
           <div class="settings-panel-head">
-            <h3 class="settings-panel-title">Token 用量缓存</h3>
+            <h3 class="settings-panel-title">Prompt 用量缓存</h3>
             <label class="toggle">
               <input type="checkbox" id="cfg_enable_token_cache" onchange="toggleCacheConfig(this.checked)">
               <span class="toggle-slider"></span>
@@ -145,6 +145,19 @@
               <div id="cacheStatsText" class="meta-text">正在统计缓存...</div>
               <button class="btn btn-outline btn-xs" onclick="clearCache()">清空缓存</button>
             </div>
+          </div>
+        </div>
+
+        <div class="settings-panel">
+          <div class="settings-panel-head">
+            <h3 class="settings-panel-title">Token 估算缓存</h3>
+            <label class="toggle">
+              <input type="checkbox" id="cfg_cache_token_count">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-panel-foot">
+            <div id="estimateCacheStatsText" class="meta-text">用于缓存本地 token 估算结果，不代表上游真实用量。</div>
           </div>
         </div>
 

@@ -1607,36 +1607,6 @@ func (a *API) SetTokenCache(c tokencache.Cache) {
 	a.tokenCache = c
 }
 
-func (a *API) HandleCacheStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-
-	if !a.cacheTokenCountEnabled() || a.tokenCache == nil {
-		// No cache configured
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"count":      0,
-			"size_bytes": 0,
-			"status":     "disabled",
-		})
-		return
-	}
-
-	count, size, err := a.tokenCache.GetStats(r.Context())
-	if err != nil {
-		http.Error(w, "Failed to get stats: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"count":      count,
-		"size_bytes": size,
-		"status":     "enabled",
-	})
-}
-
 func (a *API) HandleCacheClear(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1654,14 +1624,6 @@ func (a *API) HandleCacheClear(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-}
-
-func (a *API) cacheTokenCountEnabled() bool {
-	cfg := a.config.Load()
-	if cfg == nil {
-		return false
-	}
-	return cfg.CacheTokenCount
 }
 
 func tokenCacheConfigChanged(before, after *config.Config) bool {
