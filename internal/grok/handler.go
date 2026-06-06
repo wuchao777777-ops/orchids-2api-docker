@@ -507,6 +507,33 @@ func shouldSwitchGrokAccount(err error) bool {
 	}
 }
 
+func shouldSwitchConsoleGrokAccount(err error) bool {
+	if err == nil {
+		return false
+	}
+	if parseUpstreamStatus(err) == http.StatusTooManyRequests {
+		return false
+	}
+	return shouldSwitchGrokAccount(err)
+}
+
+func upstreamHTTPResponseStatus(err error) int {
+	switch parseUpstreamStatus(err) {
+	case http.StatusTooManyRequests:
+		return http.StatusTooManyRequests
+	case http.StatusForbidden:
+		return http.StatusForbidden
+	case http.StatusUnauthorized:
+		return http.StatusUnauthorized
+	case http.StatusServiceUnavailable:
+		return http.StatusServiceUnavailable
+	case http.StatusGatewayTimeout:
+		return http.StatusGatewayTimeout
+	default:
+		return http.StatusBadGateway
+	}
+}
+
 func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 	if acc == nil || h.lb == nil || h.lb.Store == nil {
 		return

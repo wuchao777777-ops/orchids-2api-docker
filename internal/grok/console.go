@@ -603,7 +603,7 @@ func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, r
 			logger.LogUpstreamHTTPError(consoleResponsesURL, parseUpstreamStatus(err), "", err)
 		}
 		h.markAccountStatus(ctx, sess.acc, err)
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, err.Error(), upstreamHTTPResponseStatus(err))
 		return
 	}
 	defer resp.Body.Close()
@@ -642,7 +642,7 @@ func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccount
 		}
 		lastErr = err
 		h.markAccountStatus(ctx, sess.acc, err)
-		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
+		if !shouldSwitchConsoleGrokAccount(err) || attempt == maxAttempts-1 {
 			return nil, err
 		}
 

@@ -30,6 +30,46 @@ func TestShouldSwitchGrokAccount(t *testing.T) {
 	}
 }
 
+func TestShouldSwitchConsoleGrokAccount(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "team rate limit", err: errors.New("grok upstream status=429 body=too many requests for team"), want: false},
+		{name: "403", err: errors.New("grok upstream status=403 body=forbidden"), want: true},
+		{name: "timeout", err: errors.New("context deadline exceeded"), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldSwitchConsoleGrokAccount(tt.err); got != tt.want {
+				t.Fatalf("shouldSwitchConsoleGrokAccount(%v)=%v want=%v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpstreamHTTPResponseStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "429", err: errors.New("grok upstream status=429 body=too many requests"), want: 429},
+		{name: "403", err: errors.New("grok upstream status=403 body=forbidden"), want: 403},
+		{name: "timeout", err: errors.New("context deadline exceeded"), want: 502},
+		{name: "none", err: errors.New("grok upstream request failed"), want: 502},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := upstreamHTTPResponseStatus(tt.err); got != tt.want {
+				t.Fatalf("upstreamHTTPResponseStatus(%v)=%v want=%v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSkipAppChatImageGrokAccountStatus(t *testing.T) {
 	tests := []struct {
 		name       string
