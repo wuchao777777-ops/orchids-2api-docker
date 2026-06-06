@@ -18,10 +18,16 @@ import (
 
 func normalizeRequestedModelID(modelID string) string {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	if isWarpVirtualModel(modelID) {
+		return upstreamWarpModelID(modelID)
+	}
 	return modelID
 }
 
 func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) (string, *store.Model) {
+	if m := warpVirtualModelRecord(modelID); m != nil {
+		return m.ModelID, m
+	}
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return modelID, nil
 	}
@@ -36,6 +42,11 @@ func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) (string
 }
 
 func (h *Handler) resolveModelAliasForChannel(ctx context.Context, channel, modelID string) (string, *store.Model) {
+	if strings.EqualFold(strings.TrimSpace(channel), "warp") {
+		if m := warpVirtualModelRecord(modelID); m != nil {
+			return m.ModelID, m
+		}
+	}
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return modelID, nil
 	}
@@ -101,11 +112,22 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 
 // selectAccount logic extracted from HandleMessages
 func (h *Handler) selectAccount(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, modelID ...string) (UpstreamClient, *store.Account, error) {
+	return h.selectAccountWithOptions(ctx, targetChannel, channelRequired, failedAccountIDs, accountSelectionOptions{
+		ModelID: firstString(modelID...),
+	})
+}
+
+type accountSelectionOptions struct {
+	ModelID               string
+	RequireWarpCloudAgent bool
+}
+
+func (h *Handler) selectAccountWithOptions(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, opts accountSelectionOptions) (UpstreamClient, *store.Account, error) {
 	if h.loadBalancer != nil {
 		if targetChannel != "" {
 			slog.Debug("Account channel selection", "channel", targetChannel, "channel_required", channelRequired)
 		}
-		account, err := h.selectAccountRecord(ctx, targetChannel, failedAccountIDs, firstString(modelID...))
+		account, err := h.selectAccountRecordWithOptions(ctx, targetChannel, failedAccountIDs, opts)
 		if err != nil {
 			if channelRequired {
 				return nil, nil, err
@@ -134,6 +156,10 @@ func (h *Handler) selectAccount(ctx context.Context, targetChannel string, chann
 }
 
 func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string, failedAccountIDs []int64, modelID string) (*store.Account, error) {
+	return h.selectAccountRecordWithOptions(ctx, targetChannel, failedAccountIDs, accountSelectionOptions{ModelID: modelID})
+}
+
+func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChannel string, failedAccountIDs []int64, opts accountSelectionOptions) (*store.Account, error) {
 	if h == nil || h.loadBalancer == nil {
 		return nil, errors.New("load balancer not configured")
 	}
@@ -141,26 +167,46 @@ func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string,
 		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
 	}
 
-	requestedModel := normalizeRequestedModelID(modelID)
+	requestedModel := normalizeRequestedModelID(opts.ModelID)
+	warpFilter := func(acc *store.Account) bool {
+		if opts.RequireWarpCloudAgent && !warp.AccountSupportsCloudAgent(acc) {
+			return false
+		}
+		return true
+	}
 	if requestedModel == "" || requestedModel == warp.DefaultModel() {
-		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
+		return h.selectWarpAccountWithFilter(ctx, failedAccountIDs, targetChannel, opts, warpFilter)
 	}
 
 	choices, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
 	if err != nil || choices == nil {
-		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
+		return h.selectWarpAccountWithFilter(ctx, failedAccountIDs, targetChannel, opts, warpFilter)
 	}
 	if !h.warpEffectiveChoicesSupportModel(ctx, choices, requestedModel) {
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s (model %s is not available in the current Warp account pool)", targetChannel, requestedModel)
 	}
 
 	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-		return warp.AccountSupportsModelForAccount(choices, acc, requestedModel)
+		return warpFilter(acc) && warp.AccountSupportsModelForAccount(choices, acc, requestedModel)
 	})
 	if err == nil {
 		return account, nil
 	}
+	if opts.RequireWarpCloudAgent {
+		return nil, fmt.Errorf("no enabled accounts available for channel: %s (cloud agent requires a non-free Warp account)", targetChannel)
+	}
 
+	return nil, err
+}
+
+func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccountIDs []int64, targetChannel string, opts accountSelectionOptions, filter func(*store.Account) bool) (*store.Account, error) {
+	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, filter)
+	if err == nil {
+		return account, nil
+	}
+	if opts.RequireWarpCloudAgent {
+		return nil, fmt.Errorf("no enabled accounts available for channel: %s (cloud agent requires a non-free Warp account)", targetChannel)
+	}
 	return nil, err
 }
 
@@ -240,6 +286,11 @@ func (h *Handler) releaseTrackedAccount(accountID int64) {
 }
 
 func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forcedChannel string) (*store.Model, error) {
+	if strings.TrimSpace(forcedChannel) == "" || strings.EqualFold(strings.TrimSpace(forcedChannel), "warp") {
+		if m := warpVirtualModelRecord(modelID); m != nil {
+			return m, nil
+		}
+	}
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return nil, nil
 	}

@@ -119,9 +119,18 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		warpVisible = h.visibleWarpModelSet(ctx)
 	}
 	var publicModels []PublicModelResponse
+	if filterChannel == "" || strings.EqualFold(filterChannel, "warp") {
+		publicModels = append(publicModels,
+			PublicModelResponse{ID: warpChatModelID, Object: "model", Created: 1677610602, OwnedBy: "Warp"},
+			PublicModelResponse{ID: warpAgentModelID, Object: "model", Created: 1677610602, OwnedBy: "Warp"},
+		)
+	}
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
+			continue
+		}
+		if strings.EqualFold(mChannel, "warp") && isWarpVirtualModel(m.ModelID) {
 			continue
 		}
 		if strings.EqualFold(mChannel, "warp") && warpVisible != nil {
@@ -186,6 +195,20 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filterChannel := channelFromPath(path)
+	if strings.EqualFold(filterChannel, "warp") {
+		if m := warpVirtualModelRecord(id); m != nil {
+			resp := PublicModelResponse{
+				ID:      m.ModelID,
+				Object:  "model",
+				Created: 1677610602,
+				OwnedBy: "Warp",
+			}
+			if err := json.NewEncoder(w).Encode(resp); err != nil {
+				apperrors.New("api_error", "Failed to encode response", http.StatusInternalServerError).WriteResponse(w)
+			}
+			return
+		}
+	}
 	var (
 		m   *store.Model
 		err error

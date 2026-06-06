@@ -211,8 +211,11 @@ func TestHandleModels_WarpUsesAccountModelPool(t *testing.T) {
 		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	body := rec.Body.String()
+	if !strings.Contains(body, "warp-chat") || !strings.Contains(body, "warp-agent") {
+		t.Fatalf("expected explicit warp modes in body=%s", body)
+	}
 	if !strings.Contains(body, "auto-open") {
-		t.Fatalf("expected free model in body=%s", body)
+		t.Fatalf("expected upstream free model in body=%s", body)
 	}
 	if strings.Contains(body, "gpt-5-2-medium") || strings.Contains(body, "gpt-5-2-high") {
 		t.Fatalf("expected non-free models hidden for free-only account pool, body=%s", body)
@@ -253,8 +256,11 @@ func TestHandleModels_WarpExhaustedPaidAccountBecomesFreeOnly(t *testing.T) {
 		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	body := rec.Body.String()
+	if !strings.Contains(body, "warp-chat") || !strings.Contains(body, "warp-agent") {
+		t.Fatalf("expected explicit warp modes in body=%s", body)
+	}
 	if !strings.Contains(body, "auto-open") {
-		t.Fatalf("expected free model in body=%s", body)
+		t.Fatalf("expected upstream free model in body=%s", body)
 	}
 	if strings.Contains(body, "gpt-5-2-medium") {
 		t.Fatalf("expected paid model hidden for exhausted paid account, body=%s", body)
@@ -295,11 +301,45 @@ func TestHandleModels_WarpFreeAccountIsFreeOnlyWithRemainingQuota(t *testing.T) 
 		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	body := rec.Body.String()
+	if !strings.Contains(body, "warp-chat") || !strings.Contains(body, "warp-agent") {
+		t.Fatalf("expected explicit warp modes in body=%s", body)
+	}
 	if !strings.Contains(body, "auto-open") {
-		t.Fatalf("expected free model in body=%s", body)
+		t.Fatalf("expected upstream free model in body=%s", body)
 	}
 	if strings.Contains(body, "gpt-5-2-medium") {
 		t.Fatalf("expected paid model hidden for free account, body=%s", body)
+	}
+}
+
+func TestHandleModelByID_ReturnsWarpVirtualModels(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	if err := s.CreateAccount(context.Background(), &store.Account{
+		AccountType:  "warp",
+		RefreshToken: "warp-free-token",
+		Subscription: "free",
+		Enabled:      true,
+	}); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	for _, modelID := range []string{"warp-chat", "warp-agent"} {
+		req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models/"+modelID, nil)
+		rec := httptest.NewRecorder()
+
+		h.HandleModelByID(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d want=%d body=%s", modelID, rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), modelID) {
+			t.Fatalf("%s response missing model id: %s", modelID, rec.Body.String())
+		}
 	}
 }
 
