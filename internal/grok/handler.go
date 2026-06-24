@@ -191,7 +191,24 @@ func (h *Handler) trackAccount(acc *store.Account) func() {
 }
 
 func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err error) {
+	// Team-level resource-exhausted 429: the rate limit is on the token/session,
+	// not the account. Set a 60s cooldown so the RPM window can reset. Without
+	// this, unmarked sibling accounts sharing the same token immediately hit the
+	// same team limit.
+	if err != nil && isResourceExhaustedError(err) && acc != nil {
+		acc.QuotaResetAt = time.Now().Add(60 * time.Second)
+	}
 	h.base.MarkAccountStatus(ctx, acc, err)
+}
+
+func isResourceExhaustedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "resource-exhausted") ||
+		strings.Contains(lower, "resource_exhausted") ||
+		strings.Contains(lower, "too many requests for team")
 }
 
 func (h *Handler) openChatAccountSessionForModel(ctx context.Context, spec ModelSpec) (*chatAccountSession, error) {
@@ -340,16 +357,16 @@ func (h *Handler) doAutoSwitchRequest(
 	if client == nil {
 		return nil, fmt.Errorf("grok client not configured")
 	}
-	maxAttempts := 2
+	// Time-budgeted switching: try accounts until success or deadline,
+	// pacing requests at ~2 RPS to respect the upstream rate limit.
+	switchDeadline := time.Now().Add(10 * time.Second)
 	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
-		maxAttempts = h.cfg.AccountSwitchCount
+		switchDeadline = time.Now().Add(time.Duration(h.cfg.AccountSwitchCount) * time.Second)
 	}
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
-	used := make([]int64, 0, maxAttempts)
+	const switchPace = 100 * time.Millisecond
+	used := make([]int64, 0)
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for {
 		if sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
 		}
@@ -361,11 +378,12 @@ func (h *Handler) doAutoSwitchRequest(
 		if shouldMarkStatus == nil || shouldMarkStatus(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
-		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
+		if !shouldSwitchGrokAccount(err) || time.Now().After(switchDeadline) {
 			return nil, err
 		}
 
 		sess.Close()
+		time.Sleep(switchPace)
 		next, err2 := h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
 		if err2 != nil {
 			return nil, err
@@ -402,14 +420,6 @@ func shouldSwitchGrokAccount(err error) bool {
 	}
 	status := classifyAccountStatusFromError(err.Error())
 	if status == "403" || status == "429" {
-		// Team-level rate limits ("resource-exhausted") apply to the
-		// token/session, not the individual account. Switching accounts
-		// that share the same token would just hit the same limit.
-		lower := strings.ToLower(err.Error())
-		if strings.Contains(lower, "resource-exhausted") ||
-			strings.Contains(lower, "too many requests for team") {
-			return false
-		}
 		return true
 	}
 	if upstreamStatus := parseUpstreamStatus(err); upstreamStatus == http.StatusBadGateway ||

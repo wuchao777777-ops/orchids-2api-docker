@@ -308,6 +308,9 @@ func consoleBuiltinToolName(name string) string {
 }
 
 func (h *Handler) doConsole(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
+	if err := consoleRateLimitEndpoint(ctx); err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -624,17 +627,17 @@ func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccount
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
 	}
-	maxAttempts := 2
+	// Time-budgeted switching: try accounts until success or deadline,
+	// pacing requests at ~2 RPS to respect the upstream rate limit.
+	switchDeadline := time.Now().Add(10 * time.Second)
 	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
-		maxAttempts = h.cfg.AccountSwitchCount
+		switchDeadline = time.Now().Add(time.Duration(h.cfg.AccountSwitchCount) * time.Second)
 	}
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
+	const switchPace = 100 * time.Millisecond
 
-	used := make([]int64, 0, maxAttempts)
+	used := make([]int64, 0)
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for {
 		if sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
 		}
@@ -646,11 +649,12 @@ func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccount
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
-		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
+		if !shouldSwitchGrokAccount(err) || time.Now().After(switchDeadline) {
 			return nil, err
 		}
 
 		sess.Close()
+		time.Sleep(switchPace)
 		next, switchErr := h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
 		if switchErr != nil {
 			return nil, err
