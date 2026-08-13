@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"unicode/utf8"
 )
@@ -32,33 +31,6 @@ func SetLocalUserStorageTestHooks(pathFunc func() (string, error), decryptFunc f
 		defaultLocalUserStoragePathFunc = origPathFunc
 		decryptLocalUserStorageFunc = origDecryptFunc
 	}
-}
-
-// ReadLocalUserCredential extracts id_token.refresh_token from WARP's local
-// secure storage without exposing the full persisted User JSON.
-func ReadLocalUserCredential() (*LocalUserCredential, error) {
-	path, err := defaultLocalUserStoragePathFunc()
-	if err != nil {
-		return nil, err
-	}
-	return ReadLocalUserCredentialFromPath(path)
-}
-
-func ReadLocalUserCredentialFromPath(path string) (*LocalUserCredential, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil, fmt.Errorf("warp local user path is empty")
-	}
-	encrypted, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read warp local user: %w", err)
-	}
-	credential, err := ReadLocalUserCredentialFromBytes(encrypted)
-	if err != nil {
-		return nil, err
-	}
-	credential.SourcePath = path
-	return credential, nil
 }
 
 func ReadLocalUserCredentialFromBytes(data []byte) (*LocalUserCredential, error) {

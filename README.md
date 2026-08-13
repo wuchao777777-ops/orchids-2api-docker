@@ -62,7 +62,13 @@ docker run -d --name orchids-redis -p 6379:6379 redis:7
 
 ### 2. 准备配置
 
-最小可用 `config.json`：
+从安全示例创建本地配置（`config.json` 不纳入 Git）：
+
+```bash
+cp config.example.json config.json
+```
+
+最小可用配置：
 
 ```json
 {
@@ -70,15 +76,16 @@ docker run -d --name orchids-redis -p 6379:6379 redis:7
   "store_mode": "redis",
   "redis_addr": "127.0.0.1:6379",
   "admin_user": "admin",
-  "admin_pass": "change-me",
+  "admin_pass": "",
   "admin_path": "/admin",
-  "debug_enabled": true
+  "debug_enabled": false
 }
 ```
 
 说明：
 
 - 未设置 `admin_pass` 时，程序会在启动时自动生成随机密码并打印日志
+- 生产部署建议显式设置高强度 `admin_pass`，并保持 `debug_enabled` 为 `false`
 - 运行后若 Redis 中存在 `settings:config`，会覆盖文件配置
 
 ### 3. 启动服务
@@ -129,6 +136,14 @@ go build -o orchids-server ./cmd/server
 curl -s http://127.0.0.1:3002/health
 curl -s http://127.0.0.1:3002/v1/models
 ```
+
+测量接口首字节、首个流式帧和总耗时：
+
+```bash
+go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions
+```
+
+`cmd/ttfbbench` 是独立诊断工具，不会被主服务编译或启动。
 
 ## 模型管理说明
 

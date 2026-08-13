@@ -2,7 +2,6 @@ package util
 
 import (
 	"context"
-	"crypto/subtle"
 	"time"
 )
 
@@ -38,36 +37,12 @@ func UniqueStrings(input []string) []string {
 	return out
 }
 
-// TruncateTextWithEllipsis truncates text to maxLen and adds ellipsis if needed
-func TruncateTextWithEllipsis(text string, maxLen int) string {
-	if len(text) <= maxLen {
-		return text
-	}
-	if maxLen <= 3 {
-		return text[:maxLen]
-	}
-	return text[:maxLen-3] + "..."
-}
-
 // MinInt returns the minimum of two integers
 func MinInt(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
-}
-
-// MaxInt returns the maximum of two integers
-func MaxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// SecureCompare performs constant-time string comparison
-func SecureCompare(a, b string) bool {
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // trimSpace is a helper to avoid importing strings in this file

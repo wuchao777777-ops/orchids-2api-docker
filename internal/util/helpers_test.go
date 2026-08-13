@@ -92,49 +92,6 @@ func TestUniqueStrings(t *testing.T) {
 	}
 }
 
-func TestTruncateTextWithEllipsis(t *testing.T) {
-	tests := []struct {
-		name     string
-		text     string
-		maxLen   int
-		expected string
-	}{
-		{
-			name:     "no truncation needed",
-			text:     "hello",
-			maxLen:   10,
-			expected: "hello",
-		},
-		{
-			name:     "truncate with ellipsis",
-			text:     "hello world",
-			maxLen:   8,
-			expected: "hello...",
-		},
-		{
-			name:     "very short maxLen",
-			text:     "hello",
-			maxLen:   2,
-			expected: "he",
-		},
-		{
-			name:     "exact length",
-			text:     "hello",
-			maxLen:   5,
-			expected: "hello",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := TruncateTextWithEllipsis(tt.text, tt.maxLen)
-			if result != tt.expected {
-				t.Errorf("expected %q, got %q", tt.expected, result)
-			}
-		})
-	}
-}
-
 func TestMinInt(t *testing.T) {
 	tests := []struct {
 		a, b, expected int
@@ -151,66 +108,5 @@ func TestMinInt(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("MinInt(%d, %d) = %d, expected %d", tt.a, tt.b, result, tt.expected)
 		}
-	}
-}
-
-func TestMaxInt(t *testing.T) {
-	tests := []struct {
-		a, b, expected int
-	}{
-		{1, 2, 2},
-		{2, 1, 2},
-		{5, 5, 5},
-		{-1, 1, 1},
-		{0, 0, 0},
-	}
-
-	for _, tt := range tests {
-		result := MaxInt(tt.a, tt.b)
-		if result != tt.expected {
-			t.Errorf("MaxInt(%d, %d) = %d, expected %d", tt.a, tt.b, result, tt.expected)
-		}
-	}
-}
-
-func TestSecureCompare(t *testing.T) {
-	tests := []struct {
-		name     string
-		a, b     string
-		expected bool
-	}{
-		{
-			name:     "equal strings",
-			a:        "secret",
-			b:        "secret",
-			expected: true,
-		},
-		{
-			name:     "different strings",
-			a:        "secret",
-			b:        "public",
-			expected: false,
-		},
-		{
-			name:     "empty strings",
-			a:        "",
-			b:        "",
-			expected: true,
-		},
-		{
-			name:     "different lengths",
-			a:        "short",
-			b:        "longer",
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := SecureCompare(tt.a, tt.b)
-			if result != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, result)
-			}
-		})
 	}
 }

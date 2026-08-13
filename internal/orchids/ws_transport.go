@@ -52,31 +52,9 @@ const (
 
 // Orchids Event Types
 const (
-	EventConnected          = "connected"
-	EventCodingAgentStart   = "coding_agent.start"
-	EventCodingAgentInit    = "coding_agent.initializing"
-	EventCodingAgentTokens  = "coding_agent.tokens_used"
-	EventCreditsExhausted   = "coding_agent.credits_exhausted"
-	EventResponseDone       = "response_done"
-	EventCodingAgentEnd     = "coding_agent.end"
-	EventComplete           = "complete"
-	EventTodoWriteStart     = "coding_agent.todo_write.started"
-	EventRunItemStream      = "run_item_stream_event"
-	EventToolCallOutput     = "tool_call_output_item"
-	EventEditStart          = "coding_agent.Edit.edit.started"
-	EventEditChunk          = "coding_agent.Edit.edit.chunk"
-	EventEditFileCompleted  = "coding_agent.edit_file.completed"
-	EventEditCompleted      = "coding_agent.Edit.edit.completed"
-	EventWriteStart         = "coding_agent.Write.started"
-	EventWriteContentStart  = "coding_agent.Write.content.started"
-	EventWriteChunk         = "coding_agent.Write.content.chunk"
-	EventWriteCompleted     = "coding_agent.Write.content.completed"
-	EventReasoningChunk     = "coding_agent.reasoning.chunk"
-	EventReasoningCompleted = "coding_agent.reasoning.completed"
-	EventOutputTextDelta    = "output_text_delta"
-	EventResponseChunk      = "coding_agent.response.chunk"
-	EventModel              = "model"
-	EventResponseStarted    = "response_started"
+	EventConnected       = "connected"
+	EventModel           = "model"
+	EventResponseStarted = "response_started"
 )
 
 func (c *Client) getWSToken() (string, error) {

@@ -404,16 +404,6 @@ func (h *Handler) doAutoSwitchRequest(
 	return nil, lastErr
 }
 
-func isGrokAntiBotError(err error) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "anti-bot") ||
-		strings.Contains(lower, "antibot") ||
-		strings.Contains(lower, "request rejected by anti-bot rules")
-}
-
 func shouldSwitchGrokAccount(err error) bool {
 	if err == nil {
 		return false

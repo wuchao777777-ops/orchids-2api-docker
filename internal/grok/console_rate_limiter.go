@@ -15,8 +15,7 @@ var (
 )
 
 func init() {
-	// Console is excluded from the default build. This bucket only exists when
-	// someone explicitly opts into the legacy_console tag.
+	// Console requests use a deliberately conservative shared token bucket.
 	endpointRateLimiters["console.x.ai"] = newTokenBucket(0.9, 1)
 }
 

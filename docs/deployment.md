@@ -6,7 +6,7 @@
 
 - Go `1.24+`
 - Redis `7+`
-- 已准备好 `config.json`
+- 已通过 `cp config.example.json config.json` 准备好本地配置
 
 最小配置示例见 [README.md](../README.md) 与 [configuration.md](../docs/configuration.md)。
 

@@ -1,8 +1,8 @@
 {
   "port": "3002",
-  "debug_enabled": true,
+  "debug_enabled": false,
   "admin_user": "admin",
-  "admin_pass": "admin123",
+  "admin_pass": "",
   "admin_path": "/admin",
   "admin_token": "",
   "store_mode": "redis",

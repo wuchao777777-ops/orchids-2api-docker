@@ -331,62 +331,6 @@ func requiresConsoleResponses(spec ModelSpec) bool {
 	return strings.TrimSpace(spec.ConsoleModel) != ""
 }
 
-type ConsoleProbeResult struct {
-	RequestedModel string
-	CanonicalModel string
-	OK             bool
-	Status         int
-	Error          string
-}
-
-func (c *Client) ProbeConsoleModel(ctx context.Context, token string, modelID string) ConsoleProbeResult {
-	modelID = strings.TrimSpace(modelID)
-	result := ConsoleProbeResult{RequestedModel: modelID}
-	if modelID == "" {
-		result.Error = "empty model"
-		return result
-	}
-	payload := map[string]interface{}{
-		"model": modelID,
-		"input": "Reply with exactly: ok",
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	if err := consoleRateLimitEndpoint(ctx); err != nil {
-		result.Error = err.Error()
-		if status := parseUpstreamStatus(err); status > 0 {
-			result.Status = status
-		}
-		return result
-	}
-	resp, err := c.doConsoleDPoPRequest(ctx, token, http.MethodPost, consoleResponsesURL, body)
-	if err != nil {
-		noteConsoleRateLimitError(err)
-		result.Error = err.Error()
-		if status := parseUpstreamStatus(err); status > 0 {
-			result.Status = status
-		}
-		return result
-	}
-	defer resp.Body.Close()
-	result.Status = resp.StatusCode
-	var raw map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		result.Error = "decode response: " + err.Error()
-		return result
-	}
-	result.CanonicalModel = strings.TrimSpace(fmt.Sprint(raw["model"]))
-	if result.CanonicalModel == "" || result.CanonicalModel == "<nil>" {
-		result.Error = "missing canonical model"
-		return result
-	}
-	result.OK = true
-	return result
-}
-
 func consoleExtractText(v interface{}) string {
 	switch x := v.(type) {
 	case nil:

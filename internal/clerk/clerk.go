@@ -63,14 +63,6 @@ type ParsedOrchidsCookies struct {
 	ClientUat     string
 }
 
-func FetchAccountInfoWithSessionProxy(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
-	return FetchAccountInfoWithProjectAndSessionContextProxy(clientCookie, sessionCookie, "", "", "", proxyFunc)
-}
-
-func FetchAccountInfoWithProjectAndSessionProxy(clientCookie string, sessionCookie string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
-	return FetchAccountInfoWithProjectAndSessionContextProxy(clientCookie, sessionCookie, "", "", customProjectID, proxyFunc)
-}
-
 func FetchAccountInfoWithSessionContextProxy(clientCookie string, sessionCookie string, clientUat string, sessionID string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
 	return FetchAccountInfoWithProjectAndSessionContextProxy(clientCookie, sessionCookie, clientUat, sessionID, "", proxyFunc)
 }

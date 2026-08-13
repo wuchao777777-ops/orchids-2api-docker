@@ -44,6 +44,7 @@ Thumbs.db
 debug-logs/
 data/tmp/
 internal/grok/data/
+/config.json
 
 # Database
 *.db

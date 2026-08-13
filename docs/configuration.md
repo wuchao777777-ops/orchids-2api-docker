@@ -2,6 +2,12 @@
 
 ## 1. 加载规则
 
+首次运行先复制安全示例；生成的 `config.json` 不纳入 Git：
+
+```bash
+cp config.example.json config.json
+```
+
 配置加载顺序：
 
 1. 启动参数 `-config` 指定文件
