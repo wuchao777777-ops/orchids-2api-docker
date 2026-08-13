@@ -134,10 +134,9 @@ curl -s http://127.0.0.1:3002/v1/models
 
 - 管理接口：`POST /api/models/refresh`
 - 请求体示例：`{"channel":"puter"}`
-- 当前刷新策略是“按来源同步”
-- 会把来源中新增的模型写入本地模型表
-- 会把本地已存在但来源暂时缺失的模型标记为离线并保留记录
-- 不再对每个模型单独做逐个测活；`verified` 表示本轮成功纳入同步集合的数量
+- 当前刷新策略是“按来源同步”，不同通道按各自上游能力验证
+- Puter 先读取官方模型目录，再用账号 `test_mode` 逐模型验证；目录缺失或验证失败的型号不会进入公开模型表
+- `verified` 表示本轮通过通道验证并纳入同步集合的数量
 
 当前各通道模型来源：
 
@@ -148,9 +147,13 @@ curl -s http://127.0.0.1:3002/v1/models
 
 ## Puter 当前对齐点
 
+- 请求使用 Puter 原生 `tools`、assistant `tool_calls` 和 `role: tool` 历史格式，不再通过 system prompt 模拟 `<tool_call>`
+- 流式响应直接处理 `text`、`reasoning`、`tool_use`、`usage` 和 `error` 事件
 - `/puter/v1/messages` 非流式响应会保留 `tool_use` content block，不再返回 `content: null`
 - `tool_result` follow-up 可以继续返回新的 `tool_use`，也可以正常收敛成最终文本
 - 已有回归测试覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result`
+
+当前公开型号：`claude-opus-5`、`claude-sonnet-5`、`claude-fable-5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gemini-3.5-flash`、`grok-4.5`、`deepseek-v4-pro`、`deepseek-v4-flash`、`mistral-small-2603`。
 
 ## 主要公开端点
 

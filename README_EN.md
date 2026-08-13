@@ -132,13 +132,15 @@ curl -s http://127.0.0.1:3002/v1/models
 
 - endpoint: `POST /api/models/refresh`
 - example body: `{"channel":"puter"}`
-- sync is source-driven, not per-model liveness probing
+- sync is source-driven; Puter additionally verifies official-catalog candidates with account `test_mode`
 - newly discovered models are inserted
 - locally stored models missing from the source are deleted
 - `verified` reports the number of models accepted into the synced set for that run
 
 ## Puter Notes
 
+- requests use native `tools`, assistant `tool_calls`, and `role: tool` history instead of prompt-level `<tool_call>` emulation
+- streams are decoded by native `text`, `reasoning`, `tool_use`, `usage`, and `error` event type
 - `/puter/v1/messages` non-stream responses preserve `tool_use` content blocks
 - `tool_result` follow-ups can either continue the tool chain or converge to final text
 - regressions are covered for `Read`, `Write`, `Edit`, `Delete`, long context, and multi-round `tool_result`

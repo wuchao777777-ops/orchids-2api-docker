@@ -133,21 +133,22 @@ HTTP Request
 
 - `orchids`：上游公开模型选择列表
 - `warp`：账号 GraphQL 发现结果，失败时回退内置种子
-- `puter`：Puter 公开模型列表
+- `puter`：Puter 官方模型目录与本地当前代策略的交集，再经账号 `test_mode` 验证
 - `grok`：内置支持表 + 现存模型 + 公共文档探测
 
 当前策略：
 
 - 新发现模型写入本地表
 - 来源缺失模型从本地表删除
-- 不做逐个模型在线测活
+- Puter 做无额度消耗的 `test_mode` 逐模型验证；其他通道按各自来源能力验证
 
 ## 6. Puter 当前实现要点
 
 Puter 走 `internal/puter`，特点是：
 
-- 上游是文本流，客户端会从文本中提取 `<tool_call>...</tool_call>`
-- handler 层会把结果重新组装成 Claude Messages 风格 `tool_use` block
+- 请求直接发送原生 `tools`、assistant `tool_calls` 与 `role: tool` 消息
+- 上游流按 `text`、`reasoning`、`tool_use`、`usage`、`error` 类型严格解码
+- `tool_use` 被转换为统一 `model.tool-call` 事件，再由 handler 组装成 Claude Messages 或 OpenAI 响应
 - 非流式 `tool_use` 与 `tool_result` follow-up 已有回归测试覆盖
 
 ## 7. 运行时状态

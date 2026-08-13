@@ -136,7 +136,7 @@ func TestResolveModel_AcceptsGrok43ConsoleModels(t *testing.T) {
 	}
 }
 
-func TestResolveModel_AllowsGrok43BetaAppChat(t *testing.T) {
+func TestResolveModel_DeprecatesGrok43BetaAppChat(t *testing.T) {
 	spec, ok := ResolveModel("grok-4.3-beta")
 	if !ok {
 		t.Fatal("ResolveModel(grok-4.3-beta) = false, want true")
@@ -144,8 +144,8 @@ func TestResolveModel_AllowsGrok43BetaAppChat(t *testing.T) {
 	if _, ok := ResolveModelOrDynamic("grok-4.3-beta"); !ok {
 		t.Fatal("ResolveModelOrDynamic(grok-4.3-beta) = false, want true")
 	}
-	if IsDeprecatedModelID("grok-4.3-beta") {
-		t.Fatal("grok-4.3-beta should not be deprecated")
+	if !IsDeprecatedModelID("grok-4.3-beta") {
+		t.Fatal("grok-4.3-beta should be deprecated")
 	}
 	if spec.ModeID != "grok-420-computer-use-sa" {
 		t.Fatalf("ModeID=%q want grok-420-computer-use-sa", spec.ModeID)
@@ -174,7 +174,7 @@ func TestEnsureModelEnabled_RejectsConsoleOnlyGrok43EvenWhenStored(t *testing.T)
 	}
 }
 
-func TestEnsureModelEnabled_AllowsGrok43BetaAppChat(t *testing.T) {
+func TestEnsureModelEnabled_RejectsDeprecatedGrok43Beta(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -191,8 +191,8 @@ func TestEnsureModelEnabled_AllowsGrok43BetaAppChat(t *testing.T) {
 		t.Fatalf("CreateModel(beta) error = %v", err)
 	}
 
-	if err := h.ensureModelEnabled(context.Background(), "grok-4.3-beta"); err != nil {
-		t.Fatalf("ensureModelEnabled(grok-4.3-beta) error=%v", err)
+	if err := h.ensureModelEnabled(context.Background(), "grok-4.3-beta"); err == nil {
+		t.Fatal("ensureModelEnabled(grok-4.3-beta) expected deprecated model rejection")
 	}
 }
 

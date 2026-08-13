@@ -1,23 +1,13 @@
 package store
 
-import "strconv"
+import (
+	"strconv"
+
+	"orchids-api/internal/modelpolicy"
+)
 
 func buildPuterSeedModels() []Model {
-	modelIDs := []string{
-		"claude-opus-4-5",
-		"claude-opus-4-5-latest",
-		"claude-opus-4.5",
-		"claude-sonnet-4-5",
-		"claude-sonnet-4.5",
-		"claude-haiku-4-5",
-		"claude-haiku-4.5",
-		"gpt-5",
-		"gpt-5.1",
-		"gpt-4o",
-		"o3",
-		"gemini-2.5-pro",
-		"grok-3",
-	}
+	modelIDs := modelpolicy.LatestPuterModelIDs()
 
 	models := make([]Model, 0, len(modelIDs))
 	for i, modelID := range modelIDs {
@@ -27,7 +17,7 @@ func buildPuterSeedModels() []Model {
 			ModelID:   modelID,
 			Name:      modelID,
 			Status:    ModelStatusAvailable,
-			IsDefault: modelID == "claude-opus-4-5",
+			IsDefault: modelID == modelpolicy.DefaultPuterModelID,
 			SortOrder: i,
 		})
 	}

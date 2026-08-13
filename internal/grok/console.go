@@ -315,7 +315,7 @@ func (h *Handler) doConsole(ctx context.Context, token string, payload map[strin
 	if err != nil {
 		return nil, err
 	}
-	resp, err := h.client.doRequestWith429Retry(ctx, consoleResponsesURL, http.MethodPost, body, h.client.consoleHeaders(token), http.StatusOK, false, false)
+	resp, err := h.client.doConsoleDPoPRequest(ctx, token, http.MethodPost, consoleResponsesURL, body)
 	if err != nil {
 		noteConsoleRateLimitError(err)
 		return nil, err
@@ -362,7 +362,7 @@ func (c *Client) ProbeConsoleModel(ctx context.Context, token string, modelID st
 		}
 		return result
 	}
-	resp, err := c.doRequestWith429Retry(ctx, consoleResponsesURL, http.MethodPost, body, c.consoleHeaders(token), http.StatusOK, false, false)
+	resp, err := c.doConsoleDPoPRequest(ctx, token, http.MethodPost, consoleResponsesURL, body)
 	if err != nil {
 		noteConsoleRateLimitError(err)
 		result.Error = err.Error()

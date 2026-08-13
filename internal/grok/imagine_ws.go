@@ -49,7 +49,7 @@ type imagineWSSlot struct {
 
 func isImageGenerationModel(modelID string) bool {
 	switch normalizeModelID(modelID) {
-	case "grok-imagine-image-lite", "grok-imagine-image", "grok-imagine-image-pro":
+	case "grok-imagine-image-lite", "grok-imagine-image", "grok-imagine-image-quality", "grok-imagine-image-pro":
 		return true
 	default:
 		return false

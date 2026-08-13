@@ -169,7 +169,56 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 	}
 }
 
-func TestStoreNew_SeedsGrokAppChatModelsWithoutConsoleLegacyModels(t *testing.T) {
+func TestStoreNew_PuterCleanupDoesNotRecreateDeletedModels(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	opts := Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	}
+	s, err := New(opts)
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	ctx := context.Background()
+	current, err := s.GetModelByChannelAndModelID(ctx, "puter", "claude-opus-5")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID(current) error = %v", err)
+	}
+	if err := s.DeleteModel(ctx, current.ID); err != nil {
+		t.Fatalf("DeleteModel(current) error = %v", err)
+	}
+	if err := s.CreateModel(ctx, &Model{
+		Channel:  "Puter",
+		ModelID:  "claude-opus-5-fast",
+		Name:     "removed catalog alias",
+		Status:   ModelStatusAvailable,
+		Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel(removed alias) error = %v", err)
+	}
+	_ = s.Close()
+
+	s, err = New(opts)
+	if err != nil {
+		t.Fatalf("store.New() second error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+	if _, err := s.GetModelByChannelAndModelID(ctx, "puter", "claude-opus-5"); err == nil {
+		t.Fatal("deleted current Puter model was unexpectedly recreated")
+	}
+	if _, err := s.GetModelByChannelAndModelID(ctx, "puter", "claude-opus-5-fast"); err == nil {
+		t.Fatal("catalog-missing Puter alias was not cleaned up")
+	}
+}
+
+func TestStoreNew_SeedsCurrentGrokModelsWithoutConsoleLegacyModels(t *testing.T) {
 	t.Parallel()
 
 	mini := miniredis.RunT(t)
@@ -185,7 +234,7 @@ func TestStoreNew_SeedsGrokAppChatModelsWithoutConsoleLegacyModels(t *testing.T)
 	}
 
 	ctx := context.Background()
-	for _, id := range []string{"grok-4.3-beta"} {
+	for _, id := range []string{"grok-4.5", "grok-imagine-image-quality"} {
 		model, err := s.GetModelByChannelAndModelID(ctx, "grok", id)
 		if err != nil {
 			t.Fatalf("GetModelByChannelAndModelID(%s) error = %v", id, err)
@@ -214,10 +263,12 @@ func TestStoreNew_SeedsGrokAppChatModelsWithoutConsoleLegacyModels(t *testing.T)
 		mini.Close()
 	})
 
-	if _, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-4.3-beta"); err != nil {
-		t.Fatalf("expected grok-4.3-beta to be seeded after restart: %v", err)
+	for _, id := range []string{"grok-4.5", "grok-imagine-image-quality"} {
+		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err != nil {
+			t.Fatalf("expected current model %s to be seeded after restart: %v", id, err)
+		}
 	}
-	for _, id := range []string{"grok-4.3", "grok-build-0.1"} {
+	for _, id := range []string{"grok-4.3", "grok-4.3-beta", "grok-build-0.1", "grok-imagine-image-pro"} {
 		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err == nil {
 			t.Fatalf("expected console legacy model %s to stay removed", id)
 		}

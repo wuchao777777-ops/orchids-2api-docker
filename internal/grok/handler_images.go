@@ -115,7 +115,7 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	req.Normalize()
 	req.ResponseFormat = normalizeImageResponseFormat(req.ResponseFormat)
 	if !isImageGenerationModel(req.Model) {
-		http.Error(w, "image generation model must be one of [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-pro]", http.StatusBadRequest)
+		http.Error(w, "image generation model must be one of [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-quality, grok-imagine-image-pro]", http.StatusBadRequest)
 		return
 	}
 	normalizedSize, sizeErr := normalizeImageSize(req.Size)
@@ -152,7 +152,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 
 	spec, ok := ResolveModel(req.Model)
 	if !ok || !spec.IsImage || !isImageGenerationModel(spec.ID) {
-		http.Error(w, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-pro]", req.Model), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-quality, grok-imagine-image-pro]", req.Model), http.StatusBadRequest)
 		return
 	}
 

@@ -8,7 +8,7 @@
 - Redis `7+`
 - 已准备好 `config.json`
 
-最小配置示例见 [README.md](/D:/Code/Orchids-2api/README.md) 与 [configuration.md](/D:/Code/Orchids-2api/docs/configuration.md)。
+最小配置示例见 [README.md](../README.md) 与 [configuration.md](../docs/configuration.md)。
 
 注意：
 
@@ -93,7 +93,7 @@ Get-NetTCPConnection -LocalPort 3002 -ErrorAction SilentlyContinue
 模型同步验证：
 
 - 登录管理端后调用 `POST /api/models/refresh`
-- 当前刷新是“按来源同步”：新增即写入，来源消失即删除，不再逐个模型测活
+- 当前刷新是“按来源同步”：新增即写入、来源消失即删除；Puter 还会执行账号 `test_mode` 逐模型验证
 
 建议回归：
 

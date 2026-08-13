@@ -129,7 +129,7 @@ func normalizeImagineModel(model string) string {
 	case "speed", "fast", "lite":
 		return "grok-imagine-image-lite"
 	case "quality", "pro":
-		return "grok-imagine-image-pro"
+		return "grok-imagine-image-quality"
 	}
 	id := normalizeModelID(raw)
 	if id == "" {
@@ -286,7 +286,7 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 		}
 
 		images := make([]imagineImage, 0, n)
-		events, errs := h.streamImagineWSImages(ctx, sess, strings.TrimSpace(prompt), resolveAspectRatio(aspectRatio), n, nsfwEnabled, imagineModel == "grok-imagine-image-pro")
+		events, errs := h.streamImagineWSImages(ctx, sess, strings.TrimSpace(prompt), resolveAspectRatio(aspectRatio), n, nsfwEnabled, imagineModel == "grok-imagine-image-quality" || imagineModel == "grok-imagine-image-pro")
 		for ev := range events {
 			if !ev.Final {
 				continue

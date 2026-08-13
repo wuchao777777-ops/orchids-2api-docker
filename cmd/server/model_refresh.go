@@ -540,22 +540,13 @@ func grokProbeCandidateModels(ctx context.Context, s *store.Store) []discoveredM
 		appendCandidate(id, name)
 	}
 
-	for _, id := range []string{
-		"grok-4.20-0309-non-reasoning",
-		"grok-4.20-fast",
-		"grok-4.20-heavy",
-	} {
-		name := id
-		if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
-			name = spec.Name
-		}
-		appendCandidate(id, name)
-	}
-
 	if s != nil {
 		if existing, err := s.ListModels(ctx); err == nil {
 			for _, model := range existing {
 				if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
+					continue
+				}
+				if modelpolicy.IsDeprecatedGrokModelID(model.ModelID) {
 					continue
 				}
 				appendCandidate(model.ModelID, model.Name)
@@ -948,6 +939,9 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 }
 
 func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
+	if strings.EqualFold(strings.TrimSpace(channel), "puter") {
+		return strings.HasPrefix(strings.TrimSpace(source), "puter_public_models")
+	}
 	if !strings.EqualFold(strings.TrimSpace(channel), "warp") {
 		return false
 	}

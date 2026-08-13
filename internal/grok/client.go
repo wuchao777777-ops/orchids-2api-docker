@@ -41,7 +41,6 @@ const (
 	defaultSetBirthPath     = "/rest/auth/set-birth-date"
 	defaultNSFWMgmtPath     = "/auth_mgmt.AuthManagement/UpdateUserFeatureControls"
 	defaultUA               = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-	defaultAppChatUA        = defaultUA
 	defaultAppChatSecCHUA   = `"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"`
 )
 
@@ -49,6 +48,7 @@ type Client struct {
 	cfg         *config.Config
 	httpClient  *http.Client
 	assetClient *http.Client
+	dpop        *dpopSessionManager
 }
 
 type NSFWEnableResult struct {
@@ -91,6 +91,7 @@ func New(cfg *config.Config) *Client {
 		cfg:         cfg,
 		httpClient:  baseClient,
 		assetClient: assetClient,
+		dpop:        newDPoPSessionManager(),
 	}
 }
 
@@ -322,10 +323,7 @@ func (c *Client) appChatHeaders(token string) http.Header {
 
 func (c *Client) appChatHeadersWithReferer(token, referer string) http.Header {
 	h := cloneHeaderShallow(appChatHeaders, 4)
-	h.Set("User-Agent", defaultAppChatUA)
-	if c != nil && c.cfg != nil && strings.TrimSpace(c.cfg.GrokUserAgent) != "" {
-		h.Set("User-Agent", strings.TrimSpace(c.cfg.GrokUserAgent))
-	}
+	h.Set("User-Agent", c.userAgent())
 	if referer = strings.TrimSpace(referer); referer != "" {
 		h.Set("Referer", referer)
 	}

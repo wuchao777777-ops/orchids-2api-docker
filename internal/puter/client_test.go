@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -16,373 +17,24 @@ import (
 	"orchids-api/internal/upstream"
 )
 
-func TestSendRequestWithPayload_EmitsModelEvents(t *testing.T) {
-	prevURL := puterAPIURL
-	t.Cleanup(func() { puterAPIURL = prevURL })
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), `"auth_token":"puter-token"`) {
-			t.Fatalf("request body missing auth token: %s", string(body))
-		}
-		if !strings.Contains(string(body), `"service":"claude"`) {
-			t.Fatalf("request body missing claude service: %s", string(body))
-		}
-		if strings.Contains(string(body), `"driver"`) {
-			t.Fatalf("request body should use service instead of deprecated driver: %s", string(body))
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "{\"type\":\"text\",\"text\":\"hello from puter\"}\n")
-	}))
-	defer srv.Close()
-	puterAPIURL = srv.URL
-
-	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
-	var events []string
-	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
-		Model: "claude-opus-4-5",
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "hello"}},
-		},
-	}, func(msg upstream.SSEMessage) {
-		events = append(events, msg.Type)
-	}, nil)
-	if err != nil {
-		t.Fatalf("SendRequestWithPayload() error = %v", err)
-	}
-
-	want := []string{"model.text-delta", "model.finish"}
-	if strings.Join(events, ",") != strings.Join(want, ",") {
-		t.Fatalf("events=%v want %v", events, want)
-	}
-}
-
-func TestFetchMonthlyUsage(t *testing.T) {
-	prevURL := puterMeteringUsageURL
-	t.Cleanup(func() { puterMeteringUsageURL = prevURL })
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Fatalf("method=%s want GET", r.Method)
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer puter-token" {
-			t.Fatalf("Authorization=%q want bearer token", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"usage":{"total":{"cost":42,"count":2,"units":7}},"appTotals":{"app-1":{"count":3,"total":123.5}},"allowanceInfo":{"remaining":13494935.4,"monthUsageAllowance":25000000,"addons":{}}}`)
-	}))
-	defer srv.Close()
-	puterMeteringUsageURL = srv.URL
-
-	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
-	usage, err := client.FetchMonthlyUsage(context.Background())
-	if err != nil {
-		t.Fatalf("FetchMonthlyUsage() error = %v", err)
-	}
-	if usage.AllowanceInfo.Remaining != 13494935.4 || usage.AllowanceInfo.MonthUsageAllowance != 25000000 {
-		t.Fatalf("unexpected allowance: %+v", usage.AllowanceInfo)
-	}
-	if usage.AppTotals["app-1"].Count != 3 || usage.AppTotals["app-1"].Total != 123.5 {
-		t.Fatalf("unexpected app totals: %+v", usage.AppTotals)
-	}
-}
-
-func TestSendRequestWithPayload_DoesNotFallbackModel(t *testing.T) {
-	prevURL := puterAPIURL
-	t.Cleanup(func() { puterAPIURL = prevURL })
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), `"model":"missing-model"`) {
-			t.Fatalf("request body missing requested model: %s", string(body))
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "{\"success\":false,\"error\":\"Model not found, please try one of the following models listed here: https://developer.puter.com/ai/models/\"}\n")
-	}))
-	defer srv.Close()
-	puterAPIURL = srv.URL
-
-	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
-	var events []string
-	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
-		Model: "missing-model",
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "hello"}},
-		},
-	}, func(msg upstream.SSEMessage) {
-		events = append(events, msg.Type)
-	}, nil)
-	if err == nil {
-		t.Fatal("expected SendRequestWithPayload() to fail")
-	}
-	if strings.Contains(strings.Join(events, ","), "actual_model") {
-		t.Fatalf("puter should not emit fallback actual_model events, got %v", events)
-	}
-}
-
-func TestVerifyModel_UsesTestModeAndRequestedModel(t *testing.T) {
+func TestSendRequestWithPayloadEmitsNativeStreamEvents(t *testing.T) {
 	prevURL := puterAPIURL
 	t.Cleanup(func() { puterAPIURL = prevURL })
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		text := string(body)
-		if !strings.Contains(text, `"test_mode":true`) {
-			t.Fatalf("verify request missing test_mode=true: %s", text)
+		for _, want := range []string{`"auth_token":"puter-token"`, `"service":"deepseek"`, `"model":"deepseek-v4-flash"`} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("request body missing %s: %s", want, text)
+			}
 		}
-		if !strings.Contains(text, `"model":"claude-sonnet-4-5"`) {
-			t.Fatalf("verify request missing requested model: %s", text)
-		}
-		if !strings.Contains(text, `"service":"claude"`) {
-			t.Fatalf("verify request missing service: %s", text)
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "{\"type\":\"text\",\"text\":\"pong\"}\n")
-	}))
-	defer srv.Close()
-	puterAPIURL = srv.URL
-
-	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
-	if err := client.VerifyModel(context.Background(), "claude-sonnet-4-5"); err != nil {
-		t.Fatalf("VerifyModel() error = %v", err)
-	}
-}
-
-func TestSendRequestWithPayload_PropagatesAPIError(t *testing.T) {
-	prevURL := puterAPIURL
-	t.Cleanup(func() { puterAPIURL = prevURL })
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "{\"success\":false,\"error\":{\"iface\":\"puter-chat-completion\",\"code\":\"no_implementation_available\",\"message\":\"No implementation available for interface `puter-chat-completion`.\",\"status\":502}}\n")
-	}))
-	defer srv.Close()
-	puterAPIURL = srv.URL
-
-	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
-	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
-		Model: "gpt-5.4",
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "hello"}},
-		},
-	}, nil, nil)
-	if err == nil {
-		t.Fatal("expected SendRequestWithPayload() to fail")
-	}
-	if !strings.Contains(err.Error(), "no_implementation_available") {
-		t.Fatalf("expected no_implementation_available error, got %v", err)
-	}
-}
-
-func TestSendRequestWithPayload_PropagatesStringAPIError(t *testing.T) {
-	prevURL := puterAPIURL
-	t.Cleanup(func() { puterAPIURL = prevURL })
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "{\"success\":false,\"error\":\"Model not found, please try one of the following models listed here: https://developer.puter.com/ai/models/\"}\n")
-	}))
-	defer srv.Close()
-	puterAPIURL = srv.URL
-
-	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
-	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
-		Model: "claude-3-5-sonnet",
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "hello"}},
-		},
-	}, nil, nil)
-	if err == nil {
-		t.Fatal("expected SendRequestWithPayload() to fail")
-	}
-	if !strings.Contains(strings.ToLower(err.Error()), "model not found") {
-		t.Fatalf("expected model not found error, got %v", err)
-	}
-}
-
-func TestReadStreamText_StripsDataPrefixAndUsesDelta(t *testing.T) {
-	text, err := readStreamText(strings.NewReader("data: {\"type\":\"text\",\"delta\":\"hello\"}\n\ndata: [DONE]\n"))
-	if err != nil {
-		t.Fatalf("readStreamText() error = %v", err)
-	}
-	if text != "hello" {
-		t.Fatalf("text = %q, want hello", text)
-	}
-}
-
-func TestAsString_NilLikeValuesReturnEmpty(t *testing.T) {
-	tests := []struct {
-		name  string
-		value any
-	}{
-		{name: "nil", value: nil},
-		{name: "literal-nil-string", value: "<nil>"},
-	}
-
-	for _, tt := range tests {
-		if got := asString(tt.value); got != "" {
-			t.Fatalf("%s: asString() = %q, want empty", tt.name, got)
-		}
-	}
-}
-
-func TestParseToolCalls_StripsToolCallMarkup(t *testing.T) {
-	toolCalls, text := parseToolCalls("before <tool_call>{\"name\":\"Read\",\"input\":{\"path\":\"/tmp/a\"}}</tool_call> after")
-	if len(toolCalls) != 1 {
-		t.Fatalf("toolCalls len = %d, want 1", len(toolCalls))
-	}
-	if toolCalls[0].Name != "Read" {
-		t.Fatalf("toolCalls[0].Name = %q, want Read", toolCalls[0].Name)
-	}
-	if text != "before  after" && text != "before after" {
-		t.Fatalf("text = %q", text)
-	}
-}
-
-func TestParseToolCalls_AcceptsArgumentsAlias(t *testing.T) {
-	toolCalls, text := parseToolCalls(`<tool_call>{"name":"Write","arguments":{"file_path":"note.txt","content":"alpha beta"}}</tool_call>`)
-	if len(toolCalls) != 1 {
-		t.Fatalf("toolCalls len = %d, want 1", len(toolCalls))
-	}
-	if toolCalls[0].Name != "Write" {
-		t.Fatalf("toolCalls[0].Name = %q, want Write", toolCalls[0].Name)
-	}
-	var input map[string]any
-	if err := json.Unmarshal(toolCalls[0].Input, &input); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	if input["file_path"] != "note.txt" || input["content"] != "alpha beta" {
-		t.Fatalf("toolCalls[0].Input = %#v", input)
-	}
-	if text != "" {
-		t.Fatalf("text = %q, want empty", text)
-	}
-}
-
-func TestParseToolCalls_AcceptsWholeToolUseJSON(t *testing.T) {
-	toolCalls, text := parseToolCalls("```json\n{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"note.txt\",\"content\":\"alpha beta\"}}\n```")
-	if len(toolCalls) != 1 {
-		t.Fatalf("toolCalls len = %d, want 1", len(toolCalls))
-	}
-	if toolCalls[0].Name != "Write" {
-		t.Fatalf("toolCalls[0].Name = %q, want Write", toolCalls[0].Name)
-	}
-	var input map[string]any
-	if err := json.Unmarshal(toolCalls[0].Input, &input); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	if input["file_path"] != "note.txt" || input["content"] != "alpha beta" {
-		t.Fatalf("toolCalls[0].Input = %#v", input)
-	}
-	if text != "" {
-		t.Fatalf("text = %q, want empty", text)
-	}
-}
-
-func TestParseToolCalls_AcceptsMixedProseAndFencedToolJSON(t *testing.T) {
-	raw := "I will use a tool now.\n```json\n{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"calculator.py\",\"content\":\"print(1)\"}}\n```\nI will wait for the result."
-	toolCalls, text := parseToolCalls(raw)
-	if len(toolCalls) != 1 {
-		t.Fatalf("toolCalls len = %d, want 1", len(toolCalls))
-	}
-	if toolCalls[0].Name != "Write" {
-		t.Fatalf("toolCalls[0].Name = %q, want Write", toolCalls[0].Name)
-	}
-	var input map[string]any
-	if err := json.Unmarshal(toolCalls[0].Input, &input); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	if input["file_path"] != "calculator.py" {
-		t.Fatalf("toolCalls[0].Input = %#v", input)
-	}
-	if !strings.Contains(text, "I will use a tool now.") || !strings.Contains(text, "I will wait for the result.") {
-		t.Fatalf("remaining text = %q", text)
-	}
-	if strings.Contains(text, "tool_use") {
-		t.Fatalf("expected fenced tool JSON to be removed from text, got %q", text)
-	}
-}
-
-func TestSanitizeAssistantText_StripsProceduralTextWhenToolCallExists(t *testing.T) {
-	raw := strings.Join([]string{
-		"我来帮你在 test.txt 中添加内容。首先让我读取一下这个文件的当前内容。",
-		"",
-		`{"content":"     1\tHello World\n"}tool_call_result>`,
-		"",
-		"现在我将添加 \"我是大帅比\" 到文件中：",
-		"",
-		`{"content":"     1\tHello World\n     2\t我是大帅比\n"}tool_call_result>`,
-		"",
-		"完成！✅ 我已经成功在 test.txt 中添加了 \"我是大帅比\"。",
-	}, "\n")
-
-	out := sanitizeAssistantText(raw, []ParsedToolCall{{
-		Name: "Update",
-		ID:   "tool_update_1",
-		Input: json.RawMessage(
-			`{"file_path":"test.txt","old_string":"Hello World","new_string":"Hello World\n我是大帅比"}`,
-		),
-	}})
-	if out != "" {
-		t.Fatalf("sanitizeAssistantText() = %q, want empty", out)
-	}
-}
-
-func TestSanitizeAssistantText_KeepsSubstantiveTextWithToolCall(t *testing.T) {
-	raw := "我先检查配置文件，然后修复代理设置。\n\n代理认证字段的格式有误，我会继续修正。"
-	out := sanitizeAssistantText(raw, []ParsedToolCall{{
-		Name:  "Read",
-		ID:    "tool_read_1",
-		Input: json.RawMessage(`{"file_path":"config.json"}`),
-	}})
-	if !strings.Contains(out, "代理认证字段的格式有误") {
-		t.Fatalf("sanitizeAssistantText() = %q, want substantive summary kept", out)
-	}
-	if strings.Contains(out, "我先检查配置文件") {
-		t.Fatalf("sanitizeAssistantText() should drop procedural lead-in, got %q", out)
-	}
-}
-
-func TestParseToolCalls_GeneratesToolCallIDWhenMissingOrNil(t *testing.T) {
-	tests := []struct {
-		name string
-		raw  string
-	}{
-		{
-			name: "missing-id",
-			raw:  `<tool_call>{"name":"Write","input":{"file_path":"note.txt","content":"alpha beta"}}</tool_call>`,
-		},
-		{
-			name: "null-id",
-			raw:  `<tool_call>{"id":null,"name":"Write","input":{"file_path":"note.txt","content":"alpha beta"}}</tool_call>`,
-		},
-		{
-			name: "literal-nil-id",
-			raw:  `<tool_call>{"id":"<nil>","name":"Write","input":{"file_path":"note.txt","content":"alpha beta"}}</tool_call>`,
-		},
-	}
-
-	for _, tt := range tests {
-		toolCalls, text := parseToolCalls(tt.raw)
-		if len(toolCalls) != 1 {
-			t.Fatalf("%s: toolCalls len = %d, want 1", tt.name, len(toolCalls))
-		}
-		if !strings.HasPrefix(toolCalls[0].ID, "toolu_") {
-			t.Fatalf("%s: toolCalls[0].ID = %q, want generated toolu_* id", tt.name, toolCalls[0].ID)
-		}
-		if text != "" {
-			t.Fatalf("%s: text = %q, want empty", tt.name, text)
-		}
-	}
-}
-
-func TestSendRequestWithPayload_ParsesArgumentsAliasToolCall(t *testing.T) {
-	prevURL := puterAPIURL
-	t.Cleanup(func() { puterAPIURL = prevURL })
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "{\"type\":\"text\",\"text\":\"<tool_call>{\\\"name\\\":\\\"Write\\\",\\\"arguments\\\":{\\\"file_path\\\":\\\"note.txt\\\",\\\"content\\\":\\\"alpha beta\\\"}}</tool_call>\"}\n")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`{"type":"reasoning","reasoning":"thinking"}`,
+			`{"type":"text","text":"I will search."}`,
+			`{"type":"tool_use","id":"call_search","name":"web_search","input":{"query":"SpaceX latest news"}}`,
+			`{"type":"usage","usage":{"input_tokens":12,"output_tokens":7}}`,
+		}, "\n"))
 	}))
 	defer srv.Close()
 	puterAPIURL = srv.URL
@@ -390,275 +42,288 @@ func TestSendRequestWithPayload_ParsesArgumentsAliasToolCall(t *testing.T) {
 	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
 	var events []upstream.SSEMessage
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
-		Model: "claude-opus-4-5",
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "use Write"}},
-		},
-	}, func(msg upstream.SSEMessage) {
-		events = append(events, msg)
-	}, nil)
+		Model:    "deepseek-v4-flash",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "latest news"}}},
+	}, func(msg upstream.SSEMessage) { events = append(events, msg) }, nil)
 	if err != nil {
 		t.Fatalf("SendRequestWithPayload() error = %v", err)
 	}
 
-	if len(events) != 2 {
-		t.Fatalf("events len = %d, want 2", len(events))
+	wantTypes := []string{"model.reasoning-delta", "model.text-delta", "model.tool-call", "model.tokens-used", "model.finish"}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("event count=%d want=%d: %#v", len(events), len(wantTypes), events)
 	}
-	if events[0].Type != "model.tool-call" {
-		t.Fatalf("first event type = %q, want model.tool-call", events[0].Type)
-	}
-	if got := events[0].Event["toolName"]; got != "Write" {
-		t.Fatalf("tool name = %v, want Write", got)
-	}
-	partialJSON, _ := events[0].Event["input"].(string)
-	var input map[string]any
-	if err := json.Unmarshal([]byte(partialJSON), &input); err != nil {
-		t.Fatalf("unmarshal partial_json: %v", err)
-	}
-	if input["file_path"] != "note.txt" || input["content"] != "alpha beta" {
-		t.Fatalf("partial_json = %#v", input)
-	}
-	if events[1].Type != "model.finish" {
-		t.Fatalf("second event type = %q, want model.finish", events[1].Type)
-	}
-	if got := events[1].Event["finishReason"]; got != "tool_use" {
-		t.Fatalf("finishReason = %v, want tool_use", got)
-	}
-}
-
-func TestSendRequestWithPayload_GeneratesToolCallIDWhenUpstreamOmitsIt(t *testing.T) {
-	prevURL := puterAPIURL
-	t.Cleanup(func() { puterAPIURL = prevURL })
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "{\"type\":\"text\",\"text\":\"<tool_call>{\\\"id\\\":null,\\\"name\\\":\\\"Write\\\",\\\"input\\\":{\\\"file_path\\\":\\\"note.txt\\\",\\\"content\\\":\\\"alpha beta\\\"}}</tool_call>\"}\n")
-	}))
-	defer srv.Close()
-	puterAPIURL = srv.URL
-
-	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
-	var events []upstream.SSEMessage
-	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
-		Model: "claude-opus-4-5",
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "use Write"}},
-		},
-	}, func(msg upstream.SSEMessage) {
-		events = append(events, msg)
-	}, nil)
-	if err != nil {
-		t.Fatalf("SendRequestWithPayload() error = %v", err)
-	}
-
-	if len(events) != 2 {
-		t.Fatalf("events len = %d, want 2", len(events))
-	}
-	if events[0].Type != "model.tool-call" {
-		t.Fatalf("first event type = %q, want model.tool-call", events[0].Type)
-	}
-	toolCallID, _ := events[0].Event["toolCallId"].(string)
-	if !strings.HasPrefix(toolCallID, "toolu_") {
-		t.Fatalf("toolCallId = %q, want generated toolu_* id", toolCallID)
-	}
-	if toolCallID == "<nil>" {
-		t.Fatal("toolCallId should not be <nil>")
-	}
-}
-
-func TestServiceForModel(t *testing.T) {
-	tests := []struct {
-		model string
-		want  string
-	}{
-		{model: "claude-opus-4-5", want: "claude"},
-		{model: "gpt-5.1", want: "openai"},
-		{model: "gemini-2.5-pro", want: "google"},
-		{model: "grok-3", want: "x-ai"},
-		{model: "deepseek-chat", want: "deepseek"},
-		{model: "mistral-large-latest", want: "mistral"},
-		{model: "devstral-small-2507", want: "mistral"},
-		{model: "openrouter:openai/gpt-5.1", want: "openrouter"},
-		{model: "togetherai:meta-llama/Llama-3.3-70B-Instruct-Turbo", want: "togetherai"},
-	}
-
-	for _, tt := range tests {
-		if got := serviceForModel(tt.model); got != tt.want {
-			t.Fatalf("serviceForModel(%q)=%q want %q", tt.model, got, tt.want)
+	for i, want := range wantTypes {
+		if events[i].Type != want {
+			t.Fatalf("events[%d].Type=%q want=%q", i, events[i].Type, want)
 		}
 	}
-}
-
-func TestExtractAuthToken_AcceptsCookieOrRawToken(t *testing.T) {
-	tests := []struct {
-		name string
-		raw  string
-		want string
-	}{
-		{name: "raw", raw: "puter-token", want: "puter-token"},
-		{name: "quoted", raw: `"puter-token"`, want: "puter-token"},
-		{name: "cookie-auth-token", raw: "foo=bar; auth_token=puter-token; theme=dark", want: "puter-token"},
-		{name: "cookie-puter-auth-token", raw: "puter_auth_token=puter-token", want: "puter-token"},
+	if events[2].Event["toolName"] != "web_search" || events[2].Event["input"] != `{"query":"SpaceX latest news"}` {
+		t.Fatalf("tool event=%#v", events[2].Event)
 	}
-
-	for _, tt := range tests {
-		if got := extractAuthToken(tt.raw); got != tt.want {
-			t.Fatalf("%s: extractAuthToken()=%q want %q", tt.name, got, tt.want)
-		}
+	if events[3].Event["inputTokens"] != 12 || events[3].Event["outputTokens"] != 7 {
+		t.Fatalf("usage event=%#v", events[3].Event)
+	}
+	if events[4].Event["finishReason"] != "tool_use" {
+		t.Fatalf("finish event=%#v", events[4].Event)
 	}
 }
 
-func TestBuildRequest_IncludesWorkdirToolPrompt(t *testing.T) {
+func TestBuildRequestUsesNativeToolsAndToolHistory(t *testing.T) {
 	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
 	req := upstream.UpstreamRequest{
-		Model:   "claude-sonnet-4-6",
-		Workdir: `d:\Code\Orchids-2api`,
-		Tools: []interface{}{
-			map[string]interface{}{
-				"name":        "Read",
-				"description": "Read a file",
-				"input_schema": map[string]interface{}{
-					"type": "object",
-				},
-			},
-		},
+		Model:   "claude-opus-5",
+		Workdir: `C:\Code\Orchids-2api`,
+		Tools: []interface{}{map[string]interface{}{
+			"name": "Read", "description": "Read a file",
+			"input_schema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"file_path": map[string]interface{}{"type": "string"}}},
+		}},
 		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "这个项目是干什么的"}},
+			{Role: "user", Content: prompt.MessageContent{Text: "read README"}},
+			{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+				{Type: "text", Text: "I will inspect it."},
+				{Type: "tool_use", ID: "call_read", Name: "Read", Input: map[string]interface{}{"file_path": "README.md"}},
+			}}},
+			{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+				{Type: "tool_result", ToolUseID: "call_read", Content: "project readme"},
+				{Type: "text", Text: "summarize it"},
+			}}},
 		},
 	}
 
-	built := client.buildRequest(req, false)
-	if len(built.Args.Messages) == 0 || built.Args.Messages[0].Role != "system" {
-		t.Fatalf("expected leading system prompt, got %#v", built.Args.Messages)
+	built, err := client.buildRequest(req, false)
+	if err != nil {
+		t.Fatalf("buildRequest() error=%v", err)
 	}
-	systemPrompt := built.Args.Messages[0].Content
-	for _, want := range []string{
-		"The real local project working directory is `d:\\Code\\Orchids-2api`.",
-		"Treat the project root as `.`",
-		"Never emit Windows absolute paths like `C:\\...`",
-		"# Tools",
-		"<tool_call>",
-		"Never claim that a file was created, updated, or deleted unless you emitted the corresponding tool call.",
+	if len(built.Args.Tools) != 1 {
+		t.Fatalf("native tools=%#v", built.Args.Tools)
+	}
+	rawTool, _ := json.Marshal(built.Args.Tools[0])
+	if !strings.Contains(string(rawTool), `"type":"function"`) || !strings.Contains(string(rawTool), `"parameters"`) {
+		t.Fatalf("normalized tool=%s", rawTool)
+	}
+	if len(built.Args.Messages) != 5 {
+		t.Fatalf("messages=%#v", built.Args.Messages)
+	}
+	if built.Args.Messages[0].Role != "system" || strings.Contains(built.Args.Messages[0].Content, "<tool_call>") || strings.Contains(built.Args.Messages[0].Content, "# Tools") {
+		t.Fatalf("system prompt still contains legacy tool protocol: %q", built.Args.Messages[0].Content)
+	}
+	if !strings.Contains(built.Args.Messages[0].Content, `C:\Code\Orchids-2api`) {
+		t.Fatalf("system prompt missing workdir: %q", built.Args.Messages[0].Content)
+	}
+	assistant := built.Args.Messages[2]
+	if assistant.Role != "assistant" || len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Function.Name != "Read" {
+		t.Fatalf("assistant native tool history=%#v", assistant)
+	}
+	if assistant.ToolCalls[0].Function.Arguments != `{"file_path":"README.md"}` {
+		t.Fatalf("assistant arguments=%q", assistant.ToolCalls[0].Function.Arguments)
+	}
+	if built.Args.Messages[3].Role != "tool" || built.Args.Messages[3].ToolCallID != "call_read" {
+		t.Fatalf("tool result message=%#v", built.Args.Messages[3])
+	}
+	if built.Args.Messages[4].Role != "user" || built.Args.Messages[4].Content != "summarize it" {
+		t.Fatalf("follow-up message=%#v", built.Args.Messages[4])
+	}
+}
+
+func TestBuildRequestNoToolsOmitsNativeTools(t *testing.T) {
+	client := NewFromAccount(&store.Account{ClientCookie: "puter-token"}, nil)
+	built, err := client.buildRequest(upstream.UpstreamRequest{
+		Model:    "claude-opus-5",
+		NoTools:  true,
+		Tools:    []interface{}{map[string]interface{}{"name": "Read"}},
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "summarize"}}},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest() error=%v", err)
+	}
+	if len(built.Args.Tools) != 0 {
+		t.Fatalf("tools=%#v want omitted", built.Args.Tools)
+	}
+	if !strings.Contains(built.Args.Messages[0].Content, "must not make any tool calls") {
+		t.Fatalf("missing no-tools instruction: %q", built.Args.Messages[0].Content)
+	}
+}
+
+func TestNormalizeToolDefinitionsPreservesBuiltinTools(t *testing.T) {
+	got := normalizeToolDefinitions([]interface{}{map[string]interface{}{"type": "web_search"}})
+	if len(got) != 1 {
+		t.Fatalf("builtin tools=%#v", got)
+	}
+	raw, _ := json.Marshal(got[0])
+	if string(raw) != `{"type":"web_search"}` {
+		t.Fatalf("builtin tool=%s", raw)
+	}
+}
+
+func TestVerifyModelRequiresUsableEvent(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{name: "valid", body: `{"type":"usage","usage":{"input_tokens":1,"output_tokens":1}}`},
+		{name: "empty", body: "", wantErr: "no usable stream events"},
+		{name: "stream-error", body: `{"type":"error","message":"model unavailable"}`, wantErr: "model unavailable"},
+		{name: "malformed-only", body: `not-json`, wantErr: "no usable stream events"},
 	} {
-		if !strings.Contains(systemPrompt, want) {
-			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
+		t.Run(tt.name, func(t *testing.T) {
+			prevURL := puterAPIURL
+			t.Cleanup(func() { puterAPIURL = prevURL })
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				if !strings.Contains(string(body), `"test_mode":true`) || !strings.Contains(string(body), `"model":"claude-opus-5"`) {
+					t.Fatalf("invalid verify request: %s", body)
+				}
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer srv.Close()
+			puterAPIURL = srv.URL
+
+			client := NewFromAccount(&store.Account{ClientCookie: "puter-token"}, nil)
+			err := client.VerifyModel(context.Background(), "claude-opus-5")
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("VerifyModel() error=%v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("VerifyModel() error=%v want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSendRequestWithPayloadPropagatesEnvelopeErrors(t *testing.T) {
+	for _, body := range []string{
+		`{"success":false,"error":{"iface":"puter-chat-completion","code":"no_implementation_available","message":"No implementation available","status":502}}`,
+		`{"success":false,"error":"Model not found"}`,
+	} {
+		prevURL := puterAPIURL
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, body) }))
+		puterAPIURL = srv.URL
+		client := NewFromAccount(&store.Account{ClientCookie: "puter-token"}, nil)
+		err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+			Model:    "claude-opus-5",
+			Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hello"}}},
+		}, nil, nil)
+		srv.Close()
+		puterAPIURL = prevURL
+		if err == nil {
+			t.Fatalf("expected envelope error for %s", body)
 		}
 	}
 }
 
-func TestBuildRequest_NoToolsPromptDisablesToolCalls(t *testing.T) {
-	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
-	req := upstream.UpstreamRequest{
-		Model:   "claude-sonnet-4-6",
-		Workdir: `d:\Code\Orchids-2api`,
-		NoTools: true,
-		Tools: []interface{}{
-			map[string]interface{}{
-				"name": "Read",
-			},
-		},
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "总结刚才的工具结果"}},
-		},
+func TestStreamPreservesWhitespaceTextChunks(t *testing.T) {
+	raw := strings.Join([]string{
+		"data: {\"type\":\"text\",\"text\":\"```go\"}",
+		`data: {"type":"text","text":"\n"}`,
+		`data: {"type":"text","text":"func main() {}"}`,
+		`data: [DONE]`,
+	}, "\n")
+	var text strings.Builder
+	result, err := consumePuterStream(strings.NewReader(raw), func(msg upstream.SSEMessage) {
+		if msg.Type == "model.text-delta" {
+			text.WriteString(msg.Event["delta"].(string))
+		}
+	})
+	if err != nil {
+		t.Fatalf("consumePuterStream() error=%v", err)
 	}
-
-	built := client.buildRequest(req, false)
-	systemPrompt := built.Args.Messages[0].Content
-	if !strings.Contains(systemPrompt, "This turn must not make any tool calls.") {
-		t.Fatalf("expected no-tools instruction, got:\n%s", systemPrompt)
-	}
-	if strings.Contains(systemPrompt, "# Tools") {
-		t.Fatalf("did not expect tool catalog when no-tools gate is enabled, got:\n%s", systemPrompt)
+	if !result.SawMeaningfulEvent || text.String() != "```go\nfunc main() {}" {
+		t.Fatalf("result=%#v text=%q", result, text.String())
 	}
 }
 
-func TestBuildRequest_TestModeEnabledForVerification(t *testing.T) {
-	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
-	req := upstream.UpstreamRequest{
-		Model: "claude-sonnet-4-6",
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "ping"}},
-		},
-	}
+func TestFetchMonthlyUsageDecodesOnlyAllowance(t *testing.T) {
+	prevURL := puterMeteringUsageURL
+	t.Cleanup(func() { puterMeteringUsageURL = prevURL })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer puter-token" {
+			t.Fatalf("Authorization=%q", r.Header.Get("Authorization"))
+		}
+		_, _ = io.WriteString(w, `{"usage":{"ignored":true},"appTotals":{"ignored":true},"allowanceInfo":{"remaining":13.5,"monthUsageAllowance":25,"addons":{}}}`)
+	}))
+	defer srv.Close()
+	puterMeteringUsageURL = srv.URL
 
-	built := client.buildRequest(req, true)
-	if !built.TestMode {
-		t.Fatal("expected puter verify request to enable test_mode")
+	usage, err := NewFromAccount(&store.Account{ClientCookie: "puter-token"}, nil).FetchMonthlyUsage(context.Background())
+	if err != nil {
+		t.Fatalf("FetchMonthlyUsage() error=%v", err)
 	}
-	if built.Args.Model != "claude-sonnet-4-6" {
-		t.Fatalf("Args.Model=%q want claude-sonnet-4-6", built.Args.Model)
+	if usage.AllowanceInfo.Remaining != 13.5 || usage.AllowanceInfo.MonthUsageAllowance != 25 {
+		t.Fatalf("usage=%#v", usage)
 	}
 }
 
-func TestSanitizeParsedToolCalls_RelativizesWorkspaceAbsolutePaths(t *testing.T) {
-	calls := []ParsedToolCall{
-		{
-			Name: "Write",
-			ID:   "toolu_1",
-			Input: json.RawMessage(`{
-				"file_path":"C:\\Users\\zhangdailin\\Desktop\\11112\\output.txt",
-				"content":"123123"
-			}`),
-		},
-	}
-
-	sanitized := sanitizeParsedToolCalls(calls, `C:\Users\zhangdailin\Desktop\11112`)
-	var input map[string]any
-	if err := json.Unmarshal(sanitized[0].Input, &input); err != nil {
-		t.Fatalf("unmarshal sanitized input: %v", err)
-	}
-	if got := input["file_path"]; got != "output.txt" {
-		t.Fatalf("file_path = %v, want output.txt", got)
-	}
-}
-
-func TestRelativizeWorkspacePath_WindowsStyleOnNonWindowsHost(t *testing.T) {
-	got, ok := relativizeWorkspacePath(`C:\Users\zhangdailin\Desktop\11112\folder\output.txt`, `C:\Users\zhangdailin\Desktop\11112`)
-	if !ok {
-		t.Fatal("expected Windows-style path to be relativized")
-	}
-	if got != "folder/output.txt" {
-		t.Fatalf("rel = %q, want %q", got, "folder/output.txt")
+func TestChatHeadersAreMinimal(t *testing.T) {
+	prevURL := puterAPIURL
+	t.Cleanup(func() { puterAPIURL = prevURL })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Type") != "text/plain;actually=json" {
+			t.Fatalf("Content-Type=%q", r.Header.Get("Content-Type"))
+		}
+		if r.Header.Get("Origin") != "" || r.Header.Get("Sec-Fetch-Site") != "" || r.Header.Get("sec-ch-ua") != "" {
+			t.Fatalf("legacy browser headers leaked: %#v", r.Header)
+		}
+		_, _ = io.WriteString(w, `{"type":"text","text":"ok"}`)
+	}))
+	defer srv.Close()
+	puterAPIURL = srv.URL
+	client := NewFromAccount(&store.Account{ClientCookie: "puter-token"}, nil)
+	if err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-5", Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
+	}, nil, nil); err != nil {
+		t.Fatalf("SendRequestWithPayload() error=%v", err)
 	}
 }
 
-func TestSanitizeParsedToolCalls_LeavesExternalAbsolutePathsUnchanged(t *testing.T) {
-	calls := []ParsedToolCall{
-		{
-			Name: "Write",
-			ID:   "toolu_1",
-			Input: json.RawMessage(`{
-				"file_path":"D:\\other\\place\\output.txt",
-				"content":"123123"
-			}`),
-		},
+func TestServiceForCurrentModelsAndRejectsLegacyRoutes(t *testing.T) {
+	tests := []struct{ model, want string }{
+		{"claude-opus-5", "claude"},
+		{"gpt-5.6-sol", "openai"},
+		{"gemini-3.5-flash", "google"},
+		{"grok-4.5", "x-ai"},
+		{"deepseek-v4-flash", "deepseek"},
+		{"mistral-small-2603", "mistral"},
 	}
-
-	sanitized := sanitizeParsedToolCalls(calls, `C:\Users\zhangdailin\Desktop\11112`)
-	var input map[string]any
-	if err := json.Unmarshal(sanitized[0].Input, &input); err != nil {
-		t.Fatalf("unmarshal sanitized input: %v", err)
+	for _, tt := range tests {
+		got, err := serviceForModel(tt.model)
+		if err != nil || got != tt.want {
+			t.Fatalf("serviceForModel(%q)=(%q,%v) want %q", tt.model, got, err, tt.want)
+		}
 	}
-	if got := input["file_path"]; got != `D:\other\place\output.txt` {
-		t.Fatalf("file_path = %v, want external path to remain unchanged", got)
+	for _, legacy := range []string{"claude-opus-4-6", "openrouter:openai/gpt-5.6", "togetherai:qwen/model", "o3", "unknown"} {
+		if _, err := serviceForModel(legacy); err == nil {
+			t.Fatalf("serviceForModel(%q) unexpectedly succeeded", legacy)
+		}
 	}
 }
 
-func TestNewFromAccount_ReusesSharedHTTPClient(t *testing.T) {
-	cfg := &config.Config{
-		RequestTimeout: 30,
-		ProxyHTTP:      "http://proxy.local:3128",
-		ProxyUser:      "user",
-		ProxyPass:      "pass",
+func TestExtractAuthTokenAcceptsCookieOrRawToken(t *testing.T) {
+	for _, tt := range []struct{ raw, want string }{
+		{"puter-token", "puter-token"},
+		{`"puter-token"`, "puter-token"},
+		{"foo=bar; auth_token=puter-token; theme=dark", "puter-token"},
+		{"puter_auth_token=puter-token", "puter-token"},
+	} {
+		if got := extractAuthToken(tt.raw); got != tt.want {
+			t.Fatalf("extractAuthToken(%q)=%q want=%q", tt.raw, got, tt.want)
+		}
 	}
+}
 
-	clientA := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "token-a"}, cfg)
-	clientB := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "token-b"}, cfg)
+func TestCurrentDateInstructionUsesProvidedDate(t *testing.T) {
+	got := currentDateInstruction(time.Date(2026, time.August, 12, 21, 0, 0, 0, time.FixedZone("CST", 8*60*60)))
+	if !strings.Contains(got, "2026-08-12") || !strings.Contains(got, "do not assume an earlier year") {
+		t.Fatalf("currentDateInstruction()=%q", got)
+	}
+}
 
+func TestNewFromAccountReusesSharedHTTPClient(t *testing.T) {
+	cfg := &config.Config{RequestTimeout: 30, ProxyHTTP: "http://proxy.local:3128", ProxyUser: "user", ProxyPass: "pass"}
+	clientA := NewFromAccount(&store.Account{ClientCookie: "token-a"}, cfg)
+	clientB := NewFromAccount(&store.Account{ClientCookie: "token-b"}, cfg)
 	if clientA.httpClient != clientB.httpClient {
-		t.Fatal("expected puter clients with same transport config to reuse shared http client")
-	}
-	if !clientA.sharedHTTPClient || !clientB.sharedHTTPClient {
-		t.Fatal("expected sharedHTTPClient flag to be set")
+		t.Fatal("expected shared HTTP client")
 	}
 }

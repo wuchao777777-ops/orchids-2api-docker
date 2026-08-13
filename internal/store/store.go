@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"orchids-api/internal/modelpolicy"
 )
 
 var ErrNoRows = fmt.Errorf("no rows in result set")
@@ -156,6 +159,7 @@ func New(opts Options) (*Store, error) {
 func (s *Store) seedModels() error {
 	ctx := context.Background()
 	s.cleanupDeprecatedModelIDs(ctx)
+	s.reconcileLatestPuterModels(ctx)
 	existing, err := s.ListModels(ctx)
 	if err == nil && len(existing) > 0 {
 		s.ensureRequiredGrokChatModels(ctx)
@@ -199,12 +203,45 @@ func (s *Store) seedModels() error {
 	}
 
 	s.cleanupDeprecatedModelIDs(ctx)
+	s.reconcileLatestPuterModels(ctx)
 
 	return nil
 }
 
+func (s *Store) reconcileLatestPuterModels(ctx context.Context) {
+	models, err := s.ListModels(ctx)
+	if err != nil {
+		slog.Warn("Failed to inspect Puter models for reconciliation", "error", err)
+		return
+	}
+	for _, model := range models {
+		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "puter") || modelpolicy.IsLatestPuterModelID(model.ModelID) {
+			continue
+		}
+		if err := s.DeleteModel(ctx, model.ID); err != nil {
+			slog.Warn("Failed to remove old Puter model", "model_id", model.ModelID, "error", err)
+		}
+	}
+}
+
 func (s *Store) cleanupDeprecatedModelIDs(ctx context.Context) {
 	deprecatedModelIDs := []string{
+		"grok-4.20-0309-non-reasoning",
+		"grok-4.20-0309",
+		"grok-4.20-0309-reasoning",
+		"grok-4.20-0309-non-reasoning-super",
+		"grok-4.20-0309-super",
+		"grok-4.20-0309-reasoning-super",
+		"grok-4.20-0309-non-reasoning-heavy",
+		"grok-4.20-0309-heavy",
+		"grok-4.20-0309-reasoning-heavy",
+		"grok-4.20-multi-agent-0309",
+		"grok-4.20-fast",
+		"grok-4.20-auto",
+		"grok-4.20-expert",
+		"grok-4.20-heavy",
+		"grok-4.3-beta",
+		"grok-imagine-image-pro",
 		"grok-3",
 		"grok-3-thinking",
 		"grok-3-fast",
@@ -269,24 +306,10 @@ func buildGrokSeedModels() []Model {
 		id   string
 		name string
 	}{
-		{"grok-4.20-0309-non-reasoning", "Grok 4.20 0309 Non-Reasoning"},
-		{"grok-4.20-0309", "Grok 4.20 0309"},
-		{"grok-4.20-0309-reasoning", "Grok 4.20 0309 Reasoning"},
-		{"grok-4.20-0309-non-reasoning-super", "Grok 4.20 0309 Non-Reasoning Super"},
-		{"grok-4.20-0309-super", "Grok 4.20 0309 Super"},
-		{"grok-4.20-0309-reasoning-super", "Grok 4.20 0309 Reasoning Super"},
-		{"grok-4.20-0309-non-reasoning-heavy", "Grok 4.20 0309 Non-Reasoning Heavy"},
-		{"grok-4.20-0309-heavy", "Grok 4.20 0309 Heavy"},
-		{"grok-4.20-0309-reasoning-heavy", "Grok 4.20 0309 Reasoning Heavy"},
-		{"grok-4.20-multi-agent-0309", "Grok 4.20 Multi-Agent 0309"},
-		{"grok-4.20-fast", "Grok 4.20 Fast"},
-		{"grok-4.20-auto", "Grok 4.20 Auto"},
-		{"grok-4.20-expert", "Grok 4.20 Expert"},
-		{"grok-4.20-heavy", "Grok 4.20 Heavy"},
-		{"grok-4.3-beta", "Grok 4.3 Beta"},
+		{"grok-4.5", "Grok 4.5"},
 		{"grok-imagine-image-lite", "Grok Imagine Image Lite"},
 		{"grok-imagine-image", "Grok Imagine Image"},
-		{"grok-imagine-image-pro", "Grok Imagine Image Pro"},
+		{"grok-imagine-image-quality", "Grok Imagine Image Quality"},
 		{"grok-imagine-image-edit", "Grok Imagine Image Edit"},
 		{"grok-imagine-video", "Grok Imagine Video"},
 	}

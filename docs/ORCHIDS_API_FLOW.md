@@ -57,7 +57,7 @@ main.go
 
 ## 3. `orchids` / `warp` / `puter` 处理流
 
-这些通道统一走 [handler.go](/D:/Code/Orchids-2api/internal/handler/handler.go) 和 [stream_handler.go](/D:/Code/Orchids-2api/internal/handler/stream_handler.go)。
+这些通道统一走 [handler.go](../internal/handler/handler.go) 和 [stream_handler.go](../internal/handler/stream_handler.go)。
 
 ```text
 HTTP Request
@@ -90,14 +90,15 @@ HTTP Request
 
 Puter 虽然也走统一 handler，但上游特征不同：
 
-- 上游返回的工具调用需要重新组装为 Claude Messages `tool_use`
+- 请求使用原生 `tools`、assistant `tool_calls` 与 `role: tool` 消息，不再在 system prompt 中模拟工具协议
+- 上游 `tool_use` 流事件会转换为统一工具事件，再组装为 Claude Messages `tool_use`
 - 非流式响应要保留 `tool_use` block
 - `tool_result` follow-up 可以继续发起下一轮工具调用，也可以收敛成文本
 - 当前已有 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result` 回归测试
 
 ## 4. `grok` 处理流
 
-Grok 走独立的 [handler.go](/D:/Code/Orchids-2api/internal/grok/handler.go)。
+Grok 走独立的 [handler.go](../internal/grok/handler.go)。
 
 ### 4.1 Chat Completions
 
@@ -152,7 +153,7 @@ Admin Request
 
 - `orchids`：上游公开模型选择列表
 - `warp`：账号 GraphQL 发现，失败时回退种子模型
-- `puter`：公开模型列表
+- `puter`：官方模型目录 + 当前代策略过滤 + 账号 `test_mode` 验证
 - `grok`：内置支持模型 + 现存模型 + 公共文档探测
 
 ## 6. 管理端与公共接口流程

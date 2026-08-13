@@ -163,7 +163,7 @@ func puterToolSchema(name string, properties map[string]any, required ...string)
 }
 
 func TestHandleMessages_Puter_EditRoundTripRegression(t *testing.T) {
-	model := "claude-opus-4-5"
+	model := "claude-opus-5"
 	editTool := puterToolSchema("Edit", map[string]any{
 		"file_path":  map[string]any{"type": "string"},
 		"old_string": map[string]any{"type": "string"},
@@ -247,7 +247,7 @@ func TestHandleMessages_Puter_EditRoundTripRegression(t *testing.T) {
 }
 
 func TestHandleMessages_Puter_ReadRoundTripRegression(t *testing.T) {
-	model := "claude-opus-4-5"
+	model := "claude-opus-5"
 	readTool := puterToolSchema("Read", map[string]any{
 		"file_path": map[string]any{"type": "string"},
 	}, "file_path")
@@ -329,7 +329,7 @@ func TestHandleMessages_Puter_ReadRoundTripRegression(t *testing.T) {
 }
 
 func TestHandleMessages_Puter_DeleteRoundTripRegression(t *testing.T) {
-	model := "claude-opus-4-5"
+	model := "claude-opus-5"
 	deleteTool := puterToolSchema("Delete", map[string]any{
 		"file_path": map[string]any{"type": "string"},
 	}, "file_path")
@@ -415,7 +415,7 @@ func TestHandleMessages_Puter_LongContextRegression(t *testing.T) {
 
 	client := &fakePayloadClient{
 		eventsByOp: [][]upstream.SSEMessage{
-			puterDirectTextEvents("msg_long_context", "claude-opus-4-5", sentinel, 8),
+			puterDirectTextEvents("msg_long_context", "claude-opus-5", sentinel, 8),
 		},
 	}
 	h := newTestHandler(client)
@@ -431,7 +431,7 @@ func TestHandleMessages_Puter_LongContextRegression(t *testing.T) {
 	longPrompt := b.String()
 
 	body := mustMarshalTestJSON(t, map[string]any{
-		"model":    "claude-opus-4-5",
+		"model":    "claude-opus-5",
 		"messages": []map[string]any{{"role": "user", "content": longPrompt}},
 		"stream":   false,
 	})
@@ -468,15 +468,15 @@ func TestHandleMessages_Puter_MultiRoundToolResultChainRegression(t *testing.T) 
 
 	client := &fakePayloadClient{
 		eventsByOp: [][]upstream.SSEMessage{
-			puterDirectToolUseEvents("msg_chain_1", "claude-opus-4-5", "tool_readme_1", "Read", `{"file_path":"README.md"}`, 4),
-			puterDirectToolUseEvents("msg_chain_2", "claude-opus-4-5", "tool_gomod_1", "Read", `{"file_path":"go.mod"}`, 4),
-			puterDirectTextEvents("msg_chain_3", "claude-opus-4-5", "This project is a Go-based API gateway that normalizes multiple AI providers.", 16),
+			puterDirectToolUseEvents("msg_chain_1", "claude-opus-5", "tool_readme_1", "Read", `{"file_path":"README.md"}`, 4),
+			puterDirectToolUseEvents("msg_chain_2", "claude-opus-5", "tool_gomod_1", "Read", `{"file_path":"go.mod"}`, 4),
+			puterDirectTextEvents("msg_chain_3", "claude-opus-5", "This project is a Go-based API gateway that normalizes multiple AI providers.", 16),
 		},
 	}
 	h := newTestHandler(client)
 
 	req1Body := mustMarshalTestJSON(t, map[string]any{
-		"model":           "claude-opus-4-5",
+		"model":           "claude-opus-5",
 		"conversation_id": "puter_chain_regression",
 		"messages": []map[string]any{
 			{"role": "user", "content": "Understand this project in two inspection steps."},
@@ -497,7 +497,7 @@ func TestHandleMessages_Puter_MultiRoundToolResultChainRegression(t *testing.T) 
 	}
 
 	req2Body := mustMarshalTestJSON(t, map[string]any{
-		"model":           "claude-opus-4-5",
+		"model":           "claude-opus-5",
 		"conversation_id": "puter_chain_regression",
 		"messages": []map[string]any{
 			{"role": "user", "content": "Understand this project in two inspection steps."},
@@ -524,7 +524,7 @@ func TestHandleMessages_Puter_MultiRoundToolResultChainRegression(t *testing.T) 
 	}
 
 	req3Body := mustMarshalTestJSON(t, map[string]any{
-		"model":           "claude-opus-4-5",
+		"model":           "claude-opus-5",
 		"conversation_id": "puter_chain_regression",
 		"messages": []map[string]any{
 			{"role": "user", "content": "Understand this project in two inspection steps."},

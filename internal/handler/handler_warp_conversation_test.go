@@ -147,7 +147,7 @@ func TestPuterCurrentWorkdirAfterToolTurn_ReturnsLocalResponse(t *testing.T) {
 	h := newTestHandler(client)
 
 	body := []byte(`{
-		"model":"claude-sonnet-4-6",
+		"model":"claude-opus-5",
 		"stream":false,
 		"conversation_id":"puter_fresh_reset",
 		"messages":[
@@ -191,7 +191,7 @@ func TestPuterToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t 
 	h := newTestHandler(client)
 
 	body := []byte(`{
-		"model":"claude-sonnet-4-6",
+		"model":"claude-opus-5",
 		"stream":false,
 		"conversation_id":"puter_followup_recover",
 		"messages":[
@@ -234,7 +234,7 @@ func TestPuterOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testin
 	h := newTestHandler(client)
 
 	body := []byte(`{
-		"model":"claude-sonnet-4-6",
+		"model":"claude-opus-5",
 		"stream":false,
 		"conversation_id":"puter_openai_tool_followup",
 		"messages":[
@@ -323,7 +323,7 @@ func TestPuterToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *
 	h := newTestHandler(client)
 
 	body := []byte(`{
-		"model":"claude-sonnet-4-6",
+		"model":"claude-opus-5",
 		"stream":false,
 		"conversation_id":"puter_followup_local_fallback",
 		"messages":[
@@ -372,7 +372,7 @@ func TestPuterMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
 	h := newTestHandler(client)
 
 	body := []byte(`{
-		"model":"claude-sonnet-4-6",
+		"model":"claude-opus-5",
 		"stream":false,
 		"conversation_id":"puter_multiturn_scientific_notation",
 		"messages":[

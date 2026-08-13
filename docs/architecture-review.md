@@ -8,9 +8,9 @@ Orchids-2api 目前是四通道结构：
 
 - `internal/handler` 统一处理 `orchids`、`warp`、`puter`
 - `internal/grok` 单独处理 `grok`
-- [routes.go](/D:/Code/Orchids-2api/cmd/server/routes.go) 负责统一注册公开、管理、兼容别名和 public/admin 路由
+- [routes.go](../cmd/server/routes.go) 负责统一注册公开、管理、兼容别名和 public/admin 路由
 - Redis 不只保存账号和模型，也承载了会话、去重、审计和 cache 的运行时状态
-- 模型刷新走 [model_refresh.go](/D:/Code/Orchids-2api/cmd/server/model_refresh.go) 的来源同步逻辑，不再逐个模型测活
+- 模型刷新走 [model_refresh.go](../cmd/server/model_refresh.go) 的来源同步逻辑；Puter 对目录候选执行账号 `test_mode` 逐模型验证
 
 整体上，这已经不是“只能继续硬编码加通道”的状态了。`provider` 注册表已经接入主流程，扩新通道的成本明显低于旧版本。
 
@@ -29,7 +29,7 @@ Orchids-2api 目前是四通道结构：
 
 ### 3.1 配置层仍然偏“半硬编码”
 
-[config.go](/D:/Code/Orchids-2api/internal/config/config.go) 里 `ApplyHardcoded()` 仍会强制覆盖大量运行时值。结果是：
+[config.go](../internal/config/config.go) 里 `ApplyHardcoded()` 仍会强制覆盖大量运行时值。结果是：
 
 - 文档需要明确区分“可配置字段”和“最终固定字段”
 - 运维会误以为某些历史配置项还能生效
@@ -39,7 +39,7 @@ Orchids-2api 目前是四通道结构：
 
 ### 3.2 管理端 session 仍是进程内存
 
-[auth.go](/D:/Code/Orchids-2api/internal/auth/auth.go) 里的 `session_token` 仍保存在进程内 map 中。当前影响：
+[auth.go](../internal/auth/auth.go) 里的 `session_token` 仍保存在进程内 map 中。当前影响：
 
 - 单实例没问题
 - 进程重启后 session 失效
@@ -64,7 +64,7 @@ Orchids-2api 目前是四通道结构：
 
 ### 3.5 Public API 的“空 key 即放开”语义需要被明确理解
 
-[session.go](/D:/Code/Orchids-2api/internal/middleware/session.go) 当前约定是：
+[session.go](../internal/middleware/session.go) 当前约定是：
 
 - `public_key` 为空时，public API 不做鉴权
 - 页面是否显示由 `public_enabled` 控制

@@ -88,7 +88,7 @@ func TestAppChatHeaders_MatchBrowserProfile(t *testing.T) {
 	if got := headers.Get("Accept-Language"); got != "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7" {
 		t.Fatalf("Accept-Language=%q", got)
 	}
-	if got := headers.Get("User-Agent"); got != defaultAppChatUA {
+	if got := headers.Get("User-Agent"); got != defaultUA {
 		t.Fatalf("User-Agent=%q", got)
 	}
 	if got := headers.Get("Sec-Ch-Ua"); got != defaultAppChatSecCHUA {

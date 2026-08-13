@@ -64,7 +64,7 @@
 
 ## 3. 运行时硬编码默认值
 
-这些值由 [config.go](/D:/Code/Orchids-2api/internal/config/config.go) 里的 `ApplyHardcoded()` 强制覆盖，不能指望仅靠配置文件改变。
+这些值由 [config.go](../internal/config/config.go) 里的 `ApplyHardcoded()` 强制覆盖，不能指望仅靠配置文件改变。
 
 | 字段 | 当前值 | 说明 |
 |---|---|---|

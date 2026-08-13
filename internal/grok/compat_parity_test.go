@@ -67,6 +67,7 @@ func TestResolveModel_AliasBaseMappingsMatchGrok2API(t *testing.T) {
 		{modelID: "grok-4.20-heavy", wantUpstream: "grok-4.20-heavy", wantModelMode: "MODEL_MODE_HEAVY", wantModeID: "heavy"},
 		// grok-4.3 models are console-only — skip mode/modeID checks
 		{modelID: "grok-4.3-beta", wantUpstream: "grok-4.3-beta", wantModelMode: "", wantModeID: "grok-420-computer-use-sa"},
+		{modelID: "grok-4.5", wantUpstream: "grok-4.5", wantModelMode: ""},
 	}
 	for _, tc := range cases {
 		spec, ok := ResolveModel(tc.modelID)
@@ -112,6 +113,7 @@ func TestResolveModel_ImagineMappingsMatchGrok2API(t *testing.T) {
 		{modelID: "grok-imagine-image-lite", wantUpstream: "grok-imagine-image-lite", wantModelMode: "MODEL_MODE_FAST"},
 		{modelID: "grok-imagine-image", wantUpstream: "grok-imagine-image", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-image-pro", wantUpstream: "grok-imagine-image-pro", wantModelMode: "MODEL_MODE_AUTO"},
+		{modelID: "grok-imagine-image-quality", wantUpstream: "grok-imagine-image-quality-lite", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-image-edit", wantUpstream: "imagine-image-edit", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-video", wantUpstream: "imagine-video-gen", wantModelMode: "MODEL_MODE_AUTO"},
 	}
@@ -136,7 +138,7 @@ func TestResolveModel_Grok420BetaRejected(t *testing.T) {
 	}
 }
 
-func TestResolveModel_Grok2APIAppChatModelsAccepted(t *testing.T) {
+func TestResolveModel_LegacyAppChatModelsDeprecated(t *testing.T) {
 	for _, id := range []string{
 		"grok-4.20-0309-non-reasoning",
 		"grok-4.20-0309",
@@ -157,8 +159,8 @@ func TestResolveModel_Grok2APIAppChatModelsAccepted(t *testing.T) {
 		if _, ok := ResolveModel(id); !ok {
 			t.Fatalf("ResolveModel(%s) should succeed", id)
 		}
-		if IsDeprecatedModelID(id) {
-			t.Fatalf("%s should not be deprecated", id)
+		if !IsDeprecatedModelID(id) {
+			t.Fatalf("%s should be deprecated", id)
 		}
 	}
 }
@@ -166,7 +168,7 @@ func TestResolveModel_Grok2APIAppChatModelsAccepted(t *testing.T) {
 func TestResolveModel_AcceptsGrok43(t *testing.T) {
 	for _, id := range []string{
 		"grok-4.3",
-		"grok-4.3-beta",
+		"grok-4.5",
 		"grok-build-0.1",
 	} {
 		if _, ok := ResolveModel(id); !ok {

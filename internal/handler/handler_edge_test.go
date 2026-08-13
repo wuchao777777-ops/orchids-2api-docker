@@ -240,7 +240,7 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 	})
 
 	payload := map[string]any{
-		"model":    "claude-opus-4-5",
+		"model":    "claude-opus-5",
 		"messages": []map[string]any{{"role": "user", "content": "hi"}},
 		"system":   []any{},
 		"stream":   true,

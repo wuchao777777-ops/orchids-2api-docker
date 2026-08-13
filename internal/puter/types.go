@@ -16,21 +16,39 @@ type Request struct {
 }
 
 type RequestArgs struct {
-	Messages []Message `json:"messages"`
-	Model    string    `json:"model"`
-	Stream   bool      `json:"stream"`
+	Messages []Message     `json:"messages"`
+	Model    string        `json:"model"`
+	Stream   bool          `json:"stream"`
+	Tools    []interface{} `json:"tools,omitempty"`
 }
 
 type Message struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
+}
+
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type StreamChunk struct {
-	Type    string `json:"type"`
-	Text    string `json:"text"`
-	Delta   string `json:"delta"`
-	Message string `json:"message"`
+	Type      string                 `json:"type"`
+	Text      string                 `json:"text,omitempty"`
+	Reasoning string                 `json:"reasoning,omitempty"`
+	ID        string                 `json:"id,omitempty"`
+	Name      string                 `json:"name,omitempty"`
+	Input     json.RawMessage        `json:"input,omitempty"`
+	Usage     map[string]interface{} `json:"usage,omitempty"`
+	Message   string                 `json:"message,omitempty"`
 }
 
 type ErrorResponse struct {
@@ -39,26 +57,12 @@ type ErrorResponse struct {
 }
 
 type MonthlyUsage struct {
-	Usage         map[string]json.RawMessage `json:"usage"`
-	AppTotals     map[string]AppUsageTotal   `json:"appTotals"`
-	AllowanceInfo UsageAllowanceInfo         `json:"allowanceInfo"`
-}
-
-type UsageMetric struct {
-	Cost  float64 `json:"cost"`
-	Count int64   `json:"count"`
-	Units float64 `json:"units"`
-}
-
-type AppUsageTotal struct {
-	Count int64   `json:"count"`
-	Total float64 `json:"total"`
+	AllowanceInfo UsageAllowanceInfo `json:"allowanceInfo"`
 }
 
 type UsageAllowanceInfo struct {
-	Remaining           float64                `json:"remaining"`
-	MonthUsageAllowance float64                `json:"monthUsageAllowance"`
-	Addons              map[string]interface{} `json:"addons"`
+	Remaining           float64 `json:"remaining"`
+	MonthUsageAllowance float64 `json:"monthUsageAllowance"`
 }
 
 type ErrorPayload struct {
@@ -111,10 +115,4 @@ func (e ErrorField) AsPayload() *ErrorPayload {
 		return nil
 	}
 	return &ErrorPayload{Message: strings.TrimSpace(e.Message)}
-}
-
-type ParsedToolCall struct {
-	Name  string          `json:"name"`
-	ID    string          `json:"id,omitempty"`
-	Input json.RawMessage `json:"input"`
 }

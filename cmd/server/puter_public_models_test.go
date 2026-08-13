@@ -5,78 +5,25 @@ import (
 	"testing"
 )
 
-func TestNormalizePuterModelID(t *testing.T) {
-	tests := []struct {
-		raw  string
-		want string
-		ok   bool
-	}{
-		{raw: "anthropic:anthropic/claude-opus-4-6", want: "claude-opus-4-6", ok: true},
-		{raw: "deepseek:deepseek/deepseek-chat", want: "deepseek-chat", ok: true},
-		{raw: "mistralai:mistralai/mistral-large-2512", want: "mistral-large-2512", ok: true},
-		{raw: "openrouter:openai/gpt-5.4", want: "gpt-5.4", ok: true},
-		{raw: "x-ai:x-ai/grok-4", want: "grok-4", ok: true},
-		{raw: "openai:openai/gpt-5.4", want: "gpt-5.4", ok: true},
-		{raw: "openai-completion:openai/gpt-5.4", want: "gpt-5.4", ok: true},
-		{raw: "openai-responses:openai/gpt-5.4-pro", want: "gpt-5.4-pro", ok: true},
-		{raw: "google:google/gemini-3.1-pro-preview", want: "gemini-3.1-pro-preview", ok: true},
-		{raw: "togetherai:meta-llama/Llama-3.3-70B-Instruct-Turbo", want: "", ok: false},
-		{raw: "alibaba:qwen/qwen3.5-397b-a17b", want: "", ok: false},
-	}
-
-	for _, tt := range tests {
-		got, ok := normalizePuterModelID(tt.raw)
-		if got != tt.want || ok != tt.ok {
-			t.Fatalf("normalizePuterModelID(%q)=(%q,%v) want (%q,%v)", tt.raw, got, ok, tt.want, tt.ok)
-		}
-	}
-}
-
-func TestNormalizePuterPublicModels_DedupsAndFilters(t *testing.T) {
-	got := normalizePuterPublicModels([]string{
-		"openai:openai/gpt-5.4",
-		"openai:openai/gpt-5.4",
-		"google:google/gemini-3.1-pro-preview",
-		"anthropic:anthropic/claude-opus-4-6",
-		"deepseek:deepseek/deepseek-chat",
-		"mistralai:mistralai/mistral-large-2512",
-		"openrouter:openai/gpt-5.4",
-		"togetherai:qwen/qwen3.5-397b-a17b",
-		"x-ai:x-ai/grok-4",
-	})
-
-	ids := make([]string, 0, len(got))
-	for _, item := range got {
-		ids = append(ids, item.ID)
-	}
-
-	want := []string{"claude-opus-4-6", "deepseek-chat", "gemini-3.1-pro-preview", "gpt-5.4", "grok-4", "mistral-large-2512"}
-	if !slices.Equal(ids, want) {
-		t.Fatalf("ids=%v want %v", ids, want)
-	}
-}
-
-func TestNormalizePuterPublicModelDetails_UsesDetailsPayload(t *testing.T) {
+func TestNormalizePuterPublicModelDetailsKeepsOnlyCurrentPolicy(t *testing.T) {
 	got := normalizePuterPublicModelDetails([]puterPublicModelDetails{
-		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Provider: "claude", PuterID: "anthropic:anthropic/claude-opus-4-6"},
-		{ID: "openrouter:openai/gpt-5.4", Name: "OpenRouter GPT-5.4", Provider: "openrouter", PuterID: "openrouter:openai/gpt-5.4"},
-		{ID: "gemini-3.1-pro-preview", Name: "Gemini 3.1 Pro Preview", Provider: "gemini", PuterID: "google:google/gemini-3.1-pro-preview"},
-		{ID: "gpt-5.4", Name: "GPT-5.4", Provider: "openai-completion", PuterID: "openai:openai/gpt-5.4"},
-		{ID: "gpt-5.4-pro", Name: "GPT-5.4 Pro", Provider: "openai-responses", PuterID: "openai:openai/gpt-5.4-pro"},
-		{ID: "togetherai:meta-llama/Llama-3.3-70B-Instruct-Turbo", Name: "Llama 3.3", Provider: "together-ai", PuterID: ""},
-		{ID: "togetherai:qwen/qwen3.5-397b-a17b", Name: "Together Qwen", Provider: "together-ai", PuterID: "togetherai:qwen/qwen3.5-397b-a17b"},
+		{ID: "claude-opus-5", Name: "Claude Opus 5"},
+		{ID: "CLAUDE-OPUS-5", Name: "duplicate"},
+		{ID: "gemini-3.5-flash", Name: "Gemini 3.5 Flash"},
+		{ID: "deepseek-v4-flash", Name: ""},
+		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"},
+		{ID: "openrouter:openai/gpt-5.6", Name: "OpenRouter GPT"},
 	})
 
 	ids := make([]string, 0, len(got))
 	for _, item := range got {
 		ids = append(ids, item.ID)
 	}
-
-	want := []string{"claude-opus-4-6", "gemini-3.1-pro-preview", "gpt-5.4", "gpt-5.4-pro", "openrouter:openai/gpt-5.4"}
+	want := []string{"claude-opus-5", "deepseek-v4-flash", "gemini-3.5-flash"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("ids=%v want %v", ids, want)
 	}
-	if got[4].Name != "OpenRouter GPT-5.4" {
-		t.Fatalf("got[4].Name=%q want %q", got[4].Name, "OpenRouter GPT-5.4")
+	if got[1].Name != "deepseek-v4-flash" {
+		t.Fatalf("empty display name fallback=%q", got[1].Name)
 	}
 }

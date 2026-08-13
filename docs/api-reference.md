@@ -1,6 +1,6 @@
 # API 参考
 
-本文档以 [routes.go](/D:/Code/Orchids-2api/cmd/server/routes.go) 和 [model_refresh.go](/D:/Code/Orchids-2api/cmd/server/model_refresh.go) 当前实现为准。
+本文档以 [routes.go](../cmd/server/routes.go) 和 [model_refresh.go](../cmd/server/model_refresh.go) 当前实现为准。
 
 ## 1. 公开接口
 
@@ -186,7 +186,7 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 
 注意：
 
-- 当前刷新是“来源同步”，不是逐个模型测活
+- 当前刷新是“来源同步”；Puter 会额外使用账号 `test_mode` 逐模型验证
 - 来源拿不到的模型会被删除
 
 ## 5. 常用请求示例
@@ -209,7 +209,7 @@ curl -s http://127.0.0.1:3002/orchids/v1/messages \
 curl -s http://127.0.0.1:3002/puter/v1/messages \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "claude-opus-4-5",
+    "model": "claude-opus-5",
     "messages": [{"role":"user","content":"Read README.md"}],
     "tools": [{
       "name": "Read",
