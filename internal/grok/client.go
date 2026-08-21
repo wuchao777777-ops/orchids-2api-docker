@@ -724,9 +724,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 		headerCopy := resp.Header.Clone()
 
 		if lastStatus == http.StatusTooManyRequests {
-			if meta := RateLimitFromResponse(lastStatus, resp.Header, raw); meta != nil {
-				teamCooldown.Note(meta.Scope, meta.TeamID, meta.Model, meta.RetryAfter)
-				recordTeamCooldownHit(meta)
+			if meta := noteTeamRateLimit(lastStatus, resp.Header, raw); meta != nil {
 				if desc := meta.Describe(); desc != "" {
 					lastBody = lastBody + " " + desc
 				}
@@ -946,52 +944,36 @@ func (c *Client) doAppChatAddResponse(ctx context.Context, token, conversationID
 }
 
 func extractAppChatCanvasID(v interface{}) string {
-	switch x := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return strings.TrimSpace(x)
-	case map[string]interface{}:
-		for _, key := range []string{"canvasId", "canvas_id", "documentId", "document_id", "id"} {
-			if id := extractAppChatCanvasID(x[key]); id != "" {
-				return id
-			}
-		}
-		for _, key := range []string{"document", "canvas", "result", "data"} {
-			if id := extractAppChatCanvasID(x[key]); id != "" {
-				return id
-			}
-		}
-	case []interface{}:
-		for _, item := range x {
-			if id := extractAppChatCanvasID(item); id != "" {
-				return id
-			}
-		}
-	}
-	return ""
+	return extractIDFromValue(v, []string{"canvasId", "canvas_id", "documentId", "document_id", "id"}, []string{"document", "canvas", "result", "data"})
 }
 
 func extractAppChatConversationID(v interface{}) string {
+	return extractIDFromValue(v, []string{"conversationId", "conversation_id"}, []string{"conversation", "result", "data"})
+}
+
+// extractIDFromValue walks nested maps and slices, returning the first
+// non-empty string found under any of the idKeys (leaf identifiers), then any
+// of the containerKeys whose values may themselves hold the identifier.
+func extractIDFromValue(v interface{}, idKeys []string, containerKeys []string) string {
 	switch x := v.(type) {
 	case nil:
 		return ""
 	case string:
 		return strings.TrimSpace(x)
 	case map[string]interface{}:
-		for _, key := range []string{"conversationId", "conversation_id"} {
-			if id := extractAppChatConversationID(x[key]); id != "" {
+		for _, key := range idKeys {
+			if id := extractIDFromValue(x[key], idKeys, containerKeys); id != "" {
 				return id
 			}
 		}
-		for _, key := range []string{"conversation", "result", "data"} {
-			if id := extractAppChatConversationID(x[key]); id != "" {
+		for _, key := range containerKeys {
+			if id := extractIDFromValue(x[key], idKeys, containerKeys); id != "" {
 				return id
 			}
 		}
 	case []interface{}:
 		for _, item := range x {
-			if id := extractAppChatConversationID(item); id != "" {
+			if id := extractIDFromValue(item, idKeys, containerKeys); id != "" {
 				return id
 			}
 		}

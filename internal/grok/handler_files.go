@@ -50,8 +50,7 @@ func parseFilesPath(rawPath string) (mediaType string, fileName string, ok bool)
 }
 
 func (h *Handler) HandleFiles(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	mediaType, fileName, ok := parseFilesPath(r.URL.Path)

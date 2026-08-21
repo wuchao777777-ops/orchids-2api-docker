@@ -2170,6 +2170,22 @@ func assetURLFromAssetID(assetID string) string {
 	return defaultAssetsBaseURL + "/" + assetID + "/content"
 }
 
+// assetURLs resolves each asset ID to a concrete URL, skipping empty results.
+func assetURLs(assetIDs []string) []string {
+	out := make([]string, 0, len(assetIDs))
+	for _, id := range assetIDs {
+		if u := assetURLFromAssetID(id); u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// firstAssetURL returns the first resolvable media URL in an upstream response.
+func firstAssetURL(resp map[string]interface{}) string {
+	return firstNonEmpty(assetURLs(extractAssetIDs(resp))...)
+}
+
 func appendImageResultURLs(urls []string, resp map[string]interface{}) []string {
 	added := make(map[string]struct{}, len(urls)+8)
 	for _, u := range urls {
@@ -2193,18 +2209,10 @@ func appendImageResultURLs(urls []string, resp map[string]interface{}) []string 
 	}
 	if mr := extractUpstreamModelResponse(resp); mr != nil {
 		addURLs(extractImageURLs(mr))
-		for _, assetID := range extractAssetIDs(mr) {
-			if u := assetURLFromAssetID(assetID); u != "" {
-				addURL(u)
-			}
-		}
+		addURLs(assetURLs(extractAssetIDs(mr)))
 	}
 	addURLs(extractImageURLs(resp))
-	for _, assetID := range extractAssetIDs(resp) {
-		if u := assetURLFromAssetID(assetID); u != "" {
-			addURL(u)
-		}
-	}
+	addURLs(assetURLs(extractAssetIDs(resp)))
 	return urls
 }
 

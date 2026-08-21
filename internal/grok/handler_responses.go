@@ -154,8 +154,7 @@ func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
 }
 
 func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req ResponsesCreateRequest
@@ -198,8 +197,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "chat response parse error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(responsesObjectFromChat(req.Model, chat))
+	writeJSON(w, responsesObjectFromChat(req.Model, chat))
 }
 
 func (h *Handler) applyDefaultResponsesStream(req *ResponsesCreateRequest) {

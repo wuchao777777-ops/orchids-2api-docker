@@ -9,34 +9,29 @@ import (
 )
 
 func (h *Handler) HandleAdminVerify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"status": "ok",
 	})
 }
 
 func (h *Handler) HandleAdminStorage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	storageType := "redis"
 	if h != nil && h.cfg != nil && strings.TrimSpace(h.cfg.StoreMode) != "" {
 		storageType = strings.ToLower(strings.TrimSpace(h.cfg.StoreMode))
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"type": storageType,
 	})
 }
 
 func (h *Handler) HandleAdminVoiceToken(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -103,8 +98,7 @@ func (h *Handler) HandleAdminVoiceToken(w http.ResponseWriter, r *http.Request) 
 	if strings.TrimSpace(out["url"].(string)) == "" {
 		out["url"] = "wss://livekit.grok.com"
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 func firstVoiceString(data map[string]interface{}, keys ...string) string {

@@ -285,10 +285,7 @@ func (c *Client) doConsoleDPoPRequest(ctx context.Context, token, method, endpoi
 		headerCopy := resp.Header.Clone()
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusTooManyRequests {
-			if meta := RateLimitFromResponse(resp.StatusCode, resp.Header, raw); meta != nil {
-				teamCooldown.Note(meta.Scope, meta.TeamID, meta.Model, meta.RetryAfter)
-				recordTeamCooldownHit(meta)
-			}
+			noteTeamRateLimit(resp.StatusCode, resp.Header, raw)
 		}
 		// DPoP 401 (session expiry) and explicit DPoP 403 challenges invalidate the
 		// DPoP session and retry at most once. Cloudflare/egress challenges and

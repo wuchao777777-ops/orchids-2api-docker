@@ -346,8 +346,7 @@ func (h *Handler) handleAdminTokensList(w http.ResponseWriter, r *http.Request) 
 		pools["ssoBasic"] = []map[string]interface{}{}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(pools)
+	writeJSON(w, pools)
 }
 
 func (h *Handler) handleAdminTokensUpdate(w http.ResponseWriter, r *http.Request) {
@@ -417,8 +416,7 @@ func (h *Handler) handleAdminTokensUpdate(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"status":  "success",
 		"message": "Token 已更新",
 	})

@@ -446,8 +446,7 @@ func imagineErrorRetryDelay(err error) time.Duration {
 }
 
 func (h *Handler) HandleAdminImagineStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req imagineStartRequest
@@ -470,13 +469,11 @@ func (h *Handler) HandleAdminImagineStart(w http.ResponseWriter, r *http.Request
 		"model":        model,
 		"route":        route,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 func (h *Handler) HandleAdminImagineStop(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req imagineStopRequest
@@ -489,13 +486,11 @@ func (h *Handler) HandleAdminImagineStop(w http.ResponseWriter, r *http.Request)
 		"status":  "success",
 		"removed": removed,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
@@ -542,8 +537,7 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))

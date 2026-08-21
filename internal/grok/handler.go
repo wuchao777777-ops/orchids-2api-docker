@@ -113,6 +113,19 @@ func isGrokSSOAccount(acc *store.Account) bool {
 	return !strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth")
 }
 
+// grokSSOTokenRaw returns the raw SSO credential for an account, preferring the
+// client cookie and falling back to the refresh token (no normalization).
+func grokSSOTokenRaw(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(acc.ClientCookie)
+	if raw == "" {
+		raw = strings.TrimSpace(acc.RefreshToken)
+	}
+	return raw
+}
+
 func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, error) {
 	if h.lb == nil {
 		return nil, "", fmt.Errorf("load balancer not configured")
@@ -121,10 +134,7 @@ func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, er
 	if err != nil {
 		return nil, "", err
 	}
-	raw := strings.TrimSpace(acc.ClientCookie)
-	if raw == "" {
-		raw = strings.TrimSpace(acc.RefreshToken)
-	}
+	raw := grokSSOTokenRaw(acc)
 	if NormalizeSSOToken(raw) == "" {
 		return nil, "", fmt.Errorf("grok account token is empty")
 	}
@@ -302,10 +312,7 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 			return nil, fmt.Errorf("no enabled grok accounts available for requested pools: %s", strings.Join(candidates, ","))
 		}
 	}
-	raw := strings.TrimSpace(acc.ClientCookie)
-	if raw == "" {
-		raw = strings.TrimSpace(acc.RefreshToken)
-	}
+	raw := grokSSOTokenRaw(acc)
 	if NormalizeSSOToken(raw) == "" {
 		return nil, fmt.Errorf("grok account token is empty")
 	}
@@ -384,16 +391,16 @@ func (h *Handler) doChatWithAutoSwitchRebuild(
 	payload *map[string]interface{},
 	rebuild func(token string) (map[string]interface{}, error),
 ) (*http.Response, error) {
-	return h.doAutoSwitchRequest(ctx, sess, payload, rebuild, markAllGrokAccountStatuses, (*Client).doChat)
+	return h.doAutoSwitchRequest(ctx, sess, payload, rebuild, (*Client).doChat)
 }
 
-// doAutoSwitchRequest calls the Grok API with automatic account switching on failure.
+// doAutoSwitchRequest calls the Grok API with automatic account switching on
+// failure, rebuilding the request payload for the new account when rebuild is set.
 func (h *Handler) doAutoSwitchRequest(
 	ctx context.Context,
 	sess *chatAccountSession,
 	payload *map[string]interface{},
 	rebuild func(token string) (map[string]interface{}, error),
-	shouldMarkStatus grokAccountStatusPolicy,
 	callAPI func(*Client, context.Context, string, map[string]interface{}) (*http.Response, error),
 ) (*http.Response, error) {
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
@@ -406,48 +413,22 @@ func (h *Handler) doAutoSwitchRequest(
 	if client == nil {
 		return nil, fmt.Errorf("grok client not configured")
 	}
-	// Time-budgeted switching: try accounts until success or deadline,
-	// pacing requests at ~2 RPS to respect the upstream rate limit.
-	switchDeadline := time.Now().Add(10 * time.Second)
-	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
-		switchDeadline = time.Now().Add(time.Duration(h.cfg.AccountSwitchCount) * time.Second)
-	}
-	const switchPace = 100 * time.Millisecond
-	used := make([]int64, 0)
-	for {
-		if sess.acc != nil && sess.acc.ID != 0 {
-			used = append(used, sess.acc.ID)
-		}
-		resp, err := callAPI(client, ctx, sess.token, *payload)
-		if err == nil {
-			return resp, nil
-		}
-		if shouldMarkStatus == nil || shouldMarkStatus(err) {
-			h.markAccountStatus(ctx, sess.acc, err)
-		}
-		if !shouldSwitchGrokAccount(err) || time.Now().After(switchDeadline) {
-			return nil, err
-		}
-
-		sess.Close()
-		time.Sleep(switchPace)
-		next, err2 := h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
-		if err2 != nil {
-			return nil, err
-		}
-		sess.acc = next.acc
-		sess.token = next.token
-		sess.poolCandidates = next.poolCandidates
-		sess.release = next.release
-
-		if rebuild != nil {
+	return h.retryWithAccountSwitch(ctx, sess, 100*time.Millisecond,
+		func() (*http.Response, error) { return callAPI(client, ctx, sess.token, *payload) },
+		func(used []int64) (*chatAccountSession, error) {
+			return h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
+		},
+		func() error {
+			if rebuild == nil {
+				return nil
+			}
 			newPayload, rbErr := rebuild(sess.token)
 			if rbErr != nil {
-				return nil, rbErr
+				return rbErr
 			}
 			*payload = newPayload
-		}
-	}
+			return nil
+		})
 }
 
 // isEgressChallengeError reports whether an error is a Cloudflare interstitial

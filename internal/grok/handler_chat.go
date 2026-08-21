@@ -183,8 +183,7 @@ func (h *Handler) applyDefaultChatStream(req *ChatCompletionsRequest) {
 }
 
 func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req ChatCompletionsRequest
@@ -1479,12 +1478,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 					emitChunk("", fmt.Sprintf("正在生成视频中，当前进度%d%%\n", progress), "", false)
 				}
 				if progress >= 100 && strings.TrimSpace(videoURL) == "" {
-					for _, assetID := range extractAssetIDs(resp) {
-						if resolved := assetURLFromAssetID(assetID); resolved != "" {
-							videoURL = resolved
-							break
-						}
-					}
+					videoURL = firstAssetURL(resp)
 				}
 				if progress >= 100 && strings.TrimSpace(videoURL) != "" {
 					finalURL := strings.TrimSpace(videoURL)
@@ -1719,12 +1713,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 			if progress, vurl, _, ok := extractVideoProgress(resp); ok && progress >= 100 {
 				videoURL = strings.TrimSpace(vurl)
 				if videoURL == "" {
-					for _, assetID := range extractAssetIDs(resp) {
-						if resolved := assetURLFromAssetID(assetID); resolved != "" {
-							videoURL = resolved
-							break
-						}
-					}
+					videoURL = firstAssetURL(resp)
 				}
 			}
 		}
@@ -1808,6 +1797,5 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 		}
 		choice["finish_reason"] = "tool_calls"
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, resp)
 }

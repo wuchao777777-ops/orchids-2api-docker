@@ -88,10 +88,7 @@ func (h *Handler) collectVideoSegmentFromBody(body io.Reader, logger *debug.Logg
 			result.VideoPostID = postID
 		}
 		if result.AssetID == "" {
-			for _, assetID := range extractAssetIDs(resp) {
-				result.AssetID = assetID
-				break
-			}
+			result.AssetID = firstNonEmpty(extractAssetIDs(resp)...)
 		}
 		progress, videoURL, _, ok := extractVideoProgress(resp)
 		if !ok {
@@ -325,6 +322,5 @@ func (h *Handler) collectVideoChatCompletion(
 		message := choice["message"].(map[string]interface{})
 		message["reasoning_content"] = strings.Join(reasoning, "\n")
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, resp)
 }

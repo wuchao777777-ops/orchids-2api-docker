@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,51 +89,44 @@ func parseVideosRequest(r *http.Request) (VideosRequest, error) {
 		if err := r.ParseMultipartForm(80 << 20); err != nil {
 			return req, err
 		}
-		req.Model = strings.TrimSpace(r.FormValue("model"))
-		req.Prompt = strings.TrimSpace(r.FormValue("prompt"))
-		req.Seconds = parseIntLoose(firstNonEmpty(r.FormValue("seconds"), r.FormValue("video_length")), 6)
-		req.Size = strings.TrimSpace(firstNonEmpty(r.FormValue("size"), r.FormValue("aspect_ratio")))
-		req.ResolutionName = strings.TrimSpace(r.FormValue("resolution_name"))
-		req.Preset = strings.TrimSpace(r.FormValue("preset"))
 		refs, err := readVideoInputReferenceFiles(r)
 		if err != nil {
 			return req, err
 		}
 		req.InputReferences = refs
-		for _, key := range []string{"input_reference", "input_references", "input_reference[]"} {
-			for _, value := range r.Form[key] {
-				if s := strings.TrimSpace(value); s != "" {
-					req.InputReferences = append(req.InputReferences, s)
-				}
-			}
-		}
-		req.InputReferences = uniqueStrings(req.InputReferences)
+		fillVideosRequestFromForm(&req, r.Form)
 		return req, nil
 	}
 	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
 		if err := r.ParseForm(); err != nil {
 			return req, err
 		}
-		req.Model = strings.TrimSpace(r.FormValue("model"))
-		req.Prompt = strings.TrimSpace(r.FormValue("prompt"))
-		req.Seconds = parseIntLoose(firstNonEmpty(r.FormValue("seconds"), r.FormValue("video_length")), 6)
-		req.Size = strings.TrimSpace(firstNonEmpty(r.FormValue("size"), r.FormValue("aspect_ratio")))
-		req.ResolutionName = strings.TrimSpace(r.FormValue("resolution_name"))
-		req.Preset = strings.TrimSpace(r.FormValue("preset"))
-		for _, key := range []string{"input_reference", "input_references", "input_reference[]"} {
-			for _, value := range r.Form[key] {
-				if s := strings.TrimSpace(value); s != "" {
-					req.InputReferences = append(req.InputReferences, s)
-				}
-			}
-		}
-		req.InputReferences = uniqueStrings(req.InputReferences)
+		fillVideosRequestFromForm(&req, r.Form)
 		return req, nil
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return req, err
 	}
 	return req, nil
+}
+
+// fillVideosRequestFromForm copies the video request fields from form values.
+// Multipart and urlencoded bodies share the same field layout.
+func fillVideosRequestFromForm(req *VideosRequest, form url.Values) {
+	req.Model = strings.TrimSpace(form.Get("model"))
+	req.Prompt = strings.TrimSpace(form.Get("prompt"))
+	req.Seconds = parseIntLoose(firstNonEmpty(form.Get("seconds"), form.Get("video_length")), 6)
+	req.Size = strings.TrimSpace(firstNonEmpty(form.Get("size"), form.Get("aspect_ratio")))
+	req.ResolutionName = strings.TrimSpace(form.Get("resolution_name"))
+	req.Preset = strings.TrimSpace(form.Get("preset"))
+	for _, key := range []string{"input_reference", "input_references", "input_reference[]"} {
+		for _, value := range form[key] {
+			if s := strings.TrimSpace(value); s != "" {
+				req.InputReferences = append(req.InputReferences, s)
+			}
+		}
+	}
+	req.InputReferences = uniqueStrings(req.InputReferences)
 }
 
 func readVideoInputReferenceFiles(r *http.Request) ([]string, error) {
@@ -196,8 +190,7 @@ func videoConfigFromVideosRequest(req VideosRequest) (*VideoConfig, error) {
 }
 
 func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	req, err := parseVideosRequest(r)
@@ -242,8 +235,7 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	putVideoJob(job)
 	go h.runVideoCreateJob(context.Background(), job, spec, cfg)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(job.toMap())
+	writeJSON(w, job.toMap())
 }
 
 func (h *Handler) runVideoCreateJob(ctx context.Context, job *videoJob, spec ModelSpec, cfg *VideoConfig) {
@@ -316,8 +308,7 @@ func (h *Handler) failVideoJob(job *videoJob, err error) {
 }
 
 func (h *Handler) HandleVideosRetrieve(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	videoID := videoIDFromPath(r.URL.Path)
@@ -329,13 +320,11 @@ func (h *Handler) HandleVideosRetrieve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "video not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(job.toMap())
+	writeJSON(w, job.toMap())
 }
 
 func (h *Handler) HandleVideosContent(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	videoID := videoIDFromPath(r.URL.Path)

@@ -3,7 +3,6 @@ package grok
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -25,29 +24,9 @@ func (h *Handler) serveCLIChat(ctx context.Context, w http.ResponseWriter, req *
 	}
 	// Override the console endpoint model with the CLI model name.
 	payload["model"] = spec.UpstreamModel
-
 	resp, err := h.doCLIWithAutoSwitch(ctx, sess, payload)
-	if err != nil {
-		slog.Error("cli chat upstream failed", "url", h.cliBaseURL(), "status", parseUpstreamStatus(err), "error", err)
-		if logger != nil {
-			logger.LogUpstreamHTTPError(h.cliBaseURL(), parseUpstreamStatus(err), "", err)
-		}
-		if markAllGrokAccountStatuses(err) {
-			h.markAccountStatus(ctx, sess.acc, err)
-		}
-		http.Error(w, err.Error(), upstreamHTTPResponseStatus(err))
-		return
-	}
-	defer resp.Body.Close()
-	if logger != nil {
-		logger.LogUpstreamRequest(h.cliBaseURL()+"/responses", debugHeaderMap(h.cliHeaders(sess.acc, sess.token)), payload)
-	}
-	h.syncGrokQuota(sess.acc, resp.Header)
-	if req.Stream {
-		h.streamConsoleChat(w, req, resp.Body)
-		return
-	}
-	h.collectConsoleChat(w, req, resp.Body)
+	h.finishUpstreamChat(ctx, w, req, sess, logger, "cli", h.cliBaseURL()+"/responses",
+		func() http.Header { return h.cliHeaders(sess.acc, sess.token) }, payload, resp, err)
 }
 
 func (h *Handler) cliBaseURL() string {
@@ -75,39 +54,9 @@ func (h *Handler) doCLIWithAutoSwitch(ctx context.Context, sess *chatAccountSess
 		return nil, fmt.Errorf("grok cli client not configured")
 	}
 	client := h.cliClient
-	switchDeadline := time.Now().Add(10 * time.Second)
-	if h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
-		switchDeadline = time.Now().Add(time.Duration(h.cfg.AccountSwitchCount) * time.Second)
-	}
-	const switchPace = 1500 * time.Millisecond
-
-	used := make([]int64, 0)
-	for {
-		if sess.acc != nil && sess.acc.ID != 0 {
-			used = append(used, sess.acc.ID)
-		}
-		resp, err := client.doResponses(ctx, sess.acc, payload)
-		if err == nil {
-			return resp, nil
-		}
-		if markAllGrokAccountStatuses(err) {
-			h.markAccountStatus(ctx, sess.acc, err)
-		}
-		if !shouldSwitchGrokAccount(err) || time.Now().After(switchDeadline) {
-			return nil, err
-		}
-
-		sess.Close()
-		time.Sleep(switchPace)
-		next, switchErr := h.openCLIAccountSession(ctx, used)
-		if switchErr != nil {
-			return nil, err
-		}
-		sess.acc = next.acc
-		sess.token = next.token
-		sess.poolCandidates = next.poolCandidates
-		sess.release = next.release
-	}
+	return h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond,
+		func() (*http.Response, error) { return client.doResponses(ctx, sess.acc, payload) },
+		func(used []int64) (*chatAccountSession, error) { return h.openCLIAccountSession(ctx, used) }, nil)
 }
 
 // openCLIAccountSession selects the next available Build CLI OAuth account.

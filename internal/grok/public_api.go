@@ -140,19 +140,16 @@ func validateReasoningEffortValue(raw string) bool {
 }
 
 func (h *Handler) HandlePublicVerify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"status": "success",
 	})
 }
 
 func (h *Handler) HandlePublicImagineConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	finalMinBytes := 100000
@@ -164,8 +161,7 @@ func (h *Handler) HandlePublicImagineConfig(w http.ResponseWriter, r *http.Reque
 		nsfw = h.cfg.PublicImagineNSFW()
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"final_min_bytes":  finalMinBytes,
 		"medium_min_bytes": mediumMinBytes,
 		"nsfw":             nsfw,
@@ -173,8 +169,7 @@ func (h *Handler) HandlePublicImagineConfig(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) HandlePublicVideoStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req publicVideoStartRequest
@@ -227,16 +222,14 @@ func (h *Handler) HandlePublicVideoStart(w http.ResponseWriter, r *http.Request)
 		ReasoningEffort: reasoning,
 	})
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"task_id":      taskID,
 		"aspect_ratio": videoCfg.AspectRatio,
 	})
 }
 
 func (h *Handler) HandlePublicVideoStop(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req publicVideoStopRequest
@@ -245,16 +238,14 @@ func (h *Handler) HandlePublicVideoStop(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	removed := deletePublicVideoSessions(req.TaskIDs)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"status":  "success",
 		"removed": removed,
 	})
 }
 
 func (h *Handler) HandlePublicVideoSSE(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 

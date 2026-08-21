@@ -3,7 +3,6 @@ package grok
 import (
 	"context"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -309,8 +308,7 @@ func (h *Handler) handleChatImageEdit(
 		"data":    data,
 		"usage":   buildImageUsagePayload(prompt, len(data)),
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 func isAllowedEditImageMime(mime string) bool {
@@ -323,8 +321,7 @@ func isAllowedEditImageMime(mime string) bool {
 }
 
 func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if err := r.ParseMultipartForm(80 << 20); err != nil {
@@ -515,6 +512,5 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		"data":    data,
 		"usage":   buildImageUsagePayload(prompt, len(data)),
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }

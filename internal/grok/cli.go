@@ -142,10 +142,7 @@ func (c *CLIClient) doResponses(ctx context.Context, acc *store.Account, payload
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusTooManyRequests {
-			if meta := RateLimitFromResponse(resp.StatusCode, resp.Header, raw); meta != nil {
-				teamCooldown.Note(meta.Scope, meta.TeamID, meta.Model, meta.RetryAfter)
-				recordTeamCooldownHit(meta)
-			}
+			noteTeamRateLimit(resp.StatusCode, resp.Header, raw)
 			recordCLIUpstreamStatus(resp.StatusCode)
 			return nil, newCLIUpstreamError(resp.StatusCode, headerCopy, raw, "")
 		}

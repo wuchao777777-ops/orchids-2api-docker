@@ -423,8 +423,7 @@ func parseCacheDeleteTarget(req cacheDeleteItemRequest) (string, string, bool) {
 }
 
 func (h *Handler) HandleAdminCache(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	images, imageSize, err := listCachedEntries("image")
@@ -534,13 +533,11 @@ func (h *Handler) HandleAdminCache(w http.ResponseWriter, r *http.Request) {
 		"online_scope":    onlineScope,
 		"online_details":  onlineDetails,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 func (h *Handler) HandleAdminCacheList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	rawPage := strings.TrimSpace(r.URL.Query().Get("page"))
@@ -577,13 +574,11 @@ func (h *Handler) HandleAdminCacheList(w http.ResponseWriter, r *http.Request) {
 		"page_size": pageSize,
 		"items":     paged,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 func (h *Handler) HandleAdminCacheClear(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req cacheClearRequest
@@ -634,13 +629,11 @@ func (h *Handler) HandleAdminCacheClear(w http.ResponseWriter, r *http.Request) 
 			"size_bytes": removedBytes,
 		},
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 func (h *Handler) HandleAdminCacheItemDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req cacheDeleteItemRequest
@@ -674,13 +667,11 @@ func (h *Handler) HandleAdminCacheItemDelete(w http.ResponseWriter, r *http.Requ
 			"deleted": removed,
 		},
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 func (h *Handler) HandleAdminCacheOnlineClear(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if h == nil || h.client == nil {
@@ -736,8 +727,7 @@ func (h *Handler) HandleAdminCacheOnlineClear(w http.ResponseWriter, r *http.Req
 				"status": "success",
 				"result": single["result"],
 			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
+			writeJSON(w, resp)
 			return
 		}
 
@@ -750,8 +740,7 @@ func (h *Handler) HandleAdminCacheOnlineClear(w http.ResponseWriter, r *http.Req
 			"status": "error",
 			"error":  errText,
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		writeJSON(w, resp)
 		return
 	}
 
@@ -765,8 +754,7 @@ func (h *Handler) HandleAdminCacheOnlineClear(w http.ResponseWriter, r *http.Req
 		},
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writeJSON(w, resp)
 }
 
 func resolveCacheOnlineClearTargets(
@@ -813,8 +801,7 @@ func (h *Handler) resolveCacheOnlineLoadTargets(
 }
 
 func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if h == nil || h.client == nil {
@@ -965,13 +952,11 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 		"task_id": task.ID,
 		"total":   len(tokens),
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
 
 func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if h == nil || h.client == nil {
@@ -1095,6 +1080,5 @@ func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *htt
 		"task_id": task.ID,
 		"total":   len(tokens),
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeJSON(w, out)
 }
