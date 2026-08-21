@@ -199,6 +199,7 @@ func stringValue(value interface{}) string {
 	}
 	return fmt.Sprint(value)
 }
+
 // splitMultiToolCalls 把单个 assistant 消息里的多个 tool_calls 拆成多段
 // "assistant(单个 tool_call) → tool(对应回应)"。puter 的 DeepSeekProvider
 // 会在每个 tool 消息后注入一条 system 消息;若一个 assistant 消息带多个
