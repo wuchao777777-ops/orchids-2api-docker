@@ -3,7 +3,6 @@ package grok
 import (
 	"context"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,10 +11,7 @@ import (
 )
 
 func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, token, prompt, format string, n int, publicBase string) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, _ := w.(http.Flusher)
+	flusher := streamResponseHeaders(w)
 
 	field := imageResponseField(format)
 	var urls []string
@@ -39,29 +35,19 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 				"index":    outIndex,
 				"progress": progress,
 			}
-			writeSSEBytes(w, "image_generation.partial_image", encodeJSONBytes(data))
-			if flusher != nil {
-				flusher.Flush()
-			}
+			writeSSE(w, flusher, "image_generation.partial_image", encodeJSONBytes(data))
 		}
 		urls = appendImageResultURLs(urls, resp)
 		return nil
 	}); err != nil {
-		writeSSEError(w, "stream parse error: "+err.Error(), "server_error", "stream_error")
-		writeSSEBytes(w, "", []byte("[DONE]"))
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSEStreamError(w, flusher, nil, "stream parse error: "+err.Error())
 		return
 	}
 
 	urls = normalizeGeneratedImageURLs(urls, n)
 	if len(urls) == 0 {
 		writeSSEError(w, "no image generated", "server_error", "no_image_generated")
-		writeSSEBytes(w, "", []byte("[DONE]"))
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSE(w, flusher, "", []byte("[DONE]"))
 		return
 	}
 
@@ -73,10 +59,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 				val = u
 			} else {
 				writeSSEError(w, "image cache failed: "+err.Error(), "server_error", "image_cache_failed")
-				writeSSEBytes(w, "", []byte("[DONE]"))
-				if flusher != nil {
-					flusher.Flush()
-				}
+				writeSSE(w, flusher, "", []byte("[DONE]"))
 				return
 			}
 		}
@@ -90,15 +73,9 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 			"revised_prompt": nil,
 			"usage":          buildImageUsagePayload(prompt, len(urls)),
 		}
-		writeSSEBytes(w, "image_generation.completed", encodeJSONBytes(data))
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSE(w, flusher, "image_generation.completed", encodeJSONBytes(data))
 	}
-	writeSSEBytes(w, "", []byte("[DONE]"))
-	if flusher != nil {
-		flusher.Flush()
-	}
+	writeSSE(w, flusher, "", []byte("[DONE]"))
 }
 
 func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request) {
@@ -106,8 +83,7 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req ImagesGenerationsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	req.Model = normalizeModelID(req.Model)
@@ -189,34 +165,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	field := imageResponseField(req.ResponseFormat)
-	data := make([]map[string]interface{}, 0, len(urls))
-	for _, u := range urls {
-		val, err := h.imageOutputValue(ctx, sess.token, u, req.ResponseFormat)
-		if err != nil {
-			slog.Warn("grok image convert failed", "url", u, "error", err)
-			if field == "url" && !mustCacheImageURL(u) {
-				val = u
-			} else {
-				http.Error(w, "image cache failed: "+err.Error(), http.StatusBadGateway)
-				return
-			}
-		}
-		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
-			val = publicBase + val
-		}
-		data = append(data, map[string]interface{}{
-			field:            val,
-			"revised_prompt": nil,
-		})
-	}
-
-	out := map[string]interface{}{
-		"created": time.Now().Unix(),
-		"data":    data,
-		"usage":   buildImageUsagePayload(req.Prompt, len(data)),
-	}
-	writeJSON(w, out)
+	h.writeImageResults(w, ctx, sess.token, req.Prompt, urls, req.ResponseFormat, publicBase, true)
 }
 
 func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, publicBase string, nsfw *bool) {

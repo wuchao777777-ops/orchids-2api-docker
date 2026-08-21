@@ -224,22 +224,13 @@ func (h *Handler) streamVideoChatCompletion(
 	sess *chatAccountSession,
 	logger *debug.Logger,
 ) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, _ := w.(http.Flusher)
+	flusher := streamResponseHeaders(w)
 	id := "chatcmpl_" + randomHex(8)
 	chunkScratch := make([]byte, 0, 256)
 	emit := func(content string, finish string, hasFinish bool, usage map[string]interface{}) {
 		raw := appendChatCompletionChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), req.Model, "", "", content, finish, hasFinish, usage)
 		chunkScratch = raw[:0]
-		writeSSEBytes(w, "", raw)
-		if logger != nil {
-			logger.LogOutputSSE("", string(raw))
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSELog(w, flusher, logger, raw)
 	}
 	role := appendChatCompletionChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), req.Model, "", "assistant", "", "", false, nil)
 	chunkScratch = role[:0]
@@ -255,19 +246,13 @@ func (h *Handler) streamVideoChatCompletion(
 	})
 	if err != nil {
 		writeSSEError(w, err.Error(), "server_error", "video_generation_failed")
-		writeSSEBytes(w, "", []byte("[DONE]"))
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSE(w, flusher, "", []byte("[DONE]"))
 		return
 	}
 	content := h.videoOutputURL(ctx, sess.token, artifact.URL, publicBase)
 	emit(content, "", false, nil)
 	emit("", "stop", true, buildChatUsagePayload(req, content, nil))
-	writeSSEBytes(w, "", []byte("[DONE]"))
-	if flusher != nil {
-		flusher.Flush()
-	}
+	writeSSE(w, flusher, "", []byte("[DONE]"))
 }
 
 func (h *Handler) collectVideoChatCompletion(

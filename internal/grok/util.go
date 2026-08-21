@@ -252,6 +252,23 @@ func parseUpstreamLines(body io.Reader, onLine func(map[string]interface{}) erro
 	}
 }
 
+// walkJSONStrings visits every string leaf in a nested JSON value (maps,
+// slices, or plain strings).
+func walkJSONStrings(value interface{}, visit func(string)) {
+	switch x := value.(type) {
+	case map[string]interface{}:
+		for _, item := range x {
+			walkJSONStrings(item, visit)
+		}
+	case []interface{}:
+		for _, item := range x {
+			walkJSONStrings(item, visit)
+		}
+	case string:
+		visit(x)
+	}
+}
+
 func extractImageURLs(value interface{}) []string {
 	seen := map[string]struct{}{}
 	var out []string
@@ -364,38 +381,25 @@ func normalizeGrokAssetURL(raw string) string {
 func collectAssetLikeStrings(value interface{}, limit int) []string {
 	out := make([]string, 0, 32)
 	seen := map[string]struct{}{}
-	var walk func(v interface{})
-	walk = func(v interface{}) {
+	walkJSONStrings(value, func(s string) {
 		if limit > 0 && len(out) >= limit {
 			return
 		}
-		switch x := v.(type) {
-		case map[string]interface{}:
-			for _, vv := range x {
-				walk(vv)
-			}
-		case []interface{}:
-			for _, vv := range x {
-				walk(vv)
-			}
-		case string:
-			s := strings.TrimSpace(x)
-			if s == "" {
-				return
-			}
-			ls := strings.ToLower(s)
-			// Common patterns when no direct URL is provided.
-			looksAsset := strings.Contains(ls, "assets") || strings.Contains(ls, "grok") || strings.Contains(ls, ".jpg") || strings.Contains(ls, ".png") || strings.Contains(ls, ".webp")
-			looksPath := strings.HasPrefix(s, "/") && (strings.Contains(ls, "image") || strings.Contains(ls, "asset") || strings.Contains(ls, "."))
-			if looksAsset || looksPath {
-				if _, ok := seen[s]; !ok {
-					seen[s] = struct{}{}
-					out = append(out, s)
-				}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		ls := strings.ToLower(s)
+		// Common patterns when no direct URL is provided.
+		looksAsset := strings.Contains(ls, "assets") || strings.Contains(ls, "grok") || strings.Contains(ls, ".jpg") || strings.Contains(ls, ".png") || strings.Contains(ls, ".webp")
+		looksPath := strings.HasPrefix(s, "/") && (strings.Contains(ls, "image") || strings.Contains(ls, "asset") || strings.Contains(ls, "."))
+		if looksAsset || looksPath {
+			if _, ok := seen[s]; !ok {
+				seen[s] = struct{}{}
+				out = append(out, s)
 			}
 		}
-	}
-	walk(value)
+	})
 	return out
 }
 
@@ -569,32 +573,18 @@ func extractRenderableImageLinks(value interface{}) []string {
 		return false
 	}
 
-	var walk func(interface{})
-	walk = func(v interface{}) {
-		switch x := v.(type) {
-		case map[string]interface{}:
-			for _, item := range x {
-				walk(item)
-			}
-		case []interface{}:
-			for _, item := range x {
-				walk(item)
-			}
-		case string:
-			// Some fields may contain multiple URLs; split on whitespace.
-			for _, part := range strings.Fields(x) {
-				p := strings.Trim(part, "\"'()[]{}<>,")
-				if isLikelyImageURL(p) {
-					if _, ok := seen[p]; !ok {
-						seen[p] = struct{}{}
-						out = append(out, p)
-					}
+	walkJSONStrings(value, func(s string) {
+		// Some fields may contain multiple URLs; split on whitespace.
+		for _, part := range strings.Fields(s) {
+			p := strings.Trim(part, "\"'()[]{}<>,")
+			if isLikelyImageURL(p) {
+				if _, ok := seen[p]; !ok {
+					seen[p] = struct{}{}
+					out = append(out, p)
 				}
 			}
 		}
-	}
-
-	walk(value)
+	})
 
 	// Prefer higher-quality originals over tiny thumbnails.
 	score := func(u string) int {

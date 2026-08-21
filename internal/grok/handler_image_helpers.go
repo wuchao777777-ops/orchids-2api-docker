@@ -12,10 +12,12 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func normalizeImageResponseFormat(format string) string {
@@ -206,6 +208,72 @@ func (h *Handler) imageOutputValue(ctx context.Context, token, url, format strin
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(raw), nil
+}
+
+// writeImageResults writes the non-streaming image generation/edit response.
+// With strict=true a conversion failure aborts with 502; otherwise the failing
+// entry falls back to the raw URL (url format) or an empty value (b64_json).
+func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, token, prompt string, urls []string, format, publicBase string, strict bool) {
+	field := imageResponseField(format)
+	data := make([]map[string]interface{}, 0, len(urls))
+	for _, u := range urls {
+		val, err := h.imageOutputValue(ctx, token, u, format)
+		if err != nil {
+			slog.Warn("grok image convert failed", "url", u, "error", err)
+			if field == "url" && (!strict || !mustCacheImageURL(u)) {
+				val = u
+			} else if strict {
+				http.Error(w, "image cache failed: "+err.Error(), http.StatusBadGateway)
+				return
+			}
+		}
+		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
+			val = publicBase + val
+		}
+		data = append(data, map[string]interface{}{
+			field:            val,
+			"revised_prompt": nil,
+		})
+	}
+	writeJSON(w, map[string]interface{}{
+		"created": time.Now().Unix(),
+		"data":    data,
+		"usage":   buildImageUsagePayload(prompt, len(data)),
+	})
+}
+
+// collectImageChatURLs runs the chat image edit/generation loop (n images from
+// ceil(n/2) calls) and returns the normalized URLs. On failure it writes the
+// error response and returns ok=false.
+func (h *Handler) collectImageChatURLs(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, rawPayload *map[string]interface{}, rebuildPayload func(string) (map[string]interface{}, error), n int) ([]string, bool) {
+	callsNeeded := (n + 1) / 2
+	if callsNeeded < 1 {
+		callsNeeded = 1
+	}
+	var urls []string
+	for i := 0; i < callsNeeded; i++ {
+		resp, err := h.doChatWithAutoSwitchRebuild(ctx, sess, rawPayload, rebuildPayload)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return nil, false
+		}
+		h.syncGrokQuota(sess.acc, resp.Header)
+		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
+			urls = appendImageResultURLs(urls, line)
+			return nil
+		})
+		resp.Body.Close()
+		if err != nil {
+			http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
+			return nil, false
+		}
+	}
+	urls = normalizeGeneratedImageURLs(urls, n)
+	if len(urls) == 0 {
+		http.Error(w, "no image generated", http.StatusBadGateway)
+		return nil, false
+	}
+	return urls, true
 }
 
 func (h *Handler) cacheMediaBytes(rawURL, mediaType string, data []byte, mimeType string) (string, error) {

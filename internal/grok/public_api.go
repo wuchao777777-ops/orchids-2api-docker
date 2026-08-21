@@ -173,8 +173,7 @@ func (h *Handler) HandlePublicVideoStart(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req publicVideoStartRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -233,8 +232,7 @@ func (h *Handler) HandlePublicVideoStop(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req publicVideoStopRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	removed := deletePublicVideoSessions(req.TaskIDs)

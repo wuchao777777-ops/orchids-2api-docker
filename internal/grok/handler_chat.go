@@ -36,7 +36,9 @@ func appendChatCompletionChunk(dst []byte, id string, created int64, model, fing
 	return appendChatCompletionChunkWithUsage(dst, id, created, model, fingerprint, role, content, finish, hasFinish, nil)
 }
 
-func appendChatCompletionChunkWithUsage(dst []byte, id string, created int64, model, fingerprint, role, content string, finish string, hasFinish bool, usage map[string]interface{}) []byte {
+// appendChatCompletionChunkPrefix writes the common leading fields of a
+// chat.completion.chunk SSE frame.
+func appendChatCompletionChunkPrefix(dst []byte, id string, created int64, model, fingerprint string) []byte {
 	dst = append(dst, `{"id":`...)
 	dst = strconv.AppendQuote(dst, id)
 	dst = append(dst, `,"object":"chat.completion.chunk","created":`...)
@@ -46,19 +48,12 @@ func appendChatCompletionChunkWithUsage(dst []byte, id string, created int64, mo
 	dst = append(dst, `,"service_tier":null`...)
 	dst = append(dst, `,"system_fingerprint":`...)
 	dst = strconv.AppendQuote(dst, fingerprint)
-	dst = append(dst, `,"choices":[{"index":0,"delta":`...)
-	switch {
-	case role != "":
-		dst = append(dst, `{"role":`...)
-		dst = strconv.AppendQuote(dst, role)
-		dst = append(dst, `,"content":""}`...)
-	case content != "":
-		dst = append(dst, `{"content":`...)
-		dst = strconv.AppendQuote(dst, content)
-		dst = append(dst, '}')
-	default:
-		dst = append(dst, `{}`...)
-	}
+	return dst
+}
+
+// appendChatCompletionChunkFinish writes the trailing logprobs/finish/usage
+// fields shared by every chat.completion.chunk frame.
+func appendChatCompletionChunkFinish(dst []byte, finish string, hasFinish bool, usage map[string]interface{}) []byte {
 	dst = append(dst, `,"logprobs":null,"finish_reason":`...)
 	if hasFinish {
 		dst = strconv.AppendQuote(dst, finish)
@@ -73,42 +68,34 @@ func appendChatCompletionChunkWithUsage(dst []byte, id string, created int64, mo
 	return dst
 }
 
+func appendChatCompletionChunkWithUsage(dst []byte, id string, created int64, model, fingerprint, role, content string, finish string, hasFinish bool, usage map[string]interface{}) []byte {
+	dst = appendChatCompletionChunkPrefix(dst, id, created, model, fingerprint)
+	dst = append(dst, `,"choices":[{"index":0,"delta":`...)
+	switch {
+	case role != "":
+		dst = append(dst, `{"role":`...)
+		dst = strconv.AppendQuote(dst, role)
+		dst = append(dst, `,"content":""}`...)
+	case content != "":
+		dst = append(dst, `{"content":`...)
+		dst = strconv.AppendQuote(dst, content)
+		dst = append(dst, '}')
+	default:
+		dst = append(dst, `{}`...)
+	}
+	return appendChatCompletionChunkFinish(dst, finish, hasFinish, usage)
+}
+
 func appendChatCompletionSnapshotChunkWithUsage(dst []byte, id string, created int64, model, fingerprint, messageContent string, finish string, hasFinish bool, usage map[string]interface{}) []byte {
-	dst = append(dst, `{"id":`...)
-	dst = strconv.AppendQuote(dst, id)
-	dst = append(dst, `,"object":"chat.completion.chunk","created":`...)
-	dst = strconv.AppendInt(dst, created, 10)
-	dst = append(dst, `,"model":`...)
-	dst = strconv.AppendQuote(dst, model)
-	dst = append(dst, `,"service_tier":null`...)
-	dst = append(dst, `,"system_fingerprint":`...)
-	dst = strconv.AppendQuote(dst, fingerprint)
+	dst = appendChatCompletionChunkPrefix(dst, id, created, model, fingerprint)
 	dst = append(dst, `,"choices":[{"index":0,"delta":{},"message":{"role":"assistant","content":`...)
 	dst = strconv.AppendQuote(dst, messageContent)
-	dst = append(dst, `},"logprobs":null,"finish_reason":`...)
-	if hasFinish {
-		dst = strconv.AppendQuote(dst, finish)
-	} else {
-		dst = append(dst, `null`...)
-	}
-	dst = append(dst, `}]`...)
-	if hasFinish {
-		dst = appendUsage(dst, usage)
-	}
 	dst = append(dst, '}')
-	return dst
+	return appendChatCompletionChunkFinish(dst, finish, hasFinish, usage)
 }
 
 func appendChatCompletionToolCallsChunkWithUsage(dst []byte, id string, created int64, model, fingerprint string, toolCalls []map[string]interface{}, finish string, hasFinish bool, usage map[string]interface{}) []byte {
-	dst = append(dst, `{"id":`...)
-	dst = strconv.AppendQuote(dst, id)
-	dst = append(dst, `,"object":"chat.completion.chunk","created":`...)
-	dst = strconv.AppendInt(dst, created, 10)
-	dst = append(dst, `,"model":`...)
-	dst = strconv.AppendQuote(dst, model)
-	dst = append(dst, `,"service_tier":null`...)
-	dst = append(dst, `,"system_fingerprint":`...)
-	dst = strconv.AppendQuote(dst, fingerprint)
+	dst = appendChatCompletionChunkPrefix(dst, id, created, model, fingerprint)
 	dst = append(dst, `,"choices":[{"index":0,"delta":{"tool_calls":`...)
 	if len(toolCalls) == 0 {
 		dst = append(dst, `[]`...)
@@ -117,18 +104,8 @@ func appendChatCompletionToolCallsChunkWithUsage(dst []byte, id string, created 
 	} else {
 		dst = append(dst, `[]`...)
 	}
-	dst = append(dst, `},"logprobs":null,"finish_reason":`...)
-	if hasFinish {
-		dst = strconv.AppendQuote(dst, finish)
-	} else {
-		dst = append(dst, `null`...)
-	}
-	dst = append(dst, `}]`...)
-	if hasFinish {
-		dst = appendUsage(dst, usage)
-	}
 	dst = append(dst, '}')
-	return dst
+	return appendChatCompletionChunkFinish(dst, finish, hasFinish, usage)
 }
 
 func detectPublicBaseURL(r *http.Request) string {
@@ -187,8 +164,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req ChatCompletionsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
@@ -1137,10 +1113,7 @@ func suffixPrefixOverlap(text, tag string) int {
 }
 
 func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, tools []ToolDef, toolChoice interface{}, body io.Reader, logger *debug.Logger) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, _ := w.(http.Flusher)
+	flusher := streamResponseHeaders(w)
 
 	id := "chatcmpl_" + randomHex(8)
 	fingerprint := ""
@@ -1187,13 +1160,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	emitChunk := func(role, content string, finish string, hasFinish bool) {
 		raw := appendChatCompletionChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, role, content, finish, hasFinish, finalUsage)
 		chunkScratch = raw[:0]
-		writeSSEBytes(w, "", raw)
-		if logger != nil {
-			logger.LogOutputSSE("", string(raw))
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSELog(w, flusher, logger, raw)
 		sentAny = true
 	}
 
@@ -1310,13 +1277,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		}
 		raw := appendChatCompletionToolCallsChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, indexedToolCalls, finish, hasFinish, finalUsage)
 		chunkScratch = raw[:0]
-		writeSSEBytes(w, "", raw)
-		if logger != nil {
-			logger.LogOutputSSE("", string(raw))
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSELog(w, flusher, logger, raw)
 		sentAny = true
 	}
 
@@ -1497,26 +1458,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	if err != nil {
 		slog.Warn("grok stream parse failed", "error", err)
 		if !sentAny {
-			writeSSEError(w, "stream parse error: "+err.Error(), "server_error", "stream_error")
-			writeSSEBytes(w, "", []byte("[DONE]"))
-			if logger != nil {
-				logger.LogOutputSSE("error", "stream parse error: "+err.Error())
-				logger.LogOutputSSE("", "[DONE]")
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
+			writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
 			return
 		}
-		writeSSEError(w, "stream parse error: "+err.Error(), "server_error", "stream_error")
-		writeSSEBytes(w, "", []byte("[DONE]"))
-		if logger != nil {
-			logger.LogOutputSSE("error", "stream parse error: "+err.Error())
-			logger.LogOutputSSE("", "[DONE]")
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
 		return
 	}
 
@@ -1605,13 +1550,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		if emittedToolCalls {
 			finalUsage = buildChatUsagePayload(req, strings.TrimSpace(finalBufferedText), []map[string]interface{}{{"type": "function"}})
 			emitChunk("", "", "tool_calls", true)
-			writeSSEBytes(w, "", []byte("[DONE]"))
-			if logger != nil {
-				logger.LogOutputSSE("", "[DONE]")
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
+			writeSSELog(w, flusher, logger, []byte("[DONE]"))
 			return
 		}
 		textContent, toolCalls := toolParser.parseCalls(strings.TrimSpace(finalBufferedText))
@@ -1619,13 +1558,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		if len(toolCalls) > 0 {
 			finalUsage = buildChatUsagePayload(req, textContent, toolCalls)
 			emitToolCallsChunk(textContent, toolCalls, "tool_calls", true)
-			writeSSEBytes(w, "", []byte("[DONE]"))
-			if logger != nil {
-				logger.LogOutputSSE("", "[DONE]")
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
+			writeSSELog(w, flusher, logger, []byte("[DONE]"))
 			return
 		}
 	}
@@ -1634,23 +1567,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	if finalSnapshotEnabled && finalSnapshotContent != "" {
 		raw := appendChatCompletionSnapshotChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, finalSnapshotContent, "stop", true, finalUsage)
 		chunkScratch = raw[:0]
-		writeSSEBytes(w, "", raw)
-		if logger != nil {
-			logger.LogOutputSSE("", string(raw))
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSELog(w, flusher, logger, raw)
 	} else {
 		emitChunk("", "", "stop", true)
 	}
-	writeSSEBytes(w, "", []byte("[DONE]"))
-	if logger != nil {
-		logger.LogOutputSSE("", "[DONE]")
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
+	writeSSELog(w, flusher, logger, []byte("[DONE]"))
 }
 
 func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, tools []ToolDef, toolChoice interface{}, body io.Reader, logger *debug.Logger) {

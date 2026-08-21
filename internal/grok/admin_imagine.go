@@ -3,7 +3,6 @@ package grok
 import (
 	"context"
 	"fmt"
-	"github.com/goccy/go-json"
 	"net/http"
 	"strings"
 	"sync"
@@ -450,8 +449,7 @@ func (h *Handler) HandleAdminImagineStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req imagineStartRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	prompt := strings.TrimSpace(req.Prompt)
@@ -477,8 +475,7 @@ func (h *Handler) HandleAdminImagineStop(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req imagineStopRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	removed := deleteImagineSessions(req.TaskIDs)
@@ -520,16 +517,10 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 	}
 	ratio = resolveAspectRatio(ratio)
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, _ := w.(http.Flusher)
+	flusher := streamResponseHeaders(w)
 
 	emit := func(payload map[string]interface{}) bool {
-		writeSSEBytes(w, "", encodeJSONBytes(payload))
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSE(w, flusher, "", encodeJSONBytes(payload))
 		return r.Context().Err() == nil
 	}
 

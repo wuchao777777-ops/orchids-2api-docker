@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 var imageEditPlaceholderRE = regexp.MustCompile(`(?i)@IMAGE(\d+)\b`)
@@ -252,63 +251,12 @@ func (h *Handler) handleChatImageEdit(
 		return
 	}
 
-	callsNeeded := (n + 1) / 2
-	if callsNeeded < 1 {
-		callsNeeded = 1
-	}
-
-	var urls []string
-	for i := 0; i < callsNeeded; i++ {
-		resp, err := h.doChatWithAutoSwitchRebuild(ctx, sess, &rawPayload, rebuildPayload)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		h.syncGrokQuota(sess.acc, resp.Header)
-		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
-			urls = appendImageResultURLs(urls, line)
-			return nil
-		})
-		resp.Body.Close()
-		if err != nil {
-			http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-	}
-
-	urls = normalizeGeneratedImageURLs(urls, n)
-	if len(urls) == 0 {
-		http.Error(w, "no image generated", http.StatusBadGateway)
+	urls, ok := h.collectImageChatURLs(ctx, w, sess, &rawPayload, rebuildPayload, n)
+	if !ok {
 		return
 	}
 
-	field := imageResponseField(responseFormat)
-	data := make([]map[string]interface{}, 0, len(urls))
-	for _, u := range urls {
-		val, err := h.imageOutputValue(ctx, sess.token, u, responseFormat)
-		if err != nil {
-			slog.Warn("grok image edit convert failed", "url", u, "error", err)
-			if field == "url" {
-				val = u
-			} else {
-				val = ""
-			}
-		}
-		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
-			val = publicBase + val
-		}
-		data = append(data, map[string]interface{}{
-			field:            val,
-			"revised_prompt": nil,
-		})
-	}
-
-	out := map[string]interface{}{
-		"created": time.Now().Unix(),
-		"data":    data,
-		"usage":   buildImageUsagePayload(prompt, len(data)),
-	}
-	writeJSON(w, out)
+	h.writeImageResults(w, ctx, sess.token, prompt, urls, responseFormat, publicBase, false)
 }
 
 func isAllowedEditImageMime(mime string) bool {
@@ -458,59 +406,10 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	callsNeeded := (n + 1) / 2
-	if callsNeeded < 1 {
-		callsNeeded = 1
-	}
-
-	var urls []string
-	for i := 0; i < callsNeeded; i++ {
-		resp, err := h.doChatWithAutoSwitchRebuild(r.Context(), sess, &rawPayload, rebuildPayload)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		h.syncGrokQuota(sess.acc, resp.Header)
-		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
-			urls = appendImageResultURLs(urls, line)
-			return nil
-		})
-		resp.Body.Close()
-		if err != nil {
-			http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-	}
-
-	urls = normalizeGeneratedImageURLs(urls, n)
-	if len(urls) == 0 {
-		http.Error(w, "no image generated", http.StatusBadGateway)
+	urls, ok := h.collectImageChatURLs(r.Context(), w, sess, &rawPayload, rebuildPayload, n)
+	if !ok {
 		return
 	}
 
-	field := imageResponseField(responseFormat)
-	data := make([]map[string]interface{}, 0, len(urls))
-	for _, u := range urls {
-		val, err := h.imageOutputValue(r.Context(), sess.token, u, responseFormat)
-		if err != nil {
-			slog.Warn("grok image edit convert failed", "url", u, "error", err)
-			if field == "url" {
-				val = u
-			}
-		}
-		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
-			val = publicBase + val
-		}
-		data = append(data, map[string]interface{}{
-			field:            val,
-			"revised_prompt": nil,
-		})
-	}
-
-	out := map[string]interface{}{
-		"created": time.Now().Unix(),
-		"data":    data,
-		"usage":   buildImageUsagePayload(prompt, len(data)),
-	}
-	writeJSON(w, out)
+	h.writeImageResults(w, r.Context(), sess.token, prompt, urls, responseFormat, publicBase, false)
 }

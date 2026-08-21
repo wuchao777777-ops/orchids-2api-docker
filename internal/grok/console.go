@@ -802,17 +802,11 @@ func appendConsoleFinalChunk(dst []byte, id string, created int64, model, finger
 }
 
 func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, _ := w.(http.Flusher)
+	flusher := streamResponseHeaders(w)
 	id := "chatcmpl_" + randomHex(8)
 	fingerprint := ""
 	raw := appendChatCompletionChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "assistant", "", "", false)
-	writeSSEBytes(w, "", raw)
-	if flusher != nil {
-		flusher.Flush()
-	}
+	writeSSE(w, flusher, "", raw)
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var event string
@@ -896,10 +890,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		}
 		final.WriteString(content)
 		raw = appendChatCompletionChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "", content, "", false)
-		writeSSEBytes(w, "", raw)
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSE(w, flusher, "", raw)
 	}
 	indexedToolCalls := make([]map[string]interface{}, 0, len(toolCalls))
 	for _, tc := range toolCalls {
@@ -911,19 +902,13 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 	usage := firstUsage(finalUsage, buildChatUsagePayload(req, final.String(), indexedToolCalls))
 	if len(indexedToolCalls) > 0 {
 		raw = appendChatCompletionToolCallsChunkWithUsage(nil, id, time.Now().Unix(), req.Model, fingerprint, indexedToolCalls, "tool_calls", true, usage)
-		writeSSEBytes(w, "", raw)
-		writeSSEBytes(w, "", []byte("[DONE]"))
-		if flusher != nil {
-			flusher.Flush()
-		}
+		writeSSE(w, flusher, "", raw)
+		writeSSE(w, flusher, "", []byte("[DONE]"))
 		return
 	}
 	raw = appendConsoleFinalChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "stop", consoleChatAnnotations(annotations), usage)
-	writeSSEBytes(w, "", raw)
-	writeSSEBytes(w, "", []byte("[DONE]"))
-	if flusher != nil {
-		flusher.Flush()
-	}
+	writeSSE(w, flusher, "", raw)
+	writeSSE(w, flusher, "", []byte("[DONE]"))
 }
 
 func consoleDeltaText(event string, ev map[string]interface{}) string {

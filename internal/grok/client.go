@@ -1453,10 +1453,10 @@ func parseGRPCStatus(headers http.Header, body []byte) (int, string) {
 	return -1, ""
 }
 
-func (c *Client) acceptTOS(ctx context.Context, token string) (int, error) {
+func (c *Client) grpcWebHeaders(token, origin, referer string) http.Header {
 	headers := c.headers(token)
-	headers.Set("Origin", "https://accounts.x.ai")
-	headers.Set("Referer", "https://accounts.x.ai/accept-tos")
+	headers.Set("Origin", origin)
+	headers.Set("Referer", referer)
 	headers.Set("Content-Type", "application/grpc-web+proto")
 	headers.Set("Accept", "*/*")
 	headers.Set("Sec-Fetch-Dest", "empty")
@@ -1464,6 +1464,27 @@ func (c *Client) acceptTOS(ctx context.Context, token string) (int, error) {
 	headers.Set("x-user-agent", "connect-es/2.1.1")
 	headers.Set("Cache-Control", "no-cache")
 	headers.Set("Pragma", "no-cache")
+	return headers
+}
+
+// readGRPCStatus reads a bounded grpc-web response body and returns the HTTP
+// status, grpc status/message, and a descriptive error when the grpc status is
+// non-zero.
+func readGRPCStatus(resp *http.Response, action string) (int, int, string, error) {
+	statusCode := resp.StatusCode
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
+	grpcStatus, grpcMsg := parseGRPCStatus(resp.Header, raw)
+	if grpcStatus != -1 && grpcStatus != 0 {
+		if grpcMsg == "" {
+			return statusCode, grpcStatus, grpcMsg, fmt.Errorf("%s failed grpc_status=%d", action, grpcStatus)
+		}
+		return statusCode, grpcStatus, grpcMsg, fmt.Errorf("%s failed grpc_status=%d message=%s", action, grpcStatus, grpcMsg)
+	}
+	return statusCode, grpcStatus, grpcMsg, nil
+}
+
+func (c *Client) acceptTOS(ctx context.Context, token string) (int, error) {
+	headers := c.grpcWebHeaders(token, "https://accounts.x.ai", "https://accounts.x.ai/accept-tos")
 
 	payload := grpcWebEncode([]byte{0x10, 0x01})
 	resp, err := c.doRequest(ctx, defaultAcceptTOSURL, http.MethodPost, payload, headers, http.StatusOK, false)
@@ -1472,16 +1493,8 @@ func (c *Client) acceptTOS(ctx context.Context, token string) (int, error) {
 	}
 	defer resp.Body.Close()
 
-	statusCode := resp.StatusCode
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
-	grpcStatus, grpcMsg := parseGRPCStatus(resp.Header, raw)
-	if grpcStatus != -1 && grpcStatus != 0 {
-		if grpcMsg == "" {
-			return statusCode, fmt.Errorf("accept tos failed grpc_status=%d", grpcStatus)
-		}
-		return statusCode, fmt.Errorf("accept tos failed grpc_status=%d message=%s", grpcStatus, grpcMsg)
-	}
-	return statusCode, nil
+	statusCode, _, _, err := readGRPCStatus(resp, "accept tos")
+	return statusCode, err
 }
 
 func randomAdultBirthDate() string {
@@ -1526,16 +1539,7 @@ func (c *Client) setBirthDate(ctx context.Context, token string) (int, error) {
 }
 
 func (c *Client) enableNSFWFeature(ctx context.Context, token string) (int, int, string, error) {
-	headers := c.headers(token)
-	headers.Set("Origin", "https://grok.com")
-	headers.Set("Referer", "https://grok.com/?_s=data")
-	headers.Set("Content-Type", "application/grpc-web+proto")
-	headers.Set("Accept", "*/*")
-	headers.Set("Sec-Fetch-Dest", "empty")
-	headers.Set("x-grpc-web", "1")
-	headers.Set("x-user-agent", "connect-es/2.1.1")
-	headers.Set("Cache-Control", "no-cache")
-	headers.Set("Pragma", "no-cache")
+	headers := c.grpcWebHeaders(token, "https://grok.com", "https://grok.com/?_s=data")
 
 	name := []byte("always_show_nsfw_content")
 	inner := append([]byte{0x0a, byte(len(name))}, name...)
@@ -1549,16 +1553,7 @@ func (c *Client) enableNSFWFeature(ctx context.Context, token string) (int, int,
 	}
 	defer resp.Body.Close()
 
-	statusCode := resp.StatusCode
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
-	grpcStatus, grpcMsg := parseGRPCStatus(resp.Header, raw)
-	if grpcStatus != -1 && grpcStatus != 0 {
-		if grpcMsg == "" {
-			return statusCode, grpcStatus, grpcMsg, fmt.Errorf("enable nsfw failed grpc_status=%d", grpcStatus)
-		}
-		return statusCode, grpcStatus, grpcMsg, fmt.Errorf("enable nsfw failed grpc_status=%d message=%s", grpcStatus, grpcMsg)
-	}
-	return statusCode, grpcStatus, grpcMsg, nil
+	return readGRPCStatus(resp, "enable nsfw")
 }
 
 func (c *Client) EnableNSFWDetailed(ctx context.Context, token string) NSFWEnableResult {

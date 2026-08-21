@@ -539,10 +539,7 @@ func (h *Handler) HandleAdminBatchTask(w http.ResponseWriter, r *http.Request) {
 		if !requireMethod(w, r, http.MethodGet) {
 			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		flusher, _ := w.(http.Flusher)
+		flusher := streamResponseHeaders(w)
 
 		var lastPayload []byte
 		send := func(payload map[string]interface{}) bool {
@@ -551,10 +548,7 @@ func (h *Handler) HandleAdminBatchTask(w http.ResponseWriter, r *http.Request) {
 				return true
 			}
 			lastPayload = append(lastPayload[:0], raw...)
-			writeSSEBytes(w, "", raw)
-			if flusher != nil {
-				flusher.Flush()
-			}
+			writeSSE(w, flusher, "", raw)
 			return r.Context().Err() == nil
 		}
 

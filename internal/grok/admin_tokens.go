@@ -2,10 +2,8 @@ package grok
 
 import (
 	"fmt"
-	"github.com/goccy/go-json"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -114,37 +112,6 @@ func grokAccountPool(acc *store.Account) string {
 	return normalizeGrokPoolName(inferTokenPool(acc))
 }
 
-func parseInt64FromAny(v interface{}) (int64, bool) {
-	switch t := v.(type) {
-	case int:
-		return int64(t), true
-	case int32:
-		return int64(t), true
-	case int64:
-		return t, true
-	case float64:
-		return int64(t), true
-	case float32:
-		return int64(t), true
-	case json.Number:
-		if n, err := t.Int64(); err == nil {
-			return n, true
-		}
-		if f, err := t.Float64(); err == nil {
-			return int64(f), true
-		}
-		return 0, false
-	case string:
-		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		return n, true
-	default:
-		return 0, false
-	}
-}
-
 func collectAdminTokenEntries(payload map[string]interface{}) []adminTokenEntry {
 	dedup := map[string]adminTokenEntry{}
 
@@ -181,10 +148,10 @@ func collectAdminTokenEntries(payload map[string]interface{}) []adminTokenEntry 
 				if s, ok := v["note"].(string); ok {
 					entry.Note = strings.TrimSpace(s)
 				}
-				if n, ok := parseInt64FromAny(v["quota"]); ok {
+				if n, ok := parseNumberAny(v["quota"]); ok {
 					entry.Quota = n
 				}
-				if n, ok := parseInt64FromAny(v["use_count"]); ok {
+				if n, ok := parseNumberAny(v["use_count"]); ok {
 					entry.UseCount = n
 				}
 			default:
@@ -356,8 +323,7 @@ func (h *Handler) handleAdminTokensUpdate(w http.ResponseWriter, r *http.Request
 	}
 
 	var payload map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &payload) {
 		return
 	}
 	entries := collectAdminTokenEntries(payload)

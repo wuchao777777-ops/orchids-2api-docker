@@ -257,6 +257,58 @@ func detailErrorStatus(err error) string {
 	return "error: " + msg
 }
 
+// runWorkerPool fans items out across up to workers goroutines, honouring ctx
+// cancellation, and waits for all workers to drain before returning. Workers
+// stop taking new items once ctx is cancelled.
+func runWorkerPool[T any](ctx context.Context, items []T, workers int, process func(T)) {
+	if workers > len(items) {
+		workers = len(items)
+	}
+	if workers < 1 {
+		return
+	}
+	jobs := make(chan T)
+	var wg sync.WaitGroup
+	worker := func() {
+		defer wg.Done()
+		for item := range jobs {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			process(item)
+		}
+	}
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go worker()
+	}
+sendLoop:
+	for _, item := range items {
+		select {
+		case <-ctx.Done():
+			break sendLoop
+		case jobs <- item:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+}
+
+type indexedTokenJob struct {
+	index int
+	token string
+}
+
+func indexedTokenJobs(tokens []string) []indexedTokenJob {
+	jobs := make([]indexedTokenJob, len(tokens))
+	for i, token := range tokens {
+		jobs[i] = indexedTokenJob{index: i, token: token}
+	}
+	return jobs
+}
+
 func (h *Handler) fetchOnlineAssetDetails(
 	r *http.Request,
 	tokens []string,
@@ -282,56 +334,32 @@ func (h *Handler) fetchOnlineAssetDetails(
 		return details, 0
 	}
 
-	type job struct {
-		index int
-		token string
-	}
-	workerCount := 4
-	if len(requestTokens) < workerCount {
-		workerCount = len(requestTokens)
-	}
-
 	var (
 		totalCount int
 		totalMu    sync.Mutex
 	)
-	jobs := make(chan job)
-	var wg sync.WaitGroup
-	worker := func() {
-		defer wg.Done()
-		for item := range jobs {
-			masked, lastClear := onlineAccountInfo(accountByToken, item.token)
-			detail := map[string]interface{}{
-				"token":               item.token,
-				"token_masked":        masked,
-				"count":               0,
-				"status":              "not_loaded",
-				"last_asset_clear_at": lastClear,
-			}
-
-			count, err := h.client.countAssets(r.Context(), item.token)
-			if err != nil {
-				detail["status"] = detailErrorStatus(err)
-			} else {
-				detail["count"] = count
-				detail["status"] = "ok"
-				totalMu.Lock()
-				totalCount += count
-				totalMu.Unlock()
-			}
-			details[item.index] = detail
+	runWorkerPool(r.Context(), indexedTokenJobs(requestTokens), 4, func(item indexedTokenJob) {
+		masked, lastClear := onlineAccountInfo(accountByToken, item.token)
+		detail := map[string]interface{}{
+			"token":               item.token,
+			"token_masked":        masked,
+			"count":               0,
+			"status":              "not_loaded",
+			"last_asset_clear_at": lastClear,
 		}
-	}
 
-	wg.Add(workerCount)
-	for i := 0; i < workerCount; i++ {
-		go worker()
-	}
-	for i, token := range requestTokens {
-		jobs <- job{index: i, token: token}
-	}
-	close(jobs)
-	wg.Wait()
+		count, err := h.client.countAssets(r.Context(), item.token)
+		if err != nil {
+			detail["status"] = detailErrorStatus(err)
+		} else {
+			detail["count"] = count
+			detail["status"] = "ok"
+			totalMu.Lock()
+			totalCount += count
+			totalMu.Unlock()
+		}
+		details[item.index] = detail
+	})
 	return details, totalCount
 }
 
@@ -637,8 +665,7 @@ func (h *Handler) HandleAdminCacheItemDelete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var req cacheDeleteItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	mediaType, name, ok := parseCacheDeleteTarget(req)
@@ -680,8 +707,7 @@ func (h *Handler) HandleAdminCacheOnlineClear(w http.ResponseWriter, r *http.Req
 	}
 
 	var req cacheOnlineClearRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -810,8 +836,7 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 	}
 
 	var req cacheOnlineLoadAsyncRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -829,69 +854,34 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 	go func() {
 		defer scheduleDeleteNSFWBatchTask(task.ID, nsfwBatchTaskTTL)
 
-		type job struct {
-			index int
-			token string
-		}
 		details := make([]map[string]interface{}, len(tokens))
-		jobs := make(chan job)
-		workerCount := 4
-		if len(tokens) < workerCount {
-			workerCount = len(tokens)
-		}
-
 		var (
 			totalCount int
 			totalMu    sync.Mutex
-			wg         sync.WaitGroup
 		)
-		worker := func() {
-			defer wg.Done()
-			for item := range jobs {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				masked, lastClear := onlineAccountInfo(accountByToken, item.token)
-				detail := map[string]interface{}{
-					"token":               item.token,
-					"token_masked":        masked,
-					"count":               0,
-					"status":              "not_loaded",
-					"last_asset_clear_at": lastClear,
-				}
-
-				count, err := h.client.countAssets(ctx, item.token)
-				if err != nil {
-					detail["status"] = detailErrorStatus(err)
-				} else {
-					detail["count"] = count
-					detail["status"] = "ok"
-					totalMu.Lock()
-					totalCount += count
-					totalMu.Unlock()
-				}
-				details[item.index] = detail
-				task.record(item.token, err == nil, detail)
+		runWorkerPool(ctx, indexedTokenJobs(tokens), 4, func(item indexedTokenJob) {
+			masked, lastClear := onlineAccountInfo(accountByToken, item.token)
+			detail := map[string]interface{}{
+				"token":               item.token,
+				"token_masked":        masked,
+				"count":               0,
+				"status":              "not_loaded",
+				"last_asset_clear_at": lastClear,
 			}
-		}
 
-		wg.Add(workerCount)
-		for i := 0; i < workerCount; i++ {
-			go worker()
-		}
-
-	sendLoop:
-		for i, token := range tokens {
-			select {
-			case <-ctx.Done():
-				break sendLoop
-			case jobs <- job{index: i, token: token}:
+			count, err := h.client.countAssets(ctx, item.token)
+			if err != nil {
+				detail["status"] = detailErrorStatus(err)
+			} else {
+				detail["count"] = count
+				detail["status"] = "ok"
+				totalMu.Lock()
+				totalCount += count
+				totalMu.Unlock()
 			}
-		}
-		close(jobs)
-		wg.Wait()
+			details[item.index] = detail
+			task.record(item.token, err == nil, detail)
+		})
 
 		if ctx.Err() != nil {
 			task.finish("cancelled", "")
@@ -965,8 +955,7 @@ func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *htt
 	}
 
 	var req cacheOnlineClearRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -987,75 +976,40 @@ func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *htt
 	go func() {
 		defer scheduleDeleteNSFWBatchTask(task.ID, nsfwBatchTaskTTL)
 
-		type job struct {
-			token string
-		}
-		jobs := make(chan job)
-		workerCount := 4
-		if len(tokens) < workerCount {
-			workerCount = len(tokens)
-		}
-
 		var (
 			results   = map[string]map[string]interface{}{}
 			okCount   int
 			failCount int
 			mu        sync.Mutex
-			wg        sync.WaitGroup
 		)
-		worker := func() {
-			defer wg.Done()
-			for item := range jobs {
-				select {
-				case <-ctx.Done():
-					return
-				default:
+		runWorkerPool(ctx, tokens, 4, func(token string) {
+			total, success, failed, err := h.client.clearAssets(ctx, token)
+			ok := err == nil
+			entry := map[string]interface{}{}
+			if err != nil {
+				entry["status"] = "error"
+				entry["error"] = strings.TrimSpace(err.Error())
+			} else {
+				setOnlineAssetClearTime(token, time.Now().UnixMilli())
+				entry["status"] = "success"
+				entry["result"] = map[string]interface{}{
+					"total":   total,
+					"success": success,
+					"failed":  failed,
 				}
-
-				total, success, failed, err := h.client.clearAssets(ctx, item.token)
-				ok := err == nil
-				entry := map[string]interface{}{}
-				if err != nil {
-					entry["status"] = "error"
-					entry["error"] = strings.TrimSpace(err.Error())
-				} else {
-					setOnlineAssetClearTime(item.token, time.Now().UnixMilli())
-					entry["status"] = "success"
-					entry["result"] = map[string]interface{}{
-						"total":   total,
-						"success": success,
-						"failed":  failed,
-					}
-				}
-
-				mu.Lock()
-				results[item.token] = entry
-				if ok {
-					okCount++
-				} else {
-					failCount++
-				}
-				mu.Unlock()
-
-				task.record(item.token, ok, entry)
 			}
-		}
 
-		wg.Add(workerCount)
-		for i := 0; i < workerCount; i++ {
-			go worker()
-		}
-
-	sendLoop:
-		for _, token := range tokens {
-			select {
-			case <-ctx.Done():
-				break sendLoop
-			case jobs <- job{token: token}:
+			mu.Lock()
+			results[token] = entry
+			if ok {
+				okCount++
+			} else {
+				failCount++
 			}
-		}
-		close(jobs)
-		wg.Wait()
+			mu.Unlock()
+
+			task.record(token, ok, entry)
+		})
 
 		if ctx.Err() != nil {
 			task.finish("cancelled", "")
