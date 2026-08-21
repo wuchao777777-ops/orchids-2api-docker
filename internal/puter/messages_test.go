@@ -101,8 +101,7 @@ func TestSplitMultiToolCallsIgnoresNonToolScenarios(t *testing.T) {
 }
 
 // 显式传入 SystemItem;convertMessages 将 system 条目逐字透传为独立 system 消息。
-func TestBuildRequestSplitsMultiToolCallsOnlyForDeepseek(t *testing.T) {
-	build := func(model string) []Message {
+func TestBuildRequestSplitsMultiToolCallsOnlyForDeepseek(t *testing.T) {	build := func(model string) []Message {
 		client := NewFromAccount(nil, nil)
 		req, err := client.buildRequest(upstream.UpstreamRequest{
 			Model: model,
@@ -183,5 +182,77 @@ func TestSplitMultiToolCallsPreservesArgumentsText(t *testing.T) {
 	joined := got[0].Content + got[0].ToolCalls[0].Function.Arguments + got[2].ToolCalls[0].Function.Arguments
 	if !strings.Contains(joined, "lead") || !strings.Contains(joined, "x") || !strings.Contains(joined, "y") {
 		t.Fatalf("content/arguments lost: %q", joined)
+	}
+}
+
+// 思考模式下,DeepSeek 要求 assistant 消息回传 reasoning_content;否则上游 400。
+// convertMessages 应把 Anthropic 风格 `thinking` 块与 OpenAI 顶层 reasoning_content
+// 都汇入 puter Message.ReasoningContent(仅 deepseek 服务开启回传)。
+func TestConvertMessagesEchoesReasoningForDeepseek(t *testing.T) {
+	msgs := []prompt.Message{
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "thinking", Thinking: "let me reason step by step"},
+			{Type: "text", Text: "final answer"},
+		}}},
+		{Role: "user", Content: prompt.MessageContent{Text: "next"}},
+	}
+	out := convertMessages(msgs, nil, true)
+	if len(out) != 2 {
+		t.Fatalf("len=%d want 2: %#v", len(out), out)
+	}
+	if out[0].Role != "assistant" || out[0].Content != "final answer" || out[0].ReasoningContent != "let me reason step by step" {
+		t.Fatalf("assistant=%#v want text+reasoning echoed", out[0])
+	}
+}
+
+func TestConvertMessagesEchoesOpenAIReasoningContentField(t *testing.T) {
+	msgs := []prompt.Message{
+		{Role: "assistant", Content: prompt.MessageContent{Text: "done"}, ReasoningContent: "thought it through"},
+	}
+	out := convertMessages(msgs, nil, true)
+	if len(out) != 1 || out[0].ReasoningContent != "thought it through" {
+		t.Fatalf("got %#v want reasoning_content echoed from top-level field", out)
+	}
+}
+
+// 非 deepseek 服务不回传 reasoning,与旧版行为一致。
+func TestConvertMessagesSkipsReasoningForOtherServices(t *testing.T) {
+	msgs := []prompt.Message{
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "thinking", Thinking: "secret reasoning"},
+			{Type: "text", Text: "answer"},
+		}}},
+	}
+	out := convertMessages(msgs, nil, false)
+	if len(out) != 1 {
+		t.Fatalf("len=%d want 1: %#v", len(out), out)
+	}
+	if out[0].ReasoningContent != "" {
+		t.Fatalf("non-deepseek must drop reasoning, got %#v", out[0])
+	}
+	if out[0].Content != "answer" {
+		t.Fatalf("content=%q want %q", out[0].Content, "answer")
+	}
+}
+
+// 拆分多 tool_call 时 reasoning_content 应随首个(带 content)分片保留。
+func TestSplitMultiToolCallsPreservesReasoningOnFirstPart(t *testing.T) {
+	in := []Message{
+		{Role: "assistant", Content: "lead", ReasoningContent: "reasoning here", ToolCalls: []ToolCall{
+			{ID: "a", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}},
+			{ID: "b", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}},
+		}},
+		{Role: "tool", ToolCallID: "a", Content: "r1"},
+		{Role: "tool", ToolCallID: "b", Content: "r2"},
+	}
+	got := splitMultiToolCalls(in)
+	if got[0].ReasoningContent != "reasoning here" {
+		t.Fatalf("got[0].ReasoningContent=%q want %q", got[0].ReasoningContent, "reasoning here")
+	}
+	if got[0].Content != "lead" {
+		t.Fatalf("got[0].Content=%q want %q", got[0].Content, "lead")
+	}
+	if got[2].ReasoningContent != "" {
+		t.Fatalf("second split part must not repeat reasoning, got %#v", got[2])
 	}
 }

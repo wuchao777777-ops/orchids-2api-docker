@@ -114,8 +114,9 @@ func (m *Message) ExtractText() string {
 
 // Message 消息结构
 type Message struct {
-	Role    string         `json:"role"`
-	Content MessageContent `json:"content"`
+	Role             string         `json:"role"`
+	Content          MessageContent `json:"content"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
 }
 
 type openAIToolCallFunction struct {
@@ -131,16 +132,18 @@ type openAIToolCall struct {
 
 func (m *Message) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Role       string           `json:"role"`
-		Content    json.RawMessage  `json:"content"`
-		ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
-		ToolCallID string           `json:"tool_call_id,omitempty"`
+		Role             string           `json:"role"`
+		Content          json.RawMessage  `json:"content"`
+		ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
+		ToolCallID       string           `json:"tool_call_id,omitempty"`
+		ReasoningContent string           `json:"reasoning_content,omitempty"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
 	m.Role = raw.Role
+	m.ReasoningContent = raw.ReasoningContent
 	content := raw.Content
 	if len(content) == 0 {
 		content = json.RawMessage("null")

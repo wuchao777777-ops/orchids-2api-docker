@@ -10,8 +10,10 @@ import (
 )
 
 // convertMessages 将 OpenAI 风格消息转换为 Puter 消息。系统条目逐字透传为独立
-// system 消息，其余消息按角色/schema 映射。
-func convertMessages(messages []prompt.Message, system []prompt.SystemItem) []Message {
+// system 消息，其余消息按角色/schema 映射。echoReasoning 仅在目标服务开启思考模式
+// 且要求回传 reasoning_content（deepseek）时为 true，此时保留 assistant 消息的推理
+// 内容；其余服务行为不变（与旧版一致）。
+func convertMessages(messages []prompt.Message, system []prompt.SystemItem, echoReasoning bool) []Message {
 	out := make([]Message, 0, len(messages)+len(system))
 	for _, item := range system {
 		if text := strings.TrimSpace(item.Text); text != "" {
@@ -25,13 +27,17 @@ func convertMessages(messages []prompt.Message, system []prompt.SystemItem) []Me
 		}
 		if msg.Content.IsString() {
 			if text := msg.Content.GetText(); strings.TrimSpace(text) != "" {
-				out = append(out, Message{Role: role, Content: text})
+				m := Message{Role: role, Content: text}
+				if echoReasoning && role == "assistant" {
+					m.ReasoningContent = msg.ReasoningContent
+				}
+				out = append(out, m)
 			}
 			continue
 		}
 		switch role {
 		case "assistant":
-			if converted, ok := convertAssistantMessage(msg.Content.GetBlocks()); ok {
+			if converted, ok := convertAssistantMessage(msg, echoReasoning); ok {
 				out = append(out, converted)
 			}
 		case "user", "tool":
@@ -45,14 +51,24 @@ func convertMessages(messages []prompt.Message, system []prompt.SystemItem) []Me
 	return out
 }
 
-func convertAssistantMessage(blocks []prompt.ContentBlock) (Message, bool) {
+// convertAssistantMessage 把 assistant 消息的文本/tool_use 块映射到 puter Message。
+// echoReasoning 时，OpenAI 风格 `reasoning_content` 顶层字段与 Anthropic 风格
+// `thinking` 块都会汇入 Message.ReasoningContent，保证 DeepSeek 思考模式能回传推理内容。
+func convertAssistantMessage(msg prompt.Message, echoReasoning bool) (Message, bool) {
 	message := Message{Role: "assistant"}
+	if echoReasoning {
+		message.ReasoningContent = strings.TrimSpace(msg.ReasoningContent)
+	}
 	var text []string
-	for _, block := range blocks {
+	for _, block := range msg.Content.GetBlocks() {
 		switch block.Type {
 		case "text":
 			if strings.TrimSpace(block.Text) != "" {
 				text = append(text, block.Text)
+			}
+		case "thinking":
+			if echoReasoning && message.ReasoningContent == "" {
+				message.ReasoningContent = strings.TrimSpace(block.Thinking)
 			}
 		case "tool_use":
 			name := strings.TrimSpace(block.Name)
@@ -74,7 +90,7 @@ func convertAssistantMessage(blocks []prompt.ContentBlock) (Message, bool) {
 		}
 	}
 	message.Content = strings.Join(text, "\n")
-	return message, message.Content != "" || len(message.ToolCalls) > 0
+	return message, message.Content != "" || len(message.ToolCalls) > 0 || message.ReasoningContent != ""
 }
 
 func convertUserBlocks(blocks []prompt.ContentBlock) []Message {
@@ -234,6 +250,7 @@ func splitMultiToolCalls(messages []Message) []Message {
 			part := Message{Role: "assistant", ToolCalls: []ToolCall{tc}}
 			if k == 0 {
 				part.Content = m.Content
+				part.ReasoningContent = m.ReasoningContent
 			}
 			out = append(out, part)
 			if res, ok := byID[tc.ID]; ok {
