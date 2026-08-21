@@ -262,13 +262,19 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 		tools = nil
 	}
 	// 保真：系统条目逐字透传为独立 system 消息，不注入任何客户端未发送的内容。
+	msgs := convertMessages(req.Messages, req.System)
+	if service == "deepseek" {
+		// puter 的 DeepSeekProvider 会在每个 tool 消息后注入 system 消息,
+		// 多 tool_call 轮次会被打断配对;拆成单 tool_call 序列绕开该行为。
+		msgs = splitMultiToolCalls(msgs)
+	}
 	return &Request{
 		Interface: defaultIface,
 		Service:   service,
 		TestMode:  testMode,
 		Method:    defaultMethod,
 		Args: RequestArgs{
-			Messages: convertMessages(req.Messages, req.System),
+			Messages: msgs,
 			Model:    modelID,
 			Stream:   true,
 			Tools:    tools,

@@ -199,3 +199,47 @@ func stringValue(value interface{}) string {
 	}
 	return fmt.Sprint(value)
 }
+// splitMultiToolCalls 把单个 assistant 消息里的多个 tool_calls 拆成多段
+// "assistant(单个 tool_call) → tool(对应回应)"。puter 的 DeepSeekProvider
+// 会在每个 tool 消息后注入一条 system 消息;若一个 assistant 消息带多个
+// tool_calls,注入的 system 会插在 tool 回应之间,而 DeepSeek 的严格校验
+// 要求 assistant(tool_calls) 后只能跟 tool 消息直到全部 tool_call_id 被回应,
+// 于是报 "insufficient tool messages following tool_calls message"。
+// 拆成单 tool_call 序列后,每个 assistant 的回应在注入前就已完整。
+func splitMultiToolCalls(messages []Message) []Message {
+	out := make([]Message, 0, len(messages))
+	for i := 0; i < len(messages); i++ {
+		m := messages[i]
+		if m.Role != "assistant" || len(m.ToolCalls) < 2 {
+			out = append(out, m)
+			continue
+		}
+		j := i + 1
+		results := make([]Message, 0, len(m.ToolCalls))
+		for j < len(messages) && messages[j].Role == "tool" {
+			results = append(results, messages[j])
+			j++
+		}
+		byID := make(map[string]Message, len(m.ToolCalls))
+		for _, r := range results {
+			byID[r.ToolCallID] = r
+		}
+		if len(byID) != len(m.ToolCalls) {
+			// 回应不齐时保持原样,不擅自改写。
+			out = append(out, m)
+			continue
+		}
+		for k, tc := range m.ToolCalls {
+			part := Message{Role: "assistant", ToolCalls: []ToolCall{tc}}
+			if k == 0 {
+				part.Content = m.Content
+			}
+			out = append(out, part)
+			if res, ok := byID[tc.ID]; ok {
+				out = append(out, res)
+			}
+		}
+		i = j - 1
+	}
+	return out
+}
