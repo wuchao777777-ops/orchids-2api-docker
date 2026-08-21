@@ -202,10 +202,6 @@ func (h *Handler) handleChatImageEdit(
 	if len(imageURLs) > 7 {
 		imageURLs = imageURLs[len(imageURLs)-7:]
 	}
-	if len(imageURLs) == 0 {
-		http.Error(w, "image_url is required for image edits", http.StatusBadRequest)
-		return
-	}
 
 	imageCfg := req.ImageConfig
 	if imageCfg == nil {

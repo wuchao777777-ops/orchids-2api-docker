@@ -58,7 +58,6 @@ type nsfwBatchTask struct {
 }
 
 const nsfwBatchTaskTTL = 5 * time.Minute
-const grokNSFWCapabilityEnabled = true
 
 var (
 	nsfwBatchTasksMu sync.Mutex
@@ -450,10 +449,6 @@ func (h *Handler) HandleAdminNSFWEnable(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !grokNSFWCapabilityEnabled {
-		http.Error(w, "grok nsfw capability is disabled", http.StatusGone)
-		return
-	}
 	if h == nil || h.lb == nil || h.lb.Store == nil {
 		http.Error(w, "store not configured", http.StatusServiceUnavailable)
 		return
@@ -485,10 +480,6 @@ func (h *Handler) HandleAdminNSFWEnable(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) HandleAdminNSFWEnableAsync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !grokNSFWCapabilityEnabled {
-		http.Error(w, "grok nsfw capability is disabled", http.StatusGone)
 		return
 	}
 	if h == nil || h.lb == nil || h.lb.Store == nil {

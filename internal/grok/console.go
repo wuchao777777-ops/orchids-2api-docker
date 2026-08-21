@@ -2,7 +2,6 @@ package grok
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -21,7 +20,6 @@ const consoleResponsesURL = "https://console.x.ai/v1/responses"
 type consoleContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
-	URL  string `json:"image_url,omitempty"`
 }
 
 type consoleFunctionCallItem struct {
@@ -925,9 +923,6 @@ func consoleDeltaText(event string, ev map[string]interface{}) string {
 	}
 	if strings.Contains(event, "output_text") {
 		return consoleExtractText(ev)
-	}
-	if bytes.Contains([]byte(event), []byte("completed")) {
-		return ""
 	}
 	return ""
 }

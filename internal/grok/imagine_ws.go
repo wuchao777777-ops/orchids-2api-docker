@@ -24,23 +24,16 @@ const (
 )
 
 type imagineWSEvent struct {
-	Type     string
-	ImageID  string
-	Order    int
-	Progress int
-	URL      string
-	Blob     string
-	Width    int
-	Height   int
-	Final    bool
-	Error    string
+	Type    string
+	ImageID string
+	URL     string
+	Blob    string
+	Final   bool
+	Error   string
 }
 
 type imagineWSSlot struct {
 	id       string
-	order    int
-	width    int
-	height   int
 	lastURL  string
 	lastBlob string
 	done     bool
@@ -156,11 +149,8 @@ func imagineFinalEvent(slot *imagineWSSlot) imagineWSEvent {
 	return imagineWSEvent{
 		Type:    "image",
 		ImageID: slot.id,
-		Order:   slot.order,
 		URL:     slot.lastURL,
 		Blob:    slot.lastBlob,
-		Width:   slot.width,
-		Height:  slot.height,
 		Final:   true,
 	}
 }
@@ -300,13 +290,10 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 			case "start_stage":
 				slot := &imagineWSSlot{
 					id:       imageID,
-					order:    interfaceToInt(msg["order"]),
-					width:    interfaceToInt(msg["width"]),
-					height:   interfaceToInt(msg["height"]),
 					progress: 10,
 				}
 				slots[imageID] = slot
-				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID, Order: slot.order, Progress: 10}) {
+				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID}) {
 					return finals, ctx.Err()
 				}
 			case "completed":
@@ -316,7 +303,7 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 				}
 				slot.done = true
 				if moderated, _ := msg["moderated"].(bool); moderated {
-					if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "moderated", ImageID: imageID, Order: slot.order}) {
+					if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "moderated", ImageID: imageID}) {
 						return finals, ctx.Err()
 					}
 					continue
@@ -341,7 +328,7 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 			progress := clampImagineProgress(interfaceToInt(msg["percentage_complete"]))
 			if progress > slot.progress {
 				slot.progress = progress
-				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID, Order: slot.order, Progress: progress}) {
+				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID}) {
 					return finals, ctx.Err()
 				}
 			}

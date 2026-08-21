@@ -158,11 +158,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 
 	var sess *chatAccountSession
 	var err error
-	if spec.ID == "grok-imagine-image-lite" {
-		sess, err = h.openChatAccountSessionForModel(ctx, spec)
-	} else {
-		sess, err = h.openChatAccountSessionForModel(ctx, spec)
-	}
+	sess, err = h.openChatAccountSessionForModel(ctx, spec)
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -245,8 +241,6 @@ func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.Resp
 
 func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, nsfw *bool, allowSwitch bool) ([]string, error) {
 	var urls []string
-	var debugHTTP []string
-	var debugAsset []string
 	var debugShapes []string
 	var debugNoImage []string
 
@@ -337,8 +331,6 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 			"attempts", maxAttempts,
 			"event_shapes", uniqueStrings(debugShapes),
 			"diagnostics", uniqueStrings(debugNoImage),
-			"http_candidates", len(uniqueStrings(debugHTTP)),
-			"asset_candidates", len(uniqueStrings(debugAsset)),
 		)
 		return nil, fmt.Errorf("no image generated")
 	}

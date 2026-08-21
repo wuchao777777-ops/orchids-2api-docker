@@ -777,9 +777,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 		return nil, newUpstreamError(lastStatus, headerCopy, raw, leaseNodeID)
 	}
 
-	if lastStatus == 0 {
-		return nil, fmt.Errorf("grok upstream request failed")
-	}
+	// Loop always returns; this trailing return satisfies the compiler.
 	return nil, newUpstreamError(lastStatus, nil, []byte(lastBody), "")
 }
 
@@ -1669,23 +1667,7 @@ func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*ht
 }
 
 func parseRetryAfter(raw string) time.Duration {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0
-	}
-	if secs, err := strconv.Atoi(raw); err == nil {
-		if secs <= 0 {
-			return 0
-		}
-		return time.Duration(secs) * time.Second
-	}
-	if t, err := http.ParseTime(raw); err == nil {
-		delay := time.Until(t)
-		if delay > 0 {
-			return delay
-		}
-	}
-	return 0
+	return parseRetryAfterHeader(raw, time.Now())
 }
 
 func parseUpstreamStatus(err error) int {

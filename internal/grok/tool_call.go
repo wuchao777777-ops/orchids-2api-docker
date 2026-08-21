@@ -87,21 +87,21 @@ func buildToolPrompt(tools []ToolDef, toolChoice interface{}, parallelToolCalls 
 		}
 		lines = append(lines, "")
 	}
+	forced := false
 	switch choice := toolChoice.(type) {
 	case string:
 		switch strings.ToLower(strings.TrimSpace(choice)) {
 		case "required":
 			lines = append(lines, "IMPORTANT: You MUST call at least one tool in your response. Do not respond with only text.")
-		default:
-			lines = append(lines, "Decide whether to call a tool based on the user's request. If you don't need a tool, respond normally with text only.")
+			forced = true
 		}
 	case map[string]interface{}:
 		if name := forcedToolName(choice); name != "" {
 			lines = append(lines, fmt.Sprintf("IMPORTANT: You MUST call the tool %q in your response.", name))
-			break
+			forced = true
 		}
-		lines = append(lines, "Decide whether to call a tool based on the user's request. If you don't need a tool, respond normally with text only.")
-	default:
+	}
+	if !forced {
 		lines = append(lines, "Decide whether to call a tool based on the user's request. If you don't need a tool, respond normally with text only.")
 	}
 	lines = append(lines, "", "When you call a tool, you may include text before or after the <tool_call> blocks, but the tool call blocks must be valid JSON.")

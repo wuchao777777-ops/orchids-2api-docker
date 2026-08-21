@@ -21,19 +21,6 @@ const (
 	UpstreamCLI
 )
 
-func (k UpstreamKind) String() string {
-	switch k {
-	case UpstreamAppChat:
-		return "app_chat"
-	case UpstreamConsole:
-		return "console"
-	case UpstreamCLI:
-		return "cli"
-	default:
-		return "auto"
-	}
-}
-
 // ModelSpec defines one public model and how it maps to Grok upstream fields.
 type ModelSpec struct {
 	ID            string
@@ -113,10 +100,6 @@ func (m ModelSpec) PoolCandidates() []string {
 		return []string{"lite", "super", "heavy"}
 	case m.PreferBest && m.Tier == grokTierHeavy:
 		return []string{"heavy", "basic"}
-	case m.PreferBest && m.Tier == grokTierSuper:
-		return []string{"heavy", "super", "lite", "basic"}
-	case m.PreferBest && m.Tier == grokTierLite:
-		return []string{"heavy", "super", "lite", "basic"}
 	case m.PreferBest:
 		return []string{"heavy", "super", "lite", "basic"}
 	case m.Tier == grokTierHeavy:

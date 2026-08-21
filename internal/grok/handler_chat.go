@@ -251,12 +251,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "streaming is only supported when image_config.n=1 or n=2", http.StatusBadRequest)
 			return
 		}
-		if imageCfg.ResponseFormat == "" {
-			imageCfg.ResponseFormat = "url"
-		}
-		if imageCfg.ResponseFormat != "" {
-			imageCfg.ResponseFormat = normalizeImageResponseFormat(imageCfg.ResponseFormat)
-		}
+		imageCfg.ResponseFormat = normalizeImageResponseFormat(imageCfg.ResponseFormat)
 		if imageCfg.Size != "" {
 			var (
 				size string
@@ -1484,8 +1479,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 					emitChunk("", fmt.Sprintf("正在生成视频中，当前进度%d%%\n", progress), "", false)
 				}
 				if progress >= 100 && strings.TrimSpace(videoURL) == "" {
-					for _, assetID := range extractVideoAssetIDs(resp) {
-						if resolved := videoURLFromAssetID(assetID); resolved != "" {
+					for _, assetID := range extractAssetIDs(resp) {
+						if resolved := assetURLFromAssetID(assetID); resolved != "" {
 							videoURL = resolved
 							break
 						}
@@ -1724,8 +1719,8 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 			if progress, vurl, _, ok := extractVideoProgress(resp); ok && progress >= 100 {
 				videoURL = strings.TrimSpace(vurl)
 				if videoURL == "" {
-					for _, assetID := range extractVideoAssetIDs(resp) {
-						if resolved := videoURLFromAssetID(assetID); resolved != "" {
+					for _, assetID := range extractAssetIDs(resp) {
+						if resolved := assetURLFromAssetID(assetID); resolved != "" {
 							videoURL = resolved
 							break
 						}

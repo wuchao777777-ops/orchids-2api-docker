@@ -923,9 +923,6 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 		}
 
 		onlineStatus := "ok"
-		if len(tokens) == 0 {
-			onlineStatus = "no_token"
-		}
 		online := map[string]interface{}{
 			"count":               totalCount,
 			"status":              onlineStatus,

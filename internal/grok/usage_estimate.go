@@ -14,12 +14,10 @@ const (
 )
 
 type chatUsageEstimate struct {
-	promptTextTokens      int
-	promptAudioTokens     int
-	promptImageTokens     int
-	completionTextTokens  int
-	completionAudioTokens int
-	reasoningTokens       int
+	promptTextTokens     int
+	promptAudioTokens    int
+	promptImageTokens    int
+	completionTextTokens int
 }
 
 func approxTokenCount(text string) int {
@@ -120,7 +118,7 @@ func buildChatUsagePayload(req *ChatCompletionsRequest, finalContent string, too
 	prompt := estimatePromptUsageFromRequest(req)
 	completion := estimateCompletionUsage(finalContent, toolCalls)
 	promptTokens := prompt.promptTextTokens + prompt.promptAudioTokens + prompt.promptImageTokens
-	completionTokens := completion.completionTextTokens + completion.completionAudioTokens + completion.reasoningTokens
+	completionTokens := completion.completionTextTokens
 	return map[string]interface{}{
 		"prompt_tokens":     promptTokens,
 		"completion_tokens": completionTokens,
@@ -132,9 +130,10 @@ func buildChatUsagePayload(req *ChatCompletionsRequest, finalContent string, too
 			"image_tokens":  prompt.promptImageTokens,
 		},
 		"completion_tokens_details": map[string]interface{}{
-			"text_tokens":      completion.completionTextTokens,
-			"audio_tokens":     completion.completionAudioTokens,
-			"reasoning_tokens": completion.reasoningTokens,
+			"text_tokens": completion.completionTextTokens,
+			// Audio/reasoning estimates are not tracked; kept as zero for API parity.
+			"audio_tokens":     0,
+			"reasoning_tokens": 0,
 		},
 	}
 }

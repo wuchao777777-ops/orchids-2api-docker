@@ -106,47 +106,14 @@ func (c *Client) VerifyAuthToken(ctx context.Context) error {
 }
 
 func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
-	if c == nil {
-		return fmt.Errorf("puter client is nil")
-	}
-	if strings.TrimSpace(c.authToken) == "" {
-		return fmt.Errorf("missing puter auth token")
-	}
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		modelID = defaultModelID
 	}
-
-	puterReq, err := c.buildRequest(upstream.UpstreamRequest{
-		Model: modelID,
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "Reply only OK."}},
-		},
-	}, true)
-	if err != nil {
-		return err
-	}
-	body, err := json.Marshal(puterReq)
-	if err != nil {
-		return fmt.Errorf("failed to marshal puter verify request: %w", err)
-	}
-
-	reqCtx, cancel := util.WithDefaultTimeout(ctx, 45*time.Second)
-	defer cancel()
-	resp, err := c.doChatRequest(reqCtx, body)
-	if err != nil {
-		return fmt.Errorf("puter verify request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	result, err := consumePuterStream(resp.Body, nil)
-	if err != nil {
-		return err
-	}
-	if !result.SawMeaningfulEvent {
-		return fmt.Errorf("puter verify request returned no usable stream events")
-	}
-	return nil
+	return c.runChat(ctx, upstream.UpstreamRequest{
+		Model:    modelID,
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "Reply only OK."}}},
+	}, 45*time.Second, true, nil, nil)
 }
 
 func (c *Client) FetchMonthlyUsage(ctx context.Context) (*MonthlyUsage, error) {
@@ -163,7 +130,8 @@ func (c *Client) FetchMonthlyUsage(ctx context.Context) (*MonthlyUsage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create puter usage request: %w", err)
 	}
-	c.applyUsageHeaders(httpReq)
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -183,6 +151,12 @@ func (c *Client) FetchMonthlyUsage(ctx context.Context) (*MonthlyUsage, error) {
 }
 
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	return c.runChat(ctx, req, c.requestTimeout, false, onMessage, logger)
+}
+
+// runChat 是 puter 驱动调用的唯一生命周期:组包、限速、发送、消费流,结束后可选发
+// model.finish。普通聊天与账号校验(testMode=true)共用同一条路径。
+func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, timeout time.Duration, testMode bool, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	if c == nil {
 		return fmt.Errorf("puter client is nil")
 	}
@@ -190,7 +164,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("missing puter auth token")
 	}
 
-	puterReq, err := c.buildRequest(req, false)
+	puterReq, err := c.buildRequest(req, testMode)
 	if err != nil {
 		return err
 	}
@@ -202,7 +176,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		logger.LogUpstreamRequest(puterAPIURL, map[string]string{"provider": "puter"}, body)
 	}
 
-	reqCtx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout)
+	reqCtx, cancel := util.WithDefaultTimeout(ctx, timeout)
 	defer cancel()
 	resp, err := c.doChatRequest(reqCtx, body)
 	if err != nil {
@@ -235,7 +209,8 @@ func (c *Client) doChatRequest(ctx context.Context, body []byte) (*http.Response
 	if err != nil {
 		return nil, fmt.Errorf("failed to create puter request: %w", err)
 	}
-	c.applyHeaders(httpReq)
+	httpReq.Header.Set("Accept", "application/x-ndjson, application/json")
+	httpReq.Header.Set("Content-Type", "text/plain;actually=json")
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -285,16 +260,6 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 	}, nil
 }
 
-func (c *Client) applyHeaders(req *http.Request) {
-	req.Header.Set("Accept", "application/x-ndjson, application/json")
-	req.Header.Set("Content-Type", "text/plain;actually=json")
-}
-
-func (c *Client) applyUsageHeaders(req *http.Request) {
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.authToken)
-}
-
 func serviceForModel(modelID string) (string, error) {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
 	if !modelpolicy.IsLatestPuterModelID(modelID) {
@@ -319,24 +284,24 @@ func serviceForModel(modelID string) (string, error) {
 }
 
 func formatPuterAPIError(apiErr *ErrorPayload, raw string) error {
-	if apiErr == nil {
-		return fmt.Errorf("puter API error: %s", strings.TrimSpace(raw))
+	message := strings.TrimSpace(raw)
+	if apiErr != nil {
+		parts := make([]string, 0, 4)
+		if code := strings.TrimSpace(apiErr.Code); code != "" {
+			parts = append(parts, "code="+code)
+		}
+		if iface := strings.TrimSpace(apiErr.Iface); iface != "" {
+			parts = append(parts, "iface="+iface)
+		}
+		if apiErr.Status > 0 {
+			parts = append(parts, fmt.Sprintf("status=%d", apiErr.Status))
+		}
+		if msg := strings.TrimSpace(apiErr.Message); msg != "" {
+			parts = append(parts, "message="+msg)
+		}
+		if len(parts) > 0 {
+			message = strings.Join(parts, ", ")
+		}
 	}
-	parts := make([]string, 0, 4)
-	if code := strings.TrimSpace(apiErr.Code); code != "" {
-		parts = append(parts, "code="+code)
-	}
-	if iface := strings.TrimSpace(apiErr.Iface); iface != "" {
-		parts = append(parts, "iface="+iface)
-	}
-	if apiErr.Status > 0 {
-		parts = append(parts, fmt.Sprintf("status=%d", apiErr.Status))
-	}
-	if msg := strings.TrimSpace(apiErr.Message); msg != "" {
-		parts = append(parts, "message="+msg)
-	}
-	if len(parts) == 0 {
-		return fmt.Errorf("puter API error: %s", strings.TrimSpace(raw))
-	}
-	return fmt.Errorf("puter API error: %s", strings.Join(parts, ", "))
+	return fmt.Errorf("puter API error: %s", message)
 }

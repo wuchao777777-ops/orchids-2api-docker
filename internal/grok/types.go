@@ -468,14 +468,11 @@ func (r *ChatCompletionsRequest) Validate() error {
 				return fmt.Errorf("tool_choice must be auto, required, none, or a specific function object")
 			}
 		case map[string]interface{}:
-			if strings.TrimSpace(fmt.Sprint(v["type"])) != "function" {
-				return fmt.Errorf("tool_choice object must have type=function and function.name")
-			}
 			fn, _ := v["function"].(map[string]interface{})
-			name := strings.TrimSpace(fmt.Sprint(fn["name"]))
-			if name == "" {
+			if strings.TrimSpace(fmt.Sprint(v["type"])) != "function" || strings.TrimSpace(fmt.Sprint(fn["name"])) == "" {
 				return fmt.Errorf("tool_choice object must have type=function and function.name")
 			}
+			name := strings.TrimSpace(fmt.Sprint(fn["name"]))
 			if len(r.Tools) > 0 {
 				found := false
 				for _, tool := range r.Tools {
@@ -576,9 +573,7 @@ func (c *ImageConfig) Normalize() {
 	if strings.TrimSpace(c.ResponseFormat) == "" {
 		c.ResponseFormat = "url"
 	}
-	if c.ResponseFormat != "" {
-		c.ResponseFormat = normalizeImageResponseFormat(c.ResponseFormat)
-	}
+	c.ResponseFormat = normalizeImageResponseFormat(c.ResponseFormat)
 }
 
 func (v *VideoConfig) Normalize() {

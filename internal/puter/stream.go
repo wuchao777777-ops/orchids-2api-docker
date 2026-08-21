@@ -16,7 +16,7 @@ import (
 type streamResult struct {
 	SawMeaningfulEvent bool
 	ToolCallCount      int
-	Usage              map[string]int
+	Usage              map[string]interface{}
 }
 
 func (r streamResult) FinishReason() string {
@@ -32,6 +32,13 @@ func newToolCallID() string {
 	return fmt.Sprintf("toolu_%d_%d", time.Now().UnixNano(), puterToolCallSequence.Add(1))
 }
 
+// emitDelta 把一段文本增量作为对应事件发出,空增量不发。
+func emitDelta(onMessage func(upstream.SSEMessage), eventType, delta string) {
+	if onMessage != nil && delta != "" {
+		onMessage(upstream.SSEMessage{Type: eventType, Event: map[string]interface{}{"delta": delta}})
+	}
+}
+
 func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamResult, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -43,26 +50,20 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 			continue
 		}
 
-		var apiErr ErrorResponse
-		if err := json.Unmarshal([]byte(line), &apiErr); err == nil && apiErr.Error.Present() {
-			return result, formatPuterAPIError(apiErr.Error.AsPayload(), line)
-		}
-
 		var chunk StreamChunk
 		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
 			continue
 		}
+		if chunk.Error.Present() {
+			return result, formatPuterAPIError(chunk.Error.AsPayload(), line)
+		}
 		switch strings.ToLower(strings.TrimSpace(chunk.Type)) {
 		case "text":
 			result.SawMeaningfulEvent = true
-			if onMessage != nil && chunk.Text != "" {
-				onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": chunk.Text}})
-			}
+			emitDelta(onMessage, "model.text-delta", chunk.Text)
 		case "reasoning":
 			result.SawMeaningfulEvent = true
-			if onMessage != nil && chunk.Reasoning != "" {
-				onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{"delta": chunk.Reasoning}})
-			}
+			emitDelta(onMessage, "model.reasoning-delta", chunk.Reasoning)
 		case "tool_use":
 			name := strings.TrimSpace(chunk.Name)
 			if name == "" {
@@ -85,11 +86,7 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 			result.SawMeaningfulEvent = true
 			result.Usage = normalizePuterUsage(chunk.Usage)
 			if onMessage != nil && len(result.Usage) > 0 {
-				event := make(map[string]interface{}, len(result.Usage))
-				for key, value := range result.Usage {
-					event[key] = value
-				}
-				onMessage(upstream.SSEMessage{Type: "model.tokens-used", Event: event})
+				onMessage(upstream.SSEMessage{Type: "model.tokens-used", Event: result.Usage})
 			}
 		case "error":
 			return result, puterStreamError(chunk.Message, line)
@@ -211,7 +208,7 @@ func unwrapOpenAIToolArguments(input string) (string, bool) {
 	return s, true
 }
 
-func normalizePuterUsage(raw map[string]interface{}) map[string]int {
+func normalizePuterUsage(raw map[string]interface{}) map[string]interface{} {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -220,7 +217,7 @@ func normalizePuterUsage(raw map[string]interface{}) map[string]int {
 	if !hasInput && !hasOutput {
 		return nil
 	}
-	out := make(map[string]int, 4)
+	out := make(map[string]interface{}, 4)
 	if hasInput {
 		out["inputTokens"] = input
 		out["input_tokens"] = input
@@ -234,22 +231,11 @@ func normalizePuterUsage(raw map[string]interface{}) map[string]int {
 
 func firstUsageInt(values map[string]interface{}, keys ...string) (int, bool) {
 	for _, key := range keys {
-		value, ok := values[key]
-		if !ok {
-			continue
-		}
-		switch typed := value.(type) {
+		switch typed := values[key].(type) {
 		case float64:
 			return int(typed), true
-		case float32:
-			return int(typed), true
-		case int:
-			return typed, true
-		case int64:
-			return int(typed), true
 		case json.Number:
-			parsed, err := typed.Int64()
-			if err == nil {
+			if parsed, err := typed.Int64(); err == nil {
 				return int(parsed), true
 			}
 		}

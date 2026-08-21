@@ -71,8 +71,6 @@ var (
 func init() {
 	// App Chat API: 5 RPS with burst 10 (generous, adjust as needed).
 	endpointRateLimiters["grok.com"] = newTokenBucket(5, 10)
-	// Rate-limits check: 0.5 RPS with burst 1 (very conservative).
-	endpointRateLimiters["grok.com/rate-limits"] = newTokenBucket(0.5, 1)
 }
 
 // rateLimitEndpoint blocks until it is safe to call the given endpoint URL.

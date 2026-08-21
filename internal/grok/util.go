@@ -1356,8 +1356,6 @@ func validateChatMessages(messages []ChatMessage) error {
 					if err := validateMediaInput(dataVal, "file.file_data"); err != nil {
 						return err
 					}
-				default:
-					return fmt.Errorf("invalid content block type: '%s'", blockTypeRaw)
 				}
 
 			}
@@ -2113,7 +2111,7 @@ func extractVideoPostID(resp map[string]interface{}) string {
 	)
 }
 
-func extractVideoAssetIDs(resp map[string]interface{}) []string {
+func extractAssetIDs(resp map[string]interface{}) []string {
 	seen := map[string]struct{}{}
 	var out []string
 	add := func(v interface{}) {
@@ -2158,7 +2156,7 @@ func extractVideoAssetIDs(resp map[string]interface{}) []string {
 	return out
 }
 
-func videoURLFromAssetID(assetID string) string {
+func assetURLFromAssetID(assetID string) string {
 	assetID = strings.TrimSpace(assetID)
 	if assetID == "" {
 		return ""
@@ -2170,64 +2168,6 @@ func videoURLFromAssetID(assetID string) string {
 		return defaultAssetsBaseURL + "/" + strings.TrimLeft(assetID, "/")
 	}
 	return defaultAssetsBaseURL + "/" + assetID + "/content"
-}
-
-func imageURLFromAssetID(assetID string) string {
-	assetID = strings.TrimSpace(assetID)
-	if assetID == "" {
-		return ""
-	}
-	if strings.HasPrefix(strings.ToLower(assetID), "http://") || strings.HasPrefix(strings.ToLower(assetID), "https://") {
-		return assetID
-	}
-	if strings.Contains(assetID, "/") {
-		return defaultAssetsBaseURL + "/" + strings.TrimLeft(assetID, "/")
-	}
-	return defaultAssetsBaseURL + "/" + assetID + "/content"
-}
-
-func extractImageAssetIDs(resp map[string]interface{}) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	add := func(v interface{}) {
-		s := strings.TrimSpace(fmt.Sprint(v))
-		if s == "" || s == "<nil>" {
-			return
-		}
-		if _, exists := seen[s]; exists {
-			return
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	var walk func(interface{})
-	walk = func(v interface{}) {
-		switch x := v.(type) {
-		case map[string]interface{}:
-			for k, item := range x {
-				switch strings.ToLower(strings.TrimSpace(k)) {
-				case "assetid", "asset_id":
-					add(item)
-				case "fileattachments", "file_attachments":
-					if arr, ok := item.([]interface{}); ok {
-						for _, one := range arr {
-							add(one)
-						}
-						continue
-					}
-					add(item)
-				default:
-					walk(item)
-				}
-			}
-		case []interface{}:
-			for _, item := range x {
-				walk(item)
-			}
-		}
-	}
-	walk(resp)
-	return out
 }
 
 func appendImageResultURLs(urls []string, resp map[string]interface{}) []string {
@@ -2253,15 +2193,15 @@ func appendImageResultURLs(urls []string, resp map[string]interface{}) []string 
 	}
 	if mr := extractUpstreamModelResponse(resp); mr != nil {
 		addURLs(extractImageURLs(mr))
-		for _, assetID := range extractImageAssetIDs(mr) {
-			if u := imageURLFromAssetID(assetID); u != "" {
+		for _, assetID := range extractAssetIDs(mr) {
+			if u := assetURLFromAssetID(assetID); u != "" {
 				addURL(u)
 			}
 		}
 	}
 	addURLs(extractImageURLs(resp))
-	for _, assetID := range extractImageAssetIDs(resp) {
-		if u := imageURLFromAssetID(assetID); u != "" {
+	for _, assetID := range extractAssetIDs(resp) {
+		if u := assetURLFromAssetID(assetID); u != "" {
 			addURL(u)
 		}
 	}

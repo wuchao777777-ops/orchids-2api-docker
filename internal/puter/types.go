@@ -49,11 +49,7 @@ type StreamChunk struct {
 	Input     json.RawMessage        `json:"input,omitempty"`
 	Usage     map[string]interface{} `json:"usage,omitempty"`
 	Message   string                 `json:"message,omitempty"`
-}
-
-type ErrorResponse struct {
-	Success *bool      `json:"success,omitempty"`
-	Error   ErrorField `json:"error,omitempty"`
+	Error     ErrorField             `json:"error,omitempty"`
 }
 
 type MonthlyUsage struct {
@@ -75,13 +71,11 @@ type ErrorPayload struct {
 type ErrorField struct {
 	Payload *ErrorPayload
 	Message string
-	raw     json.RawMessage
 }
 
 func (e *ErrorField) UnmarshalJSON(data []byte) error {
 	e.Payload = nil
 	e.Message = ""
-	e.raw = append(e.raw[:0], data...)
 
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" || trimmed == "null" {
@@ -103,8 +97,7 @@ func (e *ErrorField) UnmarshalJSON(data []byte) error {
 }
 
 func (e ErrorField) Present() bool {
-	trimmed := strings.TrimSpace(string(e.raw))
-	return trimmed != "" && trimmed != "null"
+	return e.Payload != nil || strings.TrimSpace(e.Message) != ""
 }
 
 func (e ErrorField) AsPayload() *ErrorPayload {

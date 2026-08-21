@@ -100,8 +100,7 @@ func TestSplitMultiToolCallsIgnoresNonToolScenarios(t *testing.T) {
 	}
 }
 
-// 显式传入 SystemItem,使断言在两种 convertMessages 语义下都成立:
-// feature 分支逐字透传,main 分支经 buildSystemPrompt 拼装,都会产出 system 首条。
+// 显式传入 SystemItem;convertMessages 将 system 条目逐字透传为独立 system 消息。
 func TestBuildRequestSplitsMultiToolCallsOnlyForDeepseek(t *testing.T) {
 	build := func(model string) []Message {
 		client := NewFromAccount(nil, nil)
