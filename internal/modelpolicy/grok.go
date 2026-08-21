@@ -7,6 +7,7 @@ import (
 
 var publicGrokModelIDs = []string{
 	"grok-4.5",
+	"grok-build-0.1",
 	"grok-imagine-image-lite",
 	"grok-imagine-image",
 	"grok-imagine-image-quality",

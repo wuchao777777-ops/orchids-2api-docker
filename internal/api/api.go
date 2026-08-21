@@ -90,10 +90,29 @@ func isGrokModelNotFound(err error) bool {
 	return strings.Contains(lower, "model is not found") || strings.Contains(lower, "model not found")
 }
 
-func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Config) error {
+func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Config, accountStore *store.Store) error {
 	if acc == nil {
 		return fmt.Errorf("missing grok account")
 	}
+	// Build CLI OAuth accounts verify against the CLI proxy with a Bearer token.
+	if grokAccountIsOAuth(acc) {
+		if !grokAccountHasOAuthCredentials(acc) {
+			return fmt.Errorf("missing oauth token")
+		}
+		cliClient := grok.NewCLIClient(cfg)
+		cliClient.SetAccountStore(accountStore)
+		verifyCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		status, verifyErr := cliClient.VerifyAccount(verifyCtx, acc)
+		cancel()
+		if verifyErr != nil {
+			if status != "" {
+				return fmt.Errorf("%s: %w", status, verifyErr)
+			}
+			return verifyErr
+		}
+		return nil
+	}
+
 	credential := strings.TrimSpace(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token))
 	if grok.NormalizeSSOToken(credential) == "" {
 		return fmt.Errorf("missing sso token")
@@ -174,6 +193,19 @@ func normalizeGrokTokenInput(acc *store.Account) {
 	if acc == nil || !strings.EqualFold(acc.AccountType, "grok") {
 		return
 	}
+	// OAuth (Build CLI) accounts carry access/refresh tokens and must not be
+	// treated as SSO cookies.
+	if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+		acc.OAuthAccessToken = strings.TrimSpace(acc.OAuthAccessToken)
+		acc.OAuthRefreshToken = strings.TrimSpace(acc.OAuthRefreshToken)
+		acc.ClientCookie = ""
+		acc.RefreshToken = ""
+		acc.SessionCookie = ""
+		acc.SessionID = ""
+		acc.ClientUat = ""
+		acc.ProjectID = ""
+		return
+	}
 	raw := strings.TrimSpace(acc.ClientCookie)
 	if raw == "" {
 		raw = strings.TrimSpace(acc.RefreshToken)
@@ -189,6 +221,44 @@ func normalizeGrokTokenInput(acc *store.Account) {
 	acc.SessionID = ""
 	acc.ClientUat = ""
 	acc.ProjectID = ""
+}
+
+// grokAccountIsOAuth reports whether a Grok account is a Build CLI OAuth account.
+func grokAccountIsOAuth(acc *store.Account) bool {
+	return acc != nil && strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth")
+}
+
+// grokAccountHasOAuthCredentials reports whether an OAuth account carries at
+// least one usable token after normalization.
+func grokAccountHasOAuthCredentials(acc *store.Account) bool {
+	if !grokAccountIsOAuth(acc) {
+		return false
+	}
+	return strings.TrimSpace(acc.OAuthAccessToken) != "" || strings.TrimSpace(acc.OAuthRefreshToken) != ""
+}
+
+// preserveGrokOAuthCredentials keeps existing OAuth secrets when the admin UI
+// submits empty fields (secrets are redacted on read and therefore absent on
+// ordinary edit/save).
+func preserveGrokOAuthCredentials(acc, existing *store.Account) {
+	if acc == nil || existing == nil || !grokAccountIsOAuth(acc) {
+		return
+	}
+	if strings.TrimSpace(acc.OAuthAccessToken) == "" {
+		acc.OAuthAccessToken = existing.OAuthAccessToken
+	}
+	if strings.TrimSpace(acc.OAuthRefreshToken) == "" {
+		acc.OAuthRefreshToken = existing.OAuthRefreshToken
+	}
+	if acc.OAuthExpiresAt.IsZero() && !existing.OAuthExpiresAt.IsZero() {
+		acc.OAuthExpiresAt = existing.OAuthExpiresAt
+	}
+	if strings.TrimSpace(acc.TeamID) == "" {
+		acc.TeamID = existing.TeamID
+	}
+	if strings.TrimSpace(acc.UpstreamMode) == "" {
+		acc.UpstreamMode = existing.UpstreamMode
+	}
 }
 
 func firstNonEmptyString(values ...string) string {
@@ -280,6 +350,9 @@ func normalizeAccountOutput(acc *store.Account) *store.Account {
 	if strings.EqualFold(out.AccountType, "grok") {
 		out.RefreshToken = ""
 		out.SessionCookie = ""
+		// Never echo OAuth credentials back to the client.
+		out.OAuthAccessToken = ""
+		out.OAuthRefreshToken = ""
 	}
 	return out
 }
@@ -296,7 +369,11 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 	case "warp":
 		token = strings.TrimSpace(warp.ResolveRefreshToken(acc))
 	case "grok":
-		token = grok.NormalizeSSOToken(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token))
+		if grokAccountIsOAuth(acc) {
+			token = strings.TrimSpace(firstNonEmptyString(acc.OAuthRefreshToken, acc.OAuthAccessToken))
+		} else {
+			token = grok.NormalizeSSOToken(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token))
+		}
 	case "puter":
 		token = puter.ResolveAuthToken(acc)
 	case "orchids":
@@ -519,23 +596,6 @@ func applyPuterMonthlyUsage(acc *store.Account, usage *puter.MonthlyUsage) {
 	acc.UsageLimit = limit
 }
 
-func orchidsCreditsToken(acc *store.Account) string {
-	if acc == nil {
-		return ""
-	}
-	if sessionJWT := strings.TrimSpace(acc.SessionCookie); sessionJWT != "" {
-		return sessionJWT
-	}
-	tok := strings.TrimSpace(acc.Token)
-	if tok == "" {
-		return ""
-	}
-	if tok == strings.TrimSpace(acc.ClientCookie) {
-		return ""
-	}
-	return tok
-}
-
 func applyOrchidsQuotaFromCredits(acc *store.Account, creditsInfo *orchids.CreditsInfo) {
 	if acc == nil || creditsInfo == nil {
 		return
@@ -655,8 +715,9 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 	}
 
 	if strings.EqualFold(acc.AccountType, "grok") {
-		if verifyErr := verifyGrokAccount(ctx, acc, a.config.Load()); verifyErr != nil {
-			if strings.Contains(strings.ToLower(verifyErr.Error()), "missing sso token") {
+		if verifyErr := verifyGrokAccount(ctx, acc, a.config.Load(), a.store); verifyErr != nil {
+			if strings.Contains(strings.ToLower(verifyErr.Error()), "missing sso token") ||
+				strings.Contains(strings.ToLower(verifyErr.Error()), "missing oauth token") {
 				return "", http.StatusBadRequest, fmt.Errorf("failed to verify grok account: %w", verifyErr)
 			}
 			status := classifyAccountStatusFromError(verifyErr.Error())
@@ -973,6 +1034,14 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
 			acc.NSFWEnabled = true
+			if grokAccountIsOAuth(&acc) && !grokAccountHasOAuthCredentials(&acc) {
+				http.Error(w, "missing oauth token", http.StatusBadRequest)
+				return
+			}
+			if !grokAccountIsOAuth(&acc) && grok.NormalizeSSOToken(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token)) == "" {
+				http.Error(w, "missing sso token", http.StatusBadRequest)
+				return
+			}
 		} else if acc.ClientCookie != "" {
 			if err := normalizeOrchidsCredentialInput(&acc); err != nil {
 				http.Error(w, "Invalid client cookie: "+err.Error(), http.StatusBadRequest)
@@ -1250,6 +1319,13 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			normalizeWarpTokenInput(&acc)
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
+			// Admin UI redacts OAuth secrets on read; empty inbound fields mean
+			// "keep existing", not "clear credentials".
+			preserveGrokOAuthCredentials(&acc, existing)
+			if grokAccountIsOAuth(&acc) && !grokAccountHasOAuthCredentials(&acc) {
+				http.Error(w, "missing oauth token", http.StatusBadRequest)
+				return
+			}
 		} else if acc.ClientCookie != "" {
 			if err := normalizeOrchidsCredentialInput(&acc); err != nil {
 				http.Error(w, "Invalid client cookie: "+err.Error(), http.StatusBadRequest)
@@ -1269,6 +1345,16 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			}
 			if strings.TrimSpace(acc.RequestID) == "" {
 				acc.RequestID = existing.RequestID
+			}
+		}
+		// For Grok SSO accounts, empty cookie on edit should keep the existing
+		// credential the same way Warp keeps refresh tokens.
+		if strings.EqualFold(acc.AccountType, "grok") && !grokAccountIsOAuth(&acc) {
+			if strings.TrimSpace(acc.ClientCookie) == "" {
+				acc.ClientCookie = existing.ClientCookie
+			}
+			if strings.TrimSpace(acc.RefreshToken) == "" {
+				acc.RefreshToken = existing.RefreshToken
 			}
 		}
 		if acc.SessionCookie == "" {
@@ -1336,9 +1422,18 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 		Accounts: make([]store.Account, len(accounts)),
 	}
 	for i, acc := range accounts {
-		exportData.Accounts[i] = *normalizeAccountOutput(acc)
-		exportData.Accounts[i].ID = 0
-		exportData.Accounts[i].RequestCount = 0
+		normalized := *normalizeAccountOutput(acc)
+		// Export must preserve OAuth credentials (normalizeAccountOutput hides
+		// them for list/query responses); an OAuth export that drops them is
+		// unusable on re-import.
+		if grokAccountIsOAuth(acc) {
+			normalized.OAuthAccessToken = acc.OAuthAccessToken
+			normalized.OAuthRefreshToken = acc.OAuthRefreshToken
+			normalized.OAuthExpiresAt = acc.OAuthExpiresAt
+		}
+		normalized.ID = 0
+		normalized.RequestCount = 0
+		exportData.Accounts[i] = normalized
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1370,6 +1465,11 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 			normalizeWarpTokenInput(&acc)
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
+			if grokAccountIsOAuth(&acc) && !grokAccountHasOAuthCredentials(&acc) {
+				slog.Warn("Skipped grok oauth import without credentials", "name", acc.Name)
+				result.Skipped++
+				continue
+			}
 		} else if acc.ClientCookie != "" {
 			if err := normalizeOrchidsCredentialInput(&acc); err != nil {
 				slog.Warn("Invalid client cookie in import", "name", acc.Name, "error", err)

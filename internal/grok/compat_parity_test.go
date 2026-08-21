@@ -93,7 +93,8 @@ func TestPublicGrokModelsAllResolveToAppChatSpecs(t *testing.T) {
 			t.Fatalf("public Grok model %q is missing from SupportedModels", id)
 		}
 		if spec.ConsoleModel != "" {
-			t.Logf("public Grok model %q uses Console API only", id); continue
+			t.Logf("public Grok model %q uses Console API only", id)
+			continue
 		}
 		if spec.UpstreamModel == "" {
 			t.Fatalf("public Grok model %q has empty UpstreamModel", id)

@@ -26,6 +26,9 @@ func TestConfigDefaults(t *testing.T) {
 	if got := cfg.PublicAPIKey(); got != "" {
 		t.Fatalf("PublicAPIKey()=%q want empty", got)
 	}
+	if got := cfg.OrchidsCCEntrypointMode; got != "keep" {
+		t.Fatalf("OrchidsCCEntrypointMode=%q want fidelity default \"keep\"", got)
+	}
 }
 
 func TestApplyDefaultsGeneratesRandomPassword(t *testing.T) {

@@ -47,6 +47,19 @@ type Account struct {
 	LastUsedAt           time.Time `json:"last_used_at"`
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
+
+	// CredentialType marks the Grok account credential mode. Empty or "sso"
+	// keeps the legacy SSO-cookie behavior; "oauth" selects the Build CLI OAuth
+	// flow (cli-chat-proxy.grok.com + Bearer). Zero value must preserve legacy
+	// SSO semantics for old Redis records.
+	CredentialType    string    `json:"credential_type,omitempty"`
+	OAuthAccessToken  string    `json:"oauth_access_token,omitempty"`
+	OAuthRefreshToken string    `json:"oauth_refresh_token,omitempty"`
+	OAuthExpiresAt    time.Time `json:"oauth_expires_at,omitempty"`
+	TeamID            string    `json:"team_id,omitempty"`
+	// UpstreamMode overrides the per-account upstream selection. Empty lets the
+	// ModelSpec decide; otherwise one of "app_chat", "console", "cli".
+	UpstreamMode string `json:"upstream_mode,omitempty"`
 }
 
 // SyncState compares this account against a snapshot and returns true if key session/auth fields differ.
@@ -261,7 +274,8 @@ func (s *Store) cleanupDeprecatedModelIDs(ctx context.Context) {
 		"grok-4.20-multi-agent",
 		"grok-420",
 		"grok-4.3",
-		"grok-build-0.1",
+		// grok-build-0.1 is served via the Build CLI upstream and must not be
+		// cleaned up as deprecated.
 		"grok-code-fast",
 		"grok-code-fast-1",
 		"grok-imagine-1.0",
@@ -307,6 +321,7 @@ func buildGrokSeedModels() []Model {
 		name string
 	}{
 		{"grok-4.5", "Grok 4.5"},
+		{"grok-build-0.1", "Grok Build 0.1"},
 		{"grok-imagine-image-lite", "Grok Imagine Image Lite"},
 		{"grok-imagine-image", "Grok Imagine Image"},
 		{"grok-imagine-image-quality", "Grok Imagine Image Quality"},

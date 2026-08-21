@@ -21,6 +21,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/grok/egress"
 	"orchids-api/internal/util"
 )
 
@@ -49,6 +50,7 @@ type Client struct {
 	httpClient  *http.Client
 	assetClient *http.Client
 	dpop        *dpopSessionManager
+	egress      *egress.Manager
 }
 
 type NSFWEnableResult struct {
@@ -92,6 +94,7 @@ func New(cfg *config.Config) *Client {
 		httpClient:  baseClient,
 		assetClient: assetClient,
 		dpop:        newDPoPSessionManager(),
+		egress:      egress.NewManager(cfg),
 	}
 }
 
@@ -630,6 +633,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 	var lastStatus int
 	var lastBody string
 	lastDelay := baseDelay
+	challengeRetried := false
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -643,8 +647,37 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 		reqHeaders.Set("x-xai-request-id", randomUUID())
 		req.Header = reqHeaders
 
-		resp, err := httpClient.Do(req)
+		// Egress: route through the proxy pool with a bound UA + clearance. When
+		// egress is explicitly enabled the manager is fail-closed: an acquire
+		// failure is returned, never silently downgraded to the direct client.
+		var resp *http.Response
+		var lease *egress.Lease
+		leaseNodeID := ""
+		releaseLease := func() {}
+		if c.egress != nil && c.egress.Enabled() {
+			lease, err = c.egress.Acquire(ctx, c.egressScopeForURL(reqURL), c.egressAffinity(reqURL))
+			if err != nil {
+				recordEgressAcquireError()
+				return nil, fmt.Errorf("grok egress unavailable: %w", err)
+			}
+			leaseNodeID = lease.NodeID
+			req.Header.Set("User-Agent", lease.UserAgent)
+			if lease.CFCookies != "" {
+				mergeCFCookies(req.Header, lease.CFCookies)
+			}
+			releaseLease = lease.Release
+		}
+
+		if lease != nil {
+			resp, err = lease.Do(req)
+		} else {
+			resp, err = httpClient.Do(req)
+		}
 		if err != nil {
+			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
+				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeTransportError)
+			}
+			releaseLease()
 			if attempt >= maxRetries {
 				return nil, err
 			}
@@ -657,6 +690,10 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 		}
 		if err := decodeHTTPResponseBody(resp); err != nil {
 			_ = resp.Body.Close()
+			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
+				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeTransportError)
+			}
+			releaseLease()
 			if attempt >= maxRetries {
 				return nil, fmt.Errorf("grok upstream decode failed: %w", err)
 			}
@@ -668,32 +705,120 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			continue
 		}
 		if resp.StatusCode == okStatus {
+			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
+				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeSuccess)
+			}
+			if lease != nil {
+				resp.Body = &leaseResponseBody{ReadCloser: resp.Body, release: releaseLease}
+			}
 			return resp, nil
 		}
 
 		lastStatus = resp.StatusCode
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamBodyBytes+1))
+		if len(raw) > maxUpstreamBodyBytes {
+			raw = raw[:maxUpstreamBodyBytes]
+		}
 		_ = resp.Body.Close()
 		lastBody = string(raw)
+		headerCopy := resp.Header.Clone()
 
-		if lastStatus != http.StatusTooManyRequests || !retry429 || attempt >= maxRetries {
-			return nil, fmt.Errorf("grok upstream status=%d body=%s", lastStatus, lastBody)
+		if lastStatus == http.StatusTooManyRequests {
+			if meta := RateLimitFromResponse(lastStatus, resp.Header, raw); meta != nil {
+				teamCooldown.Note(meta.Scope, meta.TeamID, meta.Model, meta.RetryAfter)
+				recordTeamCooldownHit(meta)
+				if desc := meta.Describe(); desc != "" {
+					lastBody = lastBody + " " + desc
+				}
+			}
+			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
+				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeRateLimited)
+			}
+			releaseLease()
+			if retry429 && attempt < maxRetries {
+				slog.Debug("doRequest retry triggered", "status", lastStatus, "attempt", attempt, "body", lastBody)
+				retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+				delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, lastStatus, retryAfter)
+				lastDelay = delay
+				if !sleepWithContext(ctx, delay) {
+					return nil, ctx.Err()
+				}
+				continue
+			}
+			return nil, newUpstreamError(lastStatus, headerCopy, []byte(lastBody), leaseNodeID)
 		}
 
-		slog.Debug("doRequest retry triggered", "status", lastStatus, "attempt", attempt, "body", lastBody)
-
-		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
-		delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, lastStatus, retryAfter)
-		lastDelay = delay
-		if !sleepWithContext(ctx, delay) {
-			return nil, ctx.Err()
+		// Response-aware classification: Cloudflare/DPoP challenges are egress
+		// problems, never account problems.
+		kind := ClassifyUpstreamResponse(lastStatus, resp.Header, raw)
+		if kind == UpstreamErrorCloudflareChallenge {
+			recordUpstreamChallenge("cloudflare")
+			if c.egress != nil && c.egress.Enabled() && !challengeRetried {
+				// Invalidate this exact clearance and re-acquire once. The retry
+				// does not consume the attempt budget (decrement before continue).
+				challengeRetried = true
+				if lease != nil {
+					lease.InvalidateClearance()
+				}
+				releaseLease()
+				attempt--
+				continue
+			}
+		} else if kind == UpstreamErrorDPoPChallenge {
+			recordUpstreamChallenge("dpop")
+		} else if kind == UpstreamErrorGenericForbidden {
+			recordGenericForbidden()
 		}
+
+		if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
+			c.egress.FeedbackOutcome(leaseNodeID, egressOutcomeForKind(kind))
+		}
+		releaseLease()
+		return nil, newUpstreamError(lastStatus, headerCopy, raw, leaseNodeID)
 	}
 
 	if lastStatus == 0 {
 		return nil, fmt.Errorf("grok upstream request failed")
 	}
-	return nil, fmt.Errorf("grok upstream status=%d body=%s", lastStatus, lastBody)
+	return nil, newUpstreamError(lastStatus, nil, []byte(lastBody), "")
+}
+
+// egressScopeForURL maps an upstream URL to an egress node scope.
+func (c *Client) egressScopeForURL(reqURL string) string {
+	host := strings.ToLower(strings.TrimSpace(reqURL))
+	switch {
+	case strings.Contains(host, "cli-chat-proxy.grok.com"):
+		return "cli"
+	case strings.Contains(host, "console.x.ai"):
+		return "console"
+	default:
+		return "app_chat"
+	}
+}
+
+// egressAffinity derives a stable affinity key so the same account path sticks
+// to the same exit node/fingerprint (clearance stays valid).
+func (c *Client) egressAffinity(reqURL string) string {
+	host := strings.ToLower(strings.TrimSpace(reqURL))
+	if strings.Contains(host, "rate-limits") {
+		return "rate-limits"
+	}
+	return "grok-default"
+}
+
+// mergeCFCookies injects Cloudflare clearance cookies into an existing Cookie
+// header without clobbering the SSO cookies already set.
+func mergeCFCookies(header http.Header, cfCookies string) {
+	if strings.TrimSpace(cfCookies) == "" {
+		return
+	}
+	existing := strings.TrimSpace(header.Get("Cookie"))
+	switch {
+	case existing == "":
+		header.Set("Cookie", cfCookies)
+	default:
+		header.Set("Cookie", existing+"; "+cfCookies)
+	}
 }
 
 func (c *Client) doChat(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {

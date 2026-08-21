@@ -494,26 +494,6 @@ func canonicalizeDiscoveredModels(items []discoveredModel, normalize func(string
 	return out
 }
 
-func grokAccountTokens(accounts []*store.Account) []string {
-	seen := map[string]struct{}{}
-	tokens := make([]string, 0, len(accounts))
-	for _, acc := range accounts {
-		if acc == nil {
-			continue
-		}
-		token := grok.NormalizeSSOToken(firstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token))
-		if token == "" {
-			continue
-		}
-		if _, exists := seen[token]; exists {
-			continue
-		}
-		seen[token] = struct{}{}
-		tokens = append(tokens, token)
-	}
-	return tokens
-}
-
 func grokProbeCandidateModels(ctx context.Context, s *store.Store) []discoveredModel {
 	seen := map[string]struct{}{}
 	out := make([]discoveredModel, 0, 16)

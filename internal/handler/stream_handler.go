@@ -303,6 +303,13 @@ type streamHandler struct {
 	logger *debug.Logger
 }
 
+func responseMessageID(format adapter.ResponseFormat) string {
+	if format == adapter.FormatOpenAI {
+		return "chatcmpl-" + randomSessionID()
+	}
+	return "msg_" + randomSessionID()
+}
+
 func newStreamHandler(
 	cfg *config.Config,
 	w http.ResponseWriter,
@@ -354,7 +361,7 @@ func newStreamHandler(
 		toolDedupKeys:             make(map[string]int),
 		introDedup:                make(map[string]struct{}),
 		allowedToolNames:          make(map[string]struct{}),
-		msgID:                     fmt.Sprintf("msg_%d", time.Now().UnixMilli()),
+		msgID:                     responseMessageID(responseFormat),
 		startTime:                 time.Now(),
 		currentTextIndex:          -1,
 		activeThinkingBlockIndex:  -1,

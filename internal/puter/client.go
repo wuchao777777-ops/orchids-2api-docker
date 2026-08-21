@@ -261,14 +261,14 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 	if req.NoTools {
 		tools = nil
 	}
-	systemPrompt := buildSystemPrompt(req.System, req.Workdir, req.NoTools)
+	// 保真：系统条目逐字透传为独立 system 消息，不注入任何客户端未发送的内容。
 	return &Request{
 		Interface: defaultIface,
 		Service:   service,
 		TestMode:  testMode,
 		Method:    defaultMethod,
 		Args: RequestArgs{
-			Messages: convertMessages(req.Messages, systemPrompt),
+			Messages: convertMessages(req.Messages, req.System),
 			Model:    modelID,
 			Stream:   true,
 			Tools:    tools,
@@ -308,29 +308,6 @@ func serviceForModel(modelID string) (string, error) {
 	default:
 		return "", fmt.Errorf("puter model %q has no configured service", modelID)
 	}
-}
-
-func buildSystemPrompt(system []prompt.SystemItem, workdir string, noTools bool) string {
-	parts := []string{currentDateInstruction(time.Now())}
-	workdir = strings.TrimSpace(workdir)
-	if workdir != "" {
-		parts = append(parts,
-			"The real local project working directory is `"+workdir+"`. Treat the project root as `.` and prefer project-relative paths for local tools.",
-		)
-	}
-	if noTools {
-		parts = append(parts, "This turn must not make any tool calls. Answer directly using the existing context and prior tool results.")
-	}
-	for _, item := range system {
-		if text := strings.TrimSpace(item.Text); text != "" {
-			parts = append(parts, text)
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-func currentDateInstruction(now time.Time) string {
-	return "Current date: " + now.UTC().Format("2006-01-02") + " (UTC). For latest, current, recent, or other time-sensitive requests, use this date and do not assume an earlier year."
 }
 
 func formatPuterAPIError(apiErr *ErrorPayload, raw string) error {

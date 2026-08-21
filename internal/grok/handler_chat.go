@@ -342,6 +342,21 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if modelRoutedToCLI(spec, h.cfg) {
+		if len(attachments) > 0 {
+			http.Error(w, fmt.Sprintf("model %s is only supported through cli-chat-proxy responses and does not support attachments in this API", req.Model), http.StatusBadRequest)
+			return
+		}
+		sess, err := h.openCLIAccountSession(r.Context(), nil)
+		if err != nil {
+			http.Error(w, "no available grok cli token: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		defer sess.Close()
+		h.serveCLIChat(r.Context(), w, &req, spec, sess, logger)
+		return
+	}
+
 	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
@@ -1046,7 +1061,7 @@ func forEachImageCandidateFromValue(value interface{}, includeStructured bool, i
 func debugHeaderMap(headers http.Header) map[string]string {
 	out := make(map[string]string, len(headers))
 	for k, values := range headers {
-		if strings.EqualFold(k, "Cookie") {
+		if isSensitiveUpstreamHeader(k) {
 			out[k] = "[redacted]"
 			continue
 		}

@@ -868,7 +868,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Debug("puter: sanitized forwarded system items")
 			}
 		}
-		req.Messages = sanitizePuterMessages(req.Messages)
 	}
 	if verboseDiagnostics {
 		slog.Debug("Checkpoint: message processing done")

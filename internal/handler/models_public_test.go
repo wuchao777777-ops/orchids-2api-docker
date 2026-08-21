@@ -180,7 +180,10 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenAccountsHaveStatusCode(t *testin
 	if !strings.Contains(body, "grok-imagine-image") {
 		t.Fatalf("expected current image model to remain visible, body=%s", body)
 	}
-	for _, hidden := range []string{"grok-4.20-0309-non-reasoning", "grok-4.3-beta", "grok-4.3", "grok-build-0.1"} {
+	if !strings.Contains(body, "grok-build-0.1") {
+		t.Fatalf("expected grok-build-0.1 (CLI model) to be visible, body=%s", body)
+	}
+	for _, hidden := range []string{"grok-4.20-0309-non-reasoning", "grok-4.3-beta", "grok-4.3"} {
 		if strings.Contains(body, `"id":"`+hidden+`"`) {
 			t.Fatalf("expected removed model %s to stay hidden, body=%s", hidden, body)
 		}

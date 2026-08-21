@@ -59,11 +59,6 @@ func extractGrokAssetPathsFromText(s string) []string {
 	return uniqueStrings(out)
 }
 
-type scoredURL struct {
-	u     string
-	score int
-}
-
 // preferFullOverPart drops "-part-0" preview variants when the corresponding full URL is present.
 // This is part of the stable contract:
 // - Never emit -part-0 when full exists.

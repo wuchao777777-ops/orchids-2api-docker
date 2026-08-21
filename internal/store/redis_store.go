@@ -229,6 +229,26 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	updated.StatusCode = acc.StatusCode
 	updated.LastAttempt = acc.LastAttempt
 	updated.QuotaResetAt = acc.QuotaResetAt
+	// Grok Build CLI OAuth credentials and identity must survive refresh /
+	// admin updates. Leaving these out would silently drop rotated tokens.
+	if strings.TrimSpace(acc.CredentialType) == "" {
+		updated.CredentialType = existing.CredentialType
+	} else {
+		updated.CredentialType = acc.CredentialType
+	}
+	updated.OAuthAccessToken = acc.OAuthAccessToken
+	updated.OAuthRefreshToken = acc.OAuthRefreshToken
+	updated.OAuthExpiresAt = acc.OAuthExpiresAt
+	if strings.TrimSpace(acc.TeamID) == "" {
+		updated.TeamID = existing.TeamID
+	} else {
+		updated.TeamID = acc.TeamID
+	}
+	if strings.TrimSpace(acc.UpstreamMode) == "" {
+		updated.UpstreamMode = existing.UpstreamMode
+	} else {
+		updated.UpstreamMode = acc.UpstreamMode
+	}
 	updated.UpdatedAt = time.Now()
 
 	data, err := json.Marshal(&updated)

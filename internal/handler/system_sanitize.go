@@ -13,6 +13,8 @@ const (
 )
 
 // sanitizeSystemItems 根据配置移除可能触发 coding agent 的 cc_entrypoint。
+// Fidelity 默认 "keep"：系统内容原样透传，不做任何改写。仅在显式配置为
+// "auto"/"strip" 时才执行 cc_entrypoint / Claude Code 过滤。
 func sanitizeSystemItems(system SystemItems, isWarp bool, isPuter bool, cfg *config.Config) (SystemItems, bool) {
 	if len(system) == 0 || cfg == nil {
 		return system, false
@@ -20,12 +22,17 @@ func sanitizeSystemItems(system SystemItems, isWarp bool, isPuter bool, cfg *con
 
 	mode := strings.ToLower(strings.TrimSpace(cfg.OrchidsCCEntrypointMode))
 	if mode == "" {
-		mode = ccEntrypointModeAuto
+		mode = ccEntrypointModeKeep
 	}
 	switch mode {
 	case ccEntrypointModeKeep, ccEntrypointModeAuto, ccEntrypointModeStrip:
 	default:
-		mode = ccEntrypointModeAuto
+		mode = ccEntrypointModeKeep
+	}
+
+	// 保真模式：系统内容逐字透传，不剥离 cc_entrypoint、不过滤 Claude Code 项。
+	if mode == ccEntrypointModeKeep {
+		return system, false
 	}
 
 	stripAll := mode == ccEntrypointModeStrip

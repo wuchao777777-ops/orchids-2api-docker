@@ -35,25 +35,6 @@ func isWarpCloudAgentForbiddenError(errStr string) bool {
 	return strings.Contains(lower, "not allowed to use the provided cloud agent")
 }
 
-func markAccountStatus(ctx context.Context, store *store.Store, acc *store.Account, status string) {
-	if acc == nil || store == nil || status == "" {
-		return
-	}
-
-	accountStatusMu.Lock()
-	defer accountStatusMu.Unlock()
-
-	now := time.Now()
-	acc.StatusCode = status
-	acc.LastAttempt = now
-
-	if err := store.UpdateAccount(ctx, acc); err != nil {
-		slog.Warn("账号状态更新失败", "account_id", acc.ID, "status", status, "error", err)
-		return
-	}
-	slog.Debug("账号状态已标记", "account_id", acc.ID, "status", status)
-}
-
 func markWarpQuotaExhausted(ctx context.Context, store *store.Store, acc *store.Account) {
 	if acc == nil || store == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
 		return

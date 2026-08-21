@@ -191,6 +191,27 @@ go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions
 - `POST /grok/v1/images/edits`
 - `GET /grok/v1/files/{image|video}/{name}`
 
+## Grok 上游模式
+
+Grok 请求按模型路由到三种上游之一（`internal/grok/models.go` 的 `ResolvedUpstream`）：
+
+| 模式 | 上游 | 账号凭据 | 典型模型 |
+|---|---|---|---|
+| app-chat | `grok.com/rest/app-chat/...` | SSO Cookie（`client_cookie`） | `grok-4.20-*`、imagine 系列 |
+| console | `console.x.ai/v1/responses` + DPoP | SSO Cookie | `grok-4.5`、`grok-4.3` |
+| cli（Build） | `cli-chat-proxy.grok.com/v1` + Bearer | OAuth token（`credential_type="oauth"` + `oauth_access_token`/`oauth_refresh_token`/`oauth_expires_at`） | `grok-build-0.1` |
+
+### 新增配置（config.json / Redis）
+
+- `grok_cli_base_url` / `grok_cli_user_agent` / `grok_cli_client_version` / `grok_cli_client_identifier`
+- `grok_cli_oauth_client_id` / `grok_cli_oauth_token_url`（默认官方 client/token 端点）
+- `grok_cli_model_ids`（把指定模型路由到 CLI 上游，如 `["grok-build-0.1"]`）
+- `grok_session_identity_refresh`（默认 true，后台刷新 SSO 账号时拉取 `/api/auth/session` 学习 teamId）
+- `grok_egress_enabled`（默认 false；开启后走代理池 + FlareSolverr + clearance 缓存）
+- `grok_egress_nodes`（代理池节点列表）、`grok_flaresolverr_url`、`grok_clearance_mode`（`manual`/`flaresolverr`）、`grok_clearance_refresh_interval`、`grok_ua_rotation_enabled`
+
+注意：这些字段带 json tag 且不会被 `ApplyHardcoded` 覆盖；通过管理端 `/api/config` 保存后不会被抹掉。
+
 ## 管理端
 
 - UI：`{admin_path}/`

@@ -3,6 +3,7 @@ package grok
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -196,6 +197,63 @@ func TestDoRequest_DoesNotFallbackForGenericTransportError(t *testing.T) {
 	}
 	if primaryCalls != 1 {
 		t.Fatalf("primaryCalls=%d want 1", primaryCalls)
+	}
+}
+
+func TestDoRequest_RetriesOnceAfterCloudflareChallenge(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("CF-Mitigated", "challenge")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("Just a moment... verifying you are human"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	c := New(&config.Config{
+		GrokEgressEnabled: true,
+		GrokEgressNodes:   []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
+	})
+	resp, err := c.doRequest(context.Background(), srv.URL, http.MethodGet, nil, http.Header{}, http.StatusOK, false)
+	if err != nil {
+		t.Fatalf("doRequest() error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if calls != 2 {
+		t.Fatalf("expected 2 calls (challenge + retry), got %d", calls)
+	}
+}
+
+func TestDoRequest_PersistentChallengeReturnsTypedError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("CF-Mitigated", "challenge")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("Just a moment..."))
+	}))
+	defer srv.Close()
+
+	c := New(&config.Config{
+		GrokEgressEnabled: true,
+		GrokEgressNodes:   []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
+	})
+	_, err := c.doRequest(context.Background(), srv.URL, http.MethodGet, nil, http.Header{}, http.StatusOK, false)
+	if err == nil {
+		t.Fatal("expected persistent challenge to fail")
+	}
+	if !isEgressChallengeError(err) {
+		t.Fatalf("expected egress challenge error, got %v", err)
+	}
+	var typed *grokUpstreamError
+	if !errors.As(err, &typed) {
+		t.Fatalf("expected typed upstream error, got %T", err)
+	}
+	if typed.status != http.StatusForbidden {
+		t.Fatalf("typed status=%d want 403", typed.status)
 	}
 }
 

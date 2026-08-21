@@ -68,6 +68,16 @@ cp config.example.json config.json
 | `proxy_pass` | 空 | 代理密码 |
 | `proxy_bypass` | 空数组 | 直连域名或网段 |
 
+### 2.5 上游保真
+
+本网关是 API 中转站，默认**逐字透传**客户端内容、不对报文内容做任何改写。以下字段可显式开启历史改写行为：
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `cc_entrypoint_mode` | `keep` | `keep`=系统内容原样透传（默认）；`auto`=仅剥离 `claude-vscode`/`claude-code` 入口值；`strip`=剥离全部 `cc_entrypoint=` 并过滤 Claude Code 系统/环境项 |
+
+这些字段会被持久化，不会被 `ApplyHardcoded()` 覆盖。
+
 ## 3. 运行时硬编码默认值
 
 这些值由 [config.go](../internal/config/config.go) 里的 `ApplyHardcoded()` 强制覆盖，不能指望仅靠配置文件改变。
@@ -81,7 +91,7 @@ cp config.example.json config.json
 | `orchids_api_version` | `2` | Orchids API 版本 |
 | `orchids_allow_run_command` | `true` | Orchids 允许命令工具 |
 | `orchids_run_allowlist` | `["*"]` | Orchids 命令白名单 |
-| `orchids_cc_entrypoint_mode` | `auto` | 入口模式 |
+| `orchids_cc_entrypoint_mode` | `keep` | 系统内容保真：`keep`=原样透传（默认，不剥离 cc_entrypoint/不过滤 Claude Code 项）；`auto`=仅剥离 claude-vscode/claude-code 入口；`strip`=全部剥离 |
 | `orchids_fs_ignore` | `["debug-logs","data",".claude"]` | 忽略目录 |
 | `grok_api_base_url` | `https://grok.com` | Grok 基础地址 |
 | `warp_disable_tools` | `false` | Warp 工具默认开启 |

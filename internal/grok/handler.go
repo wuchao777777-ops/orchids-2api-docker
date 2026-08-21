@@ -27,6 +27,7 @@ type Handler struct {
 	cfg          *config.Config
 	lb           *loadbalancer.LoadBalancer
 	client       *Client
+	cliClient    *CLIClient
 	connTracker  loadbalancer.ConnTracker
 	modelCacheMu sync.RWMutex
 	modelCache   map[string]time.Time
@@ -50,11 +51,16 @@ type imageEditReference struct {
 }
 
 func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
+	cliClient := NewCLIClient(cfg)
+	if lb != nil {
+		cliClient.SetAccountStore(lb.Store)
+	}
 	return &Handler{
 		base:        handler.NewBaseHandler(lb),
 		cfg:         cfg,
 		lb:          lb,
 		client:      New(cfg),
+		cliClient:   cliClient,
 		connTracker: loadbalancer.NewMemoryConnTracker(),
 		modelCache:  make(map[string]time.Time),
 	}
@@ -63,9 +69,6 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 func (h *Handler) currentClient() *Client {
 	if h == nil {
 		return nil
-	}
-	if h.cfg != nil {
-		return New(h.cfg)
 	}
 	return h.client
 }
@@ -100,11 +103,21 @@ func (h *Handler) cacheValidatedModel(modelID string) {
 	h.modelCacheMu.Unlock()
 }
 
+// isGrokSSOAccount reports whether a Grok account is usable for app-chat /
+// console / media paths that authenticate with SSO cookies. OAuth Build CLI
+// accounts must not be selected here.
+func isGrokSSOAccount(acc *store.Account) bool {
+	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth")
+}
+
 func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, error) {
 	if h.lb == nil {
 		return nil, "", fmt.Errorf("load balancer not configured")
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTracker(ctx, nil, "grok", h.connTracker)
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, nil, "grok", h.connTracker, isGrokSSOAccount)
 	if err != nil {
 		return nil, "", err
 	}
@@ -191,12 +204,26 @@ func (h *Handler) trackAccount(acc *store.Account) func() {
 }
 
 func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err error) {
+	// Cloudflare / DPoP challenges are egress problems, not account problems.
+	// Do not cool or disable the account; the egress layer must re-solve.
+	if isEgressChallengeError(err) {
+		return
+	}
 	// Team-level resource-exhausted 429: the rate limit is on the token/session,
-	// not the account. Set a 60s cooldown so the RPM window can reset. Without
-	// this, unmarked sibling accounts sharing the same token immediately hit the
-	// same team limit.
+	// not the account. Set a cooldown so the RPM window can reset. Without this,
+	// unmarked sibling accounts sharing the same token immediately hit the same
+	// team limit. Prefer the precise reset parsed from the 429 body (team+model
+	// granularity), falling back to a 60s blanket cooldown.
 	if err != nil && isResourceExhaustedError(err) && acc != nil {
-		acc.QuotaResetAt = time.Now().Add(60 * time.Second)
+		cooldown := 60 * time.Second
+		if meta := ParseRateLimitMetadata([]byte(err.Error())); meta != nil {
+			if remaining := teamCooldown.RetryAfterFor(meta.Scope, meta.TeamID, meta.Model); remaining > 0 {
+				cooldown = remaining
+			} else if meta.RetryAfter > 0 {
+				cooldown = meta.RetryAfter
+			}
+		}
+		acc.QuotaResetAt = time.Now().Add(cooldown)
 	}
 	h.base.MarkAccountStatus(ctx, acc, err)
 }
@@ -239,9 +266,17 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 		err     error
 		lastErr error
 	)
+	// App-chat/console/media paths only accept SSO cookie accounts. OAuth Build
+	// CLI accounts are selected exclusively by openCLIAccountSession.
+	ssoFilter := func(acc *store.Account) bool {
+		if !isGrokSSOAccount(acc) {
+			return false
+		}
+		return extraFilter == nil || extraFilter(acc)
+	}
 	candidates := normalizeGrokPoolCandidates(poolCandidates)
 	if len(candidates) == 0 {
-		acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, extraFilter)
+		acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, ssoFilter)
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +284,7 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 		for _, pool := range candidates {
 			wantPool := pool
 			acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, func(acc *store.Account) bool {
-				return strings.EqualFold(grokAccountPool(acc), wantPool) && (extraFilter == nil || extraFilter(acc))
+				return strings.EqualFold(grokAccountPool(acc), wantPool) && ssoFilter(acc)
 			})
 			if err == nil && acc != nil {
 				break
@@ -318,7 +353,21 @@ func (h *Handler) doSingleAccountRequest(
 type grokAccountStatusPolicy func(error) bool
 
 func markAllGrokAccountStatuses(err error) bool {
-	return err != nil && !isSharedGrokRateLimitError(err)
+	if err == nil {
+		return false
+	}
+	// Egress challenges and shared team rate limits are not account failures.
+	if isEgressChallengeError(err) {
+		return false
+	}
+	if isSharedGrokRateLimitError(err) {
+		return false
+	}
+	// A generic 403 must not mark the account; only explicit account blocks do.
+	if ClassifyUpstreamError(err) == UpstreamErrorGenericForbidden {
+		return false
+	}
+	return true
 }
 
 func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
@@ -365,7 +414,6 @@ func (h *Handler) doAutoSwitchRequest(
 	}
 	const switchPace = 100 * time.Millisecond
 	used := make([]int64, 0)
-	var lastErr error
 	for {
 		if sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
@@ -374,7 +422,6 @@ func (h *Handler) doAutoSwitchRequest(
 		if err == nil {
 			return resp, nil
 		}
-		lastErr = err
 		if shouldMarkStatus == nil || shouldMarkStatus(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
@@ -401,17 +448,38 @@ func (h *Handler) doAutoSwitchRequest(
 			*payload = newPayload
 		}
 	}
-	return nil, lastErr
+}
+
+// isEgressChallengeError reports whether an error is a Cloudflare interstitial
+// or DPoP proof challenge. These are egress/clearance problems, not account
+// problems: switching accounts (or cooling the account) is wrong.
+func isEgressChallengeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	kind := ClassifyUpstreamError(err)
+	return kind == UpstreamErrorCloudflareChallenge || kind == UpstreamErrorDPoPChallenge
 }
 
 func shouldSwitchGrokAccount(err error) bool {
 	if err == nil {
 		return false
 	}
-	status := classifyAccountStatusFromError(err.Error())
-	if status == "403" {
-		return true
+	// Cloudflare / DPoP challenges should not drain the account pool: switching
+	// to another account hits the same wall. Leave to the egress layer instead.
+	if isEgressChallengeError(err) {
+		return false
 	}
+	// Response-aware classification: only an explicit account block switches
+	// accounts. A generic 403 (feature/plan/permission) is not an account
+	// failure.
+	switch ClassifyUpstreamError(err) {
+	case UpstreamErrorAccountBlock:
+		return true
+	case UpstreamErrorGenericForbidden:
+		return false
+	}
+	status := classifyAccountStatusFromError(err.Error())
 	if status == "429" {
 		return !isSharedGrokRateLimitError(err)
 	}

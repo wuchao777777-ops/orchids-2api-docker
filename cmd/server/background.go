@@ -69,6 +69,11 @@ func buildGrokRefreshCandidates(accounts []*store.Account) []grokRefreshCandidat
 		if acc == nil || !strings.EqualFold(acc.AccountType, "grok") {
 			continue
 		}
+		// Build CLI OAuth accounts refresh through their own token lifecycle
+		// (refreshCLIAccounts) and must not be verified as SSO cookies here.
+		if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+			continue
+		}
 		token := grok.NormalizeSSOToken(acc.ClientCookie)
 		if token == "" {
 			token = grok.NormalizeSSOToken(acc.RefreshToken)
@@ -127,6 +132,43 @@ func setGrokRefreshBackoff(until time.Time) {
 	grokRefreshMu.Unlock()
 }
 
+// refreshCLIAccount refreshes a Build CLI OAuth account access token before it
+// expires. The CLIClient oauth layer handles the refresh_token grant and
+// persists rotated tokens back to Redis.
+func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) {
+	if acc == nil || s == nil || cfg == nil {
+		return
+	}
+	if strings.TrimSpace(acc.OAuthAccessToken) != "" && !acc.OAuthExpiresAt.IsZero() &&
+		time.Until(acc.OAuthExpiresAt) > 5*time.Minute {
+		return // token still valid, no refresh needed
+	}
+	cliClient := grok.NewCLIClient(cfg)
+	cliClient.SetAccountStore(s)
+	refreshCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	token, err := cliClient.OAuthAccessToken(refreshCtx, acc)
+	cancel()
+	if err != nil {
+		if grok.IsCLIPermanentOAuthError(err) {
+			acc.StatusCode = "401"
+			acc.LastAttempt = time.Now()
+		}
+		slog.Warn("Auto refresh grok cli token failed", "account_id", acc.ID, "error", err)
+		if updateErr := s.UpdateAccount(ctx, acc); updateErr != nil {
+			slog.Warn("Auto refresh grok cli: update account failed", "account_id", acc.ID, "error", updateErr)
+		}
+		return
+	}
+	if token != "" {
+		acc.OAuthAccessToken = token
+		acc.StatusCode = ""
+		acc.LastAttempt = time.Time{}
+	}
+	if updateErr := s.UpdateAccount(ctx, acc); updateErr != nil {
+		slog.Warn("Auto refresh grok cli: update account failed", "account_id", acc.ID, "error", updateErr)
+	}
+}
+
 func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store, accounts []*store.Account) {
 	if len(accounts) == 0 || s == nil {
 		return
@@ -180,6 +222,32 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 			}
 			slog.Warn("Auto refresh token failed", "type", "grok", "status", statusCode, "error", verifyErr)
 			continue
+		}
+
+		// Resolve the stable session identity (user/email/team) once per verified
+		// token so team+model rate limiting and account dedup can use it.
+		if cfg.GrokSessionIdentityRefreshEnabled() {
+			idCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			identity, idErr := grokClient.FetchSessionIdentity(idCtx, candidate.token)
+			cancel()
+			if idErr == nil {
+				for _, acc := range candidate.accounts {
+					if acc == nil {
+						continue
+					}
+					if identity.TeamID != "" && acc.TeamID != identity.TeamID {
+						acc.TeamID = identity.TeamID
+					}
+					if identity.Email != "" && acc.Email != identity.Email {
+						acc.Email = identity.Email
+					}
+					if identity.UserID != "" && acc.UserID != identity.UserID {
+						acc.UserID = identity.UserID
+					}
+				}
+			} else {
+				slog.Debug("Auto refresh grok: session identity fetch skipped", "error", idErr)
+			}
 		}
 
 		for _, acc := range candidate.accounts {
@@ -270,9 +338,14 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				}
 				continue
 			}
-			// Grok accounts: check once per unique token, cache result.
+			// Grok accounts: OAuth (Build CLI) refresh via their own token
+			// lifecycle; SSO accounts check once per unique token.
 			if strings.EqualFold(acc.AccountType, "grok") {
-				grokRefreshQueue = append(grokRefreshQueue, acc)
+				if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+					refreshCLIAccount(context.Background(), cfg, s, acc)
+				} else {
+					grokRefreshQueue = append(grokRefreshQueue, acc)
+				}
 				continue
 			}
 

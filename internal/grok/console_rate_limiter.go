@@ -75,6 +75,17 @@ func noteConsoleRateLimitError(err error) {
 		consoleTeamCooldownUntil = until
 	}
 	consoleTeamCooldownMu.Unlock()
+
+	// Parse structured metadata (team_id/model/RPS/RPM) out of the error text
+	// and record at team+model granularity so handler.go markAccountStatus can
+	// pick the precise reset instead of the fixed fallback delay.
+	if meta := ParseRateLimitMetadata([]byte(err.Error())); meta != nil {
+		if meta.RetryAfter <= 0 {
+			meta.RetryAfter = delay
+		}
+		teamCooldown.Note(meta.Scope, meta.TeamID, meta.Model, meta.RetryAfter)
+		recordTeamCooldownHit(meta)
+	}
 	slog.Warn("Rate limiter: console team rate limit cooldown", "cooldown", delay.String(), "error", err)
 }
 

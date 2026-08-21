@@ -320,7 +320,7 @@ func TestHandleMessages_Puter_StreamAndJSON(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_Puter_SanitizesClaudeCodeContext(t *testing.T) {
+func TestHandleMessages_Puter_PreservesContentByDefault(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	up := &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
@@ -358,12 +358,23 @@ func TestHandleMessages_Puter_SanitizesClaudeCodeContext(t *testing.T) {
 	if len(up.capturedReqs) != 1 {
 		t.Fatalf("capturedReqs len=%d want 1", len(up.capturedReqs))
 	}
-	if got := up.capturedReqs[0].Messages[0].ExtractText(); got != "帮我添加 我是大帅比" {
-		t.Fatalf("sanitized user text = %q", got)
+	got := up.capturedReqs[0].Messages[0].ExtractText()
+	if !strings.Contains(got, "<system-reminder>") || !strings.Contains(got, "帮我添加 我是大帅比") {
+		t.Fatalf("fidelity: user content rewritten = %q", got)
 	}
-	for _, item := range up.capturedReqs[0].System {
-		if strings.Contains(strings.ToLower(item.Text), "claude code") || strings.Contains(strings.ToLower(item.Text), "gitstatus:") {
-			t.Fatalf("unexpected forwarded puter system item: %q", item.Text)
+	if len(up.capturedReqs[0].System) != 3 {
+		t.Fatalf("system len=%d want 3 (all forwarded verbatim)", len(up.capturedReqs[0].System))
+	}
+	for _, want := range []string{"cc_entrypoint=cli", "Claude Code", "gitStatus:", "cc_version=2.1.85.351"} {
+		found := false
+		for _, item := range up.capturedReqs[0].System {
+			if strings.Contains(item.Text, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("fidelity: system item %q was dropped/rewritten", want)
 		}
 	}
 }

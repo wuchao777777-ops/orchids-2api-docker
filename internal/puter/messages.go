@@ -9,10 +9,14 @@ import (
 	"orchids-api/internal/prompt"
 )
 
-func convertMessages(messages []prompt.Message, systemPrompt string) []Message {
-	out := make([]Message, 0, len(messages)+1)
-	if strings.TrimSpace(systemPrompt) != "" {
-		out = append(out, Message{Role: "system", Content: systemPrompt})
+// convertMessages 将 OpenAI 风格消息转换为 Puter 消息。系统条目逐字透传为独立
+// system 消息，其余消息按角色/schema 映射。
+func convertMessages(messages []prompt.Message, system []prompt.SystemItem) []Message {
+	out := make([]Message, 0, len(messages)+len(system))
+	for _, item := range system {
+		if text := strings.TrimSpace(item.Text); text != "" {
+			out = append(out, Message{Role: "system", Content: item.Text})
+		}
 	}
 	for _, msg := range messages {
 		role := strings.ToLower(strings.TrimSpace(msg.Role))

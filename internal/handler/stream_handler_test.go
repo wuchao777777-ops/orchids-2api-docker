@@ -1089,3 +1089,20 @@ func TestStreamHandler_NoToolsGateSuppressesValidToolCall(t *testing.T) {
 		t.Fatalf("expected end_turn after suppressing tool call, got: %s", out)
 	}
 }
+
+func TestResponseMessageID_OpenAIUsesChatCompletionPrefix(t *testing.T) {
+	id := responseMessageID(adapter.FormatOpenAI)
+	if !strings.HasPrefix(id, "chatcmpl-") {
+		t.Fatalf("id=%q want chatcmpl- prefix", id)
+	}
+	if id == responseMessageID(adapter.FormatOpenAI) {
+		t.Fatal("expected unique response IDs")
+	}
+}
+
+func TestResponseMessageID_AnthropicKeepsMessagePrefix(t *testing.T) {
+	id := responseMessageID(adapter.FormatAnthropic)
+	if !strings.HasPrefix(id, "msg_") {
+		t.Fatalf("id=%q want msg_ prefix", id)
+	}
+}

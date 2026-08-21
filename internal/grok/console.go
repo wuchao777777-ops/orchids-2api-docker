@@ -584,7 +584,6 @@ func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccount
 	const switchPace = 1500 * time.Millisecond
 
 	used := make([]int64, 0)
-	var lastErr error
 	for {
 		if sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
@@ -593,7 +592,6 @@ func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccount
 		if err == nil {
 			return resp, nil
 		}
-		lastErr = err
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
@@ -612,7 +610,6 @@ func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccount
 		sess.poolCandidates = next.poolCandidates
 		sess.release = next.release
 	}
-	return nil, lastErr
 }
 
 func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) {

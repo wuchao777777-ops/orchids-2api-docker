@@ -187,6 +187,7 @@ function applyTokenLabels(type) {
     hint.textContent = accountId
       ? "编辑时仅保存第一行 SSO Token"
       : "支持批量添加 Grok。每行一个 sso token 或 Cookie 片段";
+    applyCredentialModeUI(type);
   } else if (type === 'puter') {
       label.textContent = "Auth Token";
       input.placeholder = "每行一个 Puter auth_token";
@@ -202,6 +203,28 @@ function applyTokenLabels(type) {
       : "支持原始 __client、完整 Cookie Header 或 Cookie JSON；推荐同时带上 __client_uat 以提高补全成功率";
     input.required = true;
   }
+}
+
+// Grok credential mode: SSO cookie vs Build CLI OAuth.
+function applyCredentialModeUI(type) {
+  const modeGroup = document.getElementById("credentialModeGroup");
+  const modeSelect = document.getElementById("credentialType");
+  if (!modeGroup || !modeSelect) return;
+  const isGrok = String(type || "").trim().toLowerCase() === "grok";
+  modeGroup.hidden = !isGrok;
+  if (!isGrok) return;
+  const mode = String(modeSelect?.value || "sso").trim().toLowerCase();
+  document.getElementById("ssoCredentialGroup").hidden = mode !== "sso";
+  document.getElementById("oauthCredentialGroup").hidden = mode !== "oauth";
+  document.getElementById("oauthRefreshGroup").hidden = mode !== "oauth";
+  document.getElementById("oauthExpiresGroup").hidden = mode !== "oauth";
+  const clientCookie = document.getElementById("clientCookie");
+  if (clientCookie) clientCookie.required = mode === "sso";
+}
+
+function currentCredentialMode() {
+  const modeSelect = document.getElementById("credentialType");
+  return String(modeSelect?.value || "sso").trim().toLowerCase();
 }
 
 function selectWarpUserFile() {
@@ -396,6 +419,11 @@ function renderAccountImportStatus(message, type = "info", details = []) {
 
 function buildAccountPayload(type, baseData, credential) {
   const payload = { ...baseData };
+  if (type === "grok" && String(baseData.credential_type || "").toLowerCase() === "oauth") {
+    // OAuth fields already carried in baseData; do not write a client_cookie.
+    delete payload.client_cookie;
+    return payload;
+  }
   if (type === "warp") {
     payload.refresh_token = credential;
   } else {
@@ -1261,12 +1289,18 @@ function openModal(account = null) {
   };
 
   const applyValues = () => {
+    const modeSelect = document.getElementById("credentialType");
     if (account) {
       title.textContent = "编辑账号";
       document.getElementById("accountId").value = account.id;
       setAccountModalType(normalizeAccountType(account));
       document.getElementById("clientCookie").value = getAccountToken(account);
       document.getElementById("enabled").checked = account.enabled;
+      const isOAuth = String(account.credential_type || "").trim().toLowerCase() === "oauth";
+      if (modeSelect) modeSelect.value = isOAuth ? "oauth" : "sso";
+      document.getElementById("oauthAccessToken").value = account.oauth_access_token || "";
+      document.getElementById("oauthRefreshToken").value = account.oauth_refresh_token || "";
+      document.getElementById("oauthExpiresAt").value = account.oauth_expires_at || "";
     } else {
       title.textContent = "添加账号";
       form.reset();
@@ -1274,7 +1308,12 @@ function openModal(account = null) {
       setAccountModalType(getActiveAccountType());
       document.getElementById("enabled").checked = true;
       document.getElementById("clientCookie").value = "";
+      if (modeSelect) modeSelect.value = "sso";
+      document.getElementById("oauthAccessToken").value = "";
+      document.getElementById("oauthRefreshToken").value = "";
+      document.getElementById("oauthExpiresAt").value = "";
     }
+    applyCredentialModeUI(account ? normalizeAccountType(account) : getActiveAccountType());
   };
 
   applyValues();
@@ -1295,6 +1334,12 @@ async function saveAccount(e) {
   const id = document.getElementById("accountId").value;
   const type = document.getElementById("accountType").value;
   const token = document.getElementById("clientCookie").value;
+  const mode = currentCredentialMode();
+  const isOAuth = type === "grok" && mode === "oauth";
+  const oauthAccess = String(document.getElementById("oauthAccessToken")?.value || "").trim();
+  const oauthRefresh = String(document.getElementById("oauthRefreshToken")?.value || "").trim();
+  const oauthExpires = String(document.getElementById("oauthExpiresAt")?.value || "").trim();
+
   const splitCredentials = splitBatchCredentialInput(token);
   const { unique: dedupedCredentials, duplicates: duplicateInputs } = dedupeCredentialInputs(type, splitCredentials);
   const { accepted: credentials, conflicts: existingConflicts } = filterExistingCredentialConflicts(type, dedupedCredentials, id);
@@ -1304,8 +1349,16 @@ async function saveAccount(e) {
     weight: existing ? (parseInt(existing.weight, 10) || 1) : 1,
     enabled: document.getElementById("enabled").checked,
   };
+  if (type === "grok") {
+    data.credential_type = isOAuth ? "oauth" : "";
+  }
+  if (isOAuth) {
+    if (oauthAccess) data.oauth_access_token = oauthAccess;
+    if (oauthRefresh) data.oauth_refresh_token = oauthRefresh;
+    if (oauthExpires) data.oauth_expires_at = oauthExpires;
+  }
 
-  if (credentials.length === 0) {
+  if (!isOAuth && credentials.length === 0) {
     if (duplicateInputs.length > 0 || existingConflicts.length > 0) {
       const details = []
         .concat(duplicateInputs.slice(0, 4).map((item) => `输入重复: ${item}`))

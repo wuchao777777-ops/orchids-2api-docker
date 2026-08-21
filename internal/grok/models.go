@@ -3,8 +3,36 @@ package grok
 import (
 	"strings"
 
+	"orchids-api/internal/config"
 	"orchids-api/internal/modelpolicy"
 )
+
+// UpstreamKind selects which Grok upstream protocol serves a model.
+type UpstreamKind int
+
+const (
+	// UpstreamAuto derives the upstream from ModelSpec fields and config.
+	UpstreamAuto UpstreamKind = iota
+	// UpstreamAppChat is the grok.com/rest/app-chat/... website protocol.
+	UpstreamAppChat
+	// UpstreamConsole is console.x.ai/v1/responses + DPoP.
+	UpstreamConsole
+	// UpstreamCLI is cli-chat-proxy.grok.com/v1 + OAuth Bearer.
+	UpstreamCLI
+)
+
+func (k UpstreamKind) String() string {
+	switch k {
+	case UpstreamAppChat:
+		return "app_chat"
+	case UpstreamConsole:
+		return "console"
+	case UpstreamCLI:
+		return "cli"
+	default:
+		return "auto"
+	}
+}
 
 // ModelSpec defines one public model and how it maps to Grok upstream fields.
 type ModelSpec struct {
@@ -18,6 +46,8 @@ type ModelSpec struct {
 	PreferBest    bool
 	IsImage       bool
 	IsVideo       bool
+	// Upstream explicitly routes the model; UpstreamAuto derives from fields.
+	Upstream UpstreamKind
 }
 
 const (
@@ -46,7 +76,7 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.3", Name: "Grok 4.3", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3", Tier: grokTierSuper},
 	{ID: "grok-4.3-beta", Name: "Grok 4.3 Beta", UpstreamModel: "grok-4.3-beta", ConsoleModel: "grok-4.3", ModeID: "grok-420-computer-use-sa", Tier: grokTierSuper},
 	{ID: "grok-4.5", Name: "Grok 4.5", UpstreamModel: "grok-4.5", ConsoleModel: "grok-4.5", Tier: grokTierSuper},
-	{ID: "grok-build-0.1", Name: "Grok Build 0.1", UpstreamModel: "grok-build-0.1", ConsoleModel: "grok-build-0.1", Tier: grokTierSuper},
+	{ID: "grok-build-0.1", Name: "Grok Build 0.1", UpstreamModel: "grok-build-0.1", ConsoleModel: "grok-build-0.1", Tier: grokTierSuper, Upstream: UpstreamCLI},
 	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-imagine-image-lite", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic, IsImage: true},
 	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-imagine-image", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-quality", Name: "Grok Imagine Image Quality", UpstreamModel: "grok-imagine-image-quality-lite", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
@@ -102,4 +132,31 @@ func (m ModelSpec) PoolCandidates() []string {
 
 func ResolveModelOrDynamic(modelID string) (ModelSpec, bool) {
 	return ResolveModel(modelID)
+}
+
+// ResolvedUpstream returns the upstream kind for this model, honoring an
+// explicit Upstream field, the GrokCLIModelIDs config list, and the existing
+// ConsoleModel routing in that order.
+func (m ModelSpec) ResolvedUpstream(cfg *config.Config) UpstreamKind {
+	if m.Upstream != UpstreamAuto {
+		return m.Upstream
+	}
+	if cfg != nil && cfg.GrokModelIsCLI(m.ID) {
+		return UpstreamCLI
+	}
+	if strings.TrimSpace(m.ConsoleModel) != "" {
+		return UpstreamConsole
+	}
+	return UpstreamAppChat
+}
+
+// modelRoutedToCLI reports whether a model should be served via the Build CLI
+// upstream (explicit marker or config list).
+func modelRoutedToCLI(spec ModelSpec, cfg *config.Config) bool {
+	switch spec.ResolvedUpstream(cfg) {
+	case UpstreamCLI:
+		return true
+	default:
+		return false
+	}
 }

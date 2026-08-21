@@ -48,34 +48,59 @@ type Config struct {
 	Email         string `json:"-"`
 
 	// ── Hardcoded fields (set unconditionally by ApplyHardcoded) ──
-	DebugLogSSE               bool     `json:"-"`
-	SuppressThinking          bool     `json:"-"`
-	OutputTokenMode           string   `json:"-"`
-	ContextMaxTokens          int      `json:"-"`
-	ContextSummaryMaxTokens   int      `json:"-"`
-	ContextKeepTurns          int      `json:"-"`
-	UpstreamURL               string   `json:"-"`
-	UpstreamToken             string   `json:"-"`
-	UpstreamMode              string   `json:"-"`
-	OrchidsAPIBaseURL         string   `json:"-"`
-	OrchidsWSURL              string   `json:"-"`
-	OrchidsAPIVersion         string   `json:"-"`
-	OrchidsAllowRunCommand    bool     `json:"-"`
-	OrchidsRunAllowlist       []string `json:"-"`
-	OrchidsCCEntrypointMode   string   `json:"-"`
-	OrchidsFSIgnore           []string `json:"-"`
-	GrokAPIBaseURL            string   `json:"-"`
-	GrokUserAgent             string   `json:"-"`
-	GrokCFClearance           string   `json:"-"`
-	GrokCFBM                  string   `json:"-"`
-	GrokStatsigID             string   `json:"grok_statsig_id,omitempty"`
-	GrokConfigCFClearance     string   `json:"grok_cf_clearance,omitempty"`
-	GrokConfigCFBM            string   `json:"grok_cf_bm,omitempty"`
-	GrokBaseProxyURL          string   `json:"-"`
-	GrokAssetProxyURL         string   `json:"-"`
-	GrokTemporary             *bool    `json:"grok_temporary,omitempty"`
-	GrokDisableMemory         *bool    `json:"grok_disable_memory,omitempty"`
-	GrokCustomInstruction     string   `json:"grok_custom_instruction,omitempty"`
+	DebugLogSSE             bool     `json:"-"`
+	SuppressThinking        bool     `json:"-"`
+	OutputTokenMode         string   `json:"-"`
+	ContextMaxTokens        int      `json:"-"`
+	ContextSummaryMaxTokens int      `json:"-"`
+	ContextKeepTurns        int      `json:"-"`
+	UpstreamURL             string   `json:"-"`
+	UpstreamToken           string   `json:"-"`
+	UpstreamMode            string   `json:"-"`
+	OrchidsAPIBaseURL       string   `json:"-"`
+	OrchidsWSURL            string   `json:"-"`
+	OrchidsAPIVersion       string   `json:"-"`
+	OrchidsAllowRunCommand  bool     `json:"-"`
+	OrchidsRunAllowlist     []string `json:"-"`
+	OrchidsFSIgnore         []string `json:"-"`
+	GrokAPIBaseURL          string   `json:"-"`
+	GrokUserAgent           string   `json:"-"`
+	GrokCFClearance         string   `json:"-"`
+	GrokCFBM                string   `json:"-"`
+	GrokStatsigID           string   `json:"grok_statsig_id,omitempty"`
+	GrokConfigCFClearance   string   `json:"grok_cf_clearance,omitempty"`
+	GrokConfigCFBM          string   `json:"grok_cf_bm,omitempty"`
+	GrokBaseProxyURL        string   `json:"-"`
+	GrokAssetProxyURL       string   `json:"-"`
+	GrokTemporary           *bool    `json:"grok_temporary,omitempty"`
+	GrokDisableMemory       *bool    `json:"grok_disable_memory,omitempty"`
+	GrokCustomInstruction   string   `json:"grok_custom_instruction,omitempty"`
+
+	// ── Grok Build CLI (cli-chat-proxy.grok.com) OAuth upstream ──
+	// These fields are configurable via config.json / Redis and are deliberately
+	// NOT written into ApplyHardcoded, so they survive a persistConfig round trip.
+	GrokCLIBaseURL          string   `json:"grok_cli_base_url,omitempty"`
+	GrokCLIUserAgent        string   `json:"grok_cli_user_agent,omitempty"`
+	GrokCLIClientVersion    string   `json:"grok_cli_client_version,omitempty"`
+	GrokCLIClientIdentifier string   `json:"grok_cli_client_identifier,omitempty"`
+	GrokCLIOAuthClientID    string   `json:"grok_cli_oauth_client_id,omitempty"`
+	GrokCLIOAuthTokenURL    string   `json:"grok_cli_oauth_token_url,omitempty"`
+	GrokCLIModelIDs         []string `json:"grok_cli_model_ids,omitempty"`
+	GrokSessionIdentityRefr *bool    `json:"grok_session_identity_refresh,omitempty"`
+
+	// ── Grok egress (proxy pool + FlareSolverr + clearance) ──
+	GrokEgressEnabled          bool               `json:"grok_egress_enabled,omitempty"`
+	GrokEgressNodes            []EgressNodeConfig `json:"grok_egress_nodes,omitempty"`
+	GrokFlareSolverrURL        string             `json:"grok_flaresolverr_url,omitempty"`
+	GrokClearanceMode          string             `json:"grok_clearance_mode,omitempty"`             // "manual"|"flaresolverr"
+	GrokClearanceRefreshInterv int                `json:"grok_clearance_refresh_interval,omitempty"` // seconds
+	GrokUARotationEnabled      bool               `json:"grok_ua_rotation_enabled,omitempty"`
+
+	// ── Upstream fidelity (defaults preserve client content verbatim) ──
+	// A relay gateway forwards client messages without rewriting content.
+	// This field is NOT written into ApplyHardcoded, so it survives a
+	// persistConfig round trip.
+	OrchidsCCEntrypointMode   string   `json:"cc_entrypoint_mode,omitempty"` // ""|"keep"|"auto"|"strip"; empty/keep = preserve verbatim
 	WarpDisableTools          *bool    `json:"-"`
 	WarpMaxToolResults        int      `json:"-"`
 	WarpMaxHistoryMessages    int      `json:"-"`
@@ -109,6 +134,16 @@ type Config struct {
 	AutoRegScript             string   `json:"-"`
 	PublicKey                 string   `json:"-"`
 	PublicEnabled             *bool    `json:"-"`
+}
+
+// EgressNodeConfig describes one egress exit node for the Grok proxy pool.
+// Defined in the config package (not grok/egress) to avoid an import cycle.
+type EgressNodeConfig struct {
+	Name    string `json:"name"`
+	URL     string `json:"url"`    // proxy address http/socks5; empty = direct
+	Weight  int    `json:"weight"` // weight for weighted round-robin; <=0 = 1
+	Scope   string `json:"scope"`  // "app_chat"|"console"|"cli"|"all"
+	Proxied bool   `json:"proxied"`
 }
 
 func Load(path string) (*Config, string, error) {
@@ -202,6 +237,11 @@ func ApplyDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.TokenCacheStrategy) == "" {
 		cfg.TokenCacheStrategy = "1"
 	}
+	// Fidelity default: preserve client content verbatim unless explicitly
+	// configured otherwise ("auto"/"strip" re-enable cc_entrypoint handling).
+	if strings.TrimSpace(cfg.OrchidsCCEntrypointMode) == "" {
+		cfg.OrchidsCCEntrypointMode = "keep"
+	}
 	// Always apply hardcoded values
 	ApplyHardcoded(cfg)
 }
@@ -220,7 +260,6 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.OrchidsAPIVersion = "2"
 	cfg.OrchidsAllowRunCommand = true
 	cfg.OrchidsRunAllowlist = []string{"*"}
-	cfg.OrchidsCCEntrypointMode = "auto"
 	cfg.OrchidsFSIgnore = []string{"debug-logs", "data", ".claude"}
 	cfg.GrokAPIBaseURL = "https://grok.com"
 	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
@@ -282,6 +321,98 @@ func (c *Config) GrokChatCustomInstruction() string {
 		return ""
 	}
 	return strings.TrimSpace(c.GrokCustomInstruction)
+}
+
+// GrokCLIBaseURLOrDefault returns the Build CLI proxy base URL, defaulting to
+// the official gateway.
+func (c *Config) GrokCLIBaseURLOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokCLIBaseURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(c.GrokCLIBaseURL), "/")
+	}
+	return "https://cli-chat-proxy.grok.com/v1"
+}
+
+// GrokCLIOAuthClientIDOrDefault returns the xAI OAuth client ID used for Build
+// token refresh, defaulting to the official CLI client.
+func (c *Config) GrokCLIOAuthClientIDOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokCLIOAuthClientID) != "" {
+		return strings.TrimSpace(c.GrokCLIOAuthClientID)
+	}
+	return "b1a00492-073a-47ea-816f-4c329264a828"
+}
+
+// GrokCLIOAuthTokenURLOrDefault returns the xAI OAuth token endpoint.
+func (c *Config) GrokCLIOAuthTokenURLOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokCLIOAuthTokenURL) != "" {
+		return strings.TrimSpace(c.GrokCLIOAuthTokenURL)
+	}
+	return "https://auth.x.ai/oauth2/token"
+}
+
+// GrokCLIUserAgentOrDefault returns the CLI user agent stamped on Build
+// requests. A fixed CLI identity (not the browser UA) is required upstream.
+func (c *Config) GrokCLIUserAgentOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokCLIUserAgent) != "" {
+		return strings.TrimSpace(c.GrokCLIUserAgent)
+	}
+	return "grok-cli/0.9.0"
+}
+
+// GrokCLIClientVersionOrDefault returns the x-grok-client-version header value.
+func (c *Config) GrokCLIClientVersionOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokCLIClientVersion) != "" {
+		return strings.TrimSpace(c.GrokCLIClientVersion)
+	}
+	return "0.9.0"
+}
+
+// GrokCLIClientIdentifierOrDefault returns the x-grok-client-identifier header.
+func (c *Config) GrokCLIClientIdentifierOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokCLIClientIdentifier) != "" {
+		return strings.TrimSpace(c.GrokCLIClientIdentifier)
+	}
+	return "grok-cli"
+}
+
+// GrokSessionIdentityRefreshEnabled reports whether background refresh should
+// fetch {base}/api/auth/session to learn team_id/email. Default true.
+func (c *Config) GrokSessionIdentityRefreshEnabled() bool {
+	if c == nil || c.GrokSessionIdentityRefr == nil {
+		return true
+	}
+	return *c.GrokSessionIdentityRefr
+}
+
+// GrokClearanceRefreshIntervalOrDefault returns the clearance auto-refresh
+// interval in seconds (default 600s).
+func (c *Config) GrokClearanceRefreshIntervalOrDefault() int {
+	if c != nil && c.GrokClearanceRefreshInterv > 0 {
+		return c.GrokClearanceRefreshInterv
+	}
+	return 600
+}
+
+// GrokClearanceModeOrDefault returns "manual" when FlareSolverr is not usable.
+func (c *Config) GrokClearanceModeOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokClearanceMode) != "" {
+		return strings.TrimSpace(c.GrokClearanceMode)
+	}
+	return "manual"
+}
+
+// GrokModelIsCLI reports whether the given model ID is routed to the Build CLI
+// upstream via the GrokCLIModelIDs list.
+func (c *Config) GrokModelIsCLI(modelID string) bool {
+	if c == nil || len(c.GrokCLIModelIDs) == 0 {
+		return false
+	}
+	target := strings.ToLower(strings.TrimSpace(modelID))
+	for _, id := range c.GrokCLIModelIDs {
+		if strings.ToLower(strings.TrimSpace(id)) == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Config) PublicImagineNSFW() bool {

@@ -113,7 +113,9 @@ func parseDPoPAccessToken(value string) (time.Time, string, error) {
 	}
 	var claims struct {
 		ExpiresAt int64 `json:"exp"`
-		CNF       struct{ JKT string `json:"jkt"` } `json:"cnf"`
+		CNF       struct {
+			JKT string `json:"jkt"`
+		} `json:"cnf"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil || claims.ExpiresAt <= 0 || strings.TrimSpace(claims.CNF.JKT) == "" {
 		return time.Time{}, "", errors.New("invalid DPoP access token claims")
@@ -276,13 +278,36 @@ func (c *Client) doConsoleDPoPRequest(ctx context.Context, token, method, endpoi
 		if resp.StatusCode == http.StatusOK {
 			return resp, nil
 		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamBodyBytes+1))
+		if len(raw) > maxUpstreamBodyBytes {
+			raw = raw[:maxUpstreamBodyBytes]
+		}
+		headerCopy := resp.Header.Clone()
 		resp.Body.Close()
-		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if meta := RateLimitFromResponse(resp.StatusCode, resp.Header, raw); meta != nil {
+				teamCooldown.Note(meta.Scope, meta.TeamID, meta.Model, meta.RetryAfter)
+				recordTeamCooldownHit(meta)
+			}
+		}
+		// DPoP 401 (session expiry) and explicit DPoP 403 challenges invalidate the
+		// DPoP session and retry at most once. Cloudflare/egress challenges and
+		// ordinary 403s must NOT touch the DPoP session.
+		dpopChallenge := resp.StatusCode == http.StatusUnauthorized ||
+			(resp.StatusCode == http.StatusForbidden && IsDPoPProofRequiredBody(raw))
+		if dpopChallenge && attempt == 0 {
+			recordUpstreamChallenge("dpop")
 			c.dpop.invalidate(cacheKey, session.accessToken)
 			continue
 		}
-		return nil, fmt.Errorf("grok upstream status=%d body=%s", resp.StatusCode, raw)
+
+		kind := ClassifyUpstreamResponse(resp.StatusCode, resp.Header, raw)
+		if kind == UpstreamErrorCloudflareChallenge {
+			recordUpstreamChallenge("cloudflare")
+		} else if kind == UpstreamErrorGenericForbidden {
+			recordGenericForbidden()
+		}
+		return nil, newUpstreamError(resp.StatusCode, headerCopy, raw, "")
 	}
 	return nil, errors.New("DPoP retry exhausted")
 }

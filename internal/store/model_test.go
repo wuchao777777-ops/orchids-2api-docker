@@ -263,12 +263,12 @@ func TestStoreNew_SeedsCurrentGrokModelsWithoutConsoleLegacyModels(t *testing.T)
 		mini.Close()
 	})
 
-	for _, id := range []string{"grok-4.5", "grok-imagine-image-quality"} {
+	for _, id := range []string{"grok-4.5", "grok-build-0.1", "grok-imagine-image-quality"} {
 		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err != nil {
 			t.Fatalf("expected current model %s to be seeded after restart: %v", id, err)
 		}
 	}
-	for _, id := range []string{"grok-4.3", "grok-4.3-beta", "grok-build-0.1", "grok-imagine-image-pro"} {
+	for _, id := range []string{"grok-4.3", "grok-4.3-beta", "grok-imagine-image-pro"} {
 		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err == nil {
 			t.Fatalf("expected console legacy model %s to stay removed", id)
 		}

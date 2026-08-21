@@ -317,7 +317,9 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 		if len(images) > 0 {
 			return images, int(time.Since(startedAt) / time.Millisecond), nil
 		}
-		lastErr = fmt.Errorf("no image generated")
+		if lastErr == nil {
+			lastErr = fmt.Errorf("no image generated")
+		}
 	}
 	if lastErr != nil {
 		return nil, 0, lastErr

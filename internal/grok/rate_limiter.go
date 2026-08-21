@@ -95,8 +95,3 @@ func rateLimitEndpoint(ctx context.Context, endpointKey string) error {
 func appChatRateLimitEndpoint(ctx context.Context) error {
 	return rateLimitEndpoint(ctx, "grok.com")
 }
-
-// rateLimitsCheckEndpoint waits for the grok.com rate-limits rate limiter.
-func rateLimitsCheckEndpoint(ctx context.Context) error {
-	return rateLimitEndpoint(ctx, "grok.com/rate-limits")
-}

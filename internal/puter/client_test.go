@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/goccy/go-json"
 
@@ -102,31 +101,30 @@ func TestBuildRequestUsesNativeToolsAndToolHistory(t *testing.T) {
 	if !strings.Contains(string(rawTool), `"type":"function"`) || !strings.Contains(string(rawTool), `"parameters"`) {
 		t.Fatalf("normalized tool=%s", rawTool)
 	}
-	if len(built.Args.Messages) != 5 {
+	if len(built.Args.Messages) != 4 {
 		t.Fatalf("messages=%#v", built.Args.Messages)
 	}
-	if built.Args.Messages[0].Role != "system" || strings.Contains(built.Args.Messages[0].Content, "<tool_call>") || strings.Contains(built.Args.Messages[0].Content, "# Tools") {
-		t.Fatalf("system prompt still contains legacy tool protocol: %q", built.Args.Messages[0].Content)
+	if built.Args.Messages[0].Role != "user" || built.Args.Messages[0].Content != "read README" {
+		t.Fatalf("first message=%#v want verbatim user", built.Args.Messages[0])
 	}
-	if !strings.Contains(built.Args.Messages[0].Content, `C:\Code\Orchids-2api`) {
-		t.Fatalf("system prompt missing workdir: %q", built.Args.Messages[0].Content)
-	}
-	assistant := built.Args.Messages[2]
+	assistant := built.Args.Messages[1]
 	if assistant.Role != "assistant" || len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Function.Name != "Read" {
 		t.Fatalf("assistant native tool history=%#v", assistant)
 	}
 	if assistant.ToolCalls[0].Function.Arguments != `{"file_path":"README.md"}` {
 		t.Fatalf("assistant arguments=%q", assistant.ToolCalls[0].Function.Arguments)
 	}
-	if built.Args.Messages[3].Role != "tool" || built.Args.Messages[3].ToolCallID != "call_read" {
-		t.Fatalf("tool result message=%#v", built.Args.Messages[3])
+	if built.Args.Messages[2].Role != "tool" || built.Args.Messages[2].ToolCallID != "call_read" {
+		t.Fatalf("tool result message=%#v", built.Args.Messages[2])
 	}
-	if built.Args.Messages[4].Role != "user" || built.Args.Messages[4].Content != "summarize it" {
-		t.Fatalf("follow-up message=%#v", built.Args.Messages[4])
+	if built.Args.Messages[3].Role != "user" || built.Args.Messages[3].Content != "summarize it" {
+		t.Fatalf("follow-up message=%#v", built.Args.Messages[3])
 	}
 }
 
-func TestBuildRequestNoToolsOmitsNativeTools(t *testing.T) {
+func TestBuildRequestNoToolsOmitsTools(t *testing.T) {
+	// NoTools is protocol framing: tools are omitted, but no instruction text is
+	// injected — the client's content passes through verbatim.
 	client := NewFromAccount(&store.Account{ClientCookie: "puter-token"}, nil)
 	built, err := client.buildRequest(upstream.UpstreamRequest{
 		Model:    "claude-opus-5",
@@ -140,8 +138,63 @@ func TestBuildRequestNoToolsOmitsNativeTools(t *testing.T) {
 	if len(built.Args.Tools) != 0 {
 		t.Fatalf("tools=%#v want omitted", built.Args.Tools)
 	}
-	if !strings.Contains(built.Args.Messages[0].Content, "must not make any tool calls") {
-		t.Fatalf("missing no-tools instruction: %q", built.Args.Messages[0].Content)
+	if len(built.Args.Messages) != 1 || built.Args.Messages[0].Role != "user" {
+		t.Fatalf("messages=%#v want only the user message", built.Args.Messages)
+	}
+	if strings.Contains(built.Args.Messages[0].Content, "must not make any tool calls") {
+		t.Fatalf("unexpected injected instruction: %q", built.Args.Messages[0].Content)
+	}
+}
+
+func TestBuildRequestPreservesContentVerbatimByDefault(t *testing.T) {
+	// Fidelity default (nil config): system items pass through verbatim as
+	// individual system messages — no current-date/workdir/noTools injection.
+	client := NewFromAccount(&store.Account{ClientCookie: "puter-token"}, nil)
+	req := upstream.UpstreamRequest{
+		Model:   "claude-opus-5",
+		Workdir: `C:\Code\Orchids-2api`,
+		NoTools: false,
+		System: []prompt.SystemItem{
+			{Type: "text", Text: "x-anthropic-billing-header: cc_version=2.1.85.351; cc_entrypoint=cli; cch=5e896;"},
+			{Type: "text", Text: "You are Claude Code, Anthropic's official CLI for Claude."},
+			{Type: "text", Text: "cc_entrypoint=claude-code; keep=this"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "<system-reminder>\nToday's date is 2026-03-27.\n</system-reminder> 帮我添加"}},
+			{Role: "assistant", Content: prompt.MessageContent{Text: "好的。"}},
+		},
+	}
+
+	built, err := client.buildRequest(req, false)
+	if err != nil {
+		t.Fatalf("buildRequest() error=%v", err)
+	}
+
+	if len(built.Args.Messages) != 5 {
+		t.Fatalf("messages=%#v want 3 system + 2 chat", built.Args.Messages)
+	}
+	wantSystem := []string{
+		"x-anthropic-billing-header: cc_version=2.1.85.351; cc_entrypoint=cli; cch=5e896;",
+		"You are Claude Code, Anthropic's official CLI for Claude.",
+		"cc_entrypoint=claude-code; keep=this",
+	}
+	for i, want := range wantSystem {
+		if built.Args.Messages[i].Role != "system" || built.Args.Messages[i].Content != want {
+			t.Fatalf("system[%d]=%#v want verbatim %q", i, built.Args.Messages[i], want)
+		}
+	}
+	for _, msg := range built.Args.Messages {
+		if strings.Contains(msg.Content, "Current date:") ||
+			strings.Contains(msg.Content, "working directory is") ||
+			strings.Contains(msg.Content, "must not make any tool calls") {
+			t.Fatalf("unexpected injected content: %q", msg.Content)
+		}
+	}
+	if built.Args.Messages[3].Role != "user" || built.Args.Messages[3].Content != "<system-reminder>\nToday's date is 2026-03-27.\n</system-reminder> 帮我添加" {
+		t.Fatalf("user message not preserved verbatim: %#v", built.Args.Messages[3])
+	}
+	if built.Args.Messages[4].Role != "assistant" || built.Args.Messages[4].Content != "好的。" {
+		t.Fatalf("assistant message not preserved verbatim: %#v", built.Args.Messages[4])
 	}
 }
 
@@ -309,13 +362,6 @@ func TestExtractAuthTokenAcceptsCookieOrRawToken(t *testing.T) {
 		if got := extractAuthToken(tt.raw); got != tt.want {
 			t.Fatalf("extractAuthToken(%q)=%q want=%q", tt.raw, got, tt.want)
 		}
-	}
-}
-
-func TestCurrentDateInstructionUsesProvidedDate(t *testing.T) {
-	got := currentDateInstruction(time.Date(2026, time.August, 12, 21, 0, 0, 0, time.FixedZone("CST", 8*60*60)))
-	if !strings.Contains(got, "2026-08-12") || !strings.Contains(got, "do not assume an earlier year") {
-		t.Fatalf("currentDateInstruction()=%q", got)
 	}
 }
 
