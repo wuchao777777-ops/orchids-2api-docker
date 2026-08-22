@@ -468,6 +468,13 @@ func (c *Client) appChatImagePayload(spec ModelSpec, prompt, _ string, _ int) ma
 }
 
 func appChatModeID(spec ModelSpec) string {
+	return resolveModeID(spec, strings.TrimSpace(spec.ID))
+}
+
+// resolveModeID maps ModelSpec mode fields to the upstream mode/model name.
+// fallback is used when ModeID, ModelMode, and UpstreamModel are all empty
+// (app-chat falls back to the public model ID; rate-limit probes fall back to "fast").
+func resolveModeID(spec ModelSpec, fallback string) string {
 	if modeID := strings.TrimSpace(spec.ModeID); modeID != "" {
 		return modeID
 	}
@@ -490,7 +497,7 @@ func appChatModeID(spec ModelSpec) string {
 	if upstream := strings.TrimSpace(spec.UpstreamModel); upstream != "" {
 		return upstream
 	}
-	return strings.TrimSpace(spec.ID)
+	return fallback
 }
 
 func appChatModelTier(spec ModelSpec) string {
@@ -715,13 +722,8 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 		}
 
 		lastStatus = resp.StatusCode
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamBodyBytes+1))
-		if len(raw) > maxUpstreamBodyBytes {
-			raw = raw[:maxUpstreamBodyBytes]
-		}
-		_ = resp.Body.Close()
+		raw, headerCopy := readBoundedResponse(resp)
 		lastBody = string(raw)
-		headerCopy := resp.Header.Clone()
 
 		if lastStatus == http.StatusTooManyRequests {
 			if meta := noteTeamRateLimit(lastStatus, resp.Header, raw); meta != nil {
@@ -1033,30 +1035,7 @@ func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpe
 }
 
 func rateLimitModelName(spec ModelSpec) string {
-	if modeID := strings.TrimSpace(spec.ModeID); modeID != "" {
-		return modeID
-	}
-	mode := strings.TrimSpace(spec.ModelMode)
-	switch mode {
-	case "MODEL_MODE_FAST":
-		return "fast"
-	case "MODEL_MODE_AUTO":
-		return "auto"
-	case "MODEL_MODE_EXPERT":
-		return "expert"
-	case "MODEL_MODE_HEAVY":
-		return "heavy"
-	case "MODEL_MODE_GROK_4_3":
-		return "grok-420-computer-use-sa"
-	}
-	if mode != "" {
-		return mode
-	}
-	upstream := strings.TrimSpace(spec.UpstreamModel)
-	if upstream != "" {
-		return upstream
-	}
-	return "fast"
+	return resolveModeID(spec, "fast")
 }
 
 func (c *Client) uploadFile(ctx context.Context, token, fileName, fileMimeType, contentBase64 string) (string, string, error) {

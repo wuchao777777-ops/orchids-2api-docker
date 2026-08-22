@@ -245,8 +245,7 @@ func (h *Handler) streamVideoChatCompletion(
 		emit(fmt.Sprintf("正在生成视频中，当前进度%d%%\n", progress), "", false, nil)
 	})
 	if err != nil {
-		writeSSEError(w, err.Error(), "server_error", "video_generation_failed")
-		writeSSE(w, flusher, "", []byte("[DONE]"))
+		writeSSECodedError(w, flusher, err.Error(), "server_error", "video_generation_failed")
 		return
 	}
 	content := h.videoOutputURL(ctx, sess.token, artifact.URL, publicBase)

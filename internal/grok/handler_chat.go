@@ -1139,12 +1139,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	toolStreamMode := toolCallsEnabled(tools, toolChoice)
 	toolParser := newToolCallParser(tools, toolChoice)
 	finalSnapshotEnabled := !toolStreamMode && !spec.IsVideo
-	emittedToolCalls := false
 	toolCallIndex := 0
-	toolStreamState := "text"
-	toolStreamBuffer := ""
-	toolStreamPartial := ""
-	toolStreamSawEvents := false
+	var toolPump *toolStreamPump
+	if toolStreamMode {
+		toolPump = newToolStreamPump(toolParser)
+	}
 	finalSnapshotMarkdown := make([]string, 0, 4)
 
 	var mf *streamMarkupFilter
@@ -1281,88 +1280,21 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		sentAny = true
 	}
 
+	onToolStreamText := func(s string) {
+		emitChunk("", s, "", false)
+	}
+	onToolStreamCall := func(toolCall map[string]interface{}) {
+		emitToolCallsChunk("", []map[string]interface{}{toolCall}, "", false)
+	}
 	handleToolStreamChunk := func(chunk string) {
-		if !toolStreamMode || chunk == "" {
-			return
-		}
-		const startTag = "<tool_call>"
-		const endTag = "</tool_call>"
-		data := toolStreamPartial + chunk
-		toolStreamPartial = ""
-
-		for data != "" {
-			if toolStreamState == "text" {
-				startIdx := strings.Index(data, startTag)
-				if startIdx < 0 {
-					keep := suffixPrefixOverlap(data, startTag)
-					emit := data
-					if keep > 0 {
-						emit = data[:len(data)-keep]
-						toolStreamPartial = data[len(data)-keep:]
-					}
-					if strings.TrimSpace(emit) != "" {
-						emitChunk("", emit, "", false)
-						toolStreamSawEvents = true
-					}
-					break
-				}
-				if before := data[:startIdx]; strings.TrimSpace(before) != "" {
-					emitChunk("", before, "", false)
-					toolStreamSawEvents = true
-				}
-				data = data[startIdx+len(startTag):]
-				toolStreamState = "tool"
-				continue
-			}
-
-			endIdx := strings.Index(data, endTag)
-			if endIdx < 0 {
-				keep := suffixPrefixOverlap(data, endTag)
-				appendPart := data
-				if keep > 0 {
-					appendPart = data[:len(data)-keep]
-					toolStreamPartial = data[len(data)-keep:]
-				}
-				toolStreamBuffer += appendPart
-				break
-			}
-
-			toolStreamBuffer += data[:endIdx]
-			if toolCall := toolParser.parseBlock(toolStreamBuffer); toolCall != nil {
-				emitToolCallsChunk("", []map[string]interface{}{toolCall}, "", false)
-				emittedToolCalls = true
-				toolStreamSawEvents = true
-			}
-			toolStreamBuffer = ""
-			data = data[endIdx+len(endTag):]
-			toolStreamState = "text"
+		if toolPump != nil {
+			toolPump.feed(chunk, onToolStreamText, onToolStreamCall)
 		}
 	}
-
 	flushToolStreamChunk := func() {
-		if !toolStreamMode {
-			return
+		if toolPump != nil {
+			toolPump.flush(onToolStreamText, onToolStreamCall)
 		}
-		if toolStreamState == "text" {
-			if strings.TrimSpace(toolStreamPartial) != "" {
-				emitChunk("", toolStreamPartial, "", false)
-				toolStreamSawEvents = true
-			}
-			toolStreamPartial = ""
-			return
-		}
-		raw := toolStreamBuffer + toolStreamPartial
-		if toolCall := toolParser.parseBlock(raw); toolCall != nil {
-			emitToolCallsChunk("", []map[string]interface{}{toolCall}, "", false)
-			emittedToolCalls = true
-			toolStreamSawEvents = true
-		} else if strings.TrimSpace(raw) != "" {
-			emitChunk("", "<tool_call>"+raw, "", false)
-			toolStreamSawEvents = true
-		}
-		toolStreamBuffer = ""
-		toolStreamPartial = ""
-		toolStreamState = "text"
 	}
 
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
@@ -1413,11 +1345,13 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 					}
 				}
 				pendingModelMessage = msg
-				if toolStreamMode && !toolStreamSawEvents && !emittedToolCalls {
+				if toolStreamMode && toolPump != nil && !toolPump.SawEvents && !toolPump.EmittedToolCalls {
 					textContent, toolCalls := toolParser.parseCalls(strings.TrimSpace(msg))
 					if len(toolCalls) > 0 {
 						emitToolCallsChunk(textContent, toolCalls, "", false)
-						emittedToolCalls = true
+						if toolPump != nil {
+							toolPump.EmittedToolCalls = true
+						}
 						emittedModelMessage = msg
 					}
 				}
@@ -1547,7 +1481,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 
 	if toolStreamMode {
 		flushToolStreamChunk()
-		if emittedToolCalls {
+		if toolPump != nil && toolPump.EmittedToolCalls {
 			finalUsage = buildChatUsagePayload(req, strings.TrimSpace(finalBufferedText), []map[string]interface{}{{"type": "function"}})
 			emitChunk("", "", "tool_calls", true)
 			writeSSELog(w, flusher, logger, []byte("[DONE]"))

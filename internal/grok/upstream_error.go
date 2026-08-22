@@ -2,6 +2,7 @@ package grok
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -91,6 +92,20 @@ func boundedUpstreamBody(body []byte) string {
 		return string(body[:maxUpstreamBodyBytes])
 	}
 	return string(body)
+}
+
+// readBoundedResponse drains the response body up to maxUpstreamBodyBytes,
+// clones the headers (so classification still works after the body is closed),
+// and closes the body. It returns the bounded body and the header copy for
+// building a typed upstream error. Used on every non-OK response path.
+func readBoundedResponse(resp *http.Response) ([]byte, http.Header) {
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamBodyBytes+1))
+	if len(raw) > maxUpstreamBodyBytes {
+		raw = raw[:maxUpstreamBodyBytes]
+	}
+	headerCopy := resp.Header.Clone()
+	_ = resp.Body.Close()
+	return raw, headerCopy
 }
 
 // upstreamErrorBody extracts the body portion of a legacy plain error's text.

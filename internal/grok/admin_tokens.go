@@ -260,8 +260,7 @@ func (h *Handler) HandleAdminTokens(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleAdminTokensList(w http.ResponseWriter, r *http.Request) {
-	if h == nil || h.lb == nil || h.lb.Store == nil {
-		http.Error(w, "store not configured", http.StatusServiceUnavailable)
+	if !requireGrokStore(w, h) {
 		return
 	}
 
@@ -317,8 +316,7 @@ func (h *Handler) handleAdminTokensList(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) handleAdminTokensUpdate(w http.ResponseWriter, r *http.Request) {
-	if h == nil || h.lb == nil || h.lb.Store == nil {
-		http.Error(w, "store not configured", http.StatusServiceUnavailable)
+	if !requireGrokStore(w, h) {
 		return
 	}
 

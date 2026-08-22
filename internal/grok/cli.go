@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -134,12 +133,7 @@ func (c *CLIClient) doResponses(ctx context.Context, acc *store.Account, payload
 		if resp.StatusCode == http.StatusOK {
 			return resp, nil
 		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamBodyBytes+1))
-		if len(raw) > maxUpstreamBodyBytes {
-			raw = raw[:maxUpstreamBodyBytes]
-		}
-		headerCopy := resp.Header.Clone()
-		resp.Body.Close()
+		raw, headerCopy := readBoundedResponse(resp)
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			noteTeamRateLimit(resp.StatusCode, resp.Header, raw)
@@ -239,12 +233,7 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 			_ = resp.Body.Close()
 			return "", nil
 		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamBodyBytes+1))
-		if len(raw) > maxUpstreamBodyBytes {
-			raw = raw[:maxUpstreamBodyBytes]
-		}
-		headerCopy := resp.Header.Clone()
-		_ = resp.Body.Close()
+		raw, headerCopy := readBoundedResponse(resp)
 
 		kind := ClassifyUpstreamResponse(resp.StatusCode, resp.Header, raw)
 		if kind == UpstreamErrorCloudflareChallenge && c.egress != nil && c.egress.Enabled() && !challengeRetried {

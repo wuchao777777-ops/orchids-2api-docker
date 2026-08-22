@@ -701,8 +701,7 @@ func (h *Handler) HandleAdminCacheOnlineClear(w http.ResponseWriter, r *http.Req
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if h == nil || h.client == nil {
-		http.Error(w, "grok client not configured", http.StatusServiceUnavailable)
+	if !requireGrokClient(w, h) {
 		return
 	}
 
@@ -830,8 +829,7 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if h == nil || h.client == nil {
-		http.Error(w, "grok client not configured", http.StatusServiceUnavailable)
+	if !requireGrokClient(w, h) {
 		return
 	}
 
@@ -949,8 +947,7 @@ func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *htt
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if h == nil || h.client == nil {
-		http.Error(w, "grok client not configured", http.StatusServiceUnavailable)
+	if !requireGrokClient(w, h) {
 		return
 	}
 

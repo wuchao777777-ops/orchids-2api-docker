@@ -46,8 +46,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 
 	urls = normalizeGeneratedImageURLs(urls, n)
 	if len(urls) == 0 {
-		writeSSEError(w, "no image generated", "server_error", "no_image_generated")
-		writeSSE(w, flusher, "", []byte("[DONE]"))
+		writeSSECodedError(w, flusher, "no image generated", "server_error", "no_image_generated")
 		return
 	}
 
@@ -58,8 +57,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 			if field == "url" && !mustCacheImageURL(u) {
 				val = u
 			} else {
-				writeSSEError(w, "image cache failed: "+err.Error(), "server_error", "image_cache_failed")
-				writeSSE(w, flusher, "", []byte("[DONE]"))
+				writeSSECodedError(w, flusher, "image cache failed: "+err.Error(), "server_error", "image_cache_failed")
 				return
 			}
 		}

@@ -278,12 +278,7 @@ func (c *Client) doConsoleDPoPRequest(ctx context.Context, token, method, endpoi
 		if resp.StatusCode == http.StatusOK {
 			return resp, nil
 		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamBodyBytes+1))
-		if len(raw) > maxUpstreamBodyBytes {
-			raw = raw[:maxUpstreamBodyBytes]
-		}
-		headerCopy := resp.Header.Clone()
-		resp.Body.Close()
+		raw, headerCopy := readBoundedResponse(resp)
 		if resp.StatusCode == http.StatusTooManyRequests {
 			noteTeamRateLimit(resp.StatusCode, resp.Header, raw)
 		}

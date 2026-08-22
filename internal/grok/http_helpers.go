@@ -1,11 +1,20 @@
 package grok
 
 import (
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/debug"
+)
+
+var (
+	grokSSEEventPrefixBytes = []byte("event: ")
+	grokSSEDataPrefixBytes  = []byte("data: ")
+	grokSSENewlineBytes     = []byte("\n")
+	grokSSEFrameSuffixBytes = []byte("\n\n")
 )
 
 // requireMethod writes the standard 405 response and returns false when the
@@ -39,6 +48,30 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, v interface{}) bool 
 	return true
 }
 
+// requireGrokStore writes the standard 503 response and returns false when the
+// handler has no account store. Admin handlers use it as:
+//
+//	if !requireGrokStore(w, h) {
+//		return
+//	}
+func requireGrokStore(w http.ResponseWriter, h *Handler) bool {
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		http.Error(w, "store not configured", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
+// requireGrokClient writes the standard 503 response and returns false when
+// the handler has no grok client.
+func requireGrokClient(w http.ResponseWriter, h *Handler) bool {
+	if h == nil || h.client == nil {
+		http.Error(w, "grok client not configured", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
 // streamResponseHeaders writes the standard SSE headers and returns the
 // response flusher (possibly nil).
 func streamResponseHeaders(w http.ResponseWriter) http.Flusher {
@@ -47,6 +80,39 @@ func streamResponseHeaders(w http.ResponseWriter) http.Flusher {
 	w.Header().Set("Connection", "keep-alive")
 	flusher, _ := w.(http.Flusher)
 	return flusher
+}
+
+// writeSSEEventName writes an SSE event name, preferring StringWriter when available.
+func writeSSEEventName(w http.ResponseWriter, event string) {
+	if sw, ok := interface{}(w).(io.StringWriter); ok {
+		_, _ = sw.WriteString(event)
+		return
+	}
+	_, _ = w.Write([]byte(event))
+}
+
+// writeSSEBytes sends a raw SSE frame without flushing.
+func writeSSEBytes(w http.ResponseWriter, event string, data []byte) {
+	if event != "" {
+		_, _ = w.Write(grokSSEEventPrefixBytes)
+		writeSSEEventName(w, event)
+		_, _ = w.Write(grokSSENewlineBytes)
+	}
+	_, _ = w.Write(grokSSEDataPrefixBytes)
+	_, _ = w.Write(data)
+	_, _ = w.Write(grokSSEFrameSuffixBytes)
+}
+
+// writeSSEError sends an OpenAI-style SSE error event (no flush, no [DONE]).
+func writeSSEError(w http.ResponseWriter, message, errType, code string) {
+	payload := map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": strings.TrimSpace(message),
+			"type":    strings.TrimSpace(errType),
+			"code":    strings.TrimSpace(code),
+		},
+	}
+	writeSSEBytes(w, "error", encodeJSONBytes(payload))
 }
 
 // writeSSE sends an SSE frame and flushes when the writer supports it.
@@ -80,4 +146,11 @@ func writeSSEStreamError(w http.ResponseWriter, flusher http.Flusher, logger *de
 	if flusher != nil {
 		flusher.Flush()
 	}
+}
+
+// writeSSECodedError sends a typed SSE error frame followed by [DONE] and flushes.
+// Use this when the error code is not the generic stream_error.
+func writeSSECodedError(w http.ResponseWriter, flusher http.Flusher, message, errType, code string) {
+	writeSSEError(w, message, errType, code)
+	writeSSE(w, flusher, "", []byte("[DONE]"))
 }

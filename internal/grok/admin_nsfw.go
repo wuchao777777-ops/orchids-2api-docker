@@ -444,8 +444,7 @@ func (h *Handler) HandleAdminNSFWEnable(w http.ResponseWriter, r *http.Request) 
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if h == nil || h.lb == nil || h.lb.Store == nil {
-		http.Error(w, "store not configured", http.StatusServiceUnavailable)
+	if !requireGrokStore(w, h) {
 		return
 	}
 	req, targets, tokenAccounts, err := h.resolveNSFWTargets(r)
@@ -475,8 +474,7 @@ func (h *Handler) HandleAdminNSFWEnableAsync(w http.ResponseWriter, r *http.Requ
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if h == nil || h.lb == nil || h.lb.Store == nil {
-		http.Error(w, "store not configured", http.StatusServiceUnavailable)
+	if !requireGrokStore(w, h) {
 		return
 	}
 	req, targets, tokenAccounts, err := h.resolveNSFWTargets(r)

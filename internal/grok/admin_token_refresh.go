@@ -196,8 +196,7 @@ func (h *Handler) HandleAdminTokensRefresh(w http.ResponseWriter, r *http.Reques
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if h == nil || h.lb == nil || h.lb.Store == nil {
-		http.Error(w, "store not configured", http.StatusServiceUnavailable)
+	if !requireGrokStore(w, h) {
 		return
 	}
 	req, tokens, err := h.resolveTokenRefreshRequest(r)
@@ -225,8 +224,7 @@ func (h *Handler) HandleAdminTokensRefreshAsync(w http.ResponseWriter, r *http.R
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if h == nil || h.lb == nil || h.lb.Store == nil {
-		http.Error(w, "store not configured", http.StatusServiceUnavailable)
+	if !requireGrokStore(w, h) {
 		return
 	}
 	req, tokens, err := h.resolveTokenRefreshRequest(r)
