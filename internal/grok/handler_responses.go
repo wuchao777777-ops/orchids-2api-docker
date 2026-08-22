@@ -329,11 +329,15 @@ func normalizeResponsesMessageContent(content interface{}) interface{} {
 		case "input_text", "output_text":
 			out = append(out, map[string]interface{}{"type": "text", "text": fmt.Sprint(part["text"])})
 		case "input_image", "image":
-			if url := responsesImageURL(part); url != "" {
+			if url := responsesPartURL(part, []string{"image_url", "source"}, []string{"url"}); url != "" {
 				out = append(out, map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": url}})
 			}
 		case "input_file", "file":
-			if url := responsesFileURL(part); url != "" {
+			url := responsesPartURL(part, []string{"file", "file_url", "source"}, []string{"url", "file_url", "data"})
+			if url == "" {
+				url = parseLooseStringAny(part["file_id"])
+			}
+			if url != "" {
 				out = append(out, map[string]interface{}{"type": "file", "file": map[string]interface{}{"url": url}})
 			}
 		default:
@@ -341,10 +345,6 @@ func normalizeResponsesMessageContent(content interface{}) interface{} {
 		}
 	}
 	return out
-}
-
-func responsesImageURL(part map[string]interface{}) string {
-	return responsesPartURL(part, []string{"image_url", "source"}, []string{"url"})
 }
 
 func responsesPartURL(part map[string]interface{}, keys, nestedKeys []string) string {
@@ -362,16 +362,6 @@ func responsesPartURL(part map[string]interface{}, keys, nestedKeys []string) st
 				}
 			}
 		}
-	}
-	return ""
-}
-
-func responsesFileURL(part map[string]interface{}) string {
-	if url := responsesPartURL(part, []string{"file", "file_url", "source"}, []string{"url", "file_url", "data"}); url != "" {
-		return url
-	}
-	if s := parseLooseStringAny(part["file_id"]); s != "" {
-		return s
 	}
 	return ""
 }

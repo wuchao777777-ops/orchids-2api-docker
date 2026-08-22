@@ -98,12 +98,6 @@ func deletePublicVideoSessions(taskIDs []string) int {
 	return removed
 }
 
-func validatePublicImageURL(imageURL string) bool {
-	imageURL = strings.TrimSpace(imageURL)
-	return imageURL == "" || strings.HasPrefix(imageURL, "data:") ||
-		strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://")
-}
-
 func validateReasoningEffortValue(raw string) bool {
 	value := strings.ToLower(strings.TrimSpace(raw))
 	if value == "" {
@@ -177,7 +171,8 @@ func (h *Handler) HandlePublicVideoStart(w http.ResponseWriter, r *http.Request)
 	}
 
 	imageURL := strings.TrimSpace(req.ImageURL)
-	if !validatePublicImageURL(imageURL) {
+	if imageURL != "" && !strings.HasPrefix(imageURL, "data:") &&
+		!strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
 		http.Error(w, "image_url must be a URL or data URI (data:<mime>;base64,...)", http.StatusBadRequest)
 		return
 	}

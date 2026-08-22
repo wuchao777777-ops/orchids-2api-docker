@@ -164,8 +164,5 @@ func proxyFuncForNode(node Node) func(*http.Request) (*url.URL, error) {
 	if node.Proxy == nil {
 		return nil
 	}
-	proxy := node.Proxy
-	return func(*http.Request) (*url.URL, error) {
-		return proxy, nil
-	}
+	return http.ProxyURL(node.Proxy)
 }

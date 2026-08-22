@@ -273,12 +273,6 @@ func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason st
 	}
 }
 
-func upstreamMessageHandler(sh *streamHandler) func(upstream.SSEMessage) {
-	return func(msg upstream.SSEMessage) {
-		sh.handleMessage(msg)
-	}
-}
-
 func (h *Handler) computeSemanticRequestHash(r *http.Request, req ClaudeRequest) string {
 	if lastUserIsToolResultFollowup(req.Messages) {
 		return ""
@@ -1094,7 +1088,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
 			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
 		}
-		primaryHandler := upstreamMessageHandler(sh)
+		primaryHandler := sh.handleMessage
 		var attempt int
 		for {
 			sh.resetRoundState()
@@ -1252,9 +1246,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			if !errClass.Retryable {
 				slog.Error("Aborting retries for non-retriable error", "error", err, "category", errClass.Category)
 				if errClass.Category == "auth_blocked" || errClass.Category == "auth" {
-					sh.InjectAuthError(errClass.Category, errStr)
+					sh.InjectAuthError(errStr)
 				} else if errClass.Category != "canceled" {
-					sh.InjectUpstreamError(errStr)
+					sh.InjectErrorText("Injecting upstream error to client", fmt.Sprintf("Request failed: %s", strings.TrimSpace(errStr)))
 				}
 				if errClass.Category == "canceled" {
 					sh.finishResponse("end_turn")
@@ -1273,9 +1267,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					slog.Error("Account request failed, max retries reached", "account", currentAccount.Name)
 				}
 				if errClass.Category == "auth" || errClass.Category == "auth_blocked" {
-					sh.InjectAuthError(errClass.Category, errStr)
+					sh.InjectAuthError(errStr)
 				} else {
-					sh.InjectRetryExhaustedError(errStr)
+					sh.InjectErrorText("Injecting retry exhausted error to client", fmt.Sprintf("Request failed: retries exhausted. Last error: %s", errStr))
 				}
 				sh.finishResponse("end_turn")
 				return

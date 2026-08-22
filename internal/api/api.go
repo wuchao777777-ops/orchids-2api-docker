@@ -111,7 +111,7 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	acc.ClientCookie = credential
 
 	client := grok.New(cfg)
-	if modelID := normalizeGrokVerifyModelID(acc.AgentMode); modelID != "" && modelID != acc.AgentMode {
+	if modelID := normalizeGrokVerifyModelID(acc.AgentMode); modelID != acc.AgentMode {
 		acc.AgentMode = modelID
 	}
 
@@ -575,8 +575,8 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 
 	if strings.EqualFold(acc.AccountType, "grok") {
 		if verifyErr := verifyGrokAccount(ctx, acc, a.config.Load(), a.store); verifyErr != nil {
-			if strings.Contains(strings.ToLower(verifyErr.Error()), "missing sso token") ||
-				strings.Contains(strings.ToLower(verifyErr.Error()), "missing oauth token") {
+			message := strings.ToLower(verifyErr.Error())
+			if strings.Contains(message, "missing sso token") || strings.Contains(message, "missing oauth token") {
 				return "", http.StatusBadRequest, fmt.Errorf("failed to verify grok account: %w", verifyErr)
 			}
 			status := apperrors.ClassifyAccountStatus(verifyErr.Error())
@@ -1739,12 +1739,13 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 	if acc == nil {
 		return
 	}
-	if strings.TrimSpace(status) == "" {
+	status = strings.TrimSpace(status)
+	if status == "" {
 		acc.StatusCode = ""
 		acc.LastAttempt = time.Time{}
 		return
 	}
-	acc.StatusCode = strings.TrimSpace(status)
+	acc.StatusCode = status
 	acc.LastAttempt = time.Now()
 }
 

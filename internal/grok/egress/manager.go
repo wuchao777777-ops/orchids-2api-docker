@@ -165,7 +165,11 @@ func (m *Manager) pickNode(scope, affinity string) *Node {
 	}
 
 	// Sticky affinity: prefer the node this affinity last used when healthy.
-	stickyKey := "scope:" + normalizedScope + ":" + nodeNameForAffinity(affinity)
+	stickyAffinity := affinity
+	if stickyAffinity == "" {
+		stickyAffinity = "default"
+	}
+	stickyKey := "scope:" + normalizedScope + ":" + stickyAffinity
 	if prev := m.sticky[stickyKey]; prev != "" {
 		for i := range candidates {
 			if candidates[i].Name == prev {
@@ -205,13 +209,6 @@ func (m *Manager) degradedLocked(name string, now time.Time) bool {
 		return false
 	}
 	return now.Before(m.unhealthy[name])
-}
-
-func nodeNameForAffinity(affinity string) string {
-	if affinity == "" {
-		return "default"
-	}
-	return affinity
 }
 
 func (m *Manager) fingerprint(node Node, affinity string) string {

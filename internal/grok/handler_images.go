@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -201,7 +202,7 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 		count := req.N
 		prompt := strings.TrimSpace(req.Prompt)
 		if len(promptVariants) > 0 {
-			prompt = promptVariants[promptVariantIndex(i, promptVariants)]
+			prompt = promptVariants[min(i, len(promptVariants)-1)]
 		}
 		payload := h.client.appChatImagePayload(spec, prompt, req.Size, count)
 		ensureImageNSFW(payload)
@@ -241,7 +242,9 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 				return nil, err
 			}
 			if sess.acc != nil && sess.acc.ID != 0 {
-				excludedAccountIDs = appendUniqueInt64(excludedAccountIDs, sess.acc.ID)
+				if !slices.Contains(excludedAccountIDs, sess.acc.ID) {
+					excludedAccountIDs = append(excludedAccountIDs, sess.acc.ID)
+				}
 				sess.Close()
 				next, switchErr := h.openChatAccountSessionExcludingWithPools(ctx, excludedAccountIDs, sess.poolCandidates)
 				if switchErr != nil {
@@ -281,25 +284,6 @@ func (h *Handler) doAppChatImageRequest(ctx context.Context, sess *chatAccountSe
 		return h.doAutoSwitchRequest(ctx, sess, payload, nil, (*Client).doAppChatCreateAndRespond)
 	}
 	return h.doSingleAccountRequest(ctx, sess, *payload, markAllGrokAccountStatuses, (*Client).doAppChatCreateAndRespond)
-}
-
-func appendUniqueInt64(values []int64, value int64) []int64 {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
-
-func promptVariantIndex(i int, variants []string) int {
-	if len(variants) <= 1 || i <= 0 {
-		return 0
-	}
-	if i >= len(variants) {
-		return len(variants) - 1
-	}
-	return i
 }
 
 func grokAppChatImagePrompts(prompt string) []string {

@@ -3189,7 +3189,7 @@ func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
 	}
 }
 
-func (h *streamHandler) InjectAuthError(category, errStr string) {
+func (h *streamHandler) InjectAuthError(errStr string) {
 	var errorMsg string
 	switch {
 	case strings.Contains(errStr, "401"):
@@ -3200,16 +3200,6 @@ func (h *streamHandler) InjectAuthError(category, errStr string) {
 		errorMsg = fmt.Sprintf("Request Failed: %s. Please check your account status.", errStr)
 	}
 	h.InjectErrorText("Injecting auth error to client", errorMsg)
-}
-
-func (h *streamHandler) InjectRetryExhaustedError(lastErr string) {
-	errorMsg := fmt.Sprintf("Request failed: retries exhausted. Last error: %s", lastErr)
-	h.InjectErrorText("Injecting retry exhausted error to client", errorMsg)
-}
-
-func (h *streamHandler) InjectUpstreamError(errStr string) {
-	errorMsg := fmt.Sprintf("Request failed: %s", strings.TrimSpace(errStr))
-	h.InjectErrorText("Injecting upstream error to client", errorMsg)
 }
 
 func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr error) {

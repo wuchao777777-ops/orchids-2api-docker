@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"orchids-api/internal/auth"
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/grok"
@@ -361,26 +360,6 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				return
 			case <-ticker.C:
 				refreshAccounts()
-			}
-		}
-	}()
-}
-
-func startAuthCleanupLoop(ctx context.Context) {
-	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				slog.Error("Panic in auth cleanup loop", "error", err)
-			}
-		}()
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				auth.CleanupExpiredSessions()
 			}
 		}
 	}()

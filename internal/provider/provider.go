@@ -30,14 +30,10 @@ func NewRegistry() *Registry {
 
 // Register adds a provider under the given name (case-insensitive).
 func (r *Registry) Register(name string, p Provider) {
-	r.providers[normalize(name)] = p
+	r.providers[strings.ToLower(name)] = p
 }
 
 // Get retrieves a provider by name. Returns nil if not found.
 func (r *Registry) Get(name string) Provider {
-	return r.providers[normalize(name)]
-}
-
-func normalize(s string) string {
-	return strings.ToLower(s)
+	return r.providers[strings.ToLower(name)]
 }

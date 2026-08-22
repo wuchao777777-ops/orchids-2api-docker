@@ -20,15 +20,6 @@ type videoSegmentResult struct {
 	VideoPostID string
 }
 
-func videoConfigForSegment(cfg *VideoConfig, length int) *VideoConfig {
-	if cfg == nil {
-		cfg = &VideoConfig{}
-	}
-	cp := *cfg
-	cp.VideoLength = length
-	return &cp
-}
-
 func (h *Handler) serveVideoChatCompletion(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -146,21 +137,22 @@ func (h *Handler) runVideoSegments(
 	var artifact videoSegmentResult
 
 	for idx, length := range segments {
-		segmentCfg := videoConfigForSegment(cfg, length)
+		segmentCfg := *cfg
+		segmentCfg.VideoLength = length
 		var payload map[string]interface{}
 		var rebuild func(string) (map[string]interface{}, error)
 		if idx == 0 {
-			payload, err = h.buildVideoCreatePayload(ctx, sess.token, spec, prompt, attachments, segmentCfg)
+			payload, err = h.buildVideoCreatePayload(ctx, sess.token, spec, prompt, attachments, &segmentCfg)
 			if err != nil {
 				return videoSegmentResult{}, err
 			}
 			rebuild = func(token string) (map[string]interface{}, error) {
-				return h.buildVideoCreatePayload(ctx, token, spec, prompt, attachments, segmentCfg)
+				return h.buildVideoCreatePayload(ctx, token, spec, prompt, attachments, &segmentCfg)
 			}
 		} else {
-			payload = h.buildVideoExtendPayload(spec, prompt, parentPostID, extendPostID, segmentCfg, length, elapsed)
+			payload = h.buildVideoExtendPayload(spec, prompt, parentPostID, extendPostID, &segmentCfg, length, elapsed)
 			rebuild = func(string) (map[string]interface{}, error) {
-				return h.buildVideoExtendPayload(spec, prompt, parentPostID, extendPostID, segmentCfg, length, elapsed), nil
+				return h.buildVideoExtendPayload(spec, prompt, parentPostID, extendPostID, &segmentCfg, length, elapsed), nil
 			}
 		}
 
@@ -188,13 +180,7 @@ func (h *Handler) runVideoSegments(
 }
 
 func clampProgress(progress int) int {
-	if progress < 0 {
-		return 0
-	}
-	if progress > 100 {
-		return 100
-	}
-	return progress
+	return min(max(progress, 0), 100)
 }
 
 func (h *Handler) videoOutputURL(ctx context.Context, token, rawURL, publicBase string) string {

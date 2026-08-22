@@ -175,20 +175,6 @@ func uploadFileHeaderToDataURI(fh *multipart.FileHeader) (string, error) {
 	return dataURIFromBytes(mime, data), nil
 }
 
-func videoConfigFromVideosRequest(req VideosRequest) (*VideoConfig, error) {
-	cfg := &VideoConfig{
-		AspectRatio:    "",
-		VideoLength:    req.Seconds,
-		ResolutionName: req.ResolutionName,
-		Preset:         req.Preset,
-		Size:           req.Size,
-	}
-	if strings.TrimSpace(cfg.Size) == "" {
-		cfg.Size = "720x1280"
-	}
-	return validateVideoConfig(cfg)
-}
-
 func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -213,7 +199,12 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
 		return
 	}
-	cfg, err := videoConfigFromVideosRequest(req)
+	cfg, err := validateVideoConfig(&VideoConfig{
+		VideoLength:    req.Seconds,
+		ResolutionName: req.ResolutionName,
+		Preset:         req.Preset,
+		Size:           firstNonEmpty(req.Size, "720x1280"),
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

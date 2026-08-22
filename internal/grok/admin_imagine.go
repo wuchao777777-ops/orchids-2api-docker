@@ -72,12 +72,6 @@ func normalizeImagineImageURL(raw string) string {
 	return u
 }
 
-func isLocalImagineImageURL(raw string) bool {
-	u := normalizeImagineImageURL(raw)
-	mediaType, fileName, ok := parseFilesPath(u)
-	return ok && mediaType == "image" && strings.TrimSpace(fileName) != ""
-}
-
 func cleanupImagineSessionsLocked(now time.Time) {
 	for id, session := range imagineSessions {
 		if now.Sub(session.CreatedAt) > imagineSessionTTL {
@@ -279,7 +273,8 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 				continue
 			}
 			val = normalizeImagineImageURL(val)
-			if isLocalImagineImageURL(val) {
+			mediaType, fileName, local := parseFilesPath(val)
+			if local && mediaType == "image" && strings.TrimSpace(fileName) != "" {
 				images = append(images, imagineImage{URL: val})
 			} else if strings.TrimSpace(ev.Blob) != "" {
 				images = append(images, imagineImage{B64: strings.TrimSpace(ev.Blob)})

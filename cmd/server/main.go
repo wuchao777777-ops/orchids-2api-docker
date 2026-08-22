@@ -165,7 +165,6 @@ func main() {
 	defer cancelBackground()
 
 	startTokenRefreshLoop(ctx, cfg, s, lb)
-	startAuthCleanupLoop(ctx)
 
 	// Graceful shutdown
 	idleConnsClosed := make(chan struct{})

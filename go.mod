@@ -12,7 +12,6 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.17.3
 	github.com/refraction-networking/utls v1.8.2
-	github.com/sony/gobreaker v1.0.0
 	github.com/warpdotdev/warp-proto-apis/apis/multi_agent v0.0.0-20260521145647-c67de64fc494
 	golang.org/x/net v0.43.0
 	golang.org/x/sync v0.19.0

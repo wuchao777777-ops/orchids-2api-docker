@@ -19,6 +19,8 @@ type redisStore struct {
 	prefix string
 }
 
+const redisBatchParallelThreshold = 32
+
 var (
 	incrementRequestCountScript = redis.NewScript(`
 		local key = KEYS[1]
@@ -402,21 +404,11 @@ func (s *redisStore) getAccountsByIDs(ctx context.Context, ids []string, onlyEna
 		return nil, nil
 	}
 
-	idNums := make([]int64, 0, len(ids))
-	for _, raw := range ids {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
-			idNums = append(idNums, id)
-		}
-	}
+	idNums := parseSortedInt64s(ids)
 	if len(idNums) == 0 {
 		return nil, nil
 	}
 
-	sort.Slice(idNums, func(i, j int) bool { return idNums[i] < idNums[j] })
 	keys := make([]string, 0, len(idNums))
 	for _, id := range idNums {
 		keys = append(keys, s.accountsKey(id))
@@ -432,67 +424,38 @@ func (s *redisStore) getAccountsByIDs(ctx context.Context, ids []string, onlyEna
 		}
 	}
 
-	// 并发阈值：少于 32 项时串行处理更高效
-	const parallelThreshold = 32
-
-	if len(values) >= parallelThreshold {
-		// 并行解析 JSON
-		results := make([]*Account, len(values))
-		util.ParallelFor(len(values), func(idx int) {
-			val := values[idx]
-			if val == nil {
-				return
-			}
-			strVal, ok := val.(string)
-			if !ok || strVal == "" {
-				return
-			}
-			var acc Account
-			if err := json.Unmarshal([]byte(strVal), &acc); err != nil {
-				return
-			}
-			if acc.ID == 0 {
-				acc.ID = idNums[idx]
-			}
-			if onlyEnabled && !acc.Enabled {
-				return
-			}
-			results[idx] = &acc
-		})
-
-		// 过滤 nil 结果
-		accounts := make([]*Account, 0, len(values))
-		for _, acc := range results {
-			if acc != nil {
-				accounts = append(accounts, acc)
-			}
-		}
-		return accounts, nil
-	}
-
-	// 串行处理小批量
-	accounts := make([]*Account, 0, len(values))
-	for i, value := range values {
-		if value == nil {
-			continue
-		}
-		strVal, ok := value.(string)
+	results := make([]*Account, len(values))
+	decode := func(i int) {
+		strVal, ok := values[i].(string)
 		if !ok || strVal == "" {
-			continue
+			return
 		}
 		var acc Account
 		if err := json.Unmarshal([]byte(strVal), &acc); err != nil {
-			continue
+			return
 		}
 		if acc.ID == 0 {
 			acc.ID = idNums[i]
 		}
 		if onlyEnabled && !acc.Enabled {
-			continue
+			return
 		}
-		accounts = append(accounts, &acc)
+		results[i] = &acc
+	}
+	if len(values) >= redisBatchParallelThreshold {
+		util.ParallelFor(len(values), decode)
+	} else {
+		for i := range values {
+			decode(i)
+		}
 	}
 
+	accounts := make([]*Account, 0, len(values))
+	for _, acc := range results {
+		if acc != nil {
+			accounts = append(accounts, acc)
+		}
+	}
 	return accounts, nil
 }
 
@@ -644,21 +607,11 @@ func (s *redisStore) getApiKeysByIDs(ctx context.Context, ids []string) ([]*ApiK
 		return nil, nil
 	}
 
-	idNums := make([]int64, 0, len(ids))
-	for _, raw := range ids {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
-			idNums = append(idNums, id)
-		}
-	}
+	idNums := parseSortedInt64s(ids)
 	if len(idNums) == 0 {
 		return nil, nil
 	}
 
-	sort.Slice(idNums, func(i, j int) bool { return idNums[i] < idNums[j] })
 	keys := make([]string, 0, len(idNums))
 	for _, id := range idNums {
 		keys = append(keys, s.apiKeysKey(id))
@@ -669,60 +622,48 @@ func (s *redisStore) getApiKeysByIDs(ctx context.Context, ids []string) ([]*ApiK
 		return nil, err
 	}
 
-	const parallelThreshold = 32
-
-	if len(values) >= parallelThreshold {
-		results := make([]*ApiKey, len(values))
-		util.ParallelFor(len(values), func(idx int) {
-			val := values[idx]
-			if val == nil {
-				return
-			}
-			strVal, ok := val.(string)
-			if !ok || strVal == "" {
-				return
-			}
-			var record apiKeyRecord
-			if err := json.Unmarshal([]byte(strVal), &record); err != nil {
-				return
-			}
-			key := record.toApiKey()
-			if key.ID == 0 {
-				key.ID = idNums[idx]
-			}
-			results[idx] = key
-		})
-
-		items := make([]*ApiKey, 0, len(values))
-		for _, key := range results {
-			if key != nil {
-				items = append(items, key)
-			}
-		}
-		return items, nil
-	}
-
-	items := make([]*ApiKey, 0, len(values))
-	for i, value := range values {
-		if value == nil {
-			continue
-		}
-		strVal, ok := value.(string)
+	results := make([]*ApiKey, len(values))
+	decode := func(i int) {
+		strVal, ok := values[i].(string)
 		if !ok || strVal == "" {
-			continue
+			return
 		}
 		var record apiKeyRecord
 		if err := json.Unmarshal([]byte(strVal), &record); err != nil {
-			continue
+			return
 		}
 		key := record.toApiKey()
 		if key.ID == 0 {
 			key.ID = idNums[i]
 		}
-		items = append(items, key)
+		results[i] = key
+	}
+	if len(values) >= redisBatchParallelThreshold {
+		util.ParallelFor(len(values), decode)
+	} else {
+		for i := range values {
+			decode(i)
+		}
 	}
 
+	items := make([]*ApiKey, 0, len(values))
+	for _, key := range results {
+		if key != nil {
+			items = append(items, key)
+		}
+	}
 	return items, nil
+}
+
+func parseSortedInt64s(values []string) []int64 {
+	ids := make([]int64, 0, len(values))
+	for _, value := range values {
+		if id, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 func (s *redisStore) accountsKey(id int64) string {

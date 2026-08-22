@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
@@ -16,7 +15,6 @@ import (
 // Renderer handles template rendering
 type Renderer struct {
 	templates *template.Template
-	mu        sync.RWMutex
 }
 
 // NewRenderer creates a new template renderer
@@ -33,23 +31,7 @@ func NewRenderer() (*Renderer, error) {
 
 // parseTemplates parses all template files from the embedded filesystem
 func parseTemplates() (*template.Template, error) {
-	funcMap := template.FuncMap{
-		"formatDate": formatDate,
-		"maskToken":  maskToken,
-		"add":        add,
-		"sub":        sub,
-		"mul":        mul,
-		"div":        div,
-		"mod":        mod,
-		"eq":         eq,
-		"ne":         ne,
-		"lt":         lt,
-		"le":         le,
-		"gt":         gt,
-		"ge":         ge,
-	}
-
-	tmpl := template.New("").Funcs(funcMap)
+	tmpl := template.New("")
 
 	// Parse all templates recursively
 	err := fs.WalkDir(web.TemplateFS, "templates", func(path string, d fs.DirEntry, err error) error {
@@ -76,17 +58,9 @@ func parseTemplates() (*template.Template, error) {
 
 // RenderIndex renders the main index page
 func (r *Renderer) RenderIndex(w http.ResponseWriter, req *http.Request, cfg *config.Config, s *store.Store) error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	activeTab := getActiveTab(req)
 
-	stats := &Stats{
-		TotalAccounts:    0,
-		NormalAccounts:   0,
-		AbnormalAccounts: 0,
-		SelectedAccounts: 0,
-	}
+	stats := &Stats{}
 
 	if s != nil {
 		ctx := req.Context()

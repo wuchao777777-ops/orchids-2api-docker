@@ -24,10 +24,6 @@ func pickUserAgent(affinity string) string {
 	if affinity == "" {
 		affinity = "default"
 	}
-	return grokUARotation[uint32(hashSeed(affinity))%uint32(len(grokUARotation))]
-}
-
-func hashSeed(s string) uint64 {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(s))))
-	return binary.LittleEndian.Uint64(sum[:8])
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(affinity))))
+	return grokUARotation[uint32(binary.LittleEndian.Uint64(sum[:8]))%uint32(len(grokUARotation))]
 }

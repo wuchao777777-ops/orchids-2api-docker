@@ -155,16 +155,6 @@ func imagineFinalEvent(slot *imagineWSSlot) imagineWSEvent {
 	}
 }
 
-func clampImagineProgress(v int) int {
-	if v < 10 {
-		return 10
-	}
-	if v > 99 {
-		return 99
-	}
-	return v
-}
-
 func (h *Handler) streamImagineWSImages(ctx context.Context, sess *chatAccountSession, prompt, aspectRatio string, n int, nsfw bool, pro bool) (<-chan imagineWSEvent, <-chan error) {
 	events := make(chan imagineWSEvent)
 	errs := make(chan error, 1)
@@ -325,7 +315,7 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 			}
 			slot.lastURL = urlValue
 			slot.lastBlob = strings.TrimSpace(fmt.Sprint(msg["blob"]))
-			progress := clampImagineProgress(interfaceToInt(msg["percentage_complete"]))
+			progress := min(max(interfaceToInt(msg["percentage_complete"]), 10), 99)
 			if progress > slot.progress {
 				slot.progress = progress
 				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID}) {

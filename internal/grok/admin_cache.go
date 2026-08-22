@@ -5,6 +5,7 @@ import (
 	"github.com/goccy/go-json"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -115,22 +116,14 @@ func parsePositiveInt(raw string, fallback int) int {
 	return v
 }
 
-func resolveCacheMediaType(query map[string][]string) string {
+func resolveCacheMediaType(query url.Values) string {
 	for _, key := range []string{"media_type", "type", "cache_type"} {
-		v := strings.ToLower(strings.TrimSpace(firstQueryValue(query, key)))
+		v := strings.ToLower(strings.TrimSpace(query.Get(key)))
 		if v != "" {
 			return v
 		}
 	}
 	return ""
-}
-
-func firstQueryValue(query map[string][]string, key string) string {
-	values, ok := query[key]
-	if !ok || len(values) == 0 {
-		return ""
-	}
-	return values[0]
 }
 
 func paginateCacheEntries(entries []cacheEntry, page int, pageSize int) ([]cacheEntry, int) {
@@ -249,14 +242,6 @@ func listOnlineAccountTokens(onlineAccounts []map[string]interface{}) []string {
 	return normalizeOnlineTokenList(out)
 }
 
-func detailErrorStatus(err error) string {
-	msg := strings.TrimSpace(err.Error())
-	if msg == "" {
-		msg = "request failed"
-	}
-	return "error: " + msg
-}
-
 // runWorkerPool fans items out across up to workers goroutines, honouring ctx
 // cancellation, and waits for all workers to drain before returning. Workers
 // stop taking new items once ctx is cancelled.
@@ -301,14 +286,6 @@ type indexedTokenJob struct {
 	token string
 }
 
-func indexedTokenJobs(tokens []string) []indexedTokenJob {
-	jobs := make([]indexedTokenJob, len(tokens))
-	for i, token := range tokens {
-		jobs[i] = indexedTokenJob{index: i, token: token}
-	}
-	return jobs
-}
-
 func (h *Handler) fetchOnlineAssetDetails(
 	ctx context.Context,
 	tokens []string,
@@ -342,7 +319,11 @@ func (h *Handler) fetchOnlineAssetDetails(
 		totalCount int
 		totalMu    sync.Mutex
 	)
-	runWorkerPool(ctx, indexedTokenJobs(requestTokens), 4, func(item indexedTokenJob) {
+	jobs := make([]indexedTokenJob, len(requestTokens))
+	for i, token := range requestTokens {
+		jobs[i] = indexedTokenJob{index: i, token: token}
+	}
+	runWorkerPool(ctx, jobs, 4, func(item indexedTokenJob) {
 		masked, lastClear := onlineAccountInfo(accountByToken, item.token)
 		detail := map[string]interface{}{
 			"token":               item.token,
@@ -354,7 +335,11 @@ func (h *Handler) fetchOnlineAssetDetails(
 
 		count, err := h.client.countAssets(ctx, item.token)
 		if err != nil {
-			detail["status"] = detailErrorStatus(err)
+			msg := strings.TrimSpace(err.Error())
+			if msg == "" {
+				msg = "request failed"
+			}
+			detail["status"] = "error: " + msg
 		} else {
 			detail["count"] = count
 			detail["status"] = "ok"
