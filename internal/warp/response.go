@@ -139,24 +139,87 @@ func (d *decoder) skip(wire int) error {
 }
 
 type parsedEvent struct {
-	ConversationID  string
-	TextDeltas      []string
-	ReasoningDeltas []string
-	ToolCalls       []toolCall
-	Finish          *finishInfo
-	Error           string
+	Recognized     bool
+	ConversationID string
+	ContentUpdates []warpContentUpdate
+	ToolCalls      []toolCall
+	Finish         *finishInfo
+	Error          string
 }
 
-func (e *parsedEvent) hasSignals() bool {
-	if e == nil {
+type warpContentUpdate struct {
+	MessageID string
+	Text      string
+	Reasoning bool
+	Snapshot  bool
+}
+
+type warpStreamState struct {
+	sawToolCall        bool
+	toolCallIndex      int
+	textByMessage      map[string]string
+	reasoningByMessage map[string]string
+	seenToolCalls      map[string]struct{}
+}
+
+func newWarpStreamState() *warpStreamState {
+	return &warpStreamState{
+		textByMessage:      make(map[string]string),
+		reasoningByMessage: make(map[string]string),
+		seenToolCalls:      make(map[string]struct{}),
+	}
+}
+
+func (s *warpStreamState) applyContentUpdate(update warpContentUpdate) string {
+	if update.Text == "" {
+		return ""
+	}
+	key := strings.TrimSpace(update.MessageID)
+	if key == "" {
+		key = "primary"
+	}
+	values := s.textByMessage
+	if update.Reasoning {
+		values = s.reasoningByMessage
+	}
+
+	current := values[key]
+	if !update.Snapshot {
+		values[key] = current + update.Text
+		return update.Text
+	}
+
+	// Add/update actions contain the complete message value, while append
+	// actions contain only a delta. Warp commonly sends a final update after
+	// all append events; emit only the unseen suffix instead of duplicating the
+	// full response.
+	switch {
+	case current == "":
+		values[key] = update.Text
+		return update.Text
+	case update.Text == current, strings.HasPrefix(current, update.Text):
+		return ""
+	case strings.HasPrefix(update.Text, current):
+		values[key] = update.Text
+		return update.Text[len(current):]
+	default:
+		// Streaming APIs cannot retract already-emitted text. Keep the latest
+		// snapshot for subsequent comparisons without appending a conflicting
+		// replacement as duplicate output.
+		values[key] = update.Text
+		return ""
+	}
+}
+
+func (s *warpStreamState) acceptToolCall(call toolCall) bool {
+	if strings.TrimSpace(call.ID) == "" {
+		return true
+	}
+	if _, exists := s.seenToolCalls[call.ID]; exists {
 		return false
 	}
-	return strings.TrimSpace(e.ConversationID) != "" ||
-		len(e.TextDeltas) > 0 ||
-		len(e.ReasoningDeltas) > 0 ||
-		len(e.ToolCalls) > 0 ||
-		e.Finish != nil ||
-		strings.TrimSpace(e.Error) != ""
+	s.seenToolCalls[call.ID] = struct{}{}
+	return true
 }
 
 func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -178,8 +241,7 @@ func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(ups
 	br := bufio.NewReaderSize(reader, 64*1024)
 	sawFrame := false
 	handledFrame := false
-	sawToolCall := false
-	toolCallIndex := 0
+	state := newWarpStreamState()
 
 	for {
 		frame, err := readFrame(br)
@@ -200,7 +262,7 @@ func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(ups
 		if logger != nil {
 			logger.LogUpstreamSSE("warp_frame", fmt.Sprintf("bytes=%d", len(frame)))
 		}
-		handled, done, err := emitWarpPayload(frame, onMessage, &sawToolCall, &toolCallIndex)
+		handled, done, err := emitWarpPayload(frame, onMessage, state)
 		if err != nil {
 			return err
 		}
@@ -220,7 +282,7 @@ func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(ups
 	}
 
 	reason := "end_turn"
-	if sawToolCall {
+	if state.sawToolCall {
 		reason = "tool_use"
 	}
 	onMessage(upstream.SSEMessage{
@@ -234,8 +296,7 @@ func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage f
 	var dataBuilder strings.Builder
 	dataEventCount := 0
 	parsedEventCount := 0
-	sawToolCall := false
-	toolCallIndex := 0
+	state := newWarpStreamState()
 	finishSent := false
 
 	flush := func() error {
@@ -257,7 +318,7 @@ func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage f
 			return nil
 		}
 
-		handled, done, err := emitWarpPayload(payloadBytes, onMessage, &sawToolCall, &toolCallIndex)
+		handled, done, err := emitWarpPayload(payloadBytes, onMessage, state)
 		if err != nil {
 			return err
 		}
@@ -314,7 +375,7 @@ func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage f
 	}
 	if !finishSent {
 		reason := "end_turn"
-		if sawToolCall {
+		if state.sawToolCall {
 			reason = "tool_use"
 		}
 		onMessage(upstream.SSEMessage{
@@ -338,34 +399,33 @@ func decodeWarpPayload(data string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(data)
 }
 
-func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolCall *bool, toolCallIndex *int) (bool, bool, error) {
-	if parsed, err := parseResponseEvent(frame); err == nil && parsed.hasSignals() {
+func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), state *warpStreamState) (bool, bool, error) {
+	if parsed, err := parseResponseEvent(frame); err == nil && parsed.Recognized {
 		if parsed.ConversationID != "" {
 			onMessage(upstream.SSEMessage{
 				Type:  "model.conversation_id",
 				Event: map[string]interface{}{"id": parsed.ConversationID},
 			})
 		}
-		for _, delta := range parsed.TextDeltas {
-			if strings.TrimSpace(delta) == "" {
+		for _, update := range parsed.ContentUpdates {
+			delta := state.applyContentUpdate(update)
+			if delta == "" {
 				continue
 			}
-			onMessage(upstream.SSEMessage{
-				Type:  "model.text-delta",
-				Event: map[string]interface{}{"delta": delta},
-			})
-		}
-		for _, delta := range parsed.ReasoningDeltas {
-			if strings.TrimSpace(delta) == "" {
-				continue
+			eventType := "model.text-delta"
+			if update.Reasoning {
+				eventType = "model.reasoning-delta"
 			}
 			onMessage(upstream.SSEMessage{
-				Type:  "model.reasoning-delta",
+				Type:  eventType,
 				Event: map[string]interface{}{"delta": delta},
 			})
 		}
 		for _, call := range parsed.ToolCalls {
-			*sawToolCall = true
+			if !state.acceptToolCall(call) {
+				continue
+			}
+			state.sawToolCall = true
 			onMessage(upstream.SSEMessage{
 				Type: "model.tool-call",
 				Event: map[string]interface{}{
@@ -386,7 +446,7 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolC
 			finish := map[string]interface{}{
 				"finishReason": "end_turn",
 			}
-			if *sawToolCall {
+			if state.sawToolCall {
 				finish["finishReason"] = "tool_use"
 			}
 			if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
@@ -432,11 +492,14 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolC
 		if !ok || len(payload) == 0 {
 			continue
 		}
-		calls := parseToolCalls(parseRawProtobuf(payload), *toolCallIndex)
+		calls := parseToolCalls(parseRawProtobuf(payload), state.toolCallIndex)
 		for _, call := range calls {
+			if !state.acceptToolCall(call) {
+				continue
+			}
 			handled = true
-			*sawToolCall = true
-			*toolCallIndex = *toolCallIndex + 1
+			state.sawToolCall = true
+			state.toolCallIndex++
 			onMessage(upstream.SSEMessage{
 				Type: "model.tool-call",
 				Event: map[string]interface{}{
@@ -456,7 +519,7 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolC
 		finish := map[string]interface{}{
 			"finishReason": "end_turn",
 		}
-		if *sawToolCall {
+		if state.sawToolCall {
 			finish["finishReason"] = "tool_use"
 		}
 		if usage := parseUsage(fields[5]); usage != nil {
@@ -519,6 +582,7 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 				}
 				continue
 			}
+			out.Recognized = true
 			payload, err := d.readBytes()
 			if err != nil {
 				return out, err
@@ -531,6 +595,7 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 				}
 				continue
 			}
+			out.Recognized = true
 			payload, err := d.readBytes()
 			if err != nil {
 				return out, err
@@ -543,6 +608,7 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 				}
 				continue
 			}
+			out.Recognized = true
 			payload, err := d.readBytes()
 			if err != nil {
 				return out, err
@@ -555,6 +621,7 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 				}
 				continue
 			}
+			out.Recognized = true
 			payload, err := d.readBytes()
 			if err != nil {
 				return out, err
@@ -673,7 +740,7 @@ func parseAppendToMessage(data []byte, out *parsedEvent) {
 			if err != nil {
 				return
 			}
-			parseMessage(payload, out)
+			parseMessage(payload, out, false)
 			continue
 		}
 		_ = d.skip(wire)
@@ -692,7 +759,7 @@ func parseAddMessages(data []byte, out *parsedEvent) {
 			if err != nil {
 				return
 			}
-			parseMessage(payload, out)
+			parseMessage(payload, out, true)
 			continue
 		}
 		_ = d.skip(wire)
@@ -711,7 +778,7 @@ func parseUpdateTaskMessage(data []byte, out *parsedEvent) {
 			if err != nil {
 				return
 			}
-			parseMessage(payload, out)
+			parseMessage(payload, out, true)
 			continue
 		}
 		_ = d.skip(wire)
@@ -749,21 +816,35 @@ func parseTask(data []byte, out *parsedEvent) {
 			if err != nil {
 				return
 			}
-			parseMessage(payload, out)
+			parseMessage(payload, out, true)
 			continue
 		}
 		_ = d.skip(wire)
 	}
 }
 
-func parseMessage(data []byte, out *parsedEvent) {
+func parseMessage(data []byte, out *parsedEvent, snapshot bool) {
 	d := decoder{data: data}
+	messageID := ""
+	var agentOutputs [][]byte
+	var agentReasoning [][]byte
+	var toolCalls [][]byte
 	for !d.eof() {
 		field, wire, err := d.readKey()
 		if err != nil {
 			return
 		}
 		switch field {
+		case 1:
+			if wire != 2 {
+				_ = d.skip(wire)
+				continue
+			}
+			payload, err := d.readBytes()
+			if err != nil {
+				return
+			}
+			messageID = string(payload)
 		case 3:
 			if wire != 2 {
 				_ = d.skip(wire)
@@ -773,7 +854,7 @@ func parseMessage(data []byte, out *parsedEvent) {
 			if err != nil {
 				return
 			}
-			parseAgentOutput(payload, out)
+			agentOutputs = append(agentOutputs, payload)
 		case 4:
 			if wire != 2 {
 				_ = d.skip(wire)
@@ -783,14 +864,33 @@ func parseMessage(data []byte, out *parsedEvent) {
 			if err != nil {
 				return
 			}
-			parseNestedToolCall(payload, out)
+			toolCalls = append(toolCalls, payload)
+		case 15:
+			if wire != 2 {
+				_ = d.skip(wire)
+				continue
+			}
+			payload, err := d.readBytes()
+			if err != nil {
+				return
+			}
+			agentReasoning = append(agentReasoning, payload)
 		default:
 			_ = d.skip(wire)
 		}
 	}
+	for _, payload := range agentOutputs {
+		parseAgentOutput(payload, out, messageID, snapshot)
+	}
+	for _, payload := range agentReasoning {
+		parseAgentReasoning(payload, out, messageID, snapshot)
+	}
+	for _, payload := range toolCalls {
+		parseNestedToolCall(payload, out)
+	}
 }
 
-func parseAgentOutput(data []byte, out *parsedEvent) {
+func parseAgentOutput(data []byte, out *parsedEvent, messageID string, snapshot bool) {
 	d := decoder{data: data}
 	for !d.eof() {
 		field, wire, err := d.readKey()
@@ -807,10 +907,46 @@ func parseAgentOutput(data []byte, out *parsedEvent) {
 		}
 		switch field {
 		case 1:
-			out.TextDeltas = append(out.TextDeltas, string(payload))
+			out.ContentUpdates = append(out.ContentUpdates, warpContentUpdate{
+				MessageID: messageID,
+				Text:      string(payload),
+				Snapshot:  snapshot,
+			})
 		case 2:
-			out.ReasoningDeltas = append(out.ReasoningDeltas, string(payload))
+			// Older Warp protocol versions used the second AgentOutput field
+			// for visible reasoning. Retain compatibility even though current
+			// response.proto uses a dedicated AgentReasoning message.
+			out.ContentUpdates = append(out.ContentUpdates, warpContentUpdate{
+				MessageID: messageID,
+				Text:      string(payload),
+				Reasoning: true,
+				Snapshot:  snapshot,
+			})
 		}
+	}
+}
+
+func parseAgentReasoning(data []byte, out *parsedEvent, messageID string, snapshot bool) {
+	d := decoder{data: data}
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			return
+		}
+		if field != 1 || wire != 2 {
+			_ = d.skip(wire)
+			continue
+		}
+		payload, err := d.readBytes()
+		if err != nil {
+			return
+		}
+		out.ContentUpdates = append(out.ContentUpdates, warpContentUpdate{
+			MessageID: messageID,
+			Text:      string(payload),
+			Reasoning: true,
+			Snapshot:  snapshot,
+		})
 	}
 }
 

@@ -12,9 +12,89 @@ import (
 	"testing"
 
 	"github.com/goccy/go-json"
+	warpapi "github.com/warpdotdev/warp-proto-apis/apis/multi_agent/v1/gen/go"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"orchids-api/internal/upstream"
 )
+
+func warpSSEActionFrame(t *testing.T, action *warpapi.ClientAction) string {
+	t.Helper()
+	event := warpapi.ResponseEvent_builder{
+		ClientActions: warpapi.ResponseEvent_ClientActions_builder{
+			Actions: []*warpapi.ClientAction{action},
+		}.Build(),
+	}.Build()
+	raw, err := proto.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal Warp response event: %v", err)
+	}
+	return "data: " + base64.RawURLEncoding.EncodeToString(raw) + "\n\n"
+}
+
+func warpAgentOutputMessage(id, text string) *warpapi.Message {
+	return warpapi.Message_builder{
+		Id: stringPtr(id),
+		AgentOutput: warpapi.Message_AgentOutput_builder{
+			Text: stringPtr(text),
+		}.Build(),
+	}.Build()
+}
+
+func TestProcessStreamBody_DeduplicatesMessageSnapshotsAndIgnoresMetadataActions(t *testing.T) {
+	messageID := "message-1"
+	taskID := "task-1"
+	stream := warpSSEActionFrame(t, warpapi.ClientAction_builder{
+		AddMessagesToTask: warpapi.ClientAction_AddMessagesToTask_builder{
+			TaskId:   stringPtr(taskID),
+			Messages: []*warpapi.Message{warpAgentOutputMessage(messageID, "CONTINUATION")},
+		}.Build(),
+	}.Build())
+	for _, delta := range []string{" ", "OK"} {
+		stream += warpSSEActionFrame(t, warpapi.ClientAction_builder{
+			AppendToMessageContent: warpapi.ClientAction_AppendToMessageContent_builder{
+				TaskId:  stringPtr(taskID),
+				Message: warpAgentOutputMessage(messageID, delta),
+				Mask:    &fieldmaskpb.FieldMask{Paths: []string{"agent_output.text"}},
+			}.Build(),
+		}.Build())
+	}
+	stream += warpSSEActionFrame(t, warpapi.ClientAction_builder{
+		UpdateTaskMessage: warpapi.ClientAction_UpdateTaskMessage_builder{
+			TaskId:  stringPtr(taskID),
+			Message: warpAgentOutputMessage(messageID, "CONTINUATION OK"),
+			Mask:    &fieldmaskpb.FieldMask{Paths: []string{"agent_output.text"}},
+		}.Build(),
+	}.Build())
+	stream += warpSSEActionFrame(t, warpapi.ClientAction_builder{
+		UpdateTaskDescription: warpapi.ClientAction_UpdateTaskDescription_builder{
+			TaskId:      stringPtr(taskID),
+			Description: stringPtr("Acknowledge command with CONTINUATION OK"),
+		}.Build(),
+	}.Build())
+
+	var text strings.Builder
+	var reasoning strings.Builder
+	if err := processStreamBody(context.Background(), strings.NewReader(stream), func(message upstream.SSEMessage) {
+		delta, _ := message.Event["delta"].(string)
+		switch message.Type {
+		case "model.text-delta":
+			text.WriteString(delta)
+		case "model.reasoning-delta":
+			reasoning.WriteString(delta)
+		}
+	}, nil); err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+
+	if got := text.String(); got != "CONTINUATION OK" {
+		t.Fatalf("text=%q want one complete, whitespace-preserving response", got)
+	}
+	if got := reasoning.String(); got != "" {
+		t.Fatalf("reasoning=%q want metadata action to stay hidden", got)
+	}
+}
 
 func TestMapWarpToolCalls_PreservesOneResultPerServerReadCall(t *testing.T) {
 	args := `{"paths":["/tmp/a.go","/tmp/b.go"],"start":10,"end":20}`
