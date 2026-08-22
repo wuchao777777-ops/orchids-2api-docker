@@ -84,7 +84,7 @@ func streamResponseHeaders(w http.ResponseWriter) http.Flusher {
 
 // writeSSEEventName writes an SSE event name, preferring StringWriter when available.
 func writeSSEEventName(w http.ResponseWriter, event string) {
-	if sw, ok := interface{}(w).(io.StringWriter); ok {
+	if sw, ok := w.(io.StringWriter); ok {
 		_, _ = sw.WriteString(event)
 		return
 	}

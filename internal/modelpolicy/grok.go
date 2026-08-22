@@ -15,13 +15,15 @@ var publicGrokModelIDs = []string{
 	"grok-imagine-video",
 }
 
-var publicGrokModelAllowlist = func() map[string]struct{} {
-	out := make(map[string]struct{}, len(publicGrokModelIDs))
-	for _, id := range publicGrokModelIDs {
-		out[id] = struct{}{}
+var publicGrokModelAllowlist = stringSet(publicGrokModelIDs)
+
+func stringSet(values []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		out[value] = struct{}{}
 	}
 	return out
-}()
+}
 
 var deprecatedGrokModelIDs = map[string]struct{}{
 	"grok-4.20-0309-non-reasoning":       {},
@@ -40,54 +42,48 @@ var deprecatedGrokModelIDs = map[string]struct{}{
 	"grok-4.20-heavy":                    {},
 	"grok-4.3-beta":                      {},
 	"grok-imagine-image-pro":             {},
-	"grok-3":                  {},
-	"grok-3-thinking":         {},
-	"grok-3-fast":             {},
-	"grok-4":                  {},
-	"grok-4-mini":             {},
-	"grok-4-fast":             {},
-	"grok-4-heavy":            {},
-	"grok-4.1":                {},
-	"grok-4.1-mini":           {},
-	"grok-4.1-fast":           {},
-	"grok-4.1-thinking":       {},
-	"grok-4-1-thinking":       {},
-	"grok-4-1-thinking-1129":  {},
-	"grok-4.2":                {},
-	"grok-4-2":                {},
-	"grok-4.20-beta":          {},
-	"grok-4-20-beta":          {},
-	"grok-4.20-reasoning":     {},
-	"grok-4.20-non-reasoning": {},
-	"grok-4.20-multi-agent":   {},
-	"grok-420":                {},
-// grok-4.3 and grok-build-0.1 are supported via console.x.ai only
-	"grok-code-fast":          {},
-	"grok-code-fast-1":        {},
-	"grok-imagine-1.0":        {},
-	"grok-imagine-1.0-fast":   {},
-	"grok-imagine-1.0-edit":   {},
-	"grok-imagine-1.0-video":  {},
-	"grok-2":                  {},
-	"grok-2.1":                {},
-	"grok-3.1":                {},
-	"grok-4.21":               {},
+	"grok-3":                             {},
+	"grok-3-thinking":                    {},
+	"grok-3-fast":                        {},
+	"grok-4":                             {},
+	"grok-4-mini":                        {},
+	"grok-4-fast":                        {},
+	"grok-4-heavy":                       {},
+	"grok-4.1":                           {},
+	"grok-4.1-mini":                      {},
+	"grok-4.1-fast":                      {},
+	"grok-4.1-thinking":                  {},
+	"grok-4-1-thinking":                  {},
+	"grok-4-1-thinking-1129":             {},
+	"grok-4.2":                           {},
+	"grok-4-2":                           {},
+	"grok-4.20-beta":                     {},
+	"grok-4-20-beta":                     {},
+	"grok-4.20-reasoning":                {},
+	"grok-4.20-non-reasoning":            {},
+	"grok-4.20-multi-agent":              {},
+	"grok-420":                           {},
+	// grok-4.3 and grok-build-0.1 are supported via console.x.ai only
+	"grok-code-fast":         {},
+	"grok-code-fast-1":       {},
+	"grok-imagine-1.0":       {},
+	"grok-imagine-1.0-fast":  {},
+	"grok-imagine-1.0-edit":  {},
+	"grok-imagine-1.0-video": {},
+	"grok-2":                 {},
+	"grok-2.1":               {},
+	"grok-3.1":               {},
+	"grok-4.21":              {},
 }
 
 func IsDeprecatedGrokModelID(modelID string) bool {
 	id := strings.ToLower(strings.TrimSpace(modelID))
-	if id == "" {
-		return false
-	}
 	_, ok := deprecatedGrokModelIDs[id]
 	return ok
 }
 
 func IsPublicGrokModelID(modelID string) bool {
 	id := strings.ToLower(strings.TrimSpace(modelID))
-	if id == "" {
-		return false
-	}
 	_, ok := publicGrokModelAllowlist[id]
 	return ok
 }

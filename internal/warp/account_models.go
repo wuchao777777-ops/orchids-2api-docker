@@ -192,8 +192,8 @@ func EffectiveAccountFeatureConfig(acc *store.Account, choices *AccountModelChoi
 	}
 	cfg.BaseModel = normalizeWarpModel(cfg.BaseModel)
 	cfg.CodingModel = canonicalModelID(cfg.CodingModel)
-	cfg.CliAgentModel = firstNonEmptyModelID(cfg.CliAgentModel)
-	cfg.ComputerUseAgentModel = firstNonEmptyModelID(cfg.ComputerUseAgentModel)
+	cfg.CliAgentModel = canonicalModelID(cfg.CliAgentModel)
+	cfg.ComputerUseAgentModel = canonicalModelID(cfg.ComputerUseAgentModel)
 	if cfg.CliAgentModel == "" {
 		cfg.CliAgentModel = identifier
 	}
@@ -210,10 +210,6 @@ func normalizeAccountFeatureConfig(cfg AccountFeatureConfig) AccountFeatureConfi
 		CliAgentModel:         canonicalModelID(cfg.CliAgentModel),
 		ComputerUseAgentModel: canonicalModelID(cfg.ComputerUseAgentModel),
 	}
-}
-
-func firstNonEmptyModelID(model string) string {
-	return canonicalModelID(model)
 }
 
 func (cfg AccountFeatureConfig) IsEmpty() bool {

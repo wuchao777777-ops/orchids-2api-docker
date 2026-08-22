@@ -7,11 +7,6 @@ import (
 	"github.com/goccy/go-json"
 )
 
-func (a *API) tokenCacheFeatureEnabled() bool {
-	cfg := a.config.Load()
-	return cfg != nil && cfg.EnableTokenCache
-}
-
 func formatTokenCacheBytes(size int64) string {
 	switch {
 	case size >= 1024*1024:
@@ -79,24 +74,17 @@ func (a *API) HandleTokenCacheStats(w http.ResponseWriter, r *http.Request) {
 func (a *API) HandleTokenCacheClear(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if !a.tokenCacheFeatureEnabled() || a.promptCache == nil {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"code":    0,
-			"message": "清除成功",
-			"data": map[string]interface{}{
-				"deleted": 0,
-			},
-		})
-		return
-	}
-
-	count, _, _ := a.promptCache.GetStats(r.Context())
-	if err := a.promptCache.Clear(r.Context()); err != nil {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"code":    1,
-			"message": "Failed to clear token cache: " + err.Error(),
-		})
-		return
+	var count int64
+	cfg := a.config.Load()
+	if cfg != nil && cfg.EnableTokenCache && a.promptCache != nil {
+		count, _, _ = a.promptCache.GetStats(r.Context())
+		if err := a.promptCache.Clear(r.Context()); err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code":    1,
+				"message": "Failed to clear token cache: " + err.Error(),
+			})
+			return
+		}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":    0,

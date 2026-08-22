@@ -11,9 +11,7 @@ import (
 
 // StringBuilderPool provides reusable strings.Builder instances.
 var StringBuilderPool = sync.Pool{
-	New: func() interface{} {
-		return &strings.Builder{}
-	},
+	New: func() any { return &strings.Builder{} },
 }
 
 // AcquireStringBuilder gets a strings.Builder from the pool.
@@ -32,9 +30,7 @@ func ReleaseStringBuilder(sb *strings.Builder) {
 
 // MapPool provides reusable map[string]interface{} instances.
 var MapPool = sync.Pool{
-	New: func() interface{} {
-		return make(map[string]interface{}, 64)
-	},
+	New: func() any { return make(map[string]interface{}, 64) },
 }
 
 // AcquireMap gets a map from the pool.
@@ -57,9 +53,7 @@ func ReleaseMap(m map[string]interface{}) {
 
 // ByteBufferPool provides reusable bytes.Buffer instances.
 var ByteBufferPool = sync.Pool{
-	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 4096))
-	},
+	New: func() any { return bytes.NewBuffer(make([]byte, 0, 4096)) },
 }
 
 // AcquireByteBuffer gets a bytes.Buffer from the pool.
@@ -78,9 +72,7 @@ func ReleaseByteBuffer(b *bytes.Buffer) {
 
 // BufioReaderPool provides reusable bufio.Reader instances.
 var BufioReaderPool = sync.Pool{
-	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 32768)
-	},
+	New: func() any { return bufio.NewReaderSize(nil, 32768) },
 }
 
 // AcquireBufioReader gets a bufio.Reader from the pool.

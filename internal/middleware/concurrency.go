@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,11 +16,10 @@ import (
 // This is more efficient than channel-based semaphore for high-throughput scenarios.
 type ConcurrencyLimiter struct {
 	// 64-bit atomic fields must be at the top for 32-bit alignment
-	activeCount   int64
-	totalReqs     int64
-	rejectedReqs  int64
-	maxConcurrent int64
-	cachedP95     int64 // Cached P95 to avoid sorting on the hot path
+	activeCount  int64
+	totalReqs    int64
+	rejectedReqs int64
+	cachedP95    int64 // Cached P95 to avoid sorting on the hot path
 
 	sem     *semaphore.Weighted
 	timeout time.Duration
@@ -29,9 +28,8 @@ type ConcurrencyLimiter struct {
 	adaptive      bool
 	latencyWindow []int64 // Milliseconds
 	windowIdx     int
-	windowSize    int
 	mu            sync.RWMutex
-	
+
 	lastP95Update time.Time
 }
 
@@ -45,11 +43,9 @@ func NewConcurrencyLimiter(maxConcurrent int, timeout time.Duration, adaptive bo
 	}
 	return &ConcurrencyLimiter{
 		sem:           semaphore.NewWeighted(int64(maxConcurrent)),
-		maxConcurrent: int64(maxConcurrent),
 		timeout:       timeout,
 		adaptive:      adaptive,
 		latencyWindow: make([]int64, 100), // Keep last 100 requests
-		windowSize:    100,
 	}
 }
 
@@ -120,8 +116,8 @@ func (cl *ConcurrencyLimiter) UpdateStats(d time.Duration) {
 	ms := d.Milliseconds()
 	cl.mu.Lock()
 	cl.latencyWindow[cl.windowIdx] = ms
-	cl.windowIdx = (cl.windowIdx + 1) % cl.windowSize
-	
+	cl.windowIdx = (cl.windowIdx + 1) % len(cl.latencyWindow)
+
 	// Update cached P95 periodically (e.g. at most once per second or every 10 requests) to avoid hot path bottleneck
 	now := time.Now()
 	shouldRecalc := now.Sub(cl.lastP95Update) > time.Second
@@ -136,7 +132,7 @@ func (cl *ConcurrencyLimiter) UpdateStats(d time.Duration) {
 func (cl *ConcurrencyLimiter) recalcP95() {
 	cl.mu.Lock()
 	now := time.Now()
-	
+
 	// Double-checked locking to avoid concurrent recalculations
 	if now.Sub(cl.lastP95Update) <= time.Second {
 		cl.mu.Unlock()
@@ -145,7 +141,7 @@ func (cl *ConcurrencyLimiter) recalcP95() {
 	cl.lastP95Update = now
 
 	// Make a copy of the window to avoid holding the lock while sorting
-	localWindow := make([]int64, cl.windowSize)
+	localWindow := make([]int64, len(cl.latencyWindow))
 	copy(localWindow, cl.latencyWindow)
 	cl.mu.Unlock()
 
@@ -160,13 +156,9 @@ func (cl *ConcurrencyLimiter) recalcP95() {
 		return // Not enough data
 	}
 
-	sort.Slice(valid, func(i, j int) bool { return valid[i] < valid[j] })
-
+	slices.Sort(valid)
 	idx := int(float64(len(valid)) * 0.95)
-	if idx >= len(valid) {
-		idx = len(valid) - 1
-	}
-	
+
 	atomic.StoreInt64(&cl.cachedP95, valid[idx])
 }
 

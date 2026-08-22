@@ -150,12 +150,12 @@ func (h *Handler) runVideoSegments(
 		var payload map[string]interface{}
 		var rebuild func(string) (map[string]interface{}, error)
 		if idx == 0 {
-			payload, err = h.buildVideoCreatePayload(ctx, sess.token, spec, prompt, attachments, segmentCfg, nil)
+			payload, err = h.buildVideoCreatePayload(ctx, sess.token, spec, prompt, attachments, segmentCfg)
 			if err != nil {
 				return videoSegmentResult{}, err
 			}
 			rebuild = func(token string) (map[string]interface{}, error) {
-				return h.buildVideoCreatePayload(ctx, token, spec, prompt, attachments, segmentCfg, nil)
+				return h.buildVideoCreatePayload(ctx, token, spec, prompt, attachments, segmentCfg)
 			}
 		} else {
 			payload = h.buildVideoExtendPayload(spec, prompt, parentPostID, extendPostID, segmentCfg, length, elapsed)

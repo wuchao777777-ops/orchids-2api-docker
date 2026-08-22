@@ -62,11 +62,11 @@ func InferSubscriptionFromRequestLimit(info *RequestLimitInfo) string {
 	if info == nil {
 		return ""
 	}
-	if strings.TrimSpace(info.PlanTier) != "" {
-		return strings.ToLower(strings.TrimSpace(info.PlanTier))
+	if tier := strings.TrimSpace(info.PlanTier); tier != "" {
+		return strings.ToLower(tier)
 	}
-	if strings.TrimSpace(info.PlanName) != "" {
-		return strings.ToLower(strings.TrimSpace(info.PlanName))
+	if name := strings.TrimSpace(info.PlanName); name != "" {
+		return strings.ToLower(name)
 	}
 	if info.IsUnlimited {
 		return "enterprise"
@@ -99,14 +99,8 @@ func ApplyRequestLimitInfoToAccount(acc *store.Account, info *RequestLimitInfo, 
 	}
 
 	monthlyLimit := float64(info.RequestLimit)
-	usedRequests := float64(info.RequestsUsedSinceLastRefresh)
-	if usedRequests < 0 {
-		usedRequests = 0
-	}
-	monthlyRemaining := monthlyLimit - usedRequests
-	if monthlyRemaining < 0 {
-		monthlyRemaining = 0
-	}
+	usedRequests := max(0, float64(info.RequestsUsedSinceLastRefresh))
+	monthlyRemaining := max(0, monthlyLimit-usedRequests)
 
 	bonusRemaining := 0.0
 	for _, bg := range bonuses {

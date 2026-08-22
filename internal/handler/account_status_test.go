@@ -6,6 +6,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
 )
 
@@ -94,7 +95,7 @@ func TestClassifyAccountStatus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classifyAccountStatus(tt.errStr)
+			got := apperrors.ClassifyAccountStatus(tt.errStr)
 			if got != tt.expected {
 				t.Errorf("classifyAccountStatus(%q) = %q, want %q", tt.errStr, got, tt.expected)
 			}

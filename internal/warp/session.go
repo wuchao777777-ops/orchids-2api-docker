@@ -34,7 +34,6 @@ type session struct {
 	experimentID   string
 	experimentBuck string
 	jar            http.CookieJar
-	lastUsed       time.Time
 	refreshing     bool
 	refreshDone    chan struct{}
 }
@@ -71,7 +70,6 @@ func getSession(accountID int64, refreshToken, deviceID, requestID string) *sess
 	if cached, ok := sessionCache.Load(key); ok {
 		sess := cached.(*session)
 		sess.mu.Lock()
-		sess.lastUsed = time.Now()
 		if sess.jar == nil {
 			sess.jar = mustNewCookieJar()
 		}
@@ -97,7 +95,6 @@ func getSession(accountID int64, refreshToken, deviceID, requestID string) *sess
 		deviceID:     deviceID,
 		requestID:    requestID,
 		jar:          mustNewCookieJar(),
-		lastUsed:     time.Now(),
 	}
 	actual, _ := sessionCache.LoadOrStore(key, sess)
 	return actual.(*session)
@@ -294,7 +291,6 @@ func (s *session) seedJWT(jwt string) {
 func (s *session) ensureToken(ctx context.Context, httpClient *http.Client) error {
 	s.mu.Lock()
 	if s.tokenValid() {
-		s.lastUsed = time.Now()
 		s.mu.Unlock()
 		return nil
 	}
@@ -354,7 +350,7 @@ func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
 		"refresh_token": {refreshToken},
 	}
 
-	body, err := fetchWarpAuthTokens(ctx, httpClient, form)
+	body, err := postWarpTokenForm(ctx, httpClient, warpFirebaseURL, form)
 	if err != nil {
 		return err
 	}
@@ -402,20 +398,15 @@ func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
 	}
 	s.loggedIn = false
 	s.lastLogin = time.Time{}
-	s.lastUsed = time.Now()
 	s.mu.Unlock()
 
 	return nil
 }
 
-func fetchWarpAuthTokens(ctx context.Context, httpClient *http.Client, form url.Values) ([]byte, error) {
+func postWarpTokenForm(ctx context.Context, httpClient *http.Client, endpoint string, form url.Values) ([]byte, error) {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return postWarpTokenForm(ctx, httpClient, warpFirebaseURL, form)
-}
-
-func postWarpTokenForm(ctx context.Context, httpClient *http.Client, endpoint string, form url.Values) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(form.Encode()))
 	if err != nil {
 		return nil, err
@@ -453,7 +444,6 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 
 	s.mu.Lock()
 	if s.loggedIn && time.Since(s.lastLogin) < 30*time.Minute {
-		s.lastUsed = time.Now()
 		s.mu.Unlock()
 		return nil
 	}
@@ -504,7 +494,6 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 	s.mu.Lock()
 	s.loggedIn = true
 	s.lastLogin = time.Now()
-	s.lastUsed = time.Now()
 	s.mu.Unlock()
 	return nil
 }
@@ -580,7 +569,6 @@ func (s *session) beginRequest() string {
 	if strings.TrimSpace(s.requestID) == "" {
 		s.requestID = newSessionUUID()
 	}
-	s.lastUsed = time.Now()
 	return s.requestID
 }
 

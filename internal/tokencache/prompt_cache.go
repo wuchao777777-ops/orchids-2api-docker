@@ -27,7 +27,6 @@ type MemoryPromptCache struct {
 }
 
 type promptCacheItem struct {
-	tokens     int
 	expiresAt  time.Time
 	accessedAt time.Time
 	size       int64
@@ -37,13 +36,13 @@ func NewMemoryPromptCache(ttl time.Duration, maxEntries ...int) *MemoryPromptCac
 	if ttl < 0 {
 		ttl = 0
 	}
-	max := 0
+	limit := 0
 	if len(maxEntries) > 0 && maxEntries[0] > 0 {
-		max = maxEntries[0]
+		limit = maxEntries[0]
 	}
 	c := &MemoryPromptCache{
 		ttl:        ttl,
-		maxEntries: max,
+		maxEntries: limit,
 		items:      make(map[string]promptCacheItem),
 		done:       make(chan struct{}),
 	}
@@ -86,15 +85,12 @@ func (c *MemoryPromptCache) CheckPromptCache(strategy string, systemTokens, tool
 	if c == nil {
 		return 0, systemTokens + toolsTokens
 	}
-	
+
 	// Strategy parsing
 	// 0: System + Tools together
 	// 1: Split (System and Tools separate)
 	// 2: System only
 	// 3: Tools only
-	readTokens = 0
-	creationTokens = 0
-
 	now := time.Now()
 	expiresAt := time.Time{}
 	if c.ttl > 0 {
@@ -105,11 +101,10 @@ func (c *MemoryPromptCache) CheckPromptCache(strategy string, systemTokens, tool
 		if tokens <= 0 || key == "" {
 			return 0, 0
 		}
-		
+
 		c.mu.RLock()
 		item, ok := c.items[key]
 		if ok && (c.ttl == 0 || item.expiresAt.IsZero() || !now.After(item.expiresAt)) {
-			// Cache Hit
 			c.mu.RUnlock()
 			if c.accessCount.Add(1)%8 == 0 {
 				c.mu.Lock()
@@ -122,7 +117,7 @@ func (c *MemoryPromptCache) CheckPromptCache(strategy string, systemTokens, tool
 			return tokens, 0
 		}
 		c.mu.RUnlock()
-		
+
 		// Cache Miss - Need to Put
 		size := int64(len(key)) + 8
 		c.mu.Lock()
@@ -132,75 +127,44 @@ func (c *MemoryPromptCache) CheckPromptCache(strategy string, systemTokens, tool
 			c.evictLRULocked()
 		}
 		c.items[key] = promptCacheItem{
-			tokens:     tokens,
 			expiresAt:  expiresAt,
 			accessedAt: now,
 			size:       size,
 		}
 		c.sizeBytes += size
 		c.mu.Unlock()
-		
+
 		return 0, tokens
 	}
 
 	hash := func(text string) string {
-		if len(text) == 0 {
+		if text == "" {
 			return ""
 		}
-		h := sha256.New()
-		h.Write([]byte(text))
-		return hex.EncodeToString(h.Sum(nil))
+		h := sha256.Sum256([]byte(text))
+		return hex.EncodeToString(h[:])
+	}
+	checkPart := func(prefix, text string, tokens int) {
+		if text == "" || tokens <= 0 {
+			return
+		}
+		read, created := checkCache(hash(prefix+text), tokens)
+		readTokens += read
+		creationTokens += created
 	}
 
 	switch strategy {
 	case "0": // Together
-		key := hash("sys:" + systemText + "|tools:" + toolsText)
-		r, cr := checkCache(key, systemTokens+toolsTokens)
-		readTokens += r
-		creationTokens += cr
-	case "1": // Split
-		if len(systemText) > 0 && systemTokens > 0 {
-			key1 := hash("sys:" + systemText)
-			r, cr := checkCache(key1, systemTokens)
-			readTokens += r
-			creationTokens += cr
-		}
-		if len(toolsText) > 0 && toolsTokens > 0 {
-			key2 := hash("tools:" + toolsText)
-			r, cr := checkCache(key2, toolsTokens)
-			readTokens += r
-			creationTokens += cr
-		}
+		readTokens, creationTokens = checkCache(hash("sys:"+systemText+"|tools:"+toolsText), systemTokens+toolsTokens)
 	case "2": // System only
-		if len(systemText) > 0 && systemTokens > 0 {
-			key := hash("sys:" + systemText)
-			r, cr := checkCache(key, systemTokens)
-			readTokens += r
-			creationTokens += cr
-		}
+		checkPart("sys:", systemText, systemTokens)
 		creationTokens += toolsTokens // Untracked
 	case "3": // Tools only
-		if len(toolsText) > 0 && toolsTokens > 0 {
-			key := hash("tools:" + toolsText)
-			r, cr := checkCache(key, toolsTokens)
-			readTokens += r
-			creationTokens += cr
-		}
+		checkPart("tools:", toolsText, toolsTokens)
 		creationTokens += systemTokens // Untracked
-	default:
-		// Default to Split
-		if len(systemText) > 0 && systemTokens > 0 {
-			key1 := hash("sys:" + systemText)
-			r, cr := checkCache(key1, systemTokens)
-			readTokens += r
-			creationTokens += cr
-		}
-		if len(toolsText) > 0 && toolsTokens > 0 {
-			key2 := hash("tools:" + toolsText)
-			r, cr := checkCache(key2, toolsTokens)
-			readTokens += r
-			creationTokens += cr
-		}
+	default: // Split
+		checkPart("sys:", systemText, systemTokens)
+		checkPart("tools:", toolsText, toolsTokens)
 	}
 
 	return readTokens, creationTokens

@@ -29,16 +29,13 @@ func (h *headerFlags) Set(value string) error {
 }
 
 type result struct {
-	index          int
-	statusCode     int
-	headers        time.Duration
-	firstBodyByte  time.Duration
-	firstFrame     time.Duration
-	total          time.Duration
-	err            error
-	contentType    string
-	responseBytes  int64
-	firstFrameLine string
+	index         int
+	statusCode    int
+	headers       time.Duration
+	firstBodyByte time.Duration
+	firstFrame    time.Duration
+	total         time.Duration
+	err           error
 }
 
 type summary struct {
@@ -259,11 +256,7 @@ func runOnce(client *http.Client, targetURL string, payload []byte, headers http
 	}
 	defer resp.Body.Close()
 
-	res := result{
-		statusCode:  resp.StatusCode,
-		headers:     time.Since(start),
-		contentType: strings.ToLower(resp.Header.Get("Content-Type")),
-	}
+	res := result{statusCode: resp.StatusCode, headers: time.Since(start)}
 
 	br := bufio.NewReader(resp.Body)
 	if _, err := br.ReadByte(); err != nil {
@@ -280,17 +273,14 @@ func runOnce(client *http.Client, targetURL string, payload []byte, headers http
 		return res
 	}
 
-	if strings.Contains(res.contentType, "text/event-stream") {
-		firstLine, totalBytes, err := readSSE(br, start, &res)
-		res.firstFrameLine = firstLine
-		res.responseBytes = totalBytes
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		err := readSSE(br, start, &res)
 		if err != nil && err != io.EOF {
 			res.err = err
 		}
 	} else {
 		res.firstFrame = res.firstBodyByte
-		n, err := io.Copy(io.Discard, br)
-		res.responseBytes = n
+		_, err := io.Copy(io.Discard, br)
 		if err != nil {
 			res.err = err
 		}
@@ -300,26 +290,17 @@ func runOnce(client *http.Client, targetURL string, payload []byte, headers http
 	return res
 }
 
-func readSSE(br *bufio.Reader, start time.Time, res *result) (string, int64, error) {
-	var (
-		totalBytes int64
-		firstLine  string
-	)
+func readSSE(br *bufio.Reader, start time.Time, res *result) error {
 	for {
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
-			totalBytes += int64(len(line))
 			trimmed := strings.TrimSpace(line)
 			if res.firstFrame == 0 && trimmed != "" && !strings.HasPrefix(trimmed, ":") {
 				res.firstFrame = time.Since(start)
-				firstLine = trimmed
 			}
 		}
 		if err != nil {
-			if err == io.EOF {
-				return firstLine, totalBytes, io.EOF
-			}
-			return firstLine, totalBytes, err
+			return err
 		}
 	}
 }
@@ -405,13 +386,6 @@ func printSummary(name string, s summary) {
 		"%-18s min=%7.2f  p50=%7.2f  p90=%7.2f  p95=%7.2f  max=%7.2f  avg=%7.2f ms\n",
 		name, s.Min, s.P50, s.P90, s.P95, s.Max, s.Avg,
 	)
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func exitf(format string, args ...any) {

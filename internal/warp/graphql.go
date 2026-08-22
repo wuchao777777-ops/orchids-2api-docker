@@ -305,8 +305,8 @@ func requestContextPayload() map[string]interface{} {
 		"osContext": map[string]interface{}{
 			"category":           warpOSCategory(),
 			"linuxKernelVersion": nil,
-			"name":               warpOSName(),
-			"version":            warpOSVersion(),
+			"name":               warpOSCategory(),
+			"version":            "",
 		},
 	}
 }

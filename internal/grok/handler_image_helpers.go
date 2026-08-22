@@ -24,11 +24,8 @@ func normalizeImageResponseFormat(format string) string {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "b64_json", "base64":
 		return "b64_json"
-	case "url", "":
-		return "url"
-	default:
-		return "url"
 	}
+	return "url"
 }
 
 func imageResponseField(format string) string {

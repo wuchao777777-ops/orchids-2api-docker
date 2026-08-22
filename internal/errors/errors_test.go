@@ -3,6 +3,7 @@ package errors
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -13,10 +14,10 @@ func TestAppError_ToJSON(t *testing.T) {
 	if json == "" {
 		t.Error("ToJSON() returned empty string")
 	}
-	if !contains(json, `"type":"error"`) {
+	if !strings.Contains(json, `"type":"error"`) {
 		t.Errorf("ToJSON() missing type field: %s", json)
 	}
-	if !contains(json, `"type":"invalid_request_error"`) {
+	if !strings.Contains(json, `"type":"invalid_request_error"`) {
 		t.Errorf("ToJSON() missing error type: %s", json)
 	}
 }
@@ -47,17 +48,4 @@ func TestNew(t *testing.T) {
 	if err.HTTPStatus != http.StatusTeapot {
 		t.Errorf("New() status = %v, want %v", err.HTTPStatus, http.StatusTeapot)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr, 0))
-}
-
-func containsAt(s, substr string, start int) bool {
-	for i := start; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

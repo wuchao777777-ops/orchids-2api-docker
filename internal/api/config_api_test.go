@@ -17,16 +17,7 @@ import (
 func setupConfigAPI(t *testing.T) (*API, *store.Store, *miniredis.Miniredis) {
 	t.Helper()
 
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	s, mini := newTestStore(t, "test:")
 
 	cfg := &config.Config{
 		AdminPass:          "initial-secret",

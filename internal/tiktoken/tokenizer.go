@@ -5,10 +5,6 @@ import (
 	"unicode/utf8"
 )
 
-func isASCIIWordRune(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
-}
-
 func isASCIIWordByte(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
@@ -26,10 +22,8 @@ func (e *Estimator) Add(text string) {
 	e.hasText = true
 	for _, r := range text {
 		if r < 128 {
-			if isASCIIWordRune(r) {
-				if !e.inWord {
-					e.inWord = true
-				}
+			if isASCIIWordByte(byte(r)) {
+				e.inWord = true
 			} else {
 				if e.inWord {
 					e.tokens += 1
@@ -59,9 +53,7 @@ func (e *Estimator) AddBytes(text []byte) {
 		if text[0] < utf8.RuneSelf {
 			b := text[0]
 			if isASCIIWordByte(b) {
-				if !e.inWord {
-					e.inWord = true
-				}
+				e.inWord = true
 			} else {
 				if e.inWord {
 					e.tokens += 1

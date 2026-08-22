@@ -81,12 +81,8 @@ func IsAccountAuthFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-	switch ClassifyAccountStatus(err.Error()) {
-	case "401", "403":
-		return true
-	default:
-		return false
-	}
+	status := ClassifyAccountStatus(err.Error())
+	return status == "401" || status == "403"
 }
 
 // UpstreamErrorClass describes the category and retry semantics of an upstream error.
@@ -102,13 +98,13 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	lower := strings.ToLower(errStr)
 	switch {
 	case strings.Contains(lower, "context canceled") || strings.Contains(lower, "canceled"):
-		return UpstreamErrorClass{Category: "canceled", Retryable: false, SwitchAccount: false}
+		return UpstreamErrorClass{Category: "canceled"}
 	case strings.Contains(lower, "model is not found") ||
 		strings.Contains(lower, "model not found") ||
 		strings.Contains(lower, "no_implementation_available") ||
 		strings.Contains(lower, "context_window_exceeded") ||
 		strings.Contains(lower, "max_token_limit"):
-		return UpstreamErrorClass{Category: "client", Retryable: false, SwitchAccount: false}
+		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "401") ||
 		strings.Contains(lower, "signed out") ||
 		strings.Contains(lower, "signed_out") ||
@@ -117,11 +113,11 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	case HasExplicitHTTPStatus(lower, "403"):
 		return UpstreamErrorClass{Category: "auth_blocked", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "404"):
-		return UpstreamErrorClass{Category: "auth_blocked", Retryable: false, SwitchAccount: false}
+		return UpstreamErrorClass{Category: "auth_blocked"}
 	case isWarpModelUnavailableError(lower):
 		return UpstreamErrorClass{Category: "model_unavailable", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "input is too long") || HasExplicitHTTPStatus(lower, "400"):
-		return UpstreamErrorClass{Category: "client", Retryable: false, SwitchAccount: false}
+		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "429") ||
 		HasExplicitHTTPStatus(lower, "402") ||
 		strings.Contains(lower, "too many requests") ||
@@ -154,9 +150,7 @@ func isWarpModelUnavailableError(lower string) bool {
 	if !strings.Contains(lower, "warp") {
 		return false
 	}
-	if strings.Contains(lower, "requested base model") &&
-		(strings.Contains(lower, "not allowed") || strings.Contains(lower, "no model available")) {
-		return true
-	}
-	return strings.Contains(lower, "llm_unavailable") || strings.Contains(lower, "model unavailable")
+	return strings.Contains(lower, "requested base model") &&
+		(strings.Contains(lower, "not allowed") || strings.Contains(lower, "no model available")) ||
+		strings.Contains(lower, "llm_unavailable") || strings.Contains(lower, "model unavailable")
 }

@@ -16,14 +16,12 @@ import (
 // based on their proxy configuration. This ensures that we reuse TCP connections
 // (Keep-Alive) instead of exhausting ephemeral ports and paying the TLS handshake
 // penalty on every upstream request.
-var httpClientCache struct {
+type clientPool struct {
 	mu      sync.RWMutex
 	clients map[string]*http.Client
 }
 
-func init() {
-	httpClientCache.clients = make(map[string]*http.Client)
-}
+var httpClientCache = clientPool{clients: make(map[string]*http.Client)}
 
 // GetSharedHTTPClient returns a shared http.Client.
 // The proxyKey should uniquely identify the proxy configuration (e.g., the Proxy URL or "direct").
@@ -58,7 +56,7 @@ func GetSharedHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: responseHeaderTimeoutForClient(timeout),
 		Proxy:                 proxyFunc,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: false},
+		TLSClientConfig:       &tls.Config{},
 	}
 
 	newClient := &http.Client{
@@ -81,14 +79,7 @@ func responseHeaderTimeoutForClient(timeout time.Duration) time.Duration {
 	if timeout <= 30*time.Second {
 		return timeout
 	}
-	headerTimeout := timeout / 2
-	if headerTimeout < 60*time.Second {
-		headerTimeout = 60 * time.Second
-	}
-	if headerTimeout > 120*time.Second {
-		headerTimeout = 120 * time.Second
-	}
-	return headerTimeout
+	return min(max(timeout/2, 60*time.Second), 120*time.Second)
 }
 
 // generateProxyKey generates a string key based on the proxy config.

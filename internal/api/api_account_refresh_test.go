@@ -3,8 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
@@ -182,45 +179,6 @@ func TestRefreshAccountState_GrokMissingToken(t *testing.T) {
 	}
 	if httpStatus != http.StatusBadRequest {
 		t.Fatalf("httpStatus=%d want=%d", httpStatus, http.StatusBadRequest)
-	}
-}
-
-
-
-
-func TestShouldSyncAccountOnCreate(t *testing.T) {
-	t.Parallel()
-
-	if !shouldSyncAccountOnCreate(&store.Account{AccountType: "grok"}) {
-		t.Fatal("expected non-nil account to keep initial sync")
-	}
-	if shouldSyncAccountOnCreate(nil) {
-		t.Fatal("nil account should not sync on create")
-	}
-}
-
-func TestApplyAccountStatusFromError(t *testing.T) {
-	t.Parallel()
-
-	acc := &store.Account{}
-	applyAccountStatusFromError(acc, errors.New("unexpected status code 429: too many requests"))
-	if acc.StatusCode != "429" {
-		t.Fatalf("StatusCode=%q want 429", acc.StatusCode)
-	}
-	if acc.LastAttempt.IsZero() {
-		t.Fatal("LastAttempt should be set")
-	}
-
-	unknown := &store.Account{}
-	applyAccountStatusFromError(unknown, errors.New("plain failure"))
-	if unknown.StatusCode != "" {
-		t.Fatalf("StatusCode=%q want empty", unknown.StatusCode)
-	}
-
-	noActiveSession := &store.Account{}
-	applyAccountStatusFromError(noActiveSession, errors.New("no active sessions found"))
-	if noActiveSession.StatusCode != "401" {
-		t.Fatalf("StatusCode=%q want 401", noActiveSession.StatusCode)
 	}
 }
 
@@ -437,29 +395,12 @@ func TestHandleAccountByID_PutAllowsSameAccountCredential(t *testing.T) {
 func newTestAPI(t *testing.T) (*API, *store.Store, func()) {
 	t.Helper()
 
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisPrefix: "api_test:",
-	})
-	if err != nil {
-		mini.Close()
-		t.Fatalf("store.New() error = %v", err)
-	}
+	s, mini := newTestStore(t, "api_test:")
 
 	return New(s, "", "", &config.Config{}), s, func() {
 		_ = s.Close()
 		mini.Close()
 	}
-}
-
-func encodeJWTClaims(raw string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(raw))
-}
-
-func encodeJWT(raw string) string {
-	return encodeJWTClaims(`{"alg":"none","typ":"JWT"}`) + "." + encodeJWTClaims(raw) + ".sigpayload"
 }
 
 func TestHandleAccountByID_PutPreservesGrokOAuthTokens(t *testing.T) {

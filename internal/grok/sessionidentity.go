@@ -58,9 +58,6 @@ func ParseSessionIdentity(body []byte) (AccountIdentity, error) {
 		Email:  firstNonEmpty(value.Session.Email, value.User.Email, value.Email),
 		TeamID: firstNonEmpty(value.Session.OrganizationID, value.User.TeamID, value.TeamID),
 	}
-	identity.UserID = strings.TrimSpace(identity.UserID)
-	identity.Email = strings.TrimSpace(identity.Email)
-	identity.TeamID = strings.TrimSpace(identity.TeamID)
 	if identity.UserID == "" && identity.Email == "" {
 		return AccountIdentity{}, fmt.Errorf("grok session missing account identity")
 	}

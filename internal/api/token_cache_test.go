@@ -11,6 +11,30 @@ import (
 	"orchids-api/internal/tokencache"
 )
 
+type tokenCacheStatsResponse struct {
+	Code int `json:"code"`
+	Data struct {
+		KeyCount      int64  `json:"key_count"`
+		MemoryUsed    int64  `json:"memory_used"`
+		MemoryUsedStr string `json:"memory_used_str"`
+		Connected     bool   `json:"connected"`
+		Count         int64  `json:"count"`
+		Size          int64  `json:"size"`
+		Status        string `json:"status"`
+		PromptCache   struct {
+			Connected     bool   `json:"connected"`
+			KeyCount      int64  `json:"key_count"`
+			MemoryUsedStr string `json:"memory_used_str"`
+		} `json:"prompt_cache"`
+		EstimateCache struct {
+			Connected     bool   `json:"connected"`
+			KeyCount      int64  `json:"key_count"`
+			MemoryUsed    int64  `json:"memory_used"`
+			MemoryUsedStr string `json:"memory_used_str"`
+		} `json:"estimate_cache"`
+	} `json:"data"`
+}
+
 func TestHandleTokenCacheStatsDisabledReturnsCodeFreeMaxShape(t *testing.T) {
 	api := New(nil, "", "", &config.Config{EnableTokenCache: false})
 	cache := tokencache.NewMemoryPromptCache(0)
@@ -21,18 +45,7 @@ func TestHandleTokenCacheStatsDisabledReturnsCodeFreeMaxShape(t *testing.T) {
 	rec := httptest.NewRecorder()
 	api.HandleTokenCacheStats(rec, req)
 
-	var resp struct {
-		Code int `json:"code"`
-		Data struct {
-			KeyCount      int64  `json:"key_count"`
-			MemoryUsed    int64  `json:"memory_used"`
-			MemoryUsedStr string `json:"memory_used_str"`
-			Connected     bool   `json:"connected"`
-			Count         int64  `json:"count"`
-			Size          int64  `json:"size"`
-			Status        string `json:"status"`
-		} `json:"data"`
-	}
+	var resp tokenCacheStatsResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
@@ -64,27 +77,7 @@ func TestHandleTokenCacheStatsEnabledReturnsCountsAndSize(t *testing.T) {
 	rec := httptest.NewRecorder()
 	api.HandleTokenCacheStats(rec, req)
 
-	var resp struct {
-		Code int `json:"code"`
-		Data struct {
-			KeyCount      int64  `json:"key_count"`
-			MemoryUsed    int64  `json:"memory_used"`
-			MemoryUsedStr string `json:"memory_used_str"`
-			Connected     bool   `json:"connected"`
-			Count         int64  `json:"count"`
-			Size          int64  `json:"size"`
-			Status        string `json:"status"`
-			PromptCache   struct {
-				Connected     bool   `json:"connected"`
-				KeyCount      int64  `json:"key_count"`
-				MemoryUsedStr string `json:"memory_used_str"`
-			} `json:"prompt_cache"`
-			EstimateCache struct {
-				Connected bool  `json:"connected"`
-				KeyCount  int64 `json:"key_count"`
-			} `json:"estimate_cache"`
-		} `json:"data"`
-	}
+	var resp tokenCacheStatsResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
@@ -128,22 +121,7 @@ func TestHandleTokenCacheStatsIncludesEstimateCache(t *testing.T) {
 	rec := httptest.NewRecorder()
 	api.HandleTokenCacheStats(rec, req)
 
-	var resp struct {
-		Code int `json:"code"`
-		Data struct {
-			Connected     bool `json:"connected"`
-			EstimateCache struct {
-				Connected     bool   `json:"connected"`
-				KeyCount      int64  `json:"key_count"`
-				MemoryUsed    int64  `json:"memory_used"`
-				MemoryUsedStr string `json:"memory_used_str"`
-			} `json:"estimate_cache"`
-			PromptCache struct {
-				Connected bool  `json:"connected"`
-				KeyCount  int64 `json:"key_count"`
-			} `json:"prompt_cache"`
-		} `json:"data"`
-	}
+	var resp tokenCacheStatsResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}

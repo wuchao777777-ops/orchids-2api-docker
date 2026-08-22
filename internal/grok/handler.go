@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	apperrors "orchids-api/internal/errors"
 )
 
 const maxEditImageBytes = 50 * 1024 * 1024
@@ -460,7 +462,7 @@ func shouldSwitchGrokAccount(err error) bool {
 	case UpstreamErrorGenericForbidden:
 		return false
 	}
-	status := classifyAccountStatusFromError(err.Error())
+	status := apperrors.ClassifyAccountStatus(err.Error())
 	if status == "429" {
 		return !isSharedGrokRateLimitError(err)
 	}

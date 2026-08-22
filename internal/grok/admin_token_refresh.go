@@ -12,6 +12,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
 )
 
@@ -22,15 +23,11 @@ type adminTokenRefreshRequest struct {
 	Model       string   `json:"model,omitempty"`
 }
 
-func normalizeTokenRefreshConcurrency(v int) int {
-	return normalizeNSFWConcurrency(v)
-}
-
 func collectRefreshTokens(req adminTokenRefreshRequest) []string {
 	dedup := map[string]struct{}{}
 	add := func(raw string) {
 		token := NormalizeSSOToken(raw)
-		if strings.TrimSpace(token) == "" {
+		if token == "" {
 			return
 		}
 		dedup[token] = struct{}{}
@@ -69,8 +66,8 @@ func (h *Handler) resolveTokenRefreshRequest(r *http.Request) (adminTokenRefresh
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
 		return req, nil, fmt.Errorf("invalid json")
 	}
-	req.Concurrency = normalizeTokenRefreshConcurrency(req.Concurrency)
-	req.Model = normalizeModelID(strings.TrimSpace(req.Model))
+	req.Concurrency = normalizeNSFWConcurrency(req.Concurrency)
+	req.Model = normalizeModelID(req.Model)
 
 	tokens := collectRefreshTokens(req)
 	if len(tokens) == 0 {
@@ -121,7 +118,7 @@ func (h *Handler) runTokenRefreshBatch(
 	concurrency int,
 	onItem func(token string, ok bool),
 ) (int, map[string]bool) {
-	concurrency = normalizeTokenRefreshConcurrency(concurrency)
+	concurrency = normalizeNSFWConcurrency(concurrency)
 
 	var (
 		mu      sync.Mutex
@@ -156,7 +153,7 @@ func (h *Handler) runTokenRefreshBatch(
 			success := err == nil
 			statusCode := ""
 			if !success {
-				statusCode = classifyAccountStatusFromError(err.Error())
+				statusCode = apperrors.ClassifyAccountStatus(err.Error())
 				if statusCode == "" {
 					statusCode = "500"
 				}
@@ -255,10 +252,5 @@ func (h *Handler) HandleAdminTokensRefreshAsync(w http.ResponseWriter, r *http.R
 		task.finish("done", "")
 	}()
 
-	out := map[string]interface{}{
-		"status":  "success",
-		"task_id": task.ID,
-		"total":   len(tokens),
-	}
-	writeJSON(w, out)
+	writeAsyncTaskStarted(w, task)
 }

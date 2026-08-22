@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -157,11 +156,6 @@ func normalizeWarpTokenOutput(acc *store.Account) *store.Account {
 		copyAcc.SessionCookie = ""
 	}
 	return &copyAcc
-}
-
-// classifyAccountStatusFromError delegates to the centralized errors package.
-func classifyAccountStatusFromError(errStr string) string {
-	return apperrors.ClassifyAccountStatus(errStr)
 }
 
 func httpStatusFromAccountStatus(status string) int {
@@ -565,7 +559,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 				if code := warp.HTTPStatusCode(probeErr); code >= 400 {
 					httpStatus = code
 				}
-				accountStatus := classifyAccountStatusFromError(probeErr.Error())
+				accountStatus := apperrors.ClassifyAccountStatus(probeErr.Error())
 				if accountStatus == "" && httpStatus == http.StatusForbidden {
 					accountStatus = "403"
 				}
@@ -585,7 +579,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 				strings.Contains(strings.ToLower(verifyErr.Error()), "missing oauth token") {
 				return "", http.StatusBadRequest, fmt.Errorf("failed to verify grok account: %w", verifyErr)
 			}
-			status := classifyAccountStatusFromError(verifyErr.Error())
+			status := apperrors.ClassifyAccountStatus(verifyErr.Error())
 			return status, httpStatusFromAccountStatus(status), fmt.Errorf("failed to verify grok account: %w", verifyErr)
 		}
 		return "", 0, nil
@@ -603,7 +597,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			}
 			return "", 0, nil
 		}
-		usageStatus := classifyAccountStatusFromError(usageErr.Error())
+		usageStatus := apperrors.ClassifyAccountStatus(usageErr.Error())
 		httpStatus := http.StatusBadGateway
 		if usageStatus != "" {
 			httpStatus = httpStatusFromAccountStatus(usageStatus)
@@ -662,10 +656,6 @@ func (a *API) SetPromptCache(cache tokencache.PromptCache) {
 	a.promptCache = cache
 }
 
-func secureCompare(a, b string) bool {
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
-
 func (a *API) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -694,7 +684,7 @@ func (a *API) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		adminPass = cfg.AdminPass
 	}
 
-	if !secureCompare(req.Username, adminUser) || !secureCompare(req.Password, adminPass) {
+	if !util.SecureCompare(req.Username, adminUser) || !util.SecureCompare(req.Password, adminPass) {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -885,8 +875,8 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if acc.Enabled && shouldSyncAccountOnCreate(&acc) {
-			if wantsAsyncAccountSync(r) {
+		if acc.Enabled {
+			if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Account-Sync")), "async") {
 				a.syncAccountAfterCreate(acc)
 			} else {
 				syncCtx, syncCancel := context.WithTimeout(r.Context(), 25*time.Second)
@@ -961,7 +951,7 @@ func (a *API) HandleWarpUserFileImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if acc.Enabled && shouldSyncAccountOnCreate(acc) {
+	if acc.Enabled {
 		a.syncAccountAfterCreate(*acc)
 	}
 
@@ -1062,7 +1052,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				}
 				fails := a.checkFailCount[id] + 1
 				a.checkFailCount[id] = fails
-				d := time.Duration(1<<util.MinInt(fails, 8)) * time.Second
+				d := time.Duration(1<<min(fails, 8)) * time.Second
 				// For CF/rate-limit style failures, start with a bigger cooldown.
 				if checkErrStatus == "403" || checkErrStatus == "429" {
 					if d < 60*time.Second {
@@ -1442,14 +1432,7 @@ func (a *API) HandleModels(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		filtered := make([]*store.Model, 0, len(models))
-		for _, model := range models {
-			if model == nil {
-				continue
-			}
-			filtered = append(filtered, model)
-		}
-		json.NewEncoder(w).Encode(filtered)
+		json.NewEncoder(w).Encode(models)
 
 	case http.MethodPost:
 		var m store.Model
@@ -1583,7 +1566,7 @@ func configPayload(cfg *config.Config) (map[string]interface{}, error) {
 	if v, ok := payload["admin_pass"]; ok {
 		payload["admin_password"] = v
 	}
-	if rawProxyURL, ok := payload["proxy_url"].(string); (!ok || strings.TrimSpace(rawProxyURL) == "") && cfg != nil {
+	if rawProxyURL, ok := payload["proxy_url"].(string); !ok || strings.TrimSpace(rawProxyURL) == "" {
 		if proxyURL := util.ProxyURLFromConfig(cfg); proxyURL != nil {
 			payload["proxy_url"] = proxyURL.String()
 		}
@@ -1726,19 +1709,8 @@ func normalizeProxyBypassValue(value interface{}) []string {
 	}
 }
 
-func shouldSyncAccountOnCreate(acc *store.Account) bool {
-	return acc != nil
-}
-
-func wantsAsyncAccountSync(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Account-Sync")), "async")
-}
-
 func (a *API) syncAccountAfterCreate(acc store.Account) {
-	if !acc.Enabled || !shouldSyncAccountOnCreate(&acc) {
+	if !acc.Enabled {
 		return
 	}
 
@@ -1773,18 +1745,6 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 		return
 	}
 	acc.StatusCode = strings.TrimSpace(status)
-	acc.LastAttempt = time.Now()
-}
-
-func applyAccountStatusFromError(acc *store.Account, err error) {
-	if acc == nil || err == nil {
-		return
-	}
-	status := classifyAccountStatusFromError(err.Error())
-	if status == "" {
-		return
-	}
-	acc.StatusCode = status
 	acc.LastAttempt = time.Now()
 }
 

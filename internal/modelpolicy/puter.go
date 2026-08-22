@@ -24,13 +24,7 @@ var latestPuterModelIDs = []string{
 	"mistral-small-2603",
 }
 
-var latestPuterModelAllowlist = func() map[string]struct{} {
-	out := make(map[string]struct{}, len(latestPuterModelIDs))
-	for _, id := range latestPuterModelIDs {
-		out[id] = struct{}{}
-	}
-	return out
-}()
+var latestPuterModelAllowlist = stringSet(latestPuterModelIDs)
 
 func LatestPuterModelIDs() []string {
 	return slices.Clone(latestPuterModelIDs)

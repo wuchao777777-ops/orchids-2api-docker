@@ -47,27 +47,27 @@ type Config struct {
 	Email         string `json:"-"`
 
 	// ── Hardcoded fields (set unconditionally by ApplyHardcoded) ──
-	DebugLogSSE             bool     `json:"-"`
-	SuppressThinking        bool     `json:"-"`
-	OutputTokenMode         string   `json:"-"`
-	ContextMaxTokens        int      `json:"-"`
-	ContextSummaryMaxTokens int      `json:"-"`
-	ContextKeepTurns        int      `json:"-"`
-	UpstreamURL             string   `json:"-"`
-	UpstreamToken           string   `json:"-"`
-	UpstreamMode            string   `json:"-"`
-	GrokAPIBaseURL          string   `json:"-"`
-	GrokUserAgent           string   `json:"-"`
-	GrokCFClearance         string   `json:"-"`
-	GrokCFBM                string   `json:"-"`
-	GrokStatsigID           string   `json:"grok_statsig_id,omitempty"`
-	GrokConfigCFClearance   string   `json:"grok_cf_clearance,omitempty"`
-	GrokConfigCFBM          string   `json:"grok_cf_bm,omitempty"`
-	GrokBaseProxyURL        string   `json:"-"`
-	GrokAssetProxyURL       string   `json:"-"`
-	GrokTemporary           *bool    `json:"grok_temporary,omitempty"`
-	GrokDisableMemory       *bool    `json:"grok_disable_memory,omitempty"`
-	GrokCustomInstruction   string   `json:"grok_custom_instruction,omitempty"`
+	DebugLogSSE             bool   `json:"-"`
+	SuppressThinking        bool   `json:"-"`
+	OutputTokenMode         string `json:"-"`
+	ContextMaxTokens        int    `json:"-"`
+	ContextSummaryMaxTokens int    `json:"-"`
+	ContextKeepTurns        int    `json:"-"`
+	UpstreamURL             string `json:"-"`
+	UpstreamToken           string `json:"-"`
+	UpstreamMode            string `json:"-"`
+	GrokAPIBaseURL          string `json:"-"`
+	GrokUserAgent           string `json:"-"`
+	GrokCFClearance         string `json:"-"`
+	GrokCFBM                string `json:"-"`
+	GrokStatsigID           string `json:"grok_statsig_id,omitempty"`
+	GrokConfigCFClearance   string `json:"grok_cf_clearance,omitempty"`
+	GrokConfigCFBM          string `json:"grok_cf_bm,omitempty"`
+	GrokBaseProxyURL        string `json:"-"`
+	GrokAssetProxyURL       string `json:"-"`
+	GrokTemporary           *bool  `json:"grok_temporary,omitempty"`
+	GrokDisableMemory       *bool  `json:"grok_disable_memory,omitempty"`
+	GrokCustomInstruction   string `json:"grok_custom_instruction,omitempty"`
 
 	// ── Grok Build CLI (cli-chat-proxy.grok.com) OAuth upstream ──
 	// These fields are configurable via config.json / Redis and are deliberately
@@ -93,37 +93,33 @@ type Config struct {
 	// A relay gateway forwards client messages without rewriting content.
 	// This field is NOT written into ApplyHardcoded, so it survives a
 	// persistConfig round trip.
-	WarpDisableTools          *bool    `json:"-"`
-	WarpMaxToolResults        int      `json:"-"`
-	WarpMaxHistoryMessages    int      `json:"-"`
-	WarpSplitToolResults      bool     `json:"-"`
-	Stream                    *bool    `json:"-"`
-	ImageNSFW                 *bool    `json:"-"`
-	ImageFinalMinBytes        int      `json:"-"`
-	ImageMediumMinBytes       int      `json:"-"`
-	MaxRetries                int      `json:"-"`
-	RetryDelay                int      `json:"-"`
-	AccountSwitchCount        int      `json:"-"`
-	RequestTimeout            int      `json:"-"`
-	Retry429Interval          int      `json:"-"`
-	TokenRefreshInterval      int      `json:"-"`
-	AutoRefreshToken          bool     `json:"-"`
-	OutputTokenCount          bool     `json:"-"`
-	LoadBalancerCacheTTL      int      `json:"-"`
-	ConcurrencyLimit          int      `json:"-"`
-	ConcurrencyTimeout        int      `json:"-"`
-	AdaptiveTimeout           bool     `json:"-"`
-	ProxyURL                  string   `json:"proxy_url"`
-	ProxyHTTP                 string   `json:"proxy_http"`
-	ProxyHTTPS                string   `json:"proxy_https"`
-	ProxyUser                 string   `json:"proxy_user"`
-	ProxyPass                 string   `json:"proxy_pass"`
-	ProxyBypass               []string `json:"proxy_bypass"`
-	AutoRegEnabled            bool     `json:"-"`
-	AutoRegThreshold          int      `json:"-"`
-	AutoRegScript             string   `json:"-"`
-	PublicKey                 string   `json:"-"`
-	PublicEnabled             *bool    `json:"-"`
+	WarpDisableTools       *bool    `json:"-"`
+	WarpMaxToolResults     int      `json:"-"`
+	WarpMaxHistoryMessages int      `json:"-"`
+	WarpSplitToolResults   bool     `json:"-"`
+	Stream                 *bool    `json:"-"`
+	ImageNSFW              *bool    `json:"-"`
+	ImageFinalMinBytes     int      `json:"-"`
+	ImageMediumMinBytes    int      `json:"-"`
+	MaxRetries             int      `json:"-"`
+	RetryDelay             int      `json:"-"`
+	AccountSwitchCount     int      `json:"-"`
+	RequestTimeout         int      `json:"-"`
+	Retry429Interval       int      `json:"-"`
+	TokenRefreshInterval   int      `json:"-"`
+	AutoRefreshToken       bool     `json:"-"`
+	LoadBalancerCacheTTL   int      `json:"-"`
+	ConcurrencyLimit       int      `json:"-"`
+	ConcurrencyTimeout     int      `json:"-"`
+	AdaptiveTimeout        bool     `json:"-"`
+	ProxyURL               string   `json:"proxy_url"`
+	ProxyHTTP              string   `json:"proxy_http"`
+	ProxyHTTPS             string   `json:"proxy_https"`
+	ProxyUser              string   `json:"proxy_user"`
+	ProxyPass              string   `json:"proxy_pass"`
+	ProxyBypass            []string `json:"proxy_bypass"`
+	PublicKey              string   `json:"-"`
+	PublicEnabled          *bool    `json:"-"`
 }
 
 // EgressNodeConfig describes one egress exit node for the Grok proxy pool.
@@ -265,8 +261,6 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.ConcurrencyLimit = 100
 	cfg.ConcurrencyTimeout = 300
 	cfg.AdaptiveTimeout = true
-	cfg.AutoRegThreshold = 5
-	cfg.AutoRegScript = "scripts/autoreg.py"
 	cfg.DebugLogSSE = cfg.DebugEnabled
 }
 
@@ -275,17 +269,11 @@ func (c *Config) VerboseDiagnosticsEnabled() bool {
 }
 
 func (c *Config) ChatDefaultStream() bool {
-	if c == nil || c.Stream == nil {
-		return true
-	}
-	return *c.Stream
+	return c == nil || c.Stream == nil || *c.Stream
 }
 
 func (c *Config) GrokChatTemporary() bool {
-	if c == nil || c.GrokTemporary == nil {
-		return true
-	}
-	return *c.GrokTemporary
+	return c == nil || c.GrokTemporary == nil || *c.GrokTemporary
 }
 
 func (c *Config) GrokChatDisableMemory(defaultValue bool) bool {
@@ -356,10 +344,7 @@ func (c *Config) GrokCLIClientIdentifierOrDefault() string {
 // GrokSessionIdentityRefreshEnabled reports whether background refresh should
 // fetch {base}/api/auth/session to learn team_id/email. Default true.
 func (c *Config) GrokSessionIdentityRefreshEnabled() bool {
-	if c == nil || c.GrokSessionIdentityRefr == nil {
-		return true
-	}
-	return *c.GrokSessionIdentityRefr
+	return c == nil || c.GrokSessionIdentityRefr == nil || *c.GrokSessionIdentityRefr
 }
 
 // GrokClearanceRefreshIntervalOrDefault returns the clearance auto-refresh
@@ -382,7 +367,7 @@ func (c *Config) GrokClearanceModeOrDefault() string {
 // GrokModelIsCLI reports whether the given model ID is routed to the Build CLI
 // upstream via the GrokCLIModelIDs list.
 func (c *Config) GrokModelIsCLI(modelID string) bool {
-	if c == nil || len(c.GrokCLIModelIDs) == 0 {
+	if c == nil {
 		return false
 	}
 	target := strings.ToLower(strings.TrimSpace(modelID))
@@ -395,10 +380,7 @@ func (c *Config) GrokModelIsCLI(modelID string) bool {
 }
 
 func (c *Config) PublicImagineNSFW() bool {
-	if c == nil || c.ImageNSFW == nil {
-		return true
-	}
-	return *c.ImageNSFW
+	return c == nil || c.ImageNSFW == nil || *c.ImageNSFW
 }
 
 func (c *Config) PublicImagineFinalMinBytes() int {
@@ -423,18 +405,7 @@ func (c *Config) PublicAPIKey() string {
 }
 
 func (c *Config) PublicAPIEnabled() bool {
-	if c == nil || c.PublicEnabled == nil {
-		return false
-	}
-	return *c.PublicEnabled
-}
-
-func (c *Config) Save(path string) error {
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
+	return c != nil && c.PublicEnabled != nil && *c.PublicEnabled
 }
 
 func generateRandomPassword(length int) (string, error) {

@@ -102,7 +102,7 @@ func (m *Manager) Enabled() bool {
 // healthy node exists, or clearance cannot be resolved for a flare-solve node,
 // Acquire fails closed.
 func (m *Manager) Acquire(ctx context.Context, scope, affinity string) (*Lease, error) {
-	if m == nil || !m.Enabled() {
+	if !m.Enabled() {
 		return nil, errors.New("egress disabled")
 	}
 	node := m.pickNode(scope, affinity)
@@ -133,10 +133,6 @@ func (m *Manager) Acquire(ctx context.Context, scope, affinity string) (*Lease, 
 		clearanceVersion: version,
 		client:           client,
 		manager:          m,
-	}
-	lease.release = func() {
-		// Shared client pool; nothing to return. Clearance stays cached by
-		// fingerprint for reuse.
 	}
 	return lease, nil
 }
@@ -238,7 +234,7 @@ func (m *Manager) resolveFingerprint(ctx context.Context, node Node, fingerprint
 	cfg := m.clearanceConfig()
 	ua := state.userAgent
 	if ua == "" {
-		ua = pickUserAgent(fingerprint, false)
+		ua = pickUserAgent(fingerprint)
 	}
 	cookies := state.cookies
 

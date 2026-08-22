@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -143,7 +142,7 @@ func (h *Handler) selectAccountWithOptions(ctx context.Context, targetChannel st
 		}
 		return client, account, nil
 	} else if h.client != nil {
-			return h.client, nil, nil
+		return h.client, nil, nil
 	}
 	return nil, nil, errors.New("no client configured")
 }
@@ -412,14 +411,6 @@ func (h *Handler) refundWarpCredits(client UpstreamClient, category string) {
 		return
 	}
 	slog.Debug("Warp credits refunded", "category", category, "reason", reason)
-}
-
-// upstreamErrorClass is a local alias for the centralized type.
-type upstreamErrorClass = apperrors.UpstreamErrorClass
-
-// classifyUpstreamError delegates to the centralized errors package.
-func classifyUpstreamError(errStr string) upstreamErrorClass {
-	return apperrors.ClassifyUpstreamError(errStr)
 }
 
 func computeRetryDelay(base time.Duration, attempt int, category string) time.Duration {

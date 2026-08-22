@@ -62,9 +62,6 @@ func extractPlaintextLocalUserRefreshToken(raw string) string {
 	if token := extractRefreshTokenFromPairs(raw); token != "" {
 		return token
 	}
-	if strings.Contains(raw, "----") {
-		return extractRefreshTokenFromPairs(raw)
-	}
 	if isLikelyRawRefreshToken(raw) {
 		return raw
 	}

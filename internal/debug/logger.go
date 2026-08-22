@@ -221,9 +221,6 @@ func (l *Logger) Close() {
 }
 
 func (l *Logger) writeJSON(filename string, data interface{}) {
-	if !l.enabled {
-		return
-	}
 	jsonData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return
@@ -232,8 +229,5 @@ func (l *Logger) writeJSON(filename string, data interface{}) {
 }
 
 func (l *Logger) writeFile(filename string, content string) {
-	if !l.enabled {
-		return
-	}
 	os.WriteFile(filepath.Join(l.dir, filename), []byte(content), 0644)
 }

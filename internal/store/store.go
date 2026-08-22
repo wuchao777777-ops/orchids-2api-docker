@@ -116,7 +116,6 @@ type accountStore interface {
 	ListAccounts(ctx context.Context) ([]*Account, error)
 	GetEnabledAccounts(ctx context.Context) ([]*Account, error)
 	IncrementRequestCount(ctx context.Context, id int64) error
-	IncrementUsage(ctx context.Context, id int64, usage float64) error
 	IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error
 }
 
@@ -128,9 +127,7 @@ type settingsStore interface {
 type apiKeyStore interface {
 	CreateApiKey(ctx context.Context, key *ApiKey) error
 	ListApiKeys(ctx context.Context) ([]*ApiKey, error)
-	GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey, error)
 	UpdateApiKeyEnabled(ctx context.Context, id int64, enabled bool) error
-	UpdateApiKeyLastUsed(ctx context.Context, id int64) error
 	DeleteApiKey(ctx context.Context, id int64) error
 	GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error)
 }
@@ -143,14 +140,6 @@ type modelStore interface {
 	ListModels(ctx context.Context) ([]*Model, error)
 	GetModelByModelID(ctx context.Context, modelID string) (*Model, error)
 	GetModelByChannelAndModelID(ctx context.Context, channel, modelID string) (*Model, error)
-}
-
-type redisClientStore interface {
-	Client() *redis.Client
-}
-
-type closeableStore interface {
-	Close() error
 }
 
 func New(opts Options) (*Store, error) {
@@ -183,14 +172,7 @@ func (s *Store) seedModels() error {
 		slog.Warn("failed to inspect existing models before seed", "error", err)
 	}
 
-	models := []Model{
-		// Puter 模型
-		// 这里采用“无前缀主模型”策略：
-		// 参考 puter2api 仓库附带的 model.json，只收录不带 provider 前缀的主模型，
-		// 不直接暴露 openrouter:/togetherai: 这类聚合源模型，避免列表膨胀过大。
-	}
-
-	models = append(models, BuildWarpSeedModels()...)
+	models := BuildWarpSeedModels()
 	models = append(models, buildGrokSeedModels()...)
 	models = append(models, buildPuterSeedModels()...)
 
@@ -335,20 +317,16 @@ func buildGrokSeedModels() []Model {
 }
 
 func (s *Store) Close() error {
-	if s.accounts != nil {
-		if closer, ok := s.accounts.(closeableStore); ok {
-			return closer.Close()
-		}
+	if rs, ok := s.accounts.(*redisStore); ok {
+		return rs.Close()
 	}
 	return nil
 }
 
 // RedisClient returns the underlying Redis client, or nil if not using Redis.
 func (s *Store) RedisClient() *redis.Client {
-	if s.accounts != nil {
-		if rs, ok := s.accounts.(redisClientStore); ok {
-			return rs.Client()
-		}
+	if rs, ok := s.accounts.(*redisStore); ok {
+		return rs.Client()
 	}
 	return nil
 }
@@ -471,43 +449,38 @@ func (s *Store) GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error) {
 // Model wrappers
 
 func (s *Store) CreateModel(ctx context.Context, m *Model) error {
-	if s.models != nil {
-		if m.IsDefault {
-			models, err := s.models.ListModels(ctx)
-			if err == nil {
-				for _, other := range models {
-					if other.Channel == m.Channel && other.IsDefault {
-						other.IsDefault = false
-						if err := s.models.UpdateModel(ctx, other); err != nil {
-							slog.Warn("Failed to clear default flag on model", "model_id", other.ModelID, "error", err)
-						}
-					}
-				}
-			}
-		}
-		return s.models.CreateModel(ctx, m)
+	if s.models == nil {
+		return fmt.Errorf("models store not configured")
 	}
-	return fmt.Errorf("models store not configured")
+	s.clearOtherModelDefaults(ctx, m, false)
+	return s.models.CreateModel(ctx, m)
 }
 
 func (s *Store) UpdateModel(ctx context.Context, m *Model) error {
-	if s.models != nil {
-		if m.IsDefault {
-			models, err := s.models.ListModels(ctx)
-			if err == nil {
-				for _, other := range models {
-					if other.Channel == m.Channel && other.ID != m.ID && other.IsDefault {
-						other.IsDefault = false
-						if err := s.models.UpdateModel(ctx, other); err != nil {
-							slog.Warn("Failed to clear default flag on model", "model_id", other.ModelID, "error", err)
-						}
-					}
-				}
-			}
-		}
-		return s.models.UpdateModel(ctx, m)
+	if s.models == nil {
+		return fmt.Errorf("models store not configured")
 	}
-	return fmt.Errorf("models store not configured")
+	s.clearOtherModelDefaults(ctx, m, true)
+	return s.models.UpdateModel(ctx, m)
+}
+
+func (s *Store) clearOtherModelDefaults(ctx context.Context, m *Model, excludeSelf bool) {
+	if !m.IsDefault {
+		return
+	}
+	models, err := s.models.ListModels(ctx)
+	if err != nil {
+		return
+	}
+	for _, other := range models {
+		if other.Channel != m.Channel || excludeSelf && other.ID == m.ID || !other.IsDefault {
+			continue
+		}
+		other.IsDefault = false
+		if err := s.models.UpdateModel(ctx, other); err != nil {
+			slog.Warn("Failed to clear default flag on model", "model_id", other.ModelID, "error", err)
+		}
+	}
 }
 
 func (s *Store) DeleteModel(ctx context.Context, id string) error {

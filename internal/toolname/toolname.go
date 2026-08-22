@@ -87,34 +87,9 @@ var normalizedToolNameFallbacks = map[string]string{
 	"skill":     "Skill",
 }
 
-func buildClientToolMapper(clientTools []interface{}) *ToolMapper {
-	tools := toolMapsFromInterfaces(clientTools)
-	if len(tools) == 0 {
-		return nil
-	}
-	tm := &ToolMapper{Tools: tools}
-	tm.buildIndex()
-	return tm
-}
-
-func (tm *ToolMapper) buildIndex() {
-	if tm == nil {
-		return
-	}
-	tm.index = make(map[string]map[string]interface{}, len(tm.Tools))
-	for _, tool := range tm.Tools {
-		name := toolSpecName(tool)
-		if name == "" {
-			continue
-		}
-		tm.index[strings.ToLower(name)] = tool
-	}
-}
-
 // ToolMapper manages the mapping between client tool definitions and canonical tool names.
 type ToolMapper struct {
 	Tools []map[string]interface{}
-	index map[string]map[string]interface{}
 }
 
 // NormalizedTool holds the normalized form of a tool name for matching.
@@ -155,32 +130,26 @@ func MapToolNameToClient(upstreamName string, clientTools []interface{}, toolMap
 
 	for _, tool := range tools {
 		name := toolSpecName(tool)
-		if name != "" {
-			if strings.ToLower(name) == normalized.Lowercase {
-				return name
-			}
-			if toSnakeCase(strings.ToLower(name)) == normalized.SnakeCase {
-				return name
-			}
-			fallbackName := NormalizeToolNameFallback(name)
-			if strings.ToLower(strings.TrimSpace(fallbackName)) == normalized.Lowercase {
-				return name
-			}
-			if toSnakeCase(strings.ToLower(strings.TrimSpace(fallbackName))) == normalized.SnakeCase {
-				return name
-			}
+		if name == "" {
+			continue
+		}
+		if strings.ToLower(name) == normalized.Lowercase || toSnakeCase(strings.ToLower(name)) == normalized.SnakeCase {
+			return name
+		}
+		fallbackName := strings.ToLower(strings.TrimSpace(NormalizeToolNameFallback(name)))
+		if fallbackName == normalized.Lowercase || toSnakeCase(fallbackName) == normalized.SnakeCase {
+			return name
 		}
 	}
 
 	for _, tool := range tools {
 		name := toolSpecName(tool)
-		if name != "" {
-			if toolAliases := getToolAliases(tool); toolAliases != nil {
-				for _, alias := range toolAliases {
-					if alias == normalized.SnakeCase || alias == normalized.Lowercase || strings.EqualFold(alias, upstreamName) {
-						return name
-					}
-				}
+		if name == "" {
+			continue
+		}
+		for _, alias := range getToolAliases(tool) {
+			if alias == normalized.SnakeCase || alias == normalized.Lowercase || strings.EqualFold(alias, upstreamName) {
+				return name
 			}
 		}
 	}
@@ -188,12 +157,13 @@ func MapToolNameToClient(upstreamName string, clientTools []interface{}, toolMap
 	if aliases, ok := toolAliases[normalized.SnakeCase]; ok {
 		for _, tool := range tools {
 			name := toolSpecName(tool)
-			if name != "" {
-				for _, alias := range aliases {
-					toolSnake := toSnakeCase(strings.ToLower(name))
-					if toolSnake == alias || strings.ToLower(name) == alias || strings.EqualFold(name, alias) {
-						return name
-					}
+			if name == "" {
+				continue
+			}
+			for _, alias := range aliases {
+				toolSnake := toSnakeCase(strings.ToLower(name))
+				if toolSnake == alias || strings.ToLower(name) == alias || strings.EqualFold(name, alias) {
+					return name
 				}
 			}
 		}
@@ -201,13 +171,14 @@ func MapToolNameToClient(upstreamName string, clientTools []interface{}, toolMap
 
 	for _, tool := range tools {
 		name := toolSpecName(tool)
-		if name != "" {
-			toolSnake := toSnakeCase(strings.ToLower(name))
-			if toolAliases, ok := toolAliases[toolSnake]; ok {
-				for _, alias := range toolAliases {
-					if alias == normalized.SnakeCase || alias == normalized.Lowercase {
-						return name
-					}
+		if name == "" {
+			continue
+		}
+		toolSnake := toSnakeCase(strings.ToLower(name))
+		if aliases, ok := toolAliases[toolSnake]; ok {
+			for _, alias := range aliases {
+				if alias == normalized.SnakeCase || alias == normalized.Lowercase {
+					return name
 				}
 			}
 		}
@@ -216,74 +187,10 @@ func MapToolNameToClient(upstreamName string, clientTools []interface{}, toolMap
 	return MapToolToAnthropic(upstreamName)
 }
 
-func TransformToolInput(toolName, clientName string, input map[string]interface{}) map[string]interface{} {
-	if input == nil {
-		input = make(map[string]interface{})
-	}
-
-	lowerTool := strings.ToLower(strings.TrimSpace(toolName))
-	lowerClient := strings.ToLower(strings.TrimSpace(clientName))
-	if lowerTool == "" {
-		return copyToolInput(input)
-	}
-
-	if lowerTool == "ls" || lowerTool == "list" || lowerTool == "glob" {
-		if strings.Contains(lowerClient, "/") {
-			return copyToolInput(input)
-		}
-	}
-
-	if lowerTool == "ls" && lowerClient == "glob" {
-		result := copyToolInput(input)
-		if _, ok := result["content"]; !ok {
-			result["content"] = []interface{}{}
-		}
-		return result
-	}
-
-	if lowerTool == "ls" && strings.Contains(lowerClient, ".") {
-		return copyToolInput(input)
-	}
-
-	if lowerTool == "read" || lowerTool == "readfile" {
-		result := make(map[string]interface{})
-		filePath := mapStringValue(input, "file_path", "path")
-		if filePath == "" {
-			filePath = mapStringValue(input, "content")
-		}
-		result["file_path"] = filePath
-		for key, value := range input {
-			if key == "file_path" || key == "path" {
-				continue
-			}
-			result[key] = value
-		}
-		return result
-	}
-
-	if lowerTool == "bash" || strings.Contains(lowerTool, "edit") || strings.Contains(lowerTool, "write") {
-		result := make(map[string]interface{})
-		if content := mapStringValue(input, "content"); content != "" {
-			result["content"] = content
-		}
-		if path := mapStringValue(input, "path"); path != "" {
-			if existing, ok := result["content"].(string); ok && existing != "" {
-				result["content"] = existing + "\n" + path
-			} else {
-				result["content"] = path
-			}
-		} else if _, ok := result["content"]; !ok {
-			result["content"] = ""
-		}
-		return result
-	}
-
-	return copyToolInput(input)
-}
-
 func MapToolToAnthropic(upstreamName string) string {
-	if mapped, ok := anthropicToolNames[strings.TrimSpace(upstreamName)]; ok {
-		return mapped
+	switch strings.TrimSpace(upstreamName) {
+	case "str_replace_editor", "bash", "computer", "text_editor":
+		return strings.TrimSpace(upstreamName)
 	}
 	return upstreamName
 }
@@ -311,17 +218,6 @@ func toolMapperClientTools(clientTools []interface{}, toolMapper *ToolMapper) []
 	return toolMapsFromInterfaces(clientTools)
 }
 
-func copyToolInput(input map[string]interface{}) map[string]interface{} {
-	if input == nil {
-		return nil
-	}
-	cloned := make(map[string]interface{}, len(input))
-	for key, value := range input {
-		cloned[key] = value
-	}
-	return cloned
-}
-
 func toolSpecName(tool map[string]interface{}) string {
 	return strings.TrimSpace(extractToolName(tool))
 }
@@ -336,13 +232,6 @@ var toolAliases = map[string][]string{
 	"name":    {"text"},
 	"content": {"code"},
 	"source":  {"input"},
-}
-
-var anthropicToolNames = map[string]string{
-	"str_replace_editor": "str_replace_editor",
-	"bash":               "bash",
-	"computer":           "computer",
-	"text_editor":        "text_editor",
 }
 
 func toSnakeCase(value string) string {
@@ -397,15 +286,6 @@ func extractAliasStrings(raw interface{}) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func mapStringValue(msg map[string]interface{}, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := msg[key].(string); ok {
-			return value
-		}
-	}
-	return ""
 }
 
 func extractToolSpecFields(tool interface{}) (string, string, map[string]interface{}) {

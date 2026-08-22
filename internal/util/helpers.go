@@ -2,6 +2,8 @@ package util
 
 import (
 	"context"
+	"crypto/subtle"
+	"strings"
 	"time"
 )
 
@@ -24,7 +26,7 @@ func UniqueStrings(input []string) []string {
 	seen := make(map[string]struct{}, len(input))
 	out := make([]string, 0, len(input))
 	for _, item := range input {
-		item = trimSpace(item)
+		item = strings.TrimSpace(item)
 		if item == "" {
 			continue
 		}
@@ -37,23 +39,7 @@ func UniqueStrings(input []string) []string {
 	return out
 }
 
-// MinInt returns the minimum of two integers
-func MinInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// trimSpace is a helper to avoid importing strings in this file
-func trimSpace(s string) string {
-	start := 0
-	end := len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-		end--
-	}
-	return s[start:end]
+// SecureCompare compares secrets without leaking a matching prefix through timing.
+func SecureCompare(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }

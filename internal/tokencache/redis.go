@@ -40,17 +40,11 @@ func (c *RedisCache) Get(ctx context.Context, key string) (int, bool) {
 		return 0, false
 	}
 	val, err := c.client.Get(ctx, c.key(key)).Result()
-	if err == redis.Nil {
-		return 0, false
-	}
 	if err != nil {
 		return 0, false
 	}
 	tokens, err := strconv.Atoi(val)
-	if err != nil {
-		return 0, false
-	}
-	return tokens, true
+	return tokens, err == nil
 }
 
 func (c *RedisCache) Put(ctx context.Context, key string, tokens int) {
@@ -61,16 +55,8 @@ func (c *RedisCache) Put(ctx context.Context, key string, tokens int) {
 	ttl := c.ttl
 	c.mu.RUnlock()
 
-	var err error
-	if ttl > 0 {
-		err = c.client.Set(ctx, c.key(key), strconv.Itoa(tokens), ttl).Err()
-	} else {
-		err = c.client.Set(ctx, c.key(key), strconv.Itoa(tokens), 0).Err()
-	}
-	if err != nil {
-		// Log silently; cache is best-effort
-		return
-	}
+	// Cache writes are best-effort.
+	_ = c.client.Set(ctx, c.key(key), strconv.Itoa(tokens), ttl).Err()
 }
 
 func (c *RedisCache) GetStats(ctx context.Context) (int64, int64, error) {

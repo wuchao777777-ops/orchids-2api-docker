@@ -332,7 +332,7 @@ func TestCollectAppChatImageURLs_LiteUsesNewConversationEndpoint(t *testing.T) {
 		ResponseFormat: "url",
 	}
 
-	urls, err := h.collectAppChatImageURLs(context.Background(), sess, spec, req, nil, false)
+	urls, err := h.collectAppChatImageURLs(context.Background(), sess, spec, req, false)
 	if err != nil {
 		t.Fatalf("collectAppChatImageURLs error: %v", err)
 	}
@@ -374,9 +374,7 @@ func TestIsAppChatImageLimitResponse(t *testing.T) {
 
 func TestEnsureImageNSFW_DoesNotCreateModelOverride(t *testing.T) {
 	payload := map[string]interface{}{}
-	nsfw := true
-
-	ensureImageNSFW(payload, "grok-imagine-image-lite", &nsfw)
+	ensureImageNSFW(payload)
 
 	if _, ok := payload["modelConfigOverride"]; ok {
 		t.Fatalf("modelConfigOverride should not be created by NSFW cleanup: %#v", payload["modelConfigOverride"])

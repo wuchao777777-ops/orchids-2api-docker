@@ -1,11 +1,15 @@
 package handler
 
-import "testing"
+import (
+	"testing"
+
+	apperrors "orchids-api/internal/errors"
+)
 
 func TestClassifyUpstreamErrorCreditsExhausted(t *testing.T) {
 	t.Parallel()
 
-	errClass := classifyUpstreamError("puter upstream error: no remaining quota: You have run out of credits.")
+	errClass := apperrors.ClassifyUpstreamError("puter upstream error: no remaining quota: You have run out of credits.")
 	if errClass.Category != "rate_limit" {
 		t.Fatalf("expected rate_limit category, got %q", errClass.Category)
 	}

@@ -63,10 +63,8 @@ func GetTraceID(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
-	if traceID, ok := ctx.Value(traceIDKey{}).(string); ok {
-		return traceID
-	}
-	return ""
+	traceID, _ := ctx.Value(traceIDKey{}).(string)
+	return traceID
 }
 
 // TracedResponseWriter 包装 ResponseWriter 以记录响应状态

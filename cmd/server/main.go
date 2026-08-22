@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
@@ -188,7 +187,7 @@ func main() {
 	}()
 
 	slog.Info("Server running", "port", cfg.Port)
-	slog.Info("Admin UI available", "url", fmt.Sprintf("http://localhost:%s%s", cfg.Port, cfg.AdminPath))
+	slog.Info("Admin UI available", "url", "http://localhost:"+cfg.Port+cfg.AdminPath)
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		slog.Error("Server start failed", "error", err)
@@ -201,15 +200,11 @@ func main() {
 
 func configureRuntimeLogging(cfg *config.Config) {
 	level := slog.LevelInfo
-	verboseDiagnostics := false
-	if cfg != nil {
-		if cfg.DebugEnabled {
-			level = slog.LevelDebug
-		}
-		verboseDiagnostics = cfg.VerboseDiagnosticsEnabled()
+	if cfg != nil && cfg.DebugEnabled {
+		level = slog.LevelDebug
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
-	logutil.SetVerboseDiagnostics(verboseDiagnostics)
+	logutil.SetVerboseDiagnostics(cfg != nil && cfg.VerboseDiagnosticsEnabled())
 }

@@ -25,12 +25,8 @@ type PublicModelsListResponse struct {
 	Data   []PublicModelResponse `json:"data"`
 }
 
-func normalizePublicModelChannel(channel string) string {
-	channel = strings.TrimSpace(channel)
-	if channel == "" {
-		return ""
-	}
-	return channel
+func publicModelResponse(id, ownedBy string) PublicModelResponse {
+	return PublicModelResponse{ID: id, Object: "model", Created: 1677610602, OwnedBy: ownedBy}
 }
 
 func isVisiblePublicModel(m *store.Model, filterChannel string) (string, bool) {
@@ -38,7 +34,7 @@ func isVisiblePublicModel(m *store.Model, filterChannel string) (string, bool) {
 		return "", false
 	}
 
-	mChannel := normalizePublicModelChannel(m.Channel)
+	mChannel := strings.TrimSpace(m.Channel)
 	if filterChannel != "" && !strings.EqualFold(mChannel, filterChannel) {
 		return mChannel, false
 	}
@@ -121,8 +117,8 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	var publicModels []PublicModelResponse
 	if filterChannel == "" || strings.EqualFold(filterChannel, "warp") {
 		publicModels = append(publicModels,
-			PublicModelResponse{ID: warpChatModelID, Object: "model", Created: 1677610602, OwnedBy: "Warp"},
-			PublicModelResponse{ID: warpAgentModelID, Object: "model", Created: 1677610602, OwnedBy: "Warp"},
+			publicModelResponse(warpChatModelID, "Warp"),
+			publicModelResponse(warpAgentModelID, "Warp"),
 		)
 	}
 	for _, m := range allModels {
@@ -140,12 +136,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		publicModels = append(publicModels, PublicModelResponse{
-			ID:      m.ModelID, // Use the actual model ID (e.g. "claude-3-opus") not the DB ID
-			Object:  "model",
-			Created: 1677610602, // Echo a static timestamp or 0 if unknown
-			OwnedBy: mChannel,
-		})
+		publicModels = append(publicModels, publicModelResponse(m.ModelID, mChannel))
 	}
 
 	resp := PublicModelsListResponse{
@@ -171,7 +162,7 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	// Paths could be: /v1/models/{id}, /warp/v1/models/{id}, /puter/v1/models/{id}, /grok/v1/models/{id}
 	path := r.URL.Path
 	var id string
-if strings.HasPrefix(path, "/warp/v1/models/") {
+	if strings.HasPrefix(path, "/warp/v1/models/") {
 		id = strings.TrimPrefix(path, "/warp/v1/models/")
 	} else if strings.HasPrefix(path, "/puter/v1/models/") {
 		id = strings.TrimPrefix(path, "/puter/v1/models/")
@@ -195,12 +186,7 @@ if strings.HasPrefix(path, "/warp/v1/models/") {
 	filterChannel := channelFromPath(path)
 	if strings.EqualFold(filterChannel, "warp") {
 		if m := warpVirtualModelRecord(id); m != nil {
-			resp := PublicModelResponse{
-				ID:      m.ModelID,
-				Object:  "model",
-				Created: 1677610602,
-				OwnedBy: "Warp",
-			}
+			resp := publicModelResponse(m.ModelID, "Warp")
 			if err := json.NewEncoder(w).Encode(resp); err != nil {
 				apperrors.New("api_error", "Failed to encode response", http.StatusInternalServerError).WriteResponse(w)
 			}
@@ -230,12 +216,7 @@ if strings.HasPrefix(path, "/warp/v1/models/") {
 		return
 	}
 
-	resp := PublicModelResponse{
-		ID:      m.ModelID,
-		Object:  "model",
-		Created: 1677610602,
-		OwnedBy: mChannel,
-	}
+	resp := publicModelResponse(m.ModelID, mChannel)
 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		apperrors.New("api_error", "Failed to encode response", http.StatusInternalServerError).WriteResponse(w)

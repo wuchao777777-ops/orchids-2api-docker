@@ -29,14 +29,13 @@ func (s *ModelStatus) UnmarshalJSON(data []byte) error {
 		*s = ModelStatusOffline
 		return nil
 	}
+	*s = ModelStatusOffline
 
 	// 兼容 bool：true => available, false => offline
 	var b bool
 	if err := json.Unmarshal(data, &b); err == nil {
 		if b {
 			*s = ModelStatusAvailable
-		} else {
-			*s = ModelStatusOffline
 		}
 		return nil
 	}
@@ -49,16 +48,9 @@ func (s *ModelStatus) UnmarshalJSON(data []byte) error {
 			*s = ModelStatusAvailable
 		case "maintenance", "maint":
 			*s = ModelStatusMaintenance
-		case "offline", "disabled", "false", "off", "0":
-			*s = ModelStatusOffline
-		default:
-			*s = ModelStatusOffline
 		}
 		return nil
 	}
-
-	// 兜底：非法值视为 offline
-	*s = ModelStatusOffline
 	return nil
 }
 

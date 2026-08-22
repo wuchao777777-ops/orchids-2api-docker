@@ -39,13 +39,13 @@ func NewMemoryCache(ttl time.Duration, maxEntries ...int) *MemoryCache {
 	if ttl < 0 {
 		ttl = 0
 	}
-	max := 0
+	limit := 0
 	if len(maxEntries) > 0 && maxEntries[0] > 0 {
-		max = maxEntries[0]
+		limit = maxEntries[0]
 	}
 	c := &MemoryCache{
 		ttl:        ttl,
-		maxEntries: max,
+		maxEntries: limit,
 		items:      make(map[string]cacheItem),
 		done:       make(chan struct{}),
 	}
@@ -200,13 +200,8 @@ func (c *MemoryCache) pruneExpiredLocked(now time.Time) {
 }
 
 func normalizeStrategy(strategy string) string {
-	strategy = strings.ToLower(strings.TrimSpace(strategy))
-	switch strategy {
-	case "split":
+	if strings.EqualFold(strings.TrimSpace(strategy), "split") {
 		return "split"
-	case "mix", "mixed":
-		return "mix"
-	default:
-		return "mix"
 	}
+	return "mix"
 }

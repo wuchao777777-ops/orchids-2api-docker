@@ -85,8 +85,7 @@ func IsDeprecatedModelID(modelID string) bool {
 }
 
 func normalizeModelID(modelID string) string {
-	m := strings.ToLower(strings.TrimSpace(modelID))
-	return m
+	return strings.ToLower(strings.TrimSpace(modelID))
 }
 
 func ResolveModel(modelID string) (ModelSpec, bool) {
@@ -136,10 +135,5 @@ func (m ModelSpec) ResolvedUpstream(cfg *config.Config) UpstreamKind {
 // modelRoutedToCLI reports whether a model should be served via the Build CLI
 // upstream (explicit marker or config list).
 func modelRoutedToCLI(spec ModelSpec, cfg *config.Config) bool {
-	switch spec.ResolvedUpstream(cfg) {
-	case UpstreamCLI:
-		return true
-	default:
-		return false
-	}
+	return spec.ResolvedUpstream(cfg) == UpstreamCLI
 }

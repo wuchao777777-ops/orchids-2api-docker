@@ -13,24 +13,14 @@ import (
 const publicVideoSessionTTL = 10 * time.Minute
 
 type publicVideoSession struct {
-	Prompt          string
-	AspectRatio     string
-	VideoLength     int
-	ResolutionName  string
-	Preset          string
-	ImageURL        string
-	ReasoningEffort string
-	CreatedAt       time.Time
-}
-
-type publicVideoStartRequest struct {
-	Prompt          string `json:"prompt"`
-	AspectRatio     string `json:"aspect_ratio"`
-	VideoLength     int    `json:"video_length"`
-	ResolutionName  string `json:"resolution_name"`
-	Preset          string `json:"preset"`
-	ImageURL        string `json:"image_url"`
-	ReasoningEffort string `json:"reasoning_effort"`
+	Prompt          string    `json:"prompt"`
+	AspectRatio     string    `json:"aspect_ratio"`
+	VideoLength     int       `json:"video_length"`
+	ResolutionName  string    `json:"resolution_name"`
+	Preset          string    `json:"preset"`
+	ImageURL        string    `json:"image_url"`
+	ReasoningEffort string    `json:"reasoning_effort"`
+	CreatedAt       time.Time `json:"-"`
 }
 
 type publicVideoStopRequest struct {
@@ -78,10 +68,6 @@ func getPublicVideoSession(taskID string) (publicVideoSession, bool) {
 	if !ok {
 		return publicVideoSession{}, false
 	}
-	if now.Sub(session.CreatedAt) > publicVideoSessionTTL {
-		delete(publicVideoSessions, id)
-		return publicVideoSession{}, false
-	}
 	return session, true
 }
 
@@ -114,16 +100,8 @@ func deletePublicVideoSessions(taskIDs []string) int {
 
 func validatePublicImageURL(imageURL string) bool {
 	imageURL = strings.TrimSpace(imageURL)
-	if imageURL == "" {
-		return true
-	}
-	if strings.HasPrefix(imageURL, "data:") {
-		return true
-	}
-	if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
-		return true
-	}
-	return false
+	return imageURL == "" || strings.HasPrefix(imageURL, "data:") ||
+		strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://")
 }
 
 func validateReasoningEffortValue(raw string) bool {
@@ -172,7 +150,7 @@ func (h *Handler) HandlePublicVideoStart(w http.ResponseWriter, r *http.Request)
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var req publicVideoStartRequest
+	var req publicVideoSession
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
@@ -183,17 +161,15 @@ func (h *Handler) HandlePublicVideoStart(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	preset := strings.TrimSpace(req.Preset)
+	if preset == "" {
+		preset = "normal"
+	}
 	videoCfg, err := validateVideoConfig(&VideoConfig{
 		AspectRatio:    strings.TrimSpace(req.AspectRatio),
 		VideoLength:    req.VideoLength,
 		ResolutionName: strings.TrimSpace(req.ResolutionName),
-		Preset: func() string {
-			preset := strings.TrimSpace(req.Preset)
-			if preset == "" {
-				return "normal"
-			}
-			return preset
-		}(),
+		Preset:         preset,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -211,15 +187,14 @@ func (h *Handler) HandlePublicVideoStart(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	taskID := createPublicVideoSession(publicVideoSession{
-		Prompt:          prompt,
-		AspectRatio:     videoCfg.AspectRatio,
-		VideoLength:     videoCfg.VideoLength,
-		ResolutionName:  videoCfg.ResolutionName,
-		Preset:          videoCfg.Preset,
-		ImageURL:        imageURL,
-		ReasoningEffort: reasoning,
-	})
+	req.Prompt = prompt
+	req.AspectRatio = videoCfg.AspectRatio
+	req.VideoLength = videoCfg.VideoLength
+	req.ResolutionName = videoCfg.ResolutionName
+	req.Preset = videoCfg.Preset
+	req.ImageURL = imageURL
+	req.ReasoningEffort = reasoning
+	taskID := createPublicVideoSession(req)
 
 	writeJSON(w, map[string]interface{}{
 		"task_id":      taskID,

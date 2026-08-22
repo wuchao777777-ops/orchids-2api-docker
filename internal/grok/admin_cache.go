@@ -57,7 +57,7 @@ var (
 )
 
 func setOnlineAssetClearTime(token string, ts int64) {
-	token = normalizeOnlineToken(token)
+	token = NormalizeSSOToken(token)
 	if token == "" || ts <= 0 {
 		return
 	}
@@ -67,7 +67,7 @@ func setOnlineAssetClearTime(token string, ts int64) {
 }
 
 func getOnlineAssetClearTime(token string) interface{} {
-	token = normalizeOnlineToken(token)
+	token = NormalizeSSOToken(token)
 	if token == "" {
 		return nil
 	}
@@ -85,6 +85,15 @@ func bytesToMB(size int64) float64 {
 		return 0
 	}
 	return math.Round((float64(size)/1024.0/1024.0)*100) / 100
+}
+
+func cachedMediaStats(entries []cacheEntry, size int64) map[string]interface{} {
+	return map[string]interface{}{
+		"count":      len(entries),
+		"bytes":      size,
+		"size_bytes": size,
+		"size_mb":    bytesToMB(size),
+	}
 }
 
 func maskCacheToken(raw string) string {
@@ -158,11 +167,10 @@ func (h *Handler) listCacheOnlineAccounts(r *http.Request) []map[string]interfac
 	out := make([]map[string]interface{}, 0, len(accounts))
 	seen := map[string]struct{}{}
 	for _, acc := range accounts {
-		if !isGrokAccount(acc) || acc == nil || !acc.Enabled {
+		if !isGrokAccount(acc) || !acc.Enabled {
 			continue
 		}
-		rawToken := strings.TrimSpace(grokAccountToken(acc))
-		token := normalizeOnlineToken(rawToken)
+		token := grokAccountToken(acc)
 		if token == "" {
 			continue
 		}
@@ -172,7 +180,7 @@ func (h *Handler) listCacheOnlineAccounts(r *http.Request) []map[string]interfac
 		seen[token] = struct{}{}
 		out = append(out, map[string]interface{}{
 			"token":               token,
-			"raw_token":           rawToken,
+			"raw_token":           token,
 			"token_masked":        maskCacheToken(token),
 			"pool":                inferTokenPool(acc),
 			"status":              adminTokenStatusFromAccount(acc),
@@ -192,7 +200,7 @@ func cacheOnlineAccountMap(onlineAccounts []map[string]interface{}) map[string]m
 	out := make(map[string]map[string]interface{}, len(onlineAccounts))
 	for _, item := range onlineAccounts {
 		token, _ := item["token"].(string)
-		token = normalizeOnlineToken(token)
+		token = NormalizeSSOToken(token)
 		if token == "" {
 			continue
 		}
@@ -201,15 +209,11 @@ func cacheOnlineAccountMap(onlineAccounts []map[string]interface{}) map[string]m
 	return out
 }
 
-func normalizeOnlineToken(raw string) string {
-	return NormalizeSSOToken(raw)
-}
-
 func normalizeOnlineTokenList(tokens []string) []string {
 	out := make([]string, 0, len(tokens))
 	seen := map[string]struct{}{}
 	for _, raw := range tokens {
-		token := normalizeOnlineToken(raw)
+		token := NormalizeSSOToken(raw)
 		if token == "" {
 			continue
 		}
@@ -240,10 +244,6 @@ func listOnlineAccountTokens(onlineAccounts []map[string]interface{}) []string {
 	out := make([]string, 0, len(onlineAccounts))
 	for _, item := range onlineAccounts {
 		token, _ := item["token"].(string)
-		token = normalizeOnlineToken(token)
-		if token == "" {
-			continue
-		}
 		out = append(out, token)
 	}
 	return normalizeOnlineTokenList(out)
@@ -310,9 +310,10 @@ func indexedTokenJobs(tokens []string) []indexedTokenJob {
 }
 
 func (h *Handler) fetchOnlineAssetDetails(
-	r *http.Request,
+	ctx context.Context,
 	tokens []string,
 	accountByToken map[string]map[string]interface{},
+	onItem func(string, map[string]interface{}, bool),
 ) ([]map[string]interface{}, int) {
 	requestTokens := normalizeOnlineTokenList(tokens)
 	if len(requestTokens) == 0 {
@@ -320,7 +321,7 @@ func (h *Handler) fetchOnlineAssetDetails(
 	}
 
 	details := make([]map[string]interface{}, len(requestTokens))
-	if h == nil || h.client == nil || r == nil {
+	if h == nil || h.client == nil {
 		for i, token := range requestTokens {
 			masked, lastClear := onlineAccountInfo(accountByToken, token)
 			details[i] = map[string]interface{}{
@@ -330,6 +331,9 @@ func (h *Handler) fetchOnlineAssetDetails(
 				"status":              "error: client not configured",
 				"last_asset_clear_at": lastClear,
 			}
+			if onItem != nil {
+				onItem(token, details[i], false)
+			}
 		}
 		return details, 0
 	}
@@ -338,7 +342,7 @@ func (h *Handler) fetchOnlineAssetDetails(
 		totalCount int
 		totalMu    sync.Mutex
 	)
-	runWorkerPool(r.Context(), indexedTokenJobs(requestTokens), 4, func(item indexedTokenJob) {
+	runWorkerPool(ctx, indexedTokenJobs(requestTokens), 4, func(item indexedTokenJob) {
 		masked, lastClear := onlineAccountInfo(accountByToken, item.token)
 		detail := map[string]interface{}{
 			"token":               item.token,
@@ -348,7 +352,7 @@ func (h *Handler) fetchOnlineAssetDetails(
 			"last_asset_clear_at": lastClear,
 		}
 
-		count, err := h.client.countAssets(r.Context(), item.token)
+		count, err := h.client.countAssets(ctx, item.token)
 		if err != nil {
 			detail["status"] = detailErrorStatus(err)
 		} else {
@@ -359,17 +363,16 @@ func (h *Handler) fetchOnlineAssetDetails(
 			totalMu.Unlock()
 		}
 		details[item.index] = detail
+		if onItem != nil {
+			onItem(item.token, detail, err == nil)
+		}
 	})
 	return details, totalCount
 }
 
 func validCacheMediaType(mediaType string) bool {
-	switch strings.ToLower(strings.TrimSpace(mediaType)) {
-	case "image", "video":
-		return true
-	default:
-		return false
-	}
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == "image" || mediaType == "video"
 }
 
 func listCachedEntries(mediaType string) ([]cacheEntry, int64, error) {
@@ -424,10 +427,7 @@ func listCachedEntries(mediaType string) ([]cacheEntry, int64, error) {
 }
 
 func parseCacheDeleteTarget(req cacheDeleteItemRequest) (string, string, bool) {
-	mediaType := strings.ToLower(strings.TrimSpace(req.MediaType))
-	if mediaType == "" {
-		mediaType = strings.ToLower(strings.TrimSpace(req.Type))
-	}
+	mediaType := strings.ToLower(firstNonEmpty(req.MediaType, req.Type))
 	name := sanitizeCachedFilename(strings.TrimSpace(req.Name))
 	if name == "" {
 		name = sanitizeCachedFilename(strings.TrimSpace(req.FileName))
@@ -469,7 +469,7 @@ func (h *Handler) HandleAdminCache(w http.ResponseWriter, r *http.Request) {
 	accountByToken := cacheOnlineAccountMap(onlineAccounts)
 
 	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
-	selectedToken := normalizeOnlineToken(r.URL.Query().Get("token"))
+	selectedToken := NormalizeSSOToken(r.URL.Query().Get("token"))
 	tokensParam := strings.TrimSpace(r.URL.Query().Get("tokens"))
 	selectedTokens := make([]string, 0)
 	if tokensParam != "" {
@@ -501,7 +501,7 @@ func (h *Handler) HandleAdminCache(w http.ResponseWriter, r *http.Request) {
 	onlineDetails := make([]map[string]interface{}, 0)
 	switch onlineScope {
 	case "single":
-		details, _ := h.fetchOnlineAssetDetails(r, []string{selectedToken}, accountByToken)
+		details, _ := h.fetchOnlineAssetDetails(r.Context(), []string{selectedToken}, accountByToken, nil)
 		if len(details) > 0 {
 			online["token"] = details[0]["token"]
 			online["token_masked"] = details[0]["token_masked"]
@@ -513,7 +513,7 @@ func (h *Handler) HandleAdminCache(w http.ResponseWriter, r *http.Request) {
 			online["token_masked"] = maskCacheToken(selectedToken)
 		}
 	case "selected":
-		details, total := h.fetchOnlineAssetDetails(r, selectedTokens, accountByToken)
+		details, total := h.fetchOnlineAssetDetails(r.Context(), selectedTokens, accountByToken, nil)
 		onlineDetails = details
 		online["count"] = total
 		if len(selectedTokens) > 0 {
@@ -523,7 +523,7 @@ func (h *Handler) HandleAdminCache(w http.ResponseWriter, r *http.Request) {
 		}
 	case "all":
 		allTokens := listOnlineAccountTokens(onlineAccounts)
-		details, total := h.fetchOnlineAssetDetails(r, allTokens, accountByToken)
+		details, total := h.fetchOnlineAssetDetails(r.Context(), allTokens, accountByToken, nil)
 		onlineDetails = details
 		online["count"] = total
 		if len(allTokens) > 0 {
@@ -533,18 +533,8 @@ func (h *Handler) HandleAdminCache(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	imageStats := map[string]interface{}{
-		"count":      len(images),
-		"bytes":      imageSize,
-		"size_bytes": imageSize,
-		"size_mb":    bytesToMB(imageSize),
-	}
-	videoStats := map[string]interface{}{
-		"count":      len(videos),
-		"bytes":      videoSize,
-		"size_bytes": videoSize,
-		"size_mb":    bytesToMB(videoSize),
-	}
+	imageStats := cachedMediaStats(images, imageSize)
+	videoStats := cachedMediaStats(videos, videoSize)
 	out := map[string]interface{}{
 		"status":   "success",
 		"base_dir": cacheBaseDir,
@@ -613,10 +603,7 @@ func (h *Handler) HandleAdminCacheClear(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	mediaTypes := []string{"image"}
-	targetType := strings.ToLower(strings.TrimSpace(req.MediaType))
-	if targetType == "" {
-		targetType = strings.ToLower(strings.TrimSpace(req.Type))
-	}
+	targetType := strings.ToLower(firstNonEmpty(req.MediaType, req.Type))
 	if targetType != "" {
 		typ := targetType
 		if !validCacheMediaType(typ) {
@@ -794,7 +781,7 @@ func resolveCacheOnlineClearTargets(
 		return tokens, "batch", ""
 	}
 
-	if token := normalizeOnlineToken(req.Token); token != "" {
+	if token := NormalizeSSOToken(req.Token); token != "" {
 		return []string{token}, "single", ""
 	}
 
@@ -816,7 +803,7 @@ func (h *Handler) resolveCacheOnlineLoadTargets(
 	if len(tokens) > 0 {
 		return tokens, "selected", onlineAccounts
 	}
-	if single := normalizeOnlineToken(req.Token); single != "" {
+	if single := NormalizeSSOToken(req.Token); single != "" {
 		return []string{single}, "single", onlineAccounts
 	}
 	if scope == "all" {
@@ -852,34 +839,10 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 	go func() {
 		defer scheduleDeleteNSFWBatchTask(task.ID, nsfwBatchTaskTTL)
 
-		details := make([]map[string]interface{}, len(tokens))
-		var (
-			totalCount int
-			totalMu    sync.Mutex
-		)
-		runWorkerPool(ctx, indexedTokenJobs(tokens), 4, func(item indexedTokenJob) {
-			masked, lastClear := onlineAccountInfo(accountByToken, item.token)
-			detail := map[string]interface{}{
-				"token":               item.token,
-				"token_masked":        masked,
-				"count":               0,
-				"status":              "not_loaded",
-				"last_asset_clear_at": lastClear,
-			}
-
-			count, err := h.client.countAssets(ctx, item.token)
-			if err != nil {
-				detail["status"] = detailErrorStatus(err)
-			} else {
-				detail["count"] = count
-				detail["status"] = "ok"
-				totalMu.Lock()
-				totalCount += count
-				totalMu.Unlock()
-			}
-			details[item.index] = detail
-			task.record(item.token, err == nil, detail)
-		})
+		details, totalCount := h.fetchOnlineAssetDetails(ctx, tokens, accountByToken,
+			func(token string, detail map[string]interface{}, ok bool) {
+				task.record(token, ok, detail)
+			})
 
 		if ctx.Err() != nil {
 			task.finish("cancelled", "")
@@ -897,10 +860,9 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 			return
 		}
 
-		onlineStatus := "ok"
 		online := map[string]interface{}{
 			"count":               totalCount,
-			"status":              onlineStatus,
+			"status":              "ok",
 			"token":               nil,
 			"token_masked":        nil,
 			"last_asset_clear_at": nil,
@@ -914,18 +876,8 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 		}
 
 		result := map[string]interface{}{
-			"local_image": map[string]interface{}{
-				"count":      len(images),
-				"bytes":      imageSize,
-				"size_bytes": imageSize,
-				"size_mb":    bytesToMB(imageSize),
-			},
-			"local_video": map[string]interface{}{
-				"count":      len(videos),
-				"bytes":      videoSize,
-				"size_bytes": videoSize,
-				"size_mb":    bytesToMB(videoSize),
-			},
+			"local_image":     cachedMediaStats(images, imageSize),
+			"local_video":     cachedMediaStats(videos, videoSize),
 			"online":          online,
 			"online_accounts": onlineAccounts,
 			"online_scope":    scope,
@@ -935,12 +887,7 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 		task.finish("done", "")
 	}()
 
-	out := map[string]interface{}{
-		"status":  "success",
-		"task_id": task.ID,
-		"total":   len(tokens),
-	}
-	writeJSON(w, out)
+	writeAsyncTaskStarted(w, task)
 }
 
 func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *http.Request) {
@@ -1026,10 +973,5 @@ func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *htt
 		task.finish("done", "")
 	}()
 
-	out := map[string]interface{}{
-		"status":  "success",
-		"task_id": task.ID,
-		"total":   len(tokens),
-	}
-	writeJSON(w, out)
+	writeAsyncTaskStarted(w, task)
 }

@@ -98,9 +98,7 @@ func nextGrokRefreshBatch(candidates []grokRefreshCandidate, max int) []grokRefr
 	if len(candidates) == 0 || max <= 0 {
 		return nil
 	}
-	if max > len(candidates) {
-		max = len(candidates)
-	}
+	max = min(max, len(candidates))
 
 	grokRefreshMu.Lock()
 	start := grokRefreshOffset % len(candidates)
@@ -182,12 +180,10 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 
 	grokClient := grok.New(cfg)
 	for _, candidate := range batch {
-		if grokRefreshPause > 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(grokRefreshPause):
-			}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(grokRefreshPause):
 		}
 
 		verifyCtx, verifyCancel := context.WithTimeout(ctx, 60*time.Second)
@@ -389,4 +385,3 @@ func startAuthCleanupLoop(ctx context.Context) {
 		}
 	}()
 }
-

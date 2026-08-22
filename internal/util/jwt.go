@@ -35,9 +35,5 @@ func JWTExpiry(token string, skew time.Duration) time.Time {
 	if err != nil || exp <= 0 {
 		return time.Time{}
 	}
-	t := time.Unix(exp, 0)
-	if skew > 0 {
-		t = t.Add(-skew)
-	}
-	return t
+	return time.Unix(exp, 0).Add(-max(skew, 0))
 }

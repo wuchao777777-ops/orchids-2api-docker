@@ -77,7 +77,8 @@ func inferTokenPool(acc *store.Account) string {
 }
 
 func normalizeGrokPoolName(pool string) string {
-	switch strings.ToLower(strings.TrimSpace(pool)) {
+	pool = strings.ToLower(strings.TrimSpace(pool))
+	switch pool {
 	case "ssoheavy", "heavy":
 		return "heavy"
 	case "ssosuper", "super", "pro":
@@ -87,7 +88,7 @@ func normalizeGrokPoolName(pool string) string {
 	case "ssobasic", "basic", "":
 		return "basic"
 	default:
-		return strings.ToLower(strings.TrimSpace(pool))
+		return pool
 	}
 }
 
@@ -96,9 +97,6 @@ func normalizeGrokPoolCandidates(pools []string) []string {
 	seen := map[string]struct{}{}
 	for _, raw := range pools {
 		pool := normalizeGrokPoolName(raw)
-		if pool == "" {
-			continue
-		}
 		if _, ok := seen[pool]; ok {
 			continue
 		}
@@ -158,7 +156,6 @@ func collectAdminTokenEntries(payload map[string]interface{}) []adminTokenEntry 
 				continue
 			}
 
-			entry.Token = strings.TrimSpace(entry.Token)
 			if entry.Token == "" {
 				continue
 			}
@@ -273,7 +270,7 @@ func (h *Handler) handleAdminTokensList(w http.ResponseWriter, r *http.Request) 
 	pools := map[string][]map[string]interface{}{}
 	seen := map[string]struct{}{}
 	for _, acc := range accounts {
-		if !isGrokAccount(acc) || acc == nil || !acc.Enabled {
+		if !isGrokAccount(acc) || !acc.Enabled {
 			continue
 		}
 		token := grokAccountToken(acc)

@@ -44,21 +44,6 @@ func (lb *LoadBalancer) SetConnTracker(ct ConnTracker) {
 	lb.connTracker = ct
 }
 
-func (lb *LoadBalancer) GetModelChannel(ctx context.Context, modelID string) string {
-	if lb.Store == nil {
-		return ""
-	}
-	m, err := lb.Store.GetModelByModelID(ctx, modelID)
-	if err != nil || m == nil {
-		return ""
-	}
-	return m.Channel
-}
-
-func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, excludeIDs []int64, channel string) (*store.Account, error) {
-	return lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, channel, nil)
-}
-
 func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTracker(ctx context.Context, excludeIDs []int64, channel string, tracker ConnTracker) (*store.Account, error) {
 	return lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, channel, tracker, nil)
 }
@@ -204,11 +189,7 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 		}
 	}
 
-	if len(bestAccounts) > 0 {
-		// Randomly select one from the best accounts to ensure load balancing
-		return bestAccounts[rand.IntN(len(bestAccounts))]
-	}
-	return accounts[0]
+	return bestAccounts[rand.IntN(len(bestAccounts))]
 }
 
 func (lb *LoadBalancer) AcquireConnection(accountID int64) {

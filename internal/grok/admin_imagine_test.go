@@ -29,7 +29,7 @@ func TestImagineSessionLifecycle(t *testing.T) {
 	resetImagineSessionsForTest()
 	t.Cleanup(resetImagineSessionsForTest)
 
-	id := createImagineSession("test prompt", "16:9", "", "", nil)
+	id := createImagineSession("test prompt", "16:9", "", nil)
 	if id == "" {
 		t.Fatal("expected task id")
 	}
@@ -47,10 +47,6 @@ func TestImagineSessionLifecycle(t *testing.T) {
 	if session.Model != "grok-imagine-image-lite" {
 		t.Fatalf("unexpected model: %q", session.Model)
 	}
-	if session.Route != "ws" {
-		t.Fatalf("unexpected route: %q", session.Route)
-	}
-
 	removed := deleteImagineSessions([]string{id})
 	if removed != 1 {
 		t.Fatalf("removed=%d want=1", removed)
@@ -108,10 +104,6 @@ func TestHandleAdminImagineStartStop(t *testing.T) {
 	if session.Model != "grok-imagine-image-lite" {
 		t.Fatalf("session.Model=%q want grok-imagine-image-lite", session.Model)
 	}
-	if session.Route != "ws" {
-		t.Fatalf("session.Route=%q want=ws", session.Route)
-	}
-
 	stopBody := map[string]interface{}{
 		"task_ids": []string{taskID},
 	}
@@ -141,23 +133,6 @@ func TestNormalizeImagineModel_DefaultsToLite(t *testing.T) {
 	for _, tt := range tests {
 		if got := normalizeImagineModel(tt.in); got != tt.want {
 			t.Fatalf("normalizeImagineModel(%q)=%q want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
-func TestNormalizeImagineRoute(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", "ws"},
-		{"ws", "ws"},
-		{"basic", "ws"},
-		{"chat", "ws"},
-	}
-	for _, tt := range tests {
-		if got := normalizeImagineRoute(tt.in); got != tt.want {
-			t.Fatalf("normalizeImagineRoute(%q)=%q want %q", tt.in, got, tt.want)
 		}
 	}
 }

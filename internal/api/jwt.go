@@ -10,9 +10,6 @@ import (
 // We keep this intentionally loose to accept most JWTs pasted by users.
 func isLikelyJWT(s string) bool {
 	s = strings.TrimSpace(s)
-	if s == "" {
-		return false
-	}
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 {
 		return false
@@ -30,10 +27,7 @@ func isLikelyJWT(s string) bool {
 // "rotating_token" claim. That JWT is NOT the bearer token used for upstream calls;
 // it should be treated as a client cookie input.
 func jwtHasRotatingToken(jwt string) bool {
-	claims, ok := decodeJWTPayload(jwt)
-	if !ok {
-		return false
-	}
+	claims, _ := decodeJWTPayload(jwt)
 	_, exists := claims["rotating_token"]
 	return exists
 }

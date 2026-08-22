@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +21,7 @@ import (
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/perf"
 	"orchids-api/internal/prompt"
@@ -71,12 +74,7 @@ func mapKeys(m map[string]interface{}) []string {
 	if m == nil {
 		return nil
 	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	// Order isn't critical; keep lightweight (avoid importing sort).
-	return keys
+	return slices.Collect(maps.Keys(m))
 }
 
 func writeSSEFrame(w io.Writer, event, data string) error {
@@ -219,7 +217,6 @@ type streamHandler struct {
 	completionLogged         bool
 	finalStopReason          string
 	outputTokens             int
-	thinkingTokens           int
 	inputTokens              int
 	cacheReadTokens          int
 	cacheCreationTokens      int
@@ -236,7 +233,6 @@ type streamHandler struct {
 	thinkingBlockBuilders map[int]*strings.Builder
 	thinkingBlockSigs     map[int]string
 	contentBlocks         []map[string]interface{}
-	currentTextIndex      int
 	pendingThinkingSig    string
 	hasTextOutput         bool
 	lastTextDelta         string
@@ -248,7 +244,6 @@ type streamHandler struct {
 	ssePayloadScratch     []byte
 
 	// Tool Handling (proxy mode only)
-	toolBlocks          map[string]int
 	pendingToolCalls    []toolCall
 	toolInputNames      map[string]string
 	toolInputBuffers    map[string]*strings.Builder
@@ -310,7 +305,6 @@ func newStreamHandler(
 		responseFormat:   responseFormat,
 
 		blockIndex:               -1,
-		toolBlocks:               make(map[string]int),
 		responseText:             perf.AcquireStringBuilder(),
 		textBlockBuilders:        make(map[int]*strings.Builder),
 		thinkingBlockBuilders:    make(map[int]*strings.Builder),
@@ -327,7 +321,6 @@ func newStreamHandler(
 		allowedToolNames:         make(map[string]struct{}),
 		msgID:                    responseMessageID(responseFormat),
 		startTime:                time.Now(),
-		currentTextIndex:         -1,
 		activeThinkingBlockIndex: -1,
 		activeThinkingSSEIndex:   -1,
 		activeTextBlockIndex:     -1,
@@ -706,9 +699,6 @@ func (h *streamHandler) addThinkingTokens(text string) {
 	}
 	h.outputMu.Lock()
 	if !h.useUpstreamUsage {
-		// we skip the estimator for thinking to keep it for billing/output only
-		// or we can add to thinkingTokens directly if we use an estimator
-		h.thinkingTokens += tiktoken.EstimateTextTokens(text)
 		h.outputTokens += tiktoken.EstimateTextTokens(text)
 	}
 	h.outputMu.Unlock()
@@ -769,10 +759,8 @@ func (h *streamHandler) resetRoundState() {
 	h.activeBlockType = ""
 	h.hasReturn = false
 
-	clear(h.toolBlocks)
 	h.responseText.Reset()
 	h.contentBlocks = nil
-	h.currentTextIndex = -1
 
 	for _, sb := range h.textBlockBuilders {
 		perf.ReleaseStringBuilder(sb)
@@ -803,7 +791,6 @@ func (h *streamHandler) resetRoundState() {
 	h.currentToolInputID = ""
 	h.toolCallCount = 0
 	h.outputTokens = 0
-	h.thinkingTokens = 0
 	h.completionLogged = false
 	h.outputEstimator.Reset()
 	h.useUpstreamUsage = false
@@ -1906,8 +1893,7 @@ func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) 
 
 func (h *streamHandler) flushPendingToolCalls(stopReason string) {
 	h.mu.Lock()
-	calls := make([]toolCall, len(h.pendingToolCalls))
-	copy(calls, h.pendingToolCalls)
+	calls := slices.Clone(h.pendingToolCalls)
 	h.pendingToolCalls = nil
 	h.mu.Unlock()
 
@@ -1983,10 +1969,7 @@ func (h *streamHandler) finalizeCompletion(stopReason string) {
 	// 闂傚倷娴囧畷鍨叏閹惰姤鍊块柨鏇楀亾妞ゎ厼鐏濊灒闁兼祴鏅濋ˇ顖炴倵楠炲灝鍔氭い锔诲灣缁鎮滃Ο鍦畾濡炪倖鐗楁笟妤呭磿閵夛妇绠?
 	h.mu.Lock()
 	suppressedDedup := h.toolDedupCount
-	dedupKeys := make(map[string]int, len(h.toolDedupKeys))
-	for k, v := range h.toolDedupKeys {
-		dedupKeys[k] = v
-	}
+	dedupKeys := maps.Clone(h.toolDedupKeys)
 	h.mu.Unlock()
 	if suppressedDedup > 0 && logutil.VerboseDiagnosticsEnabled() {
 		slog.Debug("tool call dedup summary", "suppressed_count", suppressedDedup, "dedup_keys", dedupKeys)
@@ -2691,12 +2674,6 @@ func (h *streamHandler) hasAnyOutput() bool {
 	return has
 }
 
-func (h *streamHandler) hasReturnedResponse() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.hasReturn
-}
-
 func (h *streamHandler) shouldSkipIntroDelta(delta string) bool {
 	key := normalizeIntroKey(delta)
 	if key == "" {
@@ -3241,7 +3218,7 @@ func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr 
 	if selectErr != nil {
 		selectErrText = strings.ToLower(selectErr.Error())
 	}
-	if classifyUpstreamError(lastErr).Category == "rate_limit" || strings.Contains(selectErrText, "rate-limited") {
+	if apperrors.ClassifyUpstreamError(lastErr).Category == "rate_limit" || strings.Contains(selectErrText, "rate-limited") {
 		errorMsg = "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account."
 	}
 	if selectErr != nil {

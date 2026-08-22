@@ -258,8 +258,8 @@ func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
 			}
 			switch itemType {
 			case "function_call":
-				name := strings.TrimSpace(fmt.Sprint(item["name"]))
-				if name == "" || name == "<nil>" {
+				name := parseLooseStringAny(item["name"])
+				if name == "" {
 					continue
 				}
 				args := "{}"
@@ -294,8 +294,8 @@ func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
 					Content:    strings.TrimSpace(fmt.Sprint(item["output"])),
 				})
 			case "message":
-				role := strings.TrimSpace(fmt.Sprint(item["role"]))
-				if role == "" || role == "<nil>" {
+				role := parseLooseStringAny(item["role"])
+				if role == "" {
 					role = "user"
 				}
 				messages = append(messages, ChatMessage{
@@ -344,7 +344,11 @@ func normalizeResponsesMessageContent(content interface{}) interface{} {
 }
 
 func responsesImageURL(part map[string]interface{}) string {
-	for _, key := range []string{"image_url", "source"} {
+	return responsesPartURL(part, []string{"image_url", "source"}, []string{"url"})
+}
+
+func responsesPartURL(part map[string]interface{}, keys, nestedKeys []string) string {
+	for _, key := range keys {
 		raw := part[key]
 		switch v := raw.(type) {
 		case string:
@@ -352,8 +356,10 @@ func responsesImageURL(part map[string]interface{}) string {
 				return strings.TrimSpace(v)
 			}
 		case map[string]interface{}:
-			if s := strings.TrimSpace(fmt.Sprint(v["url"])); s != "" && s != "<nil>" {
-				return s
+			for _, nestedKey := range nestedKeys {
+				if s := parseLooseStringAny(v[nestedKey]); s != "" {
+					return s
+				}
 			}
 		}
 	}
@@ -361,22 +367,10 @@ func responsesImageURL(part map[string]interface{}) string {
 }
 
 func responsesFileURL(part map[string]interface{}) string {
-	for _, key := range []string{"file", "file_url", "source"} {
-		raw := part[key]
-		switch v := raw.(type) {
-		case string:
-			if strings.TrimSpace(v) != "" {
-				return strings.TrimSpace(v)
-			}
-		case map[string]interface{}:
-			for _, nestedKey := range []string{"url", "file_url", "data"} {
-				if s := strings.TrimSpace(fmt.Sprint(v[nestedKey])); s != "" && s != "<nil>" {
-					return s
-				}
-			}
-		}
+	if url := responsesPartURL(part, []string{"file", "file_url", "source"}, []string{"url", "file_url", "data"}); url != "" {
+		return url
 	}
-	if s := strings.TrimSpace(fmt.Sprint(part["file_id"])); s != "" && s != "<nil>" {
+	if s := parseLooseStringAny(part["file_id"]); s != "" {
 		return s
 	}
 	return ""
@@ -394,8 +388,8 @@ func responsesToolsToChatTools(tools []map[string]interface{}) []ToolDef {
 			}
 			continue
 		}
-		name := strings.TrimSpace(fmt.Sprint(tool["name"]))
-		if name == "" || name == "<nil>" {
+		name := parseLooseStringAny(tool["name"])
+		if name == "" {
 			continue
 		}
 		out = append(out, ToolDef{Type: "function", Function: map[string]interface{}{
@@ -418,8 +412,8 @@ func responsesToolChoiceToChat(choice interface{}) interface{} {
 	if _, ok := m["function"].(map[string]interface{}); ok {
 		return choice
 	}
-	name := strings.TrimSpace(fmt.Sprint(m["name"]))
-	if name == "" || name == "<nil>" {
+	name := parseLooseStringAny(m["name"])
+	if name == "" {
 		return choice
 	}
 	return map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": name}}
@@ -499,12 +493,12 @@ func responseFunctionCallItem(call map[string]interface{}) map[string]interface{
 		return nil
 	}
 	fn, _ := call["function"].(map[string]interface{})
-	name := strings.TrimSpace(fmt.Sprint(fn["name"]))
-	if name == "" || name == "<nil>" {
+	name := parseLooseStringAny(fn["name"])
+	if name == "" {
 		return nil
 	}
-	args := strings.TrimSpace(fmt.Sprint(fn["arguments"]))
-	if args == "" || args == "<nil>" {
+	args := parseLooseStringAny(fn["arguments"])
+	if args == "" {
 		args = "{}"
 	}
 	return map[string]interface{}{

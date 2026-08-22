@@ -140,20 +140,11 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		sess.Close()
 	}()
 
-	nsfw := req.NSFW
-	if nsfw == nil {
-		v := true
-		if h != nil && h.cfg != nil {
-			v = h.cfg.PublicImagineNSFW()
-		}
-		nsfw = &v
-	}
-
 	if req.Stream {
-		h.streamAppChatImagesGeneration(ctx, w, sess, spec, req, publicBase, nsfw)
+		h.streamAppChatImagesGeneration(ctx, w, sess, spec, req, publicBase)
 		return
 	}
-	urls, err := h.collectAppChatImageURLs(ctx, sess, spec, req, nsfw, true)
+	urls, err := h.collectAppChatImageURLs(ctx, sess, spec, req, true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -166,9 +157,9 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	h.writeImageResults(w, ctx, sess.token, req.Prompt, urls, req.ResponseFormat, publicBase, true)
 }
 
-func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, publicBase string, nsfw *bool) {
+func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, publicBase string) {
 	onePayload := h.client.appChatImagePayload(spec, req.Prompt, req.Size, req.N)
-	ensureImageNSFW(onePayload, spec.UpstreamModel, nsfw)
+	ensureImageNSFW(onePayload)
 	resp, err := h.doAppChatImageRequest(ctx, sess, spec, &onePayload, true)
 	if err != nil {
 		slog.Warn("grok app-chat image stream upstream failed",
@@ -184,7 +175,7 @@ func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.Resp
 	h.streamImageGeneration(w, resp.Body, sess.token, req.Prompt, req.ResponseFormat, req.N, publicBase)
 }
 
-func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, nsfw *bool, allowSwitch bool) ([]string, error) {
+func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, allowSwitch bool) ([]string, error) {
 	var urls []string
 	var debugShapes []string
 	var debugNoImage []string
@@ -213,14 +204,8 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 			prompt = promptVariants[promptVariantIndex(i, promptVariants)]
 		}
 		payload := h.client.appChatImagePayload(spec, prompt, req.Size, count)
-		ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
-		var resp *http.Response
-		var err error
-		if allowSwitch {
-			resp, err = h.doAppChatImageRequest(ctx, sess, spec, &payload, true)
-		} else {
-			resp, err = h.doAppChatImageRequest(ctx, sess, spec, &payload, false)
-		}
+		ensureImageNSFW(payload)
+		resp, err := h.doAppChatImageRequest(ctx, sess, spec, &payload, allowSwitch)
 		if err != nil {
 			slog.Warn("grok app-chat image upstream failed",
 				"model", req.Model,
@@ -283,17 +268,14 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 }
 
 func (h *Handler) doAppChatImageRequest(ctx context.Context, sess *chatAccountSession, spec ModelSpec, payload *map[string]interface{}, allowSwitch bool) (*http.Response, error) {
+	if payload == nil {
+		return nil, fmt.Errorf("empty payload")
+	}
 	if normalizeModelID(spec.ID) == "grok-imagine-image-lite" {
-		if payload == nil {
-			return nil, fmt.Errorf("empty payload")
-		}
 		if allowSwitch {
 			return h.doAutoSwitchRequest(ctx, sess, payload, nil, (*Client).doChat)
 		}
 		return h.doSingleAccountRequest(ctx, sess, *payload, markAllGrokAccountStatuses, (*Client).doChat)
-	}
-	if payload == nil {
-		return nil, fmt.Errorf("empty payload")
 	}
 	if allowSwitch {
 		return h.doAutoSwitchRequest(ctx, sess, payload, nil, (*Client).doAppChatCreateAndRespond)

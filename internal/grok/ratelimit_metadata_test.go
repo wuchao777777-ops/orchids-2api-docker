@@ -2,6 +2,7 @@ package grok
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,19 +117,8 @@ func TestRateLimitMetadataDescribe(t *testing.T) {
 	}
 	// The appended text must keep existing classifiers matching.
 	for _, keyword := range []string{"team=", "model=", "scope=rps", "6/6", "reset=2s"} {
-		if !containsSubstring(desc, keyword) {
+		if !strings.Contains(desc, keyword) {
 			t.Fatalf("describe %q missing %q", desc, keyword)
 		}
 	}
-}
-
-func containsSubstring(s, sub string) bool {
-	return len(s) >= len(sub) && (func() bool {
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	})()
 }

@@ -7,18 +7,12 @@ import (
 	"sync"
 	"time"
 
-	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
 )
 
 // accountStatusMu 保护并发的 markAccountStatus 调用，
 // 避免多个 goroutine 同时修改同一 Account 的 StatusCode/LastAttempt。
 var accountStatusMu sync.Mutex
-
-// classifyAccountStatus delegates to the centralized errors package.
-func classifyAccountStatus(errStr string) string {
-	return apperrors.ClassifyAccountStatus(errStr)
-}
 
 func isWarpQuotaExhaustedError(errStr string) bool {
 	lower := strings.ToLower(errStr)

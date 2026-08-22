@@ -110,7 +110,7 @@ func TestSessionAuthDynamic_UsesLatestCredentials(t *testing.T) {
 
 func TestPublicKeyAuth_ValidBearer(t *testing.T) {
 	called := false
-	handler := PublicKeyAuth("pub-123", false, func(w http.ResponseWriter, r *http.Request) {
+	handler := PublicKeyAuth("pub-123", func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -129,7 +129,7 @@ func TestPublicKeyAuth_ValidBearer(t *testing.T) {
 }
 
 func TestPublicKeyAuth_MissingBearer(t *testing.T) {
-	handler := PublicKeyAuth("pub-123", false, func(w http.ResponseWriter, r *http.Request) {
+	handler := PublicKeyAuth("pub-123", func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected call")
 	})
 
@@ -153,7 +153,7 @@ func TestPublicKeyAuth_MissingBearer(t *testing.T) {
 
 func TestPublicKeyAuth_AllowsWhenNoKeyAndDisabled(t *testing.T) {
 	called := false
-	handler := PublicKeyAuth("", false, func(w http.ResponseWriter, r *http.Request) {
+	handler := PublicKeyAuth("", func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -172,7 +172,7 @@ func TestPublicKeyAuth_AllowsWhenNoKeyAndDisabled(t *testing.T) {
 
 func TestPublicKeyAuth_EnabledWhenNoKey(t *testing.T) {
 	called := false
-	handler := PublicKeyAuth("", true, func(w http.ResponseWriter, r *http.Request) {
+	handler := PublicKeyAuth("", func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -191,7 +191,7 @@ func TestPublicKeyAuth_EnabledWhenNoKey(t *testing.T) {
 
 func TestPublicImagineStreamAuth_AllowsTaskIDWithoutKey(t *testing.T) {
 	called := false
-	handler := PublicImagineStreamAuth("pub-123", false, func(w http.ResponseWriter, r *http.Request) {
+	handler := PublicImagineStreamAuth("pub-123", func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -209,7 +209,7 @@ func TestPublicImagineStreamAuth_AllowsTaskIDWithoutKey(t *testing.T) {
 }
 
 func TestPublicImagineStreamAuth_RequiresQueryPublicKey(t *testing.T) {
-	handler := PublicImagineStreamAuth("pub-123", false, func(w http.ResponseWriter, r *http.Request) {
+	handler := PublicImagineStreamAuth("pub-123", func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected call")
 	})
 
@@ -226,7 +226,7 @@ func TestPublicImagineStreamAuth_RequiresQueryPublicKey(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodGet, "/v1/public/imagine/sse?public_key=pub-123", nil)
 	rec2 := httptest.NewRecorder()
 	called := false
-	handler2 := PublicImagineStreamAuth("pub-123", false, func(w http.ResponseWriter, r *http.Request) {
+	handler2 := PublicImagineStreamAuth("pub-123", func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -242,7 +242,7 @@ func TestPublicImagineStreamAuth_RequiresQueryPublicKey(t *testing.T) {
 	req3.Header.Set("Authorization", "Bearer pub-123")
 	rec3 := httptest.NewRecorder()
 	calledBearer := false
-	handler3 := PublicImagineStreamAuth("pub-123", false, func(w http.ResponseWriter, r *http.Request) {
+	handler3 := PublicImagineStreamAuth("pub-123", func(w http.ResponseWriter, r *http.Request) {
 		calledBearer = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -257,7 +257,7 @@ func TestPublicImagineStreamAuth_RequiresQueryPublicKey(t *testing.T) {
 
 func TestPublicImagineStreamAuth_AllowsWhenNoKey(t *testing.T) {
 	called := false
-	handler := PublicImagineStreamAuth("", false, func(w http.ResponseWriter, r *http.Request) {
+	handler := PublicImagineStreamAuth("", func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})

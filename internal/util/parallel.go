@@ -26,13 +26,7 @@ func ParallelFor(n int, fn func(int)) {
 		return
 	}
 
-	workers := runtime.GOMAXPROCS(0)
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > n {
-		workers = n
-	}
+	workers := min(runtime.GOMAXPROCS(0), n)
 
 	var wg sync.WaitGroup
 	jobs := make(chan int, workers)
@@ -67,14 +61,7 @@ func SleepWithContext(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 	timer := time.NewTimer(d)
-	defer func() {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}()
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return false

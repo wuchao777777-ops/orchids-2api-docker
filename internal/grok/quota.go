@@ -38,7 +38,7 @@ func InferSubscriptionFromRateLimitInfo(info *RateLimitInfo) string {
 		return ""
 	}
 	switch limit := info.Limit; {
-	case limit >= 150 || limit == 400:
+	case limit >= 150:
 		return "heavy"
 	case limit == 50 || limit == 140:
 		return "super"

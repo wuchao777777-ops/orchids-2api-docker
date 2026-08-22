@@ -3,6 +3,8 @@
 package provider
 
 import (
+	"strings"
+
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 )
@@ -37,14 +39,5 @@ func (r *Registry) Get(name string) Provider {
 }
 
 func normalize(s string) string {
-	// Simple lowercase for case-insensitive matching.
-	out := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		out[i] = c
-	}
-	return string(out)
+	return strings.ToLower(s)
 }

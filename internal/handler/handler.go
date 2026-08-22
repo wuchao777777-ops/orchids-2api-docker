@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	rtdebug "runtime/debug"
 	"strconv"
@@ -109,12 +110,7 @@ type openAINonStreamResponse struct {
 
 func cloneSSEMessage(msg upstream.SSEMessage) upstream.SSEMessage {
 	cloned := msg
-	if msg.Event != nil {
-		cloned.Event = make(map[string]interface{}, len(msg.Event))
-		for k, v := range msg.Event {
-			cloned.Event[k] = v
-		}
-	}
+	cloned.Event = maps.Clone(msg.Event)
 	return cloned
 }
 
@@ -1131,7 +1127,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			if verboseDiagnostics {
 				slog.Debug("Using SendRequestWithPayload")
 			}
-			warpBatches := []warpToolResultBatch{{Messages: upstreamMessages}}
+			warpBatches := [][]prompt.Message{upstreamMessages}
 			if isWarpRequest {
 				if h.config.WarpSplitToolResults || lastUserIsToolResultFollowup(upstreamMessages) {
 					batches, total := splitWarpToolResults(upstreamMessages, 1)
@@ -1144,7 +1140,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			latestChatSessionID := upstreamReq.ChatSessionID
 			for i, batch := range warpBatches {
 				batchReq := upstreamReq
-				batchReq.Messages = batch.Messages
+				batchReq.Messages = batch
 				batchReq.ChatSessionID = latestChatSessionID
 				isLast := i == len(warpBatches)-1
 				if isLast {
@@ -1216,7 +1212,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			errStr := err.Error()
-			errClass := classifyUpstreamError(errStr)
+			errClass := apperrors.ClassifyUpstreamError(errStr)
 			warpCloudAgentForbidden := isWarpCloudAgentForbiddenError(errStr)
 			if isWarpRequest {
 				h.refundWarpCredits(apiClient, errClass.Category)
@@ -1231,7 +1227,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			slog.Error("Request error", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err, "category", errClass.Category, "retryable", errClass.Retryable)
 			// 标记账号状态（auth 类错误始终标记，无论是否可重试）
 			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-				if status := classifyAccountStatus(errStr); status != "" {
+				if status := apperrors.ClassifyAccountStatus(errStr); status != "" {
 					// Mark status if it's auth-related OR a quota/rate-limit style cooldown.
 					if !errClass.Retryable || errClass.Category == "auth" || errClass.Category == "auth_blocked" || status == "403" || status == "429" || status == "402" {
 						skipAccountStatusMark := isWarpRequest && status == "403" && warpCloudAgentForbidden

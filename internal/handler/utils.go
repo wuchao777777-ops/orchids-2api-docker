@@ -124,7 +124,11 @@ func channelFromPath(path string) string {
 
 // mapModel 将请求的 model 名称映射为上游实际支持的规范化模型 ID。
 func mapModel(requestModel string) string {
-	normalized := normalizeModelKey(requestModel)
+	normalized := strings.ToLower(strings.TrimSpace(requestModel))
+	if strings.HasPrefix(normalized, "claude-") {
+		normalized = strings.ReplaceAll(normalized, "4.6", "4-6")
+		normalized = strings.ReplaceAll(normalized, "4.5", "4-5")
+	}
 	if normalized == "" {
 		return "claude-sonnet-4-6"
 	}
@@ -132,15 +136,6 @@ func mapModel(requestModel string) string {
 		return mapped
 	}
 	return "claude-sonnet-4-6"
-}
-
-func normalizeModelKey(model string) string {
-	normalized := strings.ToLower(strings.TrimSpace(model))
-	if strings.HasPrefix(normalized, "claude-") {
-		normalized = strings.ReplaceAll(normalized, "4.6", "4-6")
-		normalized = strings.ReplaceAll(normalized, "4.5", "4-5")
-	}
-	return normalized
 }
 
 // modelMap 维护跨通道共享的模型别名到上游模型 ID 的规范化映射。
@@ -165,7 +160,6 @@ var modelMap = map[string]string{
 	"glm-5":                      "glm-5",
 	"kimi-k2.5":                  "kimi-k2.5",
 }
-
 
 func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {
 	if req.ConversationID != "" {
@@ -404,7 +398,6 @@ func shouldKeepToolsForRecoverableWarpToolFailure(messages []prompt.Message, ori
 type toolResultEvidence struct {
 	ToolName string
 	FilePath string
-	Command  string
 	Content  string
 }
 
@@ -501,7 +494,6 @@ func collectSuccessfulToolResultEvidence(messages []prompt.Message) []toolResult
 				toolUses[block.ID] = toolResultEvidence{
 					ToolName: strings.TrimSpace(block.Name),
 					FilePath: extractToolUseInputString(block.Input, "file_path", "path"),
-					Command:  extractToolUseInputString(block.Input, "command", "cmd"),
 				}
 			}
 			continue
@@ -1212,214 +1204,107 @@ func countNonEmptyLines(text string) int {
 	return count
 }
 
-func looksLikeTechStackRequest(text string) bool {
+func containsNormalizedRequestText(text string, markers ...string) bool {
 	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
-		"技术架构", "技术栈", "架构", "框架", "依赖", "用了哪些技术", "使用了哪些技术",
-		"tech stack", "technology stack", "architecture", "framework", "frameworks", "dependencies",
-	} {
+	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
 			return true
 		}
 	}
 	return false
+}
+
+func looksLikeTechStackRequest(text string) bool {
+	return containsNormalizedRequestText(text,
+		"技术架构", "技术栈", "架构", "框架", "依赖", "用了哪些技术", "使用了哪些技术",
+		"tech stack", "technology stack", "architecture", "framework", "frameworks", "dependencies",
+	)
 }
 
 func looksLikeProjectPurposeRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"项目是干什么的", "这个项目是干什么的", "这个项目做什么", "这个项目有什么用", "用途", "做什么",
 		"what does this project do", "what is this project", "project purpose", "purpose of this project",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikeBackendImplementationRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"后端", "服务端", "接口", "api", "后端如何实现", "接口如何实现",
 		"backend", "server side", "server-side", "api implementation", "service implementation",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikeDataLayerRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"数据层", "存储", "数据库", "缓存", "持久化", "数据怎么存", "数据存在哪里",
 		"data layer", "storage", "database", "db", "cache", "persistence",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikeTestingRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"测试", "单测", "集成测试", "e2e", "怎么测试", "如何测试",
 		"testing", "test strategy", "unit test", "integration test", "e2e test",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikeDeploymentRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"部署", "构建", "发布", "上线", "运行方式", "怎么启动",
 		"deployment", "deploy", "build", "release", "runtime", "how to run", "how to start",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikeSecurityRiskRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"安全风险", "安全问题", "漏洞", "风险点", "不安全", "安全隐患",
 		"security risk", "security risks", "security issue", "vulnerability", "vulnerabilities",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikePermissionRiskRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"权限风险", "权限问题", "提权", "root 权限", "高权限", "最小权限",
 		"permission risk", "permissions issue", "privilege escalation", "run as root", "least privilege",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikeDependencyRiskRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"依赖风险", "依赖问题", "供应链风险", "依赖是否安全", "第三方依赖风险",
 		"dependency risk", "dependency risks", "package risk", "supply chain risk", "third-party dependency",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikeReleaseRiskRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"发布风险", "上线风险", "交付风险", "发布隐患", "发布问题",
 		"release risk", "rollout risk", "deployment risk", "shipping risk", "release issue",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikeOptimizationRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"怎么优化", "如何优化", "优化建议", "性能怎么优化", "重构建议", "改进建议",
 		"帮我优化", "优化这个项目", "项目优化", "优化下这个项目", "帮我改进这个项目",
 		"优化这个方案", "帮我优化这个方案", "优化这个设计", "帮我优化这个设计", "优化这个实现", "帮我优化这个实现",
 		"how to optimize", "optimization advice", "performance optimization", "refactor suggestions", "improvement suggestions",
 		"optimize this plan", "optimize this design", "optimize this implementation",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func explicitlyRequestsDeepAnalysis(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"深入分析", "详细分析", "深层分析", "全面分析", "deep analysis", "detailed analysis", "in-depth analysis",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 func looksLikeWebImplementationRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
+	return containsNormalizedRequestText(text,
 		"网页", "前端", "页面", "界面", "网站", "web ui", "web-ui", "如何实现",
 		"frontend", "front-end", "web", "page", "pages", "website",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	)
 }
 
 type techStackSignals struct {

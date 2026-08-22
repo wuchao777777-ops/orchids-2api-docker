@@ -191,10 +191,6 @@ func boundedModelRefreshWorkers(total int, concurrency int) int {
 	return workers
 }
 
-func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.Store, channel string) ([]discoveredModel, string, error) {
-	return discoverModelsForChannelConcurrent(ctx, cfg, s, channel, defaultModelRefreshConcurrency)
-}
-
 func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) ([]discoveredModel, string, error) {
 	switch strings.ToLower(channel) {
 	case "warp":
@@ -906,8 +902,8 @@ func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 }
 
 func chooseRefreshedDefaultModel(channel string, existing map[string]*store.Model, ordered []discoveredModel) string {
-	if strings.EqualFold(strings.TrimSpace(channel), "warp") && discoveredModelsContain(ordered, warpDefaultModelID()) {
-		return warpDefaultModelID()
+	if strings.EqualFold(strings.TrimSpace(channel), "warp") && discoveredModelsContain(ordered, warpDefaultModelID) {
+		return warpDefaultModelID
 	}
 	for _, model := range ordered {
 		if current := existing[model.ID]; current != nil && current.IsDefault {
@@ -920,12 +916,10 @@ func chooseRefreshedDefaultModel(channel string, existing map[string]*store.Mode
 	return ""
 }
 
-func warpDefaultModelID() string {
-	return "auto-open"
-}
+const warpDefaultModelID = "auto-open"
 
 func shouldForceWarpDefault(channel, modelID string) bool {
-	return strings.EqualFold(strings.TrimSpace(channel), "warp") && modelID == warpDefaultModelID()
+	return strings.EqualFold(strings.TrimSpace(channel), "warp") && modelID == warpDefaultModelID
 }
 
 func discoveredModelsContain(models []discoveredModel, id string) bool {

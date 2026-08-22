@@ -132,12 +132,12 @@ func registerRoutes(
 	// --- Public API routes (dual prefix) ---
 	publicAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			middleware.PublicKeyAuth(cfg.PublicAPIKey(), cfg.PublicAPIEnabled(), next)(w, r)
+			middleware.PublicKeyAuth(cfg.PublicAPIKey(), next)(w, r)
 		}
 	}
 	publicImagineStreamAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			middleware.PublicImagineStreamAuth(cfg.PublicAPIKey(), cfg.PublicAPIEnabled(), next)(w, r)
+			middleware.PublicImagineStreamAuth(cfg.PublicAPIKey(), next)(w, r)
 		}
 	}
 
@@ -211,16 +211,9 @@ func registerRoutes(
 		mux.HandleFunc(prefix, redirectPublicRoot)
 		mux.HandleFunc(prefix+"/", redirectPublicRoot)
 	}
-	publicPages := []struct {
-		path string
-	}{
-		{"/login"},
-		{"/imagine"},
-		{"/voice"},
-		{"/video"},
-	}
+	publicPages := []string{"/login", "/imagine", "/voice", "/video"}
 	for _, page := range publicPages {
-		registerWithPrefixes(mux, publicPagePrefixes, page.path, redirectToGrokTools)
+		registerWithPrefixes(mux, publicPagePrefixes, page, redirectToGrokTools)
 	}
 
 	// --- Admin Web UI ---
@@ -279,8 +272,7 @@ func registerAdminUI(mux *http.ServeMux, cfg *config.Config, s *store.Store, sta
 	})
 
 	for _, page := range []string{"/config", "/cache", "/token"} {
-		p := page
-		mux.HandleFunc(cfg.AdminPath+p, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(cfg.AdminPath+page, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return

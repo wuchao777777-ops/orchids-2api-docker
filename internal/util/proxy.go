@@ -74,15 +74,15 @@ func ProxyFunc(httpProxy, httpsProxy, user, pass string, bypass []string) func(*
 }
 
 func DirectProxyFunc() func(*http.Request) (*url.URL, error) {
-	return func(req *http.Request) (*url.URL, error) {
-		if req == nil || req.URL == nil {
-			return nil, nil
-		}
+	return func(*http.Request) (*url.URL, error) {
 		return nil, nil
 	}
 }
 
 func ProxyFuncFromURL(proxyURL *url.URL, bypass []string) func(*http.Request) (*url.URL, error) {
+	if proxyURL == nil {
+		return DirectProxyFunc()
+	}
 	return func(req *http.Request) (*url.URL, error) {
 		if req == nil || req.URL == nil {
 			return nil, nil
@@ -90,10 +90,7 @@ func ProxyFuncFromURL(proxyURL *url.URL, bypass []string) func(*http.Request) (*
 		if shouldBypass(req.URL.Host, bypass) {
 			return nil, nil
 		}
-		if proxyURL != nil {
-			return proxyURL, nil
-		}
-		return nil, nil
+		return proxyURL, nil
 	}
 }
 

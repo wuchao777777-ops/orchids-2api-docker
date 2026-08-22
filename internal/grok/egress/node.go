@@ -26,12 +26,8 @@ type Node struct {
 // client (util.GetSharedBrowserHTTPClient): standard HTTP CONNECT and SOCKS5.
 // HTTPS proxies, trojan/vless/ss/vmess and socks4 are rejected up-front so a
 // misconfigured node fails loudly instead of failing per request.
-func supportedProxySchemes() map[string]bool {
-	return map[string]bool{
-		"http":    true,
-		"socks5":  true,
-		"socks5h": true,
-	}
+var supportedProxySchemes = map[string]bool{
+	"http": true, "socks5": true, "socks5h": true,
 }
 
 // parseProxyURL validates and parses a configured proxy URL. An empty string
@@ -46,7 +42,7 @@ func parseProxyURL(raw string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid proxy URL: %w", err)
 	}
-	if !supportedProxySchemes()[strings.ToLower(parsed.Scheme)] {
+	if !supportedProxySchemes[strings.ToLower(parsed.Scheme)] {
 		return nil, fmt.Errorf("unsupported proxy scheme %q (supported: http, socks5, socks5h)", parsed.Scheme)
 	}
 	if strings.TrimSpace(parsed.Host) == "" {

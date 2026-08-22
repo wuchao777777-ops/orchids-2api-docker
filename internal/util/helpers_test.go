@@ -92,21 +92,11 @@ func TestUniqueStrings(t *testing.T) {
 	}
 }
 
-func TestMinInt(t *testing.T) {
-	tests := []struct {
-		a, b, expected int
-	}{
-		{1, 2, 1},
-		{2, 1, 1},
-		{5, 5, 5},
-		{-1, 1, -1},
-		{0, 0, 0},
+func TestSecureCompare(t *testing.T) {
+	if !SecureCompare("secret", "secret") {
+		t.Fatal("equal values should match")
 	}
-
-	for _, tt := range tests {
-		result := MinInt(tt.a, tt.b)
-		if result != tt.expected {
-			t.Errorf("MinInt(%d, %d) = %d, expected %d", tt.a, tt.b, result, tt.expected)
-		}
+	if SecureCompare("secret", "different") {
+		t.Fatal("different values should not match")
 	}
 }

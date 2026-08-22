@@ -26,11 +26,6 @@ func resetMessagesForNewWorkdir(messages []prompt.Message) []prompt.Message {
 		return []prompt.Message{}
 	}
 
-	// 如果没有历史消息需要摘要，直接返回
-	if lastUserIdx == 0 {
-		return []prompt.Message{messages[lastUserIdx]}
-	}
-
 	// 构建简短摘要
 	older := messages[:lastUserIdx]
 	summary := buildWorkdirChangeSummary(older)
@@ -49,10 +44,6 @@ func resetMessagesForNewWorkdir(messages []prompt.Message) []prompt.Message {
 
 // buildWorkdirChangeSummary 从历史消息中提取关键上下文摘要。
 func buildWorkdirChangeSummary(messages []prompt.Message) string {
-	if len(messages) == 0 {
-		return ""
-	}
-
 	var parts []string
 	for _, msg := range messages {
 		text := msg.ExtractText()
@@ -66,10 +57,6 @@ func buildWorkdirChangeSummary(messages []prompt.Message) string {
 		parts = append(parts, fmt.Sprintf("- %s: %s", msg.Role, text))
 	}
 
-	if len(parts) == 0 {
-		return ""
-	}
-
 	// 限制总摘要条数，避免过长
 	if len(parts) > 10 {
 		parts = parts[len(parts)-10:]
@@ -77,5 +64,3 @@ func buildWorkdirChangeSummary(messages []prompt.Message) string {
 
 	return strings.Join(parts, "\n")
 }
-
-

@@ -84,24 +84,16 @@ func preferFullOverPart(urls []string) []string {
 }
 
 func normalizeImageURLs(urls []string, n int) []string {
-	urls = selectImageURLs(urls, false)
-	if n > 0 && len(urls) > n {
-		urls = urls[:n]
-	}
-	return urls
+	return selectImageURLs(urls, false, n)
 }
 
 // normalizeGeneratedImageURLs is stricter than normalizeImageURLs:
 // when Grok/local file URLs exist, they are preferred over arbitrary external links.
 func normalizeGeneratedImageURLs(urls []string, n int) []string {
-	urls = selectImageURLs(urls, true)
-	if n > 0 && len(urls) > n {
-		urls = urls[:n]
-	}
-	return urls
+	return selectImageURLs(urls, true, n)
 }
 
-func selectImageURLs(urls []string, preferGrok bool) []string {
+func selectImageURLs(urls []string, preferGrok bool, n int) []string {
 	type scored struct {
 		u     string
 		score int
@@ -134,7 +126,11 @@ func selectImageURLs(urls []string, preferGrok bool) []string {
 	for _, it := range candidates {
 		out = append(out, it.u)
 	}
-	return preferFullOverPart(out)
+	out = preferFullOverPart(out)
+	if n > 0 && len(out) > n {
+		out = out[:n]
+	}
+	return out
 }
 
 func imageURLScore(raw string) int {

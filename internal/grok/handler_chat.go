@@ -428,7 +428,7 @@ func (h *Handler) buildChatPayload(
 	if !spec.IsVideo {
 		return payload, nil
 	}
-	return h.buildVideoCreatePayload(ctx, token, spec, text, attachmentInputs, videoCfg, req)
+	return h.buildVideoCreatePayload(ctx, token, spec, text, attachmentInputs, videoCfg)
 }
 
 func (h *Handler) buildVideoCreatePayload(
@@ -438,7 +438,6 @@ func (h *Handler) buildVideoCreatePayload(
 	text string,
 	attachmentInputs []AttachmentInput,
 	videoCfg *VideoConfig,
-	req *ChatCompletionsRequest,
 ) (map[string]interface{}, error) {
 	if videoCfg == nil {
 		videoCfg = &VideoConfig{}

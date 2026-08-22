@@ -39,9 +39,8 @@ type nsfwTarget struct {
 }
 
 type nsfwBatchTask struct {
-	ID      string
-	Total   int
-	Created time.Time
+	ID    string
+	Total int
 
 	mu      sync.RWMutex
 	done    int
@@ -286,7 +285,6 @@ func newNSFWBatchTask(total int, cancel context.CancelFunc) *nsfwBatchTask {
 	task := &nsfwBatchTask{
 		ID:      id,
 		Total:   total,
-		Created: time.Now(),
 		status:  "running",
 		results: map[string]interface{}{},
 		cancel:  cancel,
@@ -296,6 +294,14 @@ func newNSFWBatchTask(total int, cancel context.CancelFunc) *nsfwBatchTask {
 	nsfwBatchTasks[id] = task
 	nsfwBatchTasksMu.Unlock()
 	return task
+}
+
+func writeAsyncTaskStarted(w http.ResponseWriter, task *nsfwBatchTask) {
+	writeJSON(w, map[string]interface{}{
+		"status":  "success",
+		"task_id": task.ID,
+		"total":   task.Total,
+	})
 }
 
 func getNSFWBatchTask(id string) (*nsfwBatchTask, bool) {
@@ -502,12 +508,7 @@ func (h *Handler) HandleAdminNSFWEnableAsync(w http.ResponseWriter, r *http.Requ
 		task.finish("done", "")
 	}()
 
-	out := map[string]interface{}{
-		"status":  "success",
-		"task_id": task.ID,
-		"total":   len(targets),
-	}
-	writeJSON(w, out)
+	writeAsyncTaskStarted(w, task)
 }
 
 func (h *Handler) HandleAdminBatchTask(w http.ResponseWriter, r *http.Request) {

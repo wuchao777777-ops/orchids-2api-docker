@@ -482,15 +482,6 @@ func parseIntLoose(raw string, fallback int) int {
 	return v
 }
 
-func firstNonEmptyStringAtAnyPath(root interface{}, paths ...[]string) string {
-	for _, path := range paths {
-		if s := strings.TrimSpace(fmt.Sprint(valueAtPath(root, path...))); s != "" && s != "<nil>" {
-			return s
-		}
-	}
-	return ""
-}
-
 func diagnosticValueSummary(v interface{}) string {
 	switch x := v.(type) {
 	case nil:
@@ -602,4 +593,3 @@ func intAtAnyPath(root interface{}, paths ...[]string) int {
 	}
 	return 0
 }
-

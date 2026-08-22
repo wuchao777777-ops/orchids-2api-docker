@@ -15,11 +15,46 @@ import (
 )
 
 type redisStore struct {
-	client                      *redis.Client
-	prefix                      string
-	incrementRequestCountScript *redis.Script
-	incrementAccountStatsScript *redis.Script
+	client *redis.Client
+	prefix string
 }
+
+var (
+	incrementRequestCountScript = redis.NewScript(`
+		local key = KEYS[1]
+		local now_str = ARGV[1]
+		local val = redis.call("GET", key)
+		if not val then return nil end
+		local acc = cjson.decode(val)
+		acc.request_count = (acc.request_count or 0) + 1
+		acc.last_used_at = now_str
+		acc.updated_at = now_str
+		redis.call("SET", key, cjson.encode(acc))
+		return "OK"
+	`)
+	incrementAccountStatsScript = redis.NewScript(`
+		local key = KEYS[1]
+		local usage = tonumber(ARGV[1])
+		local count = tonumber(ARGV[2])
+		local now_str = ARGV[3]
+		local val = redis.call("GET", key)
+		if not val then return redis.error_reply("account not found") end
+		local acc = cjson.decode(val)
+		local acc_type = ""
+		if acc.account_type ~= nil then
+			acc_type = string.lower(tostring(acc.account_type))
+		end
+		if acc_type ~= "warp" and acc_type ~= "puter" and acc_type ~= "grok" then
+			acc.usage_current = (acc.usage_current or 0) + usage
+		end
+		acc.usage_total = (acc.usage_total or 0) + usage
+		acc.request_count = (acc.request_count or 0) + count
+		acc.last_used_at = now_str
+		acc.updated_at = now_str
+		redis.call("SET", key, cjson.encode(acc))
+		return "OK"
+	`)
+)
 
 type apiKeyRecord struct {
 	ID         int64      `json:"id"`
@@ -60,53 +95,7 @@ func newRedisStore(addr, password string, db int, prefix string) (*redisStore, e
 		return nil, fmt.Errorf("redis ping failed: %w", err)
 	}
 
-	return &redisStore{
-		client: client,
-		prefix: prefix,
-		incrementRequestCountScript: redis.NewScript(`
-			local key = KEYS[1]
-			local now_str = ARGV[1]
-
-			local val = redis.call("GET", key)
-			if not val then return nil end
-
-			local acc = cjson.decode(val)
-			acc.request_count = (acc.request_count or 0) + 1
-			acc.last_used_at = now_str
-			acc.updated_at = now_str
-
-			redis.call("SET", key, cjson.encode(acc))
-			return "OK"
-		`),
-		incrementAccountStatsScript: redis.NewScript(`
-			local key = KEYS[1]
-			local usage = tonumber(ARGV[1])
-			local count = tonumber(ARGV[2])
-			local now_str = ARGV[3]
-
-			local val = redis.call("GET", key)
-			if not val then return redis.error_reply("account not found") end
-
-			local acc = cjson.decode(val)
-
-			local acc_type = ""
-			if acc.account_type ~= nil then
-				acc_type = string.lower(tostring(acc.account_type))
-			end
-
-			if acc_type ~= "warp" and acc_type ~= "puter" and acc_type ~= "grok" then
-				acc.usage_current = (acc.usage_current or 0) + usage
-			end
-			acc.usage_total = (acc.usage_total or 0) + usage
-			acc.request_count = (acc.request_count or 0) + count
-			acc.last_used_at = now_str
-			acc.updated_at = now_str
-
-			local new_val = cjson.encode(acc)
-			redis.call("SET", key, new_val)
-			return "OK"
-		`),
-	}, nil
+	return &redisStore{client: client, prefix: prefix}, nil
 }
 
 func (s *redisStore) Client() *redis.Client {
@@ -320,63 +309,8 @@ func (s *redisStore) IncrementRequestCount(ctx context.Context, id int64) error 
 	if id == 0 {
 		return nil
 	}
-	if s.incrementRequestCountScript == nil {
-		s.incrementRequestCountScript = redis.NewScript(`
-			local key = KEYS[1]
-			local now_str = ARGV[1]
-
-			local val = redis.call("GET", key)
-			if not val then return nil end
-
-			local acc = cjson.decode(val)
-			acc.request_count = (acc.request_count or 0) + 1
-			acc.last_used_at = now_str
-			acc.updated_at = now_str
-
-			redis.call("SET", key, cjson.encode(acc))
-			return "OK"
-		`)
-	}
-
 	nowStr := time.Now().Format(time.RFC3339Nano)
-	err := s.incrementRequestCountScript.Run(ctx, s.client, []string{s.accountsKey(id)}, nowStr).Err()
-	if err != nil && err != redis.Nil {
-		return err
-	}
-	return nil
-}
-
-func (s *redisStore) IncrementUsage(ctx context.Context, id int64, usage float64) error {
-	if s == nil || s.client == nil {
-		return fmt.Errorf("redis store not configured")
-	}
-	if id == 0 {
-		return nil
-	}
-	if usage <= 0 {
-		return nil
-	}
-
-	script := redis.NewScript(`
-	local key = KEYS[1]
-	local usage = tonumber(ARGV[1])
-	local now_str = ARGV[2]
-
-	local val = redis.call("GET", key)
-	if not val then return nil end
-
-	local acc = cjson.decode(val)
-	acc.usage_current = (acc.usage_current or 0) + usage
-	acc.usage_total = (acc.usage_total or 0) + usage
-	acc.last_used_at = now_str
-	acc.updated_at = now_str
-
-	redis.call("SET", key, cjson.encode(acc))
-	return "OK"
-	`)
-
-	nowStr := time.Now().Format(time.RFC3339Nano)
-	err := script.Run(ctx, s.client, []string{s.accountsKey(id)}, usage, nowStr).Err()
+	err := incrementRequestCountScript.Run(ctx, s.client, []string{s.accountsKey(id)}, nowStr).Err()
 	if err != nil && err != redis.Nil {
 		return err
 	}
@@ -393,42 +327,11 @@ func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage 
 	if usage <= 0 && count <= 0 {
 		return nil
 	}
-	if s.incrementAccountStatsScript == nil {
-		s.incrementAccountStatsScript = redis.NewScript(`
-			local key = KEYS[1]
-			local usage = tonumber(ARGV[1])
-			local count = tonumber(ARGV[2])
-			local now_str = ARGV[3]
-
-			local val = redis.call("GET", key)
-			if not val then return redis.error_reply("account not found") end
-
-			local acc = cjson.decode(val)
-
-			local acc_type = ""
-			if acc.account_type ~= nil then
-				acc_type = string.lower(tostring(acc.account_type))
-			end
-
-			if acc_type ~= "warp" and acc_type ~= "puter" and acc_type ~= "grok" then
-				acc.usage_current = (acc.usage_current or 0) + usage
-			end
-			acc.usage_total = (acc.usage_total or 0) + usage
-			acc.request_count = (acc.request_count or 0) + count
-			acc.last_used_at = now_str
-			acc.updated_at = now_str
-
-			local new_val = cjson.encode(acc)
-			redis.call("SET", key, new_val)
-			return "OK"
-		`)
-	}
-
 	nowStr := time.Now().Format(time.RFC3339Nano)
 	keys := []string{s.accountsKey(id)}
 	args := []interface{}{usage, count, nowStr}
 
-	err := s.incrementAccountStatsScript.Run(ctx, s.client, keys, args...).Err()
+	err := incrementAccountStatsScript.Run(ctx, s.client, keys, args...).Err()
 	if err != nil && err != redis.Nil {
 		return err
 	}
@@ -665,28 +568,6 @@ func (s *redisStore) ListApiKeys(ctx context.Context) ([]*ApiKey, error) {
 	return s.getApiKeysByIDs(ctx, ids)
 }
 
-func (s *redisStore) GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey, error) {
-	if s == nil || s.client == nil {
-		return nil, fmt.Errorf("redis store not configured")
-	}
-	hash = strings.TrimSpace(hash)
-	if hash == "" {
-		return nil, nil
-	}
-	idStr, err := s.client.Get(ctx, s.apiKeysHashKey(hash)).Result()
-	if err == redis.Nil {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || id == 0 {
-		return nil, nil
-	}
-	return s.getApiKeyByID(ctx, id)
-}
-
 func (s *redisStore) UpdateApiKeyEnabled(ctx context.Context, id int64, enabled bool) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")
@@ -695,40 +576,10 @@ func (s *redisStore) UpdateApiKeyEnabled(ctx context.Context, id int64, enabled 
 		return ErrNoRows
 	}
 	key, err := s.getApiKeyByID(ctx, id)
-	if err == ErrNoRows {
-		return ErrNoRows
-	}
 	if err != nil {
 		return err
 	}
 	key.Enabled = enabled
-	record := apiKeyRecordFromKey(key)
-	data, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	if err := s.client.Set(ctx, s.apiKeysKey(id), data, 0).Err(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *redisStore) UpdateApiKeyLastUsed(ctx context.Context, id int64) error {
-	if s == nil || s.client == nil {
-		return fmt.Errorf("redis store not configured")
-	}
-	if id == 0 {
-		return nil
-	}
-	key, err := s.getApiKeyByID(ctx, id)
-	if err == ErrNoRows {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	now := time.Now()
-	key.LastUsedAt = &now
 	record := apiKeyRecordFromKey(key)
 	data, err := json.Marshal(record)
 	if err != nil {
@@ -745,9 +596,6 @@ func (s *redisStore) DeleteApiKey(ctx context.Context, id int64) error {
 		return ErrNoRows
 	}
 	key, err := s.getApiKeyByID(ctx, id)
-	if err == ErrNoRows {
-		return ErrNoRows
-	}
 	if err != nil {
 		return err
 	}
@@ -914,14 +762,10 @@ func (s *redisStore) apiKeysHashKey(hash string) string {
 }
 
 func apiKeyRecordFromKey(key *ApiKey) apiKeyRecord {
-	if key == nil {
-		return apiKeyRecord{}
-	}
 	return apiKeyRecord{
 		ID:         key.ID,
 		Name:       key.Name,
 		KeyHash:    key.KeyHash,
-		KeyFull:    "",
 		KeyPrefix:  key.KeyPrefix,
 		KeySuffix:  key.KeySuffix,
 		Enabled:    key.Enabled,

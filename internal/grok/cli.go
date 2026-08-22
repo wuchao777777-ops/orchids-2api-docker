@@ -242,7 +242,7 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 			c.egress.InvalidateAffinityClearance("cli", "cli-default")
 			continue
 		}
-		return classifyAccountStatusFromHTTP(resp.StatusCode, raw), newCLIUpstreamError(resp.StatusCode, headerCopy, raw, "")
+		return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw, "")
 	}
 }
 
@@ -290,7 +290,7 @@ func (c *CLIClient) doCLIRequest(ctx context.Context, req *http.Request) (*http.
 	return resp, nil
 }
 
-func classifyAccountStatusFromHTTP(status int, raw []byte) string {
+func classifyAccountStatusFromHTTP(status int) string {
 	switch status {
 	case http.StatusUnauthorized:
 		return "401"

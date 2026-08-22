@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
-
-	apperrors "orchids-api/internal/errors"
 )
 
 type rateLimitFieldFamily struct {
@@ -95,11 +93,6 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 		return nil
 	}
 	return info
-}
-
-// classifyAccountStatusFromError delegates to the centralized errors package.
-func classifyAccountStatusFromError(errStr string) string {
-	return apperrors.ClassifyAccountStatus(errStr)
 }
 
 func collectRateLimitPayloadFields(value interface{}, numericFields map[string]int64, resetFields map[string]time.Time) {
@@ -418,4 +411,3 @@ func parseRateLimitReset(raw string) time.Time {
 	}
 	return time.Time{}
 }
-

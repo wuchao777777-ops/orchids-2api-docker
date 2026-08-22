@@ -59,7 +59,9 @@ func (h *Handler) getOrCreateAccountClient(acc *store.Account) UpstreamClient {
 	defer h.clientCache.mu.Unlock()
 
 	if entry, ok := h.clientCache.entries[acc.ID]; ok && entry.fingerprint == fingerprint && entry.client != nil {
-		closeUpstreamClient(client)
+		if c, ok := client.(clientCloser); ok {
+			c.Close()
+		}
 		return entry.client
 	}
 
@@ -123,12 +125,6 @@ func (h *Handler) Close() {
 	}
 
 	for _, c := range closers {
-		c.Close()
-	}
-}
-
-func closeUpstreamClient(client UpstreamClient) {
-	if c, ok := client.(clientCloser); ok {
 		c.Close()
 	}
 }

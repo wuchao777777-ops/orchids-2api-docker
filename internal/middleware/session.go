@@ -1,17 +1,14 @@
 package middleware
 
 import (
-	"crypto/subtle"
-	"github.com/goccy/go-json"
 	"net/http"
 	"strings"
 
-	"orchids-api/internal/auth"
-)
+	"github.com/goccy/go-json"
 
-func secureCompare(a, b string) bool {
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
+	"orchids-api/internal/auth"
+	"orchids-api/internal/util"
+)
 
 func bearerToken(r *http.Request) string {
 	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -22,7 +19,7 @@ func bearerToken(r *http.Request) string {
 	if !strings.HasPrefix(authHeader, prefix) {
 		return ""
 	}
-	return strings.TrimSpace(strings.TrimPrefix(authHeader, prefix))
+	return strings.TrimSpace(authHeader[len(prefix):])
 }
 
 func writeBearerUnauthorized(w http.ResponseWriter, message string) {
@@ -45,22 +42,11 @@ func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next 
 		}
 
 		authHeader := r.Header.Get("Authorization")
-		if adminToken != "" {
-			if secureCompare(authHeader, "Bearer "+adminToken) || secureCompare(authHeader, adminToken) {
-				next(w, r)
-				return
-			}
-			if secureCompare(r.Header.Get("X-Admin-Token"), adminToken) {
-				next(w, r)
-				return
-			}
-		}
-		if adminPass != "" {
-			if secureCompare(authHeader, "Bearer "+adminPass) || secureCompare(authHeader, adminPass) {
-				next(w, r)
-				return
-			}
-			if secureCompare(r.Header.Get("X-Admin-Token"), adminPass) {
+		adminHeader := r.Header.Get("X-Admin-Token")
+		secrets := [...]string{adminToken, adminPass}
+		for _, secret := range secrets {
+			if secret != "" && (util.SecureCompare(authHeader, "Bearer "+secret) ||
+				util.SecureCompare(authHeader, secret) || util.SecureCompare(adminHeader, secret)) {
 				next(w, r)
 				return
 			}
@@ -74,18 +60,16 @@ func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next 
 			if queryKey == "" {
 				continue
 			}
-			if adminToken != "" && secureCompare(queryKey, adminToken) {
-				next(w, r)
-				return
-			}
-			if adminPass != "" && secureCompare(queryKey, adminPass) {
-				next(w, r)
-				return
+			for _, secret := range secrets {
+				if secret != "" && util.SecureCompare(queryKey, secret) {
+					next(w, r)
+					return
+				}
 			}
 		}
 
 		_, pass, ok := r.BasicAuth()
-		if ok && secureCompare(pass, adminPass) {
+		if ok && util.SecureCompare(pass, adminPass) {
 			next(w, r)
 			return
 		}
@@ -100,9 +84,9 @@ func SessionAuth(adminPass, adminToken string, next http.HandlerFunc) http.Handl
 	}, next)
 }
 
-func PublicKeyAuth(publicKey string, _ bool, next http.HandlerFunc) http.HandlerFunc {
+func PublicKeyAuth(publicKey string, next http.HandlerFunc) http.HandlerFunc {
+	key := strings.TrimSpace(publicKey)
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := strings.TrimSpace(publicKey)
 		if key == "" {
 			// Project override: empty public_key means no auth on public APIs.
 			next(w, r)
@@ -114,7 +98,7 @@ func PublicKeyAuth(publicKey string, _ bool, next http.HandlerFunc) http.Handler
 			writeBearerUnauthorized(w, "Missing authentication token")
 			return
 		}
-		if !secureCompare(token, key) {
+		if !util.SecureCompare(token, key) {
 			writeBearerUnauthorized(w, "Invalid authentication token")
 			return
 		}
@@ -122,7 +106,8 @@ func PublicKeyAuth(publicKey string, _ bool, next http.HandlerFunc) http.Handler
 	}
 }
 
-func PublicImagineStreamAuth(publicKey string, _ bool, next http.HandlerFunc) http.HandlerFunc {
+func PublicImagineStreamAuth(publicKey string, next http.HandlerFunc) http.HandlerFunc {
+	key := strings.TrimSpace(publicKey)
 	return func(w http.ResponseWriter, r *http.Request) {
 		taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
 		if taskID != "" {
@@ -130,7 +115,6 @@ func PublicImagineStreamAuth(publicKey string, _ bool, next http.HandlerFunc) ht
 			return
 		}
 
-		key := strings.TrimSpace(publicKey)
 		if key == "" {
 			// Project override: empty public_key means no auth on public APIs.
 			next(w, r)
@@ -139,14 +123,14 @@ func PublicImagineStreamAuth(publicKey string, _ bool, next http.HandlerFunc) ht
 
 		queryKey := strings.TrimSpace(r.URL.Query().Get("public_key"))
 		if queryKey == "" {
-			if token := bearerToken(r); secureCompare(token, key) {
+			if token := bearerToken(r); util.SecureCompare(token, key) {
 				next(w, r)
 				return
 			}
 			writeBearerUnauthorized(w, "Missing authentication token")
 			return
 		}
-		if !secureCompare(queryKey, key) {
+		if !util.SecureCompare(queryKey, key) {
 			writeBearerUnauthorized(w, "Invalid authentication token")
 			return
 		}

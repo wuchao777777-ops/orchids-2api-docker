@@ -20,16 +20,10 @@ var grokUARotation = []string{
 // pickUserAgent returns a stable UA for a fingerprint. The same affinity key
 // (account identity) maps to the same UA unless rotation is forced by clearing
 // the fingerprint.
-func pickUserAgent(affinity string, rotate bool) string {
+func pickUserAgent(affinity string) string {
 	if affinity == "" {
 		affinity = "default"
 	}
-	if rotate {
-		// Rotate across the whole list on an explicit rotation request.
-		return grokUARotation[uint32(hashSeed(affinity))%uint32(len(grokUARotation))]
-	}
-	// Stable pick: hash affinity to an index, but keep it fixed for the process
-	// lifetime so clearance stays bound.
 	return grokUARotation[uint32(hashSeed(affinity))%uint32(len(grokUARotation))]
 }
 

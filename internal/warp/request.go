@@ -75,9 +75,6 @@ func extractMessageText(content prompt.MessageContent) string {
 
 func buildWarpUserQuery(promptText string, messages []prompt.Message, systemItems []prompt.SystemItem, conversationID string) string {
 	query := latestWarpUserInput(messages)
-	if query == "" && len(messages) == 0 {
-		query = sanitizeUTF8(strings.TrimSpace(promptText))
-	}
 	if query == "" {
 		query = sanitizeUTF8(strings.TrimSpace(promptText))
 	}
@@ -267,7 +264,7 @@ func buildInputContext(workdir string) *warpapi.InputContext {
 			Home: stringPtr(""),
 		}.Build(),
 		OperatingSystem: warpapi.InputContext_OperatingSystem_builder{
-			Platform:     stringPtr(warpPlatformName()),
+			Platform:     stringPtr(warpOSCategory()),
 			Distribution: stringPtr(""),
 		}.Build(),
 		Shell: warpapi.InputContext_Shell_builder{
@@ -279,11 +276,11 @@ func buildInputContext(workdir string) *warpapi.InputContext {
 }
 
 func buildRequestSettings(modelConfig AccountFeatureConfig, disableTools bool) *warpapi.Request_Settings {
-	cliAgentModel := firstNonEmptyModelID(modelConfig.CliAgentModel)
+	cliAgentModel := canonicalModelID(modelConfig.CliAgentModel)
 	if cliAgentModel == "" {
 		cliAgentModel = identifier
 	}
-	computerAgentModel := firstNonEmptyModelID(modelConfig.ComputerUseAgentModel)
+	computerAgentModel := canonicalModelID(modelConfig.ComputerUseAgentModel)
 	if computerAgentModel == "" {
 		computerAgentModel = computerUseModel
 	}
@@ -413,19 +410,6 @@ func buildMCPContext(tools []interface{}) (*warpapi.Request_MCPContext, error) {
 	return warpapi.Request_MCPContext_builder{
 		Servers: []*warpapi.Request_MCPContext_MCPServer{server},
 	}.Build(), nil
-}
-
-func warpPlatformName() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return "MacOS"
-	case "windows":
-		return "Windows"
-	case "linux":
-		return "Linux"
-	default:
-		return runtime.GOOS
-	}
 }
 
 func defaultShellName() string {
@@ -601,13 +585,8 @@ func extractWarpToolSpecFields(tool map[string]interface{}) (string, string, map
 }
 
 func schemaMap(v interface{}) map[string]interface{} {
-	if v == nil {
-		return nil
-	}
-	if m, ok := v.(map[string]interface{}); ok {
-		return m
-	}
-	return nil
+	m, _ := v.(map[string]interface{})
+	return m
 }
 
 func compactWarpDescription(description string) string {

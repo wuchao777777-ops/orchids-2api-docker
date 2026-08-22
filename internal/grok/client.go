@@ -1692,10 +1692,3 @@ func backoffDelay(baseDelay, retry429Delay, lastDelay time.Duration, attempt int
 	}
 	return time.Duration(rand.Int63n(int64(exp) + 1))
 }
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

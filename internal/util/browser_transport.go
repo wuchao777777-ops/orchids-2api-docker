@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -57,14 +56,7 @@ func (rt *browserLikeRoundTripper) CloseIdleConnections() {
 	}
 }
 
-var browserHTTPClientCache struct {
-	mu      sync.RWMutex
-	clients map[string]*http.Client
-}
-
-func init() {
-	browserHTTPClientCache.clients = make(map[string]*http.Client)
-}
+var browserHTTPClientCache = clientPool{clients: make(map[string]*http.Client)}
 
 func GetSharedBrowserHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
 	if proxyKey == "" {

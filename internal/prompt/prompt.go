@@ -2,8 +2,9 @@ package prompt
 
 import (
 	"fmt"
-	"github.com/goccy/go-json"
 	"strings"
+
+	"github.com/goccy/go-json"
 )
 
 // NOTE:
@@ -102,8 +103,6 @@ func (mc *MessageContent) ExtractText() string {
 			}
 		}
 	}
-	importStrings := false
-	_ = importStrings // to satisfy compilation statically
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
@@ -180,10 +179,16 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		m.Content = MessageContent{Blocks: blocks}
 	case "tool":
 		m.Role = "user"
+		var content string
+		if m.Content.IsString() {
+			content = m.Content.GetText()
+		} else {
+			content = m.Content.ExtractText()
+		}
 		m.Content = MessageContent{Blocks: []ContentBlock{{
 			Type:      "tool_result",
 			ToolUseID: strings.TrimSpace(raw.ToolCallID),
-			Content:   toolResultContentFromMessageContent(m.Content),
+			Content:   content,
 		}}}
 	}
 
@@ -209,13 +214,6 @@ func decodeOpenAIToolArguments(raw string) interface{} {
 	}
 
 	return map[string]interface{}{"raw": trimmed}
-}
-
-func toolResultContentFromMessageContent(content MessageContent) string {
-	if content.IsString() {
-		return content.GetText()
-	}
-	return content.ExtractText()
 }
 
 // SystemItem 系统提示词项

@@ -609,7 +609,7 @@ func appChatImageNoImageDiagnostics(resp map[string]interface{}) []string {
 		response = nested
 	}
 	var out []string
-	if msg := firstNonEmptyStringAtAnyPath(response,
+	if msg := stringAtAnyPath(response,
 		[]string{"userResponse", "message"},
 		[]string{"modelResponse", "message"},
 		[]string{"message"},
@@ -652,8 +652,8 @@ func isAppChatImageLimitResponse(resp map[string]interface{}) bool {
 		}
 	}
 	for _, msg := range []string{
-		firstNonEmptyStringAtAnyPath(response, []string{"error", "message"}),
-		firstNonEmptyStringAtAnyPath(response, []string{"modelResponse", "message"}),
+		stringAtAnyPath(response, []string{"error", "message"}),
+		stringAtAnyPath(response, []string{"modelResponse", "message"}),
 	} {
 		lower := strings.ToLower(msg)
 		if strings.Contains(lower, "image generation limit") || strings.Contains(lower, "try again later") {
@@ -972,4 +972,3 @@ func extractUpstreamTokenDelta(resp map[string]interface{}, modelResp map[string
 		[]string{"text_delta"},
 	)
 }
-

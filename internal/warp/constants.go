@@ -38,11 +38,7 @@ var warpToClientToolMap = map[string]string{
 }
 
 func canonicalModelID(model string) string {
-	key := strings.ToLower(strings.TrimSpace(model))
-	if key == "" {
-		return ""
-	}
-	return key
+	return strings.ToLower(strings.TrimSpace(model))
 }
 
 func NormalizeModelID(model string) string {
@@ -58,11 +54,8 @@ func applyWarpClientHeaders(req *http.Request) {
 	if category := warpOSCategory(); category != "" {
 		req.Header.Set("X-Warp-OS-Category", category)
 	}
-	if name := warpOSName(); name != "" {
+	if name := warpOSCategory(); name != "" {
 		req.Header.Set("X-Warp-OS-Name", name)
-	}
-	if version := warpOSVersion(); version != "" {
-		req.Header.Set("X-Warp-OS-Version", version)
 	}
 	req.Header.Set("User-Agent", "")
 }
@@ -78,12 +71,4 @@ func warpOSCategory() string {
 	default:
 		return runtime.GOOS
 	}
-}
-
-func warpOSName() string {
-	return warpOSCategory()
-}
-
-func warpOSVersion() string {
-	return ""
 }
