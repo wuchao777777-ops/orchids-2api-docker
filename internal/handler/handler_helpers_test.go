@@ -56,86 +56,6 @@ func setupModelValidationHandler(t *testing.T) (*Handler, *store.Store, *minired
 	return h, s, mini
 }
 
-func TestValidateModelAvailability_RejectsOfflineExactMatchEvenWhenAliasExists(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	ctx := context.Background()
-
-	exact, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6")
-	if err != nil {
-		t.Fatalf("GetModelByModelID(exact) error = %v", err)
-	}
-	exact.Status = store.ModelStatusOffline
-	if err := s.UpdateModel(ctx, exact); err != nil {
-		t.Fatalf("UpdateModel(exact) error = %v", err)
-	}
-
-	alias := &store.Model{
-		ID:        "200",
-		Channel:   "Orchids",
-		ModelID:   "claude-opus-4.6",
-		Name:      "Claude Opus 4.6",
-		Status:    store.ModelStatusAvailable,
-		IsDefault: false,
-		SortOrder: 0,
-	}
-	if err := s.UpdateModel(ctx, alias); err != nil {
-		t.Fatalf("UpdateModel(alias) error = %v", err)
-	}
-
-	got, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "orchids")
-	if err == nil {
-		t.Fatalf("validateModelAvailability() error = nil, got model=%v", got)
-	}
-	if err.Error() != "model not available" {
-		t.Fatalf("validateModelAvailability() error = %q, want %q", err.Error(), "model not available")
-	}
-}
-
-func TestValidateModelAvailability_ReturnsOfflineExactMatch(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	ctx := context.Background()
-
-	exact, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6")
-	if err != nil {
-		t.Fatalf("GetModelByModelID(exact) error = %v", err)
-	}
-	exact.Status = store.ModelStatusOffline
-	if err := s.UpdateModel(ctx, exact); err != nil {
-		t.Fatalf("UpdateModel(exact) error = %v", err)
-	}
-
-	alias := &store.Model{
-		ID:        "201",
-		Channel:   "Orchids",
-		ModelID:   "claude-opus-4.6",
-		Name:      "Claude Opus 4.6",
-		Status:    store.ModelStatusOffline,
-		IsDefault: false,
-		SortOrder: 0,
-	}
-	if err := s.UpdateModel(ctx, alias); err != nil {
-		t.Fatalf("UpdateModel(alias) error = %v", err)
-	}
-
-	_, err = h.validateModelAvailability(ctx, "claude-opus-4-6", "orchids")
-	if err == nil {
-		t.Fatal("validateModelAvailability() error = nil, want model not available")
-	}
-	if err.Error() != "model not available" {
-		t.Fatalf("validateModelAvailability() error = %q, want %q", err.Error(), "model not available")
-	}
-}
-
 func TestValidateModelAvailability_PuterUsesChannelSpecificModel(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
 	defer func() {
@@ -334,5 +254,67 @@ func TestSelectAccountRecord_WarpToolRequestRejectsFreeOnlyPool(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cloud agent requires a non-free Warp account") {
 		t.Fatalf("error=%q want no available warp account", err.Error())
+	}
+}
+
+// mustCreateModel inserts a model directly (avoiding reliance on seed data).
+func mustCreateModel(t *testing.T, s *store.Store, id string, channel, modelID string, status store.ModelStatus) *store.Model {
+	t.Helper()
+	m := &store.Model{
+		ID:        id,
+		Channel:   channel,
+		ModelID:   modelID,
+		Name:      modelID,
+		Status:    status,
+		IsDefault: false,
+		SortOrder: 0,
+	}
+	if err := s.UpdateModel(context.Background(), m); err != nil {
+		t.Fatalf("UpdateModel(%s) error = %v", modelID, err)
+	}
+	return m
+}
+
+func TestValidateModelAvailability_RejectsOfflineExactMatchEvenWhenAliasExists(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+
+	mustCreateModel(t, s, "199", "Puter", "claude-opus-4-6", store.ModelStatusOffline)
+
+	mustCreateModel(t, s, "200", "Puter", "claude-opus-4.6", store.ModelStatusAvailable)
+
+	got, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "puter")
+	if err == nil {
+		t.Fatalf("validateModelAvailability() error = nil, got model=%v", got)
+	}
+	if err.Error() != "model not available" {
+		t.Fatalf("validateModelAvailability() error = %q, want %q", err.Error(), "model not available")
+	}
+}
+
+func TestValidateModelAvailability_ReturnsOfflineExactMatch(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+
+	mustCreateModel(t, s, "199", "Puter", "claude-opus-4-6", store.ModelStatusOffline)
+
+	mustCreateModel(t, s, "201", "Puter", "claude-opus-4.6", store.ModelStatusOffline)
+
+	_, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "puter")
+	if err == nil {
+		t.Fatal("validateModelAvailability() error = nil, want model not available")
+	}
+	if err.Error() != "model not available" {
+		t.Fatalf("validateModelAvailability() error = %q, want %q", err.Error(), "model not available")
 	}
 }

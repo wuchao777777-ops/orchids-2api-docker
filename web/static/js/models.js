@@ -12,7 +12,7 @@ let modelRefreshResults = {};
 let modelRefreshConcurrency = 4;
 
 function modelChannels() {
-  const defaultChannels = ["Orchids", "Warp", "Puter", "Grok"];
+  const defaultChannels = ["Warp", "Warp", "Puter", "Grok"];
   const seen = new Set();
   const ordered = [];
 
@@ -156,7 +156,7 @@ function modelRefreshSourceLabel(source) {
   if (!value) return "未知来源";
   const labels = {
     upstream_api: "账号上游 API",
-    public_page: "Orchids 公开页面",
+    public_page: "Warp 公开页面",
     puter_public_models: "Puter 公开模型 API",
     puter_public_models_test_mode: "Puter 公开 API + 账号验证",
     puter_public_models_unverified: "Puter 公开 API",
@@ -529,7 +529,7 @@ function openModelModal(model = null) {
     title.textContent = "添加模型";
     form.reset();
     document.getElementById("modelId").value = "";
-    setSelectValue(document.getElementById("modelChannel"), currentModelChannel || "Orchids");
+    setSelectValue(document.getElementById("modelChannel"), currentModelChannel || "Warp");
     document.getElementById("modelSortOrder").value = "0";
     setSelectValue(document.getElementById("modelStatus"), "available");
   }

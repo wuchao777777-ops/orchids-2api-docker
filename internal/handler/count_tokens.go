@@ -2,11 +2,11 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/debug"
-	"orchids-api/internal/orchids"
 )
 
 // HandleCountTokens handles /v1/messages/count_tokens requests.
@@ -40,13 +40,11 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 		profile = "puter"
 	}
 	if breakdown.Total == 0 {
-		builtPrompt, promptHistory, meta := orchids.BuildCodeFreeMaxPromptAndHistoryWithMeta(
-			req.Messages,
-			req.System,
-			true, /* noThinking */
-		)
-		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
-		profile = meta.Profile
+		builtPrompt := strings.TrimSpace(extractUserText(req.Messages))
+		breakdown = estimateInputTokenBreakdown(builtPrompt, nil, req.Tools)
+		if profile == "" {
+			profile = channel
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -61,7 +59,6 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		// Log error but we can't do much else since headers are written
 		_ = err
 	}
 }

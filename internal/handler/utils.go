@@ -110,9 +110,6 @@ func extractWorkdirFromRequest(r *http.Request, req ClaudeRequest) (string, stri
 }
 
 func channelFromPath(path string) string {
-	if strings.HasPrefix(path, "/orchids/") {
-		return "orchids"
-	}
 	if strings.HasPrefix(path, "/warp/") {
 		return "warp"
 	}
@@ -125,20 +122,19 @@ func channelFromPath(path string) string {
 	return ""
 }
 
-// mapModel 根据请求的 model 名称映射到 orchids 上游实际支持的模型
-// 以当前 Orchids 公共模型为准（会随上游更新）：claude-sonnet-4-6 / claude-opus-4.6 / claude-haiku-4-5 等。
+// mapModel 将请求的 model 名称映射为上游实际支持的规范化模型 ID。
 func mapModel(requestModel string) string {
-	normalized := normalizeOrchidsModelKey(requestModel)
+	normalized := normalizeModelKey(requestModel)
 	if normalized == "" {
 		return "claude-sonnet-4-6"
 	}
-	if mapped, ok := orchidsModelMap[normalized]; ok {
+	if mapped, ok := modelMap[normalized]; ok {
 		return mapped
 	}
 	return "claude-sonnet-4-6"
 }
 
-func normalizeOrchidsModelKey(model string) string {
+func normalizeModelKey(model string) string {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	if strings.HasPrefix(normalized, "claude-") {
 		normalized = strings.ReplaceAll(normalized, "4.6", "4-6")
@@ -147,7 +143,8 @@ func normalizeOrchidsModelKey(model string) string {
 	return normalized
 }
 
-var orchidsModelMap = map[string]string{
+// modelMap 维护跨通道共享的模型别名到上游模型 ID 的规范化映射。
+var modelMap = map[string]string{
 	"claude-sonnet-4-5":          "claude-sonnet-4-6",
 	"claude-sonnet-4-6":          "claude-sonnet-4-6",
 	"claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
@@ -168,6 +165,7 @@ var orchidsModelMap = map[string]string{
 	"glm-5":                      "glm-5",
 	"kimi-k2.5":                  "kimi-k2.5",
 }
+
 
 func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {
 	if req.ConversationID != "" {

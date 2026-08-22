@@ -12,7 +12,7 @@ function setSidebarAccountStats(total, normal, abnormal) {
 }
 
 function normalizeSidebarAccountType(acc) {
-  return String(acc?.account_type || "orchids").toLowerCase();
+  return String(acc?.account_type || "warp").toLowerCase();
 }
 
 function normalizeSidebarStatusCode(statusCode) {
@@ -25,9 +25,6 @@ function getSidebarAccountToken(acc) {
   const type = normalizeSidebarAccountType(acc);
   if (type === "warp") {
     return acc.refresh_token || acc.token || acc.client_cookie || "";
-  }
-  if (type === "orchids") {
-    return acc.client_cookie || acc.session_cookie || acc.token || "";
   }
   if (type === "puter") {
     return acc.client_cookie || acc.token || acc.session_cookie || "";

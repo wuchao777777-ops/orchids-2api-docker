@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"orchids-api/internal/auth"
-	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 
@@ -85,7 +84,7 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 		if channel != "" {
 			accType := acc.AccountType
 			if strings.TrimSpace(accType) == "" {
-				accType = "orchids"
+				continue
 			}
 			if !strings.EqualFold(accType, channel) && !strings.EqualFold(acc.AgentMode, channel) {
 				continue
@@ -317,10 +316,6 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 }
 
 func (lb *LoadBalancer) clearAccountStatus(ctx context.Context, acc *store.Account, reason string) {
-	// 清除 token 缓存，防止恢复后仍使用失效的旧 token
-	if acc.SessionID != "" {
-		orchids.InvalidateCachedToken(acc.SessionID)
-	}
 	// 清除 warp session 缓存，确保恢复后使用新 token
 	if strings.EqualFold(acc.AccountType, "warp") && acc.ID > 0 {
 		warp.InvalidateSession(acc.ID)

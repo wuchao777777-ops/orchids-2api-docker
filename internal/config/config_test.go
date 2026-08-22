@@ -26,9 +26,6 @@ func TestConfigDefaults(t *testing.T) {
 	if got := cfg.PublicAPIKey(); got != "" {
 		t.Fatalf("PublicAPIKey()=%q want empty", got)
 	}
-	if got := cfg.OrchidsCCEntrypointMode; got != "keep" {
-		t.Fatalf("OrchidsCCEntrypointMode=%q want fidelity default \"keep\"", got)
-	}
 }
 
 func TestApplyDefaultsGeneratesRandomPassword(t *testing.T) {
@@ -72,12 +69,6 @@ func TestApplyHardcodedOverridesValues(t *testing.T) {
 	}
 	if cfg.UpstreamMode != "ws" {
 		t.Fatalf("UpstreamMode=%q want=ws", cfg.UpstreamMode)
-	}
-	if cfg.OrchidsAPIBaseURL != "https://orchids-v2-alpha-108292236521.europe-west1.run.app" {
-		t.Fatalf("OrchidsAPIBaseURL=%q want run.app endpoint", cfg.OrchidsAPIBaseURL)
-	}
-	if cfg.OrchidsWSURL != "wss://orchids-v2-alpha-108292236521.europe-west1.run.app/agent/ws/coding-agent" {
-		t.Fatalf("OrchidsWSURL=%q want websocket endpoint", cfg.OrchidsWSURL)
 	}
 }
 

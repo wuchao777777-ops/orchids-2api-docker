@@ -124,7 +124,6 @@ func main() {
 
 	// Provider registry for decoupled client creation
 	registry := provider.NewRegistry()
-	registry.Register("orchids", provider.NewOrchidsProvider())
 	registry.Register("warp", provider.NewWarpProvider())
 	registry.Register("puter", provider.NewPuterProvider())
 	h.SetClientFactory(func(acc *store.Account, c *config.Config) handler.UpstreamClient {

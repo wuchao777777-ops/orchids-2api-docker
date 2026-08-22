@@ -16,11 +16,11 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/toolname"
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/logutil"
-	"orchids-api/internal/orchids"
 	"orchids-api/internal/perf"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
@@ -405,7 +405,7 @@ func (h *streamHandler) rewriteWebToolCallToClient(name, input string) (string, 
 	clientTools := h.clientTools
 	h.mu.Unlock()
 
-	canonical := strings.ToLower(strings.TrimSpace(orchids.NormalizeToolNameFallback(name)))
+	canonical := strings.ToLower(strings.TrimSpace(toolname.NormalizeToolNameFallback(name)))
 	if canonical != "web_fetch" && canonical != "web_search" {
 		return name, input
 	}
@@ -413,7 +413,7 @@ func (h *streamHandler) rewriteWebToolCallToClient(name, input string) (string, 
 		return canonical, input
 	}
 
-	mapped := strings.TrimSpace(orchids.MapToolNameToClient(canonical, clientTools, nil))
+	mapped := strings.TrimSpace(toolname.MapToolNameToClient(canonical, clientTools, nil))
 	if mapped == "" {
 		return canonical, input
 	}
@@ -1491,7 +1491,7 @@ func normalizeUpstreamToolCall(name, input, workdir string) (string, string) {
 }
 
 func normalizeUpstreamToolName(name string) string {
-	mapped := orchids.NormalizeToolNameFallback(name)
+	mapped := toolname.NormalizeToolNameFallback(name)
 	if strings.TrimSpace(mapped) == "" {
 		return name
 	}

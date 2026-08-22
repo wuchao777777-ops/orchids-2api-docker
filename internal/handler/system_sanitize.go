@@ -20,10 +20,9 @@ func sanitizeSystemItems(system SystemItems, isWarp bool, isPuter bool, cfg *con
 		return system, false
 	}
 
-	mode := strings.ToLower(strings.TrimSpace(cfg.OrchidsCCEntrypointMode))
-	if mode == "" {
-		mode = ccEntrypointModeKeep
-	}
+	// cc_entrypoint filtering was Orchids coding-agent specific; keep system text as-is.
+	mode := ccEntrypointModeKeep
+	_ = cfg
 	switch mode {
 	case ccEntrypointModeKeep, ccEntrypointModeAuto, ccEntrypointModeStrip:
 	default:

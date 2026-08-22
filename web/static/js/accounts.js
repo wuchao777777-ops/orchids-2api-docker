@@ -199,7 +199,7 @@ function applyTokenLabels(type) {
     label.textContent = "Cookie / __client / __session";
     input.placeholder = "支持原始 __client、完整 Cookie Header 或 Cookie JSON";
     hint.textContent = accountId
-      ? "支持直接粘贴 clerk.orchids.app 的原始 __client；完整 Cookie 成功率更高，只有 www.orchids.app 的 __session 通常不够"
+      ? "支持直接粘贴 "
       : "支持原始 __client、完整 Cookie Header 或 Cookie JSON；推荐同时带上 __client_uat 以提高补全成功率";
     input.required = true;
   }
@@ -440,19 +440,18 @@ function accountTypeLabel(type) {
       return "Puter";
     case "grok":
       return "Grok";
-    case "orchids":
     default:
-      return "Orchids";
+      return "Warp";
   }
 }
 
 function getActiveAccountType() {
   const platform = String(currentPlatform || "").trim().toLowerCase();
-  return platform || "orchids";
+  return platform || "warp";
 }
 
 function setAccountModalType(type) {
-  const normalized = String(type || "orchids").trim().toLowerCase() || "orchids";
+  const normalized = String(type || "warp").trim().toLowerCase() || "warp";
   const typeEl = document.getElementById("accountType");
   const displayEl = document.getElementById("accountTypeDisplay");
   if (typeEl) typeEl.value = normalized;
@@ -527,7 +526,7 @@ async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null
 function renderPlatformTabs() {
   const container = document.getElementById("platformFilters");
   if (!container) return;
-  const defaultTypes = ["orchids", "warp", "puter", "grok"];
+  const defaultTypes = ["warp", "puter", "grok"];
   const types = new Set([...defaultTypes, ...accounts.map(normalizeAccountType)]);
   const sorted = Array.from(types).sort();
   const tabs = [...sorted];

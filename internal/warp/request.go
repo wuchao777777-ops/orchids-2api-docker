@@ -11,7 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"orchids-api/internal/orchids"
+	"orchids-api/internal/toolname"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/upstream"
@@ -534,7 +534,7 @@ func convertTools(tools []interface{}) []toolDef {
 			continue
 		}
 
-		canonicalName := orchids.NormalizeToolNameFallback(name)
+		canonicalName := toolname.NormalizeToolNameFallback(name)
 		key := strings.ToLower(name)
 		if isWarpBuiltinTool(canonicalName) {
 			key = "builtin:" + strings.ToLower(canonicalName)

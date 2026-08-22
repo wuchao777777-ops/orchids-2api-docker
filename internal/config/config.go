@@ -37,7 +37,6 @@ type Config struct {
 	TokenCacheTTL      int    `json:"token_cache_ttl"`
 	TokenCacheStrategy string `json:"token_cache_strategy"`
 
-	// ── Per-client state (used by orchids client, not configurable) ──
 	SessionID     string `json:"-"`
 	ClientCookie  string `json:"-"`
 	SessionCookie string `json:"-"`
@@ -57,12 +56,6 @@ type Config struct {
 	UpstreamURL             string   `json:"-"`
 	UpstreamToken           string   `json:"-"`
 	UpstreamMode            string   `json:"-"`
-	OrchidsAPIBaseURL       string   `json:"-"`
-	OrchidsWSURL            string   `json:"-"`
-	OrchidsAPIVersion       string   `json:"-"`
-	OrchidsAllowRunCommand  bool     `json:"-"`
-	OrchidsRunAllowlist     []string `json:"-"`
-	OrchidsFSIgnore         []string `json:"-"`
 	GrokAPIBaseURL          string   `json:"-"`
 	GrokUserAgent           string   `json:"-"`
 	GrokCFClearance         string   `json:"-"`
@@ -100,13 +93,10 @@ type Config struct {
 	// A relay gateway forwards client messages without rewriting content.
 	// This field is NOT written into ApplyHardcoded, so it survives a
 	// persistConfig round trip.
-	OrchidsCCEntrypointMode   string   `json:"cc_entrypoint_mode,omitempty"` // ""|"keep"|"auto"|"strip"; empty/keep = preserve verbatim
 	WarpDisableTools          *bool    `json:"-"`
 	WarpMaxToolResults        int      `json:"-"`
 	WarpMaxHistoryMessages    int      `json:"-"`
 	WarpSplitToolResults      bool     `json:"-"`
-	OrchidsMaxToolResults     int      `json:"-"`
-	OrchidsMaxHistoryMessages int      `json:"-"`
 	Stream                    *bool    `json:"-"`
 	ImageNSFW                 *bool    `json:"-"`
 	ImageFinalMinBytes        int      `json:"-"`
@@ -239,9 +229,6 @@ func ApplyDefaults(cfg *Config) {
 	}
 	// Fidelity default: preserve client content verbatim unless explicitly
 	// configured otherwise ("auto"/"strip" re-enable cc_entrypoint handling).
-	if strings.TrimSpace(cfg.OrchidsCCEntrypointMode) == "" {
-		cfg.OrchidsCCEntrypointMode = "keep"
-	}
 	// Always apply hardcoded values
 	ApplyHardcoded(cfg)
 }
@@ -255,20 +242,12 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.ContextMaxTokens = 100000
 	cfg.ContextSummaryMaxTokens = 800
 	cfg.ContextKeepTurns = 6
-	cfg.OrchidsAPIBaseURL = "https://orchids-v2-alpha-108292236521.europe-west1.run.app"
-	cfg.OrchidsWSURL = "wss://orchids-v2-alpha-108292236521.europe-west1.run.app/agent/ws/coding-agent"
-	cfg.OrchidsAPIVersion = "2"
-	cfg.OrchidsAllowRunCommand = true
-	cfg.OrchidsRunAllowlist = []string{"*"}
-	cfg.OrchidsFSIgnore = []string{"debug-logs", "data", ".claude"}
 	cfg.GrokAPIBaseURL = "https://grok.com"
 	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 	v := false
 	cfg.WarpDisableTools = &v
 	cfg.WarpMaxToolResults = 10
 	cfg.WarpMaxHistoryMessages = 20
-	cfg.OrchidsMaxToolResults = 10
-	cfg.OrchidsMaxHistoryMessages = 20
 	vTrue := true
 	cfg.Stream = &vTrue
 	cfg.ImageNSFW = &vTrue

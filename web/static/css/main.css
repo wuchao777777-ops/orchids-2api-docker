@@ -606,11 +606,6 @@ tr:hover td {
   color: var(--accent-cyan);
 }
 
-.badge-orchids {
-  background: rgba(167, 139, 250, 0.12);
-  color: var(--accent-purple);
-}
-
 .badge-antigravity {
   background: rgba(251, 191, 36, 0.12);
   color: var(--accent-orange);
@@ -3414,7 +3409,6 @@ code {
 }
 
 .tag-free,
-.badge-orchids,
 .badge-warp,
 .badge-grok,
 .badge-puter {

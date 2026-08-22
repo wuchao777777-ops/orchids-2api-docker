@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/orchids"
 	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -92,9 +91,6 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	}
 	if strings.EqualFold(acc.AccountType, "puter") {
 		return puter.NewFromAccount(acc, cfg)
-	}
-	if strings.EqualFold(acc.AccountType, "orchids") {
-		return orchids.NewFromAccount(acc, cfg)
 	}
 	return nil
 }
@@ -188,9 +184,6 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		writeString(cfg.UpstreamMode)
 		writeString(cfg.UpstreamURL)
 		writeString(cfg.UpstreamToken)
-		writeString(cfg.OrchidsAPIBaseURL)
-		writeString(cfg.OrchidsWSURL)
-		writeString(cfg.OrchidsAPIVersion)
 		writeString(cfg.ProxyURL)
 		writeString(cfg.ProxyHTTP)
 		writeString(cfg.ProxyHTTPS)
@@ -203,17 +196,9 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		writeInt(cfg.MaxRetries)
 		writeInt(cfg.RetryDelay)
 		writeInt(cfg.RequestTimeout)
-		writeInt(cfg.OrchidsMaxToolResults)
-		writeInt(cfg.OrchidsMaxHistoryMessages)
 		writeInt(cfg.WarpMaxToolResults)
 		writeInt(cfg.WarpMaxHistoryMessages)
-		for _, value := range cfg.OrchidsRunAllowlist {
-			writeString(value)
-		}
 		for _, value := range cfg.ProxyBypass {
-			writeString(value)
-		}
-		for _, value := range cfg.OrchidsFSIgnore {
 			writeString(value)
 		}
 	}

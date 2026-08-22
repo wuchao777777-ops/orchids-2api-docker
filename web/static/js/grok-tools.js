@@ -2058,7 +2058,7 @@
     const cfg = LIVEKIT_CLIENT_VERSIONS.stable;
     const sdk = resolveLiveKitClient();
     if (sdk) {
-      appendVoiceLog(`LiveKit SDK 已加载: ${window.__orchidsLiveKitVersion || "unknown"}`);
+      appendVoiceLog(`LiveKit SDK 已加载: ${window.__warpLiveKitVersion || "unknown"}`);
       return sdk;
     }
     if (!grokLazyState.livekitPromise) {
@@ -2077,7 +2077,7 @@
         script.onload = () => {
           const loaded = resolveLiveKitClient();
           if (loaded) {
-            window.__orchidsLiveKitVersion = cfg.label;
+            window.__warpLiveKitVersion = cfg.label;
             appendVoiceLog(`LiveKit SDK 已按需加载: ${cfg.label}`);
             resolve(loaded);
             return;
@@ -2223,7 +2223,7 @@
     voiceState.room = room;
     voiceState.running = true;
     voiceState.reconnecting = false;
-    appendVoiceLog(`LiveKit session using SDK: ${window.__orchidsLiveKitVersion || LIVEKIT_CLIENT_VERSIONS.stable.label}`);
+    appendVoiceLog(`LiveKit session using SDK: ${window.__warpLiveKitVersion || LIVEKIT_CLIENT_VERSIONS.stable.label}`);
     room.on(LiveKitSDK.RoomEvent.ParticipantConnected, (participant) => {
       appendVoiceLog(`Participant connected: ${participant?.identity || "unknown"} sid=${participant?.sid || "-"}`);
     });

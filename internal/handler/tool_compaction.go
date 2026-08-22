@@ -6,7 +6,7 @@ import (
 
 	"github.com/goccy/go-json"
 
-	"orchids-api/internal/orchids"
+	"orchids-api/internal/toolname"
 	"orchids-api/internal/tiktoken"
 )
 
@@ -108,7 +108,7 @@ func declaredToolNames(tools []interface{}) []string {
 			continue
 		}
 		add(name)
-		mappedName := orchids.NormalizeToolNameFallback(name)
+		mappedName := toolname.NormalizeToolNameFallback(name)
 		if !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(mappedName)) {
 			add(mappedName)
 		}
@@ -172,7 +172,7 @@ func compactIncomingTools(tools []interface{}) []interface{} {
 			continue
 		}
 
-		mappedName := orchids.NormalizeToolNameFallback(name)
+		mappedName := toolname.NormalizeToolNameFallback(name)
 		if !isCoreTool(mappedName) {
 			continue
 		}
@@ -240,7 +240,7 @@ func filterSupportedToolNames(raw []string) []string {
 	seen := make(map[string]struct{}, len(raw))
 	out := make([]string, 0, len(raw))
 	for _, name := range raw {
-		mapped := orchids.NormalizeToolNameFallback(name)
+		mapped := toolname.NormalizeToolNameFallback(name)
 		if !isCoreTool(mapped) {
 			continue
 		}

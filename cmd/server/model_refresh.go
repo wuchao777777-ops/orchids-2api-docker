@@ -147,8 +147,6 @@ func syncModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *
 
 func normalizeAdminModelChannel(channel string) string {
 	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "orchids":
-		return "Orchids"
 	case "warp":
 		return "Warp"
 	case "puter":
@@ -199,24 +197,6 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 
 func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) ([]discoveredModel, string, error) {
 	switch strings.ToLower(channel) {
-	case "orchids":
-		items, source, err := fetchOrchidsModelChoices(ctx, cfg, s)
-		if err != nil && len(items) == 0 {
-			return nil, "", err
-		}
-		out := make([]discoveredModel, 0, len(items))
-		for i, item := range items {
-			id := strings.TrimSpace(item.ID)
-			if id == "" {
-				continue
-			}
-			name := strings.TrimSpace(item.Name)
-			if name == "" {
-				name = id
-			}
-			out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i})
-		}
-		return out, source, nil
 	case "warp":
 		return discoverWarpModelsConcurrent(ctx, cfg, s, concurrency)
 	case "puter":
@@ -806,10 +786,6 @@ func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Confi
 	}
 
 	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "orchids":
-		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 10 {
-			cfg.RequestTimeout = 10
-		}
 	case "warp", "puter":
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 15 {
 			cfg.RequestTimeout = 15

@@ -148,49 +148,6 @@ func TestChooseRefreshedDefaultModel_WarpPrefersAutoOpen(t *testing.T) {
 	}
 }
 
-func TestDiscoverModelsForChannel_OrchidsUsesUpstreamAPI(t *testing.T) {
-	s, cleanup := setupModelRefreshStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
-			t.Fatalf("authorization=%q want Bearer test-token", got)
-		}
-		if got := r.URL.Path; got != "/v1/models" {
-			t.Fatalf("path=%q want /v1/models", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"claude-sonnet-4-6"},{"id":"claude-opus-4.6"},{"id":"claude-opus-4-6"},{"id":"gpt-5.4"}]}`))
-	}))
-	defer upstream.Close()
-
-	if err := s.CreateAccount(ctx, &store.Account{
-		AccountType: "orchids",
-		Enabled:     true,
-		Token:       "test-token",
-	}); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
-
-	items, source, err := discoverModelsForChannel(ctx, &config.Config{
-		OrchidsAPIBaseURL: upstream.URL,
-		RequestTimeout:    5,
-	}, s, "Orchids")
-	if err != nil {
-		t.Fatalf("discoverModelsForChannel() error = %v", err)
-	}
-	if source != "upstream_api" {
-		t.Fatalf("source=%q want %q", source, "upstream_api")
-	}
-	if len(items) != 3 {
-		t.Fatalf("len(items)=%d want 3", len(items))
-	}
-	if items[0].ID != "claude-sonnet-4-6" || items[1].ID != "claude-opus-4-6" || items[2].ID != "gpt-5.4" {
-		t.Fatalf("items=%+v want claude-sonnet-4-6,claude-opus-4-6,gpt-5.4", items)
-	}
-}
-
 func TestVerifyPuterDiscoveredModelsConcurrent_RequiresAcceptedProbe(t *testing.T) {
 	prevVerify := verifyPuterModelForRefresh
 	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
@@ -598,13 +555,6 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 	}
 	if model.SortOrder != 999 {
 		t.Fatalf("SortOrder=%d want 999", model.SortOrder)
-	}
-}
-
-func TestRefreshModelRequestConfig_ClampsOrchidsTimeout(t *testing.T) {
-	cfg := refreshModelRequestConfig(&config.Config{RequestTimeout: 30}, "Orchids")
-	if cfg.RequestTimeout != 10 {
-		t.Fatalf("RequestTimeout=%d want 10", cfg.RequestTimeout)
 	}
 }
 

@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"strings"
 	"testing"
 
 	"orchids-api/internal/config"
@@ -18,7 +17,7 @@ func TestSanitizeSystemItems_DefaultPreservesVerbatim(t *testing.T) {
 	}
 
 	// 空配置（未显式设置模式）与显式 "keep" 都必须原样透传。
-	for _, cfg := range []*config.Config{nil, {}, {OrchidsCCEntrypointMode: ""}, {OrchidsCCEntrypointMode: "keep"}} {
+	for _, cfg := range []*config.Config{nil, {}, {}, {}} {
 		got, changed := sanitizeSystemItems(system, false, false, cfg)
 		if changed {
 			t.Fatalf("cfg=%#v: fidelity default must not change system, got changed=true", cfg)
@@ -34,18 +33,3 @@ func TestSanitizeSystemItems_DefaultPreservesVerbatim(t *testing.T) {
 	}
 }
 
-func TestSanitizeSystemItems_ExplicitStripStillRewrites(t *testing.T) {
-	system := SystemItems{
-		{Type: "text", Text: "cc_entrypoint=claude-code; keep=this"},
-		{Type: "text", Text: "You are Claude Code, Anthropic's official CLI for Claude."},
-	}
-	got, changed := sanitizeSystemItems(system, false, true, &config.Config{OrchidsCCEntrypointMode: "strip"})
-	if !changed {
-		t.Fatalf("expected changed=true for explicit strip mode")
-	}
-	for _, item := range got {
-		if strings.Contains(item.Text, "cc_entrypoint=") {
-			t.Fatalf("cc_entrypoint not stripped: %q", item.Text)
-		}
-	}
-}

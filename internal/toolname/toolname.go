@@ -1,4 +1,4 @@
-package orchids
+package toolname
 
 import "strings"
 
@@ -111,7 +111,7 @@ func (tm *ToolMapper) buildIndex() {
 	}
 }
 
-// ToolMapper manages the mapping between client tool definitions and Orchids tool names.
+// ToolMapper manages the mapping between client tool definitions and canonical tool names.
 type ToolMapper struct {
 	Tools []map[string]interface{}
 	index map[string]map[string]interface{}
@@ -137,7 +137,7 @@ func NormalizeToolName(name string) *NormalizedTool {
 	}
 }
 
-// NormalizeToolNameFallback provides backward compatibility for the warp and handler packages.
+// NormalizeToolNameFallback provides backward compatibility for warp and handler packages.
 func NormalizeToolNameFallback(name string) string {
 	if mapped, ok := normalizedToolNameFallbacks[strings.ToLower(strings.TrimSpace(name))]; ok {
 		return mapped
@@ -185,7 +185,7 @@ func MapToolNameToClient(orchidsName string, clientTools []interface{}, toolMapp
 		}
 	}
 
-	if aliases, ok := orchidsToolAliases[normalized.SnakeCase]; ok {
+	if aliases, ok := toolAliases[normalized.SnakeCase]; ok {
 		for _, tool := range tools {
 			name := toolSpecName(tool)
 			if name != "" {
@@ -203,7 +203,7 @@ func MapToolNameToClient(orchidsName string, clientTools []interface{}, toolMapp
 		name := toolSpecName(tool)
 		if name != "" {
 			toolSnake := toSnakeCase(strings.ToLower(name))
-			if toolAliases, ok := orchidsToolAliases[toolSnake]; ok {
+			if toolAliases, ok := toolAliases[toolSnake]; ok {
 				for _, alias := range toolAliases {
 					if alias == normalized.SnakeCase || alias == normalized.Lowercase {
 						return name
@@ -331,7 +331,7 @@ func extractToolName(tool map[string]interface{}) string {
 	return name
 }
 
-var orchidsToolAliases = map[string][]string{
+var toolAliases = map[string][]string{
 	"id":      {"text"},
 	"name":    {"text"},
 	"content": {"code"},
@@ -397,4 +397,63 @@ func extractAliasStrings(raw interface{}) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+
+func mapStringValue(msg map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := msg[key].(string); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractToolSpecFields(tool interface{}) (string, string, map[string]interface{}) {
+	tm, ok := tool.(map[string]interface{})
+	if !ok {
+		return "", "", nil
+	}
+
+	var name string
+	var description string
+	var schema map[string]interface{}
+
+	if fn, ok := tm["function"].(map[string]interface{}); ok {
+		if v, ok := fn["name"].(string); ok {
+			name = strings.TrimSpace(v)
+		}
+		if v, ok := fn["description"].(string); ok {
+			description = v
+		}
+		schema = extractSchemaMap(fn, "parameters", "input_schema", "inputSchema")
+	}
+	if name == "" {
+		if v, ok := tm["name"].(string); ok {
+			name = strings.TrimSpace(v)
+		}
+	}
+	if description == "" {
+		if v, ok := tm["description"].(string); ok {
+			description = v
+		}
+	}
+	if schema == nil {
+		schema = extractSchemaMap(tm, "input_schema", "inputSchema", "parameters")
+	}
+	return name, description, schema
+}
+
+func extractSchemaMap(tm map[string]interface{}, keys ...string) map[string]interface{} {
+	if tm == nil {
+		return nil
+	}
+	for _, key := range keys {
+		if v, ok := tm[key]; ok {
+			if schema, ok := v.(map[string]interface{}); ok {
+				return schema
+			}
+		}
+	}
+	return nil
 }

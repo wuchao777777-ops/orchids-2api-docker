@@ -43,72 +43,6 @@ func (p *panicUpstream) SendRequestWithPayload(ctx context.Context, req upstream
 	panic("unexpected upstream request")
 }
 
-func TestHandleMessages_Orchids_StreamAndJSON(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
-	h := NewWithLoadBalancer(cfg, nil)
-	h.client = &mockUpstream{events: []upstream.SSEMessage{
-		{Type: "model", Event: map[string]any{"type": "text-start"}},
-		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "hello"}},
-		{Type: "model", Event: map[string]any{"type": "text-end"}},
-		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
-	}}
-
-	mkBody := func(stream bool) []byte {
-		payload := map[string]any{
-			"model":    "claude-3-5-sonnet",
-			"messages": []map[string]any{{"role": "user", "content": "hi"}},
-			"system":   []any{},
-			"stream":   stream,
-		}
-		b, _ := json.Marshal(payload)
-		return b
-	}
-
-	// non-stream JSON
-	{
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(mkBody(false)))
-		h.HandleMessages(rec, req)
-		if rec.Code != 200 {
-			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-		}
-		ct := rec.Header().Get("Content-Type")
-		if !strings.Contains(ct, "application/json") {
-			t.Fatalf("expected json content-type, got %q", ct)
-		}
-		if !strings.Contains(rec.Body.String(), "\"type\":\"message\"") {
-			t.Fatalf("expected message json, got: %s", rec.Body.String())
-		}
-		if !strings.Contains(rec.Body.String(), "hello") {
-			t.Fatalf("expected upstream text in response")
-		}
-	}
-
-	// stream SSE
-	{
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(mkBody(true)))
-		h.HandleMessages(rec, req)
-		if rec.Code != 200 {
-			t.Fatalf("expected 200, got %d", rec.Code)
-		}
-		ct := rec.Header().Get("Content-Type")
-		if !strings.Contains(ct, "text/event-stream") {
-			t.Fatalf("expected sse content-type, got %q", ct)
-		}
-		out := rec.Body.String()
-		if !strings.Contains(out, "event: message_start") {
-			t.Fatalf("expected message_start, got: %s", out)
-		}
-		if !strings.Contains(out, "hello") {
-			t.Fatalf("expected text delta in SSE")
-		}
-		if !strings.Contains(out, "event: message_stop") {
-			t.Fatalf("expected message_stop, got: %s", out)
-		}
-	}
-}
-
 func TestHandleMessages_CurrentWorkdir_LocalAnthropicJSON(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)
@@ -173,52 +107,6 @@ func TestHandleMessages_CurrentWorkdir_LocalOpenAIStream(t *testing.T) {
 	}
 	if !strings.Contains(out, "[DONE]") {
 		t.Fatalf("expected done marker, got: %s", out)
-	}
-}
-
-func TestHandleMessages_Orchids_DoesNotFilterToolCallsByDeclaredTools(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
-	h := NewWithLoadBalancer(cfg, nil)
-	h.client = &mockUpstream{events: []upstream.SSEMessage{
-		{Type: "model.tool-call", Event: map[string]any{
-			"toolCallId": "tool_edit_1",
-			"toolName":   "Edit",
-			"input":      `{"file_path":"/tmp/demo.txt","old_string":"hello","new_string":"world"}`,
-		}},
-		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "tool_use"}},
-	}}
-
-	body, _ := json.Marshal(map[string]any{
-		"model":    "claude-3-5-sonnet",
-		"messages": []map[string]any{{"role": "user", "content": "hi"}},
-		"system":   []any{},
-		"stream":   false,
-		"tools": []map[string]any{
-			{
-				"type": "function",
-				"function": map[string]any{
-					"name": "Read",
-					"parameters": map[string]any{
-						"type": "object",
-					},
-				},
-			},
-		},
-	})
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(body))
-	h.HandleMessages(rec, req)
-
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	out := rec.Body.String()
-	if !strings.Contains(out, `"type":"tool_use"`) {
-		t.Fatalf("expected tool_use block, got: %s", out)
-	}
-	if !strings.Contains(out, `"name":"Edit"`) {
-		t.Fatalf("expected Edit tool call to pass through, got: %s", out)
 	}
 }
 

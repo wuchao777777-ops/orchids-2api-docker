@@ -21,8 +21,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"orchids-api/internal/toolname"
 	"orchids-api/internal/debug"
-	"orchids-api/internal/orchids"
 	"orchids-api/internal/upstream"
 )
 
@@ -1126,7 +1126,7 @@ func normalizeWarpFallbackToolName(name string) string {
 	case "write_to_long_running_shell_command":
 		return "Bash"
 	default:
-		return orchids.NormalizeToolNameFallback(name)
+		return toolname.NormalizeToolNameFallback(name)
 	}
 }
 
@@ -1144,7 +1144,7 @@ func transformWarpToolCall(name string, args map[string]interface{}) (string, ma
 	if mapped, ok := warpToClientToolMap[name]; ok {
 		baseName = mapped
 	}
-	baseName = orchids.NormalizeToolNameFallback(baseName)
+	baseName = toolname.NormalizeToolNameFallback(baseName)
 
 	out := map[string]interface{}{}
 	switch name {

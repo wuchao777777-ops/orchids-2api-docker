@@ -24,7 +24,6 @@ import (
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/logutil"
-	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
@@ -151,9 +150,6 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
 		dedupStore:   NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
 		auditLogger:  audit.NewNopLogger(),
-	}
-	if cfg != nil {
-		h.client = orchids.New(cfg)
 	}
 
 	return h
@@ -300,7 +296,7 @@ func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason st
 }
 
 func upstreamMessageHandler(sh *streamHandler, orchidsOwnsFinalSSE bool) func(upstream.SSEMessage) {
-	if orchidsOwnsFinalSSE {
+	if false {
 		return nil
 	}
 	return func(msg upstream.SSEMessage) {
@@ -716,7 +712,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if targetChannel == "" && validatedModel != nil {
 		targetChannel = strings.TrimSpace(validatedModel.Channel)
 		if targetChannel == "" {
-			targetChannel = "orchids"
+			targetChannel = ""
 		}
 	}
 	effectiveWorkdir, prevWorkdir, workdirChanged := h.resolveWorkdir(r, req, conversationKey)
@@ -852,12 +848,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Orchids: do not trim message/tool_result content to preserve full context.
 		if verboseDiagnostics {
-			slog.Debug("Checkpoint: orchids passthrough, skip context trimming")
 		}
 		if sanitized, changed := sanitizeSystemItems(req.System, false, false, h.config); changed {
 			req.System = sanitized
 			if verboseDiagnostics {
-				slog.Debug("系统提示已移除 cc_entrypoint", "mode", h.config.OrchidsCCEntrypointMode, "warp", false)
+				slog.Debug("系统提示已移除 cc_entrypoint", "mode", "", "warp", false)
 			}
 		}
 	}
@@ -891,8 +886,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if verboseDiagnostics {
 		slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
 	}
-	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isPuterRequest
-
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
@@ -903,41 +896,22 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	var promptHistory []map[string]string
 	var builtPrompt string
-	var promptMeta orchids.PromptBuildMeta
-	if isOrchidsProtocol {
-		builtPrompt, promptHistory, promptMeta = orchids.BuildCodeFreeMaxPromptAndHistoryWithMeta(req.Messages, req.System, noThinking)
-	} else if isPuterRequest {
+	if isPuterRequest {
 		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
 		if builtPrompt == "" {
 			builtPrompt = "puter request"
 		}
-		promptMeta = orchids.PromptBuildMeta{
-			Profile:    "puter",
-			NoThinking: noThinking,
-		}
 	} else {
 		builtPrompt = warp.PreviewUserQuery("", req.Messages, req.System, chatSessionID)
-		promptMeta = orchids.PromptBuildMeta{
-			Profile:    "warp-official-proto",
-			NoThinking: noThinking,
-		}
 		if strings.TrimSpace(builtPrompt) == "" {
 			builtPrompt = "warp request"
 		}
 	}
-	noThinking = promptMeta.NoThinking
-	suppressThinking = promptMeta.NoThinking
+	suppressThinking = noThinking
 	buildDuration := time.Since(startBuild)
 	if verboseDiagnostics {
 		slog.Debug("Prompt build completed", "duration", buildDuration)
-		buildLabel := "BuildPromptAndHistory"
-		if isOrchidsProtocol {
-			buildLabel = "BuildCodeFreeMaxPromptAndHistory"
-		} else {
-			buildLabel = "BuildWarpPromptAndHistory"
-		}
-		slog.Debug("[Performance] "+buildLabel, "duration", buildDuration)
-		// Project context injection is deprecated for non-Orchids channels.
+		slog.Debug("[Performance] BuildPromptAndHistory", "duration", buildDuration)
 	}
 
 	if verboseDiagnostics {
@@ -968,13 +942,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	upstreamMessages := append([]prompt.Message(nil), req.Messages...)
 
 	// Pre-allocate chatHistory
-	if !isOrchidsProtocol {
-		chatHistory = make([]interface{}, len(promptHistory))
-		for i := range promptHistory {
-			chatHistory[i] = promptHistory[i]
-		}
-	} else {
-		chatHistory = make([]interface{}, 0, 10)
+	chatHistory = make([]interface{}, len(promptHistory))
+	for i := range promptHistory {
+		chatHistory[i] = promptHistory[i]
 	}
 
 	if gateNoTools {
@@ -988,7 +958,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	logger.LogConvertedPrompt(builtPrompt)
 
 	breakdown := inputTokenBreakdown{}
-	breakdownProfile := promptMeta.Profile
+	breakdownProfile := "warp"
+	if isPuterRequest {
+		breakdownProfile = "puter"
+	}
 	if isWarpRequest {
 		if warpBD, profile, err := estimateWarpInputTokenBreakdown(builtPrompt, mappedModel, upstreamMessages, req.System, effectiveTools, gateNoTools, chatSessionID); err == nil {
 			breakdown = warpBD
@@ -999,8 +972,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if isPuterRequest {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
-	} else if isOrchidsProtocol {
-		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
 	} else {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	}
@@ -1066,10 +1037,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
 	)
 	allowedToolNames := []string(nil)
-	if !isOrchidsProtocol {
-		allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
-		sh.setAllowedToolNames(allowedToolNames)
-	}
+	allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
+	sh.setAllowedToolNames(allowedToolNames)
 	if len(req.Tools) > 0 {
 		sh.setClientTools(req.Tools)
 	} else if len(effectiveTools) > 0 {
@@ -1092,12 +1061,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sh.release()
 
-	orchidsOwnsFinalSSE := isOrchidsProtocol && isStream && ownsFinalSSELifecycle(apiClient)
-
-	// Real Orchids client owns final SSE lifecycle like CodeFreeMax, including message_start.
-	if !orchidsOwnsFinalSSE {
-		sh.writeSSEMessageStart(req.Model, inputTokens, 0)
-	}
+	sh.writeSSEMessageStart(req.Model, inputTokens, 0)
 
 	if verboseDiagnostics {
 		slog.Debug("New request received")
@@ -1166,10 +1130,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
 			DirectSSE:            nil,
 		}
-		if orchidsOwnsFinalSSE {
+		if false {
 			upstreamReq.DirectSSE = sh
 		}
-		primaryHandler := upstreamMessageHandler(sh, orchidsOwnsFinalSSE)
+		primaryHandler := upstreamMessageHandler(sh, false)
 		var attempt int
 		for {
 			sh.resetRoundState()
@@ -1286,7 +1250,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
-			if orchidsOwnsFinalSSE && sh.hasReturnedResponse() {
+			if false && sh.hasReturnedResponse() {
 				slog.Warn("Upstream returned after Orchids already finalized SSE", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 				return
 			}

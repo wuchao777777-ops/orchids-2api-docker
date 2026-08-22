@@ -36,20 +36,17 @@ func registerRoutes(
 	tmplRenderer *template.Renderer,
 ) {
 	// --- Channel-specific message routes ---
-	mux.HandleFunc("/orchids/v1/messages", limiter.Limit(h.HandleMessages))
-	mux.HandleFunc("/orchids/v1/messages/count_tokens", limiter.Limit(h.HandleCountTokens))
 	mux.HandleFunc("/warp/v1/messages", limiter.Limit(h.HandleMessages))
 	mux.HandleFunc("/warp/v1/messages/count_tokens", limiter.Limit(h.HandleCountTokens))
 	mux.HandleFunc("/puter/v1/messages", limiter.Limit(h.HandleMessages))
 	mux.HandleFunc("/puter/v1/messages/count_tokens", limiter.Limit(h.HandleCountTokens))
 
 	// --- Model routes (channel prefixes → same handlers) ---
-	modelPrefixes := []string{"/orchids/v1", "/warp/v1", "/puter/v1", "/grok/v1", "/v1"}
+	modelPrefixes := []string{"/warp/v1", "/puter/v1", "/grok/v1", "/v1"}
 	registerWithPrefixes(mux, modelPrefixes, "/models", h.HandleModels)
 	registerWithPrefixes(mux, modelPrefixes, "/models/", h.HandleModelByID)
 
 	// --- OpenAI-compatible chat/image routes (channel-specific + unified) ---
-	mux.HandleFunc("/orchids/v1/chat/completions", limiter.Limit(h.HandleMessages))
 	mux.HandleFunc("/warp/v1/chat/completions", limiter.Limit(h.HandleMessages))
 	mux.HandleFunc("/puter/v1/chat/completions", limiter.Limit(h.HandleMessages))
 

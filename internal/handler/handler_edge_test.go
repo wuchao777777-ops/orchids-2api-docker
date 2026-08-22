@@ -148,45 +148,6 @@ func TestHandleMessages_WarpErrorTriggersRefund(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_OrchidsDirectErrorDoesNotRetryAfterFinalSSE(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 2, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
-	h := NewWithLoadBalancer(cfg, nil)
-	upstreamClient := &directErrorUpstreamEdge{err: errors.New("dial tcp: connection reset by peer")}
-	h.client = upstreamClient
-
-	payload := map[string]any{
-		"model":    "claude-3-5-sonnet",
-		"messages": []map[string]any{{"role": "user", "content": "hi"}},
-		"system":   []any{},
-		"stream":   true,
-	}
-	b, _ := json.Marshal(payload)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
-	h.HandleMessages(rec, req)
-
-	if upstreamClient.calls != 1 {
-		t.Fatalf("expected exactly one upstream call, got %d", upstreamClient.calls)
-	}
-	if !upstreamClient.sawNilOnMessage {
-		t.Fatal("expected Orchids direct SSE path to bypass onMessage callback")
-	}
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	out := rec.Body.String()
-	if count := strings.Count(out, "event: error"); count != 1 {
-		t.Fatalf("expected exactly one error event, got %d: %s", count, out)
-	}
-	if !strings.Contains(out, "boom") {
-		t.Fatalf("expected direct error payload, got: %s", out)
-	}
-	if strings.Contains(out, "Retrying request") {
-		t.Fatalf("did not expect retry marker after direct final error, got: %s", out)
-	}
-}
-
 func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedAccount(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{

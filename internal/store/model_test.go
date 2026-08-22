@@ -76,12 +76,12 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 
 	ctx := context.Background()
 
-	orchidsModel, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6")
+	puterModel, err := s.GetModelByChannelAndModelID(ctx, "puter", "deepseek-v4-pro")
 	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(orchids) error = %v", err)
+		t.Fatalf("GetModelByChannelAndModelID(puter) error = %v", err)
 	}
-	if orchidsModel.Channel != "Orchids" {
-		t.Fatalf("orchids model channel = %q, want Orchids", orchidsModel.Channel)
+	if puterModel.Channel != "Puter" {
+		t.Fatalf("puter model channel = %q, want Puter", puterModel.Channel)
 	}
 
 	warpModel, err := s.GetModelByChannelAndModelID(ctx, "warp", "auto-open")
@@ -91,7 +91,7 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 	if warpModel.Channel != "Warp" {
 		t.Fatalf("warp model channel = %q, want Warp", warpModel.Channel)
 	}
-	if warpModel.ID == orchidsModel.ID {
+	if warpModel.ID == puterModel.ID {
 		t.Fatalf("expected different records across channels, got same id %q", warpModel.ID)
 	}
 }
@@ -146,7 +146,7 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	model, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6")
+	model, err := s.GetModelByChannelAndModelID(ctx, "puter", "deepseek-v4-pro")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
 	}
@@ -164,7 +164,7 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 		mini.Close()
 	})
 
-	if _, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6"); err == nil {
+	if _, err := s.GetModelByChannelAndModelID(ctx, "puter", "deepseek-v4-pro"); err == nil {
 		t.Fatal("expected deleted model to stay deleted after store restart")
 	}
 }

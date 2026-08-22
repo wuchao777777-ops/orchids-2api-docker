@@ -45,9 +45,6 @@ func estimateInputTokenBreakdown(promptText string, history []map[string]string,
 	return bd
 }
 
-func estimateOrchidsInputTokenBreakdown(promptText string, history []map[string]string) inputTokenBreakdown {
-	return estimateInputTokenBreakdown(promptText, history, nil)
-}
 
 func estimateWarpInputTokenBreakdown(promptText, model string, messages []prompt.Message, systemItems []prompt.SystemItem, tools []interface{}, disableWarpTools bool, conversationID string) (inputTokenBreakdown, string, error) {
 	estimate, err := warp.EstimateInputTokens(promptText, model, messages, systemItems, tools, disableWarpTools, conversationID)
