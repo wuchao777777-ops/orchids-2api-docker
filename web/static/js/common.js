@@ -77,14 +77,6 @@ function isQuotaOnlyStatus(acc) {
   return statusCode === "429" && Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
 }
 
-function isPuterQuotaOnlyStatus(acc) {
-  return Boolean(acc && normalizeSidebarAccountType(acc) === "puter" && isQuotaOnlyStatus(acc));
-}
-
-function isWarpQuotaOnlyStatus(acc) {
-  return Boolean(acc && normalizeSidebarAccountType(acc) === "warp" && isQuotaOnlyStatus(acc));
-}
-
 function isSidebarAccountAbnormal(acc) {
   if (!acc || !acc.enabled) return true;
 

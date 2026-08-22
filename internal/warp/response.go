@@ -21,8 +21,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"orchids-api/internal/toolname"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/toolname"
 	"orchids-api/internal/upstream"
 )
 
@@ -30,6 +30,7 @@ type toolCall struct {
 	ID    string
 	Name  string
 	Input string
+	Type  string
 }
 
 type finishInfo struct {
@@ -368,9 +369,10 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolC
 			onMessage(upstream.SSEMessage{
 				Type: "model.tool-call",
 				Event: map[string]interface{}{
-					"toolCallId": call.ID,
-					"toolName":   call.Name,
-					"input":      call.Input,
+					"toolCallId":   call.ID,
+					"toolName":     call.Name,
+					"input":        call.Input,
+					"warpToolType": call.Type,
 				},
 			})
 		}
@@ -817,6 +819,7 @@ func parseNestedToolCall(data []byte, out *parsedEvent) {
 	toolID := ""
 	toolName := ""
 	toolInput := ""
+	toolType := ""
 	for !d.eof() {
 		field, wire, err := d.readKey()
 		if err != nil {
@@ -846,6 +849,7 @@ func parseNestedToolCall(data []byte, out *parsedEvent) {
 			if name != "" {
 				toolName = name
 				toolInput = input
+				toolType = "call_mcp_tool"
 			}
 		case 5:
 			if wire != 2 {
@@ -860,6 +864,7 @@ func parseNestedToolCall(data []byte, out *parsedEvent) {
 			if resolvedInput != "" && resolvedInput != "{}" {
 				toolName = resolvedName
 				toolInput = resolvedInput
+				toolType = "read_files"
 			}
 		default:
 			if toolName == "" && wire == 2 {
@@ -877,6 +882,7 @@ func parseNestedToolCall(data []byte, out *parsedEvent) {
 				}
 				toolName = resolvedName
 				toolInput = resolvedInput
+				toolType = fallbackName
 				if toolInput == "" {
 					toolInput = "{}"
 				}
@@ -896,7 +902,7 @@ func parseNestedToolCall(data []byte, out *parsedEvent) {
 	if toolID == "" {
 		toolID = nestedFallbackToolCallID(toolName, toolInput)
 	}
-	out.ToolCalls = append(out.ToolCalls, toolCall{ID: toolID, Name: toolName, Input: toolInput})
+	out.ToolCalls = append(out.ToolCalls, toolCall{ID: toolID, Name: toolName, Input: toolInput, Type: toolType})
 }
 
 func sniffNonProtobufResponse(reader *bufio.Reader) (preview string, kind string, ok bool) {
@@ -1092,32 +1098,11 @@ func mapWarpToolCalls(name, rawArgs, callID string, index int) []toolCall {
 	}
 
 	baseName, transformed := transformWarpToolCall(name, args)
-	if strings.EqualFold(name, "read_files") {
-		paths := extractReadPaths(args)
-		if len(paths) > 1 {
-			calls := make([]toolCall, 0, len(paths))
-			for i, path := range paths {
-				input := map[string]interface{}{"file_path": path}
-				if start, ok := args["start"]; ok {
-					input["offset"] = start
-				}
-				if end, ok := args["end"]; ok {
-					input["limit"] = end
-				}
-				calls = append(calls, toolCall{
-					ID:    derivedCallID(callID, name, index+i),
-					Name:  fmt.Sprintf("%s_%d", baseName, i),
-					Input: marshalToolInput(input),
-				})
-			}
-			return calls
-		}
-	}
-
 	return []toolCall{{
-		ID:    derivedCallID(callID, name, index),
+		ID:    derivedCallID(callID, name, 0),
 		Name:  baseName,
 		Input: marshalToolInput(transformed),
+		Type:  name,
 	}}
 }
 

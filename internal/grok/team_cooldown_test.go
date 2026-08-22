@@ -111,7 +111,10 @@ func TestTeamCooldownConcurrentNote(t *testing.T) {
 	if remaining := registry.RetryAfterFor(RateLimitScopeRPS, "team-conc", "grok-4.5"); remaining <= 0 {
 		t.Fatalf("concurrent notes should leave an entry, got %s", remaining)
 	}
-	if len(registry.snapshotForTesting()) > teamCooldownMaxSize {
+	registry.mu.Lock()
+	size := len(registry.entries)
+	registry.mu.Unlock()
+	if size > teamCooldownMaxSize {
 		t.Fatal("registry exceeded max size")
 	}
 }

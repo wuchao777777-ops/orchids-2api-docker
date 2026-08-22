@@ -56,14 +56,6 @@ func CleanupAllLogs() error {
 	return os.MkdirAll("debug-logs", 0755)
 }
 
-// Dir 返回日志目录
-func (l *Logger) Dir() string {
-	if !l.enabled {
-		return ""
-	}
-	return l.dir
-}
-
 // LogIncomingRequest 记录 1. 进入的 Claude API 请求
 func (l *Logger) LogIncomingRequest(req interface{}) {
 	if !l.enabled {

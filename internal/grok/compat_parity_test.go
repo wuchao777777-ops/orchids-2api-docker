@@ -17,30 +17,21 @@ func TestResolveModel_RejectsRemovedAliases(t *testing.T) {
 		if _, ok := ResolveModel(id); ok {
 			t.Fatalf("ResolveModel(%s) should fail", id)
 		}
-		if _, ok := ResolveModelOrDynamic(id); ok {
-			t.Fatalf("ResolveModelOrDynamic(%s) should fail", id)
-		}
 	}
 }
 
-func TestResolveModelOrDynamic_Grok42Rejected(t *testing.T) {
+func TestResolveModel_Grok42AliasesRejected(t *testing.T) {
 	if _, ok := ResolveModel("grok-4.2"); ok {
 		t.Fatalf("ResolveModel(grok-4.2) should fail")
 	}
-	if _, ok := ResolveModelOrDynamic("grok-4.2"); ok {
-		t.Fatalf("ResolveModelOrDynamic(grok-4.2) should fail")
-	}
-	if _, ok := ResolveModelOrDynamic("grok-4-2"); ok {
-		t.Fatalf("ResolveModelOrDynamic(grok-4-2) should fail")
+	if _, ok := ResolveModel("grok-4-2"); ok {
+		t.Fatalf("ResolveModel(grok-4-2) should fail")
 	}
 }
 
 func TestResolveModel_Grok420Rejected(t *testing.T) {
 	if _, ok := ResolveModel("grok-420"); ok {
 		t.Fatalf("ResolveModel(grok-420) should fail")
-	}
-	if _, ok := ResolveModelOrDynamic("grok-420"); ok {
-		t.Fatalf("ResolveModelOrDynamic(grok-420) should fail")
 	}
 }
 
@@ -184,9 +175,9 @@ func TestResolveModel_Grok420BetaHyphenAliasRejected(t *testing.T) {
 	}
 }
 
-func TestResolveModelOrDynamic_RejectsUnknownImagineModel(t *testing.T) {
-	if _, ok := ResolveModelOrDynamic("grok-imagine-2.0"); ok {
-		t.Fatalf("ResolveModelOrDynamic(grok-imagine-2.0) should fail")
+func TestResolveModel_RejectsUnknownImagineModel(t *testing.T) {
+	if _, ok := ResolveModel("grok-imagine-2.0"); ok {
+		t.Fatalf("ResolveModel(grok-imagine-2.0) should fail")
 	}
 }
 

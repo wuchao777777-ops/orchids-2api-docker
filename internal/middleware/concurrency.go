@@ -17,7 +17,6 @@ import (
 type ConcurrencyLimiter struct {
 	// 64-bit atomic fields must be at the top for 32-bit alignment
 	activeCount  int64
-	totalReqs    int64
 	rejectedReqs int64
 	cachedP95    int64 // Cached P95 to avoid sorting on the hot path
 
@@ -51,8 +50,6 @@ func NewConcurrencyLimiter(maxConcurrent int, timeout time.Duration, adaptive bo
 
 func (cl *ConcurrencyLimiter) Limit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt64(&cl.totalReqs, 1)
-
 		// Calculate wait timeout
 		waitTimeout := 60 * time.Second
 		if cl.adaptive {
@@ -160,9 +157,4 @@ func (cl *ConcurrencyLimiter) recalcP95() {
 	idx := int(float64(len(valid)) * 0.95)
 
 	atomic.StoreInt64(&cl.cachedP95, valid[idx])
-}
-
-// GetP95 returns the cached 95th percentile latency in milliseconds
-func (cl *ConcurrencyLimiter) GetP95() int64 {
-	return atomic.LoadInt64(&cl.cachedP95)
 }

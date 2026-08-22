@@ -108,16 +108,10 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 	return dynamicWorkdir, prevWorkdir, changed
 }
 
-// selectAccount logic extracted from HandleMessages
-func (h *Handler) selectAccount(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, modelID ...string) (UpstreamClient, *store.Account, error) {
-	return h.selectAccountWithOptions(ctx, targetChannel, channelRequired, failedAccountIDs, accountSelectionOptions{
-		ModelID: firstString(modelID...),
-	})
-}
-
 type accountSelectionOptions struct {
 	ModelID               string
 	RequireWarpCloudAgent bool
+	PreferredAccountID    int64
 }
 
 func (h *Handler) selectAccountWithOptions(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, opts accountSelectionOptions) (UpstreamClient, *store.Account, error) {
@@ -147,10 +141,6 @@ func (h *Handler) selectAccountWithOptions(ctx context.Context, targetChannel st
 	return nil, nil, errors.New("no client configured")
 }
 
-func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string, failedAccountIDs []int64, modelID string) (*store.Account, error) {
-	return h.selectAccountRecordWithOptions(ctx, targetChannel, failedAccountIDs, accountSelectionOptions{ModelID: modelID})
-}
-
 func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChannel string, failedAccountIDs []int64, opts accountSelectionOptions) (*store.Account, error) {
 	if h == nil || h.loadBalancer == nil {
 		return nil, errors.New("load balancer not configured")
@@ -161,6 +151,9 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 
 	requestedModel := normalizeRequestedModelID(opts.ModelID)
 	warpFilter := func(acc *store.Account) bool {
+		if opts.PreferredAccountID != 0 && acc.ID != opts.PreferredAccountID {
+			return false
+		}
 		if opts.RequireWarpCloudAgent && !warp.AccountSupportsCloudAgent(acc) {
 			return false
 		}
@@ -237,16 +230,6 @@ func (h *Handler) resolveWarpFeatureConfig(ctx context.Context, acc *store.Accou
 		}
 	}
 	return warp.EffectiveAccountFeatureConfig(acc, choices, requestedModel)
-}
-
-func firstString(values ...string) string {
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func (h *Handler) acquireTrackedAccount(acc *store.Account) int64 {

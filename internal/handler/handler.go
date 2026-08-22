@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net/http"
 	rtdebug "runtime/debug"
 	"strconv"
@@ -106,12 +105,6 @@ type openAINonStreamResponse struct {
 	Model   string                  `json:"model"`
 	Choices []openAINonStreamChoice `json:"choices"`
 	Usage   openAINonStreamUsage    `json:"usage"`
-}
-
-func cloneSSEMessage(msg upstream.SSEMessage) upstream.SSEMessage {
-	cloned := msg
-	cloned.Event = maps.Clone(msg.Event)
-	return cloned
 }
 
 const keepAliveInterval = 15 * time.Second
@@ -766,6 +759,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	requireWarpCloudAgent := preSelectWarpRequest && !warpChatMode && (warpAgentMode || warpRequestRequiresCloudAgent(req.Messages, effectiveTools))
+	warpContinuationState := warpContinuation{}
+	if preSelectWarpRequest {
+		warpContinuationState, err = h.resolveWarpContinuation(r.Context(), conversationKey, req.Messages)
+		if err != nil {
+			apperrors.New("invalid_request_error", err.Error(), http.StatusConflict).WriteResponse(w)
+			return
+		}
+	}
+	chatSessionID := warpContinuationState.conversationID
 
 	// 选择账号 (Initial Selection)
 	failedAccountIDs := []int64{}
@@ -774,6 +776,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	apiClient, currentAccount, err := h.selectAccountWithOptions(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 		ModelID:               upstreamWarpModelID(req.Model),
 		RequireWarpCloudAgent: requireWarpCloudAgent,
+		PreferredAccountID:    warpContinuationState.accountID,
 	})
 	if err != nil {
 		slog.Error("selectAccount failed", "error", err, "channel", targetChannel)
@@ -834,12 +837,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.releaseTrackedAccount(trackedAccountID)
 	}()
 
-	chatSessionID := ""
-	if isWarpRequest && conversationKey != "" {
-		chatSessionID, _ = h.sessionStore.GetConvID(r.Context(), conversationKey)
-		h.sessionStore.Touch(r.Context(), conversationKey)
-	}
-
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
 	if verboseDiagnostics {
@@ -862,7 +859,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		builtPrompt = warp.PreviewUserQuery("", req.Messages, req.System, chatSessionID)
-		if strings.TrimSpace(builtPrompt) == "" {
+		if strings.TrimSpace(builtPrompt) == "" && !(isWarpRequest && len(latestToolResultIDs(req.Messages)) > 0) {
 			builtPrompt = "warp request"
 		}
 	}
@@ -1007,16 +1004,37 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	sh.setCacheTokens(cacheReadTokens, cacheCreationTokens)
-	// 捕获上游返回的 conversationID，持久化到 session 以便后续请求复用
+	activeWarpConversationID := chatSessionID
+	// Capture the server-issued Warp conversation and bind it to both an
+	// explicit client session (when present) and every emitted tool call.
 	sh.onConversationID = func(id string) {
-		if conversationKey == "" {
+		activeWarpConversationID = strings.TrimSpace(id)
+		if conversationKey != "" {
+			h.sessionStore.SetConvID(r.Context(), conversationKey, activeWarpConversationID)
+			if currentAccount != nil {
+				h.sessionStore.SetAccountID(r.Context(), conversationKey, currentAccount.ID)
+			}
+			h.sessionStore.Touch(r.Context(), conversationKey)
+		}
+		if verboseDiagnostics {
+			slog.Debug("Warp conversationID captured", "key", conversationKey, "id", activeWarpConversationID)
+		}
+	}
+	sh.onToolCall = func(id, name, input, upstreamType string) {
+		if !isWarpRequest || activeWarpConversationID == "" {
 			return
 		}
-		h.sessionStore.SetConvID(r.Context(), conversationKey, id)
-		h.sessionStore.Touch(r.Context(), conversationKey)
-		if verboseDiagnostics {
-			slog.Debug("Warp conversationID captured", "key", conversationKey, "id", id)
+		accountID := int64(0)
+		if currentAccount != nil {
+			accountID = currentAccount.ID
 		}
+		h.sessionStore.SetWarpToolBinding(r.Context(), id, WarpToolBinding{
+			ConversationID: activeWarpConversationID,
+			AccountID:      accountID,
+			ToolType:       upstreamType,
+			ToolName:       name,
+			ToolInput:      warpBindingInput(upstreamType, input),
+		})
 	}
 	defer sh.release()
 
@@ -1056,7 +1074,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// Main execution
 	run := func() {
 		// 复用上游返回的 conversationID，保持会话连续性
-		if chatSessionID == "" {
+		if chatSessionID == "" && !isWarpRequest {
 			chatSessionID = "chat_" + randomSessionID()
 		}
 		maxRetries := h.config.MaxRetries
@@ -1087,6 +1105,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			IsFirstPrompt:        false,
 			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
 			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
+			WarpToolContexts:     warpContinuationState.toolContexts,
 		}
 		primaryHandler := sh.handleMessage
 		var attempt int
@@ -1121,79 +1140,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			if verboseDiagnostics {
 				slog.Debug("Using SendRequestWithPayload")
 			}
-			warpBatches := [][]prompt.Message{upstreamMessages}
-			if isWarpRequest {
-				if h.config.WarpSplitToolResults || lastUserIsToolResultFollowup(upstreamMessages) {
-					batches, total := splitWarpToolResults(upstreamMessages, 1)
-					if verboseDiagnostics && len(batches) > 1 {
-						slog.Debug("Warp tool results split", "total_tool_results", total, "batches", len(batches))
-					}
-					warpBatches = batches
-				}
-			}
-			latestChatSessionID := upstreamReq.ChatSessionID
-			for i, batch := range warpBatches {
-				batchReq := upstreamReq
-				batchReq.Messages = batch
-				batchReq.ChatSessionID = latestChatSessionID
-				isLast := i == len(warpBatches)-1
-				if isLast {
-					err = apiClient.SendRequestWithPayload(r.Context(), batchReq, primaryHandler, logger)
-				} else {
-					intermediateConversationID := ""
-					intermediateTextDeltas := 0
-					intermediateToolCalls := 0
-					bufferedIntermediate := make([]upstream.SSEMessage, 0, 8)
-					noopHandler := func(msg upstream.SSEMessage) {
-						switch msg.Type {
-						case "model.conversation_id":
-							if id, ok := msg.Event["id"].(string); ok && strings.TrimSpace(id) != "" {
-								intermediateConversationID = id
-								latestChatSessionID = id
-								if conversationKey != "" {
-									h.sessionStore.SetConvID(r.Context(), conversationKey, id)
-									h.sessionStore.Touch(r.Context(), conversationKey)
-								}
-								if verboseDiagnostics {
-									slog.Debug("Warp intermediate conversationID captured", "key", conversationKey, "id", id)
-								}
-							}
-							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
-						case "model.text-delta":
-							intermediateTextDeltas++
-							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
-						case "model.tool-call":
-							intermediateToolCalls++
-							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
-						case "model.finish", "model.tokens-used":
-							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
-						case "error":
-							slog.Warn("Warp intermediate batch error", "event", msg.Event)
-						}
-					}
-					err = apiClient.SendRequestWithPayload(r.Context(), batchReq, noopHandler, logger)
-					if verboseDiagnostics && err == nil && intermediateConversationID == "" {
-						slog.Debug("Warp intermediate batch completed without conversationID update", "batch", i+1)
-					}
-					if err == nil && (intermediateTextDeltas > 0 || intermediateToolCalls > 0) {
-						if verboseDiagnostics {
-							slog.Debug(
-								"Warp intermediate batch produced visible output",
-								"batch", i+1,
-								"text_deltas", intermediateTextDeltas,
-								"tool_calls", intermediateToolCalls,
-							)
-						}
-						for _, buffered := range bufferedIntermediate {
-							sh.handleMessage(buffered)
-						}
-						break
-					}
-				}
-				if err != nil {
-					break
-				}
-			}
+			err = apiClient.SendRequestWithPayload(r.Context(), upstreamReq, primaryHandler, logger)
 			if verboseDiagnostics {
 				slog.Debug("Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 			}
@@ -1304,6 +1251,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				nextClient, nextAccount, retryErr := h.selectAccountWithOptions(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 					ModelID:               upstreamReq.Model,
 					RequireWarpCloudAgent: requireWarpCloudAgent,
+					PreferredAccountID:    warpContinuationState.accountID,
 				})
 				if retryErr == nil {
 					apiClient = nextClient

@@ -124,14 +124,3 @@ func (r *teamCooldownRegistry) maybeGC(now time.Time) {
 	}
 	r.lastGC = now
 }
-
-// snapshotForTesting returns a copy of the registry state for unit tests.
-func (r *teamCooldownRegistry) snapshotForTesting() map[string]time.Time {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make(map[string]time.Time, len(r.entries))
-	for key, entry := range r.entries {
-		out[key] = entry.until
-	}
-	return out
-}

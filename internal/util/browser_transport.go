@@ -17,24 +17,6 @@ import (
 	netproxy "golang.org/x/net/proxy"
 )
 
-// NewBrowserLikeTransport keeps the old API surface for callers that expect a
-// dedicated browser-like transport with standard library connection handling.
-func NewBrowserLikeTransport(proxyFunc func(*http.Request) (*url.URL, error)) http.RoundTripper {
-	return &http.Transport{
-		Proxy:                 proxyFunc,
-		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   100,
-		MaxConnsPerHost:       200,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		TLSClientConfig:       &stdtls.Config{MinVersion: stdtls.VersionTLS12},
-	}
-}
-
 type browserLikeRoundTripper struct {
 	http1 *http.Transport
 	http2 *http2.Transport

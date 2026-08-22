@@ -121,28 +121,6 @@ func BenchmarkMaskDedupKey(b *testing.B) {
 	}
 }
 
-func BenchmarkHasRequiredToolInputUnknownMalformed(b *testing.B) {
-	tool := "UnknownTool"
-	input := `{"bad":`
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = hasRequiredToolInput(tool, input)
-	}
-}
-
-func BenchmarkToolValidationAndDedupWrite_Separate(b *testing.B) {
-	tool := "Write"
-	nameKey := "write"
-	input := `{"file_path":"/tmp/a.txt","content":"hello"}`
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if !hasRequiredToolInput(tool, input) {
-			b.Fatal("unexpected invalid input")
-		}
-		_ = sideEffectToolDedupKey(nameKey, input)
-	}
-}
-
 func BenchmarkToolValidationAndDedupWrite_Combined(b *testing.B) {
 	tool := "Write"
 	input := `{"file_path":"/tmp/a.txt","content":"hello"}`
@@ -174,16 +152,6 @@ func BenchmarkMarshalContentBlockDeltaText_MapStyle(b *testing.B) {
 	}
 }
 
-func BenchmarkMarshalContentBlockDeltaText_StructStyle(b *testing.B) {
-	idx := 7
-	text := "hello world"
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockDeltaText(idx, text)
-		_ = raw
-	}
-}
-
 func BenchmarkMarshalContentBlockDeltaText_Bytes(b *testing.B) {
 	idx := 7
 	text := "hello world"
@@ -194,32 +162,12 @@ func BenchmarkMarshalContentBlockDeltaText_Bytes(b *testing.B) {
 	}
 }
 
-func BenchmarkMarshalContentBlockDeltaThinking_StructStyle(b *testing.B) {
-	idx := 7
-	thinking := "analyzing next step"
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockDeltaThinking(idx, thinking)
-		_ = raw
-	}
-}
-
 func BenchmarkMarshalContentBlockDeltaThinking_Bytes(b *testing.B) {
 	idx := 7
 	thinking := "analyzing next step"
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, _ := marshalSSEContentBlockDeltaThinkingBytes(idx, thinking)
-		_ = raw
-	}
-}
-
-func BenchmarkMarshalContentBlockDeltaInputJSON_String(b *testing.B) {
-	idx := 5
-	partialJSON := `{"file_path":"/tmp/a.txt","content":"hello world"}`
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockDeltaInputJSON(idx, partialJSON)
 		_ = raw
 	}
 }
@@ -306,7 +254,7 @@ func BenchmarkEmitTextBlock_Stream(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		sh.blockIndex = -1
-		sh.emitTextBlock(text)
+		sh.emitTextBlockWithMode(text, false)
 	}
 }
 
@@ -421,17 +369,6 @@ func BenchmarkMarshalContentBlockStartToolUse_MapStyle(b *testing.B) {
 	}
 }
 
-func BenchmarkMarshalContentBlockStartToolUse_StructStyle(b *testing.B) {
-	idx := 3
-	id := "tool_123"
-	name := "Write"
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockStartToolUse(idx, id, name)
-		_ = raw
-	}
-}
-
 func BenchmarkMarshalContentBlockStartToolUse_Bytes(b *testing.B) {
 	idx := 3
 	id := "tool_123"
@@ -458,30 +395,11 @@ func BenchmarkAppendSSEContentBlockStartToolUse_ReusedBuffer(b *testing.B) {
 	}
 }
 
-func BenchmarkMarshalContentBlockStartText_String(b *testing.B) {
-	idx := 3
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockStartText(idx)
-		_ = raw
-	}
-}
-
 func BenchmarkMarshalContentBlockStartText_Bytes(b *testing.B) {
 	idx := 3
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, _ := marshalSSEContentBlockStartTextBytes(idx)
-		_ = raw
-	}
-}
-
-func BenchmarkMarshalContentBlockStartThinking_String(b *testing.B) {
-	idx := 3
-	signature := "sig_123"
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockStartThinking(idx, signature)
 		_ = raw
 	}
 }
@@ -496,30 +414,11 @@ func BenchmarkMarshalContentBlockStartThinking_Bytes(b *testing.B) {
 	}
 }
 
-func BenchmarkMarshalContentBlockStop_String(b *testing.B) {
-	idx := 3
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockStop(idx)
-		_ = raw
-	}
-}
-
 func BenchmarkMarshalContentBlockStop_Bytes(b *testing.B) {
 	idx := 3
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		raw, _ := marshalSSEContentBlockStopBytes(idx)
-		_ = raw
-	}
-}
-
-func BenchmarkMarshalMessageDelta_String(b *testing.B) {
-	stopReason := "tool_use"
-	outputTokens := 42
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEMessageDelta(stopReason, outputTokens)
 		_ = raw
 	}
 }

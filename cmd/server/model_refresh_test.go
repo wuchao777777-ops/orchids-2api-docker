@@ -90,22 +90,6 @@ func TestParseModelRefreshConcurrency(t *testing.T) {
 	}
 }
 
-func TestSyncModelsForChannel_WarpRequiresAccountDiscovery(t *testing.T) {
-	s, cleanup := setupModelRefreshStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Warp")
-
-	result, err := syncModelsForChannel(ctx, &config.Config{}, s, "Warp")
-	if err == nil {
-		t.Fatalf("syncModelsForChannel() result=%+v want error", result)
-	}
-	if !strings.Contains(err.Error(), "warp model discovery returned no account choices") {
-		t.Fatalf("error=%v want warp discovery failure", err)
-	}
-}
-
 func TestSyncModelsForChannelConcurrent_WarpRequiresAccountDiscovery(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()

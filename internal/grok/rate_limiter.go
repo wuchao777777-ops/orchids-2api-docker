@@ -88,8 +88,3 @@ func rateLimitEndpoint(ctx context.Context, endpointKey string) error {
 	slog.Debug("Rate limiter: token acquired", "endpoint", endpointKey)
 	return nil
 }
-
-// appChatRateLimitEndpoint waits for the grok.com App Chat rate limiter.
-func appChatRateLimitEndpoint(ctx context.Context) error {
-	return rateLimitEndpoint(ctx, "grok.com")
-}

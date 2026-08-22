@@ -121,7 +121,7 @@ func TestSelectAccountRecord_WarpRejectsModelOutsideCurrentPool(t *testing.T) {
 		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
 	}
 
-	_, err := h.selectAccountRecord(ctx, "warp", nil, "gpt-5-2-medium")
+	_, err := h.selectAccountRecordWithOptions(ctx, "warp", nil, accountSelectionOptions{ModelID: "gpt-5-2-medium"})
 	if err == nil {
 		t.Fatal("selectAccountRecord() error = nil, want unavailable model error")
 	}
@@ -155,7 +155,7 @@ func TestSelectAccountRecord_WarpExhaustedPaidAccountIsFreeOnly(t *testing.T) {
 		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
 	}
 
-	_, err := h.selectAccountRecord(ctx, "warp", nil, "gpt-5-2-medium")
+	_, err := h.selectAccountRecordWithOptions(ctx, "warp", nil, accountSelectionOptions{ModelID: "gpt-5-2-medium"})
 	if err == nil {
 		t.Fatal("selectAccountRecord() error = nil, want unavailable model error")
 	}
@@ -163,7 +163,7 @@ func TestSelectAccountRecord_WarpExhaustedPaidAccountIsFreeOnly(t *testing.T) {
 		t.Fatalf("selectAccountRecord() error = %q", err.Error())
 	}
 
-	account, err := h.selectAccountRecord(ctx, "warp", nil, "auto-open")
+	account, err := h.selectAccountRecordWithOptions(ctx, "warp", nil, accountSelectionOptions{ModelID: "auto-open"})
 	if err != nil {
 		t.Fatalf("selectAccountRecord(default) error = %v", err)
 	}
@@ -222,6 +222,41 @@ func TestSelectAccountRecord_WarpToolRequestRequiresCloudAgentAccount(t *testing
 	}
 	if account == nil || account.ID == 0 {
 		t.Fatalf("selected account=%v want any warp account", account)
+	}
+}
+
+func TestSelectAccountRecord_WarpContinuationPinsIssuingAccount(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+	for _, name := range []string{"warp-one", "warp-two"} {
+		if err := s.CreateAccount(ctx, &store.Account{
+			Name:                 name,
+			AccountType:          "warp",
+			RefreshToken:         name + "-token",
+			Subscription:         "build/business",
+			WarpMonthlyLimit:     1500,
+			WarpMonthlyRemaining: 100,
+			Enabled:              true,
+			Weight:               1,
+		}); err != nil {
+			t.Fatalf("CreateAccount(%s) error = %v", name, err)
+		}
+	}
+
+	account, err := h.selectAccountRecordWithOptions(ctx, "warp", nil, accountSelectionOptions{
+		ModelID:            "auto-open",
+		PreferredAccountID: 2,
+	})
+	if err != nil {
+		t.Fatalf("select pinned account error = %v", err)
+	}
+	if account == nil || account.ID != 2 {
+		t.Fatalf("selected account=%v want id=2", account)
 	}
 }
 

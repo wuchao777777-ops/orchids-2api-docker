@@ -37,12 +37,12 @@ func (r *flushRecorder) Flush()                      { r.flushes++ }
 func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	newline := string(byte('\n'))
 	expectedText := "he" + "\"" + "llo" + newline + "next"
-	raw, err := marshalSSEContentBlockDeltaText(7, expectedText)
+	raw, err := marshalSSEContentBlockDeltaTextBytes(7, expectedText)
 	if err != nil {
 		t.Fatalf("marshal text delta: %v", err)
 	}
 	var delta map[string]any
-	if err := json.Unmarshal([]byte(raw), &delta); err != nil {
+	if err := json.Unmarshal(raw, &delta); err != nil {
 		t.Fatalf("unmarshal text delta: %v", err)
 	}
 	if int(delta["index"].(float64)) != 7 {
@@ -55,12 +55,12 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 
 	expectedToolID := `tool_"1`
 	expectedToolName := "Wr" + newline + "ite"
-	raw, err = marshalSSEContentBlockStartToolUse(3, expectedToolID, expectedToolName)
+	raw, err = marshalSSEContentBlockStartToolUseBytes(3, expectedToolID, expectedToolName)
 	if err != nil {
 		t.Fatalf("marshal tool start: %v", err)
 	}
 	var startPayload map[string]any
-	if err := json.Unmarshal([]byte(raw), &startPayload); err != nil {
+	if err := json.Unmarshal(raw, &startPayload); err != nil {
 		t.Fatalf("unmarshal tool start: %v", err)
 	}
 	contentBlock := startPayload["content_block"].(map[string]any)
@@ -135,7 +135,7 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 		t.Fatalf("unexpected usage object: %#v", usageObj)
 	}
 
-	msgStartNoUsageRaw, err := marshalSSEMessageStartNoUsageBytes("dup", "claude-test")
+	msgStartNoUsageRaw, err := appendSSEMessageStartNoUsage(nil, "dup", "claude-test")
 	if err != nil {
 		t.Fatalf("marshal message start no usage: %v", err)
 	}
@@ -644,16 +644,16 @@ func TestNormalizeUpstreamToolCall_RewritesSandboxFindProjectToDot(t *testing.T)
 }
 
 func TestHasRequiredToolInput_Validations(t *testing.T) {
-	if hasRequiredToolInput("write", `{}`) {
+	if _, _, ok := evaluateToolCallInput("write", `{}`); ok {
 		t.Fatalf("write should require path+content")
 	}
-	if !hasRequiredToolInput("write", `{"file_path":"a","content":"x"}`) {
+	if _, _, ok := evaluateToolCallInput("write", `{"file_path":"a","content":"x"}`); !ok {
 		t.Fatalf("write with file_path+content should be valid")
 	}
-	if !hasRequiredToolInput("write", `{"path":"a","content":"x"}`) {
+	if _, _, ok := evaluateToolCallInput("write", `{"path":"a","content":"x"}`); !ok {
 		t.Fatalf("write with legacy path should be valid")
 	}
-	if hasRequiredToolInput("bash", `{"cmd":""}`) {
+	if _, _, ok := evaluateToolCallInput("bash", `{"cmd":""}`); ok {
 		t.Fatalf("bash should require non-empty cmd/command")
 	}
 }
@@ -905,26 +905,26 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 		t.Fatalf("expected message_start to flush immediately, got %d", rec.flushes)
 	}
 
-	thinkingData, err := marshalSSEContentBlockDeltaThinking(0, "step")
+	thinkingData, err := marshalSSEContentBlockDeltaThinkingBytes(0, "step")
 	if err != nil {
 		t.Fatalf("marshal thinking delta: %v", err)
 	}
 	for i := 0; i < sseDeferredFlushFrameThreshold-1; i++ {
-		sh.writeSSE("content_block_delta", thinkingData)
+		sh.writeSSE("content_block_delta", string(thinkingData))
 	}
 	if rec.flushes != 1 {
 		t.Fatalf("expected deferred thinking deltas to coalesce, got %d flushes", rec.flushes)
 	}
-	sh.writeSSE("content_block_delta", thinkingData)
+	sh.writeSSE("content_block_delta", string(thinkingData))
 	if rec.flushes != 2 {
 		t.Fatalf("expected deferred threshold flush, got %d", rec.flushes)
 	}
 
-	textData, err := marshalSSEContentBlockDeltaText(0, "hi")
+	textData, err := marshalSSEContentBlockDeltaTextBytes(0, "hi")
 	if err != nil {
 		t.Fatalf("marshal text delta: %v", err)
 	}
-	sh.writeSSE("content_block_delta", textData)
+	sh.writeSSE("content_block_delta", string(textData))
 	if rec.flushes != 3 {
 		t.Fatalf("expected text delta to flush immediately, got %d", rec.flushes)
 	}

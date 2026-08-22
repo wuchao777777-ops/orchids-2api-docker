@@ -80,7 +80,6 @@ func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
 		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "hello"}},
 		// no finish
 	}}
-
 	payload := map[string]any{
 		"model":    "claude-3-5-sonnet",
 		"messages": []map[string]any{{"role": "user", "content": "hi"}},
@@ -656,6 +655,7 @@ func TestHandleMessages_ToolResultFollowup_DoesNotInjectLocalFallbackText(t *tes
 		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "Let me first understand the project structure and code."}},
 		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
 	}}
+	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
 
 	payload := map[string]any{
 		"model": "claude-3-5-sonnet",
@@ -713,6 +713,7 @@ func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &errorUpstreamEdge{err: context.Canceled}
+	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
 
 	payload := map[string]any{
 		"model": "claude-3-5-sonnet",

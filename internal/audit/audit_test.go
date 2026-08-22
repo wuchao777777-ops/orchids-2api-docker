@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/goccy/go-json"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -17,7 +18,28 @@ func setupRedisLogger(t *testing.T) (*RedisLogger, *miniredis.Miniredis) {
 	return logger, s
 }
 
-func TestRedisLoggerLogAndQuery(t *testing.T) {
+func readLoggedEvents(t *testing.T, logger *RedisLogger, count int64) []Event {
+	t.Helper()
+	msgs, err := logger.client.XRevRangeN(context.Background(), logger.streamKey, "+", "-", count).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make([]Event, 0, len(msgs))
+	for _, msg := range msgs {
+		data, ok := msg.Values["data"].(string)
+		if !ok {
+			t.Fatalf("audit event data has type %T", msg.Values["data"])
+		}
+		var event Event
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func TestRedisLoggerLog(t *testing.T) {
 	logger, _ := setupRedisLogger(t)
 	defer logger.Close()
 	ctx := context.Background()
@@ -40,10 +62,7 @@ func TestRedisLoggerLogAndQuery(t *testing.T) {
 	// Give async writer time to flush
 	time.Sleep(100 * time.Millisecond)
 
-	events, err := logger.Query(ctx, QueryOpts{Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
+	events := readLoggedEvents(t, logger, 10)
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(events))
 	}
@@ -66,7 +85,7 @@ func TestRedisLoggerTimestamp(t *testing.T) {
 	logger.Log(ctx, Event{Action: "test", Status: "success"})
 	time.Sleep(100 * time.Millisecond)
 
-	events, _ := logger.Query(ctx, QueryOpts{Limit: 1})
+	events := readLoggedEvents(t, logger, 1)
 	if len(events) != 1 {
 		t.Fatal("expected 1 event")
 	}
@@ -81,12 +100,4 @@ func TestNopLogger(t *testing.T) {
 
 	// Should not panic
 	logger.Log(ctx, Event{Action: "test", Status: "success"})
-	events, err := logger.Query(ctx, QueryOpts{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if events != nil {
-		t.Fatal("nop logger should return nil events")
-	}
-	logger.Close()
 }

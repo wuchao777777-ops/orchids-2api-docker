@@ -227,7 +227,7 @@ func TestBuildOpenAIChunkFastMatchesSlow(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fastRaw, fastOK := buildOpenAIChunkFast("msg_1", 123, tt.event, tt.data)
+			fastRaw, fastOK := appendOpenAIChunkFast(nil, "msg_1", 123, tt.event, tt.data)
 			slowRaw, slowOK := buildOpenAIChunkSlow("msg_1", 123, tt.event, tt.data)
 			if fastOK != slowOK {
 				t.Fatalf("fastOK=%v slowOK=%v", fastOK, slowOK)

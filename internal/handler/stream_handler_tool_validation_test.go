@@ -36,7 +36,7 @@ func TestHasRequiredToolInput(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := hasRequiredToolInput(tc.tool, tc.input)
+			_, _, got := evaluateToolCallInput(tc.tool, tc.input)
 			if got != tc.expected {
 				t.Fatalf("hasRequiredToolInput(%q, %q) = %v, want %v", tc.tool, tc.input, got, tc.expected)
 			}

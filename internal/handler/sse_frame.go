@@ -250,100 +250,32 @@ func marshalSSEMessageStartBytes(msgID, model string, inputTokens, outputTokens 
 	return appendSSEMessageStart(make([]byte, 0, 192+len(msgID)+len(model)), msgID, model, inputTokens, outputTokens)
 }
 
-func marshalSSEMessageStartNoUsageBytes(msgID, model string) ([]byte, error) {
-	return appendSSEMessageStartNoUsage(make([]byte, 0, 128+len(msgID)+len(model)), msgID, model)
-}
-
-func marshalSSEContentBlockStartToolUse(index int, id, name string) (string, error) {
-	raw, err := marshalSSEContentBlockStartToolUseBytes(index, id, name)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
 func marshalSSEContentBlockStartTextBytes(index int) ([]byte, error) {
 	return appendSSEContentBlockStartText(make([]byte, 0, 96), index)
-}
-
-func marshalSSEContentBlockStartText(index int) (string, error) {
-	raw, err := marshalSSEContentBlockStartTextBytes(index)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 func marshalSSEContentBlockStartThinkingBytes(index int, signature string) ([]byte, error) {
 	return appendSSEContentBlockStartThinking(make([]byte, 0, 112+len(signature)), index, signature)
 }
 
-func marshalSSEContentBlockStartThinking(index int, signature string) (string, error) {
-	raw, err := marshalSSEContentBlockStartThinkingBytes(index, signature)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
 func marshalSSEContentBlockDeltaInputJSONBytes(index int, partialJSON string) ([]byte, error) {
 	return appendSSEContentBlockDeltaInputJSON(make([]byte, 0, 96+len(partialJSON)*2), index, partialJSON)
-}
-
-func marshalSSEContentBlockDeltaInputJSON(index int, partialJSON string) (string, error) {
-	raw, err := marshalSSEContentBlockDeltaInputJSONBytes(index, partialJSON)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 func marshalSSEContentBlockDeltaTextBytes(index int, text string) ([]byte, error) {
 	return appendSSEContentBlockDeltaText(make([]byte, 0, 80+len(text)), index, text)
 }
 
-func marshalSSEContentBlockDeltaText(index int, text string) (string, error) {
-	raw, err := marshalSSEContentBlockDeltaTextBytes(index, text)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
 func marshalSSEContentBlockDeltaThinkingBytes(index int, thinking string) ([]byte, error) {
 	return appendSSEContentBlockDeltaThinking(make([]byte, 0, 88+len(thinking)), index, thinking)
-}
-
-func marshalSSEContentBlockDeltaThinking(index int, thinking string) (string, error) {
-	raw, err := marshalSSEContentBlockDeltaThinkingBytes(index, thinking)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 func marshalSSEContentBlockStopBytes(index int) ([]byte, error) {
 	return appendSSEContentBlockStop(make([]byte, 0, 48), index)
 }
 
-func marshalSSEContentBlockStop(index int) (string, error) {
-	raw, err := marshalSSEContentBlockStopBytes(index)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
 func marshalSSEMessageDeltaBytes(stopReason string, outputTokens int) ([]byte, error) {
 	return appendSSEMessageDelta(make([]byte, 0, 88+len(stopReason)), stopReason, outputTokens)
-}
-
-func marshalSSEMessageDelta(stopReason string, outputTokens int) (string, error) {
-	raw, err := marshalSSEMessageDeltaBytes(stopReason, outputTokens)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 func marshalSSEMessageStopBytes() ([]byte, error) {

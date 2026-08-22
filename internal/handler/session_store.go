@@ -2,18 +2,35 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// SessionStore abstracts session state storage (workdir + conversation ID).
+// WarpToolBinding is enough state to route a tool result back to the exact
+// upstream Warp conversation and account that issued it.
+type WarpToolBinding struct {
+	ConversationID string `json:"conversation_id"`
+	AccountID      int64  `json:"account_id"`
+	ToolType       string `json:"tool_type,omitempty"`
+	ToolName       string `json:"tool_name,omitempty"`
+	ToolInput      string `json:"tool_input,omitempty"`
+}
+
+// SessionStore abstracts request session state and Warp tool continuations.
 type SessionStore interface {
 	GetWorkdir(ctx context.Context, key string) (string, bool)
 	SetWorkdir(ctx context.Context, key, workdir string)
 	GetConvID(ctx context.Context, key string) (string, bool)
 	SetConvID(ctx context.Context, key, convID string)
+	GetAccountID(ctx context.Context, key string) (int64, bool)
+	SetAccountID(ctx context.Context, key string, accountID int64)
+	GetWarpToolBinding(ctx context.Context, toolCallID string) (WarpToolBinding, bool)
+	SetWarpToolBinding(ctx context.Context, toolCallID string, binding WarpToolBinding)
 	DeleteSession(ctx context.Context, key string)
 	// Touch refreshes the session TTL. For Redis this issues EXPIRE; for memory it updates lastAccess.
 	Touch(ctx context.Context, key string)
@@ -25,21 +42,28 @@ type SessionStore interface {
 
 // RedisSessionStore stores session data as Redis HASHes with automatic TTL.
 type RedisSessionStore struct {
-	client *redis.Client
-	prefix string
-	ttl    time.Duration
+	client      *redis.Client
+	sessionRoot string
+	toolRoot    string
+	ttl         time.Duration
 }
 
 func NewRedisSessionStore(client *redis.Client, prefix string, ttl time.Duration) *RedisSessionStore {
 	return &RedisSessionStore{
-		client: client,
-		prefix: prefix + "session:",
-		ttl:    ttl,
+		client:      client,
+		sessionRoot: prefix + "session:",
+		toolRoot:    prefix + "warp-tool:",
+		ttl:         ttl,
 	}
 }
 
 func (s *RedisSessionStore) key(k string) string {
-	return s.prefix + k
+	return s.sessionRoot + k
+}
+
+func (s *RedisSessionStore) toolKey(toolCallID string) string {
+	sum := sha256.Sum256([]byte(toolCallID))
+	return s.toolRoot + hex.EncodeToString(sum[:])
 }
 
 func (s *RedisSessionStore) GetWorkdir(ctx context.Context, key string) (string, bool) {
@@ -72,6 +96,41 @@ func (s *RedisSessionStore) SetConvID(ctx context.Context, key, convID string) {
 	pipe.Exec(ctx)
 }
 
+func (s *RedisSessionStore) GetAccountID(ctx context.Context, key string) (int64, bool) {
+	val, err := s.client.HGet(ctx, s.key(key), "account_id").Int64()
+	return val, err == nil && val != 0
+}
+
+func (s *RedisSessionStore) SetAccountID(ctx context.Context, key string, accountID int64) {
+	if accountID == 0 {
+		return
+	}
+	pipe := s.client.Pipeline()
+	pipe.HSet(ctx, s.key(key), "account_id", accountID)
+	pipe.Expire(ctx, s.key(key), s.ttl)
+	_, _ = pipe.Exec(ctx)
+}
+
+func (s *RedisSessionStore) GetWarpToolBinding(ctx context.Context, toolCallID string) (WarpToolBinding, bool) {
+	var binding WarpToolBinding
+	raw, err := s.client.Get(ctx, s.toolKey(toolCallID)).Bytes()
+	if err != nil || json.Unmarshal(raw, &binding) != nil || binding.ConversationID == "" {
+		return WarpToolBinding{}, false
+	}
+	return binding, true
+}
+
+func (s *RedisSessionStore) SetWarpToolBinding(ctx context.Context, toolCallID string, binding WarpToolBinding) {
+	if toolCallID == "" || binding.ConversationID == "" {
+		return
+	}
+	raw, err := json.Marshal(binding)
+	if err != nil {
+		return
+	}
+	_ = s.client.Set(ctx, s.toolKey(toolCallID), raw, s.ttl).Err()
+}
+
 func (s *RedisSessionStore) DeleteSession(ctx context.Context, key string) {
 	s.client.Del(ctx, s.key(key))
 }
@@ -89,6 +148,12 @@ func (s *RedisSessionStore) Cleanup(_ context.Context) {
 type memorySession struct {
 	workdir    string
 	convID     string
+	accountID  int64
+	lastAccess time.Time
+}
+
+type memoryWarpToolBinding struct {
+	binding    WarpToolBinding
 	lastAccess time.Time
 }
 
@@ -96,6 +161,7 @@ type memorySession struct {
 type MemorySessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*memorySession
+	tools    map[string]*memoryWarpToolBinding
 	ttl      time.Duration
 	maxSize  int
 }
@@ -103,6 +169,7 @@ type MemorySessionStore struct {
 func NewMemorySessionStore(ttl time.Duration, maxSize int) *MemorySessionStore {
 	return &MemorySessionStore{
 		sessions: make(map[string]*memorySession),
+		tools:    make(map[string]*memoryWarpToolBinding),
 		ttl:      ttl,
 		maxSize:  maxSize,
 	}
@@ -167,6 +234,57 @@ func (s *MemorySessionStore) SetConvID(_ context.Context, key, convID string) {
 	sess.lastAccess = time.Now()
 }
 
+func (s *MemorySessionStore) GetAccountID(_ context.Context, key string) (int64, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess, ok := s.sessions[key]
+	if !ok || sess.accountID == 0 {
+		return 0, false
+	}
+	return sess.accountID, true
+}
+
+func (s *MemorySessionStore) SetAccountID(_ context.Context, key string, accountID int64) {
+	if accountID == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.getOrCreate(key)
+	sess.accountID = accountID
+	sess.lastAccess = time.Now()
+}
+
+func (s *MemorySessionStore) GetWarpToolBinding(_ context.Context, toolCallID string) (WarpToolBinding, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry, ok := s.tools[toolCallID]
+	if !ok || entry.binding.ConversationID == "" || time.Since(entry.lastAccess) > s.ttl {
+		return WarpToolBinding{}, false
+	}
+	return entry.binding, true
+}
+
+func (s *MemorySessionStore) SetWarpToolBinding(_ context.Context, toolCallID string, binding WarpToolBinding) {
+	if toolCallID == "" || binding.ConversationID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	limit := s.maxSize * 8
+	if s.maxSize > 0 && len(s.tools) >= limit {
+		var oldestKey string
+		var oldestTime time.Time
+		for key, entry := range s.tools {
+			if oldestKey == "" || entry.lastAccess.Before(oldestTime) {
+				oldestKey, oldestTime = key, entry.lastAccess
+			}
+		}
+		delete(s.tools, oldestKey)
+	}
+	s.tools[toolCallID] = &memoryWarpToolBinding{binding: binding, lastAccess: time.Now()}
+}
+
 func (s *MemorySessionStore) DeleteSession(_ context.Context, key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -188,6 +306,11 @@ func (s *MemorySessionStore) Cleanup(_ context.Context) {
 	for key, sess := range s.sessions {
 		if now.Sub(sess.lastAccess) > s.ttl {
 			delete(s.sessions, key)
+		}
+	}
+	for key, entry := range s.tools {
+		if now.Sub(entry.lastAccess) > s.ttl {
+			delete(s.tools, key)
 		}
 	}
 }

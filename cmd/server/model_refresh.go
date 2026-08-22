@@ -116,10 +116,6 @@ func makeModelRefreshHandler(cfg *config.Config, s *store.Store) http.HandlerFun
 	}
 }
 
-func syncModelsForChannel(ctx context.Context, cfg *config.Config, s *store.Store, channel string) (*modelRefreshResult, error) {
-	return syncModelsForChannelConcurrent(ctx, cfg, s, channel, defaultModelRefreshConcurrency)
-}
-
 func syncModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (*modelRefreshResult, error) {
 	channel = normalizeAdminModelChannel(channel)
 	if channel == "" {

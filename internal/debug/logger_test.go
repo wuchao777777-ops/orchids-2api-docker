@@ -21,13 +21,13 @@ func TestLoggerLogInputTokenBreakdownWritesFile(t *testing.T) {
 	}()
 
 	logger := New(true, false)
-	if logger == nil || logger.Dir() == "" {
+	if logger == nil || logger.dir == "" {
 		t.Fatal("expected enabled logger with directory")
 	}
 
 	logger.LogInputTokenBreakdown("warp", 101, 202, 303, 404, 1010)
 
-	path := filepath.Join(logger.Dir(), "6_input_token_breakdown.json")
+	path := filepath.Join(logger.dir, "6_input_token_breakdown.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)

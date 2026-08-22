@@ -16,13 +16,13 @@ import (
 	"orchids-api/internal/upstream"
 )
 
-func TestMapWarpToolCalls_SplitsReadFiles(t *testing.T) {
+func TestMapWarpToolCalls_PreservesOneResultPerServerReadCall(t *testing.T) {
 	args := `{"paths":["/tmp/a.go","/tmp/b.go"],"start":10,"end":20}`
 	calls := mapWarpToolCalls("read_files", args, "call_read", 0)
-	if len(calls) != 2 {
-		t.Fatalf("len(calls)=%d want 2", len(calls))
+	if len(calls) != 1 {
+		t.Fatalf("len(calls)=%d want 1", len(calls))
 	}
-	if calls[0].Name != "Read_0" || calls[1].Name != "Read_1" {
+	if calls[0].Name != "Read" || calls[0].ID != "call_read" {
 		t.Fatalf("unexpected tool names: %#v", calls)
 	}
 
@@ -38,6 +38,19 @@ func TestMapWarpToolCalls_SplitsReadFiles(t *testing.T) {
 	}
 	if got := input["limit"]; got != float64(20) {
 		t.Fatalf("limit=%v want 20", got)
+	}
+}
+
+func TestMapWarpToolCalls_PreservesServerToolCallID(t *testing.T) {
+	calls := mapWarpToolCalls("run_command", `{"command":"pwd"}`, "server_call_id", 7)
+	if len(calls) != 1 {
+		t.Fatalf("calls=%d want 1", len(calls))
+	}
+	if calls[0].ID != "server_call_id" {
+		t.Fatalf("tool call id=%q want exact server id", calls[0].ID)
+	}
+	if calls[0].Type != "run_command" {
+		t.Fatalf("tool type=%q want run_command", calls[0].Type)
 	}
 }
 

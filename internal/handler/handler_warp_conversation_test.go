@@ -125,11 +125,11 @@ func TestWarpConversationID_NotPersistedWithoutConversationKey(t *testing.T) {
 		t.Fatalf("expected 2 upstream calls, got %d", len(calls))
 	}
 
-	if !strings.HasPrefix(calls[0].ChatSessionID, "chat_") {
-		t.Fatalf("first ChatSessionID = %q, expected chat_*", calls[0].ChatSessionID)
+	if calls[0].ChatSessionID != "" {
+		t.Fatalf("first ChatSessionID = %q, want empty for a new official Warp conversation", calls[0].ChatSessionID)
 	}
-	if !strings.HasPrefix(calls[1].ChatSessionID, "chat_") {
-		t.Fatalf("second ChatSessionID = %q, expected chat_*", calls[1].ChatSessionID)
+	if calls[1].ChatSessionID != "" {
+		t.Fatalf("second unrelated ChatSessionID = %q, want empty", calls[1].ChatSessionID)
 	}
 	if calls[1].ChatSessionID == "warp_upstream_conv_1" {
 		t.Fatalf("second request unexpectedly reused upstream conversation id: %q", calls[1].ChatSessionID)
@@ -140,12 +140,106 @@ func TestWarpConversationID_NotPersistedWithoutConversationKey(t *testing.T) {
 	}
 }
 
+func TestWarpToolResultFollowup_RecoversConversationWithoutClientSessionID(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{
+		eventsByOp: [][]upstream.SSEMessage{{
+			{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp_upstream_tool_conv"}},
+			{Type: "model.tool-call", Event: map[string]interface{}{
+				"toolCallId":   "tool_write_1",
+				"toolName":     "Write",
+				"input":        `{"file_path":"calculator.py","content":"print(1)"}`,
+				"warpToolType": "call_mcp_tool",
+			}},
+			{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}},
+		}},
+	}
+	h := newTestHandler(client)
+
+	first := []byte(`{
+		"model":"claude-opus-4-6",
+		"stream":false,
+		"messages":[{"role":"user","content":"create calculator.py"}],
+		"tools":[{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}}]
+	}`)
+	rec1 := httptest.NewRecorder()
+	h.HandleMessages(rec1, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(first)))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first status=%d body=%s", rec1.Code, rec1.Body.String())
+	}
+
+	second := []byte(`{
+		"model":"claude-opus-4-6",
+		"stream":false,
+		"messages":[
+			{"role":"user","content":"create calculator.py"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"tool_write_1","name":"Write","input":{"file_path":"calculator.py","content":"print(1)"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_write_1","content":"File created successfully"}]}
+		],
+		"tools":[{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}}]
+	}`)
+	rec2 := httptest.NewRecorder()
+	h.HandleMessages(rec2, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(second)))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 2 {
+		t.Fatalf("calls=%d want 2", len(calls))
+	}
+	if calls[0].ChatSessionID != "" {
+		t.Fatalf("new conversation id=%q want empty", calls[0].ChatSessionID)
+	}
+	if calls[1].ChatSessionID != "warp_upstream_tool_conv" {
+		t.Fatalf("follow-up conversation id=%q want warp_upstream_tool_conv", calls[1].ChatSessionID)
+	}
+	ctx := calls[1].WarpToolContexts["tool_write_1"]
+	if ctx.Type != "call_mcp_tool" || ctx.Name != "Write" {
+		t.Fatalf("tool context=%#v", ctx)
+	}
+}
+
+func TestResolveWarpContinuationRejectsMixedConversations(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler(&fakePayloadClient{})
+	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_a", WarpToolBinding{ConversationID: "conv_a", AccountID: 1})
+	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_b", WarpToolBinding{ConversationID: "conv_b", AccountID: 1})
+	messages := []prompt.Message{{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+		{Type: "tool_result", ToolUseID: "tool_a", Content: "a"},
+		{Type: "tool_result", ToolUseID: "tool_b", Content: "b"},
+	}}}}
+	if _, err := h.resolveWarpContinuation(context.Background(), "", messages); err == nil {
+		t.Fatal("expected mixed-conversation tool results to be rejected")
+	}
+}
+
+func TestResolveWarpContinuationRejectsExpiredToolBinding(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler(&fakePayloadClient{})
+	messages := []prompt.Message{{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+		Type: "tool_result", ToolUseID: "expired_tool", Content: "done",
+	}}}}}
+	if _, err := h.resolveWarpContinuation(context.Background(), "", messages); err == nil || !strings.Contains(err.Error(), "expired or is unavailable") {
+		t.Fatalf("error=%v want explicit expired continuation error", err)
+	}
+}
+
+func TestWarpBindingInput_DoesNotPersistMCPPayloads(t *testing.T) {
+	if got := warpBindingInput("call_mcp_tool", `{"content":"large source file"}`); got != "" {
+		t.Fatalf("MCP input was persisted: %q", got)
+	}
+	if got := warpBindingInput("run_shell_command", `{"command":"pwd"}`); got != `{"command":"pwd"}` {
+		t.Fatalf("native shell input=%q", got)
+	}
+}
+
 func TestPuterCurrentWorkdirAfterToolTurn_ReturnsLocalResponse(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
 	h := newTestHandler(client)
-
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"stream":false,
@@ -321,7 +415,6 @@ func TestPuterToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *
 		}},
 	}
 	h := newTestHandler(client)
-
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"stream":false,
@@ -370,7 +463,6 @@ func TestPuterMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
 
 	client := &fakePayloadClient{}
 	h := newTestHandler(client)
-
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"stream":false,
@@ -427,7 +519,6 @@ func TestWarpConversationID_PersistedWithConversationKey(t *testing.T) {
 		conversationIDsByOp: []string{"warp_upstream_conv_persist"},
 	}
 	h := newTestHandler(client)
-
 	const conversationID = "local_conversation_key_1"
 
 	req1 := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(makeWarpRequestBody(t, "first", conversationID)))
@@ -449,8 +540,8 @@ func TestWarpConversationID_PersistedWithConversationKey(t *testing.T) {
 		t.Fatalf("expected 2 upstream calls, got %d", len(calls))
 	}
 
-	if !strings.HasPrefix(calls[0].ChatSessionID, "chat_") {
-		t.Fatalf("first ChatSessionID = %q, expected chat_*", calls[0].ChatSessionID)
+	if calls[0].ChatSessionID != "" {
+		t.Fatalf("first ChatSessionID = %q, want empty for a new official Warp conversation", calls[0].ChatSessionID)
 	}
 	if calls[1].ChatSessionID != "warp_upstream_conv_persist" {
 		t.Fatalf("second ChatSessionID = %q, want %q", calls[1].ChatSessionID, "warp_upstream_conv_persist")
@@ -463,9 +554,9 @@ func TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
 	client := &fakePayloadClient{}
 	h := &Handler{
 		config: &config.Config{
-			DebugEnabled:            false,
-			WarpMaxHistoryMessages:  1,
-			WarpMaxToolResults:      1,
+			DebugEnabled:           false,
+			WarpMaxHistoryMessages: 1,
+			WarpMaxToolResults:     1,
 		},
 		client:       client,
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
@@ -524,6 +615,7 @@ func TestWarpToolResultFollowupWithText_DisablesTools(t *testing.T) {
 
 	client := &fakePayloadClient{}
 	h := newTestHandler(client)
+	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
@@ -588,6 +680,7 @@ func TestWarpToolResultFollowup_DuplicateWriteFallsBackToPriorToolResult(t *test
 		},
 	}
 	h := newTestHandler(client)
+	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_old_1", WarpToolBinding{ConversationID: "warp_conv_tool_old", ToolType: "call_mcp_tool"})
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
@@ -645,13 +738,12 @@ func TestWarpToolResultFollowup_DuplicateWriteFallsBackToPriorToolResult(t *test
 	}
 }
 
-func TestWarpToolResultFollowup_SplitsCurrentTurnAndChainsConversationIDs(t *testing.T) {
+func TestWarpToolResultFollowup_SendsAllCurrentTurnResultsInOneRequest(t *testing.T) {
 	t.Parallel()
 
-	client := &fakePayloadClient{
-		conversationIDsByOp: []string{"warp_conv_batch_1", "warp_conv_batch_2"},
-	}
+	client := &fakePayloadClient{}
 	h := newTestHandler(client)
+	h.sessionStore.SetConvID(context.Background(), "local_conversation_key_split", "warp_conv_existing")
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
@@ -683,14 +775,8 @@ func TestWarpToolResultFollowup_SplitsCurrentTurnAndChainsConversationIDs(t *tes
 	}
 
 	calls := client.snapshotCalls()
-	if len(calls) != 3 {
-		t.Fatalf("expected 3 upstream calls, got %d", len(calls))
-	}
-	if calls[1].ChatSessionID != "warp_conv_batch_1" {
-		t.Fatalf("second batch ChatSessionID = %q, want %q", calls[1].ChatSessionID, "warp_conv_batch_1")
-	}
-	if calls[2].ChatSessionID != "warp_conv_batch_2" {
-		t.Fatalf("third batch ChatSessionID = %q, want %q", calls[2].ChatSessionID, "warp_conv_batch_2")
+	if len(calls) != 1 {
+		t.Fatalf("expected one official UserInputs request, got %d", len(calls))
 	}
 
 	countToolResults := func(msgs []prompt.Message) int {
@@ -705,38 +791,21 @@ func TestWarpToolResultFollowup_SplitsCurrentTurnAndChainsConversationIDs(t *tes
 		return total
 	}
 
-	if got := countToolResults(calls[0].Messages); got != 1 {
-		t.Fatalf("first batch tool_results = %d, want %d", got, 1)
+	if got := countToolResults(calls[0].Messages); got != 3 {
+		t.Fatalf("tool_results = %d, want %d", got, 3)
 	}
-	if got := countToolResults(calls[1].Messages); got != 2 {
-		t.Fatalf("second batch tool_results = %d, want %d", got, 2)
-	}
-	if got := countToolResults(calls[2].Messages); got != 3 {
-		t.Fatalf("third batch tool_results = %d, want %d", got, 3)
-	}
-
-	for i := 0; i < 2; i++ {
-		lastMsg := calls[i].Messages[len(calls[i].Messages)-1]
-		if got := strings.TrimSpace(lastMsg.ExtractText()); got != "" {
-			t.Fatalf("batch %d unexpectedly kept current-turn user text: %q", i+1, got)
-		}
-	}
-	if got := strings.TrimSpace(calls[2].Messages[len(calls[2].Messages)-1].ExtractText()); got != "帮我优化一下这个项目" {
-		t.Fatalf("last batch user text = %q, want final user request", got)
+	if got := strings.TrimSpace(calls[0].Messages[len(calls[0].Messages)-1].ExtractText()); got != "帮我优化一下这个项目" {
+		t.Fatalf("user text = %q, want final user request", got)
 	}
 }
 
-func TestWarpToolResultFollowup_ReplaysVisibleIntermediateBatch(t *testing.T) {
+func TestWarpToolResultFollowup_StreamsSingleBatchedResponse(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{
 		eventsByOp: [][]upstream.SSEMessage{
 			{
-				{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp_conv_batch_1"}},
-				{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn"}},
-			},
-			{
-				{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp_conv_batch_2"}},
+				{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp_conv_batch"}},
 				{Type: "model.text-delta", Event: map[string]interface{}{"delta": "Let me dig into the rest of the codebase first."}},
 				{
 					Type: "model.tool-call",
@@ -751,6 +820,7 @@ func TestWarpToolResultFollowup_ReplaysVisibleIntermediateBatch(t *testing.T) {
 		},
 	}
 	h := newTestHandler(client)
+	h.sessionStore.SetConvID(context.Background(), "local_conversation_key_intermediate", "warp_conv_existing")
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
@@ -782,8 +852,8 @@ func TestWarpToolResultFollowup_ReplaysVisibleIntermediateBatch(t *testing.T) {
 	}
 
 	calls := client.snapshotCalls()
-	if len(calls) != 2 {
-		t.Fatalf("expected batching to stop after visible intermediate output, got %d calls", len(calls))
+	if len(calls) != 1 {
+		t.Fatalf("expected one batched request, got %d calls", len(calls))
 	}
 
 	out := rec.Body.String()

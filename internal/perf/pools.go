@@ -2,9 +2,7 @@
 package perf
 
 import (
-	"bufio"
 	"bytes"
-	"io"
 	"strings"
 	"sync"
 )
@@ -68,25 +66,4 @@ func ReleaseByteBuffer(b *bytes.Buffer) {
 	}
 	b.Reset()
 	ByteBufferPool.Put(b)
-}
-
-// BufioReaderPool provides reusable bufio.Reader instances.
-var BufioReaderPool = sync.Pool{
-	New: func() any { return bufio.NewReaderSize(nil, 32768) },
-}
-
-// AcquireBufioReader gets a bufio.Reader from the pool.
-func AcquireBufioReader(r io.Reader) *bufio.Reader {
-	br := BufioReaderPool.Get().(*bufio.Reader)
-	br.Reset(r)
-	return br
-}
-
-// ReleaseBufioReader returns a bufio.Reader to the pool.
-func ReleaseBufioReader(br *bufio.Reader) {
-	if br == nil {
-		return
-	}
-	br.Reset(nil)
-	BufioReaderPool.Put(br)
 }

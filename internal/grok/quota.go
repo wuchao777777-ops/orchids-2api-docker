@@ -33,7 +33,7 @@ func InferQuotaLimit(acc *store.Account) float64 {
 	return basicDefaultQuota
 }
 
-func InferSubscriptionFromRateLimitInfo(info *RateLimitInfo) string {
+func inferSubscriptionFromRateLimitInfo(info *RateLimitInfo) string {
 	if info == nil || !info.HasLimit {
 		return ""
 	}
@@ -57,7 +57,7 @@ func ApplyQuotaInfo(acc *store.Account, info *RateLimitInfo) bool {
 	}
 
 	changed := false
-	if sub := InferSubscriptionFromRateLimitInfo(info); sub != "" && acc.Subscription != sub {
+	if sub := inferSubscriptionFromRateLimitInfo(info); sub != "" && acc.Subscription != sub {
 		acc.Subscription = sub
 		changed = true
 	}

@@ -690,17 +690,6 @@ async function autoRefreshWarpAccounts() {
   }
 }
 
-// Delete all accounts
-async function deleteAllAccounts() {
-  if (!accounts.length) return;
-  if (!confirm(`确定要删除全部 ${accounts.length} 个账号吗？此操作不可恢复。`)) return;
-  for (const acc of accounts) {
-    await fetch(`/api/accounts/${acc.id}`, { method: "DELETE" });
-  }
-  await loadAccounts();
-  showToast("已删除全部账号", "success");
-}
-
 // Clear abnormal accounts
 async function clearAbnormalAccounts() {
   const abnormal = accounts.filter((acc) => matchesCurrentPlatform(acc) && isAccountAbnormal(acc));
@@ -728,83 +717,6 @@ async function batchDeleteAccounts() {
     }
     loadAccounts();
     showToast(`已成功删除 ${selected.length} 个账号`);
-  }
-}
-
-function getSelectedAccountIDs() {
-  return Array.from(document.querySelectorAll(".row-checkbox:checked"))
-    .map((cb) => parseDataId(cb.dataset.id || ""))
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
-}
-
-// Enable NSFW for selected Grok accounts, or all Grok accounts when nothing selected.
-async function enableNSFW() {
-  const selectedIDs = getSelectedAccountIDs();
-  const selectedGrokIDs = selectedIDs.filter((id) => {
-    const acc = accounts.find((item) => item.id === id);
-    return !!acc && normalizeAccountType(acc) === "grok";
-  });
-
-  const payload = { concurrency: 5 };
-  let targetText = "全部 Grok 账号";
-
-  if (selectedIDs.length > 0) {
-    if (selectedGrokIDs.length === 0) {
-      showToast("选中的账号中没有 Grok 账号", "info");
-      return;
-    }
-    payload.account_ids = selectedGrokIDs;
-    targetText = `选中的 ${selectedGrokIDs.length} 个 Grok 账号`;
-    if (!confirm(`确认对${targetText}启用 NSFW 吗？`)) return;
-  } else if (!confirm("未选中账号，将对全部 Grok 账号启用 NSFW，是否继续？")) {
-    return;
-  }
-
-  try {
-    showToast(`正在为${targetText}启用 NSFW...`, "info");
-    const res = await fetch("/api/v1/admin/tokens/nsfw/enable", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (res.status === 401) {
-      window.location.href = "./login.html";
-      return;
-    }
-    if (!res.ok) {
-      throw new Error(await res.text());
-    }
-
-    const out = await res.json();
-    const summary = out && out.summary ? out.summary : {};
-    const total = Number(summary.total || 0);
-    const ok = Number(summary.ok || 0);
-    const fail = Number(summary.fail || Math.max(0, total - ok));
-
-    if (ok > 0) {
-      await loadAccounts();
-    }
-
-    if (fail > 0) {
-      const failedList = Object.entries(out && out.results ? out.results : {})
-        .filter(([, item]) => !item || item.success !== true)
-        .slice(0, 3)
-        .map(([token, item]) => {
-          const msg = item && item.error ? item.error : `HTTP ${item && item.http_status ? item.http_status : 0}`;
-          return `${token}: ${msg}`;
-        });
-      if (failedList.length > 0) {
-        console.warn("NSFW enable failures:", failedList.join(" | "));
-      }
-      showToast(`NSFW 启用完成：成功 ${ok}，失败 ${fail}`, "error");
-      return;
-    }
-
-    showToast(`NSFW 启用成功：共 ${ok}/${total}`, "success");
-  } catch (err) {
-    showToast(`NSFW 启用失败: ${err.message || err}`, "error");
   }
 }
 
@@ -1500,26 +1412,6 @@ function formatTokenDisplay(acc) {
 // Export accounts
 function exportAccounts() {
   window.location.href = "/api/export";
-}
-
-// Import accounts
-async function importAccounts(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    const res = await fetch("/api/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: text,
-    });
-    const result = await res.json();
-    showToast(`导入完成: 成功 ${result.imported}, 跳过 ${result.skipped}`);
-    loadAccounts();
-  } catch (err) {
-    showToast("导入失败: " + err.message, "error");
-  }
-  event.target.value = "";
 }
 
 // Load accounts on page load

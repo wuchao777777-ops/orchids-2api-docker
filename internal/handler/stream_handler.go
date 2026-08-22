@@ -261,6 +261,7 @@ type streamHandler struct {
 
 	// Callbacks
 	onConversationID func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
+	onToolCall       func(id, name, input, upstreamType string)
 	// Logger
 	logger *debug.Logger
 }
@@ -2122,10 +2123,6 @@ func (h *streamHandler) writeSSEBytesLocked(event string, data []byte) {
 
 // Event Handlers
 
-func (h *streamHandler) emitTextBlock(text string) {
-	h.emitTextBlockWithMode(text, false)
-}
-
 func (h *streamHandler) emitTextBlockWithMode(text string, final bool) {
 	if !h.isStream || text == "" {
 		return
@@ -2278,21 +2275,6 @@ func sideEffectToolDedupKey(name, input string, workdir ...string) string {
 		return ""
 	}
 	return sideEffectToolDedupKeyFromFields(nameKey, fields, firstOptionalString(workdir...))
-}
-
-func hasRequiredToolInput(name, input string) bool {
-	nameKey := normalizeToolNameKey(name)
-	if nameKey == "" {
-		return false
-	}
-	if !isStructuredToolName(nameKey) {
-		return true
-	}
-	fields, ok := decodeToolInputFields(input)
-	if !ok {
-		return false
-	}
-	return hasRequiredToolInputFields(nameKey, fields)
 }
 
 func evaluateToolCallInput(name, input string, workdir ...string) (nameKey string, dedupKey string, ok bool) {
@@ -3047,6 +3029,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			return
 		}
 		h.toolCallHandled[toolID] = true
+		if h.onToolCall != nil {
+			upstreamType, _ := msg.Event["warpToolType"].(string)
+			h.onToolCall(toolID, name, inputStr, upstreamType)
+		}
 		if h.isStream {
 			if inputStr != "" {
 				h.addOutputTokens(inputStr)
@@ -3082,6 +3068,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		delete(h.toolInputHadDelta, toolID)
 		delete(h.toolInputNames, toolID)
 		h.toolCallHandled[toolID] = true
+		if h.onToolCall != nil {
+			upstreamType, _ := msg.Event["warpToolType"].(string)
+			h.onToolCall(toolID, toolName, inputStr, upstreamType)
+		}
 		if h.isStream {
 			h.emitToolUseFromInput(toolID, toolName, inputStr)
 			return

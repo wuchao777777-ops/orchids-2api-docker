@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -13,7 +14,7 @@ func TestGetP95_NotEnoughData(t *testing.T) {
 	for i := 0; i < 9; i++ {
 		cl.UpdateStats(10 * time.Millisecond)
 	}
-	if p95 := cl.GetP95(); p95 != 0 {
+	if p95 := atomic.LoadInt64(&cl.cachedP95); p95 != 0 {
 		t.Fatalf("expected 0 with insufficient samples, got %d", p95)
 	}
 }
@@ -23,12 +24,12 @@ func TestGetP95_Computes(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		cl.UpdateStats(time.Duration(i+1) * time.Millisecond)
 	}
-	
+
 	// Force the 1s throttle to expire so a recalc occurs
 	time.Sleep(1100 * time.Millisecond)
 	cl.UpdateStats(100 * time.Millisecond)
-	
-	p95 := cl.GetP95()
+
+	p95 := atomic.LoadInt64(&cl.cachedP95)
 	if p95 < 90 || p95 > 100 {
 		t.Fatalf("expected p95 near top end, got %d", p95)
 	}

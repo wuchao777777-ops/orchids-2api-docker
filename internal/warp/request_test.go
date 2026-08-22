@@ -13,9 +13,9 @@ import (
 
 func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	req := upstream.UpstreamRequest{
-		Prompt:  "ignored because messages are present",
-		Model:   "claude-4-5-sonnet",
-		Workdir: "/repo",
+		Model:         "claude-4-5-sonnet",
+		Workdir:       "/repo",
+		ChatSessionID: "warp_conv_1",
 		Messages: []prompt.Message{
 			{
 				Role: "user",
@@ -53,8 +53,8 @@ func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	if strings.Contains(query, "<|system_prompt|>") || strings.Contains(query, "<|conversation|>") {
 		t.Fatalf("query should not contain legacy template markers: %q", query)
 	}
-	if !strings.Contains(query, "Tool result (call_1):") {
-		t.Fatalf("query missing tool result transcript: %q", query)
+	if query != "" {
+		t.Fatalf("tool-only continuation query=%q want empty", query)
 	}
 
 	var decoded warpapi.Request
@@ -68,12 +68,19 @@ func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	if len(inputs) != 1 {
 		t.Fatalf("user inputs=%d want 1", len(inputs))
 	}
-	userQuery := inputs[0].GetUserQuery()
-	if userQuery == nil {
-		t.Fatal("user input missing user query")
+	toolResult := inputs[0].GetToolCallResult()
+	if toolResult == nil {
+		t.Fatal("user input missing typed tool result")
 	}
-	if got := userQuery.GetQuery(); got != query {
-		t.Fatalf("query=%q want %q", got, query)
+	if got := toolResult.GetToolCallId(); got != "call_1" {
+		t.Fatalf("tool_call_id=%q want call_1", got)
+	}
+	mcpResult := toolResult.GetCallMcpTool()
+	if mcpResult == nil || mcpResult.GetSuccess() == nil || len(mcpResult.GetSuccess().GetResults()) != 1 {
+		t.Fatalf("typed MCP result=%#v want one success result", mcpResult)
+	}
+	if got := mcpResult.GetSuccess().GetResults()[0].GetText().GetText(); got != "./README.md\n./main.go" {
+		t.Fatalf("tool result text=%q", got)
 	}
 	if got := decoded.GetSettings().GetModelConfig().GetBase(); got != "claude-4-5-sonnet" {
 		t.Fatalf("base model=%q want claude-4-5-sonnet", got)
@@ -89,6 +96,96 @@ func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	}
 	if got := decoded.GetInput().GetContext().GetDirectory().GetPwd(); got != "/repo" {
 		t.Fatalf("pwd=%q want /repo", got)
+	}
+}
+
+func TestBuildRequestBytes_CombinesTypedToolResultAndUserQuery(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model:         "auto-open",
+		ChatSessionID: "warp_conv_2",
+		Messages: []prompt.Message{
+			{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "call_write", Name: "Write", Input: map[string]interface{}{"file_path": "main.go"}}}}},
+			{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "call_write", Content: "written"}}}},
+			{Role: "user", Content: prompt.MessageContent{Text: "continue"}},
+		},
+		Tools: []interface{}{map[string]interface{}{"name": "Write", "input_schema": map[string]interface{}{"type": "object"}}},
+		WarpToolContexts: map[string]upstream.WarpToolContext{
+			"call_write": {Type: "call_mcp_tool", Name: "Write", Input: `{"file_path":"main.go"}`},
+		},
+	}
+
+	query, payload, err := buildRequestBytes(req)
+	if err != nil {
+		t.Fatalf("buildRequestBytes error: %v", err)
+	}
+	if query != "continue" {
+		t.Fatalf("query=%q want continue", query)
+	}
+	var decoded warpapi.Request
+	if err := proto.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	inputs := decoded.GetInput().GetUserInputs().GetInputs()
+	if len(inputs) != 2 || inputs[0].GetToolCallResult() == nil || inputs[1].GetUserQuery() == nil {
+		t.Fatalf("inputs=%#v want typed tool result followed by user query", inputs)
+	}
+}
+
+func TestBuildRequestBytes_EncodesNativeWarpToolResults(t *testing.T) {
+	tests := []struct {
+		name      string
+		toolID    string
+		toolName  string
+		toolType  string
+		toolInput string
+		content   string
+		check     func(*testing.T, *warpapi.Request_Input_ToolCallResult)
+	}{
+		{
+			name:   "read files",
+			toolID: "read_1", toolName: "Read", toolType: "read_files",
+			toolInput: `{"file_path":"main.go"}`, content: "package main",
+			check: func(t *testing.T, result *warpapi.Request_Input_ToolCallResult) {
+				read := result.GetReadFiles().GetTextFilesSuccess().GetFiles()
+				if len(read) != 1 || read[0].GetFilePath() != "main.go" || read[0].GetContent() != "package main" {
+					t.Fatalf("read result=%#v", read)
+				}
+			},
+		},
+		{
+			name:   "shell command",
+			toolID: "shell_1", toolName: "Bash", toolType: "run_shell_command",
+			toolInput: `{"command":"pwd"}`, content: "Exit code 2\n/repo",
+			check: func(t *testing.T, result *warpapi.Request_Input_ToolCallResult) {
+				shell := result.GetRunShellCommand()
+				if shell.GetCommand() != "pwd" || shell.GetCommandFinished().GetExitCode() != 2 || shell.GetCommandFinished().GetOutput() != "Exit code 2\n/repo" {
+					t.Fatalf("shell result=%#v", shell)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := upstream.UpstreamRequest{
+				Model: "auto-open", ChatSessionID: "warp_conv",
+				Messages:         []prompt.Message{{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: tt.toolID, Content: tt.content}}}}},
+				WarpToolContexts: map[string]upstream.WarpToolContext{tt.toolID: {Type: tt.toolType, Name: tt.toolName, Input: tt.toolInput}},
+			}
+			_, payload, err := buildRequestBytes(req)
+			if err != nil {
+				t.Fatalf("buildRequestBytes error: %v", err)
+			}
+			var decoded warpapi.Request
+			if err := proto.Unmarshal(payload, &decoded); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			result := decoded.GetInput().GetUserInputs().GetInputs()[0].GetToolCallResult()
+			if result.GetToolCallId() != tt.toolID {
+				t.Fatalf("tool id=%q want %q", result.GetToolCallId(), tt.toolID)
+			}
+			tt.check(t, result)
+		})
 	}
 }
 

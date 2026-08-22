@@ -53,10 +53,12 @@ func TestFetchFeatureAgentModeModelChoices_NormalizesIDsAndDefault(t *testing.T)
 	}))
 	defer server.Close()
 
-	choices, defaultID, err := fetchFeatureAgentModeModelChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt")
+	features, err := fetchFeatureModelChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt")
 	if err != nil {
-		t.Fatalf("fetchFeatureAgentModeModelChoices() error: %v", err)
+		t.Fatalf("fetchFeatureModelChoices() error: %v", err)
 	}
+	choices := features.AgentMode.Choices
+	defaultID := features.AgentMode.DefaultID
 	if defaultID != "gpt-5.1-medium" {
 		t.Fatalf("defaultID=%q want gpt-5.1-medium", defaultID)
 	}

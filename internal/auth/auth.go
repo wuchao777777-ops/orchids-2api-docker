@@ -27,7 +27,7 @@ func init() {
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
-			CleanupExpiredSessions()
+			cleanupExpiredSessions()
 		}
 	}()
 }
@@ -71,7 +71,7 @@ func InvalidateSessionToken(token string) {
 	globalSessionStore.mu.Unlock()
 }
 
-func CleanupExpiredSessions() {
+func cleanupExpiredSessions() {
 	globalSessionStore.mu.Lock()
 	defer globalSessionStore.mu.Unlock()
 

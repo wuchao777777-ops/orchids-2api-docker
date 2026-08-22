@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -346,24 +345,6 @@ func (m *Manager) FeedbackOutcome(nodeID string, outcome FeedbackOutcome) {
 		}
 	case OutcomeRateLimited, OutcomeAccountBlock, OutcomeForbidden:
 		// No health change: the request failed for account/team-level reasons.
-	}
-}
-
-// Feedback is a compatibility wrapper that maps an HTTP status/error to a
-// FeedbackOutcome. New callers should prefer FeedbackOutcome for precise
-// semantics.
-func (m *Manager) Feedback(nodeID string, status int, err error) {
-	switch {
-	case err != nil:
-		m.FeedbackOutcome(nodeID, OutcomeTransportError)
-	case status >= 200 && status < 300:
-		m.FeedbackOutcome(nodeID, OutcomeSuccess)
-	case status == http.StatusTooManyRequests:
-		m.FeedbackOutcome(nodeID, OutcomeRateLimited)
-	case status >= 500:
-		m.FeedbackOutcome(nodeID, OutcomeServerError)
-	default:
-		m.FeedbackOutcome(nodeID, OutcomeForbidden)
 	}
 }
 

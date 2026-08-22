@@ -147,7 +147,7 @@ func TestSelectAccount_UsesHandlerConnTracker(t *testing.T) {
 		return &trackerTestUpstream{}
 	})
 
-	_, selected, err := h.selectAccount(context.Background(), "puter", true, nil)
+	_, selected, err := h.selectAccountWithOptions(context.Background(), "puter", true, nil, accountSelectionOptions{})
 	if err != nil {
 		t.Fatalf("selectAccount() error = %v", err)
 	}
@@ -193,7 +193,7 @@ func TestSelectAccount_WarpUsesAccountModelChoices(t *testing.T) {
 		return &trackerTestUpstream{}
 	})
 
-	_, selected, err := h.selectAccount(context.Background(), "warp", true, nil, "claude-4-6-opus-high")
+	_, selected, err := h.selectAccountWithOptions(context.Background(), "warp", true, nil, accountSelectionOptions{ModelID: "claude-4-6-opus-high"})
 	if err != nil {
 		t.Fatalf("selectAccount() error = %v", err)
 	}
@@ -232,7 +232,7 @@ func TestSelectAccount_WarpRejectsModelMissingFromCachedPool(t *testing.T) {
 		return &trackerTestUpstream{}
 	})
 
-	_, selected, err := h.selectAccount(context.Background(), "warp", true, nil, "claude-4-7-opus-xhigh-fast")
+	_, selected, err := h.selectAccountWithOptions(context.Background(), "warp", true, nil, accountSelectionOptions{ModelID: "claude-4-7-opus-xhigh-fast"})
 	if err == nil {
 		t.Fatal("selectAccount() error = nil, want unavailable model error")
 	}

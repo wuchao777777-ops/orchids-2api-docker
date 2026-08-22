@@ -820,7 +820,7 @@ func mergeCFCookies(header http.Header, cfCookies string) {
 }
 
 func (c *Client) doChat(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
-	if err := appChatRateLimitEndpoint(ctx); err != nil {
+	if err := rateLimitEndpoint(ctx, "grok.com"); err != nil {
 		return nil, err
 	}
 	body, err := json.Marshal(payload)
@@ -994,11 +994,11 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 	}
 
 	model := strings.TrimSpace(modelID)
-	spec, ok := ResolveModelOrDynamic(model)
+	spec, ok := ResolveModel(model)
 	if !ok {
 		// Fall back to a known default model when the model ID is not recognized
 		// (e.g. AgentMode="grok-3" stored on older accounts).
-		spec, ok = ResolveModelOrDynamic("grok-4.20-0309-non-reasoning")
+		spec, ok = ResolveModel("grok-4.20-0309-non-reasoning")
 		if !ok {
 			return nil, fmt.Errorf("model not found")
 		}

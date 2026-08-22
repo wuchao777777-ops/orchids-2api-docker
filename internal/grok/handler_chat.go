@@ -191,7 +191,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	spec, ok := ResolveModelOrDynamic(req.Model)
+	spec, ok := ResolveModel(req.Model)
 	if !ok {
 		http.Error(w, modelNotFoundMessage(req.Model), http.StatusBadRequest)
 		return

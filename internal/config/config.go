@@ -96,7 +96,6 @@ type Config struct {
 	WarpDisableTools       *bool    `json:"-"`
 	WarpMaxToolResults     int      `json:"-"`
 	WarpMaxHistoryMessages int      `json:"-"`
-	WarpSplitToolResults   bool     `json:"-"`
 	Stream                 *bool    `json:"-"`
 	ImageNSFW              *bool    `json:"-"`
 	ImageFinalMinBytes     int      `json:"-"`

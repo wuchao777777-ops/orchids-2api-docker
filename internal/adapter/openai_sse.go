@@ -392,10 +392,6 @@ func appendOpenAIChunkFast(dst []byte, msgID string, created int64, event string
 	return nil, false
 }
 
-func buildOpenAIChunkFast(msgID string, created int64, event string, data []byte) ([]byte, bool) {
-	return appendOpenAIChunkFast(nil, msgID, created, event, data)
-}
-
 func buildOpenAIChunkSlow(msgID string, created int64, event string, data []byte) ([]byte, bool) {
 	chunk := newOpenAIChunk(msgID, created)
 	choice := &chunk.Choices[0]

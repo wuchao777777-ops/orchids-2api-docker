@@ -109,9 +109,7 @@ func TestManagerUnhealthyNodeSkipped(t *testing.T) {
 		},
 	}
 	m := NewManager(cfg)
-	// Drive "bad" node unhealthy through the public feedback path so its failure
-	// cooldown is armed.
-	m.Feedback("bad", 500, nil)
+	m.FeedbackOutcome("bad", OutcomeServerError)
 	for i := 0; i < 10; i++ {
 		lease, err := m.Acquire(context.Background(), "app_chat", "acct-3")
 		if err != nil {
@@ -127,14 +125,14 @@ func TestManagerUnhealthyNodeSkipped(t *testing.T) {
 func TestFeedbackHealth(t *testing.T) {
 	cfg := &config.Config{GrokEgressEnabled: true}
 	m := NewManager(cfg)
-	m.Feedback("n1", 200, nil)
+	m.FeedbackOutcome("n1", OutcomeSuccess)
 	m.mu.RLock()
 	score := m.health["n1"]
 	m.mu.RUnlock()
 	if score <= 0 {
 		t.Fatalf("expected positive health after success, got %f", score)
 	}
-	m.Feedback("n1", 500, nil)
+	m.FeedbackOutcome("n1", OutcomeServerError)
 	m.mu.RLock()
 	scoreAfter := m.health["n1"]
 	m.mu.RUnlock()

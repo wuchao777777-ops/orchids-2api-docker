@@ -112,28 +112,11 @@ func (m ModelSpec) PoolCandidates() []string {
 	}
 }
 
-func ResolveModelOrDynamic(modelID string) (ModelSpec, bool) {
-	return ResolveModel(modelID)
-}
-
-// ResolvedUpstream returns the upstream kind for this model, honoring an
-// explicit Upstream field, the GrokCLIModelIDs config list, and the existing
-// ConsoleModel routing in that order.
-func (m ModelSpec) ResolvedUpstream(cfg *config.Config) UpstreamKind {
-	if m.Upstream != UpstreamAuto {
-		return m.Upstream
-	}
-	if cfg != nil && cfg.GrokModelIsCLI(m.ID) {
-		return UpstreamCLI
-	}
-	if strings.TrimSpace(m.ConsoleModel) != "" {
-		return UpstreamConsole
-	}
-	return UpstreamAppChat
-}
-
 // modelRoutedToCLI reports whether a model should be served via the Build CLI
 // upstream (explicit marker or config list).
 func modelRoutedToCLI(spec ModelSpec, cfg *config.Config) bool {
-	return spec.ResolvedUpstream(cfg) == UpstreamCLI
+	if spec.Upstream != UpstreamAuto {
+		return spec.Upstream == UpstreamCLI
+	}
+	return cfg != nil && cfg.GrokModelIsCLI(spec.ID)
 }

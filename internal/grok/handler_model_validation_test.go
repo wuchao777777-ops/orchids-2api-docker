@@ -141,9 +141,6 @@ func TestResolveModel_DeprecatesGrok43BetaAppChat(t *testing.T) {
 	if !ok {
 		t.Fatal("ResolveModel(grok-4.3-beta) = false, want true")
 	}
-	if _, ok := ResolveModelOrDynamic("grok-4.3-beta"); !ok {
-		t.Fatal("ResolveModelOrDynamic(grok-4.3-beta) = false, want true")
-	}
 	if !IsDeprecatedModelID("grok-4.3-beta") {
 		t.Fatal("grok-4.3-beta should be deprecated")
 	}

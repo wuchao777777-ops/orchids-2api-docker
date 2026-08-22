@@ -2,7 +2,9 @@ package warp
 
 import (
 	"fmt"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/goccy/go-json"
@@ -28,9 +30,13 @@ type InputTokenEstimate struct {
 	Total            int
 }
 
+var warpExitCodePattern = regexp.MustCompile(`(?i)\bexit(?:\s+code|\s+status)?\s*[:=]?\s*(-?\d+)\b`)
+var warpGrepLinePattern = regexp.MustCompile(`^(.+?):(\d+)(?::|-)`)
+
 func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 	query := buildWarpUserQuery(req.Prompt, req.Messages, req.System, req.ChatSessionID)
-	if strings.TrimSpace(query) == "" {
+	input, inputCount := buildRequestInput(query, req.Messages, req.Workdir, req.WarpToolContexts, req.Tools)
+	if strings.TrimSpace(query) == "" && inputCount == 0 {
 		return "", nil, fmt.Errorf("empty warp prompt")
 	}
 
@@ -38,7 +44,7 @@ func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 	modelConfig := buildRequestModelConfig(req)
 	apiReq := warpapi.Request_builder{
 		TaskContext: warpapi.Request_TaskContext_builder{}.Build(),
-		Input:       buildRequestInput(query, req.Workdir),
+		Input:       input,
 		Settings:    buildRequestSettings(modelConfig, disableWarpTools),
 		Metadata:    buildRequestMetadata(req.ChatSessionID),
 	}.Build()
@@ -98,9 +104,7 @@ func latestWarpUserInput(messages []prompt.Message) string {
 		if role != "user" && role != "tool" {
 			continue
 		}
-		if text := renderWarpUserMessageContent(messages[i].Content); text != "" {
-			return text
-		}
+		return renderWarpUserMessageContent(messages[i].Content)
 	}
 	return ""
 }
@@ -138,20 +142,6 @@ func renderWarpUserMessageContent(content prompt.MessageContent) string {
 			if text := sanitizeUTF8(strings.TrimSpace(block.Text)); text != "" {
 				parts = append(parts, text)
 			}
-		case "tool_result":
-			payload := stringifyValue(block.Content)
-			if payload == "" {
-				payload = "{}"
-			}
-			label := strings.TrimSpace(block.ToolUseID)
-			if label == "" {
-				label = strings.TrimSpace(block.Name)
-			}
-			if label != "" {
-				parts = append(parts, "Tool result ("+label+"):\n"+payload)
-			} else {
-				parts = append(parts, "Tool result:\n"+payload)
-			}
 		}
 	}
 	return sanitizeUTF8(strings.TrimSpace(strings.Join(parts, "\n\n")))
@@ -183,6 +173,10 @@ func PreviewUserQuery(promptText string, messages []prompt.Message, systemItems 
 func EstimateInputTokens(promptText, _ string, messages []prompt.Message, systemItems []prompt.SystemItem, tools []interface{}, disableWarpTools bool, conversationID string) (InputTokenEstimate, error) {
 	query := buildWarpUserQuery(promptText, messages, systemItems, conversationID)
 	queryTokens := tiktoken.EstimateTextTokens(query)
+	toolResultTokens := 0
+	for _, block := range latestWarpToolResultBlocks(messages) {
+		toolResultTokens += tiktoken.EstimateTextTokens(stringifyValue(block.Content))
+	}
 	toolSchemaTokens := 0
 	toolCount := 0
 	if !disableWarpTools {
@@ -203,10 +197,10 @@ func EstimateInputTokens(promptText, _ string, messages []prompt.Message, system
 		QueryTokens:      queryTokens,
 		BasePromptTokens: 0,
 		HistoryTokens:    0,
-		ToolResultTokens: 0,
+		ToolResultTokens: toolResultTokens,
 		ToolSchemaTokens: toolSchemaTokens,
 		ToolCount:        toolCount,
-		Total:            queryTokens + toolSchemaTokens,
+		Total:            queryTokens + toolResultTokens + toolSchemaTokens,
 	}, nil
 }
 
@@ -237,23 +231,270 @@ func buildRequestModelConfig(req upstream.UpstreamRequest) AccountFeatureConfig 
 	return cfg
 }
 
-func buildRequestInput(query, workdir string) *warpapi.Request_Input {
+func buildRequestInput(query string, messages []prompt.Message, workdir string, toolContexts map[string]upstream.WarpToolContext, tools []interface{}) (*warpapi.Request_Input, int) {
+	inputs := make([]*warpapi.Request_Input_UserInputs_UserInput, 0, 2)
+	declaredTools := make(map[string]struct{})
+	for _, tool := range convertTools(tools) {
+		declaredTools[strings.ToLower(strings.TrimSpace(tool.Name))] = struct{}{}
+	}
+	for _, block := range latestWarpToolResultBlocks(messages) {
+		if result := buildWarpToolResult(block, messages, toolContexts, declaredTools); result != nil {
+			inputs = append(inputs, warpapi.Request_Input_UserInputs_UserInput_builder{ToolCallResult: result}.Build())
+		}
+	}
+	if strings.TrimSpace(query) != "" {
+		inputs = append(inputs, buildWarpUserQueryInput(query))
+	}
+	return warpapi.Request_Input_builder{
+		Context: buildInputContext(workdir),
+		UserInputs: warpapi.Request_Input_UserInputs_builder{
+			Inputs: inputs,
+		}.Build(),
+	}.Build(), len(inputs)
+}
+
+func buildWarpUserQueryInput(query string) *warpapi.Request_Input_UserInputs_UserInput {
 	agent := warpapi.AgentType_AGENT_TYPE_PRIMARY
 	userQuery := warpapi.Request_Input_UserQuery_builder{
 		Query:         stringPtr(query),
 		Mode:          warpapi.UserQueryMode_builder{}.Build(),
 		IntendedAgent: &agent,
 	}.Build()
-	userInput := warpapi.Request_Input_UserInputs_UserInput_builder{
+	return warpapi.Request_Input_UserInputs_UserInput_builder{
 		UserQuery: userQuery,
 	}.Build()
-	userInputs := warpapi.Request_Input_UserInputs_builder{
-		Inputs: []*warpapi.Request_Input_UserInputs_UserInput{userInput},
-	}.Build()
-	return warpapi.Request_Input_builder{
-		Context:    buildInputContext(workdir),
-		UserInputs: userInputs,
-	}.Build()
+}
+
+func latestWarpToolResultBlocks(messages []prompt.Message) []prompt.ContentBlock {
+	var reversed []prompt.ContentBlock
+	foundPendingInput := false
+	seen := make(map[string]struct{})
+	for i := len(messages) - 1; i >= 0; i-- {
+		role := strings.ToLower(strings.TrimSpace(messages[i].Role))
+		if role != "user" && role != "tool" {
+			if foundPendingInput {
+				break
+			}
+			continue
+		}
+		foundPendingInput = true
+		if messages[i].Content.IsString() {
+			continue
+		}
+		blocks := messages[i].Content.GetBlocks()
+		for j := len(blocks) - 1; j >= 0; j-- {
+			block := blocks[j]
+			id := strings.TrimSpace(block.ToolUseID)
+			if block.Type != "tool_result" || id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			reversed = append(reversed, block)
+		}
+	}
+	results := make([]prompt.ContentBlock, len(reversed))
+	for i := range reversed {
+		results[len(reversed)-1-i] = reversed[i]
+	}
+	return results
+}
+
+func buildWarpToolResult(block prompt.ContentBlock, messages []prompt.Message, toolContexts map[string]upstream.WarpToolContext, declaredTools map[string]struct{}) *warpapi.Request_Input_ToolCallResult {
+	id := strings.TrimSpace(block.ToolUseID)
+	if id == "" {
+		return nil
+	}
+	ctx := toolContexts[id]
+	if ctx.Name == "" || ctx.Input == "" {
+		name, input := findWarpToolUse(messages, id)
+		if ctx.Name == "" {
+			ctx.Name = name
+		}
+		if ctx.Input == "" {
+			ctx.Input = input
+		}
+	}
+	payload := stringifyValue(block.Content)
+	toolType := strings.ToLower(strings.TrimSpace(ctx.Type))
+	if toolType == "" {
+		if _, ok := declaredTools[strings.ToLower(strings.TrimSpace(ctx.Name))]; ok {
+			toolType = "call_mcp_tool"
+		}
+	}
+	builder := warpapi.Request_Input_ToolCallResult_builder{ToolCallId: stringPtr(id)}
+	switch toolType {
+	case "run_shell_command", "run_command":
+		builder.RunShellCommand = buildWarpShellResult(ctx.Input, payload, block.IsError)
+	case "write_to_long_running_shell_command":
+		builder.WriteToLongRunningShellCommand = buildWarpWriteShellResult(payload, block.IsError)
+	case "read_shell_command_output":
+		builder.ReadShellCommandOutput = buildWarpReadShellOutputResult(ctx.Input, payload, block.IsError)
+	case "read_files", "read_file":
+		builder.ReadFiles = buildWarpReadFilesResult(ctx.Input, payload, block.IsError)
+	case "apply_file_diffs", "edit_file", "write_file":
+		builder.ApplyFileDiffs = buildWarpApplyDiffsResult(payload, block.IsError)
+	case "file_glob":
+		builder.FileGlob = buildWarpFileGlobResult(payload, block.IsError)
+	case "file_glob_v2":
+		builder.FileGlobV2 = buildWarpFileGlobV2Result(payload, block.IsError)
+	case "grep":
+		builder.Grep = buildWarpGrepResult(payload, block.IsError)
+	default:
+		builder.CallMcpTool = buildWarpMCPToolResult(payload, block.IsError)
+	}
+	return builder.Build()
+}
+
+func findWarpToolUse(messages []prompt.Message, id string) (string, string) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Content.IsString() {
+			continue
+		}
+		blocks := messages[i].Content.GetBlocks()
+		for j := len(blocks) - 1; j >= 0; j-- {
+			block := blocks[j]
+			if block.Type == "tool_use" && strings.TrimSpace(block.ID) == id {
+				return strings.TrimSpace(block.Name), stringifyValue(block.Input)
+			}
+		}
+	}
+	return "", ""
+}
+
+func buildWarpMCPToolResult(payload string, isError bool) *warpapi.CallMCPToolResult {
+	if isError {
+		return warpapi.CallMCPToolResult_builder{Error: warpapi.CallMCPToolResult_Error_builder{Message: stringPtr(payload)}.Build()}.Build()
+	}
+	text := warpapi.CallMCPToolResult_Success_Result_Text_builder{Text: stringPtr(payload)}.Build()
+	result := warpapi.CallMCPToolResult_Success_Result_builder{Text: text}.Build()
+	return warpapi.CallMCPToolResult_builder{Success: warpapi.CallMCPToolResult_Success_builder{Results: []*warpapi.CallMCPToolResult_Success_Result{result}}.Build()}.Build()
+}
+
+func buildWarpShellResult(input, payload string, isError bool) *warpapi.RunShellCommandResult {
+	command := jsonStringField(input, "command", "cmd")
+	exitCode := warpShellExitCode(payload, isError)
+	finished := warpapi.ShellCommandFinished_builder{Output: stringPtr(payload), ExitCode: &exitCode}.Build()
+	return warpapi.RunShellCommandResult_builder{Command: stringPtr(command), CommandFinished: finished}.Build()
+}
+
+func buildWarpWriteShellResult(payload string, isError bool) *warpapi.WriteToLongRunningShellCommandResult {
+	exitCode := warpShellExitCode(payload, isError)
+	finished := warpapi.ShellCommandFinished_builder{Output: stringPtr(payload), ExitCode: &exitCode}.Build()
+	return warpapi.WriteToLongRunningShellCommandResult_builder{CommandFinished: finished}.Build()
+}
+
+func buildWarpReadShellOutputResult(input, payload string, isError bool) *warpapi.ReadShellCommandOutputResult {
+	exitCode := warpShellExitCode(payload, isError)
+	command := jsonStringField(input, "command")
+	commandID := jsonStringField(input, "command_id")
+	finished := warpapi.ShellCommandFinished_builder{Output: stringPtr(payload), ExitCode: &exitCode, CommandId: stringPtr(commandID)}.Build()
+	return warpapi.ReadShellCommandOutputResult_builder{Command: stringPtr(command), CommandFinished: finished}.Build()
+}
+
+func warpShellExitCode(payload string, isError bool) int32 {
+	if match := warpExitCodePattern.FindStringSubmatch(payload); len(match) == 2 {
+		if value, err := strconv.ParseInt(match[1], 10, 32); err == nil {
+			return int32(value)
+		}
+	}
+	if isError {
+		return 1
+	}
+	return 0
+}
+
+func buildWarpReadFilesResult(input, payload string, isError bool) *warpapi.ReadFilesResult {
+	if isError {
+		return warpapi.ReadFilesResult_builder{Error: warpapi.ReadFilesResult_Error_builder{Message: stringPtr(payload)}.Build()}.Build()
+	}
+	path := jsonStringField(input, "file_path", "path")
+	file := warpapi.FileContent_builder{FilePath: stringPtr(path), Content: stringPtr(payload)}.Build()
+	return warpapi.ReadFilesResult_builder{TextFilesSuccess: warpapi.ReadFilesResult_TextFilesSuccess_builder{Files: []*warpapi.FileContent{file}}.Build()}.Build()
+}
+
+func buildWarpApplyDiffsResult(payload string, isError bool) *warpapi.ApplyFileDiffsResult {
+	if isError {
+		return warpapi.ApplyFileDiffsResult_builder{Error: warpapi.ApplyFileDiffsResult_Error_builder{Message: stringPtr(payload)}.Build()}.Build()
+	}
+	return warpapi.ApplyFileDiffsResult_builder{Success: warpapi.ApplyFileDiffsResult_Success_builder{}.Build()}.Build()
+}
+
+func buildWarpFileGlobResult(payload string, isError bool) *warpapi.FileGlobResult {
+	if isError {
+		return warpapi.FileGlobResult_builder{Error: warpapi.FileGlobResult_Error_builder{Message: stringPtr(payload)}.Build()}.Build()
+	}
+	return warpapi.FileGlobResult_builder{Success: warpapi.FileGlobResult_Success_builder{MatchedFiles: stringPtr(payload)}.Build()}.Build()
+}
+
+func buildWarpFileGlobV2Result(payload string, isError bool) *warpapi.FileGlobV2Result {
+	if isError {
+		return warpapi.FileGlobV2Result_builder{Error: warpapi.FileGlobV2Result_Error_builder{Message: stringPtr(payload)}.Build()}.Build()
+	}
+	matches := make([]*warpapi.FileGlobV2Result_Success_FileGlobMatch, 0)
+	for _, line := range strings.Split(payload, "\n") {
+		path := strings.TrimSpace(line)
+		if path == "" {
+			continue
+		}
+		matches = append(matches, warpapi.FileGlobV2Result_Success_FileGlobMatch_builder{FilePath: stringPtr(path)}.Build())
+	}
+	return warpapi.FileGlobV2Result_builder{Success: warpapi.FileGlobV2Result_Success_builder{MatchedFiles: matches}.Build()}.Build()
+}
+
+func buildWarpGrepResult(payload string, isError bool) *warpapi.GrepResult {
+	if isError {
+		return warpapi.GrepResult_builder{Error: warpapi.GrepResult_Error_builder{Message: stringPtr(payload)}.Build()}.Build()
+	}
+	type fileLines struct {
+		path  string
+		lines []uint32
+	}
+	ordered := make([]fileLines, 0)
+	indexes := make(map[string]int)
+	for _, line := range strings.Split(payload, "\n") {
+		match := warpGrepLinePattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(match) != 3 {
+			continue
+		}
+		n, err := strconv.ParseUint(match[2], 10, 32)
+		if err != nil {
+			continue
+		}
+		path := strings.TrimSpace(match[1])
+		index, ok := indexes[path]
+		if !ok {
+			index = len(ordered)
+			indexes[path] = index
+			ordered = append(ordered, fileLines{path: path})
+		}
+		ordered[index].lines = append(ordered[index].lines, uint32(n))
+	}
+	files := make([]*warpapi.GrepResult_Success_GrepFileMatch, 0, len(ordered))
+	for _, file := range ordered {
+		lines := make([]*warpapi.GrepResult_Success_GrepFileMatch_GrepLineMatch, 0, len(file.lines))
+		for _, n := range file.lines {
+			lineNumber := n
+			lines = append(lines, warpapi.GrepResult_Success_GrepFileMatch_GrepLineMatch_builder{LineNumber: &lineNumber}.Build())
+		}
+		files = append(files, warpapi.GrepResult_Success_GrepFileMatch_builder{FilePath: stringPtr(file.path), MatchedLines: lines}.Build())
+	}
+	return warpapi.GrepResult_builder{Success: warpapi.GrepResult_Success_builder{MatchedFiles: files}.Build()}.Build()
+}
+
+func jsonStringField(raw string, keys ...string) string {
+	var value map[string]interface{}
+	if json.Unmarshal([]byte(raw), &value) != nil {
+		return ""
+	}
+	for _, key := range keys {
+		if text, ok := value[key].(string); ok && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func buildInputContext(workdir string) *warpapi.InputContext {

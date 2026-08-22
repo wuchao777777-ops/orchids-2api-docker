@@ -120,14 +120,6 @@ func (c *Client) FetchDiscoveredFeatureModelChoices(ctx context.Context) (*Featu
 	return features, "feature_model_choice_all", nil
 }
 
-func fetchFeatureAgentModeModelChoices(ctx context.Context, client *http.Client, jwt string) ([]ModelChoice, string, error) {
-	features, err := fetchFeatureModelChoices(ctx, client, jwt)
-	if features == nil {
-		return nil, "", err
-	}
-	return features.AgentMode.Choices, features.AgentMode.DefaultID, err
-}
-
 func fetchFeatureModelChoices(ctx context.Context, client *http.Client, jwt string) (*FeatureModelChoices, error) {
 	payload := map[string]interface{}{
 		"query":         getFeatureModelChoicesQuery,

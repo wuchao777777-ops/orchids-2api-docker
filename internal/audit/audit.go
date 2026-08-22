@@ -24,19 +24,9 @@ type Event struct {
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// QueryOpts controls audit log queries.
-type QueryOpts struct {
-	Start  time.Time
-	End    time.Time
-	Action string
-	Limit  int64
-}
-
 // Logger is the audit logging interface.
 type Logger interface {
 	Log(ctx context.Context, event Event)
-	Query(ctx context.Context, opts QueryOpts) ([]Event, error)
-	Close()
 }
 
 // --- Redis Stream Implementation ---
@@ -78,41 +68,6 @@ func (l *RedisLogger) Log(_ context.Context, event Event) {
 	}
 }
 
-func (l *RedisLogger) Query(ctx context.Context, opts QueryOpts) ([]Event, error) {
-	start := "-"
-	end := "+"
-	if !opts.Start.IsZero() {
-		start = opts.Start.Format(time.RFC3339Nano)
-	}
-	if !opts.End.IsZero() {
-		end = opts.End.Format(time.RFC3339Nano)
-	}
-
-	count := opts.Limit
-	if count <= 0 {
-		count = 100
-	}
-
-	msgs, err := l.client.XRevRangeN(ctx, l.streamKey, end, start, count).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	events := make([]Event, 0, len(msgs))
-	for _, msg := range msgs {
-		data, ok := msg.Values["data"].(string)
-		if !ok {
-			continue
-		}
-		var ev Event
-		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			continue
-		}
-		events = append(events, ev)
-	}
-	return events, nil
-}
-
 func (l *RedisLogger) Close() {
 	close(l.eventCh)
 	<-l.done
@@ -145,7 +100,5 @@ func (l *RedisLogger) writeLoop() {
 // NopLogger discards all audit events.
 type NopLogger struct{}
 
-func NewNopLogger() *NopLogger                                             { return &NopLogger{} }
-func (l *NopLogger) Log(_ context.Context, _ Event)                        {}
-func (l *NopLogger) Query(_ context.Context, _ QueryOpts) ([]Event, error) { return nil, nil }
-func (l *NopLogger) Close()                                                {}
+func NewNopLogger() *NopLogger                      { return &NopLogger{} }
+func (l *NopLogger) Log(_ context.Context, _ Event) {}
