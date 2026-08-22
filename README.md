@@ -2,11 +2,11 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `orchids`、`warp`、`puter`、`grok` 四类通道。
+一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `warp`、`puter`、`grok` 三类通道。
 
 ## 当前状态
 
-- `internal/handler` 统一处理 `orchids` / `warp` / `puter` 的 `/v1/messages` 与 `/v1/chat/completions`
+- `internal/handler` 统一处理 `warp` / `puter` 的 `/v1/messages` 与 `/v1/chat/completions`
 - `internal/grok` 独立处理 `grok` 的 `/v1/chat/completions`、`/v1/images/*`、`/v1/files/*`
 - 模型管理支持按通道刷新：`/api/models/refresh`
 - Puter 非流式 Claude Messages 已覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result` 回归
@@ -26,7 +26,6 @@
 
 | 通道 | 对外入口 |
 |---|---|
-| `orchids` | `/orchids/v1/messages`、`/orchids/v1/chat/completions` |
 | `warp` | `/warp/v1/messages`、`/warp/v1/chat/completions` |
 | `puter` | `/puter/v1/messages`、`/puter/v1/chat/completions` |
 | `grok` | `/grok/v1/chat/completions`、`/grok/v1/images/*`、`/grok/v1/files/*` |
@@ -43,7 +42,6 @@
 - [API 参考](docs/api-reference.md)
 - [配置说明](docs/configuration.md)
 - [部署指南](docs/deployment.md)
-- [请求流程](docs/ORCHIDS_API_FLOW.md)
 - [Grok 与 grok2api 对齐清单](docs/grok2api-parity-checklist.md)
 
 ## 环境要求
@@ -155,7 +153,6 @@ go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions
 
 当前各通道模型来源：
 
-- `orchids`：账号上游 `/v1/models`，失败时退回公开页面/内置列表
 - `warp`：账号 GraphQL 发现结果，失败时退回内置种子
 - `puter`：Puter 公开模型列表 + 账号 test_mode 保守验证
 - `grok`：内置支持列表 + 现存模型 + 账号 console 探测
@@ -174,13 +171,11 @@ go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions
 
 ### Claude Messages 风格
 
-- `POST /orchids/v1/messages`
 - `POST /warp/v1/messages`
 - `POST /puter/v1/messages`
 
 ### OpenAI Chat Completions 风格
 
-- `POST /orchids/v1/chat/completions`
 - `POST /warp/v1/chat/completions`
 - `POST /puter/v1/chat/completions`
 - `POST /grok/v1/chat/completions`

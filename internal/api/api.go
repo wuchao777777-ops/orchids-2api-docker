@@ -48,8 +48,6 @@ type API struct {
 	checkSem         chan struct{}
 }
 
-
-
 var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
 	client := puter.NewFromAccount(acc, cfg)
 	defer client.Close()
@@ -311,6 +309,15 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 		return ""
 	}
 	return accountType + ":" + token
+}
+
+func isSupportedAccountType(accountType string) bool {
+	switch strings.ToLower(strings.TrimSpace(accountType)) {
+	case "warp", "puter", "grok":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.Account, excludeID int64) (*store.Account, error) {
@@ -845,8 +852,8 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "account_type is required", http.StatusBadRequest)
 			return
 		}
-		if strings.EqualFold(acc.AccountType, "orchids") {
-			http.Error(w, "orchids accounts are no longer supported", http.StatusBadRequest)
+		if !isSupportedAccountType(acc.AccountType) {
+			http.Error(w, "unsupported account type", http.StatusBadRequest)
 			return
 		}
 		if strings.EqualFold(acc.AccountType, "warp") {
@@ -1123,8 +1130,8 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "account_type is required", http.StatusBadRequest)
 			return
 		}
-		if strings.EqualFold(acc.AccountType, "orchids") {
-			http.Error(w, "orchids accounts are no longer supported", http.StatusBadRequest)
+		if !isSupportedAccountType(acc.AccountType) {
+			http.Error(w, "unsupported account type", http.StatusBadRequest)
 			return
 		}
 		if strings.EqualFold(acc.AccountType, "warp") {
@@ -1263,7 +1270,7 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 			result.Skipped++
 			continue
 		}
-		if strings.EqualFold(acc.AccountType, "orchids") {
+		if !isSupportedAccountType(acc.AccountType) {
 			result.Skipped++
 			continue
 		}

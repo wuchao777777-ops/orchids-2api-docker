@@ -35,12 +35,6 @@ type refundingErrorUpstreamEdge struct {
 	refundReasons []string
 }
 
-type directErrorUpstreamEdge struct {
-	err             error
-	calls           int
-	sawNilOnMessage bool
-}
-
 type blockingUpstreamEdge struct {
 	events    []upstream.SSEMessage
 	entered   chan struct{}
@@ -67,21 +61,6 @@ func (m *refundingErrorUpstreamEdge) SendRequestWithPayload(ctx context.Context,
 func (m *refundingErrorUpstreamEdge) RefundCredits(ctx context.Context, reason string) error {
 	m.refundReasons = append(m.refundReasons, reason)
 	return nil
-}
-
-func (m *directErrorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	m.calls++
-	m.sawNilOnMessage = onMessage == nil
-	if req.DirectSSE != nil {
-		req.DirectSSE.ObserveStopReason("error")
-		req.DirectSSE.WriteDirectSSE("error", []byte(`{"type":"error","error":{"type":"error","code":"bad_request","message":"boom"}}`), true)
-		req.DirectSSE.FinishDirectSSE("error")
-	}
-	return m.err
-}
-
-func (m *directErrorUpstreamEdge) OwnsFinalSSELifecycle() bool {
-	return true
 }
 
 func (m *blockingUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -111,7 +90,7 @@ func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
 	b, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec, req)
 	out := rec.Body.String()
 	if !strings.Contains(out, "hello") {
@@ -251,7 +230,7 @@ func TestHandleMessages_Dedup_NonStream(t *testing.T) {
 
 	// first request
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec1, req1)
 	if rec1.Code != 200 {
 		t.Fatalf("expected 200, got %d", rec1.Code)
@@ -259,7 +238,7 @@ func TestHandleMessages_Dedup_NonStream(t *testing.T) {
 
 	// second request within dedup window
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec2, req2)
 	if rec2.Code != 200 {
 		t.Fatalf("expected 200, got %d", rec2.Code)
@@ -289,7 +268,7 @@ func TestHandleMessages_Dedup_Stream(t *testing.T) {
 
 	// first request
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec1, req1)
 	if rec1.Code != 200 {
 		t.Fatalf("expected 200, got %d", rec1.Code)
@@ -297,7 +276,7 @@ func TestHandleMessages_Dedup_Stream(t *testing.T) {
 
 	// second request within dedup window
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec2, req2)
 	if rec2.Code != 200 {
 		t.Fatalf("expected 200, got %d", rec2.Code)
@@ -336,7 +315,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 	b, _ := json.Marshal(payload)
 
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec1, req1)
 	if rec1.Code != 200 {
 		t.Fatalf("expected first request 200, got %d", rec1.Code)
@@ -346,7 +325,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 	}
 
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec2, req2)
 	if rec2.Code != 200 {
 		t.Fatalf("expected second request 200, got %d", rec2.Code)
@@ -382,7 +361,7 @@ func TestHandleMessages_Dedup_Stream_StainlessRetryInFlightReturnsExplicitError(
 	b, _ := json.Marshal(payload)
 
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	done1 := make(chan struct{})
 	go func() {
 		h.HandleMessages(rec1, req1)
@@ -392,7 +371,7 @@ func TestHandleMessages_Dedup_Stream_StainlessRetryInFlightReturnsExplicitError(
 	<-blocking.entered
 
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	req2.Header.Set("X-Stainless-Retry-Count", "1")
 	h.HandleMessages(rec2, req2)
 
@@ -431,14 +410,14 @@ func TestHandleMessages_Dedup_Stream_StainlessRetryAfterFinishReturnsConflict(t 
 	b, _ := json.Marshal(payload)
 
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec1, req1)
 	if rec1.Code != http.StatusOK {
 		t.Fatalf("expected first request 200, got %d", rec1.Code)
 	}
 
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
 	req2.Header.Set("X-Stainless-Retry-Count", "1")
 	h.HandleMessages(rec2, req2)
 
@@ -578,7 +557,7 @@ func TestHandleMessages_Dedup_SemanticBodyDriftWhileInFlight(t *testing.T) {
 	bodyB, _ := json.Marshal(payloadB)
 
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(bodyA))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(bodyA))
 	done1 := make(chan struct{})
 	go func() {
 		h.HandleMessages(rec1, req1)
@@ -588,7 +567,7 @@ func TestHandleMessages_Dedup_SemanticBodyDriftWhileInFlight(t *testing.T) {
 	<-blocking.entered
 
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(bodyB))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(bodyB))
 	h.HandleMessages(rec2, req2)
 	if rec2.Code != 200 {
 		t.Fatalf("expected 200, got %d", rec2.Code)
@@ -646,7 +625,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressToolResultFollowup(t *testing.T) {
 	bodyB, _ := json.Marshal(payloadWithToolResult("file two"))
 
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(bodyA))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(bodyA))
 	h.HandleMessages(rec1, req1)
 	if rec1.Code != 200 {
 		t.Fatalf("expected first request 200, got %d", rec1.Code)
@@ -656,7 +635,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressToolResultFollowup(t *testing.T) {
 	}
 
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(bodyB))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(bodyB))
 	h.HandleMessages(rec2, req2)
 	if rec2.Code != 200 {
 		t.Fatalf("expected second request 200, got %d", rec2.Code)

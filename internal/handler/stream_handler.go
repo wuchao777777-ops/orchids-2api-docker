@@ -16,7 +16,6 @@ import (
 
 	"github.com/goccy/go-json"
 
-	"orchids-api/internal/toolname"
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
@@ -24,10 +23,10 @@ import (
 	"orchids-api/internal/perf"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
+	"orchids-api/internal/toolname"
 	"orchids-api/internal/upstream"
 )
 
-var orchidsToolMarkerRegex = regexp.MustCompile(`Used tool: (\w+)\s+with input: (\{.*\})`)
 var gitCPathRegex = regexp.MustCompile(`(?i)git\s+-C\s+((?:"[^"]+"|'[^']+'|[^\s;&|]+))\s+`)
 
 const (
@@ -62,7 +61,6 @@ var (
 		"content_block_start": []byte("content_block_start"),
 		"content_block_delta": []byte("content_block_delta"),
 		"content_block_stop":  []byte("content_block_stop"),
-		"fs_operation":        []byte("fs_operation"),
 	}
 	quotedPathRegex       = regexp.MustCompile(`"([^"\n\r]+)"`)
 	windowsDrivePathRegex = regexp.MustCompile(`(?i)\b[a-z]:[\\/]`)
@@ -79,27 +77,6 @@ func mapKeys(m map[string]interface{}) []string {
 	}
 	// Order isn't critical; keep lightweight (avoid importing sort).
 	return keys
-}
-
-type directToolUseState struct {
-	id    string
-	name  string
-	input *strings.Builder
-}
-
-func marshalEventPayloadBytes(msg upstream.SSEMessage) ([]byte, error) {
-	if len(msg.RawJSON) > 0 {
-		return msg.RawJSON, nil
-	}
-	return json.Marshal(msg.Event)
-}
-
-func marshalEventPayload(msg upstream.SSEMessage) (string, error) {
-	raw, err := marshalEventPayloadBytes(msg)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 func writeSSEFrame(w io.Writer, event, data string) error {
@@ -166,10 +143,8 @@ func shouldFlushSSEImmediately(event, data string) bool {
 		return true
 	case "content_block_delta":
 		return strings.Contains(data, `"type":"text_delta"`)
-	case "fs_operation":
-		return false
 	}
-	return !strings.HasPrefix(event, "coding_agent.")
+	return true
 }
 
 func (h *streamHandler) flushSSEWithLenLocked(event string, dataLen int, immediate bool, force bool) {
@@ -201,10 +176,8 @@ func shouldFlushSSEImmediatelyBytes(event string, data []byte) bool {
 		return true
 	case "content_block_delta":
 		return bytes.Contains(data, sseTextDeltaMarker)
-	case "fs_operation":
-		return false
 	}
-	return !strings.HasPrefix(event, "coding_agent.")
+	return true
 }
 
 func (h *streamHandler) flushSSEBytesLocked(event string, data []byte, force bool) {
@@ -259,7 +232,6 @@ type streamHandler struct {
 	// Buffers and Builders
 	responseText          *strings.Builder
 	outputEstimator       tiktoken.Estimator
-	writeChunkBuffer      *strings.Builder
 	textBlockBuilders     map[int]*strings.Builder
 	thinkingBlockBuilders map[int]*strings.Builder
 	thinkingBlockSigs     map[int]string
@@ -276,26 +248,21 @@ type streamHandler struct {
 	ssePayloadScratch     []byte
 
 	// Tool Handling (proxy mode only)
-	toolBlocks                map[string]int
-	pendingToolCalls          []toolCall
-	toolInputNames            map[string]string
-	toolInputBuffers          map[string]*strings.Builder
-	toolInputHadDelta         map[string]bool
-	pendingDirectToolUses     map[int]*directToolUseState
-	toolCallHandled           map[string]bool
-	toolCallEmitted           map[string]struct{}
-	currentToolInputID        string
-	toolCallCount             int
-	skippedDirectBlockIndices map[int]struct{}
-	suppressedToolCalls       int
-	bashCallDedup             map[string]struct{}
-	seedToolDedup             map[string]struct{}
-	toolDedupCount            int
-	toolDedupKeys             map[string]int
-	introDedup                map[string]struct{}
-
-	// Throttling
-	lastScanTime time.Time
+	toolBlocks          map[string]int
+	pendingToolCalls    []toolCall
+	toolInputNames      map[string]string
+	toolInputBuffers    map[string]*strings.Builder
+	toolInputHadDelta   map[string]bool
+	toolCallHandled     map[string]bool
+	toolCallEmitted     map[string]struct{}
+	currentToolInputID  string
+	toolCallCount       int
+	suppressedToolCalls int
+	bashCallDedup       map[string]struct{}
+	seedToolDedup       map[string]struct{}
+	toolDedupCount      int
+	toolDedupKeys       map[string]int
+	introDedup          map[string]struct{}
 
 	// Callbacks
 	onConversationID func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
@@ -342,35 +309,32 @@ func newStreamHandler(
 		outputTokenMode:  outputTokenMode,
 		responseFormat:   responseFormat,
 
-		blockIndex:                -1,
-		toolBlocks:                make(map[string]int),
-		responseText:              perf.AcquireStringBuilder(),
-		writeChunkBuffer:          perf.AcquireStringBuilder(),
-		textBlockBuilders:         make(map[int]*strings.Builder),
-		thinkingBlockBuilders:     make(map[int]*strings.Builder),
-		thinkingBlockSigs:         make(map[int]string),
-		toolInputNames:            make(map[string]string),
-		toolInputBuffers:          make(map[string]*strings.Builder),
-		toolInputHadDelta:         make(map[string]bool),
-		pendingDirectToolUses:     make(map[int]*directToolUseState),
-		toolCallHandled:           make(map[string]bool),
-		toolCallEmitted:           make(map[string]struct{}),
-		skippedDirectBlockIndices: make(map[int]struct{}),
-		bashCallDedup:             make(map[string]struct{}),
-		seedToolDedup:             make(map[string]struct{}),
-		toolDedupKeys:             make(map[string]int),
-		introDedup:                make(map[string]struct{}),
-		allowedToolNames:          make(map[string]struct{}),
-		msgID:                     responseMessageID(responseFormat),
-		startTime:                 time.Now(),
-		currentTextIndex:          -1,
-		activeThinkingBlockIndex:  -1,
-		activeThinkingSSEIndex:    -1,
-		activeTextBlockIndex:      -1,
-		activeTextSSEIndex:        -1,
-		activeBlockType:           "",
-		openAIChunkScratch:        make([]byte, 0, 512),
-		ssePayloadScratch:         make([]byte, 0, 512),
+		blockIndex:               -1,
+		toolBlocks:               make(map[string]int),
+		responseText:             perf.AcquireStringBuilder(),
+		textBlockBuilders:        make(map[int]*strings.Builder),
+		thinkingBlockBuilders:    make(map[int]*strings.Builder),
+		thinkingBlockSigs:        make(map[int]string),
+		toolInputNames:           make(map[string]string),
+		toolInputBuffers:         make(map[string]*strings.Builder),
+		toolInputHadDelta:        make(map[string]bool),
+		toolCallHandled:          make(map[string]bool),
+		toolCallEmitted:          make(map[string]struct{}),
+		bashCallDedup:            make(map[string]struct{}),
+		seedToolDedup:            make(map[string]struct{}),
+		toolDedupKeys:            make(map[string]int),
+		introDedup:               make(map[string]struct{}),
+		allowedToolNames:         make(map[string]struct{}),
+		msgID:                    responseMessageID(responseFormat),
+		startTime:                time.Now(),
+		currentTextIndex:         -1,
+		activeThinkingBlockIndex: -1,
+		activeThinkingSSEIndex:   -1,
+		activeTextBlockIndex:     -1,
+		activeTextSSEIndex:       -1,
+		activeBlockType:          "",
+		openAIChunkScratch:       make([]byte, 0, 512),
+		ssePayloadScratch:        make([]byte, 0, 512),
 	}
 	return h
 }
@@ -422,7 +386,6 @@ func (h *streamHandler) rewriteWebToolCallToClient(name, input string) (string, 
 
 func (h *streamHandler) release() {
 	perf.ReleaseStringBuilder(h.responseText)
-	perf.ReleaseStringBuilder(h.writeChunkBuffer)
 	for _, sb := range h.textBlockBuilders {
 		perf.ReleaseStringBuilder(sb)
 	}
@@ -431,11 +394,6 @@ func (h *streamHandler) release() {
 	}
 	for _, sb := range h.toolInputBuffers {
 		perf.ReleaseStringBuilder(sb)
-	}
-	for _, item := range h.pendingDirectToolUses {
-		if item != nil && item.input != nil {
-			perf.ReleaseStringBuilder(item.input)
-		}
 	}
 }
 
@@ -833,13 +791,6 @@ func (h *streamHandler) resetRoundState() {
 		perf.ReleaseStringBuilder(sb)
 	}
 	clear(h.toolInputBuffers)
-	for _, item := range h.pendingDirectToolUses {
-		if item != nil && item.input != nil {
-			perf.ReleaseStringBuilder(item.input)
-		}
-	}
-	clear(h.pendingDirectToolUses)
-
 	clear(h.toolInputHadDelta)
 	clear(h.toolCallHandled)
 	clear(h.toolCallEmitted)
@@ -855,7 +806,6 @@ func (h *streamHandler) resetRoundState() {
 	h.thinkingTokens = 0
 	h.completionLogged = false
 	h.outputEstimator.Reset()
-	h.writeChunkBuffer.Reset()
 	h.useUpstreamUsage = false
 	h.finalStopReason = ""
 	h.hasTextOutput = false
@@ -945,429 +895,6 @@ func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Messag
 		h.seedToolDedup[key] = struct{}{}
 		h.bashCallDedup[key] = struct{}{}
 	}
-}
-
-func (h *streamHandler) writeUpstreamEventSSE(msg upstream.SSEMessage) {
-	if !h.isStream {
-		return
-	}
-	payload, err := marshalEventPayloadBytes(msg)
-	if err != nil {
-		return
-	}
-	h.writeSSEBytes(msg.Type, payload)
-}
-
-func directSSEImmediate(event string, payload []byte) bool {
-	if event != "content_block_delta" {
-		return true
-	}
-	return bytes.Contains(payload, sseTextDeltaMarker)
-}
-
-func (h *streamHandler) WriteDirectSSE(event string, payload []byte, final bool) {
-	if !h.isStream || len(payload) == 0 {
-		return
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !final && h.hasReturn {
-		return
-	}
-	immediate := directSSEImmediate(event, payload)
-	if final {
-		h.writeFinalSSEBytesLockedWithHint(event, payload, immediate)
-		return
-	}
-	h.writeSSEBytesLockedWithHint(event, payload, immediate)
-}
-
-func (h *streamHandler) ObserveTextDelta(text string) {
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	h.markTextOutput()
-	h.addOutputTokens(text)
-}
-
-func (h *streamHandler) ObserveThinkingDelta(text string) {
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	h.addThinkingTokens(text)
-}
-
-func (h *streamHandler) ObserveToolCall(name, input string) {
-	h.addOutputTokens(name)
-	h.addOutputTokens(input)
-	h.mu.Lock()
-	h.toolCallCount++
-	h.mu.Unlock()
-}
-
-func (h *streamHandler) ObserveUsage(inputTokens, outputTokens int) {
-	h.setUsageTokens(inputTokens, outputTokens)
-}
-
-func (h *streamHandler) ObserveStopReason(stopReason string) {
-	stopReason = strings.TrimSpace(stopReason)
-	if stopReason == "" {
-		return
-	}
-	h.mu.Lock()
-	h.finalStopReason = stopReason
-	h.mu.Unlock()
-}
-
-func (h *streamHandler) FinishDirectSSE(stopReason string) {
-	stopReason = strings.TrimSpace(stopReason)
-	if stopReason == "" {
-		stopReason = "end_turn"
-	}
-
-	h.mu.Lock()
-	if h.hasReturn {
-		h.mu.Unlock()
-		return
-	}
-	h.hasReturn = true
-	if strings.TrimSpace(h.finalStopReason) == "" {
-		h.finalStopReason = stopReason
-	}
-	stopReason = h.finalStopReason
-	h.mu.Unlock()
-
-	h.finalizeOutputTokens()
-	h.finalizeCompletion(stopReason)
-}
-
-func directSSEEventType(event map[string]interface{}) string {
-	if event == nil {
-		return ""
-	}
-	if value, ok := event["type"].(string); ok {
-		return strings.TrimSpace(value)
-	}
-	return ""
-}
-
-func directSSEIndex(event map[string]interface{}) int {
-	if event == nil {
-		return -1
-	}
-	switch value := event["index"].(type) {
-	case int:
-		return value
-	case int32:
-		return int(value)
-	case int64:
-		return int(value)
-	case float64:
-		return int(value)
-	case json.Number:
-		if n, err := value.Int64(); err == nil {
-			return int(n)
-		}
-	}
-	return -1
-}
-
-func (h *streamHandler) handleDirectFinalSSEEvent(msg upstream.SSEMessage) bool {
-	switch msg.Type {
-	case "message_start":
-		event := msg.Event
-		if directSSEEventType(event) != "message_start" {
-			return false
-		}
-		h.writeUpstreamEventSSE(msg)
-		return true
-
-	case "message_delta":
-		event := msg.Event
-		if directSSEEventType(event) != "message_delta" {
-			return false
-		}
-		if delta, ok := event["delta"].(map[string]interface{}); ok {
-			if stopReason, ok := delta["stop_reason"].(string); ok && strings.TrimSpace(stopReason) != "" {
-				h.mu.Lock()
-				h.finalStopReason = strings.TrimSpace(stopReason)
-				h.mu.Unlock()
-			}
-		}
-		if usage, ok := event["usage"].(map[string]interface{}); ok {
-			if raw, ok := usage["output_tokens"]; ok {
-				switch value := raw.(type) {
-				case int:
-					h.setUsageTokens(-1, value)
-				case float64:
-					h.setUsageTokens(-1, int(value))
-				}
-			}
-		}
-		h.writeUpstreamEventSSE(msg)
-		return true
-
-	case "message_stop":
-		event := msg.Event
-		if directSSEEventType(event) != "message_stop" {
-			return false
-		}
-		h.writeUpstreamEventSSE(msg)
-		stopReason := "end_turn"
-		h.mu.Lock()
-		if strings.TrimSpace(h.finalStopReason) != "" {
-			stopReason = h.finalStopReason
-		}
-		h.mu.Unlock()
-		if !h.isStream {
-			h.finishResponse(stopReason)
-			return true
-		}
-		h.mu.Lock()
-		if !h.hasReturn {
-			h.hasReturn = true
-			h.finalStopReason = stopReason
-		} else if strings.TrimSpace(h.finalStopReason) == "" {
-			h.finalStopReason = stopReason
-		}
-		h.mu.Unlock()
-		h.finalizeOutputTokens()
-		h.finalizeCompletion(stopReason)
-		return true
-
-	case "content_block_start":
-		event := msg.Event
-		if directSSEEventType(event) != "content_block_start" {
-			return false
-		}
-		index := directSSEIndex(event)
-		if index < 0 {
-			return false
-		}
-		contentBlock, _ := event["content_block"].(map[string]interface{})
-		blockType, _ := contentBlock["type"].(string)
-		blockType = strings.TrimSpace(blockType)
-		if blockType == "thinking" && h.suppressThinking {
-			h.mu.Lock()
-			h.skippedDirectBlockIndices[index] = struct{}{}
-			h.mu.Unlock()
-			return true
-		}
-		if blockType == "tool_use" {
-			toolID, _ := contentBlock["id"].(string)
-			toolName, _ := contentBlock["name"].(string)
-			toolID = strings.TrimSpace(toolID)
-			toolName = strings.TrimSpace(toolName)
-			if toolID == "" || toolName == "" {
-				return true
-			}
-
-			h.mu.Lock()
-			if index > h.blockIndex {
-				h.blockIndex = index
-			}
-			state, exists := h.pendingDirectToolUses[index]
-			if !exists || state == nil {
-				state = &directToolUseState{input: perf.AcquireStringBuilder()}
-				h.pendingDirectToolUses[index] = state
-			}
-			state.id = toolID
-			state.name = toolName
-			h.mu.Unlock()
-			return true
-		}
-
-		h.mu.Lock()
-		h.mu.Unlock()
-		if !h.isStream && (blockType == "thinking" || blockType == "text") {
-			ensuredIdx := h.ensureBlock(blockType)
-			if ensuredIdx >= 0 {
-				h.mu.Lock()
-				if index > h.blockIndex {
-					h.blockIndex = index
-				}
-				switch blockType {
-				case "thinking":
-					h.activeThinkingSSEIndex = index
-					h.activeBlockType = "thinking"
-				case "text":
-					h.activeTextSSEIndex = index
-					h.activeBlockType = "text"
-				}
-				h.mu.Unlock()
-			}
-		} else {
-			h.mu.Lock()
-			if index > h.blockIndex {
-				h.blockIndex = index
-			}
-			switch blockType {
-			case "thinking":
-				h.activeThinkingSSEIndex = index
-				h.activeBlockType = "thinking"
-			case "text":
-				h.activeTextSSEIndex = index
-				h.activeBlockType = "text"
-			}
-			h.mu.Unlock()
-		}
-
-		h.writeUpstreamEventSSE(msg)
-		return true
-
-	case "content_block_delta":
-		event := msg.Event
-		if directSSEEventType(event) != "content_block_delta" {
-			return false
-		}
-		index := directSSEIndex(event)
-		if index < 0 {
-			return false
-		}
-
-		h.mu.Lock()
-		_, skipped := h.skippedDirectBlockIndices[index]
-		directToolUse := h.pendingDirectToolUses[index]
-		h.mu.Unlock()
-		if skipped {
-			return true
-		}
-		if directToolUse != nil {
-			delta, _ := event["delta"].(map[string]interface{})
-			deltaType, _ := delta["type"].(string)
-			if strings.TrimSpace(deltaType) != "input_json_delta" {
-				return true
-			}
-			partialJSON, _ := delta["partial_json"].(string)
-			if partialJSON == "" {
-				return true
-			}
-			h.mu.Lock()
-			if current := h.pendingDirectToolUses[index]; current != nil && current.input != nil {
-				current.input.WriteString(partialJSON)
-			}
-			h.mu.Unlock()
-			return true
-		}
-
-		delta, _ := event["delta"].(map[string]interface{})
-		deltaType, _ := delta["type"].(string)
-		switch strings.TrimSpace(deltaType) {
-		case "text_delta":
-			text, _ := delta["text"].(string)
-			if text != "" {
-				h.markTextOutput()
-				h.addOutputTokens(text)
-				if !h.isStream {
-					h.mu.Lock()
-					internalIdx := h.activeTextBlockIndex
-					if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
-						builder, ok := h.textBlockBuilders[internalIdx]
-						if !ok {
-							builder = perf.AcquireStringBuilder()
-							h.textBlockBuilders[internalIdx] = builder
-						}
-						builder.WriteString(text)
-					}
-					h.responseText.WriteString(text)
-					h.mu.Unlock()
-				}
-			}
-		case "thinking_delta":
-			text, _ := delta["thinking"].(string)
-			if text != "" && h.isStream {
-				h.addThinkingTokens(text)
-			}
-			if text != "" && !h.isStream {
-				h.mu.Lock()
-				internalIdx := h.activeThinkingBlockIndex
-				if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
-					builder, ok := h.thinkingBlockBuilders[internalIdx]
-					if !ok {
-						builder = perf.AcquireStringBuilder()
-						h.thinkingBlockBuilders[internalIdx] = builder
-					}
-					builder.WriteString(text)
-				}
-				h.mu.Unlock()
-			}
-		}
-
-		h.writeUpstreamEventSSE(msg)
-		return true
-
-	case "content_block_stop":
-		event := msg.Event
-		if directSSEEventType(event) != "content_block_stop" {
-			return false
-		}
-		index := directSSEIndex(event)
-		if index < 0 {
-			return false
-		}
-
-		h.mu.Lock()
-		if _, skipped := h.skippedDirectBlockIndices[index]; skipped {
-			delete(h.skippedDirectBlockIndices, index)
-			h.mu.Unlock()
-			return true
-		}
-		if pending := h.pendingDirectToolUses[index]; pending != nil {
-			delete(h.pendingDirectToolUses, index)
-			h.mu.Unlock()
-
-			inputStr := ""
-			if pending.input != nil {
-				inputStr = strings.TrimSpace(pending.input.String())
-				perf.ReleaseStringBuilder(pending.input)
-			}
-			toolID := strings.TrimSpace(pending.id)
-			toolName, normalizedInput := normalizeUpstreamToolCall(pending.name, inputStr, h.workdir)
-			if toolID == "" {
-				return true
-			}
-			if toolName == "" {
-				return true
-			}
-			if h.toolCallHandled[toolID] {
-				return true
-			}
-			call := toolCall{id: toolID, name: toolName, input: normalizedInput}
-			if !h.shouldAcceptDirectToolCall(call) {
-				return true
-			}
-			h.toolCallHandled[toolID] = true
-			if h.isStream {
-				if _, ok := h.toolCallEmitted[toolID]; ok {
-					return true
-				}
-				h.toolCallEmitted[toolID] = struct{}{}
-				h.toolCallCount++
-				h.emitToolCallStream(call, index, false)
-				return true
-			}
-			h.handleToolCallAfterChecks(call)
-			return true
-		}
-		if h.activeTextSSEIndex == index {
-			h.activeTextSSEIndex = -1
-			if h.activeBlockType == "text" {
-				h.activeBlockType = ""
-			}
-		}
-		if h.activeThinkingSSEIndex == index {
-			h.activeThinkingSSEIndex = -1
-			if h.activeBlockType == "thinking" {
-				h.activeBlockType = ""
-			}
-		}
-		h.mu.Unlock()
-
-		h.writeUpstreamEventSSE(msg)
-		return true
-	}
-
-	return false
 }
 
 func stringifyToolInput(input interface{}) string {
@@ -2424,9 +1951,6 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		if len(blockStopData) > 0 {
 			h.writeFinalSSEBytes("content_block_stop", blockStopData)
 		}
-		if stopReason != "tool_use" {
-			h.emitWriteChunkFallbackIfNeeded()
-		}
 		h.flushPendingToolCalls(stopReason)
 		h.finalizeOutputTokens()
 		h.mu.Lock()
@@ -2440,9 +1964,6 @@ func (h *streamHandler) finishResponse(stopReason string) {
 			h.writeFinalSSEBytes("message_stop", stopData)
 		}
 	} else {
-		if stopReason != "tool_use" {
-			h.emitWriteChunkFallbackIfNeeded()
-		}
 		h.flushPendingToolCalls(stopReason)
 		h.finalizeOutputTokens()
 	}
@@ -2642,33 +2163,6 @@ func (h *streamHandler) markTextOutput() {
 	h.mu.Unlock()
 }
 
-func (h *streamHandler) emitWriteChunkFallbackIfNeeded() {
-	if h.writeChunkBuffer == nil {
-		return
-	}
-
-	h.mu.Lock()
-	if h.hasTextOutput || h.writeChunkBuffer.Len() == 0 {
-		h.mu.Unlock()
-		return
-	}
-	text := h.writeChunkBuffer.String()
-	h.hasTextOutput = true
-	h.mu.Unlock()
-
-	if h.isStream {
-		h.emitTextBlockWithMode(text, true)
-		return
-	}
-
-	h.mu.Lock()
-	h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
-		"type": "text",
-		"text": text,
-	})
-	h.mu.Unlock()
-}
-
 func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
 	h.mu.Lock()
 	h.pendingToolCalls = append(h.pendingToolCalls, call)
@@ -2677,18 +2171,10 @@ func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
 }
 
 func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
-	return h.shouldAcceptToolCallWithFilter(call, true)
-}
-
-func (h *streamHandler) shouldAcceptDirectToolCall(call toolCall) bool {
-	return h.shouldAcceptToolCallWithFilter(call, false)
-}
-
-func (h *streamHandler) shouldAcceptToolCallWithFilter(call toolCall, enforceAllowedTools bool) bool {
 	h.mu.Lock()
 	disallowToolCalls := h.disallowToolCalls
 	allowedTool := true
-	if enforceAllowedTools && len(h.allowedToolNames) > 0 {
+	if len(h.allowedToolNames) > 0 {
 		lowerName := strings.ToLower(strings.TrimSpace(call.name))
 		_, allowedTool = h.allowedToolNames[lowerName]
 		if !allowedTool {
@@ -2714,7 +2200,7 @@ func (h *streamHandler) shouldAcceptToolCallWithFilter(call toolCall, enforceAll
 		}
 		return false
 	}
-	if enforceAllowedTools && !allowedTool {
+	if !allowedTool {
 		if h.config != nil && h.config.DebugEnabled {
 			slog.Debug("tool call suppressed because it is not declared in the current request", "tool", call.name, "input", call.input)
 		}
@@ -3192,8 +2678,7 @@ func (h *streamHandler) hasAnyOutput() bool {
 		len(h.pendingToolCalls) > 0 ||
 		len(h.toolCallEmitted) > 0 ||
 		len(h.contentBlocks) > 0 ||
-		h.responseText.Len() > 0 ||
-		h.writeChunkBuffer.Len() > 0
+		h.responseText.Len() > 0
 	h.mu.Unlock()
 	if has {
 		return true
@@ -3320,21 +2805,6 @@ func extractThinkingSignature(event map[string]interface{}) string {
 	return ""
 }
 
-func extractEventMessage(event map[string]interface{}, fallback string) string {
-	if event == nil {
-		return fallback
-	}
-	if data, ok := event["data"].(map[string]interface{}); ok {
-		if msg, ok := data["message"].(string); ok && strings.TrimSpace(msg) != "" {
-			return strings.TrimSpace(msg)
-		}
-	}
-	if msg, ok := event["message"].(string); ok && strings.TrimSpace(msg) != "" {
-		return strings.TrimSpace(msg)
-	}
-	return fallback
-}
-
 func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	if logutil.VerboseDiagnosticsEnabled() && msg.Type != "content_block_delta" {
 		fields := []any{"type", msg.Type}
@@ -3378,10 +2848,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 	}
 	if h.suppressThinking {
-		if strings.HasPrefix(eventKey, "model.reasoning-") ||
-			strings.HasPrefix(eventKey, "coding_agent.reasoning") ||
-			eventKey == "coding_agent.start" ||
-			eventKey == "coding_agent.initializing" {
+		if strings.HasPrefix(eventKey, "model.reasoning-") {
 			return
 		}
 	}
@@ -3405,10 +2872,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		return 0, false
 	}
 
-	if h.handleDirectFinalSSEEvent(msg) {
-		return
-	}
-
 	switch eventKey {
 	case "model.actual_model":
 		slog.Warn("Ignoring upstream model substitution event")
@@ -3427,7 +2890,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			h.ensureBlock("thinking")
 		}
 
-	case "model.reasoning-delta", "coding_agent.reasoning.chunk":
+	case "model.reasoning-delta":
 		sig := ""
 		if h.pendingThinkingSig == "" {
 			sig = extractThinkingSignature(msg.Event)
@@ -3437,15 +2900,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		} else {
 			sig = h.pendingThinkingSig
 		}
-		delta := ""
-		if msg.Type == "model" {
-			delta, _ = msg.Event["delta"].(string)
-		} else {
-			// coding_agent.reasoning.chunk
-			if data, ok := msg.Event["data"].(map[string]interface{}); ok {
-				delta, _ = data["text"].(string)
-			}
-		}
+		delta, _ := msg.Event["delta"].(string)
 		if delta == "" {
 			if sig != "" {
 				h.ensureBlock("thinking")
@@ -3501,46 +2956,13 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	case "model.text-start":
 		h.ensureBlock("text")
 
-	case "model.text-delta", "coding_agent.output_text.delta":
-		delta := ""
+	case "model.text-delta":
+		delta, _ := msg.Event["delta"].(string)
 		source := eventKey
-		if msg.Type == "model" {
-			delta, _ = msg.Event["delta"].(string)
-		} else {
-			// coding_agent.output_text.delta
-			delta, _ = msg.Event["delta"].(string)
-		}
 		if delta == "" {
 			return
 		}
 		delta = collapseDuplicatedIntroDelta(delta)
-
-		// Parse Orchids tool markers hidden in the text delta
-		if matches := orchidsToolMarkerRegex.FindStringSubmatch(delta); len(matches) > 2 {
-			toolName := matches[1]
-			toolInput := matches[2]
-			if h.config != nil && h.config.DebugEnabled {
-				slog.Debug("Orchids tool marker detected in text delta", "tool", toolName, "input", toolInput)
-			}
-			// Emit it as a structured tool call
-			h.handleMessage(upstream.SSEMessage{
-				Type: "model.tool-call",
-				Event: map[string]interface{}{
-					"toolName":   toolName,
-					"toolCallId": fmt.Sprintf("call_%d", time.Now().UnixNano()),
-					"input":      toolInput,
-				},
-			})
-			// If it's the exact content of the delta, we can skip the text delta entirely
-			if strings.TrimSpace(delta) == strings.TrimSpace(matches[0]) {
-				return
-			}
-			// Otherwise, remove the marker from the text
-			delta = strings.ReplaceAll(delta, matches[0], "")
-			if strings.TrimSpace(delta) == "" {
-				return
-			}
-		}
 
 		if h.shouldSkipIntroDelta(delta) {
 			return
@@ -3583,99 +3005,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	case "model.text-end":
 		h.closeActiveBlock()
-
-	case "coding_agent.start", "coding_agent.initializing", "init":
-		// Ensure a thinking block is open for these status updates when we already have signature or block
-		h.mu.Lock()
-		hasThinkingBlock := h.activeThinkingSSEIndex >= 0
-		h.mu.Unlock()
-		if hasThinkingBlock || h.pendingThinkingSig != "" {
-			h.ensureBlock("thinking")
-		}
-		h.writeUpstreamEventSSE(msg)
-		return
-
-	case "coding_agent.credits_exhausted":
-		errorMsg := extractEventMessage(msg.Event, "You have run out of credits. Please upgrade your plan to continue.")
-		h.closeActiveBlock()
-		h.InjectErrorText("Injecting credits exhausted message to client", errorMsg)
-		h.finishResponse("end_turn")
-		return
-
-	case "coding_agent.Write.started", "coding_agent.Edit.edit.started":
-		if h.isStream {
-			data, _ := msg.Event["data"].(map[string]interface{})
-			path, _ := data["file_path"].(string)
-			if !h.suppressThinking {
-				op := "Writing"
-				if strings.Contains(msg.Type, "Edit") {
-					op = "Editing"
-				}
-				h.ensureBlock("thinking")
-				h.emitThinkingDelta(fmt.Sprintf("\n[%s %s...]\n", op, path))
-
-				h.writeUpstreamEventSSE(msg)
-			}
-		}
-		return
-
-	case "coding_agent.Write.content.chunk", "coding_agent.Edit.edit.chunk":
-		if h.isStream {
-			data, _ := msg.Event["data"].(map[string]interface{})
-			text, _ := data["text"].(string)
-			if text != "" {
-				h.mu.Lock()
-				if h.writeChunkBuffer != nil {
-					h.writeChunkBuffer.WriteString(text)
-				}
-				h.mu.Unlock()
-				// In no-thinking mode, surface Orchids write chunks as normal text deltas
-				// so clients still see visible output instead of only internal events.
-				if h.suppressThinking {
-					h.emitTextDelta(text)
-				} else {
-					// Map Orchids code chunks to thinking blocks for standard UIs.
-					h.emitThinkingDelta(text)
-				}
-			}
-			if !h.suppressThinking {
-				h.writeUpstreamEventSSE(msg)
-			}
-		}
-		return
-
-	case "coding_agent.Write.content.completed", "coding_agent.Edit.edit.completed", "coding_agent.edit_file.completed":
-		if h.isStream {
-			if !h.suppressThinking {
-				h.emitThinkingDelta("\n[Done]\n")
-				h.writeUpstreamEventSSE(msg)
-			}
-		}
-		return
-
-	case "fs_operation":
-		// Throttle keep-alives and passthrough to avoid flooding
-		h.mu.Lock()
-		if time.Since(h.lastScanTime) < 1*time.Second {
-			h.mu.Unlock()
-			return
-		}
-		h.lastScanTime = time.Now()
-		h.mu.Unlock()
-
-		if logutil.VerboseDiagnosticsEnabled() {
-			slog.Debug("Upstream active", "op", msg.Event["operation"])
-		}
-		if h.isStream {
-			h.writeUpstreamEventSSE(msg)
-		} else {
-			h.writeKeepAlive()
-		}
-		return
-
-	case "fs_operation_result":
-		// Just pass through the event, no internal tool result handling in proxy mode
-		return
 
 	case "model.tool-input-start":
 		h.closeActiveBlock() // Tool input starts a separate block mechanism
@@ -3860,72 +3189,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		h.closeActiveBlock()
 		h.finishResponse(stopReason)
 	}
-}
-
-func (h *streamHandler) emitThinkingDelta(delta string) {
-	if delta == "" || h.suppressThinking {
-		return
-	}
-	h.mu.Lock()
-	sseIdx := h.activeThinkingSSEIndex
-	internalIdx := h.activeThinkingBlockIndex
-	h.mu.Unlock()
-
-	if sseIdx < 0 {
-		sseIdx = h.ensureBlock("thinking")
-		h.mu.Lock()
-		internalIdx = h.activeThinkingBlockIndex
-		h.mu.Unlock()
-	}
-
-	h.addOutputTokens(delta)
-
-	h.mu.Lock()
-	if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
-		builder, ok := h.thinkingBlockBuilders[internalIdx]
-		if !ok {
-			builder = perf.AcquireStringBuilder()
-			h.thinkingBlockBuilders[internalIdx] = builder
-		}
-		builder.WriteString(delta)
-	}
-	h.mu.Unlock()
-
-	h.writeSSEContentBlockDeltaThinking(sseIdx, delta, false)
-}
-
-func (h *streamHandler) emitTextDelta(delta string) {
-	if delta == "" {
-		return
-	}
-	h.markTextOutput()
-
-	h.mu.Lock()
-	sseIdx := h.activeTextSSEIndex
-	internalIdx := h.activeTextBlockIndex
-	h.mu.Unlock()
-
-	if sseIdx < 0 {
-		sseIdx = h.ensureBlock("text")
-		h.mu.Lock()
-		internalIdx = h.activeTextBlockIndex
-		h.mu.Unlock()
-	}
-
-	h.addOutputTokens(delta)
-
-	h.mu.Lock()
-	if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
-		builder, ok := h.textBlockBuilders[internalIdx]
-		if !ok {
-			builder = perf.AcquireStringBuilder()
-			h.textBlockBuilders[internalIdx] = builder
-		}
-		builder.WriteString(delta)
-	}
-	h.mu.Unlock()
-
-	h.writeSSEContentBlockDeltaText(sseIdx, delta, false)
 }
 
 // InjectErrorText injects an error message as a text delta into the stream or buffer.

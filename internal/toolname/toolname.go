@@ -145,10 +145,10 @@ func NormalizeToolNameFallback(name string) string {
 	return name
 }
 
-func MapToolNameToClient(orchidsName string, clientTools []interface{}, toolMapper *ToolMapper) string {
-	normalized := NormalizeToolName(orchidsName)
+func MapToolNameToClient(upstreamName string, clientTools []interface{}, toolMapper *ToolMapper) string {
+	normalized := NormalizeToolName(upstreamName)
 	if normalized.Original == "" {
-		return orchidsName
+		return upstreamName
 	}
 
 	tools := toolMapperClientTools(clientTools, toolMapper)
@@ -177,7 +177,7 @@ func MapToolNameToClient(orchidsName string, clientTools []interface{}, toolMapp
 		if name != "" {
 			if toolAliases := getToolAliases(tool); toolAliases != nil {
 				for _, alias := range toolAliases {
-					if alias == normalized.SnakeCase || alias == normalized.Lowercase || strings.EqualFold(alias, orchidsName) {
+					if alias == normalized.SnakeCase || alias == normalized.Lowercase || strings.EqualFold(alias, upstreamName) {
 						return name
 					}
 				}
@@ -213,7 +213,7 @@ func MapToolNameToClient(orchidsName string, clientTools []interface{}, toolMapp
 		}
 	}
 
-	return MapOrchidsToolToAnthropic(orchidsName)
+	return MapToolToAnthropic(upstreamName)
 }
 
 func TransformToolInput(toolName, clientName string, input map[string]interface{}) map[string]interface{} {
@@ -281,11 +281,11 @@ func TransformToolInput(toolName, clientName string, input map[string]interface{
 	return copyToolInput(input)
 }
 
-func MapOrchidsToolToAnthropic(orchidsName string) string {
-	if mapped, ok := orchidsToAnthropicMap[strings.TrimSpace(orchidsName)]; ok {
+func MapToolToAnthropic(upstreamName string) string {
+	if mapped, ok := anthropicToolNames[strings.TrimSpace(upstreamName)]; ok {
 		return mapped
 	}
-	return orchidsName
+	return upstreamName
 }
 
 func toolMapsFromInterfaces(clientTools []interface{}) []map[string]interface{} {
@@ -338,7 +338,7 @@ var toolAliases = map[string][]string{
 	"source":  {"input"},
 }
 
-var orchidsToAnthropicMap = map[string]string{
+var anthropicToolNames = map[string]string{
 	"str_replace_editor": "str_replace_editor",
 	"bash":               "bash",
 	"computer":           "computer",
@@ -398,7 +398,6 @@ func extractAliasStrings(raw interface{}) []string {
 	}
 	return out
 }
-
 
 func mapStringValue(msg map[string]interface{}, keys ...string) string {
 	for _, key := range keys {

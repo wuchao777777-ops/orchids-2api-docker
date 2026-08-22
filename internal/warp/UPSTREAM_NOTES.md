@@ -89,7 +89,7 @@ Current request construction mirrors upstream's `api::Request` shape:
   file, grep, MCP, subagent, document, prompt-suggestion, apply-diff, and
   search-codebase tools when tools are enabled.
 - `settings.supported_cli_agent_tools` follows upstream local-session defaults.
-- `mcp_context.servers` groups request-declared tools under an Orchids server.
+- `mcp_context.servers` groups request-declared tools under a client server.
 
 ## Model Discovery and Availability
 

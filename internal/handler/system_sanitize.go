@@ -20,7 +20,7 @@ func sanitizeSystemItems(system SystemItems, isWarp bool, isPuter bool, cfg *con
 		return system, false
 	}
 
-	// cc_entrypoint filtering was Orchids coding-agent specific; keep system text as-is.
+	// Preserve system text for passthrough providers.
 	mode := ccEntrypointModeKeep
 	_ = cfg
 	switch mode {

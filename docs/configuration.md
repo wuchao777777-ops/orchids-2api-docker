@@ -88,17 +88,10 @@ cp config.example.json config.json
 | `context_max_tokens` | `100000` | 上下文上限 |
 | `context_summary_max_tokens` | `800` | 摘要上限 |
 | `context_keep_turns` | `6` | 会话保留轮数 |
-| `orchids_api_version` | `2` | Orchids API 版本 |
-| `orchids_allow_run_command` | `true` | Orchids 允许命令工具 |
-| `orchids_run_allowlist` | `["*"]` | Orchids 命令白名单 |
-| `orchids_cc_entrypoint_mode` | `keep` | 系统内容保真：`keep`=原样透传（默认，不剥离 cc_entrypoint/不过滤 Claude Code 项）；`auto`=仅剥离 claude-vscode/claude-code 入口；`strip`=全部剥离 |
-| `orchids_fs_ignore` | `["debug-logs","data",".claude"]` | 忽略目录 |
 | `grok_api_base_url` | `https://grok.com` | Grok 基础地址 |
 | `warp_disable_tools` | `false` | Warp 工具默认开启 |
 | `warp_max_tool_results` | `10` | Warp 单轮工具结果上限 |
 | `warp_max_history_messages` | `20` | Warp 历史消息上限 |
-| `orchids_max_tool_results` | `10` | Orchids 单轮工具结果上限 |
-| `orchids_max_history_messages` | `20` | Orchids 历史消息上限 |
 | `stream` | `true` | Chat 默认流式 |
 | `image_nsfw` | `true` | 公共 imagine 默认 NSFW 开启 |
 | `public_enabled` | `true` | 公共页面默认开启 |
@@ -154,4 +147,3 @@ cp config.example.json config.json
 - `tool_call_mode`
 - `warp_tool_call_mode`
 - `disable_tool_filter`
-- `orchids_impl`

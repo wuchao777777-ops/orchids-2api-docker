@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
@@ -801,32 +800,6 @@ func TestWriteOpenAIFrame_Output(t *testing.T) {
 	}
 }
 
-func TestStreamHandler_WriteChunkBuffer_EmitsTextBlock(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	sh.writeChunkBuffer.WriteString("fallback hello")
-	sh.finishResponse("end_turn")
-
-	out := rec.buf.String()
-	if !strings.Contains(out, "event: content_block_start") {
-		t.Fatalf("expected content_block_start, got: %s", out)
-	}
-	if !strings.Contains(out, `"type":"text"`) {
-		t.Fatalf("expected text content block, got: %s", out)
-	}
-	if !strings.Contains(out, `"text":"fallback hello"`) {
-		t.Fatalf("expected buffered write chunk text delta, got: %s", out)
-	}
-	if !strings.Contains(out, "event: content_block_stop") {
-		t.Fatalf("expected content_block_stop, got: %s", out)
-	}
-}
-
 func TestMaskDedupKey_Stable(t *testing.T) {
 	cfg := &config.Config{}
 	rec := newFlushRecorder()
@@ -916,29 +889,6 @@ func TestStreamHandler_KeepAlive_NoPanic(t *testing.T) {
 	sh.writeKeepAlive()
 	if !strings.Contains(rec.buf.String(), ": keep-alive") {
 		t.Fatalf("expected keep-alive comment")
-	}
-}
-
-func TestStreamHandler_EventThrottle_fs_operation(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: true}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	sh.handleMessage(upstream.SSEMessage{Type: "fs_operation", Event: map[string]any{"operation": "scan"}})
-	first := rec.buf.Len()
-	sh.handleMessage(upstream.SSEMessage{Type: "fs_operation", Event: map[string]any{"operation": "scan"}})
-	second := rec.buf.Len()
-	if second != first {
-		t.Fatalf("expected throttling to suppress second fs_operation within 1s")
-	}
-	// allow after 1s
-	sh.lastScanTime = time.Now().Add(-2 * time.Second)
-	sh.handleMessage(upstream.SSEMessage{Type: "fs_operation", Event: map[string]any{"operation": "scan"}})
-	if rec.buf.Len() == second {
-		t.Fatalf("expected third fs_operation to be written after throttle window")
 	}
 }
 

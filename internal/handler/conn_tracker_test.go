@@ -127,8 +127,8 @@ func TestSelectAccount_UsesHandlerConnTracker(t *testing.T) {
 		mini.Close()
 	}()
 
-	acc1 := createEnabledTestAccount(t, s, "acc-1", "orchids")
-	acc2 := createEnabledTestAccount(t, s, "acc-2", "orchids")
+	acc1 := createEnabledTestAccount(t, s, "acc-1", "puter")
+	acc2 := createEnabledTestAccount(t, s, "acc-2", "puter")
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
 	globalTracker := newSpyConnTracker(map[int64]int64{
@@ -147,7 +147,7 @@ func TestSelectAccount_UsesHandlerConnTracker(t *testing.T) {
 		return &trackerTestUpstream{}
 	})
 
-	_, selected, err := h.selectAccount(context.Background(), "orchids", true, nil)
+	_, selected, err := h.selectAccount(context.Background(), "puter", true, nil)
 	if err != nil {
 		t.Fatalf("selectAccount() error = %v", err)
 	}
@@ -309,4 +309,3 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 		t.Fatalf("expected local tracker acquire twice across account switch, got %d", localTracker.acquireCalls)
 	}
 }
-

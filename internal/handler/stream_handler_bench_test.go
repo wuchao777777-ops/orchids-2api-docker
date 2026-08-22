@@ -11,7 +11,6 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/perf"
-	"orchids-api/internal/upstream"
 )
 
 type discardStringByteWriter struct{}
@@ -546,66 +545,6 @@ func BenchmarkAppendSSEMessageDelta_ReusedBuffer(b *testing.B) {
 			b.Fatal(err)
 		}
 		buf = raw[:0]
-	}
-}
-
-func BenchmarkMarshalEventPayload_MapStyle(b *testing.B) {
-	msg := upstream.SSEMessage{
-		Type: "coding_agent.Write.content.chunk",
-		Event: map[string]interface{}{
-			"type": "coding_agent.Write.content.chunk",
-			"data": map[string]interface{}{
-				"file_path": "/tmp/a.txt",
-				"text":      "hello world",
-			},
-		},
-	}
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalEventPayload(msg)
-		_ = raw
-	}
-}
-
-func BenchmarkMarshalEventPayload_RawJSON(b *testing.B) {
-	msg := upstream.SSEMessage{
-		Type:    "coding_agent.Write.content.chunk",
-		RawJSON: json.RawMessage(`{"type":"coding_agent.Write.content.chunk","data":{"file_path":"/tmp/a.txt","text":"hello world"}}`),
-	}
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalEventPayload(msg)
-		_ = raw
-	}
-}
-
-func BenchmarkMarshalEventPayloadBytes_MapStyle(b *testing.B) {
-	msg := upstream.SSEMessage{
-		Type: "coding_agent.Write.content.chunk",
-		Event: map[string]interface{}{
-			"type": "coding_agent.Write.content.chunk",
-			"data": map[string]interface{}{
-				"file_path": "/tmp/a.txt",
-				"text":      "hello world",
-			},
-		},
-	}
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalEventPayloadBytes(msg)
-		_ = raw
-	}
-}
-
-func BenchmarkMarshalEventPayloadBytes_RawJSON(b *testing.B) {
-	msg := upstream.SSEMessage{
-		Type:    "coding_agent.Write.content.chunk",
-		RawJSON: json.RawMessage(`{"type":"coding_agent.Write.content.chunk","data":{"file_path":"/tmp/a.txt","text":"hello world"}}`),
-	}
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		raw, _ := marshalEventPayloadBytes(msg)
-		_ = raw
 	}
 }
 

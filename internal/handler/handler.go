@@ -55,10 +55,6 @@ type UpstreamClient interface {
 	SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error
 }
 
-type FinalSSELifecycleOwner interface {
-	OwnsFinalSSELifecycle() bool
-}
-
 type ClaudeRequest struct {
 	Model          string                 `json:"model"`
 	Messages       []prompt.Message       `json:"messages"`
@@ -118,15 +114,6 @@ func cloneSSEMessage(msg upstream.SSEMessage) upstream.SSEMessage {
 		for k, v := range msg.Event {
 			cloned.Event[k] = v
 		}
-	}
-	if msg.Raw != nil {
-		cloned.Raw = make(map[string]interface{}, len(msg.Raw))
-		for k, v := range msg.Raw {
-			cloned.Raw[k] = v
-		}
-	}
-	if len(msg.RawJSON) > 0 {
-		cloned.RawJSON = append(json.RawMessage(nil), msg.RawJSON...)
 	}
 	return cloned
 }
@@ -193,11 +180,6 @@ func (h *Handler) computeRequestHash(r *http.Request, body []byte) string {
 	hasher.Write([]byte{0})
 	hasher.Write(body)
 	return hex.EncodeToString(hasher.Sum(nil))
-}
-
-func ownsFinalSSELifecycle(client UpstreamClient) bool {
-	owner, ok := client.(FinalSSELifecycleOwner)
-	return ok && owner.OwnsFinalSSELifecycle()
 }
 
 func mapStopReasonToOpenAIFinishReason(stopReason string) *string {
@@ -295,10 +277,7 @@ func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason st
 	}
 }
 
-func upstreamMessageHandler(sh *streamHandler, orchidsOwnsFinalSSE bool) func(upstream.SSEMessage) {
-	if false {
-		return nil
-	}
+func upstreamMessageHandler(sh *streamHandler) func(upstream.SSEMessage) {
 	return func(msg upstream.SSEMessage) {
 		sh.handleMessage(msg)
 	}
@@ -845,16 +824,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if verboseDiagnostics {
 			slog.Debug("Checkpoint: passthrough, skip context trimming", "channel", channel)
 		}
-	} else {
-		// Orchids: do not trim message/tool_result content to preserve full context.
-		if verboseDiagnostics {
-		}
-		if sanitized, changed := sanitizeSystemItems(req.System, false, false, h.config); changed {
-			req.System = sanitized
-			if verboseDiagnostics {
-				slog.Debug("系统提示已移除 cc_entrypoint", "mode", "", "warp", false)
-			}
-		}
 	}
 	if isPuterRequest {
 		if sanitized, changed := sanitizeSystemItems(req.System, false, true, h.config); changed {
@@ -1128,12 +1097,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			IsFirstPrompt:        false,
 			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
 			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
-			DirectSSE:            nil,
 		}
-		if false {
-			upstreamReq.DirectSSE = sh
-		}
-		primaryHandler := upstreamMessageHandler(sh, false)
+		primaryHandler := upstreamMessageHandler(sh)
 		var attempt int
 		for {
 			sh.resetRoundState()
@@ -1204,7 +1169,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 								}
 							}
 							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
-						case "model.text-delta", "coding_agent.output_text.delta":
+						case "model.text-delta":
 							intermediateTextDeltas++
 							bufferedIntermediate = append(bufferedIntermediate, cloneSSEMessage(msg))
 						case "model.tool-call":
@@ -1249,10 +1214,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					slog.Debug("Upstream attempt completed", "trace_id", traceID, "attempt", upstreamReq.Attempt)
 				}
 				break
-			}
-			if false && sh.hasReturnedResponse() {
-				slog.Warn("Upstream returned after Orchids already finalized SSE", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
-				return
 			}
 			errStr := err.Error()
 			errClass := classifyUpstreamError(errStr)

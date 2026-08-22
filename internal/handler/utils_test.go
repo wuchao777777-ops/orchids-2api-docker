@@ -11,7 +11,7 @@ import (
 
 func TestConversationKeyForRequestPriority(t *testing.T) {
 	baseReq := func() *http.Request {
-		r := httptest.NewRequest(http.MethodPost, "http://example.com/orchids/v1/messages", nil)
+		r := httptest.NewRequest(http.MethodPost, "http://example.com/puter/v1/messages", nil)
 		r.RemoteAddr = "203.0.113.9:1234"
 		r.Header.Set("User-Agent", "test-agent")
 		return r

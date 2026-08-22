@@ -19,7 +19,7 @@ func TestHandleModelByID_HidesOfflineModel(t *testing.T) {
 	}()
 
 	if err := s.CreateModel(context.Background(), &store.Model{
-		Channel: "Orchids",
+		Channel: "Warp",
 		ModelID: "offline-only-model",
 		Name:    "Offline Only",
 		Status:  store.ModelStatusOffline,
@@ -27,7 +27,7 @@ func TestHandleModelByID_HidesOfflineModel(t *testing.T) {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/orchids/v1/models/offline-only-model", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models/offline-only-model", nil)
 	rec := httptest.NewRecorder()
 
 	h.HandleModelByID(rec, req)

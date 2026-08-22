@@ -8,7 +8,6 @@
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
-| `/orchids/v1/messages` | POST | Orchids 通道 Claude Messages 代理 |
 | `/warp/v1/messages` | POST | Warp 通道 Claude Messages 代理 |
 | `/puter/v1/messages` | POST | Puter 通道 Claude Messages 代理 |
 | `/*/v1/messages/count_tokens` | POST | 输入 token 估算 |
@@ -17,7 +16,6 @@
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
-| `/orchids/v1/chat/completions` | POST | Orchids OpenAI 兼容入口 |
 | `/warp/v1/chat/completions` | POST | Warp OpenAI 兼容入口 |
 | `/puter/v1/chat/completions` | POST | Puter OpenAI 兼容入口 |
 | `/grok/v1/chat/completions` | POST | Grok OpenAI 兼容入口 |
@@ -40,7 +38,6 @@
 |---|---|---|
 | `/v1/models` | GET | 全通道模型列表 |
 | `/v1/models/{id}` | GET | 查询单个模型 |
-| `/orchids/v1/models` | GET | Orchids 模型列表 |
 | `/warp/v1/models` | GET | Warp 模型列表 |
 | `/puter/v1/models` | GET | Puter 模型列表 |
 | `/grok/v1/models` | GET | Grok 模型列表 |
@@ -191,19 +188,7 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 
 ## 5. 常用请求示例
 
-### 5.1 Orchids Claude Messages
-
-```bash
-curl -s http://127.0.0.1:3002/orchids/v1/messages \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "claude-sonnet-4-6",
-    "messages": [{"role":"user","content":"hello"}],
-    "stream": false
-  }'
-```
-
-### 5.2 Puter Claude Messages 工具首轮
+### 5.1 Puter Claude Messages 工具首轮
 
 ```bash
 curl -s http://127.0.0.1:3002/puter/v1/messages \
@@ -225,7 +210,7 @@ curl -s http://127.0.0.1:3002/puter/v1/messages \
   }'
 ```
 
-### 5.3 Grok Chat Completions
+### 5.2 Grok Chat Completions
 
 ```bash
 curl -s http://127.0.0.1:3002/grok/v1/chat/completions \

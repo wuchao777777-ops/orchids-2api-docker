@@ -11,9 +11,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"orchids-api/internal/toolname"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
+	"orchids-api/internal/toolname"
 	"orchids-api/internal/upstream"
 )
 
@@ -405,9 +405,9 @@ func buildMCPContext(tools []interface{}) (*warpapi.Request_MCPContext, error) {
 		}.Build())
 	}
 	server := warpapi.Request_MCPContext_MCPServer_builder{
-		Name:        stringPtr("orchids"),
+		Name:        stringPtr("client"),
 		Description: stringPtr("Tools declared by the client request"),
-		Id:          stringPtr("orchids-request-tools"),
+		Id:          stringPtr("client-request-tools"),
 		Tools:       mcpTools,
 	}.Build()
 	return warpapi.Request_MCPContext_builder{

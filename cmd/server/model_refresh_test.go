@@ -322,7 +322,6 @@ func TestApplyModelRefresh_PreservesModelsMissingFromUnreliableDiscoveredList(t 
 		modelID string
 	}{
 		{channel: "Puter", modelID: "puter-unavailable-model"},
-		{channel: "Orchids", modelID: "orchids-unavailable-model"},
 	}
 
 	for _, tc := range testCases {

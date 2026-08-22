@@ -2,11 +2,11 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-compatible APIs across four upstream channels: `orchids`, `warp`, `puter`, and `grok`.
+A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-compatible APIs across three upstream channels: `warp`, `puter`, and `grok`.
 
 ## Current Status
 
-- `internal/handler` serves `orchids` / `warp` / `puter` for both `/v1/messages` and `/v1/chat/completions`
+- `internal/handler` serves `warp` / `puter` for both `/v1/messages` and `/v1/chat/completions`
 - `internal/grok` handles `grok` chat, image, and local file endpoints
 - per-channel model sync is available through `POST /api/models/refresh`
 - Puter non-stream Claude Messages regressions are covered for `Read`, `Write`, `Edit`, `Delete`, long-context, and multi-round `tool_result`
@@ -26,7 +26,6 @@ A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-com
 
 | Channel | Public routes |
 |---|---|
-| `orchids` | `/orchids/v1/messages`, `/orchids/v1/chat/completions` |
 | `warp` | `/warp/v1/messages`, `/warp/v1/chat/completions` |
 | `puter` | `/puter/v1/messages`, `/puter/v1/chat/completions` |
 | `grok` | `/grok/v1/chat/completions`, `/grok/v1/images/*`, `/grok/v1/files/*` |
@@ -43,7 +42,6 @@ Unified model lookup:
 - [API Reference](docs/api-reference.md)
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
-- [Request Flow](docs/ORCHIDS_API_FLOW.md)
 - [Grok parity checklist](docs/grok2api-parity-checklist.md)
 
 ## Requirements

@@ -47,10 +47,7 @@ func ClassifyAccountStatus(errStr string) string {
 		strings.Contains(lower, "signed out") ||
 		strings.Contains(lower, "signed_out") ||
 		strings.Contains(lower, "unauthorized") ||
-		strings.Contains(lower, "no active sessions found") ||
-		strings.Contains(lower, "missing orchids client cookie") ||
-		strings.Contains(lower, "missing orchids session cookie") ||
-		strings.Contains(lower, "missing orchids bearer token"):
+		strings.Contains(lower, "no active sessions found"):
 		return "401"
 	case HasExplicitHTTPStatus(lower, "403") || strings.Contains(lower, "forbidden"):
 		return "403"

@@ -59,94 +59,30 @@ func firstMessageContentBlock(t *testing.T, resp map[string]any) map[string]any 
 
 func puterDirectToolUseEvents(msgID, model, toolID, toolName, partialJSON string, outputTokens int) []upstream.SSEMessage {
 	return []upstream.SSEMessage{
-		{Type: "message_start", Event: map[string]any{
-			"type": "message_start",
-			"message": map[string]any{
-				"id":    msgID,
-				"type":  "message",
-				"role":  "assistant",
-				"model": model,
-			},
+		{Type: "model.tool-call", Event: map[string]any{
+			"toolCallId": toolID,
+			"toolName":   toolName,
+			"input":      partialJSON,
 		}},
-		{Type: "content_block_start", Event: map[string]any{
-			"type":  "content_block_start",
-			"index": 0,
-			"content_block": map[string]any{
-				"type":  "tool_use",
-				"id":    toolID,
-				"name":  toolName,
-				"input": map[string]any{},
-			},
-		}},
-		{Type: "content_block_delta", Event: map[string]any{
-			"type":  "content_block_delta",
-			"index": 0,
-			"delta": map[string]any{
-				"type":         "input_json_delta",
-				"partial_json": partialJSON,
-			},
-		}},
-		{Type: "content_block_stop", Event: map[string]any{
-			"type":  "content_block_stop",
-			"index": 0,
-		}},
-		{Type: "message_delta", Event: map[string]any{
-			"type": "message_delta",
-			"delta": map[string]any{
-				"stop_reason": "tool_use",
-			},
+		{Type: "model.finish", Event: map[string]any{
+			"finishReason": "tool_use",
 			"usage": map[string]any{
-				"output_tokens": outputTokens,
+				"outputTokens": outputTokens,
 			},
-		}},
-		{Type: "message_stop", Event: map[string]any{
-			"type": "message_stop",
 		}},
 	}
 }
 
 func puterDirectTextEvents(msgID, model, text string, outputTokens int) []upstream.SSEMessage {
 	return []upstream.SSEMessage{
-		{Type: "message_start", Event: map[string]any{
-			"type": "message_start",
-			"message": map[string]any{
-				"id":    msgID,
-				"type":  "message",
-				"role":  "assistant",
-				"model": model,
-			},
+		{Type: "model.text-delta", Event: map[string]any{
+			"delta": text,
 		}},
-		{Type: "content_block_start", Event: map[string]any{
-			"type":  "content_block_start",
-			"index": 0,
-			"content_block": map[string]any{
-				"type": "text",
-				"text": "",
-			},
-		}},
-		{Type: "content_block_delta", Event: map[string]any{
-			"type":  "content_block_delta",
-			"index": 0,
-			"delta": map[string]any{
-				"type": "text_delta",
-				"text": text,
-			},
-		}},
-		{Type: "content_block_stop", Event: map[string]any{
-			"type":  "content_block_stop",
-			"index": 0,
-		}},
-		{Type: "message_delta", Event: map[string]any{
-			"type": "message_delta",
-			"delta": map[string]any{
-				"stop_reason": "end_turn",
-			},
+		{Type: "model.finish", Event: map[string]any{
+			"finishReason": "end_turn",
 			"usage": map[string]any{
-				"output_tokens": outputTokens,
+				"outputTokens": outputTokens,
 			},
-		}},
-		{Type: "message_stop", Event: map[string]any{
-			"type": "message_stop",
 		}},
 	}
 }

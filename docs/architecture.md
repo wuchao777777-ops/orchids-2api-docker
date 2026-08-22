@@ -4,7 +4,7 @@
 
 `Orchids-2api` 当前由两条主处理链组成：
 
-- `internal/handler`：处理 `orchids`、`warp`、`puter`
+- `internal/handler`：处理 `warp`、`puter`
 - `internal/grok`：处理 `grok`
 
 整体目标：
@@ -21,15 +21,13 @@ Orchids-2api/
 ├── internal/
 │   ├── api/                     # 管理端 REST API
 │   ├── auth/                    # 管理会话
-│   ├── clerk/                   # Orchids 账号鉴权辅助
 │   ├── config/                  # 配置加载与默认值
 │   ├── debug/                   # 调试日志
 │   ├── errors/                  # 错误分类
 │   ├── grok/                    # Grok chat/images/files/admin
-│   ├── handler/                 # Orchids/Warp/Puter 主处理器
+│   ├── handler/                 # Warp/Puter 主处理器
 │   ├── loadbalancer/            # 账号选择与状态管理
 │   ├── middleware/              # trace/log/session/concurrency
-│   ├── orchids/                 # Orchids 上游客户端
 │   ├── provider/                # 通道到 client 的注册表
 │   ├── prompt/                  # 共享消息结构
 │   ├── puter/                   # Puter 上游客户端
@@ -58,7 +56,7 @@ Orchids-2api/
 
 ### 3.2 `internal/handler`
 
-负责 `orchids` / `warp` / `puter`：
+负责 `warp` / `puter`：
 
 - 解析 Claude/OpenAI 请求
 - 识别通道与目标模型
@@ -95,7 +93,7 @@ Orchids-2api/
 
 ## 4. 主请求流
 
-### 4.1 `orchids` / `warp` / `puter`
+### 4.1 `warp` / `puter`
 
 ```text
 HTTP Request
@@ -131,7 +129,6 @@ HTTP Request
 
 按通道的来源：
 
-- `orchids`：上游公开模型选择列表
 - `warp`：账号 GraphQL 发现结果，失败时回退内置种子
 - `puter`：Puter 官方模型目录与本地当前代策略的交集，再经账号 `test_mode` 验证
 - `grok`：内置支持表 + 现存模型 + 公共文档探测

@@ -72,7 +72,7 @@ func (s ModelStatus) MarshalJSON() ([]byte, error) {
 
 type Model struct {
 	ID        string      `json:"id"`
-	Channel   string      `json:"channel"`  // e.g., "orchids", "kiro"
+	Channel   string      `json:"channel"`  // e.g., "warp", "grok"
 	ModelID   string      `json:"model_id"` // e.g., "claude-3-5-sonnet"
 	Name      string      `json:"name"`     // e.g., "Claude 3.5 Sonnet"
 	Status    ModelStatus `json:"status"`   // Enabled/Disabled
