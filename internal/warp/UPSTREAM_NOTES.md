@@ -57,7 +57,6 @@ hex/byte-template builder has been removed.
 - Suppress `User-Agent` and rely on `X-Warp-Client-ID`, matching Warp's custom
   client-role header behavior.
 - Parse SSE base64 protobuf response events.
-- Keep fallback tool field numbers aligned with `task.proto`.
 
 ## Current Request Shape
 

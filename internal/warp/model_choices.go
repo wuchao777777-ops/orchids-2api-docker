@@ -78,35 +78,9 @@ const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContex
   }
 }`
 
-func (c *Client) FetchDiscoveredModelChoices(ctx context.Context) ([]ModelChoice, string, error) {
-	if c == nil || c.session == nil {
-		return nil, "", fmt.Errorf("warp session not initialized")
-	}
-
-	client := c.authHTTPClient()
-	if err := c.session.ensureToken(ctx, client); err != nil {
-		return nil, "", err
-	}
-
-	jwt := c.session.currentJWT()
-	features, err := fetchFeatureModelChoices(ctx, client, jwt)
-
-	if features != nil && len(features.AgentMode.Choices) > 0 {
-		return mergeWarpModelChoices(features.AgentMode.DefaultID, features.AgentMode.Choices), "feature_model_choice_agent_mode", nil
-	}
-	if err != nil {
-		return nil, "", fmt.Errorf("warp model discovery failed: %w", err)
-	}
-	return nil, "", fmt.Errorf("warp model discovery returned no choices")
-}
-
 func (c *Client) FetchDiscoveredFeatureModelChoices(ctx context.Context) (*FeatureModelChoices, string, error) {
-	if c == nil || c.session == nil {
-		return nil, "", fmt.Errorf("warp session not initialized")
-	}
-
-	client := c.authHTTPClient()
-	if err := c.session.ensureToken(ctx, client); err != nil {
+	client, err := c.ensureAuthenticated(ctx, false)
+	if err != nil {
 		return nil, "", err
 	}
 

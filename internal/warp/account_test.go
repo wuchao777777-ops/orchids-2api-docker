@@ -61,11 +61,6 @@ func TestInferSubscriptionFromRequestLimit_MapsWarpPricingTiers(t *testing.T) {
 			info: &RequestLimitInfo{IsUnlimited: true},
 			want: "enterprise",
 		},
-		{
-			name: "official tier wins",
-			info: &RequestLimitInfo{PlanTier: "Build", RequestLimit: 60},
-			want: "build",
-		},
 	}
 
 	for _, tt := range tests {

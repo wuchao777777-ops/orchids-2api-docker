@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestFetchFeatureAgentModeModelChoices_NormalizesIDsAndDefault(t *testing.T) {
@@ -129,61 +128,6 @@ func TestFetchFeatureModelChoices_IncludesAgentSpecificDefaults(t *testing.T) {
 	}
 	if got := AgentModeModelChoices(features); len(got) != 1 || got[0].ID != "auto-open" {
 		t.Fatalf("agent mode choices=%+v want auto-open", got)
-	}
-}
-
-func TestFetchDiscoveredModelChoices_UsesFeatureAgentMode(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Query().Get("op") {
-		case "GetFeatureModelChoices":
-			_, _ = w.Write([]byte(`{
-				"data": {
-					"user": {
-						"__typename": "UserOutput",
-						"user": {
-							"workspaces": [
-								{
-									"featureModelChoice": {
-										"agentMode": {
-											"defaultId": "auto",
-											"choices": [
-												{"id": "auto", "displayName": "Auto"},
-												{"id": "gpt-5.2-medium", "displayName": "GPT 5.2 Medium"}
-											]
-										}
-									}
-								}
-							]
-						}
-					}
-				}
-			}`))
-		default:
-			t.Fatalf("unexpected op=%q", r.URL.Query().Get("op"))
-		}
-	}))
-	defer server.Close()
-
-	client := &Client{
-		authClient: warpRewriteClient(t, server.URL),
-		session: &session{
-			jwt:       "jwt",
-			expiresAt: time.Now().Add(time.Hour),
-		},
-	}
-
-	choices, source, err := client.FetchDiscoveredModelChoices(context.Background())
-	if err != nil {
-		t.Fatalf("FetchDiscoveredModelChoices() error: %v", err)
-	}
-	if source != "feature_model_choice_agent_mode" {
-		t.Fatalf("source=%q want feature_model_choice_agent_mode", source)
-	}
-	gotIDs := []string{choices[0].ID, choices[1].ID}
-	wantIDs := []string{"auto", "gpt-5.2-medium"}
-	if !slices.Equal(gotIDs, wantIDs) {
-		t.Fatalf("choice ids=%+v want %+v", gotIDs, wantIDs)
 	}
 }
 

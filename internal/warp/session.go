@@ -462,7 +462,7 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 	experimentBuck := s.experimentBuck
 	s.mu.Unlock()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, warpLegacyLoginURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, warpLoginURL, nil)
 	if err != nil {
 		return err
 	}

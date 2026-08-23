@@ -2,11 +2,46 @@ package warp
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"net/http"
 	"testing"
 )
+
+func TestDoGraphQL_DecodesGzipResponse(t *testing.T) {
+	t.Parallel()
+
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write([]byte(`{"data":{"ok":true}}`)); err != nil {
+		t.Fatalf("gzip response: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close gzip response: %v", err)
+	}
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(compressed.Bytes())),
+				Header:     http.Header{"Content-Encoding": []string{"gzip"}},
+			}, nil
+		}),
+	}
+	var response struct {
+		Data struct {
+			OK bool `json:"ok"`
+		} `json:"data"`
+	}
+	if err := doGraphQL(context.Background(), client, warpGraphQLURL, "jwt", "Test", map[string]any{}, &response); err != nil {
+		t.Fatalf("doGraphQL() error = %v", err)
+	}
+	if !response.Data.OK {
+		t.Fatal("expected decoded gzip response")
+	}
+}
 
 func TestFetchRequestLimitInfo_UsesOfficialWarpGraphQLHeaders(t *testing.T) {
 	t.Parallel()
@@ -44,7 +79,7 @@ func TestFetchRequestLimitInfo_UsesOfficialWarpGraphQLHeaders(t *testing.T) {
 	if info == nil {
 		t.Fatal("expected request limit info")
 	}
-	if info.RequestLimit != 100 || info.Remaining != 82 || info.RequestsUsedSinceLastRefresh != 25 {
+	if info.RequestLimit != 100 || info.RequestsUsedSinceLastRefresh != 25 {
 		t.Fatalf("unexpected limit info: %+v", info)
 	}
 	if len(bonuses) != 1 || bonuses[0].RequestCreditsRemaining != 7 {

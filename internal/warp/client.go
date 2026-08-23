@@ -99,9 +99,6 @@ func (c *Client) ProbeModel(ctx context.Context, model string) error {
 }
 
 func (c *Client) ProbeModelWithFeatureConfig(ctx context.Context, model string, featureConfig AccountFeatureConfig) error {
-	if c == nil || c.session == nil {
-		return fmt.Errorf("warp session not initialized")
-	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
@@ -113,11 +110,7 @@ func (c *Client) ProbeModelWithFeatureConfig(ctx context.Context, model string, 
 		WarpComputerUseModel: featureConfig.ComputerUseAgentModel,
 	}
 
-	authClient := c.authHTTPClient()
-	if err := c.session.ensureToken(ctx, authClient); err != nil {
-		return err
-	}
-	if err := c.session.ensureLogin(ctx, c.httpClient); err != nil {
+	if _, err := c.ensureAuthenticated(ctx, true); err != nil {
 		return err
 	}
 
@@ -127,27 +120,17 @@ func (c *Client) ProbeModelWithFeatureConfig(ctx context.Context, model string, 
 	}
 
 	refresh := func() error {
-		if err := c.session.ensureToken(ctx, authClient); err != nil {
-			return err
-		}
-		return c.session.ensureLogin(ctx, c.httpClient)
+		_, err := c.ensureAuthenticated(ctx, true)
+		return err
 	}
 	return c.streamWithRetry(ctx, payload, req, func(upstream.SSEMessage) {}, nil, refresh)
 }
 
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	if c == nil || c.session == nil {
-		return fmt.Errorf("warp session not initialized")
-	}
-
 	ctx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout())
 	defer cancel()
 
-	authClient := c.authHTTPClient()
-	if err := c.session.ensureToken(ctx, authClient); err != nil {
-		return err
-	}
-	if err := c.session.ensureLogin(ctx, c.httpClient); err != nil {
+	if _, err := c.ensureAuthenticated(ctx, true); err != nil {
 		return err
 	}
 
@@ -160,10 +143,8 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	}
 
 	defaultRefresh := func() error {
-		if err := c.session.ensureToken(ctx, authClient); err != nil {
-			return err
-		}
-		return c.session.ensureLogin(ctx, c.httpClient)
+		_, err := c.ensureAuthenticated(ctx, true)
+		return err
 	}
 	return c.streamWithRetry(ctx, payload, req, onMessage, logger, defaultRefresh)
 }
@@ -174,7 +155,7 @@ func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *de
 		return nil, fmt.Errorf("warp jwt missing")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, warpLegacyAIURL, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, warpAIURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +171,7 @@ func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *de
 		for k, v := range req.Header {
 			headers[k] = strings.Join(v, ", ")
 		}
-		logger.LogUpstreamRequest(warpLegacyAIURL, headers, payload)
+		logger.LogUpstreamRequest(warpAIURL, headers, payload)
 	}
 
 	return c.httpClient.Do(req)
@@ -228,18 +209,18 @@ func (c *Client) handleStreamResponse(ctx context.Context, req upstream.Upstream
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		body, _ := readLimitedBody(resp, 4096)
 		_ = resp.Body.Close()
 		bodyText := strings.TrimSpace(string(body))
 		location := ""
-		if resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.String() != warpLegacyAIURL {
+		if resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.String() != warpAIURL {
 			location = resp.Request.URL.String()
 		}
 		if headerLocation := strings.TrimSpace(resp.Header.Get("Location")); headerLocation != "" {
 			location = headerLocation
 		}
 		if logger != nil {
-			logger.LogUpstreamHTTPError(warpLegacyAIURL, resp.StatusCode, bodyText, nil)
+			logger.LogUpstreamHTTPError(warpAIURL, resp.StatusCode, bodyText, nil)
 		}
 		op := "stream request"
 		if location != "" {
@@ -276,27 +257,24 @@ func (c *Client) handleStreamResponse(ctx context.Context, req upstream.Upstream
 }
 
 func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
-	if c == nil || c.session == nil {
-		return "", fmt.Errorf("warp session not initialized")
-	}
-	ctx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout())
-	defer cancel()
-
-	if err := c.session.ensureToken(ctx, c.authHTTPClient()); err != nil {
-		return "", err
-	}
-	return c.session.currentJWT(), nil
+	return c.refreshAccount(ctx, false)
 }
 
 func (c *Client) ForceRefreshAccount(ctx context.Context) (string, error) {
+	return c.refreshAccount(ctx, true)
+}
+
+func (c *Client) refreshAccount(ctx context.Context, force bool) (string, error) {
 	if c == nil || c.session == nil {
 		return "", fmt.Errorf("warp session not initialized")
 	}
 	ctx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout())
 	defer cancel()
 
-	c.session.clearToken()
-	if err := c.session.ensureToken(ctx, c.authHTTPClient()); err != nil {
+	if force {
+		c.session.clearToken()
+	}
+	if _, err := c.ensureAuthenticated(ctx, false); err != nil {
 		return "", err
 	}
 	return c.session.currentJWT(), nil
@@ -341,12 +319,21 @@ func (c *Client) requestTimeout() time.Duration {
 	return timeout
 }
 
-func (c *Client) authHTTPClient() *http.Client {
-	if c != nil && c.authClient != nil {
-		return c.authClient
+func (c *Client) ensureAuthenticated(ctx context.Context, login bool) (*http.Client, error) {
+	if c == nil || c.session == nil {
+		return nil, fmt.Errorf("warp session not initialized")
 	}
-	if c != nil {
-		return c.httpClient
+	authClient := c.authClient
+	if authClient == nil {
+		authClient = c.httpClient
 	}
-	return nil
+	if err := c.session.ensureToken(ctx, authClient); err != nil {
+		return nil, err
+	}
+	if login {
+		if err := c.session.ensureLogin(ctx, c.httpClient); err != nil {
+			return nil, err
+		}
+	}
+	return authClient, nil
 }

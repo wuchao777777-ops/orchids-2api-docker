@@ -21,12 +21,10 @@ import (
 
 type InputTokenEstimate struct {
 	Profile          string
-	QueryTokens      int
 	BasePromptTokens int
 	HistoryTokens    int
 	ToolResultTokens int
 	ToolSchemaTokens int
-	ToolCount        int
 	Total            int
 }
 
@@ -35,21 +33,21 @@ var warpGrepLinePattern = regexp.MustCompile(`^(.+?):(\d+)(?::|-)`)
 
 func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 	query := buildWarpUserQuery(req.Prompt, req.Messages, req.System, req.ChatSessionID)
-	input, inputCount := buildRequestInput(query, req.Messages, req.Workdir, req.WarpToolContexts, req.Tools)
+	tools := convertTools(req.Tools)
+	input, inputCount := buildRequestInput(query, req.Messages, req.Workdir, req.WarpToolContexts, tools)
 	if strings.TrimSpace(query) == "" && inputCount == 0 {
 		return "", nil, fmt.Errorf("empty warp prompt")
 	}
 
-	disableWarpTools := req.NoTools || len(req.Tools) == 0
-	modelConfig := buildRequestModelConfig(req)
+	disableWarpTools := req.NoTools || len(tools) == 0
 	apiReq := warpapi.Request_builder{
 		TaskContext: warpapi.Request_TaskContext_builder{}.Build(),
 		Input:       input,
-		Settings:    buildRequestSettings(modelConfig, disableWarpTools),
+		Settings:    buildRequestSettings(req, disableWarpTools),
 		Metadata:    buildRequestMetadata(req.ChatSessionID),
 	}.Build()
 	if !disableWarpTools {
-		mcpContext, err := buildMCPContext(req.Tools)
+		mcpContext, err := buildMCPContext(tools)
 		if err != nil {
 			return "", nil, err
 		}
@@ -64,19 +62,7 @@ func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 }
 
 func extractMessageText(content prompt.MessageContent) string {
-	if content.IsString() {
-		return sanitizeUTF8(strings.TrimSpace(content.GetText()))
-	}
-
-	var parts []string
-	for _, block := range content.GetBlocks() {
-		if block.Type == "text" {
-			if text := strings.TrimSpace(block.Text); text != "" {
-				parts = append(parts, sanitizeUTF8(text))
-			}
-		}
-	}
-	return sanitizeUTF8(strings.TrimSpace(strings.Join(parts, "\n")))
+	return joinWarpTextContent(content, "\n")
 }
 
 func buildWarpUserQuery(promptText string, messages []prompt.Message, systemItems []prompt.SystemItem, conversationID string) string {
@@ -133,20 +119,24 @@ func renderWarpSystemInstructions(systemItems []prompt.SystemItem, messages []pr
 }
 
 func renderWarpUserMessageContent(content prompt.MessageContent) string {
+	return joinWarpTextContent(content, "\n\n")
+}
+
+func joinWarpTextContent(content prompt.MessageContent, separator string) string {
 	if content.IsString() {
 		return sanitizeUTF8(strings.TrimSpace(content.GetText()))
 	}
 
 	var parts []string
 	for _, block := range content.GetBlocks() {
-		switch block.Type {
-		case "text":
-			if text := sanitizeUTF8(strings.TrimSpace(block.Text)); text != "" {
-				parts = append(parts, text)
-			}
+		if block.Type != "text" {
+			continue
+		}
+		if text := sanitizeUTF8(strings.TrimSpace(block.Text)); text != "" {
+			parts = append(parts, text)
 		}
 	}
-	return sanitizeUTF8(strings.TrimSpace(strings.Join(parts, "\n\n")))
+	return strings.Join(parts, separator)
 }
 
 func sanitizeUTF8(text string) string {
@@ -180,10 +170,8 @@ func EstimateInputTokens(promptText, _ string, messages []prompt.Message, system
 		toolResultTokens += tiktoken.EstimateTextTokens(stringifyValue(block.Content))
 	}
 	toolSchemaTokens := 0
-	toolCount := 0
 	if !disableWarpTools {
 		for _, tool := range convertTools(tools) {
-			toolCount++
 			toolSchemaTokens += tiktoken.EstimateTextTokens(tool.Name)
 			toolSchemaTokens += tiktoken.EstimateTextTokens(tool.Description)
 			if len(tool.Schema) > 0 {
@@ -196,12 +184,10 @@ func EstimateInputTokens(promptText, _ string, messages []prompt.Message, system
 
 	return InputTokenEstimate{
 		Profile:          "warp-official-proto",
-		QueryTokens:      queryTokens,
 		BasePromptTokens: 0,
 		HistoryTokens:    0,
 		ToolResultTokens: toolResultTokens,
 		ToolSchemaTokens: toolSchemaTokens,
-		ToolCount:        toolCount,
 		Total:            queryTokens + toolResultTokens + toolSchemaTokens,
 	}, nil
 }
@@ -218,28 +204,17 @@ func normalizeWarpModel(model string) string {
 	return canonical
 }
 
-func buildRequestModelConfig(req upstream.UpstreamRequest) AccountFeatureConfig {
-	cfg := AccountFeatureConfig{
-		BaseModel:             normalizeWarpModel(req.Model),
-		CliAgentModel:         canonicalModelID(req.WarpCliAgentModel),
-		ComputerUseAgentModel: canonicalModelID(req.WarpComputerUseModel),
+func buildRequestInput(query string, messages []prompt.Message, workdir string, toolContexts map[string]upstream.WarpToolContext, tools []toolDef) (*warpapi.Request_Input, int) {
+	resultBlocks := latestWarpToolResultBlocks(messages)
+	inputs := make([]*warpapi.Request_Input_UserInputs_UserInput, 0, len(resultBlocks)+1)
+	var declaredTools map[string]struct{}
+	if len(resultBlocks) > 0 {
+		declaredTools = make(map[string]struct{}, len(tools))
+		for _, tool := range tools {
+			declaredTools[strings.ToLower(strings.TrimSpace(tool.Name))] = struct{}{}
+		}
 	}
-	if cfg.CliAgentModel == "" {
-		cfg.CliAgentModel = identifier
-	}
-	if cfg.ComputerUseAgentModel == "" {
-		cfg.ComputerUseAgentModel = computerUseModel
-	}
-	return cfg
-}
-
-func buildRequestInput(query string, messages []prompt.Message, workdir string, toolContexts map[string]upstream.WarpToolContext, tools []interface{}) (*warpapi.Request_Input, int) {
-	inputs := make([]*warpapi.Request_Input_UserInputs_UserInput, 0, 2)
-	declaredTools := make(map[string]struct{})
-	for _, tool := range convertTools(tools) {
-		declaredTools[strings.ToLower(strings.TrimSpace(tool.Name))] = struct{}{}
-	}
-	for _, block := range latestWarpToolResultBlocks(messages) {
+	for _, block := range resultBlocks {
 		if result := buildWarpToolResult(block, messages, toolContexts, declaredTools); result != nil {
 			inputs = append(inputs, warpapi.Request_Input_UserInputs_UserInput_builder{ToolCallResult: result}.Build())
 		}
@@ -518,12 +493,12 @@ func buildInputContext(workdir string) *warpapi.InputContext {
 	}.Build()
 }
 
-func buildRequestSettings(modelConfig AccountFeatureConfig, disableTools bool) *warpapi.Request_Settings {
-	cliAgentModel := canonicalModelID(modelConfig.CliAgentModel)
+func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warpapi.Request_Settings {
+	cliAgentModel := canonicalModelID(req.WarpCliAgentModel)
 	if cliAgentModel == "" {
 		cliAgentModel = identifier
 	}
-	computerAgentModel := canonicalModelID(modelConfig.ComputerUseAgentModel)
+	computerAgentModel := canonicalModelID(req.WarpComputerUseModel)
 	if computerAgentModel == "" {
 		computerAgentModel = computerUseModel
 	}
@@ -531,14 +506,12 @@ func buildRequestSettings(modelConfig AccountFeatureConfig, disableTools bool) *
 	// Warp defines an empty supported_tools list as "any tool", not "no tools".
 	// Always send the bounded official lists. Per-request denial is enforced by
 	// the handler's prompt gate and response-side hard gate.
-	supportedTools := officialSupportedTools()
-	supportedCliAgentTools := officialSupportedCliAgentTools()
 	toolsEnabled := !disableTools
 	autonomy := warpapi.AutonomyLevel_SUPERVISED
 	isolation := warpapi.IsolationLevel_NONE
 	return warpapi.Request_Settings_builder{
 		ModelConfig: warpapi.Request_Settings_ModelConfig_builder{
-			Base:                        stringPtr(normalizeWarpModel(modelConfig.BaseModel)),
+			Base:                        stringPtr(normalizeWarpModel(req.Model)),
 			CliAgent:                    stringPtr(cliAgentModel),
 			ComputerUseAgent:            stringPtr(computerAgentModel),
 			BaseModelContextWindowLimit: &contextLimit,
@@ -549,20 +522,20 @@ func buildRequestSettings(modelConfig AccountFeatureConfig, disableTools bool) *
 		PlanningEnabled:                            boolPtr(false),
 		WarpDriveContextEnabled:                    boolPtr(false),
 		SupportsCreateFiles:                        boolPtr(toolsEnabled),
-		SupportedTools:                             supportedTools,
+		SupportedTools:                             officialSupportedTools,
 		SupportsLongRunningCommands:                boolPtr(toolsEnabled),
 		ShouldPreserveFileContentInHistory:         boolPtr(true),
-		SupportsTodosUi:                            boolPtr(toolsEnabled),
+		SupportsTodosUi:                            boolPtr(false),
 		SupportsLinkedCodeBlocks:                   boolPtr(false),
-		SupportsStartedChildTaskMessage:            boolPtr(toolsEnabled),
-		SupportsSuggestPrompt:                      boolPtr(toolsEnabled),
+		SupportsStartedChildTaskMessage:            boolPtr(false),
+		SupportsSuggestPrompt:                      boolPtr(false),
 		SupportsReadImageFiles:                     boolPtr(false),
 		SupportsReasoningMessage:                   boolPtr(true),
 		AutonomyLevel:                              &autonomy,
 		IsolationLevel:                             &isolation,
 		WebSearchEnabled:                           boolPtr(toolsEnabled),
-		SupportedCliAgentTools:                     supportedCliAgentTools,
-		SupportsV4AFileDiffs:                       boolPtr(toolsEnabled),
+		SupportedCliAgentTools:                     officialSupportedCliAgentTools,
+		SupportsV4AFileDiffs:                       boolPtr(false),
 		SupportsSummarizationViaMessageReplacement: boolPtr(false),
 		SupportsBundledSkills:                      boolPtr(false),
 		SupportsResearchAgent:                      boolPtr(false),
@@ -586,50 +559,34 @@ func shouldSendWarpConversationID(conversationID string) bool {
 	return !strings.HasPrefix(conversationID, "chat_")
 }
 
-func officialSupportedTools() []warpapi.ToolType {
-	return []warpapi.ToolType{
-		warpapi.ToolType_GREP,
-		warpapi.ToolType_FILE_GLOB,
-		warpapi.ToolType_FILE_GLOB_V2,
-		warpapi.ToolType_READ_MCP_RESOURCE,
-		warpapi.ToolType_CALL_MCP_TOOL,
-		warpapi.ToolType_INIT_PROJECT,
-		warpapi.ToolType_OPEN_CODE_REVIEW,
-		warpapi.ToolType_RUN_SHELL_COMMAND,
-		warpapi.ToolType_SUGGEST_NEW_CONVERSATION,
-		warpapi.ToolType_SUBAGENT,
-		warpapi.ToolType_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
-		warpapi.ToolType_READ_SHELL_COMMAND_OUTPUT,
-		warpapi.ToolType_READ_DOCUMENTS,
-		warpapi.ToolType_CREATE_DOCUMENTS,
-		warpapi.ToolType_EDIT_DOCUMENTS,
-		warpapi.ToolType_SUGGEST_PROMPT,
-		warpapi.ToolType_READ_FILES,
-		warpapi.ToolType_APPLY_FILE_DIFFS,
-		warpapi.ToolType_SEARCH_CODEBASE,
-	}
+var officialSupportedTools = []warpapi.ToolType{
+	warpapi.ToolType_GREP,
+	warpapi.ToolType_FILE_GLOB,
+	warpapi.ToolType_FILE_GLOB_V2,
+	warpapi.ToolType_CALL_MCP_TOOL,
+	warpapi.ToolType_RUN_SHELL_COMMAND,
+	warpapi.ToolType_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
+	warpapi.ToolType_READ_SHELL_COMMAND_OUTPUT,
+	warpapi.ToolType_READ_FILES,
+	warpapi.ToolType_APPLY_FILE_DIFFS,
 }
 
-func officialSupportedCliAgentTools() []warpapi.ToolType {
-	return []warpapi.ToolType{
-		warpapi.ToolType_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
-		warpapi.ToolType_READ_SHELL_COMMAND_OUTPUT,
-		warpapi.ToolType_GREP,
-		warpapi.ToolType_FILE_GLOB,
-		warpapi.ToolType_FILE_GLOB_V2,
-		warpapi.ToolType_READ_FILES,
-		warpapi.ToolType_SEARCH_CODEBASE,
-	}
+var officialSupportedCliAgentTools = []warpapi.ToolType{
+	warpapi.ToolType_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
+	warpapi.ToolType_READ_SHELL_COMMAND_OUTPUT,
+	warpapi.ToolType_GREP,
+	warpapi.ToolType_FILE_GLOB,
+	warpapi.ToolType_FILE_GLOB_V2,
+	warpapi.ToolType_READ_FILES,
 }
 
-func buildMCPContext(tools []interface{}) (*warpapi.Request_MCPContext, error) {
-	converted := convertTools(tools)
-	if len(converted) == 0 {
+func buildMCPContext(tools []toolDef) (*warpapi.Request_MCPContext, error) {
+	if len(tools) == 0 {
 		return nil, nil
 	}
 
-	mcpTools := make([]*warpapi.Request_MCPContext_MCPTool, 0, len(converted))
-	for _, tool := range converted {
+	mcpTools := make([]*warpapi.Request_MCPContext_MCPTool, 0, len(tools))
+	for _, tool := range tools {
 		var schema *structpb.Struct
 		if len(tool.Schema) > 0 {
 			st, err := structpb.NewStruct(tool.Schema)
@@ -853,7 +810,7 @@ func compactWarpSchemaForTool(name string, schema map[string]interface{}) map[st
 	if schema == nil {
 		return nil
 	}
-	cleaned := cleanWarpSchema(schema)
+	cleaned := cleanWarpSchema(schema, true)
 	if cleaned == nil {
 		return nil
 	}
@@ -865,7 +822,7 @@ func compactWarpSchemaForTool(name string, schema map[string]interface{}) map[st
 	if warpSchemaJSONLen(cleaned) <= maxWarpToolSchemaJSONLen {
 		return cleaned
 	}
-	stripped := stripWarpSchemaDescriptions(cleaned)
+	stripped := cleanWarpSchema(cleaned, false)
 	if warpSchemaJSONLen(stripped) <= maxWarpToolSchemaJSONLen {
 		return stripped
 	}
@@ -920,12 +877,15 @@ func filterWarpSchemaProperties(name string, schema map[string]interface{}) map[
 	return out
 }
 
-func cleanWarpSchema(schema map[string]interface{}) map[string]interface{} {
+func cleanWarpSchema(schema map[string]interface{}, keepDescriptions bool) map[string]interface{} {
 	if schema == nil {
 		return nil
 	}
 	sanitized := map[string]interface{}{}
 	for _, key := range []string{"type", "description", "properties", "required", "enum", "items"} {
+		if key == "description" && !keepDescriptions {
+			continue
+		}
 		if v, ok := schema[key]; ok {
 			sanitized[key] = v
 		}
@@ -933,53 +893,24 @@ func cleanWarpSchema(schema map[string]interface{}) map[string]interface{} {
 	if props, ok := sanitized["properties"].(map[string]interface{}); ok {
 		cleanProps := map[string]interface{}{}
 		for name, prop := range props {
-			cleanProps[name] = cleanWarpSchemaValue(prop)
+			cleanProps[name] = cleanWarpSchemaValue(prop, keepDescriptions)
 		}
 		sanitized["properties"] = cleanProps
 	}
 	if items, ok := sanitized["items"]; ok {
-		sanitized["items"] = cleanWarpSchemaValue(items)
+		sanitized["items"] = cleanWarpSchemaValue(items, keepDescriptions)
 	}
 	return sanitized
 }
 
-func cleanWarpSchemaValue(value interface{}) interface{} {
+func cleanWarpSchemaValue(value interface{}, keepDescriptions bool) interface{} {
 	switch v := value.(type) {
 	case map[string]interface{}:
-		return cleanWarpSchema(v)
+		return cleanWarpSchema(v, keepDescriptions)
 	case []interface{}:
 		out := make([]interface{}, 0, len(v))
 		for _, item := range v {
-			out = append(out, cleanWarpSchemaValue(item))
-		}
-		return out
-	default:
-		return value
-	}
-}
-
-func stripWarpSchemaDescriptions(schema map[string]interface{}) map[string]interface{} {
-	if schema == nil {
-		return nil
-	}
-	out := make(map[string]interface{}, len(schema))
-	for k, v := range schema {
-		if strings.EqualFold(k, "description") || strings.EqualFold(k, "title") {
-			continue
-		}
-		out[k] = stripWarpSchemaDescriptionsValue(v)
-	}
-	return out
-}
-
-func stripWarpSchemaDescriptionsValue(value interface{}) interface{} {
-	switch v := value.(type) {
-	case map[string]interface{}:
-		return stripWarpSchemaDescriptions(v)
-	case []interface{}:
-		out := make([]interface{}, 0, len(v))
-		for _, item := range v {
-			out = append(out, stripWarpSchemaDescriptionsValue(item))
+			out = append(out, cleanWarpSchemaValue(item, keepDescriptions))
 		}
 		return out
 	default:

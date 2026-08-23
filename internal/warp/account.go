@@ -62,12 +62,6 @@ func InferSubscriptionFromRequestLimit(info *RequestLimitInfo) string {
 	if info == nil {
 		return ""
 	}
-	if tier := strings.TrimSpace(info.PlanTier); tier != "" {
-		return strings.ToLower(tier)
-	}
-	if name := strings.TrimSpace(info.PlanName); name != "" {
-		return strings.ToLower(name)
-	}
 	if info.IsUnlimited {
 		return "enterprise"
 	}

@@ -19,18 +19,41 @@ import (
 	"orchids-api/internal/upstream"
 )
 
-func warpSSEActionFrame(t *testing.T, action *warpapi.ClientAction) string {
+func warpSSEEventFrame(t *testing.T, event *warpapi.ResponseEvent) string {
 	t.Helper()
-	event := warpapi.ResponseEvent_builder{
-		ClientActions: warpapi.ResponseEvent_ClientActions_builder{
-			Actions: []*warpapi.ClientAction{action},
-		}.Build(),
-	}.Build()
 	raw, err := proto.Marshal(event)
 	if err != nil {
 		t.Fatalf("marshal Warp response event: %v", err)
 	}
 	return "data: " + base64.RawURLEncoding.EncodeToString(raw) + "\n\n"
+}
+
+func warpSSEActionFrame(t *testing.T, action *warpapi.ClientAction) string {
+	t.Helper()
+	return warpSSEEventFrame(t, warpapi.ResponseEvent_builder{
+		ClientActions: warpapi.ResponseEvent_ClientActions_builder{
+			Actions: []*warpapi.ClientAction{action},
+		}.Build(),
+	}.Build())
+}
+
+func warpSSEFinishFrame(t *testing.T) string {
+	t.Helper()
+	return warpSSEEventFrame(t, warpapi.ResponseEvent_builder{
+		Finished: warpapi.ResponseEvent_StreamFinished_builder{
+			Done: warpapi.ResponseEvent_StreamFinished_Done_builder{}.Build(),
+		}.Build(),
+	}.Build())
+}
+
+func warpSSETextFrame(t *testing.T, text string) string {
+	t.Helper()
+	return warpSSEActionFrame(t, warpapi.ClientAction_builder{
+		AddMessagesToTask: warpapi.ClientAction_AddMessagesToTask_builder{
+			TaskId:   stringPtr("task-1"),
+			Messages: []*warpapi.Message{warpAgentOutputMessage("message-1", text)},
+		}.Build(),
+	}.Build())
 }
 
 func warpAgentOutputMessage(id, text string) *warpapi.Message {
@@ -73,6 +96,7 @@ func TestProcessStreamBody_DeduplicatesMessageSnapshotsAndIgnoresMetadataActions
 			Description: stringPtr("Acknowledge command with CONTINUATION OK"),
 		}.Build(),
 	}.Build())
+	stream += warpSSEFinishFrame(t)
 
 	var text strings.Builder
 	var reasoning strings.Builder
@@ -93,77 +117,6 @@ func TestProcessStreamBody_DeduplicatesMessageSnapshotsAndIgnoresMetadataActions
 	}
 	if got := reasoning.String(); got != "" {
 		t.Fatalf("reasoning=%q want metadata action to stay hidden", got)
-	}
-}
-
-func TestMapWarpToolCalls_PreservesOneResultPerServerReadCall(t *testing.T) {
-	args := `{"paths":["/tmp/a.go","/tmp/b.go"],"start":10,"end":20}`
-	calls := mapWarpToolCalls("read_files", args, "call_read", 0)
-	if len(calls) != 1 {
-		t.Fatalf("len(calls)=%d want 1", len(calls))
-	}
-	if calls[0].Name != "Read" || calls[0].ID != "call_read" {
-		t.Fatalf("unexpected tool names: %#v", calls)
-	}
-
-	var input map[string]interface{}
-	if err := json.Unmarshal([]byte(calls[0].Input), &input); err != nil {
-		t.Fatalf("unmarshal first input: %v", err)
-	}
-	if got := input["file_path"]; got != "/tmp/a.go" {
-		t.Fatalf("file_path=%v want /tmp/a.go", got)
-	}
-	if got := input["offset"]; got != float64(10) {
-		t.Fatalf("offset=%v want 10", got)
-	}
-	if got := input["limit"]; got != float64(20) {
-		t.Fatalf("limit=%v want 20", got)
-	}
-}
-
-func TestMapWarpToolCalls_PreservesServerToolCallID(t *testing.T) {
-	calls := mapWarpToolCalls("run_command", `{"command":"pwd"}`, "server_call_id", 7)
-	if len(calls) != 1 {
-		t.Fatalf("calls=%d want 1", len(calls))
-	}
-	if calls[0].ID != "server_call_id" {
-		t.Fatalf("tool call id=%q want exact server id", calls[0].ID)
-	}
-	if calls[0].Type != "run_command" {
-		t.Fatalf("tool type=%q want run_command", calls[0].Type)
-	}
-}
-
-func TestTransformWarpToolCall_MapsRunCommandToBash(t *testing.T) {
-	name, input := transformWarpToolCall("run_command", map[string]interface{}{
-		"command": "ls -la",
-		"timeout": 30,
-	})
-	if name != "Bash" {
-		t.Fatalf("name=%q want Bash", name)
-	}
-	if input["command"] != "ls -la" {
-		t.Fatalf("command=%v want ls -la", input["command"])
-	}
-}
-
-func TestTransformWarpToolCall_SanitizesEditPayload(t *testing.T) {
-	name, input := transformWarpToolCall("edit_file", map[string]interface{}{
-		"path":       " ./tmp/../tmp/demo.txt\x00 ",
-		"old_string": "  1\tbefore\n  2\tafter",
-		"new_string": "  1\treplaced\n  2\tvalue",
-	})
-	if name != "Edit" {
-		t.Fatalf("name=%q want Edit", name)
-	}
-	if input["file_path"] != "./tmp/demo.txt" {
-		t.Fatalf("file_path=%v want ./tmp/demo.txt", input["file_path"])
-	}
-	if input["old_string"] != "before\nafter" {
-		t.Fatalf("old_string=%q want stripped line numbers", input["old_string"])
-	}
-	if input["new_string"] != "replaced\nvalue" {
-		t.Fatalf("new_string=%q want stripped line numbers", input["new_string"])
 	}
 }
 
@@ -336,24 +289,9 @@ func TestProcessStreamBody_ErrorsWhenFramesHaveNoParsedEvents(t *testing.T) {
 	}
 }
 
-func TestProcessStreamBody_FallsBackToLegacySSE(t *testing.T) {
+func TestProcessStreamBody_AcceptsOfficialSSETransport(t *testing.T) {
 	var events []upstream.SSEMessage
-
-	payload := appendBytesField(2,
-		appendBytesField(1,
-			appendBytesField(1,
-				appendBytesField(1,
-					appendBytesField(5,
-						appendBytesField(3,
-							appendBytesField(1, []byte("hi")),
-						),
-					),
-				),
-			),
-		),
-	)
-	encoded := base64.RawURLEncoding.EncodeToString(payload)
-	stream := "data: " + encoded + "\n\n"
+	stream := warpSSETextFrame(t, "hi") + warpSSEFinishFrame(t)
 
 	err := processStreamBody(context.Background(), strings.NewReader(stream), func(msg upstream.SSEMessage) {
 		events = append(events, msg)
@@ -373,22 +311,22 @@ func TestProcessStreamBody_FallsBackToLegacySSE(t *testing.T) {
 	}
 }
 
+func TestProcessStreamBody_RejectsMissingStreamFinished(t *testing.T) {
+	err := processStreamBody(context.Background(), strings.NewReader(warpSSETextFrame(t, "hi")), func(upstream.SSEMessage) {}, nil)
+	if err == nil || !strings.Contains(err.Error(), "without StreamFinished") {
+		t.Fatalf("error=%v want missing StreamFinished error", err)
+	}
+}
+
+func TestProcessStreamBody_RejectsInvalidSSEPayload(t *testing.T) {
+	err := processStreamBody(context.Background(), strings.NewReader("data: %%%\n\n"), func(upstream.SSEMessage) {}, nil)
+	if err == nil || !strings.Contains(err.Error(), "decode Warp SSE payload") {
+		t.Fatalf("error=%v want SSE decode error", err)
+	}
+}
+
 func TestProcessStreamBody_AllowsNilOnMessage(t *testing.T) {
-	payload := appendBytesField(2,
-		appendBytesField(1,
-			appendBytesField(1,
-				appendBytesField(1,
-					appendBytesField(5,
-						appendBytesField(3,
-							appendBytesField(1, []byte("hi")),
-						),
-					),
-				),
-			),
-		),
-	)
-	encoded := base64.RawURLEncoding.EncodeToString(payload)
-	stream := "data: " + encoded + "\n\n"
+	stream := warpSSETextFrame(t, "hi") + warpSSEFinishFrame(t)
 
 	if err := processStreamBody(context.Background(), strings.NewReader(stream), nil, nil); err != nil {
 		t.Fatalf("processStreamBody(nil onMessage) error: %v", err)
@@ -396,24 +334,10 @@ func TestProcessStreamBody_AllowsNilOnMessage(t *testing.T) {
 }
 
 func TestHandleStreamResponse_AllowsNilOnMessageWithConversationID(t *testing.T) {
-	payload := appendBytesField(2,
-		appendBytesField(1,
-			appendBytesField(1,
-				appendBytesField(1,
-					appendBytesField(5,
-						appendBytesField(3,
-							appendBytesField(1, []byte("hi")),
-						),
-					),
-				),
-			),
-		),
-	)
-	encoded := base64.RawURLEncoding.EncodeToString(payload)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{},
-		Body:       io.NopCloser(strings.NewReader("data: " + encoded + "\n\n")),
+		Body:       io.NopCloser(strings.NewReader(warpSSETextFrame(t, "hi") + warpSSEFinishFrame(t))),
 	}
 	client := &Client{}
 	req := upstream.UpstreamRequest{ChatSessionID: "conv_123"}
@@ -423,25 +347,41 @@ func TestHandleStreamResponse_AllowsNilOnMessageWithConversationID(t *testing.T)
 	}
 }
 
-func TestProcessStreamBody_SuppressesUnsupportedNestedServerFallback(t *testing.T) {
+func TestProcessStreamBody_SuppressesUnsupportedServerTool(t *testing.T) {
 	var events []upstream.SSEMessage
 
-	messagePayload := appendBytesField(3, appendBytesField(1, []byte("4")))
-	messagePayload = append(messagePayload,
-		appendBytesField(4, appendBytesField(4, appendBytesField(1, []byte("bogus"))))...,
-	)
-	textAndToolFrame := wrapFrame(appendBytesField(2,
-		appendBytesField(1,
-			appendBytesField(1,
-				appendBytesField(1,
-					appendBytesField(5, messagePayload),
-				),
-			),
-		),
-	))
+	event := warpapi.ResponseEvent_builder{
+		ClientActions: warpapi.ResponseEvent_ClientActions_builder{
+			Actions: []*warpapi.ClientAction{
+				warpapi.ClientAction_builder{
+					CreateTask: warpapi.ClientAction_CreateTask_builder{
+						Task: warpapi.Task_builder{
+							Messages: []*warpapi.Message{
+								warpAgentOutputMessage("text", "4"),
+								warpapi.Message_builder{
+									Id: stringPtr("server-tool"),
+									ToolCall: warpapi.Message_ToolCall_builder{
+										ToolCallId: stringPtr("call-server"),
+										Server: warpapi.Message_ToolCall_Server_builder{
+											Payload: stringPtr("bogus"),
+										}.Build(),
+									}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			},
+		}.Build(),
+	}.Build()
+	rawEvent, err := proto.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal response event: %v", err)
+	}
+	textAndToolFrame := wrapFrame(rawEvent)
 	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(8, appendVarintField(2, 1))))
 
-	err := processStreamBody(context.Background(), bytes.NewReader(append(textAndToolFrame, finishFrame...)), func(msg upstream.SSEMessage) {
+	err = processStreamBody(context.Background(), bytes.NewReader(append(textAndToolFrame, finishFrame...)), func(msg upstream.SSEMessage) {
 		events = append(events, msg)
 	}, nil)
 	if err != nil {
@@ -462,7 +402,7 @@ func TestProcessStreamBody_SuppressesUnsupportedNestedServerFallback(t *testing.
 	}
 }
 
-func TestProcessStreamBody_PreservesSupportedNestedShellFallback(t *testing.T) {
+func TestProcessStreamBody_ParsesRunShellCommand(t *testing.T) {
 	var events []upstream.SSEMessage
 
 	messagePayload := appendBytesField(4, appendBytesField(2, appendBytesField(1, []byte("pwd"))))
@@ -504,7 +444,7 @@ func TestProcessStreamBody_PreservesSupportedNestedShellFallback(t *testing.T) {
 	}
 }
 
-func TestProcessStreamBody_ParsesReadShellCommandOutputFallback(t *testing.T) {
+func TestProcessStreamBody_ParsesReadShellCommandOutput(t *testing.T) {
 	var events []upstream.SSEMessage
 
 	readOutputPayload := appendBytesField(1, []byte("cmd_123"))
@@ -556,12 +496,153 @@ func TestProcessStreamBody_ParsesReadShellCommandOutputFallback(t *testing.T) {
 	}
 }
 
-func TestExtractStringValue_IgnoresBinaryPayload(t *testing.T) {
-	if got := extractStringValue([]byte{0x02, 0x52, 0x00}); got != "" {
-		t.Fatalf("extractStringValue(binary)=%q want empty", got)
+func TestParseApplyFileDiffsPayload_UsesOfficialSchema(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		call      *warpapi.Message_ToolCall_ApplyFileDiffs
+		wantTool  string
+		wantInput map[string]string
+	}{
+		{
+			name: "new file",
+			call: warpapi.Message_ToolCall_ApplyFileDiffs_builder{
+				NewFiles: []*warpapi.Message_ToolCall_ApplyFileDiffs_NewFile{
+					warpapi.Message_ToolCall_ApplyFileDiffs_NewFile_builder{
+						FilePath: stringPtr("/tmp/generated.txt"),
+						Content:  stringPtr("generated content"),
+					}.Build(),
+				},
+			}.Build(),
+			wantTool:  "Write",
+			wantInput: map[string]string{"file_path": "/tmp/generated.txt", "content": "generated content"},
+		},
+		{
+			name: "file edit",
+			call: warpapi.Message_ToolCall_ApplyFileDiffs_builder{
+				Diffs: []*warpapi.Message_ToolCall_ApplyFileDiffs_FileDiff{
+					warpapi.Message_ToolCall_ApplyFileDiffs_FileDiff_builder{
+						FilePath: stringPtr("/tmp/existing.txt"),
+						Search:   stringPtr("before"),
+						Replace:  stringPtr("after"),
+					}.Build(),
+				},
+			}.Build(),
+			wantTool:  "Edit",
+			wantInput: map[string]string{"file_path": "/tmp/existing.txt", "old_string": "before", "new_string": "after"},
+		},
 	}
-	if got := extractStringValue([]byte("hello")); got != "hello" {
-		t.Fatalf("extractStringValue(text)=%q want hello", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := proto.Marshal(tt.call)
+			if err != nil {
+				t.Fatalf("marshal tool call: %v", err)
+			}
+			toolName, rawInput := parseApplyFileDiffsPayload(payload)
+			if toolName != tt.wantTool {
+				t.Fatalf("tool=%q want %q", toolName, tt.wantTool)
+			}
+			var input map[string]string
+			if err := json.Unmarshal([]byte(rawInput), &input); err != nil {
+				t.Fatalf("decode input: %v", err)
+			}
+			for key, want := range tt.wantInput {
+				if got := input[key]; got != want {
+					t.Fatalf("input[%q]=%q want %q", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestParseWarpToolInput_UsesOfficialSearchSchemas(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		toolType    string
+		message     proto.Message
+		wantTool    string
+		wantPattern string
+		wantPath    string
+	}{
+		{
+			name:     "grep",
+			toolType: "grep",
+			message: warpapi.Message_ToolCall_Grep_builder{
+				Queries: []string{"TODO"},
+				Path:    stringPtr("/workspace"),
+			}.Build(),
+			wantTool:    "Grep",
+			wantPattern: "TODO",
+			wantPath:    "/workspace",
+		},
+		{
+			name:     "glob v2",
+			toolType: "file_glob_v2",
+			message: warpapi.Message_ToolCall_FileGlobV2_builder{
+				Patterns:  []string{"**/*.go"},
+				SearchDir: stringPtr("/workspace"),
+			}.Build(),
+			wantTool:    "Glob",
+			wantPattern: "**/*.go",
+			wantPath:    "/workspace",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := proto.Marshal(tt.message)
+			if err != nil {
+				t.Fatalf("marshal tool input: %v", err)
+			}
+			toolName, rawInput := parseWarpToolInput(tt.toolType, payload)
+			if toolName != tt.wantTool {
+				t.Fatalf("tool=%q want %q", toolName, tt.wantTool)
+			}
+			var input map[string]string
+			if err := json.Unmarshal([]byte(rawInput), &input); err != nil {
+				t.Fatalf("decode input: %v", err)
+			}
+			if input["pattern"] != tt.wantPattern || input["path"] != tt.wantPath {
+				t.Fatalf("input=%#v want pattern=%q path=%q", input, tt.wantPattern, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestDecodeWarpPayload_UsesMatchingBase64Alphabet(t *testing.T) {
+	payload := []byte{0xfb, 0xff, 0x00, 0x41, 0x42}
+	encodings := []*base64.Encoding{
+		base64.RawURLEncoding,
+		base64.URLEncoding,
+		base64.StdEncoding,
+	}
+	for _, encoding := range encodings {
+		encoded := encoding.EncodeToString(payload)
+		decoded, err := decodeWarpPayload(encoded)
+		if err != nil {
+			t.Fatalf("decode %q: %v", encoded, err)
+		}
+		if !bytes.Equal(decoded, payload) {
+			t.Fatalf("decode %q=%x want %x", encoded, decoded, payload)
+		}
+	}
+}
+
+func BenchmarkWarpStreamStateAppendContent(b *testing.B) {
+	const chunks = 1000
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		state := newWarpStreamState()
+		for j := 0; j < chunks; j++ {
+			state.applyContentUpdate(warpContentUpdate{MessageID: "message", Text: "x"})
+		}
+		if got := state.textByMessage["message"].Len(); got != chunks {
+			b.Fatalf("content length=%d want %d", got, chunks)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package warp
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,6 +100,33 @@ func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	}
 }
 
+func TestBuildRequestSettings_AdvertisesOnlyImplementedCapabilities(t *testing.T) {
+	settings := buildRequestSettings(upstream.UpstreamRequest{}, false)
+	wantTools := []warpapi.ToolType{
+		warpapi.ToolType_GREP,
+		warpapi.ToolType_FILE_GLOB,
+		warpapi.ToolType_FILE_GLOB_V2,
+		warpapi.ToolType_CALL_MCP_TOOL,
+		warpapi.ToolType_RUN_SHELL_COMMAND,
+		warpapi.ToolType_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
+		warpapi.ToolType_READ_SHELL_COMMAND_OUTPUT,
+		warpapi.ToolType_READ_FILES,
+		warpapi.ToolType_APPLY_FILE_DIFFS,
+	}
+	if got := settings.GetSupportedTools(); !slices.Equal(got, wantTools) {
+		t.Fatalf("supported tools=%v want %v", got, wantTools)
+	}
+	if settings.GetSupportsTodosUi() || settings.GetSupportsStartedChildTaskMessage() ||
+		settings.GetSupportsSuggestPrompt() || settings.GetSupportsV4AFileDiffs() {
+		t.Fatalf("unsupported capabilities advertised: %#v", settings)
+	}
+	for _, tool := range settings.GetSupportedCliAgentTools() {
+		if tool == warpapi.ToolType_SEARCH_CODEBASE {
+			t.Fatal("SEARCH_CODEBASE is advertised without a response decoder")
+		}
+	}
+}
+
 func TestBuildRequestBytes_FinalPromptIsAuthoritative(t *testing.T) {
 	finalPrompt := "Instructions:\n- stay concise\n\nraw request\n\n<tool_gate>\nDo not call tools.\n</tool_gate>"
 	req := upstream.UpstreamRequest{
@@ -142,6 +170,33 @@ func TestBuildRequestBytes_FinalPromptIsAuthoritative(t *testing.T) {
 	}
 	if decoded.GetMcpContext() != nil {
 		t.Fatalf("no-tools request unexpectedly included MCP context: %#v", decoded.GetMcpContext())
+	}
+}
+
+func TestBuildRequestBytes_MalformedToolsDisableToolCapabilities(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Prompt: "answer directly",
+		Model:  "auto-open",
+		Tools: []interface{}{
+			"invalid",
+			map[string]interface{}{"name": "  "},
+		},
+	}
+
+	_, payload, err := buildRequestBytes(req)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var decoded warpapi.Request
+	if err := proto.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	settings := decoded.GetSettings()
+	if settings.GetSupportsParallelToolCalls() || settings.GetSupportsCreateFiles() || settings.GetWebSearchEnabled() {
+		t.Fatalf("malformed tools left capabilities enabled: %#v", settings)
+	}
+	if decoded.GetMcpContext() != nil {
+		t.Fatalf("malformed tools produced MCP context: %#v", decoded.GetMcpContext())
 	}
 }
 

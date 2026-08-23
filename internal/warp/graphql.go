@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,18 +17,10 @@ type RequestLimitInfo struct {
 	NextRefreshTime              string `json:"nextRefreshTime"`
 	RequestLimit                 int    `json:"requestLimit"`
 	RequestsUsedSinceLastRefresh int    `json:"requestsUsedSinceLastRefresh"`
-	RequestLimitRefreshDuration  string `json:"requestLimitRefreshDuration"`
-	PlanName                     string `json:"planName"`
-	PlanTier                     string `json:"planTier"`
-	Remaining                    int    `json:"remaining"`
 }
 
 type BonusGrant struct {
-	RequestCreditsGranted   int    `json:"requestCreditsGranted"`
-	RequestCreditsRemaining int    `json:"requestCreditsRemaining"`
-	Expiration              string `json:"expiration"`
-	Reason                  string `json:"reason"`
-	UserFacingMessage       string `json:"userFacingMessage"`
+	RequestCreditsRemaining int `json:"requestCreditsRemaining"`
 }
 
 const getRequestLimitInfoQuery = `query GetRequestLimitInfo($requestContext: RequestContext!) {
@@ -38,39 +29,20 @@ const getRequestLimitInfoQuery = `query GetRequestLimitInfo($requestContext: Req
     ... on UserOutput {
       user {
         workspaces {
-          uid
-          bonusGrantsInfo {
-            grants {
-              createdAt
-              costCents
-              expiration
-              reason
-              userFacingMessage
-              requestCreditsGranted
-              requestCreditsRemaining
-            }
-            spendingInfo {
-              currentMonthCreditsPurchased
-              currentMonthPeriodEnd
-              currentMonthSpendCents
-            }
-          }
+		  bonusGrantsInfo {
+			grants {
+			  requestCreditsRemaining
+			}
+		  }
         }
         requestLimitInfo {
           isUnlimited
           nextRefreshTime
           requestLimit
           requestsUsedSinceLastRefresh
-          requestLimitRefreshDuration
-        }
-        bonusGrants {
-          createdAt
-          costCents
-          expiration
-          reason
-          userFacingMessage
-          requestCreditsGranted
-          requestCreditsRemaining
+		}
+		bonusGrants {
+		  requestCreditsRemaining
         }
       }
     }
@@ -127,7 +99,6 @@ func fetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string)
 						NextRefreshTime              string  `json:"nextRefreshTime"`
 						RequestLimit                 float64 `json:"requestLimit"`
 						RequestsUsedSinceLastRefresh float64 `json:"requestsUsedSinceLastRefresh"`
-						RequestLimitRefreshDuration  string  `json:"requestLimitRefreshDuration"`
 					} `json:"requestLimitInfo"`
 					BonusGrants []BonusGrant `json:"bonusGrants"`
 				} `json:"user"`
@@ -163,24 +134,11 @@ func fetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string)
 			bonuses = append(bonuses, workspace.BonusGrantsInfo.Grants...)
 		}
 	}
-	bonusRemaining := 0
-	for _, grant := range bonuses {
-		if grant.RequestCreditsRemaining > 0 {
-			bonusRemaining += grant.RequestCreditsRemaining
-		}
-	}
-	remaining := requestLimit - used + bonusRemaining
-	if remaining < 0 {
-		remaining = 0
-	}
-
 	return &RequestLimitInfo{
 		IsUnlimited:                  info.IsUnlimited,
 		NextRefreshTime:              strings.TrimSpace(info.NextRefreshTime),
 		RequestLimit:                 requestLimit,
 		RequestsUsedSinceLastRefresh: used,
-		RequestLimitRefreshDuration:  strings.TrimSpace(info.RequestLimitRefreshDuration),
-		Remaining:                    remaining,
 	}, bonuses, nil
 }
 
@@ -258,7 +216,7 @@ func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, opera
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	bodyBytes, err := readLimitedBody(resp, 2<<20)
 	if err != nil {
 		return fmt.Errorf("warp graphql read body: %w", err)
 	}
@@ -276,22 +234,16 @@ func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, opera
 }
 
 func (c *Client) GetRequestLimitInfo(ctx context.Context) (*RequestLimitInfo, []BonusGrant, error) {
-	if c == nil || c.session == nil {
-		return nil, nil, fmt.Errorf("warp session not initialized")
-	}
-	client := c.authHTTPClient()
-	if err := c.session.ensureToken(ctx, client); err != nil {
+	client, err := c.ensureAuthenticated(ctx, false)
+	if err != nil {
 		return nil, nil, err
 	}
 	return fetchRequestLimitInfo(ctx, client, c.session.currentJWT())
 }
 
 func (c *Client) RefundCredits(ctx context.Context, reason string) error {
-	if c == nil || c.session == nil {
-		return fmt.Errorf("warp session not initialized")
-	}
-	client := c.authHTTPClient()
-	if err := c.session.ensureToken(ctx, client); err != nil {
+	client, err := c.ensureAuthenticated(ctx, false)
+	if err != nil {
 		return err
 	}
 	return refundCredits(ctx, client, c.session.currentJWT(), c.session.currentRequestID(), reason)

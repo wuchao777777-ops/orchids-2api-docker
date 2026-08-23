@@ -9,17 +9,12 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"math"
-	"path"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/goccy/go-json"
-	"google.golang.org/protobuf/encoding/protowire"
+	warpapi "github.com/warpdotdev/warp-proto-apis/apis/multi_agent/v1/gen/go"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 
 	"orchids-api/internal/debug"
 	"orchids-api/internal/toolname"
@@ -56,95 +51,12 @@ func (e *nonProtobufStreamError) Error() string {
 	return fmt.Sprintf("warp returned non-protobuf %s response: %s", e.Kind, e.Preview)
 }
 
-type decoder struct {
-	data []byte
-	pos  int
-}
-
-func (d *decoder) eof() bool {
-	return d.pos >= len(d.data)
-}
-
-func (d *decoder) readVarint() (uint64, error) {
-	var x uint64
-	var s uint
-	for {
-		if d.pos >= len(d.data) {
-			return 0, io.ErrUnexpectedEOF
-		}
-		b := d.data[d.pos]
-		d.pos++
-		if b < 0x80 {
-			if s >= 64 || (s == 63 && b > 1) {
-				return 0, errors.New("varint overflow")
-			}
-			return x | uint64(b)<<s, nil
-		}
-		x |= uint64(b&0x7f) << s
-		s += 7
-		if s > 64 {
-			return 0, errors.New("varint overflow")
-		}
-	}
-}
-
-func (d *decoder) readKey() (int, int, error) {
-	v, err := d.readVarint()
-	if err != nil {
-		return 0, 0, err
-	}
-	return int(v >> 3), int(v & 0x7), nil
-}
-
-func (d *decoder) readBytes() ([]byte, error) {
-	l, err := d.readVarint()
-	if err != nil {
-		return nil, err
-	}
-	if l > math.MaxInt32 {
-		return nil, errors.New("length overflow")
-	}
-	length := int(l)
-	if d.pos+length > len(d.data) {
-		return nil, io.ErrUnexpectedEOF
-	}
-	b := d.data[d.pos : d.pos+length]
-	d.pos += length
-	return b, nil
-}
-
-func (d *decoder) skip(wire int) error {
-	switch wire {
-	case 0:
-		_, err := d.readVarint()
-		return err
-	case 1:
-		if d.pos+8 > len(d.data) {
-			return io.ErrUnexpectedEOF
-		}
-		d.pos += 8
-		return nil
-	case 2:
-		_, err := d.readBytes()
-		return err
-	case 5:
-		if d.pos+4 > len(d.data) {
-			return io.ErrUnexpectedEOF
-		}
-		d.pos += 4
-		return nil
-	default:
-		return fmt.Errorf("unsupported wire type %d", wire)
-	}
-}
-
 type parsedEvent struct {
 	Recognized     bool
 	ConversationID string
 	ContentUpdates []warpContentUpdate
 	ToolCalls      []toolCall
 	Finish         *finishInfo
-	Error          string
 }
 
 type warpContentUpdate struct {
@@ -156,17 +68,15 @@ type warpContentUpdate struct {
 
 type warpStreamState struct {
 	sawToolCall        bool
-	toolCallIndex      int
-	textByMessage      map[string]string
-	reasoningByMessage map[string]string
+	textByMessage      map[string]*strings.Builder
+	reasoningByMessage map[string]*strings.Builder
 	seenToolCalls      map[string]struct{}
 }
 
 func newWarpStreamState() *warpStreamState {
 	return &warpStreamState{
-		textByMessage:      make(map[string]string),
-		reasoningByMessage: make(map[string]string),
-		seenToolCalls:      make(map[string]struct{}),
+		textByMessage:      make(map[string]*strings.Builder),
+		reasoningByMessage: make(map[string]*strings.Builder),
 	}
 }
 
@@ -182,10 +92,15 @@ func (s *warpStreamState) applyContentUpdate(update warpContentUpdate) string {
 	if update.Reasoning {
 		values = s.reasoningByMessage
 	}
+	buffer := values[key]
+	if buffer == nil {
+		buffer = &strings.Builder{}
+		values[key] = buffer
+	}
 
-	current := values[key]
+	current := buffer.String()
 	if !update.Snapshot {
-		values[key] = current + update.Text
+		buffer.WriteString(update.Text)
 		return update.Text
 	}
 
@@ -195,18 +110,19 @@ func (s *warpStreamState) applyContentUpdate(update warpContentUpdate) string {
 	// full response.
 	switch {
 	case current == "":
-		values[key] = update.Text
+		buffer.WriteString(update.Text)
 		return update.Text
 	case update.Text == current, strings.HasPrefix(current, update.Text):
 		return ""
 	case strings.HasPrefix(update.Text, current):
-		values[key] = update.Text
+		buffer.WriteString(update.Text[len(current):])
 		return update.Text[len(current):]
 	default:
 		// Streaming APIs cannot retract already-emitted text. Keep the latest
 		// snapshot for subsequent comparisons without appending a conflicting
 		// replacement as duplicate output.
-		values[key] = update.Text
+		buffer.Reset()
+		buffer.WriteString(update.Text)
 		return ""
 	}
 }
@@ -215,6 +131,9 @@ func (s *warpStreamState) acceptToolCall(call toolCall) bool {
 	if strings.TrimSpace(call.ID) == "" {
 		return true
 	}
+	if s.seenToolCalls == nil {
+		s.seenToolCalls = make(map[string]struct{})
+	}
 	if _, exists := s.seenToolCalls[call.ID]; exists {
 		return false
 	}
@@ -222,20 +141,20 @@ func (s *warpStreamState) acceptToolCall(call toolCall) bool {
 	return true
 }
 
+func (s *warpStreamState) finishReason() string {
+	if s.sawToolCall {
+		return "tool_use"
+	}
+	return "end_turn"
+}
+
 func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	if onMessage == nil {
 		onMessage = func(upstream.SSEMessage) {}
 	}
 	if closer, ok := reader.(io.Closer); ok {
-		done := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				_ = closer.Close()
-			case <-done:
-			}
-		}()
-		defer close(done)
+		stopClose := context.AfterFunc(ctx, func() { _ = closer.Close() })
+		defer stopClose()
 	}
 
 	br := bufio.NewReaderSize(reader, 64*1024)
@@ -280,16 +199,7 @@ func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(ups
 	if !handledFrame {
 		return fmt.Errorf("warp stream ended without parsed response events")
 	}
-
-	reason := "end_turn"
-	if state.sawToolCall {
-		reason = "tool_use"
-	}
-	onMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": reason},
-	})
-	return nil
+	return fmt.Errorf("warp stream ended without StreamFinished event")
 }
 
 func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -315,7 +225,7 @@ func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage f
 			if logger != nil {
 				logger.LogUpstreamSSE("warp_decode_error", err.Error())
 			}
-			return nil
+			return fmt.Errorf("decode Warp SSE payload: %w", err)
 		}
 
 		handled, done, err := emitWarpPayload(payloadBytes, onMessage, state)
@@ -374,14 +284,7 @@ func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage f
 		return fmt.Errorf("warp stream received %d SSE data events but none parsed", dataEventCount)
 	}
 	if !finishSent {
-		reason := "end_turn"
-		if state.sawToolCall {
-			reason = "tool_use"
-		}
-		onMessage(upstream.SSEMessage{
-			Type:  "model.finish",
-			Event: map[string]interface{}{"finishReason": reason},
-		})
+		return fmt.Errorf("warp SSE stream ended without StreamFinished event")
 	}
 	return nil
 }
@@ -390,149 +293,76 @@ func decodeWarpPayload(data string) ([]byte, error) {
 	if data == "" {
 		return nil, fmt.Errorf("empty payload")
 	}
-	if decoded, err := base64.RawURLEncoding.DecodeString(data); err == nil {
-		return decoded, nil
+	encoding := base64.RawURLEncoding
+	if strings.ContainsAny(data, "+/") {
+		encoding = base64.StdEncoding
+	} else if strings.HasSuffix(data, "=") {
+		encoding = base64.URLEncoding
 	}
-	if decoded, err := base64.URLEncoding.DecodeString(data); err == nil {
-		return decoded, nil
-	}
-	return base64.StdEncoding.DecodeString(data)
+	return encoding.DecodeString(data)
 }
 
 func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), state *warpStreamState) (bool, bool, error) {
-	if parsed, err := parseResponseEvent(frame); err == nil && parsed.Recognized {
-		if parsed.ConversationID != "" {
-			onMessage(upstream.SSEMessage{
-				Type:  "model.conversation_id",
-				Event: map[string]interface{}{"id": parsed.ConversationID},
-			})
-		}
-		for _, update := range parsed.ContentUpdates {
-			delta := state.applyContentUpdate(update)
-			if delta == "" {
-				continue
-			}
-			eventType := "model.text-delta"
-			if update.Reasoning {
-				eventType = "model.reasoning-delta"
-			}
-			onMessage(upstream.SSEMessage{
-				Type:  eventType,
-				Event: map[string]interface{}{"delta": delta},
-			})
-		}
-		for _, call := range parsed.ToolCalls {
-			if !state.acceptToolCall(call) {
-				continue
-			}
-			state.sawToolCall = true
-			onMessage(upstream.SSEMessage{
-				Type: "model.tool-call",
-				Event: map[string]interface{}{
-					"toolCallId":   call.ID,
-					"toolName":     call.Name,
-					"input":        call.Input,
-					"warpToolType": call.Type,
-				},
-			})
-		}
-		if parsed.Error != "" {
-			return true, false, fmt.Errorf("warp stream error: %s", parsed.Error)
-		}
-		if parsed.Finish != nil {
-			if err := parsed.Finish.terminalError(); err != nil {
-				return true, false, err
-			}
-			finish := map[string]interface{}{
-				"finishReason": "end_turn",
-			}
-			if state.sawToolCall {
-				finish["finishReason"] = "tool_use"
-			}
-			if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
-				finish["usage"] = map[string]interface{}{
-					"inputTokens":  parsed.Finish.InputTokens,
-					"outputTokens": parsed.Finish.OutputTokens,
-				}
-			}
-			if parsed.Finish.ShouldRefreshModelConfig {
-				finish["shouldRefreshModelConfig"] = true
-			}
-			onMessage(upstream.SSEMessage{Type: "model.finish", Event: finish})
-			return true, true, nil
-		}
-		return true, false, nil
+	parsed, err := parseResponseEvent(frame)
+	if err != nil {
+		return false, false, fmt.Errorf("decode Warp response event: %w", err)
 	}
-
-	fields := parseRawProtobuf(frame)
-	handled := false
-
-	for _, value := range fields[1] {
-		if text := extractStringValue(value); text != "" {
-			handled = true
-			onMessage(upstream.SSEMessage{
-				Type:  "model.text-delta",
-				Event: map[string]interface{}{"delta": text},
-			})
-		}
+	if !parsed.Recognized {
+		return false, false, nil
 	}
-
-	for _, value := range fields[2] {
-		if text := extractStringValue(value); text != "" {
-			handled = true
-			onMessage(upstream.SSEMessage{
-				Type:  "model.reasoning-delta",
-				Event: map[string]interface{}{"delta": text},
-			})
-		}
+	if parsed.ConversationID != "" {
+		onMessage(upstream.SSEMessage{
+			Type:  "model.conversation_id",
+			Event: map[string]interface{}{"id": parsed.ConversationID},
+		})
 	}
-
-	for _, value := range fields[3] {
-		payload, ok := value.([]byte)
-		if !ok || len(payload) == 0 {
+	for _, update := range parsed.ContentUpdates {
+		delta := state.applyContentUpdate(update)
+		if delta == "" {
 			continue
 		}
-		calls := parseToolCalls(parseRawProtobuf(payload), state.toolCallIndex)
-		for _, call := range calls {
-			if !state.acceptToolCall(call) {
-				continue
-			}
-			handled = true
-			state.sawToolCall = true
-			state.toolCallIndex++
-			onMessage(upstream.SSEMessage{
-				Type: "model.tool-call",
-				Event: map[string]interface{}{
-					"toolCallId": call.ID,
-					"toolName":   call.Name,
-					"input":      call.Input,
-				},
-			})
+		eventType := "model.text-delta"
+		if update.Reasoning {
+			eventType = "model.reasoning-delta"
+		}
+		onMessage(upstream.SSEMessage{
+			Type:  eventType,
+			Event: map[string]interface{}{"delta": delta},
+		})
+	}
+	for _, call := range parsed.ToolCalls {
+		if !state.acceptToolCall(call) {
+			continue
+		}
+		state.sawToolCall = true
+		onMessage(upstream.SSEMessage{
+			Type: "model.tool-call",
+			Event: map[string]interface{}{
+				"toolCallId":   call.ID,
+				"toolName":     call.Name,
+				"input":        call.Input,
+				"warpToolType": call.Type,
+			},
+		})
+	}
+	if parsed.Finish == nil {
+		return true, false, nil
+	}
+	if err := parsed.Finish.terminalError(); err != nil {
+		return true, false, err
+	}
+	finish := map[string]interface{}{"finishReason": state.finishReason()}
+	if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
+		finish["usage"] = map[string]interface{}{
+			"inputTokens":  parsed.Finish.InputTokens,
+			"outputTokens": parsed.Finish.OutputTokens,
 		}
 	}
-
-	if errMsg := firstNonEmptyString(fields[6]); errMsg != "" {
-		return true, false, fmt.Errorf("warp stream error: %s", errMsg)
+	if parsed.Finish.ShouldRefreshModelConfig {
+		finish["shouldRefreshModelConfig"] = true
 	}
-
-	if isDone(fields[4]) {
-		finish := map[string]interface{}{
-			"finishReason": "end_turn",
-		}
-		if state.sawToolCall {
-			finish["finishReason"] = "tool_use"
-		}
-		if usage := parseUsage(fields[5]); usage != nil {
-			finish["usage"] = map[string]interface{}{
-				"inputTokens":  usage.InputTokens,
-				"outputTokens": usage.OutputTokens,
-			}
-		}
-		onMessage(upstream.SSEMessage{Type: "model.finish", Event: finish})
-		return true, true, nil
-	}
-
-	return handled, false, nil
+	onMessage(upstream.SSEMessage{Type: "model.finish", Event: finish})
+	return true, true, nil
 }
 
 func readFrame(reader *bufio.Reader) ([]byte, error) {
@@ -567,478 +397,112 @@ func readFrame(reader *bufio.Reader) ([]byte, error) {
 }
 
 func parseResponseEvent(data []byte) (*parsedEvent, error) {
-	d := decoder{data: data}
-	out := &parsedEvent{}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return out, err
+	var event warpapi.ResponseEvent
+	if err := proto.Unmarshal(data, &event); err != nil {
+		return nil, err
+	}
+	out := &parsedEvent{Recognized: event.HasType()}
+	switch event.WhichType() {
+	case warpapi.ResponseEvent_Init_case:
+		out.ConversationID = event.GetInit().GetConversationId()
+	case warpapi.ResponseEvent_ClientActions_case:
+		for _, action := range event.GetClientActions().GetActions() {
+			appendWarpClientAction(out, action)
 		}
-		switch field {
-		case 1:
-			if wire != 2 {
-				if err := d.skip(wire); err != nil {
-					return out, err
-				}
-				continue
-			}
-			out.Recognized = true
-			payload, err := d.readBytes()
-			if err != nil {
-				return out, err
-			}
-			parseStreamInit(payload, out)
-		case 2:
-			if wire != 2 {
-				if err := d.skip(wire); err != nil {
-					return out, err
-				}
-				continue
-			}
-			out.Recognized = true
-			payload, err := d.readBytes()
-			if err != nil {
-				return out, err
-			}
-			parseClientActions(payload, out)
-		case 3:
-			if wire != 2 {
-				if err := d.skip(wire); err != nil {
-					return out, err
-				}
-				continue
-			}
-			out.Recognized = true
-			payload, err := d.readBytes()
-			if err != nil {
-				return out, err
-			}
-			parseNestedStreamFinished(payload, out)
-		case 4:
-			if wire != 2 {
-				if err := d.skip(wire); err != nil {
-					return out, err
-				}
-				continue
-			}
-			out.Recognized = true
-			payload, err := d.readBytes()
-			if err != nil {
-				return out, err
-			}
-			out.Error = parseNestedStreamError(payload)
-		default:
-			if err := d.skip(wire); err != nil {
-				return out, err
-			}
-		}
+	case warpapi.ResponseEvent_Finished_case:
+		out.Finish = parseStreamFinished(event.GetFinished())
 	}
 	return out, nil
 }
 
-func parseStreamInit(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		if field == 1 && wire == 2 {
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			out.ConversationID = string(payload)
-			continue
-		}
-		_ = d.skip(wire)
+func appendWarpClientAction(out *parsedEvent, action *warpapi.ClientAction) {
+	if action == nil {
+		return
+	}
+	switch action.WhichAction() {
+	case warpapi.ClientAction_CreateTask_case:
+		appendWarpMessages(out, action.GetCreateTask().GetTask().GetMessages(), true)
+	case warpapi.ClientAction_AddMessagesToTask_case:
+		appendWarpMessages(out, action.GetAddMessagesToTask().GetMessages(), true)
+	case warpapi.ClientAction_UpdateTaskMessage_case:
+		appendWarpMessage(out, action.GetUpdateTaskMessage().GetMessage(), true)
+	case warpapi.ClientAction_AppendToMessageContent_case:
+		appendWarpMessage(out, action.GetAppendToMessageContent().GetMessage(), false)
 	}
 }
 
-func parseClientActions(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		if field == 1 && wire == 2 {
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseClientAction(payload, out)
-			continue
-		}
-		_ = d.skip(wire)
+func appendWarpMessages(out *parsedEvent, messages []*warpapi.Message, snapshot bool) {
+	for _, message := range messages {
+		appendWarpMessage(out, message, snapshot)
 	}
 }
 
-func parseClientAction(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		switch field {
-		case 1:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseCreateTask(payload, out)
-		case 3:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseAddMessages(payload, out)
-		case 4:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseUpdateTaskMessage(payload, out)
-		case 5:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseAppendToMessage(payload, out)
-		default:
-			_ = d.skip(wire)
-		}
+func appendWarpMessage(out *parsedEvent, message *warpapi.Message, snapshot bool) {
+	if message == nil {
+		return
 	}
-}
-
-func parseAppendToMessage(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		if field == 1 && wire == 2 {
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseMessage(payload, out, false)
-			continue
-		}
-		_ = d.skip(wire)
-	}
-}
-
-func parseAddMessages(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		if field == 2 && wire == 2 {
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseMessage(payload, out, true)
-			continue
-		}
-		_ = d.skip(wire)
-	}
-}
-
-func parseUpdateTaskMessage(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		if field == 1 && wire == 2 {
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseMessage(payload, out, true)
-			continue
-		}
-		_ = d.skip(wire)
-	}
-}
-
-func parseCreateTask(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		if field == 1 && wire == 2 {
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseTask(payload, out)
-			continue
-		}
-		_ = d.skip(wire)
-	}
-}
-
-func parseTask(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		if field == 5 && wire == 2 {
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			parseMessage(payload, out, true)
-			continue
-		}
-		_ = d.skip(wire)
-	}
-}
-
-func parseMessage(data []byte, out *parsedEvent, snapshot bool) {
-	d := decoder{data: data}
-	messageID := ""
-	var agentOutputs [][]byte
-	var agentReasoning [][]byte
-	var toolCalls [][]byte
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		switch field {
-		case 1:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			messageID = string(payload)
-		case 3:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			agentOutputs = append(agentOutputs, payload)
-		case 4:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			toolCalls = append(toolCalls, payload)
-		case 15:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			agentReasoning = append(agentReasoning, payload)
-		default:
-			_ = d.skip(wire)
-		}
-	}
-	for _, payload := range agentOutputs {
-		parseAgentOutput(payload, out, messageID, snapshot)
-	}
-	for _, payload := range agentReasoning {
-		parseAgentReasoning(payload, out, messageID, snapshot)
-	}
-	for _, payload := range toolCalls {
-		parseNestedToolCall(payload, out)
-	}
-}
-
-func parseAgentOutput(data []byte, out *parsedEvent, messageID string, snapshot bool) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		if wire != 2 {
-			_ = d.skip(wire)
-			continue
-		}
-		payload, err := d.readBytes()
-		if err != nil {
-			return
-		}
-		switch field {
-		case 1:
-			out.ContentUpdates = append(out.ContentUpdates, warpContentUpdate{
-				MessageID: messageID,
-				Text:      string(payload),
-				Snapshot:  snapshot,
-			})
-		case 2:
-			// Older Warp protocol versions used the second AgentOutput field
-			// for visible reasoning. Retain compatibility even though current
-			// response.proto uses a dedicated AgentReasoning message.
-			out.ContentUpdates = append(out.ContentUpdates, warpContentUpdate{
-				MessageID: messageID,
-				Text:      string(payload),
-				Reasoning: true,
-				Snapshot:  snapshot,
-			})
-		}
-	}
-}
-
-func parseAgentReasoning(data []byte, out *parsedEvent, messageID string, snapshot bool) {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return
-		}
-		if field != 1 || wire != 2 {
-			_ = d.skip(wire)
-			continue
-		}
-		payload, err := d.readBytes()
-		if err != nil {
-			return
-		}
+	switch message.WhichMessage() {
+	case warpapi.Message_AgentOutput_case:
 		out.ContentUpdates = append(out.ContentUpdates, warpContentUpdate{
-			MessageID: messageID,
-			Text:      string(payload),
+			MessageID: message.GetId(),
+			Text:      message.GetAgentOutput().GetText(),
+			Snapshot:  snapshot,
+		})
+	case warpapi.Message_AgentReasoning_case:
+		out.ContentUpdates = append(out.ContentUpdates, warpContentUpdate{
+			MessageID: message.GetId(),
+			Text:      message.GetAgentReasoning().GetReasoning(),
 			Reasoning: true,
 			Snapshot:  snapshot,
 		})
+	case warpapi.Message_ToolCall_case:
+		if call, ok := parseWarpToolCall(message.GetToolCall()); ok {
+			out.ToolCalls = append(out.ToolCalls, call)
+		}
 	}
 }
 
-func parseNestedToolCall(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
-	toolID := ""
+func parseWarpToolCall(call *warpapi.Message_ToolCall) (toolCall, bool) {
+	if call == nil || !call.HasTool() {
+		return toolCall{}, false
+	}
+
 	toolName := ""
-	toolInput := ""
+	toolInput := "{}"
 	toolType := ""
-	for !d.eof() {
-		field, wire, err := d.readKey()
+	if mcpCall := call.GetCallMcpTool(); mcpCall != nil {
+		toolName = mcpCall.GetName()
+		toolType = "call_mcp_tool"
+		if mcpCall.GetArgs() != nil {
+			toolInput = marshalToolInput(mcpCall.GetArgs().AsMap())
+		}
+	} else {
+		message := call.ProtoReflect()
+		field := message.WhichOneof(message.Descriptor().Oneofs().ByName("tool"))
+		if field == nil {
+			return toolCall{}, false
+		}
+		toolType = string(field.Name())
+		if !shouldEmitWarpToolName(toolType) {
+			return toolCall{}, false
+		}
+		payload, err := proto.Marshal(message.Get(field).Message().Interface())
 		if err != nil {
-			return
+			return toolCall{}, false
 		}
-		switch field {
-		case 1:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			toolID = string(payload)
-		case 12:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			name, input := parseCallMCPTool(payload)
-			if name != "" {
-				toolName = name
-				toolInput = input
-				toolType = "call_mcp_tool"
-			}
-		case 5:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return
-			}
-			resolvedName, resolvedInput := parseFallbackToolInput("read_files", payload)
-			if resolvedInput != "" && resolvedInput != "{}" {
-				toolName = resolvedName
-				toolInput = resolvedInput
-				toolType = "read_files"
-			}
-		default:
-			if toolName == "" && wire == 2 {
-				payload, err := d.readBytes()
-				if err != nil {
-					return
-				}
-				fallbackName := fallbackToolName(field)
-				if !shouldEmitWarpFallbackToolName(fallbackName) {
-					continue
-				}
-				resolvedName, resolvedInput := parseFallbackToolInput(fallbackName, payload)
-				if strings.TrimSpace(resolvedName) == "" {
-					resolvedName = fallbackName
-				}
-				toolName = resolvedName
-				toolInput = resolvedInput
-				toolType = fallbackName
-				if toolInput == "" {
-					toolInput = "{}"
-				}
-				continue
-			}
-			_ = d.skip(wire)
-		}
+		toolName, toolInput = parseWarpToolInput(toolType, payload)
 	}
-	if toolName == "" {
-		return
-	}
-	toolName = normalizeWarpFallbackToolName(toolName)
+
+	toolName = normalizeWarpToolName(toolName)
 	toolInput = normalizeToolInputForToolName(toolName, toolInput)
-	if isIncompleteToolCall(toolName, toolInput) {
-		return
+	if toolName == "" || isIncompleteToolCall(toolName, toolInput) {
+		return toolCall{}, false
 	}
+	toolID := call.GetToolCallId()
 	if toolID == "" {
-		toolID = nestedFallbackToolCallID(toolName, toolInput)
+		toolID = derivedWarpToolCallID(toolName, toolInput)
 	}
-	out.ToolCalls = append(out.ToolCalls, toolCall{ID: toolID, Name: toolName, Input: toolInput, Type: toolType})
+	return toolCall{ID: toolID, Name: toolName, Input: toolInput, Type: toolType}, true
 }
 
 func sniffNonProtobufResponse(reader *bufio.Reader) (preview string, kind string, ok bool) {
@@ -1112,137 +576,7 @@ func looksLikeDisplayStringBytes(data []byte) bool {
 	return total > 0 && printable*100/total >= 85
 }
 
-func parseRawProtobuf(data []byte) map[uint32][]interface{} {
-	result := make(map[uint32][]interface{})
-	for len(data) > 0 {
-		num, typ, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			return result
-		}
-		data = data[n:]
-
-		switch typ {
-		case protowire.VarintType:
-			v, n := protowire.ConsumeVarint(data)
-			if n < 0 {
-				return result
-			}
-			result[uint32(num)] = append(result[uint32(num)], v)
-			data = data[n:]
-		case protowire.Fixed32Type:
-			v, n := protowire.ConsumeFixed32(data)
-			if n < 0 {
-				return result
-			}
-			result[uint32(num)] = append(result[uint32(num)], v)
-			data = data[n:]
-		case protowire.Fixed64Type:
-			v, n := protowire.ConsumeFixed64(data)
-			if n < 0 {
-				return result
-			}
-			result[uint32(num)] = append(result[uint32(num)], v)
-			data = data[n:]
-		case protowire.BytesType:
-			v, n := protowire.ConsumeBytes(data)
-			if n < 0 {
-				return result
-			}
-			result[uint32(num)] = append(result[uint32(num)], v)
-			data = data[n:]
-		default:
-			return result
-		}
-	}
-	return result
-}
-
-func extractStringValue(v interface{}) string {
-	switch t := v.(type) {
-	case []byte:
-		if !looksLikeDisplayStringBytes(t) {
-			return ""
-		}
-		return strings.TrimSpace(strings.ToValidUTF8(string(t), ""))
-	case string:
-		if !looksLikeDisplayStringBytes([]byte(t)) {
-			return ""
-		}
-		return strings.TrimSpace(strings.ToValidUTF8(t, ""))
-	default:
-		return ""
-	}
-}
-
-func firstNonEmptyString(values []interface{}) string {
-	for _, value := range values {
-		if text := extractStringValue(value); text != "" {
-			return text
-		}
-	}
-	return ""
-}
-
-func isDone(values []interface{}) bool {
-	for _, value := range values {
-		if flag, ok := value.(uint64); ok && flag == 1 {
-			return true
-		}
-	}
-	return false
-}
-
-func parseUsage(values []interface{}) *finishInfo {
-	for _, value := range values {
-		payload, ok := value.([]byte)
-		if !ok || len(payload) == 0 {
-			continue
-		}
-		fields := parseRawProtobuf(payload)
-		usage := &finishInfo{}
-		if len(fields[1]) > 0 {
-			if n, ok := fields[1][0].(uint64); ok {
-				usage.InputTokens = int(n)
-			}
-		}
-		if len(fields[2]) > 0 {
-			if n, ok := fields[2][0].(uint64); ok {
-				usage.OutputTokens = int(n)
-			}
-		}
-		return usage
-	}
-	return nil
-}
-
-func parseToolCalls(fields map[uint32][]interface{}, index int) []toolCall {
-	name := firstNonEmptyString(fields[1])
-	args := firstNonEmptyString(fields[2])
-	callID := firstNonEmptyString(fields[3])
-	if name == "" {
-		return nil
-	}
-	return mapWarpToolCalls(name, args, callID, index)
-}
-
-func mapWarpToolCalls(name, rawArgs, callID string, index int) []toolCall {
-	args := map[string]interface{}{}
-	if strings.TrimSpace(rawArgs) != "" {
-		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-			args["raw"] = strings.TrimSpace(rawArgs)
-		}
-	}
-
-	baseName, transformed := transformWarpToolCall(name, args)
-	return []toolCall{{
-		ID:    derivedCallID(callID, name, 0),
-		Name:  baseName,
-		Input: marshalToolInput(transformed),
-		Type:  name,
-	}}
-}
-
-func normalizeWarpFallbackToolName(name string) string {
+func normalizeWarpToolName(name string) string {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "write_to_long_running_shell_command":
 		return "Bash"
@@ -1251,145 +585,13 @@ func normalizeWarpFallbackToolName(name string) string {
 	}
 }
 
-func shouldEmitWarpFallbackToolName(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(normalizeWarpFallbackToolName(name))) {
+func shouldEmitWarpToolName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(normalizeWarpToolName(name))) {
 	case "bash", "grep", "glob", "read", "edit", "write", "read_shell_command_output":
 		return true
 	default:
 		return false
 	}
-}
-
-func transformWarpToolCall(name string, args map[string]interface{}) (string, map[string]interface{}) {
-	baseName := name
-	if mapped, ok := warpToClientToolMap[name]; ok {
-		baseName = mapped
-	}
-	baseName = toolname.NormalizeToolNameFallback(baseName)
-
-	out := map[string]interface{}{}
-	switch name {
-	case "grep":
-		copyIfPresent(out, "pattern", args, "pattern")
-		copyIfPresent(out, "path", args, "path")
-		copyIfPresent(out, "glob", args, "include")
-	case "file_glob":
-		copyIfPresent(out, "pattern", args, "pattern")
-		copyIfPresent(out, "path", args, "path")
-	case "read_files":
-		if paths := extractReadPaths(args); len(paths) > 0 {
-			out["file_path"] = paths[0]
-		}
-		copyIfPresent(out, "offset", args, "start")
-		copyIfPresent(out, "limit", args, "end")
-	case "edit_file":
-		copyStringIfPresent(out, "file_path", args, "path", sanitizeFileName)
-		copyStringIfPresent(out, "old_string", args, "old_string", stripLineNumberPrefixes)
-		copyStringIfPresent(out, "new_string", args, "new_string", stripLineNumberPrefixes)
-	case "write_file", "create_file":
-		copyStringIfPresent(out, "file_path", args, "path", sanitizeFileName)
-		copyStringIfPresent(out, "content", args, "content", stripLineNumberPrefixes)
-	case "run_command":
-		copyIfPresent(out, "command", args, "command")
-		copyIfPresent(out, "timeout", args, "timeout")
-	case "read_shell_command_output":
-		copyIfPresent(out, "command_id", args, "command_id")
-		copyIfPresent(out, "duration", args, "duration")
-		copyIfPresent(out, "on_completion", args, "on_completion")
-	case "list_directory":
-		copyIfPresent(out, "path", args, "path")
-	case "subagent":
-		for k, v := range args {
-			out[k] = v
-		}
-	default:
-		for k, v := range args {
-			out[k] = v
-		}
-	}
-
-	if len(out) == 0 {
-		out = map[string]interface{}{}
-	}
-	return baseName, out
-}
-
-func copyIfPresent(dst map[string]interface{}, dstKey string, src map[string]interface{}, srcKey string) {
-	if value, ok := src[srcKey]; ok {
-		dst[dstKey] = value
-	}
-}
-
-func copyStringIfPresent(dst map[string]interface{}, dstKey string, src map[string]interface{}, srcKey string, transform func(string) string) {
-	value, ok := src[srcKey]
-	if !ok {
-		return
-	}
-
-	text := fmt.Sprintf("%v", value)
-	if transform != nil {
-		text = transform(text)
-	}
-	dst[dstKey] = text
-}
-
-func extractReadPaths(args map[string]interface{}) []string {
-	var out []string
-	appendPath := func(value interface{}) {
-		if path := extractSinglePath(value); path != "" {
-			out = append(out, path)
-		}
-	}
-
-	if value, ok := args["paths"]; ok {
-		switch paths := value.(type) {
-		case []interface{}:
-			for _, path := range paths {
-				appendPath(path)
-			}
-		default:
-			appendPath(paths)
-		}
-	}
-	if len(out) == 0 {
-		appendPath(args["path"])
-		appendPath(args["file_path"])
-	}
-
-	seen := map[string]struct{}{}
-	uniq := out[:0]
-	for _, path := range out {
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		uniq = append(uniq, path)
-	}
-	return uniq
-}
-
-func extractSinglePath(value interface{}) string {
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	default:
-		return ""
-	}
-}
-
-func derivedCallID(callID, toolName string, index int) string {
-	callID = strings.TrimSpace(callID)
-	if callID != "" {
-		if index <= 0 {
-			return callID
-		}
-		return fmt.Sprintf("%s_%d", callID, index)
-	}
-	name := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(toolName), " ", "_"))
-	if name == "" {
-		name = "tool"
-	}
-	return fmt.Sprintf("call_%s_%d", name, index)
 }
 
 func marshalToolInput(input map[string]interface{}) string {
@@ -1403,48 +605,7 @@ func marshalToolInput(input map[string]interface{}) string {
 	return string(data)
 }
 
-func sanitizeFileName(name string) string {
-	name = strings.TrimSpace(strings.ReplaceAll(name, "\x00", ""))
-	if name == "" {
-		return ""
-	}
-
-	hadDotPrefix := strings.HasPrefix(name, "./")
-	name = strings.ReplaceAll(name, "\\", "/")
-	name = path.Clean(name)
-	if hadDotPrefix && name != "." && !strings.HasPrefix(name, "./") && !strings.HasPrefix(name, "../") {
-		name = "./" + name
-	}
-	return filepath.ToSlash(name)
-}
-
-var lineNumberPrefixRe = regexp.MustCompile(`(?m)^\s*\d+\t`)
-
-func stripLineNumberPrefixes(text string) string {
-	lines := strings.Split(text, "\n")
-	if len(lines) == 0 {
-		return text
-	}
-
-	matchCount := 0
-	nonEmpty := 0
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		nonEmpty++
-		if lineNumberPrefixRe.MatchString(line) {
-			matchCount++
-		}
-	}
-
-	if nonEmpty > 0 && float64(matchCount)/float64(nonEmpty) > 0.5 {
-		return lineNumberPrefixRe.ReplaceAllString(text, "")
-	}
-	return text
-}
-
-func nestedFallbackToolCallID(toolName, toolInput string) string {
+func derivedWarpToolCallID(toolName, toolInput string) string {
 	name := strings.ToLower(strings.TrimSpace(toolName))
 	input := strings.TrimSpace(toolInput)
 	if input == "" {
@@ -1488,6 +649,20 @@ func isIncompleteToolCall(toolName, toolInput string) bool {
 		}
 		path, _ := payload["file_path"].(string)
 		return strings.TrimSpace(path) == ""
+	case "read":
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(toolInput), &payload); err != nil {
+			return false
+		}
+		path, _ := payload["file_path"].(string)
+		return strings.TrimSpace(path) == ""
+	case "grep", "glob":
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(toolInput), &payload); err != nil {
+			return false
+		}
+		pattern, _ := payload["pattern"].(string)
+		return strings.TrimSpace(pattern) == ""
 	case "edit":
 		var payload map[string]interface{}
 		if err := json.Unmarshal([]byte(toolInput), &payload); err != nil {
@@ -1724,192 +899,44 @@ func findWarpWindowsPathStart(s string) int {
 	return -1
 }
 
-func parseCallMCPTool(data []byte) (string, string) {
-	d := decoder{data: data}
-	name := ""
-	input := "{}"
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return name, input
-		}
-		if wire != 2 {
-			_ = d.skip(wire)
-			continue
-		}
-		payload, err := d.readBytes()
-		if err != nil {
-			return name, input
-		}
-		switch field {
-		case 1:
-			name = string(payload)
-		case 2:
-			var st structpb.Struct
-			if err := proto.Unmarshal(payload, &st); err == nil {
-				if m := st.AsMap(); len(m) > 0 {
-					if b, err := json.Marshal(m); err == nil {
-						input = string(b)
-					}
-				}
-			}
-		}
-	}
-	return name, input
-}
-
-func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
+func parseWarpToolInput(toolName string, payload []byte) (string, string) {
 	switch toolName {
-	case "run_shell_command", "write_to_long_running_shell_command":
-		input := map[string]interface{}{}
-		d := decoder{data: payload}
-		for !d.eof() {
-			field, wire, err := d.readKey()
-			if err != nil {
-				break
-			}
-			switch field {
-			case 1:
-				if wire != 2 {
-					_ = d.skip(wire)
-					continue
-				}
-				b, err := d.readBytes()
-				if err != nil {
-					break
-				}
-				if cmd := string(b); cmd != "" {
-					input["command"] = cmd
-				}
-			case 2:
-				if wire != 0 {
-					_ = d.skip(wire)
-					continue
-				}
-				v, err := d.readVarint()
-				if err != nil {
-					break
-				}
-				input["is_read_only"] = v != 0
-			case 3:
-				if wire != 0 {
-					_ = d.skip(wire)
-					continue
-				}
-				v, err := d.readVarint()
-				if err != nil {
-					break
-				}
-				input["uses_pager"] = v != 0
-			case 5:
-				if wire != 0 {
-					_ = d.skip(wire)
-					continue
-				}
-				v, err := d.readVarint()
-				if err != nil {
-					break
-				}
-				input["is_risky"] = v != 0
-			case 6:
-				if wire != 0 {
-					_ = d.skip(wire)
-					continue
-				}
-				v, err := d.readVarint()
-				if err != nil {
-					break
-				}
-				input["wait_until_complete"] = v != 0
-			default:
-				_ = d.skip(wire)
-			}
-		}
-		if len(input) == 0 {
+	case "run_shell_command":
+		var call warpapi.Message_ToolCall_RunShellCommand
+		if err := proto.Unmarshal(payload, &call); err != nil {
 			return toolName, "{}"
 		}
-		b, err := json.Marshal(input)
-		if err != nil {
+		return toolName, marshalToolInput(map[string]interface{}{"command": call.GetCommand()})
+	case "write_to_long_running_shell_command":
+		var call warpapi.Message_ToolCall_WriteToLongRunningShellCommand
+		if err := proto.Unmarshal(payload, &call); err != nil {
 			return toolName, "{}"
 		}
-		return toolName, string(b)
+		return toolName, marshalToolInput(map[string]interface{}{"command": string(call.GetInput())})
 	case "read_shell_command_output":
-		input := map[string]interface{}{}
-		d := decoder{data: payload}
-		for !d.eof() {
-			field, wire, err := d.readKey()
-			if err != nil {
-				break
-			}
-			switch field {
-			case 1:
-				if wire != 2 {
-					_ = d.skip(wire)
-					continue
-				}
-				b, err := d.readBytes()
-				if err != nil {
-					break
-				}
-				if commandID := strings.TrimSpace(string(b)); commandID != "" {
-					input["command_id"] = commandID
-				}
-			case 2:
-				if wire != 2 {
-					_ = d.skip(wire)
-					continue
-				}
-				b, err := d.readBytes()
-				if err != nil {
-					break
-				}
-				if seconds, nanos, ok := parseWarpDuration(b); ok {
-					input["duration"] = map[string]interface{}{
-						"seconds": seconds,
-						"nanos":   nanos,
-					}
-				}
-			case 3:
-				if wire != 2 {
-					_ = d.skip(wire)
-					continue
-				}
-				if _, err := d.readBytes(); err != nil {
-					break
-				}
-				input["on_completion"] = true
-			default:
-				_ = d.skip(wire)
-			}
-		}
-		if len(input) == 0 {
+		var call warpapi.Message_ToolCall_ReadShellCommandOutput
+		if err := proto.Unmarshal(payload, &call); err != nil {
 			return toolName, "{}"
 		}
-		b, err := json.Marshal(input)
-		if err != nil {
-			return toolName, "{}"
+		input := map[string]interface{}{"command_id": call.GetCommandId()}
+		if duration := call.GetDuration(); duration != nil {
+			input["duration"] = map[string]interface{}{"seconds": duration.GetSeconds(), "nanos": duration.GetNanos()}
 		}
-		return toolName, string(b)
+		if call.GetOnCompletion() != nil {
+			input["on_completion"] = true
+		}
+		return toolName, marshalToolInput(input)
 	case "apply_file_diffs":
 		return parseApplyFileDiffsPayload(payload)
 	case "read_files":
-		var files []string
-		d := decoder{data: payload}
-		for !d.eof() {
-			field, wire, err := d.readKey()
-			if err != nil {
-				break
-			}
-			if field == 1 && wire == 2 {
-				b, err := d.readBytes()
-				if err != nil {
-					break
-				}
-				if path := strings.TrimSpace(string(b)); path != "" {
-					files = append(files, path)
-				}
-			} else {
-				_ = d.skip(wire)
+		var call warpapi.Message_ToolCall_ReadFiles
+		if err := proto.Unmarshal(payload, &call); err != nil {
+			return "Read", "{}"
+		}
+		files := make([]string, 0, len(call.GetFiles()))
+		for _, file := range call.GetFiles() {
+			if name := strings.TrimSpace(file.GetName()); name != "" {
+				files = append(files, name)
 			}
 		}
 		if len(files) == 0 {
@@ -1919,380 +946,119 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 		if path == "" {
 			path = files[0]
 		}
-		input := map[string]string{"file_path": path}
-		b, err := json.Marshal(input)
-		if err != nil {
-			return "Read", "{}"
+		return "Read", marshalToolInput(map[string]interface{}{"file_path": path})
+	case "grep":
+		var call warpapi.Message_ToolCall_Grep
+		if err := proto.Unmarshal(payload, &call); err != nil || len(call.GetQueries()) == 0 {
+			return "Grep", "{}"
 		}
-		return "Read", string(b)
+		return "Grep", marshalToolInput(map[string]interface{}{
+			"pattern": call.GetQueries()[0],
+			"path":    call.GetPath(),
+		})
+	case "file_glob":
+		var call warpapi.Message_ToolCall_FileGlob
+		if err := proto.Unmarshal(payload, &call); err != nil || len(call.GetPatterns()) == 0 {
+			return "Glob", "{}"
+		}
+		return "Glob", marshalToolInput(map[string]interface{}{
+			"pattern": call.GetPatterns()[0],
+			"path":    call.GetPath(),
+		})
+	case "file_glob_v2":
+		var call warpapi.Message_ToolCall_FileGlobV2
+		if err := proto.Unmarshal(payload, &call); err != nil || len(call.GetPatterns()) == 0 {
+			return "Glob", "{}"
+		}
+		return "Glob", marshalToolInput(map[string]interface{}{
+			"pattern": call.GetPatterns()[0],
+			"path":    call.GetSearchDir(),
+		})
 	default:
-		input := map[string]interface{}{}
-		d := decoder{data: payload}
-		for !d.eof() {
-			field, wire, err := d.readKey()
-			if err != nil {
-				break
-			}
-			switch wire {
-			case 0:
-				v, err := d.readVarint()
-				if err != nil {
-					break
-				}
-				input[fmt.Sprintf("field%d", field)] = v
-			case 2:
-				b, err := d.readBytes()
-				if err != nil {
-					break
-				}
-				if utf8.Valid(b) {
-					input[fmt.Sprintf("field%d", field)] = string(b)
-				}
-			default:
-				_ = d.skip(wire)
-			}
-		}
-		if len(input) == 0 {
-			return toolName, "{}"
-		}
-		b, err := json.Marshal(input)
-		if err != nil {
-			return toolName, "{}"
-		}
-		return toolName, string(b)
+		return toolName, "{}"
 	}
 }
 
 func parseApplyFileDiffsPayload(payload []byte) (string, string) {
-	d := decoder{data: payload}
-	writePath := ""
-	writeContent := ""
-	editPath := ""
-	editOld := ""
-	editNew := ""
-
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		if wire != 2 {
-			_ = d.skip(wire)
-			continue
-		}
-		b, err := d.readBytes()
-		if err != nil {
-			break
-		}
-		switch field {
-		case 2:
-			if editPath == "" {
-				p, oldStr, newStr := parseApplyFileDiffItem(b)
-				if strings.TrimSpace(p) != "" {
-					editPath = strings.TrimSpace(p)
-					editOld = oldStr
-					editNew = newStr
-				}
-			}
-		case 3:
-			if writePath == "" {
-				p, c := parseApplyFileDiffNewFile(b)
-				if strings.TrimSpace(p) != "" {
-					writePath = strings.TrimSpace(p)
-					writeContent = c
-				}
+	var call warpapi.Message_ToolCall_ApplyFileDiffs
+	if err := proto.Unmarshal(payload, &call); err == nil {
+		for _, file := range call.GetNewFiles() {
+			if path := strings.TrimSpace(file.GetFilePath()); path != "" {
+				return "Write", marshalToolInput(map[string]interface{}{
+					"file_path": path,
+					"content":   file.GetContent(),
+				})
 			}
 		}
-	}
-
-	if writePath != "" {
-		input := map[string]interface{}{
-			"file_path": writePath,
-			"content":   writeContent,
+		for _, diff := range call.GetDiffs() {
+			if path := strings.TrimSpace(diff.GetFilePath()); path != "" {
+				return "Edit", marshalToolInput(map[string]interface{}{
+					"file_path":  path,
+					"old_string": diff.GetSearch(),
+					"new_string": diff.GetReplace(),
+				})
+			}
 		}
-		b, err := json.Marshal(input)
-		if err != nil {
-			return "Write", "{}"
+		for _, update := range call.GetV4AUpdates() {
+			path := strings.TrimSpace(update.GetFilePath())
+			if path == "" || len(update.GetHunks()) == 0 {
+				continue
+			}
+			hunk := update.GetHunks()[0]
+			return "Edit", marshalToolInput(map[string]interface{}{
+				"file_path":  path,
+				"old_string": hunk.GetOld(),
+				"new_string": hunk.GetNew(),
+			})
 		}
-		return "Write", string(b)
-	}
-
-	if editPath != "" {
-		input := map[string]interface{}{
-			"file_path":  editPath,
-			"old_string": editOld,
-			"new_string": editNew,
-		}
-		b, err := json.Marshal(input)
-		if err != nil {
-			return "Edit", "{}"
-		}
-		return "Edit", string(b)
 	}
 
 	return "apply_file_diffs", "{}"
 }
 
-func parseWarpDuration(payload []byte) (int64, int32, bool) {
-	d := decoder{data: payload}
-	var seconds int64
-	var nanos int32
-	seen := false
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		if wire != 0 {
-			_ = d.skip(wire)
-			continue
-		}
-		v, err := d.readVarint()
-		if err != nil {
-			break
-		}
-		switch field {
-		case 1:
-			seconds = int64(v)
-			seen = true
-		case 2:
-			nanos = int32(v)
-			seen = true
-		}
-	}
-	return seconds, nanos, seen
-}
-
-func parseApplyFileDiffNewFile(payload []byte) (string, string) {
-	d := decoder{data: payload}
-	path := ""
-	content := ""
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		if wire != 2 {
-			_ = d.skip(wire)
-			continue
-		}
-		b, err := d.readBytes()
-		if err != nil {
-			break
-		}
-		switch field {
-		case 1:
-			path = string(b)
-		case 2:
-			content = string(b)
-		}
-	}
-	return path, content
-}
-
-func parseApplyFileDiffItem(payload []byte) (string, string, string) {
-	d := decoder{data: payload}
-	path := ""
-	oldStr := ""
-	newStr := ""
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		switch field {
-		case 1:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			b, err := d.readBytes()
-			if err != nil {
-				break
-			}
-			path = string(b)
-		case 3:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			b, err := d.readBytes()
-			if err != nil {
-				break
-			}
-			if oldStr == "" && newStr == "" {
-				o, n := parseApplyFileDiffReplacement(b)
-				oldStr = o
-				newStr = n
-			}
-		default:
-			_ = d.skip(wire)
-		}
-	}
-	return path, oldStr, newStr
-}
-
-func parseApplyFileDiffReplacement(payload []byte) (string, string) {
-	d := decoder{data: payload}
-	oldStr := ""
-	newStr := ""
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		if wire != 2 {
-			_ = d.skip(wire)
-			continue
-		}
-		b, err := d.readBytes()
-		if err != nil {
-			break
-		}
-		switch field {
-		case 1:
-			oldStr = string(b)
-		case 2:
-			newStr = string(b)
-		}
-	}
-	return oldStr, newStr
-}
-
-func fallbackToolName(field int) string {
-	switch field {
-	case 2:
-		return "run_shell_command"
-	case 3:
-		return "search_codebase"
-	case 4:
-		return "server"
-	case 5:
-		return "read_files"
-	case 6:
-		return "apply_file_diffs"
-	case 7:
-		return "suggest_plan"
-	case 8:
-		return "suggest_create_plan"
-	case 9:
-		return "grep"
-	case 10:
-		return "file_glob"
-	case 11:
-		return "read_mcp_resource"
-	case 13:
-		return "write_to_long_running_shell_command"
-	case 14:
-		return "suggest_new_conversation"
-	case 15:
-		return "file_glob_v2"
-	case 16:
-		return "suggest_prompt"
-	case 17:
-		return "open_code_review"
-	case 18:
-		return "init_project"
-	case 19:
-		return "subagent"
-	case 20:
-		return "read_documents"
-	case 21:
-		return "edit_documents"
-	case 22:
-		return "create_documents"
-	case 23:
-		return "read_shell_command_output"
-	case 24:
-		return "use_computer"
-	case 25:
-		return "insert_review_comments"
-	case 26:
-		return "read_skill"
-	case 27:
-		return "request_computer_use"
-	case 28:
-		return "fetch_conversation"
-	case 29:
-		return "start_agent"
-	case 30:
-		return "send_message_to_agent"
-	case 31:
-		return "transfer_shell_command_control_to_user"
-	case 32:
-		return "ask_user_question"
-	case 33:
-		return "start_agent_v2"
-	case 34:
-		return "upload_file_artifact"
-	case 35:
-		return "run_agents"
-	default:
-		return "unknown_tool"
-	}
-}
-
-func parseNestedStreamFinished(data []byte, out *parsedEvent) {
-	d := decoder{data: data}
+func parseStreamFinished(event *warpapi.ResponseEvent_StreamFinished) *finishInfo {
 	finish := &finishInfo{}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		if field == 9 {
-			if wire != 0 {
-				_ = d.skip(wire)
-				continue
-			}
-			v, err := d.readVarint()
-			if err != nil {
-				break
-			}
-			finish.ShouldRefreshModelConfig = v != 0
-			continue
-		}
-		if wire != 2 {
-			_ = d.skip(wire)
-			continue
-		}
-		payload, err := d.readBytes()
-		if err != nil {
-			break
-		}
-		switch field {
-		case 1:
-			finish.Reason = "other"
-		case 2:
-			finish.Reason = "done"
-		case 3:
-			finish.Reason = "max_token_limit"
-		case 4:
-			finish.Reason = "quota_limit"
-		case 5:
-			finish.Reason = "context_window_exceeded"
-		case 6:
-			finish.Reason = "llm_unavailable"
-		case 7:
-			finish.Reason = "internal_error"
-			if msg := parseInternalErrorMessage(payload); msg != "" {
-				finish.Message = msg
-			}
-		case 8:
-			in, outTok := parseNestedTokenUsage(payload)
-			finish.InputTokens += in
-			finish.OutputTokens += outTok
-		case 12:
-			finish.Reason = "invalid_api_key"
-			if msg := parseInvalidAPIKeyMessage(payload); msg != "" {
-				finish.Message = msg
-			}
-		default:
-			// Ignore cost and conversation metadata fields. They are useful for
-			// telemetry, but not needed to decide stream success/failure.
+	if event == nil {
+		finish.Reason = "invalid_finished_event"
+		return finish
+	}
+
+	finish.ShouldRefreshModelConfig = event.GetShouldRefreshModelConfig()
+	for _, usage := range event.GetTokenUsage() {
+		finish.InputTokens += int(usage.GetTotalInput())
+		finish.OutputTokens += int(usage.GetOutput())
+	}
+	switch event.WhichReason() {
+	case warpapi.ResponseEvent_StreamFinished_Other_case:
+		finish.Reason = "other"
+	case warpapi.ResponseEvent_StreamFinished_Done_case:
+		finish.Reason = "done"
+	case warpapi.ResponseEvent_StreamFinished_MaxTokenLimit_case:
+		finish.Reason = "max_token_limit"
+	case warpapi.ResponseEvent_StreamFinished_QuotaLimit_case:
+		finish.Reason = "quota_limit"
+	case warpapi.ResponseEvent_StreamFinished_ContextWindowExceeded_case:
+		finish.Reason = "context_window_exceeded"
+	case warpapi.ResponseEvent_StreamFinished_LlmUnavailable_case:
+		finish.Reason = "llm_unavailable"
+	case warpapi.ResponseEvent_StreamFinished_InternalError_case:
+		finish.Reason = "internal_error"
+		finish.Message = event.GetInternalError().GetMessage()
+	case warpapi.ResponseEvent_StreamFinished_InvalidApiKey_case:
+		finish.Reason = "invalid_api_key"
+		invalidKey := event.GetInvalidApiKey()
+		provider := strings.TrimPrefix(strings.ToLower(invalidKey.GetProvider().String()), "llm_provider_")
+		model := invalidKey.GetModelName()
+		switch {
+		case provider != "" && provider != "unknown" && model != "":
+			finish.Message = fmt.Sprintf("provider=%s model=%s", provider, model)
+		case provider != "" && provider != "unknown":
+			finish.Message = "provider=" + provider
+		case model != "":
+			finish.Message = "model=" + model
 		}
 	}
-	out.Finish = finish
+	return finish
 }
 
 func (f *finishInfo) terminalError() error {
@@ -2324,161 +1090,4 @@ func (f *finishInfo) terminalError() error {
 	default:
 		return fmt.Errorf("warp stream finished with %s", reason)
 	}
-}
-
-func parseInternalErrorMessage(data []byte) string {
-	d := decoder{data: data}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			return ""
-		}
-		if field == 1 && wire == 2 {
-			payload, err := d.readBytes()
-			if err != nil {
-				return ""
-			}
-			return string(payload)
-		}
-		_ = d.skip(wire)
-	}
-	return ""
-}
-
-func parseInvalidAPIKeyMessage(data []byte) string {
-	d := decoder{data: data}
-	provider := ""
-	model := ""
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		switch field {
-		case 1:
-			if wire != 0 {
-				_ = d.skip(wire)
-				continue
-			}
-			v, err := d.readVarint()
-			if err != nil {
-				return ""
-			}
-			provider = warpLLMProviderName(int(v))
-		case 2:
-			if wire != 2 {
-				_ = d.skip(wire)
-				continue
-			}
-			payload, err := d.readBytes()
-			if err != nil {
-				return ""
-			}
-			model = string(payload)
-		default:
-			_ = d.skip(wire)
-		}
-	}
-	switch {
-	case provider != "" && model != "":
-		return fmt.Sprintf("provider=%s model=%s", provider, model)
-	case provider != "":
-		return fmt.Sprintf("provider=%s", provider)
-	case model != "":
-		return fmt.Sprintf("model=%s", model)
-	default:
-		return ""
-	}
-}
-
-func warpLLMProviderName(provider int) string {
-	switch provider {
-	case 1:
-		return "anthropic"
-	case 2:
-		return "openai"
-	case 3:
-		return "google"
-	case 4:
-		return "xai"
-	case 5:
-		return "openrouter"
-	case 6:
-		return "aws_bedrock"
-	default:
-		return ""
-	}
-}
-
-func parseNestedTokenUsage(data []byte) (int, int) {
-	d := decoder{data: data}
-	inputTokens := 0
-	outputTokens := 0
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		switch field {
-		case 2:
-			if wire != 0 {
-				_ = d.skip(wire)
-				continue
-			}
-			v, err := d.readVarint()
-			if err != nil {
-				break
-			}
-			inputTokens = int(v)
-		case 3:
-			if wire != 0 {
-				_ = d.skip(wire)
-				continue
-			}
-			v, err := d.readVarint()
-			if err != nil {
-				break
-			}
-			outputTokens = int(v)
-		default:
-			_ = d.skip(wire)
-		}
-	}
-	return inputTokens, outputTokens
-}
-
-func parseNestedStreamError(data []byte) string {
-	d := decoder{data: data}
-	errMsg := ""
-	errCode := ""
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		if wire == 2 {
-			payload, err := d.readBytes()
-			if err != nil {
-				break
-			}
-			switch field {
-			case 1:
-				errMsg = string(payload)
-			case 2:
-				errCode = string(payload)
-			}
-			continue
-		}
-		_ = d.skip(wire)
-	}
-	if errMsg == "" && errCode == "" {
-		return string(data)
-	}
-	if errCode != "" && errMsg != "" {
-		return errCode + ": " + errMsg
-	}
-	if errMsg != "" {
-		return errMsg
-	}
-	return errCode
 }
