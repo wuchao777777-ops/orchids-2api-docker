@@ -201,6 +201,119 @@ func TestWarpToolResultFollowup_RecoversConversationWithoutClientSessionID(t *te
 	}
 }
 
+func TestWarpNoToolsWriteIsReturnedAsText(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{eventsByOp: [][]upstream.SSEMessage{{
+		{Type: "model.tool-call", Event: map[string]interface{}{
+			"toolCallId": "tool_write_unavailable",
+			"toolName":   "Write",
+			"input":      `{"file_path":"index.html","content":"<!doctype html><h1>Cherry ready</h1>"}`,
+		}},
+		{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}},
+	}}}
+	h := newTestHandler(client)
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"stream":false,
+		"messages":[{"role":"user","content":"Create an index.html landing page"}]
+	}`)
+	rec := httptest.NewRecorder()
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "/warp/v1/chat/completions", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 1 || !calls[0].NoTools || len(calls[0].Tools) != 0 {
+		t.Fatalf("upstream request did not enforce no-tools: %#v", calls)
+	}
+	if !strings.Contains(calls[0].Prompt, "<tool_gate>") {
+		t.Fatalf("tool gate was not included in finalized prompt: %q", calls[0].Prompt)
+	}
+	out := rec.Body.String()
+	if strings.Contains(out, `"tool_calls"`) || strings.Contains(out, `"name":"Write"`) {
+		t.Fatalf("undeclared Write leaked to OpenAI client: %s", out)
+	}
+	if !strings.Contains(out, "Cherry ready") {
+		t.Fatalf("generated file content was lost: %s", out)
+	}
+}
+
+func TestWarpSuccessfulWriteResultGetsVisibleConfirmation(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{eventsByOp: [][]upstream.SSEMessage{{
+		{Type: "model.finish", Event: map[string]interface{}{
+			"finishReason": "end_turn",
+			"usage":        map[string]interface{}{"inputTokens": 50, "outputTokens": 0},
+		}},
+	}}}
+	h := newTestHandler(client)
+	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_write_done", WarpToolBinding{ConversationID: "warp_conv_write_done", ToolType: "call_mcp_tool"})
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"stream":false,
+		"messages":[
+			{"role":"user","content":"Create notes.txt"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"tool_write_done","name":"Write","input":{"file_path":"notes.txt","content":"done"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_write_done","content":"File created successfully"}]}
+		],
+		"tools":[{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}}}}]
+	}`)
+	rec := httptest.NewRecorder()
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "File operation completed successfully.") {
+		t.Fatalf("zero-output write result remained invisible: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"output_tokens":0`) {
+		t.Fatalf("visible confirmation reported zero output tokens: %s", rec.Body.String())
+	}
+	if calls := client.snapshotCalls(); len(calls) != 1 {
+		t.Fatalf("write result was replayed through extra upstream calls: %d", len(calls))
+	}
+}
+
+func TestWarpEmptyOutputRecoveryMarkerDoesNotBecomeUserQuestion(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{}
+	h := newTestHandler(client)
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"stream":false,
+		"messages":[
+			{"role":"user","content":"Create notes.txt"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"tool_write_done","name":"Write","input":{"file_path":"notes.txt","content":"done"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_write_done","content":"File created successfully"}]},
+			{"role":"assistant","content":[]},
+			{"role":"user","content":"[Your previous response had no visible output. Please continue and produce a user-visible response.]"}
+		],
+		"tools":[{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}}}}]
+	}`)
+	rec := httptest.NewRecorder()
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	calls := client.snapshotCalls()
+	if len(calls) != 1 || !calls[0].NoTools {
+		t.Fatalf("recovery request did not prevent duplicate tools: %#v", calls)
+	}
+	if strings.Contains(calls[0].Prompt, clientEmptyOutputRecoveryMarker) {
+		t.Fatalf("client recovery marker was forwarded as the user's question: %q", calls[0].Prompt)
+	}
+	if !strings.Contains(calls[0].Prompt, "completed successfully") {
+		t.Fatalf("recovery prompt lost operation context: %q", calls[0].Prompt)
+	}
+	if !strings.Contains(rec.Body.String(), "File operation completed successfully.") {
+		t.Fatalf("recovery request remained empty: %s", rec.Body.String())
+	}
+}
+
 func TestResolveWarpContinuationRejectsMixedConversations(t *testing.T) {
 	t.Parallel()
 	h := newTestHandler(&fakePayloadClient{})
@@ -610,7 +723,7 @@ func TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
 	}
 }
 
-func TestWarpToolResultFollowupWithText_DisablesTools(t *testing.T) {
+func TestWarpToolResultFollowupWithText_HonorsEmptyTools(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
@@ -656,8 +769,8 @@ func TestWarpToolResultFollowupWithText_DisablesTools(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 upstream call, got %d", len(calls))
 	}
-	if calls[0].NoTools {
-		t.Fatalf("expected warp follow-up with tool_result+text to keep passthrough tools enabled")
+	if !calls[0].NoTools {
+		t.Fatalf("expected explicit tools:[] to disable tools on the follow-up")
 	}
 }
 
@@ -840,7 +953,7 @@ func TestWarpToolResultFollowup_StreamsSingleBatchedResponse(t *testing.T) {
 				{"type":"text","text":"帮我优化一下这个项目"}
 			]}
 		],
-		"tools":[]
+		"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}}]
 	}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))

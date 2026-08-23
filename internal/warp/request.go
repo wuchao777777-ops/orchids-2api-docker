@@ -80,10 +80,12 @@ func extractMessageText(content prompt.MessageContent) string {
 }
 
 func buildWarpUserQuery(promptText string, messages []prompt.Message, systemItems []prompt.SystemItem, conversationID string) string {
-	query := latestWarpUserInput(messages)
-	if query == "" {
-		query = sanitizeUTF8(strings.TrimSpace(promptText))
+	// Prompt is the handler's finalized query. It may contain safety gates or a
+	// recovery instruction that intentionally replaces the raw client message.
+	if query := sanitizeUTF8(strings.TrimSpace(promptText)); query != "" {
+		return query
 	}
+	query := latestWarpUserInput(messages)
 	if query == "" {
 		return ""
 	}
@@ -526,12 +528,12 @@ func buildRequestSettings(modelConfig AccountFeatureConfig, disableTools bool) *
 		computerAgentModel = computerUseModel
 	}
 	contextLimit := uint32(0)
-	supportedTools := []warpapi.ToolType(nil)
-	supportedCliAgentTools := []warpapi.ToolType(nil)
-	if !disableTools {
-		supportedTools = officialSupportedTools()
-		supportedCliAgentTools = officialSupportedCliAgentTools()
-	}
+	// Warp defines an empty supported_tools list as "any tool", not "no tools".
+	// Always send the bounded official lists. Per-request denial is enforced by
+	// the handler's prompt gate and response-side hard gate.
+	supportedTools := officialSupportedTools()
+	supportedCliAgentTools := officialSupportedCliAgentTools()
+	toolsEnabled := !disableTools
 	autonomy := warpapi.AutonomyLevel_SUPERVISED
 	isolation := warpapi.IsolationLevel_NONE
 	return warpapi.Request_Settings_builder{
@@ -541,26 +543,26 @@ func buildRequestSettings(modelConfig AccountFeatureConfig, disableTools bool) *
 			ComputerUseAgent:            stringPtr(computerAgentModel),
 			BaseModelContextWindowLimit: &contextLimit,
 		}.Build(),
-		WebContextRetrievalEnabled:                 boolPtr(true),
-		SupportsParallelToolCalls:                  boolPtr(true),
+		WebContextRetrievalEnabled:                 boolPtr(toolsEnabled),
+		SupportsParallelToolCalls:                  boolPtr(toolsEnabled),
 		UseAnthropicTextEditorTools:                boolPtr(false),
 		PlanningEnabled:                            boolPtr(false),
 		WarpDriveContextEnabled:                    boolPtr(false),
-		SupportsCreateFiles:                        boolPtr(true),
+		SupportsCreateFiles:                        boolPtr(toolsEnabled),
 		SupportedTools:                             supportedTools,
-		SupportsLongRunningCommands:                boolPtr(true),
+		SupportsLongRunningCommands:                boolPtr(toolsEnabled),
 		ShouldPreserveFileContentInHistory:         boolPtr(true),
-		SupportsTodosUi:                            boolPtr(true),
+		SupportsTodosUi:                            boolPtr(toolsEnabled),
 		SupportsLinkedCodeBlocks:                   boolPtr(false),
-		SupportsStartedChildTaskMessage:            boolPtr(true),
-		SupportsSuggestPrompt:                      boolPtr(true),
+		SupportsStartedChildTaskMessage:            boolPtr(toolsEnabled),
+		SupportsSuggestPrompt:                      boolPtr(toolsEnabled),
 		SupportsReadImageFiles:                     boolPtr(false),
 		SupportsReasoningMessage:                   boolPtr(true),
 		AutonomyLevel:                              &autonomy,
 		IsolationLevel:                             &isolation,
-		WebSearchEnabled:                           boolPtr(true),
+		WebSearchEnabled:                           boolPtr(toolsEnabled),
 		SupportedCliAgentTools:                     supportedCliAgentTools,
-		SupportsV4AFileDiffs:                       boolPtr(true),
+		SupportsV4AFileDiffs:                       boolPtr(toolsEnabled),
 		SupportsSummarizationViaMessageReplacement: boolPtr(false),
 		SupportsBundledSkills:                      boolPtr(false),
 		SupportsResearchAgent:                      boolPtr(false),

@@ -192,16 +192,19 @@ func (h *streamHandler) flushSSEBytesLockedWithHint(event string, dataLen int, i
 
 type streamHandler struct {
 	// Configuration
-	config            *config.Config
-	workdir           string
-	isStream          bool
-	suppressThinking  bool
-	useUpstreamUsage  bool
-	outputTokenMode   string
-	responseFormat    adapter.ResponseFormat
-	disallowToolCalls bool
-	allowedToolNames  map[string]struct{}
-	clientTools       []interface{}
+	config              *config.Config
+	workdir             string
+	isStream            bool
+	suppressThinking    bool
+	useUpstreamUsage    bool
+	outputTokenMode     string
+	responseFormat      adapter.ResponseFormat
+	disallowToolCalls   bool
+	strictToolAllowlist bool
+	surfaceToolRejects  bool
+	allowedToolNames    map[string]struct{}
+	clientTools         []interface{}
+	emptyOutputFallback string
 
 	// HTTP Response
 	w       http.ResponseWriter
@@ -352,9 +355,27 @@ func (h *streamHandler) setAllowedToolNames(names []string) {
 	h.mu.Unlock()
 }
 
+func (h *streamHandler) setStrictToolAllowlist(strict bool) {
+	h.mu.Lock()
+	h.strictToolAllowlist = strict
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) setSurfaceToolRejects(surface bool) {
+	h.mu.Lock()
+	h.surfaceToolRejects = surface
+	h.mu.Unlock()
+}
+
 func (h *streamHandler) setClientTools(tools []interface{}) {
 	h.mu.Lock()
 	h.clientTools = tools
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) setEmptyOutputFallback(text string) {
+	h.mu.Lock()
+	h.emptyOutputFallback = strings.TrimSpace(text)
 	h.mu.Unlock()
 }
 
@@ -1919,6 +1940,23 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		}
 	}
 
+	if !h.hasVisibleOutput() {
+		h.mu.Lock()
+		fallback := h.emptyOutputFallback
+		h.mu.Unlock()
+		if fallback != "" {
+			h.outputMu.Lock()
+			h.useUpstreamUsage = false
+			h.outputTokens = 0
+			h.outputEstimator.Reset()
+			h.outputMu.Unlock()
+			h.handleMessage(upstream.SSEMessage{
+				Type:  "model.text-delta",
+				Event: map[string]interface{}{"delta": fallback},
+			})
+		}
+	}
+
 	h.mu.Lock()
 	if h.hasReturn {
 		h.mu.Unlock()
@@ -2153,19 +2191,28 @@ func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
 func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 	h.mu.Lock()
 	disallowToolCalls := h.disallowToolCalls
+	if disallowToolCalls && h.surfaceToolRejects && h.emptyOutputFallback == "" {
+		h.emptyOutputFallback = suppressedWriteContentFallback(call)
+	}
 	allowedTool := true
-	if len(h.allowedToolNames) > 0 {
+	if h.strictToolAllowlist || len(h.allowedToolNames) > 0 {
 		lowerName := strings.ToLower(strings.TrimSpace(call.name))
 		_, allowedTool = h.allowedToolNames[lowerName]
 		if !allowedTool {
 			// Task lifecycle helper events are emitted alongside Task even though
 			// they are not exposed as normal user-declared tools.
-			if lowerName == "taskoutput" || lowerName == "taskstop" {
+			if (lowerName == "taskoutput" || lowerName == "taskstop") && h.hasAllowedToolNameLocked("task") {
 				allowedTool = true
-			} else if lowerName == "task" && h.taskDelegationAllowedLocked(call.input) {
+			} else if !h.strictToolAllowlist && lowerName == "task" && h.taskDelegationAllowedLocked(call.input) {
 				allowedTool = true
 			}
 		}
+	}
+	if !allowedTool && h.surfaceToolRejects && h.emptyOutputFallback == "" {
+		h.emptyOutputFallback = "The upstream model attempted to use a tool that is not available in this request."
+	}
+	if disallowToolCalls && h.surfaceToolRejects && h.emptyOutputFallback == "" {
+		h.emptyOutputFallback = "This request did not provide a compatible tool for the attempted operation."
 	}
 	if disallowToolCalls {
 		h.suppressedToolCalls++
@@ -2189,6 +2236,9 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 	if hasNonProjectSandboxToolPath(call.name, call.input) {
 		h.mu.Lock()
 		h.suppressedToolCalls++
+		if h.surfaceToolRejects && h.emptyOutputFallback == "" {
+			h.emptyOutputFallback = "The upstream model attempted an operation outside the active project."
+		}
 		h.mu.Unlock()
 		if h.config != nil && h.config.DebugEnabled {
 			slog.Debug("sandbox metadata tool call suppressed", "tool", call.name, "input", call.input)
@@ -2200,6 +2250,9 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 	if !ok {
 		h.mu.Lock()
 		h.suppressedToolCalls++
+		if h.surfaceToolRejects && h.emptyOutputFallback == "" {
+			h.emptyOutputFallback = "The upstream model returned an invalid tool request."
+		}
 		h.mu.Unlock()
 		if h.config != nil && h.config.DebugEnabled {
 			slog.Debug("invalid tool call suppressed", "tool", call.name, "input", call.input)
@@ -2214,6 +2267,9 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 			h.toolDedupCount++
 			h.toolDedupKeys[maskedKey]++
 			h.suppressedToolCalls++
+			if h.surfaceToolRejects && h.emptyOutputFallback == "" {
+				h.emptyOutputFallback = "The requested operation was already completed; the duplicate tool call was not repeated."
+			}
 			suppressed := h.toolDedupCount
 			h.mu.Unlock()
 			if h.config != nil && h.config.DebugEnabled {
@@ -2226,6 +2282,11 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 		h.mu.Unlock()
 	}
 	return true
+}
+
+func (h *streamHandler) hasAllowedToolNameLocked(name string) bool {
+	_, ok := h.allowedToolNames[strings.ToLower(strings.TrimSpace(name))]
+	return ok
 }
 
 func (h *streamHandler) taskDelegationAllowedLocked(input string) bool {
@@ -2338,6 +2399,19 @@ func looksLikeGitBashCommand(command string) bool {
 
 func normalizeToolNameKey(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func suppressedWriteContentFallback(call toolCall) string {
+	if normalizeToolNameKey(call.name) != "write" {
+		return ""
+	}
+	var input struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(call.input), &input); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(input.Content)
 }
 
 func isStructuredToolName(nameKey string) bool {
@@ -2637,22 +2711,17 @@ func (h *streamHandler) forceFinishIfMissing() {
 }
 
 func (h *streamHandler) hasAnyOutput() bool {
+	return h.hasVisibleOutput()
+}
+
+func (h *streamHandler) hasVisibleOutput() bool {
 	h.mu.Lock()
 	has := h.hasTextOutput ||
 		h.toolCallCount > 0 ||
 		len(h.pendingToolCalls) > 0 ||
 		len(h.toolCallEmitted) > 0 ||
-		len(h.contentBlocks) > 0 ||
 		h.responseText.Len() > 0
 	h.mu.Unlock()
-	if has {
-		return true
-	}
-
-	h.outputMu.Lock()
-	// Upstream usage tokens alone do not mean the user saw any visible output.
-	has = h.outputEstimator.HasText()
-	h.outputMu.Unlock()
 	return has
 }
 

@@ -779,6 +779,99 @@ func extractToolResultContent(content interface{}) string {
 	}
 }
 
+const clientEmptyOutputRecoveryMarker = "[Your previous response had no visible output. Please continue and produce a user-visible response.]"
+
+func isClientEmptyOutputRecoveryText(text string) bool {
+	return strings.TrimSpace(text) == clientEmptyOutputRecoveryMarker
+}
+
+func emptyOutputRecoveryPrefix(messages []prompt.Message) ([]prompt.Message, bool) {
+	if len(messages) < 3 {
+		return messages, false
+	}
+	last := messages[len(messages)-1]
+	if !strings.EqualFold(strings.TrimSpace(last.Role), "user") ||
+		!last.Content.IsString() ||
+		!isClientEmptyOutputRecoveryText(last.Content.GetText()) {
+		return messages, false
+	}
+	previous := messages[len(messages)-2]
+	if !strings.EqualFold(strings.TrimSpace(previous.Role), "assistant") || strings.TrimSpace(previous.ExtractText()) != "" {
+		return messages, false
+	}
+	if !previous.Content.IsString() {
+		for _, block := range previous.Content.GetBlocks() {
+			if block.Type != "text" || strings.TrimSpace(block.Text) != "" {
+				return messages, false
+			}
+		}
+	}
+	return messages[:len(messages)-2], true
+}
+
+func successfulFileMutationToolResultFallback(messages []prompt.Message) string {
+	effective, _ := emptyOutputRecoveryPrefix(messages)
+	if len(effective) == 0 {
+		return ""
+	}
+
+	toolNames := make(map[string]string)
+	for _, msg := range effective {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") || msg.Content.IsString() {
+			continue
+		}
+		for _, block := range msg.Content.GetBlocks() {
+			if block.Type == "tool_use" && strings.TrimSpace(block.ID) != "" {
+				toolNames[block.ID] = normalizeToolNameKey(block.Name)
+			}
+		}
+	}
+
+	last := effective[len(effective)-1]
+	if !strings.EqualFold(strings.TrimSpace(last.Role), "user") || last.Content.IsString() {
+		return ""
+	}
+	count := 0
+	for _, block := range last.Content.GetBlocks() {
+		switch block.Type {
+		case "text":
+			if strings.TrimSpace(block.Text) != "" {
+				return ""
+			}
+		case "tool_result":
+			if block.IsError || looksLikeToolResultFailure(extractToolResultContent(block.Content)) {
+				return ""
+			}
+			switch toolNames[block.ToolUseID] {
+			case "write", "edit", "notebookedit":
+				count++
+			default:
+				return ""
+			}
+		default:
+			return ""
+		}
+	}
+	if count == 0 {
+		return ""
+	}
+	if count == 1 {
+		return "File operation completed successfully."
+	}
+	return "Requested file operations completed successfully."
+}
+
+func buildEmptyOutputRecoveryPrompt(messages []prompt.Message) string {
+	if _, ok := emptyOutputRecoveryPrefix(messages); !ok {
+		return ""
+	}
+	confirmation := successfulFileMutationToolResultFallback(messages)
+	if confirmation == "" {
+		return ""
+	}
+	return confirmation + " Confirm this result to the user in one concise sentence. Do not call tools and do not repeat the file operation."
+}
+
 func lastNonToolResultUserText(messages []prompt.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
@@ -787,7 +880,7 @@ func lastNonToolResultUserText(messages []prompt.Message) string {
 		}
 		if msg.Content.IsString() {
 			text := strings.TrimSpace(stripSystemRemindersForMode(msg.Content.GetText()))
-			if text != "" && !containsSuggestionMode(text) {
+			if text != "" && !containsSuggestionMode(text) && !isClientEmptyOutputRecoveryText(text) {
 				return text
 			}
 			continue

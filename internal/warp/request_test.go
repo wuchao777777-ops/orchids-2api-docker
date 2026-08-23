@@ -99,6 +99,52 @@ func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	}
 }
 
+func TestBuildRequestBytes_FinalPromptIsAuthoritative(t *testing.T) {
+	finalPrompt := "Instructions:\n- stay concise\n\nraw request\n\n<tool_gate>\nDo not call tools.\n</tool_gate>"
+	req := upstream.UpstreamRequest{
+		Model:   "auto-open",
+		Prompt:  finalPrompt,
+		NoTools: true,
+		Messages: []prompt.Message{{
+			Role:    "user",
+			Content: prompt.MessageContent{Text: "raw request"},
+		}},
+		System: []prompt.SystemItem{{Text: "stay concise"}},
+	}
+
+	query, payload, err := buildRequestBytes(req)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if query != finalPrompt {
+		t.Fatalf("query=%q want finalized prompt", query)
+	}
+	if strings.Count(query, "stay concise") != 1 || strings.Count(query, "<tool_gate>") != 1 {
+		t.Fatalf("final prompt was duplicated or discarded: %q", query)
+	}
+
+	var decoded warpapi.Request
+	if err := proto.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	inputs := decoded.GetInput().GetUserInputs().GetInputs()
+	if len(inputs) != 1 || inputs[0].GetUserQuery().GetQuery() != finalPrompt {
+		t.Fatalf("wire query=%#v want finalized prompt", inputs)
+	}
+	settings := decoded.GetSettings()
+	if len(settings.GetSupportedTools()) == 0 || len(settings.GetSupportedCliAgentTools()) == 0 {
+		t.Fatal("no-tools settings must not encode Warp's empty-list wildcard")
+	}
+	if settings.GetSupportsParallelToolCalls() || settings.GetSupportsCreateFiles() ||
+		settings.GetSupportsLongRunningCommands() || settings.GetSupportsV4AFileDiffs() ||
+		settings.GetWebSearchEnabled() || settings.GetWebContextRetrievalEnabled() {
+		t.Fatalf("tool capabilities remained enabled: %#v", settings)
+	}
+	if decoded.GetMcpContext() != nil {
+		t.Fatalf("no-tools request unexpectedly included MCP context: %#v", decoded.GetMcpContext())
+	}
+}
+
 func TestBuildRequestBytes_CombinesTypedToolResultAndUserQuery(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model:         "auto-open",

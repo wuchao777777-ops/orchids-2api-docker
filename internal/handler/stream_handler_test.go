@@ -1040,6 +1040,96 @@ func TestStreamHandler_NoToolsGateSuppressesValidToolCall(t *testing.T) {
 	}
 }
 
+func TestStreamHandler_NoToolsWriteReturnsContentAsText(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setAllowedToolNames(nil)
+	sh.setStrictToolAllowlist(true)
+	sh.setSurfaceToolRejects(true)
+	sh.setDisallowToolCalls(true)
+	sh.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]any{
+			"toolCallId": "tool_write_1",
+			"toolName":   "Write",
+			"input":      `{"file_path":"index.html","content":"<!doctype html><h1>Ready</h1>"}`,
+		},
+	})
+	sh.finishResponse("tool_use")
+
+	out := rec.buf.String()
+	if strings.Contains(out, `"type":"tool_use"`) {
+		t.Fatalf("undeclared Write leaked to client: %s", out)
+	}
+	if !strings.Contains(out, "Ready") {
+		t.Fatalf("expected generated file content as text fallback, got: %s", out)
+	}
+	if !strings.Contains(out, `"stop_reason":"end_turn"`) {
+		t.Fatalf("expected a normal text completion, got: %s", out)
+	}
+}
+
+func TestStreamHandler_EmptyAllowedToolSetRejectsAllTools(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setAllowedToolNames(nil)
+	sh.setStrictToolAllowlist(true)
+	sh.setSurfaceToolRejects(true)
+	sh.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]any{
+			"toolCallId": "tool_read_1",
+			"toolName":   "Read",
+			"input":      `{"file_path":"README.md"}`,
+		},
+	})
+	sh.finishResponse("tool_use")
+
+	out := rec.buf.String()
+	if strings.Contains(out, `"type":"tool_use"`) {
+		t.Fatalf("empty allowlist accepted a tool: %s", out)
+	}
+	if !strings.Contains(out, "not available in this request") {
+		t.Fatalf("rejected tool produced another empty completion: %s", out)
+	}
+}
+
+func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setEmptyOutputFallback("File operation completed successfully.")
+	sh.handleMessage(upstream.SSEMessage{
+		Type: "model.finish",
+		Event: map[string]any{
+			"finishReason": "end_turn",
+			"usage":        map[string]any{"inputTokens": 20, "outputTokens": 0},
+		},
+	})
+
+	out := rec.buf.String()
+	if !strings.Contains(out, "File operation completed successfully.") {
+		t.Fatalf("expected visible success fallback, got: %s", out)
+	}
+	if strings.Contains(out, `"output_tokens":0`) {
+		t.Fatalf("synthetic visible output retained zero output usage: %s", out)
+	}
+}
+
 func TestResponseMessageID_OpenAIUsesChatCompletionPrefix(t *testing.T) {
 	id := responseMessageID(adapter.FormatOpenAI)
 	if !strings.HasPrefix(id, "chatcmpl-") {

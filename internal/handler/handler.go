@@ -714,6 +714,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	warpChatMode := preSelectWarpRequest && isWarpChatModel(req.Model)
 	warpAgentMode := preSelectWarpRequest && isWarpAgentModel(req.Model)
 	suggestionMode := isSuggestionMode(req.Messages)
+	emptyOutputRecoveryPrompt := ""
+	if preSelectWarpRequest {
+		emptyOutputRecoveryPrompt = buildEmptyOutputRecoveryPrompt(req.Messages)
+	}
 	noThinking := suggestionMode || h.config.SuppressThinking
 	gateNoTools := false
 	toolGateReasons := make([]string, 0, 2)
@@ -723,6 +727,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		gateNoTools = true
 		toolGateReasons = append(toolGateReasons, "suggestion_mode")
 		toolGateMessage = buildToolGateMessage(req.Messages, true)
+	}
+	if emptyOutputRecoveryPrompt != "" {
+		gateNoTools = true
+		toolGateReasons = append(toolGateReasons, "empty_output_recovery")
+		toolGateMessage = "Confirm the completed operation directly. Do not call tools or repeat the operation."
 	}
 	if lastUserIsToolResultFollowup(req.Messages) {
 		if preSelectPassthroughRequest {
@@ -745,6 +754,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	effectiveTools := req.Tools
 	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
 		effectiveTools = nil
+		if preSelectWarpRequest {
+			gateNoTools = true
+			toolGateReasons = append(toolGateReasons, "warp_tools_disabled")
+			toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
+		}
+	}
+	// An API client that declares no tools cannot execute Warp's native tools.
+	// Treat both an omitted tools field and tools:[] as an authoritative deny.
+	if preSelectWarpRequest && len(req.Tools) == 0 {
+		gateNoTools = true
+		toolGateReasons = append(toolGateReasons, "client_no_tools")
+		toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
 	}
 	if warpChatMode {
 		gateNoTools = true
@@ -859,6 +880,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		builtPrompt = warp.PreviewUserQuery("", req.Messages, req.System, chatSessionID)
+		if emptyOutputRecoveryPrompt != "" {
+			builtPrompt = emptyOutputRecoveryPrompt
+		}
 		if strings.TrimSpace(builtPrompt) == "" && !(isWarpRequest && len(latestToolResultIDs(req.Messages)) > 0) {
 			builtPrompt = "warp request"
 		}
@@ -995,12 +1019,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	allowedToolNames := []string(nil)
 	allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
 	sh.setAllowedToolNames(allowedToolNames)
+	if preSelectWarpRequest {
+		sh.setStrictToolAllowlist(true)
+		sh.setSurfaceToolRejects(true)
+	}
 	if len(req.Tools) > 0 {
 		sh.setClientTools(req.Tools)
 	} else if len(effectiveTools) > 0 {
 		sh.setClientTools(effectiveTools)
 	}
 	sh.setDisallowToolCalls(gateNoTools)
+	sh.setEmptyOutputFallback(successfulFileMutationToolResultFallback(upstreamMessages))
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	sh.setCacheTokens(cacheReadTokens, cacheCreationTokens)
