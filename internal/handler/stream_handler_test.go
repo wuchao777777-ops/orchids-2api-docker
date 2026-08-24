@@ -1146,3 +1146,24 @@ func TestResponseMessageID_AnthropicKeepsMessagePrefix(t *testing.T) {
 		t.Fatalf("id=%q want msg_ prefix", id)
 	}
 }
+
+func TestStreamHandler_ReasoningCountsAsUpstreamOutputWhenSuppressed(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, true, true, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.handleMessage(upstream.SSEMessage{
+		Type:  "model.reasoning-delta",
+		Event: map[string]any{"delta": "already generated and potentially billed"},
+	})
+
+	if !sh.hasAnyOutput() {
+		t.Fatal("suppressed reasoning must count as upstream output to prevent a billed retry")
+	}
+	if sh.hasVisibleOutput() {
+		t.Fatal("suppressed reasoning must not become visible client output")
+	}
+}

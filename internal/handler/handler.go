@@ -1184,11 +1184,24 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			errStr := err.Error()
 			errClass := apperrors.ClassifyUpstreamError(errStr)
 			warpCloudAgentForbidden := isWarpCloudAgentForbiddenError(errStr)
+			warpRequestStarted := isWarpRequest && warp.RequestIDFromError(err) != ""
+			warpRefundConfirmed := false
 			if isWarpRequest {
-				h.refundWarpCredits(apiClient, errClass.Category)
+				warpRefundConfirmed = h.refundWarpCredits(apiClient, err, errClass.Category)
 			}
 			if sh.hasAnyOutput() {
 				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+				if !sh.hasVisibleOutput() {
+					sh.InjectErrorText("Reporting failure after hidden upstream output", "Upstream request failed after generating reasoning. Automatic retry was suppressed to avoid duplicate token billing.")
+				}
+				sh.finishResponse("end_turn")
+				return
+			}
+			if warpRequestStarted && shouldRefundWarpCredits(errClass.Category) && !warpRefundConfirmed {
+				slog.Warn("Warp retry suppressed because the started request may have been billed and refund was not confirmed", "trace_id", traceID, "attempt", upstreamReq.Attempt, "category", errClass.Category, "request_id", warp.RequestIDFromError(err))
+				if errClass.Category != "canceled" {
+					sh.InjectErrorText("Suppressing potentially billed Warp retry", fmt.Sprintf("Request failed: %s", strings.TrimSpace(errStr)))
+				}
 				sh.finishResponse("end_turn")
 				return
 			}

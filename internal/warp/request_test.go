@@ -160,8 +160,8 @@ func TestBuildRequestBytes_FinalPromptIsAuthoritative(t *testing.T) {
 		t.Fatalf("wire query=%#v want finalized prompt", inputs)
 	}
 	settings := decoded.GetSettings()
-	if len(settings.GetSupportedTools()) == 0 || len(settings.GetSupportedCliAgentTools()) == 0 {
-		t.Fatal("no-tools settings must not encode Warp's empty-list wildcard")
+	if !slices.Equal(settings.GetSupportedTools(), warpTextOnlyToolFence) || !slices.Equal(settings.GetSupportedCliAgentTools(), warpTextOnlyToolFence) {
+		t.Fatalf("no-tools settings=%v/%v want protocol fence %v", settings.GetSupportedTools(), settings.GetSupportedCliAgentTools(), warpTextOnlyToolFence)
 	}
 	if settings.GetSupportsParallelToolCalls() || settings.GetSupportsCreateFiles() ||
 		settings.GetSupportsLongRunningCommands() || settings.GetSupportsV4AFileDiffs() ||

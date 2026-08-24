@@ -19,6 +19,7 @@ import (
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/warp"
 )
 
 type mockUpstreamEdge struct {
@@ -31,8 +32,11 @@ type errorUpstreamEdge struct {
 }
 
 type refundingErrorUpstreamEdge struct {
-	err           error
-	refundReasons []string
+	err             error
+	refundErr       error
+	calls           int
+	refundIDs       []string
+	conversationIDs []string
 }
 
 type blockingUpstreamEdge struct {
@@ -55,12 +59,14 @@ func (m *errorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upst
 }
 
 func (m *refundingErrorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	m.calls++
 	return m.err
 }
 
-func (m *refundingErrorUpstreamEdge) RefundCredits(ctx context.Context, reason string) error {
-	m.refundReasons = append(m.refundReasons, reason)
-	return nil
+func (m *refundingErrorUpstreamEdge) RefundCredits(ctx context.Context, conversationID, requestID string) error {
+	m.conversationIDs = append(m.conversationIDs, conversationID)
+	m.refundIDs = append(m.refundIDs, requestID)
+	return m.refundErr
 }
 
 func (m *blockingUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -103,7 +109,7 @@ func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
 func TestHandleMessages_WarpErrorTriggersRefund(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)
-	upstreamClient := &refundingErrorUpstreamEdge{err: errors.New("dial tcp: connection reset by peer")}
+	upstreamClient := &refundingErrorUpstreamEdge{err: warp.AttachRequestMetadata(errors.New("dial tcp: connection reset by peer"), "warp-conversation-1", "warp-request-1")}
 	h.client = upstreamClient
 
 	payload := map[string]any{
@@ -118,11 +124,36 @@ func TestHandleMessages_WarpErrorTriggersRefund(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec, req)
 
-	if len(upstreamClient.refundReasons) != 1 {
-		t.Fatalf("expected exactly one refund call, got %#v", upstreamClient.refundReasons)
+	if len(upstreamClient.refundIDs) != 1 || upstreamClient.refundIDs[0] != "warp-request-1" {
+		t.Fatalf("refund request IDs=%#v want warp-request-1", upstreamClient.refundIDs)
 	}
-	if upstreamClient.refundReasons[0] != "network_error" {
-		t.Fatalf("refund reason=%q want network_error", upstreamClient.refundReasons[0])
+	if len(upstreamClient.conversationIDs) != 1 || upstreamClient.conversationIDs[0] != "warp-conversation-1" {
+		t.Fatalf("refund conversation IDs=%#v want warp-conversation-1", upstreamClient.conversationIDs)
+	}
+}
+
+func TestHandleMessages_WarpStartedRequestDoesNotRetryWithoutConfirmedRefund(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 2, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	upstreamClient := &refundingErrorUpstreamEdge{
+		err:       warp.AttachRequestMetadata(errors.New("dial tcp: connection reset by peer"), "warp-conversation-1", "warp-request-1"),
+		refundErr: errors.New("refund not confirmed"),
+	}
+	h.client = upstreamClient
+
+	payload := map[string]any{
+		"model":    "claude-3-5-sonnet",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   false,
+	}
+	b, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(b))
+	h.HandleMessages(rec, req)
+
+	if upstreamClient.calls != 1 {
+		t.Fatalf("upstream calls=%d want 1; potentially billed request must not retry without confirmed refund", upstreamClient.calls)
 	}
 }
 

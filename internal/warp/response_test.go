@@ -204,6 +204,66 @@ func TestProcessStreamBody_HandlesDoneFinishReason(t *testing.T) {
 	}
 }
 
+func TestProcessStreamBody_MapsMaxTokenLimitToNormalStop(t *testing.T) {
+	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(3, nil)))
+	var events []upstream.SSEMessage
+	err := processStreamBody(context.Background(), bytes.NewReader(finishFrame), func(message upstream.SSEMessage) {
+		events = append(events, message)
+	}, nil)
+	if err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != "model.finish" || events[0].Event["finishReason"] != "max_tokens" {
+		t.Fatalf("events=%#v want max_tokens finish", events)
+	}
+}
+
+func TestParseStreamFinished_UsesCurrentChargeMetadata(t *testing.T) {
+	input, output, cacheRead, cacheWrite := uint32(100), uint32(20), uint32(30), uint32(4)
+	inputCost, outputCost, cacheReadCost, cacheWriteCost := float32(0.1), float32(0.2), float32(0.03), float32(0.04)
+	searches, searchCost, platformCost := uint32(2), float32(0.5), float32(0.6)
+	exactCredits, platformCredits := float32(1.25), float32(0.75)
+	totalInput, conversationCredits, conversationPlatform, contextUsage := uint32(777), float32(8.5), float32(2.5), float32(0.42)
+
+	count := warpapi.ResponseEvent_StreamFinished_TokenCount_builder{
+		Input: &input, Output: &output, InputCacheRead: &cacheRead, InputCacheWrite: &cacheWrite,
+	}.Build()
+	cost := warpapi.ResponseEvent_StreamFinished_TokenCost_builder{
+		InputCostInCents: &inputCost, OutputCostInCents: &outputCost,
+		InputCacheReadCostInCents: &cacheReadCost, InputCacheWriteCostInCents: &cacheWriteCost,
+	}.Build()
+	inference := warpapi.ResponseEvent_StreamFinished_InferenceUsage_builder{
+		TokenCount: count, TokenCost: cost, WebSearchCount: &searches, WebSearchCostInCents: &searchCost,
+	}.Build()
+	charged := warpapi.ResponseEvent_StreamFinished_ChargedUsage_builder{
+		DirectApiInferenceUsage: map[string]*warpapi.ResponseEvent_StreamFinished_InferenceUsage{"model": inference},
+		PlatformUsageInCents:    &platformCost,
+	}.Build()
+	charges := warpapi.ResponseEvent_StreamFinished_RequestCharges_builder{
+		UsageByCategory: map[string]*warpapi.ResponseEvent_StreamFinished_ChargedUsage{"primary_agent": charged},
+	}.Build()
+	requestCost := warpapi.ResponseEvent_StreamFinished_RequestCost_builder{Exact: &exactCredits, PlatformCredits: &platformCredits}.Build()
+	conversation := warpapi.ResponseEvent_StreamFinished_ConversationUsageMetadata_builder{
+		TotalInputTokens: &totalInput, CreditsSpent: &conversationCredits,
+		PlatformCreditsSpent: &conversationPlatform, ContextWindowUsage: &contextUsage,
+	}.Build()
+	finished := warpapi.ResponseEvent_StreamFinished_builder{
+		Done:           warpapi.ResponseEvent_StreamFinished_Done_builder{}.Build(),
+		RequestCharges: charges, RequestCost: requestCost, ConversationUsageMetadata: conversation,
+	}.Build()
+
+	parsed := parseStreamFinished(finished)
+	if parsed.InputTokens != 100 || parsed.OutputTokens != 20 || parsed.CacheReadTokens != 30 || parsed.CacheWriteTokens != 4 {
+		t.Fatalf("unexpected token charges: %+v", parsed)
+	}
+	if parsed.WebSearchCount != 2 || parsed.RequestCredits != 1.25 || parsed.RequestPlatformCredits != 0.75 {
+		t.Fatalf("unexpected request charges: %+v", parsed)
+	}
+	if parsed.ConversationTotalInput != 777 || parsed.ConversationCredits != 8.5 || parsed.ConversationPlatform != 2.5 {
+		t.Fatalf("unexpected conversation usage: %+v", parsed)
+	}
+}
+
 func TestProcessStreamBody_ExposesShouldRefreshModelConfig(t *testing.T) {
 	var events []upstream.SSEMessage
 
@@ -226,14 +286,23 @@ func TestProcessStreamBody_ExposesShouldRefreshModelConfig(t *testing.T) {
 }
 
 func TestProcessStreamBody_ReturnsQuotaLimitFinishReason(t *testing.T) {
-	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(4, nil)))
+	finishPayload := appendBytesField(4, nil)
+	finishPayload = append(finishPayload, appendBytesField(8, appendVarintField(2, 12))...)
+	finishPayload = append(finishPayload, appendBytesField(8, appendVarintField(3, 34))...)
+	finishFrame := wrapFrame(appendBytesField(3, finishPayload))
 
-	err := processStreamBody(context.Background(), bytes.NewReader(finishFrame), func(upstream.SSEMessage) {}, nil)
+	var events []upstream.SSEMessage
+	err := processStreamBody(context.Background(), bytes.NewReader(finishFrame), func(message upstream.SSEMessage) {
+		events = append(events, message)
+	}, nil)
 	if err == nil {
 		t.Fatal("expected quota limit error")
 	}
 	if got := err.Error(); !strings.Contains(got, "quota_limit") || !strings.Contains(got, "no remaining quota") {
 		t.Fatalf("error=%q want quota_limit with no remaining quota", got)
+	}
+	if len(events) != 1 || events[0].Type != "model.tokens-used" || events[0].Event["inputTokens"] != 12 || events[0].Event["outputTokens"] != 34 {
+		t.Fatalf("events=%#v want terminal usage before quota error", events)
 	}
 }
 
@@ -330,6 +399,27 @@ func TestProcessStreamBody_AllowsNilOnMessage(t *testing.T) {
 
 	if err := processStreamBody(context.Background(), strings.NewReader(stream), nil, nil); err != nil {
 		t.Fatalf("processStreamBody(nil onMessage) error: %v", err)
+	}
+}
+
+func TestParseResponseEvent_CapturesUpstreamRequestID(t *testing.T) {
+	event := warpapi.ResponseEvent_builder{
+		Init: warpapi.ResponseEvent_StreamInit_builder{
+			ConversationId: stringPtr("conversation-1"),
+			RequestId:      stringPtr("request-1"),
+			RunId:          stringPtr("run-1"),
+		}.Build(),
+	}.Build()
+	raw, err := proto.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal init event: %v", err)
+	}
+	parsed, err := parseResponseEvent(raw)
+	if err != nil {
+		t.Fatalf("parseResponseEvent() error = %v", err)
+	}
+	if parsed.RequestID != "request-1" || parsed.RunID != "run-1" || parsed.ConversationID != "conversation-1" {
+		t.Fatalf("unexpected init metadata: %+v", parsed)
 	}
 }
 

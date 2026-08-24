@@ -8,8 +8,24 @@ import (
 )
 
 type ModelChoice struct {
-	ID   string
-	Name string
+	ID                string
+	Name              string
+	BaseModelName     string
+	ReasoningLevel    string
+	DisableReason     string
+	Provider          string
+	VisionSupported   bool
+	CreditMultiplier  *float64
+	RequestMultiplier int
+	EnabledHosts      []string
+	ContextWindow     ModelContextWindow
+}
+
+type ModelContextWindow struct {
+	Configurable bool
+	Min          uint32
+	Max          uint32
+	Default      uint32
 }
 
 type FeatureModelChoices struct {
@@ -43,6 +59,25 @@ const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContex
               choices {
                 id
                 displayName
+				baseModelName
+				reasoningLevel
+				disableReason
+				visionSupported
+				provider
+				usageMetadata {
+				  creditMultiplier
+				  requestMultiplier
+				}
+				hostConfigs {
+				  enabled
+				  modelRoutingHost
+				}
+				contextWindow {
+				  isConfigurable
+				  min
+				  max
+				  default
+				}
               }
             }
             coding {
@@ -50,6 +85,7 @@ const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContex
               choices {
                 id
                 displayName
+				disableReason
               }
             }
             cliAgent {
@@ -57,6 +93,7 @@ const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContex
               choices {
                 id
                 displayName
+				disableReason
               }
             }
             computerUseAgent {
@@ -64,6 +101,7 @@ const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContex
               choices {
                 id
                 displayName
+				disableReason
               }
             }
           }
@@ -153,8 +191,27 @@ func fetchFeatureModelChoices(ctx context.Context, client *http.Client, jwt stri
 type featureModelGroupResponse struct {
 	DefaultID string `json:"defaultId"`
 	Choices   []struct {
-		ID          string `json:"id"`
-		DisplayName string `json:"displayName"`
+		ID              string `json:"id"`
+		DisplayName     string `json:"displayName"`
+		BaseModelName   string `json:"baseModelName"`
+		ReasoningLevel  string `json:"reasoningLevel"`
+		DisableReason   string `json:"disableReason"`
+		VisionSupported bool   `json:"visionSupported"`
+		Provider        string `json:"provider"`
+		UsageMetadata   struct {
+			CreditMultiplier  *float64 `json:"creditMultiplier"`
+			RequestMultiplier int      `json:"requestMultiplier"`
+		} `json:"usageMetadata"`
+		HostConfigs []struct {
+			Enabled          bool   `json:"enabled"`
+			ModelRoutingHost string `json:"modelRoutingHost"`
+		} `json:"hostConfigs"`
+		ContextWindow struct {
+			IsConfigurable bool   `json:"isConfigurable"`
+			Min            uint32 `json:"min"`
+			Max            uint32 `json:"max"`
+			Default        uint32 `json:"default"`
+		} `json:"contextWindow"`
 	} `json:"choices"`
 }
 
@@ -164,11 +221,38 @@ func normalizeFeatureModelGroup(raw featureModelGroupResponse) FeatureModelGroup
 		Choices:   make([]ModelChoice, 0, len(raw.Choices)),
 	}
 	for _, choice := range raw.Choices {
+		if strings.TrimSpace(choice.DisableReason) != "" {
+			continue
+		}
 		if normalized, ok := normalizeWarpModelChoice(choice.ID, choice.DisplayName); ok {
+			normalized.BaseModelName = strings.TrimSpace(choice.BaseModelName)
+			normalized.ReasoningLevel = strings.TrimSpace(choice.ReasoningLevel)
+			normalized.Provider = strings.TrimSpace(choice.Provider)
+			normalized.VisionSupported = choice.VisionSupported
+			normalized.CreditMultiplier = choice.UsageMetadata.CreditMultiplier
+			normalized.RequestMultiplier = choice.UsageMetadata.RequestMultiplier
+			normalized.ContextWindow = ModelContextWindow{
+				Configurable: choice.ContextWindow.IsConfigurable,
+				Min:          choice.ContextWindow.Min,
+				Max:          choice.ContextWindow.Max,
+				Default:      choice.ContextWindow.Default,
+			}
+			for _, host := range choice.HostConfigs {
+				if host.Enabled && strings.TrimSpace(host.ModelRoutingHost) != "" {
+					normalized.EnabledHosts = append(normalized.EnabledHosts, strings.TrimSpace(host.ModelRoutingHost))
+				}
+			}
 			group.Choices = append(group.Choices, normalized)
 		}
 	}
-	if group.DefaultID == "" && len(group.Choices) > 0 {
+	defaultAvailable := false
+	for _, choice := range group.Choices {
+		if choice.ID == group.DefaultID {
+			defaultAvailable = true
+			break
+		}
+	}
+	if !defaultAvailable && len(group.Choices) > 0 {
 		group.DefaultID = group.Choices[0].ID
 	}
 	return group
@@ -208,6 +292,15 @@ func mergeWarpModelChoices(defaultID string, groups ...[]ModelChoice) []ModelCho
 			if !ok {
 				continue
 			}
+			normalized.BaseModelName = choice.BaseModelName
+			normalized.ReasoningLevel = choice.ReasoningLevel
+			normalized.DisableReason = choice.DisableReason
+			normalized.Provider = choice.Provider
+			normalized.VisionSupported = choice.VisionSupported
+			normalized.CreditMultiplier = choice.CreditMultiplier
+			normalized.RequestMultiplier = choice.RequestMultiplier
+			normalized.EnabledHosts = append([]string(nil), choice.EnabledHosts...)
+			normalized.ContextWindow = choice.ContextWindow
 			if _, exists := seen[normalized.ID]; exists {
 				continue
 			}

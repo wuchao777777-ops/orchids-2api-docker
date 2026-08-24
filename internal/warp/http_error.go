@@ -13,6 +13,7 @@ import (
 type HTTPStatusError struct {
 	Operation  string
 	StatusCode int
+	ErrorCode  string
 	RetryAfter time.Duration
 	Body       string
 }
@@ -26,15 +27,30 @@ func (e *HTTPStatusError) Error() string {
 		op = "request"
 	}
 	if e.RetryAfter > 0 {
-		return fmt.Sprintf("warp %s failed: HTTP %d (retry after %s)", op, e.StatusCode, e.RetryAfter.Round(time.Second))
+		return fmt.Sprintf("warp %s failed: HTTP %d%s (retry after %s)", op, e.StatusCode, formatWarpErrorCode(e.ErrorCode), e.RetryAfter.Round(time.Second))
 	}
 	if body := strings.TrimSpace(e.Body); body != "" {
 		if len(body) > 512 {
 			body = body[:512] + "...[truncated]"
 		}
-		return fmt.Sprintf("warp %s failed: HTTP %d: %s", op, e.StatusCode, body)
+		return fmt.Sprintf("warp %s failed: HTTP %d%s: %s", op, e.StatusCode, formatWarpErrorCode(e.ErrorCode), body)
 	}
-	return fmt.Sprintf("warp %s failed: HTTP %d", op, e.StatusCode)
+	return fmt.Sprintf("warp %s failed: HTTP %d%s", op, e.StatusCode, formatWarpErrorCode(e.ErrorCode))
+}
+
+func formatWarpErrorCode(code string) string {
+	if code = strings.TrimSpace(code); code != "" {
+		return " [" + code + "]"
+	}
+	return ""
+}
+
+func WarpErrorCode(err error) string {
+	var statusErr *HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return strings.TrimSpace(statusErr.ErrorCode)
+	}
+	return ""
 }
 
 func HTTPStatusCode(err error) int {

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"orchids-api/internal/logutil"
@@ -139,8 +140,12 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			level = slog.LevelError
 		} else if wrapped.StatusCode >= 400 {
 			level = slog.LevelWarn
-		} else if !logutil.VerboseDiagnosticsEnabled() {
+		} else if !logutil.VerboseDiagnosticsEnabled() && !strings.HasPrefix(r.URL.Path, "/warp/") {
 			return
+		}
+		userAgent := strings.TrimSpace(r.UserAgent())
+		if len(userAgent) > 256 {
+			userAgent = userAgent[:256]
 		}
 
 		slog.Log(r.Context(), level, "Request completed",
@@ -150,6 +155,8 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			"status", wrapped.StatusCode,
 			"bytes", wrapped.BytesWritten,
 			"duration", duration,
+			"remote_ip", ExtractIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), r.Header.Get("X-Real-IP")),
+			"user_agent", userAgent,
 		)
 	})
 }

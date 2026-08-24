@@ -428,6 +428,7 @@ func postWarpTokenForm(ctx context.Context, httpClient *http.Client, endpoint st
 		return nil, &HTTPStatusError{
 			Operation:  "refresh token",
 			StatusCode: resp.StatusCode,
+			ErrorCode:  resp.Header.Get("X-Warp-Error-Code"),
 			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}
@@ -443,10 +444,11 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 	}
 
 	s.mu.Lock()
-	if s.loggedIn && time.Since(s.lastLogin) < 30*time.Minute {
+	if !s.lastLogin.IsZero() && time.Since(s.lastLogin) < 5*time.Minute {
 		s.mu.Unlock()
 		return nil
 	}
+	s.lastLogin = time.Now()
 	jwt := strings.TrimSpace(s.jwt)
 	if jwt == "" {
 		s.mu.Unlock()
@@ -487,6 +489,7 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 		return &HTTPStatusError{
 			Operation:  "login",
 			StatusCode: resp.StatusCode,
+			ErrorCode:  resp.Header.Get("X-Warp-Error-Code"),
 			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}

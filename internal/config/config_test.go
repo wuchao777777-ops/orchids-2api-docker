@@ -67,6 +67,9 @@ func TestApplyHardcodedOverridesValues(t *testing.T) {
 	if cfg.RequestTimeout != 600 {
 		t.Fatalf("RequestTimeout=%d want=600", cfg.RequestTimeout)
 	}
+	if cfg.ConcurrencyTimeout != cfg.RequestTimeout {
+		t.Fatalf("ConcurrencyTimeout=%d want RequestTimeout=%d", cfg.ConcurrencyTimeout, cfg.RequestTimeout)
+	}
 	if cfg.UpstreamMode != "ws" {
 		t.Fatalf("UpstreamMode=%q want=ws", cfg.UpstreamMode)
 	}

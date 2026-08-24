@@ -348,7 +348,11 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient, s
 }
 
 type creditRefundClient interface {
-	RefundCredits(ctx context.Context, reason string) error
+	RefundCredits(ctx context.Context, conversationID, requestID string) error
+}
+
+type warpUsageReconcileClient interface {
+	GetConversationUsage(ctx context.Context, conversationID string) (*warp.ConversationUsageInfo, error)
 }
 
 func shouldRefundWarpCredits(category string) bool {
@@ -375,25 +379,42 @@ func refundReasonForWarpCategory(category string) string {
 	}
 }
 
-func (h *Handler) refundWarpCredits(client UpstreamClient, category string) {
+func (h *Handler) refundWarpCredits(client UpstreamClient, requestErr error, category string) bool {
 	if !shouldRefundWarpCredits(category) {
-		return
+		return false
 	}
 
 	refundable, ok := client.(creditRefundClient)
 	if !ok {
-		return
+		return false
+	}
+	requestID := warp.RequestIDFromError(requestErr)
+	conversationID := warp.ConversationIDFromError(requestErr)
+	if requestID == "" || conversationID == "" {
+		slog.Warn("Warp refund skipped: upstream request metadata unavailable", "category", category, "has_request_id", requestID != "", "has_conversation_id", conversationID != "")
+		return false
+	}
+	if usageClient, ok := client.(warpUsageReconcileClient); ok {
+		usageCtx, usageCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		usage, usageErr := usageClient.GetConversationUsage(usageCtx, conversationID)
+		usageCancel()
+		if usageErr != nil {
+			slog.Warn("Warp conversation usage reconciliation failed", "conversation_id", conversationID, "request_id", requestID, "error", usageErr)
+		} else {
+			slog.Info("Warp conversation usage reconciled", "conversation_id", conversationID, "request_id", requestID, "usage", usage)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	reason := refundReasonForWarpCategory(category)
-	if err := refundable.RefundCredits(ctx, reason); err != nil {
-		slog.Warn("Warp refund credits failed", "category", category, "reason", reason, "error", err)
-		return
+	if err := refundable.RefundCredits(ctx, conversationID, requestID); err != nil {
+		slog.Warn("Warp refund credits failed", "category", category, "local_reason", reason, "request_id", requestID, "error", err)
+		return false
 	}
-	slog.Debug("Warp credits refunded", "category", category, "reason", reason)
+	slog.Info("Warp credits refunded", "category", category, "local_reason", reason, "request_id", requestID)
+	return true
 }
 
 func computeRetryDelay(base time.Duration, attempt int, category string) time.Duration {

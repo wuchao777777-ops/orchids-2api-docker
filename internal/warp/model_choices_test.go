@@ -68,6 +68,39 @@ func TestFetchFeatureAgentModeModelChoices_NormalizesIDsAndDefault(t *testing.T)
 	}
 }
 
+func TestFetchFeatureAgentModeModelChoices_FiltersDisabledAndKeepsRoutingMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data":{"user":{"__typename":"UserOutput","user":{"workspaces":[{"featureModelChoice":{"agentMode":{
+				"defaultId":"disabled-model","choices":[
+					{"id":"disabled-model","displayName":"Disabled","disableReason":"OUT_OF_REQUESTS"},
+					{"id":"enabled-model","displayName":"Enabled","baseModelName":"gpt-5.2","reasoningLevel":"high","disableReason":null,"visionSupported":true,"provider":"OPENAI","usageMetadata":{"creditMultiplier":1.5,"requestMultiplier":2},"hostConfigs":[{"enabled":true,"modelRoutingHost":"DIRECT_API"},{"enabled":false,"modelRoutingHost":"AWS_BEDROCK"}],"contextWindow":{"isConfigurable":true,"min":1024,"max":200000,"default":128000}}
+				]
+			}}}]}}}
+		}`))
+	}))
+	defer server.Close()
+
+	features, err := fetchFeatureModelChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt")
+	if err != nil {
+		t.Fatalf("fetchFeatureModelChoices() error: %v", err)
+	}
+	if features.AgentMode.DefaultID != "enabled-model" || len(features.AgentMode.Choices) != 1 {
+		t.Fatalf("unexpected enabled choices: %+v", features.AgentMode)
+	}
+	choice := features.AgentMode.Choices[0]
+	if choice.BaseModelName != "gpt-5.2" || choice.RequestMultiplier != 2 || choice.CreditMultiplier == nil || *choice.CreditMultiplier != 1.5 {
+		t.Fatalf("usage metadata was not preserved: %+v", choice)
+	}
+	if !choice.VisionSupported || choice.Provider != "OPENAI" || !slices.Equal(choice.EnabledHosts, []string{"DIRECT_API"}) {
+		t.Fatalf("routing metadata was not preserved: %+v", choice)
+	}
+	if choice.ContextWindow.Max != 200000 || choice.ContextWindow.Default != 128000 {
+		t.Fatalf("context metadata was not preserved: %+v", choice.ContextWindow)
+	}
+}
+
 func TestFetchFeatureModelChoices_IncludesAgentSpecificDefaults(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

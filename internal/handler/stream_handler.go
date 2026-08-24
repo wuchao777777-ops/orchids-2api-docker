@@ -218,6 +218,7 @@ type streamHandler struct {
 	startTime                time.Time
 	hasReturn                bool
 	completionLogged         bool
+	hasReasoningOutput       bool
 	finalStopReason          string
 	outputTokens             int
 	inputTokens              int
@@ -2711,7 +2712,10 @@ func (h *streamHandler) forceFinishIfMissing() {
 }
 
 func (h *streamHandler) hasAnyOutput() bool {
-	return h.hasVisibleOutput()
+	h.mu.Lock()
+	hasReasoning := h.hasReasoningOutput
+	h.mu.Unlock()
+	return hasReasoning || h.hasVisibleOutput()
 }
 
 func (h *streamHandler) hasVisibleOutput() bool {
@@ -2877,6 +2881,13 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	}
 	if h.suppressThinking {
 		if strings.HasPrefix(eventKey, "model.reasoning-") {
+			if eventKey == "model.reasoning-delta" {
+				if delta, _ := msg.Event["delta"].(string); delta != "" {
+					h.mu.Lock()
+					h.hasReasoningOutput = true
+					h.mu.Unlock()
+				}
+			}
 			return
 		}
 	}
@@ -2901,6 +2912,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	}
 
 	switch eventKey {
+	case "model.usage-metadata":
+		slog.Info("Warp request usage", "usage", msg.Event)
+		return
+
 	case "model.actual_model":
 		slog.Warn("Ignoring upstream model substitution event")
 
@@ -2944,6 +2959,9 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			}
 			return
 		}
+		h.mu.Lock()
+		h.hasReasoningOutput = true
+		h.mu.Unlock()
 
 		h.mu.Lock()
 		sseIdx := h.activeThinkingSSEIndex
@@ -3202,6 +3220,8 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 				stopReason = "tool_use"
 			case "stop", "end_turn":
 				stopReason = "end_turn"
+			case "max_tokens", "max_token_limit":
+				stopReason = "max_tokens"
 			}
 		}
 

@@ -258,7 +258,7 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.AutoRefreshToken = true
 	cfg.LoadBalancerCacheTTL = 5
 	cfg.ConcurrencyLimit = 100
-	cfg.ConcurrencyTimeout = 300
+	cfg.ConcurrencyTimeout = cfg.RequestTimeout
 	cfg.AdaptiveTimeout = true
 	cfg.DebugLogSSE = cfg.DebugEnabled
 }

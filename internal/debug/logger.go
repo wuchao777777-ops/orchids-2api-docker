@@ -5,11 +5,22 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/goccy/go-json"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+const (
+	maxDebugStreamLogBytes int64 = 8 << 20
+	maxDebugLogDirectories       = 512
+)
+
+var debugLoggerCreateCount atomic.Uint64
 
 // Logger 调试日志记录器
 type Logger struct {
@@ -18,6 +29,8 @@ type Logger struct {
 	dir        string
 	rawFile    *os.File
 	outFile    *os.File
+	rawBytes   int64
+	outBytes   int64
 	mu         sync.Mutex
 	startTime  time.Time
 }
@@ -36,8 +49,11 @@ func New(enabled bool, sseEnabled bool) *Logger {
 		suffix = hex.EncodeToString(randBytes[:])
 	}
 	dir := filepath.Join("debug-logs", fmt.Sprintf("%s_%s", timestamp, suffix))
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return &Logger{enabled: false}
+	}
+	if count := debugLoggerCreateCount.Add(1); count%64 == 0 {
+		pruneDebugLogDirectories("debug-logs", maxDebugLogDirectories)
 	}
 
 	return &Logger{
@@ -48,12 +64,35 @@ func New(enabled bool, sseEnabled bool) *Logger {
 	}
 }
 
+func pruneDebugLogDirectories(root string, keep int) {
+	if keep < 1 {
+		return
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	dirs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirs = append(dirs, entry.Name())
+		}
+	}
+	if len(dirs) <= keep {
+		return
+	}
+	sort.Strings(dirs)
+	for _, name := range dirs[:len(dirs)-keep] {
+		_ = os.RemoveAll(filepath.Join(root, name))
+	}
+}
+
 // CleanupAllLogs 清空所有调试日志（启动时调用）
 func CleanupAllLogs() error {
 	if err := os.RemoveAll("debug-logs"); err != nil {
 		return err
 	}
-	return os.MkdirAll("debug-logs", 0755)
+	return os.MkdirAll("debug-logs", 0700)
 }
 
 // LogIncomingRequest 记录 1. 进入的 Claude API 请求
@@ -93,9 +132,18 @@ func (l *Logger) LogUpstreamRequest(url string, headers map[string]string, body 
 		return
 	}
 
+	safeHeaders := make(map[string]string, len(headers))
+	for key, value := range headers {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key":
+			safeHeaders[key] = "[REDACTED]"
+		default:
+			safeHeaders[key] = value
+		}
+	}
 	data := map[string]interface{}{
 		"url":     url,
-		"headers": headers,
+		"headers": safeHeaders,
 		"body":    body,
 	}
 	l.writeJSON("3_upstream_request.json", data)
@@ -128,7 +176,7 @@ func (l *Logger) LogUpstreamSSE(eventType string, data string) {
 	defer l.mu.Unlock()
 
 	if l.rawFile == nil {
-		f, err := os.OpenFile(filepath.Join(l.dir, "4_upstream_sse.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(filepath.Join(l.dir, "4_upstream_sse.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			return
 		}
@@ -136,7 +184,7 @@ func (l *Logger) LogUpstreamSSE(eventType string, data string) {
 	}
 
 	elapsed := time.Since(l.startTime).Milliseconds()
-	fmt.Fprintf(l.rawFile, "[%dms] %s: %s\n", elapsed, eventType, data)
+	l.writeLimitedStream(l.rawFile, &l.rawBytes, fmt.Sprintf("[%dms] %s: %s\n", elapsed, eventType, data))
 }
 
 // LogOutputSSE 记录 5. 转换给客户端的 SSE（追加写入）
@@ -149,7 +197,7 @@ func (l *Logger) LogOutputSSE(event string, data string) {
 	defer l.mu.Unlock()
 
 	if l.outFile == nil {
-		f, err := os.OpenFile(filepath.Join(l.dir, "5_client_sse.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(filepath.Join(l.dir, "5_client_sse.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			return
 		}
@@ -157,7 +205,19 @@ func (l *Logger) LogOutputSSE(event string, data string) {
 	}
 
 	elapsed := time.Since(l.startTime).Milliseconds()
-	fmt.Fprintf(l.outFile, "[%dms] event: %s\ndata: %s\n\n", elapsed, event, data)
+	l.writeLimitedStream(l.outFile, &l.outBytes, fmt.Sprintf("[%dms] event: %s\ndata: %s\n\n", elapsed, event, data))
+}
+
+func (l *Logger) writeLimitedStream(file *os.File, written *int64, data string) {
+	if file == nil || written == nil || *written >= maxDebugStreamLogBytes {
+		return
+	}
+	remaining := maxDebugStreamLogBytes - *written
+	if int64(len(data)) > remaining {
+		data = data[:remaining]
+	}
+	n, _ := io.WriteString(file, data)
+	*written += int64(n)
 }
 
 // LogInputTokenBreakdown 记录输入 token 分解
@@ -217,9 +277,9 @@ func (l *Logger) writeJSON(filename string, data interface{}) {
 	if err != nil {
 		return
 	}
-	os.WriteFile(filepath.Join(l.dir, filename), jsonData, 0644)
+	os.WriteFile(filepath.Join(l.dir, filename), jsonData, 0600)
 }
 
 func (l *Logger) writeFile(filename string, content string) {
-	os.WriteFile(filepath.Join(l.dir, filename), []byte(content), 0644)
+	os.WriteFile(filepath.Join(l.dir, filename), []byte(content), 0600)
 }

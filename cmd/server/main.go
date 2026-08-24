@@ -39,8 +39,9 @@ func main() {
 
 	configureRuntimeLogging(cfg)
 
-	// 仅在详细诊断模式下维护逐请求调试文件目录。
-	if cfg.VerboseDiagnosticsEnabled() {
+	// DebugEnabled creates per-request files even when verbose diagnostics are
+	// disabled, so always apply startup retention in debug mode.
+	if cfg.DebugEnabled {
 		if err := debug.CleanupAllLogs(); err != nil {
 			slog.Warn("清理调试日志失败", "error", err)
 		} else {

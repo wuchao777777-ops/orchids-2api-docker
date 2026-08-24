@@ -47,3 +47,42 @@ func TestLoggerLogInputTokenBreakdownWritesFile(t *testing.T) {
 		}
 	}
 }
+
+func TestLoggerLogUpstreamRequestRedactsCredentials(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("Chdir(%q) error = %v", tmp, err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	logger := New(true, false)
+	logger.LogUpstreamRequest("https://example.test", map[string]string{
+		"Authorization": "Bearer secret-jwt",
+		"Cookie":        "session=secret-cookie",
+		"Content-Type":  "application/json",
+	}, map[string]any{"ok": true})
+
+	path := filepath.Join(logger.dir, "3_upstream_request.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	content := string(raw)
+	if strings.Contains(content, "secret-jwt") || strings.Contains(content, "secret-cookie") {
+		t.Fatalf("credential leaked into debug log: %s", content)
+	}
+	if !strings.Contains(content, "[REDACTED]") {
+		t.Fatalf("expected redaction marker: %s", content)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%q) error = %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("debug log permissions=%o want 600", got)
+	}
+}

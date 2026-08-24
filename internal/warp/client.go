@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,8 +28,8 @@ type Client struct {
 }
 
 const (
-	defaultRequestTimeout = 120 * time.Second
-	maxRequestTimeout     = 120 * time.Second
+	defaultRequestTimeout = 600 * time.Second
+	maxRequestTimeout     = 600 * time.Second
 )
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
@@ -146,7 +147,33 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		_, err := c.ensureAuthenticated(ctx, true)
 		return err
 	}
-	return c.streamWithRetry(ctx, payload, req, onMessage, logger, defaultRefresh)
+	var upstreamConversationID string
+	var upstreamRequestID string
+	intercept := func(message upstream.SSEMessage) {
+		if message.Type == "model.conversation_id" {
+			if id, ok := message.Event["id"].(string); ok {
+				upstreamConversationID = strings.TrimSpace(id)
+			}
+		}
+		if message.Type == "model.request_id" {
+			if id, ok := message.Event["id"].(string); ok {
+				upstreamRequestID = strings.TrimSpace(id)
+			}
+			return
+		}
+		if message.Type == "model.usage-metadata" {
+			if message.Event == nil {
+				message.Event = make(map[string]interface{})
+			}
+			message.Event["requestId"] = upstreamRequestID
+			message.Event["conversationId"] = upstreamConversationID
+		}
+		if onMessage != nil {
+			onMessage(message)
+		}
+	}
+	err = c.streamWithRetry(ctx, payload, req, intercept, logger, defaultRefresh)
+	return AttachRequestMetadata(err, upstreamConversationID, upstreamRequestID)
 }
 
 func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *debug.Logger) (*http.Response, error) {
@@ -229,6 +256,7 @@ func (c *Client) handleStreamResponse(ctx context.Context, req upstream.Upstream
 		return &HTTPStatusError{
 			Operation:  op,
 			StatusCode: resp.StatusCode,
+			ErrorCode:  resp.Header.Get("X-Warp-Error-Code"),
 			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
 			Body:       bodyText,
 		}
@@ -332,7 +360,10 @@ func (c *Client) ensureAuthenticated(ctx context.Context, login bool) (*http.Cli
 	}
 	if login {
 		if err := c.session.ensureLogin(ctx, c.httpClient); err != nil {
-			return nil, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			slog.Warn("Warp login notification failed; continuing with authenticated request", "error", err)
 		}
 	}
 	return authClient, nil

@@ -31,6 +31,17 @@ type toolCall struct {
 type finishInfo struct {
 	InputTokens              int
 	OutputTokens             int
+	CacheReadTokens          int
+	CacheWriteTokens         int
+	WebSearchCount           int
+	RequestCredits           float64
+	RequestPlatformCredits   float64
+	RequestProviderCostCents float64
+	RequestPlatformCostCents float64
+	ConversationCredits      float64
+	ConversationPlatform     float64
+	ConversationTotalInput   int
+	ContextWindowUsage       float64
 	Reason                   string
 	Message                  string
 	ShouldRefreshModelConfig bool
@@ -54,6 +65,8 @@ func (e *nonProtobufStreamError) Error() string {
 type parsedEvent struct {
 	Recognized     bool
 	ConversationID string
+	RequestID      string
+	RunID          string
 	ContentUpdates []warpContentUpdate
 	ToolCalls      []toolCall
 	Finish         *finishInfo
@@ -316,6 +329,12 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), state *w
 			Event: map[string]interface{}{"id": parsed.ConversationID},
 		})
 	}
+	if parsed.RequestID != "" {
+		onMessage(upstream.SSEMessage{
+			Type:  "model.request_id",
+			Event: map[string]interface{}{"id": parsed.RequestID, "runId": parsed.RunID},
+		})
+	}
 	for _, update := range parsed.ContentUpdates {
 		delta := state.applyContentUpdate(update)
 		if delta == "" {
@@ -348,10 +367,26 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), state *w
 	if parsed.Finish == nil {
 		return true, false, nil
 	}
+	if usageMetadata := parsed.Finish.usageMetadata(); usageMetadata != nil {
+		onMessage(upstream.SSEMessage{Type: "model.usage-metadata", Event: usageMetadata})
+	}
 	if err := parsed.Finish.terminalError(); err != nil {
+		if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
+			onMessage(upstream.SSEMessage{
+				Type: "model.tokens-used",
+				Event: map[string]interface{}{
+					"inputTokens":  parsed.Finish.InputTokens,
+					"outputTokens": parsed.Finish.OutputTokens,
+				},
+			})
+		}
 		return true, false, err
 	}
-	finish := map[string]interface{}{"finishReason": state.finishReason()}
+	finishReason := state.finishReason()
+	if parsed.Finish.Reason == "max_token_limit" {
+		finishReason = "max_tokens"
+	}
+	finish := map[string]interface{}{"finishReason": finishReason}
 	if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
 		finish["usage"] = map[string]interface{}{
 			"inputTokens":  parsed.Finish.InputTokens,
@@ -404,7 +439,10 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 	out := &parsedEvent{Recognized: event.HasType()}
 	switch event.WhichType() {
 	case warpapi.ResponseEvent_Init_case:
-		out.ConversationID = event.GetInit().GetConversationId()
+		init := event.GetInit()
+		out.ConversationID = init.GetConversationId()
+		out.RequestID = init.GetRequestId()
+		out.RunID = init.GetRunId()
 	case warpapi.ResponseEvent_ClientActions_case:
 		for _, action := range event.GetClientActions().GetActions() {
 			appendWarpClientAction(out, action)
@@ -1028,6 +1066,28 @@ func parseStreamFinished(event *warpapi.ResponseEvent_StreamFinished) *finishInf
 		finish.InputTokens += int(usage.GetTotalInput())
 		finish.OutputTokens += int(usage.GetOutput())
 	}
+	if charges := event.GetRequestCharges(); charges != nil {
+		input, output, cacheRead, cacheWrite, searches, providerCents, platformCents := summarizeRequestCharges(charges)
+		if input+output+cacheRead+cacheWrite > 0 {
+			finish.InputTokens = input
+			finish.OutputTokens = output
+		}
+		finish.CacheReadTokens = cacheRead
+		finish.CacheWriteTokens = cacheWrite
+		finish.WebSearchCount = searches
+		finish.RequestProviderCostCents = providerCents
+		finish.RequestPlatformCostCents = platformCents
+	}
+	if cost := event.GetRequestCost(); cost != nil {
+		finish.RequestCredits = float64(cost.GetExact())
+		finish.RequestPlatformCredits = float64(cost.GetPlatformCredits())
+	}
+	if conversation := event.GetConversationUsageMetadata(); conversation != nil {
+		finish.ConversationCredits = float64(conversation.GetCreditsSpent())
+		finish.ConversationPlatform = float64(conversation.GetPlatformCreditsSpent())
+		finish.ConversationTotalInput = int(conversation.GetTotalInputTokens())
+		finish.ContextWindowUsage = float64(conversation.GetContextWindowUsage())
+	}
 	switch event.WhichReason() {
 	case warpapi.ResponseEvent_StreamFinished_Other_case:
 		finish.Reason = "other"
@@ -1061,6 +1121,68 @@ func parseStreamFinished(event *warpapi.ResponseEvent_StreamFinished) *finishInf
 	return finish
 }
 
+func summarizeRequestCharges(charges *warpapi.ResponseEvent_StreamFinished_RequestCharges) (input, output, cacheRead, cacheWrite, searches int, providerCents, platformCents float64) {
+	if charges == nil {
+		return
+	}
+	for _, charged := range charges.GetUsageByCategory() {
+		if charged == nil {
+			continue
+		}
+		platformCents += float64(charged.GetPlatformUsageInCents())
+		usageSets := []map[string]*warpapi.ResponseEvent_StreamFinished_InferenceUsage{
+			charged.GetDirectApiInferenceUsage(),
+			charged.GetByokInferenceUsage(),
+			charged.GetCustomEndpointInferenceUsage(),
+		}
+		for _, usages := range usageSets {
+			for _, usage := range usages {
+				if usage == nil {
+					continue
+				}
+				if count := usage.GetTokenCount(); count != nil {
+					input += int(count.GetInput())
+					output += int(count.GetOutput())
+					cacheRead += int(count.GetInputCacheRead())
+					cacheWrite += int(count.GetInputCacheWrite())
+				}
+				if cost := usage.GetTokenCost(); cost != nil {
+					providerCents += float64(cost.GetInputCostInCents() + cost.GetOutputCostInCents() + cost.GetInputCacheReadCostInCents() + cost.GetInputCacheWriteCostInCents())
+				}
+				searches += int(usage.GetWebSearchCount())
+				providerCents += float64(usage.GetWebSearchCostInCents())
+			}
+		}
+	}
+	return
+}
+
+func (f *finishInfo) usageMetadata() map[string]interface{} {
+	if f == nil {
+		return nil
+	}
+	if f.CacheReadTokens == 0 && f.CacheWriteTokens == 0 && f.WebSearchCount == 0 &&
+		f.RequestCredits == 0 && f.RequestPlatformCredits == 0 &&
+		f.RequestProviderCostCents == 0 && f.RequestPlatformCostCents == 0 &&
+		f.ConversationCredits == 0 && f.ConversationPlatform == 0 &&
+		f.ConversationTotalInput == 0 && f.ContextWindowUsage == 0 {
+		return nil
+	}
+	return map[string]interface{}{
+		"cacheReadTokens":          f.CacheReadTokens,
+		"cacheWriteTokens":         f.CacheWriteTokens,
+		"webSearchCount":           f.WebSearchCount,
+		"requestCredits":           f.RequestCredits,
+		"requestPlatformCredits":   f.RequestPlatformCredits,
+		"requestProviderCostCents": f.RequestProviderCostCents,
+		"requestPlatformCostCents": f.RequestPlatformCostCents,
+		"conversationCredits":      f.ConversationCredits,
+		"conversationPlatform":     f.ConversationPlatform,
+		"conversationTotalInput":   f.ConversationTotalInput,
+		"contextWindowUsage":       f.ContextWindowUsage,
+	}
+}
+
 func (f *finishInfo) terminalError() error {
 	if f == nil {
 		return nil
@@ -1070,7 +1192,7 @@ func (f *finishInfo) terminalError() error {
 	case "", "done", "other":
 		return nil
 	case "max_token_limit":
-		return fmt.Errorf("warp stream finished with max_token_limit: maximum output tokens reached")
+		return nil
 	case "quota_limit":
 		return fmt.Errorf("warp stream finished with quota_limit: no remaining quota")
 	case "context_window_exceeded":

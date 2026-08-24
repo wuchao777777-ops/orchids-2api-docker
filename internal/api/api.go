@@ -508,6 +508,8 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			slog.Warn("Warp quota sync failed after refresh; keeping account available", "account_id", acc.ID, "error", limitErr)
 		}
 		featureConfig := warp.AccountFeatureConfig{}
+		modelDiscoveryConfirmed := false
+		var modelDiscoveryErr error
 		if a.store != nil && acc.ID != 0 {
 			modelCtx, modelCancel := context.WithTimeout(ctx, 15*time.Second)
 			features, source, modelErr := warpClient.FetchDiscoveredFeatureModelChoices(modelCtx)
@@ -515,6 +517,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			choices := warp.AgentModeModelChoices(features)
 			featureConfig = warp.AccountFeatureConfigFromChoices(features)
 			if modelErr == nil && len(choices) > 0 {
+				modelDiscoveryConfirmed = true
 				models := make([]string, 0, len(choices))
 				for _, choice := range choices {
 					models = append(models, choice.ID)
@@ -546,28 +549,18 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 					}
 				}
 			} else if modelErr != nil {
+				modelDiscoveryErr = modelErr
 				slog.Warn("Warp model choices fetch failed after refresh", "account_id", acc.ID, "error", modelErr)
+			} else {
+				modelDiscoveryErr = fmt.Errorf("warp model discovery returned no enabled models")
 			}
 		}
 		if strings.TrimSpace(acc.StatusCode) == "403" {
-			probeModel := firstNonEmptyString(featureConfig.BaseModel, warp.DefaultModel())
-			probeCtx, probeCancel := context.WithTimeout(ctx, 20*time.Second)
-			probeErr := warpClient.ProbeModelWithFeatureConfig(probeCtx, probeModel, featureConfig)
-			probeCancel()
-			if probeErr != nil {
-				httpStatus := http.StatusBadRequest
-				if code := warp.HTTPStatusCode(probeErr); code >= 400 {
-					httpStatus = code
+			if !modelDiscoveryConfirmed {
+				if modelDiscoveryErr == nil {
+					modelDiscoveryErr = fmt.Errorf("warp model discovery unavailable")
 				}
-				accountStatus := apperrors.ClassifyAccountStatus(probeErr.Error())
-				if accountStatus == "" && httpStatus == http.StatusForbidden {
-					accountStatus = "403"
-				}
-				if accountStatus == "403" {
-					return accountStatus, httpStatus, fmt.Errorf("failed to verify warp AI feature after refresh: %w", probeErr)
-				}
-				slog.Warn("Warp AI feature probe failed after refresh; preserving existing 403 status", "account_id", acc.ID, "error", probeErr)
-				return "403", httpStatus, fmt.Errorf("failed to verify warp AI feature after refresh: %w", probeErr)
+				return "403", http.StatusForbidden, fmt.Errorf("failed to verify warp AI entitlement without a billable probe: %w", modelDiscoveryErr)
 			}
 		}
 		return "", 0, nil

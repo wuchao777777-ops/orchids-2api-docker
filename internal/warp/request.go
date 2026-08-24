@@ -507,6 +507,15 @@ func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warp
 	// Always send the bounded official lists. Per-request denial is enforced by
 	// the handler's prompt gate and response-side hard gate.
 	toolsEnabled := !disableTools
+	supportedTools := officialSupportedTools
+	supportedCliTools := officialSupportedCliAgentTools
+	if disableTools {
+		// Warp treats an empty list as a wildcard. Use a non-executable passive
+		// capability as a protocol fence while keeping supports_suggest_prompt
+		// false and enforcing the explicit tool gate in the user query.
+		supportedTools = warpTextOnlyToolFence
+		supportedCliTools = warpTextOnlyToolFence
+	}
 	autonomy := warpapi.AutonomyLevel_SUPERVISED
 	isolation := warpapi.IsolationLevel_NONE
 	return warpapi.Request_Settings_builder{
@@ -522,7 +531,7 @@ func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warp
 		PlanningEnabled:                            boolPtr(false),
 		WarpDriveContextEnabled:                    boolPtr(false),
 		SupportsCreateFiles:                        boolPtr(toolsEnabled),
-		SupportedTools:                             officialSupportedTools,
+		SupportedTools:                             supportedTools,
 		SupportsLongRunningCommands:                boolPtr(toolsEnabled),
 		ShouldPreserveFileContentInHistory:         boolPtr(true),
 		SupportsTodosUi:                            boolPtr(false),
@@ -534,7 +543,7 @@ func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warp
 		AutonomyLevel:                              &autonomy,
 		IsolationLevel:                             &isolation,
 		WebSearchEnabled:                           boolPtr(toolsEnabled),
-		SupportedCliAgentTools:                     officialSupportedCliAgentTools,
+		SupportedCliAgentTools:                     supportedCliTools,
 		SupportsV4AFileDiffs:                       boolPtr(false),
 		SupportsSummarizationViaMessageReplacement: boolPtr(false),
 		SupportsBundledSkills:                      boolPtr(false),
@@ -570,6 +579,8 @@ var officialSupportedTools = []warpapi.ToolType{
 	warpapi.ToolType_READ_FILES,
 	warpapi.ToolType_APPLY_FILE_DIFFS,
 }
+
+var warpTextOnlyToolFence = []warpapi.ToolType{warpapi.ToolType_SUGGEST_PROMPT}
 
 var officialSupportedCliAgentTools = []warpapi.ToolType{
 	warpapi.ToolType_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
