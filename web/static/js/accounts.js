@@ -59,13 +59,13 @@ function normalizeAccountType(acc) {
 function getQuotaStats(acc) {
   if (!acc) return null;
   const type = normalizeAccountType(acc);
-  // An OAuth billing sync with a reset window but no numeric allowance is an
-  // explicit zero/unassigned Build allowance, not an unknown UI state.
+  // xAI may return a reset window without a numeric Build allowance. That is
+  // not evidence that the account has zero credits; keep it visibly unknown.
   if (type === "grok" && isSidebarGrokOAuthAccount(acc) &&
       Number(acc.usage_limit || 0) <= 0 &&
       String(acc.quota_reset_at || "").startsWith("0001-") === false &&
       String(acc.quota_reset_at || "").trim() !== "") {
-    return { supported: true, limit: 0, remaining: 0, used: 0, pctRemaining: 0, zeroQuota: true };
+    return { supported: true, limit: 0, remaining: 0, used: 0, pctRemaining: 0, quotaUnavailable: true };
   }
   const base = getSidebarQuotaStats(acc);
   if (!base) return null;
@@ -118,6 +118,10 @@ function normalizeAccountSubscription(acc) {
     return raw;
   }
   if (raw.includes("heavy")) return "heavy";
+  if (raw.includes("xpremiumplus") || raw.includes("x_premium_plus")) return "x_premium_plus";
+  if (raw.includes("xpremium") || raw.includes("x_premium")) return "x_premium";
+  if (raw.includes("xbasic") || raw.includes("x_basic")) return "x_basic";
+  if (raw.includes("supergrok")) return "supergrok";
   if (raw.includes("super") || raw.includes("pro")) return "super";
   if (raw.includes("lite")) return "lite";
   if (raw.includes("basic") || raw.includes("free")) return "basic";
@@ -152,6 +156,14 @@ function subscriptionBadge(acc) {
   switch (level) {
     case "unknown":
       return { text: "未知", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "xAI 未返回可验证的 Grok 套餐等级" };
+    case "x_premium_plus":
+      return { text: "X Premium+", bg: "rgba(251, 191, 36, 0.16)", color: "#fbbf24", tip: "xAI 官方 X Premium+ 套餐" };
+    case "x_premium":
+      return { text: "X Premium", bg: "rgba(56, 189, 248, 0.16)", color: "#38bdf8", tip: "xAI 官方 X Premium 套餐" };
+    case "x_basic":
+      return { text: "X Basic", bg: "rgba(167, 139, 250, 0.16)", color: "#c4b5fd", tip: "xAI 官方 X Basic 套餐" };
+    case "supergrok":
+      return { text: "SuperGrok", bg: "rgba(251, 191, 36, 0.16)", color: "#fbbf24", tip: "xAI 官方 SuperGrok 套餐" };
     case "heavy":
       return { text: "heavy", bg: "rgba(251, 191, 36, 0.16)", color: "#fbbf24", tip: "Grok Heavy 账号池" };
     case "super":
@@ -990,9 +1002,9 @@ function renderAccounts() {
     const tdQuota = document.createElement("td");
     tdQuota.style.fontSize = "0.85rem";
     const quota = getQuotaStats(acc);
-    if (quota && quota.zeroQuota) {
+    if (quota && quota.quotaUnavailable) {
       tdQuota.style.color = "#94a3b8";
-      tdQuota.innerHTML = `<span>0 / 0</span> <span style="color:#64748b;font-size:0.75rem">(官方未配置 Build 额度)</span>`;
+      tdQuota.innerHTML = `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(xAI 未下发 Build 数值配额)</span>`;
     } else if (quota && quota.unknown) {
       tdQuota.style.color = "#64748b";
       tdQuota.innerHTML = `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(Puter 暂无稳定额度接口)</span>`;
@@ -1130,8 +1142,8 @@ function renderAccounts() {
 
 function buildQuotaMarkup(acc) {
   const quota = getQuotaStats(acc);
-  if (quota && quota.zeroQuota) {
-    return `<span style="color:#94a3b8">0 / 0</span> <span style="color:#64748b;font-size:0.75rem">(官方未配置 Build 额度)</span>`;
+  if (quota && quota.quotaUnavailable) {
+    return `<span style="color:#94a3b8">未知</span> <span style="color:#64748b;font-size:0.75rem">(xAI 未下发 Build 数值配额)</span>`;
   }
   if (quota && quota.unknown) {
     return `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(Puter 暂无稳定额度接口)</span>`;

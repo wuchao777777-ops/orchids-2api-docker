@@ -17,6 +17,10 @@ import (
 
 func TestFetchCLIBillingUsesIdentityAndAppliesWeeklyQuota(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/user" && r.URL.Query().Get("include") == "subscription" {
+			_, _ = io.WriteString(w, `{"subscriptionTier":"XPremium"}`)
+			return
+		}
 		if r.URL.Path != "/v1/billing" || r.URL.Query().Get("format") != "credits" {
 			http.NotFound(w, r)
 			return
@@ -46,7 +50,7 @@ func TestFetchCLIBillingUsesIdentityAndAppliesWeeklyQuota(t *testing.T) {
 	if !info.HasUsagePercent || info.UsagePercent != 96 || acc.UserID != "user-1" || acc.TeamID != "team-1" {
 		t.Fatalf("info=%+v account=%+v", info, acc)
 	}
-	if !ApplyCLIBillingInfo(acc, info) || acc.Subscription != "unknown" || acc.UsageLimit != 100 || acc.UsageCurrent != 4 {
+	if !ApplyCLIBillingInfo(acc, info) || acc.Subscription != "XPremium" || acc.UsageLimit != 100 || acc.UsageCurrent != 4 {
 		t.Fatalf("billing not applied: %+v", acc)
 	}
 }

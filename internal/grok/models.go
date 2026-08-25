@@ -62,7 +62,10 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.20-heavy", Name: "Grok 4.20 Heavy", UpstreamModel: "grok-4.20-heavy", ModelMode: "MODEL_MODE_HEAVY", ModeID: "heavy", Tier: grokTierHeavy, PreferBest: true},
 	{ID: "grok-4.3", Name: "Grok 4.3", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3", Tier: grokTierSuper},
 	{ID: "grok-4.3-beta", Name: "Grok 4.3 Beta", UpstreamModel: "grok-4.3-beta", ConsoleModel: "grok-4.3", ModeID: "grok-420-computer-use-sa", Tier: grokTierSuper},
-	{ID: "grok-4.5", Name: "Grok 4.5", UpstreamModel: "grok-4.5", ConsoleModel: "grok-4.5", Tier: grokTierSuper},
+	// The official Build CLI model catalog exposes grok-4.5. Route it through
+	// OAuth rather than the legacy SSO/console path, so an OAuth-only account
+	// pool remains usable for the current public Grok model.
+	{ID: "grok-4.5", Name: "Grok 4.5", UpstreamModel: "grok-4.5", ConsoleModel: "grok-4.5", Tier: grokTierSuper, Upstream: UpstreamCLI},
 	{ID: "grok-build-0.1", Name: "Grok Build 0.1", UpstreamModel: "grok-build-0.1", ConsoleModel: "grok-build-0.1", Tier: grokTierSuper, Upstream: UpstreamCLI},
 	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-imagine-image-lite", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic, IsImage: true},
 	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-imagine-image", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},

@@ -169,6 +169,16 @@ func TestResolveModel_AcceptsGrok43(t *testing.T) {
 	}
 }
 
+func TestGrok45RoutesToBuildCLI(t *testing.T) {
+	spec, ok := ResolveModel("grok-4.5")
+	if !ok {
+		t.Fatal("ResolveModel(grok-4.5) = false, want true")
+	}
+	if !modelRoutedToCLI(spec, &config.Config{}) {
+		t.Fatal("grok-4.5 should route through the official Build CLI OAuth path")
+	}
+}
+
 func TestResolveModel_Grok420BetaHyphenAliasRejected(t *testing.T) {
 	if _, ok := ResolveModel("grok-4-20-beta"); ok {
 		t.Fatalf("ResolveModel(grok-4-20-beta) should fail")

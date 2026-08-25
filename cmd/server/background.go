@@ -132,30 +132,37 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 	if acc == nil || s == nil || cfg == nil {
 		return
 	}
-	if strings.TrimSpace(acc.OAuthAccessToken) != "" && !acc.OAuthExpiresAt.IsZero() &&
-		time.Until(acc.OAuthExpiresAt) > 5*time.Minute {
-		return // token still valid, no refresh needed
-	}
 	cliClient := grok.NewCLIClient(cfg)
 	cliClient.SetAccountStore(s)
-	refreshCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	token, err := cliClient.OAuthAccessToken(refreshCtx, acc)
-	cancel()
-	if err != nil {
-		if grok.IsCLIPermanentOAuthError(err) {
-			acc.StatusCode = "401"
-			acc.LastAttempt = time.Now()
+	if strings.TrimSpace(acc.OAuthAccessToken) == "" || acc.OAuthExpiresAt.IsZero() || time.Until(acc.OAuthExpiresAt) <= 5*time.Minute {
+		refreshCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		token, err := cliClient.OAuthAccessToken(refreshCtx, acc)
+		cancel()
+		if err != nil {
+			if grok.IsCLIPermanentOAuthError(err) {
+				acc.StatusCode = "401"
+				acc.LastAttempt = time.Now()
+			}
+			slog.Warn("Auto refresh grok cli token failed", "account_id", acc.ID, "error", err)
+			if updateErr := s.UpdateAccount(ctx, acc); updateErr != nil {
+				slog.Warn("Auto refresh grok cli: update account failed", "account_id", acc.ID, "error", updateErr)
+			}
+			return
 		}
-		slog.Warn("Auto refresh grok cli token failed", "account_id", acc.ID, "error", err)
-		if updateErr := s.UpdateAccount(ctx, acc); updateErr != nil {
-			slog.Warn("Auto refresh grok cli: update account failed", "account_id", acc.ID, "error", updateErr)
+		if token != "" {
+			acc.OAuthAccessToken = token
+			acc.StatusCode = ""
+			acc.LastAttempt = time.Time{}
 		}
-		return
 	}
-	if token != "" {
-		acc.OAuthAccessToken = token
-		acc.StatusCode = ""
-		acc.LastAttempt = time.Time{}
+
+	billingCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	billing, billingErr := cliClient.FetchBilling(billingCtx, acc)
+	cancel()
+	if billingErr != nil {
+		slog.Warn("Auto sync grok cli billing failed; leaving numeric quota unavailable", "account_id", acc.ID, "error", billingErr)
+	} else {
+		grok.ApplyCLIBillingInfo(acc, billing)
 	}
 	if updateErr := s.UpdateAccount(ctx, acc); updateErr != nil {
 		slog.Warn("Auto refresh grok cli: update account failed", "account_id", acc.ID, "error", updateErr)
