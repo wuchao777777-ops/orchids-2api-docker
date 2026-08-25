@@ -32,8 +32,7 @@ type Account struct {
 	Email                string    `json:"email"`
 	Weight               int       `json:"weight"`
 	Enabled              bool      `json:"enabled"`
-	Token                string    `json:"token"` // Truncated display token
-	WarpTokenExpiresAt   time.Time `json:"warp_token_expires_at,omitempty"`
+	Token                string    `json:"token"`        // Runtime/display token for non-Warp channels
 	Subscription         string    `json:"subscription"` // "free", "pro", etc.
 	UsageCurrent         float64   `json:"usage_current"`
 	UsageTotal           float64   `json:"usage_total"` // Used as lifetime usage

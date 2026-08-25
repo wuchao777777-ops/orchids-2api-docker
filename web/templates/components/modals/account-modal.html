@@ -20,12 +20,18 @@
         </select>
         <small class="helper-text">Build CLI OAuth 走 cli-chat-proxy.grok.com（grok-build-0.1 等）</small>
       </div>
-      <div class="form-group" id="ssoCredentialGroup">
-        <label class="form-label" id="tokenLabel">__session</label>
-        <textarea class="form-input account-token-input" id="clientCookie" rows="8" wrap="off" spellcheck="false" required placeholder="每行一个 __session"></textarea>
-        <small id="tokenHint" class="helper-text">按账号类型填写对应凭证</small>
-      </div>
-      <div class="form-group" id="oauthCredentialGroup" hidden>
+       <div class="form-group" id="ssoCredentialGroup">
+         <label class="form-label" id="tokenLabel">__session</label>
+         <textarea class="form-input account-token-input" id="clientCookie" rows="8" wrap="off" spellcheck="false" required placeholder="每行一个 __session"></textarea>
+         <small id="tokenHint" class="helper-text">按账号类型填写对应凭证</small>
+       </div>
+       <div class="form-group" id="warpDeviceLoginGroup" hidden>
+         <label class="form-label">官方 Warp 登录</label>
+         <button class="btn btn-secondary" id="warpDeviceLoginButton" type="button" onclick="startWarpDeviceLogin()">使用 Warp 官方网页登录</button>
+         <small class="helper-text">浏览器将在 app.warp.dev 完成授权；本服务不会读取本地 Warp 文件或接收密码。</small>
+         <div class="account-import-status" id="warpDeviceLoginStatus" hidden></div>
+       </div>
+       <div class="form-group" id="oauthCredentialGroup" hidden>
         <label class="form-label">OAuth Access Token</label>
         <input class="form-input" id="oauthAccessToken" type="text" spellcheck="false" placeholder="access_token" />
       </div>

@@ -63,7 +63,7 @@ func sessionKey(accountID int64, refreshToken string) string {
 }
 
 func getSession(accountID int64, refreshToken, deviceID, requestID string) *session {
-	refreshToken = normalizeRefreshToken(refreshToken)
+	refreshToken = strings.TrimSpace(strings.Trim(refreshToken, "\"'"))
 	deviceID, requestID = ensureSessionIDs(deviceID, requestID)
 	key := sessionKey(accountID, refreshToken)
 
@@ -108,129 +108,6 @@ func mustNewCookieJar() http.CookieJar {
 	return jar
 }
 
-func normalizeRefreshToken(refreshToken string) string {
-	refreshToken = strings.TrimSpace(strings.Trim(refreshToken, "\"'"))
-	if refreshToken == "" {
-		return ""
-	}
-
-	if token := extractRefreshTokenFromJSON(refreshToken); token != "" {
-		refreshToken = token
-	}
-	if token := extractRefreshTokenFromPairs(refreshToken); token != "" {
-		refreshToken = token
-	}
-	if strings.Contains(refreshToken, "----") {
-		parts := strings.Split(refreshToken, "----")
-		refreshToken = strings.TrimSpace(parts[len(parts)-1])
-		if token := extractRefreshTokenFromPairs(refreshToken); token != "" {
-			refreshToken = token
-		}
-	}
-
-	return strings.TrimSpace(strings.Trim(refreshToken, "\"'"))
-}
-
-func extractRefreshTokenFromJSON(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	first := raw[0]
-	if first != '{' && first != '[' {
-		return ""
-	}
-
-	var decoded interface{}
-	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return ""
-	}
-	return findRefreshTokenValue(decoded)
-}
-
-func findRefreshTokenValue(value interface{}) string {
-	switch v := value.(type) {
-	case map[string]interface{}:
-		for _, key := range []string{"id_token", "auth_tokens", "authTokens"} {
-			if token := findRefreshTokenValue(v[key]); token != "" {
-				return token
-			}
-		}
-		for key, item := range v {
-			switch strings.ToLower(strings.TrimSpace(key)) {
-			case "refresh_token", "refreshtoken":
-				if token := normalizeRefreshTokenValue(item); token != "" {
-					return token
-				}
-			}
-			if token := findRefreshTokenValue(item); token != "" {
-				return token
-			}
-		}
-	case []interface{}:
-		for _, item := range v {
-			if token := findRefreshTokenValue(item); token != "" {
-				return token
-			}
-		}
-	}
-	return ""
-}
-
-func normalizeRefreshTokenValue(value interface{}) string {
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(strings.Trim(v, "\"'"))
-	case json.Number:
-		return strings.TrimSpace(v.String())
-	default:
-		return strings.TrimSpace(strings.Trim(fmt.Sprintf("%v", v), "\"'"))
-	}
-}
-
-func extractRefreshTokenFromPairs(raw string) string {
-	candidates := []string{strings.TrimSpace(raw)}
-	if idx := strings.Index(raw, "?"); idx >= 0 && idx < len(raw)-1 {
-		candidates = append(candidates, strings.TrimSpace(raw[idx+1:]))
-	}
-
-	replacer := strings.NewReplacer(";", "&", "\n", "&", "\r", "&")
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		normalized := replacer.Replace(candidate)
-		values := make(url.Values)
-		for _, segment := range strings.Split(normalized, "&") {
-			segment = strings.TrimSpace(segment)
-			if segment == "" {
-				continue
-			}
-			key, value, ok := strings.Cut(segment, "=")
-			if !ok {
-				key, value, ok = strings.Cut(segment, ":")
-			}
-			if !ok {
-				continue
-			}
-			key = strings.TrimSpace(key)
-			value = strings.TrimSpace(value)
-			decoded, err := url.QueryUnescape(value)
-			if err == nil {
-				value = decoded
-			}
-			values.Add(key, value)
-		}
-		for _, key := range []string{"refresh_token", "refreshToken"} {
-			if token := strings.TrimSpace(values.Get(key)); token != "" {
-				return strings.TrimSpace(strings.Trim(token, "\"'"))
-			}
-		}
-	}
-	return ""
-}
-
 func ensureSessionIDs(deviceID, requestID string) (string, string) {
 	deviceID = strings.TrimSpace(deviceID)
 	requestID = strings.TrimSpace(requestID)
@@ -267,26 +144,6 @@ func (s *session) tokenValid() bool {
 		return false
 	}
 	return time.Now().Add(5 * time.Minute).Before(s.expiresAt)
-}
-
-func (s *session) seedJWT(jwt string) {
-	jwt = strings.TrimSpace(jwt)
-	if jwt == "" {
-		return
-	}
-	exp := util.JWTExpiry(jwt, 0)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.tokenValid() {
-		return
-	}
-	if !exp.IsZero() && time.Now().Add(5*time.Minute).Before(exp) {
-		s.jwt = jwt
-		s.expiresAt = exp
-		s.loggedIn = false
-		s.registerExperimentHeadersLocked(jwt)
-	}
 }
 
 func (s *session) ensureToken(ctx context.Context, httpClient *http.Client) error {
@@ -339,7 +196,7 @@ func (s *session) clearToken() {
 
 func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
 	s.mu.Lock()
-	refreshToken := normalizeRefreshToken(s.refreshToken)
+	refreshToken := strings.TrimSpace(strings.Trim(s.refreshToken, "\"'"))
 	s.mu.Unlock()
 
 	if refreshToken == "" {
@@ -394,9 +251,9 @@ func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
 	s.expiresAt = expiry
 	s.registerExperimentHeadersLocked(jwt)
 	if refresh != "" {
-		s.refreshToken = normalizeRefreshToken(refresh)
+		s.refreshToken = strings.TrimSpace(strings.Trim(refresh, "\"'"))
 	} else {
-		s.refreshToken = normalizeRefreshToken(s.refreshToken)
+		s.refreshToken = strings.TrimSpace(strings.Trim(s.refreshToken, "\"'"))
 	}
 	s.loggedIn = false
 	s.lastLogin = time.Time{}

@@ -50,7 +50,8 @@ hex/byte-template builder has been removed.
 
 ## Borrowed Behaviors
 
-- Prefer nested persisted tokens such as `id_token.refresh_token`.
+- Authenticate only with the explicit account `refresh_token`; no persisted
+  client file, JSON payload, callback URL, cookie, or cached JWT is accepted.
 - Match official WARP headers for client version and OS metadata.
 - Suppress `User-Agent` and rely on `X-Warp-Client-ID`, matching Warp's custom
   client-role header behavior.

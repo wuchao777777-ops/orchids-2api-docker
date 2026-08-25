@@ -38,11 +38,8 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		return &Client{config: cfg, httpClient: httpClient}
 	}
 
-	refresh := ResolveRefreshToken(acc)
+	refresh := RefreshToken(acc)
 	sess := getSession(acc.ID, refresh, acc.DeviceID, acc.RequestID)
-	if token := strings.TrimSpace(acc.Token); token != "" {
-		sess.seedJWT(token)
-	}
 	httpClient := newHTTPClient(0, cfg)
 	authClient := newHTTPClient(0, cfg)
 	httpClient.Jar = sess.jar
@@ -316,12 +313,21 @@ func (c *Client) SyncAccountState() bool {
 		return false
 	}
 
-	jwt := c.session.currentJWT()
 	refresh := c.session.currentRefreshToken()
 
 	changed := false
-	if jwt != "" && jwt != c.account.Token {
-		c.account.Token = jwt
+	// These fields were legacy Warp credential inputs. Clear them whenever the
+	// account is synchronized so persisted records converge on refresh_token.
+	if c.account.Token != "" {
+		c.account.Token = ""
+		changed = true
+	}
+	if c.account.ClientCookie != "" {
+		c.account.ClientCookie = ""
+		changed = true
+	}
+	if c.account.SessionCookie != "" {
+		c.account.SessionCookie = ""
 		changed = true
 	}
 	if refresh != "" && refresh != c.account.RefreshToken {

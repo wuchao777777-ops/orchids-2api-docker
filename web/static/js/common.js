@@ -24,7 +24,7 @@ function getSidebarAccountToken(acc) {
   if (!acc) return "";
   const type = normalizeSidebarAccountType(acc);
   if (type === "warp") {
-    return acc.refresh_token || acc.token || acc.client_cookie || "";
+    return acc.refresh_token || "";
   }
   if (type === "puter") {
     return acc.client_cookie || acc.token || acc.session_cookie || "";

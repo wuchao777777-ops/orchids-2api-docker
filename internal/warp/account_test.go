@@ -6,30 +6,41 @@ import (
 	"orchids-api/internal/store"
 )
 
-func TestResolveRefreshToken_UsesLegacyTokenField(t *testing.T) {
-	t.Parallel()
-
-	acc := &store.Account{
-		AccountType: "warp",
-		Token:       "legacy-refresh-token",
-	}
-
-	if got := ResolveRefreshToken(acc); got != "legacy-refresh-token" {
-		t.Fatalf("ResolveRefreshToken()=%q want legacy-refresh-token", got)
-	}
-}
-
-func TestResolveRefreshToken_PrefersNonJWTOverRuntimeToken(t *testing.T) {
+func TestRefreshToken_UsesOnlyExplicitRefreshToken(t *testing.T) {
 	t.Parallel()
 
 	acc := &store.Account{
 		AccountType:  "warp",
-		Token:        "aaaaaaaaaa.bbbbbbbbbb.cccccccccc",
+		RefreshToken: " refresh-token ",
+		Token:        "legacy-refresh-token",
+		ClientCookie: "refresh_token=cookie-token",
+	}
+
+	if got := RefreshToken(acc); got != "refresh-token" {
+		t.Fatalf("RefreshToken()=%q want refresh-token", got)
+	}
+}
+
+func TestRefreshToken_DoesNotFallbackToLegacyFields(t *testing.T) {
+	t.Parallel()
+
+	acc := &store.Account{
+		AccountType:  "warp",
+		Token:        "legacy-refresh-token",
 		ClientCookie: "refresh_token=actual-refresh-token",
 	}
 
-	if got := ResolveRefreshToken(acc); got != "actual-refresh-token" {
-		t.Fatalf("ResolveRefreshToken()=%q want actual-refresh-token", got)
+	if got := RefreshToken(acc); got != "" {
+		t.Fatalf("RefreshToken()=%q want empty", got)
+	}
+}
+
+func TestRefreshToken_OnlyTrimsExplicitValue(t *testing.T) {
+	t.Parallel()
+
+	acc := &store.Account{RefreshToken: " refresh_token=not-parsed "}
+	if got := RefreshToken(acc); got != "refresh_token=not-parsed" {
+		t.Fatalf("RefreshToken()=%q want literal value", got)
 	}
 }
 

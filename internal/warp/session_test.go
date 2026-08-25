@@ -8,35 +8,6 @@ import (
 	"testing"
 )
 
-func TestNormalizeRefreshToken_ExtractsCommonFormats(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		raw  string
-		want string
-	}{
-		{name: "plain", raw: " token-123 ", want: "token-123"},
-		{name: "legacy composite", raw: "mail@example.com----device-id----token-123", want: "token-123"},
-		{name: "form encoded", raw: "grant_type=refresh_token&refresh_token=token-123", want: "token-123"},
-		{name: "cookie fragment", raw: "foo=1; refresh_token=token-123; Path=/", want: "token-123"},
-		{name: "json snake", raw: `{"refresh_token":"token-123"}`, want: "token-123"},
-		{name: "json camel", raw: `{"auth":{"refreshToken":"token-123"}}`, want: "token-123"},
-		{name: "warp persisted user", raw: `{"id_token":{"id_token":"runtime-jwt","refresh_token":"token-123","expiration_time":"2026-05-28T00:00:00+00:00"},"refresh_token":"legacy-empty"}`, want: "token-123"},
-		{name: "warp auth redirect url", raw: "warp://auth/desktop_redirect?refresh_token=token-123&state=abc", want: "token-123"},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := normalizeRefreshToken(tt.raw); got != tt.want {
-				t.Fatalf("normalizeRefreshToken(%q)=%q want %q", tt.raw, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestSessionRefresh_UsesFirebaseWhenSuccessful(t *testing.T) {
 	t.Parallel()
 

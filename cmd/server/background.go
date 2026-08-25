@@ -279,14 +279,17 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 		grokRefreshQueue := make([]*store.Account, 0)
 		for _, acc := range accounts {
 			if strings.EqualFold(acc.AccountType, "warp") {
-				if !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
+				// nextRefreshTime from Warp's quota GraphQL response is a billing
+				// period boundary, not a request backoff. Only skip an account when
+				// the upstream actually returned 429 with Retry-After.
+				if acc.StatusCode == "429" && !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
 					continue
 				}
-				if strings.TrimSpace(acc.RefreshToken) == "" && strings.TrimSpace(acc.ClientCookie) == "" {
+				if strings.TrimSpace(acc.RefreshToken) == "" {
 					continue
 				}
 				warpClient := warp.NewFromAccount(acc, cfg)
-				jwt, err := warpClient.RefreshAccount(context.Background())
+				_, err := warpClient.RefreshAccount(context.Background())
 				if err != nil {
 					retryAfter := warp.RetryAfter(err)
 					httpStatus := warp.HTTPStatusCode(err)
@@ -300,9 +303,6 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					}
 					slog.Warn("Auto refresh token failed", "account", acc.Name, "type", "warp", "http_status", httpStatus, "error", err)
 					continue
-				}
-				if jwt != "" {
-					acc.Token = jwt
 				}
 				warpClient.SyncAccountState()
 

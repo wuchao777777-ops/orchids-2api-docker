@@ -288,17 +288,17 @@ func TestHandleAccountByID_PutAllowsSameAccountCredential(t *testing.T) {
 	}
 }
 
-func TestHandleAccountByID_PutPreservesImportedWarpIDToken(t *testing.T) {
+func TestHandleAccountByID_PutClearsLegacyWarpCredentialFields(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	expiresAt := time.Date(2026, 5, 28, 0, 0, 0, 0, time.UTC)
 	acc := &store.Account{
-		AccountType:        "warp",
-		RefreshToken:       "warp-refresh",
-		Token:              "secret-direct-jwt",
-		WarpTokenExpiresAt: expiresAt,
-		Enabled:            true,
+		AccountType:   "warp",
+		RefreshToken:  "warp-refresh",
+		Token:         "legacy-jwt",
+		ClientCookie:  "legacy-cookie",
+		SessionCookie: "legacy-session",
+		Enabled:       true,
 	}
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatal(err)
@@ -311,15 +311,15 @@ func TestHandleAccountByID_PutPreservesImportedWarpIDToken(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), "secret-direct-jwt") {
-		t.Fatalf("response leaked direct JWT: %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "legacy-jwt") {
+		t.Fatalf("response leaked legacy JWT: %s", rec.Body.String())
 	}
 	stored, err := s.GetAccount(context.Background(), acc.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Token != "secret-direct-jwt" || !stored.WarpTokenExpiresAt.Equal(expiresAt) {
-		t.Fatalf("stored credential changed: %#v", stored)
+	if stored.Token != "" || stored.ClientCookie != "" || stored.SessionCookie != "" {
+		t.Fatalf("legacy credential fields were retained: %#v", stored)
 	}
 }
 

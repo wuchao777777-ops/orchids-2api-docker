@@ -6,12 +6,12 @@ import (
 	"orchids-api/internal/store"
 )
 
-func TestNormalizeWarpTokenInput_StripsWrappedFormats(t *testing.T) {
+func TestNormalizeWarpTokenInput_UsesExplicitRefreshTokenOnly(t *testing.T) {
 	t.Parallel()
 
 	acc := &store.Account{
 		AccountType:  "warp",
-		RefreshToken: "grant_type=refresh_token&refresh_token=token-123",
+		RefreshToken: "  token-123  ",
 		ClientCookie: "should-be-cleared",
 	}
 
@@ -28,7 +28,7 @@ func TestNormalizeWarpTokenInput_StripsWrappedFormats(t *testing.T) {
 	}
 }
 
-func TestNormalizeWarpTokenOutput_NormalizesLegacyValue(t *testing.T) {
+func TestNormalizeWarpTokenOutput_DoesNotUseLegacyValue(t *testing.T) {
 	t.Parallel()
 
 	acc := &store.Account{
@@ -40,15 +40,15 @@ func TestNormalizeWarpTokenOutput_NormalizesLegacyValue(t *testing.T) {
 	if normalized == nil {
 		t.Fatal("normalizeWarpTokenOutput returned nil")
 	}
-	if normalized.RefreshToken != "token-123" {
-		t.Fatalf("RefreshToken=%q want token-123", normalized.RefreshToken)
+	if normalized.RefreshToken != "" {
+		t.Fatalf("RefreshToken=%q want empty", normalized.RefreshToken)
 	}
 	if normalized.ClientCookie != "" {
 		t.Fatalf("ClientCookie=%q want empty", normalized.ClientCookie)
 	}
 }
 
-func TestNormalizeWarpTokenInput_UsesLegacyTokenField(t *testing.T) {
+func TestNormalizeWarpTokenInput_DoesNotUseLegacyTokenField(t *testing.T) {
 	t.Parallel()
 
 	acc := &store.Account{
@@ -58,8 +58,8 @@ func TestNormalizeWarpTokenInput_UsesLegacyTokenField(t *testing.T) {
 
 	normalizeWarpTokenInput(acc)
 
-	if acc.RefreshToken != "legacy-refresh-token" {
-		t.Fatalf("RefreshToken=%q want legacy-refresh-token", acc.RefreshToken)
+	if acc.RefreshToken != "" {
+		t.Fatalf("RefreshToken=%q want empty", acc.RefreshToken)
 	}
 	if acc.Token != "" {
 		t.Fatalf("Token=%q want empty", acc.Token)

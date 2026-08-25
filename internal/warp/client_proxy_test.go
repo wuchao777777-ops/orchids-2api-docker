@@ -85,6 +85,37 @@ func TestNewFromAccount_LegacyWarpClientsShareCookieJar(t *testing.T) {
 	}
 }
 
+func TestNewFromAccount_DoesNotSeedPersistedJWT(t *testing.T) {
+	client := NewFromAccount(&store.Account{
+		ID:           7001,
+		RefreshToken: "refresh-token",
+		Token:        "legacy-jwt",
+	}, &config.Config{})
+	if got := client.session.currentJWT(); got != "" {
+		t.Fatalf("currentJWT=%q want empty", got)
+	}
+}
+
+func TestSyncAccountState_ClearsLegacyCredentialFields(t *testing.T) {
+	account := &store.Account{
+		ID:            7002,
+		RefreshToken:  "refresh-token",
+		Token:         "legacy-jwt",
+		ClientCookie:  "legacy-cookie",
+		SessionCookie: "legacy-session",
+	}
+	client := &Client{
+		account: account,
+		session: &session{refreshToken: "refresh-token"},
+	}
+	if !client.SyncAccountState() {
+		t.Fatal("SyncAccountState() should clear legacy credential fields")
+	}
+	if account.Token != "" || account.ClientCookie != "" || account.SessionCookie != "" {
+		t.Fatalf("legacy fields retained: %#v", account)
+	}
+}
+
 func TestNewHTTPClient_ProxyBypassAndHTTPS(t *testing.T) {
 	cfg := &config.Config{
 		ProxyHTTP:   "http://proxy.local:3128",

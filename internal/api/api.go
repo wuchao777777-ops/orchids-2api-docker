@@ -45,6 +45,38 @@ type API struct {
 	checkFailCount   map[int64]int
 	checkNextAllowed map[int64]time.Time
 	checkSem         chan struct{}
+
+	// Warp device logins hold only short-lived, in-memory device codes. A
+	// completed login persists the resulting refresh_token as a normal account.
+	warpDeviceLoginMu sync.Mutex
+	warpDeviceLogins  map[string]*warpDeviceLogin
+}
+
+const maxWarpDeviceLogins = 10
+
+type warpDeviceLogin struct {
+	deviceCode string
+	userCode   string
+	verifyURI  string
+	verifyFull string
+	expiresAt  time.Time
+	interval   time.Duration
+	cancel     context.CancelFunc
+
+	status    string
+	message   string
+	accountID int64
+}
+
+type warpDeviceLoginResponse struct {
+	ID                      string `json:"id"`
+	Status                  string `json:"status"`
+	UserCode                string `json:"user_code,omitempty"`
+	VerificationURI         string `json:"verification_uri,omitempty"`
+	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
+	ExpiresAt               string `json:"expires_at,omitempty"`
+	AccountID               int64  `json:"account_id,omitempty"`
+	Message                 string `json:"message,omitempty"`
 }
 
 var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
@@ -136,8 +168,9 @@ func normalizeWarpTokenInput(acc *store.Account) {
 	if acc == nil || !strings.EqualFold(acc.AccountType, "warp") {
 		return
 	}
-	acc.RefreshToken = warp.ResolveRefreshToken(acc)
-	// Warp 只使用 refresh_token，清理 client_cookie 避免混用
+	acc.RefreshToken = warp.RefreshToken(acc)
+	// Warp only accepts its explicit refresh_token. Clear all legacy fields so
+	// they cannot become an alternate authentication source.
 	acc.Token = ""
 	acc.ClientCookie = ""
 	acc.SessionCookie = ""
@@ -149,8 +182,8 @@ func normalizeWarpTokenOutput(acc *store.Account) *store.Account {
 	}
 	copyAcc := *acc
 	if strings.EqualFold(copyAcc.AccountType, "warp") {
-		copyAcc.RefreshToken = warp.ResolveRefreshToken(&copyAcc)
-		// Warp 对外只暴露 refresh_token，避免把运行时 JWT 当成用户凭据回填到前端。
+		copyAcc.RefreshToken = warp.RefreshToken(&copyAcc)
+		// Never expose stale runtime or legacy credential fields for Warp.
 		copyAcc.Token = ""
 		copyAcc.ClientCookie = ""
 		copyAcc.SessionCookie = ""
@@ -286,7 +319,7 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 
 	switch accountType {
 	case "warp":
-		token = strings.TrimSpace(warp.ResolveRefreshToken(acc))
+		token = strings.TrimSpace(warp.RefreshToken(acc))
 	case "grok":
 		if grokAccountIsOAuth(acc) {
 			token = strings.TrimSpace(firstNonEmptyString(acc.OAuthRefreshToken, acc.OAuthAccessToken))
@@ -484,7 +517,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 	if strings.EqualFold(acc.AccountType, "warp") {
 		cfg := a.config.Load()
 		warpClient := warp.NewFromAccount(acc, cfg)
-		jwt, err := warpClient.ForceRefreshAccount(ctx)
+		_, err := warpClient.ForceRefreshAccount(ctx)
 		if err != nil {
 			httpStatus := http.StatusBadRequest
 			if code := warp.HTTPStatusCode(err); code >= 400 {
@@ -496,7 +529,6 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			}
 			return accountStatus, httpStatus, fmt.Errorf("failed to refresh warp account: %w", err)
 		}
-		acc.Token = jwt
 		warpClient.SyncAccountState()
 
 		limitCtx, limitCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -638,6 +670,7 @@ func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
 		checkFailCount:   map[int64]int{},
 		checkNextAllowed: map[int64]time.Time{},
 		checkSem:         make(chan struct{}, 2),
+		warpDeviceLogins: map[string]*warpDeviceLogin{},
 	}
 	if cfg != nil {
 		a.config.Store(cfg)
@@ -841,6 +874,10 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.EqualFold(acc.AccountType, "warp") {
 			normalizeWarpTokenInput(&acc)
+			if acc.RefreshToken == "" {
+				http.Error(w, "missing warp refresh token", http.StatusBadRequest)
+				return
+			}
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
 			acc.NSFWEnabled = true
@@ -896,6 +933,247 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// HandleWarpDeviceAuthorization starts and observes the official Warp Agent
+// CLI device-authorization flow. It is registered behind the admin session
+// middleware; no Warp credentials are accepted from or returned to the UI.
+func (a *API) HandleWarpDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	path := strings.TrimPrefix(r.URL.Path, "/api/warp/device-auth")
+	path = strings.Trim(path, "/")
+
+	switch {
+	case r.Method == http.MethodPost && path == "":
+		a.startWarpDeviceAuthorization(w, r)
+	case r.Method == http.MethodGet && path != "":
+		a.getWarpDeviceAuthorization(w, r, path)
+	case r.Method == http.MethodDelete && path != "":
+		a.cancelWarpDeviceAuthorization(w, r, path)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *API) startWarpDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.store == nil {
+		http.Error(w, "account store is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	a.cleanupWarpDeviceLogins(time.Now())
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	authenticator := warp.NewDeviceAuthenticator(a.config.Load())
+	details, err := authenticator.Start(ctx)
+	if err != nil {
+		slog.Warn("Warp device authorization could not be started", "error", err)
+		http.Error(w, "failed to start Warp device authorization", http.StatusBadGateway)
+		return
+	}
+
+	id, err := newWarpDeviceLoginID()
+	if err != nil {
+		http.Error(w, "failed to create login transaction", http.StatusInternalServerError)
+		return
+	}
+	expiresAt := time.Now().Add(time.Duration(details.ExpiresIn) * time.Second)
+	pollContext, pollCancel := context.WithCancel(context.Background())
+	login := &warpDeviceLogin{
+		deviceCode: details.DeviceCode,
+		userCode:   details.UserCode,
+		verifyURI:  details.VerificationURI,
+		verifyFull: details.VerificationURIComplete,
+		expiresAt:  expiresAt,
+		interval:   time.Duration(details.Interval) * time.Second,
+		cancel:     pollCancel,
+		status:     "pending",
+	}
+
+	a.warpDeviceLoginMu.Lock()
+	if len(a.warpDeviceLogins) >= maxWarpDeviceLogins {
+		a.warpDeviceLoginMu.Unlock()
+		pollCancel()
+		http.Error(w, "too many pending Warp device logins", http.StatusTooManyRequests)
+		return
+	}
+	a.warpDeviceLogins[id] = login
+	a.warpDeviceLoginMu.Unlock()
+
+	go a.pollWarpDeviceAuthorization(pollContext, id, authenticator)
+	json.NewEncoder(w).Encode(a.warpDeviceLoginResponse(id, login))
+}
+
+func (a *API) getWarpDeviceAuthorization(w http.ResponseWriter, _ *http.Request, id string) {
+	a.cleanupWarpDeviceLogins(time.Now())
+	a.warpDeviceLoginMu.Lock()
+	login := a.warpDeviceLogins[id]
+	if login == nil {
+		a.warpDeviceLoginMu.Unlock()
+		http.Error(w, "Warp device login not found", http.StatusNotFound)
+		return
+	}
+	response := a.warpDeviceLoginResponse(id, login)
+	a.warpDeviceLoginMu.Unlock()
+	json.NewEncoder(w).Encode(response)
+}
+
+func (a *API) cancelWarpDeviceAuthorization(w http.ResponseWriter, _ *http.Request, id string) {
+	a.warpDeviceLoginMu.Lock()
+	login := a.warpDeviceLogins[id]
+	if login == nil {
+		a.warpDeviceLoginMu.Unlock()
+		http.Error(w, "Warp device login not found", http.StatusNotFound)
+		return
+	}
+	delete(a.warpDeviceLogins, id)
+	login.deviceCode = ""
+	login.status = "cancelled"
+	if login.cancel != nil {
+		login.cancel()
+	}
+	a.warpDeviceLoginMu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) pollWarpDeviceAuthorization(ctx context.Context, id string, authenticator *warp.DeviceAuthenticator) {
+	for {
+		login, ok := a.warpDeviceLoginForPoll(id)
+		if !ok {
+			return
+		}
+		if time.Now().After(login.expiresAt) {
+			a.finishWarpDeviceLogin(id, "expired", "Warp authorization expired", 0)
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(login.interval):
+		}
+
+		requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		refreshToken, err := authenticator.Exchange(requestCtx, login.deviceCode)
+		cancel()
+		if err != nil {
+			if warp.IsDeviceAuthorizationPending(err) {
+				continue
+			}
+			slog.Warn("Warp device authorization failed", "login_id", id, "error", err)
+			a.finishWarpDeviceLogin(id, "failed", "Warp authorization failed", 0)
+			return
+		}
+
+		acc := &store.Account{
+			Name:         "warp-device-login",
+			AccountType:  "warp",
+			RefreshToken: refreshToken,
+			Weight:       1,
+			Enabled:      true,
+		}
+		normalizeWarpTokenInput(acc)
+		storeCtx, storeCancel := context.WithTimeout(ctx, 20*time.Second)
+		existing, err := a.findDuplicateAccountByCredential(storeCtx, acc, 0)
+		if err == nil && existing == nil {
+			err = a.store.CreateAccount(storeCtx, acc)
+		}
+		storeCancel()
+		if err != nil {
+			slog.Warn("Warp device authorization could not save account", "login_id", id, "error", err)
+			a.finishWarpDeviceLogin(id, "failed", "Warp authorization succeeded but account could not be saved", 0)
+			return
+		}
+		if existing != nil {
+			a.finishWarpDeviceLogin(id, "complete", "Warp account already exists", existing.ID)
+			return
+		}
+
+		a.finishWarpDeviceLogin(id, "complete", "Warp account added", acc.ID)
+		a.syncAccountAfterCreate(*acc)
+		return
+	}
+}
+
+func (a *API) warpDeviceLoginForPoll(id string) (*warpDeviceLogin, bool) {
+	a.warpDeviceLoginMu.Lock()
+	defer a.warpDeviceLoginMu.Unlock()
+	login := a.warpDeviceLogins[id]
+	if login == nil || login.status != "pending" || strings.TrimSpace(login.deviceCode) == "" {
+		return nil, false
+	}
+	copyLogin := *login
+	return &copyLogin, true
+}
+
+func (a *API) finishWarpDeviceLogin(id, status, message string, accountID int64) {
+	a.warpDeviceLoginMu.Lock()
+	defer a.warpDeviceLoginMu.Unlock()
+	if login := a.warpDeviceLogins[id]; login != nil {
+		login.deviceCode = ""
+		login.userCode = ""
+		login.verifyURI = ""
+		login.verifyFull = ""
+		login.status = status
+		login.message = message
+		login.accountID = accountID
+		if login.cancel != nil {
+			login.cancel()
+		}
+	}
+}
+
+func (a *API) cleanupWarpDeviceLogins(now time.Time) {
+	if a == nil {
+		return
+	}
+	a.warpDeviceLoginMu.Lock()
+	defer a.warpDeviceLoginMu.Unlock()
+	for id, login := range a.warpDeviceLogins {
+		if login == nil {
+			delete(a.warpDeviceLogins, id)
+			continue
+		}
+		if login.status == "pending" && now.After(login.expiresAt) {
+			login.deviceCode = ""
+			login.userCode = ""
+			login.verifyURI = ""
+			login.verifyFull = ""
+			login.status = "expired"
+			login.message = "Warp authorization expired"
+			if login.cancel != nil {
+				login.cancel()
+			}
+		}
+		if now.After(login.expiresAt.Add(15 * time.Minute)) {
+			delete(a.warpDeviceLogins, id)
+		}
+	}
+}
+
+func (a *API) warpDeviceLoginResponse(id string, login *warpDeviceLogin) warpDeviceLoginResponse {
+	response := warpDeviceLoginResponse{ID: id}
+	if login == nil {
+		return response
+	}
+	response.Status = login.status
+	response.Message = login.message
+	response.AccountID = login.accountID
+	if login.status == "pending" {
+		response.UserCode = login.userCode
+		response.VerificationURI = login.verifyURI
+		response.VerificationURIComplete = login.verifyFull
+		response.ExpiresAt = login.expiresAt.UTC().Format(time.RFC3339)
+	}
+	return response
+}
+
+func newWarpDeviceLoginID() (string, error) {
+	bytes := make([]byte, 24)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }
 
 func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
@@ -1077,18 +1355,13 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if acc.SessionID == "" {
+		isWarpAccount := strings.EqualFold(acc.AccountType, "warp")
+		if !isWarpAccount && acc.SessionID == "" {
 			acc.SessionID = existing.SessionID
 		}
-		if strings.EqualFold(acc.AccountType, "warp") {
+		if isWarpAccount {
 			if strings.TrimSpace(acc.RefreshToken) == "" {
 				acc.RefreshToken = existing.RefreshToken
-			}
-			// Warp tokens are redacted from account responses, so an ordinary UI
-			// edit sends an empty value. Preserve the imported direct credential.
-			if strings.TrimSpace(acc.Token) == "" {
-				acc.Token = existing.Token
-				acc.WarpTokenExpiresAt = existing.WarpTokenExpiresAt
 			}
 			if strings.TrimSpace(acc.DeviceID) == "" {
 				acc.DeviceID = existing.DeviceID
@@ -1107,13 +1380,13 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				acc.RefreshToken = existing.RefreshToken
 			}
 		}
-		if acc.SessionCookie == "" {
+		if !isWarpAccount && acc.SessionCookie == "" {
 			acc.SessionCookie = existing.SessionCookie
 		}
-		if acc.ClientUat == "" {
+		if !isWarpAccount && acc.ClientUat == "" {
 			acc.ClientUat = existing.ClientUat
 		}
-		if acc.ProjectID == "" {
+		if !isWarpAccount && acc.ProjectID == "" {
 			acc.ProjectID = existing.ProjectID
 		}
 		if acc.UserID == "" {

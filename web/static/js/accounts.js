@@ -1,5 +1,8 @@
 // Accounts management JavaScript
 
+let warpDeviceLoginId = "";
+let warpDeviceLoginTimer = null;
+
 let accounts = [];
 let currentPlatform = '';
 let accountHealth = {};
@@ -169,13 +172,17 @@ function applyTokenLabels(type) {
   const input = document.getElementById("clientCookie");
   const hint = document.getElementById("tokenHint");
   const accountId = String(document.getElementById("accountId")?.value || "");
+  const warpDeviceLoginGroup = document.getElementById("warpDeviceLoginGroup");
+  if (warpDeviceLoginGroup) {
+    warpDeviceLoginGroup.hidden = type !== "warp" || Boolean(accountId);
+  }
   if (!label || !input || !hint) return;
   if (type === 'warp') {
     label.textContent = "Warp Auth";
-    input.placeholder = "每行一个 refresh_token 或登录回跳 URL";
+    input.placeholder = "每行一个 refresh_token";
     hint.textContent = accountId
-      ? "编辑时仅保存第一行；可粘贴 warp://auth/... 回跳 URL 或 refresh_token"
-      : "支持批量添加 Warp。可粘贴 warp://auth/... 回跳 URL 或 refresh_token";
+      ? "编辑时仅保存第一行 refresh_token"
+      : "支持批量添加 Warp；每行一个 refresh_token";
     input.required = true;
   } else if (type === 'grok') {
     label.textContent = "SSO Token";
@@ -198,6 +205,104 @@ function applyTokenLabels(type) {
       ? "支持直接粘贴 "
       : "支持原始 __client、完整 Cookie Header 或 Cookie JSON；推荐同时带上 __client_uat 以提高补全成功率";
     input.required = true;
+  }
+}
+
+function getWarpDeviceLoginStatusNode() {
+  return document.getElementById("warpDeviceLoginStatus");
+}
+
+function renderWarpDeviceLoginStatus(message, type = "info", html = "") {
+  const node = getWarpDeviceLoginStatusNode();
+  if (!node) return;
+  node.hidden = false;
+  node.classList.toggle("is-active", type === "info");
+  node.classList.toggle("is-error", type === "error");
+  node.innerHTML = `<strong>${escapeImportStatusText(message)}</strong>${html}`;
+}
+
+function resetWarpDeviceLoginStatus() {
+  const node = getWarpDeviceLoginStatusNode();
+  if (node) {
+    node.hidden = true;
+    node.classList.remove("is-active", "is-error");
+    node.innerHTML = "";
+  }
+}
+
+function stopWarpDeviceLogin(cancel = false) {
+  if (warpDeviceLoginTimer) {
+    clearTimeout(warpDeviceLoginTimer);
+    warpDeviceLoginTimer = null;
+  }
+  const id = warpDeviceLoginId;
+  warpDeviceLoginId = "";
+  const button = document.getElementById("warpDeviceLoginButton");
+  if (button) button.disabled = false;
+  if (cancel && id) {
+    fetch(`/api/warp/device-auth/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+  }
+}
+
+async function startWarpDeviceLogin() {
+  if (warpDeviceLoginId) return;
+  const button = document.getElementById("warpDeviceLoginButton");
+  if (button) button.disabled = true;
+  resetWarpDeviceLoginStatus();
+  try {
+    const res = await fetch("/api/warp/device-auth", { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    const login = await res.json();
+    warpDeviceLoginId = String(login.id || "");
+    if (!warpDeviceLoginId || login.status !== "pending") {
+      throw new Error("Warp 登录初始化响应无效");
+    }
+    const link = String(login.verification_uri_complete || login.verification_uri || "");
+    let safeLink = "";
+    try {
+      const parsed = new URL(link);
+      if (parsed.origin === "https://app.warp.dev") safeLink = parsed.href;
+    } catch (_) {
+      // The backend only returns Warp's official URL; keep the UI safe if an
+      // unexpected upstream response is ever received.
+    }
+    const linkHTML = safeLink
+      ? `<div style="margin-top:8px"><a href="${escapeImportStatusText(safeLink)}" target="_blank" rel="noopener noreferrer">打开 Warp 官方授权页面</a></div>`
+      : "";
+    renderWarpDeviceLoginStatus(`请在 Warp 官方页面输入设备码：${login.user_code || ""}`, "info", linkHTML);
+    if (safeLink) window.open(safeLink, "_blank", "noopener");
+    pollWarpDeviceLogin();
+  } catch (err) {
+    stopWarpDeviceLogin(false);
+    renderWarpDeviceLoginStatus("无法启动 Warp 官方登录：" + (err.message || String(err)), "error");
+  }
+}
+
+async function pollWarpDeviceLogin() {
+  const id = warpDeviceLoginId;
+  if (!id) return;
+  try {
+    const res = await fetch(`/api/warp/device-auth/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(await res.text());
+    const login = await res.json();
+    if (id !== warpDeviceLoginId) return;
+    if (login.status === "pending") {
+      warpDeviceLoginTimer = setTimeout(pollWarpDeviceLogin, 1500);
+      return;
+    }
+    stopWarpDeviceLogin(false);
+    if (login.status === "complete") {
+      renderWarpDeviceLoginStatus(login.message || "Warp 账号已添加", "info");
+      showToast(login.message || "Warp 账号已添加", "success");
+      loadAccounts();
+      setTimeout(closeModal, 800);
+      return;
+    }
+    renderWarpDeviceLoginStatus(login.message || "Warp 官方登录未完成", "error");
+  } catch (err) {
+    if (id !== warpDeviceLoginId) return;
+    stopWarpDeviceLogin(false);
+    renderWarpDeviceLoginStatus("Warp 登录状态查询失败：" + (err.message || String(err)), "error");
   }
 }
 
@@ -245,15 +350,7 @@ function normalizeCredentialForType(type, credential) {
   if (!raw) return "";
 
   if (normalizedType === "warp") {
-    try {
-      const parsed = JSON.parse(raw);
-      const token = findNestedWarpRefreshToken(parsed);
-      if (token) return token;
-    } catch (_) {
-      // Not JSON; continue with URL/cookie/form extraction.
-    }
-    const match = raw.match(/(?:^|[?&;\s])refresh_token=([^&;\s]+)/i);
-    return (match ? decodeURIComponent(match[1]) : raw).trim();
+    return raw;
   }
 
   if (normalizedType === "grok") {
@@ -262,27 +359,6 @@ function normalizeCredentialForType(type, credential) {
   }
 
   return raw;
-}
-
-function findNestedWarpRefreshToken(value) {
-  if (!value || typeof value !== "object") return "";
-  const preferred = ["id_token", "auth_tokens", "authTokens"];
-  for (const key of preferred) {
-    if (value[key]) {
-      const token = findNestedWarpRefreshToken(value[key]);
-      if (token) return token;
-    }
-  }
-  for (const [key, item] of Object.entries(value)) {
-    const normalizedKey = String(key || "").toLowerCase();
-    if (normalizedKey === "refresh_token" || normalizedKey === "refreshtoken") {
-      const token = String(item || "").trim();
-      if (token) return token;
-    }
-    const token = findNestedWarpRefreshToken(item);
-    if (token) return token;
-  }
-  return "";
 }
 
 function buildCredentialFingerprint(type, credential) {
@@ -1155,6 +1231,8 @@ function openModal(account = null) {
   const title = document.getElementById("modalTitle");
   const form = document.getElementById("accountForm");
   const typeEl = document.getElementById("accountType");
+  stopWarpDeviceLogin(true);
+  resetWarpDeviceLoginStatus();
   clearAccountImportStatus();
 
   const finalizeModal = () => {
@@ -1197,6 +1275,8 @@ function openModal(account = null) {
 
 // Close modal
 function closeModal() {
+  stopWarpDeviceLogin(true);
+  resetWarpDeviceLoginStatus();
   const modal = document.getElementById("accountModal");
   modal.classList.remove("active");
   modal.style.display = "none";
