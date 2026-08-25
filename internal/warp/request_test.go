@@ -411,6 +411,23 @@ func TestPreviewUserQuery_MatchesRequestBuilderConversationRules(t *testing.T) {
 	}
 }
 
+func TestPreviewUserQuery_StatelessConversationPreservesHistory(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "My name is Ada."}},
+		{Role: "assistant", Content: prompt.MessageContent{Text: "Nice to meet you, Ada."}},
+		{Role: "user", Content: prompt.MessageContent{Text: "What is my name?"}},
+	}
+	query := PreviewUserQuery("", messages, nil, "")
+	for _, want := range []string{"My name is Ada.", "Nice to meet you, Ada.", "What is my name?"} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("stateless query lost history %q: %q", want, query)
+		}
+	}
+	if strings.Contains(PreviewUserQuery("", messages, nil, "warp_server_conversation"), "My name is Ada.") {
+		t.Fatal("server-backed conversation should rely on Warp history rather than replaying it")
+	}
+}
+
 func TestConvertTools_PreservesCustomMCPTools(t *testing.T) {
 	t.Parallel()
 

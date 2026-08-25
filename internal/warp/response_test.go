@@ -647,6 +647,33 @@ func TestParseApplyFileDiffsPayload_UsesOfficialSchema(t *testing.T) {
 	}
 }
 
+func TestParseWarpToolInput_RejectsLossyBatches(t *testing.T) {
+	t.Parallel()
+	read := warpapi.Message_ToolCall_ReadFiles_builder{Files: []*warpapi.Message_ToolCall_ReadFiles_File{
+		warpapi.Message_ToolCall_ReadFiles_File_builder{Name: stringPtr("a.go")}.Build(),
+		warpapi.Message_ToolCall_ReadFiles_File_builder{Name: stringPtr("b.go")}.Build(),
+	}}.Build()
+	readPayload, err := proto.Marshal(read)
+	if err != nil {
+		t.Fatalf("marshal read batch: %v", err)
+	}
+	if name, input := parseWarpToolInput("read_files", readPayload); name != "Read" || input != "{}" {
+		t.Fatalf("lossy read batch was emitted as %q %q", name, input)
+	}
+
+	diffs := warpapi.Message_ToolCall_ApplyFileDiffs_builder{Diffs: []*warpapi.Message_ToolCall_ApplyFileDiffs_FileDiff{
+		warpapi.Message_ToolCall_ApplyFileDiffs_FileDiff_builder{FilePath: stringPtr("a.go"), Search: stringPtr("a"), Replace: stringPtr("b")}.Build(),
+		warpapi.Message_ToolCall_ApplyFileDiffs_FileDiff_builder{FilePath: stringPtr("b.go"), Search: stringPtr("a"), Replace: stringPtr("b")}.Build(),
+	}}.Build()
+	diffPayload, err := proto.Marshal(diffs)
+	if err != nil {
+		t.Fatalf("marshal diff batch: %v", err)
+	}
+	if name, input := parseApplyFileDiffsPayload(diffPayload); name != "apply_file_diffs" || input != "{}" {
+		t.Fatalf("lossy diff batch was emitted as %q %q", name, input)
+	}
+}
+
 func TestParseWarpToolInput_UsesOfficialSearchSchemas(t *testing.T) {
 	t.Parallel()
 

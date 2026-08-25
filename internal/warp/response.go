@@ -977,17 +977,17 @@ func parseWarpToolInput(toolName string, payload []byte) (string, string) {
 				files = append(files, name)
 			}
 		}
-		if len(files) == 0 {
+		// A single Warp action can ask for many files, but an OpenAI tool call
+		// has one result ID. Emitting one arbitrary file here loses operations
+		// and makes the following continuation invalid, so reject batches until
+		// they can be represented as a lossless bridge.
+		if len(files) != 1 {
 			return "Read", "{}"
 		}
-		path := pickWarpPreferredReadPath(files)
-		if path == "" {
-			path = files[0]
-		}
-		return "Read", marshalToolInput(map[string]interface{}{"file_path": path})
+		return "Read", marshalToolInput(map[string]interface{}{"file_path": files[0]})
 	case "grep":
 		var call warpapi.Message_ToolCall_Grep
-		if err := proto.Unmarshal(payload, &call); err != nil || len(call.GetQueries()) == 0 {
+		if err := proto.Unmarshal(payload, &call); err != nil || len(call.GetQueries()) != 1 {
 			return "Grep", "{}"
 		}
 		return "Grep", marshalToolInput(map[string]interface{}{
@@ -996,7 +996,7 @@ func parseWarpToolInput(toolName string, payload []byte) (string, string) {
 		})
 	case "file_glob":
 		var call warpapi.Message_ToolCall_FileGlob
-		if err := proto.Unmarshal(payload, &call); err != nil || len(call.GetPatterns()) == 0 {
+		if err := proto.Unmarshal(payload, &call); err != nil || len(call.GetPatterns()) != 1 {
 			return "Glob", "{}"
 		}
 		return "Glob", marshalToolInput(map[string]interface{}{
@@ -1005,7 +1005,7 @@ func parseWarpToolInput(toolName string, payload []byte) (string, string) {
 		})
 	case "file_glob_v2":
 		var call warpapi.Message_ToolCall_FileGlobV2
-		if err := proto.Unmarshal(payload, &call); err != nil || len(call.GetPatterns()) == 0 {
+		if err := proto.Unmarshal(payload, &call); err != nil || len(call.GetPatterns()) != 1 {
 			return "Glob", "{}"
 		}
 		return "Glob", marshalToolInput(map[string]interface{}{
@@ -1020,34 +1020,31 @@ func parseWarpToolInput(toolName string, payload []byte) (string, string) {
 func parseApplyFileDiffsPayload(payload []byte) (string, string) {
 	var call warpapi.Message_ToolCall_ApplyFileDiffs
 	if err := proto.Unmarshal(payload, &call); err == nil {
-		for _, file := range call.GetNewFiles() {
+		operationCount := len(call.GetNewFiles()) + len(call.GetDiffs())
+		for _, update := range call.GetV4AUpdates() {
+			operationCount += len(update.GetHunks())
+		}
+		if operationCount != 1 {
+			return "apply_file_diffs", "{}"
+		}
+		if len(call.GetNewFiles()) == 1 {
+			file := call.GetNewFiles()[0]
 			if path := strings.TrimSpace(file.GetFilePath()); path != "" {
-				return "Write", marshalToolInput(map[string]interface{}{
-					"file_path": path,
-					"content":   file.GetContent(),
-				})
+				return "Write", marshalToolInput(map[string]interface{}{"file_path": path, "content": file.GetContent()})
 			}
 		}
-		for _, diff := range call.GetDiffs() {
+		if len(call.GetDiffs()) == 1 {
+			diff := call.GetDiffs()[0]
 			if path := strings.TrimSpace(diff.GetFilePath()); path != "" {
-				return "Edit", marshalToolInput(map[string]interface{}{
-					"file_path":  path,
-					"old_string": diff.GetSearch(),
-					"new_string": diff.GetReplace(),
-				})
+				return "Edit", marshalToolInput(map[string]interface{}{"file_path": path, "old_string": diff.GetSearch(), "new_string": diff.GetReplace()})
 			}
 		}
 		for _, update := range call.GetV4AUpdates() {
-			path := strings.TrimSpace(update.GetFilePath())
-			if path == "" || len(update.GetHunks()) == 0 {
+			if len(update.GetHunks()) != 1 || strings.TrimSpace(update.GetFilePath()) == "" {
 				continue
 			}
 			hunk := update.GetHunks()[0]
-			return "Edit", marshalToolInput(map[string]interface{}{
-				"file_path":  path,
-				"old_string": hunk.GetOld(),
-				"new_string": hunk.GetNew(),
-			})
+			return "Edit", marshalToolInput(map[string]interface{}{"file_path": update.GetFilePath(), "old_string": hunk.GetOld(), "new_string": hunk.GetNew()})
 		}
 	}
 

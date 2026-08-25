@@ -131,7 +131,7 @@ func TestMemorySessionStoreCleanup(t *testing.T) {
 	ctx := context.Background()
 
 	store.SetWorkdir(ctx, "s1", "/tmp")
-	store.SetWarpToolBinding(ctx, "tool_1", WarpToolBinding{ConversationID: "conv_1"})
+	store.SetWarpToolBinding(ctx, "session", "tool_1", WarpToolBinding{ConversationID: "conv_1"})
 	time.Sleep(150 * time.Millisecond)
 	store.Cleanup(ctx)
 
@@ -139,7 +139,7 @@ func TestMemorySessionStoreCleanup(t *testing.T) {
 	if ok {
 		t.Fatal("session should have been cleaned up")
 	}
-	if _, ok := store.GetWarpToolBinding(ctx, "tool_1"); ok {
+	if _, ok := store.GetWarpToolBinding(ctx, "session", "tool_1"); ok {
 		t.Fatal("tool binding should have been cleaned up")
 	}
 }
@@ -148,7 +148,7 @@ func TestMemorySessionStoreWarpToolBindingAndAccount(t *testing.T) {
 	store := NewMemorySessionStore(30*time.Minute, 100)
 	ctx := context.Background()
 	store.SetAccountID(ctx, "session", 132)
-	store.SetWarpToolBinding(ctx, "tool_write", WarpToolBinding{
+	store.SetWarpToolBinding(ctx, "session", "tool_write", WarpToolBinding{
 		ConversationID: "warp_conv",
 		AccountID:      132,
 		ToolType:       "call_mcp_tool",
@@ -159,7 +159,7 @@ func TestMemorySessionStoreWarpToolBindingAndAccount(t *testing.T) {
 	if accountID, ok := store.GetAccountID(ctx, "session"); !ok || accountID != 132 {
 		t.Fatalf("accountID=%d ok=%v, want 132 true", accountID, ok)
 	}
-	binding, ok := store.GetWarpToolBinding(ctx, "tool_write")
+	binding, ok := store.GetWarpToolBinding(ctx, "session", "tool_write")
 	if !ok || binding.ConversationID != "warp_conv" || binding.AccountID != 132 || binding.ToolType != "call_mcp_tool" {
 		t.Fatalf("binding=%#v ok=%v", binding, ok)
 	}
@@ -169,7 +169,7 @@ func TestRedisSessionStoreWarpToolBindingAndAccount(t *testing.T) {
 	store, _ := setupRedisSessionStore(t)
 	ctx := context.Background()
 	store.SetAccountID(ctx, "session", 132)
-	store.SetWarpToolBinding(ctx, "tool:with unsafe key bytes", WarpToolBinding{
+	store.SetWarpToolBinding(ctx, "session", "tool:with unsafe key bytes", WarpToolBinding{
 		ConversationID: "warp_conv",
 		AccountID:      132,
 		ToolType:       "call_mcp_tool",
@@ -178,8 +178,22 @@ func TestRedisSessionStoreWarpToolBindingAndAccount(t *testing.T) {
 	if accountID, ok := store.GetAccountID(ctx, "session"); !ok || accountID != 132 {
 		t.Fatalf("accountID=%d ok=%v, want 132 true", accountID, ok)
 	}
-	binding, ok := store.GetWarpToolBinding(ctx, "tool:with unsafe key bytes")
+	binding, ok := store.GetWarpToolBinding(ctx, "session", "tool:with unsafe key bytes")
 	if !ok || binding.ConversationID != "warp_conv" || binding.AccountID != 132 {
 		t.Fatalf("binding=%#v ok=%v", binding, ok)
+	}
+}
+
+func TestMemorySessionStoreWarpToolBindingIsConversationScoped(t *testing.T) {
+	store := NewMemorySessionStore(30*time.Minute, 100)
+	ctx := context.Background()
+	store.SetWarpToolBinding(ctx, "conversation-a", "tool_1", WarpToolBinding{ConversationID: "conv_a"})
+	store.SetWarpToolBinding(ctx, "conversation-b", "tool_1", WarpToolBinding{ConversationID: "conv_b"})
+
+	if binding, ok := store.GetWarpToolBinding(ctx, "conversation-a", "tool_1"); !ok || binding.ConversationID != "conv_a" {
+		t.Fatalf("conversation-a binding=%#v ok=%v", binding, ok)
+	}
+	if binding, ok := store.GetWarpToolBinding(ctx, "conversation-b", "tool_1"); !ok || binding.ConversationID != "conv_b" {
+		t.Fatalf("conversation-b binding=%#v ok=%v", binding, ok)
 	}
 }

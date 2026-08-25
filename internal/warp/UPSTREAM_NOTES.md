@@ -127,12 +127,17 @@ Current behavior:
   settings. Orchids-2api currently uses official default role models and leaves
   those optional advanced settings disabled.
 - Official client converts native Warp conversation state into separate
-  `UserInputs` and action-result inputs. Orchids-2api receives OpenAI/Claude
-  style chat history, so it bridges the current user/tool-result turn into one
-  `UserQuery.query` until a full action-result mapper is implemented.
+  `UserInputs` and action-result inputs. Orchids-2api preserves complete
+  OpenAI/Claude history as a bounded transcript whenever no server-issued Warp
+  conversation ID is available. Tool-result continuations require a stable
+  client conversation/session/thread ID and are isolated by that namespace.
+- Some native Warp actions can contain multiple reads, searches, globs, or
+  file edits under one upstream tool-call ID. These are rejected rather than
+  truncating them to the first operation; a future bridge must model batches
+  losslessly before enabling them.
 - Official `ResponseEvent.StreamFinished.should_refresh_model_config` tells the
-  client when its model config is stale. We now parse and log this signal, but
-  do not yet trigger an automatic model refresh.
+  client when its model config is stale. Orchids-2api coalesces a background
+  per-account feature-model refresh and replaces that account's routing cache.
 - Official `StreamFinished` contains request cost and conversation usage
   metadata. We currently keep token usage only.
 - Official model refresh is tied to a single user's current model configuration.
@@ -148,8 +153,6 @@ The safer next step is a low-concurrency per-account model probe/cache:
 - Cache `(account_id, model_id) -> allowed/unavailable` with a short TTL.
 - Use the cache during account selection so a request for a specific model picks
   an account known to allow it.
-- Consume `should_refresh_model_config` by scheduling a serialized Warp refresh
-  and invalidating the relevant allowedness cache.
 - Add a full mapper from incoming tool-result messages to official
-  `Request.Input.UserInputs.UserInput.ToolCallResult` when we want tighter
-  multi-turn parity with Warp's native conversation state.
+  `Request.Input.UserInputs.UserInput.ToolCallResult` that can split and
+  rejoin native batch actions without losing result identity.

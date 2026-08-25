@@ -686,10 +686,11 @@ func TestHandleMessages_ToolResultFollowup_DoesNotInjectLocalFallbackText(t *tes
 		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "Let me first understand the project structure and code."}},
 		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
 	}}
-	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
+	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
 
 	payload := map[string]any{
-		"model": "claude-3-5-sonnet",
+		"model":           "claude-3-5-sonnet",
+		"conversation_id": "test-conversation",
 		"messages": []map[string]any{
 			{"role": "user", "content": "这个项目使用了哪些技术架构"},
 			{"role": "assistant", "content": []map[string]any{
@@ -744,10 +745,11 @@ func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &errorUpstreamEdge{err: context.Canceled}
-	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
+	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
 
 	payload := map[string]any{
-		"model": "claude-3-5-sonnet",
+		"model":           "claude-3-5-sonnet",
+		"conversation_id": "test-conversation",
 		"messages": []map[string]any{
 			{"role": "user", "content": "帮我优化这个项目"},
 			{"role": "assistant", "content": []map[string]any{

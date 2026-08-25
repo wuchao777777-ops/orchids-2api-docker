@@ -33,10 +33,13 @@ func (h *Handler) resolveWarpContinuation(ctx context.Context, conversationKey s
 	}
 
 	toolResultIDs := latestToolResultIDs(messages)
+	if len(toolResultIDs) > 0 && conversationKey == "" {
+		return warpContinuation{}, fmt.Errorf("cannot resume Warp tool results without a stable conversation_id, session_id, or thread_id")
+	}
 	for _, toolCallID := range toolResultIDs {
-		binding, ok := h.sessionStore.GetWarpToolBinding(ctx, toolCallID)
+		binding, ok := h.sessionStore.GetWarpToolBinding(ctx, conversationKey, toolCallID)
 		if !ok {
-			continue
+			return warpContinuation{}, fmt.Errorf("cannot resume Warp tool result %q because its conversation binding has expired or is unavailable", toolCallID)
 		}
 		if continuation.conversationID != "" && continuation.conversationID != binding.ConversationID {
 			return warpContinuation{}, fmt.Errorf("tool result %q belongs to a different Warp conversation", toolCallID)

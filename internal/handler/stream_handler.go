@@ -264,8 +264,9 @@ type streamHandler struct {
 	introDedup          map[string]struct{}
 
 	// Callbacks
-	onConversationID func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
-	onToolCall       func(id, name, input, upstreamType string)
+	onConversationID     func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
+	onToolCall           func(id, name, input, upstreamType string)
+	onModelConfigRefresh func()
 	// Logger
 	logger *debug.Logger
 }
@@ -3192,6 +3193,9 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		stopReason := "end_turn"
 		if shouldRefresh, ok := msg.Event["shouldRefreshModelConfig"].(bool); ok && shouldRefresh {
 			slog.Warn("Warp upstream requested model config refresh")
+			if h.onModelConfigRefresh != nil {
+				h.onModelConfigRefresh()
+			}
 		}
 		if usage, ok := msg.Event["usage"].(map[string]interface{}); ok {
 			inputTokens, hasIn := getUsageInt(usage, "inputTokens")

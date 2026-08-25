@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -230,6 +231,71 @@ func (h *Handler) resolveWarpFeatureConfig(ctx context.Context, acc *store.Accou
 		}
 	}
 	return warp.EffectiveAccountFeatureConfig(acc, choices, requestedModel)
+}
+
+// refreshWarpModelConfigAsync consumes Warp's stale-config signal without
+// delaying the completed user request. Each account has at most one refresh in
+// flight; a successful discovery atomically replaces that account's advisory
+// routing choices and feature defaults.
+func (h *Handler) refreshWarpModelConfigAsync(acc *store.Account) {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil || acc == nil || acc.ID == 0 || !strings.EqualFold(acc.AccountType, "warp") {
+		return
+	}
+	if _, loaded := h.warpModelRefreshes.LoadOrStore(acc.ID, struct{}{}); loaded {
+		return
+	}
+	account := *acc
+	go func() {
+		defer h.warpModelRefreshes.Delete(account.ID)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		client := warp.NewFromAccount(&account, h.config)
+		defer client.Close()
+		features, source, err := client.FetchDiscoveredFeatureModelChoices(ctx)
+		if err != nil {
+			slog.Warn("Warp model config refresh failed", "account_id", account.ID, "error", err)
+			return
+		}
+		choices := warp.AgentModeModelChoices(features)
+		if len(choices) == 0 {
+			slog.Warn("Warp model config refresh returned no enabled models", "account_id", account.ID)
+			return
+		}
+
+		existing, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
+		if err != nil {
+			slog.Warn("Warp model config cache load failed", "account_id", account.ID, "error", err)
+			return
+		}
+		if existing == nil {
+			existing = &warp.AccountModelChoices{}
+		}
+		if existing.Accounts == nil {
+			existing.Accounts = make(map[string][]string)
+		}
+		if existing.Sources == nil {
+			existing.Sources = make(map[string]string)
+		}
+		if existing.FeatureConfigs == nil {
+			existing.FeatureConfigs = make(map[string]warp.AccountFeatureConfig)
+		}
+		models := make([]string, 0, len(choices))
+		for _, choice := range choices {
+			models = append(models, choice.ID)
+		}
+		key := strconv.FormatInt(account.ID, 10)
+		existing.Accounts[key] = models
+		existing.Sources[key] = source
+		if config := warp.AccountFeatureConfigFromChoices(features); !config.IsEmpty() {
+			existing.FeatureConfigs[key] = config
+		}
+		if err := warp.SaveAccountModelChoices(ctx, h.loadBalancer.Store, existing); err != nil {
+			slog.Warn("Warp model config cache save failed", "account_id", account.ID, "error", err)
+			return
+		}
+		slog.Info("Warp model config refreshed", "account_id", account.ID, "source", source)
+	}()
 }
 
 func (h *Handler) acquireTrackedAccount(acc *store.Account) int64 {

@@ -140,7 +140,7 @@ func TestWarpConversationID_NotPersistedWithoutConversationKey(t *testing.T) {
 	}
 }
 
-func TestWarpToolResultFollowup_RecoversConversationWithoutClientSessionID(t *testing.T) {
+func TestWarpToolResultFollowup_RequiresStableClientSessionID(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{
@@ -181,23 +181,19 @@ func TestWarpToolResultFollowup_RecoversConversationWithoutClientSessionID(t *te
 	}`)
 	rec2 := httptest.NewRecorder()
 	h.HandleMessages(rec2, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(second)))
-	if rec2.Code != http.StatusOK {
+	if rec2.Code != http.StatusConflict {
 		t.Fatalf("second status=%d body=%s", rec2.Code, rec2.Body.String())
 	}
 
 	calls := client.snapshotCalls()
-	if len(calls) != 2 {
-		t.Fatalf("calls=%d want 2", len(calls))
+	if len(calls) != 1 {
+		t.Fatalf("calls=%d want 1", len(calls))
 	}
 	if calls[0].ChatSessionID != "" {
 		t.Fatalf("new conversation id=%q want empty", calls[0].ChatSessionID)
 	}
-	if calls[1].ChatSessionID != "warp_upstream_tool_conv" {
-		t.Fatalf("follow-up conversation id=%q want warp_upstream_tool_conv", calls[1].ChatSessionID)
-	}
-	ctx := calls[1].WarpToolContexts["tool_write_1"]
-	if ctx.Type != "call_mcp_tool" || ctx.Name != "Write" {
-		t.Fatalf("tool context=%#v", ctx)
+	if !strings.Contains(rec2.Body.String(), "stable conversation_id") {
+		t.Fatalf("missing stable session diagnostic: %s", rec2.Body.String())
 	}
 }
 
@@ -250,10 +246,10 @@ func TestWarpSuccessfulWriteResultGetsVisibleConfirmation(t *testing.T) {
 		}},
 	}}}
 	h := newTestHandler(client)
-	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_write_done", WarpToolBinding{ConversationID: "warp_conv_write_done", ToolType: "call_mcp_tool"})
+	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_write_done", WarpToolBinding{ConversationID: "warp_conv_write_done", ToolType: "call_mcp_tool"})
 	body := []byte(`{
 		"model":"claude-opus-4-6",
-		"stream":false,
+		"stream":false,"conversation_id":"test-conversation",
 		"messages":[
 			{"role":"user","content":"Create notes.txt"},
 			{"role":"assistant","content":[{"type":"tool_use","id":"tool_write_done","name":"Write","input":{"file_path":"notes.txt","content":"done"}}]},
@@ -317,13 +313,13 @@ func TestWarpEmptyOutputRecoveryMarkerDoesNotBecomeUserQuestion(t *testing.T) {
 func TestResolveWarpContinuationRejectsMixedConversations(t *testing.T) {
 	t.Parallel()
 	h := newTestHandler(&fakePayloadClient{})
-	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_a", WarpToolBinding{ConversationID: "conv_a", AccountID: 1})
-	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_b", WarpToolBinding{ConversationID: "conv_b", AccountID: 1})
+	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_a", WarpToolBinding{ConversationID: "conv_a", AccountID: 1})
+	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_b", WarpToolBinding{ConversationID: "conv_b", AccountID: 1})
 	messages := []prompt.Message{{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
 		{Type: "tool_result", ToolUseID: "tool_a", Content: "a"},
 		{Type: "tool_result", ToolUseID: "tool_b", Content: "b"},
 	}}}}
-	if _, err := h.resolveWarpContinuation(context.Background(), "", messages); err == nil {
+	if _, err := h.resolveWarpContinuation(context.Background(), "test-conversation", messages); err == nil {
 		t.Fatal("expected mixed-conversation tool results to be rejected")
 	}
 }
@@ -334,7 +330,7 @@ func TestResolveWarpContinuationRejectsExpiredToolBinding(t *testing.T) {
 	messages := []prompt.Message{{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
 		Type: "tool_result", ToolUseID: "expired_tool", Content: "done",
 	}}}}}
-	if _, err := h.resolveWarpContinuation(context.Background(), "", messages); err == nil || !strings.Contains(err.Error(), "expired or is unavailable") {
+	if _, err := h.resolveWarpContinuation(context.Background(), "test-conversation", messages); err == nil || !strings.Contains(err.Error(), "expired or is unavailable") {
 		t.Fatalf("error=%v want explicit expired continuation error", err)
 	}
 }
@@ -728,11 +724,11 @@ func TestWarpToolResultFollowupWithText_HonorsEmptyTools(t *testing.T) {
 
 	client := &fakePayloadClient{}
 	h := newTestHandler(client)
-	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
+	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
-		"stream":false,
+		"stream":false,"conversation_id":"test-conversation",
 		"messages":[
 			{
 				"role":"user",
@@ -793,11 +789,11 @@ func TestWarpToolResultFollowup_DuplicateWriteFallsBackToPriorToolResult(t *test
 		},
 	}
 	h := newTestHandler(client)
-	h.sessionStore.SetWarpToolBinding(context.Background(), "tool_old_1", WarpToolBinding{ConversationID: "warp_conv_tool_old", ToolType: "call_mcp_tool"})
+	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_old_1", WarpToolBinding{ConversationID: "warp_conv_tool_old", ToolType: "call_mcp_tool"})
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
-		"stream":false,
+		"stream":false,"conversation_id":"test-conversation",
 		"messages":[
 			{
 				"role":"user",
@@ -857,6 +853,9 @@ func TestWarpToolResultFollowup_SendsAllCurrentTurnResultsInOneRequest(t *testin
 	client := &fakePayloadClient{}
 	h := newTestHandler(client)
 	h.sessionStore.SetConvID(context.Background(), "local_conversation_key_split", "warp_conv_existing")
+	for _, id := range []string{"tool_ls", "tool_api", "tool_utils"} {
+		h.sessionStore.SetWarpToolBinding(context.Background(), "local_conversation_key_split", id, WarpToolBinding{ConversationID: "warp_conv_existing", ToolType: "call_mcp_tool"})
+	}
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
@@ -934,6 +933,9 @@ func TestWarpToolResultFollowup_StreamsSingleBatchedResponse(t *testing.T) {
 	}
 	h := newTestHandler(client)
 	h.sessionStore.SetConvID(context.Background(), "local_conversation_key_intermediate", "warp_conv_existing")
+	for _, id := range []string{"tool_ls", "tool_api", "tool_utils"} {
+		h.sessionStore.SetWarpToolBinding(context.Background(), "local_conversation_key_intermediate", id, WarpToolBinding{ConversationID: "warp_conv_existing", ToolType: "call_mcp_tool"})
+	}
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",

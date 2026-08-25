@@ -13,6 +13,7 @@ import (
 	rtdebug "runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -49,6 +50,8 @@ type Handler struct {
 
 	sessionStore SessionStore
 	dedupStore   DedupStore
+	// Coalesces upstream model-config refresh signals per Warp account.
+	warpModelRefreshes sync.Map
 }
 
 type UpstreamClient interface {
@@ -1057,13 +1060,23 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if currentAccount != nil {
 			accountID = currentAccount.ID
 		}
-		h.sessionStore.SetWarpToolBinding(r.Context(), id, WarpToolBinding{
+		// Tool continuation is only safe when the caller supplied a stable
+		// conversation namespace. Never create a globally addressable binding.
+		if conversationKey == "" {
+			return
+		}
+		h.sessionStore.SetWarpToolBinding(r.Context(), conversationKey, id, WarpToolBinding{
 			ConversationID: activeWarpConversationID,
 			AccountID:      accountID,
 			ToolType:       upstreamType,
 			ToolName:       name,
 			ToolInput:      warpBindingInput(upstreamType, input),
 		})
+	}
+	sh.onModelConfigRefresh = func() {
+		if isWarpRequest {
+			h.refreshWarpModelConfigAsync(currentAccount)
+		}
 	}
 	defer sh.release()
 

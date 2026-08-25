@@ -1130,6 +1130,24 @@ func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
 	}
 }
 
+func TestStreamHandler_ModelConfigRefreshCallback(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
+	defer sh.release()
+	called := 0
+	sh.onModelConfigRefresh = func() { called++ }
+	sh.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]any{
+		"finishReason":             "end_turn",
+		"shouldRefreshModelConfig": true,
+	}})
+	if called != 1 {
+		t.Fatalf("refresh callback calls=%d want 1", called)
+	}
+}
+
 func TestResponseMessageID_OpenAIUsesChatCompletionPrefix(t *testing.T) {
 	id := responseMessageID(adapter.FormatOpenAI)
 	if !strings.HasPrefix(id, "chatcmpl-") {

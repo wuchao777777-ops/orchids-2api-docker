@@ -31,6 +31,11 @@ type InputTokenEstimate struct {
 var warpExitCodePattern = regexp.MustCompile(`(?i)\bexit(?:\s+code|\s+status)?\s*[:=]?\s*(-?\d+)\b`)
 var warpGrepLinePattern = regexp.MustCompile(`^(.+?):(\d+)(?::|-)`)
 
+// A request without a server-issued Warp conversation ID is stateless at the
+// upstream. Keep enough transcript to preserve OpenAI/Claude multi-turn
+// semantics instead of silently forwarding only the last user message.
+const warpStatelessHistoryMaxChars = 48 * 1024
+
 func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 	query := buildWarpUserQuery(req.Prompt, req.Messages, req.System, req.ChatSessionID)
 	tools := convertTools(req.Tools)
@@ -71,19 +76,92 @@ func buildWarpUserQuery(promptText string, messages []prompt.Message, systemItem
 	if query := sanitizeUTF8(strings.TrimSpace(promptText)); query != "" {
 		return query
 	}
-	query := latestWarpUserInput(messages)
-	if query == "" {
+	if shouldSendWarpConversationID(conversationID) {
+		return latestWarpUserInput(messages)
+	}
+	return renderWarpStatelessTranscript(messages, systemItems)
+}
+
+func renderWarpStatelessTranscript(messages []prompt.Message, systemItems []prompt.SystemItem) string {
+	parts := make([]string, 0, len(messages)+1)
+	if systemText := renderWarpSystemInstructions(systemItems, messages); systemText != "" {
+		parts = append(parts, systemText)
+	}
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue // included above so it is never duplicated
+		}
+		if rendered := renderWarpTranscriptMessage(message); rendered != "" {
+			parts = append(parts, rendered)
+		}
+	}
+	if len(parts) == 0 {
 		return ""
 	}
 
-	if shouldSendWarpConversationID(conversationID) {
-		return query
+	// Prefer the latest turns when an API client sends a very long stateless
+	// transcript. System instructions remain at the front as an invariant.
+	systemPart := ""
+	start := 0
+	if strings.HasPrefix(parts[0], "Instructions:") {
+		systemPart, start = parts[0], 1
 	}
-	systemText := renderWarpSystemInstructions(systemItems, messages)
-	if systemText == "" {
-		return query
+	selected := make([]string, 0, len(parts)-start)
+	used := len(systemPart)
+	for i := len(parts) - 1; i >= start; i-- {
+		part := parts[i]
+		if used+len(part)+2 > warpStatelessHistoryMaxChars && len(selected) > 0 {
+			break
+		}
+		selected = append(selected, part)
+		used += len(part) + 2
 	}
-	return systemText + "\n\n" + query
+	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
+		selected[left], selected[right] = selected[right], selected[left]
+	}
+	if len(selected) < len(parts)-start {
+		selected = append([]string{"[Earlier conversation omitted for length]"}, selected...)
+	}
+	if systemPart != "" {
+		selected = append([]string{systemPart}, selected...)
+	}
+	return strings.Join(selected, "\n\n")
+}
+
+func renderWarpTranscriptMessage(message prompt.Message) string {
+	role := strings.ToLower(strings.TrimSpace(message.Role))
+	if role == "" {
+		role = "user"
+	}
+	if message.Content.IsString() {
+		if text := sanitizeUTF8(strings.TrimSpace(message.Content.GetText())); text != "" {
+			return role + ":\n" + text
+		}
+		return ""
+	}
+	parts := make([]string, 0, len(message.Content.GetBlocks()))
+	for _, block := range message.Content.GetBlocks() {
+		switch block.Type {
+		case "text":
+			if text := sanitizeUTF8(strings.TrimSpace(block.Text)); text != "" {
+				parts = append(parts, text)
+			}
+		case "tool_use":
+			name := strings.TrimSpace(block.Name)
+			if name != "" {
+				parts = append(parts, fmt.Sprintf("tool call %s (%s)", name, stringifyValue(block.Input)))
+			}
+		case "tool_result":
+			result := stringifyValue(block.Content)
+			if result != "" {
+				parts = append(parts, "tool result: "+result)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return role + ":\n" + strings.Join(parts, "\n")
 }
 
 func latestWarpUserInput(messages []prompt.Message) string {
