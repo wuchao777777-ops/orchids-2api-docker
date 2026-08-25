@@ -50,9 +50,17 @@ type API struct {
 	// completed login persists the resulting refresh_token as a normal account.
 	warpDeviceLoginMu sync.Mutex
 	warpDeviceLogins  map[string]*warpDeviceLogin
+
+	// Grok device logins are separate from Warp so their OAuth device codes and
+	// credentials can never cross authentication flows.
+	grokDeviceLoginMu sync.Mutex
+	grokDeviceLogins  map[string]*grokDeviceLogin
 }
 
-const maxWarpDeviceLogins = 10
+const (
+	maxWarpDeviceLogins = 10
+	maxGrokDeviceLogins = 10
+)
 
 type warpDeviceLogin struct {
 	deviceCode string
@@ -69,6 +77,31 @@ type warpDeviceLogin struct {
 }
 
 type warpDeviceLoginResponse struct {
+	ID                      string `json:"id"`
+	Status                  string `json:"status"`
+	UserCode                string `json:"user_code,omitempty"`
+	VerificationURI         string `json:"verification_uri,omitempty"`
+	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
+	ExpiresAt               string `json:"expires_at,omitempty"`
+	AccountID               int64  `json:"account_id,omitempty"`
+	Message                 string `json:"message,omitempty"`
+}
+
+type grokDeviceLogin struct {
+	deviceCode string
+	userCode   string
+	verifyURI  string
+	verifyFull string
+	expiresAt  time.Time
+	interval   time.Duration
+	cancel     context.CancelFunc
+
+	status    string
+	message   string
+	accountID int64
+}
+
+type grokDeviceLoginResponse struct {
 	ID                      string `json:"id"`
 	Status                  string `json:"status"`
 	UserCode                string `json:"user_code,omitempty"`
@@ -670,6 +703,7 @@ func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
 		checkNextAllowed: map[int64]time.Time{},
 		checkSem:         make(chan struct{}, 2),
 		warpDeviceLogins: map[string]*warpDeviceLogin{},
+		grokDeviceLogins: map[string]*grokDeviceLogin{},
 	}
 	if cfg != nil {
 		a.config.Store(cfg)
@@ -1173,6 +1207,248 @@ func newWarpDeviceLoginID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+// HandleGrokDeviceAuthorization starts and observes the official xAI Grok
+// Build CLI device-authorization flow. It accepts no files, browser cookies,
+// passwords, or user-supplied tokens; device codes remain server-side only.
+func (a *API) HandleGrokDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/grok/device-auth"), "/")
+	switch {
+	case r.Method == http.MethodPost && path == "":
+		a.startGrokDeviceAuthorization(w, r)
+	case r.Method == http.MethodGet && path != "":
+		a.getGrokDeviceAuthorization(w, path)
+	case r.Method == http.MethodDelete && path != "":
+		a.cancelGrokDeviceAuthorization(w, path)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *API) startGrokDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
+	if a == nil || a.store == nil {
+		http.Error(w, "account store is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	a.cleanupGrokDeviceLogins(time.Now())
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	authenticator := grok.NewDeviceAuthenticator(a.config.Load())
+	details, err := authenticator.Start(ctx)
+	if err != nil {
+		slog.Warn("Grok device authorization could not be started", "error", err)
+		http.Error(w, "failed to start Grok device authorization", http.StatusBadGateway)
+		return
+	}
+	id, err := newGrokDeviceLoginID()
+	if err != nil {
+		http.Error(w, "failed to create login transaction", http.StatusInternalServerError)
+		return
+	}
+	pollContext, pollCancel := context.WithCancel(context.Background())
+	login := &grokDeviceLogin{
+		deviceCode: details.DeviceCode,
+		userCode:   details.UserCode,
+		verifyURI:  details.VerificationURI,
+		verifyFull: details.VerificationURIComplete,
+		expiresAt:  time.Now().Add(time.Duration(details.ExpiresIn) * time.Second),
+		interval:   time.Duration(details.Interval) * time.Second,
+		cancel:     pollCancel,
+		status:     "pending",
+	}
+	a.grokDeviceLoginMu.Lock()
+	if len(a.grokDeviceLogins) >= maxGrokDeviceLogins {
+		a.grokDeviceLoginMu.Unlock()
+		pollCancel()
+		http.Error(w, "too many pending Grok device logins", http.StatusTooManyRequests)
+		return
+	}
+	a.grokDeviceLogins[id] = login
+	a.grokDeviceLoginMu.Unlock()
+	go a.pollGrokDeviceAuthorization(pollContext, id, authenticator)
+	json.NewEncoder(w).Encode(a.grokDeviceLoginResponse(id, login))
+}
+
+func (a *API) getGrokDeviceAuthorization(w http.ResponseWriter, id string) {
+	a.cleanupGrokDeviceLogins(time.Now())
+	a.grokDeviceLoginMu.Lock()
+	login := a.grokDeviceLogins[id]
+	if login == nil {
+		a.grokDeviceLoginMu.Unlock()
+		http.Error(w, "Grok device login not found", http.StatusNotFound)
+		return
+	}
+	response := a.grokDeviceLoginResponse(id, login)
+	a.grokDeviceLoginMu.Unlock()
+	json.NewEncoder(w).Encode(response)
+}
+
+func (a *API) cancelGrokDeviceAuthorization(w http.ResponseWriter, id string) {
+	a.grokDeviceLoginMu.Lock()
+	login := a.grokDeviceLogins[id]
+	if login == nil {
+		a.grokDeviceLoginMu.Unlock()
+		http.Error(w, "Grok device login not found", http.StatusNotFound)
+		return
+	}
+	delete(a.grokDeviceLogins, id)
+	login.deviceCode = ""
+	login.status = "cancelled"
+	if login.cancel != nil {
+		login.cancel()
+	}
+	a.grokDeviceLoginMu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) pollGrokDeviceAuthorization(ctx context.Context, id string, authenticator *grok.DeviceAuthenticator) {
+	for {
+		login, ok := a.grokDeviceLoginForPoll(id)
+		if !ok {
+			return
+		}
+		if time.Now().After(login.expiresAt) {
+			a.finishGrokDeviceLogin(id, "expired", "Grok authorization expired", 0)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(login.interval):
+		}
+		requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		accessToken, refreshToken, expiresAt, err := authenticator.Exchange(requestCtx, login.deviceCode)
+		cancel()
+		if err != nil {
+			if slowDown, pending := grok.IsDeviceAuthorizationPending(err); pending {
+				if slowDown {
+					a.increaseGrokDeviceLoginInterval(id)
+				}
+				continue
+			}
+			slog.Warn("Grok device authorization failed", "login_id", id, "error", err)
+			a.finishGrokDeviceLogin(id, "failed", "Grok authorization failed", 0)
+			return
+		}
+		acc := &store.Account{
+			Name:              "grok-device-login",
+			AccountType:       "grok",
+			CredentialType:    "oauth",
+			OAuthAccessToken:  accessToken,
+			OAuthRefreshToken: refreshToken,
+			OAuthExpiresAt:    expiresAt,
+			AgentMode:         "grok-build-0.1",
+			Weight:            1,
+			Enabled:           true,
+			NSFWEnabled:       true,
+		}
+		normalizeGrokTokenInput(acc)
+		storeCtx, storeCancel := context.WithTimeout(ctx, 20*time.Second)
+		existing, err := a.findDuplicateAccountByCredential(storeCtx, acc, 0)
+		if err == nil && existing == nil {
+			err = a.store.CreateAccount(storeCtx, acc)
+		}
+		storeCancel()
+		if err != nil {
+			slog.Warn("Grok device authorization could not save account", "login_id", id, "error", err)
+			a.finishGrokDeviceLogin(id, "failed", "Grok authorization succeeded but account could not be saved", 0)
+			return
+		}
+		if existing != nil {
+			a.finishGrokDeviceLogin(id, "complete", "Grok account already exists", existing.ID)
+			return
+		}
+		a.finishGrokDeviceLogin(id, "complete", "Grok account added", acc.ID)
+		a.syncAccountAfterCreate(*acc)
+		return
+	}
+}
+
+func (a *API) grokDeviceLoginForPoll(id string) (*grokDeviceLogin, bool) {
+	a.grokDeviceLoginMu.Lock()
+	defer a.grokDeviceLoginMu.Unlock()
+	login := a.grokDeviceLogins[id]
+	if login == nil || login.status != "pending" || strings.TrimSpace(login.deviceCode) == "" {
+		return nil, false
+	}
+	copyLogin := *login
+	return &copyLogin, true
+}
+
+func (a *API) increaseGrokDeviceLoginInterval(id string) {
+	a.grokDeviceLoginMu.Lock()
+	defer a.grokDeviceLoginMu.Unlock()
+	if login := a.grokDeviceLogins[id]; login != nil && login.status == "pending" {
+		login.interval += 5 * time.Second
+	}
+}
+
+func (a *API) finishGrokDeviceLogin(id, status, message string, accountID int64) {
+	a.grokDeviceLoginMu.Lock()
+	defer a.grokDeviceLoginMu.Unlock()
+	if login := a.grokDeviceLogins[id]; login != nil {
+		login.deviceCode = ""
+		login.userCode = ""
+		login.verifyURI = ""
+		login.verifyFull = ""
+		login.status = status
+		login.message = message
+		login.accountID = accountID
+		if login.cancel != nil {
+			login.cancel()
+		}
+	}
+}
+
+func (a *API) cleanupGrokDeviceLogins(now time.Time) {
+	if a == nil {
+		return
+	}
+	a.grokDeviceLoginMu.Lock()
+	defer a.grokDeviceLoginMu.Unlock()
+	for id, login := range a.grokDeviceLogins {
+		if login == nil {
+			delete(a.grokDeviceLogins, id)
+			continue
+		}
+		if login.status == "pending" && now.After(login.expiresAt) {
+			login.deviceCode = ""
+			login.userCode = ""
+			login.verifyURI = ""
+			login.verifyFull = ""
+			login.status = "expired"
+			login.message = "Grok authorization expired"
+			if login.cancel != nil {
+				login.cancel()
+			}
+		}
+		if now.After(login.expiresAt.Add(15 * time.Minute)) {
+			delete(a.grokDeviceLogins, id)
+		}
+	}
+}
+
+func (a *API) grokDeviceLoginResponse(id string, login *grokDeviceLogin) grokDeviceLoginResponse {
+	response := grokDeviceLoginResponse{ID: id}
+	if login == nil {
+		return response
+	}
+	response.Status = login.status
+	response.Message = login.message
+	response.AccountID = login.accountID
+	if login.status == "pending" {
+		response.UserCode = login.userCode
+		response.VerificationURI = login.verifyURI
+		response.VerificationURIComplete = login.verifyFull
+		response.ExpiresAt = login.expiresAt.UTC().Format(time.RFC3339)
+	}
+	return response
+}
+
+func newGrokDeviceLoginID() (string, error) {
+	return newWarpDeviceLoginID()
 }
 
 func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {

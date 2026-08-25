@@ -2,6 +2,8 @@
 
 let warpDeviceLoginId = "";
 let warpDeviceLoginTimer = null;
+let grokDeviceLoginId = "";
+let grokDeviceLoginTimer = null;
 
 let accounts = [];
 let currentPlatform = '';
@@ -212,6 +214,105 @@ function getWarpDeviceLoginStatusNode() {
   return document.getElementById("warpDeviceLoginStatus");
 }
 
+function getGrokDeviceLoginStatusNode() {
+  return document.getElementById("grokDeviceLoginStatus");
+}
+
+function renderGrokDeviceLoginStatus(message, type = "info", html = "") {
+  const node = getGrokDeviceLoginStatusNode();
+  if (!node) return;
+  node.hidden = false;
+  node.classList.toggle("is-active", type === "info");
+  node.classList.toggle("is-error", type === "error");
+  node.innerHTML = `<strong>${escapeImportStatusText(message)}</strong>${html}`;
+}
+
+function resetGrokDeviceLoginStatus() {
+  const node = getGrokDeviceLoginStatusNode();
+  if (node) {
+    node.hidden = true;
+    node.classList.remove("is-active", "is-error");
+    node.innerHTML = "";
+  }
+}
+
+function stopGrokDeviceLogin(cancel = false) {
+  if (grokDeviceLoginTimer) {
+    clearTimeout(grokDeviceLoginTimer);
+    grokDeviceLoginTimer = null;
+  }
+  const id = grokDeviceLoginId;
+  grokDeviceLoginId = "";
+  const button = document.getElementById("grokDeviceLoginButton");
+  if (button) button.disabled = false;
+  if (cancel && id) {
+    fetch(`/api/grok/device-auth/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+  }
+}
+
+async function startGrokDeviceLogin() {
+  if (grokDeviceLoginId) return;
+  const button = document.getElementById("grokDeviceLoginButton");
+  if (button) button.disabled = true;
+  resetGrokDeviceLoginStatus();
+  try {
+    const res = await fetch("/api/grok/device-auth", { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    const login = await res.json();
+    grokDeviceLoginId = String(login.id || "");
+    if (!grokDeviceLoginId || login.status !== "pending") {
+      throw new Error("Grok 登录初始化响应无效");
+    }
+    const link = String(login.verification_uri_complete || login.verification_uri || "");
+    let safeLink = "";
+    try {
+      const parsed = new URL(link);
+      if (parsed.protocol === "https:" && (parsed.hostname === "auth.x.ai" || parsed.hostname === "accounts.x.ai")) {
+        safeLink = parsed.href;
+      }
+    } catch (_) {
+      // Keep an unexpected upstream URL from becoming an open redirect.
+    }
+    const linkHTML = safeLink
+      ? `<div style="margin-top:8px"><a href="${escapeImportStatusText(safeLink)}" target="_blank" rel="noopener noreferrer">打开 Grok 官方授权页面</a></div>`
+      : "";
+    renderGrokDeviceLoginStatus(`请在 Grok 官方页面输入设备码：${login.user_code || ""}`, "info", linkHTML);
+    if (safeLink) window.open(safeLink, "_blank", "noopener");
+    pollGrokDeviceLogin();
+  } catch (err) {
+    stopGrokDeviceLogin(false);
+    renderGrokDeviceLoginStatus("无法启动 Grok 官方登录：" + (err.message || String(err)), "error");
+  }
+}
+
+async function pollGrokDeviceLogin() {
+  const id = grokDeviceLoginId;
+  if (!id) return;
+  try {
+    const res = await fetch(`/api/grok/device-auth/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(await res.text());
+    const login = await res.json();
+    if (id !== grokDeviceLoginId) return;
+    if (login.status === "pending") {
+      grokDeviceLoginTimer = setTimeout(pollGrokDeviceLogin, 1500);
+      return;
+    }
+    stopGrokDeviceLogin(false);
+    if (login.status === "complete") {
+      renderGrokDeviceLoginStatus(login.message || "Grok 账号已添加", "info");
+      showToast(login.message || "Grok 账号已添加", "success");
+      loadAccounts();
+      setTimeout(closeModal, 800);
+      return;
+    }
+    renderGrokDeviceLoginStatus(login.message || "Grok 官方登录未完成", "error");
+  } catch (err) {
+    if (id !== grokDeviceLoginId) return;
+    stopGrokDeviceLogin(false);
+    renderGrokDeviceLoginStatus("Grok 登录状态查询失败：" + (err.message || String(err)), "error");
+  }
+}
+
 function renderWarpDeviceLoginStatus(message, type = "info", html = "") {
   const node = getWarpDeviceLoginStatusNode();
   if (!node) return;
@@ -319,6 +420,9 @@ function applyCredentialModeUI(type) {
   document.getElementById("oauthCredentialGroup").hidden = mode !== "oauth";
   document.getElementById("oauthRefreshGroup").hidden = mode !== "oauth";
   document.getElementById("oauthExpiresGroup").hidden = mode !== "oauth";
+  const grokDeviceLoginGroup = document.getElementById("grokDeviceLoginGroup");
+  const accountId = String(document.getElementById("accountId")?.value || "");
+  if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = mode !== "oauth" || Boolean(accountId);
   const clientCookie = document.getElementById("clientCookie");
   if (clientCookie) clientCookie.required = mode === "sso";
 }
@@ -1233,6 +1337,8 @@ function openModal(account = null) {
   const typeEl = document.getElementById("accountType");
   stopWarpDeviceLogin(true);
   resetWarpDeviceLoginStatus();
+  stopGrokDeviceLogin(true);
+  resetGrokDeviceLoginStatus();
   clearAccountImportStatus();
 
   const finalizeModal = () => {
@@ -1277,6 +1383,8 @@ function openModal(account = null) {
 function closeModal() {
   stopWarpDeviceLogin(true);
   resetWarpDeviceLoginStatus();
+  stopGrokDeviceLogin(true);
+  resetGrokDeviceLoginStatus();
   const modal = document.getElementById("accountModal");
   modal.classList.remove("active");
   modal.style.display = "none";

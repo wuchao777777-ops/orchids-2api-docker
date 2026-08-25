@@ -77,6 +77,7 @@ type Config struct {
 	GrokCLIClientVersion    string   `json:"grok_cli_client_version,omitempty"`
 	GrokCLIClientIdentifier string   `json:"grok_cli_client_identifier,omitempty"`
 	GrokCLIOAuthClientID    string   `json:"grok_cli_oauth_client_id,omitempty"`
+	GrokCLIOAuthDeviceURL   string   `json:"grok_cli_oauth_device_url,omitempty"`
 	GrokCLIOAuthTokenURL    string   `json:"grok_cli_oauth_token_url,omitempty"`
 	GrokCLIModelIDs         []string `json:"grok_cli_model_ids,omitempty"`
 	GrokSessionIdentityRefr *bool    `json:"grok_session_identity_refresh,omitempty"`
@@ -305,6 +306,15 @@ func (c *Config) GrokCLIOAuthClientIDOrDefault() string {
 		return strings.TrimSpace(c.GrokCLIOAuthClientID)
 	}
 	return "b1a00492-073a-47ea-816f-4c329264a828"
+}
+
+// GrokCLIOAuthDeviceURLOrDefault returns the xAI OAuth device-authorization
+// endpoint used by the official Grok Build CLI.
+func (c *Config) GrokCLIOAuthDeviceURLOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokCLIOAuthDeviceURL) != "" {
+		return strings.TrimSpace(c.GrokCLIOAuthDeviceURL)
+	}
+	return "https://auth.x.ai/oauth2/device/code"
 }
 
 // GrokCLIOAuthTokenURLOrDefault returns the xAI OAuth token endpoint.
