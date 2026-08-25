@@ -93,19 +93,13 @@ func (c *Client) Close() {
 }
 
 func (c *Client) ProbeModel(ctx context.Context, model string) error {
-	return c.ProbeModelWithFeatureConfig(ctx, model, AccountFeatureConfig{})
-}
-
-func (c *Client) ProbeModelWithFeatureConfig(ctx context.Context, model string, featureConfig AccountFeatureConfig) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
 	req := upstream.UpstreamRequest{
-		Prompt:               "Reply with ok.",
-		Model:                model,
-		NoTools:              true,
-		WarpCliAgentModel:    featureConfig.CliAgentModel,
-		WarpComputerUseModel: featureConfig.ComputerUseAgentModel,
+		Prompt:  "Reply with ok.",
+		Model:   model,
+		NoTools: true,
 	}
 
 	if _, err := c.ensureAuthenticated(ctx, true); err != nil {

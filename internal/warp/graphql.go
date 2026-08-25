@@ -31,20 +31,6 @@ type BonusGrant struct {
 	RequestCreditsRemaining int `json:"requestCreditsRemaining"`
 }
 
-type ConversationUsageInfo struct {
-	ConversationID            string  `json:"conversation_id"`
-	LastUpdated               string  `json:"last_updated"`
-	ContextWindowUsage        float64 `json:"context_window_usage"`
-	CreditsSpent              float64 `json:"credits_spent"`
-	PlatformCreditsSpent      float64 `json:"platform_credits_spent"`
-	TotalProviderCostInCents  float64 `json:"total_provider_cost_in_cents"`
-	TotalTokens               int     `json:"total_tokens"`
-	SystemPromptTokens        int     `json:"system_prompt_tokens"`
-	ToolDefinitionTokens      int     `json:"tool_definition_tokens"`
-	ConversationHistoryTokens int     `json:"conversation_history_tokens"`
-	LatestInputTokens         int     `json:"latest_input_tokens"`
-}
-
 const getRequestLimitInfoQuery = `query GetRequestLimitInfo($requestContext: RequestContext!) {
   user(requestContext: $requestContext) {
     __typename
@@ -94,28 +80,6 @@ const refundCreditsMutation = `mutation ProvideNegativeFeedbackResponseForAiConv
     __typename
     ... on RequestsRefundedOutput {
       requestsRefunded
-    }
-  }
-}`
-
-const getConversationUsageQuery = `query GetConversationUsage($requestContext: RequestContext!, $days: Int, $limit: Int) {
-  user(requestContext: $requestContext) {
-    __typename
-    ... on UserOutput {
-      user {
-        conversationUsage(days: $days, limit: $limit) {
-          conversationId
-          lastUpdated
-          usageMetadata {
-            contextWindowUsage
-            creditsSpent
-            platformCreditsSpent
-            totalProviderCostInCents
-            tokenUsage { modelId totalTokens }
-            contextWindowSegments { segmentType tokenCount }
-          }
-        }
-      }
     }
   }
 }`
@@ -244,90 +208,6 @@ func refundCredits(ctx context.Context, client *http.Client, jwt, conversationID
 	return nil
 }
 
-func fetchConversationUsage(ctx context.Context, client *http.Client, jwt, conversationID string) (*ConversationUsageInfo, error) {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return nil, fmt.Errorf("warp conversation id is empty")
-	}
-	payload := map[string]interface{}{
-		"query":         getConversationUsageQuery,
-		"operationName": "GetConversationUsage",
-		"variables": map[string]interface{}{
-			"requestContext": requestContextPayload(),
-			"days":           7,
-			"limit":          100,
-		},
-	}
-	var response struct {
-		Data struct {
-			User struct {
-				Type string `json:"__typename"`
-				User struct {
-					ConversationUsage []struct {
-						ConversationID string `json:"conversationId"`
-						LastUpdated    string `json:"lastUpdated"`
-						UsageMetadata  struct {
-							ContextWindowUsage       float64 `json:"contextWindowUsage"`
-							CreditsSpent             float64 `json:"creditsSpent"`
-							PlatformCreditsSpent     float64 `json:"platformCreditsSpent"`
-							TotalProviderCostInCents float64 `json:"totalProviderCostInCents"`
-							TokenUsage               []struct {
-								TotalTokens int `json:"totalTokens"`
-							} `json:"tokenUsage"`
-							ContextWindowSegments []struct {
-								SegmentType string `json:"segmentType"`
-								TokenCount  int    `json:"tokenCount"`
-							} `json:"contextWindowSegments"`
-						} `json:"usageMetadata"`
-					} `json:"conversationUsage"`
-				} `json:"user"`
-			} `json:"user"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetConversationUsage", payload, &response); err != nil {
-		return nil, err
-	}
-	if len(response.Errors) > 0 {
-		return nil, fmt.Errorf("warp conversation usage: %s", response.Errors[0].Message)
-	}
-	if !strings.EqualFold(strings.TrimSpace(response.Data.User.Type), "UserOutput") {
-		return nil, fmt.Errorf("warp graphql returned %q for conversation usage", response.Data.User.Type)
-	}
-	for _, item := range response.Data.User.User.ConversationUsage {
-		if strings.TrimSpace(item.ConversationID) != conversationID {
-			continue
-		}
-		usage := &ConversationUsageInfo{
-			ConversationID:           conversationID,
-			LastUpdated:              strings.TrimSpace(item.LastUpdated),
-			ContextWindowUsage:       item.UsageMetadata.ContextWindowUsage,
-			CreditsSpent:             item.UsageMetadata.CreditsSpent,
-			PlatformCreditsSpent:     item.UsageMetadata.PlatformCreditsSpent,
-			TotalProviderCostInCents: item.UsageMetadata.TotalProviderCostInCents,
-		}
-		for _, tokens := range item.UsageMetadata.TokenUsage {
-			usage.TotalTokens += tokens.TotalTokens
-		}
-		for _, segment := range item.UsageMetadata.ContextWindowSegments {
-			switch strings.ToUpper(strings.TrimSpace(segment.SegmentType)) {
-			case "SYSTEM_PROMPT":
-				usage.SystemPromptTokens += segment.TokenCount
-			case "TOOL_DEFINITIONS":
-				usage.ToolDefinitionTokens += segment.TokenCount
-			case "CONVERSATION_HISTORY":
-				usage.ConversationHistoryTokens += segment.TokenCount
-			case "LATEST_INPUT":
-				usage.LatestInputTokens += segment.TokenCount
-			}
-		}
-		return usage, nil
-	}
-	return nil, fmt.Errorf("warp conversation usage not found for %s", conversationID)
-}
-
 func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, operationName string, body interface{}, target interface{}) error {
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -395,14 +275,6 @@ func (c *Client) GetRequestLimitInfo(ctx context.Context) (*RequestLimitInfo, []
 		return nil, nil, err
 	}
 	return fetchRequestLimitInfo(ctx, client, c.session.currentJWT())
-}
-
-func (c *Client) GetConversationUsage(ctx context.Context, conversationID string) (*ConversationUsageInfo, error) {
-	client, err := c.ensureAuthenticated(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-	return fetchConversationUsage(ctx, client, c.session.currentJWT(), conversationID)
 }
 
 func (c *Client) RefundCredits(ctx context.Context, conversationID, requestID string) error {

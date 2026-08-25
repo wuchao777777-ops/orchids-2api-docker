@@ -172,25 +172,3 @@ func TestDoGraphQL_PreservesWarpErrorCode(t *testing.T) {
 		t.Fatalf("error code not preserved: %v", err)
 	}
 }
-
-func TestFetchConversationUsage_FiltersConversationAndPreservesCostBreakdown(t *testing.T) {
-	t.Parallel()
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if got := req.URL.String(); got != warpGraphQLV2URL+"?op=GetConversationUsage" {
-			t.Fatalf("unexpected usage URL: %s", got)
-		}
-		body := `{"data":{"user":{"__typename":"UserOutput","user":{"conversationUsage":[{"conversationId":"other","lastUpdated":"x","usageMetadata":{}},{"conversationId":"conversation-1","lastUpdated":"2026-08-24T00:00:00Z","usageMetadata":{"contextWindowUsage":0.5,"creditsSpent":9.25,"platformCreditsSpent":1.5,"totalProviderCostInCents":3.75,"tokenUsage":[{"modelId":"m1","totalTokens":100},{"modelId":"m2","totalTokens":50}],"contextWindowSegments":[{"segmentType":"SYSTEM_PROMPT","tokenCount":20},{"segmentType":"TOOL_DEFINITIONS","tokenCount":30},{"segmentType":"CONVERSATION_HISTORY","tokenCount":40},{"segmentType":"LATEST_INPUT","tokenCount":10}]}}]}}}}`
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
-	})}
-
-	usage, err := fetchConversationUsage(context.Background(), client, "jwt", "conversation-1")
-	if err != nil {
-		t.Fatalf("fetchConversationUsage() error = %v", err)
-	}
-	if usage.CreditsSpent != 9.25 || usage.PlatformCreditsSpent != 1.5 || usage.TotalProviderCostInCents != 3.75 || usage.TotalTokens != 150 {
-		t.Fatalf("unexpected usage: %+v", usage)
-	}
-	if usage.SystemPromptTokens != 20 || usage.ToolDefinitionTokens != 30 || usage.ConversationHistoryTokens != 40 || usage.LatestInputTokens != 10 {
-		t.Fatalf("unexpected segment usage: %+v", usage)
-	}
-}

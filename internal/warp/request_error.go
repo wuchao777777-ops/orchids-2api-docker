@@ -20,12 +20,6 @@ func (e *requestError) WarpConversationID() string {
 	return e.conversationID
 }
 
-// AttachRequestID preserves the upstream request ID on an error so a failed
-// request can be refunded without relying on the unrelated local session ID.
-func AttachRequestID(err error, requestID string) error {
-	return AttachRequestMetadata(err, "", requestID)
-}
-
 func AttachRequestMetadata(err error, conversationID, requestID string) error {
 	conversationID = strings.TrimSpace(conversationID)
 	requestID = strings.TrimSpace(requestID)

@@ -741,10 +741,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			if verboseDiagnostics {
 				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", preSelectWarpRequest, "puter", preSelectPuterRequest)
 			}
-		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
-			if verboseDiagnostics {
-				slog.Debug("tool_gate: keeping tools for exploratory tool_result follow-up", "warp", preSelectWarpRequest)
-			}
 		} else {
 			gateNoTools = true
 			toolGateReasons = append(toolGateReasons, "tool_result_followup")

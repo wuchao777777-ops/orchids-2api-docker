@@ -144,6 +144,18 @@ Current behavior:
   Orchids-2api keeps a per-account model-choice cache because it routes over a
   pooled Warp account set.
 
+## Deliberately Removed Compatibility Paths
+
+- No path-scanning or argument-rewriting heuristics are applied to native Warp
+  tool calls. The protobuf action payload is mapped directly, and malformed or
+  unsupported actions are rejected rather than guessed.
+- Tool-result follow-ups no longer use local natural-language heuristics to
+  decide whether to reopen tool access. Warp continuations use the explicit
+  upstream conversation and tool binding only.
+- The unused `conversationUsage` GraphQL reconciliation query was removed. The
+  stream's `StreamFinished` usage metadata and the official refund mutation are
+  the authoritative request lifecycle signals used by this service.
+
 ## Recommended Next Step
 
 The safer next step is a low-concurrency per-account model probe/cache:
