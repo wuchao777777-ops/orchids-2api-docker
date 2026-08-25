@@ -1,7 +1,9 @@
 package grok
 
 import (
+	"net/http"
 	"strings"
+	"time"
 
 	"orchids-api/internal/store"
 )
@@ -94,4 +96,51 @@ func ApplyQuotaInfo(acc *store.Account, info *RateLimitInfo) bool {
 		changed = true
 	}
 	return changed
+}
+
+// ApplyBuildRateLimits persists passive Build response headers separately from
+// subscription Billing. These values often describe a minute-scale request or
+// token bucket (such as 8300 tokens), never a remaining paid-plan balance.
+func ApplyBuildRateLimits(acc *store.Account, headers http.Header) bool {
+	if acc == nil || headers == nil {
+		return false
+	}
+	requests := parseBuildRateLimitWindow(headers, "requests")
+	tokens := parseBuildRateLimitWindow(headers, "tokens")
+	if !requests.HasLimit && !requests.HasRemaining && requests.ResetAt.IsZero() &&
+		!tokens.HasLimit && !tokens.HasRemaining && tokens.ResetAt.IsZero() {
+		return false
+	}
+	acc.GrokRateLimits = store.GrokRateLimitSnapshot{
+		Requests:   requests,
+		Tokens:     tokens,
+		ObservedAt: time.Now().UTC(),
+	}
+	return true
+}
+
+func parseBuildRateLimitWindow(headers http.Header, dimension string) store.GrokQuotaWindow {
+	limit := firstHeaderValue(headers,
+		"x-ratelimit-limit-"+dimension,
+		"x-rate-limit-limit-"+dimension,
+	)
+	remaining := firstHeaderValue(headers,
+		"x-ratelimit-remaining-"+dimension,
+		"x-rate-limit-remaining-"+dimension,
+	)
+	reset := firstHeaderValue(headers,
+		"x-ratelimit-reset-"+dimension,
+		"x-rate-limit-reset-"+dimension,
+	)
+	window := store.GrokQuotaWindow{}
+	if value, ok := parseRateLimitValue(limit); ok {
+		window.Limit = float64(value)
+		window.HasLimit = true
+	}
+	if value, ok := parseRateLimitValue(remaining); ok {
+		window.Remaining = float64(value)
+		window.HasRemaining = true
+	}
+	window.ResetAt = parseRateLimitReset(reset)
+	return window
 }

@@ -44,29 +44,12 @@ const (
 	grokTierHeavy
 )
 
-// SupportedModels is the Go-native model table ported from grok2api behavior.
+// SupportedModels is the deliberately small public compatibility table. Build
+// OAuth capability snapshots remain authoritative for text models; this table
+// only describes currently supported routes, not a historical model archive.
 var SupportedModels = []ModelSpec{
-	{ID: "grok-4.20-0309-non-reasoning", Name: "Grok 4.20 0309 Non-Reasoning", UpstreamModel: "grok-4.20-0309-non-reasoning", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic},
-	{ID: "grok-4.20-0309", Name: "Grok 4.20 0309", UpstreamModel: "grok-4.20-0309", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper},
-	{ID: "grok-4.20-0309-reasoning", Name: "Grok 4.20 0309 Reasoning", UpstreamModel: "grok-4.20-0309-reasoning", ModelMode: "MODEL_MODE_EXPERT", ModeID: "expert", Tier: grokTierSuper},
-	{ID: "grok-4.20-0309-non-reasoning-super", Name: "Grok 4.20 0309 Non-Reasoning Super", UpstreamModel: "grok-4.20-0309-non-reasoning-super", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierSuper},
-	{ID: "grok-4.20-0309-super", Name: "Grok 4.20 0309 Super", UpstreamModel: "grok-4.20-0309-super", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper},
-	{ID: "grok-4.20-0309-reasoning-super", Name: "Grok 4.20 0309 Reasoning Super", UpstreamModel: "grok-4.20-0309-reasoning-super", ModelMode: "MODEL_MODE_EXPERT", ModeID: "expert", Tier: grokTierSuper},
-	{ID: "grok-4.20-0309-non-reasoning-heavy", Name: "Grok 4.20 0309 Non-Reasoning Heavy", UpstreamModel: "grok-4.20-0309-non-reasoning-heavy", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierHeavy},
-	{ID: "grok-4.20-0309-heavy", Name: "Grok 4.20 0309 Heavy", UpstreamModel: "grok-4.20-0309-heavy", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierHeavy},
-	{ID: "grok-4.20-0309-reasoning-heavy", Name: "Grok 4.20 0309 Reasoning Heavy", UpstreamModel: "grok-4.20-0309-reasoning-heavy", ModelMode: "MODEL_MODE_EXPERT", ModeID: "expert", Tier: grokTierHeavy},
-	{ID: "grok-4.20-multi-agent-0309", Name: "Grok 4.20 Multi-Agent 0309", UpstreamModel: "grok-4.20-multi-agent-0309", ModelMode: "MODEL_MODE_HEAVY", ModeID: "heavy", Tier: grokTierHeavy},
-	{ID: "grok-4.20-fast", Name: "Grok 4.20 Fast", UpstreamModel: "grok-4.20-fast", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic, PreferBest: true},
-	{ID: "grok-4.20-auto", Name: "Grok 4.20 Auto", UpstreamModel: "grok-4.20-auto", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, PreferBest: true},
-	{ID: "grok-4.20-expert", Name: "Grok 4.20 Expert", UpstreamModel: "grok-4.20-expert", ModelMode: "MODEL_MODE_EXPERT", ModeID: "expert", Tier: grokTierSuper, PreferBest: true},
-	{ID: "grok-4.20-heavy", Name: "Grok 4.20 Heavy", UpstreamModel: "grok-4.20-heavy", ModelMode: "MODEL_MODE_HEAVY", ModeID: "heavy", Tier: grokTierHeavy, PreferBest: true},
-	{ID: "grok-4.3", Name: "Grok 4.3", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3", Tier: grokTierSuper},
-	{ID: "grok-4.3-beta", Name: "Grok 4.3 Beta", UpstreamModel: "grok-4.3-beta", ConsoleModel: "grok-4.3", ModeID: "grok-420-computer-use-sa", Tier: grokTierSuper},
-	// The official Build CLI model catalog exposes grok-4.5. Route it through
-	// OAuth rather than the legacy SSO/console path, so an OAuth-only account
-	// pool remains usable for the current public Grok model.
-	{ID: "grok-4.5", Name: "Grok 4.5", UpstreamModel: "grok-4.5", ConsoleModel: "grok-4.5", Tier: grokTierSuper, Upstream: UpstreamCLI},
-	{ID: "grok-build-0.1", Name: "Grok Build 0.1", UpstreamModel: "grok-build-0.1", ConsoleModel: "grok-build-0.1", Tier: grokTierSuper, Upstream: UpstreamCLI},
+	{ID: "grok-4.5", Name: "Grok 4.5", UpstreamModel: "grok-4.5", Tier: grokTierSuper, Upstream: UpstreamCLI},
+	{ID: "grok-4.6", Name: "Grok 4.6", UpstreamModel: "grok-4.6", Tier: grokTierSuper, Upstream: UpstreamCLI},
 	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-imagine-image-lite", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic, IsImage: true},
 	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-imagine-image", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-quality", Name: "Grok Imagine Image Quality", UpstreamModel: "grok-imagine-image-quality-lite", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},

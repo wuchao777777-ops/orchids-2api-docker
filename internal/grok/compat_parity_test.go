@@ -35,30 +35,15 @@ func TestResolveModel_Grok420Rejected(t *testing.T) {
 	}
 }
 
-func TestResolveModel_AliasBaseMappingsMatchGrok2API(t *testing.T) {
+func TestResolveModel_CurrentBuildMappings(t *testing.T) {
 	cases := []struct {
 		modelID       string
 		wantUpstream  string
 		wantModelMode string
 		wantModeID    string
 	}{
-		{modelID: "grok-4.20-0309-non-reasoning", wantUpstream: "grok-4.20-0309-non-reasoning", wantModelMode: "MODEL_MODE_FAST", wantModeID: "fast"},
-		{modelID: "grok-4.20-0309", wantUpstream: "grok-4.20-0309", wantModelMode: "MODEL_MODE_AUTO", wantModeID: "auto"},
-		{modelID: "grok-4.20-0309-reasoning", wantUpstream: "grok-4.20-0309-reasoning", wantModelMode: "MODEL_MODE_EXPERT", wantModeID: "expert"},
-		{modelID: "grok-4.20-0309-non-reasoning-super", wantUpstream: "grok-4.20-0309-non-reasoning-super", wantModelMode: "MODEL_MODE_FAST", wantModeID: "fast"},
-		{modelID: "grok-4.20-0309-super", wantUpstream: "grok-4.20-0309-super", wantModelMode: "MODEL_MODE_AUTO", wantModeID: "auto"},
-		{modelID: "grok-4.20-0309-reasoning-super", wantUpstream: "grok-4.20-0309-reasoning-super", wantModelMode: "MODEL_MODE_EXPERT", wantModeID: "expert"},
-		{modelID: "grok-4.20-0309-non-reasoning-heavy", wantUpstream: "grok-4.20-0309-non-reasoning-heavy", wantModelMode: "MODEL_MODE_FAST", wantModeID: "fast"},
-		{modelID: "grok-4.20-0309-heavy", wantUpstream: "grok-4.20-0309-heavy", wantModelMode: "MODEL_MODE_AUTO", wantModeID: "auto"},
-		{modelID: "grok-4.20-0309-reasoning-heavy", wantUpstream: "grok-4.20-0309-reasoning-heavy", wantModelMode: "MODEL_MODE_EXPERT", wantModeID: "expert"},
-		{modelID: "grok-4.20-multi-agent-0309", wantUpstream: "grok-4.20-multi-agent-0309", wantModelMode: "MODEL_MODE_HEAVY", wantModeID: "heavy"},
-		{modelID: "grok-4.20-fast", wantUpstream: "grok-4.20-fast", wantModelMode: "MODEL_MODE_FAST", wantModeID: "fast"},
-		{modelID: "grok-4.20-auto", wantUpstream: "grok-4.20-auto", wantModelMode: "MODEL_MODE_AUTO", wantModeID: "auto"},
-		{modelID: "grok-4.20-expert", wantUpstream: "grok-4.20-expert", wantModelMode: "MODEL_MODE_EXPERT", wantModeID: "expert"},
-		{modelID: "grok-4.20-heavy", wantUpstream: "grok-4.20-heavy", wantModelMode: "MODEL_MODE_HEAVY", wantModeID: "heavy"},
-		// grok-4.3 models are console-only — skip mode/modeID checks
-		{modelID: "grok-4.3-beta", wantUpstream: "grok-4.3-beta", wantModelMode: "", wantModeID: "grok-420-computer-use-sa"},
 		{modelID: "grok-4.5", wantUpstream: "grok-4.5", wantModelMode: ""},
+		{modelID: "grok-4.6", wantUpstream: "grok-4.6", wantModelMode: ""},
 	}
 	for _, tc := range cases {
 		spec, ok := ResolveModel(tc.modelID)
@@ -104,7 +89,6 @@ func TestResolveModel_ImagineMappingsMatchGrok2API(t *testing.T) {
 	}{
 		{modelID: "grok-imagine-image-lite", wantUpstream: "grok-imagine-image-lite", wantModelMode: "MODEL_MODE_FAST"},
 		{modelID: "grok-imagine-image", wantUpstream: "grok-imagine-image", wantModelMode: "MODEL_MODE_AUTO"},
-		{modelID: "grok-imagine-image-pro", wantUpstream: "grok-imagine-image-pro", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-image-quality", wantUpstream: "grok-imagine-image-quality-lite", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-image-edit", wantUpstream: "imagine-image-edit", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-video", wantUpstream: "imagine-video-gen", wantModelMode: "MODEL_MODE_AUTO"},
@@ -148,8 +132,8 @@ func TestResolveModel_LegacyAppChatModelsDeprecated(t *testing.T) {
 		"grok-4.20-heavy",
 		"grok-4.3-beta",
 	} {
-		if _, ok := ResolveModel(id); !ok {
-			t.Fatalf("ResolveModel(%s) should succeed", id)
+		if _, ok := ResolveModel(id); ok {
+			t.Fatalf("ResolveModel(%s) should be removed", id)
 		}
 		if !IsDeprecatedModelID(id) {
 			t.Fatalf("%s should be deprecated", id)
@@ -157,11 +141,10 @@ func TestResolveModel_LegacyAppChatModelsDeprecated(t *testing.T) {
 	}
 }
 
-func TestResolveModel_AcceptsGrok43(t *testing.T) {
+func TestResolveModel_AcceptsCurrentBuildModels(t *testing.T) {
 	for _, id := range []string{
-		"grok-4.3",
 		"grok-4.5",
-		"grok-build-0.1",
+		"grok-4.6",
 	} {
 		if _, ok := ResolveModel(id); !ok {
 			t.Fatalf("ResolveModel(%s) should succeed", id)

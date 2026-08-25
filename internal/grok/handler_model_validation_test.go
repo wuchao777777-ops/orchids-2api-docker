@@ -124,28 +124,20 @@ func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t
 	}
 }
 
-func TestResolveModel_AcceptsGrok43ConsoleModels(t *testing.T) {
+func TestResolveModel_RejectsRemovedConsoleModels(t *testing.T) {
 	for _, id := range []string{"grok-4.3", "grok-build-0.1", "grok-4.3-beta"} {
-		spec, ok := ResolveModel(id)
-		if !ok {
-			t.Fatalf("ResolveModel(%s) = false, want true", id)
-		}
-		if spec.ConsoleModel == "" {
-			t.Fatalf("%s ConsoleModel should not be empty", id)
+		if _, ok := ResolveModel(id); ok {
+			t.Fatalf("ResolveModel(%s) = true, want removed", id)
 		}
 	}
 }
 
-func TestResolveModel_DeprecatesGrok43BetaAppChat(t *testing.T) {
-	spec, ok := ResolveModel("grok-4.3-beta")
-	if !ok {
-		t.Fatal("ResolveModel(grok-4.3-beta) = false, want true")
+func TestResolveModel_RemovesGrok43BetaAppChat(t *testing.T) {
+	if _, ok := ResolveModel("grok-4.3-beta"); ok {
+		t.Fatal("ResolveModel(grok-4.3-beta) = true, want removed")
 	}
 	if !IsDeprecatedModelID("grok-4.3-beta") {
 		t.Fatal("grok-4.3-beta should be deprecated")
-	}
-	if spec.ModeID != "grok-420-computer-use-sa" {
-		t.Fatalf("ModeID=%q want grok-420-computer-use-sa", spec.ModeID)
 	}
 }
 
@@ -259,10 +251,7 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 		}
 	}
 
-	superSpec, ok := ResolveModel("grok-4.20-0309-non-reasoning-super")
-	if !ok {
-		t.Fatal("missing grok-4.20-0309-non-reasoning-super spec")
-	}
+	superSpec := ModelSpec{ID: "grok-web-super", Tier: grokTierSuper}
 	superSess, err := h.openChatAccountSessionForModel(context.Background(), superSpec)
 	if err != nil {
 		t.Fatalf("open super session error=%v", err)
@@ -282,10 +271,7 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	}
 	liteSess.Close()
 
-	heavySpec, ok := ResolveModel("grok-4.20-heavy")
-	if !ok {
-		t.Fatal("missing grok-4.20-heavy spec")
-	}
+	heavySpec := ModelSpec{ID: "grok-web-heavy", Tier: grokTierHeavy}
 	heavySess, err := h.openChatAccountSessionForModel(context.Background(), heavySpec)
 	if err != nil {
 		t.Fatalf("open heavy session error=%v", err)
@@ -295,10 +281,7 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	}
 	heavySess.Close()
 
-	fastSpec, ok := ResolveModel("grok-4.20-fast")
-	if !ok {
-		t.Fatal("missing grok-4.20-fast spec")
-	}
+	fastSpec := ModelSpec{ID: "grok-web-basic", Tier: grokTierBasic, PreferBest: true}
 	fastSess, err := h.openChatAccountSessionForModel(context.Background(), fastSpec)
 	if err != nil {
 		t.Fatalf("open fast session error=%v", err)
@@ -548,13 +531,10 @@ func TestOpenChatAccountSessionForModel_FallsBackToBasicAccount(t *testing.T) {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	spec, ok := ResolveModel("grok-4.20-0309-non-reasoning")
-	if !ok {
-		t.Fatal("missing grok-4.20-0309-non-reasoning spec")
-	}
+	spec := ModelSpec{ID: "grok-web-basic", Tier: grokTierBasic}
 	sess, err := h.openChatAccountSessionForModel(context.Background(), spec)
 	if err != nil {
-		t.Fatalf("open session for grok-4.20-0309-non-reasoning with unknown-tier account should fall back: error=%v", err)
+		t.Fatalf("open session for basic Web model with unknown-tier account should fall back: error=%v", err)
 	}
 	defer sess.Close()
 	if NormalizeSSOToken(sess.token) != "unknown-tier-token" {

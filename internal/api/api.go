@@ -124,7 +124,7 @@ var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *
 	return client.FetchMonthlyUsage(ctx)
 }
 
-const defaultGrokVerifyModelID = "grok-4.20-0309-non-reasoning"
+const defaultGrokVerifyModelID = "grok-4.5"
 
 func normalizeGrokVerifyModelID(raw string) string {
 	model := strings.TrimSpace(raw)
@@ -174,6 +174,13 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 		} else {
 			grok.ApplyCLIBillingInfo(acc, billing)
 		}
+		modelsCtx, modelsCancel := context.WithTimeout(ctx, 15*time.Second)
+		if models, modelsErr := cliClient.FetchModels(modelsCtx, acc); modelsErr != nil {
+			slog.Warn("Grok CLI model catalog sync failed", "account_id", acc.ID, "error", modelsErr)
+		} else {
+			grok.ApplyCLIModels(acc, models, time.Now())
+		}
+		modelsCancel()
 		return nil
 	}
 
@@ -193,7 +200,7 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	cancel()
 	if verifyErr != nil && isGrokModelNotFound(verifyErr) {
 		verifyCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
-		info, verifyErr = client.VerifyToken(verifyCtx, credential, "grok-4.20-0309-non-reasoning")
+		info, verifyErr = client.VerifyToken(verifyCtx, credential, defaultGrokVerifyModelID)
 		cancel()
 	}
 	if verifyErr != nil {
@@ -256,6 +263,7 @@ func normalizeGrokTokenInput(acc *store.Account) {
 	// OAuth (Build CLI) accounts carry access/refresh tokens and must not be
 	// treated as SSO cookies.
 	if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+		acc.GrokProvider = grok.ProviderBuild
 		acc.OAuthAccessToken = strings.TrimSpace(acc.OAuthAccessToken)
 		acc.OAuthRefreshToken = strings.TrimSpace(acc.OAuthRefreshToken)
 		acc.ClientCookie = ""
@@ -265,6 +273,14 @@ func normalizeGrokTokenInput(acc *store.Account) {
 		acc.ClientUat = ""
 		acc.ProjectID = ""
 		return
+	}
+	switch strings.ToLower(strings.TrimSpace(acc.GrokProvider)) {
+	case grok.ProviderWeb, grok.ProviderConsole:
+		acc.GrokProvider = strings.ToLower(strings.TrimSpace(acc.GrokProvider))
+	default:
+		// Do not retain arbitrary provider labels: routing must have a single
+		// explicit product boundary for every SSO credential.
+		acc.GrokProvider = grok.ProviderWeb
 	}
 	raw := strings.TrimSpace(acc.ClientCookie)
 	if raw == "" {
@@ -341,6 +357,7 @@ func normalizeAccountOutput(acc *store.Account) *store.Account {
 		})
 	}
 	if strings.EqualFold(out.AccountType, "grok") {
+		grok.NormalizeProvider(out)
 		out.RefreshToken = ""
 		out.SessionCookie = ""
 		// The administrator explicitly opted in to seeing the short-lived OAuth
@@ -449,6 +466,33 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 
 	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
 	case "grok":
+		if grok.ProviderForAccount(acc) == grok.ProviderBuild {
+			weekly := acc.GrokBilling.Weekly
+			monthly := acc.GrokBilling.Monthly
+			fields["quota_mode"] = "unknown"
+			fields["quota_unit"] = "build_credits"
+			fields["quota_supported"] = false
+			if weekly.HasUsage {
+				fields["quota_limit"] = 100.0
+				fields["quota_used"] = weekly.UsagePercent
+				fields["quota_remaining"] = max(0, 100-weekly.UsagePercent)
+				fields["quota_mode"] = "weekly_percent"
+				fields["quota_unit"] = "percent"
+				fields["quota_supported"] = true
+				fields["quota_reset_at"] = weekly.ResetAt
+			}
+			if monthly.HasLimit {
+				fields["quota_monthly_limit"] = monthly.Limit
+				fields["quota_monthly_remaining"] = monthly.Remaining
+			}
+			if acc.GrokRateLimits.Requests.HasLimit || acc.GrokRateLimits.Requests.HasRemaining {
+				fields["rate_limit_requests"] = acc.GrokRateLimits.Requests
+			}
+			if acc.GrokRateLimits.Tokens.HasLimit || acc.GrokRateLimits.Tokens.HasRemaining {
+				fields["rate_limit_tokens"] = acc.GrokRateLimits.Tokens
+			}
+			break
+		}
 		limit = grok.InferQuotaLimit(acc)
 		remaining := current
 		if remaining > limit && limit > 0 {

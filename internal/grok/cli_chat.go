@@ -24,7 +24,7 @@ func (h *Handler) serveCLIChat(ctx context.Context, w http.ResponseWriter, req *
 	}
 	// Override the console endpoint model with the CLI model name.
 	payload["model"] = spec.UpstreamModel
-	resp, err := h.doCLIWithAutoSwitch(ctx, sess, payload)
+	resp, err := h.doCLIWithAutoSwitch(ctx, sess, payload, spec.UpstreamModel)
 	h.finishUpstreamChat(ctx, w, req, sess, logger, "cli", h.cliBaseURL()+"/responses",
 		func() http.Header { return h.cliHeaders(sess.acc, sess.token) }, payload, resp, err)
 }
@@ -46,7 +46,7 @@ func (h *Handler) cliHeaders(acc *store.Account, token string) http.Header {
 // doCLIWithAutoSwitch issues a CLI request, switching to another OAuth account
 // on transient failures (401 after refresh, 5xx) while treating team-level 429
 // as shared (no switch).
-func (h *Handler) doCLIWithAutoSwitch(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}) (*http.Response, error) {
+func (h *Handler) doCLIWithAutoSwitch(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelID string) (*http.Response, error) {
 	if sess == nil || sess.acc == nil {
 		return nil, fmt.Errorf("empty cli chat session")
 	}
@@ -56,16 +56,16 @@ func (h *Handler) doCLIWithAutoSwitch(ctx context.Context, sess *chatAccountSess
 	client := h.cliClient
 	return h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond,
 		func() (*http.Response, error) { return client.doResponses(ctx, sess.acc, payload) },
-		func(used []int64) (*chatAccountSession, error) { return h.openCLIAccountSession(ctx, used) }, nil)
+		func(used []int64) (*chatAccountSession, error) { return h.openCLIAccountSession(ctx, used, modelID) }, nil)
 }
 
 // openCLIAccountSession selects the next available Build CLI OAuth account.
-func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64) (*chatAccountSession, error) {
+func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64, modelID string) (*chatAccountSession, error) {
 	if h == nil || h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
 	}
 	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, func(acc *store.Account) bool {
-		return acc != nil && strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth")
+		return acc != nil && ProviderForAccount(acc) == ProviderBuild && AccountSupportsModel(acc, modelID)
 	})
 	if err != nil {
 		return nil, err
@@ -83,4 +83,22 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64)
 		poolCandidates: nil,
 		release:        h.trackAccount(acc),
 	}, nil
+}
+
+// openConsoleAccountSession selects a Console SSO account. Console sessions
+// cannot be substituted with Web SSO cookies even when both belong to the
+// same person, because their endpoints and quotas are independent.
+func (h *Handler) openConsoleAccountSession(ctx context.Context, excludeIDs []int64) (*chatAccountSession, error) {
+	if h == nil || h.lb == nil {
+		return nil, fmt.Errorf("load balancer not configured")
+	}
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, isGrokConsoleAccount)
+	if err != nil {
+		return nil, err
+	}
+	token := grokSSOTokenRaw(acc)
+	if NormalizeSSOToken(token) == "" {
+		return nil, fmt.Errorf("grok console account token is empty")
+	}
+	return &chatAccountSession{acc: acc, token: token, release: h.trackAccount(acc)}, nil
 }

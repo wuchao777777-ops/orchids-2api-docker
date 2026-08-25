@@ -40,8 +40,8 @@ func TestGetUsage_DefaultModelDoesNotFallback(t *testing.T) {
 	if len(requestedModels) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(requestedModels))
 	}
-	if requestedModels[0] != "fast" {
-		t.Fatalf("expected default model to use fast rate-limit mode, got %q", requestedModels[0])
+	if requestedModels[0] != "grok-4.5" {
+		t.Fatalf("expected current default model, got %q", requestedModels[0])
 	}
 }
 
@@ -64,15 +64,15 @@ func TestGetUsage_ExplicitModelDoesNotFallback(t *testing.T) {
 	defer srv.Close()
 
 	c := New(&config.Config{GrokAPIBaseURL: srv.URL})
-	_, err := c.GetUsage(context.Background(), "token-abc", "grok-4.20-0309-reasoning")
+	_, err := c.GetUsage(context.Background(), "token-abc", "grok-4.5")
 	if err == nil {
 		t.Fatalf("expected error for explicit invalid model")
 	}
 	if len(requestedModels) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(requestedModels))
 	}
-	if requestedModels[0] != "expert" {
-		t.Fatalf("expected explicit reasoning model to use expert rate-limit mode, got=%v", requestedModels)
+	if requestedModels[0] != "grok-4.5" {
+		t.Fatalf("expected explicit current model, got=%v", requestedModels)
 	}
 }
 

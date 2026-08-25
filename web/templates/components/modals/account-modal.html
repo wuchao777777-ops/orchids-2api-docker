@@ -18,7 +18,15 @@
           <option value="sso">SSO Cookie</option>
           <option value="oauth">Build CLI OAuth</option>
         </select>
-        <small class="helper-text">Build CLI OAuth 走 cli-chat-proxy.grok.com（grok-build-0.1 等）</small>
+        <small class="helper-text">Build CLI OAuth 走 cli-chat-proxy.grok.com；模型能力由官方 /models 同步。</small>
+      </div>
+      <div class="form-group" id="grokProviderGroup" hidden>
+        <label class="form-label">SSO 产品入口</label>
+        <select class="form-input" id="grokProvider">
+          <option value="web">Grok Web</option>
+          <option value="console">xAI Console</option>
+        </select>
+        <small class="helper-text">Web 与 Console 的 Cookie、模型和额度互不通用。</small>
       </div>
        <div class="form-group" id="ssoCredentialGroup">
          <label class="form-label" id="tokenLabel">__session</label>

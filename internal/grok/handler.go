@@ -105,14 +105,18 @@ func (h *Handler) cacheValidatedModel(modelID string) {
 	h.modelCacheMu.Unlock()
 }
 
-// isGrokSSOAccount reports whether a Grok account is usable for app-chat /
-// console / media paths that authenticate with SSO cookies. OAuth Build CLI
-// accounts must not be selected here.
-func isGrokSSOAccount(acc *store.Account) bool {
-	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") {
-		return false
-	}
-	return !strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth")
+// isGrokWebAccount selects only Grok Web SSO sessions. Build OAuth and
+// Console SSO sessions are deliberately separate products and must never be
+// sent to the legacy web transport.
+func isGrokWebAccount(acc *store.Account) bool {
+	return acc != nil && ProviderForAccount(acc) == ProviderWeb &&
+		!strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth")
+}
+
+// isGrokConsoleAccount selects only Console SSO sessions for console.x.ai.
+func isGrokConsoleAccount(acc *store.Account) bool {
+	return acc != nil && ProviderForAccount(acc) == ProviderConsole &&
+		!strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth")
 }
 
 // grokSSOTokenRaw returns the raw SSO credential for an account, preferring the
@@ -132,7 +136,7 @@ func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, er
 	if h.lb == nil {
 		return nil, "", fmt.Errorf("load balancer not configured")
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, nil, "grok", h.connTracker, isGrokSSOAccount)
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, nil, "grok", h.connTracker, isGrokWebAccount)
 	if err != nil {
 		return nil, "", err
 	}
@@ -278,10 +282,10 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 		err     error
 		lastErr error
 	)
-	// App-chat/console/media paths only accept SSO cookie accounts. OAuth Build
-	// CLI accounts are selected exclusively by openCLIAccountSession.
+	// App-chat/media only accepts Web SSO cookie accounts. OAuth Build and
+	// Console SSO are selected by their own provider-specific selectors.
 	ssoFilter := func(acc *store.Account) bool {
-		if !isGrokSSOAccount(acc) {
+		if !isGrokWebAccount(acc) {
 			return false
 		}
 		return extraFilter == nil || extraFilter(acc)
@@ -539,15 +543,17 @@ func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 		}
 
 		info := parseRateLimitInfo(headers)
-		if info == nil {
-			return
-		}
 		latest, err := h.lb.Store.GetAccount(ctx, accCopy.ID)
 		if err != nil || latest == nil {
 			slog.Warn("grok quota account reload failed", "account_id", accCopy.ID, "error", err)
 			return
 		}
-		if !ApplyQuotaInfo(latest, info) {
+		NormalizeProvider(latest)
+		if ProviderForAccount(latest) == ProviderBuild {
+			if !ApplyBuildRateLimits(latest, headers) {
+				return
+			}
+		} else if info == nil || !ApplyQuotaInfo(latest, info) {
 			return
 		}
 		if err := h.lb.Store.UpdateAccount(ctx, latest); err != nil {

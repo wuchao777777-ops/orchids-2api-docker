@@ -317,7 +317,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, fmt.Sprintf("model %s is only supported through cli-chat-proxy responses and does not support attachments in this API", req.Model), http.StatusBadRequest)
 			return
 		}
-		sess, err := h.openCLIAccountSession(r.Context(), nil)
+		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
 		if err != nil {
 			http.Error(w, "no available grok cli token: "+err.Error(), http.StatusServiceUnavailable)
 			return
@@ -327,7 +327,12 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
+	var sess *chatAccountSession
+	if shouldServeConsoleChat(spec, attachments) {
+		sess, err = h.openConsoleAccountSession(r.Context(), nil)
+	} else {
+		sess, err = h.openChatAccountSessionForModel(r.Context(), spec)
+	}
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
 		return

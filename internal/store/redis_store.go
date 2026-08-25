@@ -242,6 +242,27 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	} else {
 		updated.UpstreamMode = acc.UpstreamMode
 	}
+	if strings.TrimSpace(acc.GrokProvider) == "" {
+		updated.GrokProvider = existing.GrokProvider
+	} else {
+		updated.GrokProvider = acc.GrokProvider
+	}
+	// Account updates are often partial (for example request counters and
+	// credential rotation). Provider snapshots are refreshed independently, so
+	// never erase a successfully observed catalog/billing window with a zero
+	// value from an unrelated update.
+	if acc.GrokModels != nil {
+		updated.GrokModels = append([]string(nil), acc.GrokModels...)
+	}
+	if !acc.GrokModelsSyncedAt.IsZero() {
+		updated.GrokModelsSyncedAt = acc.GrokModelsSyncedAt
+	}
+	if !acc.GrokBilling.SyncedAt.IsZero() {
+		updated.GrokBilling = acc.GrokBilling
+	}
+	if !acc.GrokRateLimits.ObservedAt.IsZero() {
+		updated.GrokRateLimits = acc.GrokRateLimits
+	}
 	updated.UpdatedAt = time.Now()
 
 	data, err := json.Marshal(&updated)

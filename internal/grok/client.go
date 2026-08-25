@@ -998,7 +998,7 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 	if !ok {
 		// Fall back to a known default model when the model ID is not recognized
 		// (e.g. AgentMode="grok-3" stored on older accounts).
-		spec, ok = ResolveModel("grok-4.20-0309-non-reasoning")
+		spec, ok = ResolveModel("grok-4.5")
 		if !ok {
 			return nil, fmt.Errorf("model not found")
 		}

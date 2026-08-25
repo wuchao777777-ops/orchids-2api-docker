@@ -59,13 +59,23 @@ function normalizeAccountType(acc) {
 function getQuotaStats(acc) {
   if (!acc) return null;
   const type = normalizeAccountType(acc);
-  // xAI may return a reset window without a numeric Build allowance. That is
-  // not evidence that the account has zero credits; keep it visibly unknown.
-  if (type === "grok" && isSidebarGrokOAuthAccount(acc) &&
-      Number(acc.usage_limit || 0) <= 0 &&
-      String(acc.quota_reset_at || "").startsWith("0001-") === false &&
-      String(acc.quota_reset_at || "").trim() !== "") {
-    return { supported: true, limit: 0, remaining: 0, used: 0, pctRemaining: 0, quotaUnavailable: true };
+  // Build billing and response throttling are different xAI products. Never
+  // use request/token rate-limit headers as a paid-plan balance.
+  if (type === "grok" && isSidebarGrokOAuthAccount(acc)) {
+    const weekly = acc.grok_billing && acc.grok_billing.weekly;
+    if (weekly && weekly.has_usage === true && Number.isFinite(Number(weekly.usage_percent))) {
+      const used = Math.max(0, Math.min(100, Number(weekly.usage_percent)));
+      return {
+        supported: true,
+        limit: 100,
+        remaining: Math.max(0, 100 - used),
+        used,
+        pctRemaining: Math.max(0, 100 - used),
+        weeklyPercent: true,
+        resetAt: weekly.reset_at || "",
+      };
+    }
+    return { supported: false, limit: 0, remaining: 0, used: 0, pctRemaining: 0, quotaUnavailable: true };
   }
   const base = getSidebarQuotaStats(acc);
   if (!base) return null;
@@ -438,6 +448,8 @@ function applyCredentialModeUI(type) {
   modeGroup.hidden = !isGrok;
   if (!isGrok) return;
   const mode = String(modeSelect?.value || "sso").trim().toLowerCase();
+  const providerGroup = document.getElementById("grokProviderGroup");
+  if (providerGroup) providerGroup.hidden = mode !== "sso";
   document.getElementById("ssoCredentialGroup").hidden = mode !== "sso";
   document.getElementById("oauthCredentialGroup").hidden = mode !== "oauth";
   document.getElementById("oauthRefreshGroup").hidden = mode !== "oauth";
@@ -1013,7 +1025,7 @@ function renderAccounts() {
       const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
       if (normalizeAccountType(acc) === "warp" && quota.splitBonus) {
         tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span><div style="color:#64748b;font-size:0.75rem">${quota.monthlyRemaining.toLocaleString()} 月度 + ${quota.bonusRemaining.toLocaleString()} 赠送</div>`;
-      } else if (normalizeAccountType(acc) === "grok" && isSidebarGrokOAuthAccount(acc)) {
+      } else if (quota.weeklyPercent) {
         tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()}%</span> <span style="color:#64748b;font-size:0.75rem">/ 100% (周度剩余)</span>`;
       } else {
         tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>`;
@@ -1154,7 +1166,7 @@ function buildQuotaMarkup(acc) {
     if (normalizeAccountType(acc) === "warp" && quota.splitBonus) {
       return `<span style="color:${color}">${quota.remaining.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span><div style="color:#64748b;font-size:0.75rem">${quota.monthlyRemaining.toLocaleString()} 月度 + ${quota.bonusRemaining.toLocaleString()} 赠送</div>`;
     }
-	if (normalizeAccountType(acc) === "grok" && isSidebarGrokOAuthAccount(acc)) {
+	if (quota.weeklyPercent) {
 	  return `<span style="color:${color}">${quota.remaining.toLocaleString()}%</span> <span style="color:#64748b;font-size:0.75rem">/ 100% (周度剩余)</span>`;
 	}
 	return `<span style="color:${color}">${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>`;
@@ -1384,6 +1396,7 @@ function openModal(account = null) {
 
   const applyValues = () => {
     const modeSelect = document.getElementById("credentialType");
+    const providerSelect = document.getElementById("grokProvider");
     if (account) {
       title.textContent = "编辑账号";
       document.getElementById("accountId").value = account.id;
@@ -1392,6 +1405,7 @@ function openModal(account = null) {
       document.getElementById("enabled").checked = account.enabled;
       const isOAuth = String(account.credential_type || "").trim().toLowerCase() === "oauth";
       if (modeSelect) modeSelect.value = isOAuth ? "oauth" : "sso";
+      if (providerSelect) providerSelect.value = String(account.grok_provider || "web").trim().toLowerCase() === "console" ? "console" : "web";
       document.getElementById("oauthAccessToken").value = account.oauth_access_token || "";
       document.getElementById("oauthRefreshToken").value = account.oauth_refresh_token || "";
       document.getElementById("oauthExpiresAt").value = account.oauth_expires_at || "";
@@ -1403,6 +1417,7 @@ function openModal(account = null) {
       document.getElementById("enabled").checked = true;
       document.getElementById("clientCookie").value = "";
       if (modeSelect) modeSelect.value = "sso";
+      if (providerSelect) providerSelect.value = "web";
       document.getElementById("oauthAccessToken").value = "";
       document.getElementById("oauthRefreshToken").value = "";
       document.getElementById("oauthExpiresAt").value = "";
@@ -1449,6 +1464,7 @@ async function saveAccount(e) {
   };
   if (type === "grok") {
     data.credential_type = isOAuth ? "oauth" : "";
+    data.grok_provider = isOAuth ? "build" : String(document.getElementById("grokProvider")?.value || "web");
   }
   if (isOAuth) {
     if (oauthAccess) data.oauth_access_token = oauthAccess;

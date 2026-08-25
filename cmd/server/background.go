@@ -132,6 +132,10 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 	if acc == nil || s == nil || cfg == nil {
 		return
 	}
+	// Persist the compatibility inference for pre-provider OAuth rows while we
+	// already have a safe background update. This makes the product boundary
+	// visible to the admin API instead of leaving old records ambiguous.
+	grok.NormalizeProvider(acc)
 	cliClient := grok.NewCLIClient(cfg)
 	cliClient.SetAccountStore(s)
 	if strings.TrimSpace(acc.OAuthAccessToken) == "" || acc.OAuthExpiresAt.IsZero() || time.Until(acc.OAuthExpiresAt) <= 5*time.Minute {
@@ -163,6 +167,16 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 		slog.Warn("Auto sync grok cli billing failed; leaving numeric quota unavailable", "account_id", acc.ID, "error", billingErr)
 	} else {
 		grok.ApplyCLIBillingInfo(acc, billing)
+	}
+	if grok.CLIModelsNeedSync(acc, time.Now()) {
+		modelsCtx, modelsCancel := context.WithTimeout(ctx, 15*time.Second)
+		models, modelsErr := cliClient.FetchModels(modelsCtx, acc)
+		modelsCancel()
+		if modelsErr != nil {
+			slog.Warn("Auto sync grok cli model catalog failed", "account_id", acc.ID, "error", modelsErr)
+		} else {
+			grok.ApplyCLIModels(acc, models, time.Now())
+		}
 	}
 	if updateErr := s.UpdateAccount(ctx, acc); updateErr != nil {
 		slog.Warn("Auto refresh grok cli: update account failed", "account_id", acc.ID, "error", updateErr)

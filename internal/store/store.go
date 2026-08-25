@@ -60,6 +60,51 @@ type Account struct {
 	// UpstreamMode overrides the per-account upstream selection. Empty lets the
 	// ModelSpec decide; otherwise one of "app_chat", "console", "cli".
 	UpstreamMode string `json:"upstream_mode,omitempty"`
+	// GrokProvider is the explicit xAI product boundary. Build OAuth, Grok Web
+	// SSO and Console SSO have different credentials, model catalogs, quotas
+	// and failure semantics; they must not be treated as interchangeable.
+	// Legacy accounts are normalized on read/write from CredentialType.
+	GrokProvider string `json:"grok_provider,omitempty"`
+	// GrokModels is the last successful account-specific upstream /v1/models
+	// capability snapshot. An empty snapshot means not synced yet, not that the
+	// account supports every model.
+	GrokModels         []string  `json:"grok_models,omitempty"`
+	GrokModelsSyncedAt time.Time `json:"grok_models_synced_at,omitempty"`
+	// GrokBilling contains only official xAI Build billing information. It is
+	// deliberately separate from GrokRateLimits, whose request/token headers
+	// are short-lived throttling windows rather than subscription allowance.
+	GrokBilling    GrokBillingSnapshot   `json:"grok_billing,omitempty"`
+	GrokRateLimits GrokRateLimitSnapshot `json:"grok_rate_limits,omitempty"`
+}
+
+// GrokQuotaWindow is one explicit upstream usage or throttling dimension.
+// Values are meaningful only when their Has* marker is true; zero is valid.
+type GrokQuotaWindow struct {
+	Limit        float64   `json:"limit,omitempty"`
+	Remaining    float64   `json:"remaining,omitempty"`
+	UsagePercent float64   `json:"usage_percent,omitempty"`
+	HasLimit     bool      `json:"has_limit,omitempty"`
+	HasRemaining bool      `json:"has_remaining,omitempty"`
+	HasUsage     bool      `json:"has_usage,omitempty"`
+	ResetAt      time.Time `json:"reset_at,omitempty"`
+}
+
+// GrokBillingSnapshot stores official Build weekly/monthly windows only.
+type GrokBillingSnapshot struct {
+	Weekly   GrokQuotaWindow `json:"weekly,omitempty"`
+	Monthly  GrokQuotaWindow `json:"monthly,omitempty"`
+	SyncedAt time.Time       `json:"synced_at,omitempty"`
+	Source   string          `json:"source,omitempty"`
+}
+
+// GrokRateLimitSnapshot stores passive response headers separately from
+// billing. They can be useful for cooldown and diagnostics but must never be
+// rendered as a paid-plan balance.
+type GrokRateLimitSnapshot struct {
+	Requests   GrokQuotaWindow `json:"requests,omitempty"`
+	Tokens     GrokQuotaWindow `json:"tokens,omitempty"`
+	Model      string          `json:"model,omitempty"`
+	ObservedAt time.Time       `json:"observed_at,omitempty"`
 }
 
 // AccountStatusWarpQuotaExhausted records a Warp credit exhaustion separately
@@ -238,8 +283,7 @@ func (s *Store) cleanupDeprecatedModelIDs(ctx context.Context) {
 		"grok-4.20-multi-agent",
 		"grok-420",
 		"grok-4.3",
-		// grok-build-0.1 is served via the Build CLI upstream and must not be
-		// cleaned up as deprecated.
+		"grok-build-0.1",
 		"grok-code-fast",
 		"grok-code-fast-1",
 		"grok-imagine-1.0",
@@ -284,8 +328,8 @@ func buildGrokSeedModels() []Model {
 		id   string
 		name string
 	}{
+		{"grok-4.6", "Grok 4.6"},
 		{"grok-4.5", "Grok 4.5"},
-		{"grok-build-0.1", "Grok Build 0.1"},
 		{"grok-imagine-image-lite", "Grok Imagine Image Lite"},
 		{"grok-imagine-image", "Grok Imagine Image"},
 		{"grok-imagine-image-quality", "Grok Imagine Image Quality"},

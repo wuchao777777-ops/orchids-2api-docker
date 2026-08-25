@@ -184,7 +184,7 @@ func applyTokenEntryToAccount(acc *store.Account, entry adminTokenEntry) {
 	acc.RefreshToken = ""
 	acc.AccountType = "grok"
 	// Default to a valid Grok model for health checks.
-	acc.AgentMode = "grok-4.20-0309-non-reasoning"
+	acc.AgentMode = "grok-4.5"
 	acc.Enabled = true
 	if acc.Weight <= 0 {
 		acc.Weight = 1

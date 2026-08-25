@@ -6,8 +6,8 @@ import (
 )
 
 var publicGrokModelIDs = []string{
+	"grok-4.6",
 	"grok-4.5",
-	"grok-build-0.1",
 	"grok-imagine-image-lite",
 	"grok-imagine-image",
 	"grok-imagine-image-quality",
@@ -41,6 +41,7 @@ var deprecatedGrokModelIDs = map[string]struct{}{
 	"grok-4.20-expert":                   {},
 	"grok-4.20-heavy":                    {},
 	"grok-4.3-beta":                      {},
+	"grok-build-0.1":                     {},
 	"grok-imagine-image-pro":             {},
 	"grok-3":                             {},
 	"grok-3-thinking":                    {},

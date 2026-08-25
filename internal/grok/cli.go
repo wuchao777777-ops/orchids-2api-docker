@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -246,6 +247,67 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 		}
 		return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw, "")
 	}
+}
+
+// FetchModels returns the official, account-scoped Build catalog. It is a
+// control-plane request and never sends a model prompt. The result must be
+// persisted as account capability rather than merged into a global static list.
+func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]string, error) {
+	if c == nil || c.oauth == nil || acc == nil {
+		return nil, fmt.Errorf("grok cli models is not configured")
+	}
+	ApplyCLIOAuthIdentity(acc)
+	token, err := c.oauth.AccessToken(ctx, acc)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL()+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = c.cliHeaders(acc, token)
+	resp, err := c.doCLIRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := decodeHTTPResponseBody(resp); err != nil {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("decode grok cli models response: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, cliOAuthMaxBodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, newCLIUpstreamError(resp.StatusCode, resp.Header, body, "")
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("decode grok cli models response: %w", err)
+	}
+	seen := make(map[string]struct{}, len(payload.Data))
+	models := make([]string, 0, len(payload.Data))
+	for _, item := range payload.Data {
+		model := strings.TrimSpace(item.ID)
+		if model == "" {
+			continue
+		}
+		key := strings.ToLower(model)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		models = append(models, model)
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("grok cli models response contains no model ids")
+	}
+	return models, nil
 }
 
 // doCLIRequest issues an HTTP request through the CLI client, routing via the
