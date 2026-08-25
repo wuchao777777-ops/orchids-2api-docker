@@ -748,7 +748,9 @@ function evaluateAccountStatus(acc) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Refresh Token' };
     }
   } else if (type === 'grok') {
-    if (!getAccountToken(acc)) {
+    // OAuth secrets are redacted by the account list API. credential_type is
+    // the safe indicator that the server holds a Build OAuth credential.
+    if (!isSidebarGrokOAuthAccount(acc) && !getAccountToken(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 SSO Token' };
     }
   } else if (type === 'puter') {

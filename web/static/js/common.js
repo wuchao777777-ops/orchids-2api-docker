@@ -32,6 +32,18 @@ function getSidebarAccountToken(acc) {
   return acc.client_cookie || acc.token || "";
 }
 
+// OAuth secrets are deliberately redacted from /api/accounts responses. A
+// Grok Build OAuth account therefore must be treated as credentialed from its
+// explicit mode, rather than from the (intentionally absent) token fields.
+function isSidebarGrokOAuthAccount(acc) {
+  return normalizeSidebarAccountType(acc) === "grok" &&
+    String(acc?.credential_type || "").trim().toLowerCase() === "oauth";
+}
+
+function hasSidebarAccountCredential(acc) {
+  return isSidebarGrokOAuthAccount(acc) || Boolean(getSidebarAccountToken(acc));
+}
+
 function getSidebarQuotaStats(acc) {
   if (!acc) return null;
   const type = normalizeSidebarAccountType(acc);
@@ -90,11 +102,11 @@ function isSidebarAccountAbnormal(acc) {
 
   const type = normalizeSidebarAccountType(acc);
   if (type === "warp") {
-    if (!getSidebarAccountToken(acc)) return true;
+    if (!hasSidebarAccountCredential(acc)) return true;
   } else if (type === "grok") {
-    if (!getSidebarAccountToken(acc)) return true;
+    if (!hasSidebarAccountCredential(acc)) return true;
   } else if (type === "puter") {
-    if (!getSidebarAccountToken(acc)) return true;
+    if (!hasSidebarAccountCredential(acc)) return true;
   } else if (!acc.session_id && !acc.session_cookie) {
     return true;
   }
