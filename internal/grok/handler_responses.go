@@ -157,11 +157,33 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
+	// Keep the original object for the Build CLI route.  The CLI upstream
+	// speaks Responses natively, so translating it through Chat Completions
+	// would drop valid fields such as previous_response_id and metadata.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
 	var req ResponsesCreateRequest
-	if !decodeJSONBody(w, r, &req) {
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 	h.applyDefaultResponsesStream(&req)
+	var nativePayload map[string]interface{}
+	if err := json.Unmarshal(body, &nativePayload); err != nil || nativePayload == nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if _, provided := nativePayload["stream"]; !provided {
+		nativePayload["stream"] = req.Stream
+	}
+
+	if spec, ok := ResolveModel(req.Model); ok && modelRoutedToCLI(spec, h.cfg) {
+		h.handleNativeCLIResponses(w, r, req.Model, spec, nativePayload)
+		return
+	}
 	if err := validateResponsesCompatibility(req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -201,6 +223,75 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, responsesObjectFromChat(req.Model, chat))
+}
+
+// handleNativeCLIResponses proxies Build OAuth Responses requests without a
+// Chat-Completions compatibility conversion.  Besides preserving the official
+// request and event schema, this keeps SSE streaming realtime and bounded by
+// the normal HTTP backpressure instead of buffering the whole completion.
+func (h *Handler) handleNativeCLIResponses(w http.ResponseWriter, r *http.Request, modelID string, spec ModelSpec, payload map[string]interface{}) {
+	if err := h.ensureModelEnabled(r.Context(), modelID); err != nil {
+		http.Error(w, modelValidationMessage(modelID, err), http.StatusBadRequest)
+		return
+	}
+	if h == nil || h.cliClient == nil {
+		http.Error(w, "grok cli client not configured", http.StatusServiceUnavailable)
+		return
+	}
+	sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer sess.Close()
+
+	payload["model"] = spec.UpstreamModel
+	resp, err := h.doCLIWithAutoSwitch(r.Context(), sess, payload, spec.UpstreamModel)
+	if err != nil {
+		if markAllGrokAccountStatuses(err) {
+			h.markAccountStatus(r.Context(), sess.acc, err)
+		}
+		http.Error(w, err.Error(), upstreamHTTPResponseStatus(err))
+		return
+	}
+	defer resp.Body.Close()
+	h.syncGrokQuota(sess.acc, resp.Header)
+	copyNativeCLIResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	streamNativeCLIResponse(w, resp.Body)
+}
+
+func copyNativeCLIResponseHeaders(dst, src http.Header) {
+	// Forward only end-to-end response metadata. Hop-by-hop headers must not be
+	// copied because net/http owns the downstream connection.
+	for _, key := range []string{"Content-Type", "Cache-Control", "X-Request-Id", "X-Request-ID"} {
+		if values, ok := src[key]; ok {
+			dst.Del(key)
+			for _, value := range values {
+				dst.Add(key, value)
+			}
+		}
+	}
+}
+
+func streamNativeCLIResponse(w http.ResponseWriter, body io.Reader) {
+	flusher, _ := w.(http.Flusher)
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := body.Read(buf)
+		if n > 0 {
+			_, _ = w.Write(buf[:n])
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func validateResponsesCompatibility(req ResponsesCreateRequest) error {

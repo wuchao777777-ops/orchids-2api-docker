@@ -176,6 +176,16 @@ func TestParseUpstreamLines_RejectsUpstreamErrorEnvelope(t *testing.T) {
 	}
 }
 
+func TestParseUpstreamLines_RejectsUpstreamEventErrorEnvelope(t *testing.T) {
+	err := parseUpstreamLines(strings.NewReader(`{"event":{"type":"error","message":"rate limited"}}`), func(map[string]interface{}) error {
+		t.Fatal("callback must not run for upstream event errors")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("error=%v want upstream event error", err)
+	}
+}
+
 func TestParseRateLimitPayload_AcceptsQueriesFields(t *testing.T) {
 	payload := map[string]interface{}{
 		"maxQueries":       140,

@@ -252,3 +252,31 @@ func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
 		t.Fatalf("stored refresh=%q", got.OAuthRefreshToken)
 	}
 }
+
+func TestCLIClientFetchModelsReadsOfficialControlPlaneCatalog(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/models" {
+			t.Fatalf("request=%s %s want GET /models", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer active-access" {
+			t.Fatalf("authorization=%q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"grok-4.6"},{"id":"grok-4.6"},{"id":"grok-4.5"},{"id":""}]}`))
+	}))
+	defer server.Close()
+
+	client := NewCLIClient(&config.Config{GrokCLIBaseURL: server.URL})
+	models, err := client.FetchModels(context.Background(), &store.Account{
+		AccountType:      "grok",
+		CredentialType:   "oauth",
+		OAuthAccessToken: "active-access",
+		OAuthExpiresAt:   time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("FetchModels() error = %v", err)
+	}
+	if strings.Join(models, ",") != "grok-4.6,grok-4.5" {
+		t.Fatalf("models=%v want grok-4.6,grok-4.5", models)
+	}
+}

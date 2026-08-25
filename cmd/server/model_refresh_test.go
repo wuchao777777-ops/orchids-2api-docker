@@ -13,7 +13,6 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -267,38 +266,6 @@ func TestVerifyPuterDiscoveredModelsSerial_RequiresAcceptedProbe(t *testing.T) {
 	}
 }
 
-func TestGrokProbeCandidatesIncludesPolicyAndExistingModels(t *testing.T) {
-	s, cleanup := setupModelRefreshStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	if err := s.CreateModel(ctx, &store.Model{
-		Channel:   "Grok",
-		ModelID:   "grok-future-6",
-		Name:      "grok-future-6",
-		Status:    store.ModelStatusAvailable,
-		Verified:  true,
-		IsDefault: false,
-		SortOrder: 99,
-	}); err != nil {
-		t.Fatalf("CreateModel() error = %v", err)
-	}
-
-	items := grokProbeCandidateModels(context.Background(), s)
-	gotSet := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		gotSet[item.ID] = struct{}{}
-	}
-	for _, publicID := range modelpolicy.PublicGrokModelIDs() {
-		if _, ok := gotSet[publicID]; !ok {
-			t.Fatalf("expected candidates to include public model %q, got %+v", publicID, items)
-		}
-	}
-	if _, ok := gotSet["grok-future-6"]; !ok {
-		t.Fatalf("expected candidates to include existing model grok-future-6, got %+v", items)
-	}
-}
-
 func TestCanonicalizeDiscoveredModels_NormalizesLegacyGrok43(t *testing.T) {
 	got := canonicalizeDiscoveredModels([]discoveredModel{
 		{ID: "grok-4.3", Name: "Grok 4.3"},
@@ -315,7 +282,7 @@ func TestCanonicalizeDiscoveredModels_NormalizesLegacyGrok43(t *testing.T) {
 	}
 }
 
-func TestDiscoverGrokModelsUsesAppChatStaticList(t *testing.T) {
+func TestDiscoverGrokModelsUsesHistoricalCatalogWithoutBuildOAuth(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 
@@ -323,18 +290,101 @@ func TestDiscoverGrokModelsUsesAppChatStaticList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverGrokModelsConcurrent() error = %v", err)
 	}
-	if source != "grok_app_chat_static" {
-		t.Fatalf("source=%q want grok_app_chat_static", source)
+	if source != "grok_cached_models" {
+		t.Fatalf("source=%q want grok_cached_models", source)
 	}
 
 	gotSet := make(map[string]struct{}, len(items))
 	for _, item := range items {
 		gotSet[item.ID] = struct{}{}
 	}
-	for _, id := range modelpolicy.PublicGrokModelIDs() {
+	for _, id := range []string{"grok-4.5", "grok-4.6"} {
 		if _, ok := gotSet[id]; !ok {
-			t.Fatalf("expected app chat model %q in %+v", id, items)
+			t.Fatalf("expected cached Grok model %q in %+v", id, items)
 		}
+	}
+}
+
+func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	acc := &store.Account{
+		Name:              "build",
+		AccountType:       "grok",
+		CredentialType:    "oauth",
+		OAuthAccessToken:  "access",
+		OAuthRefreshToken: "refresh",
+		Enabled:           true,
+	}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	prevFetch := fetchGrokBuildModelsForRefresh
+	t.Cleanup(func() { fetchGrokBuildModelsForRefresh = prevFetch })
+	var calls int
+	fetchGrokBuildModelsForRefresh = func(ctx context.Context, cfg *config.Config, store *store.Store, got *store.Account) ([]string, error) {
+		calls++
+		if got.ID != acc.ID {
+			t.Fatalf("account id=%d want %d", got.ID, acc.ID)
+		}
+		return []string{"grok-4.6", "grok-4.6", "future-private-model", "grok-4.5"}, nil
+	}
+
+	items, source, err := discoverGrokModelsConcurrent(ctx, &config.Config{}, s, 4)
+	if err != nil {
+		t.Fatalf("discoverGrokModelsConcurrent() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("official catalog calls=%d want 1", calls)
+	}
+	if source != "grok_build_models" {
+		t.Fatalf("source=%q want grok_build_models", source)
+	}
+	gotIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		gotIDs = append(gotIDs, item.ID)
+	}
+	if strings.Join(gotIDs, ",") != "grok-4.6,grok-4.5" {
+		t.Fatalf("public IDs=%v want grok-4.6,grok-4.5", gotIDs)
+	}
+
+	persisted, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if persisted.GrokProvider != "build" || persisted.GrokModelsSyncedAt.IsZero() {
+		t.Fatalf("provider/catalog not persisted: %+v", persisted)
+	}
+	if strings.Join(persisted.GrokModels, ",") != "grok-4.6,future-private-model,grok-4.5" {
+		t.Fatalf("account capability snapshot=%v", persisted.GrokModels)
+	}
+}
+
+func TestDiscoverGrokModelsKeepsCachedCatalogWhenBuildControlPlaneFails(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	acc := &store.Account{AccountType: "grok", CredentialType: "oauth", OAuthRefreshToken: "refresh", Enabled: true}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+	prevFetch := fetchGrokBuildModelsForRefresh
+	t.Cleanup(func() { fetchGrokBuildModelsForRefresh = prevFetch })
+	fetchGrokBuildModelsForRefresh = func(context.Context, *config.Config, *store.Store, *store.Account) ([]string, error) {
+		return nil, errors.New("control plane unavailable")
+	}
+
+	items, source, err := discoverGrokModelsConcurrent(ctx, &config.Config{}, s, 1)
+	if err != nil {
+		t.Fatalf("discoverGrokModelsConcurrent() error = %v", err)
+	}
+	if source != "grok_build_models_unavailable_cached" {
+		t.Fatalf("source=%q want grok_build_models_unavailable_cached", source)
+	}
+	if len(items) == 0 {
+		t.Fatal("expected historical catalog to survive control-plane failure")
 	}
 }
 

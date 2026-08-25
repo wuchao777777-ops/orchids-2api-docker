@@ -832,7 +832,8 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		}
 		var ev map[string]interface{}
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			continue
+			writeSSEStreamError(w, flusher, nil, "console stream parse error: "+err.Error())
+			return
 		}
 		annotations = appendUniqueConsoleAnnotations(annotations, consoleFlatAnnotations(ev))
 		if usage := consoleUsageFromStreamEvent(ev); len(usage) > 0 {

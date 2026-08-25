@@ -8,12 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
-	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
@@ -35,6 +35,15 @@ var probeWarpModelForRefresh = func(ctx context.Context, cfg *config.Config, acc
 	client := warp.NewFromAccount(acc, refreshModelRequestConfig(cfg, "warp"))
 	defer client.Close()
 	return client.ProbeModel(ctx, modelID)
+}
+
+// fetchGrokBuildModelsForRefresh reads the official Build CLI catalog.  It is
+// deliberately kept as an injectable control-plane operation: model refresh
+// must never send a completion simply to discover an account's capabilities.
+var fetchGrokBuildModelsForRefresh = func(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) ([]string, error) {
+	client := grok.NewCLIClient(cfg)
+	client.SetAccountStore(s)
+	return client.FetchModels(ctx, acc)
 }
 
 type modelRefreshRequest struct {
@@ -404,28 +413,106 @@ func isPuterModelDefinitiveReject(err error) bool {
 	return false
 }
 
+type grokBuildModelDiscovery struct {
+	index   int
+	account *store.Account
+	models  []string
+	err     error
+}
+
+// discoverGrokModelsConcurrent makes the Build OAuth /v1/models catalog the
+// primary source of Grok text-model discovery.  The upstream response is
+// account scoped, so every successful response is persisted on that account;
+// only models with a locally implemented Build route are published globally.
+//
+// A failed control-plane read must never erase the last known global catalog.
+// The historical catalog is consequently used only as an outage/no-account
+// fallback, never merged into a successful Build discovery.
 func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
-	_ = cfg
-	_ = concurrency
-	candidates := canonicalizeDiscoveredModels(grokProbeCandidateModels(ctx, s), canonicalGrokRefreshModelID)
-	out := make([]discoveredModel, 0, len(candidates))
-	for _, candidate := range candidates {
-		if err := ctx.Err(); err != nil {
-			return nil, "", err
+	accounts, err := grokBuildModelDiscoveryAccounts(ctx, s)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(accounts) == 0 {
+		if cached := cachedGrokModels(ctx, s); len(cached) > 0 {
+			return cached, "grok_cached_models", nil
 		}
-		if _, ok := grok.ResolveModel(candidate.ID); !ok {
+		return nil, "", fmt.Errorf("no enabled Grok Build OAuth accounts or cached models")
+	}
+
+	workerCount := boundedModelRefreshWorkers(len(accounts), concurrency)
+	jobs := make(chan int, len(accounts))
+	results := make(chan grokBuildModelDiscovery, len(accounts))
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				acc := accounts[index]
+				models, fetchErr := fetchGrokBuildModelsForRefresh(ctx, cfg, s, acc)
+				results <- grokBuildModelDiscovery{index: index, account: acc, models: models, err: fetchErr}
+			}
+		}()
+	}
+	for index := range accounts {
+		jobs <- index
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	ordered := make([]grokBuildModelDiscovery, len(accounts))
+	for result := range results {
+		if result.index >= 0 && result.index < len(ordered) {
+			ordered[result.index] = result
+		}
+	}
+
+	now := time.Now().UTC()
+	merged := make([]discoveredModel, 0, len(accounts)*2)
+	seen := make(map[string]struct{})
+	successes := 0
+	for _, result := range ordered {
+		if result.account == nil || result.err != nil || len(result.models) == 0 {
 			continue
 		}
-		out = append(out, discoveredModel{
-			ID:        candidate.ID,
-			Name:      candidate.Name,
-			SortOrder: len(out),
-		})
+		successes++
+		// Persist the full official account capability snapshot, including an
+		// ID that this gateway intentionally does not route yet.  That keeps
+		// capability truth separate from the public compatibility surface.
+		grok.NormalizeProvider(result.account)
+		grok.ApplyCLIModels(result.account, result.models, now)
+		if updateErr := s.UpdateAccount(ctx, result.account); updateErr != nil {
+			return nil, "", fmt.Errorf("persist grok build model catalog: %w", updateErr)
+		}
+		for _, rawID := range result.models {
+			id := canonicalGrokRefreshModelID(rawID)
+			spec, ok := grok.ResolveModel(id)
+			if !ok || spec.Upstream != grok.UpstreamCLI {
+				continue
+			}
+			key := strings.ToLower(id)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, discoveredModel{ID: spec.ID, Name: firstNonEmpty(spec.Name, spec.ID), SortOrder: len(merged)})
+		}
 	}
-	if len(out) == 0 {
-		return nil, "", fmt.Errorf("no grok app chat models")
+	if len(merged) > 0 {
+		return merged, "grok_build_models", nil
 	}
-	return out, "grok_app_chat_static", nil
+	if cached := cachedGrokModels(ctx, s); len(cached) > 0 {
+		if successes > 0 {
+			return cached, "grok_build_models_no_routable_models_cached", nil
+		}
+		return cached, "grok_build_models_unavailable_cached", nil
+	}
+	if successes > 0 {
+		return nil, "", fmt.Errorf("official Grok Build catalog contains no locally routable models")
+	}
+	return nil, "", fmt.Errorf("official Grok Build model discovery failed for all enabled OAuth accounts")
 }
 
 func canonicalGrokRefreshModelID(modelID string) string {
@@ -466,46 +553,54 @@ func canonicalizeDiscoveredModels(items []discoveredModel, normalize func(string
 	return out
 }
 
-func grokProbeCandidateModels(ctx context.Context, s *store.Store) []discoveredModel {
-	seen := map[string]struct{}{}
-	out := make([]discoveredModel, 0, 16)
-	appendCandidate := func(id, name string) {
-		id = strings.TrimSpace(id)
+func grokBuildModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*store.Account, error) {
+	if s == nil {
+		return nil, fmt.Errorf("store not configured")
+	}
+	accounts, err := s.GetEnabledAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*store.Account, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc == nil || grok.ProviderForAccount(acc) != grok.ProviderBuild || !strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+			continue
+		}
+		if strings.TrimSpace(acc.OAuthAccessToken) == "" && strings.TrimSpace(acc.OAuthRefreshToken) == "" {
+			continue
+		}
+		out = append(out, acc)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func cachedGrokModels(ctx context.Context, s *store.Store) []discoveredModel {
+	if s == nil {
+		return nil
+	}
+	models, err := s.ListModels(ctx)
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	out := make([]discoveredModel, 0, len(models))
+	for _, model := range models {
+		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
+			continue
+		}
+		id := canonicalGrokRefreshModelID(model.ModelID)
 		if id == "" {
-			return
+			continue
 		}
-		if _, ok := seen[id]; ok {
-			return
+		key := strings.ToLower(id)
+		if _, exists := seen[key]; exists {
+			continue
 		}
-		seen[id] = struct{}{}
-		if strings.TrimSpace(name) == "" {
-			name = id
-		}
+		seen[key] = struct{}{}
+		name := firstNonEmpty(model.Name, id)
 		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
 	}
-
-	for _, id := range modelpolicy.PublicGrokModelIDs() {
-		name := id
-		if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
-			name = spec.Name
-		}
-		appendCandidate(id, name)
-	}
-
-	if s != nil {
-		if existing, err := s.ListModels(ctx); err == nil {
-			for _, model := range existing {
-				if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
-					continue
-				}
-				if modelpolicy.IsDeprecatedGrokModelID(model.ModelID) {
-					continue
-				}
-				appendCandidate(model.ModelID, model.Name)
-			}
-		}
-	}
-
 	return out
 }
 

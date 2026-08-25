@@ -260,6 +260,20 @@ func TestChatCompletionsRequestValidate_ToolChoice(t *testing.T) {
 	if err := req.Validate(); err == nil {
 		t.Fatalf("expected tool_choice function reference error")
 	}
+
+	req.ToolChoice = map[string]interface{}{
+		"type":     "function",
+		"function": map[string]interface{}{},
+	}
+	if err := req.Validate(); err == nil {
+		t.Fatal("expected malformed forced tool_choice error")
+	}
+
+	req.Tools = nil
+	req.ToolChoice = "required"
+	if err := req.Validate(); err == nil {
+		t.Fatal("expected required tool_choice without tools error")
+	}
 }
 
 func TestChatCompletionsRequestValidate_RejectsUnsafeToolDefinitions(t *testing.T) {

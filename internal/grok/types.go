@@ -502,27 +502,30 @@ func (r *ChatCompletionsRequest) Validate() error {
 		switch v := r.ToolChoice.(type) {
 		case string:
 			switch strings.ToLower(strings.TrimSpace(v)) {
-			case "auto", "required", "none":
+			case "auto", "none":
+			case "required":
+				if len(r.Tools) == 0 {
+					return fmt.Errorf("tool_choice required needs at least one defined tool")
+				}
 			default:
 				return fmt.Errorf("tool_choice must be auto, required, none, or a specific function object")
 			}
 		case map[string]interface{}:
 			fn, _ := v["function"].(map[string]interface{})
-			if strings.TrimSpace(fmt.Sprint(v["type"])) != "function" || strings.TrimSpace(fmt.Sprint(fn["name"])) == "" {
+			name, _ := fn["name"].(string)
+			name = strings.TrimSpace(name)
+			if strings.TrimSpace(fmt.Sprint(v["type"])) != "function" || !grokToolNamePattern.MatchString(name) {
 				return fmt.Errorf("tool_choice object must have type=function and function.name")
 			}
-			name := strings.TrimSpace(fmt.Sprint(fn["name"]))
-			if len(r.Tools) > 0 {
-				found := false
-				for _, tool := range r.Tools {
-					if strings.EqualFold(strings.TrimSpace(fmt.Sprint(tool.Function["name"])), name) {
-						found = true
-						break
-					}
+			found := false
+			for _, tool := range r.Tools {
+				if strings.EqualFold(strings.TrimSpace(fmt.Sprint(tool.Function["name"])), name) {
+					found = true
+					break
 				}
-				if !found {
-					return fmt.Errorf("tool_choice.function.name must reference a defined tool")
-				}
+			}
+			if !found {
+				return fmt.Errorf("tool_choice.function.name must reference a defined tool")
 			}
 		default:
 			return fmt.Errorf("tool_choice must be auto, required, none, or a specific function object")

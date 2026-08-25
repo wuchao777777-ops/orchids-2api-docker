@@ -232,8 +232,33 @@ func upstreamStreamErrorMessage(value map[string]interface{}) string {
 	if value == nil {
 		return ""
 	}
-	raw, ok := value["error"]
-	if !ok || raw == nil {
+	if raw, exists := value["error"]; exists {
+		if message := upstreamErrorValueMessage(raw); message != "" {
+			return message
+		}
+		return "upstream returned an unspecified error"
+	}
+	// Current Grok streams can also carry failures as an event envelope rather
+	// than a top-level error.  Do not silently turn that into a successful empty
+	// completion just because app-chat normally uses result.response envelopes.
+	event, _ := value["event"].(map[string]interface{})
+	if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(event["type"])), "error") {
+		return ""
+	}
+	if raw, exists := event["error"]; exists {
+		if message := upstreamErrorValueMessage(raw); message != "" {
+			return message
+		}
+		return "upstream returned an unspecified error"
+	}
+	if message := upstreamErrorValueMessage(event); message != "" {
+		return message
+	}
+	return "upstream returned an unspecified error"
+}
+
+func upstreamErrorValueMessage(raw interface{}) string {
+	if raw == nil {
 		return ""
 	}
 	message := strings.TrimSpace(fmt.Sprint(raw))
@@ -245,7 +270,7 @@ func upstreamStreamErrorMessage(value map[string]interface{}) string {
 		)
 	}
 	if message == "" || message == "<nil>" {
-		return "upstream returned an unspecified error"
+		return ""
 	}
 	if len(message) > 512 {
 		message = message[:512]

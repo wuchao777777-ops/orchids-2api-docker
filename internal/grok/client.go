@@ -51,6 +51,11 @@ type Client struct {
 	assetClient *http.Client
 	dpop        *dpopSessionManager
 	egress      *egress.Manager
+	// appChatTransport is deliberately kept behind a small boundary.  The
+	// historical REST request shape and the newer MGW websocket request shape
+	// are not wire-compatible, so callers must never silently reinterpret an
+	// app-chat payload as an MGW event stream.
+	appChatTransport appChatTransport
 }
 
 type NSFWEnableResult struct {
@@ -89,13 +94,19 @@ func New(cfg *config.Config) *Client {
 	if assetProxy != nil && (baseProxy == nil || assetProxy.String() != baseProxy.String()) {
 		assetClient = newHTTPClient(cfg, timeout, assetProxyFunc)
 	}
-	return &Client{
+	client := &Client{
 		cfg:         cfg,
 		httpClient:  baseClient,
 		assetClient: assetClient,
 		dpop:        newDPoPSessionManager(),
 		egress:      egress.NewManager(cfg),
 	}
+	// MGW is available through the explicit request API in
+	// mgw_websocket_transport.go.  Legacy callers only provide a REST payload,
+	// therefore the adapter records that MGW is not applicable and safely falls
+	// back to the established REST transport.
+	client.appChatTransport = newAppChatFallbackTransport(client)
+	return client
 }
 
 func (c *Client) baseURL() string {
@@ -820,6 +831,20 @@ func mergeCFCookies(header http.Header, cfCookies string) {
 }
 
 func (c *Client) doChat(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
+	if c == nil {
+		return nil, fmt.Errorf("grok client not configured")
+	}
+	transport := c.appChatTransport
+	if transport == nil {
+		transport = restAppChatTransport{}
+	}
+	return transport.Chat(ctx, c, token, payload)
+}
+
+// doRESTChat preserves the proven REST app-chat transport.  It is intentionally
+// separate from doChat so the transport selector can fall back without
+// recursively calling itself.
+func (c *Client) doRESTChat(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
 	if err := rateLimitEndpoint(ctx, "grok.com"); err != nil {
 		return nil, err
 	}
