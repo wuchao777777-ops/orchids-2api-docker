@@ -1,10 +1,17 @@
 package grok
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/store"
 )
+
+func jwtWithClaims(t *testing.T, claims string) string {
+	t.Helper()
+	return "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".signature"
+}
 
 func TestCLIHeadersUseOfficialBuildIdentity(t *testing.T) {
 	client := NewCLIClient(&config.Config{})
@@ -23,5 +30,15 @@ func TestCLIHeadersUseOfficialBuildIdentity(t *testing.T) {
 	}
 	if got := headers.Get("User-Agent"); got != "grok-shell/1.0.4 (linux; x86_64)" {
 		t.Fatalf("User-Agent=%q", got)
+	}
+}
+
+func TestApplyCLIOAuthIdentity(t *testing.T) {
+	acc := &store.Account{OAuthAccessToken: jwtWithClaims(t, `{"sub":"user-1","email":"user@example.com","team_id":"team-1"}`)}
+	if !ApplyCLIOAuthIdentity(acc) {
+		t.Fatal("expected identity fields to be applied")
+	}
+	if acc.UserID != "user-1" || acc.Email != "user@example.com" || acc.TeamID != "team-1" {
+		t.Fatalf("account=%+v", acc)
 	}
 }
