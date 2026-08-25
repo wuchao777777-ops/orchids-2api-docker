@@ -32,7 +32,8 @@ type Account struct {
 	Email                string    `json:"email"`
 	Weight               int       `json:"weight"`
 	Enabled              bool      `json:"enabled"`
-	Token                string    `json:"token"`        // Truncated display token
+	Token                string    `json:"token"` // Truncated display token
+	WarpTokenExpiresAt   time.Time `json:"warp_token_expires_at,omitempty"`
 	Subscription         string    `json:"subscription"` // "free", "pro", etc.
 	UsageCurrent         float64   `json:"usage_current"`
 	UsageTotal           float64   `json:"usage_total"` // Used as lifetime usage
@@ -61,6 +62,11 @@ type Account struct {
 	// ModelSpec decide; otherwise one of "app_chat", "console", "cli".
 	UpstreamMode string `json:"upstream_mode,omitempty"`
 }
+
+// AccountStatusWarpQuotaExhausted records a Warp credit exhaustion separately
+// from a transient HTTP 429. The account remains usable for Warp's free-only
+// capabilities while model/capability filters keep paid requests away from it.
+const AccountStatusWarpQuotaExhausted = "warp_quota_exhausted"
 
 type Settings struct {
 	ID    int64  `json:"id"`

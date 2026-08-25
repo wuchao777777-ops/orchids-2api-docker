@@ -169,6 +169,44 @@ func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
 	}
 }
 
+func TestIsAccountAvailable_WarpQuotaExhaustedRemainsAvailableForFiltering(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{
+		ID:                   1,
+		AccountType:          "warp",
+		Subscription:         "build/business",
+		StatusCode:           store.AccountStatusWarpQuotaExhausted,
+		LastAttempt:          time.Now(),
+		WarpMonthlyLimit:     1500,
+		WarpMonthlyRemaining: 0,
+	}
+
+	if !lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected quota-exhausted Warp account to remain selectable for free-only filtering")
+	}
+	if acc.StatusCode != store.AccountStatusWarpQuotaExhausted {
+		t.Fatalf("expected durable quota status to remain, got %q", acc.StatusCode)
+	}
+}
+
+func TestIsAccountAvailable_WarpQuotaStatusClearsAfterQuotaRefresh(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{
+		ID:                   1,
+		AccountType:          "warp",
+		StatusCode:           store.AccountStatusWarpQuotaExhausted,
+		WarpMonthlyLimit:     1500,
+		WarpMonthlyRemaining: 100,
+	}
+
+	if !lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected refreshed Warp account to be available")
+	}
+	if acc.StatusCode != "" {
+		t.Fatalf("expected stale quota status to clear, got %q", acc.StatusCode)
+	}
+}
+
 func TestIsAccountAvailable_402UsesLongCooldown(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{

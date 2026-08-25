@@ -146,8 +146,8 @@ func TestMarkWarpQuotaExhausted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
-	if got.StatusCode != "429" {
-		t.Fatalf("StatusCode=%q want 429", got.StatusCode)
+	if got.StatusCode != store.AccountStatusWarpQuotaExhausted {
+		t.Fatalf("StatusCode=%q want %q", got.StatusCode, store.AccountStatusWarpQuotaExhausted)
 	}
 	if got.WarpMonthlyRemaining != 0 || got.WarpBonusRemaining != 0 {
 		t.Fatalf("remaining=%v bonus=%v want 0,0", got.WarpMonthlyRemaining, got.WarpBonusRemaining)

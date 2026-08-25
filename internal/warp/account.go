@@ -132,6 +132,12 @@ func AccountFreeOnly(acc *store.Account) bool {
 	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
 		return false
 	}
+	// A quota-exhaustion response is authoritative even when older imported
+	// accounts do not have populated quota counters. This persisted capability
+	// downgrade prevents paid models/tools from repeatedly hitting the upstream.
+	if strings.TrimSpace(acc.StatusCode) == store.AccountStatusWarpQuotaExhausted {
+		return true
+	}
 	subscription := strings.ToLower(strings.TrimSpace(acc.Subscription))
 	if subscription == "free" || strings.HasPrefix(subscription, "free/") || strings.HasPrefix(subscription, "free ") {
 		return true

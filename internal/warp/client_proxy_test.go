@@ -145,11 +145,17 @@ func TestDoStreamRequest_SendsOfficialWarpHeaders(t *testing.T) {
 	var seenClientID string
 	var seenOSCategory string
 	var seenUserAgent string
+	var seenClientVersion string
+	var seenExperimentID string
+	var seenExperimentBucket string
 	client.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		seenAccept = req.Header.Get("Accept")
 		seenClientID = req.Header.Get("X-Warp-Client-ID")
 		seenOSCategory = req.Header.Get("X-Warp-OS-Category")
 		seenUserAgent = req.Header.Get("User-Agent")
+		seenClientVersion = req.Header.Get("X-Warp-Client-Version")
+		seenExperimentID = req.Header.Get("X-Warp-Experiment-Id")
+		seenExperimentBucket = req.Header.Get("X-Warp-Experiment-Bucket")
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewReader(nil)),
@@ -174,6 +180,12 @@ func TestDoStreamRequest_SendsOfficialWarpHeaders(t *testing.T) {
 	}
 	if seenUserAgent != "" {
 		t.Fatalf("User-Agent=%q want empty", seenUserAgent)
+	}
+	if seenClientVersion != "" {
+		t.Fatalf("X-Warp-Client-Version=%q want omitted", seenClientVersion)
+	}
+	if seenExperimentID == "" || seenExperimentBucket == "" {
+		t.Fatalf("missing experiment headers: id=%q bucket=%q", seenExperimentID, seenExperimentBucket)
 	}
 }
 

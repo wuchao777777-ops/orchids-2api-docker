@@ -147,6 +147,7 @@ func TestSelectAccountRecord_WarpExhaustedPaidAccountIsFreeOnly(t *testing.T) {
 		WarpMonthlyLimit:     1500,
 		WarpMonthlyRemaining: 0,
 		WarpBonusRemaining:   0,
+		StatusCode:           store.AccountStatusWarpQuotaExhausted,
 		Enabled:              true,
 	}); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)

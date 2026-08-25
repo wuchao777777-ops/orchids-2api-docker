@@ -45,6 +45,23 @@ func TestDoGraphQL_DecodesGzipResponse(t *testing.T) {
 	}
 }
 
+func TestDoGraphQL_SendsRegisteredExperimentHeaders(t *testing.T) {
+	jwt := "registered-jwt"
+	registerJWTExperimentHeaders(jwt, "experiment-id", "experiment-bucket")
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.Header.Get("X-Warp-Experiment-Id"); got != "experiment-id" {
+			t.Fatalf("experiment id=%q", got)
+		}
+		if got := req.Header.Get("X-Warp-Experiment-Bucket"); got != "experiment-bucket" {
+			t.Fatalf("experiment bucket=%q", got)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":{}}`)), Header: make(http.Header)}, nil
+	})}
+	if err := doGraphQL(context.Background(), client, warpGraphQLURL, jwt, "Test", map[string]any{}, &struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFetchRequestLimitInfo_UsesOfficialWarpGraphQLHeaders(t *testing.T) {
 	t.Parallel()
 

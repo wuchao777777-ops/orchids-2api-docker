@@ -222,6 +222,20 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 
 	now := time.Now()
 	switch status {
+	case store.AccountStatusWarpQuotaExhausted:
+		// Warp credit exhaustion is a capability downgrade, not an account-wide
+		// cooldown. Account/model filters restrict this account to free-only
+		// models and reject tools/cloud-agent requests. Once refreshed quota is
+		// observed, remove the durable downgrade marker.
+		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
+			return false
+		}
+		hasRefreshedQuota := acc.WarpMonthlyRemaining+acc.WarpBonusRemaining > 0 ||
+			(acc.WarpMonthlyLimit <= 0 && acc.UsageLimit > 0 && acc.UsageCurrent < acc.UsageLimit)
+		if hasRefreshedQuota {
+			lb.clearAccountStatus(ctx, acc, "Warp 额度已刷新，恢复完整能力")
+		}
+		return true
 	case "401":
 		// 401 表示 token 过期或会话失效，短时间冷却后自动恢复尝试
 		if acc.LastAttempt.IsZero() {

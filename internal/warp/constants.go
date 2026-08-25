@@ -4,7 +4,32 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 )
+
+type warpExperimentHeaders struct{ id, bucket string }
+
+var jwtExperimentHeaders sync.Map
+
+func registerJWTExperimentHeaders(jwt, id, bucket string) {
+	jwt = strings.TrimSpace(jwt)
+	if jwt != "" && strings.TrimSpace(id) != "" {
+		jwtExperimentHeaders.Store(jwt, warpExperimentHeaders{id: id, bucket: bucket})
+	}
+}
+
+func applyWarpExperimentHeaders(req *http.Request, jwt string) {
+	if req == nil {
+		return
+	}
+	if raw, ok := jwtExperimentHeaders.Load(strings.TrimSpace(jwt)); ok {
+		h := raw.(warpExperimentHeaders)
+		req.Header.Set("X-Warp-Experiment-Id", h.id)
+		if h.bucket != "" {
+			req.Header.Set("X-Warp-Experiment-Bucket", h.bucket)
+		}
+	}
+}
 
 const (
 	warpAPIBaseURL   = "https://app.warp.dev"
@@ -37,7 +62,10 @@ func applyWarpClientHeaders(req *http.Request) {
 		return
 	}
 	req.Header.Set("X-Warp-Client-ID", clientID)
-	req.Header.Set("X-Warp-Client-Version", clientVersion)
+	// The official local-session gateway does not advertise a synthetic client
+	// version. Keep the version only in GraphQL's required requestContext instead
+	// of fingerprinting direct-token requests as a stale desktop build.
+	req.Header.Del("X-Warp-Client-Version")
 	if category := warpOSCategory(); category != "" {
 		req.Header.Set("X-Warp-OS-Category", category)
 	}

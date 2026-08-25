@@ -898,59 +898,6 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *API) HandleWarpUserFileImport(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "missing uploaded WARP User file: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	credential, err := warp.ReadLocalUserCredentialFromReader(file, 1<<20)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	acc := &store.Account{
-		Name:         strings.TrimSpace(header.Filename),
-		AccountType:  "warp",
-		RefreshToken: credential.RefreshToken,
-		Enabled:      true,
-		Weight:       1,
-	}
-	if acc.Name == "" {
-		acc.Name = "WARP User"
-	}
-	normalizeWarpTokenInput(acc)
-
-	if existing, err := a.findDuplicateAccountByCredential(r.Context(), acc, 0); err != nil {
-		slog.Error("Failed to detect duplicate account token", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	} else if existing != nil {
-		http.Error(w, duplicateAccountError(existing).Error(), http.StatusConflict)
-		return
-	}
-	if err := a.store.CreateAccount(r.Context(), acc); err != nil {
-		slog.Error("Failed to create WARP account from uploaded User file", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if acc.Enabled {
-		a.syncAccountAfterCreate(*acc)
-	}
-
-	json.NewEncoder(w).Encode(normalizeAccountOutput(acc))
-}
-
 func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -1136,6 +1083,12 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		if strings.EqualFold(acc.AccountType, "warp") {
 			if strings.TrimSpace(acc.RefreshToken) == "" {
 				acc.RefreshToken = existing.RefreshToken
+			}
+			// Warp tokens are redacted from account responses, so an ordinary UI
+			// edit sends an empty value. Preserve the imported direct credential.
+			if strings.TrimSpace(acc.Token) == "" {
+				acc.Token = existing.Token
+				acc.WarpTokenExpiresAt = existing.WarpTokenExpiresAt
 			}
 			if strings.TrimSpace(acc.DeviceID) == "" {
 				acc.DeviceID = existing.DeviceID

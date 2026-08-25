@@ -4,15 +4,13 @@ These notes track facts verified against WARP's open-source client at
 `warpdotdev/warp@1c2d4cc` and the pinned `warp-proto-apis` revision used by
 that client.
 
-## Auth Storage
+## Authentication Policy
 
-The stable Windows app stores the persisted user at:
-
-`%LOCALAPPDATA%\warp\Warp\data\dev.warp.Warp-User`
-
-The file is encrypted with Windows DPAPI. After decryption, the refresh token is
-stored at `id_token.refresh_token`. A top-level `refresh_token` may be legacy or
-empty.
+Orchids-2api does not read, decrypt, or parse the official Warp desktop
+client's local credential storage. Warp accounts authenticate only with the
+refresh token explicitly saved in the account store. The service exchanges that
+refresh token through Warp's official Secure Token endpoint and performs the
+normal client-login handshake.
 
 ## Multi-Agent Transport
 

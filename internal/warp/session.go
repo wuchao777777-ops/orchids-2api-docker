@@ -275,17 +275,18 @@ func (s *session) seedJWT(jwt string) {
 		return
 	}
 	exp := util.JWTExpiry(jwt, 0)
-	if exp.IsZero() || time.Now().Add(5*time.Minute).After(exp) {
-		return
-	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tokenValid() {
 		return
 	}
-	s.jwt = jwt
-	s.expiresAt = exp
+	if !exp.IsZero() && time.Now().Add(5*time.Minute).Before(exp) {
+		s.jwt = jwt
+		s.expiresAt = exp
+		s.loggedIn = false
+		s.registerExperimentHeadersLocked(jwt)
+	}
 }
 
 func (s *session) ensureToken(ctx context.Context, httpClient *http.Client) error {
@@ -391,6 +392,7 @@ func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
 	s.mu.Lock()
 	s.jwt = jwt
 	s.expiresAt = expiry
+	s.registerExperimentHeadersLocked(jwt)
 	if refresh != "" {
 		s.refreshToken = normalizeRefreshToken(refresh)
 	} else {
@@ -499,6 +501,31 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 	s.lastLogin = time.Now()
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *session) experimentHeaders() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strings.TrimSpace(s.experimentID) == "" {
+		s.experimentID = newSessionUUID()
+	}
+	if strings.TrimSpace(s.experimentBuck) == "" {
+		s.experimentBuck = newExperimentBucket()
+	}
+	if s.jwt != "" {
+		s.registerExperimentHeadersLocked(s.jwt)
+	}
+	return s.experimentID, s.experimentBuck
+}
+
+func (s *session) registerExperimentHeadersLocked(jwt string) {
+	if strings.TrimSpace(s.experimentID) == "" {
+		s.experimentID = newSessionUUID()
+	}
+	if strings.TrimSpace(s.experimentBuck) == "" {
+		s.experimentBuck = newExperimentBucket()
+	}
+	registerJWTExperimentHeaders(jwt, s.experimentID, s.experimentBuck)
 }
 
 func newExperimentBucket() string {

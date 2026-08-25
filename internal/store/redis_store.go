@@ -210,6 +210,9 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	updated.Weight = acc.Weight
 	updated.Enabled = acc.Enabled
 	updated.Token = acc.Token
+	if !acc.WarpTokenExpiresAt.IsZero() {
+		updated.WarpTokenExpiresAt = acc.WarpTokenExpiresAt
+	}
 	updated.Subscription = acc.Subscription
 	updated.UsageCurrent = acc.UsageCurrent
 	updated.UsageTotal = acc.UsageTotal

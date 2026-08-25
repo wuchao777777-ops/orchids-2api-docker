@@ -351,6 +351,7 @@ func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, opera
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(jwt))
 	applyWarpClientHeaders(req)
+	applyWarpExperimentHeaders(req, jwt)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Accept-Encoding", "gzip")

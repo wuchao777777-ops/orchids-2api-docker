@@ -29,15 +29,18 @@ func isWarpCloudAgentForbiddenError(errStr string) bool {
 	return strings.Contains(lower, "not allowed to use the provided cloud agent")
 }
 
-func markWarpQuotaExhausted(ctx context.Context, store *store.Store, acc *store.Account) {
-	if acc == nil || store == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
+func markWarpQuotaExhausted(ctx context.Context, accountStore *store.Store, acc *store.Account) {
+	if acc == nil || accountStore == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
 		return
 	}
 
 	accountStatusMu.Lock()
 	defer accountStatusMu.Unlock()
 
-	acc.StatusCode = "429"
+	// Do not use 429 here: an exhausted Warp account can still serve the free
+	// auto-open/warp-chat path. A dedicated persisted status lets the load
+	// balancer distinguish that state from a temporary rate limit after restart.
+	acc.StatusCode = store.AccountStatusWarpQuotaExhausted
 	acc.LastAttempt = time.Now()
 	if acc.WarpMonthlyLimit <= 0 && acc.UsageLimit > 0 {
 		acc.WarpMonthlyLimit = acc.UsageLimit
@@ -51,7 +54,7 @@ func markWarpQuotaExhausted(ctx context.Context, store *store.Store, acc *store.
 		}
 	}
 
-	if err := store.UpdateAccount(ctx, acc); err != nil {
+	if err := accountStore.UpdateAccount(ctx, acc); err != nil {
 		slog.Warn("Warp 额度状态更新失败", "account_id", acc.ID, "error", err)
 		return
 	}

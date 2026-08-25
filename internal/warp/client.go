@@ -188,6 +188,9 @@ func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *de
 	}
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	applyWarpClientHeaders(req)
+	experimentID, experimentBucket := c.session.experimentHeaders()
+	req.Header.Set("X-Warp-Experiment-Id", experimentID)
+	req.Header.Set("X-Warp-Experiment-Bucket", experimentBucket)
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Accept-Encoding", "identity")
