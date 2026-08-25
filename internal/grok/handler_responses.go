@@ -162,6 +162,10 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.applyDefaultResponsesStream(&req)
+	if err := validateResponsesCompatibility(req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	chatReq, err := chatRequestFromResponses(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -197,6 +201,31 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, responsesObjectFromChat(req.Model, chat))
+}
+
+func validateResponsesCompatibility(req ResponsesCreateRequest) error {
+	if req.MaxOutputTokens != nil {
+		return fmt.Errorf("max_output_tokens is not supported")
+	}
+	if strings.TrimSpace(req.PreviousResponseID) != "" {
+		return fmt.Errorf("previous_response_id is not supported")
+	}
+	if req.Store != nil && *req.Store {
+		return fmt.Errorf("store=true is not supported")
+	}
+	if len(req.Metadata) > 0 {
+		return fmt.Errorf("metadata is not supported")
+	}
+	if strings.TrimSpace(req.Truncation) != "" {
+		return fmt.Errorf("truncation is not supported")
+	}
+	if len(req.Include) > 0 {
+		return fmt.Errorf("include is not supported")
+	}
+	if req.Background != nil && *req.Background {
+		return fmt.Errorf("background=true is not supported")
+	}
+	return nil
 }
 
 func (h *Handler) applyDefaultResponsesStream(req *ResponsesCreateRequest) {
@@ -557,7 +586,7 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 	})
 
 	scanner := bufio.NewScanner(strings.NewReader(raw))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -619,6 +648,14 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 				"type": "response.output_item.done", "output_index": outputIndex, "item": item,
 			})
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		writeSSEJSON("response.failed", map[string]interface{}{
+			"type":     "response.failed",
+			"response": map[string]interface{}{"id": id, "object": "response", "status": "failed", "model": model, "error": map[string]interface{}{"code": "stream_read_error", "message": "chat stream read error"}},
+		})
+		writeSSEBytes(w, "", []byte("[DONE]"))
+		return
 	}
 	if startedMessage {
 		outputIndex := len(output)

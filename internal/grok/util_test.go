@@ -166,6 +166,16 @@ func TestParseUpstreamLines_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestParseUpstreamLines_RejectsUpstreamErrorEnvelope(t *testing.T) {
+	err := parseUpstreamLines(strings.NewReader(`{"error":{"code":"forbidden","message":"not allowed"}}`), func(map[string]interface{}) error {
+		t.Fatal("callback must not run for upstream errors")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("error=%v want upstream error", err)
+	}
+}
+
 func TestParseRateLimitPayload_AcceptsQueriesFields(t *testing.T) {
 	payload := map[string]interface{}{
 		"maxQueries":       140,

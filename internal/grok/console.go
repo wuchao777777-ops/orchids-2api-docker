@@ -606,7 +606,9 @@ func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountS
 		}
 
 		sess.Close()
-		time.Sleep(switchPace)
+		if !sleepWithContext(ctx, switchPace) {
+			return nil, ctx.Err()
+		}
 		next, switchErr := openNext(used)
 		if switchErr != nil {
 			return nil, err
@@ -808,7 +810,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 	raw := appendChatCompletionChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "assistant", "", "", false)
 	writeSSE(w, flusher, "", raw)
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	var event string
 	var final strings.Builder
 	var annotations []map[string]interface{}
@@ -891,6 +893,10 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		final.WriteString(content)
 		raw = appendChatCompletionChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "", content, "", false)
 		writeSSE(w, flusher, "", raw)
+	}
+	if err := scanner.Err(); err != nil {
+		writeSSEStreamError(w, flusher, nil, "console stream read error: "+err.Error())
+		return
 	}
 	indexedToolCalls := make([]map[string]interface{}, 0, len(toolCalls))
 	for _, tc := range toolCalls {

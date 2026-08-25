@@ -539,7 +539,6 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		} else if limitErr != nil {
 			slog.Warn("Warp quota sync failed after refresh; keeping account available", "account_id", acc.ID, "error", limitErr)
 		}
-		featureConfig := warp.AccountFeatureConfig{}
 		modelDiscoveryConfirmed := false
 		var modelDiscoveryErr error
 		if a.store != nil && acc.ID != 0 {
@@ -547,7 +546,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			features, source, modelErr := warpClient.FetchDiscoveredFeatureModelChoices(modelCtx)
 			modelCancel()
 			choices := warp.AgentModeModelChoices(features)
-			featureConfig = warp.AccountFeatureConfigFromChoices(features)
+			featureConfig := warp.AccountFeatureConfigFromChoices(features)
 			if modelErr == nil && len(choices) > 0 {
 				modelDiscoveryConfirmed = true
 				models := make([]string, 0, len(choices))

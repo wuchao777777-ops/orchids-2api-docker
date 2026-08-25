@@ -2,9 +2,11 @@ package grok
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,6 +86,49 @@ func TestCLIOAuthAccessTokenRefreshes(t *testing.T) {
 	}
 }
 
+func TestCLIOAuthAccessTokenCoalescesConcurrentRefreshes(t *testing.T) {
+	var calls int
+	var callsMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callsMu.Lock()
+		calls++
+		callsMu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"access_token":"shared-access","refresh_token":"shared-refresh","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{GrokCLIOAuthTokenURL: server.URL}
+	oauth := NewCLIOAuth(cfg, server.Client())
+	acc := &store.Account{OAuthRefreshToken: "shared-refresh", OAuthExpiresAt: time.Now().Add(-time.Minute)}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			token, err := oauth.AccessToken(context.Background(), acc)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if token != "shared-access" {
+				errs <- fmt.Errorf("token=%q", token)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	callsMu.Lock()
+	defer callsMu.Unlock()
+	if calls != 1 {
+		t.Fatalf("refresh calls=%d want 1", calls)
+	}
+}
+
 func TestCLIOAuthRefreshDenied(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -106,6 +151,9 @@ func TestCLIOAuthRefreshDenied(t *testing.T) {
 	}
 	if !IsCLIPermanentOAuthError(err) {
 		t.Fatalf("invalid_grant should be permanent (401): %v", err)
+	}
+	if strings.Contains(err.Error(), "token expired") {
+		t.Fatalf("OAuth diagnostic must not expose upstream text: %v", err)
 	}
 }
 

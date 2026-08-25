@@ -2,6 +2,7 @@ package grok
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,11 +11,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 )
+
+var cliOAuthAccountLocks sync.Map // map[string]*sync.Mutex
 
 // CLIOAuth handles the Build CLI OAuth token lifecycle: return the current
 // access_token when unexpired, otherwise refresh via the refresh_token grant
@@ -54,6 +58,16 @@ func (o *CLIOAuth) AccessToken(ctx context.Context, acc *store.Account) (string,
 	if acc == nil {
 		return "", fmt.Errorf("empty cli oauth account")
 	}
+	lock := cliOAuthLockForAccount(acc)
+	lock.Lock()
+	defer lock.Unlock()
+	if o != nil && o.store != nil && acc.ID != 0 {
+		if latest, err := o.store.GetAccount(ctx, acc.ID); err == nil && latest != nil {
+			acc.OAuthAccessToken = latest.OAuthAccessToken
+			acc.OAuthRefreshToken = latest.OAuthRefreshToken
+			acc.OAuthExpiresAt = latest.OAuthExpiresAt
+		}
+	}
 	accessToken := strings.TrimSpace(acc.OAuthAccessToken)
 	refreshToken := strings.TrimSpace(acc.OAuthRefreshToken)
 	expiresAt := acc.OAuthExpiresAt
@@ -65,6 +79,18 @@ func (o *CLIOAuth) AccessToken(ctx context.Context, acc *store.Account) (string,
 		return "", &cliOAuthError{status: http.StatusUnauthorized, message: "grok cli oauth refresh token is missing"}
 	}
 	return o.refreshAndPersist(ctx, acc, refreshToken)
+}
+
+func cliOAuthLockForAccount(acc *store.Account) *sync.Mutex {
+	key := "unknown"
+	if acc != nil && acc.ID != 0 {
+		key = fmt.Sprintf("account:%d", acc.ID)
+	} else if acc != nil {
+		sum := sha256.Sum256([]byte(strings.TrimSpace(acc.OAuthRefreshToken)))
+		key = fmt.Sprintf("refresh:%x", sum[:])
+	}
+	value, _ := cliOAuthAccountLocks.LoadOrStore(key, &sync.Mutex{})
+	return value.(*sync.Mutex)
 }
 
 func (o *CLIOAuth) refreshAndPersist(ctx context.Context, acc *store.Account, refreshToken string) (string, error) {
@@ -157,19 +183,13 @@ func parseCLIOAuthErrorResponse(body []byte, status int) error {
 		ErrorDescription string `json:"error_description"`
 	}
 	code := fmt.Sprintf("oauth_http_%d", status)
-	message := ""
 	_ = json.Unmarshal(body, &payload)
 	if payload.Error != "" {
 		code = payload.Error
 	}
-	if payload.ErrorDescription != "" {
-		message = payload.ErrorDescription
-	} else if len(body) > 0 {
-		message = strings.TrimSpace(string(body))
-	}
-	if len(message) > 512 {
-		message = message[:512]
-	}
+	// OAuth diagnostics can echo bearer tokens, cookies, or JWTs. Keep the
+	// stable error code only; callers may log this error.
+	message := ""
 	// Permanent credential failures surface as 401 so the account is cooled down.
 	switch code {
 	case "refresh_denied", "expired_token", "access_denied", "invalid_grant", "unauthorized_client":

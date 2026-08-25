@@ -269,6 +269,23 @@ func TestChatCompletionsRequestValidate_ToolChoice(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsRequestValidate_RejectsUnsafeToolDefinitions(t *testing.T) {
+	base := ChatCompletionsRequest{
+		Model:    "grok-4.20-0309",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	}
+	for _, tools := range [][]ToolDef{
+		{{Type: "function", Function: map[string]interface{}{"name": "invalid name"}}},
+		{{Type: "function", Function: map[string]interface{}{"name": "weather"}}, {Type: "function", Function: map[string]interface{}{"name": "WEATHER"}}},
+		{{Type: "function", Function: map[string]interface{}{"name": "weather", "description": strings.Repeat("x", maxToolDescriptionBytes+1)}}},
+	} {
+		base.Tools = tools
+		if err := base.Validate(); err == nil {
+			t.Fatalf("expected tool validation error for %#v", tools)
+		}
+	}
+}
+
 func TestNormalizeImageSize(t *testing.T) {
 	if got, err := normalizeImageSize(""); err != nil || got != "1024x1024" {
 		t.Fatalf("normalizeImageSize(empty)=(%q,%v) want (1024x1024,nil)", got, err)

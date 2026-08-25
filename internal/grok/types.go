@@ -3,6 +3,7 @@ package grok
 import (
 	"fmt"
 	"github.com/goccy/go-json"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -439,6 +440,51 @@ type RateLimitInfo struct {
 	Unit         string
 }
 
+const (
+	maxToolDefinitions      = 128
+	maxToolDescriptionBytes = 16 << 10
+)
+
+var grokToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+func validateToolDefinitions(tools []ToolDef) error {
+	if len(tools) > maxToolDefinitions {
+		return fmt.Errorf("tools must contain at most %d items", maxToolDefinitions)
+	}
+	seen := make(map[string]struct{}, len(tools))
+	for i, tool := range tools {
+		if !strings.EqualFold(strings.TrimSpace(tool.Type), "function") {
+			return fmt.Errorf("tools.%d.type must be function", i)
+		}
+		if tool.Function == nil {
+			return fmt.Errorf("tools.%d.function is required", i)
+		}
+		name := strings.TrimSpace(fmt.Sprint(tool.Function["name"]))
+		if !grokToolNamePattern.MatchString(name) {
+			return fmt.Errorf("tools.%d.function.name must match [A-Za-z0-9_-]{1,64}", i)
+		}
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("tools.%d.function.name duplicates %q", i, name)
+		}
+		seen[key] = struct{}{}
+		if description := strings.TrimSpace(fmt.Sprint(tool.Function["description"])); len(description) > maxToolDescriptionBytes {
+			return fmt.Errorf("tools.%d.function.description must be at most %d bytes", i, maxToolDescriptionBytes)
+		}
+		if parameters, ok := tool.Function["parameters"]; ok && parameters != nil {
+			raw, err := json.Marshal(parameters)
+			if err != nil {
+				return fmt.Errorf("tools.%d.function.parameters must be valid JSON", i)
+			}
+			var decoded interface{}
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				return fmt.Errorf("tools.%d.function.parameters must be valid JSON", i)
+			}
+		}
+	}
+	return nil
+}
+
 func (r *ChatCompletionsRequest) Validate() error {
 	if strings.TrimSpace(r.Model) == "" {
 		return fmt.Errorf("model is required")
@@ -449,15 +495,8 @@ func (r *ChatCompletionsRequest) Validate() error {
 	if err := validateChatMessages(r.Messages); err != nil {
 		return err
 	}
-	if len(r.Tools) > 0 {
-		for i, tool := range r.Tools {
-			if !strings.EqualFold(strings.TrimSpace(tool.Type), "function") {
-				return fmt.Errorf("tools.%d.type must be function", i)
-			}
-			if strings.TrimSpace(fmt.Sprint(tool.Function["name"])) == "" {
-				return fmt.Errorf("tools.%d.function.name is required", i)
-			}
-		}
+	if err := validateToolDefinitions(r.Tools); err != nil {
+		return err
 	}
 	if r.ToolChoice != nil {
 		switch v := r.ToolChoice.(type) {

@@ -66,11 +66,12 @@ func applyWarpClientHeaders(req *http.Request) {
 	// version. Keep the version only in GraphQL's required requestContext instead
 	// of fingerprinting direct-token requests as a stale desktop build.
 	req.Header.Del("X-Warp-Client-Version")
-	if category := warpOSCategory(); category != "" {
+	category := warpOSCategory()
+	if category != "" {
 		req.Header.Set("X-Warp-OS-Category", category)
 	}
-	if name := warpOSCategory(); name != "" {
-		req.Header.Set("X-Warp-OS-Name", name)
+	if category != "" {
+		req.Header.Set("X-Warp-OS-Name", category)
 	}
 	req.Header.Set("User-Agent", "")
 }

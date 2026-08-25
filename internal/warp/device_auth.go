@@ -76,7 +76,7 @@ func (a *DeviceAuthenticator) Start(ctx context.Context) (*DeviceAuthorization, 
 		Interval                int    `json:"interval"`
 	}
 	if err := a.postForm(ctx, a.deviceURL, url.Values{"client_id": {WarpAgentCLIClientID}}, &upstreamResponse); err != nil {
-		return nil, fmt.Errorf("request Warp device code: %w", err)
+		return nil, fmt.Errorf("request warp device code: %w", err)
 	}
 	response := DeviceAuthorization{
 		DeviceCode:              upstreamResponse.DeviceCode,
@@ -87,7 +87,7 @@ func (a *DeviceAuthenticator) Start(ctx context.Context) (*DeviceAuthorization, 
 		Interval:                upstreamResponse.Interval,
 	}
 	if strings.TrimSpace(response.DeviceCode) == "" || strings.TrimSpace(response.UserCode) == "" || strings.TrimSpace(response.VerificationURI) == "" {
-		return nil, fmt.Errorf("Warp device code response is incomplete")
+		return nil, fmt.Errorf("warp device code response is incomplete")
 	}
 	if response.Interval < 1 {
 		response.Interval = 2
@@ -104,7 +104,7 @@ func (a *DeviceAuthenticator) Start(ctx context.Context) (*DeviceAuthorization, 
 func (a *DeviceAuthenticator) Exchange(ctx context.Context, deviceCode string) (string, error) {
 	deviceCode = strings.TrimSpace(deviceCode)
 	if deviceCode == "" {
-		return "", fmt.Errorf("missing Warp device code")
+		return "", fmt.Errorf("missing warp device code")
 	}
 
 	var tokenResponse struct {
@@ -119,7 +119,7 @@ func (a *DeviceAuthenticator) Exchange(ctx context.Context, deviceCode string) (
 		return "", err
 	}
 	if strings.TrimSpace(tokenResponse.AccessToken) == "" {
-		return "", fmt.Errorf("Warp device token response is missing access_token")
+		return "", fmt.Errorf("warp device token response is missing access_token")
 	}
 
 	var firebaseResponse struct {
@@ -130,14 +130,14 @@ func (a *DeviceAuthenticator) Exchange(ctx context.Context, deviceCode string) (
 		"token":             tokenResponse.AccessToken,
 	})
 	if err != nil {
-		return "", fmt.Errorf("encode Warp custom-token exchange: %w", err)
+		return "", fmt.Errorf("encode warp custom-token exchange: %w", err)
 	}
 	if err := a.postJSON(ctx, a.customTokenURL, customBody, &firebaseResponse); err != nil {
-		return "", fmt.Errorf("exchange Warp device token: %w", err)
+		return "", fmt.Errorf("exchange warp device token: %w", err)
 	}
 	refreshToken := strings.TrimSpace(firebaseResponse.RefreshToken)
 	if refreshToken == "" {
-		return "", fmt.Errorf("Warp custom-token exchange is missing refreshToken")
+		return "", fmt.Errorf("warp custom-token exchange is missing refreshToken")
 	}
 	return refreshToken, nil
 }
@@ -152,7 +152,7 @@ func (a *DeviceAuthenticator) postJSON(ctx context.Context, endpoint string, bod
 
 func (a *DeviceAuthenticator) doJSON(ctx context.Context, method, endpoint, contentType string, body []byte, target interface{}) error {
 	if a == nil || a.httpClient == nil {
-		return fmt.Errorf("Warp device authenticator is not configured")
+		return fmt.Errorf("warp device authenticator is not configured")
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -178,10 +178,10 @@ func (a *DeviceAuthenticator) doJSON(ctx context.Context, method, endpoint, cont
 		if strings.EqualFold(strings.TrimSpace(upstreamError.Error), "authorization_pending") {
 			return DeviceAuthorizationPendingError{}
 		}
-		return fmt.Errorf("Warp device authorization returned HTTP %d", resp.StatusCode)
+		return fmt.Errorf("warp device authorization returned HTTP %d", resp.StatusCode)
 	}
 	if err := json.Unmarshal(raw, target); err != nil {
-		return fmt.Errorf("decode Warp device authorization response: %w", err)
+		return fmt.Errorf("decode warp device authorization response: %w", err)
 	}
 	return nil
 }

@@ -202,21 +202,23 @@ func randomStringFromCharset(length int, charset string) string {
 
 func parseUpstreamLines(body io.Reader, onLine func(map[string]interface{}) error) error {
 	decoder := json.NewDecoder(body)
-	type upstreamLineEnvelope struct {
-		Result struct {
-			Response map[string]interface{} `json:"response"`
-		} `json:"result"`
-	}
 
 	for {
-		var line upstreamLineEnvelope
+		var line map[string]interface{}
 		if err := decoder.Decode(&line); err != nil {
 			if err == io.EOF {
 				return nil
 			}
 			return err
 		}
-		resp := line.Result.Response
+		if message := upstreamStreamErrorMessage(line); message != "" {
+			return fmt.Errorf("grok upstream stream error: %s", message)
+		}
+		result, _ := line["result"].(map[string]interface{})
+		if message := upstreamStreamErrorMessage(result); message != "" {
+			return fmt.Errorf("grok upstream stream error: %s", message)
+		}
+		resp, _ := result["response"].(map[string]interface{})
 		if resp == nil {
 			continue
 		}
@@ -224,6 +226,31 @@ func parseUpstreamLines(body io.Reader, onLine func(map[string]interface{}) erro
 			return err
 		}
 	}
+}
+
+func upstreamStreamErrorMessage(value map[string]interface{}) string {
+	if value == nil {
+		return ""
+	}
+	raw, ok := value["error"]
+	if !ok || raw == nil {
+		return ""
+	}
+	message := strings.TrimSpace(fmt.Sprint(raw))
+	if details, ok := raw.(map[string]interface{}); ok {
+		message = firstNonEmpty(
+			strings.TrimSpace(fmt.Sprint(details["message"])),
+			strings.TrimSpace(fmt.Sprint(details["error"])),
+			strings.TrimSpace(fmt.Sprint(details["code"])),
+		)
+	}
+	if message == "" || message == "<nil>" {
+		return "upstream returned an unspecified error"
+	}
+	if len(message) > 512 {
+		message = message[:512]
+	}
+	return message
 }
 
 // walkJSONStrings visits every string leaf in a nested JSON value (maps,

@@ -132,6 +132,24 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestValidateResponsesCompatibility_RejectsIgnoredStatefulFields(t *testing.T) {
+	store := true
+	maxOutputTokens := 128
+	for _, req := range []ResponsesCreateRequest{
+		{MaxOutputTokens: &maxOutputTokens},
+		{PreviousResponseID: "resp_previous"},
+		{Store: &store},
+		{Metadata: map[string]interface{}{"trace": "value"}},
+		{Truncation: "auto"},
+		{Include: []string{"message.output_text.logprobs"}},
+		{Background: &store},
+	} {
+		if err := validateResponsesCompatibility(req); err == nil {
+			t.Fatalf("expected unsupported-field error for %#v", req)
+		}
+	}
+}
+
 func TestResponsesObjectFromChat_ConvertsMessageAndToolCalls(t *testing.T) {
 	chat := map[string]interface{}{
 		"model": "grok-4.20-0309",
