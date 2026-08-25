@@ -21,8 +21,10 @@ import (
 // app-chat website protocol (SSO cookie) or console.x.ai (SSO + DPoP).
 
 const (
-	defaultCLIBaseURL    = "https://cli-chat-proxy.grok.com/v1"
-	defaultCLITokenAuth  = "true"
+	defaultCLIBaseURL = "https://cli-chat-proxy.grok.com/v1"
+	// cli-chat-proxy rejects generic boolean token-auth headers. These values
+	// mirror the official Grok shell identity used with Build OAuth tokens.
+	defaultCLITokenAuth  = "xai-grok-cli"
 	defaultCLIClientMode = "headless"
 )
 
@@ -98,21 +100,21 @@ func (c *CLIClient) userAgent() string {
 	if c != nil && c.cfg != nil {
 		return c.cfg.GrokCLIUserAgentOrDefault()
 	}
-	return "grok-cli/0.9.0"
+	return "grok-shell/1.0.4 (linux; x86_64)"
 }
 
 func (c *CLIClient) clientVersion() string {
 	if c != nil && c.cfg != nil {
 		return c.cfg.GrokCLIClientVersionOrDefault()
 	}
-	return "0.9.0"
+	return "1.0.4"
 }
 
 func (c *CLIClient) clientIdentifier() string {
 	if c != nil && c.cfg != nil {
 		return c.cfg.GrokCLIClientIdentifierOrDefault()
 	}
-	return "grok-cli"
+	return "grok-shell"
 }
 
 // doResponses issues a standard Responses request to the CLI proxy. It ensures a

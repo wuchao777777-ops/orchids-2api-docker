@@ -331,7 +331,7 @@ func (c *Config) GrokCLIUserAgentOrDefault() string {
 	if c != nil && strings.TrimSpace(c.GrokCLIUserAgent) != "" {
 		return strings.TrimSpace(c.GrokCLIUserAgent)
 	}
-	return "grok-cli/0.9.0"
+	return "grok-shell/1.0.4 (linux; x86_64)"
 }
 
 // GrokCLIClientVersionOrDefault returns the x-grok-client-version header value.
@@ -339,7 +339,7 @@ func (c *Config) GrokCLIClientVersionOrDefault() string {
 	if c != nil && strings.TrimSpace(c.GrokCLIClientVersion) != "" {
 		return strings.TrimSpace(c.GrokCLIClientVersion)
 	}
-	return "0.9.0"
+	return "1.0.4"
 }
 
 // GrokCLIClientIdentifierOrDefault returns the x-grok-client-identifier header.
@@ -347,7 +347,7 @@ func (c *Config) GrokCLIClientIdentifierOrDefault() string {
 	if c != nil && strings.TrimSpace(c.GrokCLIClientIdentifier) != "" {
 		return strings.TrimSpace(c.GrokCLIClientIdentifier)
 	}
-	return "grok-cli"
+	return "grok-shell"
 }
 
 // GrokSessionIdentityRefreshEnabled reports whether background refresh should
