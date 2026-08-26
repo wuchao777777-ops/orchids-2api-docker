@@ -634,6 +634,26 @@ func stringAtAnyPath(root interface{}, paths ...[]string) string {
 	return ""
 }
 
+func rawStringAtAnyPath(root interface{}, paths ...[]string) string {
+	for _, path := range paths {
+		if len(path) == 0 {
+			continue
+		}
+		raw := valueAtPath(root, path...)
+		if text, ok := raw.(string); ok {
+			if text != "" {
+				return text
+			}
+			continue
+		}
+		value := strings.TrimSpace(fmt.Sprint(raw))
+		if value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
 func intAtAnyPath(root interface{}, paths ...[]string) int {
 	for _, path := range paths {
 		if len(path) == 0 {

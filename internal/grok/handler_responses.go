@@ -188,6 +188,10 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		h.handleNativeCLIResponses(w, r, req.Model, spec, nativePayload)
 		return
 	}
+	if spec, ok := ResolveModel(req.Model); ok && !spec.SupportsConversation() {
+		http.Error(w, fmt.Sprintf("model %s does not support responses", req.Model), http.StatusBadRequest)
+		return
+	}
 	if err := validateResponsesCompatibility(req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -549,7 +553,13 @@ func responsesOutputFromChat(chat map[string]interface{}) []interface{} {
 	if message == nil {
 		return []interface{}{}
 	}
-	out := make([]interface{}, 0, 1)
+	out := make([]interface{}, 0, 2)
+	if reasoning := strings.TrimSpace(fmt.Sprint(firstNonNil(message["reasoning_content"], message["reasoning"]))); reasoning != "" && reasoning != "<nil>" {
+		out = append(out, map[string]interface{}{
+			"id": "rs_" + randomHex(12), "type": "reasoning", "status": "completed",
+			"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasoning}},
+		})
+	}
 	for _, raw := range interfaceSlice(message["tool_calls"]) {
 		call, _ := raw.(map[string]interface{})
 		if item := responseFunctionCallItem(call); item != nil {
@@ -633,8 +643,12 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 	streamResponseHeaders(w)
 	id := "resp_" + randomHex(12)
 	messageID := "msg_" + randomHex(12)
+	reasoningID := "rs_" + randomHex(12)
 	startedMessage := false
+	startedReasoning := false
+	reasoningIndex := -1
 	var text strings.Builder
+	var reasoning strings.Builder
 	var output []interface{}
 	var usage map[string]interface{}
 
@@ -651,6 +665,25 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 			"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "in_progress", "model": model, "output": []interface{}{},
 		},
 	})
+	closeReasoning := func() {
+		if !startedReasoning {
+			return
+		}
+		value := reasoning.String()
+		writeSSEJSON("response.reasoning_summary_text.done", map[string]interface{}{
+			"type": "response.reasoning_summary_text.done", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0, "text": value,
+		})
+		part := map[string]interface{}{"type": "summary_text", "text": value}
+		writeSSEJSON("response.reasoning_summary_part.done", map[string]interface{}{
+			"type": "response.reasoning_summary_part.done", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0, "part": part,
+		})
+		item := map[string]interface{}{"id": reasoningID, "type": "reasoning", "status": "completed", "summary": []interface{}{part}}
+		output[reasoningIndex] = item
+		writeSSEJSON("response.output_item.done", map[string]interface{}{
+			"type": "response.output_item.done", "output_index": reasoningIndex, "item": item,
+		})
+		startedReasoning = false
+	}
 
 	scanner := bufio.NewScanner(strings.NewReader(raw))
 	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
@@ -676,7 +709,27 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 		}
 		choice, _ := choices[0].(map[string]interface{})
 		delta, _ := choice["delta"].(map[string]interface{})
+		if value := strings.TrimSpace(fmt.Sprint(firstNonNil(delta["reasoning_content"], delta["reasoning"]))); value != "" && value != "<nil>" {
+			if !startedReasoning {
+				startedReasoning = true
+				reasoningIndex = len(output)
+				output = append(output, nil)
+				writeSSEJSON("response.output_item.added", map[string]interface{}{
+					"type": "response.output_item.added", "output_index": reasoningIndex,
+					"item": map[string]interface{}{"id": reasoningID, "type": "reasoning", "status": "in_progress", "summary": []interface{}{}},
+				})
+				writeSSEJSON("response.reasoning_summary_part.added", map[string]interface{}{
+					"type": "response.reasoning_summary_part.added", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0,
+					"part": map[string]interface{}{"type": "summary_text", "text": ""},
+				})
+			}
+			reasoning.WriteString(value)
+			writeSSEJSON("response.reasoning_summary_text.delta", map[string]interface{}{
+				"type": "response.reasoning_summary_text.delta", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0, "delta": value,
+			})
+		}
 		if content, ok := delta["content"].(string); ok && content != "" {
+			closeReasoning()
 			if !startedMessage {
 				startedMessage = true
 				writeSSEJSON("response.output_item.added", map[string]interface{}{
@@ -694,6 +747,7 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 			})
 		}
 		for _, rawCall := range interfaceSlice(delta["tool_calls"]) {
+			closeReasoning()
 			call, _ := rawCall.(map[string]interface{})
 			item := responseFunctionCallItem(call)
 			if item == nil {
@@ -724,6 +778,7 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 		writeSSEBytes(w, "", []byte("[DONE]"))
 		return
 	}
+	closeReasoning()
 	if startedMessage {
 		outputIndex := len(output)
 		fullText := text.String()

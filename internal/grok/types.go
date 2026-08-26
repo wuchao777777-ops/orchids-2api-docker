@@ -64,21 +64,27 @@ type VideosRequest struct {
 }
 
 type videoJob struct {
-	ID              string
-	Model           string
-	Prompt          string
-	Seconds         int
-	Size            string
-	Quality         string
-	CreatedAt       int64
-	Status          string
-	Progress        int
-	CompletedAt     int64
-	Error           map[string]interface{}
-	VideoURL        string
-	ContentPath     string
-	RemixedFromID   string
-	InputReferences []string
+	ID                string
+	Model             string
+	Prompt            string
+	Seconds           int
+	Size              string
+	Quality           string
+	CreatedAt         int64
+	Status            string
+	Progress          int
+	CompletedAt       int64
+	Error             map[string]interface{}
+	VideoURL          string
+	ContentPath       string
+	RemixedFromID     string
+	InputReferences   []string
+	Operation         string
+	StandardAPI       bool
+	OwnerHash         string
+	AccountID         int64
+	Provider          string
+	UpstreamRequestID string
 }
 
 type ImageConfig struct {

@@ -33,6 +33,10 @@ type ModelSpec struct {
 	PreferBest    bool
 	IsImage       bool
 	IsVideo       bool
+	IsTTS         bool
+	IsSTT         bool
+	IsRealtime    bool
+	MediaAPIOnly  bool
 	// Upstream explicitly routes the model; UpstreamAuto derives from fields.
 	Upstream UpstreamKind
 }
@@ -56,6 +60,15 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-imagine-image-pro", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-video", Name: "Grok Imagine Video", UpstreamModel: "imagine-video-gen", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsVideo: true},
+	{ID: "grok-imagine-video-1.5", Name: "Grok Imagine Video 1.5", UpstreamModel: "grok-imagine-video-1.5", Upstream: UpstreamConsole, IsVideo: true, MediaAPIOnly: true},
+	{ID: "grok-voice-latest", Name: "Grok Voice Latest", UpstreamModel: "grok-voice-latest", Upstream: UpstreamConsole, IsTTS: true, IsRealtime: true},
+	{ID: "grok-voice-think-fast-2.0", Name: "Grok Voice Think Fast 2.0", UpstreamModel: "grok-voice-think-fast-2.0", Upstream: UpstreamConsole, IsTTS: true, IsRealtime: true},
+	{ID: "grok-voice-think-fast-1.0", Name: "Grok Voice Think Fast 1.0", UpstreamModel: "grok-voice-think-fast-1.0", Upstream: UpstreamConsole, IsTTS: true, IsRealtime: true},
+	{ID: "grok-stt", Name: "Grok Speech to Text", UpstreamModel: "grok-stt", Upstream: UpstreamConsole, IsSTT: true},
+}
+
+func (m ModelSpec) SupportsConversation() bool {
+	return !m.IsTTS && !m.IsSTT && !m.IsRealtime && !m.MediaAPIOnly
 }
 
 var modelByID = func() map[string]ModelSpec {

@@ -211,6 +211,60 @@ func TestStreamChat_FallsBackToTokenWhenModelResponseMissing(t *testing.T) {
 	}
 }
 
+func TestStreamChat_SeparatesThinkingFromVisibleContent(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(
+		`{"result":{"response":{"isThinking":true,"token":"plan "}}}` +
+			`{"result":{"response":{"isThinking":true,"token":"the answer"}}}` +
+			`{"result":{"response":{"modelResponse":{"message":"The answer is 42."}}}}`,
+	)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "answer?"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
+	raw := rec.Body.String()
+	if !strings.Contains(raw, `"reasoning_content":"plan "`) || !strings.Contains(raw, `"reasoning_content":"the answer"`) {
+		t.Fatalf("reasoning deltas missing: %q", raw)
+	}
+	if strings.Contains(strings.Join(extractStreamTextContents(t, raw), ""), "plan the answer") {
+		t.Fatalf("thinking leaked into content: %q", raw)
+	}
+	if got := extractStreamFinalMessageContent(t, raw); got != "The answer is 42." {
+		t.Fatalf("final content=%q raw=%q", got, raw)
+	}
+}
+
+func TestCollectChat_SeparatesThinkingFromVisibleContent(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(
+		`{"result":{"response":{"isThinking":true,"token":"private plan"}}}` +
+			`{"result":{"response":{"modelResponse":{"message":"Public answer."}}}}`,
+	)
+	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "answer?"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
+
+	var response map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	choice := interfaceSlice(response["choices"])[0].(map[string]interface{})
+	message := choice["message"].(map[string]interface{})
+	if message["content"] != "Public answer." || message["reasoning_content"] != "private plan" {
+		t.Fatalf("message=%#v", message)
+	}
+}
+
+func TestIsThinkingResponseAcceptsKnownEnvelopeShapes(t *testing.T) {
+	for _, response := range []map[string]interface{}{
+		{"isThinking": true},
+		{"is_thinking": "true"},
+		{"result": map[string]interface{}{"response": map[string]interface{}{"isThinking": true}}},
+	} {
+		if !isThinkingResponse(response) {
+			t.Fatalf("thinking shape not detected: %#v", response)
+		}
+	}
+}
+
 func TestStreamChat_RewriteFallsBackToFinalSnapshot(t *testing.T) {
 	h := &Handler{}
 	rec := httptest.NewRecorder()

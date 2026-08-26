@@ -39,6 +39,12 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func writeJSONStatus(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
 // decodeJSONBody decodes the request body into v and writes the standard
 // 400 response on failure.
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, v interface{}) bool {

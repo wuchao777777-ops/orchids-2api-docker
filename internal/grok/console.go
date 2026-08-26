@@ -15,7 +15,13 @@ import (
 	"orchids-api/internal/debug"
 )
 
-const consoleResponsesURL = "https://console.x.ai/v1/responses"
+func (h *Handler) consoleURL(path string) string {
+	base := "https://console.x.ai/v1"
+	if h != nil && h.cfg != nil {
+		base = h.cfg.GrokConsoleBaseURLOrDefault()
+	}
+	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
+}
 
 type consoleContentBlock struct {
 	Type string `json:"type"`
@@ -316,7 +322,7 @@ func (h *Handler) doConsole(ctx context.Context, token string, payload map[strin
 	if err != nil {
 		return nil, err
 	}
-	resp, err := h.client.doConsoleDPoPRequest(ctx, token, http.MethodPost, consoleResponsesURL, body)
+	resp, err := h.client.doConsoleDPoPRequest(ctx, token, http.MethodPost, h.consoleURL("responses"), body)
 	if err != nil {
 		noteConsoleRateLimitError(err)
 		return nil, err
@@ -577,7 +583,7 @@ func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	resp, err := h.doConsoleWithAutoSwitch(ctx, sess, payload)
-	h.finishUpstreamChat(ctx, w, req, sess, logger, "console", consoleResponsesURL,
+	h.finishUpstreamChat(ctx, w, req, sess, logger, "console", h.consoleURL("responses"),
 		func() http.Header { return h.client.consoleHeaders(sess.token) }, payload, resp, err)
 }
 
@@ -646,6 +652,7 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 		return
 	}
 	text := consoleExtractMessageText(raw)
+	reasoning := consoleExtractReasoningText(raw)
 	annotations := consoleChatAnnotations(consoleFlatAnnotations(raw))
 	toolCalls := consoleToolCallsFromOutput(raw)
 	message := map[string]interface{}{
@@ -653,6 +660,9 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 		"content":     text,
 		"refusal":     nil,
 		"annotations": annotations,
+	}
+	if strings.TrimSpace(reasoning) != "" {
+		message["reasoning_content"] = reasoning
 	}
 	finishReason := "stop"
 	if len(toolCalls) > 0 {
@@ -674,9 +684,45 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 			"message":       message,
 			"finish_reason": finishReason,
 		}},
-		"usage": firstUsage(consoleUsage(raw), buildChatUsagePayload(req, text, toolCalls)),
+		"usage": firstUsage(consoleUsage(raw), addReasoningUsage(buildChatUsagePayload(req, text, toolCalls), reasoning)),
 	}
 	writeJSON(w, resp)
+}
+
+func consoleExtractReasoningText(raw map[string]interface{}) string {
+	if raw == nil {
+		return ""
+	}
+	var rawText strings.Builder
+	var summaryText strings.Builder
+	for _, value := range interfaceSlice(raw["output"]) {
+		item, _ := value.(map[string]interface{})
+		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
+			continue
+		}
+		for _, value := range interfaceSlice(item["content"]) {
+			part, _ := value.(map[string]interface{})
+			if part == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(part["type"])), "reasoning_text") {
+				continue
+			}
+			if text := fmt.Sprint(part["text"]); strings.TrimSpace(text) != "" && text != "<nil>" {
+				rawText.WriteString(text)
+			}
+		}
+		for _, value := range interfaceSlice(item["summary"]) {
+			part, _ := value.(map[string]interface{})
+			if part == nil {
+				continue
+			}
+			if text := fmt.Sprint(part["text"]); strings.TrimSpace(text) != "" && text != "<nil>" {
+				summaryText.WriteString(text)
+			}
+		}
+	}
+	if rawText.Len() > 0 {
+		return rawText.String()
+	}
+	return summaryText.String()
 }
 
 func consoleToolCallsFromOutput(raw map[string]interface{}) []map[string]interface{} {
@@ -816,10 +862,28 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	var event string
 	var final strings.Builder
+	var reasoning strings.Builder
+	var reasoningSummary strings.Builder
+	rawReasoningSeen := false
 	var annotations []map[string]interface{}
 	var finalUsage map[string]interface{}
 	var toolCalls []*consoleStreamToolCall
 	var activeToolCall *consoleStreamToolCall
+	emitReasoning := func(value string) {
+		if value == "" {
+			return
+		}
+		reasoning.WriteString(value)
+		raw := appendChatCompletionReasoningChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, value)
+		writeSSE(w, flusher, "", raw)
+	}
+	flushReasoningSummary := func() {
+		if rawReasoningSeen || reasoningSummary.Len() == 0 {
+			return
+		}
+		emitReasoning(reasoningSummary.String())
+		reasoningSummary.Reset()
+	}
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "event:") {
@@ -845,6 +909,18 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		eventLower := strings.ToLower(strings.TrimSpace(event))
 		if eventLower == "" {
 			eventLower = strings.ToLower(strings.TrimSpace(fmt.Sprint(ev["type"])))
+		}
+		if reasoningDelta := consoleReasoningDelta(eventLower, ev); reasoningDelta != "" {
+			if strings.Contains(eventLower, "reasoning_text") && !strings.Contains(eventLower, "summary") {
+				if !rawReasoningSeen {
+					rawReasoningSeen = true
+					reasoningSummary.Reset()
+				}
+				emitReasoning(reasoningDelta)
+			} else {
+				reasoningSummary.WriteString(reasoningDelta)
+			}
+			continue
 		}
 		if item, _ := ev["item"].(map[string]interface{}); item != nil && strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "function_call") {
 			name := strings.TrimSpace(fmt.Sprint(item["name"]))
@@ -890,7 +966,10 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 			}
 			continue
 		}
-		content := consoleDeltaText(event, ev)
+		if strings.Contains(eventLower, "output_text") {
+			flushReasoningSummary()
+		}
+		content := consoleDeltaText(eventLower, ev)
 		if content == "" {
 			continue
 		}
@@ -902,6 +981,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		writeSSEStreamError(w, flusher, nil, "console stream read error: "+err.Error())
 		return
 	}
+	flushReasoningSummary()
 	indexedToolCalls := make([]map[string]interface{}, 0, len(toolCalls))
 	for _, tc := range toolCalls {
 		if tc == nil || strings.TrimSpace(tc.Name) == "" {
@@ -909,7 +989,10 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		}
 		indexedToolCalls = append(indexedToolCalls, tc.openAIToolCall(len(indexedToolCalls)))
 	}
-	usage := firstUsage(finalUsage, buildChatUsagePayload(req, final.String(), indexedToolCalls))
+	usage := finalUsage
+	if len(usage) == 0 {
+		usage = addReasoningUsage(buildChatUsagePayload(req, final.String(), indexedToolCalls), reasoning.String())
+	}
 	if len(indexedToolCalls) > 0 {
 		raw = appendChatCompletionToolCallsChunkWithUsage(nil, id, time.Now().Unix(), req.Model, fingerprint, indexedToolCalls, "tool_calls", true, usage)
 		writeSSE(w, flusher, "", raw)
@@ -923,7 +1006,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 
 func consoleDeltaText(event string, ev map[string]interface{}) string {
 	event = strings.ToLower(strings.TrimSpace(event))
-	if !strings.Contains(event, "delta") {
+	if !strings.Contains(event, "delta") || strings.Contains(event, "reasoning") {
 		return ""
 	}
 	for _, key := range []string{"delta", "text"} {
@@ -941,6 +1024,21 @@ func consoleDeltaText(event string, ev map[string]interface{}) string {
 	}
 	if strings.Contains(event, "output_text") {
 		return consoleExtractText(ev)
+	}
+	return ""
+}
+
+func consoleReasoningDelta(event string, ev map[string]interface{}) string {
+	event = strings.ToLower(strings.TrimSpace(event))
+	if !strings.Contains(event, "reasoning") || !strings.Contains(event, "delta") {
+		return ""
+	}
+	for _, key := range []string{"delta", "text"} {
+		if value, ok := ev[key]; ok && value != nil {
+			if text, ok := value.(string); ok && text != "" {
+				return text
+			}
+		}
 	}
 	return ""
 }

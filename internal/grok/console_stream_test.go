@@ -1,11 +1,70 @@
 package grok
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestStreamConsoleChatSeparatesReasoningFromContent(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	stream := strings.Join([]string{
+		"event: response.reasoning_summary_text.delta",
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"plan first"}`,
+		"",
+		"event: response.output_text.delta",
+		`data: {"type":"response.output_text.delta","delta":"final answer"}`,
+		"",
+	}, "\n")
+	(&Handler{}).streamConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(stream))
+	raw := recorder.Body.String()
+	if !strings.Contains(raw, `"reasoning_content":"plan first"`) {
+		t.Fatalf("reasoning delta missing: %q", raw)
+	}
+	if !strings.Contains(raw, `"content":"final answer"`) {
+		t.Fatalf("visible content missing: %q", raw)
+	}
+	if strings.Contains(raw, `"content":"plan first"`) {
+		t.Fatalf("reasoning leaked into visible content: %q", raw)
+	}
+}
+
+func TestStreamConsoleChatPrefersRawReasoningOverDuplicateSummary(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	stream := strings.Join([]string{
+		"event: response.reasoning_summary_text.delta",
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"duplicate summary"}`,
+		"",
+		"event: response.reasoning_text.delta",
+		`data: {"type":"response.reasoning_text.delta","delta":"raw reasoning"}`,
+		"",
+		"event: response.output_text.delta",
+		`data: {"type":"response.output_text.delta","delta":"answer"}`,
+		"",
+	}, "\n")
+	(&Handler{}).streamConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(stream))
+	raw := recorder.Body.String()
+	if !strings.Contains(raw, `"reasoning_content":"raw reasoning"`) || strings.Contains(raw, "duplicate summary") {
+		t.Fatalf("raw reasoning precedence failed: %q", raw)
+	}
+}
+
+func TestCollectConsoleChatSeparatesReasoningFromContent(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	body := `{"id":"resp_1","output":[{"id":"rs_1","type":"reasoning","content":[{"type":"reasoning_text","text":"private plan"}],"summary":[{"type":"summary_text","text":"duplicate summary"}]},{"id":"msg_1","type":"message","content":[{"type":"output_text","text":"public answer"}]}]}`
+	(&Handler{}).collectConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(body))
+	var response map[string]interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	choice := interfaceSlice(response["choices"])[0].(map[string]interface{})
+	message := choice["message"].(map[string]interface{})
+	if message["content"] != "public answer" || message["reasoning_content"] != "private plan" {
+		t.Fatalf("message=%#v", message)
+	}
+}
 
 type failingConsoleStreamReader struct {
 	served bool

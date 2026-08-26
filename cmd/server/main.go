@@ -81,6 +81,11 @@ func main() {
 			slog.Debug("Config loaded from Redis")
 		}
 	}
+	if err := grok.ConfigureMediaStorage(cfg); err != nil {
+		slog.Error("Failed to initialize media storage", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Media storage initialized", "directory", cfg.MediaDir, "replicas", cfg.DeploymentReplicas, "shared", cfg.SharedMedia)
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Duration(cfg.LoadBalancerCacheTTL)*time.Second)
 

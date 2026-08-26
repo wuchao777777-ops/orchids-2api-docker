@@ -166,12 +166,56 @@ type StoredResponse struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+// StoredVideoJob is the durable, owner-scoped state required to retrieve an
+// asynchronous video result after the serving process restarts. Media bytes
+// remain in the configured local cache; this record only stores metadata.
+type StoredVideoJob struct {
+	ID                string    `json:"id"`
+	OwnerHash         string    `json:"owner_hash"`
+	AccountID         int64     `json:"account_id,omitempty"`
+	Provider          string    `json:"provider,omitempty"`
+	Model             string    `json:"model"`
+	Prompt            string    `json:"prompt,omitempty"`
+	Seconds           int       `json:"seconds,omitempty"`
+	Size              string    `json:"size,omitempty"`
+	Quality           string    `json:"quality,omitempty"`
+	Status            string    `json:"status"`
+	Progress          int       `json:"progress"`
+	VideoURL          string    `json:"video_url,omitempty"`
+	ContentPath       string    `json:"content_path,omitempty"`
+	UpstreamRequestID string    `json:"upstream_request_id,omitempty"`
+	RemixedFromID     string    `json:"remixed_from_id,omitempty"`
+	Operation         string    `json:"operation,omitempty"`
+	StandardAPI       bool      `json:"standard_api,omitempty"`
+	ErrorCode         string    `json:"error_code,omitempty"`
+	ErrorMessage      string    `json:"error_message,omitempty"`
+	CreatedAt         int64     `json:"created_at"`
+	CompletedAt       int64     `json:"completed_at,omitempty"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// StoredMediaInput points at an immutable temporary image or video accepted
+// for later use through a standard API file_id.
+type StoredMediaInput struct {
+	ID          string    `json:"id"`
+	OwnerHash   string    `json:"owner_hash"`
+	Kind        string    `json:"kind"`
+	MIMEType    string    `json:"mime_type"`
+	ContentPath string    `json:"content_path"`
+	SizeBytes   int64     `json:"size_bytes"`
+	CreatedAt   time.Time `json:"created_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
 type Store struct {
 	accounts  accountStore
 	settings  settingsStore
 	apiKeys   apiKeyStore
 	models    modelStore
 	responses responseStore
+	videoJobs videoJobStore
+	media     mediaInputStore
 }
 
 type Options struct {
@@ -225,6 +269,22 @@ type responseStore interface {
 	DeleteStoredResponse(ctx context.Context, responseID, ownerHash string) error
 }
 
+type videoJobStore interface {
+	SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error
+	GetStoredVideoJob(ctx context.Context, id, ownerHash string) (*StoredVideoJob, error)
+	ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob, error)
+	DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error
+	AcquireVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error)
+	RefreshVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error)
+	ReleaseVideoJobLease(ctx context.Context, id, ownerHash, holder string) (bool, error)
+}
+
+type mediaInputStore interface {
+	SaveStoredMediaInput(ctx context.Context, input *StoredMediaInput, ttl time.Duration) error
+	GetStoredMediaInput(ctx context.Context, id, ownerHash string) (*StoredMediaInput, error)
+	DeleteStoredMediaInput(ctx context.Context, id, ownerHash string) error
+}
+
 func New(opts Options) (*Store, error) {
 	store := &Store{}
 	redisStore, err := newRedisStore(opts.RedisAddr, opts.RedisPassword, opts.RedisDB, opts.RedisPrefix, opts.CredentialEncryptionKey)
@@ -236,6 +296,8 @@ func New(opts Options) (*Store, error) {
 	store.apiKeys = redisStore
 	store.models = redisStore
 	store.responses = redisStore
+	store.videoJobs = redisStore
+	store.media = redisStore
 	if err := redisStore.migrateLegacyAccountCredentials(context.Background()); err != nil {
 		_ = redisStore.Close()
 		return nil, fmt.Errorf("failed to migrate account credentials: %w", err)
@@ -386,6 +448,11 @@ func buildGrokSeedModels() []Model {
 		{"grok-imagine-image-quality", "Grok Imagine Image Quality"},
 		{"grok-imagine-image-edit", "Grok Imagine Image Edit"},
 		{"grok-imagine-video", "Grok Imagine Video"},
+		{"grok-imagine-video-1.5", "Grok Imagine Video 1.5"},
+		{"grok-voice-latest", "Grok Voice Latest"},
+		{"grok-voice-think-fast-2.0", "Grok Voice Think Fast 2.0"},
+		{"grok-voice-think-fast-1.0", "Grok Voice Think Fast 1.0"},
+		{"grok-stt", "Grok Speech to Text"},
 	}
 	models := make([]Model, 0, len(items))
 	for i, item := range items {
@@ -609,6 +676,76 @@ func (s *Store) DeleteStoredResponse(ctx context.Context, responseID, ownerHash 
 		return fmt.Errorf("response store not configured")
 	}
 	return s.responses.DeleteStoredResponse(ctx, responseID, ownerHash)
+}
+
+func (s *Store) SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error {
+	if s == nil || s.videoJobs == nil {
+		return fmt.Errorf("video job store not configured")
+	}
+	return s.videoJobs.SaveStoredVideoJob(ctx, job, ttl)
+}
+
+func (s *Store) GetStoredVideoJob(ctx context.Context, id, ownerHash string) (*StoredVideoJob, error) {
+	if s == nil || s.videoJobs == nil {
+		return nil, fmt.Errorf("video job store not configured")
+	}
+	return s.videoJobs.GetStoredVideoJob(ctx, id, ownerHash)
+}
+
+func (s *Store) ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob, error) {
+	if s == nil || s.videoJobs == nil {
+		return nil, fmt.Errorf("video job store not configured")
+	}
+	return s.videoJobs.ListStoredVideoJobs(ctx)
+}
+
+func (s *Store) DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error {
+	if s == nil || s.videoJobs == nil {
+		return fmt.Errorf("video job store not configured")
+	}
+	return s.videoJobs.DeleteStoredVideoJob(ctx, id, ownerHash)
+}
+
+func (s *Store) AcquireVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error) {
+	if s == nil || s.videoJobs == nil {
+		return false, fmt.Errorf("video job store not configured")
+	}
+	return s.videoJobs.AcquireVideoJobLease(ctx, id, ownerHash, holder, ttl)
+}
+
+func (s *Store) RefreshVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error) {
+	if s == nil || s.videoJobs == nil {
+		return false, fmt.Errorf("video job store not configured")
+	}
+	return s.videoJobs.RefreshVideoJobLease(ctx, id, ownerHash, holder, ttl)
+}
+
+func (s *Store) ReleaseVideoJobLease(ctx context.Context, id, ownerHash, holder string) (bool, error) {
+	if s == nil || s.videoJobs == nil {
+		return false, fmt.Errorf("video job store not configured")
+	}
+	return s.videoJobs.ReleaseVideoJobLease(ctx, id, ownerHash, holder)
+}
+
+func (s *Store) SaveStoredMediaInput(ctx context.Context, input *StoredMediaInput, ttl time.Duration) error {
+	if s == nil || s.media == nil {
+		return fmt.Errorf("media input store not configured")
+	}
+	return s.media.SaveStoredMediaInput(ctx, input, ttl)
+}
+
+func (s *Store) GetStoredMediaInput(ctx context.Context, id, ownerHash string) (*StoredMediaInput, error) {
+	if s == nil || s.media == nil {
+		return nil, fmt.Errorf("media input store not configured")
+	}
+	return s.media.GetStoredMediaInput(ctx, id, ownerHash)
+}
+
+func (s *Store) DeleteStoredMediaInput(ctx context.Context, id, ownerHash string) error {
+	if s == nil || s.media == nil {
+		return fmt.Errorf("media input store not configured")
+	}
+	return s.media.DeleteStoredMediaInput(ctx, id, ownerHash)
 }
 
 // Model wrappers

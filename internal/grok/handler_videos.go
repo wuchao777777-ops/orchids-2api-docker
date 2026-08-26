@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -13,8 +14,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/middleware"
+	"orchids-api/internal/store"
 )
 
 const videoJobTTL = time.Hour
@@ -39,19 +44,10 @@ func putVideoJob(job *videoJob) {
 	videoJobs[job.ID] = job
 }
 
-func getVideoJob(id string) (*videoJob, bool) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil, false
-	}
-	videoJobsMu.Lock()
-	defer videoJobsMu.Unlock()
-	cleanupVideoJobsLocked(time.Now())
-	job, ok := videoJobs[id]
-	return job, ok
-}
-
 func (j *videoJob) toMap() map[string]interface{} {
+	if j.StandardAPI {
+		return j.toStandardMap()
+	}
 	out := map[string]interface{}{
 		"id":         j.ID,
 		"object":     "video",
@@ -80,6 +76,192 @@ func (j *videoJob) toMap() map[string]interface{} {
 		out["remixed_from_video_id"] = j.RemixedFromID
 	}
 	return out
+}
+
+func (j *videoJob) toStandardMap() map[string]interface{} {
+	if j == nil {
+		return map[string]interface{}{"status": "failed", "error": map[string]interface{}{"code": "internal_error", "message": "video job is unavailable"}}
+	}
+	switch j.Status {
+	case "completed":
+		video := map[string]interface{}{
+			"url":                "/v1/videos/" + j.ID + "/content",
+			"respect_moderation": true,
+		}
+		if j.Operation == "generate" && j.Seconds > 0 {
+			video["duration"] = j.Seconds
+		}
+		return map[string]interface{}{
+			"status": "done", "model": j.Model, "progress": 100, "video": video,
+		}
+	case "failed":
+		message := "video operation failed"
+		if j.Error != nil {
+			if value := strings.TrimSpace(fmt.Sprint(j.Error["message"])); value != "" && value != "<nil>" {
+				message = value
+			}
+		}
+		return map[string]interface{}{
+			"status": "failed", "error": map[string]interface{}{"code": "internal_error", "message": message},
+		}
+	default:
+		return map[string]interface{}{
+			"status": "pending", "model": j.Model, "progress": min(99, clampProgress(j.Progress)),
+		}
+	}
+}
+
+func videoRequestOwner(r *http.Request) string {
+	if r == nil {
+		return "anonymous"
+	}
+	owner := strings.TrimSpace(middleware.APIKeyFingerprint(r.Context()))
+	if owner == "" {
+		return "anonymous"
+	}
+	return owner
+}
+
+func storedVideoJobFromRuntime(job *videoJob) *store.StoredVideoJob {
+	if job == nil {
+		return nil
+	}
+	owner := strings.TrimSpace(job.OwnerHash)
+	if owner == "" {
+		owner = "anonymous"
+	}
+	errorCode := ""
+	errorMessage := ""
+	if job.Error != nil {
+		errorCode = strings.TrimSpace(fmt.Sprint(job.Error["code"]))
+		errorMessage = strings.TrimSpace(fmt.Sprint(job.Error["message"]))
+		if errorCode == "<nil>" {
+			errorCode = ""
+		}
+		if errorMessage == "<nil>" {
+			errorMessage = ""
+		}
+	}
+	return &store.StoredVideoJob{
+		ID: job.ID, OwnerHash: owner, AccountID: job.AccountID, Provider: job.Provider,
+		Model: job.Model, Prompt: truncateVideoJobText(job.Prompt, 64<<10),
+		Seconds: job.Seconds, Size: job.Size, Quality: job.Quality,
+		Status: job.Status, Progress: job.Progress, VideoURL: job.VideoURL,
+		ContentPath: job.ContentPath, UpstreamRequestID: job.UpstreamRequestID, RemixedFromID: job.RemixedFromID,
+		Operation: job.Operation, StandardAPI: job.StandardAPI,
+		ErrorCode: truncateVideoJobText(errorCode, 256), ErrorMessage: truncateVideoJobText(errorMessage, 4<<10),
+		CreatedAt: job.CreatedAt, CompletedAt: job.CompletedAt,
+	}
+}
+
+func truncateVideoJobText(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	end := limit
+	for end > 0 && !utf8.ValidString(value[:end]) {
+		end--
+	}
+	return value[:end]
+}
+
+func cloneVideoJob(job *videoJob) *videoJob {
+	if job == nil {
+		return nil
+	}
+	cloned := *job
+	cloned.InputReferences = append([]string(nil), job.InputReferences...)
+	if job.Error != nil {
+		cloned.Error = make(map[string]interface{}, len(job.Error))
+		for key, value := range job.Error {
+			cloned.Error[key] = value
+		}
+	}
+	return &cloned
+}
+
+func runtimeVideoJobFromStored(stored *store.StoredVideoJob) *videoJob {
+	if stored == nil {
+		return nil
+	}
+	job := &videoJob{
+		ID: stored.ID, OwnerHash: stored.OwnerHash, AccountID: stored.AccountID, Provider: stored.Provider,
+		Model: stored.Model, Prompt: stored.Prompt,
+		Seconds: stored.Seconds, Size: stored.Size, Quality: stored.Quality,
+		Status: stored.Status, Progress: stored.Progress, VideoURL: stored.VideoURL,
+		ContentPath: stored.ContentPath, UpstreamRequestID: stored.UpstreamRequestID, RemixedFromID: stored.RemixedFromID,
+		Operation: stored.Operation, StandardAPI: stored.StandardAPI,
+		CreatedAt: stored.CreatedAt, CompletedAt: stored.CompletedAt,
+	}
+	if stored.ErrorCode != "" || stored.ErrorMessage != "" {
+		job.Error = map[string]interface{}{"code": stored.ErrorCode, "message": stored.ErrorMessage}
+	}
+	if !validPersistedVideoContentPath(job.ContentPath) {
+		job.ContentPath = ""
+	}
+	return job
+}
+
+func validPersistedVideoContentPath(path string) bool {
+	return strings.TrimSpace(path) == "" || validCachedMediaContentPath(path, "video")
+}
+
+func (h *Handler) persistVideoJob(ctx context.Context, job *videoJob) {
+	if h == nil || h.lb == nil || h.lb.Store == nil || job == nil {
+		return
+	}
+	videoJobsMu.Lock()
+	snapshot := storedVideoJobFromRuntime(job)
+	videoJobsMu.Unlock()
+	if snapshot == nil {
+		return
+	}
+	createdAt := time.Unix(snapshot.CreatedAt, 0)
+	if snapshot.CreatedAt <= 0 {
+		createdAt = time.Now()
+	}
+	ttl := time.Until(createdAt.Add(videoJobTTL))
+	if ttl <= 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if err := h.lb.Store.SaveStoredVideoJob(persistCtx, snapshot, ttl); err != nil {
+		slog.Warn("failed to persist video job", "video_id", snapshot.ID, "status", snapshot.Status, "error", err)
+	}
+}
+
+func (h *Handler) lookupVideoJob(ctx context.Context, id, owner string) (*videoJob, bool) {
+	videoJobsMu.Lock()
+	cleanupVideoJobsLocked(time.Now())
+	if job, ok := videoJobs[strings.TrimSpace(id)]; ok {
+		jobOwner := strings.TrimSpace(job.OwnerHash)
+		if jobOwner == "" {
+			jobOwner = "anonymous"
+		}
+		if jobOwner == owner {
+			snapshot := cloneVideoJob(job)
+			videoJobsMu.Unlock()
+			return snapshot, true
+		}
+	}
+	videoJobsMu.Unlock()
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		return nil, false
+	}
+	stored, err := h.lb.Store.GetStoredVideoJob(ctx, id, owner)
+	if err != nil {
+		return nil, false
+	}
+	job := runtimeVideoJobFromStored(stored)
+	if job == nil {
+		return nil, false
+	}
+	putVideoJob(job)
+	return cloneVideoJob(job), true
 }
 
 func parseVideosRequest(r *http.Request) (VideosRequest, error) {
@@ -226,20 +408,25 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		Status:          "queued",
 		Progress:        0,
 		InputReferences: req.InputReferences,
+		Operation:       "generate",
+		OwnerHash:       videoRequestOwner(r),
 	}
 	putVideoJob(job)
+	h.persistVideoJob(r.Context(), job)
+	response := job.toMap()
 	go h.runVideoCreateJob(context.Background(), job, spec, cfg)
-	writeJSON(w, job.toMap())
+	writeJSON(w, response)
 }
 
 func (h *Handler) runVideoCreateJob(ctx context.Context, job *videoJob, spec ModelSpec, cfg *VideoConfig) {
 	update := func(status string, progress int) {
 		videoJobsMu.Lock()
-		defer videoJobsMu.Unlock()
 		job.Status = status
 		if progress >= 0 {
 			job.Progress = clampProgress(progress)
 		}
+		videoJobsMu.Unlock()
+		h.persistVideoJob(ctx, job)
 	}
 	update("in_progress", 1)
 
@@ -289,16 +476,22 @@ func (h *Handler) runVideoCreateJob(ctx context.Context, job *videoJob, spec Mod
 	job.ContentPath = filepath.Join(cacheBaseDir, "video", name)
 	job.RemixedFromID = artifact.VideoPostID
 	videoJobsMu.Unlock()
+	h.persistVideoJob(ctx, job)
 }
 
 func (h *Handler) failVideoJob(job *videoJob, err error) {
+	h.failVideoJobWithCode(job, "video_generation_failed", err)
+}
+
+func (h *Handler) failVideoJobWithCode(job *videoJob, code string, err error) {
 	videoJobsMu.Lock()
-	defer videoJobsMu.Unlock()
 	job.Status = "failed"
 	job.Error = map[string]interface{}{
-		"code":    "video_generation_failed",
+		"code":    code,
 		"message": err.Error(),
 	}
+	videoJobsMu.Unlock()
+	h.persistVideoJob(context.Background(), job)
 }
 
 func (h *Handler) HandleVideosRetrieve(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +502,7 @@ func (h *Handler) HandleVideosRetrieve(w http.ResponseWriter, r *http.Request) {
 	if idx := strings.Index(videoID, "/"); idx >= 0 {
 		videoID = videoID[:idx]
 	}
-	job, ok := getVideoJob(videoID)
+	job, ok := h.lookupVideoJob(r.Context(), videoID, videoRequestOwner(r))
 	if !ok {
 		http.Error(w, "video not found", http.StatusNotFound)
 		return
@@ -322,7 +515,7 @@ func (h *Handler) HandleVideosContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	videoID := videoIDFromPath(r.URL.Path)
-	job, ok := getVideoJob(videoID)
+	job, ok := h.lookupVideoJob(r.Context(), videoID, videoRequestOwner(r))
 	if !ok {
 		http.Error(w, "video not found", http.StatusNotFound)
 		return
@@ -345,6 +538,9 @@ func videoIDFromPath(path string) string {
 	for _, prefix := range []string{"/grok/v1/videos/", "/v1/videos/"} {
 		if strings.HasPrefix(path, prefix) {
 			rest := strings.Trim(strings.TrimPrefix(path, prefix), "/")
+			if strings.HasPrefix(rest, "generations/") {
+				rest = strings.TrimPrefix(rest, "generations/")
+			}
 			rest = strings.TrimSuffix(rest, "/content")
 			rest = strings.Trim(rest, "/")
 			if idx := strings.Index(rest, "/"); idx >= 0 {

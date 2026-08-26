@@ -7,7 +7,7 @@ A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-com
 ## Current Status
 
 - `internal/handler` serves `warp` / `puter` for both `/v1/messages` and `/v1/chat/completions`
-- `internal/grok` handles Grok Messages, Responses, Chat, image, video, and local media endpoints
+- `internal/grok` handles Grok Messages, Responses, Chat, image, video, speech, and local media endpoints
 - per-channel model sync is available through `POST /api/models/refresh`
 - Puter non-stream Claude Messages regressions are covered for `Read`, `Write`, `Edit`, `Delete`, long-context, and multi-round `tool_result`
 
@@ -20,7 +20,7 @@ A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-com
 - admin UI and admin API
 - Redis-backed persistence
 - Prometheus metrics and optional `pprof`
-- Grok image generation, editing, and local media caching
+- Grok image generation/editing, Console video generation/edit/extension, Console TTS/STT/Realtime, and local media caching
 - API-key authentication by default, per-key model/RPM/expiration policies, and AES-GCM encryption for persisted account credentials
 
 ## Supported Channels
@@ -29,12 +29,14 @@ A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-com
 |---|---|
 | `warp` | `/warp/v1/messages`, `/warp/v1/chat/completions` |
 | `puter` | `/puter/v1/messages`, `/puter/v1/chat/completions` |
-| `grok` | `/grok/v1/messages`, `/grok/v1/responses`, `/grok/v1/chat/completions`, image, video, and file routes |
+| `grok` | `/grok/v1/messages`, `/grok/v1/responses`, `/grok/v1/chat/completions`, image, video, speech, and file routes |
 
 Unified model lookup:
 
 - `GET /v1/models`
 - `GET /v1/models/{id}`
+
+Standard Grok video routes include `/v1/videos/generations`, `/v1/videos/edits`, and `/v1/videos/extensions`; the legacy Web app-chat generator remains available at `/v1/videos`. Video jobs are isolated by API key and their metadata is persisted in Redis for one hour. Standard Console jobs that already obtained an upstream `request_id` resume polling with the original account after restart. A renewable 30-second Redis lease allows only one worker across instances and permits takeover after expiry. `media_dir` can be a shared filesystem mount. Multi-replica mode requires Redis, a unique `deployment_instance_id` per replica, one common `deployment_cluster_id`, and `shared_media=true`; startup validates a cluster marker and read/write access before workers start. `/v1/media/inputs` accepts temporary image/video uploads up to 20 MiB and returns an API-key-scoped `file_id` valid for 24 hours. Grok speech routes include native `/v1/tts`, `/v1/stt`, `/v1/realtime`, plus OpenAI-compatible `/v1/audio/speech`, `/v1/audio/tasks`, and `/v1/audio/transcriptions`. Transcriptions support `json`, `verbose_json`, and `text`; parameters that cannot be represented by Console STT are rejected explicitly.
 
 ## Documentation
 

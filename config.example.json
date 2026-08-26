@@ -14,8 +14,16 @@
   "redis_db": 0,
   "redis_prefix": "orchids:",
 
+  "deployment_comment": "Single instance defaults are shown. For multiple replicas, use one Redis, a unique deployment_instance_id per replica, the same deployment_cluster_id, and mount media_dir as shared read/write storage before setting shared_media=true.",
+  "deployment_replicas": 1,
+  "deployment_instance_id": "",
+  "deployment_cluster_id": "orchids",
+  "shared_media": false,
+  "media_dir": "data/tmp",
+
   "grok_comment": "Grok Build CLI upstream (cli-chat-proxy.grok.com/v1). Accounts with credential_type=\"oauth\" + oauth_access_token/oauth_refresh_token/oauth_expires_at use this. All fields optional; defaults shown.",
   "grok_cli_base_url": "https://cli-chat-proxy.grok.com/v1",
+  "grok_console_base_url": "https://console.x.ai/v1",
   "grok_cli_user_agent": "grok-cli/0.9.0",
   "grok_cli_client_version": "0.9.0",
   "grok_cli_client_identifier": "grok-cli",

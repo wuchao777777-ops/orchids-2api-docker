@@ -45,7 +45,35 @@ stored Response 归属记录按客户端 API Key 隔离。连续请求和资源�
 | `/grok/v1/files/{image\|video}/{name}` | GET | 本地缓存媒体文件 |
 | `/v1/files/{image\|video}/{name}` | GET | Grok 文件别名 |
 
-### 1.5 模型、健康与指标
+### 1.5 Grok 视频与语音
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/grok/v1/videos`、`/v1/videos` | POST | Web app-chat 旧版异步视频生成入口 |
+| `/grok/v1/videos/generations`、`/v1/videos/generations` | POST | Console DPoP 标准异步视频生成；基础模型与 1.5 |
+| `/grok/v1/videos/edits`、`/v1/videos/edits` | POST | Console DPoP 视频编辑；当前仅基础模型 |
+| `/grok/v1/videos/extensions`、`/v1/videos/extensions` | POST | Console DPoP 视频延长；当前仅基础模型 |
+| `/grok/v1/videos/{video_id}`、`/v1/videos/{video_id}` | GET | 查询视频任务；按创建任务的 API Key 隔离 |
+| `/grok/v1/videos/{video_id}/content`、`/v1/videos/{video_id}/content` | GET | 读取视频内容 |
+| `/grok/v1/media/inputs`、`/v1/media/inputs` | POST | 上传临时图片或视频；multipart 字段 `file`，单文件最大 20 MiB |
+| `/grok/v1/media/inputs/{file_id}`、`/v1/media/inputs/{file_id}` | GET / DELETE | 查询或删除调用方拥有的临时媒体输入 |
+| `/grok/v1/tts`、`/v1/tts` | POST | Console 原生 TTS；支持流式音频响应 |
+| `/grok/v1/tts/voices`、`/v1/tts/voices` | GET | 查询可用 Voice；路径后追加 `{voice_id}` 可查询单项 |
+| `/grok/v1/stt`、`/v1/stt` | POST / WebSocket | Console 原生 HTTP 或流式 STT |
+| `/grok/v1/realtime`、`/v1/realtime` | WebSocket | Console Realtime 语音双向代理 |
+| `/grok/v1/audio/speech`、`/v1/audio/speech` | POST | OpenAI speech 请求转换到 Console TTS |
+| `/grok/v1/audio/tasks`、`/v1/audio/tasks` | POST | `audio/speech` 兼容别名 |
+| `/grok/v1/audio/transcriptions`、`/v1/audio/transcriptions` | POST | OpenAI 音频转录兼容；支持 `json`、`verbose_json`、`text` |
+
+标准视频、TTS、STT 和 Realtime 只使用显式的 Grok Console SSO 账号，并通过 DPoP 请求上游。标准视频创建返回 `{"request_id":"video_..."}`，随后通过统一查询和内容端点读取结果。视频任务元数据按 API Key 所有者写入 Redis，TTL 为一小时；标准 Console 任务一旦取得上游 `request_id`，服务重启后会固定回原账号继续轮询和下载。每个运行任务持有可续期的 30 秒 Redis 原子租约，其他实例不会重复轮询或写结果；持有者失联后，租约过期即可由其他实例接管。`media_dir` 支持挂载共享文件系统，多副本启动时会验证 Redis、稳定实例 ID、集群标记和共享目录读写，因此完成视频和临时 `file_id` 可由任一副本读取。若进程在取得上游 ID 前中断，任务会明确变为 `video_resume_unavailable`，不会永久停留在 pending；旧 Web 分段视频任务不进行不安全重放。生成支持 `duration`（1–15）、`aspect_ratio`、`resolution`、`image`、`reference_images` 和 `reference_audios`；编辑要求 `prompt` 与 `video`；延长额外支持 2–10 秒的 `duration`。
+
+媒体输入上传返回 `file_id`、类型、MIME、字节数和过期时间。ID 使用 192-bit 随机值，元数据在 Redis 中保留 24 小时并按 API Key 所有者隔离；支持 jpeg、png、webp、gif、mp4、webm 和 quicktime。`image`、`reference_images` 与 `video` 的结构化输入可在 `url` 和 `file_id` 中二选一；一次标准视频请求解析的本地媒体总量不得超过 32 MiB。
+
+静态 HTTP/SOCKS 代理可用于语音 WebSocket；若启用托管 Grok 出口池，WebSocket 会在出口管理器支持租约式拨号前安全拒绝，避免绕过出口策略。
+
+`audio/transcriptions` 会明确拒绝无法无损转换到 Console STT 的 `prompt`、非零 `temperature` 和 `timestamp_granularities`，也不提供 `/audio/translations`。
+
+### 1.6 模型、健康与指标
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
@@ -144,7 +172,7 @@ stored Response 归属记录按客户端 API Key 隔离。连续请求和资源�
 
 - 默认要求 `Authorization: Bearer <API Key>`；Anthropic Messages 客户端也可发送 `x-api-key: <API Key>`
 - API Key 通过管理端 `/api/keys` 创建、禁用、设置访问策略和删除
-- 模型列表、Messages、Chat、Responses、图片和视频任务均执行该校验
+- 模型列表、Messages、Chat、Responses、图片、视频和语音任务均执行该校验
 - 只有在可信上游网关已经完成认证时，才应设置 `inference_auth_enabled=false`
 
 API Key 创建和更新支持以下策略字段：

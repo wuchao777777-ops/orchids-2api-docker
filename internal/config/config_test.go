@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -28,6 +29,12 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if cfg.ResponseStoreTTL != 720 {
 		t.Fatalf("ResponseStoreTTL=%d want=720", cfg.ResponseStoreTTL)
+	}
+	if cfg.DeploymentReplicas != 1 || cfg.DeploymentCluster != "orchids" {
+		t.Fatalf("deployment defaults = replicas %d cluster %q", cfg.DeploymentReplicas, cfg.DeploymentCluster)
+	}
+	if cfg.MediaDir != "data"+string(filepath.Separator)+"tmp" {
+		t.Fatalf("MediaDir=%q", cfg.MediaDir)
 	}
 }
 
@@ -80,11 +87,16 @@ func TestApplyHardcodedOverridesValues(t *testing.T) {
 
 func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 	cfg := Config{
-		Port:      "8080",
-		AdminUser: "myuser",
-		AdminPass: "mypass",
-		AdminPath: "/myadmin",
-		RedisAddr: "redis:6380",
+		Port:               "8080",
+		AdminUser:          "myuser",
+		AdminPass:          "mypass",
+		AdminPath:          "/myadmin",
+		RedisAddr:          "redis:6380",
+		DeploymentReplicas: 3,
+		DeploymentInstance: "replica-a",
+		DeploymentCluster:  "cluster-a",
+		SharedMedia:        true,
+		MediaDir:           "/srv/orchids-media",
 	}
 	ApplyDefaults(&cfg)
 
@@ -102,5 +114,8 @@ func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 	}
 	if cfg.RedisAddr != "redis:6380" {
 		t.Fatalf("RedisAddr=%q want=redis:6380", cfg.RedisAddr)
+	}
+	if cfg.DeploymentReplicas != 3 || cfg.DeploymentInstance != "replica-a" || cfg.DeploymentCluster != "cluster-a" || !cfg.SharedMedia || cfg.MediaDir != "/srv/orchids-media" {
+		t.Fatalf("deployment fields were not preserved: %+v", cfg)
 	}
 }

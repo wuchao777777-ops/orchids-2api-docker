@@ -70,3 +70,22 @@ func TestLimiter_RejectsWhenBusy(t *testing.T) {
 	close(block)
 	wg.Wait()
 }
+
+func TestLimitLongLivedDoesNotInjectExecutionDeadline(t *testing.T) {
+	cl := NewConcurrencyLimiter(1, 20*time.Millisecond, false)
+	handlerDone := make(chan bool, 1)
+	h := cl.LimitLongLived(func(w http.ResponseWriter, r *http.Request) {
+		_, hasDeadline := r.Context().Deadline()
+		time.Sleep(30 * time.Millisecond)
+		handlerDone <- hasDeadline || r.Context().Err() != nil
+		w.WriteHeader(http.StatusNoContent)
+	})
+	recorder := httptest.NewRecorder()
+	h(recorder, httptest.NewRequest(http.MethodGet, "http://x/realtime", nil))
+	if got := <-handlerDone; got {
+		t.Fatal("long-lived limiter injected or triggered an execution deadline")
+	}
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status=%d want=%d", recorder.Code, http.StatusNoContent)
+	}
+}

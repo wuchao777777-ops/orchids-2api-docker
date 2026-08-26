@@ -33,6 +33,7 @@ type Handler struct {
 	connTracker  loadbalancer.ConnTracker
 	modelCacheMu sync.RWMutex
 	modelCache   map[string]time.Time
+	instanceID   string
 }
 
 type chatAccountSession struct {
@@ -57,7 +58,11 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	if lb != nil {
 		cliClient.SetAccountStore(lb.Store)
 	}
-	return &Handler{
+	instanceID := "grok-" + randomHex(16)
+	if cfg != nil && strings.TrimSpace(cfg.DeploymentInstance) != "" {
+		instanceID = strings.TrimSpace(cfg.DeploymentInstance)
+	}
+	h := &Handler{
 		base:        handler.NewBaseHandler(lb),
 		cfg:         cfg,
 		lb:          lb,
@@ -65,7 +70,10 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 		cliClient:   cliClient,
 		connTracker: loadbalancer.NewMemoryConnTracker(),
 		modelCache:  make(map[string]time.Time),
+		instanceID:  instanceID,
 	}
+	h.recoverStoredConsoleVideoJobs(context.Background())
+	return h
 }
 
 func (h *Handler) currentClient() *Client {

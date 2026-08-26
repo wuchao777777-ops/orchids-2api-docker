@@ -13,6 +13,11 @@ var publicGrokModelIDs = []string{
 	"grok-imagine-image-quality",
 	"grok-imagine-image-edit",
 	"grok-imagine-video",
+	"grok-imagine-video-1.5",
+	"grok-voice-latest",
+	"grok-voice-think-fast-2.0",
+	"grok-voice-think-fast-1.0",
+	"grok-stt",
 }
 
 var publicGrokModelAllowlist = stringSet(publicGrokModelIDs)

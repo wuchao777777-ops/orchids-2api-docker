@@ -202,6 +202,23 @@ Build stored Responses 会按客户端 API Key 隔离，并固定回创建该 Re
 - `POST /grok/v1/images/edits`
 - `GET /grok/v1/files/{image|video}/{name}`
 
+### Grok 视频与语音
+
+- `POST /grok/v1/videos/generations`（Console 标准生成）
+- `POST /grok/v1/videos/edits`、`POST /grok/v1/videos/extensions`
+- `POST /grok/v1/videos`（保留的 Web app-chat 旧版生成入口）
+- `GET /grok/v1/videos/{video_id}` 与 `/content`
+- `POST /grok/v1/media/inputs`，以及 `GET` / `DELETE /grok/v1/media/inputs/{file_id}`
+- `POST /grok/v1/tts`、`GET /grok/v1/tts/voices`
+- `POST /grok/v1/stt`，以及 `GET /grok/v1/stt` WebSocket
+- `GET /grok/v1/realtime` WebSocket
+- `POST /grok/v1/audio/speech`、`POST /grok/v1/audio/tasks`
+- `POST /grok/v1/audio/transcriptions`（`json`、`verbose_json`、`text`）
+
+以上接口同时提供 `/v1/*` 别名。标准视频和语音接口使用 Grok Console SSO + DPoP；`grok_console_base_url` 可覆盖默认的 `https://console.x.ai/v1`。标准视频任务按调用方 API Key 隔离，任务元数据以一小时 TTL 写入 Redis；已提交到 Console 并取得上游 `request_id` 的任务会在服务重启后使用原账号继续轮询和下载。多实例通过 30 秒 Redis 原子租约和心跳保证同一任务只有一个 worker，租约过期后可由其他实例接管。`media_dir` 可挂载共享文件系统；多副本模式要求 Redis、每实例唯一的 `deployment_instance_id`、共同的 `deployment_cluster_id` 和 `shared_media=true`，启动时会校验集群标记及共享目录读写。媒体输入接口接受 20 MiB 以内的图片或视频 multipart `file`，返回保留 24 小时且按 API Key 隔离的 `file_id`；标准视频的 `image`、`reference_images` 和 `video` 均可使用。支持 `grok-imagine-video`，生成还支持 `grok-imagine-video-1.5`；编辑和延长目前遵循上游限制，仅支持基础模型。托管 Grok 出口池暂不支持语音 WebSocket 拨号，启用时会安全拒绝该类连接；静态 HTTP/SOCKS 代理不受影响。
+
+OpenAI 转录兼容层会拒绝 Console STT 无法无损表示的 `prompt`、非零 `temperature` 和 `timestamp_granularities`，并且不实现语义不同的 `/audio/translations`。
+
 ## Grok 上游模式
 
 Grok 代码保留三种上游传输；当前公开模型按 `internal/grok/models.go` 的 `ModelSpec` 路由：
@@ -209,12 +226,13 @@ Grok 代码保留三种上游传输；当前公开模型按 `internal/grok/model
 | 模式 | 上游 | 账号凭据 | 典型模型 |
 |---|---|---|---|
 | app-chat（Web） | `grok.com/rest/app-chat/...` | SSO Cookie（`client_cookie`） | 当前 imagine 图片、编辑和视频模型 |
-| console | `console.x.ai/v1/responses` + DPoP | Console SSO Cookie | 已实现传输；只有显式加入兼容表的模型才会公开 |
+| console | `console.x.ai/v1/*` + DPoP | Console SSO Cookie | Responses、标准视频、TTS、STT、Realtime；只有显式加入兼容表的模型才会公开 |
 | cli（Build） | `cli-chat-proxy.grok.com/v1` + Bearer | OAuth token（`credential_type="oauth"` + access/refresh token） | 当前 `grok-4.5`、`grok-4.6` |
 
 ### 新增配置（config.json / Redis）
 
 - `grok_cli_base_url` / `grok_cli_user_agent` / `grok_cli_client_version` / `grok_cli_client_identifier`
+- `grok_console_base_url`（默认 `https://console.x.ai/v1`，用于 Console Responses、标准视频、TTS、STT 与 Realtime）
 - `grok_cli_oauth_client_id` / `grok_cli_oauth_token_url`（默认官方 client/token 端点）
 - `grok_cli_model_ids`（为未显式标注上游的兼容模型指定 CLI 路由；当前 4.5/4.6 已显式标注）
 - `grok_session_identity_refresh`（默认 true，后台刷新 SSO 账号时拉取 `/api/auth/session` 学习 teamId）

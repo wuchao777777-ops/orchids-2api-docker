@@ -954,7 +954,7 @@ func extractUpstreamMessage(modelResp map[string]interface{}) string {
 }
 
 func extractUpstreamTokenDelta(resp map[string]interface{}, modelResp map[string]interface{}) string {
-	if token := stringAtAnyPath(resp,
+	if token := rawStringAtAnyPath(resp,
 		[]string{"token"},
 		[]string{"delta"},
 		[]string{"text"},
@@ -965,7 +965,7 @@ func extractUpstreamTokenDelta(resp map[string]interface{}, modelResp map[string
 	); token != "" {
 		return token
 	}
-	return stringAtAnyPath(modelResp,
+	return rawStringAtAnyPath(modelResp,
 		[]string{"token"},
 		[]string{"delta"},
 		[]string{"textDelta"},

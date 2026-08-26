@@ -33,6 +33,11 @@ type Config struct {
 	RedisPassword      string `json:"redis_password"`
 	RedisDB            int    `json:"redis_db"`
 	RedisPrefix        string `json:"redis_prefix"`
+	DeploymentReplicas int    `json:"deployment_replicas,omitempty"`
+	DeploymentInstance string `json:"deployment_instance_id,omitempty"`
+	DeploymentCluster  string `json:"deployment_cluster_id,omitempty"`
+	SharedMedia        bool   `json:"shared_media,omitempty"`
+	MediaDir           string `json:"media_dir,omitempty"`
 	CacheTokenCount    bool   `json:"cache_token_count"`
 	CacheTTL           int    `json:"cache_ttl"`
 	CacheStrategy      string `json:"cache_strategy"`
@@ -76,6 +81,7 @@ type Config struct {
 	// These fields are configurable via config.json / Redis and are deliberately
 	// NOT written into ApplyHardcoded, so they survive a persistConfig round trip.
 	GrokCLIBaseURL          string   `json:"grok_cli_base_url,omitempty"`
+	GrokConsoleBaseURL      string   `json:"grok_console_base_url,omitempty"`
 	GrokCLIUserAgent        string   `json:"grok_cli_user_agent,omitempty"`
 	GrokCLIClientVersion    string   `json:"grok_cli_client_version,omitempty"`
 	GrokCLIClientIdentifier string   `json:"grok_cli_client_identifier,omitempty"`
@@ -214,6 +220,15 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.RedisPrefix == "" {
 		cfg.RedisPrefix = "orchids:"
 	}
+	if cfg.DeploymentReplicas <= 0 {
+		cfg.DeploymentReplicas = 1
+	}
+	if strings.TrimSpace(cfg.DeploymentCluster) == "" {
+		cfg.DeploymentCluster = "orchids"
+	}
+	if strings.TrimSpace(cfg.MediaDir) == "" {
+		cfg.MediaDir = filepath.Join("data", "tmp")
+	}
 	if strings.TrimSpace(cfg.CredentialKeyFile) == "" {
 		cfg.CredentialKeyFile = filepath.Join("data", "credential.key")
 	}
@@ -306,6 +321,15 @@ func (c *Config) GrokCLIBaseURLOrDefault() string {
 		return strings.TrimRight(strings.TrimSpace(c.GrokCLIBaseURL), "/")
 	}
 	return "https://cli-chat-proxy.grok.com/v1"
+}
+
+// GrokConsoleBaseURLOrDefault returns the Console v1 API base used by DPoP
+// authenticated text, media, and voice requests.
+func (c *Config) GrokConsoleBaseURLOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokConsoleBaseURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(c.GrokConsoleBaseURL), "/")
+	}
+	return "https://console.x.ai/v1"
 }
 
 // GrokCLIOAuthClientIDOrDefault returns the xAI OAuth client ID used for Build

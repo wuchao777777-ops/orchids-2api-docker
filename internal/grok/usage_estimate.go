@@ -138,6 +138,25 @@ func buildChatUsagePayload(req *ChatCompletionsRequest, finalContent string, too
 	}
 }
 
+func addReasoningUsage(usage map[string]interface{}, reasoning string) map[string]interface{} {
+	if usage == nil || strings.TrimSpace(reasoning) == "" {
+		return usage
+	}
+	reasoningTokens := approxTokenCount(reasoning)
+	if reasoningTokens <= 0 {
+		return usage
+	}
+	details, _ := usage["completion_tokens_details"].(map[string]interface{})
+	if details == nil {
+		details = map[string]interface{}{}
+		usage["completion_tokens_details"] = details
+	}
+	details["reasoning_tokens"] = interfaceToInt(details["reasoning_tokens"]) + reasoningTokens
+	usage["completion_tokens"] = interfaceToInt(usage["completion_tokens"]) + reasoningTokens
+	usage["total_tokens"] = interfaceToInt(usage["total_tokens"]) + reasoningTokens
+	return usage
+}
+
 func buildImageUsagePayload(prompt string, imageCount int) map[string]interface{} {
 	promptTokens := approxTokenCount(prompt)
 	completionTokens := max(0, imageCount) * 64

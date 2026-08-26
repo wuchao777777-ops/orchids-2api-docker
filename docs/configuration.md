@@ -39,6 +39,7 @@ cp config.example.json config.json
 | `inference_auth_enabled` | `true` | 模型和推理接口是否要求管理 API Key |
 | `credential_encryption_key_file` | `data/credential.key` | Redis 账号凭据 AES-GCM 主密钥文件；只持久化路径，不持久化密钥内容 |
 | `response_store_ttl_hours` | `720` | Build stored Response 账号归属记录的 Redis TTL（小时） |
+| `grok_console_base_url` | `https://console.x.ai/v1` | Grok Console Responses、标准视频、TTS、STT 和 Realtime 的 DPoP 上游基址 |
 
 ### 2.2 Redis
 
@@ -50,7 +51,19 @@ cp config.example.json config.json
 | `redis_db` | `0` | Redis DB |
 | `redis_prefix` | `orchids:` | Redis key 前缀 |
 
-### 2.3 缓存
+### 2.3 媒体与多实例
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `media_dir` | `data/tmp` | 图片、视频成品和临时媒体输入目录；修改后需要重启 |
+| `deployment_replicas` | `1` | 当前部署的服务副本数 |
+| `deployment_instance_id` | 空 | 多副本时必填，并且每个副本必须使用不同的稳定值 |
+| `deployment_cluster_id` | `orchids` | 同一 Redis 和共享媒体目录所属的集群标识 |
+| `shared_media` | `false` | 多副本时必须显式设为 `true`，表示 `media_dir` 已挂载为所有副本共享的可读写目录 |
+
+当 `deployment_replicas > 1` 时，启动检查要求使用 Redis、填写实例 ID 并确认共享媒体。服务会在媒体根目录创建 `.orchids-cluster` 标记，并执行临时文件写入与回读；目录属于其他集群、不可写或无法回读时会拒绝启动。所有副本应使用相同的 `deployment_cluster_id` 和媒体目录布局，但使用不同的 `deployment_instance_id`。
+
+### 2.4 缓存
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -61,7 +74,7 @@ cp config.example.json config.json
 | `token_cache_ttl` | `300` | token cache TTL（秒） |
 | `token_cache_strategy` | `1` | token cache 策略 |
 
-### 2.4 代理
+### 2.5 代理
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -71,7 +84,7 @@ cp config.example.json config.json
 | `proxy_pass` | 空 | 代理密码 |
 | `proxy_bypass` | 空数组 | 直连域名或网段 |
 
-### 2.5 上游保真
+### 2.6 上游保真
 
 本网关是 API 中转站，默认**逐字透传**客户端内容、不对报文内容做任何改写。以下字段可显式开启历史改写行为：
 

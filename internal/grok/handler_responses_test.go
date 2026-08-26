@@ -241,3 +241,41 @@ func TestWriteResponsesStreamFromChat_ConvertsToolCallChunk(t *testing.T) {
 		t.Fatalf("expected DONE, out=%q", out)
 	}
 }
+
+func TestResponsesObjectFromChatPreservesReasoningItem(t *testing.T) {
+	chat := map[string]interface{}{
+		"model": "grok-4.3",
+		"choices": []interface{}{map[string]interface{}{"message": map[string]interface{}{
+			"role": "assistant", "reasoning_content": "plan", "content": "answer",
+		}}},
+	}
+	output := responsesObjectFromChat("grok-4.3", chat)["output"].([]interface{})
+	if len(output) != 2 {
+		t.Fatalf("output=%#v", output)
+	}
+	reasoning := output[0].(map[string]interface{})
+	if reasoning["type"] != "reasoning" {
+		t.Fatalf("reasoning item=%#v", reasoning)
+	}
+	summary := reasoning["summary"].([]interface{})[0].(map[string]interface{})
+	if summary["text"] != "plan" {
+		t.Fatalf("summary=%#v", summary)
+	}
+}
+
+func TestWriteResponsesStreamFromChatPreservesReasoningEvents(t *testing.T) {
+	raw := strings.Join([]string{
+		`data: {"choices":[{"delta":{"reasoning_content":"plan"},"finish_reason":null}]}`,
+		`data: {"choices":[{"delta":{"content":"answer"},"finish_reason":null}]}`,
+		`data: [DONE]`,
+	}, "\n\n")
+	recorder := httptest.NewRecorder()
+	writeResponsesStreamFromChat(recorder, "grok-4.3", raw)
+	out := recorder.Body.String()
+	if !strings.Contains(out, `"type":"response.reasoning_summary_text.delta"`) || !strings.Contains(out, `"delta":"plan"`) {
+		t.Fatalf("reasoning events missing: %q", out)
+	}
+	if !strings.Contains(out, `"type":"response.output_text.delta"`) || !strings.Contains(out, `"delta":"answer"`) {
+		t.Fatalf("answer events missing: %q", out)
+	}
+}

@@ -86,6 +86,14 @@ func appendChatCompletionChunkWithUsage(dst []byte, id string, created int64, mo
 	return appendChatCompletionChunkFinish(dst, finish, hasFinish, usage)
 }
 
+func appendChatCompletionReasoningChunk(dst []byte, id string, created int64, model, fingerprint, reasoning string) []byte {
+	dst = appendChatCompletionChunkPrefix(dst, id, created, model, fingerprint)
+	dst = append(dst, `,"choices":[{"index":0,"delta":{"reasoning_content":`...)
+	dst = strconv.AppendQuote(dst, reasoning)
+	dst = append(dst, '}')
+	return appendChatCompletionChunkFinish(dst, "", false, nil)
+}
+
 func appendChatCompletionSnapshotChunkWithUsage(dst []byte, id string, created int64, model, fingerprint, messageContent string, finish string, hasFinish bool, usage map[string]interface{}) []byte {
 	dst = appendChatCompletionChunkPrefix(dst, id, created, model, fingerprint)
 	dst = append(dst, `,"choices":[{"index":0,"delta":{},"message":{"role":"assistant","content":`...)
@@ -131,15 +139,22 @@ func isThinkingResponse(resp map[string]interface{}) bool {
 	if resp == nil {
 		return false
 	}
-	raw, ok := resp["isThinking"]
-	if !ok {
-		return false
+	for _, path := range [][]string{
+		{"isThinking"}, {"is_thinking"},
+		{"response", "isThinking"}, {"response", "is_thinking"},
+		{"result", "isThinking"}, {"result", "is_thinking"},
+		{"result", "response", "isThinking"}, {"result", "response", "is_thinking"},
+	} {
+		raw := valueAtPath(resp, path...)
+		if raw == nil {
+			continue
+		}
+		val, err := parseLooseBoolAnyForField(raw, path[len(path)-1])
+		if err == nil {
+			return val
+		}
 	}
-	val, err := parseLooseBoolAnyForField(raw, "isThinking")
-	if err != nil {
-		return false
-	}
-	return val
+	return false
 }
 
 func (h *Handler) defaultChatStream() bool {
@@ -197,6 +212,10 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	spec, ok := ResolveModel(req.Model)
 	if !ok {
 		http.Error(w, modelNotFoundMessage(req.Model), http.StatusBadRequest)
+		return
+	}
+	if !spec.SupportsConversation() {
+		http.Error(w, fmt.Sprintf("model %s does not support chat completions", req.Model), http.StatusBadRequest)
 		return
 	}
 
@@ -1141,6 +1160,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	sawModelMessage := false
 	lastTextChunkNorm := ""
 	var tokenFallback strings.Builder
+	var reasoningContent strings.Builder
+	lastThinkingMessage := ""
 	emittedModelMessage := ""
 	pendingModelMessage := ""
 	toolStreamMode := toolCallsEnabled(tools, toolChoice)
@@ -1200,6 +1221,16 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		} else {
 			lastTextChunkNorm = ""
 		}
+	}
+
+	emitReasoningChunk := func(content string) {
+		if content == "" {
+			return
+		}
+		raw := appendChatCompletionReasoningChunk(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, content)
+		chunkScratch = raw[:0]
+		writeSSELog(w, flusher, logger, raw)
+		sentAny = true
 	}
 
 	emitCleanText := func(raw string) {
@@ -1321,11 +1352,22 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			emitChunk("assistant", "", "", false)
 			sentRole = true
 		}
-		if tokenDelta := extractUpstreamTokenDelta(resp, mr); tokenDelta != "" {
-			if isThinkingResponse(resp) {
-				// Suppress thinking tokens to avoid leaking chain-of-thought.
-				return nil
+		tokenDelta := extractUpstreamTokenDelta(resp, mr)
+		if isThinkingResponse(resp) {
+			thinkingDelta := tokenDelta
+			if thinkingDelta == "" && mr != nil {
+				if snapshot := extractUpstreamMessage(mr); snapshot != "" && snapshot != lastThinkingMessage {
+					thinkingDelta = streamMessageDelta(lastThinkingMessage, snapshot)
+					lastThinkingMessage = snapshot
+				}
 			}
+			if thinkingDelta != "" {
+				reasoningContent.WriteString(thinkingDelta)
+				emitReasoningChunk(thinkingDelta)
+			}
+			return nil
+		}
+		if tokenDelta != "" {
 			if textRefCollector != nil {
 				textRefCollector.feed(tokenDelta)
 			}
@@ -1489,7 +1531,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	if toolStreamMode {
 		flushToolStreamChunk()
 		if toolPump != nil && toolPump.EmittedToolCalls {
-			finalUsage = buildChatUsagePayload(req, strings.TrimSpace(finalBufferedText), []map[string]interface{}{{"type": "function"}})
+			finalUsage = addReasoningUsage(buildChatUsagePayload(req, strings.TrimSpace(finalBufferedText), []map[string]interface{}{{"type": "function"}}), reasoningContent.String())
 			emitChunk("", "", "tool_calls", true)
 			writeSSELog(w, flusher, logger, []byte("[DONE]"))
 			return
@@ -1497,14 +1539,14 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		textContent, toolCalls := toolParser.parseCalls(strings.TrimSpace(finalBufferedText))
 		textContent = strings.TrimSpace(textContent)
 		if len(toolCalls) > 0 {
-			finalUsage = buildChatUsagePayload(req, textContent, toolCalls)
+			finalUsage = addReasoningUsage(buildChatUsagePayload(req, textContent, toolCalls), reasoningContent.String())
 			emitToolCallsChunk(textContent, toolCalls, "tool_calls", true)
 			writeSSELog(w, flusher, logger, []byte("[DONE]"))
 			return
 		}
 	}
 
-	finalUsage = buildChatUsagePayload(req, finalUsageText, nil)
+	finalUsage = addReasoningUsage(buildChatUsagePayload(req, finalUsageText, nil), reasoningContent.String())
 	if finalSnapshotEnabled && finalSnapshotContent != "" {
 		raw := appendChatCompletionSnapshotChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, finalSnapshotContent, "stop", true, finalUsage)
 		chunkScratch = raw[:0]
@@ -1524,6 +1566,8 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 	imageCandidates := make([]string, 0, 8)
 	imageCandidateSet := map[string]struct{}{}
 	var tokenContent strings.Builder
+	var reasoningTokens strings.Builder
+	reasoningSnapshot := ""
 	addImageCandidate := func(raw string) {
 		u := strings.TrimSpace(raw)
 		if u == "" {
@@ -1550,11 +1594,19 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 			id = rid
 		}
 		isThinking := isThinkingResponse(resp)
-		if tokenDelta := extractUpstreamTokenDelta(resp, mr); tokenDelta != "" {
-			if isThinking {
-				// Suppress thinking tokens to avoid leaking chain-of-thought in OpenAI-compatible output.
-				return nil
+		tokenDelta := extractUpstreamTokenDelta(resp, mr)
+		if isThinking {
+			if tokenDelta != "" {
+				reasoningTokens.WriteString(tokenDelta)
 			}
+			if mr != nil {
+				if snapshot := extractUpstreamMessage(mr); strings.TrimSpace(snapshot) != "" {
+					reasoningSnapshot = snapshot
+				}
+			}
+			return nil
+		}
+		if tokenDelta != "" {
 			tokenContent.WriteString(tokenDelta)
 		}
 		if mr != nil {
@@ -1594,6 +1646,11 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 		finalContent = tokenClean
 	}
 	finalContent = collapseDuplicatedLongChunk(finalContent)
+	reasoningContent := sanitizeUpstreamText(reasoningSnapshot)
+	if strings.TrimSpace(reasoningContent) == "" {
+		reasoningContent = sanitizeUpstreamText(reasoningTokens.String())
+	}
+	reasoningContent = collapseDuplicatedLongChunk(reasoningContent)
 
 	var toolCalls []map[string]interface{}
 	if toolCallsEnabled(tools, toolChoice) {
@@ -1629,6 +1686,15 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 			finalContent += formatImageMarkdown(val)
 		}
 	}
+	message := map[string]interface{}{
+		"role":        "assistant",
+		"content":     finalContent,
+		"refusal":     nil,
+		"annotations": []interface{}{},
+	}
+	if strings.TrimSpace(reasoningContent) != "" {
+		message["reasoning_content"] = reasoningContent
+	}
 	resp := map[string]interface{}{
 		"id":                 id,
 		"object":             "chat.completion",
@@ -1638,17 +1704,12 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 		"system_fingerprint": fingerprint,
 		"choices": []map[string]interface{}{
 			{
-				"index": 0,
-				"message": map[string]interface{}{
-					"role":        "assistant",
-					"content":     finalContent,
-					"refusal":     nil,
-					"annotations": []interface{}{},
-				},
+				"index":         0,
+				"message":       message,
 				"finish_reason": "stop",
 			},
 		},
-		"usage": buildChatUsagePayload(req, finalContent, toolCalls),
+		"usage": addReasoningUsage(buildChatUsagePayload(req, finalContent, toolCalls), reasoningContent),
 	}
 	if len(toolCalls) > 0 {
 		choice := resp["choices"].([]map[string]interface{})[0]

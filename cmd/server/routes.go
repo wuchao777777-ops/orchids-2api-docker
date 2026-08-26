@@ -81,6 +81,9 @@ func registerRoutes(
 	registerWithPrefixes(mux, grokPrefixes, "/images/generations", inferenceAuth(limiter.Limit(grokHandler.HandleImagesGenerations)))
 	registerWithPrefixes(mux, grokPrefixes, "/images/edits", inferenceAuth(limiter.Limit(grokHandler.HandleImagesEdits)))
 	registerWithPrefixes(mux, grokPrefixes, "/videos", inferenceAuth(limiter.Limit(grokHandler.HandleVideosCreate)))
+	registerWithPrefixes(mux, grokPrefixes, "/videos/generations", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosGenerate)))
+	registerWithPrefixes(mux, grokPrefixes, "/videos/edits", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosEdit)))
+	registerWithPrefixes(mux, grokPrefixes, "/videos/extensions", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosExtend)))
 	registerWithPrefixes(mux, grokPrefixes, "/videos/", inferenceAuth(limiter.Limit(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/content") {
 			grokHandler.HandleVideosContent(w, r)
@@ -89,6 +92,24 @@ func registerRoutes(
 		grokHandler.HandleVideosRetrieve(w, r)
 	})))
 	registerWithPrefixes(mux, grokPrefixes, "/files/", grokHandler.HandleFiles)
+	registerWithPrefixes(mux, grokPrefixes, "/media/inputs", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputs)))
+	registerWithPrefixes(mux, grokPrefixes, "/media/inputs/", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputResource)))
+	registerWithPrefixes(mux, grokPrefixes, "/tts", inferenceAuth(limiter.Limit(grokHandler.HandleTTS)))
+	registerWithPrefixes(mux, grokPrefixes, "/tts/voices", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
+	registerWithPrefixes(mux, grokPrefixes, "/tts/voices/", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
+	sttHTTP := limiter.Limit(grokHandler.HandleSTT)
+	sttWebSocket := limiter.LimitLongLived(grokHandler.HandleSTT)
+	registerWithPrefixes(mux, grokPrefixes, "/stt", inferenceAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			sttWebSocket(w, r)
+			return
+		}
+		sttHTTP(w, r)
+	}))
+	registerWithPrefixes(mux, grokPrefixes, "/audio/speech", inferenceAuth(limiter.Limit(grokHandler.HandleAudioSpeech)))
+	registerWithPrefixes(mux, grokPrefixes, "/audio/tasks", inferenceAuth(limiter.Limit(grokHandler.HandleAudioSpeech)))
+	registerWithPrefixes(mux, grokPrefixes, "/audio/transcriptions", inferenceAuth(limiter.Limit(grokHandler.HandleAudioTranscriptions)))
+	registerWithPrefixes(mux, grokPrefixes, "/realtime", inferenceAuth(limiter.LimitLongLived(grokHandler.HandleRealtime)))
 
 	// --- Public auth/login (no prefix duplication) ---
 	mux.HandleFunc("/api/login", apiHandler.HandleLogin)

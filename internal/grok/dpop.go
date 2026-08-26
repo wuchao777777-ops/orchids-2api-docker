@@ -253,6 +253,13 @@ func (c *Client) dpopSession(ctx context.Context, token string) (dpopSession, st
 }
 
 func (c *Client) doConsoleDPoPRequest(ctx context.Context, token, method, endpoint string, body []byte) (*http.Response, error) {
+	return c.doConsoleDPoPRequestWithHeaders(ctx, token, method, endpoint, body, nil)
+}
+
+// doConsoleDPoPRequestWithHeaders performs a Console request while preserving
+// the DPoP retry rules used by Responses. Voice endpoints need to override the
+// request Content-Type for multipart STT and the response Accept type for TTS.
+func (c *Client) doConsoleDPoPRequestWithHeaders(ctx context.Context, token, method, endpoint string, body []byte, overrides http.Header) (*http.Response, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		session, cacheKey, err := c.dpopSession(ctx, token)
 		if err != nil {
@@ -263,6 +270,12 @@ func (c *Client) doConsoleDPoPRequest(ctx context.Context, token, method, endpoi
 			return nil, err
 		}
 		req.Header = c.consoleHeaders(token)
+		for key, values := range overrides {
+			req.Header.Del(key)
+			for _, value := range values {
+				req.Header.Add(key, value)
+			}
+		}
 		req.Header.Set("x-cluster", "https://us-east-1.api.x.ai")
 		if err := applyDPoPAuthorization(req, session); err != nil {
 			return nil, err
