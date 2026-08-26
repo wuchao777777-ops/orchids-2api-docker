@@ -176,6 +176,9 @@ func (h *Handler) consolePayload(spec ModelSpec, req *ChatCompletionsRequest) (m
 	if req.TopP != nil {
 		payload["top_p"] = *req.TopP
 	}
+	if req.MaxTokens != nil && *req.MaxTokens > 0 {
+		payload["max_output_tokens"] = *req.MaxTokens
+	}
 	if req.ReasoningEffort != nil {
 		if effort := strings.ToLower(strings.TrimSpace(*req.ReasoningEffort)); effort != "" {
 			payload["reasoning"] = map[string]interface{}{"effort": effort}

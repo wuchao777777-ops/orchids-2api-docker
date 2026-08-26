@@ -7,9 +7,38 @@ import (
 	"strings"
 	"testing"
 
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
+
+func TestHandleModels_FiltersAPIKeyModelAllowlist(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	wrapper := middleware.APIKeyAuth(
+		func() bool { return true },
+		func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
+			return &middleware.APIKeyPrincipal{AllowedModels: []string{"grok-4.6"}}, nil
+		},
+		h.HandleModels,
+	)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer sk-test")
+	rec := httptest.NewRecorder()
+	wrapper(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "grok-4.6") || strings.Contains(body, "grok-4.5") || strings.Contains(body, "grok-imagine-image") {
+		t.Fatalf("unexpected filtered models: %s", body)
+	}
+}
 
 func TestHandleModelByID_HidesOfflineModel(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
@@ -180,10 +209,7 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenAccountsHaveStatusCode(t *testin
 	if !strings.Contains(body, "grok-imagine-image") {
 		t.Fatalf("expected current image model to remain visible, body=%s", body)
 	}
-	if !strings.Contains(body, "grok-build-0.1") {
-		t.Fatalf("expected grok-build-0.1 (CLI model) to be visible, body=%s", body)
-	}
-	for _, hidden := range []string{"grok-4.20-0309-non-reasoning", "grok-4.3-beta", "grok-4.3"} {
+	for _, hidden := range []string{"grok-4.20-0309-non-reasoning", "grok-4.3-beta", "grok-4.3", "grok-build-0.1"} {
 		if strings.Contains(body, `"id":"`+hidden+`"`) {
 			t.Fatalf("expected removed model %s to stay hidden, body=%s", hidden, body)
 		}

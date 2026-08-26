@@ -13,9 +13,51 @@
         <textarea class="form-input" id="keyName" required placeholder="每行一个名称，例如：&#10;生产环境&#10;测试用&#10;开发者-张三"
           rows="4" style="resize: vertical;"></textarea>
       </div>
+      <div class="form-group">
+        <label class="form-label">允许模型（可选，每行或逗号分隔）</label>
+        <textarea class="form-input" id="keyAllowedModels" placeholder="留空表示全部模型，例如：&#10;grok-4.6&#10;grok-imagine-image" rows="3"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">每分钟请求数（RPM）</label>
+          <input class="form-input" id="keyRPMLimit" type="number" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">到期时间（可选）</label>
+          <input class="form-input" id="keyExpiresAt" type="datetime-local" />
+        </div>
+      </div>
       <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">
         创建
       </button>
+    </form>
+  </div>
+</div>
+
+<!-- Key 策略编辑弹窗 -->
+<div class="modal" id="editKeyModal">
+  <div class="modal-content modal-content-md">
+    <div class="modal-header">
+      <h3 class="modal-title">编辑 API Key 策略</h3>
+      <button class="modal-close" onclick="closeEditKeyModal()">&times;</button>
+    </div>
+    <form onsubmit="saveKeyPolicy(event)">
+      <input type="hidden" id="editKeyId" />
+      <div class="form-group">
+        <label class="form-label">允许模型（每行或逗号分隔）</label>
+        <textarea class="form-input" id="editKeyAllowedModels" placeholder="留空表示全部模型" rows="4"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">每分钟请求数（0 表示不限）</label>
+          <input class="form-input" id="editKeyRPMLimit" type="number" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">到期时间（留空表示永不过期）</label>
+          <input class="form-input" id="editKeyExpiresAt" type="datetime-local" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">保存策略</button>
     </form>
   </div>
 </div>

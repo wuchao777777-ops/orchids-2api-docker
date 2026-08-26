@@ -18,6 +18,7 @@ type ChatCompletionsRequest struct {
 	ReasoningEffort   *string       `json:"reasoning_effort,omitempty"`
 	Temperature       *float64      `json:"temperature,omitempty"`
 	TopP              *float64      `json:"top_p,omitempty"`
+	MaxTokens         *int          `json:"max_tokens,omitempty"`
 	VideoConfig       *VideoConfig  `json:"video_config,omitempty"`
 	ImageConfig       *ImageConfig  `json:"image_config,omitempty"`
 	Tools             []ToolDef     `json:"tools,omitempty"`
@@ -293,6 +294,7 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 		ReasoningEffort   *string       `json:"reasoning_effort,omitempty"`
 		Temperature       interface{}   `json:"temperature,omitempty"`
 		TopP              interface{}   `json:"top_p,omitempty"`
+		MaxTokens         interface{}   `json:"max_tokens,omitempty"`
 		VideoConfig       *VideoConfig  `json:"video_config,omitempty"`
 		ImageConfig       *ImageConfig  `json:"image_config,omitempty"`
 		Tools             []ToolDef     `json:"tools,omitempty"`
@@ -325,6 +327,10 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	maxTokens, err := parseLooseIntAny(raw.MaxTokens)
+	if err != nil {
+		return err
+	}
 	parallelToolCalls, err := parseLooseBoolAnyForField(raw.ParallelToolCalls, "parallel_tool_calls")
 	if err != nil {
 		return err
@@ -338,6 +344,9 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	r.ReasoningEffort = raw.ReasoningEffort
 	r.Temperature = temp
 	r.TopP = topP
+	if _, ok := rawMap["max_tokens"]; ok {
+		r.MaxTokens = &maxTokens
+	}
 	r.VideoConfig = raw.VideoConfig
 	r.ImageConfig = raw.ImageConfig
 	r.Tools = raw.Tools

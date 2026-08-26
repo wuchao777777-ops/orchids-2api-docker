@@ -7,7 +7,7 @@
 ## 当前状态
 
 - `internal/handler` 统一处理 `warp` / `puter` 的 `/v1/messages` 与 `/v1/chat/completions`
-- `internal/grok` 独立处理 `grok` 的 `/v1/chat/completions`、`/v1/images/*`、`/v1/files/*`
+- `internal/grok` 独立处理 `grok` 的 Messages、Responses、Chat、图片、视频和本地媒体接口
 - 模型管理支持按通道刷新：`/api/models/refresh`
 - Puter 非流式 Claude Messages 已覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result` 回归
 
@@ -21,6 +21,7 @@
 - Redis 持久化存储
 - Prometheus 指标与可选 `pprof`
 - Grok 图片生成、编辑和本地媒体缓存
+- 推理 API Key 默认鉴权、模型白名单/RPM/到期策略与 Redis 账号凭据 AES-GCM 加密
 
 ## 支持通道
 
@@ -28,7 +29,7 @@
 |---|---|
 | `warp` | `/warp/v1/messages`、`/warp/v1/chat/completions` |
 | `puter` | `/puter/v1/messages`、`/puter/v1/chat/completions` |
-| `grok` | `/grok/v1/chat/completions`、`/grok/v1/images/*`、`/grok/v1/files/*` |
+| `grok` | `/grok/v1/messages`、`/grok/v1/responses`、`/grok/v1/chat/completions`、图片、视频与文件接口 |
 
 统一模型查询入口：
 
@@ -76,6 +77,9 @@ cp config.example.json config.json
   "admin_user": "admin",
   "admin_pass": "",
   "admin_path": "/admin",
+  "inference_auth_enabled": true,
+  "credential_encryption_key_file": "data/credential.key",
+  "response_store_ttl_hours": 720,
   "debug_enabled": false
 }
 ```
@@ -85,6 +89,8 @@ cp config.example.json config.json
 - 未设置 `admin_pass` 时，程序会在启动时自动生成随机密码并打印日志
 - 生产部署建议显式设置高强度 `admin_pass`，并保持 `debug_enabled` 为 `false`
 - 运行后若 Redis 中存在 `settings:config`，会覆盖文件配置
+- 首次启动会生成 `data/credential.key`；该文件必须和 Redis 数据一起持久化、备份，丢失后无法解密账号凭据
+- 登录管理端创建 API Key 后，使用 `Authorization: Bearer <API Key>` 调用模型和推理接口；Anthropic SDK 也可使用 `x-api-key`
 
 ### 3. 启动服务
 
@@ -132,13 +138,13 @@ go build -o orchids-server ./cmd/server
 
 ```bash
 curl -s http://127.0.0.1:3002/health
-curl -s http://127.0.0.1:3002/v1/models
+curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 ```
 
 测量接口首字节、首个流式帧和总耗时：
 
 ```bash
-go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions
+go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions -header "Authorization: Bearer sk-..."
 ```
 
 `cmd/ttfbbench` 是独立诊断工具，不会被主服务编译或启动。
@@ -165,7 +171,7 @@ go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions
 - `tool_result` follow-up 可以继续返回新的 `tool_use`，也可以正常收敛成最终文本
 - 已有回归测试覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result`
 
-当前公开型号：`claude-opus-5`、`claude-sonnet-5`、`claude-fable-5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gemini-3.5-flash`、`grok-4.5`、`deepseek-v4-pro`、`deepseek-v4-flash`、`mistral-small-2603`。
+当前公开型号：`claude-opus-5`、`claude-sonnet-5`、`claude-fable-5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gemini-3.5-flash`、`grok-4.5`、`grok-4.6`、`deepseek-v4-pro`、`deepseek-v4-flash`、`mistral-small-2603`。
 
 ## 主要公开端点
 
@@ -173,12 +179,22 @@ go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions
 
 - `POST /warp/v1/messages`
 - `POST /puter/v1/messages`
+- `POST /grok/v1/messages`
 
 ### OpenAI Chat Completions 风格
 
 - `POST /warp/v1/chat/completions`
 - `POST /puter/v1/chat/completions`
 - `POST /grok/v1/chat/completions`
+
+### OpenAI Responses 风格
+
+- `POST /grok/v1/responses`
+- `POST /grok/v1/responses/compact`
+- `GET /grok/v1/responses/{response_id}`
+- `DELETE /grok/v1/responses/{response_id}`
+
+Build stored Responses 会按客户端 API Key 隔离，并固定回创建该 Response 的 OAuth 账号；归属记录默认保留 720 小时。
 
 ### Grok 图片与文件
 
@@ -188,20 +204,21 @@ go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions
 
 ## Grok 上游模式
 
-Grok 请求按模型路由到三种上游之一（`internal/grok/models.go` 的 `ResolvedUpstream`）：
+Grok 代码保留三种上游传输；当前公开模型按 `internal/grok/models.go` 的 `ModelSpec` 路由：
 
 | 模式 | 上游 | 账号凭据 | 典型模型 |
 |---|---|---|---|
-| app-chat | `grok.com/rest/app-chat/...` | SSO Cookie（`client_cookie`） | `grok-4.20-*`、imagine 系列 |
-| console | `console.x.ai/v1/responses` + DPoP | SSO Cookie | `grok-4.5`、`grok-4.3` |
-| cli（Build） | `cli-chat-proxy.grok.com/v1` + Bearer | OAuth token（`credential_type="oauth"` + `oauth_access_token`/`oauth_refresh_token`/`oauth_expires_at`） | `grok-build-0.1` |
+| app-chat（Web） | `grok.com/rest/app-chat/...` | SSO Cookie（`client_cookie`） | 当前 imagine 图片、编辑和视频模型 |
+| console | `console.x.ai/v1/responses` + DPoP | Console SSO Cookie | 已实现传输；只有显式加入兼容表的模型才会公开 |
+| cli（Build） | `cli-chat-proxy.grok.com/v1` + Bearer | OAuth token（`credential_type="oauth"` + access/refresh token） | 当前 `grok-4.5`、`grok-4.6` |
 
 ### 新增配置（config.json / Redis）
 
 - `grok_cli_base_url` / `grok_cli_user_agent` / `grok_cli_client_version` / `grok_cli_client_identifier`
 - `grok_cli_oauth_client_id` / `grok_cli_oauth_token_url`（默认官方 client/token 端点）
-- `grok_cli_model_ids`（把指定模型路由到 CLI 上游，如 `["grok-build-0.1"]`）
+- `grok_cli_model_ids`（为未显式标注上游的兼容模型指定 CLI 路由；当前 4.5/4.6 已显式标注）
 - `grok_session_identity_refresh`（默认 true，后台刷新 SSO 账号时拉取 `/api/auth/session` 学习 teamId）
+- `response_store_ttl_hours`（Build stored Response 归属记录 TTL，默认 720 小时）
 - `grok_egress_enabled`（默认 false；开启后走代理池 + FlareSolverr + clearance 缓存）
 - `grok_egress_nodes`（代理池节点列表）、`grok_flaresolverr_url`、`grok_clearance_mode`（`manual`/`flaresolverr`）、`grok_clearance_refresh_interval`、`grok_ua_rotation_enabled`
 
@@ -222,6 +239,8 @@ Grok 请求按模型路由到三种上游之一（`internal/grok/models.go` 的 
 - `Authorization: Bearer <admin_token>`
 - `X-Admin-Token: <admin_token>`
 - Basic Auth，密码等于 `admin_pass`
+
+模型与推理接口默认要求管理端创建的 API Key。管理端可为每个 Key 设置允许模型、每分钟请求数和到期时间；旧 Key 默认不限制这些策略。仅在已有可信上游网关负责认证时，才设置 `inference_auth_enabled=false`。
 
 ## 许可证
 

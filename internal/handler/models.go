@@ -8,6 +8,7 @@ import (
 	"github.com/goccy/go-json"
 
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -116,10 +117,11 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	var publicModels []PublicModelResponse
 	if filterChannel == "" || strings.EqualFold(filterChannel, "warp") {
-		publicModels = append(publicModels,
-			publicModelResponse(warpChatModelID, "Warp"),
-			publicModelResponse(warpAgentModelID, "Warp"),
-		)
+		for _, modelID := range []string{warpChatModelID, warpAgentModelID} {
+			if middleware.APIKeyAllowsModel(ctx, modelID) {
+				publicModels = append(publicModels, publicModelResponse(modelID, "Warp"))
+			}
+		}
 	}
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
@@ -134,6 +136,9 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 			if _, ok := warpVisible[modelID]; !ok {
 				continue
 			}
+		}
+		if !middleware.APIKeyAllowsModel(ctx, m.ModelID) {
+			continue
 		}
 
 		publicModels = append(publicModels, publicModelResponse(m.ModelID, mChannel))
@@ -174,6 +179,10 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 
 	if id == "" {
 		apperrors.New("invalid_request_error", "Model ID required", http.StatusBadRequest).WriteResponse(w)
+		return
+	}
+	if !middleware.APIKeyAllowsModel(r.Context(), id) {
+		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}
 

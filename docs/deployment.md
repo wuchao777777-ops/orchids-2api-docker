@@ -14,6 +14,7 @@
 
 - 启动后若 Redis 中已有 `settings:config`，会覆盖文件配置
 - 未设置 `admin_pass` 时，程序会自动生成随机密码并写入启动日志
+- 首次启动会创建 `data/credential.key` 并迁移 Redis 中的账号凭据；生产环境必须持久化和备份该文件
 
 ## 2. 本地开发启动
 
@@ -74,7 +75,7 @@ Start-Process -FilePath .\server.exe -ArgumentList '-config','.\config.json'
 
 ```bash
 curl -s http://127.0.0.1:3002/health
-curl -s http://127.0.0.1:3002/v1/models
+curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 curl -s http://127.0.0.1:3002/metrics
 ```
 
@@ -124,6 +125,8 @@ Windows 日志通常取决于你的启动方式；若前台启动，直接查看
 - `no available grok token`
 - `Bad Gateway`
 - `stream parse error`
+
+凭据解密报错通常表示 `data/credential.key` 没有随 Redis 一起恢复，或启动时使用了不同的 `ORCHIDS_CREDENTIAL_ENCRYPTION_KEY`。不要生成新密钥覆盖旧文件。
 
 ## 7. 升级建议
 

@@ -225,7 +225,7 @@ function renderApiKeys() {
   const table = document.createElement("table");
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
-  ["Token", "状态", "最后使用", "操作"].forEach((label) => {
+  ["Token", "状态", "访问策略", "最后使用", "操作"].forEach((label) => {
     const th = document.createElement("th");
     th.textContent = label;
     headRow.appendChild(th);
@@ -279,6 +279,13 @@ function renderApiKeys() {
     tdStatus.appendChild(label);
     tr.appendChild(tdStatus);
 
+    const tdPolicy = document.createElement("td");
+    tdPolicy.style.color = "var(--text-secondary)";
+    tdPolicy.style.fontSize = "0.8rem";
+    tdPolicy.style.whiteSpace = "pre-line";
+    tdPolicy.textContent = formatKeyPolicy(k);
+    tr.appendChild(tdPolicy);
+
     const tdLast = document.createElement("td");
     tdLast.style.color = "var(--text-secondary)";
     tdLast.style.fontSize = "0.8rem";
@@ -286,6 +293,13 @@ function renderApiKeys() {
     tr.appendChild(tdLast);
 
     const tdAction = document.createElement("td");
+    const editBtn = document.createElement("button");
+    editBtn.className = "btn btn-neutral";
+    editBtn.style.padding = "4px 8px";
+    editBtn.style.marginRight = "6px";
+    editBtn.dataset.action = "edit-key";
+    editBtn.dataset.id = encodeData(k.id);
+    editBtn.textContent = "策略";
     const delBtn = document.createElement("button");
     delBtn.className = "btn btn-danger-outline";
     delBtn.style.padding = "4px 8px";
@@ -293,6 +307,7 @@ function renderApiKeys() {
     delBtn.dataset.id = encodeData(k.id);
     delBtn.dataset.label = encodedLabel;
     delBtn.textContent = "删除";
+    tdAction.appendChild(editBtn);
     tdAction.appendChild(delBtn);
     tr.appendChild(tdAction);
 
@@ -357,7 +372,10 @@ function renderApiKeys() {
     const actionEl = e.target.closest("[data-action]");
     if (!actionEl || !container.contains(actionEl)) return;
     const action = actionEl.dataset.action;
-    if (action === "delete-key") {
+    if (action === "edit-key") {
+      const id = decodeData(actionEl.dataset.id || "");
+      if (id) openEditKeyModal(id);
+    } else if (action === "delete-key") {
       const id = decodeData(actionEl.dataset.id || "");
       const label = actionEl.dataset.label ? decodeURIComponent(actionEl.dataset.label) : "";
       if (id) openDeleteKeyModal(id, label);
@@ -380,6 +398,7 @@ function renderApiKeysMobile(container) {
     const encodedKey = encodeURIComponent(keyDisplay);
     const encodedLabel = encodeURIComponent(`${k.key_prefix}...${k.key_suffix}`);
     const lastUsed = k.last_used_at ? formatTime(k.last_used_at) : "从未使用";
+    const policy = formatKeyPolicy(k);
     return `
       <article class="config-key-card">
         <div class="config-key-head">
@@ -397,8 +416,13 @@ function renderApiKeysMobile(container) {
             <span class="config-key-label">最后使用</span>
             <span>${escapeHtml(lastUsed)}</span>
           </div>
+          <div class="config-key-item">
+            <span class="config-key-label">访问策略</span>
+            <span style="white-space: pre-line">${escapeHtml(policy)}</span>
+          </div>
         </div>
         <div class="config-key-actions">
+          <button type="button" class="btn btn-neutral" data-action="edit-key" data-id="${encodeData(k.id)}">策略</button>
           <button type="button" class="btn btn-danger-outline" data-action="delete-key" data-id="${encodeData(k.id)}" data-label="${encodedLabel}">删除</button>
         </div>
       </article>
@@ -431,7 +455,10 @@ function renderApiKeysMobile(container) {
     }
     const actionEl = e.target.closest("[data-action]");
     if (!actionEl || !container.contains(actionEl)) return;
-    if (actionEl.dataset.action === "delete-key") {
+    if (actionEl.dataset.action === "edit-key") {
+      const id = decodeData(actionEl.dataset.id || "");
+      if (id) openEditKeyModal(id);
+    } else if (actionEl.dataset.action === "delete-key") {
       const id = decodeData(actionEl.dataset.id || "");
       const label = actionEl.dataset.label ? decodeURIComponent(actionEl.dataset.label) : "";
       if (id) openDeleteKeyModal(id, label);
@@ -446,6 +473,32 @@ function renderApiKeysMobile(container) {
     if (!id) return;
     toggleKeyStatus(id, target.checked);
   };
+}
+
+function parseAllowedModels(value) {
+  return String(value || "").split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function formatKeyPolicy(key) {
+  const models = Array.isArray(key.allowed_models) && key.allowed_models.length
+    ? key.allowed_models.join(", ")
+    : "全部模型";
+  const rpm = Number(key.rpm_limit) > 0 ? `${key.rpm_limit} RPM` : "不限速";
+  const expiry = key.expires_at ? `到期 ${formatTime(key.expires_at)}` : "永不过期";
+  return `${models}\n${rpm} · ${expiry}`;
+}
+
+function toDatetimeLocal(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function localExpiryValue(id) {
+  const value = document.getElementById(id).value;
+  return value ? new Date(value).toISOString() : null;
 }
 
 // Toggle key visibility
@@ -476,6 +529,9 @@ async function toggleKeyStatus(id, enabled) {
 // Open create key modal
 function openCreateKeyModal() {
   document.getElementById("keyName").value = "";
+  document.getElementById("keyAllowedModels").value = "";
+  document.getElementById("keyRPMLimit").value = "0";
+  document.getElementById("keyExpiresAt").value = "";
   document.getElementById("createKeyModal").classList.add("active");
   document.getElementById("createKeyModal").style.display = "flex";
 }
@@ -491,6 +547,9 @@ async function createApiKey(e) {
   e.preventDefault();
   const names = document.getElementById("keyName").value.split("\n").filter(n => n.trim());
   if (names.length === 0) return;
+  const allowedModels = parseAllowedModels(document.getElementById("keyAllowedModels").value);
+  const rpmLimit = Number(document.getElementById("keyRPMLimit").value || 0);
+  const expiresAt = localExpiryValue("keyExpiresAt");
 
   createdKeys = [];
   for (const name of names) {
@@ -498,9 +557,10 @@ async function createApiKey(e) {
       const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, allowed_models: allowedModels, rpm_limit: rpmLimit, expires_at: expiresAt }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || "创建失败");
       createdKeys.push({ name, key: data.key });
     } catch (err) {
       createdKeys.push({ name, error: err.message });
@@ -511,6 +571,47 @@ async function createApiKey(e) {
   document.getElementById("showKeyModal").classList.add("active");
   document.getElementById("showKeyModal").style.display = "flex";
   loadApiKeys();
+}
+
+function openEditKeyModal(id) {
+  const key = apiKeys.find((item) => String(item.id) === String(id));
+  if (!key) return;
+  document.getElementById("editKeyId").value = id;
+  document.getElementById("editKeyAllowedModels").value = (key.allowed_models || []).join("\n");
+  document.getElementById("editKeyRPMLimit").value = String(key.rpm_limit || 0);
+  document.getElementById("editKeyExpiresAt").value = toDatetimeLocal(key.expires_at);
+  const modal = document.getElementById("editKeyModal");
+  modal.classList.add("active");
+  modal.style.display = "flex";
+}
+
+function closeEditKeyModal() {
+  const modal = document.getElementById("editKeyModal");
+  modal.classList.remove("active");
+  modal.style.display = "none";
+}
+
+async function saveKeyPolicy(e) {
+  e.preventDefault();
+  const id = document.getElementById("editKeyId").value;
+  const payload = {
+    allowed_models: parseAllowedModels(document.getElementById("editKeyAllowedModels").value),
+    rpm_limit: Number(document.getElementById("editKeyRPMLimit").value || 0),
+    expires_at: localExpiryValue("editKeyExpiresAt"),
+  };
+  try {
+    const res = await fetch(`/api/keys/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text() || "保存失败");
+    closeEditKeyModal();
+    showToast("策略已保存");
+    await loadApiKeys();
+  } catch (err) {
+    showToast("保存失败: " + err.message, "error");
+  }
 }
 
 // Render created keys

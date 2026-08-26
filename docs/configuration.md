@@ -36,6 +36,9 @@ cp config.example.json config.json
 | `admin_pass` | 自动生成 | 管理端密码，建议显式设置 |
 | `admin_path` | `/admin` | 管理端路径 |
 | `admin_token` | 空 | 管理端静态 token |
+| `inference_auth_enabled` | `true` | 模型和推理接口是否要求管理 API Key |
+| `credential_encryption_key_file` | `data/credential.key` | Redis 账号凭据 AES-GCM 主密钥文件；只持久化路径，不持久化密钥内容 |
+| `response_store_ttl_hours` | `720` | Build stored Response 账号归属记录的 Redis TTL（小时） |
 
 ### 2.2 Redis
 
@@ -118,6 +121,9 @@ cp config.example.json config.json
   "admin_user": "admin",
   "admin_pass": "change-me",
   "admin_path": "/admin",
+  "inference_auth_enabled": true,
+  "credential_encryption_key_file": "data/credential.key",
+  "response_store_ttl_hours": 720,
   "debug_enabled": true
 }
 ```
@@ -136,6 +142,9 @@ cp config.example.json config.json
 
 - `admin_pass` 若留空，会在启动时自动生成随机密码并写日志
 - 配置保存在 Redis 后，后续重启会优先使用 Redis 版本
+- 可用 `ORCHIDS_CREDENTIAL_ENCRYPTION_KEY` 提供 Base64、Hex 或 32 字节原始主密钥；环境变量优先于密钥文件
+- 首次启动自动创建主密钥文件，并把已有账号明文凭据迁移为 `enc:v1:` 密文
+- 主密钥不会写入 Redis 或管理 API；必须和 Redis 数据共同备份，切勿在已有账号后更换或删除
 - `data/tmp`、`debug-logs` 等目录是运行期产物，不是配置项
 - 许多历史字段即使仍出现在旧配置里，也不会改变当前运行行为
 

@@ -3,6 +3,7 @@ package debug
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -82,7 +83,8 @@ func TestLoggerLogUpstreamRequestRedactsCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(%q) error = %v", path, err)
 	}
-	if got := info.Mode().Perm(); got != 0600 {
+	// Windows does not expose Unix permission bits through os.FileMode.
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0600 {
 		t.Fatalf("debug log permissions=%o want 600", got)
 	}
 }

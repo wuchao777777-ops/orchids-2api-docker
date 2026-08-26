@@ -10,6 +10,8 @@
 |---|---|---|
 | `/warp/v1/messages` | POST | Warp 通道 Claude Messages 代理 |
 | `/puter/v1/messages` | POST | Puter 通道 Claude Messages 代理 |
+| `/grok/v1/messages` | POST | Grok 通道 Anthropic Messages 兼容入口 |
+| `/v1/messages` | POST | Grok Messages 兼容别名 |
 | `/*/v1/messages/count_tokens` | POST | 输入 token 估算 |
 
 ### 1.2 OpenAI Chat Completions 风格
@@ -21,7 +23,18 @@
 | `/grok/v1/chat/completions` | POST | Grok OpenAI 兼容入口 |
 | `/v1/chat/completions` | POST | Grok 兼容别名 |
 
-### 1.3 Grok 图片与文件
+### 1.3 OpenAI Responses 风格
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/grok/v1/responses`、`/v1/responses` | POST | 创建 Response；Build 原生支持 `store`、`previous_response_id` |
+| `/grok/v1/responses/compact`、`/v1/responses/compact` | POST | Build 原生上下文压缩，强制非流式 |
+| `/grok/v1/responses/{response_id}`、`/v1/responses/{response_id}` | GET | 查询 stored Response |
+| 同上 | DELETE | 删除 stored Response |
+
+stored Response 归属记录按客户端 API Key 隔离。连续请求和资源管理会固定使用创建该 Response 的 Build OAuth 账号；归属记录过期或账号不可用时不会切换到其他账号。
+
+### 1.4 Grok 图片与文件
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
@@ -32,7 +45,7 @@
 | `/grok/v1/files/{image\|video}/{name}` | GET | 本地缓存媒体文件 |
 | `/v1/files/{image\|video}/{name}` | GET | Grok 文件别名 |
 
-### 1.4 模型、健康与指标
+### 1.5 模型、健康与指标
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
@@ -57,7 +70,7 @@
 | `/api/accounts/{id}/check` | GET | 账号检查 |
 | `/api/accounts/{id}/usage` | GET | 账号用量 |
 | `/api/keys` | GET/POST | API Key 列表 / 创建 |
-| `/api/keys/{id}` | GET/PUT/DELETE | API Key 详情 / 更新 / 删除 |
+| `/api/keys/{id}` | PATCH/DELETE | 更新 API Key 状态或访问策略 / 删除 |
 | `/api/models` | GET/POST | 模型列表 / 创建模型 |
 | `/api/models/{id}` | GET/PUT/DELETE | 模型详情 / 更新 / 删除 |
 | `/api/models/refresh` | POST | 按通道刷新模型列表 |
@@ -127,9 +140,34 @@
 3. `X-Admin-Token: <admin_token>`
 4. Basic Auth，密码等于 `admin_pass`
 
-### 3.2 公共接口
+### 3.2 模型与推理接口
 
-- 普通代理接口默认不强制鉴权，通常由上层网关控制
+- 默认要求 `Authorization: Bearer <API Key>`；Anthropic Messages 客户端也可发送 `x-api-key: <API Key>`
+- API Key 通过管理端 `/api/keys` 创建、禁用、设置访问策略和删除
+- 模型列表、Messages、Chat、Responses、图片和视频任务均执行该校验
+- 只有在可信上游网关已经完成认证时，才应设置 `inference_auth_enabled=false`
+
+API Key 创建和更新支持以下策略字段：
+
+| 字段 | 语义 |
+|---|---|
+| `allowed_models` | 精确、忽略大小写的模型 ID 列表；空数组或省略表示不限，`["*"]` 也表示不限 |
+| `rpm_limit` | 固定分钟窗口内允许的请求数；`0` 或省略表示不限 |
+| `expires_at` | RFC3339 到期时间；创建时省略表示永不过期，PATCH 时传 `null` 可清除 |
+
+```json
+{
+  "name": "production-client",
+  "allowed_models": ["grok-4.6", "grok-imagine-image"],
+  "rpm_limit": 60,
+  "expires_at": "2026-12-31T16:00:00Z"
+}
+```
+
+RPM 在 Redis 中原子计数，并覆盖所有受 API Key 保护的模型与推理请求；超限返回 `429` 和 `Retry-After: 60`。模型列表会按白名单过滤，白名单外的推理请求返回 `403 model_not_allowed`。已有 Key 缺少这些字段时保持不限模型、不限 RPM、永不过期。
+
+### 3.3 公共工具接口
+
 - `/api/v1/public/*` 与 `/v1/public/*` 会按当前 `public_key` / `public_enabled` 逻辑鉴权
 
 ## 4. 请求语义说明
@@ -192,6 +230,7 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 
 ```bash
 curl -s http://127.0.0.1:3002/puter/v1/messages \
+	-H 'Authorization: Bearer sk-...' \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "claude-opus-5",
@@ -214,9 +253,10 @@ curl -s http://127.0.0.1:3002/puter/v1/messages \
 
 ```bash
 curl -s http://127.0.0.1:3002/grok/v1/chat/completions \
+	-H 'Authorization: Bearer sk-...' \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "grok-4",
+    "model": "grok-4.6",
     "messages": [{"role":"user","content":"介绍一下你自己"}],
     "stream": false
   }'

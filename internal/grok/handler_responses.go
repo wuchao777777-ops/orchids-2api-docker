@@ -170,6 +170,10 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	req.Model = normalizeModelID(req.Model)
+	if !requireAPIKeyModel(w, r, req.Model) {
+		return
+	}
 	h.applyDefaultResponsesStream(&req)
 	var nativePayload map[string]interface{}
 	if err := json.Unmarshal(body, &nativePayload); err != nil || nativePayload == nil {
@@ -230,35 +234,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 // request and event schema, this keeps SSE streaming realtime and bounded by
 // the normal HTTP backpressure instead of buffering the whole completion.
 func (h *Handler) handleNativeCLIResponses(w http.ResponseWriter, r *http.Request, modelID string, spec ModelSpec, payload map[string]interface{}) {
-	if err := h.ensureModelEnabled(r.Context(), modelID); err != nil {
-		http.Error(w, modelValidationMessage(modelID, err), http.StatusBadRequest)
-		return
-	}
-	if h == nil || h.cliClient == nil {
-		http.Error(w, "grok cli client not configured", http.StatusServiceUnavailable)
-		return
-	}
-	sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer sess.Close()
-
-	payload["model"] = spec.UpstreamModel
-	resp, err := h.doCLIWithAutoSwitch(r.Context(), sess, payload, spec.UpstreamModel)
-	if err != nil {
-		if markAllGrokAccountStatuses(err) {
-			h.markAccountStatus(r.Context(), sess.acc, err)
-		}
-		http.Error(w, err.Error(), upstreamHTTPResponseStatus(err))
-		return
-	}
-	defer resp.Body.Close()
-	h.syncGrokQuota(sess.acc, resp.Header)
-	copyNativeCLIResponseHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-	streamNativeCLIResponse(w, resp.Body)
+	h.handleNativeCLIResponsesAt(w, r, modelID, spec, payload, "/responses", true)
 }
 
 func copyNativeCLIResponseHeaders(dst, src http.Header) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -35,34 +36,58 @@ func registerRoutes(
 	limiter *middleware.ConcurrencyLimiter,
 	tmplRenderer *template.Renderer,
 ) {
+	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return middleware.APIKeyAuth(
+			func() bool { return cfg.InferenceAuthEnabled() },
+			func(ctx context.Context, token string) (*middleware.APIKeyPrincipal, error) {
+				key, err := s.AuthorizeApiKey(ctx, token)
+				switch {
+				case err == nil:
+					return &middleware.APIKeyPrincipal{ID: key.ID, AllowedModels: key.AllowedModels}, nil
+				case err == store.ErrNoRows:
+					return nil, nil
+				case err == store.ErrApiKeyExpired:
+					return &middleware.APIKeyPrincipal{DenialCode: middleware.APIKeyDenialExpired}, nil
+				case err == store.ErrApiKeyRateLimited:
+					return &middleware.APIKeyPrincipal{DenialCode: middleware.APIKeyDenialRateLimited}, nil
+				default:
+					return nil, err
+				}
+			},
+			next,
+		)
+	}
 	// --- Channel-specific message routes ---
-	mux.HandleFunc("/warp/v1/messages", limiter.Limit(h.HandleMessages))
-	mux.HandleFunc("/warp/v1/messages/count_tokens", limiter.Limit(h.HandleCountTokens))
-	mux.HandleFunc("/puter/v1/messages", limiter.Limit(h.HandleMessages))
-	mux.HandleFunc("/puter/v1/messages/count_tokens", limiter.Limit(h.HandleCountTokens))
+	mux.HandleFunc("/warp/v1/messages", inferenceAuth(limiter.Limit(h.HandleMessages)))
+	mux.HandleFunc("/warp/v1/messages/count_tokens", inferenceAuth(limiter.Limit(h.HandleCountTokens)))
+	mux.HandleFunc("/puter/v1/messages", inferenceAuth(limiter.Limit(h.HandleMessages)))
+	mux.HandleFunc("/puter/v1/messages/count_tokens", inferenceAuth(limiter.Limit(h.HandleCountTokens)))
 
 	// --- Model routes (channel prefixes → same handlers) ---
 	modelPrefixes := []string{"/warp/v1", "/puter/v1", "/grok/v1", "/v1"}
-	registerWithPrefixes(mux, modelPrefixes, "/models", h.HandleModels)
-	registerWithPrefixes(mux, modelPrefixes, "/models/", h.HandleModelByID)
+	registerWithPrefixes(mux, modelPrefixes, "/models", inferenceAuth(h.HandleModels))
+	registerWithPrefixes(mux, modelPrefixes, "/models/", inferenceAuth(h.HandleModelByID))
 
 	// --- OpenAI-compatible chat/image routes (channel-specific + unified) ---
-	mux.HandleFunc("/warp/v1/chat/completions", limiter.Limit(h.HandleMessages))
-	mux.HandleFunc("/puter/v1/chat/completions", limiter.Limit(h.HandleMessages))
+	mux.HandleFunc("/warp/v1/chat/completions", inferenceAuth(limiter.Limit(h.HandleMessages)))
+	mux.HandleFunc("/puter/v1/chat/completions", inferenceAuth(limiter.Limit(h.HandleMessages)))
 
 	grokPrefixes := []string{"/grok/v1", "/v1"}
-	registerWithPrefixes(mux, grokPrefixes, "/chat/completions", limiter.Limit(grokHandler.HandleChatCompletions))
-	registerWithPrefixes(mux, grokPrefixes, "/responses", limiter.Limit(grokHandler.HandleResponses))
-	registerWithPrefixes(mux, grokPrefixes, "/images/generations", limiter.Limit(grokHandler.HandleImagesGenerations))
-	registerWithPrefixes(mux, grokPrefixes, "/images/edits", limiter.Limit(grokHandler.HandleImagesEdits))
-	registerWithPrefixes(mux, grokPrefixes, "/videos", limiter.Limit(grokHandler.HandleVideosCreate))
-	registerWithPrefixes(mux, grokPrefixes, "/videos/", limiter.Limit(func(w http.ResponseWriter, r *http.Request) {
+	registerWithPrefixes(mux, grokPrefixes, "/chat/completions", inferenceAuth(limiter.Limit(grokHandler.HandleChatCompletions)))
+	registerWithPrefixes(mux, grokPrefixes, "/messages", inferenceAuth(limiter.Limit(grokHandler.HandleMessages)))
+	registerWithPrefixes(mux, grokPrefixes, "/responses", inferenceAuth(limiter.Limit(grokHandler.HandleResponses)))
+	registerWithPrefixes(mux, grokPrefixes, "/responses/compact", inferenceAuth(limiter.Limit(grokHandler.HandleResponsesCompact)))
+	registerWithPrefixes(mux, grokPrefixes, "/responses/", inferenceAuth(limiter.Limit(grokHandler.HandleResponseResource)))
+	registerWithPrefixes(mux, grokPrefixes, "/images/generations", inferenceAuth(limiter.Limit(grokHandler.HandleImagesGenerations)))
+	registerWithPrefixes(mux, grokPrefixes, "/images/edits", inferenceAuth(limiter.Limit(grokHandler.HandleImagesEdits)))
+	registerWithPrefixes(mux, grokPrefixes, "/videos", inferenceAuth(limiter.Limit(grokHandler.HandleVideosCreate)))
+	registerWithPrefixes(mux, grokPrefixes, "/videos/", inferenceAuth(limiter.Limit(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/content") {
 			grokHandler.HandleVideosContent(w, r)
 			return
 		}
 		grokHandler.HandleVideosRetrieve(w, r)
-	}))
+	})))
 	registerWithPrefixes(mux, grokPrefixes, "/files/", grokHandler.HandleFiles)
 
 	// --- Public auth/login (no prefix duplication) ---

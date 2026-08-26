@@ -25,6 +25,7 @@ import (
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/logutil"
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
@@ -525,6 +526,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		apperrors.New("invalid_request_error", "Invalid request body", http.StatusBadRequest).WriteResponse(w)
+		return
+	}
+	if !middleware.APIKeyAllowsModel(r.Context(), req.Model) {
+		apperrors.New("permission_error", "API key is not allowed to use model "+strings.TrimSpace(req.Model), http.StatusForbidden).WriteResponse(w)
 		return
 	}
 	responseFormat := adapter.DetectResponseFormat(r.URL.Path)

@@ -186,6 +186,9 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		req.Model = "grok-imagine-image"
 		slog.Info("Auto mapped image_config request to image model", "from", originalModel, "to", req.Model)
 	}
+	if !requireAPIKeyModel(w, r, req.Model) {
+		return
+	}
 	if err := h.ensureModelEnabled(r.Context(), req.Model); err != nil {
 		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
 		return

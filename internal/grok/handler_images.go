@@ -87,6 +87,9 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	}
 	req.Model = normalizeModelID(req.Model)
 	req.Normalize()
+	if !requireAPIKeyModel(w, r, req.Model) {
+		return
+	}
 	req.ResponseFormat = normalizeImageResponseFormat(req.ResponseFormat)
 	if !isImageGenerationModel(req.Model) {
 		http.Error(w, "image generation model must be one of [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-quality, grok-imagine-image-pro]", http.StatusBadRequest)

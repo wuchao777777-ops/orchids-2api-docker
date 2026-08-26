@@ -43,6 +43,7 @@ Thumbs.db
 # Runtime data
 debug-logs/
 data/tmp/
+/data/credential.key
 internal/grok/data/
 /config.json
 

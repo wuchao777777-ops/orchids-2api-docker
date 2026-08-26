@@ -185,6 +185,9 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Model = normalizeModelID(firstNonEmpty(req.Model, "grok-imagine-video"))
+	if !requireAPIKeyModel(w, r, req.Model) {
+		return
+	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" {
 		http.Error(w, "prompt cannot be empty", http.StatusBadRequest)

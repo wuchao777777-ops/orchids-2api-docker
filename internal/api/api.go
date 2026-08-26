@@ -748,17 +748,55 @@ type ImportResult struct {
 }
 
 type CreateKeyResponse struct {
-	ID        int64     `json:"id"`
-	Key       string    `json:"key"`
-	Name      string    `json:"name"`
-	KeyPrefix string    `json:"key_prefix"`
-	KeySuffix string    `json:"key_suffix"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            int64      `json:"id"`
+	Key           string     `json:"key"`
+	Name          string     `json:"name"`
+	KeyPrefix     string     `json:"key_prefix"`
+	KeySuffix     string     `json:"key_suffix"`
+	Enabled       bool       `json:"enabled"`
+	AllowedModels []string   `json:"allowed_models,omitempty"`
+	RPMLimit      int        `json:"rpm_limit,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type UpdateKeyRequest struct {
-	Enabled *bool `json:"enabled"`
+	Enabled       *bool           `json:"enabled"`
+	AllowedModels *[]string       `json:"allowed_models"`
+	RPMLimit      *int            `json:"rpm_limit"`
+	ExpiresAt     json.RawMessage `json:"expires_at"`
+}
+
+func normalizeAllowedModels(models []string) []string {
+	seen := make(map[string]struct{}, len(models))
+	normalized := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.ToLower(strings.TrimSpace(model))
+		if model == "" {
+			continue
+		}
+		if model == "*" {
+			return []string{"*"}
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		normalized = append(normalized, model)
+	}
+	return normalized
+}
+
+func parseOptionalExpiry(raw json.RawMessage) (*time.Time, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, nil
+	}
+	var expiresAt time.Time
+	if err := json.Unmarshal(raw, &expiresAt); err != nil {
+		return nil, fmt.Errorf("expires_at must be an RFC3339 timestamp or null")
+	}
+	expiresAt = expiresAt.UTC()
+	return &expiresAt, nil
 }
 
 func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
@@ -1879,7 +1917,10 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req struct {
-			Name string `json:"name"`
+			Name          string     `json:"name"`
+			AllowedModels []string   `json:"allowed_models"`
+			RPMLimit      int        `json:"rpm_limit"`
+			ExpiresAt     *time.Time `json:"expires_at"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1889,6 +1930,18 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 		if req.Name == "" {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
+		}
+		if req.RPMLimit < 0 {
+			http.Error(w, "rpm_limit must be greater than or equal to zero", http.StatusBadRequest)
+			return
+		}
+		if req.ExpiresAt != nil {
+			expiresAt := req.ExpiresAt.UTC()
+			if !time.Now().UTC().Before(expiresAt) {
+				http.Error(w, "expires_at must be in the future", http.StatusBadRequest)
+				return
+			}
+			req.ExpiresAt = &expiresAt
 		}
 
 		fullKey, err := generateApiKey()
@@ -1901,12 +1954,15 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 		hash := sha256.Sum256([]byte(fullKey))
 		hashStr := hex.EncodeToString(hash[:])
 		key := store.ApiKey{
-			Name:      req.Name,
-			KeyHash:   hashStr,
-			KeyFull:   fullKey,
-			KeyPrefix: "sk-",
-			KeySuffix: fullKey[len(fullKey)-4:],
-			Enabled:   true,
+			Name:          req.Name,
+			KeyHash:       hashStr,
+			KeyFull:       fullKey,
+			KeyPrefix:     "sk-",
+			KeySuffix:     fullKey[len(fullKey)-4:],
+			Enabled:       true,
+			AllowedModels: normalizeAllowedModels(req.AllowedModels),
+			RPMLimit:      req.RPMLimit,
+			ExpiresAt:     req.ExpiresAt,
 		}
 		if err := a.store.CreateApiKey(r.Context(), &key); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1915,13 +1971,16 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(CreateKeyResponse{
-			ID:        key.ID,
-			Key:       fullKey,
-			Name:      key.Name,
-			KeyPrefix: key.KeyPrefix,
-			KeySuffix: key.KeySuffix,
-			Enabled:   key.Enabled,
-			CreatedAt: key.CreatedAt,
+			ID:            key.ID,
+			Key:           fullKey,
+			Name:          key.Name,
+			KeyPrefix:     key.KeyPrefix,
+			KeySuffix:     key.KeySuffix,
+			Enabled:       key.Enabled,
+			AllowedModels: key.AllowedModels,
+			RPMLimit:      key.RPMLimit,
+			ExpiresAt:     key.ExpiresAt,
+			CreatedAt:     key.CreatedAt,
 		})
 
 	default:
@@ -1946,12 +2005,12 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.Enabled == nil {
-			http.Error(w, "enabled is required", http.StatusBadRequest)
+		if req.Enabled == nil && req.AllowedModels == nil && req.RPMLimit == nil && len(req.ExpiresAt) == 0 {
+			http.Error(w, "at least one policy field is required", http.StatusBadRequest)
 			return
 		}
-
-		if err := a.store.UpdateApiKeyEnabled(r.Context(), id, *req.Enabled); err != nil {
+		key, err := a.store.GetApiKeyByID(r.Context(), id)
+		if err != nil {
 			if errors.Is(err, store.ErrNoRows) {
 				http.Error(w, "not found", http.StatusNotFound)
 				return
@@ -1959,14 +2018,33 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		key, err := a.store.GetApiKeyByID(r.Context(), id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if req.Enabled != nil {
+			key.Enabled = *req.Enabled
 		}
-		if key == nil {
-			http.Error(w, "not found", http.StatusNotFound)
+		if req.AllowedModels != nil {
+			key.AllowedModels = normalizeAllowedModels(*req.AllowedModels)
+		}
+		if req.RPMLimit != nil {
+			if *req.RPMLimit < 0 {
+				http.Error(w, "rpm_limit must be greater than or equal to zero", http.StatusBadRequest)
+				return
+			}
+			key.RPMLimit = *req.RPMLimit
+		}
+		if len(req.ExpiresAt) > 0 {
+			expiresAt, err := parseOptionalExpiry(req.ExpiresAt)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if expiresAt != nil && !time.Now().UTC().Before(*expiresAt) {
+				http.Error(w, "expires_at must be in the future", http.StatusBadRequest)
+				return
+			}
+			key.ExpiresAt = expiresAt
+		}
+		if err := a.store.UpdateApiKey(r.Context(), key); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		json.NewEncoder(w).Encode(key)

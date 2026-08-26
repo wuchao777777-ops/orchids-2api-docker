@@ -8,6 +8,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/debug"
+	"orchids-api/internal/middleware"
 )
 
 var (
@@ -46,6 +47,22 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, v interface{}) bool 
 		return false
 	}
 	return true
+}
+
+func requireAPIKeyModel(w http.ResponseWriter, r *http.Request, model string) bool {
+	if middleware.APIKeyAllowsModel(r.Context(), model) {
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": "API key is not allowed to use model " + strings.TrimSpace(model),
+			"type":    "permission_error",
+			"code":    "model_not_allowed",
+		},
+	})
+	return false
 }
 
 // requireGrokStore writes the standard 503 response and returns false when the

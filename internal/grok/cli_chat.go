@@ -47,6 +47,10 @@ func (h *Handler) cliHeaders(acc *store.Account, token string) http.Header {
 // on transient failures (401 after refresh, 5xx) while treating team-level 429
 // as shared (no switch).
 func (h *Handler) doCLIWithAutoSwitch(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelID string) (*http.Response, error) {
+	return h.doCLIWithAutoSwitchAt(ctx, sess, payload, modelID, "/responses")
+}
+
+func (h *Handler) doCLIWithAutoSwitchAt(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelID, path string) (*http.Response, error) {
 	if sess == nil || sess.acc == nil {
 		return nil, fmt.Errorf("empty cli chat session")
 	}
@@ -55,8 +59,29 @@ func (h *Handler) doCLIWithAutoSwitch(ctx context.Context, sess *chatAccountSess
 	}
 	client := h.cliClient
 	return h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond,
-		func() (*http.Response, error) { return client.doResponses(ctx, sess.acc, payload) },
+		func() (*http.Response, error) { return client.doResponsesAt(ctx, sess.acc, path, payload) },
 		func(used []int64) (*chatAccountSession, error) { return h.openCLIAccountSession(ctx, used, modelID) }, nil)
+}
+
+func (h *Handler) openCLIAccountSessionByID(ctx context.Context, accountID int64, modelID string) (*chatAccountSession, error) {
+	if h == nil || h.lb == nil || h.lb.Store == nil || accountID == 0 {
+		return nil, fmt.Errorf("stored response account is unavailable")
+	}
+	acc, err := h.lb.Store.GetAccount(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("stored response account is unavailable: %w", err)
+	}
+	if acc == nil || !acc.Enabled || ProviderForAccount(acc) != ProviderBuild || !AccountSupportsModel(acc, modelID) {
+		return nil, fmt.Errorf("stored response account is unavailable")
+	}
+	token := strings.TrimSpace(acc.OAuthAccessToken)
+	if token == "" {
+		token = strings.TrimSpace(acc.OAuthRefreshToken)
+	}
+	if token == "" {
+		return nil, fmt.Errorf("stored response account token is empty")
+	}
+	return &chatAccountSession{acc: acc, token: token, release: h.trackAccount(acc)}, nil
 }
 
 // openCLIAccountSession selects the next available Build CLI OAuth account.

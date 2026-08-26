@@ -25,6 +25,9 @@ type Config struct {
 	AdminPass          string `json:"admin_pass"`
 	AdminPath          string `json:"admin_path"`
 	AdminToken         string `json:"admin_token"`
+	InferenceAuth      *bool  `json:"inference_auth_enabled,omitempty"`
+	CredentialKeyFile  string `json:"credential_encryption_key_file,omitempty"`
+	ResponseStoreTTL   int    `json:"response_store_ttl_hours,omitempty"`
 	StoreMode          string `json:"store_mode"`
 	RedisAddr          string `json:"redis_addr"`
 	RedisPassword      string `json:"redis_password"`
@@ -210,6 +213,12 @@ func ApplyDefaults(cfg *Config) {
 	}
 	if cfg.RedisPrefix == "" {
 		cfg.RedisPrefix = "orchids:"
+	}
+	if strings.TrimSpace(cfg.CredentialKeyFile) == "" {
+		cfg.CredentialKeyFile = filepath.Join("data", "credential.key")
+	}
+	if cfg.ResponseStoreTTL <= 0 {
+		cfg.ResponseStoreTTL = 30 * 24
 	}
 	if cfg.CacheTTL <= 0 {
 		cfg.CacheTTL = 5
@@ -415,6 +424,13 @@ func (c *Config) PublicAPIKey() string {
 
 func (c *Config) PublicAPIEnabled() bool {
 	return c != nil && c.PublicEnabled != nil && *c.PublicEnabled
+}
+
+// InferenceAuthEnabled reports whether model and inference endpoints require
+// a managed API key. Authentication is enabled by default; trusted upstream
+// gateways can explicitly opt out with inference_auth_enabled=false.
+func (c *Config) InferenceAuthEnabled() bool {
+	return c == nil || c.InferenceAuth == nil || *c.InferenceAuth
 }
 
 func generateRandomPassword(length int) (string, error) {

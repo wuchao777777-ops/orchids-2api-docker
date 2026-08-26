@@ -5,6 +5,9 @@
   "admin_pass": "",
   "admin_path": "/admin",
   "admin_token": "",
+  "inference_auth_enabled": true,
+  "credential_encryption_key_file": "data/credential.key",
+  "response_store_ttl_hours": 720,
   "store_mode": "redis",
   "redis_addr": "127.0.0.1:6379",
   "redis_password": "",
@@ -18,7 +21,7 @@
   "grok_cli_client_identifier": "grok-cli",
   "grok_cli_oauth_client_id": "b1a00492-073a-47ea-816f-4c329264a828",
   "grok_cli_oauth_token_url": "https://auth.x.ai/oauth2/token",
-  "grok_cli_model_ids": ["grok-build-0.1"],
+  "grok_cli_model_ids": [],
   "grok_session_identity_refresh": true,
 
   "egress_comment": "Egress proxy pool + FlareSolverr + Cloudflare clearance auto-refresh. Disabled by default; keep grok_egress_enabled=false unless you run multiple exit nodes.",

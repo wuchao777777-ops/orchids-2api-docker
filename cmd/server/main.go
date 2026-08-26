@@ -31,13 +31,19 @@ func main() {
 	configPath := flag.String("config", "", "Path to config.json/config.yaml")
 	flag.Parse()
 
-	cfg, _, err := config.Load(*configPath)
+	cfg, resolvedConfigPath, err := config.Load(*configPath)
 	if err != nil {
 		slog.New(slog.NewJSONHandler(os.Stdout, nil)).Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
 
 	configureRuntimeLogging(cfg)
+	credentialKey, credentialKeySource, err := config.LoadOrCreateCredentialEncryptionKey(resolvedConfigPath, cfg)
+	if err != nil {
+		slog.Error("Failed to load credential encryption key", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Credential encryption enabled", "key_source", credentialKeySource)
 
 	// DebugEnabled creates per-request files even when verbose diagnostics are
 	// disabled, so always apply startup retention in debug mode.
@@ -50,11 +56,12 @@ func main() {
 	}
 
 	s, err := store.New(store.Options{
-		StoreMode:     cfg.StoreMode,
-		RedisAddr:     cfg.RedisAddr,
-		RedisPassword: cfg.RedisPassword,
-		RedisDB:       cfg.RedisDB,
-		RedisPrefix:   cfg.RedisPrefix,
+		StoreMode:               cfg.StoreMode,
+		RedisAddr:               cfg.RedisAddr,
+		RedisPassword:           cfg.RedisPassword,
+		RedisDB:                 cfg.RedisDB,
+		RedisPrefix:             cfg.RedisPrefix,
+		CredentialEncryptionKey: credentialKey,
 	})
 	if err != nil {
 		slog.Error("Failed to initialize database", "error", err)

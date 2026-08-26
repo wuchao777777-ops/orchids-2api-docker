@@ -287,6 +287,9 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		model = "grok-imagine-image-edit"
 	}
 	model = normalizeModelID(model)
+	if !requireAPIKeyModel(w, r, model) {
+		return
+	}
 	if !isImageEditModel(model) {
 		http.Error(w, "The model `grok-imagine-image-edit` is required for image edits.", http.StatusBadRequest)
 		return

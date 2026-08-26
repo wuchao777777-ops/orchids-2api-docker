@@ -7,6 +7,8 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/debug"
+	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/middleware"
 )
 
 // HandleCountTokens handles /v1/messages/count_tokens requests.
@@ -19,6 +21,10 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 	var req ClaudeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if !middleware.APIKeyAllowsModel(r.Context(), req.Model) {
+		apperrors.New("permission_error", "API key is not allowed to use model "+strings.TrimSpace(req.Model), http.StatusForbidden).WriteResponse(w)
 		return
 	}
 

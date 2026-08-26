@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 
@@ -10,16 +13,120 @@ import (
 	"orchids-api/internal/util"
 )
 
+const (
+	APIKeyDenialExpired     = "api_key_expired"
+	APIKeyDenialRateLimited = "rate_limit_exceeded"
+)
+
+type APIKeyPrincipal struct {
+	ID            int64
+	AllowedModels []string
+	DenialCode    string
+}
+
+type APIKeyValidator func(context.Context, string) (*APIKeyPrincipal, error)
+
+type apiKeyFingerprintContextKey struct{}
+type apiKeyPrincipalContextKey struct{}
+
+// APIKeyFingerprint returns a stable, non-secret identity for the validated
+// client key. Stateful inference resources use it to enforce ownership.
+func APIKeyFingerprint(ctx context.Context) string {
+	value, _ := ctx.Value(apiKeyFingerprintContextKey{}).(string)
+	return value
+}
+
+// APIKeyAllowsModel checks the exact, case-insensitive model allowlist attached
+// by APIKeyAuth. An absent or empty allowlist is unrestricted for compatibility.
+func APIKeyAllowsModel(ctx context.Context, model string) bool {
+	principal, _ := ctx.Value(apiKeyPrincipalContextKey{}).(*APIKeyPrincipal)
+	if principal == nil || len(principal.AllowedModels) == 0 {
+		return true
+	}
+	model = strings.ToLower(strings.TrimSpace(model))
+	for _, allowed := range principal.AllowedModels {
+		allowed = strings.ToLower(strings.TrimSpace(allowed))
+		if allowed == "*" || (model != "" && allowed == model) {
+			return true
+		}
+	}
+	return false
+}
+
+// APIKeyAuth protects model and inference endpoints with a managed key. It
+// accepts OpenAI-style Bearer auth and Anthropic's x-api-key header. enabled is
+// evaluated per request so config hot reloads take effect.
+func APIKeyAuth(enabled func() bool, validate APIKeyValidator, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if enabled != nil && !enabled() {
+			ctx := context.WithValue(r.Context(), apiKeyFingerprintContextKey{}, "anonymous")
+			next(w, r.WithContext(ctx))
+			return
+		}
+		token := apiKeyToken(r)
+		if token == "" {
+			writeAPIKeyError(w, http.StatusUnauthorized, "Missing API key", "invalid_api_key")
+			return
+		}
+		principal, err := validate(r.Context(), token)
+		if err != nil {
+			writeAPIKeyError(w, http.StatusServiceUnavailable, "API key validation unavailable", "auth_unavailable")
+			return
+		}
+		if principal == nil {
+			writeAPIKeyError(w, http.StatusUnauthorized, "Invalid API key", "invalid_api_key")
+			return
+		}
+		switch principal.DenialCode {
+		case APIKeyDenialExpired:
+			writeAPIKeyError(w, http.StatusUnauthorized, "API key has expired", APIKeyDenialExpired)
+			return
+		case APIKeyDenialRateLimited:
+			w.Header().Set("Retry-After", "60")
+			writeAPIKeyError(w, http.StatusTooManyRequests, "API key rate limit exceeded", APIKeyDenialRateLimited)
+			return
+		}
+		digest := sha256.Sum256([]byte(token))
+		ctx := context.WithValue(r.Context(), apiKeyFingerprintContextKey{}, hex.EncodeToString(digest[:]))
+		ctx = context.WithValue(ctx, apiKeyPrincipalContextKey{}, principal)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+func writeAPIKeyError(w http.ResponseWriter, status int, message, code string) {
+	w.Header().Set("WWW-Authenticate", "Bearer")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	errorType := "authentication_error"
+	if status == http.StatusTooManyRequests {
+		errorType = "rate_limit_error"
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": message,
+			"type":    errorType,
+			"code":    code,
+		},
+	})
+}
+
 func bearerToken(r *http.Request) string {
 	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 	if authHeader == "" {
 		return ""
 	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(authHeader, prefix) {
+	parts := strings.Fields(authHeader)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return ""
 	}
-	return strings.TrimSpace(authHeader[len(prefix):])
+	return parts[1]
+}
+
+func apiKeyToken(r *http.Request) string {
+	if token := bearerToken(r); token != "" {
+		return token
+	}
+	return strings.TrimSpace(r.Header.Get("x-api-key"))
 }
 
 func writeBearerUnauthorized(w http.ResponseWriter, message string) {

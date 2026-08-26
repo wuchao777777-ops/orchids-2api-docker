@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"github.com/goccy/go-json"
 	"sort"
@@ -15,13 +17,28 @@ import (
 )
 
 type redisStore struct {
-	client *redis.Client
-	prefix string
+	client      *redis.Client
+	prefix      string
+	credentials *credentialCipher
 }
 
 const redisBatchParallelThreshold = 32
 
 var (
+	consumeApiKeyRPMScript = redis.NewScript(`
+		local value = redis.call("GET", KEYS[2])
+		if not value then return redis.error_reply("api key not found") end
+		local api_key = cjson.decode(value)
+		api_key.last_used_at = ARGV[2]
+		redis.call("SET", KEYS[2], cjson.encode(api_key))
+		local limit = tonumber(ARGV[3])
+		if limit <= 0 then return 0 end
+		local count = redis.call("INCR", KEYS[1])
+		if count == 1 then
+			redis.call("EXPIRE", KEYS[1], tonumber(ARGV[1]))
+		end
+		return count
+	`)
 	incrementRequestCountScript = redis.NewScript(`
 		local key = KEYS[1]
 		local now_str = ARGV[1]
@@ -59,18 +76,21 @@ var (
 )
 
 type apiKeyRecord struct {
-	ID         int64      `json:"id"`
-	Name       string     `json:"name"`
-	KeyHash    string     `json:"key_hash"`
-	KeyFull    string     `json:"key_full,omitempty"`
-	KeyPrefix  string     `json:"key_prefix"`
-	KeySuffix  string     `json:"key_suffix"`
-	Enabled    bool       `json:"enabled"`
-	LastUsedAt *time.Time `json:"last_used_at"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID            int64      `json:"id"`
+	Name          string     `json:"name"`
+	KeyHash       string     `json:"key_hash"`
+	KeyFull       string     `json:"key_full,omitempty"`
+	KeyPrefix     string     `json:"key_prefix"`
+	KeySuffix     string     `json:"key_suffix"`
+	Enabled       bool       `json:"enabled"`
+	AllowedModels []string   `json:"allowed_models,omitempty"`
+	RPMLimit      int        `json:"rpm_limit,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt    *time.Time `json:"last_used_at"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
-func newRedisStore(addr, password string, db int, prefix string) (*redisStore, error) {
+func newRedisStore(addr, password string, db int, prefix string, credentialKey []byte) (*redisStore, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
 		return nil, fmt.Errorf("redis address is required")
@@ -97,7 +117,12 @@ func newRedisStore(addr, password string, db int, prefix string) (*redisStore, e
 		return nil, fmt.Errorf("redis ping failed: %w", err)
 	}
 
-	return &redisStore{client: client, prefix: prefix}, nil
+	credentials, err := newCredentialCipher(credentialKey)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return &redisStore{client: client, prefix: prefix, credentials: credentials}, nil
 }
 
 func (s *redisStore) Client() *redis.Client {
@@ -133,7 +158,7 @@ func (s *redisStore) CreateAccount(ctx context.Context, acc *Account) error {
 		acc.UpdatedAt = now
 	}
 
-	data, err := json.Marshal(acc)
+	data, err := s.marshalAccount(acc)
 	if err != nil {
 		return err
 	}
@@ -268,7 +293,7 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	}
 	updated.UpdatedAt = time.Now()
 
-	data, err := json.Marshal(&updated)
+	data, err := s.marshalAccount(&updated)
 	if err != nil {
 		return err
 	}
@@ -378,14 +403,7 @@ func (s *redisStore) getAccount(ctx context.Context, id int64) (*Account, error)
 		return nil, err
 	}
 
-	var acc Account
-	if err := json.Unmarshal([]byte(value), &acc); err != nil {
-		return nil, err
-	}
-	if acc.ID == 0 {
-		acc.ID = id
-	}
-	return &acc, nil
+	return s.unmarshalAccount([]byte(value), id)
 }
 
 // getAccountsByIDsPipelined 使用 Pipeline 批量获取账号数据
@@ -451,28 +469,32 @@ func (s *redisStore) getAccountsByIDs(ctx context.Context, ids []string, onlyEna
 	}
 
 	results := make([]*Account, len(values))
+	decodeErrs := make([]error, len(values))
 	decode := func(i int) {
 		strVal, ok := values[i].(string)
 		if !ok || strVal == "" {
 			return
 		}
-		var acc Account
-		if err := json.Unmarshal([]byte(strVal), &acc); err != nil {
+		acc, err := s.unmarshalAccount([]byte(strVal), idNums[i])
+		if err != nil {
+			decodeErrs[i] = err
 			return
-		}
-		if acc.ID == 0 {
-			acc.ID = idNums[i]
 		}
 		if onlyEnabled && !acc.Enabled {
 			return
 		}
-		results[i] = &acc
+		results[i] = acc
 	}
 	if len(values) >= redisBatchParallelThreshold {
 		util.ParallelFor(len(values), decode)
 	} else {
 		for i := range values {
 			decode(i)
+		}
+	}
+	for _, decodeErr := range decodeErrs {
+		if decodeErr != nil {
+			return nil, decodeErr
 		}
 	}
 
@@ -557,24 +579,34 @@ func (s *redisStore) ListApiKeys(ctx context.Context) ([]*ApiKey, error) {
 	return s.getApiKeysByIDs(ctx, ids)
 }
 
-func (s *redisStore) UpdateApiKeyEnabled(ctx context.Context, id int64, enabled bool) error {
+func (s *redisStore) UpdateApiKey(ctx context.Context, key *ApiKey) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")
 	}
-	if id == 0 {
+	if key == nil || key.ID == 0 {
 		return ErrNoRows
 	}
-	key, err := s.getApiKeyByID(ctx, id)
+	existing, err := s.getApiKeyByID(ctx, key.ID)
 	if err != nil {
 		return err
 	}
-	key.Enabled = enabled
 	record := apiKeyRecordFromKey(key)
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
-	return s.client.Set(ctx, s.apiKeysKey(id), data, 0).Err()
+	pipe := s.client.Pipeline()
+	pipe.Set(ctx, s.apiKeysKey(key.ID), data, 0)
+	if existing.KeyHash != record.KeyHash {
+		if existing.KeyHash != "" {
+			pipe.Del(ctx, s.apiKeysHashKey(existing.KeyHash))
+		}
+		if record.KeyHash != "" {
+			pipe.Set(ctx, s.apiKeysHashKey(record.KeyHash), key.ID, 0)
+		}
+	}
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 func (s *redisStore) DeleteApiKey(ctx context.Context, id int64) error {
@@ -604,6 +636,47 @@ func (s *redisStore) GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, erro
 		return nil, fmt.Errorf("redis store not configured")
 	}
 	return s.getApiKeyByID(ctx, id)
+}
+
+func (s *redisStore) GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey, error) {
+	if s == nil || s.client == nil {
+		return nil, fmt.Errorf("redis store not configured")
+	}
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return nil, ErrNoRows
+	}
+	id, err := s.client.Get(ctx, s.apiKeysHashKey(hash)).Int64()
+	if err == redis.Nil {
+		return nil, ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.getApiKeyByID(ctx, id)
+}
+
+func (s *redisStore) ConsumeApiKeyRPM(ctx context.Context, id int64, limit int, now time.Time) (bool, error) {
+	if s == nil || s.client == nil {
+		return false, fmt.Errorf("redis store not configured")
+	}
+	if id == 0 {
+		return false, ErrNoRows
+	}
+	minute := now.UTC().Unix() / 60
+	ttl := int64(120)
+	count, err := consumeApiKeyRPMScript.Run(
+		ctx,
+		s.client,
+		[]string{s.apiKeyRPMKey(id, minute), s.apiKeysKey(id)},
+		ttl,
+		now.UTC().Format(time.RFC3339Nano),
+		limit,
+	).Int64()
+	if err != nil {
+		return false, err
+	}
+	return count <= int64(limit), nil
 }
 
 func (s *redisStore) getApiKeyByID(ctx context.Context, id int64) (*ApiKey, error) {
@@ -728,30 +801,107 @@ func (s *redisStore) apiKeysHashKey(hash string) string {
 	return s.prefix + "api_keys:hash:" + hash
 }
 
+func (s *redisStore) apiKeyRPMKey(id, minute int64) string {
+	return fmt.Sprintf("%sapi_keys:rpm:%d:%d", s.prefix, id, minute)
+}
+
+func (s *redisStore) storedResponseKey(responseID, ownerHash string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(ownerHash) + "\x00" + strings.TrimSpace(responseID)))
+	return s.prefix + "responses:ownership:" + hex.EncodeToString(digest[:])
+}
+
+func (s *redisStore) SaveStoredResponse(ctx context.Context, response *StoredResponse, ttl time.Duration) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("redis store not configured")
+	}
+	if response == nil || strings.TrimSpace(response.ResponseID) == "" || strings.TrimSpace(response.OwnerHash) == "" {
+		return fmt.Errorf("response id and owner are required")
+	}
+	if ttl <= 0 {
+		ttl = 30 * 24 * time.Hour
+	}
+	now := time.Now().UTC()
+	stored := *response
+	stored.ResponseID = strings.TrimSpace(stored.ResponseID)
+	stored.OwnerHash = strings.TrimSpace(stored.OwnerHash)
+	if stored.CreatedAt.IsZero() {
+		stored.CreatedAt = now
+	}
+	stored.UpdatedAt = now
+	stored.ExpiresAt = now.Add(ttl)
+	data, err := json.Marshal(&stored)
+	if err != nil {
+		return err
+	}
+	return s.client.Set(ctx, s.storedResponseKey(stored.ResponseID, stored.OwnerHash), data, ttl).Err()
+}
+
+func (s *redisStore) GetStoredResponse(ctx context.Context, responseID, ownerHash string) (*StoredResponse, error) {
+	if s == nil || s.client == nil {
+		return nil, fmt.Errorf("redis store not configured")
+	}
+	value, err := s.client.Get(ctx, s.storedResponseKey(responseID, ownerHash)).Bytes()
+	if err == redis.Nil {
+		return nil, ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+	var response StoredResponse
+	if err := json.Unmarshal(value, &response); err != nil {
+		return nil, err
+	}
+	if !response.ExpiresAt.IsZero() && !time.Now().UTC().Before(response.ExpiresAt) {
+		_ = s.client.Del(ctx, s.storedResponseKey(responseID, ownerHash)).Err()
+		return nil, ErrNoRows
+	}
+	return &response, nil
+}
+
+func (s *redisStore) DeleteStoredResponse(ctx context.Context, responseID, ownerHash string) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("redis store not configured")
+	}
+	deleted, err := s.client.Del(ctx, s.storedResponseKey(responseID, ownerHash)).Result()
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return ErrNoRows
+	}
+	return nil
+}
+
 func apiKeyRecordFromKey(key *ApiKey) apiKeyRecord {
 	return apiKeyRecord{
-		ID:         key.ID,
-		Name:       key.Name,
-		KeyHash:    key.KeyHash,
-		KeyPrefix:  key.KeyPrefix,
-		KeySuffix:  key.KeySuffix,
-		Enabled:    key.Enabled,
-		LastUsedAt: key.LastUsedAt,
-		CreatedAt:  key.CreatedAt,
+		ID:            key.ID,
+		Name:          key.Name,
+		KeyHash:       key.KeyHash,
+		KeyPrefix:     key.KeyPrefix,
+		KeySuffix:     key.KeySuffix,
+		Enabled:       key.Enabled,
+		AllowedModels: append([]string(nil), key.AllowedModels...),
+		RPMLimit:      key.RPMLimit,
+		ExpiresAt:     key.ExpiresAt,
+		LastUsedAt:    key.LastUsedAt,
+		CreatedAt:     key.CreatedAt,
 	}
 }
 
 func (r apiKeyRecord) toApiKey() *ApiKey {
 	return &ApiKey{
-		ID:         r.ID,
-		Name:       r.Name,
-		KeyHash:    r.KeyHash,
-		KeyFull:    r.KeyFull,
-		KeyPrefix:  r.KeyPrefix,
-		KeySuffix:  r.KeySuffix,
-		Enabled:    r.Enabled,
-		LastUsedAt: r.LastUsedAt,
-		CreatedAt:  r.CreatedAt,
+		ID:            r.ID,
+		Name:          r.Name,
+		KeyHash:       r.KeyHash,
+		KeyFull:       r.KeyFull,
+		KeyPrefix:     r.KeyPrefix,
+		KeySuffix:     r.KeySuffix,
+		Enabled:       r.Enabled,
+		AllowedModels: append([]string(nil), r.AllowedModels...),
+		RPMLimit:      r.RPMLimit,
+		ExpiresAt:     r.ExpiresAt,
+		LastUsedAt:    r.LastUsedAt,
+		CreatedAt:     r.CreatedAt,
 	}
 }
 

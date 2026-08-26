@@ -86,6 +86,47 @@ func TestCLIOAuthAccessTokenRefreshes(t *testing.T) {
 	}
 }
 
+func TestCLIResponsesRefreshesRejectedUnexpiredTokenOnSameAccount(t *testing.T) {
+	var responseCalls, refreshCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth/token":
+			refreshCalls++
+			_, _ = w.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`))
+		case "/v1/responses":
+			responseCalls++
+			if r.Header.Get("Authorization") == "Bearer old-access" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":{"message":"expired"}}`))
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer new-access" {
+				t.Fatalf("authorization=%q", r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`{"id":"resp_refreshed","object":"response"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{GrokCLIBaseURL: server.URL + "/v1", GrokCLIOAuthTokenURL: server.URL + "/oauth/token"}
+	client := NewCLIClient(cfg)
+	client.httpClient = server.Client()
+	client.oauth.httpClient = server.Client()
+	acc := &store.Account{
+		OAuthAccessToken: "old-access", OAuthRefreshToken: "old-refresh", OAuthExpiresAt: time.Now().Add(time.Hour),
+	}
+	resp, err := client.doResponses(context.Background(), acc, map[string]interface{}{"model": "grok-4.6", "input": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if responseCalls != 2 || refreshCalls != 1 || acc.OAuthAccessToken != "new-access" {
+		t.Fatalf("response_calls=%d refresh_calls=%d access=%q", responseCalls, refreshCalls, acc.OAuthAccessToken)
+	}
+}
+
 func TestCLIOAuthAccessTokenCoalescesConcurrentRefreshes(t *testing.T) {
 	var calls int
 	var callsMu sync.Mutex

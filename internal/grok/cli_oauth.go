@@ -81,6 +81,30 @@ func (o *CLIOAuth) AccessToken(ctx context.Context, acc *store.Account) (string,
 	return o.refreshAndPersist(ctx, acc, refreshToken)
 }
 
+// ForceRefresh rotates an access token after the upstream explicitly rejects
+// an otherwise unexpired token. Stateful Responses must retry the same account
+// rather than switching to a different account and losing conversation state.
+func (o *CLIOAuth) ForceRefresh(ctx context.Context, acc *store.Account) (string, error) {
+	if acc == nil {
+		return "", fmt.Errorf("empty cli oauth account")
+	}
+	lock := cliOAuthLockForAccount(acc)
+	lock.Lock()
+	defer lock.Unlock()
+	if o != nil && o.store != nil && acc.ID != 0 {
+		if latest, err := o.store.GetAccount(ctx, acc.ID); err == nil && latest != nil {
+			acc.OAuthAccessToken = latest.OAuthAccessToken
+			acc.OAuthRefreshToken = latest.OAuthRefreshToken
+			acc.OAuthExpiresAt = latest.OAuthExpiresAt
+		}
+	}
+	refreshToken := strings.TrimSpace(acc.OAuthRefreshToken)
+	if refreshToken == "" {
+		return "", &cliOAuthError{status: http.StatusUnauthorized, message: "grok cli oauth refresh token is missing"}
+	}
+	return o.refreshAndPersist(ctx, acc, refreshToken)
+}
+
 func cliOAuthLockForAccount(acc *store.Account) *sync.Mutex {
 	key := "unknown"
 	if acc != nil && acc.ID != 0 {

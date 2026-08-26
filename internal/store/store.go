@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,7 +14,11 @@ import (
 	"orchids-api/internal/modelpolicy"
 )
 
-var ErrNoRows = fmt.Errorf("no rows in result set")
+var (
+	ErrNoRows            = fmt.Errorf("no rows in result set")
+	ErrApiKeyExpired     = fmt.Errorf("api key expired")
+	ErrApiKeyRateLimited = fmt.Errorf("api key rate limit exceeded")
+)
 
 type Account struct {
 	ID                   int64     `json:"id"`
@@ -133,30 +139,48 @@ type Settings struct {
 }
 
 type ApiKey struct {
-	ID         int64      `json:"id"`
-	Name       string     `json:"name"`
-	KeyHash    string     `json:"-"`
-	KeyFull    string     `json:"-"`
-	KeyPrefix  string     `json:"key_prefix"`
-	KeySuffix  string     `json:"key_suffix"`
-	Enabled    bool       `json:"enabled"`
-	LastUsedAt *time.Time `json:"last_used_at"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID            int64      `json:"id"`
+	Name          string     `json:"name"`
+	KeyHash       string     `json:"-"`
+	KeyFull       string     `json:"-"`
+	KeyPrefix     string     `json:"key_prefix"`
+	KeySuffix     string     `json:"key_suffix"`
+	Enabled       bool       `json:"enabled"`
+	AllowedModels []string   `json:"allowed_models,omitempty"`
+	RPMLimit      int        `json:"rpm_limit,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt    *time.Time `json:"last_used_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// StoredResponse records the ownership needed to continue or manage an
+// upstream Responses resource without retaining the request or response body.
+type StoredResponse struct {
+	ResponseID string    `json:"response_id"`
+	OwnerHash  string    `json:"owner_hash"`
+	AccountID  int64     `json:"account_id"`
+	Model      string    `json:"model"`
+	Provider   string    `json:"provider"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type Store struct {
-	accounts accountStore
-	settings settingsStore
-	apiKeys  apiKeyStore
-	models   modelStore
+	accounts  accountStore
+	settings  settingsStore
+	apiKeys   apiKeyStore
+	models    modelStore
+	responses responseStore
 }
 
 type Options struct {
-	StoreMode     string
-	RedisAddr     string
-	RedisPassword string
-	RedisDB       int
-	RedisPrefix   string
+	StoreMode               string
+	RedisAddr               string
+	RedisPassword           string
+	RedisDB                 int
+	RedisPrefix             string
+	CredentialEncryptionKey []byte
 }
 
 type accountStore interface {
@@ -178,9 +202,11 @@ type settingsStore interface {
 type apiKeyStore interface {
 	CreateApiKey(ctx context.Context, key *ApiKey) error
 	ListApiKeys(ctx context.Context) ([]*ApiKey, error)
-	UpdateApiKeyEnabled(ctx context.Context, id int64, enabled bool) error
+	UpdateApiKey(ctx context.Context, key *ApiKey) error
 	DeleteApiKey(ctx context.Context, id int64) error
 	GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error)
+	GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey, error)
+	ConsumeApiKeyRPM(ctx context.Context, id int64, limit int, now time.Time) (bool, error)
 }
 
 type modelStore interface {
@@ -193,9 +219,15 @@ type modelStore interface {
 	GetModelByChannelAndModelID(ctx context.Context, channel, modelID string) (*Model, error)
 }
 
+type responseStore interface {
+	SaveStoredResponse(ctx context.Context, response *StoredResponse, ttl time.Duration) error
+	GetStoredResponse(ctx context.Context, responseID, ownerHash string) (*StoredResponse, error)
+	DeleteStoredResponse(ctx context.Context, responseID, ownerHash string) error
+}
+
 func New(opts Options) (*Store, error) {
 	store := &Store{}
-	redisStore, err := newRedisStore(opts.RedisAddr, opts.RedisPassword, opts.RedisDB, opts.RedisPrefix)
+	redisStore, err := newRedisStore(opts.RedisAddr, opts.RedisPassword, opts.RedisDB, opts.RedisPrefix, opts.CredentialEncryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init redis store: %w", err)
 	}
@@ -203,6 +235,11 @@ func New(opts Options) (*Store, error) {
 	store.settings = redisStore
 	store.apiKeys = redisStore
 	store.models = redisStore
+	store.responses = redisStore
+	if err := redisStore.migrateLegacyAccountCredentials(context.Background()); err != nil {
+		_ = redisStore.Close()
+		return nil, fmt.Errorf("failed to migrate account credentials: %w", err)
+	}
 	if err := store.seedModels(); err != nil {
 		slog.Warn("failed to seed models in redis", "error", err)
 	}
@@ -468,6 +505,51 @@ func (s *Store) CreateApiKey(ctx context.Context, key *ApiKey) error {
 	return fmt.Errorf("api keys store not configured")
 }
 
+// AuthorizeApiKey authenticates a raw client key and atomically applies its
+// optional per-minute request limit. Raw keys are never persisted by this path.
+func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error) {
+	if s == nil || s.apiKeys == nil {
+		return nil, fmt.Errorf("api key store not configured")
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, ErrNoRows
+	}
+	digest := sha256.Sum256([]byte(raw))
+	key, err := s.apiKeys.GetApiKeyByHash(ctx, hex.EncodeToString(digest[:]))
+	if err != nil {
+		return nil, err
+	}
+	if key == nil || !key.Enabled {
+		return nil, ErrNoRows
+	}
+	now := time.Now().UTC()
+	if key.ExpiresAt != nil && !now.Before(key.ExpiresAt.UTC()) {
+		return nil, ErrApiKeyExpired
+	}
+	allowed, err := s.apiKeys.ConsumeApiKeyRPM(ctx, key.ID, key.RPMLimit, now)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, ErrApiKeyRateLimited
+	}
+	key.LastUsedAt = &now
+	return key, nil
+}
+
+// ValidateApiKey is retained for callers that only need a boolean result.
+func (s *Store) ValidateApiKey(ctx context.Context, raw string) (bool, error) {
+	_, err := s.AuthorizeApiKey(ctx, raw)
+	if err == nil {
+		return true, nil
+	}
+	if err == ErrNoRows || err == ErrApiKeyExpired || err == ErrApiKeyRateLimited {
+		return false, nil
+	}
+	return false, err
+}
+
 func (s *Store) ListApiKeys(ctx context.Context) ([]*ApiKey, error) {
 	if s.apiKeys != nil {
 		return s.apiKeys.ListApiKeys(ctx)
@@ -476,8 +558,20 @@ func (s *Store) ListApiKeys(ctx context.Context) ([]*ApiKey, error) {
 }
 
 func (s *Store) UpdateApiKeyEnabled(ctx context.Context, id int64, enabled bool) error {
-	if s.apiKeys != nil {
-		return s.apiKeys.UpdateApiKeyEnabled(ctx, id, enabled)
+	if s == nil || s.apiKeys == nil {
+		return fmt.Errorf("api keys store not configured")
+	}
+	key, err := s.apiKeys.GetApiKeyByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	key.Enabled = enabled
+	return s.apiKeys.UpdateApiKey(ctx, key)
+}
+
+func (s *Store) UpdateApiKey(ctx context.Context, key *ApiKey) error {
+	if s != nil && s.apiKeys != nil {
+		return s.apiKeys.UpdateApiKey(ctx, key)
 	}
 	return fmt.Errorf("api keys store not configured")
 }
@@ -494,6 +588,27 @@ func (s *Store) GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error) {
 		return s.apiKeys.GetApiKeyByID(ctx, id)
 	}
 	return nil, fmt.Errorf("api keys store not configured")
+}
+
+func (s *Store) SaveStoredResponse(ctx context.Context, response *StoredResponse, ttl time.Duration) error {
+	if s == nil || s.responses == nil {
+		return fmt.Errorf("response store not configured")
+	}
+	return s.responses.SaveStoredResponse(ctx, response, ttl)
+}
+
+func (s *Store) GetStoredResponse(ctx context.Context, responseID, ownerHash string) (*StoredResponse, error) {
+	if s == nil || s.responses == nil {
+		return nil, fmt.Errorf("response store not configured")
+	}
+	return s.responses.GetStoredResponse(ctx, responseID, ownerHash)
+}
+
+func (s *Store) DeleteStoredResponse(ctx context.Context, responseID, ownerHash string) error {
+	if s == nil || s.responses == nil {
+		return fmt.Errorf("response store not configured")
+	}
+	return s.responses.DeleteStoredResponse(ctx, responseID, ownerHash)
 }
 
 // Model wrappers

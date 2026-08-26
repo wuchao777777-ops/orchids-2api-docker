@@ -26,6 +26,9 @@ func TestConfigDefaults(t *testing.T) {
 	if got := cfg.PublicAPIKey(); got != "" {
 		t.Fatalf("PublicAPIKey()=%q want empty", got)
 	}
+	if cfg.ResponseStoreTTL != 720 {
+		t.Fatalf("ResponseStoreTTL=%d want=720", cfg.ResponseStoreTTL)
+	}
 }
 
 func TestApplyDefaultsGeneratesRandomPassword(t *testing.T) {

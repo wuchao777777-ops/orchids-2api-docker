@@ -125,6 +125,10 @@ func (c *CLIClient) clientIdentifier() string {
 // confirmed Cloudflare challenge invalidates the egress clearance and retries at
 // most once.
 func (c *CLIClient) doResponses(ctx context.Context, acc *store.Account, payload map[string]interface{}) (*http.Response, error) {
+	return c.doResponsesAt(ctx, acc, "/responses", payload)
+}
+
+func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path string, payload map[string]interface{}) (*http.Response, error) {
 	if acc == nil {
 		return nil, fmt.Errorf("empty cli account")
 	}
@@ -141,8 +145,9 @@ func (c *CLIClient) doResponses(ctx context.Context, acc *store.Account, payload
 		}
 	}
 	challengeRetried := false
+	authRetried := false
 	for {
-		resp, err := c.doResponsesOnce(ctx, acc, payload)
+		resp, err := c.doResponsesOnceAt(ctx, acc, path, payload)
 		if err != nil {
 			return nil, err
 		}
@@ -150,6 +155,12 @@ func (c *CLIClient) doResponses(ctx context.Context, acc *store.Account, payload
 			return resp, nil
 		}
 		raw, headerCopy := readBoundedResponse(resp)
+		if resp.StatusCode == http.StatusUnauthorized && !authRetried && c.oauth != nil && strings.TrimSpace(acc.OAuthRefreshToken) != "" {
+			authRetried = true
+			if _, refreshErr := c.oauth.ForceRefresh(ctx, acc); refreshErr == nil {
+				continue
+			}
+		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			if meta := noteTeamRateLimit(resp.StatusCode, resp.Header, raw); meta != nil {
@@ -195,6 +206,10 @@ func (c *CLIClient) doResponses(ctx context.Context, acc *store.Account, payload
 // doResponsesOnce issues a single CLI Responses request (token, headers, egress
 // lease, decompress) without retry logic.
 func (c *CLIClient) doResponsesOnce(ctx context.Context, acc *store.Account, payload map[string]interface{}) (*http.Response, error) {
+	return c.doResponsesOnceAt(ctx, acc, "/responses", payload)
+}
+
+func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, path string, payload map[string]interface{}) (*http.Response, error) {
 	if c == nil || c.oauth == nil {
 		return nil, fmt.Errorf("grok cli client not configured")
 	}
@@ -209,7 +224,8 @@ func (c *CLIClient) doResponsesOnce(ctx context.Context, acc *store.Account, pay
 	if err != nil {
 		return nil, err
 	}
-	endpoint := c.baseURL() + "/responses"
+	path = "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
+	endpoint := c.baseURL() + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -225,6 +241,47 @@ func (c *CLIClient) doResponsesOnce(ctx context.Context, acc *store.Account, pay
 		return nil, fmt.Errorf("grok cli decode failed: %w", err)
 	}
 	return resp, nil
+}
+
+// doResponseResource forwards GET/DELETE for a stored Build Responses
+// resource. Non-2xx statuses are returned intact so the downstream API can
+// preserve the upstream resource semantics.
+func (c *CLIClient) doResponseResource(ctx context.Context, acc *store.Account, method, path, rawQuery string) (*http.Response, error) {
+	if c == nil || c.oauth == nil || acc == nil {
+		return nil, fmt.Errorf("grok cli client or account not configured")
+	}
+	path = "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
+	for attempt := 0; attempt < 2; attempt++ {
+		token, err := c.oauth.AccessToken(ctx, acc)
+		if err != nil {
+			return nil, err
+		}
+		endpoint := c.baseURL() + path
+		if strings.TrimSpace(rawQuery) != "" {
+			endpoint += "?" + rawQuery
+		}
+		req, err := http.NewRequestWithContext(ctx, method, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header = c.cliHeaders(acc, token)
+		resp, err := c.doCLIRequest(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if err := decodeHTTPResponseBody(resp); err != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("grok cli decode failed: %w", err)
+		}
+		if resp.StatusCode != http.StatusUnauthorized || attempt > 0 || strings.TrimSpace(acc.OAuthRefreshToken) == "" {
+			return resp, nil
+		}
+		_ = resp.Body.Close()
+		if _, err := c.oauth.ForceRefresh(ctx, acc); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("grok cli resource authentication failed")
 }
 
 // VerifyAccount checks a Build CLI OAuth account by minting a token and probing

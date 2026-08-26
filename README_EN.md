@@ -7,7 +7,7 @@ A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-com
 ## Current Status
 
 - `internal/handler` serves `warp` / `puter` for both `/v1/messages` and `/v1/chat/completions`
-- `internal/grok` handles `grok` chat, image, and local file endpoints
+- `internal/grok` handles Grok Messages, Responses, Chat, image, video, and local media endpoints
 - per-channel model sync is available through `POST /api/models/refresh`
 - Puter non-stream Claude Messages regressions are covered for `Read`, `Write`, `Edit`, `Delete`, long-context, and multi-round `tool_result`
 
@@ -21,6 +21,7 @@ A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-com
 - Redis-backed persistence
 - Prometheus metrics and optional `pprof`
 - Grok image generation, editing, and local media caching
+- API-key authentication by default, per-key model/RPM/expiration policies, and AES-GCM encryption for persisted account credentials
 
 ## Supported Channels
 
@@ -28,7 +29,7 @@ A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-com
 |---|---|
 | `warp` | `/warp/v1/messages`, `/warp/v1/chat/completions` |
 | `puter` | `/puter/v1/messages`, `/puter/v1/chat/completions` |
-| `grok` | `/grok/v1/chat/completions`, `/grok/v1/images/*`, `/grok/v1/files/*` |
+| `grok` | `/grok/v1/messages`, `/grok/v1/responses`, `/grok/v1/chat/completions`, image, video, and file routes |
 
 Unified model lookup:
 
@@ -74,6 +75,9 @@ cp config.example.json config.json
   "admin_user": "admin",
   "admin_pass": "",
   "admin_path": "/admin",
+  "inference_auth_enabled": true,
+  "credential_encryption_key_file": "data/credential.key",
+  "response_store_ttl_hours": 720,
   "debug_enabled": false
 }
 ```
@@ -83,6 +87,8 @@ Notes:
 - if `admin_pass` is omitted, the server generates a random password at startup and prints it to logs
 - in production, set a strong `admin_pass` explicitly and keep `debug_enabled` set to `false`
 - if Redis already contains `settings:config`, that stored config overrides the file on boot
+- the first start creates `data/credential.key`; persist and back it up with Redis, because losing it makes stored account credentials unreadable
+- create an API key in the admin UI and send it as `Authorization: Bearer <API Key>`; Anthropic SDKs may use `x-api-key`
 
 ### 3. Start the server
 
@@ -130,13 +136,13 @@ Basic health checks:
 
 ```bash
 curl -s http://127.0.0.1:3002/health
-curl -s http://127.0.0.1:3002/v1/models
+curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 ```
 
 Measure time to headers, first streaming frame, and total response time:
 
 ```bash
-go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions
+go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions -header "Authorization: Bearer sk-..."
 ```
 
 `cmd/ttfbbench` is a standalone diagnostic utility and is not built into the server.
@@ -173,6 +179,10 @@ Auth methods:
 - `Authorization: Bearer <admin_token>`
 - `X-Admin-Token: <admin_token>`
 - Basic Auth with password equal to `admin_pass`
+
+Model and inference endpoints require a managed API key by default. Each key can restrict models, requests per minute, and expiration; existing keys remain unrestricted unless configured. Set `inference_auth_enabled=false` only behind a trusted authenticating gateway.
+
+Grok Build Responses also supports `POST /v1/responses/compact` and `GET`/`DELETE /v1/responses/{response_id}`. Stored response ownership is isolated by client API key, pinned to the creating OAuth account, and retained for 720 hours by default.
 
 ## License
 
