@@ -1012,6 +1012,47 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 	return c.GetUsage(ctx, token, modelID)
 }
 
+// GetWebQuota reads the Web SSO quota products using the upstream's stable
+// mode names. Web rate-limits are keyed by "auto" and "fast", not by the
+// public model ID (for example, grok-4.5). A partial result is returned when
+// one mode is unavailable; callers can still display the successful window.
+func (c *Client) GetWebQuota(ctx context.Context, token string) (map[string]*RateLimitInfo, error) {
+	token = strings.TrimSpace(token)
+	if NormalizeSSOToken(token) == "" {
+		return nil, fmt.Errorf("empty token")
+	}
+	windows := make(map[string]*RateLimitInfo, 2)
+	var errs []string
+	for _, mode := range []string{"auto", "fast"} {
+		info, err := c.getUsageByMode(ctx, token, mode)
+		if err != nil {
+			if IsAuthenticationFailure(err) {
+				return nil, err
+			}
+			errs = append(errs, mode+": "+err.Error())
+			continue
+		}
+		if info != nil {
+			windows[mode] = info
+		}
+	}
+	if len(windows) > 0 {
+		return windows, nil
+	}
+	if len(errs) == 0 {
+		return nil, fmt.Errorf("grok web quota unavailable")
+	}
+	return nil, fmt.Errorf("grok web quota unavailable: %s", strings.Join(errs, "; "))
+}
+
+func (c *Client) getUsageByMode(ctx context.Context, token, mode string) (*RateLimitInfo, error) {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return nil, fmt.Errorf("empty quota mode")
+	}
+	return c.getUsageBySpec(ctx, token, ModelSpec{ModeID: mode})
+}
+
 func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {
 	token = strings.TrimSpace(token)
 	if NormalizeSSOToken(token) == "" {

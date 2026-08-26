@@ -75,6 +75,10 @@ type Account struct {
 	// are short-lived throttling windows rather than subscription allowance.
 	GrokBilling    GrokBillingSnapshot   `json:"grok_billing,omitempty"`
 	GrokRateLimits GrokRateLimitSnapshot `json:"grok_rate_limits,omitempty"`
+	// GrokWebQuota stores the Web SSO quota windows returned by the upstream
+	// auto/fast modes. It is intentionally separate from Build billing and
+	// passive request/token rate-limit headers.
+	GrokWebQuota GrokWebQuotaSnapshot `json:"grok_web_quota,omitempty"`
 }
 
 // GrokQuotaWindow is one explicit upstream usage or throttling dimension.
@@ -105,6 +109,16 @@ type GrokRateLimitSnapshot struct {
 	Tokens     GrokQuotaWindow `json:"tokens,omitempty"`
 	Model      string          `json:"model,omitempty"`
 	ObservedAt time.Time       `json:"observed_at,omitempty"`
+}
+
+// GrokWebQuotaSnapshot is the authoritative Web SSO quota snapshot. Either
+// mode may be unavailable for a given account, so each window carries its own
+// presence markers and the snapshot can represent a partial response.
+type GrokWebQuotaSnapshot struct {
+	Auto     GrokQuotaWindow `json:"auto,omitempty"`
+	Fast     GrokQuotaWindow `json:"fast,omitempty"`
+	SyncedAt time.Time       `json:"synced_at,omitempty"`
+	Source   string          `json:"source,omitempty"`
 }
 
 // AccountStatusWarpQuotaExhausted records a Warp credit exhaustion separately

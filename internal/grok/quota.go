@@ -8,6 +8,60 @@ import (
 	"orchids-api/internal/store"
 )
 
+// ApplyWebQuotaInfo persists the independent Web SSO auto/fast windows and
+// keeps the legacy aggregate Usage* fields useful to the existing admin UI.
+// A partial response is valid: one upstream mode can be temporarily absent.
+func ApplyWebQuotaInfo(acc *store.Account, windows map[string]*RateLimitInfo) bool {
+	if acc == nil || len(windows) == 0 {
+		return false
+	}
+	snapshot := store.GrokWebQuotaSnapshot{SyncedAt: time.Now().UTC(), Source: "grok_web_rate_limits"}
+	if info := windows["auto"]; info != nil {
+		snapshot.Auto = quotaWindowFromRateLimitInfo(info)
+	}
+	if info := windows["fast"]; info != nil {
+		snapshot.Fast = quotaWindowFromRateLimitInfo(info)
+	}
+	changed := acc.GrokWebQuota != snapshot
+	acc.GrokWebQuota = snapshot
+
+	// Prefer auto, then fast, for compatibility fields used by older clients.
+	var preferred *RateLimitInfo
+	if windows["auto"] != nil {
+		preferred = windows["auto"]
+	} else {
+		preferred = windows["fast"]
+	}
+	if preferred != nil {
+		if ApplyQuotaInfo(acc, preferred) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+func quotaWindowFromRateLimitInfo(info *RateLimitInfo) store.GrokQuotaWindow {
+	if info == nil {
+		return store.GrokQuotaWindow{}
+	}
+	window := store.GrokQuotaWindow{
+		Limit:        float64(info.Limit),
+		Remaining:    float64(info.Remaining),
+		HasLimit:     info.HasLimit,
+		HasRemaining: info.HasRemaining,
+		ResetAt:      info.ResetAt,
+	}
+	if info.HasLimit && info.Limit > 0 && info.HasRemaining {
+		used := info.Limit - info.Remaining
+		if used < 0 {
+			used = 0
+		}
+		window.UsagePercent = float64(used) * 100 / float64(info.Limit)
+		window.HasUsage = true
+	}
+	return window
+}
+
 const (
 	basicDefaultQuota float64 = 30
 	liteDefaultQuota  float64 = 70

@@ -3,6 +3,7 @@ package grok
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,6 +69,23 @@ var (
 	errGrokSessionUnauthenticated = fmt.Errorf("grok session unauthenticated")
 	errGrokSessionBlocked         = fmt.Errorf("grok session blocked")
 )
+
+// IsAuthenticationFailure reports only definitive SSO authentication or
+// account-block signals. Quota/model availability errors intentionally do not
+// match this predicate.
+func IsAuthenticationFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errGrokSessionUnauthenticated) || errors.Is(err, errGrokSessionBlocked) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "status=401") ||
+		strings.Contains(lower, "status 401") ||
+		strings.Contains(lower, "blocked-user") ||
+		strings.Contains(lower, "user is blocked")
+}
 
 // FetchSessionIdentity resolves the stable identity of an SSO account via
 // GET {base}/api/auth/session. 15s timeout; the request uses the same browser

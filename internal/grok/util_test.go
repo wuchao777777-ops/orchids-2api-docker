@@ -229,6 +229,23 @@ func TestApplyQuotaInfo_InfersLiteSubscription(t *testing.T) {
 	}
 }
 
+func TestApplyWebQuotaInfoPersistsModeWindows(t *testing.T) {
+	acc := &store.Account{AccountType: "grok"}
+	changed := ApplyWebQuotaInfo(acc, map[string]*RateLimitInfo{
+		"auto": {Limit: 30, HasLimit: true, Remaining: 18, HasRemaining: true},
+		"fast": {Limit: 7, HasLimit: true, Remaining: 4, HasRemaining: true},
+	})
+	if !changed {
+		t.Fatal("ApplyWebQuotaInfo changed=false")
+	}
+	if !acc.GrokWebQuota.Auto.HasLimit || acc.GrokWebQuota.Auto.Remaining != 18 || acc.GrokWebQuota.Fast.Remaining != 4 {
+		t.Fatalf("snapshot=%+v", acc.GrokWebQuota)
+	}
+	if acc.UsageCurrent != 18 || acc.UsageLimit != 30 {
+		t.Fatalf("legacy aggregate current=%v limit=%v", acc.UsageCurrent, acc.UsageLimit)
+	}
+}
+
 func TestApplyQuotaInfo_InfersBasicFromFreeAutoWindow(t *testing.T) {
 	acc := &store.Account{}
 	changed := ApplyQuotaInfo(acc, &RateLimitInfo{

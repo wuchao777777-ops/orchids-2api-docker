@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -127,6 +128,18 @@ func (c *CLIClient) doResponses(ctx context.Context, acc *store.Account, payload
 	if acc == nil {
 		return nil, fmt.Errorf("empty cli account")
 	}
+	// A Build team-level RPM/RPS limit applies to every sibling account in the
+	// same team.  Waiting here is essential: retryWithAccountSwitch may select
+	// a different OAuth row, but that row still shares the same upstream bucket.
+	// The wait is context-cancellable and does not mark the account as failed.
+	modelID := strings.TrimSpace(fmt.Sprint(payload["model"]))
+	if modelID != "" && strings.TrimSpace(acc.TeamID) != "" {
+		for _, scope := range []RateLimitScope{RateLimitScopeRPS, RateLimitScopeRPM} {
+			if err := teamCooldown.Wait(ctx, scope, acc.TeamID, modelID); err != nil {
+				return nil, err
+			}
+		}
+	}
 	challengeRetried := false
 	for {
 		resp, err := c.doResponsesOnce(ctx, acc, payload)
@@ -139,7 +152,20 @@ func (c *CLIClient) doResponses(ctx context.Context, acc *store.Account, payload
 		raw, headerCopy := readBoundedResponse(resp)
 
 		if resp.StatusCode == http.StatusTooManyRequests {
-			noteTeamRateLimit(resp.StatusCode, resp.Header, raw)
+			if meta := noteTeamRateLimit(resp.StatusCode, resp.Header, raw); meta != nil {
+				// Keep the selected account's durable diagnostic state in sync. The
+				// in-memory team/model registry remains authoritative for waiting;
+				// this timestamp is only for admin visibility and restart diagnostics.
+				cooldownUntil := time.Now().Add(meta.RetryAfter)
+				if meta.RetryAfter > 0 && (acc.QuotaResetAt.IsZero() || cooldownUntil.After(acc.QuotaResetAt)) {
+					acc.QuotaResetAt = cooldownUntil
+					if c.oauth != nil && c.oauth.store != nil && acc.ID != 0 {
+						if err := c.oauth.store.UpdateAccount(ctx, acc); err != nil {
+							slog.Warn("grok cli: failed to persist team cooldown diagnostic", "account_id", acc.ID, "error", err)
+						}
+					}
+				}
+			}
 			recordCLIUpstreamStatus(resp.StatusCode)
 			return nil, newCLIUpstreamError(resp.StatusCode, headerCopy, raw, "")
 		}
@@ -284,7 +310,15 @@ func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]stri
 	}
 	var payload struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID      string `json:"id"`
+			Model   string `json:"model"`
+			ModelID string `json:"modelId"`
+			Hidden  bool   `json:"hidden"`
+			Meta    struct {
+				Model   string `json:"model"`
+				ModelID string `json:"modelId"`
+				Hidden  bool   `json:"hidden"`
+			} `json:"_meta"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -293,7 +327,11 @@ func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]stri
 	seen := make(map[string]struct{}, len(payload.Data))
 	models := make([]string, 0, len(payload.Data))
 	for _, item := range payload.Data {
-		model := strings.TrimSpace(item.ID)
+		if item.Hidden || item.Meta.Hidden {
+			continue
+		}
+		model := firstNonEmpty(item.ID, item.Model, item.ModelID, item.Meta.Model, item.Meta.ModelID)
+		model = strings.TrimSpace(model)
 		if model == "" {
 			continue
 		}

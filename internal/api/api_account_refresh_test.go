@@ -19,6 +19,11 @@ func TestRefreshAccountState_GrokSyncsRemainingQuota(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/auth/session" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"authenticated","session":{"userId":"user-1"}}`))
+			return
+		}
 		if r.URL.Path != "/rest/rate-limits" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -58,6 +63,11 @@ func TestRefreshAccountState_GrokQuotaIgnoresStaleAgentMode(t *testing.T) {
 
 	var requestedModels []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/auth/session" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"authenticated","session":{"userId":"user-23"}}`))
+			return
+		}
 		if r.URL.Path != "/rest/rate-limits" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -93,8 +103,8 @@ func TestRefreshAccountState_GrokQuotaIgnoresStaleAgentMode(t *testing.T) {
 	if status != "" || httpStatus != 0 {
 		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
 	}
-	if len(requestedModels) != 1 || requestedModels[0] != "grok-4.5" {
-		t.Fatalf("requestedModels=%v want [grok-4.5]", requestedModels)
+	if len(requestedModels) != 2 || requestedModels[0] != "auto" || requestedModels[1] != "fast" {
+		t.Fatalf("requestedModels=%v want [auto fast]", requestedModels)
 	}
 	if acc.AgentMode != "grok-3" {
 		t.Fatalf("AgentMode=%q want grok-3", acc.AgentMode)
@@ -249,6 +259,9 @@ func TestNormalizeGrokTokenInput_PreservesFullCookie(t *testing.T) {
 	}
 
 	normalizeGrokTokenInput(acc)
+	if acc.CredentialType != "sso" {
+		t.Fatalf("CredentialType=%q want sso", acc.CredentialType)
+	}
 
 	for _, want := range []string{"sso=grok-token-a", "x-userid=user-1", "cf_clearance=cf-1", "__cf_bm=bm-1"} {
 		if !strings.Contains(acc.ClientCookie, want) {
@@ -260,6 +273,31 @@ func TestNormalizeGrokTokenInput_PreservesFullCookie(t *testing.T) {
 	}
 	if key := normalizedAccountCredentialKey(acc); key != "grok:grok-token-a" {
 		t.Fatalf("credential key=%q want grok:grok-token-a", key)
+	}
+}
+
+func TestVerifyGrokAccount_ModelNotFoundKeepsAuthenticatedSSOUsable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/rate-limits":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"code":5,"message":"Model not found.","details":[]}`))
+		case "/api/auth/session":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"authenticated","session":{"userId":"user-1","email":"user@example.com","organizationId":"team-1"}}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	acc := &store.Account{ID: 144, AccountType: "grok", ClientCookie: "sso=test-cookie"}
+	normalizeGrokTokenInput(acc)
+	if err := verifyGrokAccount(context.Background(), acc, &config.Config{GrokAPIBaseURL: srv.URL}, nil); err != nil {
+		t.Fatalf("verifyGrokAccount() error=%v", err)
+	}
+	if acc.UserID != "user-1" || acc.Email != "user@example.com" || acc.TeamID != "team-1" {
+		t.Fatalf("identity not applied: user=%q email=%q team=%q", acc.UserID, acc.Email, acc.TeamID)
 	}
 }
 

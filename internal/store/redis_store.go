@@ -263,6 +263,9 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	if !acc.GrokRateLimits.ObservedAt.IsZero() {
 		updated.GrokRateLimits = acc.GrokRateLimits
 	}
+	if !acc.GrokWebQuota.SyncedAt.IsZero() {
+		updated.GrokWebQuota = acc.GrokWebQuota
+	}
 	updated.UpdatedAt = time.Now()
 
 	data, err := json.Marshal(&updated)

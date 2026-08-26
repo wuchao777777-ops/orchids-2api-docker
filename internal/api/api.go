@@ -124,28 +124,6 @@ var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *
 	return client.FetchMonthlyUsage(ctx)
 }
 
-const defaultGrokVerifyModelID = "grok-4.5"
-
-func normalizeGrokVerifyModelID(raw string) string {
-	model := strings.TrimSpace(raw)
-	if model == "" {
-		return defaultGrokVerifyModelID
-	}
-	lower := strings.ToLower(model)
-	if lower == "grok" || !strings.HasPrefix(lower, "grok-") {
-		return defaultGrokVerifyModelID
-	}
-	return model
-}
-
-func isGrokModelNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "model is not found") || strings.Contains(lower, "model not found")
-}
-
 func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Config, accountStore *store.Store) error {
 	if acc == nil {
 		return fmt.Errorf("missing grok account")
@@ -191,24 +169,39 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	acc.ClientCookie = credential
 
 	client := grok.New(cfg)
-	if modelID := normalizeGrokVerifyModelID(acc.AgentMode); modelID != acc.AgentMode {
-		acc.AgentMode = modelID
+	// Session identity is the authentication check. Quota availability is a
+	// separate concern and must not be allowed to invalidate a valid cookie.
+	identityCtx, identityCancel := context.WithTimeout(ctx, 15*time.Second)
+	identity, identityErr := client.FetchSessionIdentity(identityCtx, credential)
+	identityCancel()
+	if identityErr != nil && grok.IsAuthenticationFailure(identityErr) {
+		return identityErr
+	}
+	if identityErr == nil {
+		if identity.UserID != "" {
+			acc.UserID = identity.UserID
+		}
+		if identity.Email != "" {
+			acc.Email = identity.Email
+		}
+		if identity.TeamID != "" {
+			acc.TeamID = identity.TeamID
+		}
+	} else {
+		slog.Warn("Grok SSO identity sync unavailable; continuing with quota sync", "account_id", acc.ID, "error", identityErr)
 	}
 
-	verifyCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	info, verifyErr := client.VerifyToken(verifyCtx, credential, "")
-	cancel()
-	if verifyErr != nil && isGrokModelNotFound(verifyErr) {
-		verifyCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
-		info, verifyErr = client.VerifyToken(verifyCtx, credential, defaultGrokVerifyModelID)
-		cancel()
+	quotaCtx, quotaCancel := context.WithTimeout(ctx, 25*time.Second)
+	windows, quotaErr := client.GetWebQuota(quotaCtx, credential)
+	quotaCancel()
+	if quotaErr != nil {
+		if grok.IsAuthenticationFailure(quotaErr) {
+			return quotaErr
+		}
+		slog.Warn("Grok SSO quota unavailable; account remains authenticated", "account_id", acc.ID, "error", quotaErr)
+		return nil
 	}
-	if verifyErr != nil {
-		return verifyErr
-	}
-	if info != nil {
-		grok.ApplyQuotaInfo(acc, info)
-	}
+	grok.ApplyWebQuotaInfo(acc, windows)
 	return nil
 }
 
@@ -274,6 +267,9 @@ func normalizeGrokTokenInput(acc *store.Account) {
 		acc.ProjectID = ""
 		return
 	}
+	// Any non-OAuth Grok credential is the Web SSO mode. Persist the explicit
+	// type so legacy imports do not appear as an unclassified account.
+	acc.CredentialType = "sso"
 	switch strings.ToLower(strings.TrimSpace(acc.GrokProvider)) {
 	case grok.ProviderWeb, grok.ProviderConsole:
 		acc.GrokProvider = strings.ToLower(strings.TrimSpace(acc.GrokProvider))
@@ -493,20 +489,41 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 			}
 			break
 		}
-		limit = grok.InferQuotaLimit(acc)
-		remaining := current
-		if remaining > limit && limit > 0 {
-			limit = remaining
+		web := acc.GrokWebQuota
+		preferredMode := ""
+		preferred := web.Auto
+		if !preferred.HasLimit && !preferred.HasRemaining {
+			preferredMode = "fast"
+			preferred = web.Fast
+		} else {
+			preferredMode = "auto"
 		}
-		used := limit - remaining
-		if used < 0 {
-			used = 0
+		if preferred.HasLimit || preferred.HasRemaining {
+			limit = preferred.Limit
+			remaining := preferred.Remaining
+			used := limit - remaining
+			if used < 0 {
+				used = 0
+			}
+			fields["quota_limit"] = limit
+			fields["quota_used"] = used
+			fields["quota_remaining"] = remaining
+			fields["quota_mode"] = "web_" + preferredMode
+			fields["quota_unit"] = "requests"
+			fields["quota_supported"] = true
+			fields["quota_reset_at"] = preferred.ResetAt
+			fields["quota_windows"] = map[string]interface{}{"auto": web.Auto, "fast": web.Fast}
+		} else {
+			// No successful Web quota snapshot is different from zero credits.
+			// Keep the account active while telling the UI that the value is
+			// currently unavailable instead of inventing a default allowance.
+			fields["quota_limit"] = 0.0
+			fields["quota_used"] = 0.0
+			fields["quota_remaining"] = 0.0
+			fields["quota_mode"] = "unavailable"
+			fields["quota_unit"] = "requests"
+			fields["quota_supported"] = false
 		}
-		fields["quota_limit"] = limit
-		fields["quota_used"] = used
-		fields["quota_remaining"] = remaining
-		fields["quota_mode"] = "remaining"
-		fields["quota_unit"] = "requests"
 	case "warp":
 		baseLimit := limit
 		if acc.WarpMonthlyLimit > 0 {

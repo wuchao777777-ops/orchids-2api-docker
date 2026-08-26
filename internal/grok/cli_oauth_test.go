@@ -262,7 +262,7 @@ func TestCLIClientFetchModelsReadsOfficialControlPlaneCatalog(t *testing.T) {
 			t.Fatalf("authorization=%q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"id":"grok-4.6"},{"id":"grok-4.6"},{"id":"grok-4.5"},{"id":""}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"grok-4.6"},{"id":"grok-4.6"},{"modelId":"grok-4.5"},{"id":"hidden-model","hidden":true},{"id":""}]}`))
 	}))
 	defer server.Close()
 
@@ -278,5 +278,20 @@ func TestCLIClientFetchModelsReadsOfficialControlPlaneCatalog(t *testing.T) {
 	}
 	if strings.Join(models, ",") != "grok-4.6,grok-4.5" {
 		t.Fatalf("models=%v want grok-4.6,grok-4.5", models)
+	}
+}
+
+func TestCLIResponsesWaitsForTeamModelCooldownBeforeUpstream(t *testing.T) {
+	previous := teamCooldown
+	teamCooldown = newTeamCooldownRegistry()
+	defer func() { teamCooldown = previous }()
+	teamCooldown.Note(RateLimitScopeRPM, "team-1", "grok-4.6", time.Minute)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	client := &CLIClient{}
+	_, err := client.doResponses(ctx, &store.Account{TeamID: "team-1"}, map[string]interface{}{"model": "grok-4.6"})
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("error=%v want cancellable team cooldown", err)
 	}
 }

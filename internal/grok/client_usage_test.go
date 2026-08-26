@@ -76,6 +76,34 @@ func TestGetUsage_ExplicitModelDoesNotFallback(t *testing.T) {
 	}
 }
 
+func TestGetWebQuota_UsesAutoAndFastModes(t *testing.T) {
+	t.Parallel()
+	var requested []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		mode, _ := payload["modelName"].(string)
+		requested = append(requested, mode)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"remainingQueries": 12, "totalQueries": 30})
+	}))
+	defer srv.Close()
+
+	c := New(&config.Config{GrokAPIBaseURL: srv.URL})
+	windows, err := c.GetWebQuota(context.Background(), "sso=token-abc")
+	if err != nil {
+		t.Fatalf("GetWebQuota() error=%v", err)
+	}
+	if len(requested) != 2 || requested[0] != "auto" || requested[1] != "fast" {
+		t.Fatalf("requested=%v want [auto fast]", requested)
+	}
+	if windows["auto"] == nil || windows["fast"] == nil || windows["auto"].Remaining != 12 {
+		t.Fatalf("windows=%+v", windows)
+	}
+}
+
 func TestRateLimitModelName_UsesModeAcceptedByUpstream(t *testing.T) {
 	tests := []struct {
 		name string

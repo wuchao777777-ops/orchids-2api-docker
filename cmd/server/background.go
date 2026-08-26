@@ -206,69 +206,96 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 		case <-time.After(grokRefreshPause):
 		}
 
-		verifyCtx, verifyCancel := context.WithTimeout(ctx, 60*time.Second)
-		info, verifyErr := grokClient.VerifyToken(verifyCtx, candidate.token, candidate.model)
-		verifyCancel()
-
-		if verifyErr != nil {
-			statusCode := apperrors.ClassifyAccountStatus(verifyErr.Error())
+		// Session identity is the authentication check. Quota/model availability
+		// is deliberately handled separately so a retired quota model cannot mark
+		// a valid SSO account as HTTP 500.
+		idCtx, idCancel := context.WithTimeout(ctx, 15*time.Second)
+		identity, identityErr := grokClient.FetchSessionIdentity(idCtx, candidate.token)
+		idCancel()
+		if identityErr != nil && grok.IsAuthenticationFailure(identityErr) {
+			statusCode := apperrors.ClassifyAccountStatus(identityErr.Error())
 			if statusCode == "" {
-				statusCode = "500"
-			}
-			if statusCode == "429" {
-				setGrokRefreshBackoff(time.Now().Add(grokRefresh429Backoff))
-				slog.Warn("Auto refresh grok: rate-limit check throttled; pausing grok refresh", "backoff", grokRefresh429Backoff.String(), "error", verifyErr)
-				return
+				statusCode = "401"
 			}
 			for _, acc := range candidate.accounts {
 				if acc == nil {
 					continue
 				}
-				if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
-					acc.StatusCode = statusCode
-					acc.LastAttempt = time.Now()
-				}
+				acc.StatusCode = statusCode
+				acc.LastAttempt = time.Now()
 				if err := s.UpdateAccount(ctx, acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
 				}
 			}
-			slog.Warn("Auto refresh token failed", "type", "grok", "status", statusCode, "error", verifyErr)
+			slog.Warn("Auto refresh grok SSO authentication failed", "status", statusCode, "error", identityErr)
 			continue
 		}
+		if identityErr != nil {
+			slog.Debug("Auto refresh grok: session identity unavailable; continuing quota sync", "error", identityErr)
+		}
 
-		// Resolve the stable session identity (user/email/team) once per verified
-		// token so team+model rate limiting and account dedup can use it.
-		if cfg.GrokSessionIdentityRefreshEnabled() {
-			idCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			identity, idErr := grokClient.FetchSessionIdentity(idCtx, candidate.token)
-			cancel()
-			if idErr == nil {
+		quotaCtx, quotaCancel := context.WithTimeout(ctx, 30*time.Second)
+		windows, quotaErr := grokClient.GetWebQuota(quotaCtx, candidate.token)
+		quotaCancel()
+		if quotaErr != nil {
+			statusCode := apperrors.ClassifyAccountStatus(quotaErr.Error())
+			if statusCode == "429" {
+				setGrokRefreshBackoff(time.Now().Add(grokRefresh429Backoff))
+				slog.Warn("Auto refresh grok: Web quota rate-limited; pausing refresh", "backoff", grokRefresh429Backoff.String(), "error", quotaErr)
+				return
+			}
+			if grok.IsAuthenticationFailure(quotaErr) {
+				if statusCode == "" {
+					statusCode = "401"
+				}
 				for _, acc := range candidate.accounts {
 					if acc == nil {
 						continue
 					}
-					if identity.TeamID != "" && acc.TeamID != identity.TeamID {
-						acc.TeamID = identity.TeamID
-					}
-					if identity.Email != "" && acc.Email != identity.Email {
-						acc.Email = identity.Email
-					}
-					if identity.UserID != "" && acc.UserID != identity.UserID {
-						acc.UserID = identity.UserID
+					acc.StatusCode = statusCode
+					acc.LastAttempt = time.Now()
+					if err := s.UpdateAccount(ctx, acc); err != nil {
+						slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
 					}
 				}
-			} else {
-				slog.Debug("Auto refresh grok: session identity fetch skipped", "error", idErr)
+				continue
 			}
+			// 404/model-unavailable and malformed quota responses are not auth
+			// failures. Clear stale diagnostic 500/404 markers so a previous
+			// model mismatch does not remain visible as an account failure.
+			for _, acc := range candidate.accounts {
+				if acc == nil {
+					continue
+				}
+				if acc.StatusCode == "500" || acc.StatusCode == "404" {
+					acc.StatusCode = ""
+					acc.LastAttempt = time.Time{}
+					if err := s.UpdateAccount(ctx, acc); err != nil {
+						slog.Warn("Auto refresh token: clear stale grok status failed", "account_id", acc.ID, "error", err)
+					}
+				}
+			}
+			// Keep the account active and retain its last quota snapshot.
+			slog.Warn("Auto refresh grok: Web quota unavailable; account remains active", "error", quotaErr)
+			continue
 		}
 
 		for _, acc := range candidate.accounts {
 			if acc == nil {
 				continue
 			}
-			if info != nil {
-				grok.ApplyQuotaInfo(acc, info)
+			if identityErr == nil {
+				if identity.TeamID != "" {
+					acc.TeamID = identity.TeamID
+				}
+				if identity.Email != "" {
+					acc.Email = identity.Email
+				}
+				if identity.UserID != "" {
+					acc.UserID = identity.UserID
+				}
 			}
+			grok.ApplyWebQuotaInfo(acc, windows)
 			if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
 				acc.StatusCode = ""
 				acc.LastAttempt = time.Time{}
