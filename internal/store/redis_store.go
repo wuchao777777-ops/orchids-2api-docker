@@ -900,6 +900,92 @@ func (s *redisStore) DeleteStoredResponse(ctx context.Context, responseID, owner
 	return nil
 }
 
+func (s *redisStore) reasoningReplayKey(model, sessionKey string) string {
+	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(model)) + "\x00" + strings.TrimSpace(sessionKey)))
+	return s.prefix + "grok:reasoning_replay:" + hex.EncodeToString(digest[:])
+}
+
+func (s *redisStore) SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error {
+	if replay == nil || strings.TrimSpace(replay.Model) == "" || strings.TrimSpace(replay.SessionKey) == "" || strings.TrimSpace(replay.EncryptedContent) == "" {
+		return fmt.Errorf("invalid reasoning replay")
+	}
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	next := *replay
+	next.ExpiresAt = time.Now().UTC().Add(ttl)
+	raw, err := json.Marshal(&next)
+	if err != nil {
+		return err
+	}
+	return s.client.Set(ctx, s.reasoningReplayKey(next.Model, next.SessionKey), raw, ttl).Err()
+}
+
+func (s *redisStore) GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error) {
+	raw, err := s.client.Get(ctx, s.reasoningReplayKey(model, sessionKey)).Bytes()
+	if err == redis.Nil {
+		return nil, ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+	var replay StoredReasoningReplay
+	if err := json.Unmarshal(raw, &replay); err != nil {
+		return nil, err
+	}
+	if !replay.ExpiresAt.IsZero() && !time.Now().UTC().Before(replay.ExpiresAt) {
+		_ = s.client.Del(ctx, s.reasoningReplayKey(model, sessionKey)).Err()
+		return nil, ErrNoRows
+	}
+	return &replay, nil
+}
+
+func (s *redisStore) DeleteReasoningReplay(ctx context.Context, model, sessionKey string) error {
+	return s.client.Del(ctx, s.reasoningReplayKey(model, sessionKey)).Err()
+}
+
+func (s *redisStore) sessionAffinityKey(provider, model, sessionKey string) string {
+	source := strings.ToLower(strings.TrimSpace(provider)) + "\x00" + strings.ToLower(strings.TrimSpace(model)) + "\x00" + strings.TrimSpace(sessionKey)
+	digest := sha256.Sum256([]byte(source))
+	return s.prefix + "grok:session_affinity:" + hex.EncodeToString(digest[:])
+}
+
+func (s *redisStore) SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error {
+	if affinity == nil || strings.TrimSpace(affinity.Provider) == "" || strings.TrimSpace(affinity.Model) == "" || strings.TrimSpace(affinity.SessionKey) == "" || affinity.AccountID == 0 {
+		return fmt.Errorf("invalid session affinity")
+	}
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	next := *affinity
+	next.ExpiresAt = time.Now().UTC().Add(ttl)
+	raw, err := json.Marshal(&next)
+	if err != nil {
+		return err
+	}
+	return s.client.Set(ctx, s.sessionAffinityKey(next.Provider, next.Model, next.SessionKey), raw, ttl).Err()
+}
+
+func (s *redisStore) GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error) {
+	key := s.sessionAffinityKey(provider, model, sessionKey)
+	raw, err := s.client.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return nil, ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+	var affinity StoredSessionAffinity
+	if err := json.Unmarshal(raw, &affinity); err != nil {
+		return nil, err
+	}
+	if !affinity.ExpiresAt.IsZero() && !time.Now().UTC().Before(affinity.ExpiresAt) {
+		_ = s.client.Del(ctx, key).Err()
+		return nil, ErrNoRows
+	}
+	return &affinity, nil
+}
+
 func (s *redisStore) SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")

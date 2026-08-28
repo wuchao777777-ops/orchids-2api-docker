@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/middleware"
+	"orchids-api/internal/store"
 )
 
 type captureResponseWriter struct {
@@ -57,6 +60,7 @@ type ResponsesCreateRequest struct {
 	Truncation         string                   `json:"truncation,omitempty"`
 	Include            []string                 `json:"include,omitempty"`
 	Background         *bool                    `json:"background,omitempty"`
+	PromptCacheKey     string                   `json:"prompt_cache_key,omitempty"`
 }
 
 func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
@@ -78,6 +82,7 @@ func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
 		Truncation         interface{}              `json:"truncation,omitempty"`
 		Include            []string                 `json:"include,omitempty"`
 		Background         interface{}              `json:"background,omitempty"`
+		PromptCacheKey     interface{}              `json:"prompt_cache_key,omitempty"`
 	}
 
 	var raw rawResponsesCreateRequest
@@ -150,6 +155,7 @@ func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
 	r.Truncation = parseLooseStringAny(raw.Truncation)
 	r.Include = raw.Include
 	r.Background = background
+	r.PromptCacheKey = parseLooseStringAny(raw.PromptCacheKey)
 	return nil
 }
 
@@ -183,14 +189,57 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	if _, provided := nativePayload["stream"]; !provided {
 		nativePayload["stream"] = req.Stream
 	}
+	identityMessages, _ := responsesInputToMessages(req.Input)
+	session := prepareGrokSession(r, req.Model, req.PromptCacheKey, identityMessages)
+	if session.Key != "" {
+		nativePayload["prompt_cache_key"] = session.Key
+		r = r.WithContext(withGrokSession(r.Context(), session))
+		if session.Replay {
+			h.applyNativeReasoningReplay(req.Model, session.Key, nativePayload)
+		}
+	}
 
-	if spec, ok := ResolveModel(req.Model); ok && modelRoutedToCLI(spec, h.cfg) {
+	spec, resolved := h.resolveConversationModel(r.Context(), req.Model)
+	if resolved && modelRoutedToCLI(spec, h.cfg) {
 		h.handleNativeCLIResponses(w, r, req.Model, spec, nativePayload)
 		return
 	}
-	if spec, ok := ResolveModel(req.Model); ok && !spec.SupportsConversation() {
+	if !resolved {
+		http.Error(w, modelNotFoundMessage(req.Model), http.StatusBadRequest)
+		return
+	}
+	if !spec.SupportsConversation() {
 		http.Error(w, fmt.Sprintf("model %s does not support responses", req.Model), http.StatusBadRequest)
 		return
+	}
+	if previousID := strings.TrimSpace(req.PreviousResponseID); previousID != "" {
+		owner := strings.TrimSpace(middleware.APIKeyFingerprint(r.Context()))
+		if owner == "" {
+			owner = "anonymous"
+		}
+		previous, lookupErr := h.getStoredResponse(r, previousID, owner)
+		if lookupErr != nil {
+			writeStoredResponseLookupError(w, lookupErr, "previous response not found")
+			return
+		}
+		if previous == nil || len(previous.Body) == 0 || previous.Provider == ProviderBuild {
+			writeResponsesAPIError(w, http.StatusNotFound, "response_not_found", "previous response not found")
+			return
+		}
+		if previous.Provider != providerForModelSpec(spec) {
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "previous response provider is incompatible")
+			return
+		}
+		req.Input, err = expandStoredResponseInput(previous.Body, req.Input)
+		if err != nil {
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		if previous.PromptCacheKey != "" {
+			session = grokSessionContext{Key: previous.PromptCacheKey, Replay: true, Model: req.Model}
+			req.PromptCacheKey = previous.PromptCacheKey
+			r = r.WithContext(withGrokSession(r.Context(), session))
+		}
 	}
 	if err := validateResponsesCompatibility(req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -215,14 +264,34 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	subReq.Body = io.NopCloser(bytes.NewReader(raw))
 	subReq.ContentLength = int64(len(raw))
 
+	if chatReq.Stream {
+		reader, writer := io.Pipe()
+		streamWriter := newStreamingChatWriter(writer)
+		go func() {
+			h.HandleChatCompletions(streamWriter, subReq)
+			streamWriter.WriteHeader(http.StatusOK)
+			_ = writer.Close()
+		}()
+		<-streamWriter.ready
+		if streamWriter.status < 200 || streamWriter.status >= 300 {
+			body, _ := io.ReadAll(reader)
+			for key, values := range streamWriter.header {
+				for _, value := range values {
+					w.Header().Add(key, value)
+				}
+			}
+			w.WriteHeader(streamWriter.status)
+			_, _ = w.Write(body)
+			return
+		}
+		writeResponsesStreamFromChatReaderRequest(w, req, reader)
+		return
+	}
+
 	rec := newCaptureResponseWriter()
 	h.HandleChatCompletions(rec, subReq)
 	if rec.code < 200 || rec.code >= 300 {
 		copyCapturedResponse(w, rec)
-		return
-	}
-	if chatReq.Stream {
-		writeResponsesStreamFromChat(w, req.Model, rec.body.String())
 		return
 	}
 	var chat map[string]interface{}
@@ -230,7 +299,74 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "chat response parse error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, responsesObjectFromChat(req.Model, chat))
+	response := responsesObjectFromChat(req.Model, chat)
+	if len(req.Metadata) > 0 {
+		response["metadata"] = req.Metadata
+	}
+	if strings.TrimSpace(req.Truncation) != "" {
+		response["truncation"] = req.Truncation
+	}
+	if req.Store != nil && *req.Store {
+		encoded, encodeErr := json.Marshal(response)
+		if encodeErr != nil {
+			http.Error(w, "failed to store response", http.StatusInternalServerError)
+			return
+		}
+		owner := strings.TrimSpace(middleware.APIKeyFingerprint(r.Context()))
+		if owner == "" {
+			owner = "anonymous"
+		}
+		if saveErr := h.saveStoredResponse(r, &store.StoredResponse{
+			ResponseID: parseLooseStringAny(response["id"]), OwnerHash: owner, Model: req.Model,
+			Provider: providerForModelSpec(spec), PromptCacheKey: sessionFromContext(r.Context()).Key,
+			ContentType: "application/json", Body: encoded,
+		}); saveErr != nil {
+			http.Error(w, "failed to store response", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	writeJSON(w, response)
+}
+
+func providerForModelSpec(spec ModelSpec) string {
+	if spec.Upstream == UpstreamConsole || strings.TrimSpace(spec.ConsoleModel) != "" {
+		return ProviderConsole
+	}
+	if spec.Upstream == UpstreamCLI {
+		return ProviderBuild
+	}
+	return ProviderWeb
+}
+
+func expandStoredResponseInput(responseBody []byte, current interface{}) (interface{}, error) {
+	var previous map[string]interface{}
+	if json.Unmarshal(responseBody, &previous) != nil {
+		return nil, fmt.Errorf("stored response is invalid")
+	}
+	output := interfaceSlice(previous["output"])
+	if len(output) == 0 {
+		return nil, fmt.Errorf("stored response has no output")
+	}
+	currentItems := make([]interface{}, 0)
+	switch value := current.(type) {
+	case string:
+		if strings.TrimSpace(value) != "" {
+			currentItems = append(currentItems, map[string]interface{}{
+				"type": "message", "role": "user", "content": []interface{}{map[string]interface{}{"type": "input_text", "text": value}},
+			})
+		}
+	case []interface{}:
+		currentItems = append(currentItems, value...)
+	default:
+		return nil, fmt.Errorf("input must be a string or an array")
+	}
+	if len(currentItems) == 0 {
+		return nil, fmt.Errorf("input is required")
+	}
+	combined := make([]interface{}, 0, len(output)+len(currentItems))
+	combined = append(combined, output...)
+	combined = append(combined, currentItems...)
+	return combined, nil
 }
 
 // handleNativeCLIResponses proxies Build OAuth Responses requests without a
@@ -275,23 +411,11 @@ func streamNativeCLIResponse(w http.ResponseWriter, body io.Reader) {
 }
 
 func validateResponsesCompatibility(req ResponsesCreateRequest) error {
-	if req.MaxOutputTokens != nil {
-		return fmt.Errorf("max_output_tokens is not supported")
+	if req.Store != nil && *req.Store && req.Stream {
+		return fmt.Errorf("store=true requires stream=false for this provider")
 	}
-	if strings.TrimSpace(req.PreviousResponseID) != "" {
-		return fmt.Errorf("previous_response_id is not supported")
-	}
-	if req.Store != nil && *req.Store {
-		return fmt.Errorf("store=true is not supported")
-	}
-	if len(req.Metadata) > 0 {
-		return fmt.Errorf("metadata is not supported")
-	}
-	if strings.TrimSpace(req.Truncation) != "" {
-		return fmt.Errorf("truncation is not supported")
-	}
-	if len(req.Include) > 0 {
-		return fmt.Errorf("include is not supported")
+	if truncation := strings.ToLower(strings.TrimSpace(req.Truncation)); truncation != "" && truncation != "auto" && truncation != "disabled" {
+		return fmt.Errorf("truncation must be auto or disabled")
 	}
 	if req.Background != nil && *req.Background {
 		return fmt.Errorf("background=true is not supported")
@@ -330,6 +454,8 @@ func chatRequestFromResponses(req ResponsesCreateRequest) (ChatCompletionsReques
 		Tools:             responsesToolsToChatTools(req.Tools),
 		ToolChoice:        responsesToolChoiceToChat(req.ToolChoice),
 		ParallelToolCalls: req.ParallelToolCalls,
+		MaxTokens:         req.MaxOutputTokens,
+		PromptCacheKey:    req.PromptCacheKey,
 	}
 	return out, nil
 }
@@ -393,6 +519,19 @@ func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
 					ToolCallID: strings.TrimSpace(fmt.Sprint(item["call_id"])),
 					Content:    strings.TrimSpace(fmt.Sprint(item["output"])),
 				})
+			case "custom_tool_call":
+				name := firstNonEmpty(parseLooseStringAny(item["name"]), "custom_tool")
+				messages = append(messages, ChatMessage{Role: "assistant", Content: nil, ToolCalls: []ToolCall{{
+					ID: firstNonEmpty(parseLooseStringAny(item["call_id"]), parseLooseStringAny(item["id"])), Type: "function",
+					Function: map[string]interface{}{"name": name, "arguments": firstNonNil(item["input"], item["arguments"], "{}")},
+				}}})
+			case "custom_tool_call_output":
+				messages = append(messages, ChatMessage{Role: "tool", ToolCallID: parseLooseStringAny(item["call_id"]), Content: parseLooseStringAny(item["output"])})
+			case "reasoning":
+				messages = append(messages, ChatMessage{
+					Role: "assistant", Content: "",
+					ReasoningContent: responsesReasoningSummary(item), ReasoningEncryptedContent: parseLooseStringAny(item["encrypted_content"]),
+				})
 			case "message":
 				role := parseLooseStringAny(item["role"])
 				if role == "" {
@@ -411,6 +550,17 @@ func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
 	default:
 		return nil, fmt.Errorf("input must be a string or an array")
 	}
+}
+
+func responsesReasoningSummary(item map[string]interface{}) string {
+	parts := make([]string, 0)
+	for _, raw := range interfaceSlice(item["summary"]) {
+		part, _ := raw.(map[string]interface{})
+		if text := parseLooseStringAny(part["text"]); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 func normalizeResponsesMessageContent(content interface{}) interface{} {
@@ -555,9 +705,17 @@ func responsesOutputFromChat(chat map[string]interface{}) []interface{} {
 	}
 	out := make([]interface{}, 0, 2)
 	if reasoning := strings.TrimSpace(fmt.Sprint(firstNonNil(message["reasoning_content"], message["reasoning"]))); reasoning != "" && reasoning != "<nil>" {
-		out = append(out, map[string]interface{}{
+		item := map[string]interface{}{
 			"id": "rs_" + randomHex(12), "type": "reasoning", "status": "completed",
 			"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasoning}},
+		}
+		if encrypted := strings.TrimSpace(fmt.Sprint(message["reasoning_encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
+			item["encrypted_content"] = encrypted
+		}
+		out = append(out, item)
+	} else if encrypted := strings.TrimSpace(fmt.Sprint(message["reasoning_encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
+		out = append(out, map[string]interface{}{
+			"id": "rs_" + randomHex(12), "type": "reasoning", "status": "completed", "summary": []interface{}{}, "encrypted_content": encrypted,
 		})
 	}
 	for _, raw := range interfaceSlice(message["tool_calls"]) {
@@ -640,6 +798,26 @@ func copyCapturedResponse(w http.ResponseWriter, rec *captureResponseWriter) {
 }
 
 func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
+	writeResponsesStreamFromChatReader(w, model, strings.NewReader(raw))
+}
+
+type responseStreamToolState struct {
+	itemID      string
+	callID      string
+	name        string
+	outputIndex int
+	arguments   strings.Builder
+}
+
+// writeResponsesStreamFromChatReader translates Chat SSE incrementally. It is
+// deliberately reader-based so the first Responses event is emitted as soon
+// as the upstream Chat event arrives instead of after the completion ends.
+func writeResponsesStreamFromChatReader(w http.ResponseWriter, model string, reader io.Reader) {
+	writeResponsesStreamFromChatReaderRequest(w, ResponsesCreateRequest{Model: model}, reader)
+}
+
+func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request ResponsesCreateRequest, reader io.Reader) {
+	model := request.Model
 	streamResponseHeaders(w)
 	id := "resp_" + randomHex(12)
 	messageID := "msg_" + randomHex(12)
@@ -647,10 +825,14 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 	startedMessage := false
 	startedReasoning := false
 	reasoningIndex := -1
+	messageIndex := -1
 	var text strings.Builder
 	var reasoning strings.Builder
+	var encryptedReasoning string
 	var output []interface{}
 	var usage map[string]interface{}
+	toolStates := make(map[int]*responseStreamToolState)
+	toolOrder := make([]int, 0)
 
 	writeSSEJSON := func(event string, payload map[string]interface{}) {
 		raw, err := json.Marshal(payload)
@@ -659,11 +841,15 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 		}
 		writeSSEBytes(w, event, raw)
 	}
+	createdResponse := map[string]interface{}{
+		"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "in_progress", "model": model, "output": []interface{}{},
+	}
+	if len(request.Metadata) > 0 {
+		createdResponse["metadata"] = request.Metadata
+	}
 	writeSSEJSON("response.created", map[string]interface{}{
-		"type": "response.created",
-		"response": map[string]interface{}{
-			"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "in_progress", "model": model, "output": []interface{}{},
-		},
+		"type":     "response.created",
+		"response": createdResponse,
 	})
 	closeReasoning := func() {
 		if !startedReasoning {
@@ -678,6 +864,9 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 			"type": "response.reasoning_summary_part.done", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0, "part": part,
 		})
 		item := map[string]interface{}{"id": reasoningID, "type": "reasoning", "status": "completed", "summary": []interface{}{part}}
+		if encryptedReasoning != "" {
+			item["encrypted_content"] = encryptedReasoning
+		}
 		output[reasoningIndex] = item
 		writeSSEJSON("response.output_item.done", map[string]interface{}{
 			"type": "response.output_item.done", "output_index": reasoningIndex, "item": item,
@@ -685,7 +874,7 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 		startedReasoning = false
 	}
 
-	scanner := bufio.NewScanner(strings.NewReader(raw))
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -709,6 +898,22 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 		}
 		choice, _ := choices[0].(map[string]interface{})
 		delta, _ := choice["delta"].(map[string]interface{})
+		if encrypted := strings.TrimSpace(fmt.Sprint(delta["reasoning_encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
+			if !startedReasoning {
+				startedReasoning = true
+				reasoningIndex = len(output)
+				output = append(output, nil)
+				writeSSEJSON("response.output_item.added", map[string]interface{}{
+					"type": "response.output_item.added", "output_index": reasoningIndex,
+					"item": map[string]interface{}{"id": reasoningID, "type": "reasoning", "status": "in_progress", "summary": []interface{}{}},
+				})
+				writeSSEJSON("response.reasoning_summary_part.added", map[string]interface{}{
+					"type": "response.reasoning_summary_part.added", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0,
+					"part": map[string]interface{}{"type": "summary_text", "text": ""},
+				})
+			}
+			encryptedReasoning = encrypted
+		}
 		if value := strings.TrimSpace(fmt.Sprint(firstNonNil(delta["reasoning_content"], delta["reasoning"]))); value != "" && value != "<nil>" {
 			if !startedReasoning {
 				startedReasoning = true
@@ -732,42 +937,57 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 			closeReasoning()
 			if !startedMessage {
 				startedMessage = true
+				messageIndex = len(output)
+				output = append(output, nil)
 				writeSSEJSON("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": len(output),
+					"type": "response.output_item.added", "output_index": messageIndex,
 					"item": map[string]interface{}{"id": messageID, "type": "message", "role": "assistant", "content": []interface{}{}, "status": "in_progress"},
 				})
 				writeSSEJSON("response.content_part.added", map[string]interface{}{
-					"type": "response.content_part.added", "item_id": messageID, "output_index": len(output), "content_index": 0,
+					"type": "response.content_part.added", "item_id": messageID, "output_index": messageIndex, "content_index": 0,
 					"part": map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}},
 				})
 			}
 			text.WriteString(content)
 			writeSSEJSON("response.output_text.delta", map[string]interface{}{
-				"type": "response.output_text.delta", "item_id": messageID, "output_index": len(output), "content_index": 0, "delta": content,
+				"type": "response.output_text.delta", "item_id": messageID, "output_index": messageIndex, "content_index": 0, "delta": content,
 			})
 		}
 		for _, rawCall := range interfaceSlice(delta["tool_calls"]) {
 			closeReasoning()
 			call, _ := rawCall.(map[string]interface{})
-			item := responseFunctionCallItem(call)
-			if item == nil {
+			if call == nil {
 				continue
 			}
-			outputIndex := len(output)
-			output = append(output, item)
-			writeSSEJSON("response.output_item.added", map[string]interface{}{
-				"type": "response.output_item.added", "output_index": outputIndex,
-				"item": map[string]interface{}{"id": item["id"], "type": "function_call", "call_id": item["call_id"], "name": item["name"], "arguments": "", "status": "in_progress"},
-			})
-			writeSSEJSON("response.function_call_arguments.delta", map[string]interface{}{
-				"type": "response.function_call_arguments.delta", "item_id": item["id"], "output_index": outputIndex, "delta": item["arguments"],
-			})
-			writeSSEJSON("response.function_call_arguments.done", map[string]interface{}{
-				"type": "response.function_call_arguments.done", "item_id": item["id"], "output_index": outputIndex, "arguments": item["arguments"],
-			})
-			writeSSEJSON("response.output_item.done", map[string]interface{}{
-				"type": "response.output_item.done", "output_index": outputIndex, "item": item,
-			})
+			callIndex := interfaceToInt(call["index"])
+			fn, _ := call["function"].(map[string]interface{})
+			state := toolStates[callIndex]
+			if state == nil {
+				callID := firstNonEmpty(parseLooseStringAny(call["id"]), "call_"+randomHex(12))
+				state = &responseStreamToolState{
+					itemID: "fc_" + randomHex(12), callID: callID,
+					name: firstNonEmpty(parseLooseStringAny(fn["name"]), "tool"), outputIndex: len(output),
+				}
+				toolStates[callIndex] = state
+				toolOrder = append(toolOrder, callIndex)
+				output = append(output, nil)
+				writeSSEJSON("response.output_item.added", map[string]interface{}{
+					"type": "response.output_item.added", "output_index": state.outputIndex,
+					"item": map[string]interface{}{"id": state.itemID, "type": "function_call", "call_id": state.callID, "name": state.name, "arguments": "", "status": "in_progress"},
+				})
+			}
+			if id := parseLooseStringAny(call["id"]); id != "" {
+				state.callID = id
+			}
+			if name := parseLooseStringAny(fn["name"]); name != "" {
+				state.name = name
+			}
+			if fragment, ok := fn["arguments"].(string); ok && fragment != "" {
+				state.arguments.WriteString(fragment)
+				writeSSEJSON("response.function_call_arguments.delta", map[string]interface{}{
+					"type": "response.function_call_arguments.delta", "item_id": state.itemID, "output_index": state.outputIndex, "delta": fragment,
+				})
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -779,30 +999,57 @@ func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
 		return
 	}
 	closeReasoning()
+	for _, callIndex := range toolOrder {
+		state := toolStates[callIndex]
+		if state == nil || strings.TrimSpace(state.name) == "" {
+			continue
+		}
+		arguments := state.arguments.String()
+		if strings.TrimSpace(arguments) == "" {
+			arguments = "{}"
+		}
+		item := map[string]interface{}{
+			"id": state.itemID, "type": "function_call", "call_id": state.callID,
+			"name": state.name, "arguments": arguments, "status": "completed",
+		}
+		output[state.outputIndex] = item
+		writeSSEJSON("response.function_call_arguments.done", map[string]interface{}{
+			"type": "response.function_call_arguments.done", "item_id": state.itemID, "output_index": state.outputIndex, "arguments": arguments,
+		})
+		writeSSEJSON("response.output_item.done", map[string]interface{}{
+			"type": "response.output_item.done", "output_index": state.outputIndex, "item": item,
+		})
+	}
 	if startedMessage {
-		outputIndex := len(output)
 		fullText := text.String()
 		part := map[string]interface{}{"type": "output_text", "text": fullText, "annotations": []interface{}{}}
 		msg := map[string]interface{}{"id": messageID, "type": "message", "status": "completed", "role": "assistant", "content": []interface{}{part}}
-		output = append(output, msg)
+		output[messageIndex] = msg
 		writeSSEJSON("response.output_text.done", map[string]interface{}{
-			"type": "response.output_text.done", "item_id": messageID, "output_index": outputIndex, "content_index": 0, "text": fullText,
+			"type": "response.output_text.done", "item_id": messageID, "output_index": messageIndex, "content_index": 0, "text": fullText,
 		})
 		writeSSEJSON("response.content_part.done", map[string]interface{}{
-			"type": "response.content_part.done", "item_id": messageID, "output_index": outputIndex, "content_index": 0, "part": part,
+			"type": "response.content_part.done", "item_id": messageID, "output_index": messageIndex, "content_index": 0, "part": part,
 		})
 		writeSSEJSON("response.output_item.done", map[string]interface{}{
-			"type": "response.output_item.done", "output_index": outputIndex, "item": msg,
+			"type": "response.output_item.done", "output_index": messageIndex, "item": msg,
 		})
 	}
 	if usage == nil {
 		usage = map[string]interface{}{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 	}
+	completedResponse := map[string]interface{}{
+		"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "completed", "model": model, "output": output, "usage": usage,
+	}
+	if len(request.Metadata) > 0 {
+		completedResponse["metadata"] = request.Metadata
+	}
+	if strings.TrimSpace(request.Truncation) != "" {
+		completedResponse["truncation"] = request.Truncation
+	}
 	writeSSEJSON("response.completed", map[string]interface{}{
-		"type": "response.completed",
-		"response": map[string]interface{}{
-			"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "completed", "model": model, "output": output, "usage": usage,
-		},
+		"type":     "response.completed",
+		"response": completedResponse,
 	})
 	writeSSEBytes(w, "", []byte("[DONE]"))
 }

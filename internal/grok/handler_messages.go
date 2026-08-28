@@ -16,16 +16,20 @@ import (
 )
 
 type anthropicMessagesRequest struct {
-	Model       string                 `json:"model"`
-	MaxTokens   int                    `json:"max_tokens"`
-	Messages    []anthropicMessage     `json:"messages"`
-	System      interface{}            `json:"system,omitempty"`
-	Tools       []anthropicTool        `json:"tools,omitempty"`
-	ToolChoice  interface{}            `json:"tool_choice,omitempty"`
-	Stream      bool                   `json:"stream,omitempty"`
-	Temperature *float64               `json:"temperature,omitempty"`
-	TopP        *float64               `json:"top_p,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	Model         string                   `json:"model"`
+	MaxTokens     int                      `json:"max_tokens"`
+	Messages      []anthropicMessage       `json:"messages"`
+	System        interface{}              `json:"system,omitempty"`
+	Tools         []anthropicTool          `json:"tools,omitempty"`
+	ToolChoice    interface{}              `json:"tool_choice,omitempty"`
+	Stream        bool                     `json:"stream,omitempty"`
+	Temperature   *float64                 `json:"temperature,omitempty"`
+	TopP          *float64                 `json:"top_p,omitempty"`
+	Metadata      map[string]interface{}   `json:"metadata,omitempty"`
+	Thinking      map[string]interface{}   `json:"thinking,omitempty"`
+	StopSequences []string                 `json:"stop_sequences,omitempty"`
+	OutputConfig  map[string]interface{}   `json:"output_config,omitempty"`
+	MCPServers    []map[string]interface{} `json:"mcp_servers,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -110,6 +114,9 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 		}
 		messages = append(messages, converted...)
 	}
+	if err := validateChatToolSequence(messages); err != nil {
+		return ChatCompletionsRequest{}, err
+	}
 	tools := make([]ToolDef, 0, len(req.Tools))
 	for _, tool := range req.Tools {
 		name := strings.TrimSpace(tool.Name)
@@ -125,17 +132,94 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 		}})
 	}
 	maxTokens := req.MaxTokens
+	reasoningEffort := anthropicReasoningEffort(req.Thinking, req.OutputConfig)
+	promptCacheKey := anthropicPromptCacheKey(req.Metadata)
 	return ChatCompletionsRequest{
-		Model:          req.Model,
-		Messages:       messages,
-		Stream:         req.Stream,
-		StreamProvided: true,
-		Temperature:    req.Temperature,
-		TopP:           req.TopP,
-		MaxTokens:      &maxTokens,
-		Tools:          tools,
-		ToolChoice:     anthropicToolChoiceToOpenAI(req.ToolChoice),
+		Model:           req.Model,
+		Messages:        messages,
+		Stream:          req.Stream,
+		StreamProvided:  true,
+		Temperature:     req.Temperature,
+		TopP:            req.TopP,
+		MaxTokens:       &maxTokens,
+		Tools:           tools,
+		ToolChoice:      anthropicToolChoiceToOpenAI(req.ToolChoice),
+		ReasoningEffort: reasoningEffort,
+		Stop:            append([]string(nil), req.StopSequences...),
+		PromptCacheKey:  promptCacheKey,
+		MCPServers:      append([]map[string]interface{}(nil), req.MCPServers...),
+		OutputConfig:    cloneStringInterfaceMap(req.OutputConfig),
+		ThinkingConfig:  cloneStringInterfaceMap(req.Thinking),
 	}, nil
+}
+
+func validateChatToolSequence(messages []ChatMessage) error {
+	pending := make(map[string]bool)
+	completed := make(map[string]bool)
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+			for _, call := range message.ToolCalls {
+				id := strings.TrimSpace(call.ID)
+				if id == "" {
+					return fmt.Errorf("tool_use id is required")
+				}
+				if pending[id] || completed[id] {
+					return fmt.Errorf("duplicate tool_use id %q", id)
+				}
+				pending[id] = true
+			}
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool") {
+			continue
+		}
+		id := strings.TrimSpace(message.ToolCallID)
+		if id == "" || !pending[id] {
+			return fmt.Errorf("tool_result references unknown tool_use_id %q", id)
+		}
+		if completed[id] {
+			return fmt.Errorf("duplicate tool_result for %q", id)
+		}
+		delete(pending, id)
+		completed[id] = true
+	}
+	return nil
+}
+
+func anthropicReasoningEffort(thinking, outputConfig map[string]interface{}) *string {
+	if effort := strings.ToLower(strings.TrimSpace(fmt.Sprint(outputConfig["effort"]))); effort != "" && effort != "<nil>" {
+		return &effort
+	}
+	typeName := strings.ToLower(strings.TrimSpace(fmt.Sprint(thinking["type"])))
+	if typeName == "disabled" {
+		effort := "none"
+		return &effort
+	}
+	if typeName == "enabled" || typeName == "adaptive" {
+		effort := "medium"
+		return &effort
+	}
+	return nil
+}
+
+func anthropicPromptCacheKey(metadata map[string]interface{}) string {
+	for _, key := range []string{"prompt_cache_key", "session_id", "user_id"} {
+		if value := strings.TrimSpace(fmt.Sprint(metadata[key])); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
+func cloneStringInterfaceMap(value map[string]interface{}) map[string]interface{} {
+	if len(value) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(value))
+	for key, item := range value {
+		out[key] = item
+	}
+	return out
 }
 
 func anthropicSystemText(value interface{}) string {
@@ -173,6 +257,7 @@ func anthropicMessageToChat(message anthropicMessage) ([]ChatMessage, error) {
 	content := make([]interface{}, 0, len(blocks))
 	toolCalls := make([]ToolCall, 0)
 	toolResults := make([]ChatMessage, 0)
+	var reasoningContent, reasoningEncryptedContent string
 	for _, raw := range blocks {
 		block, ok := raw.(map[string]interface{})
 		if !ok {
@@ -204,6 +289,14 @@ func anthropicMessageToChat(message anthropicMessage) ([]ChatMessage, error) {
 					"name": block["name"], "arguments": block["input"],
 				},
 			})
+		case "server_tool_use":
+			if role != "assistant" {
+				return nil, fmt.Errorf("server_tool_use is only valid in assistant messages")
+			}
+			toolCalls = append(toolCalls, ToolCall{
+				ID: strings.TrimSpace(fmt.Sprint(block["id"])), Type: "function",
+				Function: map[string]interface{}{"name": block["name"], "arguments": block["input"]},
+			})
 		case "tool_result":
 			if role != "user" {
 				return nil, fmt.Errorf("tool_result is only valid in user messages")
@@ -212,6 +305,24 @@ func anthropicMessageToChat(message anthropicMessage) ([]ChatMessage, error) {
 				Role: "tool", ToolCallID: strings.TrimSpace(fmt.Sprint(block["tool_use_id"])),
 				Content: anthropicBlockContentText(block["content"]),
 			})
+		case "web_search_tool_result":
+			if role != "user" {
+				return nil, fmt.Errorf("web_search_tool_result is only valid in user messages")
+			}
+			toolResults = append(toolResults, ChatMessage{
+				Role: "tool", ToolCallID: strings.TrimSpace(fmt.Sprint(block["tool_use_id"])),
+				Content: anthropicBlockContentText(block["content"]),
+			})
+		case "thinking", "redacted_thinking":
+			if role != "assistant" {
+				return nil, fmt.Errorf("thinking is only valid in assistant messages")
+			}
+			if text := strings.TrimSpace(fmt.Sprint(block["thinking"])); text != "" && text != "<nil>" {
+				reasoningContent = text
+			}
+			if signature := strings.TrimSpace(fmt.Sprint(firstDefined(block["signature"], block["data"]))); signature != "" && signature != "<nil>" {
+				reasoningEncryptedContent = signature
+			}
 		}
 	}
 	out := make([]ChatMessage, 0, 1+len(toolResults))
@@ -219,12 +330,14 @@ func anthropicMessageToChat(message anthropicMessage) ([]ChatMessage, error) {
 	// text in the same message. OpenAI requires the corresponding tool-role
 	// messages to precede that user message.
 	out = append(out, toolResults...)
-	if len(content) > 0 || len(toolCalls) > 0 {
+	if len(content) > 0 || len(toolCalls) > 0 || reasoningContent != "" || reasoningEncryptedContent != "" {
 		var normalizedContent interface{} = content
 		if len(content) == 0 {
 			normalizedContent = ""
 		}
-		out = append(out, ChatMessage{Role: role, Content: normalizedContent, ToolCalls: toolCalls})
+		message := ChatMessage{Role: role, Content: normalizedContent, ToolCalls: toolCalls,
+			ReasoningContent: reasoningContent, ReasoningEncryptedContent: reasoningEncryptedContent}
+		out = append(out, message)
 	}
 	if len(out) == 0 {
 		out = append(out, ChatMessage{Role: role, Content: ""})
@@ -288,8 +401,17 @@ func anthropicResponseFromChat(model string, chat map[string]interface{}) map[st
 	if len(choices) > 0 {
 		choice, _ := choices[0].(map[string]interface{})
 		message, _ := choice["message"].(map[string]interface{})
-		if thinking := strings.TrimSpace(fmt.Sprint(firstDefined(message["reasoning_content"], message["reasoning"]))); thinking != "" && thinking != "<nil>" {
-			content = append(content, map[string]interface{}{"type": "thinking", "thinking": thinking})
+		thinking := strings.TrimSpace(fmt.Sprint(firstDefined(message["reasoning_content"], message["reasoning"])))
+		signature := strings.TrimSpace(fmt.Sprint(message["reasoning_encrypted_content"]))
+		if (thinking != "" && thinking != "<nil>") || (signature != "" && signature != "<nil>") {
+			if thinking == "<nil>" {
+				thinking = ""
+			}
+			block := map[string]interface{}{"type": "thinking", "thinking": thinking}
+			if signature != "" && signature != "<nil>" {
+				block["signature"] = signature
+			}
+			content = append(content, block)
 		}
 		if text := strings.TrimSpace(fmt.Sprint(message["content"])); text != "" && text != "<nil>" {
 			content = append(content, map[string]interface{}{"type": "text", "text": text})
@@ -469,6 +591,9 @@ func translateOpenAIChatStreamToAnthropic(w io.Writer, reader io.Reader, model s
 			if thinking := streamString(firstDefined(delta["reasoning_content"], delta["reasoning"])); thinking != "" {
 				state.writeThinking(w, thinking)
 			}
+			if signature := streamString(delta["reasoning_encrypted_content"]); signature != "" {
+				state.writeThinkingSignature(w, signature)
+			}
 			if content := streamString(delta["content"]); content != "" {
 				state.writeText(w, content)
 			}
@@ -548,6 +673,20 @@ func (s *anthropicStreamState) writeThinking(w io.Writer, thinking string) {
 	writeAnthropicSSE(w, "content_block_delta", map[string]interface{}{
 		"type": "content_block_delta", "index": s.thinkIndex,
 		"delta": map[string]interface{}{"type": "thinking_delta", "thinking": thinking},
+	})
+}
+
+func (s *anthropicStreamState) writeThinkingSignature(w io.Writer, signature string) {
+	if s.textIndex >= 0 {
+		s.closeBlock(w, s.textIndex)
+		s.textIndex = -1
+	}
+	if s.thinkIndex < 0 {
+		s.thinkIndex = s.startBlock(w, map[string]interface{}{"type": "thinking", "thinking": "", "signature": ""})
+	}
+	writeAnthropicSSE(w, "content_block_delta", map[string]interface{}{
+		"type": "content_block_delta", "index": s.thinkIndex,
+		"delta": map[string]interface{}{"type": "signature_delta", "signature": signature},
 	})
 }
 

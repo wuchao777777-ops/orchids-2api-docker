@@ -346,8 +346,8 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	for _, item := range items {
 		gotIDs = append(gotIDs, item.ID)
 	}
-	if strings.Join(gotIDs, ",") != "grok-4.6,grok-4.5" {
-		t.Fatalf("public IDs=%v want grok-4.6,grok-4.5", gotIDs)
+	if strings.Join(gotIDs, ",") != "grok-4.6,future-private-model,grok-4.5" {
+		t.Fatalf("public IDs=%v want dynamic Build catalog", gotIDs)
 	}
 
 	persisted, err := s.GetAccount(ctx, acc.ID)

@@ -25,6 +25,13 @@ func (h *Handler) serveCLIChat(ctx context.Context, w http.ResponseWriter, req *
 	// Override the console endpoint model with the CLI model name.
 	payload["model"] = spec.UpstreamModel
 	resp, err := h.doCLIWithAutoSwitch(ctx, sess, payload, spec.UpstreamModel)
+	if err == nil && responseRequiresThinking(spec, req) {
+		resp, err = h.retryMissingThinking(ctx, sess, resp, ProviderBuild,
+			func(exclude []int64) (*chatAccountSession, error) {
+				return h.openCLIAccountSession(ctx, exclude, spec.UpstreamModel)
+			},
+			func() (*http.Response, error) { return h.cliClient.doResponses(ctx, sess.acc, payload) })
+	}
 	h.finishUpstreamChat(ctx, w, req, sess, logger, "cli", h.cliBaseURL()+"/responses",
 		func() http.Header { return h.cliHeaders(sess.acc, sess.token) }, payload, resp, err)
 }
@@ -89,6 +96,11 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 	if h == nil || h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
 	}
+	if pinnedID := h.affinityAccount(ctx, ProviderBuild); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) {
+		if pinned, err := h.openCLIAccountSessionByID(ctx, pinnedID, modelID); err == nil && accountAffinityUsable(pinned.acc) {
+			return pinned, nil
+		}
+	}
 	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, func(acc *store.Account) bool {
 		return acc != nil && ProviderForAccount(acc) == ProviderBuild && AccountSupportsModel(acc, modelID)
 	})
@@ -102,6 +114,7 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 	if token == "" {
 		return nil, fmt.Errorf("grok cli account token is empty")
 	}
+	h.bindAffinity(ctx, ProviderBuild, acc.ID)
 	return &chatAccountSession{
 		acc:            acc,
 		token:          token,
@@ -117,6 +130,14 @@ func (h *Handler) openConsoleAccountSession(ctx context.Context, excludeIDs []in
 	if h == nil || h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
 	}
+	if pinnedID := h.affinityAccount(ctx, ProviderConsole); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) && h.lb.Store != nil {
+		if pinned, err := h.lb.Store.GetAccount(ctx, pinnedID); err == nil && pinned != nil && pinned.Enabled && isGrokConsoleAccount(pinned) && accountAffinityUsable(pinned) {
+			token := grokSSOTokenRaw(pinned)
+			if NormalizeSSOToken(token) != "" {
+				return &chatAccountSession{acc: pinned, token: token, release: h.trackAccount(pinned)}, nil
+			}
+		}
+	}
 	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, isGrokConsoleAccount)
 	if err != nil {
 		return nil, err
@@ -125,5 +146,26 @@ func (h *Handler) openConsoleAccountSession(ctx context.Context, excludeIDs []in
 	if NormalizeSSOToken(token) == "" {
 		return nil, fmt.Errorf("grok console account token is empty")
 	}
+	h.bindAffinity(ctx, ProviderConsole, acc.ID)
 	return &chatAccountSession{acc: acc, token: token, release: h.trackAccount(acc)}, nil
+}
+
+func containsAccountID(values []int64, id int64) bool {
+	for _, value := range values {
+		if value == id {
+			return true
+		}
+	}
+	return false
+}
+
+func accountAffinityUsable(acc *store.Account) bool {
+	if acc == nil || !acc.Enabled {
+		return false
+	}
+	status := strings.TrimSpace(acc.StatusCode)
+	if status == "" {
+		return true
+	}
+	return !acc.QuotaResetAt.IsZero() && time.Now().After(acc.QuotaResetAt)
 }

@@ -33,6 +33,9 @@ type Handler struct {
 	connTracker  loadbalancer.ConnTracker
 	modelCacheMu sync.RWMutex
 	modelCache   map[string]time.Time
+	sessionMu    sync.Mutex
+	affinity     map[string]sessionAffinityEntry
+	replay       map[string]reasoningReplayEntry
 	instanceID   string
 }
 
@@ -70,6 +73,8 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 		cliClient:   cliClient,
 		connTracker: loadbalancer.NewMemoryConnTracker(),
 		modelCache:  make(map[string]time.Time),
+		affinity:    make(map[string]sessionAffinityEntry),
+		replay:      make(map[string]reasoningReplayEntry),
 		instanceID:  instanceID,
 	}
 	h.recoverStoredConsoleVideoJobs(context.Background())
@@ -198,6 +203,53 @@ func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error 
 	return nil
 }
 
+// resolveConversationModel resolves the built-in Web/Console/Build catalog and
+// account-discovered Build models. A discovered model is routable only when at
+// least one enabled Build account advertises it, so arbitrary client strings
+// can never turn into upstream model probes.
+func (h *Handler) resolveConversationModel(ctx context.Context, modelID string) (ModelSpec, bool) {
+	if spec, ok := ResolveModel(modelID); ok {
+		return spec, true
+	}
+	id := normalizeModelID(modelID)
+	if id == "" || IsDeprecatedModelID(id) || h == nil || h.lb == nil || h.lb.Store == nil {
+		return ModelSpec{}, false
+	}
+	accounts, err := h.lb.Store.GetEnabledAccounts(ctx)
+	if err != nil {
+		return ModelSpec{}, false
+	}
+	for _, acc := range accounts {
+		if ProviderForAccount(acc) != ProviderBuild || len(acc.GrokModels) == 0 {
+			continue
+		}
+		for _, candidate := range acc.GrokModels {
+			if strings.EqualFold(strings.TrimSpace(candidate), id) {
+				return ModelSpec{ID: id, Name: id, UpstreamModel: strings.TrimSpace(candidate), Tier: grokTierSuper, Upstream: UpstreamCLI}, true
+			}
+		}
+	}
+	return ModelSpec{}, false
+}
+
+func (h *Handler) ensureResolvedModelEnabled(ctx context.Context, modelID string, spec ModelSpec) error {
+	err := h.ensureModelEnabled(ctx, modelID)
+	if err == nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(err.Error()), "model not found") {
+		return err
+	}
+	// Dynamic Build capabilities are authoritative even before the admin model
+	// table has been reconciled by the next catalog refresh.
+	if spec.Upstream == UpstreamCLI {
+		if dynamic, ok := h.resolveConversationModel(ctx, modelID); ok && strings.EqualFold(dynamic.UpstreamModel, spec.UpstreamModel) {
+			return nil
+		}
+	}
+	return err
+}
+
 func modelNotFoundMessage(modelID string) string {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
@@ -298,6 +350,14 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 		}
 		return extraFilter == nil || extraFilter(acc)
 	}
+	if pinnedID := h.affinityAccount(ctx, ProviderWeb); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) && h.lb.Store != nil {
+		if pinned, getErr := h.lb.Store.GetAccount(ctx, pinnedID); getErr == nil && pinned != nil && accountAffinityUsable(pinned) && ssoFilter(pinned) {
+			raw := grokSSOTokenRaw(pinned)
+			if NormalizeSSOToken(raw) != "" {
+				return &chatAccountSession{acc: pinned, token: raw, poolCandidates: normalizeGrokPoolCandidates(poolCandidates), release: h.trackAccount(pinned)}, nil
+			}
+		}
+	}
 	candidates := normalizeGrokPoolCandidates(poolCandidates)
 	if len(candidates) == 0 {
 		acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, ssoFilter)
@@ -330,6 +390,7 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 	if NormalizeSSOToken(raw) == "" {
 		return nil, fmt.Errorf("grok account token is empty")
 	}
+	h.bindAffinity(ctx, ProviderWeb, acc.ID)
 	return &chatAccountSession{
 		acc:            acc,
 		token:          raw,

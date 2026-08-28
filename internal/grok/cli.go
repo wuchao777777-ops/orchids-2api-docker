@@ -231,6 +231,10 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 		return nil, err
 	}
 	req.Header = c.cliHeaders(acc, token)
+	if sessionID := strings.TrimSpace(fmt.Sprint(payload["prompt_cache_key"])); sessionID != "" && sessionID != "<nil>" {
+		req.Header.Set("x-grok-session-id", sessionID)
+		req.Header.Set("x-grok-conv-id", sessionID)
+	}
 
 	resp, err := c.doCLIRequest(ctx, req)
 	if err != nil {

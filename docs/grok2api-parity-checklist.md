@@ -6,6 +6,11 @@
 
 - [x] Grok Build、Web、Console 凭据边界与账号级模型快照
 - [x] Chat Completions、Responses、Anthropic Messages JSON/SSE
+- [x] Web fast/auto/expert/heavy、Console 文本目录、Provider 前缀和账号发现的动态 Build 文本模型
+- [x] 非 Build Responses 的逐事件实时转换（不再完整缓冲 Chat 流）及 `max_output_tokens` 映射
+- [x] Messages adaptive/enabled thinking、预算、stop sequences、output_config、MCP servers、server tools 和 encrypted signature 回放
+- [x] Build/Console 流式响应缺失思考质量门控、跨账号重试、账号冷却及短回答 fail-open
+- [x] 租户/模型隔离的 Prompt Cache identity、Provider 级账号粘性和 Redis encrypted reasoning replay
 - [x] Build Responses compact、stored Response 查询/删除、`previous_response_id` 账号固定与 API Key 所有权隔离
 - [x] Messages 文本、多模态、`tool_use`、`tool_result` 与工具选择转换
 - [x] 图片生成、图片编辑、异步视频生成和本地媒体读取
@@ -28,13 +33,13 @@
 
 ## 部分完成
 
-- [~] Build 模型按账号动态发现，但只有本地 `ModelSpec` 已实现的模型会公开
+- [~] Provider 前缀和动态 Build 路由已完成；同一公开模型的多 Provider 自动聚合、路由级 capability/账号绑定仍待独立领域模型
 - [~] 标准视频生成、编辑、延长、查询、内容读取、`file_id`、重启续跑、多实例任务租约及共享文件系统已完成；提交前中断及旧 Web 分段任务不重放，尚无 S3 等对象存储后端
 - [~] 出口支持静态配置、权重和健康冷却，尚无订阅导入、账号绑定和管理端节点编排；托管出口尚不支持语音 WebSocket 租约拨号
 
 ## 尚未实现
 
-- [ ] Provider 前缀模型限定与同名模型多路由聚合
+- [ ] 同名模型多 Provider 路由自动聚合
 - [ ] 模型路由的 capability、upstream model 和账号绑定数据模型
 - [ ] API Key 的账号范围与金额额度（模型白名单、RPM、到期限制已完成）
 - [ ] PostgreSQL 持久化及正式多实例拓扑

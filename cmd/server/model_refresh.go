@@ -489,7 +489,11 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		for _, rawID := range result.models {
 			id := canonicalGrokRefreshModelID(rawID)
 			spec, ok := grok.ResolveModel(id)
-			if !ok || spec.Upstream != grok.UpstreamCLI {
+			if !ok {
+				// Build's account catalog is the source of truth. Unknown but
+				// advertised IDs are published as dynamic Build routes.
+				spec = grok.ModelSpec{ID: id, Name: id, UpstreamModel: id, Upstream: grok.UpstreamCLI}
+			} else if spec.Upstream != grok.UpstreamCLI {
 				continue
 			}
 			key := strings.ToLower(id)

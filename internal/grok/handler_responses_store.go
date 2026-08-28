@@ -3,6 +3,7 @@ package grok
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -71,11 +72,36 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		writeResponsesAPIError(w, upstreamHTTPResponseStatus(err), "upstream_error", err.Error())
 		return
 	}
+	if !pinned {
+		streaming, _ := payload["stream"].(bool)
+		qualityReq := &ChatCompletionsRequest{Stream: streaming}
+		if reasoning, _ := payload["reasoning"].(map[string]interface{}); reasoning != nil {
+			qualityReq.ReasoningEffort = responsesReasoningEffort(reasoning)
+		}
+		if responseRequiresThinking(spec, qualityReq) {
+			resp, err = h.retryMissingThinking(r.Context(), sess, resp, ProviderBuild,
+				func(exclude []int64) (*chatAccountSession, error) {
+					return h.openCLIAccountSession(r.Context(), exclude, spec.UpstreamModel)
+				},
+				func() (*http.Response, error) {
+					return h.cliClient.doResponsesAt(r.Context(), sess.acc, upstreamPath, payload)
+				})
+			if err != nil {
+				writeResponsesAPIError(w, upstreamHTTPResponseStatus(err), "upstream_error", err.Error())
+				return
+			}
+		}
+	}
 	defer resp.Body.Close()
 	h.syncGrokQuota(sess.acc, resp.Header)
 	copyNativeCLIResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	responseID := copyNativeCLIResponseAndCaptureID(w, resp.Body, resp.Header.Get("Content-Type"))
+	responseID, captured := copyNativeCLIResponseAndCapture(w, resp.Body, resp.Header.Get("Content-Type"))
+	if session := sessionFromContext(r.Context()); session.Replay && len(captured) > 0 {
+		if encrypted := encryptedReasoningFromResponse(captured); encrypted != "" {
+			h.storeReasoningReplay(modelID, session.Key, encrypted)
+		}
+	}
 
 	if !saveOwnership || ownerHash == "" || responseID == "" || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return
@@ -110,7 +136,7 @@ func (h *Handler) HandleResponsesCompact(w http.ResponseWriter, r *http.Request)
 	if !requireAPIKeyModel(w, r, modelID) {
 		return
 	}
-	spec, ok := ResolveModel(modelID)
+	spec, ok := h.resolveConversationModel(r.Context(), modelID)
 	if !ok || !modelRoutedToCLI(spec, h.cfg) {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses compact requires a Grok Build model")
 		return
@@ -142,7 +168,19 @@ func (h *Handler) HandleResponseResource(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if ownership.Provider != ProviderBuild {
-		writeResponsesAPIError(w, http.StatusNotFound, "response_not_found", "response not found")
+		if len(ownership.Body) == 0 {
+			writeResponsesAPIError(w, http.StatusNotFound, "response_not_found", "response not found")
+			return
+		}
+		if r.Method == http.MethodDelete {
+			_ = h.deleteStoredResponse(r, responseID, ownerHash)
+			writeJSON(w, map[string]interface{}{"id": responseID, "object": "response.deleted", "deleted": true})
+			return
+		}
+		contentType := firstNonEmpty(strings.TrimSpace(ownership.ContentType), "application/json")
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(ownership.Body)
 		return
 	}
 	sess, err := h.openCLIAccountSessionByID(r.Context(), ownership.AccountID, ownership.Model)
@@ -210,23 +248,31 @@ func responseIDFromResourcePath(path string) string {
 }
 
 func copyNativeCLIResponseAndCaptureID(w http.ResponseWriter, body io.Reader, contentType string) string {
+	id, _ := copyNativeCLIResponseAndCapture(w, body, contentType)
+	return id
+}
+
+func copyNativeCLIResponseAndCapture(w http.ResponseWriter, body io.Reader, contentType string) (string, []byte) {
+	fullCapture := newBoundedResponseCapture(8 << 20)
 	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 		capture := newBoundedResponseCapture(maxStoredResponseIDCaptureBytes)
-		if _, err := io.Copy(io.MultiWriter(w, capture), body); err != nil || capture.overflow {
-			return ""
+		if _, err := io.Copy(io.MultiWriter(w, capture, fullCapture), body); err != nil || capture.overflow {
+			return "", fullCapture.data
 		}
-		return responseIDFromJSON(capture.data)
+		return responseIDFromJSON(capture.data), fullCapture.data
 	}
 
 	reader := bufio.NewReaderSize(body, 64*1024)
 	responseID := ""
 	flusher, _ := w.(http.Flusher)
 	line := newBoundedResponseCapture(maxStoredResponseIDCaptureBytes)
+	var contentLoopGuard, reasoningLoopGuard streamLoopGuard
 	for {
 		fragment, err := reader.ReadSlice('\n')
 		if len(fragment) > 0 {
 			_, _ = w.Write(fragment)
 			_, _ = line.Write(fragment)
+			_, _ = fullCapture.Write(fragment)
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -238,13 +284,49 @@ func copyNativeCLIResponseAndCaptureID(w http.ResponseWriter, body io.Reader, co
 			if id := responseIDFromSSELine(line.data); id != "" {
 				responseID = id
 			}
+			content, reasoning := nativeResponseLoopDeltas(line.data)
+			if contentLoopGuard.Add(content) || reasoningLoopGuard.Add(reasoning) {
+				failure, _ := json.Marshal(map[string]interface{}{
+					"type": "response.failed", "response": map[string]interface{}{
+						"id": responseID, "object": "response", "status": "failed",
+						"error": map[string]interface{}{"code": "upstream_repetition_loop", "message": "upstream repetition loop detected"},
+					},
+				})
+				writeSSEBytes(w, "response.failed", failure)
+				writeSSEBytes(w, "", []byte("[DONE]"))
+				break
+			}
 		}
 		line.Reset()
 		if err != nil {
 			break
 		}
 	}
-	return responseID
+	return responseID, fullCapture.data
+}
+
+func nativeResponseLoopDeltas(line []byte) (content, reasoning string) {
+	trimmed := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(trimmed, "data:") {
+		return "", ""
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+	if payload == "" || payload == "[DONE]" {
+		return "", ""
+	}
+	var event map[string]interface{}
+	if json.Unmarshal([]byte(payload), &event) != nil {
+		return "", ""
+	}
+	typeName := strings.ToLower(strings.TrimSpace(fmt.Sprint(event["type"])))
+	delta, _ := event["delta"].(string)
+	if strings.Contains(typeName, "reasoning") || strings.Contains(typeName, "thinking") {
+		return "", delta
+	}
+	if strings.Contains(typeName, "output_text") || strings.Contains(typeName, "content") {
+		return delta, ""
+	}
+	return "", ""
 }
 
 type boundedResponseCapture struct {

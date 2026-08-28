@@ -134,19 +134,35 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 
 func TestValidateResponsesCompatibility_RejectsIgnoredStatefulFields(t *testing.T) {
 	store := true
-	maxOutputTokens := 128
 	for _, req := range []ResponsesCreateRequest{
-		{MaxOutputTokens: &maxOutputTokens},
-		{PreviousResponseID: "resp_previous"},
-		{Store: &store},
-		{Metadata: map[string]interface{}{"trace": "value"}},
-		{Truncation: "auto"},
-		{Include: []string{"message.output_text.logprobs"}},
+		{Store: &store, Stream: true},
 		{Background: &store},
 	} {
 		if err := validateResponsesCompatibility(req); err == nil {
 			t.Fatalf("expected unsupported-field error for %#v", req)
 		}
+	}
+}
+
+func TestValidateResponsesCompatibility_AcceptsRepresentableMetadataAndTruncation(t *testing.T) {
+	if err := validateResponsesCompatibility(ResponsesCreateRequest{
+		Metadata: map[string]interface{}{"trace": "value"}, Truncation: "auto",
+		Include: []string{"reasoning.encrypted_content"},
+	}); err != nil {
+		t.Fatalf("validateResponsesCompatibility() error = %v", err)
+	}
+}
+
+func TestChatRequestFromResponses_PreservesMaxOutputTokens(t *testing.T) {
+	maxOutputTokens := 128
+	chat, err := chatRequestFromResponses(ResponsesCreateRequest{
+		Model: "grok-chat-fast", Input: "hello", MaxOutputTokens: &maxOutputTokens,
+	})
+	if err != nil {
+		t.Fatalf("chatRequestFromResponses() error = %v", err)
+	}
+	if chat.MaxTokens == nil || *chat.MaxTokens != maxOutputTokens {
+		t.Fatalf("MaxTokens=%v want %d", chat.MaxTokens, maxOutputTokens)
 	}
 }
 

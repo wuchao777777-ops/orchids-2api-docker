@@ -156,14 +156,36 @@ type ApiKey struct {
 // StoredResponse records the ownership needed to continue or manage an
 // upstream Responses resource without retaining the request or response body.
 type StoredResponse struct {
-	ResponseID string    `json:"response_id"`
-	OwnerHash  string    `json:"owner_hash"`
-	AccountID  int64     `json:"account_id"`
-	Model      string    `json:"model"`
+	ResponseID     string    `json:"response_id"`
+	OwnerHash      string    `json:"owner_hash"`
+	AccountID      int64     `json:"account_id"`
+	Model          string    `json:"model"`
+	Provider       string    `json:"provider"`
+	PromptCacheKey string    `json:"prompt_cache_key,omitempty"`
+	ContentType    string    `json:"content_type,omitempty"`
+	Body           []byte    `json:"body,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// StoredReasoningReplay contains one opaque encrypted reasoning item. The key
+// is already tenant/model/session isolated by the gateway; Redis persistence
+// lets later turns resume on another replica without storing plaintext chain
+// of thought.
+type StoredReasoningReplay struct {
+	Model            string    `json:"model"`
+	SessionKey       string    `json:"session_key"`
+	EncryptedContent string    `json:"encrypted_content"`
+	ExpiresAt        time.Time `json:"expires_at"`
+}
+
+type StoredSessionAffinity struct {
 	Provider   string    `json:"provider"`
+	Model      string    `json:"model"`
+	SessionKey string    `json:"session_key"`
+	AccountID  int64     `json:"account_id"`
 	ExpiresAt  time.Time `json:"expires_at"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // StoredVideoJob is the durable, owner-scoped state required to retrieve an
@@ -214,6 +236,7 @@ type Store struct {
 	apiKeys   apiKeyStore
 	models    modelStore
 	responses responseStore
+	reasoning reasoningReplayStore
 	videoJobs videoJobStore
 	media     mediaInputStore
 }
@@ -269,6 +292,14 @@ type responseStore interface {
 	DeleteStoredResponse(ctx context.Context, responseID, ownerHash string) error
 }
 
+type reasoningReplayStore interface {
+	SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error
+	GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error)
+	DeleteReasoningReplay(ctx context.Context, model, sessionKey string) error
+	SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error
+	GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error)
+}
+
 type videoJobStore interface {
 	SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error
 	GetStoredVideoJob(ctx context.Context, id, ownerHash string) (*StoredVideoJob, error)
@@ -296,6 +327,7 @@ func New(opts Options) (*Store, error) {
 	store.apiKeys = redisStore
 	store.models = redisStore
 	store.responses = redisStore
+	store.reasoning = redisStore
 	store.videoJobs = redisStore
 	store.media = redisStore
 	if err := redisStore.migrateLegacyAccountCredentials(context.Background()); err != nil {
@@ -676,6 +708,41 @@ func (s *Store) DeleteStoredResponse(ctx context.Context, responseID, ownerHash 
 		return fmt.Errorf("response store not configured")
 	}
 	return s.responses.DeleteStoredResponse(ctx, responseID, ownerHash)
+}
+
+func (s *Store) SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error {
+	if s == nil || s.reasoning == nil {
+		return fmt.Errorf("reasoning replay store not configured")
+	}
+	return s.reasoning.SaveReasoningReplay(ctx, replay, ttl)
+}
+
+func (s *Store) GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error) {
+	if s == nil || s.reasoning == nil {
+		return nil, fmt.Errorf("reasoning replay store not configured")
+	}
+	return s.reasoning.GetReasoningReplay(ctx, model, sessionKey)
+}
+
+func (s *Store) DeleteReasoningReplay(ctx context.Context, model, sessionKey string) error {
+	if s == nil || s.reasoning == nil {
+		return fmt.Errorf("reasoning replay store not configured")
+	}
+	return s.reasoning.DeleteReasoningReplay(ctx, model, sessionKey)
+}
+
+func (s *Store) SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error {
+	if s == nil || s.reasoning == nil {
+		return fmt.Errorf("session affinity store not configured")
+	}
+	return s.reasoning.SaveSessionAffinity(ctx, affinity, ttl)
+}
+
+func (s *Store) GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error) {
+	if s == nil || s.reasoning == nil {
+		return nil, fmt.Errorf("session affinity store not configured")
+	}
+	return s.reasoning.GetSessionAffinity(ctx, provider, model, sessionKey)
 }
 
 func (s *Store) SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error {

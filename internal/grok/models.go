@@ -54,6 +54,19 @@ const (
 var SupportedModels = []ModelSpec{
 	{ID: "grok-4.5", Name: "Grok 4.5", UpstreamModel: "grok-4.5", Tier: grokTierSuper, Upstream: UpstreamCLI},
 	{ID: "grok-4.6", Name: "Grok 4.6", UpstreamModel: "grok-4.6", Tier: grokTierSuper, Upstream: UpstreamCLI},
+	// Grok Web chat products use the app-chat protocol and Web SSO accounts.
+	{ID: "grok-chat-fast", Name: "Grok Chat Fast", UpstreamModel: "grok-chat-fast", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic, Upstream: UpstreamAppChat},
+	{ID: "grok-chat-auto", Name: "Grok Chat Auto", UpstreamModel: "grok-chat-auto", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, Upstream: UpstreamAppChat},
+	{ID: "grok-chat-expert", Name: "Grok Chat Expert", UpstreamModel: "grok-chat-expert", ModelMode: "MODEL_MODE_EXPERT", ModeID: "expert", Tier: grokTierSuper, Upstream: UpstreamAppChat},
+	{ID: "grok-chat-heavy", Name: "Grok Chat Heavy", UpstreamModel: "grok-chat-heavy", ModelMode: "MODEL_MODE_HEAVY", ModeID: "heavy", Tier: grokTierHeavy, PreferBest: true, Upstream: UpstreamAppChat},
+	// Console routes are provider-qualified where their public name would collide
+	// with Build. Keeping the provider in the ID makes routing deterministic.
+	{ID: "console/grok-4.3", Name: "Console Grok 4.3", ConsoleModel: "grok-4.3", Tier: grokTierSuper, Upstream: UpstreamConsole},
+	{ID: "console/grok-4.20-0309-reasoning", Name: "Console Grok 4.20 Reasoning", ConsoleModel: "grok-4.20-0309-reasoning", Tier: grokTierSuper, Upstream: UpstreamConsole},
+	{ID: "console/grok-4.20-0309-non-reasoning", Name: "Console Grok 4.20 Non-Reasoning", ConsoleModel: "grok-4.20-0309-non-reasoning", Tier: grokTierSuper, Upstream: UpstreamConsole},
+	{ID: "console/grok-4.20-multi-agent-0309", Name: "Console Grok 4.20 Multi-Agent", ConsoleModel: "grok-4.20-multi-agent-0309", Tier: grokTierHeavy, PreferBest: true, Upstream: UpstreamConsole},
+	{ID: "console/grok-4.5", Name: "Console Grok 4.5", ConsoleModel: "grok-4.5", Tier: grokTierSuper, Upstream: UpstreamConsole},
+	{ID: "console/grok-build-0.1", Name: "Console Grok Build 0.1", ConsoleModel: "grok-build-0.1", Tier: grokTierSuper, Upstream: UpstreamConsole},
 	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-imagine-image-lite", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic, IsImage: true},
 	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-imagine-image", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-quality", Name: "Grok Imagine Image Quality", UpstreamModel: "grok-imagine-image-quality-lite", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
@@ -88,7 +101,13 @@ func normalizeModelID(modelID string) string {
 }
 
 func ResolveModel(modelID string) (ModelSpec, bool) {
-	m, ok := modelByID[normalizeModelID(modelID)]
+	id := normalizeModelID(modelID)
+	// Provider prefixes are case-insensitive. Web prefixes are aliases because
+	// Web model names do not collide; Console prefixes are canonical.
+	if strings.HasPrefix(id, "web/") {
+		id = strings.TrimPrefix(id, "web/")
+	}
+	m, ok := modelByID[id]
 	return m, ok
 }
 

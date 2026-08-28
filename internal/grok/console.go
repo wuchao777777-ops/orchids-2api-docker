@@ -71,6 +71,19 @@ func consoleInputFromMessages(messages []ChatMessage) ([]interface{}, string) {
 			})
 			continue
 		}
+		if role == "assistant" && (strings.TrimSpace(msg.ReasoningContent) != "" || strings.TrimSpace(msg.ReasoningEncryptedContent) != "") {
+			reasoning := map[string]interface{}{
+				"type":    "reasoning",
+				"summary": []interface{}{},
+			}
+			if text := strings.TrimSpace(msg.ReasoningContent); text != "" {
+				reasoning["summary"] = []interface{}{map[string]interface{}{"type": "summary_text", "text": text}}
+			}
+			if encrypted := strings.TrimSpace(msg.ReasoningEncryptedContent); encrypted != "" {
+				reasoning["encrypted_content"] = encrypted
+			}
+			items = append(items, reasoning)
+		}
 		if role == "assistant" && len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
 				name := strings.TrimSpace(fmt.Sprint(tc.Function["name"]))
@@ -163,6 +176,13 @@ func (c *Client) consoleHeaders(token string) http.Header {
 
 func (h *Handler) consolePayload(spec ModelSpec, req *ChatCompletionsRequest) (map[string]interface{}, error) {
 	input, instructions := consoleInputFromMessages(req.Messages)
+	if req.ReasoningReplay && strings.TrimSpace(req.PromptCacheKey) != "" {
+		if encrypted := h.loadReasoningReplay(req.Model, req.PromptCacheKey); encrypted != "" && !consoleInputHasEncryptedReasoning(input) {
+			input = insertConsoleReplayBeforeLastUser(input, map[string]interface{}{
+				"type": "reasoning", "summary": []interface{}{}, "content": nil, "encrypted_content": encrypted,
+			})
+		}
+	}
 	if len(input) == 0 && instructions == "" {
 		return nil, fmt.Errorf("empty message")
 	}
@@ -190,6 +210,21 @@ func (h *Handler) consolePayload(spec ModelSpec, req *ChatCompletionsRequest) (m
 			payload["reasoning"] = map[string]interface{}{"effort": effort}
 		}
 	}
+	if strings.TrimSpace(req.PromptCacheKey) != "" {
+		payload["prompt_cache_key"] = strings.TrimSpace(req.PromptCacheKey)
+	}
+	if len(req.Stop) > 0 {
+		payload["stop"] = req.Stop
+	}
+	if len(req.MCPServers) > 0 {
+		payload["mcp_servers"] = req.MCPServers
+	}
+	if len(req.OutputConfig) > 0 {
+		payload["output_config"] = req.OutputConfig
+	}
+	if len(req.ThinkingConfig) > 0 {
+		payload["thinking"] = req.ThinkingConfig
+	}
 	tools := injectConsoleSearchTools(consoleToolsFromOpenAI(req.Tools))
 	if len(tools) > 0 {
 		payload["tools"] = tools
@@ -198,6 +233,42 @@ func (h *Handler) consolePayload(spec ModelSpec, req *ChatCompletionsRequest) (m
 		}
 	}
 	return payload, nil
+}
+
+func consoleInputHasEncryptedReasoning(input []interface{}) bool {
+	for _, raw := range input {
+		item, _ := raw.(map[string]interface{})
+		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
+			continue
+		}
+		if value := strings.TrimSpace(fmt.Sprint(item["encrypted_content"])); value != "" && value != "<nil>" {
+			return true
+		}
+	}
+	return false
+}
+
+func insertConsoleReplayBeforeLastUser(input []interface{}, replay map[string]interface{}) []interface{} {
+	insertAt := len(input)
+	for index := len(input) - 1; index >= 0; index-- {
+		switch item := input[index].(type) {
+		case consoleMessageItem:
+			if strings.EqualFold(strings.TrimSpace(item.Role), "user") {
+				insertAt = index
+				index = -1
+			}
+		case map[string]interface{}:
+			if strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["role"])), "user") {
+				insertAt = index
+				index = -1
+			}
+		}
+	}
+	out := make([]interface{}, 0, len(input)+1)
+	out = append(out, input[:insertAt]...)
+	out = append(out, replay)
+	out = append(out, input[insertAt:]...)
+	return out
 }
 
 func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
@@ -583,6 +654,11 @@ func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	resp, err := h.doConsoleWithAutoSwitch(ctx, sess, payload)
+	if err == nil && responseRequiresThinking(spec, req) {
+		resp, err = h.retryMissingThinking(ctx, sess, resp, ProviderConsole,
+			func(exclude []int64) (*chatAccountSession, error) { return h.openConsoleAccountSession(ctx, exclude) },
+			func() (*http.Response, error) { return h.doConsole(ctx, sess.token, payload) })
+	}
 	h.finishUpstreamChat(ctx, w, req, sess, logger, "console", h.consoleURL("responses"),
 		func() http.Header { return h.client.consoleHeaders(sess.token) }, payload, resp, err)
 }
@@ -641,7 +717,7 @@ func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccount
 	return h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond,
 		func() (*http.Response, error) { return h.doConsole(ctx, sess.token, payload) },
 		func(used []int64) (*chatAccountSession, error) {
-			return h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
+			return h.openConsoleAccountSession(ctx, used)
 		}, nil)
 }
 
@@ -653,6 +729,7 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 	}
 	text := consoleExtractMessageText(raw)
 	reasoning := consoleExtractReasoningText(raw)
+	encryptedReasoning := consoleExtractEncryptedReasoning(raw)
 	annotations := consoleChatAnnotations(consoleFlatAnnotations(raw))
 	toolCalls := consoleToolCallsFromOutput(raw)
 	message := map[string]interface{}{
@@ -663,6 +740,12 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 	}
 	if strings.TrimSpace(reasoning) != "" {
 		message["reasoning_content"] = reasoning
+	}
+	if encryptedReasoning != "" {
+		message["reasoning_encrypted_content"] = encryptedReasoning
+		if req.ReasoningReplay {
+			h.storeReasoningReplay(req.Model, req.PromptCacheKey, encryptedReasoning)
+		}
 	}
 	finishReason := "stop"
 	if len(toolCalls) > 0 {
@@ -723,6 +806,22 @@ func consoleExtractReasoningText(raw map[string]interface{}) string {
 		return rawText.String()
 	}
 	return summaryText.String()
+}
+
+func consoleExtractEncryptedReasoning(raw map[string]interface{}) string {
+	if raw == nil {
+		return ""
+	}
+	for _, value := range interfaceSlice(raw["output"]) {
+		item, _ := value.(map[string]interface{})
+		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
+			continue
+		}
+		if encrypted := strings.TrimSpace(fmt.Sprint(item["encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
+			return encrypted
+		}
+	}
+	return ""
 }
 
 func consoleToolCallsFromOutput(raw map[string]interface{}) []map[string]interface{} {
@@ -864,13 +963,21 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 	var final strings.Builder
 	var reasoning strings.Builder
 	var reasoningSummary strings.Builder
+	var encryptedReasoning string
 	rawReasoningSeen := false
 	var annotations []map[string]interface{}
 	var finalUsage map[string]interface{}
 	var toolCalls []*consoleStreamToolCall
 	var activeToolCall *consoleStreamToolCall
+	var contentLoopGuard, reasoningLoopGuard streamLoopGuard
+	doomLoop := false
 	emitReasoning := func(value string) {
 		if value == "" {
+			return
+		}
+		if reasoningLoopGuard.Add(value) {
+			doomLoop = true
+			writeSSEStreamError(w, flusher, nil, "upstream reasoning repetition loop detected")
 			return
 		}
 		reasoning.WriteString(value)
@@ -920,6 +1027,9 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 			} else {
 				reasoningSummary.WriteString(reasoningDelta)
 			}
+			if doomLoop {
+				return
+			}
 			continue
 		}
 		if item, _ := ev["item"].(map[string]interface{}); item != nil && strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "function_call") {
@@ -947,6 +1057,18 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 			}
 			continue
 		}
+		if item, _ := ev["item"].(map[string]interface{}); item != nil && strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
+			if encrypted := strings.TrimSpace(fmt.Sprint(item["encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
+				encryptedReasoning = encrypted
+				chunk := map[string]interface{}{
+					"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": req.Model,
+					"choices": []map[string]interface{}{{"index": 0, "delta": map[string]interface{}{"reasoning_encrypted_content": encrypted}, "finish_reason": nil}},
+				}
+				if encoded, err := json.Marshal(chunk); err == nil {
+					writeSSE(w, flusher, "", encoded)
+				}
+			}
+		}
 		if strings.Contains(eventLower, "function_call_arguments") {
 			if activeToolCall == nil && len(toolCalls) > 0 {
 				activeToolCall = toolCalls[len(toolCalls)-1]
@@ -973,6 +1095,10 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		if content == "" {
 			continue
 		}
+		if contentLoopGuard.Add(content) {
+			writeSSEStreamError(w, flusher, nil, "upstream content repetition loop detected")
+			return
+		}
 		final.WriteString(content)
 		raw = appendChatCompletionChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "", content, "", false)
 		writeSSE(w, flusher, "", raw)
@@ -982,6 +1108,12 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		return
 	}
 	flushReasoningSummary()
+	if doomLoop {
+		return
+	}
+	if req.ReasoningReplay && encryptedReasoning != "" {
+		h.storeReasoningReplay(req.Model, req.PromptCacheKey, encryptedReasoning)
+	}
 	indexedToolCalls := make([]map[string]interface{}, 0, len(toolCalls))
 	for _, tc := range toolCalls {
 		if tc == nil || strings.TrimSpace(tc.Name) == "" {

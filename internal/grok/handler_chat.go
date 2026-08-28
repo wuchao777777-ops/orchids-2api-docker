@@ -204,14 +204,22 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if !requireAPIKeyModel(w, r, req.Model) {
 		return
 	}
-	if err := h.ensureModelEnabled(r.Context(), req.Model); err != nil {
-		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
-		return
+	session := sessionFromContext(r.Context())
+	if session.Key == "" {
+		session = prepareGrokSession(r, req.Model, req.PromptCacheKey, req.Messages)
 	}
-
-	spec, ok := ResolveModel(req.Model)
+	if session.Key != "" {
+		req.PromptCacheKey = session.Key
+		req.ReasoningReplay = session.Replay
+		r = r.WithContext(withGrokSession(r.Context(), session))
+	}
+	spec, ok := h.resolveConversationModel(r.Context(), req.Model)
 	if !ok {
 		http.Error(w, modelNotFoundMessage(req.Model), http.StatusBadRequest)
+		return
+	}
+	if err := h.ensureResolvedModelEnabled(r.Context(), req.Model, spec); err != nil {
+		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
 		return
 	}
 	if !spec.SupportsConversation() {
@@ -1173,6 +1181,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		toolPump = newToolStreamPump(toolParser)
 	}
 	finalSnapshotMarkdown := make([]string, 0, 4)
+	var contentLoopGuard, reasoningLoopGuard streamLoopGuard
+	doomLoop := false
 
 	var mf *streamMarkupFilter
 	if !hasAttachments && !toolStreamMode {
@@ -1208,6 +1218,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		if norm == "" {
 			return
 		}
+		if contentLoopGuard.Add(content) {
+			doomLoop = true
+			return
+		}
 
 		if norm == lastTextChunkNorm && utf8.RuneCountInString(norm) >= 12 {
 			if h != nil && h.cfg != nil && h.cfg.DebugEnabled {
@@ -1225,6 +1239,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 
 	emitReasoningChunk := func(content string) {
 		if content == "" {
+			return
+		}
+		if reasoningLoopGuard.Add(content) {
+			doomLoop = true
 			return
 		}
 		raw := appendChatCompletionReasoningChunk(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, content)
@@ -1336,6 +1354,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	}
 
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
+		if doomLoop {
+			return fmt.Errorf("upstream repetition loop detected")
+		}
 		if logger != nil {
 			if raw, err := json.Marshal(resp); err == nil {
 				logger.LogUpstreamSSE("response", string(raw))
@@ -1445,6 +1466,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			return
 		}
 		writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
+		return
+	}
+	if doomLoop {
+		writeSSEStreamError(w, flusher, logger, "upstream repetition loop detected")
 		return
 	}
 
