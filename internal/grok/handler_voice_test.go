@@ -114,7 +114,11 @@ func TestConsoleDPoPRequestPreservesVoiceHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(&config.Config{GrokConsoleBaseURL: server.URL + "/v1"})
+	client := New(&config.Config{
+		GrokConsoleBaseURL: server.URL + "/v1",
+		GrokEgressEnabled:  true,
+		GrokEgressNodes:    []config.EgressNodeConfig{{Name: "direct-voice", Scope: "console"}},
+	})
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +354,8 @@ func TestDialConsoleVoiceWebSocketUsesDPoPAndConfiguredBase(t *testing.T) {
 	client.dpop.store(dpopCacheKey(token), dpopSession{
 		accessToken: "access-token", privateKey: key, publicJWK: publicDPoPJWK(&key.PublicKey), expiresAt: time.Now().Add(time.Minute),
 	})
-	connection, response, err := client.dialConsoleVoiceWebSocket(context.Background(), token, "realtime", "grok-voice-latest")
+	connection, response, releaseEgress, err := client.dialConsoleVoiceWebSocket(context.Background(), token, "realtime", "grok-voice-latest")
+	defer releaseEgress()
 	if response != nil && response.Body != nil {
 		defer response.Body.Close()
 	}

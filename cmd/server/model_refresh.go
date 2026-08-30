@@ -486,7 +486,10 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		if updateErr := s.UpdateAccount(ctx, result.account); updateErr != nil {
 			return nil, "", fmt.Errorf("persist grok build model catalog: %w", updateErr)
 		}
-		for _, rawID := range result.models {
+		// Publish the normalized capability view as well: Build intentionally
+		// omits stable Composer and compatibility aliases from sparse /models
+		// responses even though the account can route them.
+		for _, rawID := range result.account.GrokModels {
 			id := canonicalGrokRefreshModelID(rawID)
 			spec, ok := grok.ResolveModel(id)
 			if !ok {
@@ -523,6 +526,12 @@ func canonicalGrokRefreshModelID(modelID string) string {
 	id := strings.TrimSpace(modelID)
 	if id == "" {
 		return ""
+	}
+	// Video 1.5 exists on both Console and Build. A capability discovered from
+	// the Build control plane must retain its provider-qualified route instead
+	// of resolving to the unprefixed Console compatibility model.
+	if strings.EqualFold(id, "grok-imagine-video-1.5") {
+		return "build/grok-imagine-video-1.5"
 	}
 	if spec, ok := grok.ResolveModel(id); ok {
 		return spec.ID
@@ -1015,6 +1024,18 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 				Verified:  true,
 				IsDefault: model.ID == defaultModelID,
 				SortOrder: model.SortOrder,
+			}
+			if strings.EqualFold(strings.TrimSpace(channel), "grok") {
+				store.ApplyGrokRouteDefaults(record)
+				record.Origin = "discovery"
+				record.Provider = grok.ProviderBuild
+				record.UpstreamModel = model.ID
+				if strings.Contains(strings.ToLower(model.ID), "video") {
+					record.Capabilities = []string{store.CapabilityVideo}
+				} else {
+					record.Capabilities = []string{store.CapabilityChat, store.CapabilityMessages, store.CapabilityResponses}
+				}
+				record.NormalizeRoute()
 			}
 			if err := s.CreateModel(ctx, record); err != nil {
 				return nil, err

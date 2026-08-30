@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 )
 
@@ -136,9 +137,11 @@ func TestAnthropicAdvancedFieldsAndReasoningReplayArePreserved(t *testing.T) {
 		Model: "grok-4.6", MaxTokens: 4096,
 		Thinking:      map[string]interface{}{"type": "enabled", "budget_tokens": float64(2048)},
 		StopSequences: []string{"END"},
-		OutputConfig:  map[string]interface{}{"effort": "high", "format": map[string]interface{}{"type": "json_schema"}},
-		MCPServers:    []map[string]interface{}{{"type": "url", "url": "https://example.test/mcp"}},
-		Metadata:      map[string]interface{}{"session_id": "claude-session"},
+		OutputConfig: map[string]interface{}{"effort": "high", "format": map[string]interface{}{
+			"type": "json_schema", "schema": map[string]interface{}{"type": "object"},
+		}},
+		MCPServers: []map[string]interface{}{{"name": "example", "url": "https://example.test/mcp"}},
+		Metadata:   map[string]interface{}{"session_id": "claude-session"},
 		Messages: []anthropicMessage{
 			{Role: "assistant", Content: []interface{}{map[string]interface{}{
 				"type": "thinking", "thinking": "private plan", "signature": "opaque-cipher",
@@ -153,7 +156,7 @@ func TestAnthropicAdvancedFieldsAndReasoningReplayArePreserved(t *testing.T) {
 	if chat.ReasoningEffort == nil || *chat.ReasoningEffort != "high" || chat.PromptCacheKey != "claude-session" {
 		t.Fatalf("reasoning/session not preserved: %#v", chat)
 	}
-	if len(chat.Stop) != 1 || chat.Stop[0] != "END" || len(chat.MCPServers) != 1 || len(chat.ThinkingConfig) == 0 {
+	if len(chat.Stop) != 1 || chat.Stop[0] != "END" || len(chat.ResponsesTools) != 1 || len(chat.ResponseText) == 0 {
 		t.Fatalf("advanced fields not preserved: %#v", chat)
 	}
 	if chat.Messages[0].ReasoningContent != "private plan" || chat.Messages[0].ReasoningEncryptedContent != "opaque-cipher" {
@@ -234,6 +237,62 @@ func TestQualityGateRetriesLongMissingThinkingButAllowsShortReply(t *testing.T) 
 	missing, err = gateResponseForThinking(resp)
 	if err != nil || missing {
 		t.Fatalf("thinking gate = %v,%v", missing, err)
+	}
+}
+
+func TestQualityGateHoldDeadlineReleasesLiveStream(t *testing.T) {
+	reader, writer := io.Pipe()
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       reader,
+	}
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"late answer\"}\n\n")
+		_ = writer.Close()
+	}()
+	started := time.Now()
+	missing, err := gateResponseForThinkingWithOptions(context.Background(), response, 10*time.Millisecond, 32)
+	if err != nil || missing {
+		t.Fatalf("gate=%v,%v", missing, err)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("quality gate exceeded hold deadline: %v", elapsed)
+	}
+	data, err := io.ReadAll(response.Body)
+	if err != nil || !strings.Contains(string(data), "late answer") {
+		t.Fatalf("released body=%q err=%v", data, err)
+	}
+}
+
+func TestMissingThinkingSecondStrikeDisablesAccountPersistently(t *testing.T) {
+	h, database, mini := setupValidationHandler(t)
+	defer func() {
+		_ = database.Close()
+		mini.Close()
+	}()
+	h.cfg = &config.Config{GrokThinkingCooldownSec: 1}
+	account := &store.Account{Name: "quality", AccountType: "grok", Enabled: true}
+	if err := database.CreateAccount(context.Background(), account); err != nil {
+		t.Fatal(err)
+	}
+	h.markMissingThinking(context.Background(), account)
+	first, err := database.GetAccount(context.Background(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.MissingThinkingStrikes != 1 || !first.Enabled || first.QuotaResetAt.IsZero() {
+		t.Fatalf("first strike=%#v", first)
+	}
+	account.MissingThinkingLastAt = time.Now().Add(-2 * time.Second)
+	h.markMissingThinking(context.Background(), account)
+	second, err := database.GetAccount(context.Background(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Enabled || second.MissingThinkingStrikes < 2 || second.StatusCode != "missing_thinking_disabled" {
+		t.Fatalf("second strike=%#v", second)
 	}
 }
 

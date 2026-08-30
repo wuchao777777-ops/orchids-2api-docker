@@ -21,7 +21,13 @@ const defaultStoredResponseTTL = 30 * 24 * time.Hour
 const maxStoredResponseIDCaptureBytes = 4 << 20
 
 func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Request, modelID string, spec ModelSpec, payload map[string]interface{}, upstreamPath string, saveOwnership bool) {
-	if err := h.ensureModelEnabled(r.Context(), modelID); err != nil {
+	toolAliases := collectBuildToolAliases(payload)
+	if err := normalizeBuildResponsesPayload(payload); err != nil {
+		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	compatibilityWarnings := takeBuildCompatibilityWarnings(payload)
+	if err := h.ensureModelCapability(r.Context(), modelID, store.CapabilityResponses); err != nil {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", modelValidationMessage(modelID, err))
 		return
 	}
@@ -74,11 +80,13 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	}
 	if !pinned {
 		streaming, _ := payload["stream"].(bool)
-		qualityReq := &ChatCompletionsRequest{Stream: streaming}
+		qualityReq := &ChatCompletionsRequest{Stream: streaming, ResponsesTools: interfaceMaps(payload["tools"])}
 		if reasoning, _ := payload["reasoning"].(map[string]interface{}); reasoning != nil {
 			qualityReq.ReasoningEffort = responsesReasoningEffort(reasoning)
 		}
-		if responseRequiresThinking(spec, qualityReq) {
+		stored, _ := payload["store"].(bool)
+		qualityEligible := upstreamPath == "/responses" && previousID == "" && !stored
+		if qualityEligible && responseRequiresThinking(spec, qualityReq) {
 			resp, err = h.retryMissingThinking(r.Context(), sess, resp, ProviderBuild,
 				func(exclude []int64) (*chatAccountSession, error) {
 					return h.openCLIAccountSession(r.Context(), exclude, spec.UpstreamModel)
@@ -95,8 +103,19 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	defer resp.Body.Close()
 	h.syncGrokQuota(sess.acc, resp.Header)
 	copyNativeCLIResponseHeaders(w.Header(), resp.Header)
+	if compatibilityWarnings != "" {
+		w.Header().Set("X-Grok2API-Compatibility-Warnings", compatibilityWarnings)
+	}
 	w.WriteHeader(resp.StatusCode)
-	responseID, captured := copyNativeCLIResponseAndCapture(w, resp.Body, resp.Header.Get("Content-Type"))
+	responseBody := io.Reader(resp.Body)
+	var rewritten io.ReadCloser
+	if len(toolAliases) > 0 {
+		rewritten = rewriteBuildToolAliasResponse(resp.Body, resp.Header.Get("Content-Type"), toolAliases)
+		defer rewritten.Close()
+		responseBody = rewritten
+	}
+	responseID, captured := copyNativeCLIResponseAndCaptureModel(w, responseBody, resp.Header.Get("Content-Type"), modelID)
+	h.auditRequest(r.Context(), sess.acc, ProviderBuild, modelID, fmt.Sprint(resp.StatusCode), usageFromCapturedResponse(captured))
 	if session := sessionFromContext(r.Context()); session.Replay && len(captured) > 0 {
 		if encrypted := encryptedReasoningFromResponse(captured); encrypted != "" {
 			h.storeReasoningReplay(modelID, session.Key, encrypted)
@@ -115,6 +134,37 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	}); err != nil {
 		slog.Error("failed to save response ownership", "response_id", responseID, "account_id", sess.acc.ID, "error", err)
 	}
+}
+
+func usageFromCapturedResponse(data []byte) map[string]interface{} {
+	if len(data) == 0 {
+		return nil
+	}
+	var payload map[string]interface{}
+	if json.Unmarshal(data, &payload) == nil {
+		usage, _ := payload["usage"].(map[string]interface{})
+		return usage
+	}
+	var latest map[string]interface{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "data:"))
+		if line == "" || line == "[DONE]" {
+			continue
+		}
+		var event map[string]interface{}
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		if response, _ := event["response"].(map[string]interface{}); response != nil {
+			if usage, _ := response["usage"].(map[string]interface{}); usage != nil {
+				latest = usage
+			}
+		}
+		if usage, _ := event["usage"].(map[string]interface{}); usage != nil {
+			latest = usage
+		}
+	}
+	return latest
 }
 
 // HandleResponsesCompact forwards the native Build Responses compaction API.
@@ -253,6 +303,10 @@ func copyNativeCLIResponseAndCaptureID(w http.ResponseWriter, body io.Reader, co
 }
 
 func copyNativeCLIResponseAndCapture(w http.ResponseWriter, body io.Reader, contentType string) (string, []byte) {
+	return copyNativeCLIResponseAndCaptureModel(w, body, contentType, "")
+}
+
+func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader, contentType, model string) (string, []byte) {
 	fullCapture := newBoundedResponseCapture(8 << 20)
 	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 		capture := newBoundedResponseCapture(maxStoredResponseIDCaptureBytes)
@@ -267,6 +321,9 @@ func copyNativeCLIResponseAndCapture(w http.ResponseWriter, body io.Reader, cont
 	flusher, _ := w.(http.Flusher)
 	line := newBoundedResponseCapture(maxStoredResponseIDCaptureBytes)
 	var contentLoopGuard, reasoningLoopGuard streamLoopGuard
+	terminal := false
+	done := false
+	readFailed := false
 	for {
 		fragment, err := reader.ReadSlice('\n')
 		if len(fragment) > 0 {
@@ -284,6 +341,13 @@ func copyNativeCLIResponseAndCapture(w http.ResponseWriter, body io.Reader, cont
 			if id := responseIDFromSSELine(line.data); id != "" {
 				responseID = id
 			}
+			eventType, isDone := nativeResponseTerminalFromSSELine(line.data)
+			if eventType == "response.completed" || eventType == "response.failed" || eventType == "response.incomplete" {
+				terminal = true
+			}
+			if isDone {
+				done = true
+			}
 			content, reasoning := nativeResponseLoopDeltas(line.data)
 			if contentLoopGuard.Add(content) || reasoningLoopGuard.Add(reasoning) {
 				failure, _ := json.Marshal(map[string]interface{}{
@@ -294,15 +358,58 @@ func copyNativeCLIResponseAndCapture(w http.ResponseWriter, body io.Reader, cont
 				})
 				writeSSEBytes(w, "response.failed", failure)
 				writeSSEBytes(w, "", []byte("[DONE]"))
+				terminal = true
+				done = true
 				break
 			}
 		}
 		line.Reset()
 		if err != nil {
+			readFailed = err != io.EOF
 			break
 		}
 	}
+	if !terminal {
+		code := "upstream_stream_incomplete"
+		message := "upstream stream ended before a terminal response event"
+		if readFailed {
+			code = "stream_read_error"
+			message = "upstream response stream could not be read"
+		} else if done {
+			code = "upstream_terminal_missing"
+			message = "upstream sent [DONE] without a terminal response event"
+		}
+		failure, _ := json.Marshal(map[string]interface{}{
+			"type": "response.failed", "response": map[string]interface{}{
+				"id": responseID, "object": "response", "status": "failed", "model": model,
+				"error": map[string]interface{}{"code": code, "message": message},
+			},
+		})
+		writeSSEBytes(w, "response.failed", failure)
+		if !done {
+			writeSSEBytes(w, "", []byte("[DONE]"))
+		}
+		_, _ = fullCapture.Write([]byte("event: response.failed\ndata: "))
+		_, _ = fullCapture.Write(failure)
+		_, _ = fullCapture.Write([]byte("\n\ndata: [DONE]\n\n"))
+	}
 	return responseID, fullCapture.data
+}
+
+func nativeResponseTerminalFromSSELine(line []byte) (string, bool) {
+	trimmed := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(trimmed, "data:") {
+		return "", false
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+	if payload == "[DONE]" {
+		return "", true
+	}
+	var event map[string]interface{}
+	if json.Unmarshal([]byte(payload), &event) != nil {
+		return "", false
+	}
+	return strings.TrimSpace(fmt.Sprint(event["type"])), false
 }
 
 func nativeResponseLoopDeltas(line []byte) (content, reasoning string) {

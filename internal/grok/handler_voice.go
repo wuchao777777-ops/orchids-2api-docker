@@ -100,7 +100,8 @@ func (h *Handler) requireVoiceModel(w http.ResponseWriter, r *http.Request, mode
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_model", fmt.Sprintf("model %s does not support %s", modelID, capability))
 		return ModelSpec{}, false
 	}
-	if err := h.ensureModelEnabled(r.Context(), modelID); err != nil {
+	spec = h.applyPersistedRoute(r.Context(), spec)
+	if err := h.ensureModelCapability(r.Context(), modelID, capability); err != nil {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_model", modelValidationMessage(modelID, err))
 		return ModelSpec{}, false
 	}
@@ -195,6 +196,7 @@ func (h *Handler) HandleTTS(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireVoiceModel(w, r, req.Model, "tts"); !ok {
 		return
 	}
+	modelID := req.Model
 	if err := validateTTSRequest(&req); err != nil {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -206,7 +208,7 @@ func (h *Handler) HandleTTS(w http.ResponseWriter, r *http.Request) {
 		writeResponsesAPIError(w, http.StatusInternalServerError, "internal_error", "failed to encode TTS request")
 		return
 	}
-	h.forwardConsoleVoice(w, r, http.MethodPost, "tts", body, http.Header{
+	h.forwardConsoleVoice(w, r, modelID, http.MethodPost, "tts", body, http.Header{
 		"Content-Type": []string{"application/json"},
 		"Accept":       []string{"*/*"},
 	})
@@ -319,7 +321,7 @@ func (h *Handler) HandleTTSVoices(w http.ResponseWriter, r *http.Request) {
 		}
 		path += "/" + url.PathEscape(voiceID)
 	}
-	h.forwardConsoleVoice(w, r, http.MethodGet, path, nil, http.Header{"Accept": []string{"application/json"}})
+	h.forwardConsoleVoice(w, r, modelID, http.MethodGet, path, nil, http.Header{"Accept": []string{"application/json"}})
 }
 
 // HandleSTT serves both the JSON/multipart HTTP API and the streaming
@@ -352,7 +354,7 @@ func (h *Handler) HandleSTT(w http.ResponseWriter, r *http.Request) {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", "STT requires file or url")
 		return
 	}
-	h.forwardConsoleVoice(w, r, http.MethodPost, "stt", upstreamBody, http.Header{
+	h.forwardConsoleVoice(w, r, modelID, http.MethodPost, "stt", upstreamBody, http.Header{
 		"Content-Type": []string{upstreamContentType},
 		"Accept":       []string{"application/json"},
 	})
@@ -384,7 +386,7 @@ func (h *Handler) HandleAudioTranscriptions(w http.ResponseWriter, r *http.Reque
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", "audio transcription requires file or url")
 		return
 	}
-	resp, sess, err := h.doConsoleVoice(r, http.MethodPost, "stt", upstreamBody, http.Header{
+	resp, sess, err := h.doConsoleVoice(r, modelID, http.MethodPost, "stt", upstreamBody, http.Header{
 		"Content-Type": []string{upstreamContentType},
 		"Accept":       []string{"application/json"},
 	})
@@ -673,8 +675,8 @@ func prepareSTTRequest(body []byte, contentType string) (string, bool, []byte, s
 	}
 }
 
-func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, method, path string, body []byte, headers http.Header) {
-	resp, sess, err := h.doConsoleVoice(r, method, path, body, headers)
+func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header) {
+	resp, sess, err := h.doConsoleVoice(r, modelID, method, path, body, headers)
 	if sess != nil {
 		defer sess.Close()
 	}
@@ -694,13 +696,13 @@ func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, me
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func (h *Handler) doConsoleVoice(r *http.Request, method, path string, body []byte, headers http.Header) (*http.Response, *chatAccountSession, error) {
+func (h *Handler) doConsoleVoice(r *http.Request, modelID, method, path string, body []byte, headers http.Header) (*http.Response, *chatAccountSession, error) {
 	if h == nil || h.currentClient() == nil {
 		return nil, nil, &consoleVoiceRequestError{
 			status: http.StatusServiceUnavailable, code: "service_unavailable", err: fmt.Errorf("grok client not configured"),
 		}
 	}
-	sess, err := h.openConsoleAccountSession(r.Context(), nil)
+	sess, err := h.openConsoleAccountSession(r.Context(), nil, modelID)
 	if err != nil {
 		return nil, nil, &consoleVoiceRequestError{
 			status: http.StatusServiceUnavailable, code: "account_unavailable", err: fmt.Errorf("no available Grok Console account: %w", err),

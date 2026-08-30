@@ -52,6 +52,7 @@ const (
 // OAuth capability snapshots remain authoritative for text models; this table
 // only describes currently supported routes, not a historical model archive.
 var SupportedModels = []ModelSpec{
+	{ID: "grok-composer-2.5-fast", Name: "Grok Composer 2.5 Fast", UpstreamModel: "grok-composer-2.5-fast", Tier: grokTierSuper, Upstream: UpstreamCLI},
 	{ID: "grok-4.5", Name: "Grok 4.5", UpstreamModel: "grok-4.5", Tier: grokTierSuper, Upstream: UpstreamCLI},
 	{ID: "grok-4.6", Name: "Grok 4.6", UpstreamModel: "grok-4.6", Tier: grokTierSuper, Upstream: UpstreamCLI},
 	// Grok Web chat products use the app-chat protocol and Web SSO accounts.
@@ -67,13 +68,18 @@ var SupportedModels = []ModelSpec{
 	{ID: "console/grok-4.20-multi-agent-0309", Name: "Console Grok 4.20 Multi-Agent", ConsoleModel: "grok-4.20-multi-agent-0309", Tier: grokTierHeavy, PreferBest: true, Upstream: UpstreamConsole},
 	{ID: "console/grok-4.5", Name: "Console Grok 4.5", ConsoleModel: "grok-4.5", Tier: grokTierSuper, Upstream: UpstreamConsole},
 	{ID: "console/grok-build-0.1", Name: "Console Grok Build 0.1", ConsoleModel: "grok-build-0.1", Tier: grokTierSuper, Upstream: UpstreamConsole},
+	{ID: "console/grok-imagine-image", Name: "Console Grok Imagine Image", ConsoleModel: "grok-imagine-image", Tier: grokTierBasic, IsImage: true, MediaAPIOnly: true, Upstream: UpstreamConsole},
+	{ID: "console/grok-imagine-image-quality", Name: "Console Grok Imagine Image Quality", ConsoleModel: "grok-imagine-image-quality", Tier: grokTierBasic, IsImage: true, MediaAPIOnly: true, Upstream: UpstreamConsole},
+	{ID: "console/grok-imagine-image-2.0", Name: "Console Grok Imagine Image 2.0", ConsoleModel: "grok-imagine-image-2.0", Tier: grokTierBasic, IsImage: true, MediaAPIOnly: true, Upstream: UpstreamConsole},
 	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-imagine-image-lite", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic, IsImage: true},
 	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-imagine-image", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
+	{ID: "grok-imagine-image-2.0", Name: "Grok Imagine Image 2.0", UpstreamModel: "grok-imagine-image-2.0", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-quality", Name: "Grok Imagine Image Quality", UpstreamModel: "grok-imagine-image-quality-lite", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-imagine-image-pro", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-video", Name: "Grok Imagine Video", UpstreamModel: "imagine-video-gen", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsVideo: true},
 	{ID: "grok-imagine-video-1.5", Name: "Grok Imagine Video 1.5", UpstreamModel: "grok-imagine-video-1.5", Upstream: UpstreamConsole, IsVideo: true, MediaAPIOnly: true},
+	{ID: "build/grok-imagine-video-1.5", Name: "Build Grok Imagine Video 1.5", UpstreamModel: "grok-imagine-video-1.5", Upstream: UpstreamCLI, IsVideo: true, MediaAPIOnly: true},
 	{ID: "grok-voice-latest", Name: "Grok Voice Latest", UpstreamModel: "grok-voice-latest", Upstream: UpstreamConsole, IsTTS: true, IsRealtime: true},
 	{ID: "grok-voice-think-fast-2.0", Name: "Grok Voice Think Fast 2.0", UpstreamModel: "grok-voice-think-fast-2.0", Upstream: UpstreamConsole, IsTTS: true, IsRealtime: true},
 	{ID: "grok-voice-think-fast-1.0", Name: "Grok Voice Think Fast 1.0", UpstreamModel: "grok-voice-think-fast-1.0", Upstream: UpstreamConsole, IsTTS: true, IsRealtime: true},

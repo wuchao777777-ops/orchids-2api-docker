@@ -17,13 +17,15 @@ import (
 // which already understand standard Responses SSE.
 
 func (h *Handler) serveCLIChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger) {
-	payload, err := h.consolePayload(spec, req)
+	payload, err := h.responsesPayloadFromChat(spec, req, true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Override the console endpoint model with the CLI model name.
-	payload["model"] = spec.UpstreamModel
+	compatibilityWarnings := takeBuildCompatibilityWarnings(payload)
+	if compatibilityWarnings != "" {
+		w.Header().Set("X-Grok2API-Compatibility-Warnings", compatibilityWarnings)
+	}
 	resp, err := h.doCLIWithAutoSwitch(ctx, sess, payload, spec.UpstreamModel)
 	if err == nil && responseRequiresThinking(spec, req) {
 		resp, err = h.retryMissingThinking(ctx, sess, resp, ProviderBuild,
@@ -78,7 +80,7 @@ func (h *Handler) openCLIAccountSessionByID(ctx context.Context, accountID int64
 	if err != nil {
 		return nil, fmt.Errorf("stored response account is unavailable: %w", err)
 	}
-	if acc == nil || !acc.Enabled || ProviderForAccount(acc) != ProviderBuild || !AccountSupportsModel(acc, modelID) {
+	if acc == nil || !acc.Enabled || ProviderForAccount(acc) != ProviderBuild || !AccountSupportsModel(acc, modelID) || !h.routeAllowsAccount(ctx, modelID, acc.ID) || !h.accountCapacityAvailable(acc) {
 		return nil, fmt.Errorf("stored response account is unavailable")
 	}
 	token := strings.TrimSpace(acc.OAuthAccessToken)
@@ -88,7 +90,11 @@ func (h *Handler) openCLIAccountSessionByID(ctx context.Context, accountID int64
 	if token == "" {
 		return nil, fmt.Errorf("stored response account token is empty")
 	}
-	return &chatAccountSession{acc: acc, token: token, release: h.trackAccount(acc)}, nil
+	release, reserved := h.reserveAccount(acc)
+	if !reserved {
+		return nil, fmt.Errorf("stored response account is at its concurrency limit")
+	}
+	return &chatAccountSession{acc: acc, token: token, release: release}, nil
 }
 
 // openCLIAccountSession selects the next available Build CLI OAuth account.
@@ -97,12 +103,15 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 		return nil, fmt.Errorf("load balancer not configured")
 	}
 	if pinnedID := h.affinityAccount(ctx, ProviderBuild); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) {
-		if pinned, err := h.openCLIAccountSessionByID(ctx, pinnedID, modelID); err == nil && accountAffinityUsable(pinned.acc) {
-			return pinned, nil
+		if pinned, err := h.openCLIAccountSessionByID(ctx, pinnedID, modelID); err == nil {
+			if accountAffinityUsable(pinned.acc) {
+				return pinned, nil
+			}
+			pinned.Close()
 		}
 	}
 	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, func(acc *store.Account) bool {
-		return acc != nil && ProviderForAccount(acc) == ProviderBuild && AccountSupportsModel(acc, modelID)
+		return acc != nil && ProviderForAccount(acc) == ProviderBuild && AccountSupportsModel(acc, modelID) && h.routeAllowsAccount(ctx, modelID, acc.ID)
 	})
 	if err != nil {
 		return nil, err
@@ -115,30 +124,43 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 		return nil, fmt.Errorf("grok cli account token is empty")
 	}
 	h.bindAffinity(ctx, ProviderBuild, acc.ID)
+	release, reserved := h.reserveAccount(acc)
+	if !reserved {
+		return h.openCLIAccountSession(ctx, append(excludeIDs, acc.ID), modelID)
+	}
 	return &chatAccountSession{
 		acc:            acc,
 		token:          token,
 		poolCandidates: nil,
-		release:        h.trackAccount(acc),
+		release:        release,
 	}, nil
 }
 
 // openConsoleAccountSession selects a Console SSO account. Console sessions
 // cannot be substituted with Web SSO cookies even when both belong to the
 // same person, because their endpoints and quotas are independent.
-func (h *Handler) openConsoleAccountSession(ctx context.Context, excludeIDs []int64) (*chatAccountSession, error) {
+func (h *Handler) openConsoleAccountSession(ctx context.Context, excludeIDs []int64, modelIDs ...string) (*chatAccountSession, error) {
 	if h == nil || h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
 	}
+	modelID := ""
+	if len(modelIDs) > 0 {
+		modelID = strings.TrimSpace(modelIDs[0])
+	}
+	allowed := func(acc *store.Account) bool {
+		return isGrokConsoleAccount(acc) && (modelID == "" || h.routeAllowsAccount(ctx, modelID, acc.ID))
+	}
 	if pinnedID := h.affinityAccount(ctx, ProviderConsole); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) && h.lb.Store != nil {
-		if pinned, err := h.lb.Store.GetAccount(ctx, pinnedID); err == nil && pinned != nil && pinned.Enabled && isGrokConsoleAccount(pinned) && accountAffinityUsable(pinned) {
+		if pinned, err := h.lb.Store.GetAccount(ctx, pinnedID); err == nil && pinned != nil && pinned.Enabled && allowed(pinned) && accountAffinityUsable(pinned) && h.accountCapacityAvailable(pinned) {
 			token := grokSSOTokenRaw(pinned)
 			if NormalizeSSOToken(token) != "" {
-				return &chatAccountSession{acc: pinned, token: token, release: h.trackAccount(pinned)}, nil
+				if release, reserved := h.reserveAccount(pinned); reserved {
+					return &chatAccountSession{acc: pinned, token: token, release: release}, nil
+				}
 			}
 		}
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, isGrokConsoleAccount)
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, allowed)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +169,11 @@ func (h *Handler) openConsoleAccountSession(ctx context.Context, excludeIDs []in
 		return nil, fmt.Errorf("grok console account token is empty")
 	}
 	h.bindAffinity(ctx, ProviderConsole, acc.ID)
-	return &chatAccountSession{acc: acc, token: token, release: h.trackAccount(acc)}, nil
+	release, reserved := h.reserveAccount(acc)
+	if !reserved {
+		return h.openConsoleAccountSession(ctx, append(excludeIDs, acc.ID), modelIDs...)
+	}
+	return &chatAccountSession{acc: acc, token: token, release: release}, nil
 }
 
 func containsAccountID(values []int64, id int64) bool {

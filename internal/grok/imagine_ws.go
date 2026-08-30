@@ -24,12 +24,13 @@ const (
 )
 
 type imagineWSEvent struct {
-	Type    string
-	ImageID string
-	URL     string
-	Blob    string
-	Final   bool
-	Error   string
+	Type     string
+	ImageID  string
+	URL      string
+	Blob     string
+	Progress int
+	Final    bool
+	Error    string
 }
 
 type imagineWSSlot struct {
@@ -41,12 +42,8 @@ type imagineWSSlot struct {
 }
 
 func isImageGenerationModel(modelID string) bool {
-	switch normalizeModelID(modelID) {
-	case "grok-imagine-image-lite", "grok-imagine-image", "grok-imagine-image-quality", "grok-imagine-image-pro":
-		return true
-	default:
-		return false
-	}
+	spec, ok := ResolveModel(modelID)
+	return ok && spec.IsImage && !isImageEditModel(spec.ID)
 }
 
 func isImageEditModel(modelID string) bool {
@@ -64,7 +61,7 @@ func buildImagineWSResetMessage() map[string]interface{} {
 	}
 }
 
-func buildImagineWSRequestMessage(prompt, aspectRatio string, nsfw bool, pro bool) map[string]interface{} {
+func buildImagineWSRequestMessage(prompt, aspectRatio string, nsfw bool, pro bool, generations int) map[string]interface{} {
 	requestID := randomHex(16)
 	if requestID == "" {
 		requestID = fmt.Sprintf("%d", time.Now().UnixNano())
@@ -87,6 +84,7 @@ func buildImagineWSRequestMessage(prompt, aspectRatio string, nsfw bool, pro boo
 					"is_initial":          false,
 					"aspect_ratio":        resolveAspectRatio(aspectRatio),
 					"enable_pro":          pro,
+					"num_generations":     max(generations, 1),
 				},
 			}},
 		},
@@ -225,7 +223,7 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 	if err := conn.WriteJSON(buildImagineWSResetMessage()); err != nil {
 		return 0, err
 	}
-	if err := conn.WriteJSON(buildImagineWSRequestMessage(prompt, aspectRatio, nsfw, pro)); err != nil {
+	if err := conn.WriteJSON(buildImagineWSRequestMessage(prompt, aspectRatio, nsfw, pro, needed)); err != nil {
 		return 0, err
 	}
 	slots := map[string]*imagineWSSlot{}
@@ -283,7 +281,7 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 					progress: 10,
 				}
 				slots[imageID] = slot
-				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID}) {
+				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID, Progress: slot.progress}) {
 					return finals, ctx.Err()
 				}
 			case "completed":
@@ -318,7 +316,7 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 			progress := min(max(interfaceToInt(msg["percentage_complete"]), 10), 99)
 			if progress > slot.progress {
 				slot.progress = progress
-				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID}) {
+				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID, URL: slot.lastURL, Blob: slot.lastBlob, Progress: slot.progress}) {
 					return finals, ctx.Err()
 				}
 			}

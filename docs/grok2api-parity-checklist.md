@@ -1,6 +1,6 @@
 # Grok 与 grok2api 对齐清单
 
-本文以当前实现为准，用于跟踪与 `chenyme/grok2api` 的主要能力差异。
+本文以当前实现为准，用于跟踪与 `chenyme/grok2api` 的主要能力差异。最近一次逐文件复核基线为上游提交 `62d2775cb3cd5196cc885dd98e323c90afeda023`（2026-08-25）。
 
 ## 已完成
 
@@ -8,13 +8,19 @@
 - [x] Chat Completions、Responses、Anthropic Messages JSON/SSE
 - [x] Web fast/auto/expert/heavy、Console 文本目录、Provider 前缀和账号发现的动态 Build 文本模型
 - [x] 非 Build Responses 的逐事件实时转换（不再完整缓冲 Chat 流）及 `max_output_tokens` 映射
-- [x] Messages adaptive/enabled thinking、预算、stop sequences、output_config、MCP servers、server tools 和 encrypted signature 回放
-- [x] Build/Console 流式响应缺失思考质量门控、跨账号重试、账号冷却及短回答 fail-open
+- [x] Messages adaptive/enabled thinking、预算、stop sequences、JSON Schema output_config、MCP、strict/function/web-search 工具和 encrypted signature 回放
+- [x] Build/Console 流式响应缺失思考质量门控、最长等待、跨账号重试、可选 503/fail-open，以及首次冷却/二次持久禁用
+- [x] Build Responses 工具兼容层：nullable 根 schema、namespace 展平、defer_loading、client/server tool_search、apply_patch、hosted/MCP 工具和 tool_choice
+- [x] 原生 Build Responses 的 namespace/基础特殊工具身份回写，JSON 与 SSE 均不再泄漏 namespace 扁平工具名
+- [x] Console 无状态请求规范化：清理 state hints，保留标准 text/工具/多模态输入并映射 response_format
+- [x] 原生 Build SSE 与 Chat→Responses 的终态检查；空流、上游错误和提前 EOF 输出协议安全的 `response.failed`
 - [x] 租户/模型隔离的 Prompt Cache identity、Provider 级账号粘性和 Redis encrypted reasoning replay
 - [x] Build Responses compact、stored Response 查询/删除、`previous_response_id` 账号固定与 API Key 所有权隔离
-- [x] Messages 文本、多模态、`tool_use`、`tool_result` 与工具选择转换
-- [x] 图片生成、图片编辑、异步视频生成和本地媒体读取
-- [x] Console 标准 `/videos/generations`、`/videos/edits`、`/videos/extensions`，并保留 Web 旧 `/videos` 入口
+- [x] Messages 文本、多模态、`tool_use`、`tool_result`、原生 `web_search_call` 历史与工具选择转换
+- [x] 图片生成、图片编辑、`grok-imagine-image-2.0`、完整图片比例、`partial_images`、异步视频生成和本地媒体读取
+- [x] Console 三个官方图片模型的 Provider 前缀路由、`resolution/quality` 校验、DPoP 请求和可信图片本地化
+- [x] Build `grok-composer-2.5-fast`、4.6→4.5 兼容能力和 Super 专属视频能力归一化
+- [x] Web 当前 `mediaGenInput.textToVideo` 协议（1–15 秒、无需合成媒体帖子）以及 Console 标准 `/videos/generations`、`/videos/edits`、`/videos/extensions`
 - [x] `grok-imagine-video-1.5` 生成能力、标准视频任务 API Key 所有权隔离和可信媒体下载
 - [x] 视频任务元数据 Redis 持久化，已完成任务可在进程重启后恢复查询和本地内容读取
 - [x] 已取得上游 `request_id` 的标准 Console 视频任务在服务重启后固定原账号续跑
@@ -29,21 +35,30 @@
 - [x] API Key 模型白名单、Redis 原子 RPM 限流、到期时间与管理端策略编辑
 - [x] Redis 账号敏感字段 AES-256-GCM 加密和旧明文启动迁移
 - [x] HTTP/SOCKS5 出口池、健康反馈、粘滞与 FlareSolverr
+- [x] 可信代理链解析；默认剥离未受信任的转发头，登录限流和访问日志使用解析后的客户端地址
+- [x] 客户端密钥与账号级并发策略；密钥支持模型、RPM、到期和 `max_concurrent`
+- [x] 持久化模型 Route/Capability/AccountBinding，并在请求选路与 capability 校验中执行策略
+- [x] 请求审计、跨账号 attempt/质量诊断和 token usage 账本；管理端 `/api/audit` 支持游标分页
+- [x] Build 视频确认 403 后的 XAI fallback、一次性 HTTPS `upload_url` 回调和可信结果下载
+- [x] 托管 egress 覆盖 Console Voice WebSocket，并复用节点 UA、clearance 和健康反馈
 - [x] Prometheus 指标与受保护的 pprof
 
 ## 部分完成
 
-- [~] Provider 前缀和动态 Build 路由已完成；同一公开模型的多 Provider 自动聚合、路由级 capability/账号绑定仍待独立领域模型
+- [~] Provider 前缀、动态 Build 路由、持久化 route/capability/account binding 已完成；同一公开模型的多 Provider 自动聚合仍待策略层
+- [~] Web 视频已按当前捕获协议对齐为纯文本生成；图片/参考图视频需显式走 Console/Build，尚未做同一公开模型的 capability 自动选路
+- [~] Console 标准视频链路完整；Build `/videos/generations` 已支持 OAuth 创建、轮询、可信下载、中断恢复、最多 8 张公共参考图、1.5 纯文本 1080p、确认 403 后 XAI fallback 和一次性上传回调；本地参考图仍需先转为公共 HTTPS URL
+- [x] Console 标准图片生成及 multipart 多图编辑已完成，支持 1–3 张输入、模型级比例/分辨率/quality 校验和本地化输出
+- [x] Build namespace 调用、client `tool_search` 参数增量隐藏、延迟工具动态展开及完整可见工具目录恢复已完成
 - [~] 标准视频生成、编辑、延长、查询、内容读取、`file_id`、重启续跑、多实例任务租约及共享文件系统已完成；提交前中断及旧 Web 分段任务不重放，尚无 S3 等对象存储后端
-- [~] 出口支持静态配置、权重和健康冷却，尚无订阅导入、账号绑定和管理端节点编排；托管出口尚不支持语音 WebSocket 租约拨号
+- [~] 出口支持静态配置、权重、健康冷却和 Voice WebSocket 租约拨号，尚无订阅导入、账号绑定和管理端节点编排
 
 ## 尚未实现
 
 - [ ] 同名模型多 Provider 路由自动聚合
-- [ ] 模型路由的 capability、upstream model 和账号绑定数据模型
 - [ ] API Key 的账号范围与金额额度（模型白名单、RPM、到期限制已完成）
 - [ ] PostgreSQL 持久化及正式多实例拓扑
-- [ ] 请求级 Grok 审计、客户端计费和完整媒体图库/结果资产元数据数据库（临时输入元数据已使用 Redis）
+- [ ] 正式金额计费和完整媒体图库/结果资产元数据数据库（请求/attempt/token usage 审计已使用 Redis Stream）
 - [ ] Trojan、VLESS、Shadowsocks、VMess、Resin 等隧道和出口 Quality Guard
 - [ ] React 运维控制台、媒体画廊和在线 Swagger 文档
 

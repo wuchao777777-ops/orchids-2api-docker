@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"context"
 	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
@@ -12,11 +13,11 @@ import (
 
 func TestVideoSegmentLengthsMatchGrok2API(t *testing.T) {
 	cases := map[int][]int{
+		1:  {1},
 		6:  {6},
 		10: {10},
-		12: {6, 6},
-		16: {10, 6},
-		20: {10, 10},
+		12: {12},
+		15: {15},
 	}
 	for seconds, want := range cases {
 		got, err := videoSegmentLengths(seconds)
@@ -182,6 +183,14 @@ func TestValidateVideoConfig_AcceptsSecondsSizeShape(t *testing.T) {
 	}
 	if cfg.ResolutionName != "720p" {
 		t.Fatalf("ResolutionName=%q want 720p", cfg.ResolutionName)
+	}
+}
+
+func TestBuildVideoCreatePayload_RejectsImageReferences(t *testing.T) {
+	h := &Handler{}
+	_, err := h.buildVideoCreatePayload(context.Background(), "", ModelSpec{UpstreamModel: "imagine-video-gen"}, "hello", []AttachmentInput{{Type: "image", Data: "https://example.com/a.png"}}, &VideoConfig{VideoLength: 6, AspectRatio: "16:9", ResolutionName: "720p"})
+	if err == nil || !strings.Contains(err.Error(), "text-to-video only") {
+		t.Fatalf("error=%v", err)
 	}
 }
 

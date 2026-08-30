@@ -346,7 +346,7 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	for _, item := range items {
 		gotIDs = append(gotIDs, item.ID)
 	}
-	if strings.Join(gotIDs, ",") != "grok-4.6,future-private-model,grok-4.5" {
+	if strings.Join(gotIDs, ",") != "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast" {
 		t.Fatalf("public IDs=%v want dynamic Build catalog", gotIDs)
 	}
 
@@ -357,8 +357,14 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	if persisted.GrokProvider != "build" || persisted.GrokModelsSyncedAt.IsZero() {
 		t.Fatalf("provider/catalog not persisted: %+v", persisted)
 	}
-	if strings.Join(persisted.GrokModels, ",") != "grok-4.6,future-private-model,grok-4.5" {
+	if strings.Join(persisted.GrokModels, ",") != "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast" {
 		t.Fatalf("account capability snapshot=%v", persisted.GrokModels)
+	}
+}
+
+func TestCanonicalGrokRefreshModelIDKeepsBuildVideoProvider(t *testing.T) {
+	if got := canonicalGrokRefreshModelID("grok-imagine-video-1.5"); got != "build/grok-imagine-video-1.5" {
+		t.Fatalf("canonicalGrokRefreshModelID()=%q", got)
 	}
 }
 

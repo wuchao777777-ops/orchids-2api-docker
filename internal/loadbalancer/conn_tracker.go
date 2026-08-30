@@ -19,6 +19,12 @@ type ConnTracker interface {
 	GetCounts(accountIDs []int64) map[int64]int64
 }
 
+// LimitedConnTracker atomically reserves a slot when a hard per-account limit
+// is configured. It is optional so existing custom trackers remain compatible.
+type LimitedConnTracker interface {
+	TryAcquire(accountID int64, limit int64) bool
+}
+
 // --- Memory Implementation ---
 
 // MemoryConnTracker uses sync.Map with atomic counters (the original implementation).
@@ -33,6 +39,20 @@ func NewMemoryConnTracker() *MemoryConnTracker {
 func (t *MemoryConnTracker) Acquire(accountID int64) {
 	val, _ := t.conns.LoadOrStore(accountID, &atomic.Int64{})
 	val.(*atomic.Int64).Add(1)
+}
+
+func (t *MemoryConnTracker) TryAcquire(accountID int64, limit int64) bool {
+	val, _ := t.conns.LoadOrStore(accountID, &atomic.Int64{})
+	counter := val.(*atomic.Int64)
+	for {
+		current := counter.Load()
+		if limit > 0 && current >= limit {
+			return false
+		}
+		if counter.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
 }
 
 func (t *MemoryConnTracker) Release(accountID int64) {
@@ -72,6 +92,7 @@ type RedisConnTracker struct {
 	client        *redis.Client
 	prefix        string
 	releaseScript *redis.Script
+	acquireScript *redis.Script
 }
 
 func NewRedisConnTracker(client *redis.Client, prefix string) *RedisConnTracker {
@@ -88,6 +109,16 @@ func NewRedisConnTracker(client *redis.Client, prefix string) *RedisConnTracker 
 		end
 		return 0
 	`)
+	t.acquireScript = redis.NewScript(`
+		local key = KEYS[1]
+		local limit = tonumber(ARGV[1]) or 0
+		local current = tonumber(redis.call("GET", key) or "0")
+		if limit > 0 and current >= limit then
+			return 0
+		end
+		redis.call("INCR", key)
+		return 1
+	`)
 
 	// Clear stale counters on startup
 	t.clearAll()
@@ -101,6 +132,12 @@ func (t *RedisConnTracker) key(accountID int64) string {
 func (t *RedisConnTracker) Acquire(accountID int64) {
 	ctx := context.Background()
 	t.client.Incr(ctx, t.key(accountID))
+}
+
+func (t *RedisConnTracker) TryAcquire(accountID int64, limit int64) bool {
+	ctx := context.Background()
+	result, err := t.acquireScript.Run(ctx, t.client, []string{t.key(accountID)}, limit).Int64()
+	return err == nil && result == 1
 }
 
 func (t *RedisConnTracker) Release(accountID int64) {

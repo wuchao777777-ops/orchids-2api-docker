@@ -148,7 +148,7 @@ func storedVideoJobFromRuntime(job *videoJob) *store.StoredVideoJob {
 		Seconds: job.Seconds, Size: job.Size, Quality: job.Quality,
 		Status: job.Status, Progress: job.Progress, VideoURL: job.VideoURL,
 		ContentPath: job.ContentPath, UpstreamRequestID: job.UpstreamRequestID, RemixedFromID: job.RemixedFromID,
-		Operation: job.Operation, StandardAPI: job.StandardAPI,
+		Operation: job.Operation, StandardAPI: job.StandardAPI, BuildFallback: job.BuildFallback,
 		ErrorCode: truncateVideoJobText(errorCode, 256), ErrorMessage: truncateVideoJobText(errorMessage, 4<<10),
 		CreatedAt: job.CreatedAt, CompletedAt: job.CompletedAt,
 	}
@@ -190,7 +190,7 @@ func runtimeVideoJobFromStored(stored *store.StoredVideoJob) *videoJob {
 		Seconds: stored.Seconds, Size: stored.Size, Quality: stored.Quality,
 		Status: stored.Status, Progress: stored.Progress, VideoURL: stored.VideoURL,
 		ContentPath: stored.ContentPath, UpstreamRequestID: stored.UpstreamRequestID, RemixedFromID: stored.RemixedFromID,
-		Operation: stored.Operation, StandardAPI: stored.StandardAPI,
+		Operation: stored.Operation, StandardAPI: stored.StandardAPI, BuildFallback: stored.BuildFallback,
 		CreatedAt: stored.CreatedAt, CompletedAt: stored.CompletedAt,
 	}
 	if stored.ErrorCode != "" || stored.ErrorMessage != "" {
@@ -318,9 +318,6 @@ func readVideoInputReferenceFiles(r *http.Request) ([]string, error) {
 	var out []string
 	for _, key := range []string{"input_reference", "input_reference[]"} {
 		for _, fh := range r.MultipartForm.File[key] {
-			if len(out) >= 7 {
-				return out, nil
-			}
 			dataURI, err := uploadFileHeaderToDataURI(fh)
 			if err != nil {
 				return nil, err
@@ -380,22 +377,42 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Model %q is not a video model", req.Model), http.StatusBadRequest)
 		return
 	}
-	if err := h.ensureModelEnabled(r.Context(), req.Model); err != nil {
+	spec = h.applyPersistedRoute(r.Context(), spec)
+	if err := h.ensureModelCapability(r.Context(), req.Model, store.CapabilityVideo); err != nil {
 		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
 		return
 	}
-	cfg, err := validateVideoConfig(&VideoConfig{
+	if spec.Upstream == UpstreamAppChat || (spec.Upstream == UpstreamAuto && !requiresConsoleResponses(spec)) {
+		if len(req.InputReferences) > 0 {
+			http.Error(w, "web video generation currently supports text-to-video only; use a Console/Build video model for image references", http.StatusBadRequest)
+			return
+		}
+	}
+	cfg, err := validateVideoConfigForModel(&VideoConfig{
 		VideoLength:    req.Seconds,
 		ResolutionName: req.ResolutionName,
 		Preset:         req.Preset,
 		Size:           firstNonEmpty(req.Size, "720x1280"),
-	})
+	}, spec, len(req.InputReferences))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if len(req.InputReferences) > 7 {
-		req.InputReferences = req.InputReferences[:7]
+	maxReferences := 7
+	if spec.Upstream == UpstreamCLI {
+		maxReferences = 8
+	}
+	if len(req.InputReferences) > maxReferences {
+		http.Error(w, fmt.Sprintf("input_references supports at most %d images for this model", maxReferences), http.StatusBadRequest)
+		return
+	}
+	if spec.Upstream == UpstreamCLI {
+		for _, reference := range req.InputReferences {
+			if !publicHTTPSURL(reference) {
+				http.Error(w, "Build video reference images must be public HTTPS URLs; local multipart uploads are not supported yet", http.StatusBadRequest)
+				return
+			}
+		}
 	}
 	job := &videoJob{
 		ID:              "video_" + randomHex(16),
@@ -410,6 +427,7 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		InputReferences: req.InputReferences,
 		Operation:       "generate",
 		OwnerHash:       videoRequestOwner(r),
+		PublicBaseURL:   detectPublicBaseURL(r),
 	}
 	putVideoJob(job)
 	h.persistVideoJob(r.Context(), job)
@@ -429,6 +447,10 @@ func (h *Handler) runVideoCreateJob(ctx context.Context, job *videoJob, spec Mod
 		h.persistVideoJob(ctx, job)
 	}
 	update("in_progress", 1)
+	if spec.Upstream == UpstreamCLI && spec.IsVideo {
+		h.runBuildVideoCreateJob(ctx, job, spec, cfg)
+		return
+	}
 
 	// Retry opening a session with account switching — video generation
 	// can take minutes and the 429 cooldown may clear while we wait.

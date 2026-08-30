@@ -67,3 +67,26 @@ func TestAccountSupportsModelUsesObservedBuildCatalog(t *testing.T) {
 		t.Fatalf("observed catalog not enforced: %#v", acc.GrokModels)
 	}
 }
+
+func TestApplyCLIModelsNormalizesSparseBuildCapabilities(t *testing.T) {
+	acc := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: "super"}
+	ApplyCLIModels(acc, []string{"grok-4.6", "grok-imagine-video-1.5", "grok-4.6"}, time.Now())
+
+	for _, want := range []string{"grok-4.6", "grok-4.5", "grok-composer-2.5-fast", "grok-imagine-video-1.5"} {
+		if !AccountSupportsModel(acc, want) {
+			t.Fatalf("normalized catalog %#v is missing %q", acc.GrokModels, want)
+		}
+	}
+}
+
+func TestApplyCLIModelsRemovesSuperVideoFromLowerTier(t *testing.T) {
+	acc := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: "free"}
+	ApplyCLIModels(acc, []string{"grok-4.6", "grok-imagine-video-1.5"}, time.Now())
+
+	if AccountSupportsModel(acc, "grok-imagine-video-1.5") {
+		t.Fatalf("free catalog retained Super-only video model: %#v", acc.GrokModels)
+	}
+	if !AccountSupportsModel(acc, "grok-composer-2.5-fast") {
+		t.Fatalf("free Build catalog is missing composer: %#v", acc.GrokModels)
+	}
+}

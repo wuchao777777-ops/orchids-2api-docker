@@ -10,26 +10,33 @@ import (
 )
 
 type ChatCompletionsRequest struct {
-	Model             string                   `json:"model"`
-	Messages          []ChatMessage            `json:"messages"`
-	Stream            bool                     `json:"stream"`
-	StreamProvided    bool                     `json:"-"`
-	Thinking          *string                  `json:"thinking,omitempty"`
-	ReasoningEffort   *string                  `json:"reasoning_effort,omitempty"`
-	Temperature       *float64                 `json:"temperature,omitempty"`
-	TopP              *float64                 `json:"top_p,omitempty"`
-	MaxTokens         *int                     `json:"max_tokens,omitempty"`
-	VideoConfig       *VideoConfig             `json:"video_config,omitempty"`
-	ImageConfig       *ImageConfig             `json:"image_config,omitempty"`
-	Tools             []ToolDef                `json:"tools,omitempty"`
-	ToolChoice        interface{}              `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool                    `json:"parallel_tool_calls,omitempty"`
-	Stop              []string                 `json:"stop,omitempty"`
-	PromptCacheKey    string                   `json:"prompt_cache_key,omitempty"`
-	MCPServers        []map[string]interface{} `json:"mcp_servers,omitempty"`
-	OutputConfig      map[string]interface{}   `json:"output_config,omitempty"`
-	ThinkingConfig    map[string]interface{}   `json:"thinking_config,omitempty"`
-	ReasoningReplay   bool                     `json:"-"`
+	Model               string                   `json:"model"`
+	Messages            []ChatMessage            `json:"messages"`
+	Stream              bool                     `json:"stream"`
+	StreamProvided      bool                     `json:"-"`
+	Thinking            *string                  `json:"thinking,omitempty"`
+	ReasoningEffort     *string                  `json:"reasoning_effort,omitempty"`
+	Temperature         *float64                 `json:"temperature,omitempty"`
+	TopP                *float64                 `json:"top_p,omitempty"`
+	MaxTokens           *int                     `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int                     `json:"max_completion_tokens,omitempty"`
+	ResponseFormat      map[string]interface{}   `json:"response_format,omitempty"`
+	SafetyIdentifier    string                   `json:"safety_identifier,omitempty"`
+	ResponseText        map[string]interface{}   `json:"text,omitempty"`
+	ResponsesTools      []map[string]interface{} `json:"x_responses_tools,omitempty"`
+	ResponsesInput      []interface{}            `json:"x_responses_input,omitempty"`
+	Include             []string                 `json:"include,omitempty"`
+	VideoConfig         *VideoConfig             `json:"video_config,omitempty"`
+	ImageConfig         *ImageConfig             `json:"image_config,omitempty"`
+	Tools               []ToolDef                `json:"tools,omitempty"`
+	ToolChoice          interface{}              `json:"tool_choice,omitempty"`
+	ParallelToolCalls   *bool                    `json:"parallel_tool_calls,omitempty"`
+	Stop                []string                 `json:"stop,omitempty"`
+	PromptCacheKey      string                   `json:"prompt_cache_key,omitempty"`
+	MCPServers          []map[string]interface{} `json:"mcp_servers,omitempty"`
+	OutputConfig        map[string]interface{}   `json:"output_config,omitempty"`
+	ThinkingConfig      map[string]interface{}   `json:"thinking_config,omitempty"`
+	ReasoningReplay     bool                     `json:"-"`
 }
 
 type ChatMessage struct {
@@ -93,6 +100,8 @@ type videoJob struct {
 	AccountID         int64
 	Provider          string
 	UpstreamRequestID string
+	PublicBaseURL     string
+	BuildFallback     bool
 }
 
 type ImageConfig struct {
@@ -102,13 +111,18 @@ type ImageConfig struct {
 }
 
 type ImagesGenerationsRequest struct {
-	Model          string `json:"model"`
-	Prompt         string `json:"prompt"`
-	N              int    `json:"n"`
-	Size           string `json:"size"`
-	Stream         bool   `json:"stream"`
-	NSFW           *bool  `json:"nsfw,omitempty"`
-	ResponseFormat string `json:"response_format"`
+	Model          string          `json:"model"`
+	Prompt         string          `json:"prompt"`
+	N              int             `json:"n"`
+	PartialImages  *int            `json:"partial_images,omitempty"`
+	Size           string          `json:"size"`
+	AspectRatio    string          `json:"aspect_ratio"`
+	Resolution     string          `json:"resolution"`
+	Quality        string          `json:"quality"`
+	Stream         bool            `json:"stream"`
+	NSFW           *bool           `json:"nsfw,omitempty"`
+	ResponseFormat string          `json:"response_format"`
+	StorageOptions json.RawMessage `json:"storage_options,omitempty"`
 }
 
 func parseLooseBoolAnyForField(value interface{}, field string) (bool, error) {
@@ -301,24 +315,31 @@ func (c *ImageConfig) UnmarshalJSON(data []byte) error {
 
 func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	type rawChatRequest struct {
-		Model             string                   `json:"model"`
-		Messages          []ChatMessage            `json:"messages"`
-		Stream            interface{}              `json:"stream"`
-		Thinking          *string                  `json:"thinking,omitempty"`
-		ReasoningEffort   *string                  `json:"reasoning_effort,omitempty"`
-		Temperature       interface{}              `json:"temperature,omitempty"`
-		TopP              interface{}              `json:"top_p,omitempty"`
-		MaxTokens         interface{}              `json:"max_tokens,omitempty"`
-		VideoConfig       *VideoConfig             `json:"video_config,omitempty"`
-		ImageConfig       *ImageConfig             `json:"image_config,omitempty"`
-		Tools             []ToolDef                `json:"tools,omitempty"`
-		ToolChoice        interface{}              `json:"tool_choice,omitempty"`
-		ParallelToolCalls interface{}              `json:"parallel_tool_calls,omitempty"`
-		Stop              interface{}              `json:"stop,omitempty"`
-		PromptCacheKey    string                   `json:"prompt_cache_key,omitempty"`
-		MCPServers        []map[string]interface{} `json:"mcp_servers,omitempty"`
-		OutputConfig      map[string]interface{}   `json:"output_config,omitempty"`
-		ThinkingConfig    map[string]interface{}   `json:"thinking_config,omitempty"`
+		Model               string                   `json:"model"`
+		Messages            []ChatMessage            `json:"messages"`
+		Stream              interface{}              `json:"stream"`
+		Thinking            *string                  `json:"thinking,omitempty"`
+		ReasoningEffort     *string                  `json:"reasoning_effort,omitempty"`
+		Temperature         interface{}              `json:"temperature,omitempty"`
+		TopP                interface{}              `json:"top_p,omitempty"`
+		MaxTokens           interface{}              `json:"max_tokens,omitempty"`
+		MaxCompletionTokens interface{}              `json:"max_completion_tokens,omitempty"`
+		ResponseFormat      map[string]interface{}   `json:"response_format,omitempty"`
+		User                interface{}              `json:"user,omitempty"`
+		SafetyIdentifier    interface{}              `json:"safety_identifier,omitempty"`
+		ResponseText        map[string]interface{}   `json:"text,omitempty"`
+		ResponsesTools      []map[string]interface{} `json:"x_responses_tools,omitempty"`
+		Include             []string                 `json:"include,omitempty"`
+		VideoConfig         *VideoConfig             `json:"video_config,omitempty"`
+		ImageConfig         *ImageConfig             `json:"image_config,omitempty"`
+		Tools               []ToolDef                `json:"tools,omitempty"`
+		ToolChoice          interface{}              `json:"tool_choice,omitempty"`
+		ParallelToolCalls   interface{}              `json:"parallel_tool_calls,omitempty"`
+		Stop                interface{}              `json:"stop,omitempty"`
+		PromptCacheKey      string                   `json:"prompt_cache_key,omitempty"`
+		MCPServers          []map[string]interface{} `json:"mcp_servers,omitempty"`
+		OutputConfig        map[string]interface{}   `json:"output_config,omitempty"`
+		ThinkingConfig      map[string]interface{}   `json:"thinking_config,omitempty"`
 	}
 
 	var raw rawChatRequest
@@ -350,6 +371,10 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	maxCompletionTokens, err := parseLooseIntAny(raw.MaxCompletionTokens)
+	if err != nil {
+		return err
+	}
 	parallelToolCalls, err := parseLooseBoolAnyForField(raw.ParallelToolCalls, "parallel_tool_calls")
 	if err != nil {
 		return err
@@ -366,6 +391,17 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	if _, ok := rawMap["max_tokens"]; ok {
 		r.MaxTokens = &maxTokens
 	}
+	if _, ok := rawMap["max_completion_tokens"]; ok {
+		r.MaxCompletionTokens = &maxCompletionTokens
+		if r.MaxTokens == nil {
+			r.MaxTokens = &maxCompletionTokens
+		}
+	}
+	r.ResponseFormat = raw.ResponseFormat
+	r.SafetyIdentifier = firstNonEmpty(parseLooseStringAny(raw.SafetyIdentifier), parseLooseStringAny(raw.User))
+	r.ResponseText = raw.ResponseText
+	r.ResponsesTools = append([]map[string]interface{}(nil), raw.ResponsesTools...)
+	r.Include = append([]string(nil), raw.Include...)
 	r.VideoConfig = raw.VideoConfig
 	r.ImageConfig = raw.ImageConfig
 	r.Tools = raw.Tools
@@ -407,13 +443,18 @@ func parseStringList(value interface{}, field string) ([]string, error) {
 
 func (r *ImagesGenerationsRequest) UnmarshalJSON(data []byte) error {
 	type rawImagesGenerationsRequest struct {
-		Model          interface{} `json:"model"`
-		Prompt         interface{} `json:"prompt"`
-		N              interface{} `json:"n"`
-		Size           interface{} `json:"size"`
-		Stream         interface{} `json:"stream"`
-		NSFW           interface{} `json:"nsfw"`
-		ResponseFormat interface{} `json:"response_format"`
+		Model          interface{}     `json:"model"`
+		Prompt         interface{}     `json:"prompt"`
+		N              interface{}     `json:"n"`
+		PartialImages  interface{}     `json:"partial_images"`
+		Size           interface{}     `json:"size"`
+		AspectRatio    interface{}     `json:"aspect_ratio"`
+		Resolution     interface{}     `json:"resolution"`
+		Quality        interface{}     `json:"quality"`
+		Stream         interface{}     `json:"stream"`
+		NSFW           interface{}     `json:"nsfw"`
+		ResponseFormat interface{}     `json:"response_format"`
+		StorageOptions json.RawMessage `json:"storage_options"`
 	}
 	var raw rawImagesGenerationsRequest
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -422,6 +463,14 @@ func (r *ImagesGenerationsRequest) UnmarshalJSON(data []byte) error {
 	n, err := parseLooseIntAny(raw.N)
 	if err != nil {
 		return err
+	}
+	var partialImages *int
+	if raw.PartialImages != nil {
+		value, err := parseLooseIntAny(raw.PartialImages)
+		if err != nil {
+			return err
+		}
+		partialImages = &value
 	}
 	stream, err := parseLooseBoolAny(raw.Stream)
 	if err != nil {
@@ -438,10 +487,15 @@ func (r *ImagesGenerationsRequest) UnmarshalJSON(data []byte) error {
 	r.Model = parseLooseStringAny(raw.Model)
 	r.Prompt = parseLooseStringAny(raw.Prompt)
 	r.N = n
+	r.PartialImages = partialImages
 	r.Size = parseLooseStringAny(raw.Size)
+	r.AspectRatio = parseLooseStringAny(raw.AspectRatio)
+	r.Resolution = parseLooseStringAny(raw.Resolution)
+	r.Quality = parseLooseStringAny(raw.Quality)
 	r.Stream = stream
 	r.NSFW = nsfw
 	r.ResponseFormat = parseLooseStringAny(raw.ResponseFormat)
+	r.StorageOptions = append(r.StorageOptions[:0], raw.StorageOptions...)
 	return nil
 }
 
@@ -650,9 +704,6 @@ func (r *ImagesGenerationsRequest) Normalize() {
 	}
 	if r.N <= 0 {
 		r.N = 1
-	}
-	if strings.TrimSpace(r.Size) == "" {
-		r.Size = "1024x1024"
 	}
 	if strings.TrimSpace(r.ResponseFormat) == "" {
 		r.ResponseFormat = "url"

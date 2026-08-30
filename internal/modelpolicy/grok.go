@@ -6,6 +6,7 @@ import (
 )
 
 var publicGrokModelIDs = []string{
+	"grok-composer-2.5-fast",
 	"grok-4.6",
 	"grok-4.5",
 	"grok-chat-fast",
@@ -18,12 +19,17 @@ var publicGrokModelIDs = []string{
 	"console/grok-4.20-multi-agent-0309",
 	"console/grok-4.5",
 	"console/grok-build-0.1",
+	"console/grok-imagine-image",
+	"console/grok-imagine-image-quality",
+	"console/grok-imagine-image-2.0",
 	"grok-imagine-image-lite",
 	"grok-imagine-image",
+	"grok-imagine-image-2.0",
 	"grok-imagine-image-quality",
 	"grok-imagine-image-edit",
 	"grok-imagine-video",
 	"grok-imagine-video-1.5",
+	"build/grok-imagine-video-1.5",
 	"grok-voice-latest",
 	"grok-voice-think-fast-2.0",
 	"grok-voice-think-fast-1.0",

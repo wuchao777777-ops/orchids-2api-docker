@@ -37,6 +37,7 @@ type Account struct {
 	AgentMode            string    `json:"agent_mode"`
 	Email                string    `json:"email"`
 	Weight               int       `json:"weight"`
+	MaxConcurrent        int       `json:"max_concurrent,omitempty"`
 	Enabled              bool      `json:"enabled"`
 	Token                string    `json:"token"`        // Runtime/display token for non-Warp channels
 	Subscription         string    `json:"subscription"` // "free", "pro", etc.
@@ -74,8 +75,10 @@ type Account struct {
 	// GrokModels is the last successful account-specific upstream /v1/models
 	// capability snapshot. An empty snapshot means not synced yet, not that the
 	// account supports every model.
-	GrokModels         []string  `json:"grok_models,omitempty"`
-	GrokModelsSyncedAt time.Time `json:"grok_models_synced_at,omitempty"`
+	GrokModels             []string  `json:"grok_models,omitempty"`
+	GrokModelsSyncedAt     time.Time `json:"grok_models_synced_at,omitempty"`
+	MissingThinkingStrikes int       `json:"missing_thinking_strikes,omitempty"`
+	MissingThinkingLastAt  time.Time `json:"missing_thinking_last_at,omitempty"`
 	// GrokBilling contains only official xAI Build billing information. It is
 	// deliberately separate from GrokRateLimits, whose request/token headers
 	// are short-lived throttling windows rather than subscription allowance.
@@ -148,6 +151,7 @@ type ApiKey struct {
 	Enabled       bool       `json:"enabled"`
 	AllowedModels []string   `json:"allowed_models,omitempty"`
 	RPMLimit      int        `json:"rpm_limit,omitempty"`
+	MaxConcurrent int        `json:"max_concurrent,omitempty"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	LastUsedAt    *time.Time `json:"last_used_at"`
 	CreatedAt     time.Time  `json:"created_at"`
@@ -206,6 +210,7 @@ type StoredVideoJob struct {
 	VideoURL          string    `json:"video_url,omitempty"`
 	ContentPath       string    `json:"content_path,omitempty"`
 	UpstreamRequestID string    `json:"upstream_request_id,omitempty"`
+	BuildFallback     bool      `json:"build_fallback,omitempty"`
 	RemixedFromID     string    `json:"remixed_from_id,omitempty"`
 	Operation         string    `json:"operation,omitempty"`
 	StandardAPI       bool      `json:"standard_api,omitempty"`
@@ -347,6 +352,7 @@ func (s *Store) seedModels() error {
 	existing, err := s.ListModels(ctx)
 	if err == nil && len(existing) > 0 {
 		s.ensureRequiredGrokChatModels(ctx)
+		s.backfillGrokRouteMetadata(ctx)
 		slog.Debug("Model seed skipped; existing model records preserved", "count", len(existing))
 		return nil
 	}
@@ -373,6 +379,26 @@ func (s *Store) seedModels() error {
 	s.reconcileLatestPuterModels(ctx)
 
 	return nil
+}
+
+func (s *Store) backfillGrokRouteMetadata(ctx context.Context) {
+	models, err := s.ListModels(ctx)
+	if err != nil {
+		return
+	}
+	for _, model := range models {
+		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
+			continue
+		}
+		if model.Provider != "" && model.UpstreamModel != "" && len(model.Capabilities) > 0 {
+			continue
+		}
+		updated := *model
+		applyGrokRouteDefaults(&updated)
+		if err := s.UpdateModel(ctx, &updated); err != nil {
+			slog.Warn("failed to backfill Grok route metadata", "model_id", model.ModelID, "error", err)
+		}
+	}
 }
 
 func (s *Store) reconcileLatestPuterModels(ctx context.Context) {
@@ -473,14 +499,20 @@ func buildGrokSeedModels() []Model {
 		id   string
 		name string
 	}{
+		{"grok-composer-2.5-fast", "Grok Composer 2.5 Fast"},
 		{"grok-4.6", "Grok 4.6"},
 		{"grok-4.5", "Grok 4.5"},
+		{"console/grok-imagine-image", "Console Grok Imagine Image"},
+		{"console/grok-imagine-image-quality", "Console Grok Imagine Image Quality"},
+		{"console/grok-imagine-image-2.0", "Console Grok Imagine Image 2.0"},
 		{"grok-imagine-image-lite", "Grok Imagine Image Lite"},
 		{"grok-imagine-image", "Grok Imagine Image"},
+		{"grok-imagine-image-2.0", "Grok Imagine Image 2.0"},
 		{"grok-imagine-image-quality", "Grok Imagine Image Quality"},
 		{"grok-imagine-image-edit", "Grok Imagine Image Edit"},
 		{"grok-imagine-video", "Grok Imagine Video"},
 		{"grok-imagine-video-1.5", "Grok Imagine Video 1.5"},
+		{"build/grok-imagine-video-1.5", "Build Grok Imagine Video 1.5"},
 		{"grok-voice-latest", "Grok Voice Latest"},
 		{"grok-voice-think-fast-2.0", "Grok Voice Think Fast 2.0"},
 		{"grok-voice-think-fast-1.0", "Grok Voice Think Fast 1.0"},
@@ -488,7 +520,7 @@ func buildGrokSeedModels() []Model {
 	}
 	models := make([]Model, 0, len(items))
 	for i, item := range items {
-		models = append(models, Model{
+		model := Model{
 			ID:        fmt.Sprintf("grok-%03d", i+1),
 			Channel:   "Grok",
 			ModelID:   item.id,
@@ -497,10 +529,57 @@ func buildGrokSeedModels() []Model {
 			Verified:  true,
 			IsDefault: i == 0,
 			SortOrder: i,
-		})
+		}
+		applyGrokRouteDefaults(&model)
+		models = append(models, model)
 	}
 	return models
 }
+
+func applyGrokRouteDefaults(model *Model) {
+	if model == nil {
+		return
+	}
+	id := strings.ToLower(strings.TrimSpace(model.ModelID))
+	model.Origin = "catalog"
+	model.UpstreamModel = strings.TrimPrefix(strings.TrimPrefix(id, "console/"), "build/")
+	switch {
+	case strings.HasPrefix(id, "console/"), strings.HasPrefix(id, "grok-voice"), id == "grok-stt", id == "grok-imagine-video-1.5":
+		model.Provider = "console"
+	case strings.HasPrefix(id, "build/"), id == "grok-composer-2.5-fast", id == "grok-4.5", id == "grok-4.6":
+		model.Provider = "build"
+	default:
+		model.Provider = "web"
+	}
+	switch {
+	case strings.Contains(id, "voice"):
+		model.Capabilities = []string{CapabilityRealtime, CapabilityTTS}
+	case id == "grok-stt":
+		model.Capabilities = []string{CapabilitySTT}
+	case strings.Contains(id, "video"):
+		model.Capabilities = []string{CapabilityVideo}
+		if model.Provider == "web" {
+			model.Capabilities = append(model.Capabilities, CapabilityChat)
+		}
+	case strings.Contains(id, "image-edit"):
+		model.Capabilities = []string{CapabilityImageEdit}
+		if model.Provider == "web" {
+			model.Capabilities = append(model.Capabilities, CapabilityChat)
+		}
+	case strings.Contains(id, "image"):
+		model.Capabilities = []string{CapabilityImage, CapabilityImageEdit}
+		if model.Provider == "web" {
+			model.Capabilities = append(model.Capabilities, CapabilityChat)
+		}
+	default:
+		model.Capabilities = []string{CapabilityChat, CapabilityMessages, CapabilityResponses}
+	}
+	model.NormalizeRoute()
+}
+
+// ApplyGrokRouteDefaults initializes route metadata for catalog/discovery
+// records while allowing callers to override Origin afterwards.
+func ApplyGrokRouteDefaults(model *Model) { applyGrokRouteDefaults(model) }
 
 func (s *Store) Close() error {
 	if rs, ok := s.accounts.(*redisStore); ok {
@@ -818,6 +897,9 @@ func (s *Store) DeleteStoredMediaInput(ctx context.Context, id, ownerHash string
 // Model wrappers
 
 func (s *Store) CreateModel(ctx context.Context, m *Model) error {
+	if m != nil {
+		m.NormalizeRoute()
+	}
 	if s.models == nil {
 		return fmt.Errorf("models store not configured")
 	}
@@ -826,6 +908,9 @@ func (s *Store) CreateModel(ctx context.Context, m *Model) error {
 }
 
 func (s *Store) UpdateModel(ctx context.Context, m *Model) error {
+	if m != nil {
+		m.NormalizeRoute()
+	}
 	if s.models == nil {
 		return fmt.Errorf("models store not configured")
 	}

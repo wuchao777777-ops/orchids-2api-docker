@@ -258,6 +258,48 @@ func TestWriteResponsesStreamFromChat_ConvertsToolCallChunk(t *testing.T) {
 	}
 }
 
+func TestWriteResponsesStreamFromChatFailsEmptyAndPrematureStreams(t *testing.T) {
+	for name, input := range map[string]string{
+		"empty_done": "data: [DONE]\n\n",
+		"premature":  "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+		"error":      "data: {\"error\":{\"code\":\"rate_limit\",\"message\":\"slow down\"}}\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			writeResponsesStreamFromChatReader(recorder, "grok-4.6", strings.NewReader(input))
+			body := recorder.Body.String()
+			if !strings.Contains(body, "event: response.failed") || strings.Contains(body, "event: response.completed") {
+				t.Fatalf("body=%s", body)
+			}
+			if !strings.Contains(body, `"model":"grok-4.6"`) || !strings.Contains(body, "data: [DONE]") {
+				t.Fatalf("failure terminal incomplete: %s", body)
+			}
+		})
+	}
+}
+
+func TestCopyNativeCLIResponseAddsFailedTerminalOnPrematureEOF(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	input := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n"
+	id, _ := copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6")
+	if id != "resp_1" {
+		t.Fatalf("id=%q", id)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "event: response.failed") || !strings.Contains(body, "upstream_stream_incomplete") || !strings.Contains(body, `"model":"grok-4.6"`) {
+		t.Fatalf("body=%s", body)
+	}
+}
+
+func TestCopyNativeCLIResponseKeepsValidTerminal(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	input := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\ndata: [DONE]\n\n"
+	_, _ = copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6")
+	if count := strings.Count(recorder.Body.String(), "response.failed"); count != 0 {
+		t.Fatalf("unexpected failure: %s", recorder.Body.String())
+	}
+}
+
 func TestResponsesObjectFromChatPreservesReasoningItem(t *testing.T) {
 	chat := map[string]interface{}{
 		"model": "grok-4.3",

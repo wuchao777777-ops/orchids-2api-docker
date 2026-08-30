@@ -12,38 +12,40 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 )
 
 type Config struct {
 	// ── Configurable fields (read from config.json / Redis) ──
-	Port               string `json:"port"`
-	DebugEnabled       bool   `json:"debug_enabled"`
-	VerboseDiagnostics bool   `json:"verbose_diagnostics,omitempty"`
-	AdminUser          string `json:"admin_user"`
-	AdminPass          string `json:"admin_pass"`
-	AdminPath          string `json:"admin_path"`
-	AdminToken         string `json:"admin_token"`
-	InferenceAuth      *bool  `json:"inference_auth_enabled,omitempty"`
-	CredentialKeyFile  string `json:"credential_encryption_key_file,omitempty"`
-	ResponseStoreTTL   int    `json:"response_store_ttl_hours,omitempty"`
-	StoreMode          string `json:"store_mode"`
-	RedisAddr          string `json:"redis_addr"`
-	RedisPassword      string `json:"redis_password"`
-	RedisDB            int    `json:"redis_db"`
-	RedisPrefix        string `json:"redis_prefix"`
-	DeploymentReplicas int    `json:"deployment_replicas,omitempty"`
-	DeploymentInstance string `json:"deployment_instance_id,omitempty"`
-	DeploymentCluster  string `json:"deployment_cluster_id,omitempty"`
-	SharedMedia        bool   `json:"shared_media,omitempty"`
-	MediaDir           string `json:"media_dir,omitempty"`
-	CacheTokenCount    bool   `json:"cache_token_count"`
-	CacheTTL           int    `json:"cache_ttl"`
-	CacheStrategy      string `json:"cache_strategy"`
-	EnableTokenCache   bool   `json:"enable_token_cache"`
-	TokenCacheTTL      int    `json:"token_cache_ttl"`
-	TokenCacheStrategy string `json:"token_cache_strategy"`
+	Port               string   `json:"port"`
+	DebugEnabled       bool     `json:"debug_enabled"`
+	VerboseDiagnostics bool     `json:"verbose_diagnostics,omitempty"`
+	AdminUser          string   `json:"admin_user"`
+	AdminPass          string   `json:"admin_pass"`
+	AdminPath          string   `json:"admin_path"`
+	AdminToken         string   `json:"admin_token"`
+	InferenceAuth      *bool    `json:"inference_auth_enabled,omitempty"`
+	CredentialKeyFile  string   `json:"credential_encryption_key_file,omitempty"`
+	ResponseStoreTTL   int      `json:"response_store_ttl_hours,omitempty"`
+	TrustedProxies     []string `json:"trusted_proxies,omitempty"`
+	StoreMode          string   `json:"store_mode"`
+	RedisAddr          string   `json:"redis_addr"`
+	RedisPassword      string   `json:"redis_password"`
+	RedisDB            int      `json:"redis_db"`
+	RedisPrefix        string   `json:"redis_prefix"`
+	DeploymentReplicas int      `json:"deployment_replicas,omitempty"`
+	DeploymentInstance string   `json:"deployment_instance_id,omitempty"`
+	DeploymentCluster  string   `json:"deployment_cluster_id,omitempty"`
+	SharedMedia        bool     `json:"shared_media,omitempty"`
+	MediaDir           string   `json:"media_dir,omitempty"`
+	CacheTokenCount    bool     `json:"cache_token_count"`
+	CacheTTL           int      `json:"cache_ttl"`
+	CacheStrategy      string   `json:"cache_strategy"`
+	EnableTokenCache   bool     `json:"enable_token_cache"`
+	TokenCacheTTL      int      `json:"token_cache_ttl"`
+	TokenCacheStrategy string   `json:"token_cache_strategy"`
 
 	SessionID     string `json:"-"`
 	ClientCookie  string `json:"-"`
@@ -81,6 +83,7 @@ type Config struct {
 	// These fields are configurable via config.json / Redis and are deliberately
 	// NOT written into ApplyHardcoded, so they survive a persistConfig round trip.
 	GrokCLIBaseURL          string   `json:"grok_cli_base_url,omitempty"`
+	GrokCLIFallbackBaseURL  string   `json:"grok_cli_fallback_base_url,omitempty"`
 	GrokConsoleBaseURL      string   `json:"grok_console_base_url,omitempty"`
 	GrokCLIUserAgent        string   `json:"grok_cli_user_agent,omitempty"`
 	GrokCLIClientVersion    string   `json:"grok_cli_client_version,omitempty"`
@@ -90,6 +93,11 @@ type Config struct {
 	GrokCLIOAuthTokenURL    string   `json:"grok_cli_oauth_token_url,omitempty"`
 	GrokCLIModelIDs         []string `json:"grok_cli_model_ids,omitempty"`
 	GrokSessionIdentityRefr *bool    `json:"grok_session_identity_refresh,omitempty"`
+	GrokQualityHoldSeconds  int      `json:"grok_quality_hold_seconds,omitempty"`
+	GrokQualityMinChars     int      `json:"grok_quality_min_visible_chars,omitempty"`
+	GrokQualityOnExhausted  string   `json:"grok_quality_on_exhausted,omitempty"`
+	GrokThinkingCooldownSec int      `json:"grok_missing_thinking_cooldown_seconds,omitempty"`
+	GrokQualityMaxAttempts  int      `json:"grok_quality_max_attempts,omitempty"`
 
 	// ── Grok egress (proxy pool + FlareSolverr + clearance) ──
 	GrokEgressEnabled          bool               `json:"grok_egress_enabled,omitempty"`
@@ -314,6 +322,49 @@ func (c *Config) GrokChatCustomInstruction() string {
 	return strings.TrimSpace(c.GrokCustomInstruction)
 }
 
+func (c *Config) GrokQualityHoldDuration() time.Duration {
+	if c == nil || c.GrokQualityHoldSeconds <= 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(c.GrokQualityHoldSeconds) * time.Second
+}
+
+func (c *Config) GrokQualityMinVisibleChars() int {
+	if c == nil || c.GrokQualityMinChars <= 0 {
+		return 32
+	}
+	return c.GrokQualityMinChars
+}
+
+func (c *Config) GrokQualityExhaustedMode() string {
+	if c == nil {
+		return "fail_open"
+	}
+	switch strings.ToLower(strings.TrimSpace(c.GrokQualityOnExhausted)) {
+	case "error", "503", "quality_degraded":
+		return "error"
+	default:
+		return "fail_open"
+	}
+}
+
+func (c *Config) GrokMissingThinkingCooldown() time.Duration {
+	if c == nil || c.GrokThinkingCooldownSec <= 0 {
+		return 10 * time.Minute
+	}
+	return time.Duration(c.GrokThinkingCooldownSec) * time.Second
+}
+
+func (c *Config) GrokQualityAttempts() int {
+	if c == nil || c.GrokQualityMaxAttempts <= 0 {
+		return 6
+	}
+	if c.GrokQualityMaxAttempts > 16 {
+		return 16
+	}
+	return c.GrokQualityMaxAttempts
+}
+
 // GrokCLIBaseURLOrDefault returns the Build CLI proxy base URL, defaulting to
 // the official gateway.
 func (c *Config) GrokCLIBaseURLOrDefault() string {
@@ -321,6 +372,13 @@ func (c *Config) GrokCLIBaseURLOrDefault() string {
 		return strings.TrimRight(strings.TrimSpace(c.GrokCLIBaseURL), "/")
 	}
 	return "https://cli-chat-proxy.grok.com/v1"
+}
+
+func (c *Config) GrokCLIFallbackBaseURLOrDefault() string {
+	if c != nil && strings.TrimSpace(c.GrokCLIFallbackBaseURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(c.GrokCLIFallbackBaseURL), "/")
+	}
+	return "https://api.x.ai/v1"
 }
 
 // GrokConsoleBaseURLOrDefault returns the Console v1 API base used by DPoP

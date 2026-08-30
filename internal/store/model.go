@@ -3,7 +3,20 @@ package store
 import (
 	"bytes"
 	"github.com/goccy/go-json"
+	"slices"
 	"strings"
+)
+
+const (
+	CapabilityResponses = "responses"
+	CapabilityChat      = "chat"
+	CapabilityMessages  = "messages"
+	CapabilityImage     = "image"
+	CapabilityImageEdit = "image_edit"
+	CapabilityVideo     = "video"
+	CapabilityTTS       = "tts"
+	CapabilitySTT       = "stt"
+	CapabilityRealtime  = "realtime"
 )
 
 // ModelStatus 表示模型状态。
@@ -63,12 +76,58 @@ func (s ModelStatus) MarshalJSON() ([]byte, error) {
 }
 
 type Model struct {
-	ID        string      `json:"id"`
-	Channel   string      `json:"channel"`  // e.g., "warp", "grok"
-	ModelID   string      `json:"model_id"` // e.g., "claude-3-5-sonnet"
-	Name      string      `json:"name"`     // e.g., "Claude 3.5 Sonnet"
-	Status    ModelStatus `json:"status"`   // Enabled/Disabled
-	Verified  bool        `json:"verified,omitempty"`
-	IsDefault bool        `json:"is_default"` // Is default for this channel
-	SortOrder int         `json:"sort_order"`
+	ID              string      `json:"id"`
+	Channel         string      `json:"channel"`  // e.g., "warp", "grok"
+	ModelID         string      `json:"model_id"` // e.g., "claude-3-5-sonnet"
+	Name            string      `json:"name"`     // e.g., "Claude 3.5 Sonnet"
+	Status          ModelStatus `json:"status"`   // Enabled/Disabled
+	Verified        bool        `json:"verified,omitempty"`
+	IsDefault       bool        `json:"is_default"` // Is default for this channel
+	SortOrder       int         `json:"sort_order"`
+	Provider        string      `json:"provider,omitempty"`
+	UpstreamModel   string      `json:"upstream_model,omitempty"`
+	Capabilities    []string    `json:"capabilities,omitempty"`
+	Origin          string      `json:"origin,omitempty"`
+	BoundAccountIDs []int64     `json:"bound_account_ids,omitempty"`
+}
+
+func (m *Model) NormalizeRoute() {
+	if m == nil {
+		return
+	}
+	m.Provider = strings.ToLower(strings.TrimSpace(m.Provider))
+	m.UpstreamModel = strings.TrimSpace(m.UpstreamModel)
+	m.Origin = strings.ToLower(strings.TrimSpace(m.Origin))
+	if m.Origin == "" {
+		m.Origin = "manual"
+	}
+	seen := map[string]struct{}{}
+	capabilities := make([]string, 0, len(m.Capabilities))
+	for _, value := range m.Capabilities {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		capabilities = append(capabilities, value)
+	}
+	slices.Sort(capabilities)
+	m.Capabilities = capabilities
+	ids := append([]int64(nil), m.BoundAccountIDs...)
+	slices.Sort(ids)
+	m.BoundAccountIDs = slices.CompactFunc(ids, func(a, b int64) bool { return a == b })
+}
+
+func (m *Model) SupportsCapability(capability string) bool {
+	if m == nil || len(m.Capabilities) == 0 {
+		return true
+	}
+	return slices.Contains(m.Capabilities, strings.ToLower(strings.TrimSpace(capability)))
+}
+
+func (m *Model) AllowsAccount(accountID int64) bool {
+	return m == nil || len(m.BoundAccountIDs) == 0 || slices.Contains(m.BoundAccountIDs, accountID)
 }

@@ -175,64 +175,7 @@ func (c *Client) consoleHeaders(token string) http.Header {
 }
 
 func (h *Handler) consolePayload(spec ModelSpec, req *ChatCompletionsRequest) (map[string]interface{}, error) {
-	input, instructions := consoleInputFromMessages(req.Messages)
-	if req.ReasoningReplay && strings.TrimSpace(req.PromptCacheKey) != "" {
-		if encrypted := h.loadReasoningReplay(req.Model, req.PromptCacheKey); encrypted != "" && !consoleInputHasEncryptedReasoning(input) {
-			input = insertConsoleReplayBeforeLastUser(input, map[string]interface{}{
-				"type": "reasoning", "summary": []interface{}{}, "content": nil, "encrypted_content": encrypted,
-			})
-		}
-	}
-	if len(input) == 0 && instructions == "" {
-		return nil, fmt.Errorf("empty message")
-	}
-	payload := map[string]interface{}{
-		"model": spec.ConsoleModel,
-		"input": input,
-	}
-	if instructions != "" {
-		payload["instructions"] = instructions
-	}
-	if req.Stream {
-		payload["stream"] = true
-	}
-	if req.Temperature != nil {
-		payload["temperature"] = *req.Temperature
-	}
-	if req.TopP != nil {
-		payload["top_p"] = *req.TopP
-	}
-	if req.MaxTokens != nil && *req.MaxTokens > 0 {
-		payload["max_output_tokens"] = *req.MaxTokens
-	}
-	if req.ReasoningEffort != nil {
-		if effort := strings.ToLower(strings.TrimSpace(*req.ReasoningEffort)); effort != "" {
-			payload["reasoning"] = map[string]interface{}{"effort": effort}
-		}
-	}
-	if strings.TrimSpace(req.PromptCacheKey) != "" {
-		payload["prompt_cache_key"] = strings.TrimSpace(req.PromptCacheKey)
-	}
-	if len(req.Stop) > 0 {
-		payload["stop"] = req.Stop
-	}
-	if len(req.MCPServers) > 0 {
-		payload["mcp_servers"] = req.MCPServers
-	}
-	if len(req.OutputConfig) > 0 {
-		payload["output_config"] = req.OutputConfig
-	}
-	if len(req.ThinkingConfig) > 0 {
-		payload["thinking"] = req.ThinkingConfig
-	}
-	tools := injectConsoleSearchTools(consoleToolsFromOpenAI(req.Tools))
-	if len(tools) > 0 {
-		payload["tools"] = tools
-		if choice := consoleToolChoiceFromOpenAI(req.ToolChoice); choice != nil {
-			payload["tool_choice"] = choice
-		}
-	}
-	return payload, nil
+	return h.responsesPayloadFromChat(spec, req, false)
 }
 
 func consoleInputHasEncryptedReasoning(input []interface{}) bool {
@@ -300,6 +243,9 @@ func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
 		}
 		if params, ok := tool.Function["parameters"]; ok && params != nil {
 			item["parameters"] = params
+		}
+		if strict, ok := tool.Function["strict"].(bool); ok {
+			item["strict"] = strict
 		}
 		out = append(out, item)
 	}
@@ -625,6 +571,7 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 // is evaluated lazily so it is only built on the success path.
 func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, sess *chatAccountSession, logger *debug.Logger, name, url string, headers func() http.Header, payload map[string]interface{}, resp *http.Response, err error) {
 	if err != nil {
+		h.auditRequest(ctx, sess.acc, ProviderForAccount(sess.acc), req.Model, fmt.Sprint(upstreamHTTPResponseStatus(err)), nil)
 		slog.Error(name+" chat upstream failed", "url", url, "status", parseUpstreamStatus(err), "error", err)
 		if logger != nil {
 			logger.LogUpstreamHTTPError(url, parseUpstreamStatus(err), "", err)
@@ -636,6 +583,7 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 	defer resp.Body.Close()
+	h.auditRequest(ctx, sess.acc, ProviderForAccount(sess.acc), req.Model, fmt.Sprint(resp.StatusCode), nil)
 	if logger != nil {
 		logger.LogUpstreamRequest(url, debugHeaderMap(headers()), payload)
 	}
@@ -653,10 +601,12 @@ func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, r
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp, err := h.doConsoleWithAutoSwitch(ctx, sess, payload)
+	resp, err := h.doConsoleWithAutoSwitch(ctx, sess, payload, req.Model)
 	if err == nil && responseRequiresThinking(spec, req) {
 		resp, err = h.retryMissingThinking(ctx, sess, resp, ProviderConsole,
-			func(exclude []int64) (*chatAccountSession, error) { return h.openConsoleAccountSession(ctx, exclude) },
+			func(exclude []int64) (*chatAccountSession, error) {
+				return h.openConsoleAccountSession(ctx, exclude, req.Model)
+			},
 			func() (*http.Response, error) { return h.doConsole(ctx, sess.token, payload) })
 	}
 	h.finishUpstreamChat(ctx, w, req, sess, logger, "console", h.consoleURL("responses"),
@@ -675,11 +625,19 @@ func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountS
 	}
 
 	used := make([]int64, 0)
+	attempt := 0
 	for {
+		attempt++
 		if sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
 		}
+		started := time.Now()
 		resp, err := doRequest()
+		provider := "web"
+		if sess.acc != nil {
+			provider = ProviderForAccount(sess.acc)
+		}
+		h.auditAttempt(ctx, sess.acc, provider, attempt, started, err)
 		if err == nil {
 			return resp, nil
 		}
@@ -710,14 +668,14 @@ func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountS
 	}
 }
 
-func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}) (*http.Response, error) {
+func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelIDs ...string) (*http.Response, error) {
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
 	}
 	return h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond,
 		func() (*http.Response, error) { return h.doConsole(ctx, sess.token, payload) },
 		func(used []int64) (*chatAccountSession, error) {
-			return h.openConsoleAccountSession(ctx, used)
+			return h.openConsoleAccountSession(ctx, used, modelIDs...)
 		}, nil)
 }
 

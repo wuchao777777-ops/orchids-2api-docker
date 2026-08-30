@@ -89,6 +89,7 @@ func TestResolveModel_ImagineMappingsMatchGrok2API(t *testing.T) {
 	}{
 		{modelID: "grok-imagine-image-lite", wantUpstream: "grok-imagine-image-lite", wantModelMode: "MODEL_MODE_FAST"},
 		{modelID: "grok-imagine-image", wantUpstream: "grok-imagine-image", wantModelMode: "MODEL_MODE_AUTO"},
+		{modelID: "grok-imagine-image-2.0", wantUpstream: "grok-imagine-image-2.0", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-image-quality", wantUpstream: "grok-imagine-image-quality-lite", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-image-edit", wantUpstream: "imagine-image-edit", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-video", wantUpstream: "imagine-video-gen", wantModelMode: "MODEL_MODE_AUTO"},
@@ -443,24 +444,7 @@ func TestBuildImageEditPayload_UsesGrokConfigFlags(t *testing.T) {
 }
 
 func TestBuildVideoPayload_UsesGrokConfigFlags(t *testing.T) {
-	temporary := false
-	disableMemory := true
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != defaultCreatePostPath {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"post":{"id":"post-123"}}`))
-	}))
-	defer server.Close()
-	cfg := &config.Config{
-		GrokTemporary:         &temporary,
-		GrokDisableMemory:     &disableMemory,
-		GrokCustomInstruction: "video mode",
-		GrokAPIBaseURL:        server.URL,
-	}
-	h := &Handler{cfg: cfg, client: New(cfg)}
+	h := &Handler{}
 	spec := ModelSpec{ID: "grok-imagine-video", UpstreamModel: "imagine-video-gen", ModelMode: "MODEL_MODE_AUTO", IsVideo: true}
 	req := &ChatCompletionsRequest{}
 
@@ -473,34 +457,15 @@ func TestBuildVideoPayload_UsesGrokConfigFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildChatPayload error: %v", err)
 	}
-	if got, _ := payload["temporary"].(bool); got {
-		t.Fatalf("temporary=%v want=false", got)
-	}
-	if got, _ := payload["disableMemory"].(bool); !got {
-		t.Fatalf("disableMemory=%v want=true", got)
-	}
-	if got, _ := payload["customPersonality"].(string); got != "video mode" {
-		t.Fatalf("customPersonality=%q want=%q", got, "video mode")
-	}
 	respMeta, ok := payload["responseMetadata"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("responseMetadata missing")
-	}
-	reqDetails, ok := respMeta["requestModelDetails"].(map[string]interface{})
-	if !ok || reqDetails["modelId"] != "imagine-video-gen" {
-		t.Fatalf("requestModelDetails=%#v", reqDetails)
-	}
-	if got, _ := payload["modelMode"].(string); got != spec.ModelMode {
-		t.Fatalf("modelMode=%q want=%q", got, spec.ModelMode)
 	}
 	if got, _ := payload["sendFinalMetadata"].(bool); !got {
 		t.Fatalf("sendFinalMetadata=%v want=true", got)
 	}
 	if got, _ := payload["enableImageStreaming"].(bool); !got {
 		t.Fatalf("enableImageStreaming=%v want=true", got)
-	}
-	if got, _ := payload["disableSearch"].(bool); got {
-		t.Fatalf("disableSearch=%v want=false", got)
 	}
 	modelCfg, ok := respMeta["modelConfigOverride"].(map[string]interface{})
 	if !ok {
@@ -510,12 +475,19 @@ func TestBuildVideoPayload_UsesGrokConfigFlags(t *testing.T) {
 	if !ok {
 		t.Fatalf("modelMap missing")
 	}
-	videoCfg, ok := modelMap["videoGenModelConfig"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("videoGenModelConfig missing")
+	if len(modelMap) != 0 {
+		t.Fatalf("modelMap=%#v want empty", modelMap)
 	}
-	if got := videoCfg["videoLength"]; got != 6 {
-		t.Fatalf("videoLength=%#v want=6", got)
+	mediaInput := payload["mediaGenInput"].(map[string]interface{})
+	videoCfg := mediaInput["textToVideo"].(map[string]interface{})
+	if got := videoCfg["duration"]; got != 6 {
+		t.Fatalf("duration=%#v want=6", got)
+	}
+	if got := payload["message"]; got != "make a clip --mode=custom" {
+		t.Fatalf("message=%#v", got)
+	}
+	if got := payload["kind"]; got != "CONVERSATION_KIND_IMAGINE" {
+		t.Fatalf("kind=%#v", got)
 	}
 }
 

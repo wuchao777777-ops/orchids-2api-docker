@@ -11,6 +11,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/handler"
+	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
@@ -34,6 +35,7 @@ func registerRoutes(
 	grokHandler *grok.Handler,
 	apiHandler *api.API,
 	limiter *middleware.ConcurrencyLimiter,
+	accountTracker loadbalancer.ConnTracker,
 	tmplRenderer *template.Renderer,
 ) {
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -43,7 +45,7 @@ func registerRoutes(
 				key, err := s.AuthorizeApiKey(ctx, token)
 				switch {
 				case err == nil:
-					return &middleware.APIKeyPrincipal{ID: key.ID, AllowedModels: key.AllowedModels}, nil
+					return &middleware.APIKeyPrincipal{ID: key.ID, AllowedModels: key.AllowedModels, MaxConcurrent: key.MaxConcurrent}, nil
 				case err == store.ErrNoRows:
 					return nil, nil
 				case err == store.ErrApiKeyExpired:
@@ -54,7 +56,7 @@ func registerRoutes(
 					return nil, err
 				}
 			},
-			next,
+			middleware.APIKeyConcurrencyWithTracker(next, accountTracker),
 		)
 	}
 	// --- Channel-specific message routes ---
@@ -94,6 +96,9 @@ func registerRoutes(
 	registerWithPrefixes(mux, grokPrefixes, "/files/", grokHandler.HandleFiles)
 	registerWithPrefixes(mux, grokPrefixes, "/media/inputs", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputs)))
 	registerWithPrefixes(mux, grokPrefixes, "/media/inputs/", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputResource)))
+	// One-time, unguessable callback used by the xAI video fallback. The token
+	// is the authorization boundary, so this endpoint must not require a client key.
+	mux.HandleFunc("/v1/media/uploads/", grokHandler.HandleVideoUpload)
 	registerWithPrefixes(mux, grokPrefixes, "/tts", inferenceAuth(limiter.Limit(grokHandler.HandleTTS)))
 	registerWithPrefixes(mux, grokPrefixes, "/tts/voices", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
 	registerWithPrefixes(mux, grokPrefixes, "/tts/voices/", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
@@ -142,6 +147,7 @@ func registerRoutes(
 	mux.HandleFunc("/api/config/cache/clear", sessionAuth(apiHandler.HandleCacheClear))
 	mux.HandleFunc("/api/token-cache/stats", sessionAuth(apiHandler.HandleTokenCacheStats))
 	mux.HandleFunc("/api/token-cache/clear", sessionAuth(apiHandler.HandleTokenCacheClear))
+	mux.HandleFunc("/api/audit", sessionAuth(apiHandler.HandleAuditEvents))
 
 	// Admin routes with dual prefix: /api/v1/admin/* and /v1/admin/*
 	adminPrefixes := []string{"/api/v1/admin", "/v1/admin"}

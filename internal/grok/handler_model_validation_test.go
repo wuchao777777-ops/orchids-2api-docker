@@ -93,6 +93,50 @@ func TestEnsureModelEnabled_AllowsVerifiedDynamicGrokModel(t *testing.T) {
 	}
 }
 
+func TestEnsureModelCapability_RejectsPersistedCapabilityMismatch(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	if err := s.CreateModel(context.Background(), &store.Model{
+		Channel: "Grok", ModelID: "grok-5", Name: "grok-5",
+		Status: store.ModelStatusAvailable, Verified: true,
+		Capabilities: []string{store.CapabilityResponses},
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+	if err := h.ensureModelCapability(context.Background(), "grok-5", store.CapabilityResponses); err != nil {
+		t.Fatalf("Responses capability error = %v", err)
+	}
+	if err := h.ensureModelCapability(context.Background(), "grok-5", store.CapabilityChat); err == nil {
+		t.Fatal("expected chat capability rejection")
+	}
+}
+
+func TestResolveConversationModel_AppliesPersistedRoute(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+	if err := s.CreateModel(context.Background(), &store.Model{
+		Channel: "Grok", ModelID: "grok-chat-fast", Name: "routed",
+		Status: store.ModelStatusAvailable, Verified: true, Provider: ProviderBuild,
+		UpstreamModel: "grok-routed-build", Capabilities: []string{store.CapabilityChat},
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+	spec, ok := h.resolveConversationModel(context.Background(), "grok-chat-fast")
+	if !ok {
+		t.Fatal("model was not resolved")
+	}
+	if spec.Upstream != UpstreamCLI || spec.UpstreamModel != "grok-routed-build" {
+		t.Fatalf("persisted route not applied: %#v", spec)
+	}
+}
+
 func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {

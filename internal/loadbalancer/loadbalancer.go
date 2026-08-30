@@ -97,6 +97,9 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 	}
 
 	account := lb.selectAccountWithTracker(accounts, tracker)
+	if account == nil {
+		return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are at their concurrency limit)", channel)
+	}
 
 	slog.Debug("Selected account", "id", account.ID, "name", account.Name, "type", account.AccountType, "session", auth.MaskSensitive(account.SessionID))
 
@@ -152,9 +155,6 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 	if len(accounts) == 0 {
 		return nil
 	}
-	if len(accounts) == 1 {
-		return accounts[0]
-	}
 	if tracker == nil {
 		tracker = lb.connTracker
 	}
@@ -179,6 +179,9 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 		}
 
 		conns := connCounts[acc.ID]
+		if acc.MaxConcurrent > 0 && conns >= int64(acc.MaxConcurrent) {
+			continue
+		}
 		score := float64(conns) / float64(weight)
 
 		if bestAccounts == nil || score < minScore {
@@ -187,6 +190,9 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 		} else if score == minScore {
 			bestAccounts = append(bestAccounts, acc)
 		}
+	}
+	if len(bestAccounts) == 0 {
+		return nil
 	}
 
 	return bestAccounts[rand.IntN(len(bestAccounts))]

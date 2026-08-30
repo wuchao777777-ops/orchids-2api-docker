@@ -155,7 +155,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			"status", wrapped.StatusCode,
 			"bytes", wrapped.BytesWritten,
 			"duration", duration,
-			"remote_ip", ExtractIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), r.Header.Get("X-Real-IP")),
+			"remote_ip", ClientIP(r),
 			"user_agent", userAgent,
 		)
 	})

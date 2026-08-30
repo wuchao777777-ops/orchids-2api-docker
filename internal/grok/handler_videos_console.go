@@ -221,7 +221,7 @@ func (h *Handler) handleConsoleVideoCreate(w http.ResponseWriter, r *http.Reques
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_model", fmt.Sprintf("model %s does not support video", prepared.model))
 		return
 	}
-	if err := h.ensureModelEnabled(r.Context(), prepared.model); err != nil {
+	if err := h.ensureModelCapability(r.Context(), prepared.model, store.CapabilityVideo); err != nil {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_model", modelValidationMessage(prepared.model, err))
 		return
 	}
@@ -482,7 +482,7 @@ func (h *Handler) openConsoleVideoAccountSession(ctx context.Context, model stri
 		return nil, fmt.Errorf("load balancer not configured")
 	}
 	account, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, nil, "grok", h.connTracker, func(account *store.Account) bool {
-		return isGrokConsoleAccount(account) && AccountSupportsModel(account, model)
+		return isGrokConsoleAccount(account) && AccountSupportsModel(account, model) && h.routeAllowsAccount(ctx, model, account.ID)
 	})
 	if err != nil {
 		return nil, err
@@ -491,7 +491,11 @@ func (h *Handler) openConsoleVideoAccountSession(ctx context.Context, model stri
 	if NormalizeSSOToken(token) == "" {
 		return nil, fmt.Errorf("grok console account token is empty")
 	}
-	return &chatAccountSession{acc: account, token: token, release: h.trackAccount(account)}, nil
+	release, reserved := h.reserveAccount(account)
+	if !reserved {
+		return nil, fmt.Errorf("grok console account is at its concurrency limit")
+	}
+	return &chatAccountSession{acc: account, token: token, release: release}, nil
 }
 
 func (h *Handler) recoverStoredConsoleVideoJobs(ctx context.Context) {
@@ -522,7 +526,7 @@ func (h *Handler) recoverStoredConsoleVideoJobs(ctx context.Context) {
 		if remaining <= 0 {
 			continue
 		}
-		go h.resumeStoredConsoleVideoJob(job, remaining)
+		go h.resumeStoredVideoJob(job, remaining)
 	}
 }
 
@@ -570,7 +574,12 @@ func (h *Handler) resumeStoredConsoleVideoJob(job *videoJob, timeout time.Durati
 		h.failVideoJobWithCode(job, "video_resume_unavailable", fmt.Errorf("the original Console video account token is unavailable"))
 		return
 	}
-	sess := &chatAccountSession{acc: account, token: token, release: h.trackAccount(account)}
+	release, reserved := h.reserveAccount(account)
+	if !reserved {
+		h.failVideoJobWithCode(job, "video_resume_unavailable", fmt.Errorf("the original Console video account is at its concurrency limit"))
+		return
+	}
+	sess := &chatAccountSession{acc: account, token: token, release: release}
 	defer sess.Close()
 	h.updateVideoJobProgress(job, "in_progress", max(1, job.Progress))
 	h.pollConsoleVideoJob(leaseCtx, lease, job, sess, job.UpstreamRequestID)
@@ -608,8 +617,16 @@ func (h *Handler) scheduleStoredConsoleVideoRetry(job *videoJob) {
 			return
 		}
 		putVideoJob(retryJob)
-		go h.resumeStoredConsoleVideoJob(retryJob, remaining)
+		go h.resumeStoredVideoJob(retryJob, remaining)
 	})
+}
+
+func (h *Handler) resumeStoredVideoJob(job *videoJob, timeout time.Duration) {
+	if job != nil && job.Provider == ProviderBuild {
+		h.resumeStoredBuildVideoJob(job, timeout)
+		return
+	}
+	h.resumeStoredConsoleVideoJob(job, timeout)
 }
 
 func (h *Handler) runConsoleVideoJob(job *videoJob, sess *chatAccountSession, operation consoleVideoOperation, payload map[string]interface{}) {

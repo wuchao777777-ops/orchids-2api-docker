@@ -831,6 +831,10 @@ func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request Re
 	var encryptedReasoning string
 	var output []interface{}
 	var usage map[string]interface{}
+	sawDone := false
+	sawMeaningful := false
+	failedCode := ""
+	failedMessage := ""
 	toolStates := make(map[int]*responseStreamToolState)
 	toolOrder := make([]int, 0)
 
@@ -882,12 +886,21 @@ func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request Re
 			continue
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
+		if data == "" {
 			continue
+		}
+		if data == "[DONE]" {
+			sawDone = true
+			break
 		}
 		var chunk map[string]interface{}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
+		}
+		if upstreamError, ok := chunk["error"].(map[string]interface{}); ok {
+			failedCode = firstNonEmpty(parseLooseStringAny(upstreamError["code"]), "upstream_stream_error")
+			failedMessage = firstNonEmpty(parseLooseStringAny(upstreamError["message"]), "upstream stream failed")
+			break
 		}
 		if u := responsesUsageFromChat(chunk["usage"]); interfaceToInt(u["total_tokens"]) > 0 {
 			usage = u
@@ -899,6 +912,7 @@ func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request Re
 		choice, _ := choices[0].(map[string]interface{})
 		delta, _ := choice["delta"].(map[string]interface{})
 		if encrypted := strings.TrimSpace(fmt.Sprint(delta["reasoning_encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
+			sawMeaningful = true
 			if !startedReasoning {
 				startedReasoning = true
 				reasoningIndex = len(output)
@@ -915,6 +929,7 @@ func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request Re
 			encryptedReasoning = encrypted
 		}
 		if value := strings.TrimSpace(fmt.Sprint(firstNonNil(delta["reasoning_content"], delta["reasoning"]))); value != "" && value != "<nil>" {
+			sawMeaningful = true
 			if !startedReasoning {
 				startedReasoning = true
 				reasoningIndex = len(output)
@@ -934,6 +949,7 @@ func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request Re
 			})
 		}
 		if content, ok := delta["content"].(string); ok && content != "" {
+			sawMeaningful = true
 			closeReasoning()
 			if !startedMessage {
 				startedMessage = true
@@ -954,6 +970,7 @@ func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request Re
 			})
 		}
 		for _, rawCall := range interfaceSlice(delta["tool_calls"]) {
+			sawMeaningful = true
 			closeReasoning()
 			call, _ := rawCall.(map[string]interface{})
 			if call == nil {
@@ -991,9 +1008,21 @@ func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request Re
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		failedCode = "stream_read_error"
+		failedMessage = "chat stream read error"
+	}
+	if failedCode == "" && !sawDone {
+		failedCode = "upstream_stream_incomplete"
+		failedMessage = "chat stream ended before [DONE]"
+	}
+	if failedCode == "" && !sawMeaningful {
+		failedCode = "empty_upstream_stream"
+		failedMessage = "chat stream completed without output"
+	}
+	if failedCode != "" {
 		writeSSEJSON("response.failed", map[string]interface{}{
 			"type":     "response.failed",
-			"response": map[string]interface{}{"id": id, "object": "response", "status": "failed", "model": model, "error": map[string]interface{}{"code": "stream_read_error", "message": "chat stream read error"}},
+			"response": map[string]interface{}{"id": id, "object": "response", "status": "failed", "model": model, "error": map[string]interface{}{"code": failedCode, "message": failedMessage}},
 		})
 		writeSSEBytes(w, "", []byte("[DONE]"))
 		return

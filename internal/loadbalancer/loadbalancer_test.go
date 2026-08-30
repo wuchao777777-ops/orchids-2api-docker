@@ -148,6 +148,38 @@ func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfu
 	}
 }
 
+func TestGetNextAccountExcludingByChannelWithTracker_RejectsSingleAccountAtLimit(t *testing.T) {
+	tracker := NewMemoryConnTracker()
+	tracker.Acquire(1)
+	now := time.Now()
+	lb := &LoadBalancer{
+		connTracker: tracker,
+		cachedAccounts: []*store.Account{
+			{ID: 1, Name: "Grok1", AccountType: "grok", Enabled: true, MaxConcurrent: 1},
+		},
+		cacheExpires: now.Add(time.Minute),
+	}
+
+	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "grok", tracker)
+	if err == nil || !strings.Contains(err.Error(), "concurrency limit") {
+		t.Fatalf("expected concurrency limit error, got %v", err)
+	}
+}
+
+func TestMemoryConnTrackerTryAcquireIsBounded(t *testing.T) {
+	tracker := NewMemoryConnTracker()
+	if !tracker.TryAcquire(7, 1) {
+		t.Fatal("first reservation should succeed")
+	}
+	if tracker.TryAcquire(7, 1) {
+		t.Fatal("second reservation should be rejected")
+	}
+	tracker.Release(7)
+	if !tracker.TryAcquire(7, 1) {
+		t.Fatal("reservation should succeed after release")
+	}
+}
+
 func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{

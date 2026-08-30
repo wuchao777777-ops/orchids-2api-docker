@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/logutil"
+	"orchids-api/internal/store"
 	"strconv"
 	"strings"
 	"time"
@@ -218,7 +219,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, modelNotFoundMessage(req.Model), http.StatusBadRequest)
 		return
 	}
-	if err := h.ensureResolvedModelEnabled(r.Context(), req.Model, spec); err != nil {
+	if err := h.ensureResolvedModelCapability(r.Context(), req.Model, spec, store.CapabilityChat); err != nil {
 		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
 		return
 	}
@@ -343,10 +344,6 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if modelRoutedToCLI(spec, h.cfg) {
-		if len(attachments) > 0 {
-			http.Error(w, fmt.Sprintf("model %s is only supported through cli-chat-proxy responses and does not support attachments in this API", req.Model), http.StatusBadRequest)
-			return
-		}
 		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
 		if err != nil {
 			http.Error(w, "no available grok cli token: "+err.Error(), http.StatusServiceUnavailable)
@@ -359,7 +356,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	var sess *chatAccountSession
 	if shouldServeConsoleChat(spec, attachments) {
-		sess, err = h.openConsoleAccountSession(r.Context(), nil)
+		sess, err = h.openConsoleAccountSession(r.Context(), nil, req.Model)
 	} else {
 		sess, err = h.openChatAccountSessionForModel(r.Context(), spec)
 	}
@@ -474,115 +471,39 @@ func (h *Handler) buildVideoCreatePayload(
 	attachmentInputs []AttachmentInput,
 	videoCfg *VideoConfig,
 ) (map[string]interface{}, error) {
+	_ = ctx
+	_ = token
 	if videoCfg == nil {
 		videoCfg = &VideoConfig{}
 	}
 	videoCfg.Normalize()
-
-	postType := "MEDIA_POST_TYPE_VIDEO"
-	postPrompt := text
-	postMediaURL := ""
-	imageReferences := make([]string, 0, 7)
 	for _, item := range attachmentInputs {
-		if !strings.EqualFold(strings.TrimSpace(item.Type), "image") {
-			continue
+		if strings.EqualFold(strings.TrimSpace(item.Type), "image") && strings.TrimSpace(item.Data) != "" {
+			return nil, fmt.Errorf("web video generation currently supports text-to-video only; use a Console/Build video model for image references")
 		}
-		if len(imageReferences) >= 7 {
-			break
-		}
-		if strings.TrimSpace(item.Data) == "" {
-			continue
-		}
-		_, fileURI, upErr := h.uploadSingleInput(ctx, token, item.Data)
-		if upErr != nil {
-			return nil, fmt.Errorf("video image upload failed: %w", upErr)
-		}
-		u := strings.TrimSpace(fileURI)
-		if u == "" {
-			return nil, fmt.Errorf("video image upload failed: empty file uri")
-		}
-		if !strings.HasPrefix(strings.ToLower(u), "http://") && !strings.HasPrefix(strings.ToLower(u), "https://") {
-			u = "https://assets.grok.com/" + strings.TrimLeft(u, "/")
-		}
-		if len(imageReferences) == 0 {
-			postType = "MEDIA_POST_TYPE_IMAGE"
-			postPrompt = ""
-			postMediaURL = u
-		}
-		imageReferences = append(imageReferences, u)
 	}
-
-	postID, err := h.client.createMediaPost(ctx, token, postType, postPrompt, postMediaURL)
-	if err != nil {
-		return nil, fmt.Errorf("create video post failed: %w", err)
-	}
-
-	modeFlag := videoPresetFlag(videoCfg.Preset)
-	message := strings.TrimSpace(text)
-	if modeFlag != "" {
-		message = strings.TrimSpace(message + " " + modeFlag)
-	}
-
-	temporary := true
-	disableMemory := false
-	if h != nil && h.cfg != nil {
-		temporary = h.cfg.GrokChatTemporary()
-		disableMemory = h.cfg.GrokChatDisableMemory(false)
-	}
-
+	prompt := strings.TrimSpace(text)
 	payload := map[string]interface{}{
-		"temporary":                   temporary,
-		"modelName":                   spec.UpstreamModel,
-		"message":                     message,
-		"fileAttachments":             []string{},
-		"imageAttachments":            []string{},
-		"disableSearch":               false,
-		"enableImageGeneration":       true,
-		"returnImageBytes":            false,
-		"enableImageStreaming":        true,
-		"imageGenerationCount":        2,
-		"forceConcise":                false,
-		"forceSideBySide":             false,
-		"isAsyncChat":                 false,
-		"isReasoning":                 false,
-		"disableSelfHarmShortCircuit": false,
-		"disableTextFollowUps":        false,
-		"returnRawGrokInXaiRequest":   false,
-		"sendFinalMetadata":           true,
-		"toolOverrides":               map[string]interface{}{"videoGen": true},
-		"enableSideBySide":            true,
-		"deviceEnvInfo":               appChatDeviceEnvInfo(),
+		"modelName":            firstNonEmpty(strings.TrimSpace(spec.UpstreamModel), "imagine-video-gen"),
+		"message":              prompt + " --mode=custom",
+		"enableImageStreaming": true,
+		"enableSideBySide":     true,
+		"sendFinalMetadata":    true,
 		"responseMetadata": map[string]interface{}{
 			"experiments": []interface{}{},
 			"modelConfigOverride": map[string]interface{}{
-				"modelMap": map[string]interface{}{
-					"videoGenModelConfig": map[string]interface{}{
-						"aspectRatio":    videoCfg.AspectRatio,
-						"parentPostId":   postID,
-						"resolutionName": videoCfg.ResolutionName,
-						"videoLength":    videoCfg.VideoLength,
-					},
-				},
-			},
-			"requestModelDetails": map[string]interface{}{
-				"modelId": spec.UpstreamModel,
+				"modelMap": map[string]interface{}{},
 			},
 		},
-		"disableMemory": disableMemory,
-	}
-	if len(imageReferences) > 0 {
-		cfg := payload["responseMetadata"].(map[string]interface{})["modelConfigOverride"].(map[string]interface{})["modelMap"].(map[string]interface{})["videoGenModelConfig"].(map[string]interface{})
-		cfg["isVideoEdit"] = false
-		cfg["isReferenceToVideo"] = true
-		cfg["imageReferences"] = imageReferences
-	}
-	if strings.TrimSpace(spec.ModelMode) != "" {
-		payload["modelMode"] = spec.ModelMode
-	}
-	if h != nil && h.cfg != nil {
-		if customPersonality := h.cfg.GrokChatCustomInstruction(); customPersonality != "" {
-			payload["customPersonality"] = customPersonality
-		}
+		"mediaGenInput": map[string]interface{}{
+			"textToVideo": map[string]interface{}{
+				"prompt":         prompt,
+				"aspectRatio":    videoCfg.AspectRatio,
+				"duration":       videoCfg.VideoLength,
+				"resolutionName": videoCfg.ResolutionName,
+			},
+		},
+		"kind": "CONVERSATION_KIND_IMAGINE",
 	}
 	return payload, nil
 }

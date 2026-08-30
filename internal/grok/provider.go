@@ -74,19 +74,47 @@ func ApplyCLIModels(acc *store.Account, models []string, now time.Time) bool {
 	if acc == nil {
 		return false
 	}
-	seen := make(map[string]struct{}, len(models))
-	normalized := make([]string, 0, len(models))
-	for _, model := range models {
+	seen := make(map[string]struct{}, len(models)+3)
+	normalized := make([]string, 0, len(models)+3)
+	appendModel := func(model string) {
 		model = strings.TrimSpace(model)
 		if model == "" {
-			continue
+			return
 		}
 		key := strings.ToLower(model)
 		if _, ok := seen[key]; ok {
-			continue
+			return
 		}
 		seen[key] = struct{}{}
 		normalized = append(normalized, model)
+	}
+	for _, model := range models {
+		appendModel(model)
+	}
+
+	// Build's /models response is intentionally sparse. grok2api treats the
+	// composer as a stable OAuth capability and exposes the 4.5 compatibility
+	// alias whenever the account advertises 4.6.
+	if ProviderForAccount(acc) == ProviderBuild {
+		appendModel("grok-composer-2.5-fast")
+		if _, ok := seen["grok-4.6"]; ok {
+			appendModel("grok-4.5")
+		}
+		// Video 1.5 is a Super-only Build capability and is not reliable in the
+		// catalog response. Do not retain an advertised value on lower tiers.
+		videoID := "grok-imagine-video-1.5"
+		if strings.Contains(strings.ToLower(strings.TrimSpace(acc.Subscription)), "super") {
+			appendModel(videoID)
+		} else if _, ok := seen[videoID]; ok {
+			delete(seen, videoID)
+			filtered := normalized[:0]
+			for _, model := range normalized {
+				if !strings.EqualFold(model, videoID) {
+					filtered = append(filtered, model)
+				}
+			}
+			normalized = filtered
+		}
 	}
 	if len(normalized) == 0 {
 		return false

@@ -294,23 +294,22 @@ func extractRenderableImageLinks(value interface{}) []string {
 }
 
 func resolveAspectRatio(size string) string {
-	size = strings.ToLower(strings.TrimSpace(size))
-	switch size {
-	case "16:9", "9:16", "1:1", "2:3", "3:2":
-		return size
-	case "1024x1024", "512x512":
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "512x512":
 		return "1:1"
-	case "1024x576", "1280x720", "1536x864":
+	case "1024x576", "1536x864":
 		return "16:9"
-	case "576x1024", "720x1280", "864x1536":
+	case "576x1024", "864x1536":
 		return "9:16"
-	case "1024x1536", "512x768", "768x1024":
+	case "512x768", "768x1024":
 		return "2:3"
-	case "1536x1024", "768x512", "1024x768":
+	case "768x512", "1024x768":
 		return "3:2"
-	default:
-		return "2:3"
 	}
+	if ratio, err := normalizeImageAspectRatio("", size); err == nil {
+		return ratio
+	}
+	return "2:3"
 }
 
 func resolveVideoSize(sizeOrRatio string) (aspectRatio string, resolutionName string, ok bool) {
@@ -383,8 +382,8 @@ func validateVideoConfig(cfg *VideoConfig) (*VideoConfig, error) {
 	}
 	cfg.AspectRatio = mapped
 
-	if cfg.VideoLength != 6 && cfg.VideoLength != 10 && cfg.VideoLength != 12 && cfg.VideoLength != 16 && cfg.VideoLength != 20 {
-		return nil, fmt.Errorf("video_length must be one of [6, 10, 12, 16, 20] seconds")
+	if cfg.VideoLength < 1 || cfg.VideoLength > 15 {
+		return nil, fmt.Errorf("video_length must be between 1 and 15 seconds")
 	}
 	resolution := strings.TrimSpace(cfg.ResolutionName)
 	if resolution == "" {
@@ -410,21 +409,35 @@ func validateVideoConfig(cfg *VideoConfig) (*VideoConfig, error) {
 	return cfg, nil
 }
 
-func videoSegmentLengths(seconds int) ([]int, error) {
-	switch seconds {
-	case 6:
-		return []int{6}, nil
-	case 10:
-		return []int{10}, nil
-	case 12:
-		return []int{6, 6}, nil
-	case 16:
-		return []int{10, 6}, nil
-	case 20:
-		return []int{10, 10}, nil
-	default:
-		return nil, fmt.Errorf("video_length must be one of [6, 10, 12, 16, 20] seconds")
+// validateVideoConfigForModel extends the legacy Web validator with the one
+// extra resolution exposed by the official 1.5 media routes. Reference-image
+// generation remains capped at 720p by both Console and Build.
+func validateVideoConfigForModel(cfg *VideoConfig, spec ModelSpec, referenceCount int) (*VideoConfig, error) {
+	if cfg == nil || !strings.EqualFold(strings.TrimSpace(cfg.ResolutionName), "1080p") {
+		return validateVideoConfig(cfg)
 	}
+	if strings.TrimSpace(spec.UpstreamModel) != "grok-imagine-video-1.5" ||
+		(spec.Upstream != UpstreamCLI && spec.Upstream != UpstreamConsole) {
+		return nil, fmt.Errorf("resolution_name 1080p requires grok-imagine-video-1.5 on Console or Build")
+	}
+	if referenceCount > 0 {
+		return nil, fmt.Errorf("reference image video generation supports at most 720p")
+	}
+	cloned := *cfg
+	cloned.ResolutionName = "720p"
+	validated, err := validateVideoConfig(&cloned)
+	if err != nil {
+		return nil, err
+	}
+	validated.ResolutionName = "1080p"
+	return validated, nil
+}
+
+func videoSegmentLengths(seconds int) ([]int, error) {
+	if seconds < 1 || seconds > 15 {
+		return nil, fmt.Errorf("video_length must be between 1 and 15 seconds")
+	}
+	return []int{seconds}, nil
 }
 
 func videoExtensionStartTime(seconds int) float64 {
@@ -442,6 +455,29 @@ func normalizeImageSize(size string) (string, error) {
 	default:
 		return "", fmt.Errorf("size must be one of 1280x720/720x1280/1792x1024/1024x1792/1024x1024")
 	}
+}
+
+func normalizeImageAspectRatio(aspectRatio, size string) (string, error) {
+	values := map[string]string{
+		"auto": "auto", "1:1": "1:1", "16:9": "16:9", "9:16": "9:16",
+		"4:3": "4:3", "3:4": "3:4", "3:2": "3:2", "2:3": "2:3",
+		"2:1": "2:1", "1:2": "1:2", "19.5:9": "19.5:9", "9:19.5": "9:19.5",
+		"20:9": "20:9", "9:20": "9:20",
+		"1280x720": "16:9", "720x1280": "9:16", "1792x1024": "3:2",
+		"1536x1024": "3:2", "1024x1792": "2:3", "1024x1536": "2:3",
+		"1024x1024": "1:1",
+	}
+	value := strings.ToLower(strings.TrimSpace(aspectRatio))
+	if value == "" {
+		value = strings.ToLower(strings.TrimSpace(size))
+	}
+	if value == "" {
+		return "auto", nil
+	}
+	if resolved := values[value]; resolved != "" {
+		return resolved, nil
+	}
+	return "", fmt.Errorf("aspect_ratio is not supported")
 }
 
 func normalizeImageEditSize(size string) (string, error) {

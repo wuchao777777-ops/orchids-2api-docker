@@ -37,9 +37,12 @@ cp config.example.json config.json
 | `admin_path` | `/admin` | 管理端路径 |
 | `admin_token` | 空 | 管理端静态 token |
 | `inference_auth_enabled` | `true` | 模型和推理接口是否要求管理 API Key |
+| `trusted_proxies` | `[]` | 允许提供转发头的反向代理 IP/CIDR；为空时忽略并剥离所有外部 `Forwarded`/`X-Forwarded-*`/`X-Real-IP` |
 | `credential_encryption_key_file` | `data/credential.key` | Redis 账号凭据 AES-GCM 主密钥文件；只持久化路径，不持久化密钥内容 |
 | `response_store_ttl_hours` | `720` | Build stored Response 账号归属记录的 Redis TTL（小时） |
 | `grok_console_base_url` | `https://console.x.ai/v1` | Grok Console Responses、标准视频、TTS、STT 和 Realtime 的 DPoP 上游基址 |
+| `grok_cli_fallback_base_url` | `https://api.x.ai/v1` | Build 视频主路由返回确认的 403 后使用的 XAI fallback 基址 |
+| `grok_quality_max_attempts` | `6` | 缺失思考证据时跨不同账号尝试的总次数，范围 1–16 |
 
 ### 2.2 Redis
 
@@ -83,6 +86,8 @@ cp config.example.json config.json
 | `proxy_user` | 空 | 代理用户名 |
 | `proxy_pass` | 空 | 代理密码 |
 | `proxy_bypass` | 空数组 | 直连域名或网段 |
+
+`grok_egress_enabled=true` 时，HTTP、SOCKS5/SOCKS5H 节点同时用于普通请求和 Console Voice WebSocket；节点选择、UA、Cloudflare cookies 与连接租约保持同一绑定。公网反向代理必须把自身地址加入 `trusted_proxies`，不要填写任意客户端可达的地址段。
 
 ### 2.6 上游保真
 

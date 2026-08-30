@@ -90,8 +90,10 @@ func main() {
 	lb := loadbalancer.NewWithCacheTTL(s, time.Duration(cfg.LoadBalancerCacheTTL)*time.Second)
 
 	// Connection tracker: use Redis when available
+	var accountTracker loadbalancer.ConnTracker
 	if redisClient := s.RedisClient(); redisClient != nil {
-		lb.SetConnTracker(loadbalancer.NewRedisConnTracker(redisClient, s.RedisPrefix()))
+		accountTracker = loadbalancer.NewRedisConnTracker(redisClient, s.RedisPrefix())
+		lb.SetConnTracker(accountTracker)
 		slog.Debug("Connection tracker initialized", "backend", "redis")
 	}
 
@@ -99,6 +101,9 @@ func main() {
 	h := handler.NewWithLoadBalancer(cfg, lb)
 	defer h.Close()
 	grokHandler := grok.NewHandler(cfg, lb)
+	if accountTracker != nil {
+		grokHandler.SetConnTracker(accountTracker)
+	}
 
 	// Token cache: use Redis when available, fall back to memory
 	var tokenCache tokencache.Cache
@@ -130,6 +135,7 @@ func main() {
 
 		auditLogger := audit.NewRedisLogger(redisClient, s.RedisPrefix(), 10000)
 		h.SetAuditLogger(auditLogger)
+		grokHandler.SetAuditLogger(auditLogger)
 		defer auditLogger.Close()
 		slog.Debug("Audit logger initialized", "backend", "redis")
 	}
@@ -158,12 +164,18 @@ func main() {
 	// Register routes
 	mux := http.NewServeMux()
 	limiter := middleware.NewConcurrencyLimiter(cfg.ConcurrencyLimit, time.Duration(cfg.ConcurrencyTimeout)*time.Second, cfg.AdaptiveTimeout)
-	registerRoutes(mux, cfg, s, h, grokHandler, apiHandler, limiter, tmplRenderer)
+	registerRoutes(mux, cfg, s, h, grokHandler, apiHandler, limiter, accountTracker, tmplRenderer)
+	trustedProxy, err := middleware.TrustedProxyMiddleware(cfg.TrustedProxies)
+	if err != nil {
+		slog.Error("Invalid trusted proxy configuration", "error", err)
+		os.Exit(1)
+	}
 
 	// Build server
 	server := &http.Server{
 		Addr: ":" + cfg.Port,
 		Handler: middleware.Chain(
+			trustedProxy,
 			middleware.SecurityHeaders,
 			middleware.TraceMiddleware,
 			middleware.LoggingMiddleware,

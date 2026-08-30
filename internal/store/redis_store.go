@@ -94,6 +94,7 @@ type apiKeyRecord struct {
 	Enabled       bool       `json:"enabled"`
 	AllowedModels []string   `json:"allowed_models,omitempty"`
 	RPMLimit      int        `json:"rpm_limit,omitempty"`
+	MaxConcurrent int        `json:"max_concurrent,omitempty"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	LastUsedAt    *time.Time `json:"last_used_at"`
 	CreatedAt     time.Time  `json:"created_at"`
@@ -256,6 +257,8 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	updated.StatusCode = acc.StatusCode
 	updated.LastAttempt = acc.LastAttempt
 	updated.QuotaResetAt = acc.QuotaResetAt
+	updated.MissingThinkingStrikes = acc.MissingThinkingStrikes
+	updated.MissingThinkingLastAt = acc.MissingThinkingLastAt
 	// Grok Build CLI OAuth credentials and identity must survive refresh /
 	// admin updates. Leaving these out would silently drop rotated tokens.
 	if strings.TrimSpace(acc.CredentialType) == "" {
@@ -1210,6 +1213,7 @@ func apiKeyRecordFromKey(key *ApiKey) apiKeyRecord {
 		Enabled:       key.Enabled,
 		AllowedModels: append([]string(nil), key.AllowedModels...),
 		RPMLimit:      key.RPMLimit,
+		MaxConcurrent: key.MaxConcurrent,
 		ExpiresAt:     key.ExpiresAt,
 		LastUsedAt:    key.LastUsedAt,
 		CreatedAt:     key.CreatedAt,
@@ -1227,6 +1231,7 @@ func (r apiKeyRecord) toApiKey() *ApiKey {
 		Enabled:       r.Enabled,
 		AllowedModels: append([]string(nil), r.AllowedModels...),
 		RPMLimit:      r.RPMLimit,
+		MaxConcurrent: r.MaxConcurrent,
 		ExpiresAt:     r.ExpiresAt,
 		LastUsedAt:    r.LastUsedAt,
 		CreatedAt:     r.CreatedAt,

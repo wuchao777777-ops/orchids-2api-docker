@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"orchids-api/internal/store"
 )
 
 var imageEditPlaceholderRE = regexp.MustCompile(`(?i)@IMAGE(\d+)\b`)
@@ -290,8 +292,10 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 	if !requireAPIKeyModel(w, r, model) {
 		return
 	}
-	if !isImageEditModel(model) {
-		http.Error(w, "The model `grok-imagine-image-edit` is required for image edits.", http.StatusBadRequest)
+	spec, ok := ResolveModel(model)
+	consoleEdit := ok && spec.IsImage && spec.Upstream == UpstreamConsole
+	if !isImageEditModel(model) && !consoleEdit {
+		http.Error(w, "image edit model must be grok-imagine-image-edit or a Console image model", http.StatusBadRequest)
 		return
 	}
 	if r.MultipartForm != nil && len(r.MultipartForm.File["mask"]) > 0 {
@@ -299,28 +303,49 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n := parseIntLoose(r.FormValue("n"), 1)
-	if n < 1 || n > 2 {
-		http.Error(w, "n must be between 1 and 2 for image edit", http.StatusBadRequest)
+	maxN := 2
+	if consoleEdit {
+		maxN = 10
+	}
+	if n < 1 || n > maxN {
+		http.Error(w, fmt.Sprintf("n must be between 1 and %d for image edit", maxN), http.StatusBadRequest)
 		return
 	}
-	if _, err := normalizeImageEditSize(r.FormValue("size")); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if consoleEdit {
+		if _, err := normalizeConsoleImageAspectRatio(r.FormValue("aspect_ratio"), r.FormValue("size")); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		if _, err := normalizeImageEditSize(r.FormValue("size")); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	stream := parseBoolLoose(r.FormValue("stream"), false)
+	partialImages := parseIntLoose(r.FormValue("partial_images"), 0)
+	if consoleEdit && (stream || partialImages != 0) {
+		http.Error(w, "Grok Console image edit does not support stream or partial_images", http.StatusBadRequest)
+		return
+	}
 	if stream && n > 2 {
 		http.Error(w, "streaming is only supported when n=1 or n=2", http.StatusBadRequest)
 		return
 	}
-	responseFormat := normalizeImageResponseFormat(r.FormValue("response_format"))
-	publicBase := detectPublicBaseURL(r)
-
-	spec, ok := ResolveModel(model)
-	if !ok || !spec.IsImage || !isImageEditModel(spec.ID) {
-		http.Error(w, "The model `grok-imagine-image-edit` is required for image edits.", http.StatusBadRequest)
+	rawResponseFormat := strings.ToLower(strings.TrimSpace(r.FormValue("response_format")))
+	if rawResponseFormat != "" && rawResponseFormat != "url" && rawResponseFormat != "b64_json" && rawResponseFormat != "base64" {
+		http.Error(w, "response_format must be url or b64_json", http.StatusBadRequest)
 		return
 	}
-	if err := h.ensureModelEnabled(r.Context(), model); err != nil {
+	responseFormat := normalizeImageResponseFormat(rawResponseFormat)
+	publicBase := detectPublicBaseURL(r)
+
+	if !ok || !spec.IsImage || (!isImageEditModel(spec.ID) && spec.Upstream != UpstreamConsole) {
+		http.Error(w, "image edit model is not supported", http.StatusBadRequest)
+		return
+	}
+	spec = h.applyPersistedRoute(r.Context(), spec)
+	if err := h.ensureModelCapability(r.Context(), model, store.CapabilityImageEdit); err != nil {
 		http.Error(w, modelValidationMessage(model, err), http.StatusBadRequest)
 		return
 	}
@@ -333,16 +358,13 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "image is required", http.StatusBadRequest)
 		return
 	}
-	if len(files) > 7 {
-		files = files[len(files)-7:]
-	}
-
-	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
-	if err != nil {
-		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+	if consoleEdit && len(files) > 3 {
+		http.Error(w, "Console image edit supports at most 3 images", http.StatusBadRequest)
 		return
 	}
-	defer sess.Close()
+	if !consoleEdit && len(files) > 7 {
+		files = files[len(files)-7:]
+	}
 
 	uploads := make([]imageEditUploadInput, 0, len(files))
 	for _, fh := range files {
@@ -384,6 +406,19 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 			data: data,
 		})
 	}
+	if consoleEdit {
+		h.serveConsoleImagesEdit(r.Context(), w, spec, prompt, uploads, n,
+			r.FormValue("aspect_ratio"), r.FormValue("size"), r.FormValue("resolution"), r.FormValue("quality"),
+			responseFormat, publicBase)
+		return
+	}
+
+	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
+	if err != nil {
+		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer sess.Close()
 
 	rawPayload, err := h.buildImageEditRequestPayload(r.Context(), sess.token, spec, prompt, uploads)
 	if err != nil {

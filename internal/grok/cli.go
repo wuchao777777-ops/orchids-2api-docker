@@ -231,6 +231,14 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 		return nil, err
 	}
 	req.Header = c.cliHeaders(acc, token)
+	req.Header.Set("Content-Type", "application/json")
+	if strings.HasPrefix(path, "/videos/") {
+		modelOverride := strings.TrimSpace(fmt.Sprint(payload["model"]))
+		if modelOverride == "" || modelOverride == "<nil>" {
+			modelOverride = "grok-imagine-video-1.5"
+		}
+		req.Header.Set("x-grok-model-override", modelOverride)
+	}
 	if sessionID := strings.TrimSpace(fmt.Sprint(payload["prompt_cache_key"])); sessionID != "" && sessionID != "<nil>" {
 		req.Header.Set("x-grok-session-id", sessionID)
 		req.Header.Set("x-grok-conv-id", sessionID)
@@ -245,6 +253,78 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 		return nil, fmt.Errorf("grok cli decode failed: %w", err)
 	}
 	return resp, nil
+}
+
+// doFallbackResponsesAt sends a request to the direct xAI API with the same
+// refreshed OAuth credential and fail-closed egress policy as the Build path.
+func (c *CLIClient) doFallbackResponsesAt(ctx context.Context, acc *store.Account, path string, payload map[string]interface{}) (*http.Response, error) {
+	if c == nil || c.oauth == nil || acc == nil {
+		return nil, fmt.Errorf("grok cli fallback is not configured")
+	}
+	token, err := c.oauth.AccessToken(ctx, acc)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	base := "https://api.x.ai/v1"
+	if c.cfg != nil {
+		base = c.cfg.GrokCLIFallbackBaseURLOrDefault()
+	}
+	endpoint := strings.TrimRight(base, "/") + "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header = c.cliHeaders(acc, token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.doCLIRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := decodeHTTPResponseBody(resp); err != nil {
+		_ = resp.Body.Close()
+		return nil, err
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return resp, nil
+	}
+	raw, headers := readBoundedResponse(resp)
+	return nil, newCLIUpstreamError(resp.StatusCode, headers, raw, "")
+}
+
+func (c *CLIClient) doFallbackResource(ctx context.Context, acc *store.Account, method, path string) (*http.Response, error) {
+	if c == nil || c.oauth == nil || acc == nil {
+		return nil, fmt.Errorf("grok cli fallback is not configured")
+	}
+	token, err := c.oauth.AccessToken(ctx, acc)
+	if err != nil {
+		return nil, err
+	}
+	base := "https://api.x.ai/v1"
+	if c.cfg != nil {
+		base = c.cfg.GrokCLIFallbackBaseURLOrDefault()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(base, "/")+"/"+strings.TrimLeft(path, "/"), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = c.cliHeaders(acc, token)
+	resp, err := c.doCLIRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := decodeHTTPResponseBody(resp); err != nil {
+		_ = resp.Body.Close()
+		return nil, err
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return resp, nil
+	}
+	raw, headers := readBoundedResponse(resp)
+	return nil, newCLIUpstreamError(resp.StatusCode, headers, raw, "")
 }
 
 // doResponseResource forwards GET/DELETE for a stored Build Responses
@@ -269,6 +349,9 @@ func (c *CLIClient) doResponseResource(ctx context.Context, acc *store.Account, 
 			return nil, err
 		}
 		req.Header = c.cliHeaders(acc, token)
+		if strings.HasPrefix(path, "/videos/") {
+			req.Header.Set("x-grok-model-override", "grok-imagine-video-1.5")
+		}
 		resp, err := c.doCLIRequest(ctx, req)
 		if err != nil {
 			return nil, err

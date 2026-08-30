@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/auth"
+	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/util"
 )
 
@@ -21,7 +23,75 @@ const (
 type APIKeyPrincipal struct {
 	ID            int64
 	AllowedModels []string
+	MaxConcurrent int
 	DenialCode    string
+}
+
+type keyConcurrencyEntry struct {
+	active int
+}
+
+// APIKeyConcurrency enforces the validated key's concurrent-request policy.
+// A zero limit remains unlimited for backward compatibility. The entry is
+// removed at zero so deleted keys cannot leave an unbounded local map behind.
+func APIKeyConcurrency(next http.HandlerFunc) http.HandlerFunc {
+	return APIKeyConcurrencyWithTracker(next, nil)
+}
+
+// APIKeyConcurrencyWithTracker uses the deployment-wide Redis tracker when
+// available, making the key limit atomic across replicas. Negative tracker IDs
+// form a namespace disjoint from positive account IDs.
+func APIKeyConcurrencyWithTracker(next http.HandlerFunc, tracker loadbalancer.ConnTracker) http.HandlerFunc {
+	var mu sync.Mutex
+	entries := make(map[int64]*keyConcurrencyEntry)
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := r.Context().Value(apiKeyPrincipalContextKey{}).(*APIKeyPrincipal)
+		if principal == nil || principal.ID == 0 || principal.MaxConcurrent <= 0 {
+			next(w, r)
+			return
+		}
+		if tracker != nil {
+			trackerID := -principal.ID
+			acquired := false
+			if limiter, ok := tracker.(loadbalancer.LimitedConnTracker); ok {
+				acquired = limiter.TryAcquire(trackerID, int64(principal.MaxConcurrent))
+			} else if tracker.GetCount(trackerID) < int64(principal.MaxConcurrent) {
+				tracker.Acquire(trackerID)
+				acquired = true
+			}
+			if !acquired {
+				w.Header().Set("Retry-After", "1")
+				writeAPIKeyError(w, http.StatusTooManyRequests, "API key concurrency limit exceeded", "concurrency_limit_exceeded")
+				return
+			}
+			defer tracker.Release(trackerID)
+			next(w, r)
+			return
+		}
+		mu.Lock()
+		entry := entries[principal.ID]
+		if entry == nil {
+			entry = &keyConcurrencyEntry{}
+			entries[principal.ID] = entry
+		}
+		if entry.active >= principal.MaxConcurrent {
+			mu.Unlock()
+			w.Header().Set("Retry-After", "1")
+			writeAPIKeyError(w, http.StatusTooManyRequests, "API key concurrency limit exceeded", "concurrency_limit_exceeded")
+			return
+		}
+		entry.active++
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			entry.active--
+			if entry.active <= 0 {
+				delete(entries, principal.ID)
+			}
+			mu.Unlock()
+		}()
+		next(w, r)
+	}
 }
 
 type APIKeyValidator func(context.Context, string) (*APIKeyPrincipal, error)
@@ -34,6 +104,16 @@ type apiKeyPrincipalContextKey struct{}
 func APIKeyFingerprint(ctx context.Context) string {
 	value, _ := ctx.Value(apiKeyFingerprintContextKey{}).(string)
 	return value
+}
+
+// APIKeyID returns the non-secret database identity of the validated client
+// key for request audit and usage-ledger attribution.
+func APIKeyID(ctx context.Context) int64 {
+	principal, _ := ctx.Value(apiKeyPrincipalContextKey{}).(*APIKeyPrincipal)
+	if principal == nil {
+		return 0
+	}
+	return principal.ID
 }
 
 // APIKeyAllowsModel checks the exact, case-insensitive model allowlist attached

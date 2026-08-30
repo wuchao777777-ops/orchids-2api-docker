@@ -35,6 +35,21 @@ func imageResponseField(format string) string {
 	return "url"
 }
 
+func imageOutputFormatFromBase64(value string) string {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil || len(raw) == 0 {
+		return "png"
+	}
+	switch http.DetectContentType(raw) {
+	case "image/jpeg":
+		return "jpeg"
+	case "image/webp":
+		return "webp"
+	default:
+		return "png"
+	}
+}
+
 func mediaExtFromMime(mediaType, mimeType, rawURL string) string {
 	m := strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
 	switch m {

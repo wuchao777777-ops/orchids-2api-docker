@@ -18,6 +18,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/audit"
 	"orchids-api/internal/auth"
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
@@ -55,6 +56,61 @@ type API struct {
 	// credentials can never cross authentication flows.
 	grokDeviceLoginMu sync.Mutex
 	grokDeviceLogins  map[string]*grokDeviceLogin
+}
+
+type auditEventRecord struct {
+	ID    string      `json:"id"`
+	Event audit.Event `json:"event"`
+}
+
+// HandleAuditEvents exposes the bounded Redis audit ledger to authenticated
+// administrators. Cursor pagination uses Redis Stream IDs and never returns
+// request bodies, credentials, or upstream error text.
+func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a == nil || a.store == nil || a.store.RedisClient() == nil {
+		http.Error(w, "audit ledger requires Redis storage", http.StatusServiceUnavailable)
+		return
+	}
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	maxID := "+"
+	if before := strings.TrimSpace(r.URL.Query().Get("before")); before != "" {
+		maxID = "(" + before
+	}
+	messages, err := a.store.RedisClient().XRevRangeN(r.Context(), a.store.RedisPrefix()+"audit:log", maxID, "-", int64(limit)).Result()
+	if err != nil {
+		http.Error(w, "failed to read audit ledger", http.StatusInternalServerError)
+		return
+	}
+	records := make([]auditEventRecord, 0, len(messages))
+	for _, message := range messages {
+		raw, _ := message.Values["data"].(string)
+		var event audit.Event
+		if raw == "" || json.Unmarshal([]byte(raw), &event) != nil {
+			continue
+		}
+		records = append(records, auditEventRecord{ID: message.ID, Event: event})
+	}
+	nextCursor := ""
+	if len(records) == limit {
+		nextCursor = records[len(records)-1].ID
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": records, "next_cursor": nextCursor})
 }
 
 const (
@@ -756,6 +812,7 @@ type CreateKeyResponse struct {
 	Enabled       bool       `json:"enabled"`
 	AllowedModels []string   `json:"allowed_models,omitempty"`
 	RPMLimit      int        `json:"rpm_limit,omitempty"`
+	MaxConcurrent int        `json:"max_concurrent,omitempty"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
@@ -764,6 +821,7 @@ type UpdateKeyRequest struct {
 	Enabled       *bool           `json:"enabled"`
 	AllowedModels *[]string       `json:"allowed_models"`
 	RPMLimit      *int            `json:"rpm_limit"`
+	MaxConcurrent *int            `json:"max_concurrent"`
 	ExpiresAt     json.RawMessage `json:"expires_at"`
 }
 
@@ -829,7 +887,7 @@ func (a *API) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := middleware.ExtractIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), r.Header.Get("X-Real-IP"))
+	ip := middleware.ClientIP(r)
 	if a.loginLimiter != nil && !a.loginLimiter.Allow(ip) {
 		http.Error(w, "Too many login attempts, try again later", http.StatusTooManyRequests)
 		return
@@ -1920,6 +1978,7 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 			Name          string     `json:"name"`
 			AllowedModels []string   `json:"allowed_models"`
 			RPMLimit      int        `json:"rpm_limit"`
+			MaxConcurrent int        `json:"max_concurrent"`
 			ExpiresAt     *time.Time `json:"expires_at"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1933,6 +1992,10 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.RPMLimit < 0 {
 			http.Error(w, "rpm_limit must be greater than or equal to zero", http.StatusBadRequest)
+			return
+		}
+		if req.MaxConcurrent < 0 || req.MaxConcurrent > 1024 {
+			http.Error(w, "max_concurrent must be between 0 and 1024", http.StatusBadRequest)
 			return
 		}
 		if req.ExpiresAt != nil {
@@ -1962,6 +2025,7 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 			Enabled:       true,
 			AllowedModels: normalizeAllowedModels(req.AllowedModels),
 			RPMLimit:      req.RPMLimit,
+			MaxConcurrent: req.MaxConcurrent,
 			ExpiresAt:     req.ExpiresAt,
 		}
 		if err := a.store.CreateApiKey(r.Context(), &key); err != nil {
@@ -1979,6 +2043,7 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 			Enabled:       key.Enabled,
 			AllowedModels: key.AllowedModels,
 			RPMLimit:      key.RPMLimit,
+			MaxConcurrent: key.MaxConcurrent,
 			ExpiresAt:     key.ExpiresAt,
 			CreatedAt:     key.CreatedAt,
 		})
@@ -2005,7 +2070,7 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.Enabled == nil && req.AllowedModels == nil && req.RPMLimit == nil && len(req.ExpiresAt) == 0 {
+		if req.Enabled == nil && req.AllowedModels == nil && req.RPMLimit == nil && req.MaxConcurrent == nil && len(req.ExpiresAt) == 0 {
 			http.Error(w, "at least one policy field is required", http.StatusBadRequest)
 			return
 		}
@@ -2030,6 +2095,13 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			key.RPMLimit = *req.RPMLimit
+		}
+		if req.MaxConcurrent != nil {
+			if *req.MaxConcurrent < 0 || *req.MaxConcurrent > 1024 {
+				http.Error(w, "max_concurrent must be between 0 and 1024", http.StatusBadRequest)
+				return
+			}
+			key.MaxConcurrent = *req.MaxConcurrent
 		}
 		if len(req.ExpiresAt) > 0 {
 			expiresAt, err := parseOptionalExpiry(req.ExpiresAt)

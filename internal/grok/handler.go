@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
 	"orchids-api/internal/handler"
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"path/filepath"
@@ -37,6 +39,7 @@ type Handler struct {
 	affinity     map[string]sessionAffinityEntry
 	replay       map[string]reasoningReplayEntry
 	instanceID   string
+	auditLogger  audit.Logger
 }
 
 type chatAccountSession struct {
@@ -76,9 +79,91 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 		affinity:    make(map[string]sessionAffinityEntry),
 		replay:      make(map[string]reasoningReplayEntry),
 		instanceID:  instanceID,
+		auditLogger: audit.NewNopLogger(),
 	}
 	h.recoverStoredConsoleVideoJobs(context.Background())
 	return h
+}
+
+func (h *Handler) SetAuditLogger(logger audit.Logger) {
+	if h != nil && logger != nil {
+		h.auditLogger = logger
+	}
+}
+
+func (h *Handler) auditAttempt(ctx context.Context, acc *store.Account, provider string, attempt int, started time.Time, err error) {
+	if h == nil || h.auditLogger == nil {
+		return
+	}
+	status := "ok"
+	metadata := map[string]interface{}{}
+	if err != nil {
+		status = "error"
+		metadata["http_status"] = upstreamHTTPResponseStatus(err)
+		metadata["error_kind"] = fmt.Sprint(ClassifyUpstreamError(err))
+	}
+	accountID := int64(0)
+	if acc != nil {
+		accountID = acc.ID
+	}
+	h.auditLogger.Log(ctx, audit.Event{
+		RequestID: middleware.GetTraceID(ctx), Action: "grok_upstream_attempt", APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID,
+		Channel: "grok", Provider: provider, Attempt: attempt, Duration: time.Since(started).Milliseconds(), Status: status, Metadata: metadata,
+	})
+}
+
+func (h *Handler) auditQualityAttempt(ctx context.Context, acc *store.Account, provider string, attempt int, missing bool) {
+	if h == nil || h.auditLogger == nil {
+		return
+	}
+	accountID := int64(0)
+	if acc != nil {
+		accountID = acc.ID
+	}
+	status := "accepted"
+	if missing {
+		status = "missing_thinking"
+	}
+	h.auditLogger.Log(ctx, audit.Event{
+		RequestID: middleware.GetTraceID(ctx), Action: "grok_quality_attempt", APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID,
+		Channel: "grok", Provider: provider, Attempt: attempt, Status: status,
+	})
+}
+
+func (h *Handler) auditRequest(ctx context.Context, acc *store.Account, provider, model, status string, usage map[string]interface{}) {
+	if h == nil || h.auditLogger == nil {
+		return
+	}
+	accountID := int64(0)
+	if acc != nil {
+		accountID = acc.ID
+	}
+	input := interfaceToInt(firstNonNil(usage["input_tokens"], usage["prompt_tokens"]))
+	output := interfaceToInt(firstNonNil(usage["output_tokens"], usage["completion_tokens"]))
+	cached := 0
+	reasoning := 0
+	if details, _ := usage["input_tokens_details"].(map[string]interface{}); details != nil {
+		cached = interfaceToInt(details["cached_tokens"])
+	}
+	if details, _ := usage["prompt_tokens_details"].(map[string]interface{}); details != nil && cached == 0 {
+		cached = interfaceToInt(details["cached_tokens"])
+	}
+	if details, _ := usage["output_tokens_details"].(map[string]interface{}); details != nil {
+		reasoning = interfaceToInt(details["reasoning_tokens"])
+	}
+	h.auditLogger.Log(ctx, audit.Event{
+		RequestID: middleware.GetTraceID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Model: model,
+		Channel: "grok", Provider: provider, Status: status, InputTokens: input, OutputTokens: output,
+		CachedInputTokens: cached, ReasoningTokens: reasoning,
+	})
+}
+
+// SetConnTracker lets the Grok selectors share the deployment-wide tracker
+// used by the general load balancer.
+func (h *Handler) SetConnTracker(tracker loadbalancer.ConnTracker) {
+	if h != nil && tracker != nil {
+		h.connTracker = tracker
+	}
 }
 
 func (h *Handler) currentClient() *Client {
@@ -114,6 +199,9 @@ func (h *Handler) cacheValidatedModel(modelID string) {
 		return
 	}
 	h.modelCacheMu.Lock()
+	if h.modelCache == nil {
+		h.modelCache = make(map[string]time.Time)
+	}
 	h.modelCache[modelID] = time.Now().Add(grokModelValidationCacheTTL)
 	h.modelCacheMu.Unlock()
 }
@@ -203,16 +291,53 @@ func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error 
 	return nil
 }
 
+// ensureModelCapability applies the persisted route capability policy after
+// the normal visibility/status check. Empty capability lists remain permissive
+// so pre-migration records continue to work until the startup backfill runs.
+func (h *Handler) ensureModelCapability(ctx context.Context, modelID, capability string) error {
+	if err := h.ensureModelEnabled(ctx, modelID); err != nil {
+		return err
+	}
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		return nil
+	}
+	model, err := h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", normalizeModelID(modelID))
+	if (err != nil || model == nil) && strings.TrimSpace(modelID) != normalizeModelID(modelID) {
+		model, err = h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", strings.TrimSpace(modelID))
+	}
+	if err != nil || model == nil {
+		return nil
+	}
+	if !model.SupportsCapability(capability) {
+		return fmt.Errorf("model %s does not support %s", normalizeModelID(modelID), strings.ToLower(strings.TrimSpace(capability)))
+	}
+	return nil
+}
+
+func (h *Handler) ensureResolvedModelCapability(ctx context.Context, modelID string, spec ModelSpec, capability string) error {
+	if err := h.ensureResolvedModelEnabled(ctx, modelID, spec); err != nil {
+		return err
+	}
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		return nil
+	}
+	model, err := h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", normalizeModelID(modelID))
+	if err == nil && model != nil && !model.SupportsCapability(capability) {
+		return fmt.Errorf("model %s does not support %s", normalizeModelID(modelID), strings.ToLower(strings.TrimSpace(capability)))
+	}
+	return nil
+}
+
 // resolveConversationModel resolves the built-in Web/Console/Build catalog and
 // account-discovered Build models. A discovered model is routable only when at
 // least one enabled Build account advertises it, so arbitrary client strings
 // can never turn into upstream model probes.
 func (h *Handler) resolveConversationModel(ctx context.Context, modelID string) (ModelSpec, bool) {
 	if spec, ok := ResolveModel(modelID); ok {
-		return spec, true
+		return h.applyPersistedRoute(ctx, spec), true
 	}
 	id := normalizeModelID(modelID)
-	if id == "" || IsDeprecatedModelID(id) || h == nil || h.lb == nil || h.lb.Store == nil {
+	if id == "" || IsDeprecatedModelID(id) || isKnownGrokMediaModelID(id) || h == nil || h.lb == nil || h.lb.Store == nil {
 		return ModelSpec{}, false
 	}
 	accounts, err := h.lb.Store.GetEnabledAccounts(ctx)
@@ -230,6 +355,47 @@ func (h *Handler) resolveConversationModel(ctx context.Context, modelID string) 
 		}
 	}
 	return ModelSpec{}, false
+}
+
+// applyPersistedRoute overlays the control-plane route on the static model
+// shape. Media/voice flags remain catalog-owned, while provider and upstream
+// identity are operator-controlled and survive restarts in the model store.
+func (h *Handler) applyPersistedRoute(ctx context.Context, spec ModelSpec) ModelSpec {
+	if h == nil || h.lb == nil || h.lb.Store == nil || strings.TrimSpace(spec.ID) == "" {
+		return spec
+	}
+	model, err := h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", normalizeModelID(spec.ID))
+	if err != nil || model == nil {
+		return spec
+	}
+	upstream := strings.TrimSpace(model.UpstreamModel)
+	if upstream == "" {
+		upstream = firstNonEmpty(spec.ConsoleModel, spec.UpstreamModel)
+	}
+	switch strings.ToLower(strings.TrimSpace(model.Provider)) {
+	case ProviderWeb:
+		spec.Upstream = UpstreamAppChat
+		spec.UpstreamModel = upstream
+		spec.ConsoleModel = ""
+	case ProviderConsole:
+		spec.Upstream = UpstreamConsole
+		spec.UpstreamModel = upstream
+		spec.ConsoleModel = upstream
+	case ProviderBuild:
+		spec.Upstream = UpstreamCLI
+		spec.UpstreamModel = upstream
+		spec.ConsoleModel = ""
+	}
+	return spec
+}
+
+func isKnownGrokMediaModelID(modelID string) bool {
+	switch normalizeModelID(modelID) {
+	case "grok-imagine-image-lite", "grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality", "grok-imagine-image-pro", "grok-imagine-image-edit", "grok-imagine-video", "grok-imagine-video-1.5", "grok-voice-latest", "grok-voice-think-fast-2.0", "grok-voice-think-fast-1.0", "grok-stt":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) ensureResolvedModelEnabled(ctx context.Context, modelID string, spec ModelSpec) error {
@@ -269,14 +435,31 @@ func modelValidationMessage(modelID string, err error) string {
 	return msg
 }
 
-func (h *Handler) trackAccount(acc *store.Account) func() {
+func (h *Handler) accountCapacityAvailable(acc *store.Account) bool {
+	if acc == nil || acc.MaxConcurrent <= 0 || h == nil || h.connTracker == nil {
+		return true
+	}
+	return h.connTracker.GetCount(acc.ID) < int64(acc.MaxConcurrent)
+}
+
+func (h *Handler) reserveAccount(acc *store.Account) (func(), bool) {
 	if h == nil || h.connTracker == nil || acc == nil || acc.ID == 0 {
-		return h.base.TrackAccount(acc)
+		if h != nil && h.base != nil {
+			return h.base.TrackAccount(acc), true
+		}
+		return func() {}, true
 	}
-	h.connTracker.Acquire(acc.ID)
-	return func() {
-		h.connTracker.Release(acc.ID)
+	if limiter, ok := h.connTracker.(loadbalancer.LimitedConnTracker); ok {
+		if !limiter.TryAcquire(acc.ID, int64(acc.MaxConcurrent)) {
+			return func() {}, false
+		}
+	} else {
+		if !h.accountCapacityAvailable(acc) {
+			return func() {}, false
+		}
+		h.connTracker.Acquire(acc.ID)
 	}
+	return func() { h.connTracker.Release(acc.ID) }, true
 }
 
 func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err error) {
@@ -319,14 +502,27 @@ func (h *Handler) openChatAccountSessionForModel(ctx context.Context, spec Model
 }
 
 func (h *Handler) openChatAccountSessionForModelExcluding(ctx context.Context, excludeIDs []int64, spec ModelSpec) (*chatAccountSession, error) {
-	return h.openChatAccountSessionExcludingWithPools(ctx, excludeIDs, spec.PoolCandidates())
+	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, spec.PoolCandidates(), func(acc *store.Account) bool {
+		return h.routeAllowsAccount(ctx, spec.ID, acc.ID)
+	})
 }
 
 func (h *Handler) openChatAccountSessionForImagineLite(ctx context.Context, excludeIDs []int64, spec ModelSpec) (*chatAccountSession, error) {
 	spec.Tier = grokTierLite
 	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, spec.PoolCandidates(), func(acc *store.Account) bool {
-		return grokAccountPool(acc) != "basic"
+		return grokAccountPool(acc) != "basic" && h.routeAllowsAccount(ctx, spec.ID, acc.ID)
 	})
+}
+
+func (h *Handler) routeAllowsAccount(ctx context.Context, modelID string, accountID int64) bool {
+	if h == nil || h.lb == nil || h.lb.Store == nil || accountID == 0 {
+		return true
+	}
+	model, err := h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", normalizeModelID(modelID))
+	if err != nil || model == nil {
+		return true
+	}
+	return model.AllowsAccount(accountID)
 }
 
 func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, excludeIDs []int64, poolCandidates []string) (*chatAccountSession, error) {
@@ -351,10 +547,12 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 		return extraFilter == nil || extraFilter(acc)
 	}
 	if pinnedID := h.affinityAccount(ctx, ProviderWeb); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) && h.lb.Store != nil {
-		if pinned, getErr := h.lb.Store.GetAccount(ctx, pinnedID); getErr == nil && pinned != nil && accountAffinityUsable(pinned) && ssoFilter(pinned) {
+		if pinned, getErr := h.lb.Store.GetAccount(ctx, pinnedID); getErr == nil && pinned != nil && accountAffinityUsable(pinned) && h.accountCapacityAvailable(pinned) && ssoFilter(pinned) {
 			raw := grokSSOTokenRaw(pinned)
 			if NormalizeSSOToken(raw) != "" {
-				return &chatAccountSession{acc: pinned, token: raw, poolCandidates: normalizeGrokPoolCandidates(poolCandidates), release: h.trackAccount(pinned)}, nil
+				if release, reserved := h.reserveAccount(pinned); reserved {
+					return &chatAccountSession{acc: pinned, token: raw, poolCandidates: normalizeGrokPoolCandidates(poolCandidates), release: release}, nil
+				}
 			}
 		}
 	}
@@ -391,11 +589,15 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 		return nil, fmt.Errorf("grok account token is empty")
 	}
 	h.bindAffinity(ctx, ProviderWeb, acc.ID)
+	release, reserved := h.reserveAccount(acc)
+	if !reserved {
+		return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, append(excludeIDs, acc.ID), poolCandidates, extraFilter)
+	}
 	return &chatAccountSession{
 		acc:            acc,
 		token:          raw,
 		poolCandidates: candidates,
-		release:        h.trackAccount(acc),
+		release:        release,
 	}, nil
 }
 

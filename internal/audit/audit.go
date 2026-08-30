@@ -11,17 +11,25 @@ import (
 
 // Event represents a single audit log entry.
 type Event struct {
-	Timestamp time.Time              `json:"timestamp"`
-	Action    string                 `json:"action"`
-	AccountID int64                  `json:"account_id,omitempty"`
-	Model     string                 `json:"model,omitempty"`
-	Channel   string                 `json:"channel,omitempty"`
-	ClientIP  string                 `json:"client_ip,omitempty"`
-	UserAgent string                 `json:"user_agent,omitempty"`
-	Duration  int64                  `json:"duration_ms,omitempty"`
-	Status    string                 `json:"status"`
-	Error     string                 `json:"error,omitempty"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	Timestamp         time.Time              `json:"timestamp"`
+	RequestID         string                 `json:"request_id,omitempty"`
+	Action            string                 `json:"action"`
+	APIKeyID          int64                  `json:"api_key_id,omitempty"`
+	AccountID         int64                  `json:"account_id,omitempty"`
+	Model             string                 `json:"model,omitempty"`
+	Channel           string                 `json:"channel,omitempty"`
+	Provider          string                 `json:"provider,omitempty"`
+	Attempt           int                    `json:"attempt,omitempty"`
+	InputTokens       int                    `json:"input_tokens,omitempty"`
+	OutputTokens      int                    `json:"output_tokens,omitempty"`
+	CachedInputTokens int                    `json:"cached_input_tokens,omitempty"`
+	ReasoningTokens   int                    `json:"reasoning_tokens,omitempty"`
+	ClientIP          string                 `json:"client_ip,omitempty"`
+	UserAgent         string                 `json:"user_agent,omitempty"`
+	Duration          int64                  `json:"duration_ms,omitempty"`
+	Status            string                 `json:"status"`
+	Error             string                 `json:"error,omitempty"`
+	Metadata          map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // Logger is the audit logging interface.
