@@ -330,13 +330,11 @@ func stringifyToolArguments(value interface{}) string {
 	if value == nil {
 		return "{}"
 	}
-	if raw, err := jsonMarshal(value); err == nil {
+	if raw, err := json.Marshal(value); err == nil {
 		return string(raw)
 	}
 	return "{}"
 }
-
-func jsonMarshal(value interface{}) ([]byte, error) { return json.Marshal(value) }
 
 func normalizeResponsesEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {

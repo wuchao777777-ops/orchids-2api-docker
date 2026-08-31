@@ -158,7 +158,7 @@ func TestDoRequest_DoesNotMutateInputHeaders(t *testing.T) {
 	headers := c.headers("token-abc")
 	originalID := headers.Get("x-xai-request-id")
 
-	resp, err := c.doRequest(context.Background(), srv.URL, http.MethodGet, nil, headers, http.StatusOK, false)
+	resp, err := c.doRequest(context.Background(), srv.URL, http.MethodGet, nil, headers, false)
 	if err != nil {
 		t.Fatalf("doRequest() error: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestDoRequest_DoesNotFallbackForGenericTransportError(t *testing.T) {
 		},
 	}
 
-	_, err := c.doRequest(context.Background(), "https://grok.com/rest/rate-limits", http.MethodPost, []byte(`{"message":"hi"}`), http.Header{}, http.StatusOK, false)
+	_, err := c.doRequest(context.Background(), "https://grok.com/rest/rate-limits", http.MethodPost, []byte(`{"message":"hi"}`), http.Header{}, false)
 	if err == nil {
 		t.Fatal("expected doRequest() to fail")
 	}
@@ -219,7 +219,7 @@ func TestDoRequest_RetriesOnceAfterCloudflareChallenge(t *testing.T) {
 		GrokEgressEnabled: true,
 		GrokEgressNodes:   []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
 	})
-	resp, err := c.doRequest(context.Background(), srv.URL, http.MethodGet, nil, http.Header{}, http.StatusOK, false)
+	resp, err := c.doRequest(context.Background(), srv.URL, http.MethodGet, nil, http.Header{}, false)
 	if err != nil {
 		t.Fatalf("doRequest() error: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestDoRequest_PersistentChallengeReturnsTypedError(t *testing.T) {
 		GrokEgressEnabled: true,
 		GrokEgressNodes:   []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
 	})
-	_, err := c.doRequest(context.Background(), srv.URL, http.MethodGet, nil, http.Header{}, http.StatusOK, false)
+	_, err := c.doRequest(context.Background(), srv.URL, http.MethodGet, nil, http.Header{}, false)
 	if err == nil {
 		t.Fatal("expected persistent challenge to fail")
 	}

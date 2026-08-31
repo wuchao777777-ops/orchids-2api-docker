@@ -49,12 +49,8 @@ const (
 
 const defaultModel = "auto-open"
 
-func canonicalModelID(model string) string {
-	return strings.ToLower(strings.TrimSpace(model))
-}
-
 func NormalizeModelID(model string) string {
-	return canonicalModelID(model)
+	return strings.ToLower(strings.TrimSpace(model))
 }
 
 func applyWarpClientHeaders(req *http.Request) {

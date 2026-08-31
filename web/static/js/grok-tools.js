@@ -34,9 +34,6 @@
     fileDataURL: "",
     startAt: 0,
     elapsedTimer: null,
-    contentBuffer: "",
-    progressBuffer: "",
-    collectingContent: false,
     lastProgress: 0,
     currentPreviewItem: null,
     previewCount: 0,
@@ -1485,7 +1482,6 @@
   }
 
   function renderChatSessions() {
-    const list = document.getElementById("grokSessionList");
     if (!list) return;
     list.innerHTML = "";
     chatState.sessions.forEach((session) => {
@@ -1727,7 +1723,6 @@
 
   function bindChatEvents() {
     const newBtn = document.getElementById("grokChatNewBtn");
-    const list = document.getElementById("grokSessionList");
     const sendBtn = document.getElementById("grokSendBtn");
     const input = document.getElementById("grokPromptInput");
     const modelChip = document.getElementById("grokModelChip");
@@ -2389,9 +2384,6 @@
   function resetVideoOutput(keepPreview) {
     const stage = document.getElementById("videoStage");
     const empty = document.getElementById("videoEmpty");
-    videoState.contentBuffer = "";
-    videoState.progressBuffer = "";
-    videoState.collectingContent = false;
     videoState.lastProgress = 0;
     videoState.currentPreviewItem = null;
     setVideoProgress(0);
@@ -2529,50 +2521,6 @@
     }
   }
 
-  function extractVideoInfo(buffer) {
-    if (!buffer) return null;
-    if (buffer.includes("<video")) {
-      const matches = buffer.match(/<video[\s\S]*?<\/video>/gi);
-      if (matches && matches.length) {
-        return { html: matches[matches.length - 1] };
-      }
-    }
-    const mdMatches = buffer.match(/\[video\]\(([^)]+)\)/g);
-    if (mdMatches && mdMatches.length) {
-      const last = mdMatches[mdMatches.length - 1];
-      const urlMatch = last.match(/\[video\]\(([^)]+)\)/);
-      if (urlMatch) {
-        return { url: normalizeVideoURL(urlMatch[1]) };
-      }
-    }
-    const urlMatches = buffer.match(/(?:https?:\/\/|\/grok\/v1\/files\/video\/|\/v1\/files\/video\/|\/grok\/v1\/videos\/|\/v1\/videos\/)[^\s<)]+/g);
-    if (urlMatches && urlMatches.length) {
-      return { url: normalizeVideoURL(urlMatches[urlMatches.length - 1]) };
-    }
-    return null;
-  }
-
-  function renderVideoFromHtml(html) {
-    const container = ensureVideoPreviewSlot();
-    if (!container) return;
-    const body = container.querySelector(".video-item-body");
-    if (!body) return;
-    body.innerHTML = html;
-    const videoEl = body.querySelector("video");
-    let videoUrl = "";
-    if (videoEl) {
-      videoEl.controls = true;
-      videoEl.preload = "metadata";
-      const source = videoEl.querySelector("source");
-      if (source && source.getAttribute("src")) {
-        videoUrl = source.getAttribute("src");
-      } else if (videoEl.getAttribute("src")) {
-        videoUrl = videoEl.getAttribute("src");
-      }
-    }
-    updateVideoItemLinks(container, videoUrl);
-  }
-
   function renderVideoFromUrl(url) {
     const container = ensureVideoPreviewSlot();
     if (!container) return;
@@ -2585,81 +2533,6 @@
       </video>
     `;
     updateVideoItemLinks(container, safeUrl);
-  }
-
-  function handleVideoDelta(text) {
-    if (!text) return;
-    if (text.includes("<think>") || text.includes("</think>")) {
-      return;
-    }
-    if (/超分辨率|super\s+resolution/i.test(text)) {
-      setVideoStatus(t("video.superResolution"), "connecting");
-      setVideoIndeterminate(true);
-      const progressText = document.getElementById("videoProgressText");
-      if (progressText) progressText.textContent = t("video.superResolution");
-      return;
-    }
-
-    if (!videoState.collectingContent) {
-      const maybeVideo = text.includes("<video")
-        || text.includes("[video](")
-        || text.includes("http://")
-        || text.includes("https://")
-        || text.includes("/grok/v1/files/video/")
-        || text.includes("/v1/files/video/");
-      if (maybeVideo) {
-        videoState.collectingContent = true;
-      }
-    }
-
-    if (videoState.collectingContent) {
-      videoState.contentBuffer += text;
-      const info = extractVideoInfo(videoState.contentBuffer);
-      if (info) {
-        if (info.html) {
-          renderVideoFromHtml(info.html);
-        } else if (info.url) {
-          renderVideoFromUrl(info.url);
-        }
-      }
-      return;
-    }
-
-    videoState.progressBuffer += text;
-    const progressText = document.getElementById("videoProgressText");
-    const roundMatches = [...videoState.progressBuffer.matchAll(/\[round=(\d+)\/(\d+)\]\s*progress=([0-9]+(?:\.[0-9]+)?)%/g)];
-    if (roundMatches.length) {
-      const last = roundMatches[roundMatches.length - 1];
-      const round = parseInt(last[1], 10);
-      const total = parseInt(last[2], 10);
-      const value = parseFloat(last[3]);
-      setVideoIndeterminate(false);
-      setVideoProgress(value);
-      if (progressText && Number.isFinite(round) && Number.isFinite(total) && total > 0) {
-        progressText.textContent = `${Math.round(value)}% · ${round}/${total}`;
-      }
-      videoState.progressBuffer = videoState.progressBuffer.slice(Math.max(0, videoState.progressBuffer.length - 300));
-      return;
-    }
-
-    const genericProgressMatches = [...videoState.progressBuffer.matchAll(/progress=([0-9]+(?:\.[0-9]+)?)%/g)];
-    if (genericProgressMatches.length) {
-      const last = genericProgressMatches[genericProgressMatches.length - 1];
-      const value = parseFloat(last[1]);
-      setVideoIndeterminate(false);
-      setVideoProgress(value);
-      videoState.progressBuffer = videoState.progressBuffer.slice(Math.max(0, videoState.progressBuffer.length - 240));
-      return;
-    }
-
-    const matches = [...videoState.progressBuffer.matchAll(/进度\s*(\d+)%/g)];
-    if (matches.length) {
-      const last = matches[matches.length - 1];
-      const value = parseInt(last[1], 10);
-      setVideoIndeterminate(false);
-      setVideoProgress(value);
-      videoState.progressBuffer = videoState.progressBuffer.slice(Math.max(0, videoState.progressBuffer.length - 200));
-    }
   }
 
   async function createVideoTask(payload) {

@@ -62,7 +62,7 @@ func (c *CLIClient) FetchBilling(ctx context.Context, acc *store.Account) (*CLIB
 		return nil, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newCLIUpstreamError(resp.StatusCode, resp.Header, body, "")
+		return nil, newCLIUpstreamError(resp.StatusCode, resp.Header, body)
 	}
 	var payload struct {
 		SubscriptionTier string `json:"subscriptionTier"`
@@ -201,7 +201,7 @@ func (c *CLIClient) fetchSubscriptionTier(ctx context.Context, acc *store.Accoun
 		return "", err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", newCLIUpstreamError(resp.StatusCode, resp.Header, body, "")
+		return "", newCLIUpstreamError(resp.StatusCode, resp.Header, body)
 	}
 	var payload struct {
 		SubscriptionTier string `json:"subscriptionTier"`

@@ -845,22 +845,30 @@ func (s *redisStore) GetStoredResponse(ctx context.Context, responseID, ownerHas
 	if s == nil || s.client == nil {
 		return nil, fmt.Errorf("redis store not configured")
 	}
-	value, err := s.client.Get(ctx, s.storedResponseKey(responseID, ownerHash)).Bytes()
+	key := s.storedResponseKey(responseID, ownerHash)
+	return getExpiringRedisJSON[StoredResponse](ctx, s, key, func(response *StoredResponse) time.Time {
+		return response.ExpiresAt
+	})
+}
+
+func getExpiringRedisJSON[T any](ctx context.Context, s *redisStore, key string, expiresAt func(*T) time.Time) (*T, error) {
+	value, err := s.client.Get(ctx, key).Bytes()
 	if err == redis.Nil {
 		return nil, ErrNoRows
 	}
 	if err != nil {
 		return nil, err
 	}
-	var response StoredResponse
-	if err := json.Unmarshal(value, &response); err != nil {
+	var result T
+	if err := json.Unmarshal(value, &result); err != nil {
 		return nil, err
 	}
-	if !response.ExpiresAt.IsZero() && !time.Now().UTC().Before(response.ExpiresAt) {
-		_ = s.client.Del(ctx, s.storedResponseKey(responseID, ownerHash)).Err()
+	expiry := expiresAt(&result)
+	if !expiry.IsZero() && !time.Now().UTC().Before(expiry) {
+		_ = s.client.Del(ctx, key).Err()
 		return nil, ErrNoRows
 	}
-	return &response, nil
+	return &result, nil
 }
 
 func (s *redisStore) DeleteStoredResponse(ctx context.Context, responseID, ownerHash string) error {
@@ -1051,25 +1059,6 @@ func (s *redisStore) ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob
 	return jobs, nil
 }
 
-func (s *redisStore) DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error {
-	if s == nil || s.client == nil {
-		return fmt.Errorf("redis store not configured")
-	}
-	key := s.storedVideoJobKey(id, ownerHash)
-	pipe := s.client.TxPipeline()
-	deleted := pipe.Del(ctx, key)
-	pipe.ZRem(ctx, s.storedVideoJobsIndexKey(), key)
-	pipe.Del(ctx, s.storedVideoJobLeaseKey(id, ownerHash))
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return err
-	}
-	if deleted.Val() == 0 {
-		return ErrNoRows
-	}
-	return nil
-}
-
 func validateVideoJobLeaseArgs(id, ownerHash, holder string, ttl time.Duration) error {
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerHash) == "" || strings.TrimSpace(holder) == "" {
 		return fmt.Errorf("video job id, owner, and lease holder are required")
@@ -1141,22 +1130,10 @@ func (s *redisStore) GetStoredMediaInput(ctx context.Context, id, ownerHash stri
 	if s == nil || s.client == nil {
 		return nil, fmt.Errorf("redis store not configured")
 	}
-	value, err := s.client.Get(ctx, s.storedMediaInputKey(id, ownerHash)).Bytes()
-	if err == redis.Nil {
-		return nil, ErrNoRows
-	}
-	if err != nil {
-		return nil, err
-	}
-	var input StoredMediaInput
-	if err := json.Unmarshal(value, &input); err != nil {
-		return nil, err
-	}
-	if !input.ExpiresAt.IsZero() && !time.Now().UTC().Before(input.ExpiresAt) {
-		_ = s.client.Del(ctx, s.storedMediaInputKey(id, ownerHash)).Err()
-		return nil, ErrNoRows
-	}
-	return &input, nil
+	key := s.storedMediaInputKey(id, ownerHash)
+	return getExpiringRedisJSON[StoredMediaInput](ctx, s, key, func(input *StoredMediaInput) time.Time {
+		return input.ExpiresAt
+	})
 }
 
 func (s *redisStore) DeleteStoredMediaInput(ctx context.Context, id, ownerHash string) error {

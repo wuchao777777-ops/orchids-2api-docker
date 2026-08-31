@@ -177,7 +177,6 @@ func (h *Handler) runImagineWSImages(ctx context.Context, sess *chatAccountSessi
 	if maxRounds < 3 {
 		maxRounds = 3
 	}
-	var lastErr error
 	for round := 0; round < maxRounds && collected < n; round++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -190,15 +189,14 @@ func (h *Handler) runImagineWSImages(ctx context.Context, sess *chatAccountSessi
 			if resp != nil {
 				status = resp.StatusCode
 			}
-			lastErr = fmt.Errorf("imagine websocket dial failed status=%d: %w", status, err)
-			h.markAccountStatus(ctx, sess.acc, lastErr)
-			return lastErr
+			dialErr := fmt.Errorf("imagine websocket dial failed status=%d: %w", status, err)
+			h.markAccountStatus(ctx, sess.acc, dialErr)
+			return dialErr
 		}
 		roundFinals, err := runImagineWSRound(roundCtx, conn, prompt, aspectRatio, nsfw, pro, n-collected, events)
 		_ = conn.Close()
 		cancel()
 		if err != nil {
-			lastErr = err
 			h.markAccountStatus(ctx, sess.acc, err)
 			return err
 		}
@@ -209,9 +207,6 @@ func (h *Handler) runImagineWSImages(ctx context.Context, sess *chatAccountSessi
 		if !sleepWithContext(ctx, imagineWSInterRoundPause) {
 			return ctx.Err()
 		}
-	}
-	if lastErr != nil {
-		return lastErr
 	}
 	return fmt.Errorf("no image generated")
 }

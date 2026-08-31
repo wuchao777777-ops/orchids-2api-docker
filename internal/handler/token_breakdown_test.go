@@ -14,9 +14,6 @@ func TestEstimateInputTokenBreakdown_SplitsSystemContext(t *testing.T) {
 	t.Parallel()
 
 	prompt := "<env>\ndate: 2026-02-12\n</env>\n<rules>\n- concise\n</rules>\n<sys>\nproject context and constraints\n</sys>\n<user>\nhello\n</user>"
-	history := []map[string]string{
-		{"role": "user", "content": "previous context message"},
-	}
 	tools := []interface{}{
 		map[string]interface{}{
 			"type": "function",
@@ -29,15 +26,12 @@ func TestEstimateInputTokenBreakdown_SplitsSystemContext(t *testing.T) {
 		},
 	}
 
-	bd := estimateInputTokenBreakdown(prompt, history, tools)
+	bd := estimateInputTokenBreakdown(prompt, tools)
 	if bd.SystemContextTokens <= 0 {
 		t.Fatalf("expected system_context tokens > 0")
 	}
 	if bd.BasePromptTokens <= 0 {
 		t.Fatalf("expected base prompt tokens > 0")
-	}
-	if bd.HistoryTokens <= 0 {
-		t.Fatalf("expected history tokens > 0")
 	}
 	if bd.ToolsTokens <= 0 {
 		t.Fatalf("expected tools tokens > 0")

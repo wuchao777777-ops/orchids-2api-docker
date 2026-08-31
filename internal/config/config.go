@@ -47,19 +47,9 @@ type Config struct {
 	TokenCacheTTL      int      `json:"token_cache_ttl"`
 	TokenCacheStrategy string   `json:"token_cache_strategy"`
 
-	SessionID     string `json:"-"`
-	ClientCookie  string `json:"-"`
-	SessionCookie string `json:"-"`
-	ClientUat     string `json:"-"`
-	ProjectID     string `json:"-"`
-	UserID        string `json:"-"`
-	AgentMode     string `json:"-"`
-	Email         string `json:"-"`
-
 	// ── Hardcoded fields (set unconditionally by ApplyHardcoded) ──
 	DebugLogSSE             bool   `json:"-"`
 	SuppressThinking        bool   `json:"-"`
-	OutputTokenMode         string `json:"-"`
 	ContextMaxTokens        int    `json:"-"`
 	ContextSummaryMaxTokens int    `json:"-"`
 	ContextKeepTurns        int    `json:"-"`
@@ -105,7 +95,6 @@ type Config struct {
 	GrokFlareSolverrURL        string             `json:"grok_flaresolverr_url,omitempty"`
 	GrokClearanceMode          string             `json:"grok_clearance_mode,omitempty"`             // "manual"|"flaresolverr"
 	GrokClearanceRefreshInterv int                `json:"grok_clearance_refresh_interval,omitempty"` // seconds
-	GrokUARotationEnabled      bool               `json:"grok_ua_rotation_enabled,omitempty"`
 
 	// ── Upstream fidelity (defaults preserve client content verbatim) ──
 	// A relay gateway forwards client messages without rewriting content.
@@ -265,7 +254,6 @@ func ApplyDefaults(cfg *Config) {
 // fixed values. Call this after any JSON decode (config file, Redis, API)
 // to ensure these values cannot be overridden.
 func ApplyHardcoded(cfg *Config) {
-	cfg.OutputTokenMode = "final"
 	cfg.UpstreamMode = "ws"
 	cfg.ContextMaxTokens = 100000
 	cfg.ContextSummaryMaxTokens = 800

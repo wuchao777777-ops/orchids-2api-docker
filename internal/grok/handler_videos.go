@@ -560,9 +560,7 @@ func videoIDFromPath(path string) string {
 	for _, prefix := range []string{"/grok/v1/videos/", "/v1/videos/"} {
 		if strings.HasPrefix(path, prefix) {
 			rest := strings.Trim(strings.TrimPrefix(path, prefix), "/")
-			if strings.HasPrefix(rest, "generations/") {
-				rest = strings.TrimPrefix(rest, "generations/")
-			}
+			rest = strings.TrimPrefix(rest, "generations/")
 			rest = strings.TrimSuffix(rest, "/content")
 			rest = strings.Trim(rest, "/")
 			if idx := strings.Index(rest, "/"); idx >= 0 {

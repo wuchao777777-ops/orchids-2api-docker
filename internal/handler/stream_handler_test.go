@@ -820,7 +820,7 @@ func TestExtractThinkingSignature(t *testing.T) {
 }
 
 func TestStreamHandler_TokensUsed_OverridesEstimation(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, OutputTokenMode: "final"}
+	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
@@ -838,7 +838,7 @@ func TestStreamHandler_TokensUsed_OverridesEstimation(t *testing.T) {
 }
 
 func TestStreamHandler_FinalOutputTokens_MatchChunkedText(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, OutputTokenMode: "final"}
+	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()

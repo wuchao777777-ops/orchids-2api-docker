@@ -797,23 +797,12 @@ func copyCapturedResponse(w http.ResponseWriter, rec *captureResponseWriter) {
 	_, _ = w.Write(rec.body.Bytes())
 }
 
-func writeResponsesStreamFromChat(w http.ResponseWriter, model, raw string) {
-	writeResponsesStreamFromChatReader(w, model, strings.NewReader(raw))
-}
-
 type responseStreamToolState struct {
 	itemID      string
 	callID      string
 	name        string
 	outputIndex int
 	arguments   strings.Builder
-}
-
-// writeResponsesStreamFromChatReader translates Chat SSE incrementally. It is
-// deliberately reader-based so the first Responses event is emitted as soon
-// as the upstream Chat event arrives instead of after the completion ends.
-func writeResponsesStreamFromChatReader(w http.ResponseWriter, model string, reader io.Reader) {
-	writeResponsesStreamFromChatReaderRequest(w, ResponsesCreateRequest{Model: model}, reader)
 }
 
 func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request ResponsesCreateRequest, reader io.Reader) {

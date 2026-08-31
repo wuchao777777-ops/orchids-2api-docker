@@ -45,14 +45,6 @@ func formatWarpErrorCode(code string) string {
 	return ""
 }
 
-func WarpErrorCode(err error) string {
-	var statusErr *HTTPStatusError
-	if errors.As(err, &statusErr) {
-		return strings.TrimSpace(statusErr.ErrorCode)
-	}
-	return ""
-}
-
 func HTTPStatusCode(err error) int {
 	var statusErr *HTTPStatusError
 	if errors.As(err, &statusErr) {

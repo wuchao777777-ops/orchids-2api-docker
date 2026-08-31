@@ -42,12 +42,12 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if breakdown.Total == 0 && channel == "puter" {
-		breakdown = estimateInputTokenBreakdown(extractUserText(req.Messages), nil, req.Tools)
+		breakdown = estimateInputTokenBreakdown(extractUserText(req.Messages), req.Tools)
 		profile = "puter"
 	}
 	if breakdown.Total == 0 {
 		builtPrompt := strings.TrimSpace(extractUserText(req.Messages))
-		breakdown = estimateInputTokenBreakdown(builtPrompt, nil, req.Tools)
+		breakdown = estimateInputTokenBreakdown(builtPrompt, req.Tools)
 		if profile == "" {
 			profile = channel
 		}

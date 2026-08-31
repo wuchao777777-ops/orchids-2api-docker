@@ -371,7 +371,7 @@ func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, 
 type puterModelProbeResult uint8
 
 const (
-	puterModelProbeUnknown puterModelProbeResult = iota
+	_ puterModelProbeResult = iota
 	puterModelProbeAccepted
 	puterModelProbeRejected
 	puterModelProbeQuotaLimited
@@ -539,33 +539,6 @@ func canonicalGrokRefreshModelID(modelID string) string {
 	return id
 }
 
-func canonicalizeDiscoveredModels(items []discoveredModel, normalize func(string) string) []discoveredModel {
-	seen := map[string]struct{}{}
-	out := make([]discoveredModel, 0, len(items))
-	for _, item := range items {
-		id := strings.TrimSpace(item.ID)
-		if normalize != nil {
-			id = strings.TrimSpace(normalize(id))
-		}
-		if id == "" {
-			continue
-		}
-		if _, exists := seen[id]; exists {
-			continue
-		}
-		seen[id] = struct{}{}
-		name := strings.TrimSpace(item.Name)
-		if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
-			name = strings.TrimSpace(spec.Name)
-		}
-		if name == "" {
-			name = id
-		}
-		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
-	}
-	return out
-}
-
 func grokBuildModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*store.Account, error) {
 	if s == nil {
 		return nil, fmt.Errorf("store not configured")
@@ -673,9 +646,8 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 					choices := warp.AgentModeModelChoices(features)
 					featureConfig := warp.AccountFeatureConfigFromChoices(features)
 					if warp.AccountFreeOnly(acc) {
-						probedChoices, probeSource := probeWarpFreeOnlyModelChoices(ctx, cfg, acc, choices)
-						choices = probedChoices
-						source = appendWarpDiscoverySource(source, probeSource)
+						choices = probeWarpFreeOnlyModelChoices(ctx, cfg, acc, choices)
+						source = appendWarpDiscoverySource(source, "free_probe")
 					}
 					if len(choices) == 0 {
 						continue
@@ -795,7 +767,7 @@ func warpModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*store.A
 	return eligible, nil
 }
 
-func probeWarpFreeOnlyModelChoices(ctx context.Context, cfg *config.Config, acc *store.Account, discovered []warp.ModelChoice) ([]warp.ModelChoice, string) {
+func probeWarpFreeOnlyModelChoices(ctx context.Context, cfg *config.Config, acc *store.Account, discovered []warp.ModelChoice) []warp.ModelChoice {
 	candidates := warpFreeOnlyProbeCandidates(discovered)
 	out := make([]warp.ModelChoice, 0, len(candidates))
 	for _, choice := range candidates {
@@ -804,10 +776,7 @@ func probeWarpFreeOnlyModelChoices(ctx context.Context, cfg *config.Config, acc 
 		}
 		out = append(out, choice)
 	}
-	if len(out) == 0 {
-		return nil, "free_probe"
-	}
-	return out, "free_probe"
+	return out
 }
 
 func appendWarpDiscoverySource(parts ...string) string {

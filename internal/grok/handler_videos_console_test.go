@@ -369,7 +369,13 @@ func TestRunConsoleVideoJobEndToEnd(t *testing.T) {
 		accessToken: "access-token", privateKey: key, publicJWK: publicDPoPJWK(&key.PublicKey), expiresAt: time.Now().Add(time.Minute),
 	})
 	job := &videoJob{ID: "video_test", Model: "grok-imagine-video", CreatedAt: time.Now().Unix(), Status: "queued", Operation: "edit", StandardAPI: true}
-	h.runConsoleVideoJob(job, &chatAccountSession{token: token}, consoleVideoEdit, map[string]interface{}{
+	baseCtx, cancel := context.WithTimeout(context.Background(), videoJobTTL)
+	defer cancel()
+	leaseCtx, lease, acquired, err := h.beginConsoleVideoJobLease(baseCtx, job)
+	if err != nil || !acquired {
+		t.Fatalf("beginConsoleVideoJobLease() acquired=%v err=%v", acquired, err)
+	}
+	h.runConsoleVideoJobWithLease(leaseCtx, lease, job, &chatAccountSession{token: token}, consoleVideoEdit, map[string]interface{}{
 		"model": "grok-imagine-video", "prompt": "add snow", "video": map[string]interface{}{"url": "https://example.com/source.mp4"},
 	})
 	if job.Status != "completed" || job.Progress != 100 || job.RemixedFromID != "upstream-1" {

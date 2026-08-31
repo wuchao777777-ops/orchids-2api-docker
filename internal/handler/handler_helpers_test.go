@@ -117,8 +117,8 @@ func TestSelectAccountRecord_WarpRejectsModelOutsideCurrentPool(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
-	if err := warp.SaveAccountModelChoicesForAccount(ctx, s, 1, []string{"auto-open"}); err != nil {
-		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
+	if err := warp.SaveAccountModelChoices(ctx, s, &warp.AccountModelChoices{Accounts: map[string][]string{"1": {"auto-open"}}}); err != nil {
+		t.Fatalf("SaveAccountModelChoices() error = %v", err)
 	}
 
 	_, err := h.selectAccountRecordWithOptions(ctx, "warp", nil, accountSelectionOptions{ModelID: "gpt-5-2-medium"})
@@ -152,8 +152,8 @@ func TestSelectAccountRecord_WarpExhaustedPaidAccountIsFreeOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
-	if err := warp.SaveAccountModelChoicesForAccount(ctx, s, 1, []string{"auto-open", "gpt-5-2-medium"}); err != nil {
-		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
+	if err := warp.SaveAccountModelChoices(ctx, s, &warp.AccountModelChoices{Accounts: map[string][]string{"1": {"auto-open", "gpt-5-2-medium"}}}); err != nil {
+		t.Fatalf("SaveAccountModelChoices() error = %v", err)
 	}
 
 	_, err := h.selectAccountRecordWithOptions(ctx, "warp", nil, accountSelectionOptions{ModelID: "gpt-5-2-medium"})

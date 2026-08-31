@@ -288,7 +288,7 @@ func prepareConsoleVideoRequest(request consoleVideoAPIRequest, operation consol
 	}
 
 	if operation == consoleVideoGenerate {
-		duration, _, err := parseConsoleVideoDuration(request.Duration, 8)
+		duration, err := parseConsoleVideoDuration(request.Duration, 8)
 		if err != nil || duration < 1 || duration > 15 {
 			return preparedConsoleVideoRequest{}, fmt.Errorf("duration must be an integer from 1 to 15")
 		}
@@ -402,7 +402,7 @@ func prepareConsoleVideoRequest(request consoleVideoAPIRequest, operation consol
 		}
 		return prepared, nil
 	}
-	duration, _, err := parseConsoleVideoDuration(request.Duration, 6)
+	duration, err := parseConsoleVideoDuration(request.Duration, 6)
 	if err != nil || duration < 2 || duration > 10 {
 		return preparedConsoleVideoRequest{}, fmt.Errorf("video extension duration must be an integer from 2 to 10")
 	}
@@ -439,33 +439,29 @@ func validConsoleVideoMediaInputURL(value, mediaType string) bool {
 	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil
 }
 
-func parseConsoleVideoDuration(raw json.RawMessage, defaultValue int) (int, bool, error) {
+func parseConsoleVideoDuration(raw json.RawMessage, defaultValue int) (int, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return defaultValue, false, nil
+		return defaultValue, nil
 	}
 	var number int
 	if json.Unmarshal(trimmed, &number) == nil {
-		return number, true, nil
+		return number, nil
 	}
 	var text string
 	if json.Unmarshal(trimmed, &text) != nil {
-		return 0, true, fmt.Errorf("duration must be an integer or integer string")
+		return 0, fmt.Errorf("duration must be an integer or integer string")
 	}
-	parsed, err := parseStrictInteger(text)
+	parsed, err := strconv.Atoi(strings.TrimSpace(text))
 	if err != nil {
-		return 0, true, fmt.Errorf("duration must be an integer or integer string")
+		return 0, fmt.Errorf("duration must be an integer or integer string")
 	}
-	return parsed, true, nil
+	return parsed, nil
 }
 
 func hasConsoleVideoJSONValue(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
-}
-
-func parseStrictInteger(value string) (int, error) {
-	return strconv.Atoi(strings.TrimSpace(value))
 }
 
 func validConsoleVideoAspectRatio(value string) bool {
@@ -581,7 +577,7 @@ func (h *Handler) resumeStoredConsoleVideoJob(job *videoJob, timeout time.Durati
 	}
 	sess := &chatAccountSession{acc: account, token: token, release: release}
 	defer sess.Close()
-	h.updateVideoJobProgress(job, "in_progress", max(1, job.Progress))
+	h.updateVideoJobProgress(job, max(1, job.Progress))
 	h.pollConsoleVideoJob(leaseCtx, lease, job, sess, job.UpstreamRequestID)
 }
 
@@ -629,27 +625,10 @@ func (h *Handler) resumeStoredVideoJob(job *videoJob, timeout time.Duration) {
 	h.resumeStoredConsoleVideoJob(job, timeout)
 }
 
-func (h *Handler) runConsoleVideoJob(job *videoJob, sess *chatAccountSession, operation consoleVideoOperation, payload map[string]interface{}) {
-	baseCtx, baseCancel := context.WithTimeout(context.Background(), videoJobTTL)
-	defer baseCancel()
-	leaseCtx, lease, acquired, err := h.beginConsoleVideoJobLease(baseCtx, job)
-	if err != nil {
-		sess.Close()
-		h.failVideoJobWithCode(job, "video_lease_unavailable", err)
-		return
-	}
-	if !acquired {
-		sess.Close()
-		h.abandonConsoleVideoJob(job)
-		return
-	}
-	h.runConsoleVideoJobWithLease(leaseCtx, lease, job, sess, operation, payload)
-}
-
 func (h *Handler) runConsoleVideoJobWithLease(ctx context.Context, lease *consoleVideoJobLease, job *videoJob, sess *chatAccountSession, operation consoleVideoOperation, payload map[string]interface{}) {
 	defer sess.Close()
 	defer lease.Close()
-	h.updateVideoJobProgress(job, "in_progress", 1)
+	h.updateVideoJobProgress(job, 1)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		h.handleConsoleVideoJobError(job, lease, err)
@@ -693,7 +672,7 @@ func (h *Handler) pollConsoleVideoJob(ctx context.Context, lease *consoleVideoJo
 			return
 		}
 		videoURL, done, parseErr := parseConsoleVideoStatus(statusBody, func(progress int) {
-			h.updateVideoJobProgress(job, "in_progress", min(99, progress))
+			h.updateVideoJobProgress(job, min(99, progress))
 		})
 		if parseErr != nil {
 			h.handleConsoleVideoJobError(job, lease, parseErr)
@@ -730,9 +709,9 @@ func (h *Handler) pollConsoleVideoJob(ctx context.Context, lease *consoleVideoJo
 	}
 }
 
-func (h *Handler) updateVideoJobProgress(job *videoJob, status string, progress int) {
+func (h *Handler) updateVideoJobProgress(job *videoJob, progress int) {
 	videoJobsMu.Lock()
-	job.Status = status
+	job.Status = "in_progress"
 	job.Progress = clampProgress(progress)
 	videoJobsMu.Unlock()
 	h.persistVideoJob(context.Background(), job)

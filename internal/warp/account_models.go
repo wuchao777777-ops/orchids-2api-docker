@@ -91,33 +91,6 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 	return s.SetSetting(ctx, accountModelChoicesSettingKey, string(payload))
 }
 
-func SaveAccountModelChoicesForAccount(ctx context.Context, s *store.Store, accountID int64, models []string) error {
-	if s == nil || accountID == 0 {
-		return nil
-	}
-	existing, err := LoadAccountModelChoices(ctx, s)
-	if err != nil {
-		return err
-	}
-	if existing == nil {
-		existing = &AccountModelChoices{Accounts: map[string][]string{}}
-	}
-	if existing.Accounts == nil {
-		existing.Accounts = map[string][]string{}
-	}
-	key := strconv.FormatInt(accountID, 10)
-	normalized := normalizeAccountModelIDs(models)
-	if len(normalized) == 0 {
-		delete(existing.Accounts, key)
-		if existing.FeatureConfigs != nil {
-			delete(existing.FeatureConfigs, key)
-		}
-	} else {
-		existing.Accounts[key] = normalized
-	}
-	return SaveAccountModelChoices(ctx, s, existing)
-}
-
 func EffectiveAccountModelIDs(acc *store.Account, choices *AccountModelChoices) []string {
 	if AccountFreeOnly(acc) {
 		if choices != nil && acc != nil && acc.ID != 0 && strings.Contains(strings.TrimSpace(choices.Sources[strconv.FormatInt(acc.ID, 10)]), "free_probe") {
@@ -137,7 +110,7 @@ func AccountSupportsModelForAccount(choices *AccountModelChoices, acc *store.Acc
 	if acc == nil || acc.ID == 0 {
 		return true
 	}
-	modelID = canonicalModelID(modelID)
+	modelID = NormalizeModelID(modelID)
 	if modelID == "" {
 		return true
 	}
@@ -191,9 +164,9 @@ func EffectiveAccountFeatureConfig(acc *store.Account, choices *AccountModelChoi
 		}
 	}
 	cfg.BaseModel = normalizeWarpModel(cfg.BaseModel)
-	cfg.CodingModel = canonicalModelID(cfg.CodingModel)
-	cfg.CliAgentModel = canonicalModelID(cfg.CliAgentModel)
-	cfg.ComputerUseAgentModel = canonicalModelID(cfg.ComputerUseAgentModel)
+	cfg.CodingModel = NormalizeModelID(cfg.CodingModel)
+	cfg.CliAgentModel = NormalizeModelID(cfg.CliAgentModel)
+	cfg.ComputerUseAgentModel = NormalizeModelID(cfg.ComputerUseAgentModel)
 	if cfg.CliAgentModel == "" {
 		cfg.CliAgentModel = identifier
 	}
@@ -205,10 +178,10 @@ func EffectiveAccountFeatureConfig(acc *store.Account, choices *AccountModelChoi
 
 func normalizeAccountFeatureConfig(cfg AccountFeatureConfig) AccountFeatureConfig {
 	return AccountFeatureConfig{
-		BaseModel:             canonicalModelID(cfg.BaseModel),
-		CodingModel:           canonicalModelID(cfg.CodingModel),
-		CliAgentModel:         canonicalModelID(cfg.CliAgentModel),
-		ComputerUseAgentModel: canonicalModelID(cfg.ComputerUseAgentModel),
+		BaseModel:             NormalizeModelID(cfg.BaseModel),
+		CodingModel:           NormalizeModelID(cfg.CodingModel),
+		CliAgentModel:         NormalizeModelID(cfg.CliAgentModel),
+		ComputerUseAgentModel: NormalizeModelID(cfg.ComputerUseAgentModel),
 	}
 }
 
@@ -223,7 +196,7 @@ func normalizeAccountModelIDs(models []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(models))
 	for _, model := range models {
-		model = canonicalModelID(model)
+		model = NormalizeModelID(model)
 		if model == "" {
 			continue
 		}

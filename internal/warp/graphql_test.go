@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -168,7 +169,8 @@ func TestDoGraphQL_PreservesWarpErrorCode(t *testing.T) {
 		}, nil
 	})}
 	err := doGraphQL(context.Background(), client, warpGraphQLV2URL, "jwt", "Test", map[string]any{}, &struct{}{})
-	if WarpErrorCode(err) != "REQUEST_LIMIT_EXCEEDED" || !strings.Contains(err.Error(), "REQUEST_LIMIT_EXCEEDED") {
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) || statusErr.ErrorCode != "REQUEST_LIMIT_EXCEEDED" || !strings.Contains(err.Error(), "REQUEST_LIMIT_EXCEEDED") {
 		t.Fatalf("error code not preserved: %v", err)
 	}
 }

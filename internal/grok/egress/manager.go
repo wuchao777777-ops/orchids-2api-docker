@@ -304,7 +304,6 @@ func (m *Manager) clearanceConfig() ClearanceConfig {
 		FlareSolverrURL: strings.TrimSpace(m.cfg.GrokFlareSolverrURL),
 		TargetURL:       "https://grok.com",
 		Timeout:         time.Minute,
-		RefreshInterval: time.Duration(m.cfg.GrokClearanceRefreshIntervalOrDefault()) * time.Second,
 	}
 }
 

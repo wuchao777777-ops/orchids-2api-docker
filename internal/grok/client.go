@@ -616,16 +616,12 @@ func decodeHTTPResponseBody(resp *http.Response) error {
 	return nil
 }
 
-func (c *Client) doRequest(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, okStatus int, asset bool) (*http.Response, error) {
-	return c.doRequestWith429Retry(ctx, reqURL, method, body, headers, okStatus, asset, true)
+func (c *Client) doRequest(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, asset bool) (*http.Response, error) {
+	return c.doRequestWithHTTPClient(ctx, c.clientForAsset(asset), reqURL, method, body, headers, http.StatusOK, true)
 }
 
-func (c *Client) doRequestWith429Retry(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, okStatus int, asset bool, retry429 bool) (*http.Response, error) {
-	return c.doRequestWithHTTPClient(ctx, c.clientForAsset(asset), reqURL, method, body, headers, okStatus, retry429)
-}
-
-func (c *Client) doAppChatRequestWith429Retry(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, okStatus int, retry429 bool) (*http.Response, error) {
-	return c.doRequestWithHTTPClient(ctx, c.clientForAppChat(), reqURL, method, body, headers, okStatus, retry429)
+func (c *Client) doAppChatRequest(ctx context.Context, reqURL string, body []byte, headers http.Header) (*http.Response, error) {
+	return c.doRequestWithHTTPClient(ctx, c.clientForAppChat(), reqURL, http.MethodPost, body, headers, http.StatusOK, false)
 }
 
 func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.Client, reqURL string, method string, body []byte, headers http.Header, okStatus int, retry429 bool) (*http.Response, error) {
@@ -854,7 +850,7 @@ func (c *Client) doRESTChat(ctx context.Context, token string, payload map[strin
 	}
 
 	reqURL := c.baseURL() + defaultChatPath
-	return c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeaders(token), http.StatusOK, false)
+	return c.doAppChatRequest(ctx, reqURL, body, c.appChatHeaders(token))
 }
 
 func (c *Client) doAppChatCreateAndRespond(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
@@ -889,7 +885,7 @@ func (c *Client) createAppChatCanvas(ctx context.Context, token string) (string,
 		return "", err
 	}
 	reqURL := c.baseURL() + defaultCanvasCreatePath
-	resp, err := c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer("")), http.StatusOK, false)
+	resp, err := c.doAppChatRequest(ctx, reqURL, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer("")))
 	if err != nil {
 		return "", err
 	}
@@ -915,7 +911,7 @@ func (c *Client) createAppChatConversation(ctx context.Context, token, referer s
 		return "", err
 	}
 	reqURL := c.baseURL() + defaultConversationPath
-	resp, err := c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeadersWithReferer(token, referer), http.StatusOK, false)
+	resp, err := c.doAppChatRequest(ctx, reqURL, body, c.appChatHeadersWithReferer(token, referer))
 	if err != nil {
 		return "", err
 	}
@@ -949,7 +945,7 @@ func (c *Client) linkAppChatConversationToCanvas(ctx context.Context, token, con
 		return err
 	}
 	reqURL := c.baseURL() + defaultMediaConvoPath
-	resp, err := c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer(canvasID)), http.StatusOK, false)
+	resp, err := c.doAppChatRequest(ctx, reqURL, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer(canvasID)))
 	if err != nil {
 		return err
 	}
@@ -967,7 +963,7 @@ func (c *Client) doAppChatAddResponse(ctx context.Context, token, conversationID
 		return nil, err
 	}
 	reqURL := c.baseURL() + defaultConversationPath + "/" + url.PathEscape(id) + "/responses"
-	return c.doAppChatRequestWith429Retry(ctx, reqURL, http.MethodPost, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer(canvasID)), http.StatusOK, false)
+	return c.doAppChatRequest(ctx, reqURL, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer(canvasID)))
 }
 
 func extractAppChatCanvasID(v interface{}) string {
@@ -1084,7 +1080,7 @@ func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpe
 	}
 
 	reqURL := c.baseURL() + defaultRateLimitsPath
-	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, c.headers(token), http.StatusOK, false)
+	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, c.headers(token), false)
 	if err != nil {
 		return nil, err
 	}
@@ -1128,7 +1124,7 @@ func (c *Client) uploadFile(ctx context.Context, token, fileName, fileMimeType, 
 	reqURL := c.baseURL() + defaultUploadFilePath
 	headers := c.headers(token)
 	headers.Set("Referer", "https://grok.com/files")
-	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, headers, http.StatusOK, false)
+	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, headers, false)
 	if err != nil {
 		return "", "", err
 	}
@@ -1169,7 +1165,7 @@ func (c *Client) createMediaPost(ctx context.Context, token, mediaType, prompt, 
 	reqURL := c.baseURL() + defaultCreatePostPath
 	headers := c.headers(token)
 	headers.Set("Referer", "https://grok.com/imagine")
-	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, headers, http.StatusOK, false)
+	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, headers, false)
 	if err != nil {
 		return "", err
 	}
@@ -1204,7 +1200,7 @@ func (c *Client) downloadAsset(ctx context.Context, token, rawURL string) ([]byt
 	var resp *http.Response
 	var err error
 	if c.shouldSendAuthForAssetURL(link) {
-		resp, err = c.doRequest(ctx, link, http.MethodGet, nil, c.assetDownloadHeaders(token, link), http.StatusOK, true)
+		resp, err = c.doRequest(ctx, link, http.MethodGet, nil, c.assetDownloadHeaders(token, link), true)
 	} else {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
 		if reqErr != nil {
@@ -1270,7 +1266,7 @@ func (c *Client) getVoiceToken(ctx context.Context, token, voice, personality st
 	}
 
 	reqURL := c.baseURL() + defaultLivekitPath
-	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, c.headers(token), http.StatusOK, false)
+	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, c.headers(token), false)
 	if err != nil {
 		return nil, err
 	}
@@ -1318,7 +1314,7 @@ func (c *Client) listAssets(ctx context.Context, token string) ([]string, error)
 		headers.Set("Referer", "https://grok.com/files")
 		headers.Set("Content-Type", "application/json")
 
-		resp, err := c.doRequest(ctx, reqURL, http.MethodGet, nil, headers, http.StatusOK, false)
+		resp, err := c.doRequest(ctx, reqURL, http.MethodGet, nil, headers, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1375,7 +1371,7 @@ func (c *Client) deleteAsset(ctx context.Context, token string, assetID string) 
 	headers.Set("Referer", "https://grok.com/files")
 	headers.Set("Content-Type", "application/json")
 
-	resp, err := c.doRequest(ctx, reqURL, http.MethodDelete, nil, headers, http.StatusOK, false)
+	resp, err := c.doRequest(ctx, reqURL, http.MethodDelete, nil, headers, false)
 	if err != nil {
 		return err
 	}
@@ -1532,7 +1528,7 @@ func (c *Client) acceptTOS(ctx context.Context, token string) (int, error) {
 	headers := c.grpcWebHeaders(token, "https://accounts.x.ai", "https://accounts.x.ai/accept-tos")
 
 	payload := grpcWebEncode([]byte{0x10, 0x01})
-	resp, err := c.doRequest(ctx, defaultAcceptTOSURL, http.MethodPost, payload, headers, http.StatusOK, false)
+	resp, err := c.doRequest(ctx, defaultAcceptTOSURL, http.MethodPost, payload, headers, false)
 	if err != nil {
 		return parseUpstreamStatus(err), err
 	}
@@ -1569,7 +1565,7 @@ func (c *Client) setBirthDate(ctx context.Context, token string) (int, error) {
 	headers.Set("Content-Type", "application/json")
 
 	reqURL := c.baseURL() + defaultSetBirthPath
-	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, headers, http.StatusOK, false)
+	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, headers, false)
 	if err != nil {
 		statusCode := parseUpstreamStatus(err)
 		// Upstream may return 204 No Content when already set.
@@ -1592,7 +1588,7 @@ func (c *Client) enableNSFWFeature(ctx context.Context, token string) (int, int,
 	payload := grpcWebEncode(protobuf)
 
 	reqURL := c.baseURL() + defaultNSFWMgmtPath
-	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, payload, headers, http.StatusOK, false)
+	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, payload, headers, false)
 	if err != nil {
 		return parseUpstreamStatus(err), -1, "", err
 	}

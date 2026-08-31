@@ -141,14 +141,6 @@ curl -s http://127.0.0.1:3002/health
 curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 ```
 
-Measure time to headers, first streaming frame, and total response time:
-
-```bash
-go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions -header "Authorization: Bearer sk-..."
-```
-
-`cmd/ttfbbench` is a standalone diagnostic utility and is not built into the server.
-
 ## Model Sync Behavior
 
 - endpoint: `POST /api/models/refresh`

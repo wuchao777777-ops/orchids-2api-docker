@@ -44,7 +44,7 @@ func TestSelectAccount_Distribution(t *testing.T) {
 	iterations := 1000
 
 	for i := 0; i < iterations; i++ {
-		acc := lb.selectAccount(accounts)
+		acc := lb.selectAccountWithTracker(accounts, nil)
 		if acc == nil {
 			t.Fatal("selectAccount returned nil")
 		}
@@ -79,7 +79,7 @@ func TestSelectAccount_WeightedDistribution(t *testing.T) {
 	iterations := 1000
 
 	for i := 0; i < iterations; i++ {
-		acc := lb.selectAccount(accounts)
+		acc := lb.selectAccountWithTracker(accounts, nil)
 		counts[acc.ID]++
 	}
 
@@ -100,7 +100,7 @@ func TestSelectAccount_ActiveConnections(t *testing.T) {
 
 	// Should always pick acc2
 	for i := 0; i < 100; i++ {
-		selected := lb.selectAccount(accounts)
+		selected := lb.selectAccountWithTracker(accounts, nil)
 		if selected.ID != acc2.ID {
 			t.Errorf("Expected Acc2 to be selected, got %s", selected.Name)
 		}

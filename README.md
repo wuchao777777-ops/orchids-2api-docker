@@ -141,14 +141,6 @@ curl -s http://127.0.0.1:3002/health
 curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 ```
 
-测量接口首字节、首个流式帧和总耗时：
-
-```bash
-go run ./cmd/ttfbbench -url http://127.0.0.1:3002/grok/v1/chat/completions -header "Authorization: Bearer sk-..."
-```
-
-`cmd/ttfbbench` 是独立诊断工具，不会被主服务编译或启动。
-
 ## 模型管理说明
 
 - 管理接口：`POST /api/models/refresh`
@@ -238,7 +230,7 @@ Grok 代码保留三种上游传输；当前公开模型按 `internal/grok/model
 - `grok_session_identity_refresh`（默认 true，后台刷新 SSO 账号时拉取 `/api/auth/session` 学习 teamId）
 - `response_store_ttl_hours`（Build stored Response 归属记录 TTL，默认 720 小时）
 - `grok_egress_enabled`（默认 false；开启后走代理池 + FlareSolverr + clearance 缓存）
-- `grok_egress_nodes`（代理池节点列表）、`grok_flaresolverr_url`、`grok_clearance_mode`（`manual`/`flaresolverr`）、`grok_clearance_refresh_interval`、`grok_ua_rotation_enabled`
+- `grok_egress_nodes`（代理池节点列表）、`grok_flaresolverr_url`、`grok_clearance_mode`（`manual`/`flaresolverr`）、`grok_clearance_refresh_interval`
 
 注意：这些字段带 json tag 且不会被 `ApplyHardcoded` 覆盖；通过管理端 `/api/config` 保存后不会被抹掉。
 

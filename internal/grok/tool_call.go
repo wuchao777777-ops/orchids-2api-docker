@@ -7,7 +7,12 @@ import (
 	"strings"
 )
 
-var toolCallBlockRE = regexp.MustCompile(`(?s)<tool_call>\s*(.*?)\s*</tool_call>`)
+var (
+	toolCallBlockRE         = regexp.MustCompile(`(?s)<tool_call>\s*(.*?)\s*</tool_call>`)
+	toolCallFenceStartRE    = regexp.MustCompile("^```[a-zA-Z0-9_-]*\\s*")
+	toolCallFenceEndRE      = regexp.MustCompile("\\s*```$")
+	toolCallTrailingCommaRE = regexp.MustCompile(`,\s*([}\]])`)
+)
 
 type toolCallParser struct {
 	forcedTool string
@@ -113,8 +118,8 @@ func stripToolCallCodeFences(text string) string {
 	if !strings.HasPrefix(cleaned, "```") {
 		return cleaned
 	}
-	cleaned = regexp.MustCompile("^```[a-zA-Z0-9_-]*\\s*").ReplaceAllString(cleaned, "")
-	cleaned = regexp.MustCompile("\\s*```$").ReplaceAllString(cleaned, "")
+	cleaned = toolCallFenceStartRE.ReplaceAllString(cleaned, "")
+	cleaned = toolCallFenceEndRE.ReplaceAllString(cleaned, "")
 	return strings.TrimSpace(cleaned)
 }
 
@@ -128,10 +133,6 @@ func extractToolCallJSONObject(text string) string {
 		return text[start:]
 	}
 	return text[start : end+1]
-}
-
-func removeTrailingJSONCommas(text string) string {
-	return regexp.MustCompile(`,\s*([}\]])`).ReplaceAllString(text, "$1")
 }
 
 func balanceJSONBraces(text string) string {
@@ -178,7 +179,7 @@ func repairToolCallJSON(text string) map[string]interface{} {
 	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
 	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
 	cleaned = strings.ReplaceAll(cleaned, "\n", " ")
-	cleaned = removeTrailingJSONCommas(cleaned)
+	cleaned = toolCallTrailingCommaRE.ReplaceAllString(cleaned, "$1")
 	cleaned = balanceJSONBraces(cleaned)
 	var parsed map[string]interface{}
 	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
@@ -326,7 +327,6 @@ func (p toolCallParser) parseCalls(content string) (string, []map[string]interfa
 	}
 	return strings.Join(textParts, "\n"), toolCalls
 }
-
 
 // toolStreamPump incrementally splits a text stream into plain-text deltas and
 // complete <tool_call> blocks. streamChat feeds token/message chunks through it

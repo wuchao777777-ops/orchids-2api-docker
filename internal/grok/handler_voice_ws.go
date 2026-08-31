@@ -98,7 +98,7 @@ func (h *Handler) handleVoiceWebSocket(w http.ResponseWriter, r *http.Request, p
 	errCh := make(chan error, 2)
 	go func() { errCh <- pumpVoiceWebSocket(client, upstream) }()
 	go func() { errCh <- pumpVoiceWebSocket(upstream, client) }()
-	_ = <-errCh
+	<-errCh
 	closeBoth()
 }
 

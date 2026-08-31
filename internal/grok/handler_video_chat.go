@@ -81,7 +81,7 @@ func (h *Handler) collectVideoSegmentFromBody(body io.Reader, logger *debug.Logg
 		if result.AssetID == "" {
 			result.AssetID = firstNonEmpty(extractAssetIDs(resp)...)
 		}
-		progress, videoURL, _, ok := extractVideoProgress(resp)
+		progress, videoURL, ok := extractVideoProgress(resp)
 		if !ok {
 			return nil
 		}
@@ -231,7 +231,7 @@ func (h *Handler) streamVideoChatCompletion(
 		emit(fmt.Sprintf("正在生成视频中，当前进度%d%%\n", progress), "", false, nil)
 	})
 	if err != nil {
-		writeSSECodedError(w, flusher, err.Error(), "server_error", "video_generation_failed")
+		writeSSECodedError(w, flusher, err.Error(), "video_generation_failed")
 		return
 	}
 	content := h.videoOutputURL(ctx, sess.token, artifact.URL, publicBase)

@@ -275,7 +275,7 @@ func DefaultModel() string {
 }
 
 func normalizeWarpModel(model string) string {
-	canonical := canonicalModelID(model)
+	canonical := NormalizeModelID(model)
 	if canonical == "" {
 		return defaultModel
 	}
@@ -572,11 +572,11 @@ func buildInputContext(workdir string) *warpapi.InputContext {
 }
 
 func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warpapi.Request_Settings {
-	cliAgentModel := canonicalModelID(req.WarpCliAgentModel)
+	cliAgentModel := NormalizeModelID(req.WarpCliAgentModel)
 	if cliAgentModel == "" {
 		cliAgentModel = identifier
 	}
-	computerAgentModel := canonicalModelID(req.WarpComputerUseModel)
+	computerAgentModel := NormalizeModelID(req.WarpComputerUseModel)
 	if computerAgentModel == "" {
 		computerAgentModel = computerUseModel
 	}

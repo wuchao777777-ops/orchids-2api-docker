@@ -147,10 +147,6 @@ func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Accoun
 	return val.([]*store.Account), nil
 }
 
-func (lb *LoadBalancer) selectAccount(accounts []*store.Account) *store.Account {
-	return lb.selectAccountWithTracker(accounts, nil)
-}
-
 func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, tracker ConnTracker) *store.Account {
 	if len(accounts) == 0 {
 		return nil

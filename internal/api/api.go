@@ -113,12 +113,9 @@ func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": records, "next_cursor": nextCursor})
 }
 
-const (
-	maxWarpDeviceLogins = 10
-	maxGrokDeviceLogins = 10
-)
+const maxDeviceLogins = 10
 
-type warpDeviceLogin struct {
+type deviceLogin struct {
 	deviceCode string
 	userCode   string
 	verifyURI  string
@@ -132,7 +129,7 @@ type warpDeviceLogin struct {
 	accountID int64
 }
 
-type warpDeviceLoginResponse struct {
+type deviceLoginResponse struct {
 	ID                      string `json:"id"`
 	Status                  string `json:"status"`
 	UserCode                string `json:"user_code,omitempty"`
@@ -143,36 +140,8 @@ type warpDeviceLoginResponse struct {
 	Message                 string `json:"message,omitempty"`
 }
 
-type grokDeviceLogin struct {
-	deviceCode string
-	userCode   string
-	verifyURI  string
-	verifyFull string
-	expiresAt  time.Time
-	interval   time.Duration
-	cancel     context.CancelFunc
-
-	status    string
-	message   string
-	accountID int64
-}
-
-type grokDeviceLoginResponse struct {
-	ID                      string `json:"id"`
-	Status                  string `json:"status"`
-	UserCode                string `json:"user_code,omitempty"`
-	VerificationURI         string `json:"verification_uri,omitempty"`
-	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
-	ExpiresAt               string `json:"expires_at,omitempty"`
-	AccountID               int64  `json:"account_id,omitempty"`
-	Message                 string `json:"message,omitempty"`
-}
-
-var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-	client := puter.NewFromAccount(acc, cfg)
-	defer client.Close()
-	return client.VerifyAuthToken(ctx)
-}
+type warpDeviceLogin = deviceLogin
+type grokDeviceLogin = deviceLogin
 
 var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 	client := puter.NewFromAccount(acc, cfg)
@@ -1171,7 +1140,7 @@ func (a *API) startWarpDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	id, err := newWarpDeviceLoginID()
+	id, err := newDeviceLoginID()
 	if err != nil {
 		http.Error(w, "failed to create login transaction", http.StatusInternalServerError)
 		return
@@ -1190,7 +1159,7 @@ func (a *API) startWarpDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 	}
 
 	a.warpDeviceLoginMu.Lock()
-	if len(a.warpDeviceLogins) >= maxWarpDeviceLogins {
+	if len(a.warpDeviceLogins) >= maxDeviceLogins {
 		a.warpDeviceLoginMu.Unlock()
 		pollCancel()
 		http.Error(w, "too many pending Warp device logins", http.StatusTooManyRequests)
@@ -1200,7 +1169,7 @@ func (a *API) startWarpDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 	a.warpDeviceLoginMu.Unlock()
 
 	go a.pollWarpDeviceAuthorization(pollContext, id, authenticator)
-	json.NewEncoder(w).Encode(a.warpDeviceLoginResponse(id, login))
+	json.NewEncoder(w).Encode(newDeviceLoginResponse(id, login))
 }
 
 func (a *API) getWarpDeviceAuthorization(w http.ResponseWriter, _ *http.Request, id string) {
@@ -1212,7 +1181,7 @@ func (a *API) getWarpDeviceAuthorization(w http.ResponseWriter, _ *http.Request,
 		http.Error(w, "Warp device login not found", http.StatusNotFound)
 		return
 	}
-	response := a.warpDeviceLoginResponse(id, login)
+	response := newDeviceLoginResponse(id, login)
 	a.warpDeviceLoginMu.Unlock()
 	json.NewEncoder(w).Encode(response)
 }
@@ -1297,29 +1266,13 @@ func (a *API) pollWarpDeviceAuthorization(ctx context.Context, id string, authen
 func (a *API) warpDeviceLoginForPoll(id string) (*warpDeviceLogin, bool) {
 	a.warpDeviceLoginMu.Lock()
 	defer a.warpDeviceLoginMu.Unlock()
-	login := a.warpDeviceLogins[id]
-	if login == nil || login.status != "pending" || strings.TrimSpace(login.deviceCode) == "" {
-		return nil, false
-	}
-	copyLogin := *login
-	return &copyLogin, true
+	return deviceLoginForPoll(a.warpDeviceLogins, id)
 }
 
 func (a *API) finishWarpDeviceLogin(id, status, message string, accountID int64) {
 	a.warpDeviceLoginMu.Lock()
 	defer a.warpDeviceLoginMu.Unlock()
-	if login := a.warpDeviceLogins[id]; login != nil {
-		login.deviceCode = ""
-		login.userCode = ""
-		login.verifyURI = ""
-		login.verifyFull = ""
-		login.status = status
-		login.message = message
-		login.accountID = accountID
-		if login.cancel != nil {
-			login.cancel()
-		}
-	}
+	finishDeviceLogin(a.warpDeviceLogins[id], status, message, accountID)
 }
 
 func (a *API) cleanupWarpDeviceLogins(now time.Time) {
@@ -1328,30 +1281,51 @@ func (a *API) cleanupWarpDeviceLogins(now time.Time) {
 	}
 	a.warpDeviceLoginMu.Lock()
 	defer a.warpDeviceLoginMu.Unlock()
-	for id, login := range a.warpDeviceLogins {
+	cleanupDeviceLogins(a.warpDeviceLogins, now, "Warp authorization expired")
+}
+
+func deviceLoginForPoll(logins map[string]*deviceLogin, id string) (*deviceLogin, bool) {
+	login := logins[id]
+	if login == nil || login.status != "pending" || strings.TrimSpace(login.deviceCode) == "" {
+		return nil, false
+	}
+	copyLogin := *login
+	return &copyLogin, true
+}
+
+func finishDeviceLogin(login *deviceLogin, status, message string, accountID int64) {
+	if login == nil {
+		return
+	}
+	login.deviceCode = ""
+	login.userCode = ""
+	login.verifyURI = ""
+	login.verifyFull = ""
+	login.status = status
+	login.message = message
+	login.accountID = accountID
+	if login.cancel != nil {
+		login.cancel()
+	}
+}
+
+func cleanupDeviceLogins(logins map[string]*deviceLogin, now time.Time, expiredMessage string) {
+	for id, login := range logins {
 		if login == nil {
-			delete(a.warpDeviceLogins, id)
+			delete(logins, id)
 			continue
 		}
 		if login.status == "pending" && now.After(login.expiresAt) {
-			login.deviceCode = ""
-			login.userCode = ""
-			login.verifyURI = ""
-			login.verifyFull = ""
-			login.status = "expired"
-			login.message = "Warp authorization expired"
-			if login.cancel != nil {
-				login.cancel()
-			}
+			finishDeviceLogin(login, "expired", expiredMessage, 0)
 		}
 		if now.After(login.expiresAt.Add(15 * time.Minute)) {
-			delete(a.warpDeviceLogins, id)
+			delete(logins, id)
 		}
 	}
 }
 
-func (a *API) warpDeviceLoginResponse(id string, login *warpDeviceLogin) warpDeviceLoginResponse {
-	response := warpDeviceLoginResponse{ID: id}
+func newDeviceLoginResponse(id string, login *deviceLogin) deviceLoginResponse {
+	response := deviceLoginResponse{ID: id}
 	if login == nil {
 		return response
 	}
@@ -1367,7 +1341,7 @@ func (a *API) warpDeviceLoginResponse(id string, login *warpDeviceLogin) warpDev
 	return response
 }
 
-func newWarpDeviceLoginID() (string, error) {
+func newDeviceLoginID() (string, error) {
 	bytes := make([]byte, 24)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
@@ -1408,7 +1382,7 @@ func (a *API) startGrokDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "failed to start Grok device authorization", http.StatusBadGateway)
 		return
 	}
-	id, err := newGrokDeviceLoginID()
+	id, err := newDeviceLoginID()
 	if err != nil {
 		http.Error(w, "failed to create login transaction", http.StatusInternalServerError)
 		return
@@ -1425,7 +1399,7 @@ func (a *API) startGrokDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 		status:     "pending",
 	}
 	a.grokDeviceLoginMu.Lock()
-	if len(a.grokDeviceLogins) >= maxGrokDeviceLogins {
+	if len(a.grokDeviceLogins) >= maxDeviceLogins {
 		a.grokDeviceLoginMu.Unlock()
 		pollCancel()
 		http.Error(w, "too many pending Grok device logins", http.StatusTooManyRequests)
@@ -1434,7 +1408,7 @@ func (a *API) startGrokDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 	a.grokDeviceLogins[id] = login
 	a.grokDeviceLoginMu.Unlock()
 	go a.pollGrokDeviceAuthorization(pollContext, id, authenticator)
-	json.NewEncoder(w).Encode(a.grokDeviceLoginResponse(id, login))
+	json.NewEncoder(w).Encode(newDeviceLoginResponse(id, login))
 }
 
 func (a *API) getGrokDeviceAuthorization(w http.ResponseWriter, id string) {
@@ -1446,7 +1420,7 @@ func (a *API) getGrokDeviceAuthorization(w http.ResponseWriter, id string) {
 		http.Error(w, "Grok device login not found", http.StatusNotFound)
 		return
 	}
-	response := a.grokDeviceLoginResponse(id, login)
+	response := newDeviceLoginResponse(id, login)
 	a.grokDeviceLoginMu.Unlock()
 	json.NewEncoder(w).Encode(response)
 }
@@ -1536,12 +1510,7 @@ func (a *API) pollGrokDeviceAuthorization(ctx context.Context, id string, authen
 func (a *API) grokDeviceLoginForPoll(id string) (*grokDeviceLogin, bool) {
 	a.grokDeviceLoginMu.Lock()
 	defer a.grokDeviceLoginMu.Unlock()
-	login := a.grokDeviceLogins[id]
-	if login == nil || login.status != "pending" || strings.TrimSpace(login.deviceCode) == "" {
-		return nil, false
-	}
-	copyLogin := *login
-	return &copyLogin, true
+	return deviceLoginForPoll(a.grokDeviceLogins, id)
 }
 
 func (a *API) increaseGrokDeviceLoginInterval(id string) {
@@ -1555,18 +1524,7 @@ func (a *API) increaseGrokDeviceLoginInterval(id string) {
 func (a *API) finishGrokDeviceLogin(id, status, message string, accountID int64) {
 	a.grokDeviceLoginMu.Lock()
 	defer a.grokDeviceLoginMu.Unlock()
-	if login := a.grokDeviceLogins[id]; login != nil {
-		login.deviceCode = ""
-		login.userCode = ""
-		login.verifyURI = ""
-		login.verifyFull = ""
-		login.status = status
-		login.message = message
-		login.accountID = accountID
-		if login.cancel != nil {
-			login.cancel()
-		}
-	}
+	finishDeviceLogin(a.grokDeviceLogins[id], status, message, accountID)
 }
 
 func (a *API) cleanupGrokDeviceLogins(now time.Time) {
@@ -1575,47 +1533,7 @@ func (a *API) cleanupGrokDeviceLogins(now time.Time) {
 	}
 	a.grokDeviceLoginMu.Lock()
 	defer a.grokDeviceLoginMu.Unlock()
-	for id, login := range a.grokDeviceLogins {
-		if login == nil {
-			delete(a.grokDeviceLogins, id)
-			continue
-		}
-		if login.status == "pending" && now.After(login.expiresAt) {
-			login.deviceCode = ""
-			login.userCode = ""
-			login.verifyURI = ""
-			login.verifyFull = ""
-			login.status = "expired"
-			login.message = "Grok authorization expired"
-			if login.cancel != nil {
-				login.cancel()
-			}
-		}
-		if now.After(login.expiresAt.Add(15 * time.Minute)) {
-			delete(a.grokDeviceLogins, id)
-		}
-	}
-}
-
-func (a *API) grokDeviceLoginResponse(id string, login *grokDeviceLogin) grokDeviceLoginResponse {
-	response := grokDeviceLoginResponse{ID: id}
-	if login == nil {
-		return response
-	}
-	response.Status = login.status
-	response.Message = login.message
-	response.AccountID = login.accountID
-	if login.status == "pending" {
-		response.UserCode = login.userCode
-		response.VerificationURI = login.verifyURI
-		response.VerificationURIComplete = login.verifyFull
-		response.ExpiresAt = login.expiresAt.UTC().Format(time.RFC3339)
-	}
-	return response
-}
-
-func newGrokDeviceLoginID() (string, error) {
-	return newWarpDeviceLoginID()
+	cleanupDeviceLogins(a.grokDeviceLogins, now, "Grok authorization expired")
 }
 
 func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {

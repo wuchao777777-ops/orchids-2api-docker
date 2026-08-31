@@ -266,22 +266,6 @@ func TestVerifyPuterDiscoveredModelsSerial_RequiresAcceptedProbe(t *testing.T) {
 	}
 }
 
-func TestCanonicalizeDiscoveredModels_NormalizesLegacyGrok43(t *testing.T) {
-	got := canonicalizeDiscoveredModels([]discoveredModel{
-		{ID: "grok-4.3", Name: "Grok 4.3"},
-		{ID: "grok-4.3", Name: "Grok 4.3"},
-	}, canonicalGrokRefreshModelID)
-	if len(got) != 1 {
-		t.Fatalf("len(got)=%d want 1: %+v", len(got), got)
-	}
-	if got[0].ID != "grok-4.3" {
-		t.Fatalf("ID=%q want grok-4.3", got[0].ID)
-	}
-	if got[0].Name != "Grok 4.3" {
-		t.Fatalf("Name=%q want Grok 4.3", got[0].Name)
-	}
-}
-
 func TestDiscoverGrokModelsUsesHistoricalCatalogWithoutBuildOAuth(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
@@ -559,15 +543,12 @@ func TestProbeWarpFreeOnlyModelChoices_UsesSmallPreferredSet(t *testing.T) {
 		return errors.New("model not allowed")
 	}
 
-	choices, source := probeWarpFreeOnlyModelChoices(context.Background(), &config.Config{}, &store.Account{ID: 1, AccountType: "warp"}, []warp.ModelChoice{
+	choices := probeWarpFreeOnlyModelChoices(context.Background(), &config.Config{}, &store.Account{ID: 1, AccountType: "warp"}, []warp.ModelChoice{
 		{ID: "auto-open"},
 		{ID: "gpt-5-2-low"},
 		{ID: "gpt-5-2-medium"},
 	})
 
-	if source != "free_probe" {
-		t.Fatalf("source=%q want free_probe", source)
-	}
 	got := make([]string, 0, len(choices))
 	for _, choice := range choices {
 		got = append(got, choice.ID)

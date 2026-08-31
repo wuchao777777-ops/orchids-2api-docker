@@ -48,7 +48,7 @@ func TestToolCallSameIDInvalidThenValid_UsesValidOne(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -100,7 +100,7 @@ func TestWriteToolCallDifferentIDsSameInput_Deduped(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -150,7 +150,7 @@ func TestWriteToolCallDifferentIDsSameWorkdirTarget_Deduped(t *testing.T) {
 
 	workdir := t.TempDir()
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -197,7 +197,7 @@ func TestReadToolCallDifferentIDsSameInput_BothAccepted(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -239,7 +239,7 @@ func TestWriteToolCallDifferentIDsDifferentContent_BothAccepted(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -280,7 +280,7 @@ func TestToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -319,7 +319,7 @@ func TestWriteToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -358,7 +358,7 @@ func TestSandboxMetadataReadToolCall_IsSuppressed(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -397,7 +397,7 @@ func TestTodoWriteToolCall_IsSuppressedWhenNotDeclared(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -436,7 +436,7 @@ func TestTaskToolCall_IsAcceptedWhenClientDeclaredAgent(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -481,7 +481,7 @@ func TestCustomMCPWebSearchToolCall_MapsToDeclaredWebSearch(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -524,7 +524,7 @@ func TestCustomMCPFetchToolCall_MapsToDeclaredWebFetch(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -564,7 +564,7 @@ func TestWebFetchToolCall_RewritesToDeclaredClientToolName(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -607,7 +607,7 @@ func TestTaskToolCall_IsAcceptedWhenDelegatedToolsStayWithinAllowedSet(t *testin
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -650,7 +650,7 @@ func TestTaskToolCall_IsRejectedWhenDelegatedToolsExceedAllowedSet(t *testing.T)
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -687,7 +687,7 @@ func TestSkillToolCall_IsAcceptedWhenClientDeclaredSkill(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -730,7 +730,7 @@ func TestBashToolCallDifferentIDsSameCommand_Deduped(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -775,7 +775,7 @@ func TestBashToolCallDifferentIDsDifferentCommands_BothAccepted(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -816,7 +816,7 @@ func TestToolCallMissingID_IsSuppressed(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -861,7 +861,7 @@ func TestSeedSideEffectDedupFromMessages_SuppressRepeatDeleteAcrossTurns(t *test
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -926,7 +926,7 @@ func TestSeedSideEffectDedupFromMessages_DoesNotSuppressFailedEditRetryAfterRead
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -1019,7 +1019,7 @@ func TestSeedSideEffectDedupFromMessages_SuppressesRepeatSuccessfulEditAcrossTur
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -1084,7 +1084,7 @@ func TestSeedSideEffectDedupFromMessages_DoesNotUseOlderTurnBeforeLatestUserText
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -1138,7 +1138,7 @@ func TestSeedSideEffectDedupFromMessages_DoesNotSuppressRepeatGitBashAcrossTurns
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,
@@ -1206,7 +1206,7 @@ func TestRepeatedReadOnlyBashToolCall_IsNotDeduped(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
-		&config.Config{OutputTokenMode: "final"},
+		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
 		false,

@@ -171,20 +171,8 @@ func (l *Logger) LogUpstreamSSE(eventType string, data string) {
 	if !l.enabled || !l.sseEnabled {
 		return
 	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.rawFile == nil {
-		f, err := os.OpenFile(filepath.Join(l.dir, "4_upstream_sse.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-		if err != nil {
-			return
-		}
-		l.rawFile = f
-	}
-
 	elapsed := time.Since(l.startTime).Milliseconds()
-	l.writeLimitedStream(l.rawFile, &l.rawBytes, fmt.Sprintf("[%dms] %s: %s\n", elapsed, eventType, data))
+	l.appendStream(&l.rawFile, &l.rawBytes, "4_upstream_sse.jsonl", fmt.Sprintf("[%dms] %s: %s\n", elapsed, eventType, data))
 }
 
 // LogOutputSSE 记录 5. 转换给客户端的 SSE（追加写入）
@@ -192,20 +180,22 @@ func (l *Logger) LogOutputSSE(event string, data string) {
 	if !l.enabled || !l.sseEnabled {
 		return
 	}
+	elapsed := time.Since(l.startTime).Milliseconds()
+	l.appendStream(&l.outFile, &l.outBytes, "5_client_sse.jsonl", fmt.Sprintf("[%dms] event: %s\ndata: %s\n\n", elapsed, event, data))
+}
 
+func (l *Logger) appendStream(file **os.File, written *int64, name, data string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.outFile == nil {
-		f, err := os.OpenFile(filepath.Join(l.dir, "5_client_sse.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if *file == nil {
+		opened, err := os.OpenFile(filepath.Join(l.dir, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			return
 		}
-		l.outFile = f
+		*file = opened
 	}
-
-	elapsed := time.Since(l.startTime).Milliseconds()
-	l.writeLimitedStream(l.outFile, &l.outBytes, fmt.Sprintf("[%dms] event: %s\ndata: %s\n\n", elapsed, event, data))
+	l.writeLimitedStream(*file, written, data)
 }
 
 func (l *Logger) writeLimitedStream(file *os.File, written *int64, data string) {

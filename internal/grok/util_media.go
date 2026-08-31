@@ -699,7 +699,7 @@ func isAppChatImageLimitResponse(resp map[string]interface{}) bool {
 	return false
 }
 
-func extractVideoProgress(resp map[string]interface{}) (progress int, videoURL, thumbnailURL string, ok bool) {
+func extractVideoProgress(resp map[string]interface{}) (progress int, videoURL string, ok bool) {
 	raw := mapAtAnyPath(resp,
 		[]string{"streamingVideoGenerationResponse"},
 		[]string{"streaming_video_generation_response"},
@@ -709,7 +709,7 @@ func extractVideoProgress(resp map[string]interface{}) (progress int, videoURL, 
 		[]string{"modelResponse", "streaming_video_generation_response"},
 	)
 	if raw == nil {
-		return 0, "", "", false
+		return 0, "", false
 	}
 	return intAtAnyPath(raw,
 			[]string{"progress"},
@@ -724,14 +724,6 @@ func extractVideoProgress(resp map[string]interface{}) (progress int, videoURL, 
 			[]string{"resultUrl"},
 			[]string{"result_url"},
 			[]string{"url"},
-		),
-		stringAtAnyPath(raw,
-			[]string{"thumbnailImageUrl"},
-			[]string{"thumbnailURL"},
-			[]string{"thumbnail_image_url"},
-			[]string{"thumbnailUrl"},
-			[]string{"posterUrl"},
-			[]string{"poster_url"},
 		), true
 }
 

@@ -173,7 +173,7 @@ func writeSSEStreamError(w http.ResponseWriter, flusher http.Flusher, logger *de
 
 // writeSSECodedError sends a typed SSE error frame followed by [DONE] and flushes.
 // Use this when the error code is not the generic stream_error.
-func writeSSECodedError(w http.ResponseWriter, flusher http.Flusher, message, errType, code string) {
-	writeSSEError(w, message, errType, code)
+func writeSSECodedError(w http.ResponseWriter, flusher http.Flusher, message, code string) {
+	writeSSEError(w, message, "server_error", code)
 	writeSSE(w, flusher, "", []byte("[DONE]"))
 }

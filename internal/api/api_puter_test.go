@@ -14,9 +14,6 @@ import (
 func TestRefreshAccountState_PuterRequiresAuthToken(t *testing.T) {
 	t.Parallel()
 
-	prevVerify := puterVerifyAccount
-	t.Cleanup(func() { puterVerifyAccount = prevVerify })
-
 	a := New(nil, "", "", &config.Config{})
 	acc := &store.Account{AccountType: "puter"}
 
@@ -33,21 +30,12 @@ func TestRefreshAccountState_PuterRequiresAuthToken(t *testing.T) {
 }
 
 func TestRefreshAccountState_PuterUsageFailureDoesNotFallbackToVerify(t *testing.T) {
-	prevVerify := puterVerifyAccount
 	prevUsage := puterFetchMonthlyUsage
-	t.Cleanup(func() {
-		puterVerifyAccount = prevVerify
-		puterFetchMonthlyUsage = prevUsage
-	})
+	t.Cleanup(func() { puterFetchMonthlyUsage = prevUsage })
 
 	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 		return nil, errors.New("usage endpoint unavailable")
 	}
-	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-		t.Fatal("puter verifier should not be called after usage sync failure")
-		return nil
-	}
-
 	a := New(nil, "", "", &config.Config{})
 	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
 
@@ -61,12 +49,8 @@ func TestRefreshAccountState_PuterUsageFailureDoesNotFallbackToVerify(t *testing
 }
 
 func TestRefreshAccountState_PuterSyncsMonthlyUsage(t *testing.T) {
-	prevVerify := puterVerifyAccount
 	prevUsage := puterFetchMonthlyUsage
-	t.Cleanup(func() {
-		puterVerifyAccount = prevVerify
-		puterFetchMonthlyUsage = prevUsage
-	})
+	t.Cleanup(func() { puterFetchMonthlyUsage = prevUsage })
 
 	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 		return &puter.MonthlyUsage{
@@ -76,11 +60,6 @@ func TestRefreshAccountState_PuterSyncsMonthlyUsage(t *testing.T) {
 			},
 		}, nil
 	}
-	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-		t.Fatal("verification ping should not run when usage sync succeeds")
-		return nil
-	}
-
 	a := New(nil, "", "", &config.Config{})
 	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
 
@@ -97,12 +76,8 @@ func TestRefreshAccountState_PuterSyncsMonthlyUsage(t *testing.T) {
 }
 
 func TestRefreshAccountState_PuterMonthlyUsageExhaustedCompletesWith402Status(t *testing.T) {
-	prevVerify := puterVerifyAccount
 	prevUsage := puterFetchMonthlyUsage
-	t.Cleanup(func() {
-		puterVerifyAccount = prevVerify
-		puterFetchMonthlyUsage = prevUsage
-	})
+	t.Cleanup(func() { puterFetchMonthlyUsage = prevUsage })
 
 	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 		return &puter.MonthlyUsage{
@@ -112,11 +87,6 @@ func TestRefreshAccountState_PuterMonthlyUsageExhaustedCompletesWith402Status(t 
 			},
 		}, nil
 	}
-	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-		t.Fatal("verification ping should not run when usage sync succeeds")
-		return nil
-	}
-
 	a := New(nil, "", "", &config.Config{})
 	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
 
@@ -136,21 +106,12 @@ func TestRefreshAccountState_PuterMonthlyUsageExhaustedCompletesWith402Status(t 
 }
 
 func TestRefreshAccountState_PuterPropagatesUpstreamStatus(t *testing.T) {
-	prevVerify := puterVerifyAccount
 	prevUsage := puterFetchMonthlyUsage
-	t.Cleanup(func() {
-		puterVerifyAccount = prevVerify
-		puterFetchMonthlyUsage = prevUsage
-	})
+	t.Cleanup(func() { puterFetchMonthlyUsage = prevUsage })
 
 	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 		return nil, errors.New("usage endpoint unavailable")
 	}
-	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-		t.Fatal("puter verifier should not be called after usage sync failure")
-		return nil
-	}
-
 	a := New(nil, "", "", &config.Config{})
 	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
 
@@ -167,21 +128,12 @@ func TestRefreshAccountState_PuterPropagatesUpstreamStatus(t *testing.T) {
 }
 
 func TestRefreshAccountState_PuterInsufficientFundsCompletesWith402Status(t *testing.T) {
-	prevVerify := puterVerifyAccount
 	prevUsage := puterFetchMonthlyUsage
-	t.Cleanup(func() {
-		puterVerifyAccount = prevVerify
-		puterFetchMonthlyUsage = prevUsage
-	})
+	t.Cleanup(func() { puterFetchMonthlyUsage = prevUsage })
 
 	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 		return nil, errors.New("usage endpoint unavailable")
 	}
-	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-		t.Fatal("puter verifier should not be called after usage sync failure")
-		return nil
-	}
-
 	a := New(nil, "", "", &config.Config{})
 	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
 

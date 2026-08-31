@@ -117,12 +117,11 @@ func (h *Handler) runTokenRefreshBatch(
 	tokenAccounts map[string][]*store.Account,
 	concurrency int,
 	onItem func(token string, ok bool),
-) (int, map[string]bool) {
+) map[string]bool {
 	concurrency = normalizeNSFWConcurrency(concurrency)
 
 	var (
 		mu      sync.Mutex
-		okCount int
 		results = make(map[string]bool, len(tokens))
 	)
 	sem := make(chan struct{}, concurrency)
@@ -174,9 +173,6 @@ func (h *Handler) runTokenRefreshBatch(
 
 			mu.Lock()
 			results[token] = success
-			if success {
-				okCount++
-			}
 			mu.Unlock()
 
 			if onItem != nil {
@@ -186,7 +182,7 @@ func (h *Handler) runTokenRefreshBatch(
 	}
 
 	wg.Wait()
-	return okCount, results
+	return results
 }
 
 func (h *Handler) HandleAdminTokensRefresh(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +205,7 @@ func (h *Handler) HandleAdminTokensRefresh(w http.ResponseWriter, r *http.Reques
 	}
 	tokenAccounts := collectGrokAccountsByToken(accounts)
 
-	_, results := h.runTokenRefreshBatch(r.Context(), tokens, req.Model, tokenAccounts, req.Concurrency, nil)
+	results := h.runTokenRefreshBatch(r.Context(), tokens, req.Model, tokenAccounts, req.Concurrency, nil)
 	out := map[string]interface{}{
 		"status":  "success",
 		"results": results,
@@ -241,8 +237,8 @@ func (h *Handler) HandleAdminTokensRefreshAsync(w http.ResponseWriter, r *http.R
 	task := newNSFWBatchTask(len(tokens), cancel)
 
 	go func() {
-		defer scheduleDeleteNSFWBatchTask(task.ID, nsfwBatchTaskTTL)
-		_, _ = h.runTokenRefreshBatch(ctx, tokens, req.Model, tokenAccounts, req.Concurrency, func(token string, ok bool) {
+		defer scheduleDeleteNSFWBatchTask(task.ID)
+		h.runTokenRefreshBatch(ctx, tokens, req.Model, tokenAccounts, req.Concurrency, func(token string, ok bool) {
 			task.record(token, ok, ok)
 		})
 		if ctx.Err() != nil {

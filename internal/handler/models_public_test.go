@@ -232,8 +232,8 @@ func TestHandleModels_WarpUsesAccountModelPool(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
-	if err := warp.SaveAccountModelChoicesForAccount(ctx, s, 1, []string{"auto-open"}); err != nil {
-		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
+	if err := warp.SaveAccountModelChoices(ctx, s, &warp.AccountModelChoices{Accounts: map[string][]string{"1": {"auto-open"}}}); err != nil {
+		t.Fatalf("SaveAccountModelChoices() error = %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models", nil)
@@ -277,8 +277,8 @@ func TestHandleModels_WarpExhaustedPaidAccountBecomesFreeOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
-	if err := warp.SaveAccountModelChoicesForAccount(ctx, s, 1, []string{"auto-open", "gpt-5-2-medium"}); err != nil {
-		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
+	if err := warp.SaveAccountModelChoices(ctx, s, &warp.AccountModelChoices{Accounts: map[string][]string{"1": {"auto-open", "gpt-5-2-medium"}}}); err != nil {
+		t.Fatalf("SaveAccountModelChoices() error = %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models", nil)
@@ -322,8 +322,8 @@ func TestHandleModels_WarpFreeAccountIsFreeOnlyWithRemainingQuota(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
-	if err := warp.SaveAccountModelChoicesForAccount(ctx, s, 1, []string{"auto-open", "gpt-5-2-medium"}); err != nil {
-		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
+	if err := warp.SaveAccountModelChoices(ctx, s, &warp.AccountModelChoices{Accounts: map[string][]string{"1": {"auto-open", "gpt-5-2-medium"}}}); err != nil {
+		t.Fatalf("SaveAccountModelChoices() error = %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models", nil)
@@ -393,8 +393,8 @@ func TestHandleModelByID_WarpRejectsModelOutsideAccountPool(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
-	if err := warp.SaveAccountModelChoicesForAccount(ctx, s, 1, []string{"auto-open"}); err != nil {
-		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
+	if err := warp.SaveAccountModelChoices(ctx, s, &warp.AccountModelChoices{Accounts: map[string][]string{"1": {"auto-open"}}}); err != nil {
+		t.Fatalf("SaveAccountModelChoices() error = %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models/gpt-5-2-medium", nil)

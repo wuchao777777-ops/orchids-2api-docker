@@ -317,12 +317,9 @@ func deleteNSFWBatchTask(id string) {
 	nsfwBatchTasksMu.Unlock()
 }
 
-func scheduleDeleteNSFWBatchTask(id string, ttl time.Duration) {
+func scheduleDeleteNSFWBatchTask(id string) {
 	go func() {
-		if ttl <= 0 {
-			ttl = nsfwBatchTaskTTL
-		}
-		time.Sleep(ttl)
+		time.Sleep(nsfwBatchTaskTTL)
 		deleteNSFWBatchTask(id)
 	}()
 }
@@ -497,7 +494,7 @@ func (h *Handler) HandleAdminNSFWEnableAsync(w http.ResponseWriter, r *http.Requ
 	task := newNSFWBatchTask(len(targets), cancel)
 
 	go func() {
-		defer scheduleDeleteNSFWBatchTask(task.ID, nsfwBatchTaskTTL)
+		defer scheduleDeleteNSFWBatchTask(task.ID)
 		_, _ = h.runNSFWEnableBatch(ctx, targets, tokenAccounts, req.Concurrency, func(masked string, res nsfwItemResult) {
 			task.record(masked, res.Success, res)
 		})

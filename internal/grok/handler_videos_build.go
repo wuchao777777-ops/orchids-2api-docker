@@ -191,7 +191,7 @@ func (h *Handler) pollBuildVideoJob(ctx context.Context, lease *consoleVideoJobL
 			return
 		}
 		videoURL, done, err := parseConsoleVideoStatus(body, func(progress int) {
-			h.updateVideoJobProgress(job, "in_progress", progress)
+			h.updateVideoJobProgress(job, progress)
 		})
 		if err != nil {
 			h.handleConsoleVideoJobError(job, lease, err)
@@ -268,7 +268,7 @@ func (h *Handler) resumeStoredBuildVideoJob(job *videoJob, timeout time.Duration
 		return
 	}
 	defer sess.Close()
-	h.updateVideoJobProgress(job, "in_progress", max(1, job.Progress))
+	h.updateVideoJobProgress(job, max(1, job.Progress))
 	h.pollBuildVideoJob(leaseCtx, lease, job, sess, job.UpstreamRequestID)
 }
 

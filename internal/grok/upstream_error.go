@@ -51,12 +51,11 @@ func newUpstreamError(status int, header http.Header, body []byte, nodeID string
 }
 
 // newCLIUpstreamError is newUpstreamError with a CLI-prefixed message.
-func newCLIUpstreamError(status int, header http.Header, body []byte, nodeID string) error {
+func newCLIUpstreamError(status int, header http.Header, body []byte) error {
 	return &grokUpstreamError{
 		status: status,
 		header: sanitizeUpstreamHeader(header),
 		body:   boundedUpstreamBody(body),
-		nodeID: nodeID,
 		prefix: "grok cli upstream",
 	}
 }

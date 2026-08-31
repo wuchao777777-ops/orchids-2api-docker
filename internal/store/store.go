@@ -135,12 +135,6 @@ type GrokWebQuotaSnapshot struct {
 // capabilities while model/capability filters keep paid requests away from it.
 const AccountStatusWarpQuotaExhausted = "warp_quota_exhausted"
 
-type Settings struct {
-	ID    int64  `json:"id"`
-	Key   string `json:"key"`
-	Value string `json:"value"`
-}
-
 type ApiKey struct {
 	ID            int64      `json:"id"`
 	Name          string     `json:"name"`
@@ -307,7 +301,6 @@ type videoJobStore interface {
 	SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error
 	GetStoredVideoJob(ctx context.Context, id, ownerHash string) (*StoredVideoJob, error)
 	ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob, error)
-	DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error
 	AcquireVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error)
 	RefreshVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error)
 	ReleaseVideoJobLease(ctx context.Context, id, ownerHash, holder string) (bool, error)
@@ -337,13 +330,11 @@ func New(opts Options) (*Store, error) {
 		_ = redisStore.Close()
 		return nil, fmt.Errorf("failed to migrate account credentials: %w", err)
 	}
-	if err := store.seedModels(); err != nil {
-		slog.Warn("failed to seed models in redis", "error", err)
-	}
+	store.seedModels()
 	return store, nil
 }
 
-func (s *Store) seedModels() error {
+func (s *Store) seedModels() {
 	ctx := context.Background()
 	s.cleanupDeprecatedModelIDs(ctx)
 	s.reconcileLatestPuterModels(ctx)
@@ -352,7 +343,7 @@ func (s *Store) seedModels() error {
 		s.ensureRequiredGrokChatModels(ctx)
 		s.backfillGrokRouteMetadata(ctx)
 		slog.Debug("Model seed skipped; existing model records preserved", "count", len(existing))
-		return nil
+		return
 	}
 	if err != nil {
 		slog.Warn("failed to inspect existing models before seed", "error", err)
@@ -376,7 +367,6 @@ func (s *Store) seedModels() error {
 	s.cleanupDeprecatedModelIDs(ctx)
 	s.reconcileLatestPuterModels(ctx)
 
-	return nil
 }
 
 func (s *Store) backfillGrokRouteMetadata(ctx context.Context) {
@@ -707,18 +697,6 @@ func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error
 	return key, nil
 }
 
-// ValidateApiKey is retained for callers that only need a boolean result.
-func (s *Store) ValidateApiKey(ctx context.Context, raw string) (bool, error) {
-	_, err := s.AuthorizeApiKey(ctx, raw)
-	if err == nil {
-		return true, nil
-	}
-	if err == ErrNoRows || err == ErrApiKeyExpired || err == ErrApiKeyRateLimited {
-		return false, nil
-	}
-	return false, err
-}
-
 func (s *Store) ListApiKeys(ctx context.Context) ([]*ApiKey, error) {
 	if s.apiKeys != nil {
 		return s.apiKeys.ListApiKeys(ctx)
@@ -815,13 +793,6 @@ func (s *Store) ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob, err
 		return nil, fmt.Errorf("video job store not configured")
 	}
 	return s.videoJobs.ListStoredVideoJobs(ctx)
-}
-
-func (s *Store) DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error {
-	if s == nil || s.videoJobs == nil {
-		return fmt.Errorf("video job store not configured")
-	}
-	return s.videoJobs.DeleteStoredVideoJob(ctx, id, ownerHash)
 }
 
 func (s *Store) AcquireVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error) {

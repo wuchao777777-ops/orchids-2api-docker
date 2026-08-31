@@ -46,7 +46,6 @@ const (
 	sseKeepAlive                   = ": keep-alive\n\n"
 	sseDeferredFlushFrameThreshold = 4
 	sseDeferredFlushByteThreshold  = 2048
-	sseBufferedWriteMax            = 4096
 )
 
 var (
@@ -161,8 +160,8 @@ func shouldFlushSSEImmediatelyBytes(event string, data []byte) bool {
 	return true
 }
 
-func (h *streamHandler) flushSSEBytesLocked(event string, data []byte, force bool) {
-	h.flushSSEWithLenLocked(event, len(data), shouldFlushSSEImmediatelyBytes(event, data), force)
+func (h *streamHandler) flushSSEBytesLocked(event string, data []byte) {
+	h.flushSSEWithLenLocked(event, len(data), shouldFlushSSEImmediatelyBytes(event, data), false)
 }
 
 func (h *streamHandler) flushSSEBytesLockedWithHint(event string, dataLen int, immediate bool, force bool) {
@@ -180,7 +179,6 @@ type streamHandler struct {
 	isStream            bool
 	suppressThinking    bool
 	useUpstreamUsage    bool
-	outputTokenMode     string
 	responseFormat      adapter.ResponseFormat
 	disallowToolCalls   bool
 	strictToolAllowlist bool
@@ -205,8 +203,6 @@ type streamHandler struct {
 	finalStopReason          string
 	outputTokens             int
 	inputTokens              int
-	cacheReadTokens          int
-	cacheCreationTokens      int
 	activeThinkingBlockIndex int
 	activeThinkingSSEIndex   int
 	activeTextBlockIndex     int
@@ -277,11 +273,6 @@ func newStreamHandler(
 		}
 	}
 
-	outputTokenMode := strings.ToLower(strings.TrimSpace(cfg.OutputTokenMode))
-	if outputTokenMode == "" {
-		outputTokenMode = "final"
-	}
-
 	h := &streamHandler{
 		config:           cfg,
 		workdir:          workdir,
@@ -290,7 +281,6 @@ func newStreamHandler(
 		isStream:         isStream,
 		logger:           logger,
 		suppressThinking: suppressThinking,
-		outputTokenMode:  outputTokenMode,
 		responseFormat:   responseFormat,
 
 		blockIndex:               -1,
@@ -413,7 +403,7 @@ func (h *streamHandler) writeSSEBytes(event string, data []byte) {
 			return
 		}
 		if written {
-			h.flushSSEBytesLocked(event, data, false)
+			h.flushSSEBytesLocked(event, data)
 		}
 		return
 	}
@@ -422,7 +412,7 @@ func (h *streamHandler) writeSSEBytes(event string, data []byte) {
 		h.markWriteErrorLocked(event, err)
 		return
 	}
-	h.flushSSEBytesLocked(event, data, false)
+	h.flushSSEBytesLocked(event, data)
 	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
 		h.logger.LogOutputSSE(event, string(data))
 	}
@@ -707,13 +697,6 @@ func (h *streamHandler) setUsageTokens(input, output int) {
 	if output >= 0 {
 		h.outputTokens = output
 	}
-}
-
-func (h *streamHandler) setCacheTokens(read, creation int) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.cacheReadTokens = read
-	h.cacheCreationTokens = creation
 }
 
 func (h *streamHandler) resetRoundState() {
@@ -1863,7 +1846,7 @@ func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) 
 	h.mu.Unlock()
 }
 
-func (h *streamHandler) flushPendingToolCalls(stopReason string) {
+func (h *streamHandler) flushPendingToolCalls() {
 	h.mu.Lock()
 	calls := slices.Clone(h.pendingToolCalls)
 	h.pendingToolCalls = nil
@@ -1926,7 +1909,7 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		if len(blockStopData) > 0 {
 			h.writeFinalSSEBytes("content_block_stop", blockStopData)
 		}
-		h.flushPendingToolCalls(stopReason)
+		h.flushPendingToolCalls()
 		h.finalizeOutputTokens()
 		h.mu.Lock()
 		h.writeSSEMessageDeltaLocked(stopReason, h.outputTokens, true)
@@ -1939,7 +1922,7 @@ func (h *streamHandler) finishResponse(stopReason string) {
 			h.writeFinalSSEBytes("message_stop", stopData)
 		}
 	} else {
-		h.flushPendingToolCalls(stopReason)
+		h.flushPendingToolCalls()
 		h.finalizeOutputTokens()
 	}
 
@@ -2091,7 +2074,7 @@ func (h *streamHandler) writeSSEBytesLocked(event string, data []byte) {
 			return
 		}
 		if written {
-			h.flushSSEBytesLocked(event, data, false)
+			h.flushSSEBytesLocked(event, data)
 		}
 		return
 	}
@@ -2099,7 +2082,7 @@ func (h *streamHandler) writeSSEBytesLocked(event string, data []byte) {
 		h.markWriteErrorLocked(event, err)
 		return
 	}
-	h.flushSSEBytesLocked(event, data, false)
+	h.flushSSEBytesLocked(event, data)
 	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
 		h.logger.LogOutputSSE(event, string(data))
 	}
@@ -2110,20 +2093,6 @@ func (h *streamHandler) writeSSEBytesLocked(event string, data []byte) {
 }
 
 // Event Handlers
-
-func (h *streamHandler) emitTextBlockWithMode(text string, final bool) {
-	if !h.isStream || text == "" {
-		return
-	}
-	h.mu.Lock()
-	h.hasTextOutput = true
-	h.blockIndex++
-	idx := h.blockIndex
-	h.writeSSEContentBlockStartTextLocked(idx, final)
-	h.writeSSEContentBlockDeltaTextLocked(idx, text, final)
-	h.writeSSEContentBlockStopLocked(idx, final)
-	h.mu.Unlock()
-}
 
 func (h *streamHandler) markTextOutput() {
 	h.mu.Lock()

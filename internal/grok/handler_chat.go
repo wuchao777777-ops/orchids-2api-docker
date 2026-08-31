@@ -1359,7 +1359,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			forEachImageCandidateFromValue(resp, true, true, 120, emitImageURL)
 		}
 		if spec.IsVideo {
-			if progress, videoURL, _, ok := extractVideoProgress(resp); ok {
+			if progress, videoURL, ok := extractVideoProgress(resp); ok {
 				if progress > 0 && progress < 100 {
 					emitChunk("", fmt.Sprintf("正在生成视频中，当前进度%d%%\n", progress), "", false)
 				}
@@ -1570,7 +1570,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 			forEachImageCandidateFromValue(resp, false, false, 0, addImageCandidate)
 		}
 		if spec.IsVideo {
-			if progress, vurl, _, ok := extractVideoProgress(resp); ok && progress >= 100 {
+			if progress, vurl, ok := extractVideoProgress(resp); ok && progress >= 100 {
 				videoURL = strings.TrimSpace(vurl)
 				if videoURL == "" {
 					videoURL = firstAssetURL(resp)

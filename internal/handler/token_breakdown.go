@@ -16,7 +16,7 @@ type inputTokenBreakdown struct {
 	Total               int
 }
 
-func estimateInputTokenBreakdown(promptText string, history []map[string]string, tools []interface{}) inputTokenBreakdown {
+func estimateInputTokenBreakdown(promptText string, tools []interface{}) inputTokenBreakdown {
 	var bd inputTokenBreakdown
 	promptTokens := tiktoken.EstimateTextTokens(promptText)
 	sysText := extractTaggedContent(promptText, "sys")
@@ -31,20 +31,11 @@ func estimateInputTokenBreakdown(promptText string, history []map[string]string,
 	bd.SystemContextTokens = sysTokens
 	bd.BasePromptTokens = promptTokens - sysTokens
 
-	for _, item := range history {
-		content := strings.TrimSpace(item["content"])
-		if content == "" {
-			continue
-		}
-		bd.HistoryTokens += tiktoken.EstimateTextTokens(content) + 15
-	}
-
 	bd.ToolsTokens = estimateCompactedToolsTokens(tools)
 
 	bd.Total = bd.BasePromptTokens + bd.SystemContextTokens + bd.HistoryTokens + bd.ToolsTokens
 	return bd
 }
-
 
 func estimateWarpInputTokenBreakdown(promptText, model string, messages []prompt.Message, systemItems []prompt.SystemItem, tools []interface{}, disableWarpTools bool, conversationID string) (inputTokenBreakdown, string, error) {
 	estimate, err := warp.EstimateInputTokens(promptText, model, messages, systemItems, tools, disableWarpTools, conversationID)

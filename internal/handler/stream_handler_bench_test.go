@@ -5,12 +5,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/goccy/go-json"
-
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
-	"orchids-api/internal/perf"
 )
 
 type discardStringByteWriter struct{}
@@ -81,38 +78,6 @@ func writeOpenAIFrameMultiWrite(w io.Writer, payload []byte) error {
 	return err
 }
 
-func writeSSEFrameBytesBuffered(w io.Writer, event string, data []byte) error {
-	totalLen := len(sseEventPrefix) + len(event) + len(sseDataJoin) + len(data) + len(sseLineBreak)
-	if totalLen <= 4096 {
-		buf := perf.AcquireByteBuffer()
-		defer perf.ReleaseByteBuffer(buf)
-		buf.Grow(totalLen)
-		_, _ = buf.WriteString(sseEventPrefix)
-		_, _ = buf.WriteString(event)
-		_, _ = buf.WriteString(sseDataJoin)
-		_, _ = buf.Write(data)
-		_, _ = buf.WriteString(sseLineBreak)
-		_, err := w.Write(buf.Bytes())
-		return err
-	}
-	return writeSSEFrameBytesMultiWrite(w, event, data)
-}
-
-func writeOpenAIFrameBuffered(w io.Writer, payload []byte) error {
-	totalLen := len(sseDataPrefix) + len(payload) + len(sseLineBreak)
-	if totalLen <= 4096 {
-		buf := perf.AcquireByteBuffer()
-		defer perf.ReleaseByteBuffer(buf)
-		buf.Grow(totalLen)
-		_, _ = buf.WriteString(sseDataPrefix)
-		_, _ = buf.Write(payload)
-		_, _ = buf.WriteString(sseLineBreak)
-		_, err := w.Write(buf.Bytes())
-		return err
-	}
-	return writeOpenAIFrameMultiWrite(w, payload)
-}
-
 func BenchmarkMaskDedupKey(b *testing.B) {
 	key := "bash:echo hello world"
 	b.ReportAllocs()
@@ -130,25 +95,6 @@ func BenchmarkToolValidationAndDedupWrite_Combined(b *testing.B) {
 		if !ok {
 			b.Fatal("unexpected invalid input")
 		}
-	}
-}
-
-func BenchmarkMarshalContentBlockDeltaText_MapStyle(b *testing.B) {
-	idx := 7
-	text := "hello world"
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		m := perf.AcquireMap()
-		m["type"] = "content_block_delta"
-		m["index"] = idx
-		delta := perf.AcquireMap()
-		delta["type"] = "text_delta"
-		delta["text"] = text
-		m["delta"] = delta
-		raw, _ := json.Marshal(m)
-		_ = string(raw)
-		perf.ReleaseMap(delta)
-		perf.ReleaseMap(m)
 	}
 }
 
@@ -248,16 +194,6 @@ func BenchmarkAppendSSEContentBlockDeltaInputJSON_ReusedBuffer(b *testing.B) {
 	}
 }
 
-func BenchmarkEmitTextBlock_Stream(b *testing.B) {
-	sh := newBenchmarkStreamHandler(b)
-	text := "hello world"
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		sh.blockIndex = -1
-		sh.emitTextBlockWithMode(text, false)
-	}
-}
-
 func BenchmarkEmitToolCallStream_Final(b *testing.B) {
 	sh := newBenchmarkStreamHandler(b)
 	call := toolCall{
@@ -292,35 +228,12 @@ func BenchmarkWriteSSEFrameBytes_MultiWrite(b *testing.B) {
 	}
 }
 
-func BenchmarkWriteSSEFrameBytes_Buffered(b *testing.B) {
-	writer := discardStringByteWriter{}
-	event := "content_block_delta"
-	data := []byte("{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}")
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if err := writeSSEFrameBytesBuffered(writer, event, data); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 func BenchmarkWriteOpenAIFrame_MultiWrite(b *testing.B) {
 	writer := discardStringByteWriter{}
 	payload := []byte("{\"id\":\"msg_1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		if err := writeOpenAIFrameMultiWrite(writer, payload); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkWriteOpenAIFrame_Buffered(b *testing.B) {
-	writer := discardStringByteWriter{}
-	payload := []byte("{\"id\":\"msg_1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}")
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if err := writeOpenAIFrameBuffered(writer, payload); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -343,29 +256,6 @@ func BenchmarkAppendJSONBytes_EscapedJSONLike(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		raw, _ := appendJSONBytes(dst[:0], value)
 		_ = raw
-	}
-}
-
-func BenchmarkMarshalContentBlockStartToolUse_MapStyle(b *testing.B) {
-	idx := 3
-	id := "tool_123"
-	name := "Write"
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		startMap := perf.AcquireMap()
-		startMap["type"] = "content_block_start"
-		startMap["index"] = idx
-		contentBlock := perf.AcquireMap()
-		contentBlock["type"] = "tool_use"
-		contentBlock["id"] = id
-		contentBlock["name"] = name
-		contentBlock["input"] = perf.AcquireMap()
-		startMap["content_block"] = contentBlock
-		raw, _ := json.Marshal(startMap)
-		_ = string(raw)
-		perf.ReleaseMap(contentBlock["input"].(map[string]interface{}))
-		perf.ReleaseMap(contentBlock)
-		perf.ReleaseMap(startMap)
 	}
 }
 

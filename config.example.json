@@ -43,7 +43,6 @@
   "grok_flaresolverr_url": "",
   "grok_clearance_mode": "manual",
   "grok_clearance_refresh_interval": 600,
-  "grok_ua_rotation_enabled": false,
 
   "fidelity_comment": "Upstream fidelity: the gateway relays client content verbatim by default. Set to explicitly re-enable legacy rewriting.",
   "cc_entrypoint_mode": "keep"

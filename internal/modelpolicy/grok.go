@@ -1,9 +1,6 @@
 package modelpolicy
 
-import (
-	"slices"
-	"strings"
-)
+import "strings"
 
 var publicGrokModelIDs = []string{
 	"grok-composer-2.5-fast",
@@ -108,10 +105,6 @@ func IsPublicGrokModelID(modelID string) bool {
 	id := strings.ToLower(strings.TrimSpace(modelID))
 	_, ok := publicGrokModelAllowlist[id]
 	return ok
-}
-
-func PublicGrokModelIDs() []string {
-	return slices.Clone(publicGrokModelIDs)
 }
 
 func IsVisibleGrokModel(modelID string, verified bool) bool {

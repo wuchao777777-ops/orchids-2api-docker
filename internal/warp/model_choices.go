@@ -22,10 +22,9 @@ type ModelChoice struct {
 }
 
 type ModelContextWindow struct {
-	Configurable bool
-	Min          uint32
-	Max          uint32
-	Default      uint32
+	Min     uint32
+	Max     uint32
+	Default uint32
 }
 
 type FeatureModelChoices struct {
@@ -207,17 +206,16 @@ type featureModelGroupResponse struct {
 			ModelRoutingHost string `json:"modelRoutingHost"`
 		} `json:"hostConfigs"`
 		ContextWindow struct {
-			IsConfigurable bool   `json:"isConfigurable"`
-			Min            uint32 `json:"min"`
-			Max            uint32 `json:"max"`
-			Default        uint32 `json:"default"`
+			Min     uint32 `json:"min"`
+			Max     uint32 `json:"max"`
+			Default uint32 `json:"default"`
 		} `json:"contextWindow"`
 	} `json:"choices"`
 }
 
 func normalizeFeatureModelGroup(raw featureModelGroupResponse) FeatureModelGroup {
 	group := FeatureModelGroup{
-		DefaultID: canonicalModelID(raw.DefaultID),
+		DefaultID: NormalizeModelID(raw.DefaultID),
 		Choices:   make([]ModelChoice, 0, len(raw.Choices)),
 	}
 	for _, choice := range raw.Choices {
@@ -232,10 +230,9 @@ func normalizeFeatureModelGroup(raw featureModelGroupResponse) FeatureModelGroup
 			normalized.CreditMultiplier = choice.UsageMetadata.CreditMultiplier
 			normalized.RequestMultiplier = choice.UsageMetadata.RequestMultiplier
 			normalized.ContextWindow = ModelContextWindow{
-				Configurable: choice.ContextWindow.IsConfigurable,
-				Min:          choice.ContextWindow.Min,
-				Max:          choice.ContextWindow.Max,
-				Default:      choice.ContextWindow.Default,
+				Min:     choice.ContextWindow.Min,
+				Max:     choice.ContextWindow.Max,
+				Default: choice.ContextWindow.Default,
 			}
 			for _, host := range choice.HostConfigs {
 				if host.Enabled && strings.TrimSpace(host.ModelRoutingHost) != "" {
@@ -267,7 +264,7 @@ func mergeFeatureModelGroup(current, next FeatureModelGroup) FeatureModelGroup {
 }
 
 func normalizeWarpModelChoice(id, name string) (ModelChoice, bool) {
-	id = canonicalModelID(id)
+	id = NormalizeModelID(id)
 	if id == "" {
 		return ModelChoice{}, false
 	}
@@ -282,7 +279,7 @@ func normalizeWarpModelChoice(id, name string) (ModelChoice, bool) {
 }
 
 func mergeWarpModelChoices(defaultID string, groups ...[]ModelChoice) []ModelChoice {
-	defaultID = canonicalModelID(defaultID)
+	defaultID = NormalizeModelID(defaultID)
 
 	out := make([]ModelChoice, 0)
 	seen := map[string]struct{}{}

@@ -813,7 +813,7 @@ func generateTopicTitle(text string) string {
 // stripSystemRemindersForMode 移除 <system-reminder>...</system-reminder>，避免误判 plan/suggestion 模式
 // 使用 LastIndex 查找结束标签，正确处理嵌套的字面量标签
 func stripSystemRemindersForMode(text string) string {
-	text = stripNestedModeTaggedBlock(text, "system-reminder")
+	text = stripModeTaggedBlock(text, "system-reminder", true)
 	for _, tag := range []string{
 		"local-command-caveat",
 		"command-name",
@@ -823,40 +823,12 @@ func stripSystemRemindersForMode(text string) string {
 		"local-command-stderr",
 		"local-command-exit-code",
 	} {
-		text = stripSimpleModeTaggedBlock(text, tag)
+		text = stripModeTaggedBlock(text, tag, false)
 	}
 	return text
 }
 
-func stripNestedModeTaggedBlock(text string, tag string) string {
-	startTag := "<" + tag + ">"
-	endTag := "</" + tag + ">"
-	if !strings.Contains(text, startTag) {
-		return text
-	}
-	var sb strings.Builder
-	sb.Grow(len(text))
-	i := 0
-	for i < len(text) {
-		start := strings.Index(text[i:], startTag)
-		if start == -1 {
-			sb.WriteString(text[i:])
-			break
-		}
-		sb.WriteString(text[i : i+start])
-		blockStart := i + start
-		endStart := blockStart + len(startTag)
-		end := strings.LastIndex(text[endStart:], endTag)
-		if end == -1 {
-			sb.WriteString(text[blockStart:])
-			break
-		}
-		i = endStart + end + len(endTag)
-	}
-	return sb.String()
-}
-
-func stripSimpleModeTaggedBlock(text string, tag string) string {
+func stripModeTaggedBlock(text string, tag string, nested bool) string {
 	startTag := "<" + tag + ">"
 	endTag := "</" + tag + ">"
 	if !strings.Contains(text, startTag) {
@@ -875,6 +847,9 @@ func stripSimpleModeTaggedBlock(text string, tag string) string {
 		blockStart := i + start
 		endStart := blockStart + len(startTag)
 		end := strings.Index(text[endStart:], endTag)
+		if nested {
+			end = strings.LastIndex(text[endStart:], endTag)
+		}
 		if end == -1 {
 			sb.WriteString(text[blockStart:])
 			break

@@ -928,20 +928,14 @@ func (s *anthropicStreamState) writeText(w io.Writer, text string) {
 }
 
 func (s *anthropicStreamState) writeThinking(w io.Writer, thinking string) {
-	if s.textIndex >= 0 {
-		s.closeBlock(w, s.textIndex)
-		s.textIndex = -1
-	}
-	if s.thinkIndex < 0 {
-		s.thinkIndex = s.startBlock(w, map[string]interface{}{"type": "thinking", "thinking": "", "signature": ""})
-	}
-	writeAnthropicSSE(w, "content_block_delta", map[string]interface{}{
-		"type": "content_block_delta", "index": s.thinkIndex,
-		"delta": map[string]interface{}{"type": "thinking_delta", "thinking": thinking},
-	})
+	s.writeThinkingDelta(w, "thinking_delta", "thinking", thinking)
 }
 
 func (s *anthropicStreamState) writeThinkingSignature(w io.Writer, signature string) {
+	s.writeThinkingDelta(w, "signature_delta", "signature", signature)
+}
+
+func (s *anthropicStreamState) writeThinkingDelta(w io.Writer, deltaType, field, value string) {
 	if s.textIndex >= 0 {
 		s.closeBlock(w, s.textIndex)
 		s.textIndex = -1
@@ -951,7 +945,7 @@ func (s *anthropicStreamState) writeThinkingSignature(w io.Writer, signature str
 	}
 	writeAnthropicSSE(w, "content_block_delta", map[string]interface{}{
 		"type": "content_block_delta", "index": s.thinkIndex,
-		"delta": map[string]interface{}{"type": "signature_delta", "signature": signature},
+		"delta": map[string]interface{}{"type": deltaType, field: value},
 	})
 }
 

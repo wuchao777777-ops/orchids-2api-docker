@@ -392,7 +392,7 @@ func (h *Handler) updateAccountStats(account *store.Account, inputTokens, output
 	}(account.ID, inputTokens, outputTokens)
 }
 
-func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient, snapshot *store.Account) {
+func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient) {
 	if account == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return
 	}

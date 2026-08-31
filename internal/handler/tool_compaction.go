@@ -6,8 +6,8 @@ import (
 
 	"github.com/goccy/go-json"
 
-	"orchids-api/internal/toolname"
 	"orchids-api/internal/tiktoken"
+	"orchids-api/internal/toolname"
 )
 
 const (
@@ -73,7 +73,7 @@ func collectIncomingToolNames(tools []interface{}) []string {
 
 	rawNames := make([]string, 0, len(tools))
 	for _, tool := range tools {
-		name, _, _ := extractIncomingToolSpecFields(tool)
+		name, _, _ := toolname.ExtractToolSpecFields(tool)
 		if name == "" {
 			continue
 		}
@@ -103,7 +103,7 @@ func declaredToolNames(tools []interface{}) []string {
 	}
 
 	for _, tool := range tools {
-		name, _, _ := extractIncomingToolSpecFields(tool)
+		name, _, _ := toolname.ExtractToolSpecFields(tool)
 		if name == "" {
 			continue
 		}
@@ -167,7 +167,7 @@ func compactIncomingTools(tools []interface{}) []interface{} {
 			continue
 		}
 
-		name, description, schema := extractIncomingToolSpecFields(rawMap)
+		name, description, schema := toolname.ExtractToolSpecFields(rawMap)
 		if name == "" {
 			continue
 		}
@@ -411,55 +411,6 @@ func schemaJSONLen(schema map[string]interface{}) int {
 		return 0
 	}
 	return len(raw)
-}
-
-func extractIncomingToolSpecFields(tool interface{}) (string, string, map[string]interface{}) {
-	tm, ok := tool.(map[string]interface{})
-	if !ok {
-		return "", "", nil
-	}
-
-	var name string
-	var description string
-	var schema map[string]interface{}
-
-	if fn, ok := tm["function"].(map[string]interface{}); ok {
-		if v, ok := fn["name"].(string); ok {
-			name = strings.TrimSpace(v)
-		}
-		if v, ok := fn["description"].(string); ok {
-			description = v
-		}
-		schema = extractIncomingToolSchemaMap(fn, "parameters", "input_schema", "inputSchema")
-	}
-	if name == "" {
-		if v, ok := tm["name"].(string); ok {
-			name = strings.TrimSpace(v)
-		}
-	}
-	if description == "" {
-		if v, ok := tm["description"].(string); ok {
-			description = v
-		}
-	}
-	if schema == nil {
-		schema = extractIncomingToolSchemaMap(tm, "input_schema", "inputSchema", "parameters")
-	}
-	return name, description, schema
-}
-
-func extractIncomingToolSchemaMap(tm map[string]interface{}, keys ...string) map[string]interface{} {
-	if tm == nil {
-		return nil
-	}
-	for _, key := range keys {
-		if v, ok := tm[key]; ok {
-			if schema, ok := v.(map[string]interface{}); ok {
-				return schema
-			}
-		}
-	}
-	return nil
 }
 
 func cleanJSONSchemaProperties(schema map[string]interface{}) map[string]interface{} {

@@ -31,7 +31,6 @@ type ClearanceConfig struct {
 	FlareSolverrURL string        // base URL of a FlareSolverr instance
 	TargetURL       string        // e.g. "https://grok.com"
 	Timeout         time.Duration // solve timeout
-	RefreshInterval time.Duration // how often to re-solve
 }
 
 // clearanceSolution is the outcome of a Cloudflare solve.

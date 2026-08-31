@@ -822,7 +822,7 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 	task := newNSFWBatchTask(len(tokens), cancel)
 
 	go func() {
-		defer scheduleDeleteNSFWBatchTask(task.ID, nsfwBatchTaskTTL)
+		defer scheduleDeleteNSFWBatchTask(task.ID)
 
 		details, totalCount := h.fetchOnlineAssetDetails(ctx, tokens, accountByToken,
 			func(token string, detail map[string]interface{}, ok bool) {
@@ -903,7 +903,7 @@ func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *htt
 	task := newNSFWBatchTask(len(tokens), cancel)
 
 	go func() {
-		defer scheduleDeleteNSFWBatchTask(task.ID, nsfwBatchTaskTTL)
+		defer scheduleDeleteNSFWBatchTask(task.ID)
 
 		var (
 			results   = map[string]map[string]interface{}{}

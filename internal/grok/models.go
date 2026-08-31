@@ -110,9 +110,7 @@ func ResolveModel(modelID string) (ModelSpec, bool) {
 	id := normalizeModelID(modelID)
 	// Provider prefixes are case-insensitive. Web prefixes are aliases because
 	// Web model names do not collide; Console prefixes are canonical.
-	if strings.HasPrefix(id, "web/") {
-		id = strings.TrimPrefix(id, "web/")
-	}
+	id = strings.TrimPrefix(id, "web/")
 	m, ok := modelByID[id]
 	return m, ok
 }

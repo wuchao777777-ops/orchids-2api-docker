@@ -244,7 +244,7 @@ func TestWriteResponsesStreamFromChat_ConvertsToolCallChunk(t *testing.T) {
 	b.WriteString("data: [DONE]\n\n")
 
 	rec := httptest.NewRecorder()
-	writeResponsesStreamFromChat(rec, "grok-4.20-0309", b.String())
+	writeResponsesStreamFromChatReaderRequest(rec, ResponsesCreateRequest{Model: "grok-4.20-0309"}, strings.NewReader(b.String()))
 
 	out := rec.Body.String()
 	if !strings.Contains(out, "response.output_item.added") || !strings.Contains(out, "response.function_call_arguments.done") {
@@ -266,7 +266,7 @@ func TestWriteResponsesStreamFromChatFailsEmptyAndPrematureStreams(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			writeResponsesStreamFromChatReader(recorder, "grok-4.6", strings.NewReader(input))
+			writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(input))
 			body := recorder.Body.String()
 			if !strings.Contains(body, "event: response.failed") || strings.Contains(body, "event: response.completed") {
 				t.Fatalf("body=%s", body)
@@ -328,7 +328,7 @@ func TestWriteResponsesStreamFromChatPreservesReasoningEvents(t *testing.T) {
 		`data: [DONE]`,
 	}, "\n\n")
 	recorder := httptest.NewRecorder()
-	writeResponsesStreamFromChat(recorder, "grok-4.3", raw)
+	writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-4.3"}, strings.NewReader(raw))
 	out := recorder.Body.String()
 	if !strings.Contains(out, `"type":"response.reasoning_summary_text.delta"`) || !strings.Contains(out, `"delta":"plan"`) {
 		t.Fatalf("reasoning events missing: %q", out)

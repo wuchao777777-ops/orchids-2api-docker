@@ -729,8 +729,7 @@
       btn.addEventListener("click", () => {
         const value = normalizeQuality(btn.dataset.imagineQuality);
         setToggle("#imagineQualityToggle", "imagineQuality", value);
-        const model = qualityModel(value);
-        saveState({ imagineQuality: value });
+		saveState({ imagineQuality: value });
       });
     });
     const prompt = $("imaginePrompt");

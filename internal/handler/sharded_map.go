@@ -40,46 +40,6 @@ func (m *ShardedMap[V]) getShard(key string) int {
 	return int(fnv1aHash(key) % ShardCount)
 }
 
-// Get 获取值
-func (m *ShardedMap[V]) Get(key string) (V, bool) {
-	idx := m.getShard(key)
-	m.shards[idx].mu.RLock()
-	val, ok := m.shards[idx].data[key]
-	m.shards[idx].mu.RUnlock()
-	return val, ok
-}
-
-// Set 设置值
-func (m *ShardedMap[V]) Set(key string, value V) {
-	idx := m.getShard(key)
-	m.shards[idx].mu.Lock()
-	m.shards[idx].data[key] = value
-	m.shards[idx].mu.Unlock()
-}
-
-// Delete 删除值
-func (m *ShardedMap[V]) Delete(key string) {
-	idx := m.getShard(key)
-	m.shards[idx].mu.Lock()
-	delete(m.shards[idx].data, key)
-	m.shards[idx].mu.Unlock()
-}
-
-// Range 遍历所有分片
-// 如果 fn 返回 false，则停止遍历
-func (m *ShardedMap[V]) Range(fn func(key string, value V) bool) {
-	for i := 0; i < ShardCount; i++ {
-		m.shards[i].mu.RLock()
-		for k, v := range m.shards[i].data {
-			if !fn(k, v) {
-				m.shards[i].mu.RUnlock()
-				return
-			}
-		}
-		m.shards[i].mu.RUnlock()
-	}
-}
-
 // Compute atomically reads, transforms, and writes a value under the shard lock.
 // fn receives the current value and whether it exists. It returns the new value
 // and whether to keep it (false = delete the key).

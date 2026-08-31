@@ -178,7 +178,7 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 				}
 			}
 			recordCLIUpstreamStatus(resp.StatusCode)
-			return nil, newCLIUpstreamError(resp.StatusCode, headerCopy, raw, "")
+			return nil, newCLIUpstreamError(resp.StatusCode, headerCopy, raw)
 		}
 
 		kind := ClassifyUpstreamResponse(resp.StatusCode, resp.Header, raw)
@@ -199,7 +199,7 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 		}
 
 		recordCLIUpstreamStatus(resp.StatusCode)
-		return nil, newCLIUpstreamError(resp.StatusCode, headerCopy, raw, "")
+		return nil, newCLIUpstreamError(resp.StatusCode, headerCopy, raw)
 	}
 }
 
@@ -286,7 +286,7 @@ func (c *CLIClient) doFallbackResponsesAt(ctx context.Context, acc *store.Accoun
 		return resp, nil
 	}
 	raw, headers := readBoundedResponse(resp)
-	return nil, newCLIUpstreamError(resp.StatusCode, headers, raw, "")
+	return nil, newCLIUpstreamError(resp.StatusCode, headers, raw)
 }
 
 func (c *CLIClient) doFallbackResource(ctx context.Context, acc *store.Account, method, path string) (*http.Response, error) {
@@ -318,7 +318,7 @@ func (c *CLIClient) doFallbackResource(ctx context.Context, acc *store.Account, 
 		return resp, nil
 	}
 	raw, headers := readBoundedResponse(resp)
-	return nil, newCLIUpstreamError(resp.StatusCode, headers, raw, "")
+	return nil, newCLIUpstreamError(resp.StatusCode, headers, raw)
 }
 
 // doResponseResource forwards GET/DELETE for a stored Build Responses
@@ -409,7 +409,7 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 			c.egress.InvalidateAffinityClearance("cli", "cli-default")
 			continue
 		}
-		return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw, "")
+		return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw)
 	}
 }
 
@@ -444,7 +444,7 @@ func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]stri
 		return nil, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newCLIUpstreamError(resp.StatusCode, resp.Header, body, "")
+		return nil, newCLIUpstreamError(resp.StatusCode, resp.Header, body)
 	}
 	var payload struct {
 		Data []struct {

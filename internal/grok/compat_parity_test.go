@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/modelpolicy"
 )
 
 func TestResolveModel_RejectsRemovedAliases(t *testing.T) {
@@ -58,25 +57,6 @@ func TestResolveModel_CurrentBuildMappings(t *testing.T) {
 		}
 		if spec.ModeID != tc.wantModeID {
 			t.Fatalf("%s modeID=%q want=%q", tc.modelID, spec.ModeID, tc.wantModeID)
-		}
-	}
-}
-
-func TestPublicGrokModelsAllResolveToAppChatSpecs(t *testing.T) {
-	for _, id := range modelpolicy.PublicGrokModelIDs() {
-		spec, ok := ResolveModel(id)
-		if !ok {
-			t.Fatalf("public Grok model %q is missing from SupportedModels", id)
-		}
-		if spec.ConsoleModel != "" {
-			t.Logf("public Grok model %q uses Console API only", id)
-			continue
-		}
-		if spec.UpstreamModel == "" {
-			t.Fatalf("public Grok model %q has empty UpstreamModel", id)
-		}
-		if IsDeprecatedModelID(id) {
-			t.Fatalf("public Grok model %q should not be deprecated", id)
 		}
 	}
 }

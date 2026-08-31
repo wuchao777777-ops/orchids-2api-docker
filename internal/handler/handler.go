@@ -730,7 +730,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	gateNoTools := false
 	toolGateReasons := make([]string, 0, 2)
 	toolGateMessage := ""
-	suppressThinking := noThinking
 	if suggestionMode {
 		gateNoTools = true
 		toolGateReasons = append(toolGateReasons, "suggestion_mode")
@@ -817,13 +816,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("Checkpoint: selectAccount success")
 	}
 
-	// 捕获账号快照，用于请求结束后检测 forceRefreshToken 是否更新了账号信息
-	var accountSnapshot *store.Account
-	if currentAccount != nil {
-		snap := *currentAccount
-		accountSnapshot = &snap
-	}
-
 	isWarpRequest := preSelectWarpRequest
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		isWarpRequest = true
@@ -875,7 +867,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
-	var promptHistory []map[string]string
 	var builtPrompt string
 	if isPuterRequest {
 		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
@@ -891,7 +882,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			builtPrompt = "warp request"
 		}
 	}
-	suppressThinking = noThinking
 	buildDuration := time.Since(startBuild)
 	if verboseDiagnostics {
 		slog.Debug("Prompt build completed", "duration", buildDuration)
@@ -922,14 +912,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 状态管理
 	// msgID is now managed by streamHandler
 
-	var chatHistory []interface{}
 	upstreamMessages := append([]prompt.Message(nil), req.Messages...)
-
-	// Pre-allocate chatHistory
-	chatHistory = make([]interface{}, len(promptHistory))
-	for i := range promptHistory {
-		chatHistory[i] = promptHistory[i]
-	}
 
 	if gateNoTools {
 		builtPrompt = injectToolGate(builtPrompt, toolGateMessage)
@@ -941,7 +924,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	logger.LogConvertedPrompt(builtPrompt)
 
-	breakdown := inputTokenBreakdown{}
+	breakdown := estimateInputTokenBreakdown(builtPrompt, effectiveTools)
 	breakdownProfile := "warp"
 	if isPuterRequest {
 		breakdownProfile = "puter"
@@ -952,12 +935,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			breakdownProfile = profile
 		} else {
 			slog.Warn("Warp token estimation fallback to generic breakdown", "error", err)
-			breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 		}
-	} else if isPuterRequest {
-		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
-	} else {
-		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	}
 	if verboseDiagnostics {
 		slog.Debug(
@@ -985,7 +963,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		inputTokens = h.estimateInputTokens(r.Context(), req.Model, builtPrompt)
 	}
 
-	var cacheReadTokens, cacheCreationTokens int
 	if h.config.EnableTokenCache && h.promptCache != nil {
 		sysText := ""
 		if len(req.System) > 0 {
@@ -1000,16 +977,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		rTokens, crTokens := h.promptCache.CheckPromptCache(
+		cacheReadTokens, _ := h.promptCache.CheckPromptCache(
 			h.config.TokenCacheStrategy,
 			breakdown.SystemContextTokens,
 			breakdown.ToolsTokens,
 			sysText,
 			toolsText,
 		)
-		cacheReadTokens = rTokens
-		cacheCreationTokens = crTokens
-
 		// Subtract cacheReadTokens from the base inputTokens
 		// if simulating prompt caching billing behavior
 		if inputTokens >= cacheReadTokens {
@@ -1018,7 +992,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sh := newStreamHandler(
-		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
+		h.config, w, logger, noThinking, isStream, responseFormat, effectiveWorkdir,
 	)
 	allowedToolNames := []string(nil)
 	allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
@@ -1036,7 +1010,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh.setEmptyOutputFallback(successfulFileMutationToolResultFallback(upstreamMessages))
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
-	sh.setCacheTokens(cacheReadTokens, cacheCreationTokens)
 	activeWarpConversationID := chatSessionID
 	// Capture the server-issued Warp conversation and bind it to both an
 	// explicit client session (when present) and every emitted tool call.
@@ -1133,7 +1106,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		warpFeatureConfig := h.resolveWarpFeatureConfig(r.Context(), currentAccount, mappedModel)
 		upstreamReq := upstream.UpstreamRequest{
 			Prompt:               builtPrompt,
-			ChatHistory:          chatHistory,
 			Workdir:              effectiveWorkdir,
 			Model:                mappedModel,
 			Stream:               req.Stream,
@@ -1141,11 +1113,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			System:               payloadSystem,
 			Tools:                effectiveTools,
 			NoTools:              gateNoTools,
-			NoThinking:           noThinking,
-			TraceID:              traceID,
 			ChatSessionID:        chatSessionID,
 			ProjectID:            "",
-			IsFirstPrompt:        false,
 			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
 			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
 			WarpToolContexts:     warpContinuationState.toolContexts,
@@ -1431,7 +1400,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sync state and update stats using helpers
-	h.syncWarpState(currentAccount, apiClient, accountSnapshot)
+	h.syncWarpState(currentAccount, apiClient)
 	h.updateAccountStats(currentAccount, sh.inputTokens, sh.outputTokens)
 
 	// Audit log

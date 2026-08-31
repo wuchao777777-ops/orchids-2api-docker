@@ -223,7 +223,7 @@ func toolSpecName(tool map[string]interface{}) string {
 }
 
 func extractToolName(tool map[string]interface{}) string {
-	name, _, _ := extractToolSpecFields(tool)
+	name, _, _ := ExtractToolSpecFields(tool)
 	return name
 }
 
@@ -288,7 +288,8 @@ func extractAliasStrings(raw interface{}) []string {
 	return out
 }
 
-func extractToolSpecFields(tool interface{}) (string, string, map[string]interface{}) {
+// ExtractToolSpecFields reads the common OpenAI/Anthropic tool definition shapes.
+func ExtractToolSpecFields(tool interface{}) (string, string, map[string]interface{}) {
 	tm, ok := tool.(map[string]interface{})
 	if !ok {
 		return "", "", nil

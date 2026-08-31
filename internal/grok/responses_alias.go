@@ -77,7 +77,6 @@ func rewriteBuildToolAliasSSE(dst io.Writer, source io.Reader, aliases map[strin
 }
 
 type buildToolAliasStreamCall struct {
-	identity  buildToolAliasIdentity
 	arguments strings.Builder
 }
 
@@ -125,7 +124,7 @@ func rewriteBuildToolAliasSSEBlock(block string, aliases map[string]buildToolAli
 		if identity, ok := aliases[alias]; ok && identity.Kind == "tool_search" {
 			id := firstNonEmpty(parseLooseStringAny(item["id"]), parseLooseStringAny(item["call_id"]))
 			if id != "" {
-				state.calls[id] = &buildToolAliasStreamCall{identity: identity}
+				state.calls[id] = &buildToolAliasStreamCall{}
 			}
 		}
 	}

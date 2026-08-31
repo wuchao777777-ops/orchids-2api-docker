@@ -450,13 +450,12 @@ func (s *session) currentRequestID() string {
 	return strings.TrimSpace(s.requestID)
 }
 
-func (s *session) beginRequest() string {
+func (s *session) beginRequest() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if strings.TrimSpace(s.requestID) == "" {
 		s.requestID = newSessionUUID()
 	}
-	return s.requestID
 }
 
 func InvalidateSession(accountID int64) {

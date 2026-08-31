@@ -4,13 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 )
 
-func TestValidateApiKey(t *testing.T) {
+func TestAuthorizeApiKeyBasicValidation(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "auth-test:"})
 	if err != nil {
@@ -31,21 +32,19 @@ func TestValidateApiKey(t *testing.T) {
 		t.Fatalf("CreateApiKey() error = %v", err)
 	}
 
-	valid, err := s.ValidateApiKey(context.Background(), raw)
-	if err != nil || !valid {
-		t.Fatalf("ValidateApiKey(valid) = %v, %v", valid, err)
+	authorized, err := s.AuthorizeApiKey(context.Background(), raw)
+	if err != nil || authorized == nil {
+		t.Fatalf("AuthorizeApiKey(valid) = %#v, %v", authorized, err)
 	}
-	valid, err = s.ValidateApiKey(context.Background(), "sk-wrong")
-	if err != nil || valid {
-		t.Fatalf("ValidateApiKey(wrong) = %v, %v", valid, err)
+	if _, err = s.AuthorizeApiKey(context.Background(), "sk-wrong"); !errors.Is(err, ErrNoRows) {
+		t.Fatalf("AuthorizeApiKey(wrong) error = %v, want ErrNoRows", err)
 	}
 	key.Enabled = false
 	if err := s.UpdateApiKey(context.Background(), key); err != nil {
 		t.Fatalf("UpdateApiKey() error = %v", err)
 	}
-	valid, err = s.ValidateApiKey(context.Background(), raw)
-	if err != nil || valid {
-		t.Fatalf("ValidateApiKey(disabled) = %v, %v", valid, err)
+	if _, err = s.AuthorizeApiKey(context.Background(), raw); !errors.Is(err, ErrNoRows) {
+		t.Fatalf("AuthorizeApiKey(disabled) error = %v, want ErrNoRows", err)
 	}
 }
 
