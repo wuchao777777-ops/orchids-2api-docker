@@ -497,7 +497,3 @@ func AppendOpenAIChunk(dst []byte, msgID string, created int64, event string, da
 	dst = ensureOpenAIChunkCapacity(dst, len(raw))
 	return append(dst, raw...), true
 }
-
-func BuildOpenAIChunk(msgID string, created int64, event string, data []byte) ([]byte, bool) {
-	return AppendOpenAIChunk(nil, msgID, created, event, data)
-}

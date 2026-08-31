@@ -77,23 +77,6 @@ func mapKeys(m map[string]interface{}) []string {
 	return slices.Collect(maps.Keys(m))
 }
 
-func writeSSEFrame(w io.Writer, event, data string) error {
-	if _, err := io.WriteString(w, sseEventPrefix); err != nil {
-		return err
-	}
-	if _, err := io.WriteString(w, event); err != nil {
-		return err
-	}
-	if _, err := io.WriteString(w, sseDataJoin); err != nil {
-		return err
-	}
-	if _, err := io.WriteString(w, data); err != nil {
-		return err
-	}
-	_, err := io.WriteString(w, sseLineBreak)
-	return err
-}
-
 func writeOpenAIFrame(w io.Writer, payload []byte) error {
 	if _, err := w.Write(sseDataPrefixBytes); err != nil {
 		return err
@@ -414,38 +397,6 @@ func (h *streamHandler) release() {
 	}
 }
 
-func (h *streamHandler) writeSSE(event, data string) {
-	if !h.isStream {
-		return
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.hasReturn {
-		return
-	}
-	if h.responseFormat == adapter.FormatOpenAI {
-		written, err := h.writeOpenAISSE(event, data)
-		if err != nil {
-			h.markWriteErrorLocked(event, err)
-			return
-		}
-		if written {
-			h.flushSSELocked(event, data, false)
-		}
-		return
-	}
-
-	if err := writeSSEFrame(h.w, event, data); err != nil {
-		h.markWriteErrorLocked(event, err)
-		return
-	}
-	h.flushSSELocked(event, data, false)
-
-	if h.config != nil && h.config.DebugEnabled && h.config.DebugLogSSE {
-		h.logger.LogOutputSSE(event, data)
-	}
-}
-
 func (h *streamHandler) writeSSEBytes(event string, data []byte) {
 	if !h.isStream {
 		return
@@ -477,9 +428,6 @@ func (h *streamHandler) writeSSEBytes(event string, data []byte) {
 	}
 }
 
-func (h *streamHandler) writeOpenAISSE(event, data string) (bool, error) {
-	return h.writeOpenAISSEBytes(event, []byte(data))
-}
 func (h *streamHandler) writeOpenAISSEBytes(event string, data []byte) (bool, error) {
 	raw, ok := adapter.AppendOpenAIChunk(h.openAIChunkScratch[:0], h.msgID, h.startTime.Unix(), event, data)
 	if !ok {

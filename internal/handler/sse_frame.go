@@ -147,22 +147,6 @@ func appendSSEMessageStart(dst []byte, msgID, model string, inputTokens, outputT
 	return dst, nil
 }
 
-func appendSSEMessageStartNoUsage(dst []byte, msgID, model string) ([]byte, error) {
-	dst = append(dst, `{"type":"message_start","message":{"id":`...)
-	var err error
-	dst, err = appendJSONBytes(dst, msgID)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `,"type":"message","role":"assistant","content":[],"model":`...)
-	dst, err = appendJSONBytes(dst, model)
-	if err != nil {
-		return nil, err
-	}
-	dst = append(dst, `}}`...)
-	return dst, nil
-}
-
 func appendSSEContentBlockStartText(dst []byte, index int) ([]byte, error) {
 	dst = append(dst, `{"type":"content_block_start","index":`...)
 	dst = strconv.AppendInt(dst, int64(index), 10)
@@ -242,10 +226,6 @@ func appendSSEMessageDelta(dst []byte, stopReason string, outputTokens int) ([]b
 	return dst, nil
 }
 
-func marshalSSEContentBlockStartToolUseBytes(index int, id, name string) ([]byte, error) {
-	return appendSSEContentBlockStartToolUse(make([]byte, 0, 128+len(id)+len(name)), index, id, name)
-}
-
 func marshalSSEMessageStartBytes(msgID, model string, inputTokens, outputTokens int) ([]byte, error) {
 	return appendSSEMessageStart(make([]byte, 0, 192+len(msgID)+len(model)), msgID, model, inputTokens, outputTokens)
 }
@@ -254,20 +234,8 @@ func marshalSSEContentBlockStartTextBytes(index int) ([]byte, error) {
 	return appendSSEContentBlockStartText(make([]byte, 0, 96), index)
 }
 
-func marshalSSEContentBlockStartThinkingBytes(index int, signature string) ([]byte, error) {
-	return appendSSEContentBlockStartThinking(make([]byte, 0, 112+len(signature)), index, signature)
-}
-
-func marshalSSEContentBlockDeltaInputJSONBytes(index int, partialJSON string) ([]byte, error) {
-	return appendSSEContentBlockDeltaInputJSON(make([]byte, 0, 96+len(partialJSON)*2), index, partialJSON)
-}
-
 func marshalSSEContentBlockDeltaTextBytes(index int, text string) ([]byte, error) {
 	return appendSSEContentBlockDeltaText(make([]byte, 0, 80+len(text)), index, text)
-}
-
-func marshalSSEContentBlockDeltaThinkingBytes(index int, thinking string) ([]byte, error) {
-	return appendSSEContentBlockDeltaThinking(make([]byte, 0, 88+len(thinking)), index, thinking)
 }
 
 func marshalSSEContentBlockStopBytes(index int) ([]byte, error) {

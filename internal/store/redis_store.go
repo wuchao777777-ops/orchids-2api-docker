@@ -5,11 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/goccy/go-json"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/util"
 
@@ -38,18 +39,6 @@ var (
 			redis.call("EXPIRE", KEYS[1], tonumber(ARGV[1]))
 		end
 		return count
-	`)
-	incrementRequestCountScript = redis.NewScript(`
-		local key = KEYS[1]
-		local now_str = ARGV[1]
-		local val = redis.call("GET", key)
-		if not val then return nil end
-		local acc = cjson.decode(val)
-		acc.request_count = (acc.request_count or 0) + 1
-		acc.last_used_at = now_str
-		acc.updated_at = now_str
-		redis.call("SET", key, cjson.encode(acc))
-		return "OK"
 	`)
 	incrementAccountStatsScript = redis.NewScript(`
 		local key = KEYS[1]
@@ -365,21 +354,6 @@ func (s *redisStore) GetEnabledAccounts(ctx context.Context) ([]*Account, error)
 		return nil, err
 	}
 	return s.getAccountsByIDs(ctx, ids, true)
-}
-
-func (s *redisStore) IncrementRequestCount(ctx context.Context, id int64) error {
-	if s == nil || s.client == nil {
-		return fmt.Errorf("redis store not configured")
-	}
-	if id == 0 {
-		return nil
-	}
-	nowStr := time.Now().Format(time.RFC3339Nano)
-	err := incrementRequestCountScript.Run(ctx, s.client, []string{s.accountsKey(id)}, nowStr).Err()
-	if err != nil && err != redis.Nil {
-		return err
-	}
-	return nil
 }
 
 func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error {
@@ -941,10 +915,6 @@ func (s *redisStore) GetReasoningReplay(ctx context.Context, model, sessionKey s
 		return nil, ErrNoRows
 	}
 	return &replay, nil
-}
-
-func (s *redisStore) DeleteReasoningReplay(ctx context.Context, model, sessionKey string) error {
-	return s.client.Del(ctx, s.reasoningReplayKey(model, sessionKey)).Err()
 }
 
 func (s *redisStore) sessionAffinityKey(provider, model, sessionKey string) string {

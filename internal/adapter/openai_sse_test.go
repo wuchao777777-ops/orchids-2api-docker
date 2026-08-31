@@ -159,7 +159,7 @@ func TestBuildOpenAIChunk(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			raw, ok := BuildOpenAIChunk("msg_1", 123, tt.event, tt.data)
+			raw, ok := AppendOpenAIChunk(nil, "msg_1", 123, tt.event, tt.data)
 			if ok != tt.wantOK {
 				t.Fatalf("ok=%v want=%v", ok, tt.wantOK)
 			}
@@ -282,7 +282,7 @@ func TestAppendOpenAIChunkMatchesBuild(t *testing.T) {
 	buf := make([]byte, 0, 512)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			want, wantOK := BuildOpenAIChunk("msg_1", 123, tt.event, tt.data)
+			want, wantOK := AppendOpenAIChunk(nil, "msg_1", 123, tt.event, tt.data)
 			got, gotOK := AppendOpenAIChunk(buf[:0], "msg_1", 123, tt.event, tt.data)
 			if gotOK != wantOK {
 				t.Fatalf("ok=%v want=%v", gotOK, wantOK)
@@ -302,7 +302,7 @@ func BenchmarkBuildOpenAIChunk_MessageStart(b *testing.B) {
 	data := []byte("{\"message\":{\"model\":\"claude-3-7-sonnet\"}}")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = BuildOpenAIChunk("msg_1", 123, "message_start", data)
+		_, _ = AppendOpenAIChunk(nil, "msg_1", 123, "message_start", data)
 	}
 }
 
@@ -310,7 +310,7 @@ func BenchmarkBuildOpenAIChunk_ContentBlockDeltaText(b *testing.B) {
 	data := []byte("{\"delta\":{\"type\":\"text_delta\",\"text\":\"hello world\"}}")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = BuildOpenAIChunk("msg_1", 123, "content_block_delta", data)
+		_, _ = AppendOpenAIChunk(nil, "msg_1", 123, "content_block_delta", data)
 	}
 }
 
@@ -318,7 +318,7 @@ func BenchmarkBuildOpenAIChunk_ContentBlockDeltaThinking(b *testing.B) {
 	data := []byte("{\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"step by step\"}}")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = BuildOpenAIChunk("msg_1", 123, "content_block_delta", data)
+		_, _ = AppendOpenAIChunk(nil, "msg_1", 123, "content_block_delta", data)
 	}
 }
 
@@ -326,7 +326,7 @@ func BenchmarkBuildOpenAIChunk_ContentBlockDeltaInputJSON(b *testing.B) {
 	data := []byte("{\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"a\\\":1,\\\"b\\\":2}\"}}")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = BuildOpenAIChunk("msg_1", 123, "content_block_delta", data)
+		_, _ = AppendOpenAIChunk(nil, "msg_1", 123, "content_block_delta", data)
 	}
 }
 
@@ -334,7 +334,7 @@ func BenchmarkBuildOpenAIChunk_ContentBlockStartToolUse(b *testing.B) {
 	data := []byte("{\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_123\",\"name\":\"Write\"}}")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = BuildOpenAIChunk("msg_1", 123, "content_block_start", data)
+		_, _ = AppendOpenAIChunk(nil, "msg_1", 123, "content_block_start", data)
 	}
 }
 
@@ -342,7 +342,7 @@ func BenchmarkBuildOpenAIChunk_MessageDelta(b *testing.B) {
 	data := []byte("{\"delta\":{\"stop_reason\":\"tool_use\"}}")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = BuildOpenAIChunk("msg_1", 123, "message_delta", data)
+		_, _ = AppendOpenAIChunk(nil, "msg_1", 123, "message_delta", data)
 	}
 }
 

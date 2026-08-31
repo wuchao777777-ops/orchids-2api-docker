@@ -1,30 +1,8 @@
 package errors
 
 import (
-	"errors"
 	"testing"
 )
-
-func TestIsAccountAuthFailure(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "nil", err: nil, want: false},
-		{name: "signed out", err: errors.New("signed out: no active sessions found"), want: true},
-		{name: "forbidden", err: errors.New("HTTP 403 forbidden"), want: true},
-		{name: "rate limit", err: errors.New("too many requests"), want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsAccountAuthFailure(tt.err); got != tt.want {
-				t.Fatalf("IsAccountAuthFailure(%v) = %v, want %v", tt.err, got, tt.want)
-			}
-		})
-	}
-}
 
 func TestClassifyUpstreamError(t *testing.T) {
 	tests := []struct {

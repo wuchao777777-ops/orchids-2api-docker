@@ -678,12 +678,6 @@ func looksLikeOptimizationRequest(text string) bool {
 	)
 }
 
-func explicitlyRequestsDeepAnalysis(text string) bool {
-	return containsNormalizedRequestText(text,
-		"深入分析", "详细分析", "深层分析", "全面分析", "deep analysis", "detailed analysis", "in-depth analysis",
-	)
-}
-
 func isTopicClassifierRequest(req ClaudeRequest) bool {
 	for _, item := range req.System {
 		if strings.ToLower(strings.TrimSpace(item.Type)) != "text" {

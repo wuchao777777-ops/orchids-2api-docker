@@ -79,11 +79,8 @@ func TestEstimatorMatchesEstimateTextTokens(t *testing.T) {
 			if got := estimator.Count(); got != want {
 				t.Fatalf("count=%d want=%d joined=%q", got, want, joined)
 			}
-			if !estimator.HasText() {
-				t.Fatal("expected estimator to record text")
-			}
 			estimator.Reset()
-			if estimator.Count() != 0 || estimator.HasText() {
+			if estimator.Count() != 0 {
 				t.Fatal("expected reset estimator")
 			}
 		})

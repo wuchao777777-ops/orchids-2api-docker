@@ -75,16 +75,6 @@ func ClassifyAccountStatus(errStr string) string {
 	}
 }
 
-// IsAccountAuthFailure reports whether err represents an authentication or
-// authorization failure at the account level.
-func IsAccountAuthFailure(err error) bool {
-	if err == nil {
-		return false
-	}
-	status := ClassifyAccountStatus(err.Error())
-	return status == "401" || status == "403"
-}
-
 // UpstreamErrorClass describes the category and retry semantics of an upstream error.
 type UpstreamErrorClass struct {
 	Category      string

@@ -168,10 +168,6 @@ func (h *Handler) missingThinkingCooldown() time.Duration {
 	return h.cfg.GrokMissingThinkingCooldown()
 }
 
-func gateResponseForThinking(resp *http.Response) (bool, error) {
-	return gateResponseForThinkingWithOptions(context.Background(), resp, 30*time.Second, 32)
-}
-
 type thinkingGateRead struct {
 	data []byte
 	err  error
@@ -277,10 +273,6 @@ func (r *thinkingGateChannelReader) Read(target []byte) (int, error) {
 	n := copy(target, r.pending)
 	r.pending = r.pending[n:]
 	return n, nil
-}
-
-func qualityPayloadNeedsRetry(data []byte) bool {
-	return qualityPayloadNeedsRetryWithMin(data, 32)
 }
 
 func qualityPayloadNeedsRetryWithMin(data []byte, minVisible int) bool {

@@ -31,13 +31,6 @@ type keyConcurrencyEntry struct {
 	active int
 }
 
-// APIKeyConcurrency enforces the validated key's concurrent-request policy.
-// A zero limit remains unlimited for backward compatibility. The entry is
-// removed at zero so deleted keys cannot leave an unbounded local map behind.
-func APIKeyConcurrency(next http.HandlerFunc) http.HandlerFunc {
-	return APIKeyConcurrencyWithTracker(next, nil)
-}
-
 // APIKeyConcurrencyWithTracker uses the deployment-wide Redis tracker when
 // available, making the key limit atomic across replicas. Negative tracker IDs
 // form a namespace disjoint from positive account IDs.
@@ -263,12 +256,6 @@ func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next 
 
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
-}
-
-func SessionAuth(adminPass, adminToken string, next http.HandlerFunc) http.HandlerFunc {
-	return SessionAuthDynamic(func() (string, string) {
-		return adminPass, adminToken
-	}, next)
 }
 
 func PublicKeyAuth(publicKey string, next http.HandlerFunc) http.HandlerFunc {

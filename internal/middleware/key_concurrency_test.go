@@ -14,11 +14,11 @@ func TestAPIKeyConcurrencyRejectsSecondActiveRequest(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	next := APIKeyConcurrency(func(w http.ResponseWriter, _ *http.Request) {
+	next := APIKeyConcurrencyWithTracker(func(w http.ResponseWriter, _ *http.Request) {
 		once.Do(func() { close(entered) })
 		<-release
 		w.WriteHeader(http.StatusNoContent)
-	})
+	}, nil)
 	wrapped := APIKeyAuth(func() bool { return true }, func(context.Context, string) (*APIKeyPrincipal, error) {
 		return &APIKeyPrincipal{ID: 7, MaxConcurrent: 1}, nil
 	}, next)

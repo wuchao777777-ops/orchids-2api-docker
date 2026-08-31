@@ -10,16 +10,14 @@ func isASCIIWordByte(b byte) bool {
 }
 
 type Estimator struct {
-	tokens  float64
-	inWord  bool
-	hasText bool
+	tokens float64
+	inWord bool
 }
 
 func (e *Estimator) Add(text string) {
 	if text == "" {
 		return
 	}
-	e.hasText = true
 	for _, r := range text {
 		if r < 128 {
 			if isASCIIWordByte(byte(r)) {
@@ -48,7 +46,6 @@ func (e *Estimator) AddBytes(text []byte) {
 	if len(text) == 0 {
 		return
 	}
-	e.hasText = true
 	for len(text) > 0 {
 		if text[0] < utf8.RuneSelf {
 			b := text[0]
@@ -86,14 +83,9 @@ func (e *Estimator) Count() int {
 	return int(math.Round(tokens))
 }
 
-func (e *Estimator) HasText() bool {
-	return e.hasText
-}
-
 func (e *Estimator) Reset() {
 	e.tokens = 0
 	e.inWord = false
-	e.hasText = false
 }
 
 // EstimateTextTokens estimates token count for mixed ASCII and CJK text.

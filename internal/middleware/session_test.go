@@ -136,7 +136,7 @@ func TestAPIKeyAuthEnforcesDenialsAndModelPolicy(t *testing.T) {
 
 func TestSessionAuth_AdminPassBearer(t *testing.T) {
 	called := false
-	handler := SessionAuth("admin123", "", func(w http.ResponseWriter, r *http.Request) {
+	handler := SessionAuthDynamic(func() (string, string) { return "admin123", "" }, func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -156,7 +156,7 @@ func TestSessionAuth_AdminPassBearer(t *testing.T) {
 
 func TestSessionAuth_QueryAppKey(t *testing.T) {
 	called := false
-	handler := SessionAuth("admin123", "admintoken", func(w http.ResponseWriter, r *http.Request) {
+	handler := SessionAuthDynamic(func() (string, string) { return "admin123", "admintoken" }, func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -175,7 +175,7 @@ func TestSessionAuth_QueryAppKey(t *testing.T) {
 
 func TestSessionAuth_QueryPublicKey(t *testing.T) {
 	called := false
-	handler := SessionAuth("admin123", "admintoken", func(w http.ResponseWriter, r *http.Request) {
+	handler := SessionAuthDynamic(func() (string, string) { return "admin123", "admintoken" }, func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -194,7 +194,7 @@ func TestSessionAuth_QueryPublicKey(t *testing.T) {
 
 func TestSessionAuth_Unauthorized(t *testing.T) {
 	called := false
-	handler := SessionAuth("admin123", "admintoken", func(w http.ResponseWriter, r *http.Request) {
+	handler := SessionAuthDynamic(func() (string, string) { return "admin123", "admintoken" }, func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})

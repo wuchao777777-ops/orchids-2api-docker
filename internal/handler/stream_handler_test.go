@@ -3,13 +3,14 @@ package handler
 import (
 	"bytes"
 	"errors"
-	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
@@ -55,7 +56,7 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 
 	expectedToolID := `tool_"1`
 	expectedToolName := "Wr" + newline + "ite"
-	raw, err = marshalSSEContentBlockStartToolUseBytes(3, expectedToolID, expectedToolName)
+	raw, err = appendSSEContentBlockStartToolUse(nil, 3, expectedToolID, expectedToolName)
 	if err != nil {
 		t.Fatalf("marshal tool start: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	}
 
 	expectedSignature := "sig\"" + newline + "next"
-	rawBytes, err := marshalSSEContentBlockStartThinkingBytes(4, expectedSignature)
+	rawBytes, err := appendSSEContentBlockStartThinking(nil, 4, expectedSignature)
 	if err != nil {
 		t.Fatalf("marshal thinking start: %v", err)
 	}
@@ -83,7 +84,7 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	}
 
 	expectedPartialJSON := "{\"path\":\"a.txt\",\"content\":\"he\\\"llo" + newline + "next\"}"
-	rawBytes, err = marshalSSEContentBlockDeltaInputJSONBytes(5, expectedPartialJSON)
+	rawBytes, err = appendSSEContentBlockDeltaInputJSON(nil, 5, expectedPartialJSON)
 	if err != nil {
 		t.Fatalf("marshal input_json delta: %v", err)
 	}
@@ -133,19 +134,6 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	usageObj := messageObj["usage"].(map[string]any)
 	if int(usageObj["input_tokens"].(float64)) != 12 || int(usageObj["output_tokens"].(float64)) != 0 {
 		t.Fatalf("unexpected usage object: %#v", usageObj)
-	}
-
-	msgStartNoUsageRaw, err := appendSSEMessageStartNoUsage(nil, "dup", "claude-test")
-	if err != nil {
-		t.Fatalf("marshal message start no usage: %v", err)
-	}
-	var msgStartNoUsage map[string]any
-	if err := json.Unmarshal(msgStartNoUsageRaw, &msgStartNoUsage); err != nil {
-		t.Fatalf("unmarshal message start no usage: %v", err)
-	}
-	messageNoUsageObj := msgStartNoUsage["message"].(map[string]any)
-	if _, ok := messageNoUsageObj["usage"]; ok {
-		t.Fatalf("expected no usage field, got: %#v", messageNoUsageObj)
 	}
 
 	plainText := "hello ??"
@@ -211,7 +199,7 @@ func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
 	}{
 		{
 			name:    "tool start",
-			marshal: func() ([]byte, error) { return marshalSSEContentBlockStartToolUseBytes(3, `tool_"1`, "Wr\nite") },
+			marshal: func() ([]byte, error) { return appendSSEContentBlockStartToolUse(nil, 3, `tool_"1`, "Wr\nite") },
 			appendTo: func(dst []byte) ([]byte, error) {
 				return appendSSEContentBlockStartToolUse(dst, 3, `tool_"1`, "Wr\nite")
 			},
@@ -225,7 +213,7 @@ func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
 		},
 		{
 			name:    "thinking start",
-			marshal: func() ([]byte, error) { return marshalSSEContentBlockStartThinkingBytes(5, "sig\n123") },
+			marshal: func() ([]byte, error) { return appendSSEContentBlockStartThinking(nil, 5, "sig\n123") },
 			appendTo: func(dst []byte) ([]byte, error) {
 				return appendSSEContentBlockStartThinking(dst, 5, "sig\n123")
 			},
@@ -233,7 +221,7 @@ func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
 		{
 			name: "input json delta",
 			marshal: func() ([]byte, error) {
-				return marshalSSEContentBlockDeltaInputJSONBytes(6, `{"path":"a.txt","content":"he\"llo"}`)
+				return appendSSEContentBlockDeltaInputJSON(nil, 6, `{"path":"a.txt","content":"he\"llo"}`)
 			},
 			appendTo: func(dst []byte) ([]byte, error) {
 				return appendSSEContentBlockDeltaInputJSON(dst, 6, `{"path":"a.txt","content":"he\"llo"}`)
@@ -248,7 +236,7 @@ func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
 		},
 		{
 			name:    "thinking delta",
-			marshal: func() ([]byte, error) { return marshalSSEContentBlockDeltaThinkingBytes(8, "step <1>") },
+			marshal: func() ([]byte, error) { return appendSSEContentBlockDeltaThinking(nil, 8, "step <1>") },
 			appendTo: func(dst []byte) ([]byte, error) {
 				return appendSSEContentBlockDeltaThinking(dst, 8, "step <1>")
 			},
@@ -699,7 +687,7 @@ func TestStreamHandler_TextFlow_AnthropicSSE(t *testing.T) {
 	defer sh.release()
 
 	// seed a message_start so the stream resembles real output
-	sh.writeSSE("message_start", `{"type":"message_start"}`)
+	sh.writeSSEBytes("message_start", []byte(`{"type":"message_start"}`))
 
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "text-start"}})
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "hi"}})
@@ -900,22 +888,22 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
 	defer sh.release()
 
-	sh.writeSSE("message_start", `{"type":"message_start"}`)
+	sh.writeSSEBytes("message_start", []byte(`{"type":"message_start"}`))
 	if rec.flushes != 1 {
 		t.Fatalf("expected message_start to flush immediately, got %d", rec.flushes)
 	}
 
-	thinkingData, err := marshalSSEContentBlockDeltaThinkingBytes(0, "step")
+	thinkingData, err := appendSSEContentBlockDeltaThinking(nil, 0, "step")
 	if err != nil {
 		t.Fatalf("marshal thinking delta: %v", err)
 	}
 	for i := 0; i < sseDeferredFlushFrameThreshold-1; i++ {
-		sh.writeSSE("content_block_delta", string(thinkingData))
+		sh.writeSSEBytes("content_block_delta", thinkingData)
 	}
 	if rec.flushes != 1 {
 		t.Fatalf("expected deferred thinking deltas to coalesce, got %d flushes", rec.flushes)
 	}
-	sh.writeSSE("content_block_delta", string(thinkingData))
+	sh.writeSSEBytes("content_block_delta", thinkingData)
 	if rec.flushes != 2 {
 		t.Fatalf("expected deferred threshold flush, got %d", rec.flushes)
 	}
@@ -924,7 +912,7 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal text delta: %v", err)
 	}
-	sh.writeSSE("content_block_delta", string(textData))
+	sh.writeSSEBytes("content_block_delta", textData)
 	if rec.flushes != 3 {
 		t.Fatalf("expected text delta to flush immediately, got %d", rec.flushes)
 	}
@@ -943,7 +931,7 @@ func TestStreamHandler_CoalescesNonTextFlushes_Bytes(t *testing.T) {
 		t.Fatalf("expected message_start to flush immediately, got %d", rec.flushes)
 	}
 
-	thinkingData, err := marshalSSEContentBlockDeltaThinkingBytes(0, "step")
+	thinkingData, err := appendSSEContentBlockDeltaThinking(nil, 0, "step")
 	if err != nil {
 		t.Fatalf("marshal thinking delta: %v", err)
 	}

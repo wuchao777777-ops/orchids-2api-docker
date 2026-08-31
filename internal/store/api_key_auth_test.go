@@ -39,8 +39,9 @@ func TestValidateApiKey(t *testing.T) {
 	if err != nil || valid {
 		t.Fatalf("ValidateApiKey(wrong) = %v, %v", valid, err)
 	}
-	if err := s.UpdateApiKeyEnabled(context.Background(), key.ID, false); err != nil {
-		t.Fatalf("UpdateApiKeyEnabled() error = %v", err)
+	key.Enabled = false
+	if err := s.UpdateApiKey(context.Background(), key); err != nil {
+		t.Fatalf("UpdateApiKey() error = %v", err)
 	}
 	valid, err = s.ValidateApiKey(context.Background(), raw)
 	if err != nil || valid {

@@ -297,15 +297,6 @@ func responseIDFromResourcePath(path string) string {
 	return strings.TrimSpace(decoded)
 }
 
-func copyNativeCLIResponseAndCaptureID(w http.ResponseWriter, body io.Reader, contentType string) string {
-	id, _ := copyNativeCLIResponseAndCapture(w, body, contentType)
-	return id
-}
-
-func copyNativeCLIResponseAndCapture(w http.ResponseWriter, body io.Reader, contentType string) (string, []byte) {
-	return copyNativeCLIResponseAndCaptureModel(w, body, contentType, "")
-}
-
 func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader, contentType, model string) (string, []byte) {
 	fullCapture := newBoundedResponseCapture(8 << 20)
 	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {

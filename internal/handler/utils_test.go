@@ -403,25 +403,6 @@ func TestLastUserIsToolResultFollowup_AllowsTextAlongsideToolResult(t *testing.T
 	}
 }
 
-func TestExplicitlyRequestsDeepAnalysis(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  bool
-	}{
-		{"matches chinese keywords", "请帮我深入分析这个项目", true},
-		{"matches english keywords", "can you do a deep analysis", true},
-		{"does not match normal opt", "帮我优化这个项目", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := explicitlyRequestsDeepAnalysis(tt.input); got != tt.want {
-				t.Fatalf("explicitlyRequestsDeepAnalysis(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestLooksLikeToolResultFailure_RecognizesEditValidationError(t *testing.T) {
 	if !looksLikeToolResultFailure("File has not been read yet. Read it first before writing to it.") {
 		t.Fatalf("expected edit validation failure to be recognized")

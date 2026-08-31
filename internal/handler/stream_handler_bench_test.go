@@ -167,7 +167,7 @@ func BenchmarkMarshalContentBlockDeltaThinking_Bytes(b *testing.B) {
 	thinking := "analyzing next step"
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockDeltaThinkingBytes(idx, thinking)
+		raw, _ := appendSSEContentBlockDeltaThinking(nil, idx, thinking)
 		_ = raw
 	}
 }
@@ -177,7 +177,7 @@ func BenchmarkMarshalContentBlockDeltaInputJSON_Bytes(b *testing.B) {
 	partialJSON := `{"file_path":"/tmp/a.txt","content":"hello world"}`
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockDeltaInputJSONBytes(idx, partialJSON)
+		raw, _ := appendSSEContentBlockDeltaInputJSON(nil, idx, partialJSON)
 		_ = raw
 	}
 }
@@ -375,7 +375,7 @@ func BenchmarkMarshalContentBlockStartToolUse_Bytes(b *testing.B) {
 	name := "Write"
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockStartToolUseBytes(idx, id, name)
+		raw, _ := appendSSEContentBlockStartToolUse(nil, idx, id, name)
 		_ = raw
 	}
 }
@@ -409,7 +409,7 @@ func BenchmarkMarshalContentBlockStartThinking_Bytes(b *testing.B) {
 	signature := "sig_123"
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		raw, _ := marshalSSEContentBlockStartThinkingBytes(idx, signature)
+		raw, _ := appendSSEContentBlockStartThinking(nil, idx, signature)
 		_ = raw
 	}
 }

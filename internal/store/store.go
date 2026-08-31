@@ -262,7 +262,6 @@ type accountStore interface {
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	ListAccounts(ctx context.Context) ([]*Account, error)
 	GetEnabledAccounts(ctx context.Context) ([]*Account, error)
-	IncrementRequestCount(ctx context.Context, id int64) error
 	IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error
 }
 
@@ -300,7 +299,6 @@ type responseStore interface {
 type reasoningReplayStore interface {
 	SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error
 	GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error)
-	DeleteReasoningReplay(ctx context.Context, model, sessionKey string) error
 	SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error
 	GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error)
 }
@@ -648,13 +646,6 @@ func (s *Store) GetEnabledAccounts(ctx context.Context) ([]*Account, error) {
 	return nil, fmt.Errorf("store not configured")
 }
 
-func (s *Store) IncrementRequestCount(ctx context.Context, id int64) error {
-	if s.accounts != nil {
-		return s.accounts.IncrementRequestCount(ctx, id)
-	}
-	return fmt.Errorf("store not configured")
-}
-
 func (s *Store) IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error {
 	if s.accounts != nil {
 		return s.accounts.IncrementAccountStats(ctx, id, usage, count)
@@ -735,18 +726,6 @@ func (s *Store) ListApiKeys(ctx context.Context) ([]*ApiKey, error) {
 	return nil, fmt.Errorf("api keys store not configured")
 }
 
-func (s *Store) UpdateApiKeyEnabled(ctx context.Context, id int64, enabled bool) error {
-	if s == nil || s.apiKeys == nil {
-		return fmt.Errorf("api keys store not configured")
-	}
-	key, err := s.apiKeys.GetApiKeyByID(ctx, id)
-	if err != nil {
-		return err
-	}
-	key.Enabled = enabled
-	return s.apiKeys.UpdateApiKey(ctx, key)
-}
-
 func (s *Store) UpdateApiKey(ctx context.Context, key *ApiKey) error {
 	if s != nil && s.apiKeys != nil {
 		return s.apiKeys.UpdateApiKey(ctx, key)
@@ -801,13 +780,6 @@ func (s *Store) GetReasoningReplay(ctx context.Context, model, sessionKey string
 		return nil, fmt.Errorf("reasoning replay store not configured")
 	}
 	return s.reasoning.GetReasoningReplay(ctx, model, sessionKey)
-}
-
-func (s *Store) DeleteReasoningReplay(ctx context.Context, model, sessionKey string) error {
-	if s == nil || s.reasoning == nil {
-		return fmt.Errorf("reasoning replay store not configured")
-	}
-	return s.reasoning.DeleteReasoningReplay(ctx, model, sessionKey)
 }
 
 func (s *Store) SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error {

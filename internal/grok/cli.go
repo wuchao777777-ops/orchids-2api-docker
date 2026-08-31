@@ -203,12 +203,6 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 	}
 }
 
-// doResponsesOnce issues a single CLI Responses request (token, headers, egress
-// lease, decompress) without retry logic.
-func (c *CLIClient) doResponsesOnce(ctx context.Context, acc *store.Account, payload map[string]interface{}) (*http.Response, error) {
-	return c.doResponsesOnceAt(ctx, acc, "/responses", payload)
-}
-
 func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, path string, payload map[string]interface{}) (*http.Response, error) {
 	if c == nil || c.oauth == nil {
 		return nil, fmt.Errorf("grok cli client not configured")

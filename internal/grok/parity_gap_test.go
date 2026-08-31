@@ -220,21 +220,21 @@ func TestQualityGateRetriesLongMissingThinkingButAllowsShortReply(t *testing.T) 
 	long := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"this is a sufficiently long visible answer without reasoning evidence\"}\n\n" +
 		"data: {\"type\":\"response.completed\"}\n\n"
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(long))}
-	missing, err := gateResponseForThinking(resp)
+	missing, err := gateResponseForThinkingWithOptions(context.Background(), resp, 30*time.Second, 32)
 	if err != nil || !missing {
 		t.Fatalf("long missing-thinking gate = %v,%v", missing, err)
 	}
 
 	short := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"
 	resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(short))}
-	missing, err = gateResponseForThinking(resp)
+	missing, err = gateResponseForThinkingWithOptions(context.Background(), resp, 30*time.Second, 32)
 	if err != nil || missing {
 		t.Fatalf("short reply gate = %v,%v", missing, err)
 	}
 
 	withThinking := "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"plan\"}\n\n"
 	resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(bytes.NewBufferString(withThinking))}
-	missing, err = gateResponseForThinking(resp)
+	missing, err = gateResponseForThinkingWithOptions(context.Background(), resp, 30*time.Second, 32)
 	if err != nil || missing {
 		t.Fatalf("thinking gate = %v,%v", missing, err)
 	}

@@ -1,8 +1,6 @@
 package middleware
 
 import (
-	"net"
-	"strings"
 	"sync"
 	"time"
 )
@@ -104,26 +102,4 @@ func (rl *RateLimiter) cleanup() {
 		}
 		return true
 	})
-}
-
-// ExtractIP returns the client IP from the request, checking
-// X-Forwarded-For and X-Real-IP before falling back to RemoteAddr.
-func ExtractIP(r_remoteAddr string, xForwardedFor string, xRealIP string) string {
-	if xff := strings.TrimSpace(xForwardedFor); xff != "" {
-		// Take the first IP from X-Forwarded-For.
-		if idx := strings.IndexByte(xff, ','); idx >= 0 {
-			xff = strings.TrimSpace(xff[:idx])
-		}
-		if xff != "" {
-			return xff
-		}
-	}
-	if xri := strings.TrimSpace(xRealIP); xri != "" {
-		return xri
-	}
-	host, _, err := net.SplitHostPort(r_remoteAddr)
-	if err != nil {
-		return r_remoteAddr
-	}
-	return host
 }
