@@ -347,13 +347,10 @@ func normalizeGrokAssetURL(raw string) string {
 	return s
 }
 
+// firstNonEmpty delegates to the shared implementation in internal/util so the
+// package keeps its short local name without duplicating the logic.
 func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if s := strings.TrimSpace(v); s != "" {
-			return s
-		}
-	}
-	return ""
+	return util.FirstNonEmpty(values...)
 }
 
 // NormalizeSSOToken extracts the raw SSO token from a cookie-like string.

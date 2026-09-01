@@ -101,10 +101,6 @@ func extractAuthToken(value string) string {
 // process-wide, so an individual Puter client owns no resources to close.
 func (c *Client) Close() {}
 
-func (c *Client) VerifyAuthToken(ctx context.Context) error {
-	return c.VerifyModel(ctx, defaultModelID)
-}
-
 func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {

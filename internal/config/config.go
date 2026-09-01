@@ -82,7 +82,6 @@ type Config struct {
 	GrokCLIOAuthDeviceURL   string   `json:"grok_cli_oauth_device_url,omitempty"`
 	GrokCLIOAuthTokenURL    string   `json:"grok_cli_oauth_token_url,omitempty"`
 	GrokCLIModelIDs         []string `json:"grok_cli_model_ids,omitempty"`
-	GrokSessionIdentityRefr *bool    `json:"grok_session_identity_refresh,omitempty"`
 	GrokQualityHoldSeconds  int      `json:"grok_quality_hold_seconds,omitempty"`
 	GrokQualityMinChars     int      `json:"grok_quality_min_visible_chars,omitempty"`
 	GrokQualityOnExhausted  string   `json:"grok_quality_on_exhausted,omitempty"`
@@ -427,12 +426,6 @@ func (c *Config) GrokCLIClientIdentifierOrDefault() string {
 		return strings.TrimSpace(c.GrokCLIClientIdentifier)
 	}
 	return "grok-shell"
-}
-
-// GrokSessionIdentityRefreshEnabled reports whether background refresh should
-// fetch {base}/api/auth/session to learn team_id/email. Default true.
-func (c *Config) GrokSessionIdentityRefreshEnabled() bool {
-	return c == nil || c.GrokSessionIdentityRefr == nil || *c.GrokSessionIdentityRefr
 }
 
 // GrokClearanceRefreshIntervalOrDefault returns the clearance auto-refresh

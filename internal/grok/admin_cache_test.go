@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -274,6 +275,7 @@ func TestCacheOnlineAccountMap_NormalizesTokens(t *testing.T) {
 
 func TestHandleAdminCacheOnlineClear(t *testing.T) {
 	type state struct {
+		mu     sync.Mutex
 		assets map[string][]string
 	}
 	s := &state{
@@ -300,6 +302,8 @@ func TestHandleAdminCacheOnlineClear(t *testing.T) {
 
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/rest/assets":
+			s.mu.Lock()
+			defer s.mu.Unlock()
 			items := make([]map[string]interface{}, 0, len(s.assets[token]))
 			for _, id := range s.assets[token] {
 				items = append(items, map[string]interface{}{"assetId": id})
@@ -307,6 +311,8 @@ func TestHandleAdminCacheOnlineClear(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"assets": items})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/rest/assets-metadata/"):
+			s.mu.Lock()
+			defer s.mu.Unlock()
 			id := strings.TrimPrefix(r.URL.Path, "/rest/assets-metadata/")
 			list := s.assets[token]
 			next := make([]string, 0, len(list))
@@ -392,6 +398,8 @@ func TestHandleAdminCacheOnlineClear(t *testing.T) {
 			t.Fatalf("token %s last_asset_clear_at is nil", item.Token)
 		}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.assets["t1"]) != 0 || len(s.assets["t2"]) != 0 {
 		t.Fatalf("assets not fully deleted: t1=%v t2=%v", s.assets["t1"], s.assets["t2"])
 	}
@@ -593,6 +601,7 @@ func TestHandleAdminCacheOnlineLoadAsync(t *testing.T) {
 
 func TestHandleAdminCacheOnlineClearAsync(t *testing.T) {
 	type state struct {
+		mu     sync.Mutex
 		assets map[string][]string
 	}
 	s := &state{
@@ -619,6 +628,8 @@ func TestHandleAdminCacheOnlineClearAsync(t *testing.T) {
 
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/rest/assets":
+			s.mu.Lock()
+			defer s.mu.Unlock()
 			items := make([]map[string]interface{}, 0, len(s.assets[token]))
 			for _, id := range s.assets[token] {
 				items = append(items, map[string]interface{}{"assetId": id})
@@ -626,6 +637,8 @@ func TestHandleAdminCacheOnlineClearAsync(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"assets": items})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/rest/assets-metadata/"):
+			s.mu.Lock()
+			defer s.mu.Unlock()
 			id := strings.TrimPrefix(r.URL.Path, "/rest/assets-metadata/")
 			list := s.assets[token]
 			next := make([]string, 0, len(list))
@@ -703,6 +716,8 @@ func TestHandleAdminCacheOnlineClearAsync(t *testing.T) {
 	if len(out.Result.Results) != 2 {
 		t.Fatalf("results len=%d want=2", len(out.Result.Results))
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.assets["t1"]) != 0 || len(s.assets["t2"]) != 0 {
 		t.Fatalf("assets not fully deleted: t1=%v t2=%v", s.assets["t1"], s.assets["t2"])
 	}

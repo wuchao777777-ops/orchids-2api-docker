@@ -504,7 +504,7 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 				continue
 			}
 			seen[key] = struct{}{}
-			merged = append(merged, discoveredModel{ID: spec.ID, Name: firstNonEmpty(spec.Name, spec.ID), SortOrder: len(merged)})
+			merged = append(merged, discoveredModel{ID: spec.ID, Name: util.FirstNonEmpty(spec.Name, spec.ID), SortOrder: len(merged)})
 		}
 	}
 	if len(merged) > 0 {
@@ -584,7 +584,7 @@ func cachedGrokModels(ctx context.Context, s *store.Store) []discoveredModel {
 			continue
 		}
 		seen[key] = struct{}{}
-		name := firstNonEmpty(model.Name, id)
+		name := util.FirstNonEmpty(model.Name, id)
 		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
 	}
 	return out
@@ -618,7 +618,7 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 			return
 		}
 		seen[id] = struct{}{}
-		name := firstNonEmpty(choice.Name, id)
+		name := util.FirstNonEmpty(choice.Name, id)
 		out = append(out, discoveredModel{
 			ID:        id,
 			Name:      name,
@@ -988,7 +988,7 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			record := &store.Model{
 				Channel:   channel,
 				ModelID:   model.ID,
-				Name:      firstNonEmpty(model.Name, model.ID),
+				Name:      util.FirstNonEmpty(model.Name, model.ID),
 				Status:    store.ModelStatusAvailable,
 				Verified:  true,
 				IsDefault: model.ID == defaultModelID,
@@ -1086,14 +1086,4 @@ func discoveredModelsContain(models []discoveredModel, id string) bool {
 		}
 	}
 	return false
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

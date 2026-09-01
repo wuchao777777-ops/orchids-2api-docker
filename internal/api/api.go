@@ -187,7 +187,7 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 		return nil
 	}
 
-	credential := strings.TrimSpace(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token))
+	credential := strings.TrimSpace(util.FirstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token))
 	if grok.NormalizeSSOToken(credential) == "" {
 		return fmt.Errorf("missing sso token")
 	}
@@ -358,15 +358,6 @@ func preserveGrokOAuthCredentials(acc, existing *store.Account) {
 	}
 }
 
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func normalizeAccountOutput(acc *store.Account) *store.Account {
 	out := normalizeWarpTokenOutput(acc)
 	if out == nil {
@@ -402,14 +393,14 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 		token = strings.TrimSpace(warp.RefreshToken(acc))
 	case "grok":
 		if grokAccountIsOAuth(acc) {
-			token = strings.TrimSpace(firstNonEmptyString(acc.OAuthRefreshToken, acc.OAuthAccessToken))
+			token = strings.TrimSpace(util.FirstNonEmpty(acc.OAuthRefreshToken, acc.OAuthAccessToken))
 		} else {
-			token = grok.NormalizeSSOToken(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token))
+			token = grok.NormalizeSSOToken(util.FirstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token))
 		}
 	case "puter":
 		token = puter.ResolveAuthToken(acc)
 	default:
-		token = strings.TrimSpace(firstNonEmptyString(acc.RefreshToken, acc.SessionCookie, acc.ClientCookie, acc.Token))
+		token = strings.TrimSpace(util.FirstNonEmpty(acc.RefreshToken, acc.SessionCookie, acc.ClientCookie, acc.Token))
 	}
 
 	if token == "" || accountType == "" {
@@ -1053,7 +1044,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "missing oauth token", http.StatusBadRequest)
 				return
 			}
-			if !grokAccountIsOAuth(&acc) && grok.NormalizeSSOToken(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token)) == "" {
+			if !grokAccountIsOAuth(&acc) && grok.NormalizeSSOToken(util.FirstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token)) == "" {
 				http.Error(w, "missing sso token", http.StatusBadRequest)
 				return
 			}

@@ -227,7 +227,6 @@ Grok 代码保留三种上游传输；当前公开模型按 `internal/grok/model
 - `grok_console_base_url`（默认 `https://console.x.ai/v1`，用于 Console Responses、标准视频、TTS、STT 与 Realtime）
 - `grok_cli_oauth_client_id` / `grok_cli_oauth_token_url`（默认官方 client/token 端点）
 - `grok_cli_model_ids`（为未显式标注上游的兼容模型指定 CLI 路由；当前 4.5/4.6 已显式标注）
-- `grok_session_identity_refresh`（默认 true，后台刷新 SSO 账号时拉取 `/api/auth/session` 学习 teamId）
 - `response_store_ttl_hours`（Build stored Response 归属记录 TTL，默认 720 小时）
 - `grok_egress_enabled`（默认 false；开启后走代理池 + FlareSolverr + clearance 缓存）
 - `grok_egress_nodes`（代理池节点列表）、`grok_flaresolverr_url`、`grok_clearance_mode`（`manual`/`flaresolverr`）、`grok_clearance_refresh_interval`
