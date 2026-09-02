@@ -925,6 +925,57 @@ func (s *redisStore) GetReasoningReplay(ctx context.Context, model, sessionKey s
 	return &replay, nil
 }
 
+func (s *redisStore) puterReasoningReplayKey(model, toolCallID string) string {
+	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(model)) + "\x00" + strings.TrimSpace(toolCallID)))
+	return s.prefix + "puter:reasoning_replay:" + hex.EncodeToString(digest[:])
+}
+
+func (s *redisStore) SavePuterReasoningReplay(ctx context.Context, replay *StoredPuterReasoningReplay, ttl time.Duration) error {
+	if replay == nil || strings.TrimSpace(replay.Model) == "" || strings.TrimSpace(replay.ToolCallID) == "" || strings.TrimSpace(replay.ReasoningContent) == "" {
+		return fmt.Errorf("invalid puter reasoning replay")
+	}
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	next := *replay
+	next.ExpiresAt = time.Now().UTC().Add(ttl)
+	encrypted, err := s.credentials.encrypt(next.ReasoningContent)
+	if err != nil {
+		return fmt.Errorf("encrypt puter reasoning replay: %w", err)
+	}
+	next.ReasoningContent = encrypted
+	raw, err := json.Marshal(&next)
+	if err != nil {
+		return err
+	}
+	return s.client.Set(ctx, s.puterReasoningReplayKey(next.Model, next.ToolCallID), raw, ttl).Err()
+}
+
+func (s *redisStore) GetPuterReasoningReplay(ctx context.Context, model, toolCallID string) (*StoredPuterReasoningReplay, error) {
+	key := s.puterReasoningReplayKey(model, toolCallID)
+	raw, err := s.client.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return nil, ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+	var replay StoredPuterReasoningReplay
+	if err := json.Unmarshal(raw, &replay); err != nil {
+		return nil, err
+	}
+	if !replay.ExpiresAt.IsZero() && !time.Now().UTC().Before(replay.ExpiresAt) {
+		_ = s.client.Del(ctx, key).Err()
+		return nil, ErrNoRows
+	}
+	plain, err := s.credentials.decrypt(replay.ReasoningContent)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt puter reasoning replay: %w", err)
+	}
+	replay.ReasoningContent = plain
+	return &replay, nil
+}
+
 func (s *redisStore) sessionAffinityKey(provider, model, sessionKey string) string {
 	source := strings.ToLower(strings.TrimSpace(provider)) + "\x00" + strings.ToLower(strings.TrimSpace(model)) + "\x00" + strings.TrimSpace(sessionKey)
 	digest := sha256.Sum256([]byte(source))

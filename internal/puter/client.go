@@ -239,6 +239,11 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 	// 仅对 deepseek 服务开启回传，其余服务行为不变。
 	msgs := convertMessages(req.Messages, req.System, service == "deepseek")
 	if service == "deepseek" {
+		// OpenAI-compatible DeepSeek gateways require assistant/tool history to
+		// follow a stricter role sequence than Anthropic clients do. Clients may
+		// send adjacent assistant messages (often after dropping an empty user
+		// message); coalesce them before pairing tool results.
+		msgs = mergeAdjacentAssistantMessages(msgs)
 		// puter 的 DeepSeekProvider 会在每个 tool 消息后注入 system 消息,
 		// 多 tool_call 轮次会被打断配对;拆成单 tool_call 序列绕开该行为。
 		msgs = splitMultiToolCalls(msgs)

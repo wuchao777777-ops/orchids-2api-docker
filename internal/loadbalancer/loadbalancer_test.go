@@ -239,25 +239,39 @@ func TestIsAccountAvailable_WarpQuotaStatusClearsAfterQuotaRefresh(t *testing.T)
 	}
 }
 
-func TestIsAccountAvailable_402UsesLongCooldown(t *testing.T) {
+func TestIsAccountAvailable_402UsesPuterProbeCooldown(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{
 		ID:          1,
 		AccountType: "puter",
 		StatusCode:  "402",
-		LastAttempt: time.Now().Add(-2 * time.Hour),
+		LastAttempt: time.Now().Add(-5 * time.Minute),
 	}
 
 	if lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected 402 account to remain unavailable before long cooldown expires")
+		t.Fatal("expected Puter 402 account to remain unavailable before probe cooldown expires")
 	}
 
-	acc.LastAttempt = time.Now().Add(-(retry402Default + time.Minute))
+	acc.LastAttempt = time.Now().Add(-(retry402Puter + time.Minute))
 	if !lb.isAccountAvailable(context.Background(), acc) {
 		t.Fatal("expected expired 402 cooldown to re-enable account")
 	}
 	if acc.StatusCode != "" {
 		t.Fatalf("expected status to be cleared after 402 cooldown, got %q", acc.StatusCode)
+	}
+}
+
+func TestIsAccountAvailable_402KeepsLongCooldownForOtherChannels(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{
+		ID:          1,
+		AccountType: "other",
+		StatusCode:  "402",
+		LastAttempt: time.Now().Add(-time.Hour),
+	}
+
+	if lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected non-Puter 402 account to keep the long cooldown")
 	}
 }
 

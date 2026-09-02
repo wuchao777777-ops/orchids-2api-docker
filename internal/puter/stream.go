@@ -2,6 +2,8 @@ package puter
 
 import (
 	"bufio"
+	cryptorand "crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"strings"
@@ -17,6 +19,7 @@ type streamResult struct {
 	SawMeaningfulEvent bool
 	ToolCallCount      int
 	Usage              map[string]interface{}
+	ThinkingSignature  string
 }
 
 func (r streamResult) FinishReason() string {
@@ -37,6 +40,14 @@ func emitDelta(onMessage func(upstream.SSEMessage), eventType, delta string) {
 	if onMessage != nil && delta != "" {
 		onMessage(upstream.SSEMessage{Type: eventType, Event: map[string]interface{}{"delta": delta}})
 	}
+}
+
+func newPuterThinkingSignature() string {
+	var raw [24]byte
+	if _, err := cryptorand.Read(raw[:]); err == nil {
+		return "puter-v1:" + base64.RawURLEncoding.EncodeToString(raw[:])
+	}
+	return fmt.Sprintf("puter-v1:%d", time.Now().UnixNano())
 }
 
 func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamResult, error) {
@@ -63,7 +74,15 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 			emitDelta(onMessage, "model.text-delta", chunk.Text)
 		case "reasoning":
 			result.SawMeaningfulEvent = true
-			emitDelta(onMessage, "model.reasoning-delta", chunk.Reasoning)
+			if chunk.Reasoning != "" && onMessage != nil {
+				if result.ThinkingSignature == "" {
+					result.ThinkingSignature = newPuterThinkingSignature()
+				}
+				onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{
+					"delta":     chunk.Reasoning,
+					"signature": result.ThinkingSignature,
+				}})
+			}
 		case "tool_use":
 			name := strings.TrimSpace(chunk.Name)
 			if name == "" {

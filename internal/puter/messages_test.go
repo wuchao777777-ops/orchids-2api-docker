@@ -101,10 +101,11 @@ func TestSplitMultiToolCallsIgnoresNonToolScenarios(t *testing.T) {
 }
 
 // 显式传入 SystemItem;convertMessages 将 system 条目逐字透传为独立 system 消息。
-func TestBuildRequestSplitsMultiToolCallsOnlyForDeepseek(t *testing.T) {	build := func(model string) []Message {
+func TestBuildRequestSplitsMultiToolCallsOnlyForDeepseek(t *testing.T) {
+	build := func(model string) []Message {
 		client := NewFromAccount(nil, nil)
 		req, err := client.buildRequest(upstream.UpstreamRequest{
-			Model: model,
+			Model:  model,
 			System: []prompt.SystemItem{{Type: "text", Text: "sys"}},
 			Messages: []prompt.Message{
 				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
@@ -215,6 +216,23 @@ func TestConvertMessagesEchoesOpenAIReasoningContentField(t *testing.T) {
 	}
 }
 
+func TestConvertMessagesSuppliesFallbackWhenClientDropsDeepSeekReasoning(t *testing.T) {
+	msgs := []prompt.Message{{
+		Role: "assistant",
+		Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "text", Text: "..."},
+			{Type: "tool_use", ID: "call-1", Name: "Pwsh", Input: map[string]interface{}{"command": "python --version"}},
+		}},
+	}}
+	out := convertMessages(msgs, nil, true)
+	if len(out) != 1 || out[0].ReasoningContent != missingDeepSeekReasoningFallback {
+		t.Fatalf("got %#v want non-empty fallback reasoning", out)
+	}
+	if out[0].ReasoningContent != "\u200b" {
+		t.Fatalf("fallback must remain semantically invisible, got %q", out[0].ReasoningContent)
+	}
+}
+
 // 非 deepseek 服务不回传 reasoning,与旧版行为一致。
 func TestConvertMessagesSkipsReasoningForOtherServices(t *testing.T) {
 	msgs := []prompt.Message{
@@ -235,8 +253,9 @@ func TestConvertMessagesSkipsReasoningForOtherServices(t *testing.T) {
 	}
 }
 
-// 拆分多 tool_call 时 reasoning_content 应随首个(带 content)分片保留。
-func TestSplitMultiToolCallsPreservesReasoningOnFirstPart(t *testing.T) {
+// 拆分多 tool_call 后的每个合成 assistant 都必须携带 reasoning_content，
+// 否则 DeepSeek 会把后续分片视为缺少思考内容的新 assistant 轮次。
+func TestSplitMultiToolCallsPreservesReasoningOnEveryPart(t *testing.T) {
 	in := []Message{
 		{Role: "assistant", Content: "lead", ReasoningContent: "reasoning here", ToolCalls: []ToolCall{
 			{ID: "a", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}},
@@ -252,7 +271,59 @@ func TestSplitMultiToolCallsPreservesReasoningOnFirstPart(t *testing.T) {
 	if got[0].Content != "lead" {
 		t.Fatalf("got[0].Content=%q want %q", got[0].Content, "lead")
 	}
-	if got[2].ReasoningContent != "" {
-		t.Fatalf("second split part must not repeat reasoning, got %#v", got[2])
+	if got[2].ReasoningContent != "reasoning here" {
+		t.Fatalf("second split part reasoning=%q want %q", got[2].ReasoningContent, "reasoning here")
+	}
+}
+
+func TestMergeAdjacentAssistantMessagesPreservesToolsAndRealReasoning(t *testing.T) {
+	in := []Message{
+		{Role: "user", Content: "start"},
+		{Role: "assistant", Content: "first", ReasoningContent: missingDeepSeekReasoningFallback},
+		{Role: "assistant", ReasoningContent: "real reasoning", ToolCalls: []ToolCall{{
+			ID: "call-1", Type: "function", Function: ToolCallFunction{Name: "grep", Arguments: `{}`},
+		}}},
+		{Role: "tool", ToolCallID: "call-1", Content: "done"},
+	}
+
+	got := mergeAdjacentAssistantMessages(in)
+	if len(got) != 3 {
+		t.Fatalf("len=%d want 3: %#v", len(got), got)
+	}
+	if got[1].Content != "first" || got[1].ReasoningContent != "real reasoning" || len(got[1].ToolCalls) != 1 {
+		t.Fatalf("merged assistant=%#v", got[1])
+	}
+	if got[2].Role != "tool" || got[2].ToolCallID != "call-1" {
+		t.Fatalf("tool result pairing changed: %#v", got[2])
+	}
+}
+
+func TestBuildRequestCoalescesAdjacentDeepSeekAssistants(t *testing.T) {
+	client := NewFromAccount(nil, nil)
+	req, err := client.buildRequest(upstream.UpstreamRequest{
+		Model: "deepseek-v4-flash",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "start"}},
+			{Role: "assistant", Content: prompt.MessageContent{Text: "working"}},
+			{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+				Type: "tool_use", ID: "call-1", Name: "grep", Input: map[string]interface{}{"pattern": "signup"},
+			}}}},
+			{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+				Type: "tool_result", ToolUseID: "call-1", Content: "done",
+			}}}},
+		},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Args.Messages) != 3 {
+		t.Fatalf("messages=%#v want user, merged assistant, tool", req.Args.Messages)
+	}
+	assistant := req.Args.Messages[1]
+	if assistant.Role != "assistant" || assistant.Content != "working" || len(assistant.ToolCalls) != 1 {
+		t.Fatalf("merged assistant=%#v", assistant)
+	}
+	if req.Args.Messages[2].Role != "tool" || req.Args.Messages[2].ToolCallID != "call-1" {
+		t.Fatalf("tool result=%#v", req.Args.Messages[2])
 	}
 }

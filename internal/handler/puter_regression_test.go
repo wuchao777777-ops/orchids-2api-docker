@@ -98,6 +98,36 @@ func puterToolSchema(name string, properties map[string]any, required ...string)
 	}
 }
 
+func TestHandleMessages_PuterMapsToolNameToClientDeclaredCase(t *testing.T) {
+	h := newPuterRegressionHandler(puterDirectToolUseEvents(
+		"msg_case_mapping",
+		"deepseek-v4-flash",
+		"tool_grep_1",
+		"Grep",
+		`{"pattern":"signup","path":"bundle.js"}`,
+		8,
+	))
+	body := mustMarshalTestJSON(t, map[string]any{
+		"model":    "deepseek-v4-flash",
+		"messages": []map[string]any{{"role": "user", "content": "Search the bundle."}},
+		"tools": []map[string]any{puterToolSchema("grep", map[string]any{
+			"pattern": map[string]any{"type": "string"},
+			"path":    map[string]any{"type": "string"},
+		}, "pattern")},
+		"stream": false,
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	block := firstMessageContentBlock(t, decodeMessageResponse(t, rec))
+	if block["type"] != "tool_use" || block["name"] != "grep" {
+		t.Fatalf("tool block=%#v want client-declared lowercase grep", block)
+	}
+}
+
 func TestHandleMessages_Puter_EditRoundTripRegression(t *testing.T) {
 	model := "claude-opus-5"
 	editTool := puterToolSchema("Edit", map[string]any{

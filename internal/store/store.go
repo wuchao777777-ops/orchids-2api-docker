@@ -178,6 +178,18 @@ type StoredReasoningReplay struct {
 	ExpiresAt        time.Time `json:"expires_at"`
 }
 
+// StoredPuterReasoningReplay keeps the reasoning associated with an emitted
+// Puter tool call. Some Anthropic-compatible clients display thinking blocks
+// but replace them with "..." in the next request, so the tool call ID is the
+// stable continuation key. Implementations must encrypt ReasoningContent at
+// rest before writing it to the backing store.
+type StoredPuterReasoningReplay struct {
+	Model            string    `json:"model"`
+	ToolCallID       string    `json:"tool_call_id"`
+	ReasoningContent string    `json:"reasoning_content"`
+	ExpiresAt        time.Time `json:"expires_at"`
+}
+
 type StoredSessionAffinity struct {
 	Provider   string    `json:"provider"`
 	Model      string    `json:"model"`
@@ -293,6 +305,8 @@ type responseStore interface {
 type reasoningReplayStore interface {
 	SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error
 	GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error)
+	SavePuterReasoningReplay(ctx context.Context, replay *StoredPuterReasoningReplay, ttl time.Duration) error
+	GetPuterReasoningReplay(ctx context.Context, model, toolCallID string) (*StoredPuterReasoningReplay, error)
 	SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error
 	GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error)
 }
@@ -758,6 +772,20 @@ func (s *Store) GetReasoningReplay(ctx context.Context, model, sessionKey string
 		return nil, fmt.Errorf("reasoning replay store not configured")
 	}
 	return s.reasoning.GetReasoningReplay(ctx, model, sessionKey)
+}
+
+func (s *Store) SavePuterReasoningReplay(ctx context.Context, replay *StoredPuterReasoningReplay, ttl time.Duration) error {
+	if s == nil || s.reasoning == nil {
+		return fmt.Errorf("reasoning replay store not configured")
+	}
+	return s.reasoning.SavePuterReasoningReplay(ctx, replay, ttl)
+}
+
+func (s *Store) GetPuterReasoningReplay(ctx context.Context, model, toolCallID string) (*StoredPuterReasoningReplay, error) {
+	if s == nil || s.reasoning == nil {
+		return nil, fmt.Errorf("reasoning replay store not configured")
+	}
+	return s.reasoning.GetPuterReasoningReplay(ctx, model, toolCallID)
 }
 
 func (s *Store) SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error {

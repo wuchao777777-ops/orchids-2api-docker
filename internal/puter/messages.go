@@ -9,6 +9,12 @@ import (
 	"orchids-api/internal/prompt"
 )
 
+// Puter's DeepSeek gateway requires a non-empty reasoning_content on every
+// replayed assistant message. U+200B satisfies that schema requirement without
+// injecting visible instructions into long legacy conversations whose original
+// thinking was never persisted.
+const missingDeepSeekReasoningFallback = "\u200b"
+
 // convertMessages 将 OpenAI 风格消息转换为 Puter 消息。系统条目逐字透传为独立
 // system 消息，其余消息按角色/schema 映射。echoReasoning 仅在目标服务开启思考模式
 // 且要求回传 reasoning_content（deepseek）时为 true，此时保留 assistant 消息的推理
@@ -29,7 +35,10 @@ func convertMessages(messages []prompt.Message, system []prompt.SystemItem, echo
 			if text := msg.Content.GetText(); strings.TrimSpace(text) != "" {
 				m := Message{Role: role, Content: text}
 				if echoReasoning && role == "assistant" {
-					m.ReasoningContent = msg.ReasoningContent
+					m.ReasoningContent = strings.TrimSpace(msg.ReasoningContent)
+					if m.ReasoningContent == "" {
+						m.ReasoningContent = missingDeepSeekReasoningFallback
+					}
 				}
 				out = append(out, m)
 			}
@@ -90,6 +99,9 @@ func convertAssistantMessage(msg prompt.Message, echoReasoning bool) (Message, b
 		}
 	}
 	message.Content = strings.Join(text, "\n")
+	if echoReasoning && message.ReasoningContent == "" && (message.Content != "" || len(message.ToolCalls) > 0) {
+		message.ReasoningContent = missingDeepSeekReasoningFallback
+	}
 	return message, message.Content != "" || len(message.ToolCalls) > 0 || message.ReasoningContent != ""
 }
 
@@ -216,6 +228,53 @@ func stringValue(value interface{}) string {
 	return fmt.Sprint(value)
 }
 
+func mergeAdjacentAssistantMessages(messages []Message) []Message {
+	if len(messages) < 2 {
+		return messages
+	}
+	out := make([]Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Role != "assistant" || len(out) == 0 || out[len(out)-1].Role != "assistant" {
+			out = append(out, message)
+			continue
+		}
+		previous := &out[len(out)-1]
+		previous.Content = joinAssistantReplayText(previous.Content, message.Content)
+		previous.ReasoningContent = joinAssistantReplayReasoning(previous.ReasoningContent, message.ReasoningContent)
+		previous.ToolCalls = append(previous.ToolCalls, message.ToolCalls...)
+	}
+	return out
+}
+
+func joinAssistantReplayText(left, right string) string {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	switch {
+	case left == "":
+		return right
+	case right == "":
+		return left
+	default:
+		return left + "\n" + right
+	}
+}
+
+func joinAssistantReplayReasoning(left, right string) string {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == missingDeepSeekReasoningFallback {
+		left = ""
+	}
+	if right == missingDeepSeekReasoningFallback {
+		right = ""
+	}
+	joined := joinAssistantReplayText(left, right)
+	if joined == "" {
+		return missingDeepSeekReasoningFallback
+	}
+	return joined
+}
+
 // splitMultiToolCalls 把单个 assistant 消息里的多个 tool_calls 拆成多段
 // "assistant(单个 tool_call) → tool(对应回应)"。puter 的 DeepSeekProvider
 // 会在每个 tool 消息后注入一条 system 消息;若一个 assistant 消息带多个
@@ -247,10 +306,9 @@ func splitMultiToolCalls(messages []Message) []Message {
 			continue
 		}
 		for k, tc := range m.ToolCalls {
-			part := Message{Role: "assistant", ToolCalls: []ToolCall{tc}}
+			part := Message{Role: "assistant", ReasoningContent: m.ReasoningContent, ToolCalls: []ToolCall{tc}}
 			if k == 0 {
 				part.Content = m.Content
-				part.ReasoningContent = m.ReasoningContent
 			}
 			out = append(out, part)
 			if res, ok := byID[tc.ID]; ok {

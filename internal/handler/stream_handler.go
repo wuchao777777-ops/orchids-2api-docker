@@ -354,22 +354,42 @@ func (h *streamHandler) setEmptyOutputFallback(text string) {
 	h.mu.Unlock()
 }
 
-func (h *streamHandler) rewriteWebToolCallToClient(name, input string) (string, string) {
+func (h *streamHandler) currentReasoningText() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	parts := make([]string, 0, len(h.thinkingBlockBuilders))
+	for i := range h.contentBlocks {
+		blockType, _ := h.contentBlocks[i]["type"].(string)
+		if blockType != "thinking" {
+			continue
+		}
+		if builder, ok := h.thinkingBlockBuilders[i]; ok {
+			if value := strings.TrimSpace(builder.String()); value != "" {
+				parts = append(parts, value)
+				continue
+			}
+		}
+		if value, _ := h.contentBlocks[i]["thinking"].(string); strings.TrimSpace(value) != "" {
+			parts = append(parts, strings.TrimSpace(value))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (h *streamHandler) rewriteToolCallToClient(name, input string) (string, string) {
 	h.mu.Lock()
 	clientTools := h.clientTools
 	h.mu.Unlock()
 
-	canonical := strings.ToLower(strings.TrimSpace(toolname.NormalizeToolNameFallback(name)))
-	if canonical != "web_fetch" && canonical != "web_search" {
-		return name, input
-	}
+	canonical := strings.TrimSpace(toolname.NormalizeToolNameFallback(name))
 	if len(clientTools) == 0 {
-		return canonical, input
+		return name, input
 	}
 
 	mapped := strings.TrimSpace(toolname.MapToolNameToClient(canonical, clientTools, nil))
 	if mapped == "" {
-		return canonical, input
+		return name, input
 	}
 	return mapped, input
 }
@@ -3022,7 +3042,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			perf.ReleaseStringBuilder(buf)
 		}
 		name, inputStr = normalizeUpstreamToolCall(name, inputStr, h.workdir)
-		name, inputStr = h.rewriteWebToolCallToClient(name, inputStr)
+		name, inputStr = h.rewriteToolCallToClient(name, inputStr)
 		delete(h.toolInputBuffers, toolID)
 		delete(h.toolInputHadDelta, toolID)
 		delete(h.toolInputNames, toolID)
@@ -3052,7 +3072,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		toolName, _ := msg.Event["toolName"].(string)
 		inputStr, _ := msg.Event["input"].(string)
 		toolName, inputStr = normalizeUpstreamToolCall(toolName, inputStr, h.workdir)
-		toolName, inputStr = h.rewriteWebToolCallToClient(toolName, inputStr)
+		toolName, inputStr = h.rewriteToolCallToClient(toolName, inputStr)
 		if toolID == "" {
 			return
 		}

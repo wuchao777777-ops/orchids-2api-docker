@@ -85,9 +85,10 @@ type openAINonStreamToolCall struct {
 }
 
 type openAINonStreamMessage struct {
-	Role      string                    `json:"role"`
-	Content   interface{}               `json:"content"`
-	ToolCalls []openAINonStreamToolCall `json:"tool_calls,omitempty"`
+	Role             string                    `json:"role"`
+	Content          interface{}               `json:"content"`
+	ReasoningContent string                    `json:"reasoning_content,omitempty"`
+	ToolCalls        []openAINonStreamToolCall `json:"tool_calls,omitempty"`
 }
 
 type openAINonStreamChoice struct {
@@ -197,11 +198,22 @@ func mapStopReasonToOpenAIFinishReason(stopReason string) *string {
 
 func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason string) openAINonStreamResponse {
 	textParts := make([]string, 0, len(sh.contentBlocks))
+	reasoningParts := make([]string, 0, len(sh.contentBlocks))
 	toolCalls := make([]openAINonStreamToolCall, 0)
 
 	for i := range sh.contentBlocks {
 		blockType, _ := sh.contentBlocks[i]["type"].(string)
 		switch blockType {
+		case "thinking":
+			if builder, ok := sh.thinkingBlockBuilders[i]; ok {
+				if reasoning := builder.String(); reasoning != "" {
+					reasoningParts = append(reasoningParts, reasoning)
+					continue
+				}
+			}
+			if reasoning, ok := sh.contentBlocks[i]["thinking"].(string); ok && reasoning != "" {
+				reasoningParts = append(reasoningParts, reasoning)
+			}
 		case "text":
 			if builder, ok := sh.textBlockBuilders[i]; ok {
 				if text := builder.String(); text != "" {
@@ -245,8 +257,9 @@ func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason st
 	}
 
 	message := openAINonStreamMessage{
-		Role:    "assistant",
-		Content: content,
+		Role:             "assistant",
+		Content:          content,
+		ReasoningContent: strings.Join(reasoningParts, ""),
 	}
 	if len(toolCalls) > 0 {
 		message.ToolCalls = toolCalls
@@ -842,6 +855,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Debug("puter: sanitized forwarded system items")
 			}
 		}
+		if isDeepSeekPuterModel(req.Model) {
+			restored, missing := h.restorePuterReasoning(r.Context(), req.Model, req.Messages)
+			if verboseDiagnostics && (restored > 0 || missing > 0) {
+				slog.Debug("puter reasoning replay prepared", "restored", restored, "fallback_required", missing)
+			}
+		}
 	}
 	if verboseDiagnostics {
 		slog.Debug("Checkpoint: message processing done")
@@ -1027,6 +1046,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sh.onToolCall = func(id, name, input, upstreamType string) {
+		if isPuterRequest && isDeepSeekPuterModel(mappedModel) {
+			if reasoning := sh.currentReasoningText(); reasoning != "" {
+				if err := h.savePuterReasoningForTool(r.Context(), mappedModel, id, reasoning); err != nil {
+					slog.Warn("failed to save puter reasoning replay", "tool_call_id", id, "error", err)
+				}
+			}
+		}
 		if !isWarpRequest || activeWarpConversationID == "" {
 			return
 		}

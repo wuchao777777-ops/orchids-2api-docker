@@ -57,6 +57,9 @@ func TestSendRequestWithPayloadEmitsNativeStreamEvents(t *testing.T) {
 			t.Fatalf("events[%d].Type=%q want=%q", i, events[i].Type, want)
 		}
 	}
+	if signature, _ := events[0].Event["signature"].(string); !strings.HasPrefix(signature, "puter-v1:") {
+		t.Fatalf("reasoning event signature=%q want generated puter signature", signature)
+	}
 	if events[2].Event["toolName"] != "web_search" || events[2].Event["input"] != `{"query":"SpaceX latest news"}` {
 		t.Fatalf("tool event=%#v", events[2].Event)
 	}
