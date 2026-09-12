@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"orchids-api/internal/api"
+	"orchids-api/internal/accountevents"
+	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
@@ -21,12 +23,58 @@ import (
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/opsagg"
 	"orchids-api/internal/provider"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/workbuddy"
 )
+
+// wiredOps is the per-minute aggregator created during startup. It is what the
+// overview endpoints and the alert evaluator read; it stays nil on a deployment
+// without Redis, and the API reports "no sample" in that case.
+var wiredOps *opsagg.Aggregator
+
+// alertEngine evaluates the alert rules after startup. A nil engine (no Redis)
+// simply reports no alerts.
+var alertEngine *alerting.Engine
+
+// accountChangeEmitter adapts the store's change description to the notification
+// bus. The store publishes only after a successful write; the bus decides what
+// kind of change it was.
+type accountChangeEmitter struct {
+	bus *accountevents.Bus
+}
+
+// Publish implements store.ChangeEmitter. It resolves the after-state on its own
+// goroutine (the store hands over only the id and the previous state), stamps the
+// change kind, and hands it to the bus.
+func (e accountChangeEmitter) Publish(change store.AccountChange) {
+	if e.bus == nil || change.AccountID == 0 {
+		return
+	}
+	var current *store.Account
+	if wiredStore != nil {
+		if loaded, err := wiredStore.GetAccount(context.Background(), change.AccountID); err == nil {
+			current = loaded
+		}
+	}
+	e.bus.Publish(accountevents.Change{
+		AccountID: change.AccountID,
+		Kind:      accountevents.Classify(change.Previous, current),
+		Previous:  change.Previous,
+		Account:   current,
+	})
+}
+
+// wiredStore is the account store created during startup; the change emitter uses
+// it to resolve the after-state of a mutation it was told about.
+var wiredStore *store.Store
+
+// wiredAuditLogger is the journal created at startup, used by the background
+// loops that record system events.
+var wiredAuditLogger audit.Logger
 
 func main() {
 	configPath := flag.String("config", "", "Path to config.json/config.yaml")
@@ -136,6 +184,37 @@ func main() {
 		auditLogger := audit.NewRedisLogger(redisClient, s.RedisPrefix(), 10000)
 		h.SetAuditLogger(auditLogger)
 		grokHandler.SetAuditLogger(auditLogger)
+		// The admin session wrapper journals management changes; wiring the same
+		// logger keeps requests and operations in one searchable journal.
+		middleware.SetOperationAuditLogger(auditLogger)
+		// Per-minute buckets back the operations overview. The trace middleware
+		// reports one observation per finished request, so the counters cannot
+		// double count an upstream retry.
+		opsAggregator := opsagg.New(redisClient, s.RedisPrefix())
+		middleware.SetRequestOutcomeRecorder(opsAggregator.ObserveHTTPRequest)
+		wiredOps = opsAggregator
+		apiHandler.SetOpsAggregator(opsAggregator)
+		apiHandler.SetRefreshConcurrencyReporter(grokRefreshHub.Len)
+		// Alert transitions are journalled as system events, which is what makes a
+		// failure and its recovery one traceable pair.
+		alertEngine = alerting.NewEngine(alerting.DefaultRules(), newAuditAlertRecorder(auditLogger))
+		apiHandler.SetAlertEngine(alertEngine)
+		wiredAuditLogger = auditLogger
+		// One account change, three caches: the pool snapshot, the cached upstream
+		// clients and the refresh scheduler's due set. The store announces a change
+		// only after it has been persisted, and the bus coalesces bursts by account
+		// ID so a multi-field update invalidates each cache once.
+		accountBus := accountevents.NewBus()
+		accountBus.Subscribe(lb)
+		accountBus.Subscribe(h)
+		accountBus.Subscribe(refreshKick)
+		wiredStore = s
+		s.SetChangeEmitter(accountChangeEmitter{bus: accountBus})
+		slog.Info("Operations aggregation wired",
+			"bucket_prefix", s.RedisPrefix()+"ops:agg:",
+			"request_recorder", true,
+			"alert_engine", true,
+			"account_change_bus", "in-process")
 		defer auditLogger.Close()
 		slog.Debug("Audit logger initialized", "backend", "redis")
 	}
@@ -198,6 +277,12 @@ func main() {
 	defer cancelBackground()
 
 	startTokenRefreshLoop(ctx, cfg, s, lb)
+	// Alert evaluation runs beside the refresh loop: it reads the same metric
+	// buckets the overview shows, so an alert and the page never disagree.
+	startAlertLoop(ctx, wiredOps, s, alertEngine, wiredAuditLogger)
+	// Probes answer "can this channel serve right now?" when there is no real
+	// traffic; their outcomes are counted apart from user requests.
+	startProbeLoop(ctx, s, cfg, wiredAuditLogger, cfg.Port)
 	logWorkBuddyReachability(cfg)
 
 	// Graceful shutdown

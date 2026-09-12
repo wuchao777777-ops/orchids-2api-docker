@@ -18,13 +18,17 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/accountpolicy"
+	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/auth"
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/opsagg"
 	"orchids-api/internal/puter"
+	"orchids-api/internal/refreshqueue"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/util"
@@ -61,6 +65,38 @@ type API struct {
 	// credentials until the account is verified and persisted.
 	workbuddyLoginMu sync.Mutex
 	workbuddyLogins  map[string]*workbuddyLogin
+
+	// opsAggregator and alerts back the operations overview. They are optional:
+	// a Redis-less deployment simply reports "no sample" instead of failing.
+	opsAggregator *opsagg.Aggregator
+	alertEngine   *alerting.Engine
+	// refreshConcurrency reports how many accounts are being refreshed right now.
+	refreshConcurrency func() int
+}
+
+// SetRefreshConcurrencyReporter lets the scheduler expose its in-flight count to
+// the overview without the API importing the scheduler.
+func (a *API) SetRefreshConcurrencyReporter(reporter func() int) {
+	if a == nil {
+		return
+	}
+	a.refreshConcurrency = reporter
+}
+
+// SetOpsAggregator wires the per-minute buckets used by the overview endpoints.
+func (a *API) SetOpsAggregator(aggregator *opsagg.Aggregator) {
+	if a == nil {
+		return
+	}
+	a.opsAggregator = aggregator
+}
+
+// SetAlertEngine wires the alert rules evaluated by the overview endpoints.
+func (a *API) SetAlertEngine(engine *alerting.Engine) {
+	if a == nil {
+		return
+	}
+	a.alertEngine = engine
 }
 
 type auditEventRecord struct {
@@ -68,9 +104,29 @@ type auditEventRecord struct {
 	Event audit.Event `json:"event"`
 }
 
+// auditScanCap bounds how many stream entries one query reads before filtering.
+// The ledger is time-bounded, so a filtered page must not silently promise the
+// whole history: coverage tells the reader what the store actually holds.
+const auditScanCap = 2000
+
 // HandleAuditEvents exposes the bounded Redis audit ledger to authenticated
-// administrators. Cursor pagination uses Redis Stream IDs and never returns
-// request bodies, credentials, or upstream error text.
+// administrators. Cursor pagination uses Redis Stream IDs; the journal is
+// filtered by kind (request/operation/system) plus the fields the log centre
+// offers. Credentials never appear: whether they do is enforced at write time by
+// audit.SummarizeChange.
+// writeAccountCheckBusy tells the caller that a refresh of this account is already
+// running, so the click was merged instead of racing a second refresh.
+func writeAccountCheckBusy(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": map[string]interface{}{
+			"type":    "check_in_progress",
+			"message": "this account is already being refreshed; the request was merged",
+		},
+	})
+}
+
 func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -96,26 +152,201 @@ func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
 	if before := strings.TrimSpace(r.URL.Query().Get("before")); before != "" {
 		maxID = "(" + before
 	}
-	messages, err := a.store.RedisClient().XRevRangeN(r.Context(), a.store.RedisPrefix()+"audit:log", maxID, "-", int64(limit)).Result()
+	filter := auditFilterFromQuery(r)
+
+	scanCount := int64(limit) * 5
+	if scanCount > auditScanCap {
+		scanCount = auditScanCap
+	}
+	messages, err := a.store.RedisClient().XRevRangeN(r.Context(), a.store.RedisPrefix()+"audit:log", maxID, "-", scanCount).Result()
 	if err != nil {
 		http.Error(w, "failed to read audit ledger", http.StatusInternalServerError)
 		return
 	}
 	records := make([]auditEventRecord, 0, len(messages))
+	scanned := 0
 	for _, message := range messages {
+		scanned++
 		raw, _ := message.Values["data"].(string)
 		var event audit.Event
 		if raw == "" || json.Unmarshal([]byte(raw), &event) != nil {
 			continue
 		}
+		if !filter.matches(event) {
+			continue
+		}
 		records = append(records, auditEventRecord{ID: message.ID, Event: event})
+		if len(records) >= limit {
+			break
+		}
 	}
 	nextCursor := ""
-	if len(records) == limit {
+	if len(records) == limit && len(messages) > 0 {
 		nextCursor = records[len(records)-1].ID
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": records, "next_cursor": nextCursor})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"data":        records,
+		"next_cursor": nextCursor,
+		"scanned":     scanned,
+		// Filtered: true means the store was scanned to its cap, so an empty page
+		// is "nothing matched inside the retained window" — not "never happened".
+		"filtered":   scanned >= int(scanCount),
+		"scan_cap":   scanCount,
+		"coverage":   a.auditCoverage(r.Context()),
+		"filter_used": filter.describe(),
+	})
+}
+
+// auditQueryFilter is the log centre's filter set.
+type auditQueryFilter struct {
+	kind      string
+	channel   string
+	status    string
+	action    string
+	actor     string
+	model     string
+	accountID int64
+	apiKeyID  int64
+}
+
+func auditFilterFromQuery(r *http.Request) auditQueryFilter {
+	query := r.URL.Query()
+	parse := func(name string) int64 {
+		parsed, err := strconv.ParseInt(strings.TrimSpace(query.Get(name)), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	}
+	return auditQueryFilter{
+		kind:      strings.ToLower(strings.TrimSpace(query.Get("kind"))),
+		channel:   strings.ToLower(strings.TrimSpace(query.Get("channel"))),
+		status:    strings.ToLower(strings.TrimSpace(query.Get("status"))),
+		action:    strings.ToLower(strings.TrimSpace(query.Get("action"))),
+		actor:     strings.ToLower(strings.TrimSpace(query.Get("actor"))),
+		model:     strings.ToLower(strings.TrimSpace(query.Get("model"))),
+		accountID: parse("account_id"),
+		apiKeyID:  parse("api_key_id"),
+	}
+}
+
+func (f auditQueryFilter) matches(event audit.Event) bool {
+	if f.kind != "" && string(event.Kind) != f.kind {
+		return false
+	}
+	if f.channel != "" && !strings.EqualFold(event.Channel, f.channel) {
+		return false
+	}
+	if f.status != "" && !strings.EqualFold(event.Status, f.status) {
+		return false
+	}
+	if f.action != "" && !strings.Contains(strings.ToLower(event.Action), f.action) {
+		return false
+	}
+	if f.actor != "" && !strings.Contains(strings.ToLower(event.Actor), f.actor) {
+		return false
+	}
+	if f.model != "" && !strings.Contains(strings.ToLower(event.Model), f.model) {
+		return false
+	}
+	if f.accountID != 0 && event.AccountID != f.accountID {
+		return false
+	}
+	if f.apiKeyID != 0 && event.APIKeyID != f.apiKeyID {
+		return false
+	}
+	return true
+}
+
+func (f auditQueryFilter) describe() map[string]interface{} {
+	described := map[string]interface{}{}
+	if f.kind != "" {
+		described["kind"] = f.kind
+	}
+	if f.channel != "" {
+		described["channel"] = f.channel
+	}
+	if f.status != "" {
+		described["status"] = f.status
+	}
+	if f.action != "" {
+		described["action"] = f.action
+	}
+	if f.actor != "" {
+		described["actor"] = f.actor
+	}
+	if f.model != "" {
+		described["model"] = f.model
+	}
+	if f.accountID != 0 {
+		described["account_id"] = f.accountID
+	}
+	if f.apiKeyID != 0 {
+		described["api_key_id"] = f.apiKeyID
+	}
+	return described
+}
+
+// auditCoverage reports the retained window and the per-journal counts, so the
+// UI can state what the numbers actually cover instead of promising a fixed
+// retention period.
+func (a *API) auditCoverage(ctx context.Context) map[string]interface{} {
+	coverage := map[string]interface{}{"entries": 0, "oldest": nil, "newest": nil, "counts": map[string]int{}}
+	if a == nil || a.store == nil || a.store.RedisClient() == nil {
+		return coverage
+	}
+	client := a.store.RedisClient()
+	key := a.store.RedisPrefix() + "audit:log"
+
+	total, err := client.XLen(ctx, key).Result()
+	if err != nil {
+		return coverage
+	}
+	coverage["entries"] = total
+	counts := map[string]int{}
+	var newest, oldest string
+	if entries, err := client.XRevRangeN(ctx, key, "+", "-", 1).Result(); err == nil && len(entries) > 0 {
+		newest = entries[0].ID
+	}
+	if entries, err := client.XRangeN(ctx, key, "-", "+", 1).Result(); err == nil && len(entries) > 0 {
+		oldest = entries[0].ID
+	}
+	coverage["oldest"] = streamIDTime(oldest)
+	coverage["newest"] = streamIDTime(newest)
+
+	// Per-journal counts over the retained window. The cap keeps the call bounded
+	// on a busy instance; counts are therefore a floor, which the response says.
+	if entries, err := client.XRevRangeN(ctx, key, "+", "-", auditScanCap).Result(); err == nil {
+		coverage["count_sampled"] = len(entries)
+		for _, entry := range entries {
+			raw, _ := entry.Values["data"].(string)
+			var event audit.Event
+			if raw == "" || json.Unmarshal([]byte(raw), &event) != nil {
+				continue
+			}
+			kind := string(event.Kind)
+			if kind == "" {
+				kind = string(audit.KindRequest)
+			}
+			counts[kind]++
+		}
+	}
+	coverage["counts"] = counts
+	return coverage
+}
+
+// streamIDTime converts a Redis Stream ID ("ms-seq") into RFC3339, or null.
+func streamIDTime(id string) interface{} {
+	millis := strings.SplitN(strings.TrimSpace(id), "-", 2)[0]
+	if millis == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseInt(millis, 10, 64)
+	if err != nil || parsed <= 0 {
+		return nil
+	}
+	return time.UnixMilli(parsed).UTC().Format(time.RFC3339)
 }
 
 const maxDeviceLogins = 10
@@ -507,6 +738,10 @@ func preserveGrokRuntimeStateOnAdminEdit(acc, existing *store.Account) {
 type accountOutput struct {
 	*store.Account
 	WarpAuthenticated bool `json:"warp_authenticated,omitempty"`
+	// SessionFingerprint is a short digest of the credential the account is
+	// authenticated with. It lets the table tell two sessions apart on channels
+	// that carry no email, without returning the secret itself.
+	SessionFingerprint string `json:"session_fingerprint,omitempty"`
 	// Quota holds the provider-specific quota projection. It is merged into every
 	// account response so the management table can render 等级/配额 consistently
 	// without re-deriving each channel's semantics on the client.
@@ -526,6 +761,12 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 		}
 	}
 	merged["warp_authenticated"] = o.WarpAuthenticated
+	// The session fingerprint identifies a login on channels that carry no email
+	// (Warp); it is a digest, never the credential, so it is safe to expose to an
+	// authenticated administrator.
+	if o.SessionFingerprint != "" {
+		merged["session_fingerprint"] = o.SessionFingerprint
+	}
 	for key, value := range o.Quota {
 		merged[key] = value
 	}
@@ -533,6 +774,10 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 }
 
 func normalizeAccountOutput(acc *store.Account) *accountOutput {
+	// The session fingerprint is derived from the live credential before the
+	// redaction below clears it, so the operator can still tell two browser
+	// logins apart without the session token ever leaving the server.
+	sessionFingerprint := accountSessionFingerprint(acc)
 	out := normalizeWarpTokenOutput(acc)
 	if out == nil {
 		return nil
@@ -557,9 +802,44 @@ func normalizeAccountOutput(acc *store.Account) *accountOutput {
 		out = RedactWorkBuddyOutput(out)
 	}
 	return &accountOutput{
-		Account:           out,
-		WarpAuthenticated: strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") && warp.RefreshToken(acc) != "",
-		Quota:             buildQuotaResponseFields(out),
+		Account:            out,
+		WarpAuthenticated:  strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") && warp.RefreshToken(acc) != "",
+		SessionFingerprint: sessionFingerprint,
+		Quota:              buildQuotaResponseFields(out),
+	}
+}
+
+// accountSessionFingerprint returns a short, non-reversible identifier of the
+// credential an account is authenticated with.
+//
+// It exists because some channels authenticate with a session token that carries
+// no identity at all (Warp is the clearest case: there is no email or username to
+// show). The account table then had nothing to display but "登录会话已配置", which
+// made two different browser logins look identical. The fingerprint distinguishes
+// them without ever exposing the secret: 12 hex characters of a SHA-256 digest,
+// the same shape already used for upstream diagnostics.
+func accountSessionFingerprint(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "warp":
+		// Warp stores its browser session in the refresh-token column; the read
+		// path deliberately clears that column, which is exactly why the
+		// fingerprint has to be computed here.
+		return util.Fingerprint(warp.RefreshToken(acc))
+	case "grok":
+		if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+			return util.Fingerprint(util.FirstNonEmpty(acc.OAuthAccessToken, acc.OAuthRefreshToken))
+		}
+		return util.Fingerprint(util.FirstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token))
+	case "workbuddy":
+		creds := resolveWorkBuddyCredentials(acc)
+		return util.Fingerprint(util.FirstNonEmpty(creds.AccessToken, creds.RefreshToken))
+	case "puter":
+		return util.Fingerprint(util.FirstNonEmpty(acc.Token, acc.SessionCookie, acc.ClientCookie))
+	default:
+		return ""
 	}
 }
 
@@ -1923,7 +2203,23 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				a.checkNextAllowed[id] = time.Now().Add(d)
 			}()
 
-			accountStatus, httpStatus, refreshErr := a.refreshAccountState(r.Context(), acc)
+			// The manual check takes the same process-wide lease as the background
+			// scheduler: two refreshes of one account must never run at once, or the
+			// slower writer would persist an older snapshot over a newer verdict.
+			var accountStatus string
+			var httpStatus int
+			var refreshErr error
+			if !refreshqueue.WithLease(acc.ID, func() {
+				accountStatus, httpStatus, refreshErr = a.refreshAccountState(r.Context(), acc)
+			}) {
+				slog.Info("Account check skipped: a refresh of this account is already running", "account_id", acc.ID)
+				checkErrStatus = ""
+				a.checkMu.Lock()
+				a.checkInFlight[id] = false
+				a.checkMu.Unlock()
+				writeAccountCheckBusy(w)
+				return
+			}
 			if refreshErr != nil {
 				checkErrStatus = accountStatus
 				if accountStatus != "" {
@@ -2795,16 +3091,17 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 	}
 	status = strings.TrimSpace(status)
 	// The credentials answered the upstream, whatever the verdict: stamp it so a
-	// scheduler can tell a verified account from one that was never checked.
-	acc.VerifiedAt = time.Now()
+	// scheduler can tell a verified account from one that was never checked. The
+	// policy package owns that pairing so every entrance behaves identically.
 	if status == "" {
-		acc.StatusCode = ""
-		acc.StatusMessage = ""
-		acc.LastAttempt = time.Time{}
+		accountpolicy.Success(time.Now()).Apply(acc)
 		return
 	}
-	acc.StatusCode = status
-	acc.LastAttempt = acc.VerifiedAt
+	verdict := accountpolicy.Verdict{Status: status, At: time.Now()}
+	if verdict.Scope = accountpolicy.ScopeForStatus(status); verdict.Scope == accountpolicy.ScopeCredential {
+		verdict.NeedsLogin = true
+	}
+	verdict.Apply(acc)
 }
 
 func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config) error {

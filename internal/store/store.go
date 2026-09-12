@@ -107,6 +107,11 @@ type Account struct {
 	// auto/fast modes. It is intentionally separate from Build billing and
 	// passive request/token rate-limit headers.
 	GrokWebQuota GrokWebQuotaSnapshot `json:"grok_web_quota,omitempty"`
+	// ModelCooldowns records a per-model, per-account cooldown. A model the
+	// upstream throttled must not take the whole account out of the pool: the
+	// other models of the same account are still usable, so the verdict is scoped
+	// to this map instead of StatusCode.
+	ModelCooldowns map[string]time.Time `json:"model_cooldowns,omitempty"`
 
 	// WorkBuddyAccessToken is the short-lived Keycloak bearer token of a
 	// WorkBuddy (www.workbuddy.ai) account. WorkBuddyRefreshToken is the
@@ -398,6 +403,17 @@ type mediaInputStore interface {
 	SaveStoredMediaInput(ctx context.Context, input *StoredMediaInput, ttl time.Duration) error
 	GetStoredMediaInput(ctx context.Context, id, ownerHash string) (*StoredMediaInput, error)
 	DeleteStoredMediaInput(ctx context.Context, id, ownerHash string) error
+}
+
+// SetChangeEmitter wires account-change notifications. Passing nil disables
+// them, which keeps a store used only by tests silent.
+func (s *Store) SetChangeEmitter(emitter ChangeEmitter) {
+	if s == nil {
+		return
+	}
+	if redis, ok := s.accounts.(*redisStore); ok {
+		redis.SetChangeEmitter(emitter)
+	}
 }
 
 func New(opts Options) (*Store, error) {

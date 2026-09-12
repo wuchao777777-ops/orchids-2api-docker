@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/logutil"
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
 	"strconv"
 	"strings"
@@ -190,6 +191,9 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	defer logger.Close()
 	logger.LogIncomingRequest(req)
 	req.Model = normalizeModelID(req.Model)
+	// Publish the resolved model so the per-minute aggregation can attribute this
+	// request to a model: the latency middleware cannot read the body itself.
+	r = r.WithContext(middleware.WithRequestModel(r.Context(), req.Model))
 	if req.ImageConfig != nil {
 		req.ImageConfig.Normalize()
 	}
@@ -369,6 +373,11 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		h.serveVideoChatCompletion(r.Context(), w, &req, spec, videoPrompt, videoAttachments, publicBase, logger)
 		return
 	}
+
+	// The request's model travels on the context so account selection can skip an
+	// account that is cooling down for this model only; the account's other models
+	// stay in the pool.
+	r = r.WithContext(WithRequestModel(r.Context(), spec.ID))
 
 	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
 	if err != nil {

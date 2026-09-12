@@ -17,6 +17,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
@@ -122,6 +123,20 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
 		auditLogger:  audit.NewNopLogger(),
 	}
+	h.clientCache.SetConfig(cfg)
+	// The cache re-reads an account when it is told the account changed, so the
+	// decision "is this client still valid?" uses the state that was persisted
+	// rather than the event alone.
+	h.clientCache.SetAccountResolver(func(id int64) *store.Account {
+		if lb == nil || lb.Store == nil || id == 0 {
+			return nil
+		}
+		account, err := lb.Store.GetAccount(context.Background(), id)
+		if err != nil {
+			return nil
+		}
+		return account
+	})
 
 	return h
 }
@@ -524,11 +539,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	failedAccountIDs := []int64{}
 	failedAccountSet := make(map[int64]struct{})
 
-	apiClient, currentAccount, err := h.selectAccountWithOptions(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
+	apiClient, currentAccount, releaseClient, err := h.acquireAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 		ModelID:               upstreamWarpModelID(req.Model),
 		RequireWarpCloudAgent: requireWarpCloudAgent,
 		PreferredAccountID:    warpContinuationState.accountID,
 	})
+	// The client is held for the whole request: a credential change during it
+	// retires the client and closes it here, after the request finished.
+	defer releaseClient()
 	if err != nil {
 		slog.Error("selectAccount failed", "error", err, "channel", targetChannel)
 		logger.LogEarlyExit("select_account_failed", map[string]interface{}{
@@ -854,6 +872,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
 		retriesRemaining := maxRetries
 
+		// Publish the model this request resolved to, so the per-minute
+		// aggregation can attribute the outcome to a model rather than only to a
+		// channel. The middleware cannot read the body itself.
+		r = r.WithContext(middleware.WithRequestModel(r.Context(), mappedModel))
+
 		payloadMessages := upstreamMessages
 		payloadSystem := req.System
 
@@ -945,31 +968,44 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 			// Check for non-retriable errors
 			slog.Error("Request error", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err, "category", errClass.Category, "retryable", errClass.Retryable)
+			// One decision for both questions this error raises: whether the
+			// account keeps its place in the pool, and whether the request may be
+			// retried. The scheduler reads the same policy, so a failure cannot be
+			// "cooling down" for one entrance and "retryable" for the other.
+			verdict := accountpolicy.Classify(currentAccount, err, req.Model)
 			// 标记账号状态（auth 类错误始终标记，无论是否可重试）
 			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-				if status := apperrors.ClassifyAccountStatus(errStr); status != "" {
-					// Mark status if it's auth-related OR a quota/rate-limit style cooldown.
-					if !errClass.Retryable || errClass.Category == "auth" || errClass.Category == "auth_blocked" || status == "403" || status == "429" || status == "402" {
-						skipAccountStatusMark := isWarpRequest && status == "403" && warpCloudAgentForbidden
-						if skipAccountStatusMark {
-							if verboseDiagnostics {
-								slog.Debug("跳过账号全局 403 标记: Warp cloud agent 能力不足", "account_id", currentAccount.ID, "category", errClass.Category)
-							}
-						} else if verboseDiagnostics {
-							slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", status, "category", errClass.Category)
+				if verdict.Status != "" {
+					skipAccountStatusMark := isWarpRequest && verdict.Status == "403" && warpCloudAgentForbidden
+					if skipAccountStatusMark {
+						if verboseDiagnostics {
+							slog.Debug("跳过账号全局 403 标记: Warp cloud agent 能力不足", "account_id", currentAccount.ID, "category", errClass.Category)
 						}
-						if !skipAccountStatusMark {
-							if isWarpRequest && errClass.Category == "rate_limit" && isWarpQuotaExhaustedError(errStr) {
-								markWarpQuotaExhausted(r.Context(), h.loadBalancer.Store, currentAccount)
-							} else {
-								h.loadBalancer.MarkAccountStatus(r.Context(), currentAccount, status)
+					} else if verboseDiagnostics {
+						slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", verdict.Status, "scope", string(verdict.Scope), "category", errClass.Category)
+					}
+					if !skipAccountStatusMark {
+						if isWarpRequest && errClass.Category == "rate_limit" && isWarpQuotaExhaustedError(errStr) {
+							markWarpQuotaExhausted(r.Context(), h.loadBalancer.Store, currentAccount)
+						} else {
+							// Apply keeps the status and its operator-facing reason
+							// together, so the account table can explain the cooldown.
+							verdict.Apply(currentAccount)
+							// A model-scoped failure is recorded per model: the
+							// account's other models stay in the pool. Persisting it
+							// here means the cooldown survives a restart and is
+							// honoured by every provider's selector, not only by the
+							// client that happened to notice the 429.
+							if verdict.Scope == accountpolicy.ScopeModel && verdict.Model != "" && verdict.Cooldown > 0 {
+								store.RecordModelCooldown(currentAccount, verdict.Model, time.Now().Add(verdict.Cooldown))
 							}
+							h.loadBalancer.MarkAccountStatus(r.Context(), currentAccount, verdict.Status)
 						}
 					}
 				}
 			}
 
-			if !errClass.Retryable {
+			if !verdict.Retryable {
 				slog.Error("Aborting retries for non-retriable error", "error", err, "category", errClass.Category)
 				if errClass.Category == "auth_blocked" || errClass.Category == "auth" {
 					sh.InjectAuthError(errStr)
@@ -1027,11 +1063,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					trackedAccountID = 0
 				}
 
-				nextClient, nextAccount, retryErr := h.selectAccountWithOptions(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
+				nextClient, nextAccount, releaseNext, retryErr := h.acquireAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 					ModelID:               upstreamReq.Model,
 					RequireWarpCloudAgent: requireWarpCloudAgent,
 					PreferredAccountID:    warpContinuationState.accountID,
 				})
+				// A later attempt may replace this client; the deferred release of the
+				// original stays valid because each acquire is independently counted.
+				_ = releaseNext
 				if retryErr == nil {
 					apiClient = nextClient
 					currentAccount = nextAccount
@@ -1092,7 +1131,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if !sh.hasReturn {
 		sh.finishResponse("end_turn")
 	}
-
 	if !isStream {
 		stopReason := sh.finalStopReason
 		if stopReason == "" {
@@ -1172,7 +1210,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			status = "error"
 		}
 		h.auditLogger.Log(r.Context(), audit.Event{
+			// One journal schema for every channel: the log centre must be able to
+			// compare a Grok request with a Warp request on the same fields.
+			Kind:      audit.KindRequest,
+			RequestID: middleware.GetTraceID(r.Context()),
 			Action:    "chat_request",
+			APIKeyID:  middleware.APIKeyID(r.Context()),
 			AccountID: accountID,
 			Model:     req.Model,
 			Channel:   channel,
@@ -1181,10 +1224,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			Duration:  time.Since(startTime).Milliseconds(),
 			Status:    status,
 			Metadata: map[string]interface{}{
-				"input_tokens":  sh.inputTokens,
-				"output_tokens": sh.outputTokens,
-				"stream":        isStream,
+				"stream": isStream,
 			},
+			InputTokens:  sh.inputTokens,
+			OutputTokens: sh.outputTokens,
 		})
 	}
 }

@@ -6,6 +6,7 @@
 *.dylib
 orchids-api
 orchids-server
+orchids-server-linux-*
 server
 !cmd/server/
 !cmd/server/*.go
@@ -69,3 +70,7 @@ tmp_aiclient/
 
 # Test
 test/
+
+# Local staticcheck cache (used when the default cache directory is not writable)
+.sccache/
+

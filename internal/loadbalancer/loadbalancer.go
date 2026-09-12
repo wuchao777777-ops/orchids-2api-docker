@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/auth"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -105,6 +106,52 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 
 	return account, nil
 }
+
+// InvalidateAccounts drops the cached snapshot entries for the given accounts so
+// the next selection reads their current state.
+//
+// This replaces the old "wait for the five-second TTL" behaviour: a change that
+// has been persisted must be visible to the next request, not to the request
+// after next. The whole snapshot is re-read on the next miss, so a removed
+// account cannot linger in the pool.
+func (lb *LoadBalancer) InvalidateAccounts(ids []int64) {
+	if lb == nil || len(ids) == 0 {
+		return
+	}
+	changed := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id != 0 {
+			changed[id] = struct{}{}
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	// A change to the pool always invalidates the TTL as well: keeping the deadline
+	// would let a later read serve the pre-change snapshot from a slice another
+	// caller still holds.
+	lb.cacheExpires = time.Time{}
+	if len(lb.cachedAccounts) == 0 {
+		return
+	}
+	kept := make([]*store.Account, 0, len(lb.cachedAccounts))
+	for _, acc := range lb.cachedAccounts {
+		if acc == nil {
+			continue
+		}
+		if _, dirty := changed[acc.ID]; dirty {
+			continue
+		}
+		kept = append(kept, acc)
+	}
+	lb.cachedAccounts = kept
+}
+
+// AccountChanges implements the account-change subscriber contract.
+func (lb *LoadBalancer) AccountChanges(ids []int64) { lb.InvalidateAccounts(ids) }
 
 func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Account, error) {
 	now := time.Now()
@@ -203,20 +250,24 @@ func (lb *LoadBalancer) ReleaseConnection(accountID int64) {
 }
 
 const (
+	// The account-state policy owns these windows; the aliases keep the pool's
+	// existing call sites and tests readable while giving every other entrance
+	// (scheduler, admin API, account table) the same numbers.
+	//
 	// 401 冷却时间：token 可能已刷新，较短间隔后重试
-	retry401Default = 5 * time.Minute
+	retry401Default = accountpolicy.CooldownAuth
 	// 402 对 Puter 来说通常表示余额/credits 不足。Puter 暂无稳定额度/重置时间接口，
 	// 默认按日冷却，避免无额度账号反复撞上游。
-	retry402Default = 24 * time.Hour
+	retry402Default = accountpolicy.CooldownPayment
 	// Puter 的路由额度可能在短窗口内恢复，且当前错误不提供 reset 时间。
 	// 每 15 分钟允许一次探测，在避免请求风暴的同时防止整个通道停用一天。
-	retry402Puter = 15 * time.Minute
+	retry402Puter = accountpolicy.CooldownPuterQuota
 	// 429 冷却时间：限流通常是暂时性的，优先等待较短窗口再恢复尝试
-	retry429Default = 1 * time.Minute
+	retry429Default = accountpolicy.CooldownRateLimit
 	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试
-	retry403Default = 24 * time.Hour
+	retry403Default = accountpolicy.CooldownBlocked
 	// Grok 的 403 很多是 Cloudflare challenge/临时风控，不应长时间拉黑
-	retry403Grok = 10 * time.Minute
+	retry403Grok = accountpolicy.CooldownBlockedGro
 )
 
 func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Account) bool {
