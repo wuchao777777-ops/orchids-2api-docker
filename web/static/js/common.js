@@ -34,6 +34,11 @@ function getSidebarAccountToken(acc) {
     // the visible proof that a credential is configured.
     return acc.workbuddy_access_token || "";
   }
+  if (type === "qoder") {
+    // Same contract as WorkBuddy: only the derived access token is exposed, and
+    // only so the table can show that a credential exists.
+    return acc.qoder_access_token || "";
+  }
   return acc.client_cookie || acc.token || "";
 }
 
@@ -89,10 +94,25 @@ function getSidebarQuotaStats(acc) {
     }
     return null;
   }
+  if (type === "qoder") {
+    // Qoder has no credit meter API in this integration, so a quota must not be
+    // fabricated from generic usage columns: saying "unknown" is the honest
+    // answer and keeps the sidebar from implying a balance nobody measured.
+    return null;
+  }
   const explicitLimit = Math.floor(acc.quota_limit || 0);
   const hasExplicitRemaining = acc.quota_remaining !== undefined && acc.quota_remaining !== null;
   if (explicitLimit > 0 && hasExplicitRemaining) {
-    return { supported: true, limit: explicitLimit, remaining: Math.max(0, Math.floor(acc.quota_remaining || 0)) };
+    return {
+      supported: true,
+      limit: explicitLimit,
+      remaining: Math.max(0, Math.floor(acc.quota_remaining || 0)),
+      // The server labels an inferred window. Carrying the label here as well keeps a
+      // caller from rendering an estimate as a balance just because it took this
+      // shortcut instead of the channel-specific branch.
+      estimated: acc.quota_confidence === "estimated",
+      limitKnown: acc.quota_limit_known === true,
+    };
   }
 
   const limit = Math.floor(acc.usage_limit || 0);
@@ -138,12 +158,16 @@ function isSidebarAccountAbnormal(acc) {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (type === "workbuddy") {
     if (!hasSidebarAccountCredential(acc)) return true;
+  } else if (type === "qoder") {
+    if (!hasSidebarAccountCredential(acc)) return true;
   } else if (!acc.session_id && !acc.session_cookie) {
     return true;
   }
 
   const quota = getSidebarQuotaStats(acc);
-  if (quota && quota.limit > 0 && quota.remaining <= 0 && !isQuotaOnlyStatus(acc)) {
+  // An exhausted ESTIMATE is not an account fault: the window is inferred, so it must
+  // not turn the sidebar's 正常/异常 counter into a verdict about the credential.
+  if (quota && quota.limit > 0 && quota.remaining <= 0 && !quota.estimated && !isQuotaOnlyStatus(acc)) {
     return true;
   }
 

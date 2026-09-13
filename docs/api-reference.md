@@ -11,6 +11,7 @@
 | `/warp/v1/messages` | POST | Warp 通道 Claude Messages 代理 |
 | `/puter/v1/messages` | POST | Puter 通道 Claude Messages 代理 |
 | `/workbuddy/v1/messages` | POST | WorkBuddy 国际版 Claude Messages 代理 |
+| `/qoder/v1/messages` | POST | Qoder（qoder.com）Claude Messages 代理 |
 | `/grok/v1/messages` | POST | Grok 通道 Anthropic Messages 兼容入口 |
 | `/v1/messages` | POST | Grok Messages 兼容别名 |
 | `/*/v1/messages/count_tokens` | POST | 输入 token 估算 |
@@ -22,6 +23,7 @@
 | `/warp/v1/chat/completions` | POST | Warp OpenAI 兼容入口 |
 | `/puter/v1/chat/completions` | POST | Puter OpenAI 兼容入口 |
 | `/workbuddy/v1/chat/completions` | POST | WorkBuddy 国际版 OpenAI 兼容入口 |
+| `/qoder/v1/chat/completions` | POST | Qoder OpenAI 兼容入口 |
 | `/grok/v1/chat/completions` | POST | Grok OpenAI 兼容入口 |
 | `/v1/chat/completions` | POST | Grok 兼容别名 |
 
@@ -88,6 +90,7 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/warp/v1/models` | GET | Warp 模型列表 |
 | `/puter/v1/models` | GET | Puter 模型列表 |
 | `/workbuddy/v1/models` | GET | WorkBuddy 国际版模型列表 |
+| `/qoder/v1/models` | GET | Qoder 模型列表 |
 | `/grok/v1/models` | GET | Grok 模型列表 |
 | `/health` | GET | 健康检查 |
 | `/metrics` | GET | Prometheus 指标 |
@@ -109,6 +112,8 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/api/puter/web-login` | POST | 试验：验证 Puter 官方弹窗授权并保存账号；需管理认证和同源 JSON 请求 |
 | `/api/workbuddy/login` | POST | 发起 WorkBuddy 国际版官方浏览器登录（返回 `id` 与官方 `verification_uri_complete`） |
 | `/api/workbuddy/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
+| `/api/qoder/login` | POST | 发起 Qoder 官方设备授权登录（返回 `id` 与官方 `verification_uri_complete`） |
+| `/api/qoder/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
 | `/api/keys` | GET/POST | API Key 列表 / 创建 |
 | `/api/keys/{id}` | PATCH/DELETE | 更新 API Key 状态或访问策略 / 删除 |
 | `/api/models` | GET/POST | 模型列表 / 创建模型 |
@@ -128,6 +133,27 @@ Warp 账号只能通过官方网页登录添加。`POST /api/accounts` 拒绝创
 账号查询返回 `warp_authenticated` 表示服务器是否保存了登录凭据（不代表实时认证成功），不返回会话密钥。
 `/api/import` 跳过 Warp 并计入 `skipped`；`/api/export` 不包含 Warp 账号。
 迁移服务器后需重新进行 Warp 官方网页登录。已有账号及内部自动续期机制保留。
+
+每个账号响应都带一组额度来源字段，用来区分「上游真的报了数值」「按画像推断为 Free」「尚未同步」：
+
+| 字段 | 取值 | 说明 |
+|---|---|---|
+| `quota_type` | `paid` / `free` / `unknown` | 套餐类型判定 |
+| `quota_source` | `upstreamBilling` / `upstreamExhaustion` / `planMetadata` / `billingProfile` / `subscription` / `upstreamRateLimit` / `unknown` | 判定依据 |
+| `quota_confidence` | `confirmed` / `observed` / `estimated` / `""` | 该数值的可信度 |
+| `quota_limit_known` | bool | `false` 表示上限是估算，上游未确认 |
+| `quota_observed` | bool | 用量是否由本网关实测（窗口内的审计 token 累计） |
+| `quota_window_hours` | number | 估算窗口长度（Free 为滚动 24 小时） |
+| `quota_note` | string | 面向运维的一句话解释 |
+
+Grok Build（OAuth）账号的上游常常不下发套餐名与数值额度，此时不再只回「未知」：
+
+- 账单同步成功且无任何窗口、或官方身份接口报 `free` → 判定 Free，`quota_mode=estimated_free`，`quota_limit` 为估算的 50 万 tokens / 24 小时，`quota_limit_known=false`，前端显示 `≈ 用量 / 上限 (Free 估算 · 滚动 24h)`；
+- 上游因免费额度耗尽而拒绝请求时，若响应含 `tokens (actual/limit): N/M`，则记录真实窗口：`quota_mode=confirmed_free`、`quota_source=upstreamExhaustion`、`quota_confidence=confirmed`，此时按余额渲染且不带 `≈`；
+- 付费套餐但上游不下发数值额度 → `quota_type=paid` / `quota_source=planMetadata`，**不编造任何额度**；
+- 从未同步或无法判定 → `quota_type=unknown`，保持「未知」。
+
+估算只用于展示，不参与调度判定；`quota_observed=false` 表示窗口内没有实测用量，前端显示「未统计」而不是把它当成 0。
 
 ### 2.2 `/api/v1/admin/*` 和 `/v1/admin/*`
 
@@ -269,6 +295,7 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 
 - 当前刷新是“来源同步”；Puter 会额外使用账号 `test_mode` 逐模型验证
 - WorkBuddy 使用 `GET /v3/config` 的 `cli` 白名单（鉴权成功即视为验证通过，不额外消耗额度），返回 `source=workbuddy_cli_models`
+- Qoder 使用账号级 `GET /algo/api/v2/model/list`（COSY 签名鉴权成功即视为验证通过，不额外消耗额度），返回 `source=qoder_model_list`；对外模型 ID 是**小写化的显示名**（例如 `qwen3.7-max`），内部 key（`qmodel_latest`）在账号快照里保留
 - 来源拿不到的模型会被删除
 
 ## 5. 常用请求示例
@@ -404,3 +431,52 @@ curl -s -X DELETE http://127.0.0.1:3002/api/workbuddy/login/<login-id>
 - `puter API error: ...`
 - `Bad Gateway`
 - `stream parse error`
+
+
+## 9. Qoder 官方设备授权登录
+
+Qoder 通道**只支持 OAuth 设备授权登录**，不提供 PAT（个人访问令牌）入口，账号创建接口也拒绝手填凭证。
+管理页面「添加账号 → Qoder 平台 → 使用 Qoder 官方网页登录」等价于下面这组请求。
+
+```bash
+# 1) 申请设备授权事务（同源请求，需管理会话 Cookie 或 X-Admin-Token）
+curl -s http://127.0.0.1:3002/api/qoder/login \
+  -H 'Content-Type: application/json' \
+  -H 'Origin: http://127.0.0.1:3002' \
+  -d '{"enabled":true}'
+# → {"id":"<login-id>","status":"pending","verification_uri":"https://qoder.com/device/selectAccounts","verification_uri_complete":"https://qoder.com/device/selectAccounts?challenge=...&challenge_method=S256&nonce=...&machine_id=...&client_id=...","expires_at":"..."}
+
+# 2) 浏览器打开 verification_uri_complete 完成授权，然后轮询
+curl -s http://127.0.0.1:3002/api/qoder/login/<login-id>
+# → {"status":"pending"} → ... → {"status":"complete","account_id":12,"message":"Qoder account added"}
+
+# 取消（可选）
+curl -s -X DELETE http://127.0.0.1:3002/api/qoder/login/<login-id>
+```
+
+行为说明：
+
+- **登录只由用户操作触发**：打开添加/编辑账号弹窗不会发起任何登录请求；只有点击「使用 Qoder 官方网页登录」才调用本接口
+- 授权 URL 的 host 必须在允许列表内（`qoder.com`、`www.qoder.com`、`openapi.qoder.sh`、本部署配置的 OAuth 基址，以及 loopback）；其他 host 一律拒绝，避免把登录页重定向到第三方
+- PKCE verifier、nonce 与设备 `machine_id` 只保存在服务端；轮询响应里不会出现它们（`user_code` 恒为空）
+- 上游在浏览器步骤完成前对 `GET /api/v1/deviceToken/poll` 返回 **404**，服务端归一为「pending」并按 2s 节奏轮询
+- 授权成功后服务端会派生并保存该账号的 runtime 认证对（`qoder_runtime_info` / `qoder_runtime_key`），登录时即完成，避免第一次聊天才暴露失败
+- **落库条件是「上游签发了设备凭据」+「解析出账号身份」**，不依赖模型目录读取：Qoder CLI 自带模型清单、Qoder-2API-Go 参考实现读本地缓存，都不通过网络拉取。因此当 `/algo/api/v2/model/list` 返回 404/403 或不可达（例如 CN 区账号、未开通 CLI 面、端点变更）时，账号仍会保存并装入内置模型清单，真实的读取失败原因写入服务端日志
+- 只有确实不可用的凭据才会被拒绝：解析不出账号身份（`userinfo` 被拒且设备 token 未带 `user_id`）或未签发 refreshToken 时，账号不落库，且失败消息会带上具体原因（而不只是「could not be verified」）
+- `/api/models/refresh?channel=qoder` 仍然严格：读不到账号目录时会报错，而不会把内置清单伪装成「上游已同步」
+- 设备 refreshToken 由上游轮换，服务端在过期前自动刷新并回写账号记录；管理页面不会返回 refreshToken、runtime 字段或 jobToken
+- 触发了 `POST /algo/api/v3/user/jobToken`（PAT 形态网关握手）时结果只作为辅助字段保存，**不是**推理凭据；握手失败只记日志，不影响登录或推理
+- 同一账号再次登录会更新原账号，不会产生重复记录
+- 需要同源（`Origin` 与 Host 一致）且 HTTPS（本地 `localhost`/`127.0.0.1` 例外）；跨站请求一律 403
+
+### 9.1 推理请求的鉴权链
+
+Qoder 网关不接受裸 OAuth token，每个请求携带服务端派生的认证对：
+
+| 请求头 | 内容 |
+|---|---|
+| `Cosy-Key` | 该账号的 runtime 字段里 RSA(PKCS#1 v1.5) 密文（Base64） |
+| `Authorization` | `Bearer COSY.<payloadB64>.<signature>`，其中 `payload.info` 是同一密钥加密的 runtime 明文 |
+| `Cosy-Date` | 与签名使用同一个 Unix 秒 |
+
+请求体不是裸 JSON：服务端用上游的私有 Base64 字母表编码并交换外侧三段，签名覆盖的是**编码后的字节**。`event:finish` 是权威结束标记；结束标记之前 EOF 会被判为截断并报错，而不是伪装成成功的短回答。
