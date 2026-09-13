@@ -17,7 +17,6 @@ import (
 type Severity string
 
 const (
-	SeverityInfo     Severity = "info"
 	SeverityWarning  Severity = "warning"
 	SeverityCritical Severity = "critical"
 )
@@ -69,25 +68,46 @@ type Rules struct {
 	// MinRequests is how much real traffic a window needs before a success-rate
 	// rule is allowed to fire. Without it a single failed request would raise an
 	// alert on a quiet channel.
-	MinRequests int64
+	MinRequests int64 `json:"MinRequests"`
 	// MinFailures is how many failures a window needs before the WARNING band is
 	// allowed to fire. A ratio alone is not evidence on a quiet channel: one
 	// failure out of nine requests is normal operation, and announcing it made
 	// the journal alternate between firing and recovered every few minutes.
 	// Severe outages (below SuccessRateCritical) are not gated by this: a channel
 	// that answers correctly for almost nobody is broken whatever the count.
-	MinFailures int64
+	MinFailures int64 `json:"MinFailures"`
 	// SuccessRateWarning / SuccessRateCritical are ratios (0..1).
-	SuccessRateWarning  float64
-	SuccessRateCritical float64
+	SuccessRateWarning  float64 `json:"SuccessRateWarning"`
+	SuccessRateCritical float64 `json:"SuccessRateCritical"`
 	// ClearMargin is the hysteresis band: a firing rate alert only clears once the
 	// rate is back above the threshold plus this margin. Without it a channel
 	// hovering on the line re-announces and re-clears on every evaluation, which
 	// is noise an operator learns to ignore.
-	ClearMargin float64
+	ClearMargin float64 `json:"ClearMargin"`
 	// RequireNoAvailableAccounts fires when a channel has enabled accounts but
 	// none usable.
-	RequireNoAvailableAccounts bool
+	RequireNoAvailableAccounts bool `json:"RequireNoAvailableAccounts"`
+}
+
+// Validate rejects rule sets that would collapse the warning and critical bands
+// or make recovery impossible to reason about.
+func (r Rules) Validate() error {
+	if r.MinRequests < 0 || r.MinFailures < 0 {
+		return fmt.Errorf("request and failure thresholds cannot be negative")
+	}
+	if r.SuccessRateWarning <= 0 || r.SuccessRateWarning > 1 {
+		return fmt.Errorf("warning success rate must be between 0 and 1")
+	}
+	if r.SuccessRateCritical <= 0 || r.SuccessRateCritical >= r.SuccessRateWarning {
+		return fmt.Errorf("critical success rate must be positive and below the warning threshold")
+	}
+	if r.SuccessRateWarning+r.ClearMargin > 1 {
+		return fmt.Errorf("warning threshold plus clear margin cannot exceed 100%%")
+	}
+	if r.ClearMargin < 0 || r.ClearMargin > 0.5 {
+		return fmt.Errorf("clear margin must be between 0 and 0.5")
+	}
+	return nil
 }
 
 // DefaultRules is the shipped policy.
@@ -132,10 +152,6 @@ func Evaluate(snapshot Snapshot, previous map[string]Alert, rules Rules) Transit
 	}
 	if rules.MinFailures <= 0 {
 		rules.MinFailures = 1
-	}
-	now := snapshot.At
-	if now.IsZero() {
-		now = time.Now()
 	}
 	current := map[string]Alert{}
 
@@ -304,6 +320,47 @@ func (e *Engine) Evaluate(snapshot Snapshot) Transition {
 		}
 	}
 	return transition
+}
+
+// Thresholds returns the rules this engine evaluates against.
+//
+// The rules are an unexported field, so nothing outside the package could read
+// them — which left the operations page showing a success-rate percentage with
+// no stated target and no way to explain where the number is measured against.
+// Exposing them lets the UI say "目标 90%" next to the rate instead of leaving
+// the reader to guess why 84.6% is a problem.
+//
+// A nil engine has no rules at all, and a caller that is already nil-safe
+// (Firing() is) must not start panicking here: it falls back to DefaultRules so
+// the UI always gets the shipped 0.9 rather than a zero that renders as
+// "目标 0.0%".
+func (e *Engine) Thresholds() Rules {
+	if e == nil {
+		return DefaultRules()
+	}
+	// Same semaphore dance as Firing(): take the token, copy the value, give it
+	// back before returning. Rules are never mutated after NewEngine, but the
+	// copy under the token keeps that guarantee independent of future edits.
+	<-e.mu
+	rules := e.rules
+	e.mu <- struct{}{}
+	return rules
+}
+
+// SetThresholds changes the policy used by subsequent evaluations while keeping
+// the current firing set intact. This avoids manufacturing recoveries merely
+// because an operator edited a threshold.
+func (e *Engine) SetThresholds(rules Rules) error {
+	if e == nil {
+		return fmt.Errorf("alert engine is unavailable")
+	}
+	if err := rules.Validate(); err != nil {
+		return err
+	}
+	<-e.mu
+	e.rules = rules
+	e.mu <- struct{}{}
+	return nil
 }
 
 // Firing returns a copy of the currently firing alerts.

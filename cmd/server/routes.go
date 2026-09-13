@@ -28,7 +28,7 @@ func registerWithPrefixes(mux *http.ServeMux, prefixes []string, path string, h 
 }
 
 func registerRoutes(
-	mux *http.ServeMux,
+	rootMux *http.ServeMux,
 	cfg *config.Config,
 	s *store.Store,
 	h *handler.Handler,
@@ -38,6 +38,7 @@ func registerRoutes(
 	accountTracker loadbalancer.ConnTracker,
 	tmplRenderer *template.Renderer,
 ) {
+	mux := http.NewServeMux()
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return middleware.APIKeyAuth(
 			func() bool { return cfg.InferenceAuthEnabled() },
@@ -96,12 +97,12 @@ func registerRoutes(
 		}
 		grokHandler.HandleVideosRetrieve(w, r)
 	})))
-	registerWithPrefixes(mux, grokPrefixes, "/files/", grokHandler.HandleFiles)
+	registerWithPrefixes(mux, grokPrefixes, "/files/", inferenceAuth(grokHandler.HandleFiles))
 	registerWithPrefixes(mux, grokPrefixes, "/media/inputs", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputs)))
 	registerWithPrefixes(mux, grokPrefixes, "/media/inputs/", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputResource)))
 	// One-time, unguessable callback used by the xAI video fallback. The token
 	// is the authorization boundary, so this endpoint must not require a client key.
-	mux.HandleFunc("/v1/media/uploads/", grokHandler.HandleVideoUpload)
+	mux.HandleFunc("/media/uploads/", grokHandler.HandleVideoUpload)
 	registerWithPrefixes(mux, grokPrefixes, "/tts", inferenceAuth(limiter.Limit(grokHandler.HandleTTS)))
 	registerWithPrefixes(mux, grokPrefixes, "/tts/voices", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
 	registerWithPrefixes(mux, grokPrefixes, "/tts/voices/", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
@@ -160,9 +161,13 @@ func registerRoutes(
 	mux.HandleFunc("/api/ops/overview", sessionAuth(apiHandler.HandleOpsOverview))
 	mux.HandleFunc("/api/ops/channels", sessionAuth(apiHandler.HandleOpsChannels))
 	mux.HandleFunc("/api/ops/alerts", sessionAuth(apiHandler.HandleOpsAlerts))
+	mux.HandleFunc("/api/ops/alerts/rules", sessionAuth(apiHandler.HandleOpsAlertRules))
+	mux.HandleFunc("/api/ops/runtime", sessionAuth(apiHandler.HandleOpsRuntime))
 	// Journal: one endpoint per tab (request / operation / system) with the
 	// upstream attempts of each request joined in.
 	mux.HandleFunc("/api/journal/records", sessionAuth(apiHandler.HandleJournalRecords))
+	mux.HandleFunc("/api/journal/diagnostics", sessionAuth(apiHandler.HandleJournalDiagnostics))
+	mux.HandleFunc("/api/journal/diagnostics/settings", sessionAuth(apiHandler.HandleDiagnosticSettings))
 	mux.HandleFunc("/api/journal/operations", sessionAuth(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		if query.Get("kind") == "" {
@@ -319,6 +324,17 @@ func registerRoutes(
 		}, http.DefaultServeMux.ServeHTTP))
 		slog.Debug("pprof enabled", "path", "/debug/pprof/")
 	}
+	// Guard every /v1 path, including aliases, media and unknown endpoints.
+	// Registered inference routes reuse the validated principal without charging
+	// their key's RPM budget or concurrency slot twice.
+	v1Guard := inferenceAuth(mux.ServeHTTP)
+	rootMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1" || strings.HasPrefix(r.URL.Path, "/v1/") {
+			v1Guard(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func registerAdminUI(mux *http.ServeMux, cfg *config.Config, s *store.Store, staticRootHandler http.Handler, tmplRenderer *template.Renderer) {

@@ -345,7 +345,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	responseFormat := adapter.DetectResponseFormat(r.URL.Path)
 
 	// 初始化调试日志
-	logger := debug.New(h.config.DebugEnabled, h.config.DebugLogSSE)
+	logger := debug.NewForContext(r.Context(), h.config.DebugEnabled, h.config.DebugLogSSE)
 	defer logger.Close()
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 
@@ -885,13 +885,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			Prompt:               builtPrompt,
 			Workdir:              effectiveWorkdir,
 			Model:                mappedModel,
-			Stream:               req.Stream,
 			Messages:             payloadMessages,
 			System:               payloadSystem,
 			Tools:                effectiveTools,
 			NoTools:              gateNoTools,
 			ChatSessionID:        chatSessionID,
-			ProjectID:            "",
 			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
 			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
 			WarpToolContexts:     warpContinuationState.toolContexts,
@@ -930,6 +928,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Debug("Using SendRequestWithPayload")
 			}
 			err = apiClient.SendRequestWithPayload(r.Context(), upstreamReq, primaryHandler, logger)
+			attemptAccountID := int64(0)
+			if currentAccount != nil {
+				attemptAccountID = currentAccount.ID
+			}
+			middleware.RecordUpstreamAttempt(r.Context(), attemptAccountID, err != nil)
 			if verboseDiagnostics {
 				slog.Debug("Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 			}

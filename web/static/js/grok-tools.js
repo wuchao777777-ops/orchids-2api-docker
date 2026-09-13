@@ -2,6 +2,7 @@
   const LIVEKIT_CLIENT_VERSIONS = {
     stable: {
       label: "2.7.3",
+      integrity: "sha384-Ci1eiIh2+SkRFqqfxfXgWEo0r6h30tVLpq9wIjI3lkG2VpU9MN/aNZdmQy0t3+9X",
       url: "https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js",
     },
   };
@@ -123,11 +124,18 @@
   }
 
   function handleUnauthorized(res) {
-    if (res && res.status === 401) {
+    if (!res || res.status !== 401) return false;
+    // A 401 only means "the console session is gone" for the console's own API.
+    // This page also reads inference endpoints (/grok/v1/...) with the operator's
+    // admin cookie; on a deployment that enforces API-key auth those answer 401 by
+    // design, so redirecting on one logged the operator out of a page they were
+    // already using.
+    const url = String(res.url || "");
+    const consoleSessionExpired = url === "" || url.includes("/api/");
+    if (consoleSessionExpired) {
       window.location.href = "/admin/login.html?next=" + encodeURIComponent("/admin/?tab=grok-tools");
-      return true;
     }
-    return false;
+    return true;
   }
 
   function currentGrokToolTab() {
@@ -2418,6 +2426,8 @@
           return;
         }
         const script = document.createElement("script");
+        script.integrity = cfg.integrity;
+        script.crossOrigin = "anonymous";
         script.src = cfg.url;
         script.async = true;
         script.dataset.livekitClient = "1";
@@ -4072,6 +4082,20 @@
     }
   }
 
+  // The image panel hides its batch actions while no batch has been rendered.
+  // The class is derived from the feed contents so the markup stays in sync with
+  // grok-imagine.js prepending batches, marking the empty state and clearing.
+  function watchImagineResultActions() {
+    const grid = document.getElementById("imagineGrid");
+    const actions = document.getElementById("imagineHeaderActions");
+    if (!grid || !actions) return;
+    const sync = () => {
+      actions.classList.toggle("is-empty", grid.querySelector(".imagine-masonry-batch") === null);
+    };
+    new MutationObserver(sync).observe(grid, { childList: true });
+    sync();
+  }
+
   async function init() {
     await initChat();
     bindEvents();
@@ -4100,6 +4124,7 @@
     if (window.GrokImagine && typeof window.GrokImagine.init === "function") {
       window.GrokImagine.init({ uiState, saveState: saveGrokToolsUIState, showToast });
     }
+    watchImagineResultActions();
     const videoRatio = document.getElementById("videoRatio");
     const videoLength = document.getElementById("videoLength");
     const videoResolution = document.getElementById("videoResolution");

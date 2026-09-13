@@ -21,6 +21,8 @@ import (
 // defaultOpsWindowMinutes is the window the overview opens with.
 const defaultOpsWindowMinutes = 180
 
+const alertRulesRedisKey = "ops:alert_rules"
+
 // nonProviderChannels are aggregates that are counted but must not be presented
 // as provider channels in the matrix or the channel picker:
 //
@@ -43,6 +45,39 @@ func IsProviderChannel(channel string) bool {
 		return false
 	}
 	return !nonProviderChannels[name]
+}
+
+// alertingSuccessTargetSource names where the target comes from. The page shows
+// it verbatim next to the percentage, so it doubles as the provenance: the number
+// is a policy threshold, not a measured average of recent traffic.
+const alertingSuccessTargetSource = "告警阈值 SuccessRateWarning"
+
+// successTarget answers the question the operations page could not: what is the
+// displayed success rate measured against? The threshold is read from the engine
+// rather than hard-coded so the number on the page and the number the alerts fire
+// on cannot drift apart.
+//
+// A nil engine — aggregation disabled, a test, or a deployment that never wired
+// alerting — still has to answer, and so does an engine built from a zero-value
+// Rules: the shipped policy is the honest fallback, because a returned 0 would
+// make the page print "目标 0.0%" and look broken.
+func successTarget(engine *alerting.Engine) (float64, string) {
+	rules := engine.Thresholds()
+	if rules.SuccessRateWarning <= 0 {
+		rules.SuccessRateWarning = alerting.DefaultRules().SuccessRateWarning
+	}
+	return rules.SuccessRateWarning, alertingSuccessTargetSource
+}
+
+// successTargetCritical is the severe line: below it a channel is broken whatever
+// the failure count. It rides along because the alert text quotes the very same
+// number, and one source is better than two that can disagree.
+func successTargetCritical(engine *alerting.Engine) float64 {
+	rules := engine.Thresholds()
+	if rules.SuccessRateCritical <= 0 {
+		rules.SuccessRateCritical = alerting.DefaultRules().SuccessRateCritical
+	}
+	return rules.SuccessRateCritical
 }
 
 // HandleOpsOverview answers the operations overview: KPI totals, a per-minute
@@ -75,6 +110,19 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 		"aggregation":         "per-minute",
 		"retention_hours":     int(opsagg.BucketRetention.Hours()),
 	}
+
+	// The target the success rate is judged against, set immediately after the
+	// literal so the early return below (aggregation unavailable) carries it too:
+	// that branch still renders a success-rate KPI, and a percentage with no
+	// stated target is exactly the confusion this field removes.
+	//
+	// success_target_critical is the severe line the alert detail already quotes
+	// ("阈值 <50%"); the page does not draw it yet, but keeping it in the same
+	// response means the two numbers an operator compares have one source.
+	successTargetValue, targetSource := successTarget(a.alertEngine)
+	payload["success_target"] = successTargetValue
+	payload["success_target_source"] = targetSource
+	payload["success_target_critical"] = successTargetCritical(a.alertEngine)
 
 	if a.opsAggregator == nil || !a.opsAggregator.Enabled() {
 		payload["available"] = false
@@ -138,6 +186,49 @@ func (a *API) HandleOpsAlerts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	alerts := a.firingAlerts()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"alerts": alerts, "count": len(alerts)})
+}
+
+// HandleOpsAlertRules exposes the exact policy used by the alert engine. Saved
+// rules are persisted in Redis and take effect on the next evaluation tick.
+func (a *API) HandleOpsAlertRules(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	defaults := alerting.DefaultRules()
+	if a == nil || a.alertEngine == nil || a.store == nil || a.store.RedisClient() == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"rules": defaults, "defaults": defaults, "editable": false,
+			"note": "告警规则需要 Redis 和告警引擎。",
+		})
+		return
+	}
+	if r.Method == http.MethodGet {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"rules": a.alertEngine.Thresholds(), "defaults": defaults, "editable": true,
+		})
+		return
+	}
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var rules alerting.Rules
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err := decoder.Decode(&rules); err != nil {
+		http.Error(w, "Invalid alert rules", http.StatusBadRequest)
+		return
+	}
+	if err := rules.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.alertRulesMu.Lock()
+	defer a.alertRulesMu.Unlock()
+	raw, _ := json.Marshal(rules)
+	if err := a.store.RedisClient().Set(r.Context(), a.store.RedisPrefix()+alertRulesRedisKey, raw, 0).Err(); err != nil {
+		http.Error(w, "Could not persist alert rules", http.StatusInternalServerError)
+		return
+	}
+	_ = a.alertEngine.SetThresholds(rules)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"rules": rules, "defaults": defaults, "editable": true})
 }
 
 // HandleJournalRecords answers one journal tab. It is the modern counterpart of
@@ -237,6 +328,25 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		event := record["event"].(audit.Event)
+		if event.RequestID != "" {
+			ids = append(ids, event.RequestID)
+		}
+	}
+	indexes, err := a.diagnostics.Indexes(r.Context(), ids)
+	if err != nil {
+		http.Error(w, "Could not read diagnostic indexes", http.StatusServiceUnavailable)
+		return
+	}
+	for _, record := range records {
+		event := record["event"].(audit.Event)
+		if index, ok := indexes[event.RequestID]; ok {
+			record["diagnostics"] = index
+		}
+	}
+
 	// The cursor must advance past everything that was SCANNED, not past the last
 	// record that matched. Returning the last match as the cursor made an older
 	// page unreachable whenever the window held more non-matching entries than the
@@ -323,6 +433,11 @@ func (a *API) opsBucketsWithSamples(ctx context.Context, scope string, since, un
 		for _, bucket := range buckets {
 			combined := merged[bucket.Minute]
 			combined.Minute = bucket.Minute
+			combined.Counters.Add(bucket.Counters)
+			combined.DurationFailed = append(combined.DurationFailed, bucket.DurationFailed...)
+			combined.FirstTokenFailed = append(combined.FirstTokenFailed, bucket.FirstTokenFailed...)
+			combined.DurationAttempt = append(combined.DurationAttempt, bucket.DurationAttempt...)
+			combined.FirstTokenAttempt = append(combined.FirstTokenAttempt, bucket.FirstTokenAttempt...)
 			combined.Requests += bucket.Requests
 			combined.Success += bucket.Success
 			combined.Failed += bucket.Failed
@@ -344,11 +459,12 @@ func opsSeries(buckets []opsagg.Bucket) []map[string]interface{} {
 	series := make([]map[string]interface{}, 0, len(buckets))
 	for _, bucket := range buckets {
 		series = append(series, map[string]interface{}{
-			"minute":   bucket.Minute.UTC().Format(time.RFC3339),
-			"requests": bucket.Requests,
-			"success":  bucket.Success,
-			"failed":   bucket.Failed,
-			"probes":   bucket.Probes,
+			"minute":       bucket.Minute.UTC().Format(time.RFC3339),
+			"requests":     bucket.Requests,
+			"success":      bucket.Success,
+			"failed":       bucket.Failed,
+			"probes":       bucket.Probes,
+			"input_tokens": bucket.Input, "output_tokens": bucket.Output, "usage_samples": bucket.UsageSamples, "attempt_failures": bucket.AttemptFailures, "account_switch_count": bucket.AccountSwitchCount, "account_switch_sum": bucket.AccountSwitchSum,
 		})
 	}
 	return series
@@ -358,6 +474,16 @@ func opsSeries(buckets []opsagg.Bucket) []map[string]interface{} {
 // reported as such (samples = 0) instead of a green, traffic-free channel.
 func (a *API) opsMatrix(ctx context.Context, channels []string, since, until time.Time) []map[string]interface{} {
 	accounts, _ := a.store.ListAccounts(ctx)
+	ids := make([]int64, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc != nil {
+			ids = append(ids, acc.ID)
+		}
+	}
+	counts := map[int64]int64{}
+	if a.connTracker != nil {
+		counts = a.connTracker.GetCounts(ids)
+	}
 	now := time.Now()
 	// The rate is per minute of the requested window, not per bucket that exists.
 	windowMinutes := until.Sub(since).Minutes()
@@ -373,9 +499,16 @@ func (a *API) opsMatrix(ctx context.Context, channels []string, since, until tim
 			continue
 		}
 		enabled, available, needingLogin, modelCooldowns := poolCounts(accounts, channel, now)
+		active := int64(0)
+		for _, acc := range accounts {
+			if acc != nil && strings.EqualFold(acc.AccountType, channel) {
+				active += counts[acc.ID]
+			}
+		}
 		row := map[string]interface{}{
-			"channel":                channel,
-			"accounts_enabled":       enabled,
+			"channel":          channel,
+			"accounts_enabled": enabled,
+			"active_requests":  active, "concurrency_available": a.connTracker != nil,
 			"accounts_available":     available,
 			"accounts_needing_login": needingLogin,
 			"model_cooldowns":        modelCooldowns,

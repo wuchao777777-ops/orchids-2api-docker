@@ -22,6 +22,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/debug"
 	"orchids-api/internal/grok/egress"
 	"orchids-api/internal/util"
 )
@@ -622,6 +623,9 @@ func (c *Client) doAppChatRequest(ctx context.Context, reqURL string, body []byt
 }
 
 func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.Client, reqURL string, method string, body []byte, headers http.Header, okStatus int, retry429 bool) (*http.Response, error) {
+	if capture := debug.FromContext(ctx); capture != nil {
+		capture.Append("3_upstream_request.json", string(body)+"\n")
+	}
 	if okStatus == 0 {
 		okStatus = http.StatusOK
 	}
@@ -694,11 +698,12 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			}
 			delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, 0, 0)
 			lastDelay = delay
-			if !sleepWithContext(ctx, delay) {
+			if !util.SleepWithContext(ctx, delay) {
 				return nil, ctx.Err()
 			}
 			continue
 		}
+		resp.Body = debug.CaptureBody(ctx, resp.Body)
 		if resp.StatusCode == okStatus {
 			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
 				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeSuccess)
@@ -728,7 +733,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 				retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 				delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, lastStatus, retryAfter)
 				lastDelay = delay
-				if !sleepWithContext(ctx, delay) {
+				if !util.SleepWithContext(ctx, delay) {
 					return nil, ctx.Err()
 				}
 				continue

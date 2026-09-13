@@ -247,49 +247,54 @@ function buildNSFWBadgeMarkup(acc) {
 }
 
 function applyTokenLabels(type) {
+  const normalized = String(type || "").trim().toLowerCase();
   const label = document.getElementById("tokenLabel");
   const input = document.getElementById("clientCookie");
   const hint = document.getElementById("tokenHint");
   const accountId = String(document.getElementById("accountId")?.value || "");
   const puterWebLoginGroup = document.getElementById("puterWebLoginGroup");
-  if (puterWebLoginGroup) puterWebLoginGroup.hidden = type !== "puter" || Boolean(accountId);
+  if (puterWebLoginGroup) puterWebLoginGroup.hidden = normalized !== "puter" || Boolean(accountId);
   // WorkBuddy login stays available while editing so an expired authorization can
   // be renewed by signing in again instead of deleting the account.
   const workbuddyLoginGroup = document.getElementById("workbuddyLoginGroup");
-  if (workbuddyLoginGroup) workbuddyLoginGroup.hidden = type !== "workbuddy";
+  if (workbuddyLoginGroup) workbuddyLoginGroup.hidden = normalized !== "workbuddy";
   const warpDeviceLoginGroup = document.getElementById("warpDeviceLoginGroup");
   if (warpDeviceLoginGroup) {
-    warpDeviceLoginGroup.hidden = type !== "warp" || Boolean(accountId);
+    warpDeviceLoginGroup.hidden = normalized !== "warp" || Boolean(accountId);
   }
   const saveButton = document.querySelector('#accountForm button[type="submit"]');
   if (saveButton) {
     // Warp and WorkBuddy are created by their official login flows, so the form
     // has nothing to submit for a new account of either type.
-    saveButton.hidden = (type === "warp" || type === "workbuddy") && !accountId;
+    saveButton.hidden = (normalized === "warp" || normalized === "workbuddy") && !accountId;
   }
-  applyCredentialModeUI(type);
+  applyCredentialModeUI(normalized);
   if (!label || !input || !hint) return;
-  if (type === 'warp') {
-    input.value = "";
-    input.required = false;
-  } else if (type === 'workbuddy') {
+  if (!input.required) input.value = "";
+  if (normalized === 'warp') {
+    label.textContent = "Warp 登录会话";
+    input.placeholder = "";
+    hint.textContent = accountId
+      ? "Warp 凭据由官方登录维护，这里不显示也不接受手填"
+      : "该渠道只支持官方登录，请使用下方「使用 Warp 官方网页登录」";
+  } else if (normalized === 'workbuddy') {
     // OAuth-only channel: no manual credential field is exposed.
     input.value = "";
     input.required = false;
     label.textContent = "WorkBuddy 凭证";
     input.placeholder = "";
     hint.textContent = "该渠道只支持官方登录";
-  } else if (type === 'grok') {
+  } else if (normalized === 'grok') {
     label.textContent = "SSO Token";
     input.placeholder = "每行一个 sso token（或包含 sso= 的 Cookie）";
     hint.textContent = accountId
-      ? "编辑时仅保存第一行 SSO Token"
+      ? "凭证不回显；留空保留原凭证，填写则替换"
       : "支持批量添加 Grok。每行一个 sso token 或 Cookie 片段";
-  } else if (type === 'puter') {
+  } else if (normalized === 'puter') {
       label.textContent = "Auth Token";
       input.placeholder = "每行一个 Puter auth_token";
       hint.textContent = accountId
-        ? "Puter 编辑时仅保存第一行 auth_token。可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取"
+        ? "凭证不回显；留空保留原凭证，填写则替换"
         : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
       input.required = true;
     } else {
@@ -300,6 +305,7 @@ function applyTokenLabels(type) {
       : "支持原始 __client、完整 Cookie Header 或 Cookie JSON；推荐同时带上 __client_uat 以提高补全成功率";
     input.required = true;
   }
+  if (accountId) input.required = false;
 }
 
 function getWarpDeviceLoginStatusNode() {
@@ -710,6 +716,11 @@ function getActiveAccountType() {
 // a previous modal interaction (or the HTML default "warp") silently win, which
 // made the Grok tab open a Warp form.
 function selectedPlatformAccountType(typeEl) {
+  const activeTab = document.querySelector("#platformFilters .tab-item.active");
+  if (activeTab?.dataset?.platform) {
+    const visible = decodeURIComponent(activeTab.dataset.platform);
+    if (visible) return platformAccountType(visible);
+  }
   const active = String(currentPlatform || "").trim().toLowerCase();
   if (active) return platformAccountType(active);
   const selected = String(typeEl?.value || "").trim().toLowerCase();
@@ -824,16 +835,43 @@ async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null
   return { success, failed, failures };
 }
 
+// The console's channel strip, shared with 模型管理: the same four channels, in the same
+// order, with the same names, so an operator moving between the two pages does not have
+// the strip reorder under them. It used to be sorted alphabetically here (grok, puter,
+// warp, workbuddy, all lower case) while the models page listed Warp, Puter, WorkBuddy,
+// Grok — the same channels in a different order, under different names.
+const ACCOUNT_PLATFORM_ORDER = ["warp", "puter", "workbuddy", "grok"];
+const ACCOUNT_TYPE_NAMES = { warp: "Warp", puter: "Puter", workbuddy: "WorkBuddy", grok: "Grok" };
+
+// One name for the selected channel, used by the strip, the subtitle, the toasts and the
+// empty state. currentPlatform stays the lower-case key the API stores; nothing shows it.
+function currentPlatformLabel() {
+  const key = String(currentPlatform || "").trim();
+  if (!key) return "";
+  return ACCOUNT_TYPE_NAMES[key.toLowerCase()] || key;
+}
+
+function orderedAccountPlatforms() {  const ordered = ACCOUNT_PLATFORM_ORDER.slice();
+  // A type the console has not been taught about is appended, not dropped.
+  accounts
+    .map(normalizeAccountType)
+    .filter(Boolean)
+    .filter((type) => !ordered.includes(type))
+    .sort()
+    .forEach((type) => {
+      if (!ordered.includes(type)) ordered.push(type);
+    });
+  return ordered;
+}
+
 // Render platform filter tabs
 function renderPlatformTabs() {
   const container = document.getElementById("platformFilters");
   if (!container) return;
-  const defaultTypes = ["warp", "puter", "workbuddy", "grok"];
-  const types = new Set([...defaultTypes, ...accounts.map(normalizeAccountType)]);
-  const sorted = Array.from(types).sort();
-  const tabs = [...sorted];
+  const tabs = orderedAccountPlatforms();
 
   if (currentPlatform === '' || !tabs.includes(currentPlatform)) {
+    // The first channel of the shared order, exactly as the models page picks its own.
     currentPlatform = tabs.length > 0 ? tabs[0] : '';
   }
 
@@ -844,7 +882,8 @@ function renderPlatformTabs() {
     const btn = document.createElement("button");
     btn.className = `tab-item ${isActive ? 'active' : ''}`.trim();
     btn.dataset.platform = encodeURIComponent(label);
-    btn.textContent = label;
+    // The key stays in dataset (it is what the filter matches); the strip shows the name.
+    btn.textContent = ACCOUNT_TYPE_NAMES[label.toLowerCase()] || label;
     btn.addEventListener("click", () => {
       const raw = btn.dataset.platform ? decodeURIComponent(btn.dataset.platform) : "";
       filterByPlatform(raw);
@@ -914,15 +953,15 @@ function evaluateAccountStatus(acc) {
   } else if (type === 'grok') {
     // OAuth secrets are redacted by the account list API. credential_type is
     // the safe indicator that the server holds a Build OAuth credential.
-    if (!isSidebarGrokOAuthAccount(acc) && !getAccountToken(acc)) {
+    if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 SSO Token' };
     }
   } else if (type === 'puter') {
-    if (!getAccountToken(acc)) {
+    if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Puter auth_token' };
     }
   } else if (type === 'workbuddy') {
-    if (!getAccountToken(acc)) {
+    if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 WorkBuddy 凭证（refreshToken / accessToken）' };
     }
   } else if (!acc.session_id && !acc.session_cookie) {
@@ -1119,10 +1158,10 @@ function resetAutoSyncLoadGuard() {
 async function clearAbnormalAccounts() {
   const abnormal = accounts.filter((acc) => matchesCurrentPlatform(acc) && isAccountAbnormal(acc));
   if (abnormal.length === 0) {
-    showToast(currentPlatform ? `当前 ${currentPlatform} 页面没有异常账号` : "没有异常账号", "info");
+    showToast(currentPlatform ? `当前 ${currentPlatformLabel()} 页面没有异常账号` : "没有异常账号", "info");
     return;
   }
-  const scopeText = currentPlatform ? `当前 ${currentPlatform} 页面中的 ` : "";
+  const scopeText = currentPlatform ? `当前 ${currentPlatformLabel()} 页面中的 ` : "";
   if (confirm(`确定要清空 ${scopeText}${abnormal.length} 个异常账号吗？`)) {
     for (const acc of abnormal) {
       await fetch(`/api/accounts/${acc.id}`, { method: "DELETE" });
@@ -1167,7 +1206,7 @@ function renderAccounts() {
     icon.className = "empty-state-mark";
     icon.textContent = "EMPTY";
     const text = document.createElement("p");
-    text.textContent = `暂无 ${currentPlatform ? currentPlatform : ''} 账号数据`;
+    text.textContent = currentPlatformLabel() ? `暂无 ${currentPlatformLabel()} 账号数据` : "暂无账号数据";
     empty.appendChild(icon);
     empty.appendChild(text);
     container.appendChild(empty);
@@ -1190,20 +1229,19 @@ function renderAccounts() {
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
   const headers = [
-    { label: "", style: "width: 40px;" },
-    { label: "ID", style: "width: 60px;" },
-    { label: "账号 / 邮箱" },
-    { label: "等级", style: "width: 130px;" },
-    { label: "配额", style: "width: 150px;" },
-    { label: "状态" },
-    { label: "调用" },
-    { label: "最后调用" },
-    { label: "操作", style: "text-align: right;" },
+    { label: "", className: "col-check" },
+    { label: "ID", className: "col-id" },
+    { label: "账号" },
+    { label: "等级", className: "col-tier" },
+    { label: "配额", className: "col-quota" },
+    { label: "状态", className: "col-status" },
+    { label: "能力", className: "col-capability" },
+    { label: "调用", className: "col-usage" },
+    { label: "操作", className: "col-actions" },
   ];
   headers.forEach((h, idx) => {
     const th = document.createElement("th");
-    if (h.style) th.style.cssText = h.style;
-    if (h.label === "账号 / 邮箱") th.classList.add("col-token");
+    if (h.className) th.className = h.className;
     if (idx === 0) {
       const selectAll = document.createElement("input");
       selectAll.type = "checkbox";
@@ -1218,15 +1256,17 @@ function renderAccounts() {
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
-  
+
   // 使用 DocumentFragment 批量构建表格行
   const fragment = document.createDocumentFragment();
   pageItems.forEach((acc) => {
     const badge = statusBadge(acc);
     const tokenDisplay = formatTokenDisplay(acc);
+    const identity = accountIdentityPrimary(acc);
     const tr = document.createElement("tr");
 
     const tdCheck = document.createElement("td");
+    tdCheck.className = "col-check";
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.className = "row-checkbox";
@@ -1236,28 +1276,48 @@ function renderAccounts() {
     tr.appendChild(tdCheck);
 
     const tdID = document.createElement("td");
-    tdID.style.color = "#64748b";
-    tdID.style.fontSize = "0.9rem";
+    tdID.className = "col-id";
     tdID.textContent = acc.id === null || acc.id === undefined ? "" : String(acc.id);
     tr.appendChild(tdID);
 
+    // The identity cell leads with the address/identifier and keeps the
+    // credential summary as secondary text: a truncated token used to be the
+    // most prominent thing in the row.
     const tdToken = document.createElement("td");
     tdToken.className = "col-token";
-    const tokenSpan = document.createElement("span");
-    tokenSpan.className = "token-text";
-    tokenSpan.title = tokenDisplay;
-    tokenSpan.style.fontFamily = "monospace";
-    tokenSpan.style.color = "#94a3b8";
-    tokenSpan.textContent = tokenDisplay;
-    tdToken.appendChild(tokenSpan);
+    const identityWrap = document.createElement("div");
+    identityWrap.className = "account-identity";
+    const primary = document.createElement("span");
+    primary.className = "account-identity-primary";
+    primary.textContent = identity;
+    primary.title = identity;
+    identityWrap.appendChild(primary);
+    const sub = document.createElement("span");
+    sub.className = "account-identity-sub";
+    const typeBadge = document.createElement("span");
+    typeBadge.className = "badge badge-" + normalizeAccountType(acc);
+    // The models table names its channels Warp / Puter / WorkBuddy / Grok; the same
+    // channel printed lower-cased here read as a different thing.
+    typeBadge.textContent = ACCOUNT_TYPE_NAMES[normalizeAccountType(acc)] || normalizeAccountType(acc) || "unknown";
+    sub.appendChild(typeBadge);
+    if (tokenDisplay && tokenDisplay !== identity && tokenDisplay !== "-") {
+      const credential = document.createElement("span");
+      credential.className = "account-identity-token";
+      credential.textContent = tokenDisplay;
+      credential.title = tokenDisplay;
+      sub.appendChild(credential);
+    }
+    identityWrap.appendChild(sub);
+    tdToken.appendChild(identityWrap);
     tr.appendChild(tdToken);
 
     const tdTier = document.createElement("td");
+    tdTier.className = "col-tier";
     tdTier.innerHTML = buildSubscriptionMarkup(acc);
     tr.appendChild(tdTier);
 
     const tdQuota = document.createElement("td");
-    tdQuota.style.fontSize = "0.85rem";
+    tdQuota.className = "col-quota";
     // One shared renderer for the desktop table and the mobile cards.
     tdQuota.innerHTML = buildQuotaMarkup(acc);
     const quota = getQuotaStats(acc);
@@ -1270,17 +1330,15 @@ function renderAccounts() {
           quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
         ].filter(Boolean).join(" · ");
       } else {
-        tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点 Sync 立即刷新";
+        tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步";
       }
     }
     tr.appendChild(tdQuota);
 
+    // Health only. Capability (e.g. NSFW) is a different dimension and lives in
+    // its own column so "正常" and "NSFW" never read as alternatives.
     const tdStatus = document.createElement("td");
-    const statusWrap = document.createElement("div");
-    statusWrap.style.display = "flex";
-    statusWrap.style.alignItems = "center";
-    statusWrap.style.gap = "6px";
-
+    tdStatus.className = "col-status";
     const statusSpan = document.createElement("span");
     statusSpan.className = "tag tag-status-normal";
     statusSpan.title = badge.tip || "";
@@ -1288,65 +1346,70 @@ function renderAccounts() {
     statusSpan.style.color = badge.color;
     statusSpan.style.border = "none";
     statusSpan.textContent = badge.text;
-    statusWrap.appendChild(statusSpan);
+    tdStatus.appendChild(statusSpan);
+    tr.appendChild(tdStatus);
 
+    const tdCapability = document.createElement("td");
+    tdCapability.className = "col-capability";
     if (shouldShowNSFWBadge(acc)) {
       const nsfwSpan = document.createElement("span");
       nsfwSpan.className = "tag account-nsfw-tag";
       nsfwSpan.title = "Grok NSFW 已开启";
-      nsfwSpan.style.background = "rgba(244, 114, 182, 0.14)";
-      nsfwSpan.style.color = "#f472b6";
-      nsfwSpan.style.border = "none";
       nsfwSpan.textContent = "NSFW";
-      statusWrap.appendChild(nsfwSpan);
+      tdCapability.appendChild(nsfwSpan);
+    } else {
+      const plain = document.createElement("span");
+      plain.className = "muted";
+      plain.textContent = "—";
+      tdCapability.appendChild(plain);
     }
+    tr.appendChild(tdCapability);
 
-    tdStatus.appendChild(statusWrap);
-    tr.appendChild(tdStatus);
-
-    const tdCount = document.createElement("td");
-    tdCount.style.fontSize = "0.9rem";
-    tdCount.style.color = "#e2e8f0";
-    tdCount.style.fontWeight = "500";
-    tdCount.textContent = String(accountUsageCounter(acc));
+    // One usage cell: the count carries the meaning, the last-use time is a
+    // sub-line instead of a column of its own.
+    const tdUsage = document.createElement("td");
+    tdUsage.className = "col-usage";
+    const count = document.createElement("div");
+    count.className = "account-usage-count";
+    count.textContent = String(accountUsageCounter(acc));
     if (normalizeAccountType(acc) === "workbuddy") {
-      tdCount.title = "WorkBuddy 按计量口径统计的已消耗额度（点 Sync 刷新）";
+      count.title = "WorkBuddy 按计量口径统计的已消耗额度（点刷新同步）";
     }
-    tr.appendChild(tdCount);
-
-    const tdLast = document.createElement("td");
-    tdLast.style.fontSize = "0.8rem";
-    tdLast.style.color = "#64748b";
-    tdLast.textContent = acc.last_used_at && !acc.last_used_at.startsWith('0001') ? formatTime(acc.last_used_at) : "-";
-    tr.appendChild(tdLast);
+    const when = document.createElement("div");
+    when.className = "account-usage-when";
+    when.textContent = acc.last_used_at && !acc.last_used_at.startsWith('0001') ? formatTime(acc.last_used_at) : "未调用";
+    tdUsage.appendChild(count);
+    tdUsage.appendChild(when);
+    tr.appendChild(tdUsage);
 
     const tdActions = document.createElement("td");
-    tdActions.style.textAlign = "right";
+    tdActions.className = "col-actions";
     const actionWrap = document.createElement("div");
-    actionWrap.style.display = "flex";
-    actionWrap.style.justifyContent = "flex-end";
-    actionWrap.style.gap = "12px";
+    actionWrap.className = "accounts-row-actions";
 
-    const edit = document.createElement("i");
+    const edit = document.createElement("button");
+    edit.type = "button";
     edit.className = "action-icon";
     edit.dataset.action = "edit";
     edit.dataset.id = encodeData(acc.id);
-    edit.title = "编辑";
-    edit.textContent = "Edit";
+    edit.title = "编辑账号设置与凭据";
+    edit.textContent = "编辑";
 
-    const refresh = document.createElement("i");
+    const refresh = document.createElement("button");
+    refresh.type = "button";
     refresh.className = "action-icon";
     refresh.dataset.action = "refresh";
     refresh.dataset.id = encodeData(acc.id);
-    refresh.title = "刷新";
-    refresh.textContent = "Sync";
+    refresh.title = "立即同步状态与额度";
+    refresh.textContent = "刷新";
 
-    const del = document.createElement("i");
-    del.className = "action-icon";
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "action-icon is-danger";
     del.dataset.action = "delete";
     del.dataset.id = encodeData(acc.id);
-    del.title = "删除";
-    del.textContent = "Del";
+    del.title = "删除该账号";
+    del.textContent = "删除";
 
     actionWrap.appendChild(edit);
     actionWrap.appendChild(refresh);
@@ -1357,7 +1420,7 @@ function renderAccounts() {
     // 将行添加到 fragment 而不是直接添加到 tbody
     fragment.appendChild(tr);
   });
-  
+
   // 一次性将所有行插入到 tbody
   tbody.appendChild(fragment);
   table.appendChild(tbody);
@@ -1437,6 +1500,24 @@ function buildMobileEmailMarkup(acc) {
         </div>`;
 }
 
+// accountIdentityPrimary is the row's subject: the address for channels that
+// report one (WorkBuddy's nickname is the email), the session fingerprint for
+// Warp, otherwise the credential summary.
+function accountIdentityPrimary(acc) {
+  const type = normalizeAccountType(acc);
+  if (type === "workbuddy") {
+    const label = workBuddyIdentityLabel(acc);
+    if (label && label !== "-") return label;
+  }
+  const email = String(acc?.email || "").trim();
+  if (email) return email;
+  const name = String(acc?.name || "").trim();
+  if (name) return name;
+  const display = formatTokenDisplay(acc);
+  return display && display !== "-" ? display : "未命名账号";
+}
+
+// buildQuotaMarkup renders the remaining allowance for every channel.
 function buildQuotaMarkup(acc) {
   const quota = getQuotaStats(acc);
   if (quota && quota.quotaUnavailable) {
@@ -1490,11 +1571,12 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
           <span>#${escapeHtml(acc.id === null || acc.id === undefined ? "" : String(acc.id))}</span>
         </label>
         <div class="account-mobile-actions">
-          <button type="button" class="action-icon" data-action="edit" data-id="${encodeData(acc.id)}" title="编辑">Edit</button>
-          <button type="button" class="action-icon" data-action="refresh" data-id="${encodeData(acc.id)}" title="刷新">Sync</button>
-          <button type="button" class="action-icon" data-action="delete" data-id="${encodeData(acc.id)}" title="删除">Del</button>
+          <button type="button" class="action-icon" data-action="edit" data-id="${encodeData(acc.id)}" title="编辑账号设置与凭据">编辑</button>
+          <button type="button" class="action-icon" data-action="refresh" data-id="${encodeData(acc.id)}" title="立即同步状态与额度">刷新</button>
+          <button type="button" class="action-icon is-danger" data-action="delete" data-id="${encodeData(acc.id)}" title="删除该账号">删除</button>
         </div>
       </div>
+      <div class="account-mobile-identity">${escapeHtml(accountIdentityPrimary(acc))}</div>
       <div class="account-mobile-token">
         <span class="token-text" title="${escapeHtml(tokenDisplay)}">${escapeHtml(tokenDisplay)}</span>
       </div>
@@ -1513,11 +1595,7 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
         </div>
         <div class="account-mobile-item">
           <span class="account-mobile-label">调用</span>
-          <span class="account-mobile-value">${escapeHtml(String(accountUsageCounter(acc)))}</span>
-        </div>
-        <div class="account-mobile-item">
-          <span class="account-mobile-label">最后调用</span>
-          <span class="account-mobile-value">${escapeHtml(acc.last_used_at && !acc.last_used_at.startsWith("0001") ? formatTime(acc.last_used_at) : "-")}</span>
+          <span class="account-mobile-value">${escapeHtml(String(accountUsageCounter(acc)))} · ${escapeHtml(acc.last_used_at && !acc.last_used_at.startsWith("0001") ? formatTime(acc.last_used_at) : "未调用")}</span>
         </div>
         ${buildMobileEmailMarkup(acc)}
       </div>
@@ -1609,6 +1687,7 @@ function goToPage(page) {
 
 // Filter by platform
 function filterByPlatform(platform) {
+  platform = String(platform || "").trim().toLowerCase();
   currentPlatform = platform;
   currentPage = 1; // Reset to first page
   // Keep the modal's account type in step with the selected tab. The hidden
@@ -1616,11 +1695,14 @@ function filterByPlatform(platform) {
   // must never silently fall back to Warp when a platform tab is selected.
   setAccountModalType(platformAccountType(platform));
   document.querySelectorAll("#platformFilters .tab-item").forEach(btn => {
-    btn.classList.toggle("active", btn.textContent === platform);
+    // The key, not the label: the strip renders "Warp" while the tab carries "warp",
+    // so comparing textContent left the whole strip unselected after a click.
+    const key = btn.dataset.platform ? decodeURIComponent(btn.dataset.platform) : "";
+    btn.classList.toggle("active", key === platform);
   });
   const subtitle = document.getElementById("pageSubtitle");
   if (subtitle) {
-    subtitle.textContent = currentPlatform ? `管理您的 ${currentPlatform} API 凭证` : "管理您的所有 API 凭证";
+    subtitle.textContent = currentPlatform ? `管理您的 ${currentPlatformLabel()} API 凭证` : "管理您的所有 API 凭证";
   }
   renderAccounts();
 }
@@ -1663,9 +1745,9 @@ function updateSelectedCount() {
   if (el) el.textContent = checked;
   const batchBtn = document.getElementById("batchDeleteBtn");
   if (batchBtn) {
+    // Disabled styling comes from the button's own state, not from inline colours
+    // that fought the design system.
     batchBtn.disabled = checked === 0;
-    batchBtn.style.color = checked === 0 ? "#94a3b8" : "#fb7185";
-    batchBtn.style.borderColor = checked === 0 ? "rgba(148,163,184,0.2)" : "rgba(251,113,133,0.45)";
   }
 }
 
@@ -1709,7 +1791,7 @@ function openModal(account = null) {
       document.getElementById("accountId").value = account.id;
       modalType = normalizeAccountType(account);
       setAccountModalType(modalType);
-      document.getElementById("clientCookie").value = getAccountToken(account);
+      document.getElementById("clientCookie").value = "";
       document.getElementById("enabled").checked = account.enabled;
       const isOAuth = String(account.credential_type || "").trim().toLowerCase() === "oauth";
       if (modeSelect) modeSelect.value = isOAuth ? "oauth" : "sso";
@@ -1731,6 +1813,9 @@ function openModal(account = null) {
       if (providerSelect) providerSelect.value = "web";
       if (providerHint) providerHint.textContent = "保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。";
     }
+    // The switch above is assigned, not clicked: without this its paint would depend on
+    // the stylesheet's :has() fallback, which browsers without :has() ignore.
+    if (typeof window.syncToggleStates === "function") window.syncToggleStates();
     applyCredentialModeUI(modalType || normalizeAccountType({ account_type: typeEl?.value || getActiveAccountType() }));
   };
 
@@ -1812,8 +1897,8 @@ async function saveAccount(e) {
 
   // A WorkBuddy edit may legitimately keep the stored credential: the refresh
   // token is never returned to the browser, so an empty field means "unchanged".
-  const keepStoredWorkBuddyCredential = Boolean(id) && type === "workbuddy" && splitCredentials.length === 0;
-  if (type !== "warp" && !isOAuth && credentials.length === 0 && !keepStoredWorkBuddyCredential) {
+  const keepStoredCredential = Boolean(id) && existing && normalizeAccountType(existing) === type && splitCredentials.length === 0;
+  if (type !== "warp" && !isOAuth && credentials.length === 0 && !keepStoredCredential) {
     if (duplicateInputs.length > 0 || existingConflicts.length > 0) {
       const details = []
         .concat(duplicateInputs.slice(0, 4).map((item) => `输入重复: ${item}`))
@@ -1920,6 +2005,7 @@ function parseDataId(value) {
 }
 
 function formatTokenDisplay(acc) {
+  if (typeof acc?.has_credential === "boolean") return acc.has_credential ? '凭证已配置' : '待登录';
   const type = normalizeAccountType(acc);
   if (type === 'warp') {
     // Warp authenticates with a browser session that carries no email or
