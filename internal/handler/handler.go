@@ -39,6 +39,7 @@ import (
 type ClientFactory func(acc *store.Account, cfg *config.Config) UpstreamClient
 
 type Handler struct {
+	configMu      sync.RWMutex
 	config        *config.Config
 	client        UpstreamClient
 	clientFactory ClientFactory
@@ -59,13 +60,15 @@ type UpstreamClient interface {
 }
 
 type ClaudeRequest struct {
-	Model          string                 `json:"model"`
-	Messages       []prompt.Message       `json:"messages"`
-	System         SystemItems            `json:"system"`
-	Tools          []interface{}          `json:"tools"`
-	Stream         bool                   `json:"stream"`
-	ConversationID string                 `json:"conversation_id"`
-	Metadata       map[string]interface{} `json:"metadata"`
+	Model             string                 `json:"model"`
+	Messages          []prompt.Message       `json:"messages"`
+	System            SystemItems            `json:"system"`
+	Tools             []interface{}          `json:"tools"`
+	ToolChoice        interface{}            `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool                  `json:"parallel_tool_calls,omitempty"`
+	Stream            bool                   `json:"stream"`
+	ConversationID    string                 `json:"conversation_id"`
+	Metadata          map[string]interface{} `json:"metadata"`
 }
 
 type toolCall struct {
@@ -139,6 +142,30 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 	})
 
 	return h
+}
+
+// SetConfig atomically changes the immutable config snapshot used by future
+// requests. Requests already in progress keep their existing snapshot.
+func (h *Handler) SetConfig(cfg *config.Config) {
+	if h == nil || cfg == nil {
+		return
+	}
+	h.configMu.Lock()
+	h.config = cfg
+	h.configMu.Unlock()
+	if h.clientCache != nil {
+		h.clientCache.SetConfig(cfg)
+	}
+}
+
+func (h *Handler) configSnapshot() *config.Config {
+	if h == nil {
+		return nil
+	}
+	h.configMu.RLock()
+	cfg := h.config
+	h.configMu.RUnlock()
+	return cfg
 }
 
 func (h *Handler) SetTokenCache(cache tokencache.Cache) {
@@ -345,7 +372,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	responseFormat := adapter.DetectResponseFormat(r.URL.Path)
 
 	// 初始化调试日志
-	logger := debug.NewForContext(r.Context(), h.config.DebugEnabled, h.config.DebugLogSSE)
+	cfg := h.configSnapshot()
+	logger := debug.NewForContext(r.Context(), cfg.DebugEnabled, cfg.DebugLogSSE)
 	defer logger.Close()
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 
@@ -396,7 +424,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cacheStrategy := h.config.CacheStrategy
+	cacheStrategy := cfg.CacheStrategy
 	if cacheStrategy != "" && cacheStrategy != "none" {
 		applyCacheStrategy(&req, cacheStrategy)
 	}
@@ -472,10 +500,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if preSelectWarpRequest {
 		emptyOutputRecoveryPrompt = buildEmptyOutputRecoveryPrompt(req.Messages)
 	}
-	noThinking := suggestionMode || h.config.SuppressThinking
+	noThinking := suggestionMode || cfg.SuppressThinking
 	gateNoTools := false
 	toolGateReasons := make([]string, 0, 2)
 	toolGateMessage := ""
+	if toolChoiceDisablesTools(req.ToolChoice) {
+		gateNoTools = true
+		toolGateReasons = append(toolGateReasons, "tool_choice_none")
+		toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
+	}
 	if suggestionMode {
 		gateNoTools = true
 		toolGateReasons = append(toolGateReasons, "suggestion_mode")
@@ -501,7 +534,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	effectiveTools := req.Tools
-	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
+	if cfg.WarpDisableTools != nil && *cfg.WarpDisableTools {
 		effectiveTools = nil
 		if preSelectWarpRequest {
 			gateNoTools = true
@@ -597,7 +630,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if isPuterRequest {
-		if sanitized, changed := sanitizeSystemItems(req.System, false, true, h.config); changed {
+		if sanitized, changed := sanitizeSystemItems(req.System, false, true, cfg); changed {
 			req.System = sanitized
 			if verboseDiagnostics {
 				slog.Debug("puter: sanitized forwarded system items")
@@ -745,7 +778,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		inputTokens = h.estimateInputTokens(r.Context(), req.Model, builtPrompt)
 	}
 
-	if h.config.EnableTokenCache && h.promptCache != nil {
+	if cfg.EnableTokenCache && h.promptCache != nil {
 		sysText := ""
 		if len(req.System) > 0 {
 			if sysBytes, err := json.Marshal(req.System); err == nil {
@@ -760,7 +793,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cacheReadTokens, _ := h.promptCache.CheckPromptCache(
-			h.config.TokenCacheStrategy,
+			cfg.TokenCacheStrategy,
 			breakdown.SystemContextTokens,
 			breakdown.ToolsTokens,
 			sysText,
@@ -774,7 +807,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sh := newStreamHandler(
-		h.config, w, logger, noThinking, isStream, responseFormat, effectiveWorkdir,
+		cfg, w, logger, noThinking, isStream, responseFormat, effectiveWorkdir,
 	)
 	allowedToolNames := []string(nil)
 	allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
@@ -888,11 +921,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if chatSessionID == "" && !isWarpRequest {
 			chatSessionID = "chat_" + randomSessionID()
 		}
-		maxRetries := h.config.MaxRetries
+		maxRetries := cfg.MaxRetries
 		if maxRetries < 0 {
 			maxRetries = 0
 		}
-		retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
+		retryDelay := time.Duration(cfg.RetryDelay) * time.Millisecond
 		retriesRemaining := maxRetries
 
 		// Publish the model this request resolved to, so the per-minute
@@ -911,6 +944,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			Messages:             payloadMessages,
 			System:               payloadSystem,
 			Tools:                effectiveTools,
+			ToolChoice:           req.ToolChoice,
+			ParallelToolCalls:    req.ParallelToolCalls,
 			NoTools:              gateNoTools,
 			ChatSessionID:        chatSessionID,
 			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
@@ -1255,6 +1290,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			InputTokens:  sh.inputTokens,
 			OutputTokens: sh.outputTokens,
 		})
+	}
+}
+
+func toolChoiceDisablesTools(choice interface{}) bool {
+	switch typed := choice.(type) {
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "none")
+	case map[string]interface{}:
+		return strings.EqualFold(strings.TrimSpace(fmt.Sprint(typed["type"])), "none")
+	default:
+		return false
 	}
 }
 

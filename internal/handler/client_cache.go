@@ -236,7 +236,8 @@ func (h *Handler) getOrCreateAccountClient(acc *store.Account) UpstreamClient {
 		return h.buildAccountClient(acc)
 	}
 
-	fingerprint := accountClientFingerprint(acc, h.config)
+	cfg := h.configSnapshot()
+	fingerprint := accountClientFingerprint(acc, cfg)
 
 	h.clientCache.mu.RLock()
 	entry, ok := h.clientCache.entries[acc.ID]
@@ -283,7 +284,7 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	}
 	var cfg *config.Config
 	if h != nil {
-		cfg = h.config
+		cfg = h.configSnapshot()
 	}
 	if h != nil && h.clientFactory != nil {
 		return h.clientFactory(acc, cfg)
@@ -295,10 +296,18 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 		return puter.NewFromAccount(acc, cfg)
 	}
 	if strings.EqualFold(acc.AccountType, "workbuddy") {
-		return workbuddy.NewFromAccount(acc, cfg)
+		client := workbuddy.NewFromAccount(acc, cfg)
+		if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
+			client.SetAccountStore(h.loadBalancer.Store)
+		}
+		return client
 	}
 	if strings.EqualFold(acc.AccountType, "qoder") {
-		return qoder.NewFromAccount(acc, cfg)
+		client := qoder.NewFromAccount(acc, cfg)
+		if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
+			client.SetAccountStore(h.loadBalancer.Store)
+		}
+		return client
 	}
 	return nil
 }
@@ -361,6 +370,12 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		_, _ = io.WriteString(hasher, strconv.FormatInt(value, 10))
 		_, _ = hasher.Write([]byte{0})
 	}
+	writeStrings := func(values []string) {
+		writeInt(len(values))
+		for _, value := range values {
+			writeString(value)
+		}
+	}
 
 	writeInt64(acc.ID)
 	writeString(acc.Name)
@@ -381,6 +396,20 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 	writeString(acc.WorkBuddyAccessToken)
 	writeString(acc.WorkBuddyRefreshToken)
 	writeString(acc.WorkBuddyUID)
+	writeInt64(acc.WorkBuddyExpiresAt.UnixNano())
+	writeStrings(acc.WorkBuddyModelIDs)
+	writeString(acc.QoderAccessToken)
+	writeString(acc.QoderRefreshToken)
+	writeInt64(acc.QoderExpiresAt.UnixNano())
+	writeString(acc.QoderMachineID)
+	writeString(acc.QoderUserID)
+	writeString(acc.QoderUserName)
+	writeString(acc.QoderOrganizationID)
+	writeStrings(acc.QoderOrganizationTags)
+	writeBool(acc.QoderDataPolicy)
+	writeString(acc.QoderRuntimeInfo)
+	writeString(acc.QoderRuntimeKey)
+	writeStrings(acc.QoderModelIDs)
 	// Do not include stats-only timestamps like UpdatedAt here.
 	// Request/usage accounting bumps UpdatedAt on every call, and using it in the
 	// fingerprint would force unnecessary client rebuilds and drop keep-alive pools.
@@ -389,6 +418,13 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		writeString(cfg.UpstreamMode)
 		writeString(cfg.UpstreamURL)
 		writeString(cfg.UpstreamToken)
+		writeString(cfg.WorkBuddyBaseURL)
+		writeString(cfg.QoderOAuthBaseURL)
+		writeString(cfg.QoderOpenAPIBaseURL)
+		writeString(cfg.QoderInferenceURL)
+		writeString(cfg.QoderAuthBaseURL)
+		writeString(cfg.QoderClientID)
+		writeString(cfg.QoderClientVersion)
 		writeString(cfg.ProxyURL)
 		writeString(cfg.ProxyHTTP)
 		writeString(cfg.ProxyHTTPS)

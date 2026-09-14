@@ -40,6 +40,7 @@ import (
 
 type API struct {
 	configMu     sync.Mutex
+	configHookMu sync.RWMutex
 	connTracker  loadbalancer.ConnTracker
 	store        *store.Store
 	tokenCache   tokencache.Cache
@@ -48,6 +49,7 @@ type API struct {
 	adminPass    string
 	loginLimiter *middleware.RateLimiter
 	config       atomic.Pointer[config.Config]
+	configHook   func(*config.Config)
 
 	// Account check backoff / storm control
 	checkMu          sync.Mutex
@@ -570,6 +572,10 @@ type deviceLogin struct {
 	expiresAt  time.Time
 	interval   time.Duration
 	cancel     context.CancelFunc
+	done       chan struct{}
+	// configSnapshot pins provider endpoints for the whole transaction. A
+	// live config reload must not start a login on one host and poll another.
+	configSnapshot *config.Config
 
 	status    string
 	message   string
@@ -594,7 +600,6 @@ type deviceLoginResponse struct {
 
 type warpDeviceLogin = deviceLogin
 type grokDeviceLogin = deviceLogin
-type workbuddyLogin = deviceLogin
 
 var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 	client := puter.NewFromAccount(acc, cfg)
@@ -1198,7 +1203,8 @@ func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.A
 	}
 
 	key := normalizedAccountCredentialKey(acc)
-	if key == "" {
+	identityKey := stableProviderIdentityKey(acc)
+	if key == "" && identityKey == "" {
 		return nil, nil
 	}
 
@@ -1210,7 +1216,10 @@ func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.A
 		if existing == nil || existing.ID == excludeID {
 			continue
 		}
-		if normalizedAccountCredentialKey(existing) == key {
+		if identityKey != "" && stableProviderIdentityKey(existing) == identityKey {
+			return existing, nil
+		}
+		if key != "" && normalizedAccountCredentialKey(existing) == key {
 			if grokSSOViewsAreLinked(acc, existing) {
 				continue
 			}
@@ -1218,6 +1227,30 @@ func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.A
 		}
 	}
 	return nil, nil
+}
+
+// stableProviderIdentityKey survives OAuth token rotation. WorkBuddy and Qoder
+// issue a new durable token during a fresh login, so token-only deduplication
+// would create a second row for the same upstream user and leave the old row
+// holding a consumed refresh token.
+func stableProviderIdentityKey(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "workbuddy":
+		if uid := strings.TrimSpace(acc.WorkBuddyUID); uid != "" {
+			return "workbuddy:uid:" + uid
+		}
+	case "qoder":
+		if uid := strings.TrimSpace(acc.QoderUserID); uid != "" {
+			return "qoder:uid:" + uid
+		}
+		if machineID := strings.TrimSpace(acc.QoderMachineID); machineID != "" {
+			return "qoder:machine:" + machineID
+		}
+	}
+	return ""
 }
 
 func duplicateAccountError(existing *store.Account) error {
@@ -1662,7 +1695,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			}
 			return accountStatus, httpStatus, fmt.Errorf("failed to refresh warp account: %w", err)
 		}
-		warpClient.SyncAccountState()
+		warpClient.SyncAccountStateTo(acc)
 
 		limitCtx, limitCancel := context.WithTimeout(ctx, 15*time.Second)
 		limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
@@ -1763,7 +1796,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 	}
 
 	if strings.EqualFold(acc.AccountType, "qoder") {
-		status, httpStatus, verifyErr := verifyQoderAccount(ctx, acc, a.config.Load())
+		status, httpStatus, verifyErr := verifyQoderAccountWithStore(ctx, acc, a.config.Load(), a.store)
 		if verifyErr != nil {
 			if errors.Is(verifyErr, errQoderMissingCredential) {
 				return "", http.StatusBadRequest, fmt.Errorf("failed to verify qoder account: %w", verifyErr)
@@ -1776,7 +1809,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		return status, httpStatus, nil
 	}
 	if strings.EqualFold(acc.AccountType, "workbuddy") {
-		status, httpStatus, verifyErr := verifyWorkBuddyAccount(ctx, acc, a.config.Load())
+		status, httpStatus, verifyErr := verifyWorkBuddyAccountWithStore(ctx, acc, a.config.Load(), a.store)
 		if verifyErr != nil {
 			if errors.Is(verifyErr, errWorkBuddyMissingCredential) {
 				return "", http.StatusBadRequest, fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
@@ -1875,9 +1908,39 @@ func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
 		qoderLogins:      map[string]*qoderLoginTransaction{},
 	}
 	if cfg != nil {
-		a.config.Store(cfg)
+		a.config.Store(cfg.Clone())
 	}
 	return a
+}
+
+// SetConfigChangeHook registers the runtime components that must adopt a newly
+// persisted immutable config snapshot. The hook is invoked after the snapshot
+// has been durably stored and atomically published by the API.
+func (a *API) SetConfigChangeHook(hook func(*config.Config)) {
+	if a == nil {
+		return
+	}
+	a.configHookMu.Lock()
+	a.configHook = hook
+	a.configHookMu.Unlock()
+}
+
+// ConfigSnapshot returns the current immutable runtime configuration. Callers
+// must treat the returned value as read-only.
+func (a *API) ConfigSnapshot() *config.Config {
+	if a == nil {
+		return nil
+	}
+	return a.config.Load()
+}
+
+func (a *API) notifyConfigChanged(cfg *config.Config) {
+	a.configHookMu.RLock()
+	hook := a.configHook
+	a.configHookMu.RUnlock()
+	if hook != nil {
+		hook(cfg)
+	}
 }
 
 func (a *API) SetPromptCache(cache tokencache.PromptCache) {
@@ -1971,18 +2034,18 @@ func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		// Copy current config, decode into copy, then atomically store
 		current := a.config.Load()
-		newCfg := *current
-		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
+		newCfg := current.Clone()
+		if err := json.NewDecoder(r.Body).Decode(newCfg); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := a.persistConfig(r.Context(), current, &newCfg); err != nil {
+		if err := a.persistConfig(r.Context(), current, newCfg); err != nil {
 			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(&newCfg)
+		json.NewEncoder(w).Encode(newCfg)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -2859,13 +2922,22 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			// The read path redacts the refresh token, so an ordinary edit
 			// arrives without it; keep the stored credential unless a new one
 			// was actually submitted.
+			submitted := resolveWorkBuddyCredentials(&acc)
 			PreserveWorkBuddyCredentialsOnEdit(&acc, existing)
 			if resolveWorkBuddyCredentials(&acc).RefreshToken == "" && resolveWorkBuddyCredentials(&acc).AccessToken == "" {
 				http.Error(w, "missing WorkBuddy credential", http.StatusBadRequest)
 				return
 			}
 			NormalizeWorkBuddyCredentials(&acc)
+			existingCreds := resolveWorkBuddyCredentials(existing)
+			acc.ReplaceWorkBuddyCredentials = submitted.HasCredential() &&
+				(submitted.AccessToken != existingCreds.AccessToken || submitted.RefreshToken != existingCreds.RefreshToken)
+			if acc.ReplaceWorkBuddyCredentials {
+				acc.ClearVerifiedAt = true
+			}
 		} else if strings.EqualFold(acc.AccountType, "qoder") {
+			submitted := qoder.ResolveCredentials(&acc)
+			submittedMachineID := strings.TrimSpace(acc.QoderMachineID)
 			PreserveQoderCredentialsOnEdit(&acc, existing)
 			if !NormalizeQoderCredentials(&acc) {
 				http.Error(w, "missing Qoder credential: sign in again with the browser login", http.StatusBadRequest)
@@ -2874,6 +2946,14 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(acc.QoderMachineID) == "" {
 				http.Error(w, "missing Qoder device identity: sign in again", http.StatusBadRequest)
 				return
+			}
+			existingCreds := qoder.ResolveCredentials(existing)
+			acc.ReplaceQoderCredentials = submitted.HasCredential() &&
+				(submitted.AccessToken != existingCreds.AccessToken ||
+					submitted.RefreshToken != existingCreds.RefreshToken ||
+					(submittedMachineID != "" && submittedMachineID != strings.TrimSpace(existing.QoderMachineID)))
+			if acc.ReplaceQoderCredentials {
+				acc.ClearVerifiedAt = true
 			}
 		} else if strings.EqualFold(acc.AccountType, "puter") && strings.EqualFold(existing.AccountType, "puter") && strings.TrimSpace(acc.ClientCookie) == "" && strings.TrimSpace(acc.Token) == "" {
 			acc.ClientCookie = existing.ClientCookie
@@ -3655,26 +3735,23 @@ func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config)
 		return fmt.Errorf("settings store not configured")
 	}
 
-	config.ApplyHardcoded(newCfg)
+	storedCfg := newCfg.Clone()
+	config.ApplyHardcoded(storedCfg)
 
-	data, err := json.Marshal(newCfg)
+	data, err := json.Marshal(storedCfg)
 	if err != nil {
 		return err
 	}
 	if err := a.store.SetSetting(ctx, "config", string(data)); err != nil {
 		return err
 	}
-	cacheChanged := tokenCacheConfigChanged(current, newCfg)
+	cacheChanged := tokenCacheConfigChanged(current, storedCfg)
 
-	// Keep the original shared config pointer updated in place so long-lived
-	// components started with that pointer (handler/background loops/providers)
-	// observe runtime config changes such as proxy updates immediately.
-	storedCfg := newCfg
-	if current != nil {
-		*current = *newCfg
-		storedCfg = current
-	}
+	// Runtime configs are immutable after publication. Replacing the pointer is
+	// atomic; mutating the previously published object would race with request
+	// handlers and background jobs reading its fields.
 	a.config.Store(storedCfg)
+	a.notifyConfigChanged(storedCfg)
 	if cacheChanged {
 		a.clearTokenCaches(ctx)
 	}

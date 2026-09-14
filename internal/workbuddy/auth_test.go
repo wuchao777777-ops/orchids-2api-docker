@@ -3,11 +3,15 @@ package workbuddy
 import (
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -176,6 +180,11 @@ func TestBuildMessages_KeepsSystemItemsAndToolResults(t *testing.T) {
 	messages := buildMessages(upstream.UpstreamRequest{
 		System: []prompt.SystemItem{{Type: "text", Text: "be brief"}},
 		Messages: []prompt.Message{{
+			Role: "assistant",
+			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+				{Type: "tool_use", ID: "toolu_1", Name: "run", Input: map[string]interface{}{}},
+			}},
+		}, {
 			Role: "user",
 			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
 				{Type: "text", Text: "run it"},
@@ -183,14 +192,29 @@ func TestBuildMessages_KeepsSystemItemsAndToolResults(t *testing.T) {
 			}},
 		}},
 	})
-	if len(messages) != 3 {
-		t.Fatalf("messages = %d, want system + user + tool", len(messages))
+	if len(messages) != 4 {
+		t.Fatalf("messages = %d, want system + assistant + user + tool", len(messages))
 	}
 	if messages[0].Role != "system" || messages[0].Content != "be brief" {
 		t.Fatalf("messages[0] = %+v, want the forwarded system item", messages[0])
 	}
-	if messages[2].Role != "tool" || messages[2].ToolCallID != "toolu_1" || messages[2].Content != "ok" {
-		t.Fatalf("messages[2] = %+v, want the tool result", messages[2])
+	if messages[3].Role != "tool" || messages[3].ToolCallID != "toolu_1" || messages[3].Content != "ok" {
+		t.Fatalf("messages[3] = %+v, want the tool result", messages[3])
+	}
+}
+
+func TestBuildMessagesDropsDanglingToolResult(t *testing.T) {
+	t.Parallel()
+	messages := buildMessages(upstream.UpstreamRequest{Messages: []prompt.Message{{
+		Role: "user",
+		Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+			Type: "tool_result", ToolUseID: "missing", Content: "must not be sent",
+		}}},
+	}}})
+	for _, message := range messages {
+		if message.Role == "tool" {
+			t.Fatalf("dangling tool result was forwarded: %#v", messages)
+		}
 	}
 }
 
@@ -275,6 +299,31 @@ func TestConsumeStream_ReassemblesSplitToolArguments(t *testing.T) {
 	}
 }
 
+func TestConsumeStream_DoesNotMergeReusedToolIndex(t *testing.T) {
+	t.Parallel()
+	body := strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"first","arguments":"{}"}}]}}]}`,
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_b","function":{"name":"second","arguments":"{\"n\":2}"}}]},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	}, "\n")
+	var calls []upstream.SSEMessage
+	result, err := consumeStream(strings.NewReader(body), func(message upstream.SSEMessage) {
+		if message.Type == "model.tool-call" {
+			calls = append(calls, message)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ToolCallCount != 2 || len(calls) != 2 {
+		t.Fatalf("calls=%#v count=%d, want two distinct calls", calls, result.ToolCallCount)
+	}
+	if calls[0].Event["toolName"] != "first" || calls[0].Event["input"] != "{}" ||
+		calls[1].Event["toolName"] != "second" || calls[1].Event["input"] != `{"n":2}` {
+		t.Fatalf("reused index calls were corrupted: %#v", calls)
+	}
+}
+
 func TestRunChat_RequiresCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -283,6 +332,26 @@ func TestRunChat_RequiresCredentials(t *testing.T) {
 	err := client.runChat(context.Background(), upstream.UpstreamRequest{Model: defaultModel}, time.Second, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "missing credentials") {
 		t.Fatalf("runChat() error = %v, want a missing-credential error", err)
+	}
+}
+
+func TestBuildBodyNormalizesStringOnlyToolChoice(t *testing.T) {
+	client := NewFromAccount(nil, nil)
+	body, err := client.buildBody(upstream.UpstreamRequest{
+		Tools: []interface{}{map[string]interface{}{
+			"name": "read", "input_schema": map[string]interface{}{"type": "object"},
+		}},
+		ToolChoice: map[string]interface{}{"type": "tool", "name": "read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded["tool_choice"]; got != "required" {
+		t.Fatalf("tool_choice=%#v want required", got)
 	}
 }
 
@@ -423,13 +492,99 @@ func TestTokenUpdater_PersistsRotatedRefreshToken(t *testing.T) {
 	if updater.saved.WorkBuddyRefreshToken != "new-refresh" {
 		t.Fatalf("persisted refresh token = %q", updater.saved.WorkBuddyRefreshToken)
 	}
-	if acc.WorkBuddyRefreshToken != "new-refresh" || acc.WorkBuddyAccessToken != "new-access" {
-		t.Fatalf("in-memory account = %q/%q", acc.WorkBuddyRefreshToken, acc.WorkBuddyAccessToken)
+	if acc.WorkBuddyRefreshToken != "old-refresh" || acc.WorkBuddyAccessToken != "" {
+		t.Fatalf("refresh mutated the caller-owned account snapshot: %q/%q", acc.WorkBuddyRefreshToken, acc.WorkBuddyAccessToken)
+	}
+}
+
+func TestClientConcurrentFirstUseRefreshesOnlyOnce(t *testing.T) {
+	t.Parallel()
+
+	var refreshes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes.Add(1)
+		_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"new-access","refreshToken":"new-refresh","expiresIn":172800}}`))
+	}))
+	defer srv.Close()
+
+	client := NewFromAccount(&store.Account{
+		AccountType:           "workbuddy",
+		WorkBuddyRefreshToken: "old-refresh",
+	}, nil)
+	client.SetBaseURLForTest(srv.URL)
+	client.httpClient = srv.Client()
+
+	const callers = 24
+	var wg sync.WaitGroup
+	errs := make(chan error, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			token, err := client.ensureAccessToken(context.Background())
+			if err == nil && token != "new-access" {
+				err = fmt.Errorf("token = %q", token)
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := refreshes.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
 	}
 }
 
 type fakeUpdater struct {
 	saved *store.Account
+}
+
+type flakyUpdater struct {
+	fail  bool
+	calls int
+}
+
+func (f *flakyUpdater) UpdateAccount(_ context.Context, _ *store.Account) error {
+	f.calls++
+	if f.fail {
+		return errors.New("write failed")
+	}
+	return nil
+}
+
+func TestTokenUpdaterReportsPersistenceFailureAndRetriesWithoutRotatingAgain(t *testing.T) {
+	t.Parallel()
+	refreshes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes++
+		_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"new-access","refreshToken":"new-refresh","expiresIn":172800}}`))
+	}))
+	defer srv.Close()
+
+	storeUpdater := &flakyUpdater{fail: true}
+	updater := newTokenUpdater(srv.URL, srv.Client(), storeUpdater, &store.Account{ID: 1, AccountType: "workbuddy"})
+	if _, err := updater.RefreshNow(context.Background(), Credentials{RefreshToken: "old-refresh"}); err == nil {
+		t.Fatal("RefreshNow succeeded even though the rotated token was not persisted")
+	}
+	storeUpdater.fail = false
+	token, err := updater.Token(context.Background(), Credentials{RefreshToken: "old-refresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "new-access" {
+		t.Fatalf("token = %q", token)
+	}
+	if refreshes != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refreshes)
+	}
+	if storeUpdater.calls != 2 {
+		t.Fatalf("persistence calls = %d, want failed write plus retry", storeUpdater.calls)
+	}
 }
 
 func (f *fakeUpdater) UpdateAccount(_ context.Context, acc *store.Account) error {

@@ -259,7 +259,7 @@ func (h *Handler) refreshWarpModelConfigAsync(acc *store.Account) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
-		client := warp.NewFromAccount(&account, h.config)
+		client := warp.NewFromAccount(&account, h.configSnapshot())
 		defer client.Close()
 		features, source, err := client.FetchDiscoveredFeatureModelChoices(ctx)
 		if err != nil {
@@ -409,7 +409,7 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient) {
 	var changed bool
 	if strings.EqualFold(account.AccountType, "warp") {
 		if warpClient, ok := client.(*warp.Client); ok {
-			changed = warpClient.SyncAccountState()
+			changed = warpClient.SyncAccountStateTo(account)
 		}
 	}
 

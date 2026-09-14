@@ -53,7 +53,11 @@ type Client struct {
 
 	entropy source
 
-	refreshMu sync.Mutex
+	refreshMu            sync.Mutex
+	runtimeMu            sync.Mutex
+	stateMu              sync.RWMutex
+	credsDirty           bool
+	dirtyExpectedRefresh string
 }
 
 // AccountUpdater is the subset of the account store the client needs to persist
@@ -61,6 +65,10 @@ type Client struct {
 // *store.Store.
 type AccountUpdater interface {
 	UpdateAccount(ctx context.Context, acc *store.Account) error
+}
+
+type accountPatcher interface {
+	UpdateQoderAccount(ctx context.Context, id int64, patch store.QoderAccountPatch) error
 }
 
 // NewFromAccount builds a client for one account. cfg supplies endpoints, proxy
@@ -88,9 +96,14 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		stream:         util.GetSharedHTTPClient(proxyKey+"|qoder-chat", 0, proxyFunc),
 		requestTimeout: timeout,
 		entropy:        cryptoSource{},
-		account:        acc,
 	}
-	client.creds = ResolveCredentials(acc)
+	if acc != nil {
+		copied := *acc
+		copied.QoderOrganizationTags = append([]string(nil), acc.QoderOrganizationTags...)
+		copied.QoderModelIDs = append([]string(nil), acc.QoderModelIDs...)
+		client.account = &copied
+	}
+	client.creds = ResolveCredentials(client.account)
 	if client.machineID == "" {
 		// An account-less or freshly completed credential may not carry the
 		// device identity yet; the resolved credential is the other place it
@@ -114,7 +127,9 @@ func (c *Client) SetAccountStore(s AccountUpdater) {
 	if c == nil {
 		return
 	}
+	c.stateMu.Lock()
 	c.accountStore = s
+	c.stateMu.Unlock()
 }
 
 // Close satisfies the shared upstream client lifecycle. The HTTP transports are
@@ -157,7 +172,8 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		logger.LogUpstreamRequest(url, map[string]string{"provider": "qoder", "model": model.Key}, body)
 	}
 
-	return c.runChat(ctx, url, body, model, requestID, fields, onMessage)
+	toolsEnabled := !req.NoTools && len(normalizeToolDefinitions(req, model)) > 0
+	return c.runChat(ctx, url, body, model, requestID, fields, toolsEnabled, onMessage)
 }
 
 // runChat performs the upstream call with the CLI's retry policy: transport
@@ -166,7 +182,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 //
 // Retrying after output has been handed to the caller would duplicate content,
 // so a retry is only attempted while the callback has not seen anything.
-func (c *Client) runChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, onMessage func(upstream.SSEMessage)) error {
+func (c *Client) runChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, toolsEnabled bool, onMessage func(upstream.SSEMessage)) error {
 	const maxAttempts = 4
 	emitted := false
 	emit := func(msg upstream.SSEMessage) {
@@ -178,7 +194,8 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		result, err := c.attemptChat(ctx, url, body, model, requestID, fields, emit)
+		attemptCredentials := c.currentCredentials()
+		result, err := c.attemptChat(ctx, url, body, model, requestID, fields, attemptCredentials, toolsEnabled, emit)
 		if err == nil {
 			if !result.SawMeaningfulEvent {
 				return fmt.Errorf("qoder stream produced no usable events")
@@ -200,8 +217,8 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 
 		switch {
 		case isUnauthorized(err) && attempt == 1:
-			if refreshErr := c.forceRefresh(ctx); refreshErr != nil {
-				return err
+			if refreshErr := c.forceRefresh(ctx, attemptCredentials); refreshErr != nil {
+				return refreshErr
 			}
 			if fields, err = c.ensureRuntimeFields(ctx, c.currentCredentials()); err != nil {
 				return err
@@ -280,7 +297,13 @@ func asAttemptError(err error, target **attemptStreamError) bool {
 // ensureAccessToken returns a usable device access token, refreshing when the
 // stored one is missing or close to expiry.
 func (c *Client) ensureAccessToken(ctx context.Context) (Credentials, error) {
-	creds := c.currentCredentials()
+	creds, dirty, expectedRefresh := c.currentCredentialState()
+	if dirty {
+		if err := c.persistCredentials(ctx, creds, expectedRefresh); err != nil {
+			return Credentials{}, err
+		}
+		c.markCredentialsClean(creds)
+	}
 	now := time.Now()
 	if creds.AccessValid(now) {
 		return creds, nil
@@ -302,12 +325,11 @@ func (c *Client) ensureAccessToken(ctx context.Context) (Credentials, error) {
 
 // forceRefresh renews the credential unconditionally. The stream path calls it
 // after the upstream rejected a request that was otherwise well formed.
-func (c *Client) forceRefresh(ctx context.Context) error {
-	creds := c.currentCredentials()
-	if strings.TrimSpace(creds.RefreshToken) == "" {
+func (c *Client) forceRefresh(ctx context.Context, rejected Credentials) error {
+	if strings.TrimSpace(rejected.RefreshToken) == "" {
 		return ErrCredentialMissing
 	}
-	_, err := c.refresh(ctx, creds)
+	_, err := c.refresh(ctx, rejected)
 	return err
 }
 
@@ -317,7 +339,13 @@ func (c *Client) refresh(ctx context.Context, previous Credentials) (Credentials
 	defer c.refreshMu.Unlock()
 
 	// Another goroutine may have refreshed while this one waited.
-	current := c.currentCredentials()
+	current, dirty, expectedRefresh := c.currentCredentialState()
+	if dirty {
+		if err := c.persistCredentials(ctx, current, expectedRefresh); err != nil {
+			return Credentials{}, err
+		}
+		c.markCredentialsClean(current)
+	}
 	if current.AccessValid(time.Now()) && current.AccessToken != previous.AccessToken {
 		return current, nil
 	}
@@ -339,14 +367,11 @@ func (c *Client) refresh(ctx context.Context, previous Credentials) (Credentials
 		OrgID:            previous.OrgID,
 		OrgTags:          previous.OrgTags,
 	}
-	c.storeCredentials(merged)
-	c.persist(ctx, func(acc *store.Account) {
-		acc.QoderAccessToken = merged.AccessToken
-		if merged.RefreshToken != "" {
-			acc.QoderRefreshToken = merged.RefreshToken
-		}
-		acc.QoderExpiresAt = merged.AccessExpiresAt
-	})
+	c.storeCredentials(merged, true, previous.RefreshToken)
+	if err := c.persistCredentials(ctx, merged, previous.RefreshToken); err != nil {
+		return Credentials{}, err
+	}
+	c.markCredentialsClean(merged)
 	return merged, nil
 }
 
@@ -357,8 +382,10 @@ func (c *Client) refresh(ctx context.Context, previous Credentials) (Credentials
 // pair it generated at login; it is the account's runtime fields, and the
 // upstream treats a rotation as new device material.
 func (c *Client) ensureRuntimeFields(ctx context.Context, creds Credentials) (RuntimeFields, error) {
-	if c.runtime.Complete() {
-		return c.runtime, nil
+	c.runtimeMu.Lock()
+	defer c.runtimeMu.Unlock()
+	if fields := c.runtimeSnapshot(); fields.Complete() {
+		return fields, nil
 	}
 	if strings.TrimSpace(creds.UID) == "" {
 		// The runtime fields encrypt the UID, so they cannot be derived before
@@ -374,14 +401,23 @@ func (c *Client) ensureRuntimeFields(ctx context.Context, creds Credentials) (Ru
 	if err != nil {
 		return RuntimeFields{}, err
 	}
+	if err := c.persistPatch(ctx, store.QoderAccountPatch{
+		RuntimeInfo: fields.EncryptUserInfo,
+		RuntimeKey:  fields.Key,
+		UserID:      creds.UID,
+	}); err != nil {
+		return RuntimeFields{}, err
+	}
+	c.stateMu.Lock()
 	c.runtime = fields
-	c.persist(ctx, func(acc *store.Account) {
-		acc.QoderRuntimeInfo = fields.EncryptUserInfo
-		acc.QoderRuntimeKey = fields.Key
-		if strings.TrimSpace(acc.QoderUserID) == "" {
-			acc.QoderUserID = creds.UID
+	if c.account != nil {
+		c.account.QoderRuntimeInfo = fields.EncryptUserInfo
+		c.account.QoderRuntimeKey = fields.Key
+		if strings.TrimSpace(c.account.QoderUserID) == "" {
+			c.account.QoderUserID = creds.UID
 		}
-	})
+	}
+	c.stateMu.Unlock()
 	return fields, nil
 }
 
@@ -389,6 +425,8 @@ func (c *Client) ensureRuntimeFields(ctx context.Context, creds Credentials) (Ru
 // this channel always agreed during the browser step, and an account whose
 // agreement is unknown reports disagreement, which the gateway accepts.
 func (c *Client) dataPolicyAgreed() bool {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	if c.account == nil {
 		return true
 	}
@@ -409,6 +447,8 @@ func (c *Client) resolveModel(req upstream.UpstreamRequest) (modelEntry, error) 
 // seed. It never performs I/O: a chat request must not depend on a catalog read,
 // and the handler refreshes the catalog out of band.
 func (c *Client) loadCatalog() *Catalog {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	if c.account != nil {
 		if catalog := catalogFromIDs(c.account.QoderModelIDs); catalog.Len() > 0 {
 			return catalog
@@ -419,19 +459,30 @@ func (c *Client) loadCatalog() *Catalog {
 
 // currentCredentials returns the live credential snapshot.
 func (c *Client) currentCredentials() Credentials {
+	creds, _, _ := c.currentCredentialState()
+	return creds
+}
+
+func (c *Client) currentCredentialState() (Credentials, bool, string) {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	if c.account == nil {
-		return c.creds
+		return c.creds, c.credsDirty, c.dirtyExpectedRefresh
 	}
 	resolved := ResolveCredentials(c.account)
 	if resolved.HasCredential() {
-		return resolved
+		return resolved, c.credsDirty, c.dirtyExpectedRefresh
 	}
-	return c.creds
+	return c.creds, c.credsDirty, c.dirtyExpectedRefresh
 }
 
 // storeCredentials replaces the in-memory snapshot in place.
-func (c *Client) storeCredentials(creds Credentials) {
+func (c *Client) storeCredentials(creds Credentials, dirty bool, expectedRefreshToken string) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
 	c.creds = creds
+	c.credsDirty = dirty
+	c.dirtyExpectedRefresh = expectedRefreshToken
 	if c.account == nil {
 		return
 	}
@@ -443,18 +494,81 @@ func (c *Client) storeCredentials(creds Credentials) {
 	}
 }
 
-// persist writes a mutation back to the account store. A failure is logged by
-// the caller's context rather than failing the request: the credential in memory
-// is still valid for this process, and the account is repaired on the next sync.
-func (c *Client) persist(ctx context.Context, mutate func(acc *store.Account)) {
-	if c.accountStore == nil || c.account == nil || c.account.ID == 0 {
-		return
+func (c *Client) markCredentialsClean(creds Credentials) {
+	c.stateMu.Lock()
+	if c.creds.AccessToken == creds.AccessToken && c.creds.RefreshToken == creds.RefreshToken {
+		c.credsDirty = false
+		c.dirtyExpectedRefresh = ""
+	}
+	c.stateMu.Unlock()
+}
+
+func (c *Client) runtimeSnapshot() RuntimeFields {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.runtime
+}
+
+func (c *Client) persistCredentials(ctx context.Context, creds Credentials, expectedRefreshToken string) error {
+	return c.persistPatch(ctx, store.QoderAccountPatch{
+		ExpectedRefreshToken: expectedRefreshToken,
+		AccessToken:          creds.AccessToken,
+		RefreshToken:         creds.RefreshToken,
+		ExpiresAt:            creds.AccessExpiresAt,
+		UserID:               creds.UID,
+	})
+}
+
+// persistPatch writes only Qoder-owned fields. Production stores implement the
+// atomic patch API; the full-account fallback keeps lightweight test stores
+// source compatible without weakening the real persistence path.
+func (c *Client) persistPatch(ctx context.Context, patch store.QoderAccountPatch) error {
+	c.stateMu.RLock()
+	accountStore := c.accountStore
+	if c.account == nil {
+		c.stateMu.RUnlock()
+		return nil
 	}
 	acc := *c.account
-	mutate(&acc)
+	acc.QoderOrganizationTags = append([]string(nil), c.account.QoderOrganizationTags...)
+	acc.QoderModelIDs = append([]string(nil), c.account.QoderModelIDs...)
+	c.stateMu.RUnlock()
+	if accountStore == nil || acc.ID == 0 {
+		return nil
+	}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	_ = c.accountStore.UpdateAccount(writeCtx, &acc)
+	if patcher, ok := accountStore.(accountPatcher); ok {
+		if err := patcher.UpdateQoderAccount(writeCtx, acc.ID, patch); err != nil {
+			return fmt.Errorf("persist qoder account state: %w", err)
+		}
+		return nil
+	}
+	if patch.AccessToken != "" {
+		acc.QoderAccessToken = patch.AccessToken
+	}
+	if patch.RefreshToken != "" {
+		acc.QoderRefreshToken = patch.RefreshToken
+	}
+	if !patch.ExpiresAt.IsZero() {
+		acc.QoderExpiresAt = patch.ExpiresAt
+	}
+	if patch.UserID != "" {
+		acc.QoderUserID = patch.UserID
+	}
+	if patch.RuntimeInfo != "" {
+		acc.QoderRuntimeInfo = patch.RuntimeInfo
+	}
+	if patch.RuntimeKey != "" {
+		acc.QoderRuntimeKey = patch.RuntimeKey
+	}
+	if patch.ModelIDs != nil {
+		acc.QoderModelIDs = append([]string(nil), patch.ModelIDs...)
+	}
+	if err := accountStore.UpdateAccount(writeCtx, &acc); err != nil {
+		return fmt.Errorf("persist qoder account state: %w", err)
+	}
+	return nil
 }
 
 // VerifyModel proves the account can actually run one model by issuing a
@@ -490,7 +604,7 @@ func (c *Client) RuntimeFields() RuntimeFields {
 	if c == nil {
 		return RuntimeFields{}
 	}
-	return c.runtime
+	return c.runtimeSnapshot()
 }
 
 // MachineID returns the device identity this client binds its requests to.
