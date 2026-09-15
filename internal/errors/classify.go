@@ -135,6 +135,7 @@ func ClassifyAccountStatus(errStr string) string {
 		return "404"
 	case HasExplicitHTTPStatus(lower, "402") ||
 		strings.Contains(lower, "qoder quota exhausted") ||
+		strings.Contains(lower, "no ai credits remaining") ||
 		strings.Contains(lower, "insufficient_funds") ||
 		strings.Contains(lower, "insufficient funding") ||
 		strings.Contains(lower, "available funding is insufficient") ||
@@ -208,6 +209,7 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "402") ||
 		strings.Contains(lower, "qoder quota exhausted") ||
+		strings.Contains(lower, "no ai credits remaining") ||
 		strings.Contains(lower, "insufficient_funds") ||
 		strings.Contains(lower, "insufficient funding") ||
 		strings.Contains(lower, "quota_limit") ||
@@ -217,6 +219,8 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "quota_exhausted", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "429") ||
 		strings.Contains(lower, "qoder agent limit reached") ||
+		strings.Contains(lower, "qoder model rate limited") ||
+		strings.Contains(lower, "available upstream accounts are rate-limited") ||
 		strings.Contains(lower, "agentlimitresettime") ||
 		strings.Contains(lower, "too many requests") ||
 		strings.Contains(lower, "rate limit") ||

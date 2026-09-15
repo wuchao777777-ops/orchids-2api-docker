@@ -157,8 +157,13 @@ func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetCha
 	// Account leases are held for the complete upstream request. When another
 	// request is just finishing, an immediate second selection can observe all
 	// accounts at their hard limit and turn a transient race into a 503. Give
-	// releases a short, cancellable window to become visible before failing.
-	const reservationRetries = 3
+	// releases a bounded, cancellable window to become visible before failing.
+	// The two-second window matches the busy retry used by Qoder and is still
+	// short enough that a genuinely saturated Puter pool fails promptly.
+	const (
+		reservationRetries    = 8
+		reservationRetryDelay = 250 * time.Millisecond
+	)
 	reservationAttempt := 0
 	for {
 		client, account, release, err := h.acquireAccountSelection(ctx, targetChannel, channelRequired, excluded, opts)
@@ -170,7 +175,7 @@ func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetCha
 				// be available again on the next pass.
 				excluded = append([]int64(nil), failedAccountIDs...)
 				clear(full)
-				timer := time.NewTimer(75 * time.Millisecond)
+				timer := time.NewTimer(reservationRetryDelay)
 				select {
 				case <-ctx.Done():
 					if !timer.Stop() {
@@ -210,6 +215,14 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 		return nil, errors.New("load balancer not configured")
 	}
 	if !strings.EqualFold(strings.TrimSpace(targetChannel), "warp") {
+		// Qoder business rate limits are model-scoped. Keep the account usable for
+		// its other models while the affected model cools down.
+		if strings.EqualFold(strings.TrimSpace(targetChannel), "qoder") && strings.TrimSpace(opts.ModelID) != "" {
+			model := strings.TrimSpace(opts.ModelID)
+			return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
+				return store.ModelCooldownRemaining(acc, model, time.Now()) == 0
+			})
+		}
 		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
 	}
 
@@ -241,11 +254,7 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	if err == nil {
 		return account, nil
 	}
-	if opts.RequireWarpCloudAgent {
-		return nil, fmt.Errorf("no enabled accounts available for channel: %s (cloud agent requires a non-free Warp account)", targetChannel)
-	}
-
-	return nil, err
+	return nil, warpSelectionError(err, targetChannel, opts.RequireWarpCloudAgent)
 }
 
 func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccountIDs []int64, targetChannel string, opts accountSelectionOptions, filter func(*store.Account) bool) (*store.Account, error) {
@@ -261,10 +270,21 @@ func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccount
 	if err == nil {
 		return account, nil
 	}
-	if opts.RequireWarpCloudAgent {
-		return nil, fmt.Errorf("no enabled accounts available for channel: %s (cloud agent requires a non-free Warp account)", targetChannel)
+	return nil, warpSelectionError(err, targetChannel, opts.RequireWarpCloudAgent)
+}
+
+func warpSelectionError(err error, channel string, requireCloudAgent bool) error {
+	if err == nil || !requireCloudAgent {
+		return err
 	}
-	return nil, err
+	bareUnavailable := fmt.Sprintf("no enabled accounts available for channel: %s", channel)
+	if err.Error() != bareUnavailable {
+		// Preserve actionable pool state such as concurrency saturation or a
+		// cooldown. Rewriting every selection failure as a plan restriction hid
+		// the real cause when a paid Warp account was merely busy.
+		return err
+	}
+	return fmt.Errorf("%s (cloud agent requires a non-free Warp account)", bareUnavailable)
 }
 
 func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices *warp.AccountModelChoices, modelID string) bool {
