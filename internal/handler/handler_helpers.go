@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/goccy/go-json"
+
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -47,6 +49,116 @@ func (h *Handler) resolveModelAliasForChannel(ctx context.Context, channel, mode
 		return candidate, m
 	}
 	return modelID, nil
+}
+
+// ChannelForModel reports the channel a model id is registered under, or an
+// empty string when the model is unknown. The unified /v1 routes use it to pick
+// between the native and the bridged implementation.
+func (h *Handler) ChannelForModel(ctx context.Context, modelID string) string {
+	if _, m := h.resolveModelAlias(ctx, modelID); m != nil {
+		return strings.TrimSpace(m.Channel)
+	}
+	return ""
+}
+
+// requestReasoningEffort returns the effort a client asked for, from whichever
+// dialect it used: OpenAI's reasoning_effort or Anthropic's
+// output_config.effort / thinking. A thinking budget without an explicit effort
+// maps onto the same coarse levels so an effort-suffixed catalog can still be
+// resolved.
+func requestReasoningEffort(req ClaudeRequest) string {
+	if effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort)); effort != "" {
+		return effort
+	}
+	for _, config := range []map[string]interface{}{req.OutputConfig, req.Thinking} {
+		value, ok := config["effort"].(string)
+		if !ok {
+			continue
+		}
+		if effort := strings.ToLower(strings.TrimSpace(value)); effort != "" {
+			return effort
+		}
+	}
+	if req.Thinking == nil {
+		return ""
+	}
+	budget, ok := looseNumber(req.Thinking["budget_tokens"])
+	if !ok || budget <= 0 {
+		return ""
+	}
+	switch {
+	case budget < 4096:
+		return "low"
+	case budget < 16384:
+		return "medium"
+	default:
+		return "high"
+	}
+}
+
+// looseNumber accepts the numeric shapes JSON decoding produces.
+func looseNumber(value interface{}) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// effortVariantOrder is the fallback order tried when a client asks for a model
+// family by its bare name and the catalog only exposes effort-suffixed
+// variants. Warp publishes models as "<family>-<effort>" (gpt-5-6-sol-low),
+// while clients such as Codex send the family name plus reasoning_effort.
+var effortVariantOrder = []string{"medium", "high", "low", "xhigh", "max"}
+
+// resolveEffortModelVariant maps a bare model name onto the catalog entry that
+// actually exists. An exact catalog hit always wins; otherwise the requested
+// reasoning_effort is tried as a suffix and then the default effort order.
+// Without this, "gpt-5-6-sol" is rejected as "model not found" even though the
+// family is available and the client stated which effort it wants.
+func (h *Handler) resolveEffortModelVariant(ctx context.Context, modelID, effort, forcedChannel string) string {
+	modelID = normalizeRequestedModelID(modelID)
+	if modelID == "" || h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		return modelID
+	}
+	lookup := func(id string) *store.Model {
+		if forcedChannel != "" {
+			_, m := h.resolveModelAliasForChannel(ctx, forcedChannel, id)
+			return m
+		}
+		_, m := h.resolveModelAlias(ctx, id)
+		return m
+	}
+	if m := lookup(modelID); m != nil {
+		return modelID
+	}
+
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	candidates := make([]string, 0, len(effortVariantOrder)+1)
+	if effort != "" {
+		candidates = append(candidates, modelID+"-"+effort)
+	}
+	for _, suffix := range effortVariantOrder {
+		candidates = append(candidates, modelID+"-"+suffix)
+	}
+	for _, candidate := range candidates {
+		if m := lookup(candidate); m != nil && m.Status.Enabled() {
+			slog.Info("Resolved bare model to an effort variant",
+				"model", modelID, "resolved", candidate, "reasoning_effort", effort, "channel", forcedChannel)
+			return candidate
+		}
+	}
+	return modelID
 }
 
 // resolveWorkdir determines the working directory from headers, system prompt, or session.
