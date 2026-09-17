@@ -986,15 +986,47 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 		delete(merged, field)
 	}
 	if o.Account != nil {
-		message := o.Account.StatusMessage
-		for _, secret := range []string{o.Account.Token, o.Account.ClientCookie, o.Account.RefreshToken, o.Account.SessionCookie, o.Account.OAuthAccessToken, o.Account.OAuthRefreshToken, o.Account.WorkBuddyAccessToken, o.Account.WorkBuddyRefreshToken, o.Account.QoderAccessToken, o.Account.QoderRefreshToken} {
-			if secret != "" {
-				message = strings.ReplaceAll(message, secret, "[REDACTED]")
-			}
-		}
-		merged["status_message"] = message
+		merged["status_message"] = redactAccountSecrets(o.Account.StatusMessage, o.Account)
 	}
 	return json.Marshal(merged)
+}
+
+// accountSecrets reads every credential-bearing value on an account.
+//
+// It is the one list both redaction layers use. Keeping it in one place is the
+// point: two hand-maintained copies had already drifted, and a credential that is
+// missing from the list is a credential that reaches the management API.
+func accountSecrets(acc *store.Account) []string {
+	if acc == nil {
+		return nil
+	}
+	return []string{
+		acc.Token,
+		acc.ClientCookie,
+		acc.RefreshToken,
+		acc.SessionCookie,
+		acc.SessionID,
+		acc.ClientUat,
+		acc.OAuthAccessToken,
+		acc.OAuthRefreshToken,
+		acc.WorkBuddyAccessToken,
+		acc.WorkBuddyRefreshToken,
+		acc.QoderAccessToken,
+		acc.QoderRefreshToken,
+		acc.QoderRuntimeInfo,
+		acc.QoderRuntimeKey,
+	}
+}
+
+// redactAccountSecrets replaces every credential value an account holds with a
+// placeholder, so a text field that quotes upstream output cannot publish one.
+func redactAccountSecrets(message string, acc *store.Account) string {
+	for _, secret := range accountSecrets(acc) {
+		if secret = strings.TrimSpace(secret); secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		}
+	}
+	return message
 }
 
 func normalizeAccountOutput(acc *store.Account) *accountOutput {
@@ -1015,13 +1047,11 @@ func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) 
 	if out == nil {
 		return nil
 	}
-	// Redact before the provider-specific output normalization removes secrets.
-	out.StatusMessage = acc.StatusMessage
-	for _, secret := range []string{acc.Token, acc.ClientCookie, acc.RefreshToken, acc.SessionCookie, acc.SessionID, acc.ClientUat, acc.OAuthAccessToken, acc.OAuthRefreshToken, acc.WorkBuddyAccessToken, acc.WorkBuddyRefreshToken, acc.QoderAccessToken, acc.QoderRefreshToken} {
-		if secret != "" {
-			out.StatusMessage = strings.ReplaceAll(out.StatusMessage, secret, "[REDACTED]")
-		}
-	}
+	// The message is redacted with the same list the final render uses. The two
+	// used to differ: this one omitted Qoder's access token and runtime pair, and
+	// it ran before the channel projection cleared them, so an upstream error that
+	// echoed a Qoder token published it in status_message.
+	out.StatusMessage = redactAccountSecrets(acc.StatusMessage, acc)
 	if strings.EqualFold(out.AccountType, "warp") && out.WarpMonthlyLimit > 0 {
 		out.Subscription = warp.InferSubscriptionFromRequestLimit(&warp.RequestLimitInfo{
 			RequestLimit: int(out.WarpMonthlyLimit),
@@ -1190,6 +1220,25 @@ func isSupportedAccountType(accountType string) bool {
 	}
 }
 
+// validateAccountType rejects an account whose type is missing or unknown.
+//
+// The create and update surfaces both take an account type from the request
+// body, and both have to answer the same two questions before touching the
+// store: is a type present, and is it one this gateway serves. Reporting the
+// error and writing the response belongs here so the two surfaces cannot drift
+// into giving different answers about the same input.
+func validateAccountType(w http.ResponseWriter, accountType string) bool {
+	if strings.TrimSpace(accountType) == "" {
+		http.Error(w, "account_type is required", http.StatusBadRequest)
+		return false
+	}
+	if !isSupportedAccountType(accountType) {
+		http.Error(w, "unsupported account type", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.Account, excludeID int64) (*store.Account, error) {
 	if a == nil || a.store == nil || acc == nil {
 		return nil, nil
@@ -1220,6 +1269,25 @@ func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.A
 		}
 	}
 	return nil, nil
+}
+
+// saveNewAccountUnlessDuplicate stores a freshly authenticated account, or
+// returns the row that already carries its credential.
+//
+// A completed device login and a completed browser login reach the same
+// decision — an upstream may hand out a second grant for an account this
+// gateway already has, and inserting it would give the scheduler two rows for
+// one allowance. The duplicate check and the insert share a single deadline
+// because they are one step: leaving it to the caller's context would let a
+// login hold a store round-trip open for the whole poll lifetime.
+func (a *API) saveNewAccountUnlessDuplicate(ctx context.Context, acc *store.Account) (*store.Account, error) {
+	storeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	existing, err := a.findDuplicateAccountByCredential(storeCtx, acc, 0)
+	if err == nil && existing == nil {
+		err = a.store.CreateAccount(storeCtx, acc)
+	}
+	return existing, err
 }
 
 // stableProviderIdentityKey survives OAuth token rotation. WorkBuddy and Qoder
@@ -1317,345 +1385,8 @@ func buildQuotaResponseFieldsWithUsage(acc *store.Account, observedTokens int64,
 		current = 0
 	}
 
-	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
-	case "qoder":
-		// The gateway reports the credit window directly, including its own
-		// exhausted verdict. The numbers are authoritative when a snapshot exists,
-		// and the verdict decides whether the account can spend at all — so the
-		// console can say "Free, 0 credits left, upgrade here" instead of showing
-		// a broken account.
-		snapshot := acc.QoderQuota
-		limit := snapshot.Limit
-		if limit <= 0 {
-			limit = snapshot.LastKnownLimit
-		}
-		remaining := snapshot.Remaining
-		if remaining < 0 {
-			remaining = 0
-		}
-		used := snapshot.Used
-		if used < 0 {
-			used = 0
-		}
-		fields["quota_limit"] = limit
-		fields["quota_used"] = used
-		fields["quota_remaining"] = remaining
-		fields["quota_mode"] = "remaining"
-		fields["quota_unit"] = util.FirstNonEmpty(snapshot.Unit, "credits")
-		fields["quota_supported"] = !snapshot.SyncedAt.IsZero()
-		fields["quota_plan"] = snapshot.PlanTier
-		fields["quota_exhausted"] = snapshot.Exhausted
-		fields["quota_upgrade_url"] = snapshot.UpgradeURL
-		fields["quota_reset_at"] = snapshot.ResetAt
-		// The gateway reports the window total itself, so a snapshot's limit is
-		// known even when it is zero (a Free plan with nothing left). Passing
-		// limitKnown=false here would make consumers treat a reported window as an
-		// estimate.
-		if snapshot.Exhausted {
-			// The allowance is spent: the credit window is the reason, and the
-			// numbers are still reported rather than hidden.
-			applyQuotaProvenance(fields, "upstreamQuota", "upstreamUsage", "", "", true, true)
-			break
-		}
-		if snapshot.SyncedAt.IsZero() {
-			applyQuotaProvenance(fields, "unknown", "upstreamUsage", "",
-				"Qoder 额度接口未返回数据", false, false)
-			break
-		}
-		applyQuotaProvenance(fields, "upstreamQuota", "upstreamUsage", "", "", true, true)
-		return fields
-	case "workbuddy":
-		// The meter reports the remaining credits of the current cycle; the
-		// generic UsageCurrent slot stores that remaining value for this channel,
-		// so "used" must be derived rather than read from UsageCurrent.
-		snapshot := acc.WorkBuddyQuota
-		quotaLimit := limit
-		if snapshot.Limit > 0 {
-			quotaLimit = snapshot.Limit
-		}
-		quotaRemaining := current
-		if !snapshot.SyncedAt.IsZero() {
-			quotaRemaining = snapshot.Remaining
-		}
-		if quotaLimit <= 0 {
-			fields["quota_limit"] = 0.0
-			fields["quota_used"] = 0.0
-			fields["quota_remaining"] = 0.0
-			fields["quota_mode"] = "unknown"
-			fields["quota_unit"] = "credits"
-			fields["quota_supported"] = false
-			fields["quota_plan"] = snapshot.PackageName
-			applyQuotaProvenance(fields, "unknown", "upstreamBilling", "",
-				"WorkBuddy 计量接口未返回额度", false, !snapshot.SyncedAt.IsZero())
-			break
-		}
-		if quotaRemaining < 0 {
-			quotaRemaining = 0
-		}
-		if quotaRemaining > quotaLimit {
-			quotaRemaining = quotaLimit
-		}
-		used := snapshot.Used
-		if snapshot.SyncedAt.IsZero() {
-			used = quotaLimit - quotaRemaining
-		}
-		if used < 0 {
-			used = 0
-		}
-		fields["quota_limit"] = quotaLimit
-		fields["quota_used"] = used
-		fields["quota_remaining"] = quotaRemaining
-		fields["quota_mode"] = "remaining"
-		fields["quota_unit"] = util.FirstNonEmpty(snapshot.Unit, "credits")
-		fields["quota_supported"] = !snapshot.SyncedAt.IsZero()
-		fields["quota_plan"] = snapshot.PackageName
-		fields["quota_consumed_units"] = snapshot.LastConsumedUnits
-		fields["quota_package_remaining"] = snapshot.PackageRemaining
-		workBuddyConfidence := ""
-		if !snapshot.SyncedAt.IsZero() {
-			workBuddyConfidence = "confirmed"
-		}
-		applyQuotaProvenance(fields, "paid", "upstreamBilling", workBuddyConfidence,
-			"WorkBuddy 计量包返回的周期额度", quotaLimit > 0, !snapshot.SyncedAt.IsZero())
-		if !snapshot.ResyncAt().IsZero() {
-			fields["quota_reset_at"] = snapshot.ResyncAt().UTC().Format(time.RFC3339)
-		}
-	case "grok":
-		if grok.ProviderForAccount(acc) == grok.ProviderBuild {
-			buildGrokBuildQuotaFields(fields, acc, observedTokens, usageObserved)
-			break
-		}
-		web := acc.GrokWebQuota
-		preferredMode := ""
-		preferred := web.Auto
-		if !preferred.HasLimit && !preferred.HasRemaining {
-			preferredMode = "fast"
-			preferred = web.Fast
-		} else {
-			preferredMode = "auto"
-		}
-		if preferred.HasLimit || preferred.HasRemaining {
-			limit = preferred.Limit
-			remaining := preferred.Remaining
-			used := limit - remaining
-			if used < 0 {
-				used = 0
-			}
-			fields["quota_limit"] = limit
-			fields["quota_used"] = used
-			fields["quota_remaining"] = remaining
-			fields["quota_mode"] = "web_" + preferredMode
-			fields["quota_unit"] = "requests"
-			fields["quota_supported"] = true
-			fields["quota_reset_at"] = preferred.ResetAt
-			fields["quota_windows"] = map[string]interface{}{"auto": web.Auto, "fast": web.Fast}
-			applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-				"Grok Web 上游返回的 auto/fast 额度窗口", true, false)
-		} else {
-			// No successful Web quota snapshot is different from zero credits.
-			// Keep the account active while telling the UI that the value is
-			// currently unavailable instead of inventing a default allowance.
-			fields["quota_limit"] = 0.0
-			fields["quota_used"] = 0.0
-			fields["quota_remaining"] = 0.0
-			fields["quota_mode"] = "unavailable"
-			fields["quota_unit"] = "requests"
-			fields["quota_supported"] = false
-			applyQuotaProvenance(fields, "unknown", "upstreamBilling", "",
-				"尚未同步到 Grok Web 额度窗口", false, false)
-		}
-	case "warp":
-		baseLimit := limit
-		if acc.WarpMonthlyLimit > 0 {
-			baseLimit = acc.WarpMonthlyLimit
-		}
-		used := current
-		if used > baseLimit && baseLimit > 0 {
-			used = baseLimit
-		}
-		baseRemaining := acc.WarpMonthlyRemaining
-		if baseRemaining <= 0 && baseLimit > 0 {
-			baseRemaining = baseLimit - current
-		}
-		if baseRemaining < 0 {
-			baseRemaining = 0
-		}
-		bonusRemaining := acc.WarpBonusRemaining
-		if bonusRemaining < 0 {
-			bonusRemaining = 0
-		}
-		remaining := baseRemaining + bonusRemaining
-		fields["quota_limit"] = baseLimit
-		fields["quota_used"] = used
-		fields["quota_remaining"] = remaining
-		fields["quota_mode"] = "warp_split"
-		fields["quota_unit"] = "requests"
-		fields["quota_base_limit"] = baseLimit
-		fields["quota_base_remaining"] = baseRemaining
-		fields["quota_bonus_remaining"] = bonusRemaining
-		applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-			"Warp 官方接口返回的月度额度与赠送额度", baseLimit > 0, false)
-	case "puter":
-		if limit <= 0 {
-			fields["quota_limit"] = 0.0
-			fields["quota_used"] = 0.0
-			fields["quota_remaining"] = 0.0
-			fields["quota_mode"] = "unknown"
-			fields["quota_unit"] = "credits"
-			fields["quota_supported"] = false
-			applyQuotaProvenance(fields, "unknown", "upstreamBilling", "",
-				"Puter 额度接口未返回数据", false, false)
-			break
-		}
-		remaining := current
-		if remaining > limit {
-			remaining = limit
-		}
-		used := limit - remaining
-		if used < 0 {
-			used = 0
-		}
-		fields["quota_limit"] = limit
-		fields["quota_used"] = used
-		fields["quota_remaining"] = remaining
-		fields["quota_mode"] = "remaining"
-		fields["quota_unit"] = "credits"
-		applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-			"Puter 官方接口返回的月度额度", limit > 0, false)
-	default:
-		fields["quota_limit"] = limit
-		remaining := current
-		if remaining > limit && limit > 0 {
-			remaining = limit
-		}
-		used := limit - remaining
-		if used < 0 {
-			used = 0
-		}
-		fields["quota_used"] = used
-		fields["quota_remaining"] = remaining
-		// A legacy account's numbers come from passive upstream headers, which are a
-		// short-lived throttle window rather than a subscription balance.
-		quotaType := "unknown"
-		if limit > 0 {
-			quotaType = "paid"
-		}
-		applyQuotaProvenance(fields, quotaType, "upstreamRateLimit", "observed",
-			"来自上游限流响应头，不是套餐余额", limit > 0, false)
-	}
-
+	projectQuotaFields(fields, acc, limit, current, observedTokens, usageObserved)
 	return fields
-}
-
-// buildGrokBuildQuotaFields projects one Build account's allowance.
-//
-// Upstream billing wins whenever it exists. When it does not, the account is not left
-// as a bare "未知": the projection says whether the plan is known to be paid, can be
-// inferred as Free, or is genuinely unknown — and a Free inference gets the estimated
-// window plus the usage this gateway observed inside it. The estimate is marked
-// estimated / limitKnown=false, so the number is a sense of scale rather than an
-// official balance, and rate-limit headers stay where they belong (throttling, never
-// a subscription balance).
-func buildGrokBuildQuotaFields(fields map[string]interface{}, acc *store.Account, observedTokens int64, usageObserved bool) {
-	weekly := acc.GrokBilling.Weekly
-	monthly := acc.GrokBilling.Monthly
-	fields["quota_mode"] = "unknown"
-	fields["quota_unit"] = "build_credits"
-	fields["quota_supported"] = false
-	if weekly.HasUsage {
-		fields["quota_limit"] = 100.0
-		fields["quota_used"] = weekly.UsagePercent
-		fields["quota_remaining"] = max(0, 100-weekly.UsagePercent)
-		fields["quota_mode"] = "weekly_percent"
-		fields["quota_unit"] = "percent"
-		fields["quota_supported"] = true
-		fields["quota_reset_at"] = weekly.ResetAt
-		applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-			"上游 Build 账单返回的周度窗口", true, false)
-	}
-	if monthly.HasLimit {
-		fields["quota_monthly_limit"] = monthly.Limit
-		fields["quota_monthly_remaining"] = monthly.Remaining
-		if !weekly.HasUsage {
-			fields["quota_limit"] = monthly.Limit
-			fields["quota_used"] = max(0, monthly.Limit-monthly.Remaining)
-			fields["quota_remaining"] = max(0, monthly.Remaining)
-			fields["quota_mode"] = "monthly"
-			fields["quota_unit"] = "build_credits"
-			fields["quota_supported"] = true
-			applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-				"上游 Build 账单返回的月度额度", true, false)
-		}
-	}
-	// Passive response headers are a minute-scale throttle, not a subscription
-	// balance, so they are published separately and never folded into quota_limit.
-	if acc.GrokRateLimits.Requests.HasLimit || acc.GrokRateLimits.Requests.HasRemaining {
-		fields["rate_limit_requests"] = acc.GrokRateLimits.Requests
-	}
-	if acc.GrokRateLimits.Tokens.HasLimit || acc.GrokRateLimits.Tokens.HasRemaining {
-		fields["rate_limit_tokens"] = acc.GrokRateLimits.Tokens
-	}
-	if weekly.HasUsage || monthly.HasLimit {
-		return
-	}
-	// A Free window the upstream itself reported outranks every inference: it carries
-	// the account's real actual/limit pair instead of a scale reference. It only does so
-	// while the window is still current — once the rolling window has passed, those
-	// numbers describe a window that no longer exists, and the account falls back to the
-	// estimate (still Free, because the refusal proved it) instead of showing a stale 0.
-	confirmed := acc.GrokFreeQuota
-	confirmedCurrent := !confirmed.ResetAt.IsZero() && time.Now().Before(confirmed.ResetAt)
-	if confirmed.HasLimit && !confirmed.ConfirmedAt.IsZero() && confirmedCurrent {
-		limit := confirmed.Limit
-		used := confirmed.Used
-		if used < 0 {
-			used = 0
-		}
-		if used > limit {
-			used = limit
-		}
-		fields["quota_limit"] = limit
-		fields["quota_used"] = used
-		fields["quota_remaining"] = max(0, limit-used)
-		fields["quota_mode"] = "confirmed_free"
-		fields["quota_unit"] = "tokens"
-		fields["quota_supported"] = true
-		fields["quota_window_hours"] = int(grok.FreeBuildUsageWindow / time.Hour)
-		if !confirmed.ResetAt.IsZero() {
-			fields["quota_reset_at"] = confirmed.ResetAt
-		}
-		applyQuotaProvenance(fields, "free", "upstreamExhaustion", "confirmed",
-			"上游额度耗尽时返回的真实 Free 窗口（tokens actual/limit）", true, true)
-		return
-	}
-	switch verdict := grok.InferFreeProfile(acc); {
-	case verdict.Inferred:
-		limit := float64(grok.EstimatedFreeBuildTokenLimit)
-		used := float64(0)
-		if usageObserved && observedTokens > 0 {
-			used = float64(observedTokens)
-		}
-		if used > limit {
-			used = limit
-		}
-		fields["quota_limit"] = limit
-		fields["quota_used"] = used
-		fields["quota_remaining"] = max(0, limit-used)
-		fields["quota_mode"] = "estimated_free"
-		fields["quota_unit"] = "tokens"
-		fields["quota_supported"] = true
-		fields["quota_window_hours"] = int(grok.FreeBuildUsageWindow / time.Hour)
-		applyQuotaProvenance(fields, "free", verdict.Source, "estimated",
-			"上游未下发数值额度；按 Free 画像估算，用量为本网关在窗口内观测到的 token", false, usageObserved)
-	case grok.BuildPlanIsPaid(acc.Subscription):
-		applyQuotaProvenance(fields, "paid", "planMetadata", "confirmed",
-			"官方身份接口报告为付费套餐，但未下发数值额度窗口", false, false)
-	default:
-		// Never synced, or the upstream has not said anything yet. Saying anything
-		// more here would be an invention.
-		applyQuotaProvenance(fields, "unknown", "unknown", "",
-			"尚未同步到上游套餐或额度信息；点刷新立即同步", false, false)
-	}
 }
 
 func applyPuterMonthlyUsage(acc *store.Account, usage *puter.MonthlyUsage) {
@@ -1682,149 +1413,11 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		return "", http.StatusBadRequest, fmt.Errorf("account is nil")
 	}
 
-	if strings.EqualFold(acc.AccountType, "warp") {
-		cfg := a.config.Load()
-		warpClient := warp.NewFromAccount(acc, cfg)
-		_, err := warpClient.ForceRefreshAccount(ctx)
-		if err != nil {
-			httpStatus := http.StatusBadRequest
-			if code := warp.HTTPStatusCode(err); code >= 400 {
-				httpStatus = code
-			}
-			accountStatus := ""
-			if httpStatus == http.StatusUnauthorized || httpStatus == http.StatusForbidden || httpStatus == http.StatusTooManyRequests {
-				accountStatus = strconv.Itoa(httpStatus)
-			}
-			return accountStatus, httpStatus, fmt.Errorf("failed to refresh warp account: %w", err)
-		}
-		warpClient.SyncAccountStateTo(acc)
-
-		limitCtx, limitCancel := context.WithTimeout(ctx, 15*time.Second)
-		limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
-		limitCancel()
-		if limitErr == nil && limitInfo != nil {
-			warp.ApplyRequestLimitInfoToAccount(acc, limitInfo, bonuses)
-		} else if limitErr != nil {
-			slog.Warn("Warp quota sync failed after refresh; keeping account available", "account_id", acc.ID, "error", limitErr)
-		}
-		modelDiscoveryConfirmed := false
-		var modelDiscoveryErr error
-		if a.store != nil && acc.ID != 0 {
-			modelCtx, modelCancel := context.WithTimeout(ctx, 15*time.Second)
-			features, source, modelErr := warpClient.FetchDiscoveredFeatureModelChoices(modelCtx)
-			modelCancel()
-			choices := warp.AgentModeModelChoices(features)
-			featureConfig := warp.AccountFeatureConfigFromChoices(features)
-			if modelErr == nil && len(choices) > 0 {
-				modelDiscoveryConfirmed = true
-				models := make([]string, 0, len(choices))
-				for _, choice := range choices {
-					models = append(models, choice.ID)
-				}
-				existing, err := warp.LoadAccountModelChoices(ctx, a.store)
-				if err != nil {
-					slog.Warn("Warp model choices sync failed after refresh", "account_id", acc.ID, "source", source, "error", err)
-				} else {
-					if existing == nil {
-						existing = &warp.AccountModelChoices{Accounts: map[string][]string{}}
-					}
-					if existing.Accounts == nil {
-						existing.Accounts = map[string][]string{}
-					}
-					if existing.Sources == nil {
-						existing.Sources = map[string]string{}
-					}
-					if existing.FeatureConfigs == nil {
-						existing.FeatureConfigs = map[string]warp.AccountFeatureConfig{}
-					}
-					key := strconv.FormatInt(acc.ID, 10)
-					existing.Accounts[key] = models
-					existing.Sources[key] = source
-					if !featureConfig.IsEmpty() {
-						existing.FeatureConfigs[key] = featureConfig
-					}
-					if err := warp.SaveAccountModelChoices(ctx, a.store, existing); err != nil {
-						slog.Warn("Warp model choices sync failed after refresh", "account_id", acc.ID, "source", source, "error", err)
-					}
-				}
-			} else if modelErr != nil {
-				modelDiscoveryErr = modelErr
-				slog.Warn("Warp model choices fetch failed after refresh", "account_id", acc.ID, "error", modelErr)
-			} else {
-				modelDiscoveryErr = fmt.Errorf("warp model discovery returned no enabled models")
-			}
-		}
-		if strings.TrimSpace(acc.StatusCode) == "403" {
-			if !modelDiscoveryConfirmed {
-				if modelDiscoveryErr == nil {
-					modelDiscoveryErr = fmt.Errorf("warp model discovery unavailable")
-				}
-				return "403", http.StatusForbidden, fmt.Errorf("failed to verify warp AI entitlement without a billable probe: %w", modelDiscoveryErr)
-			}
-		}
-		return "", 0, nil
+	refresher := accountRefreshers[strings.ToLower(strings.TrimSpace(acc.AccountType))]
+	if refresher == nil {
+		return "", http.StatusBadRequest, fmt.Errorf("unsupported account type %q", acc.AccountType)
 	}
-
-	if strings.EqualFold(acc.AccountType, "grok") {
-		if verifyErr := verifyGrokAccount(ctx, acc, a.config.Load(), a.store); verifyErr != nil {
-			message := strings.ToLower(verifyErr.Error())
-			if strings.Contains(message, "missing sso token") || strings.Contains(message, "missing oauth token") {
-				return "", http.StatusBadRequest, fmt.Errorf("failed to verify grok account: %w", verifyErr)
-			}
-			status := apperrors.ClassifyAccountStatus(verifyErr.Error())
-			return status, httpStatusFromAccountStatus(status), fmt.Errorf("failed to verify grok account: %w", verifyErr)
-		}
-		return "", 0, nil
-	}
-
-	if strings.EqualFold(acc.AccountType, "puter") {
-		if puter.ResolveAuthToken(acc) == "" {
-			return "", http.StatusBadRequest, fmt.Errorf("failed to verify puter account: missing auth token")
-		}
-		usage, usageErr := puterFetchMonthlyUsage(ctx, acc, a.config.Load())
-		if usageErr == nil {
-			applyPuterMonthlyUsage(acc, usage)
-			if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
-				return "402", 0, nil
-			}
-			return "", 0, nil
-		}
-		usageStatus := apperrors.ClassifyAccountStatus(usageErr.Error())
-		httpStatus := http.StatusBadGateway
-		if usageStatus != "" {
-			httpStatus = httpStatusFromAccountStatus(usageStatus)
-		}
-		return usageStatus, httpStatus, fmt.Errorf("failed to fetch puter usage: %w", usageErr)
-	}
-
-	if strings.EqualFold(acc.AccountType, "qoder") {
-		status, httpStatus, verifyErr := verifyQoderAccountWithStore(ctx, acc, a.config.Load(), a.store)
-		if verifyErr != nil {
-			if errors.Is(verifyErr, errQoderMissingCredential) {
-				return "", http.StatusBadRequest, fmt.Errorf("failed to verify qoder account: %w", verifyErr)
-			}
-			if classified := apperrors.ClassifyAccountStatus(verifyErr.Error()); classified != "" {
-				return classified, httpStatusFromAccountStatus(classified), fmt.Errorf("failed to verify qoder account: %w", verifyErr)
-			}
-			return status, httpStatus, fmt.Errorf("failed to verify qoder account: %w", verifyErr)
-		}
-		return status, httpStatus, nil
-	}
-	if strings.EqualFold(acc.AccountType, "workbuddy") {
-		status, httpStatus, verifyErr := verifyWorkBuddyAccountWithStore(ctx, acc, a.config.Load(), a.store)
-		if verifyErr != nil {
-			if errors.Is(verifyErr, errWorkBuddyMissingCredential) {
-				return "", http.StatusBadRequest, fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
-			}
-			if classified := apperrors.ClassifyAccountStatus(verifyErr.Error()); classified != "" {
-				return classified, httpStatusFromAccountStatus(classified), fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
-			}
-			return status, httpStatus, fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
-		}
-		return status, httpStatus, nil
-	}
-
-	return "", http.StatusBadRequest, fmt.Errorf("unsupported account type %q", acc.AccountType)
+	return refresher(a, ctx, acc)
 }
 
 type ExportData struct {
@@ -2150,12 +1743,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
 		acc.GrokSSOParentID = 0
-		if strings.TrimSpace(acc.AccountType) == "" {
-			http.Error(w, "account_type is required", http.StatusBadRequest)
-			return
-		}
-		if !isSupportedAccountType(acc.AccountType) {
-			http.Error(w, "unsupported account type", http.StatusBadRequest)
+		if !validateAccountType(w, acc.AccountType) {
 			return
 		}
 		if strings.EqualFold(acc.AccountType, "warp") {
@@ -2388,12 +1976,7 @@ func (a *API) pollWarpDeviceAuthorization(ctx context.Context, id string, authen
 			Enabled:      true,
 		}
 		normalizeWarpTokenInput(acc)
-		storeCtx, storeCancel := context.WithTimeout(ctx, 20*time.Second)
-		existing, err := a.findDuplicateAccountByCredential(storeCtx, acc, 0)
-		if err == nil && existing == nil {
-			err = a.store.CreateAccount(storeCtx, acc)
-		}
-		storeCancel()
+		existing, err := a.saveNewAccountUnlessDuplicate(ctx, acc)
 		if err != nil {
 			slog.Warn("Warp device authorization could not save account", "login_id", id, "error", err)
 			a.warpLogins.finish(id, "failed", "Warp authorization succeeded but account could not be saved", 0)
@@ -2575,12 +2158,7 @@ func (a *API) pollGrokDeviceAuthorization(ctx context.Context, id string, authen
 		grok.ApplyCLIOAuthIdentity(acc)
 		grok.ApplyCLIOAuthIdentityToken(acc, identityToken)
 		normalizeGrokTokenInput(acc)
-		storeCtx, storeCancel := context.WithTimeout(ctx, 20*time.Second)
-		existing, err := a.findDuplicateAccountByCredential(storeCtx, acc, 0)
-		if err == nil && existing == nil {
-			err = a.store.CreateAccount(storeCtx, acc)
-		}
-		storeCancel()
+		existing, err := a.saveNewAccountUnlessDuplicate(ctx, acc)
 		if err != nil {
 			slog.Warn("Grok device authorization could not save account", "login_id", id, "error", err)
 			a.grokLogins.finish(id, "failed", "Grok authorization succeeded but account could not be saved", 0)
@@ -2799,12 +2377,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Warp login accounts cannot change account type", http.StatusBadRequest)
 			return
 		}
-		if strings.TrimSpace(acc.AccountType) == "" {
-			http.Error(w, "account_type is required", http.StatusBadRequest)
-			return
-		}
-		if !isSupportedAccountType(acc.AccountType) {
-			http.Error(w, "unsupported account type", http.StatusBadRequest)
+		if !validateAccountType(w, acc.AccountType) {
 			return
 		}
 		if isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grok.ProviderWeb {
