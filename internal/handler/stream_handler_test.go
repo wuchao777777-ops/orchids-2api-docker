@@ -169,7 +169,7 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	}
 }
 
-func TestInjectNoAvailableAccountError_RateLimitUsesHelpfulMessage(t *testing.T) {
+func TestInjectNoAvailableAccountError_RateLimitAnswers429(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
 
@@ -178,16 +178,115 @@ func TestInjectNoAvailableAccountError_RateLimitUsesHelpfulMessage(t *testing.T)
 		errors.New("no enabled accounts available for channel: puter (all matching accounts are rate-limited or cooling down)"),
 	)
 
-	builder := sh.textBlockBuilders[sh.activeTextBlockIndex]
-	if builder == nil {
-		t.Fatal("expected text builder to be populated")
+	// A non-streaming request has committed nothing yet, so the failure is a real
+	// error response. It used to be a 200 whose assistant content was the error
+	// text, which a client cannot tell from an answer.
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
 	}
-	body := builder.String()
-	if !strings.Contains(body, "rate-limited") || !strings.Contains(body, "Retry after the cooldown") {
-		t.Fatalf("expected rate-limit-specific error text, got: %s", body)
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "rate-limited") {
+		t.Fatalf("expected an error envelope naming the rate limit, got: %s", body)
 	}
 	if strings.Contains(body, "Please check account statuses in Admin UI") {
 		t.Fatalf("did not expect generic no-accounts guidance for rate limits, got: %s", body)
+	}
+	// The selector error is a diagnostic: it belongs in the log, not in a body a
+	// client may show to a user.
+	if strings.Contains(body, "no enabled accounts available for channel") {
+		t.Fatalf("selector detail leaked into the response: %s", body)
+	}
+}
+
+// TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral pins that the
+// spent-allowance message no longer names Warp whatever channel actually ran out.
+func TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
+
+	sh.InjectNoAvailableAccountError(
+		`workbuddy API error: status=429, message={"error":{"data":{"code":14018,"msg":"Credits exhausted. Please visit the link below to purchase add-on packs"}}}`,
+		nil,
+	)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 for an exhausted allowance", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "Warp") {
+		t.Fatalf("a WorkBuddy exhaustion must not be reported as a Warp one: %s", body)
+	}
+	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "exhausted its allowance") {
+		t.Fatalf("expected an allowance-exhausted error envelope, got: %s", body)
+	}
+}
+
+// TestInjectNoAvailableAccountError_StreamingReportsInBandError is the other half
+// of the contract: a stream sent its message_start before the attempt, so its
+// status is already 200 and can never be revisited.
+//
+// It must not pretend to be an answer either. The report is the protocol's error
+// event, and the stream ends there rather than with a normal stop.
+func TestInjectNoAvailableAccountError_StreamingReportsInBandError(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatAnthropic, "")
+
+	sh.InjectNoAvailableAccountError(
+		`upstream API error: status=429, body={"code":"rate-limited"}`,
+		errors.New("no enabled accounts available for channel: puter (all matching accounts are rate-limited or cooling down)"),
+	)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want the already-committed 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, `"type":"error"`) {
+		t.Fatalf("expected the protocol error event, got: %s", body)
+	}
+	// The failure must not be dressed as assistant text.
+	if strings.Contains(body, "content_block_delta") {
+		t.Fatalf("the failure was delivered as assistant content: %s", body)
+	}
+	if strings.Contains(body, "no enabled accounts available for channel") {
+		t.Fatalf("selector detail leaked into the stream: %s", body)
+	}
+}
+
+// TestStreamError_OpenAIFormatEndsTheStream pins the OpenAI shape: a data frame
+// carrying an error object, followed by the sentinel that terminates the stream, so
+// a client reading to the end is not left waiting for a chunk that never comes.
+func TestStreamError_OpenAIFormatEndsTheStream(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatOpenAI, "")
+
+	sh.InjectNoAvailableAccountError(`upstream API error: status=429`, errors.New("no enabled accounts available"))
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"error":{`) || !strings.Contains(body, "rate-limited") {
+		t.Fatalf("expected an error object in the stream, got: %s", body)
+	}
+	if !strings.Contains(body, "[DONE]") {
+		t.Fatalf("expected the terminal sentinel after the error, got: %s", body)
+	}
+	if strings.Contains(body, `"delta"`) {
+		t.Fatalf("the failure was delivered as a choice delta: %s", body)
+	}
+}
+
+// TestReportRequestFailure_AuthErrorAnswers401 pins the same contract for the auth
+// path, which also used to answer 200 with the message as content.
+func TestReportRequestFailure_AuthErrorAnswers401(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
+
+	sh.InjectAuthError(`upstream API error: status=401, body={"message":"signed out"}`)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "Session expired") {
+		t.Fatalf("expected an auth error envelope, got: %s", body)
 	}
 }
 
