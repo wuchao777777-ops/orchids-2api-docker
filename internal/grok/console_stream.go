@@ -2,6 +2,7 @@ package grok
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,13 +11,20 @@ import (
 	"unicode/utf8"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/audit"
 )
 
 type chatOutcome struct {
-	Usage      map[string]interface{}
-	Finish     string
-	FirstToken time.Time
-	Err        error
+	Usage       map[string]interface{}
+	UsageSource audit.UsageSource
+	Finish      string
+	FirstToken  time.Time
+	Err         error
+	// Quality carries what the quality guard needs to tell a healthy turn from
+	// a degraded one (see quality_guard.go).
+	Quality qualitySignals
+	SawText bool
 }
 
 // stopFilter keeps only a suffix that could still become a stop sequence.
@@ -84,26 +92,69 @@ func readResponseSSE(reader io.Reader, consume func(string, string) error) error
 	})
 }
 
+// errGrokWebAntiBot marks a Web-plane anti-bot rejection that arrived inside an
+// otherwise successful stream (upstream code 7 / "anti-bot"). It is a distinct
+// condition from a transport failure: the request looked fine and the upstream
+// refused the session, so the clearance behind it is no longer trustworthy.
+var errGrokWebAntiBot = errors.New("grok web anti-bot rejection")
+
 func responseFailure(ev map[string]interface{}) error {
 	value := ev["error"]
 	if response, ok := ev["response"].(map[string]interface{}); ok {
 		value = response["error"]
 	}
-	if detail, ok := value.(map[string]interface{}); ok {
-		if message := interfaceString(detail["message"]); message != "" {
-			return fmt.Errorf("%s", message)
+	detail, _ := value.(map[string]interface{})
+	message := ""
+	if detail != nil {
+		message = interfaceString(detail["message"])
+	}
+	if message == "" {
+		message = interfaceString(value)
+	}
+	if message == "" {
+		message = streamString(ev["message"])
+	}
+	if isAntiBotFailure(detail, message) {
+		if message == "" {
+			message = "the upstream rejected the session as automated"
 		}
+		return fmt.Errorf("%w: %s", errGrokWebAntiBot, message)
 	}
-	if message := interfaceString(value); message != "" {
-		return fmt.Errorf("%s", message)
-	}
-	if message := streamString(ev["message"]); message != "" {
+	if message != "" {
 		return fmt.Errorf("%s", message)
 	}
 	return fmt.Errorf("upstream response failed")
 }
 
+// isAntiBotFailure recognises the upstream's anti-bot payload: numeric code 7,
+// or a message that names it.
+func isAntiBotFailure(detail map[string]interface{}, message string) bool {
+	if detail != nil {
+		switch typed := detail["code"].(type) {
+		case float64:
+			if int(typed) == 7 {
+				return true
+			}
+		case string:
+			if strings.TrimSpace(typed) == "7" {
+				return true
+			}
+		}
+	}
+	return strings.Contains(strings.ToLower(message), "anti-bot")
+}
+
 func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) (outcome chatOutcome) {
+	outcomeStarted := time.Now()
+	defer func() {
+		outcome.Quality.ExpectReasoning = qualityExpectsReasoning(req, false)
+		outcome.Quality.Terminal = outcome.Err == nil
+		if outcome.Usage != nil {
+			if details, _ := outcome.Usage["completion_tokens_details"].(map[string]interface{}); details != nil {
+				outcome.Quality.ReasoningTokens = int64(interfaceToInt(details["reasoning_tokens"]))
+			}
+		}
+	}()
 	flusher := streamResponseHeaders(w)
 	id, created := "chatcmpl_"+randomHex(8), time.Now().Unix()
 	var text, reasoning, refusal strings.Builder
@@ -157,6 +208,11 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 			return nil
 		}
 		text.WriteString(value)
+		outcome.Quality.VisibleChars += int64(len(value))
+		outcome.SawText = true
+		if outcome.Quality.FirstVisibleMS < 0 {
+			outcome.Quality.FirstVisibleMS = time.Since(outcomeStarted).Milliseconds()
+		}
 		return emit(map[string]interface{}{"content": value}, "", nil)
 	}
 	emitArgs := func(tc *responseToolState, value string, snapshot bool) error {
@@ -188,6 +244,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		}
 		tc := tools[itemID]
 		if tc == nil {
+			outcome.Quality.ToolCalls++
 			if byCall[callID] != nil {
 				return fmt.Errorf("duplicate upstream call_id %q", callID)
 			}
@@ -236,6 +293,8 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		}
 		state.text += value
 		reasoning.WriteString(value)
+		outcome.Quality.SawReasoning = true
+		outcome.Quality.ReasoningChars += int64(len(value))
 		return emit(map[string]interface{}{"reasoning_content": value, "reasoning_item_id": state.key}, "", nil)
 	}
 	err := readResponseSSE(body, func(event, data string) error {
@@ -259,6 +318,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		annotations = appendUniqueConsoleAnnotations(annotations, consoleFlatAnnotations(ev))
 		if usage := consoleUsageFromStreamEvent(ev); len(usage) > 0 {
 			outcome.Usage = usage
+			outcome.UsageSource = audit.UsageSourceUpstream
 		}
 		item, _ := ev["item"].(map[string]interface{})
 		if kind == "response.output_item.done" && item != nil {
@@ -302,6 +362,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 					}
 				}
 				if signature := streamString(item["encrypted_content"]); signature != "" && signature != state.signature {
+					outcome.Quality.EncryptedChars = int64(len(signature))
 					state.signature = signature
 					lastSignature = signature
 					if err := emit(map[string]interface{}{"reasoning_item_id": state.key, "reasoning_encrypted_content": signature}, "", nil); err != nil {
@@ -454,6 +515,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 	}
 	if outcome.Usage == nil {
 		outcome.Usage = addReasoningUsage(buildChatUsagePayload(req, text.String()+refusal.String(), calls), reasoning.String())
+		outcome.UsageSource = audit.UsageSourceEstimated
 	}
 	delta := map[string]interface{}{}
 	if len(annotations) > 0 {
