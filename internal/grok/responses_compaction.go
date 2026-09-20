@@ -747,7 +747,11 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 	for attempt := 1; attempt <= gatewayCompactionMaxAttempts; attempt++ {
 		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
 		if err != nil {
-			fail(http.StatusServiceUnavailable, "response_account_unavailable", err.Error())
+			// The pool's note names why it is empty, and this path used to put it in
+			// the body: classify it the way every other entrance does, and let the
+			// note stay in the log.
+			answer := classifyGrokPoolFailure(err, "response_account_unavailable", grokResponseAccountUnavailableMessage)
+			fail(answer.status, answer.code, answer.message)
 			return
 		}
 		accountID := sess.acc.ID
@@ -758,7 +762,12 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 			if attempt < gatewayCompactionMaxAttempts && waitGatewayCompactionRetry(r.Context(), gatewayCompactionRetryPause) {
 				continue
 			}
-			fail(upstreamHTTPResponseStatus(callErr), "upstream_error", callErr.Error())
+			// The comment above says the client never sees upstream prose from this
+			// path; that is true once the failure goes through the shared sanitizer
+			// (err.Error() used to leak it here).
+			slog.Warn("Reporting an upstream failure to the client", "error", callErr,
+				"status", upstreamHTTPResponseStatus(callErr))
+			fail(upstreamHTTPResponseStatus(callErr), "upstream_error", grokUpstreamFailureMessage(callErr))
 			return
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)

@@ -85,7 +85,7 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		sess, err = h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
 	}
 	if err != nil {
-		writeResponsesAPIError(w, http.StatusServiceUnavailable, "response_account_unavailable", err.Error())
+		writeGrokAccountUnavailable(w, err, "response_account_unavailable", grokResponseAccountUnavailableMessage)
 		return
 	}
 	defer sess.Close()
@@ -119,7 +119,7 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(r.Context(), sess.acc, err)
 		}
-		writeResponsesAPIError(w, upstreamHTTPResponseStatus(err), "upstream_error", err.Error())
+		writeGrokUpstreamFailure(w, upstreamHTTPResponseStatus(err), err)
 		return
 	}
 	defer resp.Body.Close()
@@ -252,7 +252,7 @@ func (h *Handler) HandleResponseResource(w http.ResponseWriter, r *http.Request)
 	}
 	sess, err := h.openCLIAccountSessionByID(r.Context(), ownership.AccountID, ownership.Model)
 	if err != nil {
-		writeResponsesAPIError(w, http.StatusServiceUnavailable, "response_account_unavailable", err.Error())
+		writeGrokAccountUnavailable(w, err, "response_account_unavailable", grokResponseAccountUnavailableMessage)
 		return
 	}
 	defer sess.Close()
@@ -260,7 +260,7 @@ func (h *Handler) HandleResponseResource(w http.ResponseWriter, r *http.Request)
 	path := "/responses/" + url.PathEscape(responseID)
 	resp, err := h.buildClient().doResponseResource(r.Context(), sess.acc, r.Method, path, r.URL.RawQuery)
 	if err != nil {
-		writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		writeGrokUpstreamFailure(w, http.StatusBadGateway, err)
 		return
 	}
 	defer resp.Body.Close()
