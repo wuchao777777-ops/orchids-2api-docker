@@ -28,7 +28,14 @@ func TrustedProxyMiddleware(values []string) (func(http.Handler) http.Handler, e
 				return
 			}
 
-			client := forwardedClientIP(remote, r.Header.Get("X-Forwarded-For"), networks)
+			// Cloudflare's CF-Connecting-IP names the original client and is
+			// authoritative *only* because the peer is trusted (Caddy on loopback, or
+			// a Cloudflare edge the deployment listed). The X-Forwarded-For walk is
+			// the fallback, and the peer itself the last resort.
+			client := cloudflareClientIP(remote, r.Header.Get("CF-Connecting-IP"))
+			if client == nil {
+				client = forwardedClientIP(remote, r.Header.Get("X-Forwarded-For"), networks)
+			}
 			if client == nil {
 				client = remote
 			}
@@ -133,9 +140,31 @@ func ipInNetworks(ip net.IP, networks []*net.IPNet) bool {
 }
 
 func clearForwardingHeaders(header http.Header) {
-	for _, name := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP"} {
+	for _, name := range []string{
+		"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP",
+		// A direct caller must not be able to name itself through the header the
+		// trusted path trusts; only a trusted peer's value survives.
+		"CF-Connecting-IP",
+	} {
 		header.Del(name)
 	}
+}
+
+// cloudflareClientIP reads Cloudflare's own client header. It returns nil when the
+// header is absent or unparsable, so the caller falls back to the forwarded chain.
+func cloudflareClientIP(remote net.IP, value string) net.IP {
+	if remote == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	// Cloudflare sends a single address; a comma means something else wrote here.
+	if strings.Contains(trimmed, ",") {
+		return nil
+	}
+	return net.ParseIP(trimmed)
 }
 
 func ipString(ip net.IP, fallback string) string {
@@ -143,4 +172,59 @@ func ipString(ip net.IP, fallback string) string {
 		return ip.String()
 	}
 	return strings.TrimSpace(fallback)
+}
+
+// AnonymousAllowlist decides which sources may call the inference routes without a
+// managed key. An empty list means "nobody": every caller must present a key,
+// which is the reference implementation's behaviour. A deployment that cannot
+// update a client yet can name that client's address here, and everyone else
+// still needs a key.
+type AnonymousAllowlist struct {
+	networks []*net.IPNet
+}
+
+// NewAnonymousAllowlist parses CIDRs, bare IPs and hostnames-as-IPs. An empty
+// entry list yields a usable, empty allowlist.
+func NewAnonymousAllowlist(values []string) (*AnonymousAllowlist, error) {
+	networks := make([]*net.IPNet, 0, len(values))
+	for _, raw := range values {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if address := net.ParseIP(entry); address != nil {
+			bits := 32
+			if address.To4() == nil {
+				bits = 128
+			}
+			networks = append(networks, &net.IPNet{IP: address, Mask: net.CIDRMask(bits, bits)})
+			continue
+		}
+		if _, network, err := net.ParseCIDR(entry); err == nil {
+			networks = append(networks, network)
+			continue
+		}
+		return nil, fmt.Errorf("anonymous_allow_ips entry %q is not an IP or CIDR", entry)
+	}
+	return &AnonymousAllowlist{networks: networks}, nil
+}
+
+// Empty reports whether the allowlist lets nobody through.
+func (a *AnonymousAllowlist) Empty() bool { return a == nil || len(a.networks) == 0 }
+
+// Allows reports whether this request's client address is on the list.
+func (a *AnonymousAllowlist) Allows(r *http.Request) bool {
+	if a.Empty() || r == nil {
+		return false
+	}
+	address := net.ParseIP(strings.TrimSpace(ClientIP(r)))
+	if address == nil {
+		return false
+	}
+	for _, network := range a.networks {
+		if network.Contains(address) {
+			return true
+		}
+	}
+	return false
 }

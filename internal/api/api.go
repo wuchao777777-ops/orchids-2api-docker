@@ -2893,7 +2893,9 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/keys/")
+	// A trailing action segment is stripped before the id is parsed, so
+	// /api/keys/5/reset-usage reaches the branch below instead of a 400.
+	idStr := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/keys/"), "/"), "/reset-usage")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid ID", http.StatusBadRequest)
@@ -2901,6 +2903,37 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.Method {
+	case http.MethodPost:
+		// POST /api/keys/{id}/reset-usage: start a fresh billing period for this
+		// key. grok2api resets a key's usage when its period ends; the manual
+		// action has to exist too, because a misconfigured limit is otherwise
+		// unrecoverable until the period rolls over.
+		if !strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/reset-usage") {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		resetID := id
+		key, err := a.store.GetApiKeyByID(r.Context(), resetID)
+		if err != nil {
+			if errors.Is(err, store.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.store.ResetApiKeyBilling(r.Context(), resetID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		key.BillingUsedUSDTicks = 0
+		key.BillingPeriodStartedAt = time.Now().UTC()
+		if err := a.store.UpdateApiKey(r.Context(), key); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(key)
+
 	case http.MethodPatch:
 		var req UpdateKeyRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -3384,6 +3417,23 @@ func allowanceStillSpent(acc *store.Account) bool {
 	return acc.UsageLimit > 0 && acc.UsageCurrent <= 0
 }
 
+// validateStatsigConfig checks the one configuration value that decides whether
+// account metadata leaves this host, so an invalid endpoint cannot be stored.
+func validateStatsigConfig(cfg *config.Config) error {
+	if cfg == nil || cfg.GrokStatsigSignerURL == nil {
+		return nil
+	}
+	endpoint := strings.TrimSpace(*cfg.GrokStatsigSignerURL)
+	if endpoint == "" {
+		// Explicitly disabled.
+		return nil
+	}
+	if err := grok.ValidateStatsigSignerURL(endpoint); err != nil {
+		return fmt.Errorf("grok_statsig_signer_url: %w", err)
+	}
+	return nil
+}
+
 func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config) error {
 	if newCfg == nil {
 		return fmt.Errorf("config is nil")
@@ -3394,6 +3444,15 @@ func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config)
 
 	storedCfg := newCfg.Clone()
 	config.ApplyHardcoded(storedCfg)
+	// A signing endpoint is called with the account's own page metadata, so a
+	// misconfigured one is refused where it is typed rather than dropped
+	// silently at request time (grok2api validates it during config load too).
+	if err := validateStatsigConfig(storedCfg); err != nil {
+		return err
+	}
+	if _, err := middleware.NewAnonymousAllowlist(storedCfg.AnonymousAllowIPs); err != nil {
+		return fmt.Errorf("anonymous_allow_ips: %w", err)
+	}
 
 	data, err := json.Marshal(storedCfg)
 	if err != nil {

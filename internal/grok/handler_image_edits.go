@@ -14,6 +14,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 )
@@ -127,7 +128,20 @@ func (h *Handler) handleChatImageEdit(
 		writeGrokUpstreamError(w, err)
 		return
 	}
-	ratio, _ := normalizeImageAspectRatio("", imageCfg.Size)
+	// grok2api validates these at the transport layer before the provider maps a
+	// size to a ratio, so a caller cannot smuggle a pixel string through
+	// aspect_ratio and an unsupported resolution is a parameter error.
+	// Transport-layer validation, as grok2api performs it before the provider
+	// maps a size to a ratio.
+	if edgeAspect := strings.TrimSpace(imageCfg.AspectRatio); edgeAspect != "" && !validImageAspectRatio(edgeAspect) {
+		writeGrokErrorCode(w, http.StatusBadRequest, "invalid_parameter", "aspect_ratio is not supported")
+		return
+	}
+	if _, err := normalizeImageResolution(imageCfg.Resolution); err != nil {
+		writeGrokErrorCode(w, http.StatusBadRequest, "invalid_parameter", err.Error())
+		return
+	}
+	ratio, _ := normalizeImageAspectRatio(imageCfg.AspectRatio, imageCfg.Size)
 
 	sess, err := h.openChatAccountSessionForModel(ctx, spec)
 	if err != nil {
@@ -157,6 +171,11 @@ func (h *Handler) handleChatImageEdit(
 		defer resp.Body.Close()
 		h.syncGrokQuota(sess.acc, resp.Header)
 		h.streamImageGeneration(w, resp.Body, sess.token, prompt, responseFormat, n, publicBase)
+		if cost, priced := pricing.EstimateImageEditCost(spec.UpstreamModel, imageCfg.Resolution, "", n, len(imageURLs)); priced {
+			h.settleMediaBilling(ctx, req.Model, cost, map[string]interface{}{
+				"plane": "web", "stream": true, "images": n, "input_images": len(imageURLs),
+			})
+		}
 		return
 	}
 
@@ -366,6 +385,14 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("n must be between 1 and %d for image edit", maxN))
 		return
 	}
+	if edgeAspect := strings.TrimSpace(formValue("aspect_ratio")); edgeAspect != "" && !validImageAspectRatio(edgeAspect) {
+		writeGrokErrorCode(w, http.StatusBadRequest, "invalid_parameter", "aspect_ratio is not supported")
+		return
+	}
+	if _, err := normalizeImageResolution(formValue("resolution")); err != nil {
+		writeGrokErrorCode(w, http.StatusBadRequest, "invalid_parameter", err.Error())
+		return
+	}
 	if consoleEdit {
 		if _, err := normalizeConsoleImageAspectRatio(formValue("aspect_ratio"), formValue("size")); err != nil {
 			writeGrokUpstreamError(w, err)
@@ -543,6 +570,15 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		defer resp.Body.Close()
 		h.syncGrokQuota(sess.acc, resp.Header)
 		h.streamImageGeneration(w, resp.Body, sess.token, prompt, responseFormat, n, publicBase)
+		inputs := len(inputValues)
+		if inputs == 0 {
+			inputs = len(uploads)
+		}
+		if cost, priced := pricing.EstimateImageEditCost(spec.UpstreamModel, formValue("resolution"), formValue("quality"), n, inputs); priced {
+			h.settleMediaBilling(r.Context(), model, cost, map[string]interface{}{
+				"plane": "web", "stream": true, "images": n, "input_images": inputs,
+			})
+		}
 		return
 	}
 

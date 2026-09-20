@@ -9,6 +9,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -167,6 +168,8 @@ func main() {
 		os.Exit(1)
 	}
 	grokHandler.SetCompactionCipher(compactionCipher)
+	logStatsigConfiguration(cfg)
+	logAnonymousAllowlist(cfg)
 	apiHandler.SetConfigChangeHook(func(next *config.Config) {
 		configureRuntimeLogging(next)
 		h.SetConfig(next)
@@ -395,6 +398,46 @@ func logQoderReachability(cfg *config.Config) {
 		}
 		slog.Info("Qoder control plane reachable", "endpoint", qoder.DefaultOpenAPIBaseURL)
 	}()
+}
+
+// logStatsigConfiguration states which signing endpoint the Web plane will use.
+// The value decides whether account page metadata leaves this host, so an
+// operator should not have to infer it from behaviour.
+func logStatsigConfiguration(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	switch {
+	case cfg.GrokStatsigSignerURL == nil:
+		slog.Info("Statsig signing enabled with the default endpoint",
+			"endpoint", grok.DefaultStatsigSignerURL, "source", "default")
+	case strings.TrimSpace(*cfg.GrokStatsigSignerURL) == "":
+		slog.Warn("Statsig signing is disabled: no x-statsig-id will be sent; a manual value is used when configured")
+	default:
+		endpoint := strings.TrimSpace(*cfg.GrokStatsigSignerURL)
+		if err := grok.ValidateStatsigSignerURL(endpoint); err != nil {
+			slog.Error("Configured statsig signer URL is not usable; signing will be skipped",
+				"endpoint", endpoint, "error", err)
+			return
+		}
+		slog.Info("Statsig signing enabled", "endpoint", endpoint, "source", "config")
+	}
+}
+
+// logAnonymousAllowlist states which sources may call the inference routes
+// without a key. It is a deviation from the reference implementation, so a
+// deployment that uses it should see it in the log rather than infer it.
+func logAnonymousAllowlist(cfg *config.Config) {
+	if cfg == nil || len(cfg.AnonymousAllowIPs) == 0 {
+		return
+	}
+	list, err := middleware.NewAnonymousAllowlist(cfg.AnonymousAllowIPs)
+	if err != nil || list.Empty() {
+		slog.Error("anonymous_allow_ips is not usable; every caller must present a key", "error", err)
+		return
+	}
+	slog.Warn("anonymous inference access is allowed for the configured sources; every other caller still needs a key",
+		"anonymous_allow_ips", cfg.AnonymousAllowIPs)
 }
 
 func configureRuntimeLogging(cfg *config.Config) {

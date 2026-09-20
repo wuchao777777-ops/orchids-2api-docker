@@ -6,6 +6,8 @@
   "admin_path": "/admin",
   "admin_token": "",
   "inference_auth_enabled": true,
+  "anonymous_allow_ips_comment": "Sources allowed to call the inference routes without a managed key. Empty (default) requires a key from every caller, as grok2api does; list an address only when a client cannot be updated yet.",
+  "anonymous_allow_ips": [],
   "trusted_proxies": [],
   "credential_encryption_key_file": "data/credential.key",
   "response_store_ttl_hours": 720,
@@ -45,6 +47,10 @@
 
   "fidelity_comment": "Upstream fidelity: the gateway relays client content verbatim by default. Set to explicitly re-enable legacy rewriting.",
   "cc_entrypoint_mode": "keep",
+
+  "grok_statsig_comment": "Statsig signing. Omit grok_statsig_signer_url to use grok2api's own signer (https://grok.wodf.de/sign); set it to \"\" to send no x-statsig-id (grok_statsig_id is then used when it is a valid 70-byte id); any other value is that endpoint.",
+  "grok_statsig_signer_url": null,
+  "grok_statsig_id": "",
 
   "quality_hold_comment": "Quality hold: withhold a degraded reasoning turn instead of streaming it, then retry it on another account. Fail-open delivers the last held response once the retry budget is spent.",
   "quality_hold_enabled": true,

@@ -50,8 +50,30 @@ func registerRoutes(
 		return cfg
 	}
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return middleware.APIKeyAuth(
-			func() bool { return currentConfig().InferenceAuthEnabled() },
+		return middleware.APIKeyAuthWithRequest(
+			// A key is required, exactly as grok2api mounts middleware.ClientAuth on
+			// its whole /v1 group; `inference_auth_enabled: false` used to open every
+			// inference route to anonymous callers and is now advisory only. The one
+			// exception is an explicit anonymous_allow_ips source, which a deployment
+			// names when it cannot yet update that client.
+			func(r *http.Request) bool {
+				cfg := currentConfig()
+				if cfg == nil {
+					return true
+				}
+				allowlist, err := middleware.NewAnonymousAllowlist(cfg.AnonymousAllowIPs)
+				if err != nil {
+					// A malformed entry makes the list unusable: require keys rather
+					// than silently opening the routes.
+					slog.Warn("anonymous_allow_ips is invalid; requiring a key from everyone", "error", err)
+					return true
+				}
+				if allowlist.Allows(r) {
+					slog.Debug("anonymous inference request allowed by anonymous_allow_ips", "client_ip", middleware.ClientIP(r))
+					return false
+				}
+				return true
+			},
 			func(ctx context.Context, token string) (*middleware.APIKeyPrincipal, error) {
 				key, err := s.AuthorizeApiKey(ctx, token)
 				switch {
@@ -246,6 +268,8 @@ func registerRoutes(
 	mux.HandleFunc("/api/grok/device-auth/", sessionAuth(apiHandler.HandleGrokDeviceAuthorization))
 	mux.HandleFunc("/api/keys", sessionAuth(apiHandler.HandleKeys))
 	mux.HandleFunc("/api/keys/", sessionAuth(apiHandler.HandleKeyByID))
+	// POST /api/keys/{id}/reset-usage lands on the same handler, which dispatches
+	// on the trailing path segment.
 	mux.HandleFunc("/api/models", sessionAuth(apiHandler.HandleModels))
 	mux.HandleFunc("/api/models/groups", sessionAuth(apiHandler.HandleModelGroups))
 	mux.HandleFunc("/api/models/refresh", sessionAuth(func(w http.ResponseWriter, r *http.Request) {

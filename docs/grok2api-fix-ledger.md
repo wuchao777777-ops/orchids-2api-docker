@@ -82,14 +82,11 @@
 
 - **A5-10 降级为 P2 并更正描述**：本项目已有 `TrustedProxyMiddleware`（`internal/middleware/trusted_proxy.go`），`trusted_proxies` 为空（默认）时**清除全部 `X-Forwarded-*`**，配置后也只接受来自受信代理的值并取最后一段。因此"任意客户端注入 `X-Forwarded-Host`"在默认配置下不可达；真实缺陷只剩"host 值未做字符校验"（本轮已修）。审计报告第 5 章已同步更新。
 
-## 二、保留差异（有意不改为与 grok2api 一致）
+## 二、保留差异（已清空）
 
-| 编号 | 为什么不改 |
-| --- | --- |
-| A1-11 / A3-8 / A3-9 | 本项目的原生 Build Responses 中继**故意字节透明**，并有测试锁定：`relay_policy_test.go` 断言客户端 payload 除 `prompt_cache_key` 外原样到达上游、且重复 delta 不被抑制。强行注入 `store:false` / `include` 会破坏该契约。若产品决定改为 grok2api 语义，需要同时改这两条测试与文档，属于产品决策。 |
-| A2-1（阈值） | 采用 1024/2048 而非 grok2api 的 128/256：`TestRelayRepeatedResponsesDeltasArePreserved` 明确要求 300 次合法重复必须原样传递。当前值仍能终止真正的死循环。 |
-| A8-12 | `inference_auth_enabled=false` 时 `/v1` 全部匿名，是部署方显式开关。改为强制鉴权会改变现有部署行为，留给产品决策。 |
-| A4-1/A4-2/A4-3 | 公开模型 ID 去前缀化、effort 后缀别名、注册式兼容别名是**破坏性变更**（会改变现有客户端可用的模型名），且 A 的测试刻意让裸 `grok-4.3` 不可解析。需要版本化迁移方案。 |
+第十一轮清除 12 条（见第十五节），第十二轮清除最后 5 条媒体契约（见第十六节）：**171 条已全部与 grok2api 对齐或修复，没有保留差异**。
+
+先前的 5 条媒体契约（`A5-2`、`A5-4`、`A5-5`、`A5-7`、`A5-42`）现已按参考实现改写，原先锁定旧契约的测试同步更新。
 
 ## 三、未修（已清空）
 
@@ -101,6 +98,17 @@
 
 | 编号 | 结论 |
 | --- | --- |
+| A5-2 | 已对齐（第十二轮：`/images/generations` 缺省 model 直接 400，不再回落生成并消耗图片额度） |
+| A5-4 | 已对齐（第十二轮：传输层校验 `aspect_ratio` 只接受比例串、`size` 只接受四个编辑尺寸、`resolution` 只接受 1k/2k 且默认 1k；`image_config` 补 `aspect_ratio`/`resolution` 并同样校验） |
+| A5-5 | 已对齐（第十二轮：图像响应恒为本站绝对资产 URL，不回传上游 CDN 地址、不返回站内相对路径；缓存失败即失败） |
+| A5-7 | 已对齐（第十二轮：公开名 `grok-imagine-image-quality` 归 Console 媒体面，`-quality-2.0` 别名可用，Web `-pro` 已移除） |
+| A5-42 | 已对齐（第十二轮：multipart 无 `[]` 的 `timestamp_granularities` 静默忽略，带 `[]` 仍 400） |
+| A1-11 / A2-1 / A2-6 / A3-8 / A3-9 | 已对齐（第十一轮：Build 缺省注入 `store=false` + `include: reasoning.encrypted_content`、本地持久化与 `store` 解耦、原生 Responses 字节透传且不再追加 `[DONE]`、doom-loop 阈值回到 128/256 并覆盖 chat 转换路径） |
+| A4-1 / A4-2 / A4-3 | 已对齐（第十一轮：公开模型名去 provider 前缀并按外部 ID 去重、通用大小写不敏感前缀剥离、补齐 B 的注册别名表；`<model>-<effort>` 别名按模型支持档位解析） |
+| A4-11 | 已对齐（第十一轮：恢复 B 的三项目录派生：4.6 在位补 4.5、OAuth Build 补 Composer、Super 才有 video 1.5） |
+| A4-17 | 已对齐（第十一轮：Codex 未知模型描述与 B 逐字节相同） |
+| A7-2 | 已对齐（第十一轮：移植外部签名器 + 首页 metaContent + 1h 缓存 + 反爬失效重签 + URL 校验；第十八轮改为**默认启用参考实现的签名服务**，未配置时即 `https://grok.wodf.de/sign`） |
+| A8-12 | 已对齐（第十一轮：推理前缀恒要求托管 Key，`inference_auth_enabled` 不再能关闭鉴权） |
 | A9-1 | 已修复（第十轮：`internal/pricing` 官方费率表 + Key 额度预留/结算 + 审计成本三列，见第十四节） |
 | A3-7 | 已修复（第十轮：`compaction_trigger`/TUI 分类、canonical 摘要采样、`g2a_compact_v1` 封存与展开，见第十四节） |
 | A6-1 | 已修复（第十轮：流式 hold 缓冲 + 换号重试 + 失败开放/关闭策略；并修好质量评语此前根本没落库的问题，见第十四节） |
@@ -118,18 +126,9 @@
 | A4-15 | 已修复（第九轮，加法方式：分页信封 + `/api/models/groups`，原裸数组契约保留，见第十三节） |
 | A4-17 | 归入"有意保留"（第九轮：文案收敛到单一常量，但保留本服务自述而非抄用上游项目名） |
 
-### 有意保留（等价于第二节，单列方便对账）
+### 有意保留（已清空）
 
-| 编号 | 为什么不改 |
-| --- | --- |
-| A7-2 | statsig 的**签名**需要外部签名服务（上游由首页 metaContent + 签名器生成），本项目没有该依赖：已改为"配置有效则沿用、否则安全省略"，不再伪造 |
-| A2-6 | 原生 Responses 流的 `[DONE]`/重新分帧：项目的 relay 测试明确要求保留该行为（字节透明契约），见"保留差异" |
-| A4-17 | Codex 未知模型 `description`：客户端不解析该字段；上游文案自述为 "grok2api"，抄用会误述客户端正在对话的服务。已把文案收敛到单一常量 `codexDefaultDescription`（`internal/handler/codex_models.go`），差异属产品署名而非缺陷 |
-| A5-42 | 无 `[]` 的 `timestamp_granularities`：本项目明确 400 而不是静默忽略（宁可报错也不静默丢选项），属有意保留 |
-| A4-11 | Build 账号目录不再用"合成 Composer / 4.6 时补 4.5 / 分级 video 1.5"补全：`provider.go` 明确注释"能力真相只来自上游目录"，补全等于本地上造能力并会随刷新重新发布 |
-| A5-2 | `/images/generations` 缺省 model 时回落到 `grok-imagine-image`（上游契约是 400）：本项目把它当作显式便利，管理端与前端都会传 model；若改为强制，需要同步改前端与文档 |
-| A5-4 / A5-5 / A5-7 | 图像 `resolution`/像素别名校验、URL 形态（相对路径 + publicBase 补全）、图像模型目录（quality 走 imagine-lite 上游）：三者都处在"两个实现各自可用但契约不同"的区间，改动会连带前端与客户端，保留并在审计报告留档 |
-| 其余 P2/P3 | 多为文案/字段集/边角校验差异（如流式图片事件 `size` 恒 auto、`/tts/voices` 未归一化、无 `[]` 的 `timestamp_granularities` 语义等），逐条列在 `docs/grok2api-parity-audit.md` 对应章节 |
+第十二轮后无保留项。边角 P2/P3（流式图片事件 `size`、`/tts/voices` 归一化等）已在第五、六轮修复，见对应章节。
 
 按批次给出后续方案，工作量从大到小：
 
@@ -395,18 +394,18 @@
 
 保留（已归入第三节"真正的未修条目"与"有意保留"两表）：**A4-15**（管理端模型接口形状：分页信封/分组/同步端点，改动需连同管理前端一起做，属对外管理契约）、**A4-17**（Codex 未知模型 description 文案，客户端不解析）、**A6-14**（订阅/等级推断需要 auto/fast 两套窗口形态的数据模型，凭猜测改阈值会更糟）。
 
-## 十二、总账（截至第十轮）
+## 十二、总账（截至第十二轮）
 
 对账方式：取 `docs/grok2api-parity-audit.md` 中全部发现编号（每条发现一个 `### A?-? [P?]` 标题），逐个归入本台账的"已修表 / 有意保留表 / 未修表"，要求三集合互斥且并集等于审计总数。可用 `python3 docs/grok2api-audit/recount.py` 复算（输出的四行与本表逐字对应，若有未归类条目会以非 0 退出码报错）。
 
 | 分类 | 条数 | 严重度分布 | 说明 |
 | --- | --- | --- | --- |
 | **总计** | **171** | P0 ×6、P1 ×69、P2 ×75、P3 ×21 | 审计报告自报口径（含 `A8-1` 的 `[P0/P1]` 双标） |
-| 已修复 | 154 | P0 ×6、P1 ×63、P2 ×66、P3 ×19 | 见第一、五～十一、十三、十四节各表 |
-| 有意保留 | 17 | P0 ×0、P1 ×6、P2 ×9、P3 ×2 | `A1-11`、`A2-1`、`A2-6`、`A3-8`、`A3-9`、`A4-1`、`A4-2`、`A4-3`、`A4-11`、`A4-17`、`A5-2`、`A5-4`、`A5-5`、`A5-7`、`A5-42`、`A7-2`、`A8-12` |
+| 已修复 | 171 | P0 ×6、P1 ×69、P2 ×75、P3 ×21 | 见第一、五～十一、十三～十六节各表 |
+| 有意保留 | 0 | — | 无 |
 | 未修 | 0 | — | 无 |
 
-154 + 17 + 0 = 171；严重度合计 6 + 69 + 75 + 21 = 171，无重复计数、无遗漏。
+171 + 0 + 0 = 171；严重度合计 6 + 69 + 75 + 21 = 171，无重复计数、无遗漏。
 
 - **P0 全部关闭**：6 条 P0 中 5 条在早期轮次修复，`A9-1`（计费层）在第十轮完成。
 - **未修 0 条**：第十轮关闭 `A3-7`、`A6-1`、`A9-1` 三条。
@@ -415,7 +414,7 @@
 验证（第十轮涉及代码）：
 
 - `go build ./...`、`go vet ./...`、`go test ./... -count=1` 全绿（第十轮结束时）。
-- `python3 docs/grok2api-audit/recount.py` 退出码 0，输出 171 / 154 / 17 / 0。
+- `python3 docs/grok2api-audit/recount.py` 退出码 0，输出 171 / 171 / 0 / 0。
 
 ## 十三、第九轮修复（2 条 + 1 条归类）
 
@@ -437,3 +436,101 @@
 新增配置项（`config.json`，均有安全默认）：`quality_hold_enabled`（默认 true）、`quality_hold_max_attempts`（6）、`quality_hold_timeout_ms`（30000）、`quality_hold_on_exhausted`（`fail_open`）。
 
 **有意保留的边界**（不影响条目关闭，但记录清楚）：图片/视频档计价与 `PricingBreakdown` 未移植（不在 A9-1 要求的 API 面内，且属 A9-12 的聚合维度）；管理端未暴露"重置 Key 用量"端点（store 层 `ResetApiKeyBilling` 已实现并测试）；成本聚合（opsagg）仍缺 priced/unpriced 维度，属 A9-12。
+
+> 第十三轮更新：图片/视频计价与结算已补（见第十七节），上面这条只剩 `PricingBreakdown`（成本重建结构）未移植。
+
+## 十五、第十一轮：完全对齐 grok2api（12 条保留项）
+
+按"完全对齐参考实现"的要求逐条清除此前有意保留的差异。凡原先用测试锁定的旧契约，测试同步改写为参考实现语义（改动即契约变更，不再有"两个契约各留一份"）。
+
+| 条目 | 现在与 grok2api 的行为 |
+| --- | --- |
+| A1-11 / A3-9 | `applyBuildResponseDefaults`：Build 请求缺省写 `store=false`（显式值保留），并保证 `include` 含 `reasoning.encrypted_content`（保留其它项与顺序）。 |
+| A3-8 | 本地持久化与 `store` 解耦：任何成功 Responses 都记录 ownership（chat 桥同样），`previous_response_id` / `GET /responses/{id}` 对未设 `store` 的客户端可用。 |
+| A2-6 | 原生 Responses 中继字节透传：完整帧按上游原样透出（含 CRLF 与多行 data），仅当兼容层真的补字段时才重渲染；**不再追加 `data: [DONE]`**。 |
+| A2-1 | doom-loop 阈值回到 **128 / 256**，并且 **chat 转换路径也跟踪重复 delta**（B 在协议转换前跟踪），命中给出 `upstream_output_loop` 类型错误帧。 |
+| A4-1 | `/v1/models` 发布**外部 ID**（去掉 `console/`、`build/` 前缀），同外部 ID 的路由合并为一条；内部与外部两种写法都能解析，API Key 白名单两种写法都匹配。 |
+| A4-3 | provider 前缀**通用且大小写不敏感**剥离（`Build/`、`Console/`、`grok_build/` 等），精确表优先；补齐 B 注册的 beta/latest 4.20 族、`*-console` 后缀、`grok-code-fast` 等别名。 |
+| A4-2 | `<model>-<effort>` 别名按模型真实支持档位解析（`grok-4.5-xhigh` 仍为模型不存在）。 |
+| A4-11 | 恢复 B 的三项目录派生：4.6 在位补 4.5、OAuth Build 补 Composer 2.5 Fast、Super 才有 video 1.5（非 Super 会被移除）。 |
+| A4-17 | Codex 未知模型描述与 B 逐字节相同（`Grok model served via grok2api.`）。 |
+| A7-2 | 移植 B 的 statsig 签名器：读账号首页取 `grok-site-verification` → POST 签名服务 → 按 method+path 缓存 1h → 反爬时失效重签；签名 URL 有 SSRF 形态校验；手工值改用 B 的判定（base64 解出 70 字节）。签名地址由 `grok_statsig_signer_url` 显式配置（填 B 的默认值即完全一致）。 |
+| A8-12 | 推理前缀**恒要求托管 Key**（`InferenceAuthEnabled()` 恒 true）；`inference_auth_enabled` 仅保留存储与展示，不再能打开匿名代理。 |
+
+**行为变更提示（部署方须知）**
+1. `inference_auth_enabled=false` 的部署升级后，`/v1` 等推理入口会开始返回 401；需要先为客户端配置托管 Key。
+2. `/v1/models` 的模型名去掉 provider 前缀；旧名字仍可调用，但依赖"名字里必须有 `console/`"的客户端逻辑需要更新。
+3. 质量 hold 默认开启（第十轮引入），reasoning 请求被判降级时会扣住并换号重试。
+4. statsig 签名默认**关闭**（签名字段为空）；要完全对齐 B 需配置 `grok_statsig_signer_url`。
+
+## 十六、第十二轮：媒体契约对齐（最后 5 条）
+
+| 条目 | 现在与 grok2api 的行为 |
+| --- | --- |
+| A5-2 | `/images/generations` 缺省 `model` → 400 `invalid_request_error: model is required`，不再回落成 `grok-imagine-image` 生成并消耗图片额度。 |
+| A5-4 | 传输层校验：`aspect_ratio` 只接受 `auto`/纯比例串（像素别名仅保留在 provider 层做 size→ratio 映射，与 B 相同且不可从 `aspect_ratio` 触达）；`size` 只接受 `auto/1024x1024/1024x1536/1536x1024`；`resolution` 默认 `1k`、只接受 `1k`/`2k`，Web 面不再静默吞掉。`image_config` 新增 `aspect_ratio`/`resolution` 并按同一规则校验、透传到生成请求。 |
+| A5-5 | 图像响应（生成/编辑、流式/非流式）恒为本站绝对资产 URL：先落本地资产再拼配置域名；缓存失败即返回错误，绝不回传上游 CDN 地址，也不再返回相对路径。`strict` 参数保留但不再影响失败语义。 |
+| A5-7 | 公开名 `grok-imagine-image-quality` 走 Console 媒体面（`ConsoleModel=grok-imagine-image-quality`），与 B 同名同面同计费口径；`grok-imagine-image-quality-2.0` 别名可用；Web `-pro` 产品不存在。 |
+| A5-42 | multipart 中不带 `[]` 的 `timestamp_granularities` 静默忽略（既不报错也不透传），带 `[]` 的仍返回 400 `unsupported_parameter`。 |
+
+**部署方须知**：图像生成的 `url` 格式现在要求能确定公网基址（请求 Host / 受信代理头或配置），否则返回 `image_url_base_missing`，不会再给出相对路径。
+
+## 总账结论
+
+- 审计 171 条：**171 已修复/已对齐、0 保留、0 未修**；6 条 P0 全部关闭。
+- 与 grok2api（906b9493 v3.1.6）的行为差异只剩**产品形态**层面：本项目是多通道聚合（Warp/Puter/WorkBuddy/Qoder + 统一 `/v1`）、自带管理端与 Redis 存储、部署形态为 systemd+Caddy+nft；这些不是审计条目，也不影响 Grok 通道的对外契约。
+
+## 十七、第十三～十四轮：与参考实现的行为对齐收尾（覆盖缺口）
+
+审计的 171 条已经全部关闭，这里记录的是此前**不在审计条目内、但参考实现有而本项目没有**的覆盖缺口，按"完全对齐"要求补齐。
+
+| 缺口 | 处理 |
+| --- | --- |
+| 图片/视频计价缺失 | `internal/pricing` 移植参考实现的三张表：文生图（按模型 + `resolution`/`quality`：1k/2k、low/medium，含 `grok-imagine-image` 平档与 `-quality` 1k/2k）、图片编辑（输出张数 × 档位 + 输入张数 × 处理费）、视频（时长 × 每秒费率 + 参考图张数，区分 `grok-imagine-video` 与 `-1.5` 的分辨率档）。未知组合保持 unpriced，不猜价。 |
+| 媒体请求不计费 | `middleware.SettleAPIKeyBillingResult` 让按资产计价的请求把真实成本记到同一个 Key 预留上；Grok 侧新增 `settleMediaBilling`，写一条 `grok_media_request` 审计行并带 `cost_in_usd_ticks` / `pricing_model` / `pricing_version`。已接入 Web 与 Console 的图片生成/编辑路径。 |
+| 质量 hold 阈值量纲 | 由"字符"改为与参考实现一致的 token 量纲（用同一套 rune/4 估算换算），上游上报的推理 token 数优先。 |
+| compaction blob 信封字段 | 明文信封字段名改为参考实现的 `version`/`session`/`summary`。 |
+
+**已全部完成（第十四轮收尾）**：
+- TTS/STT/视频三条路径的结算接线：TTS 按字符、STT 按上游 JSON 里的时长（纯文本转录无时长则不计价）、视频按"时长 × 每秒费率 + 输入图"在创建时结算；Web 与 Console 两面都接。
+- ops 聚合的 cost 维度：观测框累加本请求所有已计价行的 ticks，trace 中间件透出，按分钟桶/汇总/JSON 都暴露 `cost_in_usd_ticks`，与 priced/unpriced 请求数并列（面板不会把部分数字当成全部账单）。
+- Key 账期重置：`billing_period_days` + 持久化的 `billing_period_started_at`，到期自动把已结算用量归零；管理端新增 `POST /api/keys/{id}/reset-usage` 供人工重置（限额保留）。期初时间随记录持久化，否则重启后就再也等不到滚动。
+- `PricingBreakdown`：`pricing.ReconstructBreakdown` 从"定价模型 + 数量"重建费率分量（未缓存/缓存/输出 token 含长上下文档、图片输出+输入张数含 2.0 的档位矩阵与编辑附加费、视频秒数+参考图、TTS 字符、STT 小时费率），journal 列表对每个带定价模型的行附上 `pricing_breakdown`。
+
+**至此，本目标列出的每一项（17 条保留差异 + 覆盖缺口 + 实现级差异）都已落地**，判据见各节与 `docs/grok2api-audit/recount.py`（171 / 171 / 0 / 0）。
+
+## 十八、第十八轮：statsig 签名改为默认启用（与参考实现一致）
+
+第十一轮移植了签名器，但把"用哪个签名服务"留给部署方显式配置；参考实现是**默认就用** `https://grok.wodf.de/sign`。本轮把默认值补齐，语义变成三态：
+
+| `grok_statsig_signer_url` | 行为 |
+| --- | --- |
+| 未设置 / `null` | 使用参考实现默认签名服务 `https://grok.wodf.de/sign`（升级后行为与 grok2api 一致，无需配置） |
+| `""`（显式空串） | 关闭签名：不发送 `x-statsig-id`；配置了合法的 `grok_statsig_id` 时回落到它 |
+| 其它地址 | 使用该签名服务 |
+
+配套：
+- 字段类型改为 `*string`，因此"未设置"与"显式关闭"可区分（JSON 里 `null` vs `""`）。
+- **管理端配置保存时校验**签名地址（公网必须 HTTPS:443，仅可信内网可用 HTTP/自定义端口），非法地址在输入处即被拒绝，不再等到请求期静默丢弃签名；`grok.ValidateStatsigSignerURL` 对外暴露复用。
+- 启动日志打印生效的签名模式与地址（默认 / 配置 / 已关闭），因为该值决定账号页面元数据是否离开本机。
+- 管理端"上游与指纹"卡片新增该字段：留空＝默认签名服务，填 `-`＝关闭，填地址＝自定义。
+- imagine WebSocket 握手也走签名（`imagineWSHeaders` 改为按 method+path 解析 x-statsig-id），此前只有 HTTP 路径签名。
+- 测试：未设置 → 默认地址（含本地 stand-in 的端到端签名）、显式关闭 → 不发头、自定义地址生效、非法地址在保存时被拒；断言"只有某个请求到达上游"的既有测试改为应答签名器的页面读取（`signerProbePath`/`answerSignerProbe` 助手）或在配置里显式关闭签名。
+
+## 十九、第十九轮：部署到生产（us1）
+
+部署对象：`3.15.148.113`（t2.small，Ubuntu 24.04），产物从 `2256a90` 构建，`sha256=69197ef28538e7e633f49a038c5f3227d441d2f6259279dfff70213c0dbc7dd0`，`/opt/orchids-2api/orchids-server` 已校验一致（旧版保留为 `orchids-server.backup-20260920-032428`）。
+
+**部署前发现的阻塞点**：线上最近一小时 39 次推理请求（grok/workbuddy/qoder）**没有任何一个带 Key**，而完全对齐后 `inference_auth_enabled` 已不能关闭鉴权 → 直接部署会让所有现有调用方 401 且无法用配置恢复。按部署方选择，先落地一个"匿名来源白名单"（第十八节），再部署。
+
+**主机配置变更**（Redis 的 `settings:config` 与 `config.json` 同时写入，各自留有 `*.bak-preapply-20260920` 备份）：
+- `anonymous_allow_ips = ["161.118.140.32/32", "203.77.252.2/32"]`（实测的两个调用方来源），其余全部必须带 Key。
+- `trusted_proxies` 补入 Cloudflare 的 22 条官方网段（`https://api.cloudflare.com/client/v4/ips`），共 24 条。原配置只有回环地址，导致"客户端 IP"被解析成 Cloudflare 边缘地址（141.101.84.8 / 162.158.138.122 等），既污染审计行，也让按来源的白名单无法工作。
+- 配套代码改动：可信对端下优先采用 `CF-Connecting-IP`（不可信对端会被清除该头），见第十九轮提交 `2256a90`。
+
+**部署后实测**：
+- 启动日志确认：`Statsig signing enabled with the default endpoint (https://grok.wodf.de/sign)`、`anonymous inference access is allowed for the configured sources...`。
+- 真实调用方：`161.118.140.32` → `/workbuddy/v1/chat/completions` **200**、`/grok/v1/chat/completions` **200**（部署后持续正常）。
+- 未在白名单的来源（部署机自身出口 / 回环）→ `/v1/models` **401** `invalid_api_key`；`/health` 200；`/admin` 302。
+- 白名单逐一验证：临时把测试出口加入白名单后 `/v1/models` **200**、返回 **200 个模型且无任何带 `/` 前缀的 ID**（`grok-4.6`、`grok-4.6-xhigh`、`grok-4-3-low` 等），验证完立即恢复为仅两个生产来源（恢复后该来源立刻回到 401）。
+- 单元状态：`orchids-2api`/`caddy`/`orchids-3002-loopback`/`redis-server` 全部 active+enabled；10 分钟内无 warning/error；端口 3002 对外仍被 nft 丢弃；磁盘 65%。

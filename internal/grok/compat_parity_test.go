@@ -66,11 +66,14 @@ func TestResolveModel_ImagineMappingsMatchGrok2API(t *testing.T) {
 		modelID       string
 		wantUpstream  string
 		wantModelMode string
+		wantConsole   bool
 	}{
 		{modelID: "grok-imagine-image-lite", wantUpstream: "grok-imagine-image-lite", wantModelMode: "MODEL_MODE_FAST"},
 		{modelID: "grok-imagine-image", wantUpstream: "grok-imagine-image", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-image-2.0", wantUpstream: "grok-imagine-image-2.0", wantModelMode: "MODEL_MODE_AUTO"},
-		{modelID: "grok-imagine-image-quality", wantUpstream: "grok-imagine-image-quality-lite", wantModelMode: "MODEL_MODE_AUTO"},
+		// The public quality name is the Console media product, exactly as in
+		// grok2api; the Web imagine-lite route is not reachable through it.
+		{modelID: "grok-imagine-image-quality", wantUpstream: "grok-imagine-image-quality", wantModelMode: "", wantConsole: true},
 		{modelID: "grok-imagine-image-edit", wantUpstream: "imagine-image-edit", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-imagine-video", wantUpstream: "imagine-video-gen", wantModelMode: "MODEL_MODE_AUTO"},
 	}
@@ -86,12 +89,28 @@ func TestResolveModel_ImagineMappingsMatchGrok2API(t *testing.T) {
 		if spec.ModelMode != tc.wantModelMode {
 			t.Fatalf("%s mode=%q want=%q", tc.modelID, spec.ModelMode, tc.wantModelMode)
 		}
+		if tc.wantConsole && spec.Upstream != UpstreamConsole {
+			t.Fatalf("%s upstream plane=%v want the console plane", tc.modelID, spec.Upstream)
+		}
 	}
 }
 
-func TestResolveModel_Grok420BetaRejected(t *testing.T) {
-	if _, ok := ResolveModel("grok-4.20-beta"); ok {
-		t.Fatalf("ResolveModel(grok-4.20-beta) should fail")
+// grok2api's registered alias set accepts the beta spellings of the 4.20
+// family; an unknown name in the same shape is still rejected.
+func TestResolveModel_Grok420BetaResolvesRegisteredSpellings(t *testing.T) {
+	for _, id := range []string{"grok-4.20-beta", "grok-4.20-reasoning", "grok-4.20", "grok-4.20-beta-non-reasoning"} {
+		spec, ok := ResolveModel(id)
+		if !ok {
+			t.Fatalf("ResolveModel(%s) should resolve a registered alias", id)
+		}
+		if spec.Upstream != UpstreamConsole {
+			t.Fatalf("ResolveModel(%s) routed to %v, want the console plane", id, spec.Upstream)
+		}
+	}
+	for _, id := range []string{"grok-4.20-beta-9999", "grok-9.9", "console/grok-nope"} {
+		if _, ok := ResolveModel(id); ok {
+			t.Fatalf("ResolveModel(%s) should fail", id)
+		}
 	}
 }
 
