@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,12 @@ import (
 
 const defaultStoredResponseTTL = 30 * 24 * time.Hour
 
+// maxNativeResponsesBytes bounds a buffered non-streaming native Build
+// Responses body. The reference implementation allows 128 MiB; the previous
+// 8 MiB rejected a long reasoning turn as an upstream fault, and the client
+// then retried a request that had already succeeded upstream.
+const maxNativeResponsesBytes = 128 << 20
+
 func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Request, modelID string, spec ModelSpec, payload map[string]interface{}, upstreamPath string, saveOwnership bool) {
 	spec.Upstream, spec.ConsoleModel = UpstreamCLI, ""
 	started := time.Now()
@@ -28,6 +35,19 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	toolAliases := collectBuildToolAliases(payload)
+	// Gateway-owned compaction state is expanded before the payload is
+	// normalized, so the summary reaches the upstream as an ordinary user
+	// message and the reasoning-replay machinery never sees a sealed blob.
+	if codec := h.compactionCodecSnapshot(); codec.available() {
+		drifted, expandErr := expandGatewayCompactionHistory(payload, codec, sessionFromContext(r.Context()).Key)
+		if expandErr != nil {
+			writeResponsesAPIErrorWithParam(w, http.StatusBadRequest, "invalid_compaction_blob", expandErr.Error(), compactionErrorParam(expandErr))
+			return
+		}
+		if drifted > 0 {
+			w.Header().Set("X-Grok2API-Compaction-Session-Drift", strconv.Itoa(drifted))
+		}
+	}
 	if err := normalizeBuildResponsesPayload(payload); err != nil {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -125,6 +145,11 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	if !saveOwnership || ownerHash == "" || responseID == "" || resp.StatusCode < 200 || resp.StatusCode >= 300 || result.Err != nil {
 		return
 	}
+	// A continuation request only carries this turn's input; the history lives in
+	// the response it names. The stored record is what GET input_items answers
+	// from, so the chain is folded in here — otherwise a client that continues a
+	// conversation reads back a list with only the last turn in it.
+	storedInput := responsesInputItemsJSON(h.accumulatedInputItems(r, ownerHash, payload))
 	if err := h.saveStoredResponse(r, &store.StoredResponse{
 		ResponseID: responseID,
 		OwnerHash:  ownerHash,
@@ -135,7 +160,8 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		// part of the exchange the gateway can serve back itself. Persisting them
 		// lets GET /responses/{id}/input_items answer locally instead of doing a
 		// second upstream round trip for data it already had.
-		InputItems: responsesInputItemsJSON(payload["input"]),
+		InputItems:         storedInput,
+		PreviousResponseID: strings.TrimSpace(parseLooseStringAny(payload["previous_response_id"])),
 	}); err != nil {
 		slog.Error("failed to save response ownership", "response_id", responseID, "account_id", sess.acc.ID, "error", err)
 	}
@@ -163,6 +189,15 @@ func (h *Handler) HandleResponsesCompact(w http.ResponseWriter, r *http.Request)
 	spec, ok := h.resolveConversationModel(r.Context(), modelID)
 	if !ok || !modelRoutedToCLI(spec, h.configSnapshot()) {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses compact requires a Grok Build model")
+		return
+	}
+	// The whole point of this endpoint is compaction, so it takes the gateway
+	// path whenever the gateway can own the summary. The upstream blob a pure
+	// forward returns is readable only by the account that produced it, which is
+	// exactly what breaks a continuation served by another account.
+	if h.GatewayCompactionEnabled() {
+		payload["stream"] = false
+		h.handleGatewayCompaction(w, r, modelID, spec, payload, false)
 		return
 	}
 	payload["stream"] = false
@@ -237,6 +272,36 @@ func (h *Handler) HandleResponseResource(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// maxStoredInputChainDepth bounds how many previous responses are folded into a
+// stored input list, so a long conversation cannot make one record unbounded.
+const maxStoredInputChainDepth = 8
+
+// accumulatedInputItems returns this turn's input followed by the input of the
+// responses it continues (nearest ancestor first, bounded).
+func (h *Handler) accumulatedInputItems(r *http.Request, ownerHash string, payload map[string]interface{}) []interface{} {
+	current := responsesInputItems(payload["input"])
+	if h == nil || r == nil || ownerHash == "" {
+		return current
+	}
+	previousID := strings.TrimSpace(parseLooseStringAny(payload["previous_response_id"]))
+	seen := map[string]bool{}
+	for depth := 0; depth < maxStoredInputChainDepth && previousID != "" && !seen[previousID]; depth++ {
+		seen[previousID] = true
+		record, err := h.getStoredResponse(r, previousID, ownerHash)
+		if err != nil || record == nil {
+			break
+		}
+		if len(record.InputItems) > 0 {
+			var decoded []interface{}
+			if json.Unmarshal(record.InputItems, &decoded) == nil {
+				current = append(current, decoded...)
+			}
+		}
+		previousID = strings.TrimSpace(record.PreviousResponseID)
+	}
+	return current
+}
+
 func (h *Handler) getStoredResponse(r *http.Request, responseID, ownerHash string) (*store.StoredResponse, error) {
 	if h == nil || h.lb == nil || h.lb.Store == nil {
 		return nil, errors.New("response store not configured")
@@ -298,6 +363,8 @@ func responseIDFromResourcePath(path string) string {
 }
 
 func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader, contentType, model string) (responseID string, captured []byte, result chatOutcome) {
+	// The streaming capture is a bounded side buffer for usage/model recovery;
+	// only the non-streaming body needs the larger ceiling.
 	fullCapture := newBoundedResponseCapture(8 << 20)
 	defer func() {
 		captured = fullCapture.data
@@ -306,13 +373,13 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		}
 	}()
 	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		raw, readErr := io.ReadAll(io.LimitReader(body, (8<<20)+1))
+		raw, readErr := io.ReadAll(io.LimitReader(body, maxNativeResponsesBytes+1))
 		if readErr != nil {
 			result.Err = fmt.Errorf("upstream response could not be read within the response limit: %w", readErr)
 			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream response unavailable")
 			return
 		}
-		if len(raw) > 8<<20 {
+		if len(raw) > maxNativeResponsesBytes {
 			result.Err = fmt.Errorf("upstream response could not be read within the response limit")
 			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream response unavailable")
 			return
@@ -485,6 +552,13 @@ func (c *boundedResponseCapture) Write(p []byte) (int, error) {
 }
 
 func writeResponsesAPIError(w http.ResponseWriter, status int, code, message string) {
+	writeResponsesAPIErrorWithParam(w, status, code, message, "")
+}
+
+// writeResponsesAPIErrorWithParam is the same envelope with a `param` that names
+// the offending request field. A blob that cannot be decoded has to say which
+// input item to drop, and "param" is where an OpenAI-shaped client looks.
+func writeResponsesAPIErrorWithParam(w http.ResponseWriter, status int, code, message, param string) {
 	// The type has to follow the status: a client retries an overload or a rate
 	// limit and stops on a bad request, and a constant invalid_request_error
 	// told every client to stop, including for a 503 it could have retried.
@@ -499,12 +573,16 @@ func writeResponsesAPIError(w http.ResponseWriter, status int, code, message str
 	case status >= 500:
 		errType = "server_error"
 	}
+	var paramValue interface{}
+	if strings.TrimSpace(param) != "" {
+		paramValue = param
+	}
 	writeJSONStatus(w, status, map[string]interface{}{
 		"error": map[string]interface{}{
 			"message": message,
 			"type":    errType,
 			"code":    code,
-			"param":   nil,
+			"param":   paramValue,
 		},
 	})
 }

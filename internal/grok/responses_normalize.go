@@ -129,7 +129,7 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 			// Filtering drops anything the caller already sent, so a client that
 			// resends its own history is never duplicated.
 			if filtered := filterReplayItemsForInput(input, items); len(filtered) > 0 {
-				input = insertReplayItems(input, filtered)
+				input = backfillReasoningForCalls(insertReplayItems(input, filtered), items)
 			}
 		}
 	}
@@ -161,9 +161,12 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	if reasoning := chatReasoningControls(req); len(reasoning) > 0 {
 		payload["reasoning"] = reasoning
 	}
-	if len(req.Stop) > 0 {
-		payload["stop"] = append([]string(nil), req.Stop...)
-	}
+	// Stop sequences are enforced locally (the console chat/stream writers run a
+	// stopFilter over the generated text). Sending them upstream as well makes
+	// the upstream truncate the turn, so the matched sequence never reaches the
+	// gateway and the client loses the stop_sequence it asked to be told about —
+	// and the field is not part of the Build/Console wire contract.
+
 	if value := strings.TrimSpace(req.SafetyIdentifier); value != "" {
 		payload["safety_identifier"] = value
 	}
@@ -324,10 +327,11 @@ func validateNativeChatContent(messages []ChatMessage) error {
 }
 
 func responsesMessageParts(content interface{}, assistant bool) []interface{} {
+	// History parts always use input_text: the upstream `input` contract only
+	// guarantees input_text, and an assistant turn resent as output_text was
+	// rejected (grok2api rewrites all input-side text the same way).
 	textType := "input_text"
-	if assistant {
-		textType = "output_text"
-	}
+	_ = assistant
 	switch value := content.(type) {
 	case string:
 		if strings.TrimSpace(value) == "" {

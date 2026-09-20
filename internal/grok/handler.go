@@ -11,6 +11,7 @@ import (
 	"orchids-api/internal/handler"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"path/filepath"
@@ -43,6 +44,11 @@ type Handler struct {
 	replay       map[string]reasoningReplayEntry
 	instanceID   string
 	auditLogger  audit.Logger
+	// compactionCode seals and opens gateway-owned remote-v2 compaction state.
+	// Nil (no credential key configured) means the gateway cannot own a summary
+	// and compaction requests stay a plain upstream forward.
+	compactionMu   sync.RWMutex
+	compactionCode *gatewayCompactionCodec
 }
 
 type chatAccountSession struct {
@@ -201,10 +207,20 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 			usageSource = audit.UsageSourceEstimated
 		}
 	}
-	logger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
+	event := audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
 		AccountID: accountID, Model: req.Model, Channel: "grok", Provider: provider, Status: status, Error: message, Duration: duration, Metadata: metadata,
 		InputTokens: interfaceToInt(usage["prompt_tokens"]), OutputTokens: interfaceToInt(usage["completion_tokens"]), TotalTokens: interfaceToInt(usage["total_tokens"]), UsageSource: usageSource,
-		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])})
+		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])}
+	// Price the turn and book it against the client key's reservation. Only
+	// upstream-reported usage is billed: an estimated count is this gateway's
+	// own guess and must never turn into money owed.
+	if cost, priced := middleware.SettleAPIKeyBilling(ctx, nil, req.Model, usageSource,
+		int64(event.InputTokens), int64(event.CachedInputTokens), int64(event.OutputTokens)); priced {
+		event.CostInUSDTicks = cost.CostInUSDTicks
+		event.PricingModel = cost.Model
+		event.PricingVersion = pricing.Version
+	}
+	logger.Log(ctx, event)
 }
 
 // SetConnTracker lets the Grok selectors share the deployment-wide tracker
@@ -560,21 +576,36 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	// Cooling the whole credential took every other model out of the pool for
 	// ten minutes; the model cooldown map exists for exactly this case
 	// (grok2api marks the model, not the account).
+	// A 5xx is the upstream's own trouble, not the credential's: a short hold
+	// keeps the next request from immediately re-selecting the same account
+	// while the upstream recovers, without marking the credential as broken.
+	if acc != nil {
+		if status := parseUpstreamStatus(err); status >= 500 {
+			acc.QuotaResetAt = time.Now().Add(serverFaultHold)
+		}
+	}
 	if acc != nil && isModelScopedRefusal(err) {
 		if model := requestModelFromContext(ctx); model != "" {
 			store.RecordModelCooldown(acc, model, time.Now().Add(modelScopedRefusalCooldown))
 			if h.lb != nil && h.lb.Store != nil {
 				_ = h.lb.Store.UpdateAccount(ctx, acc)
 			}
+			h.unbindAffinity(ctx, ProviderForAccount(acc), acc.ID)
 			return
 		}
 	}
+	// The credential cannot serve this session any more: drop the affinity so the
+	// next turn picks a different account instead of coming back here.
+	h.unbindAffinity(ctx, ProviderForAccount(acc), acc.ID)
 	h.base.MarkAccountStatus(ctx, acc, err)
 }
 
 // modelScopedRefusalCooldown is how long one model stays out of rotation after
 // the upstream refused it for this credential.
 const modelScopedRefusalCooldown = 5 * time.Minute
+
+// serverFaultHold is the short pause applied after an upstream 5xx.
+const serverFaultHold = 5 * time.Second
 
 // isModelScopedRefusal reports whether an upstream failure refused one model
 // rather than the credential itself.
@@ -622,8 +653,10 @@ func (h *Handler) openChatAccountSessionForModelExcluding(ctx context.Context, e
 
 func (h *Handler) openChatAccountSessionForImagineLite(ctx context.Context, excludeIDs []int64, spec ModelSpec) (*chatAccountSession, error) {
 	spec.Tier = grokTierLite
+	// Basic is the minimum tier for the lite image model, so a basic credential
+	// is a valid fallback rather than an excluded pool.
 	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, spec.PoolCandidates(), func(acc *store.Account) bool {
-		return grokAccountPool(acc) != "basic" && h.routeAllowsAccount(ctx, spec.ID, acc.ID)
+		return h.routeAllowsAccount(ctx, spec.ID, acc.ID)
 	})
 }
 

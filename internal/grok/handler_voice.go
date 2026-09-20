@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -361,7 +362,11 @@ func (h *Handler) HandleTTSVoices(w http.ResponseWriter, r *http.Request) {
 		}
 		path += "/" + url.PathEscape(voiceID)
 	}
-	h.forwardConsoleVoice(w, r, modelID, http.MethodGet, path, nil, http.Header{"Accept": []string{"application/json"}})
+	rewrite := func(raw []byte) []byte { return raw }
+	if path == "tts/voices" {
+		rewrite = normalizeTTSVoices
+	}
+	h.forwardConsoleVoiceWith(w, r, modelID, http.MethodGet, path, nil, http.Header{"Accept": []string{"application/json"}}, rewrite)
 }
 
 // HandleSTT serves both the JSON/multipart HTTP API and the streaming
@@ -751,7 +756,34 @@ func prepareSTTRequest(body []byte, contentType string) (string, bool, []byte, s
 }
 
 func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header) {
-	resp, sess, err := h.doConsoleVoice(r, modelID, method, path, body, headers)
+	h.forwardConsoleVoiceWith(w, r, modelID, method, path, body, headers, nil)
+}
+
+// forwardConsoleVoiceWith is forwardConsoleVoice with an optional JSON rewriter.
+// A nil rewriter keeps the byte-for-byte passthrough used by every audio
+// endpoint; a rewriter is used where the response shape is part of the public
+// contract (the voice list).
+func (h *Handler) forwardConsoleVoiceWith(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header, rewriteJSON func([]byte) []byte) {
+	// A voice request used to be sent to exactly one account. A 402/429/5xx is
+	// an account-scoped condition (the same allowance the chat path rotates on),
+	// so the request is retried on another account before the caller sees an
+	// error.
+	var (
+		resp *http.Response
+		sess *chatAccountSession
+		err  error
+		used []int64
+	)
+	for attempt := 0; attempt < maxVoiceAccountAttempts; attempt++ {
+		resp, sess, err = h.doConsoleVoiceExcluding(r, used, modelID, method, path, body, headers)
+		if err == nil || !retryableVoiceError(err) || sess == nil {
+			break
+		}
+		used = append(used, sess.acc.ID)
+		sess.Close()
+		sess = nil
+		resp = nil
+	}
 	if sess != nil {
 		defer sess.Close()
 	}
@@ -765,19 +797,93 @@ func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, mo
 		writeResponsesAPIError(w, http.StatusBadGateway, "response_too_large", "Console voice response exceeds 128 MiB")
 		return
 	}
+	isJSON := strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type"))), "application/json")
+	if rewriteJSON == nil || !isJSON || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		w.WriteHeader(resp.StatusCode)
+		// Streaming TTS responses may not have a Content-Length. Copy them
+		// through without buffering or silently cutting a valid audio stream.
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxVoiceJSONBytes+1))
+	if readErr != nil || len(raw) > maxVoiceJSONBytes {
+		writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Console voice response could not be read")
+		return
+	}
 	w.WriteHeader(resp.StatusCode)
-	// Streaming TTS responses may not have a Content-Length. Copy them through
-	// without buffering or silently cutting a valid audio stream.
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = w.Write(rewriteJSON(raw))
+}
+
+// maxVoiceAccountAttempts bounds how many accounts one voice request may try.
+const maxVoiceAccountAttempts = 3
+
+// retryableVoiceError reports whether a failed voice attempt may succeed on a
+// different account: an allowance or credential refusal, or an upstream fault.
+// A request the upstream rejected on its merits is not retried.
+func retryableVoiceError(err error) bool {
+	var typed *consoleVoiceRequestError
+	if !errors.As(err, &typed) {
+		return false
+	}
+	switch typed.status {
+	case http.StatusPaymentRequired, http.StatusForbidden, http.StatusUnauthorized,
+		http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusBadGateway:
+		return true
+	}
+	return typed.status >= 500
+}
+
+// maxVoiceJSONBytes bounds a rewritten JSON voice response.
+const maxVoiceJSONBytes = 4 << 20
+
+// normalizeTTSVoices rewrites the Console voice list into the documented shape:
+// each entry carries voice_id, name and language, with a missing language set to
+// null rather than omitted, and unknown upstream fields dropped.
+func normalizeTTSVoices(raw []byte) []byte {
+	var payload map[string]interface{}
+	if json.Unmarshal(raw, &payload) != nil {
+		return raw
+	}
+	source, ok := payload["voices"].([]interface{})
+	if !ok {
+		return raw
+	}
+	voices := make([]interface{}, 0, len(source))
+	for _, entry := range source {
+		item, _ := entry.(map[string]interface{})
+		if item == nil {
+			continue
+		}
+		id := firstNonEmpty(interfaceString(item["voice_id"]), interfaceString(item["id"]))
+		if id == "" {
+			continue
+		}
+		name := firstNonEmpty(interfaceString(item["name"]), id)
+		normalized := map[string]interface{}{"voice_id": id, "name": name, "language": nil}
+		if language := interfaceString(item["language"]); language != "" {
+			normalized["language"] = language
+		}
+		voices = append(voices, normalized)
+	}
+	payload["voices"] = voices
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return encoded
 }
 
 func (h *Handler) doConsoleVoice(r *http.Request, modelID, method, path string, body []byte, headers http.Header) (*http.Response, *chatAccountSession, error) {
+	return h.doConsoleVoiceExcluding(r, nil, modelID, method, path, body, headers)
+}
+
+func (h *Handler) doConsoleVoiceExcluding(r *http.Request, excludeIDs []int64, modelID, method, path string, body []byte, headers http.Header) (*http.Response, *chatAccountSession, error) {
 	if h == nil || h.currentClient() == nil {
 		return nil, nil, &consoleVoiceRequestError{
 			status: http.StatusServiceUnavailable, code: "service_unavailable", err: fmt.Errorf("grok client not configured"),
 		}
 	}
-	sess, err := h.openConsoleAccountSession(r.Context(), nil, modelID)
+	sess, err := h.openConsoleAccountSession(r.Context(), excludeIDs, modelID)
 	if err != nil {
 		return nil, nil, &consoleVoiceRequestError{
 			status: http.StatusServiceUnavailable, code: "account_unavailable", err: fmt.Errorf("no available Grok Console account: %w", err),

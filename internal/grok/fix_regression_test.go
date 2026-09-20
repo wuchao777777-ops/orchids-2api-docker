@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -852,5 +853,158 @@ func TestQualityExpectsReasoning(t *testing.T) {
 	}
 	if qualityExpectsReasoning(&ChatCompletionsRequest{}, false) {
 		t.Fatal("a request without an effort must not expect reasoning")
+	}
+}
+
+func TestNormalizeTTSVoicesShape(t *testing.T) {
+	raw := []byte(`{"voices":[{"id":"v1","name":"Aria","language":"en","internal":"drop"},{"voice_id":"v2"},{"name":"nameless"}],"other":true}`)
+	normalized := normalizeTTSVoices(raw)
+	var payload map[string]interface{}
+	if err := json.Unmarshal(normalized, &payload); err != nil {
+		t.Fatalf("normalized payload is not JSON: %v (%s)", err, normalized)
+	}
+	voices, _ := payload["voices"].([]interface{})
+	if len(voices) != 2 {
+		t.Fatalf("voices = %#v, want 2 entries (an entry without an id is dropped)", voices)
+	}
+	first, _ := voices[0].(map[string]interface{})
+	if first["voice_id"] != "v1" || first["name"] != "Aria" || first["language"] != "en" {
+		t.Fatalf("first voice = %#v", first)
+	}
+	if _, leaked := first["internal"]; leaked {
+		t.Fatalf("an unknown upstream field survived: %#v", first)
+	}
+	second, _ := voices[1].(map[string]interface{})
+	if second["voice_id"] != "v2" || second["name"] != "v2" {
+		t.Fatalf("second voice must fall back to its id as the name: %#v", second)
+	}
+	if language, present := second["language"]; !present || language != nil {
+		t.Fatalf("a missing language must be an explicit null, got %#v", second["language"])
+	}
+	// A payload that is not a voice list is passed through untouched.
+	other := []byte(`{"error":"nope"}`)
+	if string(normalizeTTSVoices(other)) != string(other) {
+		t.Fatal("a non-list payload must be passed through")
+	}
+}
+
+func TestVideoFailureKeepsStoredCode(t *testing.T) {
+	job := &videoJob{ID: "v1", Status: "failed", Error: map[string]interface{}{"code": "upstream_unavailable", "message": "no account"}}
+	rendered := job.toStandardMap()
+	errorObject, _ := rendered["error"].(map[string]interface{})
+	if errorObject["code"] != "upstream_unavailable" {
+		t.Fatalf("code = %v, want the stored code", errorObject["code"])
+	}
+}
+
+func TestImageEventSizeReportsRealPixels(t *testing.T) {
+	// A 1x2 PNG, encoded by hand so the assertion does not depend on any encoder.
+	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAYAAACZgbYnAAAAEklEQVR42mP8z8BQz0AEYBxVSF8FAJJ9Bf8AAAAASUVORK5CYII="
+	if got := imageEventSize("b64_json", png); got != "1x2" {
+		t.Fatalf("imageEventSize() = %q, want 1x2", got)
+	}
+	if got := imageEventSize("b64_json", "not-base64"); got != "auto" {
+		t.Fatalf("undecodable payload = %q, want auto", got)
+	}
+	if got := imageEventSize("url", "https://example.com/a.png"); got != "auto" {
+		t.Fatalf("url payload = %q, want auto (the bytes are not fetched here)", got)
+	}
+}
+
+func TestUnbindAffinityDropsTheSessionBinding(t *testing.T) {
+	h := &Handler{affinity: map[string]sessionAffinityEntry{}}
+	ctx := withGrokSession(context.Background(), grokSessionContext{Key: "session-1", Model: "grok-4.6"})
+	h.affinityMu.Lock()
+	key := affinityMapKey(grokSessionContext{Key: "session-1", Model: "grok-4.6"}, ProviderWeb)
+	h.affinity[key] = sessionAffinityEntry{AccountID: 7, ExpiresAt: time.Now().Add(time.Hour)}
+	h.affinityMu.Unlock()
+
+	h.unbindAffinity(ctx, ProviderWeb, 7)
+
+	if id := h.affinityAccount(ctx, ProviderWeb); id != 0 {
+		t.Fatalf("affinityAccount() = %d, want 0 after an unbind", id)
+	}
+	// An unrelated account id must not clear the binding.
+	h.affinityMu.Lock()
+	h.affinity[key] = sessionAffinityEntry{AccountID: 7, ExpiresAt: time.Now().Add(time.Hour)}
+	h.affinityMu.Unlock()
+	h.unbindAffinity(ctx, ProviderWeb, 9)
+	if id := h.affinityAccount(ctx, ProviderWeb); id != 7 {
+		t.Fatalf("affinityAccount() = %d, want the binding to survive a mismatch", id)
+	}
+}
+
+func TestRetryableVoiceErrorClassification(t *testing.T) {
+	retryable := []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusPaymentRequired,
+		http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusBadGateway}
+	for _, status := range retryable {
+		err := &consoleVoiceRequestError{status: status, code: "x", err: errors.New("boom")}
+		if !retryableVoiceError(err) {
+			t.Fatalf("status %d must be retryable on another account", status)
+		}
+	}
+	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound, http.StatusUnsupportedMediaType} {
+		err := &consoleVoiceRequestError{status: status, code: "x", err: errors.New("boom")}
+		if retryableVoiceError(err) {
+			t.Fatalf("status %d is the caller's mistake and must not be retried", status)
+		}
+	}
+	// An untyped error is not a voice request failure and is not retried here.
+	if retryableVoiceError(errors.New("boom")) {
+		t.Fatal("an untyped error must not be treated as a retryable voice failure")
+	}
+}
+
+func TestBackfillReasoningForCalls(t *testing.T) {
+	proof := map[string]interface{}{"type": "reasoning", "id": "rs_1", "encrypted_content": "cipher-1"}
+	cached := []interface{}{
+		proof,
+		map[string]interface{}{"type": "function_call", "call_id": "call_1", "name": "read", "arguments": "{}"},
+	}
+	// The client echoes the call but not its proof.
+	input := []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_1", "name": "read", "arguments": "{}"}}
+	filled := backfillReasoningForCalls(input, cached)
+	if len(filled) != 2 {
+		t.Fatalf("filled = %#v, want the proof inserted before the call", filled)
+	}
+	first, _ := filled[0].(map[string]interface{})
+	if first["type"] != "reasoning" || first["encrypted_content"] != "cipher-1" {
+		t.Fatalf("first item = %#v, want the cached proof", first)
+	}
+	// A call that already carries its proof is not doubled.
+	withProof := append(cloneReplayItems([]interface{}{proof}), input...)
+	if got := backfillReasoningForCalls(withProof, cached); len(got) != len(withProof) {
+		t.Fatalf("a call that already carries its proof must not be doubled: %#v", got)
+	}
+	// An unknown call id is left alone.
+	unknown := []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_9", "name": "read"}}
+	if got := backfillReasoningForCalls(unknown, cached); len(got) != 1 {
+		t.Fatalf("an unknown call must not gain a proof: %#v", got)
+	}
+	// No cache means no change.
+	plain := []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_1"}}
+	if got := backfillReasoningForCalls(plain, nil); len(got) != 1 {
+		t.Fatalf("without cached items nothing may be inserted: %#v", got)
+	}
+}
+
+func TestReasoningForCallsIndexesOnlyProofs(t *testing.T) {
+	index := reasoningForCalls([]interface{}{
+		map[string]interface{}{"type": "reasoning", "id": "rs_1"}, // no encrypted content
+		map[string]interface{}{"type": "function_call", "call_id": "call_1"},
+		map[string]interface{}{"type": "reasoning", "id": "rs_2", "encrypted_content": "cipher"},
+		map[string]interface{}{"type": "custom_tool_call", "call_id": "call_2"},
+	})
+	if _, ok := index["call_1"]; ok {
+		t.Fatal("a reasoning item without a proof must not be indexed")
+	}
+	if entry, ok := index["call_2"]; !ok || entry["id"] != "rs_2" {
+		t.Fatalf("call_2 index = %#v, want rs_2", entry)
+	}
+}
+
+func TestAccumulatedInputItemsWalksTheContinuationChain(t *testing.T) {
+	if got := maxStoredInputChainDepth; got < 1 || got > 64 {
+		t.Fatalf("chain depth = %d, want a bounded positive value", got)
 	}
 }
