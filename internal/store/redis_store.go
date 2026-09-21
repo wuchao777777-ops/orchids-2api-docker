@@ -284,7 +284,6 @@ type apiKeyRecord struct {
 	ID                   int64    `json:"id"`
 	Name                 string   `json:"name"`
 	KeyHash              string   `json:"key_hash"`
-	KeyFull              string   `json:"key_full,omitempty"`
 	KeyPrefix            string   `json:"key_prefix"`
 	KeySuffix            string   `json:"key_suffix"`
 	Enabled              bool     `json:"enabled"`
@@ -688,6 +687,9 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		}
 		if len(acc.QoderModelIDs) > 0 {
 			updated.QoderModelIDs = append([]string(nil), acc.QoderModelIDs...)
+		}
+		if !acc.QoderModelsSyncedAt.IsZero() && (existing.QoderModelsSyncedAt.IsZero() || !acc.QoderModelsSyncedAt.Before(existing.QoderModelsSyncedAt)) {
+			updated.QoderModelsSyncedAt = acc.QoderModelsSyncedAt
 		}
 		if !acc.QoderQuota.SyncedAt.IsZero() && (existing.QoderQuota.SyncedAt.IsZero() || !acc.QoderQuota.SyncedAt.Before(existing.QoderQuota.SyncedAt)) {
 			updated.QoderQuota = acc.QoderQuota
@@ -2041,9 +2043,11 @@ func (s *redisStore) DeleteStoredMediaInput(ctx context.Context, id, ownerHash s
 
 func apiKeyRecordFromKey(key *ApiKey) apiKeyRecord {
 	return apiKeyRecord{
-		ID:                     key.ID,
-		Name:                   key.Name,
-		KeyHash:                key.KeyHash,
+		ID:      key.ID,
+		Name:    key.Name,
+		KeyHash: key.KeyHash,
+		// KeyFull is deliberately never persisted; it is only returned once by
+		// the create endpoint before this record reaches Redis.
 		KeyPrefix:              key.KeyPrefix,
 		KeySuffix:              key.KeySuffix,
 		Enabled:                key.Enabled,
@@ -2065,7 +2069,6 @@ func (r apiKeyRecord) toApiKey() *ApiKey {
 		ID:                     r.ID,
 		Name:                   r.Name,
 		KeyHash:                r.KeyHash,
-		KeyFull:                r.KeyFull,
 		KeyPrefix:              r.KeyPrefix,
 		KeySuffix:              r.KeySuffix,
 		Enabled:                r.Enabled,

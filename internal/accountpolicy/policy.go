@@ -121,7 +121,7 @@ func ScopeForStatus(status string) Scope {
 	switch strings.TrimSpace(status) {
 	case "401":
 		return ScopeCredential
-	case "402", "403", "404", "429":
+	case "402", "403", "404", "429", store.AccountStatusPuterQuotaExhausted, store.AccountStatusQoderQuotaExhausted, store.AccountStatusWorkBuddyQuotaExhausted:
 		return ScopeAccount
 	case "":
 		return ScopeNone
@@ -188,23 +188,28 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 			Cooldown: cooldown, At: now,
 		}
 	case "402":
-		if isWorkBuddy(acc) && !apperrors.IsCreditExhaustion(message) {
-			// A model-scoped payment refusal: the caller asked for something this
-			// plan does not cover while the account's own allowance is intact, so
-			// cool down the requested model and leave the account in rotation. The
-			// refusal says nothing about the credential or the other models, so the
-			// pool may keep using this account for them.
+		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "qoder") && apperrors.IsCreditExhaustion(message) {
 			return Verdict{
-				Scope:         ScopeModel,
-				Model:         model,
-				Message:       message,
-				Retryable:     Retryable(err),
-				SwitchAccount: true,
-				Cooldown:      CooldownRateLimit,
-				At:            now,
+				Status: store.AccountStatusQoderQuotaExhausted, Message: message,
+				Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
+				At: now,
 			}
 		}
-		// An exhausted allowance is a fact about the whole account: the upstream
+		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "puter") && apperrors.IsCreditExhaustion(message) {
+			return Verdict{
+				Status: store.AccountStatusPuterQuotaExhausted, Message: message,
+				Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
+				At: now,
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "workbuddy") && apperrors.IsCreditExhaustion(message) {
+			return Verdict{
+				Status: store.AccountStatusWorkBuddyQuotaExhausted, Message: message,
+				Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
+				At: now,
+			}
+		}
+		// An exhausted allowance is a fact about the whole account's metered
 		// refuses it whatever the model is asked for, so leaving it in rotation is
 		// what made every request retry a pool of dead accounts and return an error
 		// with nothing in the account table to explain it. Parking it stops the
@@ -296,7 +301,7 @@ func AccountHeld(acc *store.Account, now time.Time) bool {
 		return true
 	}
 	status := strings.TrimSpace(acc.StatusCode)
-	if status == "" {
+	if status == "" || status == store.AccountStatusPuterQuotaExhausted || status == store.AccountStatusQoderQuotaExhausted || status == store.AccountStatusWorkBuddyQuotaExhausted {
 		return false
 	}
 	if acc.LastAttempt.IsZero() {

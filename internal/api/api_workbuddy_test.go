@@ -334,12 +334,10 @@ func TestRefreshAccountState_WorkBuddySyncsModelsAndQuota(t *testing.T) {
 	}
 }
 
-// TestRefreshAccountState_WorkBuddySpentMeterKeepsAccountSchedulable pins the
-// reported behaviour: WorkBuddy's free models keep working after the metered
-// credit package is spent, so a spent meter must NOT become an account status.
-// The old synthetic "402" parked the account for the 24h payment cooldown every
-// time the admin page synced it, which took the free models out of rotation too.
-func TestRefreshAccountState_WorkBuddySpentMeterKeepsAccountSchedulable(t *testing.T) {
+// TestRefreshAccountState_WorkBuddySpentMeterEnablesFreeOnlyMode pins the
+// operator-confirmed behaviour: an empty metered package keeps the account
+// available for confirmed free models from its latest catalog.
+func TestRefreshAccountState_WorkBuddySpentMeterEnablesFreeOnlyMode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -373,11 +371,8 @@ func TestRefreshAccountState_WorkBuddySpentMeterKeepsAccountSchedulable(t *testi
 	if err != nil {
 		t.Fatalf("refreshAccountState() error = %v", err)
 	}
-	if status != "" || httpStatus != 0 {
-		t.Fatalf("status = %q httpStatus = %d, want no verdict from a spent credit meter", status, httpStatus)
-	}
-	if acc.StatusCode != "" {
-		t.Fatalf("StatusCode = %q, want the account left schedulable", acc.StatusCode)
+	if status != store.AccountStatusWorkBuddyQuotaExhausted || httpStatus != 0 {
+		t.Fatalf("status = %q httpStatus = %d, want WorkBuddy free-only verdict", status, httpStatus)
 	}
 	// The spent package must still be visible: the 配额 column renders remaining=0.
 	if acc.UsageLimit != 250 || acc.UsageCurrent != 0 {
@@ -446,11 +441,11 @@ func TestHandleAccounts_CheckWorkBuddySpentMeterKeepsThePark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
-	if stored.StatusCode != "402" {
-		t.Fatalf("StatusCode = %q, want the spent-allowance park kept while the meter is empty", stored.StatusCode)
+	if stored.StatusCode != store.AccountStatusWorkBuddyQuotaExhausted {
+		t.Fatalf("StatusCode = %q, want the spent-allowance free-only state", stored.StatusCode)
 	}
-	if stored.StatusMessage == "" {
-		t.Fatal("the operator-facing reason must survive the check")
+	if stored.StatusMessage != "" {
+		t.Fatalf("StatusMessage = %q, want successful meter refresh to replace the stale failure reason", stored.StatusMessage)
 	}
 	if stored.VerifiedAt.IsZero() {
 		t.Fatal("the check must still record that the credential was exercised")

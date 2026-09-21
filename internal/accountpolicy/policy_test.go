@@ -272,35 +272,19 @@ func TestAccountHeld_429KeepsShortRetryAfter(t *testing.T) {
 	}
 }
 
-// TestClassify_WorkBuddyPaymentRefusalIsModelScoped pins the reported behaviour:
-// WorkBuddy's free models keep working once the metered credit package is spent,
-// so a payment refusal must cool down only the model that was asked for instead
-// of parking the whole account (and its free models) for the 24h payment cooldown.
-func TestClassify_WorkBuddyPaymentRefusalIsModelScoped(t *testing.T) {
+// TestClassify_WorkBuddyPaymentRefusalEnablesFreeOnlyMode pins the distinction:
+// a spent WorkBuddy package remains selectable, but the handler permits only the
+// explicitly confirmed free models for that account.
+func TestClassify_WorkBuddyPaymentRefusalEnablesFreeOnlyMode(t *testing.T) {
 	acc := &store.Account{ID: 1, AccountType: "workbuddy", Enabled: true}
-	verdict := Classify(acc, errors.New("workbuddy API error: status=402 message=insufficient credits for model"), "claude-sonnet-4.5")
+	verdict := Classify(acc, errors.New("workbuddy API error: status=429 message=Credits exhausted code=14018"), "claude-sonnet-4.5")
 
-	if verdict.Scope != ScopeModel || verdict.Model != "claude-sonnet-4.5" {
-		t.Fatalf("verdict = %+v, want a model-scoped cooldown", verdict)
-	}
-	if verdict.Status != "" {
-		t.Fatalf("status = %q, want no account status for a spent credit package", verdict.Status)
-	}
-	if verdict.Cooldown <= 0 || verdict.Cooldown >= CooldownPayment {
-		t.Fatalf("cooldown = %v, want the short model window", verdict.Cooldown)
+	if verdict.Scope != ScopeAccount || verdict.Status != store.AccountStatusWorkBuddyQuotaExhausted {
+		t.Fatalf("verdict = %+v, want WorkBuddy free-only status", verdict)
 	}
 	verdict.Apply(acc)
-	if acc.StatusCode != "" {
-		t.Fatalf("StatusCode = %q, want the account left schedulable", acc.StatusCode)
-	}
 	if AccountHeld(acc, time.Now()) {
-		t.Fatal("a WorkBuddy payment refusal must not hold the account")
-	}
-	// Without a model to name there is nothing to cool down, and the account must
-	// still not be parked.
-	anonymous := Classify(&store.Account{AccountType: "workbuddy"}, errors.New("status=402 insufficient credits"), "")
-	if anonymous.Status != "" || AccountHeld(&store.Account{AccountType: "workbuddy", StatusCode: anonymous.Status}, time.Now()) {
-		t.Fatalf("anonymous verdict = %+v, want the account left alone", anonymous)
+		t.Fatal("a WorkBuddy quota-exhausted account must remain selectable for free models")
 	}
 }
 
@@ -324,7 +308,7 @@ func TestCredentialMessageIsProviderAware(t *testing.T) {
 // is a fact about the whole account — it is returned for every model — but it was
 // read as a model-scoped payment refusal, so the account stayed in rotation, every
 // request retried the whole pool, and the account table carried no reason for it.
-func TestClassify_WorkBuddyCreditExhaustionParksTheAccount(t *testing.T) {
+func TestClassify_WorkBuddyCreditExhaustionEnablesFreeOnlyMode(t *testing.T) {
 	// The production message, verbatim in shape: the upstream wraps it in JSON and
 	// the transport wraps that in a status.
 	production := `workbuddy API error: status=429, message={"error":{"data":{"code":14018,` +
@@ -337,12 +321,12 @@ func TestClassify_WorkBuddyCreditExhaustionParksTheAccount(t *testing.T) {
 	if verdict.Scope != ScopeAccount {
 		t.Fatalf("scope = %v, want an account-scoped verdict: an exhausted allowance refuses every model", verdict.Scope)
 	}
-	if verdict.Status != "402" {
-		t.Fatalf("status = %q, want 402 so the account table can explain the account", verdict.Status)
+	if verdict.Status != store.AccountStatusWorkBuddyQuotaExhausted {
+		t.Fatalf("status = %q, want WorkBuddy free-only status", verdict.Status)
 	}
 	verdict.Apply(acc)
-	if !AccountHeld(acc, time.Now()) {
-		t.Fatal("a credit-exhausted account must be held, or every request retries it")
+	if AccountHeld(acc, time.Now()) {
+		t.Fatal("credit exhaustion must not hide the account from confirmed free models")
 	}
 	// The reason reaches the operator, including what to do about it.
 	if !strings.Contains(acc.StatusMessage, "codebuddy.ai/profile/usage") {
