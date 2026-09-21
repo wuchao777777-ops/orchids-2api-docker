@@ -43,6 +43,16 @@ type Account struct {
 	UsageCurrent         float64 `json:"usage_current"`
 	UsageTotal           float64 `json:"usage_total"` // Used as lifetime usage
 	UsageLimit           float64 `json:"usage_limit"` // Daily limit
+	// TokensToday is the token spend the gateway counted for the account inside
+	// the current local day, and TokensDate is the day it belongs to.
+	//
+	// A lifetime total alone cannot answer the question an operator actually
+	// asks of an unmetered channel — "how close is this account to the upstream
+	// rate limit right now?" — because a total only ever grows. The pair is
+	// rolled by the counter itself: a request whose date differs from
+	// TokensDate starts a new day instead of adding to yesterday's figure.
+	TokensToday float64 `json:"tokens_today,omitempty"`
+	TokensDate  string  `json:"tokens_date,omitempty"`
 	WarpMonthlyLimit     float64 `json:"warp_monthly_limit,omitempty"`
 	WarpMonthlyRemaining float64 `json:"warp_monthly_remaining,omitempty"`
 	WarpBonusRemaining   float64 `json:"warp_bonus_remaining,omitempty"`
@@ -211,6 +221,16 @@ type Account struct {
 	ClineRefreshToken string    `json:"cline_refresh_token,omitempty"`
 	ClineExpiresAt    time.Time `json:"cline_expires_at,omitempty"`
 	ClineEmail        string    `json:"cline_email,omitempty"`
+	// ClinePlan is the account's subscription tier as the upstream states it.
+	//
+	// The recommended-models feed is per-account, but it lists four tiers at
+	// once, so "the free list is non-empty" proves free access and says nothing
+	// about whether the account also holds a paid plan — which is exactly the
+	// question the 等级 column asks. The upstream answers it at /users/me/plan:
+	// a subscriber gets a plan name, an account that never subscribed gets
+	// "no plan history found for user". Empty means not probed yet, and that is
+	// different from "free", so it is never defaulted.
+	ClinePlan string `json:"cline_plan,omitempty"`
 	// ReplaceClineCredentials is an explicit write intent. Ordinary full
 	// account updates carry a snapshot and must not overwrite a refresh token
 	// that rotated after that snapshot was read.

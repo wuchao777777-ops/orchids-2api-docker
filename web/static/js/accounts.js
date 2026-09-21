@@ -357,18 +357,25 @@ function subscriptionBadge(acc) {
     };
   }
   if (type === "cline") {
-    // No plan name is published. The catalog the server observed is the free
-    // tier of recommended-models, so the badge says what was actually observed
-    // rather than inventing a tier.
-    const plan = String(acc?.quota_plan || "").trim();
+    // The tier comes from the upstream plan endpoint, not from the catalog:
+    // recommended-models lists four tiers in one payload, so "the free list is
+    // non-empty" proves free access and says nothing about a paid plan held
+    // alongside it. The server records what /users/me/plan actually answered —
+    // a plan name for a subscriber, "free" for an account with no plan history.
+    const plan = String(acc?.cline_plan || "").trim();
     if (plan) {
+      const free = plan.toLowerCase() === "free";
       return {
-        text: plan,
-        bg: "rgba(167, 139, 250, 0.16)",
-        color: "#c4b5fd",
-        tip: `Cline 套餐: ${plan}`,
+        text: free ? "免费" : plan,
+        bg: free ? "rgba(52, 211, 153, 0.16)" : "rgba(167, 139, 250, 0.16)",
+        color: free ? "#34d399" : "#c4b5fd",
+        tip: free
+          ? "Cline 免费账号：上游 /users/me/plan 返回没有套餐记录"
+          : `Cline 套餐: ${plan}`,
       };
     }
+    // No tier recorded yet: an unread plan endpoint is not evidence of free, so
+    // the badge says what is missing rather than asserting a tier.
     const modelCount = Array.isArray(acc?.cline_model_ids) ? acc.cline_model_ids.length : 0;
     if (modelCount === 0) {
       return {
@@ -379,10 +386,10 @@ function subscriptionBadge(acc) {
       };
     }
     return {
-      text: "免费目录",
-      bg: "rgba(167, 139, 250, 0.16)",
-      color: "#c4b5fd",
-      tip: `Cline 未下发套餐名；当前 ${modelCount} 个模型来自官方 recommended-models 免费清单`,
+      text: "未同步",
+      bg: "rgba(100, 116, 139, 0.12)",
+      color: "#94a3b8",
+      tip: `已读到 ${modelCount} 个免费模型，但尚未读到套餐档位；点「刷新」重新探测`,
     };
   }
   if (type === "workbuddy") {
@@ -1159,6 +1166,16 @@ const ACCOUNT_TYPE_NAMES = { warp: "Warp", puter: "Puter", workbuddy: "WorkBuddy
 
 // One name for the selected channel, used by the strip, the subtitle, the toasts and the
 // empty state. currentPlatform stays the lower-case key the API stores; nothing shows it.
+// clinePageOnly reports whether the page is showing the Cline channel alone.
+//
+// The console renders one platform at a time; the unfiltered view mixes every
+// channel, and a column that is noise for one of them is still the only place
+// another reports its balance. So the decision is made on the filter, never on
+// the row: mixed rows keep every column.
+function clinePageOnly() {
+  return String(currentPlatform || "").trim().toLowerCase() === "cline";
+}
+
 function currentPlatformLabel() {
   const key = String(currentPlatform || "").trim();
   if (!key) return "";
@@ -1556,20 +1573,31 @@ function renderAccounts() {
   table.className = "accounts-table";
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
+  // Cline has no numeric allowance, so its 配额 cell could only ever read
+  // "未计量" — a column of noise. It is dropped on the Cline page only: the
+  // other five channels report a real balance and keep theirs. The whole page
+  // renders one channel at a time, so one filter decision covers every row.
+  const quotaColumnVisible = !clinePageOnly();
   const headers = [
     { label: "", className: "col-check" },
     { label: "ID", className: "col-id" },
     { label: "账号" },
     { label: "等级", className: "col-tier" },
-    { label: "配额", className: "col-quota" },
+    ...(quotaColumnVisible ? [{ label: "配额", className: "col-quota" }] : []),
     { label: "状态", className: "col-status" },
     { label: "能力", className: "col-capability" },
+    // 今日/累计 Tokens is the only spend figure an unmetered channel can
+    // offer, and the only one that answers "how close is this account to the
+    // upstream rate limit right now".
+    { label: "今日/累计 Tokens", className: "col-tokens", title: "本网关本地统计，不代表官方额度" },
     { label: "调用", className: "col-usage" },
+    { label: "创建时间", className: "col-created" },
     { label: "操作", className: "col-actions" },
   ];
   headers.forEach((h, idx) => {
     const th = document.createElement("th");
     if (h.className) th.className = h.className;
+    if (h.title) th.title = h.title;
     if (idx === 0) {
       const selectAll = document.createElement("input");
       selectAll.type = "checkbox";
@@ -1644,46 +1672,50 @@ function renderAccounts() {
     tdTier.innerHTML = buildSubscriptionMarkup(acc);
     tr.appendChild(tdTier);
 
-    const tdQuota = document.createElement("td");
-    tdQuota.className = "col-quota";
-    // One shared renderer for the desktop table and the mobile cards.
-    tdQuota.innerHTML = buildQuotaMarkup(acc);
-    const quota = getQuotaStats(acc);
-    if (normalizeAccountType(acc) === "workbuddy") {
-      if (quota && quota.workbuddy) {
-        tdQuota.title = [
-          quota.plan ? `计量包: ${quota.plan}` : "",
-          `单位: ${quota.unit || "credit"}`,
-          "口径: 当前周期剩余 / 周期上限",
-          quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
-        ].filter(Boolean).join(" · ");
-      } else {
-        tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步";
+    // Dropped on the Cline page for the same reason the header is: a column that
+    // can only ever say "未计量" is not worth a column.
+    if (quotaColumnVisible) {
+      const tdQuota = document.createElement("td");
+      tdQuota.className = "col-quota";
+      // One shared renderer for the desktop table and the mobile cards.
+      tdQuota.innerHTML = buildQuotaMarkup(acc);
+      const quota = getQuotaStats(acc);
+      if (normalizeAccountType(acc) === "workbuddy") {
+        if (quota && quota.workbuddy) {
+          tdQuota.title = [
+            quota.plan ? `计量包: ${quota.plan}` : "",
+            `单位: ${quota.unit || "credit"}`,
+            "口径: 当前周期剩余 / 周期上限",
+            quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
+          ].filter(Boolean).join(" · ");
+        } else {
+          tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步";
+        }
+      } else if (normalizeAccountType(acc) === "cline") {
+        const models = clineObservedModelCount(acc);
+        tdQuota.title = models > 0
+          ? `Cline 未下发数值额度；已观测 ${models} 个免费模型（点「刷新」重新同步）`
+          : "Cline 未下发数值额度；点「刷新」同步模型目录";
+      } else if (normalizeAccountType(acc) === "qoder") {
+        if (quota && quota.supported) {
+          tdQuota.title = [
+            quota.plan ? `计划: ${quota.plan}` : "",
+            `单位: ${quota.unit || "credits"}`,
+            "口径: 当前窗口剩余 / 窗口额度",
+            quota.exhausted ? "该账号额度已用尽，窗口重置后自动恢复" : "",
+            quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
+            quota.upgradeUrl ? `升级: ${quota.upgradeUrl}` : "",
+          ].filter(Boolean).join(" · ");
+        } else {
+          tdQuota.title = "尚未读取到 Qoder 计划与额度；点「检查」立即同步";
+        }
+      } else if (quota && (quota.estimated || quota.quotaUnavailable)) {
+        // Every number in this cell carries its provenance, so an estimate is never
+        // mistaken for a reported balance.
+        tdQuota.title = quotaTooltip(acc, quota);
       }
-    } else if (normalizeAccountType(acc) === "cline") {
-      const models = clineObservedModelCount(acc);
-      tdQuota.title = models > 0
-        ? `Cline 未下发数值额度；已观测 ${models} 个免费模型（点「刷新」重新同步）`
-        : "Cline 未下发数值额度；点「刷新」同步模型目录";
-    } else if (normalizeAccountType(acc) === "qoder") {
-      if (quota && quota.supported) {
-        tdQuota.title = [
-          quota.plan ? `计划: ${quota.plan}` : "",
-          `单位: ${quota.unit || "credits"}`,
-          "口径: 当前窗口剩余 / 窗口额度",
-          quota.exhausted ? "该账号额度已用尽，窗口重置后自动恢复" : "",
-          quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
-          quota.upgradeUrl ? `升级: ${quota.upgradeUrl}` : "",
-        ].filter(Boolean).join(" · ");
-      } else {
-        tdQuota.title = "尚未读取到 Qoder 计划与额度；点「检查」立即同步";
-      }
-    } else if (quota && (quota.estimated || quota.quotaUnavailable)) {
-      // Every number in this cell carries its provenance, so an estimate is never
-      // mistaken for a reported balance.
-      tdQuota.title = quotaTooltip(acc, quota);
+      tr.appendChild(tdQuota);
     }
-    tr.appendChild(tdQuota);
 
     // Health only. Capability (e.g. NSFW) is a different dimension and lives in
     // its own column so "正常" and "NSFW" never read as alternatives.
@@ -1697,12 +1729,23 @@ function renderAccounts() {
     statusSpan.style.border = "none";
     statusSpan.textContent = badge.text;
     tdStatus.appendChild(statusSpan);
+    // A cooled account without a stated recovery time reads as broken forever.
+    // The scheduler always writes a deadline when it cools one, so the line
+    // appears exactly when the account is held and says when to come back.
+    const cooldown = document.createElement("div");
+    cooldown.innerHTML = buildCooldownMarkup(acc);
+    if (cooldown.innerHTML) tdStatus.appendChild(cooldown);
     tr.appendChild(tdStatus);
 
     const tdCapability = document.createElement("td");
     tdCapability.className = "col-capability";
     tdCapability.innerHTML = buildCapabilityMarkup(acc);
     tr.appendChild(tdCapability);
+
+    const tdTokens = document.createElement("td");
+    tdTokens.className = "col-tokens";
+    tdTokens.innerHTML = buildTokensMarkup(acc);
+    tr.appendChild(tdTokens);
 
     // One usage cell: the count carries the meaning, the last-use time is a
     // sub-line instead of a column of its own.
@@ -1720,6 +1763,11 @@ function renderAccounts() {
     tdUsage.appendChild(count);
     tdUsage.appendChild(when);
     tr.appendChild(tdUsage);
+
+    const tdCreated = document.createElement("td");
+    tdCreated.className = "col-created";
+    tdCreated.innerHTML = buildCreatedMarkup(acc);
+    tr.appendChild(tdCreated);
 
     const tdActions = document.createElement("td");
     tdActions.className = "col-actions";
@@ -1812,6 +1860,116 @@ function formatQuotaReset(iso) {
   const hours = Math.floor(remaining / 3600000);
   if (hours < 24) return `${Math.max(1, hours)} 小时后重置`;
   return `${Math.floor(hours / 24)} 天后重置`;
+}
+
+// formatTokenCount abbreviates a token count the way a usage column has to: the
+// interesting values are five and six digits long, and "23849" next to a model
+// name costs more attention than "23.8K".
+function formatTokenCount(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 1000000) return (n / 1000000).toFixed(2).replace(/\.?0+$/, "") + "M";
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+  return String(Math.round(n));
+}
+
+// accountTokensToday is the spend counted for the account's current local day.
+//
+// The counter stamps the day it counted, so a figure whose date is not today is
+// yesterday's: it must read as 0 rather than as a stale number. An account that
+// predates the counter has no date at all, which is "not measured yet" — the
+// lifetime total is still the honest answer, so it is reported as-is.
+function accountTokensToday(acc) {
+  const value = Number(acc?.tokens_today || 0);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const stamp = String(acc?.tokens_date || "").trim();
+  if (!stamp) return 0;
+  return stamp === localDayStamp() ? value : 0;
+}
+
+// localDayStamp is the same YYYY-MM-DD boundary the server rolls the counter on.
+function localDayStamp(date) {
+  const d = date instanceof Date ? date : new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// buildTokensMarkup renders the 今日/累计 Tokens cell.
+//
+// A lifetime total alone cannot answer how much of the upstream rate limit the
+// account has spent right now, because it only ever grows — which is the one
+// number an unmetered channel has to offer. Both figures are local: the gateway
+// counts what it saw, and the tooltip says so instead of implying the upstream
+// reported them.
+function buildTokensMarkup(acc) {
+  const today = accountTokensToday(acc);
+  const total = Number(acc?.usage_total || 0);
+  const title = `今日 ${Math.round(today).toLocaleString()} / 累计 ${Math.round(total).toLocaleString()} tokens（本网关本地统计：上游返回 usage 时精确，否则按请求体估算）`;
+  return `<span class="account-tokens" title="${escapeHtml(title)}">${formatTokenCount(today)} / ${formatTokenCount(total)}</span>`;
+}
+
+// cooldownRecoveryAt is the instant the account is expected to serve again.
+//
+// The scheduler writes one deadline per cause; whichever is furthest out is the
+// one that still holds the account, so that is the one worth printing.
+function cooldownRecoveryAt(acc) {
+  const candidates = [acc?.quota_reset_at, acc?.quality_cooldown_until];
+  let latest = 0;
+  for (const raw of candidates) {
+    const at = Date.parse(String(raw || ""));
+    if (Number.isFinite(at) && at > latest) latest = at;
+  }
+  return latest > 0 ? latest : 0;
+}
+
+// buildCooldownMarkup renders the recovery line under the status badge.
+//
+// A cooled account with no stated recovery time looks broken forever. The
+// scheduler always sets a deadline when it cools one, so the absence of a line
+// means "not cooled" — and its presence should say when to come back.
+function buildCooldownMarkup(acc) {
+  const badge = evaluateAccountStatus(acc);
+  if (badge.normal) return "";
+  const at = cooldownRecoveryAt(acc);
+  if (!at) return "";
+  const remaining = at - Date.now();
+  const when = new Date(at).toLocaleString("zh-CN", {
+    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const tail = remaining > 0 ? `（${formatRemainingCompact(remaining)}）` : "（已到期，等待下一次调度）";
+  return `<div class="account-cooldown-until" style="font-size:0.68rem;color:#64748b;margin-top:2px">预计 ${escapeHtml(when)} 恢复${escapeHtml(tail)}</div>`;
+}
+
+// formatRemainingCompact renders a cooldown span as hours/minutes.
+//
+// Rounding happens once, at the finest unit, and the coarser units derive from
+// it: flooring the hours directly turned a 2h59m59s wait into "2 小时后" while
+// the clock above it already read 12:00.
+function formatRemainingCompact(ms) {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `${Math.max(1, minutes)} 分钟后`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时后`;
+  return `${Math.floor(hours / 24)} 天后`;
+}
+
+// buildCreatedMarkup renders the account creation time.
+//
+// It is the only column that lets an operator tell a freshly added account from
+// one that has been rotated several times, and it is what makes an aged account
+// with a low request count read as "idle" rather than "broken".
+function buildCreatedMarkup(acc) {
+  const createdAt = Date.parse(String(acc?.created_at || ""));
+  if (!Number.isFinite(createdAt) || createdAt <= 0) return `<span style="color:#64748b">-</span>`;
+  return `<span class="account-created" style="font-size:0.74rem">${escapeHtml(formatDate(new Date(createdAt)))}</span>`;
+}
+
+// formatDate renders a calendar date without the relative-time shortcut: an
+// absolute date is what you compare against another account's date.
+function formatDate(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return "-";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // accountUsageCounter is the value the 调用 column shows. WorkBuddy accounts have
@@ -1917,7 +2075,7 @@ function buildQuotaMarkup(acc) {
 }
 
 function buildStatusMarkup(acc, badge) {
-  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${buildNSFWBadgeMarkup(acc)}`;
+  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${buildNSFWBadgeMarkup(acc)}${buildCooldownMarkup(acc)}`;
 }
 
 function renderAccountsMobile(container, pageItems, total, totalPages) {
@@ -1956,13 +2114,26 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
           <span class="account-mobile-label">等级</span>
           <div class="account-mobile-inline">${buildSubscriptionMarkup(acc)}</div>
         </div>
+        ${clinePageOnly() ? "" : `
         <div class="account-mobile-item">
           <span class="account-mobile-label">配额</span>
           <div class="account-mobile-value">${buildQuotaMarkup(acc)}</div>
+        </div>`}
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">能力</span>
+          <div class="account-mobile-inline">${buildCapabilityMarkup(acc)}</div>
+        </div>
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">今日/累计 Tokens</span>
+          <div class="account-mobile-value">${buildTokensMarkup(acc)}</div>
         </div>
         <div class="account-mobile-item">
           <span class="account-mobile-label">调用</span>
           <span class="account-mobile-value">${escapeHtml(String(accountUsageCounter(acc)))} · ${escapeHtml(acc.last_used_at && !acc.last_used_at.startsWith("0001") ? formatTime(acc.last_used_at) : "未调用")}</span>
+        </div>
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">创建时间</span>
+          <span class="account-mobile-value">${buildCreatedMarkup(acc)}</span>
         </div>
         ${buildMobileEmailMarkup(acc)}
       </div>
