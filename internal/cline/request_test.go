@@ -1,6 +1,7 @@
 package cline
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,53 @@ func TestBuildChatBodyCarriesTheUpstreamDefaults(t *testing.T) {
 		if !strings.Contains(raw, want) {
 			t.Errorf("body is missing %s: %s", want, raw)
 		}
+	}
+}
+
+func TestBuildChatBodyConvertsAnthropicToolsToOpenAI(t *testing.T) {
+	body, err := buildChatBody(upstream.UpstreamRequest{
+		Model:    "z-ai/glm-5.3-flash",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "inspect"}}},
+		Tools: []interface{}{map[string]interface{}{
+			"name": "glob", "description": "Find files", "input_schema": map[string]interface{}{
+				"type": "object", "properties": map[string]interface{}{"pattern": map[string]interface{}{"type": "string"}}, "required": []interface{}{"pattern"},
+			},
+		}},
+		ToolChoice: map[string]interface{}{"type": "tool", "name": "glob"},
+	}, "z-ai/glm-5.3-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ := decoded["tools"].([]interface{})
+	if len(tools) != 1 {
+		t.Fatalf("tools=%#v", decoded["tools"])
+	}
+	tool := tools[0].(map[string]interface{})
+	if tool["type"] != "function" {
+		t.Fatalf("tool=%#v", tool)
+	}
+	function := tool["function"].(map[string]interface{})
+	if function["name"] != "glob" || function["parameters"] == nil {
+		t.Fatalf("function=%#v", function)
+	}
+	choice := decoded["tool_choice"].(map[string]interface{})
+	if choice["type"] != "function" || choice["function"].(map[string]interface{})["name"] != "glob" {
+		t.Fatalf("tool_choice=%#v", choice)
+	}
+}
+
+func TestBuildChatBodyKeepsOpenAITools(t *testing.T) {
+	openAI := map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "bash", "parameters": map[string]interface{}{"type": "object"}}}
+	body, err := buildChatBody(upstream.UpstreamRequest{Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "run"}}}, Tools: []interface{}{openAI}}, "z-ai/glm-5.3-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"tools":[{"function":{"name":"bash","parameters":{"type":"object"}},"type":"function"}]`) {
+		t.Fatalf("body=%s", body)
 	}
 }
 
@@ -104,7 +152,7 @@ func TestConsumeStreamEmitsTextAndUsage(t *testing.T) {
 	var text strings.Builder
 	var usage map[string]interface{}
 	finish := false
-	result, err := consumeStream(strings.NewReader(stream), func(msg upstream.SSEMessage) {
+	result, err := consumeStream(strings.NewReader(stream), false, func(msg upstream.SSEMessage) {
 		switch msg.Type {
 		case "model.text-delta":
 			text.WriteString(msg.Event["delta"].(string))
@@ -131,6 +179,28 @@ func TestConsumeStreamEmitsTextAndUsage(t *testing.T) {
 	}
 }
 
+func TestConsumeStreamRejectsEOFBeforeFinish(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+	result, err := consumeStream(strings.NewReader(stream), false, nil)
+	if !errors.Is(err, ErrStreamTruncated) {
+		t.Fatalf("error=%v, want ErrStreamTruncated", err)
+	}
+	if !result.SawMeaningfulEvent {
+		t.Fatal("partial data should remain observable even though the stream failed")
+	}
+}
+
+func TestConsumeStreamAcceptsFinishReasonWithoutDone(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"complete\"},\"finish_reason\":\"stop\"}]}\n\n"
+	result, err := consumeStream(strings.NewReader(stream), false, nil)
+	if err != nil {
+		t.Fatalf("error=%v", err)
+	}
+	if !result.SawMeaningfulEvent {
+		t.Fatal("complete stream was not observed")
+	}
+}
+
 // TestConsumeStreamEmitsEachToolCallOnce is the regression the accumulator
 // exists for: the finish-time emit and the end-of-stream flush both run, and a
 // tool call must not reach the client twice.
@@ -140,7 +210,7 @@ func TestConsumeStreamEmitsEachToolCallOnce(t *testing.T) {
 		"data: [DONE]\n\n"
 	var calls int
 	var names []string
-	result, err := consumeStream(strings.NewReader(stream), func(msg upstream.SSEMessage) {
+	result, err := consumeStream(strings.NewReader(stream), false, func(msg upstream.SSEMessage) {
 		if msg.Type != "model.tool-call" {
 			return
 		}
@@ -159,6 +229,103 @@ func TestConsumeStreamEmitsEachToolCallOnce(t *testing.T) {
 	if result.FinishReason() != "tool_use" {
 		t.Errorf("FinishReason() = %q, want tool_use", result.FinishReason())
 	}
+}
+
+func TestConsumeStreamConvertsGLMTextToolCall(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"checking <tool_call>bash:ls -la /tmp/a</arg_value><arg_key>command</arg_key><arg_value>ls -la /tmp/a</arg_value></tool_call>\"},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	var text strings.Builder
+	var calls []upstream.SSEMessage
+	result, err := consumeStream(strings.NewReader(stream), true, func(msg upstream.SSEMessage) {
+		switch msg.Type {
+		case "model.text-delta":
+			text.WriteString(msg.Event["delta"].(string))
+		case "model.tool-call":
+			calls = append(calls, msg)
+		}
+	})
+	if err != nil {
+		t.Fatalf("consumeStream() error = %v", err)
+	}
+	if got := text.String(); got != "checking " {
+		t.Fatalf("visible text = %q, want fallback markup stripped", got)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(calls))
+	}
+	if calls[0].Event["toolName"] != "bash" || calls[0].Event["input"] != `{"command":"ls -la /tmp/a"}` {
+		t.Fatalf("tool call = %#v", calls[0].Event)
+	}
+	if result.ToolCallCount != 1 || result.FinishReason() != "tool_use" {
+		t.Fatalf("result = %+v, want one tool_use", result)
+	}
+}
+
+func TestParseClineTextToolCallPreservesStructuredArguments(t *testing.T) {
+	markup := `<tool_call>write:ignored</arg_value><arg_key>content</arg_key><arg_value>{&quot;ok&quot;:true}</arg_value><arg_key>count</arg_key><arg_value>2</arg_value></tool_call>`
+	visible, calls := parseClineTextToolCalls(markup)
+	if visible != "" || len(calls) != 1 {
+		t.Fatalf("visible=%q calls=%+v", visible, calls)
+	}
+	if calls[0].Function.Arguments != `{"content":{"ok":true},"count":2}` {
+		t.Fatalf("arguments=%s", calls[0].Function.Arguments)
+	}
+}
+
+func TestParseClineRepeatedTagToolCall(t *testing.T) {
+	text := `让我先看一下项目。<tool_call> GetType(ItemType) + $assetPath.Write and glob the workspace.<tool_call>glob<tool_call>glob: *<tool_call>args: {"pattern":"*"}<tool_call>run_in_background: false`
+	visible, calls := parseClineTextToolCalls(text)
+	if visible != "让我先看一下项目。" || len(calls) != 1 {
+		t.Fatalf("visible=%q calls=%+v", visible, calls)
+	}
+	if calls[0].Function.Name != "glob" || calls[0].Function.Arguments != `{"pattern":"*"}` {
+		t.Fatalf("call=%+v", calls[0])
+	}
+}
+
+func TestParseClineCompactMultipleToolCalls(t *testing.T) {
+	text := `先查看结构。<tool_call>glob,{"pattern":"*"}<tool_call>glob,{"pattern":"*/*"}`
+	visible, calls := parseClineTextToolCalls(text)
+	if visible != "先查看结构。" || len(calls) != 2 {
+		t.Fatalf("visible=%q calls=%+v", visible, calls)
+	}
+	if calls[0].Function.Name != "glob" || calls[0].Function.Arguments != `{"pattern":"*"}` || calls[1].Function.Arguments != `{"pattern":"*/*"}` {
+		t.Fatalf("calls=%+v", calls)
+	}
+}
+
+func TestParseClineRepeatedTagToolCallRejectsProse(t *testing.T) {
+	text := `plain <tool_call>this is not a tool<tool_call>args: {"x":1}`
+	visible, calls := parseClineTextToolCalls(text)
+	if visible != text || len(calls) != 0 {
+		t.Fatalf("visible=%q calls=%+v", visible, calls)
+	}
+}
+
+func TestConsumeStreamLeavesTextToolMarkupWithoutDeclaredTools(t *testing.T) {
+	markup := `<tool_call>bash:x</arg_value><arg_key>command</arg_key><arg_value>x</arg_value></tool_call>`
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":" + string(mustJSON(t, markup)) + "},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+	var text strings.Builder
+	result, err := consumeStream(strings.NewReader(stream), false, func(msg upstream.SSEMessage) {
+		if msg.Type == "model.text-delta" {
+			text.WriteString(msg.Event["delta"].(string))
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text.String() != markup || result.ToolCallCount != 0 {
+		t.Fatalf("text=%q result=%+v", text.String(), result)
+	}
+}
+
+func mustJSON(t *testing.T, value interface{}) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 // TestClassifyStatusTurnsTheCapIntoAKnownWindow is the reason the 429 path is

@@ -35,6 +35,26 @@ import (
 	"orchids-api/internal/warp"
 )
 
+type responseWriterUnwrapper interface {
+	Unwrap() http.ResponseWriter
+}
+
+func responseWriterSupportsFlush(w http.ResponseWriter) bool {
+	for depth := 0; w != nil && depth < 32; depth++ {
+		unwrapper, ok := w.(responseWriterUnwrapper)
+		if !ok {
+			_, supports := w.(http.Flusher)
+			return supports
+		}
+		next := unwrapper.Unwrap()
+		if next == nil || next == w {
+			return false
+		}
+		w = next
+	}
+	return false
+}
+
 // ClientFactory creates an upstream client for a given account.
 // Used to decouple provider-specific client construction from the handler.
 type ClientFactory func(acc *store.Account, cfg *config.Config) UpstreamClient
@@ -54,6 +74,12 @@ type Handler struct {
 	sessionStore SessionStore
 	// Coalesces upstream model-config refresh signals per Warp account.
 	warpModelRefreshes sync.Map
+	// Completed API requests update usage asynchronously. Coalescing by account
+	// keeps this path at one worker instead of spawning a goroutine per request.
+	statsOnce    sync.Once
+	statsMu      sync.Mutex
+	statsPending map[int64]accountStatsDelta
+	statsWake    chan struct{}
 }
 
 type UpstreamClient interface {
@@ -746,15 +772,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	isStream := req.Stream
 
 	if isStream {
+		// Check the complete middleware chain before committing SSE headers. A
+		// wrapper may expose Flush while its underlying writer cannot actually
+		// flush, so unwrap to the real server writer before accepting the stream.
+		if !responseWriterSupportsFlush(w) {
+			apperrors.New("api_error", "Streaming not supported by underlying connection", http.StatusInternalServerError).WriteResponse(w)
+			return
+		}
 		// 设置 SSE 响应头
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-
-		if _, ok := w.(http.Flusher); !ok {
-			apperrors.New("api_error", "Streaming not supported by underlying connection", http.StatusInternalServerError).WriteResponse(w)
-			return
-		}
 		streamingStarted = true
 	} else {
 		w.Header().Set("Content-Type", "application/json")
@@ -775,28 +803,27 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	logger.LogConvertedPrompt(builtPrompt)
 
-	breakdown := estimateInputTokenBreakdown(builtPrompt, effectiveTools)
+	var breakdown inputTokenBreakdown
 	breakdownProfile := "warp"
-	if isPuterRequest {
-		breakdownProfile = "puter"
-	}
-	if isWorkBuddyRequest {
-		// WorkBuddy receives raw OpenAI-style messages like Puter does, so the
-		// generic (non-Warp) breakdown is the accurate profile here too.
-		breakdownProfile = "workbuddy"
-	}
-	if isQoderRequest {
-		breakdownProfile = "qoder"
-	}
-	if isClineRequest {
-		breakdownProfile = "cline"
-	}
 	if isWarpRequest {
 		if warpBD, profile, err := estimateWarpInputTokenBreakdown(builtPrompt, mappedModel, upstreamMessages, req.System, effectiveTools, gateNoTools, chatSessionID); err == nil {
 			breakdown = warpBD
 			breakdownProfile = profile
 		} else {
 			slog.Warn("Warp token estimation fallback to generic breakdown", "error", err)
+			breakdown = estimateInputTokenBreakdown(builtPrompt, effectiveTools)
+		}
+	} else {
+		breakdown = estimateInputTokenBreakdown(builtPrompt, effectiveTools)
+		switch {
+		case isPuterRequest:
+			breakdownProfile = "puter"
+		case isWorkBuddyRequest:
+			breakdownProfile = "workbuddy"
+		case isQoderRequest:
+			breakdownProfile = "qoder"
+		case isClineRequest:
+			breakdownProfile = "cline"
 		}
 	}
 	if verboseDiagnostics {
