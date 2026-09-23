@@ -18,6 +18,7 @@ import (
 	"orchids-api/internal/refreshqueue"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
+	"orchids-api/internal/workbuddy"
 )
 
 func preserveLatestAccountStatus(ctx context.Context, s *store.Store, acc *store.Account) {
@@ -310,25 +311,17 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 		}
 	}
 
-	if grokCLIBillingNeedsSync(acc, time.Now()) {
-		billingCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		billing, billingErr := cliClient.FetchBilling(billingCtx, acc)
-		cancel()
-		if billingErr != nil {
-			slog.Warn("Auto sync grok cli billing failed; leaving numeric quota unavailable", "account_id", acc.ID, "error", billingErr)
-		} else {
-			grok.ApplyCLIBillingInfo(acc, billing)
-		}
+	now := time.Now()
+	result := grok.RefreshBuildAccount(ctx, cliClient, acc, grok.BuildRefreshOptions{
+		Billing: grokCLIBillingNeedsSync(acc, now), BillingTimeout: 20 * time.Second,
+		Models: grok.CLIModelsNeedSync(acc, now), ModelsTimeout: 15 * time.Second,
+		Now: now,
+	})
+	if result.BillingErr != nil {
+		slog.Warn("Auto sync grok cli billing failed; leaving numeric quota unavailable", "account_id", acc.ID, "error", result.BillingErr)
 	}
-	if grok.CLIModelsNeedSync(acc, time.Now()) {
-		modelsCtx, modelsCancel := context.WithTimeout(ctx, 15*time.Second)
-		models, modelsErr := cliClient.FetchModels(modelsCtx, acc)
-		modelsCancel()
-		if modelsErr != nil {
-			slog.Warn("Auto sync grok cli model catalog failed", "account_id", acc.ID, "error", modelsErr)
-		} else {
-			grok.ApplyCLIModels(acc, models, time.Now())
-		}
+	if result.ModelsErr != nil {
+		slog.Warn("Auto sync grok cli model catalog failed; keeping last catalog", "account_id", acc.ID, "error", result.ModelsErr)
 	}
 	if updateErr := s.UpdateAccount(ctx, acc); updateErr != nil {
 		slog.Warn("Auto refresh grok cli: update account failed", "account_id", acc.ID, "error", updateErr)
@@ -418,6 +411,47 @@ func refreshQoderQuota(ctx context.Context, cfg *config.Config, s *store.Store, 
 	}
 }
 
+func workBuddyCatalogRefreshDue(acc *store.Account, now time.Time) bool {
+	if acc == nil {
+		return false
+	}
+	if len(acc.WorkBuddyModelIDs) == 0 || acc.WorkBuddyModelsSyncedAt.IsZero() {
+		return true
+	}
+	return now.Sub(acc.WorkBuddyModelsSyncedAt) >= providerHealthRefreshInterval
+}
+
+// refreshWorkBuddyCatalog keeps the account-scoped CLI whitelist current without
+// replacing a usable last-known-good snapshot when the control plane is down.
+func refreshWorkBuddyCatalog(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) {
+	if acc == nil || s == nil || !workBuddyCatalogRefreshDue(acc, time.Now()) {
+		return
+	}
+	if !refreshqueue.WithLease(acc.ID, func() {
+		client := workbuddy.NewFromAccount(acc, cfg)
+		defer client.Close()
+		client.SetAccountStore(s)
+		catalogCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		models, err := client.FetchModels(catalogCtx)
+		cancel()
+		if err != nil {
+			slog.Warn("Auto refresh workbuddy catalog failed; keeping the last snapshot", "account_id", acc.ID, "error", err)
+			return
+		}
+		ids := workbuddy.CatalogSnapshot(models)
+		if len(ids) == 0 {
+			return
+		}
+		acc.WorkBuddyModelIDs = ids
+		acc.WorkBuddyModelsSyncedAt = time.Now()
+		if err := s.UpdateAccount(ctx, acc); err != nil {
+			slog.Warn("Auto refresh workbuddy catalog: update account failed", "account_id", acc.ID, "error", err)
+		}
+	}) {
+		slog.Debug("Auto refresh workbuddy catalog: account already refreshing", "account_id", acc.ID)
+	}
+}
+
 // clineCatalogRefreshDue reports whether the account's catalog snapshot should
 // be re-read. The snapshot is an observation, and the free feed changes without
 // notice, so it is refreshed on the same cadence as the other providers.
@@ -425,10 +459,10 @@ func clineCatalogRefreshDue(acc *store.Account, now time.Time) bool {
 	if acc == nil {
 		return false
 	}
-	if len(acc.ClineModelIDs) == 0 {
+	if len(acc.ClineModelIDs) == 0 || acc.ClineModelsSyncedAt.IsZero() {
 		return true
 	}
-	return now.Sub(acc.UpdatedAt) >= providerHealthRefreshInterval
+	return now.Sub(acc.ClineModelsSyncedAt) >= providerHealthRefreshInterval
 }
 
 // refreshClineCatalog re-reads the account's model feed.
@@ -456,6 +490,7 @@ func refreshClineCatalog(ctx context.Context, cfg *config.Config, s *store.Store
 			return
 		}
 		acc.ClineModelIDs = ids
+		acc.ClineModelsSyncedAt = time.Now()
 		if err := s.UpdateAccount(ctx, acc); err != nil {
 			slog.Warn("Auto refresh cline catalog: update account failed", "account_id", acc.ID, "error", err)
 		}
@@ -464,67 +499,8 @@ func refreshClineCatalog(ctx context.Context, cfg *config.Config, s *store.Store
 	}
 }
 
-// grokSSORefreshRetryDelay is the pause before re-asking a rejected session in
-// the background loop. A variable so tests can drive the retry without sleeping.
+// Configurable in tests; the shared grok helper owns the context-aware retry.
 var grokSSORefreshRetryDelay = 800 * time.Millisecond
-
-// retryGrokRefreshAttempt reads the SSO session identity, re-asking once when the
-// upstream rejects the cookie, and reports whether the credential stands
-// definitively rejected.
-func retryGrokRefreshAttempt(ctx context.Context, client *grok.Client, token string) (grok.AccountIdentity, error) {
-	attempt := func() (grok.AccountIdentity, error) {
-		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		return client.FetchSessionIdentity(attemptCtx, token)
-	}
-	identity, err := attempt()
-	if err == nil || !grok.IsAuthenticationFailure(err) {
-		return identity, err
-	}
-	firstErr := err
-	select {
-	case <-ctx.Done():
-		return grok.AccountIdentity{}, err
-	case <-time.After(grokSSORefreshRetryDelay):
-	}
-	identity, err = attempt()
-	if err == nil {
-		slog.Warn("Auto refresh grok: session rejected once and accepted on retry; keeping the account",
-			"token_fingerprint", grok.TokenFingerprint(token),
-			"first_error", firstErr)
-	}
-	return identity, err
-}
-
-// retryGrokQuotaAttempt gives the quota endpoint the same two-witness rule as
-// the identity endpoint and the manual account refresh. Grok occasionally
-// returns a transient unauthenticated response from one surface while the same
-// cookie is still valid; persisting that first answer made the background view
-// say "异常" until a manual refresh immediately corrected it.
-func retryGrokQuotaAttempt(ctx context.Context, client *grok.Client, token string) (map[string]*grok.RateLimitInfo, error) {
-	attempt := func() (map[string]*grok.RateLimitInfo, error) {
-		attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		return client.GetWebQuota(attemptCtx, token)
-	}
-	windows, err := attempt()
-	if err == nil || !grok.IsAuthenticationFailure(err) {
-		return windows, err
-	}
-	firstErr := err
-	select {
-	case <-ctx.Done():
-		return nil, err
-	case <-time.After(grokSSORefreshRetryDelay):
-	}
-	windows, err = attempt()
-	if err == nil {
-		slog.Warn("Auto refresh grok: quota rejected once and accepted on retry; keeping the account",
-			"token_fingerprint", grok.TokenFingerprint(token),
-			"first_error", firstErr)
-	}
-	return windows, err
-}
 
 func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store, accounts []*store.Account) {
 	if len(accounts) == 0 || s == nil {
@@ -566,15 +542,17 @@ func refreshGrokCandidate(ctx context.Context, cfg *config.Config, s *store.Stor
 		defer grokRefreshHub.Release(leaseID)
 	}
 	{
-		// Session identity is the authentication check. Quota/model availability
-		// is deliberately handled separately so a retired quota model cannot mark
-		// a valid SSO account as HTTP 500. A single rejection is re-asked before it
-		// is treated as final: the upstream also answers "unauthenticated" for
-		// transient conditions, and a false verdict removes a working account from
-		// the pool until an operator notices.
-		identity, identityErr := retryGrokRefreshAttempt(ctx, grokClient, candidate.token)
-		if identityErr != nil && grok.IsAuthenticationFailure(identityErr) {
-			verdict := accountpolicy.Classify(firstCandidateAccount(candidate), identityErr, candidate.model)
+		result := grok.ProbeWebAccount(ctx, grokClient, candidate.token, grok.WebRefreshOptions{
+			IdentityTimeout: 15 * time.Second,
+			QuotaTimeout:    30 * time.Second,
+			RetryDelay:      grokSSORefreshRetryDelay,
+		})
+		if result.AuthRejected {
+			authErr := result.IdentityErr
+			if authErr == nil {
+				authErr = result.QuotaErr
+			}
+			verdict := accountpolicy.Classify(firstCandidateAccount(candidate), authErr, candidate.model)
 			for _, acc := range candidate.accounts {
 				if acc == nil {
 					continue
@@ -589,43 +567,22 @@ func refreshGrokCandidate(ctx context.Context, cfg *config.Config, s *store.Stor
 				"needs_login", verdict.NeedsLogin,
 				"account_ids", grokCandidateAccountIDs(candidate.accounts),
 				"token_fingerprint", grok.TokenFingerprint(candidate.token),
-				"error", identityErr)
+				"error", authErr)
 			return
 		}
-		if identityErr != nil {
-			slog.Debug("Auto refresh grok: session identity unavailable; continuing quota sync", "error", identityErr)
+		if result.IdentityErr != nil {
+			slog.Debug("Auto refresh grok: session identity unavailable; continuing quota sync", "error", result.IdentityErr)
 		}
 
-		windows, quotaErr := retryGrokQuotaAttempt(ctx, grokClient, candidate.token)
-		if quotaErr != nil {
-			statusCode := apperrors.ClassifyAccountStatus(quotaErr.Error())
+		if result.QuotaErr != nil {
+			statusCode := apperrors.ClassifyAccountStatus(result.QuotaErr.Error())
 			if statusCode == "429" {
 				setGrokRefreshBackoff(time.Now().Add(grokRefresh429Backoff))
-				slog.Warn("Auto refresh grok: Web quota rate-limited; pausing refresh", "backoff", grokRefresh429Backoff.String(), "error", quotaErr)
+				slog.Warn("Auto refresh grok: Web quota rate-limited; pausing refresh", "backoff", grokRefresh429Backoff.String(), "error", result.QuotaErr)
 				return
 			}
-			if grok.IsAuthenticationFailure(quotaErr) {
-				verdict := accountpolicy.Classify(firstCandidateAccount(candidate), quotaErr, candidate.model)
-				for _, acc := range candidate.accounts {
-					if acc == nil {
-						continue
-					}
-					verdict.Apply(acc)
-					if err := s.UpdateAccount(ctx, acc); err != nil {
-						slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
-					}
-				}
-				slog.Warn("Auto refresh grok SSO quota rejected the cookie",
-					"status", verdict.Status,
-					"needs_login", verdict.NeedsLogin,
-					"account_ids", grokCandidateAccountIDs(candidate.accounts),
-					"token_fingerprint", grok.TokenFingerprint(candidate.token),
-					"error", quotaErr)
-				return
-			}
-			// 404/model-unavailable and malformed quota responses are not auth
-			// failures. Clear stale diagnostic 500/404 markers so a previous
-			// model mismatch does not remain visible as an account failure.
+			// Non-auth quota failures retain the last snapshot and clear only stale
+			// diagnostic model/server markers.
 			for _, acc := range candidate.accounts {
 				if acc == nil {
 					continue
@@ -637,8 +594,7 @@ func refreshGrokCandidate(ctx context.Context, cfg *config.Config, s *store.Stor
 					}
 				}
 			}
-			// Keep the account active and retain its last quota snapshot.
-			slog.Warn("Auto refresh grok: Web quota unavailable; account remains active", "error", quotaErr)
+			slog.Warn("Auto refresh grok: Web quota unavailable; account remains active", "error", result.QuotaErr)
 			return
 		}
 
@@ -646,18 +602,7 @@ func refreshGrokCandidate(ctx context.Context, cfg *config.Config, s *store.Stor
 			if acc == nil {
 				continue
 			}
-			if identityErr == nil {
-				if identity.TeamID != "" {
-					acc.TeamID = identity.TeamID
-				}
-				if identity.Email != "" {
-					acc.Email = identity.Email
-				}
-				if identity.UserID != "" {
-					acc.UserID = identity.UserID
-				}
-			}
-			grok.ApplyWebQuotaInfo(acc, windows)
+			grok.ApplyWebRefresh(acc, result)
 			// The credential answered: record the verdict so the account leaves the
 			// first-verification queue and stops being treated as unknown. A quota
 			// reset window still in the future keeps its reset stamp.
@@ -724,7 +669,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 					continue
 				}
 				warpClient := warp.NewFromAccount(acc, cfg)
-				_, err := warpClient.RefreshAccount(refreshCtx)
+				result, err := warpClient.RefreshAccountState(refreshCtx, acc, false)
 				if err != nil {
 					retryAfter := warp.RetryAfter(err)
 					httpStatus := warp.HTTPStatusCode(err)
@@ -743,22 +688,15 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 					slog.Warn("Auto refresh token failed", "account", acc.Name, "type", "warp", "http_status", httpStatus, "error", err)
 					continue
 				}
-				warpClient.SyncAccountStateTo(acc)
 				accountpolicy.Success(time.Now()).Apply(acc)
 
-				// Sync Warp usage quota via GraphQL
-				limitCtx, limitCancel := context.WithTimeout(refreshCtx, 15*time.Second)
-				limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
-				limitCancel()
-				if limitErr != nil {
-					slog.Warn("Warp usage sync failed", "account", acc.Name, "error", limitErr)
-				} else if limitInfo != nil {
-					warp.ApplyRequestLimitInfoToAccount(acc, limitInfo, bonuses)
-					// If the GraphQL succeeded but returned no tier info and
-					// the account has no subscription yet, default to free.
-					if strings.TrimSpace(acc.Subscription) == "" || strings.EqualFold(acc.Subscription, "unknown") {
-						acc.Subscription = "free"
-					}
+				if result.QuotaError != nil {
+					slog.Warn("Warp usage sync failed", "account", acc.Name, "error", result.QuotaError)
+				} else if strings.TrimSpace(acc.Subscription) == "" || strings.EqualFold(acc.Subscription, "unknown") {
+					// A successful quota response with no recognizable paid tier is Free.
+					acc.Subscription = "free"
+				}
+				if result.QuotaError == nil {
 					slog.Debug("Warp usage synced", "account", acc.Name, "limit", acc.UsageLimit, "used", acc.UsageCurrent, "subscription", acc.Subscription)
 				}
 
@@ -772,6 +710,10 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 			if strings.EqualFold(acc.AccountType, "qoder") {
 				refreshQoderCatalog(refreshCtx, cfg, s, acc)
 				refreshQoderQuota(refreshCtx, cfg, s, acc)
+				continue
+			}
+			if strings.EqualFold(acc.AccountType, "workbuddy") {
+				refreshWorkBuddyCatalog(refreshCtx, cfg, s, acc)
 				continue
 			}
 			if strings.EqualFold(acc.AccountType, "cline") {

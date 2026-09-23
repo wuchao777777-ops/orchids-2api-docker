@@ -24,6 +24,10 @@ type AccountModelChoices struct {
 	// stored once and reused. Dropping it here was what left the request builder
 	// with nothing to state and made a 1M-token model look like a zero-window one.
 	ContextWindows map[string]ModelContextWindow `json:"context_windows,omitempty"`
+	// AccountContextWindows retains window provenance so replacing or removing
+	// one account's snapshot can also remove its stale context metadata without
+	// disturbing another account's last-known-good observation.
+	AccountContextWindows map[string]map[string]ModelContextWindow `json:"account_context_windows,omitempty"`
 }
 
 type AccountFeatureConfig struct {
@@ -31,6 +35,137 @@ type AccountFeatureConfig struct {
 	CodingModel           string `json:"coding_model,omitempty"`
 	CliAgentModel         string `json:"cli_agent_model,omitempty"`
 	ComputerUseAgentModel string `json:"computer_use_agent_model,omitempty"`
+}
+
+// AccountModelDiscovery is one account's verified Warp model snapshot.
+// UpsertAccountModelDiscoveries is the only writer for this cache so manual
+// checks, background refreshes and catalog refreshes cannot drift apart.
+type AccountModelDiscovery struct {
+	AccountID     int64
+	Source        string
+	Choices       []ModelChoice
+	FeatureConfig AccountFeatureConfig
+}
+
+func UpsertAccountModelDiscoveries(ctx context.Context, s *store.Store, discoveries ...AccountModelDiscovery) error {
+	if s == nil || len(discoveries) == 0 {
+		return nil
+	}
+	existing, err := LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		existing = &AccountModelChoices{}
+	}
+	if existing.Accounts == nil {
+		existing.Accounts = make(map[string][]string)
+	}
+	if existing.Sources == nil {
+		existing.Sources = make(map[string]string)
+	}
+	if existing.FeatureConfigs == nil {
+		existing.FeatureConfigs = make(map[string]AccountFeatureConfig)
+	}
+	ensureAccountContextWindows(existing)
+	changed := false
+	for _, discovery := range discoveries {
+		if discovery.AccountID == 0 || len(discovery.Choices) == 0 {
+			continue
+		}
+		models := make([]string, 0, len(discovery.Choices))
+		for _, choice := range discovery.Choices {
+			if id := normalizeModelID(choice.ID); id != "" {
+				models = append(models, id)
+			}
+		}
+		models = normalizeAccountModelIDs(models)
+		if len(models) == 0 {
+			continue
+		}
+		key := strconv.FormatInt(discovery.AccountID, 10)
+		existing.Accounts[key] = models
+		if source := strings.TrimSpace(discovery.Source); source != "" {
+			existing.Sources[key] = source
+		} else {
+			delete(existing.Sources, key)
+		}
+		if cfg := normalizeAccountFeatureConfig(discovery.FeatureConfig); !cfg.IsEmpty() {
+			existing.FeatureConfigs[key] = cfg
+		} else {
+			delete(existing.FeatureConfigs, key)
+		}
+		windows := ContextWindowsFromChoices(discovery.Choices)
+		if len(windows) > 0 {
+			existing.AccountContextWindows[key] = windows
+		} else {
+			delete(existing.AccountContextWindows, key)
+		}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	rebuildContextWindows(existing)
+	return SaveAccountModelChoices(ctx, s, existing)
+}
+
+func RemoveAccountModelChoices(ctx context.Context, s *store.Store, accountID int64) error {
+	if s == nil || accountID == 0 {
+		return nil
+	}
+	existing, err := LoadAccountModelChoices(ctx, s)
+	if err != nil || existing == nil {
+		return err
+	}
+	key := strconv.FormatInt(accountID, 10)
+	if _, ok := existing.Accounts[key]; !ok {
+		return nil
+	}
+	ensureAccountContextWindows(existing)
+	delete(existing.Accounts, key)
+	delete(existing.Sources, key)
+	delete(existing.FeatureConfigs, key)
+	delete(existing.AccountContextWindows, key)
+	rebuildContextWindows(existing)
+	return SaveAccountModelChoices(ctx, s, existing)
+}
+
+// ensureAccountContextWindows upgrades caches written before context windows
+// carried account provenance. It associates an observed model with every cached
+// account advertising it, allowing all subsequent writes to have replacement
+// semantics.
+func ensureAccountContextWindows(choices *AccountModelChoices) {
+	if choices == nil || choices.AccountContextWindows != nil {
+		return
+	}
+	choices.AccountContextWindows = make(map[string]map[string]ModelContextWindow)
+	for accountID, models := range choices.Accounts {
+		windows := make(map[string]ModelContextWindow)
+		for _, modelID := range models {
+			modelID = normalizeModelID(modelID)
+			if window, ok := choices.ContextWindows[modelID]; ok && window.Max > 0 {
+				windows[modelID] = window
+			}
+		}
+		if len(windows) > 0 {
+			choices.AccountContextWindows[accountID] = windows
+		}
+	}
+}
+
+func rebuildContextWindows(choices *AccountModelChoices) {
+	if choices == nil {
+		return
+	}
+	choices.ContextWindows = nil
+	for accountID, windows := range choices.AccountContextWindows {
+		if _, active := choices.Accounts[accountID]; !active {
+			delete(choices.AccountContextWindows, accountID)
+			continue
+		}
+		choices.ContextWindows = MergeContextWindows(choices.ContextWindows, windows)
+	}
 }
 
 func LoadAccountModelChoices(ctx context.Context, s *store.Store) (*AccountModelChoices, error) {
@@ -72,12 +207,15 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 	if len(choices.ContextWindows) > 0 {
 		normalized.ContextWindows = make(map[string]ModelContextWindow, len(choices.ContextWindows))
 		for modelID, window := range choices.ContextWindows {
-			key := NormalizeModelID(modelID)
+			key := normalizeModelID(modelID)
 			if key == "" || window.Max == 0 {
 				continue
 			}
 			normalized.ContextWindows[key] = window
 		}
+	}
+	if len(choices.AccountContextWindows) > 0 {
+		normalized.AccountContextWindows = make(map[string]map[string]ModelContextWindow, len(choices.AccountContextWindows))
 	}
 	for accountID, models := range choices.Accounts {
 		key := strings.TrimSpace(accountID)
@@ -99,6 +237,18 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 				normalized.FeatureConfigs[key] = cfg
 			}
 		}
+		if normalized.AccountContextWindows != nil {
+			windows := make(map[string]ModelContextWindow)
+			for modelID, window := range choices.AccountContextWindows[key] {
+				modelKey := normalizeModelID(modelID)
+				if modelKey != "" && window.Max > 0 {
+					windows[modelKey] = window
+				}
+			}
+			if len(windows) > 0 {
+				normalized.AccountContextWindows[key] = windows
+			}
+		}
 	}
 	payload, err := json.Marshal(normalized)
 	if err != nil {
@@ -115,7 +265,7 @@ func AccountSupportsModelForRouting(choices *AccountModelChoices, acc *store.Acc
 	if acc == nil || acc.ID == 0 || choices == nil || len(choices.Accounts) == 0 {
 		return true
 	}
-	modelID = NormalizeModelID(modelID)
+	modelID = normalizeModelID(modelID)
 	if modelID == "" {
 		return true
 	}
@@ -124,7 +274,7 @@ func AccountSupportsModelForRouting(choices *AccountModelChoices, acc *store.Acc
 		return true
 	}
 	for _, model := range models {
-		if NormalizeModelID(model) == modelID {
+		if normalizeModelID(model) == modelID {
 			return true
 		}
 	}
@@ -164,9 +314,9 @@ func EffectiveAccountFeatureConfig(acc *store.Account, choices *AccountModelChoi
 		}
 	}
 	cfg.BaseModel = normalizeWarpModel(cfg.BaseModel)
-	cfg.CodingModel = NormalizeModelID(cfg.CodingModel)
-	cfg.CliAgentModel = NormalizeModelID(cfg.CliAgentModel)
-	cfg.ComputerUseAgentModel = NormalizeModelID(cfg.ComputerUseAgentModel)
+	cfg.CodingModel = normalizeModelID(cfg.CodingModel)
+	cfg.CliAgentModel = normalizeModelID(cfg.CliAgentModel)
+	cfg.ComputerUseAgentModel = normalizeModelID(cfg.ComputerUseAgentModel)
 	if cfg.CliAgentModel == "" {
 		cfg.CliAgentModel = identifier
 	}
@@ -178,10 +328,10 @@ func EffectiveAccountFeatureConfig(acc *store.Account, choices *AccountModelChoi
 
 func normalizeAccountFeatureConfig(cfg AccountFeatureConfig) AccountFeatureConfig {
 	return AccountFeatureConfig{
-		BaseModel:             NormalizeModelID(cfg.BaseModel),
-		CodingModel:           NormalizeModelID(cfg.CodingModel),
-		CliAgentModel:         NormalizeModelID(cfg.CliAgentModel),
-		ComputerUseAgentModel: NormalizeModelID(cfg.ComputerUseAgentModel),
+		BaseModel:             normalizeModelID(cfg.BaseModel),
+		CodingModel:           normalizeModelID(cfg.CodingModel),
+		CliAgentModel:         normalizeModelID(cfg.CliAgentModel),
+		ComputerUseAgentModel: normalizeModelID(cfg.ComputerUseAgentModel),
 	}
 }
 
@@ -196,7 +346,7 @@ func normalizeAccountModelIDs(models []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(models))
 	for _, model := range models {
-		model = NormalizeModelID(model)
+		model = normalizeModelID(model)
 		if model == "" {
 			continue
 		}
@@ -219,7 +369,7 @@ func ContextWindowsFromChoices(choices []ModelChoice) map[string]ModelContextWin
 	}
 	out := make(map[string]ModelContextWindow, len(choices))
 	for _, choice := range choices {
-		id := NormalizeModelID(choice.ID)
+		id := normalizeModelID(choice.ID)
 		if id == "" || choice.ContextWindow.Max == 0 {
 			continue
 		}
@@ -243,7 +393,7 @@ func MergeContextWindows(dst map[string]ModelContextWindow, fresh map[string]Mod
 		dst = make(map[string]ModelContextWindow, len(fresh))
 	}
 	for id, window := range fresh {
-		key := NormalizeModelID(id)
+		key := normalizeModelID(id)
 		if key == "" || window.Max == 0 {
 			continue
 		}
@@ -255,6 +405,27 @@ func MergeContextWindows(dst map[string]ModelContextWindow, fresh map[string]Mod
 	return dst
 }
 
+func ContextWindowsForAccountIDs(choices *AccountModelChoices, accountIDs map[int64]struct{}) map[string]ModelContextWindow {
+	if choices == nil || len(accountIDs) == 0 {
+		return nil
+	}
+	ensureAccountContextWindows(choices)
+	var out map[string]ModelContextWindow
+	for accountID := range accountIDs {
+		out = MergeContextWindows(out, choices.AccountContextWindows[strconv.FormatInt(accountID, 10)])
+	}
+	return out
+}
+
+func ModelContextWindowLimitForAccount(choices *AccountModelChoices, accountID int64, modelID string) uint32 {
+	if choices == nil || accountID == 0 {
+		return ModelContextWindowLimitFor(choices, modelID)
+	}
+	ensureAccountContextWindows(choices)
+	accountChoices := &AccountModelChoices{ContextWindows: choices.AccountContextWindows[strconv.FormatInt(accountID, 10)]}
+	return ModelContextWindowLimitFor(accountChoices, modelID)
+}
+
 // ModelContextWindowLimitFor resolves the input-token window to state on an
 // upstream request. It answers 0 when nothing was observed, which the request
 // builder renders as "field absent" so Warp keeps using the model's own max.
@@ -262,7 +433,7 @@ func ModelContextWindowLimitFor(choices *AccountModelChoices, modelID string) ui
 	if choices == nil || len(choices.ContextWindows) == 0 {
 		return 0
 	}
-	normalized := NormalizeModelID(modelID)
+	normalized := normalizeModelID(modelID)
 	if normalized == "" {
 		return 0
 	}

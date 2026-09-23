@@ -9,6 +9,133 @@ import (
 	"orchids-api/internal/store"
 )
 
+func TestUpsertAccountModelDiscoveries_MergesWithoutDroppingLastKnownState(t *testing.T) {
+	mini := miniredis.RunT(t)
+	defer mini.Close()
+	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "warp_upsert_test:"})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if err := SaveAccountModelChoices(ctx, s, &AccountModelChoices{
+		Accounts:       map[string][]string{"1": {"old-model"}},
+		Sources:        map[string]string{"1": "old-source"},
+		ContextWindows: map[string]ModelContextWindow{"old-model": {Max: 1000}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertAccountModelDiscoveries(ctx, s, AccountModelDiscovery{
+		AccountID: 2,
+		Source:    "feature_model_choice_all",
+		Choices: []ModelChoice{
+			{ID: "new-model", ContextWindow: ModelContextWindow{Max: 2000}},
+			{ID: "new-model", ContextWindow: ModelContextWindow{Max: 2000}},
+		},
+		FeatureConfig: AccountFeatureConfig{CliAgentModel: "cli-agent-team-auto"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModelDiscoveries() error = %v", err)
+	}
+	got, err := LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Accounts["1"]) != 1 || got.Accounts["1"][0] != "old-model" {
+		t.Fatalf("old account was dropped: %+v", got.Accounts)
+	}
+	if len(got.Accounts["2"]) != 1 || got.Accounts["2"][0] != "new-model" {
+		t.Fatalf("new account was not normalized: %+v", got.Accounts)
+	}
+	if got.ContextWindows["old-model"].Max != 1000 || got.ContextWindows["new-model"].Max != 2000 {
+		t.Fatalf("context windows were not merged: %+v", got.ContextWindows)
+	}
+	if got.FeatureConfigs["2"].CliAgentModel != "cli-agent-team-auto" {
+		t.Fatalf("feature config missing: %+v", got.FeatureConfigs)
+	}
+}
+
+func TestUpsertAccountModelDiscoveries_ReplacesAccountSnapshotAndKeepsOtherLKG(t *testing.T) {
+	mini := miniredis.RunT(t)
+	defer mini.Close()
+	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "warp_replace_test:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	if err := UpsertAccountModelDiscoveries(ctx, s,
+		AccountModelDiscovery{AccountID: 1, Source: "old", Choices: []ModelChoice{{ID: "removed", ContextWindow: ModelContextWindow{Max: 1000}}, {ID: "shared", ContextWindow: ModelContextWindow{Max: 2000}}}, FeatureConfig: AccountFeatureConfig{CodingModel: "old-coding"}},
+		AccountModelDiscovery{AccountID: 2, Source: "lkg", Choices: []ModelChoice{{ID: "shared", ContextWindow: ModelContextWindow{Max: 4000}}}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertAccountModelDiscoveries(ctx, s, AccountModelDiscovery{
+		AccountID: 1, Source: "fresh", Choices: []ModelChoice{{ID: "fresh", ContextWindow: ModelContextWindow{Max: 3000}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if models := got.Accounts["1"]; len(models) != 1 || models[0] != "fresh" {
+		t.Fatalf("account 1 models = %v, want replacement [fresh]", models)
+	}
+	if got.Sources["1"] != "fresh" || !got.FeatureConfigs["1"].IsEmpty() {
+		t.Fatalf("account 1 metadata was not replaced: sources=%v configs=%v", got.Sources, got.FeatureConfigs)
+	}
+	if _, stale := got.ContextWindows["removed"]; stale {
+		t.Fatalf("removed model retained stale context: %v", got.ContextWindows)
+	}
+	if got.ContextWindows["fresh"].Max != 3000 || got.ContextWindows["shared"].Max != 4000 {
+		t.Fatalf("context replacement lost fresh or other-account LKG: %v", got.ContextWindows)
+	}
+	if got := ModelContextWindowLimitForAccount(got, 1, "shared"); got != 0 {
+		t.Fatalf("account 1 inherited another account context = %d", got)
+	}
+	if got := ModelContextWindowLimitForAccount(got, 2, "shared"); got != 4000 {
+		t.Fatalf("account 2 context = %d, want 4000", got)
+	}
+	if models := got.Accounts["2"]; len(models) != 1 || models[0] != "shared" {
+		t.Fatalf("other account LKG changed: %v", got.Accounts)
+	}
+}
+
+func TestRemoveAccountModelChoices_RemovesOnlyTargetSnapshot(t *testing.T) {
+	mini := miniredis.RunT(t)
+	defer mini.Close()
+	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "warp_remove_test:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if err := UpsertAccountModelDiscoveries(ctx, s,
+		AccountModelDiscovery{AccountID: 1, Choices: []ModelChoice{{ID: "only-one", ContextWindow: ModelContextWindow{Max: 1000}}}},
+		AccountModelDiscovery{AccountID: 2, Choices: []ModelChoice{{ID: "only-two", ContextWindow: ModelContextWindow{Max: 2000}}}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveAccountModelChoices(ctx, s, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Accounts["1"]; ok {
+		t.Fatalf("removed account remains: %v", got.Accounts)
+	}
+	if _, ok := got.ContextWindows["only-one"]; ok {
+		t.Fatalf("removed account context remains: %v", got.ContextWindows)
+	}
+	if got.ContextWindows["only-two"].Max != 2000 {
+		t.Fatalf("other account LKG lost: %v", got.ContextWindows)
+	}
+}
+
 func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 	mini := miniredis.RunT(t)
 	defer mini.Close()

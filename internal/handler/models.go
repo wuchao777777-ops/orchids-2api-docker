@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -131,16 +132,11 @@ func externalPublicModelID(channel, internalID string) string {
 	return normalizeRequestedModelID(internalID)
 }
 
-func containsPublicModel(items []PublicModelResponse, id string) bool {
-	for _, item := range items {
-		if strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(id)) {
-			return true
-		}
-	}
-	return false
+func publicModelIDKey(id string) string {
+	return strings.ToLower(strings.TrimSpace(id))
 }
 
-func appendGrokCompatibilityAliases(items []PublicModelResponse, entry PublicModelResponse) []PublicModelResponse {
+func appendGrokCompatibilityAliases(items []PublicModelResponse, seen map[string]struct{}, entry PublicModelResponse) []PublicModelResponse {
 	if !strings.EqualFold(entry.OwnedBy, "grok") {
 		return items
 	}
@@ -156,16 +152,11 @@ func appendGrokCompatibilityAliases(items []PublicModelResponse, entry PublicMod
 		}
 	}
 	for _, alias := range aliases {
-		duplicate := false
-		for _, existing := range items {
-			if strings.EqualFold(existing.ID, alias) {
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
+		key := publicModelIDKey(alias)
+		if _, duplicate := seen[key]; duplicate {
 			continue
 		}
+		seen[key] = struct{}{}
 		copy := entry
 		copy.ID = alias
 		items = append(items, copy)
@@ -194,20 +185,27 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		apperrors.New("api_error", "Failed to fetch models: "+err.Error(), http.StatusInternalServerError).WriteResponse(w)
 		return
 	}
+	sort.SliceStable(allModels, func(i, j int) bool {
+		if allModels[i] == nil || allModels[j] == nil {
+			return allModels[j] == nil
+		}
+		if allModels[i].SortOrder != allModels[j].SortOrder {
+			return allModels[i].SortOrder < allModels[j].SortOrder
+		}
+		return strings.ToLower(allModels[i].ModelID) < strings.ToLower(allModels[j].ModelID)
+	})
 	var warpVisible map[string]struct{}
 	if filterChannel == "" || strings.EqualFold(filterChannel, "warp") {
 		warpVisible = h.visibleWarpModelSet(ctx)
 	}
 	var publicModels []PublicModelResponse
+	seenPublicModelIDs := make(map[string]struct{}, len(allModels))
 	// One read of the observed catalogs answers every row below, so the model
 	// list reports the same window the request path forwards upstream.
 	contextWindows := h.observedModelContextWindows(ctx)
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
-			continue
-		}
-		if isWarpVirtualModel(m.ModelID) {
 			continue
 		}
 		if strings.EqualFold(mChannel, "warp") && warpVisible != nil {
@@ -226,9 +224,11 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		}
 		// One public entry per external ID: routes that differ only by plane are
 		// the same public model (the admin plane lists them grouped).
-		if containsPublicModel(publicModels, publicID) {
+		publicIDKey := publicModelIDKey(publicID)
+		if _, duplicate := seenPublicModelIDs[publicIDKey]; duplicate {
 			continue
 		}
+		seenPublicModelIDs[publicIDKey] = struct{}{}
 
 		entry := publicModelResponse(publicID, mChannel, m.CreatedAt)
 		entry.Capabilities = m.Capabilities
@@ -244,7 +244,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		entry.MaxInputTokens = input
 		entry.MaxOutputTokens = output
 		publicModels = append(publicModels, entry)
-		publicModels = appendGrokCompatibilityAliases(publicModels, entry)
+		publicModels = appendGrokCompatibilityAliases(publicModels, seenPublicModelIDs, entry)
 	}
 
 	// Codex-family clients ask for a richer catalog that carries the context
@@ -289,10 +289,6 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 
 	if id == "" {
 		apperrors.New("invalid_request_error", "Model ID required", http.StatusBadRequest).WriteResponse(w)
-		return
-	}
-	if isWarpVirtualModel(id) {
-		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}
 	if !middleware.APIKeyAllowsModel(r.Context(), id) {

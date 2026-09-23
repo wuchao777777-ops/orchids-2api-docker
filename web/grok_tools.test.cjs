@@ -5,10 +5,19 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, 'static/js/grok-tools.js'), 'utf8');
+const styles = fs.readFileSync(path.join(__dirname, 'static/css/grok-tools.css'), 'utf8');
 const render = source.slice(source.indexOf('  function renderChatSessions()'), source.indexOf('  function syncChatModelUI()'));
 
+test('chat model picker constrains long labels and dropdowns to the viewport', () => {
+  assert.match(styles, /\.model-chip\s*\{[^}]*max-width:\s*min\(360px, 100%\)/s);
+  assert.match(styles, /\.model-label\s*\{[^}]*text-overflow:\s*ellipsis/s);
+  assert.match(styles, /\.model-dropdown\s*\{[^}]*max-width:\s*min\(420px, calc\(100vw - 32px\)\)/s);
+  assert.match(styles, /\.model-dropdown\s*\{[^}]*overflow-y:\s*auto/s);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.model-dropdown\s*\{[^}]*position:\s*fixed[^}]*left:\s*max\(12px/s);
+});
+
 test('legacy reasoning migrates all blocks without dropping answers or history', () => {
-  const helpers = source.slice(source.indexOf('  function trimChatSessionMessages('), source.indexOf('  function saveChatSessions('));
+  const helpers = source.slice(source.indexOf('  function normalizeAssistantMessage('), source.indexOf('  function saveChatSessions('));
   const ctx = vm.createContext({}); vm.runInContext(helpers, ctx);
   const migrated = ctx.normalizeAssistantMessage({role:'assistant',content:'<think>one</think>A<think>two</think>B'});
   assert.equal(migrated.content, 'AB'); assert.equal(migrated.reasoning, 'one\n\ntwo');
@@ -27,8 +36,6 @@ test('legacy reasoning migrates all blocks without dropping answers or history',
   assert.equal(lead.content,'ANS'); assert.equal(lead.reasoning,'a');
   const spaced = ctx.normalizeAssistantMessage({role:'assistant',content:'  <think>a</think>ANS'});
   assert.equal(spaced.content,'ANS'); assert.equal(spaced.reasoning,'a');
-  const session = {messages:Array.from({length:100}, (_,i)=>({role:i%2?'assistant':'user',content:String(i)}))};
-  ctx.trimChatSessionMessages(session); assert.equal(session.messages.length,100);
 });
 
 test('stream stores interleaved reasoning and partial failure exactly once', async () => {
