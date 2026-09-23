@@ -22,6 +22,7 @@ import (
 	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/auth"
+	"orchids-api/internal/channel"
 	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
@@ -1110,12 +1111,7 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 }
 
 func isSupportedAccountType(accountType string) bool {
-	switch strings.ToLower(strings.TrimSpace(accountType)) {
-	case "warp", "puter", "grok", "workbuddy", "qoder", "cline":
-		return true
-	default:
-		return false
-	}
+	return channel.IsSupported(accountType)
 }
 
 // validateAccountType rejects an account whose type is missing or unknown.
@@ -3057,14 +3053,27 @@ func (a *API) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(m)
 
 	case http.MethodPut:
-		var m store.Model
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		var patch store.Model
+		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		m.ID = id
-
-		if err := a.store.UpdateModel(r.Context(), &m); err != nil {
+		// Admin edits own presentation and enablement fields only. Discovery owns
+		// verification, provider, upstream mapping, capabilities and provenance;
+		// replacing the whole row here used to make a verified Grok model vanish
+		// from the tools picker immediately after renaming it.
+		m, err := a.store.GetModel(r.Context(), id)
+		if err != nil {
+			http.Error(w, "Model not found", http.StatusNotFound)
+			return
+		}
+		m.Channel = patch.Channel
+		m.ModelID = patch.ModelID
+		m.Name = patch.Name
+		m.Status = patch.Status
+		m.IsDefault = patch.IsDefault
+		m.SortOrder = patch.SortOrder
+		if err := a.store.UpdateModel(r.Context(), m); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

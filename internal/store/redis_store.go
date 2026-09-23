@@ -289,9 +289,9 @@ var (
 	`)
 	reconcileDiscoveredModelsScript = redis.NewScript(`
 		local row_prefix, channel = ARGV[1], ARGV[2]
-		local prune, incoming = ARGV[3] == "1", cjson.decode(ARGV[4])
+		local prune, incoming, provider_scope = ARGV[3] == "1", cjson.decode(ARGV[4]), string.lower(tostring(ARGV[5] or ""))
 		local wanted, existing = {}, {}
-		local result = {added = {}, updated = {}, deleted = {}, protected = {}}
+		local added, updated, deleted, protected = {}, {}, {}, {}
 		for _, id in ipairs(redis.call("SMEMBERS", KEYS[1])) do
 			local raw = redis.call("GET", row_prefix .. id)
 			if raw then
@@ -308,7 +308,10 @@ var (
 			local current = existing[model_id]
 			if current then
 				local origin = string.lower(tostring(current.row.origin or ""))
-				if origin == "discovery" then
+				if (provider_scope ~= "" and prune) or origin == "discovery" then
+					-- An authoritative scoped catalog owns every row in its plane,
+					-- including older admin/catalog rows. Non-pruning refreshes retain
+					-- the operator-field protection below.
 					row.id, row.created_at = current.id, current.row.created_at or row.created_at
 				else
 					-- Manual/config/legacy rows are never replaced or pruned. A matching
@@ -321,11 +324,11 @@ var (
 					if (not row.upstream_model or tostring(row.upstream_model) == "") and current_incoming.upstream_model then row.upstream_model = current_incoming.upstream_model end
 					if current_incoming.billing_tier ~= nil then row.billing_tier = current_incoming.billing_tier end
 					if current_incoming.billing_source ~= nil then row.billing_source = current_incoming.billing_source end
-					table.insert(result.protected, model_id)
+					table.insert(protected, model_id)
 				end
 				redis.call("SET", row_prefix .. current.id, cjson.encode(row))
 				redis.call("HSET", KEYS[4], channel .. "|" .. model_id, current.id)
-				table.insert(result.updated, model_id)
+				table.insert(updated, model_id)
 			else
 				local id = tostring(redis.call("INCR", KEYS[2]))
 				row.id = id
@@ -333,25 +336,26 @@ var (
 				redis.call("SADD", KEYS[1], id)
 				redis.call("HSETNX", KEYS[3], model_id, id)
 				redis.call("HSET", KEYS[4], channel .. "|" .. model_id, id)
-				table.insert(result.added, model_id)
+				table.insert(added, model_id)
 			end
 		end
 		if prune then
 			for model_id, current in pairs(existing) do
-				if not wanted[model_id] then
+				local current_provider = string.lower(tostring(current.row.provider or ""))
+				if not wanted[model_id] and (provider_scope == "" or current_provider == provider_scope) then
 					local origin = string.lower(tostring(current.row.origin or ""))
-					if origin == "discovery" then
+					if (provider_scope ~= "" and prune) or origin == "discovery" then
 						redis.call("DEL", row_prefix .. current.id)
 						redis.call("SREM", KEYS[1], current.id)
 						if redis.call("HGET", KEYS[3], model_id) == current.id then redis.call("HDEL", KEYS[3], model_id) end
 						local index_key = channel .. "|" .. model_id
 						if redis.call("HGET", KEYS[4], index_key) == current.id then redis.call("HDEL", KEYS[4], index_key) end
-						table.insert(result.deleted, model_id)
-					elseif origin == "" or origin == "manual" then table.insert(result.protected, model_id) end
+						table.insert(deleted, model_id)
+					elseif origin == "" or origin == "manual" then table.insert(protected, model_id) end
 				end
 			end
 		end
-		return cjson.encode(result)
+		return cjson.encode({added = added, updated = updated, deleted = deleted, protected = protected})
 	`)
 )
 
@@ -2358,9 +2362,9 @@ func (s *redisStore) ReconcileDiscoveredModels(ctx context.Context, channel stri
 	if options.Prune {
 		prune = "1"
 	}
-	raw, err := reconcileDiscoveredModelsScript.Run(ctx, s.client, []string{
+	text, err := reconcileDiscoveredModelsScript.Run(ctx, s.client, []string{
 		s.modelsIDsKey(), s.modelsNextIDKey(), s.modelsModelIDMapKey(), s.modelsChannelModelIDMapKey(),
-	}, s.prefix+"models:id:", channelKey, prune, payload).Text()
+	}, s.prefix+"models:id:", channelKey, prune, payload, strings.ToLower(strings.TrimSpace(options.ProviderScope))).Text()
 	if err != nil {
 		return nil, err
 	}
@@ -2370,8 +2374,24 @@ func (s *redisStore) ReconcileDiscoveredModels(ctx context.Context, channel stri
 		Deleted   []string `json:"deleted"`
 		Protected []string `json:"protected"`
 	}
-	if err := json.Unmarshal([]byte(raw), &applied); err != nil {
-		return nil, fmt.Errorf("decode model reconciliation result: %w", err)
+	if err := json.Unmarshal([]byte(text), &applied); err != nil {
+		// Redis Lua represents an empty array as an empty object. Decode through
+		// RawMessage so production Redis and miniredis have one stable contract.
+		var raw map[string]json.RawMessage
+		if rawErr := json.Unmarshal([]byte(text), &raw); rawErr != nil {
+			return nil, fmt.Errorf("decode model reconciliation result: %w", err)
+		}
+		decodeIDs := func(key string) []string {
+			value := raw[key]
+			if len(value) == 0 || string(value) == "{}" || string(value) == "null" {
+				return nil
+			}
+			var ids []string
+			_ = json.Unmarshal(value, &ids)
+			return ids
+		}
+		applied.Added, applied.Updated = decodeIDs("added"), decodeIDs("updated")
+		applied.Deleted, applied.Protected = decodeIDs("deleted"), decodeIDs("protected")
 	}
 	for _, ids := range [][]string{applied.Added, applied.Updated, applied.Deleted, applied.Protected} {
 		sort.Strings(ids)
