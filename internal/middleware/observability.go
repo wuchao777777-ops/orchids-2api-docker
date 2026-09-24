@@ -68,7 +68,7 @@ func (l observedAuditLogger) Log(ctx context.Context, e audit.Event) {
 				box.account = e.AccountID
 			}
 			// Native Responses reports its usage on the completed upstream attempt.
-			if e.InputTokens > 0 || e.OutputTokens > 0 {
+			if e.UsageSource == audit.UsageSourceUpstream || e.InputTokens > 0 || e.OutputTokens > 0 {
 				box.input += int64(e.InputTokens)
 				box.cached += int64(e.CachedInputTokens)
 				box.output += int64(e.OutputTokens)
@@ -81,7 +81,7 @@ func (l observedAuditLogger) Log(ctx context.Context, e audit.Event) {
 			box.finalEvent, box.journal = &copy, l.next
 			deferJournal = true
 			box.providerReached = true
-			if e.InputTokens > 0 || e.OutputTokens > 0 {
+			if e.UsageSource == audit.UsageSourceUpstream || e.InputTokens > 0 || e.OutputTokens > 0 {
 				box.input = int64(e.InputTokens)
 				box.cached = int64(e.CachedInputTokens)
 				box.output = int64(e.OutputTokens)
@@ -160,10 +160,17 @@ type diagnosticWriter struct {
 	body    bytes.Buffer
 }
 
+const maxDiagnosticResponseBytes = 64 << 10
+
 func (w *diagnosticWriter) Write(p []byte) (int, error) {
 	n, err := w.TracedResponseWriter.Write(p)
-	if n > 0 {
-		_, _ = w.body.Write(p[:n])
+	if n > 0 && w.body.Len() < maxDiagnosticResponseBytes {
+		captured := n
+		remaining := maxDiagnosticResponseBytes - w.body.Len()
+		if captured > remaining {
+			captured = remaining
+		}
+		_, _ = w.body.Write(p[:captured])
 	}
 	return n, err
 }

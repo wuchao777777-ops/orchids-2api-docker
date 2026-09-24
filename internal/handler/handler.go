@@ -76,10 +76,14 @@ type Handler struct {
 	warpModelRefreshes sync.Map
 	// Completed API requests update usage asynchronously. Coalescing by account
 	// keeps this path at one worker instead of spawning a goroutine per request.
-	statsOnce    sync.Once
-	statsMu      sync.Mutex
-	statsPending map[int64]accountStatsDelta
-	statsWake    chan struct{}
+	statsOnce      sync.Once
+	statsCloseOnce sync.Once
+	statsMu        sync.Mutex
+	statsPending   map[int64]accountStatsDelta
+	statsWake      chan struct{}
+	statsStop      chan struct{}
+	statsDone      chan struct{}
+	statsClosed    bool
 }
 
 type UpstreamClient interface {
@@ -867,9 +871,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	allowedToolNames := []string(nil)
 	allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
 	sh.setAllowedToolNames(allowedToolNames)
+	if preSelectWarpRequest || preSelectQoderRequest {
+		sh.setSurfaceToolRejects(true)
+	}
 	if preSelectWarpRequest {
 		sh.setStrictToolAllowlist(true)
-		sh.setSurfaceToolRejects(true)
 	}
 	if len(req.Tools) > 0 {
 		sh.setClientTools(req.Tools)
@@ -1249,12 +1255,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			if retryDelay > 0 {
-				delay := computeRetryDelay(retryDelay, attempt+1, errClass.Category)
-				if delay > 0 && !util.SleepWithContext(r.Context(), delay) {
-					sh.finishResponse("end_turn")
-					return
-				}
+			retryDelayForAttempt := computeRetryDelay(retryDelay, attempt+1, errClass.Category)
+			if hinted := upstreamRetryAfter(err); hinted > retryDelayForAttempt {
+				retryDelayForAttempt = hinted
+			}
+			if retryDelayForAttempt > 0 && !util.SleepWithContext(r.Context(), retryDelayForAttempt) {
+				sh.finishResponse("end_turn")
+				return
 			}
 			attempt++
 		}
@@ -1266,7 +1273,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if !sh.hasReturn {
 		sh.finishResponse("end_turn")
 	}
-	if !isStream {
+	if !isStream && !sh.requestFailed {
 		stopReason := sh.finalStopReason
 		if stopReason == "" {
 			stopReason = "end_turn"
@@ -1326,9 +1333,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	}
 
-	// Sync state and update stats using helpers
+	// Sync state and update stats using helpers. A failed request with no
+	// provider-reported usage must not turn the local input estimate into spend;
+	// still count the request itself for operational history.
 	h.syncWarpState(currentAccount, apiClient)
-	h.updateAccountStats(currentAccount, sh.inputTokens, sh.outputTokens)
+	statsInput, statsOutput := sh.inputTokens, sh.outputTokens
+	if sh.requestFailed && !sh.useUpstreamUsage {
+		statsInput, statsOutput = 0, 0
+	}
+	h.updateAccountStats(currentAccount, statsInput, statsOutput)
 
 	// Audit log
 	if h.auditLogger != nil {
@@ -1341,40 +1354,47 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		status := "success"
-		if sh.finalStopReason == "" && !sh.hasReturn {
+		if sh.requestFailed || (sh.finalStopReason == "" && !sh.hasReturn) {
 			status = "error"
 		}
 		usageSource := audit.UsageSourceEstimated
 		if sh.useUpstreamUsage {
 			usageSource = audit.UsageSourceUpstream
 		}
+		metadata := map[string]interface{}{
+			"stream": isStream,
+		}
+		for key, value := range sh.usageMetadata {
+			metadata[key] = value
+		}
 		event := audit.Event{
 			// One journal schema for every channel: the log centre must be able to
 			// compare a Grok request with a Warp request on the same fields.
-			Kind:      audit.KindRequest,
-			RequestID: middleware.GetRequestID(r.Context()),
-			Action:    "chat_request",
-			APIKeyID:  middleware.APIKeyID(r.Context()),
-			AccountID: accountID,
-			Model:     req.Model,
-			Channel:   channel,
-			ClientIP:  r.RemoteAddr,
-			UserAgent: r.UserAgent(),
-			Duration:  time.Since(startTime).Milliseconds(),
-			Status:    status,
-			Metadata: map[string]interface{}{
-				"stream": isStream,
-			},
-			InputTokens:  sh.inputTokens,
-			OutputTokens: sh.outputTokens,
-			TotalTokens:  sh.inputTokens + sh.outputTokens,
-			UsageSource:  usageSource,
+			Kind:              audit.KindRequest,
+			RequestID:         middleware.GetRequestID(r.Context()),
+			Action:            "chat_request",
+			APIKeyID:          middleware.APIKeyID(r.Context()),
+			AccountID:         accountID,
+			Model:             req.Model,
+			Channel:           channel,
+			ClientIP:          r.RemoteAddr,
+			UserAgent:         r.UserAgent(),
+			Duration:          time.Since(startTime).Milliseconds(),
+			Status:            status,
+			Metadata:          metadata,
+			InputTokens:       sh.inputTokens,
+			CachedInputTokens: sh.cachedInputTokens,
+			CacheWriteTokens:  sh.cacheWriteTokens,
+			ReasoningTokens:   sh.reasoningTokens,
+			OutputTokens:      sh.outputTokens,
+			TotalTokens:       sh.inputTokens + sh.outputTokens,
+			UsageSource:       usageSource,
 		}
 		// Settle the reservation taken before the request and price the same
 		// event, so the journal answers "what did this cost" and the key's
 		// balance moves exactly once. An estimated row is never charged.
 		if result, priced := middleware.SettleAPIKeyBilling(
-			r.Context(), nil, req.Model, usageSource, int64(sh.inputTokens), 0, int64(sh.outputTokens),
+			r.Context(), nil, req.Model, usageSource, int64(sh.inputTokens), int64(sh.cachedInputTokens), int64(sh.outputTokens),
 		); priced {
 			event.CostInUSDTicks = result.CostInUSDTicks
 			event.PricingModel = result.Model

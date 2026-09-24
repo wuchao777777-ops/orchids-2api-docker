@@ -296,6 +296,8 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 
 	sawFinish := false
 	var streamErr error
+	var rateLimitText strings.Builder
+	checkingRateLimitText := true
 
 	readErr := readSSE(body, func(frame sseFrame) bool {
 		if strings.EqualFold(strings.TrimSpace(frame.event), "finish") {
@@ -320,10 +322,8 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 
 		var envelope streamEnvelope
 		if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
-			// A non-JSON data line is a protocol warning, not a transport
-			// failure; keep consuming so a single bad frame does not discard an
-			// otherwise good answer.
-			return true
+			streamErr = fmt.Errorf("qoder stream protocol error: invalid envelope: %w", err)
+			return false
 		}
 		if envelope.StatusCodeValue != 0 && envelope.StatusCodeValue != http.StatusOK {
 			var failure struct {
@@ -358,7 +358,7 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			case envelope.StatusCodeValue == http.StatusUnauthorized || envelope.StatusCodeValue == http.StatusForbidden:
 				streamErr = fmt.Errorf("%w: %s", errUpstreamUnauthorized, detail)
 			default:
-				streamErr = fmt.Errorf("qoder upstream error: %s", detail)
+				streamErr = fmt.Errorf("qoder upstream error: status=%d, %s", envelope.StatusCodeValue, detail)
 			}
 			return false
 		}
@@ -372,7 +372,8 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(envelope.Body), &chunk); err != nil {
-			return true
+			streamErr = fmt.Errorf("qoder stream protocol error: invalid body: %w", err)
+			return false
 		}
 		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
 			if stringOfCode(chunk.Error.Code) == busyCode {
@@ -410,12 +411,23 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			}
 		}
 		if delta.Content != "" {
-			// Some Qoder plans return account-pool throttling as a successful
-			// HTTP 200 SSE text chunk. Treat it as a model-scoped failure before
-			// forwarding the text, otherwise the gateway reports a false success.
-			if isModelRateLimitText(delta.Content) {
-				streamErr = fmt.Errorf("%w: %s", ErrModelRateLimited, strings.TrimSpace(delta.Content))
-				return false
+			// Buffer the beginning of text long enough to recognize Qoder's
+			// account-pool throttle even when the sentinel spans SSE deltas. Once
+			// the prefix can no longer become that message, release it normally.
+			if checkingRateLimitText {
+				rateLimitText.WriteString(delta.Content)
+				candidate := rateLimitText.String()
+				if isModelRateLimitText(candidate) {
+					streamErr = fmt.Errorf("%w: %s", ErrModelRateLimited, strings.TrimSpace(candidate))
+					return false
+				}
+				if !isPotentialModelRateLimitText(candidate) {
+					checkingRateLimitText = false
+					delta.Content = candidate
+					rateLimitText.Reset()
+				} else {
+					return true
+				}
 			}
 			if !bufferingToolText || sawNativeTools {
 				emitText(delta.Content)
@@ -462,6 +474,9 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 	if streamErr != nil {
 		return result, streamErr
 	}
+	if checkingRateLimitText && rateLimitText.Len() > 0 {
+		emitText(rateLimitText.String())
+	}
 	if toolsEnabled && !sawNativeTools && pendingText.Len() > 0 {
 		if parsed := parseTextToolCalls(pendingText.String()); len(parsed) > 0 {
 			pendingText.Reset()
@@ -486,6 +501,24 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 // It is intentionally distinct from a credential failure: other models on the
 // same account remain usable while this model cools down.
 var ErrModelRateLimited = fmt.Errorf("qoder model rate limited")
+
+func isPotentialModelRateLimitText(text string) bool {
+	candidate := strings.ToLower(strings.TrimSpace(text))
+	if candidate == "" {
+		return true
+	}
+	for _, sentinel := range []string{
+		"the available upstream accounts are rate-limited",
+		"the available upstream accounts are rate limited",
+		"available upstream accounts are rate-limited",
+		"available upstream accounts are rate limited",
+	} {
+		if strings.HasPrefix(sentinel, candidate) || strings.Contains(candidate, sentinel) {
+			return true
+		}
+	}
+	return false
+}
 
 func isModelRateLimitText(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))

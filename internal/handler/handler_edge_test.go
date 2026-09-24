@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +11,9 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/goccy/go-json"
 
+	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/loadbalancer"
@@ -20,6 +21,14 @@ import (
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/warp"
 )
+
+type captureAuditLogger struct {
+	events []audit.Event
+}
+
+func (l *captureAuditLogger) Log(_ context.Context, event audit.Event) {
+	l.events = append(l.events, event)
+}
 
 type mockUpstreamEdge struct {
 	events []upstream.SSEMessage
@@ -407,6 +416,8 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	h := NewWithLoadBalancer(cfg, nil)
 	upstreamClient := &errorUpstreamEdge{err: errors.New("puter API error: message=Model not found, please try another model")}
 	h.client = upstreamClient
+	auditLog := &captureAuditLogger{}
+	h.SetAuditLogger(auditLog)
 
 	payload := map[string]any{
 		"model":    "claude-3-5-sonnet",
@@ -438,5 +449,15 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	}
 	if strings.Contains(out, "retries exhausted") {
 		t.Fatalf("did not expect retry exhausted wrapper for non-retriable client error, got: %s", out)
+	}
+	var response map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("error response must contain exactly one JSON document, got %q: %v", out, err)
+	}
+	if _, exists := response["choices"]; exists {
+		t.Fatalf("error response must not append a synthetic completion: %s", out)
+	}
+	if len(auditLog.events) != 1 || auditLog.events[0].Status != "error" {
+		t.Fatalf("audit events = %#v, want one error request", auditLog.events)
 	}
 }

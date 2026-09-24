@@ -156,6 +156,20 @@ func TestConsumeStreamReportsErrorEnvelope(t *testing.T) {
 // TestConsumeStreamClassifiesBusyCode proves business code 10605 is reported as
 // a queue refusal under a 401, because refreshing the token cannot fix it and
 // the retry policy differs.
+func TestConsumeStreamClassifiesSplitTextRateLimit(t *testing.T) {
+	t.Parallel()
+	body := envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"The available upstream accounts are rate-"}}]}`) +
+		envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"limited. Retry later"},"finish_reason":"stop"}]}`) +
+		"event:finish\ndata: {}\n\n"
+	events, _, err := collectStream(t, body)
+	if !errors.Is(err, ErrModelRateLimited) {
+		t.Fatalf("error = %v, want ErrModelRateLimited", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("rate-limit sentinel leaked as assistant output: %+v", events)
+	}
+}
+
 func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
 	t.Parallel()
 
@@ -171,6 +185,15 @@ func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
 		if errors.Is(err, errUpstreamUnauthorized) {
 			t.Fatalf("busy refusal was misclassified as unauthorized: %v", err)
 		}
+	}
+}
+
+func TestConsumeStreamPreservesEnvelopeStatusForClassification(t *testing.T) {
+	t.Parallel()
+	body := "data: " + `{"statusCodeValue":400,"body":"{\"message\":\"invalid tool schema\"}"}` + "\n\n"
+	_, _, err := collectStream(t, body)
+	if err == nil || !strings.Contains(err.Error(), "status=400") {
+		t.Fatalf("error = %v, want explicit status=400", err)
 	}
 }
 
@@ -250,21 +273,19 @@ func TestConsumeStreamClassifiesUnauthorizedEnvelope(t *testing.T) {
 	}
 }
 
-// TestConsumeStreamIgnoresMalformedFrames proves one bad frame does not discard
-// an otherwise good answer.
-func TestConsumeStreamIgnoresMalformedFrames(t *testing.T) {
+// TestConsumeStreamRejectsMalformedFrames proves corrupt stream data cannot be
+// silently omitted from an otherwise successful answer.
+func TestConsumeStreamRejectsMalformedFrames(t *testing.T) {
 	t.Parallel()
 
-	body := "data: not-json\n\n" +
-		envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"kept"},"finish_reason":"stop"}]}`) +
+	body := envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"before"}}]}`) +
+		"data: not-json\n\n" +
+		envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"after"},"finish_reason":"stop"}]}`) +
 		"event:finish\ndata: {}\n\n"
 
-	events, _, err := collectStream(t, body)
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
-	if len(events) != 1 || events[0].Event["delta"] != "kept" {
-		t.Fatalf("events = %+v, want the well-formed delta only", events)
+	_, _, err := collectStream(t, body)
+	if err == nil || !strings.Contains(err.Error(), "protocol error") {
+		t.Fatalf("consumeStream() error = %v, want protocol error", err)
 	}
 }
 
