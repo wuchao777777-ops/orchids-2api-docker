@@ -179,7 +179,7 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 	case "403", "404":
 		cooldown := CooldownBlocked
 		if isGrok(acc) {
-			// Grok answers 403 for Cloudflare challenges, which clear quickly.
+			// Grok answers 403 for transient upstream denials, which clear quickly.
 			cooldown = CooldownBlockedGro
 		}
 		return Verdict{
@@ -248,6 +248,7 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 // the credential or the account's quota.
 func isModelScopedFailure(lower string) bool {
 	return strings.Contains(lower, "code=6004") ||
+		strings.Contains(lower, "qoder gateway is busy") ||
 		strings.Contains(lower, "qoder agent limit reached") ||
 		strings.Contains(lower, "qoder model rate limited") ||
 		strings.Contains(lower, "available upstream accounts are rate-limited") ||
