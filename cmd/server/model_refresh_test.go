@@ -433,12 +433,6 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	}
 }
 
-func TestCanonicalGrokRefreshModelIDKeepsBuildVideoProvider(t *testing.T) {
-	if got := canonicalGrokRefreshModelID("grok-imagine-video-1.5"); got != "build/grok-imagine-video-1.5" {
-		t.Fatalf("canonicalGrokRefreshModelID()=%q", got)
-	}
-}
-
 func TestDiscoverGrokModelsWithoutUpstreamCatalogPublishesNothing(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
@@ -1013,34 +1007,6 @@ func TestApplyModelRefresh_MarksObservedExistingRowsVerified(t *testing.T) {
 	}
 	if stored.Origin != "discovery" {
 		t.Fatalf("origin=%q, want authoritative upstream ownership", stored.Origin)
-	}
-}
-
-func TestApplyGrokRefreshPrunesWithdrawnBuildRowsButKeepsOtherPlanes(t *testing.T) {
-	s, cleanup := setupModelRefreshStore(t)
-	defer cleanup()
-	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Grok")
-	for _, model := range []*store.Model{
-		{Channel: "Grok", ModelID: "withdrawn", Name: "withdrawn", Status: store.ModelStatusAvailable, Verified: true, Provider: "build", Origin: "discovery"},
-		{Channel: "Grok", ModelID: "web-media", Name: "web-media", Status: store.ModelStatusAvailable, Verified: true, Provider: "web", Origin: "discovery"},
-		{Channel: "Grok", ModelID: "console-media", Name: "console-media", Status: store.ModelStatusAvailable, Verified: true, Provider: "console", Origin: "discovery"},
-	} {
-		if err := s.CreateModel(ctx, model); err != nil {
-			t.Fatal(err)
-		}
-	}
-	result, err := applyModelRefreshWithPrune(ctx, s, "Grok", "grok_build_models", []discoveredModel{{ID: "grok-4.7", Name: "Grok 4.7", Verified: true}}, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Deleted != 1 || len(result.DeletedModelIDs) != 1 || result.DeletedModelIDs[0] != "withdrawn" {
-		t.Fatalf("result=%+v", result)
-	}
-	for _, id := range []string{"web-media", "console-media", "grok-4.7"} {
-		if _, err := s.GetModelByChannelAndModelID(ctx, "Grok", id); err != nil {
-			t.Fatalf("%s missing: %v", id, err)
-		}
 	}
 }
 

@@ -25,7 +25,7 @@ import (
 
 // Build CLI (cli-chat-proxy.grok.com) upstream. It speaks the standard OpenAI
 // Responses protocol authenticated with a Bearer OAuth access token, unlike the
-// app-chat website protocol (SSO cookie) or console.x.ai (SSO + DPoP).
+// retired website or developer-console protocols.
 
 const (
 	defaultCLIBaseURL = "https://cli-chat-proxy.grok.com/v1"
@@ -191,14 +191,11 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 			recordUpstreamChallenge("cloudflare")
 			if c.egress != nil && c.egress.Enabled() && !challengeRetried {
 				challengeRetried = true
-				c.egress.InvalidateAffinityClearance("cli", cliEgressAffinity(acc))
 				continue
 			}
 			if c.egress != nil && c.egress.Enabled() {
 				c.egress.FeedbackAffinityOutcome("cli", cliEgressAffinity(acc), egress.OutcomeChallenge)
 			}
-		} else if kind == UpstreamErrorDPoPChallenge {
-			recordUpstreamChallenge("dpop")
 		} else if kind == UpstreamErrorGenericForbidden {
 			recordGenericForbidden()
 		}
@@ -256,10 +253,6 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 	}
 	path = "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
 	headers := http.Header{"Content-Type": {"application/json"}}
-	if strings.HasPrefix(path, "/videos/") {
-		model, _ := payload["model"].(string)
-		headers.Set("x-grok-model-override", firstNonEmpty(strings.TrimSpace(model), "grok-imagine-video-1.5"))
-	}
 	if session, _ := payload["prompt_cache_key"].(string); strings.TrimSpace(session) != "" {
 		// The Build gateway expects session identity as a UUID. A raw sha256 hex
 		// string is not one: the upstream then treats the session as unstable and
@@ -272,8 +265,9 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 	// Without these the upstream sees an anonymous caller, which is both a
 	// weaker identity and the reason session affinity behaved differently than
 	// through grok2api.
-	headers.Set("x-authenticateresponse", "true")
+	headers.Set("x-authenticateresponse", "authenticate-response")
 	headers.Set("x-grok-agent-id", buildClientIdentifier(c))
+	headers.Set("x-grok-model-override", strings.TrimSpace(fmt.Sprint(payload["model"])))
 	if version := strings.TrimSpace(c.clientVersion()); version != "" {
 		headers.Set("x-grok-client-version", version)
 	}
@@ -332,7 +326,10 @@ func buildTraceparent(requestID string) string {
 
 // buildClientIdentifier is the agent identity the official Build client sends.
 func buildClientIdentifier(c *CLIClient) string {
-	return "grok-shell"
+	if c != nil {
+		return buildSessionUUID("agent:" + c.clientIdentifier())
+	}
+	return buildSessionUUID("agent:grok-shell")
 }
 
 // doFallbackRequest sends a request to the direct xAI API with the same
@@ -373,9 +370,6 @@ func (c *CLIClient) doResponseResource(ctx context.Context, acc *store.Account, 
 		endpoint += "?" + rawQuery
 	}
 	headers := http.Header{}
-	if strings.HasPrefix(path, "/videos/") {
-		headers.Set("x-grok-model-override", "grok-imagine-video-1.5")
-	}
 	for attempt := 0; ; attempt++ {
 		resp, err := c.request(ctx, acc, method, endpoint, nil, headers)
 		if err != nil {
@@ -421,7 +415,6 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 		if kind == UpstreamErrorCloudflareChallenge && c.egress != nil && c.egress.Enabled() && !challengeRetried {
 			challengeRetried = true
 			recordUpstreamChallenge("cloudflare")
-			c.egress.InvalidateAffinityClearance("cli", cliEgressAffinity(acc))
 			continue
 		}
 		return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw)
@@ -621,7 +614,7 @@ func (c *CLIClient) doCLIRequest(ctx context.Context, acc *store.Account, req *h
 		return nil, fmt.Errorf("grok cli egress unavailable: %w", err)
 	}
 	// Build is a CLI identity. Its egress lease intentionally carries no
-	// browser UA or grok.com clearance, so never overwrite/leak either here.
+	// browser identity or clearance state, so never attach either here.
 	resp, err := lease.Do(req)
 	if err != nil {
 		c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeTransportError)

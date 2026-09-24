@@ -55,10 +55,10 @@ func TestChatRequestFromResponses_KeepsHostedSearchTools(t *testing.T) {
 	}
 }
 
-// The console plane runs the search server-side, so the tool has to appear in
-// the payload that is posted to console.x.ai — that is the only place the model
-// can learn that browsing was requested.
-func TestConsolePayloadForResponsesBridge_AdvertisesHostedSearchTools(t *testing.T) {
+// The Build plane runs hosted search server-side, so the tool has to appear in
+// the payload posted upstream — that is the only place the model can learn that
+// browsing was requested.
+func TestBuildPayloadForResponsesBridge_AdvertisesHostedSearchTools(t *testing.T) {
 	chat, err := chatRequestFromResponses(responsesSearchRequest())
 	if err != nil {
 		t.Fatalf("chatRequestFromResponses() error = %v", err)
@@ -90,6 +90,39 @@ func TestValidateWebToolDefinitions_ToleratesHostedTools(t *testing.T) {
 	}
 	if err := validateWebToolDefinitions(tools); err != nil {
 		t.Fatalf("validateWebToolDefinitions() error = %v", err)
+	}
+}
+
+func TestNormalizeBuildResponsesPayloadCompletesWebSearchRoute(t *testing.T) {
+	payload := map[string]interface{}{
+		"model": "grok-4.7",
+		"input": "search",
+		"tools": []interface{}{map[string]interface{}{"type": "web_search"}},
+	}
+	if err := normalizeBuildResponsesPayload(payload); err != nil {
+		t.Fatal(err)
+	}
+	declared := map[string]int{}
+	for _, tool := range interfaceMaps(payload["tools"]) {
+		declared[parseLooseStringAny(tool["type"])]++
+	}
+	if declared["web_search"] != 1 || declared["x_search"] != 1 {
+		t.Fatalf("Build hosted-search route = %#v", payload["tools"])
+	}
+}
+
+func TestNormalizeBuildResponsesPayloadPreservesExplicitXSearch(t *testing.T) {
+	payload := map[string]interface{}{
+		"model": "grok-4.7",
+		"input": "search X",
+		"tools": []interface{}{map[string]interface{}{"type": "x_search"}},
+	}
+	if err := normalizeBuildResponsesPayload(payload); err != nil {
+		t.Fatal(err)
+	}
+	tools := interfaceMaps(payload["tools"])
+	if len(tools) != 1 || parseLooseStringAny(tools[0]["type"]) != "x_search" {
+		t.Fatalf("explicit x_search changed: %#v", payload["tools"])
 	}
 }
 

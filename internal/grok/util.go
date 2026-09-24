@@ -297,58 +297,10 @@ func parseGrokJSONText(raw string) interface{} {
 	return parsed
 }
 
-func normalizeGrokAssetURL(raw string) string {
-	s := strings.TrimSpace(raw)
-	if s == "" || s == "<nil>" {
-		return ""
-	}
-	lower := strings.ToLower(s)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		return s
-	}
-	if strings.HasPrefix(s, "/") {
-		return defaultAssetsBaseURL + s
-	}
-	if strings.HasPrefix(lower, "users/") || strings.HasPrefix(lower, "generated/") || strings.Contains(lower, "/generated/") || strings.Contains(lower, "/image/") {
-		return defaultAssetsBaseURL + "/" + strings.TrimLeft(s, "/")
-	}
-	return s
-}
-
 // firstNonEmpty delegates to the shared implementation in internal/util so the
 // package keeps its short local name without duplicating the logic.
 func firstNonEmpty(values ...string) string {
 	return util.FirstNonEmpty(values...)
-}
-
-// NormalizeSSOToken extracts the raw SSO token from a cookie-like string.
-func NormalizeSSOToken(raw string) string {
-	token := strings.TrimSpace(raw)
-	if token == "" {
-		return ""
-	}
-
-	// Cookie-style input: scan pairs and prefer exact "sso" key.
-	if strings.Contains(token, ";") {
-		parts := strings.Split(token, ";")
-		for _, part := range parts {
-			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-			if len(kv) != 2 {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(kv[0]), "sso") {
-				return strings.TrimSpace(kv[1])
-			}
-		}
-		return strings.TrimSpace(token)
-	}
-
-	// Plain "sso=<token>" input.
-	lower := strings.ToLower(strings.TrimSpace(token))
-	if strings.HasPrefix(lower, "sso=") {
-		return strings.TrimSpace(token[len("sso="):])
-	}
-	return strings.TrimSpace(token)
 }
 
 func isDigit(c byte) bool {
