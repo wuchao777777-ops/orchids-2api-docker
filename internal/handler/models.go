@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"orchids-api/internal/channel"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -28,6 +30,11 @@ type PublicModelResponse struct {
 	UpstreamModel string   `json:"upstream_model,omitempty"`
 	BillingTier   string   `json:"billing_tier,omitempty"`
 	BillingSource string   `json:"billing_source,omitempty"`
+	// VideoActions and VideoConstraints make the route contract explicit for
+	// browser clients. In particular, edit/extend are Console operations rather
+	// than properties that can safely be inferred from a public model id.
+	VideoActions     []string                `json:"video_actions,omitempty"`
+	VideoConstraints *PublicVideoConstraints `json:"video_constraints,omitempty"`
 	// ContextLength is the model's real input-token window, as observed from the
 	// channel's own catalog. It is omitted when nothing was observed, because a
 	// client that reads a wrong number budgets against the wrong number: too low
@@ -40,11 +47,90 @@ type PublicModelResponse struct {
 	// MaxOutputTokens is the declared output budget where the catalog publishes
 	// one. Zero means unobserved and is omitted.
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// Grok Build publishes these fields per account. Pointer booleans preserve
+	// the important distinction between an explicit false and unknown metadata.
+	ReasoningEfforts        []string `json:"reasoning_efforts,omitempty"`
+	DefaultReasoningEffort  string   `json:"default_reasoning_effort,omitempty"`
+	SupportsReasoningEffort *bool    `json:"supports_reasoning_effort,omitempty"`
+	SupportsBackendSearch   *bool    `json:"supports_backend_search,omitempty"`
 }
 
 type PublicModelsListResponse struct {
 	Object string                `json:"object"`
 	Data   []PublicModelResponse `json:"data"`
+}
+
+type PublicVideoLengthRange struct {
+	Min int `json:"min"`
+	Max int `json:"max"`
+}
+
+type PublicVideoConstraints struct {
+	Lengths                     map[string]PublicVideoLengthRange `json:"lengths,omitempty"`
+	Resolutions                 []string                          `json:"resolutions,omitempty"`
+	ReferenceImages             bool                              `json:"reference_images,omitempty"`
+	ReferenceAudio              bool                              `json:"reference_audio,omitempty"`
+	MaxResolutionWithReferences string                            `json:"max_resolution_with_references,omitempty"`
+}
+
+func applyPublicVideoRoute(entry *PublicModelResponse, route *store.Model) {
+	if entry == nil || route == nil {
+		return
+	}
+	hasVideo := false
+	for _, capability := range route.Capabilities {
+		if strings.EqualFold(strings.TrimSpace(capability), store.CapabilityVideo) {
+			hasVideo = true
+			break
+		}
+	}
+	if !hasVideo {
+		return
+	}
+	provider := strings.ToLower(strings.TrimSpace(route.Provider))
+	actions := []string{"generate"}
+	constraints := &PublicVideoConstraints{
+		Lengths:     map[string]PublicVideoLengthRange{"generate": {Min: 6, Max: 30}},
+		Resolutions: []string{"480p", "720p"},
+	}
+	if provider == "console" {
+		constraints.Lengths["generate"] = PublicVideoLengthRange{Min: 1, Max: 15}
+		constraints.ReferenceImages = true
+		constraints.ReferenceAudio = true
+		if modelpolicy.GrokModelSlug(route.ModelID) == "grok-imagine-video" {
+			actions = []string{"generate", "edit", "extend"}
+			constraints.Lengths["extend"] = PublicVideoLengthRange{Min: 2, Max: 10}
+		}
+	}
+	if modelpolicy.GrokModelSlug(route.ModelID) == "grok-imagine-video-1.5" && (provider == "console" || provider == "build") {
+		constraints.Resolutions = append(constraints.Resolutions, "1080p")
+		constraints.MaxResolutionWithReferences = "720p"
+	}
+	for _, action := range actions {
+		if !slices.Contains(entry.VideoActions, action) {
+			entry.VideoActions = append(entry.VideoActions, action)
+		}
+	}
+	if entry.VideoConstraints == nil {
+		entry.VideoConstraints = constraints
+		return
+	}
+	for action, length := range constraints.Lengths {
+		current, ok := entry.VideoConstraints.Lengths[action]
+		if !ok || length.Min < current.Min || length.Max > current.Max {
+			entry.VideoConstraints.Lengths[action] = length
+		}
+	}
+	for _, resolution := range constraints.Resolutions {
+		if !slices.Contains(entry.VideoConstraints.Resolutions, resolution) {
+			entry.VideoConstraints.Resolutions = append(entry.VideoConstraints.Resolutions, resolution)
+		}
+	}
+	entry.VideoConstraints.ReferenceImages = entry.VideoConstraints.ReferenceImages || constraints.ReferenceImages
+	entry.VideoConstraints.ReferenceAudio = entry.VideoConstraints.ReferenceAudio || constraints.ReferenceAudio
+	if constraints.MaxResolutionWithReferences != "" {
+		entry.VideoConstraints.MaxResolutionWithReferences = constraints.MaxResolutionWithReferences
+	}
 }
 
 // legacyModelCreated is the placeholder the API used before a route row carried
@@ -137,6 +223,66 @@ func publicModelIDKey(id string) string {
 	return strings.ToLower(strings.TrimSpace(id))
 }
 
+// grokBuildProfiles returns the conservative capability view shared by every
+// enabled Build account that advertised a model. Accounts on the Web and
+// Console planes are deliberately excluded: their similarly named routes do
+// not speak the Build catalog contract.
+func (h *Handler) grokBuildProfiles(ctx context.Context) map[string]modelcatalog.Profile {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		return nil
+	}
+	accounts, err := h.loadBalancer.Store.GetEnabledAccounts(ctx)
+	if err != nil {
+		return nil
+	}
+	catalogs := make([][]modelcatalog.Profile, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") {
+			continue
+		}
+		provider := strings.ToLower(strings.TrimSpace(acc.GrokProvider))
+		if provider == "" && strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+			provider = "build"
+		}
+		if provider != "build" || len(acc.GrokModelCatalog) == 0 {
+			continue
+		}
+		catalogs = append(catalogs, acc.GrokModelCatalog)
+	}
+	if len(catalogs) == 0 {
+		return nil
+	}
+	profiles := modelcatalog.Aggregate(catalogs...)
+	out := make(map[string]modelcatalog.Profile, len(profiles))
+	for _, profile := range profiles {
+		for _, id := range []string{profile.ModelID, modelpolicy.ExternalPublicID(profile.ModelID)} {
+			if key := publicModelIDKey(id); key != "" {
+				out[key] = profile
+			}
+		}
+	}
+	return out
+}
+
+func applyGrokBuildProfile(entry *PublicModelResponse, profile modelcatalog.Profile) {
+	if entry == nil {
+		return
+	}
+	entry.ReasoningEfforts = append([]string(nil), profile.ReasoningEfforts...)
+	entry.DefaultReasoningEffort = profile.DefaultReasoningEffort
+	supportsReasoning := profile.SupportsReasoningEffort
+	supportsSearch := profile.SupportsBackendSearch
+	entry.SupportsReasoningEffort = &supportsReasoning
+	entry.SupportsBackendSearch = &supportsSearch
+	if profile.ContextWindow > 0 {
+		entry.ContextLength = profile.ContextWindow
+		entry.MaxInputTokens = profile.ContextWindow
+	}
+	if profile.MaxCompletionTokens > 0 {
+		entry.MaxOutputTokens = profile.MaxCompletionTokens
+	}
+}
+
 func appendGrokCompatibilityAliases(items []PublicModelResponse, seen map[string]struct{}, entry PublicModelResponse) []PublicModelResponse {
 	if !strings.EqualFold(entry.OwnedBy, "grok") {
 		return items
@@ -204,6 +350,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	// One read of the observed catalogs answers every row below, so the model
 	// list reports the same window the request path forwards upstream.
 	contextWindows := h.observedModelContextWindows(ctx)
+	grokProfiles := h.grokBuildProfiles(ctx)
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
@@ -227,6 +374,15 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		// the same public model (the admin plane lists them grouped).
 		publicIDKey := publicModelIDKey(publicID)
 		if _, duplicate := seenPublicModelIDs[publicIDKey]; duplicate {
+			// Same public id may represent Web, Console and Build routes. Preserve
+			// the single OpenAI model row, but union route-specific video actions
+			// instead of silently taking whichever provider sorted first.
+			for i := range publicModels {
+				if publicModelIDKey(publicModels[i].ID) == publicIDKey {
+					applyPublicVideoRoute(&publicModels[i], m)
+					break
+				}
+			}
 			continue
 		}
 		seenPublicModelIDs[publicIDKey] = struct{}{}
@@ -237,6 +393,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		entry.UpstreamModel = m.UpstreamModel
 		entry.BillingTier = m.BillingTier
 		entry.BillingSource = m.BillingSource
+		applyPublicVideoRoute(&entry, m)
 		// The window is looked up by the route's own id first: that is what the
 		// channel's catalog was keyed by when it was observed. The public alias is
 		// the fallback for a channel that publishes a different spelling.
@@ -244,6 +401,17 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		entry.ContextLength = input
 		entry.MaxInputTokens = input
 		entry.MaxOutputTokens = output
+		if strings.EqualFold(mChannel, "grok") {
+			provider := strings.ToLower(strings.TrimSpace(m.Provider))
+			if provider == "build" || provider == "" {
+				for _, id := range []string{m.ModelID, m.UpstreamModel, publicID} {
+					if profile, ok := grokProfiles[publicModelIDKey(id)]; ok {
+						applyGrokBuildProfile(&entry, profile)
+						break
+					}
+				}
+			}
+		}
 		publicModels = append(publicModels, entry)
 		publicModels = appendGrokCompatibilityAliases(publicModels, seenPublicModelIDs, entry)
 	}

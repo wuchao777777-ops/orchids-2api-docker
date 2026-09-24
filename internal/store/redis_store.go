@@ -15,6 +15,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/util"
 
 	"github.com/redis/go-redis/v9"
@@ -694,10 +695,13 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		// credential rotation). Provider snapshots are refreshed independently, so
 		// never erase a successfully observed catalog/billing window with a zero
 		// value from an unrelated update.
-		if acc.GrokModels != nil {
+		if acc.GrokModels != nil && (!staleSnapshot || acc.GrokModelsSyncedAt.After(existing.GrokModelsSyncedAt)) {
 			updated.GrokModels = append([]string(nil), acc.GrokModels...)
 		}
-		if !acc.GrokModelsSyncedAt.IsZero() {
+		if acc.GrokModelCatalog != nil && (!staleSnapshot || acc.GrokModelsSyncedAt.After(existing.GrokModelsSyncedAt)) {
+			updated.GrokModelCatalog = modelcatalog.CloneProfiles(acc.GrokModelCatalog)
+		}
+		if !acc.GrokModelsSyncedAt.IsZero() && (!staleSnapshot || acc.GrokModelsSyncedAt.After(existing.GrokModelsSyncedAt)) {
 			updated.GrokModelsSyncedAt = acc.GrokModelsSyncedAt
 		}
 		if !acc.GrokBilling.SyncedAt.IsZero() {
@@ -2036,6 +2040,22 @@ func (s *redisStore) ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob
 		_ = s.client.ZRem(ctx, indexKey, stale...).Err()
 	}
 	return jobs, nil
+}
+
+func (s *redisStore) DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("redis store not configured")
+	}
+	id, ownerHash = strings.TrimSpace(id), strings.TrimSpace(ownerHash)
+	if id == "" || ownerHash == "" {
+		return fmt.Errorf("video job id and owner are required")
+	}
+	key := s.storedVideoJobKey(id, ownerHash)
+	pipe := s.client.TxPipeline()
+	pipe.Del(ctx, key)
+	pipe.ZRem(ctx, s.storedVideoJobsIndexKey(), key)
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func validateVideoJobLeaseArgs(id, ownerHash, holder string, ttl time.Duration) error {

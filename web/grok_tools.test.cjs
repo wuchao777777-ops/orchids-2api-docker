@@ -53,6 +53,7 @@ test('stream stores interleaved reasoning and partial failure exactly once', asy
     body += failed ? 'data: {"type":"response.failed","response":{"error":{"message":"interrupted"}}}\n\n' : 'data: [DONE]\n\n';
     const session = {messages:[]};
     const ctx = vm.createContext({ session, AbortController,TextDecoder,fetch:async()=>new Response(body), chatState:{modelsLoaded:true,model:'test-model'},
+      toolInferencePrefix:()=>'/grok/v1',toolAuthHeaders:headers=>headers,
       setChatSendButtonState(){},updateChatStatus(){},buildResponsesPayload:()=>({}),handleUnauthorized:()=>false,
       requestAnimationFrame:()=>1,cancelAnimationFrame(){},trimChatSessionMessages:()=>0,saveChatSessions(){},renderChatSessions(){},
     });
@@ -137,6 +138,7 @@ test('Grok capability fallback fails open for invalid and failed availability re
 function streamContext(session, body, statuses) {
   const request = source.slice(source.indexOf('  async function requestChatCompletion('), source.indexOf('  async function retryAssistantMessage('));
   const ctx = vm.createContext({ session, AbortController, TextDecoder, fetch:async()=>new Response(body), chatState:{modelsLoaded:true,model:'test-model'},
+    toolInferencePrefix:()=>'/grok/v1', toolAuthHeaders:headers=>headers,
     setChatSendButtonState(){}, updateChatStatus:(text,type)=>statuses.push([text,type]), buildResponsesPayload:()=>({}), handleUnauthorized:()=>false,
     requestAnimationFrame:()=>1, cancelAnimationFrame(){}, trimChatSessionMessages:()=>0, saveChatSessions(){}, renderChatSessions(){} });
   vm.runInContext(request, ctx);
@@ -215,6 +217,8 @@ test('video operations use their matching API and preserve native request fields
     let sent;
     const values = {videoAction:action,videoRatio:'16:9',videoReferenceURL:'',videoReferenceVoice:'',videoSourceURL:'https://example.com/source.mp4'};
     const ctx = vm.createContext({chatState:{routes:[{id:'grok-imagine-video',provider:'console'}]},
+      toolInferencePrefix:()=>'/grok/v1',toolAuthHeaders:headers=>headers,videoRouteActions:()=>new Set(['generate','edit','extend']),
+      stagedVideoInput:async(_id,url)=>({url}), videoState:{referenceFileID:'',sourceFileID:''},
       document:{getElementById:id=>({value:values[id]})},handleUnauthorized:()=>false,
       fetch:async(path,options)=>{sent={path,body:JSON.parse(options.body)};return {ok:true,json:async()=>({request_id:'video_1'})};},
     });
@@ -325,4 +329,290 @@ test('JSZip is loaded only when the image batch download is used', () => {
   assert.doesNotMatch(template, /<script[^>]+jszip/i, 'JSZip must not block the initial page load');
   assert.match(imagine, /function loadJSZip\(\)/, 'the image downloader has no lazy JSZip loader');
   assert.match(imagine, /await loadJSZip\(\)/, 'batch download does not await the lazy JSZip loader');
+});
+
+
+test('chat persistence is scoped, debounced, and evicts oldest sessions to limits', () => {
+  const start = source.indexOf('  const chatSessionLimit = 50;');
+  const end = source.indexOf('  function activeChatSession()', start);
+  const writes = [];
+  const timers = [];
+  const sessions = Array.from({ length: 55 }, (_, i) => ({ id: `s${i}`, updatedAt: i, messages: [{ role: 'user', content: 'x'.repeat(100) }] }));
+  const context = vm.createContext({
+    chatState: { sessions, activeId: 's54', model: 'm', persistenceTimer: null },
+    chatStorageKey: 'history', toolHistoryScope: () => 'key-fingerprint',
+    localStorage: { setItem: (key, value) => writes.push([key, value]), getItem: () => null },
+    TextEncoder, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
+    updateChatStatus() {}, createChatSession: () => ({ id: 'new', messages: [] }),
+    createPromptCacheKey: () => 'cache', normalizeAssistantMessage: value => value,
+  });
+  vm.runInContext(source.slice(start, end), context);
+  context.saveChatSessions(); context.saveChatSessions();
+  assert.equal(writes.length, 0, 'writes must be debounced');
+  timers.at(-1)();
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0][0], 'history:key-fingerprint');
+  const stored = JSON.parse(writes[0][1]);
+  assert.equal(stored.sessions.length, 50);
+  assert.equal(stored.sessions[0].id, 's54');
+  assert.equal(stored.sessions.at(-1).id, 's5');
+  assert.ok(new TextEncoder().encode(writes[0][1]).byteLength <= 4 * 1024 * 1024);
+});
+
+test('chat persistence evicts oldest sessions until payload is about 4 MiB', () => {
+  const start = source.indexOf('  const chatSessionLimit = 50;');
+  const end = source.indexOf('  function activeChatSession()', start);
+  const huge = '界'.repeat(800000);
+  const context = vm.createContext({
+    chatState: { sessions: Array.from({length: 8}, (_, i) => ({id:`s${i}`, updatedAt:i, messages:[{role:'user',content:huge}]})), activeId:'s7', model:'m', persistenceTimer:null },
+    chatStorageKey:'history', toolHistoryScope:()=> 'admin', TextEncoder,
+    localStorage:{setItem(){},getItem(){return null;}}, setTimeout, clearTimeout,
+    updateChatStatus(){}, createChatSession:()=>({id:'new',messages:[]}), createPromptCacheKey:()=> 'cache', normalizeAssistantMessage:v=>v,
+  });
+  vm.runInContext(source.slice(start, end), context);
+  const bounded = context.boundedChatPayload();
+  assert.ok(new TextEncoder().encode(bounded.payload).byteLength <= 4 * 1024 * 1024);
+  assert.ok(bounded.sessions.length < 8);
+  assert.equal(bounded.sessions[0].id, 's7');
+});
+
+test('stale aborted SSE cannot overwrite a newer request', async () => {
+  const request = source.slice(source.indexOf('  async function requestChatCompletion('), source.indexOf('  async function retryAssistantMessage('));
+  let releaseOld;
+  let calls = 0;
+  const oldRead = new Promise(resolve => { releaseOld = resolve; });
+  const oldResponse = { ok:true, body:{ getReader:()=>({ read:()=>oldRead }) } };
+  const freshBody = 'data: '+JSON.stringify({type:'response.output_text.delta',delta:'new'})+'\n\ndata: [DONE]\n\n';
+  const session = {messages:[]};
+  const state = {modelsLoaded:true, model:'m', requestGeneration:0};
+  const ctx = vm.createContext({ session, AbortController, TextDecoder, chatState:state,
+    fetch:async()=> ++calls === 1 ? oldResponse : new Response(freshBody),
+    toolInferencePrefix:()=>'/grok/v1',toolAuthHeaders:h=>h,
+    setChatSendButtonState(){},updateChatStatus(){},buildResponsesPayload:()=>({}),handleUnauthorized:()=>false,
+    requestAnimationFrame:()=>1,cancelAnimationFrame(){},trimChatSessionMessages:()=>0,saveChatSessions(){},renderChatSessions(){},
+  });
+  vm.runInContext(request, ctx);
+  const old = ctx.requestChatCompletion(session, null);
+  const fresh = ctx.requestChatCompletion(session, null);
+  await fresh;
+  releaseOld({ value: new TextEncoder().encode('data: '+JSON.stringify({type:'response.output_text.delta',delta:'old'})+'\n\ndata: [DONE]\n\n'), done:false });
+  await old;
+  assert.deepEqual(session.messages.map(item => item.content), ['new']);
+  assert.equal(state.sending, false);
+});
+
+test('Grok model metadata rebuilds reasoning choices and disables unsupported backend search', () => {
+  const sync = source.slice(source.indexOf('  function syncChatModelUI()'), source.indexOf('  function renderChatModelDropdown()'));
+  const session = { reasoningEffort: 'none', webSearch: true };
+  const effort = element();
+  effort.value = '';
+  effort.replaceChildren = function(...children) { this.children = children; };
+  const webSearch = { checked: true, disabled: false };
+  const label = {};
+  const document = {
+    getElementById(id) { return { grokReasoningEffort: effort, grokWebSearch: webSearch, grokModelLabel: label }[id] || null; },
+    createElement() { return {}; },
+  };
+  const route = { id: 'grok-4.6', provider: 'build', reasoning_efforts: ['low', 'high'], default_reasoning_effort: 'high', supports_reasoning_effort: true, supports_backend_search: false };
+  const context = vm.createContext({ document, chatState: { model: route.id, routes: [route] }, activeChatSession: () => session });
+  vm.runInContext(`${sync}\nsyncChatModelUI();`, context);
+  assert.deepEqual(effort.children.map(option => option.value), ['', 'low', 'high']);
+  assert.equal(effort.value, 'high');
+  assert.equal(effort.disabled, false);
+  assert.equal(session.reasoningEffort, 'high');
+  assert.equal(webSearch.disabled, true);
+  assert.equal(webSearch.checked, false);
+  assert.equal(session.webSearch, false);
+});
+
+test('Grok model UI retains Console fixed reasoning behavior', () => {
+  const sync = source.slice(source.indexOf('  function syncChatModelUI()'), source.indexOf('  function renderChatModelDropdown()'));
+  const session = { reasoningEffort: 'high' };
+  const effort = element(); effort.value = ''; effort.replaceChildren = function(...children) { this.children = children; };
+  const document = { getElementById: id => id === 'grokReasoningEffort' ? effort : null, createElement: () => ({}) };
+  const route = { id: 'grok-4.20-0309-reasoning', provider: 'console', upstream_model: 'grok-4.20-0309-reasoning' };
+  const context = vm.createContext({ document, chatState: { model: route.id, routes: [route] }, activeChatSession: () => session });
+  vm.runInContext(`${sync}\nsyncChatModelUI();`, context);
+  assert.equal(effort.disabled, true);
+  assert.equal(effort.value, '');
+  assert.equal(session.reasoningEffort, '');
+});
+
+test('Grok payload omits Web search when route explicitly rejects backend search', () => {
+  const route = { id: 'grok-4.6', supports_backend_search: false };
+  const result = buildPayloadContext({ model: route.id, routes: [route] }, { webSearch: true, xSearch: true, messages: [{ role: 'user', content: 'hi' }] });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.tools)), [{ type: 'x_search' }]);
+});
+
+
+test('client media staging uses bearer inference routes and parses plain file objects', () => {
+  assert.match(source, /clientMode \? "\/v1\/media\/inputs" : "\/api\/admin\/v1\/media\/inputs\/upload"/);
+  assert.match(source, /clientMode \? "\/v1\/media\/inputs\/import" : "\/api\/admin\/v1\/media\/inputs\/import"/);
+  assert.match(source, /headers: toolAuthHeaders\(\)/);
+  assert.match(source, /toolAuthHeaders\(\{ "Content-Type": "application\/json" \}\)/);
+  assert.match(source, /const data = clientMode \? payload : \(payload\?\.data \|\| \{\}\)/);
+  assert.match(source, /data\.file_id \|\| data\.fileId/);
+});
+
+test('client key auth helpers scope history without persisting the secret', () => {
+  const helper = source.slice(source.indexOf('  const toolAuthState'), source.indexOf('  const cacheOnlineState'));
+  const context = vm.createContext({});
+  vm.runInContext(helper, context);
+  vm.runInContext('toolAuthState.mode="client"; toolAuthState.apiKey="sk-secret";', context);
+  assert.equal(context.toolHistoryScope().startsWith('key-'), true);
+  assert.equal(context.toolHistoryScope().includes('sk-secret'), false);
+  assert.equal(context.toolAuthHeaders({Accept:'x'}).Authorization, 'Bearer sk-secret');
+  assert.equal(context.toolInferencePrefix(), '/v1');
+});
+
+test('chat branch helpers confirm trailing destructive changes and rotate cache keys', () => {
+  const start = source.indexOf('  function chatMessageIndex(');
+  const end = source.indexOf('  function startEditChatMessage(', start);
+  const confirms = [];
+  const session = { messages: [{role:'user'}, {role:'assistant'}, {role:'user'}], promptCacheKey: 'old', updatedAt: 0 };
+  let saves = 0; let sessionRenders = 0; let threadRenders = 0;
+  const context = vm.createContext({
+    window: { confirm: text => { confirms.push(text); return true; } },
+    createPromptCacheKey: () => 'new-cache', Date: { now: () => 42 },
+    saveChatSessions: () => { saves += 1; }, renderChatSessions: () => { sessionRenders += 1; }, rerenderChatThread: () => { threadRenders += 1; },
+    chatState: { sending: false }, activeChatSession: () => session,
+  });
+  vm.runInContext(source.slice(start, end), context);
+  assert.equal(context.confirmTrailingMessages('编辑这条消息', 0), true);
+  assert.equal(confirms.length, 0);
+  assert.equal(context.confirmTrailingMessages('编辑这条消息', 2), true);
+  assert.match(confirms[0], /后续 2 条消息/);
+  context.truncateChatBranch(session, 1);
+  assert.equal(session.messages.length, 1);
+  assert.equal(session.promptCacheKey, 'new-cache');
+  assert.equal(session.updatedAt, 42);
+  assert.deepEqual([saves, sessionRenders, threadRenders], [1, 1, 1]);
+});
+
+test('message delete confirms and truncates the selected branch', () => {
+  const start = source.indexOf('  function chatMessageIndex(');
+  const end = source.indexOf('  function startEditChatMessage(', start);
+  const session = { messages: [{role:'user'}, {role:'assistant'}, {role:'user'}], promptCacheKey: 'old' };
+  let prompt = ''; let saved = 0;
+  const context = vm.createContext({
+    window: { confirm: text => { prompt = text; return true; } }, chatState: { sending: false },
+    activeChatSession: () => session, createPromptCacheKey: () => 'rotated', Date,
+    saveChatSessions: () => { saved += 1; }, renderChatSessions() {}, rerenderChatThread() {},
+  });
+  vm.runInContext(source.slice(start, end), context);
+  const rows = [{}, {}, {}];
+  const log = { querySelectorAll: () => rows };
+  rows.forEach(row => { row.closest = () => log; });
+  context.deleteChatMessage(rows[1]);
+  assert.match(prompt, /后续 1 条消息/);
+  assert.equal(session.messages.length, 1);
+  assert.equal(session.promptCacheKey, 'rotated');
+  assert.equal(saved, 1);
+});
+
+test('clear-current-session confirms, preserves the session, and rotates its cache key', () => {
+  const start = source.indexOf('  function clearCurrentChatSession(');
+  const end = source.indexOf('  function newChatSession(', start);
+  const session = { id: 'keep-me', messages: [{role:'user'}, {role:'assistant'}], promptCacheKey: 'old' };
+  let prompt = ''; let status = '';
+  const context = vm.createContext({
+    window: { confirm: text => { prompt = text; return true; } }, chatState: { sending: false },
+    activeChatSession: () => session, createPromptCacheKey: () => 'rotated', Date,
+    saveChatSessions() {}, renderChatSessions() {}, rerenderChatThread() {}, updateChatStatus: text => { status = text; },
+  });
+  vm.runInContext(source.slice(start, end), context);
+  context.clearCurrentChatSession();
+  assert.match(prompt, /2 条消息/);
+  assert.equal(session.id, 'keep-me');
+  assert.equal(session.messages.length, 0);
+  assert.equal(session.promptCacheKey, 'rotated');
+  assert.match(status, /已清空/);
+});
+
+test('editing a user message truncates its branch, saves, rotates cache, and regenerates', async () => {
+  const start = source.indexOf('  function startEditChatMessage(');
+  const end = source.indexOf('  function startEditAssistantMessage(', start);
+  const messages = [
+    { role: 'user', content: 'old' }, { role: 'assistant', content: 'a' },
+    { role: 'user', content: 'later' }, { role: 'assistant', content: 'b' },
+  ];
+  const session = { messages, promptCacheKey: 'old-cache', updatedAt: 0 };
+  const elements = [];
+  const makeElement = tag => {
+    const el = { tag, value: '', className: '', children: [], listeners: {},
+      appendChild(child) { this.children.push(child); }, addEventListener(name, fn) { this.listeners[name] = fn; },
+      focus() {}, select() {}, click() { return this.listeners.click?.(); },
+    };
+    elements.push(el); return el;
+  };
+  const bubble = makeElement('div');
+  const actions = makeElement('div');
+  const row = { querySelector: selector => selector === '.message-bubble' ? bubble : actions };
+  let requested = 0; let saved = 0; let confirms = 0;
+  const context = vm.createContext({
+    chatState: { sending: false }, activeChatSession: () => session, chatMessageIndex: () => 0,
+    document: { createElement: makeElement }, showToast() {}, rerenderChatThread() {}, renderChatSessions() {},
+    confirmTrailingMessages: (_action, count) => { confirms = count; return true; },
+    createPromptCacheKey: () => 'new-cache', Date: { now: () => 99 }, saveChatSessions: () => { saved += 1; },
+    appendChatMessage: () => ({}), requestChatCompletion: async () => { requested += 1; },
+  });
+  vm.runInContext(source.slice(start, end), context);
+  context.startEditChatMessage(row, 'old');
+  const textarea = elements.find(el => el.tag === 'textarea');
+  textarea.value = 'edited';
+  const saveButton = elements.find(el => el.tag === 'button' && el.className === 'btn btn-primary');
+  await saveButton.listeners.click();
+  assert.equal(confirms, 3);
+  assert.deepEqual(JSON.parse(JSON.stringify(session.messages)), [{ role: 'user', content: 'edited' }]);
+  assert.equal(session.promptCacheKey, 'new-cache');
+  assert.equal(session.updatedAt, 99);
+  assert.equal(saved, 1);
+  assert.equal(requested, 1);
+});
+
+test('retrying a historical assistant confirms branch truncation before regenerating', async () => {
+  const start = source.indexOf('  async function retryAssistantMessage(');
+  const end = source.indexOf('  function rerenderChatThread(', start);
+  const original = [
+    { role: 'user', content: 'u1' }, { role: 'assistant', content: 'a1' },
+    { role: 'user', content: 'u2' }, { role: 'assistant', content: 'a2' },
+  ];
+  for (const accepted of [false, true]) {
+    const session = { messages: original.map(item => ({...item})), promptCacheKey: 'old' };
+    let trailing = -1; let requested = 0;
+    const context = vm.createContext({
+      chatState: { sending: false }, activeChatSession: () => session, chatMessageIndex: () => 1,
+      confirmTrailingMessages: (_action, count) => { trailing = count; return accepted; }, showToast() {},
+      createPromptCacheKey: () => 'new', Date, saveChatSessions() {}, renderChatSessions() {}, rerenderChatThread() {},
+      appendChatMessage: () => ({}), requestChatCompletion: async () => { requested += 1; },
+    });
+    vm.runInContext(source.slice(start, end), context);
+    await context.retryAssistantMessage({});
+    assert.equal(trailing, 2);
+    assert.equal(session.messages.length, accepted ? 1 : 4);
+    assert.equal(requested, accepted ? 1 : 0);
+    assert.equal(session.promptCacheKey, accepted ? 'new' : 'old');
+  }
+});
+
+test('assistant local edit clears reasoning and tools and message controls expose delete and clear', () => {
+  const assistantEdit = source.slice(source.indexOf('  function startEditAssistantMessage('), source.indexOf('  async function requestChatCompletion('));
+  assert.match(assistantEdit, /msg\.reasoning = "";/);
+  assert.match(assistantEdit, /msg\.tools = \[\];/);
+  assert.match(assistantEdit, /confirmTrailingMessages\("编辑这条回复", trailing\)/);
+  assert.match(assistantEdit, /session\.messages = messages\.slice\(0, rowIndex \+ 1\)/);
+  assert.match(source, /deleteBtn\.addEventListener\("click", \(\) => deleteChatMessage\(row\)\)/);
+  assert.match(source, /clearBtn\.addEventListener\("click", clearCurrentChatSession\)/);
+  const template = fs.readFileSync(path.join(__dirname, 'templates/pages/grok-tools.html'), 'utf8');
+  assert.match(template, /id="grokChatClearBtn"/);
+});
+
+test('a JSON 401 from a Grok handler is not mistaken for an expired console session', () => {
+  const handler = source.slice(source.indexOf('  function handleUnauthorized('), source.indexOf('  function currentGrokToolTab('));
+  // Only the session middleware answers plain text; handler denials are JSON.
+  assert.match(handler, /contentType\.includes\("text\/plain"\)/);
+  assert.doesNotMatch(handler, /url\.includes\("\/api\/"\)/);
+  assert.match(handler, /window\.location\.href = "\/admin\/login\.html\?next="/);
+  // Admin tool inference now lives on the session-authenticated namespace.
+  assert.match(source, /return toolAuthState\.mode === "client" \? "\/v1" : "\/api\/grok\/tools\/v1"/);
 });
