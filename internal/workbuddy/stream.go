@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -23,14 +24,22 @@ type streamResult struct {
 	ToolCallCount      int
 	Usage              map[string]interface{}
 	ThinkingSignature  string
+	FinishReasonValue  string
 }
 
 // FinishReason maps the accumulated stream onto an Anthropic-style stop reason.
 func (r streamResult) FinishReason() string {
-	if r.ToolCallCount > 0 {
+	if r.ToolCallCount > 0 || strings.EqualFold(r.FinishReasonValue, "tool_calls") {
 		return "tool_use"
 	}
-	return "end_turn"
+	switch strings.ToLower(strings.TrimSpace(r.FinishReasonValue)) {
+	case "length", "max_tokens":
+		return "max_tokens"
+	case "content_filter":
+		return "refusal"
+	default:
+		return "end_turn"
+	}
 }
 
 var toolCallSequence atomic.Uint64
@@ -45,6 +54,8 @@ type streamChunk struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
 	Model   string `json:"model"`
+	Code    int    `json:"code"`
+	Msg     string `json:"msg"`
 	Choices []struct {
 		Index        int    `json:"index"`
 		FinishReason string `json:"finish_reason"`
@@ -136,6 +147,8 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	result := streamResult{}
 	tools := newToolCallAccumulator()
+	sawDone := false
+	sawFinish := false
 
 	emitTools := func() {
 		for _, state := range tools.completeAll() {
@@ -162,10 +175,20 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 			continue
 		}
 		if !strings.HasPrefix(line, "data:") {
+			// Some edge responses keep HTTP 200 but return the business envelope as
+			// plain JSON rather than SSE. Preserve that code instead of degrading it
+			// to a generic "no events" protocol error.
+			if strings.HasPrefix(line, "{") {
+				var env envelope
+				if json.Unmarshal([]byte(line), &env) == nil && env.Code != 0 {
+					return result, apiError(http.StatusOK, []byte(line))
+				}
+			}
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "[DONE]" {
+			sawDone = true
 			break
 		}
 		if payload == "" {
@@ -174,9 +197,10 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			// A non-JSON data line is a protocol warning, not a transport
-			// failure; keep consuming the stream.
-			continue
+			return result, fmt.Errorf("workbuddy stream protocol error: invalid JSON: %w", err)
+		}
+		if chunk.Code != 0 {
+			return result, apiError(http.StatusOK, []byte(payload))
 		}
 		if msg := strings.TrimSpace(chunk.Error.Message); msg != "" {
 			return result, fmt.Errorf("workbuddy stream error: %s", msg)
@@ -192,6 +216,9 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 		}
 		if len(chunk.Choices) == 0 {
 			continue
+		}
+		if sawFinish {
+			return result, fmt.Errorf("workbuddy stream protocol error: choice data after finish")
 		}
 		delta := chunk.Choices[0].Delta
 
@@ -222,14 +249,18 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 		// OpenAI-style tool arguments can span several deltas. Emitting on the
 		// first delta loses every later fragment and produces invalid JSON. A
 		// non-empty finish reason closes the choice; [DONE]/EOF is handled below.
-		if strings.TrimSpace(chunk.Choices[0].FinishReason) != "" {
+		if reason := strings.TrimSpace(chunk.Choices[0].FinishReason); reason != "" {
+			result.FinishReasonValue = reason
+			sawFinish = true
 			emitTools()
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return result, fmt.Errorf("failed to read workbuddy stream: %w", err)
 	}
-	emitTools()
+	if !sawDone || !sawFinish {
+		return result, fmt.Errorf("workbuddy stream ended before terminal finish")
+	}
 	return result, nil
 }
 
@@ -265,10 +296,23 @@ func normalizeUsage(raw map[string]interface{}) map[string]interface{} {
 		out["cacheReadTokens"] = cached
 		out["cache_read_tokens"] = cached
 	}
-	if reasoning, ok := firstUsageInt(raw, "completion_thinking_tokens"); ok {
+	if reasoning, ok := firstUsageInt(raw, "completion_thinking_tokens", "reasoning_tokens"); ok {
 		out["reasoningTokens"] = reasoning
+	} else if details := firstUsageMap(raw, "completion_tokens_details", "completionTokensDetails"); details != nil {
+		if reasoning, ok := firstUsageInt(details, "reasoning_tokens", "reasoningTokens"); ok {
+			out["reasoningTokens"] = reasoning
+		}
 	}
 	return out
+}
+
+func firstUsageMap(values map[string]interface{}, keys ...string) map[string]interface{} {
+	for _, key := range keys {
+		if nested, ok := values[key].(map[string]interface{}); ok {
+			return nested
+		}
+	}
+	return nil
 }
 
 func firstUsageInt(values map[string]interface{}, keys ...string) (int, bool) {

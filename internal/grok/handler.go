@@ -2,6 +2,7 @@ package grok
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -362,12 +363,15 @@ func (h *Handler) ensureResolvedModelCapability(ctx context.Context, modelID str
 // least one enabled Build account advertises it, so arbitrary client strings
 // can never turn into upstream model probes.
 func (h *Handler) resolveConversationModel(ctx context.Context, modelID string) (ModelSpec, bool) {
+	id := normalizeModelID(modelID)
+	if id == "" || IsDeprecatedModelID(id) {
+		return ModelSpec{}, false
+	}
 	if spec, effort, ok := ResolveModelAlias(modelID); ok {
 		spec.AliasReasoningEffort = effort
 		return h.applyPersistedRoute(ctx, spec), true
 	}
-	id := normalizeModelID(modelID)
-	if id == "" || IsDeprecatedModelID(id) || h == nil || h.lb == nil || h.lb.Store == nil {
+	if h == nil || h.lb == nil || h.lb.Store == nil {
 		return ModelSpec{}, false
 	}
 	accounts, err := h.lb.Store.GetEnabledAccounts(ctx)
@@ -484,6 +488,12 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	// that the credential is unusable. Do not poison account routing with them.
 	if status := parseUpstreamStatus(err); status >= 400 && status < 500 && status != 401 && status != 402 && status != 403 && status != 429 {
 		return
+	}
+	var oauthErr *cliOAuthError
+	if errors.As(err, &oauthErr) && oauthErr.status == http.StatusUnauthorized && acc != nil {
+		acc.OAuthAccessToken = ""
+		acc.OAuthRefreshToken = ""
+		acc.OAuthExpiresAt = time.Time{}
 	}
 	// Team-level resource-exhausted 429: the rate limit is on the token/session,
 	// not the account. Set a cooldown so the RPM window can reset. Without this,
@@ -649,9 +659,13 @@ func markAllGrokAccountStatuses(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Shared team rate limits are not account failures.
+	// Shared team rate limits and preflight cooldowns are not account failures.
 	if isSharedGrokRateLimitError(err) {
 		return false
+	}
+	var oauthErr *cliOAuthError
+	if errors.As(err, &oauthErr) && oauthErr.status == http.StatusUnauthorized {
+		return true
 	}
 	// A generic 403 must not mark the account; only explicit account blocks do.
 	if ClassifyUpstreamError(err) == UpstreamErrorGenericForbidden {
@@ -670,6 +684,10 @@ func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
 func shouldSwitchGrokAccount(err error) bool {
 	if err == nil {
 		return false
+	}
+	var oauthErr *cliOAuthError
+	if errors.As(err, &oauthErr) && oauthErr.status == http.StatusUnauthorized {
+		return true
 	}
 	// Response-aware classification: only an explicit account block switches
 	// accounts. A generic 403 (feature/plan/permission) is not an account
@@ -712,6 +730,10 @@ func shouldSwitchGrokAccount(err error) bool {
 func isSharedGrokRateLimitError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var synthetic *syntheticCooldownError
+	if errors.As(err, &synthetic) {
+		return true
 	}
 	lower := strings.ToLower(err.Error())
 	if parseUpstreamStatus(err) != http.StatusTooManyRequests && !strings.Contains(lower, "too many requests") {

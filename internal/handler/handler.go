@@ -79,7 +79,7 @@ type Handler struct {
 	statsOnce      sync.Once
 	statsCloseOnce sync.Once
 	statsMu        sync.Mutex
-	statsPending   map[int64]accountStatsDelta
+	statsPending   map[string]accountStatsDelta
 	statsWake      chan struct{}
 	statsStop      chan struct{}
 	statsDone      chan struct{}
@@ -685,6 +685,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("Checkpoint: passthrough, skip context trimming", "channel", channel)
 		}
 	}
+	// Keep the public model id in the response, but route Puter with the exact
+	// identifier advertised by its catalog.
+	puterUpstreamModel := strings.TrimSpace(req.Model)
+	if isPuterRequest && validatedModel != nil && strings.TrimSpace(validatedModel.UpstreamModel) != "" {
+		puterUpstreamModel = strings.TrimSpace(validatedModel.UpstreamModel)
+	}
 	if isPuterRequest {
 		if sanitized, changed := sanitizeSystemItems(req.System); changed {
 			req.System = sanitized
@@ -692,8 +698,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Debug("puter: sanitized forwarded system items")
 			}
 		}
-		if isDeepSeekPuterModel(req.Model) {
-			restored, missing := h.restorePuterReasoning(r.Context(), req.Model, req.Messages)
+		if isDeepSeekPuterModel(puterUpstreamModel) {
+			restored, missing := h.restorePuterReasoning(r.Context(), puterUpstreamModel, req.Messages)
 			if verboseDiagnostics && (restored > 0 || missing > 0) {
 				slog.Debug("puter reasoning replay prepared", "restored", restored, "fallback_required", missing)
 			}
@@ -716,7 +722,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		mappedModel = strings.TrimSpace(req.Model)
-	} else if isPuterRequest || isWorkBuddyRequest || isQoderRequest || isClineRequest {
+	} else if isPuterRequest {
+		mappedModel = puterUpstreamModel
+	} else if isWorkBuddyRequest || isQoderRequest || isClineRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
@@ -1037,6 +1045,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		primaryHandler := sh.handleMessage
 		var attempt int
 		for {
+			if returned, _ := sh.terminalState(); returned {
+				return
+			}
 			sh.resetRoundState()
 			var err error
 			upstreamReq.Attempt = attempt + 1
@@ -1084,23 +1095,35 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
+			// A provider may emit its authoritative finish frame and then observe a
+			// transport cleanup error. Never reset terminal state and append a second
+			// response in that case.
+			if returned, failed := sh.terminalState(); returned {
+				if failed {
+					return
+				}
+				slog.Warn("Ignoring upstream error after terminal response", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+				break
+			}
 			errStr := err.Error()
 			errClass := apperrors.ClassifyUpstreamError(errStr)
 			warpCloudAgentForbidden := isWarpCloudAgentForbiddenError(errStr)
 			warpRequestStarted := isWarpRequest && warp.RequestIDFromError(err) != ""
-			if sh.hasAnyOutput() {
-				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
-				if !sh.hasVisibleOutput() {
-					sh.InjectErrorText("Reporting failure after hidden upstream output", "Upstream request failed after generating reasoning. Automatic retry was suppressed to avoid duplicate token billing.")
-				}
-				sh.finishResponse("end_turn")
+			if warpRequestStarted {
+				slog.Warn("Warp request was accepted upstream; suppressing unsafe replay", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+				sh.reportRequestFailure("Reporting Warp failure after upstream acceptance",
+					errClass.Category, apperrors.PublicMessage(errStr))
 				return
 			}
-			if warpRequestStarted && errClass.Retryable {
-				// A Warp conversation and its task graph belong to the account that
-				// created them. Recoverable stream failures must retry that same
-				// request on the same account, matching Warp's client recovery path.
-				errClass.SwitchAccount = false
+			if sh.hasAnyOutput() {
+				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+				// Partial content is not a successful completion. Streaming responses
+				// have already committed 200, so report the terminal failure in band;
+				// non-streaming responses have committed nothing and can still return
+				// the correct HTTP error without leaking the partial draft.
+				sh.reportRequestFailure("Reporting upstream failure after partial output",
+					errClass.Category, apperrors.PublicMessage(errStr))
+				return
 			}
 
 			// Check for non-retriable errors
@@ -1136,7 +1159,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 							// Apply keeps the status and its operator-facing reason
 							// together, so the account table can explain the cooldown.
 							verdict.Apply(currentAccount)
-							h.loadBalancer.MarkAccountStatus(r.Context(), currentAccount, verdict.Status)
+							h.loadBalancer.PersistAppliedAccountStatus(r.Context(), currentAccount, "账号策略判定: "+verdict.Status)
 						}
 					}
 				}
@@ -1147,7 +1170,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				// A failure before any output is a failure, not an answer. The
 				// raw upstream text goes to the log; the client gets the category.
 				if errClass.Category == "canceled" {
-					sh.finishResponse("end_turn")
+					if r.Context().Err() != nil {
+						sh.finishResponse("end_turn")
+						return
+					}
+					sh.reportRequestFailure("Reporting unexpected upstream cancellation", "server", "Upstream request was canceled unexpectedly")
 					return
 				}
 				sh.reportRequestFailure("Reporting non-retriable upstream failure",
@@ -1328,6 +1355,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := json.NewEncoder(w).Encode(response); err != nil {
+			sh.markWriteError("nonstream_response", err)
 			slog.Error("Failed to write JSON response", "error", err)
 		}
 
@@ -1341,7 +1369,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if sh.requestFailed && !sh.useUpstreamUsage {
 		statsInput, statsOutput = 0, 0
 	}
-	h.updateAccountStats(currentAccount, statsInput, statsOutput)
+	h.updateAccountStats(r.Context(), currentAccount, statsInput, statsOutput)
 
 	// Audit log
 	if h.auditLogger != nil {

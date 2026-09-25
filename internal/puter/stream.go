@@ -70,10 +70,14 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 		}
 		switch strings.ToLower(strings.TrimSpace(chunk.Type)) {
 		case "text":
-			result.SawMeaningfulEvent = true
-			emitDelta(onMessage, "model.text-delta", chunk.Text)
+			if chunk.Text != "" {
+				result.SawMeaningfulEvent = true
+				emitDelta(onMessage, "model.text-delta", chunk.Text)
+			}
 		case "reasoning":
-			result.SawMeaningfulEvent = true
+			if chunk.Reasoning != "" {
+				result.SawMeaningfulEvent = true
+			}
 			if chunk.Reasoning != "" && onMessage != nil {
 				if result.ThinkingSignature == "" {
 					result.ThinkingSignature = newPuterThinkingSignature()
@@ -102,8 +106,10 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 				}})
 			}
 		case "usage":
-			result.SawMeaningfulEvent = true
 			result.Usage = normalizePuterUsage(chunk.Usage)
+			if len(result.Usage) > 0 {
+				result.SawMeaningfulEvent = true
+			}
 			if onMessage != nil && len(result.Usage) > 0 {
 				onMessage(upstream.SSEMessage{Type: "model.tokens-used", Event: result.Usage})
 			}
@@ -298,6 +304,14 @@ func normalizePuterUsage(raw map[string]interface{}) map[string]interface{} {
 		out["outputTokens"] = output
 		out["output_tokens"] = output
 	}
+	if reasoning, ok := nestedUsageInt(raw,
+		[]string{"reasoningTokens"}, []string{"reasoning_tokens"},
+		[]string{"completion_tokens_details", "reasoning_tokens"},
+		[]string{"output_tokens_details", "reasoning_tokens"},
+		[]string{"outputTokensDetails", "reasoningTokens"}); ok {
+		out["reasoningTokens"] = reasoning
+		out["reasoning_tokens"] = reasoning
+	}
 	if cached, ok := firstUsageInt(raw, "cachedTokens", "cached_tokens", "prompt_cache_hit_tokens"); ok {
 		out["cacheReadTokens"] = cached
 		out["cache_read_tokens"] = cached
@@ -307,6 +321,27 @@ func normalizePuterUsage(raw map[string]interface{}) map[string]interface{} {
 		out["usd_cents"] = usdCents
 	}
 	return out
+}
+
+func nestedUsageInt(values map[string]interface{}, paths ...[]string) (int, bool) {
+	for _, path := range paths {
+		var current interface{} = values
+		for _, key := range path {
+			object, ok := current.(map[string]interface{})
+			if !ok {
+				current = nil
+				break
+			}
+			current = object[key]
+		}
+		if current == nil {
+			continue
+		}
+		if value, ok := firstUsageInt(map[string]interface{}{"value": current}, "value"); ok {
+			return value, true
+		}
+	}
+	return 0, false
 }
 
 func firstUsageInt(values map[string]interface{}, keys ...string) (int, bool) {

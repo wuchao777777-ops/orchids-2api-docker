@@ -300,8 +300,8 @@ func TestConsumeStream_EmitsTextReasoningAndToolCalls(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"id":"cmb-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":"think"},"finish_reason":""}]}`,
 		`data: {"choices":[{"index":0,"delta":{"content":"hello "},"finish_reason":""}]}`,
-		`data: {"choices":[{"index":0,"delta":{"content":"world"},"finish_reason":"stop"}],"usage":null}`,
-		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{\"path\":\".\"}"}}]}}]}`,
+		`data: {"choices":[{"index":0,"delta":{"content":"world"},"finish_reason":""}],"usage":null}`,
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{\"path\":\".\"}"}}]},"finish_reason":"tool_calls"}]}`,
 		`data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7,"completion_thinking_tokens":2,"prompt_cache_hit_tokens":3}}`,
 		`data: [DONE]`,
 	}, "\n")
@@ -565,6 +565,29 @@ func TestBuildBody_IncludesUsageAndCamelCaseConversationID(t *testing.T) {
 	options, ok := decoded["stream_options"].(map[string]interface{})
 	if !ok || options["include_usage"] != true {
 		t.Fatalf("stream_options = %#v, want include_usage=true", decoded["stream_options"])
+	}
+}
+
+func TestConsumeStream_PreservesBusinessEnvelopeAndNestedReasoningUsage(t *testing.T) {
+	t.Parallel()
+	body := strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"completion_tokens_details":{"reasoning_tokens":4}}}`,
+		`data: [DONE]`,
+	}, "\n")
+	result, err := consumeStream(strings.NewReader(body), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Usage["reasoningTokens"]; got != 4 {
+		t.Fatalf("reasoningTokens=%v want 4", got)
+	}
+
+	for _, code := range []int{CodeModelThrottle, CodeSessionDead} {
+		_, err := consumeStream(strings.NewReader(fmt.Sprintf("data: {\"code\":%d,\"msg\":\"business failure\"}\n", code)), nil)
+		var typed *APIError
+		if !errors.As(err, &typed) || typed.Code != code || typed.HTTPStatus != http.StatusOK {
+			t.Fatalf("code %d error=%#v want typed HTTP-200 business error", code, err)
+		}
 	}
 }
 

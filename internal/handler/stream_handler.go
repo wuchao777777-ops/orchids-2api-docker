@@ -1860,19 +1860,31 @@ func hasRequiredToolInputFields(nameKey string, fields toolInputFields) bool {
 	}
 }
 
+func (h *streamHandler) markWriteError(event string, err error) {
+	if err == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.markWriteErrorLocked(event, err)
+}
+
 func (h *streamHandler) markWriteErrorLocked(event string, err error) {
 	if err == nil {
 		return
 	}
-	if h.hasReturn {
-		return
-	}
+	// finishResponse claims hasReturn before writing its terminal frames. A write
+	// can therefore fail after the response is already terminal; do not mistake
+	// that claimed state for a successful write and hide the failure.
+	alreadyFailed := h.requestFailed
 	h.hasReturn = true
 	h.requestFailed = true
 	h.returned.Store(true)
 	h.finalStopReason = "write_error"
 	middleware.MarkStreamFailure(h.w)
-	slog.Warn("SSE write failed", "event", event, "error", err)
+	if !alreadyFailed {
+		slog.Warn("Response write failed", "event", event, "error", err)
+	}
 }
 
 func (h *streamHandler) forceFinishIfMissing() {
@@ -1896,9 +1908,9 @@ func (h *streamHandler) forceFinishIfMissing() {
 
 func (h *streamHandler) hasAnyOutput() bool {
 	h.mu.Lock()
-	hasReasoning := h.hasReasoningOutput
+	has := h.hasReasoningOutput || h.useUpstreamUsage
 	h.mu.Unlock()
-	return hasReasoning || h.hasVisibleOutput()
+	return has || h.hasVisibleOutput()
 }
 
 func (h *streamHandler) hasVisibleOutput() bool {
@@ -2005,6 +2017,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	switch eventKey {
 	case "model.usage-metadata":
+		h.setUpstreamUsage(msg.Event)
 		slog.Info("Warp request usage", "usage", msg.Event)
 		return
 
@@ -2395,6 +2408,15 @@ func (h *streamHandler) injectMessageText(logMsg, errorMsg string) {
 // stream has already sent its message_start — the status is 200 and cannot be
 // revisited — so its report has to stay in band, but it carries the same
 // operator-facing message rather than a re-classified one.
+func (h *streamHandler) terminalState() (returned, failed bool) {
+	if h == nil {
+		return false, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.hasReturn, h.requestFailed
+}
+
 func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
 	if h == nil || h.w == nil {
 		return

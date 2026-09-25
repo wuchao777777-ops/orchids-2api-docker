@@ -116,6 +116,28 @@ func TestApiKeyBillingExpiredReservationsStopCounting(t *testing.T) {
 	}
 }
 
+func TestApiKeyBillingSettlementIsIdempotentByEvent(t *testing.T) {
+	s, _ := newApiKeyBillingStore(t, "billing-idempotent:")
+	key := createBillingKey(t, s, 1000)
+	ctx := context.Background()
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 300); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 300); err != nil {
+		t.Fatalf("idempotent replay failed: %v", err)
+	}
+	got, err := s.GetApiKeyByID(ctx, key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BillingUsedUSDTicks != 300 {
+		t.Fatalf("used = %d, want one 300-tick charge", got.BillingUsedUSDTicks)
+	}
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 301); err == nil {
+		t.Fatal("different amount for settled event must conflict")
+	}
+}
+
 // TestApiKeyBillingSettleMovesReservationIntoUsed pins settlement: the hold
 // disappears, the charge lands in the used counter, and actual usage is billed
 // even when its hold is gone.
@@ -324,6 +346,52 @@ func TestApiKeyBillingPeriodRollsOver(t *testing.T) {
 	}
 	if !rolled.BillingPeriodStartedAt.After(now.Add(-time.Minute)) {
 		t.Fatalf("period start was not advanced: %v", rolled.BillingPeriodStartedAt)
+	}
+}
+
+func TestApiKeyBillingPeriodRolloverPreservesLiveHoldsAndIsAtomic(t *testing.T) {
+	s, mini := newApiKeyBillingStore(t, "period-atomic:")
+	defer mini.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	raw := "raw-period-atomic"
+	digest := sha256.Sum256([]byte(raw))
+	key := &ApiKey{
+		Name: "period atomic", KeyHash: hex.EncodeToString(digest[:]), Enabled: true,
+		BillingLimitUSDTicks: 1_000, BillingPeriodDays: 1,
+		BillingPeriodStartedAt: now.Add(-48 * time.Hour),
+	}
+	if err := s.CreateApiKey(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "old", 900); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "live", 100, now.Add(time.Hour)); err != nil || !ok {
+		t.Fatalf("live hold: ok=%v err=%v", ok, err)
+	}
+	// Two stale snapshots model concurrent authorizations. Exactly one can match
+	// and advance the durable period start; the second must not reset fresh usage.
+	staleA, _ := s.GetApiKeyByID(ctx, key.ID)
+	staleB := *staleA
+	s.rolloverApiKeyBilling(ctx, staleA, now)
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "fresh", 50); err != nil {
+		t.Fatal(err)
+	}
+	s.rolloverApiKeyBilling(ctx, &staleB, now.Add(time.Second))
+
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "live", 100); err != nil {
+		t.Fatalf("live hold was deleted by rollover: %v", err)
+	}
+	got, err := s.GetApiKeyByID(ctx, key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BillingUsedUSDTicks != 150 {
+		t.Fatalf("stale rollover erased fresh settlement: used=%d want 150", got.BillingUsedUSDTicks)
+	}
+	if released, err := s.ReleaseApiKeyBilling(ctx, key.ID, "live"); err != nil || released {
+		t.Fatalf("settled live hold remains: released=%v err=%v", released, err)
 	}
 }
 

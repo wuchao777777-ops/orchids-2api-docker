@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -218,6 +219,8 @@ func TestVerifyModelRequiresUsableEvent(t *testing.T) {
 	}{
 		{name: "valid", body: `{"type":"usage","usage":{"input_tokens":1,"output_tokens":1}}`},
 		{name: "empty", body: "", wantErr: "no usable stream events"},
+		{name: "empty-text", body: `{"type":"text","text":""}`, wantErr: "no usable stream events"},
+		{name: "empty-usage", body: `{"type":"usage"}`, wantErr: "no usable stream events"},
 		{name: "stream-error", body: `{"type":"error","message":"model unavailable"}`, wantErr: "model unavailable"},
 		{name: "malformed-only", body: `not-json`, wantErr: "protocol error: invalid JSON"},
 		{name: "unknown-event", body: `{"type":"mystery"}`, wantErr: `protocol error: unknown event type "mystery"`},
@@ -385,6 +388,16 @@ func TestNewFromAccountReusesSharedHTTPClient(t *testing.T) {
 	clientB := NewFromAccount(&store.Account{ClientCookie: "token-b"}, cfg)
 	if clientA.httpClient != clientB.httpClient {
 		t.Fatal("expected shared HTTP client")
+	}
+}
+
+func TestHTTPErrorPreservesRetryAfter(t *testing.T) {
+	err := &HTTPError{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {"9"}}, Body: "slow down"}
+	if got := err.RetryAfter(); got != 9*time.Second {
+		t.Fatalf("RetryAfter()=%s want 9s", got)
+	}
+	if !strings.Contains(err.Error(), "status=429") {
+		t.Fatalf("Error()=%q", err.Error())
 	}
 }
 
