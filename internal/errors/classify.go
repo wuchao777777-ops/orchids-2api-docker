@@ -204,8 +204,6 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "auth_blocked", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "404"):
 		return UpstreamErrorClass{Category: "auth_blocked"}
-	case isWarpModelUnavailableError(lower):
-		return UpstreamErrorClass{Category: "model_unavailable", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "input is too long") || HasExplicitHTTPStatus(lower, "400"):
 		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "402") ||
@@ -214,7 +212,7 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "quota_exhausted", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "code=6004"):
 		return UpstreamErrorClass{Category: "rate_limit", Retryable: true, SwitchAccount: true}
-	case strings.Contains(lower, "qoder gateway is busy"):
+	case isSharedUpstreamQueueRefusal(lower):
 		// Qoder business code 10605 means the model queue/service is unavailable,
 		// often with serviceAvailable=false and one shared retry-after hint. It is
 		// not a bad credential and switching through four accounts only multiplies
@@ -250,6 +248,25 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	}
 }
 
+// isSharedUpstreamQueueRefusal reports whether the upstream refused because a
+// resource shared by every account is unavailable.
+//
+// It keys on the shape of the refusal, not one phrasing, because the same
+// condition reaches this classifier under several texts: the classified form
+// ("qoder gateway is busy"), Qoder's raw business code when a parser has not
+// unwrapped it (10605, isQueued), the upstream stating its own pool is throttled,
+// and the serviceAvailable:false flag. Falling through to the default branch
+// would label it "unknown" with SwitchAccount=true, which is what turned one
+// shared refusal into a rotation storm across the whole account pool.
+func isSharedUpstreamQueueRefusal(lower string) bool {
+	return strings.Contains(lower, "qoder gateway is busy") ||
+		strings.Contains(lower, "available upstream accounts are rate-limited") ||
+		strings.Contains(lower, "available upstream accounts are rate limited") ||
+		strings.Contains(lower, "10605") ||
+		strings.Contains(lower, `"serviceavailable":false`) ||
+		strings.Contains(lower, `"isqueued":true`)
+}
+
 func isClineModelEntitlement(lower string) bool {
 	if !HasExplicitHTTPStatus(lower, "403") {
 		return false
@@ -257,15 +274,6 @@ func isClineModelEntitlement(lower string) bool {
 	return strings.Contains(lower, "entitlement") ||
 		strings.Contains(lower, "not subscribed to required model plan") ||
 		strings.Contains(lower, "only available via cline product surfaces")
-}
-
-func isWarpModelUnavailableError(lower string) bool {
-	if !strings.Contains(lower, "warp") {
-		return false
-	}
-	return strings.Contains(lower, "requested base model") &&
-		(strings.Contains(lower, "not allowed") || strings.Contains(lower, "no model available")) ||
-		strings.Contains(lower, "llm_unavailable") || strings.Contains(lower, "model unavailable")
 }
 
 // IsCreditExhaustion reports whether a message says the account's allowance is

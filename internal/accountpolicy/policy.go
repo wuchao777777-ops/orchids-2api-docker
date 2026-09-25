@@ -161,6 +161,36 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 	lower := strings.ToLower(message)
 	now := time.Now()
 
+	// A queue/service refusal that names the whole upstream rather than this
+	// account has to be decided before the retryAfter hint below. Qoder reports
+	// 10605 as {"isQueued":true,"serviceAvailable":false,"retryAfterSeconds":30},
+	// and the error carrying it implements RetryAfter() -- so the generic branch
+	// used to win, park the account as "429" for 30s and rotate to the next one.
+	// Every account then ate the same shared refusal in turn: the pool drained to
+	// zero within seconds, with pool-empty alerts and a ~20% success rate, while
+	// the upstream had only said that this model's queue was unavailable.
+	//
+	// The verdict is retryable but deliberately not switchable, and it records
+	// nothing: the request waits out the upstream's own window and tries again on
+	// the account it already holds. That is the only useful response to a
+	// condition that is identical for every account -- rotating multiplies the
+	// refusal, and failing instantly throws away requests that a short wait would
+	// have served once the queue cleared.
+	//
+	// Cooldown is left zero on purpose: persisting a model cooldown here would
+	// take this account, and then every other one, out of selection for the
+	// window and turn the wait back into the fail-fast this is meant to replace.
+	if isGlobalUpstreamRefusal(lower) {
+		return Verdict{
+			Scope:         ScopeModel,
+			Message:       message,
+			Model:         model,
+			Retryable:     true,
+			SwitchAccount: false,
+			At:            now,
+		}
+	}
+
 	var retryAfter retryAfterError
 	if stderrors.As(err, &retryAfter) {
 		cooldown := retryAfter.RetryAfter()
@@ -255,6 +285,30 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 		Scope: ScopeNone, Retryable: Retryable(err), SwitchAccount: true,
 		At: now,
 	}
+}
+
+// isGlobalUpstreamRefusal reports whether the upstream refused because a shared
+// resource is unavailable, so the refusal is identical for every account and
+// rotation cannot help.
+//
+// The markers are deliberately about the *shape* of the refusal rather than one
+// phrasing, because the same condition reaches here under different text:
+//
+//   - "qoder gateway is busy"    -- the classified form
+//   - code 10605 / isQueued      -- Qoder's queue/busy business code, which also
+//     arrives wrapped in a 401 envelope that a parser can misread as a
+//     credential rejection ("qoder upstream rejected the credential: {...}")
+//   - serviceAvailable:false     -- the upstream stating the service itself is
+//     down for the model
+//   - "available upstream accounts are rate-limited" -- the upstream saying its
+//     own account pool is throttled, not ours
+func isGlobalUpstreamRefusal(lower string) bool {
+	return strings.Contains(lower, "qoder gateway is busy") ||
+		strings.Contains(lower, "available upstream accounts are rate-limited") ||
+		strings.Contains(lower, "available upstream accounts are rate limited") ||
+		strings.Contains(lower, "10605") ||
+		strings.Contains(lower, `"serviceavailable":false`) ||
+		strings.Contains(lower, `"isqueued":true`)
 }
 
 // isModelScopedFailure reports whether the message blames a model rather than
@@ -377,8 +431,6 @@ func CooldownFor(acc *store.Account) time.Duration {
 			return CooldownBlockedGro
 		}
 		return CooldownBlocked
-	case store.AccountStatusWarpQuotaExhausted:
-		return CooldownTransient
 	default:
 		return CooldownTransient
 	}
