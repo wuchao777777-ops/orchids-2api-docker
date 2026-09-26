@@ -28,6 +28,37 @@ func (m *sharedRefusalUpstream) SendRequestWithPayload(_ context.Context, req up
 	return errors.New(`qoder upstream rejected the credential: {"code":"10605","message":"{\"isQueued\":true,\"serviceAvailable\":false,\"retryAfterSeconds\":30}"}`)
 }
 
+// recoveringRefusalUpstream succeeds after its queue probe so the retry path
+// must return an answer without requiring another client-side request.
+type recoveringRefusalUpstream struct {
+	calls int
+}
+
+func (m *recoveringRefusalUpstream) SendRequestWithPayload(_ context.Context, _ upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), _ *debug.Logger) error {
+	m.calls++
+	if m.calls <= 2 {
+		return errors.New(`qoder upstream rejected the credential: {"code":"10605","message":"{\"isQueued\":true,\"serviceAvailable\":false,\"retryAfterSeconds\":30}"}`)
+	}
+	onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]any{"delta": "ready"}})
+	onMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]any{"finishReason": "end_turn"}})
+	return nil
+}
+
+func TestSharedRefusalRecoversInsideSingleRequest(t *testing.T) {
+	cfg := &config.Config{RequestTimeout: 10, MaxRetries: 3, RetryDelay: 1}
+	h := NewWithLoadBalancer(cfg, nil)
+	stub := &recoveringRefusalUpstream{}
+	h.client = stub
+	payload := map[string]any{"model": "qwen3.8-flash", "messages": []map[string]any{{"role": "user", "content": "hi"}}, "stream": true}
+	body, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/qoder/v1/chat/completions", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if stub.calls != 3 || rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ready") {
+		t.Fatalf("calls=%d status=%d body=%s", stub.calls, rec.Code, rec.Body.String())
+	}
+}
+
 // TestStreamOpensOnlyWhenThereIsSomethingToSend pins the deferral: a streaming
 // response must not commit its status before the upstream has produced anything,
 // or a failure can no longer be answered with a status.
@@ -66,23 +97,35 @@ func TestStreamOpensOnlyWhenThereIsSomethingToSend(t *testing.T) {
 	}
 }
 
-// TestKeepAliveOpensTheStreamInsteadOfStayingSilent pins the liveness bound: a
-// keep-alive tick means the upstream has been silent for the whole interval, so
-// the stream opens and the client is kept alive rather than left with nothing.
-func TestKeepAliveOpensTheStreamInsteadOfStayingSilent(t *testing.T) {
+// TestKeepAliveDoesNotCommitSilentStream keeps the HTTP status available for
+// a queue refusal even after the watchdog's first 15-second tick.
+func TestKeepAliveDoesNotCommitSilentStream(t *testing.T) {
 	rec := newFlushRecorder()
 	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatAnthropic)
 	defer sh.release()
 	sh.pendingModel = "qwen3.8-flash"
 
 	sh.writeKeepAlive()
-
-	out := rec.buf.String()
-	if !strings.Contains(out, "event: message_start") {
-		t.Fatalf("expected the keep-alive to open the stream, got: %q", out)
+	if rec.buf.Len() != 0 || sh.hasCommitted() {
+		t.Fatalf("keep-alive prematurely opened response: %q", rec.buf.String())
 	}
-	if !strings.Contains(out, sseKeepAlive) {
-		t.Fatalf("expected a keep-alive comment, got: %q", out)
+	sh.reportRequestFailure("queue refused", "rate_limit", "Qoder model queue unavailable")
+	if !strings.Contains(rec.buf.String(), "Qoder model queue unavailable") || strings.Contains(rec.buf.String(), "event: message_start") {
+		t.Fatalf("queue failure was not returned as HTTP error: %q", rec.buf.String())
+	}
+}
+
+// TestKeepAliveContinuesAfterStreamOpens covers the usual keep-alive behavior
+// after an actual content block has committed the response.
+func TestKeepAliveContinuesAfterStreamOpens(t *testing.T) {
+	rec := newFlushRecorder()
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatAnthropic)
+	defer sh.release()
+	sh.pendingModel = "qwen3.8-flash"
+	sh.handleMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]any{"delta": "hello"}})
+	sh.writeKeepAlive()
+	if !strings.Contains(rec.buf.String(), sseKeepAlive) {
+		t.Fatalf("committed response has no keep-alive: %q", rec.buf.String())
 	}
 }
 
@@ -109,11 +152,10 @@ func TestTerminalOnlyResponseStillOpensTheStream(t *testing.T) {
 	}
 }
 
-// TestSharedRefusalBeforeOutputAnswersWithAStatus is the end-to-end form of the
-// latency rule: a shared queue refusal that has produced nothing must not spend
-// the retry budget in-request. One probe is allowed, and then the caller gets a
-// retryable status it can act on rather than a long truncated stream.
-func TestSharedRefusalBeforeOutputAnswersWithAStatus(t *testing.T) {
+// TestSharedRefusalBeforeOutputUsesRetryWindow confirms that the server keeps
+// the same request open through its bounded retry window. If the upstream does
+// not recover, it returns an HTTP 429 without opening an SSE stream.
+func TestSharedRefusalBeforeOutputUsesRetryWindow(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 3, RetryDelay: 1}
 	h := NewWithLoadBalancer(cfg, nil)
 	stub := &sharedRefusalUpstream{}
@@ -137,8 +179,8 @@ func TestSharedRefusalBeforeOutputAnswersWithAStatus(t *testing.T) {
 	if strings.Contains(out, "event: error") || strings.Contains(out, "data:") {
 		t.Fatalf("an uncommitted stream must not answer with SSE frames: %s", out)
 	}
-	// One probe: the first attempt plus a single retry, not the whole budget.
-	if stub.calls != 2 {
-		t.Fatalf("upstream attempts = %d, want 2 (initial attempt plus one probe)", stub.calls)
+	// Initial request plus the three configured retry probes.
+	if stub.calls != 4 {
+		t.Fatalf("upstream attempts = %d, want 4 (initial request plus retry budget)", stub.calls)
 	}
 }

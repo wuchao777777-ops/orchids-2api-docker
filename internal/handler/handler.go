@@ -822,8 +822,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// upstream is called committed 200 and a role chunk to every streaming client,
 	// so a shared queue refusal arriving afterwards could only be reported in band
 	// -- which clients surface as a truncated stream instead of a retryable 429.
-	// It is now emitted by the first real event (see ensureMessageStartLocked), so
-	// a failure that produces nothing can still carry a real HTTP status.
+	// Keep-alive ticks also wait until actual content has opened the stream, so
+	// a queue refusal after 15 seconds can still carry a real HTTP status.
 	sh.pendingModel = req.Model
 
 	if verboseDiagnostics {
@@ -1021,20 +1021,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// A shared queue refusal that has produced nothing yet must not spend
-			// the whole retry budget in-request. Nothing has been committed, so the
-			// honest answer is a retryable HTTP status the caller can act on,
-			// instead of a 36-second wait that ends in a truncated stream. One
-			// short probe -- the first rung of the ramp -- still covers a queue that
-			// is already clearing; anything longer hands the wait back to the client.
-			if isSharedUpstreamRefusalClass(errClass) && !sh.hasCommitted() && attempt >= 1 {
-				slog.Warn("Reporting a shared upstream refusal without waiting the whole window",
-					"trace_id", traceID, "attempt", upstreamReq.Attempt,
-					"retries_remaining", retriesRemaining)
-				sh.reportRequestFailure("Reporting a shared refusal before any output",
-					errClass.Category, apperrors.PublicMessage(errStr))
-				return
-			}
+			// Shared queues may clear later within the advertised retry window.
+			// Use the bounded retry budget on the same account rather than handing
+			// every caller an early 429 after a single short probe. Once exhausted,
+			// the uncommitted response below still returns an honest HTTP 429.
 
 			if r.Context().Err() != nil {
 				sh.finishResponse("end_turn")

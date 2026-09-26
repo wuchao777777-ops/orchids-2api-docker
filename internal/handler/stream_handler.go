@@ -426,29 +426,6 @@ func (h *streamHandler) historyBuilderAt(slots *[]*strings.Builder, idx int) *st
 	return (*slots)[idx]
 }
 
-func (h *streamHandler) currentReasoningText() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	parts := make([]string, 0, len(h.thinkingBlockBuilders))
-	for i := range h.contentBlocks {
-		blockType, _ := h.contentBlocks[i]["type"].(string)
-		if blockType != "thinking" {
-			continue
-		}
-		if builder := builderAt(h.thinkingBlockBuilders, i); builder != nil {
-			if value := strings.TrimSpace(builder.String()); value != "" {
-				parts = append(parts, value)
-				continue
-			}
-		}
-		if value, _ := h.contentBlocks[i]["thinking"].(string); strings.TrimSpace(value) != "" {
-			parts = append(parts, strings.TrimSpace(value))
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
 func (h *streamHandler) rewriteToolCallToClient(name, input string) (string, string) {
 	h.mu.Lock()
 	clientTools := h.clientTools
@@ -769,15 +746,6 @@ func (h *streamHandler) writeSSEContentBlockDeltaTextLocked(index int, text stri
 	h.writeSSEBytesLockedWithHint("content_block_delta", raw, true)
 }
 
-func (h *streamHandler) writeSSEContentBlockDeltaText(index int, text string, final bool) {
-	if !h.isStream {
-		return
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.writeSSEContentBlockDeltaTextLocked(index, text, final)
-}
-
 func (h *streamHandler) writeSSEContentBlockDeltaThinkingLocked(index int, thinking string, final bool) {
 	raw, err := appendSSEContentBlockDeltaThinking(h.ssePayloadScratch[:0], index, thinking)
 	if err != nil {
@@ -790,15 +758,6 @@ func (h *streamHandler) writeSSEContentBlockDeltaThinkingLocked(index int, think
 		return
 	}
 	h.writeSSEBytesLockedWithHint("content_block_delta", raw, false)
-}
-
-func (h *streamHandler) writeSSEContentBlockDeltaThinking(index int, thinking string, final bool) {
-	if !h.isStream {
-		return
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.writeSSEContentBlockDeltaThinkingLocked(index, thinking, final)
 }
 
 func (h *streamHandler) writeSSEContentBlockStopLocked(index int, final bool) {
@@ -894,13 +853,12 @@ func (h *streamHandler) writeKeepAlive() {
 	if h.hasReturn {
 		return
 	}
-	// The stream is opened lazily, so a failure before any content can still carry
-	// a real HTTP status instead of an in-band error. That option is only worth
-	// holding while the client is willing to wait: a keep-alive tick means the
-	// upstream has been silent for the whole interval, and liveness now matters
-	// more, so open the stream and report as usual. This also bounds the silent
-	// gap to the keep-alive cadence the client saw before the frame was deferred.
-	if !h.messageStartWritten && !h.ensureMessageStartLocked() {
+	// A keep-alive comment must not commit an empty 200 response. The client
+	// can wait for the shared queue without a body; if the retry budget expires,
+	// reportRequestFailure can still return an actual HTTP 429. Opening an
+	// Anthropic message_start here made queue refusals look like interrupted
+	// streams (HTTP 200 plus an in-band error) after 15 silent seconds.
+	if !h.messageStartWritten {
 		return
 	}
 	if _, err := h.w.Write(sseKeepAliveBytes); err != nil {
