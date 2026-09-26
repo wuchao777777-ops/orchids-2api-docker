@@ -249,29 +249,50 @@ func TestConsumeStreamOversizedTextFallbackDegradesToText(t *testing.T) {
 }
 
 // TestBuildChatBodyCarriesThinkingSwitch pins the reasoning wire contract: a
-// reasoning-capable model row defaults thinking on, a client effort scales it,
-// and "none" turns it off. A non-reasoning model must not grow a thinking flag.
+// reasoning-capable model row leaves thinking off by default, explicit client
+// effort enables it, and "none" turns it off. A non-reasoning model must
+// not grow a default thinking flag or effort.
 func TestBuildChatBodyCarriesThinkingSwitch(t *testing.T) {
 	reasoning := modelEntry{Key: "qwen-plus", Source: "system", IsReasoning: true}
 	plain := modelEntry{Key: "qwen-turbo", Source: "system"}
 
-	// Default: a reasoning model thinks, a plain model does not.
+	// Default: even a reasoning-capable model has no reasoning controls.
 	body := decodeChatBodyForTestWithModel(t, reasoning, upstream.UpstreamRequest{})
 	params, _ := body["parameters"].(map[string]interface{})
-	if params["enable_thinking"] != true {
-		t.Fatalf("reasoning model parameters = %#v, want enable_thinking=true", params)
+	if _, present := params["enable_thinking"]; present {
+		t.Fatalf("default reasoning model must not enable thinking: %#v", params)
+	}
+	if _, present := params["reasoning_effort"]; present {
+		t.Fatalf("default reasoning model must not set effort: %#v", params)
+	}
+	if body["model_config"].(map[string]interface{})["is_reasoning"] != false {
+		t.Fatalf("default model_config unexpectedly enables reasoning: %#v", body)
 	}
 	body = decodeChatBodyForTestWithModel(t, plain, upstream.UpstreamRequest{})
 	params, _ = body["parameters"].(map[string]interface{})
 	if _, present := params["enable_thinking"]; present {
 		t.Fatalf("plain model must not carry enable_thinking, got %#v", params)
 	}
+	if _, present := params["reasoning_effort"]; present {
+		t.Fatalf("plain model must not carry default reasoning_effort, got %#v", params)
+	}
 
-	// A stated effort is forwarded.
-	body = decodeChatBodyForTestWithModel(t, reasoning, upstream.UpstreamRequest{ReasoningEffort: "low"})
+	// An explicit effort turns thinking on, including a mixed-case value.
+	body = decodeChatBodyForTestWithModel(t, reasoning, upstream.UpstreamRequest{ReasoningEffort: "HIGH"})
 	params, _ = body["parameters"].(map[string]interface{})
-	if params["enable_thinking"] != true || params["reasoning_effort"] != "low" {
-		t.Fatalf("parameters = %#v, want thinking on with effort=low", params)
+	if params["enable_thinking"] != true || params["reasoning_effort"] != "high" || body["model_config"].(map[string]interface{})["is_reasoning"] != true {
+		t.Fatalf("parameters = %#v, want explicit thinking on with effort=high", params)
+	}
+
+	// qfmodel is catalogued as reasoning-capable, but reference behavior does
+	// not switch it into thinking mode without an explicit client request.
+	body = decodeChatBodyForTestWithModel(t, modelEntry{Key: "qfmodel", IsReasoning: true}, upstream.UpstreamRequest{})
+	params, _ = body["parameters"].(map[string]interface{})
+	if body["model_config"].(map[string]interface{})["is_reasoning"] != false {
+		t.Fatalf("qfmodel default enabled reasoning: %#v", body)
+	}
+	if _, present := params["reasoning_effort"]; present {
+		t.Fatalf("qfmodel default carried reasoning_effort: %#v", params)
 	}
 
 	// "none" disables thinking explicitly.
