@@ -2,7 +2,6 @@ package grok
 
 import (
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 )
@@ -99,26 +98,5 @@ func TestRateLimitFromResponseRetryAfterHeader(t *testing.T) {
 func TestRateLimitFromResponseNon429(t *testing.T) {
 	if metadata := RateLimitFromResponse(http.StatusForbidden, nil, []byte(`Requests per Second (actual/limit): 6/6`)); metadata != nil {
 		t.Fatalf("403 must not parse: %#v", metadata)
-	}
-}
-
-func TestRateLimitMetadataDescribe(t *testing.T) {
-	metadata := &RateLimitMetadata{
-		Scope:      RateLimitScopeRPS,
-		TeamID:     "00000000-0000-0000-0000-000000000013",
-		Model:      "grok-4.5",
-		Actual:     6,
-		Limit:      6,
-		RetryAfter: 2 * time.Second,
-	}
-	desc := metadata.Describe()
-	if desc == "" {
-		t.Fatal("expected describe output")
-	}
-	// The appended text must keep existing classifiers matching.
-	for _, keyword := range []string{"team=", "model=", "scope=rps", "6/6", "reset=2s"} {
-		if !strings.Contains(desc, keyword) {
-			t.Fatalf("describe %q missing %q", desc, keyword)
-		}
 	}
 }

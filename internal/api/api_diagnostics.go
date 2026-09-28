@@ -14,7 +14,7 @@ func (a *API) SetDiagnosticStore(s *debug.DiagnosticStore) { a.diagnostics = s }
 
 func (a *API) HandleDiagnosticSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPut {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 		return
 	}
 	a.configMu.Lock()
@@ -45,17 +45,15 @@ func (a *API) HandleDiagnosticSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": a.DiagnosticsEnabled()})
+	writeJSON(w, map[string]bool{"enabled": a.DiagnosticsEnabled()})
 }
 func (a *API) DiagnosticsEnabled() bool {
 	cfg := a.config.Load()
 	return cfg != nil && cfg.DebugEnabled
 }
 func (a *API) HandleJournalDiagnostics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	id := strings.TrimSpace(r.URL.Query().Get("request_id"))
@@ -68,12 +66,11 @@ func (a *API) HandleJournalDiagnostics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not read diagnostics", http.StatusServiceUnavailable)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 	payload := map[string]interface{}{"available": bundle != nil, "retention": "24 小时，最多 512 个请求"}
 	if bundle != nil {
 		payload["entry"] = bundle
 	} else {
 		payload["note"] = "该请求没有保留的诊断内容（可能在采集启用前产生，或已超过保留期限）。"
 	}
-	_ = json.NewEncoder(w).Encode(payload)
+	writeJSON(w, payload)
 }

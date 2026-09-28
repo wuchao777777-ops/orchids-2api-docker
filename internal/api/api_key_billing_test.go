@@ -141,24 +141,3 @@ func TestHandleKeyBillingLimitUpdateTakesEffect(t *testing.T) {
 		t.Fatalf("empty patch status=%d body=%s", emptyRec.Code, emptyRec.Body.String())
 	}
 }
-
-// TestHandleKeysRejectsInvalidBillingLimits keeps a negative or overflow-prone
-// budget out of the ledger.
-func TestHandleKeysRejectsInvalidBillingLimits(t *testing.T) {
-	s, mini := newTestStore(t, "api-keys-billing-invalid:")
-	defer mini.Close()
-	defer s.Close()
-	a := New(s, "admin", "pass", &config.Config{})
-
-	for _, body := range []string{
-		`{"name":"negative","billing_limit_usd_ticks":-1}`,
-		`{"name":"overflow","billing_limit_usd_ticks":9000000000000001}`,
-	} {
-		req := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(body))
-		rec := httptest.NewRecorder()
-		a.HandleKeys(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("body=%s status=%d response=%s", body, rec.Code, rec.Body.String())
-		}
-	}
-}

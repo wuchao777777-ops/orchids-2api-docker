@@ -16,8 +16,8 @@
       contrast ratio on --surface-1; never use it below 12px.
    4. Page-specific rules go in that page's stylesheet (ops.css, accounts.css,
       models.css, config.css, tutorial.css), never here.
-   5. Layout primitives in this file: .page, .page-head, .toolbar, .card, .kpi,
-      .badge, .btn, .drawer, .empty-state, .skeleton.
+   5. Layout primitives in this file: .page-actions, .card-head, .content-card,
+      .badge, .btn, .drawer, .empty-state, .skeleton-line.
 
    Sections: 1 tokens · 2 reset · 3 shell · 4 page head · 5 buttons · 6 forms
    7 surfaces · 8 metrics · 9 tables · 10 badges · 11 tabs · 12 overlays
@@ -32,13 +32,9 @@
 
   /* Surfaces, from the page background up to a raised popover. */
   --bg-app: #0b0e14;
-  --bg-body: #0b0e14;
   --surface-1: #121722;
   --surface-2: #171d2b;
   --surface-3: #1e2634;
-  --bg-surface: var(--surface-1);
-  --bg-surface-hover: var(--surface-2);
-  --bg-elevated: var(--surface-3);
   --bg-inset: rgba(0, 0, 0, 0.28);
   --bg-sidebar: #0e131c;
 
@@ -57,10 +53,6 @@
   --accent-strong: #ff9f2e;
   --accent-soft: rgba(255, 178, 87, 0.14);
   --accent-line: rgba(255, 178, 87, 0.45);
-  --primary: var(--accent);
-  --primary-hover: var(--accent-strong);
-  --primary-light: var(--accent-soft);
-  --primary-glow: rgba(255, 178, 87, 0.22);
 
   /* Semantic states. Every badge, pill and chart series draws from these. */
   --ok: #4ade9b;
@@ -74,19 +66,14 @@
   --idle: #8f9cb3;
   --idle-soft: rgba(143, 156, 179, 0.14);
 
-  /* Legacy aliases kept so page stylesheets and inline styles keep resolving. */
+  /* Semantic aliases: --accent-purple for the Cline/selected-estimate accents,
+     --accent-green for the inline style config.js writes. */
   --accent-purple: #a78bfa;
-  --accent-pink: #f0a6bd;
-  --accent-blue: var(--info);
   --accent-green: var(--ok);
-  --accent-orange: var(--accent);
-  --accent-red: var(--bad);
 
   --border-color: rgba(148, 163, 184, 0.16);
   --border-strong: rgba(148, 163, 184, 0.28);
-  --border-highlight: rgba(255, 178, 87, 0.35);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 6px 20px rgba(3, 6, 12, 0.45);
   --shadow-lg: 0 24px 60px rgba(3, 6, 12, 0.6);
   --shadow-glow: 0 0 0 3px rgba(255, 178, 87, 0.18);
@@ -106,8 +93,6 @@
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-pill: 999px;
-  --radius-xs: var(--radius-sm);
-  --radius-xl: var(--radius-lg);
 
   /* One control height for every button, input and select. */
   --control-h: 34px;
@@ -132,7 +117,6 @@
      `100%`, not `100vw`: a percentage resolves against the containing block, so
      a vertical scrollbar cannot push the column into a horizontal one. */
   --content-max: min(3200px, calc(100% - var(--sidebar-w)));
-  --table-row-h: 42px;
 
   --font-sans: 'Outfit', 'Geist Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
@@ -292,7 +276,8 @@ body::before,
   text-transform: uppercase;
 }
 
-.sidebar-menu {
+.sidebar-menu,
+.ops-kpi-rows{
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -394,11 +379,12 @@ body::before,
   backdrop-filter: blur(12px);
 }
 
-.mobile-topbar-brand { display: flex; align-items: center; gap: var(--space-3); }
+.mobile-topbar-brand,
+.ops-head-title{ display: flex; align-items: center; gap: var(--space-3); }
 
 .mobile-menu-btn {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   width: 36px;
   height: 36px;
   padding: 9px;
@@ -441,7 +427,7 @@ body::before,
 }
 
 /* -----------------------------------------------------------------------------
-   4. Page head & toolbar
+   4. Page head
    -------------------------------------------------------------------------- */
 .header-section {
   display: flex;
@@ -482,19 +468,6 @@ body::before,
   margin-left: auto;
 }
 
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-}
-.toolbar-compact { padding: var(--space-2) var(--space-3); }
-
 /* -----------------------------------------------------------------------------
    5. Buttons
    -------------------------------------------------------------------------- */
@@ -510,11 +483,8 @@ body::before,
 .btn-icon,
 .action-icon,
 .ops-chip,
-.chip,
-.send-btn,
 .models-primary-action,
 .models-action-btn,
-.capability-action,
 .panel-close-btn {
   display: inline-flex;
   align-items: center;
@@ -542,7 +512,6 @@ body::before,
 .btn-icon:hover,
 .action-icon:hover,
 .models-action-btn:hover,
-.capability-action:hover,
 .panel-close-btn:hover {
   background: var(--surface-3);
   border-color: var(--border-strong);
@@ -566,7 +535,6 @@ body::before,
 
 .btn-primary:hover,
 .btn-save:hover,
-.send-btn:hover,
 .models-primary-action:hover {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
@@ -607,7 +575,6 @@ body::before,
 }
 
 .btn-sm { height: var(--control-h-sm); padding: 0 var(--space-2); font-size: 0.78rem; }
-.btn-lg { height: var(--control-h-lg); padding: 0 var(--space-5); font-size: 0.9rem; }
 
 /* Square icon button: 34x34 with a single glyph. */
 .btn-icon,
@@ -624,7 +591,6 @@ body::before,
 
 /* Segmented control: time ranges, tabs and log kinds. */
 .ops-chip,
-.chip,
 .btn-page,
 .tab-item,
 .logs-tab,
@@ -640,7 +606,6 @@ body::before,
 }
 
 .ops-chip:hover,
-.chip:hover,
 .btn-page:hover,
 .tab-item:hover,
 .logs-tab:hover {
@@ -650,7 +615,6 @@ body::before,
 }
 
 .ops-chip.is-active,
-.chip.is-active,
 .tab-item.active,
 .tab-item.is-active,
 .logs-tab.is-active,
@@ -734,8 +698,7 @@ input[type="radio"],
 
 .row-checkbox { vertical-align: middle; }
 
-input[type="range"],
-.range-input {
+input[type="range"] {
   min-height: 0;
   padding: 0;
   border: 0;
@@ -747,13 +710,12 @@ input[type="range"],
   min-width: 108px;
   min-height: var(--control-h-sm);
   font-size: 0.78rem;
+  width: auto;
 }
 
-.form-group,
-.field { display: flex; flex-direction: column; gap: var(--space-2); }
+.form-group { display: flex; flex-direction: column; gap: var(--space-2); }
 
 .form-label,
-.field-label,
 .config-key-label,
 .models-section-label {
   display: flex;
@@ -769,13 +731,6 @@ input[type="range"],
   grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
-}
-
-.helper-text,
-.field-hint {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  line-height: 1.6;
 }
 
 .input-wrapper {
@@ -839,11 +794,6 @@ input[type="range"],
   transition: transform var(--transition), background var(--transition);
 }
 
-.toggle.active {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
 .toggle.active .toggle-slider {
   transform: translateX(16px);
   background: var(--text-on-accent);
@@ -853,7 +803,8 @@ input[type="range"],
    forgot to mirror the state onto the label. The models table did exactly that —
    the box was checked and the switch still looked off, which is how a 启用 toggle
    came to look disabled. */
-.toggle:has(input:checked) {
+.toggle:has(input:checked),
+.toggle.active{
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -873,8 +824,7 @@ input[type="range"],
   overflow: hidden;
 }
 
-.advanced-settings > summary,
-details.collapsible > summary {
+.advanced-settings > summary {
   padding: var(--space-3) var(--space-4);
   color: var(--text-soft);
   font-size: 0.8rem;
@@ -893,17 +843,17 @@ details.collapsible > summary {
 
 .advanced-settings[open] > summary::before { content: "－"; }
 
-.advanced-settings[open] > summary { border-bottom: 1px solid var(--border-color); }
+.advanced-settings[open] > summary,
+.tut-faq details[open] summary{ border-bottom: 1px solid var(--border-color); }
 
-.advanced-settings .advanced-body { padding: var(--space-4); }
-
-.collapsed { display: none; }
+.advanced-settings .advanced-body,
+.estimate-panel,
+.config-key-card{ padding: var(--space-4); }
 
 /* -----------------------------------------------------------------------------
    7. Surfaces: cards, panels, sections
    -------------------------------------------------------------------------- */
 .content-card,
-.card,
 .ops-card,
 .models-results-card,
 .estimate-panel,
@@ -916,13 +866,12 @@ details.collapsible > summary {
   box-shadow: none;
 }
 
-.card,
 .content-card,
 .models-results-card { overflow: hidden; }
 
 .card-head,
-.section-head,
-.config-key-head {
+.config-key-head,
+.settings-card-head{
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -933,18 +882,8 @@ details.collapsible > summary {
 }
 
 .card-head h2,
-.section-title,
-.config-section,
 .models-section-label {
   font-size: 0.92rem;
-  font-weight: 650;
-}
-
-.card-body,
-.section-body { padding: var(--space-4) var(--space-5); }
-
-.card-title {
-  font-size: 0.98rem;
   font-weight: 650;
 }
 
@@ -986,15 +925,13 @@ details.collapsible > summary {
 .modal-close:hover { background: var(--surface-3); color: var(--text-main); }
 
 .hint,
-.helper,
 .ops-hint,
-.meta-text {
+.meta-text,
+.helper-text{
   color: var(--text-muted);
   font-size: 0.75rem;
   line-height: 1.6;
 }
-
-.section-head { border-bottom: 0; padding-bottom: 0; }
 
 /* -----------------------------------------------------------------------------
    8. Metrics & stats
@@ -1006,8 +943,7 @@ details.collapsible > summary {
   margin-bottom: var(--space-5);
 }
 
-.stat-card,
-.kpi {
+.stat-card {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -1020,37 +956,29 @@ details.collapsible > summary {
 }
 
 .stat-card::after { content: none; }
-.stat-card { background: var(--surface-1); }
 
-.stat-info {
+.stat-info,
+.form-row-control{
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
 }
 
-.stat-info .label,
-.kpi .label {
+.stat-info .label {
   color: var(--text-muted);
   font-size: 0.74rem;
   font-weight: 550;
   letter-spacing: 0.01em;
 }
 
-.stat-info .value,
-.kpi .value {
+.stat-info .value {
   color: var(--text-main);
   font-size: 1.6rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
   line-height: 1.1;
-}
-
-.stat-info .note,
-.kpi .note {
-  color: var(--text-muted);
-  font-size: 0.72rem;
 }
 
 .stat-icon {
@@ -1112,7 +1040,6 @@ details.collapsible > summary {
 }
 
 table,
-.table,
 .models-table,
 .ops-table,
 .logs-table {
@@ -1151,27 +1078,21 @@ table tbody td,
 
 table tbody tr:hover td { background: var(--surface-2); }
 
-table tbody tr:last-child td { border-bottom: 0; }
-.logs-table tbody tr.is-selected td { background: var(--accent-soft); }
+table tbody tr:last-child td,
+.accounts-table tbody tr:last-child td{ border-bottom: 0; }
 
-.table-empty-cell,
-.table-empty {
+.table-empty-cell {
   padding: var(--space-8) var(--space-4);
   color: var(--text-muted);
   text-align: center;
 }
 
-.table-checkbox-cell,
 .col-check { width: 40px; text-align: center; }
 .col-actions { width: 120px; text-align: right; white-space: nowrap; }
 .col-model { min-width: 220px; }
 .col-status { width: 120px; }
-.col-sort { width: 90px; }
-.col-toggle { width: 90px; }
+.col-sort, .col-toggle { width: 90px; }
 .col-token { max-width: 260px; }
-
-.num,
-td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
 .pagination-shell {
   display: flex;
@@ -1191,7 +1112,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
    10. Badges, tags & tokens
    -------------------------------------------------------------------------- */
 .badge,
-.status-badge,
 .tag,
 .mini-badge,
 .models-status-badge,
@@ -1214,23 +1134,17 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
   white-space: nowrap;
 }
 
-.status-badge:empty { display: none; }
-
 .is-ok,
-.tag.is-ok,
-.status-badge.is-ok { color: var(--ok); border-color: rgba(74, 222, 155, 0.35); background: var(--ok-soft); }
+.tag.is-ok { color: var(--ok); border-color: rgba(74, 222, 155, 0.35); background: var(--ok-soft); }
 
 .is-warn,
-.is-warning,
-.status-badge.is-warn { color: var(--warn); border-color: rgba(245, 194, 100, 0.35); background: var(--warn-soft); }
+.is-warning { color: var(--warn); border-color: rgba(245, 194, 100, 0.35); background: var(--warn-soft); }
 
 .is-bad,
 .is-error,
-.status-badge.is-error,
 .warning-text { color: var(--bad); border-color: rgba(251, 113, 133, 0.35); background: var(--bad-soft); }
 
-.is-info,
-.status-badge.is-info { color: var(--info); border-color: rgba(108, 182, 255, 0.35); background: var(--info-soft); }
+.is-info { color: var(--info); border-color: rgba(108, 182, 255, 0.35); background: var(--info-soft); }
 
 .is-idle,
 .is-loading { color: var(--idle); border-color: var(--border-strong); background: var(--idle-soft); }
@@ -1270,8 +1184,7 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 .filter-tabs,
 .platform-tabs,
 .config-tabs-shell,
-.logs-tabs,
-.tabs {
+.logs-tabs {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1280,8 +1193,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
   border: 0;
   background: transparent;
 }
-
-.tabs { margin-bottom: var(--space-4); }
 
 /* -----------------------------------------------------------------------------
    12. Overlays: modal, drawer, popover, toast
@@ -1317,16 +1228,8 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 .modal-content-md { max-width: 620px; }
 .modal-content-lg { max-width: 880px; }
 
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--border-color);
-}
-
-.modal-title { font-size: 0.98rem; font-weight: 650; }
+.modal-title,
+.tut-section-head h2{ font-size: 0.98rem; font-weight: 650; }
 
 .modal-body,
 .modal-scroll {
@@ -1365,7 +1268,8 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
 .drawer.is-open { transform: translateX(0); }
 
-.drawer-head {
+.drawer-head,
+.modal-header{
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1417,7 +1321,8 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 }
 
 .toast.show { opacity: 1; transform: translateY(0); }
-.toast[data-type="error"] { border-left-color: var(--bad); }
+.toast[data-type="error"],
+.logs-attempt.is-failed{ border-left-color: var(--bad); }
 .toast[data-type="info"] { border-left-color: var(--info); }
 
 .toast-mark {
@@ -1470,21 +1375,14 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
 /* Loading is a skeleton shimmer, never a grey veil over live content: a veil
    reads as "the page is broken". */
-.loading {
-  position: relative;
-  min-height: 60px;
-  border-radius: var(--radius-md);
-}
-
-.skeleton,
 .skeleton-line {
   border-radius: var(--radius-sm);
   background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
   background-size: 400% 100%;
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  height: 12px;
+  margin-bottom: var(--space-2);
 }
-
-.skeleton-line { height: 12px; margin-bottom: var(--space-2); }
 .skeleton-line.w-40 { width: 40%; }
 .skeleton-line.w-70 { width: 70%; }
 
@@ -1505,18 +1403,15 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.error,
 .warning-box {
   padding: var(--space-3) var(--space-4);
-  border: 1px solid rgba(251, 113, 133, 0.35);
-  border-left: 3px solid var(--bad);
+  border: 1px solid rgba(245, 194, 100, 0.35);
+  border-left: 3px solid var(--warn);
   border-radius: var(--radius-md);
-  background: var(--bad-soft);
+  background: var(--warn-soft);
   color: var(--text-main);
   font-size: 0.8rem;
 }
-
-.warning-box { border-color: rgba(245, 194, 100, 0.35); border-left-color: var(--warn); background: var(--warn-soft); }
 
 /* Sticky action bar: saves without scrolling back down a long page. */
 .sticky-actions {
@@ -1590,7 +1485,8 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
   padding: var(--space-4) var(--space-5);
   border-left: 3px solid var(--info);
 }
-.doc-callout-amber { border-left-color: var(--warn); }
+.doc-callout-amber,
+.tut-route-rule.is-warning{ border-left-color: var(--warn); }
 .doc-inline-code,
 .inline-code,
 .doc-inline-code-red,
@@ -1623,8 +1519,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 .muted { color: var(--text-muted); }
 .normal { color: var(--text-soft); }
 .abnormal { color: var(--bad); }
-.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.compact-select { width: auto; }
 
 /* -----------------------------------------------------------------------------
    16.5 Wide screens (27" 2560x1440, 4K, ultrawide)
@@ -1648,8 +1542,7 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
   .stats-grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
   .estimate-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 
-  .modal-content { max-width: 700px; }
-  .modal-content-md { max-width: 700px; }
+  .modal-content, .modal-content-md { max-width: 700px; }
   .modal-content-lg { max-width: 1040px; }
 }
 
@@ -1659,12 +1552,9 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
     --control-h: 36px;
     --control-h-sm: 30px;
     --control-h-lg: 42px;
-    --table-row-h: 46px;
   }
 
-  body { font-size: 16px; }
-
-  .main-content { padding: var(--space-8) var(--space-10) var(--space-10); }
+.main-content { padding: var(--space-8) var(--space-10) var(--space-10); }
   .header-section h1 { font-size: 1.65rem; }
 
   .stats-grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
@@ -1692,7 +1582,8 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
 @media (min-width: 2200px) {
   .login-card { max-width: 480px; }
-  .login-body { font-size: 16px; }
+  .login-body,
+  body{ font-size: 16px; }
   .login-hero h1 { font-size: 1.9rem; }
 }
 
@@ -1723,9 +1614,7 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
   .sidebar.mobile-open { transform: translateX(0); }
 
-  body.sidebar-open { overflow: hidden; }
-
-  /* Below this breakpoint the sidebar is a drawer, so it occupies no room in the
+/* Below this breakpoint the sidebar is a drawer, so it occupies no room in the
      flow and --content-max must stop subtracting it. --content-max is
      `min(3200px, 100% - var(--sidebar-w))`: at 390px that caps the page column at
      142px and every page renders as a narrow strip of wrapped text beside an
@@ -1738,14 +1627,10 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
     padding: 72px var(--space-4) var(--space-8);
   }
 
-  .header-section { align-items: flex-start; }
-  .page-actions { margin-left: 0; }
-  .toolbar { padding: var(--space-3); }
   .form-row,
   .estimate-grid { grid-template-columns: 1fr; gap: var(--space-2); }
 
-  .pagination-shell,
-  .section-head {
+  .pagination-shell {
     flex-direction: column;
     align-items: stretch;
   }
@@ -1835,9 +1720,7 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
   .btn-save,
   .btn-page,
   .btn-icon,
-  .icon-btn,
   .action-icon,
-  .chip,
   .ops-chip,
   .tab-item,
   .logs-tab,
@@ -1858,14 +1741,9 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
   .row-checkbox,
   .alerts-checkbox { width: 24px; height: 24px; }
 
-  .page-actions > button,
-  .page-actions > .btn,
-  .page-actions > [class*='btn-'] { flex: 1 1 auto; }
-
-  .panel-close-btn,
+.panel-close-btn,
   .modal-close,
   .btn-icon,
-  .icon-btn,
   .action-icon { min-width: 44px; }
 
   .mobile-menu-btn { width: 44px; height: 44px; padding: 13px; }
@@ -1900,7 +1778,10 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
 
-  .modal-actions > .btn { flex: 1 1 auto; }
+  .modal-actions > .btn,
+  .page-actions > button,
+  .page-actions > .btn,
+  .page-actions > [class*='btn-']{ flex: 1 1 auto; }
 
   .drawer {
     width: 100vw;
@@ -1908,10 +1789,11 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
   }
 
   /* The detail panel covers the list on a phone: the page must not scroll behind it. */
-  body.drawer-open { overflow: hidden; }
+  body.drawer-open,
+  body.sidebar-open{ overflow: hidden; }
 
-  .drawer-head { padding: var(--space-4); }
-  .drawer-body { padding: var(--space-4); }
+.drawer-body,
+  .drawer-head{ padding: var(--space-4); }
 
   .toast-container {
     top: auto;
@@ -1937,12 +1819,9 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 @media (max-width: 640px) {
   /* Five page buttons and a page-size select do not fit one line: they were the
      439px row that zoomed the accounts page out. */
-  .pagination-shell {
-    flex-direction: column;
-    align-items: stretch;
-  }
 
-  .pagination-shell .inline-actions {
+.pagination-shell .inline-actions,
+  .pagination-shell{
     flex-direction: column;
     align-items: stretch;
   }
@@ -1954,10 +1833,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
   .pagination-info { text-align: center; }
   .inline-actions { flex-wrap: wrap; }
-
-  .filters { flex-direction: column; align-items: stretch; }
-
-  .filters > * { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1966,3 +1841,134 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* -----------------------------------------------------------------------------
+   Shared page primitives. Each declaration below is needed verbatim by two
+   or more page sheets, so it lives here once instead of once per sheet.
+   -------------------------------------------------------------------------- */
+
+.accounts-table thead th,
+.models-table thead th{
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px var(--space-3);
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.account-mobile-card,
+.models-mobile-card{
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+
+.accounts-table tbody td,
+.models-table tbody td{
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-soft);
+  vertical-align: middle;
+}
+
+.accounts-panel,
+.models-results-card{
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.ops-head-filters,
+.models-toolbar-controls{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.account-mobile-head,
+.models-mobile-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.accounts-row-actions,
+.models-actions{
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.account-mobile-grid,
+.models-mobile-grid,
+.tut-route-rules{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.accounts-table,
+.models-table{
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.82rem;
+}
+
+.ops-card-tools,
+.accounts-actions,
+.account-mobile-inline,
+.models-results-meta{ display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+.form-row-label,
+.models-control{
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.account-identity-sub,
+.models-cell-title{
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.accounts-mobile-list,
+.models-mobile-list{
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.ops-page,
+.config-page,
+.tut-page{ padding-bottom: var(--space-10); }
+
+.ops-grid,
+.accounts-stats{ margin-bottom: var(--space-4); }
+
+.accounts-actions .accounts-action-cluster.is-danger,
+.models-action-btn-danger:hover{ background: var(--bad-soft); }
+
+.ops-gauge-sub > span,
+.account-cooldown-until{ white-space: nowrap; }
+
+.accounts-table .col-check,
+.models-table .col-select{ width: 40px; }

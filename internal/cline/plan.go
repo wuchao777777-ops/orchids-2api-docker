@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/util"
 )
 
 // PlanNoHistory is the answer the upstream gives for an account that never held
@@ -96,18 +98,14 @@ func (c *Client) fetchPlan(ctx context.Context) (Plan, error) {
 
 	// A subscriber: the endpoint returns a row and no error sentence.
 	if resp.StatusCode == http.StatusOK {
-		name := firstNonEmpty(
-			strings.TrimSpace(payload.DisplayName),
-			strings.TrimSpace(payload.Name),
-			strings.TrimSpace(payload.PlanName),
-		)
+		name := util.FirstNonEmpty(payload.DisplayName, payload.Name, payload.PlanName)
 		if name == "" && payload.Data != nil {
 			var row struct {
 				Name        string `json:"name"`
 				DisplayName string `json:"displayName"`
 			}
 			if err := json.Unmarshal(*payload.Data, &row); err == nil {
-				name = firstNonEmpty(strings.TrimSpace(row.DisplayName), strings.TrimSpace(row.Name))
+				name = util.FirstNonEmpty(row.DisplayName, row.Name)
 			}
 		}
 		if name == "" {
@@ -118,7 +116,7 @@ func (c *Client) fetchPlan(ctx context.Context) (Plan, error) {
 		return Plan{Name: name, Explicit: true}, nil
 	}
 
-	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(payload.Error, payload.Detail)))
+	message := strings.ToLower(util.FirstNonEmpty(payload.Error, payload.Detail))
 	if strings.Contains(message, PlanNoHistory) {
 		return Plan{Name: freePlanName, Explicit: true}, nil
 	}

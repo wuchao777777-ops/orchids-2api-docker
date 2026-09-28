@@ -3,8 +3,6 @@ package store
 import (
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // TestModelCooldown_ScopedToModelNotAccount is the rule the pool depends on: a
@@ -107,12 +105,7 @@ func TestMergeModelCooldowns_KeepsLatestAndDropsExpired(t *testing.T) {
 // TestUpdateAccount_PreservesModelCooldownsAcrossPartialWrites pins the guard:
 // saving an unrelated field (enabled, weight) keeps cooldowns in Redis.
 func TestUpdateAccount_PreservesModelCooldownsAcrossPartialWrites(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "modelcool:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "modelcool:")
 
 	ctx := t.Context()
 	acc := &Account{

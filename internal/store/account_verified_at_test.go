@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // TestUpdateAccount_VerifiedAtIsMonotonicPerCredential pins the persistence rule
@@ -13,12 +11,7 @@ import (
 // account, and only an explicit ClearVerifiedAt (credential replacement) drops
 // the verdict stamp.
 func TestUpdateAccount_VerifiedAtIsMonotonicPerCredential(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "verified-at:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "verified-at:")
 	ctx := context.Background()
 
 	acc := &Account{

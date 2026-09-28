@@ -35,12 +35,6 @@
 
 /* The action group stays contiguous: export / bulk / primary are three visually
    separated clusters, not items scattered across the row. */
-.accounts-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
 
 .accounts-actions .accounts-action-cluster {
   display: inline-flex;
@@ -51,42 +45,11 @@
   background: var(--surface-1);
 }
 
-.accounts-actions .accounts-action-cluster.is-danger { background: var(--bad-soft); }
-
 /* -----------------------------------------------------------------------------
    Table: identity first, compact rows
    -------------------------------------------------------------------------- */
-.accounts-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 0.82rem;
-}
-
-.accounts-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: 10px var(--space-3);
-  border-bottom: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-align: left;
-  white-space: nowrap;
-}
-
-.accounts-table tbody td {
-  padding: 8px var(--space-3);
-  border-bottom: 1px solid var(--border-color);
-  color: var(--text-soft);
-  vertical-align: middle;
-}
 
 .accounts-table tbody tr:hover td { background: var(--surface-2); }
-.accounts-table tbody tr.is-selected td { background: var(--accent-soft); }
-.accounts-table tbody tr:last-child td { border-bottom: 0; }
 
 .accounts-table .col-id {
   width: 56px;
@@ -95,7 +58,6 @@
   font-size: 0.74rem;
 }
 
-.accounts-table .col-check { width: 40px; }
 .accounts-table .col-tier { width: 132px; }
 .accounts-table .col-quota { width: 148px; }
 .accounts-table .col-status { width: 140px; }
@@ -118,7 +80,6 @@
 
 /* The recovery line sits under the status badge: it says when a cooled account
    comes back, so the badge alone never reads as a permanent verdict. */
-.account-cooldown-until { white-space: nowrap; }
 
 /* Identity: the address/identifier is the row's subject; the credential summary
    is supporting detail underneath, never the headline. */
@@ -136,13 +97,6 @@
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.account-identity-sub {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
 }
 
 /* The channel pill on each row comes from main.css (.badge .badge-<channel>). */
@@ -167,12 +121,6 @@
 .account-usage-when { color: var(--text-muted); font-size: 0.72rem; }
 
 /* Row actions: small text buttons with a visible boundary, not bare abbreviations. */
-.accounts-row-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  justify-content: flex-end;
-}
 
 .accounts-row-actions .action-icon {
   display: inline-flex;
@@ -204,15 +152,8 @@
 /* -----------------------------------------------------------------------------
    Stat cards read as one band, connected to the table below
    -------------------------------------------------------------------------- */
-.accounts-stats { margin-bottom: var(--space-4); }
-.accounts-stats .stat-card { min-height: 80px; }
 
-.accounts-panel {
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--surface-1);
-  overflow: hidden;
-}
+.accounts-stats .stat-card { min-height: 80px; }
 
 .accounts-panel .pagination-shell {
   border-top: 1px solid var(--border-color);
@@ -239,28 +180,6 @@
 .account-import-status.is-error { border-color: var(--bad); background: var(--bad-soft); }
 .account-import-status strong { color: var(--text-main); }
 
-.accounts-mobile-list {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3);
-}
-
-.account-mobile-card {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--surface-2);
-}
-
-.account-mobile-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
 .account-mobile-check {
   display: inline-flex;
   align-items: center;
@@ -281,12 +200,6 @@
   white-space: nowrap;
 }
 
-.account-mobile-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
 .account-mobile-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 
 .account-mobile-label {
@@ -298,7 +211,6 @@
 
 .account-mobile-value,
 .account-mobile-inline { color: var(--text-main); font-size: 0.86rem; min-width: 0; }
-.account-mobile-inline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 
 .account-mobile-identity {
   color: var(--text-main);

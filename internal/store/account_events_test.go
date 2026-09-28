@@ -6,8 +6,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // recordingEmitter captures the notifications the store publishes.
@@ -43,12 +41,7 @@ func (e *recordingEmitter) all() []AccountChange {
 
 func newEmitterStore(t *testing.T) (*Store, *recordingEmitter) {
 	t.Helper()
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "events:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "events:")
 	emitter := &recordingEmitter{}
 	s.SetChangeEmitter(emitter)
 	return s, emitter
@@ -113,12 +106,7 @@ func TestChangeEmitter_PublishesOnlyAfterAPersistedWrite(t *testing.T) {
 // TestChangeEmitter_SilentWhenNoEmitterConfigured keeps a plain store (tests, a
 // deployment without the bus) working.
 func TestChangeEmitter_SilentWhenNoEmitterConfigured(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "silent:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "silent:")
 
 	acc := &Account{AccountType: "cline", RefreshToken: "x", Enabled: true}
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
@@ -190,12 +178,7 @@ func TestChangeEmitter_CoalescesBurstWithoutGoroutinePerWrite(t *testing.T) {
 // so it must not announce a change either. A subscriber never rebuilds a cache
 // entry for an account that does not exist.
 func TestChangeEmitter_IgnoresWritesToAMissingRow(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "missing:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "missing:")
 	emitter := &recordingEmitter{}
 	s.SetChangeEmitter(emitter)
 

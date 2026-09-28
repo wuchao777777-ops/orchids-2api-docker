@@ -375,6 +375,19 @@ func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason st
 	}
 }
 
+// materializeBlockField copies a streamed text/thinking block's accumulated
+// content into its wire field before a non-streaming response is encoded. A
+// block that never streamed anything still gets the field, empty.
+func materializeBlockField(block map[string]interface{}, field string, builders []*strings.Builder, idx int) {
+	if builder := builderAt(builders, idx); builder != nil {
+		block[field] = builder.String()
+		return
+	}
+	if _, ok := block[field]; !ok {
+		block[field] = ""
+	}
+}
+
 func shortRequestTrace(hash string) string {
 	hash = strings.TrimSpace(hash)
 	if len(hash) <= 12 {
@@ -546,39 +559,35 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	preSelectWorkBuddyRequest := strings.EqualFold(targetChannel, "workbuddy")
-	// Qoder forwards raw OpenAI-style messages like WorkBuddy does, so it
-	// belongs to the same passthrough family: the request verbatim as the caller
-	// sent it.
-	preSelectQoderRequest := strings.EqualFold(targetChannel, "qoder")
-	// Cline is the same kind of passthrough: its endpoint is OpenAI-shaped and
-	// the client's messages are forwarded verbatim.
-	preSelectClineRequest := strings.EqualFold(targetChannel, "cline")
-	preSelectPassthroughRequest := preSelectWorkBuddyRequest || preSelectQoderRequest || preSelectClineRequest
-	suggestionMode := isSuggestionMode(req.Messages)
-	noThinking := suggestionMode || cfg.SuppressThinking
+	// WorkBuddy, Qoder and Cline forward raw OpenAI-style messages: their
+	// endpoint is OpenAI-shaped and the caller's request is passed upstream
+	// verbatim. The path or the model names the channel before selection; the
+	// selected account confirms it afterwards.
+	preSelectChannel := passthroughChannelName(targetChannel)
+	preSelectWorkBuddyRequest := preSelectChannel == "workbuddy"
+	preSelectQoderRequest := preSelectChannel == "qoder"
+	preSelectClineRequest := preSelectChannel == "cline"
+	// Suggestion mode answered and returned above, so the gates below can only be
+	// triggered by tool_choice or by a tool_result-only follow-up; thinking stays
+	// suppressed only by configuration.
+	noThinking := cfg.SuppressThinking
 	gateNoTools := false
 	toolGateReasons := make([]string, 0, 2)
 	toolGateMessage := ""
 	if toolChoiceDisablesTools(req.ToolChoice) {
 		gateNoTools = true
 		toolGateReasons = append(toolGateReasons, "tool_choice_none")
-		toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
-	}
-	if suggestionMode {
-		gateNoTools = true
-		toolGateReasons = append(toolGateReasons, "suggestion_mode")
-		toolGateMessage = buildToolGateMessage(req.Messages, true)
+		toolGateMessage = buildToolGateMessage(req.Messages)
 	}
 	if lastUserIsToolResultFollowup(req.Messages) {
-		if preSelectPassthroughRequest {
+		if preSelectChannel != "" {
 			if verboseDiagnostics {
 				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up")
 			}
 		} else {
 			gateNoTools = true
 			toolGateReasons = append(toolGateReasons, "tool_result_followup")
-			toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
+			toolGateMessage = buildToolGateMessage(req.Messages)
 			if verboseDiagnostics {
 				slog.Debug("tool_gate: disabled tools for tool_result-only follow-up")
 			}
@@ -591,8 +600,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("tool_gate: disabled tools", "reasons", toolGateReasons)
 		}
 	}
-	chatSessionID := ""
-
 	// 选择账号 (Initial Selection)
 	failedAccountIDs := []int64{}
 	failedAccountSet := make(map[int64]struct{})
@@ -622,33 +629,25 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("Checkpoint: selectAccount success")
 	}
 
-	isWorkBuddyRequest := preSelectWorkBuddyRequest
-	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "workbuddy") {
-		isWorkBuddyRequest = true
+	// The selected account confirms the family the pre-selection guess named: the
+	// account type is authoritative when the path did not pin a channel.
+	accountChannel := ""
+	if currentAccount != nil {
+		accountChannel = passthroughChannelName(currentAccount.AccountType)
 	}
-	isQoderRequest := preSelectQoderRequest
-	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "qoder") {
-		isQoderRequest = true
+	// The label follows the priority this gate has always used: WorkBuddy, then
+	// Qoder, then Cline. Passthrough channels do not trim history/tool results.
+	passthroughChannel := ""
+	switch {
+	case preSelectWorkBuddyRequest || accountChannel == "workbuddy":
+		passthroughChannel = "workbuddy"
+	case preSelectQoderRequest || accountChannel == "qoder":
+		passthroughChannel = "qoder"
+	case preSelectClineRequest || accountChannel == "cline":
+		passthroughChannel = "cline"
 	}
-	isClineRequest := preSelectClineRequest
-	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "cline") {
-		isClineRequest = true
-	}
-	isPassthroughRequest := isWorkBuddyRequest || isQoderRequest || isClineRequest
-	if isPassthroughRequest {
-		channel := ""
-		switch {
-		case isWorkBuddyRequest:
-			channel = "workbuddy"
-		case isQoderRequest:
-			channel = "qoder"
-		case isClineRequest:
-			channel = "cline"
-		}
-		// Passthrough channels do not trim history/tool results.
-		if verboseDiagnostics {
-			slog.Debug("Checkpoint: passthrough, skip context trimming", "channel", channel)
-		}
+	if verboseDiagnostics && passthroughChannel != "" {
+		slog.Debug("Checkpoint: passthrough, skip context trimming", "channel", passthroughChannel)
 	}
 	if verboseDiagnostics {
 		slog.Debug("Checkpoint: message processing done")
@@ -665,22 +664,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
-	if isWorkBuddyRequest || isQoderRequest || isClineRequest {
+	if passthroughChannel != "" {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
 	builtPrompt := strings.TrimSpace(extractUserText(req.Messages))
 	if builtPrompt == "" {
-		switch {
-		case isWorkBuddyRequest:
-			builtPrompt = "workbuddy request"
-		case isQoderRequest:
-			builtPrompt = "qoder request"
-		case isClineRequest:
-			builtPrompt = "cline request"
-		default:
-			builtPrompt = "request"
-		}
+		// A passthrough channel labels its placeholder; an empty one leaves the
+		// bare "request".
+		builtPrompt = strings.TrimSpace(passthroughChannel + " request")
 	}
 	buildDuration := time.Since(startBuild)
 	if verboseDiagnostics {
@@ -727,15 +719,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	logger.LogConvertedPrompt(builtPrompt)
 
 	breakdown := estimateInputTokenBreakdown(builtPrompt, effectiveTools)
-	breakdownProfile := ""
-	switch {
-	case isWorkBuddyRequest:
-		breakdownProfile = "workbuddy"
-	case isQoderRequest:
-		breakdownProfile = "qoder"
-	case isClineRequest:
-		breakdownProfile = "cline"
-	}
+	breakdownProfile := passthroughChannel
 	if verboseDiagnostics {
 		slog.Debug(
 			"Input token breakdown (estimated)",
@@ -793,16 +777,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh := newStreamHandler(
 		cfg, w, logger, noThinking, isStream, responseFormat,
 	)
-	allowedToolNames := []string(nil)
-	allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
-	sh.setAllowedToolNames(allowedToolNames)
+	sh.setAllowedToolNames(validationAllowedToolNames(effectiveTools, req.Tools, false))
 	if preSelectQoderRequest {
 		sh.setSurfaceToolRejects(true)
 	}
+	// effectiveTools is either req.Tools or nil, so a request with no tools of its
+	// own has nothing to report here.
 	if len(req.Tools) > 0 {
 		sh.setClientTools(req.Tools)
-	} else if len(effectiveTools) > 0 {
-		sh.setClientTools(effectiveTools)
 	}
 	sh.setDisallowToolCalls(gateNoTools)
 	sh.setEmptyOutputFallback(successfulFileMutationToolResultFallback(upstreamMessages))
@@ -872,10 +854,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Main execution
 	run := func() {
-		// 复用上游返回的 conversationID，保持会话连续性
-		if chatSessionID == "" {
-			chatSessionID = "chat_" + randomSessionID()
-		}
+		// A per-request chat session id, reused across account switches so the
+		// upstream keeps one conversation for this downstream request.
+		chatSessionID := "chat_" + randomSessionID()
 		maxRetries := cfg.MaxRetries
 		if maxRetries < 0 {
 			maxRetries = 0
@@ -920,12 +901,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			var err error
 			upstreamReq.Attempt = attempt + 1
 			accountID := int64(0)
-			accountType := ""
-			accountName := ""
+			accountType, accountName := "", ""
 			if currentAccount != nil {
-				accountID = currentAccount.ID
-				accountType = currentAccount.AccountType
-				accountName = currentAccount.Name
+				accountID, accountType, accountName = currentAccount.ID, currentAccount.AccountType, currentAccount.Name
 			}
 			if verboseDiagnostics {
 				slog.Debug(
@@ -941,17 +919,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					"account_type", accountType,
 					"account_name", accountName,
 				)
-			}
-
-			if verboseDiagnostics {
 				slog.Debug("Using SendRequestWithPayload")
 			}
+
 			err = apiClient.SendRequestWithPayload(r.Context(), upstreamReq, primaryHandler, logger)
-			attemptAccountID := int64(0)
-			if currentAccount != nil {
-				attemptAccountID = currentAccount.ID
-			}
-			middleware.RecordUpstreamAttempt(r.Context(), attemptAccountID, err != nil)
+			// The same account id the diagnostics above reported, with or without
+			// diagnostics enabled.
+			middleware.RecordUpstreamAttempt(r.Context(), accountID, err != nil)
 			if verboseDiagnostics {
 				slog.Debug("Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 			}
@@ -1154,17 +1128,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			blockType, _ := sh.contentBlocks[i]["type"].(string)
 			switch blockType {
 			case "text":
-				if builder := builderAt(sh.textBlockBuilders, i); builder != nil {
-					sh.contentBlocks[i]["text"] = builder.String()
-				} else if _, ok := sh.contentBlocks[i]["text"]; !ok {
-					sh.contentBlocks[i]["text"] = ""
-				}
+				materializeBlockField(sh.contentBlocks[i], "text", sh.textBlockBuilders, i)
 			case "thinking":
-				if builder := builderAt(sh.thinkingBlockBuilders, i); builder != nil {
-					sh.contentBlocks[i]["thinking"] = builder.String()
-				} else if _, ok := sh.contentBlocks[i]["thinking"]; !ok {
-					sh.contentBlocks[i]["thinking"] = ""
-				}
+				materializeBlockField(sh.contentBlocks[i], "thinking", sh.thinkingBlockBuilders, i)
 			}
 		}
 

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/util"
 )
 
 // The Qoder login is a custom device authorization grant, not a standard OAuth
@@ -81,7 +83,7 @@ func (c *Client) StartLogin(ctx context.Context) (*LoginTransaction, error) {
 
 	// Only an allowed authorization host may ever be handed to a browser: this
 	// is the one place a login could be redirected to a third party.
-	if host := hostOf(verifyURL); !c.allowedLoginHost(host) {
+	if host := util.HostOf(verifyURL); !c.allowedLoginHost(host) {
 		return nil, fmt.Errorf("%w: authorization host %q is not an allowed Qoder host", ErrAuthRejected, host)
 	}
 
@@ -220,7 +222,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (Credentials,
 	}
 	// The refresh endpoint names the access token `device_token`, while the poll
 	// endpoint names it `token`; both spellings are accepted.
-	access := firstNonEmptyToken(payload.DeviceToken, payload.Token)
+	access := util.FirstNonEmptyUntrimmed(payload.DeviceToken, payload.Token)
 	if access == "" {
 		return Credentials{}, fmt.Errorf("%w: refresh response carried no token", ErrReLoginRequired)
 	}
@@ -298,14 +300,6 @@ func (c *Client) ProbeReachability(ctx context.Context) error {
 	return c.probeHost(reqCtx, c.endpoints.oauth)
 }
 
-func hostOf(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return parsed.Hostname()
-}
-
 // allowedLoginHost reports whether an authorization URL may be handed to a
 // browser.
 //
@@ -330,6 +324,6 @@ func (c *Client) allowedLoginHost(host string) bool {
 			return true
 		}
 	}
-	configured := strings.ToLower(hostOf(c.endpoints.oauth))
+	configured := strings.ToLower(util.HostOf(c.endpoints.oauth))
 	return configured != "" && host == configured
 }

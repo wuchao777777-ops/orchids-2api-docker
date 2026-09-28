@@ -3,6 +3,7 @@ package util
 import (
 	"context"
 	"crypto/subtle"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -46,7 +47,7 @@ func SecureCompare(a, b string) bool {
 
 // FirstNonEmpty returns the first non-empty (after trimming) value, or "".
 // It is the single shared implementation of the firstNonEmpty helper that was
-// previously duplicated across packages (grok, api, cmd/server).
+// previously duplicated across packages (grok, api, cmd/server, cline, qoder).
 func FirstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
@@ -54,4 +55,67 @@ func FirstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// FirstNonEmptyUntrimmed returns the first value that is non-empty after
+// trimming, untrimmed. A credential is stored exactly as the upstream sent it:
+// trimming an access token would change the bytes the gateway signed.
+func FirstNonEmptyUntrimmed(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// FirstNonEmptyURL is FirstNonEmpty for base URLs: a trailing slash would turn
+// "https://host" + "/path" into a double slash, which some gateways read as a
+// different route.
+func FirstNonEmptyURL(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return strings.TrimRight(trimmed, "/")
+		}
+	}
+	return ""
+}
+
+// HostOf returns the host of an absolute URL, or "" when it cannot be parsed.
+func HostOf(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
+}
+
+// URLPath returns the path of an absolute URL, or "" when it cannot be parsed.
+// It keeps a credential out of an error message: only the path is echoed.
+func URLPath(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return parsed.Path
+}
+
+// Truncate keeps an upstream message short enough to log without echoing a
+// multi-megabyte body.
+func Truncate(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "..."
+}
+
+// FirstPositive returns the first strictly positive candidate, or 0.
+func FirstPositive(values ...float64) float64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }

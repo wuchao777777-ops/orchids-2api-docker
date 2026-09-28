@@ -1,6 +1,7 @@
 package cline
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -315,26 +316,7 @@ func (e *attemptStreamError) Unwrap() error { return e.err }
 
 func isUnauthorized(err error) bool {
 	var target *attemptStreamError
-	return asAttemptError(err, &target) && target.unauth
-}
-
-func asAttemptError(err error, target **attemptStreamError) bool {
-	for err != nil {
-		if typed, ok := err.(*attemptStreamError); ok {
-			*target = typed
-			return true
-		}
-		unwrapper, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		next := unwrapper.Unwrap()
-		if next == err {
-			return false
-		}
-		err = next
-	}
-	return false
+	return errors.As(err, &target) && target.unauth
 }
 
 // classifyStatus preserves the upstream status error, identifying only a 401 as

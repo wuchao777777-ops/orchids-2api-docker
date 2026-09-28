@@ -3,17 +3,10 @@ package store
 import (
 	"context"
 	"testing"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 func TestReconcileDiscoveredModelsProtectsManualAndPrunesDiscovery(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "test:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close(); mini.Close() })
+	s, _ := newTestRedisStore(t, "test:")
 	ctx := context.Background()
 	manual := &Model{Channel: "Qoder", ModelID: "manual", Name: "operator name", Status: ModelStatusMaintenance}
 	stale := &Model{Channel: "Qoder", ModelID: "stale", Name: "stale", Status: ModelStatusAvailable, Origin: "discovery"}
@@ -51,12 +44,7 @@ func TestReconcileDiscoveredModelsProtectsManualAndPrunesDiscovery(t *testing.T)
 }
 
 func TestReconcileDiscoveredModelsUpsertsAndOptionalPrune(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "test:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close(); mini.Close() })
+	s, _ := newTestRedisStore(t, "test:")
 	ctx := context.Background()
 	old := &Model{Channel: "Cline", ModelID: "same", Name: "old", Status: ModelStatusOffline, Origin: "discovery"}
 	missing := &Model{Channel: "Cline", ModelID: "missing", Name: "missing", Status: ModelStatusAvailable, Origin: "discovery"}
@@ -84,14 +72,9 @@ func TestReconcileDiscoveredModelsUpsertsAndOptionalPrune(t *testing.T) {
 }
 
 func TestReconcileDiscoveredModelsValidatesBeforeWriting(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "test:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close(); mini.Close() })
+	s, _ := newTestRedisStore(t, "test:")
 	ctx := context.Background()
-	_, err = s.ReconcileDiscoveredModels(ctx, "workbuddy", []*Model{{ModelID: "dup"}, {ModelID: "dup"}}, ModelReconcileOptions{Prune: true})
+	_, err := s.ReconcileDiscoveredModels(ctx, "workbuddy", []*Model{{ModelID: "dup"}, {ModelID: "dup"}}, ModelReconcileOptions{Prune: true})
 	if err == nil {
 		t.Fatal("expected duplicate error")
 	}

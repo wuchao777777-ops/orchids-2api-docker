@@ -7,7 +7,7 @@ import (
 
 func TestProfileUpdateInvalidatesRuntimeAndFinalizesLatestTokens(t *testing.T) {
 	client := NewFromAccount(signedTestAccount(), nil)
-	if err := client.PrepareRuntimeFields(t.Context()); err != nil {
+	if _, err := client.ensureRuntimeFields(t.Context(), client.currentCredentials()); err != nil {
 		t.Fatal(err)
 	}
 	initial := client.RuntimeFields()

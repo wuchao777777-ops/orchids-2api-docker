@@ -7,9 +7,8 @@ import (
 )
 
 // 参考值由 qoder2api 的 internal/cosy/fingerprint.go 对同一 seed 计算所得
-//（交叉校验），仅在「无本机盐」的种子下成立，测试入口统一 SetInstallSalt("")。
+// （交叉校验），仅在「无本机盐」的种子下成立，测试入口统一 SetInstallSalt("")。
 //
-//	machine 005b8945c0659064f8d25299980a27b3
 //	mtype   66ea01f7983702b088
 //	mtoken  zzpUYGGMSPEfJVrGQWHj7SBYaRUMwPMK0B4QN_aqKP0
 const testFingerprintUID = "test-uid-123"
@@ -17,9 +16,6 @@ const testFingerprintUID = "test-uid-123"
 func TestDeriveMatchesReference(t *testing.T) {
 	t.Cleanup(func() { SetInstallSalt("") })
 	SetInstallSalt("")
-	if got := DeriveMachineID(testFingerprintUID); got != "005b8945c0659064f8d25299980a27b3" {
-		t.Errorf("DeriveMachineID = %s", got)
-	}
 	if got := DeriveMachineType(testFingerprintUID); got != "66ea01f7983702b088" {
 		t.Errorf("DeriveMachineType = %s", got)
 	}
@@ -31,14 +27,12 @@ func TestDeriveMatchesReference(t *testing.T) {
 func TestDeriveStableAndIsolated(t *testing.T) {
 	t.Cleanup(func() { SetInstallSalt("") })
 	SetInstallSalt("")
-	if DeriveMachineID("acct-a") != DeriveMachineID("acct-a") {
-		t.Fatal("machine id not stable for the same uid")
+	// The derivation is stable for one seed and isolated between seeds.
+	if DeriveMachineType("acct-a") != DeriveMachineType("acct-a") {
+		t.Fatal("machine type not stable for the same uid")
 	}
-	if DeriveMachineID("acct-a") == DeriveMachineID("acct-b") {
-		t.Fatal("machine id collides across accounts")
-	}
-	if len(DeriveMachineID(testFingerprintUID)) != 32 {
-		t.Errorf("machineid len = %d, want 32", len(DeriveMachineID(testFingerprintUID)))
+	if DeriveMachineType("acct-a") == DeriveMachineType("acct-b") {
+		t.Fatal("machine type collides across accounts")
 	}
 	if len(DeriveMachineType(testFingerprintUID)) != 18 {
 		t.Errorf("machinetype len = %d, want 18", len(DeriveMachineType(testFingerprintUID)))
@@ -62,30 +56,30 @@ func TestDeriveStableAndIsolated(t *testing.T) {
 func TestDeriveInstallSalt(t *testing.T) {
 	t.Cleanup(func() { SetInstallSalt("") })
 	SetInstallSalt("")
-	plainID := DeriveMachineID(testFingerprintUID)
+	plainType := DeriveMachineType(testFingerprintUID)
 	plainToken := DeriveMachineToken(testFingerprintUID)
 
 	SetInstallSalt("unit-test-salt")
-	saltedID := DeriveMachineID(testFingerprintUID)
+	saltedType := DeriveMachineType(testFingerprintUID)
 	saltedToken := DeriveMachineToken(testFingerprintUID)
-	if saltedID == plainID || len(saltedID) != 32 {
-		t.Errorf("salted machineid invalid or equal to the plain one: %s", saltedID)
+	if saltedType == plainType || len(saltedType) != 18 {
+		t.Errorf("salted machinetype invalid or equal to the plain one: %s", saltedType)
 	}
 	if saltedToken == plainToken || len(saltedToken) != 43 {
 		t.Errorf("salted machinetoken invalid or equal to the plain one: %s", saltedToken)
 	}
-	if DeriveMachineID(testFingerprintUID) != saltedID {
+	if DeriveMachineType(testFingerprintUID) != saltedType {
 		t.Error("salted derivation is not idempotent")
 	}
-	if DeriveMachineID("acct-a") == DeriveMachineID("acct-b") {
-		t.Fatal("salted machine id collides across accounts")
+	if DeriveMachineType("acct-a") == DeriveMachineType("acct-b") {
+		t.Fatal("salted machine type collides across accounts")
 	}
 	SetInstallSalt("another-salt")
-	if DeriveMachineID(testFingerprintUID) == saltedID {
+	if DeriveMachineType(testFingerprintUID) == saltedType {
 		t.Error("changing the salt must change the fingerprint")
 	}
 	SetInstallSalt("")
-	if DeriveMachineID(testFingerprintUID) != plainID || DeriveMachineToken(testFingerprintUID) != plainToken {
+	if DeriveMachineType(testFingerprintUID) != plainType || DeriveMachineToken(testFingerprintUID) != plainToken {
 		t.Error("clearing the salt must restore the reference fingerprint")
 	}
 }

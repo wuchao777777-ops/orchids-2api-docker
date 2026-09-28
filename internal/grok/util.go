@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 
@@ -66,84 +64,6 @@ func randomUUID() string {
 	)
 }
 
-func parseUpstreamLines(body io.Reader, onLine func(map[string]interface{}) error) error {
-	decoder := json.NewDecoder(body)
-
-	for {
-		var line map[string]interface{}
-		if err := decoder.Decode(&line); err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		if message := upstreamStreamErrorMessage(line); message != "" {
-			return fmt.Errorf("grok upstream stream error: %s", message)
-		}
-		result, _ := line["result"].(map[string]interface{})
-		if message := upstreamStreamErrorMessage(result); message != "" {
-			return fmt.Errorf("grok upstream stream error: %s", message)
-		}
-		resp, _ := result["response"].(map[string]interface{})
-		if resp == nil {
-			continue
-		}
-		if err := onLine(resp); err != nil {
-			return err
-		}
-	}
-}
-
-func upstreamStreamErrorMessage(value map[string]interface{}) string {
-	if value == nil {
-		return ""
-	}
-	if raw, exists := value["error"]; exists {
-		if message := upstreamErrorValueMessage(raw); message != "" {
-			return message
-		}
-		return "upstream returned an unspecified error"
-	}
-	// Current Grok streams can also carry failures as an event envelope rather
-	// than a top-level error.  Do not silently turn that into a successful empty
-	// completion just because app-chat normally uses result.response envelopes.
-	event, _ := value["event"].(map[string]interface{})
-	if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(event["type"])), "error") {
-		return ""
-	}
-	if raw, exists := event["error"]; exists {
-		if message := upstreamErrorValueMessage(raw); message != "" {
-			return message
-		}
-		return "upstream returned an unspecified error"
-	}
-	if message := upstreamErrorValueMessage(event); message != "" {
-		return message
-	}
-	return "upstream returned an unspecified error"
-}
-
-func upstreamErrorValueMessage(raw interface{}) string {
-	if raw == nil {
-		return ""
-	}
-	message := strings.TrimSpace(fmt.Sprint(raw))
-	if details, ok := raw.(map[string]interface{}); ok {
-		message = firstNonEmpty(
-			strings.TrimSpace(fmt.Sprint(details["message"])),
-			strings.TrimSpace(fmt.Sprint(details["error"])),
-			strings.TrimSpace(fmt.Sprint(details["code"])),
-		)
-	}
-	if message == "" || message == "<nil>" {
-		return ""
-	}
-	if len(message) > 512 {
-		message = message[:512]
-	}
-	return message
-}
-
 // firstNonEmpty delegates to the shared implementation in internal/util so the
 // package keeps its short local name without duplicating the logic.
 func firstNonEmpty(values ...string) string {
@@ -166,31 +86,6 @@ func encodeJSONBytes(v interface{}) []byte {
 		return raw[:n-1]
 	}
 	return raw
-}
-
-func parseDataURI(input string) (fileName, contentBase64, mime string, err error) {
-	s := strings.TrimSpace(input)
-	if !strings.HasPrefix(strings.ToLower(s), "data:") {
-		return "", "", "", errors.New("not a data uri")
-	}
-	idx := strings.Index(s, ",")
-	if idx <= 0 {
-		return "", "", "", errors.New("invalid data uri")
-	}
-	header := s[5:idx]
-	payload := strings.TrimSpace(s[idx+1:])
-	if !strings.Contains(strings.ToLower(header), ";base64") {
-		return "", "", "", errors.New("data uri is not base64 encoded")
-	}
-	mime = strings.TrimSpace(strings.Split(header, ";")[0])
-	if mime == "" {
-		mime = "application/octet-stream"
-	}
-	ext := "bin"
-	if slash := strings.Index(mime, "/"); slash >= 0 && slash+1 < len(mime) {
-		ext = strings.TrimSpace(mime[slash+1:])
-	}
-	return "file." + ext, payload, mime, nil
 }
 
 func uniqueStrings(input []string) []string {

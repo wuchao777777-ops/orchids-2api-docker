@@ -44,16 +44,27 @@ func TestUpstreamCaptureRetainsInterleavedAttempts(t *testing.T) {
 	}
 }
 
+// TestLoggerRetryRequestsAreNotOverwritten pins that a retry owns its own
+// capture section: the second request may not overwrite the first, so a report
+// can always be read back per attempt.
 func TestLoggerRetryRequestsAreNotOverwritten(t *testing.T) {
 	ctx, c := WithCapture(context.Background(), "logger")
 	l := NewForContext(ctx, false, false)
 	for i := 1; i <= 2; i++ {
 		l.LogUpstreamRequest(fmt.Sprintf("https://attempt-%d.invalid", i), nil, map[string]int{"attempt": i})
-		l.LogUpstreamSSE("data", fmt.Sprintf("response-%d", i))
 	}
 	b := c.Bundle()
-	if len(b.Sections) != 4 {
+	if len(b.Sections) != 2 {
 		t.Fatalf("retained sections=%d", len(b.Sections))
+	}
+	byName := map[string]string{}
+	for _, s := range b.Sections {
+		byName[s.Name] = s.Payload
+	}
+	for i, name := range []string{"upstream_001_request.json", "upstream_002_request.json"} {
+		if want := fmt.Sprintf("attempt-%d.invalid", i+1); !strings.Contains(byName[name], want) {
+			t.Fatalf("%s = %q, want it to hold %q", name, byName[name], want)
+		}
 	}
 }
 

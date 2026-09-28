@@ -519,12 +519,7 @@ func (s *redisStore) CreateAccount(ctx context.Context, acc *Account) error {
 
 	pipe := s.client.Pipeline()
 	pipe.Set(ctx, s.accountsKey(id), data, 0)
-	pipe.SAdd(ctx, s.accountsIDsKey(), id)
-	if acc.Enabled {
-		pipe.SAdd(ctx, s.accountsEnabledKey(), id)
-	} else {
-		pipe.SRem(ctx, s.accountsEnabledKey(), id)
-	}
+	pipeAccountMembership(ctx, pipe, s, acc.ID, acc.Enabled)
 	if _, err = pipe.Exec(ctx); err != nil {
 		return err
 	}
@@ -532,6 +527,17 @@ func (s *redisStore) CreateAccount(ctx context.Context, acc *Account) error {
 	// to a change that did not happen.
 	s.publishChange(ctx, nil, id)
 	return nil
+}
+
+// pipeAccountMembership keeps the id and enabled index sets in step with the
+// account row written by the same pipeline.
+func pipeAccountMembership(ctx context.Context, pipe redis.Pipeliner, s *redisStore, id int64, enabled bool) {
+	pipe.SAdd(ctx, s.accountsIDsKey(), id)
+	if enabled {
+		pipe.SAdd(ctx, s.accountsEnabledKey(), id)
+		return
+	}
+	pipe.SRem(ctx, s.accountsEnabledKey(), id)
 }
 
 // mergeModelCooldowns combines two per-model cooldown maps, keeping the later
@@ -878,12 +884,7 @@ func (s *redisStore) updateAccountAtomic(ctx context.Context, id int64, mutate f
 			}
 			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 				pipe.Set(ctx, key, data, 0)
-				pipe.SAdd(ctx, s.accountsIDsKey(), id)
-				if current.Enabled {
-					pipe.SAdd(ctx, s.accountsEnabledKey(), id)
-				} else {
-					pipe.SRem(ctx, s.accountsEnabledKey(), id)
-				}
+				pipeAccountMembership(ctx, pipe, s, id, current.Enabled)
 				return nil
 			})
 			return err
@@ -1153,48 +1154,9 @@ func (s *redisStore) getAccount(ctx context.Context, id int64) (*Account, error)
 	return s.unmarshalAccount([]byte(value), id)
 }
 
-// getAccountsByIDsPipelined 使用 Pipeline 批量获取账号数据
-func (s *redisStore) getAccountsByIDsPipelined(ctx context.Context, keys []string) ([]interface{}, error) {
-	if len(keys) == 0 {
-		return nil, nil
-	}
-
-	pipe := s.client.Pipeline()
-	cmds := make([]*redis.StringCmd, len(keys))
-
-	// 批量添加 GET 命令到 Pipeline
-	for i, key := range keys {
-		cmds[i] = pipe.Get(ctx, key)
-	}
-
-	// 执行 Pipeline
-	_, err := pipe.Exec(ctx)
-	if err != nil && err != redis.Nil {
-		return nil, err
-	}
-
-	// 收集结果
-	values := make([]interface{}, len(cmds))
-	for i, cmd := range cmds {
-		val, err := cmd.Result()
-		if err == redis.Nil {
-			values[i] = nil
-		} else if err != nil {
-			// 部分命令失败，返回错误触发回退
-			return nil, err
-		} else {
-			values[i] = val
-		}
-	}
-
-	return values, nil
-}
-
+// getAccountsByIDs loads the accounts named by the id strings in one MGET,
+// decodes them positionally and drops the ids that have no row.
 func (s *redisStore) getAccountsByIDs(ctx context.Context, ids []string, onlyEnabled bool) ([]*Account, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-
 	idNums := parseSortedInt64s(ids)
 	if len(idNums) == 0 {
 		return nil, nil
@@ -1205,14 +1167,9 @@ func (s *redisStore) getAccountsByIDs(ctx context.Context, ids []string, onlyEna
 		keys = append(keys, s.accountsKey(id))
 	}
 
-	// 尝试使用 Pipeline 批量获取
-	values, err := s.getAccountsByIDsPipelined(ctx, keys)
+	values, err := s.client.MGet(ctx, keys...).Result()
 	if err != nil {
-		// Pipeline 失败，回退到单命令模式
-		values, err = s.client.MGet(ctx, keys...).Result()
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	results := make([]*Account, len(values))
@@ -1232,26 +1189,13 @@ func (s *redisStore) getAccountsByIDs(ctx context.Context, ids []string, onlyEna
 		}
 		results[i] = acc
 	}
-	if len(values) >= redisBatchParallelThreshold {
-		util.ParallelFor(len(values), decode)
-	} else {
-		for i := range values {
-			decode(i)
-		}
-	}
+	forEachIndex(len(values), decode)
 	for _, decodeErr := range decodeErrs {
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
 	}
-
-	accounts := make([]*Account, 0, len(values))
-	for _, acc := range results {
-		if acc != nil {
-			accounts = append(accounts, acc)
-		}
-	}
-	return accounts, nil
+	return compactNonNil(results), nil
 }
 
 func (s *redisStore) GetSetting(ctx context.Context, key string) (string, error) {
@@ -1665,21 +1609,33 @@ func (s *redisStore) getApiKeysByIDs(ctx context.Context, ids []string) ([]*ApiK
 		}
 		results[i] = key
 	}
-	if len(values) >= redisBatchParallelThreshold {
-		util.ParallelFor(len(values), decode)
-	} else {
-		for i := range values {
-			decode(i)
-		}
-	}
+	forEachIndex(len(values), decode)
 
-	items := make([]*ApiKey, 0, len(values))
-	for _, key := range results {
-		if key != nil {
-			items = append(items, key)
+	return compactNonNil(results), nil
+}
+
+// forEachIndex visits every position once, fanning the work out over the shared
+// worker pool only when the batch is large enough to be worth the scheduling.
+func forEachIndex(count int, visit func(i int)) {
+	if count >= redisBatchParallelThreshold {
+		util.ParallelFor(count, visit)
+		return
+	}
+	for i := 0; i < count; i++ {
+		visit(i)
+	}
+}
+
+// compactNonNil keeps the order of the decoded rows while dropping the positions
+// a missing or skipped row left empty.
+func compactNonNil[T any](items []*T) []*T {
+	out := make([]*T, 0, len(items))
+	for _, item := range items {
+		if item != nil {
+			out = append(out, item)
 		}
 	}
-	return items, nil
+	return out
 }
 
 func parseSortedInt64s(values []string) []int64 {
@@ -1694,75 +1650,67 @@ func parseSortedInt64s(values []string) []int64 {
 }
 
 func (s *redisStore) accountsKey(id int64) string {
-	return fmt.Sprintf("%saccounts:id:%d", s.prefix, id)
+	return s.prefix + "accounts:id:" + strconv.FormatInt(id, 10)
 }
 
 func (s *redisStore) accountStatsOperationsKey(id int64) string {
-	return fmt.Sprintf("%saccounts:stats_ops:%d", s.prefix, id)
+	return s.prefix + "accounts:stats_ops:" + strconv.FormatInt(id, 10)
 }
 
-func (s *redisStore) accountsIDsKey() string {
-	return s.prefix + "accounts:ids"
-}
+func (s *redisStore) accountsIDsKey() string { return s.prefix + "accounts:ids" }
 
-func (s *redisStore) accountsEnabledKey() string {
-	return s.prefix + "accounts:enabled"
-}
+func (s *redisStore) accountsEnabledKey() string { return s.prefix + "accounts:enabled" }
 
-func (s *redisStore) accountsNextIDKey() string {
-	return s.prefix + "accounts:next_id"
-}
+func (s *redisStore) accountsNextIDKey() string { return s.prefix + "accounts:next_id" }
 
-func (s *redisStore) settingsKey(key string) string {
-	return s.prefix + "settings:" + key
-}
+func (s *redisStore) settingsKey(key string) string { return s.prefix + "settings:" + key }
 
 func (s *redisStore) apiKeysKey(id int64) string {
-	return fmt.Sprintf("%sapi_keys:id:%d", s.prefix, id)
+	return s.prefix + "api_keys:id:" + strconv.FormatInt(id, 10)
 }
 
-func (s *redisStore) apiKeysIDsKey() string {
-	return s.prefix + "api_keys:ids"
-}
+func (s *redisStore) apiKeysIDsKey() string { return s.prefix + "api_keys:ids" }
 
-func (s *redisStore) apiKeysNextIDKey() string {
-	return s.prefix + "api_keys:next_id"
-}
+func (s *redisStore) apiKeysNextIDKey() string { return s.prefix + "api_keys:next_id" }
 
-func (s *redisStore) apiKeysHashKey(hash string) string {
-	return s.prefix + "api_keys:hash:" + hash
-}
+func (s *redisStore) apiKeysHashKey(hash string) string { return s.prefix + "api_keys:hash:" + hash }
 
 func (s *redisStore) apiKeyRPMKey(id, minute int64) string {
-	return fmt.Sprintf("%sapi_keys:rpm:%d:%d", s.prefix, id, minute)
+	return s.prefix + "api_keys:rpm:" + strconv.FormatInt(id, 10) + ":" + strconv.FormatInt(minute, 10)
 }
 
 // apiKeyBillingReservationsKey holds the live holds of one key as a hash of
 // "eventID -> <amount ticks>:<expiry unix seconds>". Expired fields are pruned
 // by the reserve script, and the hash itself expires shortly after its last hold.
 func (s *redisStore) apiKeyBillingReservationsKey(id int64) string {
-	return fmt.Sprintf("%skeybilling:res:%d", s.prefix, id)
+	return s.prefix + "keybilling:res:" + strconv.FormatInt(id, 10)
 }
 
 // apiKeyBillingUsedKey is the settled usage counter in ticks. It is the source
 // of truth for how much a key has spent.
 func (s *redisStore) apiKeyBillingUsedKey(id int64) string {
-	return fmt.Sprintf("%skeybilling:used:%d", s.prefix, id)
+	return s.prefix + "keybilling:used:" + strconv.FormatInt(id, 10)
 }
 
 func (s *redisStore) apiKeyBillingSettledKey(id int64) string {
-	return fmt.Sprintf("%skeybilling:settled:%d", s.prefix, id)
+	return s.prefix + "keybilling:settled:" + strconv.FormatInt(id, 10)
 }
 
 // apiKeyBillingLimitKey mirrors the key's billing limit so the reserve script
 // can decide without loading and parsing the key record.
 func (s *redisStore) apiKeyBillingLimitKey(id int64) string {
-	return fmt.Sprintf("%skeybilling:limit:%d", s.prefix, id)
+	return s.prefix + "keybilling:limit:" + strconv.FormatInt(id, 10)
+}
+
+// digestKey names an opaque Redis key after a hash of its composite identity, so
+// caller-supplied text (response ids, session keys) never reaches the key space.
+func (s *redisStore) digestKey(namespace string, parts ...string) string {
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return s.prefix + namespace + hex.EncodeToString(digest[:])
 }
 
 func (s *redisStore) storedResponseKey(responseID, ownerHash string) string {
-	digest := sha256.Sum256([]byte(strings.TrimSpace(ownerHash) + "\x00" + strings.TrimSpace(responseID)))
-	return s.prefix + "responses:ownership:" + hex.EncodeToString(digest[:])
+	return s.digestKey("responses:ownership:", strings.TrimSpace(ownerHash), strings.TrimSpace(responseID))
 }
 
 func (s *redisStore) SaveStoredResponse(ctx context.Context, response *StoredResponse, ttl time.Duration) error {
@@ -1836,8 +1784,7 @@ func (s *redisStore) DeleteStoredResponse(ctx context.Context, responseID, owner
 }
 
 func (s *redisStore) reasoningReplayKey(model, sessionKey string) string {
-	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(model)) + "\x00" + strings.TrimSpace(sessionKey)))
-	return s.prefix + "grok:reasoning_replay:" + hex.EncodeToString(digest[:])
+	return s.digestKey("grok:reasoning_replay:", strings.ToLower(strings.TrimSpace(model)), strings.TrimSpace(sessionKey))
 }
 
 func (s *redisStore) DeleteReasoningReplay(ctx context.Context, model, key string) error {
@@ -1861,28 +1808,17 @@ func (s *redisStore) SaveReasoningReplay(ctx context.Context, replay *StoredReas
 }
 
 func (s *redisStore) GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error) {
-	raw, err := s.client.Get(ctx, s.reasoningReplayKey(model, sessionKey)).Bytes()
-	if err == redis.Nil {
-		return nil, ErrNoRows
-	}
-	if err != nil {
-		return nil, err
-	}
-	var replay StoredReasoningReplay
-	if err := json.Unmarshal(raw, &replay); err != nil {
-		return nil, err
-	}
-	if !replay.ExpiresAt.IsZero() && !time.Now().UTC().Before(replay.ExpiresAt) {
-		_ = s.client.Del(ctx, s.reasoningReplayKey(model, sessionKey)).Err()
-		return nil, ErrNoRows
-	}
-	return &replay, nil
+	key := s.reasoningReplayKey(model, sessionKey)
+	return getExpiringRedisJSON[StoredReasoningReplay](ctx, s, key, func(replay *StoredReasoningReplay) time.Time {
+		return replay.ExpiresAt
+	})
 }
 
 func (s *redisStore) sessionAffinityKey(provider, model, sessionKey string) string {
-	source := strings.ToLower(strings.TrimSpace(provider)) + "\x00" + strings.ToLower(strings.TrimSpace(model)) + "\x00" + strings.TrimSpace(sessionKey)
-	digest := sha256.Sum256([]byte(source))
-	return s.prefix + "grok:session_affinity:" + hex.EncodeToString(digest[:])
+	return s.digestKey("grok:session_affinity:",
+		strings.ToLower(strings.TrimSpace(provider)),
+		strings.ToLower(strings.TrimSpace(model)),
+		strings.TrimSpace(sessionKey))
 }
 
 func (s *redisStore) SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error {
@@ -1903,22 +1839,9 @@ func (s *redisStore) SaveSessionAffinity(ctx context.Context, affinity *StoredSe
 
 func (s *redisStore) GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error) {
 	key := s.sessionAffinityKey(provider, model, sessionKey)
-	raw, err := s.client.Get(ctx, key).Bytes()
-	if err == redis.Nil {
-		return nil, ErrNoRows
-	}
-	if err != nil {
-		return nil, err
-	}
-	var affinity StoredSessionAffinity
-	if err := json.Unmarshal(raw, &affinity); err != nil {
-		return nil, err
-	}
-	if !affinity.ExpiresAt.IsZero() && !time.Now().UTC().Before(affinity.ExpiresAt) {
-		_ = s.client.Del(ctx, key).Err()
-		return nil, ErrNoRows
-	}
-	return &affinity, nil
+	return getExpiringRedisJSON[StoredSessionAffinity](ctx, s, key, func(affinity *StoredSessionAffinity) time.Time {
+		return affinity.ExpiresAt
+	})
 }
 
 func apiKeyRecordFromKey(key *ApiKey) apiKeyRecord {

@@ -4,17 +4,10 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 func TestUpdateAccountStaleRequestCannotOverwriteNewerQuota(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "quota-order:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	s, _ := newTestRedisStore(t, "quota-order:")
 
 	acc := &Account{AccountType: "qoder", Enabled: true}
 	if err := s.CreateAccount(context.Background(), acc); err != nil {

@@ -77,17 +77,6 @@ func qoderLoginConfig(baseURL string) *config.Config {
 	}
 }
 
-func qoderLoginRequest(t *testing.T, method, path, body string) *http.Request {
-	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Host = "localhost"
-	req.Header.Set("Origin", "http://localhost")
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	return req
-}
-
 // TestHandleQoderLogin_StartReturnsOfficialDeviceURL proves the start step
 // returns a device authorization URL and never leaks the transaction's private
 // halves.
@@ -97,7 +86,7 @@ func TestHandleQoderLogin_StartReturnsOfficialDeviceURL(t *testing.T) {
 	defer auth.Close()
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 	rec := httptest.NewRecorder()
-	a.HandleQoderLogin(rec, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"enabled":true}`))
+	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"enabled":true}`))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
@@ -145,7 +134,7 @@ func TestHandleQoderLogin_StartReturnsOfficialDeviceURL(t *testing.T) {
 	// The pending transaction must be pollable and must stay pending while the
 	// upstream answers 404.
 	pollRec := httptest.NewRecorder()
-	a.HandleQoderLogin(pollRec, qoderLoginRequest(t, http.MethodGet, "/api/qoder/login/"+response.ID, ""))
+	a.HandleQoderLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/qoder/login/"+response.ID, ""))
 	if pollRec.Code != http.StatusOK {
 		t.Fatalf("poll status = %d", pollRec.Code)
 	}
@@ -179,7 +168,7 @@ func TestHandleQoderLogin_CancelStopsBlockedPollAndDoesNotPersist(t *testing.T) 
 	defer auth.Close()
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 	start := httptest.NewRecorder()
-	a.HandleQoderLogin(start, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
+	a.HandleQoderLogin(start, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
 	var response struct {
 		ID string `json:"id"`
 	}
@@ -196,7 +185,7 @@ func TestHandleQoderLogin_CancelStopsBlockedPollAndDoesNotPersist(t *testing.T) 
 		t.Fatal("poll request did not start")
 	}
 	cancelRec := httptest.NewRecorder()
-	a.HandleQoderLogin(cancelRec, qoderLoginRequest(t, http.MethodDelete, "/api/qoder/login/"+response.ID, ""))
+	a.HandleQoderLogin(cancelRec, channelLoginRequest(t, http.MethodDelete, "/api/qoder/login/"+response.ID, ""))
 	if cancelRec.Code != http.StatusNoContent {
 		t.Fatalf("cancel status = %d", cancelRec.Code)
 	}
@@ -225,7 +214,7 @@ func TestHandleQoderLogin_PreservesDisabledPreference(t *testing.T) {
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 
 	start := httptest.NewRecorder()
-	a.HandleQoderLogin(start, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"enabled":false}`))
+	a.HandleQoderLogin(start, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"enabled":false}`))
 	var response struct {
 		ID string `json:"id"`
 	}
@@ -238,7 +227,7 @@ func TestHandleQoderLogin_PreservesDisabledPreference(t *testing.T) {
 	var final deviceLoginResponse
 	for time.Now().Before(deadline) {
 		poll := httptest.NewRecorder()
-		a.HandleQoderLogin(poll, qoderLoginRequest(t, http.MethodGet, "/api/qoder/login/"+response.ID, ""))
+		a.HandleQoderLogin(poll, channelLoginRequest(t, http.MethodGet, "/api/qoder/login/"+response.ID, ""))
 		if err := json.Unmarshal(poll.Body.Bytes(), &final); err != nil {
 			t.Fatal(err)
 		}
@@ -273,7 +262,7 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	defer auth.Close()
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 	rec := httptest.NewRecorder()
-	a.HandleQoderLogin(rec, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
+	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
 
 	var started struct {
 		ID string `json:"id"`
@@ -286,7 +275,7 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	var final deviceLoginResponse
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
-		a.HandleQoderLogin(pollRec, qoderLoginRequest(t, http.MethodGet, "/api/qoder/login/"+started.ID, ""))
+		a.HandleQoderLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/qoder/login/"+started.ID, ""))
 		if pollRec.Code != http.StatusOK {
 			t.Fatalf("poll status = %d body=%s", pollRec.Code, pollRec.Body.String())
 		}
@@ -395,7 +384,7 @@ func TestHandleQoderLogin_ReportsUnusableCredential(t *testing.T) {
 func runQoderLoginToCompletion(t *testing.T, a *API, s *store.Store, timeout time.Duration) deviceLoginResponse {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	a.HandleQoderLogin(rec, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
+	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
 	var started struct {
 		ID string `json:"id"`
 	}
@@ -407,7 +396,7 @@ func runQoderLoginToCompletion(t *testing.T, a *API, s *store.Store, timeout tim
 	var final deviceLoginResponse
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
-		a.HandleQoderLogin(pollRec, qoderLoginRequest(t, http.MethodGet, "/api/qoder/login/"+started.ID, ""))
+		a.HandleQoderLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/qoder/login/"+started.ID, ""))
 		if pollRec.Code != http.StatusOK {
 			t.Fatalf("poll status = %d body=%s", pollRec.Code, pollRec.Body.String())
 		}
@@ -427,7 +416,7 @@ func runQoderLoginToCompletion(t *testing.T, a *API, s *store.Store, timeout tim
 func TestHandleQoderLogin_RequiresStoreAndRejectsBadMethods(t *testing.T) {
 	a := New(nil, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
-	a.HandleQoderLogin(rec, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
+	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 without a store", rec.Code)
 	}
@@ -435,12 +424,12 @@ func TestHandleQoderLogin_RequiresStoreAndRejectsBadMethods(t *testing.T) {
 	s, _ := newTestStore(t, "qd-login:")
 	a = New(s, "", "", &config.Config{})
 	rec = httptest.NewRecorder()
-	a.HandleQoderLogin(rec, qoderLoginRequest(t, http.MethodPut, "/api/qoder/login", ""))
+	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPut, "/api/qoder/login", ""))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405 for an unsupported method", rec.Code)
 	}
 	rec = httptest.NewRecorder()
-	a.HandleQoderLogin(rec, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"unexpected":1}`))
+	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"unexpected":1}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for an unknown field", rec.Code)
 	}

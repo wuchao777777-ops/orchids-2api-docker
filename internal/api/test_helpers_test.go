@@ -1,6 +1,9 @@
 package api
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -17,4 +20,19 @@ func newTestStore(t *testing.T, prefix string) (*store.Store, *miniredis.Minired
 		t.Fatalf("store.New() error = %v", err)
 	}
 	return s, mini
+}
+
+// channelLoginRequest builds the console's own request for a device-login
+// endpoint: a localhost Origin so the origin guard accepts it, and a JSON body
+// when there is one. Every channel login test needs exactly this shape, so the
+// cline, qoder and workbuddy suites share the one builder.
+func channelLoginRequest(t *testing.T, method, path, body string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Host = "localhost"
+	req.Header.Set("Origin", "http://localhost")
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req
 }

@@ -545,12 +545,3 @@ func NeedsReverify(acc *store.Account, now time.Time) bool {
 	}
 	return now.Sub(acc.VerifiedAt) >= CredentialReverify
 }
-
-// NeedsFirstVerdict reports whether an account has never been checked, so the
-// scheduler must give it one before any pool decision trusts it.
-func NeedsFirstVerdict(acc *store.Account) bool {
-	if acc == nil {
-		return false
-	}
-	return strings.TrimSpace(acc.StatusCode) == "" && acc.VerifiedAt.IsZero()
-}

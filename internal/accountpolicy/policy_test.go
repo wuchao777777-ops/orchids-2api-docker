@@ -153,12 +153,6 @@ func TestAccountLifecycle(t *testing.T) {
 	if AccountHeld(healthy, now) {
 		t.Fatal("a healthy account must never be held")
 	}
-	if !NeedsFirstVerdict(grokBuildAccount()) {
-		t.Fatal("an account with no verdict needs one")
-	}
-	if NeedsFirstVerdict(healthy) {
-		t.Fatal("a verified account does not need a first verdict")
-	}
 }
 
 // TestCooldownFor_MatchesPoolValues guards the numbers the pool already relies on.

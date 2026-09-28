@@ -43,9 +43,6 @@ func TestCatalogContextConfigMergeAndRoundTrip(t *testing.T) {
 	if CatalogContextWindows(snapshot)["model"] != 180000 {
 		t.Fatal("input budget replaced with total tier")
 	}
-	if CatalogContextWindowDetails(snapshot)["model"].MaxContextTokens != 1000000 {
-		t.Fatal("missing separate largest tier")
-	}
 	if len(catalogFromIDs(snapshot).entries[0].ContextConfigVariants) != 1 {
 		t.Fatal("roundtrip grew variants")
 	}
@@ -70,17 +67,5 @@ func TestCatalogContextUnknownAndConflictingDefaults(t *testing.T) {
 		if got := m.ContextWindowInfo(); got != tc.want {
 			t.Fatalf("%s got=%+v want=%+v", tc.config, got, tc.want)
 		}
-	}
-}
-
-func TestCatalogContextConfigAbsentCanonicalAndSameName(t *testing.T) {
-	c := newCatalog([]modelEntry{
-		{Key: "a", Name: "Shared", MaxInputTokens: 180000},
-		{Key: "a", Name: "Shared", ContextConfig: json.RawMessage(`{"context_length":200000,"is_default":true}`)},
-		{Key: "b", Name: "Shared", MaxInputTokens: 900000, ContextConfig: json.RawMessage(`{"context_length":1000000,"is_default":true}`)},
-	})
-	details := CatalogContextWindowDetails(catalogToIDs(c))
-	if details["shared"].DefaultContextTokens != 200000 || details["b"].DefaultContextTokens != 1000000 {
-		t.Fatalf("details=%+v", details)
 	}
 }

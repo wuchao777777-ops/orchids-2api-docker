@@ -147,19 +147,14 @@ func classifyResponsesCompactionPayload(payload map[string]interface{}) gatewayC
 	if payload == nil {
 		return responsesCompactionNone
 	}
-	input := responsesPayloadItems(payload["input"])
+	input := interfaceSlice(payload["input"])
 	if hasCompactionTrigger(input) {
 		return responsesCompactionTrigger
 	}
-	if lastItemLooksLikeCompactionPrompt(input) || lastItemLooksLikeCompactionPrompt(responsesPayloadItems(payload["messages"])) {
+	if lastItemLooksLikeCompactionPrompt(input) || lastItemLooksLikeCompactionPrompt(interfaceSlice(payload["messages"])) {
 		return responsesCompactionTUI
 	}
 	return responsesCompactionNone
-}
-
-func responsesPayloadItems(value interface{}) []interface{} {
-	items, _ := value.([]interface{})
-	return items
 }
 
 func hasCompactionTrigger(items []interface{}) bool {
@@ -644,18 +639,22 @@ func writeGatewayCompactionStream(w io.Writer, response map[string]interface{}) 
 	created["status"] = "in_progress"
 	created["output"] = []interface{}{}
 	item := response["output"].([]interface{})[0]
+	// The wire `type` of every event is its own name, so it is derived instead
+	// of repeated. The encoded bytes are unchanged: the payload is a map, and
+	// both encoders sort its keys.
 	events := []struct {
 		name string
 		data map[string]interface{}
 	}{
-		{"response.created", map[string]interface{}{"type": "response.created", "sequence_number": 0, "response": created}},
-		{"response.in_progress", map[string]interface{}{"type": "response.in_progress", "sequence_number": 1, "response": clonePayload(created)}},
-		{"response.output_item.added", map[string]interface{}{"type": "response.output_item.added", "sequence_number": 2, "output_index": 0, "item": item}},
-		{"keepalive", map[string]interface{}{"type": "keepalive", "sequence_number": 3}},
-		{"response.output_item.done", map[string]interface{}{"type": "response.output_item.done", "sequence_number": 4, "output_index": 0, "item": item}},
-		{"response.completed", map[string]interface{}{"type": "response.completed", "sequence_number": 5, "response": response}},
+		{"response.created", map[string]interface{}{"sequence_number": 0, "response": created}},
+		{"response.in_progress", map[string]interface{}{"sequence_number": 1, "response": clonePayload(created)}},
+		{"response.output_item.added", map[string]interface{}{"sequence_number": 2, "output_index": 0, "item": item}},
+		{"keepalive", map[string]interface{}{"sequence_number": 3}},
+		{"response.output_item.done", map[string]interface{}{"sequence_number": 4, "output_index": 0, "item": item}},
+		{"response.completed", map[string]interface{}{"sequence_number": 5, "response": response}},
 	}
 	for _, event := range events {
+		event.data["type"] = event.name
 		encoded, err := json.Marshal(event.data)
 		if err != nil {
 			return err
@@ -737,9 +736,6 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 	sample := prepareGatewayCompactionSample(payload)
 	sample["model"] = spec.UpstreamModel
 
-	fail := func(status int, code, message string) {
-		writeResponsesAPIError(w, status, code, message)
-	}
 	// lastErr is only used to decide whether another attempt is worthwhile; the
 	// client never sees upstream prose from this path.
 	var lastErr error
@@ -749,8 +745,7 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 			// The pool's note names why it is empty, and this path used to put it in
 			// the body: classify it the way every other entrance does, and let the
 			// note stay in the log.
-			answer := classifyGrokPoolFailure(err, "response_account_unavailable", grokResponseAccountUnavailableMessage)
-			fail(answer.status, answer.code, answer.message)
+			writeGrokAccountUnavailable(w, err, "response_account_unavailable", grokResponseAccountUnavailableMessage)
 			return
 		}
 		accountID := sess.acc.ID
@@ -766,7 +761,7 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 			// (err.Error() used to leak it here).
 			slog.Warn("Reporting an upstream failure to the client", "error", callErr,
 				"status", upstreamHTTPResponseStatus(callErr))
-			fail(upstreamHTTPResponseStatus(callErr), "upstream_error", grokUpstreamFailureMessage(callErr))
+			writeResponsesAPIError(w, upstreamHTTPResponseStatus(callErr), "upstream_error", grokUpstreamFailureMessage(callErr))
 			return
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)
@@ -779,7 +774,7 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 			if attempt < gatewayCompactionMaxAttempts && waitGatewayCompactionRetry(r.Context(), gatewayCompactionRetryPause) {
 				continue
 			}
-			fail(http.StatusBadGateway, "upstream_error", "upstream compaction response could not be read")
+			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "upstream compaction response could not be read")
 			return
 		}
 		if status < 200 || status >= 300 {
@@ -788,11 +783,11 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 				waitGatewayCompactionRetry(r.Context(), gatewayCompactionRetryPause) {
 				continue
 			}
-			fail(upstreamHTTPResponseStatus(lastErr), "upstream_error", "upstream compaction request failed")
+			writeResponsesAPIError(w, upstreamHTTPResponseStatus(lastErr), "upstream_error", "upstream compaction request failed")
 			return
 		}
 		if len(data) > maxNativeResponsesBytes {
-			fail(http.StatusBadGateway, "compaction_failed", "upstream compaction response was too large")
+			writeResponsesAPIError(w, http.StatusBadGateway, "compaction_failed", "upstream compaction response was too large")
 			return
 		}
 		parsed, parseErr := parseGatewayCompactionStream(data)
@@ -805,12 +800,12 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 				waitGatewayCompactionRetry(r.Context(), gatewayCompactionRetryPause) {
 				continue
 			}
-			fail(http.StatusBadGateway, "compaction_failed", "Grok Build compaction failed")
+			writeResponsesAPIError(w, http.StatusBadGateway, "compaction_failed", "Grok Build compaction failed")
 			return
 		}
 		blob, encodeErr := codec.encode(sessionKey, gatewayCompactionContinuation(parsed.summary))
 		if encodeErr != nil {
-			fail(http.StatusBadGateway, "compaction_failed", "gateway compaction state could not be encoded")
+			writeResponsesAPIError(w, http.StatusBadGateway, "compaction_failed", "gateway compaction state could not be encoded")
 			return
 		}
 		result := buildGatewayCompactionResponse(parsed.response, blob, modelID)
@@ -829,7 +824,7 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 		return
 	}
 	slog.Debug("gateway compaction exhausted its attempts", "model", modelID, "error", lastErr)
-	fail(http.StatusBadGateway, "compaction_failed", "Grok Build compaction failed")
+	writeResponsesAPIError(w, http.StatusBadGateway, "compaction_failed", "Grok Build compaction failed")
 }
 
 // auditGatewayCompaction records the gateway-owned compaction turn. Token counts

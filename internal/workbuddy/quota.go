@@ -11,12 +11,13 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/util"
 )
 
 // The WorkBuddy backend meters credits through the shared Tencent Cloud AI Code
 // Assistant meter (`p_tcaca`). Two windows are reported per package:
 //
-//   - the package window  (Capacity*/CycleStartTime..CycleEndTime of the deal)
+//   - the package window  (Capacity*/CycleEndTime of the deal)
 //   - the current cycle   (CycleCapacity*, refreshed on the cycle boundary)
 //
 // The remaining cycle capacity is what an operator acts on, so it maps to the
@@ -52,21 +53,16 @@ type Quota struct {
 // meterAccount is one metered package in the billing response.
 type meterAccount struct {
 	PackageName           string  `json:"PackageName"`
-	ProductCode           string  `json:"ProductCode"`
 	CapacityUnit          string  `json:"CapacityUnit"`
 	CapacitySize          float64 `json:"CapacitySize"`
 	CapacityRemain        float64 `json:"CapacityRemain"`
-	CapacityUsed          float64 `json:"CapacityUsed"`
 	CapacitySizePrecise   string  `json:"CapacitySizePrecise"`
 	CapacityRemainPrecise string  `json:"CapacityRemainPrecise"`
-	CapacityUsedPrecise   string  `json:"CapacityUsedPrecise"`
 	CycleCapacitySize     float64 `json:"CycleCapacitySize"`
 	CycleCapacityRemain   float64 `json:"CycleCapacityRemain"`
-	CycleCapacityUsed     float64 `json:"CycleCapacityUsed"`
 	CycleCapacitySizeP    string  `json:"CycleCapacitySizePrecise"`
 	CycleCapacityRemainP  string  `json:"CycleCapacityRemainPrecise"`
 	CycleCapacityUsedP    string  `json:"CycleCapacityUsedPrecise"`
-	CycleStartTime        string  `json:"CycleStartTime"`
 	CycleEndTime          string  `json:"CycleEndTime"`
 	ExpiredTime           string  `json:"ExpiredTime"`
 	Status                int     `json:"Status"`
@@ -134,16 +130,16 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 func summarizeQuota(payload resourceResponse, now time.Time) *Quota {
 	quota := &Quota{SyncedAt: now, Unit: "credit"}
 	for _, account := range payload.Response.Data.Accounts {
-		cycleRemain := firstPositive(
+		cycleRemain := util.FirstPositive(
 			parsePrecise(account.CycleCapacityRemainP),
 			account.CycleCapacityRemain,
 		)
-		cycleSize := firstPositive(
+		cycleSize := util.FirstPositive(
 			parsePrecise(account.CycleCapacitySizeP),
 			account.CycleCapacitySize,
 			account.CapacitySize,
 		)
-		packageRemain := firstPositive(
+		packageRemain := util.FirstPositive(
 			parsePrecise(account.CapacityRemainPrecise),
 			account.CapacityRemain,
 			cycleRemain,
@@ -177,16 +173,6 @@ func summarizeQuota(payload resourceResponse, now time.Time) *Quota {
 		quota.Remaining = quota.Limit
 	}
 	return quota
-}
-
-// firstPositive returns the first strictly positive candidate, or 0.
-func firstPositive(values ...float64) float64 {
-	for _, value := range values {
-		if value > 0 {
-			return value
-		}
-	}
-	return 0
 }
 
 func parsePrecise(raw string) float64 {

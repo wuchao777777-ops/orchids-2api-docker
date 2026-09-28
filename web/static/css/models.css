@@ -32,15 +32,6 @@
   color: var(--accent);
 }
 
-.models-toolbar-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
-
-.models-control { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .models-control-label { color: var(--text-muted); font-size: 0.74rem; font-weight: 600; }
 .models-control-search { flex: 1 1 240px; }
 
@@ -67,14 +58,6 @@
 /* -----------------------------------------------------------------------------
    Results card
    -------------------------------------------------------------------------- */
-.models-results-card {
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--surface-1);
-  overflow: hidden;
-}
-
-.models-results-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 
 .models-meta-pill {
   display: inline-flex;
@@ -111,33 +94,9 @@
    -------------------------------------------------------------------------- */
 .models-table-wrap { max-height: 66vh; overflow: auto; }
 
-.models-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.82rem; }
-
-.models-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: 10px var(--space-3);
-  border-bottom: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-align: left;
-  white-space: nowrap;
-}
-
-.models-table tbody td {
-  padding: 8px var(--space-3);
-  border-bottom: 1px solid var(--border-color);
-  color: var(--text-soft);
-  vertical-align: middle;
-}
-
 .models-table tbody tr:hover td { background: var(--surface-2); }
 .models-table tbody tr.is-selected td { background: var(--accent-soft); }
 
-.models-table .col-select { width: 40px; }
 .models-table .col-model { min-width: 260px; }
 .models-table .col-channel { width: 108px; }
 .models-table .col-status { width: 110px; }
@@ -146,7 +105,7 @@
 .models-table .col-actions { width: 150px; text-align: right; }
 
 .models-cell-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.models-cell-title { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+
 .models-cell-title strong { color: var(--text-main); font-size: 0.85rem; font-weight: 600; }
 .models-model-id { color: var(--text-faint); font-family: var(--font-mono); font-size: 0.74rem; }
 
@@ -174,13 +133,10 @@
   font-weight: 650;
 }
 
-.models-actions { display: inline-flex; align-items: center; gap: var(--space-1); justify-content: flex-end; }
-
 .models-action-btn,
 .models-primary-action { height: var(--control-h-sm); padding: 0 var(--space-3); font-size: 0.76rem; }
 
 .models-action-btn-danger { color: var(--bad); border-color: rgba(251, 113, 133, 0.32); }
-.models-action-btn-danger:hover { background: var(--bad-soft); }
 
 .models-empty {
   display: flex;
@@ -270,19 +226,7 @@
 /* -----------------------------------------------------------------------------
    Mobile cards
    -------------------------------------------------------------------------- */
-.models-mobile-list { display: grid; gap: var(--space-3); padding: var(--space-3); }
 
-.models-mobile-card {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--surface-2);
-}
-
-.models-mobile-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
-.models-mobile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .models-mobile-item { display: flex; flex-direction: column; gap: 4px; }
 .models-mobile-label { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .models-mobile-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
@@ -309,11 +253,12 @@
 @media (max-width: 900px) {
   .models-toolbar-controls { margin-left: 0; width: 100%; }
   .models-control-search { flex-basis: 100%; }
-  .models-search { min-width: 0; width: 100%; }
-  /* The advanced disclosure kept a 220px column inside a 390px screen and hung 88px
+
+/* The advanced disclosure kept a 220px column inside a 390px screen and hung 88px
      past the edge: on a phone it is a full-width block, and its controls wrap. */
   .models-advanced { width: 100%; }
-  .models-advanced .advanced-body { min-width: 0; width: 100%; }
+  .models-advanced .advanced-body,
+  .models-search{ min-width: 0; width: 100%; }
   .models-control { width: 100%; }
 }
 

@@ -93,3 +93,6 @@ test/
 .upstream/
 .audit/
 
+
+# Local cross-compiled deploy artifacts (built by the deploy step, not source)
+dist/

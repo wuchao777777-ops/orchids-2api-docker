@@ -11,6 +11,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
 
 // envelope wraps one inner chunk the way the upstream does: a JSON object whose
@@ -382,23 +383,23 @@ func TestConsumeStreamToolCallAccumulatesArguments(t *testing.T) {
 func TestToolCallAccumulatorOpensNewCallOnIDChange(t *testing.T) {
 	t.Parallel()
 
-	accumulator := newToolCallAccumulator()
-	accumulator.add(0, "call_a", "first", `{"a":1}`)
-	first := accumulator.completeAll()
+	accumulator := util.NewToolCallAccumulator()
+	accumulator.Add(0, "call_a", "first", `{"a":1}`)
+	first := accumulator.CompleteAll()
 	if len(first) != 1 || first[0].ID != "call_a" {
 		t.Fatalf("first flush = %+v, want the first call", first)
 	}
 
 	// The same index is reused for a different call.
-	accumulator.add(0, "call_b", "second", `{"b":2}`)
-	second := accumulator.completeAll()
+	accumulator.Add(0, "call_b", "second", `{"b":2}`)
+	second := accumulator.CompleteAll()
 	if len(second) != 1 || second[0].ID != "call_b" || second[0].Name != "second" {
 		t.Fatalf("second flush = %+v, want the reused-index call", second)
 	}
 
 	// A repeated id must not emit again.
-	accumulator.add(0, "call_b", "", ``)
-	if got := accumulator.completeAll(); len(got) != 0 {
+	accumulator.Add(0, "call_b", "", ``)
+	if got := accumulator.CompleteAll(); len(got) != 0 {
 		t.Fatalf("third flush = %+v, want nothing", got)
 	}
 }
@@ -408,14 +409,14 @@ func TestToolCallAccumulatorOpensNewCallOnIDChange(t *testing.T) {
 func TestToolCallAccumulatorPreservesCallsAtReusedIndex(t *testing.T) {
 	t.Parallel()
 
-	accumulator := newToolCallAccumulator()
-	accumulator.add(1, "call_c", "third", `{"c":3}`)
-	accumulator.add(1, "call_d", "fourth", `{"d":4}`)
-	flushed := accumulator.completeAll()
+	accumulator := util.NewToolCallAccumulator()
+	accumulator.Add(1, "call_c", "third", `{"c":3}`)
+	accumulator.Add(1, "call_d", "fourth", `{"d":4}`)
+	flushed := accumulator.CompleteAll()
 	if len(flushed) != 2 || flushed[0].ID != "call_c" || flushed[1].ID != "call_d" {
 		t.Fatalf("flush = %+v, want both calls in arrival order", flushed)
 	}
-	if got := accumulator.completeAll(); len(got) != 0 {
+	if got := accumulator.CompleteAll(); len(got) != 0 {
 		t.Fatalf("re-flush = %+v, want nothing", got)
 	}
 }

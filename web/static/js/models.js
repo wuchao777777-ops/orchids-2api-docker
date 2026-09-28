@@ -12,6 +12,29 @@ let modelDeleteOfflineInFlight = false;
 let modelRefreshResults = {};
 let modelRefreshConcurrency = 4;
 
+// ── small helpers ────────────────────────────────────────────────────────────
+function el(id) {
+  return document.getElementById(id);
+}
+
+function setText(id, value) {
+  const node = el(id);
+  if (node) node.textContent = value == null ? "" : String(value);
+}
+
+// activeChannel is the channel the page is scoped to. A channel is always
+// required by the refresh and batch actions, so the first known one stands in
+// when the strip has not been clicked yet.
+function activeChannel() {
+  return currentModelChannel || modelChannels()[0] || "";
+}
+
+// offlineModels is the set of channel-scoped models the server marked offline,
+// which is what "删除已下线" acts on.
+function offlineModels() {
+  return getChannelScopedModels().filter((m) => normalizeModelStatus(m.status) === "offline");
+}
+
 function modelChannels() {
   const defaultChannels = Array.isArray(window.OrchidsProviderRegistry?.channels)
     ? [...window.OrchidsProviderRegistry.channels]
@@ -99,32 +122,13 @@ function getFilteredModels(channelModels = getChannelScopedModels()) {
 function updateModelSummary(channelModels, filtered) {
   const channelLabel = currentModelChannel || "全部";
 
-  const totalModelCount = document.getElementById("totalModelCount");
-  if (totalModelCount) {
-    totalModelCount.textContent = String(filtered.length);
-  }
-
-  const currentChannelPill = document.getElementById("currentChannelPill");
-  if (currentChannelPill) {
-    currentChannelPill.textContent = channelLabel;
-  }
-
-  const filterMeta = document.getElementById("modelsFilterMeta");
-  if (filterMeta) {
-    filterMeta.textContent = `当前渠道共 ${channelModels.length} 条，筛选后 ${filtered.length} 条。`;
-  }
-
-  const panelTitle = document.getElementById("modelsPanelTitle");
-  if (panelTitle) {
-    panelTitle.textContent = currentModelChannel ? `${channelLabel} 模型` : "全部模型";
-  }
-
-  const panelHint = document.getElementById("modelsPanelHint");
-  if (panelHint) {
-    panelHint.textContent = filtered.length > 0
-      ? "启停、编辑与删除都在行内完成；默认模型请在编辑弹窗里维护。"
-      : "当前筛选条件下没有命中的模型记录。";
-  }
+  setText("totalModelCount", String(filtered.length));
+  setText("currentChannelPill", channelLabel);
+  setText("modelsFilterMeta", `当前渠道共 ${channelModels.length} 条，筛选后 ${filtered.length} 条。`);
+  setText("modelsPanelTitle", currentModelChannel ? `${channelLabel} 模型` : "全部模型");
+  setText("modelsPanelHint", filtered.length > 0
+    ? "启停、编辑与删除都在行内完成；默认模型请在编辑弹窗里维护。"
+    : "当前筛选条件下没有命中的模型记录。");
 }
 
 function refreshChannelKey(channel) {
@@ -205,7 +209,7 @@ function renderModelRefreshSummary() {
   const deletedList = document.getElementById("modelsRefreshDeletedList");
   if (!summary || !title || !meta || !statGrid || !deletedBlock || !deletedList) return;
 
-  const channel = currentModelChannel || modelChannels()[0] || "";
+  const channel = activeChannel();
   const result = modelRefreshResults[refreshChannelKey(channel)];
   if (!result) {
     summary.hidden = true;
@@ -319,6 +323,43 @@ function renderPagination(current, total) {
   };
 }
 
+// ── row fragments ────────────────────────────────────────────────────────────
+// The table and the mobile card list are two renderings of the same model, so
+// the pieces that would otherwise be written twice (title, status pill, toggle,
+// action buttons) are built once and interpolated into both.
+function modelTitle(m) {
+  const defaultBadge = m.is_default ? `<span class="models-default-badge">默认</span>` : "";
+  return `<div class="models-cell-title"><strong>${escapeHtml(m.name || m.model_id || "-")}</strong>${defaultBadge}</div>`;
+}
+
+function statusBadgeHtml(m) {
+  const status = statusMeta(m.status);
+  return `<span class="models-status-badge" style="background:${status.bg};color:${status.color};border-color:${status.border};">${status.label}</span>`;
+}
+
+function toggleHtml(m) {
+  const available = normalizeModelStatus(m.status) === "available";
+  return `<label class="toggle${available ? " active" : ""}" title="${available ? "点击下线" : "点击启用"}">
+            <input type="checkbox" data-action="toggle-status" data-id="${encodeData(m.id)}" ${available ? "checked" : ""} />
+            <span class="toggle-slider"></span>
+          </label>`;
+}
+
+function actionButtonsHtml(m) {
+  return `<button type="button" class="btn btn-outline models-action-btn" data-action="edit" data-id="${encodeData(m.id)}">编辑</button>
+          <button type="button" class="btn btn-outline models-action-btn models-action-btn-danger" data-action="delete" data-id="${encodeData(m.id)}">删除</button>`;
+}
+
+// emptyModels is the "no model matched" panel both layouts fall back to.
+function emptyModels(container) {
+  container.innerHTML = `
+      <div class="models-empty empty-state-panel">
+        <span class="models-empty-icon empty-state-mark">◈</span>
+        <p>当前筛选条件下暂无模型数据</p>
+      </div>
+    `;
+}
+
 function renderModels() {
   const container = document.getElementById("modelsList");
   const channelModels = getChannelScopedModels();
@@ -346,12 +387,7 @@ function renderModels() {
 
   updateModelsBatchBar();
   if (pageItems.length === 0) {
-    container.innerHTML = `
-      <div class="models-empty empty-state-panel">
-        <span class="models-empty-icon empty-state-mark">◈</span>
-        <p>当前筛选条件下暂无模型数据</p>
-      </div>
-    `;
+    emptyModels(container);
     return;
   }
 
@@ -360,44 +396,28 @@ function renderModels() {
     return;
   }
 
-  const rows = pageItems.map((m) => {
-    const status = statusMeta(m.status);
-    const defaultBadge = m.is_default ? `<span class="models-default-badge">默认</span>` : "";
-
-    return `
+  const rows = pageItems.map((m) => `
       <tr data-id="${encodeData(m.id)}">
         <td class="col-select">
           <input type="checkbox" class="row-checkbox" data-action="row-select" data-id="${encodeData(m.id)}" ${modelsSelectedIds.has(String(m.id)) ? "checked" : ""} />
         </td>
         <td class="col-model">
           <div class="models-cell-main">
-            <div class="models-cell-title">
-              <strong>${escapeHtml(m.name || m.model_id || "-")}</strong>
-              ${defaultBadge}
-            </div>
+            ${modelTitle(m)}
             <span class="models-model-id">${escapeHtml(m.model_id || "-")}</span>
           </div>
         </td>
         <td class="col-channel">${escapeHtml(m.channel || "-")}</td>
-        <td class="col-status">
-          <span class="models-status-badge" style="background:${status.bg};color:${status.color};border-color:${status.border};">${status.label}</span>
-        </td>
+        <td class="col-status">${statusBadgeHtml(m)}</td>
         <td class="col-sort">${escapeHtml(String(m.sort_order ?? 0))}</td>
-        <td class="col-toggle">
-          <label class="toggle${normalizeModelStatus(m.status) === "available" ? " active" : ""}" title="${normalizeModelStatus(m.status) === "available" ? "点击下线" : "点击启用"}">
-            <input type="checkbox" data-action="toggle-status" data-id="${encodeData(m.id)}" ${normalizeModelStatus(m.status) === "available" ? "checked" : ""} />
-            <span class="toggle-slider"></span>
-          </label>
-        </td>
+        <td class="col-toggle">${toggleHtml(m)}</td>
         <td class="col-actions">
           <div class="models-actions">
-            <button type="button" class="btn btn-outline models-action-btn" data-action="edit" data-id="${encodeData(m.id)}">编辑</button>
-            <button type="button" class="btn btn-outline models-action-btn models-action-btn-danger" data-action="delete" data-id="${encodeData(m.id)}">删除</button>
+            ${actionButtonsHtml(m)}
           </div>
         </td>
       </tr>
-    `;
-  }).join("");
+    `).join("");
 
   container.innerHTML = `
     <div class="table-wrap models-table-wrap">
@@ -545,17 +565,11 @@ async function runModelBatch(action) {
 }
 
 function renderModelsMobile(container, pageItems) {
-  const cards = pageItems.map((m) => {
-    const status = statusMeta(m.status);
-    const defaultBadge = m.is_default ? `<span class="models-default-badge">默认</span>` : "";
-    return `
+  const cards = pageItems.map((m) => `
       <article class="models-mobile-card">
         <div class="models-mobile-head">
-          <div class="models-cell-title">
-            <strong>${escapeHtml(m.name || m.model_id || "-")}</strong>
-            ${defaultBadge}
-          </div>
-          <span class="models-status-badge" style="background:${status.bg};color:${status.color};border-color:${status.border};">${status.label}</span>
+          ${modelTitle(m)}
+          ${statusBadgeHtml(m)}
         </div>
         <div class="models-model-id">${escapeHtml(m.model_id || "-")}</div>
         <div class="models-mobile-grid">
@@ -569,22 +583,22 @@ function renderModelsMobile(container, pageItems) {
           </div>
           <div class="models-mobile-item">
             <span class="models-mobile-label">启用</span>
-            <label class="toggle${normalizeModelStatus(m.status) === "available" ? " active" : ""}" title="${normalizeModelStatus(m.status) === "available" ? "点击下线" : "点击启用"}">
-              <input type="checkbox" data-action="toggle-status" data-id="${encodeData(m.id)}" ${normalizeModelStatus(m.status) === "available" ? "checked" : ""} />
-              <span class="toggle-slider"></span>
-            </label>
+            ${toggleHtml(m)}
           </div>
         </div>
         <div class="models-mobile-actions">
-          <button type="button" class="btn btn-outline models-action-btn" data-action="edit" data-id="${encodeData(m.id)}">编辑</button>
-          <button type="button" class="btn btn-outline models-action-btn models-action-btn-danger" data-action="delete" data-id="${encodeData(m.id)}">删除</button>
+          ${actionButtonsHtml(m)}
         </div>
       </article>
-    `;
-  }).join("");
+    `).join("");
 
   container.innerHTML = `<div class="models-mobile-list">${cards}</div>`;
+  bindModelCardActions(container);
+}
 
+// bindModelCardActions is the mobile list's delegated handler: the card has no
+// select column and no batch bar, so only the two row actions apply.
+function bindModelCardActions(container) {
   container.onclick = (event) => {
     const target = event.target.closest("[data-action]");
     if (!target || !container.contains(target)) return;
@@ -770,24 +784,17 @@ async function deleteModel(id) {
 }
 
 function updateRefreshButton() {
-  const button = document.getElementById("refreshModelsButton");
-  const deleteButton = document.getElementById("deleteOfflineModelsButton");
-
-  const channel = currentModelChannel || modelChannels()[0] || "";
+  const channel = activeChannel();
+  const button = el("refreshModelsButton");
   if (button) {
     button.disabled = modelRefreshInFlight || modelDeleteOfflineInFlight || !channel;
-    if (!channel) {
-      button.textContent = "刷新当前渠道";
-    } else {
-      button.textContent = modelRefreshInFlight
-        ? `正在刷新 ${channel}...`
-        : `刷新 ${channel} 列表`;
-    }
+    button.textContent = !channel
+      ? "刷新当前渠道"
+      : (modelRefreshInFlight ? `正在刷新 ${channel}...` : `刷新 ${channel} 列表`);
   }
+  const deleteButton = el("deleteOfflineModelsButton");
   if (deleteButton) {
-    const offlineCount = getChannelScopedModels()
-      .filter((m) => normalizeModelStatus(m.status) === "offline")
-      .length;
+    const offlineCount = offlineModels().length;
     deleteButton.disabled = modelRefreshInFlight || modelDeleteOfflineInFlight || !channel || offlineCount === 0;
     deleteButton.textContent = modelDeleteOfflineInFlight
       ? "正在删除..."
@@ -796,7 +803,7 @@ function updateRefreshButton() {
 }
 
 async function refreshModelsForCurrentChannel() {
-  const channel = currentModelChannel || modelChannels()[0] || "";
+  const channel = activeChannel();
   if (!channel || modelRefreshInFlight) return;
 
   modelRefreshInFlight = true;
@@ -854,11 +861,10 @@ async function refreshModelsForCurrentChannel() {
 }
 
 async function deleteOfflineModelsForCurrentChannel() {
-  const channel = currentModelChannel || modelChannels()[0] || "";
+  const channel = activeChannel();
   if (!channel || modelDeleteOfflineInFlight) return;
 
-  const targets = getChannelScopedModels()
-    .filter((m) => normalizeModelStatus(m.status) === "offline");
+  const targets = offlineModels();
   if (targets.length === 0) {
     showToast(`${channel} 没有已下线模型`, "info");
     updateRefreshButton();

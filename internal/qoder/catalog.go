@@ -298,8 +298,7 @@ func catalogToIDs(catalog *Catalog) []string {
 }
 
 // CatalogContextWindows is the legacy default INPUT-budget projection, not a
-// model's total context limit. Use CatalogContextWindowDetails for separately
-// declared default/largest context tiers; unknown tiers never inherit this budget.
+// model's total context limit. Unknown tiers never inherit this budget.
 // Every alias reports the budget of the row it actually resolves to.
 func CatalogContextWindows(ids []string) map[string]int {
 	catalog := catalogFromIDs(ids)

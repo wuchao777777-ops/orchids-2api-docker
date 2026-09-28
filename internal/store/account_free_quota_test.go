@@ -4,20 +4,13 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 // TestAccountFreeQuotaPersistsAndSurvivesPartialUpdates pins the two persistence
 // rules the confirmed Free window depends on: it round-trips through Redis, and an
 // unrelated partial update (a request counter, a credential rotation) cannot erase it.
 func TestAccountFreeQuotaPersistsAndSurvivesPartialUpdates(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "free-quota:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "free-quota:")
 	ctx := context.Background()
 
 	confirmedAt := time.Now().UTC().Truncate(time.Second)

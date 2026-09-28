@@ -11,22 +11,6 @@ import (
 	"orchids-api/internal/store"
 )
 
-func TestParseDataURI(t *testing.T) {
-	name, content, mime, err := parseDataURI("data:image/png;base64,QUJD")
-	if err != nil {
-		t.Fatalf("parseDataURI error: %v", err)
-	}
-	if name != "file.png" {
-		t.Fatalf("name=%q want=file.png", name)
-	}
-	if content != "QUJD" {
-		t.Fatalf("content=%q want=QUJD", content)
-	}
-	if mime != "image/png" {
-		t.Fatalf("mime=%q want=image/png", mime)
-	}
-}
-
 func TestValidateChatMessages_AcceptsCaseInsensitiveRoleAndType(t *testing.T) {
 	messages := []ChatMessage{
 		{
@@ -46,69 +30,6 @@ func TestValidateChatMessages_AcceptsCaseInsensitiveRoleAndType(t *testing.T) {
 
 	if err := validateChatMessages(messages); err != nil {
 		t.Fatalf("validateChatMessages() error = %v", err)
-	}
-}
-
-func TestParseUpstreamLines_CollectAndSkip(t *testing.T) {
-	raw := strings.Join([]string{
-		`{"result":{"response":{"token":"hello"}}}`,
-		`{"result":{"other":1}}`,
-		`{"other":2}`,
-		`{"result":{"response":{"token":"world"}}}`,
-	}, "")
-
-	got := make([]string, 0, 2)
-	err := parseUpstreamLines(strings.NewReader(raw), func(line map[string]interface{}) error {
-		token, _ := line["token"].(string)
-		got = append(got, token)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("parseUpstreamLines() error: %v", err)
-	}
-	if len(got) != 2 || got[0] != "hello" || got[1] != "world" {
-		t.Fatalf("unexpected tokens: %v", got)
-	}
-}
-
-func TestParseUpstreamLines_CallbackError(t *testing.T) {
-	expectErr := errors.New("stop")
-	raw := `{"result":{"response":{"token":"hello"}}}`
-	err := parseUpstreamLines(strings.NewReader(raw), func(line map[string]interface{}) error {
-		return expectErr
-	})
-	if !errors.Is(err, expectErr) {
-		t.Fatalf("parseUpstreamLines error=%v want=%v", err, expectErr)
-	}
-}
-
-func TestParseUpstreamLines_InvalidJSON(t *testing.T) {
-	raw := `{"result":{"response":{"token":"hello"}}`
-	err := parseUpstreamLines(strings.NewReader(raw), func(line map[string]interface{}) error {
-		return nil
-	})
-	if err == nil {
-		t.Fatalf("expected invalid json error")
-	}
-}
-
-func TestParseUpstreamLines_RejectsUpstreamErrorEnvelope(t *testing.T) {
-	err := parseUpstreamLines(strings.NewReader(`{"error":{"code":"forbidden","message":"not allowed"}}`), func(map[string]interface{}) error {
-		t.Fatal("callback must not run for upstream errors")
-		return nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "not allowed") {
-		t.Fatalf("error=%v want upstream error", err)
-	}
-}
-
-func TestParseUpstreamLines_RejectsUpstreamEventErrorEnvelope(t *testing.T) {
-	err := parseUpstreamLines(strings.NewReader(`{"event":{"type":"error","message":"rate limited"}}`), func(map[string]interface{}) error {
-		t.Fatal("callback must not run for upstream event errors")
-		return nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "rate limited") {
-		t.Fatalf("error=%v want upstream event error", err)
 	}
 }
 

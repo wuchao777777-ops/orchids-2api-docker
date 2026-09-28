@@ -142,14 +142,6 @@ func deriveID(seed, salt string) string {
 	return fmt.Sprintf("%x", sum)
 }
 
-// DeriveMachineID derives the 32-hex device id.
-func DeriveMachineID(seed string) string {
-	if seed == "" {
-		return ""
-	}
-	return deriveID(seed, "machine")
-}
-
 // DeriveMachineType derives the 18-character device type.
 func DeriveMachineType(seed string) string {
 	if seed == "" {

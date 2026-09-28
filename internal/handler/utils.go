@@ -18,6 +18,21 @@ func channelFromPath(path string) string {
 	return ""
 }
 
+// passthroughChannelName reports the canonical name of a passthrough channel —
+// WorkBuddy, Qoder or Cline — and "" for every other name. Those three forward
+// the caller's OpenAI-shaped request upstream verbatim.
+func passthroughChannelName(name string) string {
+	switch {
+	case strings.EqualFold(name, string(channel.WorkBuddy)):
+		return string(channel.WorkBuddy)
+	case strings.EqualFold(name, string(channel.Qoder)):
+		return string(channel.Qoder)
+	case strings.EqualFold(name, string(channel.Cline)):
+		return string(channel.Cline)
+	}
+	return ""
+}
+
 // mapModel normalizes only syntax. Availability and upstream identity come from
 // the discovered Store.Model row; unknown IDs are never rewritten to a compiled
 // fallback model.
@@ -263,25 +278,20 @@ func lastNonToolResultUserText(messages []prompt.Message) string {
 			}
 			continue
 		}
-		blocks := msg.Content.GetBlocks()
+		// Only text blocks carry a user turn here; a tool_result block is skipped
+		// either way, so the walk simply moves on to the previous message.
 		var parts []string
-		hasToolResult := false
-		for _, block := range blocks {
-			switch block.Type {
-			case "tool_result":
-				hasToolResult = true
-			case "text":
-				text := strings.TrimSpace(stripSystemRemindersForMode(block.Text))
-				if text != "" && !containsSuggestionMode(text) {
-					parts = append(parts, text)
-				}
+		for _, block := range msg.Content.GetBlocks() {
+			if block.Type != "text" {
+				continue
+			}
+			text := strings.TrimSpace(stripSystemRemindersForMode(block.Text))
+			if text != "" && !containsSuggestionMode(text) {
+				parts = append(parts, text)
 			}
 		}
 		if len(parts) > 0 {
 			return strings.TrimSpace(strings.Join(parts, "\n"))
-		}
-		if hasToolResult {
-			continue
 		}
 	}
 	return ""
@@ -348,25 +358,31 @@ func containsSuggestionMode(text string) bool {
 	return strings.Contains(strings.ToLower(clean), "suggestion mode")
 }
 
-func lastNonSuggestionUserText(messages []prompt.Message) string {
+// lastMessageText walks the history backwards and returns the stripped text of
+// the newest message whose role matches and whose text satisfies accept.
+func lastMessageText(messages []prompt.Message, role string, accept func(string) bool) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
-		if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), role) {
 			continue
 		}
 		text := strings.TrimSpace(stripSystemRemindersForMode(msg.ExtractText()))
-		if text == "" || containsSuggestionMode(text) {
-			continue
+		if text != "" && accept(text) {
+			return text
 		}
-		return text
 	}
 	return ""
 }
 
-func buildToolGateMessage(messages []prompt.Message, suggestionMode bool) string {
-	if suggestionMode {
-		return "This is a suggestion-mode follow-up. Answer directly without calling tools or performing any file operations."
-	}
+func lastNonSuggestionUserText(messages []prompt.Message) string {
+	return lastMessageText(messages, "user", func(text string) bool { return !containsSuggestionMode(text) })
+}
+
+func lastAssistantText(messages []prompt.Message) string {
+	return lastMessageText(messages, "assistant", func(string) bool { return true })
+}
+
+func buildToolGateMessage(messages []prompt.Message) string {
 	if lastUserIsToolResultFollowup(messages) {
 		original := lastNonToolResultUserText(messages)
 		if looksLikeOptimizationRequest(original) {
@@ -375,20 +391,6 @@ func buildToolGateMessage(messages []prompt.Message, suggestionMode bool) string
 		return "Use the provided tool results to answer the user's follow-up directly. Tool access is unavailable for this turn, and any request to read, inspect, search, or review more files will be ignored. Stay specific to the current project and available code context. Do NOT call tools, do not describe a plan, and answer now based only on the provided results."
 	}
 	return "Answer directly without calling tools or performing any file operations."
-}
-
-func lastAssistantText(messages []prompt.Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
-			continue
-		}
-		text := strings.TrimSpace(stripSystemRemindersForMode(msg.ExtractText()))
-		if text != "" {
-			return text
-		}
-	}
-	return ""
 }
 
 func hasExplicitNextStepOffer(text string) bool {
@@ -561,9 +563,6 @@ func isGreetingText(text string) bool {
 
 func normalizeTopicText(text string) string {
 	text = strings.ToLower(strings.TrimSpace(text))
-	if text == "" {
-		return ""
-	}
 	var b strings.Builder
 	b.Grow(len(text))
 	for _, r := range text {

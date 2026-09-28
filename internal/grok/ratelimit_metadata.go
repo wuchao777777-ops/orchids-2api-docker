@@ -73,38 +73,6 @@ func RateLimitFromResponse(status int, header http.Header, body []byte) *RateLim
 	return metadata
 }
 
-// Describe renders a short human-readable summary appended to error text so
-// existing string-matching classifiers keep working while adding diagnostics.
-func (m *RateLimitMetadata) Describe() string {
-	if m == nil {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("team=" + m.TeamID)
-	if m.Model != "" {
-		b.WriteString(" model=" + m.Model)
-	}
-	b.WriteString(" scope=" + string(m.Scope))
-	if m.Limit > 0 {
-		b.WriteString(" limit=" + strconv.Itoa(m.Actual) + "/" + strconv.Itoa(m.Limit))
-	}
-	if m.RetryAfter > 0 {
-		b.WriteString(" reset=" + formatDurationShort(m.RetryAfter))
-	}
-	return b.String()
-}
-
-func formatDurationShort(d time.Duration) string {
-	switch {
-	case d >= time.Hour:
-		return strconv.Itoa(int(d.Hours())) + "h"
-	case d >= time.Minute:
-		return strconv.Itoa(int(d.Minutes())) + "m"
-	default:
-		return strconv.Itoa(int(d.Seconds())) + "s"
-	}
-}
-
 func rateLimitTexts(body []byte) []string {
 	texts := []string{string(body)}
 	var value any

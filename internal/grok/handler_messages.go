@@ -5,8 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -171,7 +172,8 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 	tools := make([]ToolDef, 0, len(req.Tools))
 	nativeTools := make([]map[string]interface{}, 0, len(req.Tools)+len(req.MCPServers))
 	for _, tool := range req.Tools {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(tool.Type)), "web_search_") {
+		typeName := strings.ToLower(strings.TrimSpace(tool.Type))
+		if strings.HasPrefix(typeName, "web_search_") {
 			search, err := anthropicSearchTool(tool)
 			if err != nil {
 				return ChatCompletionsRequest{}, err
@@ -179,7 +181,7 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 			nativeTools = append(nativeTools, search)
 			continue
 		}
-		if typeName := strings.ToLower(strings.TrimSpace(tool.Type)); typeName != "" && typeName != "custom" {
+		if typeName != "" && typeName != "custom" {
 			return ChatCompletionsRequest{}, fmt.Errorf("unsupported Anthropic server tool type=%q", tool.Type)
 		}
 		name := strings.TrimSpace(tool.Name)
@@ -211,7 +213,7 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 		nativeTools = append(nativeTools, item)
 	}
 	maxTokens := req.MaxTokens
-	reasoningEffort := anthropicReasoningEffort(req.Thinking, req.OutputConfig)
+	reasoningEffort, wantsReasoningSummary := anthropicReasoningEffort(req.Thinking, req.OutputConfig)
 	promptCacheKey := anthropicPromptCacheKey(req.Metadata)
 	var responseText map[string]interface{}
 	if format, _ := req.OutputConfig["format"].(map[string]interface{}); len(format) > 0 {
@@ -230,8 +232,7 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 	// (Claude Code included) would show no reasoning text at all. grok2api
 	// requests a detailed summary for thinking requests.
 	var reasoningSummary *string
-	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(req.Thinking["type"]))) {
-	case "enabled", "adaptive":
+	if wantsReasoningSummary {
 		summary := "detailed"
 		reasoningSummary = &summary
 	}
@@ -396,11 +397,10 @@ func validateChatToolSequence(messages []ChatMessage) error {
 			continue
 		}
 		id := strings.TrimSpace(message.ToolCallID)
+		// A completed id was deleted from pending, so it already fails here; an
+		// explicit duplicate-result check would be unreachable.
 		if id == "" || !pending[id] {
 			return fmt.Errorf("tool_result references unknown tool_use_id %q", id)
-		}
-		if completed[id] {
-			return fmt.Errorf("duplicate tool_result for %q", id)
 		}
 		delete(pending, id)
 		completed[id] = true
@@ -409,30 +409,30 @@ func validateChatToolSequence(messages []ChatMessage) error {
 	// as a dangling call_id, which the upstream rejects much later and with a
 	// message that does not name the offending call.
 	if len(pending) > 0 {
-		unanswered := make([]string, 0, len(pending))
-		for id := range pending {
-			unanswered = append(unanswered, id)
-		}
-		sort.Strings(unanswered)
+		unanswered := slices.Sorted(maps.Keys(pending))
 		return fmt.Errorf("tool_use %s has no matching tool_result", strings.Join(unanswered, ", "))
 	}
 	return nil
 }
 
-func anthropicReasoningEffort(thinking, outputConfig map[string]interface{}) *string {
+func anthropicReasoningEffort(thinking, outputConfig map[string]interface{}) (*string, bool) {
 	// An explicit `thinking: {"type":"disabled"}` wins over output_config: a
 	// client that asked for no reasoning must not silently get reasoning just
 	// because a stale effort value was also present (grok2api resolves it the
 	// same way).
 	typeName := strings.ToLower(strings.TrimSpace(fmt.Sprint(thinking["type"])))
+	// A thinking request must also ask the upstream for a summary: without it the
+	// streamed thinking block would carry only a signature and the client (Claude
+	// Code included) would show no reasoning text at all.
+	thinkingRequested := typeName == "enabled" || typeName == "adaptive"
 	if typeName == "disabled" {
 		effort := "none"
-		return &effort
+		return &effort, false
 	}
 	if effort := strings.ToLower(strings.TrimSpace(fmt.Sprint(outputConfig["effort"]))); effort != "" && effort != "<nil>" {
-		return &effort
+		return &effort, thinkingRequested
 	}
-	if typeName == "enabled" || typeName == "adaptive" {
+	if thinkingRequested {
 		budget, _ := parseLooseIntAny(thinking["budget_tokens"])
 		effort := "medium"
 		if budget > 0 && budget <= 2048 {
@@ -443,9 +443,9 @@ func anthropicReasoningEffort(thinking, outputConfig map[string]interface{}) *st
 		if configured := strings.ToLower(strings.TrimSpace(fmt.Sprint(thinking["effort"]))); configured != "" && configured != "<nil>" {
 			effort = configured
 		}
-		return &effort
+		return &effort, true
 	}
-	return nil
+	return nil, false
 }
 
 func anthropicPromptCacheKey(metadata map[string]interface{}) string {
@@ -773,12 +773,17 @@ func anthropicResponseFromChat(model string, chat map[string]interface{}) map[st
 			thinking = ""
 			signature = ""
 		}
-		if (thinking != "" && thinking != "<nil>") || (signature != "" && signature != "<nil>") {
-			if thinking == "<nil>" {
-				thinking = ""
-			}
+		// fmt.Sprint of a missing value is "<nil>"; normalizing it here lets both
+		// the presence check and the emitted block use one notion of "absent".
+		if thinking == "<nil>" {
+			thinking = ""
+		}
+		if signature == "<nil>" {
+			signature = ""
+		}
+		if thinking != "" || signature != "" {
 			block := map[string]interface{}{"type": "thinking", "thinking": thinking}
-			if signature != "" && signature != "<nil>" {
+			if signature != "" {
 				block["signature"] = signature
 			}
 			content = append(content, block)
@@ -864,11 +869,10 @@ func firstDefined(values ...interface{}) interface{} {
 	return nil
 }
 
+// interfaceString delegates to parseLooseStringAny so the package keeps its short
+// local name without duplicating the logic: nil and missing values read as "".
 func interfaceString(value interface{}) string {
-	if value == nil {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprint(value))
+	return parseLooseStringAny(value)
 }
 
 func openAIFinishToAnthropic(value string) string {
@@ -882,9 +886,8 @@ func openAIFinishToAnthropic(value string) string {
 		// stop reason for it, and a caller that only sees end_turn treats the
 		// refusal as a real answer.
 		return "refusal"
-	case "stop", "end_turn", "", "<nil>":
-		return "end_turn"
 	default:
+		// "stop", "end_turn", empty and any unknown reason complete normally.
 		return "end_turn"
 	}
 }
@@ -967,6 +970,10 @@ func translateOpenAIChatStreamToAnthropicWithInput(w io.Writer, reader io.Reader
 	state := &anthropicStreamState{
 		id: "msg_" + randomHex(12), model: model, textIndex: -1, thinkIndex: -1,
 		toolIndexes: map[int]int{}, open: map[int]bool{},
+		// Named thinking blocks stay addressable by their upstream id until they
+		// are signed, so the signature of a late snapshot attaches to the original
+		// block instead of an empty extra one.
+		reasoningIndexes: map[string]int{}, reasoningSigned: map[int]bool{},
 		// Upstream usage arrives on the terminal chunk, after message_start. The
 		// request is already parsed here, so seed Anthropic's required input/cache
 		// counters from the same conservative estimator used by chat fallback.
@@ -1012,10 +1019,10 @@ func translateOpenAIChatStreamToAnthropicWithInput(w io.Writer, reader io.Reader
 				state.reasoningID = key
 			}
 			if thinking := streamString(firstDefined(delta["reasoning_content"], delta["reasoning"])); thinking != "" {
-				state.writeThinking(w, thinking)
+				state.writeThinkingDelta(w, "thinking_delta", "thinking", thinking)
 			}
 			if signature := streamString(delta["reasoning_encrypted_content"]); signature != "" {
-				state.writeThinkingSignature(w, signature)
+				state.writeThinkingDelta(w, "signature_delta", "signature", signature)
 			}
 			if done, _ := delta["reasoning_done"].(bool); done && state.thinkIndex >= 0 {
 				state.detachThinking(w)
@@ -1117,18 +1124,7 @@ func (s *anthropicStreamState) writeText(w io.Writer, text string) {
 	if s.textIndex < 0 {
 		s.textIndex = s.startBlock(w, map[string]interface{}{"type": "text", "text": ""})
 	}
-	writeAnthropicSSE(w, "content_block_delta", map[string]interface{}{
-		"type": "content_block_delta", "index": s.textIndex,
-		"delta": map[string]interface{}{"type": "text_delta", "text": text},
-	})
-}
-
-func (s *anthropicStreamState) writeThinking(w io.Writer, thinking string) {
-	s.writeThinkingDelta(w, "thinking_delta", "thinking", thinking)
-}
-
-func (s *anthropicStreamState) writeThinkingSignature(w io.Writer, signature string) {
-	s.writeThinkingDelta(w, "signature_delta", "signature", signature)
+	writeAnthropicContentBlockDelta(w, s.textIndex, map[string]interface{}{"type": "text_delta", "text": text})
 }
 
 func (s *anthropicStreamState) writeThinkingDelta(w io.Writer, deltaType, field, value string) {
@@ -1145,26 +1141,17 @@ func (s *anthropicStreamState) writeThinkingDelta(w io.Writer, deltaType, field,
 		} else {
 			s.thinkIndex = s.startBlock(w, map[string]interface{}{"type": "thinking", "thinking": "", "signature": ""})
 			if s.reasoningID != "" {
-				if s.reasoningIndexes == nil {
-					s.reasoningIndexes = map[string]int{}
-				}
 				s.reasoningIndexes[s.reasoningID] = s.thinkIndex
 			}
 		}
 	}
 	if deltaType == "signature_delta" {
-		if s.reasoningSigned == nil {
-			s.reasoningSigned = map[int]bool{}
-		}
 		if s.reasoningSigned[s.thinkIndex] {
 			return
 		}
 		s.reasoningSigned[s.thinkIndex] = true
 	}
-	writeAnthropicSSE(w, "content_block_delta", map[string]interface{}{
-		"type": "content_block_delta", "index": s.thinkIndex,
-		"delta": map[string]interface{}{"type": deltaType, field: value},
-	})
+	writeAnthropicContentBlockDelta(w, s.thinkIndex, map[string]interface{}{"type": deltaType, field: value})
 }
 
 func (s *anthropicStreamState) writeToolCall(w io.Writer, raw interface{}) error {
@@ -1189,10 +1176,7 @@ func (s *anthropicStreamState) writeToolCall(w io.Writer, raw interface{}) error
 		s.toolIndexes[callIndex] = blockIndex
 	}
 	if args := streamString(fn["arguments"]); args != "" {
-		writeAnthropicSSE(w, "content_block_delta", map[string]interface{}{
-			"type": "content_block_delta", "index": blockIndex,
-			"delta": map[string]interface{}{"type": "input_json_delta", "partial_json": args},
-		})
+		writeAnthropicContentBlockDelta(w, blockIndex, map[string]interface{}{"type": "input_json_delta", "partial_json": args})
 	}
 	return nil
 }
@@ -1201,12 +1185,9 @@ func (s *anthropicStreamState) finish(w io.Writer) {
 	if len(s.searches) > 0 {
 		s.usage["server_tool_use"] = map[string]interface{}{"web_search_requests": len(s.searches)}
 	}
-	indexes := make([]int, 0, len(s.open))
-	for index := range s.open {
-		indexes = append(indexes, index)
-	}
-	sort.Ints(indexes)
-	for _, index := range indexes {
+	// Closing every open block must happen in index order, and closeBlock mutates
+	// s.open, so the keys are collected before the loop walks them.
+	for _, index := range slices.Sorted(maps.Keys(s.open)) {
 		s.closeBlock(w, index)
 	}
 	if s.stopReason == "" {
@@ -1221,6 +1202,14 @@ func (s *anthropicStreamState) finish(w io.Writer) {
 		"usage": s.usage,
 	})
 	writeAnthropicSSE(w, "message_stop", map[string]interface{}{"type": "message_stop"})
+}
+
+// writeAnthropicContentBlockDelta frames one content_block_delta event; every
+// streamed text, thinking and tool-argument delta shares this envelope.
+func writeAnthropicContentBlockDelta(w io.Writer, index int, delta map[string]interface{}) {
+	writeAnthropicSSE(w, "content_block_delta", map[string]interface{}{
+		"type": "content_block_delta", "index": index, "delta": delta,
+	})
 }
 
 func writeAnthropicSSE(w io.Writer, event string, payload interface{}) {
@@ -1242,50 +1231,42 @@ func writeAnthropicModelNotFound(w http.ResponseWriter, model string) {
 	})
 }
 
+// anthropicErrorStatuses pairs the statuses that have a dedicated Anthropic
+// error identity with their (type, code). Both derivations used to walk the same
+// status chain separately; the pair keeps them in sync.
+var anthropicErrorStatuses = map[int][2]string{
+	http.StatusUnauthorized:          {"authentication_error", "authentication_error"},
+	http.StatusForbidden:             {"permission_error", "permission_error"},
+	http.StatusNotFound:              {"not_found_error", "not_found_error"},
+	http.StatusRequestEntityTooLarge: {"request_too_large", "request_too_large"},
+	http.StatusTooManyRequests:       {"rate_limit_error", "rate_limit_error"},
+	// Anthropic reports capacity and upstream trouble as overloaded_error, which
+	// is the type its clients back off on.
+	http.StatusServiceUnavailable: {"overloaded_error", "upstream_unavailable"},
+	http.StatusBadGateway:         {"overloaded_error", "upstream_unavailable"},
+	http.StatusGatewayTimeout:     {"overloaded_error", "upstream_unavailable"},
+}
+
 // anthropicErrorType derives the Anthropic error type from the HTTP status.
 // A constant invalid_request_error made an exhausted allowance, an upstream
 // overload and a bad request indistinguishable, and an Anthropic client decides
 // whether to retry from that field.
 func anthropicErrorType(status int) string {
-	switch {
-	case status == http.StatusUnauthorized:
-		return "authentication_error"
-	case status == http.StatusForbidden:
-		return "permission_error"
-	case status == http.StatusNotFound:
-		return "not_found_error"
-	case status == http.StatusRequestEntityTooLarge:
-		return "request_too_large"
-	case status == http.StatusTooManyRequests:
-		return "rate_limit_error"
-	case status == http.StatusServiceUnavailable || status == http.StatusBadGateway ||
-		status == http.StatusGatewayTimeout:
-		// Anthropic reports capacity and upstream trouble as overloaded_error,
-		// which is the type its clients back off on.
-		return "overloaded_error"
-	default:
-		return "invalid_request_error"
+	if pair, ok := anthropicErrorStatuses[status]; ok {
+		return pair[0]
 	}
+	return "invalid_request_error"
 }
 
 // anthropicErrorCode is the stable machine code paired with the type above.
 func anthropicErrorCode(status int) string {
-	switch {
-	case status == http.StatusUnauthorized:
-		return "authentication_error"
-	case status == http.StatusForbidden:
-		return "permission_error"
-	case status == http.StatusNotFound:
-		return "not_found_error"
-	case status == http.StatusRequestEntityTooLarge:
-		return "request_too_large"
-	case status == http.StatusTooManyRequests:
-		return "rate_limit_error"
-	case status >= 500:
-		return "upstream_unavailable"
-	default:
-		return "invalid_request"
+	if pair, ok := anthropicErrorStatuses[status]; ok {
+		return pair[1]
 	}
+	if status >= 500 {
+		return "upstream_unavailable"
+	}
+	return "invalid_request"
 }
 
 func writeAnthropicError(w http.ResponseWriter, status int, message string) {

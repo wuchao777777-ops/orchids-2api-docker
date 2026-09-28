@@ -11,6 +11,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/util"
 )
 
 // The chat path is not the only place an account's allowance is visible. The
@@ -60,46 +61,30 @@ type Quota struct {
 type quotaUsageResponse struct {
 	UserID          string  `json:"userId"`
 	UserType        string  `json:"userType"`
-	UsageType       string  `json:"usageType"`
 	TotalUsagePct   float64 `json:"totalUsagePercentage"`
 	IsQuotaExceeded bool    `json:"isQuotaExceeded"`
 	ExpiresAt       int64   `json:"expiresAt"`
 	LimitExceeded   bool    `json:"limitExceeded"`
 	UpgradeURL      string  `json:"upgradeUrl"`
 	ModelUsage      []struct {
-		ModelKey         string  `json:"modelKey"`
 		UsagePercentage  float64 `json:"usagePercentage"`
 		TotalUsagePct    float64 `json:"totalUsagePercentage"`
 		PerModelQuotaPct float64 `json:"perModelQuotaPercentage"`
 	} `json:"modelUsage"`
-	PromptCachePromptHitPct float64 `json:"promptCachePromptHitPercentage"`
-	UserQuota               struct {
-		Total      float64 `json:"total"`
-		Used       float64 `json:"used"`
-		Remaining  float64 `json:"remaining"`
-		Percentage float64 `json:"percentage"`
-		Unit       string  `json:"unit"`
+	UserQuota struct {
+		Total     float64 `json:"total"`
+		Used      float64 `json:"used"`
+		Remaining float64 `json:"remaining"`
+		Unit      string  `json:"unit"`
 	} `json:"userQuota"`
-	OuterProviders      []json.RawMessage `json:"outerProviders"`
-	LastRecoveryAt      int64             `json:"lastRecoveryAt"`
-	IsPlanQuotaProrated bool              `json:"isPlanQuotaProrated"`
 }
 
 // planResponse is GET /api/v2/user/plan.
 type planResponse struct {
-	UserType       string `json:"user_type"`
-	PlanTierName   string `json:"plan_tier_name"`
-	IsPersonal     bool   `json:"is_personal_version"`
-	IsPaidPlan     bool   `json:"is_paid_plan"`
-	IsHighestTier  bool   `json:"is_highest_tier"`
-	StartDate      int64  `json:"start_date"`
-	EndDate        int64  `json:"end_date"`
-	FeatureAllowed struct {
-		Wiki           bool `json:"wiki"`
-		Quest          bool `json:"quest"`
-		CodeReview     bool `json:"code_review"`
-		CommitIndexing bool `json:"commit_indexing"`
-	} `json:"feature_allowed"`
+	UserType     string `json:"user_type"`
+	PlanTierName string `json:"plan_tier_name"`
+	IsPaidPlan   bool   `json:"is_paid_plan"`
+	StartDate    int64  `json:"start_date"`
 }
 
 // FetchQuota reads the account's credit state.
@@ -174,16 +159,13 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 
 // statusResponse is GET /api/v3/user/status.
 type statusResponse struct {
-	ID            string `json:"id"`
-	Email         string `json:"email"`
-	Name          string `json:"name"`
-	UserType      string `json:"userType"`
-	UserTag       string `json:"userTag"`
-	Plan          string `json:"plan"`
-	Quota         int64  `json:"quota"`
-	IsQuotaExceed bool   `json:"isQuotaExceeded"`
-	NextResetAt   int64  `json:"nextResetAt"`
-	WhitelistStat string `json:"whitelistStatus"`
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	Name        string `json:"name"`
+	UserType    string `json:"userType"`
+	UserTag     string `json:"userTag"`
+	Plan        string `json:"plan"`
+	NextResetAt int64  `json:"nextResetAt"`
 }
 
 func (c *Client) getUsage(ctx context.Context, creds Credentials) (*quotaUsageResponse, error) {
@@ -307,19 +289,10 @@ func ApplyQuota(acc *store.Account, quota *Quota) {
 		UpgradeURL:     quota.UpgradeURL,
 		ResetAt:        quota.ResetAt,
 		PeriodEnd:      quota.PeriodEnd,
-		LastKnownLimit: firstPositive(quota.Limit, previous.Limit),
+		LastKnownLimit: util.FirstPositive(quota.Limit, previous.Limit),
 		SyncedAt:       quota.SyncedAt,
 	}
 	if !quota.ResetAt.IsZero() {
 		acc.QuotaResetAt = quota.ResetAt
 	}
-}
-
-func firstPositive(values ...float64) float64 {
-	for _, value := range values {
-		if value > 0 {
-			return value
-		}
-	}
-	return 0
 }

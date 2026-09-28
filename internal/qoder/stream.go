@@ -3,13 +3,10 @@ package qoder
 import (
 	"bufio"
 	"bytes"
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -124,83 +121,10 @@ func (r streamResult) emitFinish(onMessage func(upstream.SSEMessage)) {
 	onMessage(upstream.SSEMessage{Type: "model.finish", Event: event})
 }
 
-var toolCallSequence atomic.Uint64
-
 // NewToolCallID mints a local tool-call id for upstream deltas that omit one.
-func NewToolCallID() string {
-	return fmt.Sprintf("toolu_%d_%d", time.Now().UnixNano(), toolCallSequence.Add(1))
-}
-
-// toolCallAccumulator rebuilds tool calls from streamed deltas, where the name
-// arrives in the first delta and the arguments are streamed afterwards.
-//
-// The upstream sometimes reuses one index for calls that are only distinguished
-// by id. The order therefore stores call instances rather than indexes; the map
-// only identifies which instance receives an id-less continuation delta.
-type toolCallAccumulator struct {
-	order []*toolCallState
-	calls map[int]*toolCallState
-}
-
-type toolCallState struct {
-	ID        string
-	Name      string
-	Arguments strings.Builder
-	Emitted   bool
-}
+func NewToolCallID() string { return util.NewToolCallID() }
 
 const maxTextToolFallbackBytes = 2 << 20
-
-func newToolCallAccumulator() *toolCallAccumulator {
-	return &toolCallAccumulator{
-		calls: map[int]*toolCallState{},
-	}
-}
-
-// add folds one delta into the call at index.
-func (a *toolCallAccumulator) add(index int, id, name, args string) *toolCallState {
-	trimmedID := strings.TrimSpace(id)
-	state, ok := a.calls[index]
-	if ok && (state.Emitted || (trimmedID != "" && state.ID != "" && state.ID != trimmedID)) {
-		// A closed call or a new id at the same index starts another call
-		// instance. Keeping the old pointer in order preserves parallel calls.
-		state = nil
-		ok = false
-	}
-	if !ok {
-		state = &toolCallState{}
-		a.calls[index] = state
-		a.order = append(a.order, state)
-	}
-	if trimmedID != "" {
-		state.ID = trimmedID
-	}
-	if trimmed := strings.TrimSpace(name); trimmed != "" {
-		state.Name = trimmed
-	}
-	state.Arguments.WriteString(args)
-	return state
-}
-
-// pending returns the not-yet-emitted calls in stream order.
-func (a *toolCallAccumulator) pending() []*toolCallState {
-	out := make([]*toolCallState, 0, len(a.order))
-	for _, state := range a.order {
-		if state == nil || state.Emitted || state.Name == "" {
-			continue
-		}
-		out = append(out, state)
-	}
-	return out
-}
-
-func (a *toolCallAccumulator) completeAll() []*toolCallState {
-	pending := a.pending()
-	for _, state := range pending {
-		state.Emitted = true
-	}
-	return pending
-}
 
 // sseFrame is one accumulated SSE event.
 type sseFrame struct {
@@ -260,7 +184,7 @@ func readSSE(reader io.Reader, fn func(sseFrame) bool) error {
 // that exact prefix; normal answers continue streaming as soon as they diverge.
 func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(upstream.SSEMessage)) (streamResult, error) {
 	result := streamResult{}
-	tools := newToolCallAccumulator()
+	tools := util.NewToolCallAccumulator()
 	var pendingText strings.Builder
 	bufferingToolText := toolsEnabled
 	// Leading whitespace is only relevant while deciding whether the stream can
@@ -270,15 +194,7 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 	sawNativeTools := false
 
 	emitText := func(text string) {
-		if text == "" {
-			return
-		}
-		result.SawMeaningfulEvent = true
-		if onMessage != nil {
-			onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{
-				"delta": text,
-			}})
-		}
+		upstream.EmitTextDelta(onMessage, text, &result.SawMeaningfulEvent)
 	}
 
 	flushPendingText := func() {
@@ -290,22 +206,7 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 	}
 
 	emitTools := func() {
-		for _, state := range tools.completeAll() {
-			result.SawMeaningfulEvent = true
-			result.ToolCallCount++
-			if onMessage == nil {
-				continue
-			}
-			id := state.ID
-			if id == "" {
-				id = NewToolCallID()
-			}
-			onMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{
-				"toolCallId": id,
-				"toolName":   state.Name,
-				"input":      util.NormalizeToolInput(state.Arguments.String()),
-			}})
-		}
+		upstream.EmitToolCalls(onMessage, tools.CompleteAll(), &result.SawMeaningfulEvent, &result.ToolCallCount)
 	}
 
 	sawFinish := false
@@ -426,15 +327,7 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			// into a truncation.
 			return false
 		}
-		if chunk.Usage != nil {
-			if usage := normalizeUsage(chunk.Usage); len(usage) > 0 {
-				result.Usage = usage
-				result.SawMeaningfulEvent = true
-				if onMessage != nil {
-					onMessage(upstream.SSEMessage{Type: "model.tokens-used", Event: usage})
-				}
-			}
-		}
+		upstream.ApplyStreamUsage(onMessage, normalizeUsage(chunk.Usage), &result.SawMeaningfulEvent, &result.Usage)
 		if len(chunk.Choices) == 0 {
 			return true
 		}
@@ -513,7 +406,7 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 				// representation, not assistant prose.
 				pendingText.Reset()
 			}
-			tools.add(call.Index, call.ID, call.Function.Name, call.Function.Arguments)
+			tools.Add(call.Index, call.ID, call.Function.Name, call.Function.Arguments)
 		}
 		if reason != "" && reason != "null" {
 			result.FinishReasonValue = reason
@@ -537,7 +430,7 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 		if parsed := parseTextToolCalls(pendingText.String()); len(parsed) > 0 {
 			pendingText.Reset()
 			for index, call := range parsed {
-				tools.add(index, call.ID, call.Name, call.Arguments)
+				tools.Add(index, call.ID, call.Name, call.Arguments)
 			}
 			result.SawMeaningfulEvent = true
 		} else {
@@ -734,13 +627,7 @@ func stringOfCode(raw json.RawMessage) string {
 	return ""
 }
 
-func newThinkingSignature() string {
-	var raw [24]byte
-	if _, err := rand.Read(raw[:]); err == nil {
-		return "qoder-v1:" + base64.RawURLEncoding.EncodeToString(raw[:])
-	}
-	return fmt.Sprintf("qoder-v1:%d", time.Now().UnixNano())
-}
+func newThinkingSignature() string { return util.NewThinkingSignature("qoder-v1") }
 
 // normalizeUsage maps the upstream usage object onto the key names the shared
 // stream handler consumes, keeping the credit fields under their own names so

@@ -354,10 +354,9 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 }
 
 // finishUpstreamChat completes a chat response after an upstream call: error
-// reporting, quota sync, then streaming or collection. Shared by the console
-// and CLI chat paths. url is used for both error and request logging; headers
-// is evaluated lazily so it is only built on the success path.
-// finishUpstreamChat completes a chat response after an upstream call.
+// reporting, quota sync, then streaming or collection. Shared by the console and
+// CLI chat paths; url is used for both error and request logging and headers is
+// evaluated lazily so it is only built on the success path.
 //
 // It reports a withheld turn: the response was held back by the quality guard,
 // nothing reached the client, and the caller may retry it on another account. The
@@ -647,7 +646,39 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *ChatCompletionsRe
 	reasoning := consoleExtractReasoningText(raw)
 	encryptedReasoning := consoleExtractEncryptedReasoning(raw)
 	annotations := consoleChatAnnotations(consoleFlatAnnotations(raw))
-	toolCalls := consoleToolCallsFromOutput(raw)
+	// A single pass over the upstream output collects the tool calls, the
+	// searches and the reasoning items; each of them used to walk the same slice
+	// again. A malformed function_call is recorded and reported after the
+	// accounting below, exactly where the old validation loop returned.
+	seen := map[string]bool{}
+	var toolCalls []map[string]interface{}
+	var searches, reasoningItems []interface{}
+	var validationErr error
+	for _, entry := range interfaceSlice(raw["output"]) {
+		item, _ := entry.(map[string]interface{})
+		kind := interfaceString(item["type"])
+		if kind == "function_call" {
+			id := firstNonEmpty(interfaceString(item["call_id"]), interfaceString(item["id"]))
+			name := interfaceString(item["name"])
+			args, validArgs := item["arguments"].(string)
+			if id == "" || id == "<nil>" || name == "" || name == "<nil>" || seen[id] || !validArgs || !json.Valid([]byte(args)) {
+				validationErr = fmt.Errorf("invalid or duplicate upstream function_call")
+			} else {
+				seen[id] = true
+			}
+		}
+		if strings.EqualFold(kind, "function_call") {
+			if call := consoleToolCallFromItem(item); call != nil {
+				toolCalls = append(toolCalls, call)
+			}
+		}
+		if kind == "web_search_call" {
+			searches = append(searches, item)
+		}
+		if kind == "reasoning" {
+			reasoningItems = append(reasoningItems, item)
+		}
+	}
 	outcome.Quality = qualitySignals{
 		ExpectReasoning: qualityExpectsReasoning(req, false),
 		SawReasoning:    strings.TrimSpace(reasoning) != "",
@@ -661,26 +692,14 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *ChatCompletionsRe
 	if len(text) > 0 {
 		outcome.Quality.FirstVisibleMS = time.Since(outcomeStarted).Milliseconds()
 	}
-	if usage := consoleUsage(raw); usage != nil {
-		if details, _ := usage["completion_tokens_details"].(map[string]interface{}); details != nil {
-			outcome.Quality.ReasoningTokens = int64(interfaceToInt(details["reasoning_tokens"]))
-		}
+	upstreamUsage := consoleUsage(raw)
+	if details, _ := upstreamUsage["completion_tokens_details"].(map[string]interface{}); details != nil {
+		outcome.Quality.ReasoningTokens = int64(interfaceToInt(details["reasoning_tokens"]))
 	}
-	seen := map[string]bool{}
-	for _, entry := range interfaceSlice(raw["output"]) {
-		item, _ := entry.(map[string]interface{})
-		if interfaceString(item["type"]) != "function_call" {
-			continue
-		}
-		id := firstNonEmpty(interfaceString(item["call_id"]), interfaceString(item["id"]))
-		name := interfaceString(item["name"])
-		args, validArgs := item["arguments"].(string)
-		if id == "" || id == "<nil>" || name == "" || name == "<nil>" || seen[id] || !validArgs || !json.Valid([]byte(args)) {
-			outcome.Err = fmt.Errorf("invalid or duplicate upstream function_call")
-			writeGrokUpstreamError(w, outcome.Err)
-			return
-		}
-		seen[id] = true
+	if validationErr != nil {
+		outcome.Err = validationErr
+		writeGrokUpstreamError(w, outcome.Err)
+		return
 	}
 	message := map[string]interface{}{
 		"role":        "assistant",
@@ -690,13 +709,6 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *ChatCompletionsRe
 	}
 	if refusal != "" {
 		message["refusal"] = refusal
-	}
-	var searches []interface{}
-	for _, entry := range interfaceSlice(raw["output"]) {
-		item, _ := entry.(map[string]interface{})
-		if interfaceString(item["type"]) == "web_search_call" {
-			searches = append(searches, item)
-		}
 	}
 	if len(searches) > 0 {
 		message["x_grok_searches"] = searches
@@ -709,13 +721,6 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *ChatCompletionsRe
 	}
 	if encryptedReasoning != "" {
 		message["reasoning_encrypted_content"] = encryptedReasoning
-	}
-	var reasoningItems []interface{}
-	for _, entry := range interfaceSlice(raw["output"]) {
-		item, _ := entry.(map[string]interface{})
-		if interfaceString(item["type"]) == "reasoning" {
-			reasoningItems = append(reasoningItems, item)
-		}
 	}
 	if len(reasoningItems) > 1 {
 		message["x_grok_reasoning"] = reasoningItems
@@ -739,7 +744,6 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *ChatCompletionsRe
 		writeGrokUpstreamError(w, outcome.Err)
 		return
 	}
-	upstreamUsage := consoleUsage(raw)
 	if len(upstreamUsage) > 0 {
 		outcome.Usage = upstreamUsage
 		outcome.UsageSource = audit.UsageSourceUpstream
@@ -775,6 +779,26 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *ChatCompletionsRe
 	return
 }
 
+// consoleReasoningField concatenates the text of the parts of item[field]. A
+// non-empty partType keeps only parts of that type, which is how reasoning
+// content differs from the (untyped) summary.
+func consoleReasoningField(item map[string]interface{}, field, partType string) string {
+	var out strings.Builder
+	for _, value := range interfaceSlice(item[field]) {
+		part, _ := value.(map[string]interface{})
+		if part == nil {
+			continue
+		}
+		if partType != "" && !strings.EqualFold(strings.TrimSpace(fmt.Sprint(part["type"])), partType) {
+			continue
+		}
+		if text := fmt.Sprint(part["text"]); strings.TrimSpace(text) != "" && text != "<nil>" {
+			out.WriteString(text)
+		}
+	}
+	return out.String()
+}
+
 func consoleExtractReasoningText(raw map[string]interface{}) string {
 	if raw == nil {
 		return ""
@@ -785,30 +809,11 @@ func consoleExtractReasoningText(raw map[string]interface{}) string {
 		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
 			continue
 		}
-		var rawText, summaryText strings.Builder
-		for _, value := range interfaceSlice(item["content"]) {
-			part, _ := value.(map[string]interface{})
-			if part == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(part["type"])), "reasoning_text") {
-				continue
-			}
-			if text := fmt.Sprint(part["text"]); strings.TrimSpace(text) != "" && text != "<nil>" {
-				rawText.WriteString(text)
-			}
+		text := consoleReasoningField(item, "content", "reasoning_text")
+		if text == "" {
+			text = consoleReasoningField(item, "summary", "")
 		}
-		for _, value := range interfaceSlice(item["summary"]) {
-			part, _ := value.(map[string]interface{})
-			if part == nil {
-				continue
-			}
-			if text := fmt.Sprint(part["text"]); strings.TrimSpace(text) != "" && text != "<nil>" {
-				summaryText.WriteString(text)
-			}
-		}
-		if rawText.Len() > 0 {
-			result.WriteString(rawText.String())
-		} else {
-			result.WriteString(summaryText.String())
-		}
+		result.WriteString(text)
 	}
 	return result.String()
 }
@@ -828,19 +833,6 @@ func consoleExtractEncryptedReasoning(raw map[string]interface{}) string {
 		}
 	}
 	return latest
-}
-
-func consoleToolCallsFromOutput(raw map[string]interface{}) []map[string]interface{} {
-	if raw == nil {
-		return nil
-	}
-	var out []map[string]interface{}
-	for _, item := range interfaceSlice(raw["output"]) {
-		if tc := consoleToolCallFromItem(item); tc != nil {
-			out = append(out, tc)
-		}
-	}
-	return out
 }
 
 func consoleToolCallFromItem(raw interface{}) map[string]interface{} {

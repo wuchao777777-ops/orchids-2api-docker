@@ -30,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -328,15 +327,6 @@ func allowedLoginHost(host, configured string) bool {
 	}
 	configured = strings.TrimSpace(strings.ToLower(configured))
 	return configured != "" && host == configured
-}
-
-// hostOf returns the host of an absolute URL.
-func hostOf(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return parsed.Hostname()
 }
 
 // newTaskID mints the per-request correlation id. The upstream uses it as the

@@ -3,126 +3,119 @@ package store
 import (
 	"context"
 	"testing"
-	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
-// TestGetAccountsByIDsPipelined 测试 Pipeline 批量获取功能
-func TestGetAccountsByIDsPipelined(t *testing.T) {
-	// 创建 mock redis store
-	store := &redisStore{
-		client: redis.NewClient(&redis.Options{
-			Addr: "localhost:6379",
-		}),
+// newBatchReadStore returns a store over an in-process Redis. The account read
+// path is one MGET, so it needs no live server and no credential cipher: the
+// seeded rows below carry plaintext markers only.
+func newBatchReadStore(t *testing.T) *redisStore {
+	t.Helper()
+	mini := miniredis.RunT(t)
+	s := &redisStore{
+		client: redis.NewClient(&redis.Options{Addr: mini.Addr()}),
 		prefix: "test:",
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// 测试 Pipeline 连接（如果 Redis 不可用，跳过测试）
-	if err := store.client.Ping(ctx).Err(); err != nil {
-		t.Skip("Redis not available, skipping test")
-	}
-	defer store.Close()
-
-	// 清理测试数据
-	defer func() {
-		store.client.Del(ctx, "test:accounts:id:1", "test:accounts:id:2", "test:accounts:id:3")
-	}()
-
-	// 准备测试数据
-	testAccounts := []struct {
-		id   int64
-		data string
-	}{
-		{1, `{"id":1,"name":"test1","enabled":true}`},
-		{2, `{"id":2,"name":"test2","enabled":true}`},
-		{3, `{"id":3,"name":"test3","enabled":false}`},
-	}
-
-	// 写入测试数据
-	for _, acc := range testAccounts {
-		key := store.accountsKey(acc.id)
-		if err := store.client.Set(ctx, key, acc.data, 0).Err(); err != nil {
-			t.Fatalf("Failed to set test data: %v", err)
-		}
-	}
-
-	// 测试 Pipeline 批量获取
-	keys := []string{
-		store.accountsKey(1),
-		store.accountsKey(2),
-		store.accountsKey(3),
-	}
-
-	values, err := store.getAccountsByIDsPipelined(ctx, keys)
-	if err != nil {
-		t.Fatalf("getAccountsByIDsPipelined failed: %v", err)
-	}
-
-	if len(values) != 3 {
-		t.Errorf("Expected 3 values, got %d", len(values))
-	}
-
-	// 验证返回的数据
-	for i, val := range values {
-		if val == nil {
-			t.Errorf("Value at index %d is nil", i)
-			continue
-		}
-		strVal, ok := val.(string)
-		if !ok {
-			t.Errorf("Value at index %d is not a string", i)
-			continue
-		}
-		if strVal == "" {
-			t.Errorf("Value at index %d is empty", i)
-		}
-	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
 }
 
-// TestGetAccountsByIDsPipelinedFallback 测试 Pipeline 失败时的回退逻辑
-func TestGetAccountsByIDsPipelinedFallback(t *testing.T) {
-	// 创建一个无效的 Redis 连接来模拟失败
-	store := &redisStore{
-		client: redis.NewClient(&redis.Options{
-			Addr: "localhost:9999", // 无效端口
-		}),
-		prefix: "test:",
-	}
-	defer store.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	keys := []string{"test:accounts:id:1"}
-
-	// Pipeline 应该失败
-	_, err := store.getAccountsByIDsPipelined(ctx, keys)
-	if err == nil {
-		t.Error("Expected error from invalid Redis connection, got nil")
-	}
-}
-
-// TestGetAccountsByIDsEmptyKeys 测试空键列表
-func TestGetAccountsByIDsEmptyKeys(t *testing.T) {
-	store := &redisStore{
-		client: redis.NewClient(&redis.Options{
-			Addr: "localhost:6379",
-		}),
-		prefix: "test:",
-	}
-	defer store.Close()
-
+// TestGetAccountsByIDsReadsEveryRowInOneBatch pins the batch read's contract:
+// every requested row is decoded, in the requested order.
+func TestGetAccountsByIDsReadsEveryRowInOneBatch(t *testing.T) {
+	s := newBatchReadStore(t)
 	ctx := context.Background()
 
-	values, err := store.getAccountsByIDsPipelined(ctx, []string{})
-	if err != nil {
-		t.Errorf("Expected no error for empty keys, got: %v", err)
+	for id, body := range map[int64]string{
+		1: `{"id":1,"name":"test1","enabled":true}`,
+		2: `{"id":2,"name":"test2","enabled":true}`,
+		3: `{"id":3,"name":"test3","enabled":false}`,
+	} {
+		if err := s.client.Set(ctx, s.accountsKey(id), body, 0).Err(); err != nil {
+			t.Fatalf("seed account %d: %v", id, err)
+		}
 	}
-	if values != nil {
-		t.Errorf("Expected nil values for empty keys, got: %v", values)
+
+	accounts, err := s.getAccountsByIDs(ctx, []string{"1", "2", "3"}, false)
+	if err != nil {
+		t.Fatalf("getAccountsByIDs() error = %v", err)
+	}
+	if len(accounts) != 3 {
+		t.Fatalf("got %d accounts, want 3", len(accounts))
+	}
+	for i, want := range []string{"test1", "test2", "test3"} {
+		if accounts[i].Name != want {
+			t.Fatalf("account %d = %q, want %q (row order lost)", i, accounts[i].Name, want)
+		}
+	}
+}
+
+// TestGetAccountsByIDsSkipsMissingAndDisabledRows covers the two rows the result
+// must omit: an id with no stored row and a row the caller filtered out.
+func TestGetAccountsByIDsSkipsMissingAndDisabledRows(t *testing.T) {
+	s := newBatchReadStore(t)
+	ctx := context.Background()
+
+	if err := s.client.Set(ctx, s.accountsKey(1), `{"id":1,"name":"enabled","enabled":true}`, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.client.Set(ctx, s.accountsKey(3), `{"id":3,"name":"disabled","enabled":false}`, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	// id 2 has no row at all.
+	accounts, err := s.getAccountsByIDs(ctx, []string{"1", "2", "3"}, false)
+	if err != nil {
+		t.Fatalf("getAccountsByIDs() error = %v", err)
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("got %d accounts, want 2 (the missing row must be skipped)", len(accounts))
+	}
+
+	enabled, err := s.getAccountsByIDs(ctx, []string{"1", "3"}, true)
+	if err != nil {
+		t.Fatalf("getAccountsByIDs(onlyEnabled) error = %v", err)
+	}
+	if len(enabled) != 1 || enabled[0].ID != 1 {
+		t.Fatalf("onlyEnabled result = %#v, want just account 1", enabled)
+	}
+}
+
+// TestGetAccountsByIDsEmptySelectionDoesNotReachRedis proves the empty and
+// unparseable selections short-circuit instead of issuing a batch of zero keys.
+func TestGetAccountsByIDsEmptySelectionDoesNotReachRedis(t *testing.T) {
+	s := &redisStore{
+		client: redis.NewClient(&redis.Options{Addr: "localhost:9999"}),
+		prefix: "test:",
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	for _, ids := range [][]string{nil, {}, {"not-an-id"}} {
+		accounts, err := s.getAccountsByIDs(ctx, ids, false)
+		if err != nil {
+			t.Fatalf("getAccountsByIDs(%v) error = %v, want no round trip", ids, err)
+		}
+		if accounts != nil {
+			t.Fatalf("getAccountsByIDs(%v) = %#v, want nil", ids, accounts)
+		}
+	}
+}
+
+// TestGetAccountsByIDsReportsTransportFailure keeps the failure contract: an
+// unreachable Redis is reported, never silently read as an empty pool.
+func TestGetAccountsByIDsReportsTransportFailure(t *testing.T) {
+	s := &redisStore{
+		client: redis.NewClient(&redis.Options{Addr: "localhost:9999"}),
+		prefix: "test:",
+	}
+	defer s.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := s.getAccountsByIDs(ctx, []string{"1"}, false); err == nil {
+		t.Fatal("expected an error from an unreachable Redis, got nil")
 	}
 }

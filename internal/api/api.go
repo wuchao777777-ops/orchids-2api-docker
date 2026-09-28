@@ -118,12 +118,11 @@ const auditScanCap = 2000
 // filtered by kind (request/operation/system) plus the fields the log centre
 // offers. Credentials never appear: whether they do is enforced at write time by
 // audit.SummarizeChange.
+
 // writeAccountCheckBusy tells the caller that a refresh of this account is already
 // running, so the click was merged instead of racing a second refresh.
 func writeAccountCheckBusy(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusConflict)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSONStatus(w, http.StatusConflict, map[string]interface{}{
 		"error": map[string]interface{}{
 			"type":    "check_in_progress",
 			"message": "this account is already being refreshed; the request was merged",
@@ -132,40 +131,20 @@ func writeAccountCheckBusy(w http.ResponseWriter) {
 }
 
 func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	if a == nil || a.store == nil || a.store.RedisClient() == nil {
 		http.Error(w, "audit ledger requires Redis storage", http.StatusServiceUnavailable)
 		return
 	}
-	limit := 100
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil {
-			limit = parsed
-		}
-	}
-	if limit < 1 {
-		limit = 1
-	}
-	if limit > 500 {
-		limit = 500
-	}
+	limit := parseAuditLimit(r)
 	filter, err := auditFilterFromQuery(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	maxID := "+"
-	if before := strings.TrimSpace(r.URL.Query().Get("before")); before != "" {
-		maxID = "(" + before
-	} else if !filter.until.IsZero() {
-		// Stream ids are time-ordered, so a window that ends in the past starts the
-		// scan inside itself instead of walking the newest entries it would filter
-		// all out anyway.
-		maxID = "(" + strconv.FormatInt(filter.until.UnixMilli()+1, 10)
-	}
+	maxID := journalMaxID(r, filter)
 
 	scanCount := int64(limit) * 5
 	if scanCount > auditScanCap {
@@ -203,8 +182,7 @@ func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
 	case int64(len(messages)) >= scanCount && len(messages) > 0:
 		nextCursor = messages[len(messages)-1].ID
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"data":        records,
 		"next_cursor": nextCursor,
 		"scanned":     scanned,
@@ -319,28 +297,35 @@ func auditFilterFromQuery(r *http.Request) (auditQueryFilter, error) {
 	}, nil
 }
 
-// auditMetadataInt reads an integer the journal kept under metadata. The request
-// record's HTTP status and first-token latency live there, not in a column of
-// their own.
-func auditMetadataInt(event audit.Event, key string) int {
-	if event.Metadata == nil {
-		return 0
+// parseAuditLimit reads the `limit` query both audit readers share, clamped to
+// the range one page may ask for; an unparsable value keeps the default.
+func parseAuditLimit(r *http.Request) int {
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
 	}
-	switch value := event.Metadata[key].(type) {
-	case float64:
-		return int(value)
-	case int:
-		return value
-	case int64:
-		return int(value)
-	case string:
-		parsed, _ := strconv.Atoi(strings.TrimSpace(value))
-		return parsed
-	case json.Number:
-		parsed, _ := value.Int64()
-		return int(parsed)
+	if limit < 1 {
+		limit = 1
 	}
-	return 0
+	if limit > 500 {
+		limit = 500
+	}
+	return limit
+}
+
+// journalMaxID resolves where a reverse scan starts: an explicit `before` cursor
+// wins, otherwise a window that ends in the past starts inside itself, since
+// stream ids are time-ordered and anything newer would only be filtered out.
+func journalMaxID(r *http.Request, filter auditQueryFilter) string {
+	if before := strings.TrimSpace(r.URL.Query().Get("before")); before != "" {
+		return "(" + before
+	}
+	if !filter.until.IsZero() {
+		return "(" + strconv.FormatInt(filter.until.UnixMilli()+1, 10)
+	}
+	return "+"
 }
 
 // auditOutcomeClass names a record's result the way the operations overview counts
@@ -359,7 +344,7 @@ func auditOutcomeClass(event audit.Event) string {
 			return "failed"
 		}
 	}
-	httpStatus := auditMetadataInt(event, "http_status")
+	httpStatus := int(metadataInt(event.Metadata, "http_status"))
 	switch status {
 	case "success", "ok", "stop", "tool_calls", "length", "content_filter", "recovered":
 		return "success"
@@ -1170,6 +1155,25 @@ type CreateKeyResponse struct {
 	BillingLimitUSDTicks int64 `json:"billing_limit_usd_ticks,omitempty"`
 }
 
+// newCreateKeyResponse is the payload both surfaces that hand a secret back use:
+// POST /api/keys and POST /api/keys/{id}/rotate.
+func newCreateKeyResponse(key *store.ApiKey, fullKey string) CreateKeyResponse {
+	return CreateKeyResponse{
+		ID:                   key.ID,
+		Key:                  fullKey,
+		Name:                 key.Name,
+		KeyPrefix:            key.KeyPrefix,
+		KeySuffix:            key.KeySuffix,
+		Enabled:              key.Enabled,
+		AllowedModels:        key.AllowedModels,
+		RPMLimit:             key.RPMLimit,
+		MaxConcurrent:        key.MaxConcurrent,
+		ExpiresAt:            key.ExpiresAt,
+		CreatedAt:            key.CreatedAt,
+		BillingLimitUSDTicks: key.BillingLimitUSDTicks,
+	}
+}
+
 // maxApiKeyBillingLimitUSDTicks caps an admin-supplied billing limit at
 // 9,000,000,000,000,000 ticks (900,000 USD), which keeps the sum of live holds
 // and settled usage comfortably inside int64.
@@ -1178,6 +1182,54 @@ const maxApiKeyBillingLimitUSDTicks int64 = 9_000_000_000_000_000
 // maxApiKeyBillingPeriodDays bounds the rollover window: a decade is plenty and
 // keeps the arithmetic on the stored period start sane.
 const maxApiKeyBillingPeriodDays = 3650
+
+// maxApiKeyMaxConcurrent bounds a key's in-flight ceiling: the load balancer
+// holds one semaphore per key, so an unbounded value is a self-inflicted stall.
+const maxApiKeyMaxConcurrent = 1024
+
+// apiKeyPolicyBounds are the limits the create and the patch surfaces both
+// enforce. One table keeps a rejected value from being accepted on one surface
+// and refused on the other, and keeps the two surfaces' error text identical.
+var apiKeyPolicyBounds = []struct {
+	field string
+	min   int64
+	max   int64
+	limit string
+}{
+	{"rpm_limit", 0, 0, "rpm_limit must be greater than or equal to zero"},
+	{"max_concurrent", 0, maxApiKeyMaxConcurrent, "max_concurrent must be between 0 and 1024"},
+	{"billing_limit_usd_ticks", 0, maxApiKeyBillingLimitUSDTicks, "billing_limit_usd_ticks must be between 0 and 9000000000000000"},
+	{"billing_period_days", 0, maxApiKeyBillingPeriodDays, "billing_period_days must be between 0 and 3650"},
+}
+
+// validateApiKeyPolicyValue checks one policy field against the shared bounds.
+func validateApiKeyPolicyValue(field string, value int64) error {
+	for _, bound := range apiKeyPolicyBounds {
+		if bound.field != field {
+			continue
+		}
+		if value < bound.min || (bound.max > 0 && value > bound.max) {
+			return errors.New(bound.limit)
+		}
+	}
+	return nil
+}
+
+// validateApiKeyPolicy checks the fields a request actually carried, so the
+// create and the patch surfaces report the same value the same way.
+func validateApiKeyPolicy(w http.ResponseWriter, fields map[string]int64) bool {
+	for _, bound := range apiKeyPolicyBounds {
+		value, ok := fields[bound.field]
+		if !ok {
+			continue
+		}
+		if err := validateApiKeyPolicyValue(bound.field, value); err != nil {
+			http.Error(w, bound.limit, http.StatusBadRequest)
+			return false
+		}
+	}
+	return true
+}
 
 type UpdateKeyRequest struct {
 	Enabled              *bool           `json:"enabled"`
@@ -1284,8 +1336,7 @@ func (a *API) SetPromptCache(cache tokencache.PromptCache) {
 }
 
 func (a *API) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -1362,11 +1413,10 @@ func (a *API) HandleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
-	w.Header().Set("Content-Type", "application/json")
 
 	switch r.Method {
 	case http.MethodGet:
-		json.NewEncoder(w).Encode(a.config.Load())
+		writeJSON(w, a.config.Load())
 	case http.MethodPost:
 		// Copy current config, decode into copy, then atomically store
 		current := a.config.Load()
@@ -1380,70 +1430,44 @@ func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(newCfg)
+		writeJSON(w, newCfg)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 	}
 }
 
 func (a *API) HandleConfigList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-
 	data, err := configPayload(a.config.Load())
 	if err != nil {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"code": 1,
-			"msg":  "获取配置失败: " + err.Error(),
-		})
+		writeCodeEnvelope(w, 1, nil, "获取配置失败: "+err.Error())
 		return
 	}
-
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"code": 0,
-		"data": data,
-	})
+	writeCodeEnvelope(w, 0, data, "")
 }
 
 func (a *API) HandleConfigSave(w http.ResponseWriter, r *http.Request) {
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-
 	current := a.config.Load()
 	newCfg, err := buildConfigFromPatch(r, current)
 	if err != nil {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"code": 1,
-			"msg":  "parse request failed: " + err.Error(),
-		})
+		writeCodeEnvelope(w, 1, nil, "parse request failed: "+err.Error())
 		return
 	}
 	if err := a.persistConfig(r.Context(), current, newCfg); err != nil {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"code": 1,
-			"msg":  "save config failed: " + err.Error(),
-		})
+		writeCodeEnvelope(w, 1, nil, "save config failed: "+err.Error())
 		return
 	}
-
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"code": 0,
-		"msg":  "success",
-	})
+	writeCodeEnvelope(w, 0, nil, "success")
 }
 
 func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	switch r.Method {
 	case http.MethodGet:
 		accounts, err := a.store.ListAccounts(r.Context())
@@ -1470,7 +1494,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 			normalized = append(normalized, normalizeAccountOutputWithUsage(acc, observed))
 		}
-		json.NewEncoder(w).Encode(normalized)
+		writeJSON(w, normalized)
 
 	case http.MethodPost:
 		var acc store.Account
@@ -1562,11 +1586,10 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(normalizeAccountOutput(&acc))
+		writeJSONStatus(w, http.StatusCreated, normalizeAccountOutput(&acc))
 
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 	}
 }
 
@@ -1615,7 +1638,10 @@ func newDeviceLoginID() (string, error) {
 // Build CLI device-authorization flow. It accepts no files, browser cookies,
 // passwords, or user-supplied tokens; device codes remain server-side only.
 func (a *API) HandleGrokDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	// Same route budget as the browser logins: POST starts, GET on an id
+	// observes, DELETE on an id abandons. The dispatch is spelled out here
+	// rather than through routeBrowserLogin only because this flow keeps its
+	// own lowercase 405 body, which a client may already match on.
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/grok/device-auth"), "/")
 	switch {
 	case r.Method == http.MethodPost && path == "":
@@ -1666,7 +1692,7 @@ func (a *API) startGrokDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	go a.pollGrokDeviceAuthorization(pollContext, id, authenticator)
-	json.NewEncoder(w).Encode(newDeviceLoginResponse(id, login))
+	writeJSON(w, newDeviceLoginResponse(id, login))
 }
 
 func (a *API) getGrokDeviceAuthorization(w http.ResponseWriter, id string) {
@@ -1676,7 +1702,7 @@ func (a *API) getGrokDeviceAuthorization(w http.ResponseWriter, id string) {
 		http.Error(w, "Grok device login not found", http.StatusNotFound)
 		return
 	}
-	json.NewEncoder(w).Encode(response)
+	writeJSON(w, response)
 }
 
 func (a *API) cancelGrokDeviceAuthorization(w http.ResponseWriter, id string) {
@@ -1785,8 +1811,6 @@ func (a *API) pollGrokDeviceAuthorization(ctx context.Context, id string, authen
 }
 
 func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	path := strings.TrimPrefix(r.URL.Path, "/api/accounts/")
 	parts := strings.Split(path, "/")
 	id, err := strconv.ParseInt(parts[0], 10, 64)
@@ -1823,7 +1847,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			for k, v := range buildQuotaResponseFields(account) {
 				resp[k] = v
 			}
-			json.NewEncoder(w).Encode(resp)
+			writeJSON(w, resp)
 			return
 		}
 		if isCheck {
@@ -1930,10 +1954,10 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Failed to save checked account: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
-			json.NewEncoder(w).Encode(a.normalizeAccountOutputObserved(r.Context(), acc))
+			writeJSON(w, a.normalizeAccountOutputObserved(r.Context(), acc))
 			return
 		}
-		json.NewEncoder(w).Encode(a.normalizeAccountOutputObserved(r.Context(), account))
+		writeJSON(w, a.normalizeAccountOutputObserved(r.Context(), account))
 
 	case http.MethodPut:
 		existing := account
@@ -2044,7 +2068,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(normalizeAccountOutput(&acc))
+		writeJSON(w, normalizeAccountOutput(&acc))
 
 	case http.MethodDelete:
 		if err := a.store.DeleteAccount(r.Context(), id); err != nil {
@@ -2054,13 +2078,12 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 	}
 }
 
 func (a *API) HandleGrokAvailability(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -2080,13 +2103,11 @@ func (a *API) HandleGrokAvailability(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"counts": counts})
+	writeJSON(w, map[string]interface{}{"counts": counts})
 }
 
 func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -2116,9 +2137,8 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 		exportData.Accounts = append(exportData.Accounts, normalized)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=accounts_export.json")
-	json.NewEncoder(w).Encode(exportData)
+	writeJSON(w, exportData)
 }
 
 // restoreExportCredentials puts back the credential a channel needs to be usable
@@ -2212,8 +2232,7 @@ func redactForeignCredentials(acc *store.Account) {
 }
 
 func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -2253,8 +2272,7 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	writeJSON(w, result)
 }
 
 func generateApiKey() (string, error) {
@@ -2272,8 +2290,6 @@ func generateApiKey() (string, error) {
 }
 
 func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	switch r.Method {
 	case http.MethodGet:
 		keys, err := a.store.ListApiKeys(r.Context())
@@ -2281,7 +2297,7 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(keys)
+		writeJSON(w, keys)
 
 	case http.MethodPost:
 		var req struct {
@@ -2305,20 +2321,12 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
-		if req.RPMLimit < 0 {
-			http.Error(w, "rpm_limit must be greater than or equal to zero", http.StatusBadRequest)
-			return
-		}
-		if req.MaxConcurrent < 0 || req.MaxConcurrent > 1024 {
-			http.Error(w, "max_concurrent must be between 0 and 1024", http.StatusBadRequest)
-			return
-		}
-		if req.BillingLimitUSDTicks < 0 || req.BillingLimitUSDTicks > maxApiKeyBillingLimitUSDTicks {
-			http.Error(w, "billing_limit_usd_ticks must be between 0 and 9000000000000000", http.StatusBadRequest)
-			return
-		}
-		if req.BillingPeriodDays < 0 || req.BillingPeriodDays > maxApiKeyBillingPeriodDays {
-			http.Error(w, "billing_period_days must be between 0 and 3650", http.StatusBadRequest)
+		if !validateApiKeyPolicy(w, map[string]int64{
+			"rpm_limit":               int64(req.RPMLimit),
+			"max_concurrent":          int64(req.MaxConcurrent),
+			"billing_limit_usd_ticks": req.BillingLimitUSDTicks,
+			"billing_period_days":     int64(req.BillingPeriodDays),
+		}) {
 			return
 		}
 		if req.ExpiresAt != nil {
@@ -2358,30 +2366,24 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(CreateKeyResponse{
-			ID:                   key.ID,
-			Key:                  fullKey,
-			Name:                 key.Name,
-			KeyPrefix:            key.KeyPrefix,
-			KeySuffix:            key.KeySuffix,
-			Enabled:              key.Enabled,
-			AllowedModels:        key.AllowedModels,
-			RPMLimit:             key.RPMLimit,
-			MaxConcurrent:        key.MaxConcurrent,
-			ExpiresAt:            key.ExpiresAt,
-			CreatedAt:            key.CreatedAt,
-			BillingLimitUSDTicks: key.BillingLimitUSDTicks,
-		})
+		writeJSONStatus(w, http.StatusCreated, newCreateKeyResponse(&key, fullKey))
 
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 	}
 }
 
-func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+// writeApiKeyStoreError reports a store failure on a key the console named.
+// A key that is not there is a 404; anything else is the store's own text.
+func writeApiKeyStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNoRows) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
 
+func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 	// A trailing action segment is stripped before the id is parsed, so
 	// /api/keys/5/reset-usage and /api/keys/5/rotate reach the branches below
 	// instead of a 400.
@@ -2408,17 +2410,12 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 		// action has to exist too, because a misconfigured limit is otherwise
 		// unrecoverable until the period rolls over.
 		if action == "reset-usage" {
-			resetID := id
-			key, err := a.store.GetApiKeyByID(r.Context(), resetID)
+			key, err := a.store.GetApiKeyByID(r.Context(), id)
 			if err != nil {
-				if errors.Is(err, store.ErrNoRows) {
-					http.Error(w, "not found", http.StatusNotFound)
-					return
-				}
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeApiKeyStoreError(w, err)
 				return
 			}
-			if err := a.store.ResetApiKeyBilling(r.Context(), resetID); err != nil {
+			if err := a.store.ResetApiKeyBilling(r.Context(), id); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -2428,7 +2425,7 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			json.NewEncoder(w).Encode(key)
+			writeJSON(w, key)
 			return
 		}
 
@@ -2440,11 +2437,7 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 		if action == "rotate" {
 			key, err := a.store.GetApiKeyByID(r.Context(), id)
 			if err != nil {
-				if errors.Is(err, store.ErrNoRows) {
-					http.Error(w, "not found", http.StatusNotFound)
-					return
-				}
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeApiKeyStoreError(w, err)
 				return
 			}
 			fullKey, err := generateApiKey()
@@ -2463,24 +2456,11 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			json.NewEncoder(w).Encode(CreateKeyResponse{
-				ID:                   key.ID,
-				Key:                  fullKey,
-				Name:                 key.Name,
-				KeyPrefix:            key.KeyPrefix,
-				KeySuffix:            key.KeySuffix,
-				Enabled:              key.Enabled,
-				AllowedModels:        key.AllowedModels,
-				RPMLimit:             key.RPMLimit,
-				MaxConcurrent:        key.MaxConcurrent,
-				ExpiresAt:            key.ExpiresAt,
-				CreatedAt:            key.CreatedAt,
-				BillingLimitUSDTicks: key.BillingLimitUSDTicks,
-			})
+			writeJSON(w, newCreateKeyResponse(key, fullKey))
 			return
 		}
 
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 		return
 
 	case http.MethodPatch:
@@ -2496,11 +2476,7 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 		}
 		key, err := a.store.GetApiKeyByID(r.Context(), id)
 		if err != nil {
-			if errors.Is(err, store.ErrNoRows) {
-				http.Error(w, "not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeApiKeyStoreError(w, err)
 			return
 		}
 		if req.Enabled != nil {
@@ -2509,32 +2485,34 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 		if req.AllowedModels != nil {
 			key.AllowedModels = normalizeAllowedModels(*req.AllowedModels)
 		}
+		submitted := map[string]int64{}
 		if req.RPMLimit != nil {
-			if *req.RPMLimit < 0 {
-				http.Error(w, "rpm_limit must be greater than or equal to zero", http.StatusBadRequest)
-				return
-			}
+			submitted["rpm_limit"] = int64(*req.RPMLimit)
+		}
+		if req.MaxConcurrent != nil {
+			submitted["max_concurrent"] = int64(*req.MaxConcurrent)
+		}
+		if req.BillingLimitUSDTicks != nil {
+			submitted["billing_limit_usd_ticks"] = *req.BillingLimitUSDTicks
+		}
+		if req.BillingPeriodDays != nil {
+			submitted["billing_period_days"] = int64(*req.BillingPeriodDays)
+		}
+		// Every carried field is checked before any of them is applied: a patch
+		// must not store the half it accepted.
+		if !validateApiKeyPolicy(w, submitted) {
+			return
+		}
+		if req.RPMLimit != nil {
 			key.RPMLimit = *req.RPMLimit
 		}
 		if req.MaxConcurrent != nil {
-			if *req.MaxConcurrent < 0 || *req.MaxConcurrent > 1024 {
-				http.Error(w, "max_concurrent must be between 0 and 1024", http.StatusBadRequest)
-				return
-			}
 			key.MaxConcurrent = *req.MaxConcurrent
 		}
 		if req.BillingLimitUSDTicks != nil {
-			if *req.BillingLimitUSDTicks < 0 || *req.BillingLimitUSDTicks > maxApiKeyBillingLimitUSDTicks {
-				http.Error(w, "billing_limit_usd_ticks must be between 0 and 9000000000000000", http.StatusBadRequest)
-				return
-			}
 			key.BillingLimitUSDTicks = *req.BillingLimitUSDTicks
 		}
 		if req.BillingPeriodDays != nil {
-			if *req.BillingPeriodDays < 0 || *req.BillingPeriodDays > maxApiKeyBillingPeriodDays {
-				http.Error(w, "billing_period_days must be between 0 and 3650", http.StatusBadRequest)
-				return
-			}
 			key.BillingPeriodDays = *req.BillingPeriodDays
 		}
 		if len(req.ExpiresAt) > 0 {
@@ -2553,27 +2531,21 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(key)
+		writeJSON(w, key)
 
 	case http.MethodDelete:
 		if err := a.store.DeleteApiKey(r.Context(), id); err != nil {
-			if errors.Is(err, store.ErrNoRows) {
-				http.Error(w, "not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeApiKeyStoreError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 	}
 }
 
 func (a *API) HandleModels(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	switch r.Method {
 	case http.MethodGet:
 		models, err := a.store.ListModels(r.Context())
@@ -2586,12 +2558,12 @@ func (a *API) HandleModels(w http.ResponseWriter, r *http.Request) {
 		// grok2api's admin client expects, without breaking the old shape.
 		page, pageSize, paged := adminModelPaging(r)
 		if !paged {
-			json.NewEncoder(w).Encode(models)
+			writeJSON(w, models)
 			return
 		}
 		models = filterAdminModels(models, r.URL.Query().Get("search"))
-		items, total := paginateAdminModels(models, page, pageSize)
-		writeAdminModelEnvelope(w, adminModelListEnvelope{
+		items, total := paginateAdminRows(models, page, pageSize)
+		writeJSON(w, adminModelListEnvelope{
 			Items:    items,
 			Page:     page,
 			PageSize: pageSize,
@@ -2610,17 +2582,25 @@ func (a *API) HandleModels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(m)
+		writeJSONStatus(w, http.StatusCreated, m)
 
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 	}
 }
 
-func (a *API) HandleModelByID(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+// writeModelStoreError reports a model-store failure. A row that is not there
+// is a 404 whether the store says so with its sentinel or with the driver's own
+// nil reply; anything else is the store's text.
+func writeModelStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNoRows) || err.Error() == "redis: nil" {
+		http.Error(w, "Model not found", http.StatusNotFound)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
 
+func (a *API) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/models/")
 	if id == "" {
 		http.Error(w, "Model ID required", http.StatusBadRequest)
@@ -2631,14 +2611,10 @@ func (a *API) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		m, err := a.store.GetModel(r.Context(), id)
 		if err != nil {
-			if errors.Is(err, store.ErrNoRows) || err.Error() == "redis: nil" {
-				http.Error(w, "Model not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeModelStoreError(w, err)
 			return
 		}
-		json.NewEncoder(w).Encode(m)
+		writeJSON(w, m)
 
 	case http.MethodPut:
 		var patch store.Model
@@ -2665,7 +2641,7 @@ func (a *API) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(m)
+		writeJSON(w, m)
 
 	case http.MethodDelete:
 		if err := a.store.DeleteModel(r.Context(), id); err != nil {
@@ -2675,7 +2651,7 @@ func (a *API) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 	}
 }
 
@@ -2684,11 +2660,9 @@ func (a *API) SetTokenCache(c tokencache.Cache) {
 }
 
 func (a *API) HandleCacheClear(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-
 	if a.tokenCache == nil {
 		w.WriteHeader(http.StatusOK)
 		return

@@ -55,21 +55,29 @@ func TestHandleKeysCreatesAndUpdatesPolicy(t *testing.T) {
 	}
 }
 
-func TestHandleKeysRejectsInvalidLimits(t *testing.T) {
+// TestHandleKeysRejectsInvalidPolicyLimits keeps every invalid policy value out
+// of the ledger: a negative rate limit, an already-expired window, and a
+// negative or overflow-prone budget. All four inputs reach the same create
+// handler, so they share one table.
+func TestHandleKeysRejectsInvalidPolicyLimits(t *testing.T) {
 	s, mini := newTestStore(t, "api-keys-invalid:")
 	defer mini.Close()
 	defer s.Close()
 	a := New(s, "admin", "pass", &config.Config{})
 
-	for _, body := range []string{
-		"{\"name\":\"negative\",\"rpm_limit\":-1}",
-		"{\"name\":\"expired\",\"expires_at\":\"2020-01-01T00:00:00Z\"}",
+	for _, tt := range []struct{ name, body string }{
+		{"negative rpm", `{"name":"negative","rpm_limit":-1}`},
+		{"expired window", `{"name":"expired","expires_at":"2020-01-01T00:00:00Z"}`},
+		{"negative billing budget", `{"name":"negative","billing_limit_usd_ticks":-1}`},
+		{"overflowing billing budget", `{"name":"overflow","billing_limit_usd_ticks":9000000000000001}`},
 	} {
-		req := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(body))
-		rec := httptest.NewRecorder()
-		a.HandleKeys(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("body=%s status=%d response=%s", body, rec.Code, rec.Body.String())
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(tt.body))
+			rec := httptest.NewRecorder()
+			a.HandleKeys(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("body=%s status=%d response=%s", tt.body, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

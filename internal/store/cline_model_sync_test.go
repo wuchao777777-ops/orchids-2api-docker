@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 func TestClineModelsSyncedAtJSONAndUpdateMerge(t *testing.T) {
@@ -25,12 +23,7 @@ func TestClineModelsSyncedAtJSONAndUpdateMerge(t *testing.T) {
 		t.Fatalf("JSON round trip ClineModelsSyncedAt = %v, want %v", decoded.ClineModelsSyncedAt, syncedAt)
 	}
 
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "cline-model-sync:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "cline-model-sync:")
 
 	ctx := context.Background()
 	acc := &Account{

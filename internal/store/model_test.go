@@ -9,12 +9,7 @@ import (
 )
 
 func TestGetModelByModelID_FallsBackWhenIndexPointsToWrongModel(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "test:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close(); mini.Close() })
+	s, mini := newTestRedisStore(t, "test:")
 	ctx := context.Background()
 	want := &Model{Channel: "grok", ModelID: "target", Name: "target"}
 	other := &Model{Channel: "grok", ModelID: "other", Name: "other"}
@@ -82,20 +77,7 @@ func TestModelStatus_MarshalJSON(t *testing.T) {
 func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *testing.T) {
 	t.Parallel()
 
-	mini := miniredis.RunT(t)
-	s, err := New(Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
+	s, _ := newTestRedisStore(t, "test:")
 
 	ctx := context.Background()
 
@@ -145,20 +127,7 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 func TestStoreNew_PublishesNoBuiltInModels(t *testing.T) {
 	t.Parallel()
 
-	mini := miniredis.RunT(t)
-	s, err := New(Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
+	s, _ := newTestRedisStore(t, "test:")
 
 	ctx := context.Background()
 	models, err := s.ListModels(ctx)

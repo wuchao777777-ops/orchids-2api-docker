@@ -208,13 +208,13 @@ func (h *Handler) HandleResponsesCompact(w http.ResponseWriter, r *http.Request)
 	// The whole point of this endpoint is compaction, so it takes the gateway
 	// path whenever the gateway can own the summary. The upstream blob a pure
 	// forward returns is readable only by the account that produced it, which is
-	// exactly what breaks a continuation served by another account.
+	// exactly what breaks a continuation served by another account. Compaction
+	// is never streamed.
+	payload["stream"] = false
 	if h.GatewayCompactionEnabled() {
-		payload["stream"] = false
 		h.handleGatewayCompaction(w, r, modelID, spec, payload, false)
 		return
 	}
-	payload["stream"] = false
 	h.handleNativeCLIResponsesAt(w, r, modelID, spec, payload, "/responses/compact", false)
 }
 
@@ -239,10 +239,7 @@ func (h *Handler) HandleResponseResource(w http.ResponseWriter, r *http.Request)
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "response_id is required")
 		return
 	}
-	ownerHash := middleware.APIKeyFingerprint(r.Context())
-	if ownerHash == "" {
-		ownerHash = "anonymous"
-	}
+	ownerHash := responsesOwnerHash(r.Context())
 	ownership, err := h.getStoredResponse(r, responseID, ownerHash)
 	if err != nil {
 		writeStoredResponseLookupError(w, err, "response not found")
@@ -405,11 +402,10 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		raw, readErr := io.ReadAll(io.LimitReader(body, maxNativeResponsesBytes+1))
 		if readErr != nil {
 			result.Err = fmt.Errorf("upstream response could not be read within the response limit: %w", readErr)
-			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream response unavailable")
-			return
-		}
-		if len(raw) > maxNativeResponsesBytes {
+		} else if len(raw) > maxNativeResponsesBytes {
 			result.Err = fmt.Errorf("upstream response could not be read within the response limit")
+		}
+		if result.Err != nil {
 			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream response unavailable")
 			return
 		}
@@ -559,10 +555,12 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 	return
 }
 
+// boundedResponseCapture keeps at most limit bytes of a stream, so reasoning
+// replay can still be captured when the full body is too large to buffer. Every
+// write is reported complete, so the bound never truncates the caller's stream.
 type boundedResponseCapture struct {
-	data     []byte
-	limit    int
-	overflow bool
+	data  []byte
+	limit int
 }
 
 func newBoundedResponseCapture(limit int) *boundedResponseCapture {
@@ -571,14 +569,7 @@ func newBoundedResponseCapture(limit int) *boundedResponseCapture {
 
 func (c *boundedResponseCapture) Write(p []byte) (int, error) {
 	if remaining := c.limit - len(c.data); remaining > 0 {
-		if len(p) > remaining {
-			c.data = append(c.data, p[:remaining]...)
-			c.overflow = true
-		} else {
-			c.data = append(c.data, p...)
-		}
-	} else if len(p) > 0 {
-		c.overflow = true
+		c.data = append(c.data, p[:min(len(p), remaining)]...)
 	}
 	return len(p), nil
 }

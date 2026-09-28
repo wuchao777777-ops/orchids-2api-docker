@@ -58,16 +58,22 @@ func TestAccountsJSListClineInTheChannelStrip(t *testing.T) {
 	}
 }
 
-// TestCommonJSUsesTheServerCredentialVerdict pins the current account read
+// TestCommonJSPinsTheCredentialVerdictAndQuotaGuard pins the current account read
 // contract: OAuth secrets stay server-side, while has_credential tells the UI
-// whether the account can be used.
-func TestCommonJSUsesTheServerCredentialVerdict(t *testing.T) {
+// whether the account can be used, and the same verdict backs the quota-only
+// status guard. Both assertions read one file, so they share one pass.
+func TestCommonJSPinsTheCredentialVerdictAndQuotaGuard(t *testing.T) {
 	source, err := readConsoleScript("common.js")
 	if err != nil {
 		t.Fatalf("read common.js: %v", err)
 	}
-	if !strings.Contains(source, `acc?.has_credential === true`) {
-		t.Error("common.js does not use the server's explicit credential verdict")
+	for _, want := range []string{
+		`acc?.has_credential === true`,
+		`isQuotaOnlyStatus`,
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("common.js is missing %s", want)
+		}
 	}
 }
 
@@ -116,17 +122,5 @@ func TestAccountsJSRendersTheClineRowCells(t *testing.T) {
 	// session columns this channel never writes.
 	if !strings.Contains(source, `cline: '缺少 Cline WorkOS 凭据`) || !strings.Contains(source, `hasSidebarAccountCredential(acc)`) {
 		t.Error("evaluateAccountStatus does not use the server credential verdict for Cline")
-	}
-}
-
-// TestCommonJSCountsTheClineCredentialPresence pins the verdict behind the whole
-// row: without has_credential the status cell cannot know if Cline is authorized.
-func TestCommonJSCountsTheClineCredentialPresence(t *testing.T) {
-	source, err := readConsoleScript("common.js")
-	if err != nil {
-		t.Fatalf("read common.js: %v", err)
-	}
-	if !strings.Contains(source, `isQuotaOnlyStatus`) {
-		t.Error("common.js has no quota-only guard")
 	}
 }

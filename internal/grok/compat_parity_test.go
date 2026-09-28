@@ -1,85 +1,65 @@
 package grok
 
 import (
-	"github.com/goccy/go-json"
 	"testing"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
 )
 
-func TestResolveModel_RejectsRemovedAliases(t *testing.T) {
-	for _, id := range []string{"gork-4.20-0309", "grok-4-1-thinking", "grok-imagine-1.0"} {
-		if _, ok := ResolveModel(id); ok {
-			t.Fatalf("ResolveModel(%s) should fail", id)
-		}
-	}
-}
-
-func TestResolveModel_Grok42AliasesRejected(t *testing.T) {
-	if _, ok := ResolveModel("grok-4.2"); ok {
-		t.Fatalf("ResolveModel(grok-4.2) should fail")
-	}
-	if _, ok := ResolveModel("grok-4-2"); ok {
-		t.Fatalf("ResolveModel(grok-4-2) should fail")
-	}
-}
-
-func TestResolveModel_Grok420Rejected(t *testing.T) {
-	if _, ok := ResolveModel("grok-420"); ok {
-		t.Fatalf("ResolveModel(grok-420) should fail")
-	}
-}
-
-func TestResolveModel_CurrentBuildMappings(t *testing.T) {
+// TestResolveModelRetiredIDs pins every identifier the registry must refuse.
+// The checkDeprecated rows additionally assert IsDeprecatedModelID, which is what
+// lets the management API explain a removal instead of calling the model unknown.
+func TestResolveModelRetiredIDs(t *testing.T) {
 	cases := []struct {
-		modelID      string
-		wantUpstream string
+		id              string
+		checkDeprecated bool
+		deprecated      bool
 	}{
-		{modelID: "grok-4.5", wantUpstream: "grok-4.5"},
-		{modelID: "grok-4.6", wantUpstream: "grok-4.6"},
+		{id: "grok-4.20-0309", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-0309-non-reasoning-super", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-0309-super", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-0309-reasoning-super", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-0309-non-reasoning-heavy", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-0309-heavy", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-0309-reasoning-heavy", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-fast", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-auto", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-expert", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.20-heavy", checkDeprecated: true, deprecated: true},
+		{id: "grok-4.3-beta", checkDeprecated: true, deprecated: true},
+		{id: "gork-4.20-0309"},
+		{id: "grok-4-1-thinking"},
+		{id: "grok-imagine-1.0"},
+		{id: "grok-4.2"},
+		{id: "grok-4-2"},
+		{id: "grok-420"},
+		{id: "grok-4-20-beta"},
+		{id: "grok-imagine-2.0"},
 	}
 	for _, tc := range cases {
-		spec, ok := ResolveModel(tc.modelID)
+		if _, ok := ResolveModel(tc.id); ok {
+			t.Errorf("ResolveModel(%s) = true, want the retired identifier refused", tc.id)
+		}
+		if tc.checkDeprecated {
+			if !IsDeprecatedModelID(tc.id) {
+				t.Errorf("IsDeprecatedModelID(%s) = false, want true", tc.id)
+			}
+		}
+	}
+}
+
+// TestResolveModelAcceptsCurrentBuildModels is the accepting counterpart: both
+// Build models resolve and keep their own id as the upstream model.
+func TestResolveModelAcceptsCurrentBuildModels(t *testing.T) {
+	for _, id := range []string{"grok-4.5", "grok-4.6"} {
+		spec, ok := ResolveModel(id)
 		if !ok {
-			t.Fatalf("ResolveModel(%s) should succeed", tc.modelID)
-		}
-		if spec.UpstreamModel != tc.wantUpstream {
-			t.Fatalf("%s upstream=%q want=%q", tc.modelID, spec.UpstreamModel, tc.wantUpstream)
-		}
-	}
-}
-
-func TestResolveModel_LegacyWebsiteModelsDeprecated(t *testing.T) {
-	for _, id := range []string{
-		"grok-4.20-0309",
-		"grok-4.20-0309-non-reasoning-super",
-		"grok-4.20-0309-super",
-		"grok-4.20-0309-reasoning-super",
-		"grok-4.20-0309-non-reasoning-heavy",
-		"grok-4.20-0309-heavy",
-		"grok-4.20-0309-reasoning-heavy",
-		"grok-4.20-fast",
-		"grok-4.20-auto",
-		"grok-4.20-expert",
-		"grok-4.20-heavy",
-		"grok-4.3-beta",
-	} {
-		if _, ok := ResolveModel(id); ok {
-			t.Fatalf("ResolveModel(%s) should be removed", id)
-		}
-		if !IsDeprecatedModelID(id) {
-			t.Fatalf("%s should be deprecated", id)
-		}
-	}
-}
-
-func TestResolveModel_AcceptsCurrentBuildModels(t *testing.T) {
-	for _, id := range []string{
-		"grok-4.5",
-		"grok-4.6",
-	} {
-		if _, ok := ResolveModel(id); !ok {
 			t.Fatalf("ResolveModel(%s) should succeed", id)
+		}
+		if spec.UpstreamModel != id {
+			t.Fatalf("%s upstream=%q want=%q", id, spec.UpstreamModel, id)
 		}
 	}
 }
@@ -107,19 +87,9 @@ func TestLegacyCLIModelListCannotRouteImplicitModel(t *testing.T) {
 	}
 }
 
-func TestResolveModel_Grok420BetaHyphenAliasRejected(t *testing.T) {
-	if _, ok := ResolveModel("grok-4-20-beta"); ok {
-		t.Fatalf("ResolveModel(grok-4-20-beta) should fail")
-	}
-}
-
-func TestResolveModel_RejectsUnknownImagineModel(t *testing.T) {
-	if _, ok := ResolveModel("grok-imagine-2.0"); ok {
-		t.Fatalf("ResolveModel(grok-imagine-2.0) should fail")
-	}
-}
-
-func TestChatCompletionsRequestValidate_LeavesSamplingToUpstream(t *testing.T) {
+// TestChatCompletionsRequestValidateLeavesSamplingToUpstream pins that Validate
+// never invents temperature/top_p defaults; the upstream owns them.
+func TestChatCompletionsRequestValidateLeavesSamplingToUpstream(t *testing.T) {
 	req := ChatCompletionsRequest{
 		Model: "grok-4.20-0309",
 		Messages: []ChatMessage{{
@@ -138,168 +108,159 @@ func TestChatCompletionsRequestValidate_LeavesSamplingToUpstream(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsRequestValidate_ToolChoice(t *testing.T) {
-	req := ChatCompletionsRequest{
-		Model: "grok-4.20-0309",
-		Messages: []ChatMessage{{
-			Role:    "user",
-			Content: "hello",
-		}},
-		Tools: []ToolDef{{
-			Type: "function",
-			Function: map[string]interface{}{
-				"name": "weather",
+func TestChatCompletionsRequestValidateToolChoice(t *testing.T) {
+	tools := []ToolDef{{
+		Type:     "function",
+		Function: map[string]interface{}{"name": "weather"},
+	}}
+	cases := []struct {
+		name       string
+		tools      []ToolDef
+		toolChoice interface{}
+		wantErr    bool
+	}{
+		{name: "required with a declared tool", tools: tools, toolChoice: "required"},
+		{name: "unknown literal", tools: tools, toolChoice: "bad-choice", wantErr: true},
+		{
+			name:  "forced declared function",
+			tools: tools,
+			toolChoice: map[string]interface{}{
+				"type":     "function",
+				"function": map[string]interface{}{"name": "weather"},
 			},
-		}},
-		ToolChoice: "required",
+		},
+		{
+			name:  "forced unknown function",
+			tools: tools,
+			toolChoice: map[string]interface{}{
+				"type":     "function",
+				"function": map[string]interface{}{"name": "unknown_tool"},
+			},
+			wantErr: true,
+		},
+		{
+			name:  "malformed forced function",
+			tools: tools,
+			toolChoice: map[string]interface{}{
+				"type":     "function",
+				"function": map[string]interface{}{},
+			},
+			wantErr: true,
+		},
+		{name: "required without tools", toolChoice: "required", wantErr: true},
 	}
-	if err := req.Validate(); err != nil {
-		t.Fatalf("Validate() error: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := ChatCompletionsRequest{
+				Model:      "grok-4.20-0309",
+				Messages:   []ChatMessage{{Role: "user", Content: "hello"}},
+				Tools:      tc.tools,
+				ToolChoice: tc.toolChoice,
+			}
+			if err := req.Validate(); (err != nil) != tc.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr = %v", err, tc.wantErr)
+			}
+		})
 	}
+}
 
-	req.ToolChoice = "bad-choice"
-	if err := req.Validate(); err == nil {
-		t.Fatalf("expected invalid tool_choice error")
-	}
-
-	req.ToolChoice = map[string]interface{}{
-		"type": "function",
-		"function": map[string]interface{}{
-			"name": "weather",
+// TestChatCompletionsRequestUnmarshalLooseTypes keeps the loose scalar decoding
+// (stream "true", temperature "1.2") alongside the stream-provided bookkeeping.
+func TestChatCompletionsRequestUnmarshalLooseTypes(t *testing.T) {
+	cases := []struct {
+		name         string
+		raw          string
+		wantErr      bool
+		wantStream   bool
+		wantProvided bool
+		wantSampling bool
+		wantTemp     float64
+		wantTopP     float64
+	}{
+		{
+			name:         "loose types",
+			raw:          `{"model":"grok-4.20-0309","messages":[{"role":"user","content":"hello"}],"stream":"true","temperature":"1.2","top_p":"0.6"}`,
+			wantStream:   true,
+			wantProvided: true,
+			wantSampling: true,
+			wantTemp:     1.2,
+			wantTopP:     0.6,
+		},
+		{
+			name:    "invalid stream",
+			raw:     `{"model":"grok-4.20-0309","messages":[{"role":"user","content":"hello"}],"stream":"maybe"}`,
+			wantErr: true,
+		},
+		{
+			name: "absent stream",
+			raw:  `{"model":"grok-4.20-0309","messages":[{"role":"user","content":"hello"}]}`,
+		},
+		{
+			name:         "explicit stream=false",
+			raw:          `{"model":"grok-4.20-0309","messages":[{"role":"user","content":"hello"}],"stream":false}`,
+			wantProvided: true,
+		},
+		{
+			name: "null stream",
+			raw:  `{"model":"grok-4.20-0309","messages":[{"role":"user","content":"hello"}],"stream":null}`,
 		},
 	}
-	if err := req.Validate(); err != nil {
-		t.Fatalf("Validate() object tool_choice error: %v", err)
-	}
-
-	req.ToolChoice = map[string]interface{}{
-		"type": "function",
-		"function": map[string]interface{}{
-			"name": "unknown_tool",
-		},
-	}
-	if err := req.Validate(); err == nil {
-		t.Fatalf("expected tool_choice function reference error")
-	}
-
-	req.ToolChoice = map[string]interface{}{
-		"type":     "function",
-		"function": map[string]interface{}{},
-	}
-	if err := req.Validate(); err == nil {
-		t.Fatal("expected malformed forced tool_choice error")
-	}
-
-	req.Tools = nil
-	req.ToolChoice = "required"
-	if err := req.Validate(); err == nil {
-		t.Fatal("expected required tool_choice without tools error")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var req ChatCompletionsRequest
+			err := json.Unmarshal([]byte(tc.raw), &req)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("unmarshal error = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				return
+			}
+			if req.Stream != tc.wantStream {
+				t.Fatalf("stream=%v want=%v", req.Stream, tc.wantStream)
+			}
+			if req.StreamProvided != tc.wantProvided {
+				t.Fatalf("stream provided=%v want=%v", req.StreamProvided, tc.wantProvided)
+			}
+			if (req.Temperature != nil) != tc.wantSampling || (req.TopP != nil) != tc.wantSampling {
+				t.Fatalf("sampling present=%v/%v want=%v", req.Temperature != nil, req.TopP != nil, tc.wantSampling)
+			}
+			if tc.wantSampling && (*req.Temperature != tc.wantTemp || *req.TopP != tc.wantTopP) {
+				t.Fatalf("temperature=%v top_p=%v want %v/%v", *req.Temperature, *req.TopP, tc.wantTemp, tc.wantTopP)
+			}
+		})
 	}
 }
 
-func TestChatCompletionsRequest_UnmarshalLooseTypes(t *testing.T) {
-	raw := []byte(`{
-		"model":"grok-4.20-0309",
-		"messages":[{"role":"user","content":"hello"}],
-		"stream":"true",
-		"temperature":"1.2",
-		"top_p":"0.6"
-	}`)
-	var req ChatCompletionsRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
+// TestApplyDefaultChatStream covers the four shapes of the defaulting rule: an
+// absent stream (and stream:null) takes the configured default, an explicit value
+// survives, and a Stream=false config overrides the default.
+func TestApplyDefaultChatStream(t *testing.T) {
+	streamFalse := false
+	cases := []struct {
+		name         string
+		configStream *bool
+		stream       bool
+		provided     bool
+		want         bool
+	}{
+		{name: "absent stream takes the default", want: true},
+		{name: "null stream takes the default", want: true},
+		{name: "explicit stream=false is not overridden", stream: false, provided: true, want: false},
+		{name: "config override", configStream: &streamFalse, want: false},
 	}
-	if req.Stream != true {
-		t.Fatalf("stream=%v want=true", req.Stream)
-	}
-	if req.Temperature == nil || *req.Temperature != 1.2 {
-		t.Fatalf("temperature=%v want=1.2", req.Temperature)
-	}
-	if req.TopP == nil || *req.TopP != 0.6 {
-		t.Fatalf("top_p=%v want=0.6", req.TopP)
-	}
-}
-
-func TestChatCompletionsRequest_UnmarshalInvalidStream(t *testing.T) {
-	raw := []byte(`{
-		"model":"grok-4.20-0309",
-		"messages":[{"role":"user","content":"hello"}],
-		"stream":"maybe"
-	}`)
-	var req ChatCompletionsRequest
-	if err := json.Unmarshal(raw, &req); err == nil {
-		t.Fatalf("expected stream parse error")
-	}
-}
-
-func TestChatCompletionsRequest_StreamProvidedFlagAndDefault(t *testing.T) {
-	rawNoStream := []byte(`{
-		"model":"grok-4.20-0309",
-		"messages":[{"role":"user","content":"hello"}]
-	}`)
-	var req ChatCompletionsRequest
-	if err := json.Unmarshal(rawNoStream, &req); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
-	}
-	if req.StreamProvided {
-		t.Fatalf("stream should be marked as not provided")
-	}
-
-	cfg := &config.Config{}
-	config.ApplyDefaults(cfg)
-	h := &Handler{cfg: cfg}
-	h.applyDefaultChatStream(&req)
-	if req.Stream != true {
-		t.Fatalf("default stream=%v want=true", req.Stream)
-	}
-
-	rawWithStream := []byte(`{
-		"model":"grok-4.20-0309",
-		"messages":[{"role":"user","content":"hello"}],
-		"stream":false
-	}`)
-	var req2 ChatCompletionsRequest
-	if err := json.Unmarshal(rawWithStream, &req2); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
-	}
-	if !req2.StreamProvided {
-		t.Fatalf("stream should be marked as provided")
-	}
-	h.applyDefaultChatStream(&req2)
-	if req2.Stream != false {
-		t.Fatalf("explicit stream should not be overridden, got=%v", req2.Stream)
-	}
-
-	rawWithNullStream := []byte(`{
-		"model":"grok-4.20-0309",
-		"messages":[{"role":"user","content":"hello"}],
-		"stream":null
-	}`)
-	var req3 ChatCompletionsRequest
-	if err := json.Unmarshal(rawWithNullStream, &req3); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
-	}
-	if req3.StreamProvided {
-		t.Fatalf("stream=null should be treated as not provided")
-	}
-	h.applyDefaultChatStream(&req3)
-	if req3.Stream != true {
-		t.Fatalf("null stream should fallback to default true, got=%v", req3.Stream)
-	}
-}
-
-func TestApplyDefaultChatStream_StreamFalseOverride(t *testing.T) {
-	stream := false
-	h := &Handler{
-		cfg: &config.Config{
-			Stream: &stream,
-		},
-	}
-	req := ChatCompletionsRequest{
-		StreamProvided: false,
-	}
-	h.applyDefaultChatStream(&req)
-	if req.Stream != false {
-		t.Fatalf("stream=%v want=false (config override)", req.Stream)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			config.ApplyDefaults(cfg)
+			if tc.configStream != nil {
+				cfg.Stream = tc.configStream
+			}
+			h := &Handler{cfg: cfg}
+			req := ChatCompletionsRequest{Stream: tc.stream, StreamProvided: tc.provided}
+			h.applyDefaultChatStream(&req)
+			if req.Stream != tc.want {
+				t.Fatalf("stream=%v want=%v", req.Stream, tc.want)
+			}
+		})
 	}
 }

@@ -74,27 +74,27 @@ type ResponsesCreateRequest struct {
 }
 
 func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
+	// The object is decoded in two passes. The members whose wire shape is
+	// already the one the handler consumes arrive through the embedded struct,
+	// decoded exactly as declared, so a malformed value is a request error
+	// instead of a silently dropped field. The scalar members accept several
+	// JSON shapes ("true", "1", a numeric string), so the interface{} members
+	// below shadow the typed ones and are parsed loosely afterwards.
+	type plainResponsesCreateRequest ResponsesCreateRequest
 	type rawResponsesCreateRequest struct {
-		Model              interface{}              `json:"model"`
-		Input              interface{}              `json:"input"`
-		Instructions       interface{}              `json:"instructions,omitempty"`
-		Stream             interface{}              `json:"stream,omitempty"`
-		Reasoning          map[string]interface{}   `json:"reasoning,omitempty"`
-		Temperature        interface{}              `json:"temperature,omitempty"`
-		TopP               interface{}              `json:"top_p,omitempty"`
-		MaxOutputTokens    interface{}              `json:"max_output_tokens,omitempty"`
-		Tools              []map[string]interface{} `json:"tools,omitempty"`
-		ToolChoice         interface{}              `json:"tool_choice,omitempty"`
-		ParallelToolCalls  interface{}              `json:"parallel_tool_calls,omitempty"`
-		PreviousResponseID interface{}              `json:"previous_response_id,omitempty"`
-		Store              interface{}              `json:"store,omitempty"`
-		Metadata           map[string]interface{}   `json:"metadata,omitempty"`
-		Truncation         interface{}              `json:"truncation,omitempty"`
-		Include            []string                 `json:"include,omitempty"`
-		Background         interface{}              `json:"background,omitempty"`
-		PromptCacheKey     interface{}              `json:"prompt_cache_key,omitempty"`
-		Text               map[string]interface{}   `json:"text,omitempty"`
-		ResponseFormat     map[string]interface{}   `json:"response_format,omitempty"`
+		plainResponsesCreateRequest
+		Model              interface{} `json:"model"`
+		Instructions       interface{} `json:"instructions,omitempty"`
+		Stream             interface{} `json:"stream,omitempty"`
+		Temperature        interface{} `json:"temperature,omitempty"`
+		TopP               interface{} `json:"top_p,omitempty"`
+		MaxOutputTokens    interface{} `json:"max_output_tokens,omitempty"`
+		ParallelToolCalls  interface{} `json:"parallel_tool_calls,omitempty"`
+		PreviousResponseID interface{} `json:"previous_response_id,omitempty"`
+		Store              interface{} `json:"store,omitempty"`
+		Truncation         interface{} `json:"truncation,omitempty"`
+		Background         interface{} `json:"background,omitempty"`
+		PromptCacheKey     interface{} `json:"prompt_cache_key,omitempty"`
 	}
 
 	var raw rawResponsesCreateRequest
@@ -149,27 +149,20 @@ func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
 		maxOutput = &maxOutputTokens
 	}
 
+	*r = ResponsesCreateRequest(raw.plainResponsesCreateRequest)
 	r.Model = parseLooseStringAny(raw.Model)
-	r.Input = raw.Input
 	r.Instructions = parseLooseStringAny(raw.Instructions)
 	r.Stream = stream
 	r.StreamProvided = streamProvided
-	r.Reasoning = raw.Reasoning
 	r.Temperature = temp
 	r.TopP = topP
 	r.MaxOutputTokens = maxOutput
-	r.Tools = raw.Tools
-	r.ToolChoice = raw.ToolChoice
 	r.ParallelToolCalls = parallel
 	r.PreviousResponseID = parseLooseStringAny(raw.PreviousResponseID)
 	r.Store = store
-	r.Metadata = raw.Metadata
 	r.Truncation = parseLooseStringAny(raw.Truncation)
-	r.Include = raw.Include
 	r.Background = background
 	r.PromptCacheKey = parseLooseStringAny(raw.PromptCacheKey)
-	r.Text = raw.Text
-	r.ResponseFormat = raw.ResponseFormat
 	return nil
 }
 
@@ -233,10 +226,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if previousID := strings.TrimSpace(req.PreviousResponseID); previousID != "" {
-		owner := strings.TrimSpace(middleware.APIKeyFingerprint(r.Context()))
-		if owner == "" {
-			owner = "anonymous"
-		}
+		owner := responsesOwnerHash(r.Context())
 		previous, lookupErr := h.getStoredResponse(r, previousID, owner)
 		if lookupErr != nil {
 			writeStoredResponseLookupError(w, lookupErr, "previous response not found")
@@ -246,20 +236,11 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 			writeResponsesAPIError(w, http.StatusNotFound, "response_not_found", "previous response not found")
 			return
 		}
-		if previous.Provider != providerForModelSpec(spec) {
-			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "previous response provider is incompatible")
-			return
-		}
-		req.Input, err = expandStoredResponseInput(previous.Body, req.Input)
-		if err != nil {
-			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-			return
-		}
-		if previous.PromptCacheKey != "" {
-			session = grokSessionContext{Key: previous.PromptCacheKey, Replay: true, Model: req.Model}
-			req.PromptCacheKey = previous.PromptCacheKey
-			r = r.WithContext(withGrokSession(r.Context(), session))
-		}
+		// The record exists and belongs to another provider. Only the chat bridge
+		// stores one, and it replays that continuation itself, so this plane must
+		// refuse rather than re-expand a body it did not write.
+		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "previous response provider is incompatible")
+		return
 	}
 	if err := validateResponsesCompatibility(req); err != nil {
 		writeGrokUpstreamError(w, err)
@@ -329,13 +310,10 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 			writeGrokError(w, http.StatusInternalServerError, "failed to store response")
 			return
 		}
-		owner := strings.TrimSpace(middleware.APIKeyFingerprint(r.Context()))
-		if owner == "" {
-			owner = "anonymous"
-		}
+		owner := responsesOwnerHash(r.Context())
 		if saveErr := h.saveStoredResponse(r, &store.StoredResponse{
 			ResponseID: parseLooseStringAny(response["id"]), OwnerHash: owner, Model: req.Model,
-			Provider: providerForModelSpec(spec), PromptCacheKey: sessionFromContext(r.Context()).Key,
+			Provider: ProviderBuild, PromptCacheKey: sessionFromContext(r.Context()).Key,
 			ContentType: "application/json", Body: encoded,
 			// The expanded input, not the raw one: a continuation replays what the
 			// upstream actually received, which is what input_items reports.
@@ -346,11 +324,6 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, response)
-}
-
-func providerForModelSpec(spec ModelSpec) string {
-	// Only the Build plane remains, so every served spec belongs to it.
-	return ProviderBuild
 }
 
 func expandStoredResponseInput(responseBody []byte, current interface{}) (interface{}, error) {
@@ -507,9 +480,6 @@ func chatRequestFromResponses(req ResponsesCreateRequest) (ChatCompletionsReques
 // shape it receives — so a bridge that receives either one keeps the caller's
 // intent, including the `text.verbosity` control the format object may carry.
 func responsesTextControls(req ResponsesCreateRequest) map[string]interface{} {
-	if len(req.Text) == 0 {
-		return nil
-	}
 	return cloneStringInterfaceMap(req.Text)
 }
 
@@ -520,10 +490,7 @@ func responsesOutputFormat(req ResponsesCreateRequest) map[string]interface{} {
 	if format, ok := req.Text["format"].(map[string]interface{}); ok && len(format) > 0 {
 		return cloneStringInterfaceMap(format)
 	}
-	if len(req.ResponseFormat) > 0 {
-		return cloneStringInterfaceMap(req.ResponseFormat)
-	}
-	return nil
+	return cloneStringInterfaceMap(req.ResponseFormat)
 }
 
 func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
@@ -918,10 +885,6 @@ func copyCapturedResponse(w http.ResponseWriter, rec *captureResponseWriter) {
 			w.Header().Add(k, v)
 		}
 	}
-	code := rec.code
-	if code == 0 {
-		code = http.StatusOK
-	}
-	w.WriteHeader(code)
+	w.WriteHeader(rec.code)
 	_, _ = w.Write(rec.body.Bytes())
 }

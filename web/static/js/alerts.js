@@ -52,6 +52,28 @@
     return document.getElementById(id);
   }
 
+  // --- element builders ------------------------------------------------------
+  function make(tag, className, value) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (value !== undefined && value !== null) node.textContent = value;
+    return node;
+  }
+
+  function attach(parent, children) {
+    (children || []).forEach((child) => { if (child) parent.appendChild(child); });
+    return parent;
+  }
+
+  // eventMessage is the full-width row used for "nothing recorded" and for a
+  // failed read of the trigger list.
+  function eventMessage(body, message) {
+    const td = make('td', 'table-empty-cell', message);
+    td.colSpan = 5;
+    body.replaceChildren();
+    body.appendChild(attach(make('tr'), [td]));
+  }
+
   function fmtRatio(value) {
     return (Number(value || 0) * 100).toFixed(1) + '%';
   }
@@ -83,23 +105,16 @@
     container.replaceChildren();
     const rules = state.rules || {};
     FIELDS.forEach((field) => {
-      const wrap = document.createElement('label');
-      wrap.className = 'alerts-field';
-      const label = document.createElement('span');
-      label.className = 'alerts-field-label';
-      label.textContent = field.label;
-      wrap.appendChild(label);
-
+      const wrap = make('label', 'alerts-field');
+      wrap.appendChild(make('span', 'alerts-field-label', field.label));
       let input;
       if (field.kind === 'bool') {
-        input = document.createElement('input');
+        input = make('input', 'alerts-checkbox');
         input.type = 'checkbox';
         input.checked = Boolean(rules[field.key]);
-        input.className = 'alerts-checkbox';
       } else {
-        input = document.createElement('input');
+        input = make('input', 'form-input');
         input.type = 'number';
-        input.className = 'form-input';
         input.step = '1';
         if (field.kind === 'ratio') {
           // Percent in the form, fraction on the wire.
@@ -115,22 +130,15 @@
       input.addEventListener('input', renderPreview);
       input.addEventListener('change', renderPreview);
       if (field.kind === 'ratio') {
-        const control = document.createElement('span');
-        control.className = 'alerts-field-control';
-        control.appendChild(input);
-        const unit = document.createElement('span');
-        unit.className = 'alerts-field-unit';
-        unit.textContent = '%';
-        control.appendChild(unit);
-        wrap.appendChild(control);
+        // The % sits beside the input so the unit is never mistaken for a number.
+        wrap.appendChild(attach(make('span', 'alerts-field-control'), [
+          input,
+          make('span', 'alerts-field-unit', '%'),
+        ]));
       } else {
         wrap.appendChild(input);
       }
-
-      const hint = document.createElement('span');
-      hint.className = 'alerts-field-hint';
-      hint.textContent = field.hint;
-      wrap.appendChild(hint);
+      wrap.appendChild(make('span', 'alerts-field-hint', field.hint));
       container.appendChild(wrap);
     });
   }
@@ -179,7 +187,6 @@
     }
     if (!preview) return;
     preview.replaceChildren();
-
     // The plain-language reading of the thresholds: an operator should not have to
     // translate ratios into sentences to know what they just configured.
     const rows = [
@@ -188,12 +195,7 @@
       `恢复线：成功率回到 ${fmtRatio(rules.SuccessRateWarning + rules.ClearMargin)} 以上`,
       rules.RequireNoAvailableAccounts ? '启用账号全部不可用时触发严重告警' : '不检查账号池可用性',
     ];
-    rows.forEach((text) => {
-      const item = document.createElement('p');
-      item.className = 'alerts-preview-line';
-      item.textContent = text;
-      preview.appendChild(item);
-    });
+    rows.forEach((line) => preview.appendChild(make('p', 'alerts-preview-line', line)));
   }
 
   function renderHelp() {
@@ -206,19 +208,15 @@
       ['只读部署', '没有 Redis 的部署没有告警引擎，本页会说明原因而不是显示一个空表单。'],
     ];
     help.replaceChildren();
-    items.forEach(([title, text]) => {
-      const row = document.createElement('div');
-      row.className = 'alerts-help-row';
-      const strong = document.createElement('strong');
-      strong.textContent = title;
-      const span = document.createElement('span');
-      span.textContent = text;
-      row.appendChild(strong);
-      row.appendChild(span);
-      help.appendChild(row);
+    items.forEach(([title, body]) => {
+      help.appendChild(attach(make('div', 'alerts-help-row'), [
+        make('strong', '', title),
+        make('span', '', body),
+      ]));
     });
   }
 
+  // --- load ------------------------------------------------------------------
   async function loadRules() {
     setState('读取中…');
     try {
@@ -307,19 +305,14 @@
       }
       rows.forEach((record) => {
         const event = record.event || {};
-        const tr = document.createElement('tr');
-        const fired = event.action === 'alert_fired';
+        const tr = make('tr');
         [
           new Date(event.timestamp).toLocaleString(),
-          fired ? '触发' : '恢复',
+          event.action === 'alert_fired' ? '触发' : '恢复',
           (event.metadata && event.metadata.severity) || '—',
           event.channel || '—',
           event.error || event.details || '—',
-        ].forEach((value) => {
-          const td = document.createElement('td');
-          td.textContent = String(value);
-          tr.appendChild(td);
-        });
+        ].forEach((value) => tr.appendChild(make('td', '', String(value))));
         body.appendChild(tr);
       });
     } catch (error) {
@@ -327,15 +320,15 @@
     }
   }
 
+  // --- bind ------------------------------------------------------------------
+  // Every control here is a plain click target; the ids are fixed by the page, so
+  // the handlers are attached by id rather than by query.
   function bind() {
-    const save = el('alertsSave');
-    if (save) save.addEventListener('click', saveRules);
-    const reload = el('alertsReload');
-    if (reload) reload.addEventListener('click', loadRules);
-    const reset = el('alertsResetDefaults');
-    if (reset) reset.addEventListener('click', resetDefaults);
-    const eventsReload = el('alertsEventsReload');
-    if (eventsReload) eventsReload.addEventListener('click', loadEvents);
+    [['alertsSave', saveRules], ['alertsReload', loadRules], ['alertsResetDefaults', resetDefaults],
+      ['alertsEventsReload', loadEvents]].forEach(([id, handler]) => {
+      const node = el(id);
+      if (node) node.addEventListener('click', handler);
+    });
   }
 
   if (document.readyState === 'loading') {

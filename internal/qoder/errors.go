@@ -218,18 +218,8 @@ func transientError(detail string) error {
 	return fmt.Errorf("%w: %s", ErrTransientUpstream, detail)
 }
 
-// isContentPolicyError reports whether an error chain carries the refusal.
-func isContentPolicyError(err error) bool {
-	return errors.Is(err, ErrContentPolicy)
-}
-
 // isTransientError reports whether an error chain asks for a same-account
 // backoff retry.
 func isTransientError(err error) bool {
 	return errors.Is(err, ErrTransientUpstream)
-}
-
-// isEmptyStreamError reports whether an error chain is the empty-stream verdict.
-func isEmptyStreamError(err error) bool {
-	return errors.Is(err, ErrEmptyStream)
 }

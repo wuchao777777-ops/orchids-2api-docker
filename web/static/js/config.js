@@ -1,5 +1,56 @@
 // Configuration management JavaScript
 
+// ── element builders ─────────────────────────────────────────────────────────
+// The API Key list and the cache panels are built out of the same three
+// statements (create, class, text) dozens of times; they live here once so each
+// render function reads as WHAT it draws.
+function make(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = text;
+  return node;
+}
+
+function attach(parent, children) {
+  (children || []).forEach((child) => { if (child) parent.appendChild(child); });
+  return parent;
+}
+
+// styled applies a CSS declaration block. Inline styles are kept where they are
+// (a one-off cell width or colour), not replaced by a class on the page's sheet.
+function styled(node, styles) {
+  Object.keys(styles || {}).forEach((key) => { node.style[key] = styles[key]; });
+  return node;
+}
+
+function setText(id, value) {
+  const node = document.getElementById(id);
+  if (node) node.textContent = value == null ? "" : String(value);
+}
+
+// setValue / setChecked guard every control write: a page section that is not
+// rendered (or a template that changes) must not throw on load.
+function setValue(id, value) {
+  const node = document.getElementById(id);
+  if (node) node.value = value == null ? "" : String(value);
+}
+
+// openModal / closeModal are the two states of every dialog on this page: the
+// .active class drives the transition and display carries the layout.
+function openModal(id) {
+  const modal = document.getElementById(id);
+  if (!modal) return;
+  modal.classList.add("active");
+  modal.style.display = "flex";
+}
+
+function closeModal(id) {
+  const modal = document.getElementById(id);
+  if (!modal) return;
+  modal.classList.remove("active");
+  modal.style.display = "none";
+}
+
 let apiKeys = [];
 let createdKeys = [];
 const TOKEN_CACHE_TTL_PRESETS = ["60", "300", "900", "1800", "3600", "86400", "259200", "604800"];
@@ -451,17 +502,12 @@ function renderApiKeys() {
   const container = document.getElementById("keysList");
   bindApiKeyActions(container);
   if (apiKeys.length === 0) {
-    container.innerHTML = "";
-    const empty = document.createElement("div");
-    empty.className = "empty-state empty-state-panel";
-    const mark = document.createElement("span");
-    mark.className = "empty-state-mark";
-    mark.textContent = "KY";
-    const p = document.createElement("p");
-    p.textContent = "暂无 API Key，点击上方按钮创建";
-    empty.appendChild(mark);
-    empty.appendChild(p);
-    container.appendChild(empty);
+    const empty = make("div", "empty-state empty-state-panel");
+    attach(empty, [
+      make("span", "empty-state-mark", "KY"),
+      make("p", "", "暂无 API Key，点击上方按钮创建"),
+    ]);
+    container.replaceChildren(empty);
     return;
   }
 
@@ -470,141 +516,86 @@ function renderApiKeys() {
     return;
   }
 
-  container.innerHTML = "";
-  const table = document.createElement("table");
-  const thead = document.createElement("thead");
-  const headRow = document.createElement("tr");
-  ["Token", "状态", "访问策略", "最后使用", "操作"].forEach((label) => {
-    const th = document.createElement("th");
-    th.textContent = label;
-    headRow.appendChild(th);
-  });
-  thead.appendChild(headRow);
-  table.appendChild(thead);
+  const headRow = attach(make("tr"), ["Token", "状态", "访问策略", "最后使用", "操作"].map((label) => make("th", "", label)));
+  const table = attach(document.createElement("table"), [attach(document.createElement("thead"), [headRow])]);
 
   const tbody = document.createElement("tbody");
   apiKeys.forEach((k) => {
     const encodedLabel = encodeURIComponent(`${k.key_prefix}...${k.key_suffix}`);
-    const tr = document.createElement("tr");
-
-    const tdToken = document.createElement("td");
-    const tokenWrap = document.createElement("div");
-    tokenWrap.style.display = "flex";
-    tokenWrap.style.alignItems = "center";
-    tokenWrap.style.gap = "8px";
     // The server stores only the hash, so the list can never show the secret
     // again. It used to render an eye toggle and a click-to-copy over this
     // masked string, which handed out "sk-****1234" as if it were the key; the
     // masked form is now inert and points at the action that issues a new one.
-    const display = document.createElement("span");
-    display.className = "key-display";
+    const display = make("span", "key-display", `${k.key_prefix || ""}****${k.key_suffix || ""}`);
     display.title = "完整 Key 仅在创建或重置时显示一次，之后无法再次查看；需要新 Key 请点「重置」";
-    display.textContent = `${k.key_prefix || ""}****${k.key_suffix || ""}`;
-    const badge = document.createElement("span");
-    badge.className = "secret-badge";
-    badge.textContent = "密钥";
-    tokenWrap.appendChild(display);
-    tokenWrap.appendChild(badge);
-    tdToken.appendChild(tokenWrap);
-    tr.appendChild(tdToken);
+    const tokenCell = attach(make("td"), [
+      attach(styled(make("div"), { display: "flex", alignItems: "center", gap: "8px" }), [
+        display,
+        make("span", "secret-badge", "密钥"),
+      ]),
+    ]);
 
-    const tdStatus = document.createElement("td");
-    const label = document.createElement("label");
-    label.className = "toggle";
-    label.style.transform = "scale(0.8)";
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = !!k.enabled;
     checkbox.dataset.action = "toggle-key";
     checkbox.dataset.id = encodeData(k.id);
-    const slider = document.createElement("span");
-    slider.className = "toggle-slider";
-    label.appendChild(checkbox);
-    label.appendChild(slider);
-    tdStatus.appendChild(label);
-    tr.appendChild(tdStatus);
-
-    const tdPolicy = document.createElement("td");
-    tdPolicy.style.color = "var(--text-secondary)";
-    tdPolicy.style.fontSize = "0.8rem";
-    tdPolicy.style.whiteSpace = "pre-line";
-    tdPolicy.textContent = formatKeyPolicy(k);
-    tr.appendChild(tdPolicy);
-
-    const tdLast = document.createElement("td");
-    tdLast.style.color = "var(--text-secondary)";
-    tdLast.style.fontSize = "0.8rem";
-    tdLast.textContent = k.last_used_at ? formatTime(k.last_used_at) : "从未使用";
-    tr.appendChild(tdLast);
-
-    const tdAction = document.createElement("td");
-    const editBtn = document.createElement("button");
-    editBtn.className = "btn btn-neutral";
-    editBtn.style.padding = "4px 8px";
-    editBtn.style.marginRight = "6px";
-    editBtn.dataset.action = "edit-key";
-    editBtn.dataset.id = encodeData(k.id);
-    editBtn.textContent = "策略";
-    const rotateBtn = document.createElement("button");
-    rotateBtn.className = "btn btn-neutral";
-    rotateBtn.style.padding = "4px 8px";
-    rotateBtn.style.marginRight = "6px";
-    rotateBtn.dataset.action = "rotate-key";
-    rotateBtn.dataset.id = encodeData(k.id);
-    rotateBtn.dataset.name = encodedLabel;
-    rotateBtn.textContent = "重置";
-    rotateBtn.title = "生成新的完整 Key（旧 Key 立即失效），仅显示一次";
-    const delBtn = document.createElement("button");
-    delBtn.className = "btn btn-danger-outline";
-    delBtn.style.padding = "4px 8px";
-    delBtn.dataset.action = "delete-key";
-    delBtn.dataset.id = encodeData(k.id);
-    delBtn.dataset.label = encodedLabel;
-    delBtn.textContent = "删除";
-    tdAction.appendChild(editBtn);
-    tdAction.appendChild(rotateBtn);
-    tdAction.appendChild(delBtn);
-    tr.appendChild(tdAction);
-
-    tbody.appendChild(tr);
+    const toggle = styled(make("label", "toggle"), { transform: "scale(0.8)" });
+    // keyButton is one of the three row actions; all three carry the row id the
+    // delegated handler reads back with decodeData.
+    const keyButton = (className, action, label, title) => {
+      const button = styled(make("button", className, label), { padding: "4px 8px" });
+      button.type = "button";
+      button.dataset.action = action;
+      button.dataset.id = encodeData(k.id);
+      if (action === "rotate-key") {
+        button.dataset.name = encodedLabel;
+        button.title = "生成新的完整 Key（旧 Key 立即失效），仅显示一次";
+      }
+      if (action === "delete-key") button.dataset.label = encodedLabel;
+      if (title) button.title = title;
+      return button;
+    };
+    const rows = attach(make("tr"), [
+      tokenCell,
+      attach(make("td"), [attach(toggle, [checkbox, make("span", "toggle-slider")])]),
+      styled(make("td", "", formatKeyPolicy(k)), { color: "var(--text-secondary)", fontSize: "0.8rem", whiteSpace: "pre-line" }),
+      styled(make("td", "", k.last_used_at ? formatTime(k.last_used_at) : "从未使用"), { color: "var(--text-secondary)", fontSize: "0.8rem" }),
+      attach(make("td"), [
+        styled(keyButton("btn btn-neutral", "edit-key", "策略"), { marginRight: "6px" }),
+        styled(keyButton("btn btn-neutral", "rotate-key", "重置"), { marginRight: "6px" }),
+        keyButton("btn btn-danger-outline", "delete-key", "删除"),
+      ]),
+    ]);
+    tbody.appendChild(rows);
   });
   table.appendChild(tbody);
-  container.appendChild(table);
+  container.replaceChildren(table, keyTip());
+}
 
-  const tip = document.createElement("div");
-  tip.className = "config-key-tip";
-  const tipRow = document.createElement("div");
-  tipRow.style.display = "flex";
-  tipRow.style.gap = "8px";
-  tipRow.style.alignItems = "start";
-  const tipIcon = document.createElement("span");
-  tipIcon.style.fontSize = "1.2rem";
-  tipIcon.textContent = "💡";
-  const tipBody = document.createElement("div");
-  tipBody.style.flex = "1";
-  const tipTitle = document.createElement("div");
-  tipTitle.style.fontWeight = "600";
-  tipTitle.style.marginBottom = "4px";
-  tipTitle.textContent = "提示";
-  const tipText = document.createElement("div");
-  tipText.style.fontSize = "0.9rem";
-  tipText.style.lineHeight = "1.6";
-  const tipLines = [
+// keyTip is the standing note under both the table and the mobile card list: a
+// key is a bearer secret, and the list never shows one.
+function keyTip() {
+  const tipText = styled(make("div"), { fontSize: "0.9rem", lineHeight: "1.6" });
+  [
     "• API Key 用于访问接口的身份认证",
     "• 禁用的 Key 将无法访问 API",
     "• 请妥善保管您的 API Key，不要泄露给他人",
-  ];
-  tipLines.forEach((line, idx) => {
+  ].forEach((line, idx) => {
     if (idx > 0) tipText.appendChild(document.createElement("br"));
     tipText.appendChild(document.createTextNode(line));
   });
-  tipBody.appendChild(tipTitle);
-  tipBody.appendChild(tipText);
-  tipRow.appendChild(tipIcon);
-  tipRow.appendChild(tipBody);
-  tip.appendChild(tipRow);
-  container.appendChild(tip);
-
+  const body = styled(make("div"), { flex: "1" });
+  attach(body, [
+    styled(make("div", "", "提示"), { fontWeight: "600", marginBottom: "4px" }),
+    tipText,
+  ]);
+  return attach(make("div", "config-key-tip"), [
+    attach(styled(make("div"), { display: "flex", gap: "8px", alignItems: "start" }), [
+      styled(make("span", "", "💡"), { fontSize: "1.2rem" }),
+      body,
+    ]),
+  ]);
 }
 
 function renderApiKeysMobile(container) {
@@ -750,18 +741,18 @@ async function toggleKeyStatus(id, enabled) {
 
 // Open create key modal
 function openCreateKeyModal() {
-  document.getElementById("keyName").value = "";
-  document.getElementById("keyAllowedModels").value = "";
-  document.getElementById("keyRPMLimit").value = "0";
-  document.getElementById("keyExpiresAt").value = "";
-  document.getElementById("createKeyModal").classList.add("active");
-  document.getElementById("createKeyModal").style.display = "flex";
+  // Every field starts blank: the window can hold a name left over from the last
+  // key, and a stale expiry would be saved with the new one.
+  setValue("keyName", "");
+  setValue("keyAllowedModels", "");
+  setValue("keyRPMLimit", "0");
+  setValue("keyExpiresAt", "");
+  openModal("createKeyModal");
 }
 
 // Close create key modal
 function closeCreateKeyModal() {
-  document.getElementById("createKeyModal").classList.remove("active");
-  document.getElementById("createKeyModal").style.display = "none";
+  closeModal("createKeyModal");
 }
 
 // Create API key
@@ -804,28 +795,22 @@ async function createApiKey(e) {
 function openEditKeyModal(id) {
   const key = apiKeys.find((item) => String(item.id) === String(id));
   if (!key) return;
-  document.getElementById("editKeyId").value = id;
-  document.getElementById("editKeyAllowedModels").value = (key.allowed_models || []).join("\n");
-  document.getElementById("editKeyRPMLimit").value = String(key.rpm_limit || 0);
-  document.getElementById("editKeyExpiresAt").value = toDatetimeLocal(key.expires_at);
-  document.getElementById("editKeyBillingLimit").value = String(ticksToUSD(key.billing_limit_usd_ticks));
-  document.getElementById("editKeyBillingPeriod").value = String(key.billing_period_days || 0);
-  const usageHint = document.getElementById("editKeyBillingUsage");
-  if (usageHint) {
-    const used = ticksToUSD(key.billing_used_usd_ticks);
-    usageHint.textContent = Number(key.billing_limit_usd_ticks) > 0
-      ? `已用 ${formatUSD(used)} / ${formatUSD(ticksToUSD(key.billing_limit_usd_ticks))}${periodSuffix(key)}`
-      : `已用 ${formatUSD(used)}${periodSuffix(key)}`;
-  }
-  const modal = document.getElementById("editKeyModal");
-  modal.classList.add("active");
-  modal.style.display = "flex";
+  setValue("editKeyId", id);
+  setValue("editKeyAllowedModels", (key.allowed_models || []).join("\n"));
+  setValue("editKeyRPMLimit", String(key.rpm_limit || 0));
+  setValue("editKeyExpiresAt", toDatetimeLocal(key.expires_at));
+  setValue("editKeyBillingLimit", String(ticksToUSD(key.billing_limit_usd_ticks)));
+  setValue("editKeyBillingPeriod", String(key.billing_period_days || 0));
+  const used = ticksToUSD(key.billing_used_usd_ticks);
+  const limit = ticksToUSD(key.billing_limit_usd_ticks);
+  setText("editKeyBillingUsage", Number(key.billing_limit_usd_ticks) > 0
+    ? `已用 ${formatUSD(used)} / ${formatUSD(limit)}${periodSuffix(key)}`
+    : `已用 ${formatUSD(used)}${periodSuffix(key)}`);
+  openModal("editKeyModal");
 }
 
 function closeEditKeyModal() {
-  const modal = document.getElementById("editKeyModal");
-  modal.classList.remove("active");
-  modal.style.display = "none";
+  closeModal("editKeyModal");
 }
 
 async function saveKeyPolicy(e) {
@@ -856,32 +841,24 @@ async function saveKeyPolicy(e) {
 // Render created keys
 function renderCreatedKeys() {
   const container = document.getElementById("fullKeyDisplay");
-  container.innerHTML = "";
-  createdKeys.forEach((k) => {
-    const wrap = document.createElement("div");
-    wrap.className = "key-display";
-    wrap.style.marginBottom = "8px";
-    wrap.style.padding = "12px";
-    wrap.style.background = "var(--surface-2)";
-    wrap.style.border = "1px dashed var(--border-color)";
-    wrap.style.borderRadius = "8px";
-
-    const name = document.createElement("div");
-    name.style.fontSize = "0.8rem";
-    name.style.color = "var(--text-secondary)";
-    name.textContent = k.name || "";
-
-    const key = document.createElement("div");
-    key.style.fontWeight = "bold";
-    key.style.marginTop = "4px";
-    key.style.wordBreak = "break-all";
-    key.style.color = "var(--accent-green)";
-    key.textContent = k.key || k.error || "";
-
-    wrap.appendChild(name);
-    wrap.appendChild(key);
-    container.appendChild(wrap);
-  });
+  container.replaceChildren(...createdKeys.map((k) => attach(
+    styled(make("div", "key-display"), {
+      marginBottom: "8px",
+      padding: "12px",
+      background: "var(--surface-2)",
+      border: "1px dashed var(--border-color)",
+      borderRadius: "8px",
+    }),
+    [
+      styled(make("div", "", k.name || ""), { fontSize: "0.8rem", color: "var(--text-secondary)" }),
+      styled(make("div", "", k.key || k.error || ""), {
+        fontWeight: "bold",
+        marginTop: "4px",
+        wordBreak: "break-all",
+        color: "var(--accent-green)",
+      }),
+    ],
+  )));
 }
 
 // Copy all keys
@@ -893,29 +870,23 @@ function copyAllKeys() {
 // Open/close show key modal. This window is the only place a complete secret
 // exists in the UI -- the list only ever holds a prefix and suffix.
 function openShowKeyModal() {
-  document.getElementById("showKeyModal").classList.add("active");
-  document.getElementById("showKeyModal").style.display = "flex";
+  openModal("showKeyModal");
 }
 
 function closeShowKeyModal() {
-  document.getElementById("showKeyModal").classList.remove("active");
-  document.getElementById("showKeyModal").style.display = "none";
+  closeModal("showKeyModal");
 }
 
 // Open delete key modal
 function openDeleteKeyModal(id, name) {
-  document.getElementById("deleteKeyId").value = id;
-  document.getElementById("deleteKeyName").textContent = name;
-  const modal = document.getElementById("deleteKeyModal");
-  modal.classList.add("active");
-  modal.style.display = "flex";
+  setValue("deleteKeyId", id);
+  setText("deleteKeyName", name);
+  openModal("deleteKeyModal");
 }
 
 // Close delete key modal
 function closeDeleteKeyModal() {
-  const modal = document.getElementById("deleteKeyModal");
-  modal.classList.remove("active");
-  modal.style.display = "none";
+  closeModal("deleteKeyModal");
 }
 
 // Confirm delete key
@@ -930,9 +901,6 @@ async function confirmDeleteKey() {
     showToast("删除失败", "error");
   }
 }
-
-
-
 
 function toggleCacheConfig(checked) {
   const details = document.getElementById("cacheConfigDetails");

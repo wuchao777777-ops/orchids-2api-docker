@@ -8,17 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 func TestAuthorizeApiKeyBasicValidation(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "auth-test:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, mini := newTestRedisStore(t, "auth-test:")
 
 	raw := "sk-test-secret"
 	digest := sha256.Sum256([]byte(raw))
@@ -56,12 +49,7 @@ func TestAuthorizeApiKeyBasicValidation(t *testing.T) {
 }
 
 func TestAuthorizeApiKeyPolicyAndRPM(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "auth-policy-test:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "auth-policy-test:")
 
 	raw := "sk-policy-secret"
 	digest := sha256.Sum256([]byte(raw))
@@ -94,12 +82,7 @@ func TestAuthorizeApiKeyPolicyAndRPM(t *testing.T) {
 }
 
 func TestAuthorizeApiKeyRejectsExpiredKey(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "auth-expired-test:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "auth-expired-test:")
 
 	raw := "sk-expired-secret"
 	digest := sha256.Sum256([]byte(raw))
@@ -121,12 +104,7 @@ func TestAuthorizeApiKeyRejectsExpiredKey(t *testing.T) {
 }
 
 func TestUpdateApiKeyPolicyPersists(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "auth-update-test:"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "auth-update-test:")
 
 	key := &ApiKey{Name: "update", KeyHash: "hash", KeyPrefix: "sk-", KeySuffix: "hash", Enabled: true}
 	if err := s.CreateApiKey(context.Background(), key); err != nil {

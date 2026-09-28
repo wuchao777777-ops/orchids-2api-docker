@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"orchids-api/internal/store"
-
-	"github.com/goccy/go-json"
 )
 
 // Admin model listing shapes.
@@ -71,19 +69,21 @@ func adminModelPaging(r *http.Request) (page, pageSize int, requested bool) {
 	return page, pageSize, true
 }
 
-// paginateAdminModels slices the listing for one page and reports the total, so
-// the envelope's `total` describes the full filtered set rather than the page.
-func paginateAdminModels(models []*store.Model, page, pageSize int) ([]*store.Model, int) {
-	total := len(models)
+// paginateAdminRows slices one page out of rows and reports the total, so an
+// envelope's `total` describes everything the filter kept rather than the page.
+// The flat route list and the grouped view share it. A page past the end yields
+// an empty, non-nil page, so the envelope still marshals `items` as [].
+func paginateAdminRows[T any](rows []T, page, pageSize int) ([]T, int) {
+	total := len(rows)
 	start := (page - 1) * pageSize
-	if start >= total {
-		return []*store.Model{}, total
+	if start < 0 || start >= total {
+		return make([]T, 0), total
 	}
 	end := start + pageSize
 	if end > total {
 		end = total
 	}
-	return models[start:end], total
+	return rows[start:end], total
 }
 
 func filterAdminModels(models []*store.Model, search string) []*store.Model {
@@ -103,17 +103,10 @@ func filterAdminModels(models []*store.Model, search string) []*store.Model {
 	return out
 }
 
-// writeAdminModelEnvelope writes the paged envelope shared by both endpoints.
-func writeAdminModelEnvelope(w http.ResponseWriter, body interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(body)
-}
-
 // HandleModelGroups serves GET /api/models/groups: the same routes as
 // /api/models, grouped by identical endpoint-capability sets.
 func (a *API) HandleModelGroups(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -126,21 +119,10 @@ func (a *API) HandleModelGroups(w http.ResponseWriter, r *http.Request) {
 
 	groups := groupAdminModels(models)
 	page, pageSize, _ := adminModelPaging(r)
-	total := len(groups)
-	start := (page - 1) * pageSize
-	if start > total {
-		start = total
-	}
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-	if page <= 0 || start >= total {
-		start, end = total, total
-	}
+	items, total := paginateAdminRows(groups, page, pageSize)
 
-	writeAdminModelEnvelope(w, adminModelGroupEnvelope{
-		Items:    groups[start:end],
+	writeJSON(w, adminModelGroupEnvelope{
+		Items:    items,
 		Page:     page,
 		PageSize: pageSize,
 		Total:    total,

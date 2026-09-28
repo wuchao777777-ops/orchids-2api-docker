@@ -9,18 +9,35 @@ import (
 	"time"
 )
 
+// idleSentinels caches one sentinel per label. A channel that wants to
+// recognise the condition with errors.Is rather than by matching prose gets the
+// same pointer the monitor uses, so identity comparison still holds.
+var idleSentinels sync.Map
+
+// ErrStreamIdle returns the idle-timeout error for one channel label. The label
+// is what an operator reads, and the value is stable per label so errors.Is
+// works from the channel package as well as from here.
+func ErrStreamIdle(label string) error {
+	if label == "" {
+		label = "upstream"
+	}
+	if cached, ok := idleSentinels.Load(label); ok {
+		return cached.(error)
+	}
+	sentinel := errors.New(label + " stream idle timeout")
+	actual, _ := idleSentinels.LoadOrStore(label, sentinel)
+	return actual.(error)
+}
+
 // MonitorReadIdle interrupts a response body that produces no bytes for the
 // configured window. Active long-running streams are unaffected.
 func MonitorReadIdle(body io.ReadCloser, idle time.Duration, cancel context.CancelFunc, label string) io.ReadCloser {
 	if body == nil || idle <= 0 || cancel == nil {
 		return body
 	}
-	if label == "" {
-		label = "upstream"
-	}
 	monitored := &readIdleBody{
 		body: body, cancel: cancel, idle: idle,
-		timeoutErr: errors.New(label + " stream idle timeout"), done: make(chan struct{}),
+		timeoutErr: ErrStreamIdle(label), done: make(chan struct{}),
 	}
 	monitored.lastRead.Store(time.Now().UnixNano())
 	go monitored.watch()

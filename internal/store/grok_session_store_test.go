@@ -5,20 +5,10 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 func TestReasoningReplayAndSessionAffinityLifecycle(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "grok-session-test:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	s, _ := newTestRedisStore(t, "grok-session-test:")
 	ctx := context.Background()
 	if err := s.SaveReasoningReplay(ctx, &StoredReasoningReplay{
 		Model: "grok-4.6", SessionKey: "session-a", EncryptedContent: "opaque",

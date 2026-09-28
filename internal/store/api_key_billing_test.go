@@ -12,10 +12,13 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-func newApiKeyBillingStore(t *testing.T, prefix string) (*Store, *miniredis.Miniredis) {
+// newTestRedisStore starts an isolated in-process Redis and a Store bound to it
+// under the given key prefix. The server and the store are torn down with the
+// test, so a test does not spell out its own construction and cleanup.
+func newTestRedisStore(t *testing.T, prefix string) (*Store, *miniredis.Miniredis) {
 	t.Helper()
 	mini := miniredis.RunT(t)
-	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: prefix})
+	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: prefix})
 	if err != nil {
 		mini.Close()
 		t.Fatalf("store.New() error = %v", err)
@@ -53,7 +56,7 @@ func reserve(t *testing.T, s *Store, id int64, eventID string, amount int64, ttl
 // TestApiKeyBillingUnlimitedKeyNeverBlocks pins the zero-limit contract: a key
 // created before billing limits existed must not be rationed.
 func TestApiKeyBillingUnlimitedKeyNeverBlocks(t *testing.T) {
-	s, _ := newApiKeyBillingStore(t, "billing-unlimited:")
+	s, _ := newTestRedisStore(t, "billing-unlimited:")
 	key := createBillingKey(t, s, 0)
 
 	for i, eventID := range []string{"event-a", "event-b", "event-c"} {
@@ -73,7 +76,7 @@ func TestApiKeyBillingUnlimitedKeyNeverBlocks(t *testing.T) {
 // TestApiKeyBillingLimitBlocksExceedingReservation is the core guard: live holds
 // plus settled usage may never cross the limit.
 func TestApiKeyBillingLimitBlocksExceedingReservation(t *testing.T) {
-	s, _ := newApiKeyBillingStore(t, "billing-limit:")
+	s, _ := newTestRedisStore(t, "billing-limit:")
 	key := createBillingKey(t, s, 1000)
 
 	if !reserve(t, s, key.ID, "event-a", 600, time.Hour) {
@@ -102,7 +105,7 @@ func TestApiKeyBillingLimitBlocksExceedingReservation(t *testing.T) {
 // TestApiKeyBillingExpiredReservationsStopCounting checks that a hold whose TTL
 // passed frees its capacity on the next reservation attempt.
 func TestApiKeyBillingExpiredReservationsStopCounting(t *testing.T) {
-	s, _ := newApiKeyBillingStore(t, "billing-expiry:")
+	s, _ := newTestRedisStore(t, "billing-expiry:")
 	key := createBillingKey(t, s, 1000)
 
 	if !reserve(t, s, key.ID, "event-expired", 900, -time.Minute) {
@@ -117,7 +120,7 @@ func TestApiKeyBillingExpiredReservationsStopCounting(t *testing.T) {
 }
 
 func TestApiKeyBillingSettlementIsIdempotentByEvent(t *testing.T) {
-	s, _ := newApiKeyBillingStore(t, "billing-idempotent:")
+	s, _ := newTestRedisStore(t, "billing-idempotent:")
 	key := createBillingKey(t, s, 1000)
 	ctx := context.Background()
 	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 300); err != nil {
@@ -142,7 +145,7 @@ func TestApiKeyBillingSettlementIsIdempotentByEvent(t *testing.T) {
 // disappears, the charge lands in the used counter, and actual usage is billed
 // even when its hold is gone.
 func TestApiKeyBillingSettleMovesReservationIntoUsed(t *testing.T) {
-	s, _ := newApiKeyBillingStore(t, "billing-settle:")
+	s, _ := newTestRedisStore(t, "billing-settle:")
 	key := createBillingKey(t, s, 1000)
 	ctx := context.Background()
 
@@ -191,7 +194,7 @@ func TestApiKeyBillingSettleMovesReservationIntoUsed(t *testing.T) {
 // TestApiKeyBillingReleaseFreesCapacityAndReportsExistence covers the release
 // path the request middleware relies on to avoid charging a failed request.
 func TestApiKeyBillingReleaseFreesCapacityAndReportsExistence(t *testing.T) {
-	s, _ := newApiKeyBillingStore(t, "billing-release:")
+	s, _ := newTestRedisStore(t, "billing-release:")
 	key := createBillingKey(t, s, 1000)
 	ctx := context.Background()
 
@@ -213,7 +216,7 @@ func TestApiKeyBillingReleaseFreesCapacityAndReportsExistence(t *testing.T) {
 
 // TestApiKeyBillingResetZeroesUsedAndDropsReservations covers the admin reset.
 func TestApiKeyBillingResetZeroesUsedAndDropsReservations(t *testing.T) {
-	s, _ := newApiKeyBillingStore(t, "billing-reset:")
+	s, _ := newTestRedisStore(t, "billing-reset:")
 	key := createBillingKey(t, s, 1000)
 	ctx := context.Background()
 
@@ -241,7 +244,7 @@ func TestApiKeyBillingResetZeroesUsedAndDropsReservations(t *testing.T) {
 // TestApiKeyBillingLimitMirrorFollowsKeyUpdates checks the Redis limit mirror is
 // rewritten by UpdateApiKey, which is what the admin PATCH path uses.
 func TestApiKeyBillingLimitMirrorFollowsKeyUpdates(t *testing.T) {
-	s, _ := newApiKeyBillingStore(t, "billing-mirror:")
+	s, _ := newTestRedisStore(t, "billing-mirror:")
 	key := createBillingKey(t, s, 0)
 	ctx := context.Background()
 
@@ -275,7 +278,7 @@ func TestApiKeyBillingLimitMirrorFollowsKeyUpdates(t *testing.T) {
 // TestApiKeyBillingRejectsInvalidReservations pins the argument validation so a
 // caller mistake cannot create an unbounded hold.
 func TestApiKeyBillingRejectsInvalidReservations(t *testing.T) {
-	s, _ := newApiKeyBillingStore(t, "billing-invalid:")
+	s, _ := newTestRedisStore(t, "billing-invalid:")
 	ctx := context.Background()
 	key := createBillingKey(t, s, 1000)
 
@@ -302,7 +305,7 @@ func TestApiKeyBillingRejectsInvalidReservations(t *testing.T) {
 // A key with a billing period starts a fresh period once it elapses, so a limit
 // is per period rather than forever.
 func TestApiKeyBillingPeriodRollsOver(t *testing.T) {
-	s, mini := newApiKeyBillingStore(t, "period:")
+	s, mini := newTestRedisStore(t, "period:")
 	defer func() {
 		_ = s.Close()
 		mini.Close()
@@ -350,7 +353,7 @@ func TestApiKeyBillingPeriodRollsOver(t *testing.T) {
 }
 
 func TestApiKeyBillingPeriodRolloverPreservesLiveHoldsAndIsAtomic(t *testing.T) {
-	s, mini := newApiKeyBillingStore(t, "period-atomic:")
+	s, mini := newTestRedisStore(t, "period-atomic:")
 	defer mini.Close()
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -397,7 +400,7 @@ func TestApiKeyBillingPeriodRolloverPreservesLiveHoldsAndIsAtomic(t *testing.T) 
 
 // Resetting billing by hand zeroes the counter without touching the limit.
 func TestResetApiKeyBillingKeepsTheLimit(t *testing.T) {
-	s, mini := newApiKeyBillingStore(t, "reset:")
+	s, mini := newTestRedisStore(t, "reset:")
 	defer func() {
 		_ = s.Close()
 		mini.Close()

@@ -47,28 +47,55 @@ func TestReadAndValidateNativeResponseBeforeCommit(t *testing.T) {
 	}
 }
 
-func TestWriteGrokErrorReturnsOpenAIEnvelope(t *testing.T) {
-	rec := httptest.NewRecorder()
-	writeGrokError(rec, http.StatusBadRequest, "messages is required")
-	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
-		t.Fatalf("Content-Type = %q, want application/json", got)
+// TestGrokErrorEnvelope pins the shared OpenAI error object for every status: the
+// content type an SDK needs, the status, the type derived from it and the
+// machine-readable code.
+func TestGrokErrorEnvelope(t *testing.T) {
+	cases := []struct {
+		name        string
+		status      int
+		message     string
+		wantType    string
+		wantCode    string
+		wantMessage string
+	}{
+		{name: "bad request keeps its own message", status: http.StatusBadRequest, message: "messages is required", wantType: "invalid_request_error", wantCode: "invalid_request", wantMessage: "messages is required"},
+		{name: "unauthorized", status: http.StatusUnauthorized, message: "boom", wantType: "authentication_error", wantCode: "invalid_api_key"},
+		{name: "rate limited", status: http.StatusTooManyRequests, message: "boom", wantType: "rate_limit_error", wantCode: "rate_limit_exceeded"},
+		{name: "service unavailable", status: http.StatusServiceUnavailable, message: "boom", wantType: "server_error", wantCode: "service_unavailable"},
+		{name: "entity too large", status: http.StatusRequestEntityTooLarge, message: "boom", wantType: "invalid_request_error", wantCode: "request_too_large"},
 	}
-	var body struct {
-		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-			Param   any    `json:"param"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
-	}
-	if body.Error.Message != "messages is required" || body.Error.Code != "invalid_request" {
-		t.Fatalf("unexpected error object: %+v", body.Error)
-	}
-	if body.Error.Type != "invalid_request_error" {
-		t.Fatalf("type = %q, want invalid_request_error", body.Error.Type)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeGrokError(rec, tc.status, tc.message)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+			if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+				t.Fatalf("Content-Type = %q, want application/json", got)
+			}
+			var body struct {
+				Error struct {
+					Message string `json:"message"`
+					Type    string `json:"type"`
+					Code    string `json:"code"`
+					Param   any    `json:"param"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
+			}
+			if body.Error.Type != tc.wantType {
+				t.Fatalf("type = %q, want %q", body.Error.Type, tc.wantType)
+			}
+			if body.Error.Code != tc.wantCode {
+				t.Fatalf("code = %q, want %q", body.Error.Code, tc.wantCode)
+			}
+			if tc.wantMessage != "" && body.Error.Message != tc.wantMessage {
+				t.Fatalf("message = %q, want %q", body.Error.Message, tc.wantMessage)
+			}
+		})
 	}
 }
 
@@ -87,35 +114,23 @@ func TestWriteGrokModelNotFoundReturns404Code(t *testing.T) {
 	}
 }
 
-func TestWriteGrokErrorStatusMapping(t *testing.T) {
-	cases := map[int]string{
-		http.StatusBadRequest:            "invalid_request_error",
-		http.StatusUnauthorized:          "authentication_error",
-		http.StatusTooManyRequests:       "rate_limit_error",
-		http.StatusServiceUnavailable:    "server_error",
-		http.StatusRequestEntityTooLarge: "invalid_request_error",
-	}
-	for status, wantType := range cases {
-		rec := httptest.NewRecorder()
-		writeGrokError(rec, status, "boom")
-		if rec.Code != status {
-			t.Fatalf("status = %d, want %d", rec.Code, status)
-		}
-		var body map[string]map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatalf("status %d: invalid JSON %v", status, err)
-		}
-		if got := fmt.Sprint(body["error"]["type"]); got != wantType {
-			t.Fatalf("status %d: type = %q, want %q", status, got, wantType)
-		}
-	}
-}
-
-// An upstream failure must never hand the caller the upstream body, the egress
-// node id, or the internal "status=… node=… body=…" shape.
+// An upstream failure must never hand the caller the upstream body or the
+// internal "status=… body=…" shape.
 func TestWriteGrokUpstreamErrorSanitizesInternalDetail(t *testing.T) {
-	upstream := newUpstreamError(http.StatusUnauthorized, http.Header{"Retry-After": {"7"}},
-		[]byte(`{"error":{"message":"account team=acme quota exhausted; upgrade at x.ai/pricing"}}`), "node-eu-3")
+	// The typed error is assembled directly so the internal text can be
+	// inspected. The production constructor never exposes this shape to a
+	// client, and the response must not echo it when it is attached.
+	upstream := &grokUpstreamError{
+		status: http.StatusUnauthorized,
+		header: sanitizeUpstreamHeader(http.Header{"Retry-After": {"7"}}),
+		body:   boundedUpstreamBody([]byte(`{"error":{"message":"account team=acme quota exhausted; upgrade at x.ai/pricing"}}`)),
+	}
+	// The internal text must carry every detail the leak check below looks for,
+	// otherwise that check proves nothing.
+	if text := upstream.Error(); !strings.Contains(text, "acme") ||
+		!strings.Contains(text, "status=") || !strings.Contains(text, "body=") {
+		t.Fatalf("the internal error text is missing detail the leak check below needs: %q", text)
+	}
 	rec := httptest.NewRecorder()
 	writeGrokUpstreamError(rec, upstream)
 
@@ -126,14 +141,15 @@ func TestWriteGrokUpstreamErrorSanitizesInternalDetail(t *testing.T) {
 		t.Fatalf("Retry-After = %q, want 7", got)
 	}
 	body := rec.Body.String()
-	for _, leak := range []string{"node-eu-3", "acme", "x.ai/pricing", "status=", "body="} {
+	for _, leak := range []string{"acme", "x.ai/pricing", "status=", "body="} {
 		if strings.Contains(body, leak) {
 			t.Fatalf("upstream detail %q leaked to the client: %s", leak, body)
 		}
 	}
 }
 
-// A local validation error keeps its own message, and its own 400.
+// A local validation error is not an upstream failure: preserve its own
+// message and 400 status rather than replacing it with a generic 503.
 func TestWriteGrokUpstreamErrorKeepsLocalValidationMessage(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeGrokUpstreamError(rec, errors.New("missing model"))
@@ -145,38 +161,44 @@ func TestWriteGrokUpstreamErrorKeepsLocalValidationMessage(t *testing.T) {
 	}
 }
 
-func TestStreamRepeatTrackerStopsRunawayOutput(t *testing.T) {
-	tracker := &streamRepeatTracker{}
-	event := map[string]interface{}{"type": "response.output_text.delta", "delta": "loop "}
-	var err error
-	for i := 0; i <= contentDoomLoopThreshold; i++ {
-		if err = tracker.observe(event, ""); err != nil {
-			break
+// TestStreamRepeatTracker pins both ends of the doom-loop rule: one identical
+// delta past the threshold ends the turn, while a run below the threshold — and
+// a run interrupted by a different delta — is legitimate output.
+func TestStreamRepeatTracker(t *testing.T) {
+	delta := func(value string) map[string]interface{} {
+		return map[string]interface{}{"type": "response.output_text.delta", "delta": value}
+	}
+	t.Run("stops runaway output", func(t *testing.T) {
+		tracker := &streamRepeatTracker{}
+		var err error
+		for i := 0; i <= contentDoomLoopThreshold; i++ {
+			if err = tracker.observe(delta("loop "), ""); err != nil {
+				break
+			}
 		}
-	}
-	if err == nil {
-		t.Fatalf("tracker did not stop after %d identical deltas", contentDoomLoopThreshold+1)
-	}
-	if !errors.Is(err, errGrokUpstreamOutputLoop) {
-		t.Fatalf("error = %v, want errGrokUpstreamOutputLoop", err)
-	}
-}
-
-func TestStreamRepeatTrackerAllowsLegitimateRepetition(t *testing.T) {
-	tracker := &streamRepeatTracker{}
-	// Markdown separators and table borders repeat the same single character.
-	for i := 0; i < contentDoomLoopThreshold; i++ {
-		if err := tracker.observe(map[string]interface{}{"type": "response.output_text.delta", "delta": "-"}, ""); err != nil {
-			t.Fatalf("legitimate repetition rejected at %d: %v", i, err)
+		if err == nil {
+			t.Fatalf("tracker did not stop after %d identical deltas", contentDoomLoopThreshold+1)
 		}
-	}
-	// A different delta resets the run.
-	if err := tracker.observe(map[string]interface{}{"type": "response.output_text.delta", "delta": "x"}, ""); err != nil {
-		t.Fatalf("run reset rejected: %v", err)
-	}
-	if err := tracker.observe(map[string]interface{}{"type": "response.output_text.delta", "delta": "-"}, ""); err != nil {
-		t.Fatalf("post-reset delta rejected: %v", err)
-	}
+		if !errors.Is(err, errGrokUpstreamOutputLoop) {
+			t.Fatalf("error = %v, want errGrokUpstreamOutputLoop", err)
+		}
+	})
+	t.Run("allows legitimate repetition", func(t *testing.T) {
+		tracker := &streamRepeatTracker{}
+		// Markdown separators and table borders repeat the same single character.
+		for i := 0; i < contentDoomLoopThreshold; i++ {
+			if err := tracker.observe(delta("-"), ""); err != nil {
+				t.Fatalf("legitimate repetition rejected at %d: %v", i, err)
+			}
+		}
+		// A different delta resets the run.
+		if err := tracker.observe(delta("x"), ""); err != nil {
+			t.Fatalf("run reset rejected: %v", err)
+		}
+		if err := tracker.observe(delta("-"), ""); err != nil {
+			t.Fatalf("post-reset delta rejected: %v", err)
+		}
+	})
 }
 
 func TestIsPrivateBuildControlEvent(t *testing.T) {
@@ -219,77 +241,79 @@ func TestModelScopedFreeQuotaRefusal(t *testing.T) {
 	}
 }
 
-// B=3 cases: an integral argument serialized as a float must become an integer
-// literal, guided by the tool schema (Codex's decoder rejects the float form).
-func TestNormalizeFunctionArgumentsIntegralNumbers(t *testing.T) {
-	schema := map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"timeout_ms": map[string]interface{}{"type": "integer"},
-			"count":      map[string]interface{}{"type": "integer"},
-			"ratio":      map[string]interface{}{"type": "number"},
-			"nested": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"limit": map[string]interface{}{"type": "integer"},
+// TestNormalizeFunctionArguments covers the B=3 normalization rule: an integral
+// argument serialized as a float must become an integer literal, guided by the
+// tool schema (Codex's decoder rejects the float form), while a number-typed
+// field — or a payload that is not a single JSON value — is left alone.
+func TestNormalizeFunctionArguments(t *testing.T) {
+	t.Run("integral numbers become integer literals", func(t *testing.T) {
+		schema := map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"timeout_ms": map[string]interface{}{"type": "integer"},
+				"count":      map[string]interface{}{"type": "integer"},
+				"ratio":      map[string]interface{}{"type": "number"},
+				"nested": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"limit": map[string]interface{}{"type": "integer"},
+					},
+				},
+				"items": map[string]interface{}{
+					"type":  "array",
+					"items": map[string]interface{}{"type": "integer"},
 				},
 			},
-			"items": map[string]interface{}{
-				"type":  "array",
-				"items": map[string]interface{}{"type": "integer"},
-			},
-		},
-	}
-	raw := `{"timeout_ms":60000.0,"count":1e3,"ratio":1.5,"nested":{"limit":2.0},"items":[1.0,2e1]}`
-	got, changed := normalizeFunctionArguments(raw, schema)
-	if !changed {
-		t.Fatalf("expected normalization, got %q", got)
-	}
-	var decoded map[string]interface{}
-	decoder := json.NewDecoder(strings.NewReader(got))
-	decoder.UseNumber()
-	if err := decoder.Decode(&decoded); err != nil {
-		t.Fatalf("normalized arguments are not JSON: %v (%s)", err, got)
-	}
-	check := func(path string, want string) {
-		t.Helper()
-		parts := strings.Split(path, ".")
-		var current interface{} = decoded
-		for _, part := range parts {
-			asMap, ok := current.(map[string]interface{})
-			if !ok {
-				t.Fatalf("%s: path not an object in %s", path, got)
+		}
+		raw := `{"timeout_ms":60000.0,"count":1e3,"ratio":1.5,"nested":{"limit":2.0},"items":[1.0,2e1]}`
+		got, changed := normalizeFunctionArguments(raw, schema)
+		if !changed {
+			t.Fatalf("expected normalization, got %q", got)
+		}
+		var decoded map[string]interface{}
+		decoder := json.NewDecoder(strings.NewReader(got))
+		decoder.UseNumber()
+		if err := decoder.Decode(&decoded); err != nil {
+			t.Fatalf("normalized arguments are not JSON: %v (%s)", err, got)
+		}
+		check := func(path string, want string) {
+			t.Helper()
+			parts := strings.Split(path, ".")
+			var current interface{} = decoded
+			for _, part := range parts {
+				asMap, ok := current.(map[string]interface{})
+				if !ok {
+					t.Fatalf("%s: path not an object in %s", path, got)
+				}
+				current = asMap[part]
 			}
-			current = asMap[part]
+			if fmt.Sprint(current) != want {
+				t.Fatalf("%s = %v, want %s (in %s)", path, current, want, got)
+			}
 		}
-		if fmt.Sprint(current) != want {
-			t.Fatalf("%s = %v, want %s (in %s)", path, current, want, got)
+		// json.Number stringifies exactly as written, which is the point: the literal
+		// must carry no fraction and no exponent.
+		check("timeout_ms", "60000")
+		check("count", "1000")
+		check("nested.limit", "2")
+		check("ratio", "1.5")
+		if items, ok := decoded["items"].([]interface{}); !ok || fmt.Sprint(items[1]) != "20" {
+			t.Fatalf("items = %v, want [1 20] (in %s)", decoded["items"], got)
 		}
-	}
-	// json.Number stringifies exactly as written, which is the point: the literal
-	// must carry no fraction and no exponent.
-	check("timeout_ms", "60000")
-	check("count", "1000")
-	check("nested.limit", "2")
-	check("ratio", "1.5")
-	if items, ok := decoded["items"].([]interface{}); !ok || fmt.Sprint(items[1]) != "20" {
-		t.Fatalf("items = %v, want [1 20] (in %s)", decoded["items"], got)
-	}
-}
-
-func TestNormalizeFunctionArgumentsLeavesNonIntegralAlone(t *testing.T) {
-	schema := map[string]interface{}{
-		"type":       "object",
-		"properties": map[string]interface{}{"ratio": map[string]interface{}{"type": "number"}},
-	}
-	raw := `{"ratio":60000.0}`
-	if got, changed := normalizeFunctionArguments(raw, schema); changed || got != raw {
-		t.Fatalf("number-typed field must be untouched: %q (changed=%v)", got, changed)
-	}
-	// A payload that is not a single JSON value is also left alone.
-	if got, changed := normalizeFunctionArguments(`{"a":1} trailing`, schema); changed || got != `{"a":1} trailing` {
-		t.Fatalf("non-JSON payload must be untouched: %q (changed=%v)", got, changed)
-	}
+	})
+	// A number-typed field keeps its float, and a payload that is not a single
+	// JSON value is passed through untouched.
+	t.Run("non-integral payloads are untouched", func(t *testing.T) {
+		schema := map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{"ratio": map[string]interface{}{"type": "number"}},
+		}
+		for _, raw := range []string{`{"ratio":60000.0}`, `{"a":1} trailing`} {
+			if got, changed := normalizeFunctionArguments(raw, schema); changed || got != raw {
+				t.Fatalf("payload must be untouched: %q (changed=%v)", got, changed)
+			}
+		}
+	})
 }
 
 func TestNormalizeIntegralNumberBounds(t *testing.T) {

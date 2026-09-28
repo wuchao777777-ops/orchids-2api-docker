@@ -194,7 +194,10 @@ func (c *accountClientCache) evictAccounts(ids []int64) {
 // evictIfChanged drops the entry when the account no longer builds the same
 // client. It reports whether the entry was dropped.
 func (c *accountClientCache) evictIfChanged(account *store.Account) bool {
-	fingerprint := accountClientFingerprint(account, c.configForFingerprint())
+	c.mu.RLock()
+	cfg := c.cfg
+	c.mu.RUnlock()
+	fingerprint := accountClientFingerprint(account, cfg)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[account.ID]
@@ -233,13 +236,6 @@ func (c *accountClientCache) dropLocked(id int64, entry cachedAccountClient) {
 	if closer, ok := entry.client.(clientCloser); ok {
 		closer.Close()
 	}
-}
-
-// configForFingerprint exposes the config the fingerprint is computed with.
-func (c *accountClientCache) configForFingerprint() *config.Config {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.cfg
 }
 
 func (h *Handler) getOrCreateAccountClient(acc *store.Account) UpstreamClient {
@@ -389,14 +385,11 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		}
 		_, _ = hasher.Write([]byte{0})
 	}
-	writeInt := func(value int) {
-		_, _ = io.WriteString(hasher, strconv.Itoa(value))
-		_, _ = hasher.Write([]byte{0})
-	}
 	writeInt64 := func(value int64) {
 		_, _ = io.WriteString(hasher, strconv.FormatInt(value, 10))
 		_, _ = hasher.Write([]byte{0})
 	}
+	writeInt := func(value int) { writeInt64(int64(value)) }
 	writeStrings := func(values []string) {
 		writeInt(len(values))
 		for _, value := range values {

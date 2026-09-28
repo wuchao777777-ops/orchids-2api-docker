@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/util"
 )
 
 // The Cline login is the standard WorkOS device authorization grant, followed by
@@ -94,8 +96,8 @@ func (c *Client) StartLogin(ctx context.Context) (*LoginTransaction, error) {
 
 	// Only an allowed authorization host may ever be handed to a browser: this
 	// is the one place a login could be redirected to a third party.
-	page := firstNonEmpty(payload.VerifyURIComp, payload.VerifyURI)
-	if host := hostOf(page); !allowedLoginHost(host, hostOf(c.workOSAuthorizeURL)) {
+	page := util.FirstNonEmpty(payload.VerifyURIComp, payload.VerifyURI)
+	if host := util.HostOf(page); !allowedLoginHost(host, util.HostOf(c.workOSAuthorizeURL)) {
 		return nil, fmt.Errorf("%w: authorization host %q is not an allowed Cline host", ErrAuthRejected, host)
 	}
 
@@ -308,7 +310,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (Credentials,
 	}
 	return Credentials{
 		AccessToken:  strings.TrimSpace(payload.Data.AccessToken),
-		RefreshToken: firstNonEmpty(payload.Data.RefreshToken, refreshToken),
+		RefreshToken: util.FirstNonEmptyUntrimmed(payload.Data.RefreshToken, refreshToken),
 		ExpiresAt:    ParseExpiry(payload.Data.ExpiresAt),
 	}, nil
 }
@@ -318,34 +320,10 @@ func apiError(method, rawURL string, status int, raw []byte) error {
 	parts := []string{
 		fmt.Sprintf("status=%d", status),
 		fmt.Sprintf("method=%s", method),
-		fmt.Sprintf("path=%s", urlPath(rawURL)),
+		fmt.Sprintf("path=%s", util.URLPath(rawURL)),
 	}
 	if body := strings.TrimSpace(string(raw)); body != "" {
-		parts = append(parts, "message="+truncate(body, 300))
+		parts = append(parts, "message="+util.Truncate(body, 300))
 	}
 	return fmt.Errorf("cline API error: %s", strings.Join(parts, ", "))
-}
-
-func urlPath(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	return parsed.Path
-}
-
-func truncate(value string, max int) string {
-	if len(value) <= max {
-		return value
-	}
-	return value[:max] + "..."
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }

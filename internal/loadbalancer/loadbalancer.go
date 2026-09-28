@@ -307,25 +307,16 @@ func (lb *LoadBalancer) AccountChanges(ids []int64) { lb.InvalidateAccounts(ids)
 
 func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Account, error) {
 	now := time.Now()
-
-	lb.mu.RLock()
-	if len(lb.cachedAccounts) > 0 && now.Before(lb.cacheExpires) {
-		accounts := lb.cachedAccounts
-		lb.mu.RUnlock()
+	if accounts, ok := lb.cachedAccountsBefore(now); ok {
 		return accounts, nil
 	}
-	lb.mu.RUnlock()
 
 	// Use singleflight to prevent cache stampede
 	val, err, _ := lb.sfGroup.Do("getEnabledAccounts", func() (interface{}, error) {
 		// Double check after acquiring singleflight lock
-		lb.mu.RLock()
-		if len(lb.cachedAccounts) > 0 && now.Before(lb.cacheExpires) {
-			accounts := lb.cachedAccounts
-			lb.mu.RUnlock()
+		if accounts, ok := lb.cachedAccountsBefore(now); ok {
 			return accounts, nil
 		}
-		lb.mu.RUnlock()
 
 		accounts, err := lb.Store.GetEnabledAccounts(ctx)
 		if err != nil {
@@ -344,6 +335,18 @@ func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Accoun
 		return nil, err
 	}
 	return val.([]*store.Account), nil
+}
+
+// cachedAccountsBefore reports the snapshot while it is still inside its TTL. The
+// rule lives here because both the lock-free fast path and the singleflight
+// double-check must agree on when a cached read is valid.
+func (lb *LoadBalancer) cachedAccountsBefore(now time.Time) ([]*store.Account, bool) {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+	if len(lb.cachedAccounts) > 0 && now.Before(lb.cacheExpires) {
+		return lb.cachedAccounts, true
+	}
+	return nil, false
 }
 
 // selectionScratch holds the per-call working slices of one account selection.
@@ -591,11 +594,7 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 			}
 			return false
 		}
-		if acc.LastAttempt.IsZero() {
-			return false
-		}
-		cooldown := retry402Default
-		if now.Sub(acc.LastAttempt) >= cooldown {
+		if cooldownElapsed(acc.LastAttempt, retry402Default, now) {
 			lb.clearAccountStatus(ctx, acc, "402 冷却完成，自动恢复尝试")
 			return true
 		}
@@ -603,14 +602,11 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 	case "403", "404":
 		// 403/404 可能是临时封禁或配置问题。
 		// 对 Grok 来说，403 很多是 transient upstream denial，不应长时间拉黑。
-		if acc.LastAttempt.IsZero() {
-			return false
-		}
 		cooldown := retry403Default
 		if strings.EqualFold(acc.AccountType, "grok") {
 			cooldown = retry403Grok
 		}
-		if now.Sub(acc.LastAttempt) >= cooldown {
+		if cooldownElapsed(acc.LastAttempt, cooldown, now) {
 			lb.clearAccountStatus(ctx, acc, status+" 冷却完成，自动恢复尝试")
 			return true
 		}
@@ -618,15 +614,22 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 	default:
 		// Unknown status codes are treated as transient errors with a short cooldown
 		// to prevent permanent account exclusion.
-		if acc.LastAttempt.IsZero() {
-			return false
-		}
-		if now.Sub(acc.LastAttempt) >= retry401Default {
+		if cooldownElapsed(acc.LastAttempt, retry401Default, now) {
 			lb.clearAccountStatus(ctx, acc, status+" 未知状态冷却完成，自动恢复尝试")
 			return true
 		}
 		return false
 	}
+}
+
+// cooldownElapsed reports whether a status whose only recovery signal is the last
+// attempt has served its cooldown. An account with no recorded attempt is never
+// admitted by a cooldown expiring.
+func cooldownElapsed(lastAttempt time.Time, cooldown time.Duration, now time.Time) bool {
+	if lastAttempt.IsZero() {
+		return false
+	}
+	return now.Sub(lastAttempt) >= cooldown
 }
 
 func isPaidGrokBuildAccount(acc *store.Account) bool {
@@ -647,23 +650,33 @@ func isPaidGrokBuildAccount(acc *store.Account) bool {
 	return false
 }
 
-func (lb *LoadBalancer) clearAccountStatus(ctx context.Context, acc *store.Account, reason string) {
-	// Find and update the account in the cached slice so the change reflects immediately
-	lb.mu.Lock()
+// resetAccountRuntimeState drops the transient routing verdict so the account is
+// admitted again on the next selection.
+func resetAccountRuntimeState(acc *store.Account) {
 	acc.StatusCode = ""
 	acc.StatusMessage = ""
 	acc.LastAttempt = time.Time{}
 	acc.QuotaResetAt = time.Time{}
 	acc.RateLimitFailures = 0
+}
+
+// cachedAccountLocked returns the cached copy of the account with the given id,
+// or nil when the snapshot does not hold it. lb.mu must be held.
+func (lb *LoadBalancer) cachedAccountLocked(id int64) *store.Account {
 	for _, cached := range lb.cachedAccounts {
-		if cached.ID == acc.ID {
-			cached.StatusCode = ""
-			cached.StatusMessage = ""
-			cached.LastAttempt = time.Time{}
-			cached.QuotaResetAt = time.Time{}
-			cached.RateLimitFailures = 0
-			break
+		if cached.ID == id {
+			return cached
 		}
+	}
+	return nil
+}
+
+func (lb *LoadBalancer) clearAccountStatus(ctx context.Context, acc *store.Account, reason string) {
+	// Update the cached copy as well so the change reflects immediately.
+	lb.mu.Lock()
+	resetAccountRuntimeState(acc)
+	if cached := lb.cachedAccountLocked(acc.ID); cached != nil {
+		resetAccountRuntimeState(cached)
 	}
 	lb.mu.Unlock()
 	lb.persistAccountStatus(ctx, acc, reason)
@@ -677,17 +690,14 @@ func (lb *LoadBalancer) PersistAppliedAccountStatus(ctx context.Context, acc *st
 		return
 	}
 	lb.mu.Lock()
-	for _, cached := range lb.cachedAccounts {
-		if cached.ID == acc.ID {
-			cached.StatusCode = acc.StatusCode
-			cached.StatusMessage = acc.StatusMessage
-			cached.LastAttempt = acc.LastAttempt
-			cached.AuthStatus = acc.AuthStatus
-			cached.RateLimitFailures = acc.RateLimitFailures
-			cached.QuotaResetAt = acc.QuotaResetAt
-			cached.VerifiedAt = acc.VerifiedAt
-			break
-		}
+	if cached := lb.cachedAccountLocked(acc.ID); cached != nil {
+		cached.StatusCode = acc.StatusCode
+		cached.StatusMessage = acc.StatusMessage
+		cached.LastAttempt = acc.LastAttempt
+		cached.AuthStatus = acc.AuthStatus
+		cached.RateLimitFailures = acc.RateLimitFailures
+		cached.QuotaResetAt = acc.QuotaResetAt
+		cached.VerifiedAt = acc.VerifiedAt
 	}
 	lb.mu.Unlock()
 	lb.persistAccountStatus(ctx, acc, reason)
@@ -717,15 +727,12 @@ func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Accoun
 	}
 
 	// Ensure the cache is updated as well
-	for _, cached := range lb.cachedAccounts {
-		if cached.ID == acc.ID {
-			cached.StatusCode = status
-			cached.LastAttempt = now
-			cached.AuthStatus = acc.AuthStatus
-			cached.RateLimitFailures = acc.RateLimitFailures
-			cached.QuotaResetAt = acc.QuotaResetAt
-			break
-		}
+	if cached := lb.cachedAccountLocked(acc.ID); cached != nil {
+		cached.StatusCode = status
+		cached.LastAttempt = now
+		cached.AuthStatus = acc.AuthStatus
+		cached.RateLimitFailures = acc.RateLimitFailures
+		cached.QuotaResetAt = acc.QuotaResetAt
 	}
 	lb.mu.Unlock()
 	lb.persistAccountStatus(ctx, acc, "账号状态标记: "+status)

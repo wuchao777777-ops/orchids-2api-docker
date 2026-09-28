@@ -62,7 +62,6 @@
     '2_converted_prompt.md': '2 · 转换后提示词',
     '3_upstream_request.json': '3 · 上游请求',
     '3_upstream_http_error.json': '3 · 上游错误',
-    '4_upstream_sse.jsonl': '4 · 上游响应（SSE / Protobuf 解码）',
     '5_client_sse.jsonl': '5 · 返回客户端 SSE',
     '6_input_token_breakdown.json': '6 · 输入 token 分解',
     '6_summary.json': '6 · 请求摘要',
@@ -224,6 +223,37 @@
     return String(value);
   }
 
+  // --- element builders ------------------------------------------------------
+  // The detail panel and the row list are built from the same three statements
+  // (create, class, text) over and over, so those live here once: a class name is
+  // written once and the render functions read as WHAT they draw.
+  function make(tag, className, value) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (value !== undefined && value !== null) node.textContent = value;
+    return node;
+  }
+
+  function attach(parent, children) {
+    (children || []).forEach((child) => { if (child) parent.appendChild(child); });
+    return parent;
+  }
+
+  // note is the muted one-line paragraph used for every "no data", "why this is
+  // empty" and "this read failed" message in the page.
+  function note(value, className) {
+    return make('p', className || 'ops-empty', value);
+  }
+
+  // emptyRow is the full-width "nothing matched" row. colSpan counts the columns
+  // of the table it lands in, so it is passed rather than assumed.
+  function emptyRow(body, colSpan, message) {
+    const td = make('td', 'table-empty-cell', message);
+    td.colSpan = colSpan;
+    body.replaceChildren();
+    body.appendChild(attach(make('tr'), [td]));
+  }
+
   function formatTime(value) {
     if (!value) return '—';
     const date = new Date(value);
@@ -268,11 +298,15 @@
   }
 
   function badge(meta, title) {
-    const span = document.createElement('span');
-    span.className = 'logs-badge ' + meta.tone;
-    span.textContent = meta.label;
+    const span = make('span', 'logs-badge ' + meta.tone, meta.label);
     span.title = title;
     return span;
+  }
+
+  // addBadge appends an untinted label chip. The badge is the same element the
+  // status column uses; only its tone is absent.
+  function addBadge(parent, label, tone) {
+    parent.appendChild(make('span', 'logs-badge ' + (tone || ''), label));
   }
 
   function resultBadge(record) {
@@ -336,37 +370,33 @@
     const back = el('logsScopeBack');
     if (!bar || !items) return;
     const params = filters();
+    // The time range is a drill-down's most important filter and has no obvious
+    // place in a form full of text inputs, so it is always stated explicitly.
     const chips = [];
-    const addChip = (label, value) => {
-      const chip = document.createElement('span');
-      chip.className = 'logs-scope-chip';
-      const key = document.createElement('span');
-      key.className = 'logs-scope-key';
-      key.textContent = label;
-      const val = document.createElement('span');
-      val.textContent = value;
-      chip.appendChild(key);
-      chip.appendChild(val);
-      chips.push(chip);
-    };
     const since = params.get('since');
     const until = params.get('until');
     if (since || until) {
-      // The time range is a drill-down's most important filter and has no obvious
-      // place in a form full of text inputs, so it is always stated explicitly.
-      addChip('时间范围', `${since ? formatTime(since) : '不限'} → ${until ? formatTime(until) : '现在'}`);
+      chips.push(scopeChip('时间范围', `${since ? formatTime(since) : '不限'} → ${until ? formatTime(until) : '现在'}`));
     }
     FILTER_INPUTS.filter((entry) => entry.param !== 'since' && entry.param !== 'until').forEach((entry) => {
       const value = params.get(entry.param);
       if (!value) return;
       // The chip names the filter in Chinese: a raw query parameter is an
       // implementation detail, not something an operator reads.
-      addChip(FILTER_LABELS[entry.param] || entry.param, entry.param === 'outcome' ? (RESULT_LABELS[value] || value) : value);
+      chips.push(scopeChip(FILTER_LABELS[entry.param] || entry.param,
+        entry.param === 'outcome' ? (RESULT_LABELS[value] || value) : value));
     });
-    items.replaceChildren();
-    chips.forEach((chip) => items.appendChild(chip));
+    items.replaceChildren(...chips);
     bar.hidden = chips.length === 0;
     if (back) back.hidden = !state.back;
+  }
+
+  // scopeChip is one label-over-value block in the scope bar.
+  function scopeChip(label, value) {
+    return attach(make('span', 'logs-scope-chip'), [
+      make('span', 'logs-scope-key', label),
+      make('span', '', value),
+    ]);
   }
 
   function renderRows(append) {
@@ -374,17 +404,11 @@
     if (!body) return;
     if (!append) body.replaceChildren();
     if (state.records.length === 0 && !append) {
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 5;
-      td.className = 'table-empty-cell';
       // An empty page and a broken page look alike, so say which one this is and
       // what the window actually covers.
-      td.textContent = state.kind === 'request'
+      emptyRow(body, 5, state.kind === 'request'
         ? '保留窗口内没有匹配的请求。带"含诊断"的行可以在详情里展开该请求的诊断内容。'
-        : '保留窗口内没有匹配的记录。';
-      tr.appendChild(td);
-      body.appendChild(tr);
+        : '保留窗口内没有匹配的记录。');
       return;
     }
     if (append) {
@@ -396,114 +420,75 @@
       });
     }
     const start = append ? body.querySelectorAll('tr[data-index]').length : 0;
-    state.records.slice(start).forEach((record, index) => {
+    const rows = state.records.slice(start).map((record, index) => {
       const event = record.event || {};
-      const tr = document.createElement('tr');
+      const tr = make('tr');
       tr.dataset.index = String(start + index);
-
-      const time = document.createElement('td');
-      time.className = 'logs-cell-time';
-      time.textContent = formatTime(event.timestamp);
-      tr.appendChild(time);
-
-      const action = document.createElement('td');
-      action.className = 'logs-cell-action';
       const probe = isProbeRecord(event);
       const channelLabel = KIND_LABELS[event.channel] || event.channel || '';
       const label = text(ACTION_LABELS[event.action] || actionLabel(event.action), '—');
-      if (channelLabel) {
-        action.textContent = channelLabel + ' · ' + label;
-      } else {
-        // An operation has no channel: printing the journal's kind there made every
-        // row of the operation log read "操作 · <machine id>".
-        action.textContent = label;
-      }
+      // An operation has no channel: printing the journal's kind there made every
+      // row of the operation log read "操作 · <machine id>".
+      const action = make('td', 'logs-cell-action', channelLabel ? channelLabel + ' · ' + label : label);
       action.title = String(event.action || '');
       if (probe) {
         // A probe's model is the placeholder "__probe__" and its own channel is the
         // reserved "probe" label; what an operator needs to see is WHICH channel was
         // probed, so the badge carries the provider instead of the placeholder.
-        const target = document.createElement('span');
-        target.className = 'logs-badge';
-        target.textContent = text(event.provider || '未标注渠道', '未标注渠道');
+        const target = make('span', 'logs-badge', text(event.provider || '未标注渠道', '未标注渠道'));
         target.title = '被探测渠道（合成探测请求，模型占位为 ' + PROBE_MODEL_LABEL + '）';
         action.appendChild(target);
       } else if (event.model) {
-        const badge = document.createElement('span');
-        badge.className = 'logs-badge';
-        badge.textContent = event.model;
-        action.appendChild(badge);
+        addBadge(action, event.model);
       }
       if (record.diagnostics || String(event.kind || '') === DIAGNOSTIC_INDEX_KIND) {
-        const badge = document.createElement('span');
-        badge.className = 'logs-badge is-info';
-        badge.textContent = '含诊断';
-        action.appendChild(badge);
+        addBadge(action, '含诊断', 'is-info');
       }
-      tr.appendChild(action);
-
-      const target = document.createElement('td');
-      target.className = 'logs-cell-target';
       // "accounts:120" is an account row; an operation's target is read far more
       // often than it is grepped, so it is named.
-      const targetText = targetLabel(event.target, event.action);
-      target.textContent = targetText || text(event.account_id, '—');
+      const target = make('td', 'logs-cell-target', targetLabel(event.target, event.action) || text(event.account_id, '—'));
       if (event.target) target.title = event.target;
-      tr.appendChild(target);
-
-      const status = document.createElement('td');
-      status.className = 'logs-cell-status';
+      const status = make('td', 'logs-cell-status');
       status.appendChild(resultBadge(record));
-      tr.appendChild(status);
-
-      const duration = document.createElement('td');
-      duration.className = 'logs-cell-duration';
-      duration.textContent = event.duration_ms ? event.duration_ms + ' ms' : '—';
-      tr.appendChild(duration);
-
+      attach(tr, [
+        make('td', 'logs-cell-time', formatTime(event.timestamp)),
+        action,
+        target,
+        status,
+        make('td', 'logs-cell-duration', event.duration_ms ? event.duration_ms + ' ms' : '—'),
+      ]);
       tr.addEventListener('click', () => select(start + index));
-      body.appendChild(tr);
+      return tr;
     });
+    rows.forEach((row) => body.appendChild(row));
   }
 
   // A fact is a small label-over-value block: in a 560px drawer two columns of
   // facts fit where a definition list needed thirteen rows, and the fields an
   // operator actually came for stop being buried under empty ones.
   function fact(label, value, options) {
-    const wrap = document.createElement('div');
-    wrap.className = 'logs-fact' + (options && options.wide ? ' is-wide' : '');
-    const term = document.createElement('span');
-    term.className = 'logs-fact-label';
-    term.textContent = label;
-    const detail = document.createElement('span');
-    detail.className = 'logs-fact-value';
-    if (options && options.empty) detail.classList.add('is-empty');
-    detail.textContent = value;
-    if (options && options.title) detail.title = options.title;
-    wrap.appendChild(term);
-    wrap.appendChild(detail);
-    return wrap;
+    const options_ = options || {};
+    const detail = make('span', 'logs-fact-value' + (options_.empty ? ' is-empty' : ''), value);
+    if (options_.title) detail.title = options_.title;
+    return attach(make('div', 'logs-fact' + (options_.wide ? ' is-wide' : '')), [
+      make('span', 'logs-fact-label', label),
+      detail,
+    ]);
   }
 
   function factsGrid(facts) {
-    const grid = document.createElement('div');
-    grid.className = 'logs-facts';
-    facts.forEach((node) => grid.appendChild(node));
+    const grid = make('div', 'logs-facts');
+    (facts || []).forEach((node) => grid.appendChild(node));
     return grid;
   }
 
   function sectionTitle(text_) {
-    const node = document.createElement('div');
-    node.className = 'logs-detail-section-title';
-    node.textContent = text_;
-    return node;
+    return make('div', 'logs-detail-section-title', text_);
   }
 
   function detailAction(label, onClick, titleText) {
-    const button = document.createElement('button');
+    const button = make('button', 'btn btn-sm', label);
     button.type = 'button';
-    button.className = 'btn btn-sm';
-    button.textContent = label;
     if (titleText) button.title = titleText;
     button.addEventListener('click', onClick);
     return button;
@@ -541,10 +526,7 @@
     if (!record) {
       if (title) title.textContent = '详情';
       if (sub) sub.textContent = '选择左侧一条记录查看详情';
-      const empty = document.createElement('p');
-      empty.className = 'ops-empty';
-      empty.textContent = '选择左侧一条记录查看详情。';
-      panel.appendChild(empty);
+      panel.appendChild(note('选择左侧一条记录查看详情。'));
       return;
     }
     const event = record.event || {};
@@ -554,8 +536,7 @@
     if (sub) sub.textContent = formatTime(event.timestamp) + ' · ' + text(event.request_id, '无请求 ID');
 
     // --- outcome first: a failing request is the usual reason this panel is open ---
-    const outcomeRow = document.createElement('div');
-    outcomeRow.className = 'logs-detail-outcome';
+    const outcomeRow = make('div', 'logs-detail-outcome');
     outcomeRow.appendChild(resultBadge(record));
     // The journal's own status is worth printing when it says something the class
     // does not (an upstream finish reason like "length"). For records written with
@@ -565,10 +546,7 @@
     const classToken = String(record.outcome_class || '');
     const isInferenceRecord = String(event.kind || '') === 'request';
     if (isInferenceRecord && rawStatus && rawStatus !== classToken && rawStatus !== outcome?.label) {
-      const raw = document.createElement('span');
-      raw.className = 'logs-detail-raw';
-      raw.textContent = '上游状态：' + rawStatus;
-      outcomeRow.appendChild(raw);
+      outcomeRow.appendChild(make('span', 'logs-detail-raw', '上游状态：' + rawStatus));
     }
     // The HTTP status and the first-token latency are not columns of a journal row:
     // the request middleware keeps them in metadata (http_status, first_token_ms),
@@ -576,25 +554,16 @@
     // top-level fields meant a recorded 429 and a measured 135 ms were both dropped.
     const meta = event.metadata || {};
     const httpStatus = event.http_status || meta.http_status;
-    if (httpStatus) {
-      const http = document.createElement('span');
-      http.className = 'logs-detail-raw';
-      http.textContent = 'HTTP ' + httpStatus;
-      outcomeRow.appendChild(http);
-    }
+    if (httpStatus) outcomeRow.appendChild(make('span', 'logs-detail-raw', 'HTTP ' + httpStatus));
     panel.appendChild(outcomeRow);
 
     if (event.error) {
       panel.appendChild(sectionTitle('失败原因'));
-      const pre = document.createElement('pre');
-      pre.className = 'logs-detail-error';
-      pre.textContent = event.error;
-      panel.appendChild(pre);
+      panel.appendChild(make('pre', 'logs-detail-error', event.error));
     }
 
     // --- actions: what you do next with a record you are looking at ---------------
-    const actions = document.createElement('div');
-    actions.className = 'logs-detail-actions';
+    const actions = make('div', 'logs-detail-actions');
     if (event.request_id) {
       actions.appendChild(detailAction('复制请求 ID', () => copyToClipboard(event.request_id), event.request_id));
     }
@@ -666,14 +635,9 @@
 
     if (event.details) {
       panel.appendChild(sectionTitle(String(event.kind || '') === DIAGNOSTIC_INDEX_KIND ? '诊断内容摘要' : '变更摘要（凭据已脱敏）'));
-      const pre = document.createElement('pre');
-      pre.textContent = event.details;
-      panel.appendChild(pre);
+      panel.appendChild(make('pre', '', event.details));
       if (event.redacted && event.redacted.length) {
-        const maskNote = document.createElement('p');
-        maskNote.className = 'ops-empty';
-        maskNote.textContent = '已脱敏字段：' + event.redacted.join('、');
-        panel.appendChild(maskNote);
+        panel.appendChild(note('已脱敏字段：' + event.redacted.join('、')));
       }
     }
 
@@ -681,34 +645,30 @@
     if (attempts.length) {
       const failures = attempts.filter(attemptFailed).length;
       panel.appendChild(sectionTitle(`上游尝试（${attempts.length} 次${failures ? '，其中失败 ' + failures + ' 次' : ''}）`));
-      const ul = document.createElement('ul');
-      ul.className = 'logs-attempts';
+      const ul = make('ul', 'logs-attempts');
       attempts.forEach((attempt) => {
-        const li = document.createElement('li');
-        li.className = 'logs-attempt';
-        if (attemptFailed(attempt)) li.classList.add('is-failed');
-        const head = document.createElement('div');
-        head.textContent = `第 ${text(attempt.attempt, '?')} 次 · ${text(attempt.provider, '—')} · ${attempt.duration_ms || 0} ms`;
+        const li = make('li', 'logs-attempt' + (attemptFailed(attempt) ? ' is-failed' : ''));
+        const head = make('div', '',
+          `第 ${text(attempt.attempt, '?')} 次 · ${text(attempt.provider, '—')} · ${attempt.duration_ms || 0} ms`);
         head.appendChild(badge(statusMeta(attempt.status), text(attempt.status, '—')));
+        const detail = attempt.metadata || {};
+        const upstream = detail.upstream_url || '';
+        const attemptHTTP = detail.http_status || '';
         li.appendChild(head);
-        const meta = document.createElement('div');
-        meta.className = 'ops-empty';
-        const upstream = attempt.metadata && attempt.metadata.upstream_url ? attempt.metadata.upstream_url : '';
-        const httpStatus = attempt.metadata && attempt.metadata.http_status ? attempt.metadata.http_status : '';
-        meta.textContent = [upstream, httpStatus ? 'HTTP ' + httpStatus : ''].filter(Boolean).join(' · ');
-        li.appendChild(meta);
+        li.appendChild(note([upstream, attemptHTTP ? 'HTTP ' + attemptHTTP : ''].filter(Boolean).join(' · ')));
         // The upstream's own reason. Without it a refused attempt reads "限流 · HTTP 429",
         // which cannot be told apart from a spent daily quota, a challenge, or a real rate
         // limit — the difference the operator needs to act on.
-        const upstreamError = attempt.metadata && attempt.metadata.response_error ? attempt.metadata.response_error : null;
+        const upstreamError = detail.response_error || null;
         if (upstreamError) {
-          const reason = document.createElement('div');
-          reason.className = 'logs-attempt-reason';
           const code = text(upstreamError.code || upstreamError.type, '');
           const message = text(upstreamError.message, '');
-          reason.textContent = [code, message].filter(Boolean).join(' — ');
-          reason.title = reason.textContent;
-          if (reason.textContent) li.appendChild(reason);
+          const reason = [code, message].filter(Boolean).join(' — ');
+          if (reason) {
+            const node = make('div', 'logs-attempt-reason', reason);
+            node.title = reason;
+            li.appendChild(node);
+          }
         }
         ul.appendChild(li);
       });
@@ -739,43 +699,31 @@
     const isDiagnosticEntry = String(event.kind || '') === DIAGNOSTIC_INDEX_KIND;
     if (!isDiagnosticEntry && !index) return;
 
-    const container = document.createElement('div');
-    container.className = 'logs-diagnostics';
-
-    const title = document.createElement('div');
-    title.textContent = '请求诊断日志';
-    container.appendChild(title);
+    const container = make('div', 'logs-diagnostics');
+    container.appendChild(make('div', '', '请求诊断日志'));
 
     const requestID = text(event.request_id, '');
     if (index && index.metadata) {
-      const summary = document.createElement('p');
-      summary.className = 'ops-empty';
+      const indexMeta = index.metadata;
       const parts = [];
-      if (Array.isArray(index.metadata.sections) && index.metadata.sections.length) {
-        parts.push(index.metadata.sections.length + ' 段');
+      if (Array.isArray(indexMeta.sections) && indexMeta.sections.length) {
+        parts.push(indexMeta.sections.length + ' 段');
       }
-      if (index.metadata.bytes) parts.push(formatBytes(index.metadata.bytes));
-      if (index.metadata.truncated) parts.push('已截断');
-      if (index.metadata.retention) parts.push('保留 ' + index.metadata.retention);
-      summary.textContent = parts.join(' · ');
-      container.appendChild(summary);
+      if (indexMeta.bytes) parts.push(formatBytes(indexMeta.bytes));
+      if (indexMeta.truncated) parts.push('已截断');
+      if (indexMeta.retention) parts.push('保留 ' + indexMeta.retention);
+      container.appendChild(note(parts.join(' · ')));
     }
 
     if (!requestID) {
-      const empty = document.createElement('p');
-      empty.className = 'ops-empty';
-      empty.textContent = '该记录没有请求 ID，无法定位诊断内容。';
-      container.appendChild(empty);
+      container.appendChild(note('该记录没有请求 ID，无法定位诊断内容。'));
       panel.appendChild(container);
       return;
     }
 
-    const body = document.createElement('div');
-    body.className = 'logs-diagnostic-body';
-    const button = document.createElement('button');
+    const body = make('div', 'logs-diagnostic-body');
+    const button = make('button', 'btn', '展开诊断内容');
     button.type = 'button';
-    button.className = 'btn';
-    button.textContent = '展开诊断内容';
     button.addEventListener('click', () => loadDiagnostics(requestID, body, button));
     container.appendChild(button);
     container.appendChild(body);
@@ -794,74 +742,47 @@
       });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
-      if (!payload.available) {
-        const empty = document.createElement('p');
-        empty.className = 'ops-empty';
-        empty.textContent = payload.note || '没有该请求的诊断记录。';
-        body.appendChild(empty);
-      } else {
-        renderBundle(body, payload.entry || {}, payload.retention || '');
-      }
+      if (!payload.available) body.appendChild(note(payload.note || '没有该请求的诊断记录。'));
+      else renderBundle(body, payload.entry || {}, payload.retention || '');
     } catch (error) {
-      const failed = document.createElement('p');
-      failed.className = 'ops-empty';
-      failed.textContent = '读取诊断日志失败：' + (error.message || error);
-      body.appendChild(failed);
+      body.appendChild(note('读取诊断日志失败：' + (error.message || error)));
     }
     if (button) { button.disabled = false; button.textContent = '重新读取诊断内容'; }
   }
 
   function renderBundle(container, entry, retention) {
     const sections = Array.isArray(entry.sections) ? entry.sections : [];
-    const meta = document.createElement('p');
-    meta.className = 'ops-empty';
     const parts = [`${sections.length} 段`, formatBytes(entry.bytes || 0)];
     if (entry.duration_ms) parts.push('请求耗时 ' + entry.duration_ms + ' ms');
     if (retention) parts.push('保留 ' + retention);
     if (entry.truncated) parts.push('已截断');
-    meta.textContent = parts.join(' · ');
-    container.appendChild(meta);
+    container.appendChild(note(parts.join(' · ')));
 
-    if (entry.note) {
-      const note = document.createElement('p');
-      note.className = 'ops-empty';
-      note.textContent = entry.note;
-      container.appendChild(note);
-    }
+    if (entry.note) container.appendChild(note(entry.note));
     if (sections.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'ops-empty';
-      empty.textContent = '该请求没有捕获到内容。';
-      container.appendChild(empty);
+      container.appendChild(note('该请求没有捕获到内容。'));
       return;
     }
 
     sections.forEach((section) => {
-      const details = document.createElement('details');
-      details.className = 'logs-section';
+      const details = make('details', 'logs-section');
       // A failure artifact is what an operator came for; everything else starts
       // collapsed so a 16 KiB SSE dump does not bury it.
       if (section.name === '3_upstream_http_error.json' || section.name === '1_early_exit.json' || /^upstream_\d+_(error|read_error)\.json$/.test(section.name)) {
         details.open = true;
       }
-      const summary = document.createElement('summary');
-      summary.textContent = sectionLabel(section);
-      const size = document.createElement('span');
-      size.className = 'ops-empty';
-      size.textContent = ' ' + formatBytes(section.bytes || 0) + (section.truncated ? ' · 已截断' : '');
-      summary.appendChild(size);
+      const summary = make('summary', '', sectionLabel(section));
+      summary.appendChild(make('span', 'ops-empty',
+        ' ' + formatBytes(section.bytes || 0) + (section.truncated ? ' · 已截断' : '')));
       details.appendChild(summary);
-
-      const pre = document.createElement('pre');
-      pre.textContent = section.payload || '（空）';
-      details.appendChild(pre);
+      details.appendChild(make('pre', '', section.payload || '（空）'));
       container.appendChild(details);
     });
   }
 
   function scopeNote() {
-    const note = el('logsFilterScope');
-    if (note) note.textContent = FILTER_HINTS[state.kind] || '';
+    const hint = el('logsFilterScope');
+    if (hint) hint.textContent = FILTER_HINTS[state.kind] || '';
     // The second column holds a channel only for inference traffic; an operation has
     // none, so the header says what the column really contains.
     const header = el('logsActionHeader');

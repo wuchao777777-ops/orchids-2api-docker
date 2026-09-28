@@ -63,34 +63,40 @@ const alertingSuccessTargetSource = "告警阈值 SuccessRateWarning"
 // Rules: the shipped policy is the honest fallback, because a returned 0 would
 // make the page print "目标 0.0%" and look broken.
 func successTarget(engine *alerting.Engine) (float64, string) {
-	rules := engine.Thresholds()
-	if rules.SuccessRateWarning <= 0 {
-		rules.SuccessRateWarning = alerting.DefaultRules().SuccessRateWarning
-	}
-	return rules.SuccessRateWarning, alertingSuccessTargetSource
+	return successTargets(engine).SuccessRateWarning, alertingSuccessTargetSource
 }
 
 // successTargetCritical is the severe line: below it a channel is broken whatever
 // the failure count. It rides along because the alert text quotes the very same
 // number, and one source is better than two that can disagree.
 func successTargetCritical(engine *alerting.Engine) float64 {
+	return successTargets(engine).SuccessRateCritical
+}
+
+// successTargets reads both success-rate thresholds, falling back to the shipped
+// policy wherever the engine carries no usable line. A nil engine — aggregation
+// disabled, a test, or a deployment that never wired alerting — still has to
+// answer, and so does an engine built from a zero-value Rules: a returned 0
+// would make the page print "目标 0.0%" and look broken.
+func successTargets(engine *alerting.Engine) alerting.Rules {
 	rules := engine.Thresholds()
-	if rules.SuccessRateCritical <= 0 {
-		rules.SuccessRateCritical = alerting.DefaultRules().SuccessRateCritical
+	defaults := alerting.DefaultRules()
+	if rules.SuccessRateWarning <= 0 {
+		rules.SuccessRateWarning = defaults.SuccessRateWarning
 	}
-	return rules.SuccessRateCritical
+	if rules.SuccessRateCritical <= 0 {
+		rules.SuccessRateCritical = defaults.SuccessRateCritical
+	}
+	return rules
 }
 
 // HandleOpsOverview answers the operations overview: KPI totals, a per-minute
 // trend and the current alert set. Every number states its sample count, so the
 // UI can show "暂无样本" instead of a healthy-looking zero.
 func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-
 	window, since, until := a.parseOpsWindow(r)
 	channels, aggregates, _ := a.opsChannels(r.Context(), r, since, until)
 	target := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("channel")))
@@ -129,7 +135,7 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 	if a.opsAggregator == nil || !a.opsAggregator.Enabled() {
 		payload["available"] = false
 		payload["note"] = "指标聚合需要 Redis；当前部署未启用。"
-		_ = json.NewEncoder(w).Encode(payload)
+		writeJSON(w, payload)
 		return
 	}
 	payload["available"] = true
@@ -158,20 +164,18 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 	payload["alerts"] = a.firingAlerts()
 	payload["concurrency"] = a.currentConcurrency()
 
-	_ = json.NewEncoder(w).Encode(payload)
+	writeJSON(w, payload)
 }
 
 // HandleOpsChannels answers the channel × model status matrix on its own, which
 // lets the page refresh it without recomputing the trend.
 func (a *API) HandleOpsChannels(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 	_, since, until := a.parseOpsWindow(r)
 	channels, aggregates, _ := a.opsChannels(r.Context(), r, since, until)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"matrix":              a.opsMatrix(r.Context(), channels, since, until),
 		"excluded_aggregates": aggregates,
 		"alerts":              a.firingAlerts(),
@@ -181,35 +185,32 @@ func (a *API) HandleOpsChannels(w http.ResponseWriter, r *http.Request) {
 
 // HandleOpsAlerts answers the currently firing alerts.
 func (a *API) HandleOpsAlerts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 	alerts := a.firingAlerts()
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"alerts": alerts, "count": len(alerts)})
+	writeJSON(w, map[string]interface{}{"alerts": alerts, "count": len(alerts)})
 }
 
 // HandleOpsAlertRules exposes the exact policy used by the alert engine. Saved
 // rules are persisted in Redis and take effect on the next evaluation tick.
 func (a *API) HandleOpsAlertRules(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
 	defaults := alerting.DefaultRules()
 	if a == nil || a.alertEngine == nil || a.store == nil || a.store.RedisClient() == nil {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"rules": defaults, "defaults": defaults, "editable": false,
 			"note": "告警规则需要 Redis 和告警引擎。",
 		})
 		return
 	}
 	if r.Method == http.MethodGet {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, map[string]interface{}{
 			"rules": a.alertEngine.Thresholds(), "defaults": defaults, "editable": true,
 		})
 		return
 	}
 	if r.Method != http.MethodPut {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 		return
 	}
 	var rules alerting.Rules
@@ -230,7 +231,7 @@ func (a *API) HandleOpsAlertRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = a.alertEngine.SetThresholds(rules)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"rules": rules, "defaults": defaults, "editable": true})
+	writeJSON(w, map[string]interface{}{"rules": rules, "defaults": defaults, "editable": true})
 }
 
 // journalAttemptLookback bounds the extra scan that recovers upstream attempts whose
@@ -252,7 +253,7 @@ func (a *API) HandleJournalRecords(w http.ResponseWriter, r *http.Request) {
 		// operation). Answering explicitly beats a confusing 405.
 		http.Error(w, "no journal action is defined", http.StatusNotImplemented)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 	}
 }
 
@@ -286,6 +287,13 @@ func pricingBreakdownForJournal(event audit.Event) (pricing.Breakdown, bool) {
 	return breakdown, true
 }
 
+// metadataInt reads an integer the journal kept under metadata. The request
+// record's HTTP status, the media counts a row priced, and the first-token
+// latency live there rather than in a column of their own, and they arrive as
+// whatever the encoder on the other side produced: a JSON number, a Go integer,
+// or a stringified one. One reader for all of them keeps the log centre's
+// outcome class and the journal's cost breakdown in agreement about what a row
+// said.
 func metadataInt(metadata map[string]interface{}, key string) int64 {
 	switch value := metadata[key].(type) {
 	case int:
@@ -294,6 +302,12 @@ func metadataInt(metadata map[string]interface{}, key string) int64 {
 		return value
 	case float64:
 		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(value))
+		return int64(parsed)
 	default:
 		return 0
 	}
@@ -304,18 +318,7 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "journal requires Redis storage", http.StatusServiceUnavailable)
 		return
 	}
-	limit := 100
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil {
-			limit = parsed
-		}
-	}
-	if limit < 1 {
-		limit = 1
-	}
-	if limit > 500 {
-		limit = 500
-	}
+	limit := parseAuditLimit(r)
 	kind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("kind")))
 	if kind == "" {
 		kind = string(audit.KindRequest)
@@ -327,15 +330,7 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 	}
 	filter.kind = kind
 
-	maxID := "+"
-	if before := strings.TrimSpace(r.URL.Query().Get("before")); before != "" {
-		maxID = "(" + before
-	} else if !filter.until.IsZero() {
-		// Stream ids are time-ordered, so a window that ends in the past ("the minute
-		// this chart spike happened") starts its scan inside the window instead of
-		// walking the newest entries that the filter would discard.
-		maxID = "(" + strconv.FormatInt(filter.until.UnixMilli()+1, 10)
-	}
+	maxID := journalMaxID(r, filter)
 
 	client := a.store.RedisClient()
 	key := a.store.RedisPrefix() + "audit:log"
@@ -470,8 +465,7 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 	case int64(len(entries)) >= scanCap && len(entries) > 0:
 		nextCursor = entries[len(entries)-1].ID
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"data":        records,
 		"next_cursor": nextCursor,
 		"kind":        kind,

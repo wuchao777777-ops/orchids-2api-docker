@@ -2,7 +2,6 @@ package qoder
 
 import (
 	"bytes"
-	"strings"
 
 	"github.com/goccy/go-json"
 )
@@ -127,27 +126,4 @@ func (m modelEntry) ContextWindowInfo() ContextWindowInfo {
 		info.DefaultContextTokens = 0
 	}
 	return info
-}
-
-// CatalogContextWindowDetails exposes tier metadata separately from the legacy
-// CatalogContextWindows input-budget projection. Ambiguous names follow Resolve.
-func CatalogContextWindowDetails(ids []string) map[string]ContextWindowInfo {
-	catalog := catalogFromIDs(ids)
-	if catalog.Len() == 0 {
-		return nil
-	}
-	out := make(map[string]ContextWindowInfo)
-	for _, entry := range catalog.entries {
-		for _, name := range []string{entry.Key, entry.Name, entry.DisplayName} {
-			name = strings.ToLower(strings.TrimSpace(name))
-			if name == "" {
-				continue
-			}
-			resolved, err := catalog.Resolve(name)
-			if err == nil {
-				out[name] = resolved.ContextWindowInfo()
-			}
-		}
-	}
-	return out
 }

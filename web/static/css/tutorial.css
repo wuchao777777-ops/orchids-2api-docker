@@ -1,5 +1,3 @@
-.tut-page { padding-bottom: var(--space-10); }
-
 .tut-section {
   margin-bottom: var(--space-5);
   scroll-margin-top: var(--space-6);
@@ -10,11 +8,6 @@
 .tut-section-head {
   padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid var(--border-color);
-}
-
-.tut-section-head h2 {
-  font-size: 0.98rem;
-  font-weight: 650;
 }
 
 .tut-section-head p,
@@ -157,12 +150,6 @@
   overflow-x: auto;
 }
 
-.tut-route-rules {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
 .tut-route-rule {
   display: grid;
   gap: var(--space-2);
@@ -172,8 +159,6 @@
   border-radius: var(--radius-md);
   background: var(--surface-2);
 }
-
-.tut-route-rule.is-warning { border-left-color: var(--warn); }
 
 .tut-rule-label { color: var(--text-main); font-size: 0.8rem; font-weight: 650; }
 
@@ -229,7 +214,7 @@
 
 .tut-faq summary::-webkit-details-marker { display: none; }
 .tut-faq summary::after { content: "+"; position: absolute; right: var(--space-4); color: var(--text-muted); }
-.tut-faq details[open] summary { border-bottom: 1px solid var(--border-color); }
+
 .tut-faq details[open] summary::after { content: "−"; }
 .tut-faq p { padding: var(--space-3) var(--space-4) var(--space-4); }
 

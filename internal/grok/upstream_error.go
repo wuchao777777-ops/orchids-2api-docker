@@ -19,7 +19,6 @@ type grokUpstreamError struct {
 	status int
 	header http.Header
 	body   string
-	nodeID string
 	prefix string // e.g. "grok cli upstream"; defaults to "grok upstream"
 }
 
@@ -31,9 +30,6 @@ func (e *grokUpstreamError) Error() string {
 	var b strings.Builder
 	b.WriteString(prefix)
 	fmt.Fprintf(&b, " status=%d", e.status)
-	if e.nodeID != "" {
-		b.WriteString(" node=" + e.nodeID)
-	}
 	if e.body != "" {
 		b.WriteString(" body=" + e.body)
 	}
@@ -47,18 +43,8 @@ func (e *grokUpstreamError) RetryAfter() time.Duration {
 	return parseRetryAfterHeader(e.header.Get("Retry-After"), time.Now())
 }
 
-// newUpstreamError builds a typed error with a sanitized header copy and a
-// bounded body.
-func newUpstreamError(status int, header http.Header, body []byte, nodeID string) error {
-	return &grokUpstreamError{
-		status: status,
-		header: sanitizeUpstreamHeader(header),
-		body:   boundedUpstreamBody(body),
-		nodeID: nodeID,
-	}
-}
-
-// newCLIUpstreamError is newUpstreamError with a CLI-prefixed message.
+// newCLIUpstreamError builds a typed error with a sanitized header copy, a
+// bounded body, and a CLI-prefixed message.
 func newCLIUpstreamError(status int, header http.Header, body []byte) error {
 	return &grokUpstreamError{
 		status: status,

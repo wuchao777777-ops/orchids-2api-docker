@@ -26,32 +26,31 @@ func normalizeRequestedModelID(modelID string) string {
 	return modelID
 }
 
-func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) (string, *store.Model) {
+// lookupModelRow resolves a requested model id to its catalog row. The id is
+// matched in normalized form; a non-empty channel limits the lookup to that
+// channel's catalog. It returns nil when no row matches, the id is empty, or the
+// store is unavailable.
+func (h *Handler) lookupModelRow(ctx context.Context, channel, modelID string) *store.Model {
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
-		return modelID, nil
+		return nil
 	}
 	candidate := normalizeRequestedModelID(modelID)
 	if candidate == "" {
-		return modelID, nil
+		return nil
 	}
-	if m, err := h.loadBalancer.Store.GetModelByModelID(ctx, candidate); err == nil && m != nil {
-		return candidate, m
+	var (
+		m   *store.Model
+		err error
+	)
+	if channel == "" {
+		m, err = h.loadBalancer.Store.GetModelByModelID(ctx, candidate)
+	} else {
+		m, err = h.loadBalancer.Store.GetModelByChannelAndModelID(ctx, channel, candidate)
 	}
-	return modelID, nil
-}
-
-func (h *Handler) resolveModelAliasForChannel(ctx context.Context, channel, modelID string) (string, *store.Model) {
-	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
-		return modelID, nil
+	if err != nil || m == nil {
+		return nil
 	}
-	candidate := normalizeRequestedModelID(modelID)
-	if candidate == "" {
-		return modelID, nil
-	}
-	if m, err := h.loadBalancer.Store.GetModelByChannelAndModelID(ctx, channel, candidate); err == nil && m != nil {
-		return candidate, m
-	}
-	return modelID, nil
+	return m
 }
 
 // ChannelForModel reports the channel a model id is registered under, or an
@@ -132,22 +131,18 @@ func isModelMissingError(err error) bool {
 // no channel at all, so a path-only answer silently degrades to the generic
 // code path and the token count comes back with the wrong profile).
 func (h *Handler) ModelChannel(r *http.Request, modelID string) string {
+	ctx := context.Background()
 	if r != nil {
 		if channel := channelFromPath(r.URL.Path); channel != "" {
 			return channel
 		}
+		ctx = r.Context()
 	}
 	if h == nil {
 		return ""
 	}
-	ctx := context.Background()
-	if r != nil {
-		ctx = r.Context()
-	}
-	if modelID == "" {
-		if r != nil {
-			modelID = middleware.RequestModelFromContext(ctx)
-		}
+	if modelID == "" && r != nil {
+		modelID = middleware.RequestModelFromContext(ctx)
 	}
 	return h.ChannelForModel(ctx, modelID)
 }
@@ -226,14 +221,7 @@ func (h *Handler) resolveEffortModelVariant(ctx context.Context, modelID, effort
 	if modelID == "" || h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return modelID
 	}
-	lookup := func(id string) *store.Model {
-		if forcedChannel != "" {
-			_, m := h.resolveModelAliasForChannel(ctx, forcedChannel, id)
-			return m
-		}
-		_, m := h.resolveModelAlias(ctx, id)
-		return m
-	}
+	lookup := func(id string) *store.Model { return h.lookupModelRow(ctx, forcedChannel, id) }
 	if m := lookup(modelID); m != nil {
 		return modelID
 	}
@@ -386,7 +374,9 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	}
 	model := strings.TrimSpace(opts.ModelID)
 	channel := strings.ToLower(strings.TrimSpace(targetChannel))
-	needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "qoder" || channel == "workbuddy" || channel == "cline")
+	// honorsModelCooldown already covers the qoder and workbuddy channels; cline
+	// is the one extra channel whose catalog the filter below understands.
+	needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "cline")
 	if needsFilter {
 		return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
 			if channel == "cline" && !cline.CatalogSupportsModel(acc.ClineModelIDs, model) {
@@ -468,26 +458,17 @@ func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forced
 	if modelID == "" {
 		return nil, nil
 	}
-	var m *store.Model
-	if forcedChannel != "" {
-		_, m = h.resolveModelAliasForChannel(ctx, forcedChannel, modelID)
-	} else {
-		_, m = h.resolveModelAlias(ctx, modelID)
-	}
+	m := h.lookupModelRow(ctx, forcedChannel, modelID)
 	if m == nil {
 		return nil, fmt.Errorf("model not found")
 	}
 	if !m.Status.Enabled() {
 		return nil, fmt.Errorf("model not available")
 	}
-	if forcedChannel != "" {
-		mChannel := strings.TrimSpace(m.Channel)
-		if mChannel == "" {
-			mChannel = ""
-		}
-		if !sameModelChannel(mChannel, forcedChannel) {
-			return nil, fmt.Errorf("model not found")
-		}
+	// A channel-pinned path must not serve a model that belongs to another
+	// channel: it is reported as simply unknown for that route.
+	if forcedChannel != "" && !sameModelChannel(m.Channel, forcedChannel) {
+		return nil, fmt.Errorf("model not found")
 	}
 	return m, nil
 }
@@ -496,11 +477,7 @@ func sameModelChannel(a, b string) bool {
 	normalize := func(value string) string {
 		value = strings.ToLower(strings.TrimSpace(value))
 		value = strings.ReplaceAll(value, "_", "-")
-		value = strings.ReplaceAll(value, " ", "-")
-		if value == "" {
-			return ""
-		}
-		return value
+		return strings.ReplaceAll(value, " ", "-")
 	}
 	return normalize(a) == normalize(b)
 }
@@ -548,6 +525,18 @@ func (h *Handler) updateAccountStats(ctx context.Context, account *store.Account
 	}
 }
 
+// popPendingStats takes one queued completion out of the pending map. It reports
+// false when the queue is empty.
+func (h *Handler) popPendingStats() (string, accountStatsDelta, bool) {
+	h.statsMu.Lock()
+	defer h.statsMu.Unlock()
+	for key, pending := range h.statsPending {
+		delete(h.statsPending, key)
+		return key, pending, true
+	}
+	return "", accountStatsDelta{}, false
+}
+
 func (h *Handler) runAccountStatsWriter() {
 	defer close(h.statsDone)
 	const (
@@ -562,16 +551,7 @@ func (h *Handler) runAccountStatsWriter() {
 		case <-h.statsWake:
 		}
 		for {
-			h.statsMu.Lock()
-			var pendingKey string
-			var delta accountStatsDelta
-			found := false
-			for key, pending := range h.statsPending {
-				pendingKey, delta, found = key, pending, true
-				delete(h.statsPending, key)
-				break
-			}
-			h.statsMu.Unlock()
+			pendingKey, delta, found := h.popPendingStats()
 			if !found {
 				backoff = initialBackoff
 				break
@@ -615,16 +595,7 @@ func (h *Handler) flushPendingAccountStats(timeout time.Duration) {
 	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		h.statsMu.Lock()
-		var pendingKey string
-		var delta accountStatsDelta
-		found := false
-		for key, pending := range h.statsPending {
-			pendingKey, delta, found = key, pending, true
-			delete(h.statsPending, key)
-			break
-		}
-		h.statsMu.Unlock()
+		pendingKey, delta, found := h.popPendingStats()
 		if !found {
 			return
 		}
@@ -651,16 +622,17 @@ type retryAfterError interface {
 
 func upstreamRetryAfter(err error) time.Duration {
 	var hinted retryAfterError
-	if errors.As(err, &hinted) {
-		delay := hinted.RetryAfter()
-		if delay > 30*time.Second {
-			return 30 * time.Second
-		}
-		if delay > 0 {
-			return delay
-		}
+	if !errors.As(err, &hinted) {
+		return 0
 	}
-	return 0
+	delay := hinted.RetryAfter()
+	if delay <= 0 {
+		return 0
+	}
+	if delay > 30*time.Second {
+		return 30 * time.Second
+	}
+	return delay
 }
 
 func computeRetryDelay(base time.Duration, attempt int, category string) time.Duration {

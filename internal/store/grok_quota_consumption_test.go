@@ -5,24 +5,11 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
-
-func newQuotaTestStore(t *testing.T) *Store {
-	t.Helper()
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "quota-test:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close(); mini.Close() })
-	return s
-}
 
 func TestClaimGrokPaidQuotaProbeIsBoundedAndAtomic(t *testing.T) {
 	t.Parallel()
-	s := newQuotaTestStore(t)
+	s, _ := newTestRedisStore(t, "quota-test:")
 	ctx := context.Background()
 	now := time.Now().UTC()
 	acc := &Account{AccountType: "grok", Enabled: true, GrokProvider: "build", Subscription: "super",
@@ -72,7 +59,7 @@ func TestClaimGrokPaidQuotaProbeIsBoundedAndAtomic(t *testing.T) {
 
 func TestClaimGrokPaidQuotaProbeWaitsForPeriodEnd(t *testing.T) {
 	t.Parallel()
-	s := newQuotaTestStore(t)
+	s, _ := newTestRedisStore(t, "quota-test:")
 	ctx := context.Background()
 	now := time.Now().UTC()
 	acc := &Account{AccountType: "grok", Enabled: true, GrokBilling: GrokBillingSnapshot{SyncedAt: now,

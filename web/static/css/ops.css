@@ -5,8 +5,6 @@
    5 concurrency & trends · 6 distributions · 7 alerts · 8 matrix
    9 log centre · 10 responsive */
 
-.ops-page { padding-bottom: var(--space-10); }
-
 /* -----------------------------------------------------------------------------
    1. Header: title block + status line, filters on the right
    -------------------------------------------------------------------------- */
@@ -18,8 +16,6 @@
   gap: var(--space-4);
   margin-bottom: var(--space-5);
 }
-
-.ops-head-title { display: flex; align-items: center; gap: var(--space-3); }
 
 .ops-head-mark {
   display: grid;
@@ -68,14 +64,6 @@
 .ops-dot.is-warn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
 .ops-dot.is-error { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
 
-.ops-head-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
-
 .ops-head-filters .compact-select { min-width: 108px; }
 .ops-head-filters .btn-icon { width: var(--control-h); height: var(--control-h); }
 
@@ -86,7 +74,8 @@
   display: grid;
   gap: var(--space-4);
   margin-bottom: var(--space-4);
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
 }
 
 .ops-card {
@@ -111,11 +100,10 @@
 
 .ops-card-head h2 { font-size: 0.95rem; font-weight: 650; }
 .ops-hint { color: var(--text-secondary); font-size: 0.78rem; }
-.ops-card-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 
 .ops-hero-body {
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
+  grid-template-columns: 170px minmax(0, 1fr);
   gap: var(--space-5);
   align-items: center;
 }
@@ -161,7 +149,7 @@
   font-size: 0.72rem;
   text-align: center;
 }
-.ops-gauge-sub > span { white-space: nowrap; }
+
 .ops-gauge-sub > span + span::before {
   content: '·';
   margin-right: var(--space-3);
@@ -170,11 +158,10 @@
 
 .ops-hero-live { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
 
-.ops-hero-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--bg-inset); width: fit-content; }
+.ops-hero-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--bg-inset); width: fit-content; flex-wrap: wrap; max-width: 100%; }
 .ops-hero-tabs .ops-chip { border-color: transparent; background: transparent; }
 .ops-hero-tabs .ops-chip.is-active { background: var(--accent-soft); border-color: var(--accent-line); }
 
-.ops-live-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
 .ops-live-col { display: flex; flex-direction: column; gap: var(--space-1); }
 .ops-live-label { color: var(--text-secondary); font-size: 0.76rem; }
 .ops-live-values { display: flex; flex-wrap: wrap; gap: var(--space-2); color: var(--text-secondary); font-size: 0.74rem; }
@@ -185,7 +172,8 @@
 /* -----------------------------------------------------------------------------
    3. KPI cards: six, in a 3x2 grid beside the hero
    -------------------------------------------------------------------------- */
-.ops-kpi-grid {
+.ops-kpi-grid,
+.ops-live-grid{
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-3);
@@ -220,9 +208,9 @@
 
 /* A card's own name never breaks: CJK text can break between any two characters, so a
    squeezed flex item becomes a one-character-wide column instead of wrapping sensibly. */
-.ops-kpi-head > span:first-child { flex: none; white-space: nowrap; }
 
-.ops-kpi-head > .ops-hint { flex: none; white-space: nowrap; }
+.ops-kpi-head > .ops-hint,
+.ops-kpi-head > span:first-child{ flex: none; white-space: nowrap; }
 
 /* The selector is wider than one KPI column: full width, chips wrapping inside it. */
 .ops-kpi-head .ops-tabs {
@@ -246,7 +234,6 @@
 .ops-kpi-big.is-muted { color: var(--text-muted); font-size: 1.1rem; font-weight: 550; }
 .ops-kpi-unit { margin-left: 4px; color: var(--text-muted); font-size: 0.8rem; font-weight: 500; }
 
-.ops-kpi-rows { display: flex; flex-direction: column; gap: 2px; }
 /* The KPI rows are the densest text on the page: they carry the label, so they are one
    step larger than a hint and use the brighter secondary tone rather than the muted one. */
 .ops-kpi-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); font-size: 0.8rem; }
@@ -266,6 +253,7 @@
   display: grid;
   gap: var(--space-3);
   margin-bottom: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .ops-resource {
@@ -288,7 +276,6 @@
 /* -----------------------------------------------------------------------------
    5. Concurrency, trends
    -------------------------------------------------------------------------- */
-.ops-grid { margin-bottom: var(--space-4); }
 
 /* Both rows group cards that already render at a similar height, but a row is
    only as even as its tallest card. `align-items: start` let the shorter ones
@@ -303,7 +290,7 @@
 .ops-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); align-items: stretch; }
 .ops-grid-3 > .ops-card:last-child { grid-column: span 1; }
 .ops-grid-3 > .ops-card { display: flex; flex-direction: column; }
-.ops-grid-3 > .ops-card > :last-child { flex: 1 1 auto; }
+
 .ops-grid-3 > .ops-card > .ops-concurrency,
 .ops-grid-3 > .ops-card > .ops-errors { justify-content: space-between; }
 
@@ -391,7 +378,7 @@
 
 .ops-legend { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: 0.76rem; }
 .ops-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.ops-legend-dot.is-qps { background: var(--info); }
+
 .ops-legend-dot.is-tps { background: var(--ok); }
 
 /* -----------------------------------------------------------------------------
@@ -418,7 +405,8 @@
 .ops-error-meter { height: 8px; border-radius: var(--radius-pill); background: var(--bg-inset); overflow: hidden; }
 .ops-error-meter > span { display: block; height: 100%; background: var(--bad); }
 .ops-error-meter > span.is-warn { background: var(--warn); }
-.ops-error-meter > span.is-info { background: var(--info); }
+.ops-error-meter > span.is-info,
+.ops-legend-dot.is-qps{ background: var(--info); }
 .ops-empty { color: var(--text-muted); font-size: 0.8rem; padding: var(--space-4) 0; margin: 0; }
 
 /* -----------------------------------------------------------------------------
@@ -432,22 +420,6 @@
    8. Channel × model matrix
    -------------------------------------------------------------------------- */
 .ops-table-wrap { overflow-x: auto; border: 1px solid var(--border-color); border-radius: var(--radius-md); }
-
-.ops-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
-
-.ops-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-align: left;
-  white-space: nowrap;
-}
 
 .ops-table tbody td {
   padding: 10px var(--space-4);
@@ -525,9 +497,9 @@
   display: inline-flex;
   gap: var(--space-2);
   align-items: center;
-  padding: 4px var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border-color);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface-1);
   color: var(--text-main);
   font-size: 0.74rem;
@@ -542,8 +514,10 @@
   max-height: 62vh;
 }
 
-.logs-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
-.logs-table thead th {
+.logs-table,
+.ops-table{ width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
+.logs-table thead th,
+.ops-table thead th{
   position: sticky;
   top: 0;
   z-index: 2;
@@ -557,7 +531,7 @@
   white-space: nowrap;
 }
 .logs-table tbody td { padding: 9px var(--space-4); border-bottom: 1px solid var(--border-color); color: var(--text-soft); vertical-align: middle; }
-.logs-table tbody tr { cursor: pointer; }
+
 .logs-table tbody tr:hover td { background: var(--surface-2); }
 .logs-table tbody tr.is-selected td { background: var(--accent-soft); }
 
@@ -590,12 +564,6 @@
 .logs-more { display: flex; justify-content: center; padding: var(--space-4) 0 0; }
 .logs-more button[hidden] { display: none; }
 .logs-coverage { margin: 0; }
-
-.logs-detail { font-size: 0.82rem; }
-.logs-detail h2 { margin-bottom: var(--space-3); font-size: 0.95rem; }
-.logs-detail dl { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: var(--space-2) var(--space-3); margin: 0 0 var(--space-4); }
-.logs-detail dt { color: var(--text-muted); font-size: 0.76rem; }
-.logs-detail dd { margin: 0; color: var(--text-main); word-break: break-all; }
 
 /* Result strip: the panel opens with what happened, because a failure is the usual
    reason it was opened at all. */
@@ -634,28 +602,10 @@
 }
 .logs-fact-value.is-empty { color: var(--text-faint); }
 
-.logs-detail pre {
-  margin: 0 0 var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--bg-inset);
-  color: var(--text-soft);
-  font-family: var(--font-mono);
-  font-size: 0.76rem;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 320px;
-  overflow: auto;
-}
-
-/* An error is the first thing to read, so it is not muted like the other blocks. */
-.logs-detail pre.logs-detail-error { border-color: rgba(251, 113, 133, 0.35); background: var(--bad-soft); color: var(--text-main); }
-
 .logs-detail-section-title { margin-bottom: var(--space-2); color: var(--text-soft); font-size: 0.8rem; font-weight: 650; }
 .logs-attempts { display: flex; flex-direction: column; gap: var(--space-2); }
 .logs-attempt { padding: var(--space-3); border: 1px solid var(--border-color); border-left: 3px solid var(--idle); border-radius: var(--radius-md); background: var(--surface-1); }
-.logs-attempt.is-failed { border-left-color: var(--bad); }
+
 .logs-attempt > div:first-child { display: flex; gap: var(--space-2); align-items: center; color: var(--text-main); font-weight: 600; }
 /* The upstream's own reason for refusing, shown under the attempt's status line. */
 .logs-attempt-reason {
@@ -691,7 +641,7 @@
 
 /* Anything that opens something else says so. A chart bar or a row name that
    looks identical to a static label is a feature nobody finds. */
-.is-clickable { cursor: pointer; }
+
 .is-clickable:hover { color: var(--accent); }
 .is-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -706,7 +656,9 @@
 
 /* Second series on a bar chart (upstream attempt failures). */
 polyline.series-alt { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 4 3; }
-rect.is-clickable { cursor: pointer; }
+rect.is-clickable,
+.logs-table tbody tr,
+.is-clickable{ cursor: pointer; }
 rect.is-clickable:hover { opacity: 0.75; }
 
 /* History blocks in the matrix: one block per minute of retained traffic. */
@@ -739,7 +691,8 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
 /* A percentage field reads as one control: the number and its unit.
    .alerts-field-control is created by alerts.js for every 'ratio' field. */
 .alerts-field-control { display: flex; align-items: center; gap: var(--space-2); }
-.alerts-field-control .form-input { flex: 1 1 auto; }
+.alerts-field-control .form-input,
+.ops-grid-3 > .ops-card > :last-child{ flex: 1 1 auto; }
 .alerts-field-unit { color: var(--text-secondary); font-size: 0.86rem; font-weight: 600; }
 .alerts-checkbox { width: 18px; height: 18px; accent-color: var(--accent); }
 .alerts-preview { padding: var(--space-3) var(--space-4); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-1); }
@@ -763,8 +716,7 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
 }
 
 @media (max-width: 640px) {
-  .ops-kpi-grid { grid-template-columns: minmax(0, 1fr); }
-  .logs-filters { grid-template-columns: 1fr; }
+.logs-filters { grid-template-columns: 1fr; }
   .ops-live-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -964,12 +916,8 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
 
 /* Keep the live panel wide enough for its gauge and values; breakpoints follow
    available card space, including the fixed sidebar. */
-.ops-top { grid-template-columns: minmax(0, 1fr); align-items: start; }
-.ops-hero-body { grid-template-columns: 170px minmax(0, 1fr); }
 .ops-hero-live, .ops-kpi-card, .ops-card, .ops-resource { min-width: 0; }
-.ops-hero-tabs { flex-wrap: wrap; max-width: 100%; }
 .ops-resource-detail, .ops-kpi-row, .ops-card-tools { overflow-wrap: anywhere; }
-.ops-resources { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .ops-spark svg { display: block; width: 100%; height: 72px; }
 @media (min-width: 1700px) {
  .ops-top { grid-template-columns: minmax(440px, 1fr) minmax(0, 2fr); }
@@ -978,8 +926,9 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
  .ops-grid-3 { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
- .ops-hero-body { grid-template-columns: minmax(0, 1fr); }
- .ops-resources { grid-template-columns: minmax(0, 1fr); }
+.ops-resources,
+ .ops-kpi-grid,
+ .ops-hero-body{ grid-template-columns: minmax(0, 1fr); }
  .ops-head-filters { width: 100%; }
 }
 .ops-page.main-content { width: calc(100% - var(--sidebar-w)); flex: 0 1 auto; box-sizing: border-box; }
@@ -1014,10 +963,8 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
    aspect-ratio driven, so they already grow with their own card. */
 @media (min-width: 2200px) {
   .ops-kpi-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .ops-resources { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-  .logs-filters { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-  .ops-spark { height: 88px; }
-  .ops-spark svg { height: 88px; }
+  .ops-resources, .logs-filters { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .ops-spark, .ops-spark svg { height: 88px; }
 }
 
 /* 4K / ultrawide: the column stopped growing at 3200px, so the only thing left

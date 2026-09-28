@@ -9,25 +9,6 @@ import (
 	"orchids-api/internal/config"
 )
 
-func TestTutorialPageListsCline(t *testing.T) {
-	renderer, err := NewRenderer()
-	if err != nil {
-		t.Fatalf("NewRenderer() error = %v", err)
-	}
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/?tab=tutorial", nil)
-	if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil); err != nil {
-		t.Fatalf("RenderIndex() error = %v", err)
-	}
-	page := recorder.Body.String()
-	if !strings.Contains(page, `badge-cline`) {
-		t.Error("the rendered tutorial page has no row for cline")
-	}
-	if !strings.Contains(page, `data-api-path="/cline/v1"`) {
-		t.Error("the rendered tutorial page has no address cell for cline")
-	}
-}
-
 func TestAccountModalOffersClineLogin(t *testing.T) {
 	renderer, err := NewRenderer()
 	if err != nil {

@@ -105,7 +105,7 @@ func (*timeoutError) Temporary() bool { return true }
 
 func TestEmptyAndTransientSentinels(t *testing.T) {
 	wrapped := fmt.Errorf("%w: qoder stream produced no usable events", ErrEmptyStream)
-	if !isEmptyStreamError(wrapped) {
+	if !errors.Is(wrapped, ErrEmptyStream) {
 		t.Error("the empty-stream sentinel was lost through wrapping")
 	}
 	if isRetryable(wrapped) {
@@ -126,7 +126,7 @@ func TestEmptyAndTransientSentinels(t *testing.T) {
 
 	// A safety refusal is a client outcome: no retry, no account switch.
 	refusal := contentPolicyError("DataInspectionFailed")
-	if !isContentPolicyError(refusal) {
+	if !errors.Is(refusal, ErrContentPolicy) {
 		t.Error("the content-policy sentinel was lost through wrapping")
 	}
 	if isTransientError(refusal) || isRetryable(refusal) {
@@ -197,7 +197,7 @@ func TestRunChatDoesNotReplayAContentRefusal(t *testing.T) {
 	client := newRetryTestClient(t, server.URL)
 	err := client.runChat(context.Background(), chatURL(server.URL), EncodeBody([]byte(`{}`)), modelEntry{Key: "k"},
 		"req-1", RuntimeFields{Key: "k"}, false, func(upstream.SSEMessage) {})
-	if !isContentPolicyError(err) {
+	if !errors.Is(err, ErrContentPolicy) {
 		t.Fatalf("error = %v, want the content-policy sentinel", err)
 	}
 	if hits != 1 {
@@ -220,7 +220,7 @@ func TestRunChatReportsAnEmptyStream(t *testing.T) {
 	client := newRetryTestClient(t, server.URL)
 	err := client.runChat(context.Background(), chatURL(server.URL), EncodeBody([]byte(`{}`)), modelEntry{Key: "k"},
 		"req-1", RuntimeFields{Key: "k"}, false, func(upstream.SSEMessage) {})
-	if !isEmptyStreamError(err) {
+	if !errors.Is(err, ErrEmptyStream) {
 		t.Fatalf("error = %v, want the empty-stream sentinel", err)
 	}
 	if hits != 1 {

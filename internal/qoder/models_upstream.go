@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/util"
 )
 
 // The model catalog is a control-plane read on the same COSY-signed surface as
@@ -145,7 +147,7 @@ func parseModelList(raw []byte) (*Catalog, error) {
 		MsgInfo string `json:"msgInfo"`
 	}
 	if err := json.Unmarshal(trimmed, &failure); err == nil {
-		if detail := firstNonEmpty(failure.Message, failure.MsgInfo, failure.Msg); detail != "" {
+		if detail := util.FirstNonEmpty(failure.Message, failure.MsgInfo, failure.Msg); detail != "" {
 			return nil, fmt.Errorf("upstream reported: %s", detail)
 		}
 	}

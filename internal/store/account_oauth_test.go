@@ -5,18 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-
 	"orchids-api/internal/modelcatalog"
 )
 
 func TestUpdateAccountPreservesAndDeepCopiesNewestGrokCatalog(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "catalog:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	s, _ := newTestRedisStore(t, "catalog:")
 	ctx := context.Background()
 	synced := time.Now().UTC().Truncate(time.Second)
 	acc := &Account{AccountType: "grok", Enabled: true, GrokModels: []string{"grok-4.7"}, GrokModelCatalog: []modelcatalog.Profile{{ModelID: "grok-4.7", ReasoningEfforts: []string{"high"}, ContextWindow: 500000}}, GrokModelsSyncedAt: synced}
@@ -45,20 +38,7 @@ func TestUpdateAccountPreservesAndDeepCopiesNewestGrokCatalog(t *testing.T) {
 func TestUpdateAccount_PersistsGrokOAuthFields(t *testing.T) {
 	t.Parallel()
 
-	mini := miniredis.RunT(t)
-	s, err := New(Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
+	s, _ := newTestRedisStore(t, "test:")
 
 	ctx := context.Background()
 	acc := &Account{

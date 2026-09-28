@@ -252,7 +252,9 @@ func TestInjectNoAvailableAccountError_StreamingReportsInBandError(t *testing.T)
 	// written lazily now, so a stream only becomes unrevistable once it has begun.
 	// Opening without content keeps this test about the in-band report rather than
 	// about the answer text.
-	sh.writeSSEMessageStart("workbuddy-model", 12, 0)
+	sh.mu.Lock()
+	sh.writeMessageStartLocked("workbuddy-model", 12, 0)
+	sh.mu.Unlock()
 
 	sh.InjectNoAvailableAccountError(
 		`upstream API error: status=429, body={"code":"rate-limited"}`,
@@ -512,8 +514,12 @@ func TestStreamHandler_TextFlow_AnthropicSSE(t *testing.T) {
 	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
-	// seed a message_start so the stream resembles real output
-	sh.writeSSEBytes("message_start", []byte(`{"type":"message_start"}`))
+	// seed a message_start so the stream resembles real output. For
+	// "message_start" the live writer deliberately skips ensureMessageStartLocked,
+	// so this writes exactly the one frame the retired writer wrote.
+	sh.mu.Lock()
+	sh.writeSSEBytesLockedWithHint("message_start", []byte(`{"type":"message_start"}`), true)
+	sh.mu.Unlock()
 
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "text-start"}})
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "hi"}})
@@ -775,7 +781,16 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
-	sh.writeSSEBytes("message_start", []byte(`{"type":"message_start"}`))
+	// The live writers take an explicit flush hint; writeSSEBytesLocked, the live
+	// content_block_stop writer, derives its hint from shouldFlushSSEImmediately,
+	// so these frames go through the same writer with the same hint source.
+	writeFrame := func(event string, data []byte) {
+		sh.mu.Lock()
+		defer sh.mu.Unlock()
+		sh.writeSSEBytesLockedWithHint(event, data, shouldFlushSSEImmediately(event, data))
+	}
+
+	writeFrame("message_start", []byte(`{"type":"message_start"}`))
 	if rec.flushes != 1 {
 		t.Fatalf("expected message_start to flush immediately, got %d", rec.flushes)
 	}
@@ -784,14 +799,26 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal thinking delta: %v", err)
 	}
-	for i := 0; i < sseDeferredFlushFrameThreshold-1; i++ {
-		sh.writeSSEBytes("content_block_delta", thinkingData)
+	// The seed above wrote the opening frame without marking the stream started
+	// (production's writeMessageStartLocked is what sets messageStartWritten), so
+	// the first delta also emits the deferred opening frame and flushes it. The
+	// delta itself is deferred one slot into the threshold.
+	writeFrame("content_block_delta", thinkingData)
+	if rec.flushes != 2 {
+		t.Fatalf("expected the first delta to flush the deferred opening frame, got %d", rec.flushes)
 	}
-	if rec.flushes != 1 {
+
+	// The remaining deferred thinking frames below the threshold add no flush.
+	for i := 0; i < sseDeferredFlushFrameThreshold-2; i++ {
+		writeFrame("content_block_delta", thinkingData)
+	}
+	if rec.flushes != 2 {
 		t.Fatalf("expected deferred thinking deltas to coalesce, got %d flushes", rec.flushes)
 	}
-	sh.writeSSEBytes("content_block_delta", thinkingData)
-	if rec.flushes != 2 {
+
+	// The frame that reaches sseDeferredFlushFrameThreshold flushes the batch.
+	writeFrame("content_block_delta", thinkingData)
+	if rec.flushes != 3 {
 		t.Fatalf("expected deferred threshold flush, got %d", rec.flushes)
 	}
 
@@ -799,8 +826,8 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal text delta: %v", err)
 	}
-	sh.writeSSEBytes("content_block_delta", textData)
-	if rec.flushes != 3 {
+	writeFrame("content_block_delta", textData)
+	if rec.flushes != 4 {
 		t.Fatalf("expected text delta to flush immediately, got %d", rec.flushes)
 	}
 }

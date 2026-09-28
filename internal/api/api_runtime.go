@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
-
 	"orchids-api/internal/loadbalancer"
 )
 
@@ -130,8 +128,7 @@ func runtimeMetric(label, value, detail string, available bool, percent float64)
 	return map[string]interface{}{"label": label, "value": value, "detail": detail, "available": available, "status": status}
 }
 func (a *API) HandleOpsRuntime(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	cpu := runtimeMetric("主机 CPU", "", "需要 Linux /proc 采集", false, 0)
@@ -168,8 +165,7 @@ func (a *API) HandleOpsRuntime(w http.ResponseWriter, r *http.Request) {
 		refreshing = a.refreshConcurrency()
 	}
 	metrics := []map[string]interface{}{cpu, memory, rss, runtimeMetric("Go 堆内存", formatRuntimeBytes(mem.Alloc), "当前已分配", true, 0), runtimeMetric("Goroutine", strconv.Itoa(runtime.NumGoroutine()), "当前协程数", true, 0), runtimeMetric("账号刷新", strconv.Itoa(refreshing), "正在刷新", true, 0)}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"available": true, "metrics": metrics})
+	writeJSON(w, map[string]interface{}{"available": true, "metrics": metrics})
 }
 func formatRuntimeBytes(value uint64) string {
 	if value >= 1<<30 {

@@ -75,17 +75,6 @@ func clineLoginConfig(baseURL string) *config.Config {
 	}
 }
 
-func clineLoginRequest(t *testing.T, method, path, body string) *http.Request {
-	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Host = "localhost"
-	req.Header.Set("Origin", "http://localhost")
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	return req
-}
-
 // TestHandleClineLogin_StartHidesDeviceCode proves the start response carries
 // only what a browser needs: the official page and the user code. The device
 // code is the half that can be exchanged for a credential and must never reach
@@ -98,7 +87,7 @@ func TestHandleClineLogin_StartHidesDeviceCode(t *testing.T) {
 	defer auth.Close()
 	a := New(s, "", "", clineLoginConfig(auth.URL))
 	rec := httptest.NewRecorder()
-	a.HandleClineLogin(rec, clineLoginRequest(t, http.MethodPost, "/api/cline/login", `{"enabled":true}`))
+	a.HandleClineLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/cline/login", `{"enabled":true}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
@@ -147,7 +136,7 @@ func TestHandleClineLogin_PollPersistsOAuthAccount(t *testing.T) {
 	defer auth.Close()
 	a := New(s, "", "", clineLoginConfig(auth.URL))
 	start := httptest.NewRecorder()
-	a.HandleClineLogin(start, clineLoginRequest(t, http.MethodPost, "/api/cline/login", ""))
+	a.HandleClineLogin(start, channelLoginRequest(t, http.MethodPost, "/api/cline/login", ""))
 	var started struct {
 		ID string `json:"id"`
 	}
@@ -160,7 +149,7 @@ func TestHandleClineLogin_PollPersistsOAuthAccount(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		rec := httptest.NewRecorder()
-		a.HandleClineLogin(rec, clineLoginRequest(t, http.MethodGet, "/api/cline/login/"+started.ID, ""))
+		a.HandleClineLogin(rec, channelLoginRequest(t, http.MethodGet, "/api/cline/login/"+started.ID, ""))
 		var state struct {
 			Status string `json:"status"`
 		}

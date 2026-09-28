@@ -203,11 +203,13 @@ func BenchmarkEmitToolCallStream_Final(b *testing.B) {
 	}
 }
 
-func BenchmarkWriteSSEMessageStart_Stream(b *testing.B) {
+func BenchmarkWriteMessageStartLocked_Stream(b *testing.B) {
 	sh := newBenchmarkStreamHandler(b)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		sh.writeSSEMessageStart("claude-3-7-sonnet", 12, 0)
+		sh.mu.Lock()
+		sh.writeMessageStartLocked("claude-3-7-sonnet", 12, 0)
+		sh.mu.Unlock()
 	}
 }
 

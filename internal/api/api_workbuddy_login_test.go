@@ -95,23 +95,6 @@ func stubWorkBuddyLoginClient(t *testing.T, baseURL string) {
 	})
 }
 
-func startWorkBuddyLoginRequest(t *testing.T, method, path, body string) *http.Request {
-	t.Helper()
-	var reader *strings.Reader
-	if body == "" {
-		reader = strings.NewReader("")
-	} else {
-		reader = strings.NewReader(body)
-	}
-	req := httptest.NewRequest(method, path, reader)
-	req.Host = "localhost"
-	req.Header.Set("Origin", "http://localhost")
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	return req
-}
-
 // decodeLoginError returns the machine-readable code the admin UI uses to
 // explain a failed login attempt.
 func decodeLoginError(t *testing.T, body string) string {
@@ -138,7 +121,7 @@ func TestHandleWorkBuddyLogin_RejectsCrossOriginStart(t *testing.T) {
 
 	s, _ := newTestStore(t, "wb-login:")
 	a := New(s, "", "", &config.Config{})
-	req := startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", "")
+	req := channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", "")
 	req.Header.Set("Origin", "https://evil.example.com")
 	rec := httptest.NewRecorder()
 
@@ -159,7 +142,7 @@ func TestHandleWorkBuddyLogin_RejectsInsecureOrigin(t *testing.T) {
 
 	s, _ := newTestStore(t, "wb-login:")
 	a := New(s, "", "", &config.Config{})
-	req := startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", "")
+	req := channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", "")
 	req.Host = "admin.example.com"
 	req.Header.Set("Origin", "http://admin.example.com")
 	rec := httptest.NewRecorder()
@@ -183,7 +166,7 @@ func TestHandleWorkBuddyLogin_ReportsUnreachableUpstream(t *testing.T) {
 
 	a := New(s, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(rec, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
+	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", rec.Code)
@@ -205,7 +188,7 @@ func TestHandleWorkBuddyLogin_ReportsUpstreamRejection(t *testing.T) {
 
 	a := New(s, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(rec, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
+	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", rec.Code)
@@ -223,7 +206,7 @@ func TestHandleWorkBuddyLogin_RequiresStore(t *testing.T) {
 
 	a := New(nil, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(rec, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
+	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)
 	}
@@ -234,7 +217,7 @@ func TestHandleWorkBuddyLogin_RejectsNonJSONBody(t *testing.T) {
 
 	s, _ := newTestStore(t, "wb-login:")
 	a := New(s, "", "", &config.Config{})
-	req := startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", `enabled=true`)
+	req := channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", `enabled=true`)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 
@@ -252,7 +235,7 @@ func TestHandleWorkBuddyLogin_StartReturnsOfficialLoginURL(t *testing.T) {
 
 	a := New(s, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(rec, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", `{"enabled":true}`))
+	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", `{"enabled":true}`))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
@@ -287,7 +270,7 @@ func TestHandleWorkBuddyLogin_StartReturnsOfficialLoginURL(t *testing.T) {
 	// the official login URL the browser needs, but the transport-level fields
 	// (device code / user code) must stay empty for this flow.
 	rec2 := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(rec2, startWorkBuddyLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+response.ID, ""))
+	a.HandleWorkBuddyLogin(rec2, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+response.ID, ""))
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("poll status = %d", rec2.Code)
 	}
@@ -314,7 +297,7 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 
 	a := New(s, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(rec, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
+	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
 
 	var started struct {
 		ID string `json:"id"`
@@ -327,7 +310,7 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 	var final deviceLoginResponse
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
-		a.HandleWorkBuddyLogin(pollRec, startWorkBuddyLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+started.ID, ""))
+		a.HandleWorkBuddyLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+started.ID, ""))
 		if pollRec.Code != http.StatusOK {
 			t.Fatalf("poll status = %d", pollRec.Code)
 		}
@@ -374,7 +357,7 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 	stubWorkBuddyLoginClient(t, auth2.URL)
 
 	rec3 := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(rec3, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
+	a.HandleWorkBuddyLogin(rec3, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
 	var second struct {
 		ID string `json:"id"`
 	}
@@ -384,7 +367,7 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
-		a.HandleWorkBuddyLogin(pollRec, startWorkBuddyLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+second.ID, ""))
+		a.HandleWorkBuddyLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+second.ID, ""))
 		if err := json.Unmarshal(pollRec.Body.Bytes(), &final); err != nil {
 			break
 		}
@@ -422,7 +405,7 @@ func TestHandleWorkBuddyLogin_ReportsVerificationFailure(t *testing.T) {
 
 	a := New(s, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(rec, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
+	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
 	var started struct {
 		ID string `json:"id"`
 	}
@@ -434,7 +417,7 @@ func TestHandleWorkBuddyLogin_ReportsVerificationFailure(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
-		a.HandleWorkBuddyLogin(pollRec, startWorkBuddyLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+started.ID, ""))
+		a.HandleWorkBuddyLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+started.ID, ""))
 		if err := json.Unmarshal(pollRec.Body.Bytes(), &final); err != nil {
 			t.Fatalf("decode poll: %v", err)
 		}
@@ -465,7 +448,7 @@ func TestHandleWorkBuddyLogin_CancelForgetsTransaction(t *testing.T) {
 
 	a := New(s, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(rec, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
+	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
 	var started struct {
 		ID string `json:"id"`
 	}
@@ -474,13 +457,13 @@ func TestHandleWorkBuddyLogin_CancelForgetsTransaction(t *testing.T) {
 	}
 
 	deleteRec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(deleteRec, startWorkBuddyLoginRequest(t, http.MethodDelete, "/api/workbuddy/login/"+started.ID, ""))
+	a.HandleWorkBuddyLogin(deleteRec, channelLoginRequest(t, http.MethodDelete, "/api/workbuddy/login/"+started.ID, ""))
 	if deleteRec.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d", deleteRec.Code)
 	}
 
 	missingRec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(missingRec, startWorkBuddyLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+started.ID, ""))
+	a.HandleWorkBuddyLogin(missingRec, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+started.ID, ""))
 	if missingRec.Code != http.StatusNotFound {
 		t.Fatalf("poll after cancel status = %d, want 404", missingRec.Code)
 	}
@@ -493,13 +476,13 @@ func TestHandleWorkBuddyLogin_RejectsUnknownMethodAndMissingSession(t *testing.T
 	a := New(s, "", "", &config.Config{})
 
 	putRec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(putRec, startWorkBuddyLoginRequest(t, http.MethodPut, "/api/workbuddy/login", "{}"))
+	a.HandleWorkBuddyLogin(putRec, channelLoginRequest(t, http.MethodPut, "/api/workbuddy/login", "{}"))
 	if putRec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("PUT status = %d, want 405", putRec.Code)
 	}
 
 	missingRec := httptest.NewRecorder()
-	a.HandleWorkBuddyLogin(missingRec, startWorkBuddyLoginRequest(t, http.MethodGet, "/api/workbuddy/login/does-not-exist", ""))
+	a.HandleWorkBuddyLogin(missingRec, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/does-not-exist", ""))
 	if missingRec.Code != http.StatusNotFound {
 		t.Fatalf("unknown id status = %d, want 404", missingRec.Code)
 	}

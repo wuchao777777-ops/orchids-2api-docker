@@ -9,29 +9,29 @@ import (
 	"testing"
 )
 
-func TestAccountCredentialsAreWriteOnly(t *testing.T) {
-	for _, provider := range []string{"qoder", "grok", "cline", "workbuddy"} {
-		acc := &store.Account{ID: 9, AccountType: provider, Token: "private-token", ClientCookie: "private-cookie", RefreshToken: "private-refresh", SessionCookie: "private-session", SessionID: "private-session-id", ClientUat: "private-uat", OAuthAccessToken: "private-oauth", OAuthRefreshToken: "private-oauth-refresh", WorkBuddyAccessToken: "private-wb", WorkBuddyRefreshToken: "private-wb-refresh", QoderAccessToken: "private-qoder", QoderRefreshToken: "private-qoder-refresh", ClineAccessToken: "private-cline", ClineRefreshToken: "private-cline-refresh", StatusMessage: "upstream rejected private-refresh"}
-		raw, err := json.Marshal(normalizeAccountOutput(acc))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(raw), "private-") {
-			t.Fatalf("credential leaked for %s", provider)
-		}
-		var row map[string]interface{}
-		_ = json.Unmarshal(raw, &row)
-		if row["has_credential"] != true {
-			t.Fatalf("missing credential presence for %s", provider)
-		}
-		for _, key := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key", "cline_access_token", "cline_refresh_token", "session_fingerprint"} {
-			if _, exists := row[key]; exists {
-				t.Fatalf("credential field %s was returned", key)
-			}
-		}
-		if acc.RefreshToken != "private-refresh" {
-			t.Fatal("redaction changed stored account")
-		}
+// TestAccountRedactionDoesNotMutateStoredAccount keeps the one property the
+// account leak guard does not cover: normalizeAccountOutput projects credentials
+// away for the wire, but the stored row must keep them.
+//
+// That every credential field is absent from the rendered account — for all four
+// channels, including values echoed into StatusMessage — is asserted, more
+// strongly, by TestAccountResponsesNeverCarryCredentials and
+// TestAccountResponsesHideCredentialKeys in account_leak_guard_test.go.
+func TestAccountRedactionDoesNotMutateStoredAccount(t *testing.T) {
+	acc := &store.Account{
+		ID: 9, AccountType: "qoder", Token: "private-token",
+		RefreshToken: "private-refresh", OAuthAccessToken: "private-oauth",
+		QoderAccessToken: "private-qoder", ClineAccessToken: "private-cline",
+		StatusMessage: "upstream rejected private-refresh",
+	}
+	if _, err := json.Marshal(normalizeAccountOutput(acc)); err != nil {
+		t.Fatal(err)
+	}
+	if acc.Token != "private-token" || acc.RefreshToken != "private-refresh" ||
+		acc.OAuthAccessToken != "private-oauth" || acc.QoderAccessToken != "private-qoder" ||
+		acc.ClineAccessToken != "private-cline" ||
+		acc.StatusMessage != "upstream rejected private-refresh" {
+		t.Fatal("redaction mutated the stored account")
 	}
 }
 

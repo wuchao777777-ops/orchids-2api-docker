@@ -123,7 +123,7 @@ func wireModelConfig(model modelEntry, explicitReasoning bool) modelConfigWire {
 	}
 	return modelConfigWire{
 		Key:            model.Key,
-		DisplayName:    firstNonEmpty(model.DisplayName, model.Name, model.Key),
+		DisplayName:    util.FirstNonEmpty(model.DisplayName, model.Name, model.Key),
 		Format:         format,
 		Source:         source,
 		IsVL:           model.IsVL,
@@ -542,7 +542,7 @@ func convertBlockMessage(role string, msg prompt.Message, toolCallIDs map[string
 			out = append(out, chatMessage{
 				Role:       "tool",
 				ToolCallID: toolID,
-				Content:    stringifyToolResult(block.Content),
+				Content:    util.StringifyToolResult(block.Content),
 			})
 		}
 	}
@@ -569,76 +569,21 @@ func blockImageURL(block prompt.ContentBlock) string {
 	return strings.TrimSpace(block.URL)
 }
 
-// stringifyToolResult flattens a tool result onto the string the gateway
-// expects. A structured result is serialized rather than dropped: losing it
-// would leave the model reasoning about a tool that returned nothing.
-func stringifyToolResult(value interface{}) string {
-	switch typed := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return typed
-	case []prompt.ContentBlock:
-		parts := make([]string, 0, len(typed))
-		for _, block := range typed {
-			if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-				parts = append(parts, block.Text)
-			}
-		}
-		return strings.Join(parts, "\n")
-	default:
-		raw, err := json.Marshal(typed)
-		if err != nil {
-			return fmt.Sprint(typed)
-		}
-		return string(raw)
-	}
-}
-
-// normalizeToolDefinitions accepts both OpenAI
-// (`{"type":"function","function":{...}}`) and Anthropic
-// (`{"name":...,"input_schema":...}`) declarations and renders the OpenAI shape.
+// normalizeToolDefinitions renders the OpenAI function envelope for the
+// request's tool declarations. The `model` argument is unused and kept only so
+// the call sites read uniformly with the other request builders: normalization
+// is model independent and lives in internal/util, shared with the WorkBuddy
+// and Cline channels.
+//
+// The NoTools / no-declaration guard stays here rather than in the shared
+// helper: Qoder distinguishes "no tools" (nil, so the gateway sees an empty
+// array via the chatBody fallback below) from "tools present", while WorkBuddy
+// always keeps a non-nil slice.
 func normalizeToolDefinitions(req upstream.UpstreamRequest, model modelEntry) []interface{} {
 	if req.NoTools || len(req.Tools) == 0 {
 		return nil
 	}
-	out := make([]interface{}, 0, len(req.Tools))
-	for _, tool := range req.Tools {
-		raw, err := json.Marshal(tool)
-		if err != nil {
-			continue
-		}
-		var decoded map[string]interface{}
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			continue
-		}
-		if fn, ok := decoded["function"].(map[string]interface{}); ok {
-			if strings.TrimSpace(util.StringValue(fn["name"])) == "" {
-				continue
-			}
-			decoded["type"] = "function"
-			out = append(out, decoded)
-			continue
-		}
-		name := strings.TrimSpace(util.StringValue(decoded["name"]))
-		if name == "" {
-			continue
-		}
-		parameters := decoded["input_schema"]
-		if parameters == nil {
-			parameters = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
-		}
-		out = append(out, map[string]interface{}{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        name,
-				"description": util.StringValue(decoded["description"]),
-				"parameters":  parameters,
-			},
-		})
-	}
-	_ = model
-	return out
+	return util.NormalizeToolDefinitions(req.Tools)
 }
 
 // normalizeToolControls maps both OpenAI and Anthropic tool selection shapes to
@@ -799,7 +744,7 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 	result, err := consumeStreamWithTools(resp.Body, toolsEnabled, emit)
 	if err != nil {
 		var target *attemptStreamError
-		if asAttemptError(err, &target) {
+		if errors.As(err, &target) {
 			return result, err
 		}
 		// A busy or unauthorized verdict that arrived as an in-stream frame is
@@ -823,7 +768,7 @@ func classifyStatus(status int, retryAfter string, raw []byte) error {
 	code := envelopeCode(raw)
 	detail := extractBodyMessage(raw)
 	if detail == "" {
-		detail = truncate(strings.TrimSpace(string(raw)), 300)
+		detail = util.Truncate(string(raw), 300)
 	}
 	wrapped := apiError(http.MethodPost, "chat", status, raw)
 

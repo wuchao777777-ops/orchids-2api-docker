@@ -39,6 +39,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/util"
 )
 
 // Default endpoints. The CLI talks to three hosts, and the CN gateway is a
@@ -159,9 +160,9 @@ func resolveEndpoints(cfg *config.Config) endpoints {
 	if cfg == nil {
 		return out
 	}
-	out.oauth = firstNonEmpty(cfg.QoderOAuthBaseURL, out.oauth)
-	out.openAPI = firstNonEmpty(cfg.QoderOpenAPIBaseURL, out.openAPI)
-	out.inference = firstNonEmpty(cfg.QoderInferenceURL, out.inference)
+	out.oauth = util.FirstNonEmptyURL(cfg.QoderOAuthBaseURL, out.oauth)
+	out.openAPI = util.FirstNonEmptyURL(cfg.QoderOpenAPIBaseURL, out.openAPI)
+	out.inference = util.FirstNonEmptyURL(cfg.QoderInferenceURL, out.inference)
 	return out
 }
 
@@ -187,15 +188,6 @@ func resolveClientVersion(cfg *config.Config) string {
 // family value.
 func userAgent(version string) string {
 	return "qoder/" + version
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return strings.TrimRight(trimmed, "/")
-		}
-	}
-	return ""
 }
 
 // signPath is the path component the COSY signature covers: the request path
@@ -273,7 +265,7 @@ func ParseCredentialDocument(raw string) (Credentials, bool) {
 	if err := json.Unmarshal([]byte(trimmed), &doc); err != nil {
 		return Credentials{}, false
 	}
-	access := strings.TrimSpace(firstNonEmptyToken(doc.SecurityOAuthToken, doc.AccessToken))
+	access := strings.TrimSpace(util.FirstNonEmptyUntrimmed(doc.SecurityOAuthToken, doc.AccessToken))
 	refresh := strings.TrimSpace(doc.RefreshToken)
 	if access == "" && refresh == "" {
 		return Credentials{}, false
@@ -294,15 +286,6 @@ func ParseCredentialDocument(raw string) (Credentials, bool) {
 		creds.RefreshExpiresAt = unixSeconds(doc.RefreshTokenExpireTime)
 	}
 	return creds, true
-}
-
-func firstNonEmptyToken(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 // unixSeconds normalizes an upstream timestamp. The CLI stores seconds, but
@@ -336,7 +319,6 @@ type Profile struct {
 	Name    string   `json:"name"`
 	Email   string   `json:"email"`
 	OrgID   string   `json:"organization_id"`
-	OrgName string   `json:"organization_name"`
 	OrgTags []string `json:"organization_tags"`
 }
 
@@ -424,7 +406,7 @@ func DetectNoEntitlement(values ...string) bool {
 func entitlementError(body string) error {
 	detail := decodeBodyMessage(body)
 	if detail == "" {
-		detail = truncate(strings.TrimSpace(body), 300)
+		detail = util.Truncate(body, 300)
 	}
 	if code := envelopeCode([]byte(body)); code != "" {
 		return fmt.Errorf("%w (upstream code=%s: %s)", ErrNoEntitlement, code, detail)
@@ -467,7 +449,7 @@ func apiError(method, rawURL string, status int, raw []byte) error {
 		parts = append(parts, "code="+code)
 	}
 	if body != "" {
-		parts = append(parts, "message="+truncate(body, 300))
+		parts = append(parts, "message="+util.Truncate(body, 300))
 	}
 	return fmt.Errorf("qoder API error: %s", strings.Join(parts, ", "))
 }
@@ -558,13 +540,4 @@ func envelopeCodeDepth(raw []byte, depth int) string {
 		}
 	}
 	return ""
-}
-
-// truncate keeps an upstream message short enough to log without echoing a
-// multi-megabyte body.
-func truncate(value string, limit int) string {
-	if len(value) <= limit {
-		return value
-	}
-	return value[:limit] + "..."
 }

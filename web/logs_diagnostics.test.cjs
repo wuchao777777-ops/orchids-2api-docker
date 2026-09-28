@@ -19,7 +19,11 @@ test('diagnostic attempt labels distinguish request, response, status and read f
  for(const [name,label] of [['request.json','请求'],['response.txt','响应内容'],['result.json','HTTP 状态'],['read_error.json','响应读取错误']]){
   assert.equal(api.sectionLabel({name:'upstream_002_'+name}),'上游尝试 2 · '+label);
  }
- assert.match(api.sectionLabel({name:'4_upstream_sse.jsonl'}),/Protobuf 解码/);
+ // The remaining numbered sections keep their own labels...
+ assert.equal(api.sectionLabel({name:'3_upstream_request.json'}),'3 · 上游请求');
+ assert.equal(api.sectionLabel({name:'5_client_sse.jsonl'}),'5 · 返回客户端 SSE');
+ // ...and the upstream SSE capture that no longer exists has no stale label.
+ assert.equal(api.sectionLabel({name:'4_upstream_sse.jsonl'}),'4_upstream_sse.jsonl');
 });
 test('bundle renders both attempts without hiding truncation or interpreting response markup',()=>{
  const api=load(),container=element();

@@ -93,10 +93,10 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		requestTimeout:     timeout,
 	}
 	if cfg != nil {
-		client.apiBase = firstNonEmpty(cfg.ClineAPIBaseURL, client.apiBase)
-		client.workOSAuthorizeURL = firstNonEmpty(cfg.ClineWorkOSAuthorizeURL, client.workOSAuthorizeURL)
-		client.workOSTokenURL = firstNonEmpty(cfg.ClineWorkOSTokenURL, client.workOSTokenURL)
-		client.workOSClientID = firstNonEmpty(cfg.ClineWorkOSClientID, client.workOSClientID)
+		client.apiBase = util.FirstNonEmptyURL(cfg.ClineAPIBaseURL, client.apiBase)
+		client.workOSAuthorizeURL = util.FirstNonEmptyURL(cfg.ClineWorkOSAuthorizeURL, client.workOSAuthorizeURL)
+		client.workOSTokenURL = util.FirstNonEmptyURL(cfg.ClineWorkOSTokenURL, client.workOSTokenURL)
+		client.workOSClientID = util.FirstNonEmpty(cfg.ClineWorkOSClientID, client.workOSClientID)
 	}
 	client.apiBase = strings.TrimRight(client.apiBase, "/")
 	if acc != nil {
@@ -236,7 +236,7 @@ func (c *Client) refresh(ctx context.Context, previous Credentials) (Credentials
 	// email does not change between token rotations.
 	merged := Credentials{
 		AccessToken:  refreshed.AccessToken,
-		RefreshToken: firstNonEmpty(refreshed.RefreshToken, previous.RefreshToken),
+		RefreshToken: util.FirstNonEmptyUntrimmed(refreshed.RefreshToken, previous.RefreshToken),
 		ExpiresAt:    refreshed.ExpiresAt,
 		Email:        previous.Email,
 	}

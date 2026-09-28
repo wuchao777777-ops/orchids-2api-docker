@@ -48,19 +48,9 @@ func NewConcurrencyLimiter(maxConcurrent int, timeout time.Duration, adaptive bo
 	}
 }
 
+// Limit admits a request only when a concurrency slot is free, and bounds the
+// handler's execution with the limiter timeout.
 func (cl *ConcurrencyLimiter) Limit(next http.HandlerFunc) http.HandlerFunc {
-	return cl.limit(next, true)
-}
-
-// LimitLongLived applies the same admission and concurrency accounting as
-// Limit but does not impose the request execution timeout. It is intended for
-// authenticated WebSocket sessions whose lifetime is controlled by either
-// peer, the server shutdown context, or upstream network deadlines.
-func (cl *ConcurrencyLimiter) LimitLongLived(next http.HandlerFunc) http.HandlerFunc {
-	return cl.limit(next, false)
-}
-
-func (cl *ConcurrencyLimiter) limit(next http.HandlerFunc, executionTimeout bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Admission is deliberately non-blocking. Queueing requests behind the
 		// semaphore consumes connections and goroutines precisely when the server
@@ -90,12 +80,6 @@ func (cl *ConcurrencyLimiter) limit(next http.HandlerFunc, executionTimeout bool
 			}
 			slog.Debug("Concurrency limit: Slot released", "active", atomic.LoadInt64(&cl.activeCount), "duration", duration)
 		}()
-
-		if !executionTimeout {
-			slog.Debug("Concurrency limit: Serving long-lived request", "path", r.URL.Path)
-			next.ServeHTTP(w, r)
-			return
-		}
 
 		// Use the full concurrency timeout for ordinary request execution.
 		execCtx, cancelExec := context.WithTimeout(r.Context(), cl.timeout)

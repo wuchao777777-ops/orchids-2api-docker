@@ -172,12 +172,9 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	}
 	// Both planes return opaque reasoning only when it is explicitly requested.
 	// Without it the replay cache is never populated, so a default (auto) turn
-	// would silently lose multi-turn reasoning continuity.
-	include := uniqueStrings(append([]string(nil), req.Include...))
-	include = uniqueStrings(append(include, "reasoning.encrypted_content"))
-	if len(include) > 0 {
-		payload["include"] = include
-	}
+	// would silently lose multi-turn reasoning continuity. The appended entry
+	// also means the list can never come back empty.
+	payload["include"] = uniqueStrings(append(append([]string(nil), req.Include...), "reasoning.encrypted_content"))
 	tools := append([]map[string]interface{}(nil), req.ResponsesTools...)
 	tools = append(tools, buildToolsFromOpenAI(req.Tools)...)
 	// OpenAI's web_search_options has no function form: it means "run the
@@ -564,7 +561,7 @@ func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 		// shape, otherwise the upstream rejects an unknown item type.
 		switch strings.ToLower(strings.TrimSpace(parseLooseStringAny(item["type"]))) {
 		case "custom_tool_call", "apply_patch_call":
-			lowerEmulatedCallItem(item, state)
+			lowerEmulatedCallItem(item)
 			continue
 		case "custom_tool_call_output", "apply_patch_call_output":
 			item["type"] = "function_call_output"
@@ -885,13 +882,7 @@ func validatePayloadReasoning(payload map[string]interface{}) error {
 // hasNativeSearchTool reports whether the tool list already declares a hosted
 // search tool, so web_search_options does not duplicate it.
 func hasNativeSearchTool(tools []map[string]interface{}) bool {
-	for _, tool := range tools {
-		switch strings.ToLower(strings.TrimSpace(fmt.Sprint(tool["type"]))) {
-		case "web_search", "x_search":
-			return true
-		}
-	}
-	return false
+	return hasBuildHostedTool(tools, "web_search") || hasBuildHostedTool(tools, "x_search")
 }
 
 // webSearchCompatibilityFields are newer OpenAI/Codex controls that the Grok
@@ -924,7 +915,7 @@ func stripWebSearchControlFields(tool map[string]interface{}) bool {
 // lowerEmulatedCallItem rewrites a client-side custom_tool_call / apply_patch_call
 // history item into the emulated function_call the Build plane accepts, so a
 // multi-turn agent loop keeps working after the tool declaration was emulated.
-func lowerEmulatedCallItem(item map[string]interface{}, state *buildToolNormalizationState) {
+func lowerEmulatedCallItem(item map[string]interface{}) {
 	switch strings.ToLower(strings.TrimSpace(parseLooseStringAny(item["type"]))) {
 	case "custom_tool_call":
 		name := strings.TrimSpace(parseLooseStringAny(item["name"]))

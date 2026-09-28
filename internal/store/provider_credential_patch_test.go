@@ -5,28 +5,12 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
-
-func newProviderPatchStore(t *testing.T) *Store {
-	t.Helper()
-	mini := miniredis.RunT(t)
-	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "provider-patch:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
-	return s
-}
 
 func TestProviderCredentialPatchesPreserveConcurrentAccountFields(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := newProviderPatchStore(t)
+	s, _ := newTestRedisStore(t, "provider-patch:")
 
 	wb := &Account{
 		AccountType: "workbuddy", Enabled: true, Name: "before", StatusCode: "429",
@@ -89,7 +73,7 @@ func TestProviderCredentialPatchesPreserveConcurrentAccountFields(t *testing.T) 
 func TestProviderCredentialPatchRejectsStaleRotation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s := newProviderPatchStore(t)
+	s, _ := newTestRedisStore(t, "provider-patch:")
 	acc := &Account{AccountType: "qoder", Enabled: true, QoderRefreshToken: "refresh-current"}
 	if err := s.CreateAccount(ctx, acc); err != nil {
 		t.Fatal(err)

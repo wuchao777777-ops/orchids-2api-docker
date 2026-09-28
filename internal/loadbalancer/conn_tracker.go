@@ -95,6 +95,7 @@ type RedisConnTracker struct {
 	releaseScript *redis.Script
 	acquireScript *redis.Script
 	refreshScript *redis.Script
+	countScript   *redis.Script
 	mu            sync.Mutex
 	held          map[int64][]*redisConnLease
 	closed        bool
@@ -107,6 +108,12 @@ type redisConnLease struct {
 	stop chan struct{}
 	done chan struct{}
 	once sync.Once
+}
+
+// stopRenewal ends the heartbeat goroutine. It is idempotent because a lease can
+// be released by its own request while a shutdown is releasing every lease.
+func (l *redisConnLease) stopRenewal() {
+	l.once.Do(func() { close(l.stop) })
 }
 
 func NewRedisConnTracker(client *redis.Client, prefix string) *RedisConnTracker {
@@ -139,6 +146,14 @@ func NewRedisConnTracker(client *redis.Client, prefix string) *RedisConnTracker 
 		redis.call("ZADD", KEYS[1], "XX", ARGV[2], ARGV[1])
 		redis.call("PEXPIRE", KEYS[1], ARGV[3])
 		return 1
+	`)
+	// The count read drops expired members and discards a legacy non-sorted-set
+	// key, so an upgraded deployment cannot inherit a string counter.
+	t.countScript = redis.NewScript(`
+		local kind = redis.call("TYPE", KEYS[1]).ok
+		if kind ~= "none" and kind ~= "zset" then redis.call("DEL", KEYS[1]); return 0 end
+		redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[1])
+		return redis.call("ZCARD", KEYS[1])
 	`)
 	return t
 }
@@ -174,7 +189,7 @@ func (t *RedisConnTracker) Release(accountID int64) {
 		t.held[accountID] = list
 	}
 	t.mu.Unlock()
-	lease.once.Do(func() { close(lease.stop) })
+	lease.stopRenewal()
 	<-lease.done
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -200,7 +215,7 @@ func (t *RedisConnTracker) Close() {
 
 	for _, leases := range held {
 		for _, lease := range leases {
-			lease.once.Do(func() { close(lease.stop) })
+			lease.stopRenewal()
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -218,12 +233,7 @@ func (t *RedisConnTracker) Close() {
 func (t *RedisConnTracker) GetCount(accountID int64) int64 {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	val, err := redis.NewScript(`
-		local kind = redis.call("TYPE", KEYS[1]).ok
-		if kind ~= "none" and kind ~= "zset" then redis.call("DEL", KEYS[1]); return 0 end
-		redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[1])
-		return redis.call("ZCARD", KEYS[1])
-	`).Run(ctx, t.client, []string{t.key(accountID)}, time.Now().UnixMilli()).Int64()
+	val, err := t.countScript.Run(ctx, t.client, []string{t.key(accountID)}, time.Now().UnixMilli()).Int64()
 	if err != nil {
 		return 0
 	}

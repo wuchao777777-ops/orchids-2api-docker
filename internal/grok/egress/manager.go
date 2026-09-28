@@ -384,36 +384,6 @@ func (m *Manager) probeNode(ctx context.Context, node Node) error {
 	return nil
 }
 
-// HealthSnapshot reports per-node health for the admin surface. It never
-// includes proxy URLs or credentials: only the node name, score, failure count
-// and the cooldown deadline.
-func (m *Manager) HealthSnapshot() []map[string]interface{} {
-	if m == nil {
-		return nil
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	now := time.Now()
-	out := make([]map[string]interface{}, 0, len(m.nodes))
-	for _, node := range m.nodes {
-		entry := map[string]interface{}{
-			"name":     node.Name,
-			"scope":    strings.ToLower(strings.TrimSpace(node.Scope)),
-			"health":   m.health[node.Name],
-			"failures": m.failures[node.Name],
-			"healthy":  !m.degradedLocked(node.Name, now),
-		}
-		if until, ok := m.unhealthy[node.Name]; ok && until.After(now) {
-			entry["cooldown_until"] = until.UTC().Format(time.RFC3339)
-		}
-		if last := m.lastError[node.Name]; last != "" {
-			entry["last_error"] = last
-		}
-		out = append(out, entry)
-	}
-	return out
-}
-
 // egressHealthFileName is the per-deployment health snapshot. It lives in the
 // media directory, which a multi-replica deployment already shares
 // (shared_media), so node health survives a restart and is visible to every

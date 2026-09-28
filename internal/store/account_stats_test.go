@@ -4,27 +4,12 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 func TestIncrementAccountStats_PassthroughAccountKeepsRemoteQuotaCurrent(t *testing.T) {
 	t.Parallel()
 
-	mini := miniredis.RunT(t)
-	s, err := New(Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
+	s, _ := newTestRedisStore(t, "test:")
 
 	ctx := context.Background()
 	acc := &Account{
@@ -59,20 +44,7 @@ func TestIncrementAccountStats_PassthroughAccountKeepsRemoteQuotaCurrent(t *test
 func TestIncrementAccountStats_ZeroUsageStillCountsRequest(t *testing.T) {
 	t.Parallel()
 
-	mini := miniredis.RunT(t)
-	s, err := New(Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
+	s, _ := newTestRedisStore(t, "test:")
 
 	ctx := context.Background()
 	acc := &Account{
@@ -108,12 +80,7 @@ func TestIncrementAccountStats_ZeroUsageStillCountsRequest(t *testing.T) {
 func TestUpdateAccount_DoesNotOverwriteAtomicUsageCounters(t *testing.T) {
 	t.Parallel()
 
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "test:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "test:")
 
 	ctx := context.Background()
 	acc := &Account{AccountType: "qoder", Enabled: true}
@@ -143,12 +110,7 @@ func TestUpdateAccount_DoesNotOverwriteAtomicUsageCounters(t *testing.T) {
 func TestIncrementAccountStats_WorkBuddyKeepsRemoteRemainingCredits(t *testing.T) {
 	t.Parallel()
 
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "test:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "test:")
 
 	ctx := context.Background()
 	acc := &Account{AccountType: "workbuddy", Enabled: true, UsageCurrent: 0, UsageLimit: 1000}
@@ -168,12 +130,7 @@ func TestIncrementAccountStats_WorkBuddyKeepsRemoteRemainingCredits(t *testing.T
 }
 
 func TestIncrementAccountStatsOperationIsDurablyIdempotent(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "stats-idempotent:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "stats-idempotent:")
 	ctx := context.Background()
 	acc := &Account{AccountType: "qoder", Enabled: true}
 	if err := s.CreateAccount(ctx, acc); err != nil {
@@ -195,12 +152,7 @@ func TestIncrementAccountStatsOperationIsDurablyIdempotent(t *testing.T) {
 }
 
 func TestIncrementAccountStatsOperationUsesCompletionUTCDateAcrossMidnight(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "stats-midnight:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "stats-midnight:")
 	ctx := context.Background()
 	acc := &Account{AccountType: "qoder", Enabled: true}
 	if err := s.CreateAccount(ctx, acc); err != nil {

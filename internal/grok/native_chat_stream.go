@@ -113,21 +113,18 @@ func responseFailure(ev map[string]interface{}) error {
 	if response, ok := ev["response"].(map[string]interface{}); ok {
 		value = response["error"]
 	}
+	// detail is a nil map when the upstream error is not an object; reading it is
+	// safe and yields the empty message.
 	detail, _ := value.(map[string]interface{})
-	message := ""
-	if detail != nil {
-		message = interfaceString(detail["message"])
-	}
+	message := firstNonEmpty(interfaceString(detail["message"]), interfaceString(value))
 	if message == "" {
-		message = interfaceString(value)
-	}
-	if message == "" {
+		// Kept separate from firstNonEmpty, which would trim the upstream text.
 		message = streamString(ev["message"])
 	}
-	if message != "" {
-		return fmt.Errorf("%s", message)
+	if message == "" {
+		message = "upstream response failed"
 	}
-	return fmt.Errorf("upstream response failed")
+	return fmt.Errorf("%s", message)
 }
 
 // streamBuildChatHolding is the Build streaming entry with the quality hold
@@ -198,11 +195,11 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 	searchDone := map[string]bool{}
 	finish := "stop"
 	emit := func(delta map[string]interface{}, done string, usage map[string]interface{}) error {
-		chunk := map[string]interface{}{"id": id, "object": "chat.completion.chunk", "created": created, "model": req.Model,
-			"choices": []map[string]interface{}{{"index": 0, "delta": delta, "finish_reason": nil}}}
+		choice := map[string]interface{}{"index": 0, "delta": delta, "finish_reason": nil}
 		if done != "" {
-			chunk["choices"].([]map[string]interface{})[0]["finish_reason"] = done
+			choice["finish_reason"] = done
 		}
+		chunk := map[string]interface{}{"id": id, "object": "chat.completion.chunk", "created": created, "model": req.Model, "choices": []map[string]interface{}{choice}}
 		if usage != nil {
 			chunk["usage"] = usage
 		}
@@ -476,10 +473,15 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 			finish = terminalFinish
 			for _, raw := range interfaceSlice(response["output"]) {
 				entry, _ := raw.(map[string]interface{})
-				if interfaceString(entry["type"]) == "reasoning" && filter.matched == "" {
+				if filter.matched != "" {
+					continue
+				}
+				switch interfaceString(entry["type"]) {
+				case "reasoning":
 					key := interfaceString(entry["id"])
 					state := thought(key)
-					if signature := interfaceString(entry["encrypted_content"]); signature != "" {
+					signature := interfaceString(entry["encrypted_content"])
+					if signature != "" {
 						lastSignature = signature
 					}
 					if state.text.Len() == 0 {
@@ -487,7 +489,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 							return err
 						}
 					}
-					if signature := interfaceString(entry["encrypted_content"]); signature != "" && signature != state.signature {
+					if signature != "" && signature != state.signature {
 						state.signature = signature
 						if err := emit(map[string]interface{}{"reasoning_item_id": state.key, "reasoning_encrypted_content": signature}, "", nil); err != nil {
 							return err
@@ -496,14 +498,15 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 					if err := emit(map[string]interface{}{"reasoning_item_id": state.key, "reasoning_done": true}, "", nil); err != nil {
 						return err
 					}
-				}
-				if (interfaceString(entry["type"]) == "web_search_call" || interfaceString(entry["type"]) == "x_search_call") && !searchDone[searchIdentity(entry)] && filter.matched == "" {
-					searchDone[searchIdentity(entry)] = true
-					if err := emit(map[string]interface{}{"x_grok_search": entry, "x_grok_search_done": true}, "", nil); err != nil {
-						return err
+				case "web_search_call", "x_search_call":
+					identity := searchIdentity(entry)
+					if !searchDone[identity] {
+						searchDone[identity] = true
+						if err := emit(map[string]interface{}{"x_grok_search": entry, "x_grok_search_done": true}, "", nil); err != nil {
+							return err
+						}
 					}
-				}
-				if interfaceString(entry["type"]) == "function_call" && filter.matched == "" {
+				case "function_call":
 					if err := toolItem(entry, nil); err != nil {
 						return err
 					}

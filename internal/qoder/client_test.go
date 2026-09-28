@@ -564,7 +564,7 @@ func TestClassifyStatus(t *testing.T) {
 	for _, tc := range cases {
 		err := classifyStatus(tc.status, "", []byte(tc.body))
 		var target *attemptStreamError
-		if !asAttemptError(err, &target) {
+		if !errors.As(err, &target) {
 			t.Fatalf("%s: error %v is not an attempt error", tc.name, err)
 		}
 		if target.unauth != tc.unauth || target.retryable != tc.retryable || target.busy != tc.busy {

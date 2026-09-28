@@ -164,8 +164,7 @@ func admitBrowserLogin[T any](
 		poll(pollContext, id)
 	}()
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(newDeviceLoginResponse(id, registry.shared(login)))
+	writeJSON(w, newDeviceLoginResponse(id, registry.shared(login)))
 	return true
 }
 
@@ -241,9 +240,7 @@ func finishBrowserLogin[T any](
 // admin UI can explain the actual cause instead of guessing. The message is
 // operator-facing and never contains credentials or upstream error text.
 func writeLoginError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "error": message})
+	writeJSONStatus(w, status, map[string]string{"code": code, "error": message})
 }
 
 // loginOptions is the optional start body. Both browser logins accept the same
@@ -300,7 +297,7 @@ func routeBrowserLogin(
 	case r.Method == http.MethodDelete && path != "":
 		cancel(w, path)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeMethodNotAllowed(w)
 	}
 }
 
@@ -317,8 +314,7 @@ func respondLoginStatus[T any](w http.ResponseWriter, registry *deviceLoginRegis
 			channel+" login session not found or already finished")
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(response)
+	writeJSON(w, response)
 }
 
 // abandonLogin cancels a login transaction and waits for its poll loop to stop.

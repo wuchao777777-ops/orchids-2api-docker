@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/util"
 )
 
 // ErrAuthPending is returned while the browser authorization has not completed.
@@ -78,7 +80,7 @@ func (c *Client) StartAuthLogin(ctx context.Context, clientVersion string) (stat
 		}
 	}
 	// Only the official login page may ever be handed to a browser.
-	if host := authHost(authURL); host != "" && !strings.EqualFold(host, hostOf(c.baseURL)) && !strings.EqualFold(host, "www.workbuddy.ai") {
+	if host := util.HostOf(authURL); host != "" && !strings.EqualFold(host, util.HostOf(c.baseURL)) && !strings.EqualFold(host, "www.workbuddy.ai") {
 		return "", "", fmt.Errorf("%w: auth response pointed at an unexpected host %q", ErrAuthRejected, host)
 	}
 	return state, authURL, nil
@@ -204,22 +206,6 @@ func envelopeCode(raw []byte) int {
 		return 0
 	}
 	return env.Code
-}
-
-func authHost(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return parsed.Hostname()
-}
-
-func hostOf(base string) string {
-	parsed, err := url.Parse(base)
-	if err != nil {
-		return ""
-	}
-	return parsed.Hostname()
 }
 
 // ProbeReachability verifies that this process can actually open a connection to

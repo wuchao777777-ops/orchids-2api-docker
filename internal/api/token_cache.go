@@ -3,8 +3,6 @@ package api
 import (
 	"fmt"
 	"net/http"
-
-	"github.com/goccy/go-json"
 )
 
 func formatTokenCacheBytes(size int64) string {
@@ -23,7 +21,7 @@ func writeTokenCacheStats(w http.ResponseWriter, promptConnected bool, promptCou
 	if promptConnected || estimateConnected {
 		status = "enabled"
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"code": 0,
 		"data": map[string]interface{}{
 			"key_count":       promptCount,
@@ -51,8 +49,6 @@ func writeTokenCacheStats(w http.ResponseWriter, promptConnected bool, promptCou
 
 // HandleTokenCacheStats handles GET /api/token-cache/stats
 func (a *API) HandleTokenCacheStats(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	cfg := a.config.Load()
 	promptConnected := cfg != nil && cfg.EnableTokenCache && a.promptCache != nil
 	estimateConnected := cfg != nil && cfg.CacheTokenCount && a.tokenCache != nil
@@ -72,21 +68,19 @@ func (a *API) HandleTokenCacheStats(w http.ResponseWriter, r *http.Request) {
 
 // HandleTokenCacheClear handles POST /api/token-cache/clear
 func (a *API) HandleTokenCacheClear(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	var count int64
 	cfg := a.config.Load()
 	if cfg != nil && cfg.EnableTokenCache && a.promptCache != nil {
 		count, _, _ = a.promptCache.GetStats(r.Context())
 		if err := a.promptCache.Clear(r.Context()); err != nil {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			writeJSON(w, map[string]interface{}{
 				"code":    1,
 				"message": "Failed to clear token cache: " + err.Error(),
 			})
 			return
 		}
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"code":    0,
 		"message": "清除成功",
 		"data": map[string]interface{}{

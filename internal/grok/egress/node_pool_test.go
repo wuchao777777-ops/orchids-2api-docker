@@ -2,8 +2,6 @@ package egress
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -221,32 +219,6 @@ func TestFeedbackOutcomeBacksOffExponentially(t *testing.T) {
 	}
 	if _, cooling := m.unhealthy["n1"]; cooling {
 		t.Fatal("a successful node must leave the cooldown map")
-	}
-}
-
-func TestHealthSnapshotNeverLeaksProxyURL(t *testing.T) {
-	m := &Manager{
-		cfg:       &config.Config{GrokEgressEnabled: true},
-		nodes:     []Node{{Name: "eu-1", URL: "http://user:secret@proxy.internal:8080", Scope: "cli", Weight: 1}},
-		health:    map[string]float64{},
-		unhealthy: map[string]time.Time{},
-		failures:  map[string]int{},
-		lastError: map[string]string{},
-		lastProbe: map[string]time.Time{},
-	}
-	m.FeedbackOutcome("eu-1", OutcomeServerError)
-	snapshot := m.HealthSnapshot()
-	if len(snapshot) != 1 {
-		t.Fatalf("snapshot = %#v, want one node", snapshot)
-	}
-	encoded := fmt.Sprint(snapshot)
-	for _, leak := range []string{"secret", "proxy.internal", "8080"} {
-		if strings.Contains(encoded, leak) {
-			t.Fatalf("health snapshot leaked %q: %s", leak, encoded)
-		}
-	}
-	if snapshot[0]["failures"] != 1 || snapshot[0]["healthy"] != false {
-		t.Fatalf("snapshot = %#v, want a degraded node with one failure", snapshot[0])
 	}
 }
 

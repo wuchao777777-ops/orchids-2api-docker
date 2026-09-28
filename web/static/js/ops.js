@@ -89,15 +89,13 @@
     // no failures" for a stretch that was never in it.
     const gap = journalCoverageGap(range.since);
     if (gap) showToast(gap, 'info');
-    const params = new URLSearchParams({ tab: 'logs', kind: 'request' });
-    params.set('since', range.since.toISOString());
-    params.set('until', range.until.toISOString());
-    if (state.channel) params.set('channel', state.channel);
-    if (state.model) params.set('model', state.model);
-    Object.keys(extra || {}).forEach((key) => {
-      const value = extra[key];
-      if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+    const params = assignParams(new URLSearchParams({ tab: 'logs', kind: 'request' }), {
+      since: range.since.toISOString(),
+      until: range.until.toISOString(),
+      channel: state.channel,
+      model: state.model,
     });
+    assignParams(params, extra);
     // The overview's own scope travels with the link, so the log centre can offer
     // "返回" and land on exactly the view that was left.
     params.set('back', currentOpsQuery());
@@ -119,10 +117,13 @@
   // address: the console navigates between tabs with a full page load, so an
   // in-memory "previous view" would not survive the trip.
   function currentOpsQuery() {
-    const params = new URLSearchParams({ tab: 'ops', window: String(state.window) });
-    if (state.channel) params.set('channel', state.channel);
-    if (state.model) params.set('model', state.model);
-    if (state.outcome !== 'all') params.set('outcome', state.outcome);
+    const params = assignParams(new URLSearchParams({ tab: 'ops', window: String(state.window) }), {
+      channel: state.channel,
+      model: state.model,
+      // The default cohort is absent from the URL: a bookmark without it must read
+      // as "all requests", not as a stuck selection.
+      outcome: state.outcome === 'all' ? '' : state.outcome,
+    });
     return pagePath() + '?' + params.toString();
   }
 
@@ -148,6 +149,73 @@
   function setText(id, value) {
     const node = el(id);
     if (node) node.textContent = value;
+  }
+
+  // --- element builders ------------------------------------------------------
+  // Nearly every element this page draws is the same three statements (create,
+  // class, text). These own that shape so the render functions read as WHAT they
+  // draw instead of how, and so a class name is written once.
+  function make(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+
+  function attach(parent, children) {
+    (children || []).forEach((child) => { if (child) parent.appendChild(child); });
+    return parent;
+  }
+
+  // An empty box and a broken one look alike, so both say which they are. Every
+  // empty chart, table and resource row goes through these two.
+  function emptyNote(container, text, className) {
+    container.replaceChildren();
+    container.appendChild(make('p', className || 'ops-empty', text));
+    return container;
+  }
+
+  function emptyRow(body, colSpan, text) {
+    const td = make('td', 'table-empty-cell', text);
+    td.colSpan = colSpan;
+    body.replaceChildren();
+    body.appendChild(attach(make('tr'), [td]));
+  }
+
+  // attachHandler wires one control to one handler. Every control is optional
+  // (the markup is shared with the smaller pages), so the "does it exist" guard
+  // lives here instead of at each of the twenty call sites.
+  function attachHandler(id, event, handler) {
+    const node = el(id);
+    if (node) node.addEventListener(event, handler);
+  }
+
+  // makeActivatable turns a node into a control: click, Enter and Space all run
+  // the same action. A chart bar and a matrix cell look nothing alike but must be
+  // reachable the same way, so the keyboard contract lives in one place.
+  function makeActivatable(node, action) {
+    node.setAttribute('tabindex', '0');
+    node.setAttribute('role', 'button');
+    node.classList.add('is-clickable');
+    node.addEventListener('click', action);
+    node.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        action();
+      }
+    });
+    return node;
+  }
+
+  // assignParams copies the scope fields that are set into a query string. A
+  // filter that is unset must stay absent: the log centre treats "" and "missing"
+  // the same way only because nothing ever sends an empty value.
+  function assignParams(params, source) {
+    Object.keys(source || {}).forEach((key) => {
+      const value = source[key];
+      if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+    });
+    return params;
   }
 
   function fmtInt(value) {
@@ -183,11 +251,7 @@
   }
 
   function emptyChart(container, text) {
-    container.replaceChildren();
-    const note = document.createElement('p');
-    note.className = 'ops-chart-empty';
-    note.textContent = text;
-    container.appendChild(note);
+    emptyNote(container, text, 'ops-chart-empty');
   }
 
   // --- charts (inline SVG; no chart library) --------------------------------
@@ -208,63 +272,120 @@
     return { width, height };
   }
 
+  // plotBox is the drawing area left inside a measured box after the axis gutters
+  // are taken off. Every chart below works in these five numbers, so none of them
+  // re-derives "where does the plot start" from its own padding constants.
+  function plotBox(container, fallbackHeight, pad) {
+    const box = chartBox(container, fallbackHeight);
+    return {
+      width: box.width,
+      height: box.height,
+      left: pad.left,
+      right: box.width - pad.right,
+      top: pad.top,
+      plotW: box.width - pad.left - pad.right,
+      plotH: box.height - pad.top - pad.bottom,
+    };
+  }
+
   function svgEl(name, attrs) {
     const node = document.createElementNS(SVG_NS, name);
     Object.keys(attrs || {}).forEach((key) => node.setAttribute(key, String(attrs[key])));
     return node;
   }
 
+  // gridLines draws the four horizontal guides, and axisLabels the numbers beside
+  // them. They are separate because a second series adds its own labels to the
+  // right without redrawing the guides over them.
+  function gridLines(svg, box) {
+    for (let i = 0; i <= 3; i += 1) {
+      const y = box.top + (box.plotH / 3) * i;
+      svg.appendChild(svgEl('line', { x1: box.left, y1: y, x2: box.right, y2: y, class: 'grid-line' }));
+    }
+  }
+
+  // A peak under 10 (a quiet window's QPS) would round every tick to the same
+  // integer, so the decimals follow the peak rather than being fixed.
+  function axisLabels(svg, box, max, x) {
+    for (let i = 0; i <= 3; i += 1) {
+      const label = svgEl('text', { x, y: box.top + (box.plotH / 3) * i + 3, class: 'axis-text' });
+      label.textContent = (max * (1 - i / 3)).toFixed(max < 10 ? 2 : 0);
+      svg.appendChild(label);
+    }
+  }
+
+  // polyPath turns coordinates into a path. A gap — a minute with no sample —
+  // breaks the line instead of bridging it with a straight segment that reads as
+  // a measured value: every null restarts the path with M.
+  function polyPath(coords, values) {
+    const parts = [];
+    coords.forEach((coord, index) => {
+      const value = values ? values[index] : coord.value;
+      if (value === null || value === undefined) return;
+      const command = parts.length === 0 || (values && values[index - 1] == null) ? 'M' : 'L';
+      parts.push(`${command}${coord.x.toFixed(1)},${coord.y.toFixed(1)}`);
+    });
+    return parts.join(' ');
+  }
+
+  // timeAxis prints at most six minute labels plus the last one: forty labels for
+  // forty buckets is a grey band, not an axis.
+  function timeAxis(svg, box, points, xOf) {
+    const every = Math.max(1, Math.ceil(points.length / 6));
+    points.forEach((point, index) => {
+      if (index % every !== 0 && index !== points.length - 1) return;
+      const text = svgEl('text', { x: xOf(index), y: box.height - 5, class: 'axis-text', 'text-anchor': 'middle' });
+      text.textContent = point.label;
+      svg.appendChild(text);
+    });
+  }
+
+  function chartSvg(box, stretch) {
+    const attrs = { viewBox: `0 0 ${box.width} ${box.height}` };
+    if (stretch) attrs.preserveAspectRatio = 'none';
+    return svgEl('svg', attrs);
+  }
+
   // lineChart draws one or two series with a left axis, a grid and time labels.
   function lineChart(container, options) {
-    container.replaceChildren();
     const points = options.points || [];
-    if (!points.length || !points.some(p => p.value != null)) {
+    if (!points.length || !points.some((p) => p.value != null)) {
       emptyChart(container, options.emptyText || '这段时间没有样本。');
       return;
     }
-    const box = chartBox(container, options.height || 150);
-    const width = box.width;
-    const height = box.height;
-    const padLeft = 34;
-    const padRight = options.rightAxis ? 34 : 10;
-    const padTop = 8;
-    const padBottom = 20;
-    const plotW = width - padLeft - padRight;
-    const plotH = height - padTop - padBottom;
-    const maxValue = Math.max(options.maxValue || 0, ...points.map((p) => p.value), 0.0001);
-
-    const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none' });
-
-    for (let i = 0; i <= 3; i += 1) {
-      const y = padTop + (plotH / 3) * i;
-      svg.appendChild(svgEl('line', { x1: padLeft, y1: y, x2: width - padRight, y2: y, class: 'grid-line' }));
-      const label = svgEl('text', { x: 4, y: y + 3, class: 'axis-text' });
-      label.textContent = (maxValue * (1 - i / 3)).toFixed(maxValue < 10 ? 2 : 0);
-      svg.appendChild(label);
-    }
-
-    const step = plotW / Math.max(points.length - 1, 1);
-    const coords = points.map((point, index) => {
-      const x = padLeft + step * index;
-      const y = padTop + plotH - (point.value / maxValue) * plotH;
-      return { x, y };
+    const box = plotBox(container, options.height || 150, {
+      left: 34, right: options.rightAxis ? 34 : 10, top: 8, bottom: 20,
     });
+    const maxValue = Math.max(options.maxValue || 0, ...points.map((p) => p.value), 0.0001);
+    const svg = chartSvg(box, true);
+    gridLines(svg, box);
+    axisLabels(svg, box, maxValue, 4);
+
+    const step = box.plotW / Math.max(points.length - 1, 1);
+    const coords = points.map((point, index) => ({
+      x: box.left + step * index,
+      y: box.top + box.plotH - (point.value / maxValue) * box.plotH,
+    }));
 
     if (options.area) {
-      const area = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+      const baseline = (box.top + box.plotH).toFixed(1);
       svg.appendChild(svgEl('path', {
-        d: `${area} L${coords[coords.length - 1].x.toFixed(1)},${(padTop + plotH).toFixed(1)} L${coords[0].x.toFixed(1)},${(padTop + plotH).toFixed(1)} Z`,
+        d: `${polyPath(coords)} L${coords[coords.length - 1].x.toFixed(1)},${baseline} L${coords[0].x.toFixed(1)},${baseline} Z`,
         class: 'series-area',
       }));
     }
 
-    const line = coords.map((c, i) => points[i].value == null ? '' : `${i === 0 || points[i - 1].value == null ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
-    svg.appendChild(svgEl('path', { d: line, class: options.className || 'series-qps' }));
-    coords.forEach((c, i) => {
-      if (points[i].value != null && (i === 0 || points[i - 1].value == null) &&
-          (i === points.length - 1 || points[i + 1].value == null)) {
-        svg.appendChild(svgEl('circle', { cx: c.x, cy: c.y, r: 3, fill: 'var(--accent)' }));
-      }
+    svg.appendChild(svgEl('path', {
+      d: polyPath(coords, points.map((point) => point.value)),
+      class: options.className || 'series-qps',
+    }));
+    // A sample alone in a gap would be invisible without a dot: a one-point path
+    // has no segment to draw.
+    coords.forEach((coord, index) => {
+      const value = points[index].value;
+      if (value == null) return;
+      if ((index > 0 && points[index - 1].value != null) && (index < points.length - 1 && points[index + 1].value != null)) return;
+      svg.appendChild(svgEl('circle', { cx: coord.x, cy: coord.y, r: 3, fill: 'var(--accent)' }));
     });
 
     // Second series on its own scale: QPS and TPS differ by orders of magnitude,
@@ -272,197 +393,131 @@
     if (options.secondaryPoints && options.secondaryPoints.length === points.length) {
       const secondaryMax = Math.max(options.secondaryMax || 0, ...options.secondaryPoints.map((p) => p.value), 0.0001);
       const secondaryCoords = options.secondaryPoints.map((point, index) => ({
-        x: padLeft + step * index,
-        y: padTop + plotH - (point.value / secondaryMax) * plotH,
+        x: box.left + step * index,
+        y: box.top + box.plotH - (point.value / secondaryMax) * box.plotH,
       }));
-      svg.appendChild(svgEl('path', {
-        d: secondaryCoords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' '),
-        class: 'series-tps',
-      }));
-      for (let i = 0; i <= 3; i += 1) {
-        const y = padTop + (plotH / 3) * i;
-        const label = svgEl('text', { x: width - padRight + 4, y: y + 3, class: 'axis-text' });
-        label.textContent = (secondaryMax * (1 - i / 3)).toFixed(secondaryMax < 10 ? 2 : 0);
-        svg.appendChild(label);
-      }
+      svg.appendChild(svgEl('path', { d: polyPath(secondaryCoords), class: 'series-tps' }));
+      axisLabels(svg, box, secondaryMax, box.right + 4);
     }
 
-    const labelEvery = Math.max(1, Math.ceil(points.length / 6));
-    points.forEach((point, index) => {
-      if (index % labelEvery !== 0 && index !== points.length - 1) return;
-      const text = svgEl('text', { x: coords[index].x, y: height - 5, class: 'axis-text', 'text-anchor': 'middle' });
-      text.textContent = point.label;
-      svg.appendChild(text);
-    });
-
+    timeAxis(svg, box, points, (index) => coords[index].x);
+    container.replaceChildren();
     container.appendChild(svg);
   }
 
-  // bars renders a per-minute bar series (errors, sparkline ticks). An optional
+  // barChart renders a per-minute bar series (errors, sparkline ticks). An optional
   // overlay draws a second series on the same scale, and onSelect makes each bar
   // open the log centre scoped to that minute.
   function barChart(container, points, options) {
-    container.replaceChildren();
     if (!points.length) {
       emptyChart(container, (options && options.emptyText) || '这段时间没有样本。');
       return;
     }
-    const box = chartBox(container, (options && options.height) || 150);
-    const width = box.width;
-    const height = box.height;
-    const padLeft = 30;
-    const padBottom = 20;
-    const plotW = width - padLeft - 8;
-    const plotH = height - padBottom - 8;
-    const overlay = (options && options.overlay) || [];
+    const opts = options || {};
+    const box = plotBox(container, opts.height || 150, { left: 30, right: 8, top: 8, bottom: 20 });
+    const overlay = opts.overlay || [];
     const maxValue = Math.max(1, ...points.map((p) => p.value), ...overlay.map((p) => p.value));
-    const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none' });
-    svg.appendChild(svgEl('line', { x1: padLeft, y1: 8, x2: padLeft, y2: 8 + plotH, class: 'grid-line' }));
-    const barStep = plotW / points.length;
+    const svg = chartSvg(box, true);
+    svg.appendChild(svgEl('line', { x1: box.left, y1: box.top, x2: box.left, y2: box.top + box.plotH, class: 'grid-line' }));
+    const barStep = box.plotW / points.length;
     const barW = Math.max(0.2, barStep - Math.min(2, barStep * 0.2));
     points.forEach((point, index) => {
-      const barH = Math.max(point.value > 0 ? 3 : 0.6, (point.value / maxValue) * plotH);
-      const x = padLeft + (plotW / points.length) * index;
+      const barH = Math.max(point.value > 0 ? 3 : 0.6, (point.value / maxValue) * box.plotH);
       const bar = svgEl('rect', {
-        x, y: 8 + plotH - barH, width: barW, height: barH,
-        class: (point.value > 0 || !(options && options.markZero)) && options && options.errorBars ? 'bar is-error' : 'bar',
+        x: box.left + barStep * index,
+        y: box.top + box.plotH - barH,
+        width: barW,
+        height: barH,
+        class: (point.value > 0 || !opts.markZero) && opts.errorBars ? 'bar is-error' : 'bar',
       });
       bar.appendChild(svgEl('title', {})).textContent = `${point.label}：${point.value}`;
-      if (options && options.onSelect) {
+      if (opts.onSelect) {
         // A chart that cannot be interrogated is a poster: the bar carries the
         // minute it belongs to into the log centre.
-        bar.setAttribute('tabindex', '0');
-        bar.setAttribute('role', 'button');
-        bar.classList.add('is-clickable');
-        const activate = () => options.onSelect(index);
-        bar.addEventListener('click', activate);
-        bar.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            activate();
-          }
-        });
+        makeActivatable(bar, () => opts.onSelect(index));
       }
       svg.appendChild(bar);
     });
     if (overlay.length === points.length) {
       // The attempt-failure series shares the axis (both are request counts), so it
       // is drawn as a line over the bars rather than as a second scale.
-      const step = plotW / points.length;
       const coords = overlay.map((point, index) => ({
-        x: padLeft + step * index + barW / 2,
-        y: 8 + plotH - (point.value / maxValue) * plotH,
+        x: box.left + barStep * index + barW / 2,
+        y: box.top + box.plotH - (point.value / maxValue) * box.plotH,
       }));
       svg.appendChild(svgEl('polyline', {
         points: coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' '),
         class: 'series-alt',
       }));
     }
-    const labelEvery = Math.max(1, Math.ceil(points.length / 6));
-    points.forEach((point, index) => {
-      if (index % labelEvery !== 0 && index !== points.length - 1) return;
-      const text = svgEl('text', {
-        x: padLeft + (plotW / points.length) * index + barW / 2,
-        y: height - 5, class: 'axis-text', 'text-anchor': 'middle',
-      });
-      text.textContent = point.label;
-      svg.appendChild(text);
-    });
+    timeAxis(svg, box, points, (index) => box.left + barStep * index + barW / 2);
+    container.replaceChildren();
     container.appendChild(svg);
   }
 
   function sparkline(points) {
     const container = el('opsSpark');
     if (!container) return;
-    const width = 320;
-    const height = 72;
-    container.replaceChildren();
+    // The sparkline is a fixed strip beside the hero figures, not a box the CSS
+    // sizes, so it is the one chart that does not measure itself.
+    const box = { width: 320, height: 72, left: 0, top: 6, plotH: 56 };
     if (!points.length) {
-      const note = document.createElement('p');
-      note.className = 'ops-chart-empty';
-      note.textContent = '指标未采集';
-      container.appendChild(note);
+      emptyNote(container, '指标未采集', 'ops-chart-empty');
       return;
     }
     if (points.length === 1) {
-      const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}` });
-      svg.appendChild(svgEl('circle', { cx: width / 2, cy: height / 2, r: 4, fill: 'var(--accent)' }));
-      const label = svgEl('text', { x: width / 2, y: height - 8, 'text-anchor': 'middle', class: 'axis-text' });
+      const svg = chartSvg(box, false);
+      svg.appendChild(svgEl('circle', { cx: box.width / 2, cy: box.height / 2, r: 4, fill: 'var(--accent)' }));
+      const label = svgEl('text', { x: box.width / 2, y: box.height - 8, 'text-anchor': 'middle', class: 'axis-text' });
       label.textContent = points[0].value > 0 ? '当前分钟已有请求' : '当前分钟无请求';
       svg.appendChild(label);
+      container.replaceChildren();
       container.appendChild(svg);
       return;
     }
     const max = Math.max(1, ...points.map((p) => p.value));
-    const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none' });
+    const svg = chartSvg(box, true);
     const coords = points.map((point, index) => ({
-      x: (width / Math.max(points.length - 1, 1)) * index,
-      y: height - 6 - (point.value / max) * (height - 16),
+      x: (box.width / Math.max(points.length - 1, 1)) * index,
+      y: box.height - 6 - (point.value / max) * (box.height - 16),
     }));
-    svg.appendChild(svgEl('path', {
-      d: coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' '),
-      class: 'series-tps',
-    }));
+    svg.appendChild(svgEl('path', { d: polyPath(coords), class: 'series-tps' }));
+    container.replaceChildren();
     container.appendChild(svg);
   }
 
   // --- KPI cards -------------------------------------------------------------
 
   function kpiCard(title, tools) {
-    const card = document.createElement('article');
-    card.className = 'ops-kpi-card';
-    const head = document.createElement('div');
-    head.className = 'ops-kpi-head';
-    const label = document.createElement('span');
-    label.textContent = title;
-    head.appendChild(label);
-    if (tools) {
-      const tool = document.createElement('span');
-      tool.className = 'ops-hint';
-      tool.textContent = tools;
-      head.appendChild(tool);
-    }
+    const card = make('article', 'ops-kpi-card');
+    const head = attach(make('div', 'ops-kpi-head'), [make('span', '', title), tools ? make('span', 'ops-hint', tools) : null]);
     card.appendChild(head);
     return card;
   }
 
   function bigValue(card, value, unit, tone) {
-    const node = document.createElement('div');
-    node.className = 'ops-kpi-big' + (tone ? ' ' + tone : '');
-    node.textContent = value;
-    if (unit) {
-      const unitNode = document.createElement('span');
-      unitNode.className = 'ops-kpi-unit';
-      unitNode.textContent = unit;
-      node.appendChild(unitNode);
-    }
+    const node = make('div', 'ops-kpi-big' + (tone ? ' ' + tone : ''), value);
+    if (unit) node.appendChild(make('span', 'ops-kpi-unit', unit));
     card.appendChild(node);
     return node;
   }
 
   function rowList(card, rows) {
-    const list = document.createElement('div');
-    list.className = 'ops-kpi-rows';
+    const list = make('div', 'ops-kpi-rows');
     rows.forEach((entry) => {
-      const row = document.createElement('div');
-      row.className = 'ops-kpi-row' + (entry.strong ? ' is-strong' : '');
-      const label = document.createElement('span');
-      label.textContent = entry.label;
-      const value = document.createElement('span');
-      value.textContent = entry.value;
-      row.appendChild(label);
-      row.appendChild(value);
+      const row = make('div', 'ops-kpi-row' + (entry.strong ? ' is-strong' : ''));
+      attach(row, [make('span', '', entry.label), make('span', '', entry.value)]);
       list.appendChild(row);
     });
     card.appendChild(list);
     return list;
   }
 
+  // meter draws a fill bar clamped to 0–100%. A ratio above 1 would otherwise
+  // push the fill out of its track and look like a broken card.
   function meter(card, ratio, tone) {
-    const wrap = document.createElement('div');
-    wrap.className = 'ops-kpi-meter';
-    const fill = document.createElement('span');
-    if (tone) fill.className = tone;
+    const wrap = make('div', 'ops-kpi-meter');
+    const fill = make('span', tone || '');
     fill.style.width = Math.max(0, Math.min(100, ratio * 100)).toFixed(1) + '%';
     wrap.appendChild(fill);
     card.appendChild(wrap);
@@ -470,26 +525,18 @@
 
   function percentileRows(set) {
     const p = set || {};
-    return [
-      { label: 'P95', value: fmtMs(p.p95_ms, p.samples) },
-      { label: 'P90', value: fmtMs(p.p90_ms, p.samples) },
-      { label: 'P50', value: fmtMs(p.p50_ms, p.samples) },
-      { label: 'Avg', value: fmtMs(p.avg_ms, p.samples) },
-      { label: 'Max', value: fmtMs(p.max_ms, p.samples) },
-    ];
+    return ['P95', 'P90', 'P50', 'Avg', 'Max'].map((label) => ({
+      label,
+      value: fmtMs(p[label === 'Avg' ? 'avg_ms' : label.toLowerCase() + '_ms'], p.samples),
+    }));
   }
 
   function renderSkeletons() {
     const container = el('opsKpis');
     if (!container || container.childElementCount) return;
     for (let i = 0; i < 6; i += 1) {
-      const card = document.createElement('article');
-      card.className = 'ops-kpi-card is-loading';
-      for (const width of ['w-40', 'w-70', 'w-40']) {
-        const line = document.createElement('div');
-        line.className = 'skeleton-line ' + width;
-        card.appendChild(line);
-      }
+      const card = make('article', 'ops-kpi-card is-loading');
+      ['w-40', 'w-70', 'w-40'].forEach((width) => card.appendChild(make('div', 'skeleton-line ' + width)));
       container.appendChild(card);
     }
   }
@@ -498,16 +545,14 @@
   // that card, the TTFT card and the distribution together, which is why it is
   // labelled with what it affects instead of repeating itself in four cards.
   function outcomeTabs(onChange) {
-    const wrap = document.createElement('span');
-    wrap.className = 'ops-tabs';
+    const wrap = make('span', 'ops-tabs');
     wrap.id = 'opsOutcomeTabs';
     OUTCOME_TABS.forEach((tab) => {
-      const button = document.createElement('button');
+      const active = state.outcome === tab.key;
+      const button = make('button', 'ops-chip' + (active ? ' is-active' : ''), tab.label);
       button.type = 'button';
-      button.className = 'ops-chip' + (state.outcome === tab.key ? ' is-active' : '');
       button.setAttribute('data-outcome', tab.key);
-      button.setAttribute('aria-pressed', state.outcome === tab.key ? 'true' : 'false');
-      button.textContent = tab.label;
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
       button.addEventListener('click', () => {
         state.outcome = tab.key;
         syncUrl();
@@ -582,26 +627,35 @@
 
     // Request duration, with the cohort selector
     const tab = outcomeTab(state.outcome);
-    const duration = totals[tab.duration] || (state.outcome === 'all' && totals.duration_p95_ms ? {
-      p95_ms: totals.duration_p95_ms,
-      samples: totals.samples || 0,
-    } : {});
-    const durationCard = kpiCard('请求时长', (duration.samples || 0) + ' 个样本');
-    durationCard.querySelector('.ops-kpi-head').appendChild(outcomeTabs(() => renderKpis(payload)));
-    bigValue(durationCard, fmtMs(duration.p99_ms ?? duration.p95_ms, duration.samples), duration.p99_ms == null ? 'P95' : 'P99', duration.samples ? '' : 'is-muted');
-    rowList(durationCard, percentileRows(duration).filter((row) => row.label !== 'P99'));
-    container.appendChild(durationCard);
+    // cohortSet reads the percentile set for the selected cohort. Payloads that
+    // predate the outcome breakdown carry only the all-requests P95, so it is the
+    // fallback for that cohort only — never for "failed", where it would answer a
+    // question nobody asked with a number about a different set of requests.
+    function cohortSet(key, legacyKey) {
+      return totals[key] || (state.outcome === 'all' && totals[legacyKey]
+        ? { p95_ms: totals[legacyKey], samples: totals.samples || 0 }
+        : {});
+    }
+    // latencyCard draws one percentile card. The duration and TTFT cards differ
+    // only in their headline, their sample note and which of them carries the 口径
+    // selector; one builder is what keeps "P95 of failed requests" meaning the
+    // same thing in both.
+    function latencyCard(title, tools, set, options) {
+      const card = kpiCard(title, tools);
+      if (options.tabs) card.querySelector('.ops-kpi-head').appendChild(outcomeTabs(() => renderKpis(payload)));
+      if (options.note) card.title = options.note;
+      bigValue(card, fmtMs(set.p99_ms ?? set.p95_ms, set.samples), set.p99_ms == null ? 'P95' : 'P99', set.samples ? '' : 'is-muted');
+      rowList(card, percentileRows(set));
+      return card;
+    }
+    const duration = cohortSet(tab.duration, 'duration_p95_ms');
+    container.appendChild(latencyCard('请求时长', (duration.samples || 0) + ' 个样本', duration, { tabs: true }));
 
     // Time to first token, same cohort
-    const firstToken = totals[tab.firstToken] || (state.outcome === 'all' && totals.first_token_p95_ms ? {
-      p95_ms: totals.first_token_p95_ms,
-      samples: totals.samples || 0,
-    } : {});
-    const ttftCard = kpiCard('TTFT', '口径：' + tab.label);
-    ttftCard.title = '流式：首次文本、思考或工具内容；非流式：首响应字节。未产生流内容的请求不计入 TTFT 样本。';
-    bigValue(ttftCard, fmtMs(firstToken.p99_ms ?? firstToken.p95_ms, firstToken.samples), firstToken.p99_ms == null ? 'P95' : 'P99', firstToken.samples ? '' : 'is-muted');
-    rowList(ttftCard, percentileRows(firstToken).filter((row) => row.label !== 'P99'));
-    container.appendChild(ttftCard);
+    const firstToken = cohortSet(tab.firstToken, 'first_token_p95_ms');
+    container.appendChild(latencyCard('TTFT', '口径：' + tab.label, firstToken, {
+      note: '流式：首次文本、思考或工具内容；非流式：首响应字节。未产生流内容的请求不计入 TTFT 样本。',
+    }));
 
     // Upstream errors: the two classes that are the provider's side of the
     // failure. A 4xx is the caller's fault and a rate limit is a business limit,
@@ -651,24 +705,36 @@
     const totals = payload.totals || {};
     state.overview = payload;
     const buckets = liveBuckets(state.liveWindow);
-    const qpsPoints = buckets.map(point => ({ label: fmtMinute(point.minute), value: point.requests / point.seconds }));
-    const tpsPoints = buckets.map(point => ({ label: fmtMinute(point.minute), value: ((point.input_tokens || 0) + (point.output_tokens || 0)) / point.seconds }));
+    // rateSeries turns the minute buckets into one line of points: per-second
+    // rates, because the bucket still in progress covers fewer than 60 seconds.
+    function rateSeries(tokenSum) {
+      return buckets.map((point) => ({
+        label: fmtMinute(point.minute),
+        value: tokenSum(point) / point.seconds,
+      }));
+    }
+    const qpsPoints = rateSeries((point) => point.requests);
+    const tpsPoints = rateSeries((point) => (point.input_tokens || 0) + (point.output_tokens || 0));
     const seconds = buckets.reduce((sum, point) => sum + point.seconds, 0);
     const requests = buckets.reduce((sum, point) => sum + point.requests, 0);
     const tokens = buckets.reduce((sum, point) => sum + (point.input_tokens || 0) + (point.output_tokens || 0), 0);
-    const hasUsage = requests === 0 || tokens > 0 || buckets.some(point => point.usage_samples > 0);
-    const current = qpsPoints.length ? qpsPoints[qpsPoints.length - 1].value : 0;
-    const peak = qpsPoints.reduce((max, point) => Math.max(max, point.value), 0);
-    const avg = seconds ? requests / seconds : 0;
-    const tpsCurrent = tpsPoints.length ? tpsPoints[tpsPoints.length - 1].value : 0;
-    const tpsPeak = tpsPoints.reduce((max, point) => Math.max(max, point.value), 0);
-    const tpsAvg = seconds ? tokens / seconds : 0;
-    setText('opsLiveQpsNow', buckets.length ? current.toFixed(2) : '未采集');
-    setText('opsLiveQpsPeak', buckets.length ? peak.toFixed(2) : '未采集');
-    setText('opsLiveQpsAvg', buckets.length ? avg.toFixed(2) : '未采集');
-    setText('opsLiveTpsNow', buckets.length && hasUsage ? tpsCurrent.toFixed(1) : '未采集');
-    setText('opsLiveTpsPeak', buckets.length && hasUsage ? tpsPeak.toFixed(1) : '未采集');
-    setText('opsLiveTpsAvg', buckets.length && hasUsage ? tpsAvg.toFixed(1) : '未采集');
+    const hasUsage = requests === 0 || tokens > 0 || buckets.some((point) => point.usage_samples > 0);
+    // Three live figures per metric: the bucket in progress, the busiest bucket,
+    // and the mean over the elapsed seconds. All three read 未采集 rather than 0.00
+    // when no bucket was collected: an idle console is not a zero-rate console.
+    function liveFigures(prefix, points, total, digits) {
+      const peak = points.reduce((max, point) => Math.max(max, point.value), 0);
+      const latest = points.length ? points[points.length - 1].value : 0;
+      const avg = seconds ? total / seconds : 0;
+      const shown = (value) => (points.length ? value.toFixed(digits) : '未采集');
+      setText(prefix + 'Now', shown(latest));
+      setText(prefix + 'Peak', shown(peak));
+      setText(prefix + 'Avg', shown(avg));
+    }
+    liveFigures('opsLiveQps', qpsPoints, requests, 2);
+    // The token rate is withheld entirely when nothing reported usage: a partial
+    // TPS would read as the whole window's and quietly understate the traffic.
+    liveFigures('opsLiveTps', hasUsage ? tpsPoints : [], tokens, 1);
     setText('opsHeroHint', `最近 ${state.liveWindow} 个分钟桶 · 当前分钟按已过时间计算 · 15 秒刷新`);
 
     // Health: the SLA of the window, with the traffic level deciding whether the
@@ -690,23 +756,16 @@
     const gaugeSub = el('opsGaugeSub');
     if (gaugeSub) {
       gaugeSub.replaceChildren();
-      const parts = [
+      [
         `${payload.window_minutes} 分钟 ${fmtInt(real)} 次请求`,
         `最终失败 ${fmtInt(totals.failed || 0)}`,
         `上游尝试失败 ${fmtInt(totals.attempt_failures || 0)}`,
-      ];
-      parts.forEach((part) => {
-        const span = document.createElement('span');
-        span.textContent = part;
-        gaugeSub.appendChild(span);
-      });
+      ].forEach((part) => gaugeSub.appendChild(make('span', '', part)));
       if (totals.failed > 0) {
         // A click target on the number an operator would reach for anyway.
-        const link = document.createElement('button');
+        const link = make('button', 'ops-inline-link', '查看失败请求 →');
         link.type = 'button';
-        link.className = 'ops-inline-link';
         link.id = 'opsHeroUpstreamErrors';
-        link.textContent = '查看失败请求 →';
         link.addEventListener('click', () => drilldownToLogs({ outcome: 'failed' }));
         gaugeSub.appendChild(link);
       }
@@ -720,30 +779,21 @@
   function renderResources(payload) {
     const container = el('opsResources');
     if (!container) return;
-    container.replaceChildren();
     const metrics = payload && payload.available !== false ? (payload.metrics || []) : [];
     if (!metrics.length) {
-      const note = document.createElement('p');
-      note.className = 'ops-empty';
-      note.textContent = (payload && payload.note) || '运行时指标不可用。';
-      container.appendChild(note);
+      emptyNote(container, (payload && payload.note) || '运行时指标不可用。');
       return;
     }
+    container.replaceChildren();
     metrics.forEach((metric) => {
-      const card = document.createElement('article');
-      card.className = 'ops-resource is-' + (metric.status || 'unknown');
-      const head = document.createElement('div');
-      head.className = 'ops-resource-head';
-      head.textContent = metric.available ? metric.label : metric.label + '（不可用）';
-      const value = document.createElement('div');
-      value.className = 'ops-resource-value';
-      value.textContent = metric.available ? metric.value : '不可用';
-      const detail = document.createElement('div');
-      detail.className = 'ops-resource-detail';
-      detail.textContent = [metric.detail, metric.thresholds].filter(Boolean).join(' · ');
-      card.appendChild(head);
-      card.appendChild(value);
-      card.appendChild(detail);
+      // A metric whose collector stopped keeps its row and says 不可用: a row that
+      // silently disappeared reads as "this host has no such metric".
+      const card = make('article', 'ops-resource is-' + (metric.status || 'unknown'));
+      attach(card, [
+        make('div', 'ops-resource-head', metric.available ? metric.label : metric.label + '（不可用）'),
+        make('div', 'ops-resource-value', metric.available ? metric.value : '不可用'),
+        make('div', 'ops-resource-detail', [metric.detail, metric.thresholds].filter(Boolean).join(' · ')),
+      ]);
       container.appendChild(card);
     });
   }
@@ -753,57 +803,42 @@
   function renderConcurrency(payload) {
     const container = el('opsConcurrency');
     if (!container) return;
-    container.replaceChildren();
     const rows = (payload.matrix || []).filter((row) => IsProvider(row.channel));
-    const head = document.createElement('div');
-    head.className = 'ops-platform-head';
-    head.textContent = '按平台';
-    const count = document.createElement('span');
-    count.textContent = `共 ${rows.length} 项`;
-    head.appendChild(count);
+    const head = attach(make('div', 'ops-platform-head', '按平台'), [make('span', '', `共 ${rows.length} 项`)]);
+    container.replaceChildren();
     container.appendChild(head);
 
     if (!rows.length) {
-      const note = document.createElement('p');
-      note.className = 'ops-platform-empty';
-      note.textContent = '还没有渠道数据。';
-      container.appendChild(note);
+      emptyNote(container, '还没有渠道数据。', 'ops-platform-empty');
       return;
     }
     rows.forEach((row) => {
       const enabled = row.accounts_enabled || 0;
       const available = row.accounts_available || 0;
       const ratio = enabled > 0 ? available / enabled : 0;
-      const card = document.createElement('div');
-      card.className = 'ops-platform';
-      const top = document.createElement('div');
-      top.className = 'ops-platform-top';
-      const name = document.createElement('span');
-      name.className = 'ops-platform-name';
-      name.textContent = row.channel;
-      const rate = document.createElement('span');
-      rate.className = 'ops-platform-rate';
-      rate.textContent = row.concurrency_available ? `${row.active_requests || 0} 活跃请求 · ${available}/${enabled} 可用账号` : `${available}/${enabled} 可用账号 · 并发未采集`;
-      top.appendChild(name);
-      top.appendChild(rate);
+      const card = make('div', 'ops-platform');
+      const top = attach(make('div', 'ops-platform-top'), [
+        make('span', 'ops-platform-name', row.channel),
+        make('span', 'ops-platform-rate', row.concurrency_available
+          ? `${row.active_requests || 0} 活跃请求 · ${available}/${enabled} 可用账号`
+          : `${available}/${enabled} 可用账号 · 并发未采集`),
+      ]);
       card.appendChild(top);
       meter(card, ratio, ratio >= 0.99 ? '' : ratio > 0 ? 'is-warn' : 'is-error');
-      const badges = document.createElement('div');
-      badges.className = 'ops-platform-badges';
-      if (row.accounts_needing_login) addBadge(badges, `需登录 ${row.accounts_needing_login}`, 'is-error');
-      if (row.model_cooldowns) addBadge(badges, `限流 ${row.model_cooldowns}`, 'is-warn');
-      if (!row.accounts_needing_login && !row.model_cooldowns) addBadge(badges, '无限制', 'is-ok');
-      card.appendChild(badges);
+      // The badges state what is holding the channel back, or that nothing is:
+      // an empty badge row reads as "no data" rather than "no limits".
+      const badges = [
+        row.accounts_needing_login ? [`需登录 ${row.accounts_needing_login}`, 'is-error'] : null,
+        row.model_cooldowns ? [`限流 ${row.model_cooldowns}`, 'is-warn'] : null,
+        (!row.accounts_needing_login && !row.model_cooldowns) ? ['无限制', 'is-ok'] : null,
+      ].filter(Boolean);
+      card.appendChild(attach(make('div', 'ops-platform-badges'), badges.map(([label, tone]) => {
+        const badge = make('span', 'logs-badge ' + tone, label);
+        badge.style.marginLeft = '0';
+        return badge;
+      })));
       container.appendChild(card);
     });
-  }
-
-  function addBadge(parent, text, tone) {
-    const badge = document.createElement('span');
-    badge.className = 'logs-badge ' + (tone || '');
-    badge.style.marginLeft = '0';
-    badge.textContent = text;
-    parent.appendChild(badge);
   }
 
   function IsProvider(channel) {
@@ -814,18 +849,25 @@
 
   // --- trends ----------------------------------------------------------------
 
-  function renderTrends(payload) {
-    const throughput = el('opsThroughput');
-    const switchTrend = el('opsSwitchTrend');
-    const errorTrend = el('opsErrorTrend');
-    const points = trendBuckets();
+  // bucketSeries turns the minute buckets into chart points. The value is taken
+  // per point because every trend plots a different field of the same buckets.
+  function bucketSeries(points, valueOf) {
+    return points.map((point) => ({
+      label: fmtMinute(point.minute),
+      value: valueOf(point),
+    }));
+  }
 
+  function renderTrends(payload) {
+    const points = trendBuckets();
+    // rateSeries is the per-second rate of a bucket count: the bucket still in
+    // progress covers fewer seconds, so an idle minute must not read as 0/min.
+    const rateSeries = (valueOf) => bucketSeries(points, (point) => valueOf(point) / point.seconds);
+
+    const throughput = el('opsThroughput');
     if (throughput) {
-      const qps = points.map((p) => ({ label: fmtMinute(p.minute), value: (p.requests || 0) / p.seconds }));
-      const tps = points.map((p) => ({
-        label: fmtMinute(p.minute),
-        value: ((p.input_tokens || 0) + (p.output_tokens || 0)) / p.seconds,
-      }));
+      const qps = rateSeries((point) => point.requests || 0);
+      const tps = rateSeries((point) => (point.input_tokens || 0) + (point.output_tokens || 0));
       const hasTokens = tps.some((point) => point.value > 0);
       lineChart(throughput, {
         points: qps,
@@ -840,37 +882,34 @@
         ? '左轴 QPS（次/秒） · 右轴 TPS（token/秒） · 当前分钟按已过时间计算'
         : '左轴 QPS（次/秒） · 窗口内请求未上报用量，TPS 暂不绘制');
     }
+    const switchTrend = el('opsSwitchTrend');
     if (switchTrend) {
-      const average = points.map((p) => ({
-        label: fmtMinute(p.minute),
-        value: p.account_switch_count ? (p.account_switch_sum || 0) / p.account_switch_count : null,
-      }));
+      // A minute with no switch has no average to plot. It is null rather than 0:
+      // a zero would draw a line along the baseline and read as "measured".
       lineChart(switchTrend, {
-        points: average,
+        points: bucketSeries(points, (point) => (point.account_switch_count
+          ? (point.account_switch_sum || 0) / point.account_switch_count
+          : null)),
         className: 'series-switch',
         height: 150,
         emptyText: '这段时间没有账号切换样本。',
       });
     }
+    const errorTrend = el('opsErrorTrend');
     if (errorTrend) {
       // Two series, not one: 最终失败 is what the caller saw, 上游尝试失败 counts
       // attempts that died before a retry rescued the request. Plotting only the
       // first hid exactly the upstream trouble an operator is looking for.
-      const failures = points.map((p) => ({ label: fmtMinute(p.minute), value: p.failed || 0 }));
-      const attempts = points.map((p) => ({ label: fmtMinute(p.minute), value: p.attempt_failures || 0 }));
+      const failures = bucketSeries(points, (point) => point.failed || 0);
+      const attempts = bucketSeries(points, (point) => point.attempt_failures || 0);
       const legend = el('opsErrorTrendLegend');
       if (legend) {
         legend.replaceChildren();
         [['最终失败', 'series-error'], ['上游尝试失败', 'series-alt']].forEach(([label, className]) => {
-          const item = document.createElement('span');
-          item.className = 'ops-legend-item';
-          const swatch = document.createElement('span');
-          swatch.className = 'ops-legend-swatch ' + className;
-          const text = document.createElement('span');
-          text.textContent = label;
-          item.appendChild(swatch);
-          item.appendChild(text);
-          legend.appendChild(item);
+          legend.appendChild(attach(make('span', 'ops-legend-item'), [
+            make('span', 'ops-legend-swatch ' + className),
+            make('span', '', label),
+          ]));
         });
       }
       barChart(errorTrend, failures, {
@@ -901,41 +940,29 @@
 
     if (histogram) {
       histogram.replaceChildren();
-      if (!bins.length) {
-        const note = document.createElement('p');
-        note.className = 'ops-empty';
-        // An empty chart is indistinguishable from a broken one, so say which of
-        // the two it is: no samples in this window, or no distribution collected.
-        note.textContent = (totals[tab.duration] && totals[tab.duration].samples)
-          ? '该窗口没有分布样本。'
-          : '该时间窗口内暂无延迟样本（口径：' + tab.label + '）。';
-        histogram.appendChild(note);
-      }
+      // An empty chart is indistinguishable from a broken one, so say which of
+      // the two it is: no samples in this window, or no distribution collected.
+      if (!bins.length) emptyNote(histogram, (totals[tab.duration] && totals[tab.duration].samples)
+        ? '该窗口没有分布样本。'
+        : '该时间窗口内暂无延迟样本（口径：' + tab.label + '）。');
       const maxCount = Math.max(1, ...bins.map((bin) => bin.count || 0));
       bins.forEach((bin) => {
-        const col = document.createElement('div');
-        col.className = 'ops-histogram-col';
-        const count = document.createElement('span');
-        count.className = 'ops-histogram-count';
-        count.textContent = String(bin.count || 0);
-        const bar = document.createElement('div');
-        bar.className = 'ops-histogram-bar';
+        const bar = make('div', 'ops-histogram-bar');
+        // The column heights are relative to the tallest bin, so a window of one
+        // slow request is not flattened against a 10k-request peak.
         bar.style.height = ((bin.count || 0) / maxCount * 100).toFixed(1) + '%';
         bar.title = `${bin.label}: ${bin.count || 0}`;
-        const label = document.createElement('span');
-        label.className = 'ops-histogram-label';
-        label.textContent = bin.label;
-        col.appendChild(count);
-        col.appendChild(bar);
-        col.appendChild(label);
-        histogram.appendChild(col);
+        histogram.appendChild(attach(make('div', 'ops-histogram-col'), [
+          make('span', 'ops-histogram-count', String(bin.count || 0)),
+          bar,
+          make('span', 'ops-histogram-label', bin.label),
+        ]));
       });
       const cohort = totals[tab.duration] || {};
       setText('opsHistogramHint', (cohort.samples || 0) ? `${cohort.samples} 个样本 · 口径：${tab.label}` : '暂无样本');
     }
 
     if (errorMix) {
-      errorMix.replaceChildren();
       // Each row is one class of the shared classifier, so these numbers add up to
       // the failure count the drill-down lists: 4xx + 5xx + 流中断 = 最终失败, and
       // 限流 is shown apart because it is a business limit, not a failure.
@@ -953,27 +980,23 @@
         { label: '上游尝试失败（含已重试成功）', value: totals.attempt_failures || 0, tone: 'is-warn', outcome: 'failed' },
       ];
       const maxValue = Math.max(1, ...groups.map((group) => group.value));
-      groups.forEach((group) => {
-        const row = document.createElement('button');
+      // 未采集 when the window predates the classifier: a 0 next to seven other 0s
+      // reads as "no such failures", which is a different and misleading fact.
+      const collected = !(totals.requests > 0 && !totals.detailed_requests);
+      const rows = groups.map((group) => {
+        const row = make('button', 'ops-error-row is-clickable');
         row.type = 'button';
-        row.className = 'ops-error-row is-clickable';
         // Clicking a class opens the log centre filtered to exactly that class.
         row.addEventListener('click', () => drilldownToLogs({ outcome: group.outcome }));
-        const label = document.createElement('span');
-        label.textContent = group.label;
-        const bar = document.createElement('div');
-        bar.className = 'ops-error-meter';
-        const fill = document.createElement('span');
-        if (group.tone) fill.className = group.tone;
+        const fill = make('span', group.tone || '');
         fill.style.width = (group.value / maxValue * 100).toFixed(1) + '%';
-        bar.appendChild(fill);
-        const value = document.createElement('span');
-        value.textContent = (totals.requests > 0 && !totals.detailed_requests) ? '未采集' : fmtInt(group.value);
-        row.appendChild(label);
-        row.appendChild(bar);
-        row.appendChild(value);
-        errorMix.appendChild(row);
+        return attach(row, [
+          make('span', '', group.label),
+          attach(make('div', 'ops-error-meter'), [fill]),
+          make('span', '', collected ? fmtInt(group.value) : '未采集'),
+        ]);
       });
+      errorMix.replaceChildren(...rows);
       const total = totals.failed || 0;
       setText('opsErrorMixHint', Number(totals.detailed_requests || 0) < Math.max(0, totals.requests || 0) ? '窗口含旧数据，错误分类未完整采集' : total === 0 ? '该时间窗口内暂无最终失败。' : `最终失败 ${total} 次 · 点击分类可下钻`);
     }
@@ -989,8 +1012,7 @@
     const channel = (el('opsAlertChannel') || {}).value || '';
     body.replaceChildren();
     try {
-      const params = new URLSearchParams({ kind: 'system', action: 'alert_', limit: '50' });
-      if (channel) params.set('channel', channel);
+      const params = assignParams(new URLSearchParams({ kind: 'system', action: 'alert_', limit: '50' }), { channel });
       const response = await fetch('/api/journal/records?' + params.toString(), { credentials: 'same-origin' });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
@@ -1001,52 +1023,39 @@
         return !severity || level === severity;
       });
       if (!rows.length) {
-        const tr = document.createElement('tr');
-        const td = document.createElement('td');
-        td.colSpan = 6;
-        td.className = 'table-empty-cell';
-        td.textContent = '暂无告警事件（保留窗口内）。';
-        tr.appendChild(td);
-        body.appendChild(tr);
+        emptyRow(body, 6, '暂无告警事件（保留窗口内）。');
         return;
       }
       rows.forEach((record) => {
         const event = record.event || {};
-        const tr = document.createElement('tr');
-        const severity = String((event.metadata && event.metadata.severity) || '').toLowerCase();
+        const tr = make('tr');
+        const level = String((event.metadata && event.metadata.severity) || '').toLowerCase();
+        // The level is a word an operator reads, not the key the engine stores: the
+        // table printed "warning" next to fully Chinese text.
         const cells = [
           fmtClock(new Date(event.timestamp)),
           event.action === 'alert_fired' ? '触发' : '恢复',
-          // The level is a word an operator reads, not the key the engine stores: the
-          // table printed "warning" next to fully Chinese text.
-          ALERT_SEVERITY_LABELS[severity] || (severity ? severity : '—'),
+          ALERT_SEVERITY_LABELS[level] || (level ? level : '—'),
           event.channel || '—',
           event.model || '—',
           event.error || event.details || '—',
         ];
         cells.forEach((value, index) => {
           const cell = ALERT_CELLS[index];
-          const td = document.createElement('td');
-          td.textContent = value;
           // Named so the phone layout can place each cell: six columns cannot fit a
           // 360px screen, and the card view in ops.css positions these by class.
-          td.className = cell.className;
+          // The severity column carries its tone in the same class list.
+          const className = index === 2
+            ? cell.className + ' ops-alert-severity ' + (level === 'critical' ? 'is-critical' : level === 'warning' ? 'is-warning' : '')
+            : cell.className;
+          const td = make('td', className, value);
           td.dataset.label = cell.label;
-          if (index === 2) {
-            td.className += ' ops-alert-severity ' + (severity === 'critical' ? 'is-critical' : severity === 'warning' ? 'is-warning' : '');
-          }
           tr.appendChild(td);
         });
         body.appendChild(tr);
       });
     } catch (error) {
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 6;
-      td.className = 'table-empty-cell';
-      td.textContent = '读取告警事件失败：' + (error.message || error);
-      tr.appendChild(td);
-      body.appendChild(tr);
+      emptyRow(body, 6, '读取告警事件失败：' + (error.message || error));
     }
   }
 
@@ -1056,8 +1065,7 @@
   // "when did this model start failing" is answerable per model instead of only
   // per channel; a channel row uses the channel's series.
   function historyCells(series) {
-    const cell = document.createElement('td');
-    cell.className = 'ops-history-cells';
+    const cell = make('td', 'ops-history-cells');
     const buckets = (series || []).slice(-40);
     if (!buckets.length) {
       cell.textContent = '暂无样本';
@@ -1065,19 +1073,12 @@
       return cell;
     }
     buckets.forEach((point) => {
-      const block = document.createElement('span');
-      block.className = 'ops-block';
+      const block = make('span', 'ops-block');
       const requests = point.requests || 0;
       const failed = point.failed || 0;
-      if (!requests) {
-        block.classList.add('is-idle');
-      } else if (failed >= requests) {
-        block.classList.add('is-bad');
-      } else if (failed > 0) {
-        block.classList.add('is-warn');
-      } else {
-        block.classList.add('is-ok');
-      }
+      // Idle, wholly failed, partly failed, clean: four states, because a minute
+      // with no traffic and a minute with no failures must not share a colour.
+      block.classList.add(!requests ? 'is-idle' : failed >= requests ? 'is-bad' : failed > 0 ? 'is-warn' : 'is-ok');
       block.title = `${fmtMinute(point.minute)}：${requests} 请求 / ${failed} 失败`;
       cell.appendChild(block);
     });
@@ -1096,13 +1097,15 @@
     { className: 'ops-mx-throttled', label: '限流' },
   ];
 
-  function matrixRow(label, row, options) {
-    const tr = document.createElement('tr');
-    tr.className = options.isModel ? 'is-model' : 'is-channel';
+  function formatRate(rate, samples) {
+    if (!samples) return '暂无样本';
+    return (rate * 100).toFixed(1) + '%';
+  }
 
-    const name = document.createElement('td');
-    name.className = 'ops-matrix-name';
-    name.textContent = label;
+  function matrixRow(label, row, options) {
+    const tr = make('tr', options.isModel ? 'is-model' : 'is-channel');
+
+    const name = make('td', 'ops-matrix-name', label);
     // No data-label here on purpose: the card prints the cell's label above its value,
     // and this cell's value is the channel or model name — "渠道 / 模型 / 名称"
     // labelled the heading twice. The other seven cells carry theirs.
@@ -1110,59 +1113,38 @@
     // channel-and-model traffic, both over the window the page is showing.
     name.classList.add('is-clickable');
     name.title = '点击查看该' + (options.isModel ? '模型的请求日志' : '渠道的请求日志');
-    name.setAttribute('role', 'button');
-    name.setAttribute('tabindex', '0');
-    const open = () => drilldownToLogs(options.isModel
+    makeActivatable(name, () => drilldownToLogs(options.isModel
       ? { channel: options.channel || state.channel, model: label }
-      : { channel: label });
-    name.addEventListener('click', open);
-    name.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        open();
-      }
-    });
+      : { channel: label }));
     tr.appendChild(name);
 
-    const accounts = document.createElement('td');
-    if (options.isModel) accounts.textContent = '—';
-    else if (row.accounts_enabled === 0) accounts.textContent = '未配置';
-    else accounts.textContent = `${row.accounts_available} / ${row.accounts_enabled}` + (row.accounts_needing_login ? `（需登录 ${row.accounts_needing_login}）` : '');
-    tr.appendChild(accounts);
-
-    const requests = document.createElement('td');
-    requests.textContent = options.isModel ? String(row.requests || 0) : String(Math.max((row.summary && row.summary.requests) || 0, 0));
-    tr.appendChild(requests);
-
-    const rate = document.createElement('td');
+    // A model row inherits its channel's account pool and cooldowns, so those two
+    // columns are the channel's to fill: dash, not zero.
+    const accounts = make('td', '', options.isModel
+      ? '—'
+      : row.accounts_enabled === 0
+        ? '未配置'
+        : `${row.accounts_available} / ${row.accounts_enabled}` + (row.accounts_needing_login ? `（需登录 ${row.accounts_needing_login}）` : ''));
     const samples = options.isModel ? row.samples || 0 : (row.summary && row.summary.samples) || 0;
     const r = options.isModel ? row.success_rate || 0 : (row.summary && row.summary.success_rate) || 0;
-    rate.textContent = formatRate(r, samples);
-    if (!samples) rate.className = 'ops-empty';
-    tr.appendChild(rate);
-
-    const ttft = document.createElement('td');
-    if (options.isModel) {
-      // A model's first-token figure needs its own sample count: "no sample" and
-      // "0 ms" must not look the same, and a rate limit produces no token at all.
-      const ttftSamples = row.first_token_samples || 0;
-      ttft.textContent = fmtMs(row.first_token_p95_ms, ttftSamples);
-      if (!ttftSamples) ttft.className = 'ops-empty';
-      else ttft.title = `P95 · ${ttftSamples} 个样本`;
-    } else {
-      ttft.textContent = fmtMs(row.summary && row.summary.first_token_p95_ms, samples);
-    }
-    tr.appendChild(ttft);
-
-    const duration = document.createElement('td');
-    duration.textContent = options.isModel ? fmtMs(row.duration_p95_ms, samples) : fmtMs(row.summary && row.summary.duration_p95_ms, samples);
-    tr.appendChild(duration);
-
-    const throttled = document.createElement('td');
-    throttled.textContent = options.isModel ? '—' : String(row.model_cooldowns || 0);
-    tr.appendChild(throttled);
-
-    tr.appendChild(historyCells(options.isModel ? row.history : row.series));
+    const rate = make('td', samples ? '' : 'ops-empty', formatRate(r, samples));
+    // A model's first-token figure needs its own sample count: "no sample" and
+    // "0 ms" must not look the same, and a rate limit produces no token at all.
+    const ttftSamples = row.first_token_samples || 0;
+    const ttft = options.isModel
+      ? make('td', ttftSamples ? '' : 'ops-empty', fmtMs(row.first_token_p95_ms, ttftSamples))
+      : make('td', '', fmtMs(row.summary && row.summary.first_token_p95_ms, samples));
+    if (options.isModel && ttftSamples) ttft.title = `P95 · ${ttftSamples} 个样本`;
+    const cells = [
+      accounts,
+      make('td', '', options.isModel ? String(row.requests || 0) : String(Math.max((row.summary && row.summary.requests) || 0, 0))),
+      rate,
+      ttft,
+      make('td', '', fmtMs(options.isModel ? row.duration_p95_ms : row.summary && row.summary.duration_p95_ms, samples)),
+      make('td', '', options.isModel ? '—' : String(row.model_cooldowns || 0)),
+      historyCells(options.isModel ? row.history : row.series),
+    ];
+    cells.forEach((cell) => tr.appendChild(cell));
     // The seven value cells were named as they were built; stamp the header label on
     // each one now. Both card layouts (in ops.css) read it, and the desktop table
     // ignores it because its own <thead> is visible.
@@ -1174,11 +1156,6 @@
     return tr;
   }
 
-  function formatRate(rate, samples) {
-    if (!samples) return '暂无样本';
-    return (rate * 100).toFixed(1) + '%';
-  }
-
   function renderMatrix(rows) {
     const table = el('opsMatrix');
     if (!table) return;
@@ -1186,13 +1163,7 @@
     body.replaceChildren();
     const visible = (rows || []).filter((row) => !state.model || (row.models || []).some((model) => model.model === state.model));
     if (!visible.length) {
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 8;
-      td.className = 'table-empty-cell';
-      td.textContent = '还没有渠道数据。添加账号或等待流量后这里会出现状态矩阵。';
-      tr.appendChild(td);
-      body.appendChild(tr);
+      emptyRow(body, 8, '还没有渠道数据。添加账号或等待流量后这里会出现状态矩阵。');
       return;
     }
     visible.forEach((row) => {
@@ -1207,48 +1178,58 @@
 
   // --- coverage --------------------------------------------------------------
 
+  // excludedLabel explains an aggregate the matrix leaves out. These are counted
+  // but they are not channels, so a matrix that omits them has to say why.
+  function excludedLabel(name) {
+    if (name === 'http') return 'http（非推理路径：管理页、健康检查、公网扫描）';
+    if (name === 'probe') return 'probe（旧版本探测流量的历史聚合，已不再产生）';
+    return name;
+  }
+
   function renderCoverage(payload) {
     const node = el('opsCoverage');
     if (!node) return;
-    const parts = [];
     const coverage = payload.coverage || {};
-    if (typeof coverage.entries === 'number') {
-      parts.push(`审计日志保留 ${coverage.entries} 条`);
-      if (coverage.oldest) parts.push(`最早 ${coverage.oldest}`);
-      if (coverage.newest) parts.push(`最新 ${coverage.newest}`);
-    } else {
-      parts.push('审计日志覆盖范围未能读取（接口未返回 coverage）');
-    }
+    const parts = typeof coverage.entries === 'number'
+      ? [`审计日志保留 ${coverage.entries} 条`]
+        .concat(coverage.oldest ? [`最早 ${coverage.oldest}`] : [])
+        .concat(coverage.newest ? [`最新 ${coverage.newest}`] : [])
+      : ['审计日志覆盖范围未能读取（接口未返回 coverage）'];
     if (coverage.counts) {
       const counts = Object.keys(coverage.counts).map((key) => `${key}=${coverage.counts[key]}`).join('、');
       if (counts) parts.push(`采样计数：${counts}`);
     }
     parts.push('因此页面只承诺“保留窗口内”的结论，不承诺固定天数。');
-    const excluded = payload.excluded_aggregates || [];
-    if (excluded.length) {
-      const labels = excluded.map((name) => {
-        if (name === 'http') return 'http（非推理路径：管理页、健康检查、公网扫描）';
-        if (name === 'probe') return 'probe（旧版本探测流量的历史聚合，已不再产生）';
-        return name;
-      });
-      parts.push('已计数但不在渠道矩阵中显示：' + labels.join('；'));
-    }
+    const excluded = (payload.excluded_aggregates || []).map(excludedLabel);
+    if (excluded.length) parts.push('已计数但不在渠道矩阵中显示：' + excluded.join('；'));
     parts.push('Token / TPS 只统计上报了用量的请求；未上报用量的渠道其 TPS 会偏低。');
-    node.textContent = parts.join('；');
     // When the aggregation itself is disabled the reason matters more than the
     // coverage caveat: the whole page is showing nothing because of it.
-    if (payload.available === false && payload.note) {
-      node.textContent = payload.note + '；' + node.textContent;
-    }
+    node.textContent = (payload.available === false && payload.note ? payload.note + '；' : '') + parts.join('；');
+  }
+
+  // fillOptions rebuilds a <select> of one "all" entry plus the given values. The
+  // options come from the payload, so they are rewritten on every refresh; the
+  // selection is restored afterwards because rewriting clears it.
+  function fillOptions(select, placeholder, values) {
+    select.replaceChildren();
+    const option = (value, label) => {
+      const node = document.createElement('option');
+      node.value = value;
+      node.textContent = label;
+      return node;
+    };
+    select.appendChild(option('', placeholder));
+    values.forEach((value) => select.appendChild(option(value, value)));
+    return select;
   }
 
   function updateChannelOptions(channels, current) {
     const select = el('opsChannel');
     if (!select) return;
-    select.innerHTML = ['<option value="">全部渠道</option>']
-      .concat((channels || []).map((channel) => `<option value="${channel}">${channel}</option>`))
-      .join('');
-    select.value = current || '';
+    fillOptions(select, '全部渠道', channels || []).value = current || '';
+    // The alert table's channel filter is filled once: it is a filter, not a mirror
+    // of the page scope, so a refresh must not keep appending to it.
     const alertChannel = el('opsAlertChannel');
     if (alertChannel && alertChannel.childElementCount <= 1) {
       (channels || []).forEach((channel) => {
@@ -1263,15 +1244,11 @@
   function updateModelOptions(rows, current) {
     const select = el('opsModel');
     if (!select) return;
-    const names = [];
+    const names = new Set();
     (rows || []).forEach((row) => (row.models || []).forEach((model) => {
-      if (model.model && names.indexOf(model.model) === -1) names.push(model.model);
+      if (model.model) names.add(model.model);
     }));
-    names.sort();
-    select.innerHTML = ['<option value="">全部模型</option>']
-      .concat(names.map((name) => `<option value="${name}">${name}</option>`))
-      .join('');
-    select.value = current || '';
+    fillOptions(select, '全部模型', Array.from(names).sort()).value = current || '';
   }
 
   // --- load ------------------------------------------------------------------
@@ -1290,11 +1267,9 @@
     state.loading = true;
     if (!state.overview) renderSkeletons();
     setStatus('读取中…', 'is-warn');
-    const windowMinutes = state.window;
-    const params = new URLSearchParams({ window: String(windowMinutes) });
-    if (state.channel) params.set('channel', state.channel);
     syncUrl();
     try {
+      const params = assignParams(new URLSearchParams({ window: String(state.window) }), { channel: state.channel });
       const [overviewResponse, runtimeResponse] = await Promise.all([
         fetch('/api/ops/overview?' + params.toString(), { credentials: 'same-origin' }),
         fetch('/api/ops/runtime', { credentials: 'same-origin' }).catch(() => null),
@@ -1325,9 +1300,9 @@
         rowList(card, [{ label: '原因', value: String(error.message || error) }]);
         container.appendChild(card);
       }
-      renderCoverage({ window_minutes: windowMinutes, coverage: {}, excluded_aggregates: [] });
-      const coverage = el('opsCoverage');
-      if (coverage) coverage.textContent = `指标读取失败：${String(error.message || error)}。会话可能已过期，请重新登录后刷新。`;
+      // A failed read has no window to describe, so the coverage line states the
+      // failure instead of the retention it could not read.
+      setText('opsCoverage', `指标读取失败：${String(error.message || error)}。会话可能已过期，请重新登录后刷新。`);
       setStatus('读取失败', 'is-error');
     } finally {
       state.loading = false;
@@ -1359,46 +1334,33 @@
       });
     }
 
-    const windowSelect = el('opsWindow');
-    if (windowSelect) {
-      windowSelect.addEventListener('change', () => {
-        state.window = Number(windowSelect.value) || 180;
-        load();
-      });
-    }
-    const channelSelect = el('opsChannel');
-    if (channelSelect) {
-      channelSelect.addEventListener('change', () => {
-        state.channel = channelSelect.value;
-        load();
-      });
-    }
-    const modelSelect = el('opsModel');
-    if (modelSelect) {
-      modelSelect.addEventListener('change', () => {
-        state.model = modelSelect.value;
-        syncUrl();
-        if (state.overview) renderMatrix(state.overview.matrix);
-      });
-    }
-    const refresh = el('opsRefresh');
-    if (refresh) refresh.addEventListener('click', load);
-
+    // A filter change reloads; a model change only re-filters the matrix, because
+    // the payload already carries every channel's models.
+    attachHandler('opsWindow', 'change', () => {
+      state.window = Number(el('opsWindow').value) || 180;
+      load();
+    });
+    attachHandler('opsChannel', 'change', () => {
+      state.channel = el('opsChannel').value;
+      load();
+    });
+    attachHandler('opsModel', 'change', () => {
+      state.model = el('opsModel').value;
+      syncUrl();
+      if (state.overview) renderMatrix(state.overview.matrix);
+    });
+    attachHandler('opsRefresh', 'click', load);
     // The hero's failure link is created with the gauge sub-line (it only exists
     // when there is a failure to look at), so its listener is attached there.
-    const alertsLink = el('opsAlertsLink');
-    if (alertsLink) {
-      alertsLink.addEventListener('click', () => {
-        if (window.location) window.location.href = pagePath() + '?tab=alerts';
-      });
-    }
+    attachHandler('opsAlertsLink', 'click', () => {
+      if (window.location) window.location.href = pagePath() + '?tab=alerts';
+    });
 
     // One place marks the selected window, so the chips and the state cannot drift:
     // 重置 used to set the state to 1 minute and leave "1h" lit as the selection.
     function selectLiveWindow(minutes) {
       document.querySelectorAll('#opsLiveTabs .ops-chip').forEach((chip) => {
-        const value = Number(chip.getAttribute('data-live')) || 1;
-        chip.classList.toggle('is-active', value === minutes);
+        chip.classList.toggle('is-active', (Number(chip.getAttribute('data-live')) || 1) === minutes);
       });
       state.liveWindow = minutes;
       if (state.overview) renderHero(state.overview);
@@ -1410,42 +1372,31 @@
       });
     });
 
-    const reset = el('opsTrendReset');
-    if (reset) {
-      reset.addEventListener('click', () => {
-        selectLiveWindow(1);
-        if (state.overview) {
-          renderTrends(state.overview);
-        }
-        showToast('已重置实时与趋势视图');
-      });
-    }
-    const download = el('opsTrendDownload');
-    if (download) {
-      download.addEventListener('click', () => {
-        const header = 'minute,requests,success,failed,input_tokens,output_tokens\n';
-        const rows = trendBuckets().map((point) => [
-          point.minute, point.requests || 0, point.success || 0, point.failed || 0,
-          point.input_tokens || 0, point.output_tokens || 0,
-        ].join(',')).join('\n');
-        const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `orchids-ops-${state.window}min.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      });
-    }
+    attachHandler('opsTrendReset', 'click', () => {
+      selectLiveWindow(1);
+      if (state.overview) renderTrends(state.overview);
+      showToast('已重置实时与趋势视图');
+    });
+    attachHandler('opsTrendDownload', 'click', () => {
+      const header = 'minute,requests,success,failed,input_tokens,output_tokens\n';
+      const rows = trendBuckets().map((point) => [
+        point.minute, point.requests || 0, point.success || 0, point.failed || 0,
+        point.input_tokens || 0, point.output_tokens || 0,
+      ].join(',')).join('\n');
+      const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `orchids-ops-${state.window}min.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    });
 
-    const alertReload = el('opsAlertReload');
-    if (alertReload) alertReload.addEventListener('click', loadAlertEvents);
-    const alertSeverity = el('opsAlertSeverity');
-    if (alertSeverity) alertSeverity.addEventListener('change', loadAlertEvents);
-    const alertChannel = el('opsAlertChannel');
-    if (alertChannel) alertChannel.addEventListener('change', loadAlertEvents);
+    attachHandler('opsAlertReload', 'click', loadAlertEvents);
+    attachHandler('opsAlertSeverity', 'change', loadAlertEvents);
+    attachHandler('opsAlertChannel', 'change', loadAlertEvents);
 
     document.querySelectorAll('[data-scroll-to]').forEach((button) => {
       button.addEventListener('click', () => {
@@ -1471,15 +1422,13 @@
       state.refreshPending = true;
       return;
     }
-    state.refreshPending = false;
-    load();
-    loadAlertEvents();
+    flushPendingRefresh();
   }
 
   // Returning to the tab has to catch up immediately: without this the operator
   // can sit down to a dashboard that is up to a full refresh interval stale.
   function flushPendingRefresh() {
-    if (typeof document === 'undefined' || document.hidden || !state.refreshPending) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
     state.refreshPending = false;
     state.countdown = state.refreshSeconds;
     load();
@@ -1490,12 +1439,20 @@
   // a drill-down returned to, or a bookmarked scope.
   function applyUrlState() {
     readUrlState();
-    const windowSelect = el('opsWindow');
-    if (windowSelect) windowSelect.value = String(state.window);
-    const channelSelect = el('opsChannel');
-    if (channelSelect && state.channel) channelSelect.value = state.channel;
-    const modelSelect = el('opsModel');
-    if (modelSelect && state.model) modelSelect.value = state.model;
+    // The two selects are only corrected when the scope has a value: an absent
+    // filter must leave "全部渠道" selected rather than forcing a choice.
+    if (state.window) {
+      const windowSelect = el('opsWindow');
+      if (windowSelect) windowSelect.value = String(state.window);
+    }
+    if (state.channel) {
+      const channelSelect = el('opsChannel');
+      if (channelSelect) channelSelect.value = state.channel;
+    }
+    if (state.model) {
+      const modelSelect = el('opsModel');
+      if (modelSelect) modelSelect.value = state.model;
+    }
   }
 
   if (document.readyState === 'loading') {

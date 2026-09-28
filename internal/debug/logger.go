@@ -30,9 +30,7 @@ type Logger struct {
 	enabled    bool
 	sseEnabled bool
 	dir        string
-	rawFile    *os.File
 	outFile    *os.File
-	rawBytes   int64
 	outBytes   int64
 	mu         sync.Mutex
 	startTime  time.Time
@@ -188,22 +186,6 @@ func (l *Logger) LogUpstreamHTTPError(url string, status int, body string, err e
 	l.writeJSON("3_upstream_http_error.json", payload)
 }
 
-// LogUpstreamSSE 记录 4. 上游返回的原始 SSE（追加写入）
-func (l *Logger) LogUpstreamSSE(eventType string, data string) {
-	if !l.enabled || !l.sseEnabled {
-		return
-	}
-	elapsed := time.Since(l.startTime).Milliseconds()
-	l.mu.Lock()
-	a := l.attempt
-	l.mu.Unlock()
-	if a != nil {
-		a.Append(fmt.Sprintf("[%dms] %s: %s\n", elapsed, eventType, data))
-		return
-	}
-	l.appendStream(&l.rawFile, &l.rawBytes, "4_upstream_sse.jsonl", fmt.Sprintf("[%dms] %s: %s\n", elapsed, eventType, data))
-}
-
 // LogOutputSSE 记录 5. 转换给客户端的 SSE（追加写入）
 func (l *Logger) LogOutputSSE(event string, data string) {
 	if !l.enabled || !l.sseEnabled {
@@ -285,10 +267,6 @@ func (l *Logger) Close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.rawFile != nil {
-		l.rawFile.Close()
-		l.rawFile = nil
-	}
 	if l.outFile != nil {
 		l.outFile.Close()
 		l.outFile = nil

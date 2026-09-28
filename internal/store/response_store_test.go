@@ -5,17 +5,10 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/alicebob/miniredis/v2"
 )
 
 func TestStoredResponseOwnershipLifecycleAndIsolation(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "responses-test:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestRedisStore(t, "responses-test:")
 
 	ctx := context.Background()
 	record := &StoredResponse{
@@ -41,12 +34,7 @@ func TestStoredResponseOwnershipLifecycleAndIsolation(t *testing.T) {
 }
 
 func TestStoredResponseExpires(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "responses-expiry:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, mini := newTestRedisStore(t, "responses-expiry:")
 	if err := s.SaveStoredResponse(context.Background(), &StoredResponse{
 		ResponseID: "resp_expiring", OwnerHash: "owner", AccountID: 1,
 	}, time.Second); err != nil {
