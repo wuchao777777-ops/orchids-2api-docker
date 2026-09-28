@@ -15,15 +15,12 @@ import (
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	apperrors "orchids-api/internal/errors"
 )
-
-var cacheBaseDir = filepath.Join("data", "tmp")
 
 const grokModelValidationCacheTTL = 3 * time.Second
 

@@ -240,13 +240,3 @@ func cleanupExpiredSessions() {
 		}
 	}
 }
-
-func MaskSensitive(value string) string {
-	if value == "" {
-		return ""
-	}
-	if len(value) <= 8 {
-		return "***"
-	}
-	return value[:4] + "..." + value[len(value)-4:]
-}

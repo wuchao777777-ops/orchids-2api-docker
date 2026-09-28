@@ -30,7 +30,7 @@ func responsesBridgeFixture(t *testing.T, upstreamStatus int, upstreamBody, mode
 	t.Cleanup(upstream.Close)
 
 	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: "bridge:"})
+	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: "bridge:"})
 	if err != nil {
 		t.Fatalf("store.New() error = %v", err)
 	}

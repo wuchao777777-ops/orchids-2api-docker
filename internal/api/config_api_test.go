@@ -22,13 +22,11 @@ func setupConfigAPI(t *testing.T) (*API, *store.Store, *miniredis.Miniredis) {
 	s, mini := newTestStore(t, "test:")
 
 	cfg := &config.Config{
-		AdminPass:          "initial-secret",
-		AdminToken:         "initial-token",
-		EnableTokenCache:   true,
-		TokenCacheTTL:      300,
-		TokenCacheStrategy: "1",
-		ProxyURL:           "http://127.0.0.1:7890",
-		ProxyBypass:        []string{"example.com"},
+		AdminPass:     "initial-secret",
+		AdminToken:    "initial-token",
+		CacheStrategy: "auto",
+		ProxyURL:      "http://127.0.0.1:7890",
+		ProxyBypass:   []string{"example.com"},
 	}
 	config.ApplyDefaults(cfg)
 
@@ -66,8 +64,13 @@ func TestHandleConfigListReturnsCodeFreeMaxShape(t *testing.T) {
 	if _, ok := resp.Data["admin_token"]; ok {
 		t.Fatal("config list must not expose admin_token")
 	}
-	if got := resp.Data["token_cache_strategy"]; got != "1" {
-		t.Fatalf("token_cache_strategy=%v want 1", got)
+	if got := resp.Data["cache_strategy"]; got != "auto" {
+		t.Fatalf("cache_strategy=%v want auto", got)
+	}
+	for _, retired := range []string{"enable_token_cache", "token_cache_ttl", "token_cache_strategy", "cache_token_count", "cache_ttl"} {
+		if _, present := resp.Data[retired]; present {
+			t.Fatalf("retired field %s exposed by config list", retired)
+		}
 	}
 	if got := resp.Data["proxy_url"]; got != "http://127.0.0.1:7890" {
 		t.Fatalf("proxy_url=%v want http://127.0.0.1:7890", got)
@@ -81,6 +84,29 @@ func TestBuildConfigFromPatchRejectsAdminToken(t *testing.T) {
 		t.Fatalf("buildConfigFromPatch() error=%v, want deployment-managed rejection", err)
 	}
 }
+
+func TestHandleConfigSaveRejectsRetiredLocalCacheFields(t *testing.T) {
+	api, s, mini := setupConfigAPI(t)
+	defer func() { _ = s.Close(); mini.Close() }()
+	for _, field := range []string{"enable_token_cache", "token_cache_ttl", "token_cache_strategy", "cache_token_count", "cache_ttl"} {
+		t.Run(field, func(t *testing.T) {
+			value := `"1"`
+			if field == "enable_token_cache" || field == "cache_token_count" {
+				value = `true`
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/config/save", strings.NewReader(`{"`+field+`":`+value+`}`))
+			rec := httptest.NewRecorder()
+			api.HandleConfigSave(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), field) {
+				t.Fatalf("retired %s: status=%d body=%s", field, rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if saved, err := s.GetSetting(context.Background(), "config"); err != nil || saved != "" {
+		t.Fatalf("rejected patch changed config setting: %q err=%v", saved, err)
+	}
+}
+
 func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 	api, s, mini := setupConfigAPI(t)
 	defer func() {
@@ -90,9 +116,7 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 
 	body := `{
 		"admin_password":"changed-secret",
-		"enable_token_cache":"false",
-		"token_cache_ttl":"900",
-		"token_cache_strategy":"0",
+		"cache_strategy":"disabled",
 		"proxy_url":"socks5://user:pass@127.0.0.1:1080",
 		"proxy_bypass":"example.com, internal.local"
 	}`
@@ -122,14 +146,8 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 	if cfg.AdminPass != "changed-secret" {
 		t.Fatalf("AdminPass=%q want changed-secret", cfg.AdminPass)
 	}
-	if cfg.EnableTokenCache {
-		t.Fatalf("EnableTokenCache=%v want false", cfg.EnableTokenCache)
-	}
-	if cfg.TokenCacheTTL != 900 {
-		t.Fatalf("TokenCacheTTL=%d want 900", cfg.TokenCacheTTL)
-	}
-	if cfg.TokenCacheStrategy != "0" {
-		t.Fatalf("TokenCacheStrategy=%q want 0", cfg.TokenCacheStrategy)
+	if cfg.CacheStrategy != "disabled" {
+		t.Fatalf("CacheStrategy=%q want disabled", cfg.CacheStrategy)
 	}
 	if cfg.ProxyURL != "socks5://user:pass@127.0.0.1:1080" {
 		t.Fatalf("ProxyURL=%q want socks5://user:pass@127.0.0.1:1080", cfg.ProxyURL)

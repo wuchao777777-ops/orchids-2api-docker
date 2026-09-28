@@ -132,24 +132,25 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 	}
 }
 
-func TestValidateResponsesCompatibility_RejectsIgnoredStatefulFields(t *testing.T) {
-	store := true
+func TestValidateResponsesCompatibilityFor_RejectsUnsupportedBridgeFields(t *testing.T) {
+	background := true
 	for _, req := range []ResponsesCreateRequest{
-		{Store: &store, Stream: true},
-		{Background: &store},
+		{Background: &background},
+		{Truncation: "invalid"},
 	} {
-		if err := validateResponsesCompatibility(req); err == nil {
+		if err := validateResponsesCompatibilityFor(req, true); err == nil {
 			t.Fatalf("expected unsupported-field error for %#v", req)
 		}
 	}
 }
 
-func TestValidateResponsesCompatibility_AcceptsRepresentableMetadataAndTruncation(t *testing.T) {
-	if err := validateResponsesCompatibility(ResponsesCreateRequest{
+func TestValidateResponsesCompatibilityFor_AcceptsBridgeFields(t *testing.T) {
+	store := true
+	if err := validateResponsesCompatibilityFor(ResponsesCreateRequest{
 		Metadata: map[string]interface{}{"trace": "value"}, Truncation: "auto",
-		Include: []string{"reasoning.encrypted_content"},
-	}); err != nil {
-		t.Fatalf("validateResponsesCompatibility() error = %v", err)
+		Include: []string{"reasoning.encrypted_content"}, Store: &store, Stream: true,
+	}, true); err != nil {
+		t.Fatalf("validateResponsesCompatibilityFor() error = %v", err)
 	}
 }
 
@@ -244,7 +245,7 @@ func TestWriteResponsesStreamFromChat_ConvertsToolCallChunk(t *testing.T) {
 	b.WriteString("data: [DONE]\n\n")
 
 	rec := httptest.NewRecorder()
-	writeResponsesStreamFromChatReaderRequest(rec, ResponsesCreateRequest{Model: "grok-4.20-0309"}, strings.NewReader(b.String()))
+	writeResponsesStreamFromChatReaderRequestWithHook(rec, ResponsesCreateRequest{Model: "grok-4.20-0309"}, strings.NewReader(b.String()), nil)
 
 	out := rec.Body.String()
 	if !strings.Contains(out, "response.output_item.added") || !strings.Contains(out, "response.function_call_arguments.done") {
@@ -266,7 +267,7 @@ func TestWriteResponsesStreamFromChatFailsEmptyAndPrematureStreams(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(input))
+			writeResponsesStreamFromChatReaderRequestWithHook(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(input), nil)
 			body := recorder.Body.String()
 			if !strings.Contains(body, "event: response.failed") || strings.Contains(body, "event: response.completed") {
 				t.Fatalf("body=%s", body)
@@ -328,7 +329,7 @@ func TestWriteResponsesStreamFromChatPreservesReasoningEvents(t *testing.T) {
 		`data: [DONE]`,
 	}, "\n\n")
 	recorder := httptest.NewRecorder()
-	writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-4.3"}, strings.NewReader(raw))
+	writeResponsesStreamFromChatReaderRequestWithHook(recorder, ResponsesCreateRequest{Model: "grok-4.3"}, strings.NewReader(raw), nil)
 	out := recorder.Body.String()
 	if !strings.Contains(out, `"type":"response.reasoning_summary_text.delta"`) || !strings.Contains(out, `"delta":"plan"`) {
 		t.Fatalf("reasoning events missing: %q", out)

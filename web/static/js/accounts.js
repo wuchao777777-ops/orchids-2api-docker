@@ -1766,9 +1766,6 @@ function formatTokenDisplay(acc) {
     // Qoder logins apart, and the device credential is never shown.
     return qoderIdentityLabel(acc);
   }
-  if (acc.session_id) {
-    return acc.session_id.substring(0, 30) + '...';
-  }
   return '-';
 }
 

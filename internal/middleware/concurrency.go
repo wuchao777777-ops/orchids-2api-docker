@@ -4,8 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"slices"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,22 +16,13 @@ type ConcurrencyLimiter struct {
 	// 64-bit atomic fields must be at the top for 32-bit alignment
 	activeCount  int64
 	rejectedReqs int64
-	cachedP95    int64 // Cached P95 to avoid sorting on the hot path
 
 	sem     *semaphore.Weighted
 	timeout time.Duration
-
-	// Adaptive timeout
-	adaptive      bool
-	latencyWindow []int64 // Milliseconds
-	windowIdx     int
-	mu            sync.RWMutex
-
-	lastP95Update time.Time
 }
 
-// NewConcurrencyLimiter creates a new limiter with the specified max concurrent requests and timeout.
-func NewConcurrencyLimiter(maxConcurrent int, timeout time.Duration, adaptive bool) *ConcurrencyLimiter {
+// NewConcurrencyLimiter creates a limiter with fixed capacity and timeout.
+func NewConcurrencyLimiter(maxConcurrent int, timeout time.Duration) *ConcurrencyLimiter {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 100
 	}
@@ -41,10 +30,8 @@ func NewConcurrencyLimiter(maxConcurrent int, timeout time.Duration, adaptive bo
 		timeout = 120 * time.Second
 	}
 	return &ConcurrencyLimiter{
-		sem:           semaphore.NewWeighted(int64(maxConcurrent)),
-		timeout:       timeout,
-		adaptive:      adaptive,
-		latencyWindow: make([]int64, 100), // Keep last 100 requests
+		sem:     semaphore.NewWeighted(int64(maxConcurrent)),
+		timeout: timeout,
 	}
 }
 
@@ -75,9 +62,6 @@ func (cl *ConcurrencyLimiter) Limit(next http.HandlerFunc) http.HandlerFunc {
 			atomic.AddInt64(&cl.activeCount, -1)
 
 			duration := time.Since(reqStart)
-			if cl.adaptive {
-				cl.UpdateStats(duration)
-			}
 			slog.Debug("Concurrency limit: Slot released", "active", atomic.LoadInt64(&cl.activeCount), "duration", duration)
 		}()
 
@@ -87,55 +71,4 @@ func (cl *ConcurrencyLimiter) Limit(next http.HandlerFunc) http.HandlerFunc {
 		slog.Debug("Concurrency limit: Serving request", "path", r.URL.Path, "timeout", cl.timeout)
 		next.ServeHTTP(w, r.WithContext(execCtx))
 	}
-}
-
-// UpdateStats records request latency for adaptive timeout
-func (cl *ConcurrencyLimiter) UpdateStats(d time.Duration) {
-	ms := d.Milliseconds()
-	cl.mu.Lock()
-	cl.latencyWindow[cl.windowIdx] = ms
-	cl.windowIdx = (cl.windowIdx + 1) % len(cl.latencyWindow)
-
-	// Update cached P95 periodically (e.g. at most once per second or every 10 requests) to avoid hot path bottleneck
-	now := time.Now()
-	shouldRecalc := now.Sub(cl.lastP95Update) > time.Second
-	cl.mu.Unlock()
-
-	if shouldRecalc {
-		cl.recalcP95()
-	}
-}
-
-// recalcP95 recalculates and caches the 95th percentile latency
-func (cl *ConcurrencyLimiter) recalcP95() {
-	cl.mu.Lock()
-	now := time.Now()
-
-	// Double-checked locking to avoid concurrent recalculations
-	if now.Sub(cl.lastP95Update) <= time.Second {
-		cl.mu.Unlock()
-		return
-	}
-	cl.lastP95Update = now
-
-	// Make a copy of the window to avoid holding the lock while sorting
-	localWindow := make([]int64, len(cl.latencyWindow))
-	copy(localWindow, cl.latencyWindow)
-	cl.mu.Unlock()
-
-	// Filter out zeros (uninitialized slots) to avoid skewing the result
-	valid := make([]int64, 0, len(localWindow))
-	for _, v := range localWindow {
-		if v > 0 {
-			valid = append(valid, v)
-		}
-	}
-	if len(valid) < 10 {
-		return // Not enough data
-	}
-
-	slices.Sort(valid)
-	idx := int(float64(len(valid)) * 0.95)
-
-	atomic.StoreInt64(&cl.cachedP95, valid[idx])
 }

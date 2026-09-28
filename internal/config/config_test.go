@@ -16,9 +16,6 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.ResponseStoreTTL != 720 {
 		t.Fatalf("ResponseStoreTTL=%d want=720", cfg.ResponseStoreTTL)
 	}
-	if cfg.DeploymentReplicas != 1 || cfg.DeploymentCluster != "orchids" {
-		t.Fatalf("deployment defaults = replicas %d cluster %q", cfg.DeploymentReplicas, cfg.DeploymentCluster)
-	}
 	if cfg.MediaDir != "data"+string(filepath.Separator)+"tmp" {
 		t.Fatalf("MediaDir=%q", cfg.MediaDir)
 	}
@@ -27,32 +24,6 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if got := cfg.GrokCLIUserAgentOrDefault(); got != "grok-shell/1.0.40 (linux; x86_64)" {
 		t.Fatalf("GrokCLIUserAgentOrDefault()=%q", got)
-	}
-}
-
-// A conversation binding must outlive an ordinary working session. Thirty
-// minutes detached the upstream conversation between turns, which forced the
-// next turn to replay the whole transcript.
-func TestConfigDefaultsKeepConversationBindingsAlive(t *testing.T) {
-	var cfg Config
-	ApplyDefaults(&cfg)
-	if cfg.SessionTTLMinutes < 60 {
-		t.Fatalf("SessionTTLMinutes=%d, want at least an hour", cfg.SessionTTLMinutes)
-	}
-}
-
-// An operator's explicit values survive, and an absurd one is still bounded.
-func TestConfigKeepsExplicitContextSettingsWithinBounds(t *testing.T) {
-	cfg := Config{SessionTTLMinutes: 90}
-	ApplyDefaults(&cfg)
-	if cfg.SessionTTLMinutes != 90 {
-		t.Fatalf("SessionTTLMinutes=%d, want the configured 90", cfg.SessionTTLMinutes)
-	}
-
-	over := Config{SessionTTLMinutes: 1 << 30}
-	ApplyDefaults(&over)
-	if over.SessionTTLMinutes > 30*24*60 {
-		t.Fatalf("SessionTTLMinutes=%d is unbounded", over.SessionTTLMinutes)
 	}
 }
 
@@ -121,10 +92,7 @@ func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 		AdminPass:          "mypass",
 		AdminPath:          "/myadmin",
 		RedisAddr:          "redis:6380",
-		DeploymentReplicas: 3,
 		DeploymentInstance: "replica-a",
-		DeploymentCluster:  "cluster-a",
-		SharedMedia:        true,
 		MediaDir:           "/srv/orchids-media",
 	}
 	ApplyDefaults(&cfg)
@@ -144,8 +112,8 @@ func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 	if cfg.RedisAddr != "redis:6380" {
 		t.Fatalf("RedisAddr=%q want=redis:6380", cfg.RedisAddr)
 	}
-	if cfg.DeploymentReplicas != 3 || cfg.DeploymentInstance != "replica-a" || cfg.DeploymentCluster != "cluster-a" || !cfg.SharedMedia || cfg.MediaDir != "/srv/orchids-media" {
-		t.Fatalf("deployment fields were not preserved: %+v", cfg)
+	if cfg.DeploymentInstance != "replica-a" || cfg.MediaDir != "/srv/orchids-media" {
+		t.Fatalf("deployment instance and media directory were not preserved: %+v", cfg)
 	}
 }
 

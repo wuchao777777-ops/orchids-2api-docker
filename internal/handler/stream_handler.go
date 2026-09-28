@@ -253,8 +253,6 @@ type streamHandler struct {
 	toolCallCount       int
 	suppressedToolCalls int
 
-	// Callbacks
-	onConversationID func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
 	// Logger
 	logger *debug.Logger
 }
@@ -1846,13 +1844,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	case "model.actual_model":
 		slog.Warn("Ignoring upstream model substitution event")
-
-	case "model.conversation_id":
-		if msg.Event != nil {
-			if id, ok := msg.Event["id"].(string); ok && id != "" && h.onConversationID != nil {
-				h.onConversationID(id)
-			}
-		}
 
 	case "model.reasoning-start":
 		h.pendingThinkingSig = ""

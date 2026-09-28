@@ -22,7 +22,6 @@ func setupModelValidationHandler(t *testing.T) (*Handler, *store.Store, *minired
 
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisDB:     0,
 		RedisPrefix: "test:",
@@ -275,7 +274,6 @@ func TestResolveEffortModelVariant_CaseInsensitiveRequest(t *testing.T) {
 func TestHandleMessages_ResolvesBareModelToEffortVariant(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisDB:     0,
 		RedisPrefix: "test:",
@@ -360,7 +358,6 @@ func newEffortResolutionHandler(t *testing.T, models ...string) (*Handler, *fake
 
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisDB:     0,
 		RedisPrefix: "test:",

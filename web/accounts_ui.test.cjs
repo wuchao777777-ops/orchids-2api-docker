@@ -1019,7 +1019,7 @@ test('credential verdict drives sidebar counters and channel-specific row badges
     const account = { id: 101, account_type: type, enabled: true, status_code: '', has_credential: true };
     assert.equal(context.isSidebarAccountAbnormal(account), false, `${type}: credentialed sidebar`);
     assert.equal(context.evaluateAccountStatus(account).text, '正常', `${type}: credentialed badge`);
-    const missing = { ...account, has_credential: false, session_id: 'obsolete-session', session_cookie: 'obsolete-cookie',
+    const missing = { ...account, has_credential: false,
       token: 'obsolete-token', credential_type: 'oauth', workbuddy_access_token: 'visible-token',
       qoder_access_token: 'visible-token', cline_access_token: 'visible-token' };
     assert.equal(context.isSidebarAccountAbnormal(missing), true, `${type}: missing credential sidebar`);

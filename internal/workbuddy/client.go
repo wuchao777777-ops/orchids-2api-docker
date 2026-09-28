@@ -280,20 +280,6 @@ func (c *Client) buildBody(req upstream.UpstreamRequest) ([]byte, error) {
 	return raw, nil
 }
 
-// VerifyModel performs a minimal streaming completion to prove the account can
-// actually run the model. Model refresh uses the /v3/config catalog, so this is
-// reserved for explicit single-model probes.
-func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
-	if c == nil {
-		return fmt.Errorf("workbuddy client is nil")
-	}
-	modelID = strings.TrimSpace(modelID)
-	if modelID == "" {
-		modelID = defaultModel
-	}
-	return c.runChat(ctx, upstream.UpstreamRequest{Model: modelID}, 45*time.Second, nil, nil)
-}
-
 // RefreshCredentials forces one token refresh and returns the rotated pair. It
 // is used at login time to capture the durable refresh token when the
 // authorization response did not include one.

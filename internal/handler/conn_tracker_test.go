@@ -89,7 +89,6 @@ func setupConnTrackerHandlerTest(t *testing.T) (*store.Store, *miniredis.Minired
 
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisDB:     0,
 		RedisPrefix: "test:",
@@ -107,7 +106,6 @@ func createEnabledTestAccount(t *testing.T, s *store.Store, name, accountType st
 	acc := &store.Account{
 		Name:        name,
 		AccountType: accountType,
-		SessionID:   name + "-session",
 		Enabled:     true,
 		Weight:      1,
 	}

@@ -50,7 +50,7 @@ func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("template.NewRenderer() error = %v", err)
 	}
-	limiter := middleware.NewConcurrencyLimiter(4, 0, false)
+	limiter := middleware.NewConcurrencyLimiter(4, 0)
 
 	// A managed key, because /v1 requires one unconditionally.
 	managedKey := "sk-responses-subresource"

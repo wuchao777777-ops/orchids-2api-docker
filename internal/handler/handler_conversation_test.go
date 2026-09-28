@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/goccy/go-json"
 
@@ -70,10 +69,9 @@ func (f *fakePayloadClient) snapshotCalls() []upstream.UpstreamRequest {
 
 func newTestHandler(client UpstreamClient) *Handler {
 	return &Handler{
-		config:       &config.Config{DebugEnabled: false},
-		client:       client,
-		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
-		auditLogger:  audit.NewNopLogger(),
+		config:      &config.Config{DebugEnabled: false},
+		client:      client,
+		auditLogger: audit.NewNopLogger(),
 	}
 }
 
@@ -361,9 +359,8 @@ func TestWorkBuddyPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) 
 		config: &config.Config{
 			DebugEnabled: false,
 		},
-		client:       client,
-		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
-		auditLogger:  audit.NewNopLogger(),
+		client:      client,
+		auditLogger: audit.NewNopLogger(),
 	}
 
 	reqPayload := ClaudeRequest{

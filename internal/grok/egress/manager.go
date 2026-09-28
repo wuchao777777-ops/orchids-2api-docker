@@ -385,9 +385,8 @@ func (m *Manager) probeNode(ctx context.Context, node Node) error {
 }
 
 // egressHealthFileName is the per-deployment health snapshot. It lives in the
-// media directory, which a multi-replica deployment already shares
-// (shared_media), so node health survives a restart and is visible to every
-// instance that mounts the same directory.
+// media directory; when replicas mount the same directory, node health survives
+// a restart and is visible to every instance.
 const egressHealthFileName = ".egress-health.json"
 
 type egressHealthFile struct {

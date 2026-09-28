@@ -103,7 +103,7 @@ func TestChatAlwaysRequestsEncryptedReasoning(t *testing.T) {
 
 func TestAuditChatOutcomePersistsAccountTokens(t *testing.T) {
 	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "grok_usage_test:"})
+	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "grok_usage_test:"})
 	if err != nil {
 		t.Fatal(err)
 	}

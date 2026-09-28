@@ -149,7 +149,7 @@ func remainingChatFrame(delta map[string]interface{}, finish interface{}) string
 func remainingResponse(t *testing.T, stream string) map[string]interface{} {
 	t.Helper()
 	w := httptest.NewRecorder()
-	writeResponsesStreamFromChatReaderRequest(w, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(stream))
+	writeResponsesStreamFromChatReaderRequestWithHook(w, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(stream), nil)
 	var final map[string]interface{}
 	err := readResponseSSE(strings.NewReader(w.Body.String()), func(kind, data string) error {
 		if kind == "response.completed" || kind == "response.failed" || kind == "response.incomplete" {
@@ -294,7 +294,7 @@ func (r *remainingBrokenResponseWriter) Read([]byte) (int, error) { r.reads++; r
 
 func TestRemainingResponsesWriteFailureStopsReading(t *testing.T) {
 	w := &remainingBrokenResponseWriter{}
-	writeResponsesStreamFromChatReaderRequest(w, ResponsesCreateRequest{Model: "grok-4.6"}, w)
+	writeResponsesStreamFromChatReaderRequestWithHook(w, ResponsesCreateRequest{Model: "grok-4.6"}, w, nil)
 	if w.reads != 0 {
 		t.Fatal("reader consumed after client write failure")
 	}

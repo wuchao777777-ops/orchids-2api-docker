@@ -158,7 +158,6 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 
 	mini := miniredis.RunT(t)
 	opts := Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisDB:     0,
 		RedisPrefix: "test:",
@@ -206,7 +205,6 @@ func TestStoreNew_KeepsUpstreamDiscoveredModels(t *testing.T) {
 
 	mini := miniredis.RunT(t)
 	opts := Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisDB:     0,
 		RedisPrefix: "test:",
@@ -261,7 +259,6 @@ func TestStoreNew_RemovesDeprecatedGrokModelsOnly(t *testing.T) {
 
 	mini := miniredis.RunT(t)
 	opts := Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisDB:     0,
 		RedisPrefix: "test:",
@@ -314,7 +311,6 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 
 	mini := miniredis.RunT(t)
 	s, err := New(Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisDB:     0,
 		RedisPrefix: "test:",

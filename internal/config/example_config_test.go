@@ -8,9 +8,8 @@ import (
 )
 
 // TestExampleConfigLoads keeps config.example.json honest. The file is what an
-// operator copies to config.json on a new host, so a type that no longer matches
-// the Config struct turns "deploy" into a service that exits during startup —
-// which is exactly what a bare `"token_cache_strategy": 1` did before this test.
+// operator copies to config.json on a new host, so incompatible field types
+// must be detected before deployment rather than at runtime.
 func TestExampleConfigLoads(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config.example.json"))
 	if err != nil {
@@ -20,8 +19,8 @@ func TestExampleConfigLoads(t *testing.T) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("config.example.json does not unmarshal into config.Config: %v", err)
 	}
-	if cfg.Port == "" || cfg.StoreMode == "" {
-		t.Fatalf("config.example.json is missing required values: port=%q store_mode=%q", cfg.Port, cfg.StoreMode)
+	if cfg.Port == "" || cfg.RedisAddr == "" {
+		t.Fatalf("config.example.json is missing required values: port=%q redis_addr=%q", cfg.Port, cfg.RedisAddr)
 	}
 }
 

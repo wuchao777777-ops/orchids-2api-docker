@@ -28,22 +28,13 @@ type Config struct {
 	CredentialKeyFile  string   `json:"credential_encryption_key_file,omitempty"`
 	ResponseStoreTTL   int      `json:"response_store_ttl_hours,omitempty"`
 	TrustedProxies     []string `json:"trusted_proxies,omitempty"`
-	StoreMode          string   `json:"store_mode"`
 	RedisAddr          string   `json:"redis_addr"`
 	RedisPassword      string   `json:"redis_password"`
 	RedisDB            int      `json:"redis_db"`
 	RedisPrefix        string   `json:"redis_prefix"`
-	DeploymentReplicas int      `json:"deployment_replicas,omitempty"`
 	DeploymentInstance string   `json:"deployment_instance_id,omitempty"`
-	DeploymentCluster  string   `json:"deployment_cluster_id,omitempty"`
-	SharedMedia        bool     `json:"shared_media,omitempty"`
 	MediaDir           string   `json:"media_dir,omitempty"`
-	CacheTokenCount    bool     `json:"cache_token_count"`
-	CacheTTL           int      `json:"cache_ttl"`
 	CacheStrategy      string   `json:"cache_strategy"`
-	EnableTokenCache   bool     `json:"enable_token_cache"`
-	TokenCacheTTL      int      `json:"token_cache_ttl"`
-	TokenCacheStrategy string   `json:"token_cache_strategy"`
 
 	// ── Hardcoded fields (set unconditionally by ApplyHardcoded) ──
 	DebugLogSSE      bool `json:"-"`
@@ -134,30 +125,23 @@ type Config struct {
 	// Quality-hold policy. The gateway withholds a degraded reasoning turn
 	// instead of streaming it, then retries it on another account. Holding is on
 	// by default and fails open once the retry budget is spent.
-	QualityHoldEnabled     *bool  `json:"quality_hold_enabled,omitempty"`
-	QualityHoldMaxAttempts int    `json:"quality_hold_max_attempts,omitempty"`
-	QualityHoldTimeoutMs   int    `json:"quality_hold_timeout_ms,omitempty"`
-	QualityHoldOnExhausted string `json:"quality_hold_on_exhausted,omitempty"`
-	RequestTimeout         int    `json:"request_timeout,omitempty"`
-	Retry429Interval       int    `json:"retry_429_interval,omitempty"`
-	// SessionTTLMinutes bounds how long a client conversation may pause and still
-	// resume the upstream conversation it was attached to. A coding session
-	// routinely idles for hours between turns; when the binding expires the next
-	// turn can no longer continue the upstream conversation and the whole
-	// transcript has to be re-sent instead.
-	SessionTTLMinutes    int      `json:"session_ttl_minutes,omitempty"`
-	TokenRefreshInterval int      `json:"-"`
-	AutoRefreshToken     bool     `json:"-"`
-	LoadBalancerCacheTTL int      `json:"-"`
-	ConcurrencyLimit     int      `json:"-"`
-	ConcurrencyTimeout   int      `json:"concurrency_timeout,omitempty"`
-	AdaptiveTimeout      bool     `json:"-"`
-	ProxyURL             string   `json:"proxy_url"`
-	ProxyHTTP            string   `json:"proxy_http"`
-	ProxyHTTPS           string   `json:"proxy_https"`
-	ProxyUser            string   `json:"proxy_user"`
-	ProxyPass            string   `json:"proxy_pass"`
-	ProxyBypass          []string `json:"proxy_bypass"`
+	QualityHoldEnabled     *bool    `json:"quality_hold_enabled,omitempty"`
+	QualityHoldMaxAttempts int      `json:"quality_hold_max_attempts,omitempty"`
+	QualityHoldTimeoutMs   int      `json:"quality_hold_timeout_ms,omitempty"`
+	QualityHoldOnExhausted string   `json:"quality_hold_on_exhausted,omitempty"`
+	RequestTimeout         int      `json:"request_timeout,omitempty"`
+	Retry429Interval       int      `json:"retry_429_interval,omitempty"`
+	TokenRefreshInterval   int      `json:"-"`
+	AutoRefreshToken       bool     `json:"-"`
+	LoadBalancerCacheTTL   int      `json:"-"`
+	ConcurrencyLimit       int      `json:"-"`
+	ConcurrencyTimeout     int      `json:"concurrency_timeout,omitempty"`
+	ProxyURL               string   `json:"proxy_url"`
+	ProxyHTTP              string   `json:"proxy_http"`
+	ProxyHTTPS             string   `json:"proxy_https"`
+	ProxyUser              string   `json:"proxy_user"`
+	ProxyPass              string   `json:"proxy_pass"`
+	ProxyBypass            []string `json:"proxy_bypass"`
 }
 
 // EgressNodeConfig describes one egress exit node for the Grok proxy pool.
@@ -267,17 +251,8 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.AdminPath == "" {
 		cfg.AdminPath = "/admin"
 	}
-	if cfg.StoreMode == "" {
-		cfg.StoreMode = "redis"
-	}
 	if cfg.RedisPrefix == "" {
 		cfg.RedisPrefix = "orchids:"
-	}
-	if cfg.DeploymentReplicas <= 0 {
-		cfg.DeploymentReplicas = 1
-	}
-	if strings.TrimSpace(cfg.DeploymentCluster) == "" {
-		cfg.DeploymentCluster = "orchids"
 	}
 	if strings.TrimSpace(cfg.MediaDir) == "" {
 		cfg.MediaDir = filepath.Join("data", "tmp")
@@ -288,17 +263,8 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.ResponseStoreTTL <= 0 {
 		cfg.ResponseStoreTTL = 30 * 24
 	}
-	if cfg.CacheTTL <= 0 {
-		cfg.CacheTTL = 5
-	}
 	if strings.TrimSpace(cfg.CacheStrategy) == "" {
 		cfg.CacheStrategy = "mix"
-	}
-	if cfg.TokenCacheTTL <= 0 {
-		cfg.TokenCacheTTL = 300
-	}
-	if strings.TrimSpace(cfg.TokenCacheStrategy) == "" {
-		cfg.TokenCacheStrategy = "1"
 	}
 	// Fidelity default: preserve client content verbatim unless explicitly
 	// configured otherwise ("auto"/"strip" re-enable cc_entrypoint handling).
@@ -326,16 +292,11 @@ func ApplyHardcoded(cfg *Config) {
 	// one. The bounds still let an operator lower it.
 	cfg.RequestTimeout = boundedDefault(cfg.RequestTimeout, 7200, 86400)
 	cfg.Retry429Interval = boundedDefault(cfg.Retry429Interval, 60, 3600)
-	// A conversation binding must outlive a working session. Thirty minutes was
-	// short enough that an ordinary lunch break detached the upstream
-	// conversation and forced the next turn to replay the entire transcript.
-	cfg.SessionTTLMinutes = boundedDefault(cfg.SessionTTLMinutes, 12*60, 30*24*60)
 	cfg.TokenRefreshInterval = 1
 	cfg.AutoRefreshToken = true
 	cfg.LoadBalancerCacheTTL = 5
 	cfg.ConcurrencyLimit = 100
 	cfg.ConcurrencyTimeout = boundedDefault(cfg.ConcurrencyTimeout, cfg.RequestTimeout, 86400)
-	cfg.AdaptiveTimeout = true
 	cfg.DebugLogSSE = cfg.DebugEnabled
 }
 

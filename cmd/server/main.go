@@ -31,7 +31,6 @@ import (
 	"orchids-api/internal/secureblob"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
-	"orchids-api/internal/tokencache"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -98,7 +97,6 @@ func main() {
 	slog.Info("Credential encryption enabled", "key_source", credentialKeySource)
 
 	s, err := store.New(store.Options{
-		StoreMode:               cfg.StoreMode,
 		RedisAddr:               cfg.RedisAddr,
 		RedisPassword:           cfg.RedisPassword,
 		RedisDB:                 cfg.RedisDB,
@@ -132,7 +130,7 @@ func main() {
 			slog.Debug("Config loaded from Redis")
 		}
 	}
-	slog.Info("Media storage initialized", "directory", cfg.MediaDir, "replicas", cfg.DeploymentReplicas, "shared", cfg.SharedMedia)
+	slog.Info("Media storage initialized", "directory", cfg.MediaDir)
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Duration(cfg.LoadBalancerCacheTTL)*time.Second)
 
@@ -181,39 +179,7 @@ func main() {
 		grokHandler.SetConnTracker(accountTracker)
 	}
 
-	// Token cache: use Redis when available, fall back to memory
-	var tokenCache tokencache.Cache
 	if redisClient := s.RedisClient(); redisClient != nil {
-		tokenCache = tokencache.NewRedisCache(redisClient, s.RedisPrefix(), time.Duration(cfg.CacheTTL)*time.Minute)
-		slog.Debug("Token cache initialized", "backend", "redis")
-	} else {
-		tokenCache = tokencache.NewMemoryCache(time.Duration(cfg.CacheTTL)*time.Minute, 10000)
-		slog.Debug("Token cache initialized", "backend", "memory")
-	}
-	// Memory-backed caches own a cleanup goroutine. Close them during shutdown;
-	// Redis-backed caches do not implement Close and keep their shared client
-	// lifecycle owned by the store.
-	defer func() {
-		if closer, ok := tokenCache.(interface{ Close() }); ok {
-			closer.Close()
-		}
-	}()
-	h.SetTokenCache(tokenCache)
-	apiHandler.SetTokenCache(tokenCache)
-
-	// Prompt cache: memory-based for now (simulating Anthropic prompt caching)
-	promptCache := tokencache.NewMemoryPromptCache(time.Duration(cfg.TokenCacheTTL)*time.Second, 10000)
-	defer promptCache.Close()
-	h.SetPromptCache(promptCache)
-	apiHandler.SetPromptCache(promptCache)
-	slog.Debug("Prompt cache initialized", "ttl", cfg.TokenCacheTTL)
-
-	// Session store: use Redis when available, fall back to memory
-	if redisClient := s.RedisClient(); redisClient != nil {
-		sessionStore := handler.NewRedisSessionStore(redisClient, s.RedisPrefix(), conversationBindingTTL(cfg))
-		h.SetSessionStore(sessionStore)
-		slog.Debug("Session store initialized", "backend", "redis")
-
 		auditLogger := audit.NewRedisLogger(redisClient, s.RedisPrefix(), 10000)
 		h.SetAuditLogger(middleware.ObserveAuditLogger(auditLogger))
 		grokHandler.SetAuditLogger(middleware.ObserveAuditLogger(auditLogger))
@@ -304,7 +270,7 @@ func main() {
 
 	// Register routes
 	mux := http.NewServeMux()
-	limiter := middleware.NewConcurrencyLimiter(cfg.ConcurrencyLimit, time.Duration(cfg.ConcurrencyTimeout)*time.Second, cfg.AdaptiveTimeout)
+	limiter := middleware.NewConcurrencyLimiter(cfg.ConcurrencyLimit, time.Duration(cfg.ConcurrencyTimeout)*time.Second)
 	registerRoutes(mux, cfg, s, h, grokHandler, apiHandler, limiter, accountTracker, tmplRenderer)
 	trustedProxy, err := middleware.TrustedProxyMiddleware(cfg.TrustedProxies)
 	if err != nil {
@@ -369,17 +335,6 @@ func main() {
 
 	<-idleConnsClosed
 	slog.Info("Server shutdown gracefully")
-}
-
-// conversationBindingTTL is how long a client conversation may idle and still
-// resume the upstream conversation it was attached to. The default raises the
-// historical half hour, which detached ordinary working sessions between turns.
-func conversationBindingTTL(cfg *config.Config) time.Duration {
-	const fallback = 30 * time.Minute
-	if cfg == nil || cfg.SessionTTLMinutes <= 0 {
-		return fallback
-	}
-	return time.Duration(cfg.SessionTTLMinutes) * time.Minute
 }
 
 // logWorkBuddyReachability reports at startup whether this process can reach the

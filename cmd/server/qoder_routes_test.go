@@ -187,7 +187,7 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("template.NewRenderer() error = %v", err)
 	}
-	limiter := middleware.NewConcurrencyLimiter(4, 0, false)
+	limiter := middleware.NewConcurrencyLimiter(4, 0)
 	mux := http.NewServeMux()
 	registerRoutes(mux, cfg, s, h, nil, apiHandler, limiter, nil, renderer)
 

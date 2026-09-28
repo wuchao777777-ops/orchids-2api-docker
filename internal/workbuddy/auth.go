@@ -84,7 +84,7 @@ func ResolveCredentials(acc *store.Account) Credentials {
 		ExpiresAt:    acc.WorkBuddyExpiresAt,
 	}
 
-	for _, raw := range []string{acc.ClientCookie, acc.Token, acc.SessionCookie, acc.RefreshToken} {
+	for _, raw := range []string{acc.ClientCookie, acc.Token, acc.RefreshToken} {
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}

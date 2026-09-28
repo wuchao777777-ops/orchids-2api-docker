@@ -11,7 +11,7 @@ go build -o orchids-server ./cmd/server
 - 显式设置强管理密码；`debug_enabled` 保持关闭。账号凭据的 `data/credential.key`（或环境变量密钥）必须与 Redis 一同备份和恢复。
 - Redis 的 `<redis_prefix>settings:config` 可覆盖文件配置，升级或修改参数后通过管理端核对实际值。
 - 后端默认监听所有网卡的端口；在防火墙或反向代理上阻止直接公网访问，尤其注意 `/metrics`。`trusted_proxies` 仅填写实际代理地址。
-- 多副本共享 Redis、密钥和集群 ID，并为每个副本配置不同的 `deployment_instance_id`。
+- 多副本共享 Redis 和凭据加密密钥，并为每个副本配置不同的 `deployment_instance_id`；如需共享媒体与 egress 健康状态，请显式挂载同一媒体目录。
 - 启动后检查 `/health`，再使用 API Key 请求 `/v1/models`；必要时在管理端按通道刷新模型。回归测试执行 `go test ./...`。
 
 仓库附带 [Caddy 与 systemd 主机部署手册](../deploy/README.md) 和 [`scripts/deploy-orchids.sh`](../scripts/deploy-orchids.sh)；这是特定主机环境的示例，应用前请核对地址、路径及防火墙规则。

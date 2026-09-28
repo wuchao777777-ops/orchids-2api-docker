@@ -24,9 +24,8 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 
 	cfg := &config.Config{RequestTimeout: 30}
 	h := &Handler{
-		config:       cfg,
-		clientCache:  newAccountClientCache(),
-		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
+		config:      cfg,
+		clientCache: newAccountClientCache(),
 	}
 
 	created := 0
@@ -36,10 +35,10 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 	})
 
 	base := &store.Account{
-		ID:            6,
-		AccountType:   "workbuddy",
-		SessionCookie: "session-a",
-		UpdatedAt:     time.Unix(100, 0),
+		ID:           6,
+		AccountType:  "workbuddy",
+		ClientCookie: "session-a",
+		UpdatedAt:    time.Unix(100, 0),
 	}
 
 	first := h.getOrCreateAccountClient(base)
@@ -74,9 +73,8 @@ func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 
 	cfg := &config.Config{RequestTimeout: 30}
 	h := &Handler{
-		config:       cfg,
-		clientCache:  newAccountClientCache(),
-		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
+		config:      cfg,
+		clientCache: newAccountClientCache(),
 	}
 
 	created := 0
@@ -86,9 +84,9 @@ func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 	})
 
 	base := &store.Account{
-		ID:            6,
-		AccountType:   "workbuddy",
-		SessionCookie: "session-a",
+		ID:           6,
+		AccountType:  "workbuddy",
+		ClientCookie: "session-a",
 	}
 
 	first := h.getOrCreateAccountClient(base)
@@ -97,7 +95,7 @@ func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 	}
 
 	changed := *base
-	changed.SessionCookie = "session-b"
+	changed.ClientCookie = "session-b"
 
 	second := h.getOrCreateAccountClient(&changed)
 	if second == nil {

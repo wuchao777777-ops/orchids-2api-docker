@@ -12,7 +12,6 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
-	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
@@ -690,16 +689,6 @@ func (c *Client) persistPatch(ctx context.Context, patch store.QoderAccountPatch
 		return fmt.Errorf("persist qoder account state: %w", err)
 	}
 	return nil
-}
-
-// VerifyModel proves the account can actually run one model by issuing a
-// minimal streaming completion. Model refresh uses the catalog instead, so this
-// is reserved for an explicit single-model probe.
-func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
-	return c.SendRequestWithPayload(ctx, upstream.UpstreamRequest{
-		Model:    strings.TrimSpace(modelID),
-		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "ping"}}},
-	}, nil, nil)
 }
 
 // RuntimeFields returns the derived pair. It is empty until the pair has been

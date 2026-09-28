@@ -62,7 +62,6 @@ func NormalizeWorkBuddyCredentials(acc *store.Account) bool {
 	// writing a JWT there would leak it through the account list.
 	acc.Token = ""
 	acc.RefreshToken = ""
-	acc.SessionCookie = ""
 	acc.ClientCookie = ""
 	return true
 }
@@ -128,7 +127,6 @@ func RedactWorkBuddyOutput(acc *store.Account) *store.Account {
 	out := *acc
 	out.WorkBuddyRefreshToken = ""
 	out.RefreshToken = ""
-	out.SessionCookie = ""
 	out.Token = ""
 	return &out
 }

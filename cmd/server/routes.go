@@ -198,7 +198,6 @@ func registerRoutes(
 	// context against the wrong number. On the unified prefix the channel is the
 	// model's, not the path's.
 	mux.HandleFunc("/v1/messages/count_tokens", inferenceAuth(limiter.Limit(grok.ModelDispatcher(h.HandleCountTokens, h.HandleCountTokens, isNativeResponsesModel))))
-	registerWithPrefixes(mux, []string{"/grok/v1", "/v1"}, "/files/", inferenceAuth(grokHandler.HandleFiles))
 
 	// --- Public auth/login (no prefix duplication) ---
 	mux.HandleFunc("/api/login", apiHandler.HandleLogin)
@@ -216,7 +215,6 @@ func registerRoutes(
 	mux.HandleFunc("/api/providers", sessionAuth(channel.HandleRegistry))
 	mux.HandleFunc("/api/accounts", sessionAuth(apiHandler.HandleAccounts))
 	mux.HandleFunc("/api/accounts/", sessionAuth(apiHandler.HandleAccountByID))
-	mux.HandleFunc("/api/grok/availability", sessionAuth(apiHandler.HandleGrokAvailability))
 	mux.HandleFunc("/api/workbuddy/login", sessionAuth(apiHandler.HandleWorkBuddyLogin))
 	mux.HandleFunc("/api/workbuddy/login/", sessionAuth(apiHandler.HandleWorkBuddyLogin))
 	mux.HandleFunc("/api/qoder/login", sessionAuth(apiHandler.HandleQoderLogin))
@@ -230,46 +228,22 @@ func registerRoutes(
 	// POST /api/keys/{id}/reset-usage lands on the same handler, which dispatches
 	// on the trailing path segment.
 	mux.HandleFunc("/api/models", sessionAuth(apiHandler.HandleModels))
-	mux.HandleFunc("/api/models/groups", sessionAuth(apiHandler.HandleModelGroups))
 	mux.HandleFunc("/api/models/refresh", sessionAuth(modelRefreshHandler))
 	mux.HandleFunc("/api/models/", sessionAuth(apiHandler.HandleModelByID))
 	mux.HandleFunc("/api/export", sessionAuth(apiHandler.HandleExport))
 	mux.HandleFunc("/api/import", sessionAuth(apiHandler.HandleImport))
-	mux.HandleFunc("/api/config", sessionAuth(apiHandler.HandleConfig))
 	mux.HandleFunc("/api/config/list", sessionAuth(apiHandler.HandleConfigList))
 	mux.HandleFunc("/api/config/save", sessionAuth(apiHandler.HandleConfigSave))
-	mux.HandleFunc("/api/config/cache/clear", sessionAuth(apiHandler.HandleCacheClear))
-	mux.HandleFunc("/api/token-cache/stats", sessionAuth(apiHandler.HandleTokenCacheStats))
-	mux.HandleFunc("/api/token-cache/clear", sessionAuth(apiHandler.HandleTokenCacheClear))
-	mux.HandleFunc("/api/audit", sessionAuth(apiHandler.HandleAuditEvents))
 	// Operations monitoring: the overview, the channel × model matrix and the
 	// alert set behind the 运维总览 page.
 	mux.HandleFunc("/api/ops/overview", sessionAuth(apiHandler.HandleOpsOverview))
-	mux.HandleFunc("/api/ops/channels", sessionAuth(apiHandler.HandleOpsChannels))
-	mux.HandleFunc("/api/ops/alerts", sessionAuth(apiHandler.HandleOpsAlerts))
 	mux.HandleFunc("/api/ops/alerts/rules", sessionAuth(apiHandler.HandleOpsAlertRules))
 	mux.HandleFunc("/api/ops/runtime", sessionAuth(apiHandler.HandleOpsRuntime))
-	// Journal: one endpoint per tab (request / operation / system) with the
-	// upstream attempts of each request joined in.
+	// Journal: one filtered endpoint for request, operation, and system entries,
+	// with the upstream attempts of each request joined in.
 	mux.HandleFunc("/api/journal/records", sessionAuth(apiHandler.HandleJournalRecords))
 	mux.HandleFunc("/api/journal/diagnostics", sessionAuth(apiHandler.HandleJournalDiagnostics))
 	mux.HandleFunc("/api/journal/diagnostics/settings", sessionAuth(apiHandler.HandleDiagnosticSettings))
-	mux.HandleFunc("/api/journal/operations", sessionAuth(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query()
-		if query.Get("kind") == "" {
-			query.Set("kind", "operation")
-			r.URL.RawQuery = query.Encode()
-		}
-		apiHandler.HandleJournalRecords(w, r)
-	}))
-	mux.HandleFunc("/api/journal/system", sessionAuth(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query()
-		if query.Get("kind") == "" {
-			query.Set("kind", "system")
-			r.URL.RawQuery = query.Encode()
-		}
-		apiHandler.HandleJournalRecords(w, r)
-	}))
 
 	// --- Static assets ---
 	staticRootHandler := web.StaticHandler()
@@ -314,7 +288,7 @@ func registerRoutes(
 		}, http.DefaultServeMux.ServeHTTP))
 		slog.Debug("pprof enabled", "path", "/debug/pprof/")
 	}
-	// Guard every /v1 path, including aliases, media and unknown endpoints.
+	// Guard every /v1 path, including aliases and unknown endpoints.
 	// Registered inference routes reuse the validated principal without charging
 	// their key's RPM budget or concurrency slot twice.
 	v1Guard := inferenceAuth(mux.ServeHTTP)
@@ -382,19 +356,7 @@ func registerAdminUI(mux *http.ServeMux, cfg *config.Config, currentConfig func(
 		serveLoginPage(w, r)
 	})
 
-	for _, page := range []string{"/config", "/cache", "/token"} {
-		mux.HandleFunc(cfg.AdminPath+page, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet {
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			if !isAdminAuthenticated(r) {
-				http.Redirect(w, r, cfg.AdminPath+"/login.html", http.StatusFound)
-				return
-			}
-			renderAdminIndex(w, r)
-		})
-	}
+	// All seven admin pages are selected by ?tab=... on the index route.
 
 	mux.HandleFunc(cfg.AdminPath+"/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == cfg.AdminPath+"/login.html" {

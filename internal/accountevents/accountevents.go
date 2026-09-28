@@ -324,11 +324,8 @@ func Classify(previous, current *store.Account) Kind {
 // what makes "the credential changed" precise instead of a guess.
 type credentialMaterial struct {
 	accountType  string
-	sessionID    string
 	clientCookie string
 	refreshToken string
-	sessionCk    string
-	clientUAT    string
 	token        string
 	oauthAccess  string
 	oauthRefresh string
@@ -367,11 +364,8 @@ func materialOf(acc *store.Account) credentialMaterial {
 	}
 	return credentialMaterial{
 		accountType:  strings.TrimSpace(acc.AccountType),
-		sessionID:    acc.SessionID,
 		clientCookie: acc.ClientCookie,
 		refreshToken: acc.RefreshToken,
-		sessionCk:    acc.SessionCookie,
-		clientUAT:    acc.ClientUat,
 		token:        acc.Token,
 		oauthAccess:  acc.OAuthAccessToken,
 		oauthRefresh: acc.OAuthRefreshToken,

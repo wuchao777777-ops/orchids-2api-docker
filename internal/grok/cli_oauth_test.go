@@ -250,7 +250,7 @@ func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
 	defer server.Close()
 
 	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: "test:"})
+	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: "test:"})
 	if err != nil {
 		t.Fatalf("store.New() error = %v", err)
 	}

@@ -9,34 +9,8 @@ import (
 	"time"
 )
 
-func TestGetP95_NotEnoughData(t *testing.T) {
-	cl := NewConcurrencyLimiter(1, time.Second, true)
-	for i := 0; i < 9; i++ {
-		cl.UpdateStats(10 * time.Millisecond)
-	}
-	if p95 := atomic.LoadInt64(&cl.cachedP95); p95 != 0 {
-		t.Fatalf("expected 0 with insufficient samples, got %d", p95)
-	}
-}
-
-func TestGetP95_Computes(t *testing.T) {
-	cl := NewConcurrencyLimiter(1, time.Second, true)
-	for i := 0; i < 100; i++ {
-		cl.UpdateStats(time.Duration(i+1) * time.Millisecond)
-	}
-
-	// Force the 1s throttle to expire so a recalc occurs
-	time.Sleep(1100 * time.Millisecond)
-	cl.UpdateStats(100 * time.Millisecond)
-
-	p95 := atomic.LoadInt64(&cl.cachedP95)
-	if p95 < 90 || p95 > 100 {
-		t.Fatalf("expected p95 near top end, got %d", p95)
-	}
-}
-
 func TestLimiterRejectsImmediatelyWhenBusyWithOpenAIError(t *testing.T) {
-	cl := NewConcurrencyLimiter(1, time.Second, false)
+	cl := NewConcurrencyLimiter(1, time.Second)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan struct{})
@@ -94,7 +68,7 @@ func TestLimiterRejectsImmediatelyWhenBusyWithOpenAIError(t *testing.T) {
 }
 
 func TestLimitPreservesExecutionTimeout(t *testing.T) {
-	cl := NewConcurrencyLimiter(1, 20*time.Millisecond, false)
+	cl := NewConcurrencyLimiter(1, 20*time.Millisecond)
 	contextErr := make(chan error, 1)
 	h := cl.Limit(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()

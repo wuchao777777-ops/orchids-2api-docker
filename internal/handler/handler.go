@@ -29,7 +29,6 @@ import (
 	"orchids-api/internal/pricing"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
-	"orchids-api/internal/tokencache"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 )
@@ -66,11 +65,8 @@ type Handler struct {
 	clientCache   *accountClientCache
 	loadBalancer  *loadbalancer.LoadBalancer
 	connTracker   loadbalancer.ConnTracker
-	tokenCache    tokencache.Cache
-	promptCache   tokencache.PromptCache
 	auditLogger   audit.Logger
 
-	sessionStore SessionStore
 	// Completed API requests update usage asynchronously. Coalescing by account
 	// keeps this path at one worker instead of spawning a goroutine per request.
 	statsOnce      sync.Once
@@ -161,24 +157,12 @@ type openAINonStreamResponse struct {
 const keepAliveInterval = 15 * time.Second
 const maxRequestBytes = 50 * 1024 * 1024 // 50MB
 
-// sessionTTL is how long a conversation binding survives an idle gap. A missing
-// or non-positive setting keeps the historical half hour; the configured value
-// is what a deployment raises so a long session is not detached mid-way.
-func sessionTTL(cfg *config.Config) time.Duration {
-	const fallback = 30 * time.Minute
-	if cfg == nil || cfg.SessionTTLMinutes <= 0 {
-		return fallback
-	}
-	return time.Duration(cfg.SessionTTLMinutes) * time.Minute
-}
-
 func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	h := &Handler{
 		config:       cfg,
 		loadBalancer: lb,
 		connTracker:  loadbalancer.NewMemoryConnTracker(),
 		clientCache:  newAccountClientCache(),
-		sessionStore: NewMemorySessionStore(sessionTTL(cfg), 1024),
 		auditLogger:  audit.NewNopLogger(),
 	}
 	h.clientCache.SetConfig(cfg)
@@ -230,19 +214,6 @@ func (h *Handler) configSnapshot() *config.Config {
 	cfg := h.config
 	h.configMu.RUnlock()
 	return cfg
-}
-
-func (h *Handler) SetTokenCache(cache tokencache.Cache) {
-	h.tokenCache = cache
-}
-
-func (h *Handler) SetPromptCache(cache tokencache.PromptCache) {
-	h.promptCache = cache
-}
-
-// SetSessionStore replaces the default in-memory session store.
-func (h *Handler) SetSessionStore(ss SessionStore) {
-	h.sessionStore = ss
 }
 
 // SetAuditLogger replaces the default nop audit logger.
@@ -742,37 +713,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Token 计数（用于前置 usage 展示）
 	inputTokens := breakdown.Total
-	if inputTokens <= 0 {
-		inputTokens = h.estimateInputTokens(r.Context(), req.Model, builtPrompt)
-	}
-
-	if cfg.EnableTokenCache && h.promptCache != nil {
-		sysText := ""
-		if len(req.System) > 0 {
-			if sysBytes, err := json.Marshal(req.System); err == nil {
-				sysText = string(sysBytes)
-			}
-		}
-		toolsText := ""
-		if len(effectiveTools) > 0 {
-			if toolsBytes, err := json.Marshal(effectiveTools); err == nil {
-				toolsText = string(toolsBytes)
-			}
-		}
-
-		cacheReadTokens, _ := h.promptCache.CheckPromptCache(
-			cfg.TokenCacheStrategy,
-			breakdown.SystemContextTokens,
-			breakdown.ToolsTokens,
-			sysText,
-			toolsText,
-		)
-		// Subtract cacheReadTokens from the base inputTokens
-		// if simulating prompt caching billing behavior
-		if inputTokens >= cacheReadTokens {
-			inputTokens -= cacheReadTokens
-		}
-	}
 
 	sh := newStreamHandler(
 		cfg, w, logger, noThinking, isStream, responseFormat,
@@ -789,21 +729,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh.setDisallowToolCalls(gateNoTools)
 	sh.setEmptyOutputFallback(successfulFileMutationToolResultFallback(upstreamMessages))
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
-	// Capture the server-issued conversation id so the next turn of the same
-	// client session resumes the same upstream conversation.
-	sh.onConversationID = func(id string) {
-		id = strings.TrimSpace(id)
-		if conversationKey != "" {
-			h.sessionStore.SetConvID(r.Context(), conversationKey, id)
-			if currentAccount != nil {
-				h.sessionStore.SetAccountID(r.Context(), conversationKey, currentAccount.ID)
-			}
-			h.sessionStore.Touch(r.Context(), conversationKey)
-		}
-		if verboseDiagnostics {
-			slog.Debug("conversationID captured", "key", conversationKey, "id", id)
-		}
-	}
 	defer sh.release()
 
 	// The opening frame is deliberately NOT written here. Writing it before the

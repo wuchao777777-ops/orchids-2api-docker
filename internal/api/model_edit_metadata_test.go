@@ -16,7 +16,7 @@ import (
 
 func TestModelAdminEditPreservesDiscoveredRoutingMetadata(t *testing.T) {
 	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "model_edit:"})
+	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "model_edit:"})
 	if err != nil {
 		t.Fatal(err)
 	}

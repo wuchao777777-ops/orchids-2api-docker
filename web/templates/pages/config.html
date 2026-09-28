@@ -12,7 +12,7 @@
     <section class="header-section" id="configHeader">
       <div>
         <h1>配置管理</h1>
-        <p>按分组管理后台凭据、缓存策略与代理网络；改动后底部保存栏会显示未保存数量。</p>
+        <p>按分组管理后台凭据与代理网络；改动后底部保存栏会显示未保存数量。</p>
       </div>
     </section>
 
@@ -29,7 +29,6 @@
           <div class="config-nav-head">配置分组</div>
           <a class="config-nav-link active" href="#groupOverview" data-nav-group="groupOverview">概览</a>
           <a class="config-nav-link" href="#groupAuth" data-nav-group="groupAuth">认证与密钥</a>
-          <a class="config-nav-link" href="#groupCache" data-nav-group="groupCache">缓存</a>
           <a class="config-nav-link" href="#groupProxy" data-nav-group="groupProxy">代理</a>
         </nav>
 
@@ -41,7 +40,7 @@
               <span class="mini-badge">只读</span>
             </div>
             <p class="settings-card-note">
-              这一页把配置拆成认证与密钥、缓存、代理三组；密钥类字段带「密钥」标记。
+              这一页把配置拆成认证与密钥、代理两组；密钥类字段带「密钥」标记。
               改动任意字段后，底部保存栏显示未保存数量，保存成功才成为新的对比基准。
             </p>
             <div class="settings-card-body">
@@ -56,26 +55,6 @@
                 </div>
               </div>
 
-              <div class="form-row">
-                <div class="form-row-label">
-                  <span class="form-label">Prompt 用量缓存</span>
-                  <span class="helper-text">缓存运行状态来自 /api/token-cache/stats。</span>
-                </div>
-                <div class="form-row-control config-row-stack">
-                  <div id="cacheStatsText" class="meta-text">正在统计缓存...</div>
-                  <button type="button" class="btn btn-outline btn-xs" onclick="clearCache()">清空缓存</button>
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-row-label">
-                  <span class="form-label">Token 估算缓存</span>
-                  <span class="helper-text">只影响本地估算，不改变发给上游的内容。</span>
-                </div>
-                <div class="form-row-control">
-                  <div id="estimateCacheStatsText" class="meta-text">用于缓存本地 token 估算结果，不代表上游真实用量。</div>
-                </div>
-              </div>
             </div>
           </section>
 
@@ -111,119 +90,6 @@
                 </div>
               </div>
 
-            </div>
-          </section>
-
-
-          <section class="settings-card" id="groupCache">
-            <div class="settings-card-head">
-              <h2 class="settings-card-title">缓存</h2>
-              <span class="mini-badge">Token</span>
-            </div>
-            <p class="settings-card-note">Prompt 前缀缓存降低上游 token 消耗，常驻内存随 TTL 与 QPS 线性增长。</p>
-
-            <div class="settings-card-body">
-              <div class="form-row">
-                <div class="form-row-label">
-                  <label class="form-label" for="cfg_enable_token_cache">启用 Prompt 用量缓存</label>
-                  <span class="helper-text">按 System / Tools 前缀复用上游 prompt 计算结果，关闭后每次请求都完整走上游。</span>
-                </div>
-                <div class="form-row-control config-toggle-control">
-                  <label class="toggle">
-                    <input type="checkbox" id="cfg_enable_token_cache" onchange="toggleCacheConfig(this.checked)">
-                    <span class="toggle-slider"></span>
-                  </label>
-                  <span class="config-toggle-hint">开：命中即跳过上游计算</span>
-                </div>
-              </div>
-
-              <div id="cacheConfigDetails" class="config-cache-details" style="display: none;">
-                <div class="form-row">
-                  <div class="form-row-label">
-                    <label class="form-label" for="cfg_token_cache_ttl_preset">缓存有效期</label>
-                    <span class="helper-text">TTL 越长命中率越高，常驻内存也越大；推荐 5–30 分钟。</span>
-                  </div>
-                  <div class="form-row-control">
-                    <input type="hidden" id="cfg_token_cache_ttl" value="300">
-                    <select id="cfg_token_cache_ttl_preset" class="form-input" onchange="handleTokenCacheTTLPresetChange()">
-                      <option value="60">1 分钟</option>
-                      <option value="300">5 分钟</option>
-                      <option value="900">15 分钟</option>
-                      <option value="1800">30 分钟</option>
-                      <option value="3600">1 小时</option>
-                      <option value="86400">1 天</option>
-                      <option value="259200">3 天</option>
-                      <option value="604800">1 周</option>
-                      <option value="custom">自定义</option>
-                    </select>
-                    <div id="cfg_token_cache_ttl_custom_wrap" class="config-subsection" style="display: none;">
-                      <label class="form-label" for="cfg_token_cache_ttl_custom">自定义 TTL (秒)</label>
-                      <input type="number" id="cfg_token_cache_ttl_custom" class="form-input" min="1" value="300"
-                        oninput="handleTokenCacheTTLCustomInput()">
-                    </div>
-                  </div>
-                </div>
-
-                <div class="form-row">
-                  <div class="form-row-label">
-                    <label class="form-label" for="cfg_token_cache_strategy">缓存策略</label>
-                    <span class="helper-text">分离缓存把 System 与 Tools 分开存放，命中率更稳。</span>
-                  </div>
-                  <div class="form-row-control">
-                    <select id="cfg_token_cache_strategy" class="form-input" onchange="updateMemoryEstimation()">
-                      <option value="0">完整匹配 (System + Tools)</option>
-                      <option value="1">分离缓存 (推荐)</option>
-                      <option value="2">仅缓存 System</option>
-                      <option value="3">仅缓存 Tools</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="estimate-panel">
-                  <div id="memoryEstTitle" class="estimate-title">内存估算</div>
-                  <p class="estimate-note">估算口径：QPS × TTL × 0.5KB × 策略系数，括号内为当前生效参数。</p>
-                  <div class="estimate-grid">
-                    <div class="estimate-card estimate-card-green">
-                      <div class="estimate-caption estimate-caption-ok">10 QPS · 推荐区间</div>
-                      <div id="estLow" class="estimate-value estimate-value-green">~1.5MB</div>
-                      <div class="estimate-meta"><span>低并发，TTL ≤ 30 分钟时内存可忽略</span></div>
-                    </div>
-                    <div class="estimate-card estimate-card-blue">
-                      <div class="estimate-caption">50 QPS · 常见区间</div>
-                      <div id="estMid" class="estimate-value estimate-value-blue">~7.5MB</div>
-                      <div class="estimate-meta"><span>建议 TTL 不超过 1 小时</span></div>
-                    </div>
-                    <div class="estimate-card estimate-card-purple">
-                      <div class="estimate-caption estimate-caption-warn">100 QPS · 需关注</div>
-                      <div id="estHigh" class="estimate-value estimate-value-purple">~15MB</div>
-                      <div class="estimate-meta"><span>TTL 超过 1 小时后增速最快</span></div>
-                    </div>
-                  </div>
-                  <div class="estimate-meta">
-                    <span>TTL: <span id="estTTLSeconds">300</span>s</span>
-                    <span>系数: <span id="estStrategyMult">× 2</span></span>
-                    <span>推荐 TTL: 5–30 分钟</span>
-                  </div>
-                  <p class="estimate-note estimate-note-warn">
-                    数值过高说明 TTL 或 QPS 估计偏大：100 QPS + TTL 1 周 + ×2 系数时估算内存可达数 GB。
-                    建议先按 5–30 分钟 TTL 观察命中率，再逐步调大。
-                  </p>
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-row-label">
-                  <label class="form-label" for="cfg_cache_token_count">Token 估算缓存</label>
-                  <span class="helper-text">缓存本地 token 估算结果，不代表上游真实用量。</span>
-                </div>
-                <div class="form-row-control config-toggle-control">
-                  <label class="toggle">
-                    <input type="checkbox" id="cfg_cache_token_count">
-                    <span class="toggle-slider"></span>
-                  </label>
-                  <span class="config-toggle-hint">开：本地估算结果复用</span>
-                </div>
-              </div>
             </div>
           </section>
 

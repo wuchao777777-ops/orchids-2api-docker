@@ -13,7 +13,6 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
-	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
@@ -413,23 +412,6 @@ func requestCarriesTools(body []byte) bool {
 		Tools []json.RawMessage `json:"tools"`
 	}
 	return json.Unmarshal(body, &payload) == nil && len(payload.Tools) > 0
-}
-
-// VerifyModel performs a minimal streaming completion to prove the account can
-// actually run the model. Model refresh uses the recommended-models feed, so
-// this is reserved for explicit single-model probes.
-func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
-	if c == nil {
-		return fmt.Errorf("cline client is nil")
-	}
-	model := strings.TrimSpace(modelID)
-	if model == "" {
-		return fmt.Errorf("cline verify needs a model id")
-	}
-	return c.SendRequestWithPayload(ctx, upstream.UpstreamRequest{
-		Model:    model,
-		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "ping"}}},
-	}, nil, nil)
 }
 
 // ProbeReachability verifies that this process can actually reach the Cline API.

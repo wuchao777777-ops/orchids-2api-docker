@@ -50,7 +50,7 @@ func TestResponsesStreamTranslationIsIncremental(t *testing.T) {
 	recorder := newObservedStreamWriter("response.output_text.delta")
 	done := make(chan struct{})
 	go func() {
-		writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, reader)
+		writeResponsesStreamFromChatReaderRequestWithHook(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, reader, nil)
 		close(done)
 	}()
 
@@ -73,7 +73,7 @@ func TestResponsesStreamAggregatesFragmentedToolArguments(t *testing.T) {
 		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
 		"data: [DONE]\n\n"
 	recorder := httptest.NewRecorder()
-	writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(raw))
+	writeResponsesStreamFromChatReaderRequestWithHook(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(raw), nil)
 	body := recorder.Body.String()
 	if count := strings.Count(body, "event: response.output_item.added"); count != 1 {
 		t.Fatalf("function item added count=%d body=%s", count, body)

@@ -50,7 +50,6 @@ func RedactQoderOutput(acc *store.Account) *store.Account {
 	// writes them, and clearing them here keeps a legacy row from leaking.
 	out.RefreshToken = ""
 	out.Token = ""
-	out.SessionCookie = ""
 	out.ClientCookie = ""
 	return &out
 }
@@ -162,7 +161,6 @@ func NormalizeQoderCredentials(acc *store.Account) bool {
 	// token there would leak it through another channel's account list.
 	acc.Token = ""
 	acc.RefreshToken = ""
-	acc.SessionCookie = ""
 	acc.ClientCookie = ""
 	return true
 }

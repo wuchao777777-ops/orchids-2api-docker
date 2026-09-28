@@ -47,7 +47,6 @@ func RedactClineOutput(acc *store.Account) *store.Account {
 	// writes them, and clearing them here keeps a legacy row from leaking.
 	out.RefreshToken = ""
 	out.Token = ""
-	out.SessionCookie = ""
 	out.ClientCookie = ""
 	return &out
 }
@@ -103,7 +102,6 @@ func NormalizeClineCredentials(acc *store.Account) bool {
 	}
 	acc.Token = ""
 	acc.RefreshToken = ""
-	acc.SessionCookie = ""
 	acc.ClientCookie = ""
 	return true
 }

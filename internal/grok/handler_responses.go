@@ -2,7 +2,6 @@ package grok
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/middleware"
-	"orchids-api/internal/store"
 )
 
 type captureResponseWriter struct {
@@ -209,121 +207,21 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	spec, resolved := h.resolveConversationModel(r.Context(), req.Model)
-	if resolved && modelRoutedToCLI(spec, h.configSnapshot()) {
-		// A compaction turn is not a conversation turn: Codex remote-v2 sends
-		// `compaction_trigger` and the Grok TUI appends the canonical summary
-		// prompt as its last user item. The gateway answers those itself so the
-		// resulting state stays portable across accounts.
-		if h.GatewayCompactionEnabled() && classifyResponsesCompactionPayload(nativePayload) != responsesCompactionNone {
-			h.handleGatewayCompaction(w, r, req.Model, spec, nativePayload, responsesPayloadStreaming(nativePayload, req.Stream))
-			return
-		}
-		h.handleNativeCLIResponses(w, r, req.Model, spec, nativePayload)
-		return
-	}
 	if !resolved {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", modelNotFoundMessage(req.Model))
 		return
 	}
-	if previousID := strings.TrimSpace(req.PreviousResponseID); previousID != "" {
-		owner := responsesOwnerHash(r.Context())
-		previous, lookupErr := h.getStoredResponse(r, previousID, owner)
-		if lookupErr != nil {
-			writeStoredResponseLookupError(w, lookupErr, "previous response not found")
-			return
-		}
-		if previous == nil || len(previous.Body) == 0 || previous.Provider == ProviderBuild {
-			writeResponsesAPIError(w, http.StatusNotFound, "response_not_found", "previous response not found")
-			return
-		}
-		// The record exists and belongs to another provider. Only the chat bridge
-		// stores one, and it replays that continuation itself, so this plane must
-		// refuse rather than re-expand a body it did not write.
-		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "previous response provider is incompatible")
+	// Every resolvable Grok model uses Build CLI, so the native Responses path
+	// handles all of them; other providers use ResponsesChannelBridgeHandler.
+	// A compaction turn is not a conversation turn: Codex remote-v2 sends
+	// `compaction_trigger` and the Grok TUI appends the canonical summary
+	// prompt as its last user item. The gateway answers those itself so the
+	// resulting state stays portable across accounts.
+	if h.GatewayCompactionEnabled() && classifyResponsesCompactionPayload(nativePayload) != responsesCompactionNone {
+		h.handleGatewayCompaction(w, r, req.Model, spec, nativePayload, responsesPayloadStreaming(nativePayload, req.Stream))
 		return
 	}
-	if err := validateResponsesCompatibility(req); err != nil {
-		writeGrokUpstreamError(w, err)
-		return
-	}
-	chatReq, err := chatRequestFromResponses(req)
-	if err != nil {
-		writeGrokUpstreamError(w, err)
-		return
-	}
-	raw, err := json.Marshal(chatReq)
-	if err != nil {
-		writeGrokError(w, http.StatusInternalServerError, "failed to build chat request")
-		return
-	}
-
-	subReq := r.Clone(context.WithValue(r.Context(), chatSourceOperationKey{}, "responses"))
-	subReq.Method = http.MethodPost
-	subReq.URL.Path = "/v1/chat/completions"
-	// Preserve the inbound headers: the bridge must not drop the credential that
-	// authorized the request (the Anthropic Messages bridge clones them too), and
-	// keeping them lets downstream code observe the same request identity.
-	subReq.Header = r.Header.Clone()
-	subReq.Header.Set("Content-Type", "application/json")
-	subReq.Body = io.NopCloser(bytes.NewReader(raw))
-	subReq.ContentLength = int64(len(raw))
-
-	if chatReq.Stream {
-		h.withChatStream(subReq, func(status int, header http.Header, reader io.Reader) {
-			if status < 200 || status >= 300 {
-				for key, values := range header {
-					w.Header()[key] = values
-				}
-				w.WriteHeader(status)
-				_, _ = io.Copy(w, reader)
-				return
-			}
-			for key, values := range header {
-				w.Header()[key] = append([]string(nil), values...)
-			}
-			writeResponsesStreamFromChatReaderRequest(w, req, reader)
-		})
-		return
-	}
-
-	rec := newCaptureResponseWriter()
-	h.HandleChatCompletions(rec, subReq)
-	if rec.code < 200 || rec.code >= 300 {
-		copyCapturedResponse(w, rec)
-		return
-	}
-	var chat map[string]interface{}
-	if err := json.Unmarshal(rec.body.Bytes(), &chat); err != nil {
-		writeGrokUpstreamError(w, err)
-		return
-	}
-	response := responsesObjectFromChat(req.Model, chat)
-	if len(req.Metadata) > 0 {
-		response["metadata"] = req.Metadata
-	}
-	if strings.TrimSpace(req.Truncation) != "" {
-		response["truncation"] = req.Truncation
-	}
-	if req.Store != nil && *req.Store {
-		encoded, encodeErr := json.Marshal(response)
-		if encodeErr != nil {
-			writeGrokError(w, http.StatusInternalServerError, "failed to store response")
-			return
-		}
-		owner := responsesOwnerHash(r.Context())
-		if saveErr := h.saveStoredResponse(r, &store.StoredResponse{
-			ResponseID: parseLooseStringAny(response["id"]), OwnerHash: owner, Model: req.Model,
-			Provider: ProviderBuild, PromptCacheKey: sessionFromContext(r.Context()).Key,
-			ContentType: "application/json", Body: encoded,
-			// The expanded input, not the raw one: a continuation replays what the
-			// upstream actually received, which is what input_items reports.
-			InputItems: responsesInputItemsJSON(req.Input),
-		}); saveErr != nil {
-			writeGrokError(w, http.StatusServiceUnavailable, "failed to store response")
-			return
-		}
-	}
-	writeJSON(w, response)
+	h.handleNativeCLIResponses(w, r, req.Model, spec, nativePayload)
 }
 
 func expandStoredResponseInput(responseBody []byte, current interface{}) (interface{}, error) {
@@ -396,10 +294,6 @@ func streamNativeCLIResponse(w http.ResponseWriter, body io.Reader) {
 			return
 		}
 	}
-}
-
-func validateResponsesCompatibility(req ResponsesCreateRequest) error {
-	return validateResponsesCompatibilityFor(req, false)
 }
 
 // validateResponsesCompatibilityFor validates a Responses request.

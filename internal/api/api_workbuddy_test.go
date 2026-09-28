@@ -72,10 +72,9 @@ func TestNormalizeWorkBuddyCredentials_SplitsDocumentIntoDedicatedFields(t *test
 	// The generic credential slots are shared with other channels and must stay
 	// empty so the refresh token is never echoed through the account list.
 	for name, value := range map[string]string{
-		"ClientCookie":  acc.ClientCookie,
-		"Token":         acc.Token,
-		"RefreshToken":  acc.RefreshToken,
-		"SessionCookie": acc.SessionCookie,
+		"ClientCookie": acc.ClientCookie,
+		"Token":        acc.Token,
+		"RefreshToken": acc.RefreshToken,
 	} {
 		if value != "" {
 			t.Fatalf("%s = %q, want empty", name, value)
@@ -114,14 +113,13 @@ func TestRedactWorkBuddyOutput_HidesDurableSecrets(t *testing.T) {
 		WorkBuddyUID:          "uid-1",
 		Token:                 "legacy-token",
 		RefreshToken:          "legacy-refresh",
-		SessionCookie:         "legacy-cookie",
 		ClientCookie:          "legacy-client-cookie",
 	}
 	out := RedactWorkBuddyOutput(acc)
 	if out == nil {
 		t.Fatal("RedactWorkBuddyOutput() = nil")
 	}
-	if out.WorkBuddyRefreshToken != "" || out.RefreshToken != "" || out.SessionCookie != "" || out.Token != "" {
+	if out.WorkBuddyRefreshToken != "" || out.RefreshToken != "" || out.Token != "" {
 		t.Fatalf("redacted output still carries a secret: %+v", out)
 	}
 	if out.WorkBuddyAccessToken != "visible-access-token" || out.WorkBuddyUID != "uid-1" {

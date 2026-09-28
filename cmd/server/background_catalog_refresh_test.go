@@ -59,7 +59,7 @@ func TestRefreshWorkBuddyCatalogPersistsSuccessAndKeepsLKGOnFailure(t *testing.T
 	defer srv.Close()
 
 	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "workbuddy-background:"})
+	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "workbuddy-background:"})
 	if err != nil {
 		t.Fatalf("store.New() error = %v", err)
 	}

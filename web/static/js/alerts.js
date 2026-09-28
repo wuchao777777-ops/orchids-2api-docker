@@ -65,15 +65,6 @@
     return parent;
   }
 
-  // eventMessage is the full-width row used for "nothing recorded" and for a
-  // failed read of the trigger list.
-  function eventMessage(body, message) {
-    const td = make('td', 'table-empty-cell', message);
-    td.colSpan = 5;
-    body.replaceChildren();
-    body.appendChild(attach(make('tr'), [td]));
-  }
-
   function fmtRatio(value) {
     return (Number(value || 0) * 100).toFixed(1) + '%';
   }

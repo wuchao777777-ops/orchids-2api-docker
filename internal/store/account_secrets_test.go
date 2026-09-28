@@ -70,7 +70,7 @@ func TestSecretsCoversEveryCredentialShapedField(t *testing.T) {
 
 // TestSecretsSkipsEmptyValues keeps the redactors from replacing "" with a marker.
 func TestSecretsReturnsOnlyNonEmptyValues(t *testing.T) {
-	acc := &Account{Token: "t", ClientUat: "u"}
+	acc := &Account{Token: "t", ClientCookie: "u"}
 	var nonEmpty int
 	for _, secret := range acc.Secrets() {
 		if strings.TrimSpace(secret) != "" {

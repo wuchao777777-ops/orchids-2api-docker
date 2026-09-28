@@ -65,12 +65,9 @@ func TestExportNeverCarriesAnotherChannelsCredential(t *testing.T) {
 	// are included because every channel's resolver may fall back to them for a
 	// credential document written before the channel had fields of its own.
 	allowed := map[string]map[string]bool{
-		"grok": setOf("client_cookie", "refresh_token", "token", "session_cookie",
-			"session_id", "client_uat", "oauth_access_token", "oauth_refresh_token"),
-		"workbuddy": setOf("client_cookie", "refresh_token", "token", "session_cookie",
-			"session_id", "client_uat", "workbuddy_access_token", "workbuddy_refresh_token"),
-		"qoder": setOf("client_cookie", "refresh_token", "token", "session_cookie",
-			"session_id", "client_uat", "qoder_access_token", "qoder_refresh_token",
+		"grok":      setOf("client_cookie", "refresh_token", "token", "oauth_access_token", "oauth_refresh_token"),
+		"workbuddy": setOf("client_cookie", "refresh_token", "token", "workbuddy_access_token", "workbuddy_refresh_token"),
+		"qoder": setOf("client_cookie", "refresh_token", "token", "qoder_access_token", "qoder_refresh_token",
 			"qoder_runtime_info", "qoder_runtime_key"),
 	}
 	for _, channel := range []string{"grok", "workbuddy", "qoder"} {
@@ -78,8 +75,7 @@ func TestExportNeverCarriesAnotherChannelsCredential(t *testing.T) {
 			acc := &store.Account{
 				ID: 1, Name: "guard", AccountType: channel, Enabled: true, Weight: 1,
 				Token: marker + "token", ClientCookie: marker + "client_cookie",
-				RefreshToken: marker + "refresh_token", SessionCookie: marker + "session_cookie",
-				SessionID: marker + "session_id", ClientUat: marker + "client_uat",
+				RefreshToken:     marker + "refresh_token",
 				OAuthAccessToken: marker + "oauth_access_token", OAuthRefreshToken: marker + "oauth_refresh_token",
 				WorkBuddyAccessToken: marker + "workbuddy_access_token", WorkBuddyRefreshToken: marker + "workbuddy_refresh_token",
 				QoderAccessToken: marker + "qoder_access_token", QoderRefreshToken: marker + "qoder_refresh_token",

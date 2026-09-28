@@ -167,31 +167,6 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, payload)
 }
 
-// HandleOpsChannels answers the channel × model status matrix on its own, which
-// lets the page refresh it without recomputing the trend.
-func (a *API) HandleOpsChannels(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) {
-		return
-	}
-	_, since, until := a.parseOpsWindow(r)
-	channels, aggregates, _ := a.opsChannels(r.Context(), r, since, until)
-	writeJSON(w, map[string]interface{}{
-		"matrix":              a.opsMatrix(r.Context(), channels, since, until),
-		"excluded_aggregates": aggregates,
-		"alerts":              a.firingAlerts(),
-		"channels":            channels,
-	})
-}
-
-// HandleOpsAlerts answers the currently firing alerts.
-func (a *API) HandleOpsAlerts(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) {
-		return
-	}
-	alerts := a.firingAlerts()
-	writeJSON(w, map[string]interface{}{"alerts": alerts, "count": len(alerts)})
-}
-
 // HandleOpsAlertRules exposes the exact policy used by the alert engine. Saved
 // rules are persisted in Redis and take effect on the next evaluation tick.
 func (a *API) HandleOpsAlertRules(w http.ResponseWriter, r *http.Request) {
@@ -241,9 +216,8 @@ func (a *API) HandleOpsAlertRules(w http.ResponseWriter, r *http.Request) {
 // incomplete detail panel for a request that waited behind more entries than this.
 const journalAttemptLookback = 1000
 
-// HandleJournalRecords answers one journal tab. It is the modern counterpart of
-// /api/audit: same ledger, but filtered by kind and joined with the upstream
-// attempts its request produced.
+// HandleJournalRecords answers one journal tab, filtered by kind and joined
+// with the upstream attempts its request produced.
 func (a *API) HandleJournalRecords(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

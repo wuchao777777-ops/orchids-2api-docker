@@ -26,11 +26,8 @@ type Account struct {
 	ID            int64   `json:"id"`
 	Name          string  `json:"name"`
 	AccountType   string  `json:"account_type"`
-	SessionID     string  `json:"session_id"`
 	ClientCookie  string  `json:"client_cookie"`
 	RefreshToken  string  `json:"refresh_token,omitempty"`
-	SessionCookie string  `json:"session_cookie"`
-	ClientUat     string  `json:"client_uat"`
 	UserID        string  `json:"user_id"`
 	AgentMode     string  `json:"agent_mode"`
 	Email         string  `json:"email"`
@@ -467,7 +464,6 @@ type Store struct {
 }
 
 type Options struct {
-	StoreMode               string
 	RedisAddr               string
 	RedisPassword           string
 	RedisDB                 int
@@ -1145,9 +1141,6 @@ func (a *Account) Secrets() []string {
 		a.Token,
 		a.ClientCookie,
 		a.RefreshToken,
-		a.SessionCookie,
-		a.SessionID,
-		a.ClientUat,
 		a.OAuthAccessToken,
 		a.OAuthRefreshToken,
 		a.WorkBuddyAccessToken,

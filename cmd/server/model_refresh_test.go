@@ -707,7 +707,6 @@ func setupModelRefreshStore(t *testing.T) (*store.Store, func()) {
 
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisPrefix: "model_refresh_test:",
 	})

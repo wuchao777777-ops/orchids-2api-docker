@@ -610,16 +610,19 @@ func TestBusyWaitIsCapped(t *testing.T) {
 	}
 }
 
-// TestVerifyModelRejectsUnsupportedName proves a bad model name fails before any
-// upstream call.
-func TestVerifyModelRejectsUnsupportedName(t *testing.T) {
+// TestSendRequestRejectsUnsupportedName proves the live request path rejects a
+// bad model name before any upstream call.
+func TestSendRequestRejectsUnsupportedName(t *testing.T) {
 	t.Parallel()
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
 	setTestEndpoints(client, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
-	if err := client.VerifyModel(context.Background(), "definitely-not-a-model"); err == nil {
-		t.Fatal("VerifyModel() error = nil for an unsupported model")
+	if err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model:    "definitely-not-a-model",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "ping"}}},
+	}, nil, nil); err == nil {
+		t.Fatal("SendRequestWithPayload() error = nil for an unsupported model")
 	}
 }
 

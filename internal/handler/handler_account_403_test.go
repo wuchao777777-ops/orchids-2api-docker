@@ -20,7 +20,6 @@ import (
 func TestHandleMessages_403MarksAccountBlocked(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{
-		StoreMode:   "redis",
 		RedisAddr:   mini.Addr(),
 		RedisDB:     0,
 		RedisPrefix: "test:",

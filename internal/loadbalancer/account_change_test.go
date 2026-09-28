@@ -16,7 +16,7 @@ import (
 // selected for up to cacheTTL.
 func TestInvalidateAccounts_MakesChangesImmediate(t *testing.T) {
 	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "pool-invalidate:"})
+	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "pool-invalidate:"})
 	if err != nil {
 		t.Fatalf("store.New() error = %v", err)
 	}
@@ -49,7 +49,7 @@ func TestInvalidateAccounts_MakesChangesImmediate(t *testing.T) {
 // changed account leaves the snapshot.
 func TestInvalidateAccounts_KeepsUnrelatedAccounts(t *testing.T) {
 	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "pool-keep:"})
+	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "pool-keep:"})
 	if err != nil {
 		t.Fatalf("store.New() error = %v", err)
 	}

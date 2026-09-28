@@ -75,11 +75,8 @@ func (c *credentialCipher) decrypt(value string) (string, error) {
 
 func accountCredentialFields(acc *Account) []*string {
 	return []*string{
-		&acc.SessionID,
 		&acc.ClientCookie,
 		&acc.RefreshToken,
-		&acc.SessionCookie,
-		&acc.ClientUat,
 		&acc.Token,
 		&acc.OAuthAccessToken,
 		&acc.OAuthRefreshToken,
@@ -176,8 +173,7 @@ func hasLegacyCredential(data []byte) (bool, error) {
 		return false, err
 	}
 	for _, name := range []string{
-		"session_id", "client_cookie", "refresh_token",
-		"session_cookie", "client_uat", "token", "oauth_access_token", "oauth_refresh_token",
+		"client_cookie", "refresh_token", "token", "oauth_access_token", "oauth_refresh_token",
 		"workbuddy_access_token", "workbuddy_refresh_token",
 		"qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key",
 	} {

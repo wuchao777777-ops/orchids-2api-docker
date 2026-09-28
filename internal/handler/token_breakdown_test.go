@@ -41,6 +41,26 @@ func TestEstimateInputTokenBreakdown_SplitsSystemContext(t *testing.T) {
 	}
 }
 
+func TestEstimateInputTokenBreakdown_ProductionFallbackAlwaysPositive(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		prompt string
+		tools  []interface{}
+	}{
+		{name: "empty user text uses request placeholder", prompt: "request"},
+		{name: "image-only user text uses request placeholder", prompt: "request"},
+		{name: "passthrough empty text", prompt: "workbuddy request"},
+		{name: "only tools", prompt: "request", tools: []interface{}{map[string]interface{}{"name": "Read"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := estimateInputTokenBreakdown(tc.prompt, tc.tools); got.Total < 1 {
+				t.Fatalf("builtPrompt=%q tools=%v: total=%d, want positive", tc.prompt, tc.tools, got.Total)
+			}
+		})
+	}
+}
+
 func TestHandleCountTokens_ReturnsBreakdown(t *testing.T) {
 	t.Parallel()
 

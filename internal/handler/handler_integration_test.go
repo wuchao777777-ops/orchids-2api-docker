@@ -93,41 +93,51 @@ func TestHandleMessages_WorkdirQuestionReachesUpstream(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_StoresUpstreamConversationIDForTheNextTurn(t *testing.T) {
+func TestHandleMessages_ExplicitConversationIDForwardsAcrossTurns(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
-	h.client = &mockUpstream{events: []upstream.SSEMessage{
+	up := &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "conversation_id", "id": "conv1"}},
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
 		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "workbuddy-hi"}},
 		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
 	}}
+	h.client = up
 
-	payload := map[string]any{
-		"model":    "claude-opus-4-5",
-		"messages": []map[string]any{{"role": "user", "content": "hi"}},
-		"system":   []any{},
-		"stream":   false,
-		// include stable conversation_id so handler will store upstream conv id
-		"conversation_id": "c1",
+	for _, id := range []string{"c1", "conv1"} {
+		payload := map[string]any{
+			"model":           "claude-opus-4-5",
+			"messages":        []map[string]any{{"role": "user", "content": "hi"}},
+			"system":          []any{},
+			"stream":          false,
+			"conversation_id": id,
+		}
+		body, _ := json.Marshal(payload)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
+		h.HandleMessages(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("conversation_id=%q: status=%d body=%s", id, rec.Code, rec.Body.String())
+		}
+		var response struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("conversation_id=%q: invalid response JSON: %v", id, err)
+		}
+		if response.Type != "message" || len(response.Content) != 1 || response.Content[0].Type != "text" || response.Content[0].Text != "workbuddy-hi" {
+			t.Fatalf("conversation_id=%q: unexpected protocol response: %+v", id, response)
+		}
+		if len(up.capturedReqs) == 0 || up.capturedReqs[len(up.capturedReqs)-1].ConversationID != id {
+			t.Fatalf("conversation_id=%q: upstream request did not forward the explicit id", id)
+		}
 	}
-	body, _ := json.Marshal(payload)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
-	h.HandleMessages(rec, req)
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "workbuddy-hi") {
-		t.Fatalf("expected upstream text in response")
-	}
-
-	// ensure upstream conversation id stored via SessionStore
-	convKey := conversationKeyForRequest(httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", nil), ClaudeRequest{ConversationID: "c1"})
-	got, _ := h.sessionStore.GetConvID(context.Background(), convKey)
-	if got != "conv1" {
-		t.Fatalf("expected stored upstream conversation id conv1, got %q", got)
+	if len(up.capturedReqs) != 2 {
+		t.Fatalf("upstream calls=%d, want 2", len(up.capturedReqs))
 	}
 }
 

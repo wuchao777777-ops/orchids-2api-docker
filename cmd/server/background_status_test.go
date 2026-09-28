@@ -28,7 +28,7 @@ func TestRefreshQoderQuotaClearsFalseAgentExhaustion(t *testing.T) {
 	defer upstream.Close()
 
 	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "qoder-auto-quota:"})
+	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "qoder-auto-quota:"})
 	if err != nil {
 		t.Fatalf("store.New() error=%v", err)
 	}

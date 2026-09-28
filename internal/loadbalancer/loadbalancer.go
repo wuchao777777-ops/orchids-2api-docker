@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"orchids-api/internal/accountpolicy"
-	"orchids-api/internal/auth"
 	"orchids-api/internal/channel"
 	"orchids-api/internal/store"
 
@@ -254,7 +253,7 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are at their concurrency limit)", channel)
 	}
 
-	slog.Debug("Selected account", "id", account.ID, "name", account.Name, "type", account.AccountType, "session", auth.MaskSensitive(account.SessionID))
+	slog.Debug("Selected account", "id", account.ID, "name", account.Name, "type", account.AccountType)
 
 	return account, nil
 }

@@ -41,7 +41,7 @@ func TestHealthReportsEveryRemainingProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	registerRoutes(mux, cfg, s, h, nil, a, middleware.NewConcurrencyLimiter(4, 0, false), nil, renderer)
+	registerRoutes(mux, cfg, s, h, nil, a, middleware.NewConcurrencyLimiter(4, 0), nil, renderer)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))

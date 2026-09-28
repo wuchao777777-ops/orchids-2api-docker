@@ -22,7 +22,7 @@ function loadConfig(fetchImpl){
  // config.js declares its helpers at top level, so the harness only appends an
  // export for the pure functions it wants to assert on.
  let src=fs.readFileSync(path.join(__dirname,'static/js/config.js'),'utf8');
- src+='\nglobalThis.probe={parseAnonymousAllowIPs,ticksToUSD,usdToTicks,formatUSD,periodSuffix,applyConfigurationPayload,loadConfiguration,bindApiKeyActions,Input:HTMLInputElement};\n';
+ src+='\nglobalThis.probe={parseAnonymousAllowIPs,ticksToUSD,usdToTicks,formatUSD,periodSuffix,applyConfigurationPayload,loadConfiguration,saveConfiguration,bindApiKeyActions,Input:HTMLInputElement};\n';
  vm.runInContext(src,context);
  return {api:context.probe,node,context};
 }
@@ -79,22 +79,40 @@ test('a billing policy line reads in dollars and names the period',()=>{
 });
 
 
-test('configuration payload tolerates a missing optional control',()=>{
+test('configuration payload hydrates security and proxy controls without simulated cache fields',()=>{
  const {api,node}=loadConfig();
- // The page can be served from a stale cached template while config.js is fresh.
- // Optional controls must not turn a valid API response into "配置加载失败".
- const original=node('cfg_cache_token_count');
- original.checked=false;
- api.applyConfigurationPayload({admin_password:'secret',anonymous_allow_ips:['203.0.113.1'],proxy_bypass:null,enable_token_cache:true,token_cache_ttl:300,token_cache_strategy:'1'});
+ api.applyConfigurationPayload({admin_password:'secret',anonymous_allow_ips:['203.0.113.1'],proxy_url:'http://proxy.example:8080',proxy_bypass:['example.com']});
  assert.equal(node('cfg_admin_pass').value,'secret');
  assert.equal(node('cfg_anonymous_allow_ips').value,'203.0.113.1');
- assert.equal(node('cfg_enable_token_cache').checked,true);
+ assert.equal(node('cfg_proxy_url').value,'http://proxy.example:8080');
+ assert.equal(node('cfg_proxy_bypass').value,'example.com');
+});
+
+test('save sends security and proxy settings but no local cache settings',async()=>{
+ let saved;
+ const {api,node}=loadConfig((_url,options)=>{
+  saved=JSON.parse(options.body);
+  return Promise.resolve({ok:true,json:()=>Promise.resolve({code:0})});
+ });
+ node('cfg_admin_pass').value='changed';
+ node('cfg_proxy_url').value='http://proxy.example:8080';
+ node('cfg_anonymous_allow_ips').value='203.0.113.1';
+ node('cfg_proxy_bypass').value='example.com';
+ await api.saveConfiguration();
+ same(saved,{admin_password:'changed',anonymous_allow_ips:['203.0.113.1'],proxy_url:'http://proxy.example:8080',proxy_bypass:['example.com']});
+});
+
+test('configuration page omits simulated cache section, stats and clear actions',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'templates/pages/config.html'),'utf8');
+ const js=fs.readFileSync(path.join(__dirname,'static/js/config.js'),'utf8');
+ assert.doesNotMatch(html,/groupCache|cacheStatsText|cfg_enable_token_cache|cfg_token_cache_ttl|cfg_token_cache_strategy|cacheConfigDetails|clearCache/);
+ assert.doesNotMatch(js,/token-cache\/|enable_token_cache|token_cache_ttl|token_cache_strategy|cacheStatsText|clearCache|updateMemoryEstimation/);
 });
 
 test('configuration loader applies a valid JSON response',async()=>{
  const {api,node}=loadConfig(()=>Promise.resolve({
   ok:true,status:200,headers:{get:()=> 'application/json; charset=utf-8'},
-  json:()=>Promise.resolve({code:0,data:{admin_password:'loaded',token_cache_ttl:300,token_cache_strategy:'1'}}),
+  json:()=>Promise.resolve({code:0,data:{admin_password:'loaded',proxy_url:'http://proxy.example:8080'}}),
  }));
  assert.equal(await api.loadConfiguration(),true);
  assert.equal(node('cfg_admin_pass').value,'loaded');

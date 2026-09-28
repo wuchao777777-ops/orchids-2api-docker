@@ -178,11 +178,9 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 		pipe.HIncrBy(ctx, key, "failed", 1)
 	}
 	if outcome.DurationMS > 0 {
-		pipe.HIncrBy(ctx, key, "dur_sum", outcome.DurationMS)
 		pipe.RPush(ctx, key+":dur", outcome.DurationMS)
 	}
 	if outcome.FirstTokenMS > 0 {
-		pipe.HIncrBy(ctx, key, "ttft_sum", outcome.FirstTokenMS)
 		pipe.RPush(ctx, key+":ttft", outcome.FirstTokenMS)
 	}
 	if outcome.InputTokens > 0 {
@@ -232,7 +230,6 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 			pipe.HIncrBy(ctx, key, modelField+":failed", 1)
 		}
 		if outcome.FirstTokenMS > 0 {
-			pipe.HIncrBy(ctx, key, modelField+":ttft_sum", outcome.FirstTokenMS)
 			pipe.RPush(ctx, key+":"+modelField+":ttft", outcome.FirstTokenMS)
 			pipe.Expire(ctx, key+":"+modelField+":ttft", BucketRetention)
 			pipe.LTrim(ctx, key+":"+modelField+":ttft", -2000, -1)

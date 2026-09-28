@@ -1,9 +1,7 @@
 // Configuration management JavaScript
 
 // ── element builders ─────────────────────────────────────────────────────────
-// The API Key list and the cache panels are built out of the same three
-// statements (create, class, text) dozens of times; they live here once so each
-// render function reads as WHAT it draws.
+// The API Key list uses small DOM builders to keep rendering readable.
 function make(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -53,7 +51,6 @@ function closeModal(id) {
 
 let apiKeys = [];
 let createdKeys = [];
-const TOKEN_CACHE_TTL_PRESETS = ["60", "300", "900", "1800", "3600", "86400", "259200", "604800"];
 
 // Switch between config tabs
 function switchConfigTab(tab) {
@@ -80,8 +77,7 @@ function togglePassword(fieldId) {
 // ── Unsaved-change tracking ───────────────────────────────────────────────────
 // The sticky save bar compares the live control values against the values the
 // server returned on load. Only the fields the save payload actually reads are
-// counted; the TTL preset select and its custom box mirror the effective TTL and
-// are rebuilt from it instead of being tracked separately.
+// counted.
 // parseAnonymousAllowIPs turns the textarea into a list of trimmed, non-empty
 // entries. An empty box means "nobody", which is the reference behaviour.
 function parseAnonymousAllowIPs() {
@@ -98,12 +94,7 @@ const CONFIG_TRACKED_FIELDS = [
   "cfg_anonymous_allow_ips",
   "cfg_proxy_url",
   "cfg_proxy_bypass",
-  "cfg_token_cache_ttl",
-  "cfg_token_cache_strategy",
-  "cfg_enable_token_cache",
-  "cfg_cache_token_count",
 ];
-const CONFIG_MIRROR_FIELDS = ["cfg_token_cache_ttl_preset", "cfg_token_cache_ttl_custom"];
 let configBaseline = null;
 let configSaving = false;
 
@@ -192,7 +183,7 @@ function handleConfigFieldChange() {
 }
 
 function bindConfigDirtyTracking() {
-  CONFIG_TRACKED_FIELDS.concat(CONFIG_MIRROR_FIELDS).forEach((id) => {
+  CONFIG_TRACKED_FIELDS.forEach((id) => {
     const field = document.getElementById(id);
     if (!field) return;
     field.addEventListener("input", handleConfigFieldChange);
@@ -217,10 +208,6 @@ function resetConfigChanges() {
       field.value = configBaseline[id];
     }
   });
-  syncTokenCacheTTLControls(getTokenCacheTTLValue());
-  const cacheEnabled = !!document.getElementById("cfg_enable_token_cache")?.checked;
-  toggleCacheConfig(cacheEnabled);
-  updateMemoryEstimation();
   setConfigSaveError("");
   handleConfigFieldChange();
   showToast("已重置为服务器上的配置");
@@ -276,71 +263,6 @@ function normalizeProxyBypass(value) {
   return [];
 }
 
-function normalizeTokenCacheTTLValue(raw) {
-  const value = parseInt(raw, 10);
-  if (Number.isFinite(value) && value > 0) {
-    return String(value);
-  }
-  return "300";
-}
-
-function normalizeFlagValue(value) {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") return true;
-    if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") return false;
-  }
-  return !!value;
-}
-
-function syncTokenCacheTTLControls(raw) {
-  const normalized = normalizeTokenCacheTTLValue(raw);
-  const hiddenInput = document.getElementById("cfg_token_cache_ttl");
-  const presetInput = document.getElementById("cfg_token_cache_ttl_preset");
-  const customInput = document.getElementById("cfg_token_cache_ttl_custom");
-  const customWrap = document.getElementById("cfg_token_cache_ttl_custom_wrap");
-  if (!hiddenInput || !presetInput || !customInput || !customWrap) return;
-
-  hiddenInput.value = normalized;
-  customInput.value = normalized;
-  const isPreset = TOKEN_CACHE_TTL_PRESETS.includes(normalized);
-  presetInput.value = isPreset ? normalized : "custom";
-  customWrap.style.display = isPreset ? "none" : "block";
-}
-
-function getTokenCacheTTLValue() {
-  const hiddenInput = document.getElementById("cfg_token_cache_ttl");
-  return normalizeTokenCacheTTLValue(hiddenInput?.value);
-}
-
-function handleTokenCacheTTLPresetChange() {
-  const hiddenInput = document.getElementById("cfg_token_cache_ttl");
-  const presetInput = document.getElementById("cfg_token_cache_ttl_preset");
-  const customInput = document.getElementById("cfg_token_cache_ttl_custom");
-  const customWrap = document.getElementById("cfg_token_cache_ttl_custom_wrap");
-  if (!hiddenInput || !presetInput || !customInput || !customWrap) return;
-
-  if (presetInput.value === "custom") {
-    customWrap.style.display = "block";
-    hiddenInput.value = normalizeTokenCacheTTLValue(customInput.value);
-  } else {
-    customWrap.style.display = "none";
-    hiddenInput.value = normalizeTokenCacheTTLValue(presetInput.value);
-  }
-  updateMemoryEstimation();
-}
-
-function handleTokenCacheTTLCustomInput() {
-  const presetInput = document.getElementById("cfg_token_cache_ttl_preset");
-  const hiddenInput = document.getElementById("cfg_token_cache_ttl");
-  const customInput = document.getElementById("cfg_token_cache_ttl_custom");
-  if (!presetInput || !hiddenInput || !customInput || presetInput.value !== "custom") return;
-
-  hiddenInput.value = normalizeTokenCacheTTLValue(customInput.value);
-  updateMemoryEstimation();
-}
-
 // Load configuration from API. Returns true only when the server values were
 // applied: a failed load must not become the baseline the save bar diffs against.
 function setConfigControlValue(id, value) {
@@ -356,14 +278,6 @@ function applyConfigurationPayload(cfg) {
   setConfigControlValue("cfg_anonymous_allow_ips", Array.isArray(cfg.anonymous_allow_ips) ? cfg.anonymous_allow_ips.join("\n") : "");
   setConfigControlValue("cfg_proxy_url", cfg.proxy_url || "");
   setConfigControlValue("cfg_proxy_bypass", normalizeProxyBypass(cfg.proxy_bypass).join("\n"));
-
-  const cacheTokenCount = document.getElementById("cfg_enable_token_cache");
-  if (cacheTokenCount) cacheTokenCount.checked = normalizeFlagValue(cfg.enable_token_cache);
-  const estimateTokenCache = document.getElementById("cfg_cache_token_count");
-  if (estimateTokenCache) estimateTokenCache.checked = normalizeFlagValue(cfg.cache_token_count);
-
-  syncTokenCacheTTLControls(cfg.token_cache_ttl || 300);
-  setConfigControlValue("cfg_token_cache_strategy", cfg.token_cache_strategy || "1");
 }
 
 async function loadConfiguration() {
@@ -409,10 +323,6 @@ async function saveConfiguration() {
     anonymous_allow_ips: parseAnonymousAllowIPs(),
     proxy_url: document.getElementById("cfg_proxy_url").value.trim(),
     proxy_bypass: parseProxyBypass(proxyBypassRaw),
-    enable_token_cache: document.getElementById("cfg_enable_token_cache").checked ? "true" : "false",
-    cache_token_count: document.getElementById("cfg_cache_token_count")?.checked ? "true" : "false",
-    token_cache_ttl: getTokenCacheTTLValue(),
-    token_cache_strategy: document.getElementById("cfg_token_cache_strategy").value,
   };
 
   const saveBtn = document.getElementById("cfgSaveBtn");
@@ -902,108 +812,11 @@ async function confirmDeleteKey() {
   }
 }
 
-function toggleCacheConfig(checked) {
-  const details = document.getElementById("cacheConfigDetails");
-  if (!details) return;
-  details.style.display = checked ? "block" : "none";
-  if (checked) {
-    updateMemoryEstimation();
-    loadCacheStats();
-  }
-}
-
-function updateMemoryEstimation() {
-  const strategyInput = document.getElementById("cfg_token_cache_strategy");
-  if (!strategyInput) return;
-
-  const ttlSec = parseInt(getTokenCacheTTLValue(), 10) || 300;
-  const strategy = strategyInput.value;
-  const mult = (strategy === "1" || strategy === "0") ? 2 : 1;
-
-  const ttlEl = document.getElementById("estTTLSeconds");
-  const multEl = document.getElementById("estStrategyMult");
-  const titleEl = document.getElementById("memoryEstTitle");
-  if (ttlEl) ttlEl.textContent = String(ttlSec);
-  if (multEl) multEl.textContent = mult === 2 ? "× 2" : "× 1";
-  if (titleEl) {
-    titleEl.textContent = `内存估算 (当前: TTL=${ttlSec}秒, 系数=${mult})`;
-  }
-
-  const calc = (qps) => {
-    const kb = qps * ttlSec * 0.5 * mult;
-    if (kb > 1024) return (kb / 1024).toFixed(1) + "MB";
-    return kb.toFixed(1) + "KB";
-  };
-
-  const lowEl = document.getElementById("estLow");
-  const midEl = document.getElementById("estMid");
-  const highEl = document.getElementById("estHigh");
-  if (lowEl) lowEl.textContent = calc(10);
-  if (midEl) midEl.textContent = calc(50);
-  if (highEl) highEl.textContent = calc(100);
-}
-
-async function loadCacheStats() {
-  const statsEl = document.getElementById("cacheStatsText");
-  const estimateStatsEl = document.getElementById("estimateCacheStatsText");
-  if (!statsEl && !estimateStatsEl) return;
-
-  try {
-    const res = await fetch("/api/token-cache/stats");
-    if (!res.ok) {
-      throw new Error(await res.text());
-    }
-    const data = await res.json();
-    const prompt = data?.data?.prompt_cache || {};
-    const estimate = data?.data?.estimate_cache || {};
-
-    if (statsEl) {
-      if (data.code !== 0 || !prompt.connected) {
-        statsEl.textContent = "Prompt 缓存未启用";
-      } else {
-        statsEl.textContent = `Prompt 缓存: ${Number(prompt.key_count) || 0} 条，占用内存: ${prompt.memory_used_str || "0 B"}`;
-      }
-    }
-
-    if (estimateStatsEl) {
-      if (data.code !== 0 || !estimate.connected) {
-        estimateStatsEl.textContent = "Token 估算缓存未启用";
-      } else {
-        estimateStatsEl.textContent = `Token 估算缓存: ${Number(estimate.key_count) || 0} 条，占用内存: ${estimate.memory_used_str || "0 B"}`;
-      }
-    }
-  } catch (err) {
-    if (statsEl) statsEl.textContent = "缓存统计加载失败";
-    if (estimateStatsEl) estimateStatsEl.textContent = "缓存统计加载失败";
-  }
-}
-
-async function clearCache() {
-  if (!confirm("确定要清空 Token 用量缓存吗？")) return;
-  try {
-    const res = await fetch("/api/token-cache/clear", { method: "POST" });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    if (data.code !== 0) {
-      throw new Error(data.message || data.msg || "清空失败");
-    }
-    const deleted = Number(data?.data?.deleted) || 0;
-    showToast(`已清空 ${deleted} 条缓存`);
-    loadCacheStats();
-  } catch (err) {
-    showToast("清空失败: " + err.message, "error");
-  }
-}
-
 // Load configuration on page load
 document.addEventListener('DOMContentLoaded', () => {
   bindConfigDirtyTracking();
   bindConfigNav();
   loadConfiguration().then((loaded) => {
-    const cacheEnabled = !!document.getElementById("cfg_enable_token_cache")?.checked;
-    toggleCacheConfig(cacheEnabled);
-    updateMemoryEstimation();
-    loadCacheStats();
     loadApiKeys();
     // The values the server just returned are the baseline the save bar diffs
     // against; a failed load leaves the bar in its "not loaded" state instead.
