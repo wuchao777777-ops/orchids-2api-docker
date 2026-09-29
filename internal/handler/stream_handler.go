@@ -244,12 +244,8 @@ type streamHandler struct {
 
 	// Tool Handling (proxy mode only)
 	pendingToolCalls    []toolCall
-	toolInputNames      map[string]string
-	toolInputBuffers    map[string]*strings.Builder
-	toolInputHadDelta   map[string]bool
 	toolCallHandled     map[string]bool
 	toolCallEmitted     map[string]struct{}
-	currentToolInputID  string
 	toolCallCount       int
 	suppressedToolCalls int
 
@@ -290,9 +286,6 @@ func newStreamHandler(
 
 		blockIndex:               -1,
 		responseText:             perf.AcquireStringBuilder(),
-		toolInputNames:           make(map[string]string),
-		toolInputBuffers:         make(map[string]*strings.Builder),
-		toolInputHadDelta:        make(map[string]bool),
 		toolCallHandled:          make(map[string]bool),
 		toolCallEmitted:          make(map[string]struct{}),
 		allowedToolNames:         make(map[string]struct{}),
@@ -531,9 +524,6 @@ func (h *streamHandler) release() {
 		perf.ReleaseStringBuilder(sb)
 	}
 	for _, sb := range h.thinkingBlockBuilders {
-		perf.ReleaseStringBuilder(sb)
-	}
-	for _, sb := range h.toolInputBuffers {
 		perf.ReleaseStringBuilder(sb)
 	}
 }
@@ -963,16 +953,8 @@ func (h *streamHandler) resetRoundState() {
 	h.thinkingBlockSigs = h.thinkingBlockSigs[:0]
 
 	h.pendingToolCalls = nil
-	clear(h.toolInputNames)
-
-	for _, sb := range h.toolInputBuffers {
-		perf.ReleaseStringBuilder(sb)
-	}
-	clear(h.toolInputBuffers)
-	clear(h.toolInputHadDelta)
 	clear(h.toolCallHandled)
 	clear(h.toolCallEmitted)
-	h.currentToolInputID = ""
 	h.toolCallCount = 0
 	h.outputTokens = 0
 	h.cachedInputTokens = 0
@@ -1837,11 +1819,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	}
 
 	switch eventKey {
-	case "model.usage-metadata":
-		h.setUpstreamUsage(msg.Event)
-		slog.Info("upstream request usage", "usage", msg.Event)
-		return
-
 	case "model.actual_model":
 		slog.Warn("Ignoring upstream model substitution event")
 
@@ -1958,79 +1935,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	case "model.text-end":
 		h.closeActiveBlock()
 
-	case "model.tool-input-start":
-		h.closeActiveBlock() // Tool input starts a separate block mechanism
-		toolID, _ := msg.Event["id"].(string)
-		toolName, _ := msg.Event["toolName"].(string)
-		toolName = strings.TrimSpace(toolName)
-		if toolID == "" || toolName == "" {
-			return
-		}
-		h.currentToolInputID = toolID
-		h.toolInputNames[toolID] = toolName
-		h.toolInputBuffers[toolID] = perf.AcquireStringBuilder()
-		h.toolInputHadDelta[toolID] = false
-		// 婵犵數濮烽弫鎼佸磻濞戔懞鍥敇閵忕姷顦悗骞垮劚椤︻垳绮堥崼婢濆綊鎮℃惔锝嗘喖闂佸搫鎷嬮崜姘跺箞閵娿儺娼ㄩ柛鈩冦仦缁ㄤ粙姊洪懡銈呮瀾缂佽鐗撻獮鍐倻閽樺宓嗗┑顔斤耿绾危椤斿皷鏀介柣姗嗗亜娴?tool-input-start 闂傚倷娴囬褏鎹㈤幇顔藉床闁归偊鍓涢弳锔姐亜閹烘垵鏆斿ù婊冪秺閺屾稑鐣濋埀顒勫磻閻愮儤鍊?tool_use闂傚倸鍊烽悞锔锯偓绗涘懐鐭欓柟杈鹃檮閸庢鏌涚仦鍓р槈妞ゆ洟浜堕弻宥夊传閸曨剙娅ｇ紓浣插亾闁稿本澹曢崑鎾荤嵁閸喖濮庨柣搴㈠嚬閸ｏ綁骞冮悜钘夌疀妞ゆ挾濮烽鏇㈡⒑閻熸澘鈷旂紒顕呭灠閳诲秴顭ㄩ崼鐔哄幘闂佸壊鐓堥崑鍕倶鐎电硶鍋撳▓鍨珮闁告挾鍠栭妴浣割潨閳ь剟骞冨鍫濆耿婵°倓绶￠崯宀勬⒒閸屾瑨鍏岄柛妯犲洤搴婇柡灞诲劜閸嬨倝鏌曟繛鍨壔?tool_result闂?		return
-
-	case "model.tool-input-delta":
-		toolID, _ := msg.Event["id"].(string)
-		delta, _ := msg.Event["delta"].(string)
-		if toolID == "" {
-			return
-		}
-		if buf, ok := h.toolInputBuffers[toolID]; ok {
-			buf.WriteString(delta)
-		}
-		if delta != "" {
-			h.toolInputHadDelta[toolID] = true
-		}
-		return
-
-	case "model.tool-input-end":
-		toolID, _ := msg.Event["id"].(string)
-		if toolID == "" {
-			return
-		}
-		if h.currentToolInputID == toolID {
-			h.currentToolInputID = ""
-		}
-		name, ok := h.toolInputNames[toolID]
-		if !ok || name == "" {
-			if buf, ok := h.toolInputBuffers[toolID]; ok {
-				perf.ReleaseStringBuilder(buf)
-			}
-			delete(h.toolInputBuffers, toolID)
-			delete(h.toolInputHadDelta, toolID)
-			delete(h.toolInputNames, toolID)
-			return
-		}
-		inputStr := ""
-		if buf, ok := h.toolInputBuffers[toolID]; ok {
-			inputStr = strings.TrimSpace(buf.String())
-			perf.ReleaseStringBuilder(buf)
-		}
-		name, inputStr = normalizeUpstreamToolCall(name, inputStr)
-		name, inputStr = h.rewriteToolCallToClient(name, inputStr)
-		delete(h.toolInputBuffers, toolID)
-		delete(h.toolInputHadDelta, toolID)
-		delete(h.toolInputNames, toolID)
-		if h.toolCallHandled[toolID] {
-			return
-		}
-		call := toolCall{id: toolID, name: name, input: inputStr}
-		if !h.shouldAcceptToolCall(call) {
-			return
-		}
-		h.toolCallHandled[toolID] = true
-		if h.isStream {
-			if inputStr != "" {
-				h.addOutputTokens(inputStr)
-			}
-			h.emitToolUseFromInput(toolID, name, inputStr)
-			return
-		}
-		h.handleToolCallAfterChecks(call)
-
 	case "model.tool-call":
 		toolID, _ := msg.Event["toolCallId"].(string)
 		toolName, _ := msg.Event["toolName"].(string)
@@ -2047,15 +1951,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		if !h.shouldAcceptToolCall(call) {
 			return
 		}
-		if h.currentToolInputID == toolID {
-			h.currentToolInputID = ""
-		}
-		if buf, ok := h.toolInputBuffers[toolID]; ok {
-			perf.ReleaseStringBuilder(buf)
-		}
-		delete(h.toolInputBuffers, toolID)
-		delete(h.toolInputHadDelta, toolID)
-		delete(h.toolInputNames, toolID)
 		h.toolCallHandled[toolID] = true
 		if h.isStream {
 			h.emitToolUseFromInput(toolID, toolName, inputStr)

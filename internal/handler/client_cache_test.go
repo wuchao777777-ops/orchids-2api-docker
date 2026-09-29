@@ -109,6 +109,69 @@ func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 	}
 }
 
+// Config saves replace the handler snapshot. Runtime-only controls must not
+// evict an existing provider client, even when an account event is delivered.
+func TestGetOrCreateAccountClient_ConfigSaveOnlyRebuildsForClientInputs(t *testing.T) {
+	t.Parallel()
+
+	base := &store.Account{ID: 16, AccountType: "workbuddy", ClientCookie: "session-a"}
+	cfg := &config.Config{WorkBuddyBaseURL: "https://wb-a.example", RequestTimeout: 60}
+	h := &Handler{config: cfg, clientCache: newAccountClientCache()}
+	h.clientCache.SetConfig(cfg)
+	h.clientCache.SetAccountResolver(func(id int64) *store.Account { return base })
+	created := 0
+	h.SetClientFactory(func(_ *store.Account, _ *config.Config) UpstreamClient {
+		created++
+		return &testCachedClient{id: created}
+	})
+	first := h.getOrCreateAccountClient(base)
+	if first == nil || created != 1 {
+		t.Fatalf("initial client=%v, builds=%d", first, created)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*config.Config)
+	}{
+		{"auto refresh token", func(c *config.Config) { c.AutoRefreshToken = true }},
+		{"debug enabled", func(c *config.Config) { c.DebugEnabled = true }},
+		{"debug SSE", func(c *config.Config) { c.DebugLogSSE = true }},
+		{"suppress thinking", func(c *config.Config) { c.SuppressThinking = true }},
+		{"max retries", func(c *config.Config) { c.MaxRetries = 5 }},
+		{"retry delay", func(c *config.Config) { c.RetryDelay = 1234 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := *h.configSnapshot()
+			tc.mutate(&next)
+			h.SetConfig(&next)
+			h.AccountChanges([]int64{base.ID})
+			if got := h.getOrCreateAccountClient(base); got != first || created != 1 {
+				t.Fatalf("runtime-only config rebuilt client: got=%v, first=%v, builds=%d", got, first, created)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*config.Config)
+	}{
+		{"request timeout", func(c *config.Config) { c.RequestTimeout = 120 }},
+		{"workbuddy base URL", func(c *config.Config) { c.WorkBuddyBaseURL = "https://wb-b.example" }},
+		{"proxy", func(c *config.Config) { c.ProxyHTTPS = "http://proxy.example" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previous := h.getOrCreateAccountClient(base)
+			next := *h.configSnapshot()
+			tc.mutate(&next)
+			h.SetConfig(&next)
+			h.AccountChanges([]int64{base.ID})
+			if got := h.getOrCreateAccountClient(base); got == previous || created < 2 {
+				t.Fatalf("client input change did not rebuild: got=%v, previous=%v, builds=%d", got, previous, created)
+			}
+		})
+	}
+}
+
 func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) {
 	t.Parallel()
 
@@ -195,6 +258,8 @@ func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) 
 		{"qoder protocol profile", func(c *config.Config) { c.QoderProtocolProfile = "skill-cli" }},
 		{"qoder client id", func(c *config.Config) { c.QoderClientID = "client-b" }},
 		{"qoder client version", func(c *config.Config) { c.QoderClientVersion = "version-b" }},
+		{"request timeout", func(c *config.Config) { c.RequestTimeout = 90 }},
+		{"proxy", func(c *config.Config) { c.ProxyHTTPS = "https://proxy.example" }},
 	}
 	for _, tc := range configCases {
 		t.Run(tc.name, func(t *testing.T) {

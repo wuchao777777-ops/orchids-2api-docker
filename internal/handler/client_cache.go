@@ -452,12 +452,8 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		writeString(cfg.ProxyHTTPS)
 		writeString(cfg.ProxyUser)
 		writeString(cfg.ProxyPass)
-		writeBool(cfg.AutoRefreshToken)
-		writeBool(cfg.DebugEnabled)
-		writeBool(cfg.DebugLogSSE)
-		writeBool(cfg.SuppressThinking)
-		writeInt(cfg.MaxRetries)
-		writeInt(cfg.RetryDelay)
+		// Handler-level runtime controls are read on each request, not captured
+		// by these provider clients. RequestTimeout is captured at construction.
 		writeInt(cfg.RequestTimeout)
 		for _, value := range cfg.ProxyBypass {
 			writeString(value)

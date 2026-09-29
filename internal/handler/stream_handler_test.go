@@ -538,50 +538,6 @@ func TestStreamHandler_TextFlow_AnthropicSSE(t *testing.T) {
 	}
 }
 
-func TestStreamHandler_ToolInput_EndEmitsToolUse(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
-
-	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-start", "id": "t1", "toolName": "bash"}})
-	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-delta", "id": "t1", "delta": `{"command":"echo 1"}`}})
-	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-end", "id": "t1"}})
-
-	out := rec.buf.String()
-	if !strings.Contains(out, "\"type\":\"tool_use\"") {
-		t.Fatalf("expected tool_use emitted, got: %s", out)
-	}
-	if !strings.Contains(out, "echo 1") {
-		t.Fatalf("expected command in tool input, got: %s", out)
-	}
-}
-
-func TestStreamHandler_ListDirToolInput_EndEmitsBashTopLevelList(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
-
-	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-start", "id": "t1", "toolName": "LS"}})
-	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-delta", "id": "t1", "delta": `{"path":"/home/user/app"}`}})
-	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-end", "id": "t1"}})
-
-	out := rec.buf.String()
-	if !strings.Contains(out, `"name":"Bash"`) {
-		t.Fatalf("expected LS to emit Bash tool_use, got: %s", out)
-	}
-	// The upstream path was a placeholder and there is no workdir to substitute
-	// any more, so the client is asked to list its own current directory.
-	if !strings.Contains(out, `ls -1A -- \\\".\\\"`) {
-		t.Fatalf("expected a relative top-level ls command, got: %s", out)
-	}
-}
-
 func TestStreamHandler_OpenAI_SendsDONEOnStop(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()

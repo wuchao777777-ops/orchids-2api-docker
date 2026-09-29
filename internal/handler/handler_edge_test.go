@@ -59,7 +59,7 @@ type usageThenErrorUpstreamEdge struct {
 
 func (m *usageThenErrorUpstreamEdge) SendRequestWithPayload(_ context.Context, _ upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), _ *debug.Logger) error {
 	m.calls++
-	onMessage(upstream.SSEMessage{Type: "model.usage-metadata", Event: map[string]interface{}{"inputTokens": 7, "outputTokens": 0}})
+	onMessage(upstream.SSEMessage{Type: "model.tokens-used", Event: map[string]interface{}{"inputTokens": 7, "outputTokens": 0}})
 	return m.err
 }
 
