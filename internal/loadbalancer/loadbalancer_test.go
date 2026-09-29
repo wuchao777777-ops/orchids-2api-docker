@@ -129,39 +129,66 @@ func TestSelectAccountWithTracker_UsesProvidedTracker(t *testing.T) {
 	}
 }
 
-// Qoder sticks to the lowest-ID available account. Saturation must not
-// silently spill requests to a different credential; explicit exclusion or
-// unavailability is the only reason to advance to the next account.
-func TestQoderSequentialAccountSelection(t *testing.T) {
+// Qoder accounts are interchangeable credentials behind a per-account daily
+// allowance, so selection spreads requests across the whole pool instead of
+// pinning them to the lowest account ID. The pinned primary is what drained one
+// free account's quota while the rest of the pool sat idle.
+func TestQoderAccountsAreLoadBalanced(t *testing.T) {
 	now := time.Now()
-	primary := &store.Account{ID: 2, AccountType: "qoder", Enabled: true}
-	backup := &store.Account{ID: 7, AccountType: "qoder", Enabled: true}
+	first := &store.Account{ID: 2, AccountType: "qoder", Enabled: true}
+	second := &store.Account{ID: 7, AccountType: "qoder", Enabled: true}
 	lb := &LoadBalancer{
-		cachedAccounts: []*store.Account{backup, primary},
+		cachedAccounts: []*store.Account{second, first},
 		cacheExpires:   now.Add(time.Minute),
 		connTracker:    NewMemoryConnTracker(),
 	}
-	tracker := &fixedConnTracker{counts: map[int64]int64{2: 9}}
+	tracker := &fixedConnTracker{counts: map[int64]int64{}}
 	selectAccount := func(exclude []int64) (*store.Account, error) {
 		return lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), exclude, "qoder", tracker)
 	}
+
+	// Idle pool: repeated selections must reach both accounts, not just the
+	// lowest ID.
+	counts := map[int64]int{}
+	for i := 0; i < 20; i++ {
+		selected, err := selectAccount(nil)
+		if err != nil {
+			t.Fatalf("selection %d: err=%v", i, err)
+		}
+		counts[selected.ID]++
+	}
+	if counts[first.ID] == 0 || counts[second.ID] == 0 {
+		t.Fatalf("qoder selection did not spread across the pool: %v", counts)
+	}
+
+	// A saturated account is skipped so the rest of the pool absorbs the
+	// request rather than the channel failing while capacity remains.
+	tracker.counts[first.ID] = EffectiveAccountConcurrencyLimit(first)
 	for i := 0; i < 5; i++ {
 		selected, err := selectAccount(nil)
-		if err != nil || selected.ID != primary.ID {
-			t.Fatalf("selection %d: account=%v err=%v, want primary", i, selected, err)
+		if err != nil || selected.ID != second.ID {
+			t.Fatalf("saturated first: account=%v err=%v, want second", selected, err)
 		}
 	}
-	tracker.counts[2] = EffectiveAccountConcurrencyLimit(primary)
+
+	// Only a fully saturated pool reports a capacity error.
+	tracker.counts[second.ID] = EffectiveAccountConcurrencyLimit(second)
 	if selected, err := selectAccount(nil); selected != nil || err == nil || !strings.Contains(err.Error(), "concurrency limit") {
-		t.Fatalf("saturated primary: account=%v err=%v, want capacity error without spillover", selected, err)
+		t.Fatalf("saturated pool: account=%v err=%v, want capacity error", selected, err)
 	}
-	if selected, err := selectAccount([]int64{primary.ID}); err != nil || selected.ID != backup.ID {
-		t.Fatalf("excluded primary: account=%v err=%v, want backup", selected, err)
+
+	// An explicitly excluded account stays out of the pool.
+	tracker.counts[first.ID] = 0
+	tracker.counts[second.ID] = 0
+	if selected, err := selectAccount([]int64{first.ID}); err != nil || selected.ID != second.ID {
+		t.Fatalf("excluded first: account=%v err=%v, want second", selected, err)
 	}
-	primary.StatusCode = "429"
-	primary.LastAttempt = now
-	if selected, err := selectAccount(nil); err != nil || selected.ID != backup.ID {
-		t.Fatalf("cooling primary: account=%v err=%v, want backup", selected, err)
+
+	// A cooling account falls out of the pool for the next selection.
+	first.StatusCode = "429"
+	first.LastAttempt = now
+	if selected, err := selectAccount(nil); err != nil || selected.ID != second.ID {
+		t.Fatalf("cooling first: account=%v err=%v, want second", selected, err)
 	}
 }
 

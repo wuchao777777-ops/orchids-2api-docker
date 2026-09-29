@@ -8,10 +8,13 @@ import (
 // ProfileReference preserves the deployed dialect. ProfileSkillCLI is an
 // explicit compatibility experiment, not an assertion of live gateway support.
 const (
-	ProfileReference     = "reference"
-	ProfileSkillCLI      = "skill-cli"
-	SkillCLIClientID     = "732aef47-9cf2-46a2-95fe-4cebb5d0d1fa"
-	SkillCLIInferenceURL = "https://api3.qoder.sh"
+	ProfileReference = "reference"
+	ProfileSkillCLI  = "skill-cli"
+	SkillCLIClientID = "732aef47-9cf2-46a2-95fe-4cebb5d0d1fa"
+	// SkillCLIInferenceURL follows the same international node as the reference
+	// dialect: both profiles now resolve to api2. Only the client id and the
+	// runtime layout still differ; both report the QoderWork identity.
+	SkillCLIInferenceURL = "https://api2.qoder.sh"
 )
 
 type protocolProfile struct {
@@ -25,7 +28,7 @@ type protocolProfile struct {
 
 func resolveProtocolProfile(cfg *config.Config) protocolProfile {
 	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.QoderProtocolProfile), ProfileSkillCLI) {
-		return protocolProfile{ProfileSkillCLI, SkillCLIClientID, SkillCLIInferenceURL, "cli", true, true}
+		return protocolProfile{ProfileSkillCLI, SkillCLIClientID, SkillCLIInferenceURL, sceneBusinessProduct, true, true}
 	}
 	// Empty and unrecognized values never silently opt into the experimental
 	// dialect. This also preserves callers constructing a zero-value Client.

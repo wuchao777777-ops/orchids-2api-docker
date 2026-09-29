@@ -57,7 +57,7 @@ type Config struct {
 	//
 	//   QoderOAuthBaseURL   browser authorization page   (default https://qoder.com)
 	//   QoderOpenAPIBaseURL device token + profile API   (default https://openapi.qoder.sh)
-	//   QoderInferenceURL   chat completion endpoint     (default https://api1.qoder.sh)
+	//   QoderInferenceURL   chat completion endpoint     (default https://api2.qoder.sh)
 	// QoderProtocolProfile selects a complete wire dialect: reference (default)
 	// or skill-cli (explicit opt-in). Endpoint/client overrides still win.
 	QoderProtocolProfile string `json:"qoder_protocol_profile,omitempty"`

@@ -88,7 +88,7 @@ func TestSkillHTTPBusinessErrorsBeforeAuth(t *testing.T) {
 func TestSkillRequestControlsAndSharedRetry(t *testing.T) {
 	maxTokens, temperature, topP := 123, 0.0, 0.25
 	for _, attempt := range []int{0, 1, 2} {
-		encoded, err := buildChatBody(upstream.UpstreamRequest{Prompt: "hello", Attempt: attempt, MaxTokens: &maxTokens, Temperature: &temperature, TopP: &topP, Stop: []string{"END"}}, modelEntry{Key: "test"}, "session", "request")
+		encoded, err := buildChatBody(upstream.UpstreamRequest{Prompt: "hello", Attempt: attempt, MaxTokens: &maxTokens, Temperature: &temperature, TopP: &topP, Stop: []string{"END"}}, modelEntry{Key: "test"}, "session", "request", "request-set")
 		if err != nil {
 			t.Fatal(err)
 		}

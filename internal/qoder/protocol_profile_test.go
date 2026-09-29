@@ -36,7 +36,7 @@ func TestProtocolProfileDefaultsAndOverrides(t *testing.T) {
 		}
 	}
 	nilClient := NewFromAccount(signedTestAccount(), nil)
-	if nilClient.clientID != DefaultClientID || nilClient.endpoints.inference != DefaultInferenceURL || nilClient.businessProduct() != "ide" {
+	if nilClient.clientID != DefaultClientID || nilClient.endpoints.inference != DefaultInferenceURL || nilClient.businessProduct() != "qoder_work" {
 		t.Fatal("default compatibility changed")
 	}
 }
@@ -130,5 +130,33 @@ func TestProtocolProfileChatBodyAndHeadersAgree(t *testing.T) {
 				t.Fatalf("hits=%d", hits)
 			}
 		})
+	}
+}
+
+// TestDefaultUpstreamEndpoints pins the international nodes the channel talks
+// to. The chat SSE call and the model catalog are two observations of the same
+// inference host, so a host change has to move both together.
+func TestDefaultUpstreamEndpoints(t *testing.T) {
+	t.Parallel()
+
+	c := NewFromAccount(signedTestAccount(), nil)
+	want := endpoints{
+		oauth:     "https://qoder.com",
+		openAPI:   "https://openapi.qoder.sh",
+		inference: "https://api2.qoder.sh",
+	}
+	if c.endpoints != want {
+		t.Fatalf("default endpoints = %+v, want %+v", c.endpoints, want)
+	}
+	if got, wantURL := chatURL(c.endpoints.inference), "https://api2.qoder.sh"+inferPath+inferQuery; got != wantURL {
+		t.Fatalf("chatURL() = %q, want %q", got, wantURL)
+	}
+	if got, wantURL := c.endpoints.inference+modelListRoutes[0].path, "https://api2.qoder.sh/algo/api/v2/model/list"; got != wantURL {
+		t.Fatalf("catalog url = %q, want %q", got, wantURL)
+	}
+	// The skill-cli dialect uses a different client identity but the same node.
+	skill := NewFromAccount(signedTestAccount(), &config.Config{QoderProtocolProfile: ProfileSkillCLI})
+	if skill.endpoints.inference != "https://api2.qoder.sh" {
+		t.Fatalf("skill-cli inference endpoint = %q, want https://api2.qoder.sh", skill.endpoints.inference)
 	}
 }

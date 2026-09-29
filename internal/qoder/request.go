@@ -27,24 +27,40 @@ const (
 	inferPath  = "/algo/api/v2/service/pro/sse/agent_chat_generation"
 	inferQuery = "?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
 
-	// Match the reference bridge's IDE request surface. This header and the
-	// business.product field must agree for every signed chat call.
-	sceneBusinessProduct = "ide"
+	// sceneBusinessProduct, sceneName and sessionType are the QoderWork client
+	// identity taken from a packet capture of the international client. They
+	// replaced the IDE emulation this channel was built around (product "ide",
+	// scene "assistant", session_type "qoder"). business.version and the
+	// Cosy-Version header both carry the configured client version, which is
+	// what the capture shows for those two fields.
+	sceneBusinessProduct = "qoder_work"
 	sceneBusinessType    = "agent"
-	sceneName            = "assistant"
+	sceneName            = "qwork"
+
+	// machineSceneType is Cosy-MachineType. The capture reports client type 6
+	// together with machine type 5 in one request, so this cannot share the
+	// sceneClientID constant the way it used to.
+	machineSceneType = "5"
+	// machineOS is Cosy-MachineOS, which the QoderWork client always sends.
+	machineOS = "x86_64_win32"
+	// clientUserAgent matches the QoderWork client, which is a Node program
+	// rather than the Go default HTTP client this channel used to advertise.
+	clientUserAgent = "node"
+	// subTask is business.sub_task. The capture reports the interactive agent
+	// session as "ws_builtin_general"; the internal reflection agent uses a
+	// different value that does not describe a proxied user chat.
+	subTask = "ws_builtin_general"
 
 	chatTask    = "FREE_INPUT"
 	sourceValue = 1
 	taskID      = "common"
 	agentID     = "agent_common"
-	// sessionType matches the reference gateway's chat request. The upstream's
-	// queue selection rules are not public; this value alone does not establish
-	// why a 10605 refusal reports queueType "p3".
-	sessionType = "qoder"
+	// sessionType is the QoderWork session type from the capture.
+	sessionType = "qoder_work"
 
-	// defaultAliyunUserType is the account class sent when the account's own
-	// class is unknown. The reference gateway always sends one; an empty field
-	// is not something the upstream observes from the IDE/CLI it emulates.
+	// defaultAliyunUserType is the account class used where a class is required
+	// but the account reported none. The chat body no longer falls back to it:
+	// the capture shows the QoderWork client sending aliyun_user_type empty.
 	defaultAliyunUserType = "personal_standard"
 )
 
@@ -66,6 +82,10 @@ func chatURL(base string) string {
 // chatBody is the request payload. Field order matters only for readability
 // here: the body is encoded and the signature covers the encoded bytes, not the
 // JSON, so member order is irrelevant to the signature.
+//
+// image_urls, code_language, chat_prompt and custom_model are deliberately
+// absent. This channel used to send all four as empty values; a capture of the
+// QoderWork client shows it sends none of them.
 type chatBody struct {
 	Business          businessInfo           `json:"business"`
 	RequestID         string                 `json:"request_id"`
@@ -75,9 +95,6 @@ type chatBody struct {
 	Stream            bool                   `json:"stream"`
 	ChatTask          string                 `json:"chat_task"`
 	ChatContext       map[string]interface{} `json:"chat_context"`
-	ImageURLs         interface{}            `json:"image_urls"`
-	CodeLanguage      string                 `json:"code_language"`
-	ChatPrompt        string                 `json:"chat_prompt"`
 	IsReply           bool                   `json:"is_reply"`
 	IsRetry           bool                   `json:"is_retry"`
 	Source            int                    `json:"source"`
@@ -87,7 +104,6 @@ type chatBody struct {
 	SessionType       string                 `json:"session_type"`
 	AliyunUser        string                 `json:"aliyun_user_type"`
 	ModelConfig       modelConfigWire        `json:"model_config"`
-	CustomModel       interface{}            `json:"custom_model"`
 	System            string                 `json:"system"`
 	Messages          []chatMessage          `json:"messages"`
 	Tools             []interface{}          `json:"tools"`
@@ -112,7 +128,7 @@ type modelConfigWire struct {
 	MaxInputTokens int    `json:"max_input_tokens"`
 }
 
-func wireModelConfig(model modelEntry, explicitReasoning bool) modelConfigWire {
+func wireModelConfig(model modelEntry) modelConfigWire {
 	format := model.Format
 	if format == "" {
 		format = "openai"
@@ -127,12 +143,14 @@ func wireModelConfig(model modelEntry, explicitReasoning bool) modelConfigWire {
 		Format:         format,
 		Source:         source,
 		IsVL:           model.IsVL,
-		IsReasoning:    explicitReasoning,
+		IsReasoning:    model.IsReasoning,
 		MaxInputTokens: model.MaxInputTokens,
 	}
 }
 
-// businessInfo is the request's telemetry block.
+// businessInfo is the request's telemetry block. The capture carries a
+// sub_task the earlier shape omitted, and business.id is the task set id rather
+// than the request id.
 type businessInfo struct {
 	Product string `json:"product"`
 	Version string `json:"version"`
@@ -141,6 +159,7 @@ type businessInfo struct {
 	Name    string `json:"name"`
 	BeginAt int64  `json:"begin_at"`
 	Stage   string `json:"stage"`
+	SubTask string `json:"sub_task"`
 }
 
 // chatMessage is one message in the upstream history.
@@ -178,24 +197,24 @@ type chatToolCall struct {
 }
 
 // buildChatBody renders the encoded request body.
-func buildChatBody(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID string) ([]byte, error) {
-	return buildChatBodyVersion(req, model, sessionID, requestID, DefaultClientVersion)
+func buildChatBody(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, requestSetID string) ([]byte, error) {
+	return buildChatBodyVersion(req, model, sessionID, requestID, requestSetID, DefaultClientVersion)
 }
 
-func buildChatBodyVersion(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, clientVersion string) ([]byte, error) {
-	return buildChatBodyScoped(req, model, sessionID, requestID, clientVersion, "")
+func buildChatBodyVersion(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, requestSetID, clientVersion string) ([]byte, error) {
+	return buildChatBodyScoped(req, model, sessionID, requestID, requestSetID, clientVersion, "")
 }
 
 // buildChatBodyScoped renders the encoded request body for one account class.
 //
-// aliyunUserType is the account's own class when it is known. The upstream
-// sorts traffic by it, and an empty value is not a class it recognises, so a
-// request that omits it is not queued with the account's real peers.
-func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, clientVersion, aliyunUserType string) ([]byte, error) {
-	return buildChatBodyProfile(req, model, sessionID, requestID, clientVersion, aliyunUserType, sceneBusinessProduct)
+// aliyunUserType is the account's own class. The QoderWork capture sends this
+// field empty, and the caller passes "" to reproduce that; a class is only sent
+// when a caller has evidence the upstream wants one.
+func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, requestSetID, clientVersion, aliyunUserType string) ([]byte, error) {
+	return buildChatBodyProfile(req, model, sessionID, requestID, requestSetID, clientVersion, aliyunUserType, sceneBusinessProduct)
 }
 
-func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, clientVersion, aliyunUserType, businessProduct string) ([]byte, error) {
+func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, requestSetID, clientVersion, aliyunUserType, businessProduct string) ([]byte, error) {
 	messages, systemText, err := buildMessages(req)
 	if err != nil {
 		return nil, err
@@ -203,7 +222,7 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 
 	// Preserve explicit client controls; use the reference output budget only
 	// when the caller omitted it.
-	parameters := map[string]interface{}{"max_tokens": 32768}
+	parameters := map[string]interface{}{"max_tokens": 32000}
 	if req.MaxTokens != nil {
 		parameters["max_tokens"] = *req.MaxTokens
 	}
@@ -242,23 +261,21 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 	body := chatBody{
 		Business: businessInfo{
 			Product: businessProduct,
-			Version: "1.1.3",
+			Version: clientVersion,
 			Type:    sceneBusinessType,
-			ID:      requestID,
+			ID:      requestSetID,
 			Name:    businessName(req),
 			BeginAt: time.Now().UnixMilli(),
 			Stage:   "start",
+			SubTask: subTask,
 		},
 		RequestID:         requestID,
-		RequestSetID:      requestID,
+		RequestSetID:      requestSetID,
 		ChatRecordID:      requestID,
 		SessionID:         sessionID,
 		Stream:            true,
 		ChatTask:          chatTask,
 		ChatContext:       referenceChatContext(req, model),
-		ImageURLs:         nil,
-		CodeLanguage:      "",
-		ChatPrompt:        "",
 		IsReply:           true,
 		IsRetry:           req.Attempt > 1,
 		Source:            sourceValue,
@@ -266,9 +283,8 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 		AgentID:           agentID,
 		TaskID:            taskID,
 		SessionType:       sessionType,
-		AliyunUser:        aliyunUserTypeOr(aliyunUserType),
-		ModelConfig:       wireModelConfig(model, effort != "" && effort != "none"),
-		CustomModel:       nil,
+		AliyunUser:        strings.TrimSpace(aliyunUserType),
+		ModelConfig:       wireModelConfig(model),
 		System:            systemText,
 		Messages:          messages,
 		Tools:             tools,
@@ -289,9 +305,13 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 	return EncodeBody(raw), nil
 }
 
-// referenceChatContext mirrors the reference template's lightweight context
-// metadata without importing its long built-in system prompt. The actual
-// history remains in messages; only the latest user text is echoed here.
+// referenceChatContext mirrors the capture's lightweight context metadata
+// without importing its long built-in system prompt. The actual history remains
+// in messages.
+//
+// text and extra.originalContent both carry the same plain string in the
+// capture. This channel used to send them as {"type":"text","text":...}
+// objects, a shape the QoderWork client never produces.
 func referenceChatContext(req upstream.UpstreamRequest, model modelEntry) map[string]interface{} {
 	prompt := latestUserText(req)
 	return map[string]interface{}{
@@ -302,11 +322,11 @@ func referenceChatContext(req upstream.UpstreamRequest, model modelEntry) map[st
 				"is_reasoning": model.IsReasoning,
 				"key":          model.Key,
 			},
-			"originalContent": map[string]interface{}{"type": "text", "text": prompt},
+			"originalContent": prompt,
 		},
 		"features":  []interface{}{},
 		"imageUrls": nil,
-		"text":      map[string]interface{}{"type": "text", "text": prompt},
+		"text":      prompt,
 	}
 }
 
@@ -320,9 +340,10 @@ func refreshedReplayBody(encoded []byte, requestID string) ([]byte, error) {
 		return nil, fmt.Errorf("decode qoder replay JSON: %w", err)
 	}
 	body.RequestID = requestID
-	body.RequestSetID = requestID
 	body.ChatRecordID = requestID
-	body.Business.ID = requestID
+	// request_set_id and business.id identify the task, not the attempt: the
+	// capture keeps them constant while request_id changes between the requests
+	// of one task. A replay is the same task, so they stay put.
 	body.Business.BeginAt = time.Now().UnixMilli()
 	body.IsRetry = true
 	updated, err := json.Marshal(body)
@@ -664,6 +685,7 @@ func (c *Client) applyAuthHeaders(req *http.Request, creds Credentials, fields R
 	signature := signRequest(payloadBase64, fields.Key, unixSeconds, body, signedPath)
 
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Accept-Language", "*")
 	req.Header.Set("Authorization", composeBearer(payloadBase64, signature))
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Connection", "keep-alive")
@@ -675,8 +697,9 @@ func (c *Client) applyAuthHeaders(req *http.Request, creds Credentials, fields R
 	req.Header.Set("Cosy-Date", unixSeconds)
 	req.Header.Set("Cosy-Key", fields.Key)
 	req.Header.Set("Cosy-MachineId", c.machineID)
+	req.Header.Set("Cosy-MachineOS", machineOS)
 	req.Header.Set("Cosy-MachineToken", c.machineTokenOr(c.machineID))
-	req.Header.Set("Cosy-MachineType", c.machineTypeOr(sceneClientID))
+	req.Header.Set("Cosy-MachineType", c.machineTypeOr(machineSceneType))
 	if orgID := strings.TrimSpace(creds.OrgID); orgID != "" {
 		req.Header.Set("Cosy-Organization-Id", orgID)
 	}
@@ -686,7 +709,9 @@ func (c *Client) applyAuthHeaders(req *http.Request, creds Credentials, fields R
 	req.Header.Set("Cosy-Scene", sceneName)
 	req.Header.Set("Cosy-User", strings.TrimSpace(creds.UID))
 	req.Header.Set("Cosy-Version", c.clientVersion)
-	req.Header.Set("User-Agent", "Go-http-client/2.0")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Traceparent", util.Traceparent(requestID))
+	req.Header.Set("User-Agent", clientUserAgent)
 	req.Header.Set("Login-Version", "v2")
 	if key := strings.TrimSpace(modelKey); key != "" {
 		req.Header.Set("X-Model-Key", key)

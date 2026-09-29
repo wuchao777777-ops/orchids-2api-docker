@@ -265,7 +265,7 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 	}
 	requestID := randomHex(16)
 	headers.Set("x-grok-req-id", requestID)
-	headers.Set("traceparent", buildTraceparent(requestID))
+	headers.Set("traceparent", util.Traceparent(requestID))
 	return c.request(ctx, acc, http.MethodPost, c.baseURL()+path, body, headers)
 }
 
@@ -305,15 +305,6 @@ func isUUID(value string) bool {
 		}
 	}
 	return true
-}
-
-// buildTraceparent renders a W3C trace context for one Build request.
-func buildTraceparent(requestID string) string {
-	traceID := strings.TrimSpace(requestID)
-	if len(traceID) < 32 {
-		traceID = traceID + strings.Repeat("0", 32-len(traceID))
-	}
-	return "00-" + traceID[:32] + "-" + traceID[:16] + "-01"
 }
 
 // buildClientIdentifier is the agent identity the official Build client sends.

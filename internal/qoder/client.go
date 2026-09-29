@@ -159,7 +159,7 @@ func (c *Client) aliyunUserType() string {
 func (c *Client) applyFingerprint() {
 	if c.protocol.machineTokenIsID {
 		c.machineToken = c.machineID
-		c.machineType = sceneClientID
+		c.machineType = machineSceneType
 		return
 	}
 	creds := c.creds
@@ -171,7 +171,7 @@ func (c *Client) applyFingerprint() {
 		device.Token = c.machineID
 	}
 	if device.Type == "" {
-		device.Type = sceneClientID
+		device.Type = machineSceneType
 	}
 	c.machineToken = device.Token
 	c.machineType = device.Type
@@ -215,11 +215,21 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if err != nil {
 		return err
 	}
+	// The task set id is a second, independent uuid. The capture shows
+	// request_set_id and request_id as different values within one task, with
+	// business.id carrying the set id.
+	requestSetID, err := newUUID(c.entropy)
+	if err != nil {
+		return err
+	}
 	sessionID, err := newUUID(c.entropy)
 	if err != nil {
 		return err
 	}
-	body, err := buildChatBodyProfile(req, model, sessionID, requestID, c.clientVersion, c.aliyunUserType(), c.businessProduct())
+	// aliyun_user_type is deliberately empty: the QoderWork client sends no
+	// account class, and the account's own class is still reported through the
+	// quota path.
+	body, err := buildChatBodyProfile(req, model, sessionID, requestID, requestSetID, c.clientVersion, "", c.businessProduct())
 	if err != nil {
 		return err
 	}

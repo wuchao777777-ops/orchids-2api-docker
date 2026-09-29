@@ -62,7 +62,7 @@ func TestBlockMessagePreservesMultimodalOrderAcrossToolBoundaries(t *testing.T) 
 					{Type: "tool_use", ID: "call-2", Name: "second", Input: map[string]interface{}{}},
 				}}}, msg,
 			}}
-			encoded, err := buildChatBody(req, modelEntry{Key: "test"}, "session", "request")
+			encoded, err := buildChatBody(req, modelEntry{Key: "test"}, "session", "request", "request-set")
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -268,27 +268,36 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 	}
 	want := map[string]string{
 		"Accept":                "text/event-stream",
+		"Accept-Language":       "*",
 		"Cache-Control":         "no-cache",
 		"Connection":            "keep-alive",
 		"Content-Type":          "application/json",
-		"Cosy-Business-Product": "ide",
+		"Cosy-Business-Product": "qoder_work",
 		"Cosy-Business-Type":    "agent",
-		"Cosy-Clienttype":       "5",
+		"Cosy-Clienttype":       "6",
 		"Cosy-Data-Policy":      "agree",
 		"Cosy-Machineid":        acc.QoderMachineID,
+		"Cosy-Machineos":        "x86_64_win32",
 		"Cosy-Machinetoken":     device.Token,
 		"Cosy-Machinetype":      device.Type,
-		"Cosy-Scene":            "assistant",
+		"Cosy-Scene":            "qwork",
 		"Cosy-User":             "uid-1",
 		"Login-Version":         "v2",
+		"Sec-Fetch-Mode":        "cors",
 		"X-Model-Key":           "qmodel_latest",
 		"X-Model-Source":        "system",
-		"User-Agent":            "Go-http-client/2.0",
+		"User-Agent":            "node",
 	}
 	for name, value := range want {
 		if got.headers.Get(name) != value {
 			t.Errorf("header %s = %q, want %q", name, got.headers.Get(name), value)
 		}
+	}
+	// The capture carries a trace context on every API call, and the gateway
+	// echoes the trace id back as sw-trace-id, which is what makes a request
+	// correlatable upstream-side.
+	if trace := got.headers.Get("Traceparent"); !validTraceparent(trace) {
+		t.Errorf("Traceparent = %q, want a version 00 trace context", trace)
 	}
 	if got.headers.Get("Cosy-Key") == "" || got.headers.Get("Cosy-Key") == "runtime-key" {
 		t.Error("Cosy-Key was not rederived using the reference runtime identity")
@@ -312,7 +321,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 		t.Fatalf("DecodeBody() error = %v", err)
 	}
 	text := string(decoded)
-	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qoder"`, `"agent_id":"agent_common"`, `"task_id":"common"`, `"stream":true`, `"version":"3"`, `"key":"qmodel_latest"`, `"role":"user"`, `"context_length":1000000`} {
+	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qoder_work"`, `"agent_id":"agent_common"`, `"task_id":"common"`, `"stream":true`, `"version":"3"`, `"key":"qmodel_latest"`, `"role":"user"`, `"context_length":1000000`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("decoded body = %s, want it to contain %s", text, want)
 		}
@@ -440,7 +449,7 @@ func TestConfiguredClientVersionMatchesReferenceBodyAndHeader(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{QoderClientVersion: "9.8.7"}
 	client := NewFromAccount(signedTestAccount(), cfg)
-	body, err := buildChatBodyVersion(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "request", client.clientVersion)
+	body, err := buildChatBodyVersion(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "request", "request-set", client.clientVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +457,7 @@ func TestConfiguredClientVersionMatchesReferenceBodyAndHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"business":{"product":"ide","version":"1.1.3"`) {
+	if !strings.Contains(string(raw), `"business":{"product":"qoder_work","version":"9.8.7"`) {
 		t.Fatalf("body version is incoherent: %s", raw)
 	}
 	req, _ := http.NewRequest(http.MethodPost, "https://example.invalid/algo/chat", nil)
@@ -489,7 +498,7 @@ func TestReferenceRuntimeIdentityRebuiltAfterTokenRotation(t *testing.T) {
 func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
 	model := modelEntry{Key: "qfmodel", DisplayName: "Qwen3.8-Flash", IsReasoning: true, MaxInputTokens: 180000}
 	req := upstream.UpstreamRequest{Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "你好 qoder"}}}}
-	encoded, err := buildChatBody(req, model, "session-id", "request-id")
+	encoded, err := buildChatBody(req, model, "session-id", "request-id", "request-set-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,19 +511,25 @@ func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	context := body["chat_context"].(map[string]interface{})
-	if context["text"].(map[string]interface{})["text"] != "你好 qoder" || context["extra"].(map[string]interface{})["originalContent"].(map[string]interface{})["text"] != "你好 qoder" {
-		t.Fatalf("chat context did not carry the latest user text: %#v", context)
+	// The capture carries the same plain string in both fields; the
+	// {"type":"text","text":...} object shape this channel used to send is not
+	// something the QoderWork client produces.
+	if context["text"] != "你好 qoder" || context["extra"].(map[string]interface{})["originalContent"] != "你好 qoder" {
+		t.Fatalf("chat context did not carry the latest user text as a string: %#v", context)
 	}
 	contextModel := context["extra"].(map[string]interface{})["modelConfig"].(map[string]interface{})
 	if contextModel["key"] != "qfmodel" || contextModel["is_reasoning"] != true {
 		t.Fatalf("context model config changed outside the thinking experiment: %#v", contextModel)
 	}
 	modelConfig := body["model_config"].(map[string]interface{})
-	if modelConfig["key"] != "qfmodel" || modelConfig["is_reasoning"] != false || body["business"].(map[string]interface{})["product"] != "ide" {
-		t.Fatalf("body model/business mismatch: %#v", body)
+	if modelConfig["key"] != "qfmodel" || modelConfig["is_reasoning"] != true {
+		t.Fatalf("model_config must report the model's own reasoning capability: %#v", modelConfig)
+	}
+	if body["business"].(map[string]interface{})["product"] != "qoder_work" {
+		t.Fatalf("business product is not the QoderWork identity: %#v", body["business"])
 	}
 	params := body["parameters"].(map[string]interface{})
-	if params["max_tokens"] != float64(32768) {
+	if params["max_tokens"] != float64(32000) {
 		t.Fatalf("reference max tokens missing: %#v", params)
 	}
 	for _, field := range []string{"reasoning_effort", "enable_thinking"} {
@@ -525,7 +540,7 @@ func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
 }
 
 func TestRefreshedReplayUsesFreshIdentityAndRetryFlag(t *testing.T) {
-	original, err := buildChatBodyVersion(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "old", "1.2.3")
+	original, err := buildChatBodyVersion(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "old", "request-set", "1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,8 +553,14 @@ func TestRefreshedReplayUsesFreshIdentityAndRetryFlag(t *testing.T) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.RequestID != "new" || body.RequestSetID != "new" || body.ChatRecordID != "new" || body.Business.ID != "new" || !body.IsRetry {
-		t.Fatalf("replay identity not refreshed: %+v", body)
+	// request_id and chat_record_id identify the attempt and are refreshed;
+	// request_set_id and business.id identify the task and stay put, which is
+	// what the capture shows across the requests of one task.
+	if body.RequestID != "new" || body.ChatRecordID != "new" || !body.IsRetry {
+		t.Fatalf("replay request id not refreshed: %+v", body)
+	}
+	if body.RequestSetID != "request-set" || body.Business.ID != "request-set" {
+		t.Fatalf("replay moved the task set id: %+v", body)
 	}
 }
 

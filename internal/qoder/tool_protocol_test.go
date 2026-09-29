@@ -12,7 +12,7 @@ import (
 
 func decodeChatBodyForTest(t *testing.T, req upstream.UpstreamRequest) map[string]interface{} {
 	t.Helper()
-	encoded, err := buildChatBody(req, modelEntry{Key: "qmodel_latest", Source: "system"}, "session-id", "request-id")
+	encoded, err := buildChatBody(req, modelEntry{Key: "qmodel_latest", Source: "system"}, "session-id", "request-id", "request-set-id")
 	if err != nil {
 		t.Fatalf("buildChatBody() error = %v", err)
 	}
@@ -265,8 +265,8 @@ func TestBuildChatBodyCarriesThinkingSwitch(t *testing.T) {
 	if _, present := params["reasoning_effort"]; present {
 		t.Fatalf("default reasoning model must not set effort: %#v", params)
 	}
-	if body["model_config"].(map[string]interface{})["is_reasoning"] != false {
-		t.Fatalf("default model_config unexpectedly enables reasoning: %#v", body)
+	if body["model_config"].(map[string]interface{})["is_reasoning"] != true {
+		t.Fatalf("model_config must report the model's reasoning capability: %#v", body)
 	}
 	body = decodeChatBodyForTestWithModel(t, plain, upstream.UpstreamRequest{})
 	params, _ = body["parameters"].(map[string]interface{})
@@ -284,12 +284,13 @@ func TestBuildChatBodyCarriesThinkingSwitch(t *testing.T) {
 		t.Fatalf("parameters = %#v, want explicit thinking on with effort=high", params)
 	}
 
-	// qfmodel is catalogued as reasoning-capable, but reference behavior does
-	// not switch it into thinking mode without an explicit client request.
+	// qfmodel is catalogued as reasoning-capable, so model_config reports that
+	// capability; the thinking parameters themselves stay off until the client
+	// asks for them.
 	body = decodeChatBodyForTestWithModel(t, modelEntry{Key: "qfmodel", IsReasoning: true}, upstream.UpstreamRequest{})
 	params, _ = body["parameters"].(map[string]interface{})
-	if body["model_config"].(map[string]interface{})["is_reasoning"] != false {
-		t.Fatalf("qfmodel default enabled reasoning: %#v", body)
+	if body["model_config"].(map[string]interface{})["is_reasoning"] != true {
+		t.Fatalf("qfmodel must report its reasoning capability: %#v", body)
 	}
 	if _, present := params["reasoning_effort"]; present {
 		t.Fatalf("qfmodel default carried reasoning_effort: %#v", params)
@@ -308,7 +309,7 @@ func TestBuildChatBodyCarriesThinkingSwitch(t *testing.T) {
 
 func decodeChatBodyForTestWithModel(t *testing.T, model modelEntry, req upstream.UpstreamRequest) map[string]interface{} {
 	t.Helper()
-	encoded, err := buildChatBody(req, model, "session-id", "request-id")
+	encoded, err := buildChatBody(req, model, "session-id", "request-id", "request-set-id")
 	if err != nil {
 		t.Fatalf("buildChatBody() error = %v", err)
 	}

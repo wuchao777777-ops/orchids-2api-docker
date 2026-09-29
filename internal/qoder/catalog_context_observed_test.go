@@ -34,7 +34,7 @@ func TestObservedContextTiersAndRequestDefault(t *testing.T) {
 		if info.DefaultInputTokens != tc.input || info.DefaultContextTokens != tc.def || info.MaxContextTokens != 1000000 || info.HasUnparsedConfig || info.DefaultConflict {
 			t.Fatalf("%s: %+v", tc.key, info)
 		}
-		encoded, err := buildChatBody(upstream.UpstreamRequest{Prompt: "hello"}, model, "session", "request")
+		encoded, err := buildChatBody(upstream.UpstreamRequest{Prompt: "hello"}, model, "session", "request", "request-set")
 		if err != nil {
 			t.Fatal(err)
 		}

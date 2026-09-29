@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -23,6 +24,9 @@ import (
 // Termination is also not the OpenAI one. The stream ends with `event:finish`;
 // a `[DONE]` marker may appear before final usage. Only event:finish terminates
 // the stream; EOF before it is a truncation, not a successful completion.
+//
+// The same channel also carries advisory control frames, prefixed "[KIND]#",
+// which are not chunks and must not be parsed as one.
 
 // streamEnvelope is the outer SSE frame.
 type streamEnvelope struct {
@@ -88,6 +92,10 @@ type streamResult struct {
 	FinishReasonValue  string
 	Usage              map[string]interface{}
 	ThinkingSignature  string
+	// ControlFrames counts the advisory frames the gateway multiplexed into the
+	// chunk channel, keyed by kind. They carry no model output, but a quota
+	// notice explains queue refusals that are otherwise unattributable.
+	ControlFrames map[string]int
 }
 
 // FinishReason maps the accumulated stream onto an Anthropic-style stop reason.
@@ -134,6 +142,36 @@ type sseFrame struct {
 
 // readSSE frames the upstream stream. A `data:` line continues the current
 // frame until a blank line closes it, and an `event:` line names it.
+// bodySnippet renders a bounded single-line view of an envelope body that could
+// not be parsed. A refusal the upstream explained must not reach the operator as
+// a bare "unsupported stream format".
+func bodySnippet(body string) string {
+	const limit = 400
+	compact := strings.Join(strings.Fields(body), " ")
+	if compact == "" {
+		return "<empty>"
+	}
+	if len(compact) > limit {
+		return compact[:limit] + "..."
+	}
+	return compact
+}
+
+// splitControlFrame reports whether an envelope body is an advisory control
+// frame rather than a chat chunk. The gateway prefixes those with "[KIND]#" and
+// multiplexes them into the same channel as model output.
+func splitControlFrame(body string) (kind, payload string, ok bool) {
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, "[") {
+		return "", "", false
+	}
+	end := strings.Index(trimmed, "]#")
+	if end < 0 {
+		return "", "", false
+	}
+	return trimmed[1:end], strings.TrimSpace(trimmed[end+2:]), true
+}
+
 func readSSE(reader io.Reader, fn func(sseFrame) bool) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
@@ -301,10 +339,25 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 		if strings.TrimSpace(envelope.Body) == "[DONE]" {
 			return true
 		}
+		// Advisory frames share the chunk channel. Parsing one as a chunk used
+		// to abort an otherwise healthy reply: a quota_low notice reached the
+		// client as "unsupported stream format".
+		if kind, notice, ok := splitControlFrame(envelope.Body); ok {
+			if result.ControlFrames == nil {
+				result.ControlFrames = map[string]int{}
+			}
+			result.ControlFrames[kind]++
+			slog.Warn("qoder control frame", "provider", "qoder", "kind", kind, "payload", bodySnippet(notice))
+			return true
+		}
 
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(envelope.Body), &chunk); err != nil {
-			streamErr = fmt.Errorf("qoder stream protocol error: invalid body: %w", err)
+			// The upstream reports some refusals as a JSON array rather than a
+			// chunk object. Reporting only "invalid body" hides the reason it
+			// gave, and that reason is the one thing that makes the refusal
+			// actionable.
+			streamErr = fmt.Errorf("qoder stream protocol error: invalid body: %w (upstream body: %s)", err, bodySnippet(envelope.Body))
 			return false
 		}
 		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {

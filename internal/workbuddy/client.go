@@ -42,6 +42,17 @@ import (
 // DefaultBaseURL is the international deployment host.
 const DefaultBaseURL = "https://www.workbuddy.ai"
 
+// DefaultReasoningEffort stands in when the client did not state an effort.
+//
+// The upstream only routes its chain of thought into the reasoning channel when
+// reasoning_effort is present. With the field omitted it writes the scratchpad
+// into delta.content instead, and no reader on this channel can tell that prose
+// apart from the answer, so the model's private reasoning reaches the client as
+// visible text. Cline answers the same missing-field shape with the same value
+// (cline.DefaultReasoningEffort), so the two dialects stay aligned on the
+// default; only an explicit "none" differs, which buildBody keeps omitted.
+const DefaultReasoningEffort = "high"
+
 const (
 	defaultModel   = "default-model"
 	clientVersion  = "5.5.4"
@@ -258,10 +269,17 @@ func (c *Client) buildBody(req upstream.UpstreamRequest) ([]byte, error) {
 		"stream_options": map[string]interface{}{"include_usage": true},
 		"messages":       buildMessages(req),
 	}
-	// The upstream accepts the OpenAI-style reasoning_effort hint. Forward only
-	// what the client actually asked for; "none" means the client explicitly
-	// asked for no reasoning and becomes an omitted field instead.
-	if effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort)); effort != "" && effort != "none" {
+	// The upstream accepts the OpenAI-style reasoning_effort hint. An omitted
+	// field makes it inline the chain of thought into content, which surfaces as
+	// answer text, so a default stands in when the client stated nothing; a
+	// stated effort wins. "none" is a stated choice, not an absence: it means
+	// the client explicitly asked for no reasoning, so the field stays out
+	// rather than carrying a level the upstream would reject.
+	effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
+	if effort == "" {
+		effort = DefaultReasoningEffort
+	}
+	if effort != "none" {
 		body["reasoning_effort"] = effort
 	}
 	if conversationID := strings.TrimSpace(req.ConversationID); conversationID != "" {

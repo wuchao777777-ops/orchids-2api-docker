@@ -809,7 +809,10 @@ func TestBuildBodyForwardsReasoningEffort(t *testing.T) {
 		t.Fatalf("reasoning_effort = %#v, want high", got)
 	}
 
-	// A silent request stays byte-compatible with the previous wire shape.
+	// A silent request must still carry an effort. Omitting the field makes the
+	// upstream write its chain of thought into content, where the stream reader
+	// cannot separate it from the answer and the client renders the model's
+	// private reasoning as the reply.
 	body, err = NewFromAccount(nil, nil).buildBody(upstream.UpstreamRequest{})
 	if err != nil {
 		t.Fatal(err)
@@ -818,8 +821,21 @@ func TestBuildBodyForwardsReasoningEffort(t *testing.T) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if _, present := decoded["reasoning_effort"]; present {
-		t.Fatalf("silent request must omit reasoning_effort, got %#v", decoded["reasoning_effort"])
+	if got := decoded["reasoning_effort"]; got != DefaultReasoningEffort {
+		t.Fatalf("silent request reasoning_effort = %#v, want %q", got, DefaultReasoningEffort)
+	}
+
+	// A stated effort still wins over the default, including a lower level.
+	body, err = NewFromAccount(nil, nil).buildBody(upstream.UpstreamRequest{ReasoningEffort: "low"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded = nil
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded["reasoning_effort"]; got != "low" {
+		t.Fatalf("reasoning_effort = %#v, want low", got)
 	}
 
 	// "none" means the client asked for no reasoning; omit the field instead of
@@ -834,5 +850,33 @@ func TestBuildBodyForwardsReasoningEffort(t *testing.T) {
 	}
 	if _, present := decoded["reasoning_effort"]; present {
 		t.Fatalf("none must omit reasoning_effort, got %#v", decoded["reasoning_effort"])
+	}
+}
+
+// TestSilentRequestKeepsChainOfThoughtPrivate pins the shape that leaked the
+// model's scratchpad to clients: with reasoning_effort omitted the upstream
+// wrote its chain of thought into delta.content, and the stream reader has no
+// delimiter to separate that prose from the answer, so it was forwarded as
+// visible text. A request that states nothing about reasoning must still carry
+// an effort.
+func TestSilentRequestKeepsChainOfThoughtPrivate(t *testing.T) {
+	t.Parallel()
+
+	for _, effort := range []string{"", "   "} {
+		body, err := NewFromAccount(nil, nil).buildBody(upstream.UpstreamRequest{ReasoningEffort: effort})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded map[string]interface{}
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		got, present := decoded["reasoning_effort"]
+		if !present {
+			t.Fatalf("effort %q: reasoning_effort is missing; the upstream would inline its reasoning into content", effort)
+		}
+		if got != DefaultReasoningEffort {
+			t.Fatalf("effort %q: reasoning_effort = %#v, want %q", effort, got, DefaultReasoningEffort)
+		}
 	}
 }

@@ -1,0 +1,210 @@
+package qoder
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"orchids-api/internal/config"
+	"orchids-api/internal/prompt"
+	"orchids-api/internal/upstream"
+)
+
+// The contract pinned below comes from a packet capture of the international
+// QoderWork client. Every value was observed on the wire. Moving one of them
+// changes what the gateway is asked to accept, which is not something to do
+// without new evidence.
+
+// TestQoderWorkIdentityIsTheOnlyDialect checks that no profile falls back to the
+// IDE emulation this channel was built around (client type 5, scene
+// "assistant", session_type "qoder", product "ide").
+func TestQoderWorkIdentityIsTheOnlyDialect(t *testing.T) {
+	t.Parallel()
+
+	if sceneClientID != "6" || sceneName != "qwork" || sessionType != "qoder_work" {
+		t.Fatalf("dialect = clientType %q scene %q session %q, want the QoderWork identity", sceneClientID, sceneName, sessionType)
+	}
+	if sceneBusinessProduct != "qoder_work" || DefaultClientVersion != "1.0.45" {
+		t.Fatalf("identity = product %q clientVersion %q, want QoderWork", sceneBusinessProduct, DefaultClientVersion)
+	}
+	// The capture reports client type 6 and machine type 5 in one request, so
+	// these cannot share a constant.
+	if machineSceneType != "5" {
+		t.Fatalf("machineSceneType = %q, want 5", machineSceneType)
+	}
+	for _, name := range []string{ProfileReference, ProfileSkillCLI} {
+		c := NewFromAccount(signedTestAccount(), &config.Config{QoderProtocolProfile: name})
+		if c.businessProduct() != "qoder_work" {
+			t.Fatalf("profile %q reports product %q; every profile must report QoderWork", name, c.businessProduct())
+		}
+	}
+}
+
+// TestQoderWorkBodyMatchesCapture pins the request body field for field. The
+// top-level key set matters as much as the values: this channel used to send
+// image_urls, code_language, chat_prompt and custom_model, none of which the
+// captured client sends.
+func TestQoderWorkBodyMatchesCapture(t *testing.T) {
+	t.Parallel()
+
+	model := modelEntry{Key: "qfmodel", DisplayName: "Qwen3.8-Flash", IsReasoning: true, IsVL: true, MaxInputTokens: 180000}
+	req := upstream.UpstreamRequest{Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}}}
+	encoded, err := buildChatBody(req, model, "session", "request", "request-set")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := decodeBodyForTest(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+
+	wantKeys := []string{
+		"agent_id", "aliyun_user_type", "business", "chat_context",
+		"chat_record_id", "chat_task", "is_reply", "is_retry", "messages",
+		"model_config", "parameters", "request_id", "request_set_id",
+		"session_id", "session_type", "source", "stream", "system",
+		"task_id", "tools", "version",
+	}
+	if len(body) != len(wantKeys) {
+		t.Fatalf("top-level field count = %d, want %d: %#v", len(body), len(wantKeys), body)
+	}
+	for _, key := range wantKeys {
+		if _, present := body[key]; !present {
+			t.Fatalf("body is missing %q, which the capture carries", key)
+		}
+	}
+
+	for key, want := range map[string]interface{}{
+		"stream":           true,
+		"chat_task":        "FREE_INPUT",
+		"is_reply":         true,
+		"is_retry":         false,
+		"source":           float64(1),
+		"version":          "3",
+		"agent_id":         "agent_common",
+		"task_id":          "common",
+		"session_type":     "qoder_work",
+		"aliyun_user_type": "",
+	} {
+		if body[key] != want {
+			t.Errorf("%s = %#v, want %#v", key, body[key], want)
+		}
+	}
+
+	// request_id and chat_record_id carry the attempt; request_set_id carries
+	// the task. The capture shows them as two different values.
+	if body["request_id"] != "request" || body["chat_record_id"] != "request" || body["request_set_id"] != "request-set" {
+		t.Fatalf("request id wiring = %#v", body)
+	}
+
+	business := body["business"].(map[string]interface{})
+	if len(business) != 8 {
+		t.Fatalf("business field count = %d, want 8: %#v", len(business), business)
+	}
+	for key, want := range map[string]interface{}{
+		"product":  "qoder_work",
+		"version":  DefaultClientVersion,
+		"type":     "agent",
+		"id":       "request-set",
+		"stage":    "start",
+		"sub_task": "ws_builtin_general",
+	} {
+		if business[key] != want {
+			t.Errorf("business.%s = %#v, want %#v", key, business[key], want)
+		}
+	}
+
+	// is_reasoning follows the model's own catalog capability.
+	modelConfig := body["model_config"].(map[string]interface{})
+	if modelConfig["is_reasoning"] != true || modelConfig["is_vl"] != true || modelConfig["source"] != "system" {
+		t.Fatalf("model_config = %#v", modelConfig)
+	}
+
+	// text and extra.originalContent are the same plain string in the capture.
+	context := body["chat_context"].(map[string]interface{})
+	if context["text"] != "hi" || context["chatPrompt"] != "" {
+		t.Fatalf("chat_context = %#v", context)
+	}
+	extra := context["extra"].(map[string]interface{})
+	if extra["originalContent"] != "hi" {
+		t.Fatalf("extra.originalContent = %#v, want the same string as chat_context.text", extra["originalContent"])
+	}
+	if extra["modelConfig"].(map[string]interface{})["is_reasoning"] != true {
+		t.Fatalf("chat_context disagrees with model_config about reasoning: %#v", extra["modelConfig"])
+	}
+
+	if body["parameters"].(map[string]interface{})["max_tokens"] != float64(32000) {
+		t.Fatalf("parameters = %#v, want the captured max_tokens", body["parameters"])
+	}
+}
+
+// TestQoderWorkStreamFramesParse covers the envelope shape the gateway actually
+// sends: body is a JSON *string* holding an OpenAI chunk, terminated by an
+// event:finish line. The observed capture parses to one reasoning delta.
+func TestQoderWorkStreamFramesParse(t *testing.T) {
+	t.Parallel()
+
+	frame := `{"headers":{"Content-Type":["application/json"]},"body":"{\"choices\":[{\"delta\":{\"content\":\"\",\"reasoning_content\":\"hi\",\"role\":\"assistant\"},\"index\":0}],\"created\":1,\"id\":\"chatcmpl-1\",\"model\":\"auto\",\"object\":\"chat.completion.chunk\"}","statusCodeValue":200,"statusCode":"OK"}`
+	stream := "data:" + frame + "\n\n" + "event:finish\n\n"
+
+	types := map[string]int{}
+	if _, err := consumeStreamWithTools(strings.NewReader(stream), false, func(m upstream.SSEMessage) { types[m.Type]++ }); err != nil {
+		t.Fatalf("a captured frame failed to parse: %v", err)
+	}
+	if types["model.reasoning-delta"] != 1 {
+		t.Fatalf("event types = %#v, want one reasoning delta", types)
+	}
+}
+
+// TestArrayShapedRefusalStaysDiagnosable covers the failure that took the
+// channel down. The gateway answered a rejected request with a JSON array in
+// body, and the error collapsed into "unsupported stream format" with the
+// upstream's own explanation discarded.
+func TestArrayShapedRefusalStaysDiagnosable(t *testing.T) {
+	t.Parallel()
+
+	frame := `{"headers":{},"body":"[{\"code\":\"10605\",\"message\":\"service not available\"}]","statusCodeValue":200,"statusCode":"OK"}`
+	stream := "data:" + frame + "\n\n"
+
+	_, err := consumeStreamWithTools(strings.NewReader(stream), false, func(upstream.SSEMessage) {})
+	if err == nil {
+		t.Fatal("an array-shaped body was accepted as a chunk")
+	}
+	if !strings.Contains(err.Error(), "10605") {
+		t.Fatalf("error = %v, want the upstream payload to survive into the message", err)
+	}
+}
+
+// TestNotificationsControlFrameDoesNotAbortTheStream covers the frame that broke
+// the QoderWork identity in production. The gateway prefixes advisory notices
+// and multiplexes them into the chunk channel; parsing one as a chunk aborted an
+// otherwise healthy reply and reported it as an unsupported stream format.
+func TestNotificationsControlFrameDoesNotAbortTheStream(t *testing.T) {
+	t.Parallel()
+
+	notice := `{"headers":{},"body":"[NOTIFICATIONS]#{\"notifications\":[{\"extras\":{\"pricingUrl\":\"https://qoder.com/pricing?client=qoder\",\"nextResetAt\":1791397354935},\"isHighestTier\":false,\"notificationType\":\"quota_low\"}]}","statusCodeValue":200,"statusCode":"OK"}`
+	answer := `{"headers":{"Content-Type":["application/json"]},"body":"{\"choices\":[{\"delta\":{\"content\":\"OK\",\"role\":\"assistant\"},\"index\":0}],\"created\":1,\"id\":\"chatcmpl-1\",\"model\":\"auto\",\"object\":\"chat.completion.chunk\"}","statusCodeValue":200,"statusCode":"OK"}`
+	stream := "data:" + notice + "\n\n" + "data:" + answer + "\n\n" + "event:finish\n\n"
+
+	var text strings.Builder
+	res, err := consumeStreamWithTools(strings.NewReader(stream), false, func(m upstream.SSEMessage) {
+		if m.Type == "model.text-delta" {
+			if delta, ok := m.Event["delta"].(string); ok {
+				text.WriteString(delta)
+			}
+		}
+	})
+	if err != nil {
+		t.Fatalf("a notifications control frame aborted the stream: %v", err)
+	}
+	if res.ControlFrames["NOTIFICATIONS"] != 1 {
+		t.Fatalf("control frames = %#v, want the NOTIFICATIONS frame counted", res.ControlFrames)
+	}
+	if text.String() != "OK" {
+		t.Fatalf("text = %q, want the answer that followed the notice", text.String())
+	}
+}
