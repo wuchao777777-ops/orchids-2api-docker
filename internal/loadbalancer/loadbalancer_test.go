@@ -253,15 +253,71 @@ func TestGetNextAccountExcludingByChannelWithTrackerFilter_ModelFilterEmptiesThe
 		cacheExpires: now.Add(time.Minute),
 	}
 
-	_, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", tracker, func(*store.Account) bool {
+	_, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", tracker, func(*store.Account) error {
 		// The per-model cooldown filter: every candidate is withheld for this model.
-		return false
+		return RejectModelThrottled
 	})
 	if err == nil {
 		t.Fatal("expected a model-filtered selector error, got nil")
 	}
 	if !strings.Contains(err.Error(), "cooling down for the requested model") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestFilterReasonsDecideTheEmptyPoolAnswer pins what the filter's reason is
+// for: the same empty pool has to be answered "retry later" or "this model is
+// not available here" depending on why every candidate was withheld.
+//
+// Production asked for a Qoder model whose cooldown on every account was a
+// day-long plan verdict, and was answered "the requested model is temporarily
+// rate-limited" — an invitation to retry a condition that could never change.
+func TestFilterReasonsDecideTheEmptyPoolAnswer(t *testing.T) {
+	now := time.Now()
+	for name, tc := range map[string]struct {
+		filter  AccountFilter
+		wantMsg string
+	}{
+		"every account is throttled": {
+			filter:  func(*store.Account) error { return RejectModelThrottled },
+			wantMsg: "cooling down for the requested model",
+		},
+		"no account's plan covers it": {
+			filter:  func(*store.Account) error { return RejectModelUnavailable },
+			wantMsg: "not covered by any matching account's plan",
+		},
+		"a mix of throttled and uncovered": {
+			filter: func(acc *store.Account) error {
+				if acc.ID%2 == 0 {
+					return RejectModelUnavailable
+				}
+				return RejectModelThrottled
+			},
+			wantMsg: "cooling down on some matching accounts",
+		},
+		"a caller rule with no model-cooldown verdict": {
+			filter:  func(*store.Account) error { return ErrAccountNotEligible },
+			wantMsg: "cooling down for the requested model",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tracker := NewMemoryConnTracker()
+			lb := &LoadBalancer{
+				connTracker: tracker,
+				cachedAccounts: []*store.Account{
+					{ID: 2, Name: "WB1", AccountType: "workbuddy", Enabled: true},
+					{ID: 3, Name: "WB2", AccountType: "workbuddy", Enabled: true},
+				},
+				cacheExpires: now.Add(time.Minute),
+			}
+			_, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", tracker, tc.filter)
+			if err == nil {
+				t.Fatal("expected an empty-pool error")
+			}
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Fatalf("error = %v, want it to name %q", err, tc.wantMsg)
+			}
+		})
 	}
 }
 

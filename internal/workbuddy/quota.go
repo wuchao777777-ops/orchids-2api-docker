@@ -129,21 +129,18 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 // summarizeQuota aggregates every metered package into one allowance window.
 func summarizeQuota(payload resourceResponse, now time.Time) *Quota {
 	quota := &Quota{SyncedAt: now, Unit: "credit"}
+	// The package label describes the package the allowance mostly comes from, so
+	// it follows the largest remaining balance rather than whichever row the
+	// upstream happened to append last.
+	labelRemain := -1.0
 	for _, account := range payload.Response.Data.Accounts {
-		cycleRemain := util.FirstPositive(
-			parsePrecise(account.CycleCapacityRemainP),
-			account.CycleCapacityRemain,
-		)
+		cycleRemain := preciseOr(account.CycleCapacityRemainP, account.CycleCapacityRemain)
 		cycleSize := util.FirstPositive(
 			parsePrecise(account.CycleCapacitySizeP),
 			account.CycleCapacitySize,
 			account.CapacitySize,
 		)
-		packageRemain := util.FirstPositive(
-			parsePrecise(account.CapacityRemainPrecise),
-			account.CapacityRemain,
-			cycleRemain,
-		)
+		packageRemain := preciseOr(account.CapacityRemainPrecise, account.CapacityRemain, cycleRemain)
 		if cycleSize <= 0 && cycleRemain <= 0 && packageRemain <= 0 {
 			continue
 		}
@@ -151,11 +148,12 @@ func summarizeQuota(payload resourceResponse, now time.Time) *Quota {
 		quota.Remaining += cycleRemain
 		quota.Limit += cycleSize
 		quota.PackageRemaining += packageRemain
-		if name := strings.TrimSpace(account.PackageName); name != "" {
+		if name := strings.TrimSpace(account.PackageName); name != "" && cycleRemain >= labelRemain {
 			quota.PackageName = name
-		}
-		if unit := strings.TrimSpace(account.CapacityUnit); unit != "" {
-			quota.Unit = unit
+			if unit := strings.TrimSpace(account.CapacityUnit); unit != "" {
+				quota.Unit = unit
+			}
+			labelRemain = cycleRemain
 		}
 		if resetAt := parseMeterTime(account.CycleEndTime); !resetAt.IsZero() {
 			if quota.ResetAt.IsZero() || resetAt.Before(quota.ResetAt) {
@@ -175,8 +173,12 @@ func summarizeQuota(payload resourceResponse, now time.Time) *Quota {
 	return quota
 }
 
+// preciseNumberReplacer strips the grouping a large allowance may carry: the
+// meter reports "1,234.00" for four-digit packages.
+var preciseNumberReplacer = strings.NewReplacer(",", "", " ", "", "\u00a0", "")
+
 func parsePrecise(raw string) float64 {
-	raw = strings.TrimSpace(raw)
+	raw = preciseNumberReplacer.Replace(strings.TrimSpace(raw))
 	if raw == "" {
 		return 0
 	}
@@ -187,8 +189,29 @@ func parsePrecise(raw string) float64 {
 	return value
 }
 
-// parseMeterTime reads the upstream "2006-01-02 15:04:05" wall-clock format,
-// treated as UTC. Empty or placeholder values ("9999-99-99 ...") mean no expiry.
+// preciseOr reports the precise field's value when the upstream actually sent
+// one, even when that value is zero, and falls back to the coarse fields only
+// when it did not. A genuine "0.00" remaining is a reading: treating it as
+// "absent" (which util.FirstPositive does) let a stale coarse value win and made
+// a spent account look funded.
+func preciseOr(raw string, fallbacks ...float64) float64 {
+	if strings.TrimSpace(raw) != "" {
+		return parsePrecise(raw)
+	}
+	return util.FirstPositive(fallbacks...)
+}
+
+// parseMeterTime reads the upstream "2006-01-02 15:04:05" wall-clock format.
+// Empty or placeholder values ("9999-99-99 ...") mean no expiry.
+//
+// The upstream never says which zone that clock is in, and nothing in the payload
+// pins it: the same "2026-09-30 23:59:59" window end came back for two days
+// across accounts synced at different times, so it is a fixed window end rather
+// than a local midnight that would give the zone away. It is therefore read as
+// UTC, and consumers treat the result as an order-of-magnitude hint rather than a
+// deadline: the free-tier hold is capped, and the background refresh runs on an
+// elapsed cadence. Settling the convention needs one observation — comparing this
+// value with the moment the meter actually re-arms the allowance.
 func parseMeterTime(raw string) time.Time {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || strings.HasPrefix(raw, "9999") {

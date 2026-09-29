@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -304,7 +305,18 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		case isUnauthorized(err) && !refreshed:
 			refreshed = true
 			if refreshErr := c.forceRefresh(ctx, attemptCredentials); refreshErr != nil {
-				return refreshErr
+				// The refresh can fail for reasons that have nothing to do with the
+				// refusal this attempt met (a throttled or unreachable authorization
+				// endpoint, a transient network fault). Returning it would replace a
+				// verdict about the request with one about the credential, and could
+				// retire an account the upstream never actually rejected. Only an
+				// answer that says the durable credential is gone outranks it.
+				if errors.Is(refreshErr, ErrReLoginRequired) || errors.Is(refreshErr, ErrCredentialMissing) {
+					return refreshErr
+				}
+				slog.Warn("Qoder token refresh failed while handling a refused credential; reporting the original refusal",
+					"error", refreshErr)
+				return err
 			}
 			if fields, err = c.ensureRuntimeFields(ctx, c.currentCredentials()); err != nil {
 				return err

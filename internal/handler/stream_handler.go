@@ -1991,7 +1991,7 @@ func (h *streamHandler) terminalState() (returned, failed bool) {
 	return h.hasReturn, h.requestFailed
 }
 
-func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
+func (h *streamHandler) reportRequestFailure(logMsg, category, message string, retryAfter time.Duration) {
 	if h == nil || h.w == nil {
 		return
 	}
@@ -2020,7 +2020,10 @@ func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
 	h.requestFailed = true
 	h.returned.Store(true)
 	h.mu.Unlock()
-	apperrors.New(category, message, apperrors.StatusForCategory(category)).WriteResponse(h.w)
+	// retryAfter publishes the upstream's own "come back in" hint. A caller that
+	// just waited out several windows deserves to know when the answer might
+	// change instead of retrying blindly.
+	apperrors.NewWithRetryAfter(category, message, apperrors.StatusForCategory(category), retryAfter).WriteResponse(h.w)
 }
 
 // writeStreamError reports a failure inside a stream that has already started.
@@ -2091,7 +2094,7 @@ func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr 
 	if selectErr != nil || strings.TrimSpace(lastErr) != "" {
 		slog.Warn("Reporting that no account could serve the request", "select_error", selectErr, "last_error", lastErr)
 	}
-	h.reportRequestFailure("Injecting no available account error to client", out.Category, out.Message)
+	h.reportRequestFailure("Injecting no available account error to client", out.Category, out.Message, 0)
 }
 
 // Tool shape validation is independent of whether another call had the same input.

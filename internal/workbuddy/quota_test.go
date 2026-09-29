@@ -161,3 +161,97 @@ func TestLastConsumedUnits_ResetsWithTheCycle(t *testing.T) {
 		t.Fatalf("LastConsumedUnits() with no history = %d, want 202", got)
 	}
 }
+
+// TestSummarizeQuota_PreciseZeroIsAReading pins the difference between "the
+// meter says nothing" and "the meter says zero". A spent package reports
+// "0.00", and treating that as absent let a stale coarse field win: an account
+// with nothing left was then advertised as funded.
+func TestSummarizeQuota_PreciseZeroIsAReading(t *testing.T) {
+	t.Parallel()
+
+	var payload resourceResponse
+	payload.Response.Data.Accounts = []meterAccount{{
+		PackageName:          "Free Plan Subscription",
+		CapacityUnit:         "credit",
+		CapacitySize:         100,
+		CapacityRemain:       100, // stale coarse value: the precise field is the authority
+		CycleCapacitySize:    100,
+		CycleCapacityRemain:  100,
+		CycleCapacitySizeP:   "100",
+		CycleCapacityRemainP: "0.00",
+		CycleEndTime:         "2026-09-30 23:59:59",
+	}}
+
+	quota := summarizeQuota(payload, time.Now())
+	if quota.Remaining != 0 {
+		t.Fatalf("Remaining = %v, want 0: a precise zero is a reading, not a missing value", quota.Remaining)
+	}
+	if quota.Limit != 100 {
+		t.Fatalf("Limit = %v, want 100", quota.Limit)
+	}
+}
+
+// TestSummarizeQuota_FallsBackWhenPreciseIsAbsent keeps the other direction: an
+// omitted precise field still falls back to the coarse value.
+func TestSummarizeQuota_FallsBackWhenPreciseIsAbsent(t *testing.T) {
+	t.Parallel()
+
+	if got := preciseOr("", 0, 47.5); got != 47.5 {
+		t.Fatalf("preciseOr(\"\", 0, 47.5) = %v, want the first positive fallback", got)
+	}
+	if got := preciseOr("0.00", 47.5); got != 0 {
+		t.Fatalf("preciseOr(\"0.00\", 47.5) = %v, want the precise zero", got)
+	}
+}
+
+// TestParsePrecise_HandlesGrouping pins the grouping a large allowance carries:
+// Sscanf stops at the comma and would report a thousandth of the real value.
+func TestParsePrecise_HandlesGrouping(t *testing.T) {
+	t.Parallel()
+
+	for raw, want := range map[string]float64{
+		"1,234.50": 1234.5,
+		"12,000":   12000,
+		"350":      350,
+		"0.00":     0,
+		"":         0,
+		" 47.28 ":  47.28,
+	} {
+		if got := parsePrecise(raw); got != want {
+			t.Errorf("parsePrecise(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// TestSummarizeQuota_LabelsThePackageWithTheMostLeft pins the label an operator
+// reads: it follows the largest remaining balance, not whichever row the
+// upstream appended last.
+func TestSummarizeQuota_LabelsThePackageWithTheMostLeft(t *testing.T) {
+	t.Parallel()
+
+	var payload resourceResponse
+	payload.Response.Data.Accounts = []meterAccount{
+		{
+			PackageName: "Bonus Pack", CapacityUnit: "credit",
+			CycleCapacitySizeP: "100", CycleCapacityRemainP: "5",
+			CycleEndTime: "2026-09-30 00:00:00",
+		},
+		{
+			PackageName: "Free Plan Subscription", CapacityUnit: "credit",
+			CycleCapacitySizeP: "350", CycleCapacityRemainP: "300",
+			CycleEndTime: "2026-09-28 00:00:00",
+		},
+	}
+
+	quota := summarizeQuota(payload, time.Now())
+	if quota.PackageName != "Free Plan Subscription" {
+		t.Fatalf("PackageName = %q, want the package holding most of the allowance", quota.PackageName)
+	}
+	if quota.Remaining != 305 || quota.Limit != 450 {
+		t.Fatalf("quota = %v/%v, want 305 of 450", quota.Remaining, quota.Limit)
+	}
+	// The earliest cycle end is the one worth acting on.
+	if want := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC); !quota.ResetAt.Equal(want) {
+		t.Fatalf("ResetAt = %v, want the earliest cycle end %v", quota.ResetAt, want)
+	}
+}

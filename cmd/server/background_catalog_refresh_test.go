@@ -102,3 +102,26 @@ func TestRefreshWorkBuddyCatalogPersistsSuccessAndKeepsLKGOnFailure(t *testing.T
 		t.Fatalf("failed refresh replaced LKG: %v", afterFailure.WorkBuddyModelIDs)
 	}
 }
+
+// TestWorkBuddyQuotaRefreshDueUsesMeterTimestamp keeps the credit-meter reading
+// on the same cadence as every other provider snapshot. Before this the reading
+// was only written at login and on a manual check, so production held a
+// 36-hour-old allowance for an account whose balance had already moved.
+func TestWorkBuddyQuotaRefreshDueUsesMeterTimestamp(t *testing.T) {
+	now := time.Now()
+	fresh := now.Add(-providerHealthRefreshInterval + time.Minute)
+	stale := now.Add(-providerHealthRefreshInterval - time.Minute)
+
+	if workBuddyQuotaRefreshDue(nil, now) {
+		t.Fatal("a nil account must not be due")
+	}
+	if !workBuddyQuotaRefreshDue(&store.Account{}, now) {
+		t.Fatal("an account with no meter reading must be due")
+	}
+	if workBuddyQuotaRefreshDue(&store.Account{WorkBuddyQuota: store.WorkBuddyQuotaSnapshot{SyncedAt: fresh}}, now) {
+		t.Fatal("a fresh reading must not be re-read on this tick")
+	}
+	if !workBuddyQuotaRefreshDue(&store.Account{WorkBuddyQuota: store.WorkBuddyQuotaSnapshot{SyncedAt: stale}}, now) {
+		t.Fatal("a stale reading must be re-read")
+	}
+}

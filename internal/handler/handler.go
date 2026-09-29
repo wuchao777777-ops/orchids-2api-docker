@@ -31,6 +31,7 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
+	"orchids-api/internal/workbuddy"
 )
 
 type responseWriterUnwrapper interface {
@@ -788,6 +789,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		retryDelay := time.Duration(cfg.RetryDelay) * time.Millisecond
 		retriesRemaining := maxRetries
+		// sharedRefusalWaited accumulates only the waits spent on a refusal that
+		// every account shares, which is bounded separately from maxRetries.
+		var sharedRefusalWaited time.Duration
 
 		// Publish the model this request resolved to, so the per-minute
 		// aggregation can attribute the outcome to a model rather than only to a
@@ -881,7 +885,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				// non-streaming responses have committed nothing and can still return
 				// the correct HTTP error without leaking the partial draft.
 				sh.reportRequestFailure("Reporting upstream failure after partial output",
-					errClass.Category, apperrors.PublicMessage(errStr))
+					errClass.Category, apperrors.PublicMessage(errStr), upstreamRetryAfter(err))
 				return
 			}
 
@@ -898,7 +902,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					// WorkBuddy code 6004 is a model-frequency limit. Persist only
 					// that model's cooldown; applying an empty account status here
 					// would either be skipped or accidentally clear unrelated state.
-					store.RecordModelCooldown(currentAccount, verdict.Model, time.Now().Add(verdict.Cooldown))
+					// The verdict's kind travels with the deadline: the selection
+					// layer cannot see this request, and has to know whether the
+					// model is throttled or simply not covered by the plan.
+					store.RecordModelCooldownWithReason(currentAccount, verdict.Model, time.Now().Add(verdict.Cooldown), verdict.ModelCooldownKind)
 					if persistErr := h.loadBalancer.Store.UpdateAccount(r.Context(), currentAccount); persistErr != nil {
 						slog.Warn("persist model cooldown failed", "account_id", currentAccount.ID, "model", verdict.Model, "error", persistErr)
 					}
@@ -909,6 +916,32 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					// Apply keeps the status and its operator-facing reason
 					// together, so the account table can explain the cooldown.
 					verdict.Apply(currentAccount)
+					// WorkBuddy keeps a spent account in the pool for its free tier
+					// only. When the upstream refuses that tier too — production
+					// answers 14018 "Credits exhausted" for a zero-balance plan on a
+					// confirmed free model — the tier is not available on this account
+					// either, and every later request pays for the same upstream
+					// rejection before switching. Scope the verdict to the model, so
+					// the pool stops offering this account for it while the balance is
+					// spent; the account keeps its free-only capability state.
+					if verdict.Status == store.AccountStatusWorkBuddyQuotaExhausted &&
+						workbuddy.IsFreeModelInCatalog(currentAccount.WorkBuddyModelIDs, upstreamReq.Model) {
+						// Hold the model out of this account until its plan resets, but
+						// never past the cap below: the reset comes from the upstream's
+						// wall clock, whose zone the gateway cannot verify, so a misread
+						// boundary must not park a model for hours longer than the
+						// refusal deserves.
+						const freeTierMaxHold = 6 * time.Hour
+						freeTierHold := freeTierMaxHold
+						if reset := currentAccount.WorkBuddyQuota.ResetAt; reset.After(time.Now()) {
+							if until := time.Until(reset); until < freeTierHold {
+								freeTierHold = until
+							}
+						}
+						slog.Warn("WorkBuddy free tier refused on a spent account; scoping the model out",
+							"account_id", currentAccount.ID, "model", upstreamReq.Model, "hold", freeTierHold)
+						store.RecordModelCooldownWithReason(currentAccount, upstreamReq.Model, time.Now().Add(freeTierHold), store.ModelCooldownUnavailable)
+					}
 					h.loadBalancer.PersistAppliedAccountStatus(r.Context(), currentAccount, "账号策略判定: "+verdict.Status)
 				}
 			}
@@ -922,11 +955,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						sh.finishResponse("end_turn")
 						return
 					}
-					sh.reportRequestFailure("Reporting unexpected upstream cancellation", "server", "Upstream request was canceled unexpectedly")
+					sh.reportRequestFailure("Reporting unexpected upstream cancellation", "server", "Upstream request was canceled unexpectedly", 0)
 					return
 				}
 				sh.reportRequestFailure("Reporting non-retriable upstream failure",
-					errClass.Category, apperrors.PublicMessage(errStr))
+					errClass.Category, apperrors.PublicMessage(errStr), upstreamRetryAfter(err))
 				return
 			}
 
@@ -946,7 +979,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				// Same rule as the non-retriable branch above: with nothing sent yet
 				// this is a gateway failure, and the client sees it as one.
 				sh.reportRequestFailure("Reporting that retries are exhausted",
-					errClass.Category, apperrors.PublicMessage(errStr))
+					errClass.Category, apperrors.PublicMessage(errStr), upstreamRetryAfter(err))
 				return
 			}
 			retriesRemaining--
@@ -955,10 +988,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				"trace_id", traceID,
 				"attempt", upstreamReq.Attempt,
 				"category", errClass.Category,
-				"switch_account", errClass.SwitchAccount,
+				"switch_account", verdict.SwitchAccount,
 				"retries_remaining", retriesRemaining,
 			)
-			if errClass.SwitchAccount && currentAccount != nil && h.loadBalancer != nil {
+			if verdict.SwitchAccount && currentAccount != nil && h.loadBalancer != nil {
 				prevClient := apiClient
 				prevAccount := currentAccount
 				if _, ok := failedAccountSet[currentAccount.ID]; !ok {
@@ -1022,16 +1055,62 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			if hinted := upstreamRetryAfter(err); hinted > retryDelayForAttempt {
 				retryDelayForAttempt = hinted
 			}
-			if retryDelayForAttempt > 0 && isSharedUpstreamRefusalClass(errClass) {
+			sharedRefusal := isSharedUpstreamRefusalClass(errClass)
+			if retryDelayForAttempt > 0 && sharedRefusal {
 				// Qoder preserves the provider-normalized hint. Other channels
 				// keep their existing early-probe policy; positive jitter never
 				// moves a retry before the chosen wait.
 				retryDelayForAttempt = sharedRefusalWaitForChannel(retryDelayForAttempt, attempt+1, targetChannel)
 				retryDelayForAttempt += sharedRefusalJitter(retryDelayForAttempt)
 			}
+			// A shared refusal is a gate on the upstream's side, not this account's
+			// throttle, so the wait is spent on the same account and can repeat.
+			// Bound the total: production answered after a p50 of 104s and clients
+			// gave up at ~125s, which is past the point where waiting is a service
+			// to the caller.
+			if sharedRefusal && retryDelayForAttempt > 0 && !sharedRefusalWaitAllowed(sharedRefusalWaited, retryDelayForAttempt) {
+				slog.Warn("Shared upstream refusal exceeded the wait budget; answering now",
+					"trace_id", traceID,
+					"waited", sharedRefusalWaited,
+					"budget", sharedRefusalTotalWaitBudget,
+					"category", errClass.Category,
+				)
+				sh.reportRequestFailure("Reporting a shared refusal after the wait budget",
+					errClass.Category, apperrors.PublicMessage(errStr), upstreamRetryAfter(err))
+				return
+			}
+			// Holding this account's concurrency slot through the wait starves the
+			// pool: the slot is reserved for the whole request, so ten requests
+			// waiting out a gate would occupy one account completely while the rest
+			// of the pool idled. Release it for the wait and take it back before the
+			// next attempt; if it is gone by then the account really is busy.
+			slotReleasedForWait := false
+			if retryDelayForAttempt > 0 && sharedRefusal && trackedAccountID != 0 {
+				h.releaseTrackedAccount(trackedAccountID)
+				trackedAccountID = 0
+				slotReleasedForWait = true
+			}
 			if retryDelayForAttempt > 0 && !util.SleepWithContext(r.Context(), retryDelayForAttempt) {
 				sh.finishResponse("end_turn")
 				return
+			}
+			if sharedRefusal {
+				sharedRefusalWaited += retryDelayForAttempt
+			}
+			if slotReleasedForWait && currentAccount != nil {
+				reacquiredID, acquired := h.tryAcquireTrackedAccount(currentAccount)
+				if !acquired {
+					// Another request took the slot while this one waited. Ending
+					// here is the honest answer: the account is at its limit, and
+					// retrying would either exceed that limit or make the caller
+					// wait through a second gate.
+					slog.Warn("Account became busy during a shared-refusal wait; ending the request",
+						"trace_id", traceID, "account_id", currentAccount.ID, "account", currentAccount.Name)
+					sh.reportRequestFailure("Reporting a busy pool after a shared-refusal wait",
+						"rate_limit", apperrors.PoolBusyMessage, 0)
+					return
+				}
+				trackedAccountID = reacquiredID
 			}
 			attempt++
 		}

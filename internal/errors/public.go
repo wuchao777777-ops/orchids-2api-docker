@@ -24,6 +24,12 @@ func StatusForCategory(category string) int {
 	switch category {
 	case "quota_exhausted", "rate_limit":
 		return http.StatusTooManyRequests
+	case "upstream_unavailable":
+		// The upstream's own service is down for this model. It is not the
+		// caller's rate limit and not this gateway's fault, so it is answered as
+		// a temporarily unavailable upstream rather than as a 429 that tells the
+		// caller to stop sending requests.
+		return http.StatusServiceUnavailable
 	case "auth", "auth_blocked":
 		return http.StatusUnauthorized
 	case "client":
@@ -56,6 +62,8 @@ func messageForCategory(category string) string {
 		return "The available upstream accounts have exhausted their quota. Retry after the quota resets or add capacity."
 	case "rate_limit":
 		return "The available upstream accounts are rate-limited. Retry after the cooldown."
+	case "upstream_unavailable":
+		return "The upstream service for this model is temporarily unavailable. Retry after the indicated delay."
 	case "model_unavailable":
 		return "The requested model is unavailable for the selected upstream accounts."
 	case "client":

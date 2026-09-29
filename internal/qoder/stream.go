@@ -300,6 +300,11 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 				// for, so the retry comes back before the queue has cleared.
 				busyErr := fmt.Errorf("%w: %s", ErrBusy, detail)
 				streamErr = &attemptStreamError{err: busyErr, busy: true, retryable: true, wait: busyWait("", []byte(envelope.Body))}
+			case IsDailyCountExceeded(detail, envelope.Body):
+				// The account's daily request count is spent. The credential is
+				// valid and the 401/403 envelope must not be read as a rejection of
+				// it: only another account or the next reset can serve this request.
+				streamErr = &attemptStreamError{err: fmt.Errorf("%w: %s", ErrDailyCountExceeded, detail), retryable: true}
 			case isDuplicateRequest(detail, envelope.Body):
 				// Replaying the same signed body/request id cannot repair an
 				// idempotency conflict; it only creates a retry storm.

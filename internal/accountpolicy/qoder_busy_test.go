@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
 )
 
@@ -121,5 +122,111 @@ func TestClassifyGlobalRefusalIgnoresAnUnusableHint(t *testing.T) {
 				t.Errorf("retryable=%v switch=%v, want a wait on the same account", verdict.Retryable, verdict.SwitchAccount)
 			}
 		})
+	}
+}
+
+// TestRetryLoopAndAccountPolicyAgreeOnSwitching pins the two classifiers
+// together. The retry loop reads the state decision from the policy verdict but
+// used to read the switch decision from internal/errors, and for Qoder's
+// 401-shaped 10605 refusal the two disagreed: the policy said "wait on this
+// account", the error class said "switch", so the handler walked the request
+// across the pool and answered the client with an authentication failure.
+func TestRetryLoopAndAccountPolicyAgreeOnSwitching(t *testing.T) {
+	acc := &store.Account{ID: 22, AccountType: "qoder", Enabled: true}
+	for name, message := range map[string]string{
+		"credential-shaped 10605": productionQoderBusyMessage,
+		"classified busy form":    "qoder gateway is busy: serviceAvailable=false retryAfterSeconds=29",
+		"401 envelope with 10605": `qoder gateway is busy: qoder API error: status=401, method=POST, path=/algo/api/v2/chat, code=10605, message={"isQueued":true,"queueCount":0,"serviceAvailable":false}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			verdict := Classify(acc, qoderBusyError{message: message, wait: 30 * time.Second}, "qwen3.8-flash")
+			class := apperrors.ClassifyUpstreamError(message)
+
+			if verdict.SwitchAccount != class.SwitchAccount {
+				t.Fatalf("switch disagreement: policy=%v classifier=%v for %q", verdict.SwitchAccount, class.SwitchAccount, message)
+			}
+			if verdict.SwitchAccount {
+				t.Error("a refusal every account meets must not rotate the pool")
+			}
+			if verdict.Status != "" {
+				t.Errorf("status = %q, want none: nothing about this account is wrong", verdict.Status)
+			}
+		})
+	}
+}
+
+// TestGlobalRefusalSurvivesEscapedNesting is the regression test for the dead
+// markers. The payload arrives as a JSON string nested inside another one, so
+// the text holds `\"isQueued\":true`; searching it for `"isqueued":true` never
+// matched, and the classification survived only because the bare "10605" digits
+// sat in the same string. A closed gate reported without those digits was read
+// as an account-level rate limit: the account was parked as "429" for 30s and
+// the pool rotated, which is how the whole pool drained.
+func TestGlobalRefusalSurvivesEscapedNesting(t *testing.T) {
+	acc := &store.Account{ID: 22, AccountType: "qoder", Enabled: true}
+	// No 10605 anywhere: the verdict has to come from the escaped flags.
+	escaped := `qoder upstream rejected the credential: {"message":"{\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"waitTime\":30}"}`
+	verdict := Classify(acc, qoderBusyError{message: escaped, wait: 30 * time.Second}, "qwen3.8-flash")
+
+	if verdict.Status != "" {
+		t.Fatalf("status = %q, want none: an escaped closed gate is not this account's rate limit", verdict.Status)
+	}
+	if verdict.Scope == ScopeAccount || verdict.Scope == ScopeCredential {
+		t.Fatalf("scope = %q, want a scope that does not hold the account", verdict.Scope)
+	}
+	if verdict.Cooldown != 0 {
+		t.Fatalf("cooldown = %v, want 0 so no account or model state is written", verdict.Cooldown)
+	}
+	if verdict.SwitchAccount {
+		t.Fatal("SwitchAccount = true; rotating multiplies one shared refusal")
+	}
+}
+
+// TestDeadCredentialStillRotates guards the other direction of the same wiring.
+// The retry loop now reads the switch decision from the verdict, so a verdict
+// that forgets to ask for rotation would retry a credential the upstream has
+// already rejected, four times, on every request.
+func TestDeadCredentialStillRotates(t *testing.T) {
+	acc := &store.Account{ID: 22, AccountType: "qoder", Enabled: true}
+	const refused = "upstream API error: status=401, message=invalid credential"
+
+	verdict := Classify(acc, errors.New(refused), "qwen3.8-flash")
+	class := apperrors.ClassifyUpstreamError(refused)
+
+	if verdict.Status != "401" {
+		t.Fatalf("status = %q, want 401", verdict.Status)
+	}
+	if !verdict.SwitchAccount {
+		t.Error("SwitchAccount = false; a refused credential must let the pool try another account")
+	}
+	if !verdict.NeedsLogin {
+		t.Error("NeedsLogin = false; waiting cannot repair a credential the upstream retired")
+	}
+	if verdict.SwitchAccount != class.SwitchAccount {
+		t.Fatalf("switch disagreement: policy=%v classifier=%v", verdict.SwitchAccount, class.SwitchAccount)
+	}
+}
+
+// TestModelCooldownKindTravelsWithTheVerdict pins the label the pool reads back
+// later. The verdict is the only place that knows whether a cooled model is
+// throttled or missing from the account's plan, and the selection layer sees only
+// what was stored.
+func TestModelCooldownKindTravelsWithTheVerdict(t *testing.T) {
+	acc := &store.Account{ID: 22, AccountType: "qoder", Enabled: true}
+
+	entitlement := Classify(acc, errors.New("qoder account has no usable plan or allowance; the model requires a subscription"), "ultimate")
+	if entitlement.Scope != ScopeModel {
+		t.Fatalf("scope = %q, want model", entitlement.Scope)
+	}
+	if entitlement.ModelCooldownKind != store.ModelCooldownUnavailable {
+		t.Fatalf("kind = %q, want unavailable for a plan refusal", entitlement.ModelCooldownKind)
+	}
+
+	throttle := Classify(acc, errors.New("qoder model rate limited: code=6004"), "efficient")
+	if throttle.Scope != ScopeModel {
+		t.Fatalf("scope = %q, want model", throttle.Scope)
+	}
+	if throttle.ModelCooldownKind != store.ModelCooldownThrottled {
+		t.Fatalf("kind = %q, want throttled for a frequency limit", throttle.ModelCooldownKind)
 	}
 }

@@ -12,22 +12,54 @@ func TestClassifySharedQueueRefusalDoesNotRotate(t *testing.T) {
 	// the credential, the body says the service is unavailable.
 	const production = `qoder upstream rejected the credential: {"code":"10605","message":"{\"isQueued\":true,\"modelKey\":\"qfmodel\",\"queueCount\":0,\"queueType\":\"p3\",\"retryAfterSeconds\":30,\"serviceAvailable\":false,\"waitTime\":30}"}`
 
-	for name, message := range map[string]string{
-		"production message":      production,
-		"classified busy form":    "qoder gateway is busy: serviceAvailable=false retryAfterSeconds=29",
-		"upstream pool throttled": "qoder API error: the available upstream accounts are rate-limited",
-		"service unavailable":     `qoder upstream error: {"serviceAvailable":false}`,
-		"queued flag":             `qoder upstream error: {"isQueued":true}`,
+	for name, tc := range map[string]struct {
+		message  string
+		category string
+	}{
+		"production message":      {production, "upstream_unavailable"},
+		"classified busy form":    {"qoder gateway is busy: serviceAvailable=false retryAfterSeconds=29", "upstream_unavailable"},
+		"upstream pool throttled": {"qoder API error: the available upstream accounts are rate-limited", "rate_limit"},
+		"service unavailable":     {`qoder upstream error: {"serviceAvailable":false}`, "upstream_unavailable"},
+		"queued flag":             {`qoder upstream error: {"isQueued":true}`, "rate_limit"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			class := ClassifyUpstreamError(message)
-			if class.Category != "rate_limit" {
-				t.Errorf("category = %q, want rate_limit", class.Category)
+			class := ClassifyUpstreamError(tc.message)
+			if class.Category != tc.category {
+				t.Errorf("category = %q, want %q", class.Category, tc.category)
 			}
 			if class.SwitchAccount {
 				t.Error("SwitchAccount = true; every account meets the identical refusal")
 			}
 		})
+	}
+}
+
+// TestClassifyEscapedMarkersSurviveNesting is the regression test for the
+// dead-marker bug: Qoder's payload reaches the classifier as a JSON string
+// nested inside another one, so the text holds `\"isQueued\":true`. Searching it
+// for `"isqueued":true` never matched, and the shared refusal stayed classified
+// only because the bare "10605" digits happened to sit in the same string. A
+// closed gate reported without those digits was read as a credential problem.
+func TestClassifyEscapedMarkersSurviveNesting(t *testing.T) {
+	// No 10605 anywhere: the classification has to come from the escaped flags.
+	const escapedNoCode = `qoder upstream rejected the credential: {"message":"{\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"waitTime\":30}"}`
+	class := ClassifyUpstreamError(escapedNoCode)
+	if class.Category != "upstream_unavailable" {
+		t.Fatalf("category = %q, want upstream_unavailable for an escaped closed-gate payload", class.Category)
+	}
+	if class.SwitchAccount {
+		t.Fatal("SwitchAccount = true; a closed gate is identical for every account")
+	}
+
+	// The same flags under an explicit 401 envelope, which is how Qoder reports
+	// 10605: the credential branch used to win and the handler rotated the pool.
+	escapedUnder401 := `qoder gateway is busy: qoder API error: status=401, method=POST, path=/algo/api/v2/chat, code=10605, message={\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"retryAfterSeconds\":30}`
+	class = ClassifyUpstreamError(escapedUnder401)
+	if class.Category != "upstream_unavailable" {
+		t.Fatalf("category = %q, want upstream_unavailable; a 401 envelope must not outrank the shared refusal", class.Category)
+	}
+	if class.SwitchAccount {
+		t.Fatal("SwitchAccount = true; the 401 envelope made the handler rotate the whole pool")
 	}
 }
 

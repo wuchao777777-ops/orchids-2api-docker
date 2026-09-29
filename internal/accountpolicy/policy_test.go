@@ -406,3 +406,79 @@ func TestIsCreditExhaustion_SeparatesTheTwoRefusals(t *testing.T) {
 		}
 	}
 }
+
+// hintedError reproduces the shape production actually delivers: the channel's
+// own error type carries the upstream's retry hint, which is what let the generic
+// retry-after branch outrank the credit-exhaustion verdict.
+type hintedError struct {
+	message string
+	wait    time.Duration
+}
+
+func (e hintedError) Error() string             { return e.message }
+func (e hintedError) RetryAfter() time.Duration { return e.wait }
+
+// TestClassify_SpentBalanceOutranksTheRetryHint is the regression test for the
+// WorkBuddy free-only state being lost in production while the unit tests stayed
+// green.
+//
+// The channel reports a spent balance as business code 14018 under a 429, and its
+// error type implements RetryAfter() -- so the generic retry-after branch parked
+// the account as an ordinary rate limit. A plain 429 is re-admitted as fully
+// capable when its cooldown elapses, which is how a metered request reached an
+// account with nothing left to spend.
+func TestClassify_SpentBalanceOutranksTheRetryHint(t *testing.T) {
+	production := `workbuddy API error: status=429, message={"error":{"data":{"code":14018,` +
+		`"msg":"Credits exhausted. Please visit the link below to purchase add-on packs and ` +
+		`get more credits: https://www.codebuddy.ai/profile/usage ","requestId":"dedb18a9"}}}`
+
+	for name, wait := range map[string]time.Duration{"with a retry hint": 30 * time.Second, "with no hint": 0} {
+		t.Run(name, func(t *testing.T) {
+			acc := &store.Account{ID: 60, AccountType: "workbuddy", Enabled: true}
+			verdict := Classify(acc, hintedError{message: production, wait: wait}, "hy3")
+
+			if verdict.Status != store.AccountStatusWorkBuddyQuotaExhausted {
+				t.Fatalf("status = %q, want the WorkBuddy free-only state; the retry hint must not outrank a spent balance", verdict.Status)
+			}
+			if verdict.Scope != ScopeAccount {
+				t.Fatalf("scope = %v, want account", verdict.Scope)
+			}
+			verdict.Apply(acc)
+			if AccountHeld(acc, time.Now()) {
+				t.Fatal("a spent account must stay selectable for its confirmed free models")
+			}
+		})
+	}
+}
+
+// The other direction: a real throttle that carries a hint must keep its own
+// verdict, or every rate limit would be filed as an exhausted balance.
+func TestClassify_PlainThrottleKeepsItsRetryHint(t *testing.T) {
+	acc := &store.Account{ID: 60, AccountType: "workbuddy", Enabled: true}
+	verdict := Classify(acc, hintedError{
+		message: "workbuddy API error: status=429, message=too many requests, please slow down",
+		wait:    2 * time.Minute,
+	}, "hy3")
+
+	if verdict.Status != "429" {
+		t.Fatalf("status = %q, want 429", verdict.Status)
+	}
+	if verdict.Cooldown != 2*time.Minute {
+		t.Fatalf("cooldown = %v, want the upstream hint", verdict.Cooldown)
+	}
+}
+
+// A spent balance is also not a payment refusal: it must not be answered as a
+// per-request 402 hold, which parks the whole account for a day without leaving
+// its free tier reachable.
+func TestClassify_SpentBalanceOnQoderKeepsTheFreeTierState(t *testing.T) {
+	acc := &store.Account{ID: 16, AccountType: "qoder", Enabled: true}
+	verdict := Classify(acc, hintedError{
+		message: "qoder API error: status=429, message=no AI credits remaining",
+		wait:    30 * time.Second,
+	}, "qwen3.8-flash")
+
+	if verdict.Status != store.AccountStatusQoderQuotaExhausted {
+		t.Fatalf("status = %q, want the Qoder free-tier state", verdict.Status)
+	}
+}

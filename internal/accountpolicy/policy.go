@@ -69,6 +69,12 @@ type Verdict struct {
 	Cooldown time.Duration
 	// Model names the model the verdict is scoped to, when Scope is ScopeModel.
 	Model string
+	// ModelCooldownKind is what a ScopeModel cooldown means: a throttle that
+	// clears by waiting, or a plan the account does not have. It is stored beside
+	// the deadline because the selection layer cannot see the request that
+	// recorded it, and the kind is what decides whether an emptied pool is
+	// answered with "retry later" or with "this model is not available here".
+	ModelCooldownKind store.ModelCooldownReason
 	// At is when the result was observed; it anchors the cooldown.
 	At time.Time
 }
@@ -177,9 +183,12 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 	// A plan/allowance refusal is about this account and this model, not the
 	// caller's input or the credential itself. Cool down only this pairing and
 	// allow the request to try another account with the required entitlement.
+	// The cooldown is labelled as an entitlement so the pool can answer an
+	// emptied one with "not available here" instead of "retry later".
 	if strings.EqualFold(accountType(acc), "qoder") && strings.Contains(lower, "no usable plan or allowance") {
 		return Verdict{Scope: ScopeModel, Message: message, Model: model,
-			Retryable: true, SwitchAccount: true, Cooldown: CooldownPayment, At: now}
+			Retryable: true, SwitchAccount: true, Cooldown: CooldownPayment,
+			ModelCooldownKind: store.ModelCooldownUnavailable, At: now}
 	}
 
 	// A queue/service refusal that names the whole upstream rather than this
@@ -243,6 +252,20 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 		}
 	}
 
+	// A spent balance is a fact about the account, and it has to be decided before
+	// the generic retry-after branch below. WorkBuddy reports it as business code
+	// 14018 ("Credits exhausted") under a 429, and its error type implements
+	// RetryAfter() — so the generic branch won, parked the account as an ordinary
+	// rate limit, and dropped the free-only capability state that is the only
+	// reason such an account stays in the pool. Production then dispatched metered
+	// traffic to an account with nothing left to spend, because a plain 429 is
+	// re-admitted as fully capable once its cooldown elapses.
+	if apperrors.IsCreditExhaustion(lower) {
+		if verdict, ok := creditExhaustionVerdict(acc, message, err, now); ok {
+			return verdict
+		}
+	}
+
 	var retryAfter retryAfterError
 	if stderrors.As(err, &retryAfter) {
 		cooldown := retryAfter.RetryAfter()
@@ -266,20 +289,28 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 			Retryable:     Retryable(err),
 			SwitchAccount: true,
 			Cooldown:      CooldownRateLimit,
-			At:            now,
+			// Most model-scoped complaints are a frequency limit that a wait
+			// clears; the plan ones are not, and the pool needs to know which.
+			ModelCooldownKind: modelCooldownKindFor(lower),
+			At:                now,
 		}
 	}
 
 	switch apperrors.ClassifyAccountStatus(message) {
 	case "401":
 		return Verdict{
-			Status:     "401",
-			Message:    credentialMessage(acc, message),
-			Scope:      ScopeCredential,
-			Retryable:  Retryable(err),
-			NeedsLogin: true,
-			Cooldown:   CredentialReverify,
-			At:         now,
+			Status:    "401",
+			Message:   credentialMessage(acc, message),
+			Scope:     ScopeCredential,
+			Retryable: Retryable(err),
+			// A refused credential cannot serve this request, and the pool may
+			// hold another one that can. The switch decision is read from this
+			// verdict, so it has to say so here rather than leaving callers to
+			// infer it from a second classifier.
+			SwitchAccount: true,
+			NeedsLogin:    true,
+			Cooldown:      CredentialReverify,
+			At:            now,
 		}
 	case "403", "404":
 		cooldown := CooldownBlocked
@@ -293,26 +324,18 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 			Cooldown: cooldown, At: now,
 		}
 	case "402":
-		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "qoder") && apperrors.IsCreditExhaustion(message) {
-			return Verdict{
-				Status: store.AccountStatusQoderQuotaExhausted, Message: message,
-				Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
-				At: now,
-			}
-		}
-		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "workbuddy") && apperrors.IsCreditExhaustion(message) {
-			return Verdict{
-				Status: store.AccountStatusWorkBuddyQuotaExhausted, Message: message,
-				Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
-				At: now,
-			}
-		}
-		// An exhausted allowance is a fact about the whole account's metered
-		// refuses it whatever the model is asked for, so leaving it in rotation is
-		// what made every request retry a pool of dead accounts and return an error
-		// with nothing in the account table to explain it. Parking it stops the
-		// retries and puts the reason in front of the operator; isAccountAvailable
-		// honours QuotaResetAt, so the account returns when its allowance does.
+		// A spent balance on a channel that has a free tier was already decided
+		// above, whatever HTTP status or retry hint carried it. What remains here is
+		// a per-request payment refusal ("insufficient credits for model"), which is
+		// not a verdict about the account's whole balance, and the older persisted
+		// "402" marker.
+		//
+		// An exhausted allowance is still a fact about the whole account within this
+		// case: leaving it in rotation is what made every request retry a pool of
+		// dead accounts and return an error with nothing in the account table to
+		// explain it. Parking it stops the retries and puts the reason in front of
+		// the operator; isAccountAvailable honours QuotaResetAt, so the account
+		// returns when its allowance does.
 		//
 		// This is also the release path for a "402" persisted under the old rule,
 		// which held nothing: such a marker is now held, but only until the reset
@@ -336,6 +359,29 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 		Status: "", Message: "",
 		Scope: ScopeNone, Retryable: Retryable(err), SwitchAccount: true,
 		At: now,
+	}
+}
+
+// creditExhaustionVerdict maps a spent balance onto the capability state of the
+// channels that have one. They keep such an account in the pool for their free
+// tier instead of parking it outright, which is exactly why the distinction from
+// a plain rate limit matters: a plain 429 is re-admitted as fully capable as soon
+// as its cooldown elapses, so metered traffic reaches an account with nothing left
+// to spend.
+func creditExhaustionVerdict(acc *store.Account, message string, err error, at time.Time) (Verdict, bool) {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(accountType(acc)), "workbuddy"):
+		return Verdict{
+			Status: store.AccountStatusWorkBuddyQuotaExhausted, Message: message,
+			Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true, At: at,
+		}, true
+	case strings.EqualFold(strings.TrimSpace(accountType(acc)), "qoder"):
+		return Verdict{
+			Status: store.AccountStatusQoderQuotaExhausted, Message: message,
+			Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true, At: at,
+		}, true
+	default:
+		return Verdict{}, false
 	}
 }
 
@@ -368,13 +414,41 @@ func isClientRefusal(lower string) bool {
 //     down for the model
 //   - "available upstream accounts are rate-limited" -- the upstream saying its
 //     own account pool is throttled, not ours
-func isGlobalUpstreamRefusal(lower string) bool {
-	return strings.Contains(lower, "qoder gateway is busy") ||
-		strings.Contains(lower, "available upstream accounts are rate-limited") ||
-		strings.Contains(lower, "available upstream accounts are rate limited") ||
-		strings.Contains(lower, "10605") ||
-		strings.Contains(lower, `"serviceavailable":false`) ||
-		strings.Contains(lower, `"isqueued":true`)
+//
+// The quoted markers are matched against the text with JSON escaping removed.
+// Qoder's payload reaches us as a JSON string nested inside another one, so the
+// haystack holds `\"isqueued\":true`; searching it for `"isqueued":true` never
+// matched, and the classification survived only because the bare "10605" digits
+// happened to be in the same string.
+func isGlobalUpstreamRefusal(text string) bool {
+	text = strings.ReplaceAll(strings.ToLower(text), `\`, "")
+	return strings.Contains(text, "qoder gateway is busy") ||
+		strings.Contains(text, "available upstream accounts are rate-limited") ||
+		strings.Contains(text, "available upstream accounts are rate limited") ||
+		strings.Contains(text, "10605") ||
+		strings.Contains(text, `"serviceavailable":false`) ||
+		strings.Contains(text, `"isqueued":true`)
+}
+
+// isEntitlementRefusal reports a model-scoped refusal that no amount of waiting
+// changes, because the account's plan does not include the model. The pool stores
+// this beside the cooldown so an emptied pool can be answered as "not available
+// here" rather than as "temporarily rate-limited".
+func isEntitlementRefusal(lower string) bool {
+	return strings.Contains(lower, "no usable plan or allowance") ||
+		strings.Contains(lower, "not subscribed to required model plan") ||
+		strings.Contains(lower, "only available via cline product surfaces") ||
+		(strings.Contains(lower, "http 403") && strings.Contains(lower, "entitlement"))
+}
+
+// modelCooldownKindFor labels a model-scoped cooldown with what it means. A
+// missing label would leave the pool guessing from the deadline alone, so every
+// model-scoped verdict is labelled here.
+func modelCooldownKindFor(lower string) store.ModelCooldownReason {
+	if isEntitlementRefusal(lower) {
+		return store.ModelCooldownUnavailable
+	}
+	return store.ModelCooldownThrottled
 }
 
 // isModelScopedFailure reports whether the message blames a model rather than

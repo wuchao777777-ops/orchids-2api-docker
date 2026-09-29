@@ -2,6 +2,7 @@ package loadbalancer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -96,11 +97,33 @@ func (lb *LoadBalancer) SetConnTracker(ct ConnTracker) {
 	lb.connTracker = ct
 }
 
+// AccountFilter decides whether one candidate may serve the request. A nil error
+// accepts it; a non-nil one withholds it and says why, because the reason is what
+// an emptied pool has to report. A throttle means "come back later" and a plan
+// that does not cover the model means "this will never work here"; the pool
+// cannot tell those apart from the outside, and only the filter knows.
+type AccountFilter func(*store.Account) error
+
+// The model-cooldown verdicts a filter can hand back. They are not failures:
+// they are the reason a candidate was withheld.
+var (
+	// RejectModelThrottled withholds a candidate that is cooling down for this
+	// model after the upstream asked for a pause.
+	RejectModelThrottled = errors.New("model is cooling down on this account")
+	// RejectModelUnavailable withholds a candidate whose plan does not cover the
+	// model at all.
+	RejectModelUnavailable = errors.New("model is not covered by this account's plan")
+	// ErrAccountNotEligible withholds a candidate for one of the caller's other
+	// rules (a catalog mismatch, a free-model requirement). The pool does not name
+	// it, so an emptied pool keeps its existing wording for that shape.
+	ErrAccountNotEligible = errors.New("account not eligible for this request")
+)
+
 func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTracker(ctx context.Context, excludeIDs []int64, channel string, tracker ConnTracker) (*store.Account, error) {
 	return lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, channel, tracker, nil)
 }
 
-func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx context.Context, excludeIDs []int64, channel string, tracker ConnTracker, filter func(*store.Account) bool) (*store.Account, error) {
+func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx context.Context, excludeIDs []int64, channel string, tracker ConnTracker, filter AccountFilter) (*store.Account, error) {
 	accounts, err := lb.getEnabledAccounts(ctx)
 	if err != nil {
 		return nil, err
@@ -114,6 +137,12 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 	channelMatched := 0
 	rateLimitedUnavailable := 0
 	allowanceParked := 0
+	// Among the candidates the caller's filter withheld, what did it say? The
+	// answer decides whether an empty pool invites a retry or reports a model no
+	// matching account can serve.
+	filterWithheld := 0
+	filterThrottled := 0
+	filterUnavailable := 0
 	for _, id := range excludeIDs {
 		excludeSet[id] = true
 	}
@@ -145,6 +174,7 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 		// two (and flip which reason is reported for an empty one).
 		channelCandidates, channelMatched = 0, 0
 		rateLimitedUnavailable, allowanceParked = 0, 0
+		filterWithheld, filterThrottled, filterUnavailable = 0, 0, 0
 		for _, acc := range candidates {
 			if excludeSet[acc.ID] {
 				continue
@@ -163,8 +193,17 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 			// request's model filter rejected all of them" is the whole reason the
 			// pool is empty, and it is reported below.
 			channelCandidates++
-			if filter != nil && !filter(acc) {
-				continue
+			if filter != nil {
+				if rejectErr := filter(acc); rejectErr != nil {
+					filterWithheld++
+					switch {
+					case errors.Is(rejectErr, RejectModelUnavailable):
+						filterUnavailable++
+					case errors.Is(rejectErr, RejectModelThrottled):
+						filterThrottled++
+					}
+					continue
+				}
 			}
 			channelMatched++
 			if !lb.isAccountAvailable(ctx, acc) {
@@ -203,6 +242,17 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 		// could see neither the reason nor the split.
 		switch {
 		case channel != "" && channelCandidates > 0 && channelMatched == 0:
+			// The caller's filter withheld every candidate, and the reason it gave
+			// decides the answer. "Cooling down" invites a retry; a plan that does
+			// not cover the model never becomes true by waiting. Reporting the
+			// second as the first is what answered a plan refusal with "the
+			// requested model is temporarily rate-limited".
+			switch {
+			case filterUnavailable > 0 && filterThrottled == 0 && filterUnavailable == filterWithheld:
+				return nil, fmt.Errorf("no enabled accounts available for channel: %s (the requested model is not covered by any matching account's plan)", channel)
+			case filterThrottled > 0 && filterUnavailable > 0:
+				return nil, fmt.Errorf("no enabled accounts available for channel: %s (the requested model is cooling down on some matching accounts and not covered by the plans of the rest)", channel)
+			}
 			// The caller's filter (a per-model cooldown) rejected every candidate.
 			return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are cooling down for the requested model)", channel)
 		case channel != "" && channelMatched > 0 && rateLimitedUnavailable == channelMatched:

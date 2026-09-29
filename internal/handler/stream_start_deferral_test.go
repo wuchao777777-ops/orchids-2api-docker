@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -109,7 +110,7 @@ func TestKeepAliveDoesNotCommitSilentStream(t *testing.T) {
 	if rec.buf.Len() != 0 || sh.hasCommitted() {
 		t.Fatalf("keep-alive prematurely opened response: %q", rec.buf.String())
 	}
-	sh.reportRequestFailure("queue refused", "rate_limit", "Qoder model queue unavailable")
+	sh.reportRequestFailure("queue refused", "rate_limit", "Qoder model queue unavailable", 0)
 	if !strings.Contains(rec.buf.String(), "Qoder model queue unavailable") || strings.Contains(rec.buf.String(), "event: message_start") {
 		t.Fatalf("queue failure was not returned as HTTP error: %q", rec.buf.String())
 	}
@@ -153,8 +154,10 @@ func TestTerminalOnlyResponseStillOpensTheStream(t *testing.T) {
 }
 
 // TestSharedRefusalBeforeOutputUsesRetryWindow confirms that the server keeps
-// the same request open through its bounded retry window. If the upstream does
-// not recover, it returns an HTTP 429 without opening an SSE stream.
+// the same request open through its bounded retry window. The upstream states
+// its own service is unavailable, so the answer is 503 — an upstream fault with
+// the caller's retry hint — and never a 429 claiming this gateway's accounts are
+// rate-limited. Nothing is opened as an SSE stream.
 func TestSharedRefusalBeforeOutputUsesRetryWindow(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 3, RetryDelay: 1}
 	h := NewWithLoadBalancer(cfg, nil)
@@ -172,15 +175,46 @@ func TestSharedRefusalBeforeOutputUsesRetryWindow(t *testing.T) {
 
 	h.HandleMessages(rec, req)
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}
 	out := rec.Body.String()
 	if strings.Contains(out, "event: error") || strings.Contains(out, "data:") {
 		t.Fatalf("an uncommitted stream must not answer with SSE frames: %s", out)
 	}
+	if !strings.Contains(out, "upstream_unavailable") {
+		t.Fatalf("body = %s, want the upstream_unavailable answer", out)
+	}
 	// Initial request plus the three configured retry probes.
 	if stub.calls != 4 {
 		t.Fatalf("upstream attempts = %d, want 4 (initial request plus retry budget)", stub.calls)
+	}
+}
+
+// TestSharedRefusalWaitBudgetIsBounded pins the ceiling on the shared-refusal
+// retry wait. Production spent a p50 of 104s in this loop (max 124s) and then
+// answered, while clients gave up at ~125s: the wait has to stop before the
+// caller's own patience does.
+func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
+	if sharedRefusalTotalWaitBudget != 60*time.Second {
+		t.Fatalf("budget = %v, want 60s", sharedRefusalTotalWaitBudget)
+	}
+	for _, tc := range []struct {
+		name    string
+		already time.Duration
+		next    time.Duration
+		want    bool
+	}{
+		{"first window fits", 0, 30 * time.Second, true},
+		{"second window fits exactly", 30 * time.Second, 30 * time.Second, true},
+		{"third window does not", 60 * time.Second, 30 * time.Second, false},
+		{"a window that would overrun is refused", 40 * time.Second, 30 * time.Second, false},
+		{"nothing to wait for is not a wait", 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sharedRefusalWaitAllowed(tc.already, tc.next); got != tc.want {
+				t.Fatalf("sharedRefusalWaitAllowed(%v, %v) = %v, want %v", tc.already, tc.next, got, tc.want)
+			}
+		})
 	}
 }

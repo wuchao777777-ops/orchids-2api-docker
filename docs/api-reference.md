@@ -43,3 +43,15 @@ curl http://127.0.0.1:3002/v1/chat/completions \
 模型刷新示例（需已登录的管理会话）：`POST /api/models/refresh`，JSON 请求体 `{"channel":"qoder"}`。只有成功读取上游目录时才同步；读取失败会保留原有目录，不回退到内置模型。不同通道的上游目录分别来自 WorkBuddy `/v3/config`、Qoder `/algo/api/v2/model/list`、Cline `/ai/cline/recommended-models`（免费推荐列表）和 Grok Build `/v1/models`。
 
 API Key 可设置允许模型、限速和过期策略；请求报错时先检查 Key、账号状态、模型目录与上游响应。更多配置见 [配置说明](configuration.md)。
+
+## 请求失败时客户端看到的状态
+
+账号池无法受理请求时，状态码取决于原因，不再一律按限流返回：
+
+| 情况 | 状态 | 说明 |
+|---|---|---|
+| 账号额度耗尽、并发打满、模型处于限流冷却 | `429` | 等待后重试可能成功 |
+| 请求的模型不在该通道任何匹配账号的套餐内 | `404` | 套餐不会因等待改变，换模型或补账号 |
+| 上游自述该模型服务当前不可用（如 Qoder `serviceAvailable:false`） | `503` | 带 `Retry-After` 头说明何时可重试 |
+
+模型级冷却的原因随冷却一起持久化在账号的 `model_cooldown_reasons` 字段（`throttled` / `unavailable`），冷却过期时原因一并清除；选择账号时据此区分"稍后重试"与"这里不可用"。该字段是新增的并列字段，`model_cooldowns` 的结构未变。

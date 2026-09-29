@@ -24,6 +24,11 @@ const (
 	PoolClineInferenceCapMessage = "Request failed: this Cline account reached its inference cap and is cooling down. Please wait for the cap window to pass or add another Cline account."
 	// PoolRateLimitedMessage answers a pool every account of which is cooling down.
 	PoolRateLimitedMessage = "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account."
+	// PoolUpstreamUnavailableMessage answers a model whose upstream service is
+	// down for everyone. It must not be answered as a rate limit: the caller's
+	// own traffic is not the problem, and "our accounts are rate-limited" sent
+	// operators looking at the account table while the upstream was the fault.
+	PoolUpstreamUnavailableMessage = "Request failed: the upstream service for this model is temporarily unavailable. Retry after the delay indicated by the upstream."
 	// PoolBusyMessage answers a pool whose accounts are all serving other requests.
 	PoolBusyMessage = "Request failed: every account for this channel is busy with other requests. Please retry shortly."
 	// PoolModelUnavailableMessage answers a request for a model the channel's
@@ -74,6 +79,13 @@ func ClassifyPoolExhaustion(selectErr error, lastErr string) PoolExhaustion {
 	switch {
 	case IsCreditExhaustion(lowerLastErr) || strings.Contains(lowerSelect, "exhausted their allowance"):
 		return PoolExhaustion{Category: "quota_exhausted", Message: PoolAllowanceMessage}
+	// A plan/entitlement refusal is not a rate limit: the credential works and
+	// the account simply does not cover the model. Answering it with "retry
+	// after the cooldown" told clients to retry a condition that only a plan
+	// change on the upstream side can fix.
+	case strings.Contains(lowerLastErr, "no usable plan or allowance") ||
+		strings.Contains(lowerLastErr, "not subscribed to required model plan"):
+		return PoolExhaustion{Category: "model_unavailable", Message: PoolModelUnavailableMessage}
 	case strings.Contains(lowerLastErr, "cline inference cap reached"):
 		// The inference cap holds the whole account for the duration the
 		// upstream stated, not one model, so it gets its own answer.
@@ -84,12 +96,24 @@ func ClassifyPoolExhaustion(selectErr error, lastErr string) PoolExhaustion {
 		return PoolExhaustion{Category: "rate_limit", Message: PoolQoderModelMessage}
 	case strings.Contains(lowerSelect, "cooling down for the requested model"):
 		return PoolExhaustion{Category: "rate_limit", Message: PoolModelCooldownMessage}
+	case strings.Contains(lowerSelect, "not covered by any matching account's plan"):
+		// Every account of this channel carries a model cooldown, and every one of
+		// those cooldowns is a plan verdict rather than a throttle. Waiting cannot
+		// change a plan, so the client is told the model is unavailable here
+		// instead of being invited to retry it.
+		return PoolExhaustion{Category: "model_unavailable", Message: PoolModelUnavailableMessage}
+	case strings.Contains(lowerSelect, "cooling down on some matching accounts"):
+		// Part of the pool only needs a wait, so a retry can still work — and
+		// another model always does.
+		return PoolExhaustion{Category: "rate_limit", Message: PoolModelCooldownMessage}
 	case strings.Contains(lowerSelect, "rate-limited or cooling down"):
 		return PoolExhaustion{Category: "rate_limit", Message: PoolRateLimitedMessage}
 	case strings.Contains(lowerSelect, "concurrency limit"):
 		return PoolExhaustion{Category: "rate_limit", Message: PoolBusyMessage}
 	case strings.Contains(lowerSelect, "is not available in the current") && strings.Contains(lowerSelect, "account pool"):
 		return PoolExhaustion{Category: "model_unavailable", Message: PoolModelUnavailableMessage}
+	case ClassifyUpstreamError(lastErr).Category == "upstream_unavailable":
+		return PoolExhaustion{Category: "upstream_unavailable", Message: PoolUpstreamUnavailableMessage}
 	case ClassifyUpstreamError(lastErr).Category == "rate_limit":
 		return PoolExhaustion{Category: "rate_limit", Message: PoolRateLimitedMessage}
 	}

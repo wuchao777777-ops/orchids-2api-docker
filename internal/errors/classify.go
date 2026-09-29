@@ -208,6 +208,22 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		strings.Contains(lower, "max_token_limit") ||
 		strings.Contains(lower, "duplicate request"):
 		return UpstreamErrorClass{Category: "client"}
+	// A refusal about a resource shared by every account has to be decided before
+	// the HTTP-status branches below. Qoder reports business code 10605 inside a
+	// 401/403 envelope, so the credential branch used to win: a working account's
+	// request was answered as an authentication failure and the handler rotated
+	// through the pool, meeting the identical refusal on every account.
+	case isUpstreamServiceUnavailable(lower):
+		// The service behind the model is down for everyone. Retryable on the
+		// account already held, never switchable, and reported to the client as an
+		// upstream fault (503) with the upstream's own retry hint rather than as
+		// this gateway's rate limit.
+		return UpstreamErrorClass{Category: "upstream_unavailable", Retryable: true}
+	case isSharedUpstreamQueueRefusal(lower):
+		// Qoder's model queue is unavailable (business code 10605). Retryable but
+		// deliberately not switchable: rotating multiplies one shared refusal, so
+		// the request waits out the upstream's window on the account it holds.
+		return UpstreamErrorClass{Category: "rate_limit"}
 	case HasExplicitHTTPStatus(lower, "401") ||
 		strings.Contains(lower, "refresh token is expired") ||
 		strings.Contains(lower, "new browser login is required") ||
@@ -230,12 +246,6 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "quota_exhausted", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "code=6004"):
 		return UpstreamErrorClass{Category: "rate_limit", Retryable: true, SwitchAccount: true}
-	case isSharedUpstreamQueueRefusal(lower):
-		// Qoder business code 10605 means the model queue/service is unavailable,
-		// often with serviceAvailable=false and one shared retry-after hint. It is
-		// not a bad credential and switching through four accounts only multiplies
-		// the same rejected request, so return a rate limit immediately.
-		return UpstreamErrorClass{Category: "rate_limit"}
 	case HasExplicitHTTPStatus(lower, "429") ||
 		strings.Contains(lower, "qoder agent limit reached") ||
 		strings.Contains(lower, "qoder model rate limited") ||
@@ -266,6 +276,18 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	}
 }
 
+// upstreamMarkerText lowercases an error string and removes the JSON escaping
+// backslashes a nested payload carries, so a marker is recognised whether the
+// body reached us as raw JSON or as a JSON string inside one more envelope:
+// both `{"isQueued":true}` and `{\"isQueued\":true}` normalise to the same
+// text. Matching the escaped form directly is what made every quoted marker in
+// this file dead code — the haystack held `\"isqueued\":true`, which does not
+// contain `"isqueued":true`, so only the bare "10605" digits kept the shared
+// refusal classified at all.
+func upstreamMarkerText(text string) string {
+	return strings.ReplaceAll(strings.ToLower(text), `\`, "")
+}
+
 // isSharedUpstreamQueueRefusal reports whether the upstream refused because a
 // resource shared by every account is unavailable.
 //
@@ -276,13 +298,50 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 // and the serviceAvailable:false flag. Falling through to the default branch
 // would label it "unknown" with SwitchAccount=true, which is what turned one
 // shared refusal into a rotation storm across the whole account pool.
-func isSharedUpstreamQueueRefusal(lower string) bool {
-	return strings.Contains(lower, "qoder gateway is busy") ||
-		strings.Contains(lower, "available upstream accounts are rate-limited") ||
-		strings.Contains(lower, "available upstream accounts are rate limited") ||
-		strings.Contains(lower, "10605") ||
-		strings.Contains(lower, `"serviceavailable":false`) ||
-		strings.Contains(lower, `"isqueued":true`)
+func isSharedUpstreamQueueRefusal(text string) bool {
+	text = upstreamMarkerText(text)
+	return strings.Contains(text, "qoder gateway is busy") ||
+		strings.Contains(text, "available upstream accounts are rate-limited") ||
+		strings.Contains(text, "available upstream accounts are rate limited") ||
+		strings.Contains(text, "10605") ||
+		strings.Contains(text, `"serviceavailable":false`) ||
+		strings.Contains(text, `"isqueued":true`)
+}
+
+// isUpstreamServiceUnavailable reports whether the upstream said the service
+// behind the model is down, rather than that it is throttling this caller.
+//
+// Qoder states the difference explicitly: a closed gate arrives as
+// serviceAvailable:false with an empty queue (queueCount:0) plus a
+// "come back in 30s" hint, which is not a capacity verdict about our accounts.
+// Production measured 636 such refusals in one day, every one of them carrying
+// serviceAvailable:false and queueCount:0 — and every one of them was answered
+// to the client as "the available upstream accounts are rate-limited".
+func isUpstreamServiceUnavailable(text string) bool {
+	text = upstreamMarkerText(text)
+	if flagValue(text, "serviceavailable") == "false" {
+		return true
+	}
+	// Some envelopes carry the queue flags without naming the service flag: an
+	// empty queue that is nevertheless refusing is the same closed gate.
+	return flagValue(text, "isqueued") == "true" && flagValue(text, "queuecount") == "0"
+}
+
+// flagValue returns the value token that follows name in an already normalised
+// payload. Matching the field and its value rather than one spelling of the pair
+// keeps every shape working: `"serviceAvailable":false`, `serviceAvailable=false`
+// and a re-rendered or nested copy all read the same.
+func flagValue(text, name string) string {
+	idx := strings.Index(text, name)
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimLeft(text[idx+len(name):], `":= `)
+	end := strings.IndexAny(rest, `,"} `)
+	if end < 0 {
+		end = len(rest)
+	}
+	return rest[:end]
 }
 
 func isClineModelEntitlement(lower string) bool {

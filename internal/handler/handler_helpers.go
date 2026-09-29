@@ -378,29 +378,48 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	// is the one extra channel whose catalog the filter below understands.
 	needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "cline")
 	if needsFilter {
-		return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
+		return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) error {
 			if channel == "cline" && !cline.CatalogSupportsModel(acc.ClineModelIDs, model) {
-				return false
+				return loadbalancer.ErrAccountNotEligible
 			}
-			if honorsModelCooldown(channel) && store.ModelCooldownRemaining(acc, model, time.Now()) != 0 {
-				return false
+			if honorsModelCooldown(channel) {
+				// The verdict that recorded the cooldown travels with it, so an
+				// emptied pool can say whether waiting could ever help.
+				switch store.ModelCooldownKind(acc, model, time.Now()) {
+				case store.ModelCooldownUnavailable:
+					return loadbalancer.RejectModelUnavailable
+				case store.ModelCooldownThrottled:
+					return loadbalancer.RejectModelThrottled
+				}
 			}
 			switch strings.TrimSpace(acc.StatusCode) {
 			case "402":
 				if channel == "qoder" {
-					return qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
+					if qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model) {
+						return nil
+					}
+					return loadbalancer.ErrAccountNotEligible
 				}
 				if channel == "workbuddy" {
-					return workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model)
+					if workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model) {
+						return nil
+					}
+					return loadbalancer.ErrAccountNotEligible
 				}
 			case store.AccountStatusQoderQuotaExhausted:
-				return channel == "qoder" && qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
+				if channel == "qoder" && qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model) {
+					return nil
+				}
+				return loadbalancer.ErrAccountNotEligible
 			case store.AccountStatusWorkBuddyQuotaExhausted:
-				return channel == "workbuddy" && workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model)
+				if channel == "workbuddy" && workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model) {
+					return nil
+				}
+				return loadbalancer.ErrAccountNotEligible
 			default:
-				return true
+				return nil
 			}
-			return false
+			return loadbalancer.ErrAccountNotEligible
 		})
 	}
 	return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
@@ -669,8 +688,36 @@ func shouldRetryCurrentAccountWhenNoAlternative(category string) bool {
 // category/switch pair the classifier produces for that shape, and it is also
 // what tells the retry loop to keep the account it already holds: rotating
 // would meet the identical refusal, so the wait is spent on the same one.
+//
+// upstream_unavailable (the upstream saying its own service is down for the
+// model) belongs here beside the shared queue refusal: both are answerable only
+// by waiting, neither is about the account, and both were previously reported to
+// the client as this gateway's rate limit.
 func isSharedUpstreamRefusalClass(class apperrors.UpstreamErrorClass) bool {
-	return class.Category == "rate_limit" && !class.SwitchAccount
+	if class.SwitchAccount {
+		return false
+	}
+	return class.Category == "rate_limit" || class.Category == "upstream_unavailable"
+}
+
+// sharedRefusalTotalWaitBudget bounds how long one request may wait on a
+// resource every account shares. The upstream's own hint is still honoured per
+// attempt; this only stops a closed gate from holding a caller for minutes.
+//
+// Production spent a p50 of 104s (max 124s) in this loop before answering, and
+// clients started giving up on their own side at ~125s. Sixty seconds still
+// covers two of the 30s windows Qoder advertises, which is where the redeemable
+// part of the wait lives.
+const sharedRefusalTotalWaitBudget = 60 * time.Second
+
+// sharedRefusalWaitAllowed reports whether one more wait of next fits inside the
+// budget already spent on waits of already. It is a plain comparison so the
+// bound can be tested without spending the waits themselves.
+func sharedRefusalWaitAllowed(already, next time.Duration) bool {
+	if next <= 0 {
+		return false
+	}
+	return already+next <= sharedRefusalTotalWaitBudget
 }
 
 // sharedRefusalWaitForChannel preserves Qoder's provider-normalized hint

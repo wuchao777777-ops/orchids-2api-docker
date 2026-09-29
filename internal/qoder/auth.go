@@ -109,7 +109,32 @@ var (
 	// must not be marked dead, because re-authorizing or rotating the token
 	// changes nothing. Only a plan change on the Qoder side fixes it.
 	ErrNoEntitlement = fmt.Errorf("qoder account has no usable plan or allowance; the model requires a subscription")
+	// ErrDailyCountExceeded means the account's daily request count is spent. The
+	// upstream reports it under a 401/403 envelope, exactly like a credential
+	// rejection, but the credential is fine: reading it as unauthorized forced an
+	// OAuth refresh and a replay for an account that could not have been helped
+	// by either.
+	ErrDailyCountExceeded = fmt.Errorf("qoder daily request count is exceeded")
 )
+
+// markerText lowercases an upstream payload and drops the JSON escaping
+// backslashes a nested body carries, so a marker is recognised whether the body
+// arrived as raw JSON or as a JSON string one envelope deeper: `{"isQueued":true}`
+// and `{\"isQueued\":true}` normalise to the same text.
+func markerText(value string) string {
+	return strings.ReplaceAll(strings.ToLower(value), `\`, "")
+}
+
+// IsDailyCountExceeded reports Qoder's per-account daily request-count refusal,
+// whatever envelope carried it.
+func IsDailyCountExceeded(values ...string) bool {
+	for _, value := range values {
+		if strings.Contains(markerText(value), "billing daily count exceeded") {
+			return true
+		}
+	}
+	return false
+}
 
 // Credentials is the device credential pair plus the identity observed at login.
 // RefreshToken is the durable secret; AccessToken is short lived and renewable.
@@ -471,7 +496,7 @@ func apiError(method, rawURL string, status int, raw []byte) error {
 // independent of how many times the gateway nested it.
 func sharedQueueRefusal(values ...string) bool {
 	for _, value := range values {
-		lower := strings.ToLower(value)
+		lower := markerText(value)
 		if strings.Contains(lower, busyCode) ||
 			strings.Contains(lower, `"isqueued":true`) ||
 			strings.Contains(lower, `"serviceavailable":false`) {

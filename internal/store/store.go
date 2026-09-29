@@ -22,6 +22,28 @@ var (
 	ErrApiKeyRateLimited = fmt.Errorf("api key rate limit exceeded")
 )
 
+// ModelCooldownReason says what a per-model cooldown means for the accounts that
+// carry it.
+type ModelCooldownReason string
+
+const (
+	// ModelCooldownThrottled is the upstream asking for a pause on this model.
+	// Waiting is what clears it, so the pool answers "retry later".
+	ModelCooldownThrottled ModelCooldownReason = "throttled"
+	// ModelCooldownUnavailable is this account's plan not covering the model. The
+	// credential is healthy and no wait changes the answer, so the pool answers
+	// "the model is not available on these accounts" instead of inviting a retry
+	// that can only fail the same way.
+	ModelCooldownUnavailable ModelCooldownReason = "unavailable"
+)
+
+// ModelCooldownEntitlementFloor is the remaining cooldown above which a stored
+// deadline with no recorded reason is read as a plan verdict rather than a
+// throttle. It exists for cooldowns written before reasons were stored: the two
+// verdicts that create a handler-path model cooldown hold for 30 seconds and for
+// a day, so anything still running after an hour cannot be the throttle.
+const ModelCooldownEntitlementFloor = time.Hour
+
 type Account struct {
 	ID            int64   `json:"id"`
 	Name          string  `json:"name"`
@@ -113,6 +135,18 @@ type Account struct {
 	// other models of the same account are still usable, so the verdict is scoped
 	// to this map instead of StatusCode.
 	ModelCooldowns map[string]time.Time `json:"model_cooldowns,omitempty"`
+	// ModelCooldownReasons records why each of those cooldowns exists, keyed by
+	// the same model name: a throttle the upstream asked us to back off from, or
+	// a plan verdict that no amount of waiting changes. The selection layer needs
+	// the difference — it cannot see the request that recorded the cooldown — to
+	// answer "retry later" instead of "this model is not available on these
+	// accounts", and vice versa.
+	//
+	// It is a sibling map rather than a richer value inside ModelCooldowns on
+	// purpose: the deadline map keeps the exact JSON shape earlier binaries wrote
+	// and read, so rolling the gateway back cannot turn every account that
+	// carries a cooldown into an undecodable document.
+	ModelCooldownReasons map[string]ModelCooldownReason `json:"model_cooldown_reasons,omitempty"`
 
 	// WorkBuddyAccessToken is the short-lived Keycloak bearer token of a
 	// WorkBuddy (www.workbuddy.ai) account. WorkBuddyRefreshToken is the

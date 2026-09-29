@@ -800,6 +800,13 @@ func classifyStatus(status int, retryAfter string, raw []byte) error {
 	if code == busyCode || sharedQueueRefusal(detail, string(raw)) {
 		return &attemptStreamError{err: fmt.Errorf("%w: %v", ErrBusy, wrapped), busy: true, retryable: true, wait: busyWait(retryAfter, raw)}
 	}
+	// The daily request count is spent, and the gateway reports that under the
+	// same 401/403 envelope it uses for a rejected credential. Reading it as an
+	// authentication failure rotated the account's OAuth token and replayed the
+	// request for a credential that was never the problem.
+	if IsDailyCountExceeded(detail, string(raw)) {
+		return &attemptStreamError{err: fmt.Errorf("%w: %s", ErrDailyCountExceeded, detail), retryable: true}
+	}
 	// A 403 that names the pricing page is an entitlement refusal, not a
 	// credential failure: retrying and refreshing both change nothing, and
 	// classifying it as unauthorized would retire a valid account.

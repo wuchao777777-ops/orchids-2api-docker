@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"orchids-api/internal/accountpolicy"
+	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
 )
 
@@ -98,11 +99,19 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 			pinned.Close()
 		}
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTrackerSnapshot(), func(acc *store.Account) bool {
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTrackerSnapshot(), func(acc *store.Account) error {
 		// A model this credential is cooling down for must not be retried on the
-		// same account; the account's other models stay eligible.
-		return acc != nil && ProviderForAccount(acc) == ProviderBuild && AccountSupportsModel(acc, modelID) &&
-			accountUsableForModel(ctx, acc) && h.routeAllowsAccount(ctx, modelID, acc.ID)
+		// same account; the account's other models stay eligible. The pool gets the
+		// generic reason here: grok holds a model for its own windows (a free-usage
+		// window, an inference cap), and naming those as "the plan does not cover
+		// the model" would describe them worse than the existing wording does.
+		if acc == nil || ProviderForAccount(acc) != ProviderBuild || !AccountSupportsModel(acc, modelID) {
+			return loadbalancer.ErrAccountNotEligible
+		}
+		if !accountUsableForModel(ctx, acc) || !h.routeAllowsAccount(ctx, modelID, acc.ID) {
+			return loadbalancer.ErrAccountNotEligible
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

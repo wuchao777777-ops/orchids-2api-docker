@@ -199,6 +199,69 @@ func refreshWorkBuddyCatalog(ctx context.Context, cfg *config.Config, s *store.S
 	}
 }
 
+// workBuddyQuotaRefreshDue reports whether the account's credit-meter reading
+// should be re-read on this tick.
+func workBuddyQuotaRefreshDue(acc *store.Account, now time.Time) bool {
+	if acc == nil {
+		return false
+	}
+	if acc.WorkBuddyQuota.SyncedAt.IsZero() {
+		return true
+	}
+	return now.Sub(acc.WorkBuddyQuota.SyncedAt) >= providerHealthRefreshInterval
+}
+
+// refreshWorkBuddyQuota re-reads the credit meter the account table, the
+// exhausted/free-only verdict and the selection filter are all built from.
+//
+// Before this existed the reading was only written at login and on a manual
+// check, so it aged without bound: production held a 36-hour-old snapshot for an
+// account whose live balance had already moved, and an operator comparing the
+// table with the upstream was comparing two different moments.
+//
+// The verdict follows the same rule as the manual check: a spent metered package
+// narrows the account to its confirmed free catalog instead of parking it, and a
+// reading that shows credits again restores full capability.
+func refreshWorkBuddyQuota(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) {
+	if acc == nil || s == nil || !workBuddyQuotaRefreshDue(acc, time.Now()) {
+		return
+	}
+	if !refreshqueue.WithLease(acc.ID, func() {
+		client := workbuddy.NewFromAccount(acc, cfg)
+		defer client.Close()
+		quotaCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		quota, err := client.FetchQuota(quotaCtx)
+		cancel()
+		if err != nil {
+			slog.Warn("Auto refresh workbuddy quota failed; keeping the last reading", "account_id", acc.ID, "error", err)
+			return
+		}
+		workbuddy.ApplyQuota(acc, quota)
+		switch {
+		case acc.UsageLimit > 0 && acc.UsageCurrent <= 0:
+			accountpolicy.Verdict{
+				Status:  store.AccountStatusWorkBuddyQuotaExhausted,
+				Message: "WorkBuddy allowance exhausted; free catalog models remain eligible",
+				Scope:   accountpolicy.ScopeAccount,
+				At:      time.Now(),
+			}.Apply(acc)
+		case acc.StatusCode == store.AccountStatusWorkBuddyQuotaExhausted:
+			// The meter shows credits again, so the free-only narrowing is over.
+			// Only that verdict is cleared: another status (a refused credential, a
+			// throttle) is not something a credit reading can speak to.
+			acc.StatusCode = ""
+			acc.StatusMessage = ""
+			acc.LastAttempt = time.Time{}
+			acc.VerifiedAt = time.Now()
+		}
+		if err := s.UpdateAccount(ctx, acc); err != nil {
+			slog.Warn("Auto refresh workbuddy quota: update account failed", "account_id", acc.ID, "error", err)
+		}
+	}) {
+		slog.Debug("Auto refresh workbuddy quota: account already refreshing", "account_id", acc.ID)
+	}
+}
+
 // clineCatalogRefreshDue reports whether the account's catalog snapshot should
 // be re-read. The snapshot is an observation, and the free feed changes without
 // notice, so it is refreshed on the same cadence as the other providers.
@@ -273,6 +336,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 			}
 			if strings.EqualFold(acc.AccountType, "workbuddy") {
 				refreshWorkBuddyCatalog(refreshCtx, cfg, s, acc)
+				refreshWorkBuddyQuota(refreshCtx, cfg, s, acc)
 				continue
 			}
 			if strings.EqualFold(acc.AccountType, "cline") {

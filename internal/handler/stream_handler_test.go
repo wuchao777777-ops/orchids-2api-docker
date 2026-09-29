@@ -972,7 +972,7 @@ func TestReportRequestFailure_ClientRejectionAnswers400(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic)
 
-	sh.reportRequestFailure("probe", "client", "The upstream rejected the request parameters or model. Check the request and model selection.")
+	sh.reportRequestFailure("probe", "client", "The upstream rejected the request parameters or model. Check the request and model selection.", 0)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
