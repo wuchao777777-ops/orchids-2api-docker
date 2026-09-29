@@ -90,6 +90,55 @@ func TestSummarize_NoSamplesIsZero(t *testing.T) {
 	}
 }
 
+// Range uses bounded Redis pipeline batches and includes both endpoint minutes,
+// even when their seconds differ. An invalid hash in a later batch must not leak
+// partial results from earlier successful batches.
+func TestRange_BatchBoundariesAndErrors(t *testing.T) {
+	agg, mini := newAggregator(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Minute).Add(-600 * time.Minute)
+	for _, offset := range []int{0, 255, 256, 299} {
+		agg.Observe(ctx, Outcome{Channel: "grok", OK: true, At: base.Add(time.Duration(offset) * time.Minute)})
+	}
+	from := base.Add(50 * time.Second)
+	until := base.Add(299*time.Minute + 10*time.Second)
+	buckets, err := agg.Range(ctx, "grok", until, from) // reversed on purpose
+	if err != nil || len(buckets) != 4 {
+		t.Fatalf("reversed range: buckets=%v err=%v", buckets, err)
+	}
+	for i, offset := range []int{0, 255, 256, 299} {
+		want := base.Add(time.Duration(offset) * time.Minute)
+		if !buckets[i].Minute.Equal(want) || buckets[i].Requests != 1 {
+			t.Fatalf("bucket[%d]=%+v want minute %s", i, buckets[i], want)
+		}
+	}
+	mini.Del(agg.key(base.Add(256*time.Minute), "grok"))
+	if err := mini.Set(agg.key(base.Add(256*time.Minute), "grok"), "not-a-hash"); err != nil {
+		t.Fatal(err)
+	}
+	buckets, err = agg.Range(ctx, "grok", from, until)
+	if err == nil || buckets != nil {
+		t.Fatalf("wrongtype in second batch: buckets=%v err=%v, want nil and error", buckets, err)
+	}
+}
+
+func TestRange_TruncatesToLatestMinutes(t *testing.T) {
+	agg, _ := newAggregator(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Minute).Add(-2 * 24 * time.Hour)
+	last := base.Add(time.Duration(MaxTrendMinutes+5) * time.Minute)
+	for _, at := range []time.Time{base.Add(5 * time.Minute), base.Add(6 * time.Minute), last} {
+		agg.Observe(ctx, Outcome{Channel: "grok", OK: true, At: at})
+	}
+	buckets, err := agg.Range(ctx, "grok", base, last)
+	if err != nil || len(buckets) != 2 {
+		t.Fatalf("clamped range: buckets=%v err=%v, want two", buckets, err)
+	}
+	if !buckets[0].Minute.Equal(base.Add(6*time.Minute)) || !buckets[1].Minute.Equal(last) {
+		t.Fatalf("clamped endpoints=%v, %v", buckets[0].Minute, buckets[1].Minute)
+	}
+}
+
 // TestRange_SpansMinutesInOrder keeps the trend line in chronological order.
 func TestRange_SpansMinutesInOrder(t *testing.T) {
 	agg, _ := newAggregator(t)
@@ -138,6 +187,65 @@ func TestModelStatsFromBuckets(t *testing.T) {
 	// Sorted by request count: grok-4.6 leads.
 	if stats[0].Model != "grok-4.6" || stats[0].Requests != 3 || stats[0].Success != 2 || stats[0].Failed != 1 {
 		t.Fatalf("leading model = %+v", stats[0])
+	}
+}
+
+// Mixed minutes must read only models present in each minute, while keeping
+// model counters and latency samples aggregated across all minutes.
+func TestModelStatsFromBuckets_MixedMinutesAndMissingDuration(t *testing.T) {
+	agg, mini := newAggregator(t)
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	observe := func(minute int, model string, ok bool, duration, ttft int64) {
+		agg.Observe(ctx, Outcome{Channel: "grok", Model: model, OK: ok,
+			DurationMS: duration, FirstTokenMS: ttft, At: at.Add(time.Duration(minute) * time.Minute)})
+	}
+	observe(0, "alpha", true, 100, 10)
+	observe(1, "beta", true, 200, 20)
+	observe(1, "alpha", false, 300, 30)
+	observe(2, "gamma", true, 0, 40)
+	observe(2, "alpha", true, 0, 0)
+
+	// A request with no duration must not create a zero-valued model sample.
+	if mini.Exists(agg.key(at.Add(2*time.Minute), "grok") + ":model:gamma") {
+		t.Fatal("gamma has a duration list despite no duration sample")
+	}
+	buckets, err := agg.Range(ctx, "grok", at, at.Add(2*time.Minute))
+	if err != nil || len(buckets) != 3 {
+		t.Fatalf("Range: buckets=%v err=%v", buckets, err)
+	}
+	before := mini.CommandCount()
+	stats := agg.ModelStatsFromBuckets(ctx, "grok", buckets)
+	// Three HGETALLs plus two LRANGEs per present (minute, model) pair:
+	// alpha; alpha+beta; alpha+gamma = five pairs, not 3*3 models.
+	if got, want := mini.CommandCount()-before, 3+2*5; got != want {
+		t.Fatalf("model stats Redis reads=%d, want %d (3 hashes + 10 lists)", got, want)
+	}
+	if len(stats) != 3 {
+		t.Fatalf("model stats=%+v, want three models", stats)
+	}
+	byName := make(map[string]ModelStats, len(stats))
+	for _, stat := range stats {
+		byName[stat.Model] = stat
+	}
+	if got := byName["alpha"]; got.Requests != 3 || got.Success != 2 || got.Failed != 1 ||
+		got.Samples != 2 || got.DurationP95MS != 300 || got.FirstTokenSamples != 2 || got.FirstTokenP95MS != 30 ||
+		got.SuccessRate != 2.0/3.0 {
+		t.Fatalf("alpha=%+v", got)
+	}
+	if got := byName["beta"]; got.Requests != 1 || got.Success != 1 || got.Samples != 1 ||
+		got.DurationP95MS != 200 || got.FirstTokenSamples != 1 || got.FirstTokenP95MS != 20 {
+		t.Fatalf("beta=%+v", got)
+	}
+	if got := byName["gamma"]; got.Requests != 1 || got.Success != 1 || got.Samples != 0 ||
+		got.DurationP95MS != 0 || got.FirstTokenSamples != 1 || got.FirstTokenP95MS != 40 {
+		t.Fatalf("gamma=%+v", got)
+	}
+	// Channel-level summary semantics (as consumed by API stats) are unchanged.
+	summary := agg.Summarize(ctx, "grok", buckets)
+	if summary.Requests != 5 || summary.Success != 4 || summary.Failed != 1 ||
+		summary.Samples != 3 || summary.DurationP95MS != 300 || summary.FirstTokenP95MS != 40 {
+		t.Fatalf("channel summary=%+v", summary)
 	}
 }
 

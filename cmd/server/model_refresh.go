@@ -430,21 +430,36 @@ func qoderCatalogToDiscovered(catalog *qoder.Catalog) []discoveredModel {
 	return out
 }
 
+// persistAccountCatalogSnapshot keeps the last usable account snapshot when an
+// upstream catalog is empty. Callers supply their own failure context so manual
+// discovery and background refresh retain their distinct log messages.
+func persistAccountCatalogSnapshot(ctx context.Context, s *store.Store, acc *store.Account, channel string, ids []string, updateFailureMessage string) {
+	if acc == nil || len(ids) == 0 {
+		return
+	}
+	now := time.Now()
+	switch channel {
+	case "qoder":
+		acc.QoderModelIDs, acc.QoderModelsSyncedAt = ids, now
+	case "workbuddy":
+		acc.WorkBuddyModelIDs, acc.WorkBuddyModelsSyncedAt = ids, now
+	case "cline":
+		acc.ClineModelIDs, acc.ClineModelsSyncedAt = ids, now
+	default:
+		return
+	}
+	if err := s.UpdateAccount(ctx, acc); err != nil {
+		slog.Warn(updateFailureMessage, "account_id", acc.ID, "error", err)
+	}
+}
+
 // persistQoderCatalogSnapshot records the account-scoped upstream catalog so
 // model selection resolves against the same list the channel publishes.
 func persistQoderCatalogSnapshot(ctx context.Context, s *store.Store, acc *store.Account, catalog *qoder.Catalog) {
 	if acc == nil || acc.ID == 0 {
 		return
 	}
-	ids := qoder.CatalogSnapshot(catalog)
-	if len(ids) == 0 {
-		return
-	}
-	acc.QoderModelIDs = ids
-	acc.QoderModelsSyncedAt = time.Now()
-	if err := s.UpdateAccount(ctx, acc); err != nil {
-		slog.Warn("failed to persist qoder model snapshot", "account_id", acc.ID, "error", err)
-	}
+	persistAccountCatalogSnapshot(ctx, s, acc, "qoder", qoder.CatalogSnapshot(catalog), "failed to persist qoder model snapshot")
 }
 
 func discoverAccountCatalogModels(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (accountModelDiscoveryReport, error) {
@@ -650,15 +665,7 @@ func persistClineCatalogSnapshot(ctx context.Context, s *store.Store, acc *store
 	if acc == nil || acc.ID == 0 {
 		return
 	}
-	ids := cline.CatalogSnapshot(models)
-	if len(ids) == 0 {
-		return
-	}
-	acc.ClineModelIDs = ids
-	acc.ClineModelsSyncedAt = time.Now()
-	if err := s.UpdateAccount(ctx, acc); err != nil {
-		slog.Warn("failed to persist cline model snapshot", "account_id", acc.ID, "error", err)
-	}
+	persistAccountCatalogSnapshot(ctx, s, acc, "cline", cline.CatalogSnapshot(models), "failed to persist cline model snapshot")
 }
 
 func workBuddyCatalogToDiscovered(models []workbuddy.WorkBuddyModel) []discoveredModel {
@@ -685,15 +692,7 @@ func persistWorkBuddyCatalogSnapshot(ctx context.Context, s *store.Store, acc *s
 	if acc == nil || acc.ID == 0 {
 		return
 	}
-	ids := workbuddy.CatalogSnapshot(models)
-	if len(ids) == 0 {
-		return
-	}
-	acc.WorkBuddyModelIDs = ids
-	acc.WorkBuddyModelsSyncedAt = time.Now()
-	if err := s.UpdateAccount(ctx, acc); err != nil {
-		slog.Warn("failed to persist workbuddy model snapshot", "account_id", acc.ID, "error", err)
-	}
+	persistAccountCatalogSnapshot(ctx, s, acc, "workbuddy", workbuddy.CatalogSnapshot(models), "failed to persist workbuddy model snapshot")
 }
 
 type grokBuildModelDiscovery struct {

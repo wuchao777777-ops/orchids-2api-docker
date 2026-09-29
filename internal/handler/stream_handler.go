@@ -479,10 +479,9 @@ func pruneToolInputBySchema(value interface{}, schema map[string]interface{}) (i
 		if arr, ok := value.([]interface{}); ok {
 			out := make([]interface{}, len(arr))
 			for i, item := range arr {
-				out[i], _ = pruneToolInputBySchema(item, items)
-				if !sameJSONValue(out[i], item) {
-					changed = true
-				}
+				var itemChanged bool
+				out[i], itemChanged = pruneToolInputBySchema(item, items)
+				changed = changed || itemChanged
 			}
 			return out, changed
 		}
@@ -510,12 +509,6 @@ func pruneToolInputBySchema(value interface{}, schema map[string]interface{}) (i
 		}
 	}
 	return out, changed
-}
-
-func sameJSONValue(left, right interface{}) bool {
-	lb, lerr := json.Marshal(left)
-	rb, rerr := json.Marshal(right)
-	return lerr == nil && rerr == nil && string(lb) == string(rb)
 }
 
 func (h *streamHandler) release() {
@@ -810,7 +803,10 @@ func (h *streamHandler) finalizeOutputTokens() {
 	h.outputTokens = h.outputEstimator.Count()
 }
 
-func (h *streamHandler) setUpstreamUsage(usage map[string]interface{}) {
+// applyUpstreamUsageTokens folds one provider usage payload into the reported
+// totals under one lock. Omitted fields keep their local estimates; metadata
+// alone still counts as provider usage evidence.
+func (h *streamHandler) applyUpstreamUsageTokens(usage map[string]interface{}) {
 	if len(usage) == 0 {
 		return
 	}
@@ -881,33 +877,6 @@ func getUsageIntValue(usage map[string]interface{}, key string) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-// applyUpstreamUsageTokens folds an upstream usage payload into the reported
-// totals. It is the shared shape of the two events that carry one
-// (model.tokens-used and the usage object of model.finish): a value the
-// provider spelled must win over the local estimate, and a value it omitted must
-// leave the estimate alone, which is what the -1 sentinels express.
-func (h *streamHandler) applyUpstreamUsageTokens(usage map[string]interface{}) {
-	h.setUpstreamUsage(usage)
-	input, hasInput := getUsageIntValue(usage, "inputTokens")
-	if !hasInput {
-		input, hasInput = getUsageIntValue(usage, "input_tokens")
-	}
-	output, hasOutput := getUsageIntValue(usage, "outputTokens")
-	if !hasOutput {
-		output, hasOutput = getUsageIntValue(usage, "output_tokens")
-	}
-	if !hasInput && !hasOutput {
-		return
-	}
-	if !hasInput {
-		input = -1
-	}
-	if !hasOutput {
-		output = -1
-	}
-	h.setUsageTokens(input, output)
 }
 
 func (h *streamHandler) setUsageTokens(input, output int) {

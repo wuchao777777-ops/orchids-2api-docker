@@ -432,9 +432,9 @@ func TestTaskToolCall_IsAcceptedWhenClientDeclaredAgent(t *testing.T) {
 	)
 	defer h.release()
 
-	h.setAllowedToolNames(passthroughAllowedToolNames([]interface{}{
+	h.setAllowedToolNames(declaredToolNames([]interface{}{
 		map[string]interface{}{"name": "Agent"},
-	}, true))
+	}))
 
 	h.handleMessage(upstream.SSEMessage{
 		Type: "model.tool-call",

@@ -717,7 +717,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh := newStreamHandler(
 		cfg, w, logger, noThinking, isStream, responseFormat,
 	)
-	sh.setAllowedToolNames(validationAllowedToolNames(effectiveTools, req.Tools, false))
+	sh.setAllowedToolNames(declaredToolNames(effectiveTools))
 	if preSelectQoderRequest {
 		sh.setSurfaceToolRejects(true)
 	}

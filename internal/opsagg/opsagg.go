@@ -234,7 +234,9 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 			pipe.Expire(ctx, key+":"+modelField+":ttft", BucketRetention)
 			pipe.LTrim(ctx, key+":"+modelField+":ttft", -2000, -1)
 		}
-		pipe.RPush(ctx, key+":model:"+strings.TrimSpace(outcome.Model), outcome.DurationMS)
+		if outcome.DurationMS > 0 {
+			pipe.RPush(ctx, key+":"+modelField, outcome.DurationMS)
+		}
 	}
 	pipe.Expire(ctx, key, BucketRetention)
 	pipe.Expire(ctx, key+":dur", BucketRetention)
@@ -267,26 +269,34 @@ func (a *Aggregator) Range(ctx context.Context, channel string, from, to time.Ti
 	if to.Before(from) {
 		from, to = to, from
 	}
-	minutes := int(to.Sub(from).Minutes()) + 1
-	if minutes <= 0 {
-		return nil, nil
-	}
+	fromMinute, toMinute := from.Truncate(time.Minute), to.Truncate(time.Minute)
+	minutes := int(toMinute.Sub(fromMinute)/time.Minute) + 1
 	if minutes > MaxTrendMinutes {
 		minutes = MaxTrendMinutes
-		from = to.Add(-time.Duration(minutes-1) * time.Minute)
+		fromMinute = toMinute.Add(-time.Duration(minutes-1) * time.Minute)
 	}
 
+	// A daily window may contain 1440 buckets. Batch reads so the dashboard
+	// does not spend one Redis round trip per minute; keep each batch bounded.
+	const batchSize = 256
 	buckets := make([]Bucket, 0, minutes)
-	for i := 0; i < minutes; i++ {
-		minute := from.Truncate(time.Minute).Add(time.Duration(i) * time.Minute)
-		bucket, err := a.bucket(ctx, minute, channel)
-		if err != nil {
+	for start := 0; start < minutes; start += batchSize {
+		count := min(batchSize, minutes-start)
+		pipe := a.client.Pipeline()
+		commands := make([]*redis.MapStringStringCmd, count)
+		for i := range commands {
+			minute := fromMinute.Add(time.Duration(start+i) * time.Minute)
+			commands[i] = pipe.HGetAll(ctx, a.key(minute, channel))
+		}
+		if _, err := pipe.Exec(ctx); err != nil {
 			return nil, err
 		}
-		if bucket == nil {
-			continue
+		for i, command := range commands {
+			if fields := command.Val(); len(fields) != 0 {
+				minute := fromMinute.Add(time.Duration(start+i) * time.Minute)
+				buckets = append(buckets, *bucketFromFields(minute, channel, fields))
+			}
 		}
-		buckets = append(buckets, *bucket)
 	}
 	return buckets, nil
 }
@@ -628,6 +638,7 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 		if err != nil {
 			continue
 		}
+		bucketModels := map[string]*acc{}
 		for field, value := range fields {
 			if !strings.HasPrefix(field, "model:") {
 				continue
@@ -638,10 +649,14 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 				continue
 			}
 			model, metric := trimmed[:index], trimmed[index+1:]
-			entry := byModel[model]
+			entry := bucketModels[model]
 			if entry == nil {
-				entry = &acc{}
-				byModel[model] = entry
+				entry = byModel[model]
+				if entry == nil {
+					entry = &acc{}
+					byModel[model] = entry
+				}
+				bucketModels[model] = entry
 			}
 			parsed, _ := strconv.ParseInt(value, 10, 64)
 			switch metric {
@@ -653,7 +668,7 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 				entry.failed += parsed
 			}
 		}
-		for model, entry := range byModel {
+		for model, entry := range bucketModels {
 			entry.duration = append(entry.duration, a.listInts(ctx, key+":model:"+model)...)
 			entry.ttfts = append(entry.ttfts, a.listInts(ctx, key+":model:"+model+":ttft")...)
 		}

@@ -126,15 +126,7 @@ func refreshQoderCatalog(ctx context.Context, cfg *config.Config, s *store.Store
 		slog.Warn("Auto refresh qoder catalog failed; keeping the last snapshot", "account_id", acc.ID, "error", err)
 		return
 	}
-	ids := qoder.CatalogSnapshot(catalog)
-	if len(ids) == 0 {
-		return
-	}
-	acc.QoderModelIDs = ids
-	acc.QoderModelsSyncedAt = time.Now()
-	if err := s.UpdateAccount(ctx, acc); err != nil {
-		slog.Warn("Auto refresh qoder catalog: update account failed", "account_id", acc.ID, "error", err)
-	}
+	persistAccountCatalogSnapshot(ctx, s, acc, "qoder", qoder.CatalogSnapshot(catalog), "Auto refresh qoder catalog: update account failed")
 }
 
 // refreshQoderQuota reads the same authoritative allowance endpoint used by a
@@ -201,15 +193,7 @@ func refreshWorkBuddyCatalog(ctx context.Context, cfg *config.Config, s *store.S
 			slog.Warn("Auto refresh workbuddy catalog failed; keeping the last snapshot", "account_id", acc.ID, "error", err)
 			return
 		}
-		ids := workbuddy.CatalogSnapshot(models)
-		if len(ids) == 0 {
-			return
-		}
-		acc.WorkBuddyModelIDs = ids
-		acc.WorkBuddyModelsSyncedAt = time.Now()
-		if err := s.UpdateAccount(ctx, acc); err != nil {
-			slog.Warn("Auto refresh workbuddy catalog: update account failed", "account_id", acc.ID, "error", err)
-		}
+		persistAccountCatalogSnapshot(ctx, s, acc, "workbuddy", workbuddy.CatalogSnapshot(models), "Auto refresh workbuddy catalog: update account failed")
 	}) {
 		slog.Debug("Auto refresh workbuddy catalog: account already refreshing", "account_id", acc.ID)
 	}
@@ -248,15 +232,7 @@ func refreshClineCatalog(ctx context.Context, cfg *config.Config, s *store.Store
 			slog.Warn("Auto refresh cline catalog failed; keeping the last snapshot", "account_id", acc.ID, "error", err)
 			return
 		}
-		ids := cline.CatalogSnapshot(models)
-		if len(ids) == 0 {
-			return
-		}
-		acc.ClineModelIDs = ids
-		acc.ClineModelsSyncedAt = time.Now()
-		if err := s.UpdateAccount(ctx, acc); err != nil {
-			slog.Warn("Auto refresh cline catalog: update account failed", "account_id", acc.ID, "error", err)
-		}
+		persistAccountCatalogSnapshot(ctx, s, acc, "cline", cline.CatalogSnapshot(models), "Auto refresh cline catalog: update account failed")
 	}) {
 		slog.Debug("Auto refresh cline catalog: account already refreshing", "account_id", acc.ID)
 	}

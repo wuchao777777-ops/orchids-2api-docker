@@ -606,6 +606,22 @@ func TestStreamHandler_TokensUsed_OverridesEstimation(t *testing.T) {
 	}
 }
 
+func TestStreamHandler_UsageMissingFieldsKeepLocalEstimate(t *testing.T) {
+	sh := newStreamHandler(&config.Config{}, newFlushRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
+	defer sh.release()
+	sh.inputTokens, sh.outputTokens = 31, 17
+	sh.applyUpstreamUsageTokens(map[string]interface{}{"output_tokens": 9, "credits": 0.5})
+	if !sh.useUpstreamUsage || sh.inputTokens != 31 || sh.outputTokens != 9 || sh.usageMetadata["credits"] != 0.5 {
+		t.Fatalf("partial usage overwrote estimate or lost metadata: input=%d output=%d metadata=%v", sh.inputTokens, sh.outputTokens, sh.usageMetadata)
+	}
+	sh.resetRoundState()
+	sh.inputTokens, sh.outputTokens = 31, 17
+	sh.applyUpstreamUsageTokens(map[string]interface{}{"original_credits": 0.25})
+	if !sh.useUpstreamUsage || sh.inputTokens != 31 || sh.outputTokens != 17 || sh.usageMetadata["original_credits"] != 0.25 {
+		t.Fatalf("credits-only usage lost evidence or estimate: input=%d output=%d metadata=%v", sh.inputTokens, sh.outputTokens, sh.usageMetadata)
+	}
+}
+
 func TestStreamHandler_DetailedUsageIsAssignedIdempotently(t *testing.T) {
 	sh := newStreamHandler(&config.Config{}, newFlushRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
 	defer sh.release()
