@@ -3,6 +3,7 @@ package qoder
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/debug"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
@@ -177,10 +179,11 @@ type chatMessage struct {
 
 // chatPart is one content part of a multimodal user message.
 type chatPart struct {
-	Type     string          `json:"type"`
-	Text     string          `json:"text,omitempty"`
-	ImageURL *chatImageURL   `json:"image_url,omitempty"`
-	Source   json.RawMessage `json:"source,omitempty"`
+	CacheControl *prompt.CacheControl `json:"cache_control,omitempty"`
+	Type         string               `json:"type"`
+	Text         string               `json:"text,omitempty"`
+	ImageURL     *chatImageURL        `json:"image_url,omitempty"`
+	Source       json.RawMessage      `json:"source,omitempty"`
 }
 
 type chatImageURL struct {
@@ -189,6 +192,7 @@ type chatImageURL struct {
 
 // chatToolCall is the OpenAI tool-call shape the gateway expects in history.
 type chatToolCall struct {
+	Index    *int   `json:"index,omitempty"`
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Function struct {
@@ -278,7 +282,7 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 		ChatTask:          chatTask,
 		ChatContext:       referenceChatContext(req, model),
 		IsReply:           true,
-		IsRetry:           req.Attempt > 1,
+		IsRetry:           false, // Official queued attempts keep this false; Attempt is local bookkeeping.
 		Source:            sourceValue,
 		Version:           "3",
 		AgentID:           agentID,
@@ -346,7 +350,7 @@ func refreshedReplayBody(encoded []byte, requestID string) ([]byte, error) {
 	// capture keeps them constant while request_id changes between the requests
 	// of one task. A replay is the same task, so they stay put.
 	body.Business.BeginAt = time.Now().UnixMilli()
-	body.IsRetry = true
+	body.IsRetry = false
 	updated, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal qoder replay body: %w", err)
@@ -386,7 +390,15 @@ func latestUserText(req upstream.UpstreamRequest) string {
 			}
 		}
 	}
-	return ""
+	return strings.TrimSpace(req.Prompt)
+}
+
+// Scope explicit conversation identities to the account without retaining raw IDs.
+func conversationSessionID(uid, conversation string) string {
+	sum := sha256.Sum256([]byte("qoder-session\x00" + uid + "\x00" + conversation))
+	sum[6] = (sum[6] & 0x0f) | 0x80
+	sum[8] = (sum[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", sum[:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
 }
 
 // buildMessages renders the history. System items become a leading system
@@ -431,7 +443,7 @@ func buildMessages(req upstream.UpstreamRequest) ([]chatMessage, string, error) 
 			}
 			message := chatMessage{Role: normalRole(role), Content: text}
 			if role == "assistant" {
-				message.Reasoning = strings.TrimSpace(msg.ReasoningContent)
+				message.Reasoning = msg.ReasoningContent
 				message.ReasoningItem = msg.ReasoningItem
 			}
 			out = append(out, message)
@@ -477,7 +489,7 @@ func normalRole(role string) string {
 // convertAssistantMessage maps text, thinking and tool_use blocks onto one
 // assistant message.
 func convertAssistantMessage(msg prompt.Message, toolCallIDs map[string]bool) (chatMessage, bool) {
-	message := chatMessage{Role: "assistant", Reasoning: strings.TrimSpace(msg.ReasoningContent), ReasoningItem: msg.ReasoningItem}
+	message := chatMessage{Role: "assistant", Reasoning: msg.ReasoningContent, ReasoningItem: msg.ReasoningItem}
 	texts := make([]string, 0, 2)
 	for _, block := range msg.Content.GetBlocks() {
 		switch block.Type {
@@ -487,7 +499,7 @@ func convertAssistantMessage(msg prompt.Message, toolCallIDs map[string]bool) (c
 			}
 		case "thinking":
 			if message.Reasoning == "" {
-				message.Reasoning = strings.TrimSpace(block.Thinking)
+				message.Reasoning = block.Thinking
 			}
 		case "tool_use":
 			name := strings.TrimSpace(block.Name)
@@ -498,7 +510,7 @@ func convertAssistantMessage(msg prompt.Message, toolCallIDs map[string]bool) (c
 			if id == "" {
 				id = NewToolCallID()
 			}
-			call := chatToolCall{ID: id, Type: "function"}
+			call := chatToolCall{ID: id, Type: "function", Index: block.ToolIndex}
 			call.Function.Name = name
 			call.Function.Arguments = util.CompactToolInput(block.Input)
 			message.ToolCalls = append(message.ToolCalls, call)
@@ -518,39 +530,42 @@ func convertBlockMessage(role string, msg prompt.Message, toolCallIDs map[string
 	blocks := msg.Content.GetBlocks()
 	out := make([]chatMessage, 0, len(blocks))
 	pendingParts := make([]chatPart, 0, len(blocks))
-	hasImage := false
+	preserveParts := false
 
 	flush := func() {
 		if len(pendingParts) == 0 {
 			return
 		}
 		message := chatMessage{Role: normalRole(role)}
-		if !hasImage {
+		if !preserveParts {
 			texts := make([]string, 0, len(pendingParts))
 			for _, part := range pendingParts {
 				texts = append(texts, part.Text)
 			}
 			message.Content = strings.Join(texts, "\n")
 		} else {
-			// Preserve the original text/image interleaving. Transfer ownership
+			// Preserve text/image interleaving and per-part cache hints. Transfer ownership
 			// of this slice so the next segment cannot overwrite earlier parts.
 			message.Contents = pendingParts
 		}
 		out = append(out, message)
 		pendingParts = nil
-		hasImage = false
+		preserveParts = false
 	}
 
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
 			if strings.TrimSpace(block.Text) != "" {
-				pendingParts = append(pendingParts, chatPart{Type: "text", Text: block.Text})
+				pendingParts = append(pendingParts, chatPart{Type: "text", Text: block.Text, CacheControl: block.CacheControl})
+				if block.CacheControl != nil {
+					preserveParts = true
+				}
 			}
 		case "image":
 			if url := blockImageURL(block); url != "" {
-				pendingParts = append(pendingParts, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: url}})
-				hasImage = true
+				pendingParts = append(pendingParts, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: url}, CacheControl: block.CacheControl})
+				preserveParts = true
 			}
 		case "tool_result":
 			flush()
@@ -745,7 +760,7 @@ func filterTags(tags []string) []string {
 }
 
 // attemptChat performs one upstream attempt and consumes its stream.
-func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, creds Credentials, toolsEnabled bool, emit func(upstream.SSEMessage)) (streamResult, error) {
+func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, creds Credentials, toolsEnabled bool, emit func(upstream.SSEMessage)) (result streamResult, attemptErr error) {
 	reqCtx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout)
 	defer cancel()
 
@@ -757,13 +772,59 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 		return streamResult{}, &attemptStreamError{err: err}
 	}
 	req.Header.Set("Accept", "text/event-stream")
-
+	attempt := debug.BeginUpstream(ctx, req.Method, req.URL.String(), req.Header, body)
+	traceCtx, latency := attempt.Trace(req.Context(), map[string]interface{}{"provider": "qoder", "model_key": model.Key, "model_source": model.Source, "host": req.URL.Host, "httpdns_ip": req.Header.Get("X-Qoder-Httpdns-Ip"), "body_bytes": len(body), "protocol_profile": c.protocol.name})
+	if latency != nil {
+		c.stateMu.RLock()
+		if c.account != nil {
+			latency.Set("account_id", c.account.ID)
+		}
+		c.stateMu.RUnlock()
+		if transport, ok := c.stream.Transport.(*http.Transport); ok {
+			proxy := "direct"
+			if transport.Proxy != nil {
+				if u, e := transport.Proxy(req); e == nil && u != nil {
+					proxy = u.Scheme + "://" + u.Host
+				}
+			}
+			latency.Set("proxy", proxy)
+		}
+		if raw, e := decodeBody(body); e == nil {
+			var wire chatBody
+			if json.Unmarshal(raw, &wire) == nil {
+				latency.Set("parameters", wire.Parameters)
+				latency.Set("messages_count", len(wire.Messages))
+				latency.Set("tools_count", len(wire.Tools))
+				latency.Set("conversation_fingerprint", fmt.Sprintf("%x", sha256.Sum256([]byte(wire.SessionID)))[:12])
+			}
+		}
+	}
+	req = req.WithContext(traceCtx)
+	defer func() { latency.Finish(attemptErr) }()
+	originalEmit := emit
+	emit = func(m upstream.SSEMessage) {
+		if m.Type == "model.text-delta" {
+			latency.Mark("first_text_ms")
+		}
+		if m.Type == "model.reasoning-delta" {
+			latency.Mark("first_reasoning_ms")
+		}
+		if m.Type == "model.tool-call" {
+			latency.Mark("first_tool_ms")
+		}
+		if originalEmit != nil {
+			originalEmit(m)
+		}
+	}
 	resp, err := c.stream.Do(req)
+	attempt.Response(resp, err)
+	latency.Response(resp)
 	if err != nil {
 		// Only a connection-level hiccup is worth another attempt; a bad URL or
 		// an untrusted certificate would fail identically every time.
 		return streamResult{}, &attemptStreamError{err: fmt.Errorf("send qoder request: %w", err), retryable: IsTransientTransport(err)}
 	}
+	resp.Body = attempt.CaptureBody(resp.Body)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -771,7 +832,12 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 		return streamResult{}, classifyStatus(resp.StatusCode, resp.Header.Get("Retry-After"), raw)
 	}
 
-	result, err := consumeStreamWithTools(resp.Body, toolsEnabled, emit)
+	result, err = consumeStreamObserved(resp.Body, toolsEnabled, emit, func() { latency.Mark("first_sse_ms") })
+	for _, key := range []string{"firstTokenDuration", "totalDuration", "serverDuration"} {
+		if v, ok := result.Usage[key]; ok {
+			latency.Set("upstream_"+key, v)
+		}
+	}
 	if err != nil {
 		var target *attemptStreamError
 		if errors.As(err, &target) {
@@ -923,23 +989,7 @@ func retryAfterDelay(value string) time.Duration {
 }
 
 func retryAfterDelayAt(value string, now time.Time) time.Duration {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
-		if seconds <= 0 {
-			return 0
-		}
-		if seconds >= int64(30*time.Second/time.Second) {
-			return 30 * time.Second
-		}
-		return time.Duration(seconds) * time.Second
-	}
-	if at, err := http.ParseTime(value); err == nil {
-		return capWait(at.Sub(now))
-	}
-	return 0
+	return util.ParseRetryAfter(value, now, 30*time.Second)
 }
 
 func capWait(wait time.Duration) time.Duration {

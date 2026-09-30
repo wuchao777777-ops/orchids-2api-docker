@@ -3,6 +3,7 @@ package api
 import (
 	"io"
 	"net/http"
+	"orchids-api/internal/util"
 	"strings"
 
 	"github.com/goccy/go-json"
@@ -46,7 +47,7 @@ func (a *API) HandleDiagnosticSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, map[string]bool{"enabled": a.DiagnosticsEnabled()})
+	util.WriteJSON(w, map[string]bool{"enabled": a.DiagnosticsEnabled()})
 }
 func (a *API) DiagnosticsEnabled() bool {
 	cfg := a.config.Load()
@@ -72,5 +73,5 @@ func (a *API) HandleJournalDiagnostics(w http.ResponseWriter, r *http.Request) {
 	} else {
 		payload["note"] = "该请求没有保留的诊断内容（可能在采集启用前产生，或已超过保留期限）。"
 	}
-	writeJSON(w, payload)
+	util.WriteJSON(w, payload)
 }

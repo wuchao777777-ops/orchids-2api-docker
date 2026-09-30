@@ -463,7 +463,19 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 	openNext := func(excluded []int64) (*chatAccountSession, error) {
 		return h.openCLIAccountSession(ctx, excluded, model)
 	}
+	immutable, err := cloneBuildPayload(payload)
+	if err != nil {
+		writeGrokUpstreamError(w, err)
+		return
+	}
 	request := func() (*http.Response, error) {
+		// Apply the selected account's model menu on every attempt, including
+		// quality retries. Derive it from the original request so one account's
+		// defaults or aliases never become the next account's requested effort.
+		if prepareErr := prepareBuildPayload(immutable, payload, sess.acc, model); prepareErr != nil {
+			return nil, prepareErr
+		}
+		ctx = withReasoningDiagnostics(ctx, payload)
 		attemptStarted := time.Now()
 		resp, requestErr := h.buildClient().doResponsesAt(ctx, sess.acc, "/responses", payload)
 		if requestErr == nil || !req.ReasoningReplay || !isReasoningReplayDecodeError(requestErr) || preservesClientCompaction(payload, requestErr) {

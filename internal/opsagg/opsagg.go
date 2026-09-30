@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -126,8 +127,10 @@ type Summary struct {
 
 // Aggregator writes and reads the per-minute buckets.
 type Aggregator struct {
-	client *redis.Client
-	prefix string
+	client      *redis.Client
+	prefix      string
+	written     atomic.Uint64
+	writeFailed atomic.Uint64
 }
 
 // New creates an aggregator over the shared Redis client.
@@ -156,12 +159,14 @@ func normalizeChannel(channel string) string {
 	return name
 }
 
-// Observe records one outcome. It never blocks the request path: the increments
-// are pipelined in a single round trip and a failure is not fatal.
+// Observe pipelines one outcome with a bounded Redis timeout. A failure is
+// best effort and must not change the inference response.
 func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 	if !a.Enabled() {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	at := outcome.At
 	if at.IsZero() {
 		at = time.Now()
@@ -255,9 +260,19 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 		// Aggregation is best-effort observability; the request must not fail
 		// because a counter could not be written. It is logged so a silently dead
 		// overview is diagnosable instead of invisible.
+		a.writeFailed.Add(1)
 		slog.Warn("Ops aggregation write failed", "channel", normalizeChannel(outcome.Channel), "error", err)
 		return
 	}
+	a.written.Add(1)
+}
+
+// Health reports writes in this process, separately from the retained counters.
+func (a *Aggregator) Health() map[string]interface{} {
+	if !a.Enabled() {
+		return map[string]interface{}{"available": false}
+	}
+	return map[string]interface{}{"available": true, "written": a.written.Load(), "write_failed": a.writeFailed.Load()}
 }
 
 // Range reads the buckets of one channel between two instants (inclusive of the
@@ -425,17 +440,50 @@ func (a *Aggregator) bucket(ctx context.Context, minute time.Time, channel strin
 // SamplesFor reads the latency samples of one channel, so a merged view can
 // combine them. It returns the raw samples rather than a percentile: percentiles
 // are not additive, so merging has to happen before the percentile is computed.
-func (a *Aggregator) SamplesFor(ctx context.Context, channel string, buckets []Bucket) (durations []int64, ttfts []int64) {
-	if !a.Enabled() {
-		return nil, nil
-	}
-	for i, bucket := range buckets {
-		a.loadCohorts(ctx, &buckets[i])
-		key := a.key(bucket.Minute, channel)
-		durations = append(durations, a.listInts(ctx, key+":dur")...)
-		ttfts = append(ttfts, a.listInts(ctx, key+":ttft")...)
-	}
+func (a *Aggregator) SamplesFor(ctx context.Context, channel string, buckets []Bucket) ([]int64, []int64) {
+	durations, ttfts, _ := a.SamplesForChecked(ctx, channel, buckets)
 	return durations, ttfts
+}
+
+// SamplesForChecked batches bounded list reads and preserves read failures;
+// an unavailable Redis is not a population with zero latency samples.
+func (a *Aggregator) SamplesForChecked(ctx context.Context, channel string, buckets []Bucket) (durations []int64, ttfts []int64, err error) {
+	if !a.Enabled() {
+		return nil, nil, nil
+	}
+	suffixes := []string{":dur", ":ttft", ":dur_failed", ":ttft_failed", ":dur_attempt", ":ttft_attempt"}
+	for start := 0; start < len(buckets); start += 32 {
+		end := min(start+32, len(buckets))
+		pipe := a.client.Pipeline()
+		commands := make([][6]*redis.StringSliceCmd, end-start)
+		for i := start; i < end; i++ {
+			key := a.key(buckets[i].Minute, channel)
+			for j, suffix := range suffixes {
+				commands[i-start][j] = pipe.LRange(ctx, key+suffix, -5000, -1)
+			}
+		}
+		if _, err := pipe.Exec(ctx); err != nil {
+			return nil, nil, err
+		}
+		for i, reads := range commands {
+			values := [6][]int64{}
+			for j, read := range reads {
+				for _, raw := range read.Val() {
+					value, err := strconv.ParseInt(raw, 10, 64)
+					if err != nil {
+						return nil, nil, err
+					}
+					values[j] = append(values[j], value)
+				}
+			}
+			durations = append(durations, values[0]...)
+			ttfts = append(ttfts, values[1]...)
+			bucket := &buckets[start+i]
+			bucket.DurationFailed, bucket.FirstTokenFailed = values[2], values[3]
+			bucket.DurationAttempt, bucket.FirstTokenAttempt = values[4], values[5]
+		}
+	}
+	return durations, ttfts, nil
 }
 
 // bucketFromFields builds a bucket from the stored hash fields.
@@ -624,8 +672,13 @@ type ModelStats struct {
 // ModelStatsFromBuckets extracts the per-model counters a channel's buckets
 // carry, so the matrix can show per-model quality without extra keys.
 func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, buckets []Bucket) []ModelStats {
+	stats, _ := a.ModelStatsFromBucketsChecked(ctx, channel, buckets)
+	return stats
+}
+
+func (a *Aggregator) ModelStatsFromBucketsChecked(ctx context.Context, channel string, buckets []Bucket) ([]ModelStats, error) {
 	if !a.Enabled() || len(buckets) == 0 {
-		return nil
+		return nil, nil
 	}
 	type acc struct {
 		requests, success, failed int64
@@ -636,7 +689,7 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 		key := a.key(bucket.Minute, channel)
 		fields, err := a.client.HGetAll(ctx, key).Result()
 		if err != nil {
-			continue
+			return nil, err
 		}
 		bucketModels := map[string]*acc{}
 		for field, value := range fields {
@@ -669,8 +722,16 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 			}
 		}
 		for model, entry := range bucketModels {
-			entry.duration = append(entry.duration, a.listInts(ctx, key+":model:"+model)...)
-			entry.ttfts = append(entry.ttfts, a.listInts(ctx, key+":model:"+model+":ttft")...)
+			duration, err := a.readListInts(ctx, key+":model:"+model)
+			if err != nil {
+				return nil, err
+			}
+			ttft, err := a.readListInts(ctx, key+":model:"+model+":ttft")
+			if err != nil {
+				return nil, err
+			}
+			entry.duration = append(entry.duration, duration...)
+			entry.ttfts = append(entry.ttfts, ttft...)
 		}
 	}
 	stats := make([]ModelStats, 0, len(byModel))
@@ -690,5 +751,21 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 		stats = append(stats, stat)
 	}
 	sort.Slice(stats, func(i, j int) bool { return stats[i].Requests > stats[j].Requests })
-	return stats
+	return stats, nil
+}
+
+func (a *Aggregator) readListInts(ctx context.Context, key string) ([]int64, error) {
+	values, err := a.client.LRange(ctx, key, -5000, -1).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, 0, len(values))
+	for _, raw := range values {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, nil
 }

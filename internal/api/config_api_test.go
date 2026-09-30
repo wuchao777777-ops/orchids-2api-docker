@@ -118,7 +118,8 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 		"admin_password":"changed-secret",
 		"cache_strategy":"disabled",
 		"proxy_url":"socks5://user:pass@127.0.0.1:1080",
-		"proxy_bypass":"example.com, internal.local"
+		"proxy_bypass":"example.com, internal.local",
+		"qoder_queue_retry_interval_ms":"15000"
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/api/config/save", strings.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -149,6 +150,9 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 	if cfg.CacheStrategy != "disabled" {
 		t.Fatalf("CacheStrategy=%q want disabled", cfg.CacheStrategy)
 	}
+	if cfg.QoderQueueRetryIntervalMs != 15000 {
+		t.Fatalf("QoderQueueRetryIntervalMs=%d want 15000", cfg.QoderQueueRetryIntervalMs)
+	}
 	if cfg.ProxyURL != "socks5://user:pass@127.0.0.1:1080" {
 		t.Fatalf("ProxyURL=%q want socks5://user:pass@127.0.0.1:1080", cfg.ProxyURL)
 	}
@@ -162,6 +166,9 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 	}
 	if !strings.Contains(saved, `"admin_pass":"changed-secret"`) {
 		t.Fatalf("saved config missing updated admin_pass: %s", saved)
+	}
+	if !strings.Contains(saved, `"qoder_queue_retry_interval_ms":15000`) {
+		t.Fatal("saved config missing the Qoder retry interval")
 	}
 }
 

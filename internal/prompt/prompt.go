@@ -29,10 +29,11 @@ type CacheControl struct {
 
 // ContentBlock 表示消息内容中的一个块
 type ContentBlock struct {
-	Type   string       `json:"type"`
-	Text   string       `json:"text,omitempty"`
-	Source *ImageSource `json:"source,omitempty"`
-	URL    string       `json:"url,omitempty"`
+	ToolIndex *int         `json:"index,omitempty"`
+	Type      string       `json:"type"`
+	Text      string       `json:"text,omitempty"`
+	Source    *ImageSource `json:"source,omitempty"`
+	URL       string       `json:"url,omitempty"`
 
 	// tool_use 字段
 	ID        string      `json:"id,omitempty"`
@@ -158,6 +159,7 @@ type openAIToolCallFunction struct {
 }
 
 type openAIToolCall struct {
+	Index    *int                   `json:"index,omitempty"`
 	ID       string                 `json:"id"`
 	Type     string                 `json:"type"`
 	Function openAIToolCallFunction `json:"function"`
@@ -206,10 +208,11 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 				continue
 			}
 			blocks = append(blocks, ContentBlock{
-				Type:  "tool_use",
-				ID:    strings.TrimSpace(call.ID),
-				Name:  name,
-				Input: decodeOpenAIToolArguments(call.Function.Arguments),
+				ToolIndex: call.Index,
+				Type:      "tool_use",
+				ID:        strings.TrimSpace(call.ID),
+				Name:      name,
+				Input:     decodeOpenAIToolArguments(call.Function.Arguments),
 			})
 		}
 		m.Content = MessageContent{Blocks: blocks}

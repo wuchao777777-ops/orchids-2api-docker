@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/util"
 	"strings"
 	"sync"
 	"time"
@@ -188,7 +189,7 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 			writeGrokError(w, http.StatusServiceUnavailable, "failed to store response")
 			return
 		}
-		writeJSON(w, response)
+		util.WriteJSON(w, response)
 	}
 }
 
@@ -297,7 +298,7 @@ func ResponsesResourceHandler(opts ResponsesBridgeOptions) http.HandlerFunc {
 				writeGrokError(w, http.StatusServiceUnavailable, "failed to delete response")
 				return
 			}
-			writeJSON(w, map[string]interface{}{"id": responseID, "object": "response.deleted", "deleted": true})
+			util.WriteJSON(w, map[string]interface{}{"id": responseID, "object": "response.deleted", "deleted": true})
 			return
 		}
 		if len(record.Body) == 0 {

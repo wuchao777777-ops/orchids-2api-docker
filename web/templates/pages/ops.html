@@ -47,6 +47,8 @@
       </div>
     </header>
 
+    <p class="hint">顶部时间范围用于请求统计、趋势、分布和告警事件；实时速率使用卡片内窗口，资源与活跃请求 / 账号显示当前状态。模型筛选仅作用于下方状态表。</p>
+
     <section class="ops-top">
       <article class="ops-card ops-hero">
         <div class="ops-card-head">
@@ -110,7 +112,7 @@
       <article class="ops-card">
         <div class="ops-card-head">
           <h2>活跃请求 / 账号</h2>
-          <span class="ops-hint">按平台</span>
+          <span class="ops-hint">当前状态 · 按平台</span>
         </div>
         <div class="ops-concurrency" id="opsConcurrency"></div>
       </article>
@@ -170,7 +172,7 @@
       <div class="ops-card-head">
         <div>
           <h2>告警事件</h2>
-          <p class="hint">最近的告警触发 / 恢复记录（来自系统日志，与告警规则同一份证据）</p>
+          <p class="hint">所选时间范围及渠道内最近 50 条告警触发 / 恢复记录（来自系统日志）</p>
         </div>
         <div class="ops-card-tools">
           <label class="ops-select"><span class="sr-only">严重级别</span>
@@ -230,6 +232,7 @@
 
     <details class="ops-coverage-fold" id="opsCoverageFold">
       <summary>数据覆盖与统计口径</summary>
+      <p class="ops-coverage" id="opsIngestion" role="status">采集健康状态尚未读取</p>
       <p class="ops-coverage" id="opsCoverage">—</p>
     </details>
 

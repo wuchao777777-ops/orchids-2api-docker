@@ -39,7 +39,12 @@ func beginUpstream(c *Capture, method, url string, headers http.Header, body int
 	}
 	safeHeaders := map[string]string{}
 	for k, v := range headers {
-		safeHeaders[k] = strings.Join(v, ", ")
+		switch strings.ToLower(k) {
+		case "authorization", "proxy-authorization", "cookie", "cosy-key", "cosy-user", "cosy-machineid", "cosy-machinetoken":
+			safeHeaders[k] = "[REDACTED]"
+		default:
+			safeHeaders[k] = strings.Join(v, ", ")
+		}
 	}
 	a.writeJSON("request.json", map[string]interface{}{"attempt": id, "method": method, "url": url, "headers": safeHeaders, "body": body})
 	return a

@@ -1,8 +1,9 @@
 package channel
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"orchids-api/internal/util"
 )
 
 type RegistryPayload struct {
@@ -19,6 +20,5 @@ func HandleRegistry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(Payload())
+	util.WriteJSON(w, Payload())
 }

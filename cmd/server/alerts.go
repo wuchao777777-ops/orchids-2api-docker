@@ -29,7 +29,9 @@ func startAlertLoop(ctx context.Context, agg *opsagg.Aggregator, s *store.Store,
 		return
 	}
 	evaluate := func() {
-		snapshot, err := buildAlertSnapshot(context.Background(), agg, s)
+		evaluationCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		snapshot, err := buildAlertSnapshot(evaluationCtx, agg, s)
 		if err != nil {
 			slog.Warn("Alert evaluation failed", "error", err)
 			return
@@ -76,28 +78,37 @@ func buildAlertSnapshot(ctx context.Context, agg *opsagg.Aggregator, s *store.St
 	}
 	accounts, accountErr := s.ListAccounts(ctx)
 	if accountErr != nil {
-		slog.Warn("Alert evaluation could not read accounts", "error", accountErr)
+		return snapshot, accountErr
 	}
 
 	seen := map[string]bool{}
-	add := func(channel string) alerting.ChannelSnapshot {
+	add := func(channel string) (alerting.ChannelSnapshot, error) {
 		buckets, rangeErr := agg.Range(ctx, channel, since, now)
 		entry := alerting.ChannelSnapshot{Channel: channel}
-		if rangeErr == nil {
-			summary := agg.Summarize(ctx, channel, buckets)
-			entry.Requests = summary.Requests
-			entry.Success = summary.Success
-			entry.Failed = summary.Failed
-			entry.Samples = summary.Samples
-			entry.SuccessRate = summary.SuccessRate
+		if rangeErr != nil {
+			return entry, rangeErr
 		}
+		durations, ttfts, err := agg.SamplesForChecked(ctx, channel, buckets)
+		if err != nil {
+			return entry, err
+		}
+		summary := agg.SummarizeWith(ctx, opsagg.SummaryInput{Channel: channel, Buckets: buckets, Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true, WindowMinutes: alertWindowMinutes})
+		entry.Requests = summary.Requests
+		entry.Success = summary.Success
+		entry.Failed = summary.Failed
+		entry.Samples = summary.Samples
+		entry.SuccessRate = summary.SuccessRate
 		entry.AccountsEnabled, entry.AccountsAvailable, entry.AccountsNeedingLogin, entry.ModelCooldowns = alertPoolCounts(accounts, channel, now)
-		return entry
+		return entry, ctx.Err()
 	}
 
 	for _, channel := range channels {
 		seen[channel] = true
-		snapshot.Channels = append(snapshot.Channels, add(channel))
+		entry, err := add(channel)
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.Channels = append(snapshot.Channels, entry)
 	}
 	// A channel with accounts but no traffic still matters: an exhausted pool must
 	// alert even when no request has been served yet.
@@ -105,7 +116,11 @@ func buildAlertSnapshot(ctx context.Context, agg *opsagg.Aggregator, s *store.St
 		if seen[channel] {
 			continue
 		}
-		snapshot.Channels = append(snapshot.Channels, add(channel))
+		entry, err := add(channel)
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.Channels = append(snapshot.Channels, entry)
 	}
 	return snapshot, nil
 }

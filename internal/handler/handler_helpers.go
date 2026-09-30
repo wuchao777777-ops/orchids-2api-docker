@@ -801,16 +801,34 @@ func sharedRefusalWaitAllowedWithin(already, next, budget time.Duration) bool {
 	return already+next <= budget
 }
 
-// sharedRefusalWaitForChannel preserves Qoder's provider-normalized hint
-// without shortening it further. Other channels retain their early-probe policy.
-func sharedRefusalWaitForChannel(hint time.Duration, retry int, channel string) time.Duration {
+// sharedRefusalWaitForChannel uses an explicit Qoder retry interval when set;
+// otherwise it preserves the provider hint. Other channels keep early probing.
+func sharedRefusalWaitForChannel(hint time.Duration, retry int, channel string, qoderIntervalMs ...int) time.Duration {
 	if strings.EqualFold(strings.TrimSpace(channel), "qoder") {
-		if hint < 0 {
+		if hint <= 0 {
 			return 0
+		}
+		if len(qoderIntervalMs) > 0 && qoderIntervalMs[0] > 0 {
+			ms := qoderIntervalMs[0]
+			if ms > 86400000 {
+				ms = 86400000
+			}
+			interval := time.Duration(ms) * time.Millisecond
+			if interval < time.Second {
+				interval = time.Second
+			}
+			return interval
 		}
 		return hint
 	}
 	return sharedRefusalWait(hint, retry)
+}
+
+func sharedRefusalSleepForChannel(wait time.Duration, channel string, qoderIntervalMs int) time.Duration {
+	if qoderIntervalMs > 0 && strings.EqualFold(strings.TrimSpace(channel), "qoder") {
+		return wait
+	}
+	return wait + sharedRefusalJitter(wait)
 }
 
 // sharedRefusalWait is the legacy early-probe policy for non-Qoder channels.

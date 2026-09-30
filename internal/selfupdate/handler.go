@@ -6,13 +6,13 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"orchids-api/internal/util"
 )
 
 func respond(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	util.WriteJSONStatus(w, status, value)
 }
 func method(w http.ResponseWriter, r *http.Request, want string) bool {
 	if r.Method == want {

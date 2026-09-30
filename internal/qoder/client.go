@@ -177,19 +177,30 @@ func (c *Client) SetAccountStore(s AccountUpdater) {
 func (c *Client) Close() {}
 
 // SendRequestWithPayload streams one chat completion to the caller.
-func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) (sendErr error) {
 	if c == nil {
 		return fmt.Errorf("qoder client is nil")
 	}
+	preparation := debug.BeginUpstream(ctx, "PREPARE", c.endpoints.inference, nil, nil)
+	_, prepTrace := preparation.Trace(ctx, map[string]interface{}{"kind": "preparation", "provider": "qoder"})
+	defer func() {
+		if prepTrace != nil {
+			prepTrace.Finish(sendErr)
+		}
+	}()
+	prepTrace.Set("credential_refresh_expected", !c.currentCredentials().AccessValid(time.Now()))
 	creds, err := c.ensureAccessToken(ctx)
+	prepTrace.Mark("access_ready_ms")
 	if err != nil {
 		return err
 	}
 	fields, err := c.ensureRuntimeFields(ctx, creds)
+	prepTrace.Mark("runtime_ready_ms")
 	if err != nil {
 		return err
 	}
 	model, err := c.resolveModel(req)
+	prepTrace.Mark("model_ready_ms")
 	if err != nil {
 		return err
 	}
@@ -209,6 +220,11 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if err != nil {
 		return err
 	}
+	if conversation := strings.TrimSpace(req.ConversationID); conversation != "" {
+		sessionID = conversationSessionID(creds.UID, conversation)
+	} else if conversation := strings.TrimSpace(req.ChatSessionID); conversation != "" {
+		sessionID = conversationSessionID(creds.UID, conversation)
+	}
 	// aliyun_user_type is deliberately empty: the QoderWork client sends no
 	// account class, and the account's own class is still reported through the
 	// quota path.
@@ -223,6 +239,9 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	}
 
 	toolsEnabled := !req.NoTools && len(normalizeToolDefinitions(req, model)) > 0
+	prepTrace.Mark("body_ready_ms")
+	prepTrace.Finish(nil)
+	prepTrace = nil
 	return c.runChat(ctx, url, body, model, requestID, fields, toolsEnabled, onMessage)
 }
 
@@ -328,7 +347,11 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		// own fault takes a healthy account out of rotation for nothing.
 		case isTransientError(err) && transientRetries < TransientMaxRetries:
 			transientRetries++
-			if waitErr := sleepCtx(ctx, TransientBackoff(transientRetries)); waitErr != nil {
+			waitStarted := time.Now()
+			delay := TransientBackoff(transientRetries)
+			waitErr := sleepCtx(ctx, delay)
+			debug.RecordWait(ctx, "qoder_transient", delay, time.Since(waitStarted), waitErr != nil)
+			if waitErr != nil {
 				return waitErr
 			}
 			requestID, err = newUUID(c.entropy)

@@ -8,6 +8,7 @@ import "strings"
 var reasoningEffortCapabilities = map[string][]string{
 	"grok-4.5":                     {"low", "medium", "high"},
 	"grok-4.6":                     {"low", "medium", "high", "xhigh"},
+	"grok-4.7":                     {"low", "medium", "high", "xhigh"},
 	"grok-4.3":                     {"none", "low", "medium", "high"},
 	"grok-build-0.1":               {"none"},
 	"grok-4.20-0309-reasoning":     {"low", "medium", "high"},

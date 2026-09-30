@@ -1061,17 +1061,20 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				retryDelayForAttempt = hinted
 			}
 			sharedRefusal := isSharedUpstreamRefusalClass(errClass)
-			// sharedRefusalWait is the upstream's own hint, charged against the
+			// sharedRefusalWait is the selected interval, charged against the
 			// budget. The jitter below is added only to the sleep: it exists to
 			// decorrelate wake-ups, and charging it made the last reachable
 			// window unreachable (a 30s hint plus up to 5s of jitter spent 35s
 			// against a 60s budget that had already paid 30s).
 			sharedRefusalWait := time.Duration(0)
+			qoderIntervalMs := 0
+			if cfg != nil && errClass.Category == "upstream_queue" {
+				qoderIntervalMs = cfg.QoderQueueRetryIntervalMs
+			}
 			if retryDelayForAttempt > 0 && sharedRefusal {
-				// Qoder preserves the provider-normalized hint. Other channels
-				// keep their existing early-probe policy; positive jitter never
-				// moves a retry before the chosen wait.
-				sharedRefusalWait = sharedRefusalWaitForChannel(retryDelayForAttempt, attempt+1, targetChannel)
+				// A configured Qoder interval overrides its provider hint. Other
+				// channels keep their existing early-probe policy.
+				sharedRefusalWait = sharedRefusalWaitForChannel(retryDelayForAttempt, attempt+1, targetChannel, qoderIntervalMs)
 			}
 			// configSnapshot reports nil for a nil handler, so the knob is read
 			// defensively: losing the setting must fall back to the built-in
@@ -1100,7 +1103,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if sharedRefusalWait > 0 {
-				retryDelayForAttempt = sharedRefusalWait + sharedRefusalJitter(sharedRefusalWait)
+				retryDelayForAttempt = sharedRefusalSleepForChannel(sharedRefusalWait, targetChannel, qoderIntervalMs)
 			}
 			// Holding this account's concurrency slot through the wait starves the
 			// pool: the slot is reserved for the whole request, so ten requests
@@ -1113,7 +1116,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				trackedAccountID = 0
 				slotReleasedForWait = true
 			}
-			if retryDelayForAttempt > 0 && !util.SleepWithContext(r.Context(), retryDelayForAttempt) {
+			waitStarted := time.Now()
+			waitCompleted := true
+			if retryDelayForAttempt > 0 {
+				waitCompleted = util.SleepWithContext(r.Context(), retryDelayForAttempt)
+				debug.RecordWait(r.Context(), errClass.Category, retryDelayForAttempt, time.Since(waitStarted), !waitCompleted)
+			}
+			if !waitCompleted {
 				sh.finishResponse("end_turn")
 				return
 			}

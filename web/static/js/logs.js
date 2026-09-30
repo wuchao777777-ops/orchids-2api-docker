@@ -71,9 +71,9 @@
 
   function sectionLabel(section) {
     const name = String(section.name || '');
-    const attempt = /^upstream_(\d+)_(request\.json|response\.txt|result\.json|error\.json|read_error\.json)$/.exec(name);
+    const attempt = /^upstream_(\d+)_(request\.json|response\.txt|result\.json|error\.json|read_error\.json|latency\.json)$/.exec(name);
     if (attempt) {
-      const labels = { 'request.json': '请求', 'response.txt': '响应内容', 'result.json': 'HTTP 状态', 'error.json': '错误', 'read_error.json': '响应读取错误' };
+      const labels = { 'request.json': '请求', 'response.txt': '响应内容', 'result.json': 'HTTP 状态', 'error.json': '错误', 'read_error.json': '响应读取错误', 'latency.json': '延迟诊断' };
       return '上游尝试 ' + Number(attempt[1]) + ' · ' + labels[attempt[2]];
     }
     return SECTION_LABELS[name] || (section.title || name || '记录');
@@ -756,6 +756,34 @@
       return;
     }
 
+    sections.filter(section => /_latency\.json$/.test(section.name)).forEach(section => {
+      try {
+        const data = JSON.parse(section.payload);
+        const panel = make('div', 'logs-section');
+        panel.appendChild(make('strong', '', sectionLabel(section)));
+        const labels = {
+          account_id:'账号 ID', credential_refresh_expected:'凭据需要刷新', kind:'记录类型', provider:'渠道', model_key:'实际模型路由', model_source:'模型来源', host:'上游主机', proxy:'代理路径',
+          resolved_ips:'DNS 解析地址', connected_address:'成功连接目标', remote_address:'实际对端', http_protocol:'HTTP 协议', alpn:'TLS ALPN',
+          connection_reused:'复用连接', connection_was_idle:'取自空闲池', httpdns_ip:'HTTPDNS 请求头', body_bytes:'请求体字节',
+          messages_count:'历史消息数', tools_count:'工具定义数', conversation_fingerprint:'会话指纹', protocol_profile:'协议配置', http_status:'HTTP 状态',
+          before_upstream_ms:'请求进入至本次尝试（含此前等待）', connection_wait_ms:'获取连接（含建连）', dns_ms:'DNS', tls_ms:'TLS',
+          request_written_ms:'请求写完', first_response_byte_ms:'首个响应字节', response_headers_ms:'响应头就绪', first_sse_ms:'首条 SSE',
+          first_text_ms:'首个正文', first_reasoning_ms:'首个推理', first_tool_ms:'首个工具调用', total_ms:'本次耗时',
+          access_ready_ms:'凭据准备就绪', runtime_ready_ms:'签名身份准备就绪', model_ready_ms:'模型路由就绪', body_ready_ms:'请求体就绪',
+          upstream_firstTokenDuration:'上游报告首 Token', upstream_totalDuration:'上游报告总耗时', upstream_serverDuration:'上游报告服务耗时',
+          reason:'等待原因', planned_wait_ms:'计划等待', actual_wait_ms:'实际等待', cancelled:'等待被取消', parameters:'生成参数', error:'失败原因'
+        };
+        Object.entries(data).forEach(([key,value]) => {
+          const label = labels[key] || (key.startsWith('tcp:') ? 'TCP '+key.slice(4,-3) : key);
+          let rendered = typeof value === 'boolean' ? (value ? '是' : '否') : typeof value === 'object' ? JSON.stringify(value) : String(value);
+          if (value === '' || value == null) rendered = '未记录';
+          if (key.endsWith('_ms') || key.startsWith('upstream_')) rendered += ' ms';
+          panel.appendChild(make('div', '', label + '：' + rendered));
+        });
+        panel.appendChild(note('除 DNS/TCP/TLS/获取连接外，阶段时间从本次尝试开始累计；缺失表示未观测到。上游报告耗时与本地耗时口径不同。'));
+        container.appendChild(panel);
+      } catch (_) { /* Raw section below remains available for truncated data. */ }
+    });
     sections.forEach((section) => {
       const details = make('details', 'logs-section');
       // A failure artifact is what an operator came for; everything else starts

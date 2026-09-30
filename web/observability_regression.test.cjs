@@ -13,12 +13,19 @@ function loadOps(){
  const nodes=new Map();const node=id=>{if(!nodes.has(id))nodes.set(id,element());return nodes.get(id)};
  const context=vm.createContext({console,Date,URLSearchParams,setInterval(){},window:{},document:{readyState:'loading',addEventListener(){},getElementById:node,createElement:element,createElementNS:(_,tag)=>element(tag),querySelectorAll:()=>[]}});
  let src=fs.readFileSync(path.join(__dirname,'static/js/ops.js'),'utf8');
- src=src.replace(/\}\)\(\);\s*$/,'globalThis.review={state,renderHero,renderKpis,renderResources,liveBuckets,renderTrends,trendBuckets};})();');vm.runInContext(src,context);
+ src=src.replace(/\}\)\(\);\s*$/,'globalThis.review={state,renderHero,renderKpis,renderResources,liveBuckets,renderTrends,trendBuckets,windowRange};})();');vm.runInContext(src,context);
  return {api:context.review,node};
 }
 const text=node=>[node.textContent,...node.children.map(text)].join(' ');
 function payload(series){return {available:true,until:'2026-09-13T08:30:30Z',window_minutes:180,totals:{requests:60,success:60},series};}
 const current={minute:'2026-09-13T08:30:00Z',requests:60,input_tokens:600,output_tokens:300,usage_samples:60};
+test('log drilldown keeps the rendered overview time boundaries',()=>{
+ const {api}=loadOps();
+ const p=payload([current]);p.since='2026-09-13T05:30:30Z';
+ api.state.overview=p;
+ const range=api.windowRange();
+ assert.equal(range.since.getTime(),Date.parse(p.since));assert.equal(range.until.getTime(),Date.parse(p.until));
+});
 test('1min renders one data point, TPS and server-aligned time without insufficient-sample state',()=>{
  const {api,node}=loadOps();api.renderHero(payload([current]));
  assert.equal(node('opsLiveQpsNow').textContent,'2.00');assert.equal(node('opsLiveTpsNow').textContent,'30.0');

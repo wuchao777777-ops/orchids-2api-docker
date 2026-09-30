@@ -3,29 +3,10 @@ package api
 import (
 	"net/http"
 
-	"github.com/goccy/go-json"
+	"orchids-api/internal/util"
 )
 
-// Shared response writers for the admin API.
-//
-// Every console endpoint answers the same two steps — declare the content type,
-// then encode — and most of them serve exactly one HTTP method. Those two steps
-// used to be spelled out in each handler, so an endpoint added later could
-// easily answer with a different content type or a different 405 body than its
-// neighbours. One writer each keeps the wire shape in a single place.
-
-// writeJSON answers one JSON body on 200.
-func writeJSON(w http.ResponseWriter, body interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-// writeJSONStatus answers one JSON body with an explicit status.
-func writeJSONStatus(w http.ResponseWriter, status int, body interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
+// JSON writers are shared with inference endpoints through internal/util.
 
 // requireMethod rejects every method but the one the endpoint serves. It
 // reports false when it has already written the 405, so the caller only has to
@@ -56,5 +37,5 @@ func writeCodeEnvelope(w http.ResponseWriter, code int, data interface{}, msg st
 	if msg != "" {
 		payload["msg"] = msg
 	}
-	writeJSON(w, payload)
+	util.WriteJSON(w, payload)
 }

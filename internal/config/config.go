@@ -145,6 +145,9 @@ type Config struct {
 	// clamped to a day so a bad setting cannot pin a request forever, but
 	// anything above 60s is warned about at startup for that reason.
 	SharedRefusalWaitBudgetMs int `json:"shared_refusal_wait_budget_ms,omitempty"`
+	// QoderQueueRetryIntervalMs overrides the queue retry interval. Zero keeps
+	// the upstream hint; a positive value schedules retries at this interval.
+	QoderQueueRetryIntervalMs int `json:"qoder_queue_retry_interval_ms,omitempty"`
 	// Quality-hold policy. The gateway withholds a degraded reasoning turn
 	// instead of streaming it, then retries it on another account. Holding is on
 	// by default and fails open once the retry budget is spent.

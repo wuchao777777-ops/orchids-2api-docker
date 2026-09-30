@@ -63,7 +63,7 @@ func TestSkillTransientFreshIdentity(t *testing.T) {
 	if len(bodies) != 2 {
 		t.Fatalf("attempts = %d", len(bodies))
 	}
-	if bodies[0].RequestID == bodies[1].RequestID || !bodies[1].IsRetry {
+	if bodies[0].RequestID == bodies[1].RequestID || bodies[1].IsRetry {
 		t.Fatalf("retry reused request ID=%v; is_retry=%v", bodies[0].RequestID == bodies[1].RequestID, bodies[1].IsRetry)
 	}
 	if bodies[0].SessionID != bodies[1].SessionID {
@@ -100,7 +100,7 @@ func TestSkillRequestControlsAndSharedRetry(t *testing.T) {
 		if err := json.Unmarshal(raw, &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.IsRetry != (attempt > 1) {
+		if body.IsRetry {
 			t.Fatalf("attempt %d retry=%v", attempt, body.IsRetry)
 		}
 		p := body.Parameters

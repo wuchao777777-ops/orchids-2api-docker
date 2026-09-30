@@ -483,3 +483,24 @@ func TestObserveAggregatesCostByPricedAndUnpriced(t *testing.T) {
 		t.Fatalf("summary priced=%d unpriced=%d", summary.PricedRequests, summary.UnpricedRequests)
 	}
 }
+
+func TestCheckedSamplesAndWriteHealthDoNotHideRedisFailure(t *testing.T) {
+	agg, mini := newAggregator(t)
+	now := time.Now().Truncate(time.Minute)
+	ctx := context.Background()
+	agg.Observe(ctx, Outcome{Channel: "grok", OK: true, DurationMS: 100, At: now})
+	buckets, err := agg.Range(ctx, "grok", now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mini.Del(agg.key(now, "grok") + ":dur")
+	mini.Set(agg.key(now, "grok")+":dur", "invalid")
+	if _, _, err := agg.SamplesForChecked(ctx, "grok", buckets); err == nil {
+		t.Fatal("unavailable latency was treated as empty samples")
+	}
+	agg.Observe(ctx, Outcome{Channel: "grok", OK: true, DurationMS: 100, At: now})
+	health := agg.Health()
+	if health["written"] != uint64(1) || health["write_failed"] != uint64(1) {
+		t.Fatalf("health=%+v", health)
+	}
+}

@@ -30,28 +30,23 @@ func (h *Handler) cliHeaders(acc *store.Account, token string) http.Header {
 // on transient failures (401 after refresh, 5xx) while treating team-level 429
 // as shared (no switch).
 func (h *Handler) doCLIWithAutoSwitchAt(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelID, path string) (*http.Response, error) {
-	immutable, err := cloneBuildPayload(payload)
-	if err != nil {
-		return nil, err
-	}
-	prepare := func() error {
-		attempt, err := buildPayloadForAccount(immutable, sess.acc, modelID)
-		if err != nil {
-			return err
-		}
-		replacePayload(payload, attempt)
-		return nil
-	}
-	if err := prepare(); err != nil {
-		return nil, err
-	}
-	ctx = withReasoningDiagnostics(ctx, payload)
 	if sess == nil || sess.acc == nil {
 		return nil, fmt.Errorf("empty cli chat session")
 	}
 	if h == nil || h.buildClient() == nil {
 		return nil, fmt.Errorf("grok cli client not configured")
 	}
+	immutable, err := cloneBuildPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	prepare := func() error {
+		return prepareBuildPayload(immutable, payload, sess.acc, modelID)
+	}
+	if err := prepare(); err != nil {
+		return nil, err
+	}
+	ctx = withReasoningDiagnostics(ctx, payload)
 	return h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond,
 		func() (*http.Response, error) { return h.buildClient().doResponsesAt(ctx, sess.acc, path, payload) },
 		func(used []int64) (*chatAccountSession, error) { return h.openCLIAccountSession(ctx, used, modelID) }, prepare)

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/util"
 	"strconv"
 	"strings"
 	"time"
@@ -82,7 +83,7 @@ func writeGrokErrorCode(w http.ResponseWriter, status int, code, message string)
 	case status >= 500:
 		errorType = "server_error"
 	}
-	writeJSONStatus(w, status, map[string]interface{}{
+	util.WriteJSONStatus(w, status, map[string]interface{}{
 		"error": map[string]interface{}{
 			"message": message,
 			"type":    errorType,
@@ -218,19 +219,6 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 		return false
 	}
 	return true
-}
-
-// writeJSON writes v to w as a JSON response with the application/json content
-// type.
-func writeJSON(w http.ResponseWriter, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeJSONStatus(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // maxGrokJSONBodyBytes bounds the request body of every JSON Grok endpoint: an

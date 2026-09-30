@@ -25,7 +25,9 @@
     const link = node('systemReleaseLink');
     link.hidden = !data.release;
     if (data.release) link.href = `https://github.com/${data.current.repository}/releases/tag/${encodeURIComponent(data.release.tag_name)}`;
-    text('systemReleaseNotes', data.release?.body || '');
+    const notes = String(data.release?.body || '').replace(/^\s*(?:\*\*)?Full Changelog(?:\*\*)?\s*:.*$/gmi, '').trim();
+    text('systemReleaseNotes', notes);
+    node('systemReleaseNotes').hidden = !notes;
     if (busy && !pollTimer) pollTimer = setTimeout(poll, 1500);
   }
   async function check(force = false) {

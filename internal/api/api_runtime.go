@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"orchids-api/internal/util"
 	"os"
 	"runtime"
 	"strconv"
@@ -165,7 +166,7 @@ func (a *API) HandleOpsRuntime(w http.ResponseWriter, r *http.Request) {
 		refreshing = a.refreshConcurrency()
 	}
 	metrics := []map[string]interface{}{cpu, memory, rss, runtimeMetric("Go 堆内存", formatRuntimeBytes(mem.Alloc), "当前已分配", true, 0), runtimeMetric("Goroutine", strconv.Itoa(runtime.NumGoroutine()), "当前协程数", true, 0), runtimeMetric("账号刷新", strconv.Itoa(refreshing), "正在刷新", true, 0)}
-	writeJSON(w, map[string]interface{}{"available": true, "metrics": metrics})
+	util.WriteJSON(w, map[string]interface{}{"available": true, "metrics": metrics})
 }
 func formatRuntimeBytes(value uint64) string {
 	if value >= 1<<30 {

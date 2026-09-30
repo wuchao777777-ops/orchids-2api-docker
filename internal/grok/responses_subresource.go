@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/util"
 	"strings"
 	"time"
 
@@ -212,7 +213,7 @@ func writeCancelledRecord(w http.ResponseWriter, r *http.Request, st ResponsesSt
 			return
 		}
 	}
-	writeJSON(w, response)
+	util.WriteJSON(w, response)
 }
 
 // writeSyntheticCancelledResponse answers cancel for a record whose body lives
@@ -232,7 +233,7 @@ func writeSyntheticCancelledResponse(w http.ResponseWriter, record *store.Stored
 		response["created_at"] = record.CreatedAt.Unix()
 	}
 	response["output"] = []interface{}{}
-	writeJSON(w, response)
+	util.WriteJSON(w, response)
 }
 
 // markOutputItemsCancelled keeps the item statuses consistent with the response
@@ -276,7 +277,7 @@ func writeStoredInputItems(w http.ResponseWriter, record *store.StoredResponse) 
 			payload["last_id"] = parseLooseStringAny(last["id"])
 		}
 	}
-	writeJSON(w, payload)
+	util.WriteJSON(w, payload)
 }
 
 // responsesInputItemsJSON normalizes a Responses `input` into the item array the

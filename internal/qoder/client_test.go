@@ -551,7 +551,7 @@ func TestRefreshedReplayUsesFreshIdentityAndRetryFlag(t *testing.T) {
 	// request_id and chat_record_id identify the attempt and are refreshed;
 	// request_set_id and business.id identify the task and stay put, which is
 	// what the capture shows across the requests of one task.
-	if body.RequestID != "new" || body.ChatRecordID != "new" || !body.IsRetry {
+	if body.RequestID != "new" || body.ChatRecordID != "new" || body.IsRetry {
 		t.Fatalf("replay request id not refreshed: %+v", body)
 	}
 	if body.RequestSetID != "request-set" || body.Business.ID != "request-set" {

@@ -10,6 +10,32 @@ import (
 // The exact status_message stored for production Qoder account 22.
 const sharedRefusalMessage = `qoder upstream rejected the credential: {"code":"10605","message":"{\"isQueued\":true,\"modelKey\":\"qfmodel\",\"queueCount\":0,\"queueType\":\"p3\",\"retryAfterSeconds\":30,\"serviceAvailable\":false,\"waitTime\":30}"}`
 
+func TestQoderExplicitQueueRetryInterval(t *testing.T) {
+	wait := sharedRefusalWaitForChannel(30*time.Second, 1, "qoder", 15000)
+	if wait != 15*time.Second {
+		t.Fatalf("queue wait = %v, want 15s despite the 30s hint", wait)
+	}
+	budget := SharedRefusalWaitBudget(15000)
+	if !sharedRefusalWaitAllowedWithin(0, wait, budget) {
+		t.Fatal("first retry must fit the 15s budget")
+	}
+	if sharedRefusalWaitAllowedWithin(wait, wait, budget) {
+		t.Fatal("a second wait must not exceed the total budget")
+	}
+	if sleep := sharedRefusalSleepForChannel(wait, "qoder", 15000); sleep != wait {
+		t.Fatalf("explicit interval acquired jitter: %v", sleep)
+	}
+	if got := sharedRefusalWaitForChannel(30*time.Second, 1, "qoder", 0); got != 30*time.Second {
+		t.Fatalf("default upstream hint changed: %v", got)
+	}
+	if got := sharedRefusalWaitForChannel(30*time.Second, 1, "workbuddy", 15000); got != sharedRefusalWait(30*time.Second, 1) {
+		t.Fatalf("Qoder override affected another channel: %v", got)
+	}
+	if got := sharedRefusalWaitForChannel(0, 1, "qoder", 15000); got != 0 {
+		t.Fatalf("zero delay acquired a wait: %v", got)
+	}
+}
+
 // TestSharedRefusalClassIsRecognised pins the signal the retry loop uses. A
 // shared refusal is retried on the account already held; anything the classifier
 // would rotate away from must not match, or the wait would be spent re-queueing

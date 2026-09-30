@@ -305,6 +305,9 @@ func readSSE(reader io.Reader, fn func(sseFrame) bool) error {
 // Qoder models: `Tool calls: [...]`. Text is buffered only while it can still be
 // that exact prefix; normal answers continue streaming as soon as they diverge.
 func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(upstream.SSEMessage)) (streamResult, error) {
+	return consumeStreamObserved(body, toolsEnabled, onMessage, nil)
+}
+func consumeStreamObserved(body io.Reader, toolsEnabled bool, onMessage func(upstream.SSEMessage), onFrame func()) (streamResult, error) {
 	result := streamResult{}
 	tools := util.NewToolCallAccumulator()
 	var pendingText strings.Builder
@@ -328,7 +331,11 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 	}
 
 	emitTools := func() {
-		upstream.EmitToolCalls(onMessage, tools.CompleteAll(), &result.SawMeaningfulEvent, &result.ToolCallCount)
+		completed := tools.CompleteAll()
+		for _, call := range completed {
+			call.Arguments = normalizeCommandEscalation(call.Name, call.Arguments)
+		}
+		upstream.EmitToolCalls(onMessage, completed, &result.SawMeaningfulEvent, &result.ToolCallCount)
 	}
 
 	sawFinish := false
@@ -337,6 +344,9 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 	checkingRateLimitText := true
 
 	readErr := readSSE(body, func(frame sseFrame) bool {
+		if onFrame != nil {
+			onFrame()
+		}
 		if strings.EqualFold(strings.TrimSpace(frame.event), "finish") {
 			sawFinish = true
 			var timings map[string]json.RawMessage

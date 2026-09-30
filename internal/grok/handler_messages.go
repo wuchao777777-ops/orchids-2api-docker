@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"orchids-api/internal/util"
 	"slices"
 	"strings"
 	"time"
@@ -122,7 +123,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicError(w, http.StatusBadGateway, "invalid chat response")
 		return
 	}
-	writeJSON(w, anthropicResponseFromChat(req.Model, chatResponse))
+	util.WriteJSON(w, anthropicResponseFromChat(req.Model, chatResponse))
 }
 
 func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsRequest, error) {
@@ -1270,7 +1271,7 @@ func anthropicErrorCode(status int) string {
 }
 
 func writeAnthropicError(w http.ResponseWriter, status int, message string) {
-	writeJSONStatus(w, status, map[string]interface{}{
+	util.WriteJSONStatus(w, status, map[string]interface{}{
 		"type": "error",
 		"error": map[string]interface{}{
 			"type":    anthropicErrorType(status),

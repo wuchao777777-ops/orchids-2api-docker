@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -95,7 +96,10 @@ type RedisLogger struct {
 	client    *redis.Client
 	streamKey string
 	maxLen    int64
-	eventCh   chan Event
+	eventCh   chan queuedEvent
+	mu        sync.Mutex
+	closed    bool
+	health    Health
 	done      chan struct{}
 }
 
@@ -108,11 +112,39 @@ func NewRedisLogger(client *redis.Client, prefix string, maxLen int64) *RedisLog
 		client:    client,
 		streamKey: prefix + "audit:log",
 		maxLen:    maxLen,
-		eventCh:   make(chan Event, 256),
+		eventCh:   make(chan queuedEvent, 256),
 		done:      make(chan struct{}),
 	}
 	go l.writeLoop()
 	return l
+}
+
+// Health describes this process's best-effort sink; it is not a cluster total.
+type Health struct {
+	Queue       int        `json:"queue"`
+	QueuedBytes int        `json:"queued_bytes"`
+	Written     uint64     `json:"written"`
+	Dropped     uint64     `json:"dropped"`
+	WriteFailed uint64     `json:"write_failed"`
+	LastSuccess *time.Time `json:"last_success,omitempty"`
+	LastFailure *time.Time `json:"last_failure,omitempty"`
+	Closed      bool       `json:"closed"`
+}
+type queuedEvent struct {
+	event Event
+	data  []byte
+}
+
+const maxEventBytes = 32 * 1024
+const maxQueuedBytes = 8 * 1024 * 1024
+
+func (l *RedisLogger) Health() Health {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	health := l.health
+	health.Queue = len(l.eventCh)
+	health.Closed = l.closed
+	return health
 }
 
 func (l *RedisLogger) Log(_ context.Context, event Event) {
@@ -122,39 +154,58 @@ func (l *RedisLogger) Log(_ context.Context, event Event) {
 	if event.Kind == "" {
 		event.Kind = KindRequest
 	}
+	// Serialize before enqueueing: callers may reuse metadata after Log returns.
+	data, err := json.Marshal(event)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed || err != nil || len(data) > maxEventBytes || l.health.QueuedBytes+len(data) > maxQueuedBytes {
+		l.health.Dropped++
+		return
+	}
 	select {
-	case l.eventCh <- event:
+	case l.eventCh <- queuedEvent{event: event, data: data}:
+		l.health.QueuedBytes += len(data)
 	default:
-		// Channel full, drop event to avoid blocking request path
-		slog.Warn("Audit log buffer full, dropping event", "action", event.Action, "kind", event.Kind)
+		l.health.Dropped++
 	}
 }
 
 func (l *RedisLogger) Close() {
-	close(l.eventCh)
+	l.mu.Lock()
+	if !l.closed {
+		l.closed = true
+		close(l.eventCh)
+	}
+	l.mu.Unlock()
 	<-l.done
 }
 
 func (l *RedisLogger) writeLoop() {
 	defer close(l.done)
-	for event := range l.eventCh {
-		data, err := json.Marshal(event)
-		if err != nil {
-			continue
-		}
+	for queued := range l.eventCh {
+		l.mu.Lock()
+		l.health.QueuedBytes -= len(queued.data)
+		l.mu.Unlock()
+		event := queued.event
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		l.client.XAdd(ctx, &redis.XAddArgs{
-			Stream: l.streamKey,
-			MaxLen: l.maxLen,
-			Approx: true,
-			Values: map[string]interface{}{
-				"data":   string(data),
-				"action": event.Action,
-				"status": event.Status,
-				"kind":   string(event.Kind),
-			},
+		err := l.client.XAdd(ctx, &redis.XAddArgs{
+			Stream: l.streamKey, MaxLen: l.maxLen, Approx: true,
+			Values: map[string]interface{}{"data": string(queued.data), "action": event.Action, "status": event.Status, "kind": string(event.Kind)},
 		}).Err()
 		cancel()
+		now := time.Now().UTC()
+		l.mu.Lock()
+		if err != nil {
+			l.health.WriteFailed++
+			l.health.LastFailure = &now
+		} else {
+			l.health.Written++
+			l.health.LastSuccess = &now
+		}
+		l.mu.Unlock()
+		if err != nil {
+			slog.Warn("Audit log write failed")
+		}
 	}
 }
 

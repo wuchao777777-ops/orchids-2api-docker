@@ -1,0 +1,58 @@
+package audit
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"testing"
+)
+
+func TestSinkHealthReportsPersistenceFailure(t *testing.T) {
+	logger, server := setupRedisLogger(t)
+	server.Set(logger.streamKey, "wrong type")
+	logger.Log(context.Background(), Event{Action: "test"})
+	logger.Close()
+	health := logger.Health()
+	if health.WriteFailed != 1 || health.Written != 0 || health.LastFailure == nil || health.Queue != 0 || health.QueuedBytes != 0 {
+		t.Fatalf("health = %+v", health)
+	}
+}
+
+func TestSinkRejectsOversizeAndSnapshotsMetadata(t *testing.T) {
+	logger, _ := setupRedisLogger(t)
+	logger.Log(context.Background(), Event{Details: strings.Repeat("x", maxEventBytes+1)})
+	metadata := map[string]interface{}{"value": "original"}
+	logger.Log(context.Background(), Event{Action: "test", Metadata: metadata})
+	metadata["value"] = "changed"
+	logger.Close()
+	logger.Close()
+	logger.Log(context.Background(), Event{Action: "after-close"})
+	health := logger.Health()
+	if health.Dropped != 2 || health.Written != 1 || health.LastSuccess == nil {
+		t.Fatalf("health = %+v", health)
+	}
+	events := readLoggedEvents(t, logger, 1)
+	if events[0].Metadata["value"] != "original" {
+		t.Fatalf("metadata mutated: %+v", events)
+	}
+}
+
+func TestSinkConcurrentCloseAndLog(t *testing.T) {
+	logger, _ := setupRedisLogger(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				logger.Log(context.Background(), Event{Action: "concurrent"})
+			}
+		}()
+	}
+	logger.Close()
+	wg.Wait()
+	health := logger.Health()
+	if health.Written+health.Dropped != 800 {
+		t.Fatalf("unaccounted events: %+v", health)
+	}
+}

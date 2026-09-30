@@ -15,12 +15,13 @@ import (
 // validating before selection would either reject a valid route or silently
 // send an unsupported effort to the selected credential.
 type buildReasoningProfileError struct {
-	model  string
-	effort string
+	model     string
+	effort    string
+	supported []string
 }
 
 func (e *buildReasoningProfileError) Error() string {
-	return fmt.Sprintf("reasoning.effort %q is not supported by model %s on the selected Build account", e.effort, e.model)
+	return fmt.Sprintf("reasoning.effort %q is not supported by model %s on the selected Build account; supported values: %s", e.effort, e.model, strings.Join(e.supported, ", "))
 }
 
 // cloneBuildPayload makes an attempt-local payload. Retry normalization may
@@ -105,7 +106,7 @@ func buildPayloadForAccount(immutable map[string]interface{}, acc *store.Account
 		}
 	}
 	if !profile.SupportsReasoningEffort || !accept(normalized) {
-		return nil, &buildReasoningProfileError{model: upstreamModel, effort: effort}
+		return nil, &buildReasoningProfileError{model: upstreamModel, effort: effort, supported: profile.ReasoningEfforts}
 	}
 	reasoning["effort"] = normalized
 	payload["reasoning"] = reasoning
@@ -117,4 +118,15 @@ func replacePayload(dst map[string]interface{}, src map[string]interface{}) {
 	for key, value := range src {
 		dst[key] = value
 	}
+}
+
+// prepareBuildPayload applies account capabilities without changing the source
+// shared by retries and returns the payload used by both Chat and Responses.
+func prepareBuildPayload(source, payload map[string]interface{}, acc *store.Account, model string) error {
+	attempt, err := buildPayloadForAccount(source, acc, model)
+	if err != nil {
+		return err
+	}
+	replacePayload(payload, attempt)
+	return nil
 }

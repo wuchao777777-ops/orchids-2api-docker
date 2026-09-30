@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
+
 	"strings"
 	"sync"
 	"time"
@@ -223,23 +223,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 }
 
 func parseRetryAfter(value string) time.Duration {
-	value = strings.TrimSpace(value)
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds > 0 {
-		if seconds > 30 {
-			seconds = 30
-		}
-		return time.Duration(seconds) * time.Second
-	}
-	if at, err := http.ParseTime(value); err == nil {
-		delay := time.Until(at)
-		if delay > 30*time.Second {
-			return 30 * time.Second
-		}
-		if delay > 0 {
-			return delay
-		}
-	}
-	return 0
+	return util.ParseRetryAfter(value, time.Now(), 30*time.Second)
 }
 
 // ensureAccessToken returns a usable bearer token, refreshing when the stored

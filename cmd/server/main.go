@@ -194,6 +194,7 @@ func main() {
 
 	if redisClient := s.RedisClient(); redisClient != nil {
 		auditLogger := audit.NewRedisLogger(redisClient, s.RedisPrefix(), 10000)
+		apiHandler.SetAuditHealthReporter(auditLogger.Health)
 		h.SetAuditLogger(middleware.ObserveAuditLogger(auditLogger))
 		grokHandler.SetAuditLogger(middleware.ObserveAuditLogger(auditLogger))
 		// The admin session wrapper journals management changes; wiring the same

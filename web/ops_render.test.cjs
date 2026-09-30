@@ -34,7 +34,7 @@ function makeElement(id) {
       this.children.push(node);
       return node;
     },
-    addEventListener() {},
+    addEventListener(event, handler) { this.listeners ||= {}; this.listeners[event] = handler; },
     setAttribute(name, value) {
       this[name] = String(value);
     },
@@ -107,7 +107,7 @@ const realPayload = {
   ],
 };
 
-function renderPage(payload) {
+function renderPage(payload, fetcher) {
   const elements = new Map();
   const node = (id) => {
     if (!elements.has(id)) elements.set(id, makeElement(id));
@@ -124,19 +124,93 @@ function renderPage(payload) {
       querySelectorAll: () => [],
       addEventListener() {},
     },
-    window: { setInterval: () => 0, clearInterval() {}, addEventListener() {} },
+    window: { setInterval: () => 0, clearInterval() {}, addEventListener() {}, setTimeout: (fn) => setImmediate(fn) },
     setInterval: () => 0,
     setTimeout: (fn) => { fn(); return 0; },
     URLSearchParams,
-    fetch: async () => ({
+    fetch: fetcher || (async () => ({
       ok: true,
       status: 200,
       json: async () => payload,
-    }),
+    })),
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'static/js/ops.js'), 'utf8'), context);
   return { context, node };
 }
+
+const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve)); };
+
+test('time and channel changes reload alerts with the overview boundaries', async () => {
+  const calls = [];
+  const until = new Date('2026-09-30T08:00:00Z');
+  const fetcher = async (url) => {
+    const params = new URL(url, 'http://localhost').searchParams;
+    calls.push(url);
+    if (url.startsWith('/api/ops/overview')) {
+      const minutes = Number(params.get('window'));
+      return { ok: true, json: async () => ({ ...realPayload, window_minutes: minutes, since: new Date(until - minutes * 60000).toISOString(), until: until.toISOString() }) };
+    }
+    if (url.startsWith('/api/journal/records')) {
+      const oneHour = params.get('since') === '2026-09-30T07:00:00.000Z';
+      return { ok: true, json: async () => ({ data: oneHour ? [] : [{ event: { action: 'alert_fired', timestamp: '2026-09-30T06:00:00Z', channel: 'grok', error: 'older alert' } }] }) };
+    }
+    return { ok: true, json: async () => ({ metrics: [] }) };
+  };
+  const { node } = renderPage(realPayload, fetcher);
+  await settle();
+  assert.equal(node('opsAlertTable').querySelector('tbody').children.length, 1);
+  node('opsWindow').value = '60';
+  node('opsWindow').listeners.change();
+  await settle();
+  assert.match(node('opsAlertTable').querySelector('tbody').children[0].children[0].textContent, /暂无告警/);
+  node('opsChannel').value = 'grok';
+  node('opsChannel').listeners.change();
+  await settle();
+  const alerts = calls.filter((url) => url.startsWith('/api/journal/records'));
+  assert.equal(alerts.length, 3, 'each scope refresh must load alerts exactly once');
+  const params = new URL(alerts.at(-1), 'http://localhost').searchParams;
+  assert.equal(params.get('channel'), 'grok');
+  assert.equal(params.get('since'), '2026-09-30T07:00:00.000Z');
+  assert.equal(params.get('until'), until.toISOString());
+});
+
+test('an older alert response cannot repaint a changed time range', async () => {
+  let release;
+  let count = 0;
+  const fetcher = async (url) => {
+    if (url.startsWith('/api/journal/records')) {
+      if (++count === 1) return new Promise((resolve) => { release = () => resolve({ ok: true, json: async () => ({ data: [{ event: { action: 'alert_fired', timestamp: realPayload.until, error: 'stale alert' } }] }) }); });
+      return { ok: true, json: async () => ({ data: [] }) };
+    }
+    const minutes = Number(new URL(url, 'http://localhost').searchParams.get('window')) || 180;
+    return { ok: true, json: async () => ({ ...realPayload, window_minutes: minutes }) };
+  };
+  const { node } = renderPage(realPayload, fetcher);
+  await settle();
+  node('opsWindow').value = '60';
+  node('opsWindow').listeners.change();
+  release();
+  await settle();
+  assert.equal(count, 2);
+  assert.match(node('opsAlertTable').querySelector('tbody').children[0].children[0].textContent, /暂无告警/);
+});
+
+test('failed window refresh clears historical charts and matrix instead of showing the previous scope', async () => {
+  let broken = false;
+  const { node } = renderPage(realPayload, async (url) => {
+    if (broken && url.startsWith('/api/ops/overview')) return { ok: false, status: 503 };
+    return { ok: true, json: async () => url.startsWith('/api/journal/records') ? { data: [] } : realPayload };
+  });
+  await settle();
+  assert.ok(node('opsMatrix').querySelector('tbody').children.length > 1);
+  broken = true;
+  node('opsWindow').value = '60';
+  node('opsWindow').listeners.change();
+  await settle();
+  assert.equal(node('opsGaugeValue').textContent, '—');
+  assert.equal(node('opsMatrix').querySelector('tbody').children.length, 1);
+  assert.match(node('opsThroughput').children[0].textContent, /读取失败/);
+});
 
 test('the data-coverage card is filled in from the payload', async () => {
   const { node } = renderPage(realPayload);
@@ -233,4 +307,27 @@ test('an aggregation-disabled response still fills the coverage card', async () 
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(node('opsCoverage').textContent, /Redis/, 'the disabled reason is not shown');
+});
+
+test('collection loss stays visible even when overview queries succeed', async () => {
+  const { node } = renderPage({ ...realPayload, ingestion: { queue: 2, queued_bytes: 128, written: 10, dropped: 3, write_failed: 1 } });
+  await settle();
+  assert.match(node('opsIngestion').textContent, /丢弃 3/);
+  assert.match(node('opsIngestion').textContent, /写入失败 1/);
+  assert.match(node('opsIngestion').textContent, /可能不完整/);
+  assert.equal(node('opsStatusText').textContent, '日志采集存在丢失');
+});
+
+test('unavailable coverage is not presented as an empty retained log', async () => {
+  const { node } = renderPage({ ...realPayload, coverage: { available: false, entries: 0 } });
+  await settle();
+  assert.match(node('opsCoverage').textContent, /未能读取/);
+  assert.doesNotMatch(node('opsCoverage').textContent, /保留 0 条/);
+});
+
+test('aggregation failures are distinct from healthy audit ingestion', async () => {
+  const { node } = renderPage({ ...realPayload, ingestion: { queue: 0, queued_bytes: 0, written: 10, dropped: 0, write_failed: 0 }, aggregation_health: { available: true, write_failed: 2 } });
+  await settle();
+  assert.match(node('opsIngestion').textContent, /指标聚合写入失败 2/);
+  assert.equal(node('opsStatusText').textContent, '指标采集存在丢失');
 });

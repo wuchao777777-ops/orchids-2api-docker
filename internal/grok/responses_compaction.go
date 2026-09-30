@@ -26,6 +26,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/util"
 	"strconv"
 	"strings"
 	"time"
@@ -811,7 +812,7 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 		result := buildGatewayCompactionResponse(parsed.response, blob, modelID)
 		h.auditGatewayCompaction(r.Context(), accountID, modelID, result)
 		if !streaming {
-			writeJSONStatus(w, http.StatusOK, result)
+			util.WriteJSONStatus(w, http.StatusOK, result)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

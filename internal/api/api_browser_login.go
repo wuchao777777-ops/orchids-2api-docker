@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/util"
 	"strings"
 	"time"
 
@@ -164,7 +165,7 @@ func admitBrowserLogin[T any](
 		poll(pollContext, id)
 	}()
 
-	writeJSON(w, newDeviceLoginResponse(id, registry.shared(login)))
+	util.WriteJSON(w, newDeviceLoginResponse(id, registry.shared(login)))
 	return true
 }
 
@@ -240,7 +241,7 @@ func finishBrowserLogin[T any](
 // admin UI can explain the actual cause instead of guessing. The message is
 // operator-facing and never contains credentials or upstream error text.
 func writeLoginError(w http.ResponseWriter, status int, code, message string) {
-	writeJSONStatus(w, status, map[string]string{"code": code, "error": message})
+	util.WriteJSONStatus(w, status, map[string]string{"code": code, "error": message})
 }
 
 // loginOptions is the optional start body. Both browser logins accept the same
@@ -314,7 +315,7 @@ func respondLoginStatus[T any](w http.ResponseWriter, registry *deviceLoginRegis
 			channel+" login session not found or already finished")
 		return
 	}
-	writeJSON(w, response)
+	util.WriteJSON(w, response)
 }
 
 // abandonLogin cancels a login transaction and waits for its poll loop to stop.

@@ -20,6 +20,7 @@
     // Prevent slow overview/runtime requests from overlapping on each refresh
     // tick and multiplying server aggregation plus SVG rendering work.
     loading: false,
+    alertRequest: 0,
     overview: null,
     // outcome selects which cohort the latency cards describe: every request, the
     // ones that ended in a failure, or the ones where an upstream attempt failed
@@ -78,6 +79,12 @@
   // drill-down hands to the log centre. The chart and the list must cover the same
   // minutes, so the range is derived once here instead of in each click handler.
   function windowRange() {
+    const overview = state.overview;
+    if (overview && Number(overview.window_minutes) === state.window) {
+      const since = new Date(overview.since);
+      const until = new Date(overview.until);
+      if (Number.isFinite(since.getTime()) && Number.isFinite(until.getTime()) && since <= until) return { since, until };
+    }
     const until = new Date();
     const since = new Date(until.getTime() - state.window * 60 * 1000);
     return { since, until };
@@ -1027,21 +1034,29 @@
     if (!table) return;
     const body = table.querySelector('tbody');
     const severity = (el('opsAlertSeverity') || {}).value || '';
-    const channel = (el('opsAlertChannel') || {}).value || '';
+    const localChannel = (el('opsAlertChannel') || {}).value || '';
+    const channel = state.channel || localChannel;
+    const scope = { window: state.window, channel: state.channel };
+    const request = ++state.alertRequest;
+    const current = () => request === state.alertRequest && scope.window === state.window && scope.channel === state.channel;
+    const range = windowRange();
     body.replaceChildren();
     try {
-      const params = assignParams(new URLSearchParams({ kind: 'system', action: 'alert_', limit: '50' }), { channel });
+      const params = assignParams(new URLSearchParams({ kind: 'system', action: 'alert_', limit: '50' }), {
+        channel, since: range.since.toISOString(), until: range.until.toISOString(),
+      });
       const response = await ConsoleAPI.request('/api/journal/records?' + params.toString(), { credentials: 'same-origin' });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
+      if (!current()) return;
       const rows = (payload.data || []).filter((record) => {
         const event = record.event || {};
         if (event.action !== 'alert_fired' && event.action !== 'alert_recovered') return false;
         const level = (event.metadata && event.metadata.severity) || '';
-        return !severity || level === severity;
+        return (!severity || level === severity) && (!localChannel || event.channel === localChannel);
       });
       if (!rows.length) {
-        emptyRow(body, 6, '暂无告警事件（保留窗口内）。');
+        emptyRow(body, 6, '所选时间范围及渠道内暂无告警事件。');
         return;
       }
       rows.forEach((record) => {
@@ -1073,6 +1088,7 @@
         body.appendChild(tr);
       });
     } catch (error) {
+      if (!current()) return;
       emptyRow(body, 6, '读取告警事件失败：' + (error.message || error));
     }
   }
@@ -1207,8 +1223,17 @@
   function renderCoverage(payload) {
     const node = el('opsCoverage');
     if (!node) return;
+    const health = payload.ingestion;
+    const aggregationHealth = payload.aggregation_health;
+    setText("opsIngestion", health
+      ? `本实例日志采集：队列 ${health.queue} 条 / ${health.queued_bytes} 字节；已写入 ${health.written}；丢弃 ${health.dropped}；写入失败 ${health.write_failed}` + (health.last_success ? `；最近成功 ${health.last_success}` : "；尚无成功写入") + ((health.dropped || health.write_failed) ? "；日志可能不完整，请检查 Redis 和流量压力。" : "")
+      : "本实例日志采集健康状态不可用");
+    if (aggregationHealth && aggregationHealth.write_failed) {
+ const node = el("opsIngestion");
+ if (node) node.textContent += `；本实例指标聚合写入失败 ${aggregationHealth.write_failed} 次，统计可能不完整。`;
+ }
     const coverage = payload.coverage || {};
-    const parts = typeof coverage.entries === 'number'
+    const parts = coverage.available !== false && typeof coverage.entries === 'number'
       ? [`审计日志保留 ${coverage.entries} 条`]
         .concat(coverage.oldest ? [`最早 ${coverage.oldest}`] : [])
         .concat(coverage.newest ? [`最新 ${coverage.newest}`] : [])
@@ -1220,6 +1245,7 @@
     parts.push('因此页面只承诺“保留窗口内”的结论，不承诺固定天数。');
     const excluded = (payload.excluded_aggregates || []).map(excludedLabel);
     if (excluded.length) parts.push('已计数但不在渠道矩阵中显示：' + excluded.join('；'));
+    if (payload.latency_precision) parts.push(payload.latency_precision);
     parts.push('Token / TPS 只统计上报了用量的请求；未上报用量的渠道其 TPS 会偏低。');
     // When the aggregation itself is disabled the reason matters more than the
     // coverage caveat: the whole page is showing nothing because of it.
@@ -1312,10 +1338,15 @@
       if (runtimePayload) renderResources(runtimePayload);
       else renderResources({ available: false, note: '运行时指标读取失败。' });
       setText('opsRefreshedAt', fmtClock(new Date()));
-      setStatus('就绪', '');
+      const collectionLoss = payload.ingestion && (payload.ingestion.dropped || payload.ingestion.write_failed);
+      const aggregationLoss = payload.aggregation_health && payload.aggregation_health.write_failed;
+      setStatus(collectionLoss ? '日志采集存在丢失' : aggregationLoss ? '指标采集存在丢失' : '就绪', collectionLoss || aggregationLoss ? 'is-warn' : '');
       state.countdown = state.refreshSeconds;
+      await loadAlertEvents();
     } catch (error) {
       if (scope.window !== state.window || scope.channel !== state.channel) return;
+      // A failed filter change has no valid historical scope to display.
+      state.overview = null;
       if (!state.overview) {
         renderHero({ available: false });
         renderResources({ available: false, note: '运行时指标尚未读取成功。' });
@@ -1334,8 +1365,11 @@
       }
       // A failed read has no window to describe, so the coverage line states the
       // failure instead of the retention it could not read.
+      setText('opsIngestion', '采集健康状态未能更新，请重试。');
       setText('opsCoverage', `指标读取失败：${String(error.message || error)}。会话可能已过期，请重新登录后刷新。`);
       setStatus('读取失败', 'is-error');
+      renderMatrix([]);
+      await loadAlertEvents();
     } finally {
       state.loading = false;
       // Coalesce every refresh requested while this one was in flight into one
@@ -1464,7 +1498,6 @@
     state.refreshPending = false;
     state.countdown = state.refreshSeconds;
     load();
-    loadAlertEvents();
   }
 
   // applyUrlState puts the page back where the URL says it should be: the filters
@@ -1488,12 +1521,11 @@
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { applyUrlState(); bind(); load(); loadAlertEvents(); });
+    document.addEventListener('DOMContentLoaded', () => { applyUrlState(); bind(); load(); });
   } else {
     applyUrlState();
     bind();
     load();
-    loadAlertEvents();
   }
   if (typeof document.addEventListener === 'function') {
     document.addEventListener('visibilitychange', flushPendingRefresh);

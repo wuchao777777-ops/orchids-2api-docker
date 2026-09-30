@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/util"
 	"strconv"
 	"strings"
 	"time"
@@ -252,7 +253,7 @@ func (h *Handler) HandleResponseResource(w http.ResponseWriter, r *http.Request)
 		}
 		if r.Method == http.MethodDelete {
 			_ = h.deleteStoredResponse(r, responseID, ownerHash)
-			writeJSON(w, map[string]interface{}{"id": responseID, "object": "response.deleted", "deleted": true})
+			util.WriteJSON(w, map[string]interface{}{"id": responseID, "object": "response.deleted", "deleted": true})
 			return
 		}
 		contentType := firstNonEmpty(strings.TrimSpace(ownership.ContentType), "application/json")
@@ -600,7 +601,7 @@ func writeResponsesAPIErrorWithParam(w http.ResponseWriter, status int, code, me
 	if strings.TrimSpace(param) != "" {
 		paramValue = param
 	}
-	writeJSONStatus(w, status, map[string]interface{}{
+	util.WriteJSONStatus(w, status, map[string]interface{}{
 		"error": map[string]interface{}{
 			"message": message,
 			"type":    errType,
