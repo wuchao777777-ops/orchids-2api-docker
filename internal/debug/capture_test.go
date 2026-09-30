@@ -53,17 +53,18 @@ func TestCaptureRoundTripAndRetention(t *testing.T) {
 		t.Fatal("expired index is still visible")
 	}
 }
-func TestCaptureBoundsAndRawJSON(t *testing.T) {
+func TestCaptureLongSectionAndRawJSON(t *testing.T) {
 	ctx, c := WithCapture(context.Background(), "bounded")
+	defer c.Close()
 	logger := NewForContext(ctx, false, false)
 	logger.LogUpstreamRequest("https://example.test", nil, []byte(`{"messages":["human-readable"]}`))
 	c.Append("4_upstream_sse.jsonl", strings.Repeat("x", maxCaptureBytes+100))
 	b := c.Bundle()
-	if !b.Truncated {
+	if b.Truncated {
 		t.Fatal("missing truncation marker")
 	}
 	for _, s := range b.Sections {
-		if s.Bytes > maxCaptureBytes {
+		if s.Name == "4_upstream_sse.jsonl" && s.Bytes != maxCaptureBytes+100 {
 			t.Fatal("unbounded section")
 		}
 		if s.Name == "upstream_001_request.json" && !strings.Contains(s.Payload, "human-readable") {
@@ -80,5 +81,37 @@ func TestCaptureRedactsTruncatedCredentialAndPrefixedKeys(t *testing.T) {
 				t.Fatalf("leaked %q", secret)
 			}
 		}
+	}
+}
+
+func TestLargeCompressedBundleAndLegacyCompatibility(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+	store := NewDiagnosticStore(client, "test:")
+	ctx, c := WithCapture(context.Background(), "large")
+	defer c.Close()
+	payload := strings.Repeat("long-content-中文\n", 100000) + "FINAL_SENTINEL"
+	c.Append("response.txt", payload[:65535])
+	c.Append("response.txt", payload[65535:])
+	b := c.Bundle()
+	if b.Truncated || b.Sections[0].Payload != payload {
+		t.Fatal("large capture differs")
+	}
+	if err := store.Save(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := client.Get(ctx, store.key("large")).Bytes()
+	if len(stored) >= len(payload)/2 || stored[0] != 0x1f {
+		t.Fatal("not compressed")
+	}
+	loaded, err := store.Get(ctx, "large")
+	if err != nil || loaded.Sections[0].Payload != payload {
+		t.Fatal("compressed round trip failed", err)
+	}
+	client.Set(ctx, store.key("legacy"), `{"request_id":"legacy","sections":[],"bytes":0}`, DiagnosticRetention)
+	old, err := store.Get(ctx, "legacy")
+	if err != nil || old.RequestID != "legacy" {
+		t.Fatal("legacy read failed", err)
 	}
 }

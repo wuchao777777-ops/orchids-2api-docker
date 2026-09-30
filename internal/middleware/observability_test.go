@@ -16,18 +16,16 @@ import (
 	"orchids-api/internal/opsagg"
 )
 
-func TestDiagnosticWriterBoundsBufferedResponse(t *testing.T) {
+func TestDiagnosticWriterPreservesLongResponse(t *testing.T) {
+	_, capture := debug.WithCapture(context.Background(), "long-response")
+	defer capture.Close()
 	recorder := httptest.NewRecorder()
-	writer := &diagnosticWriter{TracedResponseWriter: NewTracedResponseWriter(recorder)}
-	payload := strings.Repeat("x", maxDiagnosticResponseBytes*3)
-	if n, err := writer.Write([]byte(payload)); err != nil || n != len(payload) {
-		t.Fatalf("Write() = %d, %v; want %d, nil", n, err, len(payload))
-	}
-	if recorder.Body.Len() != len(payload) {
-		t.Fatalf("client response bytes = %d, want %d", recorder.Body.Len(), len(payload))
-	}
-	if writer.body.Len() != maxDiagnosticResponseBytes {
-		t.Fatalf("diagnostic buffer bytes = %d, want cap %d", writer.body.Len(), maxDiagnosticResponseBytes)
+	writer := &diagnosticWriter{TracedResponseWriter: NewTracedResponseWriter(recorder), capture: capture}
+	payload := strings.Repeat("中文", 40000) + "FINAL_SENTINEL"
+	writer.Write([]byte(payload))
+	b := capture.Bundle()
+	if b.Truncated || len(b.Sections) != 1 || b.Sections[0].Payload != payload || recorder.Body.String() != payload {
+		t.Fatal("response lost content")
 	}
 }
 
@@ -89,7 +87,7 @@ func TestDiagnosticsStreamingAndExactlyOneOutcome(t *testing.T) {
 	}
 }
 
-func TestDiagnosticsOmitsSuccessfulStructuredRawResponse(t *testing.T) {
+func TestDiagnosticsPreservesSuccessfulStructuredRawResponse(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	defer client.Close()
@@ -108,7 +106,11 @@ func TestDiagnosticsOmitsSuccessfulStructuredRawResponse(t *testing.T) {
 	}
 	for _, section := range b.Sections {
 		if section.Name == "5_http_response.txt" {
-			t.Fatalf("successful structured response should not be duplicated: %q", section.Payload)
+			if section.Payload != recorder.Body.String() {
+				t.Fatal("client response differs")
+			}
+			return
 		}
 	}
+	t.Fatal("missing successful client response")
 }

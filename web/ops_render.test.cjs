@@ -38,6 +38,7 @@ function makeElement(id) {
     setAttribute(name, value) {
       this[name] = String(value);
     },
+    getAttribute(name) { return this[name]; },
     querySelector(selector) {
       if (selector === 'tbody') {
         this.tbody = this.tbody || makeElement('tbody');
@@ -107,8 +108,9 @@ const realPayload = {
   ],
 };
 
-function renderPage(payload, fetcher) {
+function renderPage(payload, fetcher, liveWindow = 1) {
   const elements = new Map();
+  const liveButtons = [1, 5, 30, 60].map(minutes => { const button = makeElement("live-" + minutes); button.setAttribute("data-live", minutes); return button; });
   const node = (id) => {
     if (!elements.has(id)) elements.set(id, makeElement(id));
     return elements.get(id);
@@ -121,7 +123,7 @@ function renderPage(payload, fetcher) {
       createElement: (tag) => makeElement(tag),
       createElementNS: (_namespace, tag) => makeElement(tag),
       querySelector: node,
-      querySelectorAll: () => [],
+      querySelectorAll: selector => selector === "#opsLiveTabs .ops-chip" ? liveButtons : [],
       addEventListener() {},
     },
     window: { setInterval: () => 0, clearInterval() {}, addEventListener() {}, setTimeout: (fn) => setImmediate(fn) },
@@ -134,8 +136,8 @@ function renderPage(payload, fetcher) {
       json: async () => payload,
     })),
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, 'static/js/ops.js'), 'utf8'), context);
-  return { context, node };
+  vm.runInContext(fs.readFileSync(path.join(__dirname, 'static/js/ops.js'), 'utf8').replace('liveWindow: 1,', 'liveWindow: ' + liveWindow + ','), context);
+  return { context, node, liveButtons };
 }
 
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve)); };
@@ -330,4 +332,72 @@ test('aggregation failures are distinct from healthy audit ingestion', async () 
   await settle();
   assert.match(node('opsIngestion').textContent, /指标聚合写入失败 2/);
   assert.equal(node('opsStatusText').textContent, '指标采集存在丢失');
+});
+
+
+test('throughput with real token usage draws TPS and closes the QPS area', async () => {
+  const payload = { ...realPayload, series: [
+    { minute: '2026-09-12T14:47:00Z', requests: 6, input_tokens: 900, output_tokens: 300, usage_samples: 6 },
+    { minute: '2026-09-12T14:48:00Z', requests: 2, input_tokens: 100, output_tokens: 90, usage_samples: 2 },
+  ] };
+  const { node } = renderPage(payload, undefined, 5);
+  await settle();
+  const svg = node('opsThroughput').children[0];
+  const path = svg.children.find(child => child.class === 'series-tps');
+  assert.ok(path, 'TPS series missing despite reported usage');
+  assert.match(path.d, /^M[\d.]+,[\d.]+ L/, 'TPS path has no segments');
+  assert.doesNotMatch(path.d, /NaN|undefined/);
+  const vertices = path.d.match(/[ML][\d.]+,([\d.]+)/g);
+  assert.ok(new Set(vertices.map(point => point.split(',')[1])).size > 1, 'TPS flattened onto baseline');
+  const area = svg.children.find(child => child.class === 'series-area');
+  assert.match(area.d, /^M[\d.]+,[\d.]+ L/);
+  assert.ok(area.d.endsWith(' Z'), 'QPS area not closed');
+  assert.match(node('opsThroughputHint').textContent, /右轴 TPS/);
+  const spark = node('opsSpark').children[0].children.find(child => child.class === 'series-success');
+  assert.match(spark.d, /^M[\d.]+,[\d.]+ L/, 'hero sparkline also needs values');
+});
+
+test('throughput without usage keeps TPS absent and explains why', async () => {
+  const { node } = renderPage(realPayload);
+  await settle();
+  const svg = node('opsThroughput').children[0];
+  assert.equal(svg.children.some(child => child.class === 'series-tps'), false);
+  assert.match(node('opsThroughputHint').textContent, /未上报用量/);
+});
+
+
+test('live window buttons update success percentage, counts and full success trend together', async () => {
+  const payload = { ...realPayload, totals: { requests: 1000, success: 999 }, series: [
+    { minute: '2026-09-12T14:00:00Z', requests: 20, success: 5, failed: 15 },
+    { minute: '2026-09-12T14:30:00Z', requests: 10, success: 10, failed: 0 },
+    { minute: '2026-09-12T14:47:00Z', requests: 6, success: 4, failed: 2 },
+    { minute: '2026-09-12T14:48:00Z', requests: 4, success: 1, failed: 3 },
+  ] };
+  const { node, liveButtons } = renderPage(payload);
+  await settle();
+  const cases = [[1,'25.0%',4,1], [5,'50.0%',10,2], [30,'75.0%',20,3], [60,'50.0%',40,4]];
+  for (const [minutes, rate, count, samples] of cases) {
+    const selected = liveButtons.find(button => Number(button.getAttribute('data-live')) === minutes);
+    selected.listeners.click();
+    assert.equal(node('opsGaugeValue').textContent, rate);
+    assert.equal(selected.classList.contains('is-active'), true);
+    const text = node('opsGaugeSub').children.map(child => child.textContent).join(' ');
+    assert.match(text, new RegExp(minutes + ' 分钟桶 ' + count + ' 次请求'));
+    assert.match(node('opsSuccessTrendHint').textContent, new RegExp(minutes + ' 分钟桶'));
+    const svg = node('opsSpark').children[0];
+    const dots = svg.children.filter(child => child.id === 'circle');
+    assert.equal(dots.length, samples, 'idle minutes must have no success sample');
+    assert.ok(svg.children.some(child => /100%/.test(child.textContent)), 'percentage axis missing');
+    assert.ok(dots.every(dot => /次成功/.test(dot.children[0].textContent)), 'point tooltips missing');
+  }
+});
+
+test('idle live window shows no percentage and no invented curve', async () => {
+  const { node, liveButtons } = renderPage({ ...realPayload, series: [] });
+  await settle();
+  for (const button of liveButtons) {
+    button.listeners.click();
+    assert.equal(node('opsGaugeValue').textContent, '待机');
+    assert.match(node('opsSpark').children[0].textContent, /暂无成功率样本/);
+  }
 });

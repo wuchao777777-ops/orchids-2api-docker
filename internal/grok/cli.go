@@ -531,6 +531,7 @@ func (c *CLIClient) request(ctx context.Context, acc *store.Account, method, end
 		req.Header[key] = append([]string(nil), values...)
 	}
 	attempt := debug.BeginUpstream(ctx, method, endpoint, req.Header, body)
+	req = attempt.TraceRequest(req)
 	resp, err := doUpstreamHTTP(req, func(req *http.Request) (*http.Response, error) {
 		return c.doCLIRequest(ctx, acc, req)
 	}, c.cfg.GrokStreamIdleTimeoutFor(ProviderBuild), upstreamIdleBuildSemantic)

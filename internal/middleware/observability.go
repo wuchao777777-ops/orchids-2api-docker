@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -126,6 +125,7 @@ func Diagnostics(store *debug.DiagnosticStore, enabled func() bool) func(http.Ha
 			if r.Body != nil {
 				r.Body = &diagnosticReader{ReadCloser: r.Body, capture: capture, name: "1_http_request.json"}
 			}
+			defer capture.Close()
 			writer := &diagnosticWriter{TracedResponseWriter: NewTracedResponseWriter(w), capture: capture}
 			defer func() {
 				capture.Set("6_http_summary.json", fmtJSON(map[string]interface{}{"status": writer.StatusCode, "bytes": writer.BytesWritten, "stream_failed": writer.StreamFailed()}))
@@ -157,37 +157,18 @@ func (r *diagnosticReader) Read(p []byte) (int, error) {
 type diagnosticWriter struct {
 	*TracedResponseWriter
 	capture *debug.Capture
-	body    bytes.Buffer
 }
-
-const maxDiagnosticResponseBytes = 64 << 10
 
 func (w *diagnosticWriter) Write(p []byte) (int, error) {
 	n, err := w.TracedResponseWriter.Write(p)
-	if n > 0 && w.body.Len() < maxDiagnosticResponseBytes {
-		captured := n
-		remaining := maxDiagnosticResponseBytes - w.body.Len()
-		if captured > remaining {
-			captured = remaining
-		}
-		_, _ = w.body.Write(p[:captured])
+	if n > 0 {
+		w.capture.Append("5_http_response.txt", string(p[:n]))
 	}
 	return n, err
 }
-
 func (w *diagnosticWriter) saveResponseDiagnostic() {
-	if w == nil || w.capture == nil {
-		return
-	}
-	// The regular response is already represented by the structured client SSE
-	// capture. Keep the raw HTTP copy only when it explains a failure or when the
-	// response is not SSE/JSON and therefore cannot be reconstructed reliably.
-	contentType := strings.ToLower(strings.TrimSpace(w.Header().Get("Content-Type")))
-	failed := w.StatusCode >= 400 || w.StreamFailed()
-	structured := strings.Contains(contentType, "text/event-stream") || strings.Contains(contentType, "application/json")
-	if failed || !structured {
-		w.capture.Set("5_http_response.txt", w.body.String())
-	}
+	raw, _ := json.Marshal(map[string]interface{}{"status": w.StatusCode, "content_type": w.Header().Get("Content-Type"), "bytes": w.BytesWritten, "stream_failed": w.StreamFailed()})
+	w.capture.Set("5_http_response_metadata.json", string(raw))
 }
 
 func RecordUpstreamAttempt(ctx context.Context, accountID int64, failed bool) {

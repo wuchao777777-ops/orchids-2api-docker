@@ -186,6 +186,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 	applyChatHeaders(httpReq, accessToken, c.creds.UID, req.ConversationID, req.RequestID, req.TraceID)
 
 	attempt := debug.BeginUpstream(ctx, httpReq.Method, httpReq.URL.String(), httpReq.Header, body)
+	httpReq = attempt.TraceRequest(httpReq)
 	resp, err := c.httpClient.Do(httpReq)
 	attempt.Response(resp, err)
 	if resp != nil {

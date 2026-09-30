@@ -391,7 +391,13 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 	req.Header.Set("X-Task-ID", taskID)
 	applyClientHeaders(req.Header)
 
+	attempt := debug.BeginUpstream(ctx, req.Method, req.URL.String(), req.Header, body)
+	req = attempt.TraceRequest(req)
 	resp, err := c.stream.Do(req)
+	attempt.Response(resp, err)
+	if resp != nil {
+		resp.Body = attempt.CaptureBody(resp.Body)
+	}
 	if err != nil {
 		return streamResult{}, &attemptStreamError{err: fmt.Errorf("send cline request: %w", err)}
 	}

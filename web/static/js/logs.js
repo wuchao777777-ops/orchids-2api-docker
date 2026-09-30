@@ -56,6 +56,7 @@
   // order is the request's own timeline, so the panel must not sort it.
   const SECTION_LABELS = {
     '1_http_request.json': '1 · 客户端原始请求',
+    '5_http_response_metadata.json': '5 · 客户端响应状态与格式',
     '5_http_response.txt': '5 · 实际返回客户端内容',
     '6_http_summary.json': '6 · HTTP 完成状态',
     '6_request_events.jsonl': '6 · 上游尝试与请求事件',
@@ -71,9 +72,9 @@
 
   function sectionLabel(section) {
     const name = String(section.name || '');
-    const attempt = /^upstream_(\d+)_(request\.json|response\.txt|result\.json|error\.json|read_error\.json|latency\.json)$/.exec(name);
+    const attempt = /^upstream_(\d+)_(request\.json|response\.txt|result\.json|error\.json|read_error\.json|body_state\.json|latency\.json)$/.exec(name);
     if (attempt) {
-      const labels = { 'request.json': '请求', 'response.txt': '响应内容', 'result.json': 'HTTP 状态', 'error.json': '错误', 'read_error.json': '响应读取错误', 'latency.json': '延迟诊断' };
+      const labels = { 'request.json': '请求', 'response.txt': '响应内容', 'result.json': 'HTTP 状态', 'error.json': '错误', 'read_error.json': '响应读取错误', 'latency.json': '延迟诊断', 'body_state.json':'响应读取完整性' };
       return '上游尝试 ' + Number(attempt[1]) + ' · ' + labels[attempt[2]];
     }
     return SECTION_LABELS[name] || (section.title || name || '记录');
@@ -705,6 +706,9 @@
       if (indexMeta.truncated) parts.push('已截断');
       if (indexMeta.retention) parts.push('保留 ' + indexMeta.retention);
       container.appendChild(note(parts.join(' · ')));
+    container.appendChild(note('统一链路：入口请求 → 上游调用与响应 → 客户端响应 → 请求结果。协议转换和渠道专属诊断作为补充记录；旧记录可能缺少阶段。'));
+    const download = (name, text) => { const url = URL.createObjectURL(new Blob([text], {type:'text/plain;charset=utf-8'})); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+    const save = make('button', '', '下载完整诊断'); save.type='button'; save.addEventListener('click', () => download('diagnostics-'+(entry.request_id || 'request')+'.json', JSON.stringify(entry,null,2))); container.appendChild(save);
     }
 
     if (!requestID) {
@@ -749,6 +753,9 @@
     if (retention) parts.push('保留 ' + retention);
     if (entry.truncated) parts.push('已截断');
     container.appendChild(note(parts.join(' · ')));
+    container.appendChild(note('统一链路：入口请求 → 上游调用与响应 → 客户端响应 → 请求结果。协议转换和渠道专属诊断作为补充记录；旧记录可能缺少阶段。'));
+    const download = (name, text) => { const url = URL.createObjectURL(new Blob([text], {type:'text/plain;charset=utf-8'})); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+    const save = make('button', '', '下载完整诊断'); save.type='button'; save.addEventListener('click', () => download('diagnostics-'+(entry.request_id || 'request')+'.json', JSON.stringify(entry,null,2))); container.appendChild(save);
 
     if (entry.note) container.appendChild(note(entry.note));
     if (sections.length === 0) {
@@ -767,7 +774,7 @@
           connection_reused:'复用连接', connection_was_idle:'取自空闲池', httpdns_ip:'HTTPDNS 请求头', body_bytes:'请求体字节',
           messages_count:'历史消息数', tools_count:'工具定义数', conversation_fingerprint:'会话指纹', protocol_profile:'协议配置', http_status:'HTTP 状态',
           before_upstream_ms:'请求进入至本次尝试（含此前等待）', connection_wait_ms:'获取连接（含建连）', dns_ms:'DNS', tls_ms:'TLS',
-          request_written_ms:'请求写完', first_response_byte_ms:'首个响应字节', response_headers_ms:'响应头就绪', first_sse_ms:'首条 SSE',
+          request_written_ms:'请求写完', first_response_byte_ms:'首个响应字节', response_headers_ms:'响应头就绪', first_body_ms:'首个响应体字节', first_sse_ms:'首条 SSE',
           first_text_ms:'首个正文', first_reasoning_ms:'首个推理', first_tool_ms:'首个工具调用', total_ms:'本次耗时',
           access_ready_ms:'凭据准备就绪', runtime_ready_ms:'签名身份准备就绪', model_ready_ms:'模型路由就绪', body_ready_ms:'请求体就绪',
           upstream_firstTokenDuration:'上游报告首 Token', upstream_totalDuration:'上游报告总耗时', upstream_serverDuration:'上游报告服务耗时',
@@ -784,7 +791,8 @@
         container.appendChild(panel);
       } catch (_) { /* Raw section below remains available for truncated data. */ }
     });
-    sections.forEach((section) => {
+    const stage = name => name === '1_http_request.json' ? 0 : /^upstream_/.test(name) ? 1 : /^5_http_response/.test(name) ? 2 : /^6_http_summary/.test(name) ? 3 : 4;
+    [...sections].sort((a,b) => stage(a.name)-stage(b.name)).forEach((section) => {
       const details = make('details', 'logs-section');
       // A failure artifact is what an operator came for; everything else starts
       // collapsed so a 16 KiB SSE dump does not bury it.
@@ -795,7 +803,10 @@
       summary.appendChild(make('span', 'ops-empty',
         ' ' + formatBytes(section.bytes || 0) + (section.truncated ? ' · 已截断' : '')));
       details.appendChild(summary);
-      details.appendChild(make('pre', '', section.payload || '（空）'));
+      const pre = make('pre', '', details.open ? (section.payload || '（空）') : '');
+      details.appendChild(pre);
+      details.addEventListener('toggle', () => { if (details.open && !pre.textContent) pre.textContent=section.payload || '（空）'; });
+      const saveSection = make('button', '', '下载本段完整内容'); saveSection.type='button'; saveSection.addEventListener('click', () => download(section.name || 'diagnostic.txt', section.payload || '')); details.appendChild(saveSection);
       container.appendChild(details);
     });
   }

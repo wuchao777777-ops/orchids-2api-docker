@@ -1094,3 +1094,6 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
 @media (min-width: 3200px) {
 .ops-resources { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 }
+
+.ops-spark.ops-success-trend, .ops-spark.ops-success-trend svg { height: 140px; }
+.ops-chart .series-success { fill: none; stroke: var(--ok); stroke-width: 2; }

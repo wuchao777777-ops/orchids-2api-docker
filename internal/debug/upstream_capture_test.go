@@ -68,20 +68,23 @@ func TestLoggerRetryRequestsAreNotOverwritten(t *testing.T) {
 	}
 }
 
-func TestCaptureSectionAndTotalLimitsReportTruncation(t *testing.T) {
+func TestCapturePreservesManySectionsAndLargeBundle(t *testing.T) {
 	_, c := WithCapture(context.Background(), "limits")
-	for i := 0; i < maxCaptureSections+1; i++ {
+	defer c.Close()
+	for i := 0; i < 97; i++ {
 		c.Append(fmt.Sprintf("small-%d", i), "x")
 	}
-	if !c.Bundle().Truncated {
+	if c.Bundle().Truncated || len(c.Bundle().Sections) != 97 {
 		t.Fatal("silently discarded sections")
 	}
+	c.Close()
 	_, c = WithCapture(context.Background(), "bytes")
+	defer c.Close()
 	for i := 0; i < 32; i++ {
 		c.Append(fmt.Sprintf("large-%d", i), strings.Repeat("x", maxCaptureBytes))
 	}
 	b := c.Bundle()
-	if !b.Truncated || b.Bytes > maxBundleBytes {
+	if b.Truncated || b.Bytes != 32*maxCaptureBytes {
 		t.Fatal("unbounded or unmarked", b.Bytes, b.Truncated)
 	}
 }

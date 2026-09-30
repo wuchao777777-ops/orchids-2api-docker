@@ -4,7 +4,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('./test-support.cjs');
 function element(tag='div'){
- return {tag,children:[],textContent:'',classList:{add(){},remove(){},toggle(){}},appendChild(n){this.children.push(n);return n},replaceChildren(){this.children=[]},addEventListener(){},setAttribute(){}};
+ return {tag,children:[],textContent:'',classList:{add(){},remove(){},toggle(){}},appendChild(n){this.children.push(n);return n},replaceChildren(){this.children=[]},listeners:{},addEventListener(event,fn){this.listeners[event]=fn},setAttribute(){}};
 }
 function load(){
  const context=vm.createContext({console,URLSearchParams,document:{readyState:'loading',addEventListener(){}},window:{}});
@@ -35,7 +35,7 @@ test('bundle renders both attempts without hiding truncation or interpreting res
  assert.match(allText(container),/上游尝试 1/);assert.match(allText(container),/上游尝试 2/);
  assert.match(allText(container),/已截断/);assert.match(allText(container),/请求耗时 31 ms/);
  const details=container.children.filter(n=>n.tag==='details');assert.equal(details[1].open,true);
- assert.equal(details[2].children[1].textContent,'<script>example</script>');
+ assert.equal(details[2].children[1].textContent,''); details[2].open=true; details[2].listeners.toggle(); assert.equal(details[2].children[1].textContent,'<script>example</script>'); assert.match(allText(container),/下载完整诊断/);
 });
 
 test('latency diagnostics show zero, reused connections and upstream clock separately',()=>{

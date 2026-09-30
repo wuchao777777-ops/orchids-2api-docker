@@ -22,7 +22,8 @@ func TestBuildChatAppliesSelectedAccountReasoningProfile(t *testing.T) {
 		name, requested, expected string
 		status                    int
 	}{
-		{"unsupported none", "none", "", http.StatusBadRequest},
+		{"none uses catalog default", "none", "high", http.StatusOK},
+		{"unsupported effort", "ultra", "", http.StatusBadRequest},
 		{"catalog default", "", "high", http.StatusOK},
 		{"explicit low", "low", "low", http.StatusOK},
 		{"max alias", "max", "xhigh", http.StatusOK},
@@ -88,7 +89,11 @@ func TestBuildPayloadForAccountUsesCatalogDefaultAndValidation(t *testing.T) {
 	if reasoning["effort"] != "high" {
 		t.Fatalf("effort=%v", reasoning["effort"])
 	}
-	_, err = buildPayloadForAccount(map[string]interface{}{"reasoning": map[string]interface{}{"effort": "none"}}, acc, "grok-4.7")
+	payload, err = buildPayloadForAccount(map[string]interface{}{"reasoning": map[string]interface{}{"effort": "none"}}, acc, "grok-4.7")
+	if err != nil || payload["reasoning"].(map[string]interface{})["effort"] != "high" {
+		t.Fatalf("none fallback payload=%v err=%v", payload, err)
+	}
+	_, err = buildPayloadForAccount(map[string]interface{}{"reasoning": map[string]interface{}{"effort": "ultra"}}, acc, "grok-4.7")
 	var profileErr *buildReasoningProfileError
 	if !errors.As(err, &profileErr) {
 		t.Fatalf("err=%v", err)
@@ -110,5 +115,36 @@ func TestBuildPayloadForAccountDoesNotMutateImmutableSource(t *testing.T) {
 	}
 	if source["reasoning"].(map[string]interface{})["effort"] != "max" {
 		t.Fatalf("source mutated: %v", source)
+	}
+}
+
+func TestBuildNoneEffortFallbacks(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile *modelcatalog.Profile
+		want    string
+	}{
+		{"missing default chooses supported low", &modelcatalog.Profile{ModelID: "grok-4.7", SupportsReasoningEffort: true, ReasoningEfforts: []string{"high", "low"}}, "low"},
+		{"missing catalog lets upstream choose", nil, ""},
+		{"no effort capability omits none", &modelcatalog.Profile{ModelID: "grok-4.7"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := map[string]interface{}{"reasoning": map[string]interface{}{"effort": " NONE ", "summary": "auto"}}
+			acc := &store.Account{}
+			if tc.profile != nil {
+				acc.GrokModelCatalog = []modelcatalog.Profile{*tc.profile}
+			}
+			payload, err := buildPayloadForAccount(source, acc, "grok-4.7")
+			if err != nil {
+				t.Fatal(err)
+			}
+			reasoning := payload["reasoning"].(map[string]interface{})
+			if got := interfaceString(reasoning["effort"]); got != tc.want {
+				t.Fatalf("effort=%q want %q", got, tc.want)
+			}
+			if reasoning["summary"] != "auto" || source["reasoning"].(map[string]interface{})["effort"] != " NONE " {
+				t.Fatal("summary or immutable source changed")
+			}
+		})
 	}
 }

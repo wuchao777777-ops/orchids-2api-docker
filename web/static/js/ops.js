@@ -302,10 +302,11 @@
 
   // A peak under 10 (a quiet window's QPS) would round every tick to the same
   // integer, so the decimals follow the peak rather than being fixed.
-  function axisLabels(svg, box, max, x) {
+  function axisLabels(svg, box, max, x, format) {
     for (let i = 0; i <= 3; i += 1) {
       const label = svgEl('text', { x, y: box.top + (box.plotH / 3) * i + 3, class: 'axis-text' });
-      label.textContent = (max * (1 - i / 3)).toFixed(max < 10 ? 2 : 0);
+      const value = max * (1 - i / 3);
+      label.textContent = format ? format(value) : value.toFixed(max < 10 ? 2 : 0);
       svg.appendChild(label);
     }
   }
@@ -355,18 +356,18 @@
     const maxValue = Math.max(options.maxValue || 0, ...points.map((p) => p.value), 0.0001);
     const svg = chartSvg(box, true);
     gridLines(svg, box);
-    axisLabels(svg, box, maxValue, 4);
+    axisLabels(svg, box, maxValue, 4, options.axisFormat);
 
     const step = box.plotW / Math.max(points.length - 1, 1);
     const coords = points.map((point, index) => ({
-      x: box.left + step * index,
+      x: points.length === 1 ? box.left + box.plotW / 2 : box.left + step * index,
       y: box.top + box.plotH - (point.value / maxValue) * box.plotH,
     }));
 
     if (options.area) {
       const baseline = (box.top + box.plotH).toFixed(1);
       svg.appendChild(svgEl('path', {
-        d: `${polyPath(coords)} L${coords[coords.length - 1].x.toFixed(1)},${baseline} L${coords[0].x.toFixed(1)},${baseline} Z`,
+        d: `${polyPath(coords, points.map((point) => point.value))} L${coords[coords.length - 1].x.toFixed(1)},${baseline} L${coords[0].x.toFixed(1)},${baseline} Z`,
         class: 'series-area',
       }));
     }
@@ -380,8 +381,10 @@
     coords.forEach((coord, index) => {
       const value = points[index].value;
       if (value == null) return;
-      if ((index > 0 && points[index - 1].value != null) && (index < points.length - 1 && points[index + 1].value != null)) return;
-      svg.appendChild(svgEl('circle', { cx: coord.x, cy: coord.y, r: 3, fill: 'var(--accent)' }));
+      if (!options.tooltips && (index > 0 && points[index - 1].value != null) && (index < points.length - 1 && points[index + 1].value != null)) return;
+      const dot = svgEl('circle', { cx: coord.x, cy: coord.y, r: 3, fill: options.pointColor || 'var(--accent)' });
+      if (options.tooltips) { const title = svgEl('title'); title.textContent = points[index].tooltip || points[index].label; dot.appendChild(title); }
+      svg.appendChild(dot);
     });
 
     // Second series on its own scale: QPS and TPS differ by orders of magnitude,
@@ -389,10 +392,10 @@
     if (options.secondaryPoints && options.secondaryPoints.length === points.length) {
       const secondaryMax = Math.max(options.secondaryMax || 0, ...options.secondaryPoints.map((p) => p.value), 0.0001);
       const secondaryCoords = options.secondaryPoints.map((point, index) => ({
-        x: box.left + step * index,
+        x: points.length === 1 ? box.left + box.plotW / 2 : box.left + step * index,
         y: box.top + box.plotH - (point.value / secondaryMax) * box.plotH,
       }));
-      svg.appendChild(svgEl('path', { d: polyPath(secondaryCoords), class: 'series-tps' }));
+      svg.appendChild(svgEl('path', { d: polyPath(secondaryCoords, options.secondaryPoints.map((point) => point.value)), class: 'series-tps' }));
       axisLabels(svg, box, secondaryMax, box.right + 4);
     }
 
@@ -447,37 +450,6 @@
       }));
     }
     timeAxis(svg, box, points, (index) => box.left + barStep * index + barW / 2);
-    container.replaceChildren();
-    container.appendChild(svg);
-  }
-
-  function sparkline(points) {
-    const container = el('opsSpark');
-    if (!container) return;
-    // The sparkline is a fixed strip beside the hero figures, not a box the CSS
-    // sizes, so it is the one chart that does not measure itself.
-    const box = { width: 320, height: 72, left: 0, top: 6, plotH: 56 };
-    if (!points.length) {
-      emptyNote(container, '指标未采集', 'ops-chart-empty');
-      return;
-    }
-    if (points.length === 1) {
-      const svg = chartSvg(box, false);
-      svg.appendChild(svgEl('circle', { cx: box.width / 2, cy: box.height / 2, r: 4, fill: 'var(--accent)' }));
-      const label = svgEl('text', { x: box.width / 2, y: box.height - 8, 'text-anchor': 'middle', class: 'axis-text' });
-      label.textContent = points[0].value > 0 ? '当前分钟已有请求' : '当前分钟无请求';
-      svg.appendChild(label);
-      container.replaceChildren();
-      container.appendChild(svg);
-      return;
-    }
-    const max = Math.max(1, ...points.map((p) => p.value));
-    const svg = chartSvg(box, true);
-    const coords = points.map((point, index) => ({
-      x: (box.width / Math.max(points.length - 1, 1)) * index,
-      y: box.height - 6 - (point.value / max) * (box.height - 16),
-    }));
-    svg.appendChild(svgEl('path', { d: polyPath(coords), class: 'series-tps' }));
     container.replaceChildren();
     container.appendChild(svg);
   }
@@ -698,7 +670,6 @@
   }
 
   function renderHero(payload) {
-    const totals = payload.totals || {};
     state.overview = payload;
     if (payload.available === false) {
       ['Qps', 'Tps'].forEach((metric) => ['Now', 'Peak', 'Avg'].forEach((period) => setText('opsLive' + metric + period, '未采集')));
@@ -707,6 +678,7 @@
       setText('opsGaugeState', '指标不可用');
       setText('opsGaugeSub', '等待有效数据');
       setText('opsHeroHint', '当前未获得指标数据');
+      setText('opsSuccessTrendHint', '成功率趋势 · 未采集');
       const gauge = el('opsGaugeRing');
       if (gauge) gauge.style.background = 'var(--surface-3)';
       const spark = el('opsSpark');
@@ -748,8 +720,11 @@
 
     // Health: the SLA of the window, with the traffic level deciding whether the
     // console is "serving" or "standby".
-    const real = Math.max(totals.requests || 0, 0);
-    const rate = real > 0 ? Math.min((totals.success || 0) / real, 1) : 0;
+    const real = requests;
+    const success = buckets.reduce((sum, point) => sum + (point.success || 0), 0);
+    const failed = buckets.reduce((sum, point) => sum + (point.failed || 0), 0);
+    const attemptFailures = buckets.reduce((sum, point) => sum + (point.attempt_failures || 0), 0);
+    const rate = real > 0 ? Math.min(success / real, 1) : 0;
     const gauge = el('opsGaugeRing');
     const score = real > 0 ? rate * 100 : 0;
     const tone = real === 0 ? 'var(--idle)' : rate >= 0.95 ? 'var(--ok)' : rate >= 0.8 ? 'var(--warn)' : 'var(--bad)';
@@ -766,21 +741,32 @@
     if (gaugeSub) {
       gaugeSub.replaceChildren();
       [
-        `${payload.window_minutes} 分钟 ${fmtInt(real)} 次请求`,
-        `最终失败 ${fmtInt(totals.failed || 0)}`,
-        `上游尝试失败 ${fmtInt(totals.attempt_failures || 0)}`,
+        `${state.liveWindow} 分钟桶 ${fmtInt(real)} 次请求`,
+        `最终失败 ${fmtInt(failed)}`,
+        `上游尝试失败 ${fmtInt(attemptFailures)}`,
       ].forEach((part) => gaugeSub.appendChild(make('span', '', part)));
-      if (totals.failed > 0) {
+      if (failed > 0) {
         // A click target on the number an operator would reach for anyway.
         const link = make('button', 'ops-inline-link', '查看失败请求 →');
         link.type = 'button';
         link.id = 'opsHeroUpstreamErrors';
-        link.addEventListener('click', () => drilldownToLogs({ outcome: 'failed' }));
+        link.addEventListener('click', () => drilldownToLogs({ outcome: 'failed', since: buckets[0].minute, until: payload.until }));
         gaugeSub.appendChild(link);
       }
     }
 
-    sparkline(qpsPoints.slice(-30));
+    setText('opsSuccessTrendHint', `成功率趋势 · ${state.liveWindow} 分钟桶 · 无请求的分钟留空`);
+    const trend = el('opsSpark');
+    if (trend) lineChart(trend, {
+      points: buckets.map(point => ({
+        label: fmtMinute(point.minute),
+        value: point.requests > 0 ? Math.min((point.success || 0) / point.requests, 1) * 100 : null,
+        tooltip: `${fmtMinute(point.minute)} · ${point.requests > 0 ? (((point.success || 0) / point.requests) * 100).toFixed(1) : '—'}% · ${point.success || 0} / ${point.requests} 次成功`,
+      })),
+      maxValue: 100, axisFormat: value => value.toFixed(0) + '%',
+      className: 'series-success', pointColor: 'var(--ok)', tooltips: true,
+      height: 140, emptyText: '此时间范围没有请求，暂无成功率样本。',
+    });
   }
 
   // --- resource row ----------------------------------------------------------

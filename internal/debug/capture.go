@@ -1,11 +1,15 @@
 package debug
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -17,8 +21,6 @@ import (
 
 const DiagnosticRetention = 24 * time.Hour
 const maxCaptureBytes = 64 << 10
-const maxCaptureSections = 96
-const maxBundleBytes = 1 << 20
 const maxDiagnosticBundles = 512
 
 type Section struct {
@@ -32,7 +34,9 @@ type Section struct {
 	// append: the tee appends once per Write, so a streamed answer arrives one
 	// SSE frame at a time and a 64KiB section built from 128-byte frames copied
 	// 18MB (measured) to hold 64KiB. A Builder appends in place instead.
-	buf strings.Builder
+	buf   strings.Builder
+	spool *os.File
+	size  int
 }
 type Bundle struct {
 	RequestID  string    `json:"request_id"`
@@ -81,20 +85,36 @@ func (c *Capture) Append(name, text string) {
 func (c *Capture) appendLocked(name, text string) {
 	s := c.sections[name]
 	if s == nil {
-		if len(c.sections) >= maxCaptureSections {
-			c.truncated = true
-			return
-		}
 		s = &Section{Name: name}
 		c.sections[name] = s
 	}
-	remaining := min(maxCaptureBytes-s.buf.Len(), maxBundleBytes-c.bytes)
-	if len(text) > remaining {
-		text = text[:remaining]
+	if s.spool == nil && s.buf.Len()+len(text) > maxCaptureBytes {
+		f, err := os.CreateTemp("", "orchids-diagnostic-*")
+		if err == nil {
+			_, err = f.WriteString(s.buf.String())
+			if err == nil {
+				s.spool = f
+				s.buf.Reset()
+			} else {
+				f.Close()
+				os.Remove(f.Name())
+			}
+		}
+		// Keep the complete in-memory fallback if temporary storage is unavailable.
+	}
+	var n int
+	var err error
+	if s.spool != nil {
+		n, err = s.spool.WriteString(text)
+	} else {
+		n, err = s.buf.WriteString(text)
+	}
+	s.size += n
+	c.bytes += n
+	if err != nil {
 		s.Truncated = true
 	}
-	s.buf.WriteString(text)
-	c.bytes += len(text)
+
 }
 func (c *Capture) Set(name, text string) {
 	if c == nil {
@@ -103,7 +123,11 @@ func (c *Capture) Set(name, text string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if old := c.sections[name]; old != nil {
-		c.bytes -= old.buf.Len()
+		c.bytes -= old.size
+		if old.spool != nil {
+			old.spool.Close()
+			os.Remove(old.spool.Name())
+		}
 	}
 	delete(c.sections, name)
 	c.appendLocked(name, text)
@@ -152,7 +176,15 @@ func (c *Capture) Bundle() Bundle {
 	for _, s := range c.sections {
 		// Assembled field by field: Section carries a strings.Builder now, and
 		// copying a Builder that has already been written to is what it panics on.
-		payload := sanitizeCapture(strings.ToValidUTF8(s.buf.String(), "\uFFFD"))
+		raw := s.buf.String()
+		if s.spool != nil {
+			data, err := os.ReadFile(s.spool.Name())
+			raw = string(data)
+			if err != nil {
+				s.Truncated = true
+			}
+		}
+		payload := sanitizeCapture(strings.ToValidUTF8(raw, "\uFFFD"))
 		sec := Section{Name: s.Name, Payload: payload, Bytes: len(payload), Truncated: s.Truncated}
 		b.Bytes += sec.Bytes
 		b.Truncated = b.Truncated || sec.Truncated
@@ -199,8 +231,17 @@ func (s *DiagnosticStore) Save(ctx context.Context, b Bundle) error {
 		names = append(names, sec.Name)
 	}
 	index, _ := json.Marshal(map[string]interface{}{"metadata": map[string]interface{}{"sections": names, "bytes": b.Bytes, "truncated": b.Truncated, "retention": "24 小时，最多 512 个请求"}})
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err = zw.Write(raw); err != nil {
+		return err
+	}
+	if err = zw.Close(); err != nil {
+		return err
+	}
+	raw = compressed.Bytes()
 	key := s.key(b.RequestID)
-	// Bound total storage as well as individual bodies and TTL, atomically across replicas.
+	// Retain complete compressed bundles with count and TTL eviction across replicas.
 	return s.client.Eval(ctx, `redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[3]); redis.call('SET',KEYS[2],ARGV[2],'EX',ARGV[3]); redis.call('ZADD',KEYS[3],ARGV[4],KEYS[1]); local n=redis.call('ZCARD',KEYS[3])-tonumber(ARGV[5]); if n>0 then local old=redis.call('ZRANGE',KEYS[3],0,n-1); for _,k in ipairs(old) do redis.call('DEL',k,k..':index'); redis.call('ZREM',KEYS[3],k); end end; redis.call('EXPIRE',KEYS[3],ARGV[3]); return 1`, []string{key, key + ":index", s.prefix + "order"}, string(raw), string(index), int(DiagnosticRetention.Seconds()), time.Now().UnixMilli(), maxDiagnosticBundles).Err()
 }
 func (s *DiagnosticStore) Get(ctx context.Context, id string) (*Bundle, error) {
@@ -213,6 +254,17 @@ func (s *DiagnosticStore) Get(ctx context.Context, id string) (*Bundle, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(raw) >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
+		zr, e := gzip.NewReader(bytes.NewReader(raw))
+		if e != nil {
+			return nil, e
+		}
+		raw, err = io.ReadAll(zr)
+		zr.Close()
+		if err != nil {
+			return nil, err
+		}
 	}
 	var b Bundle
 	if err = json.Unmarshal(raw, &b); err != nil {
@@ -242,4 +294,17 @@ func (s *DiagnosticStore) Indexes(ctx context.Context, ids []string) (map[string
 		}
 	}
 	return out, nil
+}
+
+// Close releases private spill files after persistence, including failed saves.
+func (c *Capture) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.sections {
+		if s.spool != nil {
+			s.spool.Close()
+			os.Remove(s.spool.Name())
+			s.spool = nil
+		}
+	}
 }

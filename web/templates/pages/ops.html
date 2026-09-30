@@ -47,7 +47,7 @@
       </div>
     </header>
 
-    <p class="hint">顶部时间范围用于请求统计、趋势、分布和告警事件；实时速率使用卡片内窗口，资源与活跃请求 / 账号显示当前状态。模型筛选仅作用于下方状态表。</p>
+    <p class="hint">顶部时间范围用于请求统计、趋势、分布和告警事件；实时成功率与速率使用卡片内窗口，资源与活跃请求 / 账号显示当前状态。模型筛选仅作用于下方状态表。</p>
 
     <section class="ops-top">
       <article class="ops-card ops-hero">
@@ -94,7 +94,8 @@
                 </div>
               </div>
             </div>
-            <div class="ops-spark" id="opsSpark" aria-hidden="true"></div>
+            <span class="ops-hint" id="opsSuccessTrendHint">成功率趋势</span>
+            <div class="ops-spark ops-chart ops-success-trend" id="opsSpark" role="img" aria-label="所选时间范围的成功率趋势"></div>
           </div>
         </div>
       </article>

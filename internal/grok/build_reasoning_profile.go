@@ -64,6 +64,13 @@ func buildPayloadForAccount(immutable map[string]interface{}, acc *store.Account
 	profile, found := buildCatalogProfile(acc, upstreamModel)
 	if !found {
 		normalizeBuildReasoningEffort(payload, upstreamModel)
+		if reasoning, ok := payload["reasoning"].(map[string]interface{}); ok && strings.EqualFold(strings.TrimSpace(interfaceString(reasoning["effort"])), "none") {
+			// No catalog means the upstream supplies the model default.
+			delete(reasoning, "effort")
+			if len(reasoning) == 0 {
+				delete(payload, "reasoning")
+			}
+		}
 		return payload, nil
 	}
 
@@ -81,6 +88,13 @@ func buildPayloadForAccount(immutable map[string]interface{}, acc *store.Account
 	}
 
 	effort := strings.ToLower(strings.TrimSpace(interfaceString(reasoning["effort"])))
+	if effort == "none" && !profile.SupportsReasoningEffort {
+		delete(reasoning, "effort")
+		if len(reasoning) == 0 {
+			delete(payload, "reasoning")
+		}
+		return payload, nil
+	}
 	allowed := make(map[string]struct{}, len(profile.ReasoningEfforts))
 	for _, candidate := range profile.ReasoningEfforts {
 		allowed[strings.ToLower(strings.TrimSpace(candidate))] = struct{}{}
@@ -93,6 +107,17 @@ func buildPayloadForAccount(immutable map[string]interface{}, acc *store.Account
 	normalized := effort
 	if !accept(normalized) {
 		switch effort {
+		case "none":
+			if accept(profile.DefaultReasoningEffort) {
+				normalized = profile.DefaultReasoningEffort
+			} else {
+				for _, candidate := range []string{"low", "medium", "high", "xhigh"} {
+					if accept(candidate) {
+						normalized = candidate
+						break
+					}
+				}
+			}
 		case "minimal":
 			if accept("low") {
 				normalized = "low"
