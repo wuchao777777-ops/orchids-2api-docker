@@ -71,6 +71,15 @@ type Config struct {
 	// QoderClientVersion is sent as the user agent / Cosy-Version family value
 	// and appended to the login URL.
 	QoderClientVersion string `json:"qoder_client_version,omitempty"`
+	// QoderHTTP2Enabled makes the Qoder chat transport use HTTP/2, matching the
+	// official client's offer on the wire. It is off by default because HTTP/2
+	// multiplexes every chat request to the host over one connection, so a
+	// single reset there fails every in-flight request at once, and Go queues at
+	// the peer's stream limit instead of opening another connection. It was also
+	// measured *not* to be the cause of the queue refusals: HTTP/1.1, an
+	// explicit HTTP/2 transport and the default client all answered in the same
+	// 1.5-2.0s window, and the refusals appeared on all three.
+	QoderHTTP2Enabled bool `json:"qoder_http2_enabled,omitempty"`
 
 	// ── Cline (api.cline.bot) OAuth channel ──
 	//
@@ -122,6 +131,14 @@ type Config struct {
 	MaxRetries         int   `json:"max_retries,omitempty"`
 	RetryDelay         int   `json:"retry_delay,omitempty"`
 	AccountSwitchCount int   `json:"account_switch_count,omitempty"`
+	// SharedRefusalWaitBudgetMs bounds how long one request may wait on a
+	// resource every account shares — Qoder's model queue gate being the one
+	// that matters in practice. The upstream's own retry hint is still honoured
+	// per attempt; this only stops a closed gate from holding a caller past the
+	// point where its own client gives up. Zero selects the built-in default
+	// (90s, which is three of Qoder's 30s windows), and the value is clamped to
+	// a day so a bad setting cannot pin a request forever.
+	SharedRefusalWaitBudgetMs int `json:"shared_refusal_wait_budget_ms,omitempty"`
 	// Quality-hold policy. The gateway withholds a degraded reasoning turn
 	// instead of streaming it, then retries it on another account. Holding is on
 	// by default and fails open once the retry budget is spent.
@@ -280,6 +297,12 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.Stream = &vTrue
 	cfg.MaxRetries = boundedDefault(cfg.MaxRetries, 3, 20)
 	cfg.RetryDelay = boundedDefault(cfg.RetryDelay, 1000, 60000)
+	// The shared-refusal wait budget is a ceiling, not a minimum: zero asks for
+	// the built-in 90s, and an operator may raise it up to a day. It is not
+	// lowered to the retry delay, because the two answer different questions —
+	// retry_delay is how fast a fresh attempt starts, this is how long one
+	// request tolerates an upstream gate.
+	cfg.SharedRefusalWaitBudgetMs = boundedDefault(cfg.SharedRefusalWaitBudgetMs, 90000, 86400000)
 	// How many accounts one request may rotate through before it gives up.
 	// The reference implementation allows far more; a ceiling of twenty made a
 	// bad pool fail visibly ("retries exhausted") while equivalent accounts were

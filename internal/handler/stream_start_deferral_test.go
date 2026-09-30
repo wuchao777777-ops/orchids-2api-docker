@@ -154,10 +154,11 @@ func TestTerminalOnlyResponseStillOpensTheStream(t *testing.T) {
 }
 
 // TestSharedRefusalBeforeOutputUsesRetryWindow confirms that the server keeps
-// the same request open through its bounded retry window. The upstream states
-// its own service is unavailable, so the answer is 503 — an upstream fault with
-// the caller's retry hint — and never a 429 claiming this gateway's accounts are
-// rate-limited. Nothing is opened as an SSE stream.
+// the same request open through its bounded retry window. The upstream queued
+// the request and named a window, so the answer is 429 — the retryable capacity
+// status an OpenAI-compatible client already backs off from — with the caller's
+// retry hint, and never a 503 claiming the upstream service is down while the
+// same upstream answers most requests. Nothing is opened as an SSE stream.
 func TestSharedRefusalBeforeOutputUsesRetryWindow(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 3, RetryDelay: 1}
 	h := NewWithLoadBalancer(cfg, nil)
@@ -175,15 +176,15 @@ func TestSharedRefusalBeforeOutputUsesRetryWindow(t *testing.T) {
 
 	h.HandleMessages(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
 	}
 	out := rec.Body.String()
 	if strings.Contains(out, "event: error") || strings.Contains(out, "data:") {
 		t.Fatalf("an uncommitted stream must not answer with SSE frames: %s", out)
 	}
-	if !strings.Contains(out, "upstream_unavailable") {
-		t.Fatalf("body = %s, want the upstream_unavailable answer", out)
+	if !strings.Contains(out, "upstream_queue") {
+		t.Fatalf("body = %s, want the upstream_queue answer", out)
 	}
 	// Initial request plus the three configured retry probes.
 	if stub.calls != 4 {
@@ -192,12 +193,17 @@ func TestSharedRefusalBeforeOutputUsesRetryWindow(t *testing.T) {
 }
 
 // TestSharedRefusalWaitBudgetIsBounded pins the ceiling on the shared-refusal
-// retry wait. Production spent a p50 of 104s in this loop (max 124s) and then
-// answered, while clients gave up at ~125s: the wait has to stop before the
-// caller's own patience does.
+// retry wait. Production clients gave up at ~125s, so the bound has to stop
+// short of that while still covering the windows an upstream can hand out.
+//
+// It also pins the accounting rule that used to make the documented coverage
+// unreachable: the budget is charged the upstream's own hint, not hint plus
+// jitter. Charging the jitter made a 30s hint cost up to 35s, so the second
+// 30s window never fit inside 60s and a request that met the gate twice was
+// answered 503 after ~37s — exactly the latency production showed.
 func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
-	if sharedRefusalTotalWaitBudget != 60*time.Second {
-		t.Fatalf("budget = %v, want 60s", sharedRefusalTotalWaitBudget)
+	if sharedRefusalTotalWaitBudget != 90*time.Second {
+		t.Fatalf("budget = %v, want 90s", sharedRefusalTotalWaitBudget)
 	}
 	for _, tc := range []struct {
 		name    string
@@ -207,8 +213,9 @@ func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
 	}{
 		{"first window fits", 0, 30 * time.Second, true},
 		{"second window fits exactly", 30 * time.Second, 30 * time.Second, true},
-		{"third window does not", 60 * time.Second, 30 * time.Second, false},
-		{"a window that would overrun is refused", 40 * time.Second, 30 * time.Second, false},
+		{"third window fits exactly", 60 * time.Second, 30 * time.Second, true},
+		{"fourth window does not", 90 * time.Second, 30 * time.Second, false},
+		{"a window that would overrun is refused", 70 * time.Second, 30 * time.Second, false},
 		{"nothing to wait for is not a wait", 0, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -216,5 +223,17 @@ func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
 				t.Fatalf("sharedRefusalWaitAllowed(%v, %v) = %v, want %v", tc.already, tc.next, got, tc.want)
 			}
 		})
+	}
+
+	// The configured form wins, and an operator raising it must actually get the
+	// longer window rather than being clamped back to the constant.
+	if got := SharedRefusalWaitBudget(0); got != sharedRefusalTotalWaitBudget {
+		t.Fatalf("unset budget = %v, want the built-in default", got)
+	}
+	if got := SharedRefusalWaitBudget(150000); got != 150*time.Second {
+		t.Fatalf("configured budget = %v, want 150s", got)
+	}
+	if !sharedRefusalWaitAllowedWithin(90*time.Second, 30*time.Second, SharedRefusalWaitBudget(150000)) {
+		t.Fatal("a raised budget must admit the window the default refuses")
 	}
 }

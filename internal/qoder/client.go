@@ -95,9 +95,11 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	}
 	proxyFunc := http.ProxyFromEnvironment
 	proxyKey := "direct"
+	http2 := false
 	if cfg != nil {
 		proxyFunc = util.ProxyFuncFromConfig(cfg)
 		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
+		http2 = cfg.QoderHTTP2Enabled
 	}
 
 	client := &Client{
@@ -106,7 +108,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		clientID:       resolveClientID(cfg),
 		clientVersion:  resolveClientVersion(cfg),
 		control:        util.GetSharedHTTPClient(proxyKey, authRequestTimeout, proxyFunc),
-		stream:         util.GetSharedHTTPClient(proxyKey+"|qoder-chat", 0, proxyFunc),
+		stream:         util.GetSharedHTTPClientWithHTTP2(proxyKey+"|qoder-chat", 0, proxyFunc, http2),
 		requestTimeout: timeout,
 		entropy:        cryptoSource{},
 	}
@@ -275,6 +277,14 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		attemptCredentials := c.currentCredentials()
 		result, err := c.attemptChat(ctx, url, body, model, requestID, fields, attemptCredentials, toolsEnabled, emit)
 		if err == nil {
+			// A quota notice travels with the attempt's result whichever way the
+			// attempt settled, but it is only recorded on a settled stream: the
+			// notice is a statement about the account, and a stream that produced
+			// nothing usable has not proved anything except that the upstream
+			// refused, which its own error already says.
+			if result.QuotaNotice != nil && result.SawMeaningfulEvent {
+				c.recordQuotaNotice(ctx, result.QuotaNotice)
+			}
 			if !result.SawMeaningfulEvent {
 				// A 200 stream that carried nothing is the upstream refusing
 				// quietly. It is reported as an error, not as an empty success,
@@ -661,6 +671,49 @@ func (c *Client) persistCredentials(ctx context.Context, creds Credentials, expe
 	})
 }
 
+// recordQuotaNotice stores a quota verdict the upstream stated in band.
+//
+// The notice is applied through the account store's freshness-guarded quota
+// path, so it can only move the snapshot forward. It never shortens a window
+// the upstream already named, and it never overrides a newer synced reading.
+//
+// The failure is logged and swallowed: the answer the caller asked for has
+// already been produced, and losing a bookkeeping write must not turn a
+// successful generation into an error.
+func (c *Client) recordQuotaNotice(ctx context.Context, notice *QuotaNotice) {
+	if c == nil || notice == nil || !notice.Exhausted {
+		return
+	}
+	now := time.Now()
+	c.stateMu.RLock()
+	if c.account == nil {
+		c.stateMu.RUnlock()
+		return
+	}
+	snapshot := c.account.QoderQuota
+	c.stateMu.RUnlock()
+	snapshot.Exhausted = true
+	snapshot.SyncedAt = now
+	if !notice.NextResetAt.IsZero() {
+		// The stream's own reset boundary is authoritative for this window:
+		// take it even when an earlier reading named a different one, because
+		// the window the notice describes is the one that just closed.
+		snapshot.ResetAt = notice.NextResetAt
+	}
+	if notice.UpgradeURL != "" {
+		snapshot.UpgradeURL = notice.UpgradeURL
+	}
+	c.stateMu.Lock()
+	if c.account != nil {
+		c.account.QoderQuota = snapshot
+	}
+	c.stateMu.Unlock()
+	if err := c.persistPatch(ctx, store.QoderAccountPatch{Quota: &snapshot}); err != nil {
+		slog.Warn("Failed to persist a Qoder quota notice; the answer is unaffected",
+			"error", err, "next_reset_at", notice.NextResetAt)
+	}
+}
+
 // persistPatch writes only Qoder-owned fields. Production stores implement the
 // atomic patch API; the full-account fallback keeps lightweight test stores
 // source compatible without weakening the real persistence path.
@@ -706,6 +759,16 @@ func (c *Client) persistPatch(ctx context.Context, patch store.QoderAccountPatch
 	}
 	if patch.ModelIDs != nil {
 		acc.QoderModelIDs = append([]string(nil), patch.ModelIDs...)
+	}
+	if patch.Quota != nil {
+		// The fallback has no atomic guard to lean on, so the freshness rule is
+		// applied here: a reading older than the one already on the record is
+		// dropped rather than allowed to rewind it. UpdateAccount re-applies the
+		// same rule server-side when the store supports it.
+		incoming := *patch.Quota
+		if acc.QoderQuota.SyncedAt.IsZero() || !incoming.SyncedAt.Before(acc.QoderQuota.SyncedAt) {
+			acc.QoderQuota = incoming
+		}
 	}
 	if err := accountStore.UpdateAccount(writeCtx, &acc); err != nil {
 		return fmt.Errorf("persist qoder account state: %w", err)

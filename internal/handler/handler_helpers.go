@@ -692,32 +692,71 @@ func shouldRetryCurrentAccountWhenNoAlternative(category string) bool {
 // upstream_unavailable (the upstream saying its own service is down for the
 // model) belongs here beside the shared queue refusal: both are answerable only
 // by waiting, neither is about the account, and both were previously reported to
-// the client as this gateway's rate limit.
+// the client as this gateway's rate limit. upstream_queue is the same condition
+// with the upstream naming a window, and is answered to the client as 429.
 func isSharedUpstreamRefusalClass(class apperrors.UpstreamErrorClass) bool {
 	if class.SwitchAccount {
 		return false
 	}
-	return class.Category == "rate_limit" || class.Category == "upstream_unavailable"
+	return class.Category == "rate_limit" ||
+		class.Category == "upstream_unavailable" ||
+		class.Category == "upstream_queue"
 }
 
 // sharedRefusalTotalWaitBudget bounds how long one request may wait on a
 // resource every account shares. The upstream's own hint is still honoured per
 // attempt; this only stops a closed gate from holding a caller for minutes.
 //
-// Production spent a p50 of 104s (max 124s) in this loop before answering, and
-// clients started giving up on their own side at ~125s. Sixty seconds still
-// covers two of the 30s windows Qoder advertises, which is where the redeemable
-// part of the wait lives.
-const sharedRefusalTotalWaitBudget = 60 * time.Second
+// Production measured clients giving up on their own side at ~125s, so the
+// default is one window short of that: three of the 30s windows Qoder
+// advertises, plus jitter and the attempts themselves.
+//
+// The bound used to be a constant of 60s, and the wait was charged against it
+// *after* jitter was added. Qoder's hint is 30s and jitter is up to 5s, so the
+// first window already booked 30-35s and the second cost another 30-35s: the
+// pair straddled 60s and was refused whenever either jitter ran, which is
+// almost always. The documented "covers two of the 30s windows" was therefore
+// unreachable, and a request that met the gate twice was answered 503 after
+// ~37s — exactly the latency production showed. The constant became a knob so
+// an operator whose own clients tolerate longer waits can raise it without a
+// rebuild, and the budget is now charged against the upstream's hint alone,
+// with jitter allowed on top.
+const sharedRefusalTotalWaitBudget = 90 * time.Second
+
+// SharedRefusalWaitBudget is the effective wait bound. A configured
+// shared_refusal_wait_budget_ms wins over the built-in default.
+func SharedRefusalWaitBudget(configuredMs int) time.Duration {
+	if configuredMs <= 0 {
+		return sharedRefusalTotalWaitBudget
+	}
+	budget := time.Duration(configuredMs) * time.Millisecond
+	if budget < time.Second {
+		budget = time.Second
+	}
+	return budget
+}
 
 // sharedRefusalWaitAllowed reports whether one more wait of next fits inside the
 // budget already spent on waits of already. It is a plain comparison so the
 // bound can be tested without spending the waits themselves.
+//
+// next is the upstream's own hint, without the jitter that will be added to the
+// actual sleep: jitter exists to decorrelate wake-ups, not to consume budget, so
+// charging it here made the last reachable window unreachable.
 func sharedRefusalWaitAllowed(already, next time.Duration) bool {
+	return sharedRefusalWaitAllowedWithin(already, next, sharedRefusalTotalWaitBudget)
+}
+
+// sharedRefusalWaitAllowedWithin is sharedRefusalWaitAllowed against an explicit
+// budget, which is the configured form the request loop uses.
+func sharedRefusalWaitAllowedWithin(already, next, budget time.Duration) bool {
 	if next <= 0 {
 		return false
 	}
-	return already+next <= sharedRefusalTotalWaitBudget
+	if budget <= 0 {
+		budget = sharedRefusalTotalWaitBudget
+	}
+	return already+next <= budget
 }
 
 // sharedRefusalWaitForChannel preserves Qoder's provider-normalized hint

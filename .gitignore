@@ -96,3 +96,11 @@ test/
 
 # Local cross-compiled deploy artifacts (built by the deploy step, not source)
 dist/
+
+# Local operational material: host-access helpers (.tools/askpass.sh holds the
+# deployment host's root password), staged binaries (.deploy-stage/) and
+# one-off analysis dumps. Same reason as .rsh/ below — this directory has no
+# business being in a public repository.
+.tools/
+.deploy-stage/
+function_analysis_report.md

@@ -572,8 +572,27 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "qoder") {
 			return false
 		}
+		// The exhausted verdict is a snapshot, not a fact about right now: it is
+		// written by a sync round (and now also by an in-band quota notice) and
+		// stays on the row until something refreshes it. Production held six
+		// accounts flagged 300/300 while the same accounts answered complete
+		// generations, so the flag must never be the only thing that decides.
+		//
+		// Two signals retire it. A newer snapshot that says the allowance is back
+		// is the obvious one. The second is the reset boundary: once the window
+		// the snapshot named has passed, the reading describes a window that no
+		// longer exists, and holding the account out on it meant it stayed parked
+		// until the next sync happened to notice the clock, not until the
+		// upstream said so.
 		if !acc.QoderQuota.Exhausted && acc.QoderQuota.Remaining > 0 {
 			lb.clearAccountStatus(ctx, acc, "Qoder 额度已刷新，恢复完整能力")
+		} else if reset := acc.QoderQuota.ResetAt; !reset.IsZero() &&
+			!now.Before(reset) && acc.QoderQuota.SyncedAt.Before(reset) {
+			// Only a snapshot taken *before* the boundary it names is stale. A
+			// reading taken after the reset and still reporting exhaustion is
+			// describing the current window, and clearing on it would route
+			// requests at an account the upstream just said was spent.
+			lb.clearAccountStatus(ctx, acc, "Qoder 额度窗口已重置，恢复完整能力")
 		}
 		return true
 	case store.AccountStatusWorkBuddyQuotaExhausted:

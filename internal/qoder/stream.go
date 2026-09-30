@@ -96,6 +96,89 @@ type streamResult struct {
 	// chunk channel, keyed by kind. They carry no model output, but a quota
 	// notice explains queue refusals that are otherwise unattributable.
 	ControlFrames map[string]int
+	// QuotaNotice is the account's own quota verdict, when the upstream
+	// multiplexed one into the stream. A complete answer can still carry a
+	// quota_exceeded notice; it is the earliest authoritative statement of when
+	// the window resets, and it is what lets the pool stop trusting a snapshot
+	// taken before that reset.
+	QuotaNotice *QuotaNotice
+}
+
+// QuotaNotice is the advisory quota frame the upstream multiplexes into the
+// chunk channel. The gateway used to count these frames and discard the
+// payload, so an account the upstream had already told us was spent kept its
+// stale "has credits" snapshot until the next periodic sync — which is how a
+// request stayed routable onto an account whose window had already closed.
+type QuotaNotice struct {
+	// Kind is the control-frame kind that carried the notice ("NOTIFICATIONS").
+	Kind string
+	// Exhausted is true for a quota_exceeded notice: the upstream is saying the
+	// account's allowance for this window is spent.
+	Exhausted bool
+	// HighestTier reports whether the account already holds the highest plan the
+	// upstream offers, which is what makes an upgrade prompt pointless.
+	HighestTier bool
+	// NextResetAt is when the window reopens. Zero when the upstream omitted it.
+	NextResetAt time.Time
+	// UpgradeURL and PricingURL are the upstream's own links for the notice. They
+	// are kept for the log and the account view, never for the client's answer.
+	UpgradeURL string
+	PricingURL string
+}
+
+// notificationFrame is the payload shape of a NOTIFICATIONS control frame:
+//
+//	{"notifications":[{"notificationType":"quota_exceeded","isHighestTier":false,
+//	  "extras":{"nextResetAt":1759…,"pricingUrl":"…","upgradeUrl":"…"}}]}
+type notificationFrame struct {
+	Notifications []struct {
+		NotificationType string `json:"notificationType"`
+		IsHighestTier    bool   `json:"isHighestTier"`
+		Extras           struct {
+			NextResetAt int64  `json:"nextResetAt"`
+			UpgradeURL  string `json:"upgradeUrl"`
+			PricingURL  string `json:"pricingUrl"`
+		} `json:"extras"`
+	} `json:"notifications"`
+}
+
+// parseQuotaNotice extracts the quota verdict from an advisory frame. It returns
+// nil for every other kind, for a malformed payload, and for a notifications
+// frame that carries no quota_exceeded entry.
+func parseQuotaNotice(kind, payload string) *QuotaNotice {
+	if !strings.EqualFold(strings.TrimSpace(kind), "NOTIFICATIONS") {
+		return nil
+	}
+	// The frame is sometimes followed by its own terminator, so a trailing '#'
+	// survives the split. Trim it before decoding rather than treating the whole
+	// payload as malformed.
+	payload = strings.TrimSpace(payload)
+	payload = strings.TrimRight(payload, "#")
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		return nil
+	}
+	var frame notificationFrame
+	if err := json.Unmarshal([]byte(payload), &frame); err != nil {
+		return nil
+	}
+	for _, n := range frame.Notifications {
+		if !strings.EqualFold(strings.TrimSpace(n.NotificationType), "quota_exceeded") {
+			continue
+		}
+		notice := &QuotaNotice{
+			Kind:        strings.ToUpper(strings.TrimSpace(kind)),
+			Exhausted:   true,
+			HighestTier: n.IsHighestTier,
+			UpgradeURL:  strings.TrimSpace(n.Extras.UpgradeURL),
+			PricingURL:  strings.TrimSpace(n.Extras.PricingURL),
+		}
+		if n.Extras.NextResetAt > 0 {
+			notice.NextResetAt = time.Unix(normalizeMillis(n.Extras.NextResetAt), 0)
+		}
+		return notice
+	}
+	return nil
 }
 
 // FinishReason maps the accumulated stream onto an Anthropic-style stop reason.
@@ -352,6 +435,17 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 				result.ControlFrames = map[string]int{}
 			}
 			result.ControlFrames[kind]++
+			if quotaNotice := parseQuotaNotice(kind, notice); quotaNotice != nil {
+				// Keep the latest reading in the attempt's result; the caller
+				// records it against the account once the attempt settles.
+				result.QuotaNotice = quotaNotice
+				slog.Warn("qoder quota notice in stream", "provider", "qoder",
+					"kind", kind,
+					"exhausted", quotaNotice.Exhausted,
+					"highest_tier", quotaNotice.HighestTier,
+					"next_reset_at", quotaNotice.NextResetAt.Format(time.RFC3339),
+				)
+			}
 			slog.Warn("qoder control frame", "provider", "qoder", "kind", kind, "payload", bodySnippet(notice))
 			return true
 		}

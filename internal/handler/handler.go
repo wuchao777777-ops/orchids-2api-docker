@@ -1056,28 +1056,44 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				retryDelayForAttempt = hinted
 			}
 			sharedRefusal := isSharedUpstreamRefusalClass(errClass)
+			// sharedRefusalWait is the upstream's own hint, charged against the
+			// budget. The jitter below is added only to the sleep: it exists to
+			// decorrelate wake-ups, and charging it made the last reachable
+			// window unreachable (a 30s hint plus up to 5s of jitter spent 35s
+			// against a 60s budget that had already paid 30s).
+			sharedRefusalWait := time.Duration(0)
 			if retryDelayForAttempt > 0 && sharedRefusal {
 				// Qoder preserves the provider-normalized hint. Other channels
 				// keep their existing early-probe policy; positive jitter never
 				// moves a retry before the chosen wait.
-				retryDelayForAttempt = sharedRefusalWaitForChannel(retryDelayForAttempt, attempt+1, targetChannel)
-				retryDelayForAttempt += sharedRefusalJitter(retryDelayForAttempt)
+				sharedRefusalWait = sharedRefusalWaitForChannel(retryDelayForAttempt, attempt+1, targetChannel)
 			}
+			// configSnapshot reports nil for a nil handler, so the knob is read
+			// defensively: losing the setting must fall back to the built-in
+			// bound, not panic inside the retry loop.
+			budgetMs := 0
+			if cfg != nil {
+				budgetMs = cfg.SharedRefusalWaitBudgetMs
+			}
+			waitBudget := SharedRefusalWaitBudget(budgetMs)
 			// A shared refusal is a gate on the upstream's side, not this account's
 			// throttle, so the wait is spent on the same account and can repeat.
-			// Bound the total: production answered after a p50 of 104s and clients
-			// gave up at ~125s, which is past the point where waiting is a service
-			// to the caller.
-			if sharedRefusal && retryDelayForAttempt > 0 && !sharedRefusalWaitAllowed(sharedRefusalWaited, retryDelayForAttempt) {
+			// Bound the total: production clients gave up at ~125s, which is past
+			// the point where waiting is a service to the caller.
+			if sharedRefusal && sharedRefusalWait > 0 && !sharedRefusalWaitAllowedWithin(sharedRefusalWaited, sharedRefusalWait, waitBudget) {
 				slog.Warn("Shared upstream refusal exceeded the wait budget; answering now",
 					"trace_id", traceID,
 					"waited", sharedRefusalWaited,
-					"budget", sharedRefusalTotalWaitBudget,
+					"next", sharedRefusalWait,
+					"budget", waitBudget,
 					"category", errClass.Category,
 				)
 				sh.reportRequestFailure("Reporting a shared refusal after the wait budget",
 					errClass.Category, apperrors.PublicMessage(errStr), upstreamRetryAfter(err))
 				return
+			}
+			if sharedRefusalWait > 0 {
+				retryDelayForAttempt = sharedRefusalWait + sharedRefusalJitter(sharedRefusalWait)
 			}
 			// Holding this account's concurrency slot through the wait starves the
 			// pool: the slot is reserved for the whole request, so ten requests
@@ -1095,7 +1111,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if sharedRefusal {
-				sharedRefusalWaited += retryDelayForAttempt
+				sharedRefusalWaited += sharedRefusalWait
+				if sharedRefusalWait == 0 {
+					// No hint to charge, but the attempt is still repeated: count
+					// the delay actually spent so a hintless gate cannot loop
+					// forever without moving the budget.
+					sharedRefusalWaited += retryDelayForAttempt
+				}
 			}
 			if slotReleasedForWait && currentAccount != nil {
 				reacquiredID, acquired := h.tryAcquireTrackedAccount(currentAccount)

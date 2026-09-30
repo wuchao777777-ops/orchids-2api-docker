@@ -22,13 +22,17 @@ func PublicMessage(errText string) string {
 // rejected on its merits, and 5xx for the gateway's or the upstream's own fault.
 func StatusForCategory(category string) int {
 	switch category {
-	case "quota_exhausted", "rate_limit":
+	case "quota_exhausted", "rate_limit", "upstream_queue":
+		// upstream_queue is a throttle the caller can wait out: the upstream put
+		// the request in a queue and named a window (retryAfterSeconds). It is
+		// answered as 429 + Retry-After so an OpenAI-compatible client backs off
+		// and comes back, instead of reading 503 as a broken gateway.
 		return http.StatusTooManyRequests
 	case "upstream_unavailable":
-		// The upstream's own service is down for this model. It is not the
-		// caller's rate limit and not this gateway's fault, so it is answered as
-		// a temporarily unavailable upstream rather than as a 429 that tells the
-		// caller to stop sending requests.
+		// The upstream's own service is down for this model and offered no
+		// window. It is not the caller's rate limit and not this gateway's fault,
+		// so it is answered as a temporarily unavailable upstream rather than as
+		// a 429 that tells the caller to stop sending requests.
 		return http.StatusServiceUnavailable
 	case "auth", "auth_blocked":
 		return http.StatusUnauthorized
@@ -62,6 +66,11 @@ func messageForCategory(category string) string {
 		return "The available upstream accounts have exhausted their quota. Retry after the quota resets or add capacity."
 	case "rate_limit":
 		return "The available upstream accounts are rate-limited. Retry after the cooldown."
+	case "upstream_queue":
+		// This category exists so the caller is told what actually happened. It
+		// replaces a 503 "the upstream service is temporarily unavailable" that
+		// was published for a gate the same upstream served fine seconds later.
+		return "The upstream is holding this model's requests in a queue and has not admitted this one yet. Retry after the indicated delay."
 	case "upstream_unavailable":
 		return "The upstream service for this model is temporarily unavailable. Retry after the indicated delay."
 	case "model_unavailable":

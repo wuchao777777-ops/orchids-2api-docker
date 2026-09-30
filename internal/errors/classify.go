@@ -213,14 +213,24 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	// 401/403 envelope, so the credential branch used to win: a working account's
 	// request was answered as an authentication failure and the handler rotated
 	// through the pool, meeting the identical refusal on every account.
+	case isUpstreamQueueGate(lower):
+		// The upstream admitted the request into a queue and did not serve it.
+		// Retryable, never switchable — rotating multiplies one shared refusal —
+		// and answered as 429 with the upstream's own retry hint.
+		//
+		// This used to be folded into upstream_unavailable (503). The upstream is
+		// not unavailable: the same hour that produced these refusals also
+		// produced hundreds of complete generations, and the refusal names both
+		// the queue (isQueued) and the wait (retryAfterSeconds). That is a
+		// throttle the caller can act on, not an outage it cannot.
+		return UpstreamErrorClass{Category: "upstream_queue", Retryable: true}
 	case isUpstreamServiceUnavailable(lower):
-		// The service behind the model is down for everyone. Retryable on the
-		// account already held, never switchable, and reported to the client as an
-		// upstream fault (503) with the upstream's own retry hint rather than as
-		// this gateway's rate limit.
+		// The service behind the model is down and offered no window at all.
+		// Retryable on the account already held, never switchable, and reported
+		// to the client as an upstream fault (503).
 		return UpstreamErrorClass{Category: "upstream_unavailable", Retryable: true}
 	case isSharedUpstreamQueueRefusal(lower):
-		// Qoder's model queue is unavailable (business code 10605). Retryable but
+		// The upstream's own pool says it is throttling. Retryable but
 		// deliberately not switchable: rotating multiplies one shared refusal, so
 		// the request waits out the upstream's window on the account it holds.
 		return UpstreamErrorClass{Category: "rate_limit"}
@@ -288,43 +298,58 @@ func upstreamMarkerText(text string) string {
 	return strings.ReplaceAll(strings.ToLower(text), `\`, "")
 }
 
-// isSharedUpstreamQueueRefusal reports whether the upstream refused because a
-// resource shared by every account is unavailable.
-//
-// It keys on the shape of the refusal, not one phrasing, because the same
-// condition reaches this classifier under several texts: the classified form
-// ("qoder gateway is busy"), Qoder's raw business code when a parser has not
-// unwrapped it (10605, isQueued), the upstream stating its own pool is throttled,
-// and the serviceAvailable:false flag. Falling through to the default branch
-// would label it "unknown" with SwitchAccount=true, which is what turned one
-// shared refusal into a rotation storm across the whole account pool.
+// isSharedUpstreamQueueRefusal reports whether the upstream's own pool says it
+// is throttling callers. It keys on the phrasing rather than on the flags,
+// because this text is the upstream's own prose and carries no queue marker;
+// the flagged, windowed form is isUpstreamQueueGate.
 func isSharedUpstreamQueueRefusal(text string) bool {
 	text = upstreamMarkerText(text)
-	return strings.Contains(text, "qoder gateway is busy") ||
-		strings.Contains(text, "available upstream accounts are rate-limited") ||
-		strings.Contains(text, "available upstream accounts are rate limited") ||
-		strings.Contains(text, "10605") ||
-		strings.Contains(text, `"serviceavailable":false`) ||
-		strings.Contains(text, `"isqueued":true`)
+	return strings.Contains(text, "available upstream accounts are rate-limited") ||
+		strings.Contains(text, "available upstream accounts are rate limited")
+}
+
+// isUpstreamQueueGate reports whether the upstream put the request in a queue
+// and told the caller when to come back.
+//
+// Qoder's closed gate carries all of: isQueued (the request was queued rather
+// than rejected), retryAfterSeconds (the window it wants), and usually
+// serviceAvailable:false with queueCount:0. The queue field is what separates a
+// throttle from an outage, so it is required here: without it the payload is
+// "the service is down", which isUpstreamServiceUnavailable answers as 503.
+//
+// This distinction was measured, not assumed. Through the gateway, 96 requests
+// in one hour returned 200 (0 failures) while the same window still produced
+// these refusals; 24h held 364 complete generations against 184 failures. A
+// service that is answering four requests in five is throttling this caller,
+// and reporting it as unavailable sent operators looking at the upstream while
+// the only useful action was to wait out the window.
+func isUpstreamQueueGate(text string) bool {
+	text = upstreamMarkerText(text)
+	if flagValue(text, "isqueued") == "true" {
+		return true
+	}
+	// 10605 is Qoder's queue/busy business code, and "qoder gateway is busy" is
+	// the form this gateway renders it as once a parser has unwrapped the
+	// envelope. Both name the queue even when the flags were dropped on the way.
+	return strings.Contains(text, "10605") ||
+		strings.Contains(text, "qoder gateway is busy")
 }
 
 // isUpstreamServiceUnavailable reports whether the upstream said the service
-// behind the model is down, rather than that it is throttling this caller.
-//
-// Qoder states the difference explicitly: a closed gate arrives as
-// serviceAvailable:false with an empty queue (queueCount:0) plus a
-// "come back in 30s" hint, which is not a capacity verdict about our accounts.
-// Production measured 636 such refusals in one day, every one of them carrying
-// serviceAvailable:false and queueCount:0 — and every one of them was answered
-// to the client as "the available upstream accounts are rate-limited".
+// behind the model is down, with no window to wait out.
 func isUpstreamServiceUnavailable(text string) bool {
 	text = upstreamMarkerText(text)
+	if flagValue(text, "isqueued") == "true" {
+		// A gate that named its queue is a throttle, not an outage; that case is
+		// answered by isUpstreamQueueGate and must not be reported as 503.
+		return false
+	}
 	if flagValue(text, "serviceavailable") == "false" {
 		return true
 	}
-	// Some envelopes carry the queue flags without naming the service flag: an
-	// empty queue that is nevertheless refusing is the same closed gate.
-	return flagValue(text, "isqueued") == "true" && flagValue(text, "queuecount") == "0"
+	// Some envelopes carry an empty, refusing queue without naming the service
+	// flag. An empty queue with no retry window is the same closed service.
+	return flagValue(text, "queuecount") == "0"
 }
 
 // flagValue returns the value token that follows name in an already normalised

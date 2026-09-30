@@ -16,11 +16,11 @@ func TestClassifySharedQueueRefusalDoesNotRotate(t *testing.T) {
 		message  string
 		category string
 	}{
-		"production message":      {production, "upstream_unavailable"},
-		"classified busy form":    {"qoder gateway is busy: serviceAvailable=false retryAfterSeconds=29", "upstream_unavailable"},
+		"production message":      {production, "upstream_queue"},
+		"classified busy form":    {"qoder gateway is busy: serviceAvailable=false retryAfterSeconds=29", "upstream_queue"},
 		"upstream pool throttled": {"qoder API error: the available upstream accounts are rate-limited", "rate_limit"},
 		"service unavailable":     {`qoder upstream error: {"serviceAvailable":false}`, "upstream_unavailable"},
-		"queued flag":             {`qoder upstream error: {"isQueued":true}`, "rate_limit"},
+		"queued flag":             {`qoder upstream error: {"isQueued":true}`, "upstream_queue"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			class := ClassifyUpstreamError(tc.message)
@@ -44,8 +44,8 @@ func TestClassifyEscapedMarkersSurviveNesting(t *testing.T) {
 	// No 10605 anywhere: the classification has to come from the escaped flags.
 	const escapedNoCode = `qoder upstream rejected the credential: {"message":"{\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"waitTime\":30}"}`
 	class := ClassifyUpstreamError(escapedNoCode)
-	if class.Category != "upstream_unavailable" {
-		t.Fatalf("category = %q, want upstream_unavailable for an escaped closed-gate payload", class.Category)
+	if class.Category != "upstream_queue" {
+		t.Fatalf("category = %q, want upstream_queue for an escaped closed-gate payload", class.Category)
 	}
 	if class.SwitchAccount {
 		t.Fatal("SwitchAccount = true; a closed gate is identical for every account")
@@ -55,8 +55,8 @@ func TestClassifyEscapedMarkersSurviveNesting(t *testing.T) {
 	// 10605: the credential branch used to win and the handler rotated the pool.
 	escapedUnder401 := `qoder gateway is busy: qoder API error: status=401, method=POST, path=/algo/api/v2/chat, code=10605, message={\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"retryAfterSeconds\":30}`
 	class = ClassifyUpstreamError(escapedUnder401)
-	if class.Category != "upstream_unavailable" {
-		t.Fatalf("category = %q, want upstream_unavailable; a 401 envelope must not outrank the shared refusal", class.Category)
+	if class.Category != "upstream_queue" {
+		t.Fatalf("category = %q, want upstream_queue; a 401 envelope must not outrank the shared refusal", class.Category)
 	}
 	if class.SwitchAccount {
 		t.Fatal("SwitchAccount = true; the 401 envelope made the handler rotate the whole pool")

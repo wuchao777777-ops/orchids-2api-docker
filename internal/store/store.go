@@ -529,6 +529,12 @@ type QoderAccountPatch struct {
 	RuntimeInfo          string
 	RuntimeKey           string
 	ModelIDs             []string
+	// Quota carries a reading the upstream stated in band — a quota_exceeded
+	// notice multiplexed into a stream — rather than one a sync round fetched.
+	// It goes through the same freshness guard as a synced snapshot so a notice
+	// racing a login or a manual sync cannot rewind the account's view of its
+	// own allowance.
+	Quota *QoderQuotaSnapshot
 }
 
 // ClineCredentialPatch contains the independently refreshed Cline client state.

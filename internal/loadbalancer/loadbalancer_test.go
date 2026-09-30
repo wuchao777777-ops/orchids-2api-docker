@@ -635,3 +635,71 @@ func TestLargePoolIsScannedInRotatingWindows(t *testing.T) {
 		t.Fatalf("rotating windows covered %d of %d accounts", len(seen), size)
 	}
 }
+
+// TestQoderExhaustedSnapshotRetiresAtItsResetBoundary pins the scheduling rule
+// that kept a spent-looking account parked after its window had reopened.
+//
+// The exhausted flag is a snapshot: it is written by a sync round (and by an
+// in-band quota notice) and stays on the row until something refreshes it.
+// Production held six accounts flagged 300/300 while the same accounts answered
+// complete generations, so the flag cannot be the only thing that decides. A
+// snapshot taken before the boundary it names is describing a window that no
+// longer exists.
+func TestQoderExhaustedSnapshotRetiresAtItsResetBoundary(t *testing.T) {
+	build := func(syncedAt, resetAt time.Time) *store.Account {
+		acc := &store.Account{
+			ID:          1,
+			AccountType: "qoder",
+			StatusCode:  store.AccountStatusQoderQuotaExhausted,
+			LastAttempt: time.Now().Add(-time.Hour),
+		}
+		acc.QoderQuota = store.QoderQuotaSnapshot{
+			Limit: 300, Used: 300, Remaining: 0, Exhausted: true,
+			SyncedAt: syncedAt, ResetAt: resetAt,
+		}
+		return acc
+	}
+
+	now := time.Now()
+
+	// Snapshot predates the reset it named: the window it describes is over, so
+	// the account is admitted with its full capability restored.
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	stale := build(now.Add(-2*time.Hour), now.Add(-time.Hour))
+	if !lb.isAccountAvailable(context.Background(), stale) {
+		t.Fatal("an exhausted snapshot taken before its own reset boundary must be admitted")
+	}
+	if stale.StatusCode != "" {
+		t.Fatalf("StatusCode = %q, want it cleared so the account is not re-checked", stale.StatusCode)
+	}
+
+	// Snapshot taken after the reset and still reporting exhaustion describes
+	// the current window: clearing on it would route requests at an account the
+	// upstream just said was spent.
+	lb = &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	current := build(now.Add(-time.Minute), now.Add(-time.Hour))
+	if !lb.isAccountAvailable(context.Background(), current) {
+		t.Fatal("a spent account is still admitted to the model-aware selector")
+	}
+	if current.StatusCode != store.AccountStatusQoderQuotaExhausted {
+		t.Fatalf("StatusCode = %q, want the session to keep restricting it to a free catalog row", current.StatusCode)
+	}
+
+	// No boundary recorded at all: nothing proves the window reopened.
+	lb = &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	unknown := build(now.Add(-2*time.Hour), time.Time{})
+	if !lb.isAccountAvailable(context.Background(), unknown) {
+		t.Fatal("a spent account with no reset time is still admitted")
+	}
+	if unknown.StatusCode != store.AccountStatusQoderQuotaExhausted {
+		t.Fatalf("StatusCode = %q, want it untouched without a reset boundary", unknown.StatusCode)
+	}
+
+	// A non-Qoder row must not borrow the Qoder rule.
+	lb = &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	wrongChannel := build(now.Add(-2*time.Hour), now.Add(-time.Hour))
+	wrongChannel.AccountType = "workbuddy"
+	if lb.isAccountAvailable(context.Background(), wrongChannel) {
+		t.Fatal("a non-Qoder row holding the Qoder status must stay excluded")
+	}
+}

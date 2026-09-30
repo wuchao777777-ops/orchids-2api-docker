@@ -1080,6 +1080,15 @@ func (s *redisStore) UpdateQoderAccount(ctx context.Context, id int64, patch Qod
 		if patch.ModelIDs != nil {
 			acc.QoderModelIDs = append([]string(nil), patch.ModelIDs...)
 		}
+		if patch.Quota != nil {
+			// Same rule as a synced snapshot: a reading at least as new as the
+			// stored one wins; an older one is discarded rather than rewinding a
+			// view an in-flight sync just established.
+			incoming := *patch.Quota
+			if acc.QoderQuota.SyncedAt.IsZero() || !incoming.SyncedAt.Before(acc.QoderQuota.SyncedAt) {
+				acc.QoderQuota = incoming
+			}
+		}
 		return nil
 	})
 }

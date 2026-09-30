@@ -2601,13 +2601,14 @@ func normalizeConfigPatchValue(key string, value interface{}) interface{} {
 	case "enable_token_refresh", "enable_usage_refresh", "enable_token_count",
 		"auto_refresh_token", "kiro_use_builtin_proxy",
 		"antigravity_use_builtin_proxy",
-		"enable_context_compress", "debug_enabled":
+		"enable_context_compress", "debug_enabled", "qoder_http2_enabled":
 		if b, ok := parseBoolish(value); ok {
 			return b
 		}
 	case "retry_delay", "request_timeout", "refresh_interval",
 		"redis_db", "token_refresh_interval", "load_balancer_cache_ttl", "concurrency_limit",
-		"concurrency_timeout", "max_retries", "credential_retries":
+		"concurrency_timeout", "max_retries", "credential_retries",
+		"shared_refusal_wait_budget_ms":
 		if i, ok := parseIntish(value); ok {
 			return i
 		}

@@ -46,10 +46,28 @@ var httpClientCache = clientPool{clients: make(map[string]*http.Client)}
 // The proxyKey should uniquely identify the proxy configuration (e.g., the Proxy URL or "direct").
 // Transport configuration (like timeouts) should be uniform per proxyKey.
 func GetSharedHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
+	return GetSharedHTTPClientWithHTTP2(proxyKey, timeout, proxyFunc, false)
+}
+
+// GetSharedHTTPClientWithHTTP2 is GetSharedHTTPClient plus an explicit HTTP/2
+// choice, for a caller that has to match a client the upstream is known to
+// compare against.
+//
+// It is opt-in and off by default on purpose. With ForceAttemptHTTP2 the
+// transport multiplexes every request to a host over one connection, which
+// changes the failure mode of a single reset from "one request failed" to "every
+// in-flight request failed", and Go queues rather than opens a new connection
+// when the peer's stream limit is reached — so it is a poor default for a
+// concurrency-100 gateway. The flag is part of the cache key so one caller's
+// choice cannot silently become another's.
+func GetSharedHTTPClientWithHTTP2(proxyKey string, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), http2 bool) *http.Client {
 	if proxyKey == "" {
 		proxyKey = "direct"
 	}
 	cacheKey := sharedHTTPClientCacheKey(proxyKey, timeout)
+	if http2 {
+		cacheKey += "|h2"
+	}
 
 	httpClientCache.mu.RLock()
 	client, ok := httpClientCache.clients[cacheKey]
@@ -76,6 +94,7 @@ func GetSharedHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(
 		ResponseHeaderTimeout: responseHeaderTimeoutForClient(timeout),
 		Proxy:                 proxyFunc,
 		TLSClientConfig:       &tls.Config{},
+		ForceAttemptHTTP2:     http2,
 	}
 
 	newClient := &http.Client{

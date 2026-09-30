@@ -4,31 +4,58 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
 
-// TestUpstreamUnavailableAnswerIsHonest pins the answer a caller gets when the
-// upstream says its own service is down for the model.
+// TestUpstreamQueueGateAnswerIsHonest pins the answer a caller gets for Qoder's
+// admission gate: the upstream queued the request and named a window.
 //
-// Production measured 636 such refusals in one day, every one carrying
+// Production measured these refusals 636 times in one day, every one carrying
 // serviceAvailable:false and queueCount:0, and every one was answered as 429
 // "the available upstream accounts are rate-limited" after a p50 of 104s of
-// waiting: a lie about the cause, with no hint about when to come back.
-func TestUpstreamUnavailableAnswerIsHonest(t *testing.T) {
-	category := ClassifyUpstreamError(`qoder gateway is busy: {"code":"10605","serviceAvailable":false,"queueCount":0,"retryAfterSeconds":30}`).Category
+// waiting: a lie about the cause, with no hint about when to come back. The
+// correction over-swung: it started answering 503 "the upstream service is
+// temporarily unavailable" for a gate the same upstream served fine seconds
+// later. The honest answer names the queue and keeps the 429 a client already
+// knows how to back off from.
+func TestUpstreamQueueGateAnswerIsHonest(t *testing.T) {
+	const production = `qoder gateway is busy: {"code":"10605","serviceAvailable":false,"queueCount":0,"retryAfterSeconds":30}`
+
+	category := ClassifyUpstreamError(production).Category
+	if category != "upstream_queue" {
+		t.Fatalf("category = %q, want upstream_queue", category)
+	}
+	if got := StatusForCategory(category); got != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", got, http.StatusTooManyRequests)
+	}
+	message := PublicMessage(`qoder gateway is busy: {"code":"10605","serviceAvailable":false,"queueCount":0}`)
+	if !strings.Contains(message, "queue") {
+		t.Fatalf("message = %q, want it to name the queue the upstream reported", message)
+	}
+	if strings.Contains(message, "temporarily unavailable") {
+		t.Fatalf("message = %q, must not read as an outage: the same upstream answers most requests", message)
+	}
+	if got := StatusForCategory("rate_limit"); got != http.StatusTooManyRequests {
+		t.Fatalf("rate_limit status = %d, want 429: a real throttle keeps its own answer", got)
+	}
+}
+
+// TestUpstreamUnavailableAnswerStaysAnOutage guards the other direction: a
+// payload that says the service is down without naming a queue is still an
+// upstream fault, and must not be folded into the 429 the gate gets.
+func TestUpstreamUnavailableAnswerStaysAnOutage(t *testing.T) {
+	category := ClassifyUpstreamError(`qoder upstream error: {"serviceAvailable":false}`).Category
 	if category != "upstream_unavailable" {
 		t.Fatalf("category = %q, want upstream_unavailable", category)
 	}
 	if got := StatusForCategory(category); got != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", got, http.StatusServiceUnavailable)
 	}
-	message := PublicMessage(`qoder gateway is busy: {"code":"10605","serviceAvailable":false,"queueCount":0}`)
+	message := PublicMessage(`qoder upstream error: {"serviceAvailable":false}`)
 	if message != "The upstream service for this model is temporarily unavailable. Retry after the indicated delay." {
 		t.Fatalf("message = %q", message)
-	}
-	if got := StatusForCategory("rate_limit"); got != http.StatusTooManyRequests {
-		t.Fatalf("rate_limit status = %d, want 429: a real throttle keeps its own answer", got)
 	}
 }
 
@@ -42,6 +69,17 @@ func TestAppErrorPublishesRetryAfter(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "30" {
+		t.Fatalf("Retry-After = %q, want \"30\"", got)
+	}
+
+	// A queued gate is answered 429 with the same hint, which is the pair a
+	// client needs to back off correctly instead of treating the gateway as down.
+	rec = httptest.NewRecorder()
+	NewWithRetryAfter("upstream_queue", "queued", StatusForCategory("upstream_queue"), 30*time.Second).WriteResponse(rec)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
 	}
 	if got := rec.Header().Get("Retry-After"); got != "30" {
 		t.Fatalf("Retry-After = %q, want \"30\"", got)
@@ -70,10 +108,23 @@ func TestPoolAnswerDistinguishesEntitlementFromThrottle(t *testing.T) {
 	}
 
 	unavailable := ClassifyPoolExhaustion(nil, `qoder gateway is busy: {"code":"10605","serviceAvailable":false,"queueCount":0}`)
-	if unavailable.Category != "upstream_unavailable" {
-		t.Fatalf("category = %q, want upstream_unavailable", unavailable.Category)
+	if unavailable.Category != "upstream_queue" {
+		t.Fatalf("category = %q, want upstream_queue", unavailable.Category)
 	}
-	if got := StatusForCategory(unavailable.Category); got != http.StatusServiceUnavailable {
+	if got := StatusForCategory(unavailable.Category); got != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", got)
+	}
+	if unavailable.Message != PoolUpstreamQueueMessage {
+		t.Fatalf("message = %q, want the queue answer", unavailable.Message)
+	}
+
+	// A bare serviceAvailable:false names no queue, so the pool still answers it
+	// as an outage rather than inviting a retry that changes nothing.
+	outage := ClassifyPoolExhaustion(nil, `qoder upstream error: {"serviceAvailable":false}`)
+	if outage.Category != "upstream_unavailable" {
+		t.Fatalf("category = %q, want upstream_unavailable", outage.Category)
+	}
+	if got := StatusForCategory(outage.Category); got != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", got)
 	}
 }

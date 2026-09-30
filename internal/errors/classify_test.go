@@ -83,17 +83,17 @@ func TestClassifyUpstreamError(t *testing.T) {
 			wantSwitch:   true,
 		},
 		{
-			name:         "qoder busy with a closed gate is an upstream fault",
+			name:         "qoder busy with a closed gate is a queued window, not an outage",
 			errStr:       `qoder gateway is busy: {"code":"10605","serviceAvailable":false,"retryAfterSeconds":29}`,
-			wantCategory: "upstream_unavailable",
+			wantCategory: "upstream_queue",
 			wantRetry:    true,
 			wantSwitch:   false,
 		},
 		{
-			name:         "qoder busy without the service flag is a shared rate limit",
+			name:         "qoder busy without the service flag is the same queued window",
 			errStr:       `qoder gateway is busy: {"code":"10605","retryAfterSeconds":29}`,
-			wantCategory: "rate_limit",
-			wantRetry:    false,
+			wantCategory: "upstream_queue",
+			wantRetry:    true,
 			wantSwitch:   false,
 		},
 		{
