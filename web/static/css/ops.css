@@ -1,13 +1,145 @@
-/* Operations monitoring dashboard + log centre.
-   Loaded after main.css; all tokens come from there.
+/* API Console: ops.css */
+.ops-kpi-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 
-   Sections: 1 header · 2 hero gauge · 3 KPI cards · 4 resource row
-   5 concurrency & trends · 6 distributions · 7 alerts · 8 matrix
-   9 log centre · 10 responsive */
+.ops-head-title { display: flex; align-items: center; gap: var(--space-3); }
 
-/* -----------------------------------------------------------------------------
-   1. Header: title block + status line, filters on the right
-   -------------------------------------------------------------------------- */
+.ops-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition), opacity var(--transition);
+}
+
+.ops-chip,
+.logs-tab {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 550;
+}
+
+.ops-chip:hover,
+.logs-tab:hover {
+  border-color: var(--border-strong);
+  color: var(--text-main);
+  background: var(--surface-2);
+}
+
+.ops-chip.is-active,
+.logs-tab.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.ops-card {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  box-shadow: none;
+}
+
+.ops-hint {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.ops-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.ops-table,
+.logs-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.83rem;
+}
+
+.ops-table thead th,
+.logs-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ops-table tbody td,
+.logs-table tbody td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-soft);
+  vertical-align: middle;
+}
+
+.logs-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.logs-attempt.is-failed { border-left-color: var(--bad); }
+
+@media (max-width: 900px) {
+.ops-chip,
+.logs-tab { min-height: 44px !important; }
+
+.ops-inline-link { min-height: 0 !important; }
+
+.ops-inline-link { padding: 10px 2px; }
+}
+
+.ops-head-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.ops-card-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+.ops-page { padding-bottom: var(--space-10); }
+
+.ops-grid { margin-bottom: var(--space-4); }
+
+.ops-gauge-sub > span { white-space: nowrap; }
+
 .ops-head {
   display: flex;
   flex-wrap: wrap;
@@ -62,14 +194,13 @@
 }
 
 .ops-dot.is-warn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+
 .ops-dot.is-error { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
 
 .ops-head-filters .compact-select { min-width: 108px; }
+
 .ops-head-filters .btn-icon { width: var(--control-h); height: var(--control-h); }
 
-/* -----------------------------------------------------------------------------
-   2. Hero: health gauge + live QPS/TPS + sparkline
-   -------------------------------------------------------------------------- */
 .ops-top {
   display: grid;
   gap: var(--space-4);
@@ -85,8 +216,8 @@
   padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
-/* The hero card is the tallest element of the top row, so it stretches. */
 .ops-hero { min-height: 220px; }
+
 .ops-hero .ops-card-head { margin-bottom: var(--space-3); }
 
 .ops-card-head {
@@ -99,6 +230,7 @@
 }
 
 .ops-card-head h2 { font-size: 0.95rem; font-weight: 650; }
+
 .ops-hint { color: var(--text-secondary); font-size: 0.78rem; }
 
 .ops-hero-body {
@@ -110,8 +242,6 @@
 
 .ops-gauge { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
 
-/* The ring is a conic gradient painted from the health score, so the gauge needs
-   no chart library and prints the same way everywhere. */
 .ops-gauge-ring {
   position: relative;
   display: grid;
@@ -132,13 +262,15 @@
 
 .ops-gauge-value,
 .ops-gauge-label { position: relative; z-index: 1; }
+
 .ops-gauge-value { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+
 .ops-gauge-label { color: var(--text-secondary); font-size: 0.78rem; }
 
 .ops-gauge-state { margin: 0; color: var(--text-main); font-size: 0.86rem; font-weight: 650; }
+
 .ops-gauge-sub {
-  /* The sub-line carries four separate figures; laying them out as a wrapping row
-     keeps them legible in the narrow hero column instead of overlapping. */
+
   display: flex;
   flex-wrap: wrap;
   gap: 2px var(--space-3);
@@ -159,21 +291,23 @@
 .ops-hero-live { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
 
 .ops-hero-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--bg-inset); width: fit-content; flex-wrap: wrap; max-width: 100%; }
+
 .ops-hero-tabs .ops-chip { border-color: transparent; background: transparent; }
+
 .ops-hero-tabs .ops-chip.is-active { background: var(--accent-soft); border-color: var(--accent-line); }
 
 .ops-live-col { display: flex; flex-direction: column; gap: var(--space-1); }
+
 .ops-live-label { color: var(--text-secondary); font-size: 0.76rem; }
+
 .ops-live-values { display: flex; flex-wrap: wrap; gap: var(--space-2); color: var(--text-secondary); font-size: 0.74rem; }
+
 .ops-live-values strong { color: var(--text-main); font-size: 1rem; font-variant-numeric: tabular-nums; }
 
 .ops-spark { height: 72px; position: relative; }
 
-/* -----------------------------------------------------------------------------
-   3. KPI cards: six, in a 3x2 grid beside the hero
-   -------------------------------------------------------------------------- */
 .ops-kpi-grid,
-.ops-live-grid{
+.ops-live-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-3);
@@ -193,10 +327,7 @@
 
 .ops-kpi-head {
   display: flex;
-  /* The 请求时长 card carries the cohort selector in this head. Without wrapping, the
-     219px selector inside a 205px head squeezed the title and the sample count to their
-     min-content width — one character per line — so the card read as a vertical column of
-     single characters. The selector takes its own line now. */
+
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
@@ -206,13 +337,9 @@
   font-weight: 600;
 }
 
-/* A card's own name never breaks: CJK text can break between any two characters, so a
-   squeezed flex item becomes a one-character-wide column instead of wrapping sensibly. */
-
 .ops-kpi-head > .ops-hint,
-.ops-kpi-head > span:first-child{ flex: none; white-space: nowrap; }
+.ops-kpi-head > span:first-child { flex: none; white-space: nowrap; }
 
-/* The selector is wider than one KPI column: full width, chips wrapping inside it. */
 .ops-kpi-head .ops-tabs {
   flex: 1 1 100%;
   flex-wrap: wrap;
@@ -229,26 +356,31 @@
 }
 
 .ops-kpi-big.is-ok { color: var(--ok); }
+
 .ops-kpi-big.is-warn { color: var(--warn); }
+
 .ops-kpi-big.is-error { color: var(--bad); }
+
 .ops-kpi-big.is-muted { color: var(--text-muted); font-size: 1.1rem; font-weight: 550; }
+
 .ops-kpi-unit { margin-left: 4px; color: var(--text-muted); font-size: 0.8rem; font-weight: 500; }
 
-/* The KPI rows are the densest text on the page: they carry the label, so they are one
-   step larger than a hint and use the brighter secondary tone rather than the muted one. */
 .ops-kpi-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); font-size: 0.8rem; }
+
 .ops-kpi-row span:first-child { color: var(--text-secondary); }
+
 .ops-kpi-row span:last-child { color: var(--text-soft); font-variant-numeric: tabular-nums; }
+
 .ops-kpi-row.is-strong span:last-child { color: var(--text-main); font-weight: 650; }
 
 .ops-kpi-meter { height: 6px; border-radius: var(--radius-pill); background: var(--bg-inset); overflow: hidden; }
+
 .ops-kpi-meter > span { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--ok); }
+
 .ops-kpi-meter > span.is-warn { background: var(--warn); }
+
 .ops-kpi-meter > span.is-error { background: var(--bad); }
 
-/* -----------------------------------------------------------------------------
-   4. Resource row
-   -------------------------------------------------------------------------- */
 .ops-resources {
   display: grid;
   gap: var(--space-3);
@@ -267,28 +399,21 @@
 }
 
 .ops-resource-head { display: flex; align-items: center; gap: var(--space-1); color: var(--text-secondary); font-size: 0.76rem; }
+
 .ops-resource-value { font-size: 1.2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+
 .ops-resource.is-ok .ops-resource-value { color: var(--ok); }
+
 .ops-resource.is-warn .ops-resource-value { color: var(--warn); }
+
 .ops-resource.is-critical .ops-resource-value { color: var(--bad); }
+
 .ops-resource-detail { color: var(--text-muted); font-size: 0.7rem; line-height: 1.45; }
 
-/* -----------------------------------------------------------------------------
-   5. Concurrency, trends
-   -------------------------------------------------------------------------- */
-
-/* Both rows group cards that already render at a similar height, but a row is
-   only as even as its tallest card. `align-items: start` let the shorter ones
-   stop early, which left a rectangular hole in the middle of the row (a ~150px
-   chart beside a ~560px platform list). Stretching closes the row, and the card's
-   content box grows with it, so the height a card gained is spent on its content
-   instead of sitting blank underneath: the list rows spread out and the histogram
-   bars gain the room. The content box is selected by position rather than by class
-   because the phone layout test reads the first trend-chart declaration in this
-   file by first match, and a `> .ops-chart` rule declared up here would be the one
-   it read. */
 .ops-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); align-items: stretch; }
+
 .ops-grid-3 > .ops-card:last-child { grid-column: span 1; }
+
 .ops-grid-3 > .ops-card { display: flex; flex-direction: column; }
 
 .ops-grid-3 > .ops-card > .ops-concurrency,
@@ -317,55 +442,51 @@
 }
 
 .ops-platform-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+
 .ops-platform-name { color: var(--text-main); font-size: 0.82rem; font-weight: 650; }
+
 .ops-platform-rate { color: var(--text-secondary); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+
 .ops-platform-badges { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+
 .ops-platform-empty { color: var(--text-muted); font-size: 0.78rem; }
 
-/* Height follows the card instead of being a fixed 150px: the same chart is ~440px
-   wide in a laptop column and ~1100px wide on a 27" panel, and a fixed height
-   turns the wide case into a letterbox. The SVG is drawn at the measured pixel
-   size (chartBox in ops.js), so these numbers are the layout contract and the
-   script only reads them back — change one, change the other.
-
-   aspect-ratio is clamped, not authoritative: below ~480px of card the ratio
-   would ask for less than the 150px the axis labels need, and on a full-width
-   trend it would ask for more height than a dashboard should spend. */
 .ops-chart {
   position: relative;
-  /* `width` is not decoration here. With `width: auto` and `aspect-ratio` plus
-     `min-height`, Chrome sizes the box from the ratio and the floor rather than from
-     its parent: at 2.6/1 and min-height 190px the chart came out 494px wide inside a
-     336px card, and the page then clipped it (overflow-x: hidden) — the right third
-     of every trend on a phone was simply gone. Stating the width pins the box to its
-     card and leaves the ratio to decide only the height. */
+
   width: 100%;
   height: auto;
   aspect-ratio: 3.2 / 1;
   min-height: 150px;
   max-height: 300px;
 }
+
 .ops-chart-tall {
   aspect-ratio: 2.6 / 1;
   min-height: 190px;
   max-height: 360px;
 }
+
 .ops-chart svg { width: 100%; height: 100%; display: block; }
+
 .ops-chart .grid-line { stroke: var(--border-color); stroke-width: 1; }
+
 .ops-chart .axis-text { fill: var(--text-faint); font-size: 9px; font-family: var(--font-sans); }
+
 .ops-chart .series-qps { fill: none; stroke: var(--info); stroke-width: 1.6; }
+
 .ops-chart .series-tps { fill: none; stroke: var(--ok); stroke-width: 1.6; }
+
 .ops-chart .series-switch { fill: none; stroke: var(--accent-purple); stroke-width: 1.6; }
+
 .ops-chart .series-error { fill: none; stroke: var(--bad); stroke-width: 1.6; }
-.ops-chart .series-area { fill: rgba(108, 182, 255, 0.14); stroke: none; }
+
+.ops-chart .series-area { fill: var(--info-soft); stroke: none; }
+
 .ops-chart .bar { fill: var(--info); }
+
 .ops-chart .bar.is-error { fill: var(--bad); }
-/* The "no samples yet" label fills its chart box. Two things are load bearing:
-   the box must be positioned, or the label escapes to the nearest positioned
-   ancestor and covers the controls above it, and the label must never take a click —
-   it is text, not a control. Both were wrong for the hero sparkline: with an empty
-   spark, the 1min / 5min / 30min / 1h window chips were covered by this paragraph and
-   could not be clicked at all. */
+
 .ops-chart-empty {
   position: absolute;
   inset: 0;
@@ -377,48 +498,52 @@
 }
 
 .ops-legend { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: 0.76rem; }
+
 .ops-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 
 .ops-legend-dot.is-tps { background: var(--ok); }
 
-/* -----------------------------------------------------------------------------
-   6. Distributions
-   -------------------------------------------------------------------------- */
 .ops-histogram {
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
-  /* The bars are percentage heights, so the box needs a definite height — it
-     cannot be `auto` the way .ops-chart's can. Clamped rather than fixed for the
-     same reason as the charts: a 170px band inside an 1100px card is a letterbox. */
+
   height: clamp(170px, 13vw, 260px);
 }
+
 .ops-histogram-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: var(--space-1); height: 100%; justify-content: flex-end; }
-.ops-histogram-bar { width: 100%; min-height: 3px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: linear-gradient(180deg, var(--info), rgba(108, 182, 255, 0.35)); }
+
+.ops-histogram-bar { width: 100%; min-height: 3px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: linear-gradient(180deg, var(--info), var(--info-soft)); }
+
 .ops-histogram-count { color: var(--text-soft); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+
 .ops-histogram-label { color: var(--text-faint); font-size: 0.66rem; white-space: nowrap; }
 
 .ops-errors { display: flex; flex-direction: column; gap: var(--space-2); }
+
 .ops-error-row { display: grid; grid-template-columns: 84px minmax(0, 1fr) 56px; align-items: center; gap: var(--space-3); font-size: 0.78rem; }
+
 .ops-error-row > span:first-child { color: var(--text-muted); }
+
 .ops-error-row > span:last-child { color: var(--text-soft); text-align: right; font-variant-numeric: tabular-nums; }
+
 .ops-error-meter { height: 8px; border-radius: var(--radius-pill); background: var(--bg-inset); overflow: hidden; }
+
 .ops-error-meter > span { display: block; height: 100%; background: var(--bad); }
+
 .ops-error-meter > span.is-warn { background: var(--warn); }
+
 .ops-error-meter > span.is-info,
-.ops-legend-dot.is-qps{ background: var(--info); }
+.ops-legend-dot.is-qps { background: var(--info); }
+
 .ops-empty { color: var(--text-muted); font-size: 0.8rem; padding: var(--space-4) 0; margin: 0; }
 
-/* -----------------------------------------------------------------------------
-   7. Alerts
-   -------------------------------------------------------------------------- */
 .ops-alert-severity { color: var(--text-soft); font-size: 0.76rem; }
+
 .ops-alert-severity.is-critical { color: var(--bad); font-weight: 650; }
+
 .ops-alert-severity.is-warning { color: var(--warn); font-weight: 650; }
 
-/* -----------------------------------------------------------------------------
-   8. Channel × model matrix
-   -------------------------------------------------------------------------- */
 .ops-table-wrap { overflow-x: auto; border: 1px solid var(--border-color); border-radius: var(--radius-md); }
 
 .ops-table tbody td {
@@ -429,8 +554,11 @@
 }
 
 .ops-table tbody tr.is-channel td { background: var(--surface-2); color: var(--text-main); font-weight: 650; }
+
 .ops-table tbody tr.is-model td { color: var(--text-secondary); font-size: 0.78rem; }
+
 .ops-table tbody tr.is-model td:first-child { padding-left: var(--space-8); font-family: var(--font-mono); }
+
 .ops-table tbody tr:hover td { background: var(--surface-3); }
 
 .ops-coverage-fold {
@@ -450,11 +578,10 @@
 
 .ops-coverage { margin: 0; padding: 0 var(--space-4) var(--space-4); color: var(--text-muted); font-size: 0.78rem; line-height: 1.75; }
 
-/* -----------------------------------------------------------------------------
-   9. Log centre (shares this stylesheet)
-   -------------------------------------------------------------------------- */
 .logs-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+
 .logs-tab { height: var(--control-h); padding: 0 var(--space-4); font-size: 0.82rem; border-radius: var(--radius-pill); }
+
 .logs-tab.is-active { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
 
 .logs-filters {
@@ -470,15 +597,17 @@
 }
 
 .logs-filters[hidden] { display: none; }
+
 .logs-filters .ops-select { flex-direction: column; align-items: stretch; gap: var(--space-1); }
+
 .logs-filters .ops-select input { width: 100%; }
+
 .logs-filter-actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
+
 .logs-filter-note { grid-column: 1 / -1; margin: 0; color: var(--text-muted); font-size: 0.74rem; }
+
 .logs-filter-note.is-error-text { color: var(--bad); }
 
-/* Drill-down scope bar: what the list is filtered to, and the way back to the
-   chart that opened it. It sits above the table so a narrowed list always says
-   why it is narrow. */
 .logs-scope {
   display: flex;
   flex-wrap: wrap;
@@ -491,8 +620,11 @@
   border-radius: var(--radius-md);
   background: var(--surface-2);
 }
+
 .logs-scope[hidden] { display: none; }
+
 .logs-scope-items { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+
 .logs-scope-chip {
   display: inline-flex;
   gap: var(--space-2);
@@ -504,7 +636,9 @@
   color: var(--text-main);
   font-size: 0.74rem;
 }
+
 .logs-scope-key { color: var(--text-muted); }
+
 .logs-scope-actions { display: flex; gap: var(--space-2); }
 
 .logs-table-wrap {
@@ -515,9 +649,10 @@
 }
 
 .logs-table,
-.ops-table{ width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
+.ops-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
+
 .logs-table thead th,
-.ops-table thead th{
+.ops-table thead th {
   position: sticky;
   top: 0;
   z-index: 2;
@@ -530,14 +665,19 @@
   text-align: left;
   white-space: nowrap;
 }
+
 .logs-table tbody td { padding: 9px var(--space-4); border-bottom: 1px solid var(--border-color); color: var(--text-soft); vertical-align: middle; }
 
 .logs-table tbody tr:hover td { background: var(--surface-2); }
+
 .logs-table tbody tr.is-selected td { background: var(--accent-soft); }
 
 .logs-cell-time { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 .logs-cell-action { color: var(--text-main); font-weight: 550; }
+
 .logs-cell-target { color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.76rem; }
+
 .logs-cell-duration { text-align: right; font-variant-numeric: tabular-nums; }
 
 .logs-badge {
@@ -556,17 +696,21 @@
 }
 
 .logs-badge.is-ok { color: var(--ok); border-color: rgba(74, 222, 155, 0.35); background: var(--ok-soft); }
+
 .logs-badge.is-info { color: var(--info); border-color: rgba(108, 182, 255, 0.35); background: var(--info-soft); }
+
 .logs-badge.is-warn { color: var(--warn); border-color: rgba(245, 194, 100, 0.35); background: var(--warn-soft); }
+
 .logs-badge.is-error { color: var(--bad); border-color: rgba(251, 113, 133, 0.35); background: var(--bad-soft); }
+
 .logs-badge.is-idle { color: var(--idle); }
 
 .logs-more { display: flex; justify-content: center; padding: var(--space-4) 0 0; }
+
 .logs-more button[hidden] { display: none; }
+
 .logs-coverage { margin: 0; }
 
-/* Result strip: the panel opens with what happened, because a failure is the usual
-   reason it was opened at all. */
 .logs-detail-outcome {
   display: flex;
   flex-wrap: wrap;
@@ -574,14 +718,11 @@
   align-items: center;
   margin-bottom: var(--space-3);
 }
+
 .logs-detail-raw { color: var(--text-muted); font-family: var(--font-mono); font-size: 0.74rem; }
 
 .logs-detail-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
 
-/* Facts: two columns of label-over-value blocks. Thirteen definition-list rows
-   became a handful of compact cells, and empty fields keep their slot only when
-   the emptiness itself is the fact (a probe has no model, a channel may not report
-   usage). */
 .logs-facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -592,22 +733,29 @@
   border-radius: var(--radius-md);
   background: var(--surface-1);
 }
+
 .logs-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
 .logs-fact.is-wide { grid-column: 1 / -1; }
+
 .logs-fact-label { color: var(--text-muted); font-size: 0.7rem; }
+
 .logs-fact-value {
   color: var(--text-main);
   font-size: 0.8rem;
   overflow-wrap: anywhere;
 }
+
 .logs-fact-value.is-empty { color: var(--text-faint); }
 
 .logs-detail-section-title { margin-bottom: var(--space-2); color: var(--text-soft); font-size: 0.8rem; font-weight: 650; }
+
 .logs-attempts { display: flex; flex-direction: column; gap: var(--space-2); }
+
 .logs-attempt { padding: var(--space-3); border: 1px solid var(--border-color); border-left: 3px solid var(--idle); border-radius: var(--radius-md); background: var(--surface-1); }
 
 .logs-attempt > div:first-child { display: flex; gap: var(--space-2); align-items: center; color: var(--text-main); font-weight: 600; }
-/* The upstream's own reason for refusing, shown under the attempt's status line. */
+
 .logs-attempt-reason {
   margin-top: var(--space-1);
   color: var(--bad);
@@ -617,10 +765,15 @@
 }
 
 .logs-diagnostics { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border-color); }
+
 .logs-diagnostics > div:first-child { color: var(--text-soft); font-weight: 650; }
+
 .logs-diagnostic-body { display: flex; flex-direction: column; gap: var(--space-2); }
+
 .logs-section { border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-1); overflow: hidden; }
+
 .logs-section > summary { padding: var(--space-3); color: var(--text-soft); font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+
 .logs-section > pre {
   margin: 0;
   padding: var(--space-3);
@@ -635,39 +788,42 @@
   overflow: auto;
 }
 
-/* -----------------------------------------------------------------------------
-   10. Drill-down affordances, cohort selector and alert policy
-   -------------------------------------------------------------------------- */
-
-/* Anything that opens something else says so. A chart bar or a row name that
-   looks identical to a static label is a feature nobody finds. */
-
 .is-clickable:hover { color: var(--accent); }
+
 .is-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .ops-legend-item { display: inline-flex; gap: 6px; align-items: center; margin-right: var(--space-3); color: var(--text-muted); font-size: 0.72rem; }
+
 .ops-legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+
 .ops-legend-swatch.series-error { background: var(--bad); }
+
 .ops-legend-swatch.series-alt { background: var(--warn); }
 
-/* The 口径 selector: one control driving the latency cards and the distribution. */
 .ops-tabs { display: inline-flex; gap: 4px; margin-left: auto; }
+
 .ops-tabs .ops-chip { padding: 3px 8px; font-size: 0.7rem; }
 
-/* Second series on a bar chart (upstream attempt failures). */
 polyline.series-alt { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 4 3; }
+
 rect.is-clickable,
 .logs-table tbody tr,
-.is-clickable{ cursor: pointer; }
+.is-clickable { cursor: pointer; }
+
 rect.is-clickable:hover { opacity: 0.75; }
 
-/* History blocks in the matrix: one block per minute of retained traffic. */
 .ops-history-cells { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }
+
 .ops-block { display: inline-block; width: 8px; height: 14px; border-radius: 2px; background: var(--idle); opacity: 0.6; }
+
 .ops-block.is-ok { background: var(--ok); opacity: 0.85; }
+
 .ops-block.is-warn { background: var(--warn); opacity: 0.9; }
+
 .ops-block.is-bad { background: var(--bad); opacity: 0.95; }
+
 .ops-block.is-idle { background: var(--surface-3); opacity: 0.8; }
+
 .ops-matrix-name.is-clickable { text-decoration: underline dotted; text-underline-offset: 3px; }
 
 .ops-inline-link {
@@ -682,66 +838,71 @@ rect.is-clickable:hover { opacity: 0.75; }
 
 button.ops-error-row { width: 100%; border: 0; background: none; text-align: left; font: inherit; }
 
-/* Alert policy form. */
 .alerts-form { display: flex; flex-direction: column; gap: var(--space-3); }
+
 .alerts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+
 .alerts-field { display: flex; flex-direction: column; gap: var(--space-1); }
+
 .alerts-field-label { color: var(--text-soft); font-size: 0.8rem; font-weight: 600; }
+
 .alerts-field-hint { color: var(--text-secondary); font-size: 0.76rem; line-height: 1.5; }
-/* A percentage field reads as one control: the number and its unit.
-   .alerts-field-control is created by alerts.js for every 'ratio' field. */
+
 .alerts-field-control { display: flex; align-items: center; gap: var(--space-2); }
+
 .alerts-field-control .form-input,
-.ops-grid-3 > .ops-card > :last-child{ flex: 1 1 auto; }
+.ops-grid-3 > .ops-card > :last-child { flex: 1 1 auto; }
+
 .alerts-field-unit { color: var(--text-secondary); font-size: 0.86rem; font-weight: 600; }
+
 .alerts-checkbox { width: 18px; height: 18px; accent-color: var(--accent); }
+
 .alerts-preview { padding: var(--space-3) var(--space-4); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-1); }
+
 .alerts-preview-line { margin: 0 0 var(--space-1); color: var(--text-soft); font-size: 0.78rem; }
+
 .alerts-help { display: flex; flex-direction: column; gap: var(--space-2); }
+
 .alerts-help-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--space-3); font-size: 0.78rem; }
+
 .alerts-help-row strong { color: var(--text-soft); }
 
 @media (max-width: 900px) {
-  .alerts-grid { grid-template-columns: minmax(0, 1fr); }
-  .alerts-help-row { grid-template-columns: minmax(0, 1fr); }
+.alerts-grid { grid-template-columns: minmax(0, 1fr); }
+
+.alerts-help-row { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* -----------------------------------------------------------------------------
-   11. Responsive
-   -------------------------------------------------------------------------- */
 @media (max-width: 900px) {
-  .ops-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ops-hero-body { grid-template-columns: minmax(0, 1fr); }
-  .ops-head-filters { margin-left: 0; width: 100%; }
+.ops-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.ops-hero-body { grid-template-columns: minmax(0, 1fr); }
+
+.ops-head-filters { margin-left: 0; width: 100%; }
 }
 
 @media (max-width: 640px) {
 .logs-filters { grid-template-columns: 1fr; }
-  .ops-live-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.ops-live-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* On a phone the log list is a stack of records, not a table. Five columns in 390px
-   left the status badge 40px wide, so "上游错误" stacked one character per line while
-   the channel and the model each wrapped on their own; reading a single row meant
-   decoding four fragments. The cells keep their classes and their order and are laid
-   out as blocks: time and duration on the first line, what happened on the second,
-   what it was against and how it ended on the third. */
 @media (max-width: 700px) {
-  .logs-table-wrap {
+.logs-table-wrap {
     max-height: none;
     border: 0;
     background: none;
     overflow: visible;
   }
 
-  .logs-table,
-  .logs-table tbody,
-  .logs-table tr,
-  .logs-table td { display: block; }
+.logs-table,
+.logs-table tbody,
+.logs-table tr,
+.logs-table td { display: block; }
 
-  .logs-table thead { display: none; }
+.logs-table thead { display: none; }
 
-  .logs-table tr {
+.logs-table tr {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
@@ -756,68 +917,52 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
     background: var(--surface-1);
   }
 
-  .logs-table tbody tr:hover { background: var(--surface-2); }
+.logs-table tbody tr:hover { background: var(--surface-2); }
 
-  .logs-table tbody tr.is-selected {
+.logs-table tbody tr.is-selected {
     border-color: var(--accent);
     background: var(--accent-soft);
   }
 
-  /* The cells are painted transparent because they are stacked inside one card: the
-     per-cell padding and bottom border that separate table columns would draw three
-     boxes inside every row. Specificity has to match the table rules above, which
-     address `tbody td`, not `td`. */
-  .logs-table tbody td,
-  .logs-table tbody tr:hover td,
-  .logs-table tbody tr.is-selected td {
+.logs-table tbody td,
+.logs-table tbody tr:hover td,
+.logs-table tbody tr.is-selected td {
     padding: 0;
     border: 0;
     background: transparent;
     white-space: normal;
   }
 
-  .logs-cell-time { grid-area: time; }
-  .logs-cell-action { grid-area: action; }
-  .logs-cell-target { grid-area: target; }
-  .logs-cell-duration { grid-area: duration; text-align: right; }
-  .logs-cell-status { grid-area: status; justify-self: end; }
+.logs-cell-time { grid-area: time; }
 
-  .logs-cell-action .logs-badge { margin-top: var(--space-1); }
+.logs-cell-action { grid-area: action; }
 
-  .table-empty-cell { display: block; padding: var(--space-4); text-align: center; }
+.logs-cell-target { grid-area: target; }
+
+.logs-cell-duration { grid-area: duration; text-align: right; }
+
+.logs-cell-status { grid-area: status; justify-self: end; }
+
+.logs-cell-action .logs-badge { margin-top: var(--space-1); }
+
+.table-empty-cell { display: block; padding: var(--space-4); text-align: center; }
 }
 
-/* --- Channel × model matrix, and the alert list, as records -------------------
-   Both tables are wider than the space a phone or a small tablet leaves them: the
-   matrix holds eight columns and 40 minute-blocks of history, the alert list six.
-   Measured, the matrix does not merely get ugly below 900px, it collapses: at
-   700px the 40 history blocks claim the width the columns need and every cell
-   computes to 0px wide. Above that, a scrolled matrix showed the channel and about
-   two columns, and a row read as numbers with no owner.
-
-   900px is the width the shell already uses to turn the sidebar into a drawer, so
-   the console changes shape once rather than twice as the window narrows. Each row
-   becomes a card and the cells are placed by the classes ops.js stamps on them
-   (MATRIX_CELLS / ALERT_CELLS); the per-cell labels come from `data-label`, not from
-   a ::before with hard-coded text, so the header a reader sees in the card cannot
-   drift from the <th> the same column shows on a desktop. */
 @media (max-width: 900px) {
-  .ops-table-wrap {
+.ops-table-wrap {
     border: 0;
     background: none;
     overflow: visible;
   }
 
-  .ops-table,
-  .ops-table tbody,
-  .ops-table tr,
-  .ops-table td { display: block; }
+.ops-table,
+.ops-table tbody,
+.ops-table tr,
+.ops-table td { display: block; }
 
-  .ops-table thead { display: none; }
+.ops-table thead { display: none; }
 
-  /* One card per row. The two-column grid a value, its label and a sparkline all
-     fit in: a single column spent a whole line on "1 / 1". */
-  .ops-table tbody tr {
+.ops-table tbody tr {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2) var(--space-3);
@@ -828,147 +973,124 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
     background: var(--surface-1);
   }
 
-  /* The stacked cells are painted transparent, as in the log list: the per-cell
-     padding and bottom border that separate table columns would draw a bordered
-     box around every value inside the card. */
-  .ops-table tbody td,
-  .ops-table tbody tr:hover td {
+.ops-table tbody td,
+.ops-table tbody tr:hover td {
     padding: 0;
     border: 0;
     background: transparent;
     white-space: normal;
   }
 
-  /* A channel row is the card's own heading; a model row keeps its indent as a
-     left rule, which is all that separates "the channel" from "one of its models"
-     once the columns are gone. */
-  .ops-table tbody tr.is-channel { border-color: var(--border-strong); }
+.ops-table tbody tr.is-channel { border-color: var(--border-strong); }
 
-  .ops-table tbody tr.is-model {
+.ops-table tbody tr.is-model {
     margin-left: var(--space-4);
     box-shadow: inset 3px 0 0 var(--border-strong);
   }
 
-  .ops-table tbody tr:hover { background: var(--surface-2); }
+.ops-table tbody tr:hover { background: var(--surface-2); }
 
-  /* Cell, value, label. Spelled out on each cell rather than inherited from a
-     shared rule: `tbody tr > td` on its own cannot tell the name apart from an
-     empty history cell, and one of them must stay plain. */
-  .ops-table tbody td.ops-matrix-name,
-  .ops-table tbody td.ops-mx-accounts,
-  .ops-table tbody td.ops-mx-requests,
-  .ops-table tbody td.ops-mx-rate,
-  .ops-table tbody td.ops-mx-ttft,
-  .ops-table tbody td.ops-mx-duration,
-  .ops-table tbody td.ops-mx-throttled,
-  .ops-table tbody td.ops-alert-time,
-  .ops-table tbody td.ops-alert-status,
-  .ops-table tbody td.ops-alert-level,
-  .ops-table tbody td.ops-alert-channel,
-  .ops-table tbody td.ops-alert-target,
-  .ops-table tbody td.ops-alert-detail {
+.ops-table tbody td.ops-matrix-name,
+.ops-table tbody td.ops-mx-accounts,
+.ops-table tbody td.ops-mx-requests,
+.ops-table tbody td.ops-mx-rate,
+.ops-table tbody td.ops-mx-ttft,
+.ops-table tbody td.ops-mx-duration,
+.ops-table tbody td.ops-mx-throttled,
+.ops-table tbody td.ops-alert-time,
+.ops-table tbody td.ops-alert-status,
+.ops-table tbody td.ops-alert-level,
+.ops-table tbody td.ops-alert-channel,
+.ops-table tbody td.ops-alert-target,
+.ops-table tbody td.ops-alert-detail {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-width: 0;
   }
 
-  .ops-table tbody tr > td::before {
+.ops-table tbody tr > td::before {
     color: var(--text-muted);
     font-size: 0.68rem;
     font-weight: 600;
     letter-spacing: 0.02em;
-    /* A label that wraps to two lines pushed its own value down and left the two
-       columns of a metric row misaligned. */
+
     white-space: nowrap;
     content: attr(data-label);
   }
 
-  .ops-table tbody td.ops-matrix-name,
-  .ops-table tbody td.ops-alert-detail { grid-column: 1 / -1; }
+.ops-table tbody td.ops-matrix-name,
+.ops-table tbody td.ops-alert-detail { grid-column: 1 / -1; }
 
-  /* The row label is the heading of the card. The class's desktop indent is dropped
-     here — the card has no columns to align to, and the model rows carry their own
-     left rule instead — and the dotted underline the page already uses for "this
-     opens something" is what marks it as the drill-down. */
-  .ops-table tbody td.ops-matrix-name {
+.ops-table tbody td.ops-matrix-name {
     padding-left: 0;
     color: var(--text-main);
     font-size: 0.86rem;
   }
 
-  /* The 40 minute-blocks get their own full-width row, unframed: they are a
-     sparkline, not a value, and a bordered box around sixty small squares reads as
-     a broken image. */
-  .ops-table tbody td.ops-history-cells {
+.ops-table tbody td.ops-history-cells {
     grid-column: 1 / -1;
     display: block;
   }
 
-  /* An alert's message is a sentence; it gets a line of its own. */
-  .ops-table tbody td.ops-alert-detail {
+.ops-table tbody td.ops-alert-detail {
     color: var(--text-soft);
   }
 
-  .ops-table tbody td.ops-alert-level { justify-self: start; }
-  .ops-table tbody td.ops-alert-status { color: var(--text-main); }
+.ops-table tbody td.ops-alert-level { justify-self: start; }
+
+.ops-table tbody td.ops-alert-status { color: var(--text-main); }
 }
 
-/* Keep the live panel wide enough for its gauge and values; breakpoints follow
-   available card space, including the fixed sidebar. */
-.ops-hero-live, .ops-kpi-card, .ops-card, .ops-resource { min-width: 0; }
-.ops-resource-detail, .ops-kpi-row, .ops-card-tools { overflow-wrap: anywhere; }
+.ops-hero-live,
+.ops-kpi-card,
+.ops-card,
+.ops-resource { min-width: 0; }
+
+.ops-resource-detail,
+.ops-kpi-row,
+.ops-card-tools { overflow-wrap: anywhere; }
+
 .ops-spark svg { display: block; width: 100%; height: 72px; }
+
 @media (min-width: 1700px) {
- .ops-top { grid-template-columns: minmax(440px, 1fr) minmax(0, 2fr); }
+.ops-top { grid-template-columns: minmax(440px, 1fr) minmax(0, 2fr); }
 }
+
 @media (max-width: 1100px) {
- .ops-grid-3 { grid-template-columns: minmax(0, 1fr); }
+.ops-grid-3 { grid-template-columns: minmax(0, 1fr); }
 }
+
 @media (max-width: 640px) {
 .ops-resources,
- .ops-kpi-grid,
- .ops-hero-body{ grid-template-columns: minmax(0, 1fr); }
- .ops-head-filters { width: 100%; }
+.ops-kpi-grid,
+.ops-hero-body { grid-template-columns: minmax(0, 1fr); }
+
+.ops-head-filters { width: 100%; }
 }
+
 .ops-page.main-content { width: calc(100% - var(--sidebar-w)); flex: 0 1 auto; box-sizing: border-box; }
+
 .ops-spark .axis-text { fill: var(--text-secondary); font-size: 11px; font-family: var(--font-sans); }
-@media (max-width: 900px) { .ops-page.main-content { width: 100%; } }
 
-/* -----------------------------------------------------------------------------
-   12. Wide screens
-   --------------------------------------------------------------------------
-   main.css now stretches the content column on a 27" monitor, but the grids
-   inside it are still built for ~1440px: six KPI cards in a 3x2 block, six
-   runtime metrics in one row, 150px charts. On a wide panel that reads as three
-   very wide cards per line with a lot of air above each chart, so the extra
-   width buys nothing.
+@media (max-width: 900px) {
+.ops-page.main-content { width: 100%; }
+}
 
-   Column counts are chosen to divide the card counts evenly — six KPI cards get
-   six columns, never four or five, because a fixed-count grid leaves the tail of
-   the last row empty while `auto-fit` collapses it.
-
-   Breakpoints are viewport-based, matching the one existing min-width query
-   above. min-width only: the phone rules in section 11 are max-width and must
-   keep winning on a small screen.
-   -------------------------------------------------------------------------- */
-
-/* 1920 and the 2000px-class 27"/32" panels. */
 @media (min-width: 1800px) {
-  .ops-resources { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.ops-resources { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 }
 
-/* 2560x1440 — the 27" this was reported against — and 2560x1600. ~2270px of
-   content: six KPI cards fit one row. The charts get no height here: they are
-   aspect-ratio driven, so they already grow with their own card. */
 @media (min-width: 2200px) {
-  .ops-kpi-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .ops-resources, .logs-filters { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-  .ops-spark, .ops-spark svg { height: 88px; }
+.ops-kpi-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+
+.ops-resources,
+.logs-filters { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+.ops-spark,
+.ops-spark svg { height: 88px; }
 }
 
-/* 4K / ultrawide: the column stopped growing at 3200px, so the only thing left
-   to widen is the metric row. */
 @media (min-width: 3200px) {
-  .ops-resources { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.ops-resources { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 }

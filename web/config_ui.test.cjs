@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const same=(a,b)=>assert.equal(JSON.stringify(a),JSON.stringify(b));
 const fs=require('node:fs');
 const path=require('node:path');
-const vm=require('node:vm');
+const vm=require('./test-support.cjs');
 
 // Load config.js in a DOM stand-in. Only the pure helpers matter here: the
 // anonymous-allowlist parser and the USD <-> tick conversion decide what the
@@ -121,7 +121,7 @@ test('configuration loader applies a valid JSON response',async()=>{
 test('configuration loader rejects bad HTTP and non-JSON responses before applying them',()=>{
  const source=fs.readFileSync(path.join(__dirname,'static/js/config.js'),'utf8');
  assert.match(source,/if \(!res\.ok\)/);
- assert.match(source,/includes\("application\/json"\)/);
- assert.match(source,/credentials: "same-origin"/);
+ assert.match(fs.readFileSync(path.join(__dirname,'static/js/ui.js'),'utf8'), /includes\('application\/json'\)/);
+ assert.match(source,/ConsoleAPI\.json/);
  assert.match(source,/setConfigSaveError\("加载失败：" \+ reason\)/);
 });

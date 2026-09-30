@@ -1,84 +1,53 @@
-/* =============================================================================
-   Orchids Admin Console — design system
-   =============================================================================
-
-   This file is the ONLY global stylesheet. It replaced three stacked theme
-   generations (dark indigo, dark lime, light Grok2API refresh) that overrode each
-   other and left 122 class names with no definition at all — which is why the
-   console read as several design drafts stapled together.
-
-   Rules for extending it:
-
-   1. Use the tokens. A raw hex value or rgba() in a component rule is a bug
-      unless it is a shadow or a translucent state overlay.
-   2. One component, one definition. Later sections do not patch earlier ones.
-   3. Text colour comes from --text-* only. --text-muted still has a 4.6:1
-      contrast ratio on --surface-1; never use it below 12px.
-   4. Page-specific rules go in that page's stylesheet (ops.css, accounts.css,
-      models.css, config.css, tutorial.css), never here.
-   5. Layout primitives in this file: .page-actions, .card-head, .content-card,
-      .badge, .btn, .drawer, .empty-state, .skeleton-line.
-
-   Sections: 1 tokens · 2 reset · 3 shell · 4 page head · 5 buttons · 6 forms
-   7 surfaces · 8 metrics · 9 tables · 10 badges · 11 tabs · 12 overlays
-   13 states · 14 login · 15 docs · 16 utilities · 17 responsive
-   ============================================================================= */
-
-/* -----------------------------------------------------------------------------
-   1. Tokens
-   -------------------------------------------------------------------------- */
+/* API Console: main.css */
+.responsive-table td { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .table-wrap:has(.responsive-table) { overflow: visible; }
+  .responsive-table, .table-wrap .responsive-table { display: block; width: 100%; min-width: 0; table-layout: auto; }
+  .responsive-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .responsive-table tbody { display: grid; gap: var(--space-3); }
+  .responsive-table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: var(--space-4); border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--surface-1); }
+  .table-wrap .responsive-table tbody td, .responsive-table tbody td { display: flex; flex-direction: column; gap: var(--space-1); width: auto; min-width: 0; max-width: none; padding: var(--space-2); border: 0; white-space: normal; text-align: left; align-items: flex-start; }
+  .responsive-table td::before { content: attr(data-label); color: var(--text-muted); font-size: 0.74rem; }
+  .responsive-table td[data-label=""]::before { display: none; }
+  .responsive-table .col-token, .responsive-table .col-model, .responsive-table .col-actions, .responsive-table td[data-label="Token"], .responsive-table td[data-label="访问策略"], .responsive-table td[data-label="操作"] { grid-column: 1 / -1; }
+}
 :root {
-  color-scheme: dark;
-
-  /* Surfaces, from the page background up to a raised popover. */
-  --bg-app: #0b0e14;
-  --surface-1: #121722;
-  --surface-2: #171d2b;
-  --surface-3: #1e2634;
-  --bg-inset: rgba(0, 0, 0, 0.28);
-  --bg-sidebar: #0e131c;
-
-  /* Text. --text-soft is the lowest tone allowed for body copy; --text-faint is
-     reserved for identifiers and stays above a 4.5:1 contrast ratio on
-     --surface-1 so even the smallest labels remain readable. */
-  --text-main: #eef2f8;
-  --text-soft: #c3cddd;
-  --text-secondary: #9aa7bd;
-  --text-muted: #8593ab;
-  --text-faint: #7d8aa1;
-  --text-on-accent: #10130f;
-
-  /* Brand accent, used only for the primary action, focus and active nav. */
-  --accent: #ffb257;
-  --accent-strong: #ff9f2e;
-  --accent-soft: rgba(255, 178, 87, 0.14);
-  --accent-line: rgba(255, 178, 87, 0.45);
-
-  /* Semantic states. Every badge, pill and chart series draws from these. */
-  --ok: #4ade9b;
-  --ok-soft: rgba(74, 222, 155, 0.14);
-  --warn: #f5c264;
-  --warn-soft: rgba(245, 194, 100, 0.14);
-  --bad: #fb7185;
-  --bad-soft: rgba(251, 113, 133, 0.14);
-  --info: #6cb6ff;
-  --info-soft: rgba(108, 182, 255, 0.14);
-  --idle: #8f9cb3;
-  --idle-soft: rgba(143, 156, 179, 0.14);
-
-  /* Semantic aliases: --accent-purple for the Cline/selected-estimate accents,
-     --accent-green for the inline style config.js writes. */
-  --accent-purple: #a78bfa;
+  color-scheme: light;
+  --bg-app: #f8fafc;
+  --surface-1: #ffffff;
+  --surface-2: #f1f5f9;
+  --surface-3: #e2e8f0;
+  --bg-inset: #f1f5f9;
+  --bg-sidebar: #ffffff;
+  --text-main: #0f172a;
+  --text-soft: #334155;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-faint: #64748b;
+  --text-on-accent: #ffffff;
+  --accent: #0d9488;
+  --accent-strong: #0f766e;
+  --accent-soft: #f0fdfa;
+  --accent-line: #99f6e4;
+  --ok: #15803d;
+  --ok-soft: #f0fdf4;
+  --warn: #a16207;
+  --warn-soft: #fffbeb;
+  --bad: #be123c;
+  --bad-soft: #fff1f2;
+  --info: #2563eb;
+  --info-soft: #eff6ff;
+  --idle: #64748b;
+  --idle-soft: #f1f5f9;
+  --accent-purple: #7c3aed;
   --accent-green: var(--ok);
+  --border-color: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --shadow-md: 0 2px 8px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 20px 60px rgba(15, 23, 42, 0.12);
+  --shadow-glow: 0 0 0 3px rgba(20, 184, 166, 0.16);
 
-  --border-color: rgba(148, 163, 184, 0.16);
-  --border-strong: rgba(148, 163, 184, 0.28);
 
-  --shadow-md: 0 6px 20px rgba(3, 6, 12, 0.45);
-  --shadow-lg: 0 24px 60px rgba(3, 6, 12, 0.6);
-  --shadow-glow: 0 0 0 3px rgba(255, 178, 87, 0.18);
-
-  /* 4px spacing scale. Every gap, padding and margin uses a step. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -88,37 +57,24 @@
   --space-8: 32px;
   --space-10: 40px;
 
-  /* Three radii only: controls, containers, pills. */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
   --radius-pill: 999px;
 
-  /* One control height for every button, input and select. */
+
   --control-h: 34px;
   --control-h-sm: 28px;
   --control-h-lg: 40px;
 
-  /* The sidebar grows with the window instead of jumping at a breakpoint: 248px
-     on a laptop, ~266px at 1920, 288px from 2560 up. A fixed 248px rail beside a
-     2560px window read as a thin strip. */
+
   --sidebar-w: clamp(248px, calc(3.6vw + 196px), 288px);
 
-  /* Fluid content column: as wide as the space left beside the sidebar, so a
-     27" panel (2560px) is filled instead of leaving ~870px of empty background
-     to the right of a 1440px column. The 3200px ceiling stops the growth on a
-     4K / ultrawide panel at 100% scaling, where an unbounded column would
-     stretch every line past a readable measure.
 
-     The sidebar offset is subtracted because max-width applies to the element,
-     not to the row: without it the column would be 100% of the viewport *plus*
-     the 248px it is already pushed right by.
-
-     `100%`, not `100vw`: a percentage resolves against the containing block, so
-     a vertical scrollbar cannot push the column into a horizontal one. */
   --content-max: min(3200px, calc(100% - var(--sidebar-w)));
 
-  --font-sans: 'Outfit', 'Geist Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
 
   --transition: 140ms ease;
@@ -129,9 +85,70 @@
   --z-toast: 100;
 }
 
-/* -----------------------------------------------------------------------------
-   2. Reset & base
-   -------------------------------------------------------------------------- */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: #0f172a;
+  --surface-1: #182235;
+  --surface-2: #1e293b;
+  --surface-3: #334155;
+  --bg-inset: #111c2e;
+  --bg-sidebar: #131d30;
+  --text-main: #f1f5f9;
+  --text-soft: #cbd5e1;
+  --text-secondary: #a8b7cb;
+  --text-muted: #94a3b8;
+  --text-faint: #94a3b8;
+  --accent: #2dd4bf;
+  --accent-strong: #5eead4;
+  --accent-soft: rgba(45, 212, 191, 0.12);
+  --accent-line: rgba(45, 212, 191, 0.3);
+  --text-on-accent: #042f2e;
+  --ok: #4ade80;
+  --ok-soft: rgba(74, 222, 128, 0.12);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --bad: #fb7185;
+  --bad-soft: rgba(251, 113, 133, 0.12);
+  --info: #60a5fa;
+  --info-soft: rgba(96, 165, 250, 0.12);
+  --idle: #94a3b8;
+  --idle-soft: rgba(148, 163, 184, 0.12);
+  --accent-purple: #c4b5fd;
+  --border-color: #2a374b;
+  --border-strong: #40516b;
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+@media (min-width: 901px) {
+:root.sidebar-collapsed { --sidebar-w: 72px; }
+
+.sidebar-collapsed .sidebar-brand-text,
+.sidebar-collapsed .sidebar-link > span:last-child,
+.sidebar-collapsed .sidebar-footer-stats,
+.sidebar-collapsed .sidebar-tool-label,
+.sidebar-collapsed .sidebar-logout > span:last-child { display: none; }
+
+.sidebar-collapsed .sidebar-header,
+.sidebar-collapsed .sidebar-link { justify-content: center; }
+
+.sidebar-collapsed .sidebar-tools { grid-template-columns: 1fr; }
+}
+
+.sidebar-tools { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 12px; }
+
+.sidebar-tools .btn { min-width: 0; gap: 8px; }
+
+.sidebar-tool-icon { font-size: 18px; line-height: 1; }
+
+.mobile-theme-toggle { margin-left: auto; }
+
+.login-theme-toggle { position: fixed; top: 24px; right: 24px; }
+
+@media (max-width: 900px) {
+[data-sidebar-collapse] { display: none; }
+}
+
 *,
 *::before,
 *::after {
@@ -143,8 +160,6 @@
   padding: 0;
 }
 
-/* Author-level display rules such as .form-group { display:block } override the
-   browser's built-in [hidden] rule. Keep hidden state authoritative everywhere. */
 [hidden] {
   display: none !important;
 }
@@ -179,16 +194,22 @@ h4 {
 }
 
 h1 { font-size: 1.35rem; }
+
 h2 { font-size: 1rem; }
+
 h3 { font-size: 0.94rem; }
 
 p { color: var(--text-soft); }
 
-ul, ol { list-style: none; }
+ul,
+ol { list-style: none; }
 
-img, svg { display: block; max-width: 100%; }
+img,
+svg { display: block; max-width: 100%; }
 
-code, pre, .token-text, .key-display {
+code,
+pre,
+.key-display {
   font-family: var(--font-mono);
 }
 
@@ -203,29 +224,23 @@ code, pre, .token-text, .key-display {
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
+
 ::-webkit-scrollbar-track { background: transparent; }
+
 ::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.28);
   border: 3px solid transparent;
   background-clip: content-box;
   border-radius: var(--radius-pill);
 }
+
 ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.45); background-clip: content-box; }
 
-/* Decorative layers from the first theme generation: retired, kept as no-ops so
-   stale markup cannot resurrect them. */
 body::before,
-.ambient-bg,
-.blob,
-.blob-1,
-.blob-2,
-.grid-orbit {
+.blob {
   display: none !important;
 }
 
-/* -----------------------------------------------------------------------------
-   3. Shell: sidebar + content column
-   -------------------------------------------------------------------------- */
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
@@ -253,7 +268,7 @@ body::before,
   width: 32px;
   height: 32px;
   border-radius: var(--radius-md);
-  background: linear-gradient(140deg, var(--accent), #d97706);
+  background: var(--accent);
   color: var(--text-on-accent);
   font-weight: 800;
   font-size: 0.95rem;
@@ -276,8 +291,7 @@ body::before,
   text-transform: uppercase;
 }
 
-.sidebar-menu,
-.ops-kpi-rows{
+.sidebar-menu {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -289,7 +303,7 @@ body::before,
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: 8px 10px;
+  padding: 11px 12px;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   font-size: 0.86rem;
@@ -355,8 +369,11 @@ body::before,
 }
 
 .footer-stat-label { color: var(--text-muted); font-size: 0.7rem; }
+
 .footer-stat-value { font-variant-numeric: tabular-nums; font-size: 0.95rem; font-weight: 650; }
+
 .footer-stat-value.normal { color: var(--ok); }
+
 .footer-stat-value.abnormal { color: var(--bad); }
 
 .sidebar-logout {
@@ -364,7 +381,6 @@ body::before,
   justify-content: center;
 }
 
-/* Small screens: the sidebar becomes a drawer behind the top bar. */
 .mobile-topbar {
   display: none;
   position: fixed;
@@ -374,13 +390,12 @@ body::before,
   gap: var(--space-3);
   height: 56px;
   padding: 0 var(--space-4);
-  background: rgba(11, 14, 20, 0.92);
+  background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border-color);
   backdrop-filter: blur(12px);
 }
 
-.mobile-topbar-brand,
-.ops-head-title{ display: flex; align-items: center; gap: var(--space-3); }
+.mobile-topbar-brand { display: flex; align-items: center; gap: var(--space-3); }
 
 .mobile-menu-btn {
   display: grid;
@@ -405,11 +420,7 @@ body::before,
   display: none;
   position: fixed;
   inset: 0;
-  /* The backdrop belongs to the sidebar, so it sits just under it — the same rule the
-     log detail panel's backdrop follows. It used to share --z-overlay with the mobile
-     top bar (70), which put it ABOVE the open drawer (60): every tap meant for a nav
-     link landed on the backdrop, which closed the drawer instead of navigating, so the
-     drawer was a dead end on a phone. */
+
   z-index: calc(var(--z-sidebar) - 1);
   background: rgba(3, 6, 12, 0.6);
 }
@@ -426,9 +437,6 @@ body::before,
   animation: none;
 }
 
-/* -----------------------------------------------------------------------------
-   4. Page head
-   -------------------------------------------------------------------------- */
 .header-section {
   display: flex;
   flex-wrap: wrap;
@@ -438,8 +446,6 @@ body::before,
   margin-bottom: var(--space-5);
 }
 
-/* The title block never shrinks below its text: a page title that wraps to two
-   lines ("运维总 / 览") was the symptom of a two-column head with no basis. */
 .header-section > div:first-child {
   flex: 0 1 auto;
   min-width: max-content;
@@ -468,9 +474,6 @@ body::before,
   margin-left: auto;
 }
 
-/* -----------------------------------------------------------------------------
-   5. Buttons
-   -------------------------------------------------------------------------- */
 .btn,
 .btn-primary,
 .btn-secondary,
@@ -482,9 +485,6 @@ body::before,
 .btn-page,
 .btn-icon,
 .action-icon,
-.ops-chip,
-.models-primary-action,
-.models-action-btn,
 .panel-close-btn {
   display: inline-flex;
   align-items: center;
@@ -511,7 +511,6 @@ body::before,
 .btn-neutral:hover,
 .btn-icon:hover,
 .action-icon:hover,
-.models-action-btn:hover,
 .panel-close-btn:hover {
   background: var(--surface-3);
   border-color: var(--border-strong);
@@ -525,8 +524,7 @@ body::before,
 }
 
 .btn-primary,
-.btn-save,
-.models-primary-action {
+.btn-save {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--text-on-accent);
@@ -534,8 +532,7 @@ body::before,
 }
 
 .btn-primary:hover,
-.btn-save:hover,
-.models-primary-action:hover {
+.btn-save:hover {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
   color: var(--text-on-accent);
@@ -549,17 +546,15 @@ body::before,
 
 .btn-neutral { background: var(--surface-3); }
 
-.btn-danger,
-.models-action-btn-danger {
+.btn-danger {
   background: var(--bad-soft);
   border-color: rgba(251, 113, 133, 0.4);
   color: var(--bad);
 }
 
-.btn-danger:hover,
-.models-action-btn-danger:hover {
+.btn-danger:hover {
   background: rgba(251, 113, 133, 0.22);
-  color: #ffd6de;
+  color: var(--bad);
 }
 
 .btn-danger-outline {
@@ -568,15 +563,8 @@ body::before,
   color: var(--bad);
 }
 
-.btn-xs {
-  height: 24px;
-  padding: 0 var(--space-2);
-  font-size: 0.72rem;
-}
-
 .btn-sm { height: var(--control-h-sm); padding: 0 var(--space-2); font-size: 0.78rem; }
 
-/* Square icon button: 34x34 with a single glyph. */
 .btn-icon,
 .action-icon,
 .panel-close-btn {
@@ -589,11 +577,8 @@ body::before,
 
 .panel-close-btn { width: var(--control-h-sm); height: var(--control-h-sm); }
 
-/* Segmented control: time ranges, tabs and log kinds. */
-.ops-chip,
 .btn-page,
 .tab-item,
-.logs-tab,
 .filter-tabs .tab-item {
   height: var(--control-h-sm);
   padding: 0 var(--space-3);
@@ -605,19 +590,15 @@ body::before,
   font-weight: 550;
 }
 
-.ops-chip:hover,
 .btn-page:hover,
-.tab-item:hover,
-.logs-tab:hover {
+.tab-item:hover {
   border-color: var(--border-strong);
   color: var(--text-main);
   background: var(--surface-2);
 }
 
-.ops-chip.is-active,
 .tab-item.active,
 .tab-item.is-active,
-.logs-tab.is-active,
 .btn-page-current {
   background: var(--accent-soft);
   border-color: var(--accent-line);
@@ -627,9 +608,6 @@ body::before,
 
 .btn-page-current { cursor: default; }
 
-/* -----------------------------------------------------------------------------
-   6. Forms
-   -------------------------------------------------------------------------- */
 input,
 select,
 textarea,
@@ -715,9 +693,7 @@ input[type="range"] {
 
 .form-group { display: flex; flex-direction: column; gap: var(--space-2); }
 
-.form-label,
-.config-key-label,
-.models-section-label {
+.form-label {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -768,7 +744,6 @@ input[type="range"] {
 
 .password-toggle:hover { color: var(--text-main); background: var(--surface-2); }
 
-/* Switch. The JS toggles `.toggle.active` and keeps the native checkbox hidden. */
 .toggle {
   position: relative;
   display: inline-flex;
@@ -799,12 +774,8 @@ input[type="range"] {
   background: var(--text-on-accent);
 }
 
-/* Belt and braces: a switch whose checkbox is checked reads as ON even if the page
-   forgot to mirror the state onto the label. The models table did exactly that —
-   the box was checked and the switch still looked off, which is how a 启用 toggle
-   came to look disabled. */
 .toggle:has(input:checked),
-.toggle.active{
+.toggle.active {
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -816,7 +787,6 @@ input[type="range"] {
 
 .toggle input { position: absolute; opacity: 0; pointer-events: none; }
 
-/* Advanced / collapsed blocks: a control that hides rarely used fields. */
 .advanced-settings {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -843,35 +813,22 @@ input[type="range"] {
 
 .advanced-settings[open] > summary::before { content: "－"; }
 
-.advanced-settings[open] > summary,
-.tut-faq details[open] summary{ border-bottom: 1px solid var(--border-color); }
+.advanced-settings[open] > summary { border-bottom: 1px solid var(--border-color); }
 
-.advanced-settings .advanced-body,
-.estimate-panel,
-.config-key-card{ padding: var(--space-4); }
+.advanced-settings .advanced-body { padding: var(--space-4); }
 
-/* -----------------------------------------------------------------------------
-   7. Surfaces: cards, panels, sections
-   -------------------------------------------------------------------------- */
 .content-card,
-.ops-card,
-.models-results-card,
-.estimate-panel,
 .doc-callout,
-.doc-table-wrap,
-.config-key-card {
+.doc-table-wrap {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--surface-1);
   box-shadow: none;
 }
 
-.content-card,
-.models-results-card { overflow: hidden; }
+.content-card { overflow: hidden; }
 
-.card-head,
-.config-key-head,
-.settings-card-head{
+.card-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -881,32 +838,14 @@ input[type="range"] {
   border-bottom: 1px solid var(--border-color);
 }
 
-.card-head h2,
-.models-section-label {
+.card-head h2 {
   font-size: 0.92rem;
   font-weight: 650;
 }
 
-/* Tinted stat icon for the two account KPIs that carry their own meaning. */
 .stat-icon.total { background: var(--info-soft); color: var(--info); }
+
 .stat-icon.selected { background: rgba(167, 139, 250, 0.14); color: var(--accent-purple); }
-
-.config-section-shell { padding: var(--space-5); }
-.config-subsection { margin-top: var(--space-3); }
-
-.estimate-card-green { border-color: rgba(74, 222, 155, 0.28); background: var(--ok-soft); }
-.estimate-card-blue { border-color: rgba(108, 182, 255, 0.28); background: var(--info-soft); }
-.estimate-card-purple { border-color: rgba(167, 139, 250, 0.28); background: rgba(167, 139, 250, 0.08); }
-
-.estimate-meta {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-  color: var(--text-muted);
-  font-size: 0.74rem;
-}
 
 .modal-close {
   display: grid;
@@ -925,17 +864,12 @@ input[type="range"] {
 .modal-close:hover { background: var(--surface-3); color: var(--text-main); }
 
 .hint,
-.ops-hint,
-.meta-text,
-.helper-text{
+.helper-text {
   color: var(--text-muted);
   font-size: 0.75rem;
   line-height: 1.6;
 }
 
-/* -----------------------------------------------------------------------------
-   8. Metrics & stats
-   -------------------------------------------------------------------------- */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -958,7 +892,7 @@ input[type="range"] {
 .stat-card::after { content: none; }
 
 .stat-info,
-.form-row-control{
+.form-row-control {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -1005,54 +939,25 @@ input[type="range"] {
 }
 
 .metric-positive { color: var(--ok); }
+
 .metric-negative { color: var(--bad); }
+
 .metric-accent { color: var(--accent); }
 
-.estimate-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--space-3);
-}
-
-.estimate-card {
-  padding: var(--space-4);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
-}
-
-.estimate-title,
-.estimate-caption { color: var(--text-muted); font-size: 0.74rem; }
-.estimate-value { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.estimate-value-blue { color: var(--info); }
-.estimate-value-green { color: var(--ok); }
-.estimate-value-purple { color: var(--accent-purple); }
-
-/* -----------------------------------------------------------------------------
-   9. Tables
-   -------------------------------------------------------------------------- */
 .table-wrap,
-.models-table-wrap,
-.ops-table-wrap,
 .doc-table-wrap {
   width: 100%;
   overflow-x: auto;
 }
 
-table,
-.models-table,
-.ops-table,
-.logs-table {
+table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 0.83rem;
 }
 
-table thead th,
-.models-table thead th,
-.ops-table thead th,
-.logs-table thead th {
+table thead th {
   position: sticky;
   top: 0;
   z-index: 2;
@@ -1066,10 +971,7 @@ table thead th,
   white-space: nowrap;
 }
 
-table tbody td,
-.models-table tbody td,
-.ops-table tbody td,
-.logs-table tbody td {
+table tbody td {
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border-color);
   color: var(--text-soft);
@@ -1078,8 +980,7 @@ table tbody td,
 
 table tbody tr:hover td { background: var(--surface-2); }
 
-table tbody tr:last-child td,
-.accounts-table tbody tr:last-child td{ border-bottom: 0; }
+table tbody tr:last-child td { border-bottom: 0; }
 
 .table-empty-cell {
   padding: var(--space-8) var(--space-4);
@@ -1088,10 +989,16 @@ table tbody tr:last-child td,
 }
 
 .col-check { width: 40px; text-align: center; }
+
 .col-actions { width: 120px; text-align: right; white-space: nowrap; }
+
 .col-model { min-width: 220px; }
+
 .col-status { width: 120px; }
-.col-sort, .col-toggle { width: 90px; }
+
+.col-sort,
+.col-toggle { width: 90px; }
+
 .col-token { max-width: 260px; }
 
 .pagination-shell {
@@ -1106,19 +1013,13 @@ table tbody tr:last-child td,
 }
 
 .pagination-controls { display: flex; align-items: center; gap: var(--space-2); }
+
 .pagination-info { color: var(--text-muted); font-size: 0.76rem; }
 
-/* -----------------------------------------------------------------------------
-   10. Badges, tags & tokens
-   -------------------------------------------------------------------------- */
 .badge,
 .tag,
 .mini-badge,
-.models-status-badge,
-.models-default-badge,
-.models-meta-pill,
-.protocol-tag,
-.account-tier-tag {
+.protocol-tag {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -1161,13 +1062,13 @@ table tbody tr:last-child td,
 }
 
 .badge-grok { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+
 .badge-workbuddy { color: var(--ok); border-color: rgba(74, 222, 155, 0.35); background: var(--ok-soft); }
+
 .badge-qoder { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.14); }
+
 .badge-cline { color: var(--accent-purple); border-color: rgba(167, 139, 250, 0.35); background: rgba(167, 139, 250, 0.14); }
 
-.account-tier-tag { color: var(--text-soft); }
-
-.token-text,
 .key-display {
   display: block;
   max-width: 100%;
@@ -1178,13 +1079,8 @@ table tbody tr:last-child td,
   white-space: nowrap;
 }
 
-/* -----------------------------------------------------------------------------
-   11. Tabs
-   -------------------------------------------------------------------------- */
 .filter-tabs,
-.platform-tabs,
-.config-tabs-shell,
-.logs-tabs {
+.platform-tabs {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1194,9 +1090,6 @@ table tbody tr:last-child td,
   background: transparent;
 }
 
-/* -----------------------------------------------------------------------------
-   12. Overlays: modal, drawer, popover, toast
-   -------------------------------------------------------------------------- */
 .modal {
   display: none;
   position: fixed;
@@ -1225,11 +1118,12 @@ table tbody tr:last-child td,
 }
 
 .modal-content-sm { max-width: 420px; }
+
 .modal-content-md { max-width: 620px; }
+
 .modal-content-lg { max-width: 880px; }
 
-.modal-title,
-.tut-section-head h2{ font-size: 0.98rem; font-weight: 650; }
+.modal-title { font-size: 0.98rem; font-weight: 650; }
 
 .modal-body,
 .modal-scroll {
@@ -1246,12 +1140,15 @@ table tbody tr:last-child td,
 }
 
 .modal-submit { width: 100%; margin-top: var(--space-4); }
+
 .modal-field-note { margin-top: var(--space-2); line-height: 1.5; }
+
 .modal-intro { margin-bottom: var(--space-4); color: var(--text-secondary); }
+
 .modal-confirm-text { margin-bottom: var(--space-5); }
+
 .textarea-resizable { resize: vertical; }
 
-/* Drawer: the log centre's detail panel and the models editor. */
 .drawer {
   position: fixed;
   inset: 0 0 0 auto;
@@ -1269,7 +1166,7 @@ table tbody tr:last-child td,
 .drawer.is-open { transform: translateX(0); }
 
 .drawer-head,
-.modal-header{
+.modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1321,8 +1218,9 @@ table tbody tr:last-child td,
 }
 
 .toast.show { opacity: 1; transform: translateY(0); }
-.toast[data-type="error"],
-.logs-attempt.is-failed{ border-left-color: var(--bad); }
+
+.toast[data-type="error"] { border-left-color: var(--bad); }
+
 .toast[data-type="info"] { border-left-color: var(--info); }
 
 .toast-mark {
@@ -1342,12 +1240,8 @@ table tbody tr:last-child td,
 
 .toast-message { min-width: 0; }
 
-/* -----------------------------------------------------------------------------
-   13. States: empty, loading, error
-   -------------------------------------------------------------------------- */
 .empty-state,
-.empty-state-panel,
-.models-empty {
+.empty-state-panel {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1358,8 +1252,7 @@ table tbody tr:last-child td,
 
 .empty-state-panel { border-radius: var(--radius-md); background: var(--surface-1); }
 
-.empty-state-mark,
-.models-empty-icon {
+.empty-state-mark {
   display: grid;
   place-items: center;
   width: 40px;
@@ -1373,8 +1266,6 @@ table tbody tr:last-child td,
 
 .empty-state p { color: var(--text-muted); font-size: 0.8rem; }
 
-/* Loading is a skeleton shimmer, never a grey veil over live content: a veil
-   reads as "the page is broken". */
 .skeleton-line {
   border-radius: var(--radius-sm);
   background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
@@ -1383,7 +1274,9 @@ table tbody tr:last-child td,
   height: 12px;
   margin-bottom: var(--space-2);
 }
+
 .skeleton-line.w-40 { width: 40%; }
+
 .skeleton-line.w-70 { width: 70%; }
 
 @keyframes skeleton-shimmer {
@@ -1413,7 +1306,6 @@ table tbody tr:last-child td,
   font-size: 0.8rem;
 }
 
-/* Sticky action bar: saves without scrolling back down a long page. */
 .sticky-actions {
   position: sticky;
   bottom: 0;
@@ -1426,7 +1318,7 @@ table tbody tr:last-child td,
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  background: rgba(23, 29, 43, 0.96);
+  background: var(--surface-1);
   backdrop-filter: blur(10px);
 }
 
@@ -1446,15 +1338,12 @@ table tbody tr:last-child td,
   background: var(--warn);
 }
 
-/* -----------------------------------------------------------------------------
-   14. Login page
-   -------------------------------------------------------------------------- */
 .login-body {
   display: grid;
   place-items: center;
   min-height: 100vh;
   padding: var(--space-6);
-  background: radial-gradient(120% 80% at 50% 0%, #16202e 0%, var(--bg-app) 60%);
+  background: radial-gradient(ellipse at top, var(--accent-soft), var(--bg-app) 65%);
 }
 
 .login-card {
@@ -1469,15 +1358,16 @@ table tbody tr:last-child td,
 
 .login-hero,
 .login-brand { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-6); }
+
 .login-kicker { color: var(--accent); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+
 .login-brand-subtitle,
 .login-links { color: var(--text-muted); font-size: 0.78rem; }
+
 .login-links { margin-top: var(--space-4); display: flex; justify-content: space-between; }
+
 .login-submit { width: 100%; height: var(--control-h-lg); }
 
-/* -----------------------------------------------------------------------------
-   15. Documentation blocks (使用教程)
-   -------------------------------------------------------------------------- */
 .doc-callout {
   display: flex;
   flex-direction: column;
@@ -1485,8 +1375,9 @@ table tbody tr:last-child td,
   padding: var(--space-4) var(--space-5);
   border-left: 3px solid var(--info);
 }
-.doc-callout-amber,
-.tut-route-rule.is-warning{ border-left-color: var(--warn); }
+
+.doc-callout-amber { border-left-color: var(--warn); }
+
 .doc-inline-code,
 .inline-code,
 .doc-inline-code-red,
@@ -1499,12 +1390,11 @@ table tbody tr:last-child td,
   font-family: var(--font-mono);
   font-size: 0.78rem;
 }
+
 .doc-inline-code-red { color: var(--bad); }
 
-/* -----------------------------------------------------------------------------
-   16. Utilities
-   -------------------------------------------------------------------------- */
 .hidden { display: none !important; }
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1515,460 +1405,273 @@ table tbody tr:last-child td,
 }
 
 .inline-actions { display: flex; align-items: center; gap: var(--space-2); }
+
 .eq { display: flex; align-items: center; }
+
 .muted { color: var(--text-muted); }
+
 .normal { color: var(--text-soft); }
+
 .abnormal { color: var(--bad); }
 
-/* -----------------------------------------------------------------------------
-   16.5 Wide screens (27" 2560x1440, 4K, ultrawide)
-   --------------------------------------------------------------------------
-   --content-max now tracks the window, so the column already fills a 27" panel.
-   What still reads as "a laptop page on a big monitor" is the *inside* of that
-   column: 14px text, 42px table rows, 200px minmax cards and a 620px dialog
-   were all tuned against 1440px of content. These steps scale the type, the
-   control heights and the card minimums so the extra width buys density rather
-   than empty gutters.
-
-   Only min-width queries appear here. Section 18's phone contract is
-   max-width + !important and must keep winning on a small screen, so nothing
-   below may rely on a max-width neighbour to undo it.
-   -------------------------------------------------------------------------- */
-
-/* 1920 and up: FHD and the 2000px-class 27"/32" panels. */
 @media (min-width: 1800px) {
-  body { font-size: 15px; }
+body { font-size: 15px; }
 
-  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
-  .estimate-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.stats-grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 
-  .modal-content, .modal-content-md { max-width: 700px; }
-  .modal-content-lg { max-width: 1040px; }
+.modal-content,
+.modal-content-md { max-width: 700px; }
+
+.modal-content-lg { max-width: 1040px; }
 }
 
-/* 2560x1440 — the 27" this was reported against — and 2560x1600. */
 @media (min-width: 2200px) {
-  :root {
+:root {
     --control-h: 36px;
     --control-h-sm: 30px;
     --control-h-lg: 42px;
   }
 
 .main-content { padding: var(--space-8) var(--space-10) var(--space-10); }
-  .header-section h1 { font-size: 1.65rem; }
 
-  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
-  .estimate-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.header-section h1 { font-size: 1.65rem; }
 
-  .modal-content,
-  .modal-content-md { max-width: 780px; }
-  .modal-content-lg { max-width: 1240px; }
+.stats-grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+
+.modal-content,
+.modal-content-md { max-width: 780px; }
+
+.modal-content-lg { max-width: 1240px; }
 }
 
-/* 4K / 5K at 100% scaling: the column stopped growing at 3200px, so add gutter
-   and measure back rather than more width. */
 @media (min-width: 3400px) {
-  .main-content { padding: var(--space-10) calc(var(--space-10) + var(--space-6)) calc(var(--space-10) + var(--space-8)); }
+.main-content { padding: var(--space-10) calc(var(--space-10) + var(--space-6)) calc(var(--space-10) + var(--space-8)); }
 }
 
-/* The login card is a fixed 400px by design — a password field has no reason to
-   grow — but a 400px card on a 27" panel is a postage stamp, and 14px text on a
-   5K display is unreadable. This page has no sidebar and no content column, so
-   --content-max does nothing for it and it needs its own step. */
 @media (min-width: 1800px) {
-  .login-card { max-width: 440px; padding: var(--space-10) var(--space-8); }
-  .login-body { font-size: 15px; }
+.login-card { max-width: 440px; padding: var(--space-10) var(--space-8); }
+
+.login-body { font-size: 15px; }
 }
 
 @media (min-width: 2200px) {
-  .login-card { max-width: 480px; }
-  .login-body,
-  body{ font-size: 16px; }
-  .login-hero h1 { font-size: 1.9rem; }
+.login-card { max-width: 480px; }
+
+.login-body,
+body { font-size: 16px; }
+
+.login-hero h1 { font-size: 1.9rem; }
 }
 
-/* -----------------------------------------------------------------------------
-   17. Responsive
-   -------------------------------------------------------------------------- */
 @media (max-width: 1200px) {
-  .main-content { padding: var(--space-6); }
-  .header-section h1 { white-space: normal; }
+.main-content { padding: var(--space-6); }
+
+.header-section h1 { white-space: normal; }
 }
 
 @media (max-width: 900px) {
-  body { display: block; }
+body { display: block; }
 
-  .mobile-topbar { display: flex; }
+.mobile-topbar { display: flex; }
 
-  .sidebar {
+.sidebar {
     transform: translateX(-100%);
     transition: transform 180ms ease;
     box-shadow: var(--shadow-lg);
-    /* The drawer slides under the fixed top bar; without this its own brand block
-       sits behind the bar and reads as clipped text. The top bar already carries the
-       brand, so the duplicate header goes. */
+
     padding-top: calc(56px + env(safe-area-inset-top) + var(--space-3));
   }
 
-  .sidebar-header { display: none; }
+.sidebar-header { display: none; }
 
-  .sidebar.mobile-open { transform: translateX(0); }
+.sidebar.mobile-open { transform: translateX(0); }
 
-/* Below this breakpoint the sidebar is a drawer, so it occupies no room in the
-     flow and --content-max must stop subtracting it. --content-max is
-     `min(3200px, 100% - var(--sidebar-w))`: at 390px that caps the page column at
-     142px and every page renders as a narrow strip of wrapped text beside an
-     empty screen. The column is simply the whole viewport here, and the 3200px
-     ceiling is inert at this size — `none` says that without restating it. */
-  .main-content {
+.main-content {
     margin: 0;
     width: 100%;
     max-width: none;
     padding: 72px var(--space-4) var(--space-8);
   }
 
-  .form-row,
-  .estimate-grid { grid-template-columns: 1fr; gap: var(--space-2); }
+.form-row { grid-template-columns: 1fr; gap: var(--space-2); }
 
-  .pagination-shell {
+.pagination-shell {
     flex-direction: column;
     align-items: stretch;
   }
 }
 
 @media (max-width: 640px) {
-  .main-content { padding: 68px var(--space-3) var(--space-6); }
-  .header-section h1 { font-size: 1.25rem; }
-  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
-  .modal { padding: var(--space-3); }
-  .drawer { width: 100vw; }
+.main-content { padding: 68px var(--space-3) var(--space-6); }
+
+.header-section h1 { font-size: 1.25rem; }
+
+.stats-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+
+.modal { padding: var(--space-3); }
+
+.drawer { width: 100vw; }
 }
 
-/* -----------------------------------------------------------------------------
-   18. Phone
-   --------------------------------------------------------------------------
-   Two properties decide whether this console works on a phone.
-
-   First, the layout viewport must never be fitted wider than the device. When any
-   row is wider than the screen, Chrome widens the layout viewport to fit it and the
-   whole console renders zoomed out — 439px and 576px were the measured results of a
-   wide page head and a wide pagination bar, and every page inherited the smaller
-   scale. The clamp is therefore applied on <html> in each page template at parse
-   time, before any stylesheet arrives, and the real widths are fixed here too.
-
-   Second, every control has to be tappable: 34px is a desktop height, and iOS zooms
-   the page when a form control under 16px takes focus.
-   -------------------------------------------------------------------------- */
 @media (max-width: 900px) {
-  /* A single row wider than the screen makes Chrome fit the layout viewport to it —
-     439px and 576px were the measured results of a wide page head and a wide
-     pagination bar — and the whole console then renders zoomed out. Content that is
-     genuinely wider keeps its own scroll box (the matrices, the log detail, the
-     config strip); the document itself never scrolls sideways on a phone. */
-  html,
-  body { overflow-x: hidden; }
+html,
+body { overflow-x: hidden; }
 
-  /* The head is a column here. The title block keeps min-width: max-content on
-     desktop so a title never wraps mid-word; at phone width that same rule makes the
-     page as wide as its longest unwrapped line. */
-  .header-section {
+.header-section {
     flex-direction: column;
     align-items: stretch;
     gap: var(--space-3);
   }
 
-  .header-section > div:first-child { min-width: 0; }
+.header-section > div:first-child { min-width: 0; }
 
-  .header-section h1 { white-space: normal; }
+.header-section h1 { white-space: normal; }
 
-  .header-section p,
-  .page-sub { max-width: none; }
+.header-section p,
+.page-sub { max-width: none; }
 
-  .page-actions {
+.page-actions {
     width: 100%;
     margin-left: 0;
   }
 
-  /* Touch targets. 34px is a desktop height; a phone needs 44px in both axes.
-     `button` is named as an element so page-specific buttons (the tutorial's channel
-     picker, the Grok tool's density toggles) are covered too, and the class list
-     carries the variants whose markup has no <button>: most templates write
-     `class="btn-primary"` without the base `.btn`. A control that is a word inside a
-     sentence keeps its line height — 44px there would break the sentence.
+button:not([class*='inline-link']),
+summary,
+[role='button'],
+select,
+input:not([type='checkbox']):not([type='radio']):not([type='hidden']),
+textarea,
+.form-input,
+.compact-select,
+.btn,
+.btn-primary,
+.btn-secondary,
+.btn-outline,
+.btn-neutral,
+.btn-danger,
+.btn-danger-outline,
+.btn-save,
+.btn-page,
+.btn-icon,
+.action-icon,
+.tab-item,
+.modal-close,
+.panel-close-btn,
+.filter-tabs .tab-item { min-height: 44px !important; }
 
-     !important is deliberate and scoped to this breakpoint. Each page stylesheet is
-     linked after this one and sizes its own controls (`.imagine-basic-field
-     .form-input`, `.alerts-checkbox`), so a global phone contract cannot win on
-     specificity from here; the alternative is repeating the contract in five page
-     stylesheets, which is how these drifts start. */
-  button:not([class*='inline-link']),
-  summary,
-  [role='button'],
-  .tut-toc a,
-  select,
-  input:not([type='checkbox']):not([type='radio']):not([type='hidden']),
-  textarea,
-  .form-input,
-  .compact-select,
-  .btn,
-  .btn-primary,
-  .btn-secondary,
-  .btn-outline,
-  .btn-neutral,
-  .btn-danger,
-  .btn-danger-outline,
-  .btn-save,
-  .btn-page,
-  .btn-icon,
-  .action-icon,
-  .ops-chip,
-  .tab-item,
-  .logs-tab,
-  .modal-close,
-  .panel-close-btn,
-  .filter-tabs .tab-item { min-height: 44px !important; }
-
-  .ops-inline-link { min-height: 0 !important; }
-
-  /* A link inside a sentence keeps its line height, but not an 18px target: padding
-     on an inline element grows the hit area without moving the text around it. */
-  .ops-inline-link { padding: 10px 2px; }
-
-  /* A checkbox at 34px looks broken; 24px is the compromise every mobile console
-     makes, and the label beside it stays a tap target. */
-  input[type='checkbox'],
-  input[type='radio'],
-  .row-checkbox,
-  .alerts-checkbox { width: 24px; height: 24px; }
+input[type='checkbox'],
+input[type='radio'],
+.row-checkbox,
+.alerts-checkbox { width: 24px; height: 24px; }
 
 .panel-close-btn,
-  .modal-close,
-  .btn-icon,
-  .action-icon { min-width: 44px; }
+.modal-close,
+.btn-icon,
+.action-icon { min-width: 44px; }
 
-  .mobile-menu-btn { width: 44px; height: 44px; padding: 13px; }
-  .sidebar-link { min-height: 48px; padding: 0 var(--space-3); }
-  .sidebar-item { margin-bottom: 2px; }
+.mobile-menu-btn { width: 44px; height: 44px; padding: 13px; }
 
-  /* The switch stays 38x22 — that is the design — but a thumb needs more. A tap a few
-     pixels high used to hit the card and do nothing, which reads as an unresponsive
-     switch. The pseudo-element belongs to the label, so a tap on it still toggles the
-     checkbox, and it is invisible. */
-  label.toggle::after {
+.sidebar-link { min-height: 48px; padding: 0 var(--space-3); }
+
+.sidebar-item { margin-bottom: 2px; }
+
+label.toggle::after {
     content: "";
     position: absolute;
     inset: -10px -6px;
   }
 
-  /* iOS zooms the page when a control under 16px takes focus. Same reason for the
-     !important as above: the page stylesheets size their own inputs. */
-  input,
-  select,
-  textarea,
-  .form-input { font-size: 16px !important; }
+input,
+select,
+textarea,
+.form-input { font-size: 16px !important; }
 
-  /* Sheets read better than centred dialogs on a phone. */
-  .modal {
+.modal {
     align-items: flex-end;
     padding: 0;
   }
 
-  .modal-content {
+.modal-content {
     max-height: 92vh;
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
 
-  .modal-actions > .btn,
-  .page-actions > button,
-  .page-actions > .btn,
-  .page-actions > [class*='btn-']{ flex: 1 1 auto; }
+.modal-actions > .btn,
+.page-actions > button,
+.page-actions > .btn,
+.page-actions > [class*='btn-'] { flex: 1 1 auto; }
 
-  .drawer {
+.drawer {
     width: 100vw;
     padding-bottom: env(safe-area-inset-bottom);
   }
 
-  /* The detail panel covers the list on a phone: the page must not scroll behind it. */
-  body.drawer-open,
-  body.sidebar-open{ overflow: hidden; }
+body.drawer-open,
+body.sidebar-open { overflow: hidden; }
 
 .drawer-body,
-  .drawer-head{ padding: var(--space-4); }
+.drawer-head { padding: var(--space-4); }
 
-  .toast-container {
+.toast-container {
     top: auto;
     left: var(--space-4);
     right: var(--space-4);
     bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
   }
 
-  .toast { max-width: none; }
+.toast { max-width: none; }
 
-  /* The top bar owns the notch; the content starts below it. */
-  .mobile-topbar {
+.mobile-topbar {
     height: calc(56px + env(safe-area-inset-top));
     padding-top: env(safe-area-inset-top);
   }
 
-  .main-content {
+.main-content {
     padding-top: calc(72px + env(safe-area-inset-top));
     padding-bottom: calc(var(--space-8) + env(safe-area-inset-bottom));
   }
 }
 
 @media (max-width: 640px) {
-  /* Five page buttons and a page-size select do not fit one line: they were the
-     439px row that zoomed the accounts page out. */
-
 .pagination-shell .inline-actions,
-  .pagination-shell{
+.pagination-shell {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .pagination-controls {
+.pagination-controls {
     flex-wrap: wrap;
     justify-content: space-between;
   }
 
-  .pagination-info { text-align: center; }
-  .inline-actions { flex-wrap: wrap; }
+.pagination-info { text-align: center; }
+
+.inline-actions { flex-wrap: wrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
+* {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
 }
 
-/* -----------------------------------------------------------------------------
-   Shared page primitives. Each declaration below is needed verbatim by two
-   or more page sheets, so it lives here once instead of once per sheet.
-   -------------------------------------------------------------------------- */
-
-.accounts-table thead th,
-.models-table thead th{
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: 10px var(--space-3);
-  border-bottom: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-align: left;
-  white-space: nowrap;
-}
-
-.account-mobile-card,
-.models-mobile-card{
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--surface-2);
-}
-
-.accounts-table tbody td,
-.models-table tbody td{
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-color);
-  color: var(--text-soft);
-  vertical-align: middle;
-}
-
-.accounts-panel,
-.models-results-card{
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--surface-1);
-  overflow: hidden;
-}
-
-.ops-head-filters,
-.models-toolbar-controls{
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
-
-.account-mobile-head,
-.models-mobile-head{
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.accounts-row-actions,
-.models-actions{
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  justify-content: flex-end;
-}
-
-.account-mobile-grid,
-.models-mobile-grid,
-.tut-route-rules{
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.accounts-table,
-.models-table{
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 0.82rem;
-}
-
-.ops-card-tools,
-.accounts-actions,
-.account-mobile-inline,
-.models-results-meta{ display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-
-.form-row-label,
-.models-control{
+.form-row-label {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
 }
 
-.account-identity-sub,
-.models-cell-title{
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
+.system-version-button { width: 100%; margin-bottom: 8px; overflow: hidden; }
+.system-modal-content { padding: 20px; overflow: auto; width: min(680px, calc(100vw - 24px)); }
+.system-version-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.system-version-grid p { overflow-wrap: anywhere; }
+.system-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.system-progress { padding: 12px; border-radius: var(--radius-md); background: var(--surface-2); overflow-wrap: anywhere; }
+.system-progress.is-error { color: var(--bad); background: var(--bad-soft); }
+.system-release-notes { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; color: var(--text-secondary); font-family: inherit; }
+@media (min-width: 901px) { .sidebar-collapsed #versionBadge { display: none; } }
+@media (max-width: 640px) { .system-version-grid { grid-template-columns: 1fr; } }
 
-.accounts-mobile-list,
-.models-mobile-list{
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3);
-}
-
-.ops-page,
-.config-page,
-.tut-page{ padding-bottom: var(--space-10); }
-
-.ops-grid,
-.accounts-stats{ margin-bottom: var(--space-4); }
-
-.accounts-actions .accounts-action-cluster.is-danger,
-.models-action-btn-danger:hover{ background: var(--bad-soft); }
-
-.ops-gauge-sub > span,
-.account-cooldown-until{ white-space: nowrap; }
-
-.accounts-table .col-check,
-.models-table .col-select{ width: 40px; }
+.system-version-button.has-update { border-color: var(--accent); color: var(--accent-strong); background: var(--accent-soft); }

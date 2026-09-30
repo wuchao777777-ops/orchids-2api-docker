@@ -1,0 +1,10 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+function runtime(fetch){const context=vm.createContext({fetch,window:{location:{href:'/admin/'}},document:{}});vm.runInContext(fs.readFileSync(__dirname+'/static/js/ui.js','utf8'),context);return context;}
+test('shared requests preserve credentials and cancellation without mutation retries',async()=>{let calls=0;let sent;const signal=new AbortController().signal;const c=runtime(async(url,options)=>{calls++;sent=options;throw new Error('offline');});await assert.rejects(c.ConsoleAPI.json('/api/keys',{method:'POST',signal}),/offline/);assert.equal(calls,1);assert.equal(sent.signal,signal);assert.equal(sent.credentials,'same-origin');});
+test('list errors do not become empty successful lists',async()=>{const c=runtime(async()=>({ok:true,json:async()=>({error:'bad'})}));await assert.rejects(c.ConsoleAPI.json('/api/accounts',{}, {array:true}),/格式无效/);});
+test('HTTP JSON errors expose the message and permission denials keep the page',async()=>{const c=runtime(async()=>({ok:false,status:403,text:async()=>JSON.stringify({error:{message:'denied'}})}));await assert.rejects(c.ConsoleAPI.json('/api/accounts'),/^Error: denied$/);assert.equal(c.window.location.href,'/admin/');});
+test('expired sessions redirect to the admin login',async()=>{const c=runtime(async()=>({ok:false,status:401,text:async()=> 'Unauthorized'}));await assert.rejects(c.ConsoleAPI.json('/api/accounts'),/Unauthorized/);assert.equal(c.window.location.href,'./login.html');});
+test('HTML and malformed envelopes are rejected explicitly',async()=>{const c=runtime(async()=>({ok:true,headers:{get:()=> 'text/html'},json:async()=>({})}));await assert.rejects(c.ConsoleAPI.json('/api/config/list'),/JSON/);c.fetch=async()=>({ok:true,json:async()=>null});await assert.rejects(c.ConsoleAPI.json('/api/config/list',{}, {envelope:true}),/请求失败/);c.fetch=async()=>({ok:true,json:async()=>({code:0,data:[1]})});assert.deepEqual(Array.from(await c.ConsoleAPI.json('/api/config/list',{}, {envelope:true,array:true})),[1]);});

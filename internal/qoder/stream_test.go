@@ -330,8 +330,8 @@ func TestConsumeStreamUsageSurvivesASharedFrame(t *testing.T) {
 	if got := result.Usage["cacheReadTokens"]; got != 3 {
 		t.Fatalf("cacheReadTokens = %v, want 3", got)
 	}
-	if got := result.Usage["cacheWriteTokens"]; got != 5 {
-		t.Fatalf("cacheWriteTokens = %v, want 5", got)
+	if got := result.Usage["cacheable_tokens"]; got != 5 {
+		t.Fatalf("cacheable_tokens = %v, want 5", got)
 	}
 	if got := result.Usage["credits"]; got != 0.25 {
 		t.Fatalf("credits = %v, want 0.25", got)

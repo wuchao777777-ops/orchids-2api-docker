@@ -22,13 +22,8 @@ function initDOMCache() {
 // Load accounts from API
 async function loadAccounts() {
   try {
-    const res = await fetch("/api/accounts");
-    if (res.status === 401) {
-      window.location.href = "./login.html";
-      return;
-    }
-    const loadedAccounts = await res.json();
-    accounts = (Array.isArray(loadedAccounts) ? loadedAccounts : []).filter((account) => {
+    const loadedAccounts = await ConsoleAPI.json('/api/accounts', {}, { array: true });
+    accounts = loadedAccounts.filter((account) => {
       if (String(account?.account_type || "").trim().toLowerCase() !== "grok") return true;
       return String(account?.credential_type || "").trim().toLowerCase() === "oauth" ||
         String(account?.grok_provider || "").trim().toLowerCase() === "build";
@@ -413,116 +408,16 @@ function applyTokenLabels(type) {
 // with the other official-login channels while provider endpoints, copy and
 // URL allowlists remain explicit, so changing one provider cannot silently
 // widen another.
-function createAccountDeviceLogin(options) {
-  const state = { id: "", timer: null };
-  const statusNode = () => document.getElementById(options.statusId);
 
-  function render(message, type = "info", html = "") {
-    const node = statusNode();
-    if (!node) return;
-    node.hidden = false;
-    node.classList.toggle("is-active", type === "info");
-    node.classList.toggle("is-error", type === "error");
-    node.innerHTML = `<strong>${escapeImportStatusText(message)}</strong>${html}`;
-  }
 
-  function reset() {
-    const node = statusNode();
-    if (!node) return;
-    node.hidden = true;
-    node.classList.remove("is-active", "is-error");
-    node.innerHTML = "";
-  }
-
-  function stop(cancel = false) {
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
-    const id = state.id;
-    state.id = "";
-    const button = document.getElementById(options.buttonId);
-    if (button) button.disabled = false;
-    if (cancel && id) {
-      fetch(`${options.endpoint}/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
-    }
-  }
-
-  async function poll() {
-    const id = state.id;
-    if (!id) return;
-    try {
-      const res = await fetch(`${options.endpoint}/${encodeURIComponent(id)}`);
-      if (!res.ok) throw new Error(await res.text());
-      const login = await res.json();
-      if (id !== state.id) return;
-      if (login.status === "pending") {
-        state.timer = setTimeout(poll, 1500);
-        return;
-      }
-      stop(false);
-      if (login.status === "complete") {
-        const message = login.message || `${options.provider} 账号已添加`;
-        render(message, "info");
-        showToast(message, "success");
-        loadAccounts();
-        setTimeout(closeModal, 800);
-        return;
-      }
-      render(login.message || `${options.provider} 官方登录未完成`, "error");
-    } catch (err) {
-      if (id !== state.id) return;
-      stop(false);
-      render(`${options.provider} 登录状态查询失败：` + (err.message || String(err)), "error");
-    }
-  }
-
-  async function start() {
-    if (state.id) return;
-    const button = document.getElementById(options.buttonId);
-    if (button) button.disabled = true;
-    reset();
-    try {
-      const res = await fetch(options.endpoint, { method: "POST" });
-      if (!res.ok) throw new Error(await res.text());
-      const login = await res.json();
-      state.id = String(login.id || "");
-      if (!state.id || login.status !== "pending") {
-        throw new Error(`${options.provider} 登录初始化响应无效`);
-      }
-      const link = String(login.verification_uri_complete || login.verification_uri || "");
-      let safeLink = "";
-      try {
-        const parsed = new URL(link);
-        if (options.isAllowedURL(parsed)) safeLink = parsed.href;
-      } catch (_) {
-        // An unexpected upstream URL must never become an open redirect.
-      }
-      const linkHTML = safeLink
-        ? `<div style="margin-top:8px"><a href="${escapeImportStatusText(safeLink)}" target="_blank" rel="noopener noreferrer">打开 ${options.provider} 官方授权页面</a></div>`
-        : "";
-      render(`请在 ${options.provider} 官方页面输入设备码：${login.user_code || ""}`, "info", linkHTML);
-      if (safeLink) window.open(safeLink, "_blank", "noopener");
-      poll();
-    } catch (err) {
-      stop(false);
-      render(`无法启动 ${options.provider} 官方登录：` + (err.message || String(err)), "error");
-    }
-  }
-
-  return { render, reset, stop, start, poll };
-}
-
-const grokDeviceLogin = createAccountDeviceLogin({
-  provider: "Grok",
-  endpoint: "/api/grok/device-auth",
-  statusId: "grokDeviceLoginStatus",
-  buttonId: "grokDeviceLoginButton",
-  isAllowedURL: (url) => url.protocol === "https:" && (url.hostname === "auth.x.ai" || url.hostname === "accounts.x.ai"),
+const grokDeviceLogin = globalThis.DeviceAuthLogin.create({
+  storageKey: 'grok_login_v1', basePath: '/api/grok/device-auth', popupName: 'grok-login',
+  label: 'Grok', statusId: 'grokDeviceLoginStatus', buttonId: 'grokDeviceLoginButton',
+  linkId: 'grokDeviceLoginLink', linkTextId: 'grokDeviceLoginLinkText', pollInterval: 1500,
+  isAllowedURL: (url) => url.protocol === 'https:' && (url.hostname === 'auth.x.ai' || url.hostname === 'accounts.x.ai'),
 });
-
 function resetGrokDeviceLoginStatus() { grokDeviceLogin.reset(); }
-function stopGrokDeviceLogin(cancel = false) { grokDeviceLogin.stop(cancel); }
+function stopGrokDeviceLogin() { grokDeviceLogin.stop(); }
 function startGrokDeviceLogin() { return grokDeviceLogin.start(); }
 
 function applyCredentialModeUI(type) {
@@ -530,12 +425,7 @@ function applyCredentialModeUI(type) {
   if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = String(type || "").trim().toLowerCase() !== "grok";
 }
 
-function escapeImportStatusText(text) {
-  return String(text || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
+
 
 function accountTypeLabel(type) {
   return window.OrchidsProviderRegistry?.label(type) || String(type || "").trim();
@@ -586,19 +476,7 @@ function setAccountModalType(type) {
 
 // extractAdminErrorDetail keeps update failures readable without exposing raw JSON.
 function extractAdminErrorDetail(raw) {
-  const text = String(raw == null ? "" : raw).trim();
-  if (!text) return "";
-  try {
-    const parsed = JSON.parse(text);
-    const message = parsed && typeof parsed === "object"
-      ? (parsed.error && typeof parsed.error === "object" ? parsed.error.message : parsed.error)
-      : null;
-    const detail = typeof message === "string" ? message.trim() : "";
-    if (detail) return detail;
-  } catch (_) {
-    /* a plain-text error body is already the detail */
-  }
-  return text;
+  return ConsoleAPI.detail(raw, '');
 }
 
 // The console's channel strip, shared with 模型管理: the same channels, in the same
@@ -785,7 +663,7 @@ async function checkAccount(id, silent = false, actionText = "刷新") {
   const action = "check";
   let succeeded = false;
   try {
-    const res = await fetch(`/api/accounts/${id}/${action}`);
+    const res = await ConsoleAPI.request(`/api/accounts/${id}/${action}`);
     if (!res.ok) {
       throw new Error(await res.text());
     }
@@ -796,7 +674,7 @@ async function checkAccount(id, silent = false, actionText = "刷新") {
     if (!silent) showToast(`账号 ${updated.name || updated.email || id} ${actionText}完成`, "success");
   } catch (err) {
     try {
-      const latestRes = await fetch(`/api/accounts/${id}`);
+      const latestRes = await ConsoleAPI.request(`/api/accounts/${id}`);
       if (latestRes.ok) {
         const latest = await latestRes.json();
         accounts = accounts.map(a => (a.id === id ? latest : a));
@@ -825,7 +703,7 @@ async function clearAbnormalAccounts() {
   const scopeText = currentPlatform ? `当前 ${currentPlatformLabel()} 页面中的 ` : "";
   if (confirm(`确定要清空 ${scopeText}${abnormal.length} 个异常账号吗？`)) {
     for (const acc of abnormal) {
-      await fetch(`/api/accounts/${acc.id}`, { method: "DELETE" });
+      await ConsoleAPI.request(`/api/accounts/${acc.id}`, { method: "DELETE" });
     }
     loadAccounts();
     showToast(`已清空${scopeText}异常账号`);
@@ -838,7 +716,7 @@ async function batchDeleteAccounts() {
   if (selected.length === 0) return;
   if (confirm(`确定要删除选中的 ${selected.length} 个账号吗？`)) {
     for (const id of selected) {
-      await fetch(`/api/accounts/${id}`, { method: "DELETE" });
+      await ConsoleAPI.request(`/api/accounts/${id}`, { method: "DELETE" });
     }
     loadAccounts();
     showToast(`已成功删除 ${selected.length} 个账号`);
@@ -877,10 +755,6 @@ function renderAccounts() {
     return;
   }
 
-  if (window.matchMedia("(max-width: 640px)").matches) {
-    renderAccountsMobile(container, pageItems, total, totalPages);
-    return;
-  }
 
   container.innerHTML = "";
   const wrap = document.createElement("div");
@@ -1113,7 +987,7 @@ function renderAccounts() {
   // 一次性将所有行插入到 tbody
   tbody.appendChild(fragment);
   table.appendChild(tbody);
-  wrap.appendChild(table);
+  wrap.appendChild(ConsoleUI.responsiveTable(table));
   container.appendChild(wrap);
 
   const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
@@ -1274,16 +1148,7 @@ function accountUsageCounter(acc) {
 
 // buildMobileEmailMarkup surfaces the signed-in address, which is how operators
 // actually recognise a WorkBuddy account (the nickname is the email).
-function buildMobileEmailMarkup(acc) {
-  const identity = normalizeAccountType(acc) === "workbuddy" ? workBuddyIdentityLabel(acc) : String(acc?.email || "").trim();
-  if (!identity || identity === "-") return "";
-  const label = normalizeAccountType(acc) === "workbuddy" ? "账号 / 邮箱" : "邮箱";
-  return `
-        <div class="account-mobile-item" style="grid-column: 1 / -1;">
-          <span class="account-mobile-label">${label}</span>
-          <span class="account-mobile-value" style="word-break: break-all;">${escapeHtml(identity)}</span>
-        </div>`;
-}
+
 
 // accountIdentityPrimary is the row's subject: the address for channels that
 // report one (WorkBuddy's nickname is the email), otherwise the credential
@@ -1360,75 +1225,7 @@ function buildStatusMarkup(acc, badge) {
   return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${buildCooldownMarkup(acc)}`;
 }
 
-function renderAccountsMobile(container, pageItems, total, totalPages) {
-  container.innerHTML = "";
-  const list = document.createElement("div");
-  list.className = "accounts-mobile-list";
 
-  const fragment = document.createDocumentFragment();
-  pageItems.forEach((acc) => {
-    const badge = statusBadge(acc);
-    const tokenDisplay = formatTokenDisplay(acc);
-    const card = document.createElement("article");
-    card.className = "account-mobile-card";
-    card.innerHTML = `
-      <div class="account-mobile-head">
-        <label class="account-mobile-check">
-          <input type="checkbox" class="row-checkbox" data-action="row-select" data-id="${encodeData(acc.id)}">
-          <span>#${escapeHtml(acc.id === null || acc.id === undefined ? "" : String(acc.id))}</span>
-        </label>
-        <div class="account-mobile-actions">
-          <button type="button" class="action-icon" data-action="edit" data-id="${encodeData(acc.id)}" title="编辑账号设置与凭据">编辑</button>
-          <button type="button" class="action-icon" data-action="refresh" data-id="${encodeData(acc.id)}" title="立即同步状态与额度">刷新</button>
-          <button type="button" class="action-icon is-danger" data-action="delete" data-id="${encodeData(acc.id)}" title="删除该账号">删除</button>
-        </div>
-      </div>
-      <div class="account-mobile-identity">${escapeHtml(accountIdentityPrimary(acc))}</div>
-      <div class="account-mobile-token">
-        <span class="token-text" title="${escapeHtml(tokenDisplay)}">${escapeHtml(tokenDisplay)}</span>
-      </div>
-      <div class="account-mobile-grid">
-        <div class="account-mobile-item">
-          <span class="account-mobile-label">状态</span>
-          <div class="account-mobile-inline">${buildStatusMarkup(acc, badge)}</div>
-        </div>
-        <div class="account-mobile-item">
-          <span class="account-mobile-label">等级</span>
-          <div class="account-mobile-inline">${buildSubscriptionMarkup(acc)}</div>
-        </div>
-        ${clinePageOnly() ? "" : `
-        <div class="account-mobile-item">
-          <span class="account-mobile-label">配额</span>
-          <div class="account-mobile-value">${buildQuotaMarkup(acc)}</div>
-        </div>`}
-        <div class="account-mobile-item">
-          <span class="account-mobile-label">今日/累计 Tokens</span>
-          <div class="account-mobile-value">${buildTokensMarkup(acc)}</div>
-        </div>
-        <div class="account-mobile-item">
-          <span class="account-mobile-label">调用</span>
-          <span class="account-mobile-value">${escapeHtml(String(accountUsageCounter(acc)))} · ${escapeHtml(acc.last_used_at && !acc.last_used_at.startsWith("0001") ? formatTime(acc.last_used_at) : "未调用")}</span>
-        </div>
-        <div class="account-mobile-item">
-          <span class="account-mobile-label">创建时间</span>
-          <span class="account-mobile-value">${buildCreatedMarkup(acc)}</span>
-        </div>
-        ${buildMobileEmailMarkup(acc)}
-      </div>
-    `;
-    fragment.appendChild(card);
-  });
-
-  list.appendChild(fragment);
-  container.appendChild(list);
-
-  const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
-  paginationInfo.textContent = `共 ${total} 条记录，第 ${currentPage}/${totalPages} 页`;
-  renderPagination(currentPage, totalPages);
-  updateSelectedCount();
-
-  bindAccountActions(container);
-}
 
 // Desktop rows and mobile cards carry the same delegated actions. The mobile
 // view has no select-all checkbox, but its row selection uses this same handler.
@@ -1450,50 +1247,7 @@ function bindAccountActions(container) {
 }
 
 function renderPagination(current, total) {
-  const container = domCache.paginationControls || document.getElementById("paginationControls");
-  if (!container) return;
-
-  container.innerHTML = "";
-  const appendButton = (label, page, disabled, activeClass, extraStyle) => {
-    const btn = document.createElement("button");
-    btn.className = `btn ${activeClass}`.trim();
-    btn.dataset.page = String(page);
-    btn.disabled = disabled;
-    btn.textContent = label;
-    btn.style.padding = "4px 10px";
-    if (extraStyle) {
-      Object.keys(extraStyle).forEach((key) => {
-        btn.style[key] = extraStyle[key];
-      });
-    }
-    container.appendChild(btn);
-  };
-
-  // First & Prev
-  appendButton("首页", 1, current === 1, "btn-outline");
-  appendButton("上一页", current - 1, current === 1, "btn-outline");
-
-  // Page Numbers (simplified logic: show surrounding)
-  let startPage = Math.max(1, current - 2);
-  let endPage = Math.min(total, startPage + 4);
-  if (endPage - startPage < 4) {
-    startPage = Math.max(1, endPage - 4);
-  }
-
-  for (let i = startPage; i <= endPage; i++) {
-    const activeClass = i === current ? 'btn-primary' : 'btn-outline';
-    appendButton(String(i), i, false, activeClass, { minWidth: "32px", justifyContent: "center" });
-  }
-
-  // Next & Last
-  appendButton("下一页", current + 1, current === total, "btn-outline");
-  appendButton("末页", total, current === total, "btn-outline");
-  container.onclick = (e) => {
-    const btn = e.target.closest("button[data-page]");
-    if (!btn || !container.contains(btn) || btn.disabled) return;
-    const page = parseInt(btn.dataset.page, 10);
-    if (!Number.isNaN(page)) goToPage(page);
-  };
+  ConsoleUI.pagination(domCache.paginationControls || document.getElementById('paginationControls'), current, total, goToPage);
 }
 
 function goToPage(page) {
@@ -1537,13 +1291,8 @@ function updatePageSize(size) {
 
 // Update statistics
 function updateStats() {
-  const total = accounts.length;
-  // The sidebar and this page's 状态异常 stat must be the same number on every
-  // page. isSidebarAccountAbnormal (common.js) is the single predicate; the
-  // page-local isAccountAbnormal used to compute its own verdict, so the same
-  // sidebar read differently on 账号管理 and on 运维总览.
-  const abnormal = accounts.filter(isSidebarAccountAbnormal).length;
-  const normal = Math.max(0, total - abnormal);
+  const stats = computeSidebarAccountStats(accounts);
+  const { total, normal, abnormal } = stats;
 
   document.getElementById("totalAccounts").textContent = total;
   document.getElementById("enabledAccounts").textContent = normal;
@@ -1553,14 +1302,7 @@ function updateStats() {
   updateSelectedCount();
 
   // Update sidebar footer
-  const footerTotal = document.getElementById("footerTotal");
-  if (footerTotal) footerTotal.textContent = total;
-
-  const footerNormal = document.getElementById("footerNormal");
-  if (footerNormal) footerNormal.textContent = normal;
-
-  const footerAbnormal = document.getElementById("footerAbnormal");
-  if (footerAbnormal) footerAbnormal.textContent = abnormal;
+  setSidebarAccountStats(stats.total, stats.normal, stats.abnormal);
 }
 
 // Update selected count
@@ -1596,8 +1338,7 @@ function openModal(account = null) {
 
   const finalizeModal = () => {
     applyTokenLabels(typeEl ? typeEl.value : getActiveAccountType());
-    modal.classList.add("active");
-    modal.style.display = "flex";
+    ConsoleUI.modal("accountModal", true);
   };
 
   const applyValues = () => {
@@ -1661,9 +1402,7 @@ function closeModal() {
   stopWorkBuddyLogin();
   stopQoderLogin();
   stopClineLogin();
-  const modal = document.getElementById("accountModal");
-  modal.classList.remove("active");
-  modal.style.display = "none";
+  ConsoleUI.modal("accountModal", false);
 }
 
 // Save settings for an existing account. New accounts use official login only.
@@ -1687,7 +1426,7 @@ async function saveAccount(e) {
     data.grok_provider = "build";
   }
   try {
-    const res = await fetch(`/api/accounts/${id}`, {
+    const res = await ConsoleAPI.request(`/api/accounts/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -1718,7 +1457,7 @@ async function refreshToken(id) {
 async function deleteAccount(id) {
   if (!confirm("确定要删除这个账号吗？")) return;
   try {
-    const res = await fetch(`/api/accounts/${id}`, { method: "DELETE" });
+    const res = await ConsoleAPI.request(`/api/accounts/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error(await res.text());
     showToast("删除成功");
     loadAccounts();
@@ -1735,51 +1474,16 @@ function parseDataId(value) {
 }
 
 function formatTokenDisplay(acc) {
-  if (typeof acc?.has_credential === "boolean") return acc.has_credential ? '凭证已配置' : '待登录';
-  const type = normalizeAccountType(acc);
-  if (type === 'grok' && isSidebarGrokOAuthAccount(acc)) {
-    const accessToken = String(acc.oauth_access_token || "");
-    if (accessToken) {
-      return accessToken.length > 20
-        ? accessToken.substring(0, 8) + '...' + accessToken.substring(accessToken.length - 8)
-        : accessToken;
-    }
-    return 'OAuth 已配置';
-  }
-  const token = acc.token;
-  if (token) {
-    if (token.length > 30) {
-      if (type === 'grok') {
-        return token.substring(0, 8) + '...' + token.substring(token.length - 8);
-      }
-      return token.substring(0, 30) + '...';
-    }
-    return token;
-  }
-  if (type === 'workbuddy') {
-    // The signed-in address identifies both the account and the login; the token
-    // itself is deliberately not shown for this channel.
-    return workBuddyIdentityLabel(acc);
-  }
-  if (type === 'qoder') {
-    // Same contract as WorkBuddy: the signed-in identity is what tells two
-    // Qoder logins apart, and the device credential is never shown.
-    return qoderIdentityLabel(acc);
-  }
-  return '-';
+  return acc?.has_credential === true ? '凭证已配置' : acc?.has_credential === false ? '待登录' : '凭据状态未知';
 }
 
 // workBuddyIdentityLabel renders the account identity: the signed-in address when
-// the profile was fetched, otherwise a short uid, otherwise the access token tail.
+// the profile was fetched, otherwise a short uid, otherwise a placeholder.
 function workBuddyIdentityLabel(acc) {
   const email = String(acc?.email || "").trim();
   if (email) return email;
   const uid = String(acc?.workbuddy_uid || "").trim();
   if (uid) return uid.length > 20 ? `uid ${uid.substring(0, 8)}...${uid.substring(uid.length - 4)}` : `uid ${uid}`;
-  const token = String(acc?.workbuddy_access_token || "").trim();
-  if (token) {
-    return token.length > 16 ? `token ${token.substring(0, 6)}...${token.substring(token.length - 6)}` : token;
-  }
   return "-";
 }
 

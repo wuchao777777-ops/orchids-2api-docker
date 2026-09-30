@@ -1,3 +1,4 @@
+const { el, setText } = ConsoleUI;
 // Models management JavaScript
 
 let models = [];
@@ -13,14 +14,9 @@ let modelRefreshResults = {};
 let modelRefreshConcurrency = 4;
 
 // ── small helpers ────────────────────────────────────────────────────────────
-function el(id) {
-  return document.getElementById(id);
-}
 
-function setText(id, value) {
-  const node = el(id);
-  if (node) node.textContent = value == null ? "" : String(value);
-}
+
+
 
 // activeChannel is the channel the page is scoped to. A channel is always
 // required by the refresh and batch actions, so the first known one stands in
@@ -281,46 +277,10 @@ function renderChannelTabs() {
 }
 
 function renderPagination(current, total) {
-  const container = document.getElementById("modelsPaginationControls");
-  if (!container) return;
-
-  container.innerHTML = "";
-
-  const appendButton = (label, page, disabled, active) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = `btn ${active ? "btn-primary" : "btn-outline"}`;
-    btn.disabled = disabled;
-    btn.dataset.page = String(page);
-    btn.textContent = label;
-    btn.style.padding = "6px 12px";
-    container.appendChild(btn);
-  };
-
-  appendButton("首页", 1, current === 1, false);
-  appendButton("上一页", current - 1, current === 1, false);
-
-  let startPage = Math.max(1, current - 2);
-  let endPage = Math.min(total, startPage + 4);
-  if (endPage-startPage < 4) {
-    startPage = Math.max(1, endPage - 4);
-  }
-
-  for (let page = startPage; page <= endPage; page += 1) {
-    appendButton(String(page), page, false, page === current);
-  }
-
-  appendButton("下一页", current + 1, current === total, false);
-  appendButton("末页", total, current === total, false);
-
-  container.onclick = (event) => {
-    const btn = event.target.closest("button[data-page]");
-    if (!btn || btn.disabled) return;
-    const page = parseInt(btn.dataset.page || "", 10);
-    if (Number.isNaN(page)) return;
+  ConsoleUI.pagination(document.getElementById('modelsPaginationControls'), current, total, (page) => {
     modelCurrentPage = page;
     renderModels();
-  };
+  });
 }
 
 // ── row fragments ────────────────────────────────────────────────────────────
@@ -391,10 +351,6 @@ function renderModels() {
     return;
   }
 
-  if (window.matchMedia("(max-width: 640px)").matches) {
-    renderModelsMobile(container, pageItems);
-    return;
-  }
 
   const rows = pageItems.map((m) => `
       <tr data-id="${encodeData(m.id)}">
@@ -437,6 +393,8 @@ function renderModels() {
       </table>
     </div>
   `;
+
+  ConsoleUI.responsiveTable(container.querySelector("table"));
 
   container.onclick = (event) => {
     const target = event.target.closest("[data-action]");
@@ -536,12 +494,12 @@ async function runModelBatch(action) {
   for (const id of ids) {
     try {
       if (action === "delete") {
-        const response = await fetch(`/api/models/${encodeURIComponent(id)}`, { method: "DELETE" });
+        const response = await ConsoleAPI.request(`/api/models/${encodeURIComponent(id)}`, { method: "DELETE" });
         if (!response.ok) throw new Error("HTTP " + response.status);
       } else {
         const current = models.find((m) => String(m.id) === String(id));
         if (!current) throw new Error("模型已不在列表中");
-        const response = await fetch(`/api/models/${encodeURIComponent(id)}`, {
+        const response = await ConsoleAPI.request(`/api/models/${encodeURIComponent(id)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...current, status: action === "enable" ? "available" : "offline" }),
@@ -564,69 +522,15 @@ async function runModelBatch(action) {
   }
 }
 
-function renderModelsMobile(container, pageItems) {
-  const cards = pageItems.map((m) => `
-      <article class="models-mobile-card">
-        <div class="models-mobile-head">
-          ${modelTitle(m)}
-          ${statusBadgeHtml(m)}
-        </div>
-        <div class="models-model-id">${escapeHtml(m.model_id || "-")}</div>
-        <div class="models-mobile-grid">
-          <div class="models-mobile-item">
-            <span class="models-mobile-label">渠道</span>
-            <span>${escapeHtml(m.channel || "-")}</span>
-          </div>
-          <div class="models-mobile-item">
-            <span class="models-mobile-label">排序</span>
-            <span>${escapeHtml(String(m.sort_order ?? 0))}</span>
-          </div>
-          <div class="models-mobile-item">
-            <span class="models-mobile-label">启用</span>
-            ${toggleHtml(m)}
-          </div>
-        </div>
-        <div class="models-mobile-actions">
-          ${actionButtonsHtml(m)}
-        </div>
-      </article>
-    `).join("");
 
-  container.innerHTML = `<div class="models-mobile-list">${cards}</div>`;
-  bindModelCardActions(container);
-}
 
 // bindModelCardActions is the mobile list's delegated handler: the card has no
 // select column and no batch bar, so only the two row actions apply.
-function bindModelCardActions(container) {
-  container.onclick = (event) => {
-    const target = event.target.closest("[data-action]");
-    if (!target || !container.contains(target)) return;
-    const action = target.dataset.action;
-    const id = decodeData(target.dataset.id || "");
-    if (!id) return;
-    if (action === "edit") editModel(id);
-    if (action === "delete") deleteModel(id);
-  };
 
-  container.onchange = (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement)) return;
-    if (target.dataset.action !== "toggle-status") return;
-    const id = decodeData(target.dataset.id || "");
-    if (!id) return;
-    toggleModelStatus(id, target.checked);
-  };
-}
 
 async function loadModels() {
   try {
-    const res = await fetch("/api/models");
-    if (res.status === 401) {
-      window.location.href = "./login.html";
-      return;
-    }
-    models = await res.json() || [];
+    models = await ConsoleAPI.json('/api/models', {}, { array: true });
     renderChannelTabs();
     updateModelChannelOptions();
     renderModels();
@@ -703,14 +607,11 @@ function openModelModal(model = null) {
     setSelectValue(document.getElementById("modelStatus"), "available");
   }
 
-  modal.classList.add("active");
-  modal.style.display = "flex";
+  ConsoleUI.modal("modelModal", true);
 }
 
 function closeModelModal() {
-  const modal = document.getElementById("modelModal");
-  modal.classList.remove("active");
-  modal.style.display = "none";
+  ConsoleUI.modal("modelModal", false);
 }
 
 async function saveModel(event) {
@@ -733,7 +634,7 @@ async function saveModel(event) {
   try {
     const url = id ? `/api/models/${id}` : "/api/models";
     const method = id ? "PUT" : "POST";
-    const res = await fetch(url, {
+    const res = await ConsoleAPI.request(url, {
       method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -758,7 +659,7 @@ async function toggleModelStatus(id, enabled) {
 
   try {
     const updatedModel = { ...model, status: enabled ? "available" : "offline" };
-    const res = await fetch(`/api/models/${id}`, {
+    const res = await ConsoleAPI.request(`/api/models/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updatedModel),
@@ -774,7 +675,7 @@ async function toggleModelStatus(id, enabled) {
 async function deleteModel(id) {
   if (!confirm("确定要删除这个模型吗？")) return;
   try {
-    const res = await fetch(`/api/models/${id}`, { method: "DELETE" });
+    const res = await ConsoleAPI.request(`/api/models/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error(await res.text());
     showToast("删除成功");
     await loadModels();
@@ -810,7 +711,7 @@ async function refreshModelsForCurrentChannel() {
   updateRefreshButton();
 
   try {
-    const res = await fetch("/api/models/refresh", {
+    const res = await ConsoleAPI.request("/api/models/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ channel, concurrency: modelRefreshConcurrency }),
@@ -881,7 +782,7 @@ async function deleteOfflineModelsForCurrentChannel() {
   try {
     for (const model of targets) {
       try {
-        const res = await fetch(`/api/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
+        const res = await ConsoleAPI.request(`/api/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
         if (!res.ok) throw new Error(await res.text());
         deleted += 1;
       } catch (err) {

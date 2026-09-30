@@ -1,6 +1,6 @@
 {{define "page-accounts"}}
 {{template "doc-head.html" .}}
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v={{.AssetVersion}}">
+  {{template "page-styles.html" .}}
   <link rel="stylesheet" href="{{.AdminPath}}/css/accounts.css?v={{.AssetVersion}}">
 </head>
 
@@ -105,7 +105,7 @@
   {{template "account-modal.html" .}}
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js?v={{.AssetVersion}}"></script>
+  {{template "page-scripts.html" .}}
   <script src="{{.AdminPath}}/js/provider-registry.js?v={{.AssetVersion}}"></script>
   <script src="{{.AdminPath}}/js/device-auth.js?v={{.AssetVersion}}"></script>
   <script src="{{.AdminPath}}/js/workbuddy-auth.js?v={{.AssetVersion}}"></script>

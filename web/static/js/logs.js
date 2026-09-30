@@ -4,6 +4,8 @@
 // redacted summary the server produced; a diagnostic entry renders the captured
 // chain of the request — the per-request files that used to live under debug-logs/.
 (function () {
+  const { el, make, attach } = ConsoleUI;
+
   // loadSeq numbers the page loads. A filter change can be answered out of order —
   // switching to 操作日志 while the request list is still in flight — and the older
   // answer must not overwrite the newer one.
@@ -214,9 +216,7 @@
   // bundle), but it is no longer a list of its own.
   const DIAGNOSTIC_INDEX_KIND = 'debug';
 
-  function el(id) {
-    return document.getElementById(id);
-  }
+
 
   function text(value, fallback) {
     if (value === undefined || value === null || value === '') return fallback || '—';
@@ -227,17 +227,9 @@
   // The detail panel and the row list are built from the same three statements
   // (create, class, text) over and over, so those live here once: a class name is
   // written once and the render functions read as WHAT they draw.
-  function make(tag, className, value) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (value !== undefined && value !== null) node.textContent = value;
-    return node;
-  }
 
-  function attach(parent, children) {
-    (children || []).forEach((child) => { if (child) parent.appendChild(child); });
-    return parent;
-  }
+
+
 
   // note is the muted one-line paragraph used for every "no data", "why this is
   // empty" and "this read failed" message in the page.
@@ -737,7 +729,7 @@
     }
     body.replaceChildren();
     try {
-      const response = await fetch('/api/journal/diagnostics?request_id=' + encodeURIComponent(requestID), {
+      const response = await ConsoleAPI.request('/api/journal/diagnostics?request_id=' + encodeURIComponent(requestID), {
         credentials: 'same-origin',
       });
       if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -834,7 +826,7 @@
     // question (a previous tab, or a previous filter) and is dropped when it lands.
     const seq = ++state.loadSeq;
     try {
-      const response = await fetch('/api/journal/records?' + params.toString(), { credentials: 'same-origin' });
+      const response = await ConsoleAPI.request('/api/journal/records?' + params.toString(), { credentials: 'same-origin' });
       if (seq !== state.loadSeq) return;
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
@@ -974,7 +966,7 @@
     async function update(save) {
       button.disabled = true;
       try {
-        const response = await fetch('/api/journal/diagnostics/settings', save ? {
+        const response = await ConsoleAPI.request('/api/journal/diagnostics/settings', save ? {
           method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: !enabled }),
         } : { credentials: 'same-origin', cache: 'no-store' });

@@ -4,6 +4,8 @@
 // matrix. Every figure that has no sample says so instead of rendering a healthy
 // zero.
 (function () {
+  const { el, make, attach, setText } = ConsoleUI;
+
   const state = {
     window: 180,
     channel: '',
@@ -142,30 +144,17 @@
     if (outcome && OUTCOME_TABS.some((tab) => tab.key === outcome)) state.outcome = outcome;
   }
 
-  function el(id) {
-    return document.getElementById(id);
-  }
 
-  function setText(id, value) {
-    const node = el(id);
-    if (node) node.textContent = value;
-  }
+
+
 
   // --- element builders ------------------------------------------------------
   // Nearly every element this page draws is the same three statements (create,
   // class, text). These own that shape so the render functions read as WHAT they
   // draw instead of how, and so a class name is written once.
-  function make(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = text;
-    return node;
-  }
 
-  function attach(parent, children) {
-    (children || []).forEach((child) => { if (child) parent.appendChild(child); });
-    return parent;
-  }
+
+
 
   // An empty box and a broken one look alike, so both say which they are. Every
   // empty chart, table and resource row goes through these two.
@@ -704,6 +693,19 @@
   function renderHero(payload) {
     const totals = payload.totals || {};
     state.overview = payload;
+    if (payload.available === false) {
+      ['Qps', 'Tps'].forEach((metric) => ['Now', 'Peak', 'Avg'].forEach((period) => setText('opsLive' + metric + period, '未采集')));
+      setText('opsGaugeValue', '—');
+      setText('opsGaugeLabel', '未采集');
+      setText('opsGaugeState', '指标不可用');
+      setText('opsGaugeSub', '等待有效数据');
+      setText('opsHeroHint', '当前未获得指标数据');
+      const gauge = el('opsGaugeRing');
+      if (gauge) gauge.style.background = 'var(--surface-3)';
+      const spark = el('opsSpark');
+      if (spark) emptyNote(spark, '指标未采集');
+      return;
+    }
     const buckets = liveBuckets(state.liveWindow);
     // rateSeries turns the minute buckets into one line of points: per-second
     // rates, because the bucket still in progress covers fewer than 60 seconds.
@@ -859,6 +861,13 @@
   }
 
   function renderTrends(payload) {
+    if (payload.available === false) {
+      ['opsSwitchTrend', 'opsThroughput', 'opsErrorTrend'].forEach((id) => {
+        const node = el(id);
+        if (node) emptyNote(node, '指标未采集');
+      });
+      return;
+    }
     const points = trendBuckets();
     // rateSeries is the per-second rate of a bucket count: the bucket still in
     // progress covers fewer seconds, so an idle minute must not read as 0/min.
@@ -932,6 +941,15 @@
   }
 
   function renderDistributions(payload) {
+    if (payload.available === false) {
+      ['opsHistogram', 'opsErrorMix'].forEach((id) => {
+        const node = el(id);
+        if (node) emptyNote(node, '指标未采集');
+      });
+      setText('opsHistogramHint', '未采集');
+      setText('opsErrorMixHint', '未采集');
+      return;
+    }
     const totals = payload.totals || {};
     const histogram = el('opsHistogram');
     const errorMix = el('opsErrorMix');
@@ -1013,7 +1031,7 @@
     body.replaceChildren();
     try {
       const params = assignParams(new URLSearchParams({ kind: 'system', action: 'alert_', limit: '50' }), { channel });
-      const response = await fetch('/api/journal/records?' + params.toString(), { credentials: 'same-origin' });
+      const response = await ConsoleAPI.request('/api/journal/records?' + params.toString(), { credentials: 'same-origin' });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
       const rows = (payload.data || []).filter((record) => {
@@ -1265,17 +1283,22 @@
       return;
     }
     state.loading = true;
+    const scope = { window: state.window, channel: state.channel };
     if (!state.overview) renderSkeletons();
     setStatus('读取中…', 'is-warn');
     syncUrl();
     try {
       const params = assignParams(new URLSearchParams({ window: String(state.window) }), { channel: state.channel });
       const [overviewResponse, runtimeResponse] = await Promise.all([
-        fetch('/api/ops/overview?' + params.toString(), { credentials: 'same-origin' }),
-        fetch('/api/ops/runtime', { credentials: 'same-origin' }).catch(() => null),
+        ConsoleAPI.request('/api/ops/overview?' + params.toString(), { credentials: 'same-origin' }),
+        ConsoleAPI.request('/api/ops/runtime', { credentials: 'same-origin' }).catch(() => null),
       ]);
       if (!overviewResponse.ok) throw new Error('HTTP ' + overviewResponse.status);
       const payload = await overviewResponse.json();
+      const runtimePayload = runtimeResponse && runtimeResponse.ok
+        ? await runtimeResponse.json().catch(() => null) : null;
+      // A queued filter change owns the screen; never paint the previous scope.
+      if (scope.window !== state.window || scope.channel !== state.channel) return;
       state.overview = payload;
       renderKpis(payload);
       renderHero(payload);
@@ -1286,12 +1309,21 @@
       renderCoverage(payload);
       updateChannelOptions(payload.channels, state.channel);
       updateModelOptions(payload.matrix, state.model);
-      if (runtimeResponse && runtimeResponse.ok) renderResources(await runtimeResponse.json());
+      if (runtimePayload) renderResources(runtimePayload);
       else renderResources({ available: false, note: '运行时指标读取失败。' });
       setText('opsRefreshedAt', fmtClock(new Date()));
       setStatus('就绪', '');
       state.countdown = state.refreshSeconds;
     } catch (error) {
+      if (scope.window !== state.window || scope.channel !== state.channel) return;
+      if (!state.overview) {
+        renderHero({ available: false });
+        renderResources({ available: false, note: '运行时指标尚未读取成功。' });
+        ['opsConcurrency', 'opsErrorMix', 'opsHistogram', 'opsSwitchTrend', 'opsThroughput', 'opsErrorTrend'].forEach((id) => {
+          const node = el(id);
+          if (node) emptyNote(node, '指标读取失败，请刷新重试。');
+        });
+      }
       const container = el('opsKpis');
       if (container) {
         container.replaceChildren();

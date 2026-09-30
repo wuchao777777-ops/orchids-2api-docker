@@ -1,8 +1,83 @@
-/* Account management. Loaded after main.css; tokens come from there. */
+/* API Console: accounts.css */
+.accounts-table tbody tr:last-child td { border-bottom: 0; }
 
-/* -----------------------------------------------------------------------------
-   Toolbar: platform switch on the left, actions grouped on the right
-   -------------------------------------------------------------------------- */
+.account-tier-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 22px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  background: var(--idle-soft);
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.account-tier-tag { color: var(--text-soft); }
+
+.accounts-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px var(--space-3);
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.accounts-table tbody td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-soft);
+  vertical-align: middle;
+}
+
+.accounts-panel {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.accounts-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.accounts-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.82rem;
+}
+
+.accounts-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+.account-identity-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.accounts-stats { margin-bottom: var(--space-4); }
+
+.accounts-actions .accounts-action-cluster.is-danger { background: var(--bad-soft); }
+
+.account-cooldown-until { white-space: nowrap; }
+
+.accounts-table .col-check { width: 40px; }
+
 .accounts-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -33,9 +108,6 @@
   color: var(--accent);
 }
 
-/* The action group stays contiguous: export / bulk / primary are three visually
-   separated clusters, not items scattered across the row. */
-
 .accounts-actions .accounts-action-cluster {
   display: inline-flex;
   align-items: center;
@@ -44,10 +116,6 @@
   border-radius: var(--radius-md);
   background: var(--surface-1);
 }
-
-/* -----------------------------------------------------------------------------
-   Table: identity first, compact rows
-   -------------------------------------------------------------------------- */
 
 .accounts-table tbody tr:hover td { background: var(--surface-2); }
 
@@ -59,30 +127,29 @@
 }
 
 .accounts-table .col-tier { width: 132px; }
+
 .accounts-table .col-quota { width: 148px; }
+
 .accounts-table .col-status { width: 140px; }
-/* A spend column is read by comparing it with the same column in another row, so
-   it is right-aligned and monospaced like the request count beside it. */
+
 .accounts-table .col-tokens {
   width: 118px;
   text-align: right;
   font-family: var(--font-mono);
   font-size: 0.76rem;
 }
+
 .accounts-table .col-usage { width: 96px; text-align: right; }
+
 .accounts-table .col-created {
   width: 100px;
   color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: 0.74rem;
 }
+
 .accounts-table .col-actions { width: 190px; text-align: right; }
 
-/* The recovery line sits under the status badge: it says when a cooled account
-   comes back, so the badge alone never reads as a permanent verdict. */
-
-/* Identity: the address/identifier is the row's subject; the credential summary
-   is supporting detail underneath, never the headline. */
 .account-identity {
   display: flex;
   flex-direction: column;
@@ -99,7 +166,6 @@
   white-space: nowrap;
 }
 
-/* The channel pill on each row comes from main.css (.badge .badge-<channel>). */
 .account-identity-sub .badge { height: 20px; font-size: 0.68rem; }
 
 .account-identity-token {
@@ -119,8 +185,6 @@
 }
 
 .account-usage-when { color: var(--text-muted); font-size: 0.72rem; }
-
-/* Row actions: small text buttons with a visible boundary, not bare abbreviations. */
 
 .accounts-row-actions .action-icon {
   display: inline-flex;
@@ -147,11 +211,8 @@
 }
 
 .accounts-row-actions .action-icon.is-danger { color: var(--bad); border-color: rgba(251, 113, 133, 0.32); }
-.accounts-row-actions .action-icon.is-danger:hover { background: var(--bad-soft); color: #ffd6de; }
 
-/* -----------------------------------------------------------------------------
-   Stat cards read as one band, connected to the table below
-   -------------------------------------------------------------------------- */
+.accounts-row-actions .action-icon.is-danger:hover { background: var(--bad-soft); color: #ffd6de; }
 
 .accounts-stats .stat-card { min-height: 80px; }
 
@@ -162,9 +223,6 @@
 
 .accounts-panel .table-wrap { max-height: 68vh; overflow: auto; }
 
-/* -----------------------------------------------------------------------------
-   Import status + mobile cards
-   -------------------------------------------------------------------------- */
 .account-import-status {
   margin-top: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -177,90 +235,57 @@
 }
 
 .account-import-status.is-active { border-color: var(--info); background: var(--info-soft); }
+
 .account-import-status.is-error { border-color: var(--bad); background: var(--bad-soft); }
+
 .account-import-status strong { color: var(--text-main); }
 
-.account-mobile-check {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-main);
-  font-weight: 600;
-}
-
-.account-mobile-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); }
-
-.account-mobile-token .token-text {
-  display: block;
-  overflow: hidden;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.account-mobile-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-
-.account-mobile-label {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.account-mobile-value,
-.account-mobile-inline { color: var(--text-main); font-size: 0.86rem; min-width: 0; }
-
-.account-mobile-identity {
-  color: var(--text-main);
-  font-size: 0.9rem;
-  font-weight: 650;
-  word-break: break-all;
-}
-
 @media (max-width: 900px) {
-  .accounts-toolbar { align-items: stretch; }
-  .accounts-actions { justify-content: flex-start; }
-  .accounts-actions .accounts-action-cluster { width: 100%; justify-content: space-between; }
+.accounts-toolbar { align-items: stretch; }
+
+.accounts-actions { justify-content: flex-start; }
+
+.accounts-actions .accounts-action-cluster { width: 100%; justify-content: space-between; }
 }
 
-@media (max-width: 640px) {
-  .account-mobile-grid { grid-template-columns: 1fr; }
-}
-
-/* -----------------------------------------------------------------------------
-   Wide screens (27" 2560x1440, 4K, ultrawide)
-   --------------------------------------------------------------------------
-   The table has fixed-width columns for tier / quota / status / actions plus a
-   fluid identity cell, so on a 2270px column the identity cell absorbs ~1700px
-   and the row reads as one very long email. Raising the fixed columns hands the
-   extra width to the structured cells and gives the identity cell a sane
-   measure; the row height comes from main.css's own density step.
-
-   min-width only: the phone rules above are max-width and keep winning there.
-   -------------------------------------------------------------------------- */
 @media (min-width: 1800px) {
-  .accounts-table { font-size: 0.86rem; }
-  .accounts-table .col-tier { width: 160px; }
-  .accounts-table .col-quota { width: 180px; }
-  .accounts-table .col-status { width: 150px; }
-  .accounts-table .col-tokens { width: 140px; }
-  .accounts-table .col-created { width: 116px; }
-  .accounts-table .col-usage { width: 120px; }
-  .accounts-table .col-actions { width: 230px; }
+.accounts-table { font-size: 0.86rem; }
+
+.accounts-table .col-tier { width: 160px; }
+
+.accounts-table .col-quota { width: 180px; }
+
+.accounts-table .col-status { width: 150px; }
+
+.accounts-table .col-tokens { width: 140px; }
+
+.accounts-table .col-created { width: 116px; }
+
+.accounts-table .col-usage { width: 120px; }
+
+.accounts-table .col-actions { width: 230px; }
 }
 
 @media (min-width: 2200px) {
-  .accounts-table { font-size: 0.9rem; }
-  .accounts-table thead th { padding: 12px var(--space-4); font-size: 0.76rem; }
-  .accounts-table tbody td { padding: 10px var(--space-4); }
-  .accounts-table .col-id { width: 68px; }
-  .accounts-table .col-tier { width: 190px; }
-  .accounts-table .col-quota { width: 220px; }
-  .accounts-table .col-status { width: 170px; }
-  .accounts-table .col-tokens { width: 160px; }
-  .accounts-table .col-created { width: 132px; }
-  .accounts-table .col-usage { width: 150px; }
-  .accounts-table .col-actions { width: 270px; }
+.accounts-table { font-size: 0.9rem; }
+
+.accounts-table thead th { padding: 12px var(--space-4); font-size: 0.76rem; }
+
+.accounts-table tbody td { padding: 10px var(--space-4); }
+
+.accounts-table .col-id { width: 68px; }
+
+.accounts-table .col-tier { width: 190px; }
+
+.accounts-table .col-quota { width: 220px; }
+
+.accounts-table .col-status { width: 170px; }
+
+.accounts-table .col-tokens { width: 160px; }
+
+.accounts-table .col-created { width: 132px; }
+
+.accounts-table .col-usage { width: 150px; }
+
+.accounts-table .col-actions { width: 270px; }
 }

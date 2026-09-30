@@ -28,6 +28,7 @@ var modelListRoutes = []struct {
 	path   string
 	body   string
 }{
+	{method: http.MethodGet, path: "/algo/api/v2/model/list?Encode=1"},
 	{method: http.MethodGet, path: "/algo/api/v2/model/list"},
 	{method: http.MethodGet, path: "/algo/api/v2/model/list?FetchKeys=llm_model_result&Encode=1"},
 }

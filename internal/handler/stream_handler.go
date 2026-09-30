@@ -825,12 +825,21 @@ func (h *streamHandler) applyUpstreamUsageTokens(usage map[string]interface{}) {
 	reasoning, hasReasoning := read("reasoningTokens", "reasoning_tokens")
 	_, hasCredits := usage["credits"]
 	_, hasOriginalCredits := usage["original_credits"]
-	if !hasInput && !hasOutput && !hasCached && !hasCacheWrite && !hasReasoning && !hasCredits && !hasOriginalCredits {
+	metadataKeys := []string{"billable", "cacheable_tokens", "firstTokenDuration", "totalDuration", "serverDuration"}
+	hasMetadata := false
+	for _, key := range metadataKeys {
+		if _, ok := usage[key]; ok {
+			hasMetadata = true
+		}
+	}
+	if !hasInput && !hasOutput && !hasCached && !hasCacheWrite && !hasReasoning && !hasCredits && !hasOriginalCredits && !hasMetadata {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.useUpstreamUsage = true
+	if hasInput || hasOutput || hasCached || hasCacheWrite || hasReasoning || hasCredits || hasOriginalCredits {
+		h.useUpstreamUsage = true
+	}
 	if hasInput {
 		h.inputTokens = input
 	}
@@ -846,9 +855,14 @@ func (h *streamHandler) applyUpstreamUsageTokens(usage map[string]interface{}) {
 	if hasReasoning {
 		h.reasoningTokens = reasoning
 	}
-	if hasCredits || hasOriginalCredits {
+	if hasCredits || hasOriginalCredits || hasMetadata {
 		if h.usageMetadata == nil {
-			h.usageMetadata = make(map[string]interface{}, 2)
+			h.usageMetadata = make(map[string]interface{}, 7)
+		}
+		for _, key := range metadataKeys {
+			if value, ok := usage[key]; ok {
+				h.usageMetadata[key] = value
+			}
 		}
 		if hasCredits {
 			h.usageMetadata["credits"] = usage["credits"]

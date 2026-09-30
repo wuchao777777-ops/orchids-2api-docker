@@ -151,7 +151,7 @@ func TestDefaultUpstreamEndpoints(t *testing.T) {
 	if got, wantURL := chatURL(c.endpoints.inference), "https://api2.qoder.sh"+inferPath+inferQuery; got != wantURL {
 		t.Fatalf("chatURL() = %q, want %q", got, wantURL)
 	}
-	if got, wantURL := c.endpoints.inference+modelListRoutes[0].path, "https://api2.qoder.sh/algo/api/v2/model/list"; got != wantURL {
+	if got, wantURL := c.endpoints.inference+modelListRoutes[0].path, "https://api2.qoder.sh/algo/api/v2/model/list?Encode=1"; got != wantURL {
 		t.Fatalf("catalog url = %q, want %q", got, wantURL)
 	}
 	// The skill-cli dialect uses a different client identity but the same node.

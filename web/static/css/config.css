@@ -1,28 +1,30 @@
-/* 配置管理 (Config).
-   Loaded after main.css; every colour, space and radius below comes from the
-   token set documented at the top of main.css. No raw hex, no rgba() except
-   translucent state overlays (--accent-soft / --warn-soft / --info-soft).
+/* API Console: config.css */
+.settings-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-color);
+}
 
-   Structure of the page:
-     shell  → secondary tab switch (基础配置 / API Key 管理)
-            → two-column body: sticky group nav + grouped settings cards
-            → sticky save bar carrying the unsaved-change count.
+.config-section-shell { padding: var(--space-5); }
 
-   Sections: 1 shell & switch · 2 layout & nav · 3 cards & rows · 4 secret
-   fields · 5 cache details & estimates · 6 save bar · 7 API key list
-   8 responsive */
+.config-tabs-shell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 
-/* -----------------------------------------------------------------------------
-   1. Shell & secondary switch
-   -------------------------------------------------------------------------- */
+.config-page { padding-bottom: var(--space-10); }
 
-/* The basic tab is one long column: nav + cards + the sticky save bar. The
-   inline display:block/none that config.js writes for tab switching stays the
-   only thing that hides it. */
 .config-body { display: block; }
 
-/* 基础配置 / API Key 管理 is a secondary switch: the group nav inside the basic
-   tab is what actually navigates the settings. */
 .config-tabs-switch {
   gap: var(--space-2);
   margin-bottom: var(--space-5);
@@ -34,9 +36,6 @@
 
 .config-tabs-switch .tab-item { background: transparent; }
 
-/* -----------------------------------------------------------------------------
-   2. Layout & group nav
-   -------------------------------------------------------------------------- */
 .config-layout {
   display: grid;
   grid-template-columns: minmax(180px, 216px) minmax(0, 1fr);
@@ -50,8 +49,6 @@
   min-width: 0;
 }
 
-/* align-self: start is what lets the nav stay stuck instead of stretching to the
-   height of the card column. */
 .config-nav {
   position: sticky;
   top: var(--space-4);
@@ -67,7 +64,6 @@
   overflow-y: auto;
 }
 
-/* --text-secondary, not --text-muted: this line is below 12px. */
 .config-nav-head {
   padding: 0 var(--space-2) var(--space-2);
   color: var(--text-secondary);
@@ -99,9 +95,6 @@
   font-weight: 650;
 }
 
-/* -----------------------------------------------------------------------------
-   3. Grouped cards & setting rows
-   -------------------------------------------------------------------------- */
 .settings-card {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -111,7 +104,6 @@
 
 .settings-card-title { font-size: 0.98rem; }
 
-/* One-line explanation under the card title. */
 .settings-card-note {
   padding: var(--space-3) var(--space-5) 0;
   color: var(--text-secondary);
@@ -121,9 +113,6 @@
 
 .settings-card-head .settings-card-note { padding: 0; }
 
-/* One row per setting: label and explanation on the left, control on the right.
-   .form-row already provides the two-column grid; these rules only stack the
-   label block and keep the control column from stretching the page. */
 .settings-card-body {
   display: grid;
   gap: var(--space-5);
@@ -132,21 +121,7 @@
 }
 
 .form-row-control > .form-input,
-.form-row-control > .input-wrapper,
-.form-row-control > .config-subsection { max-width: 560px; }
-
-/* Toggle rows keep the switch beside the label it belongs to, with its state
-   sentence on the same line. */
-.config-toggle-control {
-  flex-direction: row;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.config-toggle-hint {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-}
+.form-row-control > .input-wrapper { max-width: 560px; }
 
 .config-inline-tags {
   flex-direction: row;
@@ -155,17 +130,6 @@
   gap: var(--space-2);
 }
 
-.config-row-stack {
-  align-items: flex-start;
-  gap: var(--space-3);
-}
-
-/* -----------------------------------------------------------------------------
-   4. Secret fields
-   -------------------------------------------------------------------------- */
-/* Password, admin token, proxy credentials and API keys all
-   carry credentials, so they share one accent: a distinct border plus a 密钥
-   badge instead of looking like any other text input. */
 .secret-field {
   border-color: var(--accent-line);
   border-left: 3px solid var(--accent);
@@ -184,8 +148,6 @@
   box-shadow: var(--shadow-glow);
 }
 
-/* Room for the absolutely positioned .password-toggle that main.css pins to the
-   right edge of .input-wrapper. */
 .input-wrapper.secret-shell .form-input { padding-right: var(--space-8); }
 
 .secret-badge {
@@ -204,50 +166,6 @@
   white-space: nowrap;
 }
 
-/* -----------------------------------------------------------------------------
-   5. Cache details & memory estimates
-   -------------------------------------------------------------------------- */
-/* config.js toggles this box with an inline display:block/none, so its children
-   stack with margins rather than a flex/grid gap. */
-.config-cache-details {
-  padding: var(--space-4);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
-}
-
-.config-cache-details > * + * { margin-top: var(--space-5); }
-
-.config-subsection .form-label { margin-bottom: var(--space-2); }
-
-.estimate-note {
-  margin-top: var(--space-2);
-  color: var(--text-secondary);
-  font-size: 0.76rem;
-  line-height: 1.6;
-}
-
-/* The risk note for a value that is too high: a warn rail on the estimate panel
-   itself, so the numbers never stand alone. */
-.estimate-note-warn {
-  margin-top: var(--space-3);
-  margin-bottom: var(--space-1);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border-color);
-  border-left: 3px solid var(--warn);
-  border-radius: var(--radius-md);
-  background: var(--warn-soft);
-  color: var(--text-soft);
-}
-
-.estimate-card .estimate-meta { margin-top: var(--space-2); }
-
-.estimate-caption-ok { color: var(--ok); }
-.estimate-caption-warn { color: var(--warn); }
-
-/* -----------------------------------------------------------------------------
-   6. Sticky save bar
-   -------------------------------------------------------------------------- */
 .config-save-bar {
   bottom: var(--space-3);
   flex-wrap: wrap;
@@ -278,49 +196,8 @@
   font-size: 0.78rem;
 }
 
-/* -----------------------------------------------------------------------------
-   7. API key list (rendered by config.js)
-   -------------------------------------------------------------------------- */
 #keysList { overflow-x: auto; }
 
-.config-key-token {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.config-key-token .key-display { min-width: 0; }
-
-.config-key-list {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.config-key-meta {
-  display: grid;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-}
-
-.config-key-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-}
-
-.config-key-actions {
-  display: flex;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-}
-
-.config-key-actions .btn { flex: 1; }
-
-/* A key value is a credential: same accent treatment as .secret-field. */
 .key-display {
   padding: 1px var(--space-2);
   border: 1px solid var(--accent-line);
@@ -330,8 +207,7 @@
   font-family: var(--font-mono);
 }
 
-.config-key-tip,
-.config-key-tip-title { color: var(--text-soft); }
+.config-key-tip { color: var(--text-soft); }
 
 .config-key-tip {
   padding: var(--space-3) var(--space-4);
@@ -343,15 +219,6 @@
   line-height: 1.6;
 }
 
-.config-key-tip-title {
-  margin-bottom: var(--space-1);
-  font-weight: 650;
-}
-
-.config-key-tip-body { line-height: 1.7; }
-
-/* API Key 管理 is one card: the head carries the create action, the body carries
-   the rendered key list. */
 .config-auth-card {
   margin-top: var(--space-5);
   margin-bottom: var(--space-6);
@@ -359,16 +226,13 @@
 
 .config-auth-card .settings-card-head { align-items: flex-start; }
 
-/* -----------------------------------------------------------------------------
-   8. Responsive: the nav becomes a horizontal strip under the mobile top bar
-   -------------------------------------------------------------------------- */
 @media (max-width: 900px) {
-  .config-layout {
+.config-layout {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
   }
 
-  .config-nav {
+.config-nav {
     top: calc(60px + env(safe-area-inset-top));
     z-index: 4;
     flex-direction: row;
@@ -380,9 +244,9 @@
     overflow-y: hidden;
   }
 
-  .config-nav-head { display: none; }
+.config-nav-head { display: none; }
 
-  .config-nav-link {
+.config-nav-link {
     display: inline-flex;
     flex: none;
     align-items: center;
@@ -395,61 +259,50 @@
     white-space: nowrap;
   }
 
-  .config-nav-link.active {
+.config-nav-link.active {
     border-color: var(--accent-line);
     background: var(--accent-soft);
   }
 
-  /* The strip is 60px down and ~46px tall: an anchored card has to clear both
-     the top bar and the strip. */
-  .settings-card { scroll-margin-top: 132px; }
+.settings-card { scroll-margin-top: 132px; }
 
-  .form-row-control > .form-input,
-  .form-row-control > .input-wrapper,
-  .form-row-control > .config-subsection,
-  .form-row-control > textarea.form-input { max-width: none; }
+.form-row-control > .form-input,
+.form-row-control > .input-wrapper,
+.form-row-control > textarea.form-input { max-width: none; }
 }
 
 @media (max-width: 640px) {
-  .settings-card-head,
-  .settings-card-note { padding-right: var(--space-4); padding-left: var(--space-4); }
+.settings-card-head,
+.settings-card-note { padding-right: var(--space-4); padding-left: var(--space-4); }
 
-  .settings-card-body {
+.settings-card-body {
     padding: var(--space-4);
     gap: var(--space-4);
   }
 
-  .config-save-bar {
+.config-save-bar {
     bottom: 0;
     border-radius: var(--radius-md) var(--radius-md) 0 0;
   }
 
-  .config-save-state, .config-save-actions { width: 100%; }
-  .config-save-actions .btn { flex: 1; }
+.config-save-state,
+.config-save-actions { width: 100%; }
+
+.config-save-actions .btn { flex: 1; }
 }
 
-/* -----------------------------------------------------------------------------
-   9. Wide screens
-   --------------------------------------------------------------------------
-   A 560px input is a comfortable measure at 1440px of content; at 2270px — a
-   27" panel — a short value sat in a 560px box with the rest of the row empty
-   and the eye had to travel back the full width to find the next label. The cap
-   is raised with the window and removed once the row is wide enough that the
-   control column is its own measure.
-
-   min-width only: section 8's phone rules are max-width and keep winning there.
-   -------------------------------------------------------------------------- */
 @media (min-width: 1800px) {
-  .form-row-control > .form-input,
-  .form-row-control > .input-wrapper,
-  .form-row-control > .config-subsection { max-width: 720px; }
+.form-row-control > .form-input,
+.form-row-control > .input-wrapper { max-width: 720px; }
 }
 
 @media (min-width: 2200px) {
-  .form-row-control > .form-input,
-  .form-row-control > .input-wrapper,
-  .form-row-control > .config-subsection { max-width: 900px; }
+.form-row-control > .form-input,
+.form-row-control > .input-wrapper { max-width: 900px; }
 
-  .config-layout { grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); gap: var(--space-5); }
-  .settings-card-body { padding: var(--space-5) var(--space-6) var(--space-6); gap: var(--space-6); }
+.config-layout { grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); gap: var(--space-5); }
+
+.settings-card-body { padding: var(--space-5) var(--space-6) var(--space-6); gap: var(--space-6); }
 }
+
+.key-actions { display: flex; flex-wrap: wrap; gap: 6px; }

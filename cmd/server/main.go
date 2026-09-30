@@ -17,6 +17,7 @@ import (
 	"orchids-api/internal/api"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/auth"
+	"orchids-api/internal/buildinfo"
 	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
@@ -29,6 +30,7 @@ import (
 	"orchids-api/internal/provider"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/secureblob"
+	"orchids-api/internal/selfupdate"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 	"orchids-api/internal/workbuddy"
@@ -79,6 +81,17 @@ var wiredStore *store.Store
 var wiredAuditLogger audit.Logger
 
 func main() {
+	if handled, err := selfupdate.RunWatchdogCLI(os.Args[1:]); handled {
+		if err != nil {
+			slog.Error("Upgrade watchdog failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		_ = json.NewEncoder(os.Stdout).Encode(buildinfo.Current())
+		return
+	}
 	configPath := flag.String("config", "", "Path to config.json/config.yaml")
 	flag.Parse()
 
@@ -271,7 +284,7 @@ func main() {
 	// Register routes
 	mux := http.NewServeMux()
 	limiter := middleware.NewConcurrencyLimiter(cfg.ConcurrencyLimit, time.Duration(cfg.ConcurrencyTimeout)*time.Second)
-	registerRoutes(mux, cfg, s, h, grokHandler, apiHandler, limiter, accountTracker, tmplRenderer)
+	updater := registerRoutes(mux, cfg, s, h, grokHandler, apiHandler, limiter, accountTracker, tmplRenderer)
 	trustedProxy, err := middleware.TrustedProxyMiddleware(cfg.TrustedProxies)
 	if err != nil {
 		slog.Error("Invalid trusted proxy configuration", "error", err)
@@ -296,6 +309,7 @@ func main() {
 	// Start background tasks
 	ctx, cancelBackground := context.WithCancel(context.Background())
 	defer cancelBackground()
+	updater.StartBackground(ctx)
 
 	startTokenRefreshLoop(ctx, apiHandler.ConfigSnapshot, s, lb)
 	startModelCatalogRefreshLoop(ctx, apiHandler.ConfigSnapshot, s)

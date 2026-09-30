@@ -107,7 +107,7 @@ test('every admin page links a cache-busted main.css', () => {
   // A literal here is the bug this test exists to catch, so assert on the
   // mechanism rather than on a value.
   for (const page of pages.map((p) => path.join(pageDir, p))) {
-    const html = fs.readFileSync(page, 'utf8');
+    const html = fs.readFileSync(page, 'utf8').replace('{{template "page-styles.html" .}}', fs.readFileSync(path.join(__dirname,'templates/partials/page-styles.html'),'utf8'));
     assert.match(
       html,
       /main\.css\?v=\{\{\.AssetVersion\}\}/,

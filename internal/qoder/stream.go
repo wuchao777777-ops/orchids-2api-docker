@@ -80,6 +80,7 @@ type streamUsage struct {
 	} `json:"completion_tokens_details"`
 	// The gateway bills in credits and reports the discount separately; the
 	// numbers are surfaced so a cost panel can show what a plan actually cost.
+	Billable        *bool    `json:"billable"`
 	Credits         *float64 `json:"credits"`
 	OriginalCredits *float64 `json:"original_credits"`
 }
@@ -338,6 +339,20 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 	readErr := readSSE(body, func(frame sseFrame) bool {
 		if strings.EqualFold(strings.TrimSpace(frame.event), "finish") {
 			sawFinish = true
+			var timings map[string]json.RawMessage
+			if json.Unmarshal([]byte(frame.data), &timings) == nil {
+				for _, key := range []string{"firstTokenDuration", "totalDuration", "serverDuration"} {
+					if raw, ok := timings[key]; ok {
+						var value int64
+						if json.Unmarshal(raw, &value) == nil && value >= 0 {
+							if result.Usage == nil {
+								result.Usage = map[string]interface{}{}
+							}
+							result.Usage[key] = value
+						}
+					}
+				}
+			}
 			return false
 		}
 		if strings.EqualFold(strings.TrimSpace(frame.event), "error") {
@@ -804,12 +819,14 @@ func normalizeUsage(usage *streamUsage) map[string]interface{} {
 			out["cache_read_tokens"] = usage.PromptTokensDetails.CachedTokens
 		}
 		if usage.PromptTokensDetails.CacheableTokens > 0 {
-			out["cacheWriteTokens"] = usage.PromptTokensDetails.CacheableTokens
-			out["cache_creation_input_tokens"] = usage.PromptTokensDetails.CacheableTokens
+			out["cacheable_tokens"] = usage.PromptTokensDetails.CacheableTokens
 		}
 	}
 	if usage.CompletionTokensDetails != nil && usage.CompletionTokensDetails.ReasoningTokens > 0 {
 		out["reasoningTokens"] = usage.CompletionTokensDetails.ReasoningTokens
+	}
+	if usage.Billable != nil {
+		out["billable"] = *usage.Billable
 	}
 	if usage.Credits != nil {
 		out["credits"] = *usage.Credits

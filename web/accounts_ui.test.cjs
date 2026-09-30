@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
+const vm = require('./test-support.cjs');
 
 test('hidden provider sections cannot be made visible by component display rules', () => {
   const css = fs.readFileSync(path.join(__dirname, 'static/css/main.css'), 'utf8');
@@ -34,6 +34,11 @@ function loadUI() {
       dataset: {},
       children,
       reset() {},
+      setAttribute(name,value) { this[name]=String(value); },
+      removeAttribute(name) { delete this[name]; },
+      replaceChildren(...nodes) { children.splice(0,children.length,...nodes); },
+      querySelectorAll() { return []; },
+      querySelector() { return null; },
       addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
       click() { (listeners.click || []).forEach((fn) => fn({ target: this })); },
       appendChild(child) { children.push(child); return child; },
@@ -61,6 +66,8 @@ function loadUI() {
       addEventListener() {},
     },
     window: {
+      isSecureContext: true,
+      location: {href:"http://localhost/admin/"},
       setInterval: (fn) => { timers.push(fn); return timers.length; },
       clearInterval: () => {},
       addEventListener() {},
@@ -73,7 +80,10 @@ function loadUI() {
         removeItem: (key) => storage.delete(key),
       },
     },
+    setInterval: (fn) => { timers.push(fn); return timers.length; },
+    clearInterval() {},
     // Immediate pacing so the auto-sync loop settles synchronously in tests.
+    requestAnimationFrame: (fn) => fn(),
     setTimeout: (fn) => { fn(); return 0; },
   });
   context.fetch = async (url) => {
@@ -106,7 +116,7 @@ function workBuddyAccount(overrides = {}) {
 test('clicking a platform tab makes 添加账号 open in that platform', () => {
   const { context, node } = loadUI();
   vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
   node('accountId').value = '';
   node('enabled').checked = true;
   context.renderPlatformTabs();
@@ -127,7 +137,7 @@ test('clicking a platform tab makes 添加账号 open in that platform', () => {
 test('the active platform tab wins over a stale account-type field', () => {
   const { context, node } = loadUI();
   vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
   node('enabled').checked = true;
   context.renderPlatformTabs();
   context.filterByPlatform('grok');
@@ -141,7 +151,7 @@ test('the active platform tab wins over a stale account-type field', () => {
 test('the visibly highlighted provider wins if in-memory state is stale', () => {
   const { context, node } = loadUI();
   vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
   node('enabled').checked = true;
   context.filterByPlatform('grok');
   node('#platformFilters .tab-item.active').dataset.platform = encodeURIComponent('cline');
@@ -164,7 +174,7 @@ test('the account modal has no manual credential or batch import inputs', () => 
 test('openModal after a tab click renders only that channel official login', () => {
   const { context, node } = loadUI();
   vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
   node('enabled').checked = true;
   context.renderPlatformTabs();
 
@@ -232,7 +242,7 @@ test('loading accounts never starts upstream account checks', async () => {
   context.renderPlatformTabs = () => {};
   context.renderAccounts = () => {};
   context.updateStats = () => {};
-  context.fetch = async () => ({ status: 200, json: async () => [
+  context.fetch = async () => ({ ok:true, status: 200, json: async () => [
     { id: 3, account_type: 'grok', credential_type: 'oauth', grok_provider: 'build', enabled: true },
   ] });
 
@@ -290,7 +300,7 @@ test('opening the WorkBuddy modal never starts a login on its own', () => {
     'globalThis.WorkBuddyLogin = { start() { globalThis.__wbStarted = (globalThis.__wbStarted || 0) + 1; }, stop() {} };',
     context,
   );
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
   node('accountType').value = 'workbuddy';
   node('accountId').value = '';
   node('enabled').checked = true;
@@ -491,7 +501,7 @@ test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login', (
     'globalThis.WorkBuddyLogin = { start() { globalThis.__wbStarted = (globalThis.__wbStarted || 0) + 1; }, stop() {} };',
     context,
   );
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
   node('accountId').value = '';
   node('enabled').checked = true;
   context.renderPlatformTabs();
@@ -517,7 +527,7 @@ test('every platform tab maps to its own provider login surface', () => {
   vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
   vm.runInContext('globalThis.QoderLogin = { start() {}, stop() {} };', context);
   vm.runInContext('globalThis.ClineLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
   node('enabled').checked = true;
   context.renderPlatformTabs();
 
@@ -541,7 +551,7 @@ test('every platform tab maps to its own provider login surface', () => {
 test('Qoder is OAuth-only in the modal: no manual credential field and no PAT entry', () => {
   const { context, node } = loadUI();
   vm.runInContext('globalThis.QoderLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
   node('accountId').value = '';
   node('enabled').checked = true;
   context.filterByPlatform('qoder');
@@ -602,7 +612,7 @@ test('Grok device login keeps its provider URL allowlist isolated', async () => 
       const requests = [];
       const opened = [];
       context.URL = URL;
-      context.window.open = (target) => opened.push(target);
+      context.window.open = () => ({closed:false,close() {this.closed=true;}, location:{replace(target) {opened.push(target);}}});
       context.fetch = async (target, options = {}) => {
         requests.push([target, options.method || 'GET']);
         if (target === scenario.endpoint) return { ok: true, json: async () => ({ id: 'login/id', status: 'pending', user_code: 'ABCD', verification_uri_complete: url }) };
@@ -617,7 +627,7 @@ test('Grok device login keeps its provider URL allowlist isolated', async () => 
       assert.deepEqual(requests.slice(0, 2), [[scenario.endpoint, 'POST'], [`${scenario.endpoint}/login%2Fid`, 'GET']]);
       assert.deepEqual(opened, shouldOpen ? [url] : [], `${scenario.provider}: cross-provider URL must not open`);
       assert.equal(node(scenario.buttonId).disabled, false);
-      assert.match(node(scenario.statusId).innerHTML, new RegExp(`${scenario.provider} 账号已添加`));
+      assert.match(node(scenario.statusId).textContent, /授权完成/);
     }
   }
 });
@@ -638,6 +648,7 @@ test('the shared device login lifecycle preserves cancellation and ignores stale
       return new Promise((resolve) => { releasePoll = () => resolve({ ok: true, json: async () => ({ status: 'complete' }) }); });
     };
     await vm.runInContext(scenario.start, context);
+    await new Promise((resolve) => setImmediate(resolve));
     vm.runInContext(scenario.stop, context);
     assert.deepEqual(requests.at(-1), [`${scenario.endpoint}/cancel-me`, 'DELETE']);
     releasePoll();
@@ -985,7 +996,7 @@ test('账号管理 and 运维总览 count the same 异常 accounts from one pred
   assert.equal(rows.filter(context.isSidebarAccountAbnormal).length, sidebar.abnormal);
 
   const source = fs.readFileSync(path.join(__dirname, 'static/js/accounts.js'), 'utf8');
-  assert.match(source, /const abnormal = accounts\.filter\(isSidebarAccountAbnormal\)\.length;/);
+  assert.match(source, /const stats = computeSidebarAccountStats\(accounts\);/);
 
   // The row badge agrees: a drained allowance is an orange business limit, not a
   // red fault, and the 清空异常 button therefore leaves those rows alone.

@@ -2,6 +2,8 @@
 // shown here is the policy in force: no translation layer between the form and
 // the engine, and the same endpoint the overview's alert counters come from.
 (function () {
+  const { el, make, attach } = ConsoleUI;
+
   const state = { rules: null, defaults: null, editable: true };
 
   // FIELDS describes the policy. Each entry states the unit, the range and why the
@@ -48,22 +50,12 @@
     },
   ];
 
-  function el(id) {
-    return document.getElementById(id);
-  }
+
 
   // --- element builders ------------------------------------------------------
-  function make(tag, className, value) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (value !== undefined && value !== null) node.textContent = value;
-    return node;
-  }
 
-  function attach(parent, children) {
-    (children || []).forEach((child) => { if (child) parent.appendChild(child); });
-    return parent;
-  }
+
+
 
   function fmtRatio(value) {
     return (Number(value || 0) * 100).toFixed(1) + '%';
@@ -211,7 +203,7 @@
   async function loadRules() {
     setState('读取中…');
     try {
-      const response = await fetch('/api/ops/alerts/rules', { credentials: 'same-origin' });
+      const response = await ConsoleAPI.request('/api/ops/alerts/rules', { credentials: 'same-origin' });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
       state.rules = payload.rules || {};
@@ -239,7 +231,7 @@
     }
     setState('保存中…');
     try {
-      const response = await fetch('/api/ops/alerts/rules', {
+      const response = await ConsoleAPI.request('/api/ops/alerts/rules', {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -283,7 +275,7 @@
     body.replaceChildren();
     try {
       const params = new URLSearchParams({ kind: 'system', action: 'alert_', limit: '20' });
-      const response = await fetch('/api/journal/records?' + params.toString(), { credentials: 'same-origin' });
+      const response = await ConsoleAPI.request('/api/journal/records?' + params.toString(), { credentials: 'same-origin' });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
       const rows = (payload.data || []).filter((record) => {

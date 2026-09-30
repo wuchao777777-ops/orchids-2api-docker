@@ -11,12 +11,14 @@ import (
 
 	"orchids-api/internal/api"
 	"orchids-api/internal/auth"
+	"orchids-api/internal/buildinfo"
 	"orchids-api/internal/channel"
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/handler"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/selfupdate"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 	"orchids-api/web"
@@ -41,7 +43,7 @@ func registerRoutes(
 	limiter *middleware.ConcurrencyLimiter,
 	accountTracker loadbalancer.ConnTracker,
 	tmplRenderer *template.Renderer,
-) {
+) *selfupdate.Manager {
 	mux := http.NewServeMux()
 	currentConfig := func() *config.Config {
 		if current := apiHandler.ConfigSnapshot(); current != nil {
@@ -232,6 +234,12 @@ func registerRoutes(
 	mux.HandleFunc("/api/models/", sessionAuth(apiHandler.HandleModelByID))
 	mux.HandleFunc("/api/export", sessionAuth(apiHandler.HandleExport))
 	mux.HandleFunc("/api/import", sessionAuth(apiHandler.HandleImport))
+	updater := selfupdate.New(cfg.Port)
+	mux.HandleFunc("/api/system/version", sessionAuth(updater.HandleVersion))
+	mux.HandleFunc("/api/system/check-updates", sessionAuth(updater.HandleCheck))
+	mux.HandleFunc("/api/system/operation", sessionAuth(updater.HandleStatus))
+	mux.HandleFunc("/api/system/update", sessionAuth(updater.HandleAction("update")))
+	mux.HandleFunc("/api/system/rollback", sessionAuth(updater.HandleAction("rollback")))
 	mux.HandleFunc("/api/config/list", sessionAuth(apiHandler.HandleConfigList))
 	mux.HandleFunc("/api/config/save", sessionAuth(apiHandler.HandleConfigSave))
 	// Operations monitoring: the overview, the channel × model matrix and the
@@ -276,6 +284,7 @@ func registerRoutes(
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":    "ok",
 			"providers": providers,
+			"build":     buildinfo.Current(),
 		})
 	})
 	mux.Handle("/metrics", promhttp.Handler())
@@ -299,6 +308,7 @@ func registerRoutes(
 		}
 		mux.ServeHTTP(w, r)
 	})
+	return updater
 }
 
 func registerAdminUI(mux *http.ServeMux, cfg *config.Config, currentConfig func() *config.Config, s *store.Store, staticRootHandler http.Handler, tmplRenderer *template.Renderer) {

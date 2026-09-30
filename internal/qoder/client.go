@@ -153,31 +153,11 @@ func (c *Client) aliyunUserType() string {
 	return ""
 }
 
-// applyFingerprint resolves the device headers this client sends.
-//
-// The machine id is the identity the login was authorized under and stays as
-// recorded, but the token and the type are derived from the account so the
-// device is the same one on every request and every restart: a device that
-// changes under a live credential is what the upstream throttles.
+// applyFingerprint preserves the QoderWork login device identity.
 func (c *Client) applyFingerprint() {
-	if c.protocol.machineTokenIsID {
-		c.machineToken = c.machineID
-		c.machineType = machineSceneType
-		return
-	}
-	creds := c.creds
-	if c.account != nil {
-		creds = ResolveCredentials(c.account)
-	}
-	device := FingerprintFor(c.machineID, creds.UID, creds.AccessToken)
-	if device.Token == "" {
-		device.Token = c.machineID
-	}
-	if device.Type == "" {
-		device.Type = machineSceneType
-	}
-	c.machineToken = device.Token
-	c.machineType = device.Type
+	// QoderWork binds the machine token to the login device ID in both profiles.
+	c.machineToken = c.machineID
+	c.machineType = machineSceneType
 }
 
 // SetAccountStore lets the client persist a rotated refresh token and a newly

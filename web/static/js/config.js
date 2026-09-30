@@ -1,18 +1,11 @@
+const { make, attach, setText } = ConsoleUI;
 // Configuration management JavaScript
 
 // ── element builders ─────────────────────────────────────────────────────────
 // The API Key list uses small DOM builders to keep rendering readable.
-function make(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined && text !== null) node.textContent = text;
-  return node;
-}
 
-function attach(parent, children) {
-  (children || []).forEach((child) => { if (child) parent.appendChild(child); });
-  return parent;
-}
+
+
 
 // styled applies a CSS declaration block. Inline styles are kept where they are
 // (a one-off cell width or colour), not replaced by a class on the page's sheet.
@@ -21,10 +14,7 @@ function styled(node, styles) {
   return node;
 }
 
-function setText(id, value) {
-  const node = document.getElementById(id);
-  if (node) node.textContent = value == null ? "" : String(value);
-}
+
 
 // setValue / setChecked guard every control write: a page section that is not
 // rendered (or a template that changes) must not throw on load.
@@ -35,19 +25,9 @@ function setValue(id, value) {
 
 // openModal / closeModal are the two states of every dialog on this page: the
 // .active class drives the transition and display carries the layout.
-function openModal(id) {
-  const modal = document.getElementById(id);
-  if (!modal) return;
-  modal.classList.add("active");
-  modal.style.display = "flex";
-}
+function openModal(id) { ConsoleUI.modal(id, true); }
 
-function closeModal(id) {
-  const modal = document.getElementById(id);
-  if (!modal) return;
-  modal.classList.remove("active");
-  modal.style.display = "none";
-}
+function closeModal(id) { ConsoleUI.modal(id, false); }
 
 let apiKeys = [];
 let createdKeys = [];
@@ -282,24 +262,11 @@ function applyConfigurationPayload(cfg) {
 
 async function loadConfiguration() {
   try {
-    const res = await fetch("/api/config/list", { credentials: "same-origin", cache: "no-store" });
-    if (res.status === 401 || res.status === 403) {
-      window.location.href = "./login.html";
-      return false;
+    const payload = await ConsoleAPI.json('/api/config/list', { cache: 'no-store' });
+    if (payload && typeof payload.code !== 'undefined' && payload.code !== 0) {
+      throw new Error(ConsoleAPI.detail(payload, '加载配置失败'));
     }
-    const contentType = res.headers?.get?.("content-type") || "";
-    if (!res.ok) {
-      const detail = (await res.text()).trim();
-      throw new Error(detail || `HTTP ${res.status}`);
-    }
-    if (!contentType.toLowerCase().includes("application/json")) {
-      throw new Error("配置接口未返回 JSON，登录状态可能已失效");
-    }
-    const payload = await res.json();
-    if (payload && typeof payload.code !== "undefined" && payload.code !== 0) {
-      throw new Error(payload.message || payload.msg || "加载配置失败");
-    }
-    applyConfigurationPayload(payload && payload.data ? payload.data : payload);
+    applyConfigurationPayload(payload?.data ?? payload);
     setConfigSaveError("");
     return true;
   } catch (err) {
@@ -333,7 +300,7 @@ async function saveConfiguration() {
   }
 
   try {
-    const res = await fetch("/api/config/save", {
+    const res = await ConsoleAPI.request("/api/config/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data)
@@ -365,12 +332,7 @@ async function saveConfiguration() {
 // Load API Keys
 async function loadApiKeys() {
   try {
-    const res = await fetch("/api/keys");
-    if (res.status === 401) {
-      window.location.href = "./login.html";
-      return;
-    }
-    apiKeys = (await res.json()) || [];
+    apiKeys = await ConsoleAPI.json('/api/keys', {}, { array: true });
     renderApiKeys();
     // The key rows carry switches: paint them from their checkbox state.
     syncAllToggleStates();
@@ -421,10 +383,6 @@ function renderApiKeys() {
     return;
   }
 
-  if (window.matchMedia("(max-width: 640px)").matches) {
-    renderApiKeysMobile(container);
-    return;
-  }
 
   const headRow = attach(make("tr"), ["Token", "状态", "访问策略", "最后使用", "操作"].map((label) => make("th", "", label)));
   const table = attach(document.createElement("table"), [attach(document.createElement("thead"), [headRow])]);
@@ -471,16 +429,16 @@ function renderApiKeys() {
       attach(make("td"), [attach(toggle, [checkbox, make("span", "toggle-slider")])]),
       styled(make("td", "", formatKeyPolicy(k)), { color: "var(--text-secondary)", fontSize: "0.8rem", whiteSpace: "pre-line" }),
       styled(make("td", "", k.last_used_at ? formatTime(k.last_used_at) : "从未使用"), { color: "var(--text-secondary)", fontSize: "0.8rem" }),
-      attach(make("td"), [
+      attach(make("td"), [attach(make("div", "key-actions"), [
         styled(keyButton("btn btn-neutral", "edit-key", "策略"), { marginRight: "6px" }),
         styled(keyButton("btn btn-neutral", "rotate-key", "重置"), { marginRight: "6px" }),
         keyButton("btn btn-danger-outline", "delete-key", "删除"),
-      ]),
+      ])]),
     ]);
     tbody.appendChild(rows);
   });
   table.appendChild(tbody);
-  container.replaceChildren(table, keyTip());
+  container.replaceChildren(ConsoleUI.responsiveTable(table), keyTip());
 }
 
 // keyTip is the standing note under both the table and the mobile card list: a
@@ -508,53 +466,7 @@ function keyTip() {
   ]);
 }
 
-function renderApiKeysMobile(container) {
-  const cards = apiKeys.map((k) => {
-    const encodedLabel = encodeURIComponent(`${k.key_prefix}...${k.key_suffix}`);
-    const lastUsed = k.last_used_at ? formatTime(k.last_used_at) : "从未使用";
-    const policy = formatKeyPolicy(k);
-    return `
-      <article class="config-key-card">
-        <div class="config-key-head">
-          <div class="config-key-token">
-            <span class="key-display" title="完整 Key 仅在创建或重置时显示一次，之后无法再次查看">${escapeHtml(`${k.key_prefix || ""}****${k.key_suffix || ""}`)}</span>
-            <span class="secret-badge">密钥</span>
-          </div>
-          <label class="toggle">
-            <input type="checkbox" data-action="toggle-key" data-id="${encodeData(k.id)}" ${k.enabled ? "checked" : ""}>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-        <div class="config-key-meta">
-          <div class="config-key-item">
-            <span class="config-key-label">最后使用</span>
-            <span>${escapeHtml(lastUsed)}</span>
-          </div>
-          <div class="config-key-item">
-            <span class="config-key-label">访问策略</span>
-            <span style="white-space: pre-line">${escapeHtml(policy)}</span>
-          </div>
-        </div>
-        <div class="config-key-actions">
-          <button type="button" class="btn btn-neutral" data-action="edit-key" data-id="${encodeData(k.id)}">策略</button>
-          <button type="button" class="btn btn-neutral" data-action="rotate-key" data-id="${encodeData(k.id)}" title="生成新的完整 Key（旧 Key 立即失效），仅显示一次">重置</button>
-          <button type="button" class="btn btn-danger-outline" data-action="delete-key" data-id="${encodeData(k.id)}" data-label="${encodedLabel}">删除</button>
-        </div>
-      </article>
-    `;
-  }).join("");
 
-  container.innerHTML = `<div class="config-key-list">${cards}</div>`;
-
-  const tip = document.createElement("div");
-  tip.className = "config-key-tip";
-  tip.innerHTML = `
-    <div class="config-key-tip-title">提示</div>
-    <div class="config-key-tip-body">• API Key 用于访问接口的身份认证<br>• 禁用的 Key 将无法访问 API<br>• 请妥善保管您的 API Key，不要泄露给他人</div>
-  `;
-  container.appendChild(tip);
-
-}
 
 function parseAllowedModels(value) {
   return String(value || "").split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
@@ -623,7 +535,7 @@ async function rotateApiKey(id) {
   );
   if (!confirmed) return;
   try {
-    const res = await fetch(`/api/keys/${id}/rotate`, { method: "POST" });
+    const res = await ConsoleAPI.request(`/api/keys/${id}/rotate`, { method: "POST" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.message || data.error || "重置失败");
     createdKeys = [{ name: data.name || label, key: data.key }];
@@ -638,7 +550,7 @@ async function rotateApiKey(id) {
 // Toggle key status
 async function toggleKeyStatus(id, enabled) {
   try {
-    await fetch(`/api/keys/${id}`, {
+    await ConsoleAPI.request(`/api/keys/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),
@@ -677,7 +589,7 @@ async function createApiKey(e) {
   createdKeys = [];
   for (const name of names) {
     try {
-      const res = await fetch("/api/keys", {
+      const res = await ConsoleAPI.request("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -734,7 +646,7 @@ async function saveKeyPolicy(e) {
     billing_period_days: Number(document.getElementById("editKeyBillingPeriod").value || 0),
   };
   try {
-    const res = await fetch(`/api/keys/${id}`, {
+    const res = await ConsoleAPI.request(`/api/keys/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -803,7 +715,7 @@ function closeDeleteKeyModal() {
 async function confirmDeleteKey() {
   const id = document.getElementById("deleteKeyId").value;
   try {
-    await fetch(`/api/keys/${id}`, { method: "DELETE" });
+    await ConsoleAPI.request(`/api/keys/${id}`, { method: "DELETE" });
     closeDeleteKeyModal();
     showToast("删除成功");
     loadApiKeys();

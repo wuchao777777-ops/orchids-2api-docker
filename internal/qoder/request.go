@@ -164,14 +164,15 @@ type businessInfo struct {
 
 // chatMessage is one message in the upstream history.
 type chatMessage struct {
-	Role       string          `json:"role"`
-	Content    string          `json:"content,omitempty"`
-	Contents   []chatPart      `json:"contents,omitempty"`
-	ToolCalls  []chatToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	Reasoning  string          `json:"reasoning_content,omitempty"`
-	Meta       json.RawMessage `json:"response_meta,omitempty"`
+	Role          string          `json:"role"`
+	Content       string          `json:"content,omitempty"`
+	Contents      []chatPart      `json:"contents,omitempty"`
+	ToolCalls     []chatToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID    string          `json:"tool_call_id,omitempty"`
+	Name          string          `json:"name,omitempty"`
+	Reasoning     string          `json:"reasoning_content,omitempty"`
+	Meta          json.RawMessage `json:"response_meta,omitempty"`
+	ReasoningItem json.RawMessage `json:"reasoning_item,omitempty"`
 }
 
 // chatPart is one content part of a multimodal user message.
@@ -423,11 +424,15 @@ func buildMessages(req upstream.UpstreamRequest) ([]chatMessage, string, error) 
 		if msg.Content.IsString() {
 			text := msg.Content.GetText()
 			if strings.TrimSpace(text) == "" {
+				if role == "assistant" && (strings.TrimSpace(msg.ReasoningContent) != "" || len(msg.ReasoningItem) > 0) {
+					out = append(out, chatMessage{Role: role, Reasoning: msg.ReasoningContent, ReasoningItem: msg.ReasoningItem})
+				}
 				continue
 			}
 			message := chatMessage{Role: normalRole(role), Content: text}
 			if role == "assistant" {
 				message.Reasoning = strings.TrimSpace(msg.ReasoningContent)
+				message.ReasoningItem = msg.ReasoningItem
 			}
 			out = append(out, message)
 			continue
@@ -472,7 +477,7 @@ func normalRole(role string) string {
 // convertAssistantMessage maps text, thinking and tool_use blocks onto one
 // assistant message.
 func convertAssistantMessage(msg prompt.Message, toolCallIDs map[string]bool) (chatMessage, bool) {
-	message := chatMessage{Role: "assistant", Reasoning: strings.TrimSpace(msg.ReasoningContent)}
+	message := chatMessage{Role: "assistant", Reasoning: strings.TrimSpace(msg.ReasoningContent), ReasoningItem: msg.ReasoningItem}
 	texts := make([]string, 0, 2)
 	for _, block := range msg.Content.GetBlocks() {
 		switch block.Type {
@@ -501,7 +506,7 @@ func convertAssistantMessage(msg prompt.Message, toolCallIDs map[string]bool) (c
 		}
 	}
 	message.Content = strings.Join(texts, "\n")
-	if message.Content == "" && len(message.ToolCalls) == 0 && message.Reasoning == "" {
+	if message.Content == "" && len(message.ToolCalls) == 0 && message.Reasoning == "" && len(message.ReasoningItem) == 0 {
 		return chatMessage{}, false
 	}
 	return message, true

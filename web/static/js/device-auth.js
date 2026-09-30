@@ -1,5 +1,5 @@
 // Shared driver for the browser device-authorization flows exposed by the admin
-// console (WorkBuddy, Qoder, Cline).
+// console (WorkBuddy, Qoder, Cline, Grok).
 //
 // The server owns the whole transaction: it starts the authorization, keeps the
 // private verifier, polls the upstream and persists the resulting credential.
@@ -39,6 +39,7 @@ globalThis.DeviceAuthLogin = (() => {
       insecureMessage = '请使用 HTTPS（本地可用 localhost）打开管理页面后再登录。',
       timeoutMessage = '授权已超时，请重新发起登录。',
       terminalMessages = TERMINAL_MESSAGES,
+      isAllowedURL = (url) => url.protocol === 'https:',
     } = options;
 
     let active = null;
@@ -179,7 +180,8 @@ globalThis.DeviceAuthLogin = (() => {
     }
 
     async function poll(login) {
-      if (active !== login || !login.loginId) return;
+      if (active !== login || !login.loginId || login.polling) return;
+      login.polling = true;
       try {
         const response = await fetch(`${basePath}/${encodeURIComponent(login.loginId)}`, {
           credentials: 'same-origin',
@@ -218,6 +220,8 @@ globalThis.DeviceAuthLogin = (() => {
       } catch (err) {
         if (err && err.name === 'AbortError') return;
         // Transient network errors are retried on the next tick.
+      } finally {
+        login.polling = false;
       }
     }
 
@@ -315,7 +319,12 @@ globalThis.DeviceAuthLogin = (() => {
           }
           if (active !== login) return;
           const loginId = String(session?.id || session?.loginId || '').trim();
-          const authURL = String(session?.verification_uri_complete || '').trim();
+          const candidateURL = String(session?.verification_uri_complete || session?.verification_uri || '').trim();
+          let authURL = '';
+          try {
+            const parsed = new URL(candidateURL);
+            if (isAllowedURL(parsed)) authURL = parsed.href;
+          } catch (_) { /* An invalid upstream link never becomes navigable. */ }
           if (!loginId) throw new Error('invalid_session');
           login.loginId = loginId;
           login.expiresAt = Date.parse(String(session.expires_at || '')) || Date.now() + 15 * 60 * 1000;
@@ -333,6 +342,7 @@ globalThis.DeviceAuthLogin = (() => {
             // browser step may already be finished.
             status(authorizedStatus || `正在确认 ${label} 授权结果…`);
           }
+          if (session.user_code) status(`请在 ${label} 官方页面输入设备码：${session.user_code}`);
           login.timer = setInterval(() => {
             if (active !== login) return;
             if (Date.now() >= login.expiresAt) {
@@ -362,11 +372,12 @@ globalThis.DeviceAuthLogin = (() => {
       // re-attach, and the transaction expires on its own.
       if (!active) return;
       clearInterval(active.timer);
+      active.controller.abort();
       active = null;
       setButton(false);
     });
 
-    return { start, stop };
+    return { start, stop, reset: () => { status(''); setLink(''); } };
   }
 
   return { create };

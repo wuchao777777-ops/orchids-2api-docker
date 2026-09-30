@@ -1,0 +1,22 @@
+<div class="modal" id="systemModal" role="dialog" aria-modal="true" aria-labelledby="systemTitle" aria-hidden="true">
+  <div class="modal-content system-modal-content">
+    <div class="modal-header">
+      <h3 class="modal-title" id="systemTitle">版本与升级</h3>
+      <button class="modal-close" type="button" id="systemClose" aria-label="关闭版本窗口">&times;</button>
+    </div>
+    <div class="system-version-grid">
+      <div><span class="helper-text">当前运行版本</span><p id="systemCurrent">正在读取…</p></div>
+      <div><span class="helper-text">最新稳定版</span><p id="systemLatest">正在检查…</p></div>
+    </div>
+    <p id="systemCheckState" role="status">正在检查…</p>
+    <p class="helper-text" id="systemCapability"></p>
+    <p class="system-progress" id="systemProgress" role="status">暂无升级操作</p>
+    <div class="system-actions">
+      <button class="btn btn-outline" type="button" id="systemCheck">检查更新</button>
+      <button class="btn btn-primary" type="button" id="systemUpdate" disabled>升级并重启</button>
+      <button class="btn btn-outline" type="button" id="systemRollback" disabled>回退旧程序</button>
+      <a class="btn btn-neutral" id="systemReleaseLink" target="_blank" rel="noopener noreferrer" hidden>发行说明</a>
+    </div>
+    <pre class="system-release-notes" id="systemReleaseNotes"></pre>
+  </div>
+</div>

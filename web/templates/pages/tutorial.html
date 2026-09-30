@@ -1,6 +1,6 @@
 {{define "page-tutorial"}}
 {{template "doc-head.html" .}}
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v={{.AssetVersion}}">
+  {{template "page-styles.html" .}}
   <link rel="stylesheet" href="{{.AdminPath}}/css/tutorial.css?v={{.AssetVersion}}">
 </head>
 
@@ -200,7 +200,7 @@
     </section>
   </main>
 
-  <script src="{{.AdminPath}}/js/common.js?v={{.AssetVersion}}"></script>
+  {{template "page-scripts.html" .}}
   <script src="{{.AdminPath}}/js/tutorial.js?v={{.AssetVersion}}"></script>
 </body>
 

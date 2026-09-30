@@ -707,21 +707,40 @@ func isSharedUpstreamRefusalClass(class apperrors.UpstreamErrorClass) bool {
 // resource every account shares. The upstream's own hint is still honoured per
 // attempt; this only stops a closed gate from holding a caller for minutes.
 //
-// Production measured clients giving up on their own side at ~125s, so the
-// default is one window short of that: three of the 30s windows Qoder
-// advertises, plus jitter and the attempts themselves.
+// The binding deadline is NOT the caller's patience, it is the shortest timeout
+// in the chain in front of this process. Production answers behind Cloudflare,
+// whose origin timeout is 100s: the first version of this bound was 90s and
+// reasoned from the client's ~125s patience instead, so three of Qoder's 30s
+// windows ran the request to 106s. Cloudflare gave up at 100s and the caller
+// got a 520 "the origin web server sent a response Cloudflare could not parse"
+// — an error no part of this gateway ever produced, for a request it was about
+// to answer correctly at 106s.
 //
-// The bound used to be a constant of 60s, and the wait was charged against it
-// *after* jitter was added. Qoder's hint is 30s and jitter is up to 5s, so the
-// first window already booked 30-35s and the second cost another 30-35s: the
-// pair straddled 60s and was refused whenever either jitter ran, which is
-// almost always. The documented "covers two of the 30s windows" was therefore
-// unreachable, and a request that met the gate twice was answered 503 after
-// ~37s — exactly the latency production showed. The constant became a knob so
-// an operator whose own clients tolerate longer waits can raise it without a
-// rebuild, and the budget is now charged against the upstream's hint alone,
-// with jitter allowed on top.
-const sharedRefusalTotalWaitBudget = 90 * time.Second
+// Measured on that deployment, one window plus its attempt costs ~33s and one
+// attempt ~1.6s, so the wall clock is about 33*N + 1.6*(N+1):
+//
+//	N=1 ->  37s   the old behaviour, and what produced the 503s
+//	N=2 ->  72s   the default: inside a 100s edge with ~28s to spare
+//	N=3 -> 107s   past the edge, which is the 520 above
+//
+// So the default admits two windows, not three. The wait is charged against the
+// budget as the upstream's own hint, without the jitter added to the sleep:
+// jitter exists to decorrelate wake-ups, not to consume budget, and charging it
+// is what made the previous 60s constant admit only one window in practice
+// (30-35s booked twice straddled 60s and the second wait was refused whenever
+// either jitter ran, which is almost always — the 503s at ~37s above).
+//
+// Two windows with honest accounting is strictly more waiting than the old
+// constant delivered, and it stays inside the edge. The knob exists for a
+// deployment whose edge tolerates more; see sharedRefusalEdgeSafeCeiling.
+const sharedRefusalTotalWaitBudget = 60 * time.Second
+
+// sharedRefusalEdgeSafeCeiling is the largest budget that is safe when the
+// gateway is published through an edge proxy with a 100s origin timeout, which
+// is Cloudflare's default and the shape this deployment runs in. Raising the
+// budget past it does not buy a longer wait, it buys a 520: the edge hangs up
+// first and the work the gateway did is discarded.
+const sharedRefusalEdgeSafeCeiling = 60 * time.Second
 
 // SharedRefusalWaitBudget is the effective wait bound. A configured
 // shared_refusal_wait_budget_ms wins over the built-in default.
@@ -734,6 +753,29 @@ func SharedRefusalWaitBudget(configuredMs int) time.Duration {
 		budget = time.Second
 	}
 	return budget
+}
+
+// SharedRefusalBudgetExceedsEdge reports whether a budget is larger than an edge
+// proxy with a 100s origin timeout will allow to finish.
+func SharedRefusalBudgetExceedsEdge(budget time.Duration) bool {
+	return budget > sharedRefusalEdgeSafeCeiling
+}
+
+// WarnIfSharedRefusalBudgetExceedsEdge reports a configured budget that will be
+// cut short by an edge proxy before the gateway can answer. It is silent for the
+// default because the default is chosen to fit.
+//
+// This exists so the failure is visible in the log before it is visible to a
+// caller as a 520. A silent over-long budget looks exactly like an upstream
+// outage from the outside, which is how the mistake it guards against was found.
+func WarnIfSharedRefusalBudgetExceedsEdge(budget time.Duration) {
+	if !SharedRefusalBudgetExceedsEdge(budget) {
+		return
+	}
+	slog.Warn("Shared-refusal wait budget exceeds the edge-safe ceiling; requests may be cut off by the edge proxy before they are answered",
+		"budget", budget,
+		"edge_safe_ceiling", sharedRefusalEdgeSafeCeiling,
+		"note", "a 100s origin timeout (Cloudflare default) leaves no room for a budget this large plus the attempts and jitter around it")
 }
 
 // sharedRefusalWaitAllowed reports whether one more wait of next fits inside the

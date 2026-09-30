@@ -202,6 +202,11 @@ func (h *Handler) SetConfig(cfg *config.Config) {
 	h.configMu.Lock()
 	h.config = cfg
 	h.configMu.Unlock()
+	// Surface an over-long shared-refusal budget once per config load. The value
+	// is legal and can be right for a deployment with no edge proxy, but with a
+	// 100s edge in front it turns a would-be 429 into a 520 for the caller, and
+	// that is indistinguishable from an upstream outage in the access logs.
+	WarnIfSharedRefusalBudgetExceedsEdge(SharedRefusalWaitBudget(cfg.SharedRefusalWaitBudgetMs))
 	if h.clientCache != nil {
 		h.clientCache.SetConfig(cfg)
 	}
@@ -1078,8 +1083,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			waitBudget := SharedRefusalWaitBudget(budgetMs)
 			// A shared refusal is a gate on the upstream's side, not this account's
 			// throttle, so the wait is spent on the same account and can repeat.
-			// Bound the total: production clients gave up at ~125s, which is past
-			// the point where waiting is a service to the caller.
+			// Bound the total by the shortest deadline in front of this process,
+			// which is the edge proxy's origin timeout, not the caller's patience:
+			// answering past the edge's limit does not give the caller the work,
+			// it gives it a 520 from the edge.
 			if sharedRefusal && sharedRefusalWait > 0 && !sharedRefusalWaitAllowedWithin(sharedRefusalWaited, sharedRefusalWait, waitBudget) {
 				slog.Warn("Shared upstream refusal exceeded the wait budget; answering now",
 					"trace_id", traceID,

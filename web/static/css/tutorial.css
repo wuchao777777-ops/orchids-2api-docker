@@ -1,3 +1,22 @@
+/* API Console: tutorial.css */
+.tut-faq details[open] summary { border-bottom: 1px solid var(--border-color); }
+
+.tut-section-head h2 { font-size: 0.98rem; font-weight: 650; }
+
+.tut-route-rule.is-warning { border-left-color: var(--warn); }
+
+@media (max-width: 900px) {
+.tut-toc a { min-height: 44px !important; }
+}
+
+.tut-route-rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.tut-page { padding-bottom: var(--space-10); }
+
 .tut-section {
   margin-bottom: var(--space-5);
   scroll-margin-top: var(--space-6);
@@ -192,6 +211,7 @@
 }
 
 .tut-address button { flex: 0 0 auto; padding: 0 var(--space-2); }
+
 .tut-muted { color: var(--text-muted); }
 
 .tut-faq { gap: var(--space-2); }
@@ -213,50 +233,58 @@
 }
 
 .tut-faq summary::-webkit-details-marker { display: none; }
+
 .tut-faq summary::after { content: "+"; position: absolute; right: var(--space-4); color: var(--text-muted); }
 
 .tut-faq details[open] summary::after { content: "−"; }
+
 .tut-faq p { padding: var(--space-3) var(--space-4) var(--space-4); }
 
 @media (max-width: 900px) {
-  .tut-page { padding-bottom: var(--space-8); }
-  .tut-section { scroll-margin-top: 72px; }
-  .tut-toc { width: 100%; border-radius: var(--radius-md); }
-  .tut-steps { grid-template-columns: minmax(0, 1fr); }
+.tut-page { padding-bottom: var(--space-8); }
+
+.tut-section { scroll-margin-top: 72px; }
+
+.tut-toc { width: 100%; border-radius: var(--radius-md); }
+
+.tut-steps { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 700px) {
-  .tut-section-body { padding: var(--space-4); }
-  .tut-route-rules { grid-template-columns: minmax(0, 1fr); }
-  .tut-credential-note { flex-direction: column; align-items: stretch; }
-  .tut-example-head { align-items: flex-start; }
+.tut-section-body { padding: var(--space-4); }
 
-  .tut-table thead { display: none; }
+.tut-route-rules { grid-template-columns: minmax(0, 1fr); }
 
-  .tut-table,
-  .tut-table tbody,
-  .tut-table tr,
-  .tut-table td {
+.tut-credential-note { flex-direction: column; align-items: stretch; }
+
+.tut-example-head { align-items: flex-start; }
+
+.tut-table thead { display: none; }
+
+.tut-table,
+.tut-table tbody,
+.tut-table tr,
+.tut-table td {
     display: block;
     width: 100%;
   }
 
-  .tut-table tbody tr {
+.tut-table tbody tr {
     padding: var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--border-color);
   }
 
-  .tut-table tbody tr:last-child { border-bottom: 0; }
+.tut-table tbody tr:last-child { border-bottom: 0; }
 
-  .tut-table tbody td,
-  .tut-table td:first-child {
+.tut-table tbody td,
+.tut-table td:first-child {
     display: block;
     min-width: 0;
     padding: var(--space-2) 0;
     border: 0;
   }
 
-  .tut-table tbody td::before {
+.tut-table tbody td::before {
     content: attr(data-label);
     display: block;
     margin-bottom: var(--space-1);
@@ -265,31 +293,27 @@
     font-weight: 650;
   }
 
-  .tut-table td:first-child small { display: block; margin-top: var(--space-1); }
-  .tut-address { width: 100%; justify-content: space-between; }
+.tut-table td:first-child small { display: block; margin-top: var(--space-1); }
+
+.tut-address { width: 100%; justify-content: space-between; }
 }
 
-/* -----------------------------------------------------------------------------
-   Wide screens
-   --------------------------------------------------------------------------
-   Three steps and two route rules were laid out for a 1440px column; on a 27"
-   panel each step became a 700px-wide card holding two short lines. The step
-   strip keeps its one-row-per-number order and gains columns, and the code
-   sample — the thing actually copied on this page — stops being a narrow
-   letterbox inside a wide card.
-
-   min-width only: the phone rules above are max-width and keep winning there.
-   -------------------------------------------------------------------------- */
 @media (min-width: 1800px) {
-  .tut-steps { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-  .tut-route-rules { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
-  .tut-section-body { padding: var(--space-6); gap: var(--space-5); }
+.tut-steps { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+
+.tut-route-rules { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+
+.tut-section-body { padding: var(--space-6); gap: var(--space-5); }
 }
 
 @media (min-width: 2200px) {
-  .tut-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
-  .tut-route-rules { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
-  .tut-section-body { padding: var(--space-8); gap: var(--space-6); }
-  .tut-code { font-size: 0.84rem; }
-  .tut-table td:first-child { min-width: 190px; }
+.tut-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+
+.tut-route-rules { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+
+.tut-section-body { padding: var(--space-8); gap: var(--space-6); }
+
+.tut-code { font-size: 0.84rem; }
+
+.tut-table td:first-child { min-width: 190px; }
 }

@@ -1,6 +1,6 @@
 {{define "page-config"}}
 {{template "doc-head.html" .}}
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v={{.AssetVersion}}">
+  {{template "page-styles.html" .}}
   <link rel="stylesheet" href="{{.AdminPath}}/css/config.css?v={{.AssetVersion}}">
 </head>
 
@@ -157,7 +157,7 @@
   {{template "key-modals.html" .}}
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js?v={{.AssetVersion}}"></script>
+  {{template "page-scripts.html" .}}
   <script src="{{.AdminPath}}/js/config.js?v={{.AssetVersion}}"></script>
 </body>
 

@@ -1,6 +1,6 @@
 {{define "page-logs"}}
 {{template "doc-head.html" .}}
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v={{.AssetVersion}}">
+  {{template "page-styles.html" .}}
   <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v={{.AssetVersion}}">
 </head>
 
@@ -99,7 +99,7 @@
     </aside>
     <div class="drawer-backdrop" id="logsDetailBackdrop"></div>
 
-    <script src="{{.AdminPath}}/js/common.js?v={{.AssetVersion}}"></script>
+    {{template "page-scripts.html" .}}
     <script src="{{.AdminPath}}/js/logs.js?v={{.AssetVersion}}"></script>
   </main>
 </body>

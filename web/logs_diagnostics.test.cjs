@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const vm=require('node:vm');
+const vm=require('./test-support.cjs');
 function element(tag='div'){
  return {tag,children:[],textContent:'',classList:{add(){},remove(){},toggle(){}},appendChild(n){this.children.push(n);return n},replaceChildren(){this.children=[]},addEventListener(){},setAttribute(){}};
 }

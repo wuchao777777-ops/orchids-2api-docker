@@ -9,7 +9,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
+const vm = require('./test-support.cjs');
 
 function loadUI() {
   const storage = new Map();
@@ -196,16 +196,11 @@ test('the desktop header and the mobile card both carry the three columns', () =
   for (const label of ['今日/累计 Tokens', '创建时间']) {
     assert.ok(source.includes(label), `accounts.js never renders ${label}`);
   }
-  // The mobile card is a template string, so a column present only in the
-  // desktop renderer is a column a phone never sees. The end marker is the
-  // call site, not the first textual hit — the function's own definition
-  // contains the same substring.
-  const start = source.indexOf('<div class="account-mobile-grid">');
-  const end = source.indexOf('${buildMobileEmailMarkup(acc)}', start);
-  assert.ok(start > 0 && end > start, 'the mobile card template was not found');
-  const card = source.slice(start, end);
-  assert.match(card, /今日\/累计 Tokens/);
-  assert.match(card, /创建时间/);
+  assert.match(source, /ConsoleUI\.responsiveTable/);
+  assert.doesNotMatch(source, /function renderAccountsMobile/);
+  assert.match(source, /buildCreatedMarkup\(acc\)/);
+  assert.match(source, /buildTokensMarkup\(acc\)/);
+
 });
 
 // --- Cline 等级 / 配额 ------------------------------------------------------

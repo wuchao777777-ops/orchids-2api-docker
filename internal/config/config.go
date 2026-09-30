@@ -135,9 +135,15 @@ type Config struct {
 	// resource every account shares — Qoder's model queue gate being the one
 	// that matters in practice. The upstream's own retry hint is still honoured
 	// per attempt; this only stops a closed gate from holding a caller past the
-	// point where its own client gives up. Zero selects the built-in default
-	// (90s, which is three of Qoder's 30s windows), and the value is clamped to
-	// a day so a bad setting cannot pin a request forever.
+	// point where the edition in front of it gives up.
+	//
+	// Zero selects the built-in default, 60s: two of Qoder's 30s windows, which
+	// costs about 72s of wall clock and fits inside a 100s edge origin timeout.
+	// That edge timeout, not the caller's patience, is the binding deadline —
+	// publishing through Cloudflare with a larger budget produced 520s at the
+	// edge for requests the gateway would have answered at ~106s. The value is
+	// clamped to a day so a bad setting cannot pin a request forever, but
+	// anything above 60s is warned about at startup for that reason.
 	SharedRefusalWaitBudgetMs int `json:"shared_refusal_wait_budget_ms,omitempty"`
 	// Quality-hold policy. The gateway withholds a degraded reasoning turn
 	// instead of streaming it, then retries it on another account. Holding is on
@@ -302,7 +308,7 @@ func ApplyHardcoded(cfg *Config) {
 	// lowered to the retry delay, because the two answer different questions —
 	// retry_delay is how fast a fresh attempt starts, this is how long one
 	// request tolerates an upstream gate.
-	cfg.SharedRefusalWaitBudgetMs = boundedDefault(cfg.SharedRefusalWaitBudgetMs, 90000, 86400000)
+	cfg.SharedRefusalWaitBudgetMs = boundedDefault(cfg.SharedRefusalWaitBudgetMs, 60000, 86400000)
 	// How many accounts one request may rotate through before it gives up.
 	// The reference implementation allows far more; a ceiling of twenty made a
 	// bad pool fail visibly ("retries exhausted") while equivalent accounts were

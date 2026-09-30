@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const vm=require('node:vm');
+const vm=require('./test-support.cjs');
 
 // A minimal DOM: enough of an element for the log centre's row and detail builders,
 // with parent tracking so the placeholder row can be removed from the table body.

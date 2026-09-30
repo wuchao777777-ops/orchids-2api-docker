@@ -1,6 +1,6 @@
 {{define "page-alerts"}}
 {{template "doc-head.html" .}}
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v={{.AssetVersion}}">
+  {{template "page-styles.html" .}}
   <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v={{.AssetVersion}}">
 </head>
 
@@ -69,7 +69,7 @@
       </div>
     </section>
 
-    <script src="{{.AdminPath}}/js/common.js?v={{.AssetVersion}}"></script>
+    {{template "page-scripts.html" .}}
     <script src="{{.AdminPath}}/js/alerts.js?v={{.AssetVersion}}"></script>
   </main>
 </body>

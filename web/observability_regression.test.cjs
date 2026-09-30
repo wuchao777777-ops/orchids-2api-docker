@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const vm=require('node:vm');
+const vm=require('./test-support.cjs');
 function element(tag='div'){
  return {tag,children:[],textContent:'',innerHTML:'',style:{},dataset:{},value:'',hidden:false,
  classList:{add(){},remove(){},toggle(){}},setAttribute(k,v){this[k]=v},addEventListener(){},
@@ -32,6 +32,18 @@ test('5min fills idle minutes and includes them in average, without treating sta
 test('missing token measurements stay unknown, and disabled aggregation never shows fake live zeroes',()=>{
  const {api,node}=loadOps();api.renderHero(payload([{minute:current.minute,requests:60}]));assert.equal(node('opsLiveTpsNow').textContent,'未采集');
  api.renderHero({...payload([]),available:false});assert.equal(node('opsLiveQpsNow').textContent,'未采集');
+});
+
+test('unavailable monitoring keeps the health gauge and error charts unknown across redraws',()=>{
+ const {api,node}=loadOps();
+ api.renderHero({available:false});
+ api.renderTrends({available:false});
+ assert.equal(node('opsGaugeValue').textContent,'—');
+ assert.equal(node('opsGaugeLabel').textContent,'未采集');
+ assert.equal(node('opsGaugeState').textContent,'指标不可用');
+ assert.doesNotMatch(text(node('opsGaugeSub')),/undefined|0|健康|无流量/);
+ assert.match(text(node('opsThroughput')),/未采集/);
+ assert.match(text(node('opsErrorTrend')),/未采集/);
 });
 test('P95-only historical data is never relabelled P99 or used for a failed-request cohort',()=>{
  const {api,node}=loadOps();const p=payload([]);p.totals={requests:1,success:1,duration_p95_ms:950,samples:1};

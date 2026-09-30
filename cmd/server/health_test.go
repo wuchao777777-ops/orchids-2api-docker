@@ -48,6 +48,21 @@ func TestHealthReportsEveryRemainingProvider(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /health = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
+	for _, endpoint := range []string{"/api/system/version", "/api/system/check-updates", "/api/system/operation", "/api/system/update", "/api/system/rollback"} {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, endpoint, nil)
+		mux.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("unprotected upgrade endpoint %s: %d", endpoint, response.Code)
+		}
+	}
+	versionResponse := httptest.NewRecorder()
+	versionRequest := httptest.NewRequest(http.MethodGet, "/api/system/version", nil)
+	versionRequest.Header.Set("Authorization", "Bearer secret")
+	mux.ServeHTTP(versionResponse, versionRequest)
+	if versionResponse.Code != http.StatusOK {
+		t.Fatalf("authenticated version endpoint: %d", versionResponse.Code)
+	}
 	var body struct {
 		Status    string            `json:"status"`
 		Providers map[string]string `json:"providers"`

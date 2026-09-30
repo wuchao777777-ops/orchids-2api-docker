@@ -192,19 +192,27 @@ func TestSharedRefusalBeforeOutputUsesRetryWindow(t *testing.T) {
 	}
 }
 
-// TestSharedRefusalWaitBudgetIsBounded pins the ceiling on the shared-refusal
-// retry wait. Production clients gave up at ~125s, so the bound has to stop
-// short of that while still covering the windows an upstream can hand out.
+// TestSharedRefusalWaitBudgetIsBounded pins the bound on the shared-refusal
+// retry wait against the deadline that actually ends the request: the origin
+// timeout of the edge proxy in front of this process, which is Cloudflare's
+// 100s. Not the caller's patience.
 //
-// It also pins the accounting rule that used to make the documented coverage
-// unreachable: the budget is charged the upstream's own hint, not hint plus
-// jitter. Charging the jitter made a 30s hint cost up to 35s, so the second
-// 30s window never fit inside 60s and a request that met the gate twice was
-// answered 503 after ~37s — exactly the latency production showed.
+// The first version of this bound reasoned from the caller instead, at 90s, and
+// production answered 520 — "the origin web server sent a response Cloudflare
+// could not parse" — for requests the gateway would have completed at ~106s.
+// Caddy's access log showed the shape exactly: every qoder failure before that
+// build ended at 33-38s, and every one after it ended at 97-108s, with one
+// connection closed by the edge before any response was written (status 0).
+//
+// The wall-clock model below is measured on that deployment, not assumed: one
+// 30s window plus its attempt cost ~33s, and one attempt ~1.6s. So N windows
+// cost about 33*N + 1.6*(N+1). The default must admit the most windows that
+// still finish inside the edge.
 func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
-	if sharedRefusalTotalWaitBudget != 90*time.Second {
-		t.Fatalf("budget = %v, want 90s", sharedRefusalTotalWaitBudget)
+	if sharedRefusalTotalWaitBudget != 60*time.Second {
+		t.Fatalf("budget = %v, want 60s", sharedRefusalTotalWaitBudget)
 	}
+
 	for _, tc := range []struct {
 		name    string
 		already time.Duration
@@ -213,9 +221,8 @@ func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
 	}{
 		{"first window fits", 0, 30 * time.Second, true},
 		{"second window fits exactly", 30 * time.Second, 30 * time.Second, true},
-		{"third window fits exactly", 60 * time.Second, 30 * time.Second, true},
-		{"fourth window does not", 90 * time.Second, 30 * time.Second, false},
-		{"a window that would overrun is refused", 70 * time.Second, 30 * time.Second, false},
+		{"third window does not: it would overrun the edge", 60 * time.Second, 30 * time.Second, false},
+		{"a window that would overrun is refused", 40 * time.Second, 30 * time.Second, false},
 		{"nothing to wait for is not a wait", 0, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -223,6 +230,28 @@ func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
 				t.Fatalf("sharedRefusalWaitAllowed(%v, %v) = %v, want %v", tc.already, tc.next, got, tc.want)
 			}
 		})
+	}
+
+	// The bound has to exclude the window whose wall clock the edge would cut
+	// off, and this is the assertion that would have caught the 520.
+	const (
+		edgeOriginTimeout = 100 * time.Second
+		windowCost        = 33 * time.Second // 30s hint + jitter + one attempt
+		attemptCost       = 1600 * time.Millisecond
+	)
+	wallClock := func(windows int) time.Duration {
+		return time.Duration(windows)*windowCost + time.Duration(windows+1)*attemptCost
+	}
+	windows := int(sharedRefusalTotalWaitBudget / (30 * time.Second))
+	if windows != 2 {
+		t.Fatalf("budget admits %d windows, want 2", windows)
+	}
+	if got := wallClock(windows); got >= edgeOriginTimeout {
+		t.Fatalf("worst case wall clock = %v, which the %v edge origin timeout cuts off", got, edgeOriginTimeout)
+	}
+	// And the window it refuses is exactly the one that would have overrun.
+	if got := wallClock(windows + 1); got < edgeOriginTimeout {
+		t.Fatalf("refusing the third window gives up %v of headroom; it should be the edge that forces the bound", edgeOriginTimeout-got)
 	}
 
 	// The configured form wins, and an operator raising it must actually get the
@@ -235,5 +264,15 @@ func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
 	}
 	if !sharedRefusalWaitAllowedWithin(90*time.Second, 30*time.Second, SharedRefusalWaitBudget(150000)) {
 		t.Fatal("a raised budget must admit the window the default refuses")
+	}
+
+	// Raising it is legal — there is no edge proxy in every deployment — but it
+	// has to be flagged, because otherwise it is silent here and only visible to
+	// the caller as a 520 from the edge.
+	if SharedRefusalBudgetExceedsEdge(SharedRefusalWaitBudget(0)) {
+		t.Fatal("the built-in default must fit inside the edge, so it must not warn")
+	}
+	if !SharedRefusalBudgetExceedsEdge(SharedRefusalWaitBudget(90000)) {
+		t.Fatal("a 90s budget must be flagged: it is the setting that produced the 520")
 	}
 }

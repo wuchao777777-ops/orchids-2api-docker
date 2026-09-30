@@ -152,9 +152,7 @@ async function refreshSidebarAccountStats() {
   if (document.getElementById("accountsList") && document.getElementById("totalAccounts")) return;
 
   try {
-    const res = await fetch("/api/accounts");
-    if (!res.ok) return;
-    const accounts = await res.json();
+    const accounts = await ConsoleAPI.json("/api/accounts", {}, { array: true });
     const stats = computeSidebarAccountStats(accounts);
     setSidebarAccountStats(stats.total, stats.normal, stats.abnormal);
   } catch (err) {
