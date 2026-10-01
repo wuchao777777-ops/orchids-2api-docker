@@ -1,12 +1,14 @@
 package qoder
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"sync"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // The gateway reads two things from a chat request that are easy to get wrong.
@@ -31,6 +33,36 @@ const bodyPadding = '$'
 // bodyEncoding is the strict private-alphabet encoder.
 var bodyEncoding = base64.NewEncoding(bodyAlphabet).WithPadding(bodyPadding).Strict()
 
+type bodyJSONWriter struct {
+	buffer  bytes.Buffer
+	encoder *json.Encoder
+}
+
+var bodyJSONWriters = sync.Pool{New: func() interface{} {
+	w := &bodyJSONWriter{}
+	w.buffer.Grow(4096)
+	w.encoder = json.NewEncoder(&w.buffer)
+	return w
+}}
+
+// Only the intermediate JSON buffer is reused. The returned encoded body owns
+// its bytes, including while net/http may still be sending the request body.
+func marshalEncodedBody(value interface{}) ([]byte, error) {
+	w := bodyJSONWriters.Get().(*bodyJSONWriter)
+	defer func() {
+		clear(w.buffer.Bytes())
+		w.buffer.Reset()
+		if w.buffer.Cap() <= 64*1024 {
+			bodyJSONWriters.Put(w)
+		}
+	}()
+	if err := w.encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	raw := w.buffer.Bytes()
+	return EncodeBody(raw[:len(raw)-1]), nil // Encoder appends exactly one LF.
+}
+
 // EncodeBody renders the JSON body the way the wire format requires.
 //
 // bodyEncoding already substitutes the private alphabet (and the '$' padding),
@@ -40,7 +72,11 @@ var bodyEncoding = base64.NewEncoding(bodyAlphabet).WithPadding(bodyPadding).Str
 func EncodeBody(raw []byte) []byte {
 	encoded := make([]byte, bodyEncoding.EncodedLen(len(raw)))
 	bodyEncoding.Encode(encoded, raw)
-	return swapOuterThirds(encoded)
+	q := len(encoded) / 3
+	for i := 0; i < q; i++ {
+		encoded[i], encoded[len(encoded)-q+i] = encoded[len(encoded)-q+i], encoded[i]
+	}
+	return encoded
 }
 
 // decodeBody reverses EncodeBody for the narrow case where a refreshed
@@ -97,8 +133,63 @@ func buildCOSYPayload(requestID, info, cosyVersion string) (string, error) {
 // the runtime key, the Unix seconds, the encoded body and the signed path,
 // joined by newlines with no trailing separator.
 func signRequest(payloadBase64, runtimeKey, unixSeconds, encodedBody, signedPath string) string {
-	sum := md5.Sum([]byte(payloadBase64 + "\n" + runtimeKey + "\n" + unixSeconds + "\n" + encodedBody + "\n" + signedPath))
+	return signRequestBytes(payloadBase64, runtimeKey, unixSeconds, []byte(encodedBody), signedPath)
+}
+
+func signRequestBytes(payloadBase64, runtimeKey, unixSeconds string, encodedBody []byte, signedPath string) string {
+	sum := cosySignature([]byte(payloadBase64), runtimeKey, unixSeconds, encodedBody, signedPath)
 	return hex.EncodeToString(sum[:])
+}
+
+func cosySignature(payloadBase64 []byte, runtimeKey, unixSeconds string, encodedBody []byte, signedPath string) [md5.Size]byte {
+	hash := md5.New()
+	_, _ = hash.Write(payloadBase64)
+	for _, field := range [...]string{runtimeKey, unixSeconds} {
+		_, _ = hash.Write([]byte{'\n'})
+		_, _ = hash.Write([]byte(field))
+	}
+	_, _ = hash.Write([]byte{'\n'})
+	_, _ = hash.Write(encodedBody)
+	_, _ = hash.Write([]byte{'\n'})
+	_, _ = hash.Write([]byte(signedPath))
+	var sum [md5.Size]byte
+	hash.Sum(sum[:0])
+	return sum
+}
+
+// Build the per-request signed bearer in one owned string. Neither the nonce
+// nor signature is cached; only the intermediate JSON writer is reused.
+func buildCOSYAuthorization(requestID, info, version, runtimeKey, seconds string, body []byte, path string) (string, error) {
+	w := bodyJSONWriters.Get().(*bodyJSONWriter)
+	defer func() {
+		clear(w.buffer.Bytes())
+		w.buffer.Reset()
+		if w.buffer.Cap() <= 64*1024 {
+			bodyJSONWriters.Put(w)
+		}
+	}()
+	if err := w.encoder.Encode(cosyPayload{Version: "v1", RequestID: requestID, Info: info, CosyVersion: version}); err != nil {
+		return "", err
+	}
+	raw := w.buffer.Bytes()
+	raw = raw[:len(raw)-1]
+	const prefix = "Bearer COSY."
+	encodedLen := base64.StdEncoding.EncodedLen(len(raw))
+	total := len(prefix) + encodedLen + 1 + md5.Size*2
+	var scratch [4096]byte
+	var bearer []byte
+	if total <= len(scratch) {
+		bearer = scratch[:total]
+	} else {
+		bearer = make([]byte, total)
+	}
+	copy(bearer, prefix)
+	payload := bearer[len(prefix) : len(prefix)+encodedLen]
+	base64.StdEncoding.Encode(payload, raw)
+	sum := cosySignature(payload, runtimeKey, seconds, body, path)
+	bearer[len(prefix)+encodedLen] = '.'
+	hex.Encode(bearer[len(prefix)+encodedLen+1:], sum[:])
+	return string(bearer), nil
 }
 
 // composeBearer renders the Authorization header value.

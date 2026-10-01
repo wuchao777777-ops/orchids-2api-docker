@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -489,18 +490,21 @@ type StoredSessionAffinity struct {
 }
 
 type Store struct {
-	accounts  accountStore
-	settings  settingsStore
-	apiKeys   apiKeyStore
-	models    modelStore
-	responses responseStore
-	reasoning reasoningReplayStore
+	accounts   accountStore
+	settings   settingsStore
+	apiKeys    apiKeyStore
+	models     modelStore
+	responses  responseStore
+	reasoning  reasoningReplayStore
+	keyTouchMu sync.Mutex
+	keyTouches map[int64]time.Time
 }
 
 type Options struct {
 	RedisAddr               string
 	RedisPassword           string
 	RedisDB                 int
+	RedisPoolSize           int
 	RedisPrefix             string
 	CredentialEncryptionKey []byte
 }
@@ -625,7 +629,7 @@ func (s *Store) SetChangeEmitter(emitter ChangeEmitter) {
 
 func New(opts Options) (*Store, error) {
 	store := &Store{}
-	redisStore, err := newRedisStore(opts.RedisAddr, opts.RedisPassword, opts.RedisDB, opts.RedisPrefix, opts.CredentialEncryptionKey)
+	redisStore, err := newRedisStore(opts.RedisAddr, opts.RedisPassword, opts.RedisDB, opts.RedisPrefix, opts.CredentialEncryptionKey, opts.RedisPoolSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init redis store: %w", err)
 	}
@@ -946,12 +950,37 @@ func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error
 	if key.RPMLimit <= 0 {
 		// Persist only the usage touch. Rewriting the stale row here could race an
 		// atomic billing rollover and restore its old period start.
-		if err := s.apiKeys.TouchApiKeyLastUsed(ctx, key.ID, now); err != nil {
+		if err := s.touchApiKeyCoalesced(ctx, key.ID, now); err != nil {
 			return nil, err
 		}
 	}
 	s.rolloverApiKeyBilling(ctx, key, now)
 	return key, nil
+}
+
+// Coalesce display-only usage timestamps; policy and billing are still read
+// from the authoritative store on every authorization.
+func (s *Store) touchApiKeyCoalesced(ctx context.Context, id int64, now time.Time) error {
+	s.keyTouchMu.Lock()
+	previous := s.keyTouches[id]
+	if !previous.IsZero() && now.Sub(previous) < time.Minute {
+		s.keyTouchMu.Unlock()
+		return nil
+	}
+	if s.keyTouches == nil || len(s.keyTouches) >= 65536 {
+		s.keyTouches = make(map[int64]time.Time)
+	}
+	s.keyTouches[id] = now
+	s.keyTouchMu.Unlock()
+	if err := s.apiKeys.TouchApiKeyLastUsed(ctx, id, now); err != nil {
+		s.keyTouchMu.Lock()
+		if s.keyTouches[id].Equal(now) {
+			delete(s.keyTouches, id)
+		}
+		s.keyTouchMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (s *Store) ListApiKeys(ctx context.Context) ([]*ApiKey, error) {

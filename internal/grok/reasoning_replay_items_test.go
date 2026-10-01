@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/store"
 )

@@ -5,7 +5,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // captureReasoningReplay stores the previous turn's portable output items so the

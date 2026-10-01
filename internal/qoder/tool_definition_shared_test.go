@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 )

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // toolCallSequence is the process-wide counter behind NewToolCallID. It is

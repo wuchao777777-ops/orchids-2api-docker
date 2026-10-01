@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"

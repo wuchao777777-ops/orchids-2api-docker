@@ -3,7 +3,7 @@ package workbuddy
 import (
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // catalogSnapshotRow is the stored form of one catalog entry.

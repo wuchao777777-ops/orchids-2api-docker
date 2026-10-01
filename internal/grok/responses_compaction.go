@@ -32,7 +32,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/audit"
 	"orchids-api/internal/middleware"

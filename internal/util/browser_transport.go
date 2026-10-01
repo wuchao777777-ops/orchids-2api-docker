@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/config"
 	"strconv"
 	"strings"
 	"time"
@@ -53,12 +54,22 @@ func GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey string, timeout, heade
 	return getSharedBrowserHTTPClient(proxyKey, timeout, headerTimeout, proxyFunc, "")
 }
 
-func getSharedBrowserHTTPClient(proxyKey string, timeout, headerTimeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), userAgent string) *http.Client {
+func GetSharedBrowserHTTPClientWithLimits(proxyKey string, timeout, headerTimeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), cfg *config.Config) *http.Client {
+	return getSharedBrowserHTTPClient(proxyKey, timeout, headerTimeout, proxyFunc, "", cfg)
+}
+
+func getSharedBrowserHTTPClient(proxyKey string, timeout, headerTimeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), userAgent string, configs ...*config.Config) *http.Client {
 	if proxyKey == "" {
 		proxyKey = "direct"
 	}
 	hello := utlsProfileForUserAgent(userAgent)
 	cacheKey := "browser|" + sharedHTTPClientCacheKey(proxyKey, timeout) + fmt.Sprintf("|headers=%d|hello=%s", headerTimeout, hello.Version)
+	var cfg *config.Config
+	if len(configs) > 0 {
+		cfg = configs[0]
+	}
+	maxConns, maxIdle := HTTPPoolLimits(cfg)
+	cacheKey += fmt.Sprintf("|connections=%d|idle=%d", maxConns, maxIdle)
 
 	browserHTTPClientCache.mu.RLock()
 	client, ok := browserHTTPClientCache.clients[cacheKey]
@@ -79,9 +90,9 @@ func getSharedBrowserHTTPClient(proxyKey string, timeout, headerTimeout time.Dur
 			Proxy:                 proxyFunc,
 			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 			ForceAttemptHTTP2:     false,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   100,
-			MaxConnsPerHost:       200,
+			MaxIdleConns:          maxIdle,
+			MaxIdleConnsPerHost:   maxIdle,
+			MaxConnsPerHost:       maxConns,
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   15 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,

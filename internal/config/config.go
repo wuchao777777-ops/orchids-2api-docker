@@ -13,28 +13,37 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 type Config struct {
 	// ── Configurable fields (read from config.json / Redis) ──
-	Port               string   `json:"port"`
-	DebugEnabled       bool     `json:"debug_enabled"`
-	VerboseDiagnostics bool     `json:"verbose_diagnostics,omitempty"`
-	AdminUser          string   `json:"admin_user"`
-	AdminPass          string   `json:"admin_pass"`
-	AdminPath          string   `json:"admin_path"`
-	AdminToken         string   `json:"admin_token"`
-	CredentialKeyFile  string   `json:"credential_encryption_key_file,omitempty"`
-	ResponseStoreTTL   int      `json:"response_store_ttl_hours,omitempty"`
-	TrustedProxies     []string `json:"trusted_proxies,omitempty"`
-	RedisAddr          string   `json:"redis_addr"`
-	RedisPassword      string   `json:"redis_password"`
-	RedisDB            int      `json:"redis_db"`
-	RedisPrefix        string   `json:"redis_prefix"`
-	DeploymentInstance string   `json:"deployment_instance_id,omitempty"`
-	MediaDir           string   `json:"media_dir,omitempty"`
-	CacheStrategy      string   `json:"cache_strategy"`
+	Port                        string         `json:"port"`
+	DebugEnabled                bool           `json:"debug_enabled"`
+	VerboseDiagnostics          bool           `json:"verbose_diagnostics,omitempty"`
+	AdminUser                   string         `json:"admin_user"`
+	AdminPass                   string         `json:"admin_pass"`
+	AdminPath                   string         `json:"admin_path"`
+	AdminToken                  string         `json:"admin_token"`
+	CredentialKeyFile           string         `json:"credential_encryption_key_file,omitempty"`
+	ResponseStoreTTL            int            `json:"response_store_ttl_hours,omitempty"`
+	TrustedProxies              []string       `json:"trusted_proxies,omitempty"`
+	RedisAddr                   string         `json:"redis_addr"`
+	RedisPassword               string         `json:"redis_password"`
+	RedisDB                     int            `json:"redis_db"`
+	RedisPoolSize               int            `json:"redis_pool_size,omitempty"`
+	RedisPrefix                 string         `json:"redis_prefix"`
+	DeploymentInstance          string         `json:"deployment_instance_id,omitempty"`
+	MediaDir                    string         `json:"media_dir,omitempty"`
+	CacheStrategy               string         `json:"cache_strategy"`
+	UpstreamMaxConnsPerHost     int            `json:"upstream_max_conns_per_host,omitempty"`
+	UpstreamMaxIdleConnsPerHost int            `json:"upstream_max_idle_conns_per_host,omitempty"`
+	ClineHTTP2Enabled           bool           `json:"cline_http2_enabled,omitempty"`
+	WorkBuddyHTTP2Enabled       bool           `json:"workbuddy_http2_enabled,omitempty"`
+	DiagnosticsSampleEvery      int            `json:"diagnostics_sample_every,omitempty"`
+	DiagnosticsMaxConcurrent    int            `json:"diagnostics_max_concurrent,omitempty"`
+	ProviderConcurrencyLimits   map[string]int `json:"provider_concurrency_limits,omitempty"`
+	StreamFlushIntervalMs       int            `json:"stream_flush_interval_ms,omitempty"`
 
 	// ── Hardcoded fields (set unconditionally by ApplyHardcoded) ──
 	DebugLogSSE      bool `json:"-"`
@@ -160,7 +169,7 @@ type Config struct {
 	TokenRefreshInterval   int      `json:"-"`
 	AutoRefreshToken       bool     `json:"-"`
 	LoadBalancerCacheTTL   int      `json:"-"`
-	ConcurrencyLimit       int      `json:"-"`
+	ConcurrencyLimit       int      `json:"concurrency_limit,omitempty"`
 	ConcurrencyTimeout     int      `json:"concurrency_timeout,omitempty"`
 	ProxyURL               string   `json:"proxy_url"`
 	ProxyHTTP              string   `json:"proxy_http"`
@@ -193,6 +202,12 @@ func (c *Config) Clone() *Config {
 	clone.TrustedProxies = append([]string(nil), c.TrustedProxies...)
 	clone.GrokEgressNodes = append([]EgressNodeConfig(nil), c.GrokEgressNodes...)
 	clone.ProxyBypass = append([]string(nil), c.ProxyBypass...)
+	if c.ProviderConcurrencyLimits != nil {
+		clone.ProviderConcurrencyLimits = make(map[string]int, len(c.ProviderConcurrencyLimits))
+		for key, value := range c.ProviderConcurrencyLimits {
+			clone.ProviderConcurrencyLimits[key] = value
+		}
+	}
 	return &clone
 }
 
@@ -327,7 +342,12 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.TokenRefreshInterval = 1
 	cfg.AutoRefreshToken = true
 	cfg.LoadBalancerCacheTTL = 5
-	cfg.ConcurrencyLimit = 100
+	if cfg.ConcurrencyLimit <= 0 {
+		cfg.ConcurrencyLimit = 100
+	}
+	if cfg.ConcurrencyLimit > 1000000 {
+		cfg.ConcurrencyLimit = 1000000
+	}
 	cfg.ConcurrencyTimeout = boundedDefault(cfg.ConcurrencyTimeout, cfg.RequestTimeout, 86400)
 	cfg.DebugLogSSE = cfg.DebugEnabled
 }

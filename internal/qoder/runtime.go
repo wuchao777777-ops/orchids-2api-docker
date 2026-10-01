@@ -11,11 +11,12 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"strings"
 	"sync"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // The gateway does not accept the raw OAuth token as its request credential.
@@ -88,7 +89,7 @@ func referenceRuntimeFieldsFor(entropy source, in referenceRuntimeFieldInput) (R
 		entropy = cryptoSource{}
 	}
 	var raw [16]byte
-	if _, err := entropy.Read(raw[:]); err != nil {
+	if _, err := io.ReadFull(entropy, raw[:]); err != nil {
 		return RuntimeFields{}, fmt.Errorf("read reference runtime entropy: %w", err)
 	}
 	key := []byte(hex.EncodeToString(raw[:])[:16])
@@ -176,8 +177,14 @@ func reverseMaskUUID(raw [16]byte) [16]byte {
 
 // formatUUID renders 16 bytes as a lowercase 8-4-4-4-12 UUID string.
 func formatUUID(value [16]byte) string {
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])
+	var out [36]byte
+	hex.Encode(out[0:8], value[0:4])
+	hex.Encode(out[9:13], value[4:6])
+	hex.Encode(out[14:18], value[6:8])
+	hex.Encode(out[19:23], value[8:10])
+	hex.Encode(out[24:36], value[10:16])
+	out[8], out[13], out[18], out[23] = '-', '-', '-', '-'
+	return string(out[:])
 }
 
 // runtimeASCIIKey is the AES key: the lowercase hex of the first 8 UUID bytes,
@@ -324,6 +331,27 @@ func newUUID(entropy source) (string, error) {
 	value[6] = (value[6] & 0x0f) | 0x40
 	value[8] = (value[8] & 0x3f) | 0x80
 	return formatUUID(value), nil
+}
+
+// Three independent UUIDs share one entropy read, not one identity. Each UUID
+// retains its own 122 random bits and the same v4/version wire format.
+func newChatUUIDs(entropy source) (request, set, session string, err error) {
+	if entropy == nil {
+		entropy = cryptoSource{}
+	}
+	var raw [48]byte
+	if _, err = io.ReadFull(entropy, raw[:]); err != nil {
+		return "", "", "", fmt.Errorf("read uuid entropy: %w", err)
+	}
+	var ids [3]string
+	for i := range ids {
+		var value [16]byte
+		copy(value[:], raw[i*16:(i+1)*16])
+		value[6] = (value[6] & 0x0f) | 0x40
+		value[8] = (value[8] & 0x3f) | 0x80
+		ids[i] = formatUUID(value)
+	}
+	return ids[0], ids[1], ids[2], nil
 }
 
 // Complete reports whether the pair carries both halves. A half-populated pair

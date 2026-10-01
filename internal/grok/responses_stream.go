@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // One state per output item; late signatures and snapshots update that item,

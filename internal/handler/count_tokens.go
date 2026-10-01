@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"

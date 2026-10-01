@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 const maxBuildAliasResponseBytes = 128 << 20

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/prompt"

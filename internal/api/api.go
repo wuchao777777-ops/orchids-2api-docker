@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/alerting"
@@ -2603,14 +2603,14 @@ func normalizeConfigPatchValue(key string, value interface{}) interface{} {
 	case "enable_token_refresh", "enable_usage_refresh", "enable_token_count",
 		"auto_refresh_token", "kiro_use_builtin_proxy",
 		"antigravity_use_builtin_proxy",
-		"enable_context_compress", "debug_enabled", "qoder_http2_enabled":
+		"enable_context_compress", "debug_enabled", "qoder_http2_enabled", "cline_http2_enabled", "workbuddy_http2_enabled":
 		if b, ok := parseBoolish(value); ok {
 			return b
 		}
 	case "retry_delay", "request_timeout", "refresh_interval",
-		"redis_db", "token_refresh_interval", "load_balancer_cache_ttl", "concurrency_limit",
+		"redis_db", "redis_pool_size", "token_refresh_interval", "load_balancer_cache_ttl", "concurrency_limit",
 		"concurrency_timeout", "max_retries", "credential_retries",
-		"shared_refusal_wait_budget_ms", "qoder_queue_retry_interval_ms":
+		"shared_refusal_wait_budget_ms", "qoder_queue_retry_interval_ms", "upstream_max_conns_per_host", "upstream_max_idle_conns_per_host", "diagnostics_sample_every", "diagnostics_max_concurrent", "stream_flush_interval_ms":
 		if i, ok := parseIntish(value); ok {
 			return i
 		}

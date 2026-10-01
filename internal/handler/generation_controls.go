@@ -2,7 +2,7 @@ package handler
 
 import (
 	"bytes"
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // StopSequences accepts both OpenAI's string and array spellings of stop.

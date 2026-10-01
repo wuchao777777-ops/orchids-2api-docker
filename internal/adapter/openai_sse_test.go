@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 func TestBuildOpenAIChunk(t *testing.T) {

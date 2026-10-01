@@ -3,7 +3,7 @@ package workbuddy
 import (
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // freeModelIDs is the WorkBuddy free tier confirmed by the operator and by

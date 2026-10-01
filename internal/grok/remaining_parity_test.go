@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 func TestRemainingSearchRestrictionsValidationAndWire(t *testing.T) {

@@ -1,7 +1,7 @@
 package grok
 
 import (
-	"github.com/goccy/go-json"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	shared "orchids-api/internal/handler"

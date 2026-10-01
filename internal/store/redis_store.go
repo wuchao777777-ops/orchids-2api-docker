@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/util"
@@ -36,6 +36,8 @@ type redisStore struct {
 	changeDone    chan struct{}
 	changeOnce    sync.Once
 	changeClosed  bool
+	keyIndexMu    sync.RWMutex
+	keyIndex      map[string]int64
 }
 
 // ChangeEmitter receives one notification per persisted account mutation. The
@@ -418,7 +420,7 @@ type apiKeyRecord struct {
 	CreatedAt              time.Time  `json:"created_at"`
 }
 
-func newRedisStore(addr, password string, db int, prefix string, credentialKey []byte) (*redisStore, error) {
+func newRedisStore(addr, password string, db int, prefix string, credentialKey []byte, poolSizes ...int) (*redisStore, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
 		return nil, fmt.Errorf("redis address is required")
@@ -431,12 +433,16 @@ func newRedisStore(addr, password string, db int, prefix string, credentialKey [
 		prefix += ":"
 	}
 
+	poolSize := 200
+	if len(poolSizes) > 0 && poolSizes[0] > 0 {
+		poolSize = min(poolSizes[0], 4096)
+	}
 	client := redis.NewClient(&redis.Options{
 		Addr:         addr,
 		Password:     password,
 		DB:           db,
-		PoolSize:     200,
-		MinIdleConns: 20,
+		PoolSize:     poolSize,
+		MinIdleConns: min(20, poolSize),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1478,6 +1484,21 @@ func (s *redisStore) GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey,
 	if hash == "" {
 		return nil, ErrNoRows
 	}
+	s.keyIndexMu.RLock()
+	cachedID := s.keyIndex[hash]
+	s.keyIndexMu.RUnlock()
+	if cachedID != 0 {
+		key, err := s.getApiKeyByID(ctx, cachedID)
+		if err == nil && key.KeyHash == hash {
+			return key, nil
+		}
+		if err != nil && err != ErrNoRows {
+			return nil, err
+		}
+		s.keyIndexMu.Lock()
+		delete(s.keyIndex, hash)
+		s.keyIndexMu.Unlock()
+	}
 	id, err := s.client.Get(ctx, s.apiKeysHashKey(hash)).Int64()
 	if err == redis.Nil {
 		return nil, ErrNoRows
@@ -1485,7 +1506,20 @@ func (s *redisStore) GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey,
 	if err != nil {
 		return nil, err
 	}
-	return s.getApiKeyByID(ctx, id)
+	key, err := s.getApiKeyByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if key.KeyHash != hash {
+		return nil, ErrNoRows
+	}
+	s.keyIndexMu.Lock()
+	if s.keyIndex == nil || len(s.keyIndex) >= 4096 {
+		s.keyIndex = make(map[string]int64)
+	}
+	s.keyIndex[hash] = id
+	s.keyIndexMu.Unlock()
+	return key, nil
 }
 
 func (s *redisStore) ConsumeApiKeyRPM(ctx context.Context, id int64, limit int, now time.Time) (bool, error) {

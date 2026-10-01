@@ -103,7 +103,7 @@ func TestSkillRequestControlsAndSharedRetry(t *testing.T) {
 		if body.IsRetry {
 			t.Fatalf("attempt %d retry=%v", attempt, body.IsRetry)
 		}
-		p := body.Parameters
+		p := body.Parameters.(map[string]interface{})
 		if p["max_tokens"] != float64(123) || p["temperature"] != float64(0) || p["top_p"] != 0.25 {
 			t.Fatalf("controls=%#v", p)
 		}

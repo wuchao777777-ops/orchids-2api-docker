@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
@@ -76,7 +76,9 @@ type streamChunk struct {
 // consumeStream parses the SSE body and forwards deltas to the caller.
 func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamResult, error) {
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	buffer := util.AcquireStreamBuffer()
+	defer util.ReleaseStreamBuffer(buffer)
+	scanner.Buffer(buffer[:], 8*1024*1024)
 	result := streamResult{}
 	tools := util.NewToolCallAccumulator()
 	sawDone := false

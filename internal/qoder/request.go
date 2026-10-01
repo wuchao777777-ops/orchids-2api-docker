@@ -8,11 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/debug"
 	"orchids-api/internal/prompt"
@@ -89,29 +90,29 @@ func chatURL(base string) string {
 // absent. This channel used to send all four as empty values; a capture of the
 // QoderWork client shows it sends none of them.
 type chatBody struct {
-	Business          businessInfo           `json:"business"`
-	RequestID         string                 `json:"request_id"`
-	RequestSetID      string                 `json:"request_set_id"`
-	ChatRecordID      string                 `json:"chat_record_id"`
-	SessionID         string                 `json:"session_id"`
-	Stream            bool                   `json:"stream"`
-	ChatTask          string                 `json:"chat_task"`
-	ChatContext       map[string]interface{} `json:"chat_context"`
-	IsReply           bool                   `json:"is_reply"`
-	IsRetry           bool                   `json:"is_retry"`
-	Source            int                    `json:"source"`
-	Version           string                 `json:"version"`
-	AgentID           string                 `json:"agent_id"`
-	TaskID            string                 `json:"task_id"`
-	SessionType       string                 `json:"session_type"`
-	AliyunUser        string                 `json:"aliyun_user_type"`
-	ModelConfig       modelConfigWire        `json:"model_config"`
-	System            string                 `json:"system"`
-	Messages          []chatMessage          `json:"messages"`
-	Tools             []interface{}          `json:"tools"`
-	ToolChoice        interface{}            `json:"tool_choice,omitempty"`
-	Parameters        map[string]interface{} `json:"parameters"`
-	ParallelToolCalls *bool                  `json:"parallel_tool_calls,omitempty"`
+	Business          businessInfo    `json:"business"`
+	RequestID         string          `json:"request_id"`
+	RequestSetID      string          `json:"request_set_id"`
+	ChatRecordID      string          `json:"chat_record_id"`
+	SessionID         string          `json:"session_id"`
+	Stream            bool            `json:"stream"`
+	ChatTask          string          `json:"chat_task"`
+	ChatContext       interface{}     `json:"chat_context"`
+	IsReply           bool            `json:"is_reply"`
+	IsRetry           bool            `json:"is_retry"`
+	Source            int             `json:"source"`
+	Version           string          `json:"version"`
+	AgentID           string          `json:"agent_id"`
+	TaskID            string          `json:"task_id"`
+	SessionType       string          `json:"session_type"`
+	AliyunUser        string          `json:"aliyun_user_type"`
+	ModelConfig       modelConfigWire `json:"model_config"`
+	System            string          `json:"system"`
+	Messages          []chatMessage   `json:"messages"`
+	Tools             []interface{}   `json:"tools"`
+	ToolChoice        interface{}     `json:"tool_choice,omitempty"`
+	Parameters        interface{}     `json:"parameters"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
 }
 
 // modelConfigWire matches the reference bridge's template keys. Its selected
@@ -219,6 +220,16 @@ func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, session
 	return buildChatBodyProfile(req, model, sessionID, requestID, requestSetID, clientVersion, aliyunUserType, sceneBusinessProduct)
 }
 
+type chatParameters struct {
+	MaxTokens       int       `json:"max_tokens"`
+	Temperature     *float64  `json:"temperature,omitempty"`
+	TopP            *float64  `json:"top_p,omitempty"`
+	Stop            *[]string `json:"stop,omitempty"`
+	ContextLength   int       `json:"context_length,omitempty"`
+	EnableThinking  *bool     `json:"enable_thinking,omitempty"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+}
+
 func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, requestSetID, clientVersion, aliyunUserType, businessProduct string) ([]byte, error) {
 	messages, systemText, err := buildMessages(req)
 	if err != nil {
@@ -227,18 +238,13 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 
 	// Preserve explicit client controls; use the reference output budget only
 	// when the caller omitted it.
-	parameters := map[string]interface{}{"max_tokens": 32000}
+	parameters := chatParameters{MaxTokens: 32000, Temperature: req.Temperature, TopP: req.TopP}
 	if req.MaxTokens != nil {
-		parameters["max_tokens"] = *req.MaxTokens
-	}
-	if req.Temperature != nil {
-		parameters["temperature"] = *req.Temperature
-	}
-	if req.TopP != nil {
-		parameters["top_p"] = *req.TopP
+		parameters.MaxTokens = *req.MaxTokens
 	}
 	if req.Stop != nil {
-		parameters["stop"] = append([]string{}, req.Stop...)
+		stops := append([]string{}, req.Stop...)
+		parameters.Stop = &stops
 	}
 	// The catalog's default tier is distinct from its input budget and largest
 	// offered tier. Never opt into the largest tier implicitly.
@@ -247,7 +253,7 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 		contextLength = model.MaxInputTokens
 	}
 	if contextLength > 0 {
-		parameters["context_length"] = contextLength
+		parameters.ContextLength = contextLength
 	}
 	// The reference gateway leaves reasoning off by default even for a catalog
 	// row marked is_reasoning=true; it enables model_config.is_reasoning only
@@ -255,10 +261,12 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 	// intact so this changes only requests that supplied no reasoning preference.
 	effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
 	if effort != "" && effort != "none" {
-		parameters["enable_thinking"] = true
-		parameters["reasoning_effort"] = effort
+		thinking := true
+		parameters.EnableThinking = &thinking
+		parameters.ReasoningEffort = effort
 	} else if effort == "none" {
-		parameters["enable_thinking"] = false
+		thinking := false
+		parameters.EnableThinking = &thinking
 	}
 	tools := normalizeToolDefinitions(req, model)
 	toolChoice, parallelTools := normalizeToolControls(req, len(tools) > 0)
@@ -303,11 +311,11 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 		body.Tools = []interface{}{}
 	}
 
-	raw, err := json.Marshal(body)
+	encoded, err := marshalEncodedBody(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal qoder request: %w", err)
 	}
-	return EncodeBody(raw), nil
+	return encoded, nil
 }
 
 // referenceChatContext mirrors the capture's lightweight context metadata
@@ -317,22 +325,28 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 // text and extra.originalContent both carry the same plain string in the
 // capture. This channel used to send them as {"type":"text","text":...}
 // objects, a shape the QoderWork client never produces.
-func referenceChatContext(req upstream.UpstreamRequest, model modelEntry) map[string]interface{} {
+type referenceContext struct {
+	ChatPrompt string `json:"chatPrompt"`
+	Extra      struct {
+		Context     []interface{} `json:"context"`
+		ModelConfig struct {
+			IsReasoning bool   `json:"is_reasoning"`
+			Key         string `json:"key"`
+		} `json:"modelConfig"`
+		OriginalContent string `json:"originalContent"`
+	} `json:"extra"`
+	Features  []interface{} `json:"features"`
+	ImageURLs interface{}   `json:"imageUrls"`
+	Text      string        `json:"text"`
+}
+
+func referenceChatContext(req upstream.UpstreamRequest, model modelEntry) referenceContext {
 	prompt := latestUserText(req)
-	return map[string]interface{}{
-		"chatPrompt": "",
-		"extra": map[string]interface{}{
-			"context": []interface{}{},
-			"modelConfig": map[string]interface{}{
-				"is_reasoning": model.IsReasoning,
-				"key":          model.Key,
-			},
-			"originalContent": prompt,
-		},
-		"features":  []interface{}{},
-		"imageUrls": nil,
-		"text":      prompt,
-	}
+	ctx := referenceContext{Features: []interface{}{}, Text: prompt}
+	ctx.Extra.Context = []interface{}{}
+	ctx.Extra.ModelConfig.IsReasoning, ctx.Extra.ModelConfig.Key = model.IsReasoning, model.Key
+	ctx.Extra.OriginalContent = prompt
+	return ctx
 }
 
 func refreshedReplayBody(encoded []byte, requestID string) ([]byte, error) {
@@ -697,47 +711,61 @@ func cloneBool(value *bool) *bool {
 // applies. Presence is not cosmetic — the gateway rejects a request that
 // carries an empty organization header.
 func (c *Client) applyAuthHeaders(req *http.Request, creds Credentials, fields RuntimeFields, requestID, modelKey, modelSource, body, signedPath string) error {
-	payloadBase64, err := buildCOSYPayload(requestID, fields.EncryptUserInfo, c.clientVersion)
+	return c.applyAuthHeadersBytes(req, creds, fields, requestID, modelKey, modelSource, []byte(body), signedPath)
+}
+
+func (c *Client) applyAuthHeadersBytes(req *http.Request, creds Credentials, fields RuntimeFields, requestID, modelKey, modelSource string, body []byte, signedPath string) error {
+	unixSeconds := strconv.FormatInt(time.Now().Unix(), 10)
+	authorization, err := buildCOSYAuthorization(requestID, fields.EncryptUserInfo, c.clientVersion, fields.Key, unixSeconds, body, signedPath)
 	if err != nil {
 		return err
 	}
-	unixSeconds := strconv.FormatInt(time.Now().Unix(), 10)
-	signature := signRequest(payloadBase64, fields.Key, unixSeconds, body, signedPath)
-
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Accept-Language", "*")
-	req.Header.Set("Authorization", composeBearer(payloadBase64, signature))
-	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Cosy-Business-Product", c.businessProduct())
-	req.Header.Set("Cosy-Business-Type", sceneBusinessType)
-	req.Header.Set("Cosy-ClientType", sceneClientID)
-	req.Header.Set("Cosy-Data-Policy", dataPolicyHeader(c.dataPolicyAgreed()))
-	req.Header.Set("Cosy-Date", unixSeconds)
-	req.Header.Set("Cosy-Key", fields.Key)
-	req.Header.Set("Cosy-MachineId", c.machineID)
-	req.Header.Set("Cosy-MachineOS", machineOS)
-	req.Header.Set("Cosy-MachineToken", c.machineTokenOr(c.machineID))
-	req.Header.Set("Cosy-MachineType", c.machineTypeOr(machineSceneType))
+	// One request-owned backing array replaces a separate allocation per value.
+	// Full slice expressions prevent Header.Add from overwriting its neighbour.
+	if len(req.Header) == 0 {
+		req.Header = make(http.Header, 32)
+	}
+	var values [32]string
+	index := 0
+	set := func(key, value string) {
+		values[index] = value
+		req.Header[textproto.CanonicalMIMEHeaderKey(key)] = values[index : index+1 : index+1]
+		index++
+	}
+	set("Accept", "text/event-stream")
+	set("Accept-Language", "*")
+	set("Authorization", authorization)
+	set("Cache-Control", "no-cache")
+	set("Connection", "keep-alive")
+	set("Content-Type", "application/json")
+	set("Cosy-Business-Product", c.businessProduct())
+	set("Cosy-Business-Type", sceneBusinessType)
+	set("Cosy-ClientType", sceneClientID)
+	set("Cosy-Data-Policy", dataPolicyHeader(c.dataPolicyAgreed()))
+	set("Cosy-Date", unixSeconds)
+	set("Cosy-Key", fields.Key)
+	set("Cosy-MachineId", c.machineID)
+	set("Cosy-MachineOS", machineOS)
+	set("Cosy-MachineToken", c.machineTokenOr(c.machineID))
+	set("Cosy-MachineType", c.machineTypeOr(machineSceneType))
 	if orgID := strings.TrimSpace(creds.OrgID); orgID != "" {
-		req.Header.Set("Cosy-Organization-Id", orgID)
+		set("Cosy-Organization-Id", orgID)
 	}
 	if tags := filterTags(creds.OrgTags); len(tags) > 0 {
-		req.Header.Set("Cosy-Organization-Tags", strings.Join(tags, ","))
+		set("Cosy-Organization-Tags", strings.Join(tags, ","))
 	}
-	req.Header.Set("Cosy-Scene", sceneName)
-	req.Header.Set("Cosy-User", strings.TrimSpace(creds.UID))
-	req.Header.Set("Cosy-Version", c.clientVersion)
-	req.Header.Set("Sec-Fetch-Mode", "cors")
-	req.Header.Set("Traceparent", util.Traceparent(requestID))
-	req.Header.Set("User-Agent", clientUserAgent)
-	req.Header.Set("Login-Version", "v2")
+	set("Cosy-Scene", sceneName)
+	set("Cosy-User", strings.TrimSpace(creds.UID))
+	set("Cosy-Version", c.clientVersion)
+	set("Sec-Fetch-Mode", "cors")
+	set("Traceparent", util.Traceparent(requestID))
+	set("User-Agent", clientUserAgent)
+	set("Login-Version", "v2")
 	if key := strings.TrimSpace(modelKey); key != "" {
-		req.Header.Set("X-Model-Key", key)
+		set("X-Model-Key", key)
 		// The source header is gated on the key, not on its own value: the CLI
 		// sends it even when the source itself is empty.
-		req.Header.Set("X-Model-Source", strings.TrimSpace(modelSource))
+		set("X-Model-Source", strings.TrimSpace(modelSource))
 	}
 	return nil
 }
@@ -764,16 +792,19 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 	reqCtx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return streamResult{}, &attemptStreamError{err: fmt.Errorf("build qoder request: %w", err)}
 	}
-	if err := c.applyAuthHeaders(req, creds, fields, requestID, model.Key, model.Source, string(body), signPath(url)); err != nil {
+	if err := c.applyAuthHeadersBytes(req, creds, fields, requestID, model.Key, model.Source, body, signPath(url)); err != nil {
 		return streamResult{}, &attemptStreamError{err: err}
 	}
-	req.Header.Set("Accept", "text/event-stream")
 	attempt := debug.BeginUpstream(ctx, req.Method, req.URL.String(), req.Header, body)
-	traceCtx, latency := attempt.Trace(req.Context(), map[string]interface{}{"provider": "qoder", "model_key": model.Key, "model_source": model.Source, "host": req.URL.Host, "httpdns_ip": req.Header.Get("X-Qoder-Httpdns-Ip"), "body_bytes": len(body), "protocol_profile": c.protocol.name})
+	var traceMetadata map[string]interface{}
+	if debug.FromContext(ctx) != nil {
+		traceMetadata = map[string]interface{}{"provider": "qoder", "model_key": model.Key, "model_source": model.Source, "host": req.URL.Host, "httpdns_ip": req.Header.Get("X-Qoder-Httpdns-Ip"), "body_bytes": len(body), "protocol_profile": c.protocol.name}
+	}
+	traceCtx, latency := attempt.Trace(req.Context(), traceMetadata)
 	if latency != nil {
 		c.stateMu.RLock()
 		if c.account != nil {

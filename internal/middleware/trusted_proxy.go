@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 )
 
 type clientIPContextKey struct{}
@@ -181,6 +183,34 @@ func ipString(ip net.IP, fallback string) string {
 // still needs a key.
 type AnonymousAllowlist struct {
 	networks []*net.IPNet
+}
+
+// The source config is immutable. Only a configuration change reparses CIDRs;
+// a malformed replacement immediately requires authentication.
+type AnonymousAllowlistCache struct {
+	mu     sync.RWMutex
+	values []string
+	list   *AnonymousAllowlist
+	err    error
+	ready  bool
+}
+
+func (c *AnonymousAllowlistCache) Get(values []string) (*AnonymousAllowlist, error) {
+	c.mu.RLock()
+	if c.ready && slices.Equal(values, c.values) {
+		list, err := c.list, c.err
+		c.mu.RUnlock()
+		return list, err
+	}
+	c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.ready || !slices.Equal(values, c.values) {
+		c.list, c.err = NewAnonymousAllowlist(values)
+		c.values = append([]string(nil), values...)
+		c.ready = true
+	}
+	return c.list, c.err
 }
 
 // NewAnonymousAllowlist parses CIDRs, bare IPs and hostnames-as-IPs. An empty

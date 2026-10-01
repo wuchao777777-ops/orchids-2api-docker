@@ -61,10 +61,30 @@ func GetSharedHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(
 // concurrency-100 gateway. The flag is part of the cache key so one caller's
 // choice cannot silently become another's.
 func GetSharedHTTPClientWithHTTP2(proxyKey string, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), http2 bool) *http.Client {
+	return GetSharedHTTPClientWithLimits(proxyKey, timeout, proxyFunc, http2, nil)
+}
+
+func HTTPPoolLimits(cfg *config.Config) (maxConns, maxIdle int) {
+	maxConns, maxIdle = 200, 100
+	if cfg != nil {
+		if cfg.UpstreamMaxConnsPerHost > 0 {
+			maxConns = min(cfg.UpstreamMaxConnsPerHost, 16384)
+		}
+		if cfg.UpstreamMaxIdleConnsPerHost > 0 {
+			maxIdle = min(cfg.UpstreamMaxIdleConnsPerHost, maxConns)
+		}
+	}
+	maxIdle = min(maxIdle, maxConns)
+	return
+}
+
+func GetSharedHTTPClientWithLimits(proxyKey string, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), http2 bool, cfg *config.Config) *http.Client {
 	if proxyKey == "" {
 		proxyKey = "direct"
 	}
 	cacheKey := sharedHTTPClientCacheKey(proxyKey, timeout)
+	maxConns, maxIdle := HTTPPoolLimits(cfg)
+	cacheKey += fmt.Sprintf("|connections=%d|idle=%d", maxConns, maxIdle)
 	if http2 {
 		cacheKey += "|h2"
 	}
@@ -85,9 +105,9 @@ func GetSharedHTTPClientWithHTTP2(proxyKey string, timeout time.Duration, proxyF
 	}
 
 	transport := &http.Transport{
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   100,
-		MaxConnsPerHost:       200, // Important for High concurrency
+		MaxIdleConns:          maxIdle,
+		MaxIdleConnsPerHost:   maxIdle,
+		MaxConnsPerHost:       maxConns,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,

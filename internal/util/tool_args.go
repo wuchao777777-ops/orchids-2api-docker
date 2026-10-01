@@ -3,7 +3,7 @@ package util
 import (
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // toolInputDepth bounds how many layers of argument wrapping are unwrapped. The

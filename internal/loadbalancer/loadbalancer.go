@@ -47,13 +47,14 @@ func EffectiveAccountConcurrencyLimit(acc *store.Account) int64 {
 }
 
 type LoadBalancer struct {
-	Store          *store.Store
-	mu             sync.RWMutex
-	cachedAccounts []*store.Account
-	cacheExpires   time.Time
-	cacheTTL       time.Duration
-	connTracker    ConnTracker
-	sfGroup        singleflight.Group
+	Store           *store.Store
+	mu              sync.RWMutex
+	cachedAccounts  []*store.Account
+	cachedByChannel map[string][]*store.Account
+	cacheExpires    time.Time
+	cacheTTL        time.Duration
+	connTracker     ConnTracker
+	sfGroup         singleflight.Group
 	// scanCursor rotates the window a large pool is examined through.
 	scanCursor int
 	// lastSelected remembers when each account was last handed out, for the
@@ -127,6 +128,14 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 	accounts, err := lb.getEnabledAccounts(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if channel != "" {
+		lb.mu.RLock()
+		if lb.cachedByChannel != nil && len(accounts) == len(lb.cachedAccounts) &&
+			(len(accounts) == 0 || &accounts[0] == &lb.cachedAccounts[0]) {
+			accounts = lb.cachedByChannel[strings.ToLower(channel)]
+		}
+		lb.mu.RUnlock()
 	}
 
 	var filtered []*store.Account
@@ -318,6 +327,7 @@ func (lb *LoadBalancer) InvalidateAccounts(ids []int64) {
 	// would let a later read serve the pre-change snapshot from a slice another
 	// caller still holds.
 	lb.cacheExpires = time.Time{}
+	lb.cachedByChannel = nil
 	if len(lb.cachedAccounts) == 0 {
 		return
 	}
@@ -357,6 +367,19 @@ func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Accoun
 
 		lb.mu.Lock()
 		lb.cachedAccounts = accounts
+		lb.cachedByChannel = make(map[string][]*store.Account)
+		for _, acc := range accounts {
+			if acc == nil {
+				continue
+			}
+			typ, mode := strings.ToLower(acc.AccountType), strings.ToLower(acc.AgentMode)
+			if typ != "" {
+				lb.cachedByChannel[typ] = append(lb.cachedByChannel[typ], acc)
+			}
+			if mode != "" && mode != typ {
+				lb.cachedByChannel[mode] = append(lb.cachedByChannel[mode], acc)
+			}
+		}
 		lb.cacheExpires = time.Now().Add(lb.cacheTTL)
 		lb.mu.Unlock()
 
@@ -424,6 +447,22 @@ func releaseSelectionScratch(s *selectionScratch) {
 
 func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, tracker ConnTracker) *store.Account {
 	if len(accounts) == 0 {
+		return nil
+	}
+	// Bound count reads and scratch allocations even when availability filtering
+	// fell back to a large pool. Probe further windows only when a window is full.
+	if len(accounts) > accountScanWindow {
+		start := lb.rotateScanCursor(len(accounts))
+		var window [accountScanWindow]*store.Account
+		for offset := 0; offset < len(accounts); offset += accountScanWindow {
+			n := min(accountScanWindow, len(accounts)-offset)
+			for i := 0; i < n; i++ {
+				window[i] = accounts[(start+offset+i)%len(accounts)]
+			}
+			if picked := lb.selectAccountWithTracker(window[:n], tracker); picked != nil {
+				return picked
+			}
+		}
 		return nil
 	}
 	if tracker == nil {

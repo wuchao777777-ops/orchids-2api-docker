@@ -27,15 +27,17 @@ func TestSimplePromptRequestRetainsContextAndExplicitBudget(t *testing.T) {
 		if len(body.Messages) != 1 || body.Messages[0].Content != req.Prompt || len(body.Tools) != 0 || body.System != "" {
 			t.Fatalf("unexpected simple payload: messages=%v tools=%d", body.Messages, len(body.Tools))
 		}
-		if body.ChatContext["text"] != req.Prompt || body.ChatContext["extra"].(map[string]interface{})["originalContent"] != req.Prompt {
+		context := body.ChatContext.(map[string]interface{})
+		if context["text"] != req.Prompt || context["extra"].(map[string]interface{})["originalContent"] != req.Prompt {
 			t.Fatalf("prompt missing from context: %v", body.ChatContext)
 		}
 		want := 32000
 		if limit != 0 {
 			want = limit
 		}
-		if body.Parameters["max_tokens"] != float64(want) {
-			t.Fatalf("budget=%v want=%d", body.Parameters["max_tokens"], want)
+		parameters := body.Parameters.(map[string]interface{})
+		if parameters["max_tokens"] != float64(want) {
+			t.Fatalf("budget=%v want=%d", parameters["max_tokens"], want)
 		}
 	}
 }

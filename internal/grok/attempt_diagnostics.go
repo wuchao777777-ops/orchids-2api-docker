@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"

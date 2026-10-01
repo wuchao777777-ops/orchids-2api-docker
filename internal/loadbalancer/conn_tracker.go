@@ -5,11 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 )
 
 // ConnTracker tracks active connections per account for weighted least-connections selection.
@@ -99,6 +102,16 @@ type RedisConnTracker struct {
 	mu            sync.Mutex
 	held          map[int64][]*redisConnLease
 	closed        bool
+	renewStop     chan struct{}
+	renewDone     chan struct{}
+	countMu       sync.Mutex
+	countCache    map[int64]cachedConnCount
+	countGroup    singleflight.Group
+}
+
+type cachedConnCount struct {
+	count   int64
+	expires time.Time
 }
 
 const redisConnLeaseTTL = 2 * time.Minute
@@ -118,9 +131,11 @@ func (l *redisConnLease) stopRenewal() {
 
 func NewRedisConnTracker(client *redis.Client, prefix string) *RedisConnTracker {
 	t := &RedisConnTracker{
-		client: client,
-		prefix: prefix + "conns:",
-		held:   make(map[int64][]*redisConnLease),
+		client:    client,
+		prefix:    prefix + "conns:",
+		held:      make(map[int64][]*redisConnLease),
+		renewStop: make(chan struct{}),
+		renewDone: make(chan struct{}),
 	}
 	// Each request owns one expiring sorted-set member. A crashed process stops
 	// renewing its members and Redis reclaims them automatically.
@@ -155,6 +170,7 @@ func NewRedisConnTracker(client *redis.Client, prefix string) *RedisConnTracker 
 		redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[1])
 		return redis.call("ZCARD", KEYS[1])
 	`)
+	go t.renewLoop()
 	return t
 }
 
@@ -193,7 +209,9 @@ func (t *RedisConnTracker) Release(accountID int64) {
 	<-lease.done
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = t.releaseScript.Run(ctx, t.client, []string{t.key(accountID)}, lease.id).Err()
+	if err := t.releaseScript.Run(ctx, t.client, []string{t.key(accountID)}, lease.id).Err(); err == nil {
+		t.adjustCachedCount(accountID, -1)
+	}
 }
 
 // Close releases every lease owned by this process. Expiry remains the crash
@@ -209,9 +227,11 @@ func (t *RedisConnTracker) Close() {
 		return
 	}
 	t.closed = true
+	close(t.renewStop)
 	held := t.held
 	t.held = make(map[int64][]*redisConnLease)
 	t.mu.Unlock()
+	<-t.renewDone
 
 	for _, leases := range held {
 		for _, lease := range leases {
@@ -241,6 +261,55 @@ func (t *RedisConnTracker) GetCount(accountID int64) int64 {
 }
 
 func (t *RedisConnTracker) GetCounts(accountIDs []int64) map[int64]int64 {
+	result := make(map[int64]int64, len(accountIDs))
+	now := time.Now()
+	missing := make([]int64, 0, len(accountIDs))
+	t.countMu.Lock()
+	for _, id := range accountIDs {
+		if cached, ok := t.countCache[id]; ok && now.Before(cached.expires) {
+			result[id] = cached.count
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	t.countMu.Unlock()
+	if len(missing) == 0 {
+		return result
+	}
+	var key strings.Builder
+	for _, id := range missing {
+		key.WriteString(strconv.FormatInt(id, 10))
+		key.WriteByte(',')
+	}
+	value, _, _ := t.countGroup.Do(key.String(), func() (interface{}, error) {
+		counts := t.fetchCounts(missing)
+		t.countMu.Lock()
+		if t.countCache == nil || len(t.countCache) > 65536 {
+			t.countCache = make(map[int64]cachedConnCount)
+		}
+		for id, count := range counts {
+			t.countCache[id] = cachedConnCount{count, time.Now().Add(50 * time.Millisecond)}
+		}
+		t.countMu.Unlock()
+		return counts, nil
+	})
+	for id, count := range value.(map[int64]int64) {
+		result[id] = count
+	}
+	return result
+}
+
+// Selection counts are short-lived hints; TryAcquire is always authoritative.
+func (t *RedisConnTracker) adjustCachedCount(id, delta int64) {
+	t.countMu.Lock()
+	defer t.countMu.Unlock()
+	if cached, ok := t.countCache[id]; ok {
+		cached.count = max(0, cached.count+delta)
+		t.countCache[id] = cached
+	}
+}
+
+func (t *RedisConnTracker) fetchCounts(accountIDs []int64) map[int64]int64 {
 	result := make(map[int64]int64, len(accountIDs))
 
 	if len(accountIDs) == 0 {
@@ -312,24 +381,75 @@ func (t *RedisConnTracker) acquire(accountID, limit int64) (*redisConnLease, boo
 	}
 	t.held[accountID] = append(t.held[accountID], lease)
 	t.mu.Unlock()
-	go t.renew(accountID, lease)
+	// One process-wide scheduler renews leases; a request owns no heartbeat
+	// goroutine or ticker. done remains the release/shutdown lifecycle barrier.
+	close(lease.done)
+	t.adjustCachedCount(accountID, 1)
 	return lease, true
 }
 
-func (t *RedisConnTracker) renew(accountID int64, lease *redisConnLease) {
-	defer close(lease.done)
+func (t *RedisConnTracker) renewLoop() {
+	defer close(t.renewDone)
 	ticker := time.NewTicker(redisConnLeaseTTL / 3)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-lease.stop:
+		case <-t.renewStop:
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = t.refreshScript.Run(ctx, t.client, []string{t.key(accountID)}, lease.id,
-				time.Now().Add(redisConnLeaseTTL).UnixMilli(), (redisConnLeaseTTL * 2).Milliseconds()).Err()
-			cancel()
+			t.renewBatch()
 		}
+	}
+}
+
+var renewConnBatchScript = redis.NewScript(`
+ local renewed = 0
+ for i = 3, #ARGV do
+  if redis.call("ZSCORE", KEYS[1], ARGV[i]) ~= false then
+   redis.call("ZADD", KEYS[1], "XX", ARGV[1], ARGV[i])
+   renewed = renewed + 1
+  end
+ end
+ if renewed > 0 then redis.call("PEXPIRE", KEYS[1], ARGV[2]) end
+ return renewed
+`)
+
+func (t *RedisConnTracker) renewBatch() {
+	type batch struct {
+		accountID int64
+		ids       []string
+	}
+	t.mu.Lock()
+	batches := make([]batch, 0, len(t.held))
+	for id, leases := range t.held {
+		for start := 0; start < len(leases); start += 256 {
+			ids := make([]string, 0, min(256, len(leases)-start))
+			for _, lease := range leases[start:min(start+256, len(leases))] {
+				ids = append(ids, lease.id)
+			}
+			batches = append(batches, batch{id, ids})
+		}
+	}
+	t.mu.Unlock()
+	for start := 0; start < len(batches); start += 128 {
+		select {
+		case <-t.renewStop:
+			return
+		default:
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		pipe := t.client.Pipeline()
+		for _, b := range batches[start:min(start+128, len(batches))] {
+			args := make([]interface{}, 0, len(b.ids)+2)
+			args = append(args, time.Now().Add(redisConnLeaseTTL).UnixMilli(), (redisConnLeaseTTL * 2).Milliseconds())
+			for _, id := range b.ids {
+				args = append(args, id)
+			}
+			// XX plus ZSCORE prevents a concurrent Release from resurrecting a lease.
+			renewConnBatchScript.Eval(ctx, pipe, []string{t.key(b.accountID)}, args...)
+		}
+		_, _ = pipe.Exec(ctx)
+		cancel()
 	}
 }
 

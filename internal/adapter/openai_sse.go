@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 type openAIChunk struct {

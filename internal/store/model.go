@@ -2,7 +2,7 @@ package store
 
 import (
 	"bytes"
-	"github.com/goccy/go-json"
+	"encoding/json"
 	"slices"
 	"strings"
 	"time"

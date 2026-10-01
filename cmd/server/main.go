@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
-	"github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
 	_ "net/http/pprof"
@@ -113,6 +113,7 @@ func main() {
 		RedisAddr:               cfg.RedisAddr,
 		RedisPassword:           cfg.RedisPassword,
 		RedisDB:                 cfg.RedisDB,
+		RedisPoolSize:           cfg.RedisPoolSize,
 		RedisPrefix:             cfg.RedisPrefix,
 		CredentialEncryptionKey: credentialKey,
 	})
@@ -299,7 +300,13 @@ func main() {
 			trustedProxy,
 			middleware.SecurityHeaders,
 			middleware.TraceMiddleware,
-			middleware.Diagnostics(diagnosticStore, apiHandler.DiagnosticsEnabled),
+			middleware.Diagnostics(diagnosticStore, apiHandler.DiagnosticsEnabled, func() middleware.DiagnosticBudget {
+				current := apiHandler.ConfigSnapshot()
+				if current == nil {
+					return middleware.DiagnosticBudget{}
+				}
+				return middleware.DiagnosticBudget{SampleEvery: current.DiagnosticsSampleEvery, MaxConcurrent: current.DiagnosticsMaxConcurrent}
+			}),
 			middleware.LoggingMiddleware,
 		)(mux),
 		ReadHeaderTimeout: 10 * time.Second,

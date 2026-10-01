@@ -5,7 +5,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // Schema-driven argument normalization, ported from chenyme/grok2api

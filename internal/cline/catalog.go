@@ -3,7 +3,7 @@ package cline
 import (
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // Model is one row of the recommended-models feed.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 func TestAnthropicRequestToChatPreservesToolsAndMultimodalContent(t *testing.T) {

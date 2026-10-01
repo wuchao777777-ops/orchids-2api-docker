@@ -3,7 +3,7 @@ package qoder
 import (
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 	"orchids-api/internal/upstream"
 )
 
@@ -46,8 +46,9 @@ func TestObservedContextTiersAndRequestDefault(t *testing.T) {
 		if err := json.Unmarshal(raw, &body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Parameters["context_length"] != float64(tc.def) {
-			t.Fatalf("%s context_length=%v", tc.key, body.Parameters["context_length"])
+		parameters := body.Parameters.(map[string]interface{})
+		if parameters["context_length"] != float64(tc.def) {
+			t.Fatalf("%s context_length=%v", tc.key, parameters["context_length"])
 		}
 		if body.ModelConfig.MaxInputTokens != tc.input {
 			t.Fatalf("%s input budget overwritten: %d", tc.key, body.ModelConfig.MaxInputTokens)

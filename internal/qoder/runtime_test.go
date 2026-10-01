@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // recordingSource replays a fixed byte sequence and fails when it runs dry, so

@@ -52,6 +52,8 @@ type Client struct {
 	// replay a consumed refresh token.
 	account      *store.Account
 	accountStore AccountUpdater
+	catalog      *Catalog
+	catalogIDs   []string
 
 	// creds is the resolved credential. runtime holds the derived auth pair.
 	creds   Credentials
@@ -108,7 +110,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		clientID:       resolveClientID(cfg),
 		clientVersion:  resolveClientVersion(cfg),
 		control:        util.GetSharedHTTPClient(proxyKey, authRequestTimeout, proxyFunc),
-		stream:         util.GetSharedHTTPClientWithHTTP2(proxyKey+"|qoder-chat", 0, proxyFunc, http2),
+		stream:         util.GetSharedHTTPClientWithLimits(proxyKey+"|qoder-chat", 0, proxyFunc, http2, cfg),
 		requestTimeout: timeout,
 		entropy:        cryptoSource{},
 	}
@@ -182,7 +184,11 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("qoder client is nil")
 	}
 	preparation := debug.BeginUpstream(ctx, "PREPARE", c.endpoints.inference, nil, nil)
-	_, prepTrace := preparation.Trace(ctx, map[string]interface{}{"kind": "preparation", "provider": "qoder"})
+	var prepMetadata map[string]interface{}
+	if debug.FromContext(ctx) != nil {
+		prepMetadata = map[string]interface{}{"kind": "preparation", "provider": "qoder"}
+	}
+	_, prepTrace := preparation.Trace(ctx, prepMetadata)
 	defer func() {
 		if prepTrace != nil {
 			prepTrace.Finish(sendErr)
@@ -205,18 +211,10 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return err
 	}
 
-	requestID, err := newUUID(c.entropy)
-	if err != nil {
-		return err
-	}
 	// The task set id is a second, independent uuid. The capture shows
 	// request_set_id and request_id as different values within one task, with
 	// business.id carrying the set id.
-	requestSetID, err := newUUID(c.entropy)
-	if err != nil {
-		return err
-	}
-	sessionID, err := newUUID(c.entropy)
+	requestID, requestSetID, sessionID, err := newChatUUIDs(c.entropy)
 	if err != nil {
 		return err
 	}
@@ -509,6 +507,14 @@ func (c *Client) refresh(ctx context.Context, previous Credentials) (Credentials
 // pair it generated at login; it is the account's runtime fields, and the
 // upstream treats a rotation as new device material.
 func (c *Client) ensureRuntimeFields(ctx context.Context, creds Credentials) (RuntimeFields, error) {
+	// The normal immutable snapshot needs no serialization with other readers.
+	c.stateMu.RLock()
+	fieldsReady := c.runtime.Complete() && c.runtimeAccessToken == creds.AccessToken && c.runtimeRefreshToken == creds.RefreshToken
+	ready := c.runtime
+	c.stateMu.RUnlock()
+	if fieldsReady {
+		return ready, nil
+	}
 	c.runtimeMu.Lock()
 	defer c.runtimeMu.Unlock()
 	// The reference identity includes both tokens. Reuse the pair only while
@@ -597,13 +603,27 @@ func (c *Client) resolveModel(req upstream.UpstreamRequest) (modelEntry, error) 
 // catalog makes Resolve report ErrNoUpstreamCatalog instead.
 func (c *Client) loadCatalog() *Catalog {
 	c.stateMu.RLock()
-	defer c.stateMu.RUnlock()
+	var ids []string
 	if c.account != nil {
-		if catalog := catalogFromIDs(c.account.QoderModelIDs); catalog.Len() > 0 {
-			return catalog
-		}
+		ids = c.account.QoderModelIDs
 	}
-	return newCatalog(nil)
+	if c.catalog != nil && slices.Equal(ids, c.catalogIDs) {
+		catalog := c.catalog
+		c.stateMu.RUnlock()
+		return catalog
+	}
+	c.stateMu.RUnlock()
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	ids = nil
+	if c.account != nil {
+		ids = c.account.QoderModelIDs
+	}
+	if c.catalog == nil || !slices.Equal(ids, c.catalogIDs) {
+		c.catalog = catalogFromIDs(ids)
+		c.catalogIDs = append([]string(nil), ids...)
+	}
+	return c.catalog
 }
 
 // currentCredentials returns the live credential snapshot.

@@ -21,6 +21,8 @@ type ConcurrencyLimiter struct {
 	timeout time.Duration
 }
 
+type concurrencyAdmissionKey struct{}
+
 // NewConcurrencyLimiter creates a limiter with fixed capacity and timeout.
 func NewConcurrencyLimiter(maxConcurrent int, timeout time.Duration) *ConcurrencyLimiter {
 	if maxConcurrent <= 0 {
@@ -39,12 +41,19 @@ func NewConcurrencyLimiter(maxConcurrent int, timeout time.Duration) *Concurrenc
 // handler's execution with the limiter timeout.
 func (cl *ConcurrencyLimiter) Limit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if admitted, _ := r.Context().Value(concurrencyAdmissionKey{}).(*ConcurrencyLimiter); admitted == cl {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Admission is deliberately non-blocking. Queueing requests behind the
 		// semaphore consumes connections and goroutines precisely when the server
 		// is overloaded, which can amplify an overload into a broader outage.
 		if !cl.sem.TryAcquire(1) {
 			atomic.AddInt64(&cl.rejectedReqs, 1)
-			slog.Warn("Concurrency limit: Request rejected", "total_rejected", atomic.LoadInt64(&cl.rejectedReqs))
+			// Log bounded samples; logging every rejected request worsens overload.
+			if count := atomic.LoadInt64(&cl.rejectedReqs); count == 1 || count%1000 == 0 {
+				slog.Warn("Concurrency limit: Request rejected", "total_rejected", count)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -67,6 +76,7 @@ func (cl *ConcurrencyLimiter) Limit(next http.HandlerFunc) http.HandlerFunc {
 
 		// Use the full concurrency timeout for ordinary request execution.
 		execCtx, cancelExec := context.WithTimeout(r.Context(), cl.timeout)
+		execCtx = context.WithValue(execCtx, concurrencyAdmissionKey{}, cl)
 		defer cancelExec()
 		slog.Debug("Concurrency limit: Serving request", "path", r.URL.Path, "timeout", cl.timeout)
 		next.ServeHTTP(w, r.WithContext(execCtx))

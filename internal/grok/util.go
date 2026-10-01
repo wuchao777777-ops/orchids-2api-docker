@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/util"
 )

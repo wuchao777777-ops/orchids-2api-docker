@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"

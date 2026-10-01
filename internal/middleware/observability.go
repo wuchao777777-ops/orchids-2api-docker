@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"orchids-api/internal/audit"
@@ -108,7 +109,10 @@ func (l observedAuditLogger) Log(ctx context.Context, e audit.Event) {
 
 // Diagnostics captures only inference traffic. Tee readers preserve streaming
 // and body limits; storage failures never replace a successful client response.
-func Diagnostics(store *debug.DiagnosticStore, enabled func() bool) func(http.Handler) http.Handler {
+type DiagnosticBudget struct{ SampleEvery, MaxConcurrent int }
+
+func Diagnostics(store *debug.DiagnosticStore, enabled func() bool, budgets ...func() DiagnosticBudget) func(http.Handler) http.Handler {
+	var counter, active atomic.Int64
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if store == nil || enabled == nil || !enabled() || r.Method != http.MethodPost || requestChannel(r.URL.Path) == HTTPChannel {
@@ -120,6 +124,34 @@ func Diagnostics(store *debug.DiagnosticStore, enabled func() bool) func(http.Ha
 				next.ServeHTTP(w, r)
 				return
 			}
+			budget := DiagnosticBudget{SampleEvery: 1, MaxConcurrent: 8}
+			if len(budgets) > 0 && budgets[0] != nil {
+				budget = budgets[0]()
+			}
+			if budget.SampleEvery <= 0 {
+				budget.SampleEvery = 1
+			}
+			if budget.MaxConcurrent <= 0 {
+				budget.MaxConcurrent = 8
+			}
+			if (counter.Add(1)-1)%int64(budget.SampleEvery) != 0 {
+				w.Header().Set("X-Diagnostic-Capture", "sampled-out")
+				next.ServeHTTP(w, r)
+				return
+			}
+			for {
+				n := active.Load()
+				if n >= int64(budget.MaxConcurrent) {
+					w.Header().Set("X-Diagnostic-Capture", "budget-exhausted")
+					next.ServeHTTP(w, r)
+					return
+				}
+				if active.CompareAndSwap(n, n+1) {
+					break
+				}
+			}
+			defer active.Add(-1)
+			w.Header().Set("X-Diagnostic-Capture", "enabled")
 			ctx, capture := debug.WithCapture(r.Context(), GetRequestID(r.Context()))
 			r = r.WithContext(ctx)
 			if r.Body != nil {

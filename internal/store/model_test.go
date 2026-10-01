@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	"github.com/goccy/go-json"
+	"encoding/json"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"

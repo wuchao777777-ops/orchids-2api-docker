@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"orchids-api/internal/util"
 )
 
 const upstreamMaxEventBytes = 8 << 20
@@ -104,7 +106,9 @@ func splitSSELinesKeepingEnd(data []byte, atEOF bool) (advance int, token []byte
 
 func consumeCompatibleSSE(source io.Reader, handle func(compatibleSSEEvent) error) error {
 	scanner := bufio.NewScanner(source)
-	scanner.Buffer(make([]byte, 64<<10), upstreamMaxEventBytes)
+	buffer := util.AcquireStreamBuffer()
+	defer util.ReleaseStreamBuffer(buffer)
+	scanner.Buffer(buffer[:], upstreamMaxEventBytes)
 	scanner.Split(splitSSELinesKeepingEnd)
 	event := compatibleSSEEvent{}
 	eventBytes := 0

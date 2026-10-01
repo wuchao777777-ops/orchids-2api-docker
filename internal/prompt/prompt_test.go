@@ -3,7 +3,7 @@ package prompt
 import (
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 func TestMessageUnmarshalJSON_OpenAIToolCallsWithNullContent(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	"encoding/json"
 	"github.com/alicebob/miniredis/v2"
-	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"

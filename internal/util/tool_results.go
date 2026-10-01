@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/prompt"
 )

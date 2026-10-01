@@ -1,7 +1,7 @@
 package qoder
 
 import (
-	"github.com/goccy/go-json"
+	"encoding/json"
 	"orchids-api/internal/upstream"
 	"strings"
 	"testing"

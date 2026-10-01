@@ -138,6 +138,7 @@ test('every admin page links a cache-busted main.css', () => {
 
 const opsCss = fs.readFileSync(path.join(__dirname, 'static', 'css', 'ops.css'), 'utf8');
 const opsJs = fs.readFileSync(path.join(__dirname, 'static', 'js', 'ops.js'), 'utf8');
+const modelsCss = fs.readFileSync(path.join(__dirname, 'static', 'css', 'models.css'), 'utf8');
 
 test('the trend charts are width-constrained instead of sized by their aspect ratio', () => {
   const rule = opsCss.match(/\.ops-chart\s*\{([^}]*)\}/);
@@ -186,5 +187,15 @@ test('the phone card layouts are driven by the labels the rows actually carry', 
     `the card layout must start at the ${DRAWER_BREAKPOINT}px drawer breakpoint (got ${card.width}px); ` +
       'below it the matrix columns collapse to zero width',
   );
+});
+
+test('model rows become compact selectable cards on phones', () => {
+  const phone = mediaBlocks(modelsCss).find((block) => block.width === 640);
+  assert.ok(phone, 'models.css has a 640px phone breakpoint');
+  assert.match(phone.body, /\.models-table tbody tr\s*\{[^}]*position:\s*relative/, 'the model card anchors its selection control');
+  assert.match(phone.body, /\.models-table tbody td\.col-select\s*\{[^}]*position:\s*absolute/, 'selection no longer consumes an empty grid row');
+  assert.match(phone.body, /\.models-table tbody td\.col-model\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/, 'the model identity spans the card');
+  assert.match(phone.body, /\.models-actions\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/, 'edit and delete share one full-width action row');
+  assert.match(phone.body, /\.models-table-wrap\s*\{[^}]*max-height:\s*none/, 'the phone page scrolls as one document instead of nesting the model list');
 });
 

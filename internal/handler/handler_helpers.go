@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/cline"
 	apperrors "orchids-api/internal/errors"

@@ -3,7 +3,7 @@ package grok
 import (
 	"testing"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/config"
 )

@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // checkedStreamWriter makes write failures visible to translators whose SSE

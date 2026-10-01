@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/modelpolicy"

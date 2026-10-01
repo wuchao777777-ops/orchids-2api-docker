@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
@@ -258,7 +258,9 @@ func splitControlFrame(body string) (kind, payload string, ok bool) {
 
 func readSSE(reader io.Reader, fn func(sseFrame) bool) error {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	buffer := util.AcquireStreamBuffer()
+	defer util.ReleaseStreamBuffer(buffer)
+	scanner.Buffer(buffer[:], 16*1024*1024)
 
 	var event, data strings.Builder
 	flush := func() bool {

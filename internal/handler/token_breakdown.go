@@ -3,7 +3,7 @@ package handler
 import (
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 	"orchids-api/internal/prompt"
 
 	"orchids-api/internal/tiktoken"

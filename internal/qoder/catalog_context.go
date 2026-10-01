@@ -3,7 +3,7 @@ package qoder
 import (
 	"bytes"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // ContextWindowInfo separates a default input budget from declared context

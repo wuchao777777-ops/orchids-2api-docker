@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 const (

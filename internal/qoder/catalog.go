@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // The catalog is an upstream observation, not a compiled-in list.

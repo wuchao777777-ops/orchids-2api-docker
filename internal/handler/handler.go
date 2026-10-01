@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/adapter"

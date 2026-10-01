@@ -6,7 +6,7 @@ import (
 	"orchids-api/internal/util"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/debug"
 )

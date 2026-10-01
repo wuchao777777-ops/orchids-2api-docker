@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // AppError 表示应用层错误，包含错误码、消息和可选的原因

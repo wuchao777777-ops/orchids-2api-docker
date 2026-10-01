@@ -455,6 +455,11 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		// Handler-level runtime controls are read on each request, not captured
 		// by these provider clients. RequestTimeout is captured at construction.
 		writeInt(cfg.RequestTimeout)
+		writeInt(cfg.UpstreamMaxConnsPerHost)
+		writeInt(cfg.UpstreamMaxIdleConnsPerHost)
+		writeString(strconv.FormatBool(cfg.QoderHTTP2Enabled))
+		writeString(strconv.FormatBool(cfg.ClineHTTP2Enabled))
+		writeString(strconv.FormatBool(cfg.WorkBuddyHTTP2Enabled))
 		for _, value := range cfg.ProxyBypass {
 			writeString(value)
 		}

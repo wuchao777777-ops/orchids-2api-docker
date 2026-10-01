@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
@@ -88,7 +88,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		workOSTokenURL:     DefaultWorkOSAuthenticateURL,
 		workOSClientID:     DefaultWorkOSClientID,
 		control:            util.GetSharedHTTPClient(proxyKey, authRequestTimeout, proxyFunc),
-		stream:             util.GetSharedHTTPClient(proxyKey+"|cline-chat", 0, proxyFunc),
+		stream:             util.GetSharedHTTPClientWithLimits(proxyKey+"|cline-chat", 0, proxyFunc, cfg != nil && cfg.ClineHTTP2Enabled, cfg),
 		requestTimeout:     timeout,
 	}
 	if cfg != nil {

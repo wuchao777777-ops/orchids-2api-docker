@@ -21,6 +21,7 @@
 package workbuddy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -30,7 +31,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
@@ -117,7 +118,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		accountSnapshot = &copied
 	}
 	return &Client{
-		httpClient:     util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
+		httpClient:     util.GetSharedHTTPClientWithLimits(proxyKey+"|workbuddy-chat", timeout, proxyFunc, cfg != nil && cfg.WorkBuddyHTTP2Enabled, cfg),
 		baseURL:        baseURL,
 		requestTimeout: timeout,
 		streamIdle:     streamIdle,
@@ -179,7 +180,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 
 	reqCtx, cancel := util.WithDefaultTimeout(ctx, timeout)
 	defer cancel()
-	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, strings.NewReader(string(body)))
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to create workbuddy request: %w", err)
 	}

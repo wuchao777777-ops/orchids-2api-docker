@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/api"
 	"orchids-api/internal/auth"
@@ -52,8 +52,27 @@ func registerRoutes(
 		return cfg
 	}
 	modelRefreshHandler := makeCoordinatedModelRefreshHandler(currentConfig, s, newModelRefreshCoordinator())
+	var anonymousCache middleware.AnonymousAllowlistCache
+	providerAdmission := middleware.ProviderAdmission(func() map[string]int {
+		current := currentConfig()
+		if current == nil {
+			return nil
+		}
+		return current.ProviderConcurrencyLimits
+	})
+	coalesceFlush := middleware.CoalesceStreamFlush(func() time.Duration {
+		current := currentConfig()
+		ms := 2
+		if current != nil && current.StreamFlushIntervalMs != 0 {
+			ms = current.StreamFlushIntervalMs
+		}
+		if ms < 0 {
+			return 0
+		}
+		return time.Duration(min(ms, 20)) * time.Millisecond
+	})
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return middleware.APIKeyAuthWithRequest(
+		authenticated := middleware.APIKeyAuthWithRequest(
 			// A key is required, exactly as grok2api mounts middleware.ClientAuth on
 			// its whole /v1 group; `inference_auth_enabled: false` used to open every
 			// inference route to anonymous callers and is now advisory only. The one
@@ -64,7 +83,7 @@ func registerRoutes(
 				if cfg == nil {
 					return true
 				}
-				allowlist, err := middleware.NewAnonymousAllowlist(cfg.AnonymousAllowIPs)
+				allowlist, err := anonymousCache.Get(cfg.AnonymousAllowIPs)
 				if err != nil {
 					// A malformed entry makes the list unusable: require keys rather
 					// than silently opening the routes.
@@ -105,6 +124,9 @@ func registerRoutes(
 				accountTracker,
 			),
 		)
+		// Reject overload before Redis authentication/billing work. Existing
+		// handler wrappers share this admission and do not acquire a second slot.
+		return limiter.Limit(providerAdmission(coalesceFlush(authenticated)))
 	}
 	// channelPrefixes are the channels that share the generic Anthropic and
 	// OpenAI handlers. Grok is not among them: it has a native implementation of

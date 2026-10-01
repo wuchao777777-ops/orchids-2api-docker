@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/channel"
 	"orchids-api/internal/cline"

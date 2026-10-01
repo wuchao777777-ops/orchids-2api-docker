@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 func TestGrokBuildLimitsSurviveConfigRoundTrip(t *testing.T) {

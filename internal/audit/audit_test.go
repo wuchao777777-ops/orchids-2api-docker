@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"encoding/json"
 	"github.com/alicebob/miniredis/v2"
-	"github.com/goccy/go-json"
 	"github.com/redis/go-redis/v9"
 )
 

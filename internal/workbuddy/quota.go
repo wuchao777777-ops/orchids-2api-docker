@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"

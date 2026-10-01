@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -112,7 +112,7 @@ func NewRedisLogger(client *redis.Client, prefix string, maxLen int64) *RedisLog
 		client:    client,
 		streamKey: prefix + "audit:log",
 		maxLen:    maxLen,
-		eventCh:   make(chan queuedEvent, 256),
+		eventCh:   make(chan queuedEvent, 4096),
 		done:      make(chan struct{}),
 	}
 	go l.writeLoop()
@@ -183,24 +183,46 @@ func (l *RedisLogger) Close() {
 func (l *RedisLogger) writeLoop() {
 	defer close(l.done)
 	for queued := range l.eventCh {
+		batch := []queuedEvent{queued}
+	collect:
+		for len(batch) < 128 {
+			select {
+			case next, ok := <-l.eventCh:
+				if !ok {
+					break collect
+				}
+				batch = append(batch, next)
+			default:
+				break collect
+			}
+		}
 		l.mu.Lock()
-		l.health.QueuedBytes -= len(queued.data)
+		for _, item := range batch {
+			l.health.QueuedBytes -= len(item.data)
+		}
 		l.mu.Unlock()
-		event := queued.event
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		err := l.client.XAdd(ctx, &redis.XAddArgs{
-			Stream: l.streamKey, MaxLen: l.maxLen, Approx: true,
-			Values: map[string]interface{}{"data": string(queued.data), "action": event.Action, "status": event.Status, "kind": string(event.Kind)},
-		}).Err()
+		pipe := l.client.Pipeline()
+		commands := make([]*redis.StringCmd, 0, len(batch))
+		for _, item := range batch {
+			event := item.event
+			commands = append(commands, pipe.XAdd(ctx, &redis.XAddArgs{
+				Stream: l.streamKey, MaxLen: l.maxLen, Approx: true,
+				Values: map[string]interface{}{"data": string(item.data), "action": event.Action, "status": event.Status, "kind": string(event.Kind)},
+			}))
+		}
+		_, err := pipe.Exec(ctx)
 		cancel()
 		now := time.Now().UTC()
 		l.mu.Lock()
-		if err != nil {
-			l.health.WriteFailed++
-			l.health.LastFailure = &now
-		} else {
-			l.health.Written++
-			l.health.LastSuccess = &now
+		for _, command := range commands {
+			if command.Err() != nil {
+				l.health.WriteFailed++
+				l.health.LastFailure = &now
+			} else {
+				l.health.Written++
+				l.health.LastSuccess = &now
+			}
 		}
 		l.mu.Unlock()
 		if err != nil {

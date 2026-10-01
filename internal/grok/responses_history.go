@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/goccy/go-json"
+	"encoding/json"
 )
 
 // normalizeBuildInputHistory lowers only client extension items that Grok Build
