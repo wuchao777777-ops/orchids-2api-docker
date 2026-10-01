@@ -303,12 +303,6 @@ func readSSE(reader io.Reader, fn func(sseFrame) bool) error {
 	return nil
 }
 
-// consumeStreamWithTools also recognizes the text fallback emitted by some
-// Qoder models: `Tool calls: [...]`. Text is buffered only while it can still be
-// that exact prefix; normal answers continue streaming as soon as they diverge.
-func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(upstream.SSEMessage)) (streamResult, error) {
-	return consumeStreamObserved(body, toolsEnabled, onMessage, nil)
-}
 func consumeStreamObserved(body io.Reader, toolsEnabled bool, onMessage func(upstream.SSEMessage), onFrame func()) (streamResult, error) {
 	result := streamResult{}
 	tools := util.NewToolCallAccumulator()

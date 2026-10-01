@@ -5,16 +5,15 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"encoding/json"
-	"github.com/alicebob/miniredis/v2"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -42,15 +41,7 @@ func (workbuddySpentError) RetryAfter() time.Duration { return time.Millisecond 
 // requests reached an account with nothing to spend — and every later request paid
 // for the same refusal before switching accounts.
 func TestSpentAccountKeepsFreeOnlyStateAndScopesTheRefusedModel(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: "wbfreetier:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
+	s := newTestRedisStore(t, "wbfreetier:")
 
 	ctx := context.Background()
 	reset := time.Now().Add(12 * time.Hour)
@@ -64,9 +55,7 @@ func TestSpentAccountKeepsFreeOnlyStateAndScopesTheRefusedModel(t *testing.T) {
 		WorkBuddyModelIDs:     []string{`{"id":"hy3"}`, `{"id":"glm-5.3"}`},
 		WorkBuddyQuota:        store.WorkBuddyQuotaSnapshot{Remaining: 0, Limit: 100, ResetAt: reset},
 	}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 	publishModel(t, s, &store.Model{Channel: "WorkBuddy", ModelID: "hy3"})
 	publishModel(t, s, &store.Model{Channel: "WorkBuddy", ModelID: "glm-5.3"})
 
@@ -80,21 +69,15 @@ func TestSpentAccountKeepsFreeOnlyStateAndScopesTheRefusedModel(t *testing.T) {
 	// The free model is dispatched — that is the whole point of keeping a spent
 	// account in the pool — and the upstream refuses it anyway.
 	first := workbuddyRequest(t, h, "hy3")
-	if upstreamCalls != 1 {
-		t.Fatalf("upstreamCalls = %d, want 1: a spent account must still be offered its free tier", upstreamCalls)
-	}
+	testutil.Equal(t, upstreamCalls, 1)
 	_ = first
 
 	after, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
-	if after.StatusCode != store.AccountStatusWorkBuddyQuotaExhausted {
-		t.Fatalf("status = %q, want the free-only state; a plain 429 would let metered traffic back in", after.StatusCode)
-	}
-	if kind := store.ModelCooldownKind(after, "hy3", time.Now()); kind != store.ModelCooldownUnavailable {
-		t.Fatalf("hy3 cooldown kind = %q, want unavailable: the refused free tier must not be probed again", kind)
-	}
+	testutil.Equal(t, after.StatusCode, store.AccountStatusWorkBuddyQuotaExhausted)
+	testutil.Equal(t, store.ModelCooldownKind(after, "hy3", time.Now()), store.ModelCooldownUnavailable)
 	if remaining := store.ModelCooldownRemaining(after, "hy3", time.Now()); remaining <= 0 {
 		t.Fatal("the refused free model must carry a cooldown")
 	} else if remaining > 6*time.Hour+time.Minute {
@@ -107,18 +90,12 @@ func TestSpentAccountKeepsFreeOnlyStateAndScopesTheRefusedModel(t *testing.T) {
 
 	// The next request for that model never reaches the upstream.
 	second := workbuddyRequest(t, h, "hy3")
-	if upstreamCalls != 1 {
-		t.Fatalf("upstreamCalls = %d, want 1: the model was scoped out of this account", upstreamCalls)
-	}
-	if second.Code != http.StatusNotFound {
-		t.Fatalf("second status = %d, want 404 (the model is unavailable on these accounts); body=%s", second.Code, second.Body.String())
-	}
+	testutil.Equal(t, upstreamCalls, 1)
+	testutil.Equal(t, second.Code, http.StatusNotFound)
 
 	// And a metered model was never eligible for a spent account at all.
 	workbuddyRequest(t, h, "glm-5.3")
-	if upstreamCalls != 1 {
-		t.Fatalf("upstreamCalls = %d, want 1: a spent account must not receive metered traffic", upstreamCalls)
-	}
+	testutil.Equal(t, upstreamCalls, 1)
 }
 
 func workbuddyRequest(t *testing.T, h *Handler, model string) *httptest.ResponseRecorder {
@@ -138,15 +115,7 @@ func workbuddyRequest(t *testing.T, h *Handler, model string) *httptest.Response
 // The other direction: a plain throttle on a healthy WorkBuddy account keeps
 // serving free models, so this rule cannot strand the free tier generally.
 func TestHealthyAccountStillServesFreeModels(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: "wbhealthy:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
+	s := newTestRedisStore(t, "wbhealthy:")
 
 	ctx := context.Background()
 	acc := &store.Account{
@@ -157,9 +126,7 @@ func TestHealthyAccountStillServesFreeModels(t *testing.T) {
 		Weight:                1,
 		WorkBuddyModelIDs:     []string{`{"id":"hy3"}`},
 	}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 	publishModel(t, s, &store.Model{Channel: "WorkBuddy", ModelID: "hy3"})
 
 	h := NewWithLoadBalancer(&config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 0}, loadbalancer.NewWithCacheTTL(s, 0))
@@ -171,17 +138,11 @@ func TestHealthyAccountStillServesFreeModels(t *testing.T) {
 	})
 
 	rec := workbuddyRequest(t, h, "hy3")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	after, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
-	if kind := store.ModelCooldownKind(after, "hy3", time.Now()); kind != "" {
-		t.Fatalf("hy3 cooldown kind = %q, want none on a served request", kind)
-	}
-	if !strings.Contains(rec.Body.String(), "ok") {
-		t.Fatalf("body = %q, want the upstream answer", rec.Body.String())
-	}
+	testutil.Equal(t, store.ModelCooldownKind(after, "hy3", time.Now()), "")
+	testutil.MustContain(t, rec.Body.String(), "ok")
 }

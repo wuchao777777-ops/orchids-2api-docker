@@ -82,6 +82,11 @@ func EncodeBody(raw []byte) []byte {
 // decodeBody reverses EncodeBody for the narrow case where a refreshed
 // credential must replay an otherwise identical request with a fresh identity.
 func decodeBody(encoded []byte) ([]byte, error) {
+	// Base64's Strict mode still ignores CR/LF. Signed bodies must retain their
+	// exact framing, so reject line breaks before the positional swap.
+	if bytes.ContainsAny(encoded, "\r\n") {
+		return nil, fmt.Errorf("encoded body contains a line break")
+	}
 	unswapped := swapOuterThirds(encoded)
 	decoded := make([]byte, bodyEncoding.DecodedLen(len(unswapped)))
 	n, err := bodyEncoding.Decode(decoded, unswapped)
@@ -112,33 +117,6 @@ type cosyPayload struct {
 	Info        string `json:"info"`
 	CosyVersion string `json:"cosyVersion"`
 	IDEVersion  string `json:"ideVersion"`
-}
-
-// buildCOSYPayload renders the payload and its base64 form.
-func buildCOSYPayload(requestID, info, cosyVersion string) (string, error) {
-	raw, err := json.Marshal(cosyPayload{
-		Version:     "v1",
-		RequestID:   requestID,
-		Info:        info,
-		CosyVersion: cosyVersion,
-		IDEVersion:  "",
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshal cosy payload: %w", err)
-	}
-	return base64.StdEncoding.EncodeToString(raw), nil
-}
-
-// signRequest is the request signature: the lowercase hex MD5 of the payload,
-// the runtime key, the Unix seconds, the encoded body and the signed path,
-// joined by newlines with no trailing separator.
-func signRequest(payloadBase64, runtimeKey, unixSeconds, encodedBody, signedPath string) string {
-	return signRequestBytes(payloadBase64, runtimeKey, unixSeconds, []byte(encodedBody), signedPath)
-}
-
-func signRequestBytes(payloadBase64, runtimeKey, unixSeconds string, encodedBody []byte, signedPath string) string {
-	sum := cosySignature([]byte(payloadBase64), runtimeKey, unixSeconds, encodedBody, signedPath)
-	return hex.EncodeToString(sum[:])
 }
 
 func cosySignature(payloadBase64 []byte, runtimeKey, unixSeconds string, encodedBody []byte, signedPath string) [md5.Size]byte {
@@ -190,9 +168,4 @@ func buildCOSYAuthorization(requestID, info, version, runtimeKey, seconds string
 	bearer[len(prefix)+encodedLen] = '.'
 	hex.Encode(bearer[len(prefix)+encodedLen+1:], sum[:])
 	return string(bearer), nil
-}
-
-// composeBearer renders the Authorization header value.
-func composeBearer(payloadBase64, signature string) string {
-	return "Bearer COSY." + payloadBase64 + "." + signature
 }

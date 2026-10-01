@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -37,7 +38,6 @@ func TestAccountRedactionDoesNotMutateStoredAccount(t *testing.T) {
 
 func TestDiagnosticTogglePersistsAndFailsSafely(t *testing.T) {
 	s, mini := newTestStore(t, "diagnostic-toggle:")
-	defer s.Close()
 	cfg := &config.Config{AdminPass: "test-admin-secret"}
 	a := New(s, "admin", cfg.AdminPass, cfg)
 	for _, enabled := range []string{"true", "false"} {
@@ -59,7 +59,5 @@ func TestDiagnosticTogglePersistsAndFailsSafely(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	a.HandleDiagnosticSettings(rec, httptest.NewRequest("GET", "/api/journal/diagnostics/settings", nil))
-	if strings.Contains(rec.Body.String(), "secret") || strings.Contains(rec.Body.String(), "admin") {
-		t.Fatal("settings exposed unrelated secrets")
-	}
+	testutil.MustNotContainAny(t, rec.Body.String(), "secret", "admin")
 }

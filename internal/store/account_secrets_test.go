@@ -1,6 +1,7 @@
 package store
 
 import (
+	"orchids-api/internal/testutil"
 	"reflect"
 	"strings"
 	"testing"
@@ -62,9 +63,7 @@ func TestSecretsCoversEveryCredentialShapedField(t *testing.T) {
 	}
 
 	// A heuristic that matches nothing would pass vacuously.
-	if checked == 0 {
-		t.Fatal("no credential-shaped fields found; the name heuristic is broken")
-	}
+	testutil.NotEqual(t, checked, 0)
 	t.Logf("checked %d credential-shaped fields", checked)
 }
 
@@ -77,7 +76,5 @@ func TestSecretsReturnsOnlyNonEmptyValues(t *testing.T) {
 			nonEmpty++
 		}
 	}
-	if nonEmpty != 2 {
-		t.Fatalf("non-empty secrets = %d, want 2", nonEmpty)
-	}
+	testutil.Equal(t, nonEmpty, 2)
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -21,13 +22,9 @@ func TestRefactorAliasMultilineKeepsMetadataAndRestoresNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{": keepalive", "id: ev_a", "retry: 1000", "\"name\":\"lookup\"", "\"namespace\":\"crm\"", "data: [DONE]"} {
-		if !strings.Contains(string(raw), want) {
-			t.Fatal("lost", want, string(raw))
-		}
+		testutil.MustContain(t, string(raw), want)
 	}
-	if strings.Contains(string(raw), "crm__lookup") {
-		t.Fatal("internal alias leaked")
-	}
+	testutil.MustNotContain(t, string(raw), "crm__lookup")
 }
 
 func TestRefactorSearchArgumentsSurviveItemDoneWithoutSnapshot(t *testing.T) {

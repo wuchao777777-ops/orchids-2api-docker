@@ -11,16 +11,16 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func newTestAPI(t *testing.T) (*API, *store.Store, func()) {
 	t.Helper()
 
-	s, mini := newTestStore(t, "api_test:")
+	s, _ := newTestStore(t, "api_test:")
 
 	return New(s, "", "", &config.Config{}), s, func() {
 		_ = s.Close()
-		mini.Close()
 	}
 }
 
@@ -38,9 +38,7 @@ func TestHandleAccountByID_PutPreservesGrokOAuthTokens(t *testing.T) {
 		Enabled:           true,
 		Name:              "oauth-acc",
 	}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount() error = %v")
 
 	// Simulate admin UI edit/save with redacted empty secrets.
 	body := `{"account_type":"grok","credential_type":"oauth","name":"oauth-acc","enabled":false,"oauth_access_token":"","oauth_refresh_token":""}`
@@ -48,26 +46,18 @@ func TestHandleAccountByID_PutPreservesGrokOAuthTokens(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.HandleAccountByID(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	got, err := s.GetAccount(context.Background(), acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
-	if got.OAuthAccessToken != "keep-access" {
-		t.Fatalf("OAuthAccessToken=%q want keep-access", got.OAuthAccessToken)
-	}
-	if got.OAuthRefreshToken != "keep-refresh" {
-		t.Fatalf("OAuthRefreshToken=%q want keep-refresh", got.OAuthRefreshToken)
-	}
+	testutil.Equal(t, got.OAuthAccessToken, "keep-access")
+	testutil.Equal(t, got.OAuthRefreshToken, "keep-refresh")
 	if got.Enabled {
 		t.Fatal("expected enabled=false after update")
 	}
-	if got.TeamID != "team-1" {
-		t.Fatalf("TeamID=%q want team-1", got.TeamID)
-	}
+	testutil.Equal(t, got.TeamID, "team-1")
 }
 
 func TestHandleAccounts_PostRejectsEmptyGrokOAuth(t *testing.T) {
@@ -79,10 +69,6 @@ func TestHandleAccounts_PostRejectsEmptyGrokOAuth(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.HandleAccounts(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d want 400 body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "missing oauth token") {
-		t.Fatalf("body=%q want missing oauth token", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
+	testutil.MustContain(t, rec.Body.String(), "missing oauth token")
 }

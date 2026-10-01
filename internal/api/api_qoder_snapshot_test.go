@@ -12,6 +12,7 @@ import (
 
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // A short-lived device token is rotated while the account still has ID zero.
@@ -27,21 +28,15 @@ func TestQoderLoginRetainsRotationsAndProfileSnapshot(t *testing.T) {
 			var body struct {
 				RefreshToken string `json:"refresh_token"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Error(err)
-			}
+			testutil.CheckNoError(t, json.NewDecoder(r.Body).Decode(&body))
 			want := "refresh-1"
 			if refreshes > 1 {
 				want = fmt.Sprintf("refresh-%d", refreshes)
 			}
-			if body.RefreshToken != want {
-				t.Errorf("refresh token %q, want %q", body.RefreshToken, want)
-			}
+			testutil.CheckEqual(t, body.RefreshToken, want)
 			fmt.Fprintf(w, `{"device_token":"access-%d","refresh_token":"refresh-%d","expires_in":3600}`, refreshes+1, refreshes+1)
 		case "/api/v1/userinfo":
-			if r.Header.Get("Authorization") != "Bearer access-2" {
-				t.Errorf("profile bearer = %q", r.Header.Get("Authorization"))
-			}
+			testutil.CheckEqual(t, r.Header.Get("Authorization"), "Bearer access-2")
 			_, _ = w.Write([]byte(`{"uid":"profile-uid","name":"profile-name","email":"profile@example.com","organization_id":"profile-org","organization_tags":["profile-tag"]}`))
 		default:
 			http.NotFound(w, r)
@@ -70,9 +65,7 @@ func TestQoderLoginRetainsRotationsAndProfileSnapshot(t *testing.T) {
 		t.Fatal("final runtime fields missing")
 	}
 	s, _ := newTestStore(t, "qoder-rotated-login:")
-	if err := s.CreateAccount(t.Context(), acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(t.Context(), acc))
 	saved, err := s.GetAccount(t.Context(), acc.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -91,9 +84,7 @@ func TestVerifyQoderRetainsRotationDuringWholeAccountSave(t *testing.T) {
 			refreshes++
 			fmt.Fprintf(w, `{"device_token":"access-%d","refresh_token":"refresh-%d","expires_in":86400}`, refreshes+1, refreshes+1)
 		case "/api/v1/userinfo":
-			if r.Header.Get("Authorization") != "Bearer access-2" {
-				t.Errorf("profile received %q", r.Header.Get("Authorization"))
-			}
+			testutil.CheckEqual(t, r.Header.Get("Authorization"), "Bearer access-2")
 			_, _ = w.Write([]byte(`{"uid":"new-uid","organization_id":"new-org"}`))
 		default:
 			http.NotFound(w, r)
@@ -102,9 +93,7 @@ func TestVerifyQoderRetainsRotationDuringWholeAccountSave(t *testing.T) {
 	defer server.Close()
 	s, _ := newTestStore(t, "qoder-rotated-verify:")
 	acc := &store.Account{AccountType: "qoder", Name: "qoder-verify", QoderAccessToken: "access-1", QoderRefreshToken: "refresh-1", QoderExpiresAt: time.Now().Add(time.Minute), QoderMachineID: "machine-id", Enabled: true}
-	if err := s.CreateAccount(t.Context(), acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(t.Context(), acc))
 	status, code, err := verifyQoderAccountWithStore(t.Context(), acc, qoderLoginConfig(server.URL), s)
 	if err != nil || status != "" || code != 0 {
 		t.Fatalf("verify = %q %d %v", status, code, err)
@@ -112,9 +101,7 @@ func TestVerifyQoderRetainsRotationDuringWholeAccountSave(t *testing.T) {
 	if refreshes != 1 || acc.QoderAccessToken != "access-2" || acc.QoderRefreshToken != "refresh-2" || acc.QoderUserID != "new-uid" || acc.QoderOrganizationID != "new-org" {
 		t.Fatalf("verified snapshot %+v, refreshes=%d", acc, refreshes)
 	}
-	if err := s.UpdateAccount(context.Background(), acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.UpdateAccount(context.Background(), acc))
 	stored, err := s.GetAccount(t.Context(), acc.ID)
 	if err != nil {
 		t.Fatal(err)

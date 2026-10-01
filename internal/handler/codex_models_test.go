@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -44,13 +45,9 @@ func TestCodexCatalogExposesContextWindowAndModalities(t *testing.T) {
 		if entry.ContextWindow != tc.context || entry.MaxContextWindow != tc.context {
 			t.Fatalf("%s context_window=%d max=%d want %d", tc.slug, entry.ContextWindow, entry.MaxContextWindow, tc.context)
 		}
-		if len(entry.InputModalities) != len(tc.modalities) {
-			t.Fatalf("%s input_modalities=%v want %v", tc.slug, entry.InputModalities, tc.modalities)
-		}
+		testutil.Equal(t, len(entry.InputModalities), len(tc.modalities))
 		for i, want := range tc.modalities {
-			if entry.InputModalities[i] != want {
-				t.Fatalf("%s input_modalities=%v want %v", tc.slug, entry.InputModalities, tc.modalities)
-			}
+			testutil.Equal(t, entry.InputModalities[i], want)
 		}
 	}
 }
@@ -70,20 +67,14 @@ func TestCodexCatalogUsesObservedGrokProfile(t *testing.T) {
 	for _, level := range entry.SupportedReasoningLevels {
 		levels = append(levels, level.Effort)
 	}
-	if strings.Join(levels, ",") != "low,high,xhigh" {
-		t.Fatalf("observed reasoning levels = %v, want low,high,xhigh", levels)
-	}
-	if entry.DefaultReasoningLevel != "high" {
-		t.Fatalf("observed default reasoning level = %q, want high", entry.DefaultReasoningLevel)
-	}
+	testutil.Equal(t, strings.Join(levels, ","), "low,high,xhigh")
+	testutil.Equal(t, entry.DefaultReasoningLevel, "high")
 	if entry.ContextWindow != 500000 || entry.MaxContextWindow != 1500000 {
 		t.Fatalf("observed windows = context %d max %d, want 500000 and 1500000", entry.ContextWindow, entry.MaxContextWindow)
 	}
 	// The declared output budget travels with the catalog so a client can plan
 	// its own completion against the same number the gateway advertises.
-	if entry.MaxOutputTokens != 1000000 {
-		t.Fatalf("observed max output tokens = %d, want 1000000", entry.MaxOutputTokens)
-	}
+	testutil.Equal(t, entry.MaxOutputTokens, 1000000)
 }
 
 func TestCodexCatalogReasoningLevels(t *testing.T) {
@@ -111,13 +102,9 @@ func TestCodexCatalogHidesMediaModels(t *testing.T) {
 		{ID: "grok-imagine-image", Capabilities: []string{"image", "image_edit"}},
 		{ID: "grok-imagine-video", Capabilities: []string{"video"}},
 	})
-	if got := codexEntryFor(t, catalog, "grok-4.6").Visibility; got != "list" {
-		t.Fatalf("text model visibility=%q", got)
-	}
+	testutil.Equal(t, codexEntryFor(t, catalog, "grok-4.6").Visibility, "list")
 	for _, slug := range []string{"grok-imagine-image", "grok-imagine-video"} {
-		if got := codexEntryFor(t, catalog, slug).Visibility; got != "hide" {
-			t.Fatalf("%s visibility=%q want hide", slug, got)
-		}
+		testutil.Equal(t, codexEntryFor(t, catalog, slug).Visibility, "hide")
 	}
 	// Agent tooling is only advertised for Responses-capable text models.
 	if entry := codexEntryFor(t, catalog, "grok-4.6"); entry.ApplyPatchToolType == nil || !entry.SupportsParallelToolCalls {
@@ -134,9 +121,7 @@ func TestCodexCatalogJSONIncludesNullableProtocolFields(t *testing.T) {
 	writeCodexModelCatalog(rec, httptest.NewRequest(http.MethodGet, "/v1/models?client_version=1", nil), catalog)
 	body := rec.Body.String()
 	for _, field := range []string{"default_service_tier", "availability_nux", "upgrade", "model_messages", "auto_compact_token_limit"} {
-		if !strings.Contains(body, `"`+field+`":null`) {
-			t.Fatalf("missing nullable field %q in %s", field, body)
-		}
+		testutil.MustContain(t, body, `"`+field+`":null`)
 	}
 }
 
@@ -145,13 +130,9 @@ func TestWriteCodexModelCatalogServesETag(t *testing.T) {
 
 	first := httptest.NewRecorder()
 	writeCodexModelCatalog(first, httptest.NewRequest(http.MethodGet, "/v1/models", nil), catalog)
-	if first.Code != http.StatusOK {
-		t.Fatalf("status=%d", first.Code)
-	}
+	testutil.Equal(t, first.Code, http.StatusOK)
 	etag := first.Header().Get("ETag")
-	if etag == "" {
-		t.Fatal("missing ETag")
-	}
+	testutil.NotEqual(t, etag, "")
 
 	revalidate := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	revalidate.Header.Set("If-None-Match", etag)
@@ -174,20 +155,14 @@ func TestCodexCatalogGroupsEffortVariantsIntoOneFamily(t *testing.T) {
 		textModel("auto-open"),
 	})
 
-	if len(catalog.Models) != 2 {
-		t.Fatalf("catalog has %d entries, want the family plus auto-open", len(catalog.Models))
-	}
+	testutil.Equal(t, len(catalog.Models), 2)
 	family := codexEntryFor(t, catalog, "gpt-5-6-sol")
 	levels := make([]string, 0, len(family.SupportedReasoningLevels))
 	for _, level := range family.SupportedReasoningLevels {
 		levels = append(levels, level.Effort)
 	}
-	if strings.Join(levels, ",") != "low,medium,high,xhigh" {
-		t.Fatalf("supported levels = %v, want the catalog's effort variants", levels)
-	}
-	if family.DefaultReasoningLevel != "medium" {
-		t.Fatalf("default level = %q, want medium", family.DefaultReasoningLevel)
-	}
+	testutil.Equal(t, strings.Join(levels, ","), "low,medium,high,xhigh")
+	testutil.Equal(t, family.DefaultReasoningLevel, "medium")
 	if !family.SupportsReasoningSummaries || !family.SupportsReasoningSummaryParameter {
 		t.Fatalf("a family with effort levels must advertise reasoning support: %+v", family)
 	}
@@ -197,9 +172,7 @@ func TestCodexCatalogGroupsEffortVariantsIntoOneFamily(t *testing.T) {
 	if len(plain.SupportedReasoningLevels) != 1 || plain.SupportedReasoningLevels[0].Effort != "none" {
 		t.Fatalf("auto-open levels = %+v, want the default none level", plain.SupportedReasoningLevels)
 	}
-	if plain.DefaultReasoningLevel != "none" {
-		t.Fatalf("auto-open default level = %q, want none", plain.DefaultReasoningLevel)
-	}
+	testutil.Equal(t, plain.DefaultReasoningLevel, "none")
 }
 
 func TestSplitEffortVariantSuffix(t *testing.T) {
@@ -227,13 +200,9 @@ func TestCodexCatalogKeepsASingleEffortVariantUnderItsOwnID(t *testing.T) {
 		textModel("grok-4.6"),
 	})
 
-	if len(catalog.Models) != 2 {
-		t.Fatalf("catalog has %d entries, want the single variant plus grok-4.6", len(catalog.Models))
-	}
+	testutil.Equal(t, len(catalog.Models), 2)
 	entry := codexEntryFor(t, catalog, "gpt-5-6-sol-high")
-	if entry.DefaultReasoningLevel != "none" {
-		t.Fatalf("single variant default level = %q, want none", entry.DefaultReasoningLevel)
-	}
+	testutil.Equal(t, entry.DefaultReasoningLevel, "none")
 	if len(entry.SupportedReasoningLevels) != 1 || entry.SupportedReasoningLevels[0].Effort != "none" {
 		t.Fatalf("single variant levels = %+v, want the default none level", entry.SupportedReasoningLevels)
 	}
@@ -252,14 +221,10 @@ func TestCodexCatalogPrefersAVisibleVariantsMetadata(t *testing.T) {
 	})
 
 	family := codexEntryFor(t, catalog, "gpt-5-6-sol")
-	if family.Visibility != "list" {
-		t.Fatalf("family visibility = %q, want list from the visible variant", family.Visibility)
-	}
+	testutil.Equal(t, family.Visibility, "list")
 	levels := make([]string, 0, len(family.SupportedReasoningLevels))
 	for _, level := range family.SupportedReasoningLevels {
 		levels = append(levels, level.Effort)
 	}
-	if strings.Join(levels, ",") != "low,high" {
-		t.Fatalf("supported levels = %v, want both variants' efforts", levels)
-	}
+	testutil.Equal(t, strings.Join(levels, ","), "low,high")
 }

@@ -8,6 +8,7 @@ import (
 
 	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestBuildCapabilitySnapshotAndRateLimitsDoNotBecomeBilling(t *testing.T) {
@@ -57,9 +58,7 @@ func TestApplyCLIModelCatalogRestoresGrok2APICatalogCompletion(t *testing.T) {
 	ApplyCLIModelCatalog(acc, []modelcatalog.Profile{{ModelID: "grok-4.6"}, {ModelID: "grok-imagine-video-1.5"}, {ModelID: "grok-4.6"}}, time.Now())
 
 	want := []string{"grok-4.6", "grok-imagine-video-1.5", "grok-4.5", "grok-composer-2.5-fast"}
-	if len(acc.GrokModels) != len(want) {
-		t.Fatalf("catalog = %#v, want %#v", acc.GrokModels, want)
-	}
+	testutil.Equal(t, len(acc.GrokModels), len(want))
 	for i, model := range want {
 		if !strings.EqualFold(acc.GrokModels[i], model) {
 			t.Fatalf("catalog = %#v, want %#v", acc.GrokModels, want)

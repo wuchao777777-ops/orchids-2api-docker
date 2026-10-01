@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -20,15 +21,9 @@ func TestStreamBuildChatSeparatesReasoningFromContent(t *testing.T) {
 	}, "\n")
 	(&Handler{}).streamBuildChatHolding(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(stream), nil)
 	raw := recorder.Body.String()
-	if !strings.Contains(raw, `"reasoning_content":"plan first"`) {
-		t.Fatalf("reasoning delta missing: %q", raw)
-	}
-	if !strings.Contains(raw, `"content":"final answer"`) {
-		t.Fatalf("visible content missing: %q", raw)
-	}
-	if strings.Contains(raw, `"content":"plan first"`) {
-		t.Fatalf("reasoning leaked into visible content: %q", raw)
-	}
+	testutil.MustContain(t, raw, `"reasoning_content":"plan first"`)
+	testutil.MustContain(t, raw, `"content":"final answer"`)
+	testutil.MustNotContain(t, raw, `"content":"plan first"`)
 }
 
 func TestStreamBuildChatStreamsFirstReasoningSourceWithoutDuplicates(t *testing.T) {
@@ -56,9 +51,7 @@ func TestCollectBuildChatSeparatesReasoningFromContent(t *testing.T) {
 	body := `{"id":"resp_1","output":[{"id":"rs_1","type":"reasoning","content":[{"type":"reasoning_text","text":"private plan"}],"summary":[{"type":"summary_text","text":"duplicate summary"}]},{"id":"msg_1","type":"message","content":[{"type":"output_text","text":"public answer"}]}]}`
 	(&Handler{}).collectBuildChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(body))
 	var response map[string]interface{}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	choice := interfaceSlice(response["choices"])[0].(map[string]interface{})
 	message := choice["message"].(map[string]interface{})
 	if message["content"] != "public answer" || message["reasoning_content"] != "private plan" {
@@ -83,9 +76,7 @@ func TestStreamBuildChatReportsMalformedSSEData(t *testing.T) {
 	(&Handler{}).streamBuildChatHolding(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader("data: {not-json}\n"), nil)
 
 	body := recorder.Body.String()
-	if !strings.Contains(body, "event: error") || !strings.Contains(body, "Use the request ID") || !strings.Contains(body, "data: [DONE]") {
-		t.Fatalf("stream=%q want explicit SSE parse error and terminator", body)
-	}
+	testutil.MustContainAll(t, body, "event: error", "Use the request ID", "data: [DONE]")
 }
 
 func TestStreamBuildChatReportsScannerError(t *testing.T) {

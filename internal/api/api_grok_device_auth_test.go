@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -26,9 +27,7 @@ func TestHandleGrokDeviceAuthorizationStatusRedactsDeviceCode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/grok/device-auth/login-id", nil).WithContext(ctx)
 	a.HandleGrokDeviceAuthorization(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	body := rec.Body.String()
 	if strings.Contains(body, "must-not-be-exposed") || !strings.Contains(body, "ABCD-1234") {
 		t.Fatalf("unexpected response: %s", body)
@@ -43,9 +42,7 @@ func TestHandleGrokDeviceAuthorizationDeleteCancelsAndForgets(t *testing.T) {
 	})
 	rec := httptest.NewRecorder()
 	a.HandleGrokDeviceAuthorization(rec, httptest.NewRequest(http.MethodDelete, "/api/grok/device-auth/login-id", nil))
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusNoContent)
 	var remained bool
 	a.grokLogins.update("login-id", func(*deviceLogin) { remained = true })
 	if remained {

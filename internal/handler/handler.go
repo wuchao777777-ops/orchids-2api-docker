@@ -436,15 +436,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	reqHash := h.computeRequestHash(r, bodyBytes)
 	traceID := shortRequestTrace(reqHash)
-	if verboseDiagnostics {
-		slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "path", r.URL.Path, "content_length", len(bodyBytes))
-	}
+	logutil.DebugIf(verboseDiagnostics, "Request fingerprint", "trace_id", traceID, "hash", reqHash, "path", r.URL.Path, "content_length", len(bodyBytes))
 
 	// ...
 	if ok, command := isCommandPrefixRequest(req); ok {
-		if verboseDiagnostics {
-			slog.Debug("Handling command prefix request", "command", command)
-		}
+		logutil.DebugIf(verboseDiagnostics, "Handling command prefix request", "command", command)
 		prefix := detectCommandPrefix(command)
 		logger.LogEarlyExit("command_prefix", map[string]interface{}{
 			"command": command,
@@ -455,9 +451,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isTopicClassifierRequest(req) {
-		if verboseDiagnostics {
-			slog.Debug("Handling topic classifier request locally")
-		}
+		logutil.DebugIf(verboseDiagnostics, "Handling topic classifier request locally")
 		logger.LogEarlyExit("topic_classifier", map[string]interface{}{
 			"mode": "local",
 		})
@@ -467,9 +461,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	if isTitleGenerationRequest(req) {
 		title := generateTopicTitle(extractUserText(req.Messages))
-		if verboseDiagnostics {
-			slog.Debug("Handling title generation request locally", "title", title)
-		}
+		logutil.DebugIf(verboseDiagnostics, "Handling title generation request locally", "title", title)
 		logger.LogEarlyExit("title_generation", map[string]interface{}{
 			"mode":  "local",
 			"title": title,
@@ -492,9 +484,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Context and Conversation Key
 	conversationKey := conversationKeyForRequest(r, req)
-	if verboseDiagnostics {
-		slog.Debug("Request dispatch initialized", "trace_id", traceID, "path", r.URL.Path, "conversation_id", conversationKey, "model", req.Model, "stream", req.Stream)
-	}
+	logutil.DebugIf(verboseDiagnostics, "Request dispatch initialized", "trace_id", traceID, "path", r.URL.Path, "conversation_id", conversationKey, "model", req.Model, "stream", req.Stream)
 
 	// The path names a channel only on a channel-prefixed route; on the unified
 	// prefix the model does. A model that ends in an effort word is only treated
@@ -525,9 +515,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// caller wrote.
 	if isSuggestionMode(req.Messages) {
 		suggestion := buildLocalSuggestion(req.Messages)
-		if verboseDiagnostics {
-			slog.Debug("Handling suggestion mode request locally", "suggestion", suggestion)
-		}
+		logutil.DebugIf(verboseDiagnostics, "Handling suggestion mode request locally", "suggestion", suggestion)
 		logger.LogEarlyExit("suggestion_mode", map[string]interface{}{
 			"mode":       "local",
 			"suggestion": suggestion,
@@ -558,24 +546,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if lastUserIsToolResultFollowup(req.Messages) {
 		if preSelectChannel != "" {
-			if verboseDiagnostics {
-				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up")
-			}
+			logutil.DebugIf(verboseDiagnostics, "tool_gate: keeping tools for passthrough tool_result follow-up")
 		} else {
 			gateNoTools = true
 			toolGateReasons = append(toolGateReasons, "tool_result_followup")
 			toolGateMessage = buildToolGateMessage(req.Messages)
-			if verboseDiagnostics {
-				slog.Debug("tool_gate: disabled tools for tool_result-only follow-up")
-			}
+			logutil.DebugIf(verboseDiagnostics, "tool_gate: disabled tools for tool_result-only follow-up")
 		}
 	}
 	effectiveTools := req.Tools
 	if gateNoTools {
 		effectiveTools = nil
-		if verboseDiagnostics {
-			slog.Debug("tool_gate: disabled tools", "reasons", toolGateReasons)
-		}
+		logutil.DebugIf(verboseDiagnostics, "tool_gate: disabled tools", "reasons", toolGateReasons)
 	}
 	// 选择账号 (Initial Selection)
 	failedAccountIDs := []int64{}
@@ -602,9 +584,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		writePoolExhaustion(w, classifyPoolExhaustion(err, err.Error()))
 		return
 	}
-	if verboseDiagnostics {
-		slog.Debug("Checkpoint: selectAccount success")
-	}
+	logutil.DebugIf(verboseDiagnostics, "Checkpoint: selectAccount success")
 
 	// The selected account confirms the family the pre-selection guess named: the
 	// account type is authoritative when the path did not pin a channel.
@@ -623,12 +603,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	case preSelectClineRequest || accountChannel == "cline":
 		passthroughChannel = "cline"
 	}
-	if verboseDiagnostics && passthroughChannel != "" {
-		slog.Debug("Checkpoint: passthrough, skip context trimming", "channel", passthroughChannel)
-	}
-	if verboseDiagnostics {
-		slog.Debug("Checkpoint: message processing done")
-	}
+	logutil.DebugIf(verboseDiagnostics && passthroughChannel != "", "Checkpoint: passthrough, skip context trimming", "channel", passthroughChannel)
+	logutil.DebugIf(verboseDiagnostics, "Checkpoint: message processing done")
 
 	// The account slot was atomically reserved with selection. Keeping the
 	// reservation from this point through the complete SSE prevents concurrent
@@ -636,9 +612,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
-	if verboseDiagnostics {
-		slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
-	}
+	logutil.DebugIf(verboseDiagnostics, "Starting prompt build...", "conversation_id", conversationKey)
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
 	if passthroughChannel != "" {
@@ -657,9 +631,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("[Performance] BuildPromptAndHistory", "duration", buildDuration)
 	}
 
-	if verboseDiagnostics {
-		slog.Debug("Model mapping", "original", req.Model, "mapped", mappedModel)
-	}
+	logutil.DebugIf(verboseDiagnostics, "Model mapping", "original", req.Model, "mapped", mappedModel)
 
 	isStream := req.Stream
 
@@ -690,9 +662,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. 记录转换后的 prompt
-	if verboseDiagnostics {
-		slog.Debug("Checkpoint: LogConvertedPrompt")
-	}
+	logutil.DebugIf(verboseDiagnostics, "Checkpoint: LogConvertedPrompt")
 	logger.LogConvertedPrompt(builtPrompt)
 
 	breakdown := estimateInputTokenBreakdown(builtPrompt, effectiveTools)
@@ -745,9 +715,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// a queue refusal after 15 seconds can still carry a real HTTP status.
 	sh.pendingModel = req.Model
 
-	if verboseDiagnostics {
-		slog.Debug("New request received")
-	}
+	logutil.DebugIf(verboseDiagnostics, "New request received")
 
 	// KeepAlive
 	//
@@ -860,15 +828,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			// The same account id the diagnostics above reported, with or without
 			// diagnostics enabled.
 			middleware.RecordUpstreamAttempt(r.Context(), accountID, err != nil)
-			if verboseDiagnostics {
-				slog.Debug("Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
-			}
+			logutil.DebugIf(verboseDiagnostics, "Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 
 			if err == nil {
 				sh.forceFinishIfMissing()
-				if verboseDiagnostics {
-					slog.Debug("Upstream attempt completed", "trace_id", traceID, "attempt", upstreamReq.Attempt)
-				}
+				logutil.DebugIf(verboseDiagnostics, "Upstream attempt completed", "trace_id", traceID, "attempt", upstreamReq.Attempt)
 				break
 			}
 			// A provider may emit its authoritative finish frame and then observe a
@@ -915,9 +879,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						slog.Warn("persist model cooldown failed", "account_id", currentAccount.ID, "model", verdict.Model, "error", persistErr)
 					}
 				} else if verdict.Status != "" {
-					if verboseDiagnostics {
-						slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", verdict.Status, "scope", string(verdict.Scope), "category", errClass.Category)
-					}
+					logutil.DebugIf(verboseDiagnostics, "标记账号状态", "account_id", currentAccount.ID, "status", verdict.Status, "scope", string(verdict.Scope), "category", errClass.Category)
 					// Apply keeps the status and its operator-facing reason
 					// together, so the account table can explain the cooldown.
 					verdict.Apply(currentAccount)

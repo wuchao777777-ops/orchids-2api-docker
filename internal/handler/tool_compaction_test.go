@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -64,12 +65,8 @@ func TestEstimateToolsTokensMeasuresTheToolsThatAreSent(t *testing.T) {
 }
 
 func TestEstimateToolsTokensIsEmptyForNoTools(t *testing.T) {
-	if got := estimateToolsTokens(nil); got != 0 {
-		t.Fatalf("estimateToolsTokens(nil) = %d, want 0", got)
-	}
-	if got := estimateToolsTokens([]interface{}{}); got != 0 {
-		t.Fatalf("estimateToolsTokens(empty) = %d, want 0", got)
-	}
+	testutil.Equal(t, estimateToolsTokens(nil), 0)
+	testutil.Equal(t, estimateToolsTokens([]interface{}{}), 0)
 }
 
 // A tool description the old code cut to 128 characters still counts in full.
@@ -116,13 +113,9 @@ func TestDeclaredToolNames_DeduplicatesNamesAndAliases(t *testing.T) {
 	}
 	got := declaredToolNames(tools)
 	want := []string{"Agent", "Task", "WEB_SEARCH"}
-	if len(got) != len(want) {
-		t.Fatalf("declaredToolNames len=%d want=%d (%#v)", len(got), len(want), got)
-	}
+	testutil.Equal(t, len(got), len(want))
 	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("declaredToolNames[%d]=%q want %q (%#v)", i, got[i], want[i], got)
-		}
+		testutil.Equal(t, got[i], want[i])
 	}
 }
 
@@ -135,12 +128,8 @@ func TestDeclaredToolNames_KeepCustomAndCanonicalAliases(t *testing.T) {
 
 	got := declaredToolNames(tools)
 	want := []string{"workspace_search", "read_files", "Read"}
-	if len(got) != len(want) {
-		t.Fatalf("declaredToolNames len=%d want=%d (%#v)", len(got), len(want), got)
-	}
+	testutil.Equal(t, len(got), len(want))
 	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("declaredToolNames[%d]=%q want %q (%#v)", i, got[i], want[i], got)
-		}
+		testutil.Equal(t, got[i], want[i])
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // buildAcc is a Build OAuth account, the only provider the Build Free window (and
@@ -169,9 +170,7 @@ func TestInferSubscriptionFromRateLimitInfoRequiresKnownShapes(t *testing.T) {
 	}
 	for limit, want := range cases {
 		got := inferSubscriptionFromRateLimitInfo(&RateLimitInfo{Limit: limit, HasLimit: true})
-		if got != want {
-			t.Fatalf("limit=%d subscription=%q want %q", limit, got, want)
-		}
+		testutil.Equal(t, got, want)
 	}
 }
 

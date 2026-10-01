@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"bytes"
+	"orchids-api/internal/testutil"
 	"reflect"
 	"testing"
 
@@ -160,16 +161,12 @@ func TestBuildOpenAIChunk(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			raw, ok := AppendOpenAIChunk(nil, "msg_1", 123, tt.event, tt.data)
-			if ok != tt.wantOK {
-				t.Fatalf("ok=%v want=%v", ok, tt.wantOK)
-			}
+			testutil.Equal(t, ok, tt.wantOK)
 			if !tt.wantOK {
 				return
 			}
 			var got openAIChunk
-			if err := json.Unmarshal(raw, &got); err != nil {
-				t.Fatalf("unmarshal output: %v", err)
-			}
+			testutil.NoError(t, json.Unmarshal(raw, &got), "unmarshal output: %v")
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("got=%#v want=%#v", got, tt.want)
 			}
@@ -229,21 +226,15 @@ func TestBuildOpenAIChunkFastMatchesSlow(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fastRaw, fastOK := appendOpenAIChunkFast(nil, "msg_1", 123, tt.event, tt.data)
 			slowRaw, slowOK := buildOpenAIChunkSlow("msg_1", 123, tt.event, tt.data)
-			if fastOK != slowOK {
-				t.Fatalf("fastOK=%v slowOK=%v", fastOK, slowOK)
-			}
+			testutil.Equal(t, fastOK, slowOK)
 			if !fastOK {
 				return
 			}
 
 			var fastChunk openAIChunk
-			if err := json.Unmarshal(fastRaw, &fastChunk); err != nil {
-				t.Fatalf("unmarshal fast output: %v", err)
-			}
+			testutil.NoError(t, json.Unmarshal(fastRaw, &fastChunk), "unmarshal fast output: %v")
 			var slowChunk openAIChunk
-			if err := json.Unmarshal(slowRaw, &slowChunk); err != nil {
-				t.Fatalf("unmarshal slow output: %v", err)
-			}
+			testutil.NoError(t, json.Unmarshal(slowRaw, &slowChunk), "unmarshal slow output: %v")
 			if !reflect.DeepEqual(fastChunk, slowChunk) {
 				t.Fatalf("fast=%#v slow=%#v", fastChunk, slowChunk)
 			}
@@ -284,9 +275,7 @@ func TestAppendOpenAIChunkMatchesBuild(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			want, wantOK := AppendOpenAIChunk(nil, "msg_1", 123, tt.event, tt.data)
 			got, gotOK := AppendOpenAIChunk(buf[:0], "msg_1", 123, tt.event, tt.data)
-			if gotOK != wantOK {
-				t.Fatalf("ok=%v want=%v", gotOK, wantOK)
-			}
+			testutil.Equal(t, gotOK, wantOK)
 			if !gotOK {
 				return
 			}

@@ -1,6 +1,7 @@
 package util
 
 import (
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -19,9 +20,7 @@ func TestResponseHeaderTimeoutForClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := responseHeaderTimeoutForClient(tt.timeout); got != tt.want {
-				t.Fatalf("responseHeaderTimeoutForClient(%s)=%s want=%s", tt.timeout, got, tt.want)
-			}
+			testutil.Equal(t, responseHeaderTimeoutForClient(tt.timeout), tt.want)
 		})
 	}
 }
@@ -29,7 +28,5 @@ func TestResponseHeaderTimeoutForClient(t *testing.T) {
 func TestSharedHTTPClientCacheKeyIncludesTimeout(t *testing.T) {
 	short := sharedHTTPClientCacheKey("direct", 30*time.Second)
 	long := sharedHTTPClientCacheKey("direct", 600*time.Second)
-	if short == long {
-		t.Fatalf("cache key should include timeout, got same key %q", short)
-	}
+	testutil.NotEqual(t, short, long)
 }

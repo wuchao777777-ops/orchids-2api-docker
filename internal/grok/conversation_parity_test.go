@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func parityFrame(kind string, fields map[string]interface{}) string {
@@ -98,9 +99,7 @@ func TestParityToolsDeduplicateAndAssociateInterleavedArguments(t *testing.T) {
 		t.Fatalf("calls=%+v body=%s", calls, body)
 	}
 	var messages bytes.Buffer
-	if err := translateOpenAIChatStreamToAnthropicWithInput(&messages, strings.NewReader(body), "grok-4.6", 0); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, translateOpenAIChatStreamToAnthropicWithInput(&messages, strings.NewReader(body), "grok-4.6", 0))
 	if strings.Count(messages.String(), `"type":"tool_use"`) != 2 || strings.Contains(messages.String(), "<nil>") {
 		t.Fatal(messages.String())
 	}
@@ -247,9 +246,7 @@ func TestParityReasoningAndSearchBlocks(t *testing.T) {
 		t.Fatal(result.Err)
 	}
 	var out bytes.Buffer
-	if err := translateOpenAIChatStreamToAnthropicWithInput(&out, strings.NewReader(body), "grok-4.6", 0); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, translateOpenAIChatStreamToAnthropicWithInput(&out, strings.NewReader(body), "grok-4.6", 0))
 	s := out.String()
 	if strings.Count(s, `"content_block":{"signature":"","thinking":"","type":"thinking"}`) != 2 || strings.Contains(s, "duplicate") || strings.Count(s, `"type":"server_tool_use"`) != 1 || strings.Count(s, `"type":"web_search_tool_result"`) != 1 || !strings.Contains(s, `"type":"citations_delta"`) {
 		t.Fatal(s)

@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"sync"
 	"testing"
 	"time"
@@ -35,9 +36,7 @@ func TestCoalescedFlushKeepsFirstTerminalAndFinalDrain(t *testing.T) {
 		writer.Write([]byte("data: delta\n\n"))
 		writer.Flush()
 	}
-	if target.flushes != 1 {
-		t.Fatalf("flush count=%d", target.flushes)
-	}
+	testutil.Equal(t, target.flushes, 1)
 	writer.Write([]byte("data: [DONE]\n\n"))
 	writer.Flush()
 	if target.flushes != 2 {

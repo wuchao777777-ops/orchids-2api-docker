@@ -14,7 +14,6 @@ import (
 
 func TestInvalidJSONDiagnosticIsReachableFromJournal(t *testing.T) {
 	s, _ := newTestStore(t, "invalid-json-diagnostic:")
-	defer s.Close()
 	d := debug.NewDiagnosticStore(s.RedisClient(), s.RedisPrefix())
 	a := &API{store: s}
 	a.SetDiagnosticStore(d)

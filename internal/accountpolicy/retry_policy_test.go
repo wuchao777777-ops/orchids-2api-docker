@@ -6,6 +6,7 @@ import (
 
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // TestRetryable_MatchesTheSharedUpstreamClassification pins the single rule the
@@ -26,9 +27,7 @@ func TestRetryable_MatchesTheSharedUpstreamClassification(t *testing.T) {
 	for _, tc := range cases {
 		err := errors.New(tc.message)
 		class := apperrors.ClassifyUpstreamError(tc.message)
-		if got := Retryable(err); got != tc.want {
-			t.Fatalf("Retryable(%q) = %v, want %v", tc.message, got, tc.want)
-		}
+		testutil.Equal(t, Retryable(err), tc.want)
 		if got, want := Retryable(err), class.Retryable; got != want {
 			t.Fatalf("Retryable(%q) = %v but the shared classification says %v", tc.message, got, want)
 		}
@@ -55,8 +54,6 @@ func TestClassify_VerdictMatchesTheSharedRetryRule(t *testing.T) {
 	for _, message := range messages {
 		err := errors.New(message)
 		verdict := Classify(acc, err, "grok-4.6")
-		if verdict.Retryable != Retryable(err) {
-			t.Fatalf("%q: verdict.Retryable=%v but Retryable()=%v", message, verdict.Retryable, Retryable(err))
-		}
+		testutil.Equal(t, verdict.Retryable, Retryable(err))
 	}
 }

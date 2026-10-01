@@ -1,11 +1,11 @@
 package cline
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // TestCredentialsBearerPinsTheWirePrefix pins the request credential. The
@@ -13,9 +13,7 @@ import (
 // token would be rejected on every request.
 func TestCredentialsBearerPinsTheWirePrefix(t *testing.T) {
 	creds := Credentials{AccessToken: "abc"}
-	if got := creds.Bearer(); got != "workos:abc" {
-		t.Fatalf("Bearer() = %q, want workos:abc", got)
-	}
+	testutil.Equal(t, creds.Bearer(), "workos:abc")
 	if !creds.HasCredential() {
 		t.Error("HasCredential() = false, want true")
 	}
@@ -54,9 +52,7 @@ func TestResolveCredentialsReadsTheChannelFields(t *testing.T) {
 	if creds.AccessToken != "access" || creds.RefreshToken != "refresh" {
 		t.Fatalf("credentials = %+v, want the trimmed pair", creds)
 	}
-	if creds.Email != "operator@example.com" {
-		t.Errorf("email = %q, want operator@example.com", creds.Email)
-	}
+	testutil.CheckEqual(t, creds.Email, "operator@example.com")
 	if !creds.ExpiresAt.Equal(expires) {
 		t.Errorf("expires at = %v, want %v", creds.ExpiresAt, expires)
 	}
@@ -79,9 +75,7 @@ func TestParseExpiryAcceptsEveryUpstreamSpelling(t *testing.T) {
 		if parsed.IsZero() {
 			t.Fatalf("ParseExpiry(%#v) = zero, want a timestamp", value)
 		}
-		if parsed.UnixMilli() != want {
-			t.Errorf("ParseExpiry(%#v) = %v, want %v", value, parsed.UnixMilli(), want)
-		}
+		testutil.CheckEqual(t, parsed.UnixMilli(), want)
 	}
 	if got := ParseExpiry("12345"); !got.IsZero() {
 		t.Errorf("ParseExpiry(12345) = %v, want zero", got)
@@ -107,9 +101,7 @@ func TestParseInferenceCapDurationReadsTheStatedWait(t *testing.T) {
 		{`{"error":"SOMETHING_ELSE"}`, 0},
 	}
 	for _, tc := range cases {
-		if got := ParseInferenceCapDuration(tc.body); got != tc.want {
-			t.Errorf("ParseInferenceCapDuration(%s) = %v, want %v", tc.body, got, tc.want)
-		}
+		testutil.CheckEqual(t, ParseInferenceCapDuration(tc.body), tc.want)
 	}
 }
 
@@ -117,15 +109,9 @@ func TestParseInferenceCapDurationReadsTheStatedWait(t *testing.T) {
 // window, so the operator-facing text says when to come back.
 func TestInferenceCapErrorNamesTheWait(t *testing.T) {
 	err := inferenceCapError(`{"error":"INFERENCE_CAP_ERROR","message":"Try again in 17h 59m"}`)
-	if err.Wait != 17*time.Hour+59*time.Minute {
-		t.Fatalf("wait = %v, want 17h59m", err.Wait)
-	}
-	if !strings.Contains(err.Error(), "cline inference cap reached") {
-		t.Fatalf("error text = %q, want the classified phrase", err.Error())
-	}
-	if !strings.Contains(err.Error(), "17h 59m") {
-		t.Errorf("error text = %q, want it to name the window", err.Error())
-	}
+	testutil.Equal(t, err.Wait, 17*time.Hour+59*time.Minute)
+	testutil.MustContain(t, err.Error(), "cline inference cap reached")
+	testutil.CheckContain(t, err.Error(), "17h 59m")
 }
 
 // TestAllowedLoginHostRefusesForeignHosts is the one check standing between a
@@ -159,7 +145,5 @@ func TestAllowedLoginHostRefusesForeignHosts(t *testing.T) {
 // upstream reads it as the session identity.
 func TestNewTaskIDCarriesTheUpstreamPrefix(t *testing.T) {
 	id := newTaskID(time.UnixMilli(1700000000000))
-	if id != "sess_1700000000000" {
-		t.Fatalf("newTaskID() = %q, want sess_1700000000000", id)
-	}
+	testutil.Equal(t, id, "sess_1700000000000")
 }

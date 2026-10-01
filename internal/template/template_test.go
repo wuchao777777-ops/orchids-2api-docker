@@ -4,13 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // TestRenderIndexShipsNoCompetingSidebarCount pins the fix for the sidebar that
@@ -24,19 +24,14 @@ func TestRenderIndexShipsNoCompetingSidebarCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.New() error = %v", err)
 	}
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	defer func() { _ = s.Close() }()
 
 	accounts := []*store.Account{
 		{AccountType: "grok", CredentialType: "oauth", GrokProvider: "build", Enabled: true},
 		{AccountType: "grok", CredentialType: "oauth", GrokProvider: "build", Enabled: false},
 	}
 	for _, acc := range accounts {
-		if err := s.CreateAccount(context.Background(), acc); err != nil {
-			t.Fatalf("CreateAccount() error = %v", err)
-		}
+		testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount() error = %v")
 	}
 
 	renderer, err := NewRenderer()
@@ -45,20 +40,14 @@ func TestRenderIndexShipsNoCompetingSidebarCount(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=accounts", nil)
-	if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, s); err != nil {
-		t.Fatalf("RenderIndex() error = %v", err)
-	}
+	testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, s), "RenderIndex() error = %v")
 	body := recorder.Body.String()
 	for _, element := range []string{`id="footerTotal"`, `id="footerNormal"`, `id="footerAbnormal"`} {
-		if !strings.Contains(body, element+`>—</span>`) {
-			t.Errorf("%s must ship the client-owned placeholder, not a server count:\n%s", element, body)
-		}
+		testutil.CheckContain(t, body, element+`>—</span>`)
 	}
 	// A server-side count would have printed the two rows and one disabled row;
 	// neither number may appear.
-	if strings.Contains(body, `id="footerTotal">2</span>`) || strings.Contains(body, `id="footerAbnormal">1</span>`) {
-		t.Fatalf("renderer still publishes a competing account count: %s", body)
-	}
+	testutil.MustNotContainAny(t, body, `id="footerTotal">2</span>`, `id="footerAbnormal">1</span>`)
 }
 
 // TestTutorialPageListsEveryChannel proves that the tutorial's single channel
@@ -72,24 +61,16 @@ func TestTutorialPageListsEveryChannel(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=tutorial", nil)
-	if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil); err != nil {
-		t.Fatalf("RenderIndex() error = %v", err)
-	}
+	testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil), "RenderIndex() error = %v")
 	page := recorder.Body.String()
 
 	for _, key := range []string{"cline", "workbuddy", "qoder", "grok"} {
-		if !strings.Contains(page, `badge-`+key) {
-			t.Errorf("the rendered tutorial page has no row for channel %q", key)
-		}
+		testutil.CheckContain(t, page, `badge-`+key)
 		// The row's copyable address must have been filled in for this channel.
-		if !strings.Contains(page, `data-api-path="/`+key+`/v1"`) {
-			t.Errorf("the rendered tutorial page has no address cell for channel %q", key)
-		}
+		testutil.CheckContain(t, page, `data-api-path="/`+key+`/v1"`)
 	}
 	for _, unrelatedID := range []string{"modelModal", "createKeyModal", "editKeyModal", "showKeyModal", "deleteKeyModal"} {
-		if strings.Contains(page, `id="`+unrelatedID+`"`) {
-			t.Errorf("tutorial page still includes unrelated modal %q", unrelatedID)
-		}
+		testutil.CheckNotContain(t, page, `id="`+unrelatedID+`"`)
 	}
 }
 
@@ -113,19 +94,13 @@ func TestPagesRenderOnlyTheirOwnModals(t *testing.T) {
 		t.Run(tt.tab, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/?tab="+tt.tab, nil)
-			if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil); err != nil {
-				t.Fatalf("RenderIndex() error = %v", err)
-			}
+			testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil), "RenderIndex() error = %v")
 			page := recorder.Body.String()
 			for _, id := range tt.wantIDs {
-				if !strings.Contains(page, `id="`+id+`"`) {
-					t.Errorf("missing modal %q", id)
-				}
+				testutil.CheckContain(t, page, `id="`+id+`"`)
 			}
 			for _, id := range tt.forbidIDs {
-				if strings.Contains(page, `id="`+id+`"`) {
-					t.Errorf("includes unrelated modal %q", id)
-				}
+				testutil.CheckNotContain(t, page, `id="`+id+`"`)
 			}
 		})
 	}
@@ -138,18 +113,12 @@ func TestSidebarUsesRealLinks(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=ops", nil)
-	if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/console"}, nil); err != nil {
-		t.Fatalf("RenderIndex() error = %v", err)
-	}
+	testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/console"}, nil), "RenderIndex() error = %v")
 	page := recorder.Body.String()
 	for _, tab := range []string{"ops", "logs", "accounts", "keys", "models", "alerts", "tutorial"} {
-		if !strings.Contains(page, `href="/console/?tab=`+tab+`"`) {
-			t.Errorf("sidebar has no native link for %q", tab)
-		}
+		testutil.CheckContain(t, page, `href="/console/?tab=`+tab+`"`)
 	}
-	if strings.Contains(page, `onclick="switchTab(`) {
-		t.Error("sidebar navigation still depends on inline JavaScript")
-	}
+	testutil.CheckNotContain(t, page, `onclick="switchTab(`)
 }
 
 // TestEveryPageRendersTheSharedDocumentHead renders each page through the real
@@ -179,9 +148,7 @@ func TestEveryPageRendersTheSharedDocumentHead(t *testing.T) {
 		}
 		page := recorder.Body.String()
 		for _, want := range []string{"<!DOCTYPE html>", "/admin/css/main.css?v=", "</head>", `id="` + marker + `"`} {
-			if !strings.Contains(page, want) {
-				t.Errorf("tab %q: rendered page is missing %q", tab, want)
-			}
+			testutil.CheckContain(t, page, want)
 		}
 	}
 }

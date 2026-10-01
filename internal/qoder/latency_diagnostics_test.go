@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 	"strings"
 	"testing"
@@ -25,9 +26,7 @@ func TestQoderDiagnosticAttemptsCaptureSSEAndModel(t *testing.T) {
 	}
 	found := false
 	for _, section := range capture.Bundle().Sections {
-		if strings.Contains(section.Payload, "secret-key") || strings.Contains(section.Payload, "secret-info") {
-			t.Fatal("secret leaked")
-		}
+		testutil.MustNotContainAny(t, section.Payload, "secret-key", "secret-info")
 		if !strings.HasSuffix(section.Name, "latency.json") {
 			continue
 		}
@@ -45,7 +44,5 @@ func TestQoderDiagnosticAttemptsCaptureSSEAndModel(t *testing.T) {
 		}
 		found = true
 	}
-	if !found {
-		t.Fatal("missing latency artifact")
-	}
+	testutil.True(t, found, "missing latency artifact")
 }

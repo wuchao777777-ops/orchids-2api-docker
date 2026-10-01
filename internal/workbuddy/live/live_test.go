@@ -23,6 +23,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/workbuddy"
 )
@@ -57,9 +58,7 @@ func TestLive_FetchModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchModels() error = %v", err)
 	}
-	if len(models) == 0 {
-		t.Fatal("FetchModels() returned no models")
-	}
+	testutil.NotEqual(t, len(models), 0)
 
 	ids := make([]string, 0, len(models))
 	for _, model := range models {
@@ -120,9 +119,7 @@ func TestLive_ChatStream(t *testing.T) {
 
 	t.Logf("events=%v reasoning_len=%d", eventTypes, reasoning.Len())
 	t.Logf("text=%q", text.String())
-	if !strings.Contains(strings.ToLower(text.String()), "pong") {
-		t.Fatalf("text = %q, want it to contain pong", text.String())
-	}
+	testutil.MustContain(t, strings.ToLower(text.String()), "pong")
 }
 
 func TestLive_ToolCall(t *testing.T) {
@@ -167,9 +164,7 @@ func TestLive_ToolCall(t *testing.T) {
 		t.Fatalf("SendRequestWithPayload() error = %v", err)
 	}
 
-	if len(calls) == 0 {
-		t.Fatal("no tool call was emitted")
-	}
+	testutil.NotEqual(t, len(calls), 0)
 	t.Logf("tool calls: %+v", calls)
 	if calls[0].name == "" || !strings.HasPrefix(strings.TrimSpace(calls[0].input), "{") {
 		t.Fatalf("tool call = %+v, want a named call with a JSON object input", calls[0])

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestChatRequestFromResponses_ConvertsInputToolsAndReasoning(t *testing.T) {
@@ -39,21 +40,13 @@ func TestChatRequestFromResponses_ConvertsInputToolsAndReasoning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chatRequestFromResponses() error: %v", err)
 	}
-	if len(chatReq.Messages) != 4 {
-		t.Fatalf("messages len=%d want 4: %#v", len(chatReq.Messages), chatReq.Messages)
-	}
+	testutil.Equal(t, len(chatReq.Messages), 4)
 	if chatReq.Messages[0].Role != "system" || chatReq.Messages[0].Content != "用中文回答" {
 		t.Fatalf("unexpected system message: %#v", chatReq.Messages[0])
 	}
-	if got := chatReq.Messages[1].Content.([]interface{})[0].(map[string]interface{})["type"]; got != "text" {
-		t.Fatalf("content type=%#v want text", got)
-	}
-	if got := chatReq.Messages[1].Content.([]interface{})[1].(map[string]interface{})["type"]; got != "file" {
-		t.Fatalf("file content type=%#v want file", got)
-	}
-	if len(chatReq.Messages[2].ToolCalls) != 1 {
-		t.Fatalf("tool calls missing: %#v", chatReq.Messages[2])
-	}
+	testutil.Equal(t, chatReq.Messages[1].Content.([]interface{})[0].(map[string]interface{})["type"], "text")
+	testutil.Equal(t, chatReq.Messages[1].Content.([]interface{})[1].(map[string]interface{})["type"], "file")
+	testutil.Equal(t, len(chatReq.Messages[2].ToolCalls), 1)
 	if chatReq.Messages[3].Role != "tool" || chatReq.Messages[3].ToolCallID != "call_1" {
 		t.Fatalf("tool output message mismatch: %#v", chatReq.Messages[3])
 	}
@@ -65,9 +58,7 @@ func TestChatRequestFromResponses_ConvertsInputToolsAndReasoning(t *testing.T) {
 	}
 	choice := chatReq.ToolChoice.(map[string]interface{})
 	fn := choice["function"].(map[string]interface{})
-	if fn["name"] != "get_weather" {
-		t.Fatalf("tool_choice mismatch: %#v", choice)
-	}
+	testutil.Equal(t, fn["name"], "get_weather")
 }
 
 func TestResponsesCreateRequest_AcceptsCompatibilityFields(t *testing.T) {
@@ -84,9 +75,7 @@ func TestResponsesCreateRequest_AcceptsCompatibilityFields(t *testing.T) {
 	}`)
 
 	var req ResponsesCreateRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		t.Fatalf("json.Unmarshal() error: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &req), "json.Unmarshal() error: %v")
 	if req.StreamProvided {
 		t.Fatal("stream should not be marked provided")
 	}
@@ -111,9 +100,7 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 	streamDefault := false
 	h := &Handler{cfg: &config.Config{Stream: &streamDefault}}
 	var decoded ResponsesCreateRequest
-	if err := json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello"}`), &decoded); err != nil {
-		t.Fatalf("json.Unmarshal() error: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello"}`), &decoded), "json.Unmarshal() error: %v")
 	if decoded.StreamProvided {
 		t.Fatal("stream should be omitted before handler defaulting")
 	}
@@ -123,9 +110,7 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 	}
 
 	var provided ResponsesCreateRequest
-	if err := json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello","stream":true}`), &provided); err != nil {
-		t.Fatalf("json.Unmarshal() provided error: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello","stream":true}`), &provided), "json.Unmarshal() provided error: %v")
 	h.applyDefaultResponsesStream(&provided)
 	if !provided.Stream {
 		t.Fatal("explicit stream=true should be preserved")
@@ -198,18 +183,14 @@ func TestResponsesObjectFromChat_ConvertsMessageAndToolCalls(t *testing.T) {
 		t.Fatalf("unexpected response metadata: %#v", resp)
 	}
 	output := resp["output"].([]interface{})
-	if len(output) != 2 {
-		t.Fatalf("output len=%d want function_call + message: %#v", len(output), output)
-	}
+	testutil.Equal(t, len(output), 2)
 	fc := output[0].(map[string]interface{})
 	if fc["type"] != "function_call" || fc["call_id"] != "call_1" || fc["name"] != "get_weather" {
 		t.Fatalf("function_call mismatch: %#v", fc)
 	}
 	msg := output[1].(map[string]interface{})
 	content := msg["content"].([]interface{})[0].(map[string]interface{})
-	if content["text"] != "answer" {
-		t.Fatalf("message text mismatch: %#v", content)
-	}
+	testutil.Equal(t, content["text"], "answer")
 	usage := resp["usage"].(map[string]interface{})
 	if usage["input_tokens"] != 3 || usage["output_tokens"] != 4 || usage["total_tokens"] != 7 {
 		t.Fatalf("usage mismatch: %#v", usage)
@@ -248,15 +229,9 @@ func TestWriteResponsesStreamFromChat_ConvertsToolCallChunk(t *testing.T) {
 	writeResponsesStreamFromChatReaderRequestWithHook(rec, ResponsesCreateRequest{Model: "grok-4.20-0309"}, strings.NewReader(b.String()), nil)
 
 	out := rec.Body.String()
-	if !strings.Contains(out, "response.output_item.added") || !strings.Contains(out, "response.function_call_arguments.done") {
-		t.Fatalf("expected function call response events, out=%q", out)
-	}
-	if !strings.Contains(out, `"call_id":"call_1"`) || !strings.Contains(out, `"name":"get_weather"`) {
-		t.Fatalf("expected function call id/name, out=%q", out)
-	}
-	if !strings.Contains(out, `data: [DONE]`) {
-		t.Fatalf("expected DONE, out=%q", out)
-	}
+	testutil.MustContainAll(t, out, "response.output_item.added", "response.function_call_arguments.done")
+	testutil.MustContainAll(t, out, `"call_id":"call_1"`, `"name":"get_weather"`)
+	testutil.MustContain(t, out, `data: [DONE]`)
 }
 
 func TestWriteResponsesStreamFromChatFailsEmptyAndPrematureStreams(t *testing.T) {
@@ -272,9 +247,7 @@ func TestWriteResponsesStreamFromChatFailsEmptyAndPrematureStreams(t *testing.T)
 			if !strings.Contains(body, "event: response.failed") || strings.Contains(body, "event: response.completed") {
 				t.Fatalf("body=%s", body)
 			}
-			if !strings.Contains(body, `"model":"grok-4.6"`) || !strings.Contains(body, "data: [DONE]") {
-				t.Fatalf("failure terminal incomplete: %s", body)
-			}
+			testutil.MustContainAll(t, body, `"model":"grok-4.6"`, "data: [DONE]")
 		})
 	}
 }
@@ -283,22 +256,16 @@ func TestCopyNativeCLIResponseAddsFailedTerminalOnPrematureEOF(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	input := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n"
 	id, _, _ := copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6")
-	if id != "resp_1" {
-		t.Fatalf("id=%q", id)
-	}
+	testutil.Equal(t, id, "resp_1")
 	body := recorder.Body.String()
-	if !strings.Contains(body, "event: response.failed") || !strings.Contains(body, "upstream_stream_incomplete") || !strings.Contains(body, `"model":"grok-4.6"`) {
-		t.Fatalf("body=%s", body)
-	}
+	testutil.MustContainAll(t, body, "event: response.failed", "upstream_stream_incomplete", `"model":"grok-4.6"`)
 }
 
 func TestCopyNativeCLIResponseKeepsValidTerminal(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	input := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\ndata: [DONE]\n\n"
 	_, _, _ = copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6")
-	if count := strings.Count(recorder.Body.String(), "response.failed"); count != 0 {
-		t.Fatalf("unexpected failure: %s", recorder.Body.String())
-	}
+	testutil.Equal(t, strings.Count(recorder.Body.String(), "response.failed"), 0)
 }
 
 func TestResponsesObjectFromChatPreservesReasoningItem(t *testing.T) {
@@ -309,17 +276,11 @@ func TestResponsesObjectFromChatPreservesReasoningItem(t *testing.T) {
 		}}},
 	}
 	output := responsesObjectFromChat("grok-4.3", chat)["output"].([]interface{})
-	if len(output) != 2 {
-		t.Fatalf("output=%#v", output)
-	}
+	testutil.Equal(t, len(output), 2)
 	reasoning := output[0].(map[string]interface{})
-	if reasoning["type"] != "reasoning" {
-		t.Fatalf("reasoning item=%#v", reasoning)
-	}
+	testutil.Equal(t, reasoning["type"], "reasoning")
 	summary := reasoning["summary"].([]interface{})[0].(map[string]interface{})
-	if summary["text"] != "plan" {
-		t.Fatalf("summary=%#v", summary)
-	}
+	testutil.Equal(t, summary["text"], "plan")
 }
 
 func TestWriteResponsesStreamFromChatPreservesReasoningEvents(t *testing.T) {
@@ -331,12 +292,8 @@ func TestWriteResponsesStreamFromChatPreservesReasoningEvents(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writeResponsesStreamFromChatReaderRequestWithHook(recorder, ResponsesCreateRequest{Model: "grok-4.3"}, strings.NewReader(raw), nil)
 	out := recorder.Body.String()
-	if !strings.Contains(out, `"type":"response.reasoning_summary_text.delta"`) || !strings.Contains(out, `"delta":"plan"`) {
-		t.Fatalf("reasoning events missing: %q", out)
-	}
-	if !strings.Contains(out, `"type":"response.output_text.delta"`) || !strings.Contains(out, `"delta":"answer"`) {
-		t.Fatalf("answer events missing: %q", out)
-	}
+	testutil.MustContainAll(t, out, `"type":"response.reasoning_summary_text.delta"`, `"delta":"plan"`)
+	testutil.MustContainAll(t, out, `"type":"response.output_text.delta"`, `"delta":"answer"`)
 }
 
 // A Responses input_file must survive conversion into the chat layer, which

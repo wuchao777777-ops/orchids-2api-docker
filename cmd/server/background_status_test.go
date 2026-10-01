@@ -11,6 +11,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestRefreshQoderQuotaClearsFalseAgentExhaustion(t *testing.T) {
@@ -40,9 +41,7 @@ func TestRefreshQoderQuotaClearsFalseAgentExhaustion(t *testing.T) {
 		QoderAccessToken: "access", QoderRefreshToken: "refresh",
 		QoderExpiresAt: time.Now().Add(6 * time.Hour), QoderMachineID: "machine",
 	}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount() error=%v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount() error=%v")
 	cfg := &config.Config{QoderOpenAPIBaseURL: upstream.URL, QoderOAuthBaseURL: upstream.URL, QoderInferenceURL: upstream.URL}
 	refreshQoderQuota(context.Background(), cfg, s, acc)
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,6 @@ func newTestRedisStore(t *testing.T, prefix string) (*Store, *miniredis.Miniredi
 	mini := miniredis.RunT(t)
 	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: prefix})
 	if err != nil {
-		mini.Close()
 		t.Fatalf("store.New() error = %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
@@ -35,12 +35,8 @@ func createBillingKey(t *testing.T, s *Store, limit int64) *ApiKey {
 		Enabled:              true,
 		BillingLimitUSDTicks: limit,
 	}
-	if err := s.CreateApiKey(context.Background(), key); err != nil {
-		t.Fatalf("CreateApiKey() error = %v", err)
-	}
-	if key.ID == 0 {
-		t.Fatal("CreateApiKey() did not assign an id")
-	}
+	testutil.NoError(t, s.CreateApiKey(context.Background(), key), "CreateApiKey() error = %v")
+	testutil.NotEqual(t, key.ID, 0)
 	return key
 }
 
@@ -68,9 +64,7 @@ func TestApiKeyBillingUnlimitedKeyNeverBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetApiKeyByID() error = %v", err)
 	}
-	if got.BillingUsedUSDTicks != 0 {
-		t.Fatalf("used = %d, want 0 before any settlement", got.BillingUsedUSDTicks)
-	}
+	testutil.Equal(t, got.BillingUsedUSDTicks, 0)
 }
 
 // TestApiKeyBillingLimitBlocksExceedingReservation is the core guard: live holds
@@ -123,19 +117,13 @@ func TestApiKeyBillingSettlementIsIdempotentByEvent(t *testing.T) {
 	s, _ := newTestRedisStore(t, "billing-idempotent:")
 	key := createBillingKey(t, s, 1000)
 	ctx := context.Background()
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 300); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 300); err != nil {
-		t.Fatalf("idempotent replay failed: %v", err)
-	}
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "same-event", 300))
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "same-event", 300), "idempotent replay failed: %v")
 	got, err := s.GetApiKeyByID(ctx, key.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.BillingUsedUSDTicks != 300 {
-		t.Fatalf("used = %d, want one 300-tick charge", got.BillingUsedUSDTicks)
-	}
+	testutil.Equal(t, got.BillingUsedUSDTicks, 300)
 	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 301); err == nil {
 		t.Fatal("different amount for settled event must conflict")
 	}
@@ -152,9 +140,7 @@ func TestApiKeyBillingSettleMovesReservationIntoUsed(t *testing.T) {
 	if !reserve(t, s, key.ID, "event-a", 400, time.Hour) {
 		t.Fatal("reservation must succeed")
 	}
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "event-a", 300); err != nil {
-		t.Fatalf("SettleApiKeyBilling() error = %v", err)
-	}
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "event-a", 300), "SettleApiKeyBilling() error = %v")
 	// The hold is gone, so its capacity is neither free nor double counted.
 	if !reserve(t, s, key.ID, "event-b", 700, time.Hour) {
 		t.Fatal("used 300 + held 700 must fit the limit")
@@ -172,16 +158,12 @@ func TestApiKeyBillingSettleMovesReservationIntoUsed(t *testing.T) {
 	}
 
 	// Settling an event whose hold already expired still charges: the request ran.
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "event-unknown", 100); err != nil {
-		t.Fatalf("settling an unknown event error = %v", err)
-	}
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "event-unknown", 100), "settling an unknown event error = %v")
 	got, err := s.GetApiKeyByID(ctx, key.ID)
 	if err != nil {
 		t.Fatalf("GetApiKeyByID() error = %v", err)
 	}
-	if got.BillingUsedUSDTicks != 400 {
-		t.Fatalf("used = %d, want 400", got.BillingUsedUSDTicks)
-	}
+	testutil.Equal(t, got.BillingUsedUSDTicks, 400)
 	listed, err := s.ListApiKeys(ctx)
 	if err != nil {
 		t.Fatalf("ListApiKeys() error = %v", err)
@@ -223,12 +205,8 @@ func TestApiKeyBillingResetZeroesUsedAndDropsReservations(t *testing.T) {
 	if !reserve(t, s, key.ID, "event-a", 400, time.Hour) {
 		t.Fatal("reservation must succeed")
 	}
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "event-a", 400); err != nil {
-		t.Fatalf("SettleApiKeyBilling() error = %v", err)
-	}
-	if err := s.ResetApiKeyBilling(ctx, key.ID); err != nil {
-		t.Fatalf("ResetApiKeyBilling() error = %v", err)
-	}
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "event-a", 400), "SettleApiKeyBilling() error = %v")
+	testutil.NoError(t, s.ResetApiKeyBilling(ctx, key.ID), "ResetApiKeyBilling() error = %v")
 	got, err := s.GetApiKeyByID(ctx, key.ID)
 	if err != nil {
 		t.Fatalf("GetApiKeyByID() error = %v", err)
@@ -256,9 +234,7 @@ func TestApiKeyBillingLimitMirrorFollowsKeyUpdates(t *testing.T) {
 	}
 
 	key.BillingLimitUSDTicks = 100
-	if err := s.UpdateApiKey(ctx, key); err != nil {
-		t.Fatalf("UpdateApiKey() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateApiKey(ctx, key), "UpdateApiKey() error = %v")
 	if reserve(t, s, key.ID, "event-limited", 200, time.Hour) {
 		t.Fatal("the updated limit must be enforced immediately")
 	}
@@ -267,9 +243,7 @@ func TestApiKeyBillingLimitMirrorFollowsKeyUpdates(t *testing.T) {
 	}
 
 	// Deleting the key drops its ledger keys with it.
-	if err := s.DeleteApiKey(ctx, key.ID); err != nil {
-		t.Fatalf("DeleteApiKey() error = %v", err)
-	}
+	testutil.NoError(t, s.DeleteApiKey(ctx, key.ID), "DeleteApiKey() error = %v")
 	if _, err := s.GetApiKeyByID(ctx, key.ID); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("GetApiKeyByID() after delete = %v, want ErrNoRows", err)
 	}
@@ -305,11 +279,7 @@ func TestApiKeyBillingRejectsInvalidReservations(t *testing.T) {
 // A key with a billing period starts a fresh period once it elapses, so a limit
 // is per period rather than forever.
 func TestApiKeyBillingPeriodRollsOver(t *testing.T) {
-	s, mini := newTestRedisStore(t, "period:")
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	s, _ := newTestRedisStore(t, "period:")
 	ctx := context.Background()
 
 	now := time.Now().UTC()
@@ -318,12 +288,8 @@ func TestApiKeyBillingPeriodRollsOver(t *testing.T) {
 		BillingLimitUSDTicks: 1_000_000, BillingPeriodDays: 1,
 		BillingPeriodStartedAt: now.Add(-48 * time.Hour),
 	}
-	if err := s.CreateApiKey(ctx, key); err != nil {
-		t.Fatalf("CreateApiKey: %v", err)
-	}
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "req_old", 500_000); err != nil {
-		t.Fatalf("SettleApiKeyBilling: %v", err)
-	}
+	testutil.NoError(t, s.CreateApiKey(ctx, key), "CreateApiKey: %v")
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "req_old", 500_000), "SettleApiKeyBilling: %v")
 	stored, err := s.GetApiKeyByID(ctx, key.ID)
 	if err != nil || stored.BillingUsedUSDTicks != 500_000 {
 		t.Fatalf("used=%d err=%v", stored.BillingUsedUSDTicks, err)
@@ -334,9 +300,7 @@ func TestApiKeyBillingPeriodRollsOver(t *testing.T) {
 	raw := "raw-period-key"
 	digest := sha256.Sum256([]byte(raw))
 	key.KeyHash = hex.EncodeToString(digest[:])
-	if err := s.UpdateApiKey(ctx, key); err != nil {
-		t.Fatalf("UpdateApiKey: %v", err)
-	}
+	testutil.NoError(t, s.UpdateApiKey(ctx, key), "UpdateApiKey: %v")
 	if _, err := s.AuthorizeApiKey(ctx, raw); err != nil {
 		t.Fatalf("AuthorizeApiKey: %v", err)
 	}
@@ -344,17 +308,14 @@ func TestApiKeyBillingPeriodRollsOver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetApiKeyByID: %v", err)
 	}
-	if rolled.BillingUsedUSDTicks != 0 {
-		t.Fatalf("the period did not roll over: used=%d", rolled.BillingUsedUSDTicks)
-	}
+	testutil.Equal(t, rolled.BillingUsedUSDTicks, 0)
 	if !rolled.BillingPeriodStartedAt.After(now.Add(-time.Minute)) {
 		t.Fatalf("period start was not advanced: %v", rolled.BillingPeriodStartedAt)
 	}
 }
 
 func TestApiKeyBillingPeriodRolloverPreservesLiveHoldsAndIsAtomic(t *testing.T) {
-	s, mini := newTestRedisStore(t, "period-atomic:")
-	defer mini.Close()
+	s, _ := newTestRedisStore(t, "period-atomic:")
 	ctx := context.Background()
 	now := time.Now().UTC()
 	raw := "raw-period-atomic"
@@ -364,12 +325,8 @@ func TestApiKeyBillingPeriodRolloverPreservesLiveHoldsAndIsAtomic(t *testing.T) 
 		BillingLimitUSDTicks: 1_000, BillingPeriodDays: 1,
 		BillingPeriodStartedAt: now.Add(-48 * time.Hour),
 	}
-	if err := s.CreateApiKey(ctx, key); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "old", 900); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateApiKey(ctx, key))
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "old", 900))
 	if ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "live", 100, now.Add(time.Hour)); err != nil || !ok {
 		t.Fatalf("live hold: ok=%v err=%v", ok, err)
 	}
@@ -378,21 +335,15 @@ func TestApiKeyBillingPeriodRolloverPreservesLiveHoldsAndIsAtomic(t *testing.T) 
 	staleA, _ := s.GetApiKeyByID(ctx, key.ID)
 	staleB := *staleA
 	s.rolloverApiKeyBilling(ctx, staleA, now)
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "fresh", 50); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "fresh", 50))
 	s.rolloverApiKeyBilling(ctx, &staleB, now.Add(time.Second))
 
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "live", 100); err != nil {
-		t.Fatalf("live hold was deleted by rollover: %v", err)
-	}
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "live", 100), "live hold was deleted by rollover: %v")
 	got, err := s.GetApiKeyByID(ctx, key.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.BillingUsedUSDTicks != 150 {
-		t.Fatalf("stale rollover erased fresh settlement: used=%d want 150", got.BillingUsedUSDTicks)
-	}
+	testutil.Equal(t, got.BillingUsedUSDTicks, 150)
 	if released, err := s.ReleaseApiKeyBilling(ctx, key.ID, "live"); err != nil || released {
 		t.Fatalf("settled live hold remains: released=%v err=%v", released, err)
 	}
@@ -400,33 +351,19 @@ func TestApiKeyBillingPeriodRolloverPreservesLiveHoldsAndIsAtomic(t *testing.T) 
 
 // Resetting billing by hand zeroes the counter without touching the limit.
 func TestResetApiKeyBillingKeepsTheLimit(t *testing.T) {
-	s, mini := newTestRedisStore(t, "reset:")
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	s, _ := newTestRedisStore(t, "reset:")
 	ctx := context.Background()
 
 	key := &ApiKey{Name: "reset", KeyHash: "hash-reset", Enabled: true, BillingLimitUSDTicks: 2_000_000}
-	if err := s.CreateApiKey(ctx, key); err != nil {
-		t.Fatalf("CreateApiKey: %v", err)
-	}
-	if err := s.SettleApiKeyBilling(ctx, key.ID, "req_1", 1_000_000); err != nil {
-		t.Fatalf("SettleApiKeyBilling: %v", err)
-	}
-	if err := s.ResetApiKeyBilling(ctx, key.ID); err != nil {
-		t.Fatalf("ResetApiKeyBilling: %v", err)
-	}
+	testutil.NoError(t, s.CreateApiKey(ctx, key), "CreateApiKey: %v")
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, key.ID, "req_1", 1_000_000), "SettleApiKeyBilling: %v")
+	testutil.NoError(t, s.ResetApiKeyBilling(ctx, key.ID), "ResetApiKeyBilling: %v")
 	stored, err := s.GetApiKeyByID(ctx, key.ID)
 	if err != nil {
 		t.Fatalf("GetApiKeyByID: %v", err)
 	}
-	if stored.BillingUsedUSDTicks != 0 {
-		t.Fatalf("used=%d want 0", stored.BillingUsedUSDTicks)
-	}
-	if stored.BillingLimitUSDTicks != 2_000_000 {
-		t.Fatalf("the limit was lost: %d", stored.BillingLimitUSDTicks)
-	}
+	testutil.Equal(t, stored.BillingUsedUSDTicks, 0)
+	testutil.Equal(t, stored.BillingLimitUSDTicks, 2_000_000)
 	// Capacity is back: a reservation that the old usage would have blocked now
 	// succeeds.
 	ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "req_2", 2_000_000, time.Now().Add(time.Minute))

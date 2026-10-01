@@ -8,20 +8,18 @@ import (
 	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
 
 func TestJournalDiagnosticLookupMatchesRequest(t *testing.T) {
 	s, _ := newTestStore(t, "diagnostic-api:")
-	defer s.Close()
 	a := &API{store: s}
 	a.SetDiagnosticStore(debug.NewDiagnosticStore(s.RedisClient(), s.RedisPrefix()))
 	_, capture := debug.WithCapture(context.Background(), "req-1")
 	capture.Set("1_http_request.json", `{"model":"test"}`)
-	if err := a.diagnostics.Save(context.Background(), capture.Bundle()); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, a.diagnostics.Save(context.Background(), capture.Bundle()))
 	seedJournal(t, a, []audit.Event{{Kind: audit.KindRequest, Action: "chat_request", RequestID: "req-1", Status: "success"}, {Kind: audit.KindRequest, Action: "chat_request", RequestID: "other", Status: "success"}})
 	list := journalRequest(t, a, "?kind=request")
 	for _, raw := range list["data"].([]interface{}) {
@@ -39,9 +37,7 @@ func TestJournalDiagnosticLookupMatchesRequest(t *testing.T) {
 	}{{"req-1", 200, true}, {"other", 200, false}, {"", 400, false}} {
 		rec := httptest.NewRecorder()
 		a.HandleJournalDiagnostics(rec, httptest.NewRequest(http.MethodGet, "/api/journal/diagnostics?request_id="+tc.id, nil))
-		if rec.Code != tc.code {
-			t.Fatalf("status=%d", rec.Code)
-		}
+		testutil.Equal(t, rec.Code, tc.code)
 		if tc.code == 200 {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(rec.Body.Bytes(), &payload)
@@ -59,9 +55,7 @@ func TestRuntimeResourcesIncludeHostMetrics(t *testing.T) {
 			Label string `json:"label"`
 		}
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
 	names := map[string]bool{}
 	for _, m := range payload.Metrics {
 		names[m.Label] = true
@@ -82,7 +76,6 @@ func TestRuntimeResourcesIncludeHostMetrics(t *testing.T) {
 }
 func TestAlertRulePersistenceFailureKeepsPolicy(t *testing.T) {
 	s, server := newTestStore(t, "rule-failure:")
-	defer s.Close()
 	a := &API{store: s, alertEngine: alerting.NewEngine(alerting.DefaultRules(), nil)}
 	before := a.alertEngine.Thresholds()
 	next := before

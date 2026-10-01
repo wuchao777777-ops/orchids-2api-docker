@@ -1,6 +1,9 @@
 package qoder
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 func TestCatalogMergesDuplicateKeys(t *testing.T) {
 	disabled := false
@@ -9,9 +12,7 @@ func TestCatalogMergesDuplicateKeys(t *testing.T) {
 		{Key: " model ", Name: " Model Name ", DisplayName: " Display Alias ", MaxInputTokens: 180000},
 		{Key: "MODEL", Name: "Model Name", MaxInputTokens: 900000},
 	})
-	if catalog.Len() != 1 {
-		t.Fatalf("Len = %d, want 1", catalog.Len())
-	}
+	testutil.Equal(t, catalog.Len(), 1)
 	for _, name := range []string{"model", "MODEL", " Model Name ", "model name", "Display Alias", "DISPLAY ALIAS"} {
 		entry, err := catalog.Resolve(name)
 		if err != nil || entry.Key != "model" || entry.MaxInputTokens != 180000 {
@@ -19,9 +20,7 @@ func TestCatalogMergesDuplicateKeys(t *testing.T) {
 		}
 	}
 	snapshot := CatalogSnapshot(catalog)
-	if len(snapshot) != 1 {
-		t.Fatalf("snapshot has %d rows", len(snapshot))
-	}
+	testutil.Equal(t, len(snapshot), 1)
 	roundtrip := catalogFromIDs(snapshot)
 	if got, err := roundtrip.Resolve("Display Alias"); err != nil || got.MaxInputTokens != 180000 {
 		t.Fatalf("roundtrip = %+v, %v", got, err)
@@ -67,7 +66,5 @@ func TestCatalogUnknownAliasWindowDoesNotBorrowAnotherRow(t *testing.T) {
 	if _, exists := windows["shared"]; exists {
 		t.Fatalf("unknown window inherited another model's budget: %#v", windows)
 	}
-	if windows["known"] != 900000 {
-		t.Fatalf("explicit key budget missing: %#v", windows)
-	}
+	testutil.Equal(t, windows["known"], 900000)
 }

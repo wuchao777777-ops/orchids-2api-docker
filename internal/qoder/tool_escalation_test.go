@@ -2,6 +2,7 @@ package qoder
 
 import (
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 	"strings"
 	"testing"
@@ -25,27 +26,19 @@ func TestCommandEscalationCompatibility(t *testing.T) {
 			got := normalizeCommandEscalation(tc.name, tc.input)
 			var before, after map[string]json.RawMessage
 			json.Unmarshal([]byte(tc.input), &before)
-			if err := json.Unmarshal([]byte(got), &after); err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, json.Unmarshal([]byte(got), &after))
 			_, present := after["justification"]
-			if present == tc.removed {
-				t.Fatalf("unexpected justification: %s", got)
-			}
+			testutil.NotEqual(t, present, tc.removed)
 			if tc.removed {
 				delete(before, "justification")
 			}
 			a, _ := json.Marshal(before)
 			b, _ := json.Marshal(after)
-			if string(a) != string(b) {
-				t.Fatalf("other arguments changed: %s vs %s", a, b)
-			}
+			testutil.Equal(t, string(a), string(b))
 		})
 	}
 	malformed := `{"command":`
-	if got := normalizeCommandEscalation("run_command", malformed); got != malformed {
-		t.Fatalf("malformed arguments changed: %s", got)
-	}
+	testutil.Equal(t, normalizeCommandEscalation("run_command", malformed), malformed)
 }
 func TestStreamRepairsCommandEscalationAfterSplitArguments(t *testing.T) {
 	body := envelope(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"run_command","arguments":"{\"command\":\"python3 -m speedtest.speedtest --simple\","}}]}}]}`) +
@@ -60,9 +53,7 @@ func TestStreamRepairsCommandEscalationAfterSplitArguments(t *testing.T) {
 			continue
 		}
 		calls++
-		if event.Event["toolCallId"] != "call_1" {
-			t.Fatalf("identity lost: %+v", event)
-		}
+		testutil.Equal(t, event.Event["toolCallId"], "call_1")
 		input := event.Event["input"].(string)
 		if strings.Contains(input, "justification") || !strings.Contains(input, "speedtest.speedtest --simple") {
 			t.Fatalf("input=%s", input)
@@ -77,15 +68,13 @@ func TestTextToolFallbackRepairsOrphanEscalation(t *testing.T) {
 	content := `Tool calls: [{"id":"fallback-1","function":{"name":"run_command","arguments":{"command":"ls","justification":"reason"}}}]`
 	chunk, _ := json.Marshal(map[string]interface{}{"choices": []interface{}{map[string]interface{}{"delta": map[string]interface{}{"content": content}, "finish_reason": "stop"}}})
 	var events []upstream.SSEMessage
-	result, err := consumeStreamWithTools(strings.NewReader(envelope(string(chunk))+"event:finish\ndata: {}\n\n"), true, func(event upstream.SSEMessage) { events = append(events, event) })
+	result, err := consumeStreamObserved(strings.NewReader(envelope(string(chunk))+"event:finish\ndata: {}\n\n"), true, func(event upstream.SSEMessage) { events = append(events, event) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, event := range events {
 		if event.Type == "model.tool-call" {
-			if strings.Contains(event.Event["input"].(string), "justification") {
-				t.Fatalf("fallback not normalized: %+v", event)
-			}
+			testutil.MustNotContain(t, event.Event["input"].(string), "justification")
 			if result.ToolCallCount != 1 {
 				t.Fatal(result.ToolCallCount)
 			}

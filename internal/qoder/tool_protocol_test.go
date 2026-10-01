@@ -7,23 +7,22 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
 func decodeChatBodyForTest(t *testing.T, req upstream.UpstreamRequest) map[string]interface{} {
 	t.Helper()
-	encoded, err := buildChatBody(req, modelEntry{Key: "qmodel_latest", Source: "system"}, "session-id", "request-id", "request-set-id")
+	encoded, err := buildChatBodyProfile(req, modelEntry{Key: "qmodel_latest", Source: "system"}, "session-id", "request-id", "request-set-id", DefaultClientVersion, "", sceneBusinessProduct)
 	if err != nil {
-		t.Fatalf("buildChatBody() error = %v", err)
+		t.Fatalf("buildChatBodyProfile() error = %v", err)
 	}
 	raw, err := decodeBodyForTest(encoded)
 	if err != nil {
 		t.Fatalf("DecodeBody() error = %v", err)
 	}
 	var body map[string]interface{}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		t.Fatalf("unmarshal body: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &body), "unmarshal body: %v")
 	return body
 }
 
@@ -50,9 +49,7 @@ func TestBuildChatBodyDropsDanglingAndDuplicateToolResults(t *testing.T) {
 			}
 		}
 	}
-	if toolMessages != 1 {
-		t.Fatalf("tool messages=%d want 1: %#v", toolMessages, messages)
-	}
+	testutil.Equal(t, toolMessages, 1)
 }
 
 func sampleQoderTool() map[string]interface{} {
@@ -73,17 +70,13 @@ func TestBuildChatBodyPlacesToolControlsAtTopLevel(t *testing.T) {
 	body := decodeChatBodyForTest(t, upstream.UpstreamRequest{
 		Tools: []interface{}{sampleQoderTool()},
 	})
-	if got := body["tool_choice"]; got != "auto" {
-		t.Fatalf("tool_choice = %#v, want top-level auto", got)
-	}
+	testutil.Equal(t, body["tool_choice"], "auto")
 	parameters, _ := body["parameters"].(map[string]interface{})
 	if _, exists := parameters["tool_choice"]; exists {
 		t.Fatalf("parameters.tool_choice must be absent: %#v", parameters)
 	}
 	tools, _ := body["tools"].([]interface{})
-	if len(tools) != 1 {
-		t.Fatalf("tools len = %d, want 1", len(tools))
-	}
+	testutil.Equal(t, len(tools), 1)
 }
 
 func TestBuildChatBodyNormalizesAnthropicToolControls(t *testing.T) {
@@ -113,24 +106,18 @@ func TestConsumeStreamConvertsTextToolFallback(t *testing.T) {
 		"event:finish\ndata: {}\n\n"
 
 	var events []upstream.SSEMessage
-	result, err := consumeStreamWithTools(strings.NewReader(body), true, func(message upstream.SSEMessage) {
+	result, err := consumeStreamObserved(strings.NewReader(body), true, func(message upstream.SSEMessage) {
 		events = append(events, message)
-	})
+	}, nil)
 	if err != nil {
-		t.Fatalf("consumeStreamWithTools() error = %v", err)
+		t.Fatalf("consumeStreamObserved() error = %v", err)
 	}
-	if got := result.FinishReason(); got != "tool_use" {
-		t.Fatalf("FinishReason() = %q, want tool_use", got)
-	}
+	testutil.Equal(t, result.FinishReason(), "tool_use")
 	if len(events) != 1 || events[0].Type != "model.tool-call" {
 		t.Fatalf("events = %#v, want one tool call", events)
 	}
-	if got := events[0].Event["toolName"]; got != "read_file" {
-		t.Fatalf("toolName = %#v", got)
-	}
-	if got := events[0].Event["input"]; got != `{"path":"README.md"}` {
-		t.Fatalf("input = %#v", got)
-	}
+	testutil.Equal(t, events[0].Event["toolName"], "read_file")
+	testutil.Equal(t, events[0].Event["input"], `{"path":"README.md"}`)
 }
 
 func TestConsumeStreamDoesNotParseTextFallbackWithoutTools(t *testing.T) {
@@ -138,11 +125,11 @@ func TestConsumeStreamDoesNotParseTextFallbackWithoutTools(t *testing.T) {
 	body := envelope(`{"choices":[{"delta":{"content":"Tool calls: []"},"finish_reason":"stop"}]}`) +
 		"event:finish\ndata: {}\n\n"
 	var events []upstream.SSEMessage
-	_, err := consumeStreamWithTools(strings.NewReader(body), false, func(message upstream.SSEMessage) {
+	_, err := consumeStreamObserved(strings.NewReader(body), false, func(message upstream.SSEMessage) {
 		events = append(events, message)
-	})
+	}, nil)
 	if err != nil {
-		t.Fatalf("consumeStreamWithTools() error = %v", err)
+		t.Fatalf("consumeStreamObserved() error = %v", err)
 	}
 	if len(events) != 1 || events[0].Type != "model.text-delta" {
 		t.Fatalf("events = %#v, want ordinary text", events)
@@ -155,11 +142,11 @@ func TestConsumeStreamInvalidTextToolFallbackRemainsText(t *testing.T) {
 	body := envelope(`{"choices":[{"delta":{"content":"Tool calls: [{not-json}]"},"finish_reason":"stop"}]}`) +
 		"event:finish\ndata: {}\n\n"
 	var text strings.Builder
-	result, err := consumeStreamWithTools(strings.NewReader(body), true, func(message upstream.SSEMessage) {
+	result, err := consumeStreamObserved(strings.NewReader(body), true, func(message upstream.SSEMessage) {
 		if message.Type == "model.text-delta" {
 			text.WriteString(message.Event["delta"].(string))
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,11 +160,11 @@ func TestConsumeStreamConvertsParallelTextToolFallback(t *testing.T) {
 	body := envelope(`{"choices":[{"delta":{"content":"Tool calls: [{\"id\":\"a\",\"function\":{\"name\":\"read\",\"arguments\":{\"path\":\"a\"}}},{\"id\":\"b\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"b\\\"}\"}}]"},"finish_reason":"stop"}]}`) +
 		"event:finish\ndata: {}\n\n"
 	var calls []upstream.SSEMessage
-	result, err := consumeStreamWithTools(strings.NewReader(body), true, func(message upstream.SSEMessage) {
+	result, err := consumeStreamObserved(strings.NewReader(body), true, func(message upstream.SSEMessage) {
 		if message.Type == "model.tool-call" {
 			calls = append(calls, message)
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,9 +179,9 @@ func TestConsumeStreamNativeToolSuppressesTextDuplicate(t *testing.T) {
 		envelope(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`) +
 		"event:finish\ndata: {}\n\n"
 	var events []upstream.SSEMessage
-	result, err := consumeStreamWithTools(strings.NewReader(body), true, func(message upstream.SSEMessage) {
+	result, err := consumeStreamObserved(strings.NewReader(body), true, func(message upstream.SSEMessage) {
 		events = append(events, message)
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,11 +199,11 @@ func TestConsumeStreamLongSplitWhitespacePrefixStaysLinearAndFlushes(t *testing.
 	body.WriteString(envelope(`{"choices":[{"delta":{"content":"ordinary text"},"finish_reason":"stop"}]}`))
 	body.WriteString("event:finish\ndata: {}\n\n")
 	var text strings.Builder
-	result, err := consumeStreamWithTools(strings.NewReader(body.String()), true, func(message upstream.SSEMessage) {
+	result, err := consumeStreamObserved(strings.NewReader(body.String()), true, func(message upstream.SSEMessage) {
 		if message.Type == "model.text-delta" {
 			text.WriteString(message.Event["delta"].(string))
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,11 +222,11 @@ func TestConsumeStreamOversizedTextFallbackDegradesToText(t *testing.T) {
 	}
 	body := envelope(string(inner)) + "event:finish\ndata: {}\n\n"
 	textBytes := 0
-	result, err := consumeStreamWithTools(strings.NewReader(body), true, func(message upstream.SSEMessage) {
+	result, err := consumeStreamObserved(strings.NewReader(body), true, func(message upstream.SSEMessage) {
 		if message.Type == "model.text-delta" {
 			textBytes += len(message.Event["delta"].(string))
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,9 +252,7 @@ func TestBuildChatBodyCarriesThinkingSwitch(t *testing.T) {
 	if _, present := params["reasoning_effort"]; present {
 		t.Fatalf("default reasoning model must not set effort: %#v", params)
 	}
-	if body["model_config"].(map[string]interface{})["is_reasoning"] != true {
-		t.Fatalf("model_config must report the model's reasoning capability: %#v", body)
-	}
+	testutil.Equal(t, body["model_config"].(map[string]interface{})["is_reasoning"], true)
 	body = decodeChatBodyForTestWithModel(t, plain, upstream.UpstreamRequest{})
 	params, _ = body["parameters"].(map[string]interface{})
 	if _, present := params["enable_thinking"]; present {
@@ -289,9 +274,7 @@ func TestBuildChatBodyCarriesThinkingSwitch(t *testing.T) {
 	// asks for them.
 	body = decodeChatBodyForTestWithModel(t, modelEntry{Key: "qfmodel", IsReasoning: true}, upstream.UpstreamRequest{})
 	params, _ = body["parameters"].(map[string]interface{})
-	if body["model_config"].(map[string]interface{})["is_reasoning"] != true {
-		t.Fatalf("qfmodel must report its reasoning capability: %#v", body)
-	}
+	testutil.Equal(t, body["model_config"].(map[string]interface{})["is_reasoning"], true)
 	if _, present := params["reasoning_effort"]; present {
 		t.Fatalf("qfmodel default carried reasoning_effort: %#v", params)
 	}
@@ -299,9 +282,7 @@ func TestBuildChatBodyCarriesThinkingSwitch(t *testing.T) {
 	// "none" disables thinking explicitly.
 	body = decodeChatBodyForTestWithModel(t, reasoning, upstream.UpstreamRequest{ReasoningEffort: "none"})
 	params, _ = body["parameters"].(map[string]interface{})
-	if params["enable_thinking"] != false {
-		t.Fatalf("parameters = %#v, want enable_thinking=false", params)
-	}
+	testutil.Equal(t, params["enable_thinking"], false)
 	if _, present := params["reasoning_effort"]; present {
 		t.Fatalf("none must not forward an effort level, got %#v", params["reasoning_effort"])
 	}
@@ -309,17 +290,15 @@ func TestBuildChatBodyCarriesThinkingSwitch(t *testing.T) {
 
 func decodeChatBodyForTestWithModel(t *testing.T, model modelEntry, req upstream.UpstreamRequest) map[string]interface{} {
 	t.Helper()
-	encoded, err := buildChatBody(req, model, "session-id", "request-id", "request-set-id")
+	encoded, err := buildChatBodyProfile(req, model, "session-id", "request-id", "request-set-id", DefaultClientVersion, "", sceneBusinessProduct)
 	if err != nil {
-		t.Fatalf("buildChatBody() error = %v", err)
+		t.Fatalf("buildChatBodyProfile() error = %v", err)
 	}
 	raw, err := decodeBodyForTest(encoded)
 	if err != nil {
 		t.Fatalf("DecodeBody() error = %v", err)
 	}
 	var body map[string]interface{}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		t.Fatalf("unmarshal body: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &body), "unmarshal body: %v")
 	return body
 }

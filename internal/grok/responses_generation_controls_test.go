@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	shared "orchids-api/internal/handler"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -14,9 +15,7 @@ func TestResponsesBridgePreservesGenerationControlsForSharedHandler(t *testing.T
 	next := func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		var req shared.ClaudeRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		if req.MaxTokens == nil || *req.MaxTokens != 23 || req.Temperature == nil || *req.Temperature != 0 || req.TopP == nil || *req.TopP != 0.5 {
 			t.Fatalf("bridge dropped controls: %+v", req)
 		}

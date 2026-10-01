@@ -240,14 +240,12 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		requestCtx, readModel := RequestModelHint(r.Context())
 		r = r.WithContext(context.WithValue(requestCtx, requestObservationKey{}, &requestObservation{}))
 
-		if logutil.VerboseDiagnosticsEnabled() {
-			slog.Debug("Request started",
-				"trace_id", traceID,
-				"method", r.Method,
-				"path", r.URL.Path,
-				"remote_addr", r.RemoteAddr,
-			)
-		}
+		logutil.DebugIf(logutil.VerboseDiagnosticsEnabled(), "Request started",
+			"trace_id", traceID,
+			"method", r.Method,
+			"path", r.URL.Path,
+			"remote_addr", r.RemoteAddr,
+		)
 
 		// 处理请求
 		next.ServeHTTP(wrapped, r)

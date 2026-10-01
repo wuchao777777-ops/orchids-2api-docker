@@ -9,6 +9,7 @@ import (
 
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // count_tokens decides the token profile from the channel, and on the unified
@@ -18,11 +19,7 @@ import (
 // count_tokens planned against a number that did not belong to the provider
 // serving it.
 func TestHandleCountTokensUsesTheModelChannelWhenThePathHasNone(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	mustCreateModel(t, s, "360", "WorkBuddy", "claude-opus-5", store.ModelStatusAvailable)
 
@@ -36,30 +33,20 @@ func TestHandleCountTokensUsesTheModelChannelWhenThePathHasNone(t *testing.T) {
 	unifiedCtx, _ := middleware.RequestModelHint(unifiedReq.Context())
 	unifiedCtx = middleware.WithRequestModel(unifiedCtx, "claude-opus-5")
 	h.HandleCountTokens(unified, unifiedReq.WithContext(unifiedCtx))
-	if unified.Code != http.StatusOK {
-		t.Fatalf("unified status = %d body=%s", unified.Code, unified.Body.String())
-	}
+	testutil.Equal(t, unified.Code, http.StatusOK)
 
 	channelScoped := httptest.NewRecorder()
 	h.HandleCountTokens(channelScoped, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages/count_tokens", strings.NewReader(body)))
-	if channelScoped.Code != http.StatusOK {
-		t.Fatalf("channel status = %d body=%s", channelScoped.Code, channelScoped.Body.String())
-	}
+	testutil.Equal(t, channelScoped.Code, http.StatusOK)
 
 	var unifiedBody, channelBody struct {
 		InputTokens   int    `json:"input_tokens"`
 		PromptProfile string `json:"prompt_profile"`
 	}
-	if err := json.Unmarshal(unified.Body.Bytes(), &unifiedBody); err != nil {
-		t.Fatalf("decode unified: %v", err)
-	}
-	if err := json.Unmarshal(channelScoped.Body.Bytes(), &channelBody); err != nil {
-		t.Fatalf("decode channel: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(unified.Body.Bytes(), &unifiedBody), "decode unified: %v")
+	testutil.NoError(t, json.Unmarshal(channelScoped.Body.Bytes(), &channelBody), "decode channel: %v")
 
-	if unifiedBody.PromptProfile != "workbuddy" {
-		t.Fatalf("unified profile = %q, want the WorkBuddy profile its model resolves to", unifiedBody.PromptProfile)
-	}
+	testutil.Equal(t, unifiedBody.PromptProfile, "workbuddy")
 	if unifiedBody.PromptProfile != channelBody.PromptProfile {
 		t.Fatalf("unified profile = %q, channel profile = %q; the unified prefix must resolve the channel from the model",
 			unifiedBody.PromptProfile, channelBody.PromptProfile)
@@ -74,26 +61,18 @@ func TestHandleCountTokensUsesTheModelChannelWhenThePathHasNone(t *testing.T) {
 // budgeting call, and a 5xx there blocks the client before it ever sends the
 // completion.
 func TestHandleCountTokensAnswersForAnUnknownModel(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, _, _ := setupModelValidationHandler(t)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
 		strings.NewReader(`{"model":"who-knows","messages":[{"role":"user","content":"hi"}]}`))
 	ctx, _ := middleware.RequestModelHint(req.Context())
 	h.HandleCountTokens(rec, req.WithContext(ctx))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var body struct {
 		InputTokens int `json:"input_tokens"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), "decode: %v")
 	if body.InputTokens <= 0 {
 		t.Fatalf("input_tokens = %d, want a positive estimate", body.InputTokens)
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestAccountModalOffersClineLogin(t *testing.T) {
@@ -16,9 +17,7 @@ func TestAccountModalOffersClineLogin(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=accounts", nil)
-	if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil); err != nil {
-		t.Fatalf("RenderIndex() error = %v", err)
-	}
+	testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil), "RenderIndex() error = %v")
 	page := recorder.Body.String()
 	for _, want := range []string{
 		`id="clineLoginGroup"`,
@@ -26,9 +25,7 @@ func TestAccountModalOffersClineLogin(t *testing.T) {
 		`ClineLogin.start()`,
 		`js/cline-auth.js`,
 	} {
-		if !strings.Contains(page, want) {
-			t.Errorf("the accounts page is missing %s", want)
-		}
+		testutil.CheckContain(t, page, want)
 	}
 }
 
@@ -39,9 +36,7 @@ func TestModelModalOffersClineChannel(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=models", nil)
-	if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil); err != nil {
-		t.Fatalf("RenderIndex() error = %v", err)
-	}
+	testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil), "RenderIndex() error = %v")
 	if page := recorder.Body.String(); !strings.Contains(page, `provider-registry.js`) || !strings.Contains(page, `id="modelChannel"`) {
 		t.Error("the model modal is not wired to the shared provider registry")
 	}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -12,9 +13,7 @@ func TestReconcileDiscoveredModelsProtectsManualAndPrunesDiscovery(t *testing.T)
 	stale := &Model{Channel: "Qoder", ModelID: "stale", Name: "stale", Status: ModelStatusAvailable, Origin: "discovery"}
 	other := &Model{Channel: "WorkBuddy", ModelID: "stale", Name: "other channel", Status: ModelStatusAvailable, Origin: "discovery"}
 	for _, m := range []*Model{manual, stale, other} {
-		if err := s.CreateModel(ctx, m); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, s.CreateModel(ctx, m))
 	}
 
 	result, err := s.ReconcileDiscoveredModels(ctx, " Qoder ", []*Model{
@@ -49,9 +48,7 @@ func TestReconcileDiscoveredModelsUpsertsAndOptionalPrune(t *testing.T) {
 	old := &Model{Channel: "Cline", ModelID: "same", Name: "old", Status: ModelStatusOffline, Origin: "discovery"}
 	missing := &Model{Channel: "Cline", ModelID: "missing", Name: "missing", Status: ModelStatusAvailable, Origin: "discovery"}
 	for _, m := range []*Model{old, missing} {
-		if err := s.CreateModel(ctx, m); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, s.CreateModel(ctx, m))
 	}
 	oldID := old.ID
 

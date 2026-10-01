@@ -1,7 +1,7 @@
 package debug
 
 import (
-	"strings"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -47,9 +47,7 @@ func TestSanitizeCaptureMatchesUngatedSweep(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			want := ungatedSanitize(tc.in)
-			if got := sanitizeCapture(tc.in); got != want {
-				t.Fatalf("gated sanitize diverged from the ungated sweep\n input: %q\n gated: %q\n  want: %q", tc.in, got, want)
-			}
+			testutil.Equal(t, sanitizeCapture(tc.in), want)
 		})
 	}
 }
@@ -78,12 +76,8 @@ func TestSanitizeCaptureStillRedactsCredentials(t *testing.T) {
 	for _, in := range inputs {
 		out := sanitizeCapture(in)
 		for _, secret := range secrets {
-			if strings.Contains(out, secret) {
-				t.Fatalf("sanitizeCapture left %q in %q", secret, out)
-			}
+			testutil.MustNotContain(t, out, secret)
 		}
-		if !strings.Contains(out, "[REDACTED]") {
-			t.Fatalf("sanitizeCapture redacted nothing in %q -> %q", in, out)
-		}
+		testutil.MustContain(t, out, "[REDACTED]")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestEstimateInputTokenBreakdown_SplitsSystemContext(t *testing.T) {
@@ -36,9 +37,7 @@ func TestEstimateInputTokenBreakdown_SplitsSystemContext(t *testing.T) {
 	if bd.ToolsTokens <= 0 {
 		t.Fatalf("expected tools tokens > 0")
 	}
-	if bd.Total != bd.BasePromptTokens+bd.SystemContextTokens+bd.HistoryTokens+bd.ToolsTokens {
-		t.Fatalf("unexpected total=%d", bd.Total)
-	}
+	testutil.Equal(t, bd.Total, bd.BasePromptTokens+bd.SystemContextTokens+bd.HistoryTokens+bd.ToolsTokens)
 }
 
 func TestEstimateInputTokenBreakdown_ProductionFallbackAlwaysPositive(t *testing.T) {
@@ -92,14 +91,10 @@ func TestHandleCountTokens_ReturnsBreakdown(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://x/v1/messages/count_tokens", bytes.NewReader(raw))
 
 	h.HandleCountTokens(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	var resp map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "decode response: %v")
 	if v, ok := resp["input_tokens"].(float64); !ok || v <= 0 {
 		t.Fatalf("expected positive input_tokens, got %#v", resp["input_tokens"])
 	}

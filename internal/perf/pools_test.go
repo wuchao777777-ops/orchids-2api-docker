@@ -1,6 +1,7 @@
 package perf
 
 import (
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -11,7 +12,5 @@ func TestStringBuilderPool(t *testing.T) {
 
 	sb2 := AcquireStringBuilder()
 	defer ReleaseStringBuilder(sb2)
-	if sb2.Len() != 0 {
-		t.Fatalf("expected reset builder, got len=%d", sb2.Len())
-	}
+	testutil.Equal(t, sb2.Len(), 0)
 }

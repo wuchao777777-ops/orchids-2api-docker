@@ -12,6 +12,7 @@ import (
 
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -28,9 +29,7 @@ func TestChatDoesNotLocallyRetryNonAuthFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected upstream error")
 	}
-	if got := attempts.Load(); got != 1 {
-		t.Fatalf("attempts=%d want 1; shared handler owns non-auth retries", got)
-	}
+	testutil.Equal(t, attempts.Load(), 1)
 }
 
 func TestChatKeepsLogicalTaskIDAcross401Refresh(t *testing.T) {
@@ -76,9 +75,7 @@ func TestConsumeStreamPreservesFinishReasonAndReasoningUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.FinishReason() != "max_tokens" {
-		t.Fatalf("finish=%q", result.FinishReason())
-	}
+	testutil.Equal(t, result.FinishReason(), "max_tokens")
 	if result.Usage["reasoningTokens"] != 4 || result.Usage["reasoning_tokens"] != 4 {
 		t.Fatalf("usage=%v", result.Usage)
 	}

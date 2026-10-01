@@ -4,10 +4,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/testutil"
 )
 
 // TestWriteGrokAccountUnavailable_ClassifiesThePool pins that the Grok handlers
@@ -65,22 +65,16 @@ func TestWriteGrokAccountUnavailable_ClassifiesThePool(t *testing.T) {
 			rec := httptest.NewRecorder()
 			writeGrokAccountUnavailable(rec, tc.err, "response_account_unavailable", grokResponseAccountUnavailableMessage)
 
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, rec.Body.String())
-			}
+			testutil.Equal(t, rec.Code, tc.wantStatus)
 			body := rec.Body.String()
-			if !strings.Contains(body, tc.wantMessage) {
-				t.Fatalf("body = %s, want it to contain %q", body, tc.wantMessage)
-			}
+			testutil.MustContain(t, body, tc.wantMessage)
 			// The pool's note and the underlying error text are diagnostics: they
 			// belong in the log, never in a body a client may show to a user.
 			for _, leaked := range []string{"no enabled accounts available", "channel: grok", tc.err.Error()} {
 				if leaked == tc.wantMessage {
 					continue
 				}
-				if strings.Contains(body, leaked) {
-					t.Fatalf("internal detail %q leaked into the response: %s", leaked, body)
-				}
+				testutil.MustNotContain(t, body, leaked)
 			}
 		})
 	}
@@ -126,19 +120,11 @@ func TestWriteGrokNoAccountError_ClassifiesTheSameWayAsEveryOtherEntrance(t *tes
 			rec := httptest.NewRecorder()
 			writeGrokNoAccountError(rec, tc.err)
 
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, rec.Body.String())
-			}
+			testutil.Equal(t, rec.Code, tc.wantStatus)
 			body := rec.Body.String()
-			if !strings.Contains(body, tc.wantMessage) {
-				t.Fatalf("body = %s, want it to contain %q", body, tc.wantMessage)
-			}
-			if !strings.Contains(body, `"type":"`+tc.wantType+`"`) {
-				t.Fatalf("body = %s, want error type %q", body, tc.wantType)
-			}
-			if strings.Contains(body, "no enabled accounts available") {
-				t.Fatalf("pool note leaked into the response: %s", body)
-			}
+			testutil.MustContain(t, body, tc.wantMessage)
+			testutil.MustContain(t, body, `"type":"`+tc.wantType+`"`)
+			testutil.MustNotContain(t, body, "no enabled accounts available")
 		})
 	}
 }
@@ -152,23 +138,15 @@ func TestWriteGrokUpstreamFailure_KeepsProseOutOfTheBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeGrokUpstreamFailure(rec, http.StatusForbidden, upstream)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want the status the caller computed", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusForbidden)
 	body := rec.Body.String()
-	if !strings.Contains(body, apperrors.PublicMessage(upstream.Error())) {
-		t.Fatalf("body = %s, want the shared category sentence", body)
-	}
+	testutil.MustContain(t, body, apperrors.PublicMessage(upstream.Error()))
 	for _, leaked := range []string{"This page is out of date", "upstream status=", "code\":7"} {
-		if strings.Contains(body, leaked) {
-			t.Fatalf("upstream prose %q leaked into the response: %s", leaked, body)
-		}
+		testutil.MustNotContain(t, body, leaked)
 	}
 
 	local := errors.New("audio part is missing a filename")
 	rec = httptest.NewRecorder()
 	writeGrokUpstreamFailure(rec, http.StatusBadGateway, local)
-	if !strings.Contains(rec.Body.String(), "audio part is missing a filename") {
-		t.Fatalf("a local failure lost its message: %s", rec.Body.String())
-	}
+	testutil.MustContain(t, rec.Body.String(), "audio part is missing a filename")
 }

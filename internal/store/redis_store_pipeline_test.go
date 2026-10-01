@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -42,13 +43,9 @@ func TestGetAccountsByIDsReadsEveryRowInOneBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getAccountsByIDs() error = %v", err)
 	}
-	if len(accounts) != 3 {
-		t.Fatalf("got %d accounts, want 3", len(accounts))
-	}
+	testutil.Equal(t, len(accounts), 3)
 	for i, want := range []string{"test1", "test2", "test3"} {
-		if accounts[i].Name != want {
-			t.Fatalf("account %d = %q, want %q (row order lost)", i, accounts[i].Name, want)
-		}
+		testutil.Equal(t, accounts[i].Name, want)
 	}
 }
 
@@ -58,21 +55,15 @@ func TestGetAccountsByIDsSkipsMissingAndDisabledRows(t *testing.T) {
 	s := newBatchReadStore(t)
 	ctx := context.Background()
 
-	if err := s.client.Set(ctx, s.accountsKey(1), `{"id":1,"name":"enabled","enabled":true}`, 0).Err(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.client.Set(ctx, s.accountsKey(3), `{"id":3,"name":"disabled","enabled":false}`, 0).Err(); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.client.Set(ctx, s.accountsKey(1), `{"id":1,"name":"enabled","enabled":true}`, 0).Err())
+	testutil.NoError(t, s.client.Set(ctx, s.accountsKey(3), `{"id":3,"name":"disabled","enabled":false}`, 0).Err())
 
 	// id 2 has no row at all.
 	accounts, err := s.getAccountsByIDs(ctx, []string{"1", "2", "3"}, false)
 	if err != nil {
 		t.Fatalf("getAccountsByIDs() error = %v", err)
 	}
-	if len(accounts) != 2 {
-		t.Fatalf("got %d accounts, want 2 (the missing row must be skipped)", len(accounts))
-	}
+	testutil.Equal(t, len(accounts), 2)
 
 	enabled, err := s.getAccountsByIDs(ctx, []string{"1", "3"}, true)
 	if err != nil {

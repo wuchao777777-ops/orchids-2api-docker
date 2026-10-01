@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/testutil"
 )
 
 func TestResponsesChatPathMapsTheChannelPrefix(t *testing.T) {
@@ -28,9 +29,7 @@ func TestResponsesChatPathMapsTheChannelPrefix(t *testing.T) {
 		"/something/else":                 "/v1/chat/completions",
 	}
 	for path, want := range cases {
-		if got := responsesChatPath(path); got != want {
-			t.Fatalf("responsesChatPath(%q) = %q, want %q", path, got, want)
-		}
+		testutil.Equal(t, responsesChatPath(path), want)
 	}
 }
 
@@ -79,28 +78,18 @@ func TestResponsesBridgeStreamsChatAsResponses(t *testing.T) {
 	rec := httptest.NewRecorder()
 	bridge(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	out := rec.Body.String()
 	for _, want := range []string{"event: response.created", "response.output_text.delta", `"hello"`, "event: response.completed"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("stream is missing %q: %s", want, out)
-		}
+		testutil.MustContain(t, out, want)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(calls) != 1 {
-		t.Fatalf("inner chat calls = %d, want 1", len(calls))
-	}
-	if calls[0].path != "/workbuddy/v1/chat/completions" {
-		t.Fatalf("inner chat path = %q, want the same channel prefix", calls[0].path)
-	}
+	testutil.Equal(t, len(calls), 1)
+	testutil.Equal(t, calls[0].path, "/workbuddy/v1/chat/completions")
 	messages, _ := calls[0].body["messages"].([]interface{})
-	if len(messages) != 2 {
-		t.Fatalf("inner messages = %#v, want instructions plus the input turn", calls[0].body["messages"])
-	}
+	testutil.Equal(t, len(messages), 2)
 	first, _ := messages[0].(map[string]interface{})
 	if first["role"] != "system" || first["content"] != "be brief" {
 		t.Fatalf("first inner message = %#v, want the instructions as a system turn", first)
@@ -125,9 +114,7 @@ func TestResponsesBridgeNonStreamReturnsAResponseObject(t *testing.T) {
 	rec := httptest.NewRecorder()
 	bridge(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var decoded map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode response object: %v (%s)", err, rec.Body.String())
@@ -135,9 +122,7 @@ func TestResponsesBridgeNonStreamReturnsAResponseObject(t *testing.T) {
 	if decoded["object"] != "response" || decoded["model"] != "gpt-5.6-luna" {
 		t.Fatalf("response object = %#v", decoded)
 	}
-	if !strings.Contains(rec.Body.String(), "hello") {
-		t.Fatalf("response is missing the assistant text: %s", rec.Body.String())
-	}
+	testutil.MustContain(t, rec.Body.String(), "hello")
 }
 
 func TestResponsesBridgeForwardsChatErrors(t *testing.T) {
@@ -155,12 +140,8 @@ func TestResponsesBridgeForwardsChatErrors(t *testing.T) {
 	rec := httptest.NewRecorder()
 	bridge(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want the inner 400", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "model not found") {
-		t.Fatalf("error body was not forwarded: %s", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
+	testutil.MustContain(t, rec.Body.String(), "model not found")
 }
 
 func TestResponsesBridgeRejectsInvalidRequests(t *testing.T) {
@@ -180,9 +161,7 @@ func TestResponsesBridgeRejectsInvalidRequests(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses", strings.NewReader(body))
 			rec := httptest.NewRecorder()
 			bridge(rec, req)
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("%s: status = %d, want 400 (body=%s)", name, rec.Code, rec.Body.String())
-			}
+			testutil.Equal(t, rec.Code, http.StatusBadRequest)
 		})
 	}
 }
@@ -193,9 +172,7 @@ func TestResponsesBridgeRejectsNonPost(t *testing.T) {
 	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {}, ResponsesBridgeOptions{})
 	rec := httptest.NewRecorder()
 	bridge(rec, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses", nil))
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want 405", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusMethodNotAllowed)
 }
 
 func TestResponsesChannelSubpathServesCompactAndTrailingSlash(t *testing.T) {
@@ -213,20 +190,14 @@ func TestResponsesChannelSubpathServesCompactAndTrailingSlash(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"model":"gpt-5.6-luna","input":"summarise the thread","stream":true}`))
 			rec := httptest.NewRecorder()
 			handler(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
-			}
-			if !strings.Contains(rec.Body.String(), "event: response.completed") {
-				t.Fatalf("missing completion event: %s", rec.Body.String())
-			}
+			testutil.Equal(t, rec.Code, http.StatusOK)
+			testutil.MustContain(t, rec.Body.String(), "event: response.completed")
 		})
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(calls) != 2 {
-		t.Fatalf("inner chat calls = %d, want 2", len(calls))
-	}
+	testutil.Equal(t, len(calls), 2)
 	// The sub-tests run in map order, so compare the set of paths.
 	paths := map[string]bool{}
 	for _, call := range calls {
@@ -250,28 +221,21 @@ func TestResponsesChannelSubpathReportsUnstoredResponses(t *testing.T) {
 		req := httptest.NewRequest(method, "/cline/v1/responses/resp_123", nil)
 		rec := httptest.NewRecorder()
 		handler(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("%s status = %d, want 404", method, rec.Code)
-		}
-		if !strings.Contains(rec.Body.String(), "response_not_found") {
-			t.Fatalf("%s body = %s, want a response_not_found error", method, rec.Body.String())
-		}
+		testutil.Equal(t, rec.Code, http.StatusNotFound)
+		testutil.MustContain(t, rec.Body.String(), "response_not_found")
 	}
 
 	put := httptest.NewRequest(http.MethodPut, "/cline/v1/responses/resp_123", nil)
 	rec := httptest.NewRecorder()
 	handler(rec, put)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("PUT status = %d, want 405", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusMethodNotAllowed)
 	if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "GET") || !strings.Contains(allow, "DELETE") {
 		t.Fatalf("Allow = %q, want GET and DELETE", allow)
 	}
 }
 
 func TestResponsesBridgeStoresAndServesResponses(t *testing.T) {
-	_, s, mini := setupValidationHandler(t)
-	defer func() { _ = s.Close(); mini.Close() }()
+	_, s, _ := setupValidationHandler(t)
 
 	var mu sync.Mutex
 	var chatBodies []map[string]interface{}
@@ -293,9 +257,7 @@ func TestResponsesBridgeStoresAndServesResponses(t *testing.T) {
 	create := httptest.NewRecorder()
 	bridge(create, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"hi","store":true}`)))
-	if create.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
-	}
+	testutil.Equal(t, create.Code, http.StatusOK)
 	var created map[string]interface{}
 	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode created response: %v (%s)", err, create.Body.String())
@@ -315,15 +277,11 @@ func TestResponsesBridgeStoresAndServesResponses(t *testing.T) {
 	continuation := httptest.NewRecorder()
 	bridge(continuation, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"again","previous_response_id":"`+responseID+`"}`)))
-	if continuation.Code != http.StatusOK {
-		t.Fatalf("continuation status=%d body=%s", continuation.Code, continuation.Body.String())
-	}
+	testutil.Equal(t, continuation.Code, http.StatusOK)
 	mu.Lock()
 	last := chatBodies[len(chatBodies)-1]
 	mu.Unlock()
-	if !strings.Contains(fmt.Sprint(last["messages"]), "stored-answer") {
-		t.Fatalf("continuation did not replay the stored output: %#v", last["messages"])
-	}
+	testutil.MustContain(t, fmt.Sprint(last["messages"]), "stored-answer")
 
 	deleted := httptest.NewRecorder()
 	resource(deleted, httptest.NewRequest(http.MethodDelete, "/workbuddy/v1/responses/"+responseID, nil))
@@ -332,14 +290,11 @@ func TestResponsesBridgeStoresAndServesResponses(t *testing.T) {
 	}
 	gone := httptest.NewRecorder()
 	resource(gone, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID, nil))
-	if gone.Code != http.StatusNotFound {
-		t.Fatalf("after delete status=%d body=%s", gone.Code, gone.Body.String())
-	}
+	testutil.Equal(t, gone.Code, http.StatusNotFound)
 }
 
 func TestResponsesBridgeStoresStreamedResponse(t *testing.T) {
-	_, s, mini := setupValidationHandler(t)
-	defer func() { _ = s.Close(); mini.Close() }()
+	_, s, _ := setupValidationHandler(t)
 
 	var mu sync.Mutex
 	calls := []recordedChatCall{}
@@ -413,9 +368,7 @@ func TestModelDispatcherSendsLookupFailuresToTheBridgedHandler(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	dispatch(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"workbuddy-model","input":"hi"}`)))
-	if rec.Body.String() != "bridged" {
-		t.Fatalf("lookup failure routed to %q, want the bridged handler", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Body.String(), "bridged")
 	if nativeCalls != 0 || bridgedCalls != 1 {
 		t.Fatalf("native=%d bridged=%d, want 0/1", nativeCalls, bridgedCalls)
 	}
@@ -441,9 +394,7 @@ func TestModelDispatcherPublishesTheResolvedModel(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"GPT-5-6-SOL","messages":[]}`))
 	ctx, _ := middleware.RequestModelHint(req.Context())
 	dispatch(rec, req.WithContext(ctx))
-	if seen != "GPT-5-6-SOL" {
-		t.Fatalf("published model = %q, want the model from the body", seen)
-	}
+	testutil.Equal(t, seen, "GPT-5-6-SOL")
 }
 
 // An unreadable body is a client-side fault; answering from the native handler
@@ -455,9 +406,7 @@ func TestModelDispatcherRejectsOversizedBodyBeforeHandler(t *testing.T) {
 	req.ContentLength = maxModelDispatcherBodyBytes + 1
 	rec := httptest.NewRecorder()
 	dispatch(rec, req)
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status=%d want 413", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusRequestEntityTooLarge)
 	if called {
 		t.Fatal("oversized request reached a downstream handler")
 	}
@@ -476,9 +425,7 @@ func TestModelDispatcherFailsClosedOnUnreadableBody(t *testing.T) {
 	req.Body = io.NopCloser(failingReader{})
 	rec := httptest.NewRecorder()
 	dispatch(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("unreadable body status = %d, want 400", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
 }
 
 type failingReader struct{}

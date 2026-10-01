@@ -2,6 +2,7 @@ package grok
 
 import (
 	"fmt"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -18,21 +19,15 @@ func TestBuildResponsesNormalizerFlattensNamespaceAndNullableRoot(t *testing.T) 
 		},
 		"tool_choice": map[string]interface{}{"type": "function", "name": "read", "namespace": "repo"},
 	}
-	if err := normalizeBuildResponsesPayload(payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	tools := interfaceMaps(payload["tools"])
 	if len(tools) != 1 || tools[0]["name"] != "repo__read" || tools[0]["defer_loading"] != nil {
 		t.Fatalf("tools=%#v", tools)
 	}
 	parameters := tools[0]["parameters"].(map[string]interface{})
-	if parameters["type"] != "object" {
-		t.Fatalf("parameters=%#v", parameters)
-	}
+	testutil.Equal(t, parameters["type"], "object")
 	choice := payload["tool_choice"].(map[string]interface{})
-	if choice["name"] != "repo__read" {
-		t.Fatalf("tool_choice=%#v", choice)
-	}
+	testutil.Equal(t, choice["name"], "repo__read")
 }
 
 func TestBuildResponsesNormalizerEmulatesClientToolSearch(t *testing.T) {
@@ -44,9 +39,7 @@ func TestBuildResponsesNormalizerEmulatesClientToolSearch(t *testing.T) {
 			map[string]interface{}{"type": "tool_search", "execution": "client"},
 		},
 	}
-	if err := normalizeBuildResponsesPayload(payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	tools := interfaceMaps(payload["tools"])
 	if len(tools) != 2 || tools[0]["name"] != "visible" || tools[1]["name"] != "tool_search" {
 		t.Fatalf("tools=%#v", tools)
@@ -55,9 +48,7 @@ func TestBuildResponsesNormalizerEmulatesClientToolSearch(t *testing.T) {
 		t.Fatalf("parallel_tool_calls=%#v", payload["parallel_tool_calls"])
 	}
 	warnings := takeBuildCompatibilityWarnings(payload)
-	if !strings.Contains(warnings, "client_tool_search_emulated") || !strings.Contains(warnings, "client_tool_search_forced_serial") {
-		t.Fatalf("warnings=%q", warnings)
-	}
+	testutil.MustContainAll(t, warnings, "client_tool_search_emulated", "client_tool_search_forced_serial")
 }
 
 func TestBuildResponsesNormalizerWarnsAndRenamesCollisions(t *testing.T) {
@@ -65,18 +56,12 @@ func TestBuildResponsesNormalizerWarnsAndRenamesCollisions(t *testing.T) {
 		map[string]interface{}{"type": "function", "name": "a b", "parameters": map[string]interface{}{"type": "object"}},
 		map[string]interface{}{"type": "function", "name": "a@b", "defer_loading": true, "parameters": map[string]interface{}{"type": []interface{}{"object", "null"}}},
 	}}
-	if err := normalizeBuildResponsesPayload(payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	tools := interfaceMaps(payload["tools"])
-	if tools[0]["name"] == tools[1]["name"] {
-		t.Fatalf("collision not renamed: %#v", tools)
-	}
+	testutil.NotEqual(t, tools[0]["name"], tools[1]["name"])
 	warnings := takeBuildCompatibilityWarnings(payload)
 	for _, expected := range []string{"function_name_collision_renamed", "orphan_deferred_tool_loaded", "function_parameters_nullable_root_normalized"} {
-		if !strings.Contains(warnings, expected) {
-			t.Fatalf("warnings=%q missing %q", warnings, expected)
-		}
+		testutil.MustContain(t, warnings, expected)
 	}
 }
 
@@ -88,9 +73,7 @@ func TestBuildResponsesNormalizerPreservesNativeHistoryAndNormalizesExtensions(t
 		map[string]interface{}{"type": "local_shell_call", "call_id": "call_1", "action": map[string]interface{}{"type": "exec", "command": []interface{}{"printf", "hello world"}}},
 		map[string]interface{}{"type": "mcp_tool_call_output", "call_id": "mcp_1", "output": map[string]interface{}{"ok": true}, "secret": "drop"},
 	}}
-	if err := normalizeBuildResponsesPayload(payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	items := payload["input"].([]interface{})
 	first := items[0].(map[string]interface{})
 	if first["future"] != "keep" || first["type"] != "shell_call" {
@@ -114,9 +97,7 @@ func TestBuildResponsesNormalizerOpaqueAgentMessageUsesBoundary(t *testing.T) {
 	payload := map[string]interface{}{"input": []interface{}{map[string]interface{}{
 		"type": "agent_message", "content": map[string]interface{}{"ciphertext": "opaque-secret"},
 	}}}
-	if err := normalizeBuildResponsesPayload(payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	encoded := fmt.Sprint(payload["input"])
 	if strings.Contains(encoded, "opaque-secret") || !strings.Contains(encoded, "not portable") {
 		t.Fatalf("boundary=%s", encoded)
@@ -135,18 +116,14 @@ func TestResponsesPayloadFromChatPreservesMultimodalAndNormalizesBuildState(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload["prompt_cache_key"] != "session" {
-		t.Fatalf("Build prompt cache key missing: %#v", payload)
-	}
+	testutil.Equal(t, payload["prompt_cache_key"], "session")
 	input := payload["input"].([]interface{})
 	message := input[0].(map[string]interface{})
 	parts := message["content"].([]interface{})
 	if len(parts) != 2 || parts[1].(map[string]interface{})["type"] != "input_image" {
 		t.Fatalf("input=%#v", input)
 	}
-	if payload["safety_identifier"] != "user-1" {
-		t.Fatalf("safety_identifier=%#v", payload["safety_identifier"])
-	}
+	testutil.Equal(t, payload["safety_identifier"], "user-1")
 }
 
 func TestAnthropicRequestNormalizesMCPStrictAndOutputFormat(t *testing.T) {

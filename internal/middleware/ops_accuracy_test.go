@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -23,9 +24,7 @@ func TestInferenceOutcomeExcludesNonGeneration(t *testing.T) {
 		{"GET", "/v1/stt", "grok"}, {"GET", "/grok/v1/realtime", "grok"},
 	} {
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(tc.method, tc.path, nil))
-		if got := (*outcomes)[len(*outcomes)-1].Channel; got != tc.channel {
-			t.Errorf("%s %s: %s, want %s", tc.method, tc.path, got, tc.channel)
-		}
+		testutil.CheckEqual(t, (*outcomes)[len(*outcomes)-1].Channel, tc.channel)
 	}
 }
 

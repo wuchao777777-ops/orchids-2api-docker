@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"runtime"
 	"sync"
 	"testing"
@@ -54,13 +55,9 @@ func TestChangeEmitter_PublishesOnlyAfterAPersistedWrite(t *testing.T) {
 	ctx := context.Background()
 
 	acc := &Account{AccountType: "cline", RefreshToken: "session-a", Enabled: true, Weight: 1}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount: %v")
 	changes := emitter.waitForChanges(t, 1)
-	if len(changes) != 1 {
-		t.Fatalf("create published %d changes, want 1", len(changes))
-	}
+	testutil.Equal(t, len(changes), 1)
 	if changes[0].AccountID != acc.ID || changes[0].Previous != nil {
 		t.Fatalf("create change = %+v", changes[0])
 	}
@@ -72,35 +69,21 @@ func TestChangeEmitter_PublishesOnlyAfterAPersistedWrite(t *testing.T) {
 		t.Fatalf("GetAccount: %v", err)
 	}
 	updated.RefreshToken = "session-b"
-	if err := s.UpdateAccount(ctx, updated); err != nil {
-		t.Fatalf("UpdateAccount: %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, updated), "UpdateAccount: %v")
 	changes = emitter.waitForChanges(t, 2)
-	if len(changes) != 2 {
-		t.Fatalf("update published %d changes, want 2 total", len(changes))
-	}
+	testutil.Equal(t, len(changes), 2)
 	if changes[1].Previous == nil || changes[1].Previous.RefreshToken != "session-a" {
 		t.Fatalf("update change lost the previous state: %+v", changes[1])
 	}
 	// The store publishes the id and the previous state; the after-state is the
 	// emitter's to resolve, so it is not asserted here.
-	if changes[1].AccountID != acc.ID {
-		t.Fatalf("update change names the wrong account: %+v", changes[1])
-	}
+	testutil.Equal(t, changes[1].AccountID, acc.ID)
 
 	// Deleting publishes once, and deleting a missing id publishes nothing.
-	if err := s.DeleteAccount(ctx, acc.ID); err != nil {
-		t.Fatalf("DeleteAccount: %v", err)
-	}
-	if got := len(emitter.waitForChanges(t, 3)); got != 3 {
-		t.Fatalf("delete published %d changes, want 3 total", got)
-	}
-	if err := s.DeleteAccount(ctx, acc.ID); err != nil {
-		t.Fatalf("second DeleteAccount: %v", err)
-	}
-	if got := len(emitter.waitForChanges(t, 3)); got != 3 {
-		t.Fatalf("deleting a missing account published an event (total %d)", got)
-	}
+	testutil.NoError(t, s.DeleteAccount(ctx, acc.ID), "DeleteAccount: %v")
+	testutil.Equal(t, len(emitter.waitForChanges(t, 3)), 3)
+	testutil.NoError(t, s.DeleteAccount(ctx, acc.ID), "second DeleteAccount: %v")
+	testutil.Equal(t, len(emitter.waitForChanges(t, 3)), 3)
 }
 
 // TestChangeEmitter_SilentWhenNoEmitterConfigured keeps a plain store (tests, a
@@ -109,12 +92,8 @@ func TestChangeEmitter_SilentWhenNoEmitterConfigured(t *testing.T) {
 	s, _ := newTestRedisStore(t, "silent:")
 
 	acc := &Account{AccountType: "cline", RefreshToken: "x", Enabled: true}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount with no emitter: %v", err)
-	}
-	if err := s.DeleteAccount(context.Background(), acc.ID); err != nil {
-		t.Fatalf("DeleteAccount with no emitter: %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount with no emitter: %v")
+	testutil.NoError(t, s.DeleteAccount(context.Background(), acc.ID), "DeleteAccount with no emitter: %v")
 }
 
 // TestChangeEmitter_DoesNotBlockTheWrite keeps observability out of the write
@@ -155,9 +134,7 @@ func TestChangeEmitter_CoalescesBurstWithoutGoroutinePerWrite(t *testing.T) {
 	s.SetChangeEmitter(blockingEmitter{release: release})
 
 	acc := &Account{AccountType: "workbuddy", Token: "t", Enabled: true}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount: %v")
 	before := runtime.NumGoroutine()
 	for i := 0; i < 500; i++ {
 		acc.Weight = i + 1
@@ -183,24 +160,14 @@ func TestChangeEmitter_IgnoresWritesToAMissingRow(t *testing.T) {
 	s.SetChangeEmitter(emitter)
 
 	acc := &Account{AccountType: "cline", RefreshToken: "session", Enabled: true}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-	if err := s.DeleteAccount(context.Background(), acc.ID); err != nil {
-		t.Fatalf("DeleteAccount: %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount: %v")
+	testutil.NoError(t, s.DeleteAccount(context.Background(), acc.ID), "DeleteAccount: %v")
 	afterDelete := len(emitter.waitForChanges(t, 2))
-	if afterDelete != 2 {
-		t.Fatalf("changes after create+delete = %d, want 2", afterDelete)
-	}
+	testutil.Equal(t, afterDelete, 2)
 
 	// The row is gone: the update is a no-op and must stay silent.
 	acc.Weight = 5
-	if err := s.UpdateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("UpdateAccount on a missing row: %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(context.Background(), acc), "UpdateAccount on a missing row: %v")
 	time.Sleep(50 * time.Millisecond)
-	if got := len(emitter.all()); got != afterDelete {
-		t.Fatalf("a write to a missing row published an event (total %d, want %d)", got, afterDelete)
-	}
+	testutil.Equal(t, len(emitter.all()), afterDelete)
 }

@@ -6,16 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
-
-	"orchids-api/internal/api"
 	"orchids-api/internal/channel"
 	"orchids-api/internal/config"
-	"orchids-api/internal/handler"
-	"orchids-api/internal/loadbalancer"
-	"orchids-api/internal/middleware"
-	"orchids-api/internal/store"
-	"orchids-api/internal/template"
+	"orchids-api/internal/testutil"
 )
 
 // TestHealthReportsEveryRemainingProvider pins /health's body: it answers "ok"
@@ -24,45 +17,23 @@ import (
 // registry rather than a literal, which is what makes a removed provider
 // disappear from the response automatically.
 func TestHealthReportsEveryRemainingProvider(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "health:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
 	cfg := &config.Config{AdminUser: "admin", AdminPass: "secret", AdminPath: "/admin"}
-	lb := loadbalancer.NewWithCacheTTL(s, 0)
-	h := handler.NewWithLoadBalancer(cfg, lb)
-	t.Cleanup(h.Close)
-	a := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
-	renderer, err := template.NewRenderer()
-	if err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	registerRoutes(mux, cfg, s, h, nil, a, middleware.NewConcurrencyLimiter(4, 0), nil, renderer)
+	mux, _, _ := newRouteMux(t, "health:", cfg)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /health = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	for _, endpoint := range []string{"/api/system/version", "/api/system/check-updates", "/api/system/operation", "/api/system/update", "/api/system/rollback"} {
 		response := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, endpoint, nil)
 		mux.ServeHTTP(response, request)
-		if response.Code != http.StatusUnauthorized {
-			t.Fatalf("unprotected upgrade endpoint %s: %d", endpoint, response.Code)
-		}
+		testutil.Equal(t, response.Code, http.StatusUnauthorized)
 	}
 	versionResponse := httptest.NewRecorder()
 	versionRequest := httptest.NewRequest(http.MethodGet, "/api/system/version", nil)
 	versionRequest.Header.Set("Authorization", "Bearer secret")
 	mux.ServeHTTP(versionResponse, versionRequest)
-	if versionResponse.Code != http.StatusOK {
-		t.Fatalf("authenticated version endpoint: %d", versionResponse.Code)
-	}
+	testutil.Equal(t, versionResponse.Code, http.StatusOK)
 	var body struct {
 		Status    string            `json:"status"`
 		Providers map[string]string `json:"providers"`
@@ -70,17 +41,11 @@ func TestHealthReportsEveryRemainingProvider(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode /health body: %v (%s)", err, rec.Body.String())
 	}
-	if body.Status != "ok" {
-		t.Fatalf("status=%q, want ok", body.Status)
-	}
+	testutil.Equal(t, body.Status, "ok")
 	want := map[string]struct{}{}
 	for _, definition := range channel.All() {
 		want[string(definition.ID)] = struct{}{}
-		if got := body.Providers[string(definition.ID)]; got != "ready" {
-			t.Fatalf("providers[%s]=%q, want ready", definition.ID, got)
-		}
+		testutil.Equal(t, body.Providers[string(definition.ID)], "ready")
 	}
-	if len(body.Providers) != len(want) {
-		t.Fatalf("providers=%v, want exactly the registered channels %v", body.Providers, want)
-	}
+	testutil.Equal(t, len(body.Providers), len(want))
 }

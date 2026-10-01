@@ -13,6 +13,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -25,20 +26,12 @@ func workbuddyAuthServer(t *testing.T, tokenStatus []string, catalog string) *ht
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/v2/plugin/auth/state":
-			if r.Method != http.MethodPost {
-				t.Errorf("auth/state method = %s, want POST", r.Method)
-			}
-			if r.URL.Query().Get("platform") != "workbuddy-ai" {
-				t.Errorf("platform = %q, want workbuddy-ai", r.URL.Query().Get("platform"))
-			}
-			if got := r.Header.Get("X-No-Authorization"); got == "" {
-				t.Error("auth/state must be sent without an Authorization header")
-			}
+			testutil.CheckEqual(t, r.Method, http.MethodPost)
+			testutil.CheckEqual(t, r.URL.Query().Get("platform"), "workbuddy-ai")
+			testutil.CheckNotEqual(t, r.Header.Get("X-No-Authorization"), "")
 			_, _ = w.Write([]byte(`{"code":0,"msg":"OK","data":{"state":"state-123","authUrl":"https://www.workbuddy.ai/login?platform=workbuddy-ai&state=state-123"}}`))
 		case "/v2/plugin/auth/token":
-			if got := r.URL.Query().Get("state"); got != "state-123" {
-				t.Errorf("state = %q, want state-123", got)
-			}
+			testutil.CheckEqual(t, r.URL.Query().Get("state"), "state-123")
 			index := polls
 			polls++
 			if index >= len(tokenStatus) {
@@ -106,9 +99,7 @@ func decodeLoginError(t *testing.T, body string) string {
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		t.Fatalf("login error is not JSON: %v (body=%q)", err, body)
 	}
-	if payload.Error == "" {
-		t.Fatalf("login error carried no message: %q", body)
-	}
+	testutil.NotEqual(t, payload.Error, "")
 	if payload.Code == "" {
 		// A code-less error cannot be translated by the UI.
 		t.Fatalf("login error carried no code: %q", body)
@@ -126,15 +117,9 @@ func TestHandleWorkBuddyLogin_RejectsCrossOriginStart(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	a.HandleWorkBuddyLogin(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
-	}
-	if code := decodeLoginError(t, rec.Body.String()); code != "origin_mismatch" {
-		t.Fatalf("code = %q, want origin_mismatch", code)
-	}
-	if strings.Contains(rec.Body.String(), "state") {
-		t.Fatalf("body leaked login state: %q", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusForbidden)
+	testutil.Equal(t, decodeLoginError(t, rec.Body.String()), "origin_mismatch")
+	testutil.MustNotContain(t, rec.Body.String(), "state")
 }
 
 func TestHandleWorkBuddyLogin_RejectsInsecureOrigin(t *testing.T) {
@@ -148,12 +133,8 @@ func TestHandleWorkBuddyLogin_RejectsInsecureOrigin(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	a.HandleWorkBuddyLogin(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
-	}
-	if code := decodeLoginError(t, rec.Body.String()); code != "insecure_origin" {
-		t.Fatalf("code = %q, want insecure_origin", code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusForbidden)
+	testutil.Equal(t, decodeLoginError(t, rec.Body.String()), "insecure_origin")
 }
 
 func TestHandleWorkBuddyLogin_ReportsUnreachableUpstream(t *testing.T) {
@@ -168,12 +149,8 @@ func TestHandleWorkBuddyLogin_ReportsUnreachableUpstream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", rec.Code)
-	}
-	if code := decodeLoginError(t, rec.Body.String()); code != "upstream_unreachable" {
-		t.Fatalf("code = %q, want upstream_unreachable (body=%q)", code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadGateway)
+	testutil.Equal(t, decodeLoginError(t, rec.Body.String()), "upstream_unreachable")
 }
 
 func TestHandleWorkBuddyLogin_ReportsUpstreamRejection(t *testing.T) {
@@ -190,15 +167,9 @@ func TestHandleWorkBuddyLogin_ReportsUpstreamRejection(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", rec.Code)
-	}
-	if code := decodeLoginError(t, rec.Body.String()); code != "upstream_rejected" {
-		t.Fatalf("code = %q, want upstream_rejected (body=%q)", code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "40301") {
-		t.Fatalf("upstream business code leaked to the client: %q", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadGateway)
+	testutil.Equal(t, decodeLoginError(t, rec.Body.String()), "upstream_rejected")
+	testutil.MustNotContain(t, rec.Body.String(), "40301")
 }
 
 func TestHandleWorkBuddyLogin_RequiresStore(t *testing.T) {
@@ -207,9 +178,7 @@ func TestHandleWorkBuddyLogin_RequiresStore(t *testing.T) {
 	a := New(nil, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusServiceUnavailable)
 }
 
 func TestHandleWorkBuddyLogin_RejectsNonJSONBody(t *testing.T) {
@@ -222,9 +191,7 @@ func TestHandleWorkBuddyLogin_RejectsNonJSONBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	a.HandleWorkBuddyLogin(rec, req)
-	if rec.Code != http.StatusUnsupportedMediaType {
-		t.Fatalf("status = %d, want 415", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusUnsupportedMediaType)
 }
 
 func TestHandleWorkBuddyLogin_StartReturnsOfficialLoginURL(t *testing.T) {
@@ -237,18 +204,14 @@ func TestHandleWorkBuddyLogin_StartReturnsOfficialLoginURL(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/workbuddy/login", `{"enabled":true}`))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var response struct {
 		ID                      string `json:"id"`
 		Status                  string `json:"status"`
 		VerificationURIComplete string `json:"verification_uri_complete"`
 		ExpiresAt               string `json:"expires_at"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response), "decode: %v")
 	if response.ID == "" || response.Status != "pending" {
 		t.Fatalf("response = %+v", response)
 	}
@@ -259,28 +222,18 @@ func TestHandleWorkBuddyLogin_StartReturnsOfficialLoginURL(t *testing.T) {
 	if parsed.Host != "www.workbuddy.ai" || parsed.Path != "/login" {
 		t.Fatalf("login URL = %q, want the official workbuddy.ai login page", response.VerificationURIComplete)
 	}
-	if parsed.Query().Get("state") != "state-123" {
-		t.Fatalf("login URL lost the state: %q", response.VerificationURIComplete)
-	}
-	if parsed.Query().Get("version") != workbuddyClientVersion {
-		t.Fatalf("login URL missing version: %q", response.VerificationURIComplete)
-	}
+	testutil.Equal(t, parsed.Query().Get("state"), "state-123")
+	testutil.Equal(t, parsed.Query().Get("version"), workbuddyClientVersion)
 
 	// The pending transaction must be pollable. The upstream state is part of
 	// the official login URL the browser needs, but the transport-level fields
 	// (device code / user code) must stay empty for this flow.
 	rec2 := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(rec2, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+response.ID, ""))
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("poll status = %d", rec2.Code)
-	}
+	testutil.Equal(t, rec2.Code, http.StatusOK)
 	var polled deviceLoginResponse
-	if err := json.Unmarshal(rec2.Body.Bytes(), &polled); err != nil {
-		t.Fatalf("decode poll: %v", err)
-	}
-	if polled.UserCode != "" {
-		t.Fatalf("poll exposed a device user code: %q", polled.UserCode)
-	}
+	testutil.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &polled), "decode poll: %v")
+	testutil.Equal(t, polled.UserCode, "")
 	if !strings.HasPrefix(polled.VerificationURIComplete, "https://www.workbuddy.ai/login?") {
 		t.Fatalf("poll returned an unexpected login URL: %q", polled.VerificationURIComplete)
 	}
@@ -311,40 +264,26 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
 		a.HandleWorkBuddyLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+started.ID, ""))
-		if pollRec.Code != http.StatusOK {
-			t.Fatalf("poll status = %d", pollRec.Code)
-		}
-		if err := json.Unmarshal(pollRec.Body.Bytes(), &final); err != nil {
-			t.Fatalf("decode poll: %v", err)
-		}
+		testutil.Equal(t, pollRec.Code, http.StatusOK)
+		testutil.NoError(t, json.Unmarshal(pollRec.Body.Bytes(), &final), "decode poll: %v")
 		if final.Status != "pending" {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if final.Status != "complete" {
-		t.Fatalf("final status = %q (%s), want complete", final.Status, final.Message)
-	}
-	if final.AccountID == 0 {
-		t.Fatal("completed login did not report an account id")
-	}
+	testutil.Equal(t, final.Status, "complete")
+	testutil.NotEqual(t, final.AccountID, 0)
 
 	acc, err := s.GetAccount(context.Background(), final.AccountID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
-	if acc.AccountType != "workbuddy" {
-		t.Fatalf("account type = %q", acc.AccountType)
-	}
-	if acc.WorkBuddyRefreshToken != "refresh-abc" {
-		t.Fatalf("stored refresh token = %q", acc.WorkBuddyRefreshToken)
-	}
+	testutil.Equal(t, acc.AccountType, "workbuddy")
+	testutil.Equal(t, acc.WorkBuddyRefreshToken, "refresh-abc")
 	if acc.WorkBuddyUID != "uid-abc" || acc.Email != "operator@example.com" {
 		t.Fatalf("identity = %q/%q", acc.WorkBuddyUID, acc.Email)
 	}
-	if len(acc.WorkBuddyModelIDs) != 2 {
-		t.Fatalf("model snapshot = %v, want the account catalog", acc.WorkBuddyModelIDs)
-	}
+	testutil.Equal(t, len(acc.WorkBuddyModelIDs), 2)
 	if acc.ClientCookie != "" || acc.Token != "" || acc.RefreshToken != "" {
 		t.Fatalf("login stored credentials in a shared slot: %+v", acc)
 	}
@@ -389,9 +328,7 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 			workbuddyAccounts++
 		}
 	}
-	if workbuddyAccounts != 1 {
-		t.Fatalf("workbuddy accounts = %d, want 1 (re-login must update in place)", workbuddyAccounts)
-	}
+	testutil.Equal(t, workbuddyAccounts, 1)
 }
 
 func TestHandleWorkBuddyLogin_ReportsVerificationFailure(t *testing.T) {
@@ -418,17 +355,13 @@ func TestHandleWorkBuddyLogin_ReportsVerificationFailure(t *testing.T) {
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
 		a.HandleWorkBuddyLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+started.ID, ""))
-		if err := json.Unmarshal(pollRec.Body.Bytes(), &final); err != nil {
-			t.Fatalf("decode poll: %v", err)
-		}
+		testutil.NoError(t, json.Unmarshal(pollRec.Body.Bytes(), &final), "decode poll: %v")
 		if final.Status != "pending" {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if final.Status != "failed" {
-		t.Fatalf("status = %q, want failed", final.Status)
-	}
+	testutil.Equal(t, final.Status, "failed")
 	accounts, err := s.ListAccounts(context.Background())
 	if err != nil {
 		t.Fatalf("ListAccounts() error = %v", err)
@@ -458,15 +391,11 @@ func TestHandleWorkBuddyLogin_CancelForgetsTransaction(t *testing.T) {
 
 	deleteRec := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(deleteRec, channelLoginRequest(t, http.MethodDelete, "/api/workbuddy/login/"+started.ID, ""))
-	if deleteRec.Code != http.StatusNoContent {
-		t.Fatalf("delete status = %d", deleteRec.Code)
-	}
+	testutil.Equal(t, deleteRec.Code, http.StatusNoContent)
 
 	missingRec := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(missingRec, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/"+started.ID, ""))
-	if missingRec.Code != http.StatusNotFound {
-		t.Fatalf("poll after cancel status = %d, want 404", missingRec.Code)
-	}
+	testutil.Equal(t, missingRec.Code, http.StatusNotFound)
 }
 
 func TestHandleWorkBuddyLogin_RejectsUnknownMethodAndMissingSession(t *testing.T) {
@@ -477,13 +406,9 @@ func TestHandleWorkBuddyLogin_RejectsUnknownMethodAndMissingSession(t *testing.T
 
 	putRec := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(putRec, channelLoginRequest(t, http.MethodPut, "/api/workbuddy/login", "{}"))
-	if putRec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("PUT status = %d, want 405", putRec.Code)
-	}
+	testutil.Equal(t, putRec.Code, http.StatusMethodNotAllowed)
 
 	missingRec := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(missingRec, channelLoginRequest(t, http.MethodGet, "/api/workbuddy/login/does-not-exist", ""))
-	if missingRec.Code != http.StatusNotFound {
-		t.Fatalf("unknown id status = %d, want 404", missingRec.Code)
-	}
+	testutil.Equal(t, missingRec.Code, http.StatusNotFound)
 }

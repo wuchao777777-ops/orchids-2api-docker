@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -28,9 +29,7 @@ func TestAccountFreeQuotaPersistsAndSurvivesPartialUpdates(t *testing.T) {
 			ResetAt:     confirmedAt.Add(24 * time.Hour),
 		},
 	}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 
 	stored, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
@@ -48,9 +47,7 @@ func TestAccountFreeQuotaPersistsAndSurvivesPartialUpdates(t *testing.T) {
 	partial := *stored
 	partial.GrokFreeQuota = GrokFreeQuotaSnapshot{}
 	partial.RequestCount = stored.RequestCount + 1
-	if err := s.UpdateAccount(ctx, &partial); err != nil {
-		t.Fatalf("UpdateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, &partial), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {

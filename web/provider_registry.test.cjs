@@ -24,13 +24,23 @@ async function registry() {
   return window.OrchidsProviderRegistry;
 }
 
-test('frontend provider registry is generated from the backend definitions', async () => {
+test('frontend provider registry exposes ordered immutable metadata and lookups', async () => {
   const value = await registry();
   assert.deepEqual(Array.from(value.keys), payload.providers.map((item) => item.key));
   assert.deepEqual(Array.from(value.channels), payload.providers.map((item) => item.label));
-  assert.equal(value.defaultProviderKey, 'workbuddy');
+  assert.equal(value.defaultProviderKey, payload.defaultProviderKey);
+  assert.ok(Object.isFrozen(value));
+  assert.ok(Object.isFrozen(value.providers));
+  assert.ok(value.providers.every(Object.isFrozen));
+  for (const item of payload.providers) {
+    assert.equal(value.get(` ${item.key.toUpperCase()} `).label, item.label);
+    assert.equal(value.label(item.key), item.label);
+  }
+  assert.equal(value.get('unknown-provider'), null);
+  assert.equal(value.label(' unknown-provider '), 'unknown-provider');
+  // Backend/manifest equality is checked without writing files by
+  // scripts/check-provider-registry.sh; this test covers the browser contract.
   assert.match(registrySource, /Code generated from internal\/channel definitions/);
-  assert.match(registrySource, /key":"cline"/);
 });
 
 test('accounts and models consume the backend-fed provider registry', () => {

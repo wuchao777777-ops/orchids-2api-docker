@@ -2,6 +2,7 @@ package qoder
 
 import (
 	"errors"
+	"orchids-api/internal/testutil"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,9 +29,7 @@ func TestDailyCountRefusalIsNotACredentialRejection(t *testing.T) {
 		}
 		// The shared classifiers and the account policy both key off this phrase,
 		// so it has to survive the wrap that carries the sentinel.
-		if !strings.Contains(strings.ToLower(err.Error()), "billing daily count exceeded") {
-			t.Fatalf("status %d: the upstream phrase was lost from %q", status, err.Error())
-		}
+		testutil.MustContain(t, strings.ToLower(err.Error()), "billing daily count exceeded")
 	}
 }
 
@@ -49,9 +48,7 @@ func TestStreamDailyCountRefusalIsNotACredentialRejection(t *testing.T) {
 	if !errors.Is(err, ErrDailyCountExceeded) {
 		t.Fatalf("error = %v, want ErrDailyCountExceeded", err)
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "billing daily count exceeded") {
-		t.Fatalf("error = %q, want the upstream phrase preserved", err.Error())
-	}
+	testutil.MustContain(t, strings.ToLower(err.Error()), "billing daily count exceeded")
 }
 
 // A genuine credential rejection must keep its meaning: the split above only

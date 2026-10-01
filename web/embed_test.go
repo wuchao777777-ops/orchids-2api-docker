@@ -2,8 +2,13 @@ package web
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"testing"
 )
@@ -14,7 +19,42 @@ import (
 // under. When the version was a literal, removing a provider from the UI left
 // every browser on the cached copy of the previous one.
 func TestAssetVersionIsContentDerived(t *testing.T) {
+	// Compute the expected version independently from the embedded assets, not
+	// from AssetVersion's cached value. WalkDir visits names in lexical order;
+	// each asset contributes its path, byte length and content to the digest.
+	sum := sha256.New()
+	assetCounts := map[string]int{}
+	err := fs.WalkDir(staticFS, "static", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(path.Ext(name))
+		if ext != ".js" && ext != ".css" {
+			return nil
+		}
+		data, err := staticFS.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		assetCounts[ext]++
+		fmt.Fprintf(sum, "%s\x00%d\x00", name, len(data))
+		_, _ = sum.Write(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk embedded assets: %v", err)
+	}
+	if assetCounts[".js"] == 0 || assetCounts[".css"] == 0 {
+		t.Fatalf("expected embedded JavaScript and CSS assets, got %v", assetCounts)
+	}
+	want := hex.EncodeToString(sum.Sum(nil))[:12]
 	version := AssetVersion()
+	if version != want {
+		t.Fatalf("AssetVersion() = %q, want embedded-content SHA-256 prefix %q", version, want)
+	}
 	if len(version) != 12 {
 		t.Fatalf("AssetVersion() = %q, want a 12-character hash", version)
 	}

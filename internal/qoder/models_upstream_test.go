@@ -2,7 +2,7 @@ package qoder
 
 import (
 	"encoding/json"
-	"strings"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -29,20 +29,14 @@ func TestParseModelListReadsTheObservedGroupShape(t *testing.T) {
 	}
 	// `auto` is a routing directive rather than a runnable model, so the two
 	// concrete rows are what the catalog carries.
-	if catalog.Len() != 2 {
-		t.Fatalf("catalog length = %d, want 2 concrete rows", catalog.Len())
-	}
+	testutil.Equal(t, catalog.Len(), 2)
 	entry, err := catalog.Resolve("Qwen3.7-Max")
 	if err != nil {
 		t.Fatalf("Resolve(display name) error = %v", err)
 	}
-	if entry.Key != "qmodel_latest" {
-		t.Fatalf("resolved key = %q, want qmodel_latest", entry.Key)
-	}
+	testutil.Equal(t, entry.Key, "qmodel_latest")
 	// The wire fields routing needs must survive the parse.
-	if entry.MaxInputTokens != 1000000 {
-		t.Fatalf("MaxInputTokens = %d, want 1000000", entry.MaxInputTokens)
-	}
+	testutil.Equal(t, entry.MaxInputTokens, 1000000)
 	ultimate, err := catalog.Resolve("Ultimate")
 	if err != nil {
 		t.Fatalf("Resolve(Ultimate) error = %v", err)
@@ -121,18 +115,10 @@ func TestParseModelListRejectsAResponseWithoutRows(t *testing.T) {
 func TestModelListRoutesAreReadsWithTheCosySigner(t *testing.T) {
 	t.Parallel()
 
-	if len(modelListRoutes) == 0 {
-		t.Fatal("no catalog route is configured")
-	}
+	testutil.NotEqual(t, len(modelListRoutes), 0)
 	for _, route := range modelListRoutes {
-		if route.method != "GET" {
-			t.Fatalf("route %s %s is not a GET", route.method, route.path)
-		}
-		if route.body != "" {
-			t.Fatalf("route %s %s carries a body; the signed read is bodyless", route.method, route.path)
-		}
-		if !strings.Contains(route.path, "/model/list") {
-			t.Fatalf("route %s does not read the model list", route.path)
-		}
+		testutil.Equal(t, route.method, "GET")
+		testutil.Equal(t, route.body, "")
+		testutil.MustContain(t, route.path, "/model/list")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // quotaNoticeStore records what a quota-notice write asked the store to persist.
@@ -56,12 +57,8 @@ func TestRecordQuotaNoticeMovesTheAccountView(t *testing.T) {
 		UpgradeURL: "https://qoder.com/upgrade",
 	})
 
-	if len(fake.patches) != 1 {
-		t.Fatalf("store patches = %d, want 1 (the atomic path)", len(fake.patches))
-	}
-	if len(fake.full) != 0 {
-		t.Fatalf("full-account writes = %d, want 0: a notice must use the narrow patch", len(fake.full))
-	}
+	testutil.Equal(t, len(fake.patches), 1)
+	testutil.Equal(t, len(fake.full), 0)
 	patch := fake.patches[0]
 	if patch.Quota == nil {
 		t.Fatal("patch carried no quota; the notice was dropped on the way to the store")
@@ -72,9 +69,7 @@ func TestRecordQuotaNoticeMovesTheAccountView(t *testing.T) {
 	if !patch.Quota.ResetAt.Equal(reset) {
 		t.Errorf("patch.Quota.ResetAt = %v, want the boundary the stream named (%v)", patch.Quota.ResetAt, reset)
 	}
-	if patch.Quota.UpgradeURL != "https://qoder.com/upgrade" {
-		t.Errorf("patch.Quota.UpgradeURL = %q", patch.Quota.UpgradeURL)
-	}
+	testutil.CheckEqual(t, patch.Quota.UpgradeURL, "https://qoder.com/upgrade")
 	if !patch.Quota.SyncedAt.After(previousSynced) {
 		t.Errorf("SyncedAt = %v, want it newer than the reading it replaces (%v)", patch.Quota.SyncedAt, previousSynced)
 	}
@@ -87,9 +82,7 @@ func TestRecordQuotaNoticeMovesTheAccountView(t *testing.T) {
 	if !acc.QoderQuota.ResetAt.Equal(reset) {
 		t.Errorf("in-memory ResetAt = %v, want %v", acc.QoderQuota.ResetAt, reset)
 	}
-	if acc.QoderQuota.PlanTier != "Pro Trial" {
-		t.Errorf("PlanTier = %q; a notice must not clobber fields it does not carry", acc.QoderQuota.PlanTier)
-	}
+	testutil.CheckEqual(t, acc.QoderQuota.PlanTier, "Pro Trial")
 }
 
 // TestRecordQuotaNoticeIgnoresNonVerdicts guards the other direction: only an
@@ -102,9 +95,7 @@ func TestRecordQuotaNoticeIgnoresNonVerdicts(t *testing.T) {
 	client.recordQuotaNotice(context.Background(), &QuotaNotice{Kind: "NOTIFICATIONS"})
 	client.recordQuotaNotice(context.Background(), &QuotaNotice{Kind: "NOTIFICATIONS", NextResetAt: time.Now().Add(time.Hour)})
 
-	if len(fake.patches) != 0 {
-		t.Fatalf("store patches = %d, want 0 for notices that carry no exhaustion verdict", len(fake.patches))
-	}
+	testutil.Equal(t, len(fake.patches), 0)
 }
 
 // TestRecordQuotaNoticeWithoutAResetKeepsTheOldWindow covers the boundary the
@@ -116,9 +107,7 @@ func TestRecordQuotaNoticeWithoutAResetKeepsTheOldWindow(t *testing.T) {
 
 	client.recordQuotaNotice(context.Background(), &QuotaNotice{Kind: "NOTIFICATIONS", Exhausted: true})
 
-	if len(fake.patches) != 1 {
-		t.Fatalf("store patches = %d, want 1", len(fake.patches))
-	}
+	testutil.Equal(t, len(fake.patches), 1)
 	if got := fake.patches[0].Quota.ResetAt; !got.Equal(previous) {
 		t.Errorf("ResetAt = %v, want the previous window %v preserved", got, previous)
 	}

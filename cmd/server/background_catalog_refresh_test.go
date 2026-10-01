@@ -13,6 +13,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestCatalogRefreshDueUsesProviderSyncTimestamp(t *testing.T) {
@@ -74,9 +75,7 @@ func TestRefreshWorkBuddyCatalogPersistsSuccessAndKeepsLKGOnFailure(t *testing.T
 		WorkBuddyModelIDs:       []string{"last-known-good"},
 		WorkBuddyModelsSyncedAt: time.Now().Add(-time.Hour),
 	}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount() error = %v")
 	cfg := &config.Config{WorkBuddyBaseURL: srv.URL}
 	refreshWorkBuddyCatalog(context.Background(), cfg, s, acc)
 
@@ -90,9 +89,7 @@ func TestRefreshWorkBuddyCatalogPersistsSuccessAndKeepsLKGOnFailure(t *testing.T
 
 	fail.Store(true)
 	got.WorkBuddyModelsSyncedAt = time.Now().Add(-time.Hour)
-	if err := s.UpdateAccount(context.Background(), got); err != nil {
-		t.Fatalf("make snapshot due: %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(context.Background(), got), "make snapshot due: %v")
 	refreshWorkBuddyCatalog(context.Background(), cfg, s, got)
 	afterFailure, err := s.GetAccount(context.Background(), acc.ID)
 	if err != nil {

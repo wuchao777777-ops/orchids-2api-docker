@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -16,9 +17,7 @@ func TestClineModelsSyncedAtJSONAndUpdateMerge(t *testing.T) {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 	var decoded Account
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &decoded), "json.Unmarshal() error = %v")
 	if !decoded.ClineModelsSyncedAt.Equal(syncedAt) {
 		t.Fatalf("JSON round trip ClineModelsSyncedAt = %v, want %v", decoded.ClineModelsSyncedAt, syncedAt)
 	}
@@ -33,16 +32,12 @@ func TestClineModelsSyncedAtJSONAndUpdateMerge(t *testing.T) {
 		ClineModelIDs:       []string{"old-model"},
 		ClineModelsSyncedAt: syncedAt,
 	}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 
 	partial := *acc
 	partial.ClineModelIDs = nil
 	partial.ClineModelsSyncedAt = time.Time{}
-	if err := s.UpdateAccount(ctx, &partial); err != nil {
-		t.Fatalf("UpdateAccount(partial) error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, &partial), "UpdateAccount(partial) error = %v")
 	got, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
@@ -54,15 +49,11 @@ func TestClineModelsSyncedAtJSONAndUpdateMerge(t *testing.T) {
 	newer := syncedAt.Add(time.Minute)
 	got.ClineModelIDs = []string{"new-model"}
 	got.ClineModelsSyncedAt = newer
-	if err := s.UpdateAccount(ctx, got); err != nil {
-		t.Fatalf("UpdateAccount(newer) error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, got), "UpdateAccount(newer) error = %v")
 	stale := *got
 	stale.ClineModelIDs = nil
 	stale.ClineModelsSyncedAt = syncedAt
-	if err := s.UpdateAccount(ctx, &stale); err != nil {
-		t.Fatalf("UpdateAccount(stale) error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, &stale), "UpdateAccount(stale) error = %v")
 	got, err = s.GetAccount(ctx, acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount(after stale) error = %v", err)

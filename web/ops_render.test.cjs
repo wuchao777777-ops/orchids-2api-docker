@@ -1,7 +1,6 @@
 // Run with: node --test web/ops_render.test.cjs
-// Renders the operations overview against a realistic payload in a minimal DOM.
-// The asset tests above only inspect the source text; this one actually executes
-// the page script, which is how a "card stays empty" bug is caught.
+// Execute the page against deterministic in-file fixtures. Exact figure, row,
+// failure-state and chart assertions catch cards that render the wrong data.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -258,27 +257,6 @@ test('the matrix renders provider rows plus their model rows', async () => {
   assert.ok(clineCells.includes('暂无样本'), `cline row shows ${clineCells.join('|')}`);
 });
 
-// A payload captured from the running deployment can be dropped in as
-// live_payload.json; when it is absent the locally built one is used so the
-// suite stays runnable everywhere.
-const livePayloadPath = path.join(__dirname, '..', 'live_payload.json');
-const livePayload = fs.existsSync(livePayloadPath)
-  ? JSON.parse(fs.readFileSync(livePayloadPath, 'utf8'))
-  : realPayload;
-
-test('the live production payload renders every card', async () => {
-  const payload = livePayload;
-  const { node } = renderPage(payload);
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.ok(node('opsKpis').children.length > 0, 'KPI cards are empty with the live payload');
-  assert.notEqual(node('opsCoverage').textContent, '—', 'the coverage card is empty with the live payload');
-  assert.ok(node('opsCoverage').textContent.length > 0, 'the coverage card is empty with the live payload');
-  assert.ok(node('opsThroughput').children.length > 0, 'the trend is empty with the live payload');
-  assert.ok(node('opsMatrix').querySelector('tbody').children.length > 0, 'the matrix is empty with the live payload');
-  assert.ok(node('opsStatusText').textContent.length > 0, 'the refresh status is empty with the live payload');
-});
 test('a failed fetch still explains itself instead of leaving the card blank', async () => {
   const elements = new Map();
   const node = (id) => {

@@ -3,6 +3,7 @@ package upstream
 import (
 	"testing"
 
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/util"
 )
 
@@ -43,9 +44,7 @@ func TestSharedEmittersMatchEveryCallersShape(t *testing.T) {
 		t.Fatalf("tool emits = %+v count=%d", events, toolCount)
 	}
 	for _, event := range events {
-		if event.Type != "model.tool-call" {
-			t.Fatalf("event type = %q", event.Type)
-		}
+		testutil.Equal(t, event.Type, "model.tool-call")
 		if _, ok := event.Event["toolCallId"].(string); !ok || event.Event["toolCallId"] == "" {
 			t.Fatalf("tool call without an id: %+v", event.Event)
 		}
@@ -58,9 +57,7 @@ func TestSharedEmittersMatchEveryCallersShape(t *testing.T) {
 	// both safe on the same accumulator.
 	events = nil
 	EmitToolCalls(func(msg SSEMessage) { events = append(events, msg) }, accumulator.CompleteAll(), &emitted, &toolCount)
-	if len(events) != 0 {
-		t.Fatalf("a drained accumulator emitted again: %+v", events)
-	}
+	testutil.Equal(t, len(events), 0)
 
 	usage := map[string]interface{}{"inputTokens": 1}
 	stored := map[string]interface{}{}

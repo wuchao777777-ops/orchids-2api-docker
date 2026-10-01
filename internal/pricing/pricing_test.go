@@ -1,6 +1,7 @@
 package pricing
 
 import (
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -58,9 +59,7 @@ func TestEstimateCostMatchesPublishedPerMillionPrices(t *testing.T) {
 	t.Parallel()
 
 	got, ok := EstimateCost("grok-4.6", 100_000, 0, 100_000, 100_000)
-	if !ok {
-		t.Fatal("grok-4.6 is priced")
-	}
+	testutil.True(t, ok, "grok-4.6 is priced")
 	// 0.1M in at $2 + 0.1M out at $6 = $0.80 = 8e9 ticks (standard tier).
 	if want := int64(8) * 1_000_000_000; got.CostInUSDTicks != want {
 		t.Fatalf("cost = %d ticks, want %d", got.CostInUSDTicks, want)
@@ -145,9 +144,7 @@ func BenchmarkEstimateTextReservationFromBody(b *testing.B) {
 func TestConstantsAreStable(t *testing.T) {
 	t.Parallel()
 
-	if TicksPerUSD != 10_000_000_000 {
-		t.Fatalf("TicksPerUSD = %d", TicksPerUSD)
-	}
+	testutil.Equal(t, TicksPerUSD, 10_000_000_000)
 	if Version != "official-"+AsOf || Source == "" {
 		t.Fatalf("version %q / source %q", Version, Source)
 	}
@@ -157,9 +154,7 @@ func TestReconstructBreakdownExplainsAStoredCost(t *testing.T) {
 	// A text row: the components must add up to the estimator's answer.
 	q := Quantities{InputTokens: 1000, CachedTokens: 400, OutputTokens: 500}
 	breakdown, ok := ReconstructBreakdown("grok-4.6", q)
-	if !ok {
-		t.Fatal("grok-4.6 was not reconstructed")
-	}
+	testutil.True(t, ok, "grok-4.6 was not reconstructed")
 	direct, priced := EstimateCost("grok-4.6", q.InputTokens, q.CachedTokens, q.OutputTokens, q.InputTokens)
 	if !priced || breakdown.CostInUSDTicks != direct.CostInUSDTicks {
 		t.Fatalf("breakdown=%d direct=%d", breakdown.CostInUSDTicks, direct.CostInUSDTicks)
@@ -173,9 +168,7 @@ func TestReconstructBreakdownExplainsAStoredCost(t *testing.T) {
 	}
 	// The long-context tier is visible in the component price.
 	long, ok := ReconstructBreakdown("grok-4.6", Quantities{InputTokens: 300_000, OutputTokens: 10, ContextTokens: 300_000})
-	if !ok {
-		t.Fatal("long-context row was not reconstructed")
-	}
+	testutil.True(t, ok, "long-context row was not reconstructed")
 	for _, component := range long.Components {
 		if component.Kind == ComponentUncachedInput && component.UnitPriceInUSDTicks != 40_000 {
 			t.Fatalf("long-context input price=%d", component.UnitPriceInUSDTicks)

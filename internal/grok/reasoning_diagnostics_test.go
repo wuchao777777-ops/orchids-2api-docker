@@ -5,11 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-
 	"orchids-api/internal/audit"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestBuildChatSummaryBoundary(t *testing.T) {
@@ -33,9 +32,7 @@ func TestBuildChatSummaryBoundary(t *testing.T) {
 				if build && operation == "" && effort != "none" {
 					want = "concise"
 				}
-				if r["summary"] != want {
-					t.Fatalf("build=%v operation=%q reasoning=%v", build, operation, r)
-				}
+				testutil.Equal(t, r["summary"], want)
 				if effort == "" && r["effort"] != nil || effort != "" && r["effort"] != effort {
 					t.Fatalf("changed effort: %v", r)
 				}
@@ -102,16 +99,9 @@ func TestChatAlwaysRequestsEncryptedReasoning(t *testing.T) {
 }
 
 func TestAuditChatOutcomePersistsAccountTokens(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "grok_usage_test:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := newTestGrokStore(t, "grok_usage_test:")
 	acc := &store.Account{AccountType: "grok", GrokProvider: ProviderBuild, Enabled: true}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc))
 	h := &Handler{lb: loadbalancer.NewWithCacheTTL(s, time.Minute), auditLogger: audit.NewNopLogger()}
 	h.auditChatOutcome(context.Background(), acc, &ChatCompletionsRequest{Model: "grok-4.7"}, chatOutcome{
 		Finish:      "stop",
@@ -125,9 +115,7 @@ func TestAuditChatOutcomePersistsAccountTokens(t *testing.T) {
 	if got.TokensToday != 150 || got.UsageTotal != 150 {
 		t.Fatalf("tokens_today=%v usage_total=%v want 150/150", got.TokensToday, got.UsageTotal)
 	}
-	if got.RequestCount != 0 {
-		t.Fatalf("request_count=%d: token persistence must not double-count the quota touch", got.RequestCount)
-	}
+	testutil.Equal(t, got.RequestCount, 0)
 }
 
 func TestReasoningDiagnosticsReachAttemptAndOutcome(t *testing.T) {

@@ -2,6 +2,7 @@ package util
 
 import (
 	"net/http"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -23,8 +24,6 @@ func TestParseRetryAfterProviderBudgets(t *testing.T) {
 		{"9223372036854775807", 30 * time.Second, 30 * time.Second},
 		{"9223372036854775807", 0, time.Duration(1<<63 - 1)},
 	} {
-		if got := ParseRetryAfter(tc.value, now, tc.limit); got != tc.want {
-			t.Errorf("value=%q limit=%s got=%s want=%s", tc.value, tc.limit, got, tc.want)
-		}
+		testutil.CheckEqual(t, ParseRetryAfter(tc.value, now, tc.limit), tc.want)
 	}
 }

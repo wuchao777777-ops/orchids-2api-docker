@@ -7,6 +7,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -29,14 +30,10 @@ func TestQoderWorkIdentityIsTheOnlyDialect(t *testing.T) {
 	}
 	// The capture reports client type 6 and machine type 5 in one request, so
 	// these cannot share a constant.
-	if machineSceneType != "5" {
-		t.Fatalf("machineSceneType = %q, want 5", machineSceneType)
-	}
+	testutil.Equal(t, machineSceneType, "5")
 	for _, name := range []string{ProfileReference, ProfileSkillCLI} {
 		c := NewFromAccount(signedTestAccount(), &config.Config{QoderProtocolProfile: name})
-		if c.businessProduct() != "qoder_work" {
-			t.Fatalf("profile %q reports product %q; every profile must report QoderWork", name, c.businessProduct())
-		}
+		testutil.Equal(t, c.businessProduct(), "qoder_work")
 	}
 }
 
@@ -49,7 +46,7 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 
 	model := modelEntry{Key: "qfmodel", DisplayName: "Qwen3.8-Flash", IsReasoning: true, IsVL: true, MaxInputTokens: 180000}
 	req := upstream.UpstreamRequest{Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}}}
-	encoded, err := buildChatBody(req, model, "session", "request", "request-set")
+	encoded, err := buildChatBodyProfile(req, model, "session", "request", "request-set", DefaultClientVersion, "", sceneBusinessProduct)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,9 +55,7 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	var body map[string]interface{}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &body))
 
 	wantKeys := []string{
 		"agent_id", "aliyun_user_type", "business", "chat_context",
@@ -69,9 +64,7 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 		"session_id", "session_type", "source", "stream", "system",
 		"task_id", "tools", "version",
 	}
-	if len(body) != len(wantKeys) {
-		t.Fatalf("top-level field count = %d, want %d: %#v", len(body), len(wantKeys), body)
-	}
+	testutil.Equal(t, len(body), len(wantKeys))
 	for _, key := range wantKeys {
 		if _, present := body[key]; !present {
 			t.Fatalf("body is missing %q, which the capture carries", key)
@@ -90,9 +83,7 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 		"session_type":     "qoder_work",
 		"aliyun_user_type": "",
 	} {
-		if body[key] != want {
-			t.Errorf("%s = %#v, want %#v", key, body[key], want)
-		}
+		testutil.CheckEqual(t, body[key], want)
 	}
 
 	// request_id and chat_record_id carry the attempt; request_set_id carries
@@ -102,9 +93,7 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 	}
 
 	business := body["business"].(map[string]interface{})
-	if len(business) != 8 {
-		t.Fatalf("business field count = %d, want 8: %#v", len(business), business)
-	}
+	testutil.Equal(t, len(business), 8)
 	for key, want := range map[string]interface{}{
 		"product":  "qoder_work",
 		"version":  DefaultClientVersion,
@@ -113,9 +102,7 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 		"stage":    "start",
 		"sub_task": "ws_builtin_general",
 	} {
-		if business[key] != want {
-			t.Errorf("business.%s = %#v, want %#v", key, business[key], want)
-		}
+		testutil.CheckEqual(t, business[key], want)
 	}
 
 	// is_reasoning follows the model's own catalog capability.
@@ -130,16 +117,10 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 		t.Fatalf("chat_context = %#v", context)
 	}
 	extra := context["extra"].(map[string]interface{})
-	if extra["originalContent"] != "hi" {
-		t.Fatalf("extra.originalContent = %#v, want the same string as chat_context.text", extra["originalContent"])
-	}
-	if extra["modelConfig"].(map[string]interface{})["is_reasoning"] != true {
-		t.Fatalf("chat_context disagrees with model_config about reasoning: %#v", extra["modelConfig"])
-	}
+	testutil.Equal(t, extra["originalContent"], "hi")
+	testutil.Equal(t, extra["modelConfig"].(map[string]interface{})["is_reasoning"], true)
 
-	if body["parameters"].(map[string]interface{})["max_tokens"] != float64(32000) {
-		t.Fatalf("parameters = %#v, want the captured max_tokens", body["parameters"])
-	}
+	testutil.EqualAny(t, body["parameters"].(map[string]interface{})["max_tokens"], float64(32000))
 }
 
 // TestQoderWorkStreamFramesParse covers the envelope shape the gateway actually
@@ -152,12 +133,10 @@ func TestQoderWorkStreamFramesParse(t *testing.T) {
 	stream := "data:" + frame + "\n\n" + "event:finish\n\n"
 
 	types := map[string]int{}
-	if _, err := consumeStreamWithTools(strings.NewReader(stream), false, func(m upstream.SSEMessage) { types[m.Type]++ }); err != nil {
+	if _, err := consumeStreamObserved(strings.NewReader(stream), false, func(m upstream.SSEMessage) { types[m.Type]++ }, nil); err != nil {
 		t.Fatalf("a captured frame failed to parse: %v", err)
 	}
-	if types["model.reasoning-delta"] != 1 {
-		t.Fatalf("event types = %#v, want one reasoning delta", types)
-	}
+	testutil.Equal(t, types["model.reasoning-delta"], 1)
 }
 
 // TestArrayShapedRefusalStaysDiagnosable covers the failure that took the
@@ -170,13 +149,11 @@ func TestArrayShapedRefusalStaysDiagnosable(t *testing.T) {
 	frame := `{"headers":{},"body":"[{\"code\":\"10605\",\"message\":\"service not available\"}]","statusCodeValue":200,"statusCode":"OK"}`
 	stream := "data:" + frame + "\n\n"
 
-	_, err := consumeStreamWithTools(strings.NewReader(stream), false, func(upstream.SSEMessage) {})
+	_, err := consumeStreamObserved(strings.NewReader(stream), false, func(upstream.SSEMessage) {}, nil)
 	if err == nil {
 		t.Fatal("an array-shaped body was accepted as a chunk")
 	}
-	if !strings.Contains(err.Error(), "10605") {
-		t.Fatalf("error = %v, want the upstream payload to survive into the message", err)
-	}
+	testutil.MustContain(t, err.Error(), "10605")
 }
 
 // TestNotificationsControlFrameDoesNotAbortTheStream covers the frame that broke
@@ -191,20 +168,16 @@ func TestNotificationsControlFrameDoesNotAbortTheStream(t *testing.T) {
 	stream := "data:" + notice + "\n\n" + "data:" + answer + "\n\n" + "event:finish\n\n"
 
 	var text strings.Builder
-	res, err := consumeStreamWithTools(strings.NewReader(stream), false, func(m upstream.SSEMessage) {
+	res, err := consumeStreamObserved(strings.NewReader(stream), false, func(m upstream.SSEMessage) {
 		if m.Type == "model.text-delta" {
 			if delta, ok := m.Event["delta"].(string); ok {
 				text.WriteString(delta)
 			}
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("a notifications control frame aborted the stream: %v", err)
 	}
-	if res.ControlFrames["NOTIFICATIONS"] != 1 {
-		t.Fatalf("control frames = %#v, want the NOTIFICATIONS frame counted", res.ControlFrames)
-	}
-	if text.String() != "OK" {
-		t.Fatalf("text = %q, want the answer that followed the notice", text.String())
-	}
+	testutil.Equal(t, res.ControlFrames["NOTIFICATIONS"], 1)
+	testutil.Equal(t, text.String(), "OK")
 }

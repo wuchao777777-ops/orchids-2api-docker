@@ -1,6 +1,9 @@
 package grok
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 // responsesSearchRequest is what the Grok tools Build sends when the operator
 // switches Web search and X search on: both hosted tools travel in the Responses
@@ -85,9 +88,7 @@ func TestNormalizeBuildResponsesPayloadCompletesWebSearchRoute(t *testing.T) {
 		"input": "search",
 		"tools": []interface{}{map[string]interface{}{"type": "web_search"}},
 	}
-	if err := normalizeBuildResponsesPayload(payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	declared := map[string]int{}
 	for _, tool := range interfaceMaps(payload["tools"]) {
 		declared[parseLooseStringAny(tool["type"])]++
@@ -103,9 +104,7 @@ func TestNormalizeBuildResponsesPayloadPreservesExplicitXSearch(t *testing.T) {
 		"input": "search X",
 		"tools": []interface{}{map[string]interface{}{"type": "x_search"}},
 	}
-	if err := normalizeBuildResponsesPayload(payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	tools := interfaceMaps(payload["tools"])
 	if len(tools) != 1 || parseLooseStringAny(tools[0]["type"]) != "x_search" {
 		t.Fatalf("explicit x_search changed: %#v", payload["tools"])
@@ -128,7 +127,5 @@ func TestChatRequestFromResponses_DeduplicatesHostedTools(t *testing.T) {
 			searches++
 		}
 	}
-	if searches != 1 {
-		t.Fatalf("hosted web_search declarations = %d, want 1: %#v", searches, chat.ResponsesTools)
-	}
+	testutil.Equal(t, searches, 1)
 }

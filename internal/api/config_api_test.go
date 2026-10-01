@@ -10,10 +10,12 @@ import (
 	"testing"
 
 	"encoding/json"
+
 	"github.com/alicebob/miniredis/v2"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func setupConfigAPI(t *testing.T) (*API, *store.Store, *miniredis.Miniredis) {
@@ -34,11 +36,7 @@ func setupConfigAPI(t *testing.T) (*API, *store.Store, *miniredis.Miniredis) {
 }
 
 func TestHandleConfigListReturnsCodeFreeMaxShape(t *testing.T) {
-	api, s, mini := setupConfigAPI(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	api, _, _ := setupConfigAPI(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config/list", nil)
 	rec := httptest.NewRecorder()
@@ -48,33 +46,21 @@ func TestHandleConfigListReturnsCodeFreeMaxShape(t *testing.T) {
 		Code int                    `json:"code"`
 		Data map[string]interface{} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "unmarshal response: %v")
 
-	if resp.Code != 0 {
-		t.Fatalf("expected code 0, got %d", resp.Code)
-	}
-	if got := resp.Data["admin_pass"]; got != "initial-secret" {
-		t.Fatalf("admin_pass=%v want initial-secret", got)
-	}
-	if got := resp.Data["admin_password"]; got != "initial-secret" {
-		t.Fatalf("admin_password=%v want initial-secret", got)
-	}
+	testutil.Equal(t, resp.Code, 0)
+	testutil.Equal(t, resp.Data["admin_pass"], "initial-secret")
+	testutil.Equal(t, resp.Data["admin_password"], "initial-secret")
 	if _, ok := resp.Data["admin_token"]; ok {
 		t.Fatal("config list must not expose admin_token")
 	}
-	if got := resp.Data["cache_strategy"]; got != "auto" {
-		t.Fatalf("cache_strategy=%v want auto", got)
-	}
+	testutil.Equal(t, resp.Data["cache_strategy"], "auto")
 	for _, retired := range []string{"enable_token_cache", "token_cache_ttl", "token_cache_strategy", "cache_token_count", "cache_ttl"} {
 		if _, present := resp.Data[retired]; present {
 			t.Fatalf("retired field %s exposed by config list", retired)
 		}
 	}
-	if got := resp.Data["proxy_url"]; got != "http://127.0.0.1:7890" {
-		t.Fatalf("proxy_url=%v want http://127.0.0.1:7890", got)
-	}
+	testutil.Equal(t, resp.Data["proxy_url"], "http://127.0.0.1:7890")
 }
 
 func TestBuildConfigFromPatchRejectsAdminToken(t *testing.T) {
@@ -86,8 +72,7 @@ func TestBuildConfigFromPatchRejectsAdminToken(t *testing.T) {
 }
 
 func TestHandleConfigSaveRejectsRetiredLocalCacheFields(t *testing.T) {
-	api, s, mini := setupConfigAPI(t)
-	defer func() { _ = s.Close(); mini.Close() }()
+	api, s, _ := setupConfigAPI(t)
 	for _, field := range []string{"enable_token_cache", "token_cache_ttl", "token_cache_strategy", "cache_token_count", "cache_ttl"} {
 		t.Run(field, func(t *testing.T) {
 			value := `"1"`
@@ -108,11 +93,7 @@ func TestHandleConfigSaveRejectsRetiredLocalCacheFields(t *testing.T) {
 }
 
 func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
-	api, s, mini := setupConfigAPI(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	api, s, _ := setupConfigAPI(t)
 
 	body := `{
 		"admin_password":"changed-secret",
@@ -129,33 +110,19 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "unmarshal response: %v")
 
-	if resp.Code != 0 {
-		t.Fatalf("expected code 0, got %d body=%s", resp.Code, rec.Body.String())
-	}
-	if resp.Msg != "success" {
-		t.Fatalf("msg=%q want success", resp.Msg)
-	}
+	testutil.Equal(t, resp.Code, 0)
+	testutil.Equal(t, resp.Msg, "success")
 
 	cfg := api.config.Load()
 	if cfg == nil {
 		t.Fatal("config not stored")
 	}
-	if cfg.AdminPass != "changed-secret" {
-		t.Fatalf("AdminPass=%q want changed-secret", cfg.AdminPass)
-	}
-	if cfg.CacheStrategy != "disabled" {
-		t.Fatalf("CacheStrategy=%q want disabled", cfg.CacheStrategy)
-	}
-	if cfg.QoderQueueRetryIntervalMs != 15000 {
-		t.Fatalf("QoderQueueRetryIntervalMs=%d want 15000", cfg.QoderQueueRetryIntervalMs)
-	}
-	if cfg.ProxyURL != "socks5://user:pass@127.0.0.1:1080" {
-		t.Fatalf("ProxyURL=%q want socks5://user:pass@127.0.0.1:1080", cfg.ProxyURL)
-	}
+	testutil.Equal(t, cfg.AdminPass, "changed-secret")
+	testutil.Equal(t, cfg.CacheStrategy, "disabled")
+	testutil.Equal(t, cfg.QoderQueueRetryIntervalMs, 15000)
+	testutil.Equal(t, cfg.ProxyURL, "socks5://user:pass@127.0.0.1:1080")
 	if len(cfg.ProxyBypass) != 2 || cfg.ProxyBypass[0] != "example.com" || cfg.ProxyBypass[1] != "internal.local" {
 		t.Fatalf("ProxyBypass=%v want [example.com internal.local]", cfg.ProxyBypass)
 	}
@@ -164,20 +131,12 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSetting(config) error = %v", err)
 	}
-	if !strings.Contains(saved, `"admin_pass":"changed-secret"`) {
-		t.Fatalf("saved config missing updated admin_pass: %s", saved)
-	}
-	if !strings.Contains(saved, `"qoder_queue_retry_interval_ms":15000`) {
-		t.Fatal("saved config missing the Qoder retry interval")
-	}
+	testutil.MustContain(t, saved, `"admin_pass":"changed-secret"`)
+	testutil.MustContain(t, saved, `"qoder_queue_retry_interval_ms":15000`)
 }
 
 func TestHandleConfigSavePublishesImmutableSnapshot(t *testing.T) {
-	api, s, mini := setupConfigAPI(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	api, _, _ := setupConfigAPI(t)
 
 	original := api.config.Load()
 	if original == nil {
@@ -194,31 +153,17 @@ func TestHandleConfigSavePublishesImmutableSnapshot(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if resp.Code != 0 {
-		t.Fatalf("expected code 0, got %d body=%s", resp.Code, rec.Body.String())
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "unmarshal response: %v")
+	testutil.Equal(t, resp.Code, 0)
 
-	if original.ProxyURL != "http://127.0.0.1:7890" {
-		t.Fatalf("published snapshot mutated in place: ProxyURL=%q", original.ProxyURL)
-	}
+	testutil.Equal(t, original.ProxyURL, "http://127.0.0.1:7890")
 	updated := api.config.Load()
-	if updated == original {
-		t.Fatal("expected a new immutable config snapshot")
-	}
-	if updated.ProxyURL != "http://alice:secret@127.0.0.1:9090" {
-		t.Fatalf("updated ProxyURL=%q want new value", updated.ProxyURL)
-	}
+	testutil.NotEqual(t, updated, original)
+	testutil.Equal(t, updated.ProxyURL, "http://alice:secret@127.0.0.1:9090")
 }
 
 func TestHandleConfigSaveNotifiesRuntimeConsumers(t *testing.T) {
-	api, s, mini := setupConfigAPI(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	api, _, _ := setupConfigAPI(t)
 
 	var notified *config.Config
 	api.SetConfigChangeHook(func(cfg *config.Config) { notified = cfg })
@@ -232,17 +177,11 @@ func TestHandleConfigSaveNotifiesRuntimeConsumers(t *testing.T) {
 	if notified != api.config.Load() {
 		t.Fatal("runtime consumers did not receive the published snapshot")
 	}
-	if notified.ProxyURL != "http://127.0.0.1:9091" {
-		t.Fatalf("notified ProxyURL=%q", notified.ProxyURL)
-	}
+	testutil.Equal(t, notified.ProxyURL, "http://127.0.0.1:9091")
 }
 
 func TestPersistConfigConcurrentReadersSeeCompleteSnapshots(t *testing.T) {
-	api, s, mini := setupConfigAPI(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	api, _, _ := setupConfigAPI(t)
 
 	const updates = 100
 	var readers sync.WaitGroup
@@ -308,7 +247,5 @@ func TestPersistConfigValidatesAnonymousAllowIPs(t *testing.T) {
 	}
 
 	valid := &config.Config{AnonymousAllowIPs: []string{"203.0.113.20", "198.51.100.0/24"}}
-	if err := a.persistConfig(ctx, nil, valid); err != nil {
-		t.Fatalf("a valid allowlist was rejected: %v", err)
-	}
+	testutil.NoError(t, a.persistConfig(ctx, nil, valid), "a valid allowlist was rejected: %v")
 }

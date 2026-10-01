@@ -2,6 +2,7 @@ package qoder
 
 import (
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -23,9 +24,7 @@ func TestProfileUpdateInvalidatesRuntimeAndFinalizesLatestTokens(t *testing.T) {
 	creds.RefreshToken = "rotated-refresh"
 	client.storeCredentials(creds, false, "")
 	var account store.Account
-	if err := client.FinalizeAccountState(t.Context(), &account); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, client.FinalizeAccountState(t.Context(), &account))
 	if !client.runtimeTokensMatch(creds) {
 		t.Fatal("runtime derived from stale token pair")
 	}

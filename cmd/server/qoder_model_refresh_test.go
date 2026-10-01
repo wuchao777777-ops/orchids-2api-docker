@@ -10,6 +10,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func qoderTestAccount(machineID string) *store.Account {
@@ -45,9 +46,7 @@ func TestDiscoverQoderModelsRequiresAnActiveAccount(t *testing.T) {
 	if !isNoActiveAccounts(err) {
 		t.Fatalf("error=%v want a no-active-account report", err)
 	}
-	if len(items) != 0 {
-		t.Fatalf("items=%+v want none published", items)
-	}
+	testutil.Equal(t, len(items), 0)
 }
 
 // TestDiscoverQoderModelsWithoutAnUpstreamCatalogPublishesNothing proves the
@@ -60,9 +59,7 @@ func TestDiscoverQoderModelsWithoutAnUpstreamCatalogPublishesNothing(t *testing.
 	clearModelsForChannel(t, ctx, s, "Qoder")
 
 	acc := qoderTestAccount("11111111-2222-4333-8444-555555555555")
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 
 	// Every endpoint points at a closed port, so the catalog read cannot succeed.
 	dead := "http://127.0.0.1:1"
@@ -76,15 +73,9 @@ func TestDiscoverQoderModelsWithoutAnUpstreamCatalogPublishesNothing(t *testing.
 	if err == nil {
 		t.Fatalf("discoverAccountCatalogModels() items=%+v source=%q want error", items, source)
 	}
-	if source != "" {
-		t.Fatalf("source=%q want no source for a failed read", source)
-	}
-	if len(items) != 0 {
-		t.Fatalf("items=%+v want none published", items)
-	}
-	if strings.Contains(err.Error(), "builtin") {
-		t.Fatalf("error=%v must not describe a built-in catalog", err)
-	}
+	testutil.Equal(t, source, "")
+	testutil.Equal(t, len(items), 0)
+	testutil.MustNotContain(t, err.Error(), "builtin")
 
 	models, listErr := s.ListModels(ctx)
 	if listErr != nil {
@@ -102,9 +93,7 @@ func TestDiscoverQoderModelsWithoutAnUpstreamCatalogPublishesNothing(t *testing.
 	if getErr != nil {
 		t.Fatalf("GetAccount() error = %v", getErr)
 	}
-	if len(stored.QoderModelIDs) != 0 {
-		t.Fatalf("account snapshot = %v, want it left empty", stored.QoderModelIDs)
-	}
+	testutil.Equal(t, len(stored.QoderModelIDs), 0)
 }
 
 // qoderCatalogStub answers the signed catalog route the way the gateway does,
@@ -123,9 +112,7 @@ func qoderCatalogStub(t *testing.T, status int, body string) *httptest.Server {
 			t.Errorf("catalog request Authorization = %q, want a COSY bearer", auth)
 		}
 		for _, header := range []string{"Cosy-Key", "Cosy-MachineId", "Cosy-Date"} {
-			if r.Header.Get(header) == "" {
-				t.Errorf("catalog request is missing %s", header)
-			}
+			testutil.CheckNotEqual(t, r.Header.Get(header), "")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -149,28 +136,20 @@ func TestDiscoverQoderModelsPublishesTheObservedCatalog(t *testing.T) {
 	defer stub.Close()
 
 	acc := qoderTestAccount("11111111-2222-4333-8444-555555555555")
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 
 	report, err := discoverAccountCatalogModels(ctx, &config.Config{QoderInferenceURL: stub.URL}, s, "Qoder", defaultModelRefreshConcurrency)
 	items, source := report.Candidates, report.Source
 	if err != nil {
 		t.Fatalf("discoverAccountCatalogModels() error = %v", err)
 	}
-	if source != "qoder_upstream_models" {
-		t.Fatalf("source=%q want qoder_upstream_models", source)
-	}
-	if len(items) != 2 {
-		t.Fatalf("items=%+v want the two observed rows", items)
-	}
+	testutil.Equal(t, source, "qoder_upstream_models")
+	testutil.Equal(t, len(items), 2)
 	for _, item := range items {
 		if !item.Verified {
 			t.Fatalf("item %+v is not marked verified", item)
 		}
-		if item.ID != strings.ToLower(item.ID) {
-			t.Fatalf("item %+v is not lowercased", item)
-		}
+		testutil.Equal(t, item.ID, strings.ToLower(item.ID))
 	}
 
 	// The snapshot must carry the wire fields routing rebuilds the request from.
@@ -178,12 +157,8 @@ func TestDiscoverQoderModelsPublishesTheObservedCatalog(t *testing.T) {
 	if getErr != nil {
 		t.Fatalf("GetAccount() error = %v", getErr)
 	}
-	if len(stored.QoderModelIDs) == 0 {
-		t.Fatal("the observed catalog was not recorded on the account")
-	}
-	if !strings.Contains(strings.Join(stored.QoderModelIDs, ""), "max_input_tokens") {
-		t.Fatalf("snapshot lost the routing fields: %v", stored.QoderModelIDs)
-	}
+	testutil.NotEqual(t, len(stored.QoderModelIDs), 0)
+	testutil.MustContain(t, strings.Join(stored.QoderModelIDs, ""), "max_input_tokens")
 }
 
 // TestDiscoverQoderModelsReportsTheReadFailure proves a failed read is reported
@@ -199,21 +174,15 @@ func TestDiscoverQoderModelsReportsTheReadFailure(t *testing.T) {
 	defer stub.Close()
 
 	acc := qoderTestAccount("11111111-2222-4333-8444-555555555555")
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 
 	report, err := discoverAccountCatalogModels(ctx, &config.Config{QoderInferenceURL: stub.URL}, s, "Qoder", defaultModelRefreshConcurrency)
 	items, source := report.Candidates, report.Source
 	if err == nil {
 		t.Fatalf("discoverAccountCatalogModels() items=%+v source=%q want error", items, source)
 	}
-	if !strings.Contains(err.Error(), "status=403") {
-		t.Fatalf("error=%v does not carry the upstream cause", err)
-	}
-	if len(items) != 0 {
-		t.Fatalf("items=%+v want none published", items)
-	}
+	testutil.MustContain(t, err.Error(), "status=403")
+	testutil.Equal(t, len(items), 0)
 	models, listErr := s.ListModels(ctx)
 	if listErr != nil {
 		t.Fatalf("ListModels() error = %v", listErr)
@@ -228,12 +197,8 @@ func TestDiscoverQoderModelsReportsTheReadFailure(t *testing.T) {
 // TestNormalizeAdminModelChannel_AcceptsQoder proves the admin refresh endpoint
 // recognises the channel name.
 func TestNormalizeAdminModelChannel_AcceptsQoder(t *testing.T) {
-	if got := normalizeAdminModelChannel("qoder"); got != "Qoder" {
-		t.Fatalf("normalizeAdminModelChannel(qoder) = %q, want Qoder", got)
-	}
-	if got := normalizeAdminModelChannel("QODER"); got != "Qoder" {
-		t.Fatalf("normalizeAdminModelChannel(QODER) = %q, want Qoder", got)
-	}
+	testutil.Equal(t, normalizeAdminModelChannel("qoder"), "Qoder")
+	testutil.Equal(t, normalizeAdminModelChannel("QODER"), "Qoder")
 }
 
 // TestShouldDeleteMissingModelsOnRefresh_OnlyPrunesUpstreamCatalogs proves

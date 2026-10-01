@@ -16,6 +16,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('./test-support.cjs');
 
 const MAIN_CSS = path.join(__dirname, 'static', 'css', 'main.css');
 const css = fs.readFileSync(MAIN_CSS, 'utf8');
@@ -156,16 +157,78 @@ test('the trend charts are width-constrained instead of sized by their aspect ra
   assert.match(body, /aspect-ratio:/, '.ops-chart still sizes its height from the ratio');
 });
 
-test('the phone card layouts are driven by the labels the rows actually carry', () => {
-  // ops.js stamps a class and a header label on every value cell; ops.css turns the
-  // row into a card and prints that label with ::before. This asserts the two halves
-  // of that contract still exist, because either one alone renders a card of
-  // unlabelled numbers.
-  for (const name of ['MATRIX_CELLS', 'ALERT_CELLS']) {
-    assert.match(opsJs, new RegExp(`const ${name} = \\[`), `${name} is declared in ops.js`);
+function renderOpsPhoneRows() {
+  const make = (tag) => {
+    const classes = new Set();
+    return {
+      tagName: tag, children: [], dataset: {}, style: {}, textContent: '', value: '',
+      classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name),
+        toggle: (name, on) => on ? classes.add(name) : classes.delete(name), contains: (name) => classes.has(name) },
+      appendChild(child) { this.children.push(child); return child; },
+      replaceChildren(...children) { this.children = children; },
+      setAttribute(name, value) { this[name] = String(value); },
+      getAttribute(name) { return this[name]; },
+      addEventListener() {},
+      querySelector(selector) {
+        if (selector === 'tbody') return this.tbody ||= make('tbody');
+        const descendants = (parent) => parent.children.flatMap((child) => [child, ...descendants(child)]);
+        return descendants(this).find((child) => selector.startsWith('.')
+          ? (child.className || '').split(' ').includes(selector.slice(1)) : child.tagName === selector) || null;
+      },
+    };
+  };
+  const nodes = new Map();
+  const node = (id) => { if (!nodes.has(id)) nodes.set(id, make(id)); return nodes.get(id); };
+  const overview = {
+    available: true, window_minutes: 180, since: '2026-09-12T11:48:00Z', until: '2026-09-12T14:48:00Z',
+    totals: {}, coverage: {}, series: [], matrix: [{
+      channel: 'grok', accounts_enabled: 2, accounts_available: 1, model_cooldowns: 3,
+      summary: { requests: 8, samples: 8, success_rate: 0.75 }, series: [],
+      models: [{ model: 'fixture-model', requests: 4, samples: 4, success_rate: 0.5 }],
+    }],
+  };
+  const context = vm.createContext({
+    document: { readyState: 'complete', getElementById: node, querySelector: node,
+      querySelectorAll: () => [], createElement: make, createElementNS: (_ns, tag) => make(tag), addEventListener() {} },
+    window: { innerWidth: 390, addEventListener() {}, setTimeout },
+    setInterval: () => 0, setTimeout, URLSearchParams,
+    fetch: async (url) => ({ ok: true, status: 200, json: async () => url.startsWith('/api/journal/records')
+      ? { data: [{ event: { action: 'alert_fired', timestamp: overview.until, channel: 'grok',
+        model: 'fixture-model', error: 'fixture alert', metadata: { severity: 'warning' } } }] }
+      : url.startsWith('/api/ops/overview') ? overview : {} }),
+  });
+  vm.runInContext(opsJs, context);
+  return node;
+}
+
+test('the phone card layouts are driven by the labels the rows actually carry', async () => {
+  // Execute both production branches: a matrix label elsewhere in the source
+  // cannot mask a missing alert label, or vice versa.
+  const node = renderOpsPhoneRows();
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+  const matrix = node('opsMatrix').querySelector('tbody').children;
+  assert.equal(matrix.length, 2, `both channel and model matrix branches render: ${node('opsCoverage').textContent}`);
+  const matrixCells = [
+    ['ops-mx-accounts', '可用账号'], ['ops-mx-requests', '请求'], ['ops-mx-rate', '成功率'],
+    ['ops-mx-ttft', '首 Token P95'], ['ops-mx-duration', '总耗时 P95'], ['ops-mx-throttled', '限流'],
+  ];
+  for (const row of matrix) {
+    for (const [index, [className, label]] of matrixCells.entries()) {
+      assert.equal(row.children[index + 1].dataset.label, label, `matrix ${className}`);
+      assert.equal(row.children[index + 1].classList.contains(className), true);
+    }
   }
-  assert.match(opsJs, /td\.dataset\.label = cell\.label;/, 'matrix cells carry their header label');
-  assert.match(opsJs, /td\.dataset\.label = cell\.label/, 'alert cells carry their header label');
+  const alerts = node('opsAlertTable').querySelector('tbody').children;
+  assert.equal(alerts.length, 1);
+  const alertCells = [
+    ['ops-alert-time', '时间'], ['ops-alert-status', '状态'], ['ops-alert-level', '严重级别'],
+    ['ops-alert-channel', '渠道'], ['ops-alert-target', '对象'], ['ops-alert-detail', '说明'],
+  ];
+  for (const [index, [className, label]] of alertCells.entries()) {
+    assert.equal(alerts[0].children[index].dataset.label, label, `alert ${className}`);
+    assert.ok(alerts[0].children[index].className.split(' ').includes(className));
+  }
+  assert.equal(alerts[0].children[5].textContent, 'fixture alert');
 
   const cards = mediaBlocks(opsCss).filter((b) => /\.ops-table tbody tr\s*\{[^}]*display:\s*grid/.test(b.body));
   assert.equal(cards.length, 1, 'exactly one breakpoint turns a matrix/alert row into a card');

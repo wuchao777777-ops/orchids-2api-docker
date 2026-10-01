@@ -9,6 +9,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -144,9 +145,7 @@ func TestAccountChanges_RotationBuildsANewClient(t *testing.T) {
 
 	second, releaseSecond := fixture.handler.acquireAccountClient(rotated)
 	defer releaseSecond()
-	if second == first {
-		t.Fatal("the client built from the replaced credential was reused")
-	}
+	testutil.NotEqual(t, second, first)
 	if built := fixture.builtClients(); len(built) != 2 {
 		t.Fatalf("clients built = %d, want a new one after rotation", len(built))
 	}
@@ -179,9 +178,7 @@ func TestAccountChanges_DoesNotCloseAClientInUse(t *testing.T) {
 	// A new request already gets the fresh client.
 	fresh, releaseFresh := fixture.handler.acquireAccountClient(rotated)
 	releaseFresh()
-	if fresh == inUse {
-		t.Fatal("a request started after the rotation reused the old client")
-	}
+	testutil.NotEqual(t, fresh, inUse)
 
 	// Finishing the first request releases the old client.
 	releaseInUse()
@@ -260,7 +257,5 @@ func TestAcquireRelease_UnchangedAccountReusesTheClient(t *testing.T) {
 	if second != first {
 		t.Fatal("a status-only change rebuilt the client")
 	}
-	if len(fixture.builtClients()) != 1 {
-		t.Fatalf("clients built = %d, want 1", len(fixture.builtClients()))
-	}
+	testutil.Equal(t, len(fixture.builtClients()), 1)
 }

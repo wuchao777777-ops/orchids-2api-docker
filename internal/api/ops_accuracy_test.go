@@ -2,6 +2,7 @@ package api
 
 import (
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -21,7 +22,5 @@ func TestPoolCountsLoginIndependentOfCooldown(t *testing.T) {
 	}
 	accounts[0].StatusCode = ""
 	_, _, login, _ = poolCounts(accounts, "grok", now)
-	if login != 2 {
-		t.Fatalf("recovered login count=%d", login)
-	}
+	testutil.Equal(t, login, 2)
 }

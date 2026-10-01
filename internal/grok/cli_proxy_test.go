@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestGrokClientsUseConfiguredProxy(t *testing.T) {
@@ -40,18 +41,12 @@ func TestGrokClientsUseConfiguredProxy(t *testing.T) {
 				t.Fatalf("client did not reach configured proxy: %v", err)
 			}
 			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusTeapot {
-				t.Fatalf("status = %d, want proxy's status", resp.StatusCode)
-			}
+			testutil.Equal(t, resp.StatusCode, http.StatusTeapot)
 		})
 	}
 
 	// Proxy changes must allocate a new shared browser transport.
 	other := &config.Config{ProxyURL: "http://different.proxy.invalid:3128"}
-	if cli.httpClient == NewCLIClient(other).httpClient {
-		t.Fatal("Grok CLI reused a cached client after proxy change")
-	}
-	if NewDeviceAuthenticator(cfg).httpClient == NewDeviceAuthenticator(other).httpClient {
-		t.Fatal("device auth reused a cached client after proxy change")
-	}
+	testutil.NotEqual(t, cli.httpClient, NewCLIClient(other).httpClient)
+	testutil.NotEqual(t, NewDeviceAuthenticator(cfg).httpClient, NewDeviceAuthenticator(other).httpClient)
 }

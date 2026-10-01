@@ -1,6 +1,9 @@
 package handler
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 func TestMapModelOnlyNormalizesSyntax(t *testing.T) {
 	for _, tc := range []struct{ input, want string }{
@@ -10,8 +13,6 @@ func TestMapModelOnlyNormalizesSyntax(t *testing.T) {
 		{"future-upstream-model", "future-upstream-model"},
 		{"", ""},
 	} {
-		if got := mapModel(tc.input); got != tc.want {
-			t.Errorf("mapModel(%q)=%q want %q", tc.input, got, tc.want)
-		}
+		testutil.CheckEqual(t, mapModel(tc.input), tc.want)
 	}
 }

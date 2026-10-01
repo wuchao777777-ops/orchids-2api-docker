@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"fmt"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -35,9 +36,7 @@ func TestEncodeBodyMatchesPrivateAlphabet(t *testing.T) {
 	want := swapOuterThirds([]byte(substituted.String()))
 
 	got := EncodeBody(raw)
-	if string(got) != string(want) {
-		t.Fatalf("EncodeBody() = %q, want %q", got, want)
-	}
+	testutil.Equal(t, string(got), string(want))
 	for _, b := range got {
 		if strings.ContainsRune("+/=", rune(b)) {
 			t.Fatalf("EncodeBody() left a standard-alphabet byte %q in %q", b, got)
@@ -56,12 +55,15 @@ func TestBodyCodecRoundTrip(t *testing.T) {
 			raw[i] = byte(i * 7 % 251)
 		}
 		encoded := EncodeBody(raw)
-		decoded, err := decodeBodyForTest(encoded)
-		if err != nil {
-			t.Fatalf("DecodeBody(len=%d) error = %v", length, err)
-		}
-		if string(decoded) != string(raw) {
-			t.Fatalf("round trip mismatch at length %d", length)
+		for name, decoder := range map[string]func([]byte) ([]byte, error){
+			"production":               decodeBody,
+			"independent test decoder": decodeBodyForTest,
+		} {
+			decoded, err := decoder(encoded)
+			if err != nil {
+				t.Fatalf("%s DecodeBody(len=%d) error = %v", name, length, err)
+			}
+			testutil.Equal(t, string(decoded), string(raw))
 		}
 	}
 }
@@ -72,16 +74,28 @@ func TestDecodeBodyRejectsLineBreaks(t *testing.T) {
 	t.Parallel()
 
 	encoded := EncodeBody([]byte(`{"a":1}`))
-	if _, err := decodeBodyForTest(append(encoded[:4], append([]byte{'\n'}, encoded[4:]...)...)); err == nil {
-		t.Fatal("DecodeBody() error = nil for a body containing a line break")
+	for _, newline := range []string{"\n", "\r", "\r\n"} {
+		for _, offset := range []int{0, 4, len(encoded)} {
+			malformed := append([]byte(nil), encoded[:offset]...)
+			malformed = append(malformed, newline...)
+			malformed = append(malformed, encoded[offset:]...)
+			if _, err := decodeBody(malformed); err == nil {
+				t.Fatalf("production decodeBody accepted %q at offset %d", newline, offset)
+			}
+		}
+	}
+	for _, malformed := range [][]byte{[]byte("+"), []byte("invalid-length"), []byte("$$$$")} {
+		if _, err := decodeBody(malformed); err == nil {
+			t.Fatalf("production decodeBody accepted malformed encoding %q", malformed)
+		}
 	}
 }
 
-// TestSignRequestSeparators pins the five-field, four-newline MD5 formula with
+// TestCOSYSignatureSeparators pins the five-field, four-newline MD5 formula with
 // no trailing separator. The trailing byte is the classic mistake here: a
 // trailing newline yields a signature that is 32 valid-looking hex characters
 // the gateway rejects.
-func TestSignRequestSeparators(t *testing.T) {
+func TestCOSYSignatureSeparators(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -91,23 +105,24 @@ func TestSignRequestSeparators(t *testing.T) {
 		body    = "encoded-body"
 		path    = "/api/v2/service/pro/sse/agent_chat_generation"
 	)
-	want := fmt.Sprintf("%x", md5.Sum([]byte(payload+"\n"+key+"\n"+seconds+"\n"+body+"\n"+path)))
-
-	if got := signRequest(payload, key, seconds, body, path); got != want {
-		t.Fatalf("signRequest() = %q, want %q", got, want)
-	}
-	if strings.HasSuffix(signRequest(payload, key, seconds, body, path), "\n") {
-		t.Fatal("signature carries a trailing separator")
-	}
+	want := md5.Sum([]byte(payload + "\n" + key + "\n" + seconds + "\n" + body + "\n" + path))
+	got := cosySignature([]byte(payload), key, seconds, []byte(body), path)
+	testutil.Equal(t, got, want)
+	testutil.Equal(t, fmt.Sprintf("%x", got), "fb256c9d505e6c4a4ae4c1525d583c9e")
+	testutil.NotEqual(t, got, md5.Sum([]byte(payload+"\n"+key+"\n"+seconds+"\n"+body+"\n"+path+"\n")))
 }
 
-// TestComposeBearer pins the authorization prefix.
-func TestComposeBearer(t *testing.T) {
+// TestCOSYAuthorizationFixedVector pins the prefix, payload field order and
+// empty ideVersion, standard base64, and hexadecimal signature together.
+func TestCOSYAuthorizationFixedVector(t *testing.T) {
 	t.Parallel()
 
-	if got, want := composeBearer("payload", "sig"), "Bearer COSY.payload.sig"; got != want {
-		t.Fatalf("composeBearer() = %q, want %q", got, want)
+	const want = "Bearer COSY.eyJ2ZXJzaW9uIjoidjEiLCJyZXF1ZXN0SWQiOiJyZXF1ZXN0IiwiaW5mbyI6ImluZm8iLCJjb3N5VmVyc2lvbiI6InZlcnNpb24iLCJpZGVWZXJzaW9uIjoiIn0=.759d3ccbc63c510f16c3e66bd4c0b230"
+	got, err := buildCOSYAuthorization("request", "info", "version", "key", "123", []byte("encoded-body"), "/path")
+	if err != nil {
+		t.Fatal(err)
 	}
+	testutil.Equal(t, got, want)
 }
 
 // TestSignPathStripsAlgoAndQuery pins the signed path: the covered path drops
@@ -121,9 +136,7 @@ func TestSignPathStripsAlgoAndQuery(t *testing.T) {
 		"/algo/api/v2/quota/usage?Encode=1": "/api/v2/quota/usage",
 	}
 	for raw, want := range cases {
-		if got := signPath(raw); got != want {
-			t.Errorf("signPath(%q) = %q, want %q", raw, got, want)
-		}
+		testutil.CheckEqual(t, signPath(raw), want)
 	}
 }
 
@@ -134,7 +147,5 @@ func TestChatURLCarriesFixedAgentQuery(t *testing.T) {
 
 	got := chatURL("https://api2.qoder.sh")
 	want := "https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
-	if got != want {
-		t.Fatalf("chatURL() = %q, want %q", got, want)
-	}
+	testutil.Equal(t, got, want)
 }

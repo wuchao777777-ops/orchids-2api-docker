@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"orchids-api/internal/buildinfo"
+	"orchids-api/internal/testutil"
 )
 
 type fixtureSource struct {
@@ -42,9 +43,7 @@ func fixture(t *testing.T, binary []byte) *Manager {
 	t.Helper()
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "server")
-	if err := os.WriteFile(exe, []byte("old binary"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, os.WriteFile(exe, []byte("old binary"), 0755))
 	h := sha256.Sum256(binary)
 	name := "orchids-server-linux-amd64"
 	f := &fixtureSource{release: Release{Tag: "v1.0.3", Assets: []Asset{{Name: name, URL: "binary"}, {Name: name + ".sha256", URL: "checksum"}, {Name: name + ".build-info.txt", URL: "metadata"}}}, files: map[string][]byte{name: binary, name + ".sha256": []byte(hex.EncodeToString(h[:]) + "  " + name), name + ".build-info.txt": []byte("version=v1.0.3\ncommit=abcdef0\ngoos=linux\ngoarch=amd64\n")}}
@@ -158,9 +157,7 @@ func TestActionHTTPGuards(t *testing.T) {
 		r.Header.Set("Content-Type", tt.content)
 		w := httptest.NewRecorder()
 		m.HandleAction("update")(w, r)
-		if w.Code != tt.want {
-			t.Fatalf("got %d want %d", w.Code, tt.want)
-		}
+		testutil.Equal(t, w.Code, tt.want)
 	}
 }
 

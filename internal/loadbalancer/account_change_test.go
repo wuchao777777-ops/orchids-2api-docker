@@ -8,6 +8,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // TestInvalidateAccounts_MakesChangesImmediate is the acceptance rule for the
@@ -23,9 +24,7 @@ func TestInvalidateAccounts_MakesChangesImmediate(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 
 	acc := &store.Account{AccountType: "workbuddy", RefreshToken: "session-a", Enabled: true, Weight: 1}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount: %v")
 
 	// A long TTL makes the point: without notification the pool would keep serving
 	// the stale snapshot for the whole window.
@@ -35,9 +34,7 @@ func TestInvalidateAccounts_MakesChangesImmediate(t *testing.T) {
 	}
 
 	// Delete the account, then notify as the change bus would.
-	if err := s.DeleteAccount(context.Background(), acc.ID); err != nil {
-		t.Fatalf("DeleteAccount: %v", err)
-	}
+	testutil.NoError(t, s.DeleteAccount(context.Background(), acc.ID), "DeleteAccount: %v")
 	lb.AccountChanges([]int64{acc.ID})
 
 	if _, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", nil, nil); err == nil {
@@ -58,9 +55,7 @@ func TestInvalidateAccounts_KeepsUnrelatedAccounts(t *testing.T) {
 	first := &store.Account{AccountType: "workbuddy", RefreshToken: "session-a", Enabled: true, Weight: 1}
 	second := &store.Account{AccountType: "workbuddy", RefreshToken: "session-b", Enabled: true, Weight: 1}
 	for _, acc := range []*store.Account{first, second} {
-		if err := s.CreateAccount(context.Background(), acc); err != nil {
-			t.Fatalf("CreateAccount: %v", err)
-		}
+		testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount: %v")
 	}
 
 	lb := NewWithCacheTTL(s, time.Hour)

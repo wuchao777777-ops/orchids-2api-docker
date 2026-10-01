@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 // TestResolveModelRetiredIDs pins every identifier the registry must refuse.
@@ -58,17 +59,13 @@ func TestResolveModelAcceptsCurrentBuildModels(t *testing.T) {
 		if !ok {
 			t.Fatalf("ResolveModel(%s) should succeed", id)
 		}
-		if spec.UpstreamModel != id {
-			t.Fatalf("%s upstream=%q want=%q", id, spec.UpstreamModel, id)
-		}
+		testutil.Equal(t, spec.UpstreamModel, id)
 	}
 }
 
 func TestGrok45RoutesToBuildCLI(t *testing.T) {
 	spec, ok := ResolveModel("grok-4.5")
-	if !ok {
-		t.Fatal("ResolveModel(grok-4.5) = false, want true")
-	}
+	testutil.True(t, ok, "ResolveModel(grok-4.5) = false, want true")
 	if !modelRoutedToCLI(spec, &config.Config{}) {
 		t.Fatal("grok-4.5 should route through the official Build CLI OAuth path")
 	}
@@ -76,9 +73,7 @@ func TestGrok45RoutesToBuildCLI(t *testing.T) {
 
 func TestLegacyCLIModelListCannotRouteImplicitModel(t *testing.T) {
 	var cfg config.Config
-	if err := json.Unmarshal([]byte(`{"grok_cli_model_ids":["implicit-model"]}`), &cfg); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(`{"grok_cli_model_ids":["implicit-model"]}`), &cfg))
 	if modelRoutedToCLI(ModelSpec{ID: "implicit-model"}, &cfg) {
 		t.Fatal("legacy model list must not route models without explicit Build capability")
 	}
@@ -97,9 +92,7 @@ func TestChatCompletionsRequestValidateLeavesSamplingToUpstream(t *testing.T) {
 			Content: "hello",
 		}},
 	}
-	if err := req.Validate(); err != nil {
-		t.Fatalf("Validate() error: %v", err)
-	}
+	testutil.NoError(t, req.Validate(), "Validate() error: %v")
 	if req.Temperature != nil {
 		t.Fatalf("temperature default mismatch: got=%v", req.Temperature)
 	}
@@ -215,12 +208,8 @@ func TestChatCompletionsRequestUnmarshalLooseTypes(t *testing.T) {
 			if tc.wantErr {
 				return
 			}
-			if req.Stream != tc.wantStream {
-				t.Fatalf("stream=%v want=%v", req.Stream, tc.wantStream)
-			}
-			if req.StreamProvided != tc.wantProvided {
-				t.Fatalf("stream provided=%v want=%v", req.StreamProvided, tc.wantProvided)
-			}
+			testutil.Equal(t, req.Stream, tc.wantStream)
+			testutil.Equal(t, req.StreamProvided, tc.wantProvided)
 			if (req.Temperature != nil) != tc.wantSampling || (req.TopP != nil) != tc.wantSampling {
 				t.Fatalf("sampling present=%v/%v want=%v", req.Temperature != nil, req.TopP != nil, tc.wantSampling)
 			}
@@ -258,9 +247,7 @@ func TestApplyDefaultChatStream(t *testing.T) {
 			h := &Handler{cfg: cfg}
 			req := ChatCompletionsRequest{Stream: tc.stream, StreamProvided: tc.provided}
 			h.applyDefaultChatStream(&req)
-			if req.Stream != tc.want {
-				t.Fatalf("stream=%v want=%v", req.Stream, tc.want)
-			}
+			testutil.Equal(t, req.Stream, tc.want)
 		})
 	}
 }

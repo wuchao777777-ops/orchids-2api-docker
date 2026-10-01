@@ -19,6 +19,7 @@ import (
 
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -41,9 +42,7 @@ func jsonMessage(t *testing.T, role, text string) prompt.Message {
 	if err != nil {
 		t.Fatalf("marshal message: %v", err)
 	}
-	if err := json.Unmarshal(raw, &msg); err != nil {
-		t.Fatalf("unmarshal message: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &msg), "unmarshal message: %v")
 	return msg
 }
 
@@ -71,18 +70,10 @@ func TestResolveCredentials_ReadsAuthDocument(t *testing.T) {
 		`","refreshToken":"refresh-value","expiresAt":` + strconv.FormatInt(expiry.UnixMilli(), 10) + `}}`
 
 	creds := ResolveCredentials(&store.Account{ClientCookie: doc})
-	if creds.AccessToken != token {
-		t.Fatalf("AccessToken = %q, want the embedded token", creds.AccessToken)
-	}
-	if creds.RefreshToken != "refresh-value" {
-		t.Fatalf("RefreshToken = %q, want refresh-value", creds.RefreshToken)
-	}
-	if creds.UID != uid {
-		t.Fatalf("UID = %q, want %q", creds.UID, uid)
-	}
-	if creds.Email != "operator@example.com" {
-		t.Fatalf("Email = %q, want operator@example.com", creds.Email)
-	}
+	testutil.Equal(t, creds.AccessToken, token)
+	testutil.Equal(t, creds.RefreshToken, "refresh-value")
+	testutil.Equal(t, creds.UID, uid)
+	testutil.Equal(t, creds.Email, "operator@example.com")
 	if creds.ExpiresAt.IsZero() || creds.ExpiresAt.Before(time.Now().Add(24*time.Hour)) {
 		t.Fatalf("ExpiresAt = %v, want a future expiry decoded from milliseconds", creds.ExpiresAt)
 	}
@@ -94,24 +85,16 @@ func TestResolveCredentials_SplitsKeyValuePairs(t *testing.T) {
 	creds := ResolveCredentials(&store.Account{
 		ClientCookie: "accessToken=abc.def.ghi; refreshToken=refresh-xyz",
 	})
-	if creds.AccessToken != "abc.def.ghi" {
-		t.Fatalf("AccessToken = %q", creds.AccessToken)
-	}
-	if creds.RefreshToken != "refresh-xyz" {
-		t.Fatalf("RefreshToken = %q", creds.RefreshToken)
-	}
+	testutil.Equal(t, creds.AccessToken, "abc.def.ghi")
+	testutil.Equal(t, creds.RefreshToken, "refresh-xyz")
 }
 
 func TestResolveCredentials_TreatsOpaqueValueAsRefreshToken(t *testing.T) {
 	t.Parallel()
 
 	creds := ResolveCredentials(&store.Account{ClientCookie: "opaque-refresh-value"})
-	if creds.RefreshToken != "opaque-refresh-value" {
-		t.Fatalf("RefreshToken = %q", creds.RefreshToken)
-	}
-	if creds.AccessToken != "" {
-		t.Fatalf("AccessToken = %q, want empty", creds.AccessToken)
-	}
+	testutil.Equal(t, creds.RefreshToken, "opaque-refresh-value")
+	testutil.Equal(t, creds.AccessToken, "")
 }
 
 func TestResolveCredentials_PrefersDedicatedFields(t *testing.T) {
@@ -149,9 +132,7 @@ func TestBuildMessages_RequiresSystemFirst(t *testing.T) {
 	t.Parallel()
 
 	messages := buildMessages(upstream.UpstreamRequest{Messages: []prompt.Message{userMessage(t, "hello")}})
-	if len(messages) != 2 {
-		t.Fatalf("messages = %d, want 2 (synthetic system + user)", len(messages))
-	}
+	testutil.Equal(t, len(messages), 2)
 	if messages[0].Role != "system" || messages[0].Content != defaultSystem {
 		t.Fatalf("messages[0] = %+v, want the default system prompt", messages[0])
 	}
@@ -166,9 +147,7 @@ func TestBuildMessages_NormalizesDeveloperRole(t *testing.T) {
 	// `developer` is OpenAI's alias for the system role; the upstream rejects
 	// it, and the rewrite must preserve content and position.
 	messages := buildMessages(upstream.UpstreamRequest{Messages: []prompt.Message{roleMessage(t, "developer", "stay terse")}})
-	if len(messages) != 1 {
-		t.Fatalf("messages = %d, want 1", len(messages))
-	}
+	testutil.Equal(t, len(messages), 1)
 	if messages[0].Role != "system" || messages[0].Content != "stay terse" {
 		t.Fatalf("messages[0] = %+v, want the developer turn rewritten to system", messages[0])
 	}
@@ -192,9 +171,7 @@ func TestBuildMessages_KeepsSystemItemsAndToolResults(t *testing.T) {
 			}},
 		}},
 	})
-	if len(messages) != 4 {
-		t.Fatalf("messages = %d, want system + assistant + user + tool", len(messages))
-	}
+	testutil.Equal(t, len(messages), 4)
 	if messages[0].Role != "system" || messages[0].Content != "be brief" {
 		t.Fatalf("messages[0] = %+v, want the forwarded system item", messages[0])
 	}
@@ -218,9 +195,7 @@ func TestBuildMessages_DropsAnthropicClientMarkers(t *testing.T) {
 		Messages: []prompt.Message{userMessage(t, "hello")},
 	})
 
-	if len(messages) != 2 {
-		t.Fatalf("messages = %#v, want the real instruction plus the user turn", messages)
-	}
+	testutil.Equal(t, len(messages), 2)
 	if messages[0].Role != "system" || messages[0].Content != "be brief" {
 		t.Fatalf("messages[0] = %+v, want only the real instruction", messages[0])
 	}
@@ -256,9 +231,7 @@ func TestBuildMessages_DropsClientMarkerSystemMessage(t *testing.T) {
 	}})
 
 	for _, message := range messages {
-		if strings.Contains(message.Content, "anthropic-billing-header") {
-			t.Fatalf("client marker sent as a system message: %+v", messages)
-		}
+		testutil.MustNotContain(t, message.Content, "anthropic-billing-header")
 	}
 	if len(messages) != 2 || messages[0].Content != defaultSystem {
 		t.Fatalf("messages = %#v, want the default system prompt followed by the user turn", messages)
@@ -274,9 +247,7 @@ func TestBuildMessages_KeepsOrdinaryClaudeMention(t *testing.T) {
 		System:   []prompt.SystemItem{{Type: "text", Text: instruction}},
 		Messages: []prompt.Message{userMessage(t, "hello")},
 	})
-	if messages[0].Content != instruction {
-		t.Fatalf("messages[0] = %+v, want an ordinary mention preserved", messages[0])
-	}
+	testutil.Equal(t, messages[0].Content, instruction)
 }
 
 func TestBuildMessagesDropsDanglingToolResult(t *testing.T) {
@@ -288,9 +259,7 @@ func TestBuildMessagesDropsDanglingToolResult(t *testing.T) {
 		}}},
 	}}})
 	for _, message := range messages {
-		if message.Role == "tool" {
-			t.Fatalf("dangling tool result was forwarded: %#v", messages)
-		}
+		testutil.NotEqual(t, message.Role, "tool")
 	}
 }
 
@@ -316,12 +285,8 @@ func TestConsumeStream_EmitsTextReasoningAndToolCalls(t *testing.T) {
 	if !result.SawMeaningfulEvent {
 		t.Fatal("SawMeaningfulEvent = false")
 	}
-	if result.ToolCallCount != 1 {
-		t.Fatalf("ToolCallCount = %d, want 1", result.ToolCallCount)
-	}
-	if result.FinishReason() != "tool_use" {
-		t.Fatalf("FinishReason() = %q, want tool_use", result.FinishReason())
-	}
+	testutil.Equal(t, result.ToolCallCount, 1)
+	testutil.Equal(t, result.FinishReason(), "tool_use")
 	if result.Usage["inputTokens"] != 11 || result.Usage["outputTokens"] != 7 {
 		t.Fatalf("usage = %+v", result.Usage)
 	}
@@ -338,12 +303,8 @@ func TestConsumeStream_EmitsTextReasoningAndToolCalls(t *testing.T) {
 			toolInput, _ = event.Event["input"].(string)
 		}
 	}
-	if text != "hello world" {
-		t.Fatalf("text = %q", text)
-	}
-	if reasoning != "think" {
-		t.Fatalf("reasoning = %q", reasoning)
-	}
+	testutil.Equal(t, text, "hello world")
+	testutil.Equal(t, reasoning, "think")
 	if toolName != "list_files" || toolInput != `{"path":"."}` {
 		t.Fatalf("tool call = %q %q", toolName, toolInput)
 	}
@@ -370,9 +331,7 @@ func TestConsumeStream_ReassemblesSplitToolArguments(t *testing.T) {
 	if result.ToolCallCount != 1 || len(calls) != 1 {
 		t.Fatalf("tool calls = %d/%d, want exactly one", result.ToolCallCount, len(calls))
 	}
-	if got := calls[0].Event["input"]; got != `{"path":"notes.txt","content":"ok"}` {
-		t.Fatalf("tool input = %q", got)
-	}
+	testutil.Equal(t, calls[0].Event["input"], `{"path":"notes.txt","content":"ok"}`)
 }
 
 func TestConsumeStream_DoesNotMergeReusedToolIndex(t *testing.T) {
@@ -423,12 +382,8 @@ func TestBuildBodyNormalizesStringOnlyToolChoice(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded map[string]interface{}
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if got := decoded["tool_choice"]; got != "required" {
-		t.Fatalf("tool_choice=%#v want required", got)
-	}
+	testutil.NoError(t, json.Unmarshal(body, &decoded))
+	testutil.Equal(t, decoded["tool_choice"], "required")
 }
 
 func TestRunChat_SendsSystemFirstAndSurfacesBusinessError(t *testing.T) {
@@ -443,9 +398,7 @@ func TestRunChat_SendsSystemFirstAndSurfacesBusinessError(t *testing.T) {
 			_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"fresh-access","refreshToken":"rotated-refresh","expiresIn":3600}}`))
 		case "/v2/chat/completions":
 			sawUID = r.Header.Get("X-User-Id") != ""
-			if got := r.Header.Get("Origin"); got != originReferer {
-				t.Errorf("Origin = %q, want %q", got, originReferer)
-			}
+			testutil.CheckEqual(t, r.Header.Get("Origin"), originReferer)
 			raw, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(raw, &gotBody)
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -465,20 +418,14 @@ func TestRunChat_SendsSystemFirstAndSurfacesBusinessError(t *testing.T) {
 		Messages: []prompt.Message{userMessage(t, "hi")},
 	}, 5*time.Second, nil, nil)
 
-	if !sawUID {
-		t.Error("X-User-Id header missing on the chat request")
-	}
+	testutil.CheckTrue(t, sawUID, "X-User-Id header missing on the chat request")
 	messages, ok := gotBody["messages"].([]interface{})
 	if !ok || len(messages) == 0 {
 		t.Fatalf("request body messages = %v", gotBody["messages"])
 	}
 	first, _ := messages[0].(map[string]interface{})
-	if first["role"] != "system" {
-		t.Fatalf("messages[0].role = %v, want system", first["role"])
-	}
-	if gotBody["stream"] != true {
-		t.Fatalf("stream = %v, want true", gotBody["stream"])
-	}
+	testutil.Equal(t, first["role"], "system")
+	testutil.Equal(t, gotBody["stream"], true)
 	if err == nil {
 		t.Fatal("runChat() error = nil, want the failure surfaced")
 	}
@@ -522,26 +469,18 @@ func TestApplyChatHeaders_MatchesDesktopFingerprintAndReusesTurnID(t *testing.T)
 	}
 	for i, header := range headers {
 		for name, expected := range want {
-			if got := header.Get(name); got != expected {
-				t.Errorf("request %d %s = %q, want %q", i+1, name, got, expected)
-			}
+			testutil.CheckEqual(t, header.Get(name), expected)
 		}
 		messageID := header.Get("X-Conversation-Message-ID")
 		if len(messageID) != 32 || validWorkBuddyTraceID(messageID) == "" {
 			t.Errorf("request %d message id = %q, want 32 hex", i+1, messageID)
 		}
-		if got := header.Get("X-Request-ID"); got != messageID {
-			t.Errorf("request %d X-Request-ID = %q, want message id %q", i+1, got, messageID)
-		}
+		testutil.CheckEqual(t, header.Get("X-Request-ID"), messageID)
 		if got := header.Get("X-B3-TraceId"); len(got) != 32 || validWorkBuddyTraceID(got) == "" {
 			t.Errorf("request %d X-B3-TraceId = %q, want valid fallback", i+1, got)
 		}
-		if got := header.Get("X-B3-SpanId"); got != messageID[:16] {
-			t.Errorf("request %d X-B3-SpanId = %q, want %q", i+1, got, messageID[:16])
-		}
-		if got := header.Get("X-B3-Sampled"); got != "1" {
-			t.Errorf("request %d X-B3-Sampled = %q, want 1", i+1, got)
-		}
+		testutil.CheckEqual(t, header.Get("X-B3-SpanId"), messageID[:16])
+		testutil.CheckEqual(t, header.Get("X-B3-Sampled"), "1")
 	}
 	if first, second := headers[0].Get("X-Conversation-Message-ID"), headers[1].Get("X-Conversation-Message-ID"); first == second {
 		t.Fatalf("message id was reused across attempts: %q", first)
@@ -556,12 +495,8 @@ func TestBuildBody_IncludesUsageAndCamelCaseConversationID(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded map[string]interface{}
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if got := decoded["conversationId"]; got != "conv-1" {
-		t.Fatalf("conversationId = %#v, want conv-1", got)
-	}
+	testutil.NoError(t, json.Unmarshal(body, &decoded))
+	testutil.Equal(t, decoded["conversationId"], "conv-1")
 	options, ok := decoded["stream_options"].(map[string]interface{})
 	if !ok || options["include_usage"] != true {
 		t.Fatalf("stream_options = %#v, want include_usage=true", decoded["stream_options"])
@@ -578,9 +513,7 @@ func TestConsumeStream_PreservesBusinessEnvelopeAndNestedReasoningUsage(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := result.Usage["reasoningTokens"]; got != 4 {
-		t.Fatalf("reasoningTokens=%v want 4", got)
-	}
+	testutil.Equal(t, result.Usage["reasoningTokens"], 4)
 
 	for _, code := range []int{CodeModelThrottle, CodeSessionDead} {
 		_, err := consumeStream(strings.NewReader(fmt.Sprintf("data: {\"code\":%d,\"msg\":\"business failure\"}\n", code)), nil)
@@ -597,9 +530,7 @@ func TestApiError_CarriesStatusAndCode(t *testing.T) {
 	err := apiError(http.StatusUnauthorized, []byte(`{"code":12153,"msg":"Offline user session not found"}`))
 	msg := err.Error()
 	for _, want := range []string{"status=401", "code=12153", "Offline user session not found"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("error = %q, want it to contain %q", msg, want)
-		}
+		testutil.MustContain(t, msg, want)
 	}
 }
 
@@ -632,9 +563,7 @@ func TestFetchModels_FiltersCLIWhitelist(t *testing.T) {
 	for _, model := range models {
 		got = append(got, model.ID)
 	}
-	if strings.Join(got, ",") != "hy3,default-model" {
-		t.Fatalf("models = %v, want the cli whitelist minus disabled entries", got)
-	}
+	testutil.Equal(t, strings.Join(got, ","), "hy3,default-model")
 	if !models[0].SupportsTools || !models[0].SupportsReason || models[0].MaxInputTokens != 131072 || models[0].MaxOutputTokens != 8192 {
 		t.Fatalf("model capabilities were lost: %+v", models[0])
 	}
@@ -644,12 +573,8 @@ func TestTokenUpdater_PersistsRotatedRefreshToken(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-Refresh-Token"); got != "old-refresh" {
-			t.Errorf("X-Refresh-Token = %q, want old-refresh", got)
-		}
-		if got := r.Header.Get("X-Auth-Refresh-Source"); got != "plugin" {
-			t.Errorf("X-Auth-Refresh-Source = %q, want plugin", got)
-		}
+		testutil.CheckEqual(t, r.Header.Get("X-Refresh-Token"), "old-refresh")
+		testutil.CheckEqual(t, r.Header.Get("X-Auth-Refresh-Source"), "plugin")
 		_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"new-access","refreshToken":"new-refresh","expiresIn":86400}}`))
 	}))
 	defer srv.Close()
@@ -666,15 +591,11 @@ func TestTokenUpdater_PersistsRotatedRefreshToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RefreshNow() error = %v", err)
 	}
-	if refreshed.AccessToken != "new-access" {
-		t.Fatalf("access token = %q, want new-access", refreshed.AccessToken)
-	}
+	testutil.Equal(t, refreshed.AccessToken, "new-access")
 	if updater.saved == nil {
 		t.Fatal("rotated refresh token was not persisted")
 	}
-	if updater.saved.WorkBuddyRefreshToken != "new-refresh" {
-		t.Fatalf("persisted refresh token = %q", updater.saved.WorkBuddyRefreshToken)
-	}
+	testutil.Equal(t, updater.saved.WorkBuddyRefreshToken, "new-refresh")
 	if acc.WorkBuddyRefreshToken != "old-refresh" || acc.WorkBuddyAccessToken != "" {
 		t.Fatalf("refresh mutated the caller-owned account snapshot: %q/%q", acc.WorkBuddyRefreshToken, acc.WorkBuddyAccessToken)
 	}
@@ -718,9 +639,7 @@ func TestClientConcurrentFirstUseRefreshesOnlyOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := refreshes.Load(); got != 1 {
-		t.Fatalf("refresh calls = %d, want 1", got)
-	}
+	testutil.Equal(t, refreshes.Load(), 1)
 }
 
 type fakeUpdater struct {
@@ -759,15 +678,9 @@ func TestTokenUpdaterReportsPersistenceFailureAndRetriesWithoutRotatingAgain(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token != "new-access" {
-		t.Fatalf("token = %q", token)
-	}
-	if refreshes != 1 {
-		t.Fatalf("refresh calls = %d, want 1", refreshes)
-	}
-	if storeUpdater.calls != 2 {
-		t.Fatalf("persistence calls = %d, want failed write plus retry", storeUpdater.calls)
-	}
+	testutil.Equal(t, token, "new-access")
+	testutil.Equal(t, refreshes, 1)
+	testutil.Equal(t, storeUpdater.calls, 2)
 }
 
 func (f *fakeUpdater) UpdateAccount(_ context.Context, acc *store.Account) error {
@@ -782,15 +695,11 @@ func TestBuildMessages_DefaultSystemPromptOnly(t *testing.T) {
 	// A request without any history still has to produce a system-first pair,
 	// because the upstream rejects anything else with code=11128.
 	messages := buildMessages(upstream.UpstreamRequest{})
-	if len(messages) != 2 {
-		t.Fatalf("messages = %+v, want a system/user pair", messages)
-	}
+	testutil.Equal(t, len(messages), 2)
 	if messages[0].Role != "system" || messages[0].Content != defaultSystem {
 		t.Fatalf("messages[0] = %+v, want the default system prompt", messages[0])
 	}
-	if messages[1].Role != "user" {
-		t.Fatalf("messages[1] = %+v, want a user turn", messages[1])
-	}
+	testutil.Equal(t, messages[1].Role, "user")
 }
 
 func TestBuildBodyForwardsReasoningEffort(t *testing.T) {
@@ -802,12 +711,8 @@ func TestBuildBodyForwardsReasoningEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded map[string]interface{}
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if got := decoded["reasoning_effort"]; got != "high" {
-		t.Fatalf("reasoning_effort = %#v, want high", got)
-	}
+	testutil.NoError(t, json.Unmarshal(body, &decoded))
+	testutil.Equal(t, decoded["reasoning_effort"], "high")
 
 	// A silent request must still carry an effort. Omitting the field makes the
 	// upstream write its chain of thought into content, where the stream reader
@@ -818,12 +723,8 @@ func TestBuildBodyForwardsReasoningEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 	decoded = nil
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if got := decoded["reasoning_effort"]; got != DefaultReasoningEffort {
-		t.Fatalf("silent request reasoning_effort = %#v, want %q", got, DefaultReasoningEffort)
-	}
+	testutil.NoError(t, json.Unmarshal(body, &decoded))
+	testutil.Equal(t, decoded["reasoning_effort"], DefaultReasoningEffort)
 
 	// A stated effort still wins over the default, including a lower level.
 	body, err = NewFromAccount(nil, nil).buildBody(upstream.UpstreamRequest{ReasoningEffort: "low"})
@@ -831,12 +732,8 @@ func TestBuildBodyForwardsReasoningEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 	decoded = nil
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if got := decoded["reasoning_effort"]; got != "low" {
-		t.Fatalf("reasoning_effort = %#v, want low", got)
-	}
+	testutil.NoError(t, json.Unmarshal(body, &decoded))
+	testutil.Equal(t, decoded["reasoning_effort"], "low")
 
 	// "none" means the client asked for no reasoning; omit the field instead of
 	// sending a level the upstream would reject.
@@ -845,9 +742,7 @@ func TestBuildBodyForwardsReasoningEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 	decoded = nil
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(body, &decoded))
 	if _, present := decoded["reasoning_effort"]; present {
 		t.Fatalf("none must omit reasoning_effort, got %#v", decoded["reasoning_effort"])
 	}
@@ -868,15 +763,11 @@ func TestSilentRequestKeepsChainOfThoughtPrivate(t *testing.T) {
 			t.Fatal(err)
 		}
 		var decoded map[string]interface{}
-		if err := json.Unmarshal(body, &decoded); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, json.Unmarshal(body, &decoded))
 		got, present := decoded["reasoning_effort"]
 		if !present {
 			t.Fatalf("effort %q: reasoning_effort is missing; the upstream would inline its reasoning into content", effort)
 		}
-		if got != DefaultReasoningEffort {
-			t.Fatalf("effort %q: reasoning_effort = %#v, want %q", effort, got, DefaultReasoningEffort)
-		}
+		testutil.Equal(t, got, DefaultReasoningEffort)
 	}
 }

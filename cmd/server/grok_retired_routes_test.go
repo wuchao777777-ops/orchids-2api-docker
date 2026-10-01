@@ -5,35 +5,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
-
-	"orchids-api/internal/api"
 	"orchids-api/internal/config"
-	"orchids-api/internal/handler"
-	"orchids-api/internal/loadbalancer"
-	"orchids-api/internal/middleware"
-	"orchids-api/internal/store"
-	"orchids-api/internal/template"
+	"orchids-api/internal/testutil"
 )
 
 func TestRegisterRoutes_GrokConversationSurfacesAreRetired(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "retired-grok-routes:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
 	cfg := &config.Config{AdminUser: "admin", AdminPass: "secret", AdminToken: "admintoken", AdminPath: "/admin", AnonymousAllowIPs: []string{"192.0.2.1"}}
-	lb := loadbalancer.NewWithCacheTTL(s, 0)
-	h := handler.NewWithLoadBalancer(cfg, lb)
-	t.Cleanup(h.Close)
-	a := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
-	renderer, err := template.NewRenderer()
-	if err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	registerRoutes(mux, cfg, s, h, nil, a, middleware.NewConcurrencyLimiter(4, 0), nil, renderer)
+	mux, _, _ := newRouteMux(t, "retired-grok-routes:", cfg)
 
 	for _, path := range []string{
 		"/api/grok/tools/v1/models", "/api/grok/tools/v1/responses", "/api/grok/models",
@@ -57,9 +35,7 @@ func TestRegisterRoutes_GrokConversationSurfacesAreRetired(t *testing.T) {
 			req.Header.Set("X-Admin-Token", cfg.AdminToken)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
-			if rec.Code != http.StatusNotFound {
-				t.Errorf("GET %s = %d, want 404", path, rec.Code)
-			}
+			testutil.CheckEqual(t, rec.Code, http.StatusNotFound)
 		}
 	}
 
@@ -76,17 +52,13 @@ func TestRegisterRoutes_GrokConversationSurfacesAreRetired(t *testing.T) {
 		if authorized {
 			want = http.StatusOK
 		}
-		if rec.Code != want {
-			t.Errorf("GET /api/config/list (authorized=%v) = %d, want %d", authorized, rec.Code, want)
-		}
+		testutil.CheckEqual(t, rec.Code, want)
 	}
 	rec := httptest.NewRecorder()
 	oldReq := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	oldReq.Header.Set("X-Admin-Token", cfg.AdminToken)
 	mux.ServeHTTP(rec, oldReq)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("GET /api/config = %d, want 404", rec.Code)
-	}
+	testutil.CheckEqual(t, rec.Code, http.StatusNotFound)
 
 	// Local-only token-cache management no longer has a backing cache.
 	for _, path := range []string{"/api/token-cache/stats", "/api/token-cache/clear"} {
@@ -94,9 +66,7 @@ func TestRegisterRoutes_GrokConversationSurfacesAreRetired(t *testing.T) {
 		req.Header.Set("X-Admin-Token", cfg.AdminToken)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("GET %s = %d, want 404", path, rec.Code)
-		}
+		testutil.CheckEqual(t, rec.Code, http.StatusNotFound)
 	}
 
 	// These old management and media surfaces no longer have backing producers
@@ -112,18 +82,14 @@ func TestRegisterRoutes_GrokConversationSurfacesAreRetired(t *testing.T) {
 		req.Header.Set("X-Admin-Token", cfg.AdminToken)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("GET %s = %d, want 404", path, rec.Code)
-		}
+		testutil.CheckEqual(t, rec.Code, http.StatusNotFound)
 	}
 	for _, path := range []string{"/grok/v1/files/image/missing.jpg", "/v1/files/video/missing.mp4"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.RemoteAddr = "192.0.2.1:1234" // bypass the key guard to test routing
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("GET %s = %d, want 404", path, rec.Code)
-		}
+		testutil.CheckEqual(t, rec.Code, http.StatusNotFound)
 	}
 
 	rec = httptest.NewRecorder()

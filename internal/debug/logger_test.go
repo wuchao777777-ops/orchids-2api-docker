@@ -1,10 +1,10 @@
 package debug
 
 import (
+	"orchids-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -43,9 +43,7 @@ func TestLoggerLogInputTokenBreakdownWritesFile(t *testing.T) {
 		`"tools_tokens": 404`,
 		`"estimated_total": 1010`,
 	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("breakdown file missing %q, content=%s", want, content)
-		}
+		testutil.MustContain(t, content, want)
 	}
 }
 
@@ -73,12 +71,8 @@ func TestLoggerLogUpstreamRequestRedactsCredentials(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
 	content := string(raw)
-	if strings.Contains(content, "secret-jwt") || strings.Contains(content, "secret-cookie") {
-		t.Fatalf("credential leaked into debug log: %s", content)
-	}
-	if !strings.Contains(content, "[REDACTED]") {
-		t.Fatalf("expected redaction marker: %s", content)
-	}
+	testutil.MustNotContainAny(t, content, "secret-jwt", "secret-cookie")
+	testutil.MustContain(t, content, "[REDACTED]")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat(%q) error = %v", path, err)

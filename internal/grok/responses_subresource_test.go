@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // brokenResponsesStore stands in for a response backend that is configured but
@@ -61,9 +62,7 @@ func TestParseResponsesResourcePath(t *testing.T) {
 		if tc.wantAction == responsesActionCancel || tc.wantAction == responsesActionInputItems {
 			wantAction = tc.wantAction
 		}
-		if got := responsesSubResourceAction(tc.path); got != wantAction {
-			t.Fatalf("responsesSubResourceAction(%q) = %q, want %q", tc.path, got, wantAction)
-		}
+		testutil.Equal(t, responsesSubResourceAction(tc.path), wantAction)
 	}
 }
 
@@ -75,21 +74,15 @@ func TestResponsesInputItemsJSONNormalizesEveryInputShape(t *testing.T) {
 	t.Parallel()
 
 	var fromString []map[string]interface{}
-	if err := json.Unmarshal(responsesInputItemsJSON("hello"), &fromString); err != nil {
-		t.Fatalf("string input did not normalize: %v", err)
-	}
-	if len(fromString) != 1 {
-		t.Fatalf("string input = %#v, want one message item", fromString)
-	}
+	testutil.NoError(t, json.Unmarshal(responsesInputItemsJSON("hello"), &fromString), "string input did not normalize: %v")
+	testutil.Equal(t, len(fromString), 1)
 	if fromString[0]["type"] != "message" || fromString[0]["role"] != "user" {
 		t.Fatalf("string input item = %#v", fromString[0])
 	}
 	if !strings.HasPrefix(interfaceString(fromString[0]["id"]), "msg_") {
 		t.Fatalf("string input item id = %#v, want a msg_ id", fromString[0]["id"])
 	}
-	if fromString[0]["status"] != "completed" {
-		t.Fatalf("string input item status = %#v, want completed", fromString[0]["status"])
-	}
+	testutil.Equal(t, fromString[0]["status"], "completed")
 
 	var fromArray []map[string]interface{}
 	raw := []interface{}{
@@ -98,15 +91,9 @@ func TestResponsesInputItemsJSONNormalizesEveryInputShape(t *testing.T) {
 		}},
 		map[string]interface{}{"id": "fc_known", "type": "function_call", "call_id": "call_1", "name": "f"},
 	}
-	if err := json.Unmarshal(responsesInputItemsJSON(raw), &fromArray); err != nil {
-		t.Fatalf("array input did not normalize: %v", err)
-	}
-	if len(fromArray) != 2 {
-		t.Fatalf("array input = %#v, want two items", fromArray)
-	}
-	if fromArray[1]["id"] != "fc_known" {
-		t.Fatalf("client id was rewritten: %#v", fromArray[1]["id"])
-	}
+	testutil.NoError(t, json.Unmarshal(responsesInputItemsJSON(raw), &fromArray), "array input did not normalize: %v")
+	testutil.Equal(t, len(fromArray), 2)
+	testutil.Equal(t, fromArray[1]["id"], "fc_known")
 	for i, item := range fromArray {
 		if interfaceString(item["id"]) == "" || interfaceString(item["status"]) == "" {
 			t.Fatalf("item %d is missing id/status: %#v", i, item)
@@ -138,9 +125,7 @@ func TestResponsesInputItemsServesPersistedItems(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler(rec, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+id+"/input_items", nil))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var payload struct {
 		Object  string                   `json:"object"`
 		Data    []map[string]interface{} `json:"data"`
@@ -154,13 +139,9 @@ func TestResponsesInputItemsServesPersistedItems(t *testing.T) {
 		t.Fatalf("payload = %#v, want a one-item list", payload)
 	}
 	content, _ := payload.Data[0]["content"].([]interface{})
-	if len(content) != 1 {
-		t.Fatalf("item content = %#v", payload.Data[0]["content"])
-	}
+	testutil.Equal(t, len(content), 1)
 	part, _ := content[0].(map[string]interface{})
-	if part["text"] != "first turn" {
-		t.Fatalf("item text = %#v, want the input the response was created from", part["text"])
-	}
+	testutil.Equal(t, part["text"], "first turn")
 	if payload.FirstID == "" || payload.FirstID != payload.LastID {
 		t.Fatalf("first_id/last_id = %q/%q, want the single item id", payload.FirstID, payload.LastID)
 	}
@@ -173,12 +154,8 @@ func TestResponsesInputItemsUnknownResponseIs404(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/resp_missing/input_items", nil))
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 (body=%s)", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "response_not_found") {
-		t.Fatalf("body = %s, want the response_not_found envelope", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusNotFound)
+	testutil.MustContain(t, rec.Body.String(), "response_not_found")
 }
 
 func TestResponsesSubResourcesRejectWrongMethod(t *testing.T) {
@@ -191,9 +168,7 @@ func TestResponsesSubResourcesRejectWrongMethod(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Header().Get("Allow"), "POST") {
 		t.Fatalf("cancel GET: status=%d Allow=%q", rec.Code, rec.Header().Get("Allow"))
 	}
-	if !strings.Contains(rec.Body.String(), `"error"`) {
-		t.Fatalf("cancel GET body = %s, want the Responses error envelope", rec.Body.String())
-	}
+	testutil.MustContain(t, rec.Body.String(), `"error"`)
 
 	items := ResponsesInputItemsHandler(opts)
 	rec = httptest.NewRecorder()
@@ -223,9 +198,7 @@ func TestResponsesCancelFlipsStoredStatus(t *testing.T) {
 	cancel := ResponsesCancelHandler(opts)
 	first := httptest.NewRecorder()
 	cancel(first, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses/"+id+"/cancel", nil))
-	if first.Code != http.StatusOK {
-		t.Fatalf("cancel status = %d, body=%s", first.Code, first.Body.String())
-	}
+	testutil.Equal(t, first.Code, http.StatusOK)
 	var cancelled map[string]interface{}
 	if err := json.Unmarshal(first.Body.Bytes(), &cancelled); err != nil {
 		t.Fatalf("decode cancel body: %v (%s)", err, first.Body.String())
@@ -234,26 +207,18 @@ func TestResponsesCancelFlipsStoredStatus(t *testing.T) {
 		t.Fatalf("cancel body = %#v", cancelled)
 	}
 	output, _ := cancelled["output"].([]interface{})
-	if len(output) != 1 {
-		t.Fatalf("cancel body output = %#v", cancelled["output"])
-	}
+	testutil.Equal(t, len(output), 1)
 
 	record, err := opts.store().GetStoredResponse(nil, id, "anonymous") //nolint:staticcheck // see above
 	if err != nil {
 		t.Fatalf("GetStoredResponse() error = %v", err)
 	}
-	if !strings.Contains(string(record.Body), `"status":"cancelled"`) {
-		t.Fatalf("cancel was not persisted: %s", record.Body)
-	}
+	testutil.MustContain(t, string(record.Body), `"status":"cancelled"`)
 
 	second := httptest.NewRecorder()
 	cancel(second, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses/"+id+"/cancel", nil))
-	if second.Code != http.StatusOK {
-		t.Fatalf("second cancel status = %d, body=%s", second.Code, second.Body.String())
-	}
-	if second.Body.String() != first.Body.String() {
-		t.Fatalf("cancel is not idempotent:\nfirst=%s\nsecond=%s", first.Body.String(), second.Body.String())
-	}
+	testutil.Equal(t, second.Code, http.StatusOK)
+	testutil.Equal(t, second.Body.String(), first.Body.String())
 }
 
 func TestResponsesCancelUnknownResponseIs404(t *testing.T) {
@@ -283,9 +248,7 @@ func TestResponsesCancelAnswersBuildOwnershipRecords(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ResponsesCancelHandler(opts)(rec, httptest.NewRequest(http.MethodPost, "/grok/v1/responses/"+id+"/cancel", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var decoded map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
@@ -311,15 +274,11 @@ func TestResponsesBridgeForwardsTextFormatAndInclude(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/qoder/v1/responses", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	bridge(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(calls) != 1 {
-		t.Fatalf("inner chat calls = %d, want 1", len(calls))
-	}
+	testutil.Equal(t, len(calls), 1)
 	inner := calls[0].body
 	format, _ := inner["response_format"].(map[string]interface{})
 	if format == nil || format["type"] != "json_schema" || format["name"] != "answer" {
@@ -349,9 +308,7 @@ func TestResponsesBridgePrefersTextFormatOverResponseFormat(t *testing.T) {
 		`"text":{"format":{"type":"json_object"}}}`
 	rec := httptest.NewRecorder()
 	bridge(rec, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses", strings.NewReader(body)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -379,17 +336,13 @@ func TestResponsesBridgeMemoryFallbackStoresResponses(t *testing.T) {
 	create := httptest.NewRecorder()
 	bridge(create, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"hi","store":true}`)))
-	if create.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
-	}
+	testutil.Equal(t, create.Code, http.StatusOK)
 	var created map[string]interface{}
 	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode: %v (%s)", err, create.Body.String())
 	}
 	responseID, _ := created["id"].(string)
-	if responseID == "" {
-		t.Fatalf("no response id in %s", create.Body.String())
-	}
+	testutil.NotEqual(t, responseID, "")
 
 	get := httptest.NewRecorder()
 	resource(get, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID, nil))
@@ -410,8 +363,7 @@ func TestResponsesBridgeMemoryFallbackStoresResponses(t *testing.T) {
 // proven to survive the JSON path rather than only the in-process store. A
 // sibling replica serving the next call reads the record through the same path.
 func TestResponsesSubResourcesRoundTripThroughRedis(t *testing.T) {
-	_, s, mini := setupValidationHandler(t)
-	defer func() { _ = s.Close(); mini.Close() }()
+	_, s, _ := setupValidationHandler(t)
 
 	opts := ResponsesBridgeOptions{Store: s}
 	chat := func(w http.ResponseWriter, r *http.Request) {
@@ -423,17 +375,13 @@ func TestResponsesSubResourcesRoundTripThroughRedis(t *testing.T) {
 	create := httptest.NewRecorder()
 	ResponsesBridgeHandler(chat, opts)(create, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"remember this turn","store":true}`)))
-	if create.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
-	}
+	testutil.Equal(t, create.Code, http.StatusOK)
 	var created map[string]interface{}
 	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v (%s)", err, create.Body.String())
 	}
 	responseID, _ := created["id"].(string)
-	if responseID == "" {
-		t.Fatalf("create carried no id: %s", create.Body.String())
-	}
+	testutil.NotEqual(t, responseID, "")
 
 	items := httptest.NewRecorder()
 	ResponsesInputItemsHandler(opts)(items, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID+"/input_items", nil))
@@ -494,9 +442,7 @@ func TestResponsesUnifiedResourceHandsTheRecordToItsOwner(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		handler(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/"+id, nil))
-		if nativeCalls != 0 {
-			t.Fatalf("the native handler served a bridged record (%d calls)", nativeCalls)
-		}
+		testutil.Equal(t, nativeCalls, 0)
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bridge") {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}
@@ -513,12 +459,8 @@ func TestResponsesUnifiedResourceHandsTheRecordToItsOwner(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		handler(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/"+id, nil))
-		if nativeCalls != 1 {
-			t.Fatalf("native handler calls = %d, want 1", nativeCalls)
-		}
-		if !strings.Contains(rec.Body.String(), "native") {
-			t.Fatalf("body = %s", rec.Body.String())
-		}
+		testutil.Equal(t, nativeCalls, 1)
+		testutil.MustContain(t, rec.Body.String(), "native")
 	})
 
 	// An id that was never stored is answered by the dispatcher itself: the
@@ -533,9 +475,7 @@ func TestResponsesUnifiedResourceHandsTheRecordToItsOwner(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		handler(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/resp_absent", nil))
-		if nativeCalls != 0 {
-			t.Fatalf("native handler calls = %d, want 0: a miss needs no provider", nativeCalls)
-		}
+		testutil.Equal(t, nativeCalls, 0)
 		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "response_not_found") {
 			t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
 		}
@@ -553,12 +493,8 @@ func TestResponsesUnifiedResourceHandsTheRecordToItsOwner(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		handler(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/resp_any", nil))
-		if nativeCalls != 1 {
-			t.Fatalf("native handler calls = %d, want 1", nativeCalls)
-		}
-		if !strings.Contains(rec.Body.String(), "store unavailable") {
-			t.Fatalf("body = %s", rec.Body.String())
-		}
+		testutil.Equal(t, nativeCalls, 1)
+		testutil.MustContain(t, rec.Body.String(), "store unavailable")
 	})
 
 	t.Run("sibling_actions_bypass_the_provider_decision", func(t *testing.T) {
@@ -570,9 +506,7 @@ func TestResponsesUnifiedResourceHandsTheRecordToItsOwner(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		handler(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/"+id+"/input_items", nil))
-		if nativeCalls != 0 {
-			t.Fatalf("the provider decision ran for input_items (%d native calls)", nativeCalls)
-		}
+		testutil.Equal(t, nativeCalls, 0)
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"object":"list"`) {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}

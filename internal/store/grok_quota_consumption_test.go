@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"sync"
 	"testing"
 	"time"
@@ -14,9 +15,7 @@ func TestClaimGrokPaidQuotaProbeIsBoundedAndAtomic(t *testing.T) {
 	now := time.Now().UTC()
 	acc := &Account{AccountType: "grok", Enabled: true, GrokProvider: "build", Subscription: "super",
 		GrokBilling: GrokBillingSnapshot{SyncedAt: now.Add(-time.Hour), Monthly: GrokQuotaWindow{HasLimit: true, Limit: 100, HasRemaining: true, Remaining: 0, ResetAt: now.Add(-time.Second)}}}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc))
 
 	claims := make(chan bool, 8)
 	var wg sync.WaitGroup
@@ -39,9 +38,7 @@ func TestClaimGrokPaidQuotaProbeIsBoundedAndAtomic(t *testing.T) {
 			count++
 		}
 	}
-	if count != 1 {
-		t.Fatalf("claims=%d want 1", count)
-	}
+	testutil.Equal(t, count, 1)
 	got, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -64,9 +61,7 @@ func TestClaimGrokPaidQuotaProbeWaitsForPeriodEnd(t *testing.T) {
 	now := time.Now().UTC()
 	acc := &Account{AccountType: "grok", Enabled: true, GrokBilling: GrokBillingSnapshot{SyncedAt: now,
 		Weekly: GrokQuotaWindow{HasUsage: true, UsagePercent: 100, ResetAt: now.Add(time.Hour)}}}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc))
 	claimed, err := s.ClaimGrokPaidQuotaProbe(ctx, acc.ID, now)
 	if err != nil || claimed {
 		t.Fatalf("claim before period end=%v err=%v", claimed, err)

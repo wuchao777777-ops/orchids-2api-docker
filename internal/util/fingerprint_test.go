@@ -1,6 +1,9 @@
 package util
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 // TestFingerprint_StableAndNonReversible pins the two properties the account
 // table relies on: the same secret always maps to the same short id, different
@@ -12,12 +15,8 @@ func TestFingerprint_StableAndNonReversible(t *testing.T) {
 	if first == "" || len(first) != 12 {
 		t.Fatalf("Fingerprint() = %q, want 12 hex characters", first)
 	}
-	if first != second {
-		t.Fatalf("fingerprint is not stable across whitespace: %q vs %q", first, second)
-	}
-	if other := Fingerprint("workbuddy-session-token-abcdeg"); other == first {
-		t.Fatal("different secrets must not share a fingerprint")
-	}
+	testutil.Equal(t, first, second)
+	testutil.NotEqual(t, Fingerprint("workbuddy-session-token-abcdeg"), first)
 	if Fingerprint("") != "" {
 		t.Fatal("an empty secret has no fingerprint")
 	}

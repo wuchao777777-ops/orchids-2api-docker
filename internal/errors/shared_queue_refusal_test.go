@@ -1,6 +1,9 @@
 package errors
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 // TestClassifySharedQueueRefusalDoesNotRotate pins that every shape of a
 // shared/upstream-wide queue refusal is recognised. Falling through to the
@@ -24,9 +27,7 @@ func TestClassifySharedQueueRefusalDoesNotRotate(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			class := ClassifyUpstreamError(tc.message)
-			if class.Category != tc.category {
-				t.Errorf("category = %q, want %q", class.Category, tc.category)
-			}
+			testutil.CheckEqual(t, class.Category, tc.category)
 			if class.SwitchAccount {
 				t.Error("SwitchAccount = true; every account meets the identical refusal")
 			}
@@ -44,9 +45,7 @@ func TestClassifyEscapedMarkersSurviveNesting(t *testing.T) {
 	// No 10605 anywhere: the classification has to come from the escaped flags.
 	const escapedNoCode = `qoder upstream rejected the credential: {"message":"{\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"waitTime\":30}"}`
 	class := ClassifyUpstreamError(escapedNoCode)
-	if class.Category != "upstream_queue" {
-		t.Fatalf("category = %q, want upstream_queue for an escaped closed-gate payload", class.Category)
-	}
+	testutil.Equal(t, class.Category, "upstream_queue")
 	if class.SwitchAccount {
 		t.Fatal("SwitchAccount = true; a closed gate is identical for every account")
 	}
@@ -55,9 +54,7 @@ func TestClassifyEscapedMarkersSurviveNesting(t *testing.T) {
 	// 10605: the credential branch used to win and the handler rotated the pool.
 	escapedUnder401 := `qoder gateway is busy: qoder API error: status=401, method=POST, path=/algo/api/v2/chat, code=10605, message={\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"retryAfterSeconds\":30}`
 	class = ClassifyUpstreamError(escapedUnder401)
-	if class.Category != "upstream_queue" {
-		t.Fatalf("category = %q, want upstream_queue; a 401 envelope must not outrank the shared refusal", class.Category)
-	}
+	testutil.Equal(t, class.Category, "upstream_queue")
 	if class.SwitchAccount {
 		t.Fatal("SwitchAccount = true; the 401 envelope made the handler rotate the whole pool")
 	}
@@ -74,9 +71,7 @@ func TestClassifyOrdinaryThrottleStillSwitches(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			class := ClassifyUpstreamError(message)
-			if class.Category != "rate_limit" {
-				t.Errorf("category = %q, want rate_limit", class.Category)
-			}
+			testutil.CheckEqual(t, class.Category, "rate_limit")
 			if !class.SwitchAccount {
 				t.Error("SwitchAccount = false; an account-scoped throttle must still rotate")
 			}

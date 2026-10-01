@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"orchids-api/internal/audit"
+	"orchids-api/internal/testutil"
 )
 
 // requestEvent builds an inference record the way the request middleware writes it:
@@ -96,13 +97,9 @@ func TestJournalRecordsPagingReturnsEveryRecord(t *testing.T) {
 		}
 	}
 
-	if len(seen) != total {
-		t.Fatalf("paging reached %d of %d stored requests: matches are skipped by the cursor", len(seen), total)
-	}
-	for id, count := range seen {
-		if count != 1 {
-			t.Fatalf("request %s was listed %d times: the cursor re-reads rows", id, count)
-		}
+	testutil.Equal(t, len(seen), total)
+	for _, count := range seen {
+		testutil.Equal(t, count, 1)
 	}
 }
 
@@ -166,9 +163,7 @@ func TestJournalRecordsAppliesTimeAndOutcomeFilters(t *testing.T) {
 	// cannot tell a filtered list from an empty one.
 	payload := journalRequest(t, a, "?kind=request&outcome=failed&since="+boundary)
 	used, _ := payload["filter_used"].(map[string]interface{})
-	if used["outcome_label"] != "失败（全部失败类型）" {
-		t.Fatalf("filter_used.outcome_label = %v", used["outcome_label"])
-	}
+	testutil.Equal(t, used["outcome_label"], "失败（全部失败类型）")
 	if used["since"] == nil {
 		t.Fatal("filter_used.since is missing: the coverage note cannot warn about the retention edge")
 	}
@@ -218,9 +213,7 @@ func TestJournalRecordsOutcomeClassMatchesOverview(t *testing.T) {
 		"req-error-200": "failed",
 	}
 	for id, class := range want {
-		if classes[id] != class {
-			t.Fatalf("%s outcome_class = %q, want %q", id, classes[id], class)
-		}
+		testutil.Equal(t, classes[id], class)
 	}
 }
 
@@ -234,12 +227,8 @@ func TestJournalRecordsRejectsUnparseableTimeFilter(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/journal/records?since=yesterday", nil)
 	recorder := httptest.NewRecorder()
 	a.HandleJournalRecords(recorder, request)
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for an unparseable since", recorder.Code)
-	}
-	if recorder.Body.String() == "" {
-		t.Fatal("a refused filter must say what was wrong")
-	}
+	testutil.Equal(t, recorder.Code, http.StatusBadRequest)
+	testutil.NotEqual(t, recorder.Body.String(), "")
 }
 
 // TestJournalRecordsRecoversAttemptsBehindThePageWindow pins the fifth reported
@@ -264,18 +253,12 @@ func TestJournalRecordsRecoversAttemptsBehindThePageWindow(t *testing.T) {
 	// limit=1 makes the scan window six entries: the attempt stays far outside it.
 	payload := journalRequest(t, a, "?kind=request&limit=1")
 	rows, _ := payload["data"].([]interface{})
-	if len(rows) != 1 {
-		t.Fatalf("rows = %d, want the single request", len(rows))
-	}
+	testutil.Equal(t, len(rows), 1)
 	row, _ := rows[0].(map[string]interface{})
 	attempts, _ := row["attempts"].([]interface{})
-	if len(attempts) != 1 {
-		t.Fatalf("attempts = %d, want the retained upstream attempt", len(attempts))
-	}
+	testutil.Equal(t, len(attempts), 1)
 	attempt, _ := attempts[0].(map[string]interface{})
-	if attempt["request_id"] != "req-old" {
-		t.Fatalf("attached attempt = %v, want req-old", attempt["request_id"])
-	}
+	testutil.Equal(t, attempt["request_id"], "req-old")
 
 	// The lookback must not move the cursor: the next page still starts before the
 	// last row shown, so no record behind it is skipped.

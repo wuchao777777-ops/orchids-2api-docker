@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +14,8 @@ import (
 )
 
 func main() {
+	check := flag.Bool("check", false, "check the generated manifest without writing it")
+	flag.Parse()
 	definitions := channel.All()
 	rows := make([]string, 0, len(definitions))
 	for _, definition := range definitions {
@@ -39,6 +43,19 @@ func main() {
   });
 })();
 `
+	if *check {
+		current, err := os.ReadFile("web/static/js/provider-registry.js")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if !bytes.Equal(current, []byte(content)) {
+			fmt.Fprintln(os.Stderr, "provider-registry.js is stale; run: go run ./cmd/providerregistry")
+			os.Exit(1)
+		}
+		fmt.Println("provider registry matches backend definitions")
+		return
+	}
 	if err := os.WriteFile("web/static/js/provider-registry.js", []byte(content), 0o644); err != nil {
 		panic(err)
 	}

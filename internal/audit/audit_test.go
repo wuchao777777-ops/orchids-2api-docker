@@ -2,10 +2,12 @@ package audit
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 
 	"encoding/json"
+
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
@@ -42,9 +44,7 @@ func readLoggedEvents(t *testing.T, logger *RedisLogger, count int64) []Event {
 			t.Fatalf("audit event data has type %T", msg.Values["data"])
 		}
 		var event Event
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, json.Unmarshal([]byte(data), &event))
 		events = append(events, event)
 	}
 	return events
@@ -73,17 +73,11 @@ func TestRedisLoggerLog(t *testing.T) {
 	logger.Close()
 
 	events := readLoggedEvents(t, logger, 10)
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(events))
-	}
+	testutil.Equal(t, len(events), 2)
 
 	// Results are reverse-chronological
-	if events[0].Action != "image_generate" {
-		t.Fatalf("expected image_generate first (newest), got %s", events[0].Action)
-	}
-	if events[1].Action != "chat_request" {
-		t.Fatalf("expected chat_request second (oldest), got %s", events[1].Action)
-	}
+	testutil.Equal(t, events[0].Action, "image_generate")
+	testutil.Equal(t, events[1].Action, "chat_request")
 }
 
 func TestRedisLoggerTimestamp(t *testing.T) {
@@ -105,9 +99,7 @@ func TestRedisLoggerTimestamp(t *testing.T) {
 
 func TestLegacyEventUsageFieldsDefaultEmpty(t *testing.T) {
 	var decoded Event
-	if err := json.Unmarshal([]byte(`{"action":"chat_request","status":"success","input_tokens":3,"output_tokens":4}`), &decoded); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(`{"action":"chat_request","status":"success","input_tokens":3,"output_tokens":4}`), &decoded))
 	if decoded.TotalTokens != 0 || decoded.UsageSource != "" {
 		t.Fatalf("legacy defaults are not backward-compatible: %+v", decoded)
 	}

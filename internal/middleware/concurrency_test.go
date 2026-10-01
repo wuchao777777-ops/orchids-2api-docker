@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,15 +35,9 @@ func TestLimiterRejectsImmediatelyWhenBusyWithOpenAIError(t *testing.T) {
 	if elapsed >= 100*time.Millisecond {
 		t.Fatalf("overloaded request waited %s; want immediate rejection", elapsed)
 	}
-	if recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d want=%d", recorder.Code, http.StatusServiceUnavailable)
-	}
-	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
-		t.Fatalf("Content-Type=%q want application/json", got)
-	}
-	if got := recorder.Header().Get("Retry-After"); got != "1" {
-		t.Fatalf("Retry-After=%q want 1", got)
-	}
+	testutil.Equal(t, recorder.Code, http.StatusServiceUnavailable)
+	testutil.Equal(t, recorder.Header().Get("Content-Type"), "application/json")
+	testutil.Equal(t, recorder.Header().Get("Retry-After"), "1")
 	var envelope struct {
 		Error struct {
 			Message string  `json:"message"`
@@ -59,9 +54,7 @@ func TestLimiterRejectsImmediatelyWhenBusyWithOpenAIError(t *testing.T) {
 		envelope.Error.Code != "server_overloaded" || envelope.Error.Param != nil {
 		t.Fatalf("unexpected OpenAI error envelope: %+v", envelope.Error)
 	}
-	if got := atomic.LoadInt64(&cl.rejectedReqs); got != 1 {
-		t.Fatalf("rejectedReqs=%d want=1", got)
-	}
+	testutil.Equal(t, atomic.LoadInt64(&cl.rejectedReqs), 1)
 
 	close(release)
 	<-done
@@ -81,7 +74,5 @@ func TestLimitPreservesExecutionTimeout(t *testing.T) {
 	if got := <-contextErr; got == nil {
 		t.Fatal("ordinary limiter did not apply execution timeout")
 	}
-	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("status=%d want=%d", recorder.Code, http.StatusNoContent)
-	}
+	testutil.Equal(t, recorder.Code, http.StatusNoContent)
 }

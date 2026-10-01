@@ -2,10 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // accountSecretFields is every field on a stored account that carries a
@@ -30,6 +32,79 @@ var accountSecretFields = map[string]func(*store.Account) string{
 	"qoder_runtime_key":   func(a *store.Account) string { return a.QoderRuntimeKey },
 	"cline_access_token":  func(a *store.Account) string { return a.ClineAccessToken },
 	"cline_refresh_token": func(a *store.Account) string { return a.ClineRefreshToken },
+}
+
+// TestAccountSecretFieldsAreComplete makes every new Account field require an
+// explicit security review. Name heuristics alone miss credentials called things
+// like runtime_info, so even non-secret fields are explicitly classified here.
+func TestAccountSecretFieldsAreComplete(t *testing.T) {
+	nonSecret := map[string]bool{}
+	for _, name := range strings.Fields(`
+		ID Name AccountType UserID AgentMode Email Weight MaxConcurrent Enabled
+		Subscription UsageCurrent UsageTotal UsageLimit TokensToday TokensDate
+		StatusCode AuthStatus RateLimitFailures QualityFailures QualityCooldownUntil
+		StatusMessage LastAttempt VerifiedAt ClearVerifiedAt QuotaResetAt RequestCount
+		LastUsedAt CreatedAt UpdatedAt CredentialType OAuthExpiresAt TeamID
+		GrokProvider GrokModels GrokModelCatalog GrokModelsSyncedAt GrokBilling
+		GrokRateLimits GrokFreeQuota ModelCooldowns ModelCooldownReasons
+		WorkBuddyExpiresAt WorkBuddyUID ReplaceWorkBuddyCredentials WorkBuddyModelIDs
+		WorkBuddyModelsSyncedAt WorkBuddyQuota QoderExpiresAt ReplaceQoderCredentials
+		QoderMachineID QoderUserID QoderUserName QoderOrganizationID
+		QoderOrganizationTags QoderDataPolicy QoderModelIDs QoderModelsSyncedAt QoderQuota
+		ClineExpiresAt ClineEmail ClinePlan ReplaceClineCredentials ClineModelIDs
+		ClineModelsSyncedAt
+	`) {
+		nonSecret[name] = true
+	}
+	accountType := reflect.TypeOf(store.Account{})
+	seenSecrets := map[string]bool{}
+	seenNonSecrets := map[string]bool{}
+	for i := 0; i < accountType.NumField(); i++ {
+		field := accountType.Field(i)
+		key := strings.Split(field.Tag.Get("json"), ",")[0]
+		read, secret := accountSecretFields[key]
+		if secret && nonSecret[field.Name] {
+			t.Errorf("%s is classified as both secret and non-secret", field.Name)
+		}
+		if !secret {
+			if !nonSecret[field.Name] {
+				t.Errorf("new account field %s (%q) needs explicit secret/non-secret classification", field.Name, key)
+			}
+			seenNonSecrets[field.Name] = true
+			continue
+		}
+		seenSecrets[key] = true
+		if field.Type.Kind() != reflect.String {
+			t.Errorf("secret field %s needs a guard for its new type %s", field.Name, field.Type)
+			continue
+		}
+		set, ok := accountSecretSetter[key]
+		if !ok {
+			t.Errorf("secret field %q has no setter", key)
+			continue
+		}
+		acc := &store.Account{}
+		value := marker + key
+		set(acc, value)
+		if read(acc) != value || reflect.ValueOf(acc).Elem().Field(i).String() != value {
+			t.Errorf("secret getter/setter %q do not target Account.%s", key, field.Name)
+		}
+	}
+	for key := range accountSecretFields {
+		if !seenSecrets[key] {
+			t.Errorf("secret guard %q has no corresponding Account field", key)
+		}
+	}
+	for key := range accountSecretSetter {
+		if _, ok := accountSecretFields[key]; !ok {
+			t.Errorf("secret setter %q has no corresponding getter", key)
+		}
+	}
+	for name := range nonSecret {
+		if !seenNonSecrets[name] {
+			t.Errorf("non-secret classification %q has no corresponding Account field", name)
+		}
+	}
 }
 
 // accountChannels are the channels the account API serves. Every one of them goes
@@ -104,12 +179,8 @@ func TestAccountResponsesNeverCarryCredentials(t *testing.T) {
 			}
 			// Presence, not the value, is how the table proves a credential exists.
 			var row map[string]interface{}
-			if err := json.Unmarshal(raw, &row); err != nil {
-				t.Fatalf("decode rendered account: %v", err)
-			}
-			if row["has_credential"] != true {
-				t.Fatalf(`${channel}: has_credential = %v, want true`, row["has_credential"])
-			}
+			testutil.NoError(t, json.Unmarshal(raw, &row), "decode rendered account: %v")
+			testutil.Equal(t, row["has_credential"], true)
 		})
 	}
 }
@@ -124,9 +195,7 @@ func TestAccountResponsesHideCredentialKeys(t *testing.T) {
 		t.Fatalf("marshal account output: %v", err)
 	}
 	var row map[string]interface{}
-	if err := json.Unmarshal(raw, &row); err != nil {
-		t.Fatalf("decode rendered account: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &row), "decode rendered account: %v")
 	for field := range accountSecretFields {
 		if _, exists := row[field]; exists {
 			t.Errorf("credential field %q was returned", field)

@@ -9,6 +9,7 @@ import (
 
 	"encoding/json"
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestGenerationControlsReachUpstream(t *testing.T) {
@@ -44,17 +45,13 @@ func TestGenerationControlsReachUpstream(t *testing.T) {
 
 func TestGenerationControlsOmittedAndInvalid(t *testing.T) {
 	var req ClaudeRequest
-	if err := json.Unmarshal([]byte(`{"messages":[],"stop":null}`), &req); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(`{"messages":[],"stop":null}`), &req))
 	if req.outputTokenLimit() != nil || req.Temperature != nil || req.TopP != nil || req.stopSequences() != nil {
 		t.Fatal("omitted controls acquired defaults")
 	}
 	for _, raw := range []string{`{"stop":[]}`, `{"stop_sequences":[]}`} {
 		var empty ClaudeRequest
-		if err := json.Unmarshal([]byte(raw), &empty); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, json.Unmarshal([]byte(raw), &empty))
 		if got := empty.stopSequences(); got == nil || len(got) != 0 {
 			t.Fatalf("explicit empty stop lost: %#v", got)
 		}
@@ -66,12 +63,8 @@ func TestGenerationControlsOmittedAndInvalid(t *testing.T) {
 
 func TestQoderSharedRefusalPreservesFullHintOnlyForQoder(t *testing.T) {
 	for _, retry := range []int{1, 2, 3, 4} {
-		if got := sharedRefusalWaitForChannel(30*time.Second, retry, "Qoder"); got != 30*time.Second {
-			t.Fatalf("retry %d wait %v", retry, got)
-		}
-		if got := sharedRefusalWaitForChannel(30*time.Second, retry, "workbuddy"); got != sharedRefusalWait(30*time.Second, retry) {
-			t.Fatalf("other channel changed: %v", got)
-		}
+		testutil.Equal(t, sharedRefusalWaitForChannel(30*time.Second, retry, "Qoder"), 30*time.Second)
+		testutil.Equal(t, sharedRefusalWaitForChannel(30*time.Second, retry, "workbuddy"), sharedRefusalWait(30*time.Second, retry))
 	}
 }
 
@@ -84,12 +77,8 @@ func TestCountTokensIncludesEntireRequest(t *testing.T) {
 		var got struct {
 			InputTokens int `json:"input_tokens"`
 		}
-		if rec.Code != 200 {
-			t.Fatalf("status=%d %s", rec.Code, rec.Body.String())
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-			t.Fatal(err)
-		}
+		testutil.Equal(t, rec.Code, 200)
+		testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 		return got.InputTokens
 	}
 	base := count(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)

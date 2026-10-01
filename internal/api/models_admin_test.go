@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func seedAdminModels(t *testing.T, s *store.Store, models ...*store.Model) {
@@ -29,9 +30,7 @@ func TestHandleModelsStaysABareArrayWithoutPaging(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.HandleModels(rec, httptest.NewRequest(http.MethodGet, "/api/models", nil))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var bare []store.Model
 	if err := json.Unmarshal(rec.Body.Bytes(), &bare); err != nil {
 		t.Fatalf("legacy array decode failed: %v (body=%s)", err, rec.Body.String())
@@ -64,9 +63,7 @@ func TestHandleModelsServesPagedEnvelopeOnRequest(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	a.HandleModels(rec, httptest.NewRequest(http.MethodGet, "/api/models?page=2&pageSize=2&search=grok", nil))
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("filtered envelope decode failed: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope), "filtered envelope decode failed: %v")
 	if envelope.Total != 2 || len(envelope.Items) != 0 {
 		t.Fatalf("search+page envelope=%+v", envelope)
 	}
@@ -74,10 +71,6 @@ func TestHandleModelsServesPagedEnvelopeOnRequest(t *testing.T) {
 	// pageSize is clamped so one request cannot dump the whole table.
 	rec = httptest.NewRecorder()
 	a.HandleModels(rec, httptest.NewRequest(http.MethodGet, "/api/models?pageSize=100000", nil))
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("clamped envelope decode failed: %v", err)
-	}
-	if envelope.PageSize != maxAdminModelPageSize {
-		t.Fatalf("pageSize=%d want %d", envelope.PageSize, maxAdminModelPageSize)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope), "clamped envelope decode failed: %v")
+	testutil.Equal(t, envelope.PageSize, maxAdminModelPageSize)
 }

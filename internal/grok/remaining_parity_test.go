@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 
@@ -46,9 +47,7 @@ func TestRemainingSearchRestrictionsValidationAndWire(t *testing.T) {
 			t.Fatal(err)
 		}
 		data, _ := json.Marshal(payload)
-		if !strings.Contains(string(data), "example.com") {
-			t.Fatal("wire lost domain")
-		}
+		testutil.MustContain(t, string(data), "example.com")
 	}
 }
 
@@ -63,9 +62,7 @@ func TestRemainingRefusalNonstream(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &chat)
 	for _, v := range []map[string]interface{}{anthropicResponseFromChat("grok-4.6", chat), responsesObjectFromChat("grok-4.6", chat)} {
 		b, _ := json.Marshal(v)
-		if !strings.Contains(string(b), "Cannot help.") {
-			t.Fatal(string(b))
-		}
+		testutil.MustContain(t, string(b), "Cannot help.")
 	}
 
 }
@@ -95,9 +92,7 @@ func TestRemainingResponsesSearchCitationsAndUsage(t *testing.T) {
 		t.Fatal(v)
 	}
 	b, _ := json.Marshal(v)
-	if !strings.Contains(string(b), `"text":" answer "`) || !strings.Contains(string(b), `"cached_tokens":3`) || !strings.Contains(string(b), `"reasoning_tokens":2`) {
-		t.Fatal(string(b))
-	}
+	testutil.MustContainAll(t, string(b), `"text":" answer "`, `"cached_tokens":3`, `"reasoning_tokens":2`)
 }
 
 func TestRemainingResponsesRejectsBadToolAndPreservesIncomplete(t *testing.T) {
@@ -137,9 +132,7 @@ func TestRemainingEarlyMessagesSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(messages.String(), "synthetic-signature") {
-		t.Fatal("signature on output_item.added lost on Messages")
-	}
+	testutil.MustContain(t, messages.String(), "synthetic-signature")
 }
 
 func remainingChatFrame(delta map[string]interface{}, finish interface{}) string {
@@ -170,9 +163,7 @@ func TestRemainingTerminalSignature(t *testing.T) {
 	if out.Err != nil {
 		t.Fatal(out.Err)
 	}
-	if !strings.Contains(body, "synthetic-signature") {
-		t.Fatal("readable reasoning emitted but terminal-only encrypted signature lost")
-	}
+	testutil.MustContain(t, body, "synthetic-signature")
 }
 func TestRemainingRefusal(t *testing.T) {
 	body, out := parityRun(t, parityFrame("response.refusal.delta", map[string]interface{}{"delta": "I cannot help with that."})+parityTerminal("response.completed"))
@@ -182,9 +173,7 @@ func TestRemainingRefusal(t *testing.T) {
 }
 func TestRemainingResponsesLength(t *testing.T) {
 	v := remainingResponse(t, remainingChatFrame(map[string]interface{}{"content": "partial"}, nil)+remainingChatFrame(map[string]interface{}{}, "length")+"data: [DONE]\n\n")
-	if v["status"] != "incomplete" {
-		t.Fatalf("length became status=%v", v["status"])
-	}
+	testutil.Equal(t, v["status"], "incomplete")
 }
 func TestRemainingResponsesReasoningIdentity(t *testing.T) {
 	s := remainingChatFrame(map[string]interface{}{"reasoning_content": "first ", "reasoning_item_id": "rs_1"}, nil) + remainingChatFrame(map[string]interface{}{"content": "A"}, nil) + remainingChatFrame(map[string]interface{}{"reasoning_content": "second", "reasoning_item_id": "rs_2"}, nil) + remainingChatFrame(map[string]interface{}{}, "stop") + "data: [DONE]\n\n"
@@ -204,9 +193,7 @@ func TestRemainingResponsesReasoningIdentity(t *testing.T) {
 }
 func TestRemainingResponsesMalformedFrame(t *testing.T) {
 	v := remainingResponse(t, remainingChatFrame(map[string]interface{}{"content": "partial"}, nil)+"data: {broken\n\n"+"data: [DONE]\n\n")
-	if v["status"] != "failed" {
-		t.Fatalf("malformed frame and missing finish_reason became status=%v", v["status"])
-	}
+	testutil.Equal(t, v["status"], "failed")
 }
 func TestRemainingSearchDomainRestriction(t *testing.T) {
 	var req anthropicMessagesRequest
@@ -216,9 +203,7 @@ func TestRemainingSearchDomainRestriction(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(out.ResponsesTools)
-	if !strings.Contains(string(b), "example.com") {
-		t.Fatalf("allowed_domains dropped: %s", b)
-	}
+	testutil.MustContain(t, string(b), "example.com")
 }
 
 func TestRemainingResponsesUsageDetails(t *testing.T) {
@@ -233,9 +218,7 @@ func TestRemainingTerminalCitations(t *testing.T) {
 	if out.Err != nil {
 		t.Fatal(out.Err)
 	}
-	if !strings.Contains(body, "https://example.com/source") {
-		t.Fatal("terminal-only citation lost")
-	}
+	testutil.MustContain(t, body, "https://example.com/source")
 }
 
 func TestRemainingLateMessagesSignatureKeepsOriginalBlock(t *testing.T) {
@@ -245,9 +228,7 @@ func TestRemainingLateMessagesSignatureKeepsOriginalBlock(t *testing.T) {
 		t.Fatal(out.Err)
 	}
 	var messages bytes.Buffer
-	if err := translateOpenAIChatStreamToAnthropicWithInput(&messages, strings.NewReader(chat), "grok-4.6", 0); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, translateOpenAIChatStreamToAnthropicWithInput(&messages, strings.NewReader(chat), "grok-4.6", 0))
 	thinkingIndex := -1
 	count := 0
 	signed := false

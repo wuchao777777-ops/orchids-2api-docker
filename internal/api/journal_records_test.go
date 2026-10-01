@@ -10,6 +10,7 @@ import (
 
 	"orchids-api/internal/audit"
 	"orchids-api/internal/pricing"
+	"orchids-api/internal/testutil"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -43,9 +44,7 @@ func journalRequest(t *testing.T, a *API, query string) map[string]interface{} {
 	request := httptest.NewRequest(http.MethodGet, "/api/journal/records"+query, nil)
 	recorder := httptest.NewRecorder()
 	a.HandleJournalRecords(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("journal status = %d, body = %s", recorder.Code, recorder.Body.String())
-	}
+	testutil.Equal(t, recorder.Code, http.StatusOK)
 	var payload map[string]interface{}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("journal body is not JSON: %v (%s)", err, recorder.Body.String())
@@ -73,18 +72,12 @@ func TestJournalRecords_AttachAttemptsToTheirRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("data = %T, want a list", payload["data"])
 	}
-	if len(rows) != 1 {
-		t.Fatalf("rows = %d, want 1 (attempts are shown through their request)", len(rows))
-	}
+	testutil.Equal(t, len(rows), 1)
 	row, _ := rows[0].(map[string]interface{})
 	attempts, _ := row["attempts"].([]interface{})
-	if len(attempts) != 2 {
-		t.Fatalf("attempts = %d, want the 2 upstream tries of req-1", len(attempts))
-	}
+	testutil.Equal(t, len(attempts), 2)
 	event, _ := row["event"].(map[string]interface{})
-	if event["request_id"] != "req-1" {
-		t.Fatalf("row event request_id = %v, want req-1", event["request_id"])
-	}
+	testutil.Equal(t, event["request_id"], "req-1")
 }
 
 // TestJournalRecords_CursorAdvancesPastScannedEntries pins the second half of the
@@ -113,9 +106,7 @@ func TestJournalRecords_CursorAdvancesPastScannedEntries(t *testing.T) {
 	// The cursor must point past everything that was scanned, so following it
 	// eventually reaches the request the first page could not fit.
 	cursor, _ := first["next_cursor"].(string)
-	if cursor == "" {
-		t.Fatal("next_cursor is empty although the scan window was exhausted: older pages become unreachable")
-	}
+	testutil.NotEqual(t, cursor, "")
 	if scanned, _ := first["scanned"].(float64); scanned <= 0 {
 		t.Fatalf("scanned = %v, want the number of entries the page examined", first["scanned"])
 	}
@@ -141,9 +132,7 @@ func TestJournalRecords_CursorAdvancesPastScannedEntries(t *testing.T) {
 		}
 		cursor, _ = payload["next_cursor"].(string)
 	}
-	if !found {
-		t.Fatal("following next_cursor never reached the buried request: older journal entries are unreachable")
-	}
+	testutil.True(t, found, "following next_cursor never reached the buried request: older journal entries are unreachable")
 }
 
 // A priced journal row carries the components behind its cost, so the log centre
@@ -153,9 +142,7 @@ func TestJournalRowCarriesItsPricingBreakdown(t *testing.T) {
 		Action: "grok_request", Model: "grok-4.6", PricingModel: "grok-4.6", PricingVersion: pricing.Version,
 		InputTokens: 1000, CachedInputTokens: 400, OutputTokens: 500, CostInUSDTicks: 55_000_000,
 	})
-	if !ok {
-		t.Fatal("a priced row produced no breakdown")
-	}
+	testutil.True(t, ok, "a priced row produced no breakdown")
 	if breakdown.Model != "grok-4.6" || len(breakdown.Components) != 3 {
 		t.Fatalf("breakdown=%+v", breakdown)
 	}
@@ -163,9 +150,7 @@ func TestJournalRowCarriesItsPricingBreakdown(t *testing.T) {
 	for _, component := range breakdown.Components {
 		total += component.CostInUSDTicks
 	}
-	if total != breakdown.CostInUSDTicks {
-		t.Fatalf("components total %d but the row says %d", total, breakdown.CostInUSDTicks)
-	}
+	testutil.Equal(t, total, breakdown.CostInUSDTicks)
 
 	// An unpriced row stays without one rather than fabricating components.
 	if _, ok := pricingBreakdownForJournal(audit.Event{Action: "grok_request", Model: "future-model"}); ok {

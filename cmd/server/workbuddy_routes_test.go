@@ -7,41 +7,47 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
-
-	"orchids-api/internal/api"
 	"orchids-api/internal/config"
-	"orchids-api/internal/handler"
-	"orchids-api/internal/loadbalancer"
-	"orchids-api/internal/middleware"
-	"orchids-api/internal/store"
-	"orchids-api/internal/template"
+	"orchids-api/internal/testutil"
 )
+
+// workbuddyAuthStub is the local stand-in for the WorkBuddy authorization
+// service. It answers the start request with a state and keeps every poll
+// pending, so this test never reaches the real deployment.
+func workbuddyAuthStub(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v2/plugin/auth/state":
+			testutil.CheckEqual(t, r.URL.Query().Get("platform"), "workbuddy-ai")
+			_, _ = w.Write([]byte(`{"code":0,"msg":"OK","data":{"state":"state-routes","authUrl":"https://www.workbuddy.ai/login?platform=workbuddy-ai&state=state-routes"}}`))
+		case "/v2/plugin/auth/token":
+			// Pending forever: the transaction is cancelled below, and no
+			// credential is ever exchanged with this stub.
+			_, _ = w.Write([]byte(`{"code":11217,"msg":"11217:login ing..."}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
 
 // TestRegisterRoutes_WorkBuddyEndpoints proves the WorkBuddy inference channel
 // and the official browser login are reachable through the real route table and
 // stay behind their respective auth layers.
 func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "routes:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	auth := workbuddyAuthStub(t)
+	defer auth.Close()
 
-	cfg := &config.Config{AdminUser: "admin", AdminPass: "secret", AdminToken: "admintoken", AdminPath: "/admin"}
-	lb := loadbalancer.NewWithCacheTTL(s, 0)
-	h := handler.NewWithLoadBalancer(cfg, lb)
-	t.Cleanup(h.Close)
-	apiHandler := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
-	renderer, err := template.NewRenderer()
-	if err != nil {
-		t.Fatalf("template.NewRenderer() error = %v", err)
+	// Every WorkBuddy upstream call is redirected to the stub, so the default
+	// suite stays offline: without this the login start would hit the real
+	// authorization service.
+	cfg := &config.Config{
+		AdminUser: "admin", AdminPass: "secret", AdminToken: "admintoken", AdminPath: "/admin",
+		WorkBuddyBaseURL:  auth.URL,
+		AnonymousAllowIPs: []string{"192.0.2.1"},
 	}
-	limiter := middleware.NewConcurrencyLimiter(4, 0)
-
-	mux := http.NewServeMux()
-	registerRoutes(mux, cfg, s, h, nil, apiHandler, limiter, nil, renderer)
+	mux, _, _ := newRouteMux(t, "routes:", cfg)
 
 	// The login endpoints must not be usable without an admin session.
 	unauth := httptest.NewRecorder()
@@ -50,9 +56,9 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 		t.Fatalf("unauthenticated login status = %d, want 401/403", unauth.Code)
 	}
 
-	// Authorized requests reach the handler, which asks the upstream for a fresh
-	// authorization transaction. localhost is used so the same-origin HTTPS
-	// guard accepts the plain-HTTP test request.
+	// Authorized requests reach the handler, which asks the (local) upstream for
+	// a fresh authorization transaction. localhost is used so the same-origin
+	// HTTPS guard accepts the plain-HTTP test request.
 	req := httptest.NewRequest(http.MethodPost, "/api/workbuddy/login", strings.NewReader("{}"))
 	req.Header.Set("X-Admin-Token", "admintoken")
 	req.Header.Set("Origin", "http://localhost")
@@ -60,9 +66,7 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 	req.Host = "localhost"
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("authorized login status = %d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var started struct {
 		ID                      string `json:"id"`
 		Status                  string `json:"status"`
@@ -83,22 +87,23 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 	pollReq.Header.Set("X-Admin-Token", "admintoken")
 	pollRec := httptest.NewRecorder()
 	mux.ServeHTTP(pollRec, pollReq)
-	if pollRec.Code != http.StatusOK {
-		t.Fatalf("poll status = %d body=%s", pollRec.Code, pollRec.Body.String())
-	}
+	testutil.Equal(t, pollRec.Code, http.StatusOK)
 	cancelReq := httptest.NewRequest(http.MethodDelete, "/api/workbuddy/login/"+started.ID, nil)
 	cancelReq.Header.Set("X-Admin-Token", "admintoken")
 	cancelRec := httptest.NewRecorder()
 	mux.ServeHTTP(cancelRec, cancelReq)
-	if cancelRec.Code != http.StatusNoContent {
-		t.Fatalf("cancel status = %d", cancelRec.Code)
-	}
+	testutil.Equal(t, cancelRec.Code, http.StatusNoContent)
 
-	// The WorkBuddy channel entry points are routed for both protocols. Without
-	// an API key the inference auth layer rejects the request, which still proves
-	// the path is registered rather than unknown. The Responses endpoints matter
-	// specifically because Codex defaults to that wire API, so a 404 there breaks
-	// every Codex client pointed at a channel prefix.
+	// An unregistered path is what a missing route looks like on this mux; every
+	// path below must answer differently, which is what proves it is routed.
+	unknown := httptest.NewRecorder()
+	mux.ServeHTTP(unknown, httptest.NewRequest(http.MethodPost, "/definitely-not-registered", strings.NewReader("{}")))
+	unknownBody := unknown.Body.String()
+	testutil.MustContain(t, unknownBody, "404 page not found")
+
+	// Inference auth must reject untrusted clients, but an authorized/allowlisted
+	// control must get through it. Otherwise the blanket /v1 guard also returns
+	// 401 for missing routes and conceals a registration regression.
 	for _, target := range []string{
 		"/workbuddy/v1/messages",
 		"/workbuddy/v1/chat/completions",
@@ -115,14 +120,39 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 		"/v1/messages/count_tokens",
 		"/v1/responses",
 	} {
-		channelReq := httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"model":"hy3","messages":[]}`))
+		method := http.MethodPost
+		if strings.HasSuffix(target, "/models") {
+			method = http.MethodGet
+		}
+		channelReq := httptest.NewRequest(method, target, strings.NewReader(`{"model":"hy3","messages":[]}`))
+		channelReq.RemoteAddr = "198.51.100.1:12345"
 		channelRec := httptest.NewRecorder()
 		mux.ServeHTTP(channelRec, channelReq)
-		if channelRec.Code == http.StatusMethodNotAllowed {
-			t.Fatalf("%s rejected the method, path is wrong", target)
+		testutil.Equal(t, channelRec.Code, http.StatusUnauthorized)
+		allowedReq := httptest.NewRequest(method, target, strings.NewReader(`{"model":"hy3","messages":[]}`))
+		allowedReq.RemoteAddr = "192.0.2.1:12345"
+		allowedRec := httptest.NewRecorder()
+		mux.ServeHTTP(allowedRec, allowedReq)
+		if allowedRec.Code == http.StatusUnauthorized || allowedRec.Code == http.StatusForbidden {
+			t.Fatalf("%s did not get through inference auth: %d %s", target, allowedRec.Code, allowedRec.Body.String())
 		}
-		if strings.Contains(channelRec.Body.String(), "404 page not found") {
-			t.Fatalf("%s is not routed", target)
+		if allowedRec.Code == http.StatusMethodNotAllowed || (allowedRec.Code >= 300 && allowedRec.Code < 400) {
+			t.Fatalf("%s %s rejected its registered method or redirected: %d %s", method, target, allowedRec.Code, allowedRec.Body.String())
 		}
+		if !json.Valid(allowedRec.Body.Bytes()) {
+			t.Fatalf("%s returned no API JSON envelope: %d %s", target, allowedRec.Code, allowedRec.Body.String())
+		}
+		if allowedRec.Body.String() == unknownBody || strings.Contains(allowedRec.Body.String(), "404 page not found") {
+			t.Fatalf("%s answered like an unregistered route: %d %s", target, allowedRec.Code, allowedRec.Body.String())
+		}
+	}
+	// The same allowlisted request to a missing /v1 path must now expose its
+	// real 404, instead of the authentication response used above.
+	missingReq := httptest.NewRequest(http.MethodPost, "/v1/definitely-not-registered", strings.NewReader("{}"))
+	missingReq.RemoteAddr = "192.0.2.1:12345"
+	missingRec := httptest.NewRecorder()
+	mux.ServeHTTP(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound || missingRec.Body.String() != unknownBody {
+		t.Fatalf("missing allowlisted /v1 route = %d %s, want plain 404", missingRec.Code, missingRec.Body.String())
 	}
 }

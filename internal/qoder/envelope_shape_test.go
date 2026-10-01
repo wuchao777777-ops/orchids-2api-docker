@@ -2,6 +2,7 @@ package qoder
 
 import (
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -24,9 +25,7 @@ func TestEnvelopeCodeReadsADoubleEncodedBody(t *testing.T) {
 		"string within body": `{"code":"10605","message":"{\"isQueued\":true}"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := envelopeCode([]byte(raw)); got != busyCode {
-				t.Fatalf("envelopeCode = %q, want %q", got, busyCode)
-			}
+			testutil.Equal(t, envelopeCode([]byte(raw)), busyCode)
 		})
 	}
 }
@@ -48,16 +47,12 @@ func TestStreamReportsAQueueRefusalAsBusy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, streamErr := consumeStreamWithTools(strings.NewReader("data: "+string(frame)+"\n\n"), true, nil)
+			_, streamErr := consumeStreamObserved(strings.NewReader("data: "+string(frame)+"\n\n"), true, nil, nil)
 			if streamErr == nil {
 				t.Fatal("expected an error")
 			}
-			if !strings.Contains(streamErr.Error(), "gateway is busy") {
-				t.Errorf("a queue refusal was not reported as busy: %v", streamErr)
-			}
-			if strings.Contains(streamErr.Error(), "rejected the credential") {
-				t.Errorf("a queue refusal was reported as a credential rejection: %v", streamErr)
-			}
+			testutil.CheckContain(t, streamErr.Error(), "gateway is busy")
+			testutil.CheckNotContain(t, streamErr.Error(), "rejected the credential")
 		})
 	}
 }

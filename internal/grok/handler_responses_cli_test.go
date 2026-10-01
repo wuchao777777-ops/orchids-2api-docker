@@ -13,6 +13,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestHandleResponses_ProxiesBuildOAuthNatively(t *testing.T) {
@@ -21,9 +22,7 @@ func TestHandleResponses_ProxiesBuildOAuthNatively(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
 			t.Fatalf("upstream request = %s %s", r.Method, r.URL.Path)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-			t.Fatalf("decode upstream request: %v", err)
-		}
+		testutil.NoError(t, json.NewDecoder(r.Body).Decode(&received), "decode upstream request: %v")
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("X-Request-ID", "native-response-test")
 		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\"}\n\n")
@@ -31,11 +30,7 @@ func TestHandleResponses_ProxiesBuildOAuthNatively(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5",
@@ -69,26 +64,14 @@ func TestHandleResponses_ProxiesBuildOAuthNatively(t *testing.T) {
 
 	h.HandleResponses(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
-		t.Fatalf("Content-Type=%q", got)
-	}
-	if got := rec.Header().Get("X-Request-Id"); got != "native-response-test" {
-		t.Fatalf("X-Request-Id=%q", got)
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
+	testutil.Equal(t, rec.Header().Get("Content-Type"), "text/event-stream")
+	testutil.Equal(t, rec.Header().Get("X-Request-Id"), "native-response-test")
 	if got := rec.Body.String(); !strings.Contains(got, "event: response.created") || strings.Contains(got, "chat.completion.chunk") {
 		t.Fatalf("response was not native Responses SSE: %q", got)
 	}
-	if got := received["previous_response_id"]; got != "resp_previous" {
-		t.Fatalf("previous_response_id=%v", got)
-	}
+	testutil.Equal(t, received["previous_response_id"], "resp_previous")
 	metadata, _ := received["metadata"].(map[string]interface{})
-	if got := metadata["trace"]; got != "keep" {
-		t.Fatalf("metadata.trace=%v", got)
-	}
-	if got := len(interfaceSlice(received["tools"])); got != 1 {
-		t.Fatalf("tools len=%d", got)
-	}
+	testutil.Equal(t, metadata["trace"], "keep")
+	testutil.Equal(t, len(interfaceSlice(received["tools"])), 1)
 }

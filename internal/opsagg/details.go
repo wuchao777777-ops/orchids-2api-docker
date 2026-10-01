@@ -160,16 +160,6 @@ func (a *Aggregator) observeDetails(ctx context.Context, pipe redis.Pipeliner, k
 		}
 	}
 }
-func (a *Aggregator) loadCohorts(ctx context.Context, b *Bucket) {
-	if b.DetailedRequests == 0 {
-		return
-	}
-	key := a.key(b.Minute, b.Channel)
-	b.DurationFailed = a.listInts(ctx, key+":dur_failed")
-	b.FirstTokenFailed = a.listInts(ctx, key+":ttft_failed")
-	b.DurationAttempt = a.listInts(ctx, key+":dur_attempt")
-	b.FirstTokenAttempt = a.listInts(ctx, key+":ttft_attempt")
-}
 
 // Keep discovery on the request hashes; side lists are not channels.
 func isDetailSuffix(channel string) bool {

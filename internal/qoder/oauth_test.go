@@ -12,6 +12,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // newLoginClient builds an account-less client pointed at stub endpoints. It is
@@ -30,9 +31,7 @@ func TestStartLoginBuildsOfficialURL(t *testing.T) {
 	t.Parallel()
 
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodHead {
-			t.Errorf("probe method = %s, want HEAD", r.Method)
-		}
+		testutil.CheckEqual(t, r.Method, http.MethodHead)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer page.Close()
@@ -48,18 +47,12 @@ func TestStartLoginBuildsOfficialURL(t *testing.T) {
 		t.Fatalf("VerifyURL = %q, want the official authorization path", tx.VerifyURL)
 	}
 	for _, want := range []string{"challenge=", "challenge_method=S256", "nonce=", "machine_id=", "client_id=" + DefaultClientID} {
-		if !strings.Contains(tx.VerifyURL, want) {
-			t.Errorf("VerifyURL = %q, want it to contain %q", tx.VerifyURL, want)
-		}
+		testutil.CheckContain(t, tx.VerifyURL, want)
 	}
 	for _, unwanted := range []string{"redirect_uri", "scope=", "response_type"} {
-		if strings.Contains(tx.VerifyURL, unwanted) {
-			t.Errorf("VerifyURL = %q, want it not to contain %q", tx.VerifyURL, unwanted)
-		}
+		testutil.CheckNotContain(t, tx.VerifyURL, unwanted)
 	}
-	if len(tx.MachineID) != 36 {
-		t.Errorf("MachineID = %q, want a 36-character UUID", tx.MachineID)
-	}
+	testutil.CheckEqual(t, len(tx.MachineID), 36)
 	if len(tx.Verifier) < 43 || len(tx.Verifier) > 128 {
 		t.Errorf("Verifier length = %d, want 43..128", len(tx.Verifier))
 	}
@@ -135,12 +128,8 @@ func TestPollLoginTreats404AsPending(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.URL.Path != "/api/v1/deviceToken/poll" {
-			t.Errorf("path = %q, want /api/v1/deviceToken/poll", r.URL.Path)
-		}
-		if got := r.Header.Get("Accept"); got != "application/json" {
-			t.Errorf("Accept = %q, want application/json", got)
-		}
+		testutil.CheckEqual(t, r.URL.Path, "/api/v1/deviceToken/poll")
+		testutil.CheckEqual(t, r.Header.Get("Accept"), "application/json")
 		if calls < 2 {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -218,9 +207,7 @@ func TestRefreshAcceptsBothTokenSpellings(t *testing.T) {
 			t.Errorf("request = %s %s, want POST /api/v1/deviceToken/refresh", r.Method, r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), `"refresh_token":"refresh-1"`) {
-			t.Errorf("body = %s, want the refresh token", body)
-		}
+		testutil.CheckContain(t, string(body), `"refresh_token":"refresh-1"`)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"device_token":"access-2","refresh_token":"refresh-2","expires_in":1800}`))
 	}))
@@ -231,12 +218,8 @@ func TestRefreshAcceptsBothTokenSpellings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Refresh() error = %v", err)
 	}
-	if creds.AccessToken != "access-2" {
-		t.Fatalf("AccessToken = %q, want access-2 (from device_token)", creds.AccessToken)
-	}
-	if creds.RefreshToken != "refresh-2" {
-		t.Fatalf("RefreshToken = %q, want refresh-2 (rotation)", creds.RefreshToken)
-	}
+	testutil.Equal(t, creds.AccessToken, "access-2")
+	testutil.Equal(t, creds.RefreshToken, "refresh-2")
 }
 
 // TestRefreshClassifiesReLoginRequired proves a refused refresh grant is
@@ -274,9 +257,7 @@ func TestFetchProfileToleratesFailure(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer access-1" {
-			t.Errorf("Authorization = %q, want Bearer access-1", got)
-		}
+		testutil.CheckEqual(t, r.Header.Get("Authorization"), "Bearer access-1")
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
@@ -321,18 +302,12 @@ func TestParseCredentialDocumentRoundTrips(t *testing.T) {
 
 	raw := `{"uid":"u1","name":"n1","email":"e@example.com","organization_id":"org1","organization_tags":["a","b"],"security_oauth_token":"sot","refresh_token":"rt","expire_time":1700000000,"refresh_token_expire_time":1700086400}`
 	creds, ok := ParseCredentialDocument(raw)
-	if !ok {
-		t.Fatal("ParseCredentialDocument() = false, want true")
-	}
+	testutil.True(t, ok, "ParseCredentialDocument() = false, want true")
 	if creds.AccessToken != "sot" || creds.RefreshToken != "rt" || creds.UID != "u1" || creds.OrgID != "org1" {
 		t.Fatalf("credentials = %+v", creds)
 	}
-	if len(creds.OrgTags) != 2 {
-		t.Fatalf("OrgTags = %v, want two entries", creds.OrgTags)
-	}
-	if creds.AccessExpiresAt.Unix() != 1700000000 {
-		t.Fatalf("AccessExpiresAt = %v, want 1700000000", creds.AccessExpiresAt)
-	}
+	testutil.Equal(t, len(creds.OrgTags), 2)
+	testutil.Equal(t, creds.AccessExpiresAt.Unix(), 1700000000)
 
 	if _, ok := ParseCredentialDocument(`{"uid":"u1"}`); ok {
 		t.Fatal("ParseCredentialDocument() = true for a document without a token")
@@ -348,12 +323,8 @@ func TestParseCredentialDocumentRoundTrips(t *testing.T) {
 func TestUnixSecondsNormalizesMilliseconds(t *testing.T) {
 	t.Parallel()
 
-	if got := unixSeconds(1700000000000).Unix(); got != 1700000000 {
-		t.Fatalf("unixSeconds(millis) = %d, want 1700000000", got)
-	}
-	if got := unixSeconds(1700000000).Unix(); got != 1700000000 {
-		t.Fatalf("unixSeconds(seconds) = %d, want 1700000000", got)
-	}
+	testutil.Equal(t, unixSeconds(1700000000000).Unix(), 1700000000)
+	testutil.Equal(t, unixSeconds(1700000000).Unix(), 1700000000)
 }
 
 // TestParseExpiryAcceptsBothForms proves the relative and absolute spellings are
@@ -392,9 +363,7 @@ func TestProbeReachabilityDetectsBlockedEgress(t *testing.T) {
 	}))
 	defer live.Close()
 	client = newLoginClient(t, live.URL, live.URL, live.URL)
-	if err := client.ProbeReachability(context.Background()); err != nil {
-		t.Fatalf("ProbeReachability() error = %v, want success", err)
-	}
+	testutil.NoError(t, client.ProbeReachability(context.Background()), "ProbeReachability() error = %v, want success")
 }
 
 // TestEnsureAccessTokenSkipsRefreshWhileValid proves a fresh token is reused
@@ -425,10 +394,6 @@ func TestEnsureAccessTokenSkipsRefreshWhileValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensureAccessToken() error = %v", err)
 	}
-	if creds.AccessToken != "access-fresh" {
-		t.Fatalf("AccessToken = %q, want the stored token", creds.AccessToken)
-	}
-	if refreshes != 0 {
-		t.Fatalf("refresh calls = %d, want 0 for a valid token", refreshes)
-	}
+	testutil.Equal(t, creds.AccessToken, "access-fresh")
+	testutil.Equal(t, refreshes, 0)
 }

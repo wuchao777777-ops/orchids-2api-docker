@@ -1,7 +1,9 @@
+//go:build live
+
 package qoder
 
-// Live probe (manual, opt-in). It is skipped unless QODER_PROBE=1, so the
-// normal test suite never talks to the upstream.
+// Live probe (manual, opt-in). It requires -tags live and QODER_PROBE=1, so
+// the normal test suite never talks to the upstream.
 //
 // It replays the production request construction against the real Qoder
 // gateway from an account loaded out of the deployment's own Redis, one variant
@@ -9,7 +11,7 @@ package qoder
 //
 // Run on the deployment host:
 //
-//	cd /opt/orchids-2api/qoder-probe && QODER_PROBE=1 go test ./internal/qoder/ -run TestLiveProbe -v -count=1 -timeout 20m
+//	cd /opt/orchids-2api/qoder-probe && QODER_PROBE=1 go test -tags live ./internal/qoder/ -run TestLiveProbe -v -count=1 -timeout 20m
 //
 // SECRETS: tokens, the COSY payload, the RSA key and the COSY signature are
 // never printed. Only header names, the literal machine identity, status codes
@@ -31,6 +33,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 
@@ -115,9 +118,7 @@ func TestLiveProbe(t *testing.T) {
 	}
 	cfg, s := probeEnvironment(t)
 	accounts := probeAccounts(t, s)
-	if len(accounts) == 0 {
-		t.Fatalf("PROBE no usable qoder account with remaining allowance")
-	}
+	testutil.NotEqual(t, len(accounts), 0)
 	if want := strings.TrimSpace(os.Getenv("QODER_PROBE_ACCOUNT")); want != "" {
 		filtered := accounts[:0]
 		for _, candidate := range accounts {
@@ -125,17 +126,13 @@ func TestLiveProbe(t *testing.T) {
 				filtered = append(filtered, candidate)
 			}
 		}
-		if len(filtered) == 0 {
-			t.Fatalf("PROBE account %s is not usable", want)
-		}
+		testutil.NotEqual(t, len(filtered), 0)
 		accounts = filtered
 	}
 	acc := accounts[0]
 	client := NewFromAccount(acc, cfg)
 	creds := ResolveCredentials(acc)
-	if err := client.PrepareCurrentRuntimeFields(context.Background()); err != nil {
-		t.Fatalf("PROBE runtime prepare: %v", err)
-	}
+	testutil.NoError(t, client.PrepareCurrentRuntimeFields(context.Background()), "PROBE runtime prepare: %v")
 	fields := client.RuntimeFields()
 	if strings.TrimSpace(fields.Key) == "" || strings.TrimSpace(fields.EncryptUserInfo) == "" {
 		t.Fatalf("PROBE runtime fields unavailable for account %d", acc.ID)
@@ -151,19 +148,17 @@ func TestLiveProbe(t *testing.T) {
 	// prompt, so it stays opt-in.
 	if out := strings.TrimSpace(os.Getenv("QODER_PROBE_BODY_OUT")); out != "" {
 		requestID := fmt.Sprintf("probe-%d", time.Now().UnixNano())
-		raw, err := buildChatBody(upstream.UpstreamRequest{
+		raw, err := buildChatBodyProfile(upstream.UpstreamRequest{
 			Model:         "qwen3.8-flash",
 			Messages:      []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "Reply exactly OK."}}},
 			Prompt:        "Reply exactly OK.",
 			RequestID:     requestID,
 			ChatSessionID: "probe-session",
-		}, model, "probe-session", requestID, requestID)
+		}, model, "probe-session", requestID, requestID, client.clientVersion, client.aliyunUserType(), client.businessProduct())
 		if err != nil {
 			t.Fatalf("PROBE body dump: %v", err)
 		}
-		if err := os.WriteFile(out, raw, 0o600); err != nil {
-			t.Fatalf("PROBE body dump write: %v", err)
-		}
+		testutil.NoError(t, os.WriteFile(out, raw, 0o600), "PROBE body dump write: %v")
 		fmt.Printf("PROBE body_dump=%s bytes=%d\n", out, len(raw))
 	}
 
@@ -206,13 +201,13 @@ func TestLiveProbe(t *testing.T) {
 func runProbe(t *testing.T, client *Client, creds Credentials, fields RuntimeFields, model modelEntry, url string, variant probeVariant) {
 	t.Helper()
 	requestID := fmt.Sprintf("probe-%d", time.Now().UnixNano())
-	body, err := buildChatBody(upstream.UpstreamRequest{
+	body, err := buildChatBodyProfile(upstream.UpstreamRequest{
 		Model:         "qwen3.8-flash",
 		Messages:      []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "Reply exactly OK."}}},
 		Prompt:        "Reply exactly OK.",
 		RequestID:     requestID,
 		ChatSessionID: "probe-session",
-	}, model, "probe-session", requestID, requestID)
+	}, model, "probe-session", requestID, requestID, client.clientVersion, client.aliyunUserType(), client.businessProduct())
 	if err != nil {
 		fmt.Printf("PROBE variant=%s build_error=%v\n", variant.label, err)
 		return

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -41,9 +42,7 @@ func TestRedisSessionBackendRoundTrip(t *testing.T) {
 		t.Fatal("an unknown token must not be valid")
 	}
 
-	if err := backend.SaveSession(ctx, "token-1", time.Now().Add(time.Hour)); err != nil {
-		t.Fatalf("SaveSession() error = %v", err)
-	}
+	testutil.NoError(t, backend.SaveSession(ctx, "token-1", time.Now().Add(time.Hour)), "SaveSession() error = %v")
 	ok, err = backend.HasSession(ctx, "token-1")
 	if err != nil || !ok {
 		t.Fatalf("HasSession(saved) = %v, %v; want true, nil", ok, err)
@@ -60,9 +59,7 @@ func TestRedisSessionBackendExpiresWithTheSession(t *testing.T) {
 	mini, backend := newRedisSessionBackendForTest(t)
 	ctx := context.Background()
 
-	if err := backend.SaveSession(ctx, "token-1", time.Now().Add(90*time.Second)); err != nil {
-		t.Fatalf("SaveSession() error = %v", err)
-	}
+	testutil.NoError(t, backend.SaveSession(ctx, "token-1", time.Now().Add(90*time.Second)), "SaveSession() error = %v")
 	mini.FastForward(3 * time.Minute)
 
 	ok, err := backend.HasSession(ctx, "token-1")
@@ -84,9 +81,7 @@ func TestRedisSessionBackendRejectsAlreadyExpiredSessions(t *testing.T) {
 	if err := backend.SaveSession(ctx, "token-1", time.Now().Add(-time.Minute)); err == nil {
 		t.Fatal("SaveSession() of an expired session must return an error")
 	}
-	if len(mini.Keys()) != 0 {
-		t.Fatalf("keys = %v, want no key written for an expired session", mini.Keys())
-	}
+	testutil.Equal(t, len(mini.Keys()), 0)
 }
 
 // A Redis dump must never hand out a usable cookie, so the raw token stays out
@@ -95,25 +90,17 @@ func TestRedisSessionBackendStoresOnlyADigest(t *testing.T) {
 	mini, backend := newRedisSessionBackendForTest(t)
 	const token = "plain-token-that-must-not-be-stored"
 
-	if err := backend.SaveSession(context.Background(), token, time.Now().Add(time.Hour)); err != nil {
-		t.Fatalf("SaveSession() error = %v", err)
-	}
+	testutil.NoError(t, backend.SaveSession(context.Background(), token, time.Now().Add(time.Hour)), "SaveSession() error = %v")
 
 	keys := mini.Keys()
-	if len(keys) != 1 {
-		t.Fatalf("keys = %v, want exactly one session key", keys)
-	}
+	testutil.Equal(t, len(keys), 1)
 	if !strings.HasPrefix(keys[0], "test:admin:sessions:") {
 		t.Fatalf("key = %q, want the configured prefix", keys[0])
 	}
-	if strings.Contains(keys[0], token) {
-		t.Fatalf("key %q must not embed the raw session token", keys[0])
-	}
+	testutil.MustNotContain(t, keys[0], token)
 	value, err := mini.Get(keys[0])
 	if err != nil {
 		t.Fatalf("Get(%q) error = %v", keys[0], err)
 	}
-	if strings.Contains(value, token) {
-		t.Fatalf("value %q must not embed the raw session token", value)
-	}
+	testutil.MustNotContain(t, value, token)
 }

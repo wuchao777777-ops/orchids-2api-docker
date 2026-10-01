@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestLeaseUsesBuildConfiguredDeadline(t *testing.T) {
@@ -15,7 +16,5 @@ func TestLeaseUsesBuildConfiguredDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lease.Release()
-	if lease.client.Timeout != 900*time.Second {
-		t.Fatalf("timeout=%v", lease.client.Timeout)
-	}
+	testutil.Equal(t, lease.client.Timeout, 900*time.Second)
 }

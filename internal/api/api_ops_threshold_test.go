@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"orchids-api/internal/alerting"
+	"orchids-api/internal/testutil"
 )
 
 // TestSuccessTarget_ComesFromTheEngine pins why the number exists: the page shows
@@ -17,12 +17,8 @@ import (
 func TestSuccessTarget_ComesFromTheEngine(t *testing.T) {
 	engine := alerting.NewEngine(alerting.DefaultRules(), nil)
 	target, source := successTarget(engine)
-	if target != 0.9 {
-		t.Fatalf("successTarget() = %v, want 0.9", target)
-	}
-	if source == "" {
-		t.Fatal("success_target_source must name where the target comes from")
-	}
+	testutil.Equal(t, target, 0.9)
+	testutil.NotEqual(t, source, "")
 
 	custom := alerting.DefaultRules()
 	custom.SuccessRateWarning = 0.8
@@ -37,23 +33,15 @@ func TestSuccessTarget_ComesFromTheEngine(t *testing.T) {
 // page print "目标 0.0%" and look broken.
 func TestSuccessTarget_NilAndZeroValueFallBackToTheShippedPolicy(t *testing.T) {
 	got, source := successTarget(nil)
-	if got != 0.9 {
-		t.Fatalf("successTarget(nil) = %v, want the default 0.9", got)
-	}
-	if source == "" {
-		t.Fatal("success_target_source must still be present for a nil engine")
-	}
+	testutil.Equal(t, got, 0.9)
+	testutil.NotEqual(t, source, "")
 
 	zero := alerting.NewEngine(alerting.Rules{}, nil)
 	if got, _ := successTarget(zero); got != 0.9 {
 		t.Fatalf("successTarget() on a zero-value Rules = %v, want 0.9", got)
 	}
-	if got := successTargetCritical(zero); got != 0.5 {
-		t.Fatalf("successTargetCritical() on a zero-value Rules = %v, want 0.5", got)
-	}
-	if got := successTargetCritical(nil); got != 0.5 {
-		t.Fatalf("successTargetCritical(nil) = %v, want 0.5", got)
-	}
+	testutil.Equal(t, successTargetCritical(zero), 0.5)
+	testutil.Equal(t, successTargetCritical(nil), 0.5)
 }
 
 // TestSuccessTarget_SourceIsRenderable keeps the provenance string a UI can print
@@ -64,9 +52,7 @@ func TestSuccessTarget_SourceIsRenderable(t *testing.T) {
 		t.Fatalf("success_target_source too long for a label: %q", source)
 	}
 	for _, forbidden := range []string{"\"", "\\", "\n", "\t", "<", ">"} {
-		if strings.Contains(source, forbidden) {
-			t.Fatalf("success_target_source %q contains %q", source, forbidden)
-		}
+		testutil.MustNotContain(t, source, forbidden)
 	}
 }
 
@@ -78,9 +64,7 @@ func TestHandleOpsOverview_PublishesTheTargetOnTheUnavailableBranch(t *testing.T
 	recorder := httptest.NewRecorder()
 	(&API{}).HandleOpsOverview(recorder, httptest.NewRequest(http.MethodGet, "/api/ops/overview", nil))
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", recorder.Code)
-	}
+	testutil.Equal(t, recorder.Code, http.StatusOK)
 	payload := map[string]interface{}{}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("overview is not JSON: %v (%s)", err, recorder.Body.String())
@@ -92,9 +76,7 @@ func TestHandleOpsOverview_PublishesTheTargetOnTheUnavailableBranch(t *testing.T
 	if !ok {
 		t.Fatalf("success_target missing from the unavailable payload: %v", payload)
 	}
-	if target != 0.9 {
-		t.Fatalf("success_target = %v, want the default 0.9", target)
-	}
+	testutil.Equal(t, target, 0.9)
 	if _, ok := payload["success_target_source"].(string); !ok {
 		t.Fatalf("success_target_source missing: %v", payload)
 	}

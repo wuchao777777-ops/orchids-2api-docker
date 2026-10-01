@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -59,18 +60,14 @@ func TestRefreshReplayKeepsIndependentTransientBudget(t *testing.T) {
 			if (err == nil) != success {
 				t.Fatalf("error=%v success wanted=%v", err, success)
 			}
-			if int(chats.Load()) != len(statuses) {
-				t.Fatalf("chat calls=%d want %d", chats.Load(), len(statuses))
-			}
+			testutil.Equal(t, int(chats.Load()), len(statuses))
 			wantRefresh := int32(0)
 			for _, s := range statuses {
 				if s == 401 {
 					wantRefresh = 1
 				}
 			}
-			if refreshes.Load() != wantRefresh {
-				t.Fatalf("refresh calls=%d want %d", refreshes.Load(), wantRefresh)
-			}
+			testutil.Equal(t, refreshes.Load(), wantRefresh)
 		})
 	}
 }
@@ -103,7 +100,5 @@ func TestTransientBackoffReturnsCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v want context.Canceled", err)
 	}
-	if transport.calls.Load() != 1 {
-		t.Fatalf("calls=%d want 1", transport.calls.Load())
-	}
+	testutil.Equal(t, transport.calls.Load(), 1)
 }

@@ -10,6 +10,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // clineAuthServer stubs the two upstreams a Cline login touches: WorkOS for the
@@ -29,9 +30,7 @@ func newClineAuthServer(t *testing.T, pollAnswers []func(w http.ResponseWriter))
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/user_management/authorize/device":
-			if got := r.FormValue("client_id"); got == "" {
-				t.Errorf("device authorize is missing client_id")
-			}
+			testutil.CheckNotEqual(t, r.FormValue("client_id"), "")
 			// The stub stands in for WorkOS, so it answers with its own host:
 			// the client refuses to hand a browser a page on a foreign host,
 			// and this test is about the console's response, not the check.
@@ -51,9 +50,7 @@ func newClineAuthServer(t *testing.T, pollAnswers []func(w http.ResponseWriter))
 			var body map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			stub.registerBody = body
-			if strings.TrimSpace(body["accessToken"]) == "" {
-				t.Errorf("register is missing the WorkOS access token")
-			}
+			testutil.CheckNotEqual(t, strings.TrimSpace(body["accessToken"]), "")
 			_, _ = w.Write([]byte(`{"data":{"accessToken":"cline-access-1",` +
 				`"refreshToken":"cline-refresh-1","expiresAt":4102444800000,` +
 				`"userInfo":{"email":"operator@example.com"}}}`))
@@ -88,9 +85,7 @@ func TestHandleClineLogin_StartHidesDeviceCode(t *testing.T) {
 	a := New(s, "", "", clineLoginConfig(auth.URL))
 	rec := httptest.NewRecorder()
 	a.HandleClineLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/cline/login", `{"enabled":true}`))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var response struct {
 		ID                 string `json:"id"`
 		VerifyURI          string `json:"verification_uri"`
@@ -99,24 +94,14 @@ func TestHandleClineLogin_StartHidesDeviceCode(t *testing.T) {
 		DeviceCode         string `json:"device_code"`
 		SessionFingerprint string `json:"session_fingerprint"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if response.ID == "" {
-		t.Fatal("start returned no transaction id")
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response), "decode response: %v")
+	testutil.NotEqual(t, response.ID, "")
 	if response.VerifyURI == "" || response.VerifyFull == "" {
 		t.Fatalf("start returned no verification page: %+v", response)
 	}
-	if response.UserCode == "" {
-		t.Fatal("start returned no user code for the operator to confirm")
-	}
-	if response.DeviceCode != "" {
-		t.Errorf("start response leaked the device code (%q)", response.DeviceCode)
-	}
-	if strings.Contains(rec.Body.String(), "dev-1") {
-		t.Errorf("start response leaked the device code: %s", rec.Body.String())
-	}
+	testutil.NotEqual(t, response.UserCode, "")
+	testutil.CheckEqual(t, response.DeviceCode, "")
+	testutil.CheckNotContain(t, rec.Body.String(), "dev-1")
 }
 
 // TestHandleClineLogin_PollPersistsOAuthAccount drives the flow from start to a
@@ -140,9 +125,7 @@ func TestHandleClineLogin_PollPersistsOAuthAccount(t *testing.T) {
 	var started struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(start.Body.Bytes(), &started); err != nil {
-		t.Fatalf("decode start: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(start.Body.Bytes(), &started), "decode start: %v")
 	a.clineLogins.update(started.ID, func(login *clineLoginTransaction) { login.interval = time.Millisecond })
 
 	var stored *store.Account
@@ -153,9 +136,7 @@ func TestHandleClineLogin_PollPersistsOAuthAccount(t *testing.T) {
 		var state struct {
 			Status string `json:"status"`
 		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
-			t.Fatalf("decode poll: %v", err)
-		}
+		testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &state), "decode poll: %v")
 		accounts, err := s.ListAccounts(t.Context())
 		if err != nil {
 			t.Fatalf("list accounts: %v", err)
@@ -176,9 +157,7 @@ func TestHandleClineLogin_PollPersistsOAuthAccount(t *testing.T) {
 	if stored.ClineAccessToken == "" || stored.ClineRefreshToken == "" {
 		t.Fatalf("stored account is missing the cline pair: %+v", stored)
 	}
-	if stored.ClineEmail != "operator@example.com" {
-		t.Errorf("email = %q, want operator@example.com", stored.ClineEmail)
-	}
+	testutil.CheckEqual(t, stored.ClineEmail, "operator@example.com")
 	if len(stored.ClineModelIDs) != 1 || !strings.Contains(stored.ClineModelIDs[0], "x-ai/grok-4.1-fast") {
 		t.Errorf("model ids = %v, want the recommended-models feed", stored.ClineModelIDs)
 	}
@@ -188,9 +167,7 @@ func TestHandleClineLogin_PollPersistsOAuthAccount(t *testing.T) {
 	if stored.Token != "" || stored.RefreshToken != "" || stored.ClientCookie != "" {
 		t.Errorf("stored account wrote a generic credential slot: %+v", stored)
 	}
-	if got := auth.registerBody["accessToken"]; got != "workos-access" {
-		t.Errorf("register accessToken = %q, want workos-access", got)
-	}
+	testutil.CheckEqual(t, auth.registerBody["accessToken"], "workos-access")
 }
 
 // TestHandleClineLogin_RejectsManualCredential pins the OAuth-only contract: a
@@ -203,19 +180,13 @@ func TestHandleClineLogin_RejectsManualCredential(t *testing.T) {
 		`{"account_type":"cline","name":"manual","cline_access_token":"access","cline_refresh_token":"refresh"}`))
 	req.Header.Set("Content-Type", "application/json")
 	a.HandleAccounts(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(strings.ToLower(rec.Body.String()), "cline/login") {
-		t.Errorf("rejection must point at the official login, got %q", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
+	testutil.CheckContain(t, strings.ToLower(rec.Body.String()), "cline/login")
 	accounts, err := s.ListAccounts(t.Context())
 	if err != nil {
 		t.Fatalf("list accounts: %v", err)
 	}
-	if len(accounts) != 0 {
-		t.Fatalf("account count = %d, want 0", len(accounts))
-	}
+	testutil.Equal(t, len(accounts), 0)
 }
 
 // TestHandleClineLogin_AccountOutputHidesRefreshToken proves the durable
@@ -229,21 +200,15 @@ func TestHandleClineLogin_AccountOutputHidesRefreshToken(t *testing.T) {
 		ClineAccessToken:  "access-secret",
 		ClineRefreshToken: "refresh-secret",
 	}
-	if err := s.CreateAccount(t.Context(), acc); err != nil {
-		t.Fatalf("create account: %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(t.Context(), acc), "create account: %v")
 	out := normalizeAccountOutput(acc)
 	if out == nil || out.Account == nil {
 		t.Fatal("normalizeAccountOutput returned nothing")
 	}
-	if out.Account.ClineRefreshToken != "" {
-		t.Errorf("account output leaked the cline refresh token (%q)", out.Account.ClineRefreshToken)
-	}
+	testutil.CheckEqual(t, out.Account.ClineRefreshToken, "")
 	raw, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if strings.Contains(string(raw), "refresh-secret") {
-		t.Errorf("account output leaked the cline refresh token: %s", raw)
-	}
+	testutil.CheckNotContain(t, string(raw), "refresh-secret")
 }

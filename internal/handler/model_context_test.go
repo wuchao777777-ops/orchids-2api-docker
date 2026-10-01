@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // publicListEntry is the shape a client reads. The window fields are the point
@@ -23,15 +24,11 @@ func fetchPublicModels(t *testing.T, h *Handler, path string) map[string]publicL
 	t.Helper()
 	rec := httptest.NewRecorder()
 	h.HandleModels(rec, httptest.NewRequest(http.MethodGet, "http://example.com"+path, nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var payload struct {
 		Data []publicListEntry `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode: %v")
 	out := make(map[string]publicListEntry, len(payload.Data))
 	for _, entry := range payload.Data {
 		out[entry.ID] = entry
@@ -43,20 +40,14 @@ func fetchPublicModels(t *testing.T, h *Handler, path string) map[string]publicL
 // already forwards it. The model list has to publish the same number, otherwise
 // a 1M-token model reads as the client's 262144 default.
 func TestPublicModelsPublishQoderContextWindow(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	acc := createEnabledTestAccount(t, s, "qoder-1", "qoder")
 	acc.QoderModelIDs = []string{
 		`{"key":"ultimate","name":"Ultimate","display_name":"Ultimate","max_input_tokens":1000000}`,
 		`{"key":"qfmodel","name":"Qwen3.8-Flash","display_name":"Qwen3.8-Flash","max_input_tokens":180000}`,
 	}
-	if err := s.UpdateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("UpdateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(context.Background(), acc), "UpdateAccount() error = %v")
 
 	publishModel(t, s,
 		&store.Model{Channel: "qoder", ModelID: "ultimate"},
@@ -64,25 +55,15 @@ func TestPublicModelsPublishQoderContextWindow(t *testing.T) {
 	)
 
 	entries := fetchPublicModels(t, h, "/qoder/v1/models")
-	if got := entries["ultimate"].ContextLength; got != 1000000 {
-		t.Fatalf("ultimate context_length = %d, want 1000000", got)
-	}
-	if got := entries["ultimate"].MaxInputTokens; got != 1000000 {
-		t.Fatalf("ultimate max_input_tokens = %d, want 1000000", got)
-	}
-	if got := entries["qwen3.8-flash"].ContextLength; got != 180000 {
-		t.Fatalf("qwen3.8-flash context_length = %d, want 180000", got)
-	}
+	testutil.Equal(t, entries["ultimate"].ContextLength, 1000000)
+	testutil.Equal(t, entries["ultimate"].MaxInputTokens, 1000000)
+	testutil.Equal(t, entries["qwen3.8-flash"].ContextLength, 180000)
 }
 
 // A window that was never observed must be absent, not zero: a client that reads
 // zero would treat the model as unable to hold anything.
 func TestPublicModelsOmitUnobservedContextWindow(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	publishModel(t, s, &store.Model{Channel: "cline", ModelID: "gpt-5-nano"})
 
@@ -104,11 +85,7 @@ func TestPublicModelsOmitUnobservedContextWindow(t *testing.T) {
 }
 
 func TestPublicModelsPublishWorkBuddyContextWindow(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	acc := createEnabledTestAccount(t, s, "wb-1", "workbuddy")
 	acc.WorkBuddyModelIDs = []string{
@@ -117,9 +94,7 @@ func TestPublicModelsPublishWorkBuddyContextWindow(t *testing.T) {
 		// no window to report.
 		"legacy-model",
 	}
-	if err := s.UpdateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("UpdateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(context.Background(), acc), "UpdateAccount() error = %v")
 
 	publishModel(t, s,
 		&store.Model{Channel: "workbuddy", ModelID: "wb-model"},
@@ -127,32 +102,20 @@ func TestPublicModelsPublishWorkBuddyContextWindow(t *testing.T) {
 	)
 
 	entries := fetchPublicModels(t, h, "/workbuddy/v1/models")
-	if got := entries["wb-model"].ContextLength; got != 256000 {
-		t.Fatalf("wb-model context_length = %d, want 256000", got)
-	}
-	if got := entries["wb-model"].MaxOutputTokens; got != 32000 {
-		t.Fatalf("wb-model max_output_tokens = %d, want 32000", got)
-	}
-	if got := entries["legacy-model"].ContextLength; got != 0 {
-		t.Fatalf("legacy-model context_length = %d, want omitted", got)
-	}
+	testutil.Equal(t, entries["wb-model"].ContextLength, 256000)
+	testutil.Equal(t, entries["wb-model"].MaxOutputTokens, 32000)
+	testutil.Equal(t, entries["legacy-model"].ContextLength, 0)
 }
 
 // The Grok window is not account-scoped; it comes from the same table the Codex
 // catalog publishes, so both surfaces agree.
 func TestPublicModelsPublishGrokContextWindow(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	publishModel(t, s, &store.Model{Channel: "grok", ModelID: "grok-4.3", Verified: true})
 
 	entries := fetchPublicModels(t, h, "/grok/v1/models")
-	if got := entries["grok-4.3"].ContextLength; got != 1000000 {
-		t.Fatalf("grok-4.3 context_length = %d, want 1000000", got)
-	}
+	testutil.Equal(t, entries["grok-4.3"].ContextLength, 1000000)
 }
 
 // The Codex catalog used to fall back to a Grok-shaped 128k default for every
@@ -165,14 +128,10 @@ func TestCodexCatalogPrefersObservedContextWindow(t *testing.T) {
 
 	catalog := newCodexModelCatalog([]PublicModelResponse{observed, unobserved})
 
-	if got := codexEntryFor(t, catalog, "qwen3.8-max").ContextWindow; got != 1000000 {
-		t.Fatalf("observed window ignored: context_window = %d, want 1000000", got)
-	}
+	testutil.Equal(t, codexEntryFor(t, catalog, "qwen3.8-max").ContextWindow, 1000000)
 	// Nothing was observed for this one, so the historical default still applies
 	// and no wrong number is invented.
-	if got := codexEntryFor(t, catalog, "qwen3.8-flash").ContextWindow; got != 128000 {
-		t.Fatalf("unobserved model context_window = %d, want the 128000 default", got)
-	}
+	testutil.Equal(t, codexEntryFor(t, catalog, "qwen3.8-flash").ContextWindow, 128000)
 }
 
 func containsJSONField(body, field string) bool {

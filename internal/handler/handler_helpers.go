@@ -778,19 +778,13 @@ func WarnIfSharedRefusalBudgetExceedsEdge(budget time.Duration) {
 		"note", "a 100s origin timeout (Cloudflare default) leaves no room for a budget this large plus the attempts and jitter around it")
 }
 
-// sharedRefusalWaitAllowed reports whether one more wait of next fits inside the
-// budget already spent on waits of already. It is a plain comparison so the
-// bound can be tested without spending the waits themselves.
+// sharedRefusalWaitAllowedWithin reports whether one more wait of next fits
+// inside the explicit budget after spending already on waits. It is a plain
+// comparison so the bound can be tested without spending the waits themselves.
 //
 // next is the upstream's own hint, without the jitter that will be added to the
 // actual sleep: jitter exists to decorrelate wake-ups, not to consume budget, so
 // charging it here made the last reachable window unreachable.
-func sharedRefusalWaitAllowed(already, next time.Duration) bool {
-	return sharedRefusalWaitAllowedWithin(already, next, sharedRefusalTotalWaitBudget)
-}
-
-// sharedRefusalWaitAllowedWithin is sharedRefusalWaitAllowed against an explicit
-// budget, which is the configured form the request loop uses.
 func sharedRefusalWaitAllowedWithin(already, next, budget time.Duration) bool {
 	if next <= 0 {
 		return false

@@ -15,6 +15,7 @@ import (
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // qoderAuthServer stubs the Qoder device authorization endpoints. It records
@@ -39,9 +40,7 @@ func newQoderAuthServer(t *testing.T, pollBodies []string) *qoderAuthServer {
 			w.WriteHeader(http.StatusOK)
 		case "/api/v1/deviceToken/poll":
 			for _, key := range []string{"nonce", "verifier", "challenge_method"} {
-				if r.URL.Query().Get(key) == "" {
-					t.Errorf("poll is missing %s", key)
-				}
+				testutil.CheckNotEqual(t, r.URL.Query().Get(key), "")
 			}
 			index := stub.polls
 			stub.polls++
@@ -88,9 +87,7 @@ func TestHandleQoderLogin_StartReturnsOfficialDeviceURL(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"enabled":true}`))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var response struct {
 		ID                      string `json:"id"`
 		Status                  string `json:"status"`
@@ -98,9 +95,7 @@ func TestHandleQoderLogin_StartReturnsOfficialDeviceURL(t *testing.T) {
 		VerificationURIComplete string `json:"verification_uri_complete"`
 		ExpiresAt               string `json:"expires_at"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response), "decode: %v")
 	if response.ID == "" || response.Status != "pending" {
 		t.Fatalf("response = %+v", response)
 	}
@@ -108,43 +103,25 @@ func TestHandleQoderLogin_StartReturnsOfficialDeviceURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authorization URL is not parseable: %v", err)
 	}
-	if parsed.Path != "/device/selectAccounts" {
-		t.Fatalf("authorization path = %q, want /device/selectAccounts", parsed.Path)
-	}
+	testutil.Equal(t, parsed.Path, "/device/selectAccounts")
 	for _, key := range []string{"challenge", "challenge_method", "nonce", "machine_id", "client_id"} {
-		if parsed.Query().Get(key) == "" {
-			t.Errorf("authorization URL is missing %s", key)
-		}
+		testutil.CheckNotEqual(t, parsed.Query().Get(key), "")
 	}
-	if parsed.Query().Get("challenge_method") != "S256" {
-		t.Errorf("challenge_method = %q, want S256", parsed.Query().Get("challenge_method"))
-	}
+	testutil.CheckEqual(t, parsed.Query().Get("challenge_method"), "S256")
 	// The nonce and the verifier are the transaction's private halves; a nonce
 	// that reached the browser would let a third party complete the attempt.
-	if strings.Contains(rec.Body.String(), "verifier") {
-		t.Fatal("the start response mentions the PKCE verifier")
-	}
-	if response.UserCode != "" {
-		t.Fatalf("start response exposed a user code: %q", response.UserCode)
-	}
-	if strings.Contains(response.VerificationURIComplete, parsed.Query().Get("nonce")) == false {
-		t.Fatal("the nonce must be part of the browser challenge")
-	}
+	testutil.MustNotContain(t, rec.Body.String(), "verifier")
+	testutil.Equal(t, response.UserCode, "")
+	testutil.NotEqual(t, strings.Contains(response.VerificationURIComplete, parsed.Query().Get("nonce")), false)
 
 	// The pending transaction must be pollable and must stay pending while the
 	// upstream answers 404.
 	pollRec := httptest.NewRecorder()
 	a.HandleQoderLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/qoder/login/"+response.ID, ""))
-	if pollRec.Code != http.StatusOK {
-		t.Fatalf("poll status = %d", pollRec.Code)
-	}
+	testutil.Equal(t, pollRec.Code, http.StatusOK)
 	var polled deviceLoginResponse
-	if err := json.Unmarshal(pollRec.Body.Bytes(), &polled); err != nil {
-		t.Fatalf("decode poll: %v", err)
-	}
-	if polled.Status != "pending" {
-		t.Fatalf("polled status = %q, want pending", polled.Status)
-	}
+	testutil.NoError(t, json.Unmarshal(pollRec.Body.Bytes(), &polled), "decode poll: %v")
+	testutil.Equal(t, polled.Status, "pending")
 }
 
 func TestHandleQoderLogin_CancelStopsBlockedPollAndDoesNotPersist(t *testing.T) {
@@ -186,9 +163,7 @@ func TestHandleQoderLogin_CancelStopsBlockedPollAndDoesNotPersist(t *testing.T) 
 	}
 	cancelRec := httptest.NewRecorder()
 	a.HandleQoderLogin(cancelRec, channelLoginRequest(t, http.MethodDelete, "/api/qoder/login/"+response.ID, ""))
-	if cancelRec.Code != http.StatusNoContent {
-		t.Fatalf("cancel status = %d", cancelRec.Code)
-	}
+	testutil.Equal(t, cancelRec.Code, http.StatusNoContent)
 	select {
 	case <-pollCancelled:
 	case <-time.After(time.Second):
@@ -228,17 +203,13 @@ func TestHandleQoderLogin_PreservesDisabledPreference(t *testing.T) {
 	for time.Now().Before(deadline) {
 		poll := httptest.NewRecorder()
 		a.HandleQoderLogin(poll, channelLoginRequest(t, http.MethodGet, "/api/qoder/login/"+response.ID, ""))
-		if err := json.Unmarshal(poll.Body.Bytes(), &final); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, json.Unmarshal(poll.Body.Bytes(), &final))
 		if final.Status == "complete" {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if final.Status != "complete" {
-		t.Fatalf("final login = %+v", final)
-	}
+	testutil.Equal(t, final.Status, "complete")
 	acc, err := s.GetAccount(context.Background(), final.AccountID)
 	if err != nil {
 		t.Fatal(err)
@@ -276,40 +247,26 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
 		a.HandleQoderLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/qoder/login/"+started.ID, ""))
-		if pollRec.Code != http.StatusOK {
-			t.Fatalf("poll status = %d body=%s", pollRec.Code, pollRec.Body.String())
-		}
-		if err := json.Unmarshal(pollRec.Body.Bytes(), &final); err != nil {
-			t.Fatalf("decode poll: %v", err)
-		}
+		testutil.Equal(t, pollRec.Code, http.StatusOK)
+		testutil.NoError(t, json.Unmarshal(pollRec.Body.Bytes(), &final), "decode poll: %v")
 		if final.Status == "complete" || final.Status == "failed" {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if final.Status != "complete" {
-		t.Fatalf("final status = %q message=%q, want complete", final.Status, final.Message)
-	}
-	if final.AccountID == 0 {
-		t.Fatal("the completed login did not report an account id")
-	}
+	testutil.Equal(t, final.Status, "complete")
+	testutil.NotEqual(t, final.AccountID, 0)
 
 	acc, err := s.GetAccount(t.Context(), final.AccountID)
 	if err != nil {
 		t.Fatalf("GetAccount: %v", err)
 	}
-	if acc.AccountType != "qoder" {
-		t.Fatalf("account type = %q, want qoder", acc.AccountType)
-	}
+	testutil.Equal(t, acc.AccountType, "qoder")
 	if acc.QoderAccessToken == "" || acc.QoderRefreshToken == "" {
 		t.Fatalf("stored credential = %q/%q, want a persisted pair", acc.QoderAccessToken, acc.QoderRefreshToken)
 	}
-	if acc.QoderUserID != "uid-qoder" {
-		t.Fatalf("stored user id = %q", acc.QoderUserID)
-	}
-	if acc.QoderMachineID == "" {
-		t.Fatal("the device identity was not stored")
-	}
+	testutil.Equal(t, acc.QoderUserID, "uid-qoder")
+	testutil.NotEqual(t, acc.QoderMachineID, "")
 	if acc.QoderRuntimeInfo == "" || acc.QoderRuntimeKey == "" {
 		t.Fatal("the derived runtime pair was not stored")
 	}
@@ -317,12 +274,8 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	// answers 404 for every catalog route, so the login must save the account
 	// with an empty snapshot: nothing compiled in may be installed as if it had
 	// been observed, and the operator is expected to run a refresh.
-	if len(acc.QoderModelIDs) != 0 {
-		t.Fatalf("catalog snapshot = %v, want empty when the upstream read fails", acc.QoderModelIDs)
-	}
-	if acc.Email != "operator@example.com" {
-		t.Fatalf("email = %q", acc.Email)
-	}
+	testutil.Equal(t, len(acc.QoderModelIDs), 0)
+	testutil.Equal(t, acc.Email, "operator@example.com")
 
 	// The account response must never carry the durable credential or the
 	// derived runtime material.
@@ -330,9 +283,7 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	if redacted.QoderRefreshToken != "" || redacted.QoderRuntimeKey != "" {
 		t.Fatal("RedactQoderOutput left a secret in place")
 	}
-	if redacted.QoderAccessToken == "" {
-		t.Fatal("RedactQoderOutput dropped the access token the table needs as proof")
-	}
+	testutil.NotEqual(t, redacted.QoderAccessToken, "")
 }
 
 // TestHandleQoderLogin_ReportsUnusableCredential proves a login whose credential
@@ -359,14 +310,10 @@ func TestHandleQoderLogin_ReportsUnusableCredential(t *testing.T) {
 	defer auth.Close()
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 	final := runQoderLoginToCompletion(t, a, s, 15*time.Second)
-	if final.Status != "failed" {
-		t.Fatalf("status = %q, want failed", final.Status)
-	}
+	testutil.Equal(t, final.Status, "failed")
 	// The reason must name the actual problem instead of only saying that
 	// verification failed.
-	if !strings.Contains(final.Message, "user id") {
-		t.Fatalf("message = %q, want the underlying reason", final.Message)
-	}
+	testutil.MustContain(t, final.Message, "user id")
 
 	accounts, err := s.ListAccounts(t.Context())
 	if err != nil {
@@ -397,12 +344,8 @@ func runQoderLoginToCompletion(t *testing.T, a *API, s *store.Store, timeout tim
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
 		a.HandleQoderLogin(pollRec, channelLoginRequest(t, http.MethodGet, "/api/qoder/login/"+started.ID, ""))
-		if pollRec.Code != http.StatusOK {
-			t.Fatalf("poll status = %d body=%s", pollRec.Code, pollRec.Body.String())
-		}
-		if err := json.Unmarshal(pollRec.Body.Bytes(), &final); err != nil {
-			t.Fatalf("decode poll: %v", err)
-		}
+		testutil.Equal(t, pollRec.Code, http.StatusOK)
+		testutil.NoError(t, json.Unmarshal(pollRec.Body.Bytes(), &final), "decode poll: %v")
 		if final.Status == "complete" || final.Status == "failed" || final.Status == "expired" {
 			return final
 		}
@@ -417,22 +360,16 @@ func TestHandleQoderLogin_RequiresStoreAndRejectsBadMethods(t *testing.T) {
 	a := New(nil, "", "", &config.Config{})
 	rec := httptest.NewRecorder()
 	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 without a store", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusServiceUnavailable)
 
 	s, _ := newTestStore(t, "qd-login:")
 	a = New(s, "", "", &config.Config{})
 	rec = httptest.NewRecorder()
 	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPut, "/api/qoder/login", ""))
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want 405 for an unsupported method", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusMethodNotAllowed)
 	rec = httptest.NewRecorder()
 	a.HandleQoderLogin(rec, channelLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"unexpected":1}`))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for an unknown field", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
 }
 
 // TestHandleQoderLogin_RejectsForeignOrigin proves a credential-mutating request
@@ -446,12 +383,8 @@ func TestHandleQoderLogin_RejectsForeignOrigin(t *testing.T) {
 	req.Header.Set("Origin", "https://evil.example")
 	rec := httptest.NewRecorder()
 	a.HandleQoderLogin(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 for a foreign origin", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "origin_mismatch") {
-		t.Fatalf("body = %s, want the origin_mismatch code", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusForbidden)
+	testutil.MustContain(t, rec.Body.String(), "origin_mismatch")
 }
 
 // TestQoderAccountCreateAndEditAreOAuthOnly proves the account API refuses to
@@ -464,12 +397,8 @@ func TestQoderAccountCreateAndEditAreOAuthOnly(t *testing.T) {
 	createBody := `{"account_type":"qoder","client_cookie":"pat-shaped-value","enabled":true}`
 	rec := httptest.NewRecorder()
 	a.HandleAccounts(rec, qoderAccountRequest(t, http.MethodPost, "/api/accounts", createBody))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("create status = %d body=%s, want 400", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "/api/qoder/login") {
-		t.Fatalf("create body = %s, want a pointer at the official login", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
+	testutil.MustContain(t, rec.Body.String(), "/api/qoder/login")
 
 	// A stored account keeps its credential when an edit omits it.
 	acc := &store.Account{
@@ -483,9 +412,7 @@ func TestQoderAccountCreateAndEditAreOAuthOnly(t *testing.T) {
 		QoderRuntimeKey:   "key",
 		Enabled:           true,
 	}
-	if err := s.CreateAccount(t.Context(), acc); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(t.Context(), acc), "CreateAccount: %v")
 
 	editBody, _ := json.Marshal(map[string]interface{}{
 		"account_type": "qoder",
@@ -494,9 +421,7 @@ func TestQoderAccountCreateAndEditAreOAuthOnly(t *testing.T) {
 	})
 	rec = httptest.NewRecorder()
 	a.HandleAccountByID(rec, qoderAccountRequest(t, http.MethodPut, "/api/accounts/"+strconv.FormatInt(acc.ID, 10), string(editBody)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("edit status = %d body=%s, want 200", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	stored, err := s.GetAccount(t.Context(), acc.ID)
 	if err != nil {
@@ -505,12 +430,8 @@ func TestQoderAccountCreateAndEditAreOAuthOnly(t *testing.T) {
 	if stored.QoderRefreshToken != "refresh-1" || stored.QoderRuntimeKey != "key" {
 		t.Fatalf("the edit wiped the credential: %+v", stored)
 	}
-	if stored.QoderUserID != "uid-qoder" {
-		t.Fatalf("the edit changed the identity: %q", stored.QoderUserID)
-	}
-	if stored.Name != "renamed" {
-		t.Fatalf("name = %q, want the submitted value", stored.Name)
-	}
+	testutil.Equal(t, stored.QoderUserID, "uid-qoder")
+	testutil.Equal(t, stored.Name, "renamed")
 }
 
 func qoderAccountRequest(t *testing.T, method, path, body string) *http.Request {
@@ -548,9 +469,7 @@ func TestVerifyQoderAccountDoesNotReportForbidden(t *testing.T) {
 		QoderDataPolicy:   true,
 		Enabled:           true,
 	}
-	if err := s.CreateAccount(t.Context(), acc); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(t.Context(), acc), "CreateAccount: %v")
 
 	cfg := &config.Config{
 		QoderOAuthBaseURL:   upstream.URL,
@@ -561,21 +480,15 @@ func TestVerifyQoderAccountDoesNotReportForbidden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verifyQoderAccount() error = %v, want success", err)
 	}
-	if status != "" {
-		t.Fatalf("status = %q, want no account status", status)
-	}
-	if httpStatus != 0 {
-		t.Fatalf("httpStatus = %d, want 0", httpStatus)
-	}
+	testutil.Equal(t, status, "")
+	testutil.Equal(t, httpStatus, 0)
 	if apperrors.ClassifyAccountStatus("") != "" {
 		t.Fatal("sanity: the classifier must not invent a status")
 	}
 	// The catalog is an upstream observation, not a compiled-in list. This stub
 	// answers 404 for every catalog route, so verification must leave the
 	// snapshot empty rather than installing anything.
-	if len(acc.QoderModelIDs) != 0 {
-		t.Fatalf("QoderModelIDs = %v, want empty when the upstream read fails", acc.QoderModelIDs)
-	}
+	testutil.Equal(t, len(acc.QoderModelIDs), 0)
 }
 
 // TestQoderQuotaResponseFieldsAreAuthoritative proves the account payload reports
@@ -602,24 +515,16 @@ func TestQoderQuotaResponseFieldsAreAuthoritative(t *testing.T) {
 		},
 	}
 	fields := buildQuotaResponseFields(trial)
-	if got := fields["quota_limit"]; got != float64(300) {
-		t.Fatalf("quota_limit = %v, want 300", got)
-	}
-	if got := fields["quota_remaining"]; got != float64(300) {
-		t.Fatalf("quota_remaining = %v, want 300", got)
-	}
-	if got := fields["quota_plan"]; got != "Pro Trial" {
-		t.Fatalf("quota_plan = %v, want Pro Trial", got)
-	}
+	testutil.EqualAny(t, fields["quota_limit"], float64(300))
+	testutil.EqualAny(t, fields["quota_remaining"], float64(300))
+	testutil.Equal(t, fields["quota_plan"], "Pro Trial")
 	if fields["quota_limit_known"] != true {
 		t.Fatal("quota_limit_known = false for a window the gateway reported")
 	}
 	if fields["quota_observed"] != true {
 		t.Fatal("quota_observed = false for a window the gateway reported")
 	}
-	if fields["quota_exhausted"] != false {
-		t.Fatalf("quota_exhausted = %v, want false", fields["quota_exhausted"])
-	}
+	testutil.Equal(t, fields["quota_exhausted"], false)
 
 	exhausted := &store.Account{
 		ID:          185,
@@ -637,14 +542,10 @@ func TestQoderQuotaResponseFieldsAreAuthoritative(t *testing.T) {
 	if exhaustedFields["quota_exhausted"] != true {
 		t.Fatal("quota_exhausted = false for an account the gateway flagged")
 	}
-	if got := exhaustedFields["quota_plan"]; got != "Free" {
-		t.Fatalf("quota_plan = %v, want Free", got)
-	}
+	testutil.Equal(t, exhaustedFields["quota_plan"], "Free")
 	// A zero limit is a known zero, not an unknown window.
 	if exhaustedFields["quota_limit_known"] != true {
 		t.Fatal("quota_limit_known = false for a reported Free window")
 	}
-	if got := exhaustedFields["quota_upgrade_url"]; got == "" {
-		t.Fatal("quota_upgrade_url is empty, so the operator gets no next step")
-	}
+	testutil.NotEqual(t, exhaustedFields["quota_upgrade_url"], "")
 }

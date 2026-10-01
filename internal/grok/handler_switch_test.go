@@ -2,6 +2,7 @@ package grok
 
 import (
 	"errors"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -25,9 +26,7 @@ func TestShouldSwitchGrokAccount(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldSwitchGrokAccount(tt.err); got != tt.want {
-				t.Fatalf("shouldSwitchGrokAccount(%v)=%v want=%v", tt.err, got, tt.want)
-			}
+			testutil.Equal(t, shouldSwitchGrokAccount(tt.err), tt.want)
 		})
 	}
 }
@@ -45,9 +44,7 @@ func TestUpstreamHTTPResponseStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := upstreamHTTPResponseStatus(tt.err); got != tt.want {
-				t.Fatalf("upstreamHTTPResponseStatus(%v)=%v want=%v", tt.err, got, tt.want)
-			}
+			testutil.Equal(t, upstreamHTTPResponseStatus(tt.err), tt.want)
 		})
 	}
 }
@@ -71,12 +68,8 @@ func TestMarkAllGrokAccountStatuses(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := markAllGrokAccountStatuses(tt.err); got != tt.wantMark {
-				t.Fatalf("markAllGrokAccountStatuses()=%v want mark=%v", got, tt.wantMark)
-			}
-			if got := shouldSwitchGrokAccount(tt.err); got != tt.wantSwitch {
-				t.Fatalf("shouldSwitchGrokAccount()=%v want %v", got, tt.wantSwitch)
-			}
+			testutil.Equal(t, markAllGrokAccountStatuses(tt.err), tt.wantMark)
+			testutil.Equal(t, shouldSwitchGrokAccount(tt.err), tt.wantSwitch)
 		})
 	}
 }

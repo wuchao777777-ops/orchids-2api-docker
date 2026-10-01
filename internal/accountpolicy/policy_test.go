@@ -8,6 +8,7 @@ import (
 
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func grokBuildAccount() *store.Account {
@@ -21,22 +22,16 @@ func TestClassify_RefusedCredentialNeedsLogin(t *testing.T) {
 	acc := grokBuildAccount()
 	v := Classify(acc, errors.New("401: grok session unauthenticated"), "grok-4.6")
 
-	if v.Scope != ScopeCredential {
-		t.Fatalf("scope = %q, want %q", v.Scope, ScopeCredential)
-	}
+	testutil.Equal(t, v.Scope, ScopeCredential)
 	if !v.NeedsLogin || (v.Scope != ScopeAccount && v.Scope != ScopeCredential) {
 		t.Fatalf("verdict must require a login and hold the account: %+v", v)
 	}
 	if v.Status != "401" || !strings.Contains(v.Message, "Build OAuth") || strings.Contains(v.Message, "Cookie") {
 		t.Fatalf("verdict must identify the Build OAuth re-login without a retired cookie hint: %+v", v)
 	}
-	if v.Cooldown != CredentialReverify {
-		t.Fatalf("cooldown = %v, want %v", v.Cooldown, CredentialReverify)
-	}
+	testutil.Equal(t, v.Cooldown, CredentialReverify)
 	v.Apply(acc)
-	if acc.AuthStatus != store.AccountAuthStatusReauthRequired {
-		t.Fatalf("auth status = %q, want reauthRequired", acc.AuthStatus)
-	}
+	testutil.Equal(t, acc.AuthStatus, store.AccountAuthStatusReauthRequired)
 }
 
 // TestClassify_ModelScopedFailureKeepsAccount covers the P0 rule: a complaint
@@ -55,18 +50,12 @@ func TestClassify_ModelScopedFailureKeepsAccount(t *testing.T) {
 		"requested base model not allowed for this account",
 	} {
 		v := Classify(acc, errors.New(message), "grok-4.6")
-		if v.Scope != ScopeModel {
-			t.Fatalf("%q: scope = %q, want %q", message, v.Scope, ScopeModel)
-		}
-		if v.Status != "" {
-			t.Fatalf("%q: a model-scoped failure must not set an account status, got %q", message, v.Status)
-		}
+		testutil.Equal(t, v.Scope, ScopeModel)
+		testutil.Equal(t, v.Status, "")
 		if v.Scope == ScopeAccount || v.Scope == ScopeCredential {
 			t.Fatalf("%q: a model-scoped failure must not hold the account", message)
 		}
-		if v.Model != "grok-4.6" {
-			t.Fatalf("%q: model = %q, want the reported model", message, v.Model)
-		}
+		testutil.Equal(t, v.Model, "grok-4.6")
 	}
 }
 
@@ -77,9 +66,7 @@ func TestClassify_RateLimitIsAccountScopedWithShortCooldown(t *testing.T) {
 	if v.Scope != ScopeAccount || v.Status != "429" {
 		t.Fatalf("verdict = %+v, want account-scoped 429", v)
 	}
-	if v.Cooldown != CooldownRateLimit {
-		t.Fatalf("cooldown = %v, want %v", v.Cooldown, CooldownRateLimit)
-	}
+	testutil.Equal(t, v.Cooldown, CooldownRateLimit)
 	if v.NeedsLogin {
 		t.Fatal("throttling must not require a login")
 	}
@@ -144,9 +131,7 @@ func TestAccountLifecycle(t *testing.T) {
 	if !NeedsReverify(&store.Account{StatusCode: "401"}, now) {
 		t.Fatal("a 401 without a verdict stamp must be due immediately")
 	}
-	if AccountHeld(rejected, now.Add(24*time.Hour)) == false {
-		t.Fatal("reauthRequired must remain held until a successful re-authentication")
-	}
+	testutil.NotEqual(t, AccountHeld(rejected, now.Add(24*time.Hour)), false)
 
 	healthy := grokBuildAccount()
 	Success(now).Apply(healthy)
@@ -175,9 +160,7 @@ func TestCooldownFor_MatchesPoolValues(t *testing.T) {
 		{&store.Account{StatusCode: "weird"}, 5 * time.Minute},
 	}
 	for _, tc := range cases {
-		if got := CooldownFor(tc.acc); got != tc.want {
-			t.Fatalf("CooldownFor(%s/%s) = %v, want %v", tc.acc.AccountType, tc.acc.StatusCode, got, tc.want)
-		}
+		testutil.Equal(t, CooldownFor(tc.acc), tc.want)
 	}
 }
 
@@ -185,13 +168,9 @@ func TestRateLimitCooldownIsBoundedExponential(t *testing.T) {
 	want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 16 * time.Minute, 30 * time.Minute, 30 * time.Minute}
 	failures := []int{1, 2, 3, 6, 7, 20}
 	for i, failureCount := range failures {
-		if got := RateLimitCooldown(failureCount); got != want[i] {
-			t.Fatalf("RateLimitCooldown(%d)=%v want %v", failureCount, got, want[i])
-		}
+		testutil.Equal(t, RateLimitCooldown(failureCount), want[i])
 	}
-	if got := BoundRateLimitCooldown(2 * time.Hour); got != 30*time.Minute {
-		t.Fatalf("bounded retry-after=%v want 30m", got)
-	}
+	testutil.Equal(t, BoundRateLimitCooldown(2*time.Hour), 30*time.Minute)
 }
 
 func TestAccountHeldUsesLaterBoundedReset(t *testing.T) {
@@ -337,9 +316,7 @@ func TestClassifyCline403EntitlementIsModelScoped(t *testing.T) {
 // TestCredentialMessageIsProviderAware keeps the operator instruction concrete.
 func TestCredentialMessageIsProviderAware(t *testing.T) {
 	grokVerdict := Classify(grokBuildAccount(), errors.New("401: unauthenticated"), "")
-	if !strings.Contains(grokVerdict.Message, "重新完成官方登录") || !strings.Contains(grokVerdict.Message, "Build OAuth") {
-		t.Fatalf("grok reason = %q", grokVerdict.Message)
-	}
+	testutil.MustContainAll(t, grokVerdict.Message, "重新完成官方登录", "Build OAuth")
 	other := Classify(&store.Account{AccountType: "workbuddy"}, errors.New("401: expired"), "")
 	if other.Message == "" || other.NeedsLogin == false {
 		t.Fatalf("workbuddy verdict = %+v", other)
@@ -364,20 +341,14 @@ func TestClassify_WorkBuddyCreditExhaustionEnablesFreeOnlyMode(t *testing.T) {
 	acc := &store.Account{ID: 1, AccountType: "workbuddy", Enabled: true}
 	verdict := Classify(acc, errors.New(production), "fast-model")
 
-	if verdict.Scope != ScopeAccount {
-		t.Fatalf("scope = %v, want an account-scoped verdict: an exhausted allowance refuses every model", verdict.Scope)
-	}
-	if verdict.Status != store.AccountStatusWorkBuddyQuotaExhausted {
-		t.Fatalf("status = %q, want WorkBuddy free-only status", verdict.Status)
-	}
+	testutil.Equal(t, verdict.Scope, ScopeAccount)
+	testutil.Equal(t, verdict.Status, store.AccountStatusWorkBuddyQuotaExhausted)
 	verdict.Apply(acc)
 	if AccountHeld(acc, time.Now()) {
 		t.Fatal("credit exhaustion must not hide the account from confirmed free models")
 	}
 	// The reason reaches the operator, including what to do about it.
-	if !strings.Contains(acc.StatusMessage, "codebuddy.ai/profile/usage") {
-		t.Fatalf("status message = %q, want the upstream's purchase link", acc.StatusMessage)
-	}
+	testutil.MustContain(t, acc.StatusMessage, "codebuddy.ai/profile/usage")
 }
 
 // TestIsCreditExhaustion_SeparatesTheTwoRefusals pins the distinction the rule
@@ -437,12 +408,8 @@ func TestClassify_SpentBalanceOutranksTheRetryHint(t *testing.T) {
 			acc := &store.Account{ID: 60, AccountType: "workbuddy", Enabled: true}
 			verdict := Classify(acc, hintedError{message: production, wait: wait}, "hy3")
 
-			if verdict.Status != store.AccountStatusWorkBuddyQuotaExhausted {
-				t.Fatalf("status = %q, want the WorkBuddy free-only state; the retry hint must not outrank a spent balance", verdict.Status)
-			}
-			if verdict.Scope != ScopeAccount {
-				t.Fatalf("scope = %v, want account", verdict.Scope)
-			}
+			testutil.Equal(t, verdict.Status, store.AccountStatusWorkBuddyQuotaExhausted)
+			testutil.Equal(t, verdict.Scope, ScopeAccount)
 			verdict.Apply(acc)
 			if AccountHeld(acc, time.Now()) {
 				t.Fatal("a spent account must stay selectable for its confirmed free models")
@@ -460,12 +427,8 @@ func TestClassify_PlainThrottleKeepsItsRetryHint(t *testing.T) {
 		wait:    2 * time.Minute,
 	}, "hy3")
 
-	if verdict.Status != "429" {
-		t.Fatalf("status = %q, want 429", verdict.Status)
-	}
-	if verdict.Cooldown != 2*time.Minute {
-		t.Fatalf("cooldown = %v, want the upstream hint", verdict.Cooldown)
-	}
+	testutil.Equal(t, verdict.Status, "429")
+	testutil.Equal(t, verdict.Cooldown, 2*time.Minute)
 }
 
 // A spent balance is also not a payment refusal: it must not be answered as a
@@ -478,7 +441,5 @@ func TestClassify_SpentBalanceOnQoderKeepsTheFreeTierState(t *testing.T) {
 		wait:    30 * time.Second,
 	}, "qwen3.8-flash")
 
-	if verdict.Status != store.AccountStatusQoderQuotaExhausted {
-		t.Fatalf("status = %q, want the Qoder free-tier state", verdict.Status)
-	}
+	testutil.Equal(t, verdict.Status, store.AccountStatusQoderQuotaExhausted)
 }

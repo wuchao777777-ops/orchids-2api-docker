@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -67,9 +68,7 @@ func TestGenerateSessionTokenWithoutBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateSessionToken() error = %v", err)
 	}
-	if len(token) != sessionTokenLength*2 {
-		t.Fatalf("token length = %d, want %d hex characters", len(token), sessionTokenLength*2)
-	}
+	testutil.Equal(t, len(token), sessionTokenLength*2)
 	if !ValidateSessionToken(token) {
 		t.Fatal("a token generated in-process must validate")
 	}
@@ -92,9 +91,7 @@ func TestDurableSessionSurvivesProcessRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateSessionToken() error = %v", err)
 	}
-	if backend.saveCalls != 1 {
-		t.Fatalf("SaveSession calls = %d, want 1", backend.saveCalls)
-	}
+	testutil.Equal(t, backend.saveCalls, 1)
 
 	// Simulate the restart: the new process has an empty in-process map.
 	clearInProcessSessions()

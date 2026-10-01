@@ -12,7 +12,21 @@ import (
 
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
+
+// newTestGrokStore builds a grok-test store on a throwaway miniredis whose
+// lifetime is the test's own.
+func newTestGrokStore(t *testing.T, prefix string) *store.Store {
+	t.Helper()
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: prefix})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
 
 func setupValidationHandler(t *testing.T) (*Handler, *store.Store, *miniredis.Miniredis) {
 	t.Helper()
@@ -28,31 +42,24 @@ func setupValidationHandler(t *testing.T) (*Handler, *store.Store, *miniredis.Mi
 	}
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
+	t.Cleanup(func() {
+		_ = s.Close()
+	})
 	return NewHandler(nil, lb), s, mini
 }
 
 func TestEnsureModelEnabled_RejectsHiddenGrokModel(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, _, _ := setupValidationHandler(t)
 
 	err := h.ensureModelEnabled(context.Background(), "grok-4.1")
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if err.Error() != "model not found" {
-		t.Fatalf("error=%q want %q", err.Error(), "model not found")
-	}
+	testutil.Equal(t, err.Error(), "model not found")
 }
 
 func TestHandleChatCompletions_DoesNotAutoRegisterUnknownModel(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 
 	body := `{"model":"grok-5","messages":[{"role":"user","content":"hello"}],"stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", strings.NewReader(body))
@@ -60,20 +67,14 @@ func TestHandleChatCompletions_DoesNotAutoRegisterUnknownModel(t *testing.T) {
 
 	h.HandleChatCompletions(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusNotFound)
 	if _, err := s.GetModelByModelID(context.Background(), "grok-5"); err == nil {
 		t.Fatal("unexpected auto-registered model grok-5")
 	}
 }
 
 func TestEnsureModelEnabled_AllowsVerifiedDynamicGrokModel(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel:  "Grok",
@@ -85,17 +86,11 @@ func TestEnsureModelEnabled_AllowsVerifiedDynamicGrokModel(t *testing.T) {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	if err := h.ensureModelEnabled(context.Background(), "grok-5"); err != nil {
-		t.Fatalf("ensureModelEnabled() error = %v", err)
-	}
+	testutil.NoError(t, h.ensureModelEnabled(context.Background(), "grok-5"), "ensureModelEnabled() error = %v")
 }
 
 func TestEnsureModelCapability_RejectsPersistedCapabilityMismatch(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel: "Grok", ModelID: "grok-5", Name: "grok-5",
@@ -104,23 +99,15 @@ func TestEnsureModelCapability_RejectsPersistedCapabilityMismatch(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
-	if err := h.ensureModelCapability(context.Background(), "grok-5", store.CapabilityResponses); err != nil {
-		t.Fatalf("Responses capability error = %v", err)
-	}
+	testutil.NoError(t, h.ensureModelCapability(context.Background(), "grok-5", store.CapabilityResponses), "Responses capability error = %v")
 	if err := h.ensureModelCapability(context.Background(), "grok-5", store.CapabilityChat); err == nil {
 		t.Fatal("expected chat capability rejection")
 	}
 }
 
 func TestResolveConversationModel_AppliesPersistedRoute(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-	if err := s.CreateAccount(context.Background(), &store.Account{AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, OAuthAccessToken: "token", Enabled: true, GrokModels: []string{"future-build-chat"}}); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	h, s, _ := setupValidationHandler(t)
+	testutil.NoError(t, s.CreateAccount(context.Background(), &store.Account{AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, OAuthAccessToken: "token", Enabled: true, GrokModels: []string{"future-build-chat"}}), "CreateAccount() error = %v")
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel: "Grok", ModelID: "future-build-chat", Name: "routed",
 		Status: store.ModelStatusAvailable, Verified: true, Provider: ProviderBuild,
@@ -129,20 +116,14 @@ func TestResolveConversationModel_AppliesPersistedRoute(t *testing.T) {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 	spec, ok := h.resolveConversationModel(context.Background(), "future-build-chat")
-	if !ok {
-		t.Fatal("model was not resolved")
-	}
+	testutil.True(t, ok, "model was not resolved")
 	if spec.Upstream != UpstreamCLI || spec.UpstreamModel != "grok-routed-build" {
 		t.Fatalf("persisted route not applied: %#v", spec)
 	}
 }
 
 func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel:  "WorkBuddy",
@@ -163,9 +144,7 @@ func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t
 		t.Fatalf("CreateModel(grok) error = %v", err)
 	}
 
-	if err := h.ensureModelEnabled(context.Background(), "grok-shared-id"); err != nil {
-		t.Fatalf("ensureModelEnabled() error = %v", err)
-	}
+	testutil.NoError(t, h.ensureModelEnabled(context.Background(), "grok-shared-id"), "ensureModelEnabled() error = %v")
 }
 
 func TestResolveModel_ParsesSupportedEffortSuffixes(t *testing.T) {
@@ -207,11 +186,7 @@ func TestResolveModel_RemovesGrok43BetaWebsite(t *testing.T) {
 }
 
 func TestEnsureModelEnabled_RejectsBuildOnlyGrok43EvenWhenStored(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel:  "Grok",
@@ -223,17 +198,11 @@ func TestEnsureModelEnabled_RejectsBuildOnlyGrok43EvenWhenStored(t *testing.T) {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	if err := h.ensureModelEnabled(context.Background(), "grok-4.3"); err != nil {
-		t.Fatalf("ensureModelEnabled(grok-4.3) error = %v", err)
-	}
+	testutil.NoError(t, h.ensureModelEnabled(context.Background(), "grok-4.3"), "ensureModelEnabled(grok-4.3) error = %v")
 }
 
 func TestEnsureModelEnabled_RejectsDeprecatedGrok43Beta(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel:  "Grok",
@@ -251,20 +220,14 @@ func TestEnsureModelEnabled_RejectsDeprecatedGrok43Beta(t *testing.T) {
 }
 
 func TestHandleChatCompletions_DoesNotProbeMissingModel(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 
 	body := `{"model":"grok-5","messages":[{"role":"user","content":"hello"}],"stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.HandleChatCompletions(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusNotFound)
 	if _, err := s.GetModelByModelID(context.Background(), "grok-5"); err == nil {
 		t.Fatal("unexpected created model grok-5")
 	} else if err.Error() == "" {

@@ -12,6 +12,7 @@ import (
 
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -47,16 +48,10 @@ func TestChatRequestCarriesTheClineProductIdentity(t *testing.T) {
 	}
 
 	for name, want := range defaultClientHeaders {
-		if got := seen.Get(name); got != want {
-			t.Errorf("header %s = %q, want %q", name, got, want)
-		}
+		testutil.CheckEqual(t, seen.Get(name), want)
 	}
-	if got := seen.Get("X-Task-ID"); got == "" {
-		t.Error("X-Task-ID is empty; the upstream correlates a turn by it")
-	}
-	if got := seen.Get("Authorization"); got != "Bearer workos:access-1" {
-		t.Errorf("Authorization = %q, want %q", got, "Bearer workos:access-1")
-	}
+	testutil.CheckNotEqual(t, seen.Get("X-Task-ID"), "")
+	testutil.CheckEqual(t, seen.Get("Authorization"), "Bearer workos:access-1")
 }
 
 // TestCatalogRequestCarriesTheClineProductIdentity keeps the model feed on the
@@ -81,9 +76,7 @@ func TestCatalogRequestCarriesTheClineProductIdentity(t *testing.T) {
 		t.Fatalf("FetchUpstreamModels() error = %v", err)
 	}
 	for name, want := range defaultClientHeaders {
-		if got := seen.Get(name); got != want {
-			t.Errorf("header %s = %q, want %q", name, got, want)
-		}
+		testutil.CheckEqual(t, seen.Get(name), want)
 	}
 }
 
@@ -95,12 +88,8 @@ func TestApplyClientHeadersKeepsAnExplicitValue(t *testing.T) {
 	h := http.Header{}
 	h.Set("Accept", "application/json")
 	applyClientHeaders(h)
-	if got := h.Get("Accept"); got != "application/json" {
-		t.Errorf("Accept = %q, want it to survive", got)
-	}
-	if got := h.Get("X-CLIENT-TYPE"); got != "cline-cli" {
-		t.Errorf("X-CLIENT-TYPE = %q, want cline-cli", got)
-	}
+	testutil.CheckEqual(t, h.Get("Accept"), "application/json")
+	testutil.CheckEqual(t, h.Get("X-CLIENT-TYPE"), "cline-cli")
 }
 
 // TestChat401RefreshRetryRebuildsThePOSTBody guards the consumed-body bug from
@@ -127,9 +116,7 @@ func TestChat401RefreshRetryRebuildsThePOSTBody(t *testing.T) {
 				_, _ = io.WriteString(w, `{"error":{"message":"expired"}}`)
 				return
 			}
-			if got := r.Header.Get("Authorization"); got != "Bearer workos:access-2" {
-				t.Errorf("retry authorization=%q", got)
-			}
+			testutil.CheckEqual(t, r.Header.Get("Authorization"), "Bearer workos:access-2")
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
 		default:
@@ -171,9 +158,7 @@ func TestClassifyStatusKeepsAForbiddenOutOfTheCredentialPath(t *testing.T) {
 	if isUnauthorized(forbidden) {
 		t.Error("403 must not be treated as unauthorized: a refresh cannot repair it")
 	}
-	if !strings.Contains(forbidden.Error(), "status=403") || !strings.Contains(forbidden.Error(), "cline-free/x") {
-		t.Errorf("403 must preserve its entitlement refusal: %v", forbidden)
-	}
+	testutil.CheckContainAll(t, forbidden.Error(), "status=403", "cline-free/x")
 
 	unauthorized := classifyStatus(http.StatusUnauthorized, []byte(`{"error":{"message":"token expired"}}`))
 	if !isUnauthorized(unauthorized) {

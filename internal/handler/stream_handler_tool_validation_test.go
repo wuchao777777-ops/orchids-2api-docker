@@ -9,6 +9,7 @@ import (
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -26,6 +27,10 @@ func TestHasRequiredToolInput(t *testing.T) {
 		{name: "edit valid", tool: "Edit", input: `{"file_path":"/tmp/a","old_string":"a","new_string":"b"}`, expected: true},
 		{name: "write empty json", tool: "Write", input: `{}`, expected: false},
 		{name: "write valid", tool: "Write", input: `{"file_path":"/tmp/a","content":"x"}`, expected: true},
+		{name: "lowercase write empty json", tool: "write", input: `{}`, expected: false},
+		{name: "lowercase write valid", tool: "write", input: `{"file_path":"a","content":"x"}`, expected: true},
+		{name: "lowercase write legacy path", tool: "write", input: `{"path":"a","content":"x"}`, expected: true},
+		{name: "lowercase bash empty cmd", tool: "bash", input: `{"cmd":""}`, expected: false},
 		{name: "bash empty", tool: "Bash", input: `{}`, expected: false},
 		{name: "bash valid", tool: "Bash", input: `{"command":"ls"}`, expected: true},
 		{name: "unknown tool malformed json", tool: "Unknown", input: `{`, expected: true},
@@ -36,9 +41,7 @@ func TestHasRequiredToolInput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := validToolCallInput(tc.tool, tc.input)
-			if got != tc.expected {
-				t.Fatalf("hasRequiredToolInput(%q, %q) = %v, want %v", tc.tool, tc.input, got, tc.expected)
-			}
+			testutil.Equal(t, got, tc.expected)
 		})
 	}
 }
@@ -46,44 +49,17 @@ func TestHasRequiredToolInput(t *testing.T) {
 func TestToolCallSameIDInvalidThenValid_UsesValidOne(t *testing.T) {
 	t.Parallel()
 
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false, // non-stream mode for easier assertions
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
+	h := newToolValidationHandler(t)
 
 	// First frame is incomplete and should be rejected.
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_same_id",
-			"toolName":   "Edit",
-			"input":      "{}",
-		},
-	})
+	sendToolCall(h, "tool_same_id", "Edit", "{}")
 
 	// Second frame (same toolCallId) is valid and should be accepted.
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_same_id",
-			"toolName":   "Write",
-			"input":      `{"file_path":"/tmp/a.txt","content":"x"}`,
-		},
-	})
+	sendToolCall(h, "tool_same_id", "Write", `{"file_path":"/tmp/a.txt","content":"x"}`)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
+	sendToolFinish(h)
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(h.contentBlocks))
-	}
+	testutil.Equal(t, len(h.contentBlocks), 1)
 
 	block := h.contentBlocks[0]
 	if got, _ := block["type"].(string); got != "tool_use" {
@@ -97,42 +73,15 @@ func TestToolCallSameIDInvalidThenValid_UsesValidOne(t *testing.T) {
 func TestWriteToolCallDifferentIDsSameInput_Preserved(t *testing.T) {
 	t.Parallel()
 
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false, // non-stream mode for easier assertions
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
+	h := newToolValidationHandler(t)
 
 	input := `{"file_path":"/tmp/a.txt","content":"x"}`
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_id_1",
-			"toolName":   "Write",
-			"input":      input,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_id_2",
-			"toolName":   "Write",
-			"input":      input,
-		},
-	})
+	sendToolCall(h, "tool_id_1", "Write", input)
+	sendToolCall(h, "tool_id_2", "Write", input)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
+	sendToolFinish(h)
 
-	if len(h.contentBlocks) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d", len(h.contentBlocks))
-	}
+	testutil.Equal(t, len(h.contentBlocks), 2)
 	block := h.contentBlocks[0]
 	if got, _ := block["type"].(string); got != "tool_use" {
 		t.Fatalf("expected tool_use block, got %q", got)
@@ -146,605 +95,170 @@ func TestWriteToolCallDifferentIDsSameWorkdirTarget_Preserved(t *testing.T) {
 	t.Parallel()
 
 	workdir := t.TempDir()
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
+	h := newToolValidationHandler(t)
 
 	relativeInput := `{"file_path":"calculator.py","content":"x"}`
 	absoluteInput := `{"file_path":"` + strings.ReplaceAll(filepath.Join(workdir, "calculator.py"), `\`, `\\`) + `","content":"x"}`
 
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_rel",
-			"toolName":   "Write",
-			"input":      relativeInput,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_abs",
-			"toolName":   "Write",
-			"input":      absoluteInput,
-		},
-	})
+	sendToolCall(h, "tool_rel", "Write", relativeInput)
+	sendToolCall(h, "tool_abs", "Write", absoluteInput)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
+	sendToolFinish(h)
 
-	if len(h.contentBlocks) != 2 {
-		t.Fatalf("expected 1 deduped content block, got %d: %v", len(h.contentBlocks), h.contentBlocks)
-	}
+	testutil.Equal(t, len(h.contentBlocks), 2)
 }
 
 func TestReadToolCallDifferentIDsSameInput_BothAccepted(t *testing.T) {
 	t.Parallel()
 
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false, // non-stream mode for easier assertions
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
+	h := newToolValidationHandler(t)
 
 	input := `{"file_path":"/tmp/a.txt"}`
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "read_id_1",
-			"toolName":   "Read",
-			"input":      input,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "read_id_2",
-			"toolName":   "Read",
-			"input":      input,
-		},
-	})
+	sendToolCall(h, "read_id_1", "Read", input)
+	sendToolCall(h, "read_id_2", "Read", input)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
+	sendToolFinish(h)
 
-	if len(h.contentBlocks) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d: %v", len(h.contentBlocks), h.contentBlocks)
-	}
+	testutil.Equal(t, len(h.contentBlocks), 2)
 }
 
 func TestWriteToolCallDifferentIDsDifferentContent_BothAccepted(t *testing.T) {
 	t.Parallel()
 
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false, // non-stream mode for easier assertions
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
+	h := newToolValidationHandler(t)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "write_id_1",
-			"toolName":   "Write",
-			"input":      `{"file_path":"/tmp/a.txt","content":"x"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "write_id_2",
-			"toolName":   "Write",
-			"input":      `{"file_path":"/tmp/a.txt","content":"y"}`,
-		},
-	})
+	sendToolCall(h, "write_id_1", "Write", `{"file_path":"/tmp/a.txt","content":"x"}`)
+	sendToolCall(h, "write_id_2", "Write", `{"file_path":"/tmp/a.txt","content":"y"}`)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
+	sendToolFinish(h)
 
-	if len(h.contentBlocks) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d", len(h.contentBlocks))
+	testutil.Equal(t, len(h.contentBlocks), 2)
+}
+
+// runToolCall drives one tool call through a handler that declares allowed, then
+// returns the handler for the caller to assert on what survived the finish frame.
+func runToolCall(t *testing.T, allowed []string, callID, name, args string) *streamHandler {
+	t.Helper()
+	h := newToolValidationHandler(t)
+	h.setAllowedToolNames(allowed)
+	sendToolCall(h, callID, name, args)
+	sendToolFinish(h)
+	return h
+}
+
+// assertToolCallSurvived checks the call was kept and renamed to wantName.
+func assertToolCallSurvived(t *testing.T, h *streamHandler, wantName string) {
+	t.Helper()
+	testutil.Equal(t, len(h.contentBlocks), 1)
+	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
+		t.Fatalf("expected tool_use block, got %q", got)
 	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != wantName {
+		t.Fatalf("expected tool name %s, got %q", wantName, got)
+	}
+	testutil.Equal(t, h.suppressedToolCalls, 0)
+}
+
+// assertToolCallSuppressed checks the call was dropped and the turn still ended.
+func assertToolCallSuppressed(t *testing.T, h *streamHandler, name string) {
+	t.Helper()
+	testutil.Equal(t, len(h.contentBlocks), 0)
+	testutil.Equal(t, h.suppressedToolCalls, 1)
+	testutil.Equal(t, h.finalStopReason, "end_turn")
 }
 
 func TestToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
 	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-	h.setAllowedToolNames([]string{"Read", "Bash"})
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "readfolder_1",
-			"toolName":   "ReadFolder",
-			"input":      `{"path":"/tmp"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 0 {
-		t.Fatalf("expected undeclared tool call to be suppressed without fallback text, got %#v", h.contentBlocks)
-	}
-	if h.suppressedToolCalls != 1 {
-		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
-	}
-	if h.finalStopReason != "end_turn" {
-		t.Fatalf("finalStopReason=%q want end_turn", h.finalStopReason)
-	}
+	h := runToolCall(t, []string{"Read", "Bash"}, "readfolder_1", "ReadFolder", `{"path":"/tmp"}`)
+	assertToolCallSuppressed(t, h, "ReadFolder")
 }
 
 func TestWriteToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
 	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-	h.setAllowedToolNames([]string{"Read", "Glob", "Grep"})
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "write_undeclared_1",
-			"toolName":   "Write",
-			"input":      `{"file_path":"calculator.py","content":"print(1)"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 0 {
-		t.Fatalf("expected undeclared Write tool call to be suppressed without fallback text, got %#v", h.contentBlocks)
-	}
-	if h.suppressedToolCalls != 1 {
-		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
-	}
-	if h.finalStopReason != "end_turn" {
-		t.Fatalf("finalStopReason=%q want end_turn", h.finalStopReason)
-	}
+	h := runToolCall(t, []string{"Read", "Glob", "Grep"}, "write_undeclared_1", "Write", `{"file_path":"calculator.py","content":"print(1)"}`)
+	assertToolCallSuppressed(t, h, "Write")
 }
 
 func TestSandboxMetadataReadToolCall_IsSuppressed(t *testing.T) {
 	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-	h.setAllowedToolNames([]string{"Read", "Bash"})
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "sandbox_meta_read",
-			"toolName":   "Read",
-			"input":      `{"file_path":"/tmp/cc-agent/sb1-demo/.claude/.claude.json"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 0 {
-		t.Fatalf("expected suppressed tool call without fallback text, got %#v", h.contentBlocks)
-	}
-	if h.suppressedToolCalls != 1 {
-		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
-	}
-	if h.finalStopReason != "end_turn" {
-		t.Fatalf("finalStopReason=%q want end_turn", h.finalStopReason)
-	}
+	h := runToolCall(t, []string{"Read", "Bash"}, "sandbox_meta_read", "Read", `{"file_path":"/tmp/cc-agent/sb1-demo/.claude/.claude.json"}`)
+	assertToolCallSuppressed(t, h, "Read")
 }
 
 func TestTodoWriteToolCall_IsSuppressedWhenNotDeclared(t *testing.T) {
 	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-	h.setAllowedToolNames([]string{"Read", "Write", "Edit", "Bash", "Glob", "Grep"})
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "todo_1",
-			"toolName":   "TodoWrite",
-			"input":      `{"todos":[{"content":"Create calculator app with scientific notation support","status":"in_progress"}]}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 0 {
-		t.Fatalf("expected TodoWrite tool call to be suppressed without fallback text, got %#v", h.contentBlocks)
-	}
-	if h.suppressedToolCalls != 1 {
-		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
-	}
-	if h.finalStopReason != "end_turn" {
-		t.Fatalf("finalStopReason=%q want end_turn", h.finalStopReason)
-	}
+	h := runToolCall(t, []string{"Read", "Write", "Edit", "Bash", "Glob", "Grep"}, "todo_1", "TodoWrite", `{"todos":[{"content":"Create calculator app with scientific notation support","status":"in_progress"}]}`)
+	assertToolCallSuppressed(t, h, "TodoWrite")
 }
 
 func TestTaskToolCall_IsAcceptedWhenClientDeclaredAgent(t *testing.T) {
 	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-
-	h.setAllowedToolNames(declaredToolNames([]interface{}{
-		map[string]interface{}{"name": "Agent"},
-	}))
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "task_1",
-			"toolName":   "Task",
-			"input":      `{"description":"Explore calculator codebase","prompt":"Find calculator files","subagent_type":"Explore"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected Task tool call to pass through, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
-		t.Fatalf("expected tool_use block, got %q", got)
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "Task" {
-		t.Fatalf("expected Task tool call, got %q", got)
-	}
-	if h.suppressedToolCalls != 0 {
-		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
-	}
+	h := runToolCall(t, declaredToolNames([]interface{}{map[string]interface{}{"name": "Agent"}}), "task_1", "Task", `{"description":"Explore calculator codebase","prompt":"Find calculator files","subagent_type":"Explore"}`)
+	assertToolCallSurvived(t, h, "Task")
 }
 
 func TestCustomMCPWebSearchToolCall_MapsToDeclaredWebSearch(t *testing.T) {
 	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-
-	h.setAllowedToolNames([]string{"web_search"})
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "ws_1",
-			"toolName":   "mcp__tavily__web_search",
-			"input":      `{"query":"Akron Ohio weather today March 29 2026 why so cold","timeRange":"day"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected mapped web_search tool call to pass through, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
-		t.Fatalf("expected tool_use block, got %q", got)
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "web_search" {
-		t.Fatalf("expected mapped tool name web_search, got %q", got)
-	}
-	if h.suppressedToolCalls != 0 {
-		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
-	}
+	h := runToolCall(t, []string{"web_search"}, "ws_1", "mcp__tavily__web_search", `{"query":"Akron Ohio weather today March 29 2026 why so cold","timeRange":"day"}`)
+	assertToolCallSurvived(t, h, "web_search")
 }
 
 func TestCustomMCPFetchToolCall_MapsToDeclaredWebFetch(t *testing.T) {
 	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-
-	h.setAllowedToolNames([]string{"web_fetch"})
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "wf_1",
-			"toolName":   "mcp__fetch__fetch",
-			"input":      `{"url":"https://example.com","max_length":4000}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected mapped web_fetch tool call to pass through, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "web_fetch" {
-		t.Fatalf("expected mapped tool name web_fetch, got %q", got)
-	}
-	if h.suppressedToolCalls != 0 {
-		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
-	}
+	h := runToolCall(t, []string{"web_fetch"}, "wf_1", "mcp__fetch__fetch", `{"url":"https://example.com","max_length":4000}`)
+	assertToolCallSurvived(t, h, "web_fetch")
 }
 
 func TestWebFetchToolCall_RewritesToDeclaredClientToolName(t *testing.T) {
 	t.Parallel()
 
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-
+	h := newToolValidationHandler(t)
 	h.setAllowedToolNames([]string{"web_fetch", "mcp__tavily__web_extract"})
-	h.setClientTools([]interface{}{
-		map[string]interface{}{"name": "mcp__tavily__web_extract"},
-	})
+	h.setClientTools([]interface{}{map[string]interface{}{"name": "mcp__tavily__web_extract"}})
+	sendToolCall(h, "wf_2", "web_fetch", `{"url":"https://linux.do/t/topic/1872670"}`)
+	sendToolFinish(h)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "wf_2",
-			"toolName":   "web_fetch",
-			"input":      `{"url":"https://linux.do/t/topic/1872670"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected rewritten web_fetch tool call to pass through, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "mcp__tavily__web_extract" {
-		t.Fatalf("expected mapped tool name mcp__tavily__web_extract, got %q", got)
-	}
-	if h.suppressedToolCalls != 0 {
-		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
-	}
+	assertToolCallSurvived(t, h, "mcp__tavily__web_extract")
 }
 
 func TestTaskToolCall_IsAcceptedWhenDelegatedToolsStayWithinAllowedSet(t *testing.T) {
 	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-
-	h.setAllowedToolNames([]string{"Read"})
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "task_1",
-			"toolName":   "Task",
-			"input":      `{"description":"Get weather","prompt":"Read weather skill","allowed_tools":["Read"]}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected delegated Task tool call to pass through, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
-		t.Fatalf("expected tool_use block, got %q", got)
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "Task" {
-		t.Fatalf("expected Task tool call, got %q", got)
-	}
-	if h.suppressedToolCalls != 0 {
-		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
-	}
+	h := runToolCall(t, []string{"Read"}, "task_1", "Task", `{"description":"Get weather","prompt":"Read weather skill","allowed_tools":["Read"]}`)
+	assertToolCallSurvived(t, h, "Task")
 }
 
 func TestTaskToolCall_IsRejectedWhenDelegatedToolsExceedAllowedSet(t *testing.T) {
 	t.Parallel()
 
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
+	h := newToolValidationHandler(t)
 
 	h.setAllowedToolNames([]string{"Read"})
 
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "task_1",
-			"toolName":   "Task",
-			"input":      `{"description":"Get weather","prompt":"Run shell","allowed_tools":["Bash"]}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
+	sendToolCall(h, "task_1", "Task", `{"description":"Get weather","prompt":"Run shell","allowed_tools":["Bash"]}`)
+	sendToolFinish(h)
 
-	if len(h.contentBlocks) != 0 {
-		t.Fatalf("expected rejected delegated Task without fallback text, got %#v", h.contentBlocks)
-	}
-	if h.suppressedToolCalls == 0 {
-		t.Fatalf("expected suppressed tool call count to increase")
-	}
+	testutil.Equal(t, len(h.contentBlocks), 0)
+	testutil.NotEqual(t, h.suppressedToolCalls, 0)
 }
 
 func TestSkillToolCall_IsAcceptedWhenClientDeclaredSkill(t *testing.T) {
 	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
-
-	h.setAllowedToolNames([]string{"Skill"})
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "skill_1",
-			"toolName":   "Skill",
-			"input":      `{"skill":"weather","args":"Yangzhou, China"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected Skill tool call to pass through, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
-		t.Fatalf("expected tool_use block, got %q", got)
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "Skill" {
-		t.Fatalf("expected Skill tool call, got %q", got)
-	}
-	if h.suppressedToolCalls != 0 {
-		t.Fatalf("suppressedToolCalls=%d want=0", h.suppressedToolCalls)
-	}
+	h := runToolCall(t, []string{"Skill"}, "skill_1", "Skill", `{"skill":"weather","args":"Yangzhou, China"}`)
+	assertToolCallSurvived(t, h, "Skill")
 }
 
 func TestBashToolCallDifferentIDsSameCommand_Preserved(t *testing.T) {
 	t.Parallel()
 
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false, // non-stream mode for easier assertions
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
+	h := newToolValidationHandler(t)
 
 	input := `{"command":"rm /Users/dailin/Documents/GitHub/TEST/calculator.py"}`
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "bash_id_1",
-			"toolName":   "Bash",
-			"input":      input,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "bash_id_2",
-			"toolName":   "Bash",
-			"input":      input,
-		},
-	})
+	sendToolCall(h, "bash_id_1", "Bash", input)
+	sendToolCall(h, "bash_id_2", "Bash", input)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
+	sendToolFinish(h)
 
-	if len(h.contentBlocks) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d", len(h.contentBlocks))
-	}
+	testutil.Equal(t, len(h.contentBlocks), 2)
 	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
 		t.Fatalf("expected Bash tool call, got %q", got)
 	}
@@ -753,46 +267,32 @@ func TestBashToolCallDifferentIDsSameCommand_Preserved(t *testing.T) {
 func TestBashToolCallDifferentIDsDifferentCommands_BothAccepted(t *testing.T) {
 	t.Parallel()
 
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false, // non-stream mode for easier assertions
-		adapter.FormatAnthropic,
-	)
-	defer h.release()
+	h := newToolValidationHandler(t)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "bash_id_1",
-			"toolName":   "Bash",
-			"input":      `{"command":"pwd"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "bash_id_2",
-			"toolName":   "Bash",
-			"input":      `{"command":"ls -la"}`,
-		},
-	})
+	sendToolCall(h, "bash_id_1", "Bash", `{"command":"pwd"}`)
+	sendToolCall(h, "bash_id_2", "Bash", `{"command":"ls -la"}`)
 
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
+	sendToolFinish(h)
 
-	if len(h.contentBlocks) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d", len(h.contentBlocks))
-	}
+	testutil.Equal(t, len(h.contentBlocks), 2)
 }
 
 func TestToolCallMissingID_IsSuppressed(t *testing.T) {
 	t.Parallel()
 
+	h := newToolValidationHandler(t)
+
+	sendToolCallWithoutID(h, "Bash", `{"command":"pwd"}`)
+
+	sendToolFinish(h)
+
+	testutil.Equal(t, len(h.contentBlocks), 0)
+}
+
+// newToolValidationHandler builds the non-stream handler these tool-call
+// validation tests assert against, and releases it when the test ends.
+func newToolValidationHandler(t *testing.T) *streamHandler {
+	t.Helper()
 	h := newStreamHandler(
 		&config.Config{},
 		httptest.NewRecorder(),
@@ -801,22 +301,37 @@ func TestToolCallMissingID_IsSuppressed(t *testing.T) {
 		false, // non-stream mode for easier assertions
 		adapter.FormatAnthropic,
 	)
-	defer h.release()
+	t.Cleanup(h.release)
+	return h
+}
 
+// sendToolCall feeds one model.tool-call frame.
+func sendToolCall(h *streamHandler, id, name, input string) {
 	h.handleMessage(upstream.SSEMessage{
 		Type: "model.tool-call",
 		Event: map[string]interface{}{
-			"toolName": "Bash",
-			"input":    `{"command":"pwd"}`,
+			"toolCallId": id,
+			"toolName":   name,
+			"input":      input,
 		},
 	})
+}
 
+// sendToolCallWithoutID feeds a tool-call frame that carries no toolCallId.
+func sendToolCallWithoutID(h *streamHandler, name, input string) {
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolName": name,
+			"input":    input,
+		},
+	})
+}
+
+// sendToolFinish closes the turn with a tool_use finish reason.
+func sendToolFinish(h *streamHandler) {
 	h.handleMessage(upstream.SSEMessage{
 		Type:  "model.finish",
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
-
-	if len(h.contentBlocks) != 0 {
-		t.Fatalf("expected missing-id tool call to be suppressed, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
-	}
 }

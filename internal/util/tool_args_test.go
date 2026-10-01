@@ -1,6 +1,9 @@
 package util
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 // TestNormalizeToolInputUnwrapsNestedArguments proves the OpenAI argument
 // wrapping is removed before the tool dispatcher sees the input.
@@ -15,9 +18,7 @@ func TestNormalizeToolInputUnwrapsNestedArguments(t *testing.T) {
 		`{"a":1}`:                   `{"a":1}`,
 	}
 	for input, want := range cases {
-		if got := NormalizeToolInput(input); got != want {
-			t.Errorf("NormalizeToolInput(%q) = %q, want %q", input, got, want)
-		}
+		testutil.CheckEqual(t, NormalizeToolInput(input), want)
 	}
 }
 
@@ -54,10 +55,6 @@ func TestNormalizeToolInputDepthStopsAtTheLimit(t *testing.T) {
 	// One layer deeper than the limit is left as-is rather than being unwrapped
 	// again, so a nested payload cannot drive unbounded recursion.
 	nested := `{"arguments":"{\"arguments\":\"{\\\"a\\\":1}\"}"}`
-	if got := normalizeToolInputDepth(nested, 0); got != nested {
-		t.Fatalf("depth 0 = %q, want the input unchanged", got)
-	}
-	if got := NormalizeToolInput(nested); got != `{"a":1}` {
-		t.Fatalf("NormalizeToolInput(%q) = %q, want the fully unwrapped object", nested, got)
-	}
+	testutil.Equal(t, normalizeToolInputDepth(nested, 0), nested)
+	testutil.Equal(t, NormalizeToolInput(nested), `{"a":1}`)
 }

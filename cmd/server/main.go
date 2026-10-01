@@ -125,15 +125,6 @@ func main() {
 
 	slog.Debug("Store initialized", "mode", "redis", "addr", cfg.RedisAddr, "prefix", cfg.RedisPrefix)
 
-	// The Qoder device fingerprint is derived from a per-deployment salt. It is
-	// generated once and never rotated: rotating it moves every account's
-	// fingerprint at once, which the upstream reads as every device changing.
-	if salt := qoder.EnsureInstallSalt(context.Background(), s); salt == "" {
-		slog.Debug("Qoder device fingerprint salt unavailable; using the reference-compatible derivation")
-	} else {
-		slog.Debug("Qoder device fingerprint salt loaded")
-	}
-
 	// 从 Redis 加载已保存的配置（如果存在）
 	if savedConfig, err := s.GetSetting(context.Background(), "config"); err == nil && savedConfig != "" {
 		if err := json.Unmarshal([]byte(savedConfig), cfg); err != nil {
@@ -324,9 +315,12 @@ func main() {
 	// Alert evaluation runs beside the refresh loop: it reads the same metric
 	// buckets the overview shows, so an alert and the page never disagree.
 	startAlertLoop(ctx, wiredOps, s, alertEngine, wiredAuditLogger)
-	logWorkBuddyReachability(cfg)
-	logQoderReachability(cfg)
-	logClineReachability(cfg)
+	logReachability("WorkBuddy backend", "workbuddy", workbuddy.DefaultBaseURL,
+		func() reachableClient { return workbuddy.NewFromAccount(nil, cfg) })
+	logReachability("Qoder control plane", "qoder", qoder.DefaultOpenAPIBaseURL,
+		func() reachableClient { return qoder.NewFromAccount(nil, cfg) })
+	logReachability("Cline API", "cline", cline.DefaultAPIBase,
+		func() reachableClient { return cline.NewFromAccount(nil, cfg) })
 
 	// Graceful shutdown
 	idleConnsClosed := make(chan struct{})
@@ -359,66 +353,30 @@ func main() {
 	slog.Info("Server shutdown gracefully")
 }
 
-// logWorkBuddyReachability reports at startup whether this process can reach the
-// WorkBuddy international backend. A blocked egress path breaks both the OAuth
-// login and every inference request, so the cause should be visible in the boot
-// log instead of surfacing as a per-request 502.
-func logWorkBuddyReachability(cfg *config.Config) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-
-		client := workbuddy.NewFromAccount(nil, cfg)
-		defer client.Close()
-		if err := client.ProbeReachability(ctx); err != nil {
-			slog.Warn("WorkBuddy backend is not reachable; the workbuddy channel will fail until egress is fixed",
-				"endpoint", workbuddy.DefaultBaseURL, "error", err,
-				"hint", "configure HTTP_PROXY/HTTPS_PROXY or the proxy settings in config.json if this host needs one")
-			return
-		}
-		slog.Info("WorkBuddy backend reachable", "endpoint", workbuddy.DefaultBaseURL)
-	}()
+// reachableClient is the shape shared by the per-provider startup probes.
+type reachableClient interface {
+	ProbeReachability(ctx context.Context) error
+	Close()
 }
 
-// logQoderReachability reports at startup whether this process can reach the
-// Qoder control plane. A blocked egress path breaks both the device login and
-// every inference request, so the cause should be visible in the boot log
-// instead of surfacing as a per-request 502.
-func logQoderReachability(cfg *config.Config) {
+// logReachability reports at startup whether this process can reach a provider
+// backend. A blocked egress path breaks both the login and every inference
+// request, so the cause should be visible in the boot log instead of surfacing
+// as a per-request 502.
+func logReachability(subject, channel, endpoint string, newClient func() reachableClient) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
-		client := qoder.NewFromAccount(nil, cfg)
+		client := newClient()
 		defer client.Close()
 		if err := client.ProbeReachability(ctx); err != nil {
-			slog.Warn("Qoder control plane is not reachable; the qoder channel will fail until egress is fixed",
-				"endpoint", qoder.DefaultOpenAPIBaseURL, "error", err,
+			slog.Warn(subject+" is not reachable; the "+channel+" channel will fail until egress is fixed",
+				"endpoint", endpoint, "error", err,
 				"hint", "configure HTTP_PROXY/HTTPS_PROXY or the proxy settings in config.json if this host needs one")
 			return
 		}
-		slog.Info("Qoder control plane reachable", "endpoint", qoder.DefaultOpenAPIBaseURL)
-	}()
-}
-
-// logClineReachability reports at startup whether this process can reach the
-// Cline API. A blocked egress path breaks both the device login and every
-// inference request, so the cause should be visible in the boot log instead of
-// surfacing as a per-request 502.
-func logClineReachability(cfg *config.Config) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-
-		client := cline.NewFromAccount(nil, cfg)
-		defer client.Close()
-		if err := client.ProbeReachability(ctx); err != nil {
-			slog.Warn("Cline API is not reachable; the cline channel will fail until egress is fixed",
-				"endpoint", cline.DefaultAPIBase, "error", err,
-				"hint", "configure HTTP_PROXY/HTTPS_PROXY or the proxy settings in config.json if this host needs one")
-			return
-		}
-		slog.Info("Cline API reachable", "endpoint", cline.DefaultAPIBase)
+		slog.Info(subject+" reachable", "endpoint", endpoint)
 	}()
 }
 

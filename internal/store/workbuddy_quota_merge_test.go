@@ -1,6 +1,7 @@
 package store
 
 import (
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -17,9 +18,7 @@ func workBuddyAccount(t *testing.T, s *Store, usage, limit float64, syncedAt tim
 			Limit: limit, Remaining: usage, SyncedAt: syncedAt,
 		},
 	}
-	if err := s.CreateAccount(t.Context(), acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(t.Context(), acc), "CreateAccount() error = %v")
 	return acc
 }
 
@@ -36,9 +35,7 @@ func TestUpdateAccount_KeepsWorkBuddyUsageWithoutAMeterReading(t *testing.T) {
 
 	// A re-login style in-place update: the same credential, no meter reading.
 	fresh := &Account{ID: acc.ID, AccountType: "workbuddy", Enabled: true}
-	if err := s.UpdateAccount(t.Context(), fresh); err != nil {
-		t.Fatalf("UpdateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(t.Context(), fresh), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(t.Context(), acc.ID)
 	if err != nil {
@@ -63,9 +60,7 @@ func TestUpdateAccount_AcceptsANewerMeterReading(t *testing.T) {
 		UsageLimit: 100, UsageCurrent: 0,
 		WorkBuddyQuota: WorkBuddyQuotaSnapshot{Limit: 100, Remaining: 0, SyncedAt: time.Now()},
 	}
-	if err := s.UpdateAccount(t.Context(), newer); err != nil {
-		t.Fatalf("UpdateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(t.Context(), newer), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(t.Context(), acc.ID)
 	if err != nil {
@@ -74,9 +69,7 @@ func TestUpdateAccount_AcceptsANewerMeterReading(t *testing.T) {
 	if after.UsageCurrent != 0 || after.UsageLimit != 100 {
 		t.Fatalf("usage = %v/%v, want the new reading 0/100", after.UsageCurrent, after.UsageLimit)
 	}
-	if after.WorkBuddyQuota.Limit != 100 {
-		t.Fatalf("quota = %+v, want the new snapshot", after.WorkBuddyQuota)
-	}
+	testutil.Equal(t, after.WorkBuddyQuota.Limit, 100)
 }
 
 // TestUpdateAccount_IgnoresAnOlderMeterReading covers the third case: a copy
@@ -90,9 +83,7 @@ func TestUpdateAccount_IgnoresAnOlderMeterReading(t *testing.T) {
 		UsageLimit: 350, UsageCurrent: 999, // whatever the older copy held
 		WorkBuddyQuota: WorkBuddyQuotaSnapshot{Limit: 350, Remaining: 999, SyncedAt: time.Now().Add(-time.Hour)},
 	}
-	if err := s.UpdateAccount(t.Context(), stale); err != nil {
-		t.Fatalf("UpdateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(t.Context(), stale), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(t.Context(), acc.ID)
 	if err != nil {
@@ -109,14 +100,10 @@ func TestUpdateAccount_IgnoresAnOlderMeterReading(t *testing.T) {
 func TestUpdateAccount_OtherChannelsKeepWritingUsage(t *testing.T) {
 	s, _ := newTestRedisStore(t, "otherusage:")
 	acc := &Account{AccountType: "cline", Enabled: true, UsageLimit: 100, UsageCurrent: 100}
-	if err := s.CreateAccount(t.Context(), acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(t.Context(), acc), "CreateAccount() error = %v")
 
 	updated := &Account{ID: acc.ID, AccountType: "cline", Enabled: true, UsageLimit: 40, UsageCurrent: 25}
-	if err := s.UpdateAccount(t.Context(), updated); err != nil {
-		t.Fatalf("UpdateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(t.Context(), updated), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(t.Context(), acc.ID)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 
 	"encoding/json"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestRemainingAttemptDiagnosticsRedactAndBound(t *testing.T) {
@@ -27,9 +28,7 @@ func TestRemainingAttemptDiagnosticsRedactAndBound(t *testing.T) {
 	encoded, _ := json.Marshal(event)
 	text := string(encoded)
 	for _, secret := range []string{"private-bearer", "private-password", "synthetic-account-secret", "synthetic-oauth-secret", "private-cookie", "private-auth", "private-user-output", "private-cipher"} {
-		if strings.Contains(text, secret) {
-			t.Fatalf("diagnostic leaked %s", secret)
-		}
+		testutil.MustNotContain(t, text, secret)
 	}
 	if !strings.Contains(text, "invalid_encrypted_content") || !strings.Contains(text, "request-123") || event.Metadata["http_status"] != 400 || len(text) > 5000 {
 		t.Fatalf("diagnostic missing useful bounded fields: %s", text)

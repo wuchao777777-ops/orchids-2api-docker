@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"encoding/json"
+
 	"github.com/alicebob/miniredis/v2"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
@@ -33,23 +35,13 @@ func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
 
 	handler(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	var resp modelRefreshResult
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Channel != "workbuddy" {
-		t.Fatalf("channel=%q want %q", resp.Channel, "workbuddy")
-	}
-	if resp.Verified != 2 {
-		t.Fatalf("verified=%d want 2", resp.Verified)
-	}
-	if resp.Concurrency != 8 {
-		t.Fatalf("concurrency=%d want 8", resp.Concurrency)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "decode response: %v")
+	testutil.Equal(t, resp.Channel, "workbuddy")
+	testutil.Equal(t, resp.Verified, 2)
+	testutil.Equal(t, resp.Concurrency, 8)
 }
 
 func TestModelRefreshCoordinatorRejectsDuplicateChannel(t *testing.T) {
@@ -72,9 +64,7 @@ func TestModelRefreshCoordinatorRejectsDuplicateChannel(t *testing.T) {
 	<-started
 	second := httptest.NewRecorder()
 	handler(second, httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=workbuddy", nil))
-	if second.Code != http.StatusConflict {
-		t.Fatalf("duplicate status=%d want 409", second.Code)
-	}
+	testutil.Equal(t, second.Code, http.StatusConflict)
 	close(release)
 	<-firstDone
 }
@@ -90,10 +80,8 @@ func TestRunIndexedModelRefreshWorkersVisitsEachIndexOnce(t *testing.T) {
 		mu.Unlock()
 	})
 
-	for index, count := range counts {
-		if count != 1 {
-			t.Fatalf("index %d visited %d times, want once", index, count)
-		}
+	for _, count := range counts {
+		testutil.Equal(t, count, 1)
 	}
 }
 
@@ -119,9 +107,7 @@ func TestNormalizeModelRefreshConcurrency(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := normalizeModelRefreshConcurrency(tt.in); got != tt.want {
-				t.Fatalf("normalizeModelRefreshConcurrency(%d)=%d want %d", tt.in, got, tt.want)
-			}
+			testutil.Equal(t, normalizeModelRefreshConcurrency(tt.in), tt.want)
 		})
 	}
 }
@@ -165,9 +151,7 @@ func TestSyncModelsForChannelConcurrent_WorkBuddyRequiresAccountDiscovery(t *tes
 	if listErr != nil {
 		t.Fatalf("ListModels() error = %v", listErr)
 	}
-	if len(models) != 0 {
-		t.Fatalf("models=%+v want none published", models)
-	}
+	testutil.Equal(t, len(models), 0)
 }
 
 // TestRefreshDoesNotRepublishStoredCatalogOnFailure proves the stored rows are
@@ -210,9 +194,7 @@ func TestChooseRefreshedDefaultModel_PrefersExistingDefault(t *testing.T) {
 	ordered := []discoveredModel{{ID: "b"}, {ID: "a"}}
 
 	got := chooseRefreshedDefaultModel("WorkBuddy", existing, ordered)
-	if got != "a" {
-		t.Fatalf("default=%q want %q", got, "a")
-	}
+	testutil.Equal(t, got, "a")
 }
 
 // TestDiscoverGrokModelsWithoutActiveAccountReportsNoAccount proves the channel
@@ -229,9 +211,7 @@ func TestDiscoverGrokModelsWithoutActiveAccountReportsNoAccount(t *testing.T) {
 	if !isNoActiveAccounts(err) {
 		t.Fatalf("error=%v want a no-active-account report", err)
 	}
-	if len(items) != 0 {
-		t.Fatalf("items=%+v want none published", items)
-	}
+	testutil.Equal(t, len(items), 0)
 }
 
 func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot(t *testing.T) {
@@ -246,18 +226,14 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 		OAuthRefreshToken: "refresh",
 		Enabled:           true,
 	}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 
 	prevFetch := fetchGrokBuildModelsForRefresh
 	t.Cleanup(func() { fetchGrokBuildModelsForRefresh = prevFetch })
 	var calls int
 	fetchGrokBuildModelsForRefresh = func(ctx context.Context, cfg *config.Config, store *store.Store, got *store.Account) ([]modelcatalog.Profile, error) {
 		calls++
-		if got.ID != acc.ID {
-			t.Fatalf("account id=%d want %d", got.ID, acc.ID)
-		}
+		testutil.Equal(t, got.ID, acc.ID)
 		return []modelcatalog.Profile{{ModelID: "grok-4.6"}, {ModelID: "grok-4.6"}, {ModelID: "future-private-model"}, {ModelID: "grok-4.5"}}, nil
 	}
 
@@ -266,12 +242,8 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	if err != nil {
 		t.Fatalf("discoverGrokModelsReport() error = %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("official catalog calls=%d want 1", calls)
-	}
-	if source != "grok_build_models" {
-		t.Fatalf("source=%q want grok_build_models", source)
-	}
+	testutil.Equal(t, calls, 1)
+	testutil.Equal(t, source, "grok_build_models")
 	gotIDs := make([]string, 0, len(items))
 	for _, item := range items {
 		gotIDs = append(gotIDs, item.ID)
@@ -280,9 +252,7 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	// 4.6 implies 4.5, and an OAuth Build account can serve Composer. The row for
 	// the catalog model is published under its bare public name.
 	wantIDs := "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast"
-	if strings.Join(gotIDs, ",") != wantIDs {
-		t.Fatalf("public IDs=%v want %s", gotIDs, wantIDs)
-	}
+	testutil.Equal(t, strings.Join(gotIDs, ","), wantIDs)
 
 	persisted, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
@@ -291,9 +261,7 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	if persisted.GrokProvider != "build" || persisted.GrokModelsSyncedAt.IsZero() {
 		t.Fatalf("provider/catalog not persisted: %+v", persisted)
 	}
-	if strings.Join(persisted.GrokModels, ",") != "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast" {
-		t.Fatalf("account capability snapshot=%v", persisted.GrokModels)
-	}
+	testutil.Equal(t, strings.Join(persisted.GrokModels, ","), "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast")
 }
 
 func TestDiscoverGrokModelsWithoutUpstreamCatalogPublishesNothing(t *testing.T) {
@@ -301,9 +269,7 @@ func TestDiscoverGrokModelsWithoutUpstreamCatalogPublishesNothing(t *testing.T) 
 	defer cleanup()
 	ctx := context.Background()
 	acc := &store.Account{AccountType: "grok", CredentialType: "oauth", OAuthRefreshToken: "refresh", Enabled: true}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 	prevFetch := fetchGrokBuildModelsForRefresh
 	t.Cleanup(func() { fetchGrokBuildModelsForRefresh = prevFetch })
 	fetchGrokBuildModelsForRefresh = func(context.Context, *config.Config, *store.Store, *store.Account) ([]modelcatalog.Profile, error) {
@@ -315,16 +281,10 @@ func TestDiscoverGrokModelsWithoutUpstreamCatalogPublishesNothing(t *testing.T) 
 	if err == nil {
 		t.Fatalf("discoverGrokModelsReport() items=%+v source=%q want error", items, source)
 	}
-	if source != "" {
-		t.Fatalf("source=%q want no source for a failed read", source)
-	}
-	if len(items) != 0 {
-		t.Fatalf("items=%+v want none published on a failed read", items)
-	}
+	testutil.Equal(t, source, "")
+	testutil.Equal(t, len(items), 0)
 	// The failure must not be reported as a cached observation.
-	if strings.Contains(err.Error(), "cached") {
-		t.Fatalf("error=%v must not describe a cached catalog", err)
-	}
+	testutil.MustNotContain(t, err.Error(), "cached")
 }
 
 // TestApplyModelRefresh_RefusesNonUpstreamSources is the gate that keeps a
@@ -409,12 +369,8 @@ func TestApplyModelRefresh_CountsVerifiedSeparately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
 	}
-	if result.Discovered != 2 {
-		t.Fatalf("Discovered=%d want 2", result.Discovered)
-	}
-	if result.Verified != 1 {
-		t.Fatalf("Verified=%d want 1", result.Verified)
-	}
+	testutil.Equal(t, result.Discovered, 2)
+	testutil.Equal(t, result.Verified, 1)
 	listed, err := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "listed-only")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID(listed-only) error = %v", err)
@@ -441,9 +397,7 @@ func TestApplyModelRefresh_DeletesMissingClineModels(t *testing.T) {
 		{Channel: "Cline", ModelID: "cline/free/opus", Name: "Old Opus", Status: store.ModelStatusAvailable, Verified: true, IsDefault: true, SortOrder: 0, Origin: "discovery"},
 		{Channel: "Cline", ModelID: "cline/free/auto", Name: "Auto", Status: store.ModelStatusAvailable, Verified: true, SortOrder: 1, Origin: "discovery"},
 	} {
-		if err := s.CreateModel(ctx, record); err != nil {
-			t.Fatalf("CreateModel() error = %v", err)
-		}
+		testutil.NoError(t, s.CreateModel(ctx, record), "CreateModel() error = %v")
 	}
 
 	result, err := applyModelRefreshWithPrune(ctx, s, "Cline", "cline_recommended_models", []discoveredModel{
@@ -453,9 +407,7 @@ func TestApplyModelRefresh_DeletesMissingClineModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
 	}
-	if result.Deleted != 1 {
-		t.Fatalf("Deleted=%d want 1", result.Deleted)
-	}
+	testutil.Equal(t, result.Deleted, 1)
 	if _, err := s.GetModelByChannelAndModelID(ctx, "Cline", "cline/free/opus"); err == nil {
 		t.Fatal("expected old model to be deleted")
 	}
@@ -483,21 +435,15 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 		IsDefault: false,
 		SortOrder: 999,
 	}
-	if err := s.CreateModel(ctx, record); err != nil {
-		t.Fatalf("CreateModel() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateModel(ctx, record), "CreateModel() error = %v")
 
 	candidates := []discoveredModel{{ID: "cline/free/sonnet", Name: "Cline Sonnet", SortOrder: 0}}
 	result, err := applyModelRefreshWithPrune(ctx, s, "Cline", "cline_recommended_models", candidates, true)
 	if err != nil {
 		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
 	}
-	if result.Deleted != 0 {
-		t.Fatalf("Deleted=%d want 0", result.Deleted)
-	}
-	if result.Updated != 1 {
-		t.Fatalf("Updated=%d want 1 (verification promotion)", result.Updated)
-	}
+	testutil.Equal(t, result.Deleted, 0)
+	testutil.Equal(t, result.Updated, 1)
 
 	model, err := s.GetModelByChannelAndModelID(ctx, "Cline", "cline/free/sonnet")
 	if err != nil {
@@ -506,18 +452,12 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 	if model == nil {
 		t.Fatal("expected model to remain in store")
 	}
-	if model.Status != store.ModelStatusOffline {
-		t.Fatalf("Status=%q want %q", model.Status, store.ModelStatusOffline)
-	}
+	testutil.Equal(t, model.Status, store.ModelStatusOffline)
 	if !model.Verified {
 		t.Fatal("Verified=false want true after upstream observation")
 	}
-	if model.Name != "Old Name" {
-		t.Fatalf("Name=%q want %q", model.Name, "Old Name")
-	}
-	if model.SortOrder != 999 {
-		t.Fatalf("SortOrder=%d want 999", model.SortOrder)
-	}
+	testutil.Equal(t, model.Name, "Old Name")
+	testutil.Equal(t, model.SortOrder, 999)
 }
 
 func TestSyncAccountCatalogAggregatesAllAccountsAndProtectsPartialPrune(t *testing.T) {
@@ -616,9 +556,7 @@ func TestSyncAccountCatalogAggregatesAllAccountsAndProtectsPartialPrune(t *testi
 				second.QoderMachineID = "22222222-3333-4444-8555-666666666666"
 			}
 			for _, acc := range []*store.Account{first, second} {
-				if err := s.CreateAccount(ctx, acc); err != nil {
-					t.Fatal(err)
-				}
+				testutil.NoError(t, s.CreateAccount(ctx, acc))
 			}
 
 			done := make(chan struct{})
@@ -686,17 +624,13 @@ func TestApplyModelRefreshPartialNeverPrunes(t *testing.T) {
 	ctx := context.Background()
 	clearModelsForChannel(t, ctx, s, "Cline")
 	for _, id := range []string{"fresh", "failed-account-lkg"} {
-		if err := s.CreateModel(ctx, &store.Model{Channel: "Cline", ModelID: id, Name: id, Status: store.ModelStatusAvailable, Verified: true}); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, s.CreateModel(ctx, &store.Model{Channel: "Cline", ModelID: id, Name: id, Status: store.ModelStatusAvailable, Verified: true}))
 	}
 	result, err := applyModelRefreshWithPrune(ctx, s, "Cline", "cline_recommended_models", []discoveredModel{{ID: "fresh", Name: "fresh", Verified: true}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Deleted != 0 {
-		t.Fatalf("Deleted=%d want 0", result.Deleted)
-	}
+	testutil.Equal(t, result.Deleted, 0)
 	if _, err := s.GetModelByChannelAndModelID(ctx, "Cline", "failed-account-lkg"); err != nil {
 		t.Fatalf("partial refresh pruned LKG: %v", err)
 	}
@@ -711,13 +645,11 @@ func setupModelRefreshStore(t *testing.T) (*store.Store, func()) {
 		RedisPrefix: "model_refresh_test:",
 	})
 	if err != nil {
-		mini.Close()
 		t.Fatalf("store.New() error = %v", err)
 	}
 
 	return s, func() {
 		_ = s.Close()
-		mini.Close()
 	}
 }
 
@@ -797,9 +729,7 @@ func TestApplyModelRefresh_MarksObservedExistingRowsVerified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
 	}
-	if result.Updated != 1 {
-		t.Fatalf("Updated=%d want 1 for the promoted row", result.Updated)
-	}
+	testutil.Equal(t, result.Updated, 1)
 	stored, err := s.GetModelByChannelAndModelID(ctx, "Grok", "grok-4.6")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
@@ -810,9 +740,7 @@ func TestApplyModelRefresh_MarksObservedExistingRowsVerified(t *testing.T) {
 	if !stored.IsDefault {
 		t.Fatal("the operator-owned default was changed by the promotion")
 	}
-	if stored.Origin != "discovery" {
-		t.Fatalf("origin=%q, want authoritative upstream ownership", stored.Origin)
-	}
+	testutil.Equal(t, stored.Origin, "discovery")
 }
 
 func TestGrokPartialCatalogNeverPrunes(t *testing.T) {
@@ -821,13 +749,9 @@ func TestGrokPartialCatalogNeverPrunes(t *testing.T) {
 	ctx := context.Background()
 	clearModelsForChannel(t, ctx, s, "Grok")
 	for id := int64(1); id <= 2; id++ {
-		if err := s.CreateAccount(ctx, &store.Account{AccountType: "grok", Name: fmt.Sprintf("build-%d", id), Enabled: true, AuthStatus: store.AccountAuthStatusActive, CredentialType: "oauth", GrokProvider: "build", OAuthAccessToken: "token", GrokModels: []string{"old"}, GrokModelsSyncedAt: time.Now()}); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, s.CreateAccount(ctx, &store.Account{AccountType: "grok", Name: fmt.Sprintf("build-%d", id), Enabled: true, AuthStatus: store.AccountAuthStatusActive, CredentialType: "oauth", GrokProvider: "build", OAuthAccessToken: "token", GrokModels: []string{"old"}, GrokModelsSyncedAt: time.Now()}))
 	}
-	if err := s.CreateModel(ctx, &store.Model{Channel: "Grok", ModelID: "old", Name: "old", Provider: "build", Origin: "discovery", Status: store.ModelStatusAvailable, Verified: true}); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateModel(ctx, &store.Model{Channel: "Grok", ModelID: "old", Name: "old", Provider: "build", Origin: "discovery", Status: store.ModelStatusAvailable, Verified: true}))
 	previous := fetchGrokBuildModelsForRefresh
 	defer func() { fetchGrokBuildModelsForRefresh = previous }()
 	fetchGrokBuildModelsForRefresh = func(_ context.Context, _ *config.Config, _ *store.Store, acc *store.Account) ([]modelcatalog.Profile, error) {

@@ -166,10 +166,13 @@ func rememberBackendSession(token string) {
 	globalSessionStore.mu.Unlock()
 }
 
-func backendHasSession(token string) bool {
-	globalSessionStore.mu.RLock()
-	expiry, exists := globalSessionStore.backendOnly[token]
-	globalSessionStore.mu.RUnlock()
+// hasSession reads one session table under the store lock and forgets an entry
+// whose TTL has already passed. All three tables share this rule; they differ
+// only in which map they live in.
+func (s *SessionStore) hasSession(table map[string]time.Time, token string) bool {
+	s.mu.RLock()
+	expiry, exists := table[token]
+	s.mu.RUnlock()
 
 	if !exists {
 		return false
@@ -179,40 +182,18 @@ func backendHasSession(token string) bool {
 		return false
 	}
 	return true
+}
+
+func backendHasSession(token string) bool {
+	return globalSessionStore.hasSession(globalSessionStore.backendOnly, token)
 }
 
 func memoryHasSession(token string) bool {
-	globalSessionStore.mu.RLock()
-	expiry, exists := globalSessionStore.sessions[token]
-	globalSessionStore.mu.RUnlock()
-
-	if !exists {
-		return false
-	}
-
-	if time.Now().After(expiry) {
-		forgetSession(token)
-		return false
-	}
-
-	return true
+	return globalSessionStore.hasSession(globalSessionStore.sessions, token)
 }
 
 func localOnlyHasSession(token string) bool {
-	globalSessionStore.mu.RLock()
-	expiry, exists := globalSessionStore.localOnly[token]
-	globalSessionStore.mu.RUnlock()
-
-	if !exists {
-		return false
-	}
-
-	if time.Now().After(expiry) {
-		forgetSession(token)
-		return false
-	}
-
-	return true
+	return globalSessionStore.hasSession(globalSessionStore.localOnly, token)
 }
 
 func forgetSession(token string) {

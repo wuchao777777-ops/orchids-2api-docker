@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func timeDate(year int, month time.Month, day, hour, min, sec int) time.Time {
@@ -22,9 +23,7 @@ func TestFetchQuotaReadsTheWindowAndPlan(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer access-1" {
-			t.Errorf("%s Authorization = %q", r.URL.Path, got)
-		}
+		testutil.CheckEqual(t, r.Header.Get("Authorization"), "Bearer access-1")
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v2/quota/usage":
@@ -45,18 +44,14 @@ func TestFetchQuotaReadsTheWindowAndPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchQuota() error = %v", err)
 	}
-	if quota.PlanTier != "Free" {
-		t.Fatalf("PlanTier = %q, want Free", quota.PlanTier)
-	}
+	testutil.Equal(t, quota.PlanTier, "Free")
 	if quota.PaidPlan {
 		t.Fatal("PaidPlan = true for a free account")
 	}
 	if !quota.Exhausted {
 		t.Fatal("Exhausted = false, want the gateway's verdict")
 	}
-	if quota.UpgradeURL == "" {
-		t.Fatal("UpgradeURL is empty, so the operator gets no next step")
-	}
+	testutil.NotEqual(t, quota.UpgradeURL, "")
 	if !quota.PeriodEnd.After(quota.SyncedAt) {
 		t.Fatalf("PeriodEnd = %v, want a millisecond timestamp normalized to the future", quota.PeriodEnd)
 	}
@@ -68,6 +63,7 @@ func TestApplyQuotaStoresRemainingAsUsageCurrent(t *testing.T) {
 	t.Parallel()
 
 	acc := &store.Account{AccountType: "qoder"}
+	synced := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	ApplyQuota(acc, &Quota{
 		Limit:      100,
 		Used:       40,
@@ -75,6 +71,7 @@ func TestApplyQuotaStoresRemainingAsUsageCurrent(t *testing.T) {
 		PlanTier:   "Pro",
 		Unit:       "credits",
 		UpgradeURL: "https://qoder.com/pricing?client=qoder",
+		SyncedAt:   synced,
 	})
 	if acc.UsageLimit != 100 || acc.UsageCurrent != 60 {
 		t.Fatalf("usage = %v/%v, want limit 100 and remaining 60", acc.UsageLimit, acc.UsageCurrent)
@@ -82,8 +79,8 @@ func TestApplyQuotaStoresRemainingAsUsageCurrent(t *testing.T) {
 	if acc.QoderQuota.PlanTier != "Pro" || acc.QoderQuota.Used != 40 {
 		t.Fatalf("snapshot = %+v", acc.QoderQuota)
 	}
-	if !acc.QoderQuota.SyncedAt.Equal(acc.QoderQuota.SyncedAt) {
-		t.Fatal("snapshot carries no sync time")
+	if !acc.QoderQuota.SyncedAt.Equal(synced) {
+		t.Fatalf("snapshot sync time = %v, want the observation time %v", acc.QoderQuota.SyncedAt, synced)
 	}
 }
 

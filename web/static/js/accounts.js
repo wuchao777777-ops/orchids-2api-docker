@@ -1221,12 +1221,6 @@ function buildQuotaMarkup(acc) {
   return `<span style="color:#64748b">-</span>`;
 }
 
-function buildStatusMarkup(acc, badge) {
-  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${buildCooldownMarkup(acc)}`;
-}
-
-
-
 // Desktop rows and mobile cards carry the same delegated actions. The mobile
 // view has no select-all checkbox, but its row selection uses this same handler.
 function bindAccountActions(container) {

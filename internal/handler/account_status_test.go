@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/testutil"
 )
 
 func TestClassifyAccountStatus(t *testing.T) {
@@ -97,9 +98,7 @@ func TestClassifyAccountStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := apperrors.ClassifyAccountStatus(tt.errStr)
-			if got != tt.expected {
-				t.Errorf("classifyAccountStatus(%q) = %q, want %q", tt.errStr, got, tt.expected)
-			}
+			testutil.CheckEqual(t, got, tt.expected)
 		})
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -27,12 +28,8 @@ func TestParseQuotaNoticeReadsTheExhaustionFrame(t *testing.T) {
 	if !notice.NextResetAt.Equal(time.Unix(1791397354, 0)) {
 		t.Errorf("NextResetAt = %v, want %v", notice.NextResetAt, time.Unix(1791397354, 0))
 	}
-	if notice.Kind != "NOTIFICATIONS" {
-		t.Errorf("Kind = %q, want NOTIFICATIONS", notice.Kind)
-	}
-	if notice.UpgradeURL != "" {
-		t.Errorf("UpgradeURL = %q, want it empty when the frame omits one", notice.UpgradeURL)
-	}
+	testutil.CheckEqual(t, notice.Kind, "NOTIFICATIONS")
+	testutil.CheckEqual(t, notice.UpgradeURL, "")
 }
 
 // TestParseQuotaNoticeIgnoresAdvisoryOnlyFrames guards the other direction: a
@@ -84,7 +81,7 @@ func TestParseQuotaNoticeToleratesAFrameTerminator(t *testing.T) {
 }
 
 // TestQuotaExceededFrameReachesTheAttemptResult is the end-to-end half: the
-// notice has to survive consumeStreamWithTools, because that is the only place
+// notice has to survive consumeStreamObserved, because that is the only place
 // the account-facing record is written from.
 func TestQuotaExceededFrameReachesTheAttemptResult(t *testing.T) {
 	t.Parallel()
@@ -94,19 +91,17 @@ func TestQuotaExceededFrameReachesTheAttemptResult(t *testing.T) {
 	stream := "data:" + notice + "\n\n" + "data:" + answer + "\n\n" + "event:finish\n\n"
 
 	var text strings.Builder
-	res, err := consumeStreamWithTools(strings.NewReader(stream), false, func(m upstream.SSEMessage) {
+	res, err := consumeStreamObserved(strings.NewReader(stream), false, func(m upstream.SSEMessage) {
 		if m.Type == "model.text-delta" {
 			if delta, ok := m.Event["delta"].(string); ok {
 				text.WriteString(delta)
 			}
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("a quota_exceeded control frame aborted the stream: %v", err)
 	}
-	if text.String() != "OK" {
-		t.Fatalf("text = %q, want the answer that followed the notice", text.String())
-	}
+	testutil.Equal(t, text.String(), "OK")
 	if res.QuotaNotice == nil {
 		t.Fatal("QuotaNotice = nil; the account never learns its window closed")
 	}
@@ -116,7 +111,5 @@ func TestQuotaExceededFrameReachesTheAttemptResult(t *testing.T) {
 	if !res.QuotaNotice.NextResetAt.Equal(time.Unix(1791397354, 0)) {
 		t.Errorf("QuotaNotice.NextResetAt = %v, want %v", res.QuotaNotice.NextResetAt, time.Unix(1791397354, 0))
 	}
-	if res.QuotaNotice.PricingURL != "https://qoder.com/pricing" {
-		t.Errorf("PricingURL = %q", res.QuotaNotice.PricingURL)
-	}
+	testutil.CheckEqual(t, res.QuotaNotice.PricingURL, "https://qoder.com/pricing")
 }

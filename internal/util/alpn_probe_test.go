@@ -1,8 +1,10 @@
+//go:build live
+
 package util
 
 // Opt-in probes for the shared transport's TLS/ALPN behaviour. They make real
-// network connections, so they only run when the matching environment variable
-// is set:
+// network connections, so they require -tags live and the matching environment
+// variable to be set:
 //
 //	TLS_PROBE_HOST=api2.qoder.sh:443   -> what ALPN the shared transport offers
 //	TLS_PROBE_H2_LOCAL=127.0.0.1:8443  -> what protocol it speaks to a local h2 server
@@ -14,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"os"
 	"strings"
 	"testing"
@@ -79,8 +82,6 @@ func TestSharedTransportProtocolAgainstLocalH2(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var out map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	testutil.NoError(t, json.NewDecoder(resp.Body).Decode(&out), "decode: %v")
 	fmt.Printf("LOCALH2 client_proto=%s server_saw=%s alpn=%q\n", resp.Proto, out["proto"], out["alpn"])
 }

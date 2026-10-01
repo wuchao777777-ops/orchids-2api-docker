@@ -1,6 +1,7 @@
 package util
 
 import (
+	"orchids-api/internal/testutil"
 	"regexp"
 	"strings"
 	"testing"
@@ -51,26 +52,27 @@ func TestTraceparentAcceptsEveryIdentifierShape(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := Traceparent(tc.input)
-			if got != tc.want {
-				t.Fatalf("Traceparent(%q) = %q, want %q", tc.input, got, tc.want)
-			}
+			testutil.Equal(t, got, tc.want)
 			if !traceparentPattern.MatchString(got) {
 				t.Fatalf("Traceparent(%q) = %q, which is not a version 00 trace context", tc.input, got)
 			}
-			if len(got) != 55 {
-				t.Fatalf("Traceparent(%q) length = %d, want 55", tc.input, len(got))
-			}
+			testutil.Equal(t, len(got), 55)
 		})
 	}
 
 	// The same request must render the same header, and degenerate input must
 	// still produce a usable one rather than a panic.
-	if again := Traceparent(uuid); again != Traceparent(uuid) {
-		t.Fatal("Traceparent is not deterministic for one request id")
-	}
-	for _, input := range []string{"", "   ", "not-a-uuid", "zzzz", "-", "0"} {
-		if got := Traceparent(input); !traceparentPattern.MatchString(got) {
-			t.Errorf("Traceparent(%q) = %q, want a valid trace context", input, got)
+	testutil.Equal(t, Traceparent(uuid), Traceparent(uuid))
+	for _, input := range []string{"", "   ", "not-a-uuid", "zzzz", "-", "0", strings.Repeat("0", 32), strings.Repeat("0", 16) + strings.Repeat("a", 16)} {
+		got := Traceparent(input)
+		if !traceparentPattern.MatchString(got) {
+			t.Fatalf("Traceparent(%q) = %q, want a valid trace context", input, got)
 		}
+		parts := strings.Split(got, "-")
+		if parts[1] == strings.Repeat("0", 32) || parts[2] == strings.Repeat("0", 16) {
+			t.Errorf("Traceparent(%q) has a forbidden zero trace/span ID: %q", input, got)
+		}
+		testutil.CheckEqual(t, got, Traceparent(input))
 	}
+	testutil.NotEqual(t, Traceparent(""), Traceparent("zzzz"))
 }

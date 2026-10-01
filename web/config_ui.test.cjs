@@ -5,26 +5,36 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('./test-support.cjs');
 
-// Load config.js in a DOM stand-in. Only the pure helpers matter here: the
-// anonymous-allowlist parser and the USD <-> tick conversion decide what the
-// admin plane sends to the server.
+// Execute config.js with the real shared UI/API primitives and a small DOM.
+// Both pure billing/security helpers and HTTP failure behavior are covered.
 function loadConfig(fetchImpl){
  const nodes=new Map();
- const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false,style:{},textContent:'',classList:{add(){},remove(){},toggle(){}}});return nodes.get(id)};
+ const notices=[];
+ const node=id=>{
+  if(!nodes.has(id)) {
+   const classes=new Set();
+   nodes.set(id,{value:'',checked:false,style:{},textContent:'',classList:{
+    add:name=>classes.add(name),remove:name=>classes.delete(name),
+    toggle:(name,on)=>on?classes.add(name):classes.delete(name),contains:name=>classes.has(name),
+   }});
+  }
+  return nodes.get(id);
+ };
  const context=vm.createContext({
   console,Date,Math,Number,String,Array,Object,JSON,isNaN,parseInt,parseFloat,
   setTimeout(){},setInterval(){},fetch:fetchImpl||(()=>Promise.resolve({ok:true,headers:{get:()=>"application/json"},json:()=>({})})),
   window:{matchMedia:()=>({matches:false}),addEventListener(){},location:{href:''}},
   HTMLInputElement:class HTMLInputElement {},
   document:{readyState:'loading',addEventListener(){},getElementById:node,createElement:()=>({}),querySelectorAll:()=>[]},
-  encodeData:v=>String(v),decodeData:v=>String(v),showToast(){},
+  encodeData:v=>String(v),decodeData:v=>String(v),showToast:(message,kind)=>notices.push({message,kind}),
  });
- // config.js declares its helpers at top level, so the harness only appends an
- // export for the pure functions it wants to assert on.
+ // Explicitly execute ui.js so failures exercise ConsoleAPI, not a test double.
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'static/js/ui.js'),'utf8'),context);
+ // Export the config helpers without changing the production asset.
  let src=fs.readFileSync(path.join(__dirname,'static/js/config.js'),'utf8');
  src+='\nglobalThis.probe={parseAnonymousAllowIPs,ticksToUSD,usdToTicks,formatUSD,periodSuffix,applyConfigurationPayload,loadConfiguration,saveConfiguration,bindApiKeyActions,Input:HTMLInputElement};\n';
  vm.runInContext(src,context);
- return {api:context.probe,node,context};
+ return {api:context.probe,node,context,notices};
 }
 
 // Arrays built inside the vm belong to that realm, so a strict deep comparison
@@ -118,10 +128,43 @@ test('configuration loader applies a valid JSON response',async()=>{
  assert.equal(node('cfg_admin_pass').value,'loaded');
 });
 
-test('configuration loader rejects bad HTTP and non-JSON responses before applying them',()=>{
- const source=fs.readFileSync(path.join(__dirname,'static/js/config.js'),'utf8');
- assert.match(source,/if \(!res\.ok\)/);
- assert.match(fs.readFileSync(path.join(__dirname,'static/js/ui.js'),'utf8'), /includes\('application\/json'\)/);
- assert.match(source,/ConsoleAPI\.json/);
- assert.match(source,/setConfigSaveError\("加载失败：" \+ reason\)/);
-});
+for (const scenario of [
+ {name:'403',status:403,body:JSON.stringify({error:{message:'forbidden by policy'}}),reason:'forbidden by policy'},
+ {name:'503',status:503,body:'',reason:'HTTP 503'},
+ {name:'HTML login page',status:200,contentType:'text/html; charset=utf-8',body:'<html>login</html>',reason:'接口未返回 JSON，登录状态可能已失效'},
+ {name:'malformed JSON',status:200,contentType:'application/json',body:'{"data":',malformed:true},
+]) {
+ test(`configuration loader preserves form values on ${scenario.name}`,async()=>{
+  const calls=[];
+  let jsonReads=0;
+  let textReads=0;
+  const {api,node,notices}=loadConfig(async(url,options)=>{
+   calls.push({url,options});
+   return {
+    ok:scenario.status===200,status:scenario.status,
+    headers:{get:()=>scenario.contentType||'application/json'},
+    text:async()=>{textReads++;return scenario.body;},
+    json:async()=>{
+     jsonReads++;
+     if(scenario.malformed) return JSON.parse(scenario.body);
+     // A faulty HTTP/content-type guard would apply this payload and overwrite edits.
+     return {data:{admin_password:'must-not-apply',proxy_url:'must-not-apply'}};
+    },
+   };
+  });
+  const original={cfg_admin_pass:'local secret',cfg_anonymous_allow_ips:'203.0.113.20\n198.51.100.0/24',cfg_proxy_url:'http://local.example:8080',cfg_proxy_bypass:'example.net\nexample.org'};
+  for(const [id,value] of Object.entries(original))node(id).value=value;
+  assert.equal(await api.loadConfiguration(),false);
+  assert.deepStrictEqual(Object.fromEntries(Object.keys(original).map(id=>[id,node(id).value])),original);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].url,'/api/config/list');
+  assert.equal(calls[0].options.cache,'no-store');
+  assert.equal(calls[0].options.credentials,'same-origin');
+  assert.equal(jsonReads,scenario.malformed?1:0);
+  assert.equal(textReads,scenario.status===200?0:1);
+  const reason=scenario.malformed?(() => {try{JSON.parse(scenario.body);}catch(error){return error.message;}})():scenario.reason;
+  assert.equal(node('cfgSaveError').textContent,'加载失败：'+reason);
+  assert.equal(node('cfgSaveError').classList.contains('hidden'),false);
+  assert.deepStrictEqual(notices,[{message:'配置加载失败：'+reason,kind:'error'}]);
+ });
+}

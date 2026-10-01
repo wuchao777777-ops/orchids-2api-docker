@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -15,9 +16,7 @@ func TestStoredResponseOwnershipLifecycleAndIsolation(t *testing.T) {
 		ResponseID: "resp_123", OwnerHash: "owner-a", AccountID: 42,
 		Model: "grok-4.6", Provider: "build",
 	}
-	if err := s.SaveStoredResponse(ctx, record, time.Hour); err != nil {
-		t.Fatalf("SaveStoredResponse() error = %v", err)
-	}
+	testutil.NoError(t, s.SaveStoredResponse(ctx, record, time.Hour), "SaveStoredResponse() error = %v")
 	got, err := s.GetStoredResponse(ctx, "resp_123", "owner-a")
 	if err != nil || got.AccountID != 42 || got.Model != "grok-4.6" || got.ExpiresAt.IsZero() {
 		t.Fatalf("GetStoredResponse() = %#v, %v", got, err)
@@ -25,9 +24,7 @@ func TestStoredResponseOwnershipLifecycleAndIsolation(t *testing.T) {
 	if _, err := s.GetStoredResponse(ctx, "resp_123", "owner-b"); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("cross-owner lookup error = %v, want ErrNoRows", err)
 	}
-	if err := s.DeleteStoredResponse(ctx, "resp_123", "owner-a"); err != nil {
-		t.Fatalf("DeleteStoredResponse() error = %v", err)
-	}
+	testutil.NoError(t, s.DeleteStoredResponse(ctx, "resp_123", "owner-a"), "DeleteStoredResponse() error = %v")
 	if _, err := s.GetStoredResponse(ctx, "resp_123", "owner-a"); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("lookup after delete error = %v, want ErrNoRows", err)
 	}

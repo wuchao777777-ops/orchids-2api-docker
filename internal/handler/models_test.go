@@ -11,19 +11,16 @@ import (
 
 	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestPublicModelResponseUsesRouteCreatedAt(t *testing.T) {
 	created := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	entry := publicModelResponse("grok-4.6", "grok", created)
-	if entry.Created != created.Unix() {
-		t.Fatalf("created = %d, want %d", entry.Created, created.Unix())
-	}
+	testutil.Equal(t, entry.Created, created.Unix())
 	// A row stored before the field existed keeps the legacy placeholder.
 	legacy := publicModelResponse("grok-4.6", "grok", time.Time{})
-	if legacy.Created != legacyModelCreated {
-		t.Fatalf("legacy created = %d, want %d", legacy.Created, legacyModelCreated)
-	}
+	testutil.Equal(t, legacy.Created, legacyModelCreated)
 }
 
 func TestAppendGrokCompatibilityAliasesUsesCaseInsensitiveIndex(t *testing.T) {
@@ -37,13 +34,9 @@ func TestAppendGrokCompatibilityAliasesUsesCaseInsensitiveIndex(t *testing.T) {
 	for _, item := range items {
 		counts[publicModelIDKey(item.ID)]++
 	}
-	if counts["grok-4.6-high"] != 1 {
-		t.Fatalf("case-insensitive alias count=%d want 1: %#v", counts["grok-4.6-high"], items)
-	}
+	testutil.Equal(t, counts["grok-4.6-high"], 1)
 	for _, want := range []string{"grok-4.6-low", "grok-4.6-medium", "grok-4.6-xhigh"} {
-		if counts[want] != 1 {
-			t.Fatalf("alias %q count=%d want 1: %#v", want, counts[want], items)
-		}
+		testutil.Equal(t, counts[want], 1)
 	}
 }
 
@@ -51,11 +44,7 @@ func TestAppendGrokCompatibilityAliasesUsesCaseInsensitiveIndex(t *testing.T) {
 // routing details, and two routes that differ only by plane are the same public
 // model. Resolution keeps accepting both spellings.
 func TestPublicModelsPublishExternalIDs(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 	publishModel(t, s,
 		&store.Model{Channel: "Grok", ModelID: "grok-4.3"},
 		&store.Model{Channel: "Grok", ModelID: "grok-4.5"},
@@ -64,39 +53,28 @@ func TestPublicModelsPublishExternalIDs(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	h.HandleModels(rec, httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var payload struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode: %v")
 	seen := map[string]int{}
 	for _, entry := range payload.Data {
 		seen[entry.ID]++
 	}
 	for _, want := range []string{"grok-4.3", "grok-4.5", "grok-4.6"} {
-		if seen[want] == 0 {
-			t.Fatalf("external model %q missing from the public list: %#v", want, seen)
-		}
+		testutil.NotEqual(t, seen[want], 0)
 	}
 	for id := range seen {
-		if strings.Contains(id, "/") {
-			t.Fatalf("a provider-qualified ID was published: %q", id)
-		}
+		testutil.MustNotContain(t, id, "/")
 	}
-	if seen["grok-4.6"] != 1 {
-		t.Fatalf("routes differing only by plane must collapse to one public entry: %#v", seen)
-	}
+	testutil.Equal(t, seen["grok-4.6"], 1)
 }
 
 func TestHandleModelsPublishesConservativeEnabledBuildProfile(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() { _ = s.Close(); mini.Close() }()
+	h, s, _ := setupModelValidationHandler(t)
 	publishModel(t, s, &store.Model{Channel: "Grok", ModelID: "grok-4.6", Provider: "build", UpstreamModel: "grok-4.6"})
 
 	ctx := context.Background()
@@ -105,20 +83,14 @@ func TestHandleModelsPublishesConservativeEnabledBuildProfile(t *testing.T) {
 		{AccountType: "grok", Enabled: true, CredentialType: "oauth", GrokProvider: "build", OAuthAccessToken: "two", GrokModelCatalog: []modelcatalog.Profile{{ModelID: "GROK-4.6", ReasoningEfforts: []string{"low", "high"}, DefaultReasoningEffort: "high", SupportsReasoningEffort: true, SupportsBackendSearch: false, ContextWindow: 256000, MaxCompletionTokens: 64000}}},
 		{AccountType: "grok", Enabled: false, CredentialType: "oauth", GrokProvider: "build", OAuthAccessToken: "disabled", GrokModelCatalog: []modelcatalog.Profile{{ModelID: "grok-4.6", ReasoningEfforts: []string{"none"}, ContextWindow: 1, MaxCompletionTokens: 1}}},
 	} {
-		if err := s.CreateAccount(ctx, acc); err != nil {
-			t.Fatalf("CreateAccount: %v", err)
-		}
+		testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount: %v")
 	}
 
 	rec := httptest.NewRecorder()
 	h.HandleModels(rec, httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var payload PublicModelsListResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode: %v")
 	var got *PublicModelResponse
 	for i := range payload.Data {
 		if payload.Data[i].ID == "grok-4.6" {

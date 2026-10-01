@@ -1,6 +1,7 @@
 package alerting
 
 import (
+	"orchids-api/internal/testutil"
 	"sync"
 	"testing"
 	"time"
@@ -60,19 +61,13 @@ func TestEvaluate_FiresRecoversAndClosesTheLoop(t *testing.T) {
 	if len(recovered.Recovered) != 1 || recovered.Recovered[0].Key != transition.Firing[0].Key {
 		t.Fatalf("recovery = %+v", recovered.Recovered)
 	}
-	if len(engine.Firing()) != 0 {
-		t.Fatalf("engine still reports firing alerts: %+v", engine.Firing())
-	}
+	testutil.Equal(t, len(engine.Firing()), 0)
 
 	want := []string{"fired:success-rate:grok", "recovered:success-rate:grok"}
 	got := *recorded
-	if len(got) != len(want) {
-		t.Fatalf("recorded = %v, want %v", got, want)
-	}
+	testutil.Equal(t, len(got), len(want))
 	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("recorded = %v, want %v", got, want)
-		}
+		testutil.Equal(t, got[i], want[i])
 	}
 }
 
@@ -88,9 +83,7 @@ func TestEvaluate_QuietChannelNeverFires(t *testing.T) {
 			c.Samples = 2
 		}),
 	}}, nil, DefaultRules())
-	if len(transition.Firing) != 0 {
-		t.Fatalf("a channel below the sample floor fired: %+v", transition.Firing)
-	}
+	testutil.Equal(t, len(transition.Firing), 0)
 }
 
 // TestEvaluate_PoolAndCredentialAlerts covers the two account-level rules.
@@ -106,12 +99,8 @@ func TestEvaluate_PoolAndCredentialAlerts(t *testing.T) {
 	for _, alert := range transition.Firing {
 		byKey[alert.Key] = alert
 	}
-	if byKey["pool-empty:grok"].Severity != SeverityCritical {
-		t.Fatalf("missing pool alert: %+v", transition.Firing)
-	}
-	if byKey["credential:grok"].Severity != SeverityCritical {
-		t.Fatalf("missing credential alert: %+v", transition.Firing)
-	}
+	testutil.Equal(t, byKey["pool-empty:grok"].Severity, SeverityCritical)
+	testutil.Equal(t, byKey["credential:grok"].Severity, SeverityCritical)
 }
 
 // TestEvaluate_NoSampleIsNotHealthy confirms an idle channel raises nothing —
@@ -128,9 +117,7 @@ func TestEvaluate_NoSampleIsNotHealthy(t *testing.T) {
 			c.AccountsAvailable = 0
 		}),
 	}}, nil, DefaultRules())
-	if len(transition.Firing) != 0 {
-		t.Fatalf("an idle channel fired: %+v", transition.Firing)
-	}
+	testutil.Equal(t, len(transition.Firing), 0)
 }
 
 // TestEvaluate_SeverityOrdering puts the most urgent alert first.
@@ -146,12 +133,8 @@ func TestEvaluate_SeverityOrdering(t *testing.T) {
 		}),
 	}}, nil, DefaultRules())
 
-	if len(transition.Firing) != 2 {
-		t.Fatalf("firing = %+v", transition.Firing)
-	}
-	if transition.Firing[0].Severity != SeverityCritical {
-		t.Fatalf("critical alert must sort first: %+v", transition.Firing)
-	}
+	testutil.Equal(t, len(transition.Firing), 2)
+	testutil.Equal(t, transition.Firing[0].Severity, SeverityCritical)
 }
 
 // TestEvaluate_IgnoresInfrastructureAggregates keeps the public-facing request
@@ -184,9 +167,7 @@ func TestEvaluate_IgnoresInfrastructureAggregates(t *testing.T) {
 		channel("grok", nil),
 	}}, nil, DefaultRules())
 
-	if len(transition.Firing) != 0 {
-		t.Fatalf("infrastructure aggregates fired alerts: %+v", transition.Firing)
-	}
+	testutil.Equal(t, len(transition.Firing), 0)
 }
 
 // TestEvaluate_StillAlertsOnRealChannels is the counterweight: excluding the
@@ -225,9 +206,7 @@ func TestEvaluate_HysteresisStopsFlapping(t *testing.T) {
 
 	// 89% is below the 90% warning line: fires.
 	first := Evaluate(degraded(0.89), nil, rules)
-	if len(first.Firing) != 1 {
-		t.Fatalf("expected a warning at 89%%: %+v", first)
-	}
+	testutil.Equal(t, len(first.Firing), 1)
 	firing := map[string]Alert{}
 	for _, alert := range first.Firing {
 		firing[alert.Key] = alert
@@ -236,18 +215,12 @@ func TestEvaluate_HysteresisStopsFlapping(t *testing.T) {
 	// 91% is above the line but inside the margin: the alert must stay, and must
 	// not be re-announced (a re-announcement means "fired" again).
 	still := Evaluate(degraded(0.91), firing, rules)
-	if len(still.Firing) != 0 {
-		t.Fatalf("a held alert must not re-announce: %+v", still.Firing)
-	}
-	if len(still.Recovered) != 0 {
-		t.Fatalf("91%% is inside the hysteresis band and must not clear: %+v", still.Recovered)
-	}
+	testutil.Equal(t, len(still.Firing), 0)
+	testutil.Equal(t, len(still.Recovered), 0)
 
 	// 95% is above the line plus the margin: it clears.
 	cleared := Evaluate(degraded(0.95), firing, rules)
-	if len(cleared.Recovered) != 1 {
-		t.Fatalf("95%% must clear the alert: %+v", cleared.Recovered)
-	}
+	testutil.Equal(t, len(cleared.Recovered), 1)
 
 	// Without an existing alert, 91% raises nothing (no flapping on the way up).
 	if len(Evaluate(degraded(0.91), nil, rules).Firing) != 0 {
@@ -334,12 +307,8 @@ func TestEvaluate_FailureFloorDoesNotReleaseAFiringAlert(t *testing.T) {
 		}),
 	}}
 	transition := Evaluate(held, previous, rules)
-	if len(transition.Firing) != 0 {
-		t.Fatalf("a held alert re-announced: %+v", transition.Firing)
-	}
-	if len(transition.Recovered) != 0 {
-		t.Fatalf("a held alert cleared although the rate had not recovered: %+v", transition.Recovered)
-	}
+	testutil.Equal(t, len(transition.Firing), 0)
+	testutil.Equal(t, len(transition.Recovered), 0)
 }
 
 // TestEngine_ThresholdsExposesTheRules is what lets the operations page state the
@@ -355,9 +324,7 @@ func TestEngine_ThresholdsExposesTheRules(t *testing.T) {
 	// the default while alerts fire on something else.
 	custom := DefaultRules()
 	custom.SuccessRateWarning = 0.75
-	if got := NewEngine(custom, nil).Thresholds().SuccessRateWarning; got != 0.75 {
-		t.Fatalf("custom SuccessRateWarning = %v, want 0.75", got)
-	}
+	testutil.Equal(t, NewEngine(custom, nil).Thresholds().SuccessRateWarning, 0.75)
 }
 
 // TestEngine_ThresholdsOnNilEngineFallsBackToDefaults keeps the nil-safe callers
@@ -366,9 +333,7 @@ func TestEngine_ThresholdsExposesTheRules(t *testing.T) {
 // would render as "目标 0.0%".
 func TestEngine_ThresholdsOnNilEngineFallsBackToDefaults(t *testing.T) {
 	var engine *Engine
-	if got := engine.Thresholds(); got != DefaultRules() {
-		t.Fatalf("nil engine Thresholds() = %+v, want DefaultRules() %+v", got, DefaultRules())
-	}
+	testutil.Equal(t, engine.Thresholds(), DefaultRules())
 }
 
 // TestEngine_ThresholdsIsSafeUnderConcurrency pins the semaphore use: Thresholds()
@@ -402,9 +367,7 @@ func TestRejectUnreachableRecoveryAndAllow100Percent(t *testing.T) {
 		t.Fatal("accepted a 102% recovery line")
 	}
 	rules.SuccessRateWarning = .97
-	if err := rules.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, rules.Validate())
 	engine := NewEngine(rules, nil)
 	engine.Evaluate(Snapshot{Channels: []ChannelSnapshot{channel("grok", func(c *ChannelSnapshot) { c.SuccessRate = .8; c.Failed = 5 })}})
 	recovery := engine.Evaluate(Snapshot{Channels: []ChannelSnapshot{channel("grok", nil)}})

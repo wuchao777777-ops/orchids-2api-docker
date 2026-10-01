@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 type recordingSubscriber struct {
@@ -60,9 +61,7 @@ func TestBus_CoalescesBurstsByAccount(t *testing.T) {
 
 	waitFor(t, func() bool { return len(subscriber.all()) > 0 }, "no batch delivered")
 	batches := subscriber.all()
-	if len(batches) != 1 {
-		t.Fatalf("batches = %d, want the burst coalesced into one", len(batches))
-	}
+	testutil.Equal(t, len(batches), 1)
 	if len(batches[0]) != 1 || batches[0][0] != 7 {
 		t.Fatalf("batch = %v, want just account 7", batches[0])
 	}
@@ -88,9 +87,7 @@ func TestBus_DeliversEveryAccountOnce(t *testing.T) {
 		}
 	}
 	for _, id := range []int64{1, 2, 3} {
-		if seen[id] != 1 {
-			t.Fatalf("account %d delivered %d times, want once", id, seen[id])
-		}
+		testutil.Equal(t, seen[id], 1)
 	}
 }
 
@@ -176,35 +173,23 @@ func TestClassify_StatusAndCredentialChanges(t *testing.T) {
 
 	credentialSwap := *base
 	credentialSwap.RefreshToken = "session-b"
-	if got := Classify(base, &credentialSwap); got != KindCredential {
-		t.Fatalf("credential swap classified as %q", got)
-	}
+	testutil.Equal(t, Classify(base, &credentialSwap), KindCredential)
 
 	disabled := *base
 	disabled.Enabled = false
-	if got := Classify(base, &disabled); got != KindCredential {
-		t.Fatalf("enable/disable classified as %q, want credential (routing changed)", got)
-	}
+	testutil.Equal(t, Classify(base, &disabled), KindCredential)
 
 	renamed := *base
 	renamed.Name = "renamed"
-	if got := Classify(base, &renamed); got != KindUpdated {
-		t.Fatalf("rename classified as %q, want updated", got)
-	}
+	testutil.Equal(t, Classify(base, &renamed), KindUpdated)
 
 	rejected := *base
 	rejected.StatusCode = "401"
 	rejected.VerifiedAt = time.Now()
-	if got := Classify(base, &rejected); got != KindStatus {
-		t.Fatalf("status change classified as %q", got)
-	}
+	testutil.Equal(t, Classify(base, &rejected), KindStatus)
 
-	if got := Classify(nil, base); got != KindCreated {
-		t.Fatalf("creation classified as %q", got)
-	}
-	if got := Classify(base, nil); got != KindDeleted {
-		t.Fatalf("deletion classified as %q", got)
-	}
+	testutil.Equal(t, Classify(nil, base), KindCreated)
+	testutil.Equal(t, Classify(base, nil), KindDeleted)
 }
 
 // TestClassify_CredentialSignalCoversEveryChannel guards the field list: a
@@ -213,21 +198,15 @@ func TestClassify_CredentialSignalCoversEveryChannel(t *testing.T) {
 	wb := &store.Account{ID: 2, AccountType: "workbuddy", WorkBuddyAccessToken: "a1", WorkBuddyRefreshToken: "r1"}
 	rotated := *wb
 	rotated.WorkBuddyRefreshToken = "r2"
-	if got := Classify(wb, &rotated); got != KindCredential {
-		t.Fatalf("workbuddy rotation classified as %q", got)
-	}
+	testutil.Equal(t, Classify(wb, &rotated), KindCredential)
 
 	grokOAuth := &store.Account{ID: 3, AccountType: "grok", CredentialType: "oauth", OAuthAccessToken: "t1", OAuthRefreshToken: "rr1"}
 	refreshed := *grokOAuth
 	refreshed.OAuthAccessToken = "t2"
-	if got := Classify(grokOAuth, &refreshed); got != KindCredential {
-		t.Fatalf("oauth rotation classified as %q", got)
-	}
+	testutil.Equal(t, Classify(grokOAuth, &refreshed), KindCredential)
 
 	qoder := &store.Account{ID: 4, AccountType: "qoder", QoderAccessToken: "q1"}
 	reTokenized := *qoder
 	reTokenized.QoderAccessToken = "q2"
-	if got := Classify(qoder, &reTokenized); got != KindCredential {
-		t.Fatalf("qoder token swap classified as %q", got)
-	}
+	testutil.Equal(t, Classify(qoder, &reTokenized), KindCredential)
 }

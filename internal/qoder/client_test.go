@@ -19,6 +19,7 @@ import (
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -139,9 +140,7 @@ func TestConcurrentExpiredCredentialRefreshesOnlyOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := refreshes.Load(); got != 1 {
-		t.Fatalf("refresh calls = %d, want 1", got)
-	}
+	testutil.Equal(t, refreshes.Load(), 1)
 }
 
 func TestForceRefreshSkipsCredentialAlreadyRotatedByPeer(t *testing.T) {
@@ -152,12 +151,8 @@ func TestForceRefreshSkipsCredentialAlreadyRotatedByPeer(t *testing.T) {
 	acc.QoderRefreshToken = "refresh-new"
 	client := NewFromAccount(acc, nil)
 	rejected := Credentials{AccessToken: "access-old", RefreshToken: "refresh-old"}
-	if err := client.forceRefresh(context.Background(), rejected); err != nil {
-		t.Fatalf("peer-rotated credential should be reused: %v", err)
-	}
-	if got := client.currentCredentials().AccessToken; got != "access-new" {
-		t.Fatalf("access token=%q want access-new", got)
-	}
+	testutil.NoError(t, client.forceRefresh(context.Background(), rejected), "peer-rotated credential should be reused: %v")
+	testutil.Equal(t, client.currentCredentials().AccessToken, "access-new")
 }
 
 type failingQoderUpdater struct {
@@ -198,15 +193,9 @@ func TestRefreshReportsPersistenceFailureAndRetriesWriteBeforeReuse(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if creds.AccessToken != "access-new" {
-		t.Fatalf("access token = %q", creds.AccessToken)
-	}
-	if refreshes != 1 {
-		t.Fatalf("refresh calls = %d, want 1", refreshes)
-	}
-	if updater.calls != 2 {
-		t.Fatalf("persistence calls = %d, want failed write plus retry", updater.calls)
-	}
+	testutil.Equal(t, creds.AccessToken, "access-new")
+	testutil.Equal(t, refreshes, 1)
+	testutil.Equal(t, updater.calls, 2)
 }
 
 // TestSendRequestSetsTheFullHeaderContract pins the signed header set, including
@@ -253,9 +242,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 		t.Fatal("the stub server received no request")
 	}
 
-	if !strings.Contains(got.url, "/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1") {
-		t.Fatalf("url = %q, want the fixed chat path and query", got.url)
-	}
+	testutil.MustContain(t, got.url, "/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1")
 
 	// NOTE: net/http canonicalizes header names, so Cosy-ClientType reads back
 	// as Cosy-Clienttype and Login-Version as Login-Version.
@@ -284,9 +271,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 		"User-Agent":            "node",
 	}
 	for name, value := range want {
-		if got.headers.Get(name) != value {
-			t.Errorf("header %s = %q, want %q", name, got.headers.Get(name), value)
-		}
+		testutil.CheckEqual(t, got.headers.Get(name), value)
 	}
 	// The capture carries a trace context on every API call, and the gateway
 	// echoes the trace id back as sw-trace-id, which is what makes a request
@@ -297,9 +282,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 	if got.headers.Get("Cosy-Key") == "" || got.headers.Get("Cosy-Key") == "runtime-key" {
 		t.Error("Cosy-Key was not rederived using the reference runtime identity")
 	}
-	if got.headers.Get("Cosy-Date") == "" {
-		t.Error("Cosy-Date is empty")
-	}
+	testutil.CheckNotEqual(t, got.headers.Get("Cosy-Date"), "")
 	if auth := got.headers.Get("Authorization"); !strings.HasPrefix(auth, "Bearer COSY.") {
 		t.Errorf("Authorization = %q, want a COSY bearer", auth)
 	}
@@ -317,9 +300,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 	}
 	text := string(decoded)
 	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qoder_work"`, `"agent_id":"agent_common"`, `"task_id":"common"`, `"stream":true`, `"version":"3"`, `"key":"qmodel_latest"`, `"role":"user"`, `"context_length":1000000`} {
-		if !strings.Contains(text, want) {
-			t.Errorf("decoded body = %s, want it to contain %s", text, want)
-		}
+		testutil.CheckContain(t, text, want)
 	}
 
 	if len(events) == 0 || events[len(events)-1].Type != "model.finish" {
@@ -371,12 +352,8 @@ func TestSendRequestRefreshesOnceOnUnauthorized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendRequestWithPayload() error = %v", err)
 	}
-	if chatCalls != 2 {
-		t.Fatalf("chat calls = %d, want 2 (one rejected, one retried)", chatCalls)
-	}
-	if refreshCalls != 1 {
-		t.Fatalf("refresh calls = %d, want exactly 1", refreshCalls)
-	}
+	testutil.Equal(t, chatCalls, 2)
+	testutil.Equal(t, refreshCalls, 1)
 }
 
 func TestForceRefreshRejectsExpiredDurableCredential(t *testing.T) {
@@ -386,9 +363,7 @@ func TestForceRefreshRejectsExpiredDurableCredential(t *testing.T) {
 		t.Fatalf("forceRefresh error=%v want ErrReLoginRequired", err)
 	}
 	class := apperrors.ClassifyUpstreamError(err.Error())
-	if class.Category != "auth" {
-		t.Fatalf("class=%+v want auth", class)
-	}
+	testutil.Equal(t, class.Category, "auth")
 }
 
 // TestSendRequestDoesNotReplayAfterOutput proves a retry is refused once content
@@ -430,12 +405,8 @@ func TestSendRequestDoesNotReplayAfterOutput(t *testing.T) {
 	if !errors.Is(err, ErrStreamTruncated) {
 		t.Fatalf("error = %v, want ErrStreamTruncated", err)
 	}
-	if chatCalls != 1 {
-		t.Fatalf("chat calls = %d, want 1: output must not be replayed", chatCalls)
-	}
-	if len(events) != 1 {
-		t.Fatalf("events = %+v, want only the delivered delta", events)
-	}
+	testutil.Equal(t, chatCalls, 1)
+	testutil.Equal(t, len(events), 1)
 }
 
 // TestClassifyStatus pins the retry verdicts, including the busy code arriving
@@ -444,7 +415,7 @@ func TestConfiguredClientVersionMatchesReferenceBodyAndHeader(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{QoderClientVersion: "9.8.7"}
 	client := NewFromAccount(signedTestAccount(), cfg)
-	body, err := buildChatBodyVersion(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "request", "request-set", client.clientVersion)
+	body, err := buildChatBodyProfile(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "request", "request-set", client.clientVersion, "", sceneBusinessProduct)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,12 +427,8 @@ func TestConfiguredClientVersionMatchesReferenceBodyAndHeader(t *testing.T) {
 		t.Fatalf("body version is incoherent: %s", raw)
 	}
 	req, _ := http.NewRequest(http.MethodPost, "https://example.invalid/algo/chat", nil)
-	if err := client.applyAuthHeaders(req, credsOf(signedTestAccount()), RuntimeFields{EncryptUserInfo: "info", Key: "key"}, "request", "m", "system", string(body), "/chat"); err != nil {
-		t.Fatal(err)
-	}
-	if got := req.Header.Get("Cosy-Version"); got != "9.8.7" {
-		t.Fatalf("Cosy-Version=%q", got)
-	}
+	testutil.NoError(t, client.applyAuthHeaders(req, credsOf(signedTestAccount()), RuntimeFields{EncryptUserInfo: "info", Key: "key"}, "request", "m", "system", string(body), "/chat"))
+	testutil.Equal(t, req.Header.Get("Cosy-Version"), "9.8.7")
 }
 
 func TestReferenceRuntimeIdentityRebuiltAfterTokenRotation(t *testing.T) {
@@ -493,7 +460,7 @@ func TestReferenceRuntimeIdentityRebuiltAfterTokenRotation(t *testing.T) {
 func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
 	model := modelEntry{Key: "qfmodel", DisplayName: "Qwen3.8-Flash", IsReasoning: true, MaxInputTokens: 180000}
 	req := upstream.UpstreamRequest{Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "你好 qoder"}}}}
-	encoded, err := buildChatBody(req, model, "session-id", "request-id", "request-set-id")
+	encoded, err := buildChatBodyProfile(req, model, "session-id", "request-id", "request-set-id", DefaultClientVersion, "", sceneBusinessProduct)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,9 +469,7 @@ func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	var body map[string]interface{}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &body))
 	context := body["chat_context"].(map[string]interface{})
 	// The capture carries the same plain string in both fields; the
 	// {"type":"text","text":...} object shape this channel used to send is not
@@ -520,13 +485,9 @@ func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
 	if modelConfig["key"] != "qfmodel" || modelConfig["is_reasoning"] != true {
 		t.Fatalf("model_config must report the model's own reasoning capability: %#v", modelConfig)
 	}
-	if body["business"].(map[string]interface{})["product"] != "qoder_work" {
-		t.Fatalf("business product is not the QoderWork identity: %#v", body["business"])
-	}
+	testutil.Equal(t, body["business"].(map[string]interface{})["product"], "qoder_work")
 	params := body["parameters"].(map[string]interface{})
-	if params["max_tokens"] != float64(32000) {
-		t.Fatalf("reference max tokens missing: %#v", params)
-	}
+	testutil.EqualAny(t, params["max_tokens"], float64(32000))
 	for _, field := range []string{"reasoning_effort", "enable_thinking"} {
 		if _, present := params[field]; present {
 			t.Fatalf("unexpected default %s in %#v", field, params)
@@ -535,7 +496,7 @@ func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
 }
 
 func TestRefreshedReplayUsesFreshIdentityAndRetryFlag(t *testing.T) {
-	original, err := buildChatBodyVersion(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "old", "request-set", "1.2.3")
+	original, err := buildChatBodyProfile(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "old", "request-set", "1.2.3", "", sceneBusinessProduct)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,9 +506,7 @@ func TestRefreshedReplayUsesFreshIdentityAndRetryFlag(t *testing.T) {
 	}
 	raw, _ := decodeBodyForTest(replayed)
 	var body chatBody
-	if err := json.Unmarshal(raw, &body); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &body))
 	// request_id and chat_record_id identify the attempt and are refreshed;
 	// request_set_id and business.id identify the task and stay put, which is
 	// what the capture shows across the requests of one task.
@@ -593,15 +552,9 @@ func TestClassifyStatus(t *testing.T) {
 func TestRetryAfterDelaySupportsHTTPDateAndCapsSafely(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
-	if got := retryAfterDelayAt(now.Add(7*time.Second).Format(http.TimeFormat), now); got != 7*time.Second {
-		t.Fatalf("HTTP-date Retry-After = %v, want 7s", got)
-	}
-	if got := retryAfterDelayAt(now.Add(-time.Second).Format(http.TimeFormat), now); got != 0 {
-		t.Fatalf("past Retry-After = %v, want 0", got)
-	}
-	if got := retryAfterDelayAt("9223372036854775807", now); got != 30*time.Second {
-		t.Fatalf("huge Retry-After = %v, want cap 30s", got)
-	}
+	testutil.Equal(t, retryAfterDelayAt(now.Add(7*time.Second).Format(http.TimeFormat), now), 7*time.Second)
+	testutil.Equal(t, retryAfterDelayAt(now.Add(-time.Second).Format(http.TimeFormat), now), 0)
+	testutil.Equal(t, retryAfterDelayAt("9223372036854775807", now), 30*time.Second)
 }
 
 // TestBusyWaitIsCapped proves a hostile or buggy backoff hint cannot park a
@@ -609,21 +562,11 @@ func TestRetryAfterDelaySupportsHTTPDateAndCapsSafely(t *testing.T) {
 func TestBusyWaitIsCapped(t *testing.T) {
 	t.Parallel()
 
-	if got := busyWait("", []byte(`{"retryAfterMs":600000}`)); got != 30*time.Second {
-		t.Fatalf("busyWait() = %v, want the 30s cap", got)
-	}
-	if got := busyWait("", []byte(`{"message":"{\"retryAfterSeconds\":29,\"serviceAvailable\":false}"}`)); got != 29*time.Second {
-		t.Fatalf("nested retryAfterSeconds = %v, want 29s", got)
-	}
-	if got := busyWait("", []byte(`{"queue":{"isQueued":true,"waitTime":1500}}`)); got != 1500*time.Millisecond {
-		t.Fatalf("busyWait() = %v, want 1.5s", got)
-	}
-	if got := busyWait("7", nil); got != 7*time.Second {
-		t.Fatalf("busyWait() = %v, want 7s from Retry-After", got)
-	}
-	if got := busyWait("not-a-number", nil); got != 2*time.Second {
-		t.Fatalf("busyWait() = %v, want the 2s default", got)
-	}
+	testutil.Equal(t, busyWait("", []byte(`{"retryAfterMs":600000}`)), 30*time.Second)
+	testutil.Equal(t, busyWait("", []byte(`{"message":"{\"retryAfterSeconds\":29,\"serviceAvailable\":false}"}`)), 29*time.Second)
+	testutil.Equal(t, busyWait("", []byte(`{"queue":{"isQueued":true,"waitTime":1500}}`)), 1500*time.Millisecond)
+	testutil.Equal(t, busyWait("7", nil), 7*time.Second)
+	testutil.Equal(t, busyWait("not-a-number", nil), 2*time.Second)
 }
 
 // TestSendRequestRejectsUnsupportedName proves the live request path rejects a
@@ -681,9 +624,7 @@ func TestEnsureRuntimeFieldsDerivesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second ensureRuntimeFields() error = %v", err)
 	}
-	if first != second {
-		t.Fatalf("the pair was re-derived: %+v vs %+v", first, second)
-	}
+	testutil.Equal(t, first, second)
 }
 
 // TestApplyAuthHeadersOmitsOrganizationWhenAbsent pins the conditional presence
@@ -700,15 +641,9 @@ func TestApplyAuthHeadersOmitsOrganizationWhenAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.applyAuthHeaders(req, creds, fields, "req-1", "", "", "", signPath(req.URL.String())); err != nil {
-		t.Fatalf("applyAuthHeaders() error = %v", err)
-	}
-	if got := req.Header.Get("Cosy-Organization-Id"); got != "" {
-		t.Errorf("Cosy-Organization-Id = %q, want absent", got)
-	}
-	if got := req.Header.Get("X-Model-Key"); got != "" {
-		t.Errorf("X-Model-Key = %q, want absent for a quota read", got)
-	}
+	testutil.NoError(t, client.applyAuthHeaders(req, creds, fields, "req-1", "", "", "", signPath(req.URL.String())), "applyAuthHeaders() error = %v")
+	testutil.CheckEqual(t, req.Header.Get("Cosy-Organization-Id"), "")
+	testutil.CheckEqual(t, req.Header.Get("X-Model-Key"), "")
 
 	creds.OrgID = "org-1"
 	creds.OrgTags = []string{"a", "b"}
@@ -716,15 +651,9 @@ func TestApplyAuthHeadersOmitsOrganizationWhenAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.applyAuthHeaders(req2, creds, fields, "req-2", "dmodel", "", "body", signPath(req2.URL.String())); err != nil {
-		t.Fatalf("applyAuthHeaders() error = %v", err)
-	}
-	if got := req2.Header.Get("Cosy-Organization-Id"); got != "org-1" {
-		t.Errorf("Cosy-Organization-Id = %q, want org-1", got)
-	}
-	if got := req2.Header.Get("Cosy-Organization-Tags"); got != "a,b" {
-		t.Errorf("Cosy-Organization-Tags = %q, want a,b", got)
-	}
+	testutil.NoError(t, client.applyAuthHeaders(req2, creds, fields, "req-2", "dmodel", "", "body", signPath(req2.URL.String())), "applyAuthHeaders() error = %v")
+	testutil.CheckEqual(t, req2.Header.Get("Cosy-Organization-Id"), "org-1")
+	testutil.CheckEqual(t, req2.Header.Get("Cosy-Organization-Tags"), "a,b")
 	if got := req2.Header.Get("X-Model-Source"); got != "" {
 		// The source header is gated on the key, not on its own value; an empty
 		// source must still be present when a key is sent.
@@ -783,14 +712,10 @@ func TestEntitlementRefusalKeepsTheAccountUsable(t *testing.T) {
 	}
 
 	// The handler's own classifier, on the handler's own input.
-	if status := apperrors.ClassifyAccountStatus(requestErr.Error()); status != "" {
-		t.Fatalf("ClassifyAccountStatus(%q) = %q, want \"\" — a non-empty status disables the account", requestErr.Error(), status)
-	}
+	testutil.Equal(t, apperrors.ClassifyAccountStatus(requestErr.Error()), "")
 
 	// And the reason still reaches whoever reads the request error.
-	if !strings.Contains(requestErr.Error(), "pricing") {
-		t.Fatalf("error = %v, want the pricing pointer", requestErr)
-	}
+	testutil.MustContain(t, requestErr.Error(), "pricing")
 }
 
 // A subscription refusal is terminal for this account/model pair, but another
@@ -804,7 +729,5 @@ func TestEntitlementRefusalSwitchesAccounts(t *testing.T) {
 	if class.Category != "model_unavailable" || !class.Retryable || !class.SwitchAccount {
 		t.Fatalf("classification = %+v, want switchable model_unavailable", class)
 	}
-	if status := apperrors.ClassifyAccountStatus(err.Error()); status != "" {
-		t.Fatalf("account status = %q, want \"\"", status)
-	}
+	testutil.Equal(t, apperrors.ClassifyAccountStatus(err.Error()), "")
 }

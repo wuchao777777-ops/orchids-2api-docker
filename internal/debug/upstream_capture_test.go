@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -29,18 +30,14 @@ func TestUpstreamCaptureRetainsInterleavedAttempts(t *testing.T) {
 	sections := map[string]string{}
 	for _, s := range c.Bundle().Sections {
 		sections[s.Name] = s.Payload
-		if strings.Contains(s.Payload, "private-credential") || strings.Contains(s.Payload, "session-private") {
-			t.Fatal("credential persisted")
-		}
+		testutil.MustNotContainAny(t, s.Payload, "private-credential", "session-private")
 	}
 	for _, tc := range []struct{ name, want string }{
 		{"upstream_001_request.json", "first.invalid"}, {"upstream_002_request.json", "second.invalid"},
 		{"upstream_001_response.txt", "first response"}, {"upstream_002_response.txt", "second response"},
 		{"upstream_001_result.json", "429"}, {"upstream_002_result.json", "200"},
 	} {
-		if !strings.Contains(sections[tc.name], tc.want) {
-			t.Fatalf("%s: %q", tc.name, sections[tc.name])
-		}
+		testutil.MustContain(t, sections[tc.name], tc.want)
 	}
 }
 
@@ -54,9 +51,7 @@ func TestLoggerRetryRequestsAreNotOverwritten(t *testing.T) {
 		l.LogUpstreamRequest(fmt.Sprintf("https://attempt-%d.invalid", i), nil, map[string]int{"attempt": i})
 	}
 	b := c.Bundle()
-	if len(b.Sections) != 2 {
-		t.Fatalf("retained sections=%d", len(b.Sections))
-	}
+	testutil.Equal(t, len(b.Sections), 2)
 	byName := map[string]string{}
 	for _, s := range b.Sections {
 		byName[s.Name] = s.Payload

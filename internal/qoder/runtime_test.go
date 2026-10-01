@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 
@@ -77,12 +78,8 @@ func TestRuntimeFieldsMatchesPinnedFixture(t *testing.T) {
 	const wantInfo = "A2MBsulMvdx5p3X6li/3gjwEdVeJ/EkXILah2VTr11+i+FqvTaZ90ZrsGAtfSUode28WR718Kzups7BnrO2w+LGj2Y3+3zswmr48XkCV+HvUuajHkcU+tPJdWeL69JwKA+h2be5MvPMEYFopCPt9jE/DBdk/2Q+1oBab6DYLbrp8u5IYpZq7Fe4IrCcskN0K"
 	const wantKey = "nKeC6jJtXTWF4TpnVNnxMT/6jY0gBZfCPfjQaKbIi0lS+j2REWVXO5f6BzlvfEvHCrC+UY7rBMZfYs/C72KNYVIH2HLAR8E1yPDAGvV2xViMw029bXcMVa9ib0vyaM4IEu7HJlNHzUXTJOvEBB4YUAyxTCysQ/oYct/JIpRNg7I="
 
-	if fields.EncryptUserInfo != wantInfo {
-		t.Errorf("encrypt_user_info = %q, want %q", fields.EncryptUserInfo, wantInfo)
-	}
-	if fields.Key != wantKey {
-		t.Errorf("key = %q, want %q", fields.Key, wantKey)
-	}
+	testutil.CheckEqual(t, fields.EncryptUserInfo, wantInfo)
+	testutil.CheckEqual(t, fields.Key, wantKey)
 }
 
 // TestReverseMaskUUID pins the key derivation. The AES key is the hex of the
@@ -99,9 +96,7 @@ func TestReverseMaskUUID(t *testing.T) {
 	if got, want := string(runtimeASCIIKey(masked)), "100f0e0d0c0b4a09"; got != want {
 		t.Fatalf("runtimeASCIIKey() = %q, want %q", got, want)
 	}
-	if len(runtimeASCIIKey(masked)) != 16 {
-		t.Fatalf("runtimeASCIIKey() length = %d, want 16", len(runtimeASCIIKey(masked)))
-	}
+	testutil.Equal(t, len(runtimeASCIIKey(masked)), 16)
 }
 
 // TestRuntimeFieldsAccessorRoundTrip proves a stored pair is accepted and a half
@@ -145,9 +140,7 @@ func TestRuntimeFieldInputAlwaysCarriesTagsArray(t *testing.T) {
 	plaintext := make([]byte, len(sealed))
 	cipher.NewCBCDecrypter(block, key).CryptBlocks(plaintext, sealed)
 	unpadded := unpadPKCS7(t, plaintext)
-	if !strings.Contains(string(unpadded), `"organization_tags":[]`) {
-		t.Fatalf("plaintext = %s, want an empty organization_tags array", unpadded)
-	}
+	testutil.MustContain(t, string(unpadded), `"organization_tags":[]`)
 }
 
 func TestReferenceRuntimeIdentityIncludesTokensAndAccountClass(t *testing.T) {
@@ -174,9 +167,7 @@ func TestReferenceRuntimeIdentityIncludesTokensAndAccountClass(t *testing.T) {
 	plaintext := make([]byte, len(sealed))
 	cipher.NewCBCDecrypter(block, key).CryptBlocks(plaintext, sealed)
 	var identity map[string]string
-	if err := json.Unmarshal(unpadPKCS7(t, plaintext), &identity); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(unpadPKCS7(t, plaintext), &identity))
 	if len(identity) != 9 || identity["security_oauth_token"] != "access-secret" || identity["refresh_token"] != "refresh-secret" || identity["aid"] != "uid-1" || identity["user_type"] != "personal_professional_trial" {
 		t.Fatalf("reference identity field shape mismatch: keys=%d aid=%q user_type=%q", len(identity), identity["aid"], identity["user_type"])
 	}
@@ -184,9 +175,7 @@ func TestReferenceRuntimeIdentityIncludesTokensAndAccountClass(t *testing.T) {
 
 func unpadPKCS7(t *testing.T, padded []byte) []byte {
 	t.Helper()
-	if len(padded) == 0 {
-		t.Fatal("padded plaintext is empty")
-	}
+	testutil.NotEqual(t, len(padded), 0)
 	padding := int(padded[len(padded)-1])
 	if padding <= 0 || padding > len(padded) {
 		t.Fatalf("invalid padding %d", padding)
@@ -204,9 +193,7 @@ func TestPKCEPairShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pkcePair() error = %v", err)
 	}
-	if len(verifier) != 43 {
-		t.Fatalf("verifier length = %d, want 43", len(verifier))
-	}
+	testutil.Equal(t, len(verifier), 43)
 	if strings.ContainsAny(challenge, "+/=") {
 		t.Fatalf("challenge %q is not unpadded base64url", challenge)
 	}
@@ -233,9 +220,7 @@ func TestPKCEVerifierLengthSpread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pkcePair() error = %v", err)
 	}
-	if len(verifier) != 128 {
-		t.Fatalf("verifier length = %d, want 128", len(verifier))
-	}
+	testutil.Equal(t, len(verifier), 128)
 }
 
 // TestNewUUIDVersionAndVariant pins the UUID shape the upstream expects in the
@@ -248,12 +233,8 @@ func TestNewUUIDVersionAndVariant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newUUID() error = %v", err)
 	}
-	if len(value) != 36 {
-		t.Fatalf("uuid length = %d, want 36", len(value))
-	}
-	if value[14] != '4' {
-		t.Fatalf("uuid = %q, want version 4 at index 14", value)
-	}
+	testutil.Equal(t, len(value), 36)
+	testutil.Equal(t, value[14], '4')
 	if !strings.ContainsRune("89ab", rune(value[19])) {
 		t.Fatalf("uuid = %q, want an RFC 4122 variant at index 19", value)
 	}

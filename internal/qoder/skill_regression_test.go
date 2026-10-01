@@ -10,20 +10,19 @@ import (
 	"strings"
 	"testing"
 
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
 func TestSkillFinishReadsTail(t *testing.T) {
 	for _, done := range []string{"data: [DONE]\n\n", envelope(`[DONE]`)} {
 		prefix := envelope(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`) + done
-		result, err := consumeStreamWithTools(strings.NewReader(prefix+envelope(`{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}`)+"event:finish\ndata: {}\n\n"), false, nil)
+		result, err := consumeStreamObserved(strings.NewReader(prefix+envelope(`{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}`)+"event:finish\ndata: {}\n\n"), false, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Usage["inputTokens"] != 11 {
-			t.Fatalf("late usage lost: %#v", result.Usage)
-		}
-		_, err = consumeStreamWithTools(strings.NewReader(prefix+"event:error\ndata: failure\n\n"), false, nil)
+		testutil.Equal(t, result.Usage["inputTokens"], 11)
+		_, err = consumeStreamObserved(strings.NewReader(prefix+"event:error\ndata: failure\n\n"), false, nil, nil)
 		if err == nil {
 			t.Fatal("late error lost")
 		}
@@ -57,12 +56,8 @@ func TestSkillTransientFreshIdentity(t *testing.T) {
 	defer server.Close()
 	client := NewFromAccount(signedTestAccount(), nil)
 	setTestEndpoints(client, server.URL, server.URL, server.URL)
-	if err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{Model: "Qwen3.7-Max", Prompt: "hello"}, nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	if len(bodies) != 2 {
-		t.Fatalf("attempts = %d", len(bodies))
-	}
+	testutil.NoError(t, client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{Model: "Qwen3.7-Max", Prompt: "hello"}, nil, nil))
+	testutil.Equal(t, len(bodies), 2)
 	if bodies[0].RequestID == bodies[1].RequestID || bodies[1].IsRetry {
 		t.Fatalf("retry reused request ID=%v; is_retry=%v", bodies[0].RequestID == bodies[1].RequestID, bodies[1].IsRetry)
 	}
@@ -88,7 +83,7 @@ func TestSkillHTTPBusinessErrorsBeforeAuth(t *testing.T) {
 func TestSkillRequestControlsAndSharedRetry(t *testing.T) {
 	maxTokens, temperature, topP := 123, 0.0, 0.25
 	for _, attempt := range []int{0, 1, 2} {
-		encoded, err := buildChatBody(upstream.UpstreamRequest{Prompt: "hello", Attempt: attempt, MaxTokens: &maxTokens, Temperature: &temperature, TopP: &topP, Stop: []string{"END"}}, modelEntry{Key: "test"}, "session", "request", "request-set")
+		encoded, err := buildChatBodyProfile(upstream.UpstreamRequest{Prompt: "hello", Attempt: attempt, MaxTokens: &maxTokens, Temperature: &temperature, TopP: &topP, Stop: []string{"END"}}, modelEntry{Key: "test"}, "session", "request", "request-set", DefaultClientVersion, "", sceneBusinessProduct)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,9 +92,7 @@ func TestSkillRequestControlsAndSharedRetry(t *testing.T) {
 			t.Fatal(err)
 		}
 		var body chatBody
-		if err := json.Unmarshal(raw, &body); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, json.Unmarshal(raw, &body))
 		if body.IsRetry {
 			t.Fatalf("attempt %d retry=%v", attempt, body.IsRetry)
 		}

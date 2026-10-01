@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -13,12 +14,8 @@ func TestGetModelByModelID_FallsBackWhenIndexPointsToWrongModel(t *testing.T) {
 	ctx := context.Background()
 	want := &Model{Channel: "grok", ModelID: "target", Name: "target"}
 	other := &Model{Channel: "grok", ModelID: "other", Name: "other"}
-	if err := s.CreateModel(ctx, want); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CreateModel(ctx, other); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateModel(ctx, want))
+	testutil.NoError(t, s.CreateModel(ctx, other))
 	mini.HSet("test:models:model_id_map", "target", other.ID)
 	got, err := s.GetModelByModelID(ctx, "target")
 	if err != nil || got.ModelID != "target" {
@@ -49,15 +46,9 @@ func TestModelStatus_UnmarshalJSON(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var s ModelStatus
-			if err := json.Unmarshal([]byte(tt.input), &s); err != nil {
-				t.Fatalf("unmarshal failed: %v", err)
-			}
-			if s != tt.want {
-				t.Fatalf("got %q want %q", s, tt.want)
-			}
-			if s.Enabled() != tt.enabled {
-				t.Fatalf("enabled=%v want %v", s.Enabled(), tt.enabled)
-			}
+			testutil.NoError(t, json.Unmarshal([]byte(tt.input), &s), "unmarshal failed: %v")
+			testutil.Equal(t, s, tt.want)
+			testutil.Equal(t, s.Enabled(), tt.enabled)
 		})
 	}
 }
@@ -69,9 +60,7 @@ func TestModelStatus_MarshalJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal failed: %v", err)
 	}
-	if string(b) != `"available"` {
-		t.Fatalf("got %s want %s", string(b), `"available"`)
-	}
+	testutil.Equal(t, string(b), `"available"`)
 }
 
 func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *testing.T) {
@@ -84,37 +73,36 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 	// The store publishes nothing on its own, so the two channels' fixtures are
 	// created explicitly. The point of the test is that the lookup index is keyed
 	// by channel *and* model id, not that either channel has a catalog.
+	const sharedModelID = "shared-model"
 	if err := s.CreateModel(ctx, &Model{
-		Channel: "WorkBuddy", ModelID: "deepseek-v4-pro", Name: "deepseek-v4-pro",
+		Channel: "WorkBuddy", ModelID: sharedModelID, Name: "WorkBuddy Shared",
 		Status: ModelStatusAvailable, Verified: true,
 	}); err != nil {
 		t.Fatalf("CreateModel(workbuddy) error = %v", err)
 	}
 	if err := s.CreateModel(ctx, &Model{
-		Channel: "Qoder", ModelID: "auto-open", Name: "Qoder Auto Open",
+		Channel: "Qoder", ModelID: sharedModelID, Name: "Qoder Shared",
 		Status: ModelStatusAvailable, Verified: true,
 	}); err != nil {
 		t.Fatalf("CreateModel(qoder) error = %v", err)
 	}
 
-	workBuddyModel, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", "deepseek-v4-pro")
+	workBuddyModel, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", sharedModelID)
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID(workbuddy) error = %v", err)
 	}
-	if workBuddyModel.Channel != "WorkBuddy" {
-		t.Fatalf("workbuddy model channel = %q, want WorkBuddy", workBuddyModel.Channel)
-	}
+	testutil.Equal(t, workBuddyModel.Channel, "WorkBuddy")
 
-	qoderModel, err := s.GetModelByChannelAndModelID(ctx, "qoder", "auto-open")
+	qoderModel, err := s.GetModelByChannelAndModelID(ctx, "qoder", sharedModelID)
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID(qoder) error = %v", err)
 	}
-	if qoderModel.Channel != "Qoder" {
-		t.Fatalf("qoder model channel = %q, want Qoder", qoderModel.Channel)
+	testutil.Equal(t, qoderModel.Channel, "Qoder")
+	if workBuddyModel.ModelID != sharedModelID || qoderModel.ModelID != sharedModelID ||
+		workBuddyModel.Name != "WorkBuddy Shared" || qoderModel.Name != "Qoder Shared" {
+		t.Fatalf("channel index mixed records: workbuddy=%+v qoder=%+v", workBuddyModel, qoderModel)
 	}
-	if qoderModel.ID == workBuddyModel.ID {
-		t.Fatalf("expected different records across channels, got same id %q", qoderModel.ID)
-	}
+	testutil.NotEqual(t, qoderModel.ID, workBuddyModel.ID)
 }
 
 // TestStoreNew_PublishesNoBuiltInModels pins the startup contract: a new store
@@ -134,9 +122,7 @@ func TestStoreNew_PublishesNoBuiltInModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListModels() error = %v", err)
 	}
-	if len(models) != 0 {
-		t.Fatalf("ListModels() = %d rows, want none: %+v", len(models), models)
-	}
+	testutil.Equal(t, len(models), 0)
 	for _, probe := range []struct{ channel, modelID string }{
 		{"Grok", "grok-4.5"},
 		{"Grok", "grok-imagine-image"},
@@ -178,9 +164,7 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
 	}
-	if err := s.DeleteModel(ctx, model.ID); err != nil {
-		t.Fatalf("DeleteModel() error = %v", err)
-	}
+	testutil.NoError(t, s.DeleteModel(ctx, model.ID), "DeleteModel() error = %v")
 	_ = s.Close()
 
 	s, err = New(opts)
@@ -189,7 +173,6 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = s.Close()
-		mini.Close()
 	})
 
 	if _, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", "deepseek-v4-pro"); err == nil {
@@ -234,7 +217,6 @@ func TestStoreNew_KeepsUpstreamDiscoveredModels(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = s.Close()
-		mini.Close()
 	})
 
 	for _, probe := range []struct{ channel, modelID string }{
@@ -287,7 +269,6 @@ func TestStoreNew_RemovesDeprecatedGrokModelsOnly(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = s.Close()
-		mini.Close()
 	})
 
 	for _, id := range []string{"grok-4.5", "grok-imagine-image-quality", "grok-user-custom"} {
@@ -331,7 +312,6 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = s.Close()
-		mini.Close()
 	})
 
 	s.cleanupDeprecatedModelIDs(ctx)

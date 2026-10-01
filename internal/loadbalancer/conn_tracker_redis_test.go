@@ -2,6 +2,7 @@ package loadbalancer
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 
@@ -22,18 +23,12 @@ func TestRedisConnTrackerLeaseIsAtomicSharedAndReleased(t *testing.T) {
 	if second.TryAcquire(42, 1) {
 		t.Fatal("second process exceeded the shared hard limit")
 	}
-	if got := second.GetCount(42); got != 1 {
-		t.Fatalf("shared count=%d want 1", got)
-	}
+	testutil.Equal(t, second.GetCount(42), 1)
 	// Constructing another tracker must never erase live leases from a peer.
 	third := NewRedisConnTracker(client, "test:")
-	if got := third.GetCount(42); got != 1 {
-		t.Fatalf("new tracker cleared peer lease; count=%d", got)
-	}
+	testutil.Equal(t, third.GetCount(42), 1)
 	first.Release(42)
-	if got := second.GetCount(42); got != 0 {
-		t.Fatalf("released lease count=%d want 0", got)
-	}
+	testutil.Equal(t, second.GetCount(42), 0)
 }
 
 func TestRedisConnTrackerReclaimsExpiredAndLegacyCounters(t *testing.T) {
@@ -43,22 +38,14 @@ func TestRedisConnTrackerReclaimsExpiredAndLegacyCounters(t *testing.T) {
 	tracker := NewRedisConnTracker(client, "test:")
 	key := tracker.key(7)
 
-	if err := client.ZAdd(context.Background(), key, redis.Z{Score: float64(time.Now().Add(-time.Minute).UnixMilli()), Member: "dead"}).Err(); err != nil {
-		t.Fatal(err)
-	}
-	if got := tracker.GetCount(7); got != 0 {
-		t.Fatalf("expired lease count=%d want 0", got)
-	}
+	testutil.NoError(t, client.ZAdd(context.Background(), key, redis.Z{Score: float64(time.Now().Add(-time.Minute).UnixMilli()), Member: "dead"}).Err())
+	testutil.Equal(t, tracker.GetCount(7), 0)
 
-	if err := client.Set(context.Background(), key, "99", 0).Err(); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, client.Set(context.Background(), key, "99", 0).Err())
 	if !tracker.TryAcquire(7, 1) {
 		t.Fatal("legacy string counter prevented lease migration")
 	}
-	if got := tracker.GetCount(7); got != 1 {
-		t.Fatalf("migrated count=%d want 1", got)
-	}
+	testutil.Equal(t, tracker.GetCount(7), 1)
 	tracker.Release(7)
 }
 
@@ -73,9 +60,7 @@ func TestRedisConnTrackerCloseReleasesOwnedLeases(t *testing.T) {
 		t.Fatal("failed to acquire owned leases")
 	}
 	tracker.Close()
-	if got := peer.GetCount(42); got != 1 {
-		t.Fatalf("close removed a peer lease: count=%d want=1", got)
-	}
+	testutil.Equal(t, peer.GetCount(42), 1)
 	peer.Release(42)
 	if tracker.TryAcquire(42, 1) {
 		t.Fatal("closed tracker acquired a new lease")

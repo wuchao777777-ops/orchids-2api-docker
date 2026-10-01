@@ -8,30 +8,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestModelAdminEditPreservesDiscoveredRoutingMetadata(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "model_edit:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s, _ := newTestStore(t, "model_edit:")
 	model := &store.Model{Channel: "Grok", ModelID: "grok-4.7", Name: "old", Status: store.ModelStatusAvailable, Verified: true, Provider: "build", UpstreamModel: "grok-4.7", Capabilities: []string{store.CapabilityChat, store.CapabilityResponses}, Origin: "discovery", BoundAccountIDs: []int64{7}, CreatedAt: time.Now().UTC()}
-	if err := s.CreateModel(context.Background(), model); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateModel(context.Background(), model))
 	a := New(s, "admin", "pass", &config.Config{})
 	req := httptest.NewRequest(http.MethodPut, "/api/models/"+model.ID, strings.NewReader(`{"channel":"Grok","model_id":"grok-4.7","name":"renamed","status":"maintenance","sort_order":9,"is_default":true}`))
 	rec := httptest.NewRecorder()
 	a.HandleModelByID(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	got, err := s.GetModel(context.Background(), model.ID)
 	if err != nil {
 		t.Fatal(err)

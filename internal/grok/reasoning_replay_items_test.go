@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // testReplayCipher produces a distinct but equally valid opaque cipher per seed,
@@ -30,9 +31,7 @@ func TestNormalizeReplayItemsRequiresAnAnchor(t *testing.T) {
 	}
 	// Reasoning items must carry only the portable shape; extra keys 400 upstream.
 	normalized, _ := items[0].(map[string]interface{})
-	if len(normalized) != 3 {
-		t.Fatalf("reasoning item not reduced to its portable shape: %v", normalized)
-	}
+	testutil.Equal(t, len(normalized), 3)
 	// A message alone is not replayable.
 	if _, ok := normalizeReplayItems([]interface{}{message}); ok {
 		t.Fatal("message-only replay should not be anchorable")
@@ -76,13 +75,9 @@ func TestFilterReplayItemsMatchesPrefixedToolCallIDs(t *testing.T) {
 		map[string]interface{}{"role": "user", "content": "next"},
 	}
 	got := filterReplayItemsForInput(input, items)
-	if len(got) != 1 {
-		t.Fatalf("prefixed call not matched: %v", got)
-	}
+	testutil.Equal(t, len(got), 1)
 	// The replayed call is rebound to the spelling the client already uses.
-	if callID := interfaceString(got[0].(map[string]interface{})["call_id"]); callID != "toolu_call_1" {
-		t.Fatalf("call_id=%q want toolu_call_1", callID)
-	}
+	testutil.Equal(t, interfaceString(got[0].(map[string]interface{})["call_id"]), "toolu_call_1")
 }
 
 func TestInsertReplayItemsPlacesBeforeMatchingToolOutput(t *testing.T) {
@@ -96,29 +91,21 @@ func TestInsertReplayItemsPlacesBeforeMatchingToolOutput(t *testing.T) {
 		map[string]interface{}{"type": "function_call_output", "call_id": "call_9", "output": "done"},
 	}
 	got := insertReplayItems(input, items)
-	if len(got) != 5 {
-		t.Fatalf("inserted=%v", got)
-	}
+	testutil.Equal(t, len(got), 5)
 	// The replay must land ahead of its own tool output, never after it.
 	for index, want := range []string{"", "", "reasoning", "function_call", "function_call_output"} {
 		if want == "" {
 			continue
 		}
-		if typeName := interfaceString(got[index].(map[string]interface{})["type"]); typeName != want {
-			t.Fatalf("index %d type=%q want %q (%v)", index, typeName, want, got)
-		}
+		testutil.Equal(t, interfaceString(got[index].(map[string]interface{})["type"]), want)
 	}
 }
 
 func TestReplayItemsFromLegacyCipher(t *testing.T) {
 	cipher := validTestReplayCipher()
 	items := replayItemsFromStored(&store.StoredReasoningReplay{EncryptedContent: cipher})
-	if len(items) != 1 {
-		t.Fatalf("legacy items=%v", items)
-	}
-	if got := interfaceString(items[0].(map[string]interface{})["encrypted_content"]); got != cipher {
-		t.Fatalf("legacy cipher=%q", got)
-	}
+	testutil.Equal(t, len(items), 1)
+	testutil.Equal(t, interfaceString(items[0].(map[string]interface{})["encrypted_content"]), cipher)
 	// A normalized item list takes precedence when both forms are present.
 	encoded, err := json.Marshal(map[string]interface{}{"type": "reasoning", "summary": []interface{}{}, "encrypted_content": testReplayCipher(4)})
 	if err != nil {
@@ -151,12 +138,8 @@ func TestCaptureReasoningReplayFromStream(t *testing.T) {
 		"data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"reasoning\",\"encrypted_content\":\"" + cipher + "\"}]}}\n\n"
 	h.captureReasoningReplay(context.Background(), "grok-4.6", "session", []byte(stream))
 	items := h.loadReasoningReplayItems("grok-4.6", "session")
-	if len(items) != 1 {
-		t.Fatalf("stream capture items=%v", items)
-	}
-	if got := interfaceString(items[0].(map[string]interface{})["encrypted_content"]); got != cipher {
-		t.Fatalf("stream capture cipher=%q want %q", got, cipher)
-	}
+	testutil.Equal(t, len(items), 1)
+	testutil.Equal(t, interfaceString(items[0].(map[string]interface{})["encrypted_content"]), cipher)
 }
 
 func TestReasoningReplayCacheReturnsDeepCopies(t *testing.T) {
@@ -175,11 +158,7 @@ func TestReasoningReplayCacheReturnsDeepCopies(t *testing.T) {
 
 	again := h.loadReasoningReplayItems("grok-4.6", "session")
 	againItem := again[0].(map[string]interface{})
-	if got := interfaceString(againItem["encrypted_content"]); got != cipher {
-		t.Fatalf("cached cipher was mutated: %q", got)
-	}
+	testutil.Equal(t, interfaceString(againItem["encrypted_content"]), cipher)
 	summary := againItem["summary"].([]interface{})[0].(map[string]interface{})
-	if got := interfaceString(summary["text"]); got != "stable" {
-		t.Fatalf("nested cached value was mutated: %q", got)
-	}
+	testutil.Equal(t, interfaceString(summary["text"]), "stable")
 }

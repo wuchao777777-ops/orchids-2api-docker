@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -22,9 +23,7 @@ func TestAuthorizeApiKeyBasicValidation(t *testing.T) {
 		KeySuffix: "cret",
 		Enabled:   true,
 	}
-	if err := s.CreateApiKey(context.Background(), key); err != nil {
-		t.Fatalf("CreateApiKey() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateApiKey(context.Background(), key), "CreateApiKey() error = %v")
 
 	if authorized, err := s.AuthorizeApiKey(context.Background(), raw); err != nil || authorized == nil {
 		t.Fatalf("AuthorizeApiKey(valid) = %#v, %v", authorized, err)
@@ -40,9 +39,7 @@ func TestAuthorizeApiKeyBasicValidation(t *testing.T) {
 		t.Fatalf("AuthorizeApiKey(wrong) error = %v, want ErrNoRows", err)
 	}
 	key.Enabled = false
-	if err := s.UpdateApiKey(context.Background(), key); err != nil {
-		t.Fatalf("UpdateApiKey() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateApiKey(context.Background(), key), "UpdateApiKey() error = %v")
 	if _, err = s.AuthorizeApiKey(context.Background(), raw); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("AuthorizeApiKey(disabled) error = %v, want ErrNoRows", err)
 	}
@@ -62,9 +59,7 @@ func TestAuthorizeApiKeyPolicyAndRPM(t *testing.T) {
 		AllowedModels: []string{"grok-4.6"},
 		RPMLimit:      2,
 	}
-	if err := s.CreateApiKey(context.Background(), key); err != nil {
-		t.Fatalf("CreateApiKey() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateApiKey(context.Background(), key), "CreateApiKey() error = %v")
 
 	for i := 0; i < 2; i++ {
 		got, err := s.AuthorizeApiKey(context.Background(), raw)
@@ -95,9 +90,7 @@ func TestAuthorizeApiKeyRejectsExpiredKey(t *testing.T) {
 		Enabled:   true,
 		ExpiresAt: &expiresAt,
 	}
-	if err := s.CreateApiKey(context.Background(), key); err != nil {
-		t.Fatalf("CreateApiKey() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateApiKey(context.Background(), key), "CreateApiKey() error = %v")
 	if _, err := s.AuthorizeApiKey(context.Background(), raw); err != ErrApiKeyExpired {
 		t.Fatalf("AuthorizeApiKey() error = %v, want %v", err, ErrApiKeyExpired)
 	}
@@ -107,16 +100,12 @@ func TestUpdateApiKeyPolicyPersists(t *testing.T) {
 	s, _ := newTestRedisStore(t, "auth-update-test:")
 
 	key := &ApiKey{Name: "update", KeyHash: "hash", KeyPrefix: "sk-", KeySuffix: "hash", Enabled: true}
-	if err := s.CreateApiKey(context.Background(), key); err != nil {
-		t.Fatalf("CreateApiKey() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateApiKey(context.Background(), key), "CreateApiKey() error = %v")
 	expiresAt := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
 	key.AllowedModels = []string{"grok-4.6", "grok-imagine-video"}
 	key.RPMLimit = 17
 	key.ExpiresAt = &expiresAt
-	if err := s.UpdateApiKey(context.Background(), key); err != nil {
-		t.Fatalf("UpdateApiKey() error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateApiKey(context.Background(), key), "UpdateApiKey() error = %v")
 	got, err := s.GetApiKeyByID(context.Background(), key.ID)
 	if err != nil {
 		t.Fatalf("GetApiKeyByID() error = %v", err)

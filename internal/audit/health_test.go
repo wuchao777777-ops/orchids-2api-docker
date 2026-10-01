@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"strings"
 	"sync"
 	"testing"
@@ -32,9 +33,7 @@ func TestSinkRejectsOversizeAndSnapshotsMetadata(t *testing.T) {
 		t.Fatalf("health = %+v", health)
 	}
 	events := readLoggedEvents(t, logger, 1)
-	if events[0].Metadata["value"] != "original" {
-		t.Fatalf("metadata mutated: %+v", events)
-	}
+	testutil.Equal(t, events[0].Metadata["value"], "original")
 }
 
 func TestSinkConcurrentCloseAndLog(t *testing.T) {
@@ -52,7 +51,5 @@ func TestSinkConcurrentCloseAndLog(t *testing.T) {
 	logger.Close()
 	wg.Wait()
 	health := logger.Health()
-	if health.Written+health.Dropped != 800 {
-		t.Fatalf("unaccounted events: %+v", health)
-	}
+	testutil.Equal(t, health.Written+health.Dropped, 800)
 }

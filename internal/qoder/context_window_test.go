@@ -1,6 +1,9 @@
 package qoder
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 // The catalog declares max_input_tokens per model and the request path already
 // forwards it. This is the same observation, made readable to the public model
@@ -22,9 +25,7 @@ func TestCatalogContextWindowsReadsStoredSnapshot(t *testing.T) {
 		// answered too.
 		{"qwen3.8-flash", 180000},
 	} {
-		if got := windows[want.key]; got != want.want {
-			t.Fatalf("window[%q] = %d, want %d", want.key, got, want.want)
-		}
+		testutil.Equal(t, windows[want.key], want.want)
 	}
 }
 

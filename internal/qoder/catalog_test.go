@@ -3,6 +3,7 @@ package qoder
 import (
 	"context"
 	"errors"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -35,9 +36,7 @@ func TestFetchModelsReadsOnlyTheObservedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchModels() with a snapshot error = %v", err)
 	}
-	if snapshot.Len() != 2 {
-		t.Fatalf("snapshot catalog length = %d, want exactly the 2 recorded rows", snapshot.Len())
-	}
+	testutil.Equal(t, snapshot.Len(), 2)
 	if _, resolveErr := snapshot.Resolve("Kimi-K2.7-Code"); resolveErr != nil {
 		t.Fatalf("the snapshot catalog cannot resolve its own model: %v", resolveErr)
 	}

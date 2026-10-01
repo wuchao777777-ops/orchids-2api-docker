@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -40,9 +41,7 @@ func TestConsumeStreamReportsUnifiedUsage(t *testing.T) {
 			}
 		case "model.text-delta":
 			sawText = true
-			if event.Event["delta"] != "hi" {
-				t.Fatalf("delta = %v", event.Event["delta"])
-			}
+			testutil.Equal(t, event.Event["delta"], "hi")
 		}
 	}
 	if !sawUsage || !sawText {

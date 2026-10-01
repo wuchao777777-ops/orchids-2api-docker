@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -10,9 +11,7 @@ func TestUpdateAccountStaleRequestCannotOverwriteNewerQuota(t *testing.T) {
 	s, _ := newTestRedisStore(t, "quota-order:")
 
 	acc := &Account{AccountType: "qoder", Enabled: true}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc))
 	stale := *acc
 
 	newReset := time.Now().Add(24 * time.Hour).Round(time.Millisecond)
@@ -20,17 +19,13 @@ func TestUpdateAccountStaleRequestCannotOverwriteNewerQuota(t *testing.T) {
 	fresh := *acc
 	fresh.QuotaResetAt = newReset
 	fresh.QoderQuota = QoderQuotaSnapshot{Exhausted: true, ResetAt: newReset, SyncedAt: newSync}
-	if err := s.UpdateAccount(context.Background(), &fresh); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.UpdateAccount(context.Background(), &fresh))
 
 	stale.StatusCode = "402"
 	stale.LastAttempt = time.Now()
 	stale.QuotaResetAt = time.Now().Add(time.Hour)
 	stale.QoderQuota = QoderQuotaSnapshot{ResetAt: stale.QuotaResetAt, SyncedAt: newSync.Add(-time.Minute)}
-	if err := s.UpdateAccount(context.Background(), &stale); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.UpdateAccount(context.Background(), &stale))
 
 	got, err := s.GetAccount(context.Background(), acc.ID)
 	if err != nil {
@@ -39,7 +34,5 @@ func TestUpdateAccountStaleRequestCannotOverwriteNewerQuota(t *testing.T) {
 	if !got.QuotaResetAt.Equal(newReset) || !got.QoderQuota.ResetAt.Equal(newReset) || !got.QoderQuota.Exhausted {
 		t.Fatalf("stale write overwrote quota: reset=%v snapshot=%+v", got.QuotaResetAt, got.QoderQuota)
 	}
-	if got.StatusCode != "402" {
-		t.Fatalf("stale request verdict was lost: status=%q", got.StatusCode)
-	}
+	testutil.Equal(t, got.StatusCode, "402")
 }

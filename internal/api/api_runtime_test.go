@@ -1,6 +1,7 @@
 package api
 
 import (
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -54,9 +55,7 @@ func TestSampleHostCPURequiresAWindow(t *testing.T) {
 	if !ok || window != 2*time.Second {
 		t.Fatalf("ok=%v window=%s", ok, window)
 	}
-	if busy != 0 {
-		t.Fatalf("busy=%.3f want 0", busy)
-	}
+	testutil.Equal(t, busy, 0)
 	// A sub-tick reading right after a valid one must repeat the last value and
 	// window instead of inventing 100%.
 	busy, window, ok = sampleHostCPU(cpuStat(100, 0, 101, 1000, 0), start.Add(2*time.Second+10*time.Millisecond))
@@ -66,15 +65,11 @@ func TestSampleHostCPURequiresAWindow(t *testing.T) {
 	// A later window reports its own rate: 900 ticks elapsed since the previous
 	// reading and 600 of them were idle, so 33.3% busy.
 	busy, window, ok = sampleHostCPU(cpuStat(200, 0, 300, 1600, 0), start.Add(10*time.Second))
-	if !ok {
-		t.Fatal("a real window reported no rate")
-	}
+	testutil.True(t, ok, "a real window reported no rate")
 	if got := busy * 100; got < 33 || got > 34 {
 		t.Fatalf("busy=%.2f%% want ~33.3%% (window %s)", got, window)
 	}
-	if window != 8*time.Second {
-		t.Fatalf("window=%s want 8s", window)
-	}
+	testutil.Equal(t, window, 8*time.Second)
 }
 
 func TestSampleHostCPUSurvivesCounterReset(t *testing.T) {

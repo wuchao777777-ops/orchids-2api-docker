@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -16,16 +17,12 @@ func TestProviderCredentialPatchesPreserveConcurrentAccountFields(t *testing.T) 
 		AccountType: "workbuddy", Enabled: true, Name: "before", StatusCode: "429",
 		UsageCurrent: 17, WorkBuddyAccessToken: "access-old", WorkBuddyRefreshToken: "refresh-old",
 	}
-	if err := s.CreateAccount(ctx, wb); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, wb))
 	admin := *wb
 	admin.Name = "after"
 	admin.StatusCode = ""
 	admin.WorkBuddyRefreshToken = "stale-refresh"
-	if err := s.UpdateAccount(ctx, &admin); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, &admin))
 	if err := s.UpdateWorkBuddyCredentials(ctx, wb.ID, WorkBuddyCredentialPatch{
 		ExpectedRefreshToken: "refresh-old",
 		AccessToken:          "access-new",
@@ -41,17 +38,13 @@ func TestProviderCredentialPatchesPreserveConcurrentAccountFields(t *testing.T) 
 	if storedWB.Name != "after" || storedWB.UsageCurrent != 17 {
 		t.Fatalf("credential patch lost unrelated fields: %+v", storedWB)
 	}
-	if storedWB.WorkBuddyRefreshToken != "refresh-new" {
-		t.Fatalf("refresh token = %q", storedWB.WorkBuddyRefreshToken)
-	}
+	testutil.Equal(t, storedWB.WorkBuddyRefreshToken, "refresh-new")
 
 	qoder := &Account{
 		AccountType: "qoder", Enabled: true, Name: "qoder", UsageLimit: 100,
 		QoderAccessToken: "q-access-old", QoderRefreshToken: "q-refresh-old", QoderMachineID: "machine",
 	}
-	if err := s.CreateAccount(ctx, qoder); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, qoder))
 	if err := s.UpdateQoderAccount(ctx, qoder.ID, QoderAccountPatch{
 		ExpectedRefreshToken: "q-refresh-old",
 		AccessToken:          "q-access-new",
@@ -75,9 +68,7 @@ func TestProviderCredentialPatchRejectsStaleRotation(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newTestRedisStore(t, "provider-patch:")
 	acc := &Account{AccountType: "qoder", Enabled: true, QoderRefreshToken: "refresh-current"}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc))
 	err := s.UpdateQoderAccount(ctx, acc.ID, QoderAccountPatch{
 		ExpectedRefreshToken: "refresh-stale",
 		RefreshToken:         "refresh-would-overwrite",
@@ -89,7 +80,5 @@ func TestProviderCredentialPatchRejectsStaleRotation(t *testing.T) {
 	if getErr != nil {
 		t.Fatal(getErr)
 	}
-	if stored.QoderRefreshToken != "refresh-current" {
-		t.Fatalf("stale patch overwrote token: %q", stored.QoderRefreshToken)
-	}
+	testutil.Equal(t, stored.QoderRefreshToken, "refresh-current")
 }

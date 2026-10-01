@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,9 +17,7 @@ func TestExampleConfigLoads(t *testing.T) {
 		t.Fatalf("read config.example.json: %v", err)
 	}
 	var cfg Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		t.Fatalf("config.example.json does not unmarshal into config.Config: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &cfg), "config.example.json does not unmarshal into config.Config: %v")
 	if cfg.Port == "" || cfg.RedisAddr == "" {
 		t.Fatalf("config.example.json is missing required values: port=%q redis_addr=%q", cfg.Port, cfg.RedisAddr)
 	}
@@ -38,9 +37,7 @@ func TestExampleConfigUpstreamURLsMatchDefaults(t *testing.T) {
 		t.Fatalf("read config.example.json: %v", err)
 	}
 	var cfg Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		t.Fatalf("config.example.json does not unmarshal into config.Config: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &cfg), "config.example.json does not unmarshal into config.Config: %v")
 	var empty Config
 	for _, tc := range []struct {
 		field string

@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -12,15 +13,9 @@ func TestTrustedProxyMiddlewareRejectsSpoofedForwardingHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := ClientIP(r); got != "203.0.113.10" {
-			t.Fatalf("client IP = %q", got)
-		}
-		if got := r.Header.Get("X-Forwarded-For"); got != "" {
-			t.Fatalf("untrusted forwarding header survived: %q", got)
-		}
-		if got := r.Header.Get("X-Forwarded-Proto"); got != "" {
-			t.Fatalf("untrusted proto survived: %q", got)
-		}
+		testutil.Equal(t, ClientIP(r), "203.0.113.10")
+		testutil.Equal(t, r.Header.Get("X-Forwarded-For"), "")
+		testutil.Equal(t, r.Header.Get("X-Forwarded-Proto"), "")
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "203.0.113.10:1234"
@@ -35,18 +30,10 @@ func TestTrustedProxyMiddlewareWalksForwardedChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := ClientIP(r); got != "198.51.100.9" {
-			t.Fatalf("client IP = %q", got)
-		}
-		if got := r.Header.Get("X-Forwarded-Proto"); got != "https" {
-			t.Fatalf("trusted proto = %q", got)
-		}
-		if got := r.Header.Get("X-Forwarded-For"); got != "198.51.100.9" {
-			t.Fatalf("sanitized forwarding chain = %q", got)
-		}
-		if got := r.Header.Get("X-Forwarded-Host"); got != "api.example.com" {
-			t.Fatalf("sanitized forwarded host = %q", got)
-		}
+		testutil.Equal(t, ClientIP(r), "198.51.100.9")
+		testutil.Equal(t, r.Header.Get("X-Forwarded-Proto"), "https")
+		testutil.Equal(t, r.Header.Get("X-Forwarded-For"), "198.51.100.9")
+		testutil.Equal(t, r.Header.Get("X-Forwarded-Host"), "api.example.com")
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.0.0.2:443"
@@ -101,9 +88,7 @@ func TestAnonymousAllowlistAllowsOnlyNamedSources(t *testing.T) {
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
 		req.RemoteAddr = tc.remote
-		if got := list.Allows(req); got != tc.want {
-			t.Fatalf("Allows(%q)=%v want %v", tc.remote, got, tc.want)
-		}
+		testutil.Equal(t, list.Allows(req), tc.want)
 	}
 
 	// A malformed entry is an error, so a typo cannot silently widen the list.
@@ -134,9 +119,7 @@ func TestAnonymousAllowlistUsesTheTrustedClientAddress(t *testing.T) {
 	trusted.RemoteAddr = "127.0.0.1:5555"
 	trusted.Header.Set("X-Forwarded-For", "203.0.113.20")
 	handler.ServeHTTP(httptest.NewRecorder(), trusted)
-	if !allowed {
-		t.Fatal("a trusted proxy's forwarded client address was not honoured")
-	}
+	testutil.True(t, allowed, "a trusted proxy's forwarded client address was not honoured")
 
 	// The same header from an untrusted peer is cleared, so the peer itself decides.
 	untrusted := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
@@ -168,9 +151,7 @@ func TestTrustedProxyPrefersCloudflareClientHeader(t *testing.T) {
 	request.Header.Set("CF-Connecting-IP", "203.0.113.20")
 	request.Header.Set("X-Forwarded-For", "173.245.48.9")
 	handler.ServeHTTP(httptest.NewRecorder(), request)
-	if resolved != "203.0.113.20" {
-		t.Fatalf("resolved client=%q want the Cloudflare client address", resolved)
-	}
+	testutil.Equal(t, resolved, "203.0.113.20")
 
 	// A request from an untrusted peer has the header stripped, so the peer is the
 	// client and cannot claim to be someone else.
@@ -178,9 +159,7 @@ func TestTrustedProxyPrefersCloudflareClientHeader(t *testing.T) {
 	direct.RemoteAddr = "203.0.113.9:5555"
 	direct.Header.Set("CF-Connecting-IP", "203.0.113.20")
 	handler.ServeHTTP(httptest.NewRecorder(), direct)
-	if resolved != "203.0.113.9" {
-		t.Fatalf("resolved client=%q want the real peer", resolved)
-	}
+	testutil.Equal(t, resolved, "203.0.113.9")
 
 	// With Cloudflare's ranges trusted, the forwarded chain also resolves to the
 	// original client past the edge.
@@ -188,7 +167,5 @@ func TestTrustedProxyPrefersCloudflareClientHeader(t *testing.T) {
 	chain.RemoteAddr = "127.0.0.1:5555"
 	chain.Header.Set("X-Forwarded-For", "203.0.113.20, 173.245.48.9")
 	handler.ServeHTTP(httptest.NewRecorder(), chain)
-	if resolved != "203.0.113.20" {
-		t.Fatalf("resolved client=%q want the original client from the chain", resolved)
-	}
+	testutil.Equal(t, resolved, "203.0.113.20")
 }

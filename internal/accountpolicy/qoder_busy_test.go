@@ -7,6 +7,7 @@ import (
 
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // qoderBusyError reproduces the two things production actually paired: the text
@@ -49,18 +50,14 @@ func TestClassifyGlobalQueueRefusalWaitsWithoutHoldingTheAccount(t *testing.T) {
 
 			// The account must stay in the pool: no account status, and a scope
 			// that is not the account or the credential.
-			if verdict.Status != "" {
-				t.Errorf("account status = %q, want none; a shared refusal is not this account's fault", verdict.Status)
-			}
+			testutil.CheckEqual(t, verdict.Status, "")
 			if verdict.Scope == ScopeAccount || verdict.Scope == ScopeCredential {
 				t.Errorf("scope = %q, want a scope that does not hold the account", verdict.Scope)
 			}
 			// Nothing is persisted. A model cooldown here would take this account,
 			// and then every other one, out of selection for the window, which is
 			// the fail-fast this replaces.
-			if verdict.Cooldown != 0 {
-				t.Errorf("cooldown = %v, want 0 so no account or model state is written", verdict.Cooldown)
-			}
+			testutil.CheckEqual(t, verdict.Cooldown, 0)
 			// Wait and retry, on the account already held.
 			if !verdict.Retryable {
 				t.Error("Retryable = false; a short queue window should be waited out, not failed")
@@ -68,9 +65,7 @@ func TestClassifyGlobalQueueRefusalWaitsWithoutHoldingTheAccount(t *testing.T) {
 			if verdict.SwitchAccount {
 				t.Error("SwitchAccount = true; rotating multiplies one shared refusal across every account")
 			}
-			if verdict.Model != "qwen3.8-flash" {
-				t.Errorf("model = %q, want the reported model", verdict.Model)
-			}
+			testutil.CheckEqual(t, verdict.Model, "qwen3.8-flash")
 		})
 	}
 }
@@ -82,18 +77,12 @@ func TestClassifyAccountScopedRateLimitStillRotates(t *testing.T) {
 	acc := &store.Account{ID: 3, AccountType: "cline", Enabled: true}
 	verdict := Classify(acc, retryAfterTestError{wait: 2 * time.Minute}, "claude-sonnet-4")
 
-	if verdict.Status != "429" {
-		t.Errorf("status = %q, want 429 for a real per-account cap", verdict.Status)
-	}
-	if verdict.Scope != ScopeAccount {
-		t.Errorf("scope = %q, want account", verdict.Scope)
-	}
+	testutil.CheckEqual(t, verdict.Status, "429")
+	testutil.CheckEqual(t, verdict.Scope, ScopeAccount)
 	if !verdict.SwitchAccount || !verdict.Retryable {
 		t.Error("a genuine per-account throttle must still switch accounts and retry")
 	}
-	if verdict.Cooldown != 2*time.Minute {
-		t.Errorf("cooldown = %v, want the upstream hint", verdict.Cooldown)
-	}
+	testutil.CheckEqual(t, verdict.Cooldown, 2*time.Minute)
 }
 
 // TestClassifyGlobalRefusalIgnoresAnUnusableHint pins that a shared refusal does
@@ -112,12 +101,8 @@ func TestClassifyGlobalRefusalIgnoresAnUnusableHint(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			verdict := Classify(acc, tc.err, "qwen3.8-flash")
-			if verdict.Cooldown != 0 {
-				t.Errorf("cooldown = %v, want 0 regardless of the hint", verdict.Cooldown)
-			}
-			if verdict.Status != "" {
-				t.Errorf("status = %q, want none", verdict.Status)
-			}
+			testutil.CheckEqual(t, verdict.Cooldown, 0)
+			testutil.CheckEqual(t, verdict.Status, "")
 			if !verdict.Retryable || verdict.SwitchAccount {
 				t.Errorf("retryable=%v switch=%v, want a wait on the same account", verdict.Retryable, verdict.SwitchAccount)
 			}
@@ -142,15 +127,11 @@ func TestRetryLoopAndAccountPolicyAgreeOnSwitching(t *testing.T) {
 			verdict := Classify(acc, qoderBusyError{message: message, wait: 30 * time.Second}, "qwen3.8-flash")
 			class := apperrors.ClassifyUpstreamError(message)
 
-			if verdict.SwitchAccount != class.SwitchAccount {
-				t.Fatalf("switch disagreement: policy=%v classifier=%v for %q", verdict.SwitchAccount, class.SwitchAccount, message)
-			}
+			testutil.Equal(t, verdict.SwitchAccount, class.SwitchAccount)
 			if verdict.SwitchAccount {
 				t.Error("a refusal every account meets must not rotate the pool")
 			}
-			if verdict.Status != "" {
-				t.Errorf("status = %q, want none: nothing about this account is wrong", verdict.Status)
-			}
+			testutil.CheckEqual(t, verdict.Status, "")
 		})
 	}
 }
@@ -168,15 +149,11 @@ func TestGlobalRefusalSurvivesEscapedNesting(t *testing.T) {
 	escaped := `qoder upstream rejected the credential: {"message":"{\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"waitTime\":30}"}`
 	verdict := Classify(acc, qoderBusyError{message: escaped, wait: 30 * time.Second}, "qwen3.8-flash")
 
-	if verdict.Status != "" {
-		t.Fatalf("status = %q, want none: an escaped closed gate is not this account's rate limit", verdict.Status)
-	}
+	testutil.Equal(t, verdict.Status, "")
 	if verdict.Scope == ScopeAccount || verdict.Scope == ScopeCredential {
 		t.Fatalf("scope = %q, want a scope that does not hold the account", verdict.Scope)
 	}
-	if verdict.Cooldown != 0 {
-		t.Fatalf("cooldown = %v, want 0 so no account or model state is written", verdict.Cooldown)
-	}
+	testutil.Equal(t, verdict.Cooldown, 0)
 	if verdict.SwitchAccount {
 		t.Fatal("SwitchAccount = true; rotating multiplies one shared refusal")
 	}
@@ -193,18 +170,14 @@ func TestDeadCredentialStillRotates(t *testing.T) {
 	verdict := Classify(acc, errors.New(refused), "qwen3.8-flash")
 	class := apperrors.ClassifyUpstreamError(refused)
 
-	if verdict.Status != "401" {
-		t.Fatalf("status = %q, want 401", verdict.Status)
-	}
+	testutil.Equal(t, verdict.Status, "401")
 	if !verdict.SwitchAccount {
 		t.Error("SwitchAccount = false; a refused credential must let the pool try another account")
 	}
 	if !verdict.NeedsLogin {
 		t.Error("NeedsLogin = false; waiting cannot repair a credential the upstream retired")
 	}
-	if verdict.SwitchAccount != class.SwitchAccount {
-		t.Fatalf("switch disagreement: policy=%v classifier=%v", verdict.SwitchAccount, class.SwitchAccount)
-	}
+	testutil.Equal(t, verdict.SwitchAccount, class.SwitchAccount)
 }
 
 // TestModelCooldownKindTravelsWithTheVerdict pins the label the pool reads back
@@ -215,18 +188,10 @@ func TestModelCooldownKindTravelsWithTheVerdict(t *testing.T) {
 	acc := &store.Account{ID: 22, AccountType: "qoder", Enabled: true}
 
 	entitlement := Classify(acc, errors.New("qoder account has no usable plan or allowance; the model requires a subscription"), "ultimate")
-	if entitlement.Scope != ScopeModel {
-		t.Fatalf("scope = %q, want model", entitlement.Scope)
-	}
-	if entitlement.ModelCooldownKind != store.ModelCooldownUnavailable {
-		t.Fatalf("kind = %q, want unavailable for a plan refusal", entitlement.ModelCooldownKind)
-	}
+	testutil.Equal(t, entitlement.Scope, ScopeModel)
+	testutil.Equal(t, entitlement.ModelCooldownKind, store.ModelCooldownUnavailable)
 
 	throttle := Classify(acc, errors.New("qoder model rate limited: code=6004"), "efficient")
-	if throttle.Scope != ScopeModel {
-		t.Fatalf("scope = %q, want model", throttle.Scope)
-	}
-	if throttle.ModelCooldownKind != store.ModelCooldownThrottled {
-		t.Fatalf("kind = %q, want throttled for a frequency limit", throttle.ModelCooldownKind)
-	}
+	testutil.Equal(t, throttle.Scope, ScopeModel)
+	testutil.Equal(t, throttle.ModelCooldownKind, store.ModelCooldownThrottled)
 }

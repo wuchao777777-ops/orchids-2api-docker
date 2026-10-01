@@ -3,6 +3,7 @@ package grok
 import (
 	"bytes"
 	"io"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -19,9 +20,7 @@ func TestReadResponseSSEBytesPreservesPayloads(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("readResponseSSEBytes: %v", err)
 	}
-	if len(payloads) != 2 {
-		t.Fatalf("got %d payloads, want 2", len(payloads))
-	}
+	testutil.Equal(t, len(payloads), 2)
 	if events[0] != "message" || string(payloads[0]) != "{\"text\":\"hello\"}\n" {
 		t.Fatalf("first event = %q %q", events[0], payloads[0])
 	}

@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 
@@ -37,9 +38,7 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 		QoderRuntimeInfo:      "qoder-runtime-secret",
 		QoderRuntimeKey:       "qoder-key-secret",
 	}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 	raw, err := mini.Get("cipher-test:accounts:id:1")
 	if err != nil {
 		t.Fatalf("read raw account: %v", err)
@@ -48,13 +47,9 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 		"sso-secret", "access-secret", "refresh-secret", "wb-access-secret", "wb-refresh-secret",
 		"qoder-access-secret", "qoder-refresh-secret", "qoder-runtime-secret", "qoder-key-secret", "qoder-job-secret",
 	} {
-		if strings.Contains(raw, secret) {
-			t.Fatalf("raw Redis value contains plaintext %q: %s", secret, raw)
-		}
+		testutil.MustNotContain(t, raw, secret)
 	}
-	if !strings.Contains(raw, encryptedCredentialPrefix) {
-		t.Fatalf("raw Redis value does not contain encrypted fields: %s", raw)
-	}
+	testutil.MustContain(t, raw, encryptedCredentialPrefix)
 	got, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
@@ -74,9 +69,7 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 	if err != nil || legacyAcc.ClientCookie != "legacy-secret" {
 		t.Fatalf("legacy read = %#v, %v", legacyAcc, err)
 	}
-	if err := s.UpdateAccount(ctx, legacyAcc); err != nil {
-		t.Fatalf("legacy migration update error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, legacyAcc), "legacy migration update error = %v")
 	migrated, _ := mini.Get("cipher-test:accounts:id:2")
 	if strings.Contains(migrated, "legacy-secret") || !strings.Contains(migrated, encryptedCredentialPrefix) {
 		t.Fatalf("legacy account was not encrypted on write: %s", migrated)
@@ -100,21 +93,15 @@ func TestRetiredAccountFieldsAreDroppedOnRewrite(t *testing.T) {
 		t.Fatalf("GetAccount() = %+v, %v", acc, err)
 	}
 	acc.Name = "rewritten"
-	if err := s.UpdateAccount(ctx, acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, acc))
 	raw, err := mini.Get("retired-fields:accounts:id:1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, field := range []string{"nsfw_enabled", "device_id", "request_id", "project_id", "upstream_mode"} {
-		if strings.Contains(raw, `"`+field+`"`) {
-			t.Errorf("retired field %q survived rewrite: %s", field, raw)
-		}
+		testutil.CheckNotContain(t, raw, `"`+field+`"`)
 	}
-	if !strings.Contains(raw, `"workbuddy_refresh_token":"live-refresh"`) {
-		t.Errorf("live WorkBuddy refresh token lost: %s", raw)
-	}
+	testutil.CheckContain(t, raw, `"workbuddy_refresh_token":"live-refresh"`)
 }
 
 func TestEncryptedAccountRejectsWrongKey(t *testing.T) {
@@ -152,9 +139,7 @@ func TestStoreStartupMigratesLegacyCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	acc := &Account{Name: "legacy", AccountType: "grok", Enabled: true, ClientCookie: "legacy-on-disk"}
-	if err := legacy.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, legacy.CreateAccount(context.Background(), acc))
 	_ = legacy.Close()
 
 	secure, err := New(Options{

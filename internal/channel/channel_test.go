@@ -1,6 +1,9 @@
 package channel
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 func TestRegistryInvariantsAndPathParsing(t *testing.T) {
 	seenID, seenLabel, seenPrefix := map[ID]bool{}, map[string]bool{}, map[string]bool{}
@@ -23,9 +26,7 @@ func TestRegistryInvariantsAndPathParsing(t *testing.T) {
 			t.Fatalf("model path parse failed: %+v", definition)
 		}
 	}
-	if defaults != 1 {
-		t.Fatalf("defaults=%d want 1", defaults)
-	}
+	testutil.Equal(t, defaults, 1)
 }
 
 // TestRegistryIsWorkBuddyDefaultAfterChannelRemoval pins the provider set once
@@ -38,18 +39,10 @@ func TestRegistryIsWorkBuddyDefaultAfterChannelRemoval(t *testing.T) {
 	}
 	want := []ID{WorkBuddy, Qoder, Cline, Grok}
 	all := All()
-	if len(all) != len(want) {
-		t.Fatalf("All() has %d channels, want %d", len(all), len(want))
-	}
+	testutil.Equal(t, len(all), len(want))
 	for i, id := range want {
-		if all[i].ID != id {
-			t.Fatalf("All()[%d] = %q, want %q", i, all[i].ID, id)
-		}
+		testutil.Equal(t, all[i].ID, id)
 	}
-	if len(GenericPrefixes()) != 3 {
-		t.Fatalf("GenericPrefixes() = %v, want the three chat-completions channels", GenericPrefixes())
-	}
-	if len(AllPrefixes()) != len(want) {
-		t.Fatalf("AllPrefixes() = %v, want one per channel", AllPrefixes())
-	}
+	testutil.Equal(t, len(GenericPrefixes()), 3)
+	testutil.Equal(t, len(AllPrefixes()), len(want))
 }

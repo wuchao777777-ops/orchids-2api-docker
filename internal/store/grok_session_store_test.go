@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"orchids-api/internal/testutil"
 	"reflect"
 	"testing"
 	"time"
@@ -17,9 +18,7 @@ func TestReasoningReplayItemsPersistenceAndExpiry(t *testing.T) {
 		json.RawMessage(`{"type":"reasoning","summary":[{"type":"summary_text","text":"step"}],"encrypted_content":"cipher-b"}`),
 	}
 	original := &StoredReasoningReplay{Model: "grok-4.6", SessionKey: "session-items", Items: items}
-	if err := s.SaveReasoningReplay(ctx, original, 2*time.Second); err != nil {
-		t.Fatalf("SaveReasoningReplay(items) error = %v", err)
-	}
+	testutil.NoError(t, s.SaveReasoningReplay(ctx, original, 2*time.Second), "SaveReasoningReplay(items) error = %v")
 	if !original.ExpiresAt.IsZero() {
 		t.Fatal("SaveReasoningReplay mutated caller expiry")
 	}

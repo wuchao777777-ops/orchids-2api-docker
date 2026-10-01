@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-
 	"orchids-api/internal/config"
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestCLIOAuthAccessTokenUnexpired(t *testing.T) {
@@ -35,27 +35,17 @@ func TestCLIOAuthAccessTokenUnexpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if token != "existing-token" {
-		t.Fatalf("token = %q", token)
-	}
+	testutil.Equal(t, token, "existing-token")
 }
 
 func TestCLIOAuthAccessTokenRefreshes(t *testing.T) {
 	var called int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called++
-		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s", r.Method)
-		}
-		if err := r.ParseForm(); err != nil {
-			t.Fatalf("parse form: %v", err)
-		}
-		if r.Form.Get("grant_type") != "refresh_token" {
-			t.Fatalf("grant_type = %q", r.Form.Get("grant_type"))
-		}
-		if r.Form.Get("refresh_token") != "old-refresh" {
-			t.Fatalf("refresh_token = %q", r.Form.Get("refresh_token"))
-		}
+		testutil.Equal(t, r.Method, http.MethodPost)
+		testutil.NoError(t, r.ParseForm(), "parse form: %v")
+		testutil.Equal(t, r.Form.Get("grant_type"), "refresh_token")
+		testutil.Equal(t, r.Form.Get("refresh_token"), "old-refresh")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`))
 	}))
@@ -73,18 +63,10 @@ func TestCLIOAuthAccessTokenRefreshes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if called != 1 {
-		t.Fatalf("expected exactly 1 refresh call, got %d", called)
-	}
-	if token != "new-access" {
-		t.Fatalf("token = %q", token)
-	}
-	if acc.OAuthAccessToken != "new-access" {
-		t.Fatalf("persisted access = %q", acc.OAuthAccessToken)
-	}
-	if acc.OAuthRefreshToken != "new-refresh" {
-		t.Fatalf("persisted refresh (rotated) = %q", acc.OAuthRefreshToken)
-	}
+	testutil.Equal(t, called, 1)
+	testutil.Equal(t, token, "new-access")
+	testutil.Equal(t, acc.OAuthAccessToken, "new-access")
+	testutil.Equal(t, acc.OAuthRefreshToken, "new-refresh")
 }
 
 func TestCLIResponsesRefreshesRejectedUnexpiredTokenOnSameAccount(t *testing.T) {
@@ -101,9 +83,7 @@ func TestCLIResponsesRefreshesRejectedUnexpiredTokenOnSameAccount(t *testing.T) 
 				_, _ = w.Write([]byte(`{"error":{"message":"expired"}}`))
 				return
 			}
-			if r.Header.Get("Authorization") != "Bearer new-access" {
-				t.Fatalf("authorization=%q", r.Header.Get("Authorization"))
-			}
+			testutil.Equal(t, r.Header.Get("Authorization"), "Bearer new-access")
 			_, _ = w.Write([]byte(`{"id":"resp_refreshed","object":"response"}`))
 		default:
 			http.NotFound(w, r)
@@ -166,9 +146,7 @@ func TestCLIOAuthAccessTokenCoalescesConcurrentRefreshes(t *testing.T) {
 	}
 	callsMu.Lock()
 	defer callsMu.Unlock()
-	if calls != 1 {
-		t.Fatalf("refresh calls=%d want 1", calls)
-	}
+	testutil.Equal(t, calls, 1)
 }
 
 func TestCLIOAuthRefreshDenied(t *testing.T) {
@@ -194,9 +172,7 @@ func TestCLIOAuthRefreshDenied(t *testing.T) {
 	if !IsCLIPermanentOAuthError(err) {
 		t.Fatalf("invalid_grant should be permanent (401): %v", err)
 	}
-	if strings.Contains(err.Error(), "token expired") {
-		t.Fatalf("OAuth diagnostic must not expose upstream text: %v", err)
-	}
+	testutil.MustNotContain(t, err.Error(), "token expired")
 }
 
 func TestCLIOAuthMissingRefreshToken(t *testing.T) {
@@ -229,16 +205,10 @@ func TestCLIOAuthRefreshServerErrorTransient(t *testing.T) {
 
 func TestCLIOAuthErrorStatus(t *testing.T) {
 	e := &cliOAuthError{status: http.StatusUnauthorized, message: "denied"}
-	if e.Status() != "401" {
-		t.Fatalf("status = %q", e.Status())
-	}
+	testutil.Equal(t, e.Status(), "401")
 	zero := &cliOAuthError{}
-	if zero.Status() != "" {
-		t.Fatalf("zero status = %q", zero.Status())
-	}
-	if !strings.Contains(e.Error(), "denied") {
-		t.Fatalf("error message = %q", e.Error())
-	}
+	testutil.Equal(t, zero.Status(), "")
+	testutil.MustContain(t, e.Error(), "denied")
 }
 
 func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
@@ -249,15 +219,7 @@ func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
 	}))
 	defer server.Close()
 
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: "test:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
+	s := newTestGrokStore(t, "test:")
 
 	acc := &store.Account{
 		AccountType:       "grok",
@@ -267,9 +229,7 @@ func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
 		OAuthExpiresAt:    time.Now().Add(-time.Minute),
 		Enabled:           true,
 	}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount() error = %v")
 
 	cfg := &config.Config{}
 	cfg.GrokCLIOAuthTokenURL = server.URL
@@ -280,20 +240,14 @@ func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AccessToken() error = %v", err)
 	}
-	if token != "stored-access" {
-		t.Fatalf("token=%q", token)
-	}
+	testutil.Equal(t, token, "stored-access")
 
 	got, err := s.GetAccount(context.Background(), acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
-	if got.OAuthAccessToken != "stored-access" {
-		t.Fatalf("stored access=%q", got.OAuthAccessToken)
-	}
-	if got.OAuthRefreshToken != "stored-refresh" {
-		t.Fatalf("stored refresh=%q", got.OAuthRefreshToken)
-	}
+	testutil.Equal(t, got.OAuthAccessToken, "stored-access")
+	testutil.Equal(t, got.OAuthRefreshToken, "stored-refresh")
 	if got.Email != "stored@example.com" || got.Name != "stored@example.com" || got.UserID != "stored-user" || got.TeamID != "stored-team" {
 		t.Fatalf("stored OAuth identity=%+v", got)
 	}
@@ -330,27 +284,24 @@ func TestCLIClientFetchModelsReadsOfficialControlPlaneCatalog(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/models" {
 			t.Fatalf("request=%s %s want GET /models", r.Method, r.URL.Path)
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer active-access" {
-			t.Fatalf("authorization=%q", got)
-		}
+		testutil.Equal(t, r.Header.Get("Authorization"), "Bearer active-access")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[{"id":"grok-4.6"},{"id":"grok-4.6"},{"modelId":"grok-4.5"},{"id":"hidden-model","hidden":true},{"id":""}]}`))
 	}))
 	defer server.Close()
 
 	client := NewCLIClient(&config.Config{GrokCLIBaseURL: server.URL})
-	models, err := client.FetchModels(context.Background(), &store.Account{
+	catalog, err := client.FetchModelCatalog(context.Background(), &store.Account{
 		AccountType:      "grok",
 		CredentialType:   "oauth",
 		OAuthAccessToken: "active-access",
 		OAuthExpiresAt:   time.Now().Add(time.Hour),
 	})
 	if err != nil {
-		t.Fatalf("FetchModels() error = %v", err)
+		t.Fatalf("FetchModelCatalog() error = %v", err)
 	}
-	if strings.Join(models, ",") != "grok-4.6,grok-4.5" {
-		t.Fatalf("models=%v want grok-4.6,grok-4.5", models)
-	}
+	models := modelcatalog.ModelIDs(catalog)
+	testutil.Equal(t, strings.Join(models, ","), "grok-4.6,grok-4.5")
 }
 
 func TestCLIResponsesRejectsTeamModelCooldownBeforeUpstream(t *testing.T) {

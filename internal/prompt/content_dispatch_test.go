@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,12 +49,8 @@ func TestMessageContentUnmarshalDispatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error for %s: %v", tc.in, err)
 			}
-			if mc.Text != tc.wantText {
-				t.Fatalf("Text = %q, want %q", mc.Text, tc.wantText)
-			}
-			if len(mc.Blocks) != tc.wantBlks {
-				t.Fatalf("Blocks = %d, want %d", len(mc.Blocks), tc.wantBlks)
-			}
+			testutil.Equal(t, mc.Text, tc.wantText)
+			testutil.Equal(t, len(mc.Blocks), tc.wantBlks)
 			// Exactly one representation is armed: a string feed leaves Blocks nil,
 			// a block feed clears Text.
 			if tc.wantText != "" && !mc.IsString() {
@@ -73,9 +70,7 @@ func TestMessageContentRoundTrip(t *testing.T) {
 
 	in := []byte(`{"role":"user","content":[{"type":"text","text":"hi"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/tmp/a"}}]}`)
 	var m Message
-	if err := json.Unmarshal(in, &m); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(in, &m))
 	if len(m.Content.Blocks) != 2 || m.Content.Blocks[0].Text != "hi" {
 		t.Fatalf("decoded content = %+v", m.Content)
 	}
@@ -83,9 +78,7 @@ func TestMessageContentRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"text":"hi"`) || !strings.Contains(string(raw), `"name":"Read"`) {
-		t.Fatalf("round trip lost content: %s", raw)
-	}
+	testutil.MustContainAll(t, string(raw), `"text":"hi"`, `"name":"Read"`)
 }
 
 // realisticConversation builds the shape a coding harness sends: every message

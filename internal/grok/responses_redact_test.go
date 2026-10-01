@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -82,12 +83,8 @@ func TestRedactResponseErrorSeparatesRejectionFromFailure(t *testing.T) {
 				}
 				envelope = nested
 			}
-			if got := interfaceString(envelope["code"]); got != tc.wantCode {
-				t.Fatalf("code = %q, want %q", got, tc.wantCode)
-			}
-			if got := interfaceString(envelope["message"]); got != tc.wantMessage {
-				t.Fatalf("message = %q, want %q", got, tc.wantMessage)
-			}
+			testutil.Equal(t, interfaceString(envelope["code"]), tc.wantCode)
+			testutil.Equal(t, interfaceString(envelope["message"]), tc.wantMessage)
 			if _, leaked := tc.event["param"]; leaked {
 				t.Fatalf("error frame leaked the upstream param field: %#v", tc.event)
 			}
@@ -109,9 +106,7 @@ func TestRedactResponseErrorNeverForwardsUpstreamText(t *testing.T) {
 	}
 	redactResponseError(event)
 	encoded := event["error"].(map[string]interface{})
-	if strings.Contains(interfaceString(encoded["message"]), secret) {
-		t.Fatalf("upstream text leaked: %#v", encoded)
-	}
+	testutil.MustNotContain(t, interfaceString(encoded["message"]), secret)
 	if got := codeForCategory("client"); interfaceString(encoded["code"]) != got {
 		t.Fatalf("code = %q, want %q", interfaceString(encoded["code"]), got)
 	}
@@ -133,15 +128,11 @@ func TestRedactResponseErrorNormalizesFailedEnvelope(t *testing.T) {
 	redactResponseError(event)
 	response := event["response"].(map[string]interface{})
 	envelope := response["error"].(map[string]interface{})
-	if got := interfaceString(envelope["code"]); got != upstreamRejectionCode {
-		t.Fatalf("envelope code = %q, want %q", got, upstreamRejectionCode)
-	}
+	testutil.Equal(t, interfaceString(envelope["code"]), upstreamRejectionCode)
 	if got := interfaceString(envelope["message"]); !strings.Contains(got, "rejected the request parameters") {
 		t.Fatalf("envelope message = %q", got)
 	}
-	if got := interfaceString(response["status"]); got != "failed" {
-		t.Fatalf("status = %q, want failed", got)
-	}
+	testutil.Equal(t, interfaceString(response["status"]), "failed")
 }
 
 // A completed response that merely mentions an error field is not a failure and
@@ -154,9 +145,7 @@ func TestRedactResponseErrorLeavesCompletedEnvelopeStatus(t *testing.T) {
 	}
 	redactResponseError(event)
 	response := event["response"].(map[string]interface{})
-	if got := interfaceString(response["status"]); got != "completed" {
-		t.Fatalf("status = %q, want completed", got)
-	}
+	testutil.Equal(t, interfaceString(response["status"]), "completed")
 }
 
 // A gateway-synthesized failure caused by a rejection reports the rejection, so

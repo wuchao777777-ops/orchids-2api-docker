@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 
@@ -98,17 +99,13 @@ func TestTranslateOpenAIChatStreamToAnthropic(t *testing.T) {
 		``,
 	}, "\n")
 	var out bytes.Buffer
-	if err := translateOpenAIChatStreamToAnthropicWithInput(&out, strings.NewReader(input), "grok-4.6", 0); err != nil {
-		t.Fatalf("translate error = %v", err)
-	}
+	testutil.NoError(t, translateOpenAIChatStreamToAnthropicWithInput(&out, strings.NewReader(input), "grok-4.6", 0), "translate error = %v")
 	text := out.String()
 	for _, expected := range []string{
 		"event: message_start", `"type":"thinking_delta"`, `"text":"hello"`,
 		`"type":"tool_use"`, `"type":"input_json_delta"`, `"stop_reason":"tool_use"`, "event: message_stop",
 	} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("stream missing %q:\n%s", expected, text)
-		}
+		testutil.MustContain(t, text, expected)
 	}
 }
 
@@ -120,16 +117,12 @@ func TestBuildPayloadIncludesMaxOutputTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload["max_output_tokens"] != 321 {
-		t.Fatalf("max_output_tokens=%#v", payload["max_output_tokens"])
-	}
+	testutil.Equal(t, payload["max_output_tokens"], 321)
 }
 
 func TestChatRequestUnmarshalPreservesMaxTokens(t *testing.T) {
 	var req ChatCompletionsRequest
-	if err := json.Unmarshal([]byte(`{"model":"grok-4.6","messages":[{"role":"user","content":"hi"}],"max_tokens":123}`), &req); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(`{"model":"grok-4.6","messages":[{"role":"user","content":"hi"}],"max_tokens":123}`), &req))
 	if req.MaxTokens == nil || *req.MaxTokens != 123 {
 		t.Fatalf("max_tokens=%v", req.MaxTokens)
 	}

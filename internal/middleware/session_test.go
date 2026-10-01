@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -29,9 +30,7 @@ func TestAPIKeyAuth(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			called := false
 			h := APIKeyAuthWithRequest(func(*http.Request) bool { return tt.enabled }, func(_ context.Context, token string) (*APIKeyPrincipal, error) {
-				if token != tt.token {
-					t.Fatalf("token=%q want=%q", token, tt.token)
-				}
+				testutil.Equal(t, token, tt.token)
 				if !tt.valid {
 					return nil, tt.validate
 				}
@@ -91,9 +90,7 @@ func TestAPIKeyAuthAddsNonSecretFingerprint(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	h(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status=%d", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusNoContent)
 }
 
 func TestAPIKeyAuthEnforcesDenialsAndModelPolicy(t *testing.T) {
@@ -124,9 +121,7 @@ func TestAPIKeyAuthEnforcesDenialsAndModelPolicy(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer key")
 			rec := httptest.NewRecorder()
 			h(rec, req)
-			if rec.Code != tt.wantCode {
-				t.Fatalf("status=%d want=%d body=%s", rec.Code, tt.wantCode, rec.Body.String())
-			}
+			testutil.Equal(t, rec.Code, tt.wantCode)
 			if (rec.Header().Get("Retry-After") != "") != tt.wantRetry {
 				t.Fatalf("Retry-After=%q", rec.Header().Get("Retry-After"))
 			}
@@ -146,12 +141,8 @@ func TestSessionAuth_AdminPassBearer(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
-	if !called {
-		t.Fatalf("expected handler to be called")
-	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d", rec.Code, http.StatusOK)
-	}
+	testutil.True(t, called, "expected handler to be called")
+	testutil.Equal(t, rec.Code, http.StatusOK)
 }
 
 func TestSessionAuth_RejectsLegacyQueryCredentials(t *testing.T) {
@@ -164,9 +155,7 @@ func TestSessionAuth_RejectsLegacyQueryCredentials(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/config?"+query, nil)
 			rec := httptest.NewRecorder()
 			handler(rec, req)
-			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("status=%d want=%d", rec.Code, http.StatusUnauthorized)
-			}
+			testutil.Equal(t, rec.Code, http.StatusUnauthorized)
 		})
 	}
 }
@@ -190,9 +179,7 @@ func TestSessionAuth_PreservesHeaderAndBasicAuth(t *testing.T) {
 			tt.setup(req)
 			rec := httptest.NewRecorder()
 			handler(rec, req)
-			if rec.Code != http.StatusNoContent {
-				t.Fatalf("status=%d want=%d", rec.Code, http.StatusNoContent)
-			}
+			testutil.Equal(t, rec.Code, http.StatusNoContent)
 		})
 	}
 }
@@ -211,9 +198,7 @@ func TestSessionAuth_Unauthorized(t *testing.T) {
 	if called {
 		t.Fatalf("expected handler not to be called")
 	}
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d want=%d", rec.Code, http.StatusUnauthorized)
-	}
+	testutil.Equal(t, rec.Code, http.StatusUnauthorized)
 }
 
 func TestSessionAuthDynamic_UsesLatestCredentials(t *testing.T) {
@@ -232,10 +217,6 @@ func TestSessionAuthDynamic_UsesLatestCredentials(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
-	if !called {
-		t.Fatalf("expected handler to be called")
-	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d", rec.Code, http.StatusOK)
-	}
+	testutil.True(t, called, "expected handler to be called")
+	testutil.Equal(t, rec.Code, http.StatusOK)
 }

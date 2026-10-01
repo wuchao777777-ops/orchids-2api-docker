@@ -6,6 +6,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestFindDuplicateAccountUsesStableProviderIdentityAfterTokenRotation(t *testing.T) {
@@ -35,9 +36,7 @@ func TestFindDuplicateAccountUsesStableProviderIdentityAfterTokenRotation(t *tes
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := newTestStore(t, "identity-dedup:")
-			if err := s.CreateAccount(context.Background(), tc.existing); err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, s.CreateAccount(context.Background(), tc.existing))
 			a := New(s, "", "", &config.Config{})
 			got, err := a.findDuplicateAccountByCredential(context.Background(), tc.login, 0)
 			if err != nil {
@@ -54,9 +53,7 @@ func TestStableProviderIdentityNeverCrossesProviders(t *testing.T) {
 	t.Parallel()
 	s, _ := newTestStore(t, "identity-isolation:")
 	existing := &store.Account{AccountType: "workbuddy", WorkBuddyUID: "same-user", WorkBuddyRefreshToken: "wb-token", Enabled: true}
-	if err := s.CreateAccount(context.Background(), existing); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), existing))
 	a := New(s, "", "", &config.Config{})
 	got, err := a.findDuplicateAccountByCredential(context.Background(), &store.Account{
 		AccountType:       "qoder",

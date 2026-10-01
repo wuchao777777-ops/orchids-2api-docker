@@ -3,11 +3,11 @@ package grok
 import (
 	"encoding/base64"
 	"regexp"
-	"strings"
 	"testing"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/util"
 )
 
@@ -23,18 +23,14 @@ func TestTraceparentIsWellFormedForTheRequestIdTheClientMints(t *testing.T) {
 	t.Parallel()
 
 	requestID := randomHex(16)
-	if len(requestID) != 32 {
-		t.Fatalf("randomHex(16) = %q (length %d), want 32 hex characters", requestID, len(requestID))
-	}
+	testutil.Equal(t, len(requestID), 32)
 	trace := util.Traceparent(requestID)
 	if !traceparentRE.MatchString(trace) {
 		t.Fatalf("traceparent = %q, want a version 00 trace context", trace)
 	}
 	// The trace id is the same request id the client sends as x-grok-req-id, so
 	// the two correlate in the upstream's logs.
-	if !strings.Contains(trace, requestID) {
-		t.Fatalf("traceparent %q does not carry the request id %q", trace, requestID)
-	}
+	testutil.MustContain(t, trace, requestID)
 }
 
 func jwtWithClaims(t *testing.T, claims string) string {
@@ -45,18 +41,10 @@ func jwtWithClaims(t *testing.T, claims string) string {
 func TestCLIHeadersUseOfficialBuildIdentity(t *testing.T) {
 	client := NewCLIClient(&config.Config{})
 	headers := client.cliHeaders(nil, "test-access-token")
-	if got := headers.Get("Authorization"); got != "Bearer test-access-token" {
-		t.Fatalf("Authorization=%q", got)
-	}
-	if got := headers.Get("X-XAI-Token-Auth"); got != "xai-grok-cli" {
-		t.Fatalf("X-XAI-Token-Auth=%q", got)
-	}
-	if got := headers.Get("x-grok-client-identifier"); got != "grok-shell" {
-		t.Fatalf("x-grok-client-identifier=%q", got)
-	}
-	if got := headers.Get("x-grok-client-version"); got != "1.0.40" {
-		t.Fatalf("x-grok-client-version=%q", got)
-	}
+	testutil.Equal(t, headers.Get("Authorization"), "Bearer test-access-token")
+	testutil.Equal(t, headers.Get("X-XAI-Token-Auth"), "xai-grok-cli")
+	testutil.Equal(t, headers.Get("x-grok-client-identifier"), "grok-shell")
+	testutil.Equal(t, headers.Get("x-grok-client-version"), "1.0.40")
 	if got := headers.Get("User-Agent"); got != "grok-shell/1.0.40 (linux; x86_64)" {
 		t.Fatalf("User-Agent=%q", got)
 	}

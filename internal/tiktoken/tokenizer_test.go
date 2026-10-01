@@ -2,6 +2,7 @@ package tiktoken
 
 import (
 	"math"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -78,9 +79,7 @@ func TestEstimatorMatchesEstimateTextTokens(t *testing.T) {
 				joined = strings.Join(tt.parts, "")
 			}
 			want := EstimateTextTokens(joined)
-			if got := estimator.Count(); got != want {
-				t.Fatalf("count=%d want=%d joined=%q", got, want, joined)
-			}
+			testutil.Equal(t, estimator.Count(), want)
 			estimator.Reset()
 			if estimator.Count() != 0 {
 				t.Fatal("expected reset estimator")

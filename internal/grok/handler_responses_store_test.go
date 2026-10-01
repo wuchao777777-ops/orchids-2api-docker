@@ -15,6 +15,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestBuildStoredResponseLifecycleAndOwnerIsolation(t *testing.T) {
@@ -35,8 +36,7 @@ func TestBuildStoredResponseLifecycleAndOwnerIsolation(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h, s, mini := setupValidationHandler(t)
-	defer func() { _ = s.Close(); mini.Close() }()
+	h, s, _ := setupValidationHandler(t)
 	configureStoredResponseTestHandler(t, h, s, upstream)
 
 	call := func(token, method, path, body string, handler http.HandlerFunc) *httptest.ResponseRecorder {
@@ -56,13 +56,9 @@ func TestBuildStoredResponseLifecycleAndOwnerIsolation(t *testing.T) {
 		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
 	}
 	deniedContinuation := call("owner-b", http.MethodPost, "/v1/responses", `{"model":"grok-4.6","input":"continue","stream":false,"previous_response_id":"resp_owned"}`, h.HandleResponses)
-	if deniedContinuation.Code != http.StatusNotFound {
-		t.Fatalf("cross-owner continuation status=%d body=%s", deniedContinuation.Code, deniedContinuation.Body.String())
-	}
+	testutil.Equal(t, deniedContinuation.Code, http.StatusNotFound)
 	denied := call("owner-b", http.MethodGet, "/v1/responses/resp_owned", "", h.HandleResponseResource)
-	if denied.Code != http.StatusNotFound {
-		t.Fatalf("cross-owner get status=%d body=%s", denied.Code, denied.Body.String())
-	}
+	testutil.Equal(t, denied.Code, http.StatusNotFound)
 	got := call("owner-a", http.MethodGet, "/v1/responses/resp_owned", "", h.HandleResponseResource)
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), "resp_owned") {
 		t.Fatalf("get status=%d body=%s", got.Code, got.Body.String())
@@ -72,12 +68,8 @@ func TestBuildStoredResponseLifecycleAndOwnerIsolation(t *testing.T) {
 		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
 	}
 	missing := call("owner-a", http.MethodGet, "/v1/responses/resp_owned", "", h.HandleResponseResource)
-	if missing.Code != http.StatusNotFound {
-		t.Fatalf("get after delete status=%d body=%s", missing.Code, missing.Body.String())
-	}
-	if len(calls) != 3 {
-		t.Fatalf("upstream calls=%v, want POST+GET+DELETE only", calls)
-	}
+	testutil.Equal(t, missing.Code, http.StatusNotFound)
+	testutil.Equal(t, len(calls), 3)
 }
 
 func TestBuildPreviousResponsePinsCreatingAccount(t *testing.T) {
@@ -91,12 +83,9 @@ func TestBuildPreviousResponsePinsCreatingAccount(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h, s, mini := setupValidationHandler(t)
-	defer func() { _ = s.Close(); mini.Close() }()
+	h, s, _ := setupValidationHandler(t)
 	configureStoredResponseTestHandler(t, h, s, upstream)
-	if err := s.CreateAccount(context.Background(), buildTestAccount(t, "user-2", "team-2")); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), buildTestAccount(t, "user-2", "team-2")))
 
 	wrapped := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
 		return &middleware.APIKeyPrincipal{}, nil
@@ -110,15 +99,11 @@ func TestBuildPreviousResponsePinsCreatingAccount(t *testing.T) {
 		return rec
 	}
 	first := request(`{"model":"grok-4.6","input":"first","stream":false}`)
-	if first.Code != http.StatusOK {
-		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
-	}
+	testutil.Equal(t, first.Code, http.StatusOK)
 	var firstBody map[string]interface{}
 	_ = json.Unmarshal(first.Body.Bytes(), &firstBody)
 	second := request(`{"model":"grok-4.6","input":"second","stream":false,"previous_response_id":"` + parseLooseStringAny(firstBody["id"]) + `"}`)
-	if second.Code != http.StatusOK {
-		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
-	}
+	testutil.Equal(t, second.Code, http.StatusOK)
 	if len(authHeaders) != 2 || authHeaders[0] == "" || authHeaders[0] != authHeaders[1] {
 		t.Fatalf("requests were not pinned to the creating account: %v", authHeaders)
 	}
@@ -126,9 +111,7 @@ func TestBuildPreviousResponsePinsCreatingAccount(t *testing.T) {
 
 func TestResponsesCompactForcesNonStreamingNativeEndpoint(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/responses/compact" {
-			t.Fatalf("path=%s", r.URL.Path)
-		}
+		testutil.Equal(t, r.URL.Path, "/v1/responses/compact")
 		var payload map[string]interface{}
 		_ = json.NewDecoder(r.Body).Decode(&payload)
 		if stream, _ := payload["stream"].(bool); stream {
@@ -138,8 +121,7 @@ func TestResponsesCompactForcesNonStreamingNativeEndpoint(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":"resp_compact","object":"response","output":[{"type":"compaction","encrypted_content":"opaque"}]}`)
 	}))
 	defer upstream.Close()
-	h, s, mini := setupValidationHandler(t)
-	defer func() { _ = s.Close(); mini.Close() }()
+	h, s, _ := setupValidationHandler(t)
 	configureStoredResponseTestHandler(t, h, s, upstream)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(`{"model":"grok-4.6","input":[{"type":"compaction_trigger"}],"stream":true}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -157,9 +139,7 @@ func configureStoredResponseTestHandler(t *testing.T, h *Handler, s *store.Store
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateAccount(context.Background(), buildTestAccount(t, "user-1", "team-1")); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), buildTestAccount(t, "user-1", "team-1")))
 	h.cfg = &config.Config{GrokCLIBaseURL: upstream.URL + "/v1", ResponseStoreTTL: 24}
 	h.cliClient = NewCLIClient(h.cfg)
 	h.cliClient.SetAccountStore(s)

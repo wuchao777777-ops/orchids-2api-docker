@@ -6,6 +6,7 @@ import (
 
 	"encoding/json"
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -51,9 +52,7 @@ func TestBlockMessagePreservesMultimodalOrderAcrossToolBoundaries(t *testing.T) 
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("messages = %#v; want %#v", got, want)
 			}
-			if len(ids) != 0 {
-				t.Fatalf("unconsumed calls: %v", ids)
-			}
+			testutil.Equal(t, len(ids), 0)
 
 			// Verify the signed/encoded request path retains that exact representation.
 			req := upstream.UpstreamRequest{Messages: []prompt.Message{
@@ -62,7 +61,7 @@ func TestBlockMessagePreservesMultimodalOrderAcrossToolBoundaries(t *testing.T) 
 					{Type: "tool_use", ID: "call-2", Name: "second", Input: map[string]interface{}{}},
 				}}}, msg,
 			}}
-			encoded, err := buildChatBody(req, modelEntry{Key: "test"}, "session", "request", "request-set")
+			encoded, err := buildChatBodyProfile(req, modelEntry{Key: "test"}, "session", "request", "request-set", DefaultClientVersion, "", sceneBusinessProduct)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,9 +70,7 @@ func TestBlockMessagePreservesMultimodalOrderAcrossToolBoundaries(t *testing.T) 
 				t.Fatal(err)
 			}
 			var body chatBody
-			if err := json.Unmarshal(raw, &body); err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, json.Unmarshal(raw, &body))
 			if len(body.Messages) != len(want)+1 || !reflect.DeepEqual(body.Messages[1:], want) {
 				t.Fatalf("wire messages = %#v", body.Messages)
 			}

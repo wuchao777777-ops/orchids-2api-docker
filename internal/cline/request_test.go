@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -34,9 +35,7 @@ func TestBuildChatBodyCarriesTheUpstreamDefaults(t *testing.T) {
 		`"stream":true`,
 		`"messages":[{"role":"user","content":"hello"}]`,
 	} {
-		if !strings.Contains(raw, want) {
-			t.Errorf("body is missing %s: %s", want, raw)
-		}
+		testutil.CheckContain(t, raw, want)
 	}
 }
 
@@ -55,17 +54,11 @@ func TestBuildChatBodyConvertsAnthropicToolsToOpenAI(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded map[string]interface{}
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(body, &decoded))
 	tools, _ := decoded["tools"].([]interface{})
-	if len(tools) != 1 {
-		t.Fatalf("tools=%#v", decoded["tools"])
-	}
+	testutil.Equal(t, len(tools), 1)
 	tool := tools[0].(map[string]interface{})
-	if tool["type"] != "function" {
-		t.Fatalf("tool=%#v", tool)
-	}
+	testutil.Equal(t, tool["type"], "function")
 	function := tool["function"].(map[string]interface{})
 	if function["name"] != "glob" || function["parameters"] == nil {
 		t.Fatalf("function=%#v", function)
@@ -82,9 +75,7 @@ func TestBuildChatBodyKeepsOpenAITools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `"tools":[{"function":{"name":"bash","parameters":{"type":"object"}},"type":"function"}]`) {
-		t.Fatalf("body=%s", body)
-	}
+	testutil.MustContain(t, string(body), `"tools":[{"function":{"name":"bash","parameters":{"type":"object"}},"type":"function"}]`)
 }
 
 // TestBuildMessagesMapsToolHistory proves an assistant tool_use block becomes a
@@ -109,9 +100,7 @@ func TestBuildMessagesMapsToolHistory(t *testing.T) {
 			},
 		},
 	})
-	if len(out) != 4 {
-		t.Fatalf("messages = %d, want 4 (%+v)", len(out), out)
-	}
+	testutil.Equal(t, len(out), 4)
 	if out[0].Role != "system" || out[0].Content != "be terse" {
 		t.Errorf("first message = %+v, want the system item", out[0])
 	}
@@ -166,9 +155,7 @@ func TestConsumeStreamEmitsTextAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("consumeStream() error = %v", err)
 	}
-	if got := text.String(); got != "hello world" {
-		t.Errorf("text = %q, want \"hello world\"", got)
-	}
+	testutil.CheckEqual(t, text.String(), "hello world")
 	if usage == nil || usage["inputTokens"] != 5 || usage["outputTokens"] != 2 {
 		t.Errorf("usage = %+v, want the normalized pair", usage)
 	}
@@ -229,15 +216,9 @@ func TestConsumeStreamEmitsEachToolCallOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("consumeStream() error = %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("tool calls emitted = %d, want 1 (%v)", calls, names)
-	}
-	if result.ToolCallCount != 1 {
-		t.Errorf("ToolCallCount = %d, want 1", result.ToolCallCount)
-	}
-	if result.FinishReason() != "tool_use" {
-		t.Errorf("FinishReason() = %q, want tool_use", result.FinishReason())
-	}
+	testutil.Equal(t, calls, 1)
+	testutil.CheckEqual(t, result.ToolCallCount, 1)
+	testutil.CheckEqual(t, result.FinishReason(), "tool_use")
 }
 
 func TestConsumeStreamConvertsGLMTextToolCall(t *testing.T) {
@@ -256,12 +237,8 @@ func TestConsumeStreamConvertsGLMTextToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("consumeStream() error = %v", err)
 	}
-	if got := text.String(); got != "checking " {
-		t.Fatalf("visible text = %q, want fallback markup stripped", got)
-	}
-	if len(calls) != 1 {
-		t.Fatalf("tool calls = %d, want 1", len(calls))
-	}
+	testutil.Equal(t, text.String(), "checking ")
+	testutil.Equal(t, len(calls), 1)
 	if calls[0].Event["toolName"] != "bash" || calls[0].Event["input"] != `{"command":"ls -la /tmp/a"}` {
 		t.Fatalf("tool call = %#v", calls[0].Event)
 	}
@@ -276,9 +253,7 @@ func TestParseClineTextToolCallPreservesStructuredArguments(t *testing.T) {
 	if visible != "" || len(calls) != 1 {
 		t.Fatalf("visible=%q calls=%+v", visible, calls)
 	}
-	if calls[0].Function.Arguments != `{"content":{"ok":true},"count":2}` {
-		t.Fatalf("arguments=%s", calls[0].Function.Arguments)
-	}
+	testutil.Equal(t, calls[0].Function.Arguments, `{"content":{"ok":true},"count":2}`)
 }
 
 func TestParseClineRepeatedTagToolCall(t *testing.T) {
@@ -346,9 +321,7 @@ func TestClassifyStatusTurnsTheCapIntoAKnownWindow(t *testing.T) {
 	if !ok {
 		t.Fatalf("classifyStatus(429) = %T (%v), want *InferenceCapError", err, err)
 	}
-	if capErr.Wait != 17*time.Hour+59*time.Minute {
-		t.Errorf("wait = %v, want 17h59m", capErr.Wait)
-	}
+	testutil.CheckEqual(t, capErr.Wait, 17*time.Hour+59*time.Minute)
 }
 
 // TestClassifyStatusPreservesFailures checks the one local recovery path (401)
@@ -370,9 +343,7 @@ func TestClassifyStatusPreservesFailures(t *testing.T) {
 		if isUnauthorized(err) || errors.Is(err, ErrCredentialMissing) {
 			t.Errorf("classifyStatus(%d) = %v, must not trigger credential refresh", tc.status, err)
 		}
-		if !strings.Contains(err.Error(), fmt.Sprintf("status=%d", tc.status)) || !strings.Contains(err.Error(), tc.body) {
-			t.Errorf("classifyStatus(%d) = %v, want status and upstream body", tc.status, err)
-		}
+		testutil.CheckContainAll(t, err.Error(), fmt.Sprintf("status=%d", tc.status), tc.body)
 	}
 }
 
@@ -381,23 +352,13 @@ func TestClassifyStatusPreservesFailures(t *testing.T) {
 func TestCatalogSnapshotRoundTripsTheObservedFeed(t *testing.T) {
 	models := []Model{{ID: "x-ai/grok-4.1-fast", Name: "Grok 4.1 Fast", Provider: "x-ai", RequiresStream: true}}
 	rows := CatalogSnapshot(models)
-	if len(rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(rows))
-	}
-	if got := catalogID(rows[0]); got != "x-ai/grok-4.1-fast" {
-		t.Errorf("catalogID() = %q, want x-ai/grok-4.1-fast", got)
-	}
-	if got := catalogID("openai/gpt-5"); got != "openai/gpt-5" {
-		t.Errorf("catalogID(bare) = %q, want the bare id", got)
-	}
+	testutil.Equal(t, len(rows), 1)
+	testutil.CheckEqual(t, catalogID(rows[0]), "x-ai/grok-4.1-fast")
+	testutil.CheckEqual(t, catalogID("openai/gpt-5"), "openai/gpt-5")
 	// The snapshot is JSON rows, so the identifier has to survive the encoding.
 	var decoded map[string]interface{}
-	if err := json.Unmarshal([]byte(rows[0]), &decoded); err != nil {
-		t.Fatalf("row is not JSON: %v", err)
-	}
-	if decoded["id"] != "x-ai/grok-4.1-fast" {
-		t.Errorf("row id = %v, want the upstream id", decoded["id"])
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(rows[0]), &decoded), "row is not JSON: %v")
+	testutil.CheckEqual(t, decoded["id"], "x-ai/grok-4.1-fast")
 }
 
 // TestParseCatalogPublishesOnlyTheFreeTier covers the feed's shape: the paid
@@ -411,9 +372,7 @@ func TestParseCatalogPublishesOnlyTheFreeTier(t *testing.T) {
 	if len(models) != 1 || models[0].ID != "x-ai/grok-4.1-fast" {
 		t.Fatalf("models = %+v, want only the free row", models)
 	}
-	if models[0].Provider != "x-ai" {
-		t.Errorf("provider = %q, want the half before the slash", models[0].Provider)
-	}
+	testutil.CheckEqual(t, models[0].Provider, "x-ai")
 	if !models[0].RequiresStream {
 		t.Error("RequiresStream = false, want true for a bare identifier")
 	}
@@ -446,9 +405,7 @@ func TestNewToolCallIDIsUnique(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if len(seen) != 200 {
-		t.Errorf("unique ids = %d, want 200", len(seen))
-	}
+	testutil.CheckEqual(t, len(seen), 200)
 }
 
 // TestConsumeStreamSignsReasoningDeltas pins the WorkBuddy/Qoder/Cline parity:
@@ -472,9 +429,7 @@ func TestConsumeStreamSignsReasoningDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("consumeStream() error = %v", err)
 	}
-	if reasoning.String() != "step onestep two" {
-		t.Fatalf("reasoning = %q", reasoning.String())
-	}
+	testutil.Equal(t, reasoning.String(), "step onestep two")
 	if len(signatures) != 2 || signatures[0] == "" || signatures[0] != signatures[1] {
 		t.Fatalf("signatures = %v, want one stable non-empty signature", signatures)
 	}
@@ -499,9 +454,7 @@ func TestConsumeStreamAcceptsGLMReasoningAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("consumeStream() error = %v", err)
 	}
-	if reasoning.String() != "step onestep two" {
-		t.Fatalf("reasoning = %q, want aliases merged", reasoning.String())
-	}
+	testutil.Equal(t, reasoning.String(), "step onestep two")
 	if text.String() != "answer" || !result.SawMeaningfulEvent {
 		t.Fatalf("text/result = %q/%+v", text.String(), result)
 	}
@@ -555,9 +508,7 @@ func TestBuildChatBodyHonorsClientReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildChatBody() error = %v", err)
 	}
-	if !strings.Contains(string(body), `"reasoning_effort":"low"`) {
-		t.Fatalf("body missing client effort: %s", body)
-	}
+	testutil.MustContain(t, string(body), `"reasoning_effort":"low"`)
 
 	body, err = buildChatBody(upstream.UpstreamRequest{
 		Model:           "z-ai/glm-5.3-flash",
@@ -567,10 +518,6 @@ func TestBuildChatBodyHonorsClientReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildChatBody() error = %v", err)
 	}
-	if strings.Contains(string(body), `"reasoning_effort":"none"`) {
-		t.Fatalf("none must not reach the wire: %s", body)
-	}
-	if !strings.Contains(string(body), `"reasoning_effort":"high"`) {
-		t.Fatalf("none must fall back to the default effort: %s", body)
-	}
+	testutil.MustNotContain(t, string(body), `"reasoning_effort":"none"`)
+	testutil.MustContain(t, string(body), `"reasoning_effort":"high"`)
 }

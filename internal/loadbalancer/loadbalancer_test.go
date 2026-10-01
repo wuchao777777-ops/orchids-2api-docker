@@ -8,6 +8,7 @@ import (
 
 	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 type fixedConnTracker struct {
@@ -102,9 +103,7 @@ func TestSelectAccount_ActiveConnections(t *testing.T) {
 	// Should always pick acc2
 	for i := 0; i < 100; i++ {
 		selected := lb.selectAccountWithTracker(accounts, nil)
-		if selected.ID != acc2.ID {
-			t.Errorf("Expected Acc2 to be selected, got %s", selected.Name)
-		}
+		testutil.CheckEqual(t, selected.ID, acc2.ID)
 	}
 }
 
@@ -207,9 +206,7 @@ func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfu
 	if err == nil {
 		t.Fatal("expected rate-limited selector error, got nil")
 	}
-	if !strings.Contains(err.Error(), "all matching accounts are rate-limited or cooling down") {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.MustContain(t, err.Error(), "all matching accounts are rate-limited or cooling down")
 }
 
 // TestGetNextAccountExcludingByChannelWithTracker_AllAllowanceParkedNamesTheAllowance
@@ -232,9 +229,7 @@ func TestGetNextAccountExcludingByChannelWithTracker_AllAllowanceParkedNamesTheA
 	if err == nil {
 		t.Fatal("expected an allowance-parked selector error, got nil")
 	}
-	if !strings.Contains(err.Error(), "have exhausted their allowance") {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.MustContain(t, err.Error(), "have exhausted their allowance")
 }
 
 // TestGetNextAccountExcludingByChannelWithTrackerFilter_ModelFilterEmptiesThePool
@@ -260,9 +255,7 @@ func TestGetNextAccountExcludingByChannelWithTrackerFilter_ModelFilterEmptiesThe
 	if err == nil {
 		t.Fatal("expected a model-filtered selector error, got nil")
 	}
-	if !strings.Contains(err.Error(), "cooling down for the requested model") {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.MustContain(t, err.Error(), "cooling down for the requested model")
 }
 
 // TestFilterReasonsDecideTheEmptyPoolAnswer pins what the filter's reason is
@@ -314,9 +307,7 @@ func TestFilterReasonsDecideTheEmptyPoolAnswer(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected an empty-pool error")
 			}
-			if !strings.Contains(err.Error(), tc.wantMsg) {
-				t.Fatalf("error = %v, want it to name %q", err, tc.wantMsg)
-			}
+			testutil.MustContain(t, err.Error(), tc.wantMsg)
 		})
 	}
 }
@@ -352,17 +343,11 @@ func TestGetNextAccountExcludingByChannelWithTracker_MixedPoolNamesTheSplit(t *t
 		t.Fatal("expected a mixed-pool selector error, got nil")
 	}
 	message := err.Error()
-	if !strings.Contains(message, "rate-limited or cooling down") {
-		t.Fatalf("mixed pool must name the rate limit: %v", err)
-	}
-	if !strings.Contains(message, "3 rate-limited") || !strings.Contains(message, "4 parked for a spent allowance") {
-		t.Fatalf("mixed pool must report both counts: %v", err)
-	}
+	testutil.MustContain(t, message, "rate-limited or cooling down")
+	testutil.MustContainAll(t, message, "3 rate-limited", "4 parked for a spent allowance")
 	// The phrase "exhausted their allowance" would make the shared pool rule
 	// classify a recoverable mixed pool as a permanent quota verdict.
-	if strings.Contains(message, "exhausted their allowance") {
-		t.Fatalf("mixed pool must not claim every account is out of quota: %v", err)
-	}
+	testutil.MustNotContain(t, message, "exhausted their allowance")
 	// And it must not degrade to the bare sentence that answered 503.
 	if strings.HasSuffix(message, "channel: workbuddy") {
 		t.Fatalf("mixed pool fell back to the unexplained selector sentence: %v", err)
@@ -451,9 +436,7 @@ func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
 	if !lb.isAccountAvailable(context.Background(), acc) {
 		t.Fatal("expected expired quota reset to re-enable account")
 	}
-	if acc.StatusCode != "" {
-		t.Fatalf("expected status to be cleared after cooldown, got %q", acc.StatusCode)
-	}
+	testutil.Equal(t, acc.StatusCode, "")
 	if !acc.QuotaResetAt.IsZero() {
 		t.Fatalf("expected quota reset timestamp to be cleared, got %v", acc.QuotaResetAt)
 	}
@@ -471,9 +454,7 @@ func TestIsAccountAvailable_LegacyQoder402ReachesModelFilter(t *testing.T) {
 	if !lb.isAccountAvailable(context.Background(), acc) {
 		t.Fatal("expected legacy Qoder 402 account to reach the free-model filter")
 	}
-	if acc.StatusCode != "402" {
-		t.Fatalf("expected legacy quota marker preserved, got %q", acc.StatusCode)
-	}
+	testutil.Equal(t, acc.StatusCode, "402")
 }
 
 // TestIsAccountAvailable_WorkBuddyCreditExhaustionReachesModelFilter pins that
@@ -488,9 +469,7 @@ func TestIsAccountAvailable_WorkBuddyCreditExhaustionReachesModelFilter(t *testi
 	if !lb.isAccountAvailable(context.Background(), acc) {
 		t.Fatal("expected exhausted WorkBuddy account to reach the free-model filter")
 	}
-	if acc.StatusCode != store.AccountStatusWorkBuddyQuotaExhausted {
-		t.Fatalf("expected free-only state preserved, got %q", acc.StatusCode)
-	}
+	testutil.Equal(t, acc.StatusCode, store.AccountStatusWorkBuddyQuotaExhausted)
 }
 
 // TestIsAccountAvailable_WorkBuddyCreditExhaustionClearsWhenQuotaReturns proves
@@ -501,9 +480,7 @@ func TestIsAccountAvailable_WorkBuddyCreditExhaustionClearsWhenQuotaReturns(t *t
 	if !lb.isAccountAvailable(context.Background(), acc) {
 		t.Fatal("expected account to remain available when quota returns")
 	}
-	if acc.StatusCode != "" {
-		t.Fatalf("expected free-only marker cleared, got %q", acc.StatusCode)
-	}
+	testutil.Equal(t, acc.StatusCode, "")
 }
 
 // TestIsAccountAvailable_402KeepsLongCooldownForOtherChannels pins that the
@@ -608,9 +585,7 @@ func TestSelectAccountRotatesAcrossEqualAccounts(t *testing.T) {
 		}
 		seen[acc.ID]++
 	}
-	if len(seen) != 3 {
-		t.Fatalf("selection hit only %d accounts; equally loaded accounts must rotate", len(seen))
-	}
+	testutil.Equal(t, len(seen), 3)
 	for id, count := range seen {
 		if count < 5 {
 			t.Fatalf("account %d selected %d times out of 30; rotation is too uneven", id, count)
@@ -631,9 +606,7 @@ func TestLargePoolIsScannedInRotatingWindows(t *testing.T) {
 			seen[(start+offset)%size] = true
 		}
 	}
-	if len(seen) != size {
-		t.Fatalf("rotating windows covered %d of %d accounts", len(seen), size)
-	}
+	testutil.Equal(t, len(seen), size)
 }
 
 // TestQoderExhaustedSnapshotRetiresAtItsResetBoundary pins the scheduling rule
@@ -669,9 +642,7 @@ func TestQoderExhaustedSnapshotRetiresAtItsResetBoundary(t *testing.T) {
 	if !lb.isAccountAvailable(context.Background(), stale) {
 		t.Fatal("an exhausted snapshot taken before its own reset boundary must be admitted")
 	}
-	if stale.StatusCode != "" {
-		t.Fatalf("StatusCode = %q, want it cleared so the account is not re-checked", stale.StatusCode)
-	}
+	testutil.Equal(t, stale.StatusCode, "")
 
 	// Snapshot taken after the reset and still reporting exhaustion describes
 	// the current window: clearing on it would route requests at an account the
@@ -681,9 +652,7 @@ func TestQoderExhaustedSnapshotRetiresAtItsResetBoundary(t *testing.T) {
 	if !lb.isAccountAvailable(context.Background(), current) {
 		t.Fatal("a spent account is still admitted to the model-aware selector")
 	}
-	if current.StatusCode != store.AccountStatusQoderQuotaExhausted {
-		t.Fatalf("StatusCode = %q, want the session to keep restricting it to a free catalog row", current.StatusCode)
-	}
+	testutil.Equal(t, current.StatusCode, store.AccountStatusQoderQuotaExhausted)
 
 	// No boundary recorded at all: nothing proves the window reopened.
 	lb = &LoadBalancer{connTracker: NewMemoryConnTracker()}
@@ -691,9 +660,7 @@ func TestQoderExhaustedSnapshotRetiresAtItsResetBoundary(t *testing.T) {
 	if !lb.isAccountAvailable(context.Background(), unknown) {
 		t.Fatal("a spent account with no reset time is still admitted")
 	}
-	if unknown.StatusCode != store.AccountStatusQoderQuotaExhausted {
-		t.Fatalf("StatusCode = %q, want it untouched without a reset boundary", unknown.StatusCode)
-	}
+	testutil.Equal(t, unknown.StatusCode, store.AccountStatusQoderQuotaExhausted)
 
 	// A non-Qoder row must not borrow the Qoder rule.
 	lb = &LoadBalancer{connTracker: NewMemoryConnTracker()}

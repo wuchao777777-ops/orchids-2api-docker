@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -34,7 +35,7 @@ func TestObservedContextTiersAndRequestDefault(t *testing.T) {
 		if info.DefaultInputTokens != tc.input || info.DefaultContextTokens != tc.def || info.MaxContextTokens != 1000000 || info.HasUnparsedConfig || info.DefaultConflict {
 			t.Fatalf("%s: %+v", tc.key, info)
 		}
-		encoded, err := buildChatBody(upstream.UpstreamRequest{Prompt: "hello"}, model, "session", "request", "request-set")
+		encoded, err := buildChatBodyProfile(upstream.UpstreamRequest{Prompt: "hello"}, model, "session", "request", "request-set", DefaultClientVersion, "", sceneBusinessProduct)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -43,16 +44,10 @@ func TestObservedContextTiersAndRequestDefault(t *testing.T) {
 			t.Fatal(err)
 		}
 		var body chatBody
-		if err := json.Unmarshal(raw, &body); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, json.Unmarshal(raw, &body))
 		parameters := body.Parameters.(map[string]interface{})
-		if parameters["context_length"] != float64(tc.def) {
-			t.Fatalf("%s context_length=%v", tc.key, parameters["context_length"])
-		}
-		if body.ModelConfig.MaxInputTokens != tc.input {
-			t.Fatalf("%s input budget overwritten: %d", tc.key, body.ModelConfig.MaxInputTokens)
-		}
+		testutil.EqualAny(t, parameters["context_length"], float64(tc.def))
+		testutil.Equal(t, body.ModelConfig.MaxInputTokens, tc.input)
 	}
 }
 

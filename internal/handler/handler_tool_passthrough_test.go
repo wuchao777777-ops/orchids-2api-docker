@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -58,25 +58,15 @@ func TestHandleMessages_CustomMCPToolCall_RemainsAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	out := rec.Body.String()
-	if !strings.Contains(out, `"type":"tool_use"`) {
-		t.Fatalf("expected tool_use block, got: %s", out)
-	}
-	if !strings.Contains(out, `"name":"workspace_search"`) {
-		t.Fatalf("expected custom MCP tool call to pass through, got: %s", out)
-	}
+	testutil.MustContain(t, out, `"type":"tool_use"`)
+	testutil.MustContain(t, out, `"name":"workspace_search"`)
 
 	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 upstream call, got %d", len(calls))
-	}
-	if len(calls[0].Tools) != 1 {
-		t.Fatalf("expected 1 declared tool, got %#v", calls[0].Tools)
-	}
+	testutil.Equal(t, len(calls), 1)
+	testutil.Equal(t, len(calls[0].Tools), 1)
 
 	declared, ok := calls[0].Tools[0].(map[string]interface{})
 	if !ok {

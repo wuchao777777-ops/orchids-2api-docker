@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"encoding/json"
-	"github.com/alicebob/miniredis/v2"
 
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -91,12 +91,8 @@ func TestHandleMessages_NonStreamPartialFailureReturnsOnlyError(t *testing.T) {
 	body, _ := json.Marshal(payload)
 	rec := httptest.NewRecorder()
 	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "partial draft") || strings.Contains(rec.Body.String(), "choices") {
-		t.Fatalf("partial failure was fabricated as a completion: %s", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadGateway)
+	testutil.MustNotContainAny(t, rec.Body.String(), "partial draft", "choices")
 }
 
 func TestHandleMessages_UsageEvidenceSuppressesReplay(t *testing.T) {
@@ -108,12 +104,8 @@ func TestHandleMessages_UsageEvidenceSuppressesReplay(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
 
-	if client.calls != 1 {
-		t.Fatalf("upstream calls = %d, want 1 after provider-reported usage", client.calls)
-	}
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, client.calls, 1)
+	testutil.Equal(t, rec.Code, http.StatusBadGateway)
 }
 
 func TestHandleMessages_NonStreamEncodeFailureIsObservable(t *testing.T) {
@@ -129,12 +121,8 @@ func TestHandleMessages_NonStreamEncodeFailureIsObservable(t *testing.T) {
 	writer := &encodeFailResponseWriter{err: errors.New("client connection closed")}
 	h.HandleMessages(writer, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
 
-	if len(auditLog.events) != 1 {
-		t.Fatalf("audit events = %d, want 1", len(auditLog.events))
-	}
-	if auditLog.events[0].Status != "error" {
-		t.Fatalf("audit status = %q, want error", auditLog.events[0].Status)
-	}
+	testutil.Equal(t, len(auditLog.events), 1)
+	testutil.Equal(t, auditLog.events[0].Status, "error")
 }
 
 func TestHandleMessages_StreamPartialFailureEndsWithErrorNotSuccess(t *testing.T) {
@@ -145,12 +133,8 @@ func TestHandleMessages_StreamPartialFailureEndsWithErrorNotSuccess(t *testing.T
 	rec := httptest.NewRecorder()
 	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
 	out := rec.Body.String()
-	if !strings.Contains(out, "event: error") {
-		t.Fatalf("stream lacks terminal error: %s", out)
-	}
-	if strings.Contains(out, "event: message_stop") {
-		t.Fatalf("stream failure was followed by normal completion: %s", out)
-	}
+	testutil.MustContain(t, out, "event: error")
+	testutil.MustNotContain(t, out, "event: message_stop")
 }
 
 type finishThenErrorUpstreamEdge struct{ calls int }
@@ -169,12 +153,8 @@ func TestHandleMessages_DoesNotRetryAfterTerminalFinish(t *testing.T) {
 	body, _ := json.Marshal(payload)
 	rec := httptest.NewRecorder()
 	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
-	if client.calls != 1 {
-		t.Fatalf("upstream calls = %d, want 1", client.calls)
-	}
-	if got := strings.Count(rec.Body.String(), "event: message_stop"); got != 1 {
-		t.Fatalf("message_stop count = %d, body=%s", got, rec.Body.String())
-	}
+	testutil.Equal(t, client.calls, 1)
+	testutil.Equal(t, strings.Count(rec.Body.String(), "event: message_stop"), 1)
 }
 
 func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
@@ -197,46 +177,26 @@ func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec, req)
 	out := rec.Body.String()
-	if !strings.Contains(out, "hello") {
-		t.Fatalf("expected text delta")
-	}
-	if !strings.Contains(out, "event: message_stop") {
-		t.Fatalf("expected forced message_stop when upstream missing finish, got: %s", out)
-	}
+	testutil.MustContain(t, out, "hello")
+	testutil.MustContain(t, out, "event: message_stop")
 }
 
 func TestHandleMessages_WorkBuddyStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedAccount(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	s := newTestRedisStore(t, "test:")
 
 	first := &store.Account{
 		AccountType: "workbuddy",
 		Enabled:     true,
 		Weight:      1,
 	}
-	if err := s.CreateAccount(context.Background(), first); err != nil {
-		t.Fatalf("CreateAccount(first) error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), first), "CreateAccount(first) error = %v")
 	second := &store.Account{
 		AccountType:   "workbuddy",
 		Enabled:       true,
 		Weight:        1,
 		MaxConcurrent: 2,
 	}
-	if err := s.CreateAccount(context.Background(), second); err != nil {
-		t.Fatalf("CreateAccount(second) error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), second), "CreateAccount(second) error = %v")
 
 	publishModel(t, s, &store.Model{Channel: "WorkBuddy", ModelID: "claude-opus-5"})
 
@@ -271,24 +231,16 @@ func TestHandleMessages_WorkBuddyStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFai
 	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/chat/completions", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	out := rec.Body.String()
-	if !strings.Contains(out, "quota-ok") {
-		t.Fatalf("expected successful retry output, got: %s", out)
-	}
-	if strings.Contains(out, "Retrying request") {
-		t.Fatalf("did not expect retry marker in streamed assistant output, got: %s", out)
-	}
+	testutil.MustContain(t, out, "quota-ok")
+	testutil.MustNotContain(t, out, "Retrying request")
 
 	storedFirst, err := s.GetAccount(context.Background(), first.ID)
 	if err != nil {
 		t.Fatalf("GetAccount(first) error = %v", err)
 	}
-	if storedFirst.StatusCode != store.AccountStatusWorkBuddyQuotaExhausted {
-		t.Fatalf("expected first account to enter WorkBuddy free-only mode, got %q", storedFirst.StatusCode)
-	}
+	testutil.Equal(t, storedFirst.StatusCode, store.AccountStatusWorkBuddyQuotaExhausted)
 }
 
 func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
@@ -318,9 +270,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 	rec1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec1, req1)
-	if rec1.Code != 200 {
-		t.Fatalf("expected first request 200, got %d", rec1.Code)
-	}
+	testutil.Equal(t, rec1.Code, 200)
 	if strings.Contains(rec1.Body.String(), "duplicate_request") || !strings.Contains(rec1.Body.String(), "ok") {
 		t.Fatalf("expected first request to complete normally, got: %s", rec1.Body.String())
 	}
@@ -328,15 +278,9 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec2, req2)
-	if rec2.Code != 200 {
-		t.Fatalf("expected second request 200, got %d", rec2.Code)
-	}
-	if strings.Contains(rec2.Body.String(), "duplicate_request") {
-		t.Fatalf("expected interrupted retry to bypass dedup, got: %s", rec2.Body.String())
-	}
-	if !strings.Contains(rec2.Body.String(), "ok") {
-		t.Fatalf("expected second request to complete normally, got: %s", rec2.Body.String())
-	}
+	testutil.Equal(t, rec2.Code, 200)
+	testutil.MustNotContain(t, rec2.Body.String(), "duplicate_request")
+	testutil.MustContain(t, rec2.Body.String(), "ok")
 }
 
 func TestHandleMessages_Dedup_DoesNotSuppressToolResultFollowup(t *testing.T) {
@@ -380,87 +324,15 @@ func TestHandleMessages_Dedup_DoesNotSuppressToolResultFollowup(t *testing.T) {
 	rec1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(bodyA))
 	h.HandleMessages(rec1, req1)
-	if rec1.Code != 200 {
-		t.Fatalf("expected first request 200, got %d", rec1.Code)
-	}
-	if !strings.Contains(rec1.Body.String(), "ok") {
-		t.Fatalf("expected first request to complete normally, got: %s", rec1.Body.String())
-	}
+	testutil.Equal(t, rec1.Code, 200)
+	testutil.MustContain(t, rec1.Body.String(), "ok")
 
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(bodyB))
 	h.HandleMessages(rec2, req2)
-	if rec2.Code != 200 {
-		t.Fatalf("expected second request 200, got %d", rec2.Code)
-	}
-	if strings.Contains(rec2.Body.String(), "duplicate_request") {
-		t.Fatalf("expected tool_result follow-up to bypass semantic dedup, got: %s", rec2.Body.String())
-	}
-	if !strings.Contains(rec2.Body.String(), "ok") {
-		t.Fatalf("expected second request to complete normally, got: %s", rec2.Body.String())
-	}
-}
-
-func TestHandleMessages_ToolResultFollowup_DoesNotInjectLocalFallbackText(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
-	h := NewWithLoadBalancer(cfg, nil)
-	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
-		{Type: "model", Event: map[string]any{"type": "text-start"}},
-		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "Let me first understand the project structure and code."}},
-		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
-	}}
-
-	payload := map[string]any{
-		"model":           "claude-3-5-sonnet",
-		"conversation_id": "test-conversation",
-		"messages": []map[string]any{
-			{"role": "user", "content": "这个项目使用了哪些技术架构"},
-			{"role": "assistant", "content": []map[string]any{
-				{
-					"type":  "tool_use",
-					"id":    "tool_1",
-					"name":  "Read",
-					"input": map[string]any{"file_path": "/Users/dailin/Documents/GitHub/truth_social_scraper/utils.py"},
-				},
-			}},
-			{"role": "user", "content": []map[string]any{
-				{
-					"type":        "tool_result",
-					"tool_use_id": "tool_1",
-					"content":     "import json\nimport os\nALERTS_FILE='alerts.json'\ndef load_json(path):\n    return json.load(open(path))",
-				},
-				{
-					"type": "text",
-					"text": "请直接回答",
-				},
-			}},
-		},
-		"system": []any{},
-		"stream": false,
-	}
-	body, _ := json.Marshal(payload)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
-	h.HandleMessages(rec, req)
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-
-	out := rec.Body.String()
-	if !strings.Contains(out, "Let me first understand the project structure and code.") {
-		t.Fatalf("expected upstream text to be preserved, got: %s", out)
-	}
-	for _, unwanted := range []string{
-		"Python",
-		"JSON",
-		"基于当前已读取内容",
-		"当前只拿到目录概览",
-	} {
-		if strings.Contains(out, unwanted) {
-			t.Fatalf("did not expect local fallback text %q in %s", unwanted, out)
-		}
-	}
+	testutil.Equal(t, rec2.Code, 200)
+	testutil.MustNotContain(t, rec2.Body.String(), "duplicate_request")
+	testutil.MustContain(t, rec2.Body.String(), "ok")
 }
 
 func TestHandleMessages_CanceledFollowup_DoesNotEmitGenericEmptyFallback(t *testing.T) {
@@ -501,20 +373,12 @@ func TestHandleMessages_CanceledFollowup_DoesNotEmitGenericEmptyFallback(t *test
 	// answerable with a status rather than a 200 carrying an error frame. The
 	// point of the test is unchanged: the cancellation must be reported, and it
 	// must not be dressed up as the generic empty-output fallback.
-	if rec.Code == http.StatusOK {
-		t.Fatalf("expected a failure status for an uncommitted stream, got 200 with: %s", rec.Body.String())
-	}
+	testutil.NotEqual(t, rec.Code, http.StatusOK)
 
 	out := rec.Body.String()
-	if strings.Contains(out, "No output was presented to the user") {
-		t.Fatalf("did not expect generic empty fallback after canceled upstream, got: %s", out)
-	}
-	if !strings.Contains(out, "error") {
-		t.Fatalf("unexpected upstream-local cancellation must be reported as an error, got: %s", out)
-	}
-	if strings.Contains(out, "event: error") {
-		t.Fatalf("the status was still free, so the report belongs in the response status, got: %s", out)
-	}
+	testutil.MustNotContain(t, out, "No output was presented to the user")
+	testutil.MustContain(t, out, "error")
+	testutil.MustNotContain(t, out, "event: error")
 }
 
 func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing.T) {
@@ -539,23 +403,15 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	// A failure with nothing sent yet is a failure. Answering 200 with the error as
 	// assistant content is what made a client unable to tell a rejection from an
 	// answer.
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for a client-side rejection, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if upstreamClient.calls != 1 {
-		t.Fatalf("expected exactly one upstream call, got %d", upstreamClient.calls)
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
+	testutil.Equal(t, upstreamClient.calls, 1)
 
 	out := rec.Body.String()
 	if !strings.Contains(out, "rejected the request parameters or model") || strings.Contains(out, "workbuddy API error") {
 		t.Fatalf("expected redacted upstream error, got: %s", out)
 	}
-	if strings.Contains(out, "No output was presented to the user") {
-		t.Fatalf("did not expect generic empty fallback, got: %s", out)
-	}
-	if strings.Contains(out, "retries exhausted") {
-		t.Fatalf("did not expect retry exhausted wrapper for non-retriable client error, got: %s", out)
-	}
+	testutil.MustNotContain(t, out, "No output was presented to the user")
+	testutil.MustNotContain(t, out, "retries exhausted")
 	var response map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("error response must contain exactly one JSON document, got %q: %v", out, err)

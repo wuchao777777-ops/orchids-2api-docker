@@ -4,14 +4,27 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('./test-support.cjs');
+const strip = (html) => String(html).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 
 test('hidden provider sections cannot be made visible by component display rules', () => {
   const css = fs.readFileSync(path.join(__dirname, 'static/css/main.css'), 'utf8');
   assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
 });
 
-function loadUI() {
-  const timers = [];
+function loadUI({ deferTimers = false, accountsPayload = [] } = {}) {
+  const timers = new Map();
+  let timerId = 0;
+  const schedule = (fn, repeat) => {
+    const id = ++timerId;
+    timers.set(id, { fn, repeat });
+    return id;
+  };
+  const scheduleTimeout = (fn) => {
+    if (deferTimers) return schedule(fn, false);
+    fn();
+    return 0;
+  };
+  const requests = [];
   const storage = new Map();
   // Minimal element/DOM surface: enough for tab rendering and modal wiring.
   const makeElement = (tag) => {
@@ -29,7 +42,7 @@ function loadUI() {
       // escapeHtml() renders through a detached div, so the stub must mirror
       // textContent into innerHTML the way the DOM does.
       get innerHTML() { return this.__innerHTML !== undefined ? this.__innerHTML : this.textContent; },
-      set innerHTML(value) { this.__innerHTML = value; },
+      set innerHTML(value) { this.__innerHTML = value; children.splice(0); },
       style: {},
       dataset: {},
       children,
@@ -37,11 +50,21 @@ function loadUI() {
       setAttribute(name,value) { this[name]=String(value); },
       removeAttribute(name) { delete this[name]; },
       replaceChildren(...nodes) { children.splice(0,children.length,...nodes); },
-      querySelectorAll() { return []; },
-      querySelector() { return null; },
+      querySelectorAll(selector) {
+        const [ancestor, tag] = selector.split(' ');
+        const descendants = (parent) => parent.children.flatMap((child) => [child, ...descendants(child)]);
+        const all = descendants(this);
+        return tag ? all.filter((child) => child.tagName === ancestor).flatMap((child) => descendants(child).filter((candidate) => candidate.tagName === tag))
+          : all.filter((child) => child.tagName === selector);
+      },
+      querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
       addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
       click() { (listeners.click || []).forEach((fn) => fn({ target: this })); },
-      appendChild(child) { children.push(child); return child; },
+      appendChild(child) {
+        if (child.tagName === 'fragment') children.push(...child.children.splice(0));
+        else children.push(child);
+        return child;
+      },
       classList: {
         add: (name) => classes.add(name),
         remove: (name) => classes.delete(name),
@@ -59,17 +82,21 @@ function loadUI() {
   const context = vm.createContext({
     document: {
       getElementById: node,
-      querySelector: node,
+      querySelector: (selector) => selector === '#platformFilters .tab-item.active'
+        ? node('platformFilters').children.find((tab) => tab.classList.contains('active')) || null
+        : node(selector),
       createElement: makeElement,
       createDocumentFragment: () => makeElement('fragment'),
-      querySelectorAll: () => [],
+      querySelectorAll: (selector) => selector === '#platformFilters .tab-item' ? node('platformFilters').children : [],
       addEventListener() {},
     },
     window: {
       isSecureContext: true,
       location: {href:"http://localhost/admin/"},
-      setInterval: (fn) => { timers.push(fn); return timers.length; },
-      clearInterval: () => {},
+      setInterval: (fn) => schedule(fn, true),
+      clearInterval: (id) => timers.delete(id),
+      setTimeout: scheduleTimeout,
+      clearTimeout: (id) => timers.delete(id),
       addEventListener() {},
       dispatchEvent() {},
       matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
@@ -80,24 +107,38 @@ function loadUI() {
         removeItem: (key) => storage.delete(key),
       },
     },
-    setInterval: (fn) => { timers.push(fn); return timers.length; },
-    clearInterval() {},
-    // Immediate pacing so the auto-sync loop settles synchronously in tests.
-    requestAnimationFrame: (fn) => fn(),
-    setTimeout: (fn) => { fn(); return 0; },
+    setInterval: (fn) => schedule(fn, true),
+    clearInterval: (id) => timers.delete(id),
+    requestAnimationFrame: (fn) => deferTimers ? schedule(fn, false) : fn(),
+    setTimeout: scheduleTimeout,
+    clearTimeout: (id) => timers.delete(id),
   });
-  context.fetch = async (url) => {
+  context.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), method: options.method || 'GET' });
     if (url === '/api/providers') return { ok: true, json: async () => ({ defaultProviderKey:'workbuddy', providers:[
       {key:'workbuddy',label:'WorkBuddy'},
       {key:'qoder',label:'Qoder'},{key:'cline',label:'Cline'},{key:'grok',label:'Grok'},
     ]}) };
-    return { ok: true, json: async () => [] };
+    return { ok: true, status: 200, headers: { get: () => 'application/json' },
+      json: async () => url === '/api/accounts' ? accountsPayload : [] };
   };
   context.CustomEvent = class { constructor(type, init={}) { this.type=type; this.detail=init.detail; } };
   for (const file of ['common.js', 'provider-registry.js', 'accounts.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, 'static/js', file), 'utf8'), context);
   }
-  return { context, node, storage };
+  const runTimers = async () => {
+    // Run three clock turns, including callbacks scheduled by an earlier turn.
+    // Bound the turns so an accidental recurring task cannot hang the suite.
+    for (let turn = 0; turn < 3; turn++) {
+      for (const [id, timer] of [...timers]) {
+        if (!timers.has(id)) continue;
+        if (!timer.repeat) timers.delete(id);
+        await timer.fn();
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+  return { context, node, storage, requests, runTimers };
 }
 
 function workBuddyAccount(overrides = {}) {
@@ -113,26 +154,61 @@ function workBuddyAccount(overrides = {}) {
   };
 }
 
-test('clicking a platform tab makes 添加账号 open in that platform', () => {
-  const { context, node } = loadUI();
-  vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
-  node('accountId').value = '';
-  node('enabled').checked = true;
-  context.renderPlatformTabs();
+const LOGIN_PLATFORMS = [
+  { key: 'grok', label: 'Grok', group: 'grokDeviceLoginGroup' },
+  { key: 'cline', label: 'Cline', group: 'clineLoginGroup' },
+  { key: 'workbuddy', label: 'WorkBuddy', group: 'workbuddyLoginGroup' },
+  { key: 'qoder', label: 'Qoder', group: 'qoderLoginGroup' },
+];
 
-  const tabs = node('platformFilters').children;
-  for (const platform of ['grok', 'cline', 'workbuddy']) {
-    const tab = tabs.find((candidate) => decodeURIComponent(candidate.dataset.platform || '') === platform);
-    assert.ok(tab, `no ${platform} tab among ${tabs.map((candidate) => candidate.textContent).join(',')}`);
-    tab.click();
-    node('accountId').value = '';
+for (const { key, label } of LOGIN_PLATFORMS) {
+  test(`${label} tab opens only its official login and retains settings editing`, () => {
+    const { context, node } = loadUI();
+    context.renderPlatformTabs();
+    const previous = LOGIN_PLATFORMS.find((provider) => provider.key !== key);
+    context.filterByPlatform(previous.key);
     context.openModal();
-    assert.equal(node('accountType').value, platform, `${platform}: openModal type`);
-    const expectedLabel = platform === 'workbuddy' ? 'WorkBuddy' : platform.charAt(0).toUpperCase() + platform.slice(1);
-    assert.equal(node('accountTypeDisplay').value, expectedLabel, `${platform}: displayed label`);
-  }
-});
+    assert.equal(node(previous.group).hidden, false, 'seed a different provider login surface');
+    const tab = node('platformFilters').children.find((candidate) => decodeURIComponent(candidate.dataset.platform || '') === key);
+    assert.ok(tab, `no ${key} tab`);
+    tab.click();
+    assert.equal(vm.runInContext('currentPlatform', context), key);
+    assert.equal(tab.classList.contains('active'), true);
+    context.openModal();
+    assert.equal(node('accountType').value, key);
+    assert.equal(node('accountTypeDisplay').value, label);
+    const checkGroups = () => {
+      for (const provider of LOGIN_PLATFORMS) {
+        assert.equal(node(provider.group).hidden, provider.key !== key, `${key}: ${provider.group}`);
+      }
+    };
+    checkGroups();
+    assert.equal(node('#accountForm button[type="submit"]').hidden, true, 'new accounts require official login');
+    context.openModal({ id: 7, account_type: key, enabled: true });
+    assert.equal(node('accountType').value, key);
+    assert.equal(node('accountTypeDisplay').value, label);
+    assert.equal(node('#accountForm button[type="submit"]').hidden, false, 'existing settings remain editable');
+    checkGroups();
+  });
+
+  test(`${label} rejects manual creation without fetching`, async () => {
+    const { context, node } = loadUI();
+    node('accountType').value = key;
+    node('accountId').value = '';
+    const notices = [];
+    const requests = [];
+    let prevented = false;
+    context.showToast = (message, kind) => notices.push({ message, kind });
+    context.fetch = (...args) => {
+      requests.push(args);
+      throw new Error('manual creation must not send a request');
+    };
+    await context.saveAccount({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.deepEqual(requests, [], 'even a caught fetch attempt must fail this test');
+    assert.deepEqual(notices, [{ message: `请使用「使用 ${label} 官方网页登录」添加账号`, kind: 'error' }]);
+  });
+}
 
 test('the active platform tab wins over a stale account-type field', () => {
   const { context, node } = loadUI();
@@ -153,8 +229,11 @@ test('the visibly highlighted provider wins if in-memory state is stale', () => 
   vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
   node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
   node('enabled').checked = true;
+  context.renderPlatformTabs();
   context.filterByPlatform('grok');
-  node('#platformFilters .tab-item.active').dataset.platform = encodeURIComponent('cline');
+  const tabs = node('platformFilters').children;
+  for (const tab of tabs) tab.classList.toggle('active', decodeURIComponent(tab.dataset.platform) === 'cline');
+  assert.equal(vm.runInContext('currentPlatform', context), 'grok', 'only the visible selection changes');
   node('accountId').value = '';
   context.openModal();
   assert.equal(node('accountType').value, 'cline');
@@ -171,83 +250,21 @@ test('the account modal has no manual credential or batch import inputs', () => 
   assert.doesNotMatch(source, /runAccountCreatePool|splitBatchCredentialInput|buildAccountPayload/);
 });
 
-test('openModal after a tab click renders only that channel official login', () => {
-  const { context, node } = loadUI();
-  vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
-  node('enabled').checked = true;
-  context.renderPlatformTabs();
-
-  const groups = { grok: 'grokDeviceLoginGroup', cline: 'clineLoginGroup', workbuddy: 'workbuddyLoginGroup', qoder: 'qoderLoginGroup' };
-  const tabs = node('platformFilters').children;
-  for (const platform of Object.keys(groups)) {
-    const tab = tabs.find((candidate) => decodeURIComponent(candidate.dataset.platform || '') === platform);
-    assert.ok(tab, `no ${platform} tab`);
-    tab.click();
-    node('accountId').value = '';
-    context.openModal();
-    assert.equal(node('accountType').value, platform, `${platform}: modal type`);
-    for (const [channel, group] of Object.entries(groups)) {
-      assert.equal(node(group).hidden, channel !== platform, `${platform}: ${group} visibility`);
-    }
-    assert.equal(node('#accountForm button[type="submit"]').hidden, true);
-    node('accountId').value = '7';
-    context.applyTokenLabels(platform);
-    assert.equal(node('#accountForm button[type="submit"]').hidden, false, `${platform}: settings editing`);
-  }
-});
-
-test('Grok Build CLI OAuth cannot be created from the form', async () => {
-  const { context, node } = loadUI();
-  node('accountType').value = 'grok';
-  node('accountId').value = '';
-  const notices = [];
-  context.showToast = (message) => notices.push(message);
-  context.fetch = () => { throw new Error('manual OAuth creation must not send a request'); };
-  await context.saveAccount({ preventDefault() {} });
-  assert.equal(notices.length, 1);
-  assert.match(notices[0], /官方网页登录/);
-});
-
-test('Cline exposes official login and preserves settings editing', () => {
-  const { context, node } = loadUI();
-  context.applyTokenLabels('grok');
-  context.applyTokenLabels('cline');
-  assert.equal(node('grokDeviceLoginGroup').hidden, true);
-  assert.equal(node('clineLoginGroup').hidden, false);
-  assert.equal(node('#accountForm button[type="submit"]').hidden, true);
-  node('accountId').value = '1';
-  context.applyTokenLabels('cline');
-  assert.equal(node('#accountForm button[type="submit"]').hidden, false);
-  node('accountId').value = '';
-  context.applyTokenLabels('workbuddy');
-  assert.equal(node('workbuddyLoginGroup').hidden, false);
-  assert.equal(node('clineLoginGroup').hidden, true);
-});
-
-test('Cline save cannot submit a manual creation request', async () => {
-  const { context, node } = loadUI();
-  node('accountType').value = 'cline';
-  const notices = [];
-  context.showToast = (message) => notices.push(message);
-  context.fetch = () => { throw new Error('manual Cline creation must not send a request'); };
-  await context.saveAccount({ preventDefault() {} });
-  assert.equal(notices.length, 1);
-  assert.match(notices[0], /官方网页登录/);
-});
-
-test('loading accounts never starts upstream account checks', async () => {
-  const { context } = loadUI();
-  context.sortAccounts = () => {};
-  context.renderPlatformTabs = () => {};
-  context.renderAccounts = () => {};
-  context.updateStats = () => {};
-  context.fetch = async () => ({ ok:true, status: 200, json: async () => [
-    { id: 3, account_type: 'grok', credential_type: 'oauth', grok_provider: 'build', enabled: true },
-  ] });
-
+test('loading accounts stays read-only after scheduled callbacks run', async () => {
+  const accountsPayload = LOGIN_PLATFORMS.map(({ key }, index) => ({
+    id: index + 1, account_type: key, enabled: true, has_credential: true,
+    credential_type: 'oauth', grok_provider: key === 'grok' ? 'build' : undefined,
+    // An unsynced snapshot used to trigger automatic upstream checks.
+    last_checked_at: '', quota_supported: false,
+  }));
+  const { context, node, requests, runTimers } = loadUI({ deferTimers: true, accountsPayload });
   await context.loadAccounts();
-  assert.equal('autoSyncStaleAccounts' in context, false, 'obsolete auto-sync machinery must stay removed');
+  assert.deepEqual(requests, [{ url: '/api/accounts', method: 'GET' }]);
+  assert.equal(vm.runInContext('accounts.length', context), 4);
+  assert.equal(node('totalAccounts').textContent, 4, 'the real stats/render path must run');
+  await runTimers();
+  assert.deepEqual(requests, [{ url: '/api/accounts', method: 'GET' }], 'timer execution must not issue any upstream work');
+  assert.equal(requests.some(({ url }) => /\/(?:check|refresh)(?:[/?]|$)/.test(url)), false);
 });
 
 test('Cline settings save succeeds without submitting credentials', async () => {
@@ -265,33 +282,6 @@ test('Cline settings save succeeds without submitting credentials', async () => 
   assert.equal(sent.url, '/api/accounts/7');
   assert.equal(sent.options.method, 'PUT');
   assert.deepEqual(JSON.parse(sent.options.body), { account_type: 'cline', weight: 2, enabled: true });
-});
-
-test('WorkBuddy uses official login, while edits can save settings', () => {
-  const { context, node } = loadUI();
-  node('accountId').value = '';
-  context.applyTokenLabels('workbuddy');
-  assert.equal(node('workbuddyLoginGroup').hidden, false);
-  assert.equal(node('#accountForm button[type="submit"]').hidden, true);
-  node('accountId').value = '11';
-  context.applyTokenLabels('workbuddy');
-  assert.equal(node('#accountForm button[type="submit"]').hidden, false);
-  node('accountId').value = '';
-  context.applyTokenLabels('cline');
-  assert.equal(node('workbuddyLoginGroup').hidden, true);
-  assert.equal(node('clineLoginGroup').hidden, false);
-});
-
-test('WorkBuddy creation cannot be submitted from the form', async () => {
-  const { context, node } = loadUI();
-  node('accountType').value = 'workbuddy';
-  node('accountId').value = '';
-  const notices = [];
-  context.showToast = (message) => notices.push(message);
-  context.fetch = () => { throw new Error('manual WorkBuddy creation must not send a request'); };
-  await context.saveAccount({ preventDefault() {} });
-  assert.equal(notices.length, 1);
-  assert.match(notices[0], /官方网页登录/);
 });
 
 test('opening the WorkBuddy modal never starts a login on its own', () => {
@@ -373,7 +363,7 @@ test('WorkBuddy rows show the metered credits, plan label and signed-in email', 
   assert.equal(quota.limit, 350);
   assert.equal(quota.remaining, 147.28);
   assert.equal(quota.used, 350 - 147.28, 'used must be derived from the meter');
-  assert.ok(quota.pctRemaining > 40 && quota.pctRemaining < 43, `pctRemaining=${quota.pctRemaining}`);
+  assert.equal(quota.pctRemaining, 42, 'the displayed percentage rounds to whole points');
 
   const markup = context.buildQuotaMarkup(account);
   assert.match(markup, /147\.28 \/ 350/);
@@ -495,59 +485,6 @@ test('WorkBuddy keeps operator-facing server errors and original terminal messag
   assert.match(fs.readFileSync(path.join(__dirname, 'static/js/device-auth.js'), 'utf8'), /readErrorPayload\(response\)/);
 });
 
-test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login', () => {
-  const { context, node } = loadUI();
-  vm.runInContext(
-    'globalThis.WorkBuddyLogin = { start() { globalThis.__wbStarted = (globalThis.__wbStarted || 0) + 1; }, stop() {} };',
-    context,
-  );
-  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
-  node('accountId').value = '';
-  node('enabled').checked = true;
-  context.renderPlatformTabs();
-
-  const tabs = node('platformFilters').children;
-  const workbuddyTab = tabs.find((tab) => decodeURIComponent(tab.dataset.platform || '') === 'workbuddy');
-  assert.ok(workbuddyTab, `no workbuddy tab among ${tabs.map((tab) => tab.textContent).join(',')}`);
-  workbuddyTab.click();
-  assert.equal(vm.runInContext('currentPlatform', context), 'workbuddy');
-
-  // This is the 添加账号 button in the accounts page header.
-  context.openModal();
-
-  assert.equal(node('accountType').value, 'workbuddy', 'modal type');
-  assert.equal(node('accountTypeDisplay').value, 'WorkBuddy', 'modal type label');
-  assert.equal(node('workbuddyLoginGroup').hidden, false, 'workbuddy login must be visible');
-  assert.equal(node('grokDeviceLoginGroup').hidden, true, 'grok login must stay hidden');
-  assert.equal(node('clineLoginGroup').hidden, true, 'cline login must stay hidden');
-});
-
-test('every platform tab maps to its own provider login surface', () => {
-  const { context, node } = loadUI();
-  vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
-  vm.runInContext('globalThis.QoderLogin = { start() {}, stop() {} };', context);
-  vm.runInContext('globalThis.ClineLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, toggle() {}, contains() { return true; } };
-  node('enabled').checked = true;
-  context.renderPlatformTabs();
-
-  const expectations = {
-    cline: { workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: false },
-    workbuddy: { workbuddyLoginGroup: false, qoderLoginGroup: true, clineLoginGroup: true },
-    qoder: { workbuddyLoginGroup: true, qoderLoginGroup: false, clineLoginGroup: true },
-    grok: { workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: true },
-  };
-  for (const [platform, expected] of Object.entries(expectations)) {
-    node('accountId').value = '';
-    context.filterByPlatform(platform);
-    context.openModal();
-    assert.equal(node('accountType').value, platform, `${platform}: modal type`);
-    for (const [id, hidden] of Object.entries(expected)) {
-      assert.equal(node(id).hidden, hidden, `${platform}: ${id} hidden`);
-    }
-  }
-});
-
 test('Qoder is OAuth-only in the modal: no manual credential field and no PAT entry', () => {
   const { context, node } = loadUI();
   vm.runInContext('globalThis.QoderLogin = { start() {}, stop() {} };', context);
@@ -564,19 +501,6 @@ test('Qoder is OAuth-only in the modal: no manual credential field and no PAT en
   // The channel is OAuth-only: there must be no credential field to type a PAT
   // into, and no submit button for a new account.
   assert.equal(node('#accountForm button[type="submit"]').hidden, true, 'new Qoder account uses official login');
-});
-
-test('Qoder creation cannot be submitted from the form', () => {
-  const { context, node } = loadUI();
-  vm.runInContext('globalThis.QoderLogin = { start() {}, stop() {} };', context);
-  context.accounts = [];
-  node('accountId').value = '';
-  node('accountType').value = 'qoder';
-  let toast = '';
-  vm.runInContext('globalThis.showToast = (message) => { globalThis.__lastToast = message; };', context);
-  context.saveAccount({ preventDefault() {} });
-  toast = vm.runInContext('globalThis.__lastToast || ""', context);
-  assert.match(toast, /Qoder 官方网页登录/, 'the form must point at the official login');
 });
 
 test('the qoder-auth module drives the server flow without carrying credentials', () => {
@@ -689,7 +613,7 @@ test('the session fingerprint never exposes the credential', () => {
 // ---------------------------------------------------------------------------
 // Qoder account row: 等级 / 配额 / 状态 must all render.
 //
-// A live Qoder account is a "Pro Trial" plan with a daily credit window, and the
+// A Qoder "Pro Trial" fixture has a daily credit window, and the
 // allowance is reported by the channel's quota read. Before these cases the row
 // was blank because the channel was not in any of the renderer's branches: 等级
 // fell through to a generic badge, 配额 read the generic usage columns (which are
@@ -700,9 +624,9 @@ function qoderTrialAccount(overrides = {}) {
   return {
     account_type: 'qoder',
     enabled: true,
-    name: 'zhangdailin1996@gmail.com',
-    email: 'zhangdailin1996@gmail.com',
-    qoder_user_id: '01a09c4c-e8d5-7bf6-a73f-d89a2b21d915',
+    name: 'trial-user@example.com',
+    email: 'trial-user@example.com',
+    qoder_user_id: '00000000-0000-4000-8000-000000000001',
     qoder_access_token: 'eyJhbGciOi.access.token',
     has_credential: true,
     quota_supported: true,
@@ -731,11 +655,13 @@ test('a Qoder trial account renders 等级, 配额 and 状态 instead of blank c
   assert.equal(quota.remaining, 300, 'the remaining allowance must be read from the quota fields');
   assert.equal(quota.limit, 300);
   const quotaMarkup = context.buildQuotaMarkup(account);
-  assert.match(quotaMarkup, /300/, `quota markup was ${quotaMarkup}`);
+  assert.equal(quota.used, 0);
+  assert.equal(quota.pctRemaining, 100);
+  assert.equal(strip(quotaMarkup), '300 / 300 (剩余)');
 
   // 状态 must be a real label, not the fallback.
   const badge = context.statusBadge(account);
-  assert.notEqual(badge.text, '未知', 'an enabled Qoder account must have a known status');
+  assert.equal(badge.text, '正常');
 });
 
 test('a Qoder account with no quota snapshot says so instead of showing zero', () => {
@@ -764,15 +690,22 @@ test('an exhausted Qoder account shows the reset and the upgrade link, not an er
 
   // 402 is a quota state: the row must stay readable and say what to do.
   const badge = context.statusBadge(account);
-  assert.notEqual(badge.text, '未知');
+  assert.equal(badge.text, '额度不足');
   const quotaMarkup = context.buildQuotaMarkup(account);
-  assert.match(quotaMarkup, /0/, `quota markup was ${quotaMarkup}`);
+  assert.equal(strip(quotaMarkup), '0 / 300 (剩余)');
+  const quota = context.getQuotaStats(account);
+  assert.equal(quota.remaining, 0);
+  assert.equal(quota.limit, 300);
+  assert.equal(quota.used, 300);
+  assert.equal(quota.pctRemaining, 0);
+  assert.equal(quota.resetAt, account.quota_reset_at);
+  assert.equal(quota.upgradeUrl, account.quota_upgrade_url);
 });
 
 test('the Qoder identity column leads with the signed-in address', () => {
   const { context } = loadUI();
   const account = qoderTrialAccount();
-  assert.equal(context.accountIdentityPrimary(account), 'zhangdailin1996@gmail.com');
+  assert.equal(context.accountIdentityPrimary(account), 'trial-user@example.com');
   // The device credential is never shown, not even truncated.
   const token = context.formatTokenDisplay(account);
   assert.doesNotMatch(token, /eyJhbGciOi/);
@@ -790,11 +723,18 @@ test('Grok identity shows the email together with the login method', () => {
 });
 
 test('the Qoder quota tooltip carries the plan, the reset and the upgrade link', () => {
-  const source = fs.readFileSync(path.join(__dirname, 'static/js/accounts.js'), 'utf8');
-  // The cell's provenance must be reachable without hovering the API.
-  assert.match(source, /口径: 当前窗口剩余 \/ 窗口额度/);
-  assert.match(source, /该账号额度已用尽，窗口重置后自动恢复/);
-  assert.match(source, /升级: \$\{quota\.upgradeUrl\}/);
+  const { context, node } = loadUI();
+  const account = qoderTrialAccount({ id: 901, status_code: '402', quota_remaining: 0, quota_used: 300, quota_exhausted: true });
+  vm.runInContext(`accounts = [${JSON.stringify(account)}]; currentPlatform = 'qoder'; renderAccounts();`, context);
+  const row = node('accountsList').querySelectorAll('tbody tr')[0];
+  const cell = row.children.find((candidate) => candidate.className === 'col-quota');
+  assert.equal(strip(cell.innerHTML), '0 / 300 (剩余)');
+  assert.equal(cell.title, [
+    '计划: Pro Trial', '单位: credits', '口径: 当前窗口剩余 / 窗口额度',
+    '该账号额度已用尽，窗口重置后自动恢复',
+    `重置: ${new Date(account.quota_reset_at).toLocaleString()}`,
+    `升级: ${account.quota_upgrade_url}`,
+  ].join(' · '));
 });
 
 test('an exhausted Qoder quota is reported as a quota state, not as a fault', () => {
@@ -810,18 +750,16 @@ test('an exhausted Qoder quota is reported as a quota state, not as a fault', ()
   assert.equal(context.isSidebarAccountAbnormal({ ...exhausted, has_credential: true, status_code: '' }), false);
 });
 
-
-// Renders the three allowance columns for the exact payload the live server
-// returned for the two real Qoder accounts. This is a regression fixture, not a
-// synthetic case: it is what the operator saw as blank cells.
-test('the live Qoder account payloads render 等级 / 配额 / 状态', () => {
+// Anonymized regression fixtures retain the server payload shape and quota
+// values without committing an operator's account address or identifier.
+test('anonymized Qoder payloads render exact 等级 / 配额 / 状态', () => {
   const fixtures = [
     {
-      id: 184,
+      id: 901,
       account_type: 'qoder',
       enabled: true,
-      email: 'zhangdailin1996@gmail.com',
-      qoder_user_id: '01a09c4c-e8d5-7bf6-a73f-d89a2b21d915',
+      email: 'trial-user@example.com',
+      qoder_user_id: '00000000-0000-4000-8000-000000000001',
       qoder_access_token: 'access-token-placeholder',
       has_credential: true,
       usage_limit: 300,
@@ -835,14 +773,14 @@ test('the live Qoder account payloads render 等级 / 配额 / 状态', () => {
       quota_exhausted: false,
       quota_upgrade_url: 'https://qoder.com/pricing?client=qoder',
       quota_reset_at: '2026-09-14T19:47:13Z',
-      expect: { tier: /Pro Trial/, quota: /300/, status: '正常' },
+      expect: { tier: 'Pro Trial', quota: '300 / 300 (剩余)', remaining: 300, limit: 300, used: 0, pctRemaining: 100, status: '正常' },
     },
     {
-      id: 185,
+      id: 902,
       account_type: 'qoder',
       enabled: true,
-      email: 'sheldon@uq.edu.rs',
-      qoder_user_id: '2d24b061-2fd4-4fbd-8859-fcb05ed1c029',
+      email: 'free-user@example.net',
+      qoder_user_id: '00000000-0000-4000-8000-000000000002',
       qoder_access_token: 'access-token-placeholder',
       has_credential: true,
       status_code: '402',
@@ -857,7 +795,7 @@ test('the live Qoder account payloads render 等级 / 配额 / 状态', () => {
       quota_exhausted: true,
       quota_upgrade_url: 'https://qoder.com/pricing?client=qoder',
       quota_reset_at: '2026-09-14T02:39:48Z',
-      expect: { tier: /Free/, quota: /0/, status: '额度不足' },
+      expect: { tier: 'Free', quota: '0 / 0 (剩余)', remaining: 0, limit: 0, used: 0, pctRemaining: 0, status: '额度不足' },
     },
   ];
 
@@ -868,9 +806,13 @@ test('the live Qoder account payloads render 等级 / 配额 / 状态', () => {
     const quota = context.buildQuotaMarkup(account);
     const status = context.statusBadge(account);
 
-    assert.match(tier, expect.tier, `id ${account.id}: 等级 was ${tier}`);
+    assert.equal(strip(tier), expect.tier, `id ${account.id}: 等级`);
     assert.doesNotMatch(tier, />-</, `id ${account.id}: 等级 fell through to the empty placeholder`);
-    assert.match(quota, expect.quota, `id ${account.id}: 配额 was ${quota}`);
+    assert.equal(strip(quota), expect.quota, `id ${account.id}: 配额`);
+    const stats = context.getQuotaStats(account);
+    for (const field of ['remaining', 'limit', 'used', 'pctRemaining']) {
+      assert.equal(stats[field], expect[field], `id ${account.id}: ${field}`);
+    }
     assert.doesNotMatch(quota, /未知/, `id ${account.id}: 配额 claimed to be unknown while a snapshot existed`);
     assert.equal(status.text, expect.status, `id ${account.id}: 状态 was ${status.text}`);
   }

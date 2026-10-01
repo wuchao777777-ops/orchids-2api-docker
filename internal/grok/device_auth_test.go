@@ -10,19 +10,14 @@ import (
 	"time"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestDeviceAuthenticatorStartAndExchange(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			t.Fatal(err)
-		}
-		if r.Header.Get("x-grok-client-surface") != "ui" {
-			t.Fatalf("surface=%q", r.Header.Get("x-grok-client-surface"))
-		}
-		if r.Header.Get("x-grok-client-version") != "test-version" {
-			t.Fatalf("version=%q", r.Header.Get("x-grok-client-version"))
-		}
+		testutil.NoError(t, r.ParseForm())
+		testutil.Equal(t, r.Header.Get("x-grok-client-surface"), "ui")
+		testutil.Equal(t, r.Header.Get("x-grok-client-version"), "test-version")
 		switch r.URL.Path {
 		case "/device":
 			if r.Form.Get("client_id") != "test-client" || r.Form.Get("referrer") != "grok-build" || r.Form.Get("scope") != grokDeviceAuthorizationScope {
@@ -73,9 +68,7 @@ func TestDeviceAuthenticatorPendingAndSanitizedError(t *testing.T) {
 	if slowDown, pending := IsDeviceAuthorizationPending(err); !pending || slowDown {
 		t.Fatalf("error=%v pending=%t slowDown=%t", err, pending, slowDown)
 	}
-	if strings.Contains(err.Error(), "very-secret-token") || strings.Contains(err.Error(), "device-secret") {
-		t.Fatalf("sensitive content leaked: %v", err)
-	}
+	testutil.MustNotContainAny(t, err.Error(), "very-secret-token", "device-secret")
 }
 
 func TestParseGrokDeviceOAuthErrorSlowDown(t *testing.T) {

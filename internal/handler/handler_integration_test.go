@@ -12,6 +12,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -76,19 +77,11 @@ func TestHandleMessages_WorkdirQuestionReachesUpstream(t *testing.T) {
 			req.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹`)
 			h.HandleMessages(rec, req)
 
-			if rec.Code != 200 {
-				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-			}
-			if len(client.requests) != 1 {
-				t.Fatalf("upstream calls = %d, want 1: the question must not be short-circuited locally", len(client.requests))
-			}
+			testutil.Equal(t, rec.Code, 200)
+			testutil.Equal(t, len(client.requests), 1)
 			out := rec.Body.String()
-			if strings.Contains(out, "当前工作目录未在本次请求中提供") {
-				t.Fatalf("gateway still answered the workdir question locally: %s", out)
-			}
-			if !strings.Contains(out, "upstream answer") {
-				t.Fatalf("expected the upstream answer to be relayed, got: %s", out)
-			}
+			testutil.MustNotContain(t, out, "当前工作目录未在本次请求中提供")
+			testutil.MustContain(t, out, "upstream answer")
 		})
 	}
 }
@@ -116,9 +109,7 @@ func TestHandleMessages_ExplicitConversationIDForwardsAcrossTurns(t *testing.T) 
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 		h.HandleMessages(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("conversation_id=%q: status=%d body=%s", id, rec.Code, rec.Body.String())
-		}
+		testutil.Equal(t, rec.Code, http.StatusOK)
 		var response struct {
 			Type    string `json:"type"`
 			Content []struct {
@@ -136,9 +127,7 @@ func TestHandleMessages_ExplicitConversationIDForwardsAcrossTurns(t *testing.T) 
 			t.Fatalf("conversation_id=%q: upstream request did not forward the explicit id", id)
 		}
 	}
-	if len(up.capturedReqs) != 2 {
-		t.Fatalf("upstream calls=%d, want 2", len(up.capturedReqs))
-	}
+	testutil.Equal(t, len(up.capturedReqs), 2)
 }
 
 func TestHandleMessages_WorkBuddy_StreamAndJSON(t *testing.T) {
@@ -165,12 +154,8 @@ func TestHandleMessages_WorkBuddy_StreamAndJSON(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(false)))
 		h.HandleMessages(rec, req)
-		if rec.Code != 200 {
-			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-		}
-		if !strings.Contains(rec.Body.String(), "workbuddy-hi") {
-			t.Fatalf("expected upstream text in response")
-		}
+		testutil.Equal(t, rec.Code, 200)
+		testutil.MustContain(t, rec.Body.String(), "workbuddy-hi")
 	}
 
 	{
@@ -178,9 +163,7 @@ func TestHandleMessages_WorkBuddy_StreamAndJSON(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(true)))
 		h.HandleMessages(rec, req)
 		out := rec.Body.String()
-		if !strings.Contains(out, "workbuddy-hi") {
-			t.Fatalf("expected text delta in SSE")
-		}
+		testutil.MustContain(t, out, "workbuddy-hi")
 	}
 }
 
@@ -201,9 +184,7 @@ func TestHandleMessages_ForwardsAndEnforcesToolControls(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 		h.HandleMessages(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-		}
+		testutil.Equal(t, rec.Code, http.StatusOK)
 		return up.capturedReqs[len(up.capturedReqs)-1]
 	}
 
@@ -254,19 +235,11 @@ func TestHandleMessages_WorkBuddy_PreservesContentByDefault(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if len(up.capturedReqs) != 1 {
-		t.Fatalf("capturedReqs len=%d want 1", len(up.capturedReqs))
-	}
+	testutil.Equal(t, rec.Code, 200)
+	testutil.Equal(t, len(up.capturedReqs), 1)
 	got := up.capturedReqs[0].Messages[0].ExtractText()
-	if !strings.Contains(got, "<system-reminder>") || !strings.Contains(got, "帮我添加 我是大帅比") {
-		t.Fatalf("fidelity: user content rewritten = %q", got)
-	}
-	if len(up.capturedReqs[0].System) != 3 {
-		t.Fatalf("system len=%d want 3 (all forwarded verbatim)", len(up.capturedReqs[0].System))
-	}
+	testutil.MustContainAll(t, got, "<system-reminder>", "帮我添加 我是大帅比")
+	testutil.Equal(t, len(up.capturedReqs[0].System), 3)
 	for _, want := range []string{"cc_entrypoint=cli", "Claude Code", "gitStatus:", "cc_version=2.1.85.351"} {
 		found := false
 		for _, item := range up.capturedReqs[0].System {
@@ -313,32 +286,20 @@ func TestHandleMessages_WorkBuddy_OpenAIToolCall_StreamAndJSON(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(false)))
 		h.HandleMessages(rec, req)
-		if rec.Code != 200 {
-			t.Fatalf("non-stream expected 200, got %d: %s", rec.Code, rec.Body.String())
-		}
+		testutil.Equal(t, rec.Code, 200)
 		out := rec.Body.String()
-		if !strings.Contains(out, `"type":"tool_use"`) || !strings.Contains(out, `"name":"Write"`) {
-			t.Fatalf("expected Write tool_use in JSON, got: %s", out)
-		}
-		if !strings.Contains(out, `"stop_reason":"tool_use"`) {
-			t.Fatalf("expected stop_reason tool_use in JSON, got: %s", out)
-		}
+		testutil.MustContainAll(t, out, `"type":"tool_use"`, `"name":"Write"`)
+		testutil.MustContain(t, out, `"stop_reason":"tool_use"`)
 	}
 
 	{
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(true)))
 		h.HandleMessages(rec, req)
-		if rec.Code != 200 {
-			t.Fatalf("stream expected 200, got %d: %s", rec.Code, rec.Body.String())
-		}
+		testutil.Equal(t, rec.Code, 200)
 		out := rec.Body.String()
-		if !strings.Contains(out, `"type":"tool_use"`) || !strings.Contains(out, `"name":"Write"`) {
-			t.Fatalf("expected Write tool_use in SSE, got: %s", out)
-		}
-		if !strings.Contains(out, `alpha beta`) {
-			t.Fatalf("expected write payload in SSE, got: %s", out)
-		}
+		testutil.MustContainAll(t, out, `"type":"tool_use"`, `"name":"Write"`)
+		testutil.MustContain(t, out, `alpha beta`)
 	}
 }
 
@@ -366,31 +327,19 @@ func TestHandleMessages_SuggestionMode_LocalResponse(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(false)))
 		h.HandleMessages(rec, req)
-		if rec.Code != 200 {
-			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-		}
-		if !strings.Contains(rec.Body.String(), "\"type\":\"message\"") {
-			t.Fatalf("expected message json, got: %s", rec.Body.String())
-		}
-		if !strings.Contains(rec.Body.String(), "可以") {
-			t.Fatalf("expected local suggestion in response, got: %s", rec.Body.String())
-		}
+		testutil.Equal(t, rec.Code, 200)
+		testutil.MustContain(t, rec.Body.String(), "\"type\":\"message\"")
+		testutil.MustContain(t, rec.Body.String(), "可以")
 	}
 
 	{
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(true)))
 		h.HandleMessages(rec, req)
-		if rec.Code != 200 {
-			t.Fatalf("expected 200, got %d", rec.Code)
-		}
+		testutil.Equal(t, rec.Code, 200)
 		out := rec.Body.String()
-		if !strings.Contains(out, "event: message_start") || !strings.Contains(out, "event: message_stop") {
-			t.Fatalf("expected sse message start/stop, got: %s", out)
-		}
-		if !strings.Contains(out, "可以") {
-			t.Fatalf("expected local suggestion in sse output, got: %s", out)
-		}
+		testutil.MustContainAll(t, out, "event: message_start", "event: message_stop")
+		testutil.MustContain(t, out, "可以")
 	}
 }
 
@@ -419,15 +368,9 @@ func TestHandleMessages_TitleGeneration_LocalResponse(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, 200)
 
 	out := rec.Body.String()
-	if !strings.Contains(out, "event: message_start") || !strings.Contains(out, "event: message_stop") {
-		t.Fatalf("expected local SSE message start/stop, got: %s", out)
-	}
-	if !strings.Contains(out, "\"text\":\"{\\\"title\\\":\\\"添加科学计数法\\\"}\"") {
-		t.Fatalf("expected generated title JSON in local response, got: %s", out)
-	}
+	testutil.MustContainAll(t, out, "event: message_start", "event: message_stop")
+	testutil.MustContain(t, out, "\"text\":\"{\\\"title\\\":\\\"添加科学计数法\\\"}\"")
 }

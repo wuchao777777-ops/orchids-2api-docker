@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestProxyFunc_NoSchemeDefaultsToHTTP(t *testing.T) {
@@ -18,12 +19,8 @@ func TestProxyFunc_NoSchemeDefaultsToHTTP(t *testing.T) {
 	if proxyURL == nil {
 		t.Fatal("expected proxy url")
 	}
-	if proxyURL.Scheme != "http" {
-		t.Fatalf("expected http scheme, got %q", proxyURL.Scheme)
-	}
-	if proxyURL.Host != "proxy.local:3128" {
-		t.Fatalf("unexpected proxy host: %s", proxyURL.Host)
-	}
+	testutil.Equal(t, proxyURL.Scheme, "http")
+	testutil.Equal(t, proxyURL.Host, "proxy.local:3128")
 }
 
 func TestProxyFunc_WSSUsesHTTPSProxy(t *testing.T) {
@@ -107,9 +104,7 @@ func TestProxyFuncFromConfig_SeparateCredentialsApplyToURL(t *testing.T) {
 
 func TestProxyCacheKeyDoesNotExposeURLCredentials(t *testing.T) {
 	key := GenerateProxyKeyFromConfig(&config.Config{ProxyURL: "http://alice:very-secret@proxy.local:3128"})
-	if strings.Contains(key, "very-secret") || strings.Contains(key, "alice") {
-		t.Fatalf("proxy credentials leaked into cache key")
-	}
+	testutil.MustNotContainAny(t, key, "very-secret", "alice")
 }
 
 func TestParseProxyURL_Socks5(t *testing.T) {
@@ -120,10 +115,6 @@ func TestParseProxyURL_Socks5(t *testing.T) {
 	if proxyURL == nil {
 		t.Fatal("expected proxy url")
 	}
-	if proxyURL.Scheme != "socks5" {
-		t.Fatalf("Scheme=%q want socks5", proxyURL.Scheme)
-	}
-	if proxyURL.Host != "127.0.0.1:1080" {
-		t.Fatalf("Host=%q want 127.0.0.1:1080", proxyURL.Host)
-	}
+	testutil.Equal(t, proxyURL.Scheme, "socks5")
+	testutil.Equal(t, proxyURL.Host, "127.0.0.1:1080")
 }

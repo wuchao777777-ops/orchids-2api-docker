@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"path/filepath"
 	"testing"
 )
@@ -10,18 +11,10 @@ func TestConfigDefaults(t *testing.T) {
 	var cfg Config
 	ApplyDefaults(&cfg)
 
-	if got := cfg.ChatDefaultStream(); got != true {
-		t.Fatalf("ChatDefaultStream()=%v want=true", got)
-	}
-	if cfg.ResponseStoreTTL != 720 {
-		t.Fatalf("ResponseStoreTTL=%d want=720", cfg.ResponseStoreTTL)
-	}
-	if cfg.MediaDir != "data"+string(filepath.Separator)+"tmp" {
-		t.Fatalf("MediaDir=%q", cfg.MediaDir)
-	}
-	if got := cfg.GrokCLIClientVersionOrDefault(); got != "1.0.40" {
-		t.Fatalf("GrokCLIClientVersionOrDefault()=%q", got)
-	}
+	testutil.Equal(t, cfg.ChatDefaultStream(), true)
+	testutil.Equal(t, cfg.ResponseStoreTTL, 720)
+	testutil.Equal(t, cfg.MediaDir, "data"+string(filepath.Separator)+"tmp")
+	testutil.Equal(t, cfg.GrokCLIClientVersionOrDefault(), "1.0.40")
 	if got := cfg.GrokCLIUserAgentOrDefault(); got != "grok-shell/1.0.40 (linux; x86_64)" {
 		t.Fatalf("GrokCLIUserAgentOrDefault()=%q", got)
 	}
@@ -49,12 +42,8 @@ func TestApplyDefaultsGeneratesRandomPassword(t *testing.T) {
 	var cfg Config
 	ApplyDefaults(&cfg)
 
-	if cfg.AdminPass == "" {
-		t.Fatal("AdminPass should not be empty after ApplyDefaults")
-	}
-	if cfg.AdminPass == "admin123" {
-		t.Fatal("AdminPass should not be the old default 'admin123'")
-	}
+	testutil.NotEqual(t, cfg.AdminPass, "")
+	testutil.NotEqual(t, cfg.AdminPass, "admin123")
 	if len(cfg.AdminPass) < 16 {
 		t.Fatalf("AdminPass too short: got %d chars, want at least 16", len(cfg.AdminPass))
 	}
@@ -62,9 +51,7 @@ func TestApplyDefaultsGeneratesRandomPassword(t *testing.T) {
 	// Verify each call generates a different password.
 	var cfg2 Config
 	ApplyDefaults(&cfg2)
-	if cfg.AdminPass == cfg2.AdminPass {
-		t.Fatal("Two calls to ApplyDefaults should generate different passwords")
-	}
+	testutil.NotEqual(t, cfg.AdminPass, cfg2.AdminPass)
 }
 
 func TestApplyHardcodedOverridesValues(t *testing.T) {
@@ -74,15 +61,9 @@ func TestApplyHardcodedOverridesValues(t *testing.T) {
 	}
 	ApplyHardcoded(&cfg)
 
-	if cfg.MaxRetries != 20 {
-		t.Fatalf("MaxRetries=%d want bounded maximum 20", cfg.MaxRetries)
-	}
-	if cfg.RequestTimeout != 999 {
-		t.Fatalf("RequestTimeout=%d want configured 999", cfg.RequestTimeout)
-	}
-	if cfg.ConcurrencyTimeout != cfg.RequestTimeout {
-		t.Fatalf("ConcurrencyTimeout=%d want RequestTimeout=%d", cfg.ConcurrencyTimeout, cfg.RequestTimeout)
-	}
+	testutil.Equal(t, cfg.MaxRetries, 20)
+	testutil.Equal(t, cfg.RequestTimeout, 999)
+	testutil.Equal(t, cfg.ConcurrencyTimeout, cfg.RequestTimeout)
 }
 
 func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
@@ -97,21 +78,11 @@ func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 	}
 	ApplyDefaults(&cfg)
 
-	if cfg.Port != "8080" {
-		t.Fatalf("Port=%q want=8080", cfg.Port)
-	}
-	if cfg.AdminUser != "myuser" {
-		t.Fatalf("AdminUser=%q want=myuser", cfg.AdminUser)
-	}
-	if cfg.AdminPass != "mypass" {
-		t.Fatalf("AdminPass=%q want=mypass", cfg.AdminPass)
-	}
-	if cfg.AdminPath != "/myadmin" {
-		t.Fatalf("AdminPath=%q want=/myadmin", cfg.AdminPath)
-	}
-	if cfg.RedisAddr != "redis:6380" {
-		t.Fatalf("RedisAddr=%q want=redis:6380", cfg.RedisAddr)
-	}
+	testutil.Equal(t, cfg.Port, "8080")
+	testutil.Equal(t, cfg.AdminUser, "myuser")
+	testutil.Equal(t, cfg.AdminPass, "mypass")
+	testutil.Equal(t, cfg.AdminPath, "/myadmin")
+	testutil.Equal(t, cfg.RedisAddr, "redis:6380")
 	if cfg.DeploymentInstance != "replica-a" || cfg.MediaDir != "/srv/orchids-media" {
 		t.Fatalf("deployment instance and media directory were not preserved: %+v", cfg)
 	}
@@ -121,9 +92,7 @@ func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 // Unknown JSON config keys are ignored, including this removed switch.
 func TestLegacyInferenceAuthOptOutIsIgnored(t *testing.T) {
 	var cfg Config
-	if err := json.Unmarshal([]byte(`{"inference_auth_enabled":false}`), &cfg); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(`{"inference_auth_enabled":false}`), &cfg))
 	ApplyDefaults(&cfg)
 	if cfg.AnonymousAllowIPs != nil {
 		t.Fatal("legacy opt-out must not introduce an anonymous allowlist")

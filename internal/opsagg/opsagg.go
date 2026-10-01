@@ -425,26 +425,6 @@ func channelFromBucketKey(prefix, key string) (string, bool) {
 	return channel, true
 }
 
-func (a *Aggregator) bucket(ctx context.Context, minute time.Time, channel string) (*Bucket, error) {
-	key := a.key(minute, channel)
-	fields, err := a.client.HGetAll(ctx, key).Result()
-	if err != nil {
-		return nil, err
-	}
-	if len(fields) == 0 {
-		return nil, nil
-	}
-	return bucketFromFields(minute, channel, fields), nil
-}
-
-// SamplesFor reads the latency samples of one channel, so a merged view can
-// combine them. It returns the raw samples rather than a percentile: percentiles
-// are not additive, so merging has to happen before the percentile is computed.
-func (a *Aggregator) SamplesFor(ctx context.Context, channel string, buckets []Bucket) ([]int64, []int64) {
-	durations, ttfts, _ := a.SamplesForChecked(ctx, channel, buckets)
-	return durations, ttfts
-}
-
 // SamplesForChecked batches bounded list reads and preserves read failures;
 // an unavailable Redis is not a population with zero latency samples.
 func (a *Aggregator) SamplesForChecked(ctx context.Context, channel string, buckets []Bucket) (durations []int64, ttfts []int64, err error) {
@@ -539,13 +519,7 @@ type SummaryInput struct {
 	SamplesProvided bool
 }
 
-// Summarize folds buckets into one summary, computing percentiles from the
-// per-minute sample lists.
-func (a *Aggregator) Summarize(ctx context.Context, channel string, buckets []Bucket) Summary {
-	return a.SummarizeWith(ctx, SummaryInput{Channel: channel, Buckets: buckets})
-}
-
-// SummarizeWith is Summarize with the window and sample lists made explicit.
+// SummarizeWith folds buckets into one summary with an explicit window and samples.
 func (a *Aggregator) SummarizeWith(ctx context.Context, input SummaryInput) Summary {
 	summary := Summary{Channel: normalizeChannel(input.Channel)}
 	var durations, ttfts, failedDur, failedTTFT, attemptDur, attemptTTFT []int64
@@ -669,13 +643,8 @@ type ModelStats struct {
 	Samples           int64   `json:"samples"`
 }
 
-// ModelStatsFromBuckets extracts the per-model counters a channel's buckets
-// carry, so the matrix can show per-model quality without extra keys.
-func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, buckets []Bucket) []ModelStats {
-	stats, _ := a.ModelStatsFromBucketsChecked(ctx, channel, buckets)
-	return stats
-}
-
+// ModelStatsFromBucketsChecked extracts per-model counters and latency samples,
+// preserving read failures so unavailable statistics cannot appear as empty.
 func (a *Aggregator) ModelStatsFromBucketsChecked(ctx context.Context, channel string, buckets []Bucket) ([]ModelStats, error) {
 	if !a.Enabled() || len(buckets) == 0 {
 		return nil, nil

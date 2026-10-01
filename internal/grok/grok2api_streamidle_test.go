@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"orchids-api/internal/testutil"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -75,9 +76,7 @@ func TestBuildSemanticIdleResetsOnGeneratedDelta(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(180 * time.Millisecond)
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, writer.Close())
 
 	select {
 	case err := <-readDone:
@@ -104,9 +103,7 @@ func TestBuildSemanticIdleResetsOnGeneratedOutputItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(180 * time.Millisecond)
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, writer.Close())
 
 	select {
 	case err := <-readDone:
@@ -127,9 +124,7 @@ func TestBuildSSEActivityDetectorRecognizesSplitGeneratedEvents(t *testing.T) {
 			for index := range event {
 				active = detector.Observe([]byte(event[index:index+1])) || active
 			}
-			if !active {
-				t.Fatal("split generated event was not recognized")
-			}
+			testutil.True(t, active, "split generated event was not recognized")
 		})
 	}
 }
@@ -139,9 +134,7 @@ func TestBuildSSEActivityDetectorDoesNotRescanSplitLinePrefix(t *testing.T) {
 	line := strings.Repeat("x", 256*1024)
 	for index := range line {
 		detector.Observe([]byte(line[index : index+1]))
-		if detector.scanOffset != len(detector.pending) {
-			t.Fatalf("scan offset=%d pending=%d", detector.scanOffset, len(detector.pending))
-		}
+		testutil.Equal(t, detector.scanOffset, len(detector.pending))
 	}
 	if detector.Observe([]byte("\n\n")) {
 		t.Fatal("unknown long line must not count as activity")
@@ -201,9 +194,7 @@ func TestBuildSemanticIdlePausesWhileNotReading(t *testing.T) {
 	if err != nil || n != len(chunk) {
 		t.Fatalf("first read n=%d err=%v", n, err)
 	}
-	if err := <-writeErr; err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, <-writeErr)
 	time.Sleep(150 * time.Millisecond)
 	if body.(*semanticIdleReadCloser).TimedOut() {
 		t.Fatal("idle timer fired while nobody was reading upstream")
@@ -217,9 +208,7 @@ func TestBuildSemanticIdlePausesWhileNotReading(t *testing.T) {
 	if err != nil || n != len(chunk) {
 		t.Fatalf("resume read n=%d err=%v", n, err)
 	}
-	if err := <-writeErr; err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, <-writeErr)
 	if _, err := io.Copy(io.Discard, body); err != nil {
 		t.Fatal(err)
 	}
@@ -274,12 +263,8 @@ func TestBuildSemanticIdleIgnoresStaleTimerCallbackAfterActivityReset(t *testing
 	body.readers = 0
 	body.stopClockLocked()
 	body.mu.Unlock()
-	if err := body.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if got := inner.closes.Load(); got != 1 {
-		t.Fatalf("inner Close calls = %d, want 1", got)
-	}
+	testutil.NoError(t, body.Close())
+	testutil.Equal(t, inner.closes.Load(), 1)
 }
 
 func TestBuildSemanticIdleStopsAfterEOFOrClose(t *testing.T) {
@@ -293,30 +278,20 @@ func TestBuildSemanticIdleStopsAfterEOFOrClose(t *testing.T) {
 		if body.TimedOut() {
 			t.Fatal("timer fired after EOF")
 		}
-		if err := body.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if got := inner.closes.Load(); got != 1 {
-			t.Fatalf("inner Close calls = %d, want 1", got)
-		}
+		testutil.NoError(t, body.Close())
+		testutil.Equal(t, inner.closes.Load(), 1)
 	})
 
 	t.Run("Close", func(t *testing.T) {
 		inner := &grok2apiCountingReadCloser{Reader: strings.NewReader("")}
 		body := wrapBuildSemanticIdle(inner, 20*time.Millisecond).(*semanticIdleReadCloser)
-		if err := body.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err := body.Close(); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, body.Close())
+		testutil.NoError(t, body.Close())
 		time.Sleep(40 * time.Millisecond)
 		if body.TimedOut() {
 			t.Fatal("timer fired after Close")
 		}
-		if got := inner.closes.Load(); got != 1 {
-			t.Fatalf("inner Close calls = %d, want 1", got)
-		}
+		testutil.Equal(t, inner.closes.Load(), 1)
 	})
 }
 

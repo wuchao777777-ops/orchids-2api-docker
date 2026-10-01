@@ -13,14 +13,11 @@ import (
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestResolveConversationModelUsesAccountBuildCatalog(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 	if err := s.CreateAccount(context.Background(), &store.Account{
 		Name: "build", AccountType: "grok", GrokProvider: ProviderBuild, CredentialType: "oauth", Enabled: true,
 		OAuthAccessToken: "token", GrokModels: []string{"grok-future-account-model"}, GrokModelsSyncedAt: time.Now(),
@@ -75,12 +72,8 @@ func TestResponsesStreamAggregatesFragmentedToolArguments(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writeResponsesStreamFromChatReaderRequestWithHook(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(raw), nil)
 	body := recorder.Body.String()
-	if count := strings.Count(body, "event: response.output_item.added"); count != 1 {
-		t.Fatalf("function item added count=%d body=%s", count, body)
-	}
-	if !strings.Contains(body, `"arguments":"{\"x\":1}"`) {
-		t.Fatalf("fragmented arguments were not aggregated: %s", body)
-	}
+	testutil.Equal(t, strings.Count(body, "event: response.output_item.added"), 1)
+	testutil.MustContain(t, body, `"arguments":"{\"x\":1}"`)
 }
 
 type observedStreamWriter struct {
@@ -152,15 +145,9 @@ func TestReasoningReplayIsModelAndSessionIsolated(t *testing.T) {
 		return interfaceString(item["encrypted_content"])
 	}
 	h.storeReasoningReplay("grok-4.6", "session-a", validTestReplayCipher())
-	if got := replayCipher("grok-4.6", "session-a"); got != validTestReplayCipher() {
-		t.Fatalf("replay=%q want cipher-a", got)
-	}
-	if got := replayCipher("grok-4.5", "session-a"); got != "" {
-		t.Fatalf("cross-model replay leak: %q", got)
-	}
-	if got := replayCipher("grok-4.6", "session-b"); got != "" {
-		t.Fatalf("cross-session replay leak: %q", got)
-	}
+	testutil.Equal(t, replayCipher("grok-4.6", "session-a"), validTestReplayCipher())
+	testutil.Equal(t, replayCipher("grok-4.5", "session-a"), "")
+	testutil.Equal(t, replayCipher("grok-4.6", "session-b"), "")
 
 	payload := map[string]interface{}{"input": []interface{}{map[string]interface{}{"role": "user", "content": "continue"}}}
 	h.applyNativeReasoningReplay("grok-4.6", "session-a", payload)
@@ -204,9 +191,7 @@ func TestNativeReasoningReplayConvertsStringInput(t *testing.T) {
 	if !ok || len(input) != 2 {
 		t.Fatalf("input=%#v", payload["input"])
 	}
-	if input[0].(map[string]interface{})["encrypted_content"] != validTestReplayCipher() {
-		t.Fatalf("replay=%#v", input[0])
-	}
+	testutil.EqualAny(t, input[0].(map[string]interface{})["encrypted_content"], validTestReplayCipher())
 }
 
 func TestPrepareGrokSessionSeparatesTenantsAndSoftReplay(t *testing.T) {
@@ -221,7 +206,5 @@ func TestPrepareGrokSessionSeparatesTenantsAndSoftReplay(t *testing.T) {
 		t.Fatalf("soft session=%#v", soft)
 	}
 	otherModel := prepareGrokSession(reqA, "grok-4.5", "", []ChatMessage{{Role: "user", Content: "hello"}})
-	if otherModel.Key == a.Key {
-		t.Fatal("session identity must be model-isolated")
-	}
+	testutil.NotEqual(t, otherModel.Key, a.Key)
 }

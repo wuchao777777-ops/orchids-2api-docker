@@ -15,6 +15,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -105,9 +106,7 @@ func TestToolResultFollowupWorkdirAfterToolTurn_ReachesUpstream(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	if calls := client.snapshotCalls(); len(calls) != 1 {
 		t.Fatalf("upstream calls = %d, want 1: the question must be answered upstream", len(calls))
@@ -147,14 +146,10 @@ func TestToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *test
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 upstream call, got %d", len(calls))
-	}
+	testutil.Equal(t, len(calls), 1)
 	if calls[0].NoTools {
 		t.Fatalf("expected workbuddy follow-up after sandbox path miss to keep tools enabled")
 	}
@@ -186,33 +181,23 @@ func TestOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testing.T) 
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 upstream call, got %d", len(calls))
-	}
+	testutil.Equal(t, len(calls), 1)
 	if calls[0].NoTools {
 		t.Fatalf("expected openai workbuddy tool follow-up to keep tools enabled")
 	}
 
-	if len(calls[0].Messages) != 3 {
-		t.Fatalf("expected 3 normalized messages, got %d", len(calls[0].Messages))
-	}
+	testutil.Equal(t, len(calls[0].Messages), 3)
 
 	assistantMsg := calls[0].Messages[1]
-	if assistantMsg.Role != "assistant" {
-		t.Fatalf("assistant role = %q, want assistant", assistantMsg.Role)
-	}
+	testutil.Equal(t, assistantMsg.Role, "assistant")
 	if assistantMsg.Content.IsString() {
 		t.Fatal("expected assistant tool call message to normalize into content blocks")
 	}
 	assistantBlocks := assistantMsg.Content.GetBlocks()
-	if len(assistantBlocks) != 1 {
-		t.Fatalf("assistant blocks len = %d, want 1", len(assistantBlocks))
-	}
+	testutil.Equal(t, len(assistantBlocks), 1)
 	if assistantBlocks[0].Type != "tool_use" || assistantBlocks[0].Name != "Write" || assistantBlocks[0].ID != "call_write_1" {
 		t.Fatalf("unexpected assistant tool_use block: %#v", assistantBlocks[0])
 	}
@@ -225,16 +210,12 @@ func TestOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testing.T) 
 	}
 
 	toolResultMsg := calls[0].Messages[2]
-	if toolResultMsg.Role != "user" {
-		t.Fatalf("tool result role = %q, want user", toolResultMsg.Role)
-	}
+	testutil.Equal(t, toolResultMsg.Role, "user")
 	if toolResultMsg.Content.IsString() {
 		t.Fatal("expected tool result follow-up to normalize into content blocks")
 	}
 	resultBlocks := toolResultMsg.Content.GetBlocks()
-	if len(resultBlocks) != 1 {
-		t.Fatalf("tool result blocks len = %d, want 1", len(resultBlocks))
-	}
+	testutil.Equal(t, len(resultBlocks), 1)
 	if resultBlocks[0].Type != "tool_result" || resultBlocks[0].ToolUseID != "call_write_1" {
 		t.Fatalf("unexpected tool_result block: %#v", resultBlocks[0])
 	}
@@ -246,15 +227,12 @@ func TestOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testing.T) 
 func TestToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *testing.T) {
 	t.Parallel()
 
-	client := &fakePayloadClient{
-		eventsByOp: [][]upstream.SSEMessage{{
-			{Type: "model", Event: map[string]any{"type": "text-start"}},
-			{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "Let me first understand the project structure and code."}},
-			{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
-		}},
-	}
-	h := newTestHandler(client)
-	body := []byte(`{
+	cases := []struct {
+		name        string
+		body        []byte
+		fullHandler bool
+	}{
+		{name: "bash_directory_result", body: []byte(`{
 		"model":"claude-opus-5",
 		"stream":false,
 		"conversation_id":"workbuddy_followup_local_fallback",
@@ -271,29 +249,45 @@ func TestToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *testi
 			{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}},
 			{"name":"Bash","input_schema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}
 		]
-	}`)
-
-	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}`)},
+		{name: "read_result_with_text", fullHandler: true, body: []byte(`{
+			"model":"claude-3-5-sonnet","conversation_id":"read-followup","stream":false,"system":[],
+			"messages":[
+				{"role":"user","content":"这个项目使用了哪些技术架构"},
+				{"role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"Read","input":{"file_path":"/tmp/project/utils.py"}}]},
+				{"role":"user","content":[
+					{"type":"tool_result","tool_use_id":"tool_1","content":"import json\nimport os\nALERTS_FILE='alerts.json'\ndef load_json(path):\n    return json.load(open(path))"},
+					{"type":"text","text":"请直接回答"}
+				]}
+			]
+		}`)},
 	}
-
-	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected upstream passthrough call, got %d", len(calls))
-	}
-
-	out := rec.Body.String()
-	if !strings.Contains(out, "Let me first understand the project structure and code.") {
-		t.Fatalf("expected upstream text to be preserved, got: %s", out)
-	}
-	for _, unwanted := range []string{"前端", "后端", "脚本层", "当前只拿到目录概览", "基于当前已读取内容"} {
-		if strings.Contains(out, unwanted) {
-			t.Fatalf("did not expect local fallback text %q in %s", unwanted, out)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const answer = "Let me first understand the project structure and code."
+			client := &fakePayloadClient{eventsByOp: [][]upstream.SSEMessage{{
+				{Type: "model", Event: map[string]any{"type": "text-start"}},
+				{Type: "model", Event: map[string]any{"type": "text-delta", "delta": answer}},
+				{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+			}}}
+			h := newTestHandler(client)
+			if tc.fullHandler {
+				h = NewWithLoadBalancer(&config.Config{DebugEnabled: false, RequestTimeout: 10}, nil)
+				h.client = client
+			}
+			rec := httptest.NewRecorder()
+			h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(tc.body)))
+			testutil.Equal(t, rec.Code, http.StatusOK)
+			if calls := client.snapshotCalls(); len(calls) != 1 {
+				t.Fatalf("expected one upstream passthrough call, got %d", len(calls))
+			}
+			out := rec.Body.String()
+			testutil.MustContain(t, out, answer)
+			for _, unwanted := range []string{"Python", "JSON", "前端", "后端", "脚本层", "当前只拿到目录概览", "基于当前已读取内容"} {
+				testutil.MustNotContain(t, out, unwanted)
+			}
+		})
 	}
 }
 
@@ -329,26 +323,14 @@ func TestMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 upstream call, got %d", len(calls))
-	}
-	if len(calls[0].Messages) != 5 {
-		t.Fatalf("messages len=%d want 5", len(calls[0].Messages))
-	}
-	if got := calls[0].Messages[0].ExtractText(); got != "帮我用python写一个计算器" {
-		t.Fatalf("first user text=%q want original create request", got)
-	}
-	if got := calls[0].Messages[3].ExtractText(); got != "完成！计算器已创建在项目目录中。" {
-		t.Fatalf("assistant completion=%q want preserved assistant summary", got)
-	}
-	if got := calls[0].Messages[4].ExtractText(); got != "帮我添加科学计数法" {
-		t.Fatalf("latest user text=%q want edit follow-up", got)
-	}
+	testutil.Equal(t, len(calls), 1)
+	testutil.Equal(t, len(calls[0].Messages), 5)
+	testutil.Equal(t, calls[0].Messages[0].ExtractText(), "帮我用python写一个计算器")
+	testutil.Equal(t, calls[0].Messages[3].ExtractText(), "完成！计算器已创建在项目目录中。")
+	testutil.Equal(t, calls[0].Messages[4].ExtractText(), "帮我添加科学计数法")
 }
 
 func TestWorkBuddyPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
@@ -386,27 +368,15 @@ func TestWorkBuddyPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) 
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 upstream call, got %d", len(calls))
-	}
+	testutil.Equal(t, len(calls), 1)
 
-	if len(calls[0].Messages) != len(reqPayload.Messages) {
-		t.Fatalf("messages len = %d, want %d", len(calls[0].Messages), len(reqPayload.Messages))
-	}
-	if len(calls[0].System) != len(reqPayload.System) {
-		t.Fatalf("system len = %d, want %d", len(calls[0].System), len(reqPayload.System))
-	}
-	if !strings.Contains(calls[0].System[0].Text, "Claude Code") {
-		t.Fatalf("expected the system prompt to be unchanged, got %q", calls[0].System[0].Text)
-	}
-	if !strings.Contains(calls[0].System[1].Text, "cc_entrypoint=claude-code") {
-		t.Fatalf("expected cc_entrypoint to be preserved, got %q", calls[0].System[1].Text)
-	}
+	testutil.Equal(t, len(calls[0].Messages), len(reqPayload.Messages))
+	testutil.Equal(t, len(calls[0].System), len(reqPayload.System))
+	testutil.MustContain(t, calls[0].System[0].Text, "Claude Code")
+	testutil.MustContain(t, calls[0].System[1].Text, "cc_entrypoint=claude-code")
 }
 
 func TestToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
@@ -472,20 +442,12 @@ func TestToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	out := rec.Body.String()
-	if strings.Contains(out, "No output was presented to the user") {
-		t.Fatalf("did not expect generic empty fallback in response, got: %s", out)
-	}
-	if strings.Contains(out, "duplicate mutating tool call was suppressed") {
-		t.Fatalf("did not expect duplicate-tool-result fallback in response, got: %s", out)
-	}
-	if !strings.Contains(out, "tool_new_1") || !strings.Contains(out, `"name":"Write"`) {
-		t.Fatalf("repeat tool call was suppressed: %s", out)
-	}
+	testutil.MustNotContain(t, out, "No output was presented to the user")
+	testutil.MustNotContain(t, out, "duplicate mutating tool call was suppressed")
+	testutil.MustContainAll(t, out, "tool_new_1", `"name":"Write"`)
 
 }
 
@@ -520,14 +482,10 @@ func TestToolResultFollowup_SendsAllCurrentTurnResultsInOneRequest(t *testing.T)
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected one official UserInputs request, got %d", len(calls))
-	}
+	testutil.Equal(t, len(calls), 1)
 
 	countToolResults := func(msgs []prompt.Message) int {
 		total := 0
@@ -541,12 +499,8 @@ func TestToolResultFollowup_SendsAllCurrentTurnResultsInOneRequest(t *testing.T)
 		return total
 	}
 
-	if got := countToolResults(calls[0].Messages); got != 3 {
-		t.Fatalf("tool_results = %d, want %d", got, 3)
-	}
-	if got := strings.TrimSpace(calls[0].Messages[len(calls[0].Messages)-1].ExtractText()); got != "帮我优化一下这个项目" {
-		t.Fatalf("user text = %q, want final user request", got)
-	}
+	testutil.Equal(t, countToolResults(calls[0].Messages), 3)
+	testutil.Equal(t, strings.TrimSpace(calls[0].Messages[len(calls[0].Messages)-1].ExtractText()), "帮我优化一下这个项目")
 }
 
 func TestToolResultFollowup_StreamsSingleBatchedResponse(t *testing.T) {
@@ -596,20 +550,12 @@ func TestToolResultFollowup_StreamsSingleBatchedResponse(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected one batched request, got %d calls", len(calls))
-	}
+	testutil.Equal(t, len(calls), 1)
 
 	out := rec.Body.String()
-	if !strings.Contains(out, "Let me dig into the rest of the codebase first.") {
-		t.Fatalf("expected intermediate text to be replayed, got: %s", out)
-	}
-	if !strings.Contains(out, "monitor_trump.py") {
-		t.Fatalf("expected intermediate tool call to be replayed, got: %s", out)
-	}
+	testutil.MustContain(t, out, "Let me dig into the rest of the codebase first.")
+	testutil.MustContain(t, out, "monitor_trump.py")
 }

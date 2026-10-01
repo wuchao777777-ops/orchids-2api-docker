@@ -11,6 +11,7 @@ import (
 
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/testutil"
 )
 
 func TestConversationKeyForRequestPriority(t *testing.T) {
@@ -92,9 +93,7 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 			if tt.userAgent != "" {
 				r.Header.Set("User-Agent", tt.userAgent)
 			}
-			if got := conversationKeyForRequest(r, tt.req); got != tt.want {
-				t.Fatalf("conversationKeyForRequest() = %q, want %q", got, tt.want)
-			}
+			testutil.Equal(t, conversationKeyForRequest(r, tt.req), tt.want)
 		})
 	}
 }
@@ -103,13 +102,9 @@ func TestExplicitConversationID_AcceptsCamelCaseJSON(t *testing.T) {
 	t.Parallel()
 
 	var payload ClaudeRequest
-	if err := json.Unmarshal([]byte(`{"conversationId":"conv-camel"}`), &payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(`{"conversationId":"conv-camel"}`), &payload))
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/workbuddy/v1/messages", nil)
-	if got := explicitConversationID(req, payload); got != "conv-camel" {
-		t.Fatalf("explicitConversationID() = %q, want conv-camel", got)
-	}
+	testutil.Equal(t, explicitConversationID(req, payload), "conv-camel")
 }
 
 func TestWorkBuddyConversationRequestID_PrefersInboundAggregationHeader(t *testing.T) {
@@ -117,9 +112,7 @@ func TestWorkBuddyConversationRequestID_PrefersInboundAggregationHeader(t *testi
 
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/workbuddy/v1/messages", nil)
 	req.Header.Set("X-Conversation-Request-ID", "client-req-1")
-	if got := workBuddyConversationRequestID(req); got != "client-req-1" {
-		t.Fatalf("workBuddyConversationRequestID() = %q, want client-req-1", got)
-	}
+	testutil.Equal(t, workBuddyConversationRequestID(req), "client-req-1")
 
 	// A request without that header falls back to the trace middleware's stable
 	// request identity. Run the middleware because its context key is private.
@@ -127,9 +120,7 @@ func TestWorkBuddyConversationRequestID_PrefersInboundAggregationHeader(t *testi
 	middleware.TraceMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		got = workBuddyConversationRequestID(r)
 	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.com", nil))
-	if len(got) != 32 {
-		t.Fatalf("generated aggregation id = %q, want 32 hex", got)
-	}
+	testutil.Equal(t, len(got), 32)
 }
 
 func TestChannelFromPath(t *testing.T) {
@@ -142,9 +133,7 @@ func TestChannelFromPath(t *testing.T) {
 		{path: "/v1/messages", want: ""},
 	}
 	for _, tt := range tests {
-		if got := channelFromPath(tt.path); got != tt.want {
-			t.Fatalf("channelFromPath(%q)=%q want %q", tt.path, got, tt.want)
-		}
+		testutil.Equal(t, channelFromPath(tt.path), tt.want)
 	}
 }
 
@@ -231,9 +220,7 @@ func TestClassifyTopicRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := ClaudeRequest{Messages: tt.messages}
 			gotNew, title := classifyTopicRequest(req)
-			if gotNew != tt.wantIsNew {
-				t.Fatalf("classifyTopicRequest() isNewTopic = %v, want %v", gotNew, tt.wantIsNew)
-			}
+			testutil.Equal(t, gotNew, tt.wantIsNew)
 			if gotNew && strings.TrimSpace(title) == "" {
 				t.Fatalf("expected non-empty title for new topic")
 			}
@@ -281,9 +268,7 @@ func TestBuildLocalSuggestion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := buildLocalSuggestion(tt.messages); got != tt.want {
-				t.Fatalf("buildLocalSuggestion() = %q, want %q", got, tt.want)
-			}
+			testutil.Equal(t, buildLocalSuggestion(tt.messages), tt.want)
 		})
 	}
 }
@@ -291,12 +276,8 @@ func TestBuildLocalSuggestion(t *testing.T) {
 func TestStripSystemRemindersForMode_StripsLocalCommandMetadata(t *testing.T) {
 	text := "<local-command-caveat>Caveat</local-command-caveat>\n<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>\n<local-command-stdout>Set model to opus</local-command-stdout>\n[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]"
 	got := stripSystemRemindersForMode(text)
-	if strings.Contains(got, "<local-command-caveat>") || strings.Contains(got, "/model") || strings.Contains(got, "Set model to opus") {
-		t.Fatalf("stripSystemRemindersForMode() should strip local command metadata, got %q", got)
-	}
-	if !strings.Contains(got, "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]") {
-		t.Fatalf("stripSystemRemindersForMode() should keep suggestion marker, got %q", got)
-	}
+	testutil.MustNotContainAny(t, got, "<local-command-caveat>", "/model", "Set model to opus")
+	testutil.MustContain(t, got, "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]")
 }
 
 func TestLastUserIsToolResultFollowup_AllowsTextAlongsideToolResult(t *testing.T) {

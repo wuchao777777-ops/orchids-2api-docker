@@ -3,6 +3,7 @@ package grok
 import (
 	"errors"
 	"net/http"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -20,9 +21,7 @@ func TestIsDefinitiveAccountBlockBody(t *testing.T) {
 		{`{"code":"resource-exhausted"}`, false},
 	}
 	for _, c := range cases {
-		if got := IsDefinitiveAccountBlockBody([]byte(c.body)); got != c.want {
-			t.Errorf("body %q: got %v want %v", c.body, got, c.want)
-		}
+		testutil.CheckEqual(t, IsDefinitiveAccountBlockBody([]byte(c.body)), c.want)
 	}
 }
 
@@ -45,9 +44,7 @@ func TestClassifyUpstreamResponse(t *testing.T) {
 			for k, v := range c.header {
 				header[k] = []string{v}
 			}
-			if got := ClassifyUpstreamResponse(c.status, http.Header(header), []byte(c.body)); got != c.want {
-				t.Fatalf("ClassifyUpstreamResponse(%d,%q)=%v want=%v", c.status, c.body, got, c.want)
-			}
+			testutil.Equal(t, ClassifyUpstreamResponse(c.status, http.Header(header), []byte(c.body)), c.want)
 		})
 	}
 }
@@ -64,9 +61,7 @@ func TestClassifyUpstreamError_LegacyText(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := ClassifyUpstreamError(c.err); got != c.want {
-				t.Fatalf("ClassifyUpstreamError()=%v want=%v", got, c.want)
-			}
+			testutil.Equal(t, ClassifyUpstreamError(c.err), c.want)
 		})
 	}
 }
@@ -84,9 +79,7 @@ func TestClassifyUpstreamError_PlainText(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := ClassifyUpstreamError(c.err); got != c.want {
-				t.Fatalf("ClassifyUpstreamError()=%v want=%v", got, c.want)
-			}
+			testutil.Equal(t, ClassifyUpstreamError(c.err), c.want)
 		})
 	}
 }

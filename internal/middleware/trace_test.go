@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -53,9 +54,7 @@ func TestTraceMiddleware(t *testing.T) {
 	t.Run("generates trace ID when not provided", func(t *testing.T) {
 		handler := TraceMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			traceID := GetTraceID(r.Context())
-			if traceID == "" {
-				t.Error("trace ID not found in context")
-			}
+			testutil.CheckNotEqual(t, traceID, "")
 			w.WriteHeader(http.StatusOK)
 		}))
 
@@ -64,18 +63,14 @@ func TestTraceMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(w, req)
 
-		if w.Header().Get(TraceIDHeader) == "" {
-			t.Error("trace ID not set in response header")
-		}
+		testutil.CheckNotEqual(t, w.Header().Get(TraceIDHeader), "")
 	})
 
 	t.Run("uses provided trace ID", func(t *testing.T) {
 		expectedID := "test-trace-id-123"
 		handler := TraceMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			traceID := GetTraceID(r.Context())
-			if traceID != expectedID {
-				t.Errorf("trace ID = %q, want %q", traceID, expectedID)
-			}
+			testutil.CheckEqual(t, traceID, expectedID)
 		}))
 
 		req := httptest.NewRequest("GET", "/", nil)
@@ -84,18 +79,14 @@ func TestTraceMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(w, req)
 
-		if w.Header().Get(TraceIDHeader) != expectedID {
-			t.Errorf("response trace ID = %q, want %q", w.Header().Get(TraceIDHeader), expectedID)
-		}
+		testutil.CheckEqual(t, w.Header().Get(TraceIDHeader), expectedID)
 	})
 
 	t.Run("uses X-Request-ID as fallback", func(t *testing.T) {
 		expectedID := "request-id-456"
 		handler := TraceMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			traceID := GetTraceID(r.Context())
-			if traceID != expectedID {
-				t.Errorf("trace ID = %q, want %q", traceID, expectedID)
-			}
+			testutil.CheckEqual(t, traceID, expectedID)
 		}))
 
 		req := httptest.NewRequest("GET", "/", nil)
@@ -109,17 +100,13 @@ func TestTraceMiddleware(t *testing.T) {
 func TestGetTraceID(t *testing.T) {
 	t.Run("returns empty for context without trace ID", func(t *testing.T) {
 		ctx := context.Background()
-		if got := GetTraceID(ctx); got != "" {
-			t.Errorf("GetTraceID(ctx) = %q, want empty", got)
-		}
+		testutil.CheckEqual(t, GetTraceID(ctx), "")
 	})
 
 	t.Run("returns trace ID from context", func(t *testing.T) {
 		expected := "test-trace-id"
 		ctx := context.WithValue(context.Background(), traceIDKey{}, expected)
-		if got := GetTraceID(ctx); got != expected {
-			t.Errorf("GetTraceID(ctx) = %q, want %q", got, expected)
-		}
+		testutil.CheckEqual(t, GetTraceID(ctx), expected)
 	})
 }
 
@@ -130,18 +117,14 @@ func TestTracedResponseWriter(t *testing.T) {
 
 		traced.WriteHeader(http.StatusNotFound)
 
-		if traced.StatusCode != http.StatusNotFound {
-			t.Errorf("StatusCode = %d, want %d", traced.StatusCode, http.StatusNotFound)
-		}
+		testutil.CheckEqual(t, traced.StatusCode, http.StatusNotFound)
 	})
 
 	t.Run("default status is 200", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		traced := NewTracedResponseWriter(w)
 
-		if traced.StatusCode != http.StatusOK {
-			t.Errorf("default StatusCode = %d, want %d", traced.StatusCode, http.StatusOK)
-		}
+		testutil.CheckEqual(t, traced.StatusCode, http.StatusOK)
 	})
 
 	t.Run("tracks bytes written", func(t *testing.T) {
@@ -151,9 +134,7 @@ func TestTracedResponseWriter(t *testing.T) {
 		traced.Write([]byte("hello"))
 		traced.Write([]byte(" world"))
 
-		if traced.BytesWritten != 11 {
-			t.Errorf("BytesWritten = %d, want 11", traced.BytesWritten)
-		}
+		testutil.CheckEqual(t, traced.BytesWritten, 11)
 	})
 
 	t.Run("flush works", func(t *testing.T) {
@@ -206,9 +187,7 @@ func TestTracedResponseWriter(t *testing.T) {
 		if err == nil {
 			t.Fatal("Hijack() should fail when underlying writer is not hijackable")
 		}
-		if !strings.Contains(err.Error(), "does not support hijacking") {
-			t.Fatalf("Hijack() unexpected error: %v", err)
-		}
+		testutil.MustContain(t, err.Error(), "does not support hijacking")
 	})
 }
 
@@ -226,9 +205,7 @@ func TestLoggingMiddleware(t *testing.T) {
 
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
-	}
+	testutil.CheckEqual(t, w.Code, http.StatusOK)
 }
 
 func TestLoggingMiddleware_WebSocketUpgrade(t *testing.T) {
@@ -260,9 +237,7 @@ func TestLoggingMiddleware_WebSocketUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMessage() error = %v", err)
 	}
-	if string(msg) != "ok" {
-		t.Fatalf("message = %q, want %q", string(msg), "ok")
-	}
+	testutil.Equal(t, string(msg), "ok")
 }
 
 func TestChain(t *testing.T) {
@@ -296,12 +271,8 @@ func TestChain(t *testing.T) {
 	chained.ServeHTTP(w, req)
 
 	expected := []string{"m1-before", "m2-before", "handler", "m2-after", "m1-after"}
-	if len(order) != len(expected) {
-		t.Fatalf("order length = %d, want %d", len(order), len(expected))
-	}
+	testutil.Equal(t, len(order), len(expected))
 	for i, v := range expected {
-		if order[i] != v {
-			t.Errorf("order[%d] = %q, want %q", i, order[i], v)
-		}
+		testutil.CheckEqual(t, order[i], v)
 	}
 }

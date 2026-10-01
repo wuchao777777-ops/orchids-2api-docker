@@ -505,16 +505,6 @@ func (c *CLIClient) FetchModelCatalog(ctx context.Context, acc *store.Account) (
 	return profiles, nil
 }
 
-// FetchModels preserves the historical identifier-only API for callers which
-// do not need profile metadata.
-func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]string, error) {
-	catalog, err := c.FetchModelCatalog(ctx, acc)
-	if err != nil {
-		return nil, err
-	}
-	return modelcatalog.ModelIDs(catalog), nil
-}
-
 // request is the single authenticated Build HTTP entry for chat, resources,
 // models, billing and fallback. Callers retain their endpoint status semantics.
 func (c *CLIClient) request(ctx context.Context, acc *store.Account, method, endpoint string, body []byte, headers http.Header) (*http.Response, error) {

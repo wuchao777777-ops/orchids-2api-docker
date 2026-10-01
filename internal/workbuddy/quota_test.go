@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestSummarizeQuota_AggregatesPackages(t *testing.T) {
@@ -45,21 +46,11 @@ func TestSummarizeQuota_AggregatesPackages(t *testing.T) {
 	now := time.Date(2026, 9, 12, 9, 0, 0, 0, time.UTC)
 	quota := summarizeQuota(payload, now)
 
-	if quota.Limit != 350 {
-		t.Fatalf("Limit = %v, want 350", quota.Limit)
-	}
-	if quota.Remaining != 147.28 {
-		t.Fatalf("Remaining = %v, want 147.28 (precise values win)", quota.Remaining)
-	}
-	if used := quota.VisibleUsed(); used != 202.72 {
-		t.Fatalf("VisibleUsed() = %v, want 202.72", used)
-	}
-	if quota.PackageRemaining != 147.28 {
-		t.Fatalf("PackageRemaining = %v, want 147.28", quota.PackageRemaining)
-	}
-	if quota.PackageName == "" {
-		t.Fatal("PackageName is empty")
-	}
+	testutil.Equal(t, quota.Limit, 350)
+	testutil.Equal(t, quota.Remaining, 147.28)
+	testutil.Equal(t, quota.VisibleUsed(), 202.72)
+	testutil.Equal(t, quota.PackageRemaining, 147.28)
+	testutil.NotEqual(t, quota.PackageName, "")
 	wantReset := time.Date(2026, 9, 26, 0, 13, 42, 0, time.UTC)
 	if !quota.ResetAt.Equal(wantReset) {
 		t.Fatalf("ResetAt = %v, want %v", quota.ResetAt, wantReset)
@@ -76,9 +67,7 @@ func TestSummarizeQuota_EmptyMeterIsZeroNotError(t *testing.T) {
 	if quota.Limit != 0 || quota.Remaining != 0 {
 		t.Fatalf("quota = %+v, want a zero allowance", quota)
 	}
-	if used := quota.VisibleUsed(); used != 0 {
-		t.Fatalf("VisibleUsed() = %v, want 0", used)
-	}
+	testutil.Equal(t, quota.VisibleUsed(), 0)
 }
 
 func TestParseMeterTime_IgnoresPlaceholder(t *testing.T) {
@@ -120,9 +109,7 @@ func TestApplyQuota_MapsRemainingIntoSchedulingFields(t *testing.T) {
 	if acc.WorkBuddyQuota.PackageName == "" || acc.WorkBuddyQuota.SyncedAt.IsZero() {
 		t.Fatalf("snapshot = %+v", acc.WorkBuddyQuota)
 	}
-	if acc.WorkBuddyQuota.Used != 202.72 {
-		t.Fatalf("snapshot used = %v, want 202.72", acc.WorkBuddyQuota.Used)
-	}
+	testutil.Equal(t, acc.WorkBuddyQuota.Used, 202.72)
 }
 
 func TestLastConsumedUnits_ResetsWithTheCycle(t *testing.T) {
@@ -151,15 +138,11 @@ func TestLastConsumedUnits_ResetsWithTheCycle(t *testing.T) {
 		ResetAt:   cycleEnd.Add(14 * 24 * time.Hour),
 		SyncedAt:  time.Now(),
 	}
-	if got := rearmed.LastConsumedUnits(previous); got != 0 {
-		t.Fatalf("LastConsumedUnits() after reset = %d, want 0", got)
-	}
+	testutil.Equal(t, rearmed.LastConsumedUnits(previous), 0)
 
 	// First ever snapshot reports the consumption observed so far.
 	fresh := &Quota{Limit: 350, Remaining: 147.28, ResetAt: cycleEnd, SyncedAt: time.Now()}
-	if got := fresh.LastConsumedUnits(store.WorkBuddyQuotaSnapshot{}); got != 202 {
-		t.Fatalf("LastConsumedUnits() with no history = %d, want 202", got)
-	}
+	testutil.Equal(t, fresh.LastConsumedUnits(store.WorkBuddyQuotaSnapshot{}), 202)
 }
 
 // TestSummarizeQuota_PreciseZeroIsAReading pins the difference between "the
@@ -183,12 +166,8 @@ func TestSummarizeQuota_PreciseZeroIsAReading(t *testing.T) {
 	}}
 
 	quota := summarizeQuota(payload, time.Now())
-	if quota.Remaining != 0 {
-		t.Fatalf("Remaining = %v, want 0: a precise zero is a reading, not a missing value", quota.Remaining)
-	}
-	if quota.Limit != 100 {
-		t.Fatalf("Limit = %v, want 100", quota.Limit)
-	}
+	testutil.Equal(t, quota.Remaining, 0)
+	testutil.Equal(t, quota.Limit, 100)
 }
 
 // TestSummarizeQuota_FallsBackWhenPreciseIsAbsent keeps the other direction: an
@@ -196,12 +175,8 @@ func TestSummarizeQuota_PreciseZeroIsAReading(t *testing.T) {
 func TestSummarizeQuota_FallsBackWhenPreciseIsAbsent(t *testing.T) {
 	t.Parallel()
 
-	if got := preciseOr("", 0, 47.5); got != 47.5 {
-		t.Fatalf("preciseOr(\"\", 0, 47.5) = %v, want the first positive fallback", got)
-	}
-	if got := preciseOr("0.00", 47.5); got != 0 {
-		t.Fatalf("preciseOr(\"0.00\", 47.5) = %v, want the precise zero", got)
-	}
+	testutil.Equal(t, preciseOr("", 0, 47.5), 47.5)
+	testutil.Equal(t, preciseOr("0.00", 47.5), 0)
 }
 
 // TestParsePrecise_HandlesGrouping pins the grouping a large allowance carries:
@@ -217,9 +192,7 @@ func TestParsePrecise_HandlesGrouping(t *testing.T) {
 		"":         0,
 		" 47.28 ":  47.28,
 	} {
-		if got := parsePrecise(raw); got != want {
-			t.Errorf("parsePrecise(%q) = %v, want %v", raw, got, want)
-		}
+		testutil.CheckEqual(t, parsePrecise(raw), want)
 	}
 }
 
@@ -244,9 +217,7 @@ func TestSummarizeQuota_LabelsThePackageWithTheMostLeft(t *testing.T) {
 	}
 
 	quota := summarizeQuota(payload, time.Now())
-	if quota.PackageName != "Free Plan Subscription" {
-		t.Fatalf("PackageName = %q, want the package holding most of the allowance", quota.PackageName)
-	}
+	testutil.Equal(t, quota.PackageName, "Free Plan Subscription")
 	if quota.Remaining != 305 || quota.Limit != 450 {
 		t.Fatalf("quota = %v/%v, want 305 of 450", quota.Remaining, quota.Limit)
 	}

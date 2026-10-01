@@ -8,6 +8,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -45,9 +46,7 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 	if first == nil {
 		t.Fatal("expected first client")
 	}
-	if created != 1 {
-		t.Fatalf("created=%d want 1", created)
-	}
+	testutil.Equal(t, created, 1)
 
 	statsOnly := *base
 	statsOnly.UpdatedAt = base.UpdatedAt.Add(5 * time.Minute)
@@ -63,9 +62,7 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 	if second != first {
 		t.Fatal("expected stats-only update to reuse cached client")
 	}
-	if created != 1 {
-		t.Fatalf("created=%d want 1 after stats-only update", created)
-	}
+	testutil.Equal(t, created, 1)
 }
 
 func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
@@ -101,12 +98,8 @@ func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 	if second == nil {
 		t.Fatal("expected second client")
 	}
-	if second == first {
-		t.Fatal("expected credential change to rebuild cached client")
-	}
-	if created != 2 {
-		t.Fatalf("created=%d want 2 after credential change", created)
-	}
+	testutil.NotEqual(t, second, first)
+	testutil.Equal(t, created, 2)
 }
 
 // Config saves replace the handler snapshot. Runtime-only controls must not
@@ -224,9 +217,7 @@ func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			changed := *base
 			tc.mutate(&changed)
-			if got := accountClientFingerprint(&changed, cfg); got == want {
-				t.Fatal("fingerprint did not change")
-			}
+			testutil.NotEqual(t, accountClientFingerprint(&changed, cfg), want)
 		})
 	}
 
@@ -241,9 +232,7 @@ func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			changed := *base
 			tc.mutate(&changed)
-			if got := accountClientFingerprint(&changed, cfg); got != want {
-				t.Fatal("derived Qoder state unexpectedly invalidated its own client")
-			}
+			testutil.Equal(t, accountClientFingerprint(&changed, cfg), want)
 		})
 	}
 
@@ -265,9 +254,7 @@ func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			changed := *cfg
 			tc.mutate(&changed)
-			if got := accountClientFingerprint(base, &changed); got == want {
-				t.Fatal("fingerprint did not change")
-			}
+			testutil.NotEqual(t, accountClientFingerprint(base, &changed), want)
 		})
 	}
 }

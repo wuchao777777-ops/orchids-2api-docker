@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // fetchCatalogModels runs FetchModels against a stubbed /v3/config body.
@@ -47,9 +48,7 @@ func TestFetchModels_WhitelistMismatchDoesNotDarkenTheChannel(t *testing.T) {
 		t.Fatalf("a whitelist that matches nothing must not fail the read: %v", err)
 	}
 	// The advertised, enabled list; the disabled entry stays out.
-	if strings.Join(got, ",") != "hy3,hy3-pro" {
-		t.Fatalf("models = %v, want the advertised enabled list", got)
-	}
+	testutil.Equal(t, strings.Join(got, ","), "hy3,hy3-pro")
 }
 
 // TestFetchModels_EmptyCatalogIsStillAnError keeps the distinction the fix rests
@@ -76,9 +75,7 @@ func TestFetchModels_WhitelistStillFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchModels() error = %v", err)
 	}
-	if strings.Join(got, ",") != "b" {
-		t.Fatalf("models = %v, want only the whitelisted model", got)
-	}
+	testutil.Equal(t, strings.Join(got, ","), "b")
 }
 
 // TestFetchModels_NoCLIRestrictionServesTheCatalog preserves the case that already
@@ -93,8 +90,6 @@ func TestFetchModels_NoCLIRestrictionServesTheCatalog(t *testing.T) {
 		if err != nil {
 			t.Fatalf("body %s: FetchModels() error = %v", body, err)
 		}
-		if strings.Join(got, ",") != "a,b" {
-			t.Fatalf("body %s: models = %v, want the whole catalog", body, got)
-		}
+		testutil.Equal(t, strings.Join(got, ","), "a,b")
 	}
 }

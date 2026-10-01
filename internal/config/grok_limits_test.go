@@ -1,6 +1,7 @@
 package config
 
 import (
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 
@@ -9,18 +10,14 @@ import (
 
 func TestGrokBuildLimitsSurviveConfigRoundTrip(t *testing.T) {
 	var cfg Config
-	if err := json.Unmarshal([]byte(`{"max_retries":2,"retry_delay":50,"account_switch_count":4,"request_timeout":1800,"concurrency_timeout":2400,"retry_429_interval":90,"grok_build_rps":10,"grok_build_timeout_seconds":1800,"grok_stream_idle_seconds":300}`), &cfg); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(`{"max_retries":2,"retry_delay":50,"account_switch_count":4,"request_timeout":1800,"concurrency_timeout":2400,"retry_429_interval":90,"grok_build_rps":10,"grok_build_timeout_seconds":1800,"grok_stream_idle_seconds":300}`), &cfg))
 	ApplyHardcoded(&cfg)
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var restored Config
-	if err := json.Unmarshal(raw, &restored); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &restored))
 	ApplyHardcoded(&restored)
 	if restored.MaxRetries != 2 || restored.RetryDelay != 50 || restored.AccountSwitchCount != 4 || restored.RequestTimeout != 1800 || restored.ConcurrencyTimeout != 2400 || restored.Retry429Interval != 90 {
 		t.Fatal("runtime settings were overwritten")

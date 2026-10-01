@@ -12,6 +12,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // grokOAuthJWT mints a decodable access token so the login flow can copy the
@@ -61,9 +62,7 @@ func TestGrokDeviceLogin_SecondLoginForSameAccountUpdatesInPlace(t *testing.T) {
 		Enabled:           true,
 		Weight:            1,
 	}
-	if err := s.CreateAccount(ctx, existing); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, existing), "CreateAccount() error = %v")
 
 	cfg := &config.Config{GrokCLIOAuthTokenURL: upstream.URL + "/token"}
 	a := New(s, "", "", cfg)
@@ -100,18 +99,14 @@ func TestGrokDeviceLogin_SecondLoginForSameAccountUpdatesInPlace(t *testing.T) {
 			grokAccounts++
 		}
 	}
-	if grokAccounts != 1 {
-		t.Fatalf("grok accounts = %d, want 1: a re-login must not create a duplicate row", grokAccounts)
-	}
+	testutil.Equal(t, grokAccounts, 1)
 
 	var state *deviceLogin
 	a.grokLogins.update("dup", func(login *deviceLogin) { state = login })
 	if state == nil || state.status != "complete" {
 		t.Fatalf("login state = %+v, want complete", state)
 	}
-	if state.accountID != existing.ID {
-		t.Fatalf("login reported account %d, want the existing account %d", state.accountID, existing.ID)
-	}
+	testutil.Equal(t, state.accountID, existing.ID)
 	updated, err := s.GetAccount(ctx, existing.ID)
 	if err != nil {
 		t.Fatal(err)

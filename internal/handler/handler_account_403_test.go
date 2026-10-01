@@ -6,31 +6,18 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"encoding/json"
-	"github.com/alicebob/miniredis/v2"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestHandleMessages_403MarksAccountBlocked(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	s := newTestRedisStore(t, "test:")
 
 	acc := &store.Account{
 		Name:         "workbuddy-1",
@@ -39,9 +26,7 @@ func TestHandleMessages_403MarksAccountBlocked(t *testing.T) {
 		Enabled:      true,
 		Weight:       1,
 	}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc), "CreateAccount() error = %v")
 
 	publishModel(t, s, &store.Model{Channel: "WorkBuddy", ModelID: "claude-opus-5"})
 
@@ -73,15 +58,11 @@ func TestHandleMessages_403MarksAccountBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
-	if updated.StatusCode != "403" {
-		t.Fatalf("status_code=%q want 403", updated.StatusCode)
-	}
+	testutil.Equal(t, updated.StatusCode, "403")
 	if updated.LastAttempt.IsZero() {
 		t.Fatal("expected last_attempt to be set")
 	}
-	if upstreamCalls != 1 {
-		t.Fatalf("upstreamCalls=%d want 1 after first request", upstreamCalls)
-	}
+	testutil.Equal(t, upstreamCalls, 1)
 
 	payload["messages"] = []map[string]any{{"role": "user", "content": "hi again"}}
 	body2, _ := json.Marshal(payload)
@@ -92,17 +73,9 @@ func TestHandleMessages_403MarksAccountBlocked(t *testing.T) {
 	// diagnostic and stays in the log: the client is told the pool cannot serve the
 	// request, in words that do not read like the channel is empty or the caller
 	// sent something wrong.
-	if rec2.Code != http.StatusServiceUnavailable {
-		t.Fatalf("second status=%d want 503 body=%s", rec2.Code, rec2.Body.String())
-	}
+	testutil.Equal(t, rec2.Code, http.StatusServiceUnavailable)
 	secondBody := rec2.Body.String()
-	if !strings.Contains(secondBody, "no account in this channel can serve the request") {
-		t.Fatalf("second body=%q want the pool-unavailable answer", secondBody)
-	}
-	if strings.Contains(secondBody, "no enabled accounts available for channel") {
-		t.Fatalf("selector detail leaked into the response: %s", secondBody)
-	}
-	if upstreamCalls != 1 {
-		t.Fatalf("upstreamCalls=%d want still 1 after cached 403", upstreamCalls)
-	}
+	testutil.MustContain(t, secondBody, "no account in this channel can serve the request")
+	testutil.MustNotContain(t, secondBody, "no enabled accounts available for channel")
+	testutil.Equal(t, upstreamCalls, 1)
 }

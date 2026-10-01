@@ -9,14 +9,11 @@ import (
 
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestHandleModels_FiltersAPIKeyModelAllowlist(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	// The catalog is published explicitly: the store starts empty now.
 	publishModel(t, s,
@@ -37,9 +34,7 @@ func TestHandleModels_FiltersAPIKeyModelAllowlist(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wrapper(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	body := rec.Body.String()
 	if !strings.Contains(body, "grok-4.6") || strings.Contains(body, "grok-4.5") || strings.Contains(body, "grok-imagine-image") {
 		t.Fatalf("unexpected filtered models: %s", body)
@@ -47,11 +42,7 @@ func TestHandleModels_FiltersAPIKeyModelAllowlist(t *testing.T) {
 }
 
 func TestHandleModelByID_HidesOfflineModel(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel: "WorkBuddy",
@@ -67,34 +58,22 @@ func TestHandleModelByID_HidesOfflineModel(t *testing.T) {
 
 	h.HandleModelByID(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusNotFound)
 }
 
 func TestHandleModelByID_HidesUnsupportedGrokModel(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, _, _ := setupModelValidationHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models/grok-4.1", nil)
 	rec := httptest.NewRecorder()
 
 	h.HandleModelByID(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusNotFound)
 }
 
 func TestHandleModelByID_ReturnsVisibleModel(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	publishModel(t, s, &store.Model{Channel: "Grok", ModelID: "grok-4.5"})
 	if err := s.CreateAccount(context.Background(), &store.Account{
@@ -111,17 +90,11 @@ func TestHandleModelByID_ReturnsVisibleModel(t *testing.T) {
 
 	h.HandleModelByID(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 }
 
 func TestHandleModelByID_ReturnsVerifiedDynamicGrokModel(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel:  "Grok",
@@ -146,17 +119,11 @@ func TestHandleModelByID_ReturnsVerifiedDynamicGrokModel(t *testing.T) {
 
 	h.HandleModelByID(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 }
 
 func TestHandleModels_KeepsGrokModelsVisibleWhenOnlyBasicPoolExists(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	publishModel(t, s,
 		&store.Model{Channel: "Grok", ModelID: "grok-4.5"},
@@ -177,24 +144,14 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenOnlyBasicPoolExists(t *testing.T
 
 	h.HandleModels(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	body := rec.Body.String()
-	if !strings.Contains(body, "grok-4.5") {
-		t.Fatalf("expected current chat model in body=%s", body)
-	}
-	if !strings.Contains(body, "grok-imagine-image") || !strings.Contains(body, "grok-imagine-video") {
-		t.Fatalf("expected enabled grok models to remain visible regardless of pool state, body=%s", body)
-	}
+	testutil.MustContain(t, body, "grok-4.5")
+	testutil.MustContainAll(t, body, "grok-imagine-image", "grok-imagine-video")
 }
 
 func TestHandleModels_KeepsGrokModelsVisibleWhenAccountsHaveStatusCode(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	// The withdrawn identifiers are published too, so "stays hidden" is proven
 	// against the deprecated-name rule rather than against an empty store.
@@ -220,29 +177,17 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenAccountsHaveStatusCode(t *testin
 
 	h.HandleModels(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	body := rec.Body.String()
-	if !strings.Contains(body, "grok-4.5") {
-		t.Fatalf("expected grok models to remain visible despite account status, body=%s", body)
-	}
-	if !strings.Contains(body, "grok-imagine-image") {
-		t.Fatalf("expected current image model to remain visible, body=%s", body)
-	}
+	testutil.MustContain(t, body, "grok-4.5")
+	testutil.MustContain(t, body, "grok-imagine-image")
 	for _, hidden := range []string{"grok-4.20-0309-non-reasoning", "grok-4.3-beta", "grok-4.3", "grok-build-0.1"} {
-		if strings.Contains(body, `"id":"`+hidden+`"`) {
-			t.Fatalf("expected removed model %s to stay hidden, body=%s", hidden, body)
-		}
+		testutil.MustNotContain(t, body, `"id":"`+hidden+`"`)
 	}
 }
 
 func TestHandleModelByID_ReturnsGrokModelWithoutRequiredPool(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupModelValidationHandler(t)
 
 	publishModel(t, s, &store.Model{Channel: "Grok", ModelID: "grok-imagine-video"})
 	if err := s.CreateAccount(context.Background(), &store.Account{
@@ -259,7 +204,5 @@ func TestHandleModelByID_ReturnsGrokModelWithoutRequiredPool(t *testing.T) {
 
 	h.HandleModelByID(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 }

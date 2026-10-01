@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/audit"
+	"orchids-api/internal/testutil"
 )
 
 type recordingAuditLogger struct {
@@ -57,31 +58,17 @@ func TestAdminSessionAudit_RecordsMutationsOnly(t *testing.T) {
 	handler(httptest.NewRecorder(), writeReq)
 
 	events := logger.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("events = %d, want only the mutating call: %+v", len(events), events)
-	}
+	testutil.Equal(t, len(events), 1)
 	event := events[0]
-	if event.Kind != audit.KindOperation {
-		t.Fatalf("kind = %q, want operation", event.Kind)
-	}
+	testutil.Equal(t, event.Kind, audit.KindOperation)
 	if event.Action != "accounts.42.update" && !strings.HasSuffix(event.Action, ".update") {
 		t.Fatalf("action = %q", event.Action)
 	}
-	if event.Status != "success" {
-		t.Fatalf("status = %q", event.Status)
-	}
-	if event.Actor != "admin-session" {
-		t.Fatalf("actor = %q, want the browser session", event.Actor)
-	}
-	if event.Target == "" {
-		t.Fatal("target should name the changed object")
-	}
-	if strings.Contains(event.Details, "sso=secret") {
-		t.Fatalf("details leaked a credential: %s", event.Details)
-	}
-	if len(event.Redacted) == 0 {
-		t.Fatal("the masked field should be reported")
-	}
+	testutil.Equal(t, event.Status, "success")
+	testutil.Equal(t, event.Actor, "admin-session")
+	testutil.NotEqual(t, event.Target, "")
+	testutil.MustNotContain(t, event.Details, "sso=secret")
+	testutil.NotEqual(t, len(event.Redacted), 0)
 }
 
 // TestAdminSessionAudit_LoginBodyIsNeverRecorded: the login payload is the admin
@@ -99,9 +86,7 @@ func TestAdminSessionAudit_LoginBodyIsNeverRecorded(t *testing.T) {
 	handler(httptest.NewRecorder(), req)
 
 	events := logger.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("events = %d, want the login attempt recorded", len(events))
-	}
+	testutil.Equal(t, len(events), 1)
 	if strings.Contains(events[0].Details, "hunter2") || events[0].Details != "" {
 		t.Fatalf("login body leaked into the journal: %q", events[0].Details)
 	}
@@ -139,23 +124,15 @@ func TestOperationAction_Naming(t *testing.T) {
 		{http.MethodGet, "/api/audit", "audit.read"},
 	}
 	for _, tc := range cases {
-		if got := operationAction(tc.method, tc.path); got != tc.want {
-			t.Fatalf("operationAction(%s %s) = %q, want %q", tc.method, tc.path, got, tc.want)
-		}
+		testutil.Equal(t, operationAction(tc.method, tc.path), tc.want)
 	}
 }
 
 // TestOperationTarget prefers the addressed object over a query parameter.
 func TestOperationTarget(t *testing.T) {
-	if got := operationTarget("/api/accounts/42", nil); got != "accounts:42" {
-		t.Fatalf("target = %q", got)
-	}
-	if got := operationTarget("/api/accounts", map[string][]string{"account_id": {"9"}}); got != "account_id:9" {
-		t.Fatalf("target = %q", got)
-	}
-	if got := operationTarget("/api/config", nil); got != "" {
-		t.Fatalf("target = %q, want empty for a singleton resource", got)
-	}
+	testutil.Equal(t, operationTarget("/api/accounts/42", nil), "accounts:42")
+	testutil.Equal(t, operationTarget("/api/accounts", map[string][]string{"account_id": {"9"}}), "account_id:9")
+	testutil.Equal(t, operationTarget("/api/config", nil), "")
 }
 
 // TestAdminSessionAudit_LargeBodyReachesTheHandler is the regression the operator
@@ -176,9 +153,7 @@ func TestAdminSessionAudit_LargeBodyReachesTheHandler(t *testing.T) {
 		raw, err := io.ReadAll(r.Body)
 		received = len(raw)
 		readErr = err
-		if r.ContentLength != int64(len(body)) {
-			t.Errorf("ContentLength = %d, want %d", r.ContentLength, len(body))
-		}
+		testutil.CheckEqual(t, r.ContentLength, int64(len(body)))
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -189,14 +164,10 @@ func TestAdminSessionAudit_LargeBodyReachesTheHandler(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("handler failed to read the body: %v", readErr)
 	}
-	if received != len(body) {
-		t.Fatalf("handler received %d bytes, want the full %d", received, len(body))
-	}
+	testutil.Equal(t, received, len(body))
 	// The summary is still bounded, and still a valid prefix of the body.
 	events := logger.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("events = %d, want 1", len(events))
-	}
+	testutil.Equal(t, len(events), 1)
 	if len(events[0].Details) > 2100 {
 		t.Fatalf("summary = %d bytes, want it bounded", len(events[0].Details))
 	}
@@ -218,9 +189,7 @@ func TestAdminSessionAudit_OversizedBodyIsReported(t *testing.T) {
 	handler(httptest.NewRecorder(), req)
 
 	events := logger.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("events = %d, want 1", len(events))
-	}
+	testutil.Equal(t, len(events), 1)
 	if _, ok := events[0].Metadata["body_capture_error"]; !ok {
 		t.Fatalf("oversized body not reported: %+v", events[0].Metadata)
 	}

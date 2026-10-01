@@ -5,13 +5,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestCLIDiagnosticsCaptureRequestResponseAndRetry(t *testing.T) {
@@ -42,16 +42,12 @@ func TestCLIDiagnosticsCaptureRequestResponseAndRetry(t *testing.T) {
 	sections := map[string]string{}
 	for _, s := range capture.Bundle().Sections {
 		sections[s.Name] = s.Payload
-		if strings.Contains(s.Payload, "fake-private-token") {
-			t.Fatal("token in diagnostic")
-		}
+		testutil.MustNotContain(t, s.Payload, "fake-private-token")
 	}
 	for _, tc := range []struct{ name, want string }{
 		{"upstream_001_request.json", "hello"}, {"upstream_001_result.json", "429"}, {"upstream_001_response.txt", "limited"},
 		{"upstream_002_request.json", "hello"}, {"upstream_002_result.json", "200"}, {"upstream_002_response.txt", "response.output_text.delta"},
 	} {
-		if !strings.Contains(sections[tc.name], tc.want) {
-			t.Fatalf("%s missing %q: %q", tc.name, tc.want, sections[tc.name])
-		}
+		testutil.MustContain(t, sections[tc.name], tc.want)
 	}
 }

@@ -1,30 +1,17 @@
 package main
 
 import (
-	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-
-	"orchids-api/internal/api"
 	"orchids-api/internal/config"
-	"orchids-api/internal/handler"
-	"orchids-api/internal/loadbalancer"
-	"orchids-api/internal/middleware"
-	"orchids-api/internal/provider"
-	"orchids-api/internal/qoder"
-	"orchids-api/internal/store"
-	"orchids-api/internal/template"
+	"orchids-api/internal/testutil"
 )
 
 func decodeQoderBodyForTest(encoded []byte) ([]byte, error) {
@@ -130,22 +117,9 @@ func sseEnvelope(inner string) string {
 // HTTP server rather than a bare recorder, so the same request lifecycle the
 // deployment uses is exercised (and the -race detector observes it).
 func TestQoderChannelEndToEnd(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "qoder-e2e:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
 
 	stub := newQoderE2EStub(t)
 	defer stub.Close()
-
-	digest := sha256.Sum256([]byte("sk-qoder-e2e"))
-	if err := s.CreateApiKey(context.Background(), &store.ApiKey{
-		Name: "qoder-e2e", KeyHash: hex.EncodeToString(digest[:]), KeyPrefix: "sk-", KeySuffix: "-e2e", Enabled: true,
-	}); err != nil {
-		t.Fatalf("CreateApiKey() error = %v", err)
-	}
 
 	// Inference auth is unconditional, so the channel request carries a managed
 	// key; the admin request uses the admin token as before.
@@ -162,82 +136,12 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 
 	// Build the client through the same provider table the server uses, so the
 	// request path exercises the real seam.
-	lb := loadbalancer.NewWithCacheTTL(s, 0)
-	h := handler.NewWithLoadBalancer(cfg, lb)
-	h.SetClientFactory(func(acc *store.Account, c *config.Config) handler.UpstreamClient {
-		factory, ok := provider.Get(acc.AccountType)
-		if !ok {
-			t.Fatalf("no provider registered for %q", acc.AccountType)
-		}
-		client, ok := factory(acc, c).(handler.UpstreamClient)
-		if !ok {
-			t.Fatalf("provider %q returned an unusable client", acc.AccountType)
-		}
-		if setter, ok := client.(interface {
-			SetAccountStore(qoder.AccountUpdater)
-		}); ok {
-			setter.SetAccountStore(s)
-		}
-		return client
-	})
-	t.Cleanup(h.Close)
-
-	apiHandler := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
-	renderer, err := template.NewRenderer()
-	if err != nil {
-		t.Fatalf("template.NewRenderer() error = %v", err)
-	}
-	limiter := middleware.NewConcurrencyLimiter(4, 0)
-	mux := http.NewServeMux()
-	registerRoutes(mux, cfg, s, h, nil, apiHandler, limiter, nil, renderer)
-
-	// A real listener is used so request contexts live for the whole handler, as
-	// they do in production.
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-	httpClient := &http.Client{Timeout: 60 * time.Second}
-
-	do := func(method, path, body string, admin bool) *http.Response {
-		t.Helper()
-		var reader *strings.Reader
-		if body == "" {
-			reader = strings.NewReader("")
-		} else {
-			reader = strings.NewReader(body)
-		}
-		req, err := http.NewRequest(method, server.URL+path, reader)
-		if err != nil {
-			t.Fatalf("build request: %v", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Origin", server.URL)
-		if admin {
-			req.Header.Set("X-Admin-Token", "admintoken")
-		} else {
-			req.Header.Set("Authorization", "Bearer "+managedKey)
-		}
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			t.Fatalf("%s %s: %v", method, path, err)
-		}
-		return resp
-	}
-	readBody := func(resp *http.Response) string {
-		t.Helper()
-		defer resp.Body.Close()
-		raw, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-		return string(raw)
-	}
+	e := newChannelE2E(t, "qoder-e2e:", managedKey, cfg)
 
 	// 1. Create the account through the device authorization flow.
-	startResp := do(http.MethodPost, "/api/qoder/login", "", true)
-	startBody := readBody(startResp)
-	if startResp.StatusCode != http.StatusOK {
-		t.Fatalf("login start status = %d body=%s", startResp.StatusCode, startBody)
-	}
+	startResp := e.do(t, http.MethodPost, "/api/qoder/login", "", true)
+	startBody := e.readBody(t, startResp)
+	testutil.Equal(t, startResp.StatusCode, http.StatusOK)
 	var started struct {
 		ID                      string `json:"id"`
 		VerificationURIComplete string `json:"verification_uri_complete"`
@@ -245,9 +149,7 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	if err := json.Unmarshal([]byte(startBody), &started); err != nil || started.ID == "" {
 		t.Fatalf("login start response = %q", startBody)
 	}
-	if !strings.Contains(started.VerificationURIComplete, "/device/selectAccounts?") {
-		t.Fatalf("login start did not return the device authorization URL: %q", started.VerificationURIComplete)
-	}
+	testutil.MustContain(t, started.VerificationURIComplete, "/device/selectAccounts?")
 
 	var final struct {
 		Status    string `json:"status"`
@@ -255,89 +157,57 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		pollResp := do(http.MethodGet, "/api/qoder/login/"+started.ID, "", true)
-		pollBody := readBody(pollResp)
-		if pollResp.StatusCode != http.StatusOK {
-			t.Fatalf("poll status = %d body=%s", pollResp.StatusCode, pollBody)
-		}
-		if err := json.Unmarshal([]byte(pollBody), &final); err != nil {
-			t.Fatalf("decode poll: %v", err)
-		}
+		pollResp := e.do(t, http.MethodGet, "/api/qoder/login/"+started.ID, "", true)
+		pollBody := e.readBody(t, pollResp)
+		testutil.Equal(t, pollResp.StatusCode, http.StatusOK)
+		testutil.NoError(t, json.Unmarshal([]byte(pollBody), &final), "decode poll: %v")
 		if final.Status == "complete" || final.Status == "failed" {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if final.Status != "complete" {
-		t.Fatalf("login status = %q, want complete", final.Status)
-	}
+	testutil.Equal(t, final.Status, "complete")
 
 	// 2. Refresh the channel catalog from the account.
-	refreshResp := do(http.MethodPost, "/api/models/refresh?channel=qoder", "", true)
-	refreshBody := readBody(refreshResp)
-	if refreshResp.StatusCode != http.StatusOK {
-		t.Fatalf("model refresh status = %d body=%s", refreshResp.StatusCode, refreshBody)
-	}
+	refreshResp := e.do(t, http.MethodPost, "/api/models/refresh?channel=qoder", "", true)
+	refreshBody := e.readBody(t, refreshResp)
+	testutil.Equal(t, refreshResp.StatusCode, http.StatusOK)
 	var refreshed modelRefreshResult
-	if err := json.Unmarshal([]byte(refreshBody), &refreshed); err != nil {
-		t.Fatalf("decode refresh: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(refreshBody), &refreshed), "decode refresh: %v")
 	if refreshed.Channel != "Qoder" || refreshed.Discovered == 0 {
 		t.Fatalf("refresh result = %+v, want a discovered Qoder catalog", refreshed)
 	}
 	// The catalog must have come from the signed upstream read, not from a
 	// compiled-in list.
-	if refreshed.Source != "qoder_upstream_models" {
-		t.Fatalf("refresh source = %q, want qoder_upstream_models", refreshed.Source)
-	}
-	if stub.modelListCalls == 0 {
-		t.Fatal("the refresh did not read the upstream model list")
-	}
-	if refreshed.Verified != refreshed.Discovered {
-		t.Fatalf("verified=%d discovered=%d, want every observed row counted as verified", refreshed.Verified, refreshed.Discovered)
-	}
+	testutil.Equal(t, refreshed.Source, "qoder_upstream_models")
+	testutil.NotEqual(t, stub.modelListCalls, 0)
+	testutil.Equal(t, refreshed.Verified, refreshed.Discovered)
 
 	// 3. Run one chat completion through the channel route.
-	chatResp := do(http.MethodPost, "/qoder/v1/chat/completions",
+	chatResp := e.do(t, http.MethodPost, "/qoder/v1/chat/completions",
 		`{"model":"Qwen3.7-Max","stream":true,"messages":[{"role":"user","content":"hello"}]}`, false)
-	chatBody := readBody(chatResp)
-	if chatResp.StatusCode != http.StatusOK {
-		t.Fatalf("chat status = %d body=%s", chatResp.StatusCode, chatBody)
-	}
-	if !strings.Contains(chatBody, "e2e answer") {
-		t.Fatalf("chat body did not carry the upstream text: %s", chatBody)
-	}
-	if stub.chatCalls != 1 {
-		t.Fatalf("upstream chat calls = %d, want 1", stub.chatCalls)
-	}
+	chatBody := e.readBody(t, chatResp)
+	testutil.Equal(t, chatResp.StatusCode, http.StatusOK)
+	testutil.MustContain(t, chatBody, "e2e answer")
+	testutil.Equal(t, stub.chatCalls, 1)
 
 	// The upstream request must carry the derived authentication chain, not the
 	// bare device token.
 	for _, header := range []string{"Authorization", "Cosy-Key", "Cosy-MachineId", "Cosy-MachineToken", "Cosy-User", "Cosy-Date", "Cosy-Scene", "Cosy-Data-Policy", "Login-Version", "X-Model-Key", "X-Model-Source"} {
-		if stub.chatHeaders.Get(header) == "" {
-			t.Errorf("upstream chat request is missing %s", header)
-		}
+		testutil.CheckNotEqual(t, stub.chatHeaders.Get(header), "")
 	}
 	if auth := stub.chatHeaders.Get("Authorization"); !strings.HasPrefix(auth, "Bearer COSY.") {
 		t.Errorf("Authorization = %q, want a COSY bearer", auth)
 	}
-	if got := stub.chatHeaders.Get("X-Model-Key"); got != "qmodel_latest" {
-		t.Errorf("X-Model-Key = %q, want the resolved internal key", got)
-	}
-	if got := stub.chatHeaders.Get("Cosy-User"); got != "uid-e2e" {
-		t.Errorf("Cosy-User = %q, want the signed-in user", got)
-	}
+	testutil.CheckEqual(t, stub.chatHeaders.Get("X-Model-Key"), "qmodel_latest")
+	testutil.CheckEqual(t, stub.chatHeaders.Get("Cosy-User"), "uid-e2e")
 
 	// The device token must never appear in a header: the runtime fields are the
 	// request credential.
-	if strings.Contains(fmtHeaders(stub.chatHeaders), "access-1") {
-		t.Fatal("the device access token leaked into an upstream header")
-	}
+	testutil.MustNotContain(t, fmtHeaders(stub.chatHeaders), "access-1")
 
 	// The body is in the private encoding and carries the chat contract.
-	if len(stub.chatBody) == 0 {
-		t.Fatal("the upstream request carried no body")
-	}
+	testutil.NotEqual(t, len(stub.chatBody), 0)
 	decoded, err := decodeQoderBodyForTest(stub.chatBody)
 	if err != nil {
 		t.Fatalf("DecodeBody() error = %v", err)
@@ -345,23 +215,15 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	// The capture shows the QoderWork client sending no account class: the field
 	// is present and empty rather than omitted.
 	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qoder_work"`, `"agent_id":"agent_common"`, `"stream":true`, `"aliyun_user_type":""`} {
-		if !strings.Contains(string(decoded), want) {
-			t.Errorf("decoded body = %s, want it to contain %s", decoded, want)
-		}
+		testutil.CheckContain(t, string(decoded), want)
 	}
 
 	// 4. The account row must not expose either secret.
-	redactResp := do(http.MethodGet, "/api/accounts", "", true)
-	redactBody := readBody(redactResp)
-	if redactResp.StatusCode != http.StatusOK {
-		t.Fatalf("accounts status = %d body=%s", redactResp.StatusCode, redactBody)
-	}
-	if strings.Contains(redactBody, "refresh-1") {
-		t.Fatal("the durable refresh token was returned by the account API")
-	}
-	if strings.Contains(redactBody, "runtime-key") {
-		t.Fatal("the derived runtime key was returned by the account API")
-	}
+	redactResp := e.do(t, http.MethodGet, "/api/accounts", "", true)
+	redactBody := e.readBody(t, redactResp)
+	testutil.Equal(t, redactResp.StatusCode, http.StatusOK)
+	testutil.MustNotContain(t, redactBody, "refresh-1")
+	testutil.MustNotContain(t, redactBody, "runtime-key")
 }
 
 func fmtHeaders(headers http.Header) string {

@@ -2,6 +2,7 @@ package grok
 
 import (
 	"io"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -13,18 +14,14 @@ func TestBuildNamespaceAliasRestoredInJSONAndSSE(t *testing.T) {
 		}},
 	}}
 	aliases := collectBuildToolAliases(payload)
-	if aliases["crm__lookup"].Namespace != "crm" {
-		t.Fatalf("aliases=%#v", aliases)
-	}
+	testutil.Equal(t, aliases["crm__lookup"].Namespace, "crm")
 
 	jsonSource := io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call","name":"crm__lookup","arguments":"{}"}]}`))
 	converted, err := io.ReadAll(rewriteBuildToolAliasResponse(jsonSource, "application/json", aliases))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(converted), `"name":"lookup"`) || !strings.Contains(string(converted), `"namespace":"crm"`) {
-		t.Fatalf("JSON alias was not restored: %s", converted)
-	}
+	testutil.MustContainAll(t, string(converted), `"name":"lookup"`, `"namespace":"crm"`)
 
 	sseSource := io.NopCloser(strings.NewReader("event: response.output_item.added\n" +
 		"data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"name\":\"crm__lookup\"}}\n\n"))
@@ -32,9 +29,7 @@ func TestBuildNamespaceAliasRestoredInJSONAndSSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(converted), `"namespace":"crm"`) || !strings.Contains(string(converted), `event: response.output_item.added`) {
-		t.Fatalf("SSE alias was not restored: %s", converted)
-	}
+	testutil.MustContainAll(t, string(converted), `"namespace":"crm"`, `event: response.output_item.added`)
 }
 
 func TestAnthropicServerSearchHistoryUsesNativeResponsesItem(t *testing.T) {
@@ -99,12 +94,8 @@ func TestBuildToolSearchStreamHidesInternalArgumentEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(converted)
-	if strings.Contains(text, "response.function_call_arguments") || strings.Contains(text, `"name":"tool_search"`) {
-		t.Fatalf("internal tool_search events leaked:\n%s", text)
-	}
+	testutil.MustNotContainAny(t, text, "response.function_call_arguments", `"name":"tool_search"`)
 	for _, expected := range []string{`"type":"tool_search_call"`, `"goal":"crm"`, `"type":"namespace"`, `"name":"crm"`, "data: [DONE]"} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("missing %s:\n%s", expected, text)
-		}
+		testutil.MustContain(t, text, expected)
 	}
 }

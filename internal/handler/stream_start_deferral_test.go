@@ -15,6 +15,7 @@ import (
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -69,9 +70,7 @@ func TestStreamOpensOnlyWhenThereIsSomethingToSend(t *testing.T) {
 	defer sh.release()
 	sh.pendingModel = "qwen3.8-flash"
 
-	if got := rec.buf.String(); got != "" {
-		t.Fatalf("nothing had been produced, yet the client already received: %q", got)
-	}
+	testutil.Equal(t, rec.buf.String(), "")
 	if sh.hasCommitted() {
 		t.Fatal("hasCommitted() = true before any output")
 	}
@@ -90,9 +89,7 @@ func TestStreamOpensOnlyWhenThereIsSomethingToSend(t *testing.T) {
 	if startAt > textAt {
 		t.Fatalf("content arrived before the opening frame: %s", out)
 	}
-	if strings.Count(out, "event: message_start") != 1 {
-		t.Fatalf("expected exactly one opening frame, got: %s", out)
-	}
+	testutil.Equal(t, strings.Count(out, "event: message_start"), 1)
 	if !sh.hasCommitted() {
 		t.Fatal("hasCommitted() = false after the opening frame was written")
 	}
@@ -125,9 +122,7 @@ func TestKeepAliveContinuesAfterStreamOpens(t *testing.T) {
 	sh.pendingModel = "qwen3.8-flash"
 	sh.handleMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]any{"delta": "hello"}})
 	sh.writeKeepAlive()
-	if !strings.Contains(rec.buf.String(), sseKeepAlive) {
-		t.Fatalf("committed response has no keep-alive: %q", rec.buf.String())
-	}
+	testutil.MustContain(t, rec.buf.String(), sseKeepAlive)
 }
 
 // TestTerminalOnlyResponseStillOpensTheStream covers an answer that produced no
@@ -176,20 +171,12 @@ func TestSharedRefusalBeforeOutputUsesRetryWindow(t *testing.T) {
 
 	h.HandleMessages(rec, req)
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusTooManyRequests)
 	out := rec.Body.String()
-	if strings.Contains(out, "event: error") || strings.Contains(out, "data:") {
-		t.Fatalf("an uncommitted stream must not answer with SSE frames: %s", out)
-	}
-	if !strings.Contains(out, "upstream_queue") {
-		t.Fatalf("body = %s, want the upstream_queue answer", out)
-	}
+	testutil.MustNotContainAny(t, out, "event: error", "data:")
+	testutil.MustContain(t, out, "upstream_queue")
 	// Initial request plus the three configured retry probes.
-	if stub.calls != 4 {
-		t.Fatalf("upstream attempts = %d, want 4 (initial request plus retry budget)", stub.calls)
-	}
+	testutil.Equal(t, stub.calls, 4)
 }
 
 // TestSharedRefusalWaitBudgetIsBounded pins the bound on the shared-refusal
@@ -209,9 +196,7 @@ func TestSharedRefusalBeforeOutputUsesRetryWindow(t *testing.T) {
 // cost about 33*N + 1.6*(N+1). The default must admit the most windows that
 // still finish inside the edge.
 func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
-	if sharedRefusalTotalWaitBudget != 60*time.Second {
-		t.Fatalf("budget = %v, want 60s", sharedRefusalTotalWaitBudget)
-	}
+	testutil.Equal(t, sharedRefusalTotalWaitBudget, 60*time.Second)
 
 	for _, tc := range []struct {
 		name    string
@@ -226,9 +211,7 @@ func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
 		{"nothing to wait for is not a wait", 0, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sharedRefusalWaitAllowed(tc.already, tc.next); got != tc.want {
-				t.Fatalf("sharedRefusalWaitAllowed(%v, %v) = %v, want %v", tc.already, tc.next, got, tc.want)
-			}
+			testutil.Equal(t, sharedRefusalWaitAllowedWithin(tc.already, tc.next, sharedRefusalTotalWaitBudget), tc.want)
 		})
 	}
 
@@ -243,9 +226,7 @@ func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
 		return time.Duration(windows)*windowCost + time.Duration(windows+1)*attemptCost
 	}
 	windows := int(sharedRefusalTotalWaitBudget / (30 * time.Second))
-	if windows != 2 {
-		t.Fatalf("budget admits %d windows, want 2", windows)
-	}
+	testutil.Equal(t, windows, 2)
 	if got := wallClock(windows); got >= edgeOriginTimeout {
 		t.Fatalf("worst case wall clock = %v, which the %v edge origin timeout cuts off", got, edgeOriginTimeout)
 	}
@@ -256,12 +237,8 @@ func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
 
 	// The configured form wins, and an operator raising it must actually get the
 	// longer window rather than being clamped back to the constant.
-	if got := SharedRefusalWaitBudget(0); got != sharedRefusalTotalWaitBudget {
-		t.Fatalf("unset budget = %v, want the built-in default", got)
-	}
-	if got := SharedRefusalWaitBudget(150000); got != 150*time.Second {
-		t.Fatalf("configured budget = %v, want 150s", got)
-	}
+	testutil.Equal(t, SharedRefusalWaitBudget(0), sharedRefusalTotalWaitBudget)
+	testutil.Equal(t, SharedRefusalWaitBudget(150000), 150*time.Second)
 	if !sharedRefusalWaitAllowedWithin(90*time.Second, 30*time.Second, SharedRefusalWaitBudget(150000)) {
 		t.Fatal("a raised budget must admit the window the default refuses")
 	}

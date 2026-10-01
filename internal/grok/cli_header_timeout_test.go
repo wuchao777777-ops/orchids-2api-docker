@@ -11,6 +11,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func headerTimeoutTestClient(t *testing.T, server *httptest.Server, timeout time.Duration) (*CLIClient, *store.Account) {
@@ -67,7 +68,5 @@ func TestCLIResponsesHeaderTimeoutStopsAfterHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(body) != "data: done\n\n" {
-		t.Fatalf("body=%q", body)
-	}
+	testutil.Equal(t, string(body), "data: done\n\n")
 }

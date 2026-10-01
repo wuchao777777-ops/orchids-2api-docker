@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"regexp"
 	"strings"
 	"testing"
@@ -51,9 +52,7 @@ func TestCatalogFetchCarriesTheClientHeadersToo(t *testing.T) {
 			"Accept-Language": "*",
 			"Sec-Fetch-Mode":  "cors",
 		} {
-			if got := headers.Get(name); got != want {
-				t.Errorf("catalog header %s = %q, want %q", name, got, want)
-			}
+			testutil.CheckEqual(t, headers.Get(name), want)
 		}
 		if trace := headers.Get("Traceparent"); !validTraceparent(trace) {
 			t.Errorf("catalog Traceparent = %q, want a version 00 trace context", trace)

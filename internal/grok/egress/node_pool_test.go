@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestNodesFromConfigDisabled(t *testing.T) {
@@ -24,12 +25,8 @@ func TestNodesFromConfig(t *testing.T) {
 		},
 	}
 	nodes := nodesFromConfig(cfg)
-	if len(nodes) != 2 {
-		t.Fatalf("expected 2 nodes, got %d", len(nodes))
-	}
-	if nodes[0].Weight != 2 {
-		t.Fatalf("node a weight = %d", nodes[0].Weight)
-	}
+	testutil.Equal(t, len(nodes), 2)
+	testutil.Equal(t, nodes[0].Weight, 2)
 	if !nodes[0].Proxied {
 		t.Fatal("node a should be proxied")
 	}
@@ -91,9 +88,7 @@ func TestManagerUnhealthyNodeSkipped(t *testing.T) {
 		if err != nil {
 			t.Fatalf("acquire %d failed: %v", i, err)
 		}
-		if lease.NodeID == "bad" {
-			t.Fatalf("unhealthy node should be skipped, got %q", lease.NodeID)
-		}
+		testutil.NotEqual(t, lease.NodeID, "bad")
 		lease.Release()
 	}
 }
@@ -127,9 +122,7 @@ func TestFeedbackOutcome_RateLimitKeepsHealth(t *testing.T) {
 	m.mu.RLock()
 	after := m.health["n1"]
 	m.mu.RUnlock()
-	if after != before {
-		t.Fatalf("rate limit should not change node health: before=%f after=%f", before, after)
-	}
+	testutil.Equal(t, after, before)
 }
 
 func TestParseProxyURL(t *testing.T) {
@@ -180,9 +173,7 @@ func TestNodeCooldownGrowsAndCaps(t *testing.T) {
 		20: nodeCooldownMax,
 	}
 	for failures, want := range cases {
-		if got := nodeCooldownFor(failures); got != want {
-			t.Fatalf("nodeCooldownFor(%d) = %s, want %s", failures, got, want)
-		}
+		testutil.Equal(t, nodeCooldownFor(failures), want)
 		if got := nodeCooldownFor(failures); got > nodeCooldownMax {
 			t.Fatalf("nodeCooldownFor(%d) = %s exceeds the cap", failures, got)
 		}
@@ -209,14 +200,10 @@ func TestFeedbackOutcomeBacksOffExponentially(t *testing.T) {
 	if second < first {
 		t.Fatalf("second cooldown %s must be longer than the first %s", second, first)
 	}
-	if m.lastError["n1"] != "transport" {
-		t.Fatalf("last error = %q, want transport", m.lastError["n1"])
-	}
+	testutil.Equal(t, m.lastError["n1"], "transport")
 	// A success clears both the cooldown and the accumulated backoff.
 	m.FeedbackOutcome("n1", OutcomeSuccess)
-	if m.failures["n1"] != 0 {
-		t.Fatalf("failures = %d, want 0 after success", m.failures["n1"])
-	}
+	testutil.Equal(t, m.failures["n1"], 0)
 	if _, cooling := m.unhealthy["n1"]; cooling {
 		t.Fatal("a successful node must leave the cooldown map")
 	}
@@ -247,12 +234,8 @@ func TestHealthPersistsAcrossManagers(t *testing.T) {
 	failures := second.failures["n1"]
 	_, cooling := second.unhealthy["n1"]
 	second.mu.RUnlock()
-	if failures != 2 {
-		t.Fatalf("restored failures = %d, want 2", failures)
-	}
-	if !cooling {
-		t.Fatal("restored node must keep its cooldown")
-	}
+	testutil.Equal(t, failures, 2)
+	testutil.True(t, cooling, "restored node must keep its cooldown")
 	// A node that no longer exists in the configuration must not come back.
 	cfg.GrokEgressNodes = []config.EgressNodeConfig{{Name: "other", URL: "http://127.0.0.1:1", Scope: "all"}}
 	third := NewManager(cfg)

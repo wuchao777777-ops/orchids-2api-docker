@@ -1,9 +1,11 @@
 package grok
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -26,33 +28,63 @@ func TestLocalErrorKeepsItsStatusAndMessage(t *testing.T) {
 	for _, message := range local {
 		rec := httptest.NewRecorder()
 		writeGrokUpstreamError(rec, errors.New(message))
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("%q: status = %d, want 400 for a local error", message, rec.Code)
-		}
-		if !strings.Contains(rec.Body.String(), message) {
-			t.Errorf("%q: the local message was replaced: %s", message, rec.Body.String())
-		}
+		testutil.CheckEqual(t, rec.Code, http.StatusBadRequest)
+		testutil.CheckContain(t, rec.Body.String(), message)
 	}
 }
 
 // TestUpstreamErrorIsStillSanitized pins the other half: a genuine upstream failure
 // is still classified as one, answered 5xx, and stripped of upstream detail.
 func TestUpstreamErrorIsStillSanitized(t *testing.T) {
-	upstream := []string{
-		"grok upstream status=502 body=bad gateway from xai",
-		"grok cli upstream status=403 body=forbidden",
+	upstream := []struct {
+		name        string
+		message     string
+		wantStatus  int
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name:        "legacy 502",
+			message:     `grok upstream status=502 body={"message":"bad gateway from xai","team":"classify-private-team","token":"classify-secret-token"}`,
+			wantStatus:  http.StatusBadGateway,
+			wantCode:    "server",
+			wantMessage: "The upstream service is temporarily unavailable. Retry later.",
+		},
+		{
+			name:        "legacy 403",
+			message:     `grok cli upstream status=403 body={"message":"forbidden","team":"classify-private-team","token":"classify-secret-token"}`,
+			wantStatus:  http.StatusServiceUnavailable,
+			wantCode:    "auth_blocked",
+			wantMessage: "The upstream account is not allowed to use this feature. Check its plan and permissions.",
+		},
 	}
-	for _, message := range upstream {
-		rec := httptest.NewRecorder()
-		writeGrokUpstreamError(rec, errors.New(message))
-		// A credential-class failure is answered 503 (grok2api does the same: the
-		// caller's own key is fine, the account pool needs operator action); any
-		// other upstream failure carries the status for its category.
-		if rec.Code < 400 {
-			t.Errorf("%q: status = %d, want an error for an upstream failure", message, rec.Code)
-		}
-		if strings.Contains(rec.Body.String(), "body=") {
-			t.Errorf("%q: upstream body leaked to the client: %s", message, rec.Body.String())
-		}
+	for _, tc := range upstream {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeGrokUpstreamError(rec, errors.New(tc.message))
+			// Credentials belong to the operator-owned pool, so legacy 403
+			// maps to 503 while a server-class upstream 502 stays 502.
+			testutil.Equal(t, rec.Code, tc.wantStatus)
+			if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+				t.Fatalf("Content-Type = %q, want application/json", got)
+			}
+			var payload struct {
+				Error struct {
+					Message string `json:"message"`
+					Type    string `json:"type"`
+					Code    string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
+			}
+			if payload.Error.Code != tc.wantCode || payload.Error.Type != "server_error" {
+				t.Fatalf("error code/type = %q/%q, want %s/server_error", payload.Error.Code, payload.Error.Type, tc.wantCode)
+			}
+			testutil.Equal(t, payload.Error.Message, tc.wantMessage)
+			for _, leak := range []string{"body=", "status=", "classify-private-team", "classify-secret-token", "bad gateway from xai", "forbidden"} {
+				testutil.CheckNotContain(t, rec.Body.String(), leak)
+			}
+		})
 	}
 }

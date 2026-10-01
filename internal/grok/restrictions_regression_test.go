@@ -13,15 +13,14 @@ import (
 	"encoding/json"
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestRestrictionsToolNamesRemainCaseSensitiveAndRoundTrip(t *testing.T) {
 	tools := []ToolDef{{Type: "function", Function: map[string]interface{}{"name": "ReadFile"}}, {Type: "function", Function: map[string]interface{}{"name": "readfile"}}}
 	req := ChatCompletionsRequest{Model: "grok-4.6", Messages: []ChatMessage{{Role: "user", Content: "hi"}}, Tools: tools,
 		ToolChoice: map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "ReadFile"}}}
-	if err := req.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, req.Validate())
 	req.ToolChoice.(map[string]interface{})["function"].(map[string]interface{})["name"] = "READFILE"
 	if err := req.Validate(); err == nil {
 		t.Fatal("forced names must match exactly")
@@ -33,9 +32,7 @@ func TestRestrictionsToolNamesRemainCaseSensitiveAndRoundTrip(t *testing.T) {
 	declarations := []map[string]interface{}{{"type": "function", "name": "a b"}, {"type": "function", "name": "a_b_2"}, {"type": "function", "name": "a@b"}, {"type": "function", "name": longName}, {"type": "function", "name": "ReadFile"}, {"type": "function", "name": "readfile"}}
 	payload := map[string]interface{}{"tools": declarations, "tool_choice": map[string]interface{}{"type": "function", "name": longName}, "input": []interface{}{map[string]interface{}{"type": "function_call", "name": longName, "call_id": "call_x", "arguments": "{}"}}}
 	aliases := collectBuildToolAliases(payload)
-	if err := normalizeBuildResponsesPayload(payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	seen := map[string]bool{}
 	for _, tool := range interfaceMaps(payload["tools"]) {
 		name := tool["name"].(string)
@@ -51,9 +48,7 @@ func TestRestrictionsToolNamesRemainCaseSensitiveAndRoundTrip(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{"type": "function_call", "name": alias, "call_id": "call_x", "arguments": "{}"})
 	var restored map[string]interface{}
 	_ = json.Unmarshal(rewriteBuildToolAliasesJSON(raw, aliases), &restored)
-	if restored["name"] != longName {
-		t.Fatalf("round trip lost original name: %v", restored)
-	}
+	testutil.EqualAny(t, restored["name"], longName)
 }
 
 // validatePayloadReasoning only checks structure and never rewrites the caller's
@@ -89,9 +84,7 @@ func TestRestrictionsReasoningAliasesReachWire(t *testing.T) {
 func TestRestrictionsEmptyAndImageToolOutputs(t *testing.T) {
 	for _, content := range []interface{}{"", []interface{}{map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/a.png", "detail": "high"}}}} {
 		messages := []ChatMessage{{Role: "tool", ToolCallID: "call_a", Content: content}}
-		if err := validateChatMessages(messages); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, validateChatMessages(messages))
 		input, _ := responsesInputFromChatMessages(messages)
 		item := input[0].(map[string]interface{})
 		if item["call_id"] != "call_a" {
@@ -146,21 +139,15 @@ func TestRestrictionsScopedCooldownAndPacing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	for i := 0; i < 100; i++ {
-		if err := waitScopedRateLimit(ctx, ProviderBuild, "unlimited-default", "m", 0); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, waitScopedRateLimit(ctx, ProviderBuild, "unlimited-default", "m", 0))
 	}
-	if err := waitScopedRateLimit(ctx, ProviderBuild, "paced-account-a", "m", 0.1); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, waitScopedRateLimit(ctx, ProviderBuild, "paced-account-a", "m", 0.1))
 	short, stop := context.WithTimeout(ctx, 20*time.Millisecond)
 	defer stop()
 	if err := waitScopedRateLimit(short, ProviderBuild, "paced-account-a", "m", 0.1); err == nil {
 		t.Fatal("configured pace ignored")
 	}
-	if err := waitScopedRateLimit(ctx, ProviderBuild, "paced-account-b", "m", 0.1); err != nil {
-		t.Fatal("unrelated account blocked", err)
-	}
+	testutil.NoError(t, waitScopedRateLimit(ctx, ProviderBuild, "paced-account-b", "m", 0.1), "unrelated account blocked")
 }
 
 func TestRestrictionsBuildChatLongToolNameEndToEnd(t *testing.T) {
@@ -174,17 +161,11 @@ func TestRestrictionsBuildChatLongToolNameEndToEnd(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "resp_tool", "status": "completed", "output": []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_long", "name": choice["name"], "arguments": "{}"}}})
 	}))
 	defer upstream.Close()
-	h, s, mini := setupValidationHandler(t)
-	defer s.Close()
-	defer mini.Close()
+	h, s, _ := setupValidationHandler(t)
 	model := "grok-4.6"
-	if err := s.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: model, Name: model, Status: store.ModelStatusAvailable, Verified: true}); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: model, Name: model, Status: store.ModelStatusAvailable, Verified: true}))
 	acc := &store.Account{AccountType: "grok", GrokProvider: ProviderBuild, CredentialType: "oauth", Enabled: true, OAuthAccessToken: jwtWithClaims(t, `{"sub":"restriction-user","team_id":"restriction-build"}`), OAuthExpiresAt: time.Now().Add(time.Hour), GrokModels: []string{model}, GrokModelsSyncedAt: time.Now()}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc))
 	h.cfg = &config.Config{GrokCLIBaseURL: upstream.URL + "/v1"}
 	h.cliClient = NewCLIClient(h.cfg)
 	h.cliClient.httpClient = upstream.Client()

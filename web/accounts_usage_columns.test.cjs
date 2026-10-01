@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('./test-support.cjs');
 
-function loadUI() {
+function loadUI(viewport = 1440) {
   const storage = new Map();
   const makeElement = (tag) => {
     const classes = new Set();
@@ -26,14 +26,27 @@ function loadUI() {
       checked: false,
       textContent: '',
       get innerHTML() { return this.__innerHTML !== undefined ? this.__innerHTML : this.textContent; },
-      set innerHTML(value) { this.__innerHTML = value; },
+      set innerHTML(value) { this.__innerHTML = value; children.splice(0); },
       style: {},
       dataset: {},
       children,
       reset() {},
       addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
       click() { (listeners.click || []).forEach((fn) => fn({ target: this })); },
-      appendChild(child) { children.push(child); return child; },
+      appendChild(child) {
+        if (child.tagName === 'fragment') children.push(...child.children.splice(0));
+        else children.push(child);
+        return child;
+      },
+      replaceChildren(...nodes) { children.splice(0, children.length, ...nodes); },
+      querySelectorAll(selector) {
+        const descendants = (parent) => parent.children.flatMap((child) => [child, ...descendants(child)]);
+        const [ancestor, tag] = selector.split(' ');
+        const all = descendants(this);
+        return tag ? all.filter((child) => child.tagName === ancestor).flatMap((parent) => descendants(parent).filter((child) => child.tagName === tag))
+          : all.filter((child) => child.tagName === selector);
+      },
+      querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
       insertAdjacentHTML(_position, html) { this.__innerHTML = (this.__innerHTML || '') + html; },
       classList: {
         add: (name) => classes.add(name),
@@ -61,8 +74,8 @@ function loadUI() {
       setInterval: () => 0,
       clearInterval: () => {},
       addEventListener() {},
-      matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-      innerWidth: 1440,
+      matchMedia: () => ({ matches: viewport <= 640, addEventListener() {}, removeEventListener() {} }),
+      innerWidth: viewport,
       localStorage: {
         getItem: (key) => (storage.has(key) ? storage.get(key) : null),
         setItem: (key, value) => storage.set(key, String(value)),
@@ -135,8 +148,9 @@ test('the recovery line appears only for an account that is actually held', () =
   const { context } = loadUI();
   // A healthy account must not carry a recovery time: printing one there would
   // say "held" while the badge says 正常.
-  const healthy = { id: 1, account_type: 'cline', enabled: true, has_credential: true, status_code: '' };
-  assert.equal(context.buildCooldownMarkup(healthy), '');
+  const healthy = { id: 1, account_type: 'cline', enabled: true, has_credential: true, status_code: '',
+    quota_reset_at: new Date(Date.now() + 3 * 3600000).toISOString() };
+  assert.equal(context.buildCooldownMarkup(healthy), '', 'a normal quota reset is not a routing hold');
   // A cooled account with a stated deadline says when it comes back. The wait
   // is rendered from the same instant as the clock, so the two cannot disagree:
   // 3h minus one second of test runtime must still read as 3 小时, not 2.
@@ -168,15 +182,37 @@ test('an expired cooldown says it is due rather than promising a future time', (
   assert.match(strip(context.buildCooldownMarkup(acc)), /已到期/);
 });
 
-test('the status cell carries the recovery line on both the table and the card', () => {
-  const { context } = loadUI();
-  const source = fs.readFileSync(path.join(__dirname, 'static/js/accounts.js'), 'utf8');
-  // Desktop builds the cell by hand; the mobile card reuses buildStatusMarkup.
-  // Both have to carry it, or one layout drops the recovery time.
-  assert.match(source, /cooldown\.innerHTML = buildCooldownMarkup\(acc\)/);
-  assert.match(source, /if \(cooldown\.innerHTML\) tdStatus\.appendChild\(cooldown\)/);
-  assert.match(source, /\$\{buildCooldownMarkup\(acc\)\}/);
-  assert.equal(typeof context.buildCooldownMarkup, 'function');
+test('the shared desktop/phone status cell renders recovery only while held', () => {
+  // There is no separate mobile renderer: responsiveTable stamps data-label on
+  // the same row DOM, and main.css presents it as a card below 640px.
+  const css = fs.readFileSync(path.join(__dirname, 'static/css/main.css'), 'utf8');
+  const phoneRules = css.match(/@media\s*\(max-width:\s*640px\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(phoneRules, 'the shared table has a phone breakpoint');
+  assert.match(phoneRules[1], /\.responsive-table tbody tr\s*\{[^}]*display:\s*grid/);
+  assert.match(phoneRules[1], /content:\s*attr\(data-label\)/);
+  for (const viewport of [1440, 390]) {
+    const { context, node } = loadUI(viewport);
+    const healthy = { id: 1, account_type: 'cline', enabled: true, has_credential: true, status_code: '',
+      quota_reset_at: new Date(Date.now() + 3 * 3600000).toISOString() };
+    const cooled = { ...healthy, id: 2, status_code: '429' };
+    vm.runInContext(`accounts = ${JSON.stringify([healthy, cooled])}; currentPlatform = 'cline'; renderAccounts();`, context);
+    const table = node('accountsList').querySelector('table');
+    assert.ok(table, `${viewport}: actual account table rendered`);
+    assert.equal(table.classList.contains('responsive-table'), true);
+    const rows = table.querySelectorAll('tbody tr');
+    assert.equal(rows.length, 2);
+    const status = (row) => row.children.find((cell) => cell.className === 'col-status');
+    const healthyCell = status(rows[0]);
+    const cooledCell = status(rows[1]);
+    assert.equal(healthyCell.dataset.label, '状态', `${viewport}: phone card label`);
+    assert.equal(healthyCell.children.length, 1, `${viewport}: no recovery on a healthy row`);
+    assert.equal(healthyCell.children[0].textContent, '正常');
+    assert.equal(cooledCell.dataset.label, '状态');
+    assert.equal(cooledCell.children.length, 2, `${viewport}: recovery is attached to the actual status cell`);
+    assert.equal(cooledCell.children[0].textContent, context.statusBadge(cooled).text);
+    assert.match(strip(cooledCell.children[1].innerHTML), /恢复/);
+    assert.match(strip(cooledCell.children[1].innerHTML), /3 小时后/);
+  }
 });
 
 // --- 创建时间 ---------------------------------------------------------------
@@ -191,16 +227,24 @@ test('the creation time renders as a calendar date', () => {
 
 // --- 表格与卡片都带齐三列 ---------------------------------------------------
 
-test('the desktop header and the mobile card both carry the three columns', () => {
-  const source = fs.readFileSync(path.join(__dirname, 'static/js/accounts.js'), 'utf8');
-  for (const label of ['今日/累计 Tokens', '创建时间']) {
-    assert.ok(source.includes(label), `accounts.js never renders ${label}`);
+test('the shared table headers and phone labels carry tokens and creation time', () => {
+  for (const viewport of [1440, 390]) {
+    const { context, node } = loadUI(viewport);
+    const account = { id: 1, account_type: 'cline', enabled: true, has_credential: true,
+      tokens_today: 23849, tokens_date: dayStamp(), usage_total: 1234567, created_at: '2026-09-20T15:27:37Z' };
+    vm.runInContext(`accounts = [${JSON.stringify(account)}]; currentPlatform = 'cline'; renderAccounts();`, context);
+    const table = node('accountsList').querySelector('table');
+    const headers = table.querySelectorAll('thead th').map((th) => th.textContent);
+    assert.ok(headers.includes('今日/累计 Tokens'));
+    assert.ok(headers.includes('创建时间'));
+    const row = table.querySelectorAll('tbody tr')[0];
+    const tokens = row.children.find((cell) => cell.className === 'col-tokens');
+    const created = row.children.find((cell) => cell.className === 'col-created');
+    assert.equal(tokens.dataset.label, '今日/累计 Tokens');
+    assert.equal(strip(tokens.innerHTML), '23.8K / 1.23M');
+    assert.equal(created.dataset.label, '创建时间');
+    assert.equal(strip(created.innerHTML), '2026-09-20');
   }
-  assert.match(source, /ConsoleUI\.responsiveTable/);
-  assert.doesNotMatch(source, /function renderAccountsMobile/);
-  assert.match(source, /buildCreatedMarkup\(acc\)/);
-  assert.match(source, /buildTokensMarkup\(acc\)/);
-
 });
 
 // --- Cline 等级 / 配额 ------------------------------------------------------

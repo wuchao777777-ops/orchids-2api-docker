@@ -13,6 +13,7 @@ import (
 
 	"orchids-api/internal/audit"
 	"orchids-api/internal/pricing"
+	"orchids-api/internal/testutil"
 )
 
 // stubBillingLedger is an in-memory stand-in for the Redis ledger. It applies
@@ -109,12 +110,8 @@ func TestAPIKeyBillingReservationSettles(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler(recorder, billingRequest(http.MethodPost, "/v1/chat/completions", billingChatBody, principal, "req-1"))
 
-	if !handlerRun {
-		t.Fatal("handler must run for a reservation that fits")
-	}
-	if seenBody != billingChatBody {
-		t.Fatalf("handler body = %q, want the original body", seenBody)
-	}
+	testutil.True(t, handlerRun, "handler must run for a reservation that fits")
+	testutil.Equal(t, seenBody, billingChatBody)
 	if seenHeld == nil || seenHeld.KeyID != 7 || seenHeld.EventID != "req-1" || seenHeld.Amount <= 0 {
 		t.Fatalf("reservation in context = %#v", seenHeld)
 	}
@@ -128,12 +125,8 @@ func TestAPIKeyBillingReservationSettles(t *testing.T) {
 	if len(ledger.settles) != 1 || ledger.settles[0] != settled.CostInUSDTicks || ledger.used != settled.CostInUSDTicks {
 		t.Fatalf("ledger after settle = %#v", ledger)
 	}
-	if len(ledger.held) != 0 {
-		t.Fatalf("hold survived settlement: %#v", ledger.held)
-	}
-	if len(ledger.releases) != 0 {
-		t.Fatalf("a settled request was also released: %#v", ledger.releases)
-	}
+	testutil.Equal(t, len(ledger.held), 0)
+	testutil.Equal(t, len(ledger.releases), 0)
 }
 
 // TestAPIKeyBillingReservationReleasesUnsettledRequest checks the deferred
@@ -174,12 +167,8 @@ func TestAPIKeyBillingReservationRefusesOverLimit(t *testing.T) {
 	if handlerRun {
 		t.Fatal("a refused reservation must not call the handler")
 	}
-	if recorder.Code != http.StatusPaymentRequired {
-		t.Fatalf("status = %d, want 402", recorder.Code)
-	}
-	if recorder.Header().Get("WWW-Authenticate") != "Bearer" {
-		t.Fatalf("missing WWW-Authenticate header")
-	}
+	testutil.Equal(t, recorder.Code, http.StatusPaymentRequired)
+	testutil.Equal(t, recorder.Header().Get("WWW-Authenticate"), "Bearer")
 	var envelope struct {
 		Error struct {
 			Message string `json:"message"`
@@ -193,12 +182,8 @@ func TestAPIKeyBillingReservationRefusesOverLimit(t *testing.T) {
 	if envelope.Error.Code != "billing_limit_exceeded" || envelope.Error.Message != "API key billing limit exceeded" {
 		t.Fatalf("error envelope = %#v", envelope.Error)
 	}
-	if envelope.Error.Type != "insufficient_quota" {
-		t.Fatalf("error type = %q, want insufficient_quota", envelope.Error.Type)
-	}
-	if len(ledger.held) != 0 {
-		t.Fatalf("refused reservation was recorded: %#v", ledger.held)
-	}
+	testutil.Equal(t, envelope.Error.Type, "insufficient_quota")
+	testutil.Equal(t, len(ledger.held), 0)
 }
 
 // TestAPIKeyBillingReservationFailsClosedOnLedgerError keeps a Redis outage from
@@ -218,9 +203,7 @@ func TestAPIKeyBillingReservationFailsClosedOnLedgerError(t *testing.T) {
 	if handlerRun {
 		t.Fatal("a failing ledger must not let the request through unmetered")
 	}
-	if recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", recorder.Code)
-	}
+	testutil.Equal(t, recorder.Code, http.StatusServiceUnavailable)
 }
 
 // TestAPIKeyBillingReservationSkipsUnbilledRequests keeps the middleware off
@@ -251,9 +234,7 @@ func TestAPIKeyBillingReservationSkipsUnbilledRequests(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			handler(recorder, billingRequest(tc.method, tc.path, tc.body, tc.principal, "req-skip"))
 
-			if !handlerRun {
-				t.Fatal("handler must still run")
-			}
+			testutil.True(t, handlerRun, "handler must still run")
 			if len(ledger.held) != 0 || len(ledger.settles) != 0 || len(ledger.releases) != 0 {
 				t.Fatalf("ledger was touched: %#v", ledger)
 			}
@@ -280,9 +261,7 @@ func TestAPIKeyBillingReservationReleasesAfterClientDisconnect(t *testing.T) {
 	ctx = context.WithValue(ctx, cancelKey{}, cancel)
 	handler(httptest.NewRecorder(), request.WithContext(ctx))
 
-	if len(ledger.releases) != 1 {
-		t.Fatalf("releases = %#v, want the cancelled request to release its hold", ledger.releases)
-	}
+	testutil.Equal(t, len(ledger.releases), 1)
 }
 
 type cancelKey struct{}
@@ -312,12 +291,8 @@ func TestAPIKeyBillingReservationRestoresOversizedBody(t *testing.T) {
 		strings.Repeat("x", maxBillingBodyBytes+1024) + `"}]}`
 	handler(httptest.NewRecorder(), billingRequest(http.MethodPost, "/v1/chat/completions", body, principal, "req-big"))
 
-	if size != len(body) {
-		t.Fatalf("handler saw %d bytes, want %d", size, len(body))
-	}
-	if len(ledger.settles) != 1 {
-		t.Fatalf("oversized body was not reserved and settled: %#v", ledger)
-	}
+	testutil.Equal(t, size, len(body))
+	testutil.Equal(t, len(ledger.settles), 1)
 }
 
 func readAllBody(r *http.Request) ([]byte, error) {
@@ -346,9 +321,7 @@ func TestSettleAPIKeyBillingRules(t *testing.T) {
 		if _, priced := SettleAPIKeyBilling(ctx, ledger, "grok-4.6", audit.UsageSourceEstimated, 1000, 0, 500); priced {
 			t.Fatal("an estimated row must not be priced")
 		}
-		if len(ledger.settles) != 0 {
-			t.Fatalf("settles = %#v", ledger.settles)
-		}
+		testutil.Equal(t, len(ledger.settles), 0)
 	})
 
 	t.Run("unpriced model", func(t *testing.T) {
@@ -357,9 +330,7 @@ func TestSettleAPIKeyBillingRules(t *testing.T) {
 		if _, priced := SettleAPIKeyBilling(ctx, ledger, "gpt-5", audit.UsageSourceUpstream, 1000, 0, 500); priced {
 			t.Fatal("an unpriced model must not be priced")
 		}
-		if len(ledger.settles) != 0 {
-			t.Fatalf("settles = %#v", ledger.settles)
-		}
+		testutil.Equal(t, len(ledger.settles), 0)
 	})
 
 	t.Run("idempotent per event id", func(t *testing.T) {
@@ -370,9 +341,7 @@ func TestSettleAPIKeyBillingRules(t *testing.T) {
 		if !priced || first != second {
 			t.Fatalf("first=%#v second=%#v priced=%v", first, second, priced)
 		}
-		if len(ledger.settles) != 1 {
-			t.Fatalf("settles = %#v, want exactly one charge", ledger.settles)
-		}
+		testutil.Equal(t, len(ledger.settles), 1)
 	})
 
 	t.Run("without a reservation the cost is still reported", func(t *testing.T) {
@@ -394,9 +363,7 @@ func TestSettleAPIKeyBillingRules(t *testing.T) {
 		if _, priced := SettleAPIKeyBilling(ctx, nil, "grok-4.6", audit.UsageSourceUpstream, 1000, 0, 500); !priced {
 			t.Fatal("a wired ledger must be used")
 		}
-		if len(ledger.settles) != 1 {
-			t.Fatalf("settles = %#v", ledger.settles)
-		}
+		testutil.Equal(t, len(ledger.settles), 1)
 	})
 
 	t.Run("settle failure keeps the audit cost", func(t *testing.T) {
@@ -434,9 +401,7 @@ func TestBillingReservationConcurrentSettleIsIdempotent(t *testing.T) {
 		}
 	}
 	close(done)
-	if winners != 1 {
-		t.Fatalf("claim winners = %d, want exactly 1", winners)
-	}
+	testutil.Equal(t, winners, 1)
 }
 
 func TestBillingRequestPathMatching(t *testing.T) {

@@ -1,6 +1,9 @@
 package errors
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 // TestClassifyAccountStatus_LeadingStatusCodePrefix pins the "<code>: <detail>"
 // error shape that provider layers produce (e.g. the Grok wrapper
@@ -29,9 +32,7 @@ func TestClassifyAccountStatus_LeadingStatusCodePrefix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ClassifyAccountStatus(tc.in); got != tc.want {
-				t.Fatalf("ClassifyAccountStatus(%q) = %q, want %q", tc.in, got, tc.want)
-			}
+			testutil.Equal(t, ClassifyAccountStatus(tc.in), tc.want)
 		})
 	}
 }
@@ -40,7 +41,5 @@ func TestClassifyAccountStatus_LeadingStatusCodePrefix(t *testing.T) {
 // existing guard: a model-name failure must never poison account status even if
 // it is prefixed with a status code.
 func TestClassifyAccountStatus_LeadingPrefixStillYieldsToModelErrors(t *testing.T) {
-	if got := ClassifyAccountStatus("404: model not found"); got != "" {
-		t.Fatalf("ClassifyAccountStatus(404: model not found) = %q, want empty", got)
-	}
+	testutil.Equal(t, ClassifyAccountStatus("404: model not found"), "")
 }

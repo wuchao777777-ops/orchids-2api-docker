@@ -25,7 +25,7 @@ func TestStreamPrefixPreservesNativeToolsAndOrder(t *testing.T) {
 					body += envelope(`{"choices":[{"delta":{"content":"after","tool_calls":[{"index":0,"function":{"arguments":"1}"}}]},"finish_reason":"length"}]}`)
 					body += "event:finish\n\n"
 					var events []upstream.SSEMessage
-					result, err := consumeStreamWithTools(strings.NewReader(body), toolsEnabled, func(e upstream.SSEMessage) { events = append(events, e) })
+					result, err := consumeStreamObserved(strings.NewReader(body), toolsEnabled, func(e upstream.SSEMessage) { events = append(events, e) }, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -59,7 +59,7 @@ func TestStreamPrefixSharedFinishFrame(t *testing.T) {
 						body += "data: [DONE]\n\nevent:finish\n\n"
 					}
 					var events []upstream.SSEMessage
-					result, err := consumeStreamWithTools(strings.NewReader(body), toolsEnabled, func(e upstream.SSEMessage) { events = append(events, e) })
+					result, err := consumeStreamObserved(strings.NewReader(body), toolsEnabled, func(e upstream.SSEMessage) { events = append(events, e) }, nil)
 					if (terminated && err != nil) || (!terminated && !errors.Is(err, ErrStreamTruncated)) {
 						t.Fatalf("error = %v", err)
 					}

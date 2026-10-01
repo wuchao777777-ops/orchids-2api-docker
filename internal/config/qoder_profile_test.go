@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,9 +16,7 @@ func TestQoderProtocolProfileConfigRoundTrip(t *testing.T) {
 				raw = []byte("qoder_protocol_profile: skill-cli\nqoder_client_id: override\n")
 			}
 			path := filepath.Join(t.TempDir(), "config."+ext)
-			if err := os.WriteFile(path, raw, 0600); err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, os.WriteFile(path, raw, 0600))
 			cfg, _, err := Load(path)
 			if err != nil {
 				t.Fatal(err)

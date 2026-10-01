@@ -4,10 +4,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/testutil"
 )
 
 // TestWritePoolExhaustion_CapacityProblemIsRetryable is the initial-selection
@@ -21,19 +21,11 @@ func TestWritePoolExhaustion_CapacityProblemIsRetryable(t *testing.T) {
 
 	writePoolExhaustion(rec, classifyPoolExhaustion(selectErr, selectErr.Error()))
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429 for a cooling pool (body=%s)", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusTooManyRequests)
 	body := rec.Body.String()
-	if !strings.Contains(body, "the requested model is cooling down on this channel") {
-		t.Fatalf("body = %s, want the model-cooldown answer", body)
-	}
-	if strings.Contains(body, "no enabled accounts available for channel") {
-		t.Fatalf("selector detail leaked into the response: %s", body)
-	}
-	if strings.Contains(body, "overloaded_error") {
-		t.Fatalf("a capacity problem was reported as a server fault: %s", body)
-	}
+	testutil.MustContain(t, body, "the requested model is cooling down on this channel")
+	testutil.MustNotContain(t, body, "no enabled accounts available for channel")
+	testutil.MustNotContain(t, body, "overloaded_error")
 }
 
 // TestWritePoolExhaustion_ResidualCausePointsAtTheOperator covers everything that
@@ -46,14 +38,8 @@ func TestWritePoolExhaustion_ResidualCausePointsAtTheOperator(t *testing.T) {
 
 	writePoolExhaustion(rec, classifyPoolExhaustion(selectErr, ""))
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (body=%s)", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusServiceUnavailable)
 	body := rec.Body.String()
-	if !strings.Contains(body, apperrors.PoolNoAccountsMessage) {
-		t.Fatalf("body = %s, want the pool-unavailable answer", body)
-	}
-	if strings.Contains(body, "no enabled accounts available for channel") {
-		t.Fatalf("selector detail leaked into the response: %s", body)
-	}
+	testutil.MustContain(t, body, apperrors.PoolNoAccountsMessage)
+	testutil.MustNotContain(t, body, "no enabled accounts available for channel")
 }

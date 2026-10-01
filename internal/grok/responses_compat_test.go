@@ -2,6 +2,7 @@ package grok
 
 import (
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -19,9 +20,7 @@ data: { "type":"response.completed", "id":"resp_ok", "response":{"id":"resp_ok",
 	// The native relay is byte-transparent: an event that already carries every
 	// field reaches the client exactly as the upstream wrote it, with no added
 	// frame (grok2api relays the same way).
-	if rec.Body.String() != line {
-		t.Fatalf("complete event bytes changed:\n got %q\nwant %q", rec.Body.String(), line)
-	}
+	testutil.Equal(t, rec.Body.String(), line)
 }
 
 func TestNativeResponsesCompatibilitySupplementsStrictClientFields(t *testing.T) {
@@ -35,8 +34,6 @@ func TestNativeResponsesCompatibilitySupplementsStrictClientFields(t *testing.T)
 	}
 	got := rec.Body.String()
 	for _, required := range []string{`"annotations":[]`, `"id":"item_1"`, `"item_id":"item_1"`, `"object":"response"`, `"model":"grok-4.6"`, `"output":[]`} {
-		if !strings.Contains(got, required) {
-			t.Fatalf("missing %s in %s", required, got)
-		}
+		testutil.MustContain(t, got, required)
 	}
 }

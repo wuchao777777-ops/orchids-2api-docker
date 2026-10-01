@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -18,9 +19,7 @@ func TestUpdateQoderAccountQuotaPatchRespectsFreshness(t *testing.T) {
 	s, _ := newTestRedisStore(t, "qoder-quota-patch:")
 
 	acc := &Account{AccountType: "qoder", Enabled: true}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.CreateAccount(context.Background(), acc))
 
 	// The account starts with no snapshot at all: the first notice must land.
 	first := time.Now().Round(time.Millisecond)
@@ -74,9 +73,7 @@ func TestUpdateQoderAccountQuotaPatchRespectsFreshness(t *testing.T) {
 
 	// A patch that carries no quota leaves the stored snapshot alone, which is
 	// what a plain credential rotation relies on.
-	if err := s.UpdateQoderAccount(context.Background(), acc.ID, QoderAccountPatch{UserID: "u-1"}); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, s.UpdateQoderAccount(context.Background(), acc.ID, QoderAccountPatch{UserID: "u-1"}))
 	got, err = s.GetAccount(context.Background(), acc.ID)
 	if err != nil {
 		t.Fatal(err)

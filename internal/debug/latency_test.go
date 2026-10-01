@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -36,21 +37,15 @@ func TestLatencyCapturesReusedConnectionsAndSecrets(t *testing.T) {
 	bundle := capture.Bundle()
 	count := 0
 	for _, s := range bundle.Sections {
-		if strings.Contains(s.Payload, "secret-key") || strings.Contains(s.Payload, "private-user") {
-			t.Fatal("credential leak")
-		}
+		testutil.MustNotContainAny(t, s.Payload, "secret-key", "private-user")
 		if !strings.HasSuffix(s.Name, "latency.json") {
 			continue
 		}
 		count++
 		var v map[string]interface{}
-		if err := json.Unmarshal([]byte(s.Payload), &v); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, json.Unmarshal([]byte(s.Payload), &v))
 		if count == 2 {
-			if v["connection_reused"] != true {
-				t.Fatalf("not reused: %v", v)
-			}
+			testutil.Equal(t, v["connection_reused"], true)
 			if _, ok := v["dns_ms"]; ok {
 				t.Fatal("invented DNS timing")
 			}
@@ -59,9 +54,7 @@ func TestLatencyCapturesReusedConnectionsAndSecrets(t *testing.T) {
 			t.Fatalf("missing response: %v", v)
 		}
 	}
-	if count != 2 {
-		t.Fatalf("attempts=%d", count)
-	}
+	testutil.Equal(t, count, 2)
 }
 func TestLatencyDisabledAndWaitCancellation(t *testing.T) {
 	ctx := context.Background()
@@ -81,7 +74,5 @@ func TestLatencyDisabledAndWaitCancellation(t *testing.T) {
 			found = true
 		}
 	}
-	if !found {
-		t.Fatal("wait lost")
-	}
+	testutil.True(t, found, "wait lost")
 }

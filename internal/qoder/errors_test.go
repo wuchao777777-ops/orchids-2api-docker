@@ -12,6 +12,7 @@ import (
 	"time"
 
 	orchidserrors "orchids-api/internal/errors"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -34,9 +35,7 @@ func TestIsTransientUpstreamStatus(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := IsTransientUpstreamStatus(tc.status, tc.detail); got != tc.want {
-				t.Fatalf("IsTransientUpstreamStatus(%d, %q) = %v, want %v", tc.status, tc.detail, got, tc.want)
-			}
+			testutil.Equal(t, IsTransientUpstreamStatus(tc.status, tc.detail), tc.want)
 		})
 	}
 }
@@ -138,9 +137,7 @@ func TestEmptyAndTransientSentinels(t *testing.T) {
 // multiplies every attempt by its own budget, so an unbounded local retry turns
 // one provider hiccup into a storm.
 func TestTransientBackoffIsBounded(t *testing.T) {
-	if TransientMaxRetries != 2 {
-		t.Fatalf("TransientMaxRetries = %d, want 2", TransientMaxRetries)
-	}
+	testutil.Equal(t, TransientMaxRetries, 2)
 	for attempt := 1; attempt <= TransientMaxRetries; attempt++ {
 		if d := TransientBackoff(attempt); d <= 0 || d > 5*time.Second {
 			t.Errorf("TransientBackoff(%d) = %v, want a short bounded wait", attempt, d)
@@ -174,9 +171,7 @@ func TestRunChatRetriesATransientFaultLocally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runChat() error = %v, want the retry to succeed", err)
 	}
-	if hits != 2 {
-		t.Fatalf("upstream hits = %d, want 2 (one transient failure then a retry)", hits)
-	}
+	testutil.Equal(t, hits, 2)
 	if !sawFinishMessage(got) {
 		t.Fatalf("no finish frame: %+v", got)
 	}
@@ -200,9 +195,7 @@ func TestRunChatDoesNotReplayAContentRefusal(t *testing.T) {
 	if !errors.Is(err, ErrContentPolicy) {
 		t.Fatalf("error = %v, want the content-policy sentinel", err)
 	}
-	if hits != 1 {
-		t.Fatalf("upstream hits = %d, want one: a refusal must never be replayed", hits)
-	}
+	testutil.Equal(t, hits, 1)
 }
 
 // TestRunChatReportsAnEmptyStream proves a 200 stream that delivers nothing is
@@ -223,9 +216,7 @@ func TestRunChatReportsAnEmptyStream(t *testing.T) {
 	if !errors.Is(err, ErrEmptyStream) {
 		t.Fatalf("error = %v, want the empty-stream sentinel", err)
 	}
-	if hits != 1 {
-		t.Fatalf("upstream hits = %d, want one: an empty stream is not replayed", hits)
-	}
+	testutil.Equal(t, hits, 1)
 }
 
 // TestRunChatStopsAtABusyVerdict proves the queue refusal keeps its own wait
@@ -246,9 +237,7 @@ func TestRunChatStopsAtABusyVerdict(t *testing.T) {
 	if !errors.Is(err, ErrBusy) {
 		t.Fatalf("error = %v, want the busy verdict", err)
 	}
-	if hits != 1 {
-		t.Fatalf("upstream hits = %d, want one: a busy verdict waits out its window", hits)
-	}
+	testutil.Equal(t, hits, 1)
 }
 
 func sawFinishMessage(messages []upstream.SSEMessage) bool {

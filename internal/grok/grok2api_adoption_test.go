@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -85,9 +86,7 @@ func TestGrok2apiNativeSSEFramingAndLogicalTerminal(t *testing.T) {
 	}
 	// grok2api relays the native Responses stream: no added [DONE], and the
 	// upstream's own framing (CRLF, multi-line data) is what the client receives.
-	if strings.Contains(recorder.Body.String(), "data: [DONE]") {
-		t.Fatal("the relay appended a Responses-invalid [DONE] frame")
-	}
+	testutil.MustNotContain(t, recorder.Body.String(), "data: [DONE]")
 
 	// A frame that already carries every field the strict clients need is relayed
 	// byte-for-byte, CRLF included: supplementation is what makes a frame differ,
@@ -98,9 +97,7 @@ func TestGrok2apiNativeSSEFramingAndLogicalTerminal(t *testing.T) {
 	if verbatimResult.Err != nil {
 		t.Fatal(verbatimResult.Err)
 	}
-	if verbatim.Body.String() != complete {
-		t.Fatalf("complete frame was rewritten:\n got %q\nwant %q", verbatim.Body.String(), complete)
-	}
+	testutil.Equal(t, verbatim.Body.String(), complete)
 }
 
 // An upstream [DONE] without a terminal response event is still a failure the
@@ -109,13 +106,7 @@ func TestGrok2apiNativeDoneWithoutTerminalSynthesizesFailure(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	_, _, _ = copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader("data: [DONE]\n\n"), "text/event-stream", "grok-4.6")
 	output := recorder.Body.String()
-	if !strings.Contains(output, "event: response.failed") {
-		t.Fatalf("no synthesized failure: %s", output)
-	}
-	if strings.Contains(output, "data: [DONE]") {
-		t.Fatalf("the relay relayed or re-added [DONE]: %s", output)
-	}
-	if !strings.Contains(output, "upstream_terminal_missing") {
-		t.Fatalf("failure reason lost: %s", output)
-	}
+	testutil.MustContain(t, output, "event: response.failed")
+	testutil.MustNotContain(t, output, "data: [DONE]")
+	testutil.MustContain(t, output, "upstream_terminal_missing")
 }

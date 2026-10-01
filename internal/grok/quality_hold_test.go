@@ -13,6 +13,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestClassifyQualityHold(t *testing.T) {
@@ -109,9 +110,7 @@ func TestClassifyQualityHold(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyQualityHold(tc.sig, qualityHoldMinOutputDefault); got != tc.want {
-				t.Fatalf("verdict=%s want %s", got, tc.want)
-			}
+			testutil.Equal(t, classifyQualityHold(tc.sig, qualityHoldMinOutputDefault), tc.want)
 		})
 	}
 }
@@ -119,29 +118,15 @@ func TestClassifyQualityHold(t *testing.T) {
 func TestDecideQualityRetryPolicy(t *testing.T) {
 	// Six attempts: the first five withhold-and-retry, the sixth delivers.
 	for attempt := 0; attempt < qualityHoldMaxAttemptsDefault-1; attempt++ {
-		if got := decideQualityRetry(qualityWithhold, attempt, qualityHoldMaxAttemptsDefault, qualityRetryFailOpen); got != qualityActionRetry {
-			t.Fatalf("attempt=%d action=%s want retry", attempt, got)
-		}
+		testutil.Equal(t, decideQualityRetry(qualityWithhold, attempt, qualityHoldMaxAttemptsDefault, qualityRetryFailOpen), qualityActionRetry)
 	}
-	if got := decideQualityRetry(qualityWithhold, qualityHoldMaxAttemptsDefault-1, qualityHoldMaxAttemptsDefault, qualityRetryFailOpen); got != qualityActionDeliverLast {
-		t.Fatalf("last attempt action=%s want deliver_last", got)
-	}
-	if got := decideQualityRetry(qualityWithhold, qualityHoldMaxAttemptsDefault-1, qualityHoldMaxAttemptsDefault, qualityRetryFailClosed); got != qualityActionReject {
-		t.Fatalf("fail-closed last attempt action=%s want reject", got)
-	}
-	if got := decideQualityRetry(qualityDeliver, 0, qualityHoldMaxAttemptsDefault, qualityRetryFailOpen); got != qualityActionDeliver {
-		t.Fatalf("deliver verdict action=%s", got)
-	}
+	testutil.Equal(t, decideQualityRetry(qualityWithhold, qualityHoldMaxAttemptsDefault-1, qualityHoldMaxAttemptsDefault, qualityRetryFailOpen), qualityActionDeliverLast)
+	testutil.Equal(t, decideQualityRetry(qualityWithhold, qualityHoldMaxAttemptsDefault-1, qualityHoldMaxAttemptsDefault, qualityRetryFailClosed), qualityActionReject)
+	testutil.Equal(t, decideQualityRetry(qualityDeliver, 0, qualityHoldMaxAttemptsDefault, qualityRetryFailOpen), qualityActionDeliver)
 	// No routing attempt left: a retry must degrade into deliver-last or reject.
-	if got := boundQualityRetry(qualityActionRetry, false, qualityRetryFailOpen); got != qualityActionDeliverLast {
-		t.Fatalf("bound fail-open action=%s", got)
-	}
-	if got := boundQualityRetry(qualityActionRetry, false, qualityRetryFailClosed); got != qualityActionReject {
-		t.Fatalf("bound fail-closed action=%s", got)
-	}
-	if got := boundQualityRetry(qualityActionRetry, true, qualityRetryFailClosed); got != qualityActionRetry {
-		t.Fatalf("bound with a next account action=%s", got)
-	}
+	testutil.Equal(t, boundQualityRetry(qualityActionRetry, false, qualityRetryFailOpen), qualityActionDeliverLast)
+	testutil.Equal(t, boundQualityRetry(qualityActionRetry, false, qualityRetryFailClosed), qualityActionReject)
+	testutil.Equal(t, boundQualityRetry(qualityActionRetry, true, qualityRetryFailClosed), qualityActionRetry)
 }
 
 func TestQualityRequestReplayUnsafe(t *testing.T) {
@@ -193,25 +178,15 @@ func TestDeferredResponseWriterHoldsThenCommits(t *testing.T) {
 	if rec.Body.Len() != 0 || rec.Code != http.StatusOK {
 		t.Fatalf("held response leaked: code=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if deferred.Buffered() == 0 {
-		t.Fatal("held bytes were not buffered")
-	}
-	if err := deferred.Commit(); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-	if got := rec.Body.String(); got != "data: first\n\n" {
-		t.Fatalf("committed body=%q", got)
-	}
-	if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
-		t.Fatalf("committed Content-Type=%q", got)
-	}
+	testutil.NotEqual(t, deferred.Buffered(), 0)
+	testutil.NoError(t, deferred.Commit(), "commit: %v")
+	testutil.Equal(t, rec.Body.String(), "data: first\n\n")
+	testutil.Equal(t, rec.Header().Get("Content-Type"), "text/event-stream")
 	// After the commit the writer is transparent: no second status line.
 	if _, err := io.WriteString(deferred, "data: second\n\n"); err != nil {
 		t.Fatalf("write after commit: %v", err)
 	}
-	if got := rec.Body.String(); got != "data: first\n\ndata: second\n\n" {
-		t.Fatalf("body after commit=%q", got)
-	}
+	testutil.Equal(t, rec.Body.String(), "data: first\n\ndata: second\n\n")
 }
 
 func TestDeferredResponseWriterParksWithoutRevealing(t *testing.T) {
@@ -228,16 +203,10 @@ func TestDeferredResponseWriterParksWithoutRevealing(t *testing.T) {
 	if _, err := io.WriteString(deferred, "more"); err != nil {
 		t.Fatalf("write after park: %v", err)
 	}
-	if rec.Body.Len() != 0 {
-		t.Fatalf("parked response leaked: %q", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Body.Len(), 0)
 	// Fail-open delivery writes the parked body to the real client.
-	if err := parked.CommitTo(rec); err != nil {
-		t.Fatalf("commit parked: %v", err)
-	}
-	if got := rec.Body.String(); got != "degraded dump" {
-		t.Fatalf("delivered body=%q", got)
-	}
+	testutil.NoError(t, parked.CommitTo(rec), "commit parked: %v")
+	testutil.Equal(t, rec.Body.String(), "degraded dump")
 }
 
 func TestDeferredResponseWriterOverflowDelivers(t *testing.T) {
@@ -253,9 +222,7 @@ func TestDeferredResponseWriterOverflowDelivers(t *testing.T) {
 		}
 	}
 	// Past the cap the response is delivered instead of buffered without bound.
-	if rec.Body.Len() == 0 {
-		t.Fatal("overflow did not deliver the response")
-	}
+	testutil.NotEqual(t, rec.Body.Len(), 0)
 }
 
 func TestQualityHoldPolicyDefaults(t *testing.T) {
@@ -327,6 +294,7 @@ func TestServeNativeChatWithholdsDegradedTurnAndRetriesAnotherAccount(t *testing
 	degraded := degradedUpstream(t)
 	defer degraded.Close()
 	healthy := healthyUpstream(t)
+	defer healthy.Close()
 
 	var healthyCalls int
 	var degradedCalls int
@@ -342,11 +310,7 @@ func TestServeNativeChatWithholdsDegradedTurnAndRetriesAnotherAccount(t *testing
 	}))
 	defer routing.Close()
 
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &store.Model{
 		Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5",
@@ -363,9 +327,7 @@ func TestServeNativeChatWithholdsDegradedTurnAndRetriesAnotherAccount(t *testing
 		OAuthAccessToken: "jwt-user-healthy", GrokModels: []string{"grok-4.5"}, GrokModelsSyncedAt: time.Now(),
 	}
 	for _, acc := range []*store.Account{degradedAcc, healthyAcc} {
-		if err := s.CreateAccount(ctx, acc); err != nil {
-			t.Fatalf("CreateAccount: %v", err)
-		}
+		testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount: %v")
 	}
 
 	h.cfg = &config.Config{GrokCLIBaseURL: routing.URL + "/v1"}
@@ -380,9 +342,7 @@ func TestServeNativeChatWithholdsDegradedTurnAndRetriesAnotherAccount(t *testing
 	}
 	defer sess.Close()
 	spec, ok := h.resolveConversationModel(ctx, "grok-4.5")
-	if !ok {
-		t.Fatal("grok-4.5 did not resolve")
-	}
+	testutil.True(t, ok, "grok-4.5 did not resolve")
 	effort := "high"
 	req := &ChatCompletionsRequest{
 		Model: "grok-4.5", Stream: true, ReasoningEffort: &effort,
@@ -391,22 +351,12 @@ func TestServeNativeChatWithholdsDegradedTurnAndRetriesAnotherAccount(t *testing
 	rec := httptest.NewRecorder()
 	h.serveNativeChat(ctx, rec, req, spec, sess, nil, true)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	stream := rec.Body.String()
-	if strings.Contains(stream, "status loop") {
-		t.Fatalf("the degraded dump reached the client: %s", stream)
-	}
-	if !strings.Contains(stream, "healthy answer") {
-		t.Fatalf("the healthy answer never arrived: %s", stream)
-	}
-	if healthyCalls == 0 {
-		t.Fatal("the request was never retried on the healthy account")
-	}
-	if degradedCalls != 1 {
-		t.Fatalf("degraded upstream calls=%d want 1 (the withheld attempt)", degradedCalls)
-	}
+	testutil.MustNotContain(t, stream, "status loop")
+	testutil.MustContain(t, stream, "healthy answer")
+	testutil.NotEqual(t, healthyCalls, 0)
+	testutil.Equal(t, degradedCalls, 1)
 
 	// The degraded credential is parked so it stops serving dumps.
 	stored, err := s.ListAccounts(ctx)
@@ -422,9 +372,7 @@ func TestServeNativeChatWithholdsDegradedTurnAndRetriesAnotherAccount(t *testing
 			}
 		}
 	}
-	if parked != 1 {
-		t.Fatalf("parked accounts=%d want 1", parked)
-	}
+	testutil.Equal(t, parked, 1)
 }
 
 // The HTTP entry point never hands a degraded dump to a client either, whichever
@@ -433,6 +381,7 @@ func TestHandleChatCompletionsNeverDeliversDegradedDump(t *testing.T) {
 	degraded := degradedUpstream(t)
 	defer degraded.Close()
 	healthy := healthyUpstream(t)
+	defer healthy.Close()
 	routing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Authorization"), "jwt-user-healthy") {
 			healthy.Config.Handler.ServeHTTP(w, r)
@@ -442,11 +391,7 @@ func TestHandleChatCompletionsNeverDeliversDegradedDump(t *testing.T) {
 	}))
 	defer routing.Close()
 
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &store.Model{
 		Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5",
@@ -473,16 +418,10 @@ func TestHandleChatCompletionsNeverDeliversDegradedDump(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleChatCompletions(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	stream := rec.Body.String()
-	if strings.Contains(stream, "status loop") {
-		t.Fatalf("the degraded dump reached the client: %s", stream)
-	}
-	if !strings.Contains(stream, "healthy answer") {
-		t.Fatalf("no healthy answer was delivered: %s", stream)
-	}
+	testutil.MustNotContain(t, stream, "status loop")
+	testutil.MustContain(t, stream, "healthy answer")
 }
 
 // A request whose tools have already produced an external side effect is still
@@ -497,11 +436,7 @@ func TestServeNativeChatDoesNotReplayHostedToolTurn(t *testing.T) {
 	}))
 	defer routing.Close()
 
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &store.Model{
 		Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5",
@@ -530,27 +465,17 @@ func TestServeNativeChatDoesNotReplayHostedToolTurn(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleChatCompletions(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	// Fail-open: the held body is delivered because it cannot be replayed.
-	if !strings.Contains(rec.Body.String(), "status loop") {
-		t.Fatalf("fail-open delivery did not write the held body: %s", rec.Body.String())
-	}
-	if calls != 1 {
-		t.Fatalf("upstream calls=%d want 1 (a hosted-tool turn must not be replayed)", calls)
-	}
+	testutil.MustContain(t, rec.Body.String(), "status loop")
+	testutil.Equal(t, calls, 1)
 }
 
 // Fail-closed reports the degradation instead of delivering it.
 func TestServeNativeChatFailClosedRejectsWithheldTurn(t *testing.T) {
 	degraded := degradedUpstream(t)
 	defer degraded.Close()
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &store.Model{
 		Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5",
@@ -579,26 +504,16 @@ func TestServeNativeChatFailClosedRejectsWithheldTurn(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleChatCompletions(rec, req)
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "status loop") {
-		t.Fatalf("fail-closed leaked the degraded body: %s", rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "quality_degraded") {
-		t.Fatalf("error body did not name the degradation: %s", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadGateway)
+	testutil.MustNotContain(t, rec.Body.String(), "status loop")
+	testutil.MustContain(t, rec.Body.String(), "quality_degraded")
 }
 
 // A disabled hold keeps the historical behaviour: the dump is streamed through.
 func TestServeNativeChatStreamsThroughWhenHoldDisabled(t *testing.T) {
 	degraded := degradedUpstream(t)
 	defer degraded.Close()
-	h, s, mini := setupValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
+	h, s, _ := setupValidationHandler(t)
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &store.Model{
 		Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5",
@@ -624,10 +539,6 @@ func TestServeNativeChatStreamsThroughWhenHoldDisabled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleChatCompletions(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "status loop") {
-		t.Fatalf("with the hold disabled the stream must pass through: %s", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
+	testutil.MustContain(t, rec.Body.String(), "status loop")
 }

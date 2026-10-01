@@ -2,28 +2,24 @@ package util
 
 import (
 	"context"
-	utls "github.com/refraction-networking/utls"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/testutil"
 	"strconv"
 	"testing"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 func TestBrowserHTTPClientCustomHeaderDeadlineIsIsolated(t *testing.T) {
 	defaultClient := GetSharedBrowserHTTPClientWithHeaderTimeout("header-isolation-test", 10*time.Minute, responseHeaderTimeoutForClient(10*time.Minute), nil)
 	longClient := GetSharedBrowserHTTPClientWithHeaderTimeout("header-isolation-test", 10*time.Minute, 0, nil)
-	if defaultClient == longClient {
-		t.Fatal("different header deadlines share a cached client")
-	}
-	if got := defaultClient.Transport.(*browserLikeRoundTripper).http1.ResponseHeaderTimeout; got != 2*time.Minute {
-		t.Fatal(got)
-	}
-	if got := longClient.Transport.(*browserLikeRoundTripper).http1.ResponseHeaderTimeout; got != 0 {
-		t.Fatal(got)
-	}
+	testutil.NotEqual(t, defaultClient, longClient)
+	testutil.Equal(t, defaultClient.Transport.(*browserLikeRoundTripper).http1.ResponseHeaderTimeout, 2*time.Minute)
+	testutil.Equal(t, longClient.Transport.(*browserLikeRoundTripper).http1.ResponseHeaderTimeout, 0)
 	if longClient.Timeout != 10*time.Minute {
 		t.Fatal("total deadline lost")
 	}
@@ -51,9 +47,7 @@ func TestDialHTTPSProxyAwareSupportsSOCKS5(t *testing.T) {
 		t.Fatalf("dialHTTPSProxyAware() error = %v", err)
 	}
 	defer conn.Close()
-	if targetHost == "" {
-		t.Fatal("targetHost is empty")
-	}
+	testutil.NotEqual(t, targetHost, "")
 	if _, err := conn.Write([]byte("ping")); err != nil {
 		t.Fatalf("write through proxy: %v", err)
 	}
@@ -61,9 +55,7 @@ func TestDialHTTPSProxyAwareSupportsSOCKS5(t *testing.T) {
 	if _, err := io.ReadFull(conn, buf); err != nil {
 		t.Fatalf("read through proxy: %v", err)
 	}
-	if string(buf) != "ping" {
-		t.Fatalf("echo=%q want ping", string(buf))
-	}
+	testutil.Equal(t, string(buf), "ping")
 }
 
 func startEchoListener(t *testing.T) net.Listener {
@@ -188,14 +180,10 @@ func TestUtlsProfileFollowsUserAgentChromeVersion(t *testing.T) {
 	}
 	for ua, want := range cases {
 		profile := utlsProfileForUserAgent(ua)
-		if profile.Version != want {
-			t.Fatalf("utlsProfileForUserAgent(%q) = %s, want %s", ua, profile.Version, want)
-		}
+		testutil.Equal(t, profile.Version, want)
 	}
 	// A UA without a Chrome version keeps the library default.
-	if got := utlsProfileForUserAgent("curl/8.0"); got != utls.HelloChrome_Auto {
-		t.Fatalf("unknown UA = %+v, want the default profile", got)
-	}
+	testutil.Equal(t, utlsProfileForUserAgent("curl/8.0"), utls.HelloChrome_Auto)
 	if chromeMajorFromUserAgent("curl/8.0") != 0 {
 		t.Fatal("a UA without Chrome/ must not report a version")
 	}

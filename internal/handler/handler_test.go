@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"net/http"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -20,17 +21,9 @@ func TestComputeRequestHash_ChangesWithAuthPathBody(t *testing.T) {
 
 	h1 := h.computeRequestHash(mkReq("/v1/messages", "Bearer x"), bodyA)
 	h2 := h.computeRequestHash(mkReq("/v1/messages", "Bearer x"), bodyA)
-	if h1 != h2 {
-		t.Fatalf("expected stable hash, got %q vs %q", h1, h2)
-	}
+	testutil.Equal(t, h1, h2)
 
-	if h1 == h.computeRequestHash(mkReq("/v1/messages", "Bearer y"), bodyA) {
-		t.Fatalf("expected auth to affect hash")
-	}
-	if h1 == h.computeRequestHash(mkReq("/v1/other", "Bearer x"), bodyA) {
-		t.Fatalf("expected path to affect hash")
-	}
-	if h1 == h.computeRequestHash(mkReq("/v1/messages", "Bearer x"), bodyB) {
-		t.Fatalf("expected body to affect hash")
-	}
+	testutil.NotEqual(t, h1, h.computeRequestHash(mkReq("/v1/messages", "Bearer y"), bodyA))
+	testutil.NotEqual(t, h1, h.computeRequestHash(mkReq("/v1/other", "Bearer x"), bodyA))
+	testutil.NotEqual(t, h1, h.computeRequestHash(mkReq("/v1/messages", "Bearer x"), bodyB))
 }

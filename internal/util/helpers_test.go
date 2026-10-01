@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -84,9 +85,7 @@ func TestUniqueStrings(t *testing.T) {
 				return
 			}
 			for i := range result {
-				if result[i] != tt.expected[i] {
-					t.Errorf("at index %d: expected %q, got %q", i, tt.expected[i], result[i])
-				}
+				testutil.CheckEqual(t, result[i], tt.expected[i])
 			}
 		})
 	}

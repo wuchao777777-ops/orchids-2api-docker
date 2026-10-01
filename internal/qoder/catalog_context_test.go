@@ -2,6 +2,7 @@ package qoder
 
 import (
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -17,9 +18,7 @@ func TestCatalogContextConfigMergeAndRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if catalog.Len() != 1 {
-		t.Fatalf("len=%d", catalog.Len())
-	}
+	testutil.Equal(t, catalog.Len(), 1)
 	for _, c := range []*Catalog{catalog, catalogFromIDs(catalogToIDs(catalog))} {
 		for _, name := range []string{"k", "Model"} {
 			model, err := c.Resolve(name)
@@ -61,11 +60,7 @@ func TestCatalogContextUnknownAndConflictingDefaults(t *testing.T) {
 		c := newCatalog([]modelEntry{{Key: "k", MaxInputTokens: 180000, ContextConfig: json.RawMessage(tc.config)}})
 		restored := catalogFromIDs(catalogToIDs(c))
 		m, _ := restored.Resolve("k")
-		if compactContextConfig(m.ContextConfig) != tc.config {
-			t.Fatalf("opaque lost: %s", m.ContextConfig)
-		}
-		if got := m.ContextWindowInfo(); got != tc.want {
-			t.Fatalf("%s got=%+v want=%+v", tc.config, got, tc.want)
-		}
+		testutil.Equal(t, compactContextConfig(m.ContextConfig), tc.config)
+		testutil.Equal(t, m.ContextWindowInfo(), tc.want)
 	}
 }

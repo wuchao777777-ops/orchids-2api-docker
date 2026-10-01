@@ -2,6 +2,7 @@ package grok
 
 import (
 	"net/http"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -12,21 +13,13 @@ func TestParseRateLimitMetadataBuildTeamRPS(t *testing.T) {
 	if metadata == nil {
 		t.Fatal("expected metadata")
 	}
-	if metadata.Scope != RateLimitScopeRPS {
-		t.Fatalf("scope = %q", metadata.Scope)
-	}
-	if metadata.TeamID != "f1692451-874f-4765-ab9b-5285f6c6ff65" {
-		t.Fatalf("team = %q", metadata.TeamID)
-	}
-	if metadata.Model != "grok-4.5-build-free" {
-		t.Fatalf("model = %q", metadata.Model)
-	}
+	testutil.Equal(t, metadata.Scope, RateLimitScopeRPS)
+	testutil.Equal(t, metadata.TeamID, "f1692451-874f-4765-ab9b-5285f6c6ff65")
+	testutil.Equal(t, metadata.Model, "grok-4.5-build-free")
 	if metadata.Actual != 2 || metadata.Limit != 2 {
 		t.Fatalf("actual/limit = %d/%d", metadata.Actual, metadata.Limit)
 	}
-	if metadata.RetryAfter != 2*time.Second {
-		t.Fatalf("retryAfter = %s, want 2s for RPS without resets-in", metadata.RetryAfter)
-	}
+	testutil.Equal(t, metadata.RetryAfter, 2*time.Second)
 }
 
 func TestParseRateLimitMetadataRPMWithResetsIn(t *testing.T) {
@@ -35,22 +28,14 @@ func TestParseRateLimitMetadataRPMWithResetsIn(t *testing.T) {
 	if metadata == nil {
 		t.Fatal("expected metadata")
 	}
-	if metadata.Scope != RateLimitScopeRPM {
-		t.Fatalf("scope = %q", metadata.Scope)
-	}
-	if metadata.TeamID != "00000000-0000-0000-0000-000000000013" {
-		t.Fatalf("team = %q", metadata.TeamID)
-	}
-	if metadata.Model != "grok-4.5" {
-		t.Fatalf("model = %q", metadata.Model)
-	}
+	testutil.Equal(t, metadata.Scope, RateLimitScopeRPM)
+	testutil.Equal(t, metadata.TeamID, "00000000-0000-0000-0000-000000000013")
+	testutil.Equal(t, metadata.Model, "grok-4.5")
 	if metadata.Actual != 58 || metadata.Limit != 60 {
 		t.Fatalf("actual/limit = %d/%d", metadata.Actual, metadata.Limit)
 	}
 	// resets-in 45s overrides the default 1m RPM fallback.
-	if metadata.RetryAfter != 45*time.Second {
-		t.Fatalf("retryAfter = %s, want 45s", metadata.RetryAfter)
-	}
+	testutil.Equal(t, metadata.RetryAfter, 45*time.Second)
 }
 
 func TestParseRateLimitMetadataResetsInHour(t *testing.T) {
@@ -59,12 +44,8 @@ func TestParseRateLimitMetadataResetsInHour(t *testing.T) {
 	if metadata == nil {
 		t.Fatal("expected metadata")
 	}
-	if metadata.Scope != RateLimitScopeRPM {
-		t.Fatalf("scope = %q", metadata.Scope)
-	}
-	if metadata.RetryAfter != 90*time.Minute {
-		t.Fatalf("retryAfter = %s, want 90m", metadata.RetryAfter)
-	}
+	testutil.Equal(t, metadata.Scope, RateLimitScopeRPM)
+	testutil.Equal(t, metadata.RetryAfter, 90*time.Minute)
 }
 
 func TestParseRateLimitMetadataOrdinary429(t *testing.T) {
@@ -87,12 +68,8 @@ func TestRateLimitFromResponseRetryAfterHeader(t *testing.T) {
 	if metadata == nil {
 		t.Fatal("expected metadata")
 	}
-	if metadata.RetryAfter != 17*time.Second {
-		t.Fatalf("retryAfter = %s, want 17s from header", metadata.RetryAfter)
-	}
-	if metadata.Scope != RateLimitScopeRPS {
-		t.Fatalf("scope = %q", metadata.Scope)
-	}
+	testutil.Equal(t, metadata.RetryAfter, 17*time.Second)
+	testutil.Equal(t, metadata.Scope, RateLimitScopeRPS)
 }
 
 func TestRateLimitFromResponseNon429(t *testing.T) {

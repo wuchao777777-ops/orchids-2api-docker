@@ -1,5 +1,4 @@
-// Package refreshqueue schedules credential refreshes by due time and collapses
-// duplicate work per account.
+// Package refreshqueue serialises credential refreshes per account.
 //
 // Before this existed the scheduler took "the next N accounts" from a global
 // rotation offset, with no per-account lease. Two consequences followed: one
@@ -9,21 +8,7 @@
 // cycles.
 package refreshqueue
 
-import (
-	"sort"
-	"sync"
-	"time"
-)
-
-// Task is one account's pending refresh.
-type Task struct {
-	// AccountID is the key that deduplicates work.
-	AccountID int64
-	// Due explains why the task is scheduled, for logs and tests.
-	Due time.Duration
-	// Payload carries the caller's account object through the queue.
-	Payload interface{}
-}
+import "sync"
 
 // defaultHub is the process-wide refresh lease set. Every refresh entrance —
 // the background scheduler, the admin "check" button, a per-channel refresh —
@@ -48,8 +33,7 @@ func WithLease(accountID int64, fn func()) bool {
 	return true
 }
 
-// Hub tracks which accounts are currently being refreshed and orders pending
-// work by due time.
+// Hub tracks which accounts are currently being refreshed.
 type Hub struct {
 	mu       sync.Mutex
 	inFlight map[int64]struct{}
@@ -89,18 +73,8 @@ func (h *Hub) Release(accountID int64) {
 	h.mu.Unlock()
 }
 
-// InFlight reports whether the account currently holds a lease.
-func (h *Hub) InFlight(accountID int64) bool {
-	if h == nil {
-		return false
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	_, busy := h.inFlight[accountID]
-	return busy
-}
-
-// Len is the number of accounts currently being refreshed.
+// Len is the number of accounts currently being refreshed, for the runtime
+// concurrency reporter.
 func (h *Hub) Len() int {
 	if h == nil {
 		return 0
@@ -108,55 +82,4 @@ func (h *Hub) Len() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.inFlight)
-}
-
-// Plan orders tasks by due time — most overdue first — and drops the ones whose
-// account already holds a lease or that exceed the concurrency limit. The
-// returned slice is what the caller may start right now.
-func Plan(tasks []Task, hub *Hub, maxConcurrent int) []Task {
-	if len(tasks) == 0 {
-		return nil
-	}
-	ordered := make([]Task, 0, len(tasks))
-	seen := map[int64]struct{}{}
-	for _, task := range tasks {
-		if task.AccountID == 0 {
-			continue
-		}
-		if _, duplicate := seen[task.AccountID]; duplicate {
-			// The same account appearing twice in one plan is a caller bug, but
-			// merging it here keeps the queue's promise: one task per account.
-			continue
-		}
-		seen[task.AccountID] = struct{}{}
-		ordered = append(ordered, task)
-	}
-
-	// Stable ordering by due time: the longest-overdue task is served first, and
-	// equal due times keep the caller's order so tests stay deterministic.
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].Due > ordered[j].Due
-	})
-
-	if maxConcurrent <= 0 {
-		maxConcurrent = len(ordered)
-	}
-	out := make([]Task, 0, min(maxConcurrent, len(ordered)))
-	for _, task := range ordered {
-		if len(out) >= maxConcurrent {
-			break
-		}
-		if hub != nil && hub.InFlight(task.AccountID) {
-			continue
-		}
-		out = append(out, task)
-	}
-	return out
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"orchids-api/internal/opsagg"
+	"orchids-api/internal/testutil"
 )
 
 type recordedOutcome struct {
@@ -57,9 +58,7 @@ func TestObservedOutcome_TimeToFirstTokenSkipsKeepalives(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 
-	if len(*outcomes) != 1 {
-		t.Fatalf("recorded outcomes = %d, want 1", len(*outcomes))
-	}
+	testutil.Equal(t, len(*outcomes), 1)
 	outcome := (*outcomes)[0]
 	if outcome.Channel != "grok" || outcome.StatusClass != "2xx" {
 		t.Fatalf("outcome = %+v, want the grok /v1 channel with a 2xx class", outcome)
@@ -85,12 +84,8 @@ func TestObservedOutcome_FallsBackToFirstWrite(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 
-	if len(*outcomes) != 1 {
-		t.Fatalf("recorded outcomes = %d, want 1", len(*outcomes))
-	}
-	if got := (*outcomes)[0].StatusClass; got != "2xx" {
-		t.Fatalf("status class = %q, want 2xx", got)
-	}
+	testutil.Equal(t, len(*outcomes), 1)
+	testutil.Equal(t, (*outcomes)[0].StatusClass, "2xx")
 }
 
 // TestObservedOutcome_StreamFailureAfterCommittedStatus pins the other reported
@@ -111,15 +106,9 @@ func TestObservedOutcome_StreamFailureAfterCommittedStatus(t *testing.T) {
 	handler.ServeHTTP(recorder, req)
 
 	// The client still saw a 200: that part cannot be changed after the fact.
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("client status = %d, want the committed 200", recorder.Code)
-	}
-	if len(*outcomes) != 1 {
-		t.Fatalf("recorded outcomes = %d, want 1", len(*outcomes))
-	}
-	if got := (*outcomes)[0].StatusClass; got != "stream_error" {
-		t.Fatalf("status class = %q, want stream_error (counted as a failure)", got)
-	}
+	testutil.Equal(t, recorder.Code, http.StatusOK)
+	testutil.Equal(t, len(*outcomes), 1)
+	testutil.Equal(t, (*outcomes)[0].StatusClass, "stream_error")
 }
 
 // TestMarkStreamFailure_IsSafeOnForeignWriters keeps the helper usable from the
@@ -153,8 +142,6 @@ func TestIsPayloadWrite(t *testing.T) {
 		{"plain text", "hello", true},
 	}
 	for _, tc := range cases {
-		if got := isPayloadWrite([]byte(tc.write)); got != tc.want {
-			t.Errorf("isPayloadWrite(%q) = %v, want %v", tc.write, got, tc.want)
-		}
+		testutil.CheckEqual(t, isPayloadWrite([]byte(tc.write)), tc.want)
 	}
 }

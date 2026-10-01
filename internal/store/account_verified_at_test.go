@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -24,9 +25,7 @@ func TestUpdateAccount_VerifiedAtIsMonotonicPerCredential(t *testing.T) {
 		Weight:           1,
 		VerifiedAt:       time.Now().Add(-time.Minute),
 	}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 	stamp := acc.VerifiedAt
 
 	// A partial update that carries no verdict stamp (request counters, quota
@@ -38,9 +37,7 @@ func TestUpdateAccount_VerifiedAtIsMonotonicPerCredential(t *testing.T) {
 	partial.VerifiedAt = time.Time{}
 	partial.StatusCode = "401"
 	partial.StatusMessage = "upstream rejected the OAuth credential"
-	if err := s.UpdateAccount(ctx, partial); err != nil {
-		t.Fatalf("UpdateAccount(partial) error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, partial), "UpdateAccount(partial) error = %v")
 	afterPartial, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
@@ -55,9 +52,7 @@ func TestUpdateAccount_VerifiedAtIsMonotonicPerCredential(t *testing.T) {
 	// Replacing the credential drops it so the new credential is verified.
 	afterPartial.OAuthAccessToken = "replacement-token"
 	afterPartial.ClearVerifiedAt = true
-	if err := s.UpdateAccount(ctx, afterPartial); err != nil {
-		t.Fatalf("UpdateAccount(replacement) error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, afterPartial), "UpdateAccount(replacement) error = %v")
 	afterEdit, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
@@ -71,9 +66,7 @@ func TestUpdateAccount_VerifiedAtIsMonotonicPerCredential(t *testing.T) {
 
 	// A fresh verdict is stored normally.
 	afterEdit.VerifiedAt = time.Now()
-	if err := s.UpdateAccount(ctx, afterEdit); err != nil {
-		t.Fatalf("UpdateAccount(verdict) error = %v", err)
-	}
+	testutil.NoError(t, s.UpdateAccount(ctx, afterEdit), "UpdateAccount(verdict) error = %v")
 	final, err := s.GetAccount(ctx, acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)

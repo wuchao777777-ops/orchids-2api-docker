@@ -7,6 +7,7 @@ import (
 	"time"
 
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/testutil"
 )
 
 type hintedRetryError struct{ delay time.Duration }
@@ -16,24 +17,16 @@ func (e hintedRetryError) RetryAfter() time.Duration { return e.delay }
 
 func TestUpstreamRetryAfterReadsWrappedHint(t *testing.T) {
 	err := fmt.Errorf("wrapped: %w", hintedRetryError{delay: 7 * time.Second})
-	if got := upstreamRetryAfter(err); got != 7*time.Second {
-		t.Fatalf("upstreamRetryAfter() = %v, want 7s", got)
-	}
-	if got := upstreamRetryAfter(hintedRetryError{delay: time.Minute}); got != 30*time.Second {
-		t.Fatalf("upstreamRetryAfter() cap = %v, want 30s", got)
-	}
-	if got := upstreamRetryAfter(errors.New("plain")); got != 0 {
-		t.Fatalf("upstreamRetryAfter(plain) = %v, want 0", got)
-	}
+	testutil.Equal(t, upstreamRetryAfter(err), 7*time.Second)
+	testutil.Equal(t, upstreamRetryAfter(hintedRetryError{delay: time.Minute}), 30*time.Second)
+	testutil.Equal(t, upstreamRetryAfter(errors.New("plain")), 0)
 }
 
 func TestClassifyUpstreamErrorCreditsExhausted(t *testing.T) {
 	t.Parallel()
 
 	errClass := apperrors.ClassifyUpstreamError("workbuddy upstream error: no remaining quota: You have run out of credits.")
-	if errClass.Category != "quota_exhausted" {
-		t.Fatalf("expected quota_exhausted category, got %q", errClass.Category)
-	}
+	testutil.Equal(t, errClass.Category, "quota_exhausted")
 	if !errClass.Retryable {
 		t.Fatal("expected credits exhausted to be retryable")
 	}

@@ -7,6 +7,7 @@ import (
 	"orchids-api/internal/audit"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // buildAccount is a Grok Build (OAuth/Build provider) account with the given plan
@@ -51,21 +52,11 @@ func TestBuildQuotaOfficialWindowIsConfirmed(t *testing.T) {
 	})
 
 	fields := buildQuotaResponseFields(acc)
-	if got := fieldString(t, fields, "quota_mode"); got != "weekly_percent" {
-		t.Fatalf("quota_mode=%q want weekly_percent", got)
-	}
-	if got := fieldFloat(t, fields, "quota_used"); got != 42 {
-		t.Fatalf("quota_used=%v want 42", got)
-	}
-	if got := fieldString(t, fields, "quota_type"); got != "paid" {
-		t.Fatalf("quota_type=%q want paid", got)
-	}
-	if got := fieldString(t, fields, "quota_source"); got != "upstreamBilling" {
-		t.Fatalf("quota_source=%q want upstreamBilling", got)
-	}
-	if got := fieldString(t, fields, "quota_confidence"); got != "confirmed" {
-		t.Fatalf("quota_confidence=%q want confirmed", got)
-	}
+	testutil.Equal(t, fieldString(t, fields, "quota_mode"), "weekly_percent")
+	testutil.Equal(t, fieldFloat(t, fields, "quota_used"), 42)
+	testutil.Equal(t, fieldString(t, fields, "quota_type"), "paid")
+	testutil.Equal(t, fieldString(t, fields, "quota_source"), "upstreamBilling")
+	testutil.Equal(t, fieldString(t, fields, "quota_confidence"), "confirmed")
 	if !fieldBool(t, fields, "quota_limit_known") {
 		t.Fatal("quota_limit_known=false for a window upstream actually reported")
 	}
@@ -80,44 +71,26 @@ func TestBuildQuotaInfersFreeAndEstimatesTheWindow(t *testing.T) {
 	acc := buildAccount("", store.GrokBillingSnapshot{SyncedAt: time.Now(), Source: "cli_billing"})
 
 	fields := buildQuotaResponseFieldsWithUsage(acc, 12000, true)
-	if got := fieldString(t, fields, "quota_type"); got != "free" {
-		t.Fatalf("quota_type=%q want free", got)
-	}
-	if got := fieldString(t, fields, "quota_source"); got != grok.FreeProfileSourceBilling {
-		t.Fatalf("quota_source=%q want %q", got, grok.FreeProfileSourceBilling)
-	}
-	if got := fieldString(t, fields, "quota_confidence"); got != "estimated" {
-		t.Fatalf("quota_confidence=%q want estimated", got)
-	}
+	testutil.Equal(t, fieldString(t, fields, "quota_type"), "free")
+	testutil.Equal(t, fieldString(t, fields, "quota_source"), grok.FreeProfileSourceBilling)
+	testutil.Equal(t, fieldString(t, fields, "quota_confidence"), "estimated")
 	if fieldBool(t, fields, "quota_limit_known") {
 		t.Fatal("quota_limit_known=true for an estimated window: the UI would show it as a balance")
 	}
 	if !fieldBool(t, fields, "quota_observed") {
 		t.Fatal("quota_observed=false although this gateway measured the usage")
 	}
-	if got := fieldFloat(t, fields, "quota_limit"); got != float64(grok.EstimatedFreeBuildTokenLimit) {
-		t.Fatalf("quota_limit=%v want %d", got, grok.EstimatedFreeBuildTokenLimit)
-	}
-	if got := fieldFloat(t, fields, "quota_used"); got != 12000 {
-		t.Fatalf("quota_used=%v want 12000", got)
-	}
-	if got := fieldFloat(t, fields, "quota_remaining"); got != float64(grok.EstimatedFreeBuildTokenLimit)-12000 {
-		t.Fatalf("quota_remaining=%v", got)
-	}
-	if got := fields["quota_window_hours"]; got != 24 {
-		t.Fatalf("quota_window_hours=%v want 24", got)
-	}
-	if got := fieldString(t, fields, "quota_unit"); got != "tokens" {
-		t.Fatalf("quota_unit=%q want tokens", got)
-	}
+	testutil.Equal(t, fieldFloat(t, fields, "quota_limit"), float64(grok.EstimatedFreeBuildTokenLimit))
+	testutil.Equal(t, fieldFloat(t, fields, "quota_used"), 12000)
+	testutil.Equal(t, fieldFloat(t, fields, "quota_remaining"), float64(grok.EstimatedFreeBuildTokenLimit)-12000)
+	testutil.Equal(t, fields["quota_window_hours"], 24)
+	testutil.Equal(t, fieldString(t, fields, "quota_unit"), "tokens")
 	// An unmeasured window must not be presented as measured usage of zero.
 	unmeasured := buildQuotaResponseFields(acc)
 	if fieldBool(t, unmeasured, "quota_observed") {
 		t.Fatal("quota_observed=true although nothing was measured")
 	}
-	if got := fieldFloat(t, unmeasured, "quota_used"); got != 0 {
-		t.Fatalf("quota_used=%v want 0 when nothing was measured", got)
-	}
+	testutil.Equal(t, fieldFloat(t, unmeasured, "quota_used"), 0)
 }
 
 // TestBuildQuotaFreeFromOfficialPlanName covers the stronger Free signal: the
@@ -127,15 +100,9 @@ func TestBuildQuotaFreeFromOfficialPlanName(t *testing.T) {
 
 	acc := buildAccount("free", store.GrokBillingSnapshot{})
 	fields := buildQuotaResponseFields(acc)
-	if got := fieldString(t, fields, "quota_type"); got != "free" {
-		t.Fatalf("quota_type=%q want free", got)
-	}
-	if got := fieldString(t, fields, "quota_source"); got != grok.FreeProfileSourcePlan {
-		t.Fatalf("quota_source=%q want %q", got, grok.FreeProfileSourcePlan)
-	}
-	if got := fieldString(t, fields, "quota_confidence"); got != "estimated" {
-		t.Fatalf("quota_confidence=%q want estimated", got)
-	}
+	testutil.Equal(t, fieldString(t, fields, "quota_type"), "free")
+	testutil.Equal(t, fieldString(t, fields, "quota_source"), grok.FreeProfileSourcePlan)
+	testutil.Equal(t, fieldString(t, fields, "quota_confidence"), "estimated")
 }
 
 // TestBuildQuotaPaidPlanWithoutWindowInventsNothing pins the boundary the estimate
@@ -147,18 +114,12 @@ func TestBuildQuotaPaidPlanWithoutWindowInventsNothing(t *testing.T) {
 	for _, plan := range []string{"supergrok", "x_premium", "supergrok_heavy", "supergrok_lite"} {
 		acc := buildAccount(plan, store.GrokBillingSnapshot{SyncedAt: time.Now()})
 		fields := buildQuotaResponseFields(acc)
-		if got := fieldString(t, fields, "quota_type"); got != "paid" {
-			t.Fatalf("%s: quota_type=%q want paid", plan, got)
-		}
-		if got := fieldString(t, fields, "quota_source"); got != "planMetadata" {
-			t.Fatalf("%s: quota_source=%q want planMetadata", plan, got)
-		}
+		testutil.Equal(t, fieldString(t, fields, "quota_type"), "paid")
+		testutil.Equal(t, fieldString(t, fields, "quota_source"), "planMetadata")
 		if fieldBool(t, fields, "quota_limit_known") {
 			t.Fatal("a window upstream never reported cannot be a known limit")
 		}
-		if got := fieldFloat(t, fields, "quota_limit"); got != 0 {
-			t.Fatalf("%s: quota_limit=%v want 0 (no invented allowance)", plan, got)
-		}
+		testutil.Equal(t, fieldFloat(t, fields, "quota_limit"), 0)
 		if fieldBool(t, fields, "quota_supported") {
 			t.Fatalf("%s: quota_supported=true for an unknown window", plan)
 		}
@@ -172,18 +133,12 @@ func TestBuildQuotaUnsyncedStaysUnknown(t *testing.T) {
 
 	acc := buildAccount("", store.GrokBillingSnapshot{})
 	fields := buildQuotaResponseFields(acc)
-	if got := fieldString(t, fields, "quota_type"); got != "unknown" {
-		t.Fatalf("quota_type=%q want unknown", got)
-	}
-	if got := fieldString(t, fields, "quota_confidence"); got != "" {
-		t.Fatalf("quota_confidence=%q want empty for an account with no signal", got)
-	}
+	testutil.Equal(t, fieldString(t, fields, "quota_type"), "unknown")
+	testutil.Equal(t, fieldString(t, fields, "quota_confidence"), "")
 	if fieldBool(t, fields, "quota_supported") {
 		t.Fatal("quota_supported=true without any upstream data")
 	}
-	if got := fieldString(t, fields, "quota_note"); got == "" {
-		t.Fatal("a bare unknown quota must still explain itself")
-	}
+	testutil.NotEqual(t, fieldString(t, fields, "quota_note"), "")
 }
 
 // TestFreeProfileInferenceRequiresASignal is the unit-level pin for the rule above.
@@ -205,12 +160,8 @@ func TestFreeProfileInferenceRequiresASignal(t *testing.T) {
 	}
 	for _, tc := range cases {
 		verdict := grok.InferFreeProfile(tc.acc)
-		if verdict.Inferred != tc.want {
-			t.Fatalf("%s: inferred=%v want %v", tc.name, verdict.Inferred, tc.want)
-		}
-		if verdict.Source != tc.source {
-			t.Fatalf("%s: source=%q want %q", tc.name, verdict.Source, tc.source)
-		}
+		testutil.Equal(t, verdict.Inferred, tc.want)
+		testutil.Equal(t, verdict.Source, tc.source)
 	}
 }
 
@@ -242,21 +193,13 @@ func TestObservedTokensByAccountUsesOnlyTheFreeWindow(t *testing.T) {
 	seedJournal(t, a, []audit.Event{older, recent, other})
 
 	usage, ok := a.observedTokensByAccount(t.Context(), time.Now().Add(-grok.FreeBuildUsageWindow))
-	if !ok {
-		t.Fatal("the measurement reported failure on a healthy store")
-	}
-	if got := usage[143]; got != 2000 {
-		t.Fatalf("account 143 usage = %d, want the 2000 tokens inside the window", got)
-	}
-	if got := usage[144]; got != 5000 {
-		t.Fatalf("account 144 usage = %d, want 5000", got)
-	}
+	testutil.True(t, ok, "the measurement reported failure on a healthy store")
+	testutil.Equal(t, usage[143], 2000)
+	testutil.Equal(t, usage[144], 5000)
 
 	acc := buildAccount("", store.GrokBillingSnapshot{SyncedAt: time.Now()})
 	fields := buildQuotaResponseFieldsWithUsage(acc, usage[acc.ID], true)
-	if got := fieldFloat(t, fields, "quota_used"); got != 2000 {
-		t.Fatalf("quota_used=%v want the in-window measurement", got)
-	}
+	testutil.Equal(t, fieldFloat(t, fields, "quota_used"), 2000)
 	if !fieldBool(t, fields, "quota_observed") {
 		t.Fatal("quota_observed=false although the measurement succeeded")
 	}
@@ -275,27 +218,15 @@ func TestBuildQuotaConfirmedFreeWindowReplacesTheEstimate(t *testing.T) {
 	}
 
 	fields := buildQuotaResponseFields(acc)
-	if got := fieldString(t, fields, "quota_mode"); got != "confirmed_free" {
-		t.Fatalf("quota_mode=%q want confirmed_free", got)
-	}
-	if got := fieldString(t, fields, "quota_source"); got != "upstreamExhaustion" {
-		t.Fatalf("quota_source=%q want upstreamExhaustion", got)
-	}
-	if got := fieldString(t, fields, "quota_confidence"); got != "confirmed" {
-		t.Fatalf("quota_confidence=%q want confirmed", got)
-	}
+	testutil.Equal(t, fieldString(t, fields, "quota_mode"), "confirmed_free")
+	testutil.Equal(t, fieldString(t, fields, "quota_source"), "upstreamExhaustion")
+	testutil.Equal(t, fieldString(t, fields, "quota_confidence"), "confirmed")
 	if !fieldBool(t, fields, "quota_limit_known") {
 		t.Fatal("a window the upstream reported has a known limit")
 	}
-	if got := fieldFloat(t, fields, "quota_limit"); got != 300000 {
-		t.Fatalf("quota_limit=%v, want the reported limit rather than the estimate", got)
-	}
-	if got := fieldFloat(t, fields, "quota_used"); got != 300000 {
-		t.Fatalf("quota_used=%v want 300000", got)
-	}
-	if got := fieldFloat(t, fields, "quota_remaining"); got != 0 {
-		t.Fatalf("quota_remaining=%v want 0", got)
-	}
+	testutil.Equal(t, fieldFloat(t, fields, "quota_limit"), 300000)
+	testutil.Equal(t, fieldFloat(t, fields, "quota_used"), 300000)
+	testutil.Equal(t, fieldFloat(t, fields, "quota_remaining"), 0)
 
 	// Once the rolling window has passed, those numbers describe a window that no longer
 	// exists: the account falls back to the estimate, but the refusal still proves Free.
@@ -305,16 +236,10 @@ func TestBuildQuotaConfirmedFreeWindowReplacesTheEstimate(t *testing.T) {
 		ConfirmedAt: time.Now().Add(-48 * time.Hour), ResetAt: time.Now().Add(-24 * time.Hour),
 	}
 	staleFields := buildQuotaResponseFields(expired)
-	if got := fieldString(t, staleFields, "quota_mode"); got != "estimated_free" {
-		t.Fatalf("expired window: quota_mode=%q want estimated_free", got)
-	}
-	if got := fieldString(t, staleFields, "quota_source"); got != grok.FreeProfileSourceExhaustion {
-		t.Fatalf("expired window: quota_source=%q want the Free inference kept", got)
-	}
+	testutil.Equal(t, fieldString(t, staleFields, "quota_mode"), "estimated_free")
+	testutil.Equal(t, fieldString(t, staleFields, "quota_source"), grok.FreeProfileSourceExhaustion)
 	if fieldBool(t, staleFields, "quota_limit_known") {
 		t.Fatal("an expired window cannot still be a known current limit")
 	}
-	if got := fieldFloat(t, staleFields, "quota_limit"); got != float64(grok.EstimatedFreeBuildTokenLimit) {
-		t.Fatalf("expired window: quota_limit=%v, want the estimate", got)
-	}
+	testutil.Equal(t, fieldFloat(t, staleFields, "quota_limit"), float64(grok.EstimatedFreeBuildTokenLimit))
 }

@@ -14,6 +14,7 @@ import (
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/upstream"
 )
@@ -57,12 +58,8 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 		t.Fatalf("marshal text delta: %v", err)
 	}
 	var delta map[string]any
-	if err := json.Unmarshal(raw, &delta); err != nil {
-		t.Fatalf("unmarshal text delta: %v", err)
-	}
-	if int(delta["index"].(float64)) != 7 {
-		t.Fatalf("unexpected index: %v", delta["index"])
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &delta), "unmarshal text delta: %v")
+	testutil.Equal(t, int(delta["index"].(float64)), 7)
 	deltaObj := delta["delta"].(map[string]any)
 	if deltaObj["type"] != "text_delta" || deltaObj["text"] != expectedText {
 		t.Fatalf("unexpected delta payload: %#v", deltaObj)
@@ -75,9 +72,7 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 		t.Fatalf("marshal tool start: %v", err)
 	}
 	var startPayload map[string]any
-	if err := json.Unmarshal(raw, &startPayload); err != nil {
-		t.Fatalf("unmarshal tool start: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(raw, &startPayload), "unmarshal tool start: %v")
 	contentBlock := startPayload["content_block"].(map[string]any)
 	if contentBlock["id"] != expectedToolID || contentBlock["name"] != expectedToolName {
 		t.Fatalf("unexpected tool payload: %#v", contentBlock)
@@ -89,9 +84,7 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 		t.Fatalf("marshal thinking start: %v", err)
 	}
 	var thinkingStartPayload map[string]any
-	if err := json.Unmarshal(rawBytes, &thinkingStartPayload); err != nil {
-		t.Fatalf("unmarshal thinking start: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rawBytes, &thinkingStartPayload), "unmarshal thinking start: %v")
 	thinkingBlock := thinkingStartPayload["content_block"].(map[string]any)
 	if thinkingBlock["type"] != "thinking" || thinkingBlock["signature"] != expectedSignature {
 		t.Fatalf("unexpected thinking payload: %#v", thinkingBlock)
@@ -103,9 +96,7 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 		t.Fatalf("marshal input_json delta: %v", err)
 	}
 	var inputJSONPayload map[string]any
-	if err := json.Unmarshal(rawBytes, &inputJSONPayload); err != nil {
-		t.Fatalf("unmarshal input_json delta: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rawBytes, &inputJSONPayload), "unmarshal input_json delta: %v")
 	inputDelta := inputJSONPayload["delta"].(map[string]any)
 	if inputDelta["type"] != "input_json_delta" || inputDelta["partial_json"] != expectedPartialJSON {
 		t.Fatalf("unexpected input_json payload: %#v", inputDelta)
@@ -117,30 +108,18 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 		t.Fatalf("marshal message delta: %v", err)
 	}
 	var msg map[string]any
-	if err := json.Unmarshal(rawBytes, &msg); err != nil {
-		t.Fatalf("unmarshal message delta: %v", err)
-	}
-	if msg["type"] != "message_delta" {
-		t.Fatalf("unexpected message type: %#v", msg)
-	}
-	if msg["delta"].(map[string]any)["stop_reason"] != expectedStopReason {
-		t.Fatalf("unexpected stop reason: %#v", msg)
-	}
-	if int(msg["usage"].(map[string]any)["output_tokens"].(float64)) != 42 {
-		t.Fatalf("unexpected output tokens: %#v", msg)
-	}
+	testutil.NoError(t, json.Unmarshal(rawBytes, &msg), "unmarshal message delta: %v")
+	testutil.Equal(t, msg["type"], "message_delta")
+	testutil.EqualAny(t, msg["delta"].(map[string]any)["stop_reason"], expectedStopReason)
+	testutil.Equal(t, int(msg["usage"].(map[string]any)["output_tokens"].(float64)), 42)
 
 	msgStartRaw, err := marshalSSEMessageStartBytes("msg_123", "claude-test", 12, 0)
 	if err != nil {
 		t.Fatalf("marshal message start: %v", err)
 	}
 	var msgStart map[string]any
-	if err := json.Unmarshal(msgStartRaw, &msgStart); err != nil {
-		t.Fatalf("unmarshal message start: %v", err)
-	}
-	if msgStart["type"] != "message_start" {
-		t.Fatalf("unexpected message start type: %#v", msgStart["type"])
-	}
+	testutil.NoError(t, json.Unmarshal(msgStartRaw, &msgStart), "unmarshal message start: %v")
+	testutil.Equal(t, msgStart["type"], "message_start")
 	messageObj := msgStart["message"].(map[string]any)
 	if messageObj["id"] != "msg_123" || messageObj["model"] != "claude-test" {
 		t.Fatalf("unexpected message object: %#v", messageObj)
@@ -156,12 +135,8 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 		t.Fatalf("marshal plain text delta: %v", err)
 	}
 	var plainDelta map[string]any
-	if err := json.Unmarshal(rawBytes, &plainDelta); err != nil {
-		t.Fatalf("unmarshal plain text delta: %v", err)
-	}
-	if got := plainDelta["delta"].(map[string]any)["text"]; got != plainText {
-		t.Fatalf("unexpected plain text delta: %#v", got)
-	}
+	testutil.NoError(t, json.Unmarshal(rawBytes, &plainDelta), "unmarshal plain text delta: %v")
+	testutil.EqualAny(t, plainDelta["delta"].(map[string]any)["text"], plainText)
 
 	htmlEscaped := "<tag>&\u2028\u2029"
 	rawBytes, err = marshalSSEContentBlockDeltaTextBytes(10, htmlEscaped)
@@ -175,12 +150,8 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 		t.Fatalf("expected line separator bytes to be escaped, got: %s", rawBytes)
 	}
 	var escapedDelta map[string]any
-	if err := json.Unmarshal(rawBytes, &escapedDelta); err != nil {
-		t.Fatalf("unmarshal html escaped delta: %v", err)
-	}
-	if got := escapedDelta["delta"].(map[string]any)["text"]; got != htmlEscaped {
-		t.Fatalf("unexpected escaped text delta: %#v", got)
-	}
+	testutil.NoError(t, json.Unmarshal(rawBytes, &escapedDelta), "unmarshal html escaped delta: %v")
+	testutil.EqualAny(t, escapedDelta["delta"].(map[string]any)["text"], htmlEscaped)
 }
 
 func TestInjectNoAvailableAccountError_RateLimitAnswers429(t *testing.T) {
@@ -195,21 +166,13 @@ func TestInjectNoAvailableAccountError_RateLimitAnswers429(t *testing.T) {
 	// A non-streaming request has committed nothing yet, so the failure is a real
 	// error response. It used to be a 200 whose assistant content was the error
 	// text, which a client cannot tell from an answer.
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusTooManyRequests)
 	body := rec.Body.String()
-	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "rate-limited") {
-		t.Fatalf("expected an error envelope naming the rate limit, got: %s", body)
-	}
-	if strings.Contains(body, "Please check account statuses in Admin UI") {
-		t.Fatalf("did not expect generic no-accounts guidance for rate limits, got: %s", body)
-	}
+	testutil.MustContainAll(t, body, `"type":"error"`, "rate-limited")
+	testutil.MustNotContain(t, body, "Please check account statuses in Admin UI")
 	// The selector error is a diagnostic: it belongs in the log, not in a body a
 	// client may show to a user.
-	if strings.Contains(body, "no enabled accounts available for channel") {
-		t.Fatalf("selector detail leaked into the response: %s", body)
-	}
+	testutil.MustNotContain(t, body, "no enabled accounts available for channel")
 }
 
 // TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral pins that the
@@ -224,16 +187,10 @@ func TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral(t *testi
 		nil,
 	)
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429 for an exhausted allowance", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusTooManyRequests)
 	body := rec.Body.String()
-	if strings.Contains(body, "workbuddy API error") {
-		t.Fatalf("the upstream error text leaked into the channel-neutral message: %s", body)
-	}
-	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "exhausted its allowance") {
-		t.Fatalf("expected an allowance-exhausted error envelope, got: %s", body)
-	}
+	testutil.MustNotContain(t, body, "workbuddy API error")
+	testutil.MustContainAll(t, body, `"type":"error"`, "exhausted its allowance")
 }
 
 // TestInjectNoAvailableAccountError_StreamingReportsInBandError is the other half
@@ -261,20 +218,12 @@ func TestInjectNoAvailableAccountError_StreamingReportsInBandError(t *testing.T)
 		errors.New("no enabled accounts available for channel: workbuddy (all matching accounts are rate-limited or cooling down)"),
 	)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want the already-committed 200", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	body := rec.Body.String()
-	if !strings.Contains(body, "event: error") || !strings.Contains(body, `"type":"error"`) {
-		t.Fatalf("expected the protocol error event, got: %s", body)
-	}
+	testutil.MustContainAll(t, body, "event: error", `"type":"error"`)
 	// The failure must not be dressed as assistant text.
-	if strings.Contains(body, "content_block_delta") {
-		t.Fatalf("the failure was delivered as assistant content: %s", body)
-	}
-	if strings.Contains(body, "no enabled accounts available for channel") {
-		t.Fatalf("selector detail leaked into the stream: %s", body)
-	}
+	testutil.MustNotContain(t, body, "content_block_delta")
+	testutil.MustNotContain(t, body, "no enabled accounts available for channel")
 }
 
 // TestStreamError_OpenAIFormatRespectsWhetherTheStreamStarted pins the two
@@ -292,16 +241,10 @@ func TestStreamError_OpenAIFormatRespectsWhetherTheStreamStarted(t *testing.T) {
 
 		sh.InjectNoAvailableAccountError(`upstream API error: status=429`, errors.New("no enabled accounts available"))
 
-		if rec.Code != http.StatusTooManyRequests {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusTooManyRequests)
-		}
+		testutil.Equal(t, rec.Code, http.StatusTooManyRequests)
 		body := rec.Body.String()
-		if !strings.Contains(body, `"error":{`) || !strings.Contains(body, "rate-limited") {
-			t.Fatalf("expected an error object in the body, got: %s", body)
-		}
-		if strings.Contains(body, "data:") || strings.Contains(body, "[DONE]") {
-			t.Fatalf("an uncommitted stream must not answer with SSE frames: %s", body)
-		}
+		testutil.MustContainAll(t, body, `"error":{`, "rate-limited")
+		testutil.MustNotContainAny(t, body, "data:", "[DONE]")
 	})
 
 	t.Run("after content it terminates the stream in band", func(t *testing.T) {
@@ -315,12 +258,8 @@ func TestStreamError_OpenAIFormatRespectsWhetherTheStreamStarted(t *testing.T) {
 		sh.InjectNoAvailableAccountError(`upstream API error: status=429`, errors.New("no enabled accounts available"))
 
 		body := rec.Body.String()
-		if !strings.Contains(body, `"error":{`) || !strings.Contains(body, "rate-limited") {
-			t.Fatalf("expected an error object in the stream, got: %s", body)
-		}
-		if !strings.Contains(body, "[DONE]") {
-			t.Fatalf("expected the terminal sentinel after the error, got: %s", body)
-		}
+		testutil.MustContainAll(t, body, `"error":{`, "rate-limited")
+		testutil.MustContain(t, body, "[DONE]")
 	})
 }
 
@@ -413,15 +352,11 @@ func TestSanitizeToolInput_FieldMapping(t *testing.T) {
 	in := `{"path":"a.txt","content":"hi","overwrite":true}`
 	out := sanitizeToolInput("write", in)
 	var m map[string]any
-	if err := json.Unmarshal([]byte(out), &m); err != nil {
-		t.Fatalf("expected json out: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(out), &m), "expected json out: %v")
 	if _, ok := m["overwrite"]; ok {
 		t.Fatalf("expected overwrite removed")
 	}
-	if m["file_path"] != "a.txt" {
-		t.Fatalf("expected file_path mapped, got %v", m["file_path"])
-	}
+	testutil.Equal(t, m["file_path"], "a.txt")
 	if _, ok := m["path"]; ok {
 		t.Fatalf("expected path removed")
 	}
@@ -429,29 +364,17 @@ func TestSanitizeToolInput_FieldMapping(t *testing.T) {
 
 func TestNormalizeUpstreamToolCall_ListDirUsesTopLevelBash(t *testing.T) {
 	name, input := normalizeUpstreamToolCall("LS", `{"path":"/tmp/project"}`)
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
+	testutil.Equal(t, name, "Bash")
 	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("expected json input, got %v", err)
-	}
-	if payload["command"] != `ls -1A -- "/tmp/project"` {
-		t.Fatalf("expected top-level ls command, got %s", payload["command"])
-	}
-	if payload["description"] != "List top-level directory entries" {
-		t.Fatalf("expected directory list description, got %s", payload["description"])
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(input), &payload), "expected json input, got %v")
+	testutil.Equal(t, payload["command"], `ls -1A -- "/tmp/project"`)
+	testutil.Equal(t, payload["description"], "List top-level directory entries")
 }
 
 func TestNormalizeUpstreamToolCall_GlobPreservesGlob(t *testing.T) {
 	name, input := normalizeUpstreamToolCall("Glob", `{"path":"/tmp/project"}`)
-	if name != "Glob" {
-		t.Fatalf("expected Glob, got %q", name)
-	}
-	if !strings.Contains(input, `"pattern":"*"`) {
-		t.Fatalf("expected glob pattern injection, got %s", input)
-	}
+	testutil.Equal(t, name, "Glob")
+	testutil.MustContain(t, input, `"pattern":"*"`)
 }
 
 func TestRewriteToolCallToClient_PrunesNestedUnknownTodoFields(t *testing.T) {
@@ -482,37 +405,29 @@ func TestRewriteToolCallToClient_PrunesNestedUnknownTodoFields(t *testing.T) {
 		t.Fatalf("unexpected sanitized todo call: name=%s input=%s", name, input)
 	}
 	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, json.Unmarshal([]byte(input), &payload))
 	todos := payload["todos"].([]interface{})
 	if _, ok := todos[0].(map[string]interface{})["content"]; !ok {
 		t.Fatalf("content was lost: %s", input)
 	}
 }
 
-func TestHasRequiredToolInput_Validations(t *testing.T) {
-	if ok := validToolCallInput("write", `{}`); ok {
-		t.Fatalf("write should require path+content")
-	}
-	if ok := validToolCallInput("write", `{"file_path":"a","content":"x"}`); !ok {
-		t.Fatalf("write with file_path+content should be valid")
-	}
-	if ok := validToolCallInput("write", `{"path":"a","content":"x"}`); !ok {
-		t.Fatalf("write with legacy path should be valid")
-	}
-	if ok := validToolCallInput("bash", `{"cmd":""}`); ok {
-		t.Fatalf("bash should require non-empty cmd/command")
-	}
+// newStreamTestHandler builds a stream handler over a flushing recorder for a
+// test, and tears the logger and handler down with it.
+func newStreamTestHandler(t *testing.T, streaming, toolMode bool, format adapter.ResponseFormat) (*streamHandler, *flushRecorder) {
+	t.Helper()
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	sh := newStreamHandler(&config.Config{DebugEnabled: false}, rec, logger, streaming, toolMode, format)
+	t.Cleanup(func() {
+		sh.release()
+		logger.Close()
+	})
+	return sh, rec
 }
 
 func TestStreamHandler_TextFlow_AnthropicSSE(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, rec := newStreamTestHandler(t, false, true, adapter.FormatAnthropic)
 
 	// seed a message_start so the stream resembles real output. For
 	// "message_start" the live writer deliberately skips ensureMessageStartLocked,
@@ -527,74 +442,44 @@ func TestStreamHandler_TextFlow_AnthropicSSE(t *testing.T) {
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}})
 
 	out := rec.buf.String()
-	if !strings.Contains(out, "event: content_block_start") {
-		t.Fatalf("expected content_block_start in output, got: %s", out)
-	}
-	if !strings.Contains(out, "\"text\":\"hi\"") {
-		t.Fatalf("expected text delta, got: %s", out)
-	}
-	if !strings.Contains(out, "event: message_stop") {
-		t.Fatalf("expected message_stop, got: %s", out)
-	}
+	testutil.MustContain(t, out, "event: content_block_start")
+	testutil.MustContain(t, out, "\"text\":\"hi\"")
+	testutil.MustContain(t, out, "event: message_stop")
 }
 
 func TestStreamHandler_OpenAI_SendsDONEOnStop(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatOpenAI)
-	defer sh.release()
+	sh, rec := newStreamTestHandler(t, false, true, adapter.FormatOpenAI)
 
 	sh.finishResponse("end_turn")
 	out := rec.buf.String()
-	if !strings.Contains(out, "[DONE]") {
-		t.Fatalf("expected [DONE] for openai SSE, got: %s", out)
-	}
+	testutil.MustContain(t, out, "[DONE]")
 }
 
 func TestWriteSSEFrameBytes_Output(t *testing.T) {
 	var buf bytes.Buffer
-	if err := writeSSEFrameBytes(&buf, "content_block_delta", []byte("{\"type\":\"content_block_delta\"}")); err != nil {
-		t.Fatalf("writeSSEFrameBytes: %v", err)
-	}
+	testutil.NoError(t, writeSSEFrameBytes(&buf, "content_block_delta", []byte("{\"type\":\"content_block_delta\"}")), "writeSSEFrameBytes: %v")
 	got := buf.String()
 	want := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\n"
-	if got != want {
-		t.Fatalf("unexpected SSE frame output: %q", got)
-	}
+	testutil.Equal(t, got, want)
 }
 
 func TestWriteOpenAIFrame_Output(t *testing.T) {
 	var buf bytes.Buffer
-	if err := writeOpenAIFrame(&buf, []byte("{\"id\":\"msg_1\"}")); err != nil {
-		t.Fatalf("writeOpenAIFrame: %v", err)
-	}
+	testutil.NoError(t, writeOpenAIFrame(&buf, []byte("{\"id\":\"msg_1\"}")), "writeOpenAIFrame: %v")
 	got := buf.String()
 	want := "data: {\"id\":\"msg_1\"}\n\n"
-	if got != want {
-		t.Fatalf("unexpected OpenAI frame output: %q", got)
-	}
+	testutil.Equal(t, got, want)
 }
 
 func TestExtractThinkingSignature(t *testing.T) {
 	e := map[string]any{"signature": "sig"}
-	if got := extractThinkingSignature(e); got != "sig" {
-		t.Fatalf("unexpected: %q", got)
-	}
+	testutil.Equal(t, extractThinkingSignature(e), "sig")
 	e2 := map[string]any{"data": map[string]any{"signature": "sig2"}}
-	if got := extractThinkingSignature(e2); got != "sig2" {
-		t.Fatalf("unexpected: %q", got)
-	}
+	testutil.Equal(t, extractThinkingSignature(e2), "sig2")
 }
 
 func TestStreamHandler_TokensUsed_OverridesEstimation(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, _ := newStreamTestHandler(t, false, false, adapter.FormatAnthropic)
 
 	sh.setUsageTokens(10, -1)
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tokens-used", "inputTokens": float64(12), "outputTokens": float64(34)}})
@@ -645,12 +530,7 @@ func TestStreamHandler_DetailedUsageIsAssignedIdempotently(t *testing.T) {
 }
 
 func TestStreamHandler_FinalOutputTokens_MatchChunkedText(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, _ := newStreamTestHandler(t, false, false, adapter.FormatAnthropic)
 
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "text-start"}})
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "hel"}})
@@ -659,18 +539,11 @@ func TestStreamHandler_FinalOutputTokens_MatchChunkedText(t *testing.T) {
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}})
 
 	want := tiktoken.EstimateTextTokens("hello world!")
-	if sh.outputTokens != want {
-		t.Fatalf("unexpected output tokens: got=%d want=%d", sh.outputTokens, want)
-	}
+	testutil.Equal(t, sh.outputTokens, want)
 }
 
 func TestStreamHandler_KeepAlive_NoPanic(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, rec := newStreamTestHandler(t, false, true, adapter.FormatAnthropic)
 
 	// should not write once terminal state is set
 	sh.mu.Lock()
@@ -678,9 +551,7 @@ func TestStreamHandler_KeepAlive_NoPanic(t *testing.T) {
 	sh.returned.Store(true)
 	sh.mu.Unlock()
 	sh.writeKeepAlive()
-	if rec.buf.Len() != 0 {
-		t.Fatalf("expected no output when hasReturn")
-	}
+	testutil.Equal(t, rec.buf.Len(), 0)
 
 	// reset: a silent stream must stay uncommitted until it has content.
 	sh.mu.Lock()
@@ -688,14 +559,10 @@ func TestStreamHandler_KeepAlive_NoPanic(t *testing.T) {
 	sh.returned.Store(false)
 	sh.mu.Unlock()
 	sh.writeKeepAlive()
-	if rec.buf.Len() != 0 {
-		t.Fatalf("silent stream was committed by a keep-alive")
-	}
+	testutil.Equal(t, rec.buf.Len(), 0)
 	sh.handleMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": "hello"}})
 	sh.writeKeepAlive()
-	if !strings.Contains(rec.buf.String(), ": keep-alive") {
-		t.Fatalf("expected keep-alive comment after content")
-	}
+	testutil.MustContain(t, rec.buf.String(), ": keep-alive")
 }
 
 func TestStreamHandler_TerminalWriteFailureOverridesClaimedSuccess(t *testing.T) {
@@ -711,17 +578,11 @@ func TestStreamHandler_TerminalWriteFailureOverridesClaimedSuccess(t *testing.T)
 	if !returned || !failed {
 		t.Fatalf("terminal state = returned:%v failed:%v, want terminal failure", returned, failed)
 	}
-	if sh.finalStopReason != "write_error" {
-		t.Fatalf("final stop reason = %q, want write_error", sh.finalStopReason)
-	}
+	testutil.Equal(t, sh.finalStopReason, "write_error")
 }
 
 func TestStreamHandler_TerminalStateAndKeepAliveAreRaceSafe(t *testing.T) {
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(&config.Config{}, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, _ := newStreamTestHandler(t, false, true, adapter.FormatAnthropic)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -746,12 +607,7 @@ func TestStreamHandler_TerminalStateAndKeepAliveAreRaceSafe(t *testing.T) {
 }
 
 func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, rec := newStreamTestHandler(t, false, true, adapter.FormatAnthropic)
 
 	// The live writers take an explicit flush hint; writeSSEBytesLocked, the live
 	// content_block_stop writer, derives its hint from shouldFlushSSEImmediately,
@@ -763,9 +619,7 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	}
 
 	writeFrame("message_start", []byte(`{"type":"message_start"}`))
-	if rec.flushes != 1 {
-		t.Fatalf("expected message_start to flush immediately, got %d", rec.flushes)
-	}
+	testutil.Equal(t, rec.flushes, 1)
 
 	thinkingData, err := appendSSEContentBlockDeltaThinking(nil, 0, "step")
 	if err != nil {
@@ -776,60 +630,38 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	// the first delta also emits the deferred opening frame and flushes it. The
 	// delta itself is deferred one slot into the threshold.
 	writeFrame("content_block_delta", thinkingData)
-	if rec.flushes != 2 {
-		t.Fatalf("expected the first delta to flush the deferred opening frame, got %d", rec.flushes)
-	}
+	testutil.Equal(t, rec.flushes, 2)
 
 	// The remaining deferred thinking frames below the threshold add no flush.
 	for i := 0; i < sseDeferredFlushFrameThreshold-2; i++ {
 		writeFrame("content_block_delta", thinkingData)
 	}
-	if rec.flushes != 2 {
-		t.Fatalf("expected deferred thinking deltas to coalesce, got %d flushes", rec.flushes)
-	}
+	testutil.Equal(t, rec.flushes, 2)
 
 	// The frame that reaches sseDeferredFlushFrameThreshold flushes the batch.
 	writeFrame("content_block_delta", thinkingData)
-	if rec.flushes != 3 {
-		t.Fatalf("expected deferred threshold flush, got %d", rec.flushes)
-	}
+	testutil.Equal(t, rec.flushes, 3)
 
 	textData, err := marshalSSEContentBlockDeltaTextBytes(0, "hi")
 	if err != nil {
 		t.Fatalf("marshal text delta: %v", err)
 	}
 	writeFrame("content_block_delta", textData)
-	if rec.flushes != 4 {
-		t.Fatalf("expected text delta to flush immediately, got %d", rec.flushes)
-	}
+	testutil.Equal(t, rec.flushes, 4)
 }
 
 func TestStreamHandler_FinishResponse_SuppressesGenericEmptyFallbackWhenRequested(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, rec := newStreamTestHandler(t, false, true, adapter.FormatAnthropic)
 
 	sh.finishResponse("end_turn")
 
 	out := rec.buf.String()
-	if strings.Contains(out, "No output was presented to the user") {
-		t.Fatalf("expected generic empty fallback to stay suppressed, got: %s", out)
-	}
-	if !strings.Contains(out, "event: message_stop") {
-		t.Fatalf("expected message_stop even when empty fallback is suppressed, got: %s", out)
-	}
+	testutil.MustNotContain(t, out, "No output was presented to the user")
+	testutil.MustContain(t, out, "event: message_stop")
 }
 
 func TestStreamHandler_NoToolsGateSuppressesValidToolCall(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, rec := newStreamTestHandler(t, false, true, adapter.FormatAnthropic)
 
 	sh.setDisallowToolCalls(true)
 	sh.handleMessage(upstream.SSEMessage{
@@ -844,21 +676,12 @@ func TestStreamHandler_NoToolsGateSuppressesValidToolCall(t *testing.T) {
 	sh.finishResponse("tool_use")
 
 	out := rec.buf.String()
-	if strings.Contains(out, `"type":"tool_use"`) {
-		t.Fatalf("expected tool_use to be suppressed, got: %s", out)
-	}
-	if !strings.Contains(out, `"stop_reason":"end_turn"`) {
-		t.Fatalf("expected end_turn after suppressing tool call, got: %s", out)
-	}
+	testutil.MustNotContain(t, out, `"type":"tool_use"`)
+	testutil.MustContain(t, out, `"stop_reason":"end_turn"`)
 }
 
 func TestStreamHandler_NoToolsWriteReturnsContentAsText(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, rec := newStreamTestHandler(t, false, true, adapter.FormatAnthropic)
 
 	sh.setAllowedToolNames(nil)
 	sh.setSurfaceToolRejects(true)
@@ -874,24 +697,13 @@ func TestStreamHandler_NoToolsWriteReturnsContentAsText(t *testing.T) {
 	sh.finishResponse("tool_use")
 
 	out := rec.buf.String()
-	if strings.Contains(out, `"type":"tool_use"`) {
-		t.Fatalf("undeclared Write leaked to client: %s", out)
-	}
-	if !strings.Contains(out, "Ready") {
-		t.Fatalf("expected generated file content as text fallback, got: %s", out)
-	}
-	if !strings.Contains(out, `"stop_reason":"end_turn"`) {
-		t.Fatalf("expected a normal text completion, got: %s", out)
-	}
+	testutil.MustNotContain(t, out, `"type":"tool_use"`)
+	testutil.MustContain(t, out, "Ready")
+	testutil.MustContain(t, out, `"stop_reason":"end_turn"`)
 }
 
 func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, rec := newStreamTestHandler(t, false, true, adapter.FormatAnthropic)
 
 	sh.setEmptyOutputFallback("File operation completed successfully.")
 	sh.handleMessage(upstream.SSEMessage{
@@ -903,9 +715,7 @@ func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
 	})
 
 	out := rec.buf.String()
-	if !strings.Contains(out, "File operation completed successfully.") {
-		t.Fatalf("expected visible success fallback, got: %s", out)
-	}
+	testutil.MustContain(t, out, "File operation completed successfully.")
 	// The opening frame reports the usage known when it is opened, which is zero
 	// output tokens -- the same figure the eager opening call carried before it was
 	// deferred, so a whole-body search for a zero would now always find it. The
@@ -916,12 +726,8 @@ func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
 		t.Fatalf("expected a terminal usage report, got: %s", out)
 	}
 	terminal := out[terminalAt:]
-	if strings.Contains(terminal, `"output_tokens":0`) {
-		t.Fatalf("synthetic visible output retained zero output usage: %s", out)
-	}
-	if !strings.Contains(terminal, `"usage":{"output_tokens":`) {
-		t.Fatalf("expected the terminal report to carry usage, got: %s", out)
-	}
+	testutil.MustNotContain(t, terminal, `"output_tokens":0`)
+	testutil.MustContain(t, terminal, `"usage":{"output_tokens":`)
 }
 
 func TestResponseMessageID_OpenAIUsesChatCompletionPrefix(t *testing.T) {
@@ -929,9 +735,7 @@ func TestResponseMessageID_OpenAIUsesChatCompletionPrefix(t *testing.T) {
 	if !strings.HasPrefix(id, "chatcmpl-") {
 		t.Fatalf("id=%q want chatcmpl- prefix", id)
 	}
-	if id == responseMessageID(adapter.FormatOpenAI) {
-		t.Fatal("expected unique response IDs")
-	}
+	testutil.NotEqual(t, id, responseMessageID(adapter.FormatOpenAI))
 }
 
 func TestResponseMessageID_AnthropicKeepsMessagePrefix(t *testing.T) {
@@ -942,12 +746,7 @@ func TestResponseMessageID_AnthropicKeepsMessagePrefix(t *testing.T) {
 }
 
 func TestStreamHandler_ReasoningCountsAsUpstreamOutputWhenSuppressed(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, true, true, adapter.FormatAnthropic)
-	defer sh.release()
+	sh, _ := newStreamTestHandler(t, true, true, adapter.FormatAnthropic)
 
 	sh.handleMessage(upstream.SSEMessage{
 		Type:  "model.reasoning-delta",
@@ -974,11 +773,7 @@ func TestReportRequestFailure_ClientRejectionAnswers400(t *testing.T) {
 
 	sh.reportRequestFailure("probe", "client", "The upstream rejected the request parameters or model. Check the request and model selection.", 0)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
 	body := rec.Body.String()
-	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "rejected the request parameters") {
-		t.Fatalf("expected the client-rejection envelope, got: %s", body)
-	}
+	testutil.MustContainAll(t, body, `"type":"error"`, "rejected the request parameters")
 }

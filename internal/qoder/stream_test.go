@@ -10,6 +10,7 @@ import (
 
 	"encoding/json"
 
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 )
@@ -43,9 +44,9 @@ func jsonString(value string) string {
 func collectStream(t *testing.T, body string) ([]upstream.SSEMessage, streamResult, error) {
 	t.Helper()
 	var events []upstream.SSEMessage
-	result, err := consumeStreamWithTools(strings.NewReader(body), false, func(msg upstream.SSEMessage) {
+	result, err := consumeStreamObserved(strings.NewReader(body), false, func(msg upstream.SSEMessage) {
 		events = append(events, msg)
-	})
+	}, nil)
 	return events, result, err
 }
 
@@ -75,15 +76,9 @@ func TestConsumeStreamDecodesWrappedChunks(t *testing.T) {
 			reasoning.WriteString(event.Event["delta"].(string))
 		}
 	}
-	if text.String() != "Hello" {
-		t.Fatalf("text = %q, want Hello", text.String())
-	}
-	if reasoning.String() != "think" {
-		t.Fatalf("reasoning = %q, want think", reasoning.String())
-	}
-	if got := result.FinishReason(); got != "end_turn" {
-		t.Fatalf("FinishReason() = %q, want end_turn", got)
-	}
+	testutil.Equal(t, text.String(), "Hello")
+	testutil.Equal(t, reasoning.String(), "think")
+	testutil.Equal(t, result.FinishReason(), "end_turn")
 	if !result.SawMeaningfulEvent {
 		t.Fatal("SawMeaningfulEvent = false")
 	}
@@ -97,9 +92,7 @@ func TestConsumeStreamClassifiesTextRateLimit(t *testing.T) {
 	if !errors.Is(err, ErrModelRateLimited) {
 		t.Fatalf("error = %v, want ErrModelRateLimited", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("rate-limit text must not be forwarded as output: %+v", events)
-	}
+	testutil.Equal(t, len(events), 0)
 }
 
 // TestConsumeStreamRequiresTerminator proves a premature EOF is reported as a
@@ -144,9 +137,7 @@ func TestConsumeStreamReportsErrorEnvelope(t *testing.T) {
 	if err == nil {
 		t.Fatal("consumeStream() error = nil for an error envelope")
 	}
-	if !strings.Contains(err.Error(), "model overloaded") {
-		t.Fatalf("error = %v, want the upstream message", err)
-	}
+	testutil.MustContain(t, err.Error(), "model overloaded")
 }
 
 // TestConsumeStreamClassifiesBusyCode proves business code 10605 is reported as
@@ -161,9 +152,7 @@ func TestConsumeStreamClassifiesSplitTextRateLimit(t *testing.T) {
 	if !errors.Is(err, ErrModelRateLimited) {
 		t.Fatalf("error = %v, want ErrModelRateLimited", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("rate-limit sentinel leaked as assistant output: %+v", events)
-	}
+	testutil.Equal(t, len(events), 0)
 }
 
 func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
@@ -212,9 +201,7 @@ func TestConsumeStreamClassifiesAgentLimitWithoutClaimingAccountQuota(t *testing
 	if want := time.UnixMilli(resetMillis); !agentErr.resetAt.Equal(want) {
 		t.Fatalf("reset=%v want %v", agentErr.resetAt, want)
 	}
-	if strings.Contains(err.Error(), "quota exhausted") {
-		t.Fatalf("agent-scoped refusal was presented as account quota exhaustion: %v", err)
-	}
+	testutil.MustNotContain(t, err.Error(), "quota exhausted")
 }
 
 func TestConsumeStreamDoesNotRetryDuplicateRequest(t *testing.T) {
@@ -249,12 +236,8 @@ func TestConsumeStreamAuthenticatedRequestEnvelope(t *testing.T) {
 	}
 	// The account classifier reads any "status=403" as a dead credential, so the
 	// error text must not carry the upstream status.
-	if strings.Contains(err.Error(), "status=403") {
-		t.Fatalf("error text = %q, want no upstream status (it would retire the account)", err)
-	}
-	if strings.Contains(err.Error(), "forbidden") {
-		t.Fatalf("error text = %q, want no forbidden wording", err)
-	}
+	testutil.MustNotContain(t, err.Error(), "status=403")
+	testutil.MustNotContain(t, err.Error(), "forbidden")
 	// The reason must reach the operator.
 	if !strings.Contains(err.Error(), "pricing") && !strings.Contains(err.Error(), "plan") {
 		t.Fatalf("error text = %q, want the entitlement reason", err)
@@ -315,27 +298,13 @@ func TestConsumeStreamUsageSurvivesASharedFrame(t *testing.T) {
 			sawText = true
 		}
 	}
-	if !sawText {
-		t.Fatal("the content in a shared usage frame was dropped")
-	}
-	if !sawUsage {
-		t.Fatal("usage was not emitted")
-	}
-	if got := result.Usage["inputTokens"]; got != 11 {
-		t.Fatalf("inputTokens = %v, want 11", got)
-	}
-	if got := result.Usage["outputTokens"]; got != 7 {
-		t.Fatalf("outputTokens = %v, want 7", got)
-	}
-	if got := result.Usage["cacheReadTokens"]; got != 3 {
-		t.Fatalf("cacheReadTokens = %v, want 3", got)
-	}
-	if got := result.Usage["cacheable_tokens"]; got != 5 {
-		t.Fatalf("cacheable_tokens = %v, want 5", got)
-	}
-	if got := result.Usage["credits"]; got != 0.25 {
-		t.Fatalf("credits = %v, want 0.25", got)
-	}
+	testutil.True(t, sawText, "the content in a shared usage frame was dropped")
+	testutil.True(t, sawUsage, "usage was not emitted")
+	testutil.Equal(t, result.Usage["inputTokens"], 11)
+	testutil.Equal(t, result.Usage["outputTokens"], 7)
+	testutil.Equal(t, result.Usage["cacheReadTokens"], 3)
+	testutil.Equal(t, result.Usage["cacheable_tokens"], 5)
+	testutil.Equal(t, result.Usage["credits"], 0.25)
 }
 
 // TestConsumeStreamToolCallAccumulatesArguments proves split argument deltas are
@@ -362,18 +331,10 @@ func TestConsumeStreamToolCallAccumulatesArguments(t *testing.T) {
 	if call == nil {
 		t.Fatalf("no tool call was emitted; events = %+v", events)
 	}
-	if call["toolName"] != "search" {
-		t.Fatalf("toolName = %v, want search", call["toolName"])
-	}
-	if call["input"] != `{"q":"cats"}` {
-		t.Fatalf("input = %v, want the reassembled arguments", call["input"])
-	}
-	if got := result.FinishReason(); got != "tool_use" {
-		t.Fatalf("FinishReason() = %q, want tool_use", got)
-	}
-	if result.ToolCallCount != 1 {
-		t.Fatalf("ToolCallCount = %d, want 1", result.ToolCallCount)
-	}
+	testutil.Equal(t, call["toolName"], "search")
+	testutil.Equal(t, call["input"], `{"q":"cats"}`)
+	testutil.Equal(t, result.FinishReason(), "tool_use")
+	testutil.Equal(t, result.ToolCallCount, 1)
 }
 
 // TestToolCallAccumulatorOpensNewCallOnIDChange covers parallel calls, which the
@@ -445,9 +406,7 @@ func TestReadSSEHandlesMultilineData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readSSE() error = %v", err)
 	}
-	if len(frames) != 1 {
-		t.Fatalf("frames = %d, want 1", len(frames))
-	}
+	testutil.Equal(t, len(frames), 1)
 	if frames[0].event != "message" || frames[0].data != "line1\nline2" {
 		t.Fatalf("frame = %+v, want the joined data", frames[0])
 	}
@@ -482,13 +441,9 @@ func TestFinishReasonMapping(t *testing.T) {
 		{"", "end_turn"},
 	}
 	for _, tc := range cases {
-		if got := (streamResult{FinishReasonValue: tc.in}).FinishReason(); got != tc.want {
-			t.Errorf("FinishReason(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+		testutil.CheckEqual(t, (streamResult{FinishReasonValue: tc.in}).FinishReason(), tc.want)
 	}
-	if got := (streamResult{ToolCallCount: 1}).FinishReason(); got != "tool_use" {
-		t.Errorf("FinishReason with a tool call = %q, want tool_use", got)
-	}
+	testutil.CheckEqual(t, (streamResult{ToolCallCount: 1}).FinishReason(), "tool_use")
 }
 
 // TestEntitlementRefusalDoesNotRetireTheAccount is the regression test for the
@@ -532,20 +487,14 @@ func TestEntitlementRefusalDoesNotRetireTheAccount(t *testing.T) {
 	// account's status and disable it.
 	lower := strings.ToLower(text)
 	for _, forbidden := range []string{"status=403", "403", "forbidden", "unauthorized"} {
-		if strings.Contains(lower, forbidden) {
-			t.Errorf("error text %q contains %q, which the account classifier reads as a dead credential", text, forbidden)
-		}
+		testutil.CheckNotContain(t, lower, forbidden)
 	}
 
 	// And the operator must still learn what is actually wrong. The code marker is
 	// asserted too, so this test cannot pass through the generic error path: it
 	// must be the entitlement branch that produced the message.
-	if !strings.Contains(text, "code=112") {
-		t.Fatalf("error text %q was not produced by the entitlement branch", text)
-	}
-	if !strings.Contains(text, "pricing") {
-		t.Errorf("error text %q does not name the pricing page", text)
-	}
+	testutil.MustContain(t, text, "code=112")
+	testutil.CheckContain(t, text, "pricing")
 	if !strings.Contains(text, "plan") && !strings.Contains(text, "subscription") {
 		t.Errorf("error text %q does not say what to do", text)
 	}

@@ -1,6 +1,7 @@
 package util
 
 import (
+	"orchids-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,13 +10,9 @@ import (
 
 func TestNormalizePersistedToolResultText_ExpandsSafePersistedOutput(t *testing.T) {
 	base := filepath.Join(t.TempDir(), ".claude", "projects", "demo", "tool-results")
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	testutil.NoError(t, os.MkdirAll(base, 0o755), "mkdir: %v")
 	path := filepath.Join(base, "tool.txt")
-	if err := os.WriteFile(path, []byte("line one\nline two"), 0o644); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
+	testutil.NoError(t, os.WriteFile(path, []byte("line one\nline two"), 0o644), "write file: %v")
 
 	raw := strings.Join([]string{
 		"<persisted-output>",
@@ -24,9 +21,7 @@ func TestNormalizePersistedToolResultText_ExpandsSafePersistedOutput(t *testing.
 	}, "\n")
 
 	got := NormalizePersistedToolResultText(raw)
-	if got != "line one\nline two" {
-		t.Fatalf("NormalizePersistedToolResultText() = %q", got)
-	}
+	testutil.Equal(t, got, "line one\nline two")
 }
 
 func TestNormalizePersistedToolResultText_RejectsUnsafePath(t *testing.T) {
@@ -37,7 +32,5 @@ func TestNormalizePersistedToolResultText_RejectsUnsafePath(t *testing.T) {
 	}, "\n")
 
 	got := NormalizePersistedToolResultText(raw)
-	if !strings.Contains(got, "Full output saved to: /tmp/not-allowed.txt") {
-		t.Fatalf("expected unsafe path to remain unchanged, got %q", got)
-	}
+	testutil.MustContain(t, got, "Full output saved to: /tmp/not-allowed.txt")
 }

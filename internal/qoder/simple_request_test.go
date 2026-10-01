@@ -2,6 +2,7 @@ package qoder
 
 import (
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 	"testing"
 )
@@ -12,7 +13,7 @@ func TestSimplePromptRequestRetainsContextAndExplicitBudget(t *testing.T) {
 		if limit != 0 {
 			req.MaxTokens = &limit
 		}
-		encoded, err := buildChatBody(req, modelEntry{Key: "qfmodel"}, "session", "request", "set")
+		encoded, err := buildChatBodyProfile(req, modelEntry{Key: "qfmodel"}, "session", "request", "set", DefaultClientVersion, "", sceneBusinessProduct)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -36,8 +37,6 @@ func TestSimplePromptRequestRetainsContextAndExplicitBudget(t *testing.T) {
 			want = limit
 		}
 		parameters := body.Parameters.(map[string]interface{})
-		if parameters["max_tokens"] != float64(want) {
-			t.Fatalf("budget=%v want=%d", parameters["max_tokens"], want)
-		}
+		testutil.EqualAny(t, parameters["max_tokens"], float64(want))
 	}
 }

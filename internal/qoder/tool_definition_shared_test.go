@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"encoding/json"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 )
@@ -60,9 +61,7 @@ func TestNormalizeToolDefinitionsMatchesSharedHelper(t *testing.T) {
 	if !reflect.DeepEqual(qoderGot, workbuddyGot) {
 		t.Fatalf("qoder and workbuddy normalization diverged:\nqoder:     %s\nworkbuddy: %s", qoderJSON, workbuddyJSON)
 	}
-	if len(qoderGot) != 4 {
-		t.Fatalf("expected 4 kept declarations (openai envelope, anthropic schema, default schema, trimmed name), got %d: %s", len(qoderGot), qoderJSON)
-	}
+	testutil.Equal(t, len(qoderGot), 4)
 
 	// The NoTools / empty guard is Qoder's own behavior, not the shared helper's.
 	if got := normalizeToolDefinitions(upstream.UpstreamRequest{NoTools: true, Tools: declarations}, modelEntry{Key: "k"}); got != nil {

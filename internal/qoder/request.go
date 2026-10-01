@@ -202,24 +202,6 @@ type chatToolCall struct {
 	} `json:"function"`
 }
 
-// buildChatBody renders the encoded request body.
-func buildChatBody(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, requestSetID string) ([]byte, error) {
-	return buildChatBodyVersion(req, model, sessionID, requestID, requestSetID, DefaultClientVersion)
-}
-
-func buildChatBodyVersion(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, requestSetID, clientVersion string) ([]byte, error) {
-	return buildChatBodyScoped(req, model, sessionID, requestID, requestSetID, clientVersion, "")
-}
-
-// buildChatBodyScoped renders the encoded request body for one account class.
-//
-// aliyunUserType is the account's own class. The QoderWork capture sends this
-// field empty, and the caller passes "" to reproduce that; a class is only sent
-// when a caller has evidence the upstream wants one.
-func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, requestSetID, clientVersion, aliyunUserType string) ([]byte, error) {
-	return buildChatBodyProfile(req, model, sessionID, requestID, requestSetID, clientVersion, aliyunUserType, sceneBusinessProduct)
-}
-
 type chatParameters struct {
 	MaxTokens       int       `json:"max_tokens"`
 	Temperature     *float64  `json:"temperature,omitempty"`

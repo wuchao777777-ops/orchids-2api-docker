@@ -4,11 +4,11 @@ import (
 	"errors"
 	"io"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestValidateChatMessages_AcceptsCaseInsensitiveRoleAndType(t *testing.T) {
@@ -28,9 +28,7 @@ func TestValidateChatMessages_AcceptsCaseInsensitiveRoleAndType(t *testing.T) {
 		},
 	}
 
-	if err := validateChatMessages(messages); err != nil {
-		t.Fatalf("validateChatMessages() error = %v", err)
-	}
+	testutil.NoError(t, validateChatMessages(messages), "validateChatMessages() error = %v")
 }
 
 func TestApplyQuotaInfo_InfersLiteSubscription(t *testing.T) {
@@ -42,12 +40,8 @@ func TestApplyQuotaInfo_InfersLiteSubscription(t *testing.T) {
 		HasRemaining: true,
 		Unit:         "requests",
 	})
-	if !changed {
-		t.Fatal("ApplyQuotaInfo changed=false, want true")
-	}
-	if acc.Subscription != "lite" {
-		t.Fatalf("subscription=%q want lite", acc.Subscription)
-	}
+	testutil.True(t, changed, "ApplyQuotaInfo changed=false, want true")
+	testutil.Equal(t, acc.Subscription, "lite")
 	if acc.UsageLimit != 70 || acc.UsageCurrent != 63 {
 		t.Fatalf("unexpected quota: limit=%v current=%v", acc.UsageLimit, acc.UsageCurrent)
 	}
@@ -62,12 +56,8 @@ func TestApplyQuotaInfo_InfersBasicFromFreeAutoWindow(t *testing.T) {
 		HasRemaining: true,
 		Unit:         "requests",
 	})
-	if !changed {
-		t.Fatal("ApplyQuotaInfo changed=false, want true")
-	}
-	if acc.Subscription != "basic" {
-		t.Fatalf("subscription=%q want basic", acc.Subscription)
-	}
+	testutil.True(t, changed, "ApplyQuotaInfo changed=false, want true")
+	testutil.Equal(t, acc.Subscription, "basic")
 	if acc.UsageLimit != 7 || acc.UsageCurrent != 7 {
 		t.Fatalf("unexpected quota: limit=%v current=%v", acc.UsageLimit, acc.UsageCurrent)
 	}
@@ -89,9 +79,7 @@ func TestParseRateLimitValue_ComplexFormats(t *testing.T) {
 		if !ok {
 			t.Fatalf("parseRateLimitValue(%q) not parsed", tt.in)
 		}
-		if got != tt.want {
-			t.Fatalf("parseRateLimitValue(%q)=%d want=%d", tt.in, got, tt.want)
-		}
+		testutil.Equal(t, got, tt.want)
 	}
 }
 
@@ -113,9 +101,7 @@ func TestEncodeJSONBytesDoesNotEscapeHTML(t *testing.T) {
 		},
 	}
 	got := string(encodeJSONBytes(payload))
-	if !strings.Contains(got, "hello <world>") {
-		t.Fatalf("got=%q want unescaped html", got)
-	}
+	testutil.MustContain(t, got, "hello <world>")
 }
 
 func TestWriteSSEBytesWritesEventFrame(t *testing.T) {
@@ -123,9 +109,7 @@ func TestWriteSSEBytesWritesEventFrame(t *testing.T) {
 	writeSSEBytes(bytesRec, "demo", []byte(`{"ok":true}`))
 
 	got := bytesRec.Body.String()
-	if !strings.Contains(got, "event: demo\n") || !strings.Contains(got, `data: {"ok":true}`) {
-		t.Fatalf("unexpected sse frame: %q", got)
-	}
+	testutil.MustContainAll(t, got, "event: demo\n", `data: {"ok":true}`)
 }
 
 func TestWriteSSEBytesPropagatesShortWrite(t *testing.T) {

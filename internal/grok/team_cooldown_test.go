@@ -2,6 +2,7 @@ package grok
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"sync"
 	"testing"
 	"time"
@@ -33,7 +34,6 @@ func withTestDistributedGrokLimits(t *testing.T) *redisGrokLimits {
 		distributedGrokLimits.backend = previous
 		distributedGrokLimits.Unlock()
 		_ = client.Close()
-		mini.Close()
 	})
 	return backend
 }
@@ -50,9 +50,7 @@ func TestDistributedCooldownVisibleToAnotherRegistry(t *testing.T) {
 
 func TestDistributedPacingSerializesReplicas(t *testing.T) {
 	backend := withTestDistributedGrokLimits(t)
-	if err := backend.waitPacing(context.Background(), "shared-account", 2); err != nil {
-		t.Fatalf("first pacing token failed: %v", err)
-	}
+	testutil.NoError(t, backend.waitPacing(context.Background(), "shared-account", 2), "first pacing token failed: %v")
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
 	if err := backend.waitPacing(ctx, "shared-account", 2); err == nil {
@@ -68,12 +66,8 @@ func TestTeamCooldownNoteAndRetry(t *testing.T) {
 		t.Fatalf("remaining = %s, want in (0, 30s]", remaining)
 	}
 	// Different team/model must be unaffected.
-	if remaining := registry.RetryAfterFor(RateLimitScopeRPS, "team-b", "grok-4.5"); remaining != 0 {
-		t.Fatalf("team-b should have no cooldown, got %s", remaining)
-	}
-	if remaining := registry.RetryAfterFor(RateLimitScopeRPM, "team-a", "grok-4.5"); remaining != 0 {
-		t.Fatalf("different scope should have no cooldown, got %s", remaining)
-	}
+	testutil.Equal(t, registry.RetryAfterFor(RateLimitScopeRPS, "team-b", "grok-4.5"), 0)
+	testutil.Equal(t, registry.RetryAfterFor(RateLimitScopeRPM, "team-a", "grok-4.5"), 0)
 }
 
 func TestTeamCooldownNoteIgnoresEmptyTeamOrModel(t *testing.T) {
@@ -92,9 +86,7 @@ func TestTeamCooldownExpiry(t *testing.T) {
 	registry := newTeamCooldownRegistry()
 	registry.Note(RateLimitScopeRPM, "team-a", "grok-4.5", time.Nanosecond)
 	time.Sleep(time.Millisecond)
-	if remaining := registry.RetryAfterFor(RateLimitScopeRPM, "team-a", "grok-4.5"); remaining != 0 {
-		t.Fatalf("expired cooldown should be cleared, got %s", remaining)
-	}
+	testutil.Equal(t, registry.RetryAfterFor(RateLimitScopeRPM, "team-a", "grok-4.5"), 0)
 }
 
 func TestTeamCooldownNoteKeepsLongest(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/secureblob"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 const compactionTestSummary = "1. Primary Request and Intent: keep the session going across account switches.\n" +
@@ -40,7 +41,7 @@ func testCompactionCipher(t *testing.T) *secureblob.Cipher {
 // gateway compaction, the same shape the CLI responses tests use.
 func setupCompactionHandler(t *testing.T, upstream *httptest.Server) (*Handler, *store.Store, func()) {
 	t.Helper()
-	h, s, mini := setupValidationHandler(t)
+	h, s, _ := setupValidationHandler(t)
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5",
 		Status: store.ModelStatusAvailable, Verified: true,
@@ -64,7 +65,6 @@ func setupCompactionHandler(t *testing.T, upstream *httptest.Server) (*Handler, 
 	h.SetCompactionCipher(testCompactionCipher(t))
 	return h, s, func() {
 		_ = s.Close()
-		mini.Close()
 	}
 }
 
@@ -77,9 +77,7 @@ func compactionUpstream(t *testing.T, summary string, received *map[string]inter
 		}
 		if received != nil {
 			var decoded map[string]interface{}
-			if err := json.Unmarshal(body, &decoded); err != nil {
-				t.Fatalf("decode upstream body: %v", err)
-			}
+			testutil.NoError(t, json.Unmarshal(body, &decoded), "decode upstream body: %v")
 			*received = decoded
 		}
 		completed := map[string]interface{}{
@@ -155,9 +153,7 @@ func TestClassifyResponsesCompactionPayload(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyResponsesCompactionPayload(tc.payload); got != tc.want {
-				t.Fatalf("kind=%d want %d", got, tc.want)
-			}
+			testutil.Equal(t, classifyResponsesCompactionPayload(tc.payload), tc.want)
 		})
 	}
 }
@@ -233,9 +229,7 @@ func TestExpandGatewayCompactionHistory(t *testing.T) {
 		t.Fatalf("expanded item=%#v", expanded)
 	}
 	parts := expanded["content"].([]interface{})
-	if text := parts[0].(map[string]interface{})["text"]; text != "Summary:\nreplayed" {
-		t.Fatalf("expanded text=%v", text)
-	}
+	testutil.Equal(t, parts[0].(map[string]interface{})["text"], "Summary:\nreplayed")
 	// The upstream's own blob is handed to the upstream unchanged.
 	foreign := items[2].(map[string]interface{})
 	if foreign["type"] != "compaction" || foreign["encrypted_content"] != "upstream-opaque" {
@@ -298,9 +292,7 @@ func TestCleanGatewayCompactionSummary(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := cleanGatewayCompactionSummary(tc.raw); got != tc.want {
-				t.Fatalf("cleaned=%q want %q", got, tc.want)
-			}
+			testutil.Equal(t, cleanGatewayCompactionSummary(tc.raw), tc.want)
 		})
 	}
 }
@@ -342,9 +334,7 @@ func TestPrepareGatewayCompactionSample(t *testing.T) {
 		t.Fatalf("temperature=%v tool_choice=%v", sample["temperature"], sample["tool_choice"])
 	}
 	reasoning, _ := sample["reasoning"].(map[string]interface{})
-	if reasoning["summary"] != "concise" {
-		t.Fatalf("reasoning=%v", sample["reasoning"])
-	}
+	testutil.Equal(t, reasoning["summary"], "concise")
 	for _, dropped := range []string{"previous_response_id", "text", "max_output_tokens", "max_completion_tokens"} {
 		if _, present := sample[dropped]; present {
 			t.Fatalf("%s survived sample preparation", dropped)
@@ -433,9 +423,7 @@ func TestBuildGatewayCompactionResponseShape(t *testing.T) {
 		t.Fatalf("item=%#v", item)
 	}
 	usage := result["usage"].(map[string]interface{})
-	if usage["total_tokens"] != int64(15) {
-		t.Fatalf("usage=%#v", usage)
-	}
+	testutil.EqualAny(t, usage["total_tokens"], int64(15))
 	// A response without usage keeps it absent instead of inventing zeros.
 	noUsage := buildGatewayCompactionResponse(map[string]interface{}{"id": "resp_x"}, "blob", "grok-4.5")
 	if _, present := noUsage["usage"]; present {
@@ -444,9 +432,7 @@ func TestBuildGatewayCompactionResponseShape(t *testing.T) {
 
 	// The streamed form is the same answer as six ordered events.
 	var builder strings.Builder
-	if err := writeGatewayCompactionStream(&builder, result); err != nil {
-		t.Fatalf("write stream: %v", err)
-	}
+	testutil.NoError(t, writeGatewayCompactionStream(&builder, result), "write stream: %v")
 	names := make([]string, 0, 6)
 	var completedPayload map[string]interface{}
 	if err := consumeCompatibleSSE(strings.NewReader(builder.String()), func(event compatibleSSEEvent) error {
@@ -461,13 +447,9 @@ func TestBuildGatewayCompactionResponseShape(t *testing.T) {
 		t.Fatalf("consume stream: %v", err)
 	}
 	want := []string{"response.created", "response.in_progress", "response.output_item.added", "keepalive", "response.output_item.done", "response.completed"}
-	if strings.Join(names, ",") != strings.Join(want, ",") {
-		t.Fatalf("events=%v want %v", names, want)
-	}
+	testutil.Equal(t, strings.Join(names, ","), strings.Join(want, ","))
 	completedResponse := completedPayload["response"].(map[string]interface{})
-	if completedResponse["status"] != "completed" {
-		t.Fatalf("completed response=%#v", completedResponse)
-	}
+	testutil.Equal(t, completedResponse["status"], "completed")
 }
 
 // TestHandleResponsesCompactSealsGatewaySummary is the end-to-end proof: the
@@ -486,9 +468,7 @@ func TestHandleResponsesCompactSealsGatewaySummary(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleResponsesCompact(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
 		t.Fatalf("Content-Type=%q", got)
 	}
@@ -511,14 +491,10 @@ func TestHandleResponsesCompactSealsGatewaySummary(t *testing.T) {
 	}
 
 	var payload map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode response: %v")
 	output := payload["output"].([]interface{})
 	item := output[0].(map[string]interface{})
-	if item["type"] != "compaction" {
-		t.Fatalf("item=%#v", item)
-	}
+	testutil.Equal(t, item["type"], "compaction")
 	blob := item["encrypted_content"].(string)
 	if !strings.HasPrefix(blob, gatewayCompactionPrefix) {
 		t.Fatalf("blob=%q is not gateway-owned", blob)
@@ -528,12 +504,8 @@ func TestHandleResponsesCompactSealsGatewaySummary(t *testing.T) {
 	if err != nil || !owned {
 		t.Fatalf("decode blob owned=%v err=%v", owned, err)
 	}
-	if !strings.Contains(summary, "This session is being continued from a previous conversation") {
-		t.Fatalf("summary=%q is missing the continuation preamble", summary)
-	}
-	if !strings.Contains(summary, "Primary Request and Intent") {
-		t.Fatalf("summary=%q lost the model's summary", summary)
-	}
+	testutil.MustContain(t, summary, "This session is being continued from a previous conversation")
+	testutil.MustContain(t, summary, "Primary Request and Intent")
 }
 
 // TestHandleResponsesExpandsGatewayCompactionHistory proves the other half: the
@@ -544,9 +516,7 @@ func TestHandleResponsesExpandsGatewayCompactionHistory(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var decoded map[string]interface{}
-		if err := json.Unmarshal(body, &decoded); err != nil {
-			t.Fatalf("decode upstream body: %v", err)
-		}
+		testutil.NoError(t, json.Unmarshal(body, &decoded), "decode upstream body: %v")
 		received = decoded
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\"}\n\n")
@@ -573,9 +543,7 @@ func TestHandleResponsesExpandsGatewayCompactionHistory(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleResponses(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	if received == nil {
 		t.Fatal("upstream saw no request")
 	}
@@ -590,9 +558,7 @@ func TestHandleResponsesExpandsGatewayCompactionHistory(t *testing.T) {
 		t.Fatalf("expanded item=%#v", first)
 	}
 	parts := first["content"].([]interface{})
-	if text := parts[0].(map[string]interface{})["text"]; text != "Summary:\ncarried forward" {
-		t.Fatalf("expanded text=%v", text)
-	}
+	testutil.Equal(t, parts[0].(map[string]interface{})["text"], "Summary:\ncarried forward")
 }
 
 // A blob this gateway cannot open is a 400 that names the offending item. It must
@@ -618,23 +584,13 @@ func TestHandleResponsesRejectsUnreadableGatewayCompactionBlob(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleResponses(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
 	var payload map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode error body: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode error body: %v")
 	errObj := payload["error"].(map[string]interface{})
-	if errObj["code"] != "invalid_compaction_blob" {
-		t.Fatalf("error=%#v", errObj)
-	}
-	if errObj["param"] != "input[1].encrypted_content" {
-		t.Fatalf("param=%v", errObj["param"])
-	}
-	if upstreamCalls != 0 {
-		t.Fatalf("upstream was called %d times for an unreadable blob", upstreamCalls)
-	}
+	testutil.Equal(t, errObj["code"], "invalid_compaction_blob")
+	testutil.Equal(t, errObj["param"], "input[1].encrypted_content")
+	testutil.Equal(t, upstreamCalls, 0)
 }
 
 // Without a sealing key the feature is off, and a compaction trigger keeps the
@@ -667,16 +623,12 @@ func TestHandleResponsesRelaysCompactionTriggerWhenDisabled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleResponses(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	if received == nil {
 		t.Fatal("the trigger was not relayed upstream")
 	}
 	items := received["input"].([]interface{})
-	if items[0].(map[string]interface{})["type"] != "compaction_trigger" {
-		t.Fatalf("trigger was rewritten: %#v", items[0])
-	}
+	testutil.Equal(t, items[0].(map[string]interface{})["type"], "compaction_trigger")
 	for _, raw := range items {
 		if item, ok := raw.(map[string]interface{}); ok && item["content"] == gatewayCompactionPrompt {
 			t.Fatal("the gateway ran a summary turn while the feature was disabled")
@@ -715,9 +667,7 @@ func TestHandleResponsesCompactionTriggerStreamsSyntheticEvents(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleResponses(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
 		t.Fatalf("Content-Type=%q", got)
 	}
@@ -739,9 +689,7 @@ func TestHandleResponsesCompactionTriggerStreamsSyntheticEvents(t *testing.T) {
 		t.Fatalf("consume response stream: %v", err)
 	}
 	want := []string{"response.created", "response.in_progress", "response.output_item.added", "keepalive", "response.output_item.done", "response.completed"}
-	if strings.Join(events, ",") != strings.Join(want, ",") {
-		t.Fatalf("events=%v want %v", events, want)
-	}
+	testutil.Equal(t, strings.Join(events, ","), strings.Join(want, ","))
 	if !strings.HasPrefix(blob, gatewayCompactionPrefix) {
 		t.Fatalf("streamed blob=%q is not gateway-owned", blob)
 	}
@@ -770,18 +718,10 @@ func TestHandleResponsesCompactFailsOnDegenerateSummary(t *testing.T) {
 	defer func() { gatewayCompactionRetryPause = previousPause }()
 	h.HandleResponsesCompact(rec, req)
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadGateway)
 	var payload map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode error body: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode error body: %v")
 	errObj, _ := payload["error"].(map[string]interface{})
-	if errObj["code"] != "compaction_failed" {
-		t.Fatalf("error=%#v", errObj)
-	}
-	if attempts != gatewayCompactionMaxAttempts {
-		t.Fatalf("upstream attempts=%d want %d", attempts, gatewayCompactionMaxAttempts)
-	}
+	testutil.Equal(t, errObj["code"], "compaction_failed")
+	testutil.Equal(t, attempts, gatewayCompactionMaxAttempts)
 }

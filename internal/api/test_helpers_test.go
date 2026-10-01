@@ -16,9 +16,9 @@ func newTestStore(t *testing.T, prefix string) (*store.Store, *miniredis.Minired
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: prefix})
 	if err != nil {
-		mini.Close()
 		t.Fatalf("store.New() error = %v", err)
 	}
+	t.Cleanup(func() { _ = s.Close() })
 	return s, mini
 }
 

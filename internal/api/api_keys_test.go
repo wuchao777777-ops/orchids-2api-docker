@@ -12,12 +12,11 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestHandleKeysCreatesAndUpdatesPolicy(t *testing.T) {
-	s, mini := newTestStore(t, "api-keys-policy:")
-	defer mini.Close()
-	defer s.Close()
+	s, _ := newTestStore(t, "api-keys-policy:")
 	a := New(s, "admin", "pass", &config.Config{})
 
 	expiresAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
@@ -25,13 +24,9 @@ func TestHandleKeysCreatesAndUpdatesPolicy(t *testing.T) {
 	createReq := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(createBody))
 	createRec := httptest.NewRecorder()
 	a.HandleKeys(createRec, createReq)
-	if createRec.Code != http.StatusCreated {
-		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
-	}
+	testutil.Equal(t, createRec.Code, http.StatusCreated)
 	var created CreateKeyResponse
-	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
-		t.Fatalf("decode create response: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(createRec.Body.Bytes(), &created), "decode create response: %v")
 	if created.Key == "" || created.RPMLimit != 12 || len(created.AllowedModels) != 2 || created.ExpiresAt == nil {
 		t.Fatalf("created=%#v", created)
 	}
@@ -43,13 +38,9 @@ func TestHandleKeysCreatesAndUpdatesPolicy(t *testing.T) {
 	)
 	patchRec := httptest.NewRecorder()
 	a.HandleKeyByID(patchRec, patchReq)
-	if patchRec.Code != http.StatusOK {
-		t.Fatalf("patch status=%d body=%s", patchRec.Code, patchRec.Body.String())
-	}
+	testutil.Equal(t, patchRec.Code, http.StatusOK)
 	var updated store.ApiKey
-	if err := json.Unmarshal(patchRec.Body.Bytes(), &updated); err != nil {
-		t.Fatalf("decode patch response: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(patchRec.Body.Bytes(), &updated), "decode patch response: %v")
 	if updated.RPMLimit != 0 || len(updated.AllowedModels) != 0 || updated.ExpiresAt != nil {
 		t.Fatalf("updated=%#v", updated)
 	}
@@ -60,9 +51,7 @@ func TestHandleKeysCreatesAndUpdatesPolicy(t *testing.T) {
 // negative or overflow-prone budget. All four inputs reach the same create
 // handler, so they share one table.
 func TestHandleKeysRejectsInvalidPolicyLimits(t *testing.T) {
-	s, mini := newTestStore(t, "api-keys-invalid:")
-	defer mini.Close()
-	defer s.Close()
+	s, _ := newTestStore(t, "api-keys-invalid:")
 	a := New(s, "admin", "pass", &config.Config{})
 
 	for _, tt := range []struct{ name, body string }{
@@ -75,9 +64,7 @@ func TestHandleKeysRejectsInvalidPolicyLimits(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(tt.body))
 			rec := httptest.NewRecorder()
 			a.HandleKeys(rec, req)
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("body=%s status=%d response=%s", tt.body, rec.Code, rec.Body.String())
-			}
+			testutil.Equal(t, rec.Code, http.StatusBadRequest)
 		})
 	}
 }

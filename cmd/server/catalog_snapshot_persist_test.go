@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestPersistAccountCatalogSnapshotChannels(t *testing.T) {
@@ -25,9 +26,7 @@ func TestPersistAccountCatalogSnapshotChannels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.channel, func(t *testing.T) {
 			acc := &store.Account{Name: tt.channel, AccountType: tt.channel, Enabled: true}
-			if err := s.CreateAccount(ctx, acc); err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, s.CreateAccount(ctx, acc))
 			before := time.Now()
 			want := []string{"model-a", "model-b"}
 			persistAccountCatalogSnapshot(ctx, s, acc, tt.channel, want, "test update failure")

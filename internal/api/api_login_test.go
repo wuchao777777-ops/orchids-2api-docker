@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/testutil"
 )
 
 func TestHandleLogin_SecureCookieDependsOnHTTPS(t *testing.T) {
@@ -23,12 +24,8 @@ func TestHandleLogin_SecureCookieDependsOnHTTPS(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "http://example.com/api/login", bytes.NewReader(body))
 		a.HandleLogin(rec, req)
 		set := rec.Header().Get("Set-Cookie")
-		if set == "" {
-			t.Fatalf("expected Set-Cookie")
-		}
-		if strings.Contains(strings.ToLower(set), "secure") {
-			t.Fatalf("expected no Secure attribute over http, got %q", set)
-		}
+		testutil.NotEqual(t, set, "")
+		testutil.MustNotContain(t, strings.ToLower(set), "secure")
 	}
 
 	// Proxy HTTPS via X-Forwarded-Proto: should set Secure
@@ -38,9 +35,7 @@ func TestHandleLogin_SecureCookieDependsOnHTTPS(t *testing.T) {
 		req.Header.Set("X-Forwarded-Proto", "https")
 		a.HandleLogin(rec, req)
 		set := rec.Header().Get("Set-Cookie")
-		if !strings.Contains(strings.ToLower(set), "secure") {
-			t.Fatalf("expected Secure attribute when forwarded proto is https, got %q", set)
-		}
+		testutil.MustContain(t, strings.ToLower(set), "secure")
 	}
 }
 
@@ -53,7 +48,5 @@ func TestHandleLogin_UsesUpdatedConfigCredentials(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/api/login", bytes.NewReader([]byte(`{"username":"admin","password":"new-pass"}`)))
 	a.HandleLogin(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d body=%q", rec.Code, http.StatusOK, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 }

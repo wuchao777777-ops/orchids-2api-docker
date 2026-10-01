@@ -11,6 +11,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // The account export is a downloadable, shareable artifact, so it is a different
@@ -24,23 +25,17 @@ import (
 func exportedCredentialKeys(t *testing.T, acc *store.Account) []string {
 	t.Helper()
 	s, _ := newTestStore(t, "export-guard-"+acc.AccountType+":")
-	defer s.Close()
 	cfg := &config.Config{AdminPass: "x"}
 	a := New(s, "admin", cfg.AdminPass, cfg)
-	if err := s.CreateAccount(t.Context(), acc); err != nil {
-		t.Fatalf("create account: %v", err)
-	}
+	testutil.NoError(t, s.CreateAccount(t.Context(), acc), "create account: %v")
 	rec := httptest.NewRecorder()
 	a.HandleExport(rec, httptest.NewRequest(http.MethodGet, "/api/export", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("export status = %d, body = %s", rec.Code, rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusOK)
 	var payload struct {
 		Accounts []map[string]interface{} `json:"accounts"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode export: %v", err)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode export: %v")
+	testutil.Equal(t, len(payload.Accounts), 1)
 	keys := []string{}
 	for _, row := range payload.Accounts {
 		for key, value := range row {
@@ -67,21 +62,17 @@ func TestExportNeverCarriesAnotherChannelsCredential(t *testing.T) {
 	allowed := map[string]map[string]bool{
 		"grok":      setOf("client_cookie", "refresh_token", "token", "oauth_access_token", "oauth_refresh_token"),
 		"workbuddy": setOf("client_cookie", "refresh_token", "token", "workbuddy_access_token", "workbuddy_refresh_token"),
+		"cline":     setOf("client_cookie", "refresh_token", "token", "cline_access_token", "cline_refresh_token"),
 		"qoder": setOf("client_cookie", "refresh_token", "token", "qoder_access_token", "qoder_refresh_token",
 			"qoder_runtime_info", "qoder_runtime_key"),
 	}
-	for _, channel := range []string{"grok", "workbuddy", "qoder"} {
+	for _, channel := range accountChannels {
 		t.Run(channel, func(t *testing.T) {
-			acc := &store.Account{
-				ID: 1, Name: "guard", AccountType: channel, Enabled: true, Weight: 1,
-				Token: marker + "token", ClientCookie: marker + "client_cookie",
-				RefreshToken:     marker + "refresh_token",
-				OAuthAccessToken: marker + "oauth_access_token", OAuthRefreshToken: marker + "oauth_refresh_token",
-				WorkBuddyAccessToken: marker + "workbuddy_access_token", WorkBuddyRefreshToken: marker + "workbuddy_refresh_token",
-				QoderAccessToken: marker + "qoder_access_token", QoderRefreshToken: marker + "qoder_refresh_token",
-				QoderRuntimeInfo: marker + "qoder_runtime_info", QoderRuntimeKey: marker + "qoder_runtime_key",
-			}
-			for _, key := range exportedCredentialKeys(t, acc) {
+			acc := accountWithSecrets(channel)
+			acc.ID, acc.Weight = 1, 1
+			got := exportedCredentialKeys(t, acc)
+			testutil.NotEqual(t, len(got), 0)
+			for _, key := range got {
 				if !allowed[channel][key] {
 					t.Errorf("export of a %s account carries %q, which belongs to another channel", channel, key)
 				}
@@ -113,9 +104,7 @@ func TestExportKeepsOAuthCredentialsForAnOAuthAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal account output: %v", err)
 	}
-	if strings.Contains(string(raw), marker) {
-		t.Fatalf("account API exposed an OAuth credential: %s", raw)
-	}
+	testutil.MustNotContain(t, string(raw), marker)
 }
 
 func setOf(keys ...string) map[string]bool {
@@ -151,6 +140,11 @@ func TestExportCarriesTheDurableCredentialForReimport(t *testing.T) {
 			acc: &store.Account{ID: 1, AccountType: "workbuddy", Enabled: true, Weight: 1,
 				WorkBuddyAccessToken: marker + "access", WorkBuddyRefreshToken: marker + "refresh"},
 			want: []string{"workbuddy_access_token", "workbuddy_refresh_token"},
+		},
+		"cline": {
+			acc: &store.Account{ID: 1, AccountType: "cline", Enabled: true, Weight: 1,
+				ClineAccessToken: marker + "access", ClineRefreshToken: marker + "refresh"},
+			want: []string{"cline_access_token", "cline_refresh_token"},
 		},
 		"qoder": {
 			acc: &store.Account{ID: 1, AccountType: "qoder", Enabled: true, Weight: 1,
@@ -189,12 +183,8 @@ func TestAccountCheckKeepsASpentAllowanceVerdict(t *testing.T) {
 		UsageLimit:    250, UsageCurrent: 0, // the fresh meter still reports it spent
 	}
 	applySuccessfulAccountRefreshStatus(parked, "")
-	if parked.StatusCode != "402" {
-		t.Fatalf("StatusCode = %q, want the spent-allowance verdict kept", parked.StatusCode)
-	}
-	if parked.StatusMessage == "" {
-		t.Fatal("the operator-facing reason must survive the check")
-	}
+	testutil.Equal(t, parked.StatusCode, "402")
+	testutil.NotEqual(t, parked.StatusMessage, "")
 	if parked.VerifiedAt.IsZero() {
 		t.Fatal("the check must still record that the credential was exercised")
 	}
@@ -205,26 +195,20 @@ func TestAccountCheckKeepsASpentAllowanceVerdict(t *testing.T) {
 	expired := &store.Account{ID: 2, AccountType: "workbuddy", StatusCode: "402", QuotaResetAt: reset,
 		UsageLimit: 250, UsageCurrent: 0}
 	applySuccessfulAccountRefreshStatus(expired, "")
-	if expired.StatusCode != "" {
-		t.Fatalf("StatusCode = %q, want the marker cleared after the reset time", expired.StatusCode)
-	}
+	testutil.Equal(t, expired.StatusCode, "")
 
 	// A meter that reports credits again releases the park immediately, so an
 	// operator who tops up does not wait for the cycle boundary.
 	toppedUp := &store.Account{ID: 4, AccountType: "workbuddy", StatusCode: "402",
 		QuotaResetAt: now.Add(24 * time.Hour), UsageLimit: 250, UsageCurrent: 250}
 	applySuccessfulAccountRefreshStatus(toppedUp, "")
-	if toppedUp.StatusCode != "" {
-		t.Fatalf("StatusCode = %q, want the park released once the meter shows credits", toppedUp.StatusCode)
-	}
+	testutil.Equal(t, toppedUp.StatusCode, "")
 
 	// A verdict with no reset time is a cooldown, not an allowance: the check still
 	// clears it.
 	cooldown := &store.Account{ID: 3, AccountType: "workbuddy", StatusCode: "402"}
 	applySuccessfulAccountRefreshStatus(cooldown, "")
-	if cooldown.StatusCode != "" {
-		t.Fatalf("StatusCode = %q, want a plain cooldown cleared by a successful check", cooldown.StatusCode)
-	}
+	testutil.Equal(t, cooldown.StatusCode, "")
 }
 
 // TestAccountCheckKeepsTheReasonForAnUnchangedVerdict pins that a bare status from
@@ -239,22 +223,16 @@ func TestAccountCheckKeepsTheReasonForAnUnchangedVerdict(t *testing.T) {
 	// Same status: the specific reason survives.
 	same := &store.Account{AccountType: "workbuddy", StatusCode: "402", StatusMessage: reason}
 	applySuccessfulAccountRefreshStatus(same, "402")
-	if same.StatusMessage != reason {
-		t.Fatalf("message = %q, want the existing reason kept", same.StatusMessage)
-	}
+	testutil.Equal(t, same.StatusMessage, reason)
 
 	// Different status: an old reason described a different problem and must not be
 	// carried onto the new one.
 	different := &store.Account{AccountType: "workbuddy", StatusCode: "401", StatusMessage: "session expired"}
 	applySuccessfulAccountRefreshStatus(different, "402")
-	if strings.Contains(different.StatusMessage, "session expired") {
-		t.Fatalf("message = %q, want a stale reason dropped when the status changes", different.StatusMessage)
-	}
+	testutil.MustNotContain(t, different.StatusMessage, "session expired")
 
 	// A verifier with something to say keeps its own wording.
 	explicit := &store.Account{AccountType: "qoder", StatusCode: "402", StatusMessage: "old"}
 	applySuccessfulAccountRefreshStatus(explicit, "402")
-	if explicit.StatusMessage != "old" {
-		t.Fatalf("message = %q, want the carried reason", explicit.StatusMessage)
-	}
+	testutil.Equal(t, explicit.StatusMessage, "old")
 }

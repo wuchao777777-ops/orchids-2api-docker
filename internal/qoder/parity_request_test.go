@@ -50,7 +50,7 @@ func TestToolHistoryRetainsIndexAndReasoningWhitespace(t *testing.T) {
 
 func TestTextCacheHintSurvivesWireEncoding(t *testing.T) {
 	messages := []prompt.Message{{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "text", Text: "context", CacheControl: &prompt.CacheControl{Type: "ephemeral"}}, {Type: "text", Text: "question"}}}}}
-	encoded, err := buildChatBody(upstream.UpstreamRequest{Messages: messages, Attempt: 2}, modelEntry{Key: "qfmodel"}, "session", "request", "set")
+	encoded, err := buildChatBodyProfile(upstream.UpstreamRequest{Messages: messages, Attempt: 2}, modelEntry{Key: "qfmodel"}, "session", "request", "set", DefaultClientVersion, "", sceneBusinessProduct)
 	if err != nil {
 		t.Fatal(err)
 	}

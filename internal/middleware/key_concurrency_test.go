@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/testutil"
 )
 
 func TestAPIKeyConcurrencyRejectsSecondActiveRequest(t *testing.T) {
@@ -34,9 +35,7 @@ func TestAPIKeyConcurrencyRejectsSecondActiveRequest(t *testing.T) {
 	second.Header.Set("Authorization", "Bearer one")
 	secondResult := httptest.NewRecorder()
 	wrapped(secondResult, second)
-	if secondResult.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d", secondResult.Code)
-	}
+	testutil.Equal(t, secondResult.Code, http.StatusTooManyRequests)
 	close(release)
 	<-done
 }
@@ -66,12 +65,8 @@ func TestAPIKeyConcurrencyUsesSharedAtomicTracker(t *testing.T) {
 	second.Header.Set("Authorization", "Bearer shared")
 	recorder := httptest.NewRecorder()
 	wrapped(recorder, second)
-	if recorder.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d", recorder.Code)
-	}
+	testutil.Equal(t, recorder.Code, http.StatusTooManyRequests)
 	close(release)
 	<-done
-	if got := tracker.GetCount(-9); got != 0 {
-		t.Fatalf("shared key slot leaked: %d", got)
-	}
+	testutil.Equal(t, tracker.GetCount(-9), 0)
 }

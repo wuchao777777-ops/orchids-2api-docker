@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"math/rand"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -72,18 +73,14 @@ func TestAppendJSONBytesMatchesEncodingJSON(t *testing.T) {
 		if err != nil {
 			t.Fatalf("appendJSONBytes(%q): %v", value, err)
 		}
-		if string(got) != want {
-			t.Fatalf("appendJSONBytes(%q) = %s, json.Marshal = %s", value, got, want)
-		}
+		testutil.Equal(t, string(got), want)
 
 		// canAppendJSONRawString must agree with what the encoder actually did: it
 		// answers true exactly when the reference output is the value itself
 		// wrapped in quotes.
 		raw := canAppendJSONRawString(value)
 		wantRaw := want == `"`+value+`"`
-		if raw != wantRaw {
-			t.Fatalf("canAppendJSONRawString(%q) = %v, encoder kept it raw = %v", value, raw, wantRaw)
-		}
+		testutil.Equal(t, raw, wantRaw)
 	}
 }
 
@@ -103,9 +100,7 @@ func TestAppendJSONBytesMatchesEncodingJSONOnRandomInput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("appendJSONBytes(%q): %v", value, err)
 		}
-		if string(got) != want {
-			t.Fatalf("appendJSONBytes(%q) = %s, json.Marshal = %s", value, got, want)
-		}
+		testutil.Equal(t, string(got), want)
 		if raw, wantRaw := canAppendJSONRawString(value), want == `"`+value+`"`; raw != wantRaw {
 			t.Fatalf("canAppendJSONRawString(%q) = %v, want %v", value, raw, wantRaw)
 		}
@@ -118,7 +113,7 @@ func TestAppendJSONBytesMatchesEncodingJSONOnRandomInput(t *testing.T) {
 // behind.
 func TestAppendJSONBytesAppendsToExistingPrefix(t *testing.T) {
 	prefix := []byte("PREFIX")
-	for _, value := range []string{`ok`, `bad \xff`, `quote "` + strings.Repeat("x", 20)} {
+	for _, value := range []string{`ok`, "bad \xff", "escaped \" prefix then bad \xff", `quote "` + strings.Repeat("x", 20)} {
 		dst := append([]byte(nil), prefix...)
 		got, err := appendJSONBytes(dst, value)
 		if err != nil {

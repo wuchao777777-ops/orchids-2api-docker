@@ -3,6 +3,7 @@ package errors
 import (
 	"errors"
 	"net/http"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
@@ -107,15 +108,9 @@ func TestClassifyPoolExhaustion_SelectorReasonsPickTheAnswer(t *testing.T) {
 				}
 				return
 			}
-			if out.Category != tc.wantCategory {
-				t.Fatalf("category = %q, want %q", out.Category, tc.wantCategory)
-			}
-			if got := StatusForCategory(out.Category); got != tc.wantStatus {
-				t.Fatalf("status = %d, want %d", got, tc.wantStatus)
-			}
-			if !strings.Contains(out.Message, tc.wantMessage) {
-				t.Fatalf("message = %q, want it to contain %q", out.Message, tc.wantMessage)
-			}
+			testutil.Equal(t, out.Category, tc.wantCategory)
+			testutil.Equal(t, StatusForCategory(out.Category), tc.wantStatus)
+			testutil.MustContain(t, out.Message, tc.wantMessage)
 		})
 	}
 }
@@ -141,9 +136,7 @@ func TestPoolExhaustionMessagesNeverNamePoolInternals(t *testing.T) {
 			"enabled=false",
 			"account_type",
 		} {
-			if strings.Contains(strings.ToLower(message), leaked) {
-				t.Errorf("pool message %q names pool internals (%q)", message, leaked)
-			}
+			testutil.CheckNotContain(t, strings.ToLower(message), leaked)
 		}
 	}
 }

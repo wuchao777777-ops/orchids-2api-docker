@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
 )
@@ -12,9 +13,7 @@ func TestNestedAdmissionUsesOneGlobalSlot(t *testing.T) {
 	handler := limiter.Limit(limiter.Limit(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
 	rec := httptest.NewRecorder()
 	handler(rec, httptest.NewRequest("POST", "/grok/v1/responses", nil))
-	if rec.Code != 204 {
-		t.Fatalf("nested admission status=%d", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, 204)
 }
 func TestAllowlistCacheRejectsInvalidReplacement(t *testing.T) {
 	var cache AnonymousAllowlistCache
@@ -48,14 +47,10 @@ func TestProviderAdmissionSeparatesBudgetsAndReleases(t *testing.T) {
 	<-entered
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest("POST", "/grok/second", nil))
-	if rec.Code != 503 {
-		t.Fatalf("overload=%d", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, 503)
 	rec = httptest.NewRecorder()
 	h(rec, httptest.NewRequest("POST", "/cline/test", nil))
-	if rec.Code != 204 {
-		t.Fatalf("other provider=%d", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, 204)
 	close(release)
 	<-done
 	rec = httptest.NewRecorder()

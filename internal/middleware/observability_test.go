@@ -14,6 +14,7 @@ import (
 	"orchids-api/internal/audit"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/opsagg"
+	"orchids-api/internal/testutil"
 )
 
 func TestDiagnosticWriterPreservesLongResponse(t *testing.T) {
@@ -62,9 +63,7 @@ func TestDiagnosticsStreamingAndExactlyOneOutcome(t *testing.T) {
 	if recorder.Body.String() != "data: hello\n\n" || !recorder.Flushed {
 		t.Fatal("streaming changed")
 	}
-	if len(outcomes) != 1 {
-		t.Fatalf("outcomes=%d", len(outcomes))
-	}
+	testutil.Equal(t, len(outcomes), 1)
 	o := outcomes[0]
 	if o.OK || o.Status != "stream_error" || o.InputTokens != 11 || o.OutputTokens != 22 || o.AttemptFailures != 1 || o.AccountSwitches != 1 || o.Model != "test" {
 		t.Fatalf("outcome=%+v", o)

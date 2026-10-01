@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"orchids-api/internal/testutil"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,9 +20,7 @@ func TestParallelFor(t *testing.T) {
 		ParallelFor(1, func(i int) {
 			atomic.AddInt32(&called, 1)
 		})
-		if called != 1 {
-			t.Errorf("called = %d, want 1", called)
-		}
+		testutil.CheckEqual(t, called, 1)
 	})
 
 	t.Run("small batch (serial)", func(t *testing.T) {
@@ -31,9 +30,7 @@ func TestParallelFor(t *testing.T) {
 			results[i] = i * 2
 		})
 		for i := 0; i < n; i++ {
-			if results[i] != i*2 {
-				t.Errorf("results[%d] = %d, want %d", i, results[i], i*2)
-			}
+			testutil.CheckEqual(t, results[i], i*2)
 		}
 	})
 
@@ -43,9 +40,7 @@ func TestParallelFor(t *testing.T) {
 		ParallelFor(n, func(i int) {
 			atomic.AddInt64(&counter, 1)
 		})
-		if counter != int64(n) {
-			t.Errorf("counter = %d, want %d", counter, n)
-		}
+		testutil.CheckEqual(t, counter, int64(n))
 	})
 }
 

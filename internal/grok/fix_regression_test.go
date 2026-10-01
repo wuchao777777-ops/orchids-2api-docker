@@ -10,6 +10,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // The client-facing error object has to be parseable by an OpenAI SDK: the
@@ -19,12 +23,8 @@ func TestResponsesUpstreamFailureMapsAuthAndRetryAfter(t *testing.T) {
 	err := newCLIUpstreamError(http.StatusUnauthorized, http.Header{"Retry-After": {"7"}}, []byte(`{"error":"expired"}`))
 	rec := httptest.NewRecorder()
 	writeGrokUpstreamFailure(rec, http.StatusUnauthorized, err)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d want 503", rec.Code)
-	}
-	if got := rec.Header().Get("Retry-After"); got != "7" {
-		t.Fatalf("Retry-After=%q want 7", got)
-	}
+	testutil.Equal(t, rec.Code, http.StatusServiceUnavailable)
+	testutil.Equal(t, rec.Header().Get("Retry-After"), "7")
 }
 
 func TestSyntheticCooldownCarriesTypedHint(t *testing.T) {
@@ -69,9 +69,7 @@ func TestGrokErrorEnvelope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			writeGrokError(rec, tc.status, tc.message)
-			if rec.Code != tc.status {
-				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
-			}
+			testutil.Equal(t, rec.Code, tc.status)
 			if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 				t.Fatalf("Content-Type = %q, want application/json", got)
 			}
@@ -86,12 +84,8 @@ func TestGrokErrorEnvelope(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
 			}
-			if body.Error.Type != tc.wantType {
-				t.Fatalf("type = %q, want %q", body.Error.Type, tc.wantType)
-			}
-			if body.Error.Code != tc.wantCode {
-				t.Fatalf("code = %q, want %q", body.Error.Code, tc.wantCode)
-			}
+			testutil.Equal(t, body.Error.Type, tc.wantType)
+			testutil.Equal(t, body.Error.Code, tc.wantCode)
 			if tc.wantMessage != "" && body.Error.Message != tc.wantMessage {
 				t.Fatalf("message = %q, want %q", body.Error.Message, tc.wantMessage)
 			}
@@ -102,16 +96,10 @@ func TestGrokErrorEnvelope(t *testing.T) {
 func TestWriteGrokModelNotFoundReturns404Code(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeGrokErrorCode(rec, http.StatusNotFound, "model_not_found", modelNotFoundMessage("missing"))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d want 404", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, http.StatusNotFound)
 	var body map[string]map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if got := fmt.Sprint(body["error"]["code"]); got != "model_not_found" {
-		t.Fatalf("code=%q want model_not_found", got)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), "invalid JSON: %v")
+	testutil.Equal(t, fmt.Sprint(body["error"]["code"]), "model_not_found")
 }
 
 // An upstream failure must never hand the caller the upstream body or the
@@ -134,17 +122,11 @@ func TestWriteGrokUpstreamErrorSanitizesInternalDetail(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeGrokUpstreamError(rec, upstream)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (an upstream credential failure is the pool's problem)", rec.Code)
-	}
-	if got := rec.Header().Get("Retry-After"); got != "7" {
-		t.Fatalf("Retry-After = %q, want 7", got)
-	}
+	testutil.Equal(t, rec.Code, http.StatusServiceUnavailable)
+	testutil.Equal(t, rec.Header().Get("Retry-After"), "7")
 	body := rec.Body.String()
 	for _, leak := range []string{"acme", "x.ai/pricing", "status=", "body="} {
-		if strings.Contains(body, leak) {
-			t.Fatalf("upstream detail %q leaked to the client: %s", leak, body)
-		}
+		testutil.MustNotContain(t, body, leak)
 	}
 }
 
@@ -153,12 +135,8 @@ func TestWriteGrokUpstreamErrorSanitizesInternalDetail(t *testing.T) {
 func TestWriteGrokUpstreamErrorKeepsLocalValidationMessage(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeGrokUpstreamError(rec, errors.New("missing model"))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "missing model") {
-		t.Fatalf("local message lost: %s", rec.Body.String())
-	}
+	testutil.Equal(t, rec.Code, http.StatusBadRequest)
+	testutil.MustContain(t, rec.Body.String(), "missing model")
 }
 
 // TestStreamRepeatTracker pins both ends of the doom-loop rule: one identical
@@ -192,12 +170,8 @@ func TestStreamRepeatTracker(t *testing.T) {
 			}
 		}
 		// A different delta resets the run.
-		if err := tracker.observe(delta("x"), ""); err != nil {
-			t.Fatalf("run reset rejected: %v", err)
-		}
-		if err := tracker.observe(delta("-"), ""); err != nil {
-			t.Fatalf("post-reset delta rejected: %v", err)
-		}
+		testutil.NoError(t, tracker.observe(delta("x"), ""), "run reset rejected: %v")
+		testutil.NoError(t, tracker.observe(delta("-"), ""), "post-reset delta rejected: %v")
 	})
 }
 
@@ -287,9 +261,7 @@ func TestNormalizeFunctionArguments(t *testing.T) {
 				}
 				current = asMap[part]
 			}
-			if fmt.Sprint(current) != want {
-				t.Fatalf("%s = %v, want %s (in %s)", path, current, want, got)
-			}
+			testutil.Equal(t, fmt.Sprint(current), want)
 		}
 		// json.Number stringifies exactly as written, which is the point: the literal
 		// must carry no fraction and no exponent.
@@ -339,12 +311,8 @@ func TestAnthropicUsageCarriesCacheAndThinkingFields(t *testing.T) {
 		"completion_tokens_details": map[string]interface{}{"reasoning_tokens": 7},
 	}
 	got := anthropicUsageFromOpenAI(usage)
-	if got["input_tokens"] != 70 {
-		t.Fatalf("input_tokens = %v, want 70 (100 - 30 cached)", got["input_tokens"])
-	}
-	if got["cache_read_input_tokens"] != 30 {
-		t.Fatalf("cache_read_input_tokens = %v, want 30", got["cache_read_input_tokens"])
-	}
+	testutil.Equal(t, got["input_tokens"], 70)
+	testutil.Equal(t, got["cache_read_input_tokens"], 30)
 	if _, ok := got["cache_creation_input_tokens"]; !ok {
 		t.Fatal("cache_creation_input_tokens must be reported (0 is a value, not absence)")
 	}
@@ -363,30 +331,20 @@ func TestAnthropicRefusalUsesDedicatedStopReason(t *testing.T) {
 		}},
 	}
 	got := anthropicResponseFromChat("grok-4.6", chat)
-	if got["stop_reason"] != "refusal" {
-		t.Fatalf("stop_reason = %v, want refusal", got["stop_reason"])
-	}
+	testutil.Equal(t, got["stop_reason"], "refusal")
 	if !strings.HasPrefix(fmt.Sprint(got["id"]), "msg_") {
 		t.Fatalf("id = %v, want an Anthropic msg_ id, not a chatcmpl_ id", got["id"])
 	}
 }
 
 func TestOpenAIFinishToAnthropicMapsRefusal(t *testing.T) {
-	if got := openAIFinishToAnthropic("content_filter"); got != "refusal" {
-		t.Fatalf("content_filter -> %q, want refusal", got)
-	}
-	if got := openAIFinishToAnthropic("stop"); got != "end_turn" {
-		t.Fatalf("stop -> %q, want end_turn", got)
-	}
+	testutil.Equal(t, openAIFinishToAnthropic("content_filter"), "refusal")
+	testutil.Equal(t, openAIFinishToAnthropic("stop"), "end_turn")
 }
 
 func TestAnthropicMessageIDReshapesChatCompletionsID(t *testing.T) {
-	if got := anthropicMessageID("chatcmpl_abc"); got != "msg_abc" {
-		t.Fatalf("anthropicMessageID(chatcmpl_abc) = %q, want msg_abc", got)
-	}
-	if got := anthropicMessageID("msg_keep"); got != "msg_keep" {
-		t.Fatalf("a msg_ id must be preserved, got %q", got)
-	}
+	testutil.Equal(t, anthropicMessageID("chatcmpl_abc"), "msg_abc")
+	testutil.Equal(t, anthropicMessageID("msg_keep"), "msg_keep")
 	if got := anthropicMessageID(""); !strings.HasPrefix(got, "msg_") || len(got) != len("msg_")+24 {
 		t.Fatalf("empty id -> %q, want a generated msg_ id", got)
 	}
@@ -405,9 +363,7 @@ func TestPrepareGrokSessionRecognizesAgentSessionHeaders(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		req.Header.Set(header, value)
 		session := prepareGrokSession(req, "grok-4.6", "", base)
-		if session.Key == "" {
-			t.Fatalf("%s: no session key derived", header)
-		}
+		testutil.NotEqual(t, session.Key, "")
 		// An explicit client identity permits encrypted reasoning replay; the
 		// message-prefix fallback is affinity-only.
 		if !session.Replay {
@@ -436,9 +392,7 @@ func TestAnthropicUpstreamErrorDoesNotLeakUpstreamBody(t *testing.T) {
 	writeAnthropicUpstreamError(rec, http.StatusBadRequest, upstream)
 	body := rec.Body.String()
 	for _, leak := range []string{"acme-team", "x.ai/pricing", "quota exhausted"} {
-		if strings.Contains(body, leak) {
-			t.Fatalf("upstream detail %q leaked to the client: %s", leak, body)
-		}
+		testutil.MustNotContain(t, body, leak)
 	}
 	var envelope struct {
 		Type  string `json:"type"`
@@ -461,38 +415,26 @@ func TestIdleTimeoutIsClassifiedSeparately(t *testing.T) {
 		t.Fatal("the ported alias must resolve to the exported sentinel")
 	}
 	code, message := classifySynthesizedFailure("stream_read_error", "stream read error", errGrokSemanticIdle)
-	if code != "upstream_stream_idle_timeout" {
-		t.Fatalf("code = %q, want upstream_stream_idle_timeout", code)
-	}
-	if strings.Contains(message, "parse") {
-		t.Fatalf("an idle timeout must not be described as a parse error: %q", message)
-	}
+	testutil.Equal(t, code, "upstream_stream_idle_timeout")
+	testutil.MustNotContain(t, message, "parse")
 	// Any other failure keeps its own classification.
 	code, _ = classifySynthesizedFailure("stream_read_error", "stream read error", errors.New("boom"))
-	if code != "stream_read_error" {
-		t.Fatalf("code = %q, want stream_read_error", code)
-	}
+	testutil.Equal(t, code, "stream_read_error")
 }
 
 func TestResponsesImagePartsCarryDefaultDetail(t *testing.T) {
 	parts := responsesMessageParts([]interface{}{
 		map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/a.png"}},
 	}, false)
-	if len(parts) != 1 {
-		t.Fatalf("parts = %#v, want one image part", parts)
-	}
+	testutil.Equal(t, len(parts), 1)
 	part, _ := parts[0].(map[string]interface{})
-	if part["detail"] != "auto" {
-		t.Fatalf("detail = %v, want auto", part["detail"])
-	}
+	testutil.Equal(t, part["detail"], "auto")
 	// An explicit detail is preserved.
 	parts = responsesMessageParts([]interface{}{
 		map[string]interface{}{"type": "image_url", "detail": "high", "image_url": map[string]interface{}{"url": "https://example.com/a.png"}},
 	}, false)
 	part, _ = parts[0].(map[string]interface{})
-	if part["detail"] != "high" {
-		t.Fatalf("explicit detail = %v, want high", part["detail"])
-	}
+	testutil.Equal(t, part["detail"], "high")
 }
 
 func TestAnthropicErrorTypeFollowsStatus(t *testing.T) {
@@ -517,12 +459,8 @@ func TestAnthropicErrorTypeFollowsStatus(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 			t.Fatalf("status %d: invalid JSON %v", status, err)
 		}
-		if envelope.Error.Type != want {
-			t.Fatalf("status %d: type = %q, want %q", status, envelope.Error.Type, want)
-		}
-		if envelope.Error.Code == "" {
-			t.Fatalf("status %d: code must be present", status)
-		}
+		testutil.Equal(t, envelope.Error.Type, want)
+		testutil.NotEqual(t, envelope.Error.Code, "")
 	}
 }
 
@@ -536,20 +474,12 @@ func TestResponsesAPIErrorTypeFollowsStatus(t *testing.T) {
 			Param any    `json:"param"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if envelope.Error.Type != "server_error" {
-		t.Fatalf("type = %q, want server_error for a 503", envelope.Error.Type)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope), "invalid JSON: %v")
+	testutil.Equal(t, envelope.Error.Type, "server_error")
 	rec = httptest.NewRecorder()
 	writeResponsesAPIError(rec, http.StatusTooManyRequests, "rate_limit_exceeded", "slow down")
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if envelope.Error.Type != "rate_limit_error" {
-		t.Fatalf("type = %q, want rate_limit_error for a 429", envelope.Error.Type)
-	}
+	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope), "invalid JSON: %v")
+	testutil.Equal(t, envelope.Error.Type, "rate_limit_error")
 }
 
 func TestBuildSessionUUIDIsStableAndValid(t *testing.T) {
@@ -560,13 +490,9 @@ func TestBuildSessionUUIDIsStableAndValid(t *testing.T) {
 	if first != buildSessionUUID("deadbeef") {
 		t.Fatal("the same session seed must map to the same UUID")
 	}
-	if first == buildSessionUUID("deadbeee") {
-		t.Fatal("different seeds must not collide")
-	}
+	testutil.NotEqual(t, first, buildSessionUUID("deadbeee"))
 	existing := "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
-	if got := buildSessionUUID(existing); got != existing {
-		t.Fatalf("an existing UUID must pass through, got %q", got)
-	}
+	testutil.Equal(t, buildSessionUUID(existing), existing)
 }
 
 func TestToolMessagesRequireCallID(t *testing.T) {
@@ -591,9 +517,7 @@ func TestChatToolUseMustBeAnswered(t *testing.T) {
 		t.Fatal("an unanswered tool_use must be rejected")
 	}
 	answered := append([]ChatMessage{}, unanswered[0], ChatMessage{Role: "tool", ToolCallID: "call_1", Content: "ok"})
-	if err := validateChatToolSequence(answered); err != nil {
-		t.Fatalf("a paired tool_use must be accepted: %v", err)
-	}
+	testutil.NoError(t, validateChatToolSequence(answered), "a paired tool_use must be accepted: %v")
 }
 
 func TestQualityDegradedDetection(t *testing.T) {
@@ -639,9 +563,7 @@ func TestQualityDegradedDetection(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		if got := qualityDegraded(tc.sig); got != tc.want {
-			t.Fatalf("%s: qualityDegraded() = %v, want %v", tc.name, got, tc.want)
-		}
+		testutil.Equal(t, qualityDegraded(tc.sig), tc.want)
 	}
 }
 
@@ -671,17 +593,13 @@ func TestUnbindAffinityDropsTheSessionBinding(t *testing.T) {
 
 	h.unbindAffinity(ctx, ProviderBuild, 7)
 
-	if id := h.affinityAccount(ctx, ProviderBuild); id != 0 {
-		t.Fatalf("affinityAccount() = %d, want 0 after an unbind", id)
-	}
+	testutil.Equal(t, h.affinityAccount(ctx, ProviderBuild), 0)
 	// An unrelated account id must not clear the binding.
 	h.sessionMu.Lock()
 	h.affinity[key] = sessionAffinityEntry{AccountID: 7, ExpiresAt: time.Now().Add(time.Hour)}
 	h.sessionMu.Unlock()
 	h.unbindAffinity(ctx, ProviderBuild, 9)
-	if id := h.affinityAccount(ctx, ProviderBuild); id != 7 {
-		t.Fatalf("affinityAccount() = %d, want the binding to survive a mismatch", id)
-	}
+	testutil.Equal(t, h.affinityAccount(ctx, ProviderBuild), 7)
 }
 
 func TestBackfillReasoningForCalls(t *testing.T) {
@@ -693,9 +611,7 @@ func TestBackfillReasoningForCalls(t *testing.T) {
 	// The client echoes the call but not its proof.
 	input := []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_1", "name": "read", "arguments": "{}"}}
 	filled := backfillReasoningForCalls(input, cached)
-	if len(filled) != 2 {
-		t.Fatalf("filled = %#v, want the proof inserted before the call", filled)
-	}
+	testutil.Equal(t, len(filled), 2)
 	first, _ := filled[0].(map[string]interface{})
 	if first["type"] != "reasoning" || first["encrypted_content"] != "cipher-1" {
 		t.Fatalf("first item = %#v, want the cached proof", first)
@@ -732,8 +648,84 @@ func TestReasoningForCallsIndexesOnlyProofs(t *testing.T) {
 	}
 }
 
+// TestAccumulatedInputItemsWalksTheContinuationChain drives the real chain
+// builder: ancestor inputs are appended nearest-first, the walk stops at the
+// documented bound, and a cycle terminates instead of looping forever.
 func TestAccumulatedInputItemsWalksTheContinuationChain(t *testing.T) {
-	if got := maxStoredInputChainDepth; got < 1 || got > 64 {
-		t.Fatalf("chain depth = %d, want a bounded positive value", got)
+	t.Parallel()
+	if maxStoredInputChainDepth < 1 || maxStoredInputChainDepth > 64 {
+		t.Fatalf("chain depth = %d, want a bounded positive value no greater than 64", maxStoredInputChainDepth)
+	}
+
+	s := newTestGrokStore(t, "chain:")
+	h := NewHandler(nil, loadbalancer.NewWithCacheTTL(s, 0))
+
+	ctx := context.Background()
+	save := func(id, previous, text string) {
+		raw, err := json.Marshal([]map[string]string{{"role": "user", "content": text}})
+		if err != nil {
+			t.Fatalf("marshal %s: %v", id, err)
+		}
+		if err := s.SaveStoredResponse(ctx, &store.StoredResponse{
+			ResponseID:         id,
+			OwnerHash:          "owner",
+			PreviousResponseID: previous,
+			InputItems:         raw,
+		}, time.Hour); err != nil {
+			t.Fatalf("SaveStoredResponse(%s) error = %v", id, err)
+		}
+	}
+
+	// A cycle: the walk must stop on the seen set.
+	save("resp_a", "resp_b", "a")
+	save("resp_b", "resp_a", "b")
+
+	// A chain longer than the bound: only the nearest ancestors are folded in.
+	const chainLength = maxStoredInputChainDepth + 4
+	for i := 0; i <= chainLength; i++ {
+		previous := ""
+		if i < chainLength {
+			previous = fmt.Sprintf("resp_c%d", i+1)
+		}
+		save(fmt.Sprintf("resp_c%d", i), previous, fmt.Sprintf("c%d", i))
+	}
+
+	itemText := func(item interface{}) string {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("input item = %#v, want an object", item)
+		}
+		return fmt.Sprint(entry["content"])
+	}
+
+	cases := []struct {
+		name      string
+		previous  string
+		wantOrder []string
+	}{
+		{name: "cycle terminates", previous: "resp_a", wantOrder: []string{"current", "a", "b"}},
+		{name: "bound keeps the nearest ancestors", previous: "resp_c0", wantOrder: append([]string{"current"}, func() []string {
+			ids := make([]string, 0, maxStoredInputChainDepth)
+			for i := 0; i < maxStoredInputChainDepth; i++ {
+				ids = append(ids, fmt.Sprintf("c%d", i))
+			}
+			return ids
+		}()...)},
+		{name: "unknown ancestor adds nothing", previous: "resp_missing", wantOrder: []string{"current"}},
+		{name: "no ancestor", previous: "", wantOrder: []string{"current"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]interface{}{
+				"input":                []interface{}{map[string]interface{}{"role": "user", "content": "current"}},
+				"previous_response_id": tc.previous,
+			}
+			req := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+			got := h.accumulatedInputItems(req, "owner", payload)
+			testutil.Equal(t, len(got), len(tc.wantOrder))
+			for i, want := range tc.wantOrder {
+				testutil.Equal(t, itemText(got[i]), want)
+			}
+		})
 	}
 }

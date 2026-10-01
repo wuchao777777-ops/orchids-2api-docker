@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"encoding/json"
-	"github.com/alicebob/miniredis/v2"
 	"orchids-api/internal/config"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 func parityBuildHandler(t *testing.T, server *httptest.Server) (*Handler, *store.Account) {
@@ -53,12 +55,8 @@ func TestRelayNativeContextAndUpstreamDecisions(t *testing.T) {
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				if r.URL.Path != "/v1"+tc.path {
-					t.Errorf("unexpected fallback path %s", r.URL.Path)
-				}
-				if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-					t.Error(err)
-				}
+				testutil.CheckEqual(t, r.URL.Path, "/v1"+tc.path)
+				testutil.CheckNoError(t, json.NewDecoder(r.Body).Decode(&received))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(tc.status)
 				_, _ = io.WriteString(w, tc.body)
@@ -66,12 +64,8 @@ func TestRelayNativeContextAndUpstreamDecisions(t *testing.T) {
 			defer server.Close()
 			h, acc := parityBuildHandler(t, server)
 			acc.ID, acc.GrokModels, acc.GrokModelsSyncedAt = 0, []string{"grok-4.6"}, time.Now()
-			if err := h.lb.Store.CreateAccount(context.Background(), acc); err != nil {
-				t.Fatal(err)
-			}
-			if err := h.lb.Store.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: "grok-4.6", Name: "Grok 4.6", Status: store.ModelStatusAvailable, Verified: true}); err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, h.lb.Store.CreateAccount(context.Background(), acc))
+			testutil.NoError(t, h.lb.Store.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: "grok-4.6", Name: "Grok 4.6", Status: store.ModelStatusAvailable, Verified: true}))
 			payload := map[string]interface{}{
 				"model": "grok-4.6", "stream": false, "prompt_cache_key": "client-session",
 				// The gateway now applies grok2api's Build defaults: store=false for
@@ -100,9 +94,7 @@ func TestRelayNativeContextAndUpstreamDecisions(t *testing.T) {
 				t.Fatalf("status=%d want=%d calls=%d body=%s", rec.Code, tc.status, calls, rec.Body.String())
 			}
 			// Session keys are tenant-scoped routing metadata; content is not.
-			if interfaceString(received["prompt_cache_key"]) == "" {
-				t.Fatal("session key lost")
-			}
+			testutil.NotEqual(t, interfaceString(received["prompt_cache_key"]), "")
 			received["prompt_cache_key"] = payload["prompt_cache_key"]
 			if !reflect.DeepEqual(received, payload) {
 				for key, want := range payload {
@@ -143,12 +135,8 @@ func TestRelayNativeResponsesRecoversOpaqueReasoning(t *testing.T) {
 	defer server.Close()
 	h, acc := parityBuildHandler(t, server)
 	acc.ID, acc.GrokModels, acc.GrokModelsSyncedAt = 0, []string{"grok-4.6"}, time.Now()
-	if err := h.lb.Store.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.lb.Store.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: "grok-4.6", Name: "Grok 4.6", Status: store.ModelStatusAvailable, Verified: true}); err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, h.lb.Store.CreateAccount(context.Background(), acc))
+	testutil.NoError(t, h.lb.Store.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: "grok-4.6", Name: "Grok 4.6", Status: store.ModelStatusAvailable, Verified: true}))
 	payload := map[string]interface{}{
 		"model": "grok-4.6", "stream": false, "prompt_cache_key": "client-session",
 		"input": []interface{}{
@@ -172,13 +160,9 @@ func TestRelayNativeResponsesRecoversOpaqueReasoning(t *testing.T) {
 			switch interfaceString(item["type"]) {
 			case "reasoning":
 				reasoningSeen = true
-				if interfaceString(item["encrypted_content"]) != "" {
-					t.Fatalf("retry %d still carried opaque reasoning: %v", index, item)
-				}
+				testutil.Equal(t, interfaceString(item["encrypted_content"]), "")
 			case "compaction":
-				if interfaceString(item["encrypted_content"]) != "client-native-compaction" {
-					t.Fatalf("retry %d rewrote client compaction state: %v", index, item)
-				}
+				testutil.Equal(t, interfaceString(item["encrypted_content"]), "client-native-compaction")
 			}
 		}
 		if reasoningSeen {
@@ -198,9 +182,7 @@ func TestRelayChatSamplingAndEffortAreClientOwned(t *testing.T) {
 		effort := tc.effort
 		temperature, topP := 3.0, 1.5
 		req := &ChatCompletionsRequest{Model: "grok-4.5", Messages: []ChatMessage{{Role: "user", Content: "original"}}, ReasoningEffort: &effort, Temperature: &temperature, TopP: &topP}
-		if err := req.Validate(); err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, req.Validate())
 		payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{ID: req.Model, UpstreamModel: req.Model, Upstream: UpstreamCLI}, req, true)
 		if err != nil {
 			t.Fatal(err)
@@ -231,14 +213,10 @@ func TestRelayBuildEffortAliasesFollowModelContract(t *testing.T) {
 			if _, exists := reasoning["effort"]; exists {
 				t.Fatalf("%s kept effort %v", tc.model, reasoning)
 			}
-			if reasoning["summary"] != "concise" {
-				t.Fatalf("%s dropped its summary: %v", tc.model, reasoning)
-			}
+			testutil.Equal(t, reasoning["summary"], "concise")
 			continue
 		}
-		if reasoning["effort"] != tc.want {
-			t.Fatalf("%s effort=%v want %s", tc.model, reasoning["effort"], tc.want)
-		}
+		testutil.EqualAny(t, reasoning["effort"], tc.want)
 	}
 }
 
@@ -259,9 +237,7 @@ func TestRelayRepeatedDeltaThresholdsMatchGrok2API(t *testing.T) {
 		t.Fatalf("distinct deltas were rejected: %v", result.Err)
 	}
 	for i := 0; i < 300; i++ {
-		if !strings.Contains(rec.Body.String(), fmt.Sprintf("chunk-%d", i)) {
-			t.Fatalf("distinct delta %d was dropped", i)
-		}
+		testutil.MustContain(t, rec.Body.String(), fmt.Sprintf("chunk-%d", i))
 	}
 
 	// One visible delta repeated past the threshold terminates the relay.

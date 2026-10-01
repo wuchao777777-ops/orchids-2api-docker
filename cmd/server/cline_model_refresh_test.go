@@ -7,6 +7,7 @@ import (
 	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // TestClineCatalogToDiscoveredPublishesTheFeedName pins the display name the
@@ -24,9 +25,7 @@ func TestClineCatalogToDiscoveredPublishesTheFeedName(t *testing.T) {
 		{ID: "poolside/laguna-s-2.1:free", Provider: "poolside"},
 		{ID: "   "},
 	})
-	if len(got) != 3 {
-		t.Fatalf("discovered=%d want 3: %#v", len(got), got)
-	}
+	testutil.Equal(t, len(got), 3)
 	want := []struct {
 		id, name, provider string
 	}{
@@ -41,9 +40,7 @@ func TestClineCatalogToDiscoveredPublishesTheFeedName(t *testing.T) {
 		}
 		// The upstream identifier is what the request path sends, so it is the
 		// upstream model of every published row.
-		if got[i].UpstreamModel != want.id {
-			t.Errorf("row %d UpstreamModel=%q want %q", i, got[i].UpstreamModel, want.id)
-		}
+		testutil.CheckEqual(t, got[i].UpstreamModel, want.id)
 		if !got[i].Verified {
 			t.Errorf("row %d Verified=false: a catalog read is an observation", i)
 		}
@@ -66,23 +63,15 @@ func TestApplyModelRefreshWritesTheClineRouteMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
 	}
-	if result.Added != 2 {
-		t.Fatalf("Added=%d want 2", result.Added)
-	}
+	testutil.Equal(t, result.Added, 2)
 
 	row, err := s.GetModelByChannelAndModelID(ctx, "Cline", "z-ai/glm-5.3-flash")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
 	}
-	if row.Name != "glm-5.3-flash" {
-		t.Errorf("Name=%q want the feed's display name", row.Name)
-	}
-	if row.Provider != "z-ai" {
-		t.Errorf("Provider=%q want z-ai", row.Provider)
-	}
-	if row.UpstreamModel != "z-ai/glm-5.3-flash" {
-		t.Errorf("UpstreamModel=%q want the upstream id", row.UpstreamModel)
-	}
+	testutil.CheckEqual(t, row.Name, "glm-5.3-flash")
+	testutil.CheckEqual(t, row.Provider, "z-ai")
+	testutil.CheckEqual(t, row.UpstreamModel, "z-ai/glm-5.3-flash")
 }
 
 // TestApplyModelRefreshFillsInARowThatPredatesTheMetadata is the migration half:
@@ -102,9 +91,7 @@ func TestApplyModelRefreshFillsInARowThatPredatesTheMetadata(t *testing.T) {
 		Status:   store.ModelStatusAvailable,
 		Verified: false,
 	}
-	if err := s.CreateModel(ctx, stored); err != nil {
-		t.Fatalf("CreateModel() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateModel(ctx, stored), "CreateModel() error = %v")
 	// A row an operator renamed must keep its name.
 	renamed := &store.Model{
 		Channel:  "Cline",
@@ -114,9 +101,7 @@ func TestApplyModelRefreshFillsInARowThatPredatesTheMetadata(t *testing.T) {
 		Verified: true,
 		Provider: "hand-set",
 	}
-	if err := s.CreateModel(ctx, renamed); err != nil {
-		t.Fatalf("CreateModel() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateModel(ctx, renamed), "CreateModel() error = %v")
 
 	if _, err := applyModelRefreshWithPrune(ctx, s, "Cline", "cline_recommended_models", clineCatalogToDiscovered([]cline.Model{
 		{ID: "cline-free/deepseek-v4.1-flash", Name: "Deepseek-v4.1-Flash", Provider: "cline-free"},
@@ -133,23 +118,15 @@ func TestApplyModelRefreshFillsInARowThatPredatesTheMetadata(t *testing.T) {
 		t.Error("an observed row stayed unverified")
 	}
 	// The name was a copy of the identifier, so it adopts the feed's name.
-	if completed.Name != "Deepseek-v4.1-Flash" {
-		t.Errorf("Name=%q want Deepseek-v4.1-Flash", completed.Name)
-	}
-	if completed.Provider != "cline-free" {
-		t.Errorf("Provider=%q want cline-free", completed.Provider)
-	}
+	testutil.CheckEqual(t, completed.Name, "Deepseek-v4.1-Flash")
+	testutil.CheckEqual(t, completed.Provider, "cline-free")
 
 	kept, err := s.GetModelByChannelAndModelID(ctx, "Cline", "z-ai/glm-5.3-flash")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
 	}
-	if kept.Name != "运营改过的名字" {
-		t.Errorf("Name=%q want the operator's name preserved", kept.Name)
-	}
-	if kept.Provider != "hand-set" {
-		t.Errorf("Provider=%q want the operator's provider preserved", kept.Provider)
-	}
+	testutil.CheckEqual(t, kept.Name, "运营改过的名字")
+	testutil.CheckEqual(t, kept.Provider, "hand-set")
 }
 
 // TestDiscoverClineModelsReportsNoAccount keeps the channel's contract: without
@@ -194,10 +171,6 @@ func TestClineRefreshSourceIsAnUpstreamCatalog(t *testing.T) {
 	if !isUpstreamCatalogSource("cline_recommended_models") {
 		t.Fatal("cline_recommended_models must be an upstream catalog source")
 	}
-	if normalizeAdminModelChannel("cline") != "Cline" {
-		t.Fatalf("normalizeAdminModelChannel(cline) = %q", normalizeAdminModelChannel("cline"))
-	}
-	if got := refreshModelRequestConfig(&config.Config{RequestTimeout: 600}, "cline").RequestTimeout; got != 15 {
-		t.Errorf("refresh timeout = %d, want it bounded to 15s for a catalog read", got)
-	}
+	testutil.Equal(t, normalizeAdminModelChannel("cline"), "Cline")
+	testutil.CheckEqual(t, refreshModelRequestConfig(&config.Config{RequestTimeout: 600}, "cline").RequestTimeout, 15)
 }

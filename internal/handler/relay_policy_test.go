@@ -14,6 +14,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -68,9 +69,7 @@ func TestRelayForwardsCallerHistoryVerbatim(t *testing.T) {
 		t.Fatalf("status=%d body=%s calls=%d", w.Code, w.Body.String(), len(client.requests))
 	}
 	got := client.requests[0].Messages
-	if len(got) != len(messages) {
-		t.Fatalf("history shortened: %v", got)
-	}
+	testutil.Equal(t, len(got), len(messages))
 	for i := range messages {
 		if got[i].Role != messages[i].Role || got[i].ExtractText() != messages[i].ExtractText() {
 			t.Fatalf("message %d rewritten: %+v", i, got[i])
@@ -88,13 +87,9 @@ func TestRelayIdempotencyKeyIsCallerScoped(t *testing.T) {
 		r.Header.Set("Idempotency-Key", "same-key")
 		w := httptest.NewRecorder()
 		h.HandleMessages(w, r)
-		if w.Code != 200 {
-			t.Fatalf("cross-caller dedup: status=%d body=%s", w.Code, w.Body.String())
-		}
+		testutil.Equal(t, w.Code, 200)
 	}
-	if len(client.requests) != 2 {
-		t.Fatalf("calls=%d", len(client.requests))
-	}
+	testutil.Equal(t, len(client.requests), 2)
 }
 
 func TestRelayRepeatedTextIsNotFiltered(t *testing.T) {
@@ -111,9 +106,7 @@ func TestRelayRepeatedTextIsNotFiltered(t *testing.T) {
 		if streaming {
 			got = rec.Body.String()
 		}
-		if strings.Count(got, text) != 6 {
-			t.Errorf("stream=%v repeated text changed: %q", streaming, got)
-		}
+		testutil.CheckEqual(t, strings.Count(got, text), 6)
 		h.release()
 	}
 }
@@ -127,18 +120,14 @@ func TestRelayRepeatedToolCallsHaveIndependentIDs(t *testing.T) {
 				h.handleMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": id, "toolName": "Write", "input": `{"file_path":"repeat.txt","content":"same content"}`}})
 			}
 			h.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}})
-			if h.toolCallCount != 2 {
-				t.Errorf("format=%v stream=%v calls=%d", format, streaming, h.toolCallCount)
-			}
+			testutil.CheckEqual(t, h.toolCallCount, 2)
 			wire := rec.Body.String()
 			if !streaming {
 				raw, _ := json.Marshal(h.contentBlocks)
 				wire = string(raw)
 			}
 			for _, id := range []string{"call_one", "call_two"} {
-				if !strings.Contains(wire, id) {
-					t.Errorf("format=%v stream=%v tool call identity lost: %s; output=%s", format, streaming, id, wire)
-				}
+				testutil.CheckContain(t, wire, id)
 			}
 			h.release()
 		}

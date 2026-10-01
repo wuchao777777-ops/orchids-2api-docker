@@ -5,10 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestStartAuthLogin_ClassifiesUnreachable(t *testing.T) {
@@ -48,9 +48,7 @@ func TestProbeReachability_DetectsBlockedEgress(t *testing.T) {
 	}))
 	defer live.Close()
 	client.baseURL = live.URL
-	if err := client.ProbeReachability(context.Background()); err != nil {
-		t.Fatalf("ProbeReachability() error = %v, want success", err)
-	}
+	testutil.NoError(t, client.ProbeReachability(context.Background()), "ProbeReachability() error = %v, want success")
 }
 
 func TestStartAuthLogin_ClassifiesRejection(t *testing.T) {
@@ -98,12 +96,8 @@ func TestStartAuthLogin_AppendsClientVersion(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("method = %s, want POST", r.Method)
-		}
-		if got := r.URL.Query().Get("platform"); got != "workbuddy-ai" {
-			t.Errorf("platform = %q", got)
-		}
+		testutil.CheckEqual(t, r.Method, http.MethodPost)
+		testutil.CheckEqual(t, r.URL.Query().Get("platform"), "workbuddy-ai")
 		_, _ = w.Write([]byte(`{"code":0,"data":{"state":"state-1","authUrl":"https://www.workbuddy.ai/login?platform=workbuddy-ai&state=state-1"}}`))
 	}))
 	defer srv.Close()
@@ -115,10 +109,6 @@ func TestStartAuthLogin_AppendsClientVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartAuthLogin() error = %v", err)
 	}
-	if state != "state-1" {
-		t.Fatalf("state = %q", state)
-	}
-	if !strings.Contains(authURL, "version=5.5.2") {
-		t.Fatalf("authURL = %q, want the client version appended", authURL)
-	}
+	testutil.Equal(t, state, "state-1")
+	testutil.MustContain(t, authURL, "version=5.5.2")
 }

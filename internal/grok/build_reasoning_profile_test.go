@@ -15,6 +15,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestBuildChatAppliesSelectedAccountReasoningProfile(t *testing.T) {
@@ -33,27 +34,17 @@ func TestBuildChatAppliesSelectedAccountReasoningProfile(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				var payload map[string]interface{}
-				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-					t.Error(err)
-				}
-				if got := payload["reasoning"].(map[string]interface{})["effort"]; got != tc.expected {
-					t.Errorf("effort=%v want=%s", got, tc.expected)
-				}
+				testutil.CheckNoError(t, json.NewDecoder(r.Body).Decode(&payload))
+				testutil.CheckEqualAny(t, payload["reasoning"].(map[string]interface{})["effort"], tc.expected)
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`{"id":"resp_profile","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`))
 			}))
 			defer upstream.Close()
-			h, s, mini := setupValidationHandler(t)
-			defer s.Close()
-			defer mini.Close()
+			h, s, _ := setupValidationHandler(t)
 			model := "grok-4.7"
-			if err := s.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: model, Name: model, Status: store.ModelStatusAvailable, Verified: true}); err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, s.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: model, Name: model, Status: store.ModelStatusAvailable, Verified: true}))
 			acc := &store.Account{AccountType: "grok", GrokProvider: ProviderBuild, CredentialType: "oauth", Enabled: true, OAuthAccessToken: jwtWithClaims(t, `{"sub":"profile-user","team_id":"profile-team"}`), OAuthExpiresAt: time.Now().Add(time.Hour), GrokModels: []string{model}, GrokModelsSyncedAt: time.Now(), GrokModelCatalog: []modelcatalog.Profile{{ModelID: model, ReasoningEfforts: []string{"xhigh", "high", "medium", "low"}, DefaultReasoningEffort: "high", SupportsReasoningEffort: true}}}
-			if err := s.CreateAccount(context.Background(), acc); err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, s.CreateAccount(context.Background(), acc))
 			h.cfg = &config.Config{GrokCLIBaseURL: upstream.URL + "/v1"}
 			h.cliClient = NewCLIClient(h.cfg)
 			h.cliClient.httpClient = upstream.Client()
@@ -65,9 +56,7 @@ func TestBuildChatAppliesSelectedAccountReasoningProfile(t *testing.T) {
 			body, _ := json.Marshal(req)
 			rec := httptest.NewRecorder()
 			h.HandleChatCompletions(rec, httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", bytes.NewReader(body)))
-			if rec.Code != tc.status {
-				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-			}
+			testutil.Equal(t, rec.Code, tc.status)
 			if tc.status == http.StatusBadRequest {
 				if calls != 0 || !strings.Contains(rec.Body.String(), "supported values: xhigh, high, medium, low") {
 					t.Fatalf("calls=%d body=%s", calls, rec.Body.String())
@@ -86,9 +75,7 @@ func TestBuildPayloadForAccountUsesCatalogDefaultAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	reasoning := payload["reasoning"].(map[string]interface{})
-	if reasoning["effort"] != "low" {
-		t.Fatalf("effort=%v", reasoning["effort"])
-	}
+	testutil.Equal(t, reasoning["effort"], "low")
 	payload, err = buildPayloadForAccount(map[string]interface{}{"reasoning": map[string]interface{}{"effort": "none"}}, acc, "grok-4.7")
 	if err != nil || payload["reasoning"].(map[string]interface{})["effort"] != "low" {
 		t.Fatalf("none compatibility payload=%v err=%v", payload, err)
@@ -102,9 +89,7 @@ func TestBuildPayloadForAccountUsesCatalogDefaultAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload["reasoning"].(map[string]interface{})["effort"] != "xhigh" {
-		t.Fatalf("payload=%v", payload)
-	}
+	testutil.Equal(t, payload["reasoning"].(map[string]interface{})["effort"], "xhigh")
 }
 
 func TestBuildPayloadForAccountDoesNotMutateImmutableSource(t *testing.T) {
@@ -113,9 +98,7 @@ func TestBuildPayloadForAccountDoesNotMutateImmutableSource(t *testing.T) {
 	if _, err := buildPayloadForAccount(source, acc, "grok-4.7"); err != nil {
 		t.Fatal(err)
 	}
-	if source["reasoning"].(map[string]interface{})["effort"] != "max" {
-		t.Fatalf("source mutated: %v", source)
-	}
+	testutil.Equal(t, source["reasoning"].(map[string]interface{})["effort"], "max")
 }
 
 func TestBuildExplicitNoneUsesLowestCompatibleEffort(t *testing.T) {
@@ -161,9 +144,7 @@ func TestBuildMissingCatalogDefaultsKnownReasoningModelToLow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := payload["reasoning"].(map[string]interface{})["effort"]; got != "low" {
-		t.Fatalf("effort=%v", got)
-	}
+	testutil.Equal(t, payload["reasoning"].(map[string]interface{})["effort"], "low")
 	payload, err = buildPayloadForAccount(map[string]interface{}{}, &store.Account{}, "unknown-model")
 	if err != nil {
 		t.Fatal(err)

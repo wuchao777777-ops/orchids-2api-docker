@@ -12,15 +12,14 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 // TestHandleKeysCreateBillingLimitEnforcesReservation is the end-to-end admin
 // contract: a limit set through the API is what the request path reserves
 // against, without any cache or restart in between.
 func TestHandleKeysCreateBillingLimitEnforcesReservation(t *testing.T) {
-	s, mini := newTestStore(t, "api-keys-billing:")
-	defer mini.Close()
-	defer s.Close()
+	s, _ := newTestStore(t, "api-keys-billing:")
 	a := New(s, "admin", "pass", &config.Config{})
 	ctx := t.Context()
 
@@ -29,25 +28,17 @@ func TestHandleKeysCreateBillingLimitEnforcesReservation(t *testing.T) {
 		strings.NewReader(fmt.Sprintf(`{"name":"metered","billing_limit_usd_ticks":%d}`, limit)))
 	createRec := httptest.NewRecorder()
 	a.HandleKeys(createRec, createReq)
-	if createRec.Code != http.StatusCreated {
-		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
-	}
+	testutil.Equal(t, createRec.Code, http.StatusCreated)
 	var created CreateKeyResponse
-	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
-		t.Fatalf("decode create response: %v", err)
-	}
-	if created.BillingLimitUSDTicks != limit {
-		t.Fatalf("created limit = %d, want %d", created.BillingLimitUSDTicks, limit)
-	}
+	testutil.NoError(t, json.Unmarshal(createRec.Body.Bytes(), &created), "decode create response: %v")
+	testutil.Equal(t, created.BillingLimitUSDTicks, limit)
 
 	// The limit is persisted and visible through the admin list.
 	stored, err := s.GetApiKeyByID(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetApiKeyByID() error = %v", err)
 	}
-	if stored.BillingLimitUSDTicks != limit {
-		t.Fatalf("stored limit = %d, want %d", stored.BillingLimitUSDTicks, limit)
-	}
+	testutil.Equal(t, stored.BillingLimitUSDTicks, limit)
 	listed, err := s.ListApiKeys(ctx)
 	if err != nil || len(listed) != 1 || listed[0].BillingLimitUSDTicks != limit {
 		t.Fatalf("ListApiKeys() = %#v, %v", listed, err)
@@ -74,9 +65,7 @@ func TestHandleKeysCreateBillingLimitEnforcesReservation(t *testing.T) {
 	}
 
 	// Settling the request books its cost, and the budget is then exhausted.
-	if err := s.SettleApiKeyBilling(ctx, created.ID, "event-a", limit-1); err != nil {
-		t.Fatalf("SettleApiKeyBilling() error = %v", err)
-	}
+	testutil.NoError(t, s.SettleApiKeyBilling(ctx, created.ID, "event-a", limit-1), "SettleApiKeyBilling() error = %v")
 	ok, err = s.ReserveApiKeyBilling(ctx, created.ID, "event-c", 2, time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatalf("ReserveApiKeyBilling() error = %v", err)
@@ -94,16 +83,12 @@ func TestHandleKeysCreateBillingLimitEnforcesReservation(t *testing.T) {
 // TestHandleKeyBillingLimitUpdateTakesEffect checks the PATCH path, including
 // that a billing limit alone counts as a policy change.
 func TestHandleKeyBillingLimitUpdateTakesEffect(t *testing.T) {
-	s, mini := newTestStore(t, "api-keys-billing-patch:")
-	defer mini.Close()
-	defer s.Close()
+	s, _ := newTestStore(t, "api-keys-billing-patch:")
 	a := New(s, "admin", "pass", &config.Config{})
 	ctx := t.Context()
 
 	key := &store.ApiKey{Name: "unlimited", KeyHash: "hash-unlimited", Enabled: true}
-	if err := s.CreateApiKey(ctx, key); err != nil {
-		t.Fatalf("CreateApiKey() error = %v", err)
-	}
+	testutil.NoError(t, s.CreateApiKey(ctx, key), "CreateApiKey() error = %v")
 	if ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "event-unlimited", 1_000_000, time.Now().UTC().Add(time.Hour)); err != nil || !ok {
 		t.Fatalf("unlimited reservation = %v, %v", ok, err)
 	}
@@ -116,16 +101,10 @@ func TestHandleKeyBillingLimitUpdateTakesEffect(t *testing.T) {
 		strings.NewReader(`{"billing_limit_usd_ticks":1000}`))
 	patchRec := httptest.NewRecorder()
 	a.HandleKeyByID(patchRec, patchReq)
-	if patchRec.Code != http.StatusOK {
-		t.Fatalf("patch status=%d body=%s", patchRec.Code, patchRec.Body.String())
-	}
+	testutil.Equal(t, patchRec.Code, http.StatusOK)
 	var updated store.ApiKey
-	if err := json.Unmarshal(patchRec.Body.Bytes(), &updated); err != nil {
-		t.Fatalf("decode patch response: %v", err)
-	}
-	if updated.BillingLimitUSDTicks != 1000 {
-		t.Fatalf("patched limit = %d, want 1000", updated.BillingLimitUSDTicks)
-	}
+	testutil.NoError(t, json.Unmarshal(patchRec.Body.Bytes(), &updated), "decode patch response: %v")
+	testutil.Equal(t, updated.BillingLimitUSDTicks, 1000)
 	if ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "event-over", 1001, time.Now().UTC().Add(time.Hour)); err != nil || ok {
 		t.Fatalf("reservation above the patched limit = %v, %v", ok, err)
 	}
@@ -137,7 +116,5 @@ func TestHandleKeyBillingLimitUpdateTakesEffect(t *testing.T) {
 	emptyReq := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/api/keys/%d", key.ID), strings.NewReader(`{}`))
 	emptyRec := httptest.NewRecorder()
 	a.HandleKeyByID(emptyRec, emptyReq)
-	if emptyRec.Code != http.StatusBadRequest {
-		t.Fatalf("empty patch status=%d body=%s", emptyRec.Code, emptyRec.Body.String())
-	}
+	testutil.Equal(t, emptyRec.Code, http.StatusBadRequest)
 }

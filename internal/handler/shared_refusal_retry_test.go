@@ -5,6 +5,7 @@ import (
 	"time"
 
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/testutil"
 )
 
 // The exact status_message stored for production Qoder account 22.
@@ -12,9 +13,7 @@ const sharedRefusalMessage = `qoder upstream rejected the credential: {"code":"1
 
 func TestQoderExplicitQueueRetryInterval(t *testing.T) {
 	wait := sharedRefusalWaitForChannel(30*time.Second, 1, "qoder", 15000)
-	if wait != 15*time.Second {
-		t.Fatalf("queue wait = %v, want 15s despite the 30s hint", wait)
-	}
+	testutil.Equal(t, wait, 15*time.Second)
 	budget := SharedRefusalWaitBudget(15000)
 	if !sharedRefusalWaitAllowedWithin(0, wait, budget) {
 		t.Fatal("first retry must fit the 15s budget")
@@ -22,18 +21,10 @@ func TestQoderExplicitQueueRetryInterval(t *testing.T) {
 	if sharedRefusalWaitAllowedWithin(wait, wait, budget) {
 		t.Fatal("a second wait must not exceed the total budget")
 	}
-	if sleep := sharedRefusalSleepForChannel(wait, "qoder", 15000); sleep != wait {
-		t.Fatalf("explicit interval acquired jitter: %v", sleep)
-	}
-	if got := sharedRefusalWaitForChannel(30*time.Second, 1, "qoder", 0); got != 30*time.Second {
-		t.Fatalf("default upstream hint changed: %v", got)
-	}
-	if got := sharedRefusalWaitForChannel(30*time.Second, 1, "workbuddy", 15000); got != sharedRefusalWait(30*time.Second, 1) {
-		t.Fatalf("Qoder override affected another channel: %v", got)
-	}
-	if got := sharedRefusalWaitForChannel(0, 1, "qoder", 15000); got != 0 {
-		t.Fatalf("zero delay acquired a wait: %v", got)
-	}
+	testutil.Equal(t, sharedRefusalSleepForChannel(wait, "qoder", 15000), wait)
+	testutil.Equal(t, sharedRefusalWaitForChannel(30*time.Second, 1, "qoder", 0), 30*time.Second)
+	testutil.Equal(t, sharedRefusalWaitForChannel(30*time.Second, 1, "workbuddy", 15000), sharedRefusalWait(30*time.Second, 1))
+	testutil.Equal(t, sharedRefusalWaitForChannel(0, 1, "qoder", 15000), 0)
 }
 
 // TestSharedRefusalClassIsRecognised pins the signal the retry loop uses. A
@@ -87,9 +78,7 @@ func TestSharedRefusalJitterIsBounded(t *testing.T) {
 				t.Fatalf("jitter(%v) = %v, want non-negative", delay, got)
 			}
 			if limit <= 0 {
-				if got != 0 {
-					t.Fatalf("jitter(%v) = %v, want 0 when the wait has no room", delay, got)
-				}
+				testutil.Equal(t, got, 0)
 				continue
 			}
 			if got >= limit {
@@ -131,9 +120,7 @@ func TestSharedRefusalWaitRampsUpToTheHint(t *testing.T) {
 	}
 	// Beyond the schedule the hint is honoured, and every value stays bounded.
 	for retry := 4; retry <= 8; retry++ {
-		if wait := sharedRefusalWait(hint, retry); wait != hint {
-			t.Errorf("retry %d wait = %v, want the hint %v", retry, wait, hint)
-		}
+		testutil.CheckEqual(t, sharedRefusalWait(hint, retry), hint)
 	}
 }
 
@@ -143,18 +130,10 @@ func TestSharedRefusalWaitRampsUpToTheHint(t *testing.T) {
 func TestSharedRefusalWaitEdges(t *testing.T) {
 	t.Parallel()
 
-	if got := sharedRefusalWait(0, 1); got != 0 {
-		t.Errorf("zero hint = %v, want 0", got)
-	}
-	if got := sharedRefusalWait(-time.Second, 1); got != 0 {
-		t.Errorf("negative hint = %v, want 0", got)
-	}
-	if got := sharedRefusalWait(2*time.Second, 1); got != time.Second {
-		t.Errorf("2s hint first probe = %v, want the 1s floor", got)
-	}
-	if got := sharedRefusalWait(500*time.Millisecond, 3); got != 500*time.Millisecond {
-		t.Errorf("sub-floor hint = %v, want it honoured rather than raised above itself", got)
-	}
+	testutil.CheckEqual(t, sharedRefusalWait(0, 1), 0)
+	testutil.CheckEqual(t, sharedRefusalWait(-time.Second, 1), 0)
+	testutil.CheckEqual(t, sharedRefusalWait(2*time.Second, 1), time.Second)
+	testutil.CheckEqual(t, sharedRefusalWait(500*time.Millisecond, 3), 500*time.Millisecond)
 }
 
 // TestSharedRefusalWaitIsCappedByTheHandler documents that the wait the retry
@@ -163,10 +142,6 @@ func TestSharedRefusalWaitEdges(t *testing.T) {
 func TestSharedRefusalWaitIsCappedByTheHandler(t *testing.T) {
 	t.Parallel()
 
-	if got := upstreamRetryAfter(hintedRetryError{delay: 30 * time.Second}); got != 30*time.Second {
-		t.Fatalf("a 30s shared window = %v, want it honoured", got)
-	}
-	if got := upstreamRetryAfter(hintedRetryError{delay: 4 * time.Hour}); got != 30*time.Second {
-		t.Fatalf("an absurd window = %v, want the 30s cap", got)
-	}
+	testutil.Equal(t, upstreamRetryAfter(hintedRetryError{delay: 30 * time.Second}), 30*time.Second)
+	testutil.Equal(t, upstreamRetryAfter(hintedRetryError{delay: 4 * time.Hour}), 30*time.Second)
 }
