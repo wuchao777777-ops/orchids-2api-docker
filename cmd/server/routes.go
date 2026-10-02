@@ -215,7 +215,8 @@ func registerRoutes(
 	// POST is dispatched by model, but GET and DELETE have no model to read: the
 	// stored record decides instead, so a bridged record is served by the bridge
 	// that wrote it rather than by Grok's handler accepting a foreign record.
-	mux.HandleFunc("/v1/responses/", inferenceAuth(limiter.Limit(grok.ResponsesUnifiedResource(nativeResponsesSub, bridgeOptions))))
+	unifiedResponsesSub := grok.ModelDispatcher(nativeResponsesSub, channelResponsesSub, isNativeResponsesModel)
+	mux.HandleFunc("/v1/responses/", inferenceAuth(limiter.Limit(grok.ResponsesUnifiedResource(unifiedResponsesSub, bridgeOptions))))
 	// count_tokens takes the same dispatch decision as the request it precedes:
 	// dedicated channel prefixes have their own token profiles, and a client that
 	// counts against one channel while the completion runs on another plans its

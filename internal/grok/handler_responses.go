@@ -193,7 +193,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	if _, provided := nativePayload["stream"]; !provided {
 		nativePayload["stream"] = req.Stream
 	}
-	identityMessages, _ := responsesInputToMessages(req.Input)
+	identityMessages, _ := responsesInputToMessagesMode(req.Input, false)
 	session := prepareGrokSession(r, req.Model, req.PromptCacheKey, identityMessages)
 	if session.Key != "" {
 		nativePayload["prompt_cache_key"] = session.Key
@@ -352,6 +352,7 @@ func chatRequestFromResponses(req ResponsesCreateRequest) (ChatCompletionsReques
 		ParallelToolCalls: req.ParallelToolCalls,
 		MaxTokens:         req.MaxOutputTokens,
 		PromptCacheKey:    req.PromptCacheKey,
+		Metadata:          cloneStringInterfaceMap(req.Metadata),
 		// Include and the output format used to be dropped here while the native
 		// Grok path forwarded them, so the same request produced reasoning
 		// summaries and structured output on one channel and neither on the
@@ -385,6 +386,12 @@ func responsesOutputFormat(req ResponsesCreateRequest) map[string]interface{} {
 }
 
 func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
+	return responsesInputToMessagesMode(input, true)
+}
+
+// Native identity extraction never changes the payload sent upstream. Unknown
+// items remain in that original payload; only the chat bridge rejects them.
+func responsesInputToMessagesMode(input interface{}, strict bool) ([]ChatMessage, error) {
 	switch v := input.(type) {
 	case nil:
 		return nil, fmt.Errorf("input is required")
@@ -395,14 +402,17 @@ func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
 		return []ChatMessage{{Role: "user", Content: v}}, nil
 	case []interface{}:
 		messages := make([]ChatMessage, 0, len(v))
-		for _, raw := range v {
+		for index, raw := range v {
 			item, _ := raw.(map[string]interface{})
 			if item == nil {
-				continue
+				if !strict {
+					continue
+				}
+				return nil, fmt.Errorf("input[%d] must be an object", index)
 			}
-			itemType := strings.ToLower(strings.TrimSpace(fmt.Sprint(item["type"])))
+			itemType := strings.ToLower(strings.TrimSpace(parseLooseStringAny(item["type"])))
 			if itemType == "" {
-				if strings.TrimSpace(fmt.Sprint(item["role"])) != "" {
+				if strings.TrimSpace(parseLooseStringAny(item["role"])) != "" {
 					itemType = "message"
 				}
 			}
@@ -410,7 +420,13 @@ func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
 			case "function_call":
 				name := parseLooseStringAny(item["name"])
 				if name == "" {
-					continue
+					if !strict {
+						continue
+					}
+					return nil, fmt.Errorf("input[%d].name is required", index)
+				}
+				if strict && parseLooseStringAny(item["call_id"]) == "" {
+					return nil, fmt.Errorf("input[%d].call_id is required", index)
 				}
 				args := "{}"
 				if rawArgs := item["arguments"]; rawArgs != nil {
@@ -438,20 +454,33 @@ func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
 					}},
 				})
 			case "function_call_output":
+				if strict && parseLooseStringAny(item["call_id"]) == "" {
+					return nil, fmt.Errorf("input[%d].call_id is required", index)
+				}
 				messages = append(messages, ChatMessage{
 					Role:       "tool",
 					ToolCallID: strings.TrimSpace(fmt.Sprint(item["call_id"])),
-					Content:    strings.TrimSpace(fmt.Sprint(item["output"])),
+					Content:    bridgeToolOutput(item["output"]),
 				})
 			case "custom_tool_call":
 				name := firstNonEmpty(parseLooseStringAny(item["name"]), "custom_tool")
+				if strict && parseLooseStringAny(item["call_id"]) == "" {
+					return nil, fmt.Errorf("input[%d].call_id is required", index)
+				}
+				arguments, _ := json.Marshal(map[string]interface{}{"input": firstNonNil(item["input"], item["arguments"], "")})
 				messages = append(messages, ChatMessage{Role: "assistant", Content: nil, ToolCalls: []ToolCall{{
 					ID: firstNonEmpty(parseLooseStringAny(item["call_id"]), parseLooseStringAny(item["id"])), Type: "function",
-					Function: map[string]interface{}{"name": name, "arguments": firstNonNil(item["input"], item["arguments"], "{}")},
+					Function: map[string]interface{}{"name": name, "arguments": string(arguments)},
 				}}})
 			case "custom_tool_call_output":
-				messages = append(messages, ChatMessage{Role: "tool", ToolCallID: parseLooseStringAny(item["call_id"]), Content: parseLooseStringAny(item["output"])})
+				if strict && parseLooseStringAny(item["call_id"]) == "" {
+					return nil, fmt.Errorf("input[%d].call_id is required", index)
+				}
+				messages = append(messages, ChatMessage{Role: "tool", ToolCallID: parseLooseStringAny(item["call_id"]), Content: bridgeToolOutput(item["output"])})
 			case "reasoning":
+				if strict && parseLooseStringAny(item["encrypted_content"]) != "" {
+					return nil, fmt.Errorf("input[%d]: encrypted reasoning requires a native Responses provider", index)
+				}
 				messages = append(messages, ChatMessage{
 					Role: "assistant", Content: "",
 					ReasoningContent: responsesReasoningSummary(item), ReasoningEncryptedContent: parseLooseStringAny(item["encrypted_content"]),
@@ -465,6 +494,11 @@ func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
 					Role:    role,
 					Content: normalizeResponsesMessageContent(item["content"]),
 				})
+			default:
+				if !strict {
+					continue
+				}
+				return nil, fmt.Errorf("input[%d]: unsupported Responses item type %q", index, itemType)
 			}
 		}
 		if len(messages) == 0 {
@@ -474,6 +508,17 @@ func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {
 	default:
 		return nil, fmt.Errorf("input must be a string or an array")
 	}
+}
+
+func bridgeToolOutput(output interface{}) string {
+	if text, ok := output.(string); ok {
+		return text
+	}
+	if output == nil {
+		return ""
+	}
+	encoded, _ := json.Marshal(output)
+	return string(encoded)
 }
 
 func responsesReasoningSummary(item map[string]interface{}) string {

@@ -129,7 +129,15 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 			writeGrokUpstreamError(w, err)
 			return
 		}
+		if err := validateBridgeTools(req.Tools); err != nil {
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
 		if !expandBridgedPreviousResponse(w, r, &req, opts) {
+			return
+		}
+		if err := expandBridgedCompaction(r, &req, opts); err != nil {
+			writeBridgeCompactionError(w, err)
 			return
 		}
 		chatReq, err := chatRequestFromResponses(req)
@@ -319,18 +327,22 @@ func ResponsesResourceHandler(opts ResponsesBridgeOptions) http.HandlerFunc {
 // /responses for a chat-completions-only channel:
 //
 //   - POST /responses/            behaves like POST /responses (trailing slash)
-//   - POST /responses/compact     runs the compaction request as an ordinary
-//     completion: these channels have no native compact endpoint, and the
-//     client's payload is a normal summarisation turn
+//   - POST /responses/compact     creates a caller-owned summary reference for
+//     subsequent Responses input; it does not create an ordinary response
 //   - GET|DELETE /responses/{id}  served from the response store
 //   - POST /responses/{id}/cancel and GET /responses/{id}/input_items
 //     served from the response store (see responses_subresource.go)
 func ResponsesChannelSubpath(chat http.HandlerFunc, opts ResponsesBridgeOptions) http.HandlerFunc {
 	create := ResponsesBridgeHandler(chat, opts)
+	compact := ResponsesBridgeCompactHandler(chat, opts)
 	resource := ResponsesResourceHandler(opts)
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimRight(strings.TrimSpace(r.URL.Path), "/")
-		if strings.HasSuffix(path, "/responses") || strings.HasSuffix(path, "/responses/compact") {
+		if strings.HasSuffix(path, "/responses/compact") {
+			compact(w, r)
+			return
+		}
+		if strings.HasSuffix(path, "/responses") {
 			create(w, r)
 			return
 		}

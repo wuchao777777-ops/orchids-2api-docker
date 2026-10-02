@@ -108,8 +108,14 @@ type ClaudeRequest struct {
 	// OutputConfig and Thinking carry the Anthropic-side effort hints Claude
 	// Code sends (output_config.effort, thinking.effort/budget_tokens). They
 	// feed the same effort resolution as reasoning_effort.
-	OutputConfig map[string]interface{} `json:"output_config,omitempty"`
-	Thinking     map[string]interface{} `json:"thinking,omitempty"`
+	OutputConfig   map[string]interface{}   `json:"output_config,omitempty"`
+	Thinking       map[string]interface{}   `json:"thinking,omitempty"`
+	ResponseFormat map[string]interface{}   `json:"response_format,omitempty"`
+	ResponseText   map[string]interface{}   `json:"text,omitempty"`
+	Include        []string                 `json:"include,omitempty"`
+	PromptCacheKey string                   `json:"prompt_cache_key,omitempty"`
+	ResponsesTools []map[string]interface{} `json:"x_responses_tools,omitempty"`
+	MCPServers     []map[string]interface{} `json:"mcp_servers,omitempty"`
 }
 
 type toolCall struct {
@@ -520,6 +526,22 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// verbatim. The path or the model names the channel before selection; the
 	// selected account confirms it afterwards.
 	preSelectChannel := passthroughChannelName(targetChannel)
+	protocolControls := upstream.UpstreamRequest{
+		ResponseFormat: req.ResponseFormat, ResponseText: req.ResponseText,
+		Include: req.Include, PromptCacheKey: req.PromptCacheKey, ResponsesTools: req.ResponsesTools,
+	}
+	if format, ok := req.OutputConfig["format"].(map[string]interface{}); ok && len(protocolControls.ResponseFormat) == 0 && len(protocolControls.ResponseText) == 0 {
+		protocolControls.ResponseText = map[string]interface{}{"format": format}
+		req.ResponseText = protocolControls.ResponseText
+	}
+	if len(req.MCPServers) > 0 {
+		apperrors.New("invalid_request_error", "MCP servers require a native Responses provider", http.StatusBadRequest).WriteResponse(w)
+		return
+	}
+	if err := protocolControls.ValidateProtocolControls(preSelectChannel); err != nil {
+		apperrors.New("invalid_request_error", err.Error(), http.StatusBadRequest).WriteResponse(w)
+		return
+	}
 	preSelectWorkBuddyRequest := preSelectChannel == "workbuddy"
 	preSelectQoderRequest := preSelectChannel == "qoder"
 	preSelectClineRequest := preSelectChannel == "cline"
@@ -764,6 +786,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		payloadSystem := req.System
 
 		upstreamReq := upstream.UpstreamRequest{
+			ResponseFormat:    req.ResponseFormat,
+			ResponseText:      req.ResponseText,
+			Include:           req.Include,
+			PromptCacheKey:    req.PromptCacheKey,
+			ResponsesTools:    req.ResponsesTools,
 			MaxTokens:         req.outputTokenLimit(),
 			Temperature:       req.Temperature,
 			TopP:              req.TopP,

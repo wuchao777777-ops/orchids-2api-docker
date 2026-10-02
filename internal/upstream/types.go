@@ -24,6 +24,11 @@ type UpstreamRequest struct {
 	// effort or thinking switch forward it; the value stays empty when the
 	// client did not state one.
 	ReasoningEffort string
+	ResponseFormat  map[string]interface{}
+	ResponseText    map[string]interface{}
+	Include         []string
+	PromptCacheKey  string
+	ResponsesTools  []map[string]interface{}
 	// RequestID identifies one downstream request across provider retries and
 	// account switches. Providers that expose an upstream request-correlation
 	// header can reuse it instead of making every retry look like a new turn.

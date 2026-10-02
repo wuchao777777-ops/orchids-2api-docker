@@ -1,10 +1,45 @@
 package grok
 
 import (
+	"encoding/json"
+	"net/http/httptest"
 	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
+
+func TestNativeResponsesRelayPreservesNullError(t *testing.T) {
+	response := map[string]interface{}{
+		"id": "resp_ok", "object": "response", "created_at": 42,
+		"model": "grok-4.7", "status": "completed", "error": nil,
+		"output": []interface{}{map[string]interface{}{
+			"id": "msg_ok", "type": "message", "role": "assistant", "status": "completed",
+			"content": []interface{}{map[string]interface{}{"type": "output_text", "text": "2", "annotations": []interface{}{}}},
+		}},
+	}
+	raw, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, contentType := range []string{"application/json", "text/event-stream"} {
+		t.Run(contentType, func(t *testing.T) {
+			input := string(raw)
+			if contentType == "text/event-stream" {
+				input = parityFrame("response.completed", map[string]interface{}{"id": "resp_ok", "response": response})
+			}
+			recorder := httptest.NewRecorder()
+			id, captured, result := copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), contentType, "grok-4.7")
+			if result.Err != nil || result.Finish != "stop" || id != "resp_ok" {
+				t.Fatalf("id=%q, outcome=%+v", id, result)
+			}
+			for _, output := range []string{recorder.Body.String(), string(captured)} {
+				if !strings.Contains(output, `"error":null`) || strings.Contains(output, upstreamRejectionCode) || !strings.Contains(output, `"text":"2"`) {
+					t.Fatalf("successful response or audit capture changed: %s", output)
+				}
+			}
+		})
+	}
+}
 
 // A rejection and a transient failure must not reach the client as the same
 // event: the first is not worth retrying and the second is.
@@ -134,6 +169,25 @@ func TestRedactResponseErrorLeavesCompletedEnvelopeStatus(t *testing.T) {
 	redactResponseError(event)
 	response := event["response"].(map[string]interface{})
 	testutil.Equal(t, interfaceString(response["status"]), "completed")
+	testutil.True(t, response["error"] == nil, "successful response must retain error: null")
+}
+
+func TestRedactResponseErrorPreservesNullErrors(t *testing.T) {
+	for _, status := range []string{"queued", "in_progress", "completed", "incomplete"} {
+		t.Run(status, func(t *testing.T) {
+			response := map[string]interface{}{"object": "response", "status": status, "error": nil}
+			if redactResponseError(response) {
+				t.Fatal("null error changed a response")
+			}
+			if value, exists := response["error"]; !exists || value != nil {
+				t.Fatalf("error = %#v, exists = %v; want explicit null", value, exists)
+			}
+			event := map[string]interface{}{"type": "response." + status, "response": response}
+			if redactResponseError(event) || response["error"] != nil {
+				t.Fatal("nested SSE response acquired a spurious error")
+			}
+		})
+	}
 }
 
 // A gateway-synthesized failure caused by a rejection reports the rejection, so

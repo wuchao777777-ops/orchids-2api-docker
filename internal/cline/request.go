@@ -41,20 +41,32 @@ type toolCallFunction struct {
 // models, and it needs a session_id to correlate a turn, so both are always
 // present even when the client did not ask for them.
 type chatBody struct {
-	Model           string        `json:"model"`
-	MaxTokens       int           `json:"max_tokens"`
-	SessionID       string        `json:"session_id"`
-	ReasoningEffort string        `json:"reasoning_effort"`
-	Messages        []chatMessage `json:"messages"`
-	Stream          bool          `json:"stream"`
-	Tools           []interface{} `json:"tools,omitempty"`
-	ToolChoice      interface{}   `json:"tool_choice,omitempty"`
+	ResponseFormat    map[string]interface{} `json:"response_format,omitempty"`
+	PromptCacheKey    string                 `json:"prompt_cache_key,omitempty"`
+	Temperature       *float64               `json:"temperature,omitempty"`
+	TopP              *float64               `json:"top_p,omitempty"`
+	Stop              *[]string              `json:"stop,omitempty"`
+	ParallelToolCalls *bool                  `json:"parallel_tool_calls,omitempty"`
+	Model             string                 `json:"model"`
+	MaxTokens         int                    `json:"max_tokens"`
+	SessionID         string                 `json:"session_id"`
+	ReasoningEffort   string                 `json:"reasoning_effort"`
+	Messages          []chatMessage          `json:"messages"`
+	Stream            bool                   `json:"stream"`
+	Tools             []interface{}          `json:"tools,omitempty"`
+	ToolChoice        interface{}            `json:"tool_choice,omitempty"`
 }
 
 // buildChatBody renders one chat request.
 func buildChatBody(req upstream.UpstreamRequest, model string) ([]byte, error) {
+	if err := req.ValidateProtocolControls("cline"); err != nil {
+		return nil, err
+	}
 	sessionID := logicalTaskID(req.RequestID)
 	maxTokens := DefaultMaxTokens
+	if req.MaxTokens != nil {
+		maxTokens = *req.MaxTokens
+	}
 	// The upstream needs a reasoning_effort on every request, so the default
 	// stands in when the client did not state one; a stated effort wins.
 	effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
@@ -63,12 +75,17 @@ func buildChatBody(req upstream.UpstreamRequest, model string) ([]byte, error) {
 	}
 	effort = util.FirstNonEmptyUntrimmed(effort, DefaultReasoningEffort)
 	body := chatBody{
+		ResponseFormat: req.ChatResponseFormat(), PromptCacheKey: req.PromptCacheKey,
+		Temperature: req.Temperature, TopP: req.TopP, ParallelToolCalls: req.ParallelToolCalls,
 		Model:           model,
 		MaxTokens:       maxTokens,
 		SessionID:       sessionID,
 		ReasoningEffort: effort,
 		Messages:        buildMessages(req),
 		Stream:          true,
+	}
+	if req.Stop != nil {
+		body.Stop = &req.Stop
 	}
 	if !req.NoTools {
 		body.Tools = normalizeToolDefinitions(req)

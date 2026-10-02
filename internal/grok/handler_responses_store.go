@@ -630,8 +630,10 @@ func redactResponseError(event map[string]interface{}) bool {
 		return false
 	}
 	changed := false
-	if _, exists := event["error"]; exists {
-		code, message := redactedUpstreamError(event["error"])
+	// Responses uses error: null on healthy envelopes. Only actual error
+	// values need redaction; treating null as an empty error invents a rejection.
+	if raw, exists := event["error"]; exists && raw != nil {
+		code, message := redactedUpstreamError(raw)
 		event["error"] = map[string]interface{}{"code": code, "message": message}
 		changed = true
 	}

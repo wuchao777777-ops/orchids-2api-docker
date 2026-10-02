@@ -50,6 +50,11 @@ func recordingChat(t *testing.T, calls *[]recordedChatCall, mu *sync.Mutex) http
 		mu.Lock()
 		*calls = append(*calls, recordedChatCall{path: r.URL.Path, body: decoded})
 		mu.Unlock()
+		if streaming, _ := decoded["stream"].(bool); !streaming {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"chatcmpl-1","model":"gpt-5.6-luna","choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`)
+			return
+		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)

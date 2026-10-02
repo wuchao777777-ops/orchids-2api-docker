@@ -197,16 +197,20 @@ type chatToolCall struct {
 }
 
 type chatParameters struct {
-	MaxTokens       int       `json:"max_tokens"`
-	Temperature     *float64  `json:"temperature,omitempty"`
-	TopP            *float64  `json:"top_p,omitempty"`
-	Stop            *[]string `json:"stop,omitempty"`
-	ContextLength   int       `json:"context_length,omitempty"`
-	EnableThinking  *bool     `json:"enable_thinking,omitempty"`
-	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	ResponseFormat  map[string]interface{} `json:"response_format,omitempty"`
+	MaxTokens       int                    `json:"max_tokens"`
+	Temperature     *float64               `json:"temperature,omitempty"`
+	TopP            *float64               `json:"top_p,omitempty"`
+	Stop            *[]string              `json:"stop,omitempty"`
+	ContextLength   int                    `json:"context_length,omitempty"`
+	EnableThinking  *bool                  `json:"enable_thinking,omitempty"`
+	ReasoningEffort string                 `json:"reasoning_effort,omitempty"`
 }
 
 func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, requestSetID, clientVersion, aliyunUserType, businessProduct string) ([]byte, error) {
+	if err := req.ValidateProtocolControls("qoder"); err != nil {
+		return nil, err
+	}
 	messages, systemText, err := buildMessages(req)
 	if err != nil {
 		return nil, err
@@ -215,6 +219,7 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 	// Preserve explicit client controls; use the reference output budget only
 	// when the caller omitted it.
 	parameters := chatParameters{MaxTokens: 32000, Temperature: req.Temperature, TopP: req.TopP}
+	parameters.ResponseFormat = req.ChatResponseFormat()
 	if req.MaxTokens != nil {
 		parameters.MaxTokens = *req.MaxTokens
 	}

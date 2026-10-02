@@ -245,6 +245,9 @@ func (c *Client) tokenUpdater() *tokenUpdater {
 
 // buildBody renders the OpenAI-shaped request body the upstream expects.
 func (c *Client) buildBody(req upstream.UpstreamRequest) ([]byte, error) {
+	if err := req.ValidateProtocolControls("workbuddy"); err != nil {
+		return nil, err
+	}
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
 		model = defaultModel
@@ -254,6 +257,27 @@ func (c *Client) buildBody(req upstream.UpstreamRequest) ([]byte, error) {
 		"stream":         true,
 		"stream_options": map[string]interface{}{"include_usage": true},
 		"messages":       buildMessages(req),
+	}
+	if format := req.ChatResponseFormat(); len(format) > 0 {
+		body["response_format"] = format
+	}
+	if req.PromptCacheKey != "" {
+		body["prompt_cache_key"] = req.PromptCacheKey
+	}
+	if req.MaxTokens != nil {
+		body["max_tokens"] = *req.MaxTokens
+	}
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
+	}
+	if req.TopP != nil {
+		body["top_p"] = *req.TopP
+	}
+	if req.Stop != nil {
+		body["stop"] = req.Stop
+	}
+	if req.ParallelToolCalls != nil {
+		body["parallel_tool_calls"] = *req.ParallelToolCalls
 	}
 	// The upstream accepts the OpenAI-style reasoning_effort hint. An omitted
 	// field makes it inline the chain of thought into content, which surfaces as
