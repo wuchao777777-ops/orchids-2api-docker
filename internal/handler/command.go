@@ -50,6 +50,34 @@ func extractCommandFromPolicy(text string) string {
 	return ""
 }
 
+// Local responses use a cold JSON encoder, not the upstream SSE hot path. One
+// schema keeps start/content/stop frames consistent while omitting empty deltas.
+type localOpenAIDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+type localOpenAIChoice struct {
+	Index        int              `json:"index"`
+	Delta        localOpenAIDelta `json:"delta"`
+	FinishReason *string          `json:"finish_reason,omitempty"`
+}
+
+type localOpenAIChunk struct {
+	ID      string              `json:"id"`
+	Object  string              `json:"object"`
+	Created int64               `json:"created"`
+	Model   string              `json:"model"`
+	Choices []localOpenAIChoice `json:"choices"`
+}
+
+func newLocalOpenAIChunk(id, model string, delta localOpenAIDelta, finish *string) localOpenAIChunk {
+	return localOpenAIChunk{
+		ID: id, Object: "chat.completion.chunk", Created: time.Now().Unix(), Model: model,
+		Choices: []localOpenAIChoice{{Delta: delta, FinishReason: finish}},
+	}
+}
+
 func writeLocalTextResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, text string, startTime time.Time, logger *debug.Logger) {
 	inputTokens := tiktoken.EstimateTextTokens(extractUserText(req.Messages))
 	outputTokens := tiktoken.EstimateTextTokens(text)
@@ -68,94 +96,16 @@ func writeLocalTextResponse(w http.ResponseWriter, req ClaudeRequest, responseFo
 		if responseFormat == adapter.FormatOpenAI {
 			w.Header().Set("Content-Type", "text/event-stream")
 
-			startChunk := struct {
-				ID      string `json:"id"`
-				Object  string `json:"object"`
-				Created int64  `json:"created"`
-				Model   string `json:"model"`
-				Choices []struct {
-					Index int `json:"index"`
-					Delta struct {
-						Role string `json:"role,omitempty"`
-					} `json:"delta"`
-				} `json:"choices"`
-			}{
-				ID:      msgID,
-				Object:  "chat.completion.chunk",
-				Created: time.Now().Unix(),
-				Model:   req.Model,
-				Choices: []struct {
-					Index int `json:"index"`
-					Delta struct {
-						Role string `json:"role,omitempty"`
-					} `json:"delta"`
-				}{{
-					Index: 0,
-					Delta: struct {
-						Role string `json:"role,omitempty"`
-					}{Role: "assistant"},
-				}},
-			}
+			startChunk := newLocalOpenAIChunk(msgID, req.Model, localOpenAIDelta{Role: "assistant"}, nil)
 			stopReason := "stop"
-			stopChunk := struct {
-				ID      string `json:"id"`
-				Object  string `json:"object"`
-				Created int64  `json:"created"`
-				Model   string `json:"model"`
-				Choices []struct {
-					Index        int            `json:"index"`
-					Delta        map[string]any `json:"delta"`
-					FinishReason *string        `json:"finish_reason,omitempty"`
-				} `json:"choices"`
-			}{
-				ID:      msgID,
-				Object:  "chat.completion.chunk",
-				Created: time.Now().Unix(),
-				Model:   req.Model,
-				Choices: []struct {
-					Index        int            `json:"index"`
-					Delta        map[string]any `json:"delta"`
-					FinishReason *string        `json:"finish_reason,omitempty"`
-				}{{
-					Index:        0,
-					Delta:        map[string]any{},
-					FinishReason: &stopReason,
-				}},
-			}
+			stopChunk := newLocalOpenAIChunk(msgID, req.Model, localOpenAIDelta{}, &stopReason)
 			rawStart, _ := json.Marshal(startChunk)
 			_ = writeOpenAIFrame(w, rawStart)
 			if logger != nil {
 				logger.LogOutputSSE("message_start", string(rawStart))
 			}
 			if text != "" {
-				contentChunk := struct {
-					ID      string `json:"id"`
-					Object  string `json:"object"`
-					Created int64  `json:"created"`
-					Model   string `json:"model"`
-					Choices []struct {
-						Index int `json:"index"`
-						Delta struct {
-							Content string `json:"content,omitempty"`
-						} `json:"delta"`
-					} `json:"choices"`
-				}{
-					ID:      msgID,
-					Object:  "chat.completion.chunk",
-					Created: time.Now().Unix(),
-					Model:   req.Model,
-					Choices: []struct {
-						Index int `json:"index"`
-						Delta struct {
-							Content string `json:"content,omitempty"`
-						} `json:"delta"`
-					}{{
-						Index: 0,
-						Delta: struct {
-							Content string `json:"content,omitempty"`
-						}{Content: text},
-					}},
-				}
+				contentChunk := newLocalOpenAIChunk(msgID, req.Model, localOpenAIDelta{Content: text}, nil)
 				rawContent, _ := json.Marshal(contentChunk)
 				_ = writeOpenAIFrame(w, rawContent)
 				if logger != nil {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -69,12 +68,10 @@ func (c *Client) StartLogin(ctx context.Context) (*LoginTransaction, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: %s", ErrAuthRejected, apiError(http.MethodPost, c.workOSAuthorizeURL, resp.StatusCode, raw))
 	}
@@ -149,12 +146,10 @@ func (c *Client) PollLogin(ctx context.Context, tx *LoginTransaction) (Credentia
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 
 	// A pending authorization is not an error. The body names it, and it is read
 	// before the status is trusted: the endpoint is not consistent about which
@@ -215,12 +210,10 @@ func (c *Client) Register(ctx context.Context, workosAccess, workosRefresh strin
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
 		return Credentials{}, apiError(http.MethodPost, endpoint, resp.StatusCode, raw)
 	}
@@ -279,12 +272,10 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (Credentials,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
 		err := apiError(http.MethodPost, endpoint, resp.StatusCode, raw)
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {

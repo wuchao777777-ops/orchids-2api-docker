@@ -960,12 +960,7 @@ func sanitizeToolInput(name, input string) string {
 	}
 
 	nameKey := strings.ToLower(strings.TrimSpace(name))
-	switch nameKey {
-	case "write", "edit", "read", "bash", "glob":
-	default:
-		return input
-	}
-
+	from, to := "path", "file_path"
 	switch nameKey {
 	case "write":
 		if !strings.Contains(trimmed, `"path"`) && !strings.Contains(trimmed, `"overwrite"`) {
@@ -976,6 +971,7 @@ func sanitizeToolInput(name, input string) string {
 			return input
 		}
 	case "bash":
+		from, to = "cmd", "command"
 		if !strings.Contains(trimmed, `"cmd"`) {
 			return input
 		}
@@ -983,45 +979,36 @@ func sanitizeToolInput(name, input string) string {
 		if !strings.Contains(trimmed, `"path"`) || strings.Contains(trimmed, `"pattern"`) {
 			return input
 		}
+	default:
+		return input
 	}
-
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
 		return input
 	}
 
 	changed := false
-	mapField := func(from, to string) {
-		v, ok := payload[from]
-		if !ok {
-			return
-		}
-		if _, exists := payload[to]; !exists {
-			payload[to] = v
-			changed = true
-		}
-		delete(payload, from)
-		changed = true
-	}
-
-	switch nameKey {
-	case "write":
-		// Claude Code Write tool rejects unknown field "overwrite".
-		if _, ok := payload["overwrite"]; ok {
-			delete(payload, "overwrite")
-			changed = true
-		}
-		mapField("path", "file_path")
-	case "edit", "read":
-		mapField("path", "file_path")
-	case "bash":
-		mapField("cmd", "command")
-	case "glob":
-		if _, ok := payload["pattern"]; !ok {
+	if nameKey == "glob" {
+		if _, exists := payload["pattern"]; !exists {
 			if path, ok := payload["path"].(string); ok && strings.TrimSpace(path) != "" {
 				payload["pattern"] = "*"
 				changed = true
 			}
+		}
+	} else {
+		// Write rejects overwrite; destination fields always win over aliases.
+		if nameKey == "write" {
+			if _, exists := payload["overwrite"]; exists {
+				delete(payload, "overwrite")
+				changed = true
+			}
+		}
+		if value, exists := payload[from]; exists {
+			if _, present := payload[to]; !present {
+				payload[to] = value
+			}
+			delete(payload, from)
+			changed = true
 		}
 	}
 

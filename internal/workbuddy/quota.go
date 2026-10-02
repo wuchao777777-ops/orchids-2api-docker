@@ -3,7 +3,6 @@ package workbuddy
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -108,12 +107,10 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 	}
 	applyHeaders(req, accessToken, c.creds.UID, "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, raw, err := util.DoReadBody(c.httpClient, req, 8<<20)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch workbuddy credits: %w", err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	data, err := unwrapEnvelope(resp.StatusCode, raw)
 	if err != nil {
 		return nil, err

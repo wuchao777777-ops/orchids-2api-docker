@@ -3,7 +3,6 @@ package cline
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -74,12 +73,10 @@ func (c *Client) fetchPlan(ctx context.Context) (Plan, error) {
 	req.Header.Set("Accept", "application/json")
 	applyClientHeaders(req.Header)
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Plan{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 
 	var payload struct {
 		Data   *json.RawMessage `json:"data"`

@@ -704,10 +704,7 @@ func (h *Handler) compactionCodecSnapshot() *gatewayCompactionCodec {
 	if h == nil {
 		return nil
 	}
-	h.compactionMu.RLock()
-	codec := h.compactionCode
-	h.compactionMu.RUnlock()
-	return codec
+	return util.ReadSnapshot(&h.compactionMu, &h.compactionCode)
 }
 
 // GatewayCompactionEnabled reports whether this deployment can own compaction

@@ -479,12 +479,10 @@ func (c *Client) FetchUpstreamModels(ctx context.Context) ([]Model, error) {
 	req.Header.Set("X-Task-ID", newTaskID(time.Now()))
 	applyClientHeaders(req.Header)
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
 		return nil, apiError(http.MethodGet, endpoint, resp.StatusCode, raw)
 	}

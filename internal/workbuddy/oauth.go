@@ -48,12 +48,10 @@ func (c *Client) StartAuthLogin(ctx context.Context, clientVersion string) (stat
 	}
 	applyHeaders(req, "", "", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, raw, err := util.DoReadBody(c.httpClient, req, 64<<10)
 	if err != nil {
 		return "", "", fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	data, err := unwrapEnvelope(resp.StatusCode, raw)
 	if err != nil {
 		return "", "", fmt.Errorf("%w: %v", ErrAuthRejected, err)
@@ -106,12 +104,10 @@ func (c *Client) PollAuthLogin(ctx context.Context, state string) (Credentials, 
 	}
 	applyHeaders(req, "", "", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, raw, err := util.DoReadBody(c.httpClient, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 
 	if code := envelopeCode(raw); code == CodeLoginPending {
 		return Credentials{}, ErrAuthPending
@@ -172,12 +168,10 @@ func (c *Client) FetchAccountIdentity(ctx context.Context, accessToken, state st
 	}
 	applyHeaders(req, accessToken, "", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, raw, err := util.DoReadBody(c.httpClient, req, 64<<10)
 	if err != nil {
 		return "", "", "", err
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	data, err := unwrapEnvelope(resp.StatusCode, raw)
 	if err != nil {
 		return "", "", "", err

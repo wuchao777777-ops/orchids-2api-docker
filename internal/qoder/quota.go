@@ -3,7 +3,6 @@ package qoder
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -212,12 +211,10 @@ func (c *Client) getJSON(ctx context.Context, url string, creds Credentials, out
 		req.Header.Set("Cosy-MachineToken", machine)
 	}
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
 		return apiError(http.MethodGet, url, resp.StatusCode, raw)
 	}

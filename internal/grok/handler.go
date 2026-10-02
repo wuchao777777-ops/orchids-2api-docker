@@ -109,20 +109,14 @@ func (h *Handler) configSnapshot() *config.Config {
 	if h == nil {
 		return nil
 	}
-	h.runtimeMu.RLock()
-	cfg := h.cfg
-	h.runtimeMu.RUnlock()
-	return cfg
+	return util.ReadSnapshot(&h.runtimeMu, &h.cfg)
 }
 
 func (h *Handler) buildClient() *CLIClient {
 	if h == nil {
 		return nil
 	}
-	h.runtimeMu.RLock()
-	client := h.cliClient
-	h.runtimeMu.RUnlock()
-	return client
+	return util.ReadSnapshot(&h.runtimeMu, &h.cliClient)
 }
 
 func (h *Handler) SetAuditLogger(logger audit.Logger) {
@@ -137,10 +131,7 @@ func (h *Handler) auditLoggerSnapshot() audit.Logger {
 	if h == nil {
 		return nil
 	}
-	h.runtimeMu.RLock()
-	logger := h.auditLogger
-	h.runtimeMu.RUnlock()
-	return logger
+	return util.ReadSnapshot(&h.runtimeMu, &h.auditLogger)
 }
 
 func (h *Handler) auditAttempt(ctx context.Context, acc *store.Account, provider string, attempt int, started time.Time, err error, stages ...string) {
@@ -227,10 +218,7 @@ func (h *Handler) connTrackerSnapshot() loadbalancer.ConnTracker {
 	if h == nil {
 		return nil
 	}
-	h.runtimeMu.RLock()
-	tracker := h.connTracker
-	h.runtimeMu.RUnlock()
-	return tracker
+	return util.ReadSnapshot(&h.runtimeMu, &h.connTracker)
 }
 
 func (h *Handler) isModelValidationCached(modelID string) bool {

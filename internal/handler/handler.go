@@ -216,10 +216,7 @@ func (h *Handler) configSnapshot() *config.Config {
 	if h == nil {
 		return nil
 	}
-	h.configMu.RLock()
-	cfg := h.config
-	h.configMu.RUnlock()
-	return cfg
+	return util.ReadSnapshot(&h.configMu, &h.config)
 }
 
 // SetAuditLogger replaces the default nop audit logger.

@@ -101,12 +101,10 @@ func (c *Client) fetchModelListOnce(ctx context.Context, creds Credentials, fiel
 	// path's Accept header keeps a strict gateway from wrapping the reply.
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 4<<20)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
 		return nil, apiError(method, url, resp.StatusCode, raw)
 	}

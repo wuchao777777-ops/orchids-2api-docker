@@ -129,12 +129,10 @@ func (c *Client) PollLogin(ctx context.Context, tx *LoginTransaction) (Credentia
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent(c.clientVersion))
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
@@ -191,12 +189,10 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (Credentials,
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent(c.clientVersion))
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
 		err := apiError(http.MethodPost, endpoint, resp.StatusCode, raw)
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -252,12 +248,10 @@ func (c *Client) FetchProfile(ctx context.Context, accessToken string) (Profile,
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
 	req.Header.Set("User-Agent", userAgent(c.clientVersion))
 
-	resp, err := c.control.Do(req)
+	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Profile{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
 		return Profile{}, apiError(http.MethodGet, endpoint, resp.StatusCode, raw)
 	}
