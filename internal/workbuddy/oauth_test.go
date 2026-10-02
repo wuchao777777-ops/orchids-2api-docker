@@ -22,12 +22,8 @@ func TestStartAuthLogin_ClassifiesUnreachable(t *testing.T) {
 	client.baseURL = base
 
 	_, _, err := client.StartAuthLogin(context.Background(), "5.5.2")
-	if err == nil {
-		t.Fatal("StartAuthLogin() error = nil, want a failure")
-	}
-	if !errors.Is(err, ErrAuthUnavailable) {
-		t.Fatalf("error = %v, want ErrAuthUnavailable", err)
-	}
+	testutil.False(t, err == nil, "StartAuthLogin() error = nil, want a failure")
+	testutil.Falsef(t, !errors.Is(err, ErrAuthUnavailable), "error = %v, want ErrAuthUnavailable", err)
 }
 
 func TestProbeReachability_DetectsBlockedEgress(t *testing.T) {
@@ -39,9 +35,8 @@ func TestProbeReachability_DetectsBlockedEgress(t *testing.T) {
 
 	client := NewFromAccount(&store.Account{}, nil)
 	client.baseURL = base
-	if err := client.ProbeReachability(context.Background()); err == nil {
-		t.Fatal("ProbeReachability() = nil, want a reachability failure")
-	}
+	err := client.ProbeReachability(context.Background())
+	testutil.Error(t, err)
 
 	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
@@ -64,12 +59,8 @@ func TestStartAuthLogin_ClassifiesRejection(t *testing.T) {
 	client.baseURL = srv.URL
 
 	_, _, err := client.StartAuthLogin(context.Background(), "")
-	if err == nil {
-		t.Fatal("StartAuthLogin() error = nil, want a failure")
-	}
-	if !errors.Is(err, ErrAuthRejected) {
-		t.Fatalf("error = %v, want ErrAuthRejected", err)
-	}
+	testutil.False(t, err == nil, "StartAuthLogin() error = nil, want a failure")
+	testutil.Falsef(t, !errors.Is(err, ErrAuthRejected), "error = %v, want ErrAuthRejected", err)
 }
 
 func TestStartAuthLogin_RejectsForeignLoginHost(t *testing.T) {
@@ -84,12 +75,8 @@ func TestStartAuthLogin_RejectsForeignLoginHost(t *testing.T) {
 	client.baseURL = srv.URL
 
 	_, _, err := client.StartAuthLogin(context.Background(), "")
-	if err == nil {
-		t.Fatal("StartAuthLogin() accepted a foreign login host")
-	}
-	if !errors.Is(err, ErrAuthRejected) {
-		t.Fatalf("error = %v, want ErrAuthRejected", err)
-	}
+	testutil.False(t, err == nil, "StartAuthLogin() accepted a foreign login host")
+	testutil.Falsef(t, !errors.Is(err, ErrAuthRejected), "error = %v, want ErrAuthRejected", err)
 }
 
 func TestStartAuthLogin_AppendsClientVersion(t *testing.T) {
@@ -106,9 +93,7 @@ func TestStartAuthLogin_AppendsClientVersion(t *testing.T) {
 	client.baseURL = srv.URL
 
 	state, authURL, err := client.StartAuthLogin(context.Background(), "5.5.2")
-	if err != nil {
-		t.Fatalf("StartAuthLogin() error = %v", err)
-	}
+	testutil.NoError(t, err, "StartAuthLogin() error = %v")
 	testutil.Equal(t, state, "state-1")
 	testutil.MustContain(t, authURL, "version=5.5.2")
 }

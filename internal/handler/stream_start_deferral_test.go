@@ -56,9 +56,7 @@ func TestSharedRefusalRecoversInsideSingleRequest(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "http://x/qoder/v1/chat/completions", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
-	if stub.calls != 3 || rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ready") {
-		t.Fatalf("calls=%d status=%d body=%s", stub.calls, rec.Code, rec.Body.String())
-	}
+	testutil.Falsef(t, stub.calls != 3 || rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ready"), "calls=%d status=%d body=%s", stub.calls, rec.Code, rec.Body.String())
 }
 
 // TestStreamOpensOnlyWhenThereIsSomethingToSend pins the deferral: a streaming
@@ -71,9 +69,7 @@ func TestStreamOpensOnlyWhenThereIsSomethingToSend(t *testing.T) {
 	sh.pendingModel = "qwen3.8-flash"
 
 	testutil.Equal(t, rec.buf.String(), "")
-	if sh.hasCommitted() {
-		t.Fatal("hasCommitted() = true before any output")
-	}
+	testutil.False(t, sh.hasCommitted(), "hasCommitted() = true before any output")
 
 	sh.handleMessage(upstream.SSEMessage{
 		Type:  "model.text-delta",
@@ -83,16 +79,10 @@ func TestStreamOpensOnlyWhenThereIsSomethingToSend(t *testing.T) {
 	out := rec.buf.String()
 	startAt := strings.Index(out, "event: message_start")
 	textAt := strings.Index(out, `"text":"hello"`)
-	if startAt < 0 || textAt < 0 {
-		t.Fatalf("expected an opening frame followed by the text, got: %s", out)
-	}
-	if startAt > textAt {
-		t.Fatalf("content arrived before the opening frame: %s", out)
-	}
+	testutil.Falsef(t, startAt < 0 || textAt < 0, "expected an opening frame followed by the text, got: %s", out)
+	testutil.Falsef(t, startAt > textAt, "content arrived before the opening frame: %s", out)
 	testutil.Equal(t, strings.Count(out, "event: message_start"), 1)
-	if !sh.hasCommitted() {
-		t.Fatal("hasCommitted() = false after the opening frame was written")
-	}
+	testutil.False(t, !sh.hasCommitted(), "hasCommitted() = false after the opening frame was written")
 }
 
 // TestKeepAliveDoesNotCommitSilentStream keeps the HTTP status available for
@@ -104,13 +94,9 @@ func TestKeepAliveDoesNotCommitSilentStream(t *testing.T) {
 	sh.pendingModel = "qwen3.8-flash"
 
 	sh.writeKeepAlive()
-	if rec.buf.Len() != 0 || sh.hasCommitted() {
-		t.Fatalf("keep-alive prematurely opened response: %q", rec.buf.String())
-	}
+	testutil.Falsef(t, rec.buf.Len() != 0 || sh.hasCommitted(), "keep-alive prematurely opened response: %q", rec.buf.String())
 	sh.reportRequestFailure("queue refused", "rate_limit", "Qoder model queue unavailable", 0)
-	if !strings.Contains(rec.buf.String(), "Qoder model queue unavailable") || strings.Contains(rec.buf.String(), "event: message_start") {
-		t.Fatalf("queue failure was not returned as HTTP error: %q", rec.buf.String())
-	}
+	testutil.Falsef(t, !strings.Contains(rec.buf.String(), "Qoder model queue unavailable") || strings.Contains(rec.buf.String(), "event: message_start"), "queue failure was not returned as HTTP error: %q", rec.buf.String())
 }
 
 // TestKeepAliveContinuesAfterStreamOpens covers the usual keep-alive behavior
@@ -140,12 +126,8 @@ func TestTerminalOnlyResponseStillOpensTheStream(t *testing.T) {
 	startAt := strings.Index(out, "event: message_start")
 	deltaAt := strings.Index(out, "event: message_delta")
 	stopAt := strings.Index(out, "event: message_stop")
-	if startAt < 0 || deltaAt < 0 || stopAt < 0 {
-		t.Fatalf("expected opening and terminal frames, got: %s", out)
-	}
-	if !(startAt < deltaAt && deltaAt < stopAt) {
-		t.Fatalf("frames out of order: %s", out)
-	}
+	testutil.Falsef(t, startAt < 0 || deltaAt < 0 || stopAt < 0, "expected opening and terminal frames, got: %s", out)
+	testutil.Falsef(t, !(startAt < deltaAt && deltaAt < stopAt), "frames out of order: %s", out)
 }
 
 // TestSharedRefusalBeforeOutputUsesRetryWindow confirms that the server keeps
@@ -227,29 +209,21 @@ func TestSharedRefusalWaitBudgetIsBounded(t *testing.T) {
 	}
 	windows := int(sharedRefusalTotalWaitBudget / (30 * time.Second))
 	testutil.Equal(t, windows, 2)
-	if got := wallClock(windows); got >= edgeOriginTimeout {
-		t.Fatalf("worst case wall clock = %v, which the %v edge origin timeout cuts off", got, edgeOriginTimeout)
-	}
+	got := wallClock(windows)
+	testutil.Falsef(t, got >= edgeOriginTimeout, "worst case wall clock = %v, which the %v edge origin timeout cuts off", got, edgeOriginTimeout)
 	// And the window it refuses is exactly the one that would have overrun.
-	if got := wallClock(windows + 1); got < edgeOriginTimeout {
-		t.Fatalf("refusing the third window gives up %v of headroom; it should be the edge that forces the bound", edgeOriginTimeout-got)
-	}
+	got = wallClock(windows + 1)
+	testutil.Falsef(t, got < edgeOriginTimeout, "refusing the third window gives up %v of headroom; it should be the edge that forces the bound", edgeOriginTimeout-got)
 
 	// The configured form wins, and an operator raising it must actually get the
 	// longer window rather than being clamped back to the constant.
 	testutil.Equal(t, SharedRefusalWaitBudget(0), sharedRefusalTotalWaitBudget)
 	testutil.Equal(t, SharedRefusalWaitBudget(150000), 150*time.Second)
-	if !sharedRefusalWaitAllowedWithin(90*time.Second, 30*time.Second, SharedRefusalWaitBudget(150000)) {
-		t.Fatal("a raised budget must admit the window the default refuses")
-	}
+	testutil.False(t, !sharedRefusalWaitAllowedWithin(90*time.Second, 30*time.Second, SharedRefusalWaitBudget(150000)), "a raised budget must admit the window the default refuses")
 
 	// Raising it is legal — there is no edge proxy in every deployment — but it
 	// has to be flagged, because otherwise it is silent here and only visible to
 	// the caller as a 520 from the edge.
-	if SharedRefusalBudgetExceedsEdge(SharedRefusalWaitBudget(0)) {
-		t.Fatal("the built-in default must fit inside the edge, so it must not warn")
-	}
-	if !SharedRefusalBudgetExceedsEdge(SharedRefusalWaitBudget(90000)) {
-		t.Fatal("a 90s budget must be flagged: it is the setting that produced the 520")
-	}
+	testutil.False(t, SharedRefusalBudgetExceedsEdge(SharedRefusalWaitBudget(0)), "the built-in default must fit inside the edge, so it must not warn")
+	testutil.False(t, !SharedRefusalBudgetExceedsEdge(SharedRefusalWaitBudget(90000)), "a 90s budget must be flagged: it is the setting that produced the 520")
 }

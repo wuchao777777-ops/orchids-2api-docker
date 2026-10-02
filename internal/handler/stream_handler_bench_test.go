@@ -19,25 +19,17 @@ type discardFlushResponseWriter struct {
 	header http.Header
 }
 
-func (discardStringByteWriter) Write(p []byte) (int, error) {
-	return len(p), nil
-}
+func (discardStringByteWriter) Write(p []byte) (int, error) { return len(p), nil }
 
-func (discardStringByteWriter) WriteString(s string) (int, error) {
-	return len(s), nil
-}
+func (discardStringByteWriter) WriteString(s string) (int, error) { return len(s), nil }
 
 func newDiscardFlushResponseWriter() *discardFlushResponseWriter {
 	return &discardFlushResponseWriter{header: make(http.Header)}
 }
 
-func (w *discardFlushResponseWriter) Header() http.Header {
-	return w.header
-}
+func (w *discardFlushResponseWriter) Header() http.Header { return w.header }
 
-func (w *discardFlushResponseWriter) Write(p []byte) (int, error) {
-	return len(p), nil
-}
+func (w *discardFlushResponseWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func (w *discardFlushResponseWriter) WriteHeader(statusCode int) {}
 

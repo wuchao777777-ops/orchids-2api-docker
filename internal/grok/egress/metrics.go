@@ -40,18 +40,12 @@ var (
 	}, []string{"scope"})
 )
 
-func recordNodeSelection(scope string) {
-	grokEgressSelections.WithLabelValues(scope).Inc()
-}
+func recordNodeSelection(scope string) { grokEgressSelections.WithLabelValues(scope).Inc() }
 
 func recordNodeFailure(scope, reason string) {
 	grokEgressNodeFailures.WithLabelValues(scope, reason).Inc()
 }
 
-func recordNodeRecovery(scope string) {
-	grokEgressNodeRecoveries.WithLabelValues(scope).Inc()
-}
+func recordNodeRecovery(scope string) { grokEgressNodeRecoveries.WithLabelValues(scope).Inc() }
 
-func recordAllNodesUnhealthy(scope string) {
-	grokEgressAllNodesUnhealthy.WithLabelValues(scope).Inc()
-}
+func recordAllNodesUnhealthy(scope string) { grokEgressAllNodesUnhealthy.WithLabelValues(scope).Inc() }

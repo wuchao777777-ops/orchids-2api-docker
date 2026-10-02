@@ -33,9 +33,7 @@ func TestCLIDiagnosticsCaptureRequestResponseAndRetry(t *testing.T) {
 	ctx, capture := debug.WithCapture(context.Background(), "cli")
 	for i := 0; i < 2; i++ {
 		resp, err := c.request(ctx, &store.Account{OAuthAccessToken: "fake-private-token", OAuthExpiresAt: time.Now().Add(time.Hour)}, "POST", server.URL, []byte(`{"input":"hello"}`), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 		io.ReadAll(resp.Body)
 		resp.Body.Close()
 	}

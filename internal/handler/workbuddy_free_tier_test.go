@@ -73,9 +73,7 @@ func TestSpentAccountKeepsFreeOnlyStateAndScopesTheRefusedModel(t *testing.T) {
 	_ = first
 
 	after, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, after.StatusCode, store.AccountStatusWorkBuddyQuotaExhausted)
 	testutil.Equal(t, store.ModelCooldownKind(after, "hy3", time.Now()), store.ModelCooldownUnavailable)
 	if remaining := store.ModelCooldownRemaining(after, "hy3", time.Now()); remaining <= 0 {
@@ -140,9 +138,7 @@ func TestHealthyAccountStillServesFreeModels(t *testing.T) {
 	rec := workbuddyRequest(t, h, "hy3")
 	testutil.Equal(t, rec.Code, http.StatusOK)
 	after, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, store.ModelCooldownKind(after, "hy3", time.Now()), "")
 	testutil.MustContain(t, rec.Body.String(), "ok")
 }

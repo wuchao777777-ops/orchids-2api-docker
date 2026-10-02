@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -94,24 +95,15 @@ var nonTransientTransportMarkers = []string{
 }
 
 func containsAnyMarker(detail string, markers []string) bool {
-	for _, marker := range markers {
-		if strings.Contains(detail, marker) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(markers, func(marker string) bool { return strings.Contains(detail, marker) })
 }
 
 // IsContentPolicy reports whether the upstream refused the input on safety
 // grounds rather than because of capacity or credentials.
-func IsContentPolicy(detail string) bool {
-	return containsAnyMarker(detail, contentPolicyMarkers)
-}
+func IsContentPolicy(detail string) bool { return containsAnyMarker(detail, contentPolicyMarkers) }
 
 // IsClientFault reports a request the upstream rejected on its own merits.
-func IsClientFault(detail string) bool {
-	return containsAnyMarker(detail, clientFaultMarkers)
-}
+func IsClientFault(detail string) bool { return containsAnyMarker(detail, clientFaultMarkers) }
 
 // IsTransientUpstreamStatus reports whether an HTTP failure is a provider-side
 // hiccup the same account can wait out.
@@ -119,10 +111,7 @@ func IsClientFault(detail string) bool {
 // 401/403/429 are excluded on purpose: they are a credential, a permission and
 // a capacity window respectively, and each already has its own path.
 func IsTransientUpstreamStatus(status int, detail string) bool {
-	if status == 401 || status == 403 || status == 429 {
-		return false
-	}
-	if IsContentPolicy(detail) || IsClientFault(detail) {
+	if status == 401 || status == 403 || status == 429 || IsContentPolicy(detail) || IsClientFault(detail) {
 		return false
 	}
 	if transientStatusCodes[status] || status >= 500 {
@@ -136,10 +125,7 @@ func IsTransientUpstreamStatus(status int, detail string) bool {
 // IsTransientTransport reports a connection-level hiccup. A caller-side
 // cancellation is not one, and neither is a configuration or certificate fault.
 func IsTransientTransport(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	detail := err.Error()
@@ -220,6 +206,4 @@ func transientError(detail string) error {
 
 // isTransientError reports whether an error chain asks for a same-account
 // backoff retry.
-func isTransientError(err error) bool {
-	return errors.Is(err, ErrTransientUpstream)
-}
+func isTransientError(err error) bool { return errors.Is(err, ErrTransientUpstream) }

@@ -448,10 +448,7 @@ func (c *Client) ensureAccessToken(ctx context.Context) (Credentials, error) {
 // forceRefresh renews the credential unconditionally. The stream path calls it
 // after the upstream rejected a request that was otherwise well formed.
 func (c *Client) forceRefresh(ctx context.Context, rejected Credentials) error {
-	if strings.TrimSpace(rejected.RefreshToken) == "" {
-		return ErrReLoginRequired
-	}
-	if !rejected.RefreshExpiresAt.IsZero() && time.Now().After(rejected.RefreshExpiresAt) {
+	if strings.TrimSpace(rejected.RefreshToken) == "" || !rejected.RefreshExpiresAt.IsZero() && time.Now().After(rejected.RefreshExpiresAt) {
 		return ErrReLoginRequired
 	}
 	_, err := c.refresh(ctx, rejected)
@@ -723,9 +720,7 @@ func (c *Client) recordQuotaNotice(ctx context.Context, notice *QuotaNotice) {
 		// the window the notice describes is the one that just closed.
 		snapshot.ResetAt = notice.NextResetAt
 	}
-	if notice.UpgradeURL != "" {
-		snapshot.UpgradeURL = notice.UpgradeURL
-	}
+	snapshot.UpgradeURL = util.FirstNonEmpty(notice.UpgradeURL, snapshot.UpgradeURL)
 	c.stateMu.Lock()
 	if c.account != nil {
 		c.account.QoderQuota = snapshot
@@ -850,9 +845,7 @@ func NormalizeLoginResult(creds Credentials, machineID string) Credentials {
 }
 
 // CatalogSnapshot renders a catalog as the account's stored snapshot.
-func CatalogSnapshot(catalog *Catalog) []string {
-	return catalogToIDs(catalog)
-}
+func CatalogSnapshot(catalog *Catalog) []string { return catalogToIDs(catalog) }
 
 // ApplyProfile updates the client's private account snapshot as well as its
 // resolved identity. NewFromAccount copies its input, so changing the caller's

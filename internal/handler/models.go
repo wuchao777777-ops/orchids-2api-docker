@@ -70,10 +70,7 @@ func isVisiblePublicModel(m *store.Model, filterChannel string) (string, bool) {
 	}
 
 	mChannel := strings.TrimSpace(m.Channel)
-	if filterChannel != "" && !strings.EqualFold(mChannel, filterChannel) {
-		return mChannel, false
-	}
-	if !m.Status.Enabled() {
+	if filterChannel != "" && !strings.EqualFold(mChannel, filterChannel) || !m.Status.Enabled() {
 		return mChannel, false
 	}
 	if strings.EqualFold(mChannel, "grok") && !modelpolicy.IsVisibleGrokModel(m.ModelID, m.Verified) {
@@ -93,9 +90,7 @@ func externalPublicModelID(channel, internalID string) string {
 	return normalizeRequestedModelID(internalID)
 }
 
-func publicModelIDKey(id string) string {
-	return strings.ToLower(strings.TrimSpace(id))
-}
+func publicModelIDKey(id string) string { return strings.ToLower(strings.TrimSpace(id)) }
 
 // grokBuildProfiles returns the conservative capability view shared by every
 // enabled Build account that advertised a model.

@@ -15,9 +15,7 @@ import (
 func jsonReference(t *testing.T, value string) string {
 	t.Helper()
 	raw, err := json.Marshal(value)
-	if err != nil {
-		t.Fatalf("json.Marshal(%q): %v", value, err)
-	}
+	testutil.Falsef(t, err != nil, "json.Marshal(%q): %v", value, err)
 	return string(raw)
 }
 
@@ -70,9 +68,7 @@ func TestAppendJSONBytesMatchesEncodingJSON(t *testing.T) {
 	for _, value := range cases {
 		want := jsonReference(t, value)
 		got, err := appendJSONBytes(make([]byte, 0, 64), value)
-		if err != nil {
-			t.Fatalf("appendJSONBytes(%q): %v", value, err)
-		}
+		testutil.Falsef(t, err != nil, "appendJSONBytes(%q): %v", value, err)
 		testutil.Equal(t, string(got), want)
 
 		// canAppendJSONRawString must agree with what the encoder actually did: it
@@ -97,13 +93,10 @@ func TestAppendJSONBytesMatchesEncodingJSONOnRandomInput(t *testing.T) {
 
 		want := jsonReference(t, value)
 		got, err := appendJSONBytes(make([]byte, 0, 64), value)
-		if err != nil {
-			t.Fatalf("appendJSONBytes(%q): %v", value, err)
-		}
+		testutil.Falsef(t, err != nil, "appendJSONBytes(%q): %v", value, err)
 		testutil.Equal(t, string(got), want)
-		if raw, wantRaw := canAppendJSONRawString(value), want == `"`+value+`"`; raw != wantRaw {
-			t.Fatalf("canAppendJSONRawString(%q) = %v, want %v", value, raw, wantRaw)
-		}
+		raw, wantRaw := canAppendJSONRawString(value), want == `"`+value+`"`
+		testutil.Falsef(t, raw != wantRaw, "canAppendJSONRawString(%q) = %v, want %v", value, raw, wantRaw)
 	}
 }
 
@@ -116,15 +109,10 @@ func TestAppendJSONBytesAppendsToExistingPrefix(t *testing.T) {
 	for _, value := range []string{`ok`, "bad \xff", "escaped \" prefix then bad \xff", `quote "` + strings.Repeat("x", 20)} {
 		dst := append([]byte(nil), prefix...)
 		got, err := appendJSONBytes(dst, value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.HasPrefix(string(got), "PREFIX") {
-			t.Fatalf("prefix lost: %q", got)
-		}
-		if want := "PREFIX" + jsonReference(t, value); string(got) != want {
-			t.Fatalf("got %q want %q", got, want)
-		}
+		testutil.NoError(t, err)
+		testutil.Falsef(t, !strings.HasPrefix(string(got), "PREFIX"), "prefix lost: %q", got)
+		want := "PREFIX" + jsonReference(t, value)
+		testutil.Falsef(t, string(got) != want, "got %q want %q", got, want)
 	}
 }
 

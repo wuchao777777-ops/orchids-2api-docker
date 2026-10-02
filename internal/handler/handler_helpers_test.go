@@ -24,9 +24,7 @@ func newTestRedisStore(t *testing.T, prefix string) *store.Store {
 	t.Helper()
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: prefix})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
@@ -40,15 +38,11 @@ func setupModelValidationHandler(t *testing.T) (*Handler, *store.Store, *minired
 		RedisDB:     0,
 		RedisPrefix: "test:",
 	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
 	h := NewWithLoadBalancer(nil, lb)
-	t.Cleanup(func() {
-		_ = s.Close()
-	})
+	t.Cleanup(func() { _ = s.Close() })
 	return h, s, mini
 }
 
@@ -77,9 +71,8 @@ func publishModel(t *testing.T, s *store.Store, records ...*store.Model) {
 			record.Origin = "discovery"
 		}
 		record.Verified = true
-		if err := s.CreateModel(ctx, record); err != nil {
-			t.Fatalf("CreateModel(%s/%s) error = %v", record.Channel, record.ModelID, err)
-		}
+		err := s.CreateModel(ctx, record)
+		testutil.CheckNoError(t, err)
 	}
 }
 
@@ -90,12 +83,8 @@ func TestValidateModelAvailability_WorkBuddyUsesChannelSpecificModel(t *testing.
 	publishModel(t, s, &store.Model{Channel: "WorkBuddy", ModelID: "claude-opus-5"})
 
 	got, err := h.validateModelAvailability(ctx, "claude-opus-5", "workbuddy")
-	if err != nil {
-		t.Fatalf("validateModelAvailability() error = %v", err)
-	}
-	if got == nil {
-		t.Fatal("validateModelAvailability() returned nil model")
-	}
+	testutil.NoError(t, err, "validateModelAvailability() error = %v")
+	testutil.False(t, got == nil, "validateModelAvailability() returned nil model")
 	testutil.Equal(t, got.Channel, "WorkBuddy")
 	testutil.Equal(t, got.ModelID, "claude-opus-5")
 }
@@ -112,9 +101,8 @@ func TestSelectAccountRecord_WorkBuddyParksModelNotAccount(t *testing.T) {
 	refused := &store.Account{Name: "wb-paid", AccountType: "workbuddy", WorkBuddyAccessToken: "paid-token", Enabled: true, Weight: 1}
 	spare := &store.Account{Name: "wb-spare", AccountType: "workbuddy", WorkBuddyAccessToken: "spare-token", Enabled: true, Weight: 1}
 	for _, acc := range []*store.Account{refused, spare} {
-		if err := s.CreateAccount(ctx, acc); err != nil {
-			t.Fatalf("CreateAccount(%s) error = %v", acc.Name, err)
-		}
+		err := s.CreateAccount(ctx, acc)
+		testutil.CheckNoError(t, err)
 	}
 
 	// The paid model was refused with 402 on the first account.
@@ -122,16 +110,12 @@ func TestSelectAccountRecord_WorkBuddyParksModelNotAccount(t *testing.T) {
 	testutil.NoError(t, s.UpdateAccount(ctx, refused), "UpdateAccount() error = %v")
 
 	account, err := h.selectAccountRecordWithOptions(ctx, "workbuddy", nil, accountSelectionOptions{ModelID: "paid-model"})
-	if err != nil {
-		t.Fatalf("selectAccountRecordWithOptions() error = %v", err)
-	}
+	testutil.NoError(t, err, "selectAccountRecordWithOptions() error = %v")
 	testutil.Equal(t, account.ID, spare.ID)
 
 	// Only the named model is parked: the refused account still serves free models.
 	account, err = h.selectAccountRecordWithOptions(ctx, "workbuddy", []int64{spare.ID}, accountSelectionOptions{ModelID: "free-model"})
-	if err != nil {
-		t.Fatalf("selectAccountRecordWithOptions(free-model) error = %v", err)
-	}
+	testutil.NoError(t, err, "selectAccountRecordWithOptions(free-model) error = %v")
 	testutil.Equal(t, account.ID, refused.ID)
 }
 
@@ -144,9 +128,7 @@ func TestSelectAccountRecord_ClineEnforcesPerAccountCatalog(t *testing.T) {
 		testutil.NoError(t, s.CreateAccount(ctx, acc))
 	}
 	selected, err := h.selectAccountRecordWithOptions(ctx, "cline", nil, accountSelectionOptions{ModelID: "model-b"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, selected.ID, second.ID)
 }
 
@@ -162,9 +144,8 @@ func mustCreateModel(t *testing.T, s *store.Store, id string, channel, modelID s
 		IsDefault: false,
 		SortOrder: 0,
 	}
-	if err := s.UpdateModel(context.Background(), m); err != nil {
-		t.Fatalf("UpdateModel(%s) error = %v", modelID, err)
-	}
+	err := s.UpdateModel(context.Background(), m)
+	testutil.CheckNoError(t, err)
 	return m
 }
 
@@ -177,10 +158,8 @@ func TestValidateModelAvailability_RejectsOfflineExactMatchEvenWhenAliasExists(t
 
 	mustCreateModel(t, s, "200", "WorkBuddy", "claude-opus-4.6", store.ModelStatusAvailable)
 
-	got, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "workbuddy")
-	if err == nil {
-		t.Fatalf("validateModelAvailability() error = nil, got model=%v", got)
-	}
+	_, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "workbuddy")
+	testutil.Error(t, err, "validateModelAvailability() error = nil, got model=%v")
 	testutil.Equal(t, err.Error(), "model not available")
 }
 
@@ -194,9 +173,7 @@ func TestValidateModelAvailability_ReturnsOfflineExactMatch(t *testing.T) {
 	mustCreateModel(t, s, "201", "WorkBuddy", "claude-opus-4.6", store.ModelStatusOffline)
 
 	_, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "workbuddy")
-	if err == nil {
-		t.Fatal("validateModelAvailability() error = nil, want model not available")
-	}
+	testutil.False(t, err == nil, "validateModelAvailability() error = nil, want model not available")
 	testutil.Equal(t, err.Error(), "model not available")
 }
 
@@ -295,9 +272,7 @@ func TestRequestReasoningEffort(t *testing.T) {
 		{"no hint", ClaudeRequest{}, ""},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			testutil.Equal(t, requestReasoningEffort(tc.req), tc.want)
-		})
+		t.Run(tc.name, func(t *testing.T) { testutil.Equal(t, requestReasoningEffort(tc.req), tc.want) })
 	}
 }
 
@@ -310,12 +285,8 @@ func newEffortResolutionHandler(t *testing.T, models ...string) (*Handler, *fake
 		RedisDB:     0,
 		RedisPrefix: "test:",
 	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-	})
+	testutil.NoError(t, err, "store.New() error = %v")
+	t.Cleanup(func() { _ = s.Close() })
 	if err := s.CreateAccount(context.Background(), &store.Account{
 		Name:         "workbuddy-1",
 		AccountType:  "workbuddy",
@@ -362,9 +333,8 @@ func TestHandleMessages_ResolvesEffortFromAnthropicHints(t *testing.T) {
 			testutil.Equal(t, rec.Code, http.StatusOK)
 			client.mu.Lock()
 			defer client.mu.Unlock()
-			if len(client.calls) != 1 || client.calls[0].Model != tc.want {
-				t.Fatalf("upstream calls = %+v, want model %q", client.calls, tc.want)
-			}
+			testutil.Equal(t, len(client.calls), 1)
+			testutil.Equal(t, client.calls[0].Model, tc.want)
 		})
 	}
 }
@@ -432,9 +402,7 @@ func TestChannelLookupResolvesAnEffortFamilyName(t *testing.T) {
 	mustCreateModel(t, s, "341", "WorkBuddy", "claude-opus-5-medium", store.ModelStatusAvailable)
 
 	channel, err := h.LookupChannelForModel(context.Background(), "claude-opus-5")
-	if err != nil {
-		t.Fatalf("LookupChannelForModel() error = %v", err)
-	}
+	testutil.NoError(t, err, "LookupChannelForModel() error = %v")
 	testutil.Equal(t, channel, "WorkBuddy")
 	testutil.Equal(t, h.ChannelForModel(context.Background(), "claude-opus-5"), "WorkBuddy")
 	testutil.Equal(t, h.ChannelForModel(context.Background(), "gpt-9-unknown"), "")

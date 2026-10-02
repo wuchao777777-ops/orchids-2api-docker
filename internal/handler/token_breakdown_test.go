@@ -19,24 +19,16 @@ func TestEstimateInputTokenBreakdown_SplitsSystemContext(t *testing.T) {
 		map[string]interface{}{
 			"type": "function",
 			"function": map[string]interface{}{
-				"name": "Read",
-				"parameters": map[string]interface{}{
-					"type": "object",
-				},
+				"name":       "Read",
+				"parameters": map[string]interface{}{"type": "object"},
 			},
 		},
 	}
 
 	bd := estimateInputTokenBreakdown(prompt, tools)
-	if bd.SystemContextTokens <= 0 {
-		t.Fatalf("expected system_context tokens > 0")
-	}
-	if bd.BasePromptTokens <= 0 {
-		t.Fatalf("expected base prompt tokens > 0")
-	}
-	if bd.ToolsTokens <= 0 {
-		t.Fatalf("expected tools tokens > 0")
-	}
+	testutil.False(t, bd.SystemContextTokens <= 0, "expected system_context tokens > 0")
+	testutil.False(t, bd.BasePromptTokens <= 0, "expected base prompt tokens > 0")
+	testutil.False(t, bd.ToolsTokens <= 0, "expected tools tokens > 0")
 	testutil.Equal(t, bd.Total, bd.BasePromptTokens+bd.SystemContextTokens+bd.HistoryTokens+bd.ToolsTokens)
 }
 
@@ -53,9 +45,8 @@ func TestEstimateInputTokenBreakdown_ProductionFallbackAlwaysPositive(t *testing
 		{name: "only tools", prompt: "request", tools: []interface{}{map[string]interface{}{"name": "Read"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := estimateInputTokenBreakdown(tc.prompt, tc.tools); got.Total < 1 {
-				t.Fatalf("builtPrompt=%q tools=%v: total=%d, want positive", tc.prompt, tc.tools, got.Total)
-			}
+			got := estimateInputTokenBreakdown(tc.prompt, tc.tools)
+			testutil.Falsef(t, got.Total < 1, "builtPrompt=%q tools=%v: total=%d, want positive", tc.prompt, tc.tools, got.Total)
 		})
 	}
 }
@@ -70,18 +61,14 @@ func TestHandleCountTokens_ReturnsBreakdown(t *testing.T) {
 	}, nil)
 
 	reqBody := map[string]interface{}{
-		"model": "claude-3-5-sonnet",
-		"messages": []map[string]interface{}{
-			{"role": "user", "content": "What is dependency injection?"},
-		},
+		"model":    "claude-3-5-sonnet",
+		"messages": []map[string]interface{}{{"role": "user", "content": "What is dependency injection?"}},
 		"tools": []map[string]interface{}{
 			{
 				"type": "function",
 				"function": map[string]interface{}{
-					"name": "Read",
-					"parameters": map[string]interface{}{
-						"type": "object",
-					},
+					"name":       "Read",
+					"parameters": map[string]interface{}{"type": "object"},
 				},
 			},
 		},
@@ -95,23 +82,17 @@ func TestHandleCountTokens_ReturnsBreakdown(t *testing.T) {
 
 	var resp map[string]interface{}
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "decode response: %v")
-	if v, ok := resp["input_tokens"].(float64); !ok || v <= 0 {
-		t.Fatalf("expected positive input_tokens, got %#v", resp["input_tokens"])
-	}
-	if _, ok := resp["prompt_profile"].(string); !ok {
-		t.Fatalf("expected prompt_profile string, got %#v", resp["prompt_profile"])
-	}
+	v, ok := resp["input_tokens"].(float64)
+	testutil.Falsef(t, !ok || v <= 0, "expected positive input_tokens, got %#v", resp["input_tokens"])
+	_, ok = resp["prompt_profile"].(string)
+	testutil.Falsef(t, !ok, "expected prompt_profile string, got %#v", resp["prompt_profile"])
 	breakdown, ok := resp["breakdown"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected breakdown object, got %#v", resp["breakdown"])
-	}
+	testutil.True(t, ok, "expected breakdown object, got %#v")
 	required := []string{"base_prompt_tokens", "system_context_tokens", "history_tokens", "tools_tokens"}
 	for _, key := range required {
-		if _, ok := breakdown[key].(float64); !ok {
-			t.Fatalf("expected breakdown key %q as number, got %#v", key, breakdown[key])
-		}
+		_, ok := breakdown[key].(float64)
+		testutil.Falsef(t, !ok, "expected breakdown key %q as number, got %#v", key, breakdown[key])
 	}
-	if toolsTokens, _ := breakdown["tools_tokens"].(float64); toolsTokens <= 0 {
-		t.Fatalf("expected positive tools_tokens, got %#v", breakdown["tools_tokens"])
-	}
+	toolsTokens, _ := breakdown["tools_tokens"].(float64)
+	testutil.Falsef(t, toolsTokens <= 0, "expected positive tools_tokens, got %#v", breakdown["tools_tokens"])
 }

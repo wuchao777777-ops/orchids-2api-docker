@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"orchids-api/internal/util"
 	"strings"
 	"time"
 
@@ -27,9 +28,7 @@ func NewRedisSessionBackend(client *redis.Client, prefix string) SessionBackend 
 		return nil
 	}
 	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		prefix = "orchids:"
-	}
+	prefix = util.FirstNonEmptyUntrimmed(prefix, "orchids:")
 	if !strings.HasSuffix(prefix, ":") {
 		prefix += ":"
 	}

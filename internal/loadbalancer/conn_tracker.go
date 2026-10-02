@@ -36,9 +36,7 @@ type MemoryConnTracker struct {
 	conns sync.Map // map[int64]*atomic.Int64
 }
 
-func NewMemoryConnTracker() *MemoryConnTracker {
-	return &MemoryConnTracker{}
-}
+func NewMemoryConnTracker() *MemoryConnTracker { return &MemoryConnTracker{} }
 
 func (t *MemoryConnTracker) Acquire(accountID int64) {
 	val, _ := t.conns.LoadOrStore(accountID, &atomic.Int64{})
@@ -178,9 +176,7 @@ func (t *RedisConnTracker) key(accountID int64) string {
 	return fmt.Sprintf("%s%d", t.prefix, accountID)
 }
 
-func (t *RedisConnTracker) Acquire(accountID int64) {
-	_, _ = t.acquire(accountID, 0)
-}
+func (t *RedisConnTracker) Acquire(accountID int64) { _, _ = t.acquire(accountID, 0) }
 
 func (t *RedisConnTracker) TryAcquire(accountID int64, limit int64) bool {
 	_, ok := t.acquire(accountID, limit)

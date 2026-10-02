@@ -23,32 +23,19 @@ func TestBuildCapabilitySnapshotAndRateLimitsDoNotBecomeBilling(t *testing.T) {
 	headers.Set("x-ratelimit-remaining-requests", "19")
 	headers.Set("x-ratelimit-limit-tokens", "8300")
 	headers.Set("x-ratelimit-remaining-tokens", "8192")
-	if !ApplyBuildRateLimits(acc, headers) {
-		t.Fatal("ApplyBuildRateLimits() = false")
-	}
-	if acc.GrokRateLimits.Tokens.Limit != 8300 || acc.GrokBilling.Weekly.HasUsage {
-		t.Fatalf("rate limits/billing mixed: %+v %+v", acc.GrokRateLimits, acc.GrokBilling)
-	}
-	if !ApplyCLIBillingInfo(acc, &CLIBillingInfo{UsagePercent: 12, HasUsagePercent: true, PeriodEnd: time.Now().Add(time.Hour)}) {
-		t.Fatal("ApplyCLIBillingInfo() = false")
-	}
-	if acc.UsageCurrent != 0 || acc.UsageLimit != 0 {
-		t.Fatalf("legacy flat quota not cleared: %v/%v", acc.UsageCurrent, acc.UsageLimit)
-	}
-	if !acc.GrokBilling.Weekly.HasUsage || acc.GrokBilling.Weekly.UsagePercent != 12 || acc.GrokRateLimits.Tokens.Limit != 8300 {
-		t.Fatalf("billing/rate-limit separation lost: %+v %+v", acc.GrokBilling, acc.GrokRateLimits)
-	}
+	testutil.False(t, !ApplyBuildRateLimits(acc, headers), "ApplyBuildRateLimits() = false")
+	testutil.Falsef(t, acc.GrokRateLimits.Tokens.Limit != 8300 || acc.GrokBilling.Weekly.HasUsage, "rate limits/billing mixed: %+v %+v", acc.GrokRateLimits, acc.GrokBilling)
+	testutil.False(t, !ApplyCLIBillingInfo(acc, &CLIBillingInfo{UsagePercent: 12, HasUsagePercent: true, PeriodEnd: time.Now().Add(time.Hour)}), "ApplyCLIBillingInfo() = false")
+	testutil.Equal(t, acc.UsageCurrent, 0)
+	testutil.Equal(t, acc.UsageLimit, 0)
+	testutil.Falsef(t, !acc.GrokBilling.Weekly.HasUsage || acc.GrokBilling.Weekly.UsagePercent != 12 || acc.GrokRateLimits.Tokens.Limit != 8300, "billing/rate-limit separation lost: %+v %+v", acc.GrokBilling, acc.GrokRateLimits)
 }
 
 func TestAccountSupportsModelUsesObservedBuildCatalog(t *testing.T) {
 	acc := &store.Account{AccountType: "grok", CredentialType: "oauth"}
-	if !AccountSupportsModel(acc, "grok-4.6") {
-		t.Fatal("unsynced account should remain eligible until its catalog is read")
-	}
+	testutil.False(t, !AccountSupportsModel(acc, "grok-4.6"), "unsynced account should remain eligible until its catalog is read")
 	ApplyCLIModelCatalog(acc, []modelcatalog.Profile{{ModelID: "grok-4.5"}}, time.Now())
-	if AccountSupportsModel(acc, "grok-4.6") || !AccountSupportsModel(acc, "grok-4.5") {
-		t.Fatalf("observed catalog not enforced: %#v", acc.GrokModels)
-	}
+	testutil.Falsef(t, AccountSupportsModel(acc, "grok-4.6") || !AccountSupportsModel(acc, "grok-4.5"), "observed catalog not enforced: %#v", acc.GrokModels)
 }
 
 // TestApplyCLIModelCatalogRestoresGrok2APICatalogCompletion checks observed
@@ -60,18 +47,12 @@ func TestApplyCLIModelCatalogRestoresGrok2APICatalogCompletion(t *testing.T) {
 	want := []string{"grok-4.6", "grok-imagine-video-1.5", "grok-4.5", "grok-composer-2.5-fast"}
 	testutil.Equal(t, len(acc.GrokModels), len(want))
 	for i, model := range want {
-		if !strings.EqualFold(acc.GrokModels[i], model) {
-			t.Fatalf("catalog = %#v, want %#v", acc.GrokModels, want)
-		}
+		testutil.Falsef(t, !strings.EqualFold(acc.GrokModels[i], model), "catalog = %#v, want %#v", acc.GrokModels, want)
 	}
 	for _, derived := range want[2:] {
-		if !AccountSupportsModel(acc, derived) {
-			t.Fatalf("derived capability %q is missing: %#v", derived, acc.GrokModels)
-		}
+		testutil.True(t, AccountSupportsModel(acc, derived), "derived capability %q is missing: %#v")
 	}
-	if acc.GrokModelsSyncedAt.IsZero() {
-		t.Fatal("the snapshot was not dated")
-	}
+	testutil.False(t, acc.GrokModelsSyncedAt.IsZero(), "the snapshot was not dated")
 }
 
 // The only capability grok2api gates on tier is the video 1.5 entry: a Super

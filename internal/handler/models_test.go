@@ -98,12 +98,9 @@ func TestHandleModelsPublishesConservativeEnabledBuildProfile(t *testing.T) {
 			break
 		}
 	}
-	if got == nil {
-		t.Fatalf("grok-4.6 missing: %+v", payload.Data)
-	}
-	if strings.Join(got.ReasoningEfforts, ",") != "low,high" || got.DefaultReasoningEffort != "high" {
-		t.Fatalf("reasoning metadata=%+v", *got)
-	}
+	testutil.Falsef(t, got == nil, "grok-4.6 missing: %+v", payload.Data)
+	testutil.Equal(t, strings.Join(got.ReasoningEfforts, ","), "low,high")
+	testutil.Equal(t, got.DefaultReasoningEffort, "high")
 	if got.SupportsReasoningEffort == nil || !*got.SupportsReasoningEffort || got.SupportsBackendSearch == nil || *got.SupportsBackendSearch {
 		t.Fatalf("feature metadata=%+v", *got)
 	}

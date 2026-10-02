@@ -51,20 +51,14 @@ func TestClassifyGlobalQueueRefusalWaitsWithoutHoldingTheAccount(t *testing.T) {
 			// The account must stay in the pool: no account status, and a scope
 			// that is not the account or the credential.
 			testutil.CheckEqual(t, verdict.Status, "")
-			if verdict.Scope == ScopeAccount || verdict.Scope == ScopeCredential {
-				t.Errorf("scope = %q, want a scope that does not hold the account", verdict.Scope)
-			}
+			testutil.CheckFalsef(t, verdict.Scope == ScopeAccount || verdict.Scope == ScopeCredential, "scope = %q, want a scope that does not hold the account", verdict.Scope)
 			// Nothing is persisted. A model cooldown here would take this account,
 			// and then every other one, out of selection for the window, which is
 			// the fail-fast this replaces.
 			testutil.CheckEqual(t, verdict.Cooldown, 0)
 			// Wait and retry, on the account already held.
-			if !verdict.Retryable {
-				t.Error("Retryable = false; a short queue window should be waited out, not failed")
-			}
-			if verdict.SwitchAccount {
-				t.Error("SwitchAccount = true; rotating multiplies one shared refusal across every account")
-			}
+			testutil.CheckFalse(t, !verdict.Retryable, "Retryable = false; a short queue window should be waited out, not failed")
+			testutil.CheckFalse(t, verdict.SwitchAccount, "SwitchAccount = true; rotating multiplies one shared refusal across every account")
 			testutil.CheckEqual(t, verdict.Model, "qwen3.8-flash")
 		})
 	}
@@ -79,9 +73,7 @@ func TestClassifyAccountScopedRateLimitStillRotates(t *testing.T) {
 
 	testutil.CheckEqual(t, verdict.Status, "429")
 	testutil.CheckEqual(t, verdict.Scope, ScopeAccount)
-	if !verdict.SwitchAccount || !verdict.Retryable {
-		t.Error("a genuine per-account throttle must still switch accounts and retry")
-	}
+	testutil.CheckFalse(t, !verdict.SwitchAccount || !verdict.Retryable, "a genuine per-account throttle must still switch accounts and retry")
 	testutil.CheckEqual(t, verdict.Cooldown, 2*time.Minute)
 }
 
@@ -103,9 +95,7 @@ func TestClassifyGlobalRefusalIgnoresAnUnusableHint(t *testing.T) {
 			verdict := Classify(acc, tc.err, "qwen3.8-flash")
 			testutil.CheckEqual(t, verdict.Cooldown, 0)
 			testutil.CheckEqual(t, verdict.Status, "")
-			if !verdict.Retryable || verdict.SwitchAccount {
-				t.Errorf("retryable=%v switch=%v, want a wait on the same account", verdict.Retryable, verdict.SwitchAccount)
-			}
+			testutil.CheckFalsef(t, !verdict.Retryable || verdict.SwitchAccount, "retryable=%v switch=%v, want a wait on the same account", verdict.Retryable, verdict.SwitchAccount)
 		})
 	}
 }
@@ -128,9 +118,7 @@ func TestRetryLoopAndAccountPolicyAgreeOnSwitching(t *testing.T) {
 			class := apperrors.ClassifyUpstreamError(message)
 
 			testutil.Equal(t, verdict.SwitchAccount, class.SwitchAccount)
-			if verdict.SwitchAccount {
-				t.Error("a refusal every account meets must not rotate the pool")
-			}
+			testutil.CheckFalse(t, verdict.SwitchAccount, "a refusal every account meets must not rotate the pool")
 			testutil.CheckEqual(t, verdict.Status, "")
 		})
 	}
@@ -150,13 +138,9 @@ func TestGlobalRefusalSurvivesEscapedNesting(t *testing.T) {
 	verdict := Classify(acc, qoderBusyError{message: escaped, wait: 30 * time.Second}, "qwen3.8-flash")
 
 	testutil.Equal(t, verdict.Status, "")
-	if verdict.Scope == ScopeAccount || verdict.Scope == ScopeCredential {
-		t.Fatalf("scope = %q, want a scope that does not hold the account", verdict.Scope)
-	}
+	testutil.Falsef(t, verdict.Scope == ScopeAccount || verdict.Scope == ScopeCredential, "scope = %q, want a scope that does not hold the account", verdict.Scope)
 	testutil.Equal(t, verdict.Cooldown, 0)
-	if verdict.SwitchAccount {
-		t.Fatal("SwitchAccount = true; rotating multiplies one shared refusal")
-	}
+	testutil.False(t, verdict.SwitchAccount, "SwitchAccount = true; rotating multiplies one shared refusal")
 }
 
 // TestDeadCredentialStillRotates guards the other direction of the same wiring.
@@ -171,12 +155,8 @@ func TestDeadCredentialStillRotates(t *testing.T) {
 	class := apperrors.ClassifyUpstreamError(refused)
 
 	testutil.Equal(t, verdict.Status, "401")
-	if !verdict.SwitchAccount {
-		t.Error("SwitchAccount = false; a refused credential must let the pool try another account")
-	}
-	if !verdict.NeedsLogin {
-		t.Error("NeedsLogin = false; waiting cannot repair a credential the upstream retired")
-	}
+	testutil.CheckFalse(t, !verdict.SwitchAccount, "SwitchAccount = false; a refused credential must let the pool try another account")
+	testutil.CheckFalse(t, !verdict.NeedsLogin, "NeedsLogin = false; waiting cannot repair a credential the upstream retired")
 	testutil.Equal(t, verdict.SwitchAccount, class.SwitchAccount)
 }
 

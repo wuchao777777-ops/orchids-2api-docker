@@ -36,9 +36,7 @@ func TestHandleModels_FiltersAPIKeyModelAllowlist(t *testing.T) {
 
 	testutil.Equal(t, rec.Code, http.StatusOK)
 	body := rec.Body.String()
-	if !strings.Contains(body, "grok-4.6") || strings.Contains(body, "grok-4.5") || strings.Contains(body, "grok-imagine-image") {
-		t.Fatalf("unexpected filtered models: %s", body)
-	}
+	testutil.Falsef(t, !strings.Contains(body, "grok-4.6") || strings.Contains(body, "grok-4.5") || strings.Contains(body, "grok-imagine-image"), "unexpected filtered models: %s", body)
 }
 
 func TestHandleModelByID_HidesOfflineModel(t *testing.T) {

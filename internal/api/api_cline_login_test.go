@@ -96,9 +96,7 @@ func TestHandleClineLogin_StartHidesDeviceCode(t *testing.T) {
 	}
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response), "decode response: %v")
 	testutil.NotEqual(t, response.ID, "")
-	if response.VerifyURI == "" || response.VerifyFull == "" {
-		t.Fatalf("start returned no verification page: %+v", response)
-	}
+	testutil.Falsef(t, response.VerifyURI == "" || response.VerifyFull == "", "start returned no verification page: %+v", response)
 	testutil.NotEqual(t, response.UserCode, "")
 	testutil.CheckEqual(t, response.DeviceCode, "")
 	testutil.CheckNotContain(t, rec.Body.String(), "dev-1")
@@ -138,9 +136,7 @@ func TestHandleClineLogin_PollPersistsOAuthAccount(t *testing.T) {
 		}
 		testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &state), "decode poll: %v")
 		accounts, err := s.ListAccounts(t.Context())
-		if err != nil {
-			t.Fatalf("list accounts: %v", err)
-		}
+		testutil.NoError(t, err, "list accounts: %v")
 		for _, acc := range accounts {
 			if strings.EqualFold(acc.AccountType, "cline") {
 				stored = acc
@@ -151,22 +147,12 @@ func TestHandleClineLogin_PollPersistsOAuthAccount(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if stored == nil {
-		t.Fatal("login completed without storing a cline account")
-	}
-	if stored.ClineAccessToken == "" || stored.ClineRefreshToken == "" {
-		t.Fatalf("stored account is missing the cline pair: %+v", stored)
-	}
+	testutil.False(t, stored == nil, "login completed without storing a cline account")
+	testutil.Falsef(t, stored.ClineAccessToken == "" || stored.ClineRefreshToken == "", "stored account is missing the cline pair: %+v", stored)
 	testutil.CheckEqual(t, stored.ClineEmail, "operator@example.com")
-	if len(stored.ClineModelIDs) != 1 || !strings.Contains(stored.ClineModelIDs[0], "x-ai/grok-4.1-fast") {
-		t.Errorf("model ids = %v, want the recommended-models feed", stored.ClineModelIDs)
-	}
-	if stored.ClineModelsSyncedAt.IsZero() {
-		t.Error("model sync timestamp is zero after successful login catalog read")
-	}
-	if stored.Token != "" || stored.RefreshToken != "" || stored.ClientCookie != "" {
-		t.Errorf("stored account wrote a generic credential slot: %+v", stored)
-	}
+	testutil.CheckFalsef(t, len(stored.ClineModelIDs) != 1 || !strings.Contains(stored.ClineModelIDs[0], "x-ai/grok-4.1-fast"), "model ids = %v, want the recommended-models feed", stored.ClineModelIDs)
+	testutil.CheckFalse(t, stored.ClineModelsSyncedAt.IsZero(), "model sync timestamp is zero after successful login catalog read")
+	testutil.CheckFalsef(t, stored.Token != "" || stored.RefreshToken != "" || stored.ClientCookie != "", "stored account wrote a generic credential slot: %+v", stored)
 	testutil.CheckEqual(t, auth.registerBody["accessToken"], "workos-access")
 }
 
@@ -183,9 +169,7 @@ func TestHandleClineLogin_RejectsManualCredential(t *testing.T) {
 	testutil.Equal(t, rec.Code, http.StatusBadRequest)
 	testutil.CheckContain(t, strings.ToLower(rec.Body.String()), "cline/login")
 	accounts, err := s.ListAccounts(t.Context())
-	if err != nil {
-		t.Fatalf("list accounts: %v", err)
-	}
+	testutil.NoError(t, err, "list accounts: %v")
 	testutil.Equal(t, len(accounts), 0)
 }
 
@@ -202,13 +186,9 @@ func TestHandleClineLogin_AccountOutputHidesRefreshToken(t *testing.T) {
 	}
 	testutil.NoError(t, s.CreateAccount(t.Context(), acc), "create account: %v")
 	out := normalizeAccountOutput(acc)
-	if out == nil || out.Account == nil {
-		t.Fatal("normalizeAccountOutput returned nothing")
-	}
+	testutil.False(t, out == nil || out.Account == nil, "normalizeAccountOutput returned nothing")
 	testutil.CheckEqual(t, out.Account.ClineRefreshToken, "")
 	raw, err := json.Marshal(out)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testutil.NoError(t, err, "marshal: %v")
 	testutil.CheckNotContain(t, string(raw), "refresh-secret")
 }

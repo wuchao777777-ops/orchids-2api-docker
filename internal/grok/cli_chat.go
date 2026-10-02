@@ -40,9 +40,7 @@ func (h *Handler) doCLIWithAutoSwitchAt(ctx context.Context, sess *chatAccountSe
 	if err != nil {
 		return nil, err
 	}
-	prepare := func() error {
-		return prepareBuildPayload(immutable, payload, sess.acc, modelID)
-	}
+	prepare := func() error { return prepareBuildPayload(immutable, payload, sess.acc, modelID) }
 	if err := prepare(); err != nil {
 		return nil, err
 	}

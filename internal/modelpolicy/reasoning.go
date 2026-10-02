@@ -1,6 +1,9 @@
 package modelpolicy
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // reasoningEffortCapabilities maps an upstream model slug to the effort levels
 // its wire contract accepts. A slug that is absent falls back to "none" only,
@@ -47,10 +50,5 @@ func SupportedReasoningEfforts(publicID string) []string {
 // SupportsReasoningEffort reports whether the model accepts the given level.
 func SupportsReasoningEffort(publicID, effort string) bool {
 	effort = strings.ToLower(strings.TrimSpace(effort))
-	for _, level := range SupportedReasoningEfforts(publicID) {
-		if level == effort {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(SupportedReasoningEfforts(publicID), func(level string) bool { return level == effort })
 }

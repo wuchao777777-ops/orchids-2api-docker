@@ -78,9 +78,7 @@ func aliyunUserTypeOr(aliyunUserType string) string {
 }
 
 // chatURL renders the chat endpoint.
-func chatURL(base string) string {
-	return strings.TrimRight(base, "/") + inferPath + inferQuery
-}
+func chatURL(base string) string { return strings.TrimRight(base, "/") + inferPath + inferQuery }
 
 // chatBody is the request payload. Field order matters only for readability
 // here: the body is encoded and the signature covers the encoded bytes, not the
@@ -133,13 +131,9 @@ type modelConfigWire struct {
 
 func wireModelConfig(model modelEntry) modelConfigWire {
 	format := model.Format
-	if format == "" {
-		format = "openai"
-	}
+	format = util.FirstNonEmptyUntrimmed(format, "openai")
 	source := model.Source
-	if source == "" {
-		source = "system"
-	}
+	source = util.FirstNonEmptyUntrimmed(source, "system")
 	return modelConfigWire{
 		Key:            model.Key,
 		DisplayName:    util.FirstNonEmpty(model.DisplayName, model.Name, model.Key),
@@ -997,9 +991,7 @@ func nestedInt64(raw []byte, key string, depth int) int64 {
 	return walk(value, depth)
 }
 
-func retryAfterDelay(value string) time.Duration {
-	return retryAfterDelayAt(value, time.Now())
-}
+func retryAfterDelay(value string) time.Duration { return retryAfterDelayAt(value, time.Now()) }
 
 func retryAfterDelayAt(value string, now time.Time) time.Duration {
 	return util.ParseRetryAfter(value, now, 30*time.Second)

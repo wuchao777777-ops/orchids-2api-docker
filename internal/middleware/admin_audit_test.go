@@ -42,9 +42,7 @@ func TestAdminSessionAudit_RecordsMutationsOnly(t *testing.T) {
 		if r.Body != nil {
 			buf := make([]byte, 64)
 			n, _ := r.Body.Read(buf)
-			if n == 0 && r.Method == http.MethodPost {
-				t.Error("handler received an empty body")
-			}
+			testutil.CheckFalse(t, n == 0 && r.Method == http.MethodPost, "handler received an empty body")
 		}
 		w.WriteHeader(http.StatusCreated)
 	})
@@ -61,9 +59,7 @@ func TestAdminSessionAudit_RecordsMutationsOnly(t *testing.T) {
 	testutil.Equal(t, len(events), 1)
 	event := events[0]
 	testutil.Equal(t, event.Kind, audit.KindOperation)
-	if event.Action != "accounts.42.update" && !strings.HasSuffix(event.Action, ".update") {
-		t.Fatalf("action = %q", event.Action)
-	}
+	testutil.Falsef(t, event.Action != "accounts.42.update" && !strings.HasSuffix(event.Action, ".update"), "action = %q", event.Action)
 	testutil.Equal(t, event.Status, "success")
 	testutil.Equal(t, event.Actor, "admin-session")
 	testutil.NotEqual(t, event.Target, "")
@@ -105,9 +101,8 @@ func TestAdminSessionAudit_ErrorResult(t *testing.T) {
 	handler(httptest.NewRecorder(), req)
 
 	events := logger.snapshot()
-	if len(events) != 1 || events[0].Status != "error" {
-		t.Fatalf("events = %+v", events)
-	}
+	testutil.Equal(t, len(events), 1)
+	testutil.Equal(t, events[0].Status, "error")
 	if code, _ := events[0].Metadata["code"].(int); code != http.StatusBadRequest {
 		t.Fatalf("metadata code = %v, want 400", events[0].Metadata["code"])
 	}
@@ -161,9 +156,7 @@ func TestAdminSessionAudit_LargeBodyReachesTheHandler(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	handler(httptest.NewRecorder(), req)
 
-	if readErr != nil {
-		t.Fatalf("handler failed to read the body: %v", readErr)
-	}
+	testutil.NoError(t, readErr, "handler failed to read the body: %v")
 	testutil.Equal(t, received, len(body))
 	// The summary is still bounded, and still a valid prefix of the body.
 	events := logger.snapshot()
@@ -190,7 +183,6 @@ func TestAdminSessionAudit_OversizedBodyIsReported(t *testing.T) {
 
 	events := logger.snapshot()
 	testutil.Equal(t, len(events), 1)
-	if _, ok := events[0].Metadata["body_capture_error"]; !ok {
-		t.Fatalf("oversized body not reported: %+v", events[0].Metadata)
-	}
+	_, ok := events[0].Metadata["body_capture_error"]
+	testutil.Falsef(t, !ok, "oversized body not reported: %+v", events[0].Metadata)
 }

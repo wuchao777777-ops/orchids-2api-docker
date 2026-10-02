@@ -58,9 +58,7 @@ func TestBuildChatAppliesSelectedAccountReasoningProfile(t *testing.T) {
 			h.HandleChatCompletions(rec, httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", bytes.NewReader(body)))
 			testutil.Equal(t, rec.Code, tc.status)
 			if tc.status == http.StatusBadRequest {
-				if calls != 0 || !strings.Contains(rec.Body.String(), "supported values: xhigh, high, medium, low") {
-					t.Fatalf("calls=%d body=%s", calls, rec.Body.String())
-				}
+				testutil.Falsef(t, calls != 0 || !strings.Contains(rec.Body.String(), "supported values: xhigh, high, medium, low"), "calls=%d body=%s", calls, rec.Body.String())
 			} else if calls != 1 {
 				t.Fatalf("calls=%d", calls)
 			}
@@ -71,33 +69,24 @@ func TestBuildChatAppliesSelectedAccountReasoningProfile(t *testing.T) {
 func TestBuildPayloadForAccountUsesCatalogDefaultAndValidation(t *testing.T) {
 	acc := &store.Account{GrokModelCatalog: []modelcatalog.Profile{{ModelID: "grok-4.7", ReasoningEfforts: []string{"xhigh", "high", "medium", "low"}, DefaultReasoningEffort: "high", SupportsReasoningEffort: true}}}
 	payload, err := buildPayloadForAccount(map[string]interface{}{"reasoning": map[string]interface{}{"summary": "auto"}}, acc, "grok-4.7")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	reasoning := payload["reasoning"].(map[string]interface{})
 	testutil.Equal(t, reasoning["effort"], "low")
 	payload, err = buildPayloadForAccount(map[string]interface{}{"reasoning": map[string]interface{}{"effort": "none"}}, acc, "grok-4.7")
-	if err != nil || payload["reasoning"].(map[string]interface{})["effort"] != "low" {
-		t.Fatalf("none compatibility payload=%v err=%v", payload, err)
-	}
+	testutil.Falsef(t, err != nil || payload["reasoning"].(map[string]interface{})["effort"] != "low", "none compatibility payload=%v err=%v", payload, err)
 	_, err = buildPayloadForAccount(map[string]interface{}{"reasoning": map[string]interface{}{"effort": "ultra"}}, acc, "grok-4.7")
 	var profileErr *buildReasoningProfileError
-	if !errors.As(err, &profileErr) {
-		t.Fatalf("err=%v", err)
-	}
+	testutil.Falsef(t, !errors.As(err, &profileErr), "err=%v", err)
 	payload, err = buildPayloadForAccount(map[string]interface{}{"reasoning": map[string]interface{}{"effort": "max"}}, acc, "grok-4.7")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, payload["reasoning"].(map[string]interface{})["effort"], "xhigh")
 }
 
 func TestBuildPayloadForAccountDoesNotMutateImmutableSource(t *testing.T) {
 	source := map[string]interface{}{"reasoning": map[string]interface{}{"effort": "max"}}
 	acc := &store.Account{GrokModelCatalog: []modelcatalog.Profile{{ModelID: "grok-4.7", ReasoningEfforts: []string{"xhigh"}, SupportsReasoningEffort: true}}}
-	if _, err := buildPayloadForAccount(source, acc, "grok-4.7"); err != nil {
-		t.Fatal(err)
-	}
+	_, err := buildPayloadForAccount(source, acc, "grok-4.7")
+	testutil.NoError(t, err)
 	testutil.Equal(t, source["reasoning"].(map[string]interface{})["effort"], "max")
 }
 
@@ -120,36 +109,24 @@ func TestBuildExplicitNoneUsesLowestCompatibleEffort(t *testing.T) {
 			payload, err := buildPayloadForAccount(source, acc, "grok-4.7")
 			if tc.want == "error" {
 				var profileErr *buildReasoningProfileError
-				if !errors.As(err, &profileErr) {
-					t.Fatalf("err=%v", err)
-				}
+				testutil.Falsef(t, !errors.As(err, &profileErr), "err=%v", err)
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, err)
 			reasoning := payload["reasoning"].(map[string]interface{})
-			if got := interfaceString(reasoning["effort"]); !strings.EqualFold(got, tc.want) {
-				t.Fatalf("effort=%q want=%q", got, tc.want)
-			}
-			if reasoning["summary"] != "auto" || source["reasoning"].(map[string]interface{})["effort"] != " NONE " {
-				t.Fatal("summary or immutable source changed")
-			}
+			got := interfaceString(reasoning["effort"])
+			testutil.Falsef(t, !strings.EqualFold(got, tc.want), "effort=%q want=%q", got, tc.want)
+			testutil.False(t, reasoning["summary"] != "auto" || source["reasoning"].(map[string]interface{})["effort"] != " NONE ", "summary or immutable source changed")
 		})
 	}
 }
 
 func TestBuildMissingCatalogDefaultsKnownReasoningModelToLow(t *testing.T) {
 	payload, err := buildPayloadForAccount(map[string]interface{}{}, &store.Account{}, "grok-4.7")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, payload["reasoning"].(map[string]interface{})["effort"], "low")
 	payload, err = buildPayloadForAccount(map[string]interface{}{}, &store.Account{}, "unknown-model")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, exists := payload["reasoning"]; exists {
-		t.Fatalf("unexpected reasoning=%v", payload["reasoning"])
-	}
+	testutil.NoError(t, err)
+	_, exists := payload["reasoning"]
+	testutil.Falsef(t, exists, "unexpected reasoning=%v", payload["reasoning"])
 }

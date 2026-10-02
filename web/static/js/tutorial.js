@@ -16,8 +16,6 @@
     if (!button) { return; }
 
     var target = document.getElementById(button.getAttribute('data-copy-target'));
-    if (target && typeof copyToClipboard === 'function') {
-      copyToClipboard(target.textContent || '');
-    }
+    if (target && typeof copyToClipboard === 'function') { copyToClipboard(target.textContent || ''); }
   });
 })();

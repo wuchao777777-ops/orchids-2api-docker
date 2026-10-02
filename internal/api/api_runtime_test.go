@@ -41,34 +41,27 @@ func TestSampleHostCPURequiresAWindow(t *testing.T) {
 	start := time.Now()
 
 	// The first reading can only open a window.
-	if _, _, ok := sampleHostCPU(cpuStat(100, 0, 100, 800, 0), start); ok {
-		t.Fatal("the first sample reported a rate without a baseline")
-	}
+	_, _, ok := sampleHostCPU(cpuStat(100, 0, 100, 800, 0), start)
+	testutil.False(t, ok, "the first sample reported a rate without a baseline")
 	// A second reading 10ms later spans at most one tick. On an idle host the
 	// request that asks for the metric is itself the only thing that ran, which
 	// is exactly how the panel used to show 100%.
-	if busy, _, ok := sampleHostCPU(cpuStat(100, 0, 101, 800, 0), start.Add(10*time.Millisecond)); ok {
-		t.Fatalf("a sub-tick window reported a rate: %.1f%%", busy*100)
-	}
+	busy, _, ok := sampleHostCPU(cpuStat(100, 0, 101, 800, 0), start.Add(10*time.Millisecond))
+	testutil.Falsef(t, ok, "a sub-tick window reported a rate: %.1f%%", busy*100)
 	// Two seconds later the window is real: 200 of 200 ticks idle means 0% busy.
 	busy, window, ok := sampleHostCPU(cpuStat(100, 0, 100, 1000, 0), start.Add(2*time.Second))
-	if !ok || window != 2*time.Second {
-		t.Fatalf("ok=%v window=%s", ok, window)
-	}
+	testutil.Falsef(t, !ok || window != 2*time.Second, "ok=%v window=%s", ok, window)
 	testutil.Equal(t, busy, 0)
 	// A sub-tick reading right after a valid one must repeat the last value and
 	// window instead of inventing 100%.
 	busy, window, ok = sampleHostCPU(cpuStat(100, 0, 101, 1000, 0), start.Add(2*time.Second+10*time.Millisecond))
-	if !ok || busy != 0 || window != 2*time.Second {
-		t.Fatalf("busy=%.3f window=%s ok=%v want the previous 0%%/2s", busy, window, ok)
-	}
+	testutil.Falsef(t, !ok || busy != 0 || window != 2*time.Second, "busy=%.3f window=%s ok=%v want the previous 0%%/2s", busy, window, ok)
 	// A later window reports its own rate: 900 ticks elapsed since the previous
 	// reading and 600 of them were idle, so 33.3% busy.
 	busy, window, ok = sampleHostCPU(cpuStat(200, 0, 300, 1600, 0), start.Add(10*time.Second))
 	testutil.True(t, ok, "a real window reported no rate")
-	if got := busy * 100; got < 33 || got > 34 {
-		t.Fatalf("busy=%.2f%% want ~33.3%% (window %s)", got, window)
-	}
+	got := busy * 100
+	testutil.Falsef(t, got < 33 || got > 34, "busy=%.2f%% want ~33.3%% (window %s)", got, window)
 	testutil.Equal(t, window, 8*time.Second)
 }
 
@@ -76,15 +69,12 @@ func TestSampleHostCPUSurvivesCounterReset(t *testing.T) {
 	resetHostCPU()
 	start := time.Now()
 	sampleHostCPU(cpuStat(100, 0, 100, 800, 0), start)
-	if _, _, ok := sampleHostCPU(cpuStat(100, 0, 100, 1000, 0), start.Add(3*time.Second)); !ok {
-		t.Fatal("a valid window was rejected")
-	}
+	_, _, ok := sampleHostCPU(cpuStat(100, 0, 100, 1000, 0), start.Add(3*time.Second))
+	testutil.False(t, !ok, "a valid window was rejected")
 	// Counters moving backwards means the machine rebooted under us: the next
 	// reading has to open a new window rather than divide by a negative delta.
-	if _, _, ok := sampleHostCPU(cpuStat(1, 0, 1, 10, 0), start.Add(4*time.Second)); ok {
-		t.Fatal("a reset counter produced a rate")
-	}
-	if _, _, ok := sampleHostCPU(cpuStat(1, 0, 1, 12, 0), start.Add(6*time.Second)); !ok {
-		t.Fatal("the sampler did not recover after a counter reset")
-	}
+	_, _, ok = sampleHostCPU(cpuStat(1, 0, 1, 10, 0), start.Add(4*time.Second))
+	testutil.False(t, ok, "a reset counter produced a rate")
+	_, _, ok = sampleHostCPU(cpuStat(1, 0, 1, 12, 0), start.Add(6*time.Second))
+	testutil.False(t, !ok, "the sampler did not recover after a counter reset")
 }

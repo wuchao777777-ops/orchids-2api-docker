@@ -12,12 +12,8 @@ func TestFingerprint_StableAndNonReversible(t *testing.T) {
 	token := "workbuddy-session-token-abcdef"
 	first := Fingerprint(token)
 	second := Fingerprint("  " + token + "  ")
-	if first == "" || len(first) != 12 {
-		t.Fatalf("Fingerprint() = %q, want 12 hex characters", first)
-	}
+	testutil.Falsef(t, first == "" || len(first) != 12, "Fingerprint() = %q, want 12 hex characters", first)
 	testutil.Equal(t, first, second)
 	testutil.NotEqual(t, Fingerprint("workbuddy-session-token-abcdeg"), first)
-	if Fingerprint("") != "" {
-		t.Fatal("an empty secret has no fingerprint")
-	}
+	testutil.Equal(t, Fingerprint(""), "")
 }

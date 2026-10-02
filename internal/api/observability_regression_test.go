@@ -26,9 +26,7 @@ func TestJournalDiagnosticLookupMatchesRequest(t *testing.T) {
 		row := raw.(map[string]interface{})
 		event := row["event"].(map[string]interface{})
 		_, present := row["diagnostics"]
-		if present != (event["request_id"] == "req-1") {
-			t.Fatalf("incorrect attachment: %v", row)
-		}
+		testutil.Equal(t, present, (event["request_id"] == "req-1"))
 	}
 	for _, tc := range []struct {
 		id        string
@@ -41,9 +39,7 @@ func TestJournalDiagnosticLookupMatchesRequest(t *testing.T) {
 		if tc.code == 200 {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(rec.Body.Bytes(), &payload)
-			if payload["available"] != tc.available {
-				t.Fatal(payload)
-			}
+			testutil.EqualAny(t, payload["available"], tc.available)
 		}
 	}
 }
@@ -61,18 +57,12 @@ func TestRuntimeResourcesIncludeHostMetrics(t *testing.T) {
 		names[m.Label] = true
 	}
 	for _, name := range []string{"主机 CPU", "主机内存", "进程内存 RSS", "Go 堆内存"} {
-		if !names[name] {
-			t.Fatalf("missing %s", name)
-		}
+		testutil.Falsef(t, !names[name], "missing %s", name)
 	}
 	total, idle, err := parseCPUTicks("cpu 10 20 30 40 5 6 7 8 999 999\n")
-	if err != nil || total != 126 || idle != 45 {
-		t.Fatalf("ticks=%d/%d %v", total, idle, err)
-	}
+	testutil.Falsef(t, err != nil || total != 126 || idle != 45, "ticks=%d/%d %v", total, idle, err)
 	used, mem := parseHostMemory("MemTotal: 1000 kB\nMemAvailable: 250 kB\n")
-	if used != 750*1024 || mem != 1000*1024 {
-		t.Fatal("memory units")
-	}
+	testutil.False(t, used != 750*1024 || mem != 1000*1024, "memory units")
 }
 func TestAlertRulePersistenceFailureKeepsPolicy(t *testing.T) {
 	s, server := newTestStore(t, "rule-failure:")
@@ -84,7 +74,6 @@ func TestAlertRulePersistenceFailureKeepsPolicy(t *testing.T) {
 	server.SetError("storage unavailable")
 	rec := httptest.NewRecorder()
 	a.HandleOpsAlertRules(rec, httptest.NewRequest("PUT", "/api/ops/alerts/rules", strings.NewReader(string(raw))))
-	if rec.Code != 500 || a.alertEngine.Thresholds() != before {
-		t.Fatalf("failed save changed policy, status=%d", rec.Code)
-	}
+	testutil.Equal(t, rec.Code, 500)
+	testutil.Equal(t, a.alertEngine.Thresholds(), before)
 }

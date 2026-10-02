@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/audit"
+	"orchids-api/internal/util"
 )
 
 type chatOutcome struct {
@@ -121,9 +122,7 @@ func responseFailure(ev map[string]interface{}) error {
 		// Kept separate from firstNonEmpty, which would trim the upstream text.
 		message = streamString(ev["message"])
 	}
-	if message == "" {
-		message = "upstream response failed"
-	}
+	message = util.FirstNonEmptyUntrimmed(message, "upstream response failed")
 	return fmt.Errorf("%s", message)
 }
 

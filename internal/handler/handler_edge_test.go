@@ -237,9 +237,7 @@ func TestHandleMessages_WorkBuddyStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFai
 	testutil.MustNotContain(t, out, "Retrying request")
 
 	storedFirst, err := s.GetAccount(context.Background(), first.ID)
-	if err != nil {
-		t.Fatalf("GetAccount(first) error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount(first) error = %v")
 	testutil.Equal(t, storedFirst.StatusCode, store.AccountStatusWorkBuddyQuotaExhausted)
 }
 
@@ -271,9 +269,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec1, req1)
 	testutil.Equal(t, rec1.Code, 200)
-	if strings.Contains(rec1.Body.String(), "duplicate_request") || !strings.Contains(rec1.Body.String(), "ok") {
-		t.Fatalf("expected first request to complete normally, got: %s", rec1.Body.String())
-	}
+	testutil.Falsef(t, strings.Contains(rec1.Body.String(), "duplicate_request") || !strings.Contains(rec1.Body.String(), "ok"), "expected first request to complete normally, got: %s", rec1.Body.String())
 
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(b))
@@ -407,19 +403,14 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	testutil.Equal(t, upstreamClient.calls, 1)
 
 	out := rec.Body.String()
-	if !strings.Contains(out, "rejected the request parameters or model") || strings.Contains(out, "workbuddy API error") {
-		t.Fatalf("expected redacted upstream error, got: %s", out)
-	}
+	testutil.Falsef(t, !strings.Contains(out, "rejected the request parameters or model") || strings.Contains(out, "workbuddy API error"), "expected redacted upstream error, got: %s", out)
 	testutil.MustNotContain(t, out, "No output was presented to the user")
 	testutil.MustNotContain(t, out, "retries exhausted")
 	var response map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("error response must contain exactly one JSON document, got %q: %v", out, err)
-	}
-	if _, exists := response["choices"]; exists {
-		t.Fatalf("error response must not append a synthetic completion: %s", out)
-	}
-	if len(auditLog.events) != 1 || auditLog.events[0].Status != "error" {
-		t.Fatalf("audit events = %#v, want one error request", auditLog.events)
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &response)
+	testutil.CheckNoError(t, err)
+	_, exists := response["choices"]
+	testutil.Falsef(t, exists, "error response must not append a synthetic completion: %s", out)
+	testutil.Equal(t, len(auditLog.events), 1)
+	testutil.Equal(t, auditLog.events[0].Status, "error")
 }

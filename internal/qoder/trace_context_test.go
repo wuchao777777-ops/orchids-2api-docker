@@ -17,9 +17,7 @@ import (
 // the shape; these tests only prove the channels send it.
 var traceparentRE = regexp.MustCompile(`^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`)
 
-func validTraceparent(value string) bool {
-	return traceparentRE.MatchString(strings.TrimSpace(value))
-}
+func validTraceparent(value string) bool { return traceparentRE.MatchString(strings.TrimSpace(value)) }
 
 // TestCatalogFetchCarriesTheClientHeadersToo pins the trace context and the
 // negotiation headers on the catalog read. The capture carries
@@ -42,9 +40,8 @@ func TestCatalogFetchCarriesTheClientHeadersToo(t *testing.T) {
 	client := NewFromAccount(acc, nil)
 	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
-	if _, err := client.FetchUpstreamModels(context.Background()); err != nil {
-		t.Fatalf("FetchUpstreamModels() error = %v", err)
-	}
+	_, err := client.FetchUpstreamModels(context.Background())
+	testutil.CheckNoError(t, err)
 
 	select {
 	case headers := <-headersCh:
@@ -54,9 +51,8 @@ func TestCatalogFetchCarriesTheClientHeadersToo(t *testing.T) {
 		} {
 			testutil.CheckEqual(t, headers.Get(name), want)
 		}
-		if trace := headers.Get("Traceparent"); !validTraceparent(trace) {
-			t.Errorf("catalog Traceparent = %q, want a version 00 trace context", trace)
-		}
+		trace := headers.Get("Traceparent")
+		testutil.CheckFalsef(t, !validTraceparent(trace), "catalog Traceparent = %q, want a version 00 trace context", trace)
 	case <-time.After(2 * time.Second):
 		t.Fatal("the stub server received no catalog request")
 	}

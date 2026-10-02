@@ -18,6 +18,23 @@ func NoError(t *testing.T, err error, context ...string) {
 	t.Fatalf("%s: %v", errorContext(context), err)
 }
 
+// Error fails when err is nil: the call sites use it where the operation is
+// required to fail, and the context says what failure was expected.
+func Error(t *testing.T, err error, context ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s", errorContext(context))
+	}
+}
+
+// CheckError is Error for the non-fatal call sites.
+func CheckError(t *testing.T, err error, context ...string) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("%s", errorContext(context))
+	}
+}
+
 // CheckNoError is NoError for the call sites that keep going after a failure.
 func CheckNoError(t *testing.T, err error, context ...string) {
 	t.Helper()
@@ -96,6 +113,51 @@ func True(t *testing.T, ok bool, context ...string) {
 	t.Helper()
 	if !ok {
 		t.Fatalf("%s", errorContext(context))
+	}
+}
+
+// False fails when cond holds, keeping the call site's description of what it
+// expected to be false.
+func False(t *testing.T, cond bool, context ...string) {
+	t.Helper()
+	if cond {
+		t.Fatalf("%s", errorContext(context))
+	}
+}
+
+// CheckFalse is False for the non-fatal call sites.
+func CheckFalse(t *testing.T, cond bool, context ...string) {
+	t.Helper()
+	if cond {
+		t.Errorf("%s", errorContext(context))
+	}
+}
+
+// Falsef annotates the context with the formatted details the call site used
+// to print itself, so no diagnostic text is dropped when the three-line block
+// collapses to one call.
+func Falsef(t *testing.T, cond bool, format string, args ...any) {
+	t.Helper()
+	if cond {
+		t.Fatalf(format, args...)
+	}
+}
+
+// CheckFalsef is Falsef for the non-fatal call sites.
+func CheckFalsef(t *testing.T, cond bool, format string, args ...any) {
+	t.Helper()
+	if cond {
+		t.Errorf(format, args...)
+	}
+}
+
+// Fail reports the condition and every value the call site used to print
+// itself. It carries the same arguments t.Fatal would, so collapsing a
+// three-line block into one call never drops a diagnostic.
+func Fail(t *testing.T, cond bool, args ...any) {
+	t.Helper()
+	if cond {
+		t.Fatal(args...)
 	}
 }
 

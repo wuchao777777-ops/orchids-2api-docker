@@ -25,9 +25,7 @@ func parityBuildHandler(t *testing.T, server *httptest.Server) (*Handler, *store
 	t.Helper()
 	mini := miniredis.RunT(t)
 	database, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "parity:", CredentialEncryptionKey: bytes.Repeat([]byte{42}, 32)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 	cfg := &config.Config{GrokCLIBaseURL: server.URL + "/v1"}
 	h := NewHandler(cfg, loadbalancer.NewWithCacheTTL(database, time.Second))
@@ -90,31 +88,22 @@ func TestRelayNativeContextAndUpstreamDecisions(t *testing.T) {
 			} else {
 				h.HandleResponses(rec, req)
 			}
-			if rec.Code != tc.status || calls != 1 {
-				t.Fatalf("status=%d want=%d calls=%d body=%s", rec.Code, tc.status, calls, rec.Body.String())
-			}
+			testutil.Falsef(t, rec.Code != tc.status || calls != 1, "status=%d want=%d calls=%d body=%s", rec.Code, tc.status, calls, rec.Body.String())
 			// Session keys are tenant-scoped routing metadata; content is not.
 			testutil.NotEqual(t, interfaceString(received["prompt_cache_key"]), "")
 			received["prompt_cache_key"] = payload["prompt_cache_key"]
 			if !reflect.DeepEqual(received, payload) {
 				for key, want := range payload {
-					if !reflect.DeepEqual(received[key], want) {
-						t.Errorf("request field %q changed", key)
-					}
+					testutil.CheckFalsef(t, !reflect.DeepEqual(received[key], want), "request field %q changed", key)
 				}
 				for key := range received {
-					if _, ok := payload[key]; !ok {
-						t.Errorf("unexpected request field %q", key)
-					}
+					_, ok := payload[key]
+					testutil.CheckFalsef(t, !ok, "unexpected request field %q", key)
 				}
 			}
-			if tc.status == 200 && !strings.Contains(rec.Body.String(), tc.body) {
-				t.Fatalf("response changed: %s", rec.Body.String())
-			}
+			testutil.Falsef(t, tc.status == 200 && !strings.Contains(rec.Body.String(), tc.body), "response changed: %s", rec.Body.String())
 			stored, err := h.lb.Store.GetAccount(context.Background(), acc.ID)
-			if err != nil || !stored.Enabled || stored.StatusCode != "" {
-				t.Fatalf("relay penalized valid account: status=%q error=%v", stored.StatusCode, err)
-			}
+			testutil.Falsef(t, err != nil || !stored.Enabled || stored.StatusCode != "", "relay penalized valid account: status=%q error=%v", stored.StatusCode, err)
 		})
 	}
 }
@@ -149,9 +138,7 @@ func TestRelayNativeResponsesRecoversOpaqueReasoning(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleResponses(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body)))
 
-	if len(bodies) < 2 {
-		t.Fatalf("expected a recovery retry, calls=%d", len(bodies))
-	}
+	testutil.Falsef(t, len(bodies) < 2, "expected a recovery retry, calls=%d", len(bodies))
 	for index, received := range bodies[1:] {
 		items, _ := received["input"].([]interface{})
 		reasoningSeen := false
@@ -165,9 +152,7 @@ func TestRelayNativeResponsesRecoversOpaqueReasoning(t *testing.T) {
 				testutil.Equal(t, interfaceString(item["encrypted_content"]), "client-native-compaction")
 			}
 		}
-		if reasoningSeen {
-			t.Fatalf("retry %d kept an empty reasoning item instead of dropping it: %v", index, items)
-		}
+		testutil.Falsef(t, reasoningSeen, "retry %d kept an empty reasoning item instead of dropping it: %v", index, items)
 	}
 }
 
@@ -184,12 +169,8 @@ func TestRelayChatSamplingAndEffortAreClientOwned(t *testing.T) {
 		req := &ChatCompletionsRequest{Model: "grok-4.5", Messages: []ChatMessage{{Role: "user", Content: "original"}}, ReasoningEffort: &effort, Temperature: &temperature, TopP: &topP}
 		testutil.NoError(t, req.Validate())
 		payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{ID: req.Model, UpstreamModel: req.Model, Upstream: UpstreamCLI}, req, true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if payload["reasoning"].(map[string]interface{})["effort"] != tc.want || payload["temperature"] != temperature || payload["top_p"] != topP {
-			t.Fatalf("effort=%q payload=%v", tc.effort, payload)
-		}
+		testutil.NoError(t, err)
+		testutil.Falsef(t, payload["reasoning"].(map[string]interface{})["effort"] != tc.want || payload["temperature"] != temperature || payload["top_p"] != topP, "effort=%q payload=%v", tc.effort, payload)
 	}
 }
 
@@ -205,14 +186,11 @@ func TestRelayBuildEffortAliasesFollowModelContract(t *testing.T) {
 		effort := tc.effort
 		req := &ChatCompletionsRequest{Model: tc.model, Messages: []ChatMessage{{Role: "user", Content: "hi"}}, ReasoningEffort: &effort}
 		payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{ID: tc.model, UpstreamModel: tc.model, Upstream: UpstreamCLI}, req, true)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 		reasoning, _ := payload["reasoning"].(map[string]interface{})
 		if tc.want == "" {
-			if _, exists := reasoning["effort"]; exists {
-				t.Fatalf("%s kept effort %v", tc.model, reasoning)
-			}
+			_, exists := reasoning["effort"]
+			testutil.Falsef(t, exists, "%s kept effort %v", tc.model, reasoning)
 			testutil.Equal(t, reasoning["summary"], "concise")
 			continue
 		}
@@ -233,9 +211,7 @@ func TestRelayRepeatedDeltaThresholdsMatchGrok2API(t *testing.T) {
 	distinct.WriteString(parityTerminal("response.completed"))
 	rec := httptest.NewRecorder()
 	_, _, result := copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(distinct.String()), "text/event-stream", "grok-4.6")
-	if result.Err != nil {
-		t.Fatalf("distinct deltas were rejected: %v", result.Err)
-	}
+	testutil.Falsef(t, result.Err != nil, "distinct deltas were rejected: %v", result.Err)
 	for i := 0; i < 300; i++ {
 		testutil.MustContain(t, rec.Body.String(), fmt.Sprintf("chunk-%d", i))
 	}
@@ -244,28 +220,20 @@ func TestRelayRepeatedDeltaThresholdsMatchGrok2API(t *testing.T) {
 	repeating := strings.Repeat(parityText("repeat this answer "), int(contentDoomLoopThreshold)+2) + parityTerminal("response.completed")
 	rec = httptest.NewRecorder()
 	_, _, result = copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(repeating), "text/event-stream", "grok-4.6")
-	if result.Err == nil || !strings.Contains(rec.Body.String(), "upstream_output_loop") {
-		t.Fatalf("content doom loop was not terminated: err=%v body=%s", result.Err, rec.Body.String())
-	}
+	testutil.Falsef(t, result.Err == nil || !strings.Contains(rec.Body.String(), "upstream_output_loop"), "content doom loop was not terminated: err=%v body=%s", result.Err, rec.Body.String())
 
 	// Reasoning has its own, higher threshold: just below it the stream is fine.
 	belowReasoning := strings.Repeat(parityFrame("response.reasoning_text.delta", map[string]interface{}{"delta": "same thought "}), int(reasoningDoomLoopThreshold)) + parityTerminal("response.completed")
 	rec = httptest.NewRecorder()
 	_, _, result = copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(belowReasoning), "text/event-stream", "grok-4.6")
-	if result.Err != nil {
-		t.Fatalf("a stream at the reasoning threshold was rejected: %v", result.Err)
-	}
+	testutil.Falsef(t, result.Err != nil, "a stream at the reasoning threshold was rejected: %v", result.Err)
 	// One more repeat crosses it.
 	aboveReasoning := strings.Repeat(parityFrame("response.reasoning_text.delta", map[string]interface{}{"delta": "same thought "}), int(reasoningDoomLoopThreshold)+1) + parityTerminal("response.completed")
 	rec = httptest.NewRecorder()
 	_, _, result = copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(aboveReasoning), "text/event-stream", "grok-4.6")
-	if result.Err == nil || !strings.Contains(rec.Body.String(), "upstream_output_loop") {
-		t.Fatalf("reasoning doom loop was not terminated: err=%v", result.Err)
-	}
+	testutil.Falsef(t, result.Err == nil || !strings.Contains(rec.Body.String(), "upstream_output_loop"), "reasoning doom loop was not terminated: err=%v", result.Err)
 
 	// The converted (chat) path applies the same thresholds.
 	converted, outcome := parityRun(t, repeating)
-	if outcome.Err == nil {
-		t.Fatalf("converted stream accepted a doom loop: %s", converted)
-	}
+	testutil.Falsef(t, outcome.Err == nil, "converted stream accepted a doom loop: %s", converted)
 }

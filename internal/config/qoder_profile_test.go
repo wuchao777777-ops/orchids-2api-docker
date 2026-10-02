@@ -18,23 +18,14 @@ func TestQoderProtocolProfileConfigRoundTrip(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config."+ext)
 			testutil.NoError(t, os.WriteFile(path, raw, 0600))
 			cfg, _, err := Load(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cfg.QoderProtocolProfile != "skill-cli" || cfg.QoderClientID != "override" {
-				t.Fatal("profile or override lost loading")
-			}
+			testutil.NoError(t, err)
+			testutil.False(t, cfg.QoderProtocolProfile != "skill-cli" || cfg.QoderClientID != "override", "profile or override lost loading")
 			encoded, err := json.Marshal(cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, err)
 			var round Config
-			if err = json.Unmarshal(encoded, &round); err != nil {
-				t.Fatal(err)
-			}
-			if round.QoderProtocolProfile != "skill-cli" {
-				t.Fatal("profile lost serializing")
-			}
+			err = json.Unmarshal(encoded, &round)
+			testutil.NoError(t, err)
+			testutil.Equal(t, round.QoderProtocolProfile, "skill-cli")
 		})
 	}
 }

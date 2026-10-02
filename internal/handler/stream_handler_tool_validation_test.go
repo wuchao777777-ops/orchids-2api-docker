@@ -62,12 +62,10 @@ func TestToolCallSameIDInvalidThenValid_UsesValidOne(t *testing.T) {
 	testutil.Equal(t, len(h.contentBlocks), 1)
 
 	block := h.contentBlocks[0]
-	if got, _ := block["type"].(string); got != "tool_use" {
-		t.Fatalf("expected tool_use block, got %q", got)
-	}
-	if got, _ := block["name"].(string); got != "Write" {
-		t.Fatalf("expected Write tool call, got %q", got)
-	}
+	got, _ := block["type"].(string)
+	testutil.Falsef(t, got != "tool_use", "expected tool_use block, got %q", got)
+	got, _ = block["name"].(string)
+	testutil.Falsef(t, got != "Write", "expected Write tool call, got %q", got)
 }
 
 func TestWriteToolCallDifferentIDsSameInput_Preserved(t *testing.T) {
@@ -83,12 +81,10 @@ func TestWriteToolCallDifferentIDsSameInput_Preserved(t *testing.T) {
 
 	testutil.Equal(t, len(h.contentBlocks), 2)
 	block := h.contentBlocks[0]
-	if got, _ := block["type"].(string); got != "tool_use" {
-		t.Fatalf("expected tool_use block, got %q", got)
-	}
-	if got, _ := block["name"].(string); got != "Write" {
-		t.Fatalf("expected Write tool call, got %q", got)
-	}
+	got, _ := block["type"].(string)
+	testutil.Falsef(t, got != "tool_use", "expected tool_use block, got %q", got)
+	got, _ = block["name"].(string)
+	testutil.Falsef(t, got != "Write", "expected Write tool call, got %q", got)
 }
 
 func TestWriteToolCallDifferentIDsSameWorkdirTarget_Preserved(t *testing.T) {
@@ -150,12 +146,10 @@ func runToolCall(t *testing.T, allowed []string, callID, name, args string) *str
 func assertToolCallSurvived(t *testing.T, h *streamHandler, wantName string) {
 	t.Helper()
 	testutil.Equal(t, len(h.contentBlocks), 1)
-	if got, _ := h.contentBlocks[0]["type"].(string); got != "tool_use" {
-		t.Fatalf("expected tool_use block, got %q", got)
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != wantName {
-		t.Fatalf("expected tool name %s, got %q", wantName, got)
-	}
+	got, _ := h.contentBlocks[0]["type"].(string)
+	testutil.Falsef(t, got != "tool_use", "expected tool_use block, got %q", got)
+	got, _ = h.contentBlocks[0]["name"].(string)
+	testutil.Falsef(t, got != wantName, "expected tool name %s, got %q", wantName, got)
 	testutil.Equal(t, h.suppressedToolCalls, 0)
 }
 
@@ -259,9 +253,8 @@ func TestBashToolCallDifferentIDsSameCommand_Preserved(t *testing.T) {
 	sendToolFinish(h)
 
 	testutil.Equal(t, len(h.contentBlocks), 2)
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
-		t.Fatalf("expected Bash tool call, got %q", got)
-	}
+	got, _ := h.contentBlocks[0]["name"].(string)
+	testutil.Falsef(t, got != "Bash", "expected Bash tool call, got %q", got)
 }
 
 func TestBashToolCallDifferentIDsDifferentCommands_BothAccepted(t *testing.T) {

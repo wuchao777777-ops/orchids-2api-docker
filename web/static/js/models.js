@@ -21,15 +21,11 @@ let modelRefreshConcurrency = 4;
 // activeChannel is the channel the page is scoped to. A channel is always
 // required by the refresh and batch actions, so the first known one stands in
 // when the strip has not been clicked yet.
-function activeChannel() {
-  return currentModelChannel || modelChannels()[0] || "";
-}
+function activeChannel() { return currentModelChannel || modelChannels()[0] || ""; }
 
 // offlineModels is the set of channel-scoped models the server marked offline,
 // which is what "删除已下线" acts on.
-function offlineModels() {
-  return getChannelScopedModels().filter((m) => normalizeModelStatus(m.status) === "offline");
-}
+function offlineModels() { return getChannelScopedModels().filter((m) => normalizeModelStatus(m.status) === "offline"); }
 
 function modelChannels() {
   const defaultChannels = Array.isArray(window.OrchidsProviderRegistry?.channels)
@@ -86,9 +82,7 @@ function sortModels(list) {
 function getChannelScopedModels() {
   let scoped = models.slice();
 
-  if (currentModelChannel) {
-    scoped = scoped.filter((m) => String(m.channel || "").toLowerCase() === currentModelChannel.toLowerCase());
-  }
+  if (currentModelChannel) { scoped = scoped.filter((m) => String(m.channel || "").toLowerCase() === currentModelChannel.toLowerCase()); }
 
   return sortModels(scoped);
 }
@@ -96,9 +90,7 @@ function getChannelScopedModels() {
 function getFilteredModels(channelModels = getChannelScopedModels()) {
   let filtered = channelModels;
 
-  if (modelStatusFilter) {
-    filtered = filtered.filter((m) => normalizeModelStatus(m.status) === modelStatusFilter);
-  }
+  if (modelStatusFilter) { filtered = filtered.filter((m) => normalizeModelStatus(m.status) === modelStatusFilter); }
 
   if (modelSearchTerm) {
     const term = modelSearchTerm.toLowerCase();
@@ -127,9 +119,7 @@ function updateModelSummary(channelModels, filtered) {
     : "当前筛选条件下没有命中的模型记录。");
 }
 
-function refreshChannelKey(channel) {
-  return String(channel || "").trim().toLowerCase();
-}
+function refreshChannelKey(channel) { return String(channel || "").trim().toLowerCase(); }
 
 function sortTextValues(values) {
   return values
@@ -180,9 +170,7 @@ function modelRefreshSourceLabel(source) {
   if (value.startsWith("cline_recommended_models")) return "Cline 推荐模型目录";
   // Anything reaching here is a cached or compiled-in list. It must not be
   // mistaken for a fresh upstream observation.
-  if (value.includes("cached") || value.includes("builtin") || value.endsWith("_unverified")) {
-    return `${value}（非上游目录，不应出现）`;
-  }
+  if (value.includes("cached") || value.includes("builtin") || value.endsWith("_unverified")) { return `${value}（非上游目录，不应出现）`; }
   return value;
 }
 
@@ -225,9 +213,7 @@ function renderModelRefreshSummary() {
     skippedNote = "该渠道没有 active 账号，本次未向上游拉取，也未写入任何模型。";
   } else if (Number(result.verified) === 0) {
     skippedNote = "本次只读取上游目录，未逐个验证模型可用性。";
-  } else if (!isUpstreamModelRefreshSource(result.source)) {
-    skippedNote = "该来源不是上游目录，结果不会写入模型列表。";
-  }
+  } else if (!isUpstreamModelRefreshSource(result.source)) { skippedNote = "该来源不是上游目录，结果不会写入模型列表。"; }
   meta.textContent = `来源：${modelRefreshSourceLabel(result.source)}。并发数 ${result.concurrency || modelRefreshConcurrency}。${skippedNote}`;
 
   const stats = [
@@ -256,9 +242,7 @@ function renderChannelTabs() {
   if (!container) return;
 
   const channels = modelChannels();
-  if (!currentModelChannel || !channels.includes(currentModelChannel)) {
-    currentModelChannel = channels[0] || "";
-  }
+  if (!currentModelChannel || !channels.includes(currentModelChannel)) { currentModelChannel = channels[0] || ""; }
 
   container.innerHTML = "";
   channels.forEach((channel) => {
@@ -335,14 +319,10 @@ function renderModels() {
   const start = (modelCurrentPage - 1) * modelPageSize;
   const pageItems = filtered.slice(start, start + modelPageSize);
   const pageCount = document.getElementById("currentPageCount");
-  if (pageCount) {
-    pageCount.textContent = String(pageItems.length);
-  }
+  if (pageCount) { pageCount.textContent = String(pageItems.length); }
 
   const paginationInfo = document.getElementById("modelsPaginationInfo");
-  if (paginationInfo) {
-    paginationInfo.textContent = `共 ${total} 条记录，第 ${modelCurrentPage}/${totalPages} 页`;
-  }
+  if (paginationInfo) { paginationInfo.textContent = `共 ${total} 条记录，第 ${modelCurrentPage}/${totalPages} 页`; }
   renderPagination(modelCurrentPage, totalPages);
 
   updateModelsBatchBar();
@@ -500,10 +480,7 @@ async function runModelBatch(action) {
         const current = models.find((m) => String(m.id) === String(id));
         if (!current) throw new Error("模型已不在列表中");
         const response = await ConsoleAPI.request(`/api/models/${encodeURIComponent(id)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...current, status: action === "enable" ? "available" : "offline" }),
-        });
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...current, status: action === "enable" ? "available" : "offline" }) });
         if (!response.ok) throw new Error("HTTP " + response.status);
       }
       done += 1;
@@ -535,9 +512,7 @@ async function loadModels() {
     updateModelChannelOptions();
     renderModels();
     updateRefreshButton();
-  } catch (err) {
-    showToast("加载模型失败", "error");
-  }
+  } catch (err) { showToast("加载模型失败", "error"); }
 }
 
 function filterModelsByChannel(channel) {
@@ -567,9 +542,7 @@ function updateModelChannelOptions() {
 
   if (previous && Array.from(select.options).some((option) => option.value === previous)) {
     select.value = previous;
-  } else if (currentModelChannel && Array.from(select.options).some((option) => option.value === currentModelChannel)) {
-    select.value = currentModelChannel;
-  }
+  } else if (currentModelChannel && Array.from(select.options).some((option) => option.value === currentModelChannel)) { select.value = currentModelChannel; }
 }
 
 function openModelModal(model = null) {
@@ -583,9 +556,7 @@ function openModelModal(model = null) {
     if (!el) return;
     const raw = value === null || value === undefined ? "" : String(value);
     el.value = raw;
-    if (el.tagName === "SELECT" && el.value !== raw) {
-      el.selectedIndex = 0;
-    }
+    if (el.tagName === "SELECT" && el.value !== raw) { el.selectedIndex = 0; }
   };
 
   if (model) {
@@ -610,9 +581,7 @@ function openModelModal(model = null) {
   ConsoleUI.modal("modelModal", true);
 }
 
-function closeModelModal() {
-  ConsoleUI.modal("modelModal", false);
-}
+function closeModelModal() { ConsoleUI.modal("modelModal", false); }
 
 async function saveModel(event) {
   event.preventDefault();
@@ -627,25 +596,18 @@ async function saveModel(event) {
     is_default: document.getElementById("modelIsDefault").checked,
   };
 
-  if (id) {
-    data.id = id;
-  }
+  if (id) { data.id = id; }
 
   try {
     const url = id ? `/api/models/${id}` : "/api/models";
     const method = id ? "PUT" : "POST";
     const res = await ConsoleAPI.request(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
+      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
     if (!res.ok) throw new Error(await res.text());
     closeModelModal();
     await loadModels();
     showToast("保存成功");
-  } catch (err) {
-    showToast(`保存失败: ${err.message}`, "error");
-  }
+  } catch (err) { showToast(`保存失败: ${err.message}`, "error"); }
 }
 
 function editModel(id) {
@@ -659,17 +621,11 @@ async function toggleModelStatus(id, enabled) {
 
   try {
     const updatedModel = { ...model, status: enabled ? "available" : "offline" };
-    const res = await ConsoleAPI.request(`/api/models/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updatedModel),
-    });
+    const res = await ConsoleAPI.request(`/api/models/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updatedModel) });
     if (!res.ok) throw new Error(await res.text());
     showToast(enabled ? "模型已启用" : "模型已禁用");
     await loadModels();
-  } catch (err) {
-    showToast(`操作失败: ${err.message}`, "error");
-  }
+  } catch (err) { showToast(`操作失败: ${err.message}`, "error"); }
 }
 
 async function deleteModel(id) {
@@ -679,9 +635,7 @@ async function deleteModel(id) {
     if (!res.ok) throw new Error(await res.text());
     showToast("删除成功");
     await loadModels();
-  } catch (err) {
-    showToast(`删除失败: ${err.message}`, "error");
-  }
+  } catch (err) { showToast(`删除失败: ${err.message}`, "error"); }
 }
 
 function updateRefreshButton() {
@@ -712,10 +666,7 @@ async function refreshModelsForCurrentChannel() {
 
   try {
     const res = await ConsoleAPI.request("/api/models/refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ channel, concurrency: modelRefreshConcurrency }),
-    });
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel, concurrency: modelRefreshConcurrency }) });
 
     const raw = await res.text();
     let data = {};
@@ -727,14 +678,10 @@ async function refreshModelsForCurrentChannel() {
       }
     }
 
-    if (!res.ok) {
-      throw new Error(data.message || raw || "刷新失败");
-    }
+    if (!res.ok) { throw new Error(data.message || raw || "刷新失败"); }
 
     const normalized = normalizeModelRefreshResult(data, channel);
-    if (normalized.channel) {
-      modelRefreshResults[refreshChannelKey(normalized.channel)] = normalized;
-    }
+    if (normalized.channel) { modelRefreshResults[refreshChannelKey(normalized.channel)] = normalized; }
 
     await loadModels();
 
@@ -771,9 +718,7 @@ async function deleteOfflineModelsForCurrentChannel() {
     updateRefreshButton();
     return;
   }
-  if (!confirm(`确定删除 ${channel} 渠道的 ${targets.length} 个已下线模型吗？`)) {
-    return;
-  }
+  if (!confirm(`确定删除 ${channel} 渠道的 ${targets.length} 个已下线模型吗？`)) { return; }
 
   modelDeleteOfflineInFlight = true;
   updateRefreshButton();
@@ -785,17 +730,13 @@ async function deleteOfflineModelsForCurrentChannel() {
         const res = await ConsoleAPI.request(`/api/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
         if (!res.ok) throw new Error(await res.text());
         deleted += 1;
-      } catch (err) {
-        failures.push(`${model.model_id || model.id}: ${err.message || err}`);
-      }
+      } catch (err) { failures.push(`${model.model_id || model.id}: ${err.message || err}`); }
     }
     await loadModels();
     if (failures.length > 0) {
       showToast(`已删除 ${deleted} 个，失败 ${failures.length} 个`, "error");
       console.warn("delete offline models failures", failures);
-    } else {
-      showToast(`已删除 ${deleted} 个已下线模型`);
-    }
+    } else { showToast(`已删除 ${deleted} 个已下线模型`); }
   } finally {
     modelDeleteOfflineInFlight = false;
     updateRefreshButton();

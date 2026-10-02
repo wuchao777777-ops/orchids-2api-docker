@@ -17,12 +17,8 @@ func TestRedisConnTrackerLeaseIsAtomicSharedAndReleased(t *testing.T) {
 
 	first := NewRedisConnTracker(client, "test:")
 	second := NewRedisConnTracker(client, "test:")
-	if !first.TryAcquire(42, 1) {
-		t.Fatal("first lease was rejected")
-	}
-	if second.TryAcquire(42, 1) {
-		t.Fatal("second process exceeded the shared hard limit")
-	}
+	testutil.False(t, !first.TryAcquire(42, 1), "first lease was rejected")
+	testutil.False(t, second.TryAcquire(42, 1), "second process exceeded the shared hard limit")
 	testutil.Equal(t, second.GetCount(42), 1)
 	// Constructing another tracker must never erase live leases from a peer.
 	third := NewRedisConnTracker(client, "test:")
@@ -42,9 +38,7 @@ func TestRedisConnTrackerReclaimsExpiredAndLegacyCounters(t *testing.T) {
 	testutil.Equal(t, tracker.GetCount(7), 0)
 
 	testutil.NoError(t, client.Set(context.Background(), key, "99", 0).Err())
-	if !tracker.TryAcquire(7, 1) {
-		t.Fatal("legacy string counter prevented lease migration")
-	}
+	testutil.False(t, !tracker.TryAcquire(7, 1), "legacy string counter prevented lease migration")
 	testutil.Equal(t, tracker.GetCount(7), 1)
 	tracker.Release(7)
 }
@@ -56,13 +50,9 @@ func TestRedisConnTrackerCloseReleasesOwnedLeases(t *testing.T) {
 
 	tracker := NewRedisConnTracker(client, "test:")
 	peer := NewRedisConnTracker(client, "test:")
-	if !tracker.TryAcquire(42, 2) || !peer.TryAcquire(42, 2) {
-		t.Fatal("failed to acquire owned leases")
-	}
+	testutil.False(t, !tracker.TryAcquire(42, 2) || !peer.TryAcquire(42, 2), "failed to acquire owned leases")
 	tracker.Close()
 	testutil.Equal(t, peer.GetCount(42), 1)
 	peer.Release(42)
-	if tracker.TryAcquire(42, 1) {
-		t.Fatal("closed tracker acquired a new lease")
-	}
+	testutil.False(t, tracker.TryAcquire(42, 1), "closed tracker acquired a new lease")
 }

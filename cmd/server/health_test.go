@@ -38,9 +38,8 @@ func TestHealthReportsEveryRemainingProvider(t *testing.T) {
 		Status    string            `json:"status"`
 		Providers map[string]string `json:"providers"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode /health body: %v (%s)", err, rec.Body.String())
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &body)
+	testutil.CheckNoError(t, err)
 	testutil.Equal(t, body.Status, "ok")
 	want := map[string]struct{}{}
 	for _, definition := range channel.All() {

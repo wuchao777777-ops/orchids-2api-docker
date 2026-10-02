@@ -319,30 +319,18 @@ func auditOutcomeLabel(class string) string {
 }
 
 func (f auditQueryFilter) matches(event audit.Event) bool {
-	if f.kind != "" && string(event.Kind) != f.kind {
+	if f.kind != "" && string(event.Kind) != f.kind || f.channel != "" && !strings.EqualFold(event.Channel, f.channel) {
 		return false
 	}
-	if f.channel != "" && !strings.EqualFold(event.Channel, f.channel) {
+	if f.status != "" && !strings.EqualFold(event.Status, f.status) || f.action != "" && !strings.Contains(strings.ToLower(event.Action), f.action) {
 		return false
 	}
-	if f.status != "" && !strings.EqualFold(event.Status, f.status) {
-		return false
-	}
-	if f.action != "" && !strings.Contains(strings.ToLower(event.Action), f.action) {
-		return false
-	}
-	if f.actor != "" && !strings.Contains(strings.ToLower(event.Actor), f.actor) {
-		return false
-	}
-	if f.model != "" && !strings.Contains(strings.ToLower(event.Model), f.model) {
+	if f.actor != "" && !strings.Contains(strings.ToLower(event.Actor), f.actor) || f.model != "" && !strings.Contains(strings.ToLower(event.Model), f.model) {
 		return false
 	}
 	// The time range is the filter a drill-down always carries: the overview counted
 	// one window, so a list that ignores it shows records the chart never saw.
-	if !f.since.IsZero() && event.Timestamp.Before(f.since) {
-		return false
-	}
-	if !f.until.IsZero() && event.Timestamp.After(f.until) {
+	if !f.since.IsZero() && event.Timestamp.Before(f.since) || !f.until.IsZero() && event.Timestamp.After(f.until) {
 		return false
 	}
 	if f.outcome != "" {
@@ -355,13 +343,7 @@ func (f auditQueryFilter) matches(event audit.Event) bool {
 			return false
 		}
 	}
-	if f.accountID != 0 && event.AccountID != f.accountID {
-		return false
-	}
-	if f.apiKeyID != 0 && event.APIKeyID != f.apiKeyID {
-		return false
-	}
-	return true
+	return !(f.accountID != 0 && event.AccountID != f.accountID || f.apiKeyID != 0 && event.APIKeyID != f.apiKeyID)
 }
 
 func (f auditQueryFilter) describe() map[string]interface{} {
@@ -858,9 +840,7 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 	return accountType + ":" + token
 }
 
-func isSupportedAccountType(accountType string) bool {
-	return channel.IsSupported(accountType)
-}
+func isSupportedAccountType(accountType string) bool { return channel.IsSupported(accountType) }
 
 // validateAccountType rejects an account whose type is missing or unknown.
 //
@@ -971,9 +951,7 @@ func duplicateAccountError(existing *store.Account) error {
 		return fmt.Errorf("duplicate account token")
 	}
 	accountType := strings.TrimSpace(existing.AccountType)
-	if accountType == "" {
-		accountType = "account"
-	}
+	accountType = util.FirstNonEmptyUntrimmed(accountType, "account")
 	return fmt.Errorf("duplicate %s token already exists on account #%d", accountType, existing.ID)
 }
 
@@ -2672,9 +2650,7 @@ func normalizeProxyBypassValue(value interface{}) []string {
 		}
 		return out
 	case string:
-		lines := strings.FieldsFunc(v, func(r rune) bool {
-			return r == '\n' || r == ','
-		})
+		lines := strings.FieldsFunc(v, func(r rune) bool { return r == '\n' || r == ',' })
 		out := make([]string, 0, len(lines))
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
@@ -2762,10 +2738,7 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 // check that cleared the marker would only make the next request re-park it — which
 // is what the console showed as an account turning green and then red again.
 func accountHoldsAllowanceVerdict(acc *store.Account, now time.Time) bool {
-	if acc == nil || strings.TrimSpace(acc.StatusCode) != "402" {
-		return false
-	}
-	if acc.QuotaResetAt.IsZero() {
+	if acc == nil || strings.TrimSpace(acc.StatusCode) != "402" || acc.QuotaResetAt.IsZero() {
 		return false
 	}
 	return now.Before(acc.QuotaResetAt)

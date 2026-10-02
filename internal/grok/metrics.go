@@ -74,14 +74,8 @@ func recordCLIUpstreamStatus(status int) {
 	grokCLIUpstreamStatus.WithLabelValues(class).Inc()
 }
 
-func recordCLIOAuthRefresh() {
-	grokCLIOAuthRefreshes.Inc()
-}
+func recordCLIOAuthRefresh() { grokCLIOAuthRefreshes.Inc() }
 
-func recordEgressAcquireError() {
-	grokEgressAcquireErrors.Inc()
-}
+func recordEgressAcquireError() { grokEgressAcquireErrors.Inc() }
 
-func recordGenericForbidden() {
-	grokGenericForbidden.Inc()
-}
+func recordGenericForbidden() { grokGenericForbidden.Inc() }

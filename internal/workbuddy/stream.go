@@ -84,9 +84,7 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 	sawDone := false
 	sawFinish := false
 
-	emitText := func(text string) {
-		upstream.EmitTextDelta(onMessage, text, &result.SawMeaningfulEvent)
-	}
+	emitText := func(text string) { upstream.EmitTextDelta(onMessage, text, &result.SawMeaningfulEvent) }
 
 	emitTools := func() {
 		upstream.EmitToolCalls(onMessage, tools.CompleteAll(), &result.SawMeaningfulEvent, &result.ToolCallCount)

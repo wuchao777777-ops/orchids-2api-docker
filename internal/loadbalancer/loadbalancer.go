@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -94,9 +95,7 @@ func (lb *LoadBalancer) rotateScanCursor(size int) int {
 }
 
 // SetConnTracker replaces the default in-memory connection tracker.
-func (lb *LoadBalancer) SetConnTracker(ct ConnTracker) {
-	lb.connTracker = ct
-}
+func (lb *LoadBalancer) SetConnTracker(ct ConnTracker) { lb.connTracker = ct }
 
 // AccountFilter decides whether one candidate may serve the request. A nil error
 // accepts it; a non-nil one withholds it and says why, because the reason is what
@@ -554,13 +553,9 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 	return picked
 }
 
-func (lb *LoadBalancer) AcquireConnection(accountID int64) {
-	lb.connTracker.Acquire(accountID)
-}
+func (lb *LoadBalancer) AcquireConnection(accountID int64) { lb.connTracker.Acquire(accountID) }
 
-func (lb *LoadBalancer) ReleaseConnection(accountID int64) {
-	lb.connTracker.Release(accountID)
-}
+func (lb *LoadBalancer) ReleaseConnection(accountID int64) { lb.connTracker.Release(accountID) }
 
 const (
 	// The account-state policy owns these windows; the aliases keep the pool's
@@ -732,12 +727,7 @@ func isPaidGrokBuildAccount(acc *store.Account) bool {
 		return false
 	}
 	plan := strings.ToLower(strings.TrimSpace(acc.Subscription))
-	for _, paid := range []string{"super", "pro", "heavy", "lite", "x_basic", "xbasic", "x_premium", "xpremium", "paid", "team", "enterprise"} {
-		if strings.Contains(plan, paid) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc([]string{"super", "pro", "heavy", "lite", "x_basic", "xbasic", "x_premium", "xpremium", "paid", "team", "enterprise"}, func(paid string) bool { return strings.Contains(plan, paid) })
 }
 
 // resetAccountRuntimeState drops the transient routing verdict so the account is

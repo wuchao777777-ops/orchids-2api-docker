@@ -356,9 +356,7 @@ func (c *Config) VerboseDiagnosticsEnabled() bool {
 	return c != nil && c.DebugEnabled && c.VerboseDiagnostics
 }
 
-func (c *Config) ChatDefaultStream() bool {
-	return c == nil || c.Stream == nil || *c.Stream
-}
+func (c *Config) ChatDefaultStream() bool { return c == nil || c.Stream == nil || *c.Stream }
 
 // GrokCLIBaseURLOrDefault returns the Build CLI proxy base URL, defaulting to
 // the official gateway.

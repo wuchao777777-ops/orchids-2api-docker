@@ -11,9 +11,8 @@ import (
 
 func TestNodesFromConfigDisabled(t *testing.T) {
 	cfg := &config.Config{GrokEgressEnabled: false}
-	if nodes := nodesFromConfig(cfg); len(nodes) != 0 {
-		t.Fatalf("disabled egress should yield no nodes, got %d", len(nodes))
-	}
+	nodes := nodesFromConfig(cfg)
+	testutil.Falsef(t, len(nodes) != 0, "disabled egress should yield no nodes, got %d", len(nodes))
 }
 
 func TestNodesFromConfig(t *testing.T) {
@@ -27,34 +26,22 @@ func TestNodesFromConfig(t *testing.T) {
 	nodes := nodesFromConfig(cfg)
 	testutil.Equal(t, len(nodes), 2)
 	testutil.Equal(t, nodes[0].Weight, 2)
-	if !nodes[0].Proxied {
-		t.Fatal("node a should be proxied")
-	}
-	if nodes[1].Proxied {
-		t.Fatal("node b should be direct")
-	}
+	testutil.False(t, !nodes[0].Proxied, "node a should be proxied")
+	testutil.False(t, nodes[1].Proxied, "node b should be direct")
 }
 
 func TestNodeMatchesScope(t *testing.T) {
 	node := Node{Name: "n", Scope: "cli"}
-	if !nodeMatchesScope(node, "cli") {
-		t.Fatal("cli node should match cli scope")
-	}
-	if nodeMatchesScope(node, "other") {
-		t.Fatal("cli node should not match another scope")
-	}
+	testutil.False(t, !nodeMatchesScope(node, "cli"), "cli node should match cli scope")
+	testutil.False(t, nodeMatchesScope(node, "other"), "cli node should not match another scope")
 	all := Node{Name: "n", Scope: "all"}
-	if !nodeMatchesScope(all, "cli") || !nodeMatchesScope(all, "other") {
-		t.Fatal("all scope should match any scope")
-	}
+	testutil.False(t, !nodeMatchesScope(all, "cli") || !nodeMatchesScope(all, "other"), "all scope should match any scope")
 }
 
 func TestManagerAcquireDisabled(t *testing.T) {
 	cfg := &config.Config{GrokEgressEnabled: false}
 	m := NewManager(cfg)
-	if m != nil {
-		t.Fatal("disabled egress should yield nil manager")
-	}
+	testutil.False(t, m != nil, "disabled egress should yield nil manager")
 }
 
 func TestManagerAcquireDirectNode(t *testing.T) {
@@ -63,13 +50,9 @@ func TestManagerAcquireDirectNode(t *testing.T) {
 		GrokEgressNodes:   []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
 	}
 	m := NewManager(cfg)
-	if m == nil {
-		t.Fatal("expected manager")
-	}
+	testutil.False(t, m == nil, "expected manager")
 	lease, err := m.Acquire(context.Background(), "cli", "acct-1")
-	if err != nil {
-		t.Fatalf("acquire failed: %v", err)
-	}
+	testutil.NoError(t, err, "acquire failed: %v")
 	defer lease.Release()
 }
 
@@ -85,9 +68,7 @@ func TestManagerUnhealthyNodeSkipped(t *testing.T) {
 	m.FeedbackOutcome("bad", OutcomeServerError)
 	for i := 0; i < 10; i++ {
 		lease, err := m.Acquire(context.Background(), "cli", "acct-3")
-		if err != nil {
-			t.Fatalf("acquire %d failed: %v", i, err)
-		}
+		testutil.Falsef(t, err != nil, "acquire %d failed: %v", i, err)
 		testutil.NotEqual(t, lease.NodeID, "bad")
 		lease.Release()
 	}
@@ -100,16 +81,12 @@ func TestFeedbackHealth(t *testing.T) {
 	m.mu.RLock()
 	score := m.health["n1"]
 	m.mu.RUnlock()
-	if score <= 0 {
-		t.Fatalf("expected positive health after success, got %f", score)
-	}
+	testutil.Falsef(t, score <= 0, "expected positive health after success, got %f", score)
 	m.FeedbackOutcome("n1", OutcomeServerError)
 	m.mu.RLock()
 	scoreAfter := m.health["n1"]
 	m.mu.RUnlock()
-	if scoreAfter >= score {
-		t.Fatalf("expected health to drop after failure: before=%f after=%f", score, scoreAfter)
-	}
+	testutil.Falsef(t, scoreAfter >= score, "expected health to drop after failure: before=%f after=%f", score, scoreAfter)
 }
 
 func TestFeedbackOutcome_RateLimitKeepsHealth(t *testing.T) {
@@ -132,9 +109,8 @@ func TestParseProxyURL(t *testing.T) {
 		"socks5h://proxy1:1080",
 	}
 	for _, raw := range valid {
-		if _, err := parseProxyURL(raw); err != nil {
-			t.Fatalf("expected %q to parse, got %v", raw, err)
-		}
+		_, err := parseProxyURL(raw)
+		testutil.CheckNoError(t, err)
 	}
 	invalid := []string{
 		"https://proxy1:8443", // https proxy unsupported by the browser transport
@@ -145,20 +121,16 @@ func TestParseProxyURL(t *testing.T) {
 		"http://host:notaport",
 	}
 	for _, raw := range invalid {
-		if _, err := parseProxyURL(raw); err == nil {
-			t.Fatalf("expected %q to be rejected", raw)
-		}
+		_, err := parseProxyURL(raw)
+		testutil.CheckError(t, err)
 	}
 }
 
 func TestAcquireFailsClosedWhenNoNodes(t *testing.T) {
 	m := NewManager(&config.Config{GrokEgressEnabled: true})
-	if m == nil {
-		t.Fatal("expected manager for enabled egress")
-	}
-	if _, err := m.Acquire(context.Background(), "cli", "acct"); err == nil {
-		t.Fatal("expected error when no nodes configured")
-	}
+	testutil.False(t, m == nil, "expected manager for enabled egress")
+	_, err := m.Acquire(context.Background(), "cli", "acct")
+	testutil.Error(t, err)
 }
 
 func TestNodeCooldownGrowsAndCaps(t *testing.T) {
@@ -174,9 +146,8 @@ func TestNodeCooldownGrowsAndCaps(t *testing.T) {
 	}
 	for failures, want := range cases {
 		testutil.Equal(t, nodeCooldownFor(failures), want)
-		if got := nodeCooldownFor(failures); got > nodeCooldownMax {
-			t.Fatalf("nodeCooldownFor(%d) = %s exceeds the cap", failures, got)
-		}
+		got := nodeCooldownFor(failures)
+		testutil.Falsef(t, got > nodeCooldownMax, "nodeCooldownFor(%d) = %s exceeds the cap", failures, got)
 	}
 }
 
@@ -192,21 +163,16 @@ func TestFeedbackOutcomeBacksOffExponentially(t *testing.T) {
 	}
 	m.FeedbackOutcome("n1", OutcomeTransportError)
 	first := time.Until(m.unhealthy["n1"])
-	if first > nodeCooldown+2*time.Second || first < nodeCooldown-2*time.Second {
-		t.Fatalf("first cooldown = %s, want about %s", first, nodeCooldown)
-	}
+	testutil.Falsef(t, first > nodeCooldown+2*time.Second || first < nodeCooldown-2*time.Second, "first cooldown = %s, want about %s", first, nodeCooldown)
 	m.FeedbackOutcome("n1", OutcomeTransportError)
 	second := time.Until(m.unhealthy["n1"])
-	if second < first {
-		t.Fatalf("second cooldown %s must be longer than the first %s", second, first)
-	}
+	testutil.Falsef(t, second < first, "second cooldown %s must be longer than the first %s", second, first)
 	testutil.Equal(t, m.lastError["n1"], "transport")
 	// A success clears both the cooldown and the accumulated backoff.
 	m.FeedbackOutcome("n1", OutcomeSuccess)
 	testutil.Equal(t, m.failures["n1"], 0)
-	if _, cooling := m.unhealthy["n1"]; cooling {
-		t.Fatal("a successful node must leave the cooldown map")
-	}
+	_, cooling := m.unhealthy["n1"]
+	testutil.False(t, cooling, "a successful node must leave the cooldown map")
 }
 
 func TestHealthPersistsAcrossManagers(t *testing.T) {
@@ -215,9 +181,7 @@ func TestHealthPersistsAcrossManagers(t *testing.T) {
 		{Name: "n1", URL: "http://127.0.0.1:1", Scope: "all"},
 	}}
 	first := NewManager(cfg)
-	if first == nil {
-		t.Fatal("manager must be created when egress is enabled")
-	}
+	testutil.False(t, first == nil, "manager must be created when egress is enabled")
 	first.FeedbackOutcome("n1", OutcomeTransportError)
 	first.FeedbackOutcome("n1", OutcomeTransportError)
 	// The write is throttled; force a flush by clearing the throttle.
@@ -227,9 +191,7 @@ func TestHealthPersistsAcrossManagers(t *testing.T) {
 	first.mu.Unlock()
 
 	second := NewManager(cfg)
-	if second == nil {
-		t.Fatal("second manager must be created")
-	}
+	testutil.False(t, second == nil, "second manager must be created")
 	second.mu.RLock()
 	failures := second.failures["n1"]
 	_, cooling := second.unhealthy["n1"]
@@ -242,7 +204,5 @@ func TestHealthPersistsAcrossManagers(t *testing.T) {
 	third.mu.RLock()
 	_, restored := third.failures["n1"]
 	third.mu.RUnlock()
-	if restored {
-		t.Fatal("health of a removed node must not be restored")
-	}
+	testutil.False(t, restored, "health of a removed node must not be restored")
 }

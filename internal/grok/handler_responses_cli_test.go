@@ -19,9 +19,8 @@ import (
 func TestHandleResponses_ProxiesBuildOAuthNatively(t *testing.T) {
 	var received map[string]interface{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
-			t.Fatalf("upstream request = %s %s", r.Method, r.URL.Path)
-		}
+		testutil.Equal(t, r.Method, http.MethodPost)
+		testutil.Equal(t, r.URL.Path, "/v1/responses")
 		testutil.NoError(t, json.NewDecoder(r.Body).Decode(&received), "decode upstream request: %v")
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("X-Request-ID", "native-response-test")
@@ -67,9 +66,8 @@ func TestHandleResponses_ProxiesBuildOAuthNatively(t *testing.T) {
 	testutil.Equal(t, rec.Code, http.StatusOK)
 	testutil.Equal(t, rec.Header().Get("Content-Type"), "text/event-stream")
 	testutil.Equal(t, rec.Header().Get("X-Request-Id"), "native-response-test")
-	if got := rec.Body.String(); !strings.Contains(got, "event: response.created") || strings.Contains(got, "chat.completion.chunk") {
-		t.Fatalf("response was not native Responses SSE: %q", got)
-	}
+	got := rec.Body.String()
+	testutil.Falsef(t, !strings.Contains(got, "event: response.created") || strings.Contains(got, "chat.completion.chunk"), "response was not native Responses SSE: %q", got)
 	testutil.Equal(t, received["previous_response_id"], "resp_previous")
 	metadata, _ := received["metadata"].(map[string]interface{})
 	testutil.Equal(t, metadata["trace"], "keep")

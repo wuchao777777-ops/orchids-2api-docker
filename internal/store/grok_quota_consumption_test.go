@@ -24,9 +24,7 @@ func TestClaimGrokPaidQuotaProbeIsBoundedAndAtomic(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			claimed, err := s.ClaimGrokPaidQuotaProbe(ctx, acc.ID, now)
-			if err != nil {
-				t.Errorf("claim: %v", err)
-			}
+			testutil.CheckNoError(t, err, "claim: %v")
 			claims <- claimed
 		}()
 	}
@@ -40,18 +38,12 @@ func TestClaimGrokPaidQuotaProbeIsBoundedAndAtomic(t *testing.T) {
 	}
 	testutil.Equal(t, count, 1)
 	got, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.GrokBilling.LastProbeAt.Equal(now) || !got.GrokBilling.NextProbeAt.Equal(now.Add(GrokPaidQuotaProbeInterval)) {
-		t.Fatalf("probe schedule=%+v", got.GrokBilling)
-	}
-	if claimed, err := s.ClaimGrokPaidQuotaProbe(ctx, acc.ID, now.Add(time.Minute)); err != nil || claimed {
-		t.Fatalf("probe admitted inside interval: claimed=%v err=%v", claimed, err)
-	}
-	if claimed, err := s.ClaimGrokPaidQuotaProbe(ctx, acc.ID, now.Add(GrokPaidQuotaProbeInterval)); err != nil || !claimed {
-		t.Fatalf("probe not admitted after interval: claimed=%v err=%v", claimed, err)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, !got.GrokBilling.LastProbeAt.Equal(now) || !got.GrokBilling.NextProbeAt.Equal(now.Add(GrokPaidQuotaProbeInterval)), "probe schedule=%+v", got.GrokBilling)
+	claimed, err := s.ClaimGrokPaidQuotaProbe(ctx, acc.ID, now.Add(time.Minute))
+	testutil.Falsef(t, err != nil || claimed, "probe admitted inside interval: claimed=%v err=%v", claimed, err)
+	claimed, err = s.ClaimGrokPaidQuotaProbe(ctx, acc.ID, now.Add(GrokPaidQuotaProbeInterval))
+	testutil.Falsef(t, err != nil || !claimed, "probe not admitted after interval: claimed=%v err=%v", claimed, err)
 }
 
 func TestClaimGrokPaidQuotaProbeWaitsForPeriodEnd(t *testing.T) {
@@ -63,7 +55,5 @@ func TestClaimGrokPaidQuotaProbeWaitsForPeriodEnd(t *testing.T) {
 		Weekly: GrokQuotaWindow{HasUsage: true, UsagePercent: 100, ResetAt: now.Add(time.Hour)}}}
 	testutil.NoError(t, s.CreateAccount(ctx, acc))
 	claimed, err := s.ClaimGrokPaidQuotaProbe(ctx, acc.ID, now)
-	if err != nil || claimed {
-		t.Fatalf("claim before period end=%v err=%v", claimed, err)
-	}
+	testutil.Falsef(t, err != nil || claimed, "claim before period end=%v err=%v", claimed, err)
 }

@@ -61,36 +61,18 @@ func PreserveQoderCredentialsOnEdit(acc, existing *store.Account) {
 	if acc == nil || existing == nil {
 		return
 	}
-	if strings.TrimSpace(acc.QoderAccessToken) == "" {
-		acc.QoderAccessToken = existing.QoderAccessToken
-	}
-	if strings.TrimSpace(acc.QoderRefreshToken) == "" {
-		acc.QoderRefreshToken = existing.QoderRefreshToken
-	}
-	if strings.TrimSpace(acc.QoderMachineID) == "" {
-		acc.QoderMachineID = existing.QoderMachineID
-	}
-	if strings.TrimSpace(acc.QoderUserID) == "" {
-		acc.QoderUserID = existing.QoderUserID
-	}
-	if strings.TrimSpace(acc.QoderUserName) == "" {
-		acc.QoderUserName = existing.QoderUserName
-	}
-	if strings.TrimSpace(acc.QoderOrganizationID) == "" {
-		acc.QoderOrganizationID = existing.QoderOrganizationID
-	}
+	preserveBlank(&acc.QoderAccessToken, existing.QoderAccessToken)
+	preserveBlank(&acc.QoderRefreshToken, existing.QoderRefreshToken)
+	preserveBlank(&acc.QoderMachineID, existing.QoderMachineID)
+	preserveBlank(&acc.QoderUserID, existing.QoderUserID)
+	preserveBlank(&acc.QoderUserName, existing.QoderUserName)
+	preserveBlank(&acc.QoderOrganizationID, existing.QoderOrganizationID)
 	if len(acc.QoderOrganizationTags) == 0 {
 		acc.QoderOrganizationTags = append([]string(nil), existing.QoderOrganizationTags...)
 	}
-	if acc.QoderExpiresAt.IsZero() {
-		acc.QoderExpiresAt = existing.QoderExpiresAt
-	}
-	if strings.TrimSpace(acc.QoderRuntimeInfo) == "" {
-		acc.QoderRuntimeInfo = existing.QoderRuntimeInfo
-	}
-	if strings.TrimSpace(acc.QoderRuntimeKey) == "" {
-		acc.QoderRuntimeKey = existing.QoderRuntimeKey
-	}
+	preserveTime(&acc.QoderExpiresAt, existing.QoderExpiresAt)
+	preserveBlank(&acc.QoderRuntimeInfo, existing.QoderRuntimeInfo)
+	preserveBlank(&acc.QoderRuntimeKey, existing.QoderRuntimeKey)
 	// The identity in the runtime plaintext is immutable for a credential: an
 	// edit must not change the UID without re-deriving, or every request would
 	// be signed with material that no longer matches the account.
@@ -101,25 +83,10 @@ func PreserveQoderCredentialsOnEdit(acc, existing *store.Account) {
 	if len(acc.QoderModelIDs) == 0 {
 		acc.QoderModelIDs = append([]string(nil), existing.QoderModelIDs...)
 	}
-	if acc.QoderModelsSyncedAt.IsZero() {
-		acc.QoderModelsSyncedAt = existing.QoderModelsSyncedAt
-	}
+	preserveTime(&acc.QoderModelsSyncedAt, existing.QoderModelsSyncedAt)
 	// Provider-observed usage and health are not editable either.
-	acc.UsageLimit = existing.UsageLimit
-	acc.UsageCurrent = existing.UsageCurrent
-	acc.UsageTotal = existing.UsageTotal
-	if acc.QuotaResetAt.IsZero() {
-		acc.QuotaResetAt = existing.QuotaResetAt
-	}
-	if strings.TrimSpace(acc.StatusCode) == "" {
-		acc.StatusCode = existing.StatusCode
-	}
-	if acc.LastAttempt.IsZero() {
-		acc.LastAttempt = existing.LastAttempt
-	}
-	if acc.VerifiedAt.IsZero() {
-		acc.VerifiedAt = existing.VerifiedAt
-	}
+	preserveObservedAccountState(acc, existing)
+	preserveTime(&acc.VerifiedAt, existing.VerifiedAt)
 }
 
 // NormalizeQoderCredentials binds the account's device identity to its
@@ -203,21 +170,7 @@ func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 	// The runtime pair encrypts the UID, so it cannot be produced before the
 	// identity is known. A credential imported without one is completed here.
 	if profile, err := client.FetchProfile(ctx, accessToken); err == nil {
-		if uid := strings.TrimSpace(profile.UID); uid != "" {
-			acc.QoderUserID = uid
-		}
-		if name := strings.TrimSpace(profile.Name); name != "" {
-			acc.QoderUserName = name
-		}
-		if email := strings.TrimSpace(profile.Email); email != "" {
-			acc.Email = email
-		}
-		if orgID := strings.TrimSpace(profile.OrgID); orgID != "" {
-			acc.QoderOrganizationID = orgID
-		}
-		if len(profile.OrgTags) > 0 {
-			acc.QoderOrganizationTags = append([]string(nil), profile.OrgTags...)
-		}
+		profile.ApplyToAccount(acc)
 		client.ApplyProfile(profile)
 	} else {
 		slog.Debug("Qoder profile lookup failed during verification", "account_id", acc.ID, "error", err)

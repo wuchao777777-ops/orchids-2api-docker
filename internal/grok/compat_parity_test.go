@@ -40,13 +40,10 @@ func TestResolveModelRetiredIDs(t *testing.T) {
 		{id: "grok-imagine-2.0"},
 	}
 	for _, tc := range cases {
-		if _, ok := ResolveModel(tc.id); ok {
-			t.Errorf("ResolveModel(%s) = true, want the retired identifier refused", tc.id)
-		}
+		_, ok := ResolveModel(tc.id)
+		testutil.CheckFalsef(t, ok, "ResolveModel(%s) = true, want the retired identifier refused", tc.id)
 		if tc.checkDeprecated {
-			if !IsDeprecatedModelID(tc.id) {
-				t.Errorf("IsDeprecatedModelID(%s) = false, want true", tc.id)
-			}
+			testutil.CheckTrue(t, IsDeprecatedModelID(tc.id), "IsDeprecatedModelID(%s) = false, want true")
 		}
 	}
 }
@@ -56,9 +53,7 @@ func TestResolveModelRetiredIDs(t *testing.T) {
 func TestResolveModelAcceptsCurrentBuildModels(t *testing.T) {
 	for _, id := range []string{"grok-4.5", "grok-4.6"} {
 		spec, ok := ResolveModel(id)
-		if !ok {
-			t.Fatalf("ResolveModel(%s) should succeed", id)
-		}
+		testutil.True(t, ok, "ResolveModel(%s) should succeed")
 		testutil.Equal(t, spec.UpstreamModel, id)
 	}
 }
@@ -66,20 +61,14 @@ func TestResolveModelAcceptsCurrentBuildModels(t *testing.T) {
 func TestGrok45RoutesToBuildCLI(t *testing.T) {
 	spec, ok := ResolveModel("grok-4.5")
 	testutil.True(t, ok, "ResolveModel(grok-4.5) = false, want true")
-	if !modelRoutedToCLI(spec, &config.Config{}) {
-		t.Fatal("grok-4.5 should route through the official Build CLI OAuth path")
-	}
+	testutil.False(t, !modelRoutedToCLI(spec, &config.Config{}), "grok-4.5 should route through the official Build CLI OAuth path")
 }
 
 func TestLegacyCLIModelListCannotRouteImplicitModel(t *testing.T) {
 	var cfg config.Config
 	testutil.NoError(t, json.Unmarshal([]byte(`{"grok_cli_model_ids":["implicit-model"]}`), &cfg))
-	if modelRoutedToCLI(ModelSpec{ID: "implicit-model"}, &cfg) {
-		t.Fatal("legacy model list must not route models without explicit Build capability")
-	}
-	if !modelRoutedToCLI(ModelSpec{ID: "dynamic-build", Upstream: UpstreamCLI}, &cfg) {
-		t.Fatal("dynamically discovered Build models must stay routed to CLI")
-	}
+	testutil.False(t, modelRoutedToCLI(ModelSpec{ID: "implicit-model"}, &cfg), "legacy model list must not route models without explicit Build capability")
+	testutil.False(t, !modelRoutedToCLI(ModelSpec{ID: "dynamic-build", Upstream: UpstreamCLI}, &cfg), "dynamically discovered Build models must stay routed to CLI")
 }
 
 // TestChatCompletionsRequestValidateLeavesSamplingToUpstream pins that Validate
@@ -93,12 +82,8 @@ func TestChatCompletionsRequestValidateLeavesSamplingToUpstream(t *testing.T) {
 		}},
 	}
 	testutil.NoError(t, req.Validate(), "Validate() error: %v")
-	if req.Temperature != nil {
-		t.Fatalf("temperature default mismatch: got=%v", req.Temperature)
-	}
-	if req.TopP != nil {
-		t.Fatalf("top_p default mismatch: got=%v", req.TopP)
-	}
+	testutil.Falsef(t, req.Temperature != nil, "temperature default mismatch: got=%v", req.Temperature)
+	testutil.Falsef(t, req.TopP != nil, "top_p default mismatch: got=%v", req.TopP)
 }
 
 func TestChatCompletionsRequestValidateToolChoice(t *testing.T) {
@@ -150,9 +135,8 @@ func TestChatCompletionsRequestValidateToolChoice(t *testing.T) {
 				Tools:      tc.tools,
 				ToolChoice: tc.toolChoice,
 			}
-			if err := req.Validate(); (err != nil) != tc.wantErr {
-				t.Fatalf("Validate() error = %v, wantErr = %v", err, tc.wantErr)
-			}
+			err := req.Validate()
+			testutil.Falsef(t, (err != nil) != tc.wantErr, "Validate() error = %v, wantErr = %v", err, tc.wantErr)
 		})
 	}
 }
@@ -202,17 +186,13 @@ func TestChatCompletionsRequestUnmarshalLooseTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var req ChatCompletionsRequest
 			err := json.Unmarshal([]byte(tc.raw), &req)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("unmarshal error = %v, wantErr = %v", err, tc.wantErr)
-			}
+			testutil.Falsef(t, (err != nil) != tc.wantErr, "unmarshal error = %v, wantErr = %v", err, tc.wantErr)
 			if tc.wantErr {
 				return
 			}
 			testutil.Equal(t, req.Stream, tc.wantStream)
 			testutil.Equal(t, req.StreamProvided, tc.wantProvided)
-			if (req.Temperature != nil) != tc.wantSampling || (req.TopP != nil) != tc.wantSampling {
-				t.Fatalf("sampling present=%v/%v want=%v", req.Temperature != nil, req.TopP != nil, tc.wantSampling)
-			}
+			testutil.Falsef(t, (req.Temperature != nil) != tc.wantSampling || (req.TopP != nil) != tc.wantSampling, "sampling present=%v/%v want=%v", req.Temperature != nil, req.TopP != nil, tc.wantSampling)
 			if tc.wantSampling && (*req.Temperature != tc.wantTemp || *req.TopP != tc.wantTopP) {
 				t.Fatalf("temperature=%v top_p=%v want %v/%v", *req.Temperature, *req.TopP, tc.wantTemp, tc.wantTopP)
 			}

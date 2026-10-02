@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"orchids-api/internal/testutil"
 	"orchids-api/internal/upstream"
 )
 
@@ -26,15 +27,9 @@ func TestStreamPrefixPreservesNativeToolsAndOrder(t *testing.T) {
 					body += "event:finish\n\n"
 					var events []upstream.SSEMessage
 					result, err := consumeStreamObserved(strings.NewReader(body), toolsEnabled, func(e upstream.SSEMessage) { events = append(events, e) }, nil)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if result.ToolCallCount != 1 || result.FinishReasonValue != "length" || result.FinishReason() != "max_tokens" {
-						t.Fatalf("result = %+v", result)
-					}
-					if len(events) != 3 || events[0].Type != "model.text-delta" || events[0].Event["delta"] != prefix || events[1].Type != "model.text-delta" || events[1].Event["delta"] != "after" || events[2].Type != "model.tool-call" {
-						t.Fatalf("events = %+v", events)
-					}
+					testutil.NoError(t, err)
+					testutil.Falsef(t, result.ToolCallCount != 1 || result.FinishReasonValue != "length" || result.FinishReason() != "max_tokens", "result = %+v", result)
+					testutil.Falsef(t, len(events) != 3 || events[0].Type != "model.text-delta" || events[0].Event["delta"] != prefix || events[1].Type != "model.text-delta" || events[1].Event["delta"] != "after" || events[2].Type != "model.tool-call", "events = %+v", events)
 					if events[2].Event["toolCallId"] != "call_1" || events[2].Event["toolName"] != "lookup" || events[2].Event["input"] != `{"key":1}` {
 						t.Fatalf("tool = %+v", events[2])
 					}
@@ -60,22 +55,15 @@ func TestStreamPrefixSharedFinishFrame(t *testing.T) {
 					}
 					var events []upstream.SSEMessage
 					result, err := consumeStreamObserved(strings.NewReader(body), toolsEnabled, func(e upstream.SSEMessage) { events = append(events, e) }, nil)
-					if (terminated && err != nil) || (!terminated && !errors.Is(err, ErrStreamTruncated)) {
-						t.Fatalf("error = %v", err)
-					}
+					testutil.Falsef(t, (terminated && err != nil) || (!terminated && !errors.Is(err, ErrStreamTruncated)), "error = %v", err)
 					wantEvents := 1
 					if withTool {
 						wantEvents++
 					}
-					if len(events) != wantEvents || events[0].Type != "model.text-delta" || events[0].Event["delta"] != "The" {
-						t.Fatalf("events = %+v", events)
-					}
-					if result.FinishReasonValue != "length" || result.FinishReason() != "max_tokens" {
-						t.Fatalf("result = %+v", result)
-					}
-					if withTool && (result.ToolCallCount != 1 || events[1].Type != "model.tool-call") {
-						t.Fatalf("tool lost: %+v, %+v", result, events)
-					}
+					testutil.Falsef(t, len(events) != wantEvents || events[0].Type != "model.text-delta" || events[0].Event["delta"] != "The", "events = %+v", events)
+					testutil.Equal(t, result.FinishReasonValue, "length")
+					testutil.Equal(t, result.FinishReason(), "max_tokens")
+					testutil.Falsef(t, withTool && (result.ToolCallCount != 1 || events[1].Type != "model.tool-call"), "tool lost: %+v, %+v", result, events)
 				})
 			}
 		}

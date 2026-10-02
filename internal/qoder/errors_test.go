@@ -41,18 +41,10 @@ func TestIsTransientUpstreamStatus(t *testing.T) {
 }
 
 func TestContentPolicyAndClientFaultMarkers(t *testing.T) {
-	if !IsContentPolicy(`{"message":"DataInspectionFailed"}`) {
-		t.Error("the safety marker was not recognised")
-	}
-	if IsContentPolicy(`{"message":"gateway is busy"}`) {
-		t.Error("a busy payload was read as a safety refusal")
-	}
-	if !IsClientFault(`{"error":{"type":"invalid_parameter_error"}}`) {
-		t.Error("a parameter rejection was not recognised")
-	}
-	if IsClientFault(`{"error":{"type":"provider_error"}}`) {
-		t.Error("a provider fault was read as the client's fault")
-	}
+	testutil.CheckFalse(t, !IsContentPolicy(`{"message":"DataInspectionFailed"}`), "the safety marker was not recognised")
+	testutil.CheckFalse(t, IsContentPolicy(`{"message":"gateway is busy"}`), "a busy payload was read as a safety refusal")
+	testutil.CheckFalse(t, !IsClientFault(`{"error":{"type":"invalid_parameter_error"}}`), "a parameter rejection was not recognised")
+	testutil.CheckFalse(t, IsClientFault(`{"error":{"type":"provider_error"}}`), "a provider fault was read as the client's fault")
 }
 
 func TestIsTransientTransport(t *testing.T) {
@@ -63,37 +55,23 @@ func TestIsTransientTransport(t *testing.T) {
 		&net.OpError{Op: "dial", Err: &timeoutError{}},
 	}
 	for _, err := range transient {
-		if !IsTransientTransport(err) {
-			t.Errorf("IsTransientTransport(%v) = false, want true", err)
-		}
+		testutil.CheckTrue(t, IsTransientTransport(err), "IsTransientTransport(%v) = false, want true")
 	}
 
 	// A caller-side cancellation is not the upstream hiccupping.
-	if IsTransientTransport(context.Canceled) {
-		t.Error("a canceled context was treated as transient")
-	}
-	if IsTransientTransport(context.DeadlineExceeded) {
-		t.Error("an exceeded deadline was treated as transient")
-	}
+	testutil.CheckFalse(t, IsTransientTransport(context.Canceled), "a canceled context was treated as transient")
+	testutil.CheckFalse(t, IsTransientTransport(context.DeadlineExceeded), "an exceeded deadline was treated as transient")
 	// Configuration and certificate faults fail identically next time.
 	for _, err := range []error{
 		fmt.Errorf(`unsupported protocol scheme "ftp"`),
 		fmt.Errorf("x509: certificate signed by unknown authority"),
 	} {
-		if IsTransientTransport(err) {
-			t.Errorf("IsTransientTransport(%v) = true, want false", err)
-		}
+		testutil.CheckFalsef(t, IsTransientTransport(err), "IsTransientTransport(%v) = true, want false", err)
 	}
-	if IsTransientTransport(nil) {
-		t.Error("a nil error was treated as transient")
-	}
+	testutil.CheckFalse(t, IsTransientTransport(nil), "a nil error was treated as transient")
 	// A connection refused at the OS level is still a hiccup.
-	if !isTransientSyscall(syscall.ECONNRESET) {
-		t.Error("ECONNRESET was not recognised as transient")
-	}
-	if isTransientSyscall(syscall.EACCES) {
-		t.Error("a permission fault was read as transient")
-	}
+	testutil.CheckFalse(t, !isTransientSyscall(syscall.ECONNRESET), "ECONNRESET was not recognised as transient")
+	testutil.CheckFalse(t, isTransientSyscall(syscall.EACCES), "a permission fault was read as transient")
 }
 
 type timeoutError struct{}
@@ -104,33 +82,20 @@ func (*timeoutError) Temporary() bool { return true }
 
 func TestEmptyAndTransientSentinels(t *testing.T) {
 	wrapped := fmt.Errorf("%w: qoder stream produced no usable events", ErrEmptyStream)
-	if !errors.Is(wrapped, ErrEmptyStream) {
-		t.Error("the empty-stream sentinel was lost through wrapping")
-	}
-	if isRetryable(wrapped) {
-		t.Error("an empty stream must not be replayed")
-	}
-	if got := orchidserrors.ClassifyUpstreamError(wrapped.Error()); got.Category != "protocol" || got.Retryable {
-		t.Errorf("class = %+v, want protocol and not retryable", got)
-	}
+	testutil.CheckFalse(t, !errors.Is(wrapped, ErrEmptyStream), "the empty-stream sentinel was lost through wrapping")
+	testutil.CheckFalse(t, isRetryable(wrapped), "an empty stream must not be replayed")
+	got := orchidserrors.ClassifyUpstreamError(wrapped.Error())
+	testutil.CheckFalsef(t, got.Category != "protocol" || got.Retryable, "class = %+v, want protocol and not retryable", got)
 
 	// A transient provider fault retries locally on the same account.
 	transient := &attemptStreamError{err: transientError("status=503"), retryable: true}
-	if !isTransientError(transient) {
-		t.Error("the transient sentinel was lost through wrapping")
-	}
-	if !isRetryable(transient) {
-		t.Error("a transient fault must reach the shared handler as retryable")
-	}
+	testutil.CheckFalse(t, !isTransientError(transient), "the transient sentinel was lost through wrapping")
+	testutil.CheckFalse(t, !isRetryable(transient), "a transient fault must reach the shared handler as retryable")
 
 	// A safety refusal is a client outcome: no retry, no account switch.
 	refusal := contentPolicyError("DataInspectionFailed")
-	if !errors.Is(refusal, ErrContentPolicy) {
-		t.Error("the content-policy sentinel was lost through wrapping")
-	}
-	if isTransientError(refusal) || isRetryable(refusal) {
-		t.Error("a safety refusal must not be retried or rotated")
-	}
+	testutil.CheckFalse(t, !errors.Is(refusal, ErrContentPolicy), "the content-policy sentinel was lost through wrapping")
+	testutil.CheckFalse(t, isTransientError(refusal) || isRetryable(refusal), "a safety refusal must not be retried or rotated")
 }
 
 // TestTransientBackoffIsBounded pins the local retry budget: the shared handler
@@ -139,13 +104,10 @@ func TestEmptyAndTransientSentinels(t *testing.T) {
 func TestTransientBackoffIsBounded(t *testing.T) {
 	testutil.Equal(t, TransientMaxRetries, 2)
 	for attempt := 1; attempt <= TransientMaxRetries; attempt++ {
-		if d := TransientBackoff(attempt); d <= 0 || d > 5*time.Second {
-			t.Errorf("TransientBackoff(%d) = %v, want a short bounded wait", attempt, d)
-		}
+		d := TransientBackoff(attempt)
+		testutil.CheckFalsef(t, d <= 0 || d > 5*time.Second, "TransientBackoff(%d) = %v, want a short bounded wait", attempt, d)
 	}
-	if TransientBackoff(0) <= 0 {
-		t.Error("a non-positive attempt must still produce a wait")
-	}
+	testutil.CheckFalse(t, TransientBackoff(0) <= 0, "a non-positive attempt must still produce a wait")
 }
 
 // TestRunChatRetriesATransientFaultLocally proves a provider-side hiccup is
@@ -168,13 +130,9 @@ func TestRunChatRetriesATransientFaultLocally(t *testing.T) {
 	var got []upstream.SSEMessage
 	err := client.runChat(context.Background(), chatURL(server.URL), EncodeBody([]byte(`{}`)), modelEntry{Key: "k"},
 		"req-1", RuntimeFields{Key: "k"}, false, func(m upstream.SSEMessage) { got = append(got, m) })
-	if err != nil {
-		t.Fatalf("runChat() error = %v, want the retry to succeed", err)
-	}
+	testutil.NoError(t, err, "runChat() error = %v, want the retry to succeed")
 	testutil.Equal(t, hits, 2)
-	if !sawFinishMessage(got) {
-		t.Fatalf("no finish frame: %+v", got)
-	}
+	testutil.True(t, sawFinishMessage(got), "no finish frame: %+v")
 }
 
 // TestRunChatDoesNotReplayAContentRefusal proves a safety refusal fails fast:
@@ -192,9 +150,7 @@ func TestRunChatDoesNotReplayAContentRefusal(t *testing.T) {
 	client := newRetryTestClient(t, server.URL)
 	err := client.runChat(context.Background(), chatURL(server.URL), EncodeBody([]byte(`{}`)), modelEntry{Key: "k"},
 		"req-1", RuntimeFields{Key: "k"}, false, func(upstream.SSEMessage) {})
-	if !errors.Is(err, ErrContentPolicy) {
-		t.Fatalf("error = %v, want the content-policy sentinel", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrContentPolicy), "error = %v, want the content-policy sentinel", err)
 	testutil.Equal(t, hits, 1)
 }
 
@@ -213,9 +169,7 @@ func TestRunChatReportsAnEmptyStream(t *testing.T) {
 	client := newRetryTestClient(t, server.URL)
 	err := client.runChat(context.Background(), chatURL(server.URL), EncodeBody([]byte(`{}`)), modelEntry{Key: "k"},
 		"req-1", RuntimeFields{Key: "k"}, false, func(upstream.SSEMessage) {})
-	if !errors.Is(err, ErrEmptyStream) {
-		t.Fatalf("error = %v, want the empty-stream sentinel", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrEmptyStream), "error = %v, want the empty-stream sentinel", err)
 	testutil.Equal(t, hits, 1)
 }
 
@@ -234,9 +188,7 @@ func TestRunChatStopsAtABusyVerdict(t *testing.T) {
 	client := newRetryTestClient(t, server.URL, withRetryTestCredential("token"))
 	err := client.runChat(context.Background(), chatURL(server.URL), EncodeBody([]byte(`{}`)), modelEntry{Key: "k"},
 		"req-1", RuntimeFields{Key: "k"}, false, func(upstream.SSEMessage) {})
-	if !errors.Is(err, ErrBusy) {
-		t.Fatalf("error = %v, want the busy verdict", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrBusy), "error = %v, want the busy verdict", err)
 	testutil.Equal(t, hits, 1)
 }
 

@@ -73,18 +73,10 @@ func PreserveWorkBuddyCredentialsOnEdit(acc, existing *store.Account) {
 	if acc == nil || existing == nil {
 		return
 	}
-	if strings.TrimSpace(acc.WorkBuddyAccessToken) == "" {
-		acc.WorkBuddyAccessToken = existing.WorkBuddyAccessToken
-	}
-	if strings.TrimSpace(acc.WorkBuddyRefreshToken) == "" {
-		acc.WorkBuddyRefreshToken = existing.WorkBuddyRefreshToken
-	}
-	if strings.TrimSpace(acc.WorkBuddyUID) == "" {
-		acc.WorkBuddyUID = existing.WorkBuddyUID
-	}
-	if acc.WorkBuddyExpiresAt.IsZero() {
-		acc.WorkBuddyExpiresAt = existing.WorkBuddyExpiresAt
-	}
+	preserveBlank(&acc.WorkBuddyAccessToken, existing.WorkBuddyAccessToken)
+	preserveBlank(&acc.WorkBuddyRefreshToken, existing.WorkBuddyRefreshToken)
+	preserveBlank(&acc.WorkBuddyUID, existing.WorkBuddyUID)
+	preserveTime(&acc.WorkBuddyExpiresAt, existing.WorkBuddyExpiresAt)
 	if !isFullWorkBuddyCatalog(acc.WorkBuddyModelIDs) {
 		// An edit must not erase the account-scoped catalog snapshot, and the UI
 		// has no way to submit it.
@@ -96,26 +88,13 @@ func PreserveWorkBuddyCredentialsOnEdit(acc, existing *store.Account) {
 	}
 	// Provider-observed usage and health are not editable through the account
 	// form; a partial PUT must not zero the credit meter the table displays.
-	acc.UsageLimit = existing.UsageLimit
-	acc.UsageCurrent = existing.UsageCurrent
-	acc.UsageTotal = existing.UsageTotal
-	if acc.QuotaResetAt.IsZero() {
-		acc.QuotaResetAt = existing.QuotaResetAt
-	}
-	if strings.TrimSpace(acc.StatusCode) == "" {
-		acc.StatusCode = existing.StatusCode
-	}
-	if acc.LastAttempt.IsZero() {
-		acc.LastAttempt = existing.LastAttempt
-	}
+	preserveObservedAccountState(acc, existing)
 }
 
 // isFullWorkBuddyCatalog reports whether a snapshot carries a plausible catalog.
 // The admin API never accepts the snapshot from a client, so this is a guard
 // against an accidental partial overwrite rather than a validation rule.
-func isFullWorkBuddyCatalog(ids []string) bool {
-	return len(ids) >= 4
-}
+func isFullWorkBuddyCatalog(ids []string) bool { return len(ids) >= 4 }
 
 // RedactWorkBuddyOutput hides the durable refresh token and unrelated legacy
 // secrets while leaving the access token visible (the management UI shows a

@@ -73,10 +73,7 @@ type qualitySignals struct {
 // without narrating its reasoning, and a false positive here disables a working
 // credential.
 func qualityDegraded(sig qualitySignals) bool {
-	if !sig.ExpectReasoning || sig.SawReasoning || !sig.Terminal {
-		return false
-	}
-	if sig.ToolCalls > 0 {
+	if !sig.ExpectReasoning || sig.SawReasoning || !sig.Terminal || sig.ToolCalls > 0 {
 		return false
 	}
 	if sig.VisibleChars < qualityMinVisible && sig.ReasoningChars <= 0 {
@@ -157,10 +154,7 @@ func (h *Handler) clearQualityGuard(ctx context.Context, acc *store.Account) {
 // gateway has already streamed it, and rewriting a delivered answer would be
 // worse than cooling the credential that produced it.
 func (h *Handler) applyBuildQualityGuard(ctx context.Context, acc *store.Account, outcome chatOutcome) {
-	if h == nil || acc == nil {
-		return
-	}
-	if outcome.Err != nil || !outcome.Quality.Terminal {
+	if h == nil || acc == nil || outcome.Err != nil || !outcome.Quality.Terminal {
 		return
 	}
 	if qualityDegraded(outcome.Quality) {

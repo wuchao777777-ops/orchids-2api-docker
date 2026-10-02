@@ -10,29 +10,22 @@ import (
 
 func TestLoggerLogInputTokenBreakdownWritesFile(t *testing.T) {
 	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
+	testutil.NoError(t, err, "Getwd() error = %v")
 	tmp := t.TempDir()
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatalf("Chdir(%q) error = %v", tmp, err)
-	}
+	err = os.Chdir(tmp)
+	testutil.CheckNoError(t, err)
 	defer func() {
 		_ = os.Chdir(wd)
 	}()
 
 	logger := New(true, false)
-	if logger == nil || logger.dir == "" {
-		t.Fatal("expected enabled logger with directory")
-	}
+	testutil.False(t, logger == nil || logger.dir == "", "expected enabled logger with directory")
 
 	logger.LogInputTokenBreakdown("workbuddy", 101, 202, 303, 404, 1010)
 
 	path := filepath.Join(logger.dir, "6_input_token_breakdown.json")
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", path, err)
-	}
+	testutil.Falsef(t, err != nil, "ReadFile(%q) error = %v", path, err)
 
 	content := string(raw)
 	for _, want := range []string{
@@ -49,13 +42,10 @@ func TestLoggerLogInputTokenBreakdownWritesFile(t *testing.T) {
 
 func TestLoggerLogUpstreamRequestRedactsCredentials(t *testing.T) {
 	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
+	testutil.NoError(t, err, "Getwd() error = %v")
 	tmp := t.TempDir()
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatalf("Chdir(%q) error = %v", tmp, err)
-	}
+	err = os.Chdir(tmp)
+	testutil.CheckNoError(t, err)
 	defer func() { _ = os.Chdir(wd) }()
 
 	logger := New(true, false)
@@ -67,18 +57,13 @@ func TestLoggerLogUpstreamRequestRedactsCredentials(t *testing.T) {
 
 	path := filepath.Join(logger.dir, "3_upstream_request.json")
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", path, err)
-	}
+	testutil.Falsef(t, err != nil, "ReadFile(%q) error = %v", path, err)
 	content := string(raw)
 	testutil.MustNotContainAny(t, content, "secret-jwt", "secret-cookie")
 	testutil.MustContain(t, content, "[REDACTED]")
 	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat(%q) error = %v", path, err)
-	}
+	testutil.Falsef(t, err != nil, "Stat(%q) error = %v", path, err)
 	// Windows does not expose Unix permission bits through os.FileMode.
-	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0600 {
-		t.Fatalf("debug log permissions=%o want 600", got)
-	}
+	got := info.Mode().Perm()
+	testutil.Falsef(t, runtime.GOOS != "windows" && got != 0600, "debug log permissions=%o want 600", got)
 }

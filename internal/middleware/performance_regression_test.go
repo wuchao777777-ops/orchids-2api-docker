@@ -18,18 +18,13 @@ func TestNestedAdmissionUsesOneGlobalSlot(t *testing.T) {
 func TestAllowlistCacheRejectsInvalidReplacement(t *testing.T) {
 	var cache AnonymousAllowlistCache
 	list, err := cache.Get([]string{"127.0.0.1"})
-	if err != nil || list.Empty() {
-		t.Fatal("first config")
-	}
-	if same, _ := cache.Get([]string{"127.0.0.1"}); same != list {
-		t.Fatal("unchanged list reparsed")
-	}
-	if _, err := cache.Get([]string{"invalid"}); err == nil {
-		t.Fatal("invalid config inherited previous allowlist")
-	}
-	if empty, err := cache.Get(nil); err != nil || !empty.Empty() {
-		t.Fatal("empty list allowed old source")
-	}
+	testutil.False(t, err != nil || list.Empty(), "first config")
+	same, _ := cache.Get([]string{"127.0.0.1"})
+	testutil.False(t, same != list, "unchanged list reparsed")
+	_, err = cache.Get([]string{"invalid"})
+	testutil.Error(t, err)
+	empty, err := cache.Get(nil)
+	testutil.False(t, err != nil || !empty.Empty(), "empty list allowed old source")
 }
 func TestProviderAdmissionSeparatesBudgetsAndReleases(t *testing.T) {
 	wrap := ProviderAdmission(func() map[string]int { return map[string]int{"grok": 1, "cline": 1} })
@@ -55,7 +50,5 @@ func TestProviderAdmissionSeparatesBudgetsAndReleases(t *testing.T) {
 	<-done
 	rec = httptest.NewRecorder()
 	h(rec, httptest.NewRequest("POST", "/grok/after", nil))
-	if rec.Code != 204 {
-		t.Fatal("slot leaked")
-	}
+	testutil.Equal(t, rec.Code, 204)
 }

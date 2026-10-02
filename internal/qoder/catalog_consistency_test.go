@@ -15,16 +15,13 @@ func TestCatalogMergesDuplicateKeys(t *testing.T) {
 	testutil.Equal(t, catalog.Len(), 1)
 	for _, name := range []string{"model", "MODEL", " Model Name ", "model name", "Display Alias", "DISPLAY ALIAS"} {
 		entry, err := catalog.Resolve(name)
-		if err != nil || entry.Key != "model" || entry.MaxInputTokens != 180000 {
-			t.Fatalf("Resolve(%q) = %+v, %v", name, entry, err)
-		}
+		testutil.Falsef(t, err != nil || entry.Key != "model" || entry.MaxInputTokens != 180000, "Resolve(%q) = %+v, %v", name, entry, err)
 	}
 	snapshot := CatalogSnapshot(catalog)
 	testutil.Equal(t, len(snapshot), 1)
 	roundtrip := catalogFromIDs(snapshot)
-	if got, err := roundtrip.Resolve("Display Alias"); err != nil || got.MaxInputTokens != 180000 {
-		t.Fatalf("roundtrip = %+v, %v", got, err)
-	}
+	got, err := roundtrip.Resolve("Display Alias")
+	testutil.Falsef(t, err != nil || got.MaxInputTokens != 180000, "roundtrip = %+v, %v", got, err)
 }
 
 func TestCatalogMetadataMatchesAliasAndKeyResolution(t *testing.T) {
@@ -45,16 +42,10 @@ func TestCatalogMetadataMatchesAliasAndKeyResolution(t *testing.T) {
 		{"DISPLAY", "Display", 32000}, {"display", "Display", 32000},
 	} {
 		entry, err := catalog.Resolve(tc.name)
-		if err != nil || entry.Key != tc.key || entry.MaxInputTokens != tc.window {
-			t.Fatalf("Resolve(%q) = %+v, %v", tc.name, entry, err)
-		}
+		testutil.Falsef(t, err != nil || entry.Key != tc.key || entry.MaxInputTokens != tc.window, "Resolve(%q) = %+v, %v", tc.name, entry, err)
 	}
-	if windows["shared"] != 180000 || windows["display"] != 32000 || windows["large"] != 900000 {
-		t.Fatalf("windows = %#v", windows)
-	}
-	if IsFreeModel(snapshot, "SHARED") || IsFreeModel(snapshot, "display") || !IsFreeModel(snapshot, "large") {
-		t.Fatalf("free metadata disagrees with routing: %#v", FreeModelIDs(snapshot))
-	}
+	testutil.Falsef(t, windows["shared"] != 180000 || windows["display"] != 32000 || windows["large"] != 900000, "windows = %#v", windows)
+	testutil.Falsef(t, IsFreeModel(snapshot, "SHARED") || IsFreeModel(snapshot, "display") || !IsFreeModel(snapshot, "large"), "free metadata disagrees with routing: %#v", FreeModelIDs(snapshot))
 }
 
 func TestCatalogUnknownAliasWindowDoesNotBorrowAnotherRow(t *testing.T) {
@@ -63,8 +54,7 @@ func TestCatalogUnknownAliasWindowDoesNotBorrowAnotherRow(t *testing.T) {
 		{Key: "known", Name: "Shared", MaxInputTokens: 900000},
 	}))
 	windows := CatalogContextWindows(snapshot)
-	if _, exists := windows["shared"]; exists {
-		t.Fatalf("unknown window inherited another model's budget: %#v", windows)
-	}
+	_, exists := windows["shared"]
+	testutil.Falsef(t, exists, "unknown window inherited another model's budget: %#v", windows)
 	testutil.Equal(t, windows["known"], 900000)
 }

@@ -18,15 +18,9 @@ func TestDailyCountRefusalIsNotACredentialRejection(t *testing.T) {
 
 	for _, status := range []int{401, 403, 500} {
 		err := classifyStatus(status, "", []byte(body))
-		if err == nil {
-			t.Fatalf("status %d: expected an error", status)
-		}
-		if isUnauthorized(err) {
-			t.Fatalf("status %d: daily-count refusal reported as a credential rejection: %v", status, err)
-		}
-		if !errors.Is(err, ErrDailyCountExceeded) {
-			t.Fatalf("status %d: err = %v, want ErrDailyCountExceeded", status, err)
-		}
+		testutil.Error(t, err, "status %d: expected an error")
+		testutil.Falsef(t, isUnauthorized(err), "status %d: daily-count refusal reported as a credential rejection: %v", status, err)
+		testutil.Falsef(t, !errors.Is(err, ErrDailyCountExceeded), "status %d: err = %v, want ErrDailyCountExceeded", status, err)
 		// The shared classifiers and the account policy both key off this phrase,
 		// so it has to survive the wrap that carries the sentinel.
 		testutil.MustContain(t, strings.ToLower(err.Error()), "billing daily count exceeded")
@@ -39,15 +33,9 @@ func TestStreamDailyCountRefusalIsNotACredentialRejection(t *testing.T) {
 
 	body := "data: " + `{"statusCodeValue":401,"body":` + strconv.Quote(`{"code":112,"message":"Billing daily count exceeded"}`) + `}` + "\n\n"
 	_, _, err := collectStream(t, body)
-	if err == nil {
-		t.Fatal("consumeStream() error = nil for an error envelope")
-	}
-	if errors.Is(err, errUpstreamUnauthorized) {
-		t.Fatalf("daily-count refusal was misclassified as unauthorized: %v", err)
-	}
-	if !errors.Is(err, ErrDailyCountExceeded) {
-		t.Fatalf("error = %v, want ErrDailyCountExceeded", err)
-	}
+	testutil.False(t, err == nil, "consumeStream() error = nil for an error envelope")
+	testutil.Falsef(t, errors.Is(err, errUpstreamUnauthorized), "daily-count refusal was misclassified as unauthorized: %v", err)
+	testutil.Falsef(t, !errors.Is(err, ErrDailyCountExceeded), "error = %v, want ErrDailyCountExceeded", err)
 	testutil.MustContain(t, strings.ToLower(err.Error()), "billing daily count exceeded")
 }
 
@@ -55,10 +43,6 @@ func TestStreamDailyCountRefusalIsNotACredentialRejection(t *testing.T) {
 // moves the daily-count verdict, it does not weaken authentication handling.
 func TestGenuineCredentialRejectionStaysUnauthorized(t *testing.T) {
 	err := classifyStatus(401, "", []byte(`{"message":"invalid access token"}`))
-	if !isUnauthorized(err) {
-		t.Fatalf("err = %v, want a credential rejection", err)
-	}
-	if errors.Is(err, ErrDailyCountExceeded) {
-		t.Fatalf("err = %v, want no daily-count verdict", err)
-	}
+	testutil.True(t, isUnauthorized(err), "err = %v, want a credential rejection")
+	testutil.Falsef(t, errors.Is(err, ErrDailyCountExceeded), "err = %v, want no daily-count verdict", err)
 }

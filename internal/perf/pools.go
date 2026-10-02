@@ -12,9 +12,7 @@ var StringBuilderPool = sync.Pool{
 }
 
 // AcquireStringBuilder gets a strings.Builder from the pool.
-func AcquireStringBuilder() *strings.Builder {
-	return StringBuilderPool.Get().(*strings.Builder)
-}
+func AcquireStringBuilder() *strings.Builder { return StringBuilderPool.Get().(*strings.Builder) }
 
 // maxPooledBuilderBytes is the largest buffer worth keeping in the pool. Reset
 // keeps the backing array, so a builder that grew to hold a long streamed answer
@@ -25,10 +23,7 @@ const maxPooledBuilderBytes = 64 << 10
 // An oversized builder is dropped instead of pooled, so the pool itself stays
 // small and a fresh buffer is allocated on the next acquire.
 func ReleaseStringBuilder(sb *strings.Builder) {
-	if sb == nil {
-		return
-	}
-	if sb.Cap() > maxPooledBuilderBytes {
+	if sb == nil || sb.Cap() > maxPooledBuilderBytes {
 		return
 	}
 	sb.Reset()

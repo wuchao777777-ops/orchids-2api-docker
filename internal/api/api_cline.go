@@ -58,18 +58,10 @@ func PreserveClineCredentialsOnEdit(acc, existing *store.Account) {
 	if acc == nil || existing == nil {
 		return
 	}
-	if strings.TrimSpace(acc.ClineAccessToken) == "" {
-		acc.ClineAccessToken = existing.ClineAccessToken
-	}
-	if strings.TrimSpace(acc.ClineRefreshToken) == "" {
-		acc.ClineRefreshToken = existing.ClineRefreshToken
-	}
-	if acc.ClineExpiresAt.IsZero() {
-		acc.ClineExpiresAt = existing.ClineExpiresAt
-	}
-	if strings.TrimSpace(acc.ClineEmail) == "" {
-		acc.ClineEmail = existing.ClineEmail
-	}
+	preserveBlank(&acc.ClineAccessToken, existing.ClineAccessToken)
+	preserveBlank(&acc.ClineRefreshToken, existing.ClineRefreshToken)
+	preserveTime(&acc.ClineExpiresAt, existing.ClineExpiresAt)
+	preserveBlank(&acc.ClineEmail, existing.ClineEmail)
 	if len(acc.ClineModelIDs) == 0 {
 		acc.ClineModelIDs = append([]string(nil), existing.ClineModelIDs...)
 		acc.ClineModelsSyncedAt = existing.ClineModelsSyncedAt
@@ -128,26 +120,9 @@ func verifyClineAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 		client.SetAccountStore(accountStore)
 	}
 
-	// The catalog comes from the upstream recommended-models feed. A failed read
-	// leaves the snapshot untouched rather than installing a compiled-in list, so
-	// an unreadable catalog stays visible as "not observed yet".
-	if models, catalogErr := client.FetchUpstreamModels(ctx); catalogErr != nil {
-		slog.Warn("Cline catalog read failed; leaving the observed snapshot unchanged",
-			"account_id", acc.ID, "error", catalogErr)
-	} else if ids := cline.CatalogSnapshot(models); len(ids) > 0 {
-		acc.ClineModelIDs = ids
-		acc.ClineModelsSyncedAt = time.Now()
-	}
-
-	// The tier is decoration on top of a verdict the refresh call is about to
-	// prove, so it is read first and never allowed to fail the verification:
-	// an account whose plan endpoint is unreachable is still a working account.
-	if plan, planErr := client.FetchPlan(ctx); planErr != nil {
-		slog.Warn("Cline plan read failed; leaving the recorded tier unchanged",
-			"account_id", acc.ID, "error", planErr)
-	} else if plan.Explicit {
-		acc.ClinePlan = plan.Name
-	}
+	observeClineAccount(ctx, client, acc, "account_id", acc.ID,
+		"Cline catalog read failed; leaving the observed snapshot unchanged",
+		"Cline plan read failed; leaving the recorded tier unchanged")
 
 	// Renewing is the proof the credential still works: the refresh endpoint is
 	// the only control-plane call that answers for a rotated token, and a
@@ -156,4 +131,20 @@ func verifyClineAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 		return "", 502, err
 	}
 	return "", 0, nil
+}
+
+// Optional account decoration is shared by login and verification; verification
+// still performs its separate renewal proof after this best-effort observation.
+func observeClineAccount(ctx context.Context, client *cline.Client, acc *store.Account, key string, id any, catalogMessage, planMessage string) {
+	if models, err := client.FetchUpstreamModels(ctx); err != nil {
+		slog.Warn(catalogMessage, key, id, "error", err)
+	} else if ids := cline.CatalogSnapshot(models); len(ids) > 0 {
+		acc.ClineModelIDs = ids
+		acc.ClineModelsSyncedAt = time.Now()
+	}
+	if plan, err := client.FetchPlan(ctx); err != nil {
+		slog.Warn(planMessage, key, id, "error", err)
+	} else if plan.Explicit {
+		acc.ClinePlan = plan.Name
+	}
 }

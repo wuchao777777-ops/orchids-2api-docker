@@ -21,9 +21,7 @@ func newTestGrokStore(t *testing.T, prefix string) *store.Store {
 	t.Helper()
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: prefix})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
@@ -37,14 +35,10 @@ func setupValidationHandler(t *testing.T) (*Handler, *store.Store, *miniredis.Mi
 		RedisDB:     0,
 		RedisPrefix: "test:",
 	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
-	t.Cleanup(func() {
-		_ = s.Close()
-	})
+	t.Cleanup(func() { _ = s.Close() })
 	return NewHandler(nil, lb), s, mini
 }
 
@@ -52,9 +46,7 @@ func TestEnsureModelEnabled_RejectsHiddenGrokModel(t *testing.T) {
 	h, _, _ := setupValidationHandler(t)
 
 	err := h.ensureModelEnabled(context.Background(), "grok-4.1")
-	if err == nil {
-		t.Fatal("expected error")
-	}
+	testutil.False(t, err == nil, "expected error")
 	testutil.Equal(t, err.Error(), "model not found")
 }
 
@@ -68,9 +60,8 @@ func TestHandleChatCompletions_DoesNotAutoRegisterUnknownModel(t *testing.T) {
 	h.HandleChatCompletions(rec, req)
 
 	testutil.Equal(t, rec.Code, http.StatusNotFound)
-	if _, err := s.GetModelByModelID(context.Background(), "grok-5"); err == nil {
-		t.Fatal("unexpected auto-registered model grok-5")
-	}
+	_, err := s.GetModelByModelID(context.Background(), "grok-5")
+	testutil.Error(t, err)
 }
 
 func TestEnsureModelEnabled_AllowsVerifiedDynamicGrokModel(t *testing.T) {
@@ -100,9 +91,8 @@ func TestEnsureModelCapability_RejectsPersistedCapabilityMismatch(t *testing.T) 
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 	testutil.NoError(t, h.ensureModelCapability(context.Background(), "grok-5", store.CapabilityResponses), "Responses capability error = %v")
-	if err := h.ensureModelCapability(context.Background(), "grok-5", store.CapabilityChat); err == nil {
-		t.Fatal("expected chat capability rejection")
-	}
+	err := h.ensureModelCapability(context.Background(), "grok-5", store.CapabilityChat)
+	testutil.Error(t, err)
 }
 
 func TestResolveConversationModel_AppliesPersistedRoute(t *testing.T) {
@@ -117,9 +107,8 @@ func TestResolveConversationModel_AppliesPersistedRoute(t *testing.T) {
 	}
 	spec, ok := h.resolveConversationModel(context.Background(), "future-build-chat")
 	testutil.True(t, ok, "model was not resolved")
-	if spec.Upstream != UpstreamCLI || spec.UpstreamModel != "grok-routed-build" {
-		t.Fatalf("persisted route not applied: %#v", spec)
-	}
+	testutil.Equal(t, spec.Upstream, UpstreamCLI)
+	testutil.Equal(t, spec.UpstreamModel, "grok-routed-build")
 }
 
 func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t *testing.T) {
@@ -155,14 +144,11 @@ func TestResolveModel_ParsesSupportedEffortSuffixes(t *testing.T) {
 		{"grok-4.6-xhigh", "xhigh"},
 	} {
 		_, effort, ok := ResolveModelAlias(tc.id)
-		if !ok || effort != tc.effort {
-			t.Fatalf("ResolveModelAlias(%q) effort=%q ok=%v", tc.id, effort, ok)
-		}
+		testutil.Falsef(t, !ok || effort != tc.effort, "ResolveModelAlias(%q) effort=%q ok=%v", tc.id, effort, ok)
 	}
 	for _, id := range []string{"grok-4.5-xhigh", "grok-4.6-none"} {
-		if _, _, ok := ResolveModelAlias(id); ok {
-			t.Fatalf("ResolveModelAlias(%q) unexpectedly accepted", id)
-		}
+		_, _, ok := ResolveModelAlias(id)
+		testutil.Falsef(t, ok, "ResolveModelAlias(%q) unexpectedly accepted", id)
 	}
 }
 
@@ -170,19 +156,15 @@ func TestResolveConversationModelRejectsDeprecatedAlias(t *testing.T) {
 	t.Parallel()
 	h := &Handler{}
 	for _, id := range []string{"grok-code-fast", "grok-code-fast-1", "grok/grok-code-fast"} {
-		if _, ok := h.resolveConversationModel(context.Background(), id); ok {
-			t.Fatalf("deprecated model %q resolved through alias", id)
-		}
+		_, ok := h.resolveConversationModel(context.Background(), id)
+		testutil.Falsef(t, ok, "deprecated model %q resolved through alias", id)
 	}
 }
 
 func TestResolveModel_RemovesGrok43BetaWebsite(t *testing.T) {
-	if _, ok := ResolveModel("grok-4.3-beta"); ok {
-		t.Fatal("ResolveModel(grok-4.3-beta) = true, want removed")
-	}
-	if !IsDeprecatedModelID("grok-4.3-beta") {
-		t.Fatal("grok-4.3-beta should be deprecated")
-	}
+	_, ok := ResolveModel("grok-4.3-beta")
+	testutil.False(t, ok, "ResolveModel(grok-4.3-beta) = true, want removed")
+	testutil.False(t, !IsDeprecatedModelID("grok-4.3-beta"), "grok-4.3-beta should be deprecated")
 }
 
 func TestEnsureModelEnabled_RejectsBuildOnlyGrok43EvenWhenStored(t *testing.T) {
@@ -214,9 +196,8 @@ func TestEnsureModelEnabled_RejectsDeprecatedGrok43Beta(t *testing.T) {
 		t.Fatalf("CreateModel(beta) error = %v", err)
 	}
 
-	if err := h.ensureModelEnabled(context.Background(), "grok-4.3-beta"); err == nil {
-		t.Fatal("ensureModelEnabled(grok-4.3-beta) expected deprecated model rejection")
-	}
+	err := h.ensureModelEnabled(context.Background(), "grok-4.3-beta")
+	testutil.Error(t, err)
 }
 
 func TestHandleChatCompletions_DoesNotProbeMissingModel(t *testing.T) {

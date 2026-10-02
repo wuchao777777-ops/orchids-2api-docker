@@ -117,15 +117,10 @@ func TestHandleMessages_ExplicitConversationIDForwardsAcrossTurns(t *testing.T) 
 				Text string `json:"text"`
 			} `json:"content"`
 		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-			t.Fatalf("conversation_id=%q: invalid response JSON: %v", id, err)
-		}
-		if response.Type != "message" || len(response.Content) != 1 || response.Content[0].Type != "text" || response.Content[0].Text != "workbuddy-hi" {
-			t.Fatalf("conversation_id=%q: unexpected protocol response: %+v", id, response)
-		}
-		if len(up.capturedReqs) == 0 || up.capturedReqs[len(up.capturedReqs)-1].ConversationID != id {
-			t.Fatalf("conversation_id=%q: upstream request did not forward the explicit id", id)
-		}
+		err := json.Unmarshal(rec.Body.Bytes(), &response)
+		testutil.CheckNoError(t, err)
+		testutil.Falsef(t, response.Type != "message" || len(response.Content) != 1 || response.Content[0].Type != "text" || response.Content[0].Text != "workbuddy-hi", "conversation_id=%q: unexpected protocol response: %+v", id, response)
+		testutil.Falsef(t, len(up.capturedReqs) == 0 || up.capturedReqs[len(up.capturedReqs)-1].ConversationID != id, "conversation_id=%q: upstream request did not forward the explicit id", id)
 	}
 	testutil.Equal(t, len(up.capturedReqs), 2)
 }
@@ -190,17 +185,11 @@ func TestHandleMessages_ForwardsAndEnforcesToolControls(t *testing.T) {
 
 	forwarded := send(map[string]any{"type": "tool", "name": "read"})
 	choice, _ := forwarded.ToolChoice.(map[string]interface{})
-	if choice["type"] != "tool" || choice["name"] != "read" || forwarded.ParallelToolCalls == nil || *forwarded.ParallelToolCalls {
-		t.Fatalf("tool controls were not forwarded: %#v", forwarded)
-	}
-	if forwarded.NoTools || len(forwarded.Tools) != 1 {
-		t.Fatalf("enabled tools were unexpectedly gated: %#v", forwarded)
-	}
+	testutil.Falsef(t, choice["type"] != "tool" || choice["name"] != "read" || forwarded.ParallelToolCalls == nil || *forwarded.ParallelToolCalls, "tool controls were not forwarded: %#v", forwarded)
+	testutil.Falsef(t, forwarded.NoTools || len(forwarded.Tools) != 1, "enabled tools were unexpectedly gated: %#v", forwarded)
 
 	disabled := send("none")
-	if !disabled.NoTools || len(disabled.Tools) != 0 {
-		t.Fatalf("tool_choice=none was not enforced: %#v", disabled)
-	}
+	testutil.Falsef(t, !disabled.NoTools || len(disabled.Tools) != 0, "tool_choice=none was not enforced: %#v", disabled)
 }
 
 func TestHandleMessages_WorkBuddy_PreservesContentByDefault(t *testing.T) {
@@ -248,9 +237,7 @@ func TestHandleMessages_WorkBuddy_PreservesContentByDefault(t *testing.T) {
 				break
 			}
 		}
-		if !found {
-			t.Fatalf("fidelity: system item %q was dropped/rewritten", want)
-		}
+		testutil.True(t, found, "fidelity: system item %q was dropped/rewritten")
 	}
 }
 
@@ -349,10 +336,8 @@ func TestHandleMessages_TitleGeneration_LocalResponse(t *testing.T) {
 	h.client = &panicUpstream{}
 
 	payload := map[string]any{
-		"model": "claude-haiku-4-5-20251001",
-		"messages": []map[string]any{
-			{"role": "user", "content": "添加科学计数法"},
-		},
+		"model":    "claude-haiku-4-5-20251001",
+		"messages": []map[string]any{{"role": "user", "content": "添加科学计数法"}},
 		"system": []map[string]any{
 			{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
 			{

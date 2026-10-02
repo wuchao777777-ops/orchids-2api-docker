@@ -20,14 +20,10 @@ func TestDeviceAuthenticatorStartAndExchange(t *testing.T) {
 		testutil.Equal(t, r.Header.Get("x-grok-client-version"), "test-version")
 		switch r.URL.Path {
 		case "/device":
-			if r.Form.Get("client_id") != "test-client" || r.Form.Get("referrer") != "grok-build" || r.Form.Get("scope") != grokDeviceAuthorizationScope {
-				t.Fatalf("unexpected device form: %s", r.Form.Encode())
-			}
+			testutil.Falsef(t, r.Form.Get("client_id") != "test-client" || r.Form.Get("referrer") != "grok-build" || r.Form.Get("scope") != grokDeviceAuthorizationScope, "unexpected device form: %s", r.Form.Encode())
 			_, _ = io.WriteString(w, `{"device_code":"device-secret","user_code":"ABCD-EFGH","verification_uri":"https://auth.x.ai/device","expires_in":120,"interval":3}`)
 		case "/token":
-			if r.Form.Get("device_code") != "device-secret" || r.Form.Get("grant_type") != "urn:ietf:params:oauth:grant-type:device_code" {
-				t.Fatalf("unexpected token form: %s", r.Form.Encode())
-			}
+			testutil.Falsef(t, r.Form.Get("device_code") != "device-secret" || r.Form.Get("grant_type") != "urn:ietf:params:oauth:grant-type:device_code", "unexpected token form: %s", r.Form.Encode())
 			_, _ = io.WriteString(w, `{"access_token":"access-secret","refresh_token":"refresh-secret","id_token":"header.eyJzdWIiOiJ1c2VyLTEiLCJlbWFpbCI6Im9hdXRoQGV4YW1wbGUuY29tIn0.signature","expires_in":3600}`)
 		default:
 			http.NotFound(w, r)
@@ -38,22 +34,12 @@ func TestDeviceAuthenticatorStartAndExchange(t *testing.T) {
 	authenticator := NewDeviceAuthenticator(cfg)
 	authenticator.httpClient = server.Client()
 	details, err := authenticator.Start(context.Background())
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if details.DeviceCode != "device-secret" || details.UserCode != "ABCD-EFGH" || details.Interval != 3 {
-		t.Fatalf("details=%+v", details)
-	}
+	testutil.NoError(t, err, "Start() error = %v")
+	testutil.Falsef(t, details.DeviceCode != "device-secret" || details.UserCode != "ABCD-EFGH" || details.Interval != 3, "details=%+v", details)
 	access, refresh, identity, expiresAt, err := authenticator.Exchange(context.Background(), details.DeviceCode)
-	if err != nil {
-		t.Fatalf("Exchange() error = %v", err)
-	}
-	if access != "access-secret" || refresh != "refresh-secret" || time.Until(expiresAt) < 59*time.Minute {
-		t.Fatalf("unexpected exchange result access=%q refresh=%q expires=%s", access, refresh, expiresAt)
-	}
-	if identity == "" || strings.Contains(access, identity) || strings.Contains(refresh, identity) {
-		t.Fatalf("identity token was not returned independently: %q", identity)
-	}
+	testutil.NoError(t, err, "Exchange() error = %v")
+	testutil.Falsef(t, access != "access-secret" || refresh != "refresh-secret" || time.Until(expiresAt) < 59*time.Minute, "unexpected exchange result access=%q refresh=%q expires=%s", access, refresh, expiresAt)
+	testutil.Falsef(t, identity == "" || strings.Contains(access, identity) || strings.Contains(refresh, identity), "identity token was not returned independently: %q", identity)
 }
 
 func TestDeviceAuthenticatorPendingAndSanitizedError(t *testing.T) {
@@ -65,15 +51,13 @@ func TestDeviceAuthenticatorPendingAndSanitizedError(t *testing.T) {
 	authenticator := NewDeviceAuthenticator(&config.Config{GrokCLIOAuthTokenURL: server.URL})
 	authenticator.httpClient = server.Client()
 	_, _, _, _, err := authenticator.Exchange(context.Background(), "device-secret")
-	if slowDown, pending := IsDeviceAuthorizationPending(err); !pending || slowDown {
-		t.Fatalf("error=%v pending=%t slowDown=%t", err, pending, slowDown)
-	}
+	slowDown, pending := IsDeviceAuthorizationPending(err)
+	testutil.Falsef(t, !pending || slowDown, "error=%v pending=%t slowDown=%t", err, pending, slowDown)
 	testutil.MustNotContainAny(t, err.Error(), "very-secret-token", "device-secret")
 }
 
 func TestParseGrokDeviceOAuthErrorSlowDown(t *testing.T) {
 	err := parseGrokDeviceOAuthError([]byte(`{"error":"slow_down"}`), http.StatusBadRequest)
-	if slowDown, pending := IsDeviceAuthorizationPending(err); !pending || !slowDown {
-		t.Fatalf("error=%v pending=%t slowDown=%t", err, pending, slowDown)
-	}
+	slowDown, pending := IsDeviceAuthorizationPending(err)
+	testutil.Falsef(t, !pending || !slowDown, "error=%v pending=%t slowDown=%t", err, pending, slowDown)
 }

@@ -76,12 +76,9 @@ func newQoderE2EStub(t *testing.T) *qoderE2EStub {
 		case "/algo/api/v2/model/list":
 			// The catalog is now read from the signed control plane, so the
 			// refresh depends on this route answering with the account's models.
-			if r.Header.Get("Cosy-Key") == "" || r.Header.Get("Cosy-MachineId") == "" {
-				t.Errorf("model list request is missing the derived auth chain: %v", r.Header)
-			}
-			if auth := r.Header.Get("Authorization"); !strings.HasPrefix(auth, "Bearer COSY.") {
-				t.Errorf("model list Authorization = %q, want a COSY bearer", auth)
-			}
+			testutil.CheckFalsef(t, r.Header.Get("Cosy-Key") == "" || r.Header.Get("Cosy-MachineId") == "", "model list request is missing the derived auth chain: %v", r.Header)
+			auth := r.Header.Get("Authorization")
+			testutil.CheckFalsef(t, !strings.HasPrefix(auth, "Bearer COSY."), "model list Authorization = %q, want a COSY bearer", auth)
 			stub.modelListCalls++
 			_, _ = w.Write([]byte(`{"code":0,"data":{"models":[` +
 				`{"key":"qmodel_latest","name":"Qwen3.7-Max","display_name":"Qwen3.7-Max","format":"openai","source":"system","enable":true,"is_reasoning":false,"max_input_tokens":1000000},` +
@@ -146,9 +143,8 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 		ID                      string `json:"id"`
 		VerificationURIComplete string `json:"verification_uri_complete"`
 	}
-	if err := json.Unmarshal([]byte(startBody), &started); err != nil || started.ID == "" {
-		t.Fatalf("login start response = %q", startBody)
-	}
+	err := json.Unmarshal([]byte(startBody), &started)
+	testutil.Falsef(t, err != nil || started.ID == "", "login start response = %q", startBody)
 	testutil.MustContain(t, started.VerificationURIComplete, "/device/selectAccounts?")
 
 	var final struct {
@@ -174,9 +170,7 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	testutil.Equal(t, refreshResp.StatusCode, http.StatusOK)
 	var refreshed modelRefreshResult
 	testutil.NoError(t, json.Unmarshal([]byte(refreshBody), &refreshed), "decode refresh: %v")
-	if refreshed.Channel != "Qoder" || refreshed.Discovered == 0 {
-		t.Fatalf("refresh result = %+v, want a discovered Qoder catalog", refreshed)
-	}
+	testutil.Falsef(t, refreshed.Channel != "Qoder" || refreshed.Discovered == 0, "refresh result = %+v, want a discovered Qoder catalog", refreshed)
 	// The catalog must have come from the signed upstream read, not from a
 	// compiled-in list.
 	testutil.Equal(t, refreshed.Source, "qoder_upstream_models")
@@ -196,9 +190,8 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	for _, header := range []string{"Authorization", "Cosy-Key", "Cosy-MachineId", "Cosy-MachineToken", "Cosy-User", "Cosy-Date", "Cosy-Scene", "Cosy-Data-Policy", "Login-Version", "X-Model-Key", "X-Model-Source"} {
 		testutil.CheckNotEqual(t, stub.chatHeaders.Get(header), "")
 	}
-	if auth := stub.chatHeaders.Get("Authorization"); !strings.HasPrefix(auth, "Bearer COSY.") {
-		t.Errorf("Authorization = %q, want a COSY bearer", auth)
-	}
+	auth := stub.chatHeaders.Get("Authorization")
+	testutil.CheckFalsef(t, !strings.HasPrefix(auth, "Bearer COSY."), "Authorization = %q, want a COSY bearer", auth)
 	testutil.CheckEqual(t, stub.chatHeaders.Get("X-Model-Key"), "qmodel_latest")
 	testutil.CheckEqual(t, stub.chatHeaders.Get("Cosy-User"), "uid-e2e")
 
@@ -209,9 +202,7 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	// The body is in the private encoding and carries the chat contract.
 	testutil.NotEqual(t, len(stub.chatBody), 0)
 	decoded, err := decodeQoderBodyForTest(stub.chatBody)
-	if err != nil {
-		t.Fatalf("DecodeBody() error = %v", err)
-	}
+	testutil.NoError(t, err, "DecodeBody() error = %v")
 	// The capture shows the QoderWork client sending no account class: the field
 	// is present and empty rather than omitted.
 	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qoder_work"`, `"agent_id":"agent_common"`, `"stream":true`, `"aliyun_user_type":""`} {

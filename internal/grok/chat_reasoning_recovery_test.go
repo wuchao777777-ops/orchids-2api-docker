@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -16,13 +17,9 @@ func validTestReplayCipher() string {
 }
 
 func TestReplayCipherValidation(t *testing.T) {
-	if !validReplayCipher(validTestReplayCipher()) {
-		t.Fatal("valid cipher rejected")
-	}
+	testutil.False(t, !validReplayCipher(validTestReplayCipher()), "valid cipher rejected")
 	for _, value := range []string{"cipher", "gAAAAsecret", " " + validTestReplayCipher(), validTestReplayCipher() + "=", base64.RawStdEncoding.EncodeToString(make([]byte, 128))} {
-		if validReplayCipher(value) {
-			t.Fatal("malformed cipher accepted")
-		}
+		testutil.False(t, validReplayCipher(value), "malformed cipher accepted")
 	}
 }
 
@@ -34,31 +31,21 @@ func TestChatReasoningRecoveryResetsOnlyAfterDecodeFailure(t *testing.T) {
 		calls++
 		if calls == 1 {
 			item := payload["input"].([]interface{})[0].(map[string]interface{})
-			if item["type"] != "message" || item["encrypted_content"] != nil {
-				t.Fatal(item)
-			}
-			if payload["prompt_cache_key"] != "session" {
-				t.Fatal("removed session before portable retry")
-			}
+			testutil.Fail(t, item["type"] != "message" || item["encrypted_content"] != nil, item)
+			testutil.Equal(t, payload["prompt_cache_key"], "session")
 			return nil, initial
 		}
-		if payload["prompt_cache_key"] != nil || stage != "reasoning_session_reset" {
-			t.Fatal(payload, stage)
-		}
+		testutil.Fail(t, payload["prompt_cache_key"] != nil || stage != "reasoning_session_reset", payload, stage)
 		return &http.Response{StatusCode: 200}, nil
 	})
-	if err != nil || response == nil || calls != 2 {
-		t.Fatal(response, err, calls)
-	}
+	testutil.Fail(t, err != nil || response == nil || calls != 2, response, err, calls)
 }
 
 func TestChatReasoningRecoveryPreservesPreviousResponse(t *testing.T) {
 	initial := fmt.Errorf("grok cli upstream status=400 body=invalid_encrypted_content")
 	payload := map[string]interface{}{"prompt_cache_key": "session", "previous_response_id": "resp_1"}
 	_, err := recoverChatReasoning(payload, initial, func(string) (*http.Response, error) { t.Fatal("unsafe reset"); return nil, nil })
-	if err != initial || payload["prompt_cache_key"] != "session" {
-		t.Fatal(err, payload)
-	}
+	testutil.Fail(t, err != initial || payload["prompt_cache_key"] != "session", err, payload)
 }
 
 func TestChatReasoningRecoveryDoesNotRetryRateLimit(t *testing.T) {
@@ -67,7 +54,5 @@ func TestChatReasoningRecoveryDoesNotRetryRateLimit(t *testing.T) {
 	payload := map[string]interface{}{"prompt_cache_key": "session", "input": []interface{}{map[string]interface{}{"type": "reasoning", "encrypted_content": "opaque"}}}
 	calls := 0
 	_, err := recoverChatReasoning(payload, initial, func(string) (*http.Response, error) { calls++; return nil, limited })
-	if err != limited || calls != 1 {
-		t.Fatal(err, calls)
-	}
+	testutil.Fail(t, err != limited || calls != 1, err, calls)
 }

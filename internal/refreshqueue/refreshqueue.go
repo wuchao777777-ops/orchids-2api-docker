@@ -40,11 +40,7 @@ type Hub struct {
 }
 
 // NewHub creates an empty refresh hub.
-func NewHub() *Hub {
-	return &Hub{
-		inFlight: map[int64]struct{}{},
-	}
-}
+func NewHub() *Hub { return &Hub{inFlight: map[int64]struct{}{}} }
 
 // TryAcquire takes the per-account lease. It reports false when another refresh
 // of the same account is already running, which is the signal to merge the task

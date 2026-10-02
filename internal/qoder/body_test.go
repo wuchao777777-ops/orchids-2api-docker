@@ -28,9 +28,7 @@ func TestEncodeBodyMatchesPrivateAlphabet(t *testing.T) {
 			continue
 		}
 		index := strings.IndexByte("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", c)
-		if index < 0 {
-			t.Fatalf("standard base64 produced %q, which is outside the standard alphabet", c)
-		}
+		testutil.Falsef(t, index < 0, "standard base64 produced %q, which is outside the standard alphabet", c)
 		substituted.WriteByte(bodyAlphabet[index])
 	}
 	want := swapOuterThirds([]byte(substituted.String()))
@@ -38,9 +36,7 @@ func TestEncodeBodyMatchesPrivateAlphabet(t *testing.T) {
 	got := EncodeBody(raw)
 	testutil.Equal(t, string(got), string(want))
 	for _, b := range got {
-		if strings.ContainsRune("+/=", rune(b)) {
-			t.Fatalf("EncodeBody() left a standard-alphabet byte %q in %q", b, got)
-		}
+		testutil.Falsef(t, strings.ContainsRune("+/=", rune(b)), "EncodeBody() left a standard-alphabet byte %q in %q", b, got)
 	}
 }
 
@@ -60,9 +56,7 @@ func TestBodyCodecRoundTrip(t *testing.T) {
 			"independent test decoder": decodeBodyForTest,
 		} {
 			decoded, err := decoder(encoded)
-			if err != nil {
-				t.Fatalf("%s DecodeBody(len=%d) error = %v", name, length, err)
-			}
+			testutil.Falsef(t, err != nil, "%s DecodeBody(len=%d) error = %v", name, length, err)
 			testutil.Equal(t, string(decoded), string(raw))
 		}
 	}
@@ -79,15 +73,13 @@ func TestDecodeBodyRejectsLineBreaks(t *testing.T) {
 			malformed := append([]byte(nil), encoded[:offset]...)
 			malformed = append(malformed, newline...)
 			malformed = append(malformed, encoded[offset:]...)
-			if _, err := decodeBody(malformed); err == nil {
-				t.Fatalf("production decodeBody accepted %q at offset %d", newline, offset)
-			}
+			_, err := decodeBody(malformed)
+			testutil.CheckError(t, err)
 		}
 	}
 	for _, malformed := range [][]byte{[]byte("+"), []byte("invalid-length"), []byte("$$$$")} {
-		if _, err := decodeBody(malformed); err == nil {
-			t.Fatalf("production decodeBody accepted malformed encoding %q", malformed)
-		}
+		_, err := decodeBody(malformed)
+		testutil.CheckError(t, err)
 	}
 }
 
@@ -119,9 +111,7 @@ func TestCOSYAuthorizationFixedVector(t *testing.T) {
 
 	const want = "Bearer COSY.eyJ2ZXJzaW9uIjoidjEiLCJyZXF1ZXN0SWQiOiJyZXF1ZXN0IiwiaW5mbyI6ImluZm8iLCJjb3N5VmVyc2lvbiI6InZlcnNpb24iLCJpZGVWZXJzaW9uIjoiIn0=.759d3ccbc63c510f16c3e66bd4c0b230"
 	got, err := buildCOSYAuthorization("request", "info", "version", "key", "123", []byte("encoded-body"), "/path")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, got, want)
 }
 

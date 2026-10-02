@@ -309,13 +309,11 @@ func responsesInputItems(input interface{}) []interface{} {
 			return nil
 		}
 		return []interface{}{map[string]interface{}{
-			"id":     "msg_" + randomHex(12),
-			"type":   "message",
-			"role":   "user",
-			"status": "completed",
-			"content": []interface{}{
-				map[string]interface{}{"type": "input_text", "text": value},
-			},
+			"id":      "msg_" + randomHex(12),
+			"type":    "message",
+			"role":    "user",
+			"status":  "completed",
+			"content": []interface{}{map[string]interface{}{"type": "input_text", "text": value}},
 		}}
 	case []interface{}:
 		out := make([]interface{}, 0, len(value))

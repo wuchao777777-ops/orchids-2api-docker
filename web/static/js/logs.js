@@ -43,14 +43,7 @@
   ];
 
   // FILTER_LABELS names each filter for the scope chips.
-  const FILTER_LABELS = {
-    channel: '渠道',
-    model: '模型',
-    status: '状态',
-    outcome: '结果',
-    actor: '操作者',
-    action: '动作',
-  };
+  const FILTER_LABELS = { channel: '渠道', model: '模型', status: '状态', outcome: '结果', actor: '操作者', action: '动作' };
 
   // The capture records a request as a fixed sequence of numbered sections. The
   // order is the request's own timeline, so the panel must not sort it.
@@ -105,18 +98,7 @@
   // Operation actions are built from the request path (see operationAction in
   // middleware/admin_audit.go): "<resource>[.<id>].<verb>", e.g. accounts.120.create.
   // Printing that verbatim is why the operation log read as machine output.
-  const OPERATION_VERBS = {
-    create: '创建',
-    update: '更新',
-    delete: '删除',
-    read: '查看',
-    save: '保存',
-    refresh: '刷新',
-    sync: '同步',
-    test: '测试',
-    login: '登录',
-    logout: '登出',
-  };
+  const OPERATION_VERBS = { create: '创建', update: '更新', delete: '删除', read: '查看', save: '保存', refresh: '刷新', sync: '同步', test: '测试', login: '登录', logout: '登出' };
   const OPERATION_RESOURCES = {
     accounts: '账号',
     models: '模型',
@@ -180,9 +162,7 @@
 
   // isProbeRecord reports a synthetic probe: its channel is the reserved "probe"
   // label, which no client can route to.
-  function isProbeRecord(event) {
-    return String((event || {}).channel || '').toLowerCase() === 'probe';
-  }
+  function isProbeRecord(event) { return String((event || {}).channel || '').toLowerCase() === 'probe'; }
 
   // Result semantics. One green pill for success, stop, length and tool_calls
   // made four different outcomes look identical; each one now has its own tone
@@ -204,11 +184,7 @@
     skipped: { tone: 'is-idle', label: '已跳过' },
   };
 
-  const FILTER_HINTS = {
-    request: '请求日志按渠道、模型和状态筛选；带"含诊断"的请求可以在详情里展开它的诊断内容。操作者与动作对请求无意义。',
-    operation: '操作日志按操作者、动作和状态筛选；渠道与模型通常为空。',
-    system: '系统日志按动作和状态筛选；渠道用于标注探测目标。',
-  };
+  const FILTER_HINTS = { request: '请求日志按渠道、模型和状态筛选；带"含诊断"的请求可以在详情里展开它的诊断内容。操作者与动作对请求无意义。', operation: '操作日志按操作者、动作和状态筛选；渠道与模型通常为空。', system: '系统日志按动作和状态筛选；渠道用于标注探测目标。' };
 
   // The diagnostics journal used to be a fourth tab. Its rows carry only
   // action=debug_bundle and a request id, so every line read 诊断 · 请求诊断包 with
@@ -234,9 +210,7 @@
 
   // note is the muted one-line paragraph used for every "no data", "why this is
   // empty" and "this read failed" message in the page.
-  function note(value, className) {
-    return make('p', className || 'ops-empty', value);
-  }
+  function note(value, className) { return make('p', className || 'ops-empty', value); }
 
   // emptyRow is the full-width "nothing matched" row. colSpan counts the columns
   // of the table it lands in, so it is passed rather than assumed.
@@ -298,9 +272,7 @@
 
   // addBadge appends an untinted label chip. The badge is the same element the
   // status column uses; only its tone is absent.
-  function addBadge(parent, label, tone) {
-    parent.appendChild(make('span', 'logs-badge ' + (tone || ''), label));
-  }
+  function addBadge(parent, label, tone) { parent.appendChild(make('span', 'logs-badge ' + (tone || ''), label)); }
 
   function resultBadge(record) {
     const outcome = outcomeMeta(record);
@@ -368,9 +340,7 @@
     const chips = [];
     const since = params.get('since');
     const until = params.get('until');
-    if (since || until) {
-      chips.push(scopeChip('时间范围', `${since ? formatTime(since) : '不限'} → ${until ? formatTime(until) : '现在'}`));
-    }
+    if (since || until) { chips.push(scopeChip('时间范围', `${since ? formatTime(since) : '不限'} → ${until ? formatTime(until) : '现在'}`)); }
     FILTER_INPUTS.filter((entry) => entry.param !== 'since' && entry.param !== 'until').forEach((entry) => {
       const value = params.get(entry.param);
       if (!value) return;
@@ -431,12 +401,8 @@
         const target = make('span', 'logs-badge', text(event.provider || '未标注渠道', '未标注渠道'));
         target.title = '被探测渠道（合成探测请求，模型占位为 ' + PROBE_MODEL_LABEL + '）';
         action.appendChild(target);
-      } else if (event.model) {
-        addBadge(action, event.model);
-      }
-      if (record.diagnostics || String(event.kind || '') === DIAGNOSTIC_INDEX_KIND) {
-        addBadge(action, '含诊断', 'is-info');
-      }
+      } else if (event.model) { addBadge(action, event.model); }
+      if (record.diagnostics || String(event.kind || '') === DIAGNOSTIC_INDEX_KIND) { addBadge(action, '含诊断', 'is-info'); }
       // "accounts:120" is an account row; an operation's target is read far more
       // often than it is grepped, so it is named.
       const target = make('td', 'logs-cell-target', targetLabel(event.target, event.action) || text(event.account_id, '—'));
@@ -475,9 +441,7 @@
     return grid;
   }
 
-  function sectionTitle(text_) {
-    return make('div', 'logs-detail-section-title', text_);
-  }
+  function sectionTitle(text_) { return make('div', 'logs-detail-section-title', text_); }
 
   function detailAction(label, onClick, titleText) {
     const button = make('button', 'btn btn-sm', label);
@@ -538,9 +502,7 @@
     const rawStatus = String(event.status || '');
     const classToken = String(record.outcome_class || '');
     const isInferenceRecord = String(event.kind || '') === 'request';
-    if (isInferenceRecord && rawStatus && rawStatus !== classToken && rawStatus !== outcome?.label) {
-      outcomeRow.appendChild(make('span', 'logs-detail-raw', '上游状态：' + rawStatus));
-    }
+    if (isInferenceRecord && rawStatus && rawStatus !== classToken && rawStatus !== outcome?.label) { outcomeRow.appendChild(make('span', 'logs-detail-raw', '上游状态：' + rawStatus)); }
     // The HTTP status and the first-token latency are not columns of a journal row:
     // the request middleware keeps them in metadata (http_status, first_token_ms),
     // which is where the attempt list below reads them from too. Reading only the
@@ -557,9 +519,7 @@
 
     // --- actions: what you do next with a record you are looking at ---------------
     const actions = make('div', 'logs-detail-actions');
-    if (event.request_id) {
-      actions.appendChild(detailAction('复制请求 ID', () => copyToClipboard(event.request_id), event.request_id));
-    }
+    if (event.request_id) { actions.appendChild(detailAction('复制请求 ID', () => copyToClipboard(event.request_id), event.request_id)); }
     actions.appendChild(detailAction('复制摘要', () => copyToClipboard(summarizeRecord(record)), summarizeRecord(record)));
     if (!probe && (event.channel || event.model)) {
       // Narrowing the list to this channel/model is the next question after "what
@@ -583,14 +543,9 @@
       requestFacts.push(fact('渠道', text(event.channel, '未标注'), { empty: !event.channel }));
       requestFacts.push(fact('模型', text(event.model, '未标注'), { empty: !event.model }));
     } else {
-      requestFacts.push(fact('动作', text(ACTION_LABELS[event.action] || actionLabel(event.action), '—'), {
-        wide: true,
-        title: String(event.action || ''),
-      }));
+      requestFacts.push(fact('动作', text(ACTION_LABELS[event.action] || actionLabel(event.action), '—'), { wide: true, title: String(event.action || '') }));
       const objectName = targetLabel(event.target, event.action);
-      if (objectName || event.account_id) {
-        requestFacts.push(fact('对象', objectName || ('账号 #' + event.account_id), { title: String(event.target || '') }));
-      }
+      if (objectName || event.account_id) { requestFacts.push(fact('对象', objectName || ('账号 #' + event.account_id), { title: String(event.target || '') })); }
     }
     // The 对象 row already names the row this operation touched; a second 账号
     // 未指定账号 next to it only contradicts it.
@@ -629,9 +584,7 @@
     if (event.details) {
       panel.appendChild(sectionTitle(String(event.kind || '') === DIAGNOSTIC_INDEX_KIND ? '诊断内容摘要' : '变更摘要（凭据已脱敏）'));
       panel.appendChild(make('pre', '', event.details));
-      if (event.redacted && event.redacted.length) {
-        panel.appendChild(note('已脱敏字段：' + event.redacted.join('、')));
-      }
+      if (event.redacted && event.redacted.length) { panel.appendChild(note('已脱敏字段：' + event.redacted.join('、'))); }
     }
 
     const attempts = record.attempts || [];
@@ -699,9 +652,7 @@
     if (index && index.metadata) {
       const indexMeta = index.metadata;
       const parts = [];
-      if (Array.isArray(indexMeta.sections) && indexMeta.sections.length) {
-        parts.push(indexMeta.sections.length + ' 段');
-      }
+      if (Array.isArray(indexMeta.sections) && indexMeta.sections.length) { parts.push(indexMeta.sections.length + ' 段'); }
       if (indexMeta.bytes) parts.push(formatBytes(indexMeta.bytes));
       if (indexMeta.truncated) parts.push('已截断');
       if (indexMeta.retention) parts.push('保留 ' + indexMeta.retention);
@@ -740,9 +691,7 @@
       const payload = await response.json();
       if (!payload.available) body.appendChild(note(payload.note || '没有该请求的诊断记录。'));
       else renderBundle(body, payload.entry || {}, payload.retention || '');
-    } catch (error) {
-      body.appendChild(note('读取诊断日志失败：' + (error.message || error)));
-    }
+    } catch (error) { body.appendChild(note('读取诊断日志失败：' + (error.message || error))); }
     if (button) { button.disabled = false; button.textContent = '重新读取诊断内容'; }
   }
 
@@ -796,9 +745,7 @@
       const details = make('details', 'logs-section');
       // A failure artifact is what an operator came for; everything else starts
       // collapsed so a 16 KiB SSE dump does not bury it.
-      if (section.name === '3_upstream_http_error.json' || section.name === '1_early_exit.json' || /^upstream_\d+_(error|read_error)\.json$/.test(section.name)) {
-        details.open = true;
-      }
+      if (section.name === '3_upstream_http_error.json' || section.name === '1_early_exit.json' || /^upstream_\d+_(error|read_error)\.json$/.test(section.name)) { details.open = true; }
       const summary = make('summary', '', sectionLabel(section));
       summary.appendChild(make('span', 'ops-empty',
         ' ' + formatBytes(section.bytes || 0) + (section.truncated ? ' · 已截断' : '')));
@@ -895,9 +842,7 @@
         if (info.oldest && filterUsed.since) {
           const oldest = new Date(info.oldest);
           const from = new Date(filterUsed.since);
-          if (!Number.isNaN(oldest.getTime()) && !Number.isNaN(from.getTime()) && from < oldest) {
-            parts.push('⚠ 起始时间早于日志留存起点：列表中缺少更早的记录，只有图表统计包含那一段');
-          }
+          if (!Number.isNaN(oldest.getTime()) && !Number.isNaN(from.getTime()) && from < oldest) { parts.push('⚠ 起始时间早于日志留存起点：列表中缺少更早的记录，只有图表统计包含那一段'); }
         }
         if (filterUsed.outcome_label) parts.push(`结果口径：${filterUsed.outcome_label}`);
         parts.push('为空的含义是"保留窗口内没有匹配"，不代表从未发生。');
@@ -1019,9 +964,7 @@
       } catch (error) {
         button.textContent = enabled == null ? '诊断采集：读取失败，点击重试' : '诊断采集：保存失败，点击重试';
         button.title = error.message;
-      } finally {
-        button.disabled = false;
-      }
+      } finally { button.disabled = false; }
     }
     button.addEventListener('click', () => update(enabled != null));
     await update(false);

@@ -62,9 +62,7 @@ func TestConsumeStreamDecodesWrappedChunks(t *testing.T) {
 		"event:finish\ndata: {}\n\n"
 
 	events, result, err := collectStream(t, body)
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
+	testutil.NoError(t, err, "consumeStream() error = %v")
 
 	var text strings.Builder
 	var reasoning strings.Builder
@@ -79,9 +77,7 @@ func TestConsumeStreamDecodesWrappedChunks(t *testing.T) {
 	testutil.Equal(t, text.String(), "Hello")
 	testutil.Equal(t, reasoning.String(), "think")
 	testutil.Equal(t, result.FinishReason(), "end_turn")
-	if !result.SawMeaningfulEvent {
-		t.Fatal("SawMeaningfulEvent = false")
-	}
+	testutil.False(t, !result.SawMeaningfulEvent, "SawMeaningfulEvent = false")
 }
 
 func TestConsumeStreamClassifiesTextRateLimit(t *testing.T) {
@@ -89,9 +85,7 @@ func TestConsumeStreamClassifiesTextRateLimit(t *testing.T) {
 	body := envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"The available upstream accounts are rate-limited. Retry after the cooldown. Request ID: abc"},"finish_reason":"stop"}]}`) +
 		"event:finish\ndata: {}\n\n"
 	events, _, err := collectStream(t, body)
-	if !errors.Is(err, ErrModelRateLimited) {
-		t.Fatalf("error = %v, want ErrModelRateLimited", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrModelRateLimited), "error = %v, want ErrModelRateLimited", err)
 	testutil.Equal(t, len(events), 0)
 }
 
@@ -103,28 +97,22 @@ func TestConsumeStreamRequiresTerminator(t *testing.T) {
 
 	body := envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"partial"}}]}`)
 	_, result, err := collectStream(t, body)
-	if !errors.Is(err, ErrStreamTruncated) {
-		t.Fatalf("error = %v, want ErrStreamTruncated", err)
-	}
-	if !result.SawMeaningfulEvent {
-		t.Fatal("SawMeaningfulEvent = false, want the partial content to be recorded")
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrStreamTruncated), "error = %v, want ErrStreamTruncated", err)
+	testutil.False(t, !result.SawMeaningfulEvent, "SawMeaningfulEvent = false, want the partial content to be recorded")
 }
 
 // A done marker without Qoder's final event must not hide a truncated tail.
 func TestConsumeStreamBareDoneRequiresFinish(t *testing.T) {
 	t.Parallel()
 	body := envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"ok"}}]}`) + "data: [DONE]\n\n"
-	if _, _, err := collectStream(t, body); !errors.Is(err, ErrStreamTruncated) {
-		t.Fatalf("error = %v, want ErrStreamTruncated", err)
-	}
+	_, _, err := collectStream(t, body)
+	testutil.Falsef(t, !errors.Is(err, ErrStreamTruncated), "error = %v, want ErrStreamTruncated", err)
 }
 
 func TestConsumeStreamEnvelopeDoneRequiresFinish(t *testing.T) {
 	t.Parallel()
-	if _, _, err := collectStream(t, envelope(`[DONE]`)); !errors.Is(err, ErrStreamTruncated) {
-		t.Fatalf("error = %v, want ErrStreamTruncated", err)
-	}
+	_, _, err := collectStream(t, envelope(`[DONE]`))
+	testutil.Falsef(t, !errors.Is(err, ErrStreamTruncated), "error = %v, want ErrStreamTruncated", err)
 }
 
 // TestConsumeStreamReportsErrorEnvelope proves an upstream failure is surfaced
@@ -134,9 +122,7 @@ func TestConsumeStreamReportsErrorEnvelope(t *testing.T) {
 
 	body := "data: " + `{"statusCodeValue":500,"body":"{\"message\":\"model overloaded\"}"}` + "\n\n"
 	_, _, err := collectStream(t, body)
-	if err == nil {
-		t.Fatal("consumeStream() error = nil for an error envelope")
-	}
+	testutil.False(t, err == nil, "consumeStream() error = nil for an error envelope")
 	testutil.MustContain(t, err.Error(), "model overloaded")
 }
 
@@ -149,9 +135,7 @@ func TestConsumeStreamClassifiesSplitTextRateLimit(t *testing.T) {
 		envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"limited. Retry later"},"finish_reason":"stop"}]}`) +
 		"event:finish\ndata: {}\n\n"
 	events, _, err := collectStream(t, body)
-	if !errors.Is(err, ErrModelRateLimited) {
-		t.Fatalf("error = %v, want ErrModelRateLimited", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrModelRateLimited), "error = %v, want ErrModelRateLimited", err)
 	testutil.Equal(t, len(events), 0)
 }
 
@@ -164,19 +148,11 @@ func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
 	} {
 		body := "data: " + `{"statusCodeValue":401,"body":` + strconv.Quote(bodyJSON) + `}` + "\n\n"
 		_, _, err := collectStream(t, body)
-		if !errors.Is(err, ErrBusy) {
-			t.Fatalf("error = %v, want ErrBusy for %s", err, bodyJSON)
-		}
-		if errors.Is(err, errUpstreamUnauthorized) {
-			t.Fatalf("busy refusal was misclassified as unauthorized: %v", err)
-		}
+		testutil.Falsef(t, !errors.Is(err, ErrBusy), "error = %v, want ErrBusy for %s", err, bodyJSON)
+		testutil.Falsef(t, errors.Is(err, errUpstreamUnauthorized), "busy refusal was misclassified as unauthorized: %v", err)
 		var attemptErr *attemptStreamError
-		if !errors.As(err, &attemptErr) || !attemptErr.busy || !attemptErr.retryable {
-			t.Fatalf("busy refusal lacks typed retry metadata: %#v", err)
-		}
-		if strings.Contains(bodyJSON, "retryAfterSeconds") && attemptErr.RetryAfter() != 29*time.Second {
-			t.Fatalf("RetryAfter=%v want 29s", attemptErr.RetryAfter())
-		}
+		testutil.Falsef(t, !errors.As(err, &attemptErr) || !attemptErr.busy || !attemptErr.retryable, "busy refusal lacks typed retry metadata: %#v", err)
+		testutil.Falsef(t, strings.Contains(bodyJSON, "retryAfterSeconds") && attemptErr.RetryAfter() != 29*time.Second, "RetryAfter=%v want 29s", attemptErr.RetryAfter())
 	}
 }
 
@@ -184,9 +160,7 @@ func TestConsumeStreamPreservesEnvelopeStatusForClassification(t *testing.T) {
 	t.Parallel()
 	body := "data: " + `{"statusCodeValue":400,"body":"{\"message\":\"invalid tool schema\"}"}` + "\n\n"
 	_, _, err := collectStream(t, body)
-	if err == nil || !strings.Contains(err.Error(), "status=400") {
-		t.Fatalf("error = %v, want explicit status=400", err)
-	}
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "status=400"), "error = %v, want explicit status=400", err)
 }
 
 func TestConsumeStreamClassifiesAgentLimitWithoutClaimingAccountQuota(t *testing.T) {
@@ -195,12 +169,9 @@ func TestConsumeStreamClassifiesAgentLimitWithoutClaimingAccountQuota(t *testing
 	body := "data: " + `{"statusCodeValue":401,"body":"{\"message\":\"{\\\"agentLimitResetTime\\\":1790538433100}\"}"}` + "\n\n"
 	_, _, err := collectStream(t, body)
 	var agentErr *agentLimitError
-	if !errors.As(err, &agentErr) {
-		t.Fatalf("error = %v, want agentLimitError", err)
-	}
-	if want := time.UnixMilli(resetMillis); !agentErr.resetAt.Equal(want) {
-		t.Fatalf("reset=%v want %v", agentErr.resetAt, want)
-	}
+	testutil.Falsef(t, !errors.As(err, &agentErr), "error = %v, want agentLimitError", err)
+	want := time.UnixMilli(resetMillis)
+	testutil.Falsef(t, !agentErr.resetAt.Equal(want), "reset=%v want %v", agentErr.resetAt, want)
 	testutil.MustNotContain(t, err.Error(), "quota exhausted")
 }
 
@@ -208,9 +179,7 @@ func TestConsumeStreamDoesNotRetryDuplicateRequest(t *testing.T) {
 	t.Parallel()
 	body := "data: " + `{"statusCodeValue":401,"body":"{\"message\":\"Duplicate request\"}"}` + "\n\n"
 	_, _, err := collectStream(t, body)
-	if err == nil || !strings.Contains(err.Error(), "duplicate request") || errors.Is(err, errUpstreamUnauthorized) {
-		t.Fatalf("error = %v, want non-auth duplicate request", err)
-	}
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "duplicate request") || errors.Is(err, errUpstreamUnauthorized), "error = %v, want non-auth duplicate request", err)
 }
 
 // TestConsumeStreamAuthenticatedRequestEnvelope covers the exact answer a live
@@ -228,20 +197,14 @@ func TestConsumeStreamAuthenticatedRequestEnvelope(t *testing.T) {
 	body := "data:{\"headers\":{\"Content-Type\":[\"application/json\"]},\"body\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"statusCodeValue\":403,\"statusCode\":\"FORBIDDEN\"}\n\n"
 
 	_, _, err := collectStream(t, body)
-	if err == nil {
-		t.Fatal("consumeStream() error = nil for an entitlement refusal")
-	}
-	if !errors.Is(err, ErrNoEntitlement) {
-		t.Fatalf("error = %v, want ErrNoEntitlement", err)
-	}
+	testutil.False(t, err == nil, "consumeStream() error = nil for an entitlement refusal")
+	testutil.Falsef(t, !errors.Is(err, ErrNoEntitlement), "error = %v, want ErrNoEntitlement", err)
 	// The account classifier reads any "status=403" as a dead credential, so the
 	// error text must not carry the upstream status.
 	testutil.MustNotContain(t, err.Error(), "status=403")
 	testutil.MustNotContain(t, err.Error(), "forbidden")
 	// The reason must reach the operator.
-	if !strings.Contains(err.Error(), "pricing") && !strings.Contains(err.Error(), "plan") {
-		t.Fatalf("error text = %q, want the entitlement reason", err)
-	}
+	testutil.Falsef(t, !strings.Contains(err.Error(), "pricing") && !strings.Contains(err.Error(), "plan"), "error text = %q, want the entitlement reason", err)
 }
 
 // TestConsumeStreamClassifiesUnauthorizedEnvelope proves a genuine auth failure
@@ -251,12 +214,8 @@ func TestConsumeStreamClassifiesUnauthorizedEnvelope(t *testing.T) {
 
 	body := "data: " + `{"statusCodeValue":403,"body":"{\"message\":\"login expired\"}"}` + "\n\n"
 	_, _, err := collectStream(t, body)
-	if !errors.Is(err, errUpstreamUnauthorized) {
-		t.Fatalf("error = %v, want errUpstreamUnauthorized", err)
-	}
-	if !strings.Contains(err.Error(), "status=403") && !strings.Contains(err.Error(), "login expired") {
-		t.Fatalf("error = %v, want the upstream reason", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, errUpstreamUnauthorized), "error = %v, want errUpstreamUnauthorized", err)
+	testutil.Falsef(t, !strings.Contains(err.Error(), "status=403") && !strings.Contains(err.Error(), "login expired"), "error = %v, want the upstream reason", err)
 }
 
 // TestConsumeStreamRejectsMalformedFrames proves corrupt stream data cannot be
@@ -270,9 +229,7 @@ func TestConsumeStreamRejectsMalformedFrames(t *testing.T) {
 		"event:finish\ndata: {}\n\n"
 
 	_, _, err := collectStream(t, body)
-	if err == nil || !strings.Contains(err.Error(), "protocol error") {
-		t.Fatalf("consumeStream() error = %v, want protocol error", err)
-	}
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "protocol error"), "consumeStream() error = %v, want protocol error", err)
 }
 
 // TestConsumeStreamUsageSurvivesASharedFrame proves usage is captured even when
@@ -285,9 +242,7 @@ func TestConsumeStreamUsageSurvivesASharedFrame(t *testing.T) {
 		"event:finish\ndata: {}\n\n"
 
 	events, result, err := collectStream(t, body)
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
+	testutil.NoError(t, err, "consumeStream() error = %v")
 	var sawUsage bool
 	var sawText bool
 	for _, event := range events {
@@ -319,18 +274,14 @@ func TestConsumeStreamToolCallAccumulatesArguments(t *testing.T) {
 		"event:finish\ndata: {}\n\n"
 
 	events, result, err := collectStream(t, body)
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
+	testutil.NoError(t, err, "consumeStream() error = %v")
 	var call map[string]interface{}
 	for _, event := range events {
 		if event.Type == "model.tool-call" {
 			call = event.Event
 		}
 	}
-	if call == nil {
-		t.Fatalf("no tool call was emitted; events = %+v", events)
-	}
+	testutil.Falsef(t, call == nil, "no tool call was emitted; events = %+v", events)
 	testutil.Equal(t, call["toolName"], "search")
 	testutil.Equal(t, call["input"], `{"q":"cats"}`)
 	testutil.Equal(t, result.FinishReason(), "tool_use")
@@ -347,22 +298,18 @@ func TestToolCallAccumulatorOpensNewCallOnIDChange(t *testing.T) {
 	accumulator := util.NewToolCallAccumulator()
 	accumulator.Add(0, "call_a", "first", `{"a":1}`)
 	first := accumulator.CompleteAll()
-	if len(first) != 1 || first[0].ID != "call_a" {
-		t.Fatalf("first flush = %+v, want the first call", first)
-	}
+	testutil.Equal(t, len(first), 1)
+	testutil.Equal(t, first[0].ID, "call_a")
 
 	// The same index is reused for a different call.
 	accumulator.Add(0, "call_b", "second", `{"b":2}`)
 	second := accumulator.CompleteAll()
-	if len(second) != 1 || second[0].ID != "call_b" || second[0].Name != "second" {
-		t.Fatalf("second flush = %+v, want the reused-index call", second)
-	}
+	testutil.Falsef(t, len(second) != 1 || second[0].ID != "call_b" || second[0].Name != "second", "second flush = %+v, want the reused-index call", second)
 
 	// A repeated id must not emit again.
 	accumulator.Add(0, "call_b", "", ``)
-	if got := accumulator.CompleteAll(); len(got) != 0 {
-		t.Fatalf("third flush = %+v, want nothing", got)
-	}
+	got := accumulator.CompleteAll()
+	testutil.Falsef(t, len(got) != 0, "third flush = %+v, want nothing", got)
 }
 
 // TestToolCallAccumulatorPreservesCallsAtReusedIndex proves an index collision
@@ -374,12 +321,9 @@ func TestToolCallAccumulatorPreservesCallsAtReusedIndex(t *testing.T) {
 	accumulator.Add(1, "call_c", "third", `{"c":3}`)
 	accumulator.Add(1, "call_d", "fourth", `{"d":4}`)
 	flushed := accumulator.CompleteAll()
-	if len(flushed) != 2 || flushed[0].ID != "call_c" || flushed[1].ID != "call_d" {
-		t.Fatalf("flush = %+v, want both calls in arrival order", flushed)
-	}
-	if got := accumulator.CompleteAll(); len(got) != 0 {
-		t.Fatalf("re-flush = %+v, want nothing", got)
-	}
+	testutil.Falsef(t, len(flushed) != 2 || flushed[0].ID != "call_c" || flushed[1].ID != "call_d", "flush = %+v, want both calls in arrival order", flushed)
+	got := accumulator.CompleteAll()
+	testutil.Falsef(t, len(got) != 0, "re-flush = %+v, want nothing", got)
 }
 
 // TestConsumeStreamRejectsEventError proves an explicit error event terminates
@@ -388,9 +332,8 @@ func TestConsumeStreamRejectsEventError(t *testing.T) {
 	t.Parallel()
 
 	body := "event: error\ndata: {}\n\n"
-	if _, _, err := collectStream(t, body); err == nil {
-		t.Fatal("consumeStream() error = nil for an error event")
-	}
+	_, _, err := collectStream(t, body)
+	testutil.Error(t, err)
 }
 
 // TestReadSSEHandlesMultilineData proves a frame split across several data lines
@@ -403,13 +346,10 @@ func TestReadSSEHandlesMultilineData(t *testing.T) {
 		frames = append(frames, frame)
 		return true
 	})
-	if err != nil {
-		t.Fatalf("readSSE() error = %v", err)
-	}
+	testutil.NoError(t, err, "readSSE() error = %v")
 	testutil.Equal(t, len(frames), 1)
-	if frames[0].event != "message" || frames[0].data != "line1\nline2" {
-		t.Fatalf("frame = %+v, want the joined data", frames[0])
-	}
+	testutil.Equal(t, frames[0].event, "message")
+	testutil.Equal(t, frames[0].data, "line1\nline2")
 }
 
 // TestReadSSEPropagatesReadErrors proves a transport failure is visible.
@@ -417,9 +357,7 @@ func TestReadSSEPropagatesReadErrors(t *testing.T) {
 	t.Parallel()
 
 	err := readSSE(io.MultiReader(strings.NewReader("data: x\n"), errReader{}), func(sseFrame) bool { return true })
-	if err == nil {
-		t.Fatal("readSSE() error = nil for a failing reader")
-	}
+	testutil.False(t, err == nil, "readSSE() error = nil for a failing reader")
 }
 
 type errReader struct{}
@@ -468,18 +406,12 @@ func TestEntitlementRefusalDoesNotRetireTheAccount(t *testing.T) {
 		"statusCodeValue": 403,
 		"statusCode":      "FORBIDDEN",
 	})
-	if err != nil {
-		t.Fatalf("marshal fixture: %v", err)
-	}
+	testutil.NoError(t, err, "marshal fixture: %v")
 	stream := "data:" + string(envelopeBody) + "\n\n"
 
 	_, _, streamErr := collectStream(t, stream)
-	if streamErr == nil {
-		t.Fatal("consumeStream() error = nil, want an entitlement refusal")
-	}
-	if !errors.Is(streamErr, ErrNoEntitlement) {
-		t.Fatalf("error = %v, want ErrNoEntitlement", streamErr)
-	}
+	testutil.False(t, streamErr == nil, "consumeStream() error = nil, want an entitlement refusal")
+	testutil.Falsef(t, !errors.Is(streamErr, ErrNoEntitlement), "error = %v, want ErrNoEntitlement", streamErr)
 
 	text := streamErr.Error()
 
@@ -495,7 +427,5 @@ func TestEntitlementRefusalDoesNotRetireTheAccount(t *testing.T) {
 	// must be the entitlement branch that produced the message.
 	testutil.MustContain(t, text, "code=112")
 	testutil.CheckContain(t, text, "pricing")
-	if !strings.Contains(text, "plan") && !strings.Contains(text, "subscription") {
-		t.Errorf("error text %q does not say what to do", text)
-	}
+	testutil.CheckFalsef(t, !strings.Contains(text, "plan") && !strings.Contains(text, "subscription"), "error text %q does not say what to do", text)
 }

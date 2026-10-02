@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -309,21 +308,5 @@ func (c *Client) ProbeReachability(ctx context.Context) error {
 // it would make the setting unusable. Everything else is refused, including a
 // host that merely looks similar.
 func (c *Client) allowedLoginHost(host string) bool {
-	host = strings.TrimSpace(strings.ToLower(host))
-	if host == "" {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") || host == "::1" {
-		return true
-	}
-	if parsed := net.ParseIP(host); parsed != nil && parsed.IsLoopback() {
-		return true
-	}
-	for _, allowed := range loginHosts {
-		if strings.EqualFold(host, allowed) {
-			return true
-		}
-	}
-	configured := strings.ToLower(util.HostOf(c.endpoints.oauth))
-	return configured != "" && host == configured
+	return util.AllowedLoginHost(host, strings.ToLower(util.HostOf(c.endpoints.oauth)), loginHosts)
 }

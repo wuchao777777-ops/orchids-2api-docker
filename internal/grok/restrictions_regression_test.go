@@ -22,12 +22,10 @@ func TestRestrictionsToolNamesRemainCaseSensitiveAndRoundTrip(t *testing.T) {
 		ToolChoice: map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "ReadFile"}}}
 	testutil.NoError(t, req.Validate())
 	req.ToolChoice.(map[string]interface{})["function"].(map[string]interface{})["name"] = "READFILE"
-	if err := req.Validate(); err == nil {
-		t.Fatal("forced names must match exactly")
-	}
-	if err := validateToolDefinitions(append(tools, tools[0])); err == nil {
-		t.Fatal("exact duplicates must fail")
-	}
+	err := req.Validate()
+	testutil.Error(t, err)
+	err = validateToolDefinitions(append(tools, tools[0]))
+	testutil.Error(t, err)
 	longName := strings.Repeat("Long", 40)
 	declarations := []map[string]interface{}{{"type": "function", "name": "a b"}, {"type": "function", "name": "a_b_2"}, {"type": "function", "name": "a@b"}, {"type": "function", "name": longName}, {"type": "function", "name": "ReadFile"}, {"type": "function", "name": "readfile"}}
 	payload := map[string]interface{}{"tools": declarations, "tool_choice": map[string]interface{}{"type": "function", "name": longName}, "input": []interface{}{map[string]interface{}{"type": "function_call", "name": longName, "call_id": "call_x", "arguments": "{}"}}}
@@ -36,15 +34,11 @@ func TestRestrictionsToolNamesRemainCaseSensitiveAndRoundTrip(t *testing.T) {
 	seen := map[string]bool{}
 	for _, tool := range interfaceMaps(payload["tools"]) {
 		name := tool["name"].(string)
-		if seen[name] || len(name) > 128 {
-			t.Fatalf("invalid alias %q", name)
-		}
+		testutil.Falsef(t, seen[name] || len(name) > 128, "invalid alias %q", name)
 		seen[name] = true
 	}
 	alias := payload["tool_choice"].(map[string]interface{})["name"].(string)
-	if interfaceMaps(payload["input"])[0]["name"] != alias {
-		t.Fatal("history and declaration aliases differ")
-	}
+	testutil.EqualAny(t, interfaceMaps(payload["input"])[0]["name"], alias)
 	raw, _ := json.Marshal(map[string]interface{}{"type": "function_call", "name": alias, "call_id": "call_x", "arguments": "{}"})
 	var restored map[string]interface{}
 	_ = json.Unmarshal(rewriteBuildToolAliasesJSON(raw, aliases), &restored)
@@ -67,17 +61,13 @@ func TestRestrictionsReasoningAliasesReachWire(t *testing.T) {
 		{"grok-3-mini-fast", "minimal"},
 	} {
 		payload := map[string]interface{}{"reasoning": map[string]interface{}{"effort": test.effort, "summary": "auto"}}
-		if err := validatePayloadReasoning(payload); err != nil {
-			t.Fatal(test, err)
-		}
-		if payload["reasoning"].(map[string]interface{})["effort"] != test.effort {
-			t.Fatal(test, payload)
-		}
+		err := validatePayloadReasoning(payload)
+		testutil.NoError(t, err)
+		testutil.Fail(t, payload["reasoning"].(map[string]interface{})["effort"] != test.effort, test, payload)
 		effort := test.effort
 		request := &ChatCompletionsRequest{Model: test.model, Messages: []ChatMessage{{Role: "user", Content: "hi"}}, ReasoningEffort: &effort}
-		if err := request.Validate(); err != nil {
-			t.Fatal(test, err)
-		}
+		err = request.Validate()
+		testutil.NoError(t, err)
 	}
 }
 
@@ -87,21 +77,14 @@ func TestRestrictionsEmptyAndImageToolOutputs(t *testing.T) {
 		testutil.NoError(t, validateChatMessages(messages))
 		input, _ := responsesInputFromChatMessages(messages)
 		item := input[0].(map[string]interface{})
-		if item["call_id"] != "call_a" {
-			t.Fatal(item)
-		}
-		if content == "" && item["output"] != "" {
-			t.Fatal("empty result changed")
-		}
+		testutil.Equal(t, item["call_id"], "call_a")
+		testutil.False(t, content == "" && item["output"] != "", "empty result changed")
 		if parts, ok := item["output"].([]interface{}); ok {
-			if parts[0].(map[string]interface{})["detail"] != "high" {
-				t.Fatal(parts)
-			}
+			testutil.Fail(t, parts[0].(map[string]interface{})["detail"] != "high", parts)
 		}
 	}
-	if err := validateChatMessages([]ChatMessage{{Role: "tool", Content: ""}}); err == nil {
-		t.Fatal("missing call ID accepted")
-	}
+	err := validateChatMessages([]ChatMessage{{Role: "tool", Content: ""}})
+	testutil.Error(t, err)
 }
 
 func TestRestrictionsScopedCooldownAndPacing(t *testing.T) {
@@ -132,9 +115,7 @@ func TestRestrictionsScopedCooldownAndPacing(t *testing.T) {
 		ctx, cancel := context.WithTimeout(test.ctx, 20*time.Millisecond)
 		err := waitScopedRateLimit(ctx, test.provider, "unused", test.model, 0)
 		cancel()
-		if (err != nil) != test.blocked {
-			t.Fatalf("%s %s blocked=%v: %v", test.provider, test.model, test.blocked, err)
-		}
+		testutil.Falsef(t, (err != nil) != test.blocked, "%s %s blocked=%v: %v", test.provider, test.model, test.blocked, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -144,9 +125,8 @@ func TestRestrictionsScopedCooldownAndPacing(t *testing.T) {
 	testutil.NoError(t, waitScopedRateLimit(ctx, ProviderBuild, "paced-account-a", "m", 0.1))
 	short, stop := context.WithTimeout(ctx, 20*time.Millisecond)
 	defer stop()
-	if err := waitScopedRateLimit(short, ProviderBuild, "paced-account-a", "m", 0.1); err == nil {
-		t.Fatal("configured pace ignored")
-	}
+	err := waitScopedRateLimit(short, ProviderBuild, "paced-account-a", "m", 0.1)
+	testutil.Error(t, err)
 	testutil.NoError(t, waitScopedRateLimit(ctx, ProviderBuild, "paced-account-b", "m", 0.1), "unrelated account blocked")
 }
 
@@ -179,14 +159,10 @@ func TestRestrictionsBuildChatLongToolNameEndToEnd(t *testing.T) {
 	body, _ := json.Marshal(ChatCompletionsRequest{Model: model, Messages: []ChatMessage{{Role: "user", Content: "use the tool"}}, Tools: tools, ToolChoice: map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": longName}}})
 	rec := httptest.NewRecorder()
 	h.HandleChatCompletions(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body)))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), longName) || !strings.Contains(rec.Body.String(), "call_long") {
-		t.Fatalf("%d %s", rec.Code, rec.Body.String())
-	}
+	testutil.Falsef(t, rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), longName) || !strings.Contains(rec.Body.String(), "call_long"), "%d %s", rec.Code, rec.Body.String())
 	select {
 	case payload := <-received:
-		if len(interfaceMaps(payload["tools"])) != 129 {
-			t.Fatal("tool list truncated")
-		}
+		testutil.Equal(t, len(interfaceMaps(payload["tools"])), 129)
 		if name := parseLooseStringAny(payload["tool_choice"].(map[string]interface{})["name"]); name == "" || len(name) > 128 {
 			t.Fatal("invalid wire alias", name)
 		}

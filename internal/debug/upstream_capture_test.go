@@ -23,9 +23,7 @@ func TestUpstreamCaptureRetainsInterleavedAttempts(t *testing.T) {
 		body string
 	}{{b, "second response"}, {a, "first response"}} {
 		got, err := io.ReadAll(tc.a.CaptureBody(io.NopCloser(strings.NewReader(tc.body))))
-		if err != nil || string(got) != tc.body {
-			t.Fatal("tee changed data")
-		}
+		testutil.False(t, err != nil || string(got) != tc.body, "tee changed data")
 	}
 	sections := map[string]string{}
 	for _, s := range c.Bundle().Sections {
@@ -57,9 +55,8 @@ func TestLoggerRetryRequestsAreNotOverwritten(t *testing.T) {
 		byName[s.Name] = s.Payload
 	}
 	for i, name := range []string{"upstream_001_request.json", "upstream_002_request.json"} {
-		if want := fmt.Sprintf("attempt-%d.invalid", i+1); !strings.Contains(byName[name], want) {
-			t.Fatalf("%s = %q, want it to hold %q", name, byName[name], want)
-		}
+		want := fmt.Sprintf("attempt-%d.invalid", i+1)
+		testutil.Falsef(t, !strings.Contains(byName[name], want), "%s = %q, want it to hold %q", name, byName[name], want)
 	}
 }
 
@@ -69,9 +66,7 @@ func TestCapturePreservesManySectionsAndLargeBundle(t *testing.T) {
 	for i := 0; i < 97; i++ {
 		c.Append(fmt.Sprintf("small-%d", i), "x")
 	}
-	if c.Bundle().Truncated || len(c.Bundle().Sections) != 97 {
-		t.Fatal("silently discarded sections")
-	}
+	testutil.False(t, c.Bundle().Truncated || len(c.Bundle().Sections) != 97, "silently discarded sections")
 	c.Close()
 	_, c = WithCapture(context.Background(), "bytes")
 	defer c.Close()

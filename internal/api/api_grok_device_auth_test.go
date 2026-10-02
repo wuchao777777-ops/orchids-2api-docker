@@ -29,9 +29,7 @@ func TestHandleGrokDeviceAuthorizationStatusRedactsDeviceCode(t *testing.T) {
 	a.HandleGrokDeviceAuthorization(rec, req)
 	testutil.Equal(t, rec.Code, http.StatusOK)
 	body := rec.Body.String()
-	if strings.Contains(body, "must-not-be-exposed") || !strings.Contains(body, "ABCD-1234") {
-		t.Fatalf("unexpected response: %s", body)
-	}
+	testutil.Falsef(t, strings.Contains(body, "must-not-be-exposed") || !strings.Contains(body, "ABCD-1234"), "unexpected response: %s", body)
 }
 
 func TestHandleGrokDeviceAuthorizationDeleteCancelsAndForgets(t *testing.T) {
@@ -45,9 +43,7 @@ func TestHandleGrokDeviceAuthorizationDeleteCancelsAndForgets(t *testing.T) {
 	testutil.Equal(t, rec.Code, http.StatusNoContent)
 	var remained bool
 	a.grokLogins.update("login-id", func(*deviceLogin) { remained = true })
-	if remained {
-		t.Fatal("cancelled login remained in memory")
-	}
+	testutil.False(t, remained, "cancelled login remained in memory")
 	select {
 	case <-ctx.Done():
 	case <-time.After(time.Second):

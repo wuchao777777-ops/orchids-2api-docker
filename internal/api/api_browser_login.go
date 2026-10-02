@@ -194,6 +194,53 @@ func awaitLoginPoll[T any](ctx context.Context, registry *deviceLoginRegistry[T]
 	return login, true
 }
 
+// pollBrowserLogin owns the exchange/verify/persist state machine. Provider
+// adapters keep private grants out of the response and preserve their builders.
+func pollBrowserLogin[T, C any](a *API, ctx context.Context, registry *deviceLoginRegistry[T], id, channel string, pending error,
+	exchange func(context.Context, *T) (C, error), build func(*T, C) (*store.Account, error), markReplace func(*store.Account)) {
+	for {
+		login, ok := awaitLoginPoll(ctx, registry, id, channel)
+		if !ok {
+			return
+		}
+		reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		creds, err := exchange(reqCtx, login)
+		cancel()
+		if err != nil {
+			if errors.Is(err, pending) {
+				continue
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Warn(channel+" authorization failed", "login_id", id, "error", err)
+			registry.finish(id, "failed", channel+" authorization failed; start again", 0)
+			return
+		}
+		account, err := build(login, creds)
+		if err != nil {
+			logMessage := channel + " authorization succeeded but the account could not be stored"
+			message := channel + " authorization succeeded but the account could not be saved: " + truncateLoginReason(err)
+			if channel == "WorkBuddy" {
+				logMessage = "WorkBuddy authorization succeeded but verification failed"
+				message = "WorkBuddy authorization succeeded but the account could not be verified"
+			}
+			slog.Warn(logMessage, "login_id", id, "error", err)
+			registry.finish(id, "failed", message, 0)
+			return
+		}
+		if ctx.Err() != nil || !registry.pending(id) {
+			return
+		}
+		shared := registry.shared(login)
+		if shared.enabledKnown {
+			account.Enabled = shared.enabled
+		}
+		finishBrowserLogin(a, ctx, registry, id, channel, account, markReplace)
+		return
+	}
+}
+
 // finishBrowserLogin persists the account a completed browser login produced.
 //
 // A channel may hand out a second grant for an account this gateway already has:

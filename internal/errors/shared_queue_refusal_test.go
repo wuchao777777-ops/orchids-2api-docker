@@ -28,9 +28,7 @@ func TestClassifySharedQueueRefusalDoesNotRotate(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			class := ClassifyUpstreamError(tc.message)
 			testutil.CheckEqual(t, class.Category, tc.category)
-			if class.SwitchAccount {
-				t.Error("SwitchAccount = true; every account meets the identical refusal")
-			}
+			testutil.CheckFalse(t, class.SwitchAccount, "SwitchAccount = true; every account meets the identical refusal")
 		})
 	}
 }
@@ -46,18 +44,14 @@ func TestClassifyEscapedMarkersSurviveNesting(t *testing.T) {
 	const escapedNoCode = `qoder upstream rejected the credential: {"message":"{\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"waitTime\":30}"}`
 	class := ClassifyUpstreamError(escapedNoCode)
 	testutil.Equal(t, class.Category, "upstream_queue")
-	if class.SwitchAccount {
-		t.Fatal("SwitchAccount = true; a closed gate is identical for every account")
-	}
+	testutil.False(t, class.SwitchAccount, "SwitchAccount = true; a closed gate is identical for every account")
 
 	// The same flags under an explicit 401 envelope, which is how Qoder reports
 	// 10605: the credential branch used to win and the handler rotated the pool.
 	escapedUnder401 := `qoder gateway is busy: qoder API error: status=401, method=POST, path=/algo/api/v2/chat, code=10605, message={\"isQueued\":true,\"queueCount\":0,\"serviceAvailable\":false,\"retryAfterSeconds\":30}`
 	class = ClassifyUpstreamError(escapedUnder401)
 	testutil.Equal(t, class.Category, "upstream_queue")
-	if class.SwitchAccount {
-		t.Fatal("SwitchAccount = true; the 401 envelope made the handler rotate the whole pool")
-	}
+	testutil.False(t, class.SwitchAccount, "SwitchAccount = true; the 401 envelope made the handler rotate the whole pool")
 }
 
 // TestClassifyOrdinaryThrottleStillSwitches guards the other direction: an
@@ -72,9 +66,7 @@ func TestClassifyOrdinaryThrottleStillSwitches(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			class := ClassifyUpstreamError(message)
 			testutil.CheckEqual(t, class.Category, "rate_limit")
-			if !class.SwitchAccount {
-				t.Error("SwitchAccount = false; an account-scoped throttle must still rotate")
-			}
+			testutil.CheckFalse(t, !class.SwitchAccount, "SwitchAccount = false; an account-scoped throttle must still rotate")
 		})
 	}
 }

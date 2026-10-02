@@ -28,13 +28,10 @@ func TestRetryable_MatchesTheSharedUpstreamClassification(t *testing.T) {
 		err := errors.New(tc.message)
 		class := apperrors.ClassifyUpstreamError(tc.message)
 		testutil.Equal(t, Retryable(err), tc.want)
-		if got, want := Retryable(err), class.Retryable; got != want {
-			t.Fatalf("Retryable(%q) = %v but the shared classification says %v", tc.message, got, want)
-		}
+		got, want := Retryable(err), class.Retryable
+		testutil.Falsef(t, got != want, "Retryable(%q) = %v but the shared classification says %v", tc.message, got, want)
 	}
-	if Retryable(nil) {
-		t.Fatal("a nil error is not retryable")
-	}
+	testutil.False(t, Retryable(nil), "a nil error is not retryable")
 }
 
 // TestClassify_VerdictMatchesTheSharedRetryRule makes the two systems provably

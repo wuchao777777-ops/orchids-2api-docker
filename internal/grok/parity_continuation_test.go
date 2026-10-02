@@ -18,17 +18,13 @@ func TestBuildNamespaceAliasRestoredInJSONAndSSE(t *testing.T) {
 
 	jsonSource := io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call","name":"crm__lookup","arguments":"{}"}]}`))
 	converted, err := io.ReadAll(rewriteBuildToolAliasResponse(jsonSource, "application/json", aliases))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.MustContainAll(t, string(converted), `"name":"lookup"`, `"namespace":"crm"`)
 
 	sseSource := io.NopCloser(strings.NewReader("event: response.output_item.added\n" +
 		"data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"name\":\"crm__lookup\"}}\n\n"))
 	converted, err = io.ReadAll(rewriteBuildToolAliasResponse(sseSource, "text/event-stream", aliases))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.MustContainAll(t, string(converted), `"namespace":"crm"`, `event: response.output_item.added`)
 }
 
@@ -44,22 +40,16 @@ func TestAnthropicServerSearchHistoryUsesNativeResponsesItem(t *testing.T) {
 		}}, {Role: "user", Content: "continue"}},
 	}
 	chat, err := anthropicRequestToChat(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.5"}, &chat, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	input := payload["input"].([]interface{})
 	call, _ := input[0].(map[string]interface{})
-	if call["type"] != "web_search_call" || call["status"] != "completed" {
-		t.Fatalf("native search call=%#v input=%#v", call, input)
-	}
+	testutil.Equal(t, call["type"], "web_search_call")
+	testutil.Equal(t, call["status"], "completed")
 	action := call["action"].(map[string]interface{})
-	if action["query"] != "orchids" || len(action["sources"].([]interface{})) != 1 {
-		t.Fatalf("native search action=%#v", action)
-	}
+	testutil.Equal(t, action["query"], "orchids")
+	testutil.Equal(t, len(action["sources"].([]interface{})), 1)
 }
 
 func TestBuildToolSearchStreamHidesInternalArgumentEvents(t *testing.T) {
@@ -90,9 +80,7 @@ func TestBuildToolSearchStreamHidesInternalArgumentEvents(t *testing.T) {
 		"",
 	}, "\n")
 	converted, err := io.ReadAll(rewriteBuildToolAliasResponse(io.NopCloser(strings.NewReader(source)), "text/event-stream", aliases))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	text := string(converted)
 	testutil.MustNotContainAny(t, text, "response.function_call_arguments", `"name":"tool_search"`)
 	for _, expected := range []string{`"type":"tool_search_call"`, `"goal":"crm"`, `"type":"namespace"`, `"name":"crm"`, "data: [DONE]"} {

@@ -32,12 +32,9 @@ func TestProviderCredentialPatchesPreserveConcurrentAccountFields(t *testing.T) 
 		t.Fatal(err)
 	}
 	storedWB, err := s.GetAccount(ctx, wb.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if storedWB.Name != "after" || storedWB.UsageCurrent != 17 {
-		t.Fatalf("credential patch lost unrelated fields: %+v", storedWB)
-	}
+	testutil.NoError(t, err)
+	testutil.Equal(t, storedWB.Name, "after")
+	testutil.Equal(t, storedWB.UsageCurrent, 17)
 	testutil.Equal(t, storedWB.WorkBuddyRefreshToken, "refresh-new")
 
 	qoder := &Account{
@@ -55,12 +52,8 @@ func TestProviderCredentialPatchesPreserveConcurrentAccountFields(t *testing.T) 
 		t.Fatal(err)
 	}
 	storedQoder, err := s.GetAccount(ctx, qoder.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if storedQoder.UsageLimit != 100 || storedQoder.QoderRefreshToken != "q-refresh-new" || storedQoder.QoderRuntimeKey != "key" {
-		t.Fatalf("qoder patch produced the wrong state: %+v", storedQoder)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, storedQoder.UsageLimit != 100 || storedQoder.QoderRefreshToken != "q-refresh-new" || storedQoder.QoderRuntimeKey != "key", "qoder patch produced the wrong state: %+v", storedQoder)
 }
 
 func TestProviderCredentialPatchRejectsStaleRotation(t *testing.T) {
@@ -73,12 +66,8 @@ func TestProviderCredentialPatchRejectsStaleRotation(t *testing.T) {
 		ExpectedRefreshToken: "refresh-stale",
 		RefreshToken:         "refresh-would-overwrite",
 	})
-	if err == nil || !strings.Contains(err.Error(), "changed concurrently") {
-		t.Fatalf("error = %v, want a concurrent credential rejection", err)
-	}
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "changed concurrently"), "error = %v, want a concurrent credential rejection", err)
 	stored, getErr := s.GetAccount(ctx, acc.ID)
-	if getErr != nil {
-		t.Fatal(getErr)
-	}
+	testutil.NoError(t, getErr)
 	testutil.Equal(t, stored.QoderRefreshToken, "refresh-current")
 }

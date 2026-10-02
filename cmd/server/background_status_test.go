@@ -30,9 +30,7 @@ func TestRefreshQoderQuotaClearsFalseAgentExhaustion(t *testing.T) {
 
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "qoder-auto-quota:"})
-	if err != nil {
-		t.Fatalf("store.New() error=%v", err)
-	}
+	testutil.NoError(t, err, "store.New() error=%v")
 	t.Cleanup(func() { _ = s.Close() })
 
 	acc := &store.Account{
@@ -46,25 +44,16 @@ func TestRefreshQoderQuotaClearsFalseAgentExhaustion(t *testing.T) {
 	refreshQoderQuota(context.Background(), cfg, s, acc)
 
 	after, err := s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error=%v", err)
-	}
-	if after.StatusCode != "" || after.QoderQuota.Exhausted {
-		t.Fatalf("false exhaustion survived authoritative sync: status=%q quota=%+v", after.StatusCode, after.QoderQuota)
-	}
-	if after.QoderQuota.Remaining != 218 || after.UsageCurrent != 218 {
-		t.Fatalf("remaining=%v usage_current=%v want 218", after.QoderQuota.Remaining, after.UsageCurrent)
-	}
+	testutil.NoError(t, err, "GetAccount() error=%v")
+	testutil.Falsef(t, after.StatusCode != "" || after.QoderQuota.Exhausted, "false exhaustion survived authoritative sync: status=%q quota=%+v", after.StatusCode, after.QoderQuota)
+	testutil.Equal(t, after.QoderQuota.Remaining, 218)
+	testutil.Equal(t, after.UsageCurrent, 218)
 }
 
 func TestGrokCLIBillingNeedsSyncUsesSlowCadence(t *testing.T) {
 	now := time.Now()
-	if grokCLIBillingNeedsSync(&store.Account{GrokBilling: store.GrokBillingSnapshot{SyncedAt: now.Add(-time.Minute)}}, now) {
-		t.Fatal("fresh CLI billing was polled on credential tick")
-	}
-	if !grokCLIBillingNeedsSync(&store.Account{GrokBilling: store.GrokBillingSnapshot{SyncedAt: now.Add(-time.Hour)}}, now) {
-		t.Fatal("stale CLI billing was not polled")
-	}
+	testutil.False(t, grokCLIBillingNeedsSync(&store.Account{GrokBilling: store.GrokBillingSnapshot{SyncedAt: now.Add(-time.Minute)}}, now), "fresh CLI billing was polled on credential tick")
+	testutil.False(t, !grokCLIBillingNeedsSync(&store.Account{GrokBilling: store.GrokBillingSnapshot{SyncedAt: now.Add(-time.Hour)}}, now), "stale CLI billing was not polled")
 }
 
 // TestPlanGrokRefreshCycle_SkipsAccountHoldingALease covers the write-back

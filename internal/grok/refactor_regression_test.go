@@ -18,9 +18,7 @@ func TestRefactorAliasMultilineKeepsMetadataAndRestoresNames(t *testing.T) {
 	body := rewriteBuildToolAliasResponse(io.NopCloser(strings.NewReader(input)), "text/event-stream", aliases)
 	defer body.Close()
 	raw, err := io.ReadAll(body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	for _, want := range []string{": keepalive", "id: ev_a", "retry: 1000", "\"name\":\"lookup\"", "\"namespace\":\"crm\"", "data: [DONE]"} {
 		testutil.MustContain(t, string(raw), want)
 	}
@@ -38,21 +36,16 @@ func TestRefactorSearchArgumentsSurviveItemDoneWithoutSnapshot(t *testing.T) {
 	body := rewriteBuildToolAliasResponse(io.NopCloser(strings.NewReader(stream)), "text/event-stream", aliases)
 	defer body.Close()
 	raw, err := io.ReadAll(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "response.function_call_arguments") || !strings.Contains(string(raw), "\"goal\":\"crm\"") {
-		t.Fatal(string(raw))
-	}
+	testutil.NoError(t, err)
+	testutil.Fail(t, strings.Contains(string(raw), "response.function_call_arguments") || !strings.Contains(string(raw), "\"goal\":\"crm\""), string(raw))
 }
 
 func TestRefactorAliasRejectsOversizedMultilineFrame(t *testing.T) {
 	input := strings.Repeat("data: "+strings.Repeat("a", 64<<10)+"\n", 130)
 	body := rewriteBuildToolAliasResponse(io.NopCloser(strings.NewReader(input)), "text/event-stream", nil)
 	defer body.Close()
-	if _, err := io.Copy(io.Discard, body); err == nil {
-		t.Fatal("unbounded alias frame accepted")
-	}
+	_, err := io.Copy(io.Discard, body)
+	testutil.Error(t, err)
 }
 
 func TestRefactorNativeUsageSurvivesFullCaptureOverflow(t *testing.T) {
@@ -61,9 +54,7 @@ func TestRefactorNativeUsageSurvivesFullCaptureOverflow(t *testing.T) {
 		"id": "resp_a", "status": "completed", "usage": map[string]interface{}{"input_tokens": 100, "output_tokens": 10},
 	}})
 	id, captured, result := copyNativeCLIResponseAndCaptureModel(httptest.NewRecorder(), strings.NewReader(stream), "text/event-stream", "grok-4.6")
-	if id != "resp_a" || len(captured) != upstreamMaxEventBytes || result.Err != nil || interfaceToInt(result.Usage["completion_tokens"]) != 10 {
-		t.Fatal(id, len(captured), result)
-	}
+	testutil.Fail(t, id != "resp_a" || len(captured) != upstreamMaxEventBytes || result.Err != nil || interfaceToInt(result.Usage["completion_tokens"]) != 10, id, len(captured), result)
 }
 
 type refactorErrorReader struct{ err error }
@@ -74,9 +65,7 @@ func TestRefactorNativeJSONReadErrorIsNotAuditedAsSuccess(t *testing.T) {
 	readErr := errors.New("synthetic transport failure")
 	source := io.MultiReader(strings.NewReader("{\"id\":\"resp_a\",\"status\":\"completed\"}"), refactorErrorReader{readErr})
 	_, _, result := copyNativeCLIResponseAndCaptureModel(httptest.NewRecorder(), source, "application/json", "grok-4.6")
-	if !errors.Is(result.Err, readErr) || result.Finish != "error" {
-		t.Fatal(result)
-	}
+	testutil.Fail(t, !errors.Is(result.Err, readErr) || result.Finish != "error", result)
 }
 
 func TestRefactorChatStreamFreezesCommittedHeaders(t *testing.T) {
@@ -88,9 +77,7 @@ func TestRefactorChatStreamFreezesCommittedHeaders(t *testing.T) {
 	stream.WriteHeader(http.StatusBadRequest)
 	stream.Header().Set("X-Test", "later")
 	stream.WriteHeader(http.StatusOK)
-	if stream.status != http.StatusBadRequest || stream.committedHeader.Get("X-Test") != "initial" {
-		t.Fatal("committed response changed")
-	}
+	testutil.False(t, stream.status != http.StatusBadRequest || stream.committedHeader.Get("X-Test") != "initial", "committed response changed")
 }
 
 func TestRefactorChatBridgePropagatesErrorAndClosesPipe(t *testing.T) {
@@ -99,13 +86,9 @@ func TestRefactorChatBridgePropagatesErrorAndClosesPipe(t *testing.T) {
 	(&Handler{}).withChatStream(req, func(status int, header http.Header, reader io.Reader) {
 		saved = reader
 		body, err := io.ReadAll(reader)
-		if err != nil || status != http.StatusBadRequest || !strings.Contains(string(body), "invalid json") {
-			t.Fatal(status, err, string(body))
-		}
+		testutil.Fail(t, err != nil || status != http.StatusBadRequest || !strings.Contains(string(body), "invalid json"), status, err, string(body))
 	})
-	if saved == nil {
-		t.Fatal("bridge did not forward response")
-	}
+	testutil.False(t, saved == nil, "bridge did not forward response")
 	if _, err := saved.Read(make([]byte, 1)); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatal("bridge left reader open", err)
 	}

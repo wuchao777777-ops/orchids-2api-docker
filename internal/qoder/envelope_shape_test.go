@@ -16,17 +16,13 @@ const productionBusyBody = `{"code":"10605","message":"{\"isQueued\":true,\"mode
 // rejection, and every account in turn was parked as a rate limit.
 func TestEnvelopeCodeReadsADoubleEncodedBody(t *testing.T) {
 	doubleEncoded, err := json.Marshal(productionBusyBody)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	for name, raw := range map[string]string{
 		"plain object":       productionBusyBody,
 		"JSON string body":   string(doubleEncoded),
 		"string within body": `{"code":"10605","message":"{\"isQueued\":true}"}`,
 	} {
-		t.Run(name, func(t *testing.T) {
-			testutil.Equal(t, envelopeCode([]byte(raw)), busyCode)
-		})
+		t.Run(name, func(t *testing.T) { testutil.Equal(t, envelopeCode([]byte(raw)), busyCode) })
 	}
 }
 
@@ -44,13 +40,9 @@ func TestStreamReportsAQueueRefusalAsBusy(t *testing.T) {
 				"statusCodeValue": 401,
 				"statusCode":      "401",
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, err)
 			_, streamErr := consumeStreamObserved(strings.NewReader("data: "+string(frame)+"\n\n"), true, nil, nil)
-			if streamErr == nil {
-				t.Fatal("expected an error")
-			}
+			testutil.False(t, streamErr == nil, "expected an error")
 			testutil.CheckContain(t, streamErr.Error(), "gateway is busy")
 			testutil.CheckNotContain(t, streamErr.Error(), "rejected the credential")
 		})
@@ -60,9 +52,7 @@ func TestStreamReportsAQueueRefusalAsBusy(t *testing.T) {
 func mustMarshalString(t *testing.T, value string) string {
 	t.Helper()
 	raw, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	return string(raw)
 }
 
@@ -78,9 +68,7 @@ func TestSharedQueueRefusalIsShapeIndependent(t *testing.T) {
 		"nested inside message": {`{"code":"10605","message":"{\"isQueued\":true,\"serviceAvailable\":false,\"retryAfterSeconds\":30}"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if !sharedQueueRefusal(values...) {
-				t.Errorf("%v was not recognised as a shared queue refusal", values)
-			}
+			testutil.CheckTrue(t, sharedQueueRefusal(values...), "%v was not recognised as a shared queue refusal")
 		})
 	}
 	for name, values := range map[string][]string{
@@ -88,9 +76,7 @@ func TestSharedQueueRefusalIsShapeIndependent(t *testing.T) {
 		"agent limit":          {`{"agentLimitResetTime":1790538433100}`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if sharedQueueRefusal(values...) {
-				t.Errorf("%v was wrongly treated as a queue refusal", values)
-			}
+			testutil.CheckFalsef(t, sharedQueueRefusal(values...), "%v was wrongly treated as a queue refusal", values)
 		})
 	}
 }

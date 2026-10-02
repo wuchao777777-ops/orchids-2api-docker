@@ -9,15 +9,14 @@ import (
 	"github.com/alicebob/miniredis/v2"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func newTestStore(t *testing.T, prefix string) (*store.Store, *miniredis.Miniredis) {
 	t.Helper()
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: prefix})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 	t.Cleanup(func() { _ = s.Close() })
 	return s, mini
 }

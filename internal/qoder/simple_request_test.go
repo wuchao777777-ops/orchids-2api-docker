@@ -14,24 +14,16 @@ func TestSimplePromptRequestRetainsContextAndExplicitBudget(t *testing.T) {
 			req.MaxTokens = &limit
 		}
 		encoded, err := buildChatBodyProfile(req, modelEntry{Key: "qfmodel"}, "session", "request", "set", DefaultClientVersion, "", sceneBusinessProduct)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 		raw, err := decodeBody(encoded)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 		var body chatBody
-		if err = json.Unmarshal(raw, &body); err != nil {
-			t.Fatal(err)
-		}
-		if len(body.Messages) != 1 || body.Messages[0].Content != req.Prompt || len(body.Tools) != 0 || body.System != "" {
-			t.Fatalf("unexpected simple payload: messages=%v tools=%d", body.Messages, len(body.Tools))
-		}
+		err = json.Unmarshal(raw, &body)
+		testutil.NoError(t, err)
+		testutil.Falsef(t, len(body.Messages) != 1 || body.Messages[0].Content != req.Prompt || len(body.Tools) != 0 || body.System != "", "unexpected simple payload: messages=%v tools=%d", body.Messages, len(body.Tools))
 		context := body.ChatContext.(map[string]interface{})
-		if context["text"] != req.Prompt || context["extra"].(map[string]interface{})["originalContent"] != req.Prompt {
-			t.Fatalf("prompt missing from context: %v", body.ChatContext)
-		}
+		testutil.EqualAny(t, context["text"], req.Prompt)
+		testutil.EqualAny(t, context["extra"].(map[string]interface{})["originalContent"], req.Prompt)
 		want := 32000
 		if limit != 0 {
 			want = limit

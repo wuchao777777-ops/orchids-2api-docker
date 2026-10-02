@@ -21,12 +21,10 @@ func TestReadResponseSSEBytesPreservesPayloads(t *testing.T) {
 		t.Fatalf("readResponseSSEBytes: %v", err)
 	}
 	testutil.Equal(t, len(payloads), 2)
-	if events[0] != "message" || string(payloads[0]) != "{\"text\":\"hello\"}\n" {
-		t.Fatalf("first event = %q %q", events[0], payloads[0])
-	}
-	if events[1] != "" || string(payloads[1]) != "[DONE]" {
-		t.Fatalf("terminal event = %q %q", events[1], payloads[1])
-	}
+	testutil.Equal(t, events[0], "message")
+	testutil.Equal(t, string(payloads[0]), "{\"text\":\"hello\"}\n")
+	testutil.Equal(t, events[1], "")
+	testutil.Equal(t, string(payloads[1]), "[DONE]")
 }
 
 func BenchmarkReadResponseSSEBytesJSONPayload(b *testing.B) {

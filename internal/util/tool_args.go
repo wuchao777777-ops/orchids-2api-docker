@@ -17,9 +17,7 @@ const toolInputDepth = 3
 // It lives here because both the Qoder and WorkBuddy stream readers need exactly
 // this behaviour; the two channels each carried their own copy of the helpers
 // below.
-func NormalizeToolInput(raw string) string {
-	return normalizeToolInputDepth(raw, toolInputDepth)
-}
+func NormalizeToolInput(raw string) string { return normalizeToolInputDepth(raw, toolInputDepth) }
 
 // NormalizeToolInputDepth unwraps nested argument wrapping up to depth.
 func normalizeToolInputDepth(input string, depth int) string {

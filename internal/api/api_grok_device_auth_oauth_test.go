@@ -21,9 +21,7 @@ func grokOAuthJWT(t *testing.T, sub, email, team string) string {
 	t.Helper()
 	encode := func(value interface{}) string {
 		raw, err := json.Marshal(value)
-		if err != nil {
-			t.Fatalf("marshal claim: %v", err)
-		}
+		testutil.NoError(t, err, "marshal claim: %v")
 		return base64.RawURLEncoding.EncodeToString(raw)
 	}
 	return encode(map[string]string{"alg": "RS256", "typ": "JWT"}) + "." +
@@ -90,9 +88,7 @@ func TestGrokDeviceLogin_SecondLoginForSameAccountUpdatesInPlace(t *testing.T) {
 	}
 
 	accounts, err := s.ListAccounts(ctx)
-	if err != nil {
-		t.Fatalf("ListAccounts() error = %v", err)
-	}
+	testutil.NoError(t, err, "ListAccounts() error = %v")
 	grokAccounts := 0
 	for _, acc := range accounts {
 		if acc.AccountType == "grok" {
@@ -103,15 +99,9 @@ func TestGrokDeviceLogin_SecondLoginForSameAccountUpdatesInPlace(t *testing.T) {
 
 	var state *deviceLogin
 	a.grokLogins.update("dup", func(login *deviceLogin) { state = login })
-	if state == nil || state.status != "complete" {
-		t.Fatalf("login state = %+v, want complete", state)
-	}
+	testutil.Falsef(t, state == nil || state.status != "complete", "login state = %+v, want complete", state)
 	testutil.Equal(t, state.accountID, existing.ID)
 	updated, err := s.GetAccount(ctx, existing.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.OAuthRefreshToken != "refresh-new" || updated.Email != "one@example.com" || updated.Name != "one@example.com" {
-		t.Fatalf("existing OAuth row was not refreshed in place: %+v", updated)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, updated.OAuthRefreshToken != "refresh-new" || updated.Email != "one@example.com" || updated.Name != "one@example.com", "existing OAuth row was not refreshed in place: %+v", updated)
 }

@@ -59,10 +59,7 @@ func wrapByteIdle(body io.ReadCloser, idle time.Duration) io.ReadCloser {
 		return body
 	}
 	r := &byteIdleReadCloser{inner: body, idle: idle}
-	r.timer = time.AfterFunc(idle, func() {
-		r.timedOut.Store(true)
-		_ = r.closeInner()
-	})
+	r.timer = time.AfterFunc(idle, func() { r.timedOut.Store(true); _ = r.closeInner() })
 	return r
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -157,28 +156,15 @@ func (a *DeviceAuthenticator) clientID() string {
 }
 
 func (a *DeviceAuthenticator) postForm(ctx context.Context, endpoint string, form url.Values, target interface{}) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	body, _, err := postOAuthForm(ctx, a.httpClient, endpoint, form, grokDeviceOAuthMaxBodyBytes,
+		func(req *http.Request) {
+			if a.cfg != nil {
+				req.Header.Set("x-grok-client-version", a.cfg.GrokCLIClientVersionOrDefault())
+			}
+			req.Header.Set("x-grok-client-surface", "ui")
+		}, parseGrokDeviceOAuthError)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if a != nil && a.cfg != nil {
-		req.Header.Set("x-grok-client-version", a.cfg.GrokCLIClientVersionOrDefault())
-	}
-	req.Header.Set("x-grok-client-surface", "ui")
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, grokDeviceOAuthMaxBodyBytes))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return parseGrokDeviceOAuthError(body, resp.StatusCode)
 	}
 	if err := json.Unmarshal(body, target); err != nil {
 		return fmt.Errorf("decode grok device authorization response: %w", err)

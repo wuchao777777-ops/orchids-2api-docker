@@ -23,10 +23,7 @@ func (h *Handler) defaultChatStream() bool {
 }
 
 func (h *Handler) applyDefaultChatStream(req *ChatCompletionsRequest) {
-	if req == nil {
-		return
-	}
-	if req.StreamProvided {
+	if req == nil || req.StreamProvided {
 		return
 	}
 	req.Stream = h.defaultChatStream()

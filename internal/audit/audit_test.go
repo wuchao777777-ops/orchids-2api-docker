@@ -17,9 +17,7 @@ func TestUsageAccountingFieldsRoundTrip(t *testing.T) {
 	logger.Log(context.Background(), Event{Action: "usage", Status: "ok", InputTokens: 10, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 15, UsageSource: UsageSourceUpstream})
 	logger.Close()
 	events := readLoggedEvents(t, logger, 1)
-	if len(events) != 1 || events[0].UsageSource != UsageSourceUpstream || events[0].TotalTokens != 15 || events[0].CachedInputTokens != 4 || events[0].ReasoningTokens != 3 {
-		t.Fatalf("event=%+v", events)
-	}
+	testutil.Falsef(t, len(events) != 1 || events[0].UsageSource != UsageSourceUpstream || events[0].TotalTokens != 15 || events[0].CachedInputTokens != 4 || events[0].ReasoningTokens != 3, "event=%+v", events)
 }
 
 func setupRedisLogger(t *testing.T) (*RedisLogger, *miniredis.Miniredis) {
@@ -34,15 +32,11 @@ func setupRedisLogger(t *testing.T) (*RedisLogger, *miniredis.Miniredis) {
 func readLoggedEvents(t *testing.T, logger *RedisLogger, count int64) []Event {
 	t.Helper()
 	msgs, err := logger.client.XRevRangeN(context.Background(), logger.streamKey, "+", "-", count).Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	events := make([]Event, 0, len(msgs))
 	for _, msg := range msgs {
 		data, ok := msg.Values["data"].(string)
-		if !ok {
-			t.Fatalf("audit event data has type %T", msg.Values["data"])
-		}
+		testutil.True(t, ok, "audit event data has type %T")
 		var event Event
 		testutil.NoError(t, json.Unmarshal([]byte(data), &event))
 		events = append(events, event)
@@ -89,20 +83,15 @@ func TestRedisLoggerTimestamp(t *testing.T) {
 	logger.Close()
 
 	events := readLoggedEvents(t, logger, 1)
-	if len(events) != 1 {
-		t.Fatal("expected 1 event")
-	}
-	if events[0].Timestamp.Before(before) {
-		t.Fatal("timestamp should be after log call")
-	}
+	testutil.Equal(t, len(events), 1)
+	testutil.False(t, events[0].Timestamp.Before(before), "timestamp should be after log call")
 }
 
 func TestLegacyEventUsageFieldsDefaultEmpty(t *testing.T) {
 	var decoded Event
 	testutil.NoError(t, json.Unmarshal([]byte(`{"action":"chat_request","status":"success","input_tokens":3,"output_tokens":4}`), &decoded))
-	if decoded.TotalTokens != 0 || decoded.UsageSource != "" {
-		t.Fatalf("legacy defaults are not backward-compatible: %+v", decoded)
-	}
+	testutil.Equal(t, decoded.TotalTokens, 0)
+	testutil.Equal(t, decoded.UsageSource, "")
 }
 
 func TestNopLogger(t *testing.T) {

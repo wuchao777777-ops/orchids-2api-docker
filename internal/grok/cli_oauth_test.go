@@ -32,9 +32,7 @@ func TestCLIOAuthAccessTokenUnexpired(t *testing.T) {
 		OAuthExpiresAt:    time.Now().Add(time.Hour),
 	}
 	token, err := oauth.AccessToken(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.NoError(t, err, "unexpected error: %v")
 	testutil.Equal(t, token, "existing-token")
 }
 
@@ -60,9 +58,7 @@ func TestCLIOAuthAccessTokenRefreshes(t *testing.T) {
 		OAuthExpiresAt:    time.Now().Add(-time.Hour), // expired → forces refresh
 	}
 	token, err := oauth.AccessToken(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	testutil.NoError(t, err, "unexpected error: %v")
 	testutil.Equal(t, called, 1)
 	testutil.Equal(t, token, "new-access")
 	testutil.Equal(t, acc.OAuthAccessToken, "new-access")
@@ -99,13 +95,9 @@ func TestCLIResponsesRefreshesRejectedUnexpiredTokenOnSameAccount(t *testing.T) 
 		OAuthAccessToken: "old-access", OAuthRefreshToken: "old-refresh", OAuthExpiresAt: time.Now().Add(time.Hour),
 	}
 	resp, err := client.doResponsesAt(context.Background(), acc, "/responses", map[string]interface{}{"model": "grok-4.6", "input": "hello"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	_ = resp.Body.Close()
-	if responseCalls != 2 || refreshCalls != 1 || acc.OAuthAccessToken != "new-access" {
-		t.Fatalf("response_calls=%d refresh_calls=%d access=%q", responseCalls, refreshCalls, acc.OAuthAccessToken)
-	}
+	testutil.Falsef(t, responseCalls != 2 || refreshCalls != 1 || acc.OAuthAccessToken != "new-access", "response_calls=%d refresh_calls=%d access=%q", responseCalls, refreshCalls, acc.OAuthAccessToken)
 }
 
 func TestCLIOAuthAccessTokenCoalescesConcurrentRefreshes(t *testing.T) {
@@ -166,12 +158,8 @@ func TestCLIOAuthRefreshDenied(t *testing.T) {
 		OAuthExpiresAt:    time.Now().Add(-time.Minute),
 	}
 	_, err := oauth.AccessToken(context.Background(), acc)
-	if err == nil {
-		t.Fatal("expected error for denied refresh")
-	}
-	if !IsCLIPermanentOAuthError(err) {
-		t.Fatalf("invalid_grant should be permanent (401): %v", err)
-	}
+	testutil.False(t, err == nil, "expected error for denied refresh")
+	testutil.True(t, IsCLIPermanentOAuthError(err), "invalid_grant should be permanent (401): %v")
 	testutil.MustNotContain(t, err.Error(), "token expired")
 }
 
@@ -179,9 +167,8 @@ func TestCLIOAuthMissingRefreshToken(t *testing.T) {
 	cfg := &config.Config{}
 	oauth := NewCLIOAuth(cfg, nil)
 	acc := &store.Account{OAuthAccessToken: "", OAuthRefreshToken: "", OAuthExpiresAt: time.Time{}}
-	if _, err := oauth.AccessToken(context.Background(), acc); err == nil {
-		t.Fatal("expected error when no token present")
-	}
+	_, err := oauth.AccessToken(context.Background(), acc)
+	testutil.Error(t, err)
 }
 
 func TestCLIOAuthRefreshServerErrorTransient(t *testing.T) {
@@ -195,12 +182,8 @@ func TestCLIOAuthRefreshServerErrorTransient(t *testing.T) {
 	oauth := NewCLIOAuth(cfg, server.Client())
 	acc := &store.Account{OAuthRefreshToken: "r", OAuthExpiresAt: time.Now().Add(-time.Minute)}
 	_, err := oauth.AccessToken(context.Background(), acc)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if IsCLIPermanentOAuthError(err) {
-		t.Fatalf("5xx should be transient, got permanent: %v", err)
-	}
+	testutil.False(t, err == nil, "expected error")
+	testutil.Falsef(t, IsCLIPermanentOAuthError(err), "5xx should be transient, got permanent: %v", err)
 }
 
 func TestCLIOAuthErrorStatus(t *testing.T) {
@@ -237,53 +220,35 @@ func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
 	oauth.SetAccountStore(s)
 
 	token, err := oauth.AccessToken(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("AccessToken() error = %v", err)
-	}
+	testutil.NoError(t, err, "AccessToken() error = %v")
 	testutil.Equal(t, token, "stored-access")
 
 	got, err := s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, got.OAuthAccessToken, "stored-access")
 	testutil.Equal(t, got.OAuthRefreshToken, "stored-refresh")
-	if got.Email != "stored@example.com" || got.Name != "stored@example.com" || got.UserID != "stored-user" || got.TeamID != "stored-team" {
-		t.Fatalf("stored OAuth identity=%+v", got)
-	}
-	if strings.Contains(got.OAuthAccessToken, idToken) || strings.Contains(got.OAuthRefreshToken, idToken) {
-		t.Fatal("id_token must not be persisted as a credential")
-	}
+	testutil.Falsef(t, got.Email != "stored@example.com" || got.Name != "stored@example.com" || got.UserID != "stored-user" || got.TeamID != "stored-team", "stored OAuth identity=%+v", got)
+	testutil.False(t, strings.Contains(got.OAuthAccessToken, idToken) || strings.Contains(got.OAuthRefreshToken, idToken), "id_token must not be persisted as a credential")
 }
 
 func TestCLIClientFetchModelCatalogParsesRealBuildFixture(t *testing.T) {
 	catalogBody, err := os.ReadFile("testdata/build_models_catalog.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(catalogBody)
 	}))
 	defer server.Close()
 	client := NewCLIClient(&config.Config{GrokCLIBaseURL: server.URL})
 	catalog, err := client.FetchModelCatalog(context.Background(), &store.Account{OAuthAccessToken: "active-access", OAuthExpiresAt: time.Now().Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(catalog) != 2 || catalog[0].ModelID != "grok-4.7" || catalog[1].ModelID != "grok-4.6" {
-		t.Fatalf("catalog=%+v", catalog)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, len(catalog) != 2 || catalog[0].ModelID != "grok-4.7" || catalog[1].ModelID != "grok-4.6", "catalog=%+v", catalog)
 	profile := catalog[0]
-	if strings.Join(profile.ReasoningEfforts, ",") != "xhigh,high,medium,low" || profile.DefaultReasoningEffort != "high" || !profile.SupportsReasoningEffort || profile.ContextWindow != 500000 || profile.MaxCompletionTokens != 1000000 || !profile.SupportsBackendSearch {
-		t.Fatalf("grok-4.7 profile=%+v", profile)
-	}
+	testutil.Falsef(t, strings.Join(profile.ReasoningEfforts, ",") != "xhigh,high,medium,low" || profile.DefaultReasoningEffort != "high" || !profile.SupportsReasoningEffort || profile.ContextWindow != 500000 || profile.MaxCompletionTokens != 1000000 || !profile.SupportsBackendSearch, "grok-4.7 profile=%+v", profile)
 }
 
 func TestCLIClientFetchModelsReadsOfficialControlPlaneCatalog(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/models" {
-			t.Fatalf("request=%s %s want GET /models", r.Method, r.URL.Path)
-		}
+		testutil.Falsef(t, r.Method != http.MethodGet || r.URL.Path != "/models", "request=%s %s want GET /models", r.Method, r.URL.Path)
 		testutil.Equal(t, r.Header.Get("Authorization"), "Bearer active-access")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[{"id":"grok-4.6"},{"id":"grok-4.6"},{"modelId":"grok-4.5"},{"id":"hidden-model","hidden":true},{"id":""}]}`))
@@ -297,9 +262,7 @@ func TestCLIClientFetchModelsReadsOfficialControlPlaneCatalog(t *testing.T) {
 		OAuthAccessToken: "active-access",
 		OAuthExpiresAt:   time.Now().Add(time.Hour),
 	})
-	if err != nil {
-		t.Fatalf("FetchModelCatalog() error = %v", err)
-	}
+	testutil.NoError(t, err, "FetchModelCatalog() error = %v")
 	models := modelcatalog.ModelIDs(catalog)
 	testutil.Equal(t, strings.Join(models, ","), "grok-4.6,grok-4.5")
 }
@@ -313,10 +276,7 @@ func TestCLIResponsesRejectsTeamModelCooldownBeforeUpstream(t *testing.T) {
 	client := &CLIClient{}
 	started := time.Now()
 	_, err := client.doResponsesAt(context.Background(), &store.Account{TeamID: "team-1"}, "/responses", map[string]interface{}{"model": "grok-4.6"})
-	if err == nil || !strings.Contains(err.Error(), "status=429") || !strings.Contains(err.Error(), "retry-after") {
-		t.Fatalf("error=%v want immediate team/model cooldown 429 with retry-after", err)
-	}
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		t.Fatalf("team cooldown blocked for %s; it must reject immediately so the retry loop can rotate accounts", elapsed)
-	}
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "status=429") || !strings.Contains(err.Error(), "retry-after"), "error=%v want immediate team/model cooldown 429 with retry-after", err)
+	elapsed := time.Since(started)
+	testutil.Falsef(t, elapsed > 100*time.Millisecond, "team cooldown blocked for %s; it must reject immediately so the retry loop can rotate accounts", elapsed)
 }

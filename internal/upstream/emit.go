@@ -45,9 +45,7 @@ func EmitTextDelta(onMessage func(SSEMessage), text string, saw *bool) {
 		*saw = true
 	}
 	if onMessage != nil {
-		onMessage(SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{
-			"delta": text,
-		}})
+		onMessage(SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": text}})
 	}
 }
 

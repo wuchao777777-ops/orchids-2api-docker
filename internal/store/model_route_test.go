@@ -1,6 +1,7 @@
 package store
 
 import (
+	"orchids-api/internal/testutil"
 	"reflect"
 	"testing"
 )
@@ -8,13 +9,8 @@ import (
 func TestModelNormalizeRouteAndAccountBinding(t *testing.T) {
 	model := &Model{Provider: " BUILD ", Origin: "", Capabilities: []string{"video", "VIDEO", " responses "}, BoundAccountIDs: []int64{9, 2, 9}}
 	model.NormalizeRoute()
-	if model.Provider != "build" || model.Origin != "manual" {
-		t.Fatalf("route = %#v", model)
-	}
-	if !reflect.DeepEqual(model.Capabilities, []string{"responses", "video"}) || !reflect.DeepEqual(model.BoundAccountIDs, []int64{2, 9}) {
-		t.Fatalf("normalized route = %#v", model)
-	}
-	if !model.SupportsCapability("VIDEO") || model.AllowsAccount(3) || !model.AllowsAccount(9) {
-		t.Fatalf("route policy mismatch")
-	}
+	testutil.Equal(t, model.Provider, "build")
+	testutil.Equal(t, model.Origin, "manual")
+	testutil.Falsef(t, !reflect.DeepEqual(model.Capabilities, []string{"responses", "video"}) || !reflect.DeepEqual(model.BoundAccountIDs, []int64{2, 9}), "normalized route = %#v", model)
+	testutil.False(t, !model.SupportsCapability("VIDEO") || model.AllowsAccount(3) || !model.AllowsAccount(9), "route policy mismatch")
 }

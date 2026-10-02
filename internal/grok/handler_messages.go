@@ -555,11 +555,9 @@ func anthropicMessageToChat(message anthropicMessage) ([]ChatMessage, error) {
 				return nil, fmt.Errorf("tool_use requires a non-empty string id, name and object input")
 			}
 			toolCalls = append(toolCalls, ToolCall{
-				ID:   strings.TrimSpace(id),
-				Type: "function",
-				Function: map[string]interface{}{
-					"name": block["name"], "arguments": block["input"],
-				},
+				ID:       strings.TrimSpace(id),
+				Type:     "function",
+				Function: map[string]interface{}{"name": block["name"], "arguments": block["input"]},
 			})
 		case "server_tool_use":
 			if role != "assistant" {
@@ -872,9 +870,7 @@ func firstDefined(values ...interface{}) interface{} {
 
 // interfaceString delegates to parseLooseStringAny so the package keeps its short
 // local name without duplicating the logic: nil and missing values read as "".
-func interfaceString(value interface{}) string {
-	return parseLooseStringAny(value)
-}
+func interfaceString(value interface{}) string { return parseLooseStringAny(value) }
 
 func openAIFinishToAnthropic(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -1225,9 +1221,7 @@ func writeAnthropicSSE(w io.Writer, event string, payload interface{}) {
 }
 
 func writeAnthropicModelNotFound(w http.ResponseWriter, model string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotFound)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	util.WriteJSONStatus(w, http.StatusNotFound, map[string]interface{}{
 		"type": "error", "error": map[string]interface{}{"type": "not_found_error", "message": modelNotFoundMessage(model)},
 	})
 }

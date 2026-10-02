@@ -20,9 +20,7 @@ func (b *BaseHandler) TrackAccount(acc *store.Account) func() {
 		return func() {}
 	}
 	b.LB.AcquireConnection(acc.ID)
-	return func() {
-		b.LB.ReleaseConnection(acc.ID)
-	}
+	return func() { b.LB.ReleaseConnection(acc.ID) }
 }
 
 // MarkAccountStatus classifies an error string and marks the account
@@ -39,6 +37,4 @@ func (b *BaseHandler) MarkAccountStatus(ctx context.Context, acc *store.Account,
 }
 
 // NewBaseHandler creates a BaseHandler with the given load balancer.
-func NewBaseHandler(lb *loadbalancer.LoadBalancer) *BaseHandler {
-	return &BaseHandler{LB: lb}
-}
+func NewBaseHandler(lb *loadbalancer.LoadBalancer) *BaseHandler { return &BaseHandler{LB: lb} }

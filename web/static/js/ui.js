@@ -16,13 +16,9 @@ globalThis.ConsoleAPI = (() => {
   }
   async function json(url, options = {}, contract = {}) {
     const response = await request(url, options);
-    if (!response.ok) {
-      throw new Error(detail(await response.text(), `HTTP ${response.status}`));
-    }
+    if (!response.ok) { throw new Error(detail(await response.text(), `HTTP ${response.status}`)); }
     const contentType = response.headers?.get?.('content-type');
-    if (contentType && !contentType.toLowerCase().includes('application/json')) {
-      throw new Error('接口未返回 JSON，登录状态可能已失效');
-    }
+    if (contentType && !contentType.toLowerCase().includes('application/json')) { throw new Error('接口未返回 JSON，登录状态可能已失效'); }
     let value = await response.json();
     if (contract.envelope) {
       if (!value || value.code !== 0) throw new Error(detail(value, '请求失败'));

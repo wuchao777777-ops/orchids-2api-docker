@@ -35,9 +35,7 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 			name: "conversation_id highest priority",
 			req: ClaudeRequest{
 				ConversationID: "cid",
-				Metadata: map[string]interface{}{
-					"user_id": "u1",
-				},
+				Metadata:       map[string]interface{}{"user_id": "u1"},
 			},
 			headerKey: "X-Conversation-Id",
 			headerVal: "header",
@@ -46,9 +44,7 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 		{
 			name: "metadata conversation_id before header",
 			req: ClaudeRequest{
-				Metadata: map[string]interface{}{
-					"conversation_id": "meta",
-				},
+				Metadata: map[string]interface{}{"conversation_id": "meta"},
 			},
 			headerKey: "X-Conversation-Id",
 			headerVal: "header",
@@ -57,9 +53,7 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 		{
 			name: "header before metadata user_id",
 			req: ClaudeRequest{
-				Metadata: map[string]interface{}{
-					"user_id": "u1",
-				},
+				Metadata: map[string]interface{}{"user_id": "u1"},
 			},
 			headerKey: "X-Conversation-Id",
 			headerVal: "header",
@@ -68,9 +62,7 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 		{
 			name: "no explicit session key returns empty",
 			req: ClaudeRequest{
-				Metadata: map[string]interface{}{
-					"user_id": "u1",
-				},
+				Metadata: map[string]interface{}{"user_id": "u1"},
 			},
 			want: "u1",
 		},
@@ -146,16 +138,12 @@ func TestIsTopicClassifierRequest(t *testing.T) {
 			},
 		},
 	}
-	if !isTopicClassifierRequest(req) {
-		t.Fatalf("expected topic classifier request to be detected")
-	}
+	testutil.True(t, isTopicClassifierRequest(req), "expected topic classifier request to be detected")
 
 	nonClassifier := ClaudeRequest{
 		System: SystemItems{{Type: "text", Text: "You are Claude Code"}},
 	}
-	if isTopicClassifierRequest(nonClassifier) {
-		t.Fatalf("expected non-topic-classifier request")
-	}
+	testutil.False(t, isTopicClassifierRequest(nonClassifier), "expected non-topic-classifier request")
 }
 
 func TestIsTitleGenerationRequest(t *testing.T) {
@@ -168,9 +156,7 @@ func TestIsTitleGenerationRequest(t *testing.T) {
 			},
 		},
 	}
-	if !isTitleGenerationRequest(req) {
-		t.Fatalf("expected title generation request to be detected")
-	}
+	testutil.True(t, isTitleGenerationRequest(req), "expected title generation request to be detected")
 
 	nonTitle := ClaudeRequest{
 		System: SystemItems{{
@@ -178,9 +164,7 @@ func TestIsTitleGenerationRequest(t *testing.T) {
 			Text: "Analyze if this message indicates a new conversation topic. Format your response as a JSON object with two fields: 'isNewTopic' and 'title'.",
 		}},
 	}
-	if isTitleGenerationRequest(nonTitle) {
-		t.Fatalf("expected non-title-generation request")
-	}
+	testutil.False(t, isTitleGenerationRequest(nonTitle), "expected non-title-generation request")
 }
 
 func TestClassifyTopicRequest(t *testing.T) {
@@ -190,10 +174,8 @@ func TestClassifyTopicRequest(t *testing.T) {
 		wantIsNew bool
 	}{
 		{
-			name: "single user message treated as new topic",
-			messages: []prompt.Message{
-				{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}},
-			},
+			name:      "single user message treated as new topic",
+			messages:  []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}}},
 			wantIsNew: true,
 		},
 		{
@@ -221,12 +203,8 @@ func TestClassifyTopicRequest(t *testing.T) {
 			req := ClaudeRequest{Messages: tt.messages}
 			gotNew, title := classifyTopicRequest(req)
 			testutil.Equal(t, gotNew, tt.wantIsNew)
-			if gotNew && strings.TrimSpace(title) == "" {
-				t.Fatalf("expected non-empty title for new topic")
-			}
-			if !gotNew && title != "" {
-				t.Fatalf("expected empty title when not a new topic, got %q", title)
-			}
+			testutil.False(t, gotNew && strings.TrimSpace(title) == "", "expected non-empty title for new topic")
+			testutil.Falsef(t, !gotNew && title != "", "expected empty title when not a new topic, got %q", title)
 		})
 	}
 }
@@ -267,9 +245,7 @@ func TestBuildLocalSuggestion(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			testutil.Equal(t, buildLocalSuggestion(tt.messages), tt.want)
-		})
+		t.Run(tt.name, func(t *testing.T) { testutil.Equal(t, buildLocalSuggestion(tt.messages), tt.want) })
 	}
 }
 
@@ -289,19 +265,11 @@ func TestLastUserIsToolResultFollowup_AllowsTextAlongsideToolResult(t *testing.T
 		}}},
 	}
 
-	if !lastUserIsToolResultFollowup(messages) {
-		t.Fatalf("expected tool_result+text to be recognized as follow-up")
-	}
+	testutil.True(t, lastUserIsToolResultFollowup(messages), "expected tool_result+text to be recognized as follow-up")
 }
 
 func TestLooksLikeToolResultFailure_RecognizesEditValidationError(t *testing.T) {
-	if !looksLikeToolResultFailure("File has not been read yet. Read it first before writing to it.") {
-		t.Fatalf("expected edit validation failure to be recognized")
-	}
-	if !looksLikeToolResultFailure("old_string not found in file") {
-		t.Fatalf("expected old_string-not-found failure to be recognized")
-	}
-	if looksLikeToolResultFailure("Done") {
-		t.Fatalf("did not expect successful tool result to be treated as failure")
-	}
+	testutil.True(t, looksLikeToolResultFailure("File has not been read yet. Read it first before writing to it."), "expected edit validation failure to be recognized")
+	testutil.True(t, looksLikeToolResultFailure("old_string not found in file"), "expected old_string-not-found failure to be recognized")
+	testutil.False(t, looksLikeToolResultFailure("Done"), "did not expect successful tool result to be treated as failure")
 }

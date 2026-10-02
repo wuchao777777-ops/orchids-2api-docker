@@ -35,49 +35,34 @@ func TestHandleKeysCreateBillingLimitEnforcesReservation(t *testing.T) {
 
 	// The limit is persisted and visible through the admin list.
 	stored, err := s.GetApiKeyByID(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetApiKeyByID() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetApiKeyByID() error = %v")
 	testutil.Equal(t, stored.BillingLimitUSDTicks, limit)
 	listed, err := s.ListApiKeys(ctx)
-	if err != nil || len(listed) != 1 || listed[0].BillingLimitUSDTicks != limit {
-		t.Fatalf("ListApiKeys() = %#v, %v", listed, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, len(listed), 1)
+	testutil.Equal(t, listed[0].BillingLimitUSDTicks, limit)
 
 	// Reserving inside the limit succeeds; the request that would cross it does
 	// not.
 	ok, err := s.ReserveApiKeyBilling(ctx, created.ID, "event-a", limit-1, time.Now().UTC().Add(time.Hour))
-	if err != nil || !ok {
-		t.Fatalf("reservation inside the limit = %v, %v", ok, err)
-	}
+	testutil.Falsef(t, err != nil || !ok, "reservation inside the limit = %v, %v", ok, err)
 	ok, err = s.ReserveApiKeyBilling(ctx, created.ID, "event-b", 2, time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatalf("ReserveApiKeyBilling() error = %v", err)
-	}
-	if ok {
-		t.Fatal("a reservation crossing the limit must be refused")
-	}
+	testutil.NoError(t, err, "ReserveApiKeyBilling() error = %v")
+	testutil.False(t, ok, "a reservation crossing the limit must be refused")
 	// Idempotency: the same event id and amount is the same request, not a
 	// second hold.
 	ok, err = s.ReserveApiKeyBilling(ctx, created.ID, "event-a", limit-1, time.Now().UTC().Add(time.Hour))
-	if err != nil || !ok {
-		t.Fatalf("idempotent re-reserve = %v, %v", ok, err)
-	}
+	testutil.Falsef(t, err != nil || !ok, "idempotent re-reserve = %v, %v", ok, err)
 
 	// Settling the request books its cost, and the budget is then exhausted.
 	testutil.NoError(t, s.SettleApiKeyBilling(ctx, created.ID, "event-a", limit-1), "SettleApiKeyBilling() error = %v")
 	ok, err = s.ReserveApiKeyBilling(ctx, created.ID, "event-c", 2, time.Now().UTC().Add(time.Hour))
-	if err != nil {
-		t.Fatalf("ReserveApiKeyBilling() error = %v", err)
-	}
-	if ok {
-		t.Fatal("a settled key with no headroom must refuse further reservations")
-	}
+	testutil.NoError(t, err, "ReserveApiKeyBilling() error = %v")
+	testutil.False(t, ok, "a settled key with no headroom must refuse further reservations")
 	// The remaining single tick is still spendable: the limit is a ceiling, not
 	// an exclusive bound.
-	if ok, err := s.ReserveApiKeyBilling(ctx, created.ID, "event-c", 1, time.Now().UTC().Add(time.Hour)); err != nil || !ok {
-		t.Fatalf("reservation up to the exact limit = %v, %v", ok, err)
-	}
+	ok, err = s.ReserveApiKeyBilling(ctx, created.ID, "event-c", 1, time.Now().UTC().Add(time.Hour))
+	testutil.Falsef(t, err != nil || !ok, "reservation up to the exact limit = %v, %v", ok, err)
 }
 
 // TestHandleKeyBillingLimitUpdateTakesEffect checks the PATCH path, including
@@ -89,12 +74,10 @@ func TestHandleKeyBillingLimitUpdateTakesEffect(t *testing.T) {
 
 	key := &store.ApiKey{Name: "unlimited", KeyHash: "hash-unlimited", Enabled: true}
 	testutil.NoError(t, s.CreateApiKey(ctx, key), "CreateApiKey() error = %v")
-	if ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "event-unlimited", 1_000_000, time.Now().UTC().Add(time.Hour)); err != nil || !ok {
-		t.Fatalf("unlimited reservation = %v, %v", ok, err)
-	}
-	if _, err := s.ReleaseApiKeyBilling(ctx, key.ID, "event-unlimited"); err != nil {
-		t.Fatalf("ReleaseApiKeyBilling() error = %v", err)
-	}
+	ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "event-unlimited", 1_000_000, time.Now().UTC().Add(time.Hour))
+	testutil.Falsef(t, err != nil || !ok, "unlimited reservation = %v, %v", ok, err)
+	_, err = s.ReleaseApiKeyBilling(ctx, key.ID, "event-unlimited")
+	testutil.CheckNoError(t, err)
 
 	// A PATCH carrying only the billing limit must be accepted.
 	patchReq := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/api/keys/%d", key.ID),
@@ -105,12 +88,10 @@ func TestHandleKeyBillingLimitUpdateTakesEffect(t *testing.T) {
 	var updated store.ApiKey
 	testutil.NoError(t, json.Unmarshal(patchRec.Body.Bytes(), &updated), "decode patch response: %v")
 	testutil.Equal(t, updated.BillingLimitUSDTicks, 1000)
-	if ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "event-over", 1001, time.Now().UTC().Add(time.Hour)); err != nil || ok {
-		t.Fatalf("reservation above the patched limit = %v, %v", ok, err)
-	}
-	if ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "event-fits", 1000, time.Now().UTC().Add(time.Hour)); err != nil || !ok {
-		t.Fatalf("reservation at the patched limit = %v, %v", ok, err)
-	}
+	ok, err = s.ReserveApiKeyBilling(ctx, key.ID, "event-over", 1001, time.Now().UTC().Add(time.Hour))
+	testutil.Falsef(t, err != nil || ok, "reservation above the patched limit = %v, %v", ok, err)
+	ok, err = s.ReserveApiKeyBilling(ctx, key.ID, "event-fits", 1000, time.Now().UTC().Add(time.Hour))
+	testutil.Falsef(t, err != nil || !ok, "reservation at the patched limit = %v, %v", ok, err)
 
 	// A PATCH with no policy field at all is still rejected.
 	emptyReq := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/api/keys/%d", key.ID), strings.NewReader(`{}`))

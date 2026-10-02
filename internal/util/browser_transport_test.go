@@ -20,12 +20,8 @@ func TestBrowserHTTPClientCustomHeaderDeadlineIsIsolated(t *testing.T) {
 	testutil.NotEqual(t, defaultClient, longClient)
 	testutil.Equal(t, defaultClient.Transport.(*browserLikeRoundTripper).http1.ResponseHeaderTimeout, 2*time.Minute)
 	testutil.Equal(t, longClient.Transport.(*browserLikeRoundTripper).http1.ResponseHeaderTimeout, 0)
-	if longClient.Timeout != 10*time.Minute {
-		t.Fatal("total deadline lost")
-	}
-	if GetSharedBrowserHTTPClientWithHeaderTimeout("header-isolation-test", 10*time.Minute, 0, nil) != longClient {
-		t.Fatal("matching client not cached")
-	}
+	testutil.Equal(t, longClient.Timeout, 10*time.Minute)
+	testutil.Equal(t, GetSharedBrowserHTTPClientWithHeaderTimeout("header-isolation-test", 10*time.Minute, 0, nil), longClient)
 }
 
 func TestDialHTTPSProxyAwareSupportsSOCKS5(t *testing.T) {
@@ -33,37 +29,27 @@ func TestDialHTTPSProxyAwareSupportsSOCKS5(t *testing.T) {
 	proxy := startSOCKS5Proxy(t)
 
 	proxyURL, err := url.Parse("socks5://" + proxy.Addr().String())
-	if err != nil {
-		t.Fatalf("parse proxy url: %v", err)
-	}
-	proxyFunc := func(*http.Request) (*url.URL, error) {
-		return proxyURL, nil
-	}
+	testutil.NoError(t, err, "parse proxy url: %v")
+	proxyFunc := func(*http.Request) (*url.URL, error) { return proxyURL, nil }
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	conn, targetHost, err := dialHTTPSProxyAware(ctx, "tcp", target.Addr().String(), proxyFunc)
-	if err != nil {
-		t.Fatalf("dialHTTPSProxyAware() error = %v", err)
-	}
+	testutil.NoError(t, err, "dialHTTPSProxyAware() error = %v")
 	defer conn.Close()
 	testutil.NotEqual(t, targetHost, "")
-	if _, err := conn.Write([]byte("ping")); err != nil {
-		t.Fatalf("write through proxy: %v", err)
-	}
+	_, err = conn.Write([]byte("ping"))
+	testutil.CheckNoError(t, err)
 	buf := make([]byte, 4)
-	if _, err := io.ReadFull(conn, buf); err != nil {
-		t.Fatalf("read through proxy: %v", err)
-	}
+	_, err = io.ReadFull(conn, buf)
+	testutil.CheckNoError(t, err)
 	testutil.Equal(t, string(buf), "ping")
 }
 
 func startEchoListener(t *testing.T) net.Listener {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen echo: %v", err)
-	}
+	testutil.NoError(t, err, "listen echo: %v")
 	t.Cleanup(func() { _ = ln.Close() })
 	go func() {
 		for {
@@ -83,9 +69,7 @@ func startEchoListener(t *testing.T) net.Listener {
 func startSOCKS5Proxy(t *testing.T) net.Listener {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen socks5: %v", err)
-	}
+	testutil.NoError(t, err, "listen socks5: %v")
 	t.Cleanup(func() { _ = ln.Close() })
 	go func() {
 		for {
@@ -184,7 +168,5 @@ func TestUtlsProfileFollowsUserAgentChromeVersion(t *testing.T) {
 	}
 	// A UA without a Chrome version keeps the library default.
 	testutil.Equal(t, utlsProfileForUserAgent("curl/8.0"), utls.HelloChrome_Auto)
-	if chromeMajorFromUserAgent("curl/8.0") != 0 {
-		t.Fatal("a UA without Chrome/ must not report a version")
-	}
+	testutil.Equal(t, chromeMajorFromUserAgent("curl/8.0"), 0)
 }

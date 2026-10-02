@@ -9,9 +9,7 @@ import (
 
 func TestTrustedProxyMiddlewareRejectsSpoofedForwardingHeaders(t *testing.T) {
 	middleware, err := TrustedProxyMiddleware([]string{"10.0.0.0/8"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		testutil.Equal(t, ClientIP(r), "203.0.113.10")
 		testutil.Equal(t, r.Header.Get("X-Forwarded-For"), "")
@@ -26,9 +24,7 @@ func TestTrustedProxyMiddlewareRejectsSpoofedForwardingHeaders(t *testing.T) {
 
 func TestTrustedProxyMiddlewareWalksForwardedChain(t *testing.T) {
 	middleware, err := TrustedProxyMiddleware([]string{"10.0.0.0/8", "192.0.2.10"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		testutil.Equal(t, ClientIP(r), "198.51.100.9")
 		testutil.Equal(t, r.Header.Get("X-Forwarded-Proto"), "https")
@@ -48,31 +44,22 @@ func TestTrustedProxyMiddlewareRejectsInvalidNetwork(t *testing.T) {
 		// A broad network is syntactically valid and deliberately explicit.
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := TrustedProxyMiddleware([]string{"not-an-ip"}); err == nil {
-		t.Fatal("expected invalid proxy error")
-	}
+	_, err := TrustedProxyMiddleware([]string{"not-an-ip"})
+	testutil.Error(t, err)
 }
 
 // An anonymous allowlist lets the named sources through without a key and nobody
 // else; an empty list is the reference behaviour (everyone needs a key).
 func TestAnonymousAllowlistAllowsOnlyNamedSources(t *testing.T) {
 	empty, err := NewAnonymousAllowlist(nil)
-	if err != nil {
-		t.Fatalf("NewAnonymousAllowlist(nil): %v", err)
-	}
-	if !empty.Empty() {
-		t.Fatal("a nil list is not empty")
-	}
+	testutil.NoError(t, err, "NewAnonymousAllowlist(nil): %v")
+	testutil.False(t, !empty.Empty(), "a nil list is not empty")
 	request := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
 	request.RemoteAddr = "203.0.113.20:4444"
-	if empty.Allows(request) {
-		t.Fatal("an empty allowlist allowed a caller")
-	}
+	testutil.False(t, empty.Allows(request), "an empty allowlist allowed a caller")
 
 	list, err := NewAnonymousAllowlist([]string{"203.0.113.20", "198.51.100.0/24", "2001:db8::1"})
-	if err != nil {
-		t.Fatalf("NewAnonymousAllowlist: %v", err)
-	}
+	testutil.NoError(t, err, "NewAnonymousAllowlist: %v")
 	cases := []struct {
 		remote string
 		want   bool
@@ -92,22 +79,17 @@ func TestAnonymousAllowlistAllowsOnlyNamedSources(t *testing.T) {
 	}
 
 	// A malformed entry is an error, so a typo cannot silently widen the list.
-	if _, err := NewAnonymousAllowlist([]string{"10.0.0.0/8", "nonsense"}); err == nil {
-		t.Fatal("a malformed entry was accepted")
-	}
+	_, err = NewAnonymousAllowlist([]string{"10.0.0.0/8", "nonsense"})
+	testutil.Error(t, err)
 }
 
 // A forwarded client address is only honoured when the peer is a trusted proxy,
 // which is what the allowlist must decide on.
 func TestAnonymousAllowlistUsesTheTrustedClientAddress(t *testing.T) {
 	list, err := NewAnonymousAllowlist([]string{"203.0.113.20"})
-	if err != nil {
-		t.Fatalf("NewAnonymousAllowlist: %v", err)
-	}
+	testutil.NoError(t, err, "NewAnonymousAllowlist: %v")
 	wrap, err := TrustedProxyMiddleware([]string{"127.0.0.1/32"})
-	if err != nil {
-		t.Fatalf("TrustedProxyMiddleware: %v", err)
-	}
+	testutil.NoError(t, err, "TrustedProxyMiddleware: %v")
 	var allowed bool
 	handler := wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		allowed = list.Allows(r)
@@ -126,18 +108,14 @@ func TestAnonymousAllowlistUsesTheTrustedClientAddress(t *testing.T) {
 	untrusted.RemoteAddr = "203.0.113.9:5555"
 	untrusted.Header.Set("X-Forwarded-For", "203.0.113.20")
 	handler.ServeHTTP(httptest.NewRecorder(), untrusted)
-	if allowed {
-		t.Fatal("an untrusted peer spoofed its way onto the allowlist")
-	}
+	testutil.False(t, allowed, "an untrusted peer spoofed its way onto the allowlist")
 }
 
 // Behind Cloudflare the original client is named by CF-Connecting-IP, and only a
 // trusted peer's value counts: a direct caller cannot name itself.
 func TestTrustedProxyPrefersCloudflareClientHeader(t *testing.T) {
 	wrap, err := TrustedProxyMiddleware([]string{"127.0.0.1/32", "173.245.48.0/20"})
-	if err != nil {
-		t.Fatalf("TrustedProxyMiddleware: %v", err)
-	}
+	testutil.NoError(t, err, "TrustedProxyMiddleware: %v")
 	var resolved string
 	handler := wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resolved = ClientIP(r)

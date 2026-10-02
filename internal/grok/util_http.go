@@ -72,10 +72,7 @@ func decodeHTTPResponseBody(resp *http.Response) error {
 			return err
 		}
 		reader = zr
-		closers = append(closers, closeFunc(func() error {
-			zr.Close()
-			return nil
-		}))
+		closers = append(closers, closeFunc(func() error { zr.Close(); return nil }))
 	default:
 		return nil
 	}

@@ -32,9 +32,7 @@ func TestLimiterRejectsImmediatelyWhenBusyWithOpenAIError(t *testing.T) {
 	h(recorder, httptest.NewRequest(http.MethodGet, "http://x/", nil))
 	elapsed := time.Since(start)
 
-	if elapsed >= 100*time.Millisecond {
-		t.Fatalf("overloaded request waited %s; want immediate rejection", elapsed)
-	}
+	testutil.Falsef(t, elapsed >= 100*time.Millisecond, "overloaded request waited %s; want immediate rejection", elapsed)
 	testutil.Equal(t, recorder.Code, http.StatusServiceUnavailable)
 	testutil.Equal(t, recorder.Header().Get("Content-Type"), "application/json")
 	testutil.Equal(t, recorder.Header().Get("Retry-After"), "1")
@@ -46,9 +44,8 @@ func TestLimiterRejectsImmediatelyWhenBusyWithOpenAIError(t *testing.T) {
 			Param   *string `json:"param"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("decode response: %v; body=%q", err, recorder.Body.String())
-	}
+	err := json.Unmarshal(recorder.Body.Bytes(), &envelope)
+	testutil.CheckNoError(t, err)
 	if envelope.Error.Message != "server is overloaded; retry later" ||
 		envelope.Error.Type != "server_error" ||
 		envelope.Error.Code != "server_overloaded" || envelope.Error.Param != nil {
@@ -71,8 +68,7 @@ func TestLimitPreservesExecutionTimeout(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	h(recorder, httptest.NewRequest(http.MethodGet, "http://x/", nil))
-	if got := <-contextErr; got == nil {
-		t.Fatal("ordinary limiter did not apply execution timeout")
-	}
+	got := <-contextErr
+	testutil.False(t, got == nil, "ordinary limiter did not apply execution timeout")
 	testutil.Equal(t, recorder.Code, http.StatusNoContent)
 }

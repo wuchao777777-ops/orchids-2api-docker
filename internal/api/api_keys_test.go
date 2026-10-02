@@ -27,9 +27,7 @@ func TestHandleKeysCreatesAndUpdatesPolicy(t *testing.T) {
 	testutil.Equal(t, createRec.Code, http.StatusCreated)
 	var created CreateKeyResponse
 	testutil.NoError(t, json.Unmarshal(createRec.Body.Bytes(), &created), "decode create response: %v")
-	if created.Key == "" || created.RPMLimit != 12 || len(created.AllowedModels) != 2 || created.ExpiresAt == nil {
-		t.Fatalf("created=%#v", created)
-	}
+	testutil.Falsef(t, created.Key == "" || created.RPMLimit != 12 || len(created.AllowedModels) != 2 || created.ExpiresAt == nil, "created=%#v", created)
 
 	patchReq := httptest.NewRequest(
 		http.MethodPatch,
@@ -41,9 +39,7 @@ func TestHandleKeysCreatesAndUpdatesPolicy(t *testing.T) {
 	testutil.Equal(t, patchRec.Code, http.StatusOK)
 	var updated store.ApiKey
 	testutil.NoError(t, json.Unmarshal(patchRec.Body.Bytes(), &updated), "decode patch response: %v")
-	if updated.RPMLimit != 0 || len(updated.AllowedModels) != 0 || updated.ExpiresAt != nil {
-		t.Fatalf("updated=%#v", updated)
-	}
+	testutil.Falsef(t, updated.RPMLimit != 0 || len(updated.AllowedModels) != 0 || updated.ExpiresAt != nil, "updated=%#v", updated)
 }
 
 // TestHandleKeysRejectsInvalidPolicyLimits keeps every invalid policy value out

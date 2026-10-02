@@ -35,9 +35,7 @@ func TestSummarizeChange_NestedAndArraySecrets(t *testing.T) {
 	// The masked marker is written through encoding/json, which escapes "<" as
 	// \u003c; only the field names are asserted here.
 	testutil.MustContainAll(t, summary, "account", "api_key")
-	if strings.Contains(summary, `"api_key":"`) && !strings.Contains(summary, "u003credacted") {
-		t.Fatalf("api_key was not masked: %s", summary)
-	}
+	testutil.Falsef(t, strings.Contains(summary, `"api_key":"`) && !strings.Contains(summary, "u003credacted"), "api_key was not masked: %s", summary)
 }
 
 // TestSummarizeChange_NonJSONBodyNeverLeaksContent keeps a form or text body
@@ -45,18 +43,15 @@ func TestSummarizeChange_NestedAndArraySecrets(t *testing.T) {
 func TestSummarizeChange_NonJSONBodyNeverLeaksContent(t *testing.T) {
 	summary, redacted := SummarizeChange([]byte("admin_pass=secret&x=1"))
 	testutil.MustNotContain(t, summary, "secret")
-	if summary == "" || len(redacted) != 0 {
-		t.Fatalf("summary = %q redacted = %v", summary, redacted)
-	}
+	testutil.Falsef(t, summary == "" || len(redacted) != 0, "summary = %q redacted = %v", summary, redacted)
 	testutil.MustContain(t, summary, "form")
 }
 
 // TestSummarizeChange_EmptyBodyIsEmpty keeps noise out of the journal.
 func TestSummarizeChange_EmptyBodyIsEmpty(t *testing.T) {
 	summary, redacted := SummarizeChange([]byte("   "))
-	if summary != "" || redacted != nil {
-		t.Fatalf("summary = %q redacted = %v", summary, redacted)
-	}
+	testutil.Equal(t, summary, "")
+	testutil.True(t, redacted == nil, "redacted must be nil")
 }
 
 // TestEventKindsAreDeclared guards the three journals the log centre filters on.
@@ -90,9 +85,7 @@ func TestSummarizeChange_MasksConfigSecrets(t *testing.T) {
 	}
 	// The non-secret settings still describe the change.
 	testutil.MustContainAll(t, summary, "3002", "debug_enabled")
-	if len(redacted) < 5 {
-		t.Fatalf("redacted = %v, want every secret field named", redacted)
-	}
+	testutil.Falsef(t, len(redacted) < 5, "redacted = %v, want every secret field named", redacted)
 	// The URL keeps its shape so the reader sees that a proxied URL was set.
 	testutil.MustContain(t, summary, "proxy.internal")
 }

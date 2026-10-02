@@ -174,12 +174,7 @@ func codexReasoningLevelEntries(levels []string) []codexReasoningLevel {
 }
 
 func codexHasCapability(item PublicModelResponse, capability string) bool {
-	for _, value := range item.Capabilities {
-		if strings.EqualFold(strings.TrimSpace(value), capability) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(item.Capabilities, func(value string) bool { return strings.EqualFold(strings.TrimSpace(value), capability) })
 }
 
 func codexAgentToolsSupported(item PublicModelResponse) bool {

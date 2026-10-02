@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestFetchQuotaUsageFailurePreservesSnapshot(t *testing.T) {
@@ -60,12 +61,8 @@ func TestFetchQuotaUsageFailurePreservesSnapshot(t *testing.T) {
 			client := NewFromAccount(acc, nil)
 			setTestEndpoints(client, server.URL, server.URL, server.URL)
 			quota, err := client.FetchQuota(context.Background())
-			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
-				t.Fatalf("FetchQuota() error = %v, want %q", err, tc.wantError)
-			}
-			if quota != nil {
-				t.Fatalf("FetchQuota() returned a partial snapshot: %+v", quota)
-			}
+			testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), tc.wantError), "FetchQuota() error = %v, want %q", err, tc.wantError)
+			testutil.Falsef(t, quota != nil, "FetchQuota() returned a partial snapshot: %+v", quota)
 			// Even an unconditional ApplyQuota must not install zero counters or
 			// clear known exhaustion after the failed fetch.
 			ApplyQuota(acc, quota)
@@ -108,19 +105,11 @@ func TestFetchQuotaUsageSuccessWithOptionalMetadata(t *testing.T) {
 			client := NewFromAccount(acc, nil)
 			setTestEndpoints(client, server.URL, server.URL, server.URL)
 			quota, err := client.FetchQuota(context.Background())
-			if err != nil {
-				t.Fatalf("FetchQuota() error = %v", err)
-			}
-			if quota.Limit != 100 || quota.Used != 20 || quota.Remaining != 80 || quota.Exhausted {
-				t.Fatalf("usage snapshot = %+v", quota)
-			}
-			if statusWorks && (quota.PlanTier != "Pro" || quota.ResetAt.IsZero()) {
-				t.Fatalf("status fallback metadata = %+v", quota)
-			}
+			testutil.NoError(t, err, "FetchQuota() error = %v")
+			testutil.Falsef(t, quota.Limit != 100 || quota.Used != 20 || quota.Remaining != 80 || quota.Exhausted, "usage snapshot = %+v", quota)
+			testutil.Falsef(t, statusWorks && (quota.PlanTier != "Pro" || quota.ResetAt.IsZero()), "status fallback metadata = %+v", quota)
 			ApplyQuota(acc, quota)
-			if acc.QoderQuota.Exhausted || acc.UsageLimit != 100 || acc.UsageCurrent != 80 {
-				t.Fatalf("successful usage refresh did not replace exhausted snapshot: %+v", acc.QoderQuota)
-			}
+			testutil.Falsef(t, acc.QoderQuota.Exhausted || acc.UsageLimit != 100 || acc.UsageCurrent != 80, "successful usage refresh did not replace exhausted snapshot: %+v", acc.QoderQuota)
 		})
 	}
 }

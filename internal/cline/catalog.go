@@ -1,6 +1,7 @@
 package cline
 
 import (
+	"slices"
 	"strings"
 
 	"encoding/json"
@@ -112,12 +113,7 @@ func CatalogSupportsModel(rows []string, modelID string) bool {
 	if modelID == "" {
 		return true
 	}
-	for _, row := range rows {
-		if strings.EqualFold(catalogID(row), modelID) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(rows, func(row string) bool { return strings.EqualFold(catalogID(row), modelID) })
 }
 
 // catalogID reads the identifier back out of a stored row. A bare id written by

@@ -134,13 +134,9 @@ func TestLiveProbe(t *testing.T) {
 	creds := ResolveCredentials(acc)
 	testutil.NoError(t, client.PrepareCurrentRuntimeFields(context.Background()), "PROBE runtime prepare: %v")
 	fields := client.RuntimeFields()
-	if strings.TrimSpace(fields.Key) == "" || strings.TrimSpace(fields.EncryptUserInfo) == "" {
-		t.Fatalf("PROBE runtime fields unavailable for account %d", acc.ID)
-	}
+	testutil.Falsef(t, strings.TrimSpace(fields.Key) == "" || strings.TrimSpace(fields.EncryptUserInfo) == "", "PROBE runtime fields unavailable for account %d", acc.ID)
 	model, err := client.resolveModel(upstream.UpstreamRequest{Model: "qwen3.8-flash"})
-	if err != nil {
-		t.Fatalf("PROBE model resolve: %v", err)
-	}
+	testutil.NoError(t, err, "PROBE model resolve: %v")
 	url := chatURL(client.endpoints.inference)
 
 	// Optional: dump the exact decoded request body for a byte-level comparison
@@ -155,9 +151,7 @@ func TestLiveProbe(t *testing.T) {
 			RequestID:     requestID,
 			ChatSessionID: "probe-session",
 		}, model, "probe-session", requestID, requestID, client.clientVersion, client.aliyunUserType(), client.businessProduct())
-		if err != nil {
-			t.Fatalf("PROBE body dump: %v", err)
-		}
+		testutil.NoError(t, err, "PROBE body dump: %v")
 		testutil.NoError(t, os.WriteFile(out, raw, 0o600), "PROBE body dump write: %v")
 		fmt.Printf("PROBE body_dump=%s bytes=%d\n", out, len(raw))
 	}

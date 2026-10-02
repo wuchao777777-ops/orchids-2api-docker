@@ -12,40 +12,30 @@ import (
 	"time"
 
 	"orchids-api/internal/buildinfo"
+	"orchids-api/internal/testutil"
 )
 
 func realBinary(t *testing.T) []byte {
 	t.Helper()
 	path, e := os.Executable()
-	if e != nil {
-		t.Fatal(e)
-	}
+	testutil.NoError(t, e)
 	b, e := os.ReadFile(path)
-	if e != nil {
-		t.Fatal(e)
-	}
+	testutil.NoError(t, e)
 	return append(b, []byte("updated fixture")...)
 }
 func TestReplacementAndBackup(t *testing.T) {
 	m := fixture(t, realBinary(t))
 	op := Operation{ID: "test", Target: buildinfo.Info{Version: "v1.0.3"}, Previous: m.Info}
-	if e := m.perform(context.Background(), &op); e != nil {
-		t.Fatal(e)
-	}
-	if op.Phase != "restart_pending" || op.Target.Commit != "abcdef0" {
-		t.Fatalf("%+v", op)
-	}
+	e := m.perform(context.Background(), &op)
+	testutil.NoError(t, e)
+	testutil.Equal(t, op.Phase, "restart_pending")
+	testutil.Equal(t, op.Target.Commit, "abcdef0")
 	backup, _ := os.ReadFile(op.Backup)
-	if string(backup) != "old binary" {
-		t.Fatal("backup lost")
-	}
+	testutil.Equal(t, string(backup), "old binary")
 	hash, e := hashFile(m.Executable)
-	if e != nil || hash != op.SHA256 {
-		t.Fatal("new binary not installed")
-	}
-	if _, e := os.Stat(m.Executable); e != nil {
-		t.Fatal("executable path disappeared")
-	}
+	testutil.False(t, e != nil || hash != op.SHA256, "new binary not installed")
+	_, e = os.Stat(m.Executable)
+	testutil.NoError(t, e)
 }
 func TestFailedReplacementAndWatchdogLaunchPreserveOld(t *testing.T) {
 	for _, stage := range []string{"launch", "rename"} {
@@ -57,49 +47,38 @@ func TestFailedReplacementAndWatchdogLaunchPreserveOld(t *testing.T) {
 				m.rename = func(string, string) error { return errors.New("rename failed") }
 			}
 			op := Operation{ID: "test", Target: buildinfo.Info{Version: "v1.0.3"}, Previous: m.Info}
-			if e := m.perform(context.Background(), &op); e == nil {
-				t.Fatal("failure ignored")
-			}
+			e := m.perform(context.Background(), &op)
+			testutil.Error(t, e)
 			b, _ := os.ReadFile(m.Executable)
-			if string(b) != "old binary" {
-				t.Fatal("old binary not preserved")
-			}
+			testutil.Equal(t, string(b), "old binary")
 		})
 	}
 }
 func TestLocksAndIdempotencySurviveManagerRecreation(t *testing.T) {
 	m := fixture(t, nil)
 	op := Operation{ID: "existing", IdempotencyKey: "same-key-123", Kind: "update", Phase: "downloading", Target: buildinfo.Info{Version: "v1.0.3"}}
-	if e := m.save(&op); e != nil {
-		t.Fatal(e)
-	}
+	e := m.save(&op)
+	testutil.NoError(t, e)
 	unlock, e := fileLock(filepath.Join(m.Dir, "operation.lock"))
-	if e != nil {
-		t.Fatal(e)
-	}
+	testutil.NoError(t, e)
 	defer unlock()
-	if _, e := fileLock(filepath.Join(m.Dir, "operation.lock")); e == nil {
-		t.Fatal("second process lock accepted")
-	}
+	_, e = fileLock(filepath.Join(m.Dir, "operation.lock"))
+	testutil.Error(t, e)
 	replay, e := m.Start("update", "v1.0.3", "same-key-123")
-	if e != nil || replay.ID != op.ID {
-		t.Fatalf("idempotency replay failed: %v", e)
-	}
-	if _, e := m.Start("update", "v1.0.4", "same-key-123"); e == nil {
-		t.Fatal("key reused for different target")
-	}
-	if _, e := m.Start("update", "v1.0.3", "different-key"); e == nil {
-		t.Fatal("concurrent update accepted")
-	}
+	testutil.Equal(t, e, nil)
+	testutil.Equal(t, replay.ID, op.ID)
+	_, e = m.Start("update", "v1.0.4", "same-key-123")
+	testutil.Error(t, e)
+	_, e = m.Start("update", "v1.0.3", "different-key")
+	testutil.Error(t, e)
 }
 func TestWatchdogSuccessAndAutomaticRollback(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(map[bool]string{false: "success", true: "failed-startup"}[fail], func(t *testing.T) {
 			m := fixture(t, realBinary(t))
 			op := Operation{ID: "watch", Target: buildinfo.Info{Version: "v1.0.3"}, Previous: m.Info}
-			if e := m.perform(context.Background(), &op); e != nil {
-				t.Fatal(e)
-			}
+			e := m.perform(context.Background(), &op)
+			testutil.NoError(t, e)
 			restarts, checks := 0, 0
 			restart := func(string) error { restarts++; return nil }
 			verify := func(_, _, hash string, info buildinfo.Info, _ time.Duration) error {
@@ -111,36 +90,24 @@ func TestWatchdogSuccessAndAutomaticRollback(t *testing.T) {
 				if e != nil || actual != hash {
 					return errors.New("incorrect process hash")
 				}
-				if checks == 1 && info.Version != "v1.0.3" {
-					t.Fatal("wrong version verified")
-				}
-				if checks == 2 && info.Version != "v1.0.2" {
-					t.Fatal("wrong recovery version")
-				}
+				testutil.False(t, checks == 1 && info.Version != "v1.0.3", "wrong version verified")
+				testutil.False(t, checks == 2 && info.Version != "v1.0.2", "wrong recovery version")
 				return nil
 			}
-			if e := runWatchdog(m.statePath(), "fixture.service", m.Executable, "http://127.0.0.1/health", op.ID, restart, verify); e != nil {
-				t.Fatal(e)
-			}
+			e = runWatchdog(m.statePath(), "fixture.service", m.Executable, "http://127.0.0.1/health", op.ID, restart, verify)
+			testutil.NoError(t, e)
 			result, e := m.Status()
-			if e != nil {
-				t.Fatal(e)
-			}
+			testutil.NoError(t, e)
 			if fail {
-				if result.Phase != "rolled_back" || restarts != 2 {
-					t.Fatalf("%+v restarts=%d", result, restarts)
-				}
+				testutil.Equal(t, result.Phase, "rolled_back")
+				testutil.Equal(t, restarts, 2)
 				b, _ := os.ReadFile(m.Executable)
-				if string(b) != "old binary" {
-					t.Fatal("recovery did not restore original")
-				}
+				testutil.Equal(t, string(b), "old binary")
 			} else {
-				if result.Phase != "complete" || restarts != 1 {
-					t.Fatalf("%+v", result)
-				}
-				if _, e := m.backup(); e != nil {
-					t.Fatal("manual rollback unavailable")
-				}
+				testutil.Equal(t, result.Phase, "complete")
+				testutil.Equal(t, restarts, 1)
+				_, e := m.backup()
+				testutil.NoError(t, e)
 			}
 		})
 	}
@@ -156,12 +123,10 @@ func TestWatchdogDoesNotActOnAnotherOperation(t *testing.T) {
 func TestInvalidELFAndWrongMetadata(t *testing.T) {
 	m := fixture(t, []byte("not an ELF"))
 	op := Operation{ID: "bad", Target: buildinfo.Info{Version: "v1.0.3"}}
-	if e := m.perform(context.Background(), &op); e == nil || !strings.Contains(e.Error(), "ELF") {
-		t.Fatalf("%v", e)
-	}
+	e := m.perform(context.Background(), &op)
+	testutil.Falsef(t, e == nil || !strings.Contains(e.Error(), "ELF"), "%v", e)
 	m = fixture(t, realBinary(t))
 	m.Source.(*fixtureSource).files["orchids-server-linux-amd64.build-info.txt"] = []byte("version=v9.0.0")
-	if e := m.perform(context.Background(), &op); e == nil {
-		t.Fatal("wrong target metadata accepted")
-	}
+	e = m.perform(context.Background(), &op)
+	testutil.Error(t, e)
 }

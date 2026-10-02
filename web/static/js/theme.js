@@ -8,9 +8,7 @@
   }
   try {
     apply(localStorage.getItem('api-console-theme'), localStorage.getItem('api-console-sidebar'));
-  } catch (_) {
-    apply('light', 'false');
-  }
+  } catch (_) { apply('light', 'false'); }
   function labels() {
     document.querySelectorAll('[data-theme-toggle]').forEach((button) => {
       const dark = root.dataset.theme === 'dark';

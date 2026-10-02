@@ -25,9 +25,7 @@ func TestDiagnosticWriterPreservesLongResponse(t *testing.T) {
 	payload := strings.Repeat("中文", 40000) + "FINAL_SENTINEL"
 	writer.Write([]byte(payload))
 	b := capture.Bundle()
-	if b.Truncated || len(b.Sections) != 1 || b.Sections[0].Payload != payload || recorder.Body.String() != payload {
-		t.Fatal("response lost content")
-	}
+	testutil.False(t, b.Truncated || len(b.Sections) != 1 || b.Sections[0].Payload != payload || recorder.Body.String() != payload, "response lost content")
 }
 
 func TestDiagnosticsStreamingAndExactlyOneOutcome(t *testing.T) {
@@ -43,9 +41,7 @@ func TestDiagnosticsStreamingAndExactlyOneOutcome(t *testing.T) {
 	original := `{"model":"test","messages":[{"content":"hello"}]}`
 	handler := TraceMiddleware(Diagnostics(store, func() bool { return true })(LoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		if string(raw) != original {
-			t.Error("request changed")
-		}
+		testutil.CheckEqual(t, string(raw), original)
 		r = r.WithContext(WithRequestModel(r.Context(), "test"))
 		log.Log(r.Context(), audit.Event{Action: "grok_upstream_attempt", AccountID: 1, Status: "error"})
 		log.Log(r.Context(), audit.Event{Action: "grok_upstream_attempt", AccountID: 2, Status: "success"})
@@ -60,18 +56,12 @@ func TestDiagnosticsStreamingAndExactlyOneOutcome(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
-	if recorder.Body.String() != "data: hello\n\n" || !recorder.Flushed {
-		t.Fatal("streaming changed")
-	}
+	testutil.False(t, recorder.Body.String() != "data: hello\n\n" || !recorder.Flushed, "streaming changed")
 	testutil.Equal(t, len(outcomes), 1)
 	o := outcomes[0]
-	if o.OK || o.Status != "stream_error" || o.InputTokens != 11 || o.OutputTokens != 22 || o.AttemptFailures != 1 || o.AccountSwitches != 1 || o.Model != "test" {
-		t.Fatalf("outcome=%+v", o)
-	}
+	testutil.Falsef(t, o.OK || o.Status != "stream_error" || o.InputTokens != 11 || o.OutputTokens != 22 || o.AttemptFailures != 1 || o.AccountSwitches != 1 || o.Model != "test", "outcome=%+v", o)
 	b, err := store.Get(context.Background(), recorder.Header().Get(TraceIDHeader))
-	if err != nil || b == nil {
-		t.Fatalf("diagnostics=%v err=%v", b, err)
-	}
+	testutil.Falsef(t, err != nil || b == nil, "diagnostics=%v err=%v", b, err)
 	found, summaryFound := false, false
 	for _, s := range b.Sections {
 		if s.Name == "6_http_summary.json" && strings.Contains(s.Payload, `"stream_failed":true`) {
@@ -81,9 +71,7 @@ func TestDiagnosticsStreamingAndExactlyOneOutcome(t *testing.T) {
 			found = true
 		}
 	}
-	if !found || !summaryFound {
-		t.Fatal("response diagnostic missing")
-	}
+	testutil.False(t, !found || !summaryFound, "response diagnostic missing")
 }
 
 func TestDiagnosticsPreservesSuccessfulStructuredRawResponse(t *testing.T) {
@@ -100,14 +88,10 @@ func TestDiagnosticsPreservesSuccessfulStructuredRawResponse(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	b, err := store.Get(context.Background(), recorder.Header().Get(TraceIDHeader))
-	if err != nil || b == nil {
-		t.Fatalf("diagnostics=%v err=%v", b, err)
-	}
+	testutil.Falsef(t, err != nil || b == nil, "diagnostics=%v err=%v", b, err)
 	for _, section := range b.Sections {
 		if section.Name == "5_http_response.txt" {
-			if section.Payload != recorder.Body.String() {
-				t.Fatal("client response differs")
-			}
+			testutil.Equal(t, section.Payload, recorder.Body.String())
 			return
 		}
 	}

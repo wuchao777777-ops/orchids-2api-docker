@@ -200,9 +200,7 @@ func (r *semanticIdleReadCloser) Close() error {
 }
 
 func (r *semanticIdleReadCloser) closeInner() error {
-	r.closeOnce.Do(func() {
-		r.closeErr = r.inner.Close()
-	})
+	r.closeOnce.Do(func() { r.closeErr = r.inner.Close() })
 	return r.closeErr
 }
 

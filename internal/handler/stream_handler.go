@@ -25,6 +25,7 @@ import (
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/toolname"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
 
 const (
@@ -590,10 +591,7 @@ func (h *streamHandler) writeFinalSSEBytesLockedWithHint(event string, data []by
 }
 
 func (h *streamHandler) writeSSEBytesLockedWithHint(event string, data []byte, immediate bool) {
-	if !h.isStream {
-		return
-	}
-	if h.hasReturn {
+	if !h.isStream || h.hasReturn {
 		return
 	}
 	// Every event except the opening frame itself needs the stream open first, so
@@ -1014,9 +1012,7 @@ func sanitizeToolInput(name, input string) string {
 			changed = true
 		}
 		mapField("path", "file_path")
-	case "edit":
-		mapField("path", "file_path")
-	case "read":
+	case "edit", "read":
 		mapField("path", "file_path")
 	case "bash":
 		mapField("cmd", "command")
@@ -1153,10 +1149,7 @@ func isNonProjectSandboxPath(pathValue string) bool {
 	}
 
 	parts := strings.Split(strings.Trim(pathValue, "/"), "/")
-	if len(parts) < 3 {
-		return false
-	}
-	if !strings.EqualFold(parts[0], "tmp") || !strings.EqualFold(parts[1], "cc-agent") {
+	if len(parts) < 3 || !strings.EqualFold(parts[0], "tmp") || !strings.EqualFold(parts[1], "cc-agent") {
 		return false
 	}
 	if len(parts) == 3 {
@@ -1169,9 +1162,7 @@ func (h *streamHandler) emitToolCallNonStream(call toolCall) {
 	h.addOutputTokens(call.name)
 	h.addOutputTokens(call.input)
 	inputJSON := strings.TrimSpace(call.input)
-	if inputJSON == "" {
-		inputJSON = "{}"
-	}
+	inputJSON = util.FirstNonEmptyUntrimmed(inputJSON, "{}")
 	var inputValue interface{}
 	if err := json.Unmarshal([]byte(inputJSON), &inputValue); err != nil {
 		inputValue = map[string]interface{}{}
@@ -1192,9 +1183,7 @@ func (h *streamHandler) emitToolCallStream(call toolCall, idx int, final bool) {
 	h.addOutputTokens(call.name)
 	h.addOutputTokens(call.input)
 	inputJSON := strings.TrimSpace(call.input)
-	if inputJSON == "" {
-		inputJSON = "{}"
-	}
+	inputJSON = util.FirstNonEmptyUntrimmed(inputJSON, "{}")
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1219,9 +1208,7 @@ func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) 
 
 	h.addOutputTokens(toolName)
 	inputJSON := strings.TrimSpace(inputStr)
-	if inputJSON == "" {
-		inputJSON = "{}"
-	}
+	inputJSON = util.FirstNonEmptyUntrimmed(inputJSON, "{}")
 
 	h.mu.Lock()
 	h.toolCallCount++
@@ -1464,10 +1451,7 @@ func (h *streamHandler) closeActiveBlockLocked() {
 // writeSSEBytesLocked writes one frame the caller has already serialized and
 // lets the shared writer decide whether it must reach the client at once.
 func (h *streamHandler) writeSSEBytesLocked(event string, data []byte) {
-	if !h.isStream {
-		return
-	}
-	if h.hasReturn {
+	if !h.isStream || h.hasReturn {
 		return
 	}
 	h.emitSSEFrameLocked(event, data, shouldFlushSSEImmediately(event, data), false)
@@ -1588,9 +1572,7 @@ func (h *streamHandler) taskDelegationAllowedLocked(input string) bool {
 	return true
 }
 
-func normalizeToolNameKey(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
+func normalizeToolNameKey(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
 
 func suppressedWriteContentFallback(call toolCall) string {
 	if normalizeToolNameKey(call.name) != "write" {
@@ -1626,9 +1608,7 @@ type toolInputFields struct {
 
 func decodeToolInputFields(input string) (toolInputFields, bool) {
 	raw := strings.TrimSpace(input)
-	if raw == "" {
-		raw = "{}"
-	}
+	raw = util.FirstNonEmptyUntrimmed(raw, "{}")
 	var fields toolInputFields
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
 		return toolInputFields{}, false

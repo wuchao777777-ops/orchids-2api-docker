@@ -95,9 +95,8 @@ func TestClineChannelEndToEnd(t *testing.T) {
 		ID                      string `json:"id"`
 		VerificationURIComplete string `json:"verification_uri_complete"`
 	}
-	if err := json.Unmarshal([]byte(startBody), &started); err != nil || started.ID == "" {
-		t.Fatalf("login start response = %q", startBody)
-	}
+	err := json.Unmarshal([]byte(startBody), &started)
+	testutil.Falsef(t, err != nil || started.ID == "", "login start response = %q", startBody)
 	testutil.NotEqual(t, started.VerificationURIComplete, "")
 
 	var final struct {
@@ -107,9 +106,8 @@ func TestClineChannelEndToEnd(t *testing.T) {
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		pollBody := e.readBody(t, e.do(t, http.MethodGet, "/api/cline/login/"+started.ID, "", true))
-		if err := json.Unmarshal([]byte(pollBody), &final); err != nil {
-			t.Fatalf("decode poll: %v (%s)", err, pollBody)
-		}
+		err := json.Unmarshal([]byte(pollBody), &final)
+		testutil.CheckNoError(t, err)
 		if final.Status == "complete" || final.Status == "failed" {
 			break
 		}
@@ -120,12 +118,9 @@ func TestClineChannelEndToEnd(t *testing.T) {
 	// 2. Refresh the channel catalog from the account.
 	refreshBody := e.readBody(t, e.do(t, http.MethodPost, "/api/models/refresh?channel=cline", "", true))
 	var refreshed modelRefreshResult
-	if err := json.Unmarshal([]byte(refreshBody), &refreshed); err != nil {
-		t.Fatalf("decode refresh: %v (%s)", err, refreshBody)
-	}
-	if refreshed.Channel != "Cline" || refreshed.Discovered == 0 {
-		t.Fatalf("refresh result = %+v, want a discovered Cline catalog", refreshed)
-	}
+	err = json.Unmarshal([]byte(refreshBody), &refreshed)
+	testutil.CheckNoError(t, err)
+	testutil.Falsef(t, refreshed.Channel != "Cline" || refreshed.Discovered == 0, "refresh result = %+v, want a discovered Cline catalog", refreshed)
 	// The catalog must have come from the upstream feed, never a compiled-in
 	// list.
 	testutil.Equal(t, refreshed.Source, "cline_recommended_models")

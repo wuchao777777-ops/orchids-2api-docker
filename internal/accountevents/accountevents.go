@@ -105,9 +105,7 @@ func NewFilteredKick(kinds []Kind, ignoredOrigins ...string) *Kick {
 }
 
 // AccountChanges implements Subscriber.
-func (k *Kick) AccountChanges([]int64) {
-	k.signalNow()
-}
+func (k *Kick) AccountChanges([]int64) { k.signalNow() }
 
 // AccountChangeBatch applies the scheduler's kind/origin filter.
 func (k *Kick) AccountChangeBatch(changes []Change) {

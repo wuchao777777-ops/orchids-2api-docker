@@ -58,27 +58,17 @@ func TestDiagnosticsUniqueIdentityAndUnifiedCompletion(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		id := rec.Header().Get(DiagnosticRequestIDHeader)
-		if id == "" || id == "client-trace" || ids[id] {
-			t.Fatalf("nonunique id %q", id)
-		}
+		testutil.Falsef(t, id == "" || id == "client-trace" || ids[id], "nonunique id %q", id)
 		ids[id] = true
-		if rec.Header().Get(TraceIDHeader) != "client-trace" {
-			t.Fatal("trace correlation changed")
-		}
+		testutil.Equal(t, rec.Header().Get(TraceIDHeader), "client-trace")
 		b, err := store.Get(context.Background(), id)
-		if err != nil || b == nil {
-			t.Fatal(b, err)
-		}
-		if len(journal.events) != i+1 {
-			t.Fatal("missing/duplicate journal rows", journal.events)
-		}
+		testutil.Fail(t, err != nil || b == nil, b, err)
+		testutil.Equal(t, len(journal.events), i+1)
 		e := journal.events[i]
-		if e.RequestID != id || b.DurationMS != durations[i] || e.Duration != b.DurationMS {
-			t.Fatalf("duration or id mismatch: %+v %+v", b, e)
-		}
-		if i == 2 && (e.Status != "error" || e.Metadata["http_status"] != 400) {
-			t.Fatal(e)
-		}
+		testutil.Equal(t, e.RequestID, id)
+		testutil.Equal(t, b.DurationMS, durations[i])
+		testutil.Equal(t, e.Duration, b.DurationMS)
+		testutil.Fail(t, i == 2 && (e.Status != "error" || e.Metadata["http_status"] != 400), e)
 		found := false
 		for _, s := range b.Sections {
 			if s.Name == "1_http_request.json" {
@@ -89,9 +79,8 @@ func TestDiagnosticsUniqueIdentityAndUnifiedCompletion(t *testing.T) {
 	}
 	// Verify earlier bundles are still independently addressable after later saves.
 	for id := range ids {
-		if b, _ := store.Get(context.Background(), id); b == nil {
-			t.Fatal("bundle overwritten")
-		}
+		b, _ := store.Get(context.Background(), id)
+		testutil.False(t, b == nil, "bundle overwritten")
 	}
 }
 
@@ -114,24 +103,16 @@ func TestDiagnosticsStreamFailureSummaryMatchesJournal(t *testing.T) {
 	requestID := rec.Header().Get(DiagnosticRequestIDHeader)
 	testutil.NotEqual(t, requestID, "")
 	b, err := store.Get(context.Background(), requestID)
-	if err != nil || b == nil {
-		t.Fatalf("diagnostic bundle missing: %v", err)
-	}
-	if len(journal.events) != 1 || journal.events[0].Status != "stream_error" {
-		t.Fatal(journal.events)
-	}
+	testutil.Falsef(t, err != nil || b == nil, "diagnostic bundle missing: %v", err)
+	testutil.Fail(t, len(journal.events) != 1 || journal.events[0].Status != "stream_error", journal.events)
 	found := false
 	for _, s := range b.Sections {
 		if s.Name == "6_http_summary.json" {
-			if found {
-				t.Fatal("duplicate HTTP summary section")
-			}
+			testutil.False(t, found, "duplicate HTTP summary section")
 			found = true
 			var v map[string]interface{}
 			testutil.NoError(t, json.Unmarshal([]byte(s.Payload), &v), "invalid HTTP summary: %v")
-			if v["status"] != float64(200) || v["stream_failed"] != true {
-				t.Fatal(v)
-			}
+			testutil.Fail(t, v["status"] != float64(200) || v["stream_failed"] != true, v)
 		}
 	}
 	testutil.True(t, found, "diagnostic bundle is missing 6_http_summary.json")

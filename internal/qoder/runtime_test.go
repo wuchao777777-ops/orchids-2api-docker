@@ -56,13 +56,9 @@ func TestRuntimeFieldsMatchesPinnedFixture(t *testing.T) {
 	t.Parallel()
 
 	uuidEntropy, err := base64.StdEncoding.DecodeString("AQIDBAUGBwgJCgsMDQ4PEA==")
-	if err != nil {
-		t.Fatalf("decode uuid entropy: %v", err)
-	}
+	testutil.NoError(t, err, "decode uuid entropy: %v")
 	paddingEntropy, err := base64.StdEncoding.DecodeString("ERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fQ==")
-	if err != nil {
-		t.Fatalf("decode padding entropy: %v", err)
-	}
+	testutil.NoError(t, err, "decode padding entropy: %v")
 
 	source := newRecordingSource(uuidEntropy, paddingEntropy)
 	fields, err := runtimeFieldsFor(source, runtimeFieldInput{
@@ -71,9 +67,7 @@ func TestRuntimeFieldsMatchesPinnedFixture(t *testing.T) {
 		OrganizationTags: []string{"synthetic-a", "b"},
 		DataPolicyAgreed: true,
 	})
-	if err != nil {
-		t.Fatalf("runtimeFieldsFor() error = %v", err)
-	}
+	testutil.NoError(t, err, "runtimeFieldsFor() error = %v")
 
 	const wantInfo = "A2MBsulMvdx5p3X6li/3gjwEdVeJ/EkXILah2VTr11+i+FqvTaZ90ZrsGAtfSUode28WR718Kzups7BnrO2w+LGj2Y3+3zswmr48XkCV+HvUuajHkcU+tPJdWeL69JwKA+h2be5MvPMEYFopCPt9jE/DBdk/2Q+1oBab6DYLbrp8u5IYpZq7Fe4IrCcskN0K"
 	const wantKey = "nKeC6jJtXTWF4TpnVNnxMT/6jY0gBZfCPfjQaKbIi0lS+j2REWVXO5f6BzlvfEvHCrC+UY7rBMZfYs/C72KNYVIH2HLAR8E1yPDAGvV2xViMw029bXcMVa9ib0vyaM4IEu7HJlNHzUXTJOvEBB4YUAyxTCysQ/oYct/JIpRNg7I="
@@ -90,12 +84,10 @@ func TestReverseMaskUUID(t *testing.T) {
 
 	raw := [16]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
 	masked := reverseMaskUUID(raw)
-	if got, want := formatUUID(masked), "100f0e0d-0c0b-4a09-8807-060504030201"; got != want {
-		t.Fatalf("formatUUID() = %q, want %q", got, want)
-	}
-	if got, want := string(runtimeASCIIKey(masked)), "100f0e0d0c0b4a09"; got != want {
-		t.Fatalf("runtimeASCIIKey() = %q, want %q", got, want)
-	}
+	got, want := formatUUID(masked), "100f0e0d-0c0b-4a09-8807-060504030201"
+	testutil.Falsef(t, got != want, "formatUUID() = %q, want %q", got, want)
+	got, want = string(runtimeASCIIKey(masked)), "100f0e0d0c0b4a09"
+	testutil.Falsef(t, got != want, "runtimeASCIIKey() = %q, want %q", got, want)
 	testutil.Equal(t, len(runtimeASCIIKey(masked)), 16)
 }
 
@@ -105,15 +97,9 @@ func TestReverseMaskUUID(t *testing.T) {
 func TestRuntimeFieldsAccessorRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	if (RuntimeFields{}).Complete() {
-		t.Fatal("Complete() = true for an empty pair")
-	}
-	if (RuntimeFields{Key: "x"}).Complete() {
-		t.Fatal("Complete() = true for a pair with no info")
-	}
-	if !(RuntimeFields{EncryptUserInfo: "a", Key: "b"}).Complete() {
-		t.Fatal("Complete() = false for a full pair")
-	}
+	testutil.False(t, (RuntimeFields{}).Complete(), "Complete() = true for an empty pair")
+	testutil.False(t, (RuntimeFields{Key: "x"}).Complete(), "Complete() = true for a pair with no info")
+	testutil.False(t, !(RuntimeFields{EncryptUserInfo: "a", Key: "b"}).Complete(), "Complete() = false for a full pair")
 }
 
 // TestRuntimeFieldInputAlwaysCarriesTagsArray pins the empty-array encoding: the
@@ -124,19 +110,13 @@ func TestRuntimeFieldInputAlwaysCarriesTagsArray(t *testing.T) {
 
 	source := newRecordingSource(bytes.Repeat([]byte{7}, 16), bytes.Repeat([]byte{9}, 109))
 	fields, err := runtimeFieldsFor(source, runtimeFieldInput{UID: "u"})
-	if err != nil {
-		t.Fatalf("runtimeFieldsFor() error = %v", err)
-	}
+	testutil.NoError(t, err, "runtimeFieldsFor() error = %v")
 	// Decrypt with the derived key to prove the plaintext contains "[]".
 	key := runtimeASCIIKey(reverseMaskUUID([16]byte{7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7}))
 	sealed, err := base64.StdEncoding.DecodeString(fields.EncryptUserInfo)
-	if err != nil {
-		t.Fatalf("decode ciphertext: %v", err)
-	}
+	testutil.NoError(t, err, "decode ciphertext: %v")
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("build cipher: %v", err)
-	}
+	testutil.NoError(t, err, "build cipher: %v")
 	plaintext := make([]byte, len(sealed))
 	cipher.NewCBCDecrypter(block, key).CryptBlocks(plaintext, sealed)
 	unpadded := unpadPKCS7(t, plaintext)
@@ -149,21 +129,13 @@ func TestReferenceRuntimeIdentityIncludesTokensAndAccountClass(t *testing.T) {
 		Name: "Test User", Aid: "uid-1", UID: "uid-1", UserType: "personal_professional_trial",
 		SecurityOAuthToken: "access-secret", RefreshToken: "refresh-secret",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !fields.Complete() {
-		t.Fatal("reference runtime pair incomplete")
-	}
+	testutil.NoError(t, err)
+	testutil.False(t, !fields.Complete(), "reference runtime pair incomplete")
 	key := []byte("3131313131313131") // hex of the reference's first 8 random bytes
 	sealed, err := base64.StdEncoding.DecodeString(fields.EncryptUserInfo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	plaintext := make([]byte, len(sealed))
 	cipher.NewCBCDecrypter(block, key).CryptBlocks(plaintext, sealed)
 	var identity map[string]string
@@ -177,9 +149,7 @@ func unpadPKCS7(t *testing.T, padded []byte) []byte {
 	t.Helper()
 	testutil.NotEqual(t, len(padded), 0)
 	padding := int(padded[len(padded)-1])
-	if padding <= 0 || padding > len(padded) {
-		t.Fatalf("invalid padding %d", padding)
-	}
+	testutil.Falsef(t, padding <= 0 || padding > len(padded), "invalid padding %d", padding)
 	return padded[:len(padded)-padding]
 }
 
@@ -190,13 +160,9 @@ func TestPKCEPairShape(t *testing.T) {
 
 	source := newRecordingSource([]byte{0}, bytes.Repeat([]byte{0x42}, 43))
 	verifier, challenge, err := pkcePair(source)
-	if err != nil {
-		t.Fatalf("pkcePair() error = %v", err)
-	}
+	testutil.NoError(t, err, "pkcePair() error = %v")
 	testutil.Equal(t, len(verifier), 43)
-	if strings.ContainsAny(challenge, "+/=") {
-		t.Fatalf("challenge %q is not unpadded base64url", challenge)
-	}
+	testutil.Falsef(t, strings.ContainsAny(challenge, "+/="), "challenge %q is not unpadded base64url", challenge)
 	if len(challenge) != 43 && len(challenge) != 42 {
 		// A 32-byte digest is 43 base64url characters once padding is dropped.
 		t.Fatalf("challenge length = %d, want 43", len(challenge))
@@ -205,9 +171,7 @@ func TestPKCEPairShape(t *testing.T) {
 	// page, so the charset is asserted rather than assumed.
 	const allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 	for _, r := range verifier {
-		if !strings.ContainsRune(allowed, r) {
-			t.Fatalf("verifier contains %q, which is outside the allowed charset", r)
-		}
+		testutil.Falsef(t, !strings.ContainsRune(allowed, r), "verifier contains %q, which is outside the allowed charset", r)
 	}
 }
 
@@ -217,9 +181,7 @@ func TestPKCEVerifierLengthSpread(t *testing.T) {
 
 	source := newRecordingSource([]byte{85}, bytes.Repeat([]byte{0x11}, 128))
 	verifier, _, err := pkcePair(source)
-	if err != nil {
-		t.Fatalf("pkcePair() error = %v", err)
-	}
+	testutil.NoError(t, err, "pkcePair() error = %v")
 	testutil.Equal(t, len(verifier), 128)
 }
 
@@ -230,14 +192,10 @@ func TestNewUUIDVersionAndVariant(t *testing.T) {
 
 	source := newRecordingSource(bytes.Repeat([]byte{0xff}, 16))
 	value, err := newUUID(source)
-	if err != nil {
-		t.Fatalf("newUUID() error = %v", err)
-	}
+	testutil.NoError(t, err, "newUUID() error = %v")
 	testutil.Equal(t, len(value), 36)
 	testutil.Equal(t, value[14], '4')
-	if !strings.ContainsRune("89ab", rune(value[19])) {
-		t.Fatalf("uuid = %q, want an RFC 4122 variant at index 19", value)
-	}
+	testutil.Falsef(t, !strings.ContainsRune("89ab", rune(value[19])), "uuid = %q, want an RFC 4122 variant at index 19", value)
 }
 
 // TestRSAEncryptionRejectsShortModulusInput guards the padding arithmetic.
@@ -245,11 +203,8 @@ func TestRSAEncryptionRejectsShortModulusInput(t *testing.T) {
 	t.Parallel()
 
 	publicKey, err := runtimePublicKey()
-	if err != nil {
-		t.Fatalf("runtimePublicKey() error = %v", err)
-	}
+	testutil.NoError(t, err, "runtimePublicKey() error = %v")
 	source := newRecordingSource()
-	if _, err := rsaEncryptPKCS1v15WithSource(source, publicKey, make([]byte, publicKey.Size())); err == nil {
-		t.Fatal("rsaEncryptPKCS1v15WithSource() error = nil for an oversized message")
-	}
+	_, err = rsaEncryptPKCS1v15WithSource(source, publicKey, make([]byte, publicKey.Size()))
+	testutil.Error(t, err)
 }

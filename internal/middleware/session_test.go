@@ -45,9 +45,8 @@ func TestAPIKeyAuth(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 			h(rec, req)
-			if rec.Code != tt.wantCode || called != tt.wantCalled {
-				t.Fatalf("status=%d called=%v want status=%d called=%v", rec.Code, called, tt.wantCode, tt.wantCalled)
-			}
+			testutil.Equal(t, rec.Code, tt.wantCode)
+			testutil.Equal(t, called, tt.wantCalled)
 		})
 	}
 }
@@ -67,9 +66,7 @@ func TestAPIKeyAuthAcceptsAnthropicHeader(t *testing.T) {
 	req.Header.Set("x-api-key", "anthropic-key")
 	rec := httptest.NewRecorder()
 	h(rec, req)
-	if rec.Code != http.StatusNoContent || !called {
-		t.Fatalf("status=%d called=%v", rec.Code, called)
-	}
+	testutil.Falsef(t, rec.Code != http.StatusNoContent || !called, "status=%d called=%v", rec.Code, called)
 }
 
 func TestAPIKeyAuthAddsNonSecretFingerprint(t *testing.T) {
@@ -81,9 +78,7 @@ func TestAPIKeyAuthAddsNonSecretFingerprint(t *testing.T) {
 		return nil, nil
 	}, func(w http.ResponseWriter, r *http.Request) {
 		fingerprint := APIKeyFingerprint(r.Context())
-		if fingerprint == "" || strings.Contains(fingerprint, token) {
-			t.Fatalf("unsafe fingerprint %q", fingerprint)
-		}
+		testutil.Falsef(t, fingerprint == "" || strings.Contains(fingerprint, token), "unsafe fingerprint %q", fingerprint)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -122,9 +117,7 @@ func TestAPIKeyAuthEnforcesDenialsAndModelPolicy(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h(rec, req)
 			testutil.Equal(t, rec.Code, tt.wantCode)
-			if (rec.Header().Get("Retry-After") != "") != tt.wantRetry {
-				t.Fatalf("Retry-After=%q", rec.Header().Get("Retry-After"))
-			}
+			testutil.Falsef(t, (rec.Header().Get("Retry-After") != "") != tt.wantRetry, "Retry-After=%q", rec.Header().Get("Retry-After"))
 		})
 	}
 }
@@ -195,9 +188,7 @@ func TestSessionAuth_Unauthorized(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
-	if called {
-		t.Fatalf("expected handler not to be called")
-	}
+	testutil.False(t, called, "expected handler not to be called")
 	testutil.Equal(t, rec.Code, http.StatusUnauthorized)
 }
 

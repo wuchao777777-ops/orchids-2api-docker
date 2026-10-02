@@ -39,12 +39,8 @@ func TestFindDuplicateAccountUsesStableProviderIdentityAfterTokenRotation(t *tes
 			testutil.NoError(t, s.CreateAccount(context.Background(), tc.existing))
 			a := New(s, "", "", &config.Config{})
 			got, err := a.findDuplicateAccountByCredential(context.Background(), tc.login, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got == nil || got.ID != tc.existing.ID {
-				t.Fatalf("duplicate = %+v, want account %d", got, tc.existing.ID)
-			}
+			testutil.NoError(t, err)
+			testutil.Falsef(t, got == nil || got.ID != tc.existing.ID, "duplicate = %+v, want account %d", got, tc.existing.ID)
 		})
 	}
 }
@@ -60,10 +56,6 @@ func TestStableProviderIdentityNeverCrossesProviders(t *testing.T) {
 		QoderUserID:       "same-user",
 		QoderRefreshToken: "q-token",
 	}, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != nil {
-		t.Fatalf("cross-provider account was treated as duplicate: %+v", got)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, got != nil, "cross-provider account was treated as duplicate: %+v", got)
 }

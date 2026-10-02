@@ -19,15 +19,9 @@ func TestParseQuotaNoticeReadsTheExhaustionFrame(t *testing.T) {
 
 	payload := `{"notifications":[{"extras":{"pricingUrl":"https://qoder.com/pricing?client=qoder","nextResetAt":1791397354935},"isHighestTier":false,"notificationType":"quota_exceeded"}]}`
 	notice := parseQuotaNotice("NOTIFICATIONS", payload)
-	if notice == nil {
-		t.Fatal("parseQuotaNotice returned nil for a quota_exceeded frame")
-	}
-	if !notice.Exhausted {
-		t.Error("Exhausted = false; a quota_exceeded frame is the account's own verdict that it is spent")
-	}
-	if !notice.NextResetAt.Equal(time.Unix(1791397354, 0)) {
-		t.Errorf("NextResetAt = %v, want %v", notice.NextResetAt, time.Unix(1791397354, 0))
-	}
+	testutil.False(t, notice == nil, "parseQuotaNotice returned nil for a quota_exceeded frame")
+	testutil.CheckFalse(t, !notice.Exhausted, "Exhausted = false; a quota_exceeded frame is the account's own verdict that it is spent")
+	testutil.CheckFalsef(t, !notice.NextResetAt.Equal(time.Unix(1791397354, 0)), "NextResetAt = %v, want %v", notice.NextResetAt, time.Unix(1791397354, 0))
 	testutil.CheckEqual(t, notice.Kind, "NOTIFICATIONS")
 	testutil.CheckEqual(t, notice.UpgradeURL, "")
 }
@@ -56,9 +50,8 @@ func TestParseQuotaNoticeIgnoresAdvisoryOnlyFrames(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := parseQuotaNotice(tc.kind, tc.payload); got != nil {
-				t.Fatalf("parseQuotaNotice(%q, %.40q) = %#v, want nil", tc.kind, tc.payload, got)
-			}
+			got := parseQuotaNotice(tc.kind, tc.payload)
+			testutil.Falsef(t, got != nil, "parseQuotaNotice(%q, %.40q) = %#v, want nil", tc.kind, tc.payload, got)
 		})
 	}
 }
@@ -72,12 +65,8 @@ func TestParseQuotaNoticeToleratesAFrameTerminator(t *testing.T) {
 
 	payload := `{"notifications":[{"extras":{"nextResetAt":1791397354935},"notificationType":"quota_exceeded"}]}#`
 	notice := parseQuotaNotice("NOTIFICATIONS", payload)
-	if notice == nil {
-		t.Fatal("parseQuotaNotice dropped a frame with a trailing terminator")
-	}
-	if !notice.NextResetAt.Equal(time.Unix(1791397354, 0)) {
-		t.Errorf("NextResetAt = %v, want %v", notice.NextResetAt, time.Unix(1791397354, 0))
-	}
+	testutil.False(t, notice == nil, "parseQuotaNotice dropped a frame with a trailing terminator")
+	testutil.CheckFalsef(t, !notice.NextResetAt.Equal(time.Unix(1791397354, 0)), "NextResetAt = %v, want %v", notice.NextResetAt, time.Unix(1791397354, 0))
 }
 
 // TestQuotaExceededFrameReachesTheAttemptResult is the end-to-end half: the
@@ -98,18 +87,10 @@ func TestQuotaExceededFrameReachesTheAttemptResult(t *testing.T) {
 			}
 		}
 	}, nil)
-	if err != nil {
-		t.Fatalf("a quota_exceeded control frame aborted the stream: %v", err)
-	}
+	testutil.NoError(t, err, "a quota_exceeded control frame aborted the stream: %v")
 	testutil.Equal(t, text.String(), "OK")
-	if res.QuotaNotice == nil {
-		t.Fatal("QuotaNotice = nil; the account never learns its window closed")
-	}
-	if !res.QuotaNotice.Exhausted {
-		t.Error("QuotaNotice.Exhausted = false, want true")
-	}
-	if !res.QuotaNotice.NextResetAt.Equal(time.Unix(1791397354, 0)) {
-		t.Errorf("QuotaNotice.NextResetAt = %v, want %v", res.QuotaNotice.NextResetAt, time.Unix(1791397354, 0))
-	}
+	testutil.False(t, res.QuotaNotice == nil, "QuotaNotice = nil; the account never learns its window closed")
+	testutil.CheckFalse(t, !res.QuotaNotice.Exhausted, "QuotaNotice.Exhausted = false, want true")
+	testutil.CheckFalsef(t, !res.QuotaNotice.NextResetAt.Equal(time.Unix(1791397354, 0)), "QuotaNotice.NextResetAt = %v, want %v", res.QuotaNotice.NextResetAt, time.Unix(1791397354, 0))
 	testutil.CheckEqual(t, res.QuotaNotice.PricingURL, "https://qoder.com/pricing")
 }

@@ -28,12 +28,8 @@ const compactionTestSummary = "1. Primary Request and Intent: keep the session g
 func testCompactionCipher(t *testing.T) *secureblob.Cipher {
 	t.Helper()
 	cipher, err := secureblob.NewCipher([]byte("0123456789abcdef0123456789abcdef"))
-	if err != nil {
-		t.Fatalf("secureblob.NewCipher: %v", err)
-	}
-	if !cipher.Available() {
-		t.Fatal("cipher is not available")
-	}
+	testutil.NoError(t, err, "secureblob.NewCipher: %v")
+	testutil.False(t, !cipher.Available(), "cipher is not available")
 	return cipher
 }
 
@@ -63,18 +59,14 @@ func setupCompactionHandler(t *testing.T, upstream *httptest.Server) (*Handler, 
 	h.cliClient.httpClient = upstream.Client()
 	h.cliClient.oauth.httpClient = upstream.Client()
 	h.SetCompactionCipher(testCompactionCipher(t))
-	return h, s, func() {
-		_ = s.Close()
-	}
+	return h, s, func() { _ = s.Close() }
 }
 
 func compactionUpstream(t *testing.T, summary string, received *map[string]interface{}) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("read upstream body: %v", err)
-		}
+		testutil.NoError(t, err, "read upstream body: %v")
 		if received != nil {
 			var decoded map[string]interface{}
 			testutil.NoError(t, json.Unmarshal(body, &decoded), "decode upstream body: %v")
@@ -161,58 +153,42 @@ func TestClassifyResponsesCompactionPayload(t *testing.T) {
 func TestGatewayCompactionCodecRoundTripAndRejections(t *testing.T) {
 	codec := newGatewayCompactionCodec(testCompactionCipher(t))
 	blob, err := codec.encode("session-a", "Summary:\nkept text")
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	if !strings.HasPrefix(blob, gatewayCompactionPrefix) {
-		t.Fatalf("blob=%q missing prefix", blob)
-	}
+	testutil.NoError(t, err, "encode: %v")
+	testutil.Falsef(t, !strings.HasPrefix(blob, gatewayCompactionPrefix), "blob=%q missing prefix", blob)
 
 	summary, owned, drifted, err := codec.decode("session-a", blob)
-	if err != nil || !owned || drifted || summary != "Summary:\nkept text" {
-		t.Fatalf("decode=%q owned=%v drifted=%v err=%v", summary, owned, drifted, err)
-	}
+	testutil.Falsef(t, err != nil || !owned || drifted || summary != "Summary:\nkept text", "decode=%q owned=%v drifted=%v err=%v", summary, owned, drifted, err)
 	// Session is advisory: a drifted key still decrypts, and the caller learns it.
-	if _, owned, drifted, err := codec.decode("session-b", blob); err != nil || !owned || !drifted {
-		t.Fatalf("drifted decode owned=%v drifted=%v err=%v", owned, drifted, err)
-	}
+	_, owned, drifted, err = codec.decode("session-b", blob)
+	testutil.Falsef(t, err != nil || !owned || !drifted, "drifted decode owned=%v drifted=%v err=%v", owned, drifted, err)
 	// A foreign blob is not ours and must pass through untouched.
-	if summary, owned, _, err := codec.decode("session-a", "upstream-opaque-blob"); err != nil || owned || summary != "" {
-		t.Fatalf("foreign blob summary=%q owned=%v err=%v", summary, owned, err)
-	}
+	summary, owned, _, err = codec.decode("session-a", "upstream-opaque-blob")
+	testutil.Falsef(t, err != nil || owned || summary != "", "foreign blob summary=%q owned=%v err=%v", summary, owned, err)
 	// A prefixed blob that cannot be opened is an error, never an empty summary.
-	if _, owned, _, err := codec.decode("session-a", gatewayCompactionPrefix+"not-base64!!"); err == nil || !owned {
-		t.Fatalf("tampered blob owned=%v err=%v", owned, err)
-	}
+	_, owned, _, err = codec.decode("session-a", gatewayCompactionPrefix+"not-base64!!")
+	testutil.Falsef(t, err == nil || !owned, "tampered blob owned=%v err=%v", owned, err)
 	// Another instance (different key) must not be able to read ours.
 	otherCodec := newGatewayCompactionCodec(mustCipher(t, "fedcba9876543210fedcba9876543210"))
-	if _, _, _, err := otherCodec.decode("session-a", blob); err == nil {
-		t.Fatal("a blob was decoded with a foreign key")
-	}
+	_, _, _, err = otherCodec.decode("session-a", blob)
+	testutil.Error(t, err)
 	// Size limits are enforced on both ends.
-	if _, err := codec.encode("s", ""); err == nil {
-		t.Fatal("empty summary was sealed")
-	}
-	if _, err := codec.encode("s", strings.Repeat("x", maxGatewayCompactionSummary+1)); err == nil {
-		t.Fatal("oversized summary was sealed")
-	}
+	_, err = codec.encode("s", "")
+	testutil.Error(t, err)
+	_, err = codec.encode("s", strings.Repeat("x", maxGatewayCompactionSummary+1))
+	testutil.Error(t, err)
 }
 
 func mustCipher(t *testing.T, key string) *secureblob.Cipher {
 	t.Helper()
 	cipher, err := secureblob.NewCipher([]byte(key))
-	if err != nil {
-		t.Fatalf("secureblob.NewCipher: %v", err)
-	}
+	testutil.NoError(t, err, "secureblob.NewCipher: %v")
 	return cipher
 }
 
 func TestExpandGatewayCompactionHistory(t *testing.T) {
 	codec := newGatewayCompactionCodec(testCompactionCipher(t))
 	blob, err := codec.encode("session-a", "Summary:\nreplayed")
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
+	testutil.NoError(t, err, "encode: %v")
 
 	payload := map[string]interface{}{"input": []interface{}{
 		map[string]interface{}{"type": "message", "role": "user", "content": "hello"},
@@ -220,34 +196,27 @@ func TestExpandGatewayCompactionHistory(t *testing.T) {
 		map[string]interface{}{"id": "cmp_2", "type": "compaction", "encrypted_content": "upstream-opaque"},
 	}}
 	drifted, err := expandGatewayCompactionHistory(payload, codec, "session-a")
-	if err != nil || drifted != 0 {
-		t.Fatalf("drifted=%d err=%v", drifted, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, drifted, 0)
 	items := payload["input"].([]interface{})
 	expanded := items[1].(map[string]interface{})
-	if expanded["type"] != "message" || expanded["role"] != "user" {
-		t.Fatalf("expanded item=%#v", expanded)
-	}
+	testutil.Equal(t, expanded["type"], "message")
+	testutil.Equal(t, expanded["role"], "user")
 	parts := expanded["content"].([]interface{})
 	testutil.Equal(t, parts[0].(map[string]interface{})["text"], "Summary:\nreplayed")
 	// The upstream's own blob is handed to the upstream unchanged.
 	foreign := items[2].(map[string]interface{})
-	if foreign["type"] != "compaction" || foreign["encrypted_content"] != "upstream-opaque" {
-		t.Fatalf("foreign item=%#v", foreign)
-	}
+	testutil.Equal(t, foreign["type"], "compaction")
+	testutil.Equal(t, foreign["encrypted_content"], "upstream-opaque")
 
 	// An undecodable gateway blob names the item that has to be dropped.
 	bad := map[string]interface{}{"input": []interface{}{
 		map[string]interface{}{"type": "compaction", "encrypted_content": gatewayCompactionPrefix + "broken"},
 	}}
 	_, err = expandGatewayCompactionHistory(bad, codec, "session-a")
-	if err == nil {
-		t.Fatal("expected an error for an undecodable gateway blob")
-	}
+	testutil.False(t, err == nil, "expected an error for an undecodable gateway blob")
 	var blobErr *compactionBlobError
-	if !asError(err, &blobErr) || blobErr.Param() != "input[0].encrypted_content" {
-		t.Fatalf("err=%v param=%q", err, compactionErrorParam(err))
-	}
+	testutil.Falsef(t, !asError(err, &blobErr) || blobErr.Param() != "input[0].encrypted_content", "err=%v param=%q", err, compactionErrorParam(err))
 }
 
 func TestCleanGatewayCompactionSummary(t *testing.T) {
@@ -298,19 +267,11 @@ func TestCleanGatewayCompactionSummary(t *testing.T) {
 }
 
 func TestDegenerateGatewayCompactionSummary(t *testing.T) {
-	if !isDegenerateGatewayCompactionSummary("too short") {
-		t.Fatal("a short summary must count as degenerate")
-	}
+	testutil.False(t, !isDegenerateGatewayCompactionSummary("too short"), "a short summary must count as degenerate")
 	// Tags and blank padding must not be able to fake length.
-	if !isDegenerateGatewayCompactionSummary("<summary>" + strings.Repeat("\n", 600) + "short</summary>") {
-		t.Fatal("padding counted towards the summary length")
-	}
-	if isDegenerateGatewayCompactionSummary(compactionTestSummary) {
-		t.Fatal("a real summary was rejected")
-	}
-	if utf8.RuneCountInString(cleanGatewayCompactionSummary(compactionTestSummary)) < minGatewayCompactionRunes {
-		t.Fatalf("fixture summary is too short: %d runes", utf8.RuneCountInString(compactionTestSummary))
-	}
+	testutil.False(t, !isDegenerateGatewayCompactionSummary("<summary>"+strings.Repeat("\n", 600)+"short</summary>"), "padding counted towards the summary length")
+	testutil.False(t, isDegenerateGatewayCompactionSummary(compactionTestSummary), "a real summary was rejected")
+	testutil.Falsef(t, utf8.RuneCountInString(cleanGatewayCompactionSummary(compactionTestSummary)) < minGatewayCompactionRunes, "fixture summary is too short: %d runes", utf8.RuneCountInString(compactionTestSummary))
 }
 
 func TestPrepareGatewayCompactionSample(t *testing.T) {
@@ -324,39 +285,30 @@ func TestPrepareGatewayCompactionSample(t *testing.T) {
 	}
 	sample := prepareGatewayCompactionSample(payload)
 
-	if sample["stream"] != true || sample["store"] != false {
-		t.Fatalf("stream=%v store=%v", sample["stream"], sample["store"])
-	}
+	testutil.Equal(t, sample["stream"], true)
+	testutil.Equal(t, sample["store"], false)
 	if sample["instructions"] != nil {
 		t.Fatalf("instructions=%v want nil", sample["instructions"])
 	}
-	if sample["temperature"] != 1.0 || sample["tool_choice"] != "auto" {
-		t.Fatalf("temperature=%v tool_choice=%v", sample["temperature"], sample["tool_choice"])
-	}
+	testutil.Equal(t, sample["temperature"], 1.0)
+	testutil.Equal(t, sample["tool_choice"], "auto")
 	reasoning, _ := sample["reasoning"].(map[string]interface{})
 	testutil.Equal(t, reasoning["summary"], "concise")
 	for _, dropped := range []string{"previous_response_id", "text", "max_output_tokens", "max_completion_tokens"} {
-		if _, present := sample[dropped]; present {
-			t.Fatalf("%s survived sample preparation", dropped)
-		}
+		_, present := sample[dropped]
+		testutil.Falsef(t, present, "%s survived sample preparation", dropped)
 	}
 	items := sample["input"].([]interface{})
 	last := items[len(items)-1].(map[string]interface{})
-	if last["content"] != gatewayCompactionPrompt {
-		t.Fatal("the canonical compaction prompt was not appended")
-	}
+	testutil.EqualAny(t, last["content"], gatewayCompactionPrompt)
 	// The caller's payload must not be mutated: it is still the request body.
-	if _, present := payload["reasoning"]; present {
-		t.Fatal("prepareGatewayCompactionSample mutated its input")
-	}
-	if len(payload["input"].([]interface{})) != 1 {
-		t.Fatal("prepareGatewayCompactionSample appended to the caller's input")
-	}
+	_, present := payload["reasoning"]
+	testutil.False(t, present, "prepareGatewayCompactionSample mutated its input")
+	testutil.False(t, len(payload["input"].([]interface{})) != 1, "prepareGatewayCompactionSample appended to the caller's input")
 	// Without tools, a stale tool_choice is removed rather than forwarded.
 	noTools := prepareGatewayCompactionSample(map[string]interface{}{"model": "grok-4.5", "input": []interface{}{}, "tool_choice": "none"})
-	if _, present := noTools["tool_choice"]; present {
-		t.Fatal("tool_choice survived without tools")
-	}
+	_, present = noTools["tool_choice"]
+	testutil.False(t, present, "tool_choice survived without tools")
 }
 
 func TestParseGatewayCompactionStream(t *testing.T) {
@@ -370,38 +322,28 @@ func TestParseGatewayCompactionStream(t *testing.T) {
 	stream := "event: response.created\ndata: {\"type\":\"response.created\"}\n\n" +
 		"event: response.completed\ndata: " + string(completedJSON) + "\n\n"
 	sample, err := parseGatewayCompactionStream([]byte(stream))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if sample.summary != strings.TrimSpace(compactionTestSummary) || sample.response["id"] != "resp_1" {
-		t.Fatalf("sample=%+v", sample)
-	}
+	testutil.NoError(t, err, "parse: %v")
+	testutil.Equal(t, sample.summary, strings.TrimSpace(compactionTestSummary))
+	testutil.Equal(t, sample.response["id"], "resp_1")
 
 	// No completed event at all is a retryable failure, not an empty summary.
-	if _, err := parseGatewayCompactionStream([]byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n")); err == nil {
-		t.Fatal("expected an error for a stream without response.completed")
-	}
+	_, err = parseGatewayCompactionStream([]byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n"))
+	testutil.Error(t, err)
 
 	// A failed response carries the upstream reason and its retryability.
 	failed := "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"invalid_request_error\",\"message\":\"bad input\"}}}\n\n"
 	_, err = parseGatewayCompactionStream([]byte(failed))
-	if err == nil || gatewayCompactionErrorIsTransient(err) {
-		t.Fatalf("err=%v transient=%v", err, gatewayCompactionErrorIsTransient(err))
-	}
+	testutil.Falsef(t, err == nil || gatewayCompactionErrorIsTransient(err), "err=%v transient=%v", err, gatewayCompactionErrorIsTransient(err))
 	transient := "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\",\"message\":\"try later\"}}}\n\n"
 	_, err = parseGatewayCompactionStream([]byte(transient))
-	if err == nil || !gatewayCompactionErrorIsTransient(err) {
-		t.Fatalf("err=%v transient=%v", err, gatewayCompactionErrorIsTransient(err))
-	}
+	testutil.Falsef(t, err == nil || !gatewayCompactionErrorIsTransient(err), "err=%v transient=%v", err, gatewayCompactionErrorIsTransient(err))
 
 	// A summary that only arrives as streamed output items is still usable.
 	streamedOnly := "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"" +
 		strings.ReplaceAll(compactionTestSummary, "\n", "\\n") + "\"}]}}\n\n" +
 		"event: response.completed\ndata: " + string(completedJSON) + "\n\n"
 	sample, err = parseGatewayCompactionStream([]byte(streamedOnly))
-	if err != nil || sample.summary == "" {
-		t.Fatalf("summary=%q err=%v", sample.summary, err)
-	}
+	testutil.Falsef(t, err != nil || sample.summary == "", "summary=%q err=%v", sample.summary, err)
 }
 
 func TestBuildGatewayCompactionResponseShape(t *testing.T) {
@@ -411,24 +353,23 @@ func TestBuildGatewayCompactionResponseShape(t *testing.T) {
 	}
 	result := buildGatewayCompactionResponse(response, "g2a_compact_v1.xyz", "grok-4.5")
 
-	if result["id"] != "resp_abc" || result["object"] != "response" || result["status"] != "completed" || result["model"] != "grok-4.5" {
-		t.Fatalf("result=%#v", result)
-	}
-	if _, present := result["output_text"]; present {
-		t.Fatal("output_text leaked into the compaction response")
-	}
+	testutil.Equal(t, result["id"], "resp_abc")
+	testutil.Equal(t, result["object"], "response")
+	testutil.Equal(t, result["status"], "completed")
+	testutil.Equal(t, result["model"], "grok-4.5")
+	_, present := result["output_text"]
+	testutil.False(t, present, "output_text leaked into the compaction response")
 	output := result["output"].([]interface{})
 	item := output[0].(map[string]interface{})
-	if item["type"] != "compaction" || item["encrypted_content"] != "g2a_compact_v1.xyz" || item["id"] != "cmp_abc" {
-		t.Fatalf("item=%#v", item)
-	}
+	testutil.Equal(t, item["type"], "compaction")
+	testutil.Equal(t, item["encrypted_content"], "g2a_compact_v1.xyz")
+	testutil.Equal(t, item["id"], "cmp_abc")
 	usage := result["usage"].(map[string]interface{})
 	testutil.EqualAny(t, usage["total_tokens"], int64(15))
 	// A response without usage keeps it absent instead of inventing zeros.
 	noUsage := buildGatewayCompactionResponse(map[string]interface{}{"id": "resp_x"}, "blob", "grok-4.5")
-	if _, present := noUsage["usage"]; present {
-		t.Fatal("usage was fabricated")
-	}
+	_, present = noUsage["usage"]
+	testutil.False(t, present, "usage was fabricated")
 
 	// The streamed form is the same answer as six ordered events.
 	var builder strings.Builder
@@ -469,26 +410,20 @@ func TestHandleResponsesCompactSealsGatewaySummary(t *testing.T) {
 	h.HandleResponsesCompact(rec, req)
 
 	testutil.Equal(t, rec.Code, http.StatusOK)
-	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
-		t.Fatalf("Content-Type=%q", got)
-	}
+	got := rec.Header().Get("Content-Type")
+	testutil.Falsef(t, !strings.Contains(got, "application/json"), "Content-Type=%q", got)
 	_ = s
 
 	// The sample the gateway sent upstream is the canonical Build compaction turn.
-	if received == nil {
-		t.Fatal("upstream saw no request")
-	}
-	if received["stream"] != true || received["store"] != false {
-		t.Fatalf("sample stream=%v store=%v", received["stream"], received["store"])
-	}
+	testutil.False(t, received == nil, "upstream saw no request")
+	testutil.Equal(t, received["stream"], true)
+	testutil.Equal(t, received["store"], false)
 	if received["instructions"] != nil {
 		t.Fatalf("sample instructions=%v", received["instructions"])
 	}
 	items := received["input"].([]interface{})
 	last := items[len(items)-1].(map[string]interface{})
-	if last["content"] != gatewayCompactionPrompt {
-		t.Fatal("the canonical compaction prompt was not sent upstream")
-	}
+	testutil.EqualAny(t, last["content"], gatewayCompactionPrompt)
 
 	var payload map[string]interface{}
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode response: %v")
@@ -496,14 +431,10 @@ func TestHandleResponsesCompactSealsGatewaySummary(t *testing.T) {
 	item := output[0].(map[string]interface{})
 	testutil.Equal(t, item["type"], "compaction")
 	blob := item["encrypted_content"].(string)
-	if !strings.HasPrefix(blob, gatewayCompactionPrefix) {
-		t.Fatalf("blob=%q is not gateway-owned", blob)
-	}
+	testutil.Falsef(t, !strings.HasPrefix(blob, gatewayCompactionPrefix), "blob=%q is not gateway-owned", blob)
 	codec := newGatewayCompactionCodec(codecCipher)
 	summary, owned, _, err := codec.decode("", blob)
-	if err != nil || !owned {
-		t.Fatalf("decode blob owned=%v err=%v", owned, err)
-	}
+	testutil.Falsef(t, err != nil || !owned, "decode blob owned=%v err=%v", owned, err)
 	testutil.MustContain(t, summary, "This session is being continued from a previous conversation")
 	testutil.MustContain(t, summary, "Primary Request and Intent")
 }
@@ -529,9 +460,7 @@ func TestHandleResponsesExpandsGatewayCompactionHistory(t *testing.T) {
 
 	codec := newGatewayCompactionCodec(testCompactionCipher(t))
 	blob, err := codec.encode("session-a", "Summary:\ncarried forward")
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
+	testutil.NoError(t, err, "encode: %v")
 	body, _ := json.Marshal(map[string]interface{}{
 		"model": "grok-4.5", "stream": true,
 		"input": []interface{}{
@@ -544,19 +473,15 @@ func TestHandleResponsesExpandsGatewayCompactionHistory(t *testing.T) {
 	h.HandleResponses(rec, req)
 
 	testutil.Equal(t, rec.Code, http.StatusOK)
-	if received == nil {
-		t.Fatal("upstream saw no request")
-	}
+	testutil.False(t, received == nil, "upstream saw no request")
 	items := received["input"].([]interface{})
 	for index, raw := range items {
-		if item, ok := raw.(map[string]interface{}); ok && item["type"] == "compaction" {
-			t.Fatalf("input[%d] still carries a compaction item: %#v", index, item)
-		}
+		item, ok := raw.(map[string]interface{})
+		testutil.Falsef(t, ok && item["type"] == "compaction", "input[%d] still carries a compaction item: %#v", index, item)
 	}
 	first := items[0].(map[string]interface{})
-	if first["type"] != "message" || first["role"] != "user" {
-		t.Fatalf("expanded item=%#v", first)
-	}
+	testutil.Equal(t, first["type"], "message")
+	testutil.Equal(t, first["role"], "user")
 	parts := first["content"].([]interface{})
 	testutil.Equal(t, parts[0].(map[string]interface{})["text"], "Summary:\ncarried forward")
 }
@@ -611,9 +536,7 @@ func TestHandleResponsesRelaysCompactionTriggerWhenDisabled(t *testing.T) {
 	h, _, cleanup := setupCompactionHandler(t, upstream)
 	defer cleanup()
 	h.SetCompactionCipher(nil)
-	if h.GatewayCompactionEnabled() {
-		t.Fatal("compaction reported as enabled without a cipher")
-	}
+	testutil.False(t, h.GatewayCompactionEnabled(), "compaction reported as enabled without a cipher")
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"model": "grok-4.5", "stream": true,
@@ -624,15 +547,12 @@ func TestHandleResponsesRelaysCompactionTriggerWhenDisabled(t *testing.T) {
 	h.HandleResponses(rec, req)
 
 	testutil.Equal(t, rec.Code, http.StatusOK)
-	if received == nil {
-		t.Fatal("the trigger was not relayed upstream")
-	}
+	testutil.False(t, received == nil, "the trigger was not relayed upstream")
 	items := received["input"].([]interface{})
 	testutil.Equal(t, items[0].(map[string]interface{})["type"], "compaction_trigger")
 	for _, raw := range items {
-		if item, ok := raw.(map[string]interface{}); ok && item["content"] == gatewayCompactionPrompt {
-			t.Fatal("the gateway ran a summary turn while the feature was disabled")
-		}
+		item, ok := raw.(map[string]interface{})
+		testutil.False(t, ok && item["content"] == gatewayCompactionPrompt, "the gateway ran a summary turn while the feature was disabled")
 	}
 }
 
@@ -668,9 +588,8 @@ func TestHandleResponsesCompactionTriggerStreamsSyntheticEvents(t *testing.T) {
 	h.HandleResponses(rec, req)
 
 	testutil.Equal(t, rec.Code, http.StatusOK)
-	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
-		t.Fatalf("Content-Type=%q", got)
-	}
+	got := rec.Header().Get("Content-Type")
+	testutil.Falsef(t, !strings.Contains(got, "text/event-stream"), "Content-Type=%q", got)
 	var events []string
 	var blob string
 	if err := consumeCompatibleSSE(strings.NewReader(rec.Body.String()), func(event compatibleSSEEvent) error {
@@ -690,9 +609,7 @@ func TestHandleResponsesCompactionTriggerStreamsSyntheticEvents(t *testing.T) {
 	}
 	want := []string{"response.created", "response.in_progress", "response.output_item.added", "keepalive", "response.output_item.done", "response.completed"}
 	testutil.Equal(t, strings.Join(events, ","), strings.Join(want, ","))
-	if !strings.HasPrefix(blob, gatewayCompactionPrefix) {
-		t.Fatalf("streamed blob=%q is not gateway-owned", blob)
-	}
+	testutil.Falsef(t, !strings.HasPrefix(blob, gatewayCompactionPrefix), "streamed blob=%q is not gateway-owned", blob)
 }
 
 // A summary the model refuses to produce is not charged to the client as an

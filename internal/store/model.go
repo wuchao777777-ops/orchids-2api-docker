@@ -33,9 +33,7 @@ const (
 )
 
 // Enabled 表示该模型是否可用于对外 /v1/models 列表。
-func (s ModelStatus) Enabled() bool {
-	return s == ModelStatusAvailable
-}
+func (s ModelStatus) Enabled() bool { return s == ModelStatusAvailable }
 
 func (s *ModelStatus) UnmarshalJSON(data []byte) error {
 	data = bytes.TrimSpace(data)

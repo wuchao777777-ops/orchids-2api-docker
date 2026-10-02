@@ -44,9 +44,7 @@ func TestFetchModels_WhitelistMismatchDoesNotDarkenTheChannel(t *testing.T) {
 		"models":[{"id":"hy3","disabled":false},{"id":"hy3-pro","disabled":false},{"id":"dead","disabled":true}],
 		"agents":[{"name":"cli","models":["completely-different-id"]}]
 	}}`)
-	if err != nil {
-		t.Fatalf("a whitelist that matches nothing must not fail the read: %v", err)
-	}
+	testutil.NoError(t, err, "a whitelist that matches nothing must not fail the read: %v")
 	// The advertised, enabled list; the disabled entry stays out.
 	testutil.Equal(t, strings.Join(got, ","), "hy3,hy3-pro")
 }
@@ -56,13 +54,9 @@ func TestFetchModels_WhitelistMismatchDoesNotDarkenTheChannel(t *testing.T) {
 // artifact, and must not be reported as one.
 func TestFetchModels_EmptyCatalogIsStillAnError(t *testing.T) {
 	_, err := fetchCatalogModels(t, `{"code":0,"data":{"models":[],"agents":[{"name":"cli","models":["x"]}]}}`)
-	if err == nil || !strings.Contains(err.Error(), "advertised no enabled models") {
-		t.Fatalf("error = %v, want a report that the upstream advertised nothing", err)
-	}
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "advertised no enabled models"), "error = %v, want a report that the upstream advertised nothing", err)
 	_, err = fetchCatalogModels(t, `{"code":0,"data":{"models":[{"id":"only","disabled":true}],"agents":[]}}`)
-	if err == nil {
-		t.Fatal("an all-disabled catalog must still be an error")
-	}
+	testutil.False(t, err == nil, "an all-disabled catalog must still be an error")
 }
 
 // TestFetchModels_WhitelistStillFilters pins the restriction the whitelist is for:
@@ -72,9 +66,7 @@ func TestFetchModels_WhitelistStillFilters(t *testing.T) {
 		"models":[{"id":"a"},{"id":"b"},{"id":"c"}],
 		"agents":[{"name":"cli","models":["b"]}]
 	}}`)
-	if err != nil {
-		t.Fatalf("FetchModels() error = %v", err)
-	}
+	testutil.NoError(t, err, "FetchModels() error = %v")
 	testutil.Equal(t, strings.Join(got, ","), "b")
 }
 
@@ -87,9 +79,7 @@ func TestFetchModels_NoCLIRestrictionServesTheCatalog(t *testing.T) {
 		`{"code":0,"data":{"models":[{"id":"a"},{"id":"b"}]}}`,
 	} {
 		got, err := fetchCatalogModels(t, body)
-		if err != nil {
-			t.Fatalf("body %s: FetchModels() error = %v", body, err)
-		}
+		testutil.Falsef(t, err != nil, "body %s: FetchModels() error = %v", body, err)
 		testutil.Equal(t, strings.Join(got, ","), "a,b")
 	}
 }

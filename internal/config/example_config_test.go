@@ -13,14 +13,10 @@ import (
 // must be detected before deployment rather than at runtime.
 func TestExampleConfigLoads(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config.example.json"))
-	if err != nil {
-		t.Fatalf("read config.example.json: %v", err)
-	}
+	testutil.NoError(t, err, "read config.example.json: %v")
 	var cfg Config
 	testutil.NoError(t, json.Unmarshal(raw, &cfg), "config.example.json does not unmarshal into config.Config: %v")
-	if cfg.Port == "" || cfg.RedisAddr == "" {
-		t.Fatalf("config.example.json is missing required values: port=%q redis_addr=%q", cfg.Port, cfg.RedisAddr)
-	}
+	testutil.Falsef(t, cfg.Port == "" || cfg.RedisAddr == "", "config.example.json is missing required values: port=%q redis_addr=%q", cfg.Port, cfg.RedisAddr)
 }
 
 // TestExampleConfigUpstreamURLsMatchDefaults pins the example's upstream
@@ -33,9 +29,7 @@ func TestExampleConfigLoads(t *testing.T) {
 // actually carries it, so a deliberate omission still passes.
 func TestExampleConfigUpstreamURLsMatchDefaults(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config.example.json"))
-	if err != nil {
-		t.Fatalf("read config.example.json: %v", err)
-	}
+	testutil.NoError(t, err, "read config.example.json: %v")
 	var cfg Config
 	testutil.NoError(t, json.Unmarshal(raw, &cfg), "config.example.json does not unmarshal into config.Config: %v")
 	var empty Config

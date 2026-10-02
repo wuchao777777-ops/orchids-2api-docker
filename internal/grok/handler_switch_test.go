@@ -25,9 +25,7 @@ func TestShouldSwitchGrokAccount(t *testing.T) {
 		{name: "other", err: errors.New("grok upstream status=404 body=model not found"), want: false},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			testutil.Equal(t, shouldSwitchGrokAccount(tt.err), tt.want)
-		})
+		t.Run(tt.name, func(t *testing.T) { testutil.Equal(t, shouldSwitchGrokAccount(tt.err), tt.want) })
 	}
 }
 
@@ -43,9 +41,7 @@ func TestUpstreamHTTPResponseStatus(t *testing.T) {
 		{name: "none", err: errors.New("grok upstream request failed"), want: 502},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			testutil.Equal(t, upstreamHTTPResponseStatus(tt.err), tt.want)
-		})
+		t.Run(tt.name, func(t *testing.T) { testutil.Equal(t, upstreamHTTPResponseStatus(tt.err), tt.want) })
 	}
 }
 

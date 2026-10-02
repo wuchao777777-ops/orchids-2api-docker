@@ -26,16 +26,13 @@ func TestGrok2apiNativeOutcomeStatusAndEOF(t *testing.T) {
 			raw := strings.TrimRight(parityFrame("response.completed", map[string]interface{}{"response": response}), "\n")
 			// Byte-sized reads and no final LF exercise the shared production decoder.
 			_, _, result := copyNativeCLIResponseAndCaptureModel(httptest.NewRecorder(), iotest.OneByteReader(strings.NewReader(raw)), "text/event-stream", "grok-4.6")
-			if result.Finish != test.finish || (result.Err != nil) != test.fail {
-				t.Fatalf("%+v", result)
-			}
+			testutil.Falsef(t, result.Finish != test.finish || (result.Err != nil) != test.fail, "%+v", result)
 		})
 	}
 	for _, status := range []string{"queued", "in_progress"} {
 		_, _, result := copyNativeCLIResponseAndCaptureModel(httptest.NewRecorder(), strings.NewReader("{\"status\":\""+status+"\"}"), "application/json", "grok-4.6")
-		if result.Finish != status || result.Err != nil {
-			t.Fatalf("async JSON mislabeled: %+v", result)
-		}
+		testutil.Equal(t, result.Finish, status)
+		testutil.Equal(t, result.Err, nil)
 	}
 }
 
@@ -45,14 +42,10 @@ func (w grok2apiShortWriter) Write(p []byte) (int, error) { return len(p) - 1, n
 
 func TestGrok2apiNativeOutcomeShortWriteAndStickyFailure(t *testing.T) {
 	_, _, result := copyNativeCLIResponseAndCaptureModel(grok2apiShortWriter{httptest.NewRecorder()}, strings.NewReader(parityTerminal("response.completed")), "text/event-stream", "grok-4.6")
-	if !errors.Is(result.Err, io.ErrShortWrite) || result.Finish != "error" {
-		t.Fatal(result)
-	}
+	testutil.Fail(t, !errors.Is(result.Err, io.ErrShortWrite) || result.Finish != "error", result)
 	stream := parityFrame("response.failed", map[string]interface{}{"response": map[string]interface{}{"error": map[string]interface{}{"message": "failed first"}}}) + parityTerminal("response.completed")
 	_, _, result = copyNativeCLIResponseAndCaptureModel(httptest.NewRecorder(), strings.NewReader(stream), "text/event-stream", "grok-4.6")
-	if result.Err == nil || result.Finish != "error" {
-		t.Fatal(result)
-	}
+	testutil.Fail(t, result.Err == nil || result.Finish != "error", result)
 }
 
 func TestGrok2apiNativeAuditBoundsWholeMultilineFrame(t *testing.T) {
@@ -76,9 +69,7 @@ func TestGrok2apiNativeSSEFramingAndLogicalTerminal(t *testing.T) {
 	tail := &grok2apiUnexpectedReader{}
 	recorder := httptest.NewRecorder()
 	id, capture, result := copyNativeCLIResponseAndCaptureModel(recorder, io.MultiReader(strings.NewReader(input), tail), "text/event-stream", "grok-4.6")
-	if id != "resp_a" || tail.reads != 0 || result.Err != nil || result.Finish != "stop" {
-		t.Fatal(id, tail.reads, result)
-	}
+	testutil.Fail(t, id != "resp_a" || tail.reads != 0 || result.Err != nil || result.Finish != "stop", id, tail.reads, result)
 	for _, want := range []string{": keepalive", "id: event_a", "retry: 1000"} {
 		if !strings.Contains(recorder.Body.String(), want) || !bytes.Contains(capture, []byte(want)) {
 			t.Fatal("SSE metadata lost", want)
@@ -94,9 +85,7 @@ func TestGrok2apiNativeSSEFramingAndLogicalTerminal(t *testing.T) {
 	complete := "event: response.completed\r\ndata: { \"type\":\"response.completed\", \"id\":\"resp_ok\", \"response\":{\"id\":\"resp_ok\",\"object\":\"response\",\"created_at\":42,\"model\":\"grok-4.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}]}}\r\n\r\n"
 	verbatim := httptest.NewRecorder()
 	_, _, verbatimResult := copyNativeCLIResponseAndCaptureModel(verbatim, strings.NewReader(complete), "text/event-stream", "grok-4.6")
-	if verbatimResult.Err != nil {
-		t.Fatal(verbatimResult.Err)
-	}
+	testutil.Fail(t, verbatimResult.Err != nil, verbatimResult.Err)
 	testutil.Equal(t, verbatim.Body.String(), complete)
 }
 

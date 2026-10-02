@@ -32,15 +32,9 @@ func TestAccountFreeQuotaPersistsAndSurvivesPartialUpdates(t *testing.T) {
 	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 
 	stored, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
-	if !stored.GrokFreeQuota.HasLimit || stored.GrokFreeQuota.Used != 500123 || stored.GrokFreeQuota.Limit != 500000 {
-		t.Fatalf("stored free quota = %+v, want the confirmed 500123/500000 pair", stored.GrokFreeQuota)
-	}
-	if !stored.GrokFreeQuota.ConfirmedAt.Equal(confirmedAt) {
-		t.Fatalf("confirmedAt = %v, want %v", stored.GrokFreeQuota.ConfirmedAt, confirmedAt)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
+	testutil.Falsef(t, !stored.GrokFreeQuota.HasLimit || stored.GrokFreeQuota.Used != 500123 || stored.GrokFreeQuota.Limit != 500000, "stored free quota = %+v, want the confirmed 500123/500000 pair", stored.GrokFreeQuota)
+	testutil.Falsef(t, !stored.GrokFreeQuota.ConfirmedAt.Equal(confirmedAt), "confirmedAt = %v, want %v", stored.GrokFreeQuota.ConfirmedAt, confirmedAt)
 
 	// A partial update that never mentions the free window must keep it: the window is
 	// confirmed once per exhaustion and must not be lost by the next request counter.
@@ -50,10 +44,6 @@ func TestAccountFreeQuotaPersistsAndSurvivesPartialUpdates(t *testing.T) {
 	testutil.NoError(t, s.UpdateAccount(ctx, &partial), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
-	if !after.GrokFreeQuota.HasLimit || after.GrokFreeQuota.Limit != 500000 {
-		t.Fatalf("a partial update erased the confirmed free window: %+v", after.GrokFreeQuota)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
+	testutil.Falsef(t, !after.GrokFreeQuota.HasLimit || after.GrokFreeQuota.Limit != 500000, "a partial update erased the confirmed free window: %+v", after.GrokFreeQuota)
 }

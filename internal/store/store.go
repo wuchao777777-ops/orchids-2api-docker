@@ -704,9 +704,7 @@ var deprecatedModelIDsByChannel = func() map[string][]string {
 	// grok-4.3 is deprecated for the Grok channel only: other channels may still
 	// route it.
 	grokIDs = append(grokIDs, "grok-4.3")
-	return map[string][]string{
-		"Grok": grokIDs,
-	}
+	return map[string][]string{"Grok": grokIDs}
 }()
 
 // cleanupDeprecatedModelIDs removes retired identifiers from the channel whose

@@ -23,12 +23,8 @@ func TestClassify_RefusedCredentialNeedsLogin(t *testing.T) {
 	v := Classify(acc, errors.New("401: grok session unauthenticated"), "grok-4.6")
 
 	testutil.Equal(t, v.Scope, ScopeCredential)
-	if !v.NeedsLogin || (v.Scope != ScopeAccount && v.Scope != ScopeCredential) {
-		t.Fatalf("verdict must require a login and hold the account: %+v", v)
-	}
-	if v.Status != "401" || !strings.Contains(v.Message, "Build OAuth") || strings.Contains(v.Message, "Cookie") {
-		t.Fatalf("verdict must identify the Build OAuth re-login without a retired cookie hint: %+v", v)
-	}
+	testutil.Falsef(t, !v.NeedsLogin || (v.Scope != ScopeAccount && v.Scope != ScopeCredential), "verdict must require a login and hold the account: %+v", v)
+	testutil.Falsef(t, v.Status != "401" || !strings.Contains(v.Message, "Build OAuth") || strings.Contains(v.Message, "Cookie"), "verdict must identify the Build OAuth re-login without a retired cookie hint: %+v", v)
 	testutil.Equal(t, v.Cooldown, CredentialReverify)
 	v.Apply(acc)
 	testutil.Equal(t, acc.AuthStatus, store.AccountAuthStatusReauthRequired)
@@ -52,9 +48,7 @@ func TestClassify_ModelScopedFailureKeepsAccount(t *testing.T) {
 		v := Classify(acc, errors.New(message), "grok-4.6")
 		testutil.Equal(t, v.Scope, ScopeModel)
 		testutil.Equal(t, v.Status, "")
-		if v.Scope == ScopeAccount || v.Scope == ScopeCredential {
-			t.Fatalf("%q: a model-scoped failure must not hold the account", message)
-		}
+		testutil.Falsef(t, v.Scope == ScopeAccount || v.Scope == ScopeCredential, "%q: a model-scoped failure must not hold the account", message)
 		testutil.Equal(t, v.Model, "grok-4.6")
 	}
 }
@@ -63,13 +57,10 @@ func TestClassify_ModelScopedFailureKeepsAccount(t *testing.T) {
 // temporary, account-wide condition.
 func TestClassify_RateLimitIsAccountScopedWithShortCooldown(t *testing.T) {
 	v := Classify(grokBuildAccount(), errors.New("429: too many requests"), "grok-4.6")
-	if v.Scope != ScopeAccount || v.Status != "429" {
-		t.Fatalf("verdict = %+v, want account-scoped 429", v)
-	}
+	testutil.Equal(t, v.Scope, ScopeAccount)
+	testutil.Equal(t, v.Status, "429")
 	testutil.Equal(t, v.Cooldown, CooldownRateLimit)
-	if v.NeedsLogin {
-		t.Fatal("throttling must not require a login")
-	}
+	testutil.False(t, v.NeedsLogin, "throttling must not require a login")
 }
 
 // TestClassify_SuccessStampsVerdict keeps "never checked" distinguishable from
@@ -77,16 +68,11 @@ func TestClassify_RateLimitIsAccountScopedWithShortCooldown(t *testing.T) {
 func TestClassify_SuccessStampsVerdict(t *testing.T) {
 	acc := grokBuildAccount()
 	verdict := Classify(acc, nil, "grok-4.6")
-	if verdict.Status != "" || (verdict.Scope != ScopeNone && verdict.Scope != ScopeModel) {
-		t.Fatalf("success verdict is not healthy: %+v", verdict)
-	}
+	testutil.Falsef(t, verdict.Status != "" || (verdict.Scope != ScopeNone && verdict.Scope != ScopeModel), "success verdict is not healthy: %+v", verdict)
 	verdict.Apply(acc)
-	if acc.VerifiedAt.IsZero() {
-		t.Fatal("a success verdict must stamp VerifiedAt")
-	}
-	if acc.StatusCode != "" || acc.StatusMessage != "" {
-		t.Fatalf("a success verdict must clear status/reason: %+v", acc)
-	}
+	testutil.False(t, acc.VerifiedAt.IsZero(), "a success verdict must stamp VerifiedAt")
+	testutil.Equal(t, acc.StatusCode, "")
+	testutil.Equal(t, acc.StatusMessage, "")
 }
 
 // TestApply_KeepsStatusAndReasonTogether is the invariant the account table
@@ -98,20 +84,13 @@ func TestApply_KeepsStatusAndReasonTogether(t *testing.T) {
 	acc.LastAttempt = time.Now().Add(-time.Hour)
 
 	Success(time.Now()).Apply(acc)
-	if acc.StatusCode != "" || acc.StatusMessage != "" {
-		t.Fatalf("recovery left %q / %q", acc.StatusCode, acc.StatusMessage)
-	}
-	if !acc.LastAttempt.IsZero() {
-		t.Fatalf("recovery must clear the attempt stamp, got %v", acc.LastAttempt)
-	}
+	testutil.Equal(t, acc.StatusCode, "")
+	testutil.Equal(t, acc.StatusMessage, "")
+	testutil.Falsef(t, !acc.LastAttempt.IsZero(), "recovery must clear the attempt stamp, got %v", acc.LastAttempt)
 
 	Classify(acc, errors.New("429: slow down"), "").Apply(acc)
-	if acc.StatusCode != "429" || acc.StatusMessage == "" {
-		t.Fatalf("failure verdict lost status/reason: %+v", acc)
-	}
-	if acc.LastAttempt.IsZero() {
-		t.Fatal("failure verdict must anchor the cooldown")
-	}
+	testutil.Falsef(t, acc.StatusCode != "429" || acc.StatusMessage == "", "failure verdict lost status/reason: %+v", acc)
+	testutil.False(t, acc.LastAttempt.IsZero(), "failure verdict must anchor the cooldown")
 }
 
 // TestAccountLifecycle pins hold/expiry behaviour shared by pool and scheduler.
@@ -119,25 +98,15 @@ func TestAccountLifecycle(t *testing.T) {
 	rejected := grokBuildAccount()
 	Classify(rejected, errors.New("401: grok session unauthenticated"), "").Apply(rejected)
 	now := rejected.VerifiedAt
-	if !AccountHeld(rejected, now) {
-		t.Fatal("a freshly rejected credential must hold the account")
-	}
-	if NeedsReverify(rejected, now.Add(time.Minute)) {
-		t.Fatal("a refused credential must not be re-asked inside the revertify window")
-	}
-	if !NeedsReverify(rejected, now.Add(CredentialReverify)) {
-		t.Fatal("the credential must be re-asked once its window is over")
-	}
-	if !NeedsReverify(&store.Account{StatusCode: "401"}, now) {
-		t.Fatal("a 401 without a verdict stamp must be due immediately")
-	}
+	testutil.False(t, !AccountHeld(rejected, now), "a freshly rejected credential must hold the account")
+	testutil.False(t, NeedsReverify(rejected, now.Add(time.Minute)), "a refused credential must not be re-asked inside the revertify window")
+	testutil.False(t, !NeedsReverify(rejected, now.Add(CredentialReverify)), "the credential must be re-asked once its window is over")
+	testutil.False(t, !NeedsReverify(&store.Account{StatusCode: "401"}, now), "a 401 without a verdict stamp must be due immediately")
 	testutil.NotEqual(t, AccountHeld(rejected, now.Add(24*time.Hour)), false)
 
 	healthy := grokBuildAccount()
 	Success(now).Apply(healthy)
-	if AccountHeld(healthy, now) {
-		t.Fatal("a healthy account must never be held")
-	}
+	testutil.False(t, AccountHeld(healthy, now), "a healthy account must never be held")
 }
 
 // TestCooldownFor_MatchesPoolValues guards the numbers the pool already relies on.
@@ -176,12 +145,8 @@ func TestRateLimitCooldownIsBoundedExponential(t *testing.T) {
 func TestAccountHeldUsesLaterBoundedReset(t *testing.T) {
 	now := time.Now()
 	acc := &store.Account{StatusCode: "429", LastAttempt: now, RateLimitFailures: 1, QuotaResetAt: now.Add(10 * time.Minute)}
-	if !AccountHeld(acc, now.Add(time.Minute)) {
-		t.Fatal("quota reset later than exponential cooldown must keep account held")
-	}
-	if AccountHeld(acc, now.Add(11*time.Minute)) {
-		t.Fatal("account should recover after the later reset")
-	}
+	testutil.False(t, !AccountHeld(acc, now.Add(time.Minute)), "quota reset later than exponential cooldown must keep account held")
+	testutil.False(t, AccountHeld(acc, now.Add(11*time.Minute)), "account should recover after the later reset")
 }
 
 // TestAccountHeld_429IgnoresBillingCycleReset is the regression test for the
@@ -215,9 +180,7 @@ func TestAccountHeld_429IgnoresBillingCycleReset(t *testing.T) {
 		t.Fatalf("429 held for %v; a billing-cycle reset must not extend a rate limit past %v",
 			9*24*time.Hour, CooldownRateLimitMax)
 	}
-	if AccountHeld(acc, now.Add(2*time.Hour)) {
-		t.Fatal("account should be back in rotation within the rate-limit ceiling")
-	}
+	testutil.False(t, AccountHeld(acc, now.Add(2*time.Hour)), "account should be back in rotation within the rate-limit ceiling")
 
 	// The same far-future reset on a 402 is a real allowance verdict: it must keep
 	// the account parked, or a spent account is offered again on every request.
@@ -227,9 +190,7 @@ func TestAccountHeld_429IgnoresBillingCycleReset(t *testing.T) {
 		LastAttempt:  now,
 		QuotaResetAt: cycleEnd,
 	}
-	if !AccountHeld(spent, now.Add(2*time.Hour)) {
-		t.Fatal("a spent allowance must still hold the account until its reset")
-	}
+	testutil.False(t, !AccountHeld(spent, now.Add(2*time.Hour)), "a spent allowance must still hold the account until its reset")
 }
 
 // TestAccountHeld_429KeepsShortRetryAfter pins the other direction: the ceiling
@@ -238,12 +199,8 @@ func TestAccountHeld_429IgnoresBillingCycleReset(t *testing.T) {
 func TestAccountHeld_429KeepsShortRetryAfter(t *testing.T) {
 	now := time.Now()
 	acc := &store.Account{StatusCode: "429", LastAttempt: now, RateLimitFailures: 1, QuotaResetAt: now.Add(20 * time.Minute)}
-	if !AccountHeld(acc, now.Add(10*time.Minute)) {
-		t.Fatal("a stated 20m retry-after must still hold the account past its 30s exponential cooldown")
-	}
-	if AccountHeld(acc, now.Add(21*time.Minute)) {
-		t.Fatal("account should recover once the stated retry-after passed")
-	}
+	testutil.False(t, !AccountHeld(acc, now.Add(10*time.Minute)), "a stated 20m retry-after must still hold the account past its 30s exponential cooldown")
+	testutil.False(t, AccountHeld(acc, now.Add(21*time.Minute)), "account should recover once the stated retry-after passed")
 }
 
 // TestClassify_WorkBuddyPaymentRefusalEnablesFreeOnlyMode pins the distinction:
@@ -253,51 +210,38 @@ func TestClassify_WorkBuddyPaymentRefusalEnablesFreeOnlyMode(t *testing.T) {
 	acc := &store.Account{ID: 1, AccountType: "workbuddy", Enabled: true}
 	verdict := Classify(acc, errors.New("workbuddy API error: status=429 message=Credits exhausted code=14018"), "claude-sonnet-4.5")
 
-	if verdict.Scope != ScopeAccount || verdict.Status != store.AccountStatusWorkBuddyQuotaExhausted {
-		t.Fatalf("verdict = %+v, want WorkBuddy free-only status", verdict)
-	}
+	testutil.Equal(t, verdict.Scope, ScopeAccount)
+	testutil.Equal(t, verdict.Status, store.AccountStatusWorkBuddyQuotaExhausted)
 	verdict.Apply(acc)
-	if AccountHeld(acc, time.Now()) {
-		t.Fatal("a WorkBuddy quota-exhausted account must remain selectable for free models")
-	}
+	testutil.False(t, AccountHeld(acc, time.Now()), "a WorkBuddy quota-exhausted account must remain selectable for free models")
 }
 
 func TestClassifyInferenceCapPreservesStatedCooldown(t *testing.T) {
 	wait := 17*time.Hour + 59*time.Minute
 	acc := &store.Account{ID: 2, AccountType: "cline", Enabled: true}
 	verdict := Classify(acc, retryAfterTestError{wait: wait}, "model-a")
-	if verdict.Scope != ScopeAccount || verdict.Status != "429" || verdict.Cooldown != wait {
-		t.Fatalf("verdict=%+v", verdict)
-	}
+	testutil.Equal(t, verdict.Scope, ScopeAccount)
+	testutil.Equal(t, verdict.Status, "429")
+	testutil.Equal(t, verdict.Cooldown, wait)
 	verdict.Apply(acc)
-	if !AccountHeld(acc, time.Now().Add(time.Hour)) {
-		t.Fatal("inference cap account was released by the generic 30m throttle ceiling")
-	}
+	testutil.False(t, !AccountHeld(acc, time.Now().Add(time.Hour)), "inference cap account was released by the generic 30m throttle ceiling")
 	remaining := time.Until(acc.QuotaResetAt)
-	if remaining < wait-time.Second || remaining > wait+time.Second {
-		t.Fatalf("quota reset remaining=%v want %v", remaining, wait)
-	}
+	testutil.Falsef(t, remaining < wait-time.Second || remaining > wait+time.Second, "quota reset remaining=%v want %v", remaining, wait)
 }
 
 func TestClassifyQoderDailyCountHoldsUntilReset(t *testing.T) {
 	acc := &store.Account{ID: 16, AccountType: "qoder", Enabled: true,
 		QoderQuota: store.QoderQuotaSnapshot{ResetAt: time.Now().Add(8 * time.Hour)}}
 	v := Classify(acc, errors.New("qoder upstream rejected the credential: Billing daily count exceeded"), "efficient")
-	if v.Scope != ScopeAccount || v.Status != "429" || !v.Retryable || !v.SwitchAccount || v.Cooldown < time.Hour {
-		t.Fatalf("daily count verdict = %+v", v)
-	}
+	testutil.Falsef(t, v.Scope != ScopeAccount || v.Status != "429" || !v.Retryable || !v.SwitchAccount || v.Cooldown < time.Hour, "daily count verdict = %+v", v)
 	v.Apply(acc)
-	if !AccountHeld(acc, time.Now().Add(time.Hour)) {
-		t.Fatal("daily limit must not be released after an ordinary 30s throttle")
-	}
+	testutil.False(t, !AccountHeld(acc, time.Now().Add(time.Hour)), "daily limit must not be released after an ordinary 30s throttle")
 }
 
 func TestClassifyQoderEntitlementOnlyBlocksCurrentModel(t *testing.T) {
 	acc := &store.Account{ID: 18, AccountType: "qoder", Enabled: true}
 	v := Classify(acc, errors.New("qoder account has no usable plan or allowance; the model requires a subscription (upstream code=112)"), "efficient")
-	if v.Scope != ScopeModel || v.Model != "efficient" || v.Status != "" || !v.Retryable || !v.SwitchAccount || v.Cooldown <= 0 {
-		t.Fatalf("entitlement verdict = %+v", v)
-	}
+	testutil.Falsef(t, v.Scope != ScopeModel || v.Model != "efficient" || v.Status != "" || !v.Retryable || !v.SwitchAccount || v.Cooldown <= 0, "entitlement verdict = %+v", v)
 }
 
 type retryAfterTestError struct{ wait time.Duration }
@@ -308,9 +252,7 @@ func (e retryAfterTestError) RetryAfter() time.Duration { return e.wait }
 func TestClassifyCline403EntitlementIsModelScoped(t *testing.T) {
 	acc := &store.Account{ID: 2, AccountType: "cline", Enabled: true}
 	verdict := Classify(acc, errors.New(`cline API error: POST /chat/completions returned HTTP 403: {"error":"ENTITLEMENT_ERROR","message":"user is not subscribed to required model plan"}`), "paid-model")
-	if verdict.Scope != ScopeModel || verdict.Status != "" || verdict.NeedsLogin || !verdict.SwitchAccount {
-		t.Fatalf("verdict=%+v", verdict)
-	}
+	testutil.Falsef(t, verdict.Scope != ScopeModel || verdict.Status != "" || verdict.NeedsLogin || !verdict.SwitchAccount, "verdict=%+v", verdict)
 }
 
 // TestCredentialMessageIsProviderAware keeps the operator instruction concrete.
@@ -318,9 +260,7 @@ func TestCredentialMessageIsProviderAware(t *testing.T) {
 	grokVerdict := Classify(grokBuildAccount(), errors.New("401: unauthenticated"), "")
 	testutil.MustContainAll(t, grokVerdict.Message, "重新完成官方登录", "Build OAuth")
 	other := Classify(&store.Account{AccountType: "workbuddy"}, errors.New("401: expired"), "")
-	if other.Message == "" || other.NeedsLogin == false {
-		t.Fatalf("workbuddy verdict = %+v", other)
-	}
+	testutil.Falsef(t, other.Message == "" || other.NeedsLogin == false, "workbuddy verdict = %+v", other)
 }
 
 // TestClassify_WorkBuddyCreditExhaustionParksTheAccount is the regression test for
@@ -344,9 +284,7 @@ func TestClassify_WorkBuddyCreditExhaustionEnablesFreeOnlyMode(t *testing.T) {
 	testutil.Equal(t, verdict.Scope, ScopeAccount)
 	testutil.Equal(t, verdict.Status, store.AccountStatusWorkBuddyQuotaExhausted)
 	verdict.Apply(acc)
-	if AccountHeld(acc, time.Now()) {
-		t.Fatal("credit exhaustion must not hide the account from confirmed free models")
-	}
+	testutil.False(t, AccountHeld(acc, time.Now()), "credit exhaustion must not hide the account from confirmed free models")
 	// The reason reaches the operator, including what to do about it.
 	testutil.MustContain(t, acc.StatusMessage, "codebuddy.ai/profile/usage")
 }
@@ -362,9 +300,7 @@ func TestIsCreditExhaustion_SeparatesTheTwoRefusals(t *testing.T) {
 		"402 out of credits",
 	}
 	for _, message := range exhausted {
-		if !apperrors.IsCreditExhaustion(message) {
-			t.Errorf("IsCreditExhaustion(%q) = false, want true", message)
-		}
+		testutil.CheckFalsef(t, !apperrors.IsCreditExhaustion(message), "IsCreditExhaustion(%q) = false, want true", message)
 	}
 	modelScoped := []string{
 		"workbuddy API error: status=402 message=insufficient credits for model",
@@ -372,9 +308,7 @@ func TestIsCreditExhaustion_SeparatesTheTwoRefusals(t *testing.T) {
 		"workbuddy API error: status=429, code=14003, message=too many requests",
 	}
 	for _, message := range modelScoped {
-		if apperrors.IsCreditExhaustion(message) {
-			t.Errorf("IsCreditExhaustion(%q) = true, want false", message)
-		}
+		testutil.CheckFalsef(t, apperrors.IsCreditExhaustion(message), "IsCreditExhaustion(%q) = true, want false", message)
 	}
 }
 
@@ -411,9 +345,7 @@ func TestClassify_SpentBalanceOutranksTheRetryHint(t *testing.T) {
 			testutil.Equal(t, verdict.Status, store.AccountStatusWorkBuddyQuotaExhausted)
 			testutil.Equal(t, verdict.Scope, ScopeAccount)
 			verdict.Apply(acc)
-			if AccountHeld(acc, time.Now()) {
-				t.Fatal("a spent account must stay selectable for its confirmed free models")
-			}
+			testutil.False(t, AccountHeld(acc, time.Now()), "a spent account must stay selectable for its confirmed free models")
 		})
 	}
 }

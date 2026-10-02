@@ -17,21 +17,19 @@ import (
 // here is one the account API could start returning without a test noticing, so
 // TestAccountSecretFieldsAreComplete fails when the struct grows one.
 var accountSecretFields = map[string]func(*store.Account) string{
-	"token":                  func(a *store.Account) string { return a.Token },
-	"client_cookie":          func(a *store.Account) string { return a.ClientCookie },
-	"refresh_token":          func(a *store.Account) string { return a.RefreshToken },
-	"oauth_access_token":     func(a *store.Account) string { return a.OAuthAccessToken },
-	"oauth_refresh_token":    func(a *store.Account) string { return a.OAuthRefreshToken },
-	"workbuddy_access_token": func(a *store.Account) string { return a.WorkBuddyAccessToken },
-	"workbuddy_refresh_token": func(a *store.Account) string {
-		return a.WorkBuddyRefreshToken
-	},
-	"qoder_access_token":  func(a *store.Account) string { return a.QoderAccessToken },
-	"qoder_refresh_token": func(a *store.Account) string { return a.QoderRefreshToken },
-	"qoder_runtime_info":  func(a *store.Account) string { return a.QoderRuntimeInfo },
-	"qoder_runtime_key":   func(a *store.Account) string { return a.QoderRuntimeKey },
-	"cline_access_token":  func(a *store.Account) string { return a.ClineAccessToken },
-	"cline_refresh_token": func(a *store.Account) string { return a.ClineRefreshToken },
+	"token":                   func(a *store.Account) string { return a.Token },
+	"client_cookie":           func(a *store.Account) string { return a.ClientCookie },
+	"refresh_token":           func(a *store.Account) string { return a.RefreshToken },
+	"oauth_access_token":      func(a *store.Account) string { return a.OAuthAccessToken },
+	"oauth_refresh_token":     func(a *store.Account) string { return a.OAuthRefreshToken },
+	"workbuddy_access_token":  func(a *store.Account) string { return a.WorkBuddyAccessToken },
+	"workbuddy_refresh_token": func(a *store.Account) string { return a.WorkBuddyRefreshToken },
+	"qoder_access_token":      func(a *store.Account) string { return a.QoderAccessToken },
+	"qoder_refresh_token":     func(a *store.Account) string { return a.QoderRefreshToken },
+	"qoder_runtime_info":      func(a *store.Account) string { return a.QoderRuntimeInfo },
+	"qoder_runtime_key":       func(a *store.Account) string { return a.QoderRuntimeKey },
+	"cline_access_token":      func(a *store.Account) string { return a.ClineAccessToken },
+	"cline_refresh_token":     func(a *store.Account) string { return a.ClineRefreshToken },
 }
 
 // TestAccountSecretFieldsAreComplete makes every new Account field require an
@@ -63,13 +61,9 @@ func TestAccountSecretFieldsAreComplete(t *testing.T) {
 		field := accountType.Field(i)
 		key := strings.Split(field.Tag.Get("json"), ",")[0]
 		read, secret := accountSecretFields[key]
-		if secret && nonSecret[field.Name] {
-			t.Errorf("%s is classified as both secret and non-secret", field.Name)
-		}
+		testutil.CheckFalsef(t, secret && nonSecret[field.Name], "%s is classified as both secret and non-secret", field.Name)
 		if !secret {
-			if !nonSecret[field.Name] {
-				t.Errorf("new account field %s (%q) needs explicit secret/non-secret classification", field.Name, key)
-			}
+			testutil.CheckFalsef(t, !nonSecret[field.Name], "new account field %s (%q) needs explicit secret/non-secret classification", field.Name, key)
 			seenNonSecrets[field.Name] = true
 			continue
 		}
@@ -86,24 +80,18 @@ func TestAccountSecretFieldsAreComplete(t *testing.T) {
 		acc := &store.Account{}
 		value := marker + key
 		set(acc, value)
-		if read(acc) != value || reflect.ValueOf(acc).Elem().Field(i).String() != value {
-			t.Errorf("secret getter/setter %q do not target Account.%s", key, field.Name)
-		}
+		testutil.CheckEqual(t, read(acc), value)
+		testutil.CheckEqual(t, reflect.ValueOf(acc).Elem().Field(i).String(), value)
 	}
 	for key := range accountSecretFields {
-		if !seenSecrets[key] {
-			t.Errorf("secret guard %q has no corresponding Account field", key)
-		}
+		testutil.CheckFalsef(t, !seenSecrets[key], "secret guard %q has no corresponding Account field", key)
 	}
 	for key := range accountSecretSetter {
-		if _, ok := accountSecretFields[key]; !ok {
-			t.Errorf("secret setter %q has no corresponding getter", key)
-		}
+		_, ok := accountSecretFields[key]
+		testutil.CheckFalsef(t, !ok, "secret setter %q has no corresponding getter", key)
 	}
 	for name := range nonSecret {
-		if !seenNonSecrets[name] {
-			t.Errorf("non-secret classification %q has no corresponding Account field", name)
-		}
+		testutil.CheckFalsef(t, !seenNonSecrets[name], "non-secret classification %q has no corresponding Account field", name)
 	}
 }
 
@@ -171,12 +159,9 @@ func TestAccountResponsesNeverCarryCredentials(t *testing.T) {
 		t.Run(channel, func(t *testing.T) {
 			acc := accountWithSecrets(channel)
 			raw, err := json.Marshal(normalizeAccountOutput(acc))
-			if err != nil {
-				t.Fatalf("marshal account output: %v", err)
-			}
-			if leaked := findPlantedSecrets(raw); len(leaked) > 0 {
-				t.Fatalf("%s account response leaked %v\n%s", channel, leaked, raw)
-			}
+			testutil.NoError(t, err, "marshal account output: %v")
+			leaked := findPlantedSecrets(raw)
+			testutil.Falsef(t, len(leaked) > 0, "%s account response leaked %v\n%s", channel, leaked, raw)
 			// Presence, not the value, is how the table proves a credential exists.
 			var row map[string]interface{}
 			testutil.NoError(t, json.Unmarshal(raw, &row), "decode rendered account: %v")
@@ -191,20 +176,16 @@ func TestAccountResponsesNeverCarryCredentials(t *testing.T) {
 func TestAccountResponsesHideCredentialKeys(t *testing.T) {
 	acc := accountWithSecrets("qoder")
 	raw, err := json.Marshal(normalizeAccountOutput(acc))
-	if err != nil {
-		t.Fatalf("marshal account output: %v", err)
-	}
+	testutil.NoError(t, err, "marshal account output: %v")
 	var row map[string]interface{}
 	testutil.NoError(t, json.Unmarshal(raw, &row), "decode rendered account: %v")
 	for field := range accountSecretFields {
-		if _, exists := row[field]; exists {
-			t.Errorf("credential field %q was returned", field)
-		}
+		_, exists := row[field]
+		testutil.CheckFalsef(t, exists, "credential field %q was returned", field)
 	}
 	for _, derived := range []string{"session_fingerprint"} {
-		if _, exists := row[derived]; exists {
-			t.Errorf("derived field %q was returned", derived)
-		}
+		_, exists := row[derived]
+		testutil.CheckFalsef(t, exists, "derived field %q was returned", derived)
 	}
 }
 

@@ -34,28 +34,18 @@ func TestLive_StartAuthLogin(t *testing.T) {
 	defer cancel()
 
 	state, authURL, err := client.StartAuthLogin(ctx, "5.5.2")
-	if err != nil {
-		t.Fatalf("StartAuthLogin() error = %v", err)
-	}
+	testutil.NoError(t, err, "StartAuthLogin() error = %v")
 	testutil.NotEqual(t, state, "")
 	parsed, err := url.Parse(authURL)
-	if err != nil {
-		t.Fatalf("login URL is not parseable: %v", err)
-	}
-	if parsed.Host != "www.workbuddy.ai" || parsed.Path != "/login" {
-		t.Fatalf("login URL = %q, want the official workbuddy.ai login page", authURL)
-	}
-	if parsed.Query().Get("state") != state || parsed.Query().Get("platform") != "workbuddy-ai" {
-		t.Fatalf("login URL query = %q", parsed.RawQuery)
-	}
+	testutil.NoError(t, err, "login URL is not parseable: %v")
+	testutil.Equal(t, parsed.Host, "www.workbuddy.ai")
+	testutil.Equal(t, parsed.Path, "/login")
+	testutil.Equal(t, parsed.Query().Get("state"), state)
+	testutil.Equal(t, parsed.Query().Get("platform"), "workbuddy-ai")
 	testutil.Equal(t, parsed.Query().Get("version"), "5.5.2")
 	t.Logf("state=%s url=%s", state, authURL)
 
 	creds, err := client.PollAuthLogin(ctx, state)
-	if err == nil {
-		t.Fatalf("PollAuthLogin() = %+v, want a pending result", creds)
-	}
-	if !errors.Is(err, workbuddy.ErrAuthPending) {
-		t.Fatalf("PollAuthLogin() error = %v, want ErrAuthPending", err)
-	}
+	testutil.Error(t, err, "PollAuthLogin() = %+v, want a pending result")
+	testutil.Falsef(t, !errors.Is(err, workbuddy.ErrAuthPending), "PollAuthLogin() error = %v, want ErrAuthPending", err)
 }

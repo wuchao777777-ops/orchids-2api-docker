@@ -376,10 +376,7 @@ func responseIDFromResourcePath(path string) string {
 
 func readAndValidateNativeResponse(body io.Reader) ([]byte, error) {
 	raw, err := io.ReadAll(io.LimitReader(body, maxNativeResponsesBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("Upstream response unavailable")
-	}
-	if len(raw) > maxNativeResponsesBytes {
+	if err != nil || len(raw) > maxNativeResponsesBytes {
 		return nil, fmt.Errorf("Upstream response unavailable")
 	}
 	var response map[string]interface{}
@@ -714,10 +711,7 @@ func reconcileResponseErrorEnvelope(response map[string]interface{}) {
 		return
 	}
 	error_, _ := response["error"].(map[string]interface{})
-	if error_ == nil {
-		return
-	}
-	if strings.TrimSpace(interfaceString(error_["message"])) == "" || strings.TrimSpace(interfaceString(error_["code"])) == "" {
+	if error_ == nil || strings.TrimSpace(interfaceString(error_["message"])) == "" || strings.TrimSpace(interfaceString(error_["code"])) == "" {
 		return
 	}
 	response["error"] = map[string]interface{}{
@@ -745,10 +739,7 @@ func classifySynthesizedFailure(code, message string, err error) (string, string
 	if err != nil && err != io.EOF {
 		text = strings.TrimSpace(err.Error())
 	}
-	if text == "" {
-		return code, message
-	}
-	if apperrors.ClassifyUpstreamError(text).Category != "client" {
+	if text == "" || apperrors.ClassifyUpstreamError(text).Category != "client" {
 		return code, message
 	}
 	return codeForCategory("client"), apperrors.PublicMessage(text)

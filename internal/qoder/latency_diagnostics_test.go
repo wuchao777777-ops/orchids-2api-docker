@@ -21,9 +21,7 @@ func TestQoderDiagnosticAttemptsCaptureSSEAndModel(t *testing.T) {
 	client := NewFromAccount(signedTestAccount(), nil)
 	ctx, capture := debug.WithCapture(context.Background(), "latency-test")
 	_, err := client.attemptChat(ctx, chatURL(srv.URL), EncodeBody([]byte(`{"messages":[],"tools":[],"session_id":"private-session","parameters":{"context_length":200000}}`)), modelEntry{Key: "qfmodel", Source: "system"}, "request", RuntimeFields{Key: "secret-key", EncryptUserInfo: "secret-info"}, client.currentCredentials(), false, func(upstream.SSEMessage) {})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	found := false
 	for _, section := range capture.Bundle().Sections {
 		testutil.MustNotContainAny(t, section.Payload, "secret-key", "secret-info")
@@ -31,17 +29,14 @@ func TestQoderDiagnosticAttemptsCaptureSSEAndModel(t *testing.T) {
 			continue
 		}
 		var v map[string]interface{}
-		if e := json.Unmarshal([]byte(section.Payload), &v); e != nil {
-			t.Fatal(e)
-		}
+		e := json.Unmarshal([]byte(section.Payload), &v)
+		testutil.NoError(t, e)
 		for _, key := range []string{"first_sse_ms", "first_text_ms", "total_ms", "response_headers_ms", "remote_address", "conversation_fingerprint"} {
-			if _, ok := v[key]; !ok {
-				t.Fatalf("missing %s: %v", key, v)
-			}
+			_, ok := v[key]
+			testutil.Falsef(t, !ok, "missing %s: %v", key, v)
 		}
-		if v["model_key"] != "qfmodel" || v["upstream_firstTokenDuration"] != float64(12) {
-			t.Fatalf("metadata=%v", v)
-		}
+		testutil.Equal(t, v["model_key"], "qfmodel")
+		testutil.EqualAny(t, v["upstream_firstTokenDuration"], float64(12))
 		found = true
 	}
 	testutil.True(t, found, "missing latency artifact")

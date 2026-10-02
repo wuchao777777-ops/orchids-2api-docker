@@ -327,10 +327,7 @@ func decodeApplyPatchOperation(arguments interface{}) (map[string]interface{}, b
 		return nil, false
 	}
 	operation, ok := wrapper["operation"].(map[string]interface{})
-	if !ok || len(operation) == 0 {
-		return nil, false
-	}
-	if strings.TrimSpace(parseLooseStringAny(operation["type"])) == "" {
+	if !ok || len(operation) == 0 || strings.TrimSpace(parseLooseStringAny(operation["type"])) == "" {
 		return nil, false
 	}
 	return operation, true

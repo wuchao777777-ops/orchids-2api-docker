@@ -24,26 +24,18 @@ func TestParseModelListReadsTheObservedGroupShape(t *testing.T) {
 	t.Parallel()
 
 	catalog, err := parseModelList([]byte(observedCatalogResponse))
-	if err != nil {
-		t.Fatalf("parseModelList() error = %v", err)
-	}
+	testutil.NoError(t, err, "parseModelList() error = %v")
 	// `auto` is a routing directive rather than a runnable model, so the two
 	// concrete rows are what the catalog carries.
 	testutil.Equal(t, catalog.Len(), 2)
 	entry, err := catalog.Resolve("Qwen3.7-Max")
-	if err != nil {
-		t.Fatalf("Resolve(display name) error = %v", err)
-	}
+	testutil.NoError(t, err, "Resolve(display name) error = %v")
 	testutil.Equal(t, entry.Key, "qmodel_latest")
 	// The wire fields routing needs must survive the parse.
 	testutil.Equal(t, entry.MaxInputTokens, 1000000)
 	ultimate, err := catalog.Resolve("Ultimate")
-	if err != nil {
-		t.Fatalf("Resolve(Ultimate) error = %v", err)
-	}
-	if !ultimate.IsReasoning {
-		t.Fatal("is_reasoning was dropped")
-	}
+	testutil.NoError(t, err, "Resolve(Ultimate) error = %v")
+	testutil.False(t, !ultimate.IsReasoning, "is_reasoning was dropped")
 }
 
 // TestParseModelListAcceptsTheOtherNestings proves the parser is not pinned to
@@ -61,35 +53,24 @@ func TestParseModelListAcceptsTheOtherNestings(t *testing.T) {
 	}
 	for name, payload := range cases {
 		catalog, err := parseModelList([]byte(payload))
-		if err != nil {
-			t.Fatalf("%s: parseModelList() error = %v", name, err)
-		}
-		if _, err := catalog.Resolve("Qwen3.7-Max"); err != nil {
-			t.Fatalf("%s: catalog did not carry the row: %v", name, err)
-		}
+		testutil.Falsef(t, err != nil, "%s: parseModelList() error = %v", name, err)
+		_, err = catalog.Resolve("Qwen3.7-Max")
+		testutil.CheckNoError(t, err)
 	}
 
 	// Encode=1 nests the payload as a JSON string, so the inner document has to
 	// be escaped on the wire. Building it with the encoder is the only way to
 	// produce a valid fixture for that.
 	inner, err := json.Marshal(map[string]string{"chat": `[` + row + `]`})
-	if err != nil {
-		t.Fatalf("marshal inner payload: %v", err)
-	}
-	if _, err := parseModelList(inner); err != nil {
-		t.Fatalf("chat payload: parseModelList() error = %v", err)
-	}
+	testutil.NoError(t, err, "marshal inner payload: %v")
+	_, err = parseModelList(inner)
+	testutil.CheckNoError(t, err)
 	encoded, err := json.Marshal(map[string]json.RawMessage{"code": json.RawMessage(`0`), "data": inner})
-	if err != nil {
-		t.Fatalf("marshal encoded envelope: %v", err)
-	}
+	testutil.NoError(t, err, "marshal encoded envelope: %v")
 	catalog, err := parseModelList(encoded)
-	if err != nil {
-		t.Fatalf("encoded data: parseModelList() error = %v", err)
-	}
-	if _, err := catalog.Resolve("Qwen3.7-Max"); err != nil {
-		t.Fatalf("encoded data: catalog did not carry the row: %v", err)
-	}
+	testutil.NoError(t, err, "encoded data: parseModelList() error = %v")
+	_, err = catalog.Resolve("Qwen3.7-Max")
+	testutil.CheckNoError(t, err)
 }
 
 // TestParseModelListRejectsAResponseWithoutRows proves an unrelated payload is
@@ -97,15 +78,14 @@ func TestParseModelListAcceptsTheOtherNestings(t *testing.T) {
 func TestParseModelListRejectsAResponseWithoutRows(t *testing.T) {
 	t.Parallel()
 
-	for name, payload := range map[string]string{
+	for _, payload := range map[string]string{
 		"failure envelope": `{"success":false,"msgCode":400,"message":"Request method 'POST' not supported"}`,
 		"unkeyed rows":     `{"chat":[{"display_name":"Qwen3.7-Max"}]}`,
 		"empty":            ``,
 		"scalar":           `42`,
 	} {
-		if _, err := parseModelList([]byte(payload)); err == nil {
-			t.Fatalf("%s: parseModelList() error = nil, want a rejection", name)
-		}
+		_, err := parseModelList([]byte(payload))
+		testutil.CheckError(t, err)
 	}
 }
 

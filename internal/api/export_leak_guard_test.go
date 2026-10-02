@@ -73,9 +73,7 @@ func TestExportNeverCarriesAnotherChannelsCredential(t *testing.T) {
 			got := exportedCredentialKeys(t, acc)
 			testutil.NotEqual(t, len(got), 0)
 			for _, key := range got {
-				if !allowed[channel][key] {
-					t.Errorf("export of a %s account carries %q, which belongs to another channel", channel, key)
-				}
+				testutil.CheckFalsef(t, !allowed[channel][key], "export of a %s account carries %q, which belongs to another channel", channel, key)
 			}
 		})
 	}
@@ -94,16 +92,12 @@ func TestExportKeepsOAuthCredentialsForAnOAuthAccount(t *testing.T) {
 	}
 	got := exportedCredentialKeys(t, acc)
 	for _, want := range []string{"oauth_access_token", "oauth_refresh_token"} {
-		if !containsString(got, want) {
-			t.Errorf("OAuth export dropped %q; it must stay re-importable (got %v)", want, got)
-		}
+		testutil.CheckTrue(t, containsString(got, want), "OAuth export dropped %q; it must stay re-importable (got %v)")
 	}
 	// The account API still hides them: the export is the only surface allowed to
 	// carry them.
 	raw, err := json.Marshal(normalizeAccountOutput(acc))
-	if err != nil {
-		t.Fatalf("marshal account output: %v", err)
-	}
+	testutil.NoError(t, err, "marshal account output: %v")
 	testutil.MustNotContain(t, string(raw), marker)
 }
 
@@ -157,9 +151,7 @@ func TestExportCarriesTheDurableCredentialForReimport(t *testing.T) {
 		t.Run(channel, func(t *testing.T) {
 			got := exportedCredentialKeys(t, tc.acc)
 			for _, want := range tc.want {
-				if !containsString(got, want) {
-					t.Errorf("export dropped %q; the account could not be renewed after import (got %v)", want, got)
-				}
+				testutil.CheckTrue(t, containsString(got, want), "export dropped %q; the account could not be renewed after import (got %v)")
 			}
 		})
 	}
@@ -185,9 +177,7 @@ func TestAccountCheckKeepsASpentAllowanceVerdict(t *testing.T) {
 	applySuccessfulAccountRefreshStatus(parked, "")
 	testutil.Equal(t, parked.StatusCode, "402")
 	testutil.NotEqual(t, parked.StatusMessage, "")
-	if parked.VerifiedAt.IsZero() {
-		t.Fatal("the check must still record that the credential was exercised")
-	}
+	testutil.False(t, parked.VerifiedAt.IsZero(), "the check must still record that the credential was exercised")
 
 	// Once the reset time has passed the selector would release the account, so the
 	// check must be free to clear the marker too.

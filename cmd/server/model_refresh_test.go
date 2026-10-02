@@ -74,11 +74,7 @@ func TestRunIndexedModelRefreshWorkersVisitsEachIndexOnce(t *testing.T) {
 	counts := make([]int, total)
 	var mu sync.Mutex
 
-	runIndexedModelRefreshWorkers(total, 5, func(index int) {
-		mu.Lock()
-		counts[index]++
-		mu.Unlock()
-	})
+	runIndexedModelRefreshWorkers(total, 5, func(index int) { mu.Lock(); counts[index]++; mu.Unlock() })
 
 	for _, count := range counts {
 		testutil.Equal(t, count, 1)
@@ -89,9 +85,7 @@ func TestRunIndexedModelRefreshWorkersHandlesEmptyWork(t *testing.T) {
 	called := false
 	runIndexedModelRefreshWorkers(0, 4, func(int) { called = true })
 	runIndexedModelRefreshWorkers(3, 4, nil)
-	if called {
-		t.Fatal("worker called for empty input")
-	}
+	testutil.False(t, called, "worker called for empty input")
 }
 
 func TestNormalizeModelRefreshConcurrency(t *testing.T) {
@@ -125,9 +119,8 @@ func TestParseModelRefreshConcurrency(t *testing.T) {
 	}
 	for _, tt := range tests {
 		got, ok := parseModelRefreshConcurrency(tt.raw)
-		if got != tt.want || ok != tt.ok {
-			t.Fatalf("parseModelRefreshConcurrency(%q)=(%d,%v) want (%d,%v)", tt.raw, got, ok, tt.want, tt.ok)
-		}
+		testutil.Equal(t, got, tt.want)
+		testutil.Equal(t, ok, tt.ok)
 	}
 }
 
@@ -138,19 +131,13 @@ func TestSyncModelsForChannelConcurrent_WorkBuddyRequiresAccountDiscovery(t *tes
 	ctx := context.Background()
 	clearModelsForChannel(t, ctx, s, "WorkBuddy")
 
-	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "WorkBuddy", 8)
-	if err == nil {
-		t.Fatalf("syncModelsForChannelConcurrent() result=%+v want error", result)
-	}
+	_, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "WorkBuddy", 8)
+	testutil.Error(t, err, "syncModelsForChannelConcurrent() result=%+v want error")
 	// Without an active account nothing is read and nothing is published: the
 	// refresh reports the missing account rather than a cached catalog.
-	if !isNoActiveAccounts(err) {
-		t.Fatalf("error=%v want a no-active-account report", err)
-	}
+	testutil.True(t, isNoActiveAccounts(err), "error=%v want a no-active-account report")
 	models, listErr := s.ListModels(ctx)
-	if listErr != nil {
-		t.Fatalf("ListModels() error = %v", listErr)
-	}
+	testutil.NoError(t, listErr, "ListModels() error = %v")
 	testutil.Equal(t, len(models), 0)
 }
 
@@ -169,21 +156,13 @@ func TestRefreshDoesNotRepublishStoredCatalogOnFailure(t *testing.T) {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Cline", 4)
-	if err == nil {
-		t.Fatalf("syncModelsForChannelConcurrent() result=%+v want error", result)
-	}
-	if !isNoActiveAccounts(err) {
-		t.Fatalf("error=%v want a no-active-account report", err)
-	}
+	_, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Cline", 4)
+	testutil.Error(t, err, "syncModelsForChannelConcurrent() result=%+v want error")
+	testutil.True(t, isNoActiveAccounts(err), "error=%v want a no-active-account report")
 
 	stored, getErr := s.GetModelByChannelAndModelID(ctx, "Cline", "cline-a")
-	if getErr != nil || stored == nil {
-		t.Fatalf("stored row was destroyed by a failed refresh: %v", getErr)
-	}
-	if stored.Status != store.ModelStatusAvailable || !stored.Verified {
-		t.Fatalf("stored row was modified by a failed refresh: %+v", stored)
-	}
+	testutil.Falsef(t, getErr != nil || stored == nil, "stored row was destroyed by a failed refresh: %v", getErr)
+	testutil.Falsef(t, stored.Status != store.ModelStatusAvailable || !stored.Verified, "stored row was modified by a failed refresh: %+v", stored)
 }
 
 func TestChooseRefreshedDefaultModel_PrefersExistingDefault(t *testing.T) {
@@ -204,13 +183,9 @@ func TestDiscoverGrokModelsWithoutActiveAccountReportsNoAccount(t *testing.T) {
 	defer cleanup()
 
 	report, err := discoverGrokModelsReport(context.Background(), &config.Config{}, s, 4)
-	items, source := report.Candidates, report.Source
-	if err == nil {
-		t.Fatalf("discoverGrokModelsReport() items=%+v source=%q want error", items, source)
-	}
-	if !isNoActiveAccounts(err) {
-		t.Fatalf("error=%v want a no-active-account report", err)
-	}
+	items, _ := report.Candidates, report.Source
+	testutil.Error(t, err, "discoverGrokModelsReport() items=%+v source=%q want error")
+	testutil.True(t, isNoActiveAccounts(err), "error=%v want a no-active-account report")
 	testutil.Equal(t, len(items), 0)
 }
 
@@ -239,9 +214,7 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 
 	report, err := discoverGrokModelsReport(ctx, &config.Config{}, s, 4)
 	items, source := report.Candidates, report.Source
-	if err != nil {
-		t.Fatalf("discoverGrokModelsReport() error = %v", err)
-	}
+	testutil.NoError(t, err, "discoverGrokModelsReport() error = %v")
 	testutil.Equal(t, calls, 1)
 	testutil.Equal(t, source, "grok_build_models")
 	gotIDs := make([]string, 0, len(items))
@@ -255,12 +228,8 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	testutil.Equal(t, strings.Join(gotIDs, ","), wantIDs)
 
 	persisted, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
-	if persisted.GrokProvider != "build" || persisted.GrokModelsSyncedAt.IsZero() {
-		t.Fatalf("provider/catalog not persisted: %+v", persisted)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
+	testutil.Falsef(t, persisted.GrokProvider != "build" || persisted.GrokModelsSyncedAt.IsZero(), "provider/catalog not persisted: %+v", persisted)
 	testutil.Equal(t, strings.Join(persisted.GrokModels, ","), "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast")
 }
 
@@ -278,9 +247,7 @@ func TestDiscoverGrokModelsWithoutUpstreamCatalogPublishesNothing(t *testing.T) 
 
 	report, err := discoverGrokModelsReport(ctx, &config.Config{}, s, 1)
 	items, source := report.Candidates, report.Source
-	if err == nil {
-		t.Fatalf("discoverGrokModelsReport() items=%+v source=%q want error", items, source)
-	}
+	testutil.Error(t, err, "discoverGrokModelsReport() items=%+v source=%q want error")
 	testutil.Equal(t, source, "")
 	testutil.Equal(t, len(items), 0)
 	// The failure must not be reported as a cached observation.
@@ -311,16 +278,12 @@ func TestApplyModelRefresh_RefusesNonUpstreamSources(t *testing.T) {
 				t.Fatalf("CreateModel() error = %v", err)
 			}
 
-			result, err := applyModelRefreshWithPrune(ctx, s, "WorkBuddy", source, []discoveredModel{{ID: "injected", Name: "injected", Verified: true}}, true)
-			if err == nil {
-				t.Fatalf("applyModelRefreshWithPrune() result=%+v want a refusal for source %q", result, source)
-			}
-			if _, getErr := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "injected"); getErr == nil {
-				t.Fatal("a non-upstream source published a model")
-			}
-			if _, getErr := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "existing"); getErr != nil {
-				t.Fatalf("a refused refresh mutated the stored catalog: %v", getErr)
-			}
+			_, err := applyModelRefreshWithPrune(ctx, s, "WorkBuddy", source, []discoveredModel{{ID: "injected", Name: "injected", Verified: true}}, true)
+			testutil.Error(t, err, "applyModelRefreshWithPrune() result=%+v want a refusal for source %q")
+			_, getErr := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "injected")
+			testutil.Error(t, getErr)
+			_, getErr = s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "existing")
+			testutil.CheckNoError(t, getErr)
 		})
 	}
 }
@@ -334,9 +297,7 @@ func TestApplyModelRefresh_IsUpstreamCatalogSource(t *testing.T) {
 		"cline_recommended_models",
 	}
 	for _, source := range allowed {
-		if !isUpstreamCatalogSource(source) {
-			t.Fatalf("isUpstreamCatalogSource(%q) = false, want true", source)
-		}
+		testutil.True(t, isUpstreamCatalogSource(source), "isUpstreamCatalogSource(%q) = false, want true")
 	}
 	refused := []string{
 		"",
@@ -347,9 +308,7 @@ func TestApplyModelRefresh_IsUpstreamCatalogSource(t *testing.T) {
 		"grok_build_models_unavailable_cached",
 	}
 	for _, source := range refused {
-		if isUpstreamCatalogSource(source) {
-			t.Fatalf("isUpstreamCatalogSource(%q) = true, want false", source)
-		}
+		testutil.Falsef(t, isUpstreamCatalogSource(source), "isUpstreamCatalogSource(%q) = true, want false", source)
 	}
 }
 
@@ -366,25 +325,15 @@ func TestApplyModelRefresh_CountsVerifiedSeparately(t *testing.T) {
 		{ID: "probed", Name: "probed", Verified: true},
 		{ID: "listed-only", Name: "listed-only"},
 	}, true)
-	if err != nil {
-		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
-	}
+	testutil.NoError(t, err, "applyModelRefreshWithPrune() error = %v")
 	testutil.Equal(t, result.Discovered, 2)
 	testutil.Equal(t, result.Verified, 1)
 	listed, err := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "listed-only")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(listed-only) error = %v", err)
-	}
-	if listed.Verified {
-		t.Fatal("a candidate that was never probed was recorded as verified")
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID(listed-only) error = %v")
+	testutil.False(t, listed.Verified, "a candidate that was never probed was recorded as verified")
 	probed, err := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "probed")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(probed) error = %v", err)
-	}
-	if !probed.Verified {
-		t.Fatal("a probed candidate was recorded as unverified")
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID(probed) error = %v")
+	testutil.False(t, !probed.Verified, "a probed candidate was recorded as unverified")
 }
 
 func TestApplyModelRefresh_DeletesMissingClineModels(t *testing.T) {
@@ -404,20 +353,13 @@ func TestApplyModelRefresh_DeletesMissingClineModels(t *testing.T) {
 		{ID: "cline/free/auto", Name: "Auto", SortOrder: 0},
 		{ID: "cline/free/sonnet", Name: "Sonnet", SortOrder: 1},
 	}, true)
-	if err != nil {
-		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
-	}
+	testutil.NoError(t, err, "applyModelRefreshWithPrune() error = %v")
 	testutil.Equal(t, result.Deleted, 1)
-	if _, err := s.GetModelByChannelAndModelID(ctx, "Cline", "cline/free/opus"); err == nil {
-		t.Fatal("expected old model to be deleted")
-	}
+	_, err = s.GetModelByChannelAndModelID(ctx, "Cline", "cline/free/opus")
+	testutil.Error(t, err)
 	model, err := s.GetModelByChannelAndModelID(ctx, "Cline", "cline/free/auto")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(cline/free/auto) error = %v", err)
-	}
-	if !model.IsDefault {
-		t.Fatal("cline/free/auto IsDefault=false want true")
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID(cline/free/auto) error = %v")
+	testutil.False(t, !model.IsDefault, "cline/free/auto IsDefault=false want true")
 }
 
 func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
@@ -439,23 +381,15 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 
 	candidates := []discoveredModel{{ID: "cline/free/sonnet", Name: "Cline Sonnet", SortOrder: 0}}
 	result, err := applyModelRefreshWithPrune(ctx, s, "Cline", "cline_recommended_models", candidates, true)
-	if err != nil {
-		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
-	}
+	testutil.NoError(t, err, "applyModelRefreshWithPrune() error = %v")
 	testutil.Equal(t, result.Deleted, 0)
 	testutil.Equal(t, result.Updated, 1)
 
 	model, err := s.GetModelByChannelAndModelID(ctx, "Cline", "cline/free/sonnet")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
-	}
-	if model == nil {
-		t.Fatal("expected model to remain in store")
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID() error = %v")
+	testutil.False(t, model == nil, "expected model to remain in store")
 	testutil.Equal(t, model.Status, store.ModelStatusOffline)
-	if !model.Verified {
-		t.Fatal("Verified=false want true after upstream observation")
-	}
+	testutil.False(t, !model.Verified, "Verified=false want true after upstream observation")
 	testutil.Equal(t, model.Name, "Old Name")
 	testutil.Equal(t, model.SortOrder, 999)
 }
@@ -574,22 +508,15 @@ func TestSyncAccountCatalogAggregatesAllAccountsAndProtectsPartialPrune(t *testi
 				t.Fatal("second account did not start concurrently")
 			}
 			<-done
-			if refreshErr != nil {
-				t.Fatalf("refresh error = %v", refreshErr)
-			}
-			if result.AccountsTotal != 2 || result.AccountsSuccess != 2 || result.AccountsFailed != 0 || result.Partial {
-				t.Fatalf("result metadata = %+v", result)
-			}
+			testutil.NoError(t, refreshErr, "refresh error = %v")
+			testutil.Falsef(t, result.AccountsTotal != 2 || result.AccountsSuccess != 2 || result.AccountsFailed != 0 || result.Partial, "result metadata = %+v", result)
 			for _, modelID := range tc.models {
-				if _, err := s.GetModelByChannelAndModelID(ctx, tc.name, modelID); err != nil {
-					t.Fatalf("union missed %s: %v", modelID, err)
-				}
+				_, err := s.GetModelByChannelAndModelID(ctx, tc.name, modelID)
+				testutil.CheckNoError(t, err)
 			}
 			for _, id := range []int64{first.ID, second.ID} {
 				stored, err := s.GetAccount(ctx, id)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testutil.NoError(t, err)
 				if (tc.accountType == "workbuddy" && len(stored.WorkBuddyModelIDs) == 0) ||
 					(tc.accountType == "qoder" && len(stored.QoderModelIDs) == 0) ||
 					(tc.accountType == "cline" && len(stored.ClineModelIDs) == 0) {
@@ -603,16 +530,11 @@ func TestSyncAccountCatalogAggregatesAllAccountsAndProtectsPartialPrune(t *testi
 			partialPhase = true
 			mu.Unlock()
 			result, err := syncModelsForChannelConcurrent(ctx, cfg, s, tc.name, 1)
-			if err != nil {
-				t.Fatalf("partial refresh error = %v", err)
-			}
-			if !result.Partial || result.AccountsSuccess != 1 || result.AccountsFailed != 1 || !result.KeptLastKnownGood || result.Deleted != 0 {
-				t.Fatalf("partial metadata = %+v", result)
-			}
+			testutil.NoError(t, err, "partial refresh error = %v")
+			testutil.Falsef(t, !result.Partial || result.AccountsSuccess != 1 || result.AccountsFailed != 1 || !result.KeptLastKnownGood || result.Deleted != 0, "partial metadata = %+v", result)
 			for _, modelID := range tc.models {
-				if _, getErr := s.GetModelByChannelAndModelID(ctx, tc.name, modelID); getErr != nil {
-					t.Fatalf("partial refresh pruned %s: %v", modelID, getErr)
-				}
+				_, getErr := s.GetModelByChannelAndModelID(ctx, tc.name, modelID)
+				testutil.CheckNoError(t, getErr)
 			}
 		})
 	}
@@ -627,13 +549,10 @@ func TestApplyModelRefreshPartialNeverPrunes(t *testing.T) {
 		testutil.NoError(t, s.CreateModel(ctx, &store.Model{Channel: "Cline", ModelID: id, Name: id, Status: store.ModelStatusAvailable, Verified: true}))
 	}
 	result, err := applyModelRefreshWithPrune(ctx, s, "Cline", "cline_recommended_models", []discoveredModel{{ID: "fresh", Name: "fresh", Verified: true}}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, result.Deleted, 0)
-	if _, err := s.GetModelByChannelAndModelID(ctx, "Cline", "failed-account-lkg"); err != nil {
-		t.Fatalf("partial refresh pruned LKG: %v", err)
-	}
+	_, err = s.GetModelByChannelAndModelID(ctx, "Cline", "failed-account-lkg")
+	testutil.CheckNoError(t, err)
 }
 
 func setupModelRefreshStore(t *testing.T) (*store.Store, func()) {
@@ -644,61 +563,46 @@ func setupModelRefreshStore(t *testing.T) (*store.Store, func()) {
 		RedisAddr:   mini.Addr(),
 		RedisPrefix: "model_refresh_test:",
 	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 
-	return s, func() {
-		_ = s.Close()
-	}
+	return s, func() { _ = s.Close() }
 }
 
 func clearModelsForChannel(t *testing.T, ctx context.Context, s *store.Store, channel string) {
 	t.Helper()
 
 	models, err := s.ListModels(ctx)
-	if err != nil {
-		t.Fatalf("ListModels() error = %v", err)
-	}
+	testutil.NoError(t, err, "ListModels() error = %v")
 	for _, model := range models {
 		if model == nil || !strings.EqualFold(model.Channel, channel) {
 			continue
 		}
-		if err := s.DeleteModel(ctx, model.ID); err != nil {
-			t.Fatalf("DeleteModel(%q) error = %v", model.ID, err)
-		}
+		err := s.DeleteModel(ctx, model.ID)
+		testutil.CheckNoError(t, err)
 	}
 }
 
 // TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog pins
 // the scope guard: Grok Build is reconciled separately from retired providers.
 func TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog(t *testing.T) {
-	if shouldDeleteMissingModelsOnRefresh("Grok", "grok_build_models") {
-		t.Fatal("a Build text-catalog read must not prune the channel catalog")
-	}
+	testutil.False(t, shouldDeleteMissingModelsOnRefresh("Grok", "grok_build_models"), "a Build text-catalog read must not prune the channel catalog")
 	// Only complete authoritative account catalogs prune automatically.
 	// WorkBuddy's degraded whitelist fallback cannot prove absence.
 	for _, tc := range []struct{ channel, source string }{
 		{"Qoder", "qoder_upstream_models"},
 		{"Cline", "cline_recommended_models"},
 	} {
-		if !shouldDeleteMissingModelsOnRefresh(tc.channel, tc.source) {
-			t.Fatalf("%s/%s must be allowed to prune", tc.channel, tc.source)
-		}
+		testutil.True(t, shouldDeleteMissingModelsOnRefresh(tc.channel, tc.source), "%s/%s must be allowed to prune")
 	}
 	for _, tc := range []struct{ channel, source string }{
 		{"Grok", "grok_build_models"},
 		{"WorkBuddy", "workbuddy_cli_models"},
 	} {
-		if shouldDeleteMissingModelsOnRefresh(tc.channel, tc.source) {
-			t.Fatalf("%s/%s must retain LKG rather than prune", tc.channel, tc.source)
-		}
+		testutil.Falsef(t, shouldDeleteMissingModelsOnRefresh(tc.channel, tc.source), "%s/%s must retain LKG rather than prune", tc.channel, tc.source)
 	}
 	// A non-upstream source never prunes.
 	for _, source := range []string{"", "test", "cline_cached_models", "grok_build_models_unavailable_cached"} {
-		if shouldDeleteMissingModelsOnRefresh("Grok", source) {
-			t.Fatalf("source %q must not prune", source)
-		}
+		testutil.Falsef(t, shouldDeleteMissingModelsOnRefresh("Grok", source), "source %q must not prune", source)
 	}
 }
 
@@ -726,20 +630,12 @@ func TestApplyModelRefresh_MarksObservedExistingRowsVerified(t *testing.T) {
 	result, err := applyModelRefreshWithPrune(ctx, s, "Grok", "grok_build_models", []discoveredModel{
 		{ID: "grok-4.6", Name: "Grok 4.6", Verified: true},
 	}, true)
-	if err != nil {
-		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
-	}
+	testutil.NoError(t, err, "applyModelRefreshWithPrune() error = %v")
 	testutil.Equal(t, result.Updated, 1)
 	stored, err := s.GetModelByChannelAndModelID(ctx, "Grok", "grok-4.6")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
-	}
-	if !stored.Verified {
-		t.Fatal("an observed row was not marked verified")
-	}
-	if !stored.IsDefault {
-		t.Fatal("the operator-owned default was changed by the promotion")
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID() error = %v")
+	testutil.False(t, !stored.Verified, "an observed row was not marked verified")
+	testutil.False(t, !stored.IsDefault, "the operator-owned default was changed by the promotion")
 	testutil.Equal(t, stored.Origin, "discovery")
 }
 
@@ -761,13 +657,8 @@ func TestGrokPartialCatalogNeverPrunes(t *testing.T) {
 		return nil, fmt.Errorf("temporary")
 	}
 	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Grok", 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.Partial || result.Deleted != 0 {
-		t.Fatalf("result=%+v", result)
-	}
-	if _, err := s.GetModelByChannelAndModelID(ctx, "Grok", "old"); err != nil {
-		t.Fatalf("partial refresh deleted LKG: %v", err)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, !result.Partial || result.Deleted != 0, "result=%+v", result)
+	_, err = s.GetModelByChannelAndModelID(ctx, "Grok", "old")
+	testutil.CheckNoError(t, err)
 }

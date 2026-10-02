@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -341,10 +342,7 @@ func isSuggestionMode(messages []prompt.Message) bool {
 func buildLocalSuggestion(messages []prompt.Message) string {
 	lastUser := lastNonSuggestionUserText(messages)
 	lastAssistant := lastAssistantText(messages)
-	if lastAssistant == "" {
-		return ""
-	}
-	if !hasExplicitNextStepOffer(lastAssistant) {
+	if lastAssistant == "" || !hasExplicitNextStepOffer(lastAssistant) {
 		return ""
 	}
 	if containsHan(lastUser) || containsHan(lastAssistant) {
@@ -427,12 +425,7 @@ func hasExplicitNextStepOffer(text string) bool {
 		"我可以帮你",
 		"我下一步可以",
 	}
-	for _, marker := range chineseMarkers {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(chineseMarkers, func(marker string) bool { return strings.Contains(text, marker) })
 }
 
 func containsHan(text string) bool {
@@ -446,12 +439,7 @@ func containsHan(text string) bool {
 
 func containsNormalizedRequestText(text string, markers ...string) bool {
 	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
-	for _, marker := range markers {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(markers, func(marker string) bool { return strings.Contains(lower, marker) })
 }
 
 func looksLikeOptimizationRequest(text string) bool {

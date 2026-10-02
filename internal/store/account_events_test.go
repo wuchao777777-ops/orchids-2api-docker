@@ -58,16 +58,13 @@ func TestChangeEmitter_PublishesOnlyAfterAPersistedWrite(t *testing.T) {
 	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount: %v")
 	changes := emitter.waitForChanges(t, 1)
 	testutil.Equal(t, len(changes), 1)
-	if changes[0].AccountID != acc.ID || changes[0].Previous != nil {
-		t.Fatalf("create change = %+v", changes[0])
-	}
+	testutil.Equal(t, changes[0].AccountID, acc.ID)
+	testutil.Equal(t, changes[0].Previous, nil)
 
 	// An update carries the previous state, which is what lets a subscriber see
 	// whether the credential moved.
 	updated, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount: %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount: %v")
 	updated.RefreshToken = "session-b"
 	testutil.NoError(t, s.UpdateAccount(ctx, updated), "UpdateAccount: %v")
 	changes = emitter.waitForChanges(t, 2)
@@ -111,17 +108,13 @@ func TestChangeEmitter_DoesNotBlockTheWrite(t *testing.T) {
 
 	select {
 	case err := <-writeDone:
-		if err != nil {
-			t.Fatalf("CreateAccount: %v", err)
-		}
+		testutil.NoError(t, err, "CreateAccount: %v")
 	case <-time.After(2 * time.Second):
 		t.Fatal("a blocked emitter stalled the write")
 	}
 
 	accounts, err := s.ListAccounts(context.Background())
-	if err != nil || len(accounts) == 0 {
-		t.Fatalf("the write did not land: %v", err)
-	}
+	testutil.Falsef(t, err != nil || len(accounts) == 0, "the write did not land: %v", err)
 }
 
 type blockingEmitter struct{ release chan struct{} }
@@ -145,9 +138,8 @@ func TestChangeEmitter_CoalescesBurstWithoutGoroutinePerWrite(t *testing.T) {
 	}
 	after := runtime.NumGoroutine()
 	close(release)
-	if growth := after - before; growth > 10 {
-		t.Fatalf("account event burst created %d goroutines; want fixed dispatcher", growth)
-	}
+	growth := after - before
+	testutil.Falsef(t, growth > 10, "account event burst created %d goroutines; want fixed dispatcher", growth)
 }
 
 // TestChangeEmitter_IgnoresWritesToAMissingRow documents the delete-then-write

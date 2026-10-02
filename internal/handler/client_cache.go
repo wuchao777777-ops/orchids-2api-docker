@@ -201,10 +201,7 @@ func (c *accountClientCache) evictIfChanged(account *store.Account) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[account.ID]
-	if !ok {
-		return false
-	}
-	if entry.fingerprint == fingerprint {
+	if !ok || entry.fingerprint == fingerprint {
 		return false
 	}
 	c.dropLocked(account.ID, entry)

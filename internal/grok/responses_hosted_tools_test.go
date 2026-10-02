@@ -44,18 +44,10 @@ func chatRequestDeclaresHostedTool(req *ChatCompletionsRequest, want string) boo
 // enabled. Both hosted tools must survive the bridge.
 func TestChatRequestFromResponses_KeepsHostedSearchTools(t *testing.T) {
 	chat, err := chatRequestFromResponses(responsesSearchRequest())
-	if err != nil {
-		t.Fatalf("chatRequestFromResponses() error = %v", err)
-	}
-	if !chatRequestDeclaresHostedTool(&chat, "web_search") {
-		t.Error("web_search was dropped by the Responses bridge")
-	}
-	if !chatRequestDeclaresHostedTool(&chat, "x_search") {
-		t.Error("x_search was dropped by the Responses bridge")
-	}
-	if len(chat.Tools) == 0 || chat.Tools[0].Type != "function" {
-		t.Fatalf("the function declaration must stay a function tool: %#v", chat.Tools)
-	}
+	testutil.NoError(t, err, "chatRequestFromResponses() error = %v")
+	testutil.CheckFalse(t, !chatRequestDeclaresHostedTool(&chat, "web_search"), "web_search was dropped by the Responses bridge")
+	testutil.CheckFalse(t, !chatRequestDeclaresHostedTool(&chat, "x_search"), "x_search was dropped by the Responses bridge")
+	testutil.Falsef(t, len(chat.Tools) == 0 || chat.Tools[0].Type != "function", "the function declaration must stay a function tool: %#v", chat.Tools)
 }
 
 // The Build plane runs hosted search server-side, so the tool has to appear in
@@ -63,13 +55,9 @@ func TestChatRequestFromResponses_KeepsHostedSearchTools(t *testing.T) {
 // browsing was requested.
 func TestBuildPayloadForResponsesBridge_AdvertisesHostedSearchTools(t *testing.T) {
 	chat, err := chatRequestFromResponses(responsesSearchRequest())
-	if err != nil {
-		t.Fatalf("chatRequestFromResponses() error = %v", err)
-	}
+	testutil.NoError(t, err, "chatRequestFromResponses() error = %v")
 	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.20-0309"}, &chat, false)
-	if err != nil {
-		t.Fatalf("responsesPayloadFromChat() error = %v", err)
-	}
+	testutil.NoError(t, err, "responsesPayloadFromChat() error = %v")
 	declared := map[string]bool{}
 	for _, tool := range interfaceMaps(payload["tools"]) {
 		declared[parseLooseStringAny(tool["type"])] = true
@@ -93,9 +81,8 @@ func TestNormalizeBuildResponsesPayloadCompletesWebSearchRoute(t *testing.T) {
 	for _, tool := range interfaceMaps(payload["tools"]) {
 		declared[parseLooseStringAny(tool["type"])]++
 	}
-	if declared["web_search"] != 1 || declared["x_search"] != 1 {
-		t.Fatalf("Build hosted-search route = %#v", payload["tools"])
-	}
+	testutil.Equal(t, declared["web_search"], 1)
+	testutil.Equal(t, declared["x_search"], 1)
 }
 
 func TestNormalizeBuildResponsesPayloadPreservesExplicitXSearch(t *testing.T) {
@@ -106,9 +93,8 @@ func TestNormalizeBuildResponsesPayloadPreservesExplicitXSearch(t *testing.T) {
 	}
 	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	tools := interfaceMaps(payload["tools"])
-	if len(tools) != 1 || parseLooseStringAny(tools[0]["type"]) != "x_search" {
-		t.Fatalf("explicit x_search changed: %#v", payload["tools"])
-	}
+	testutil.Equal(t, len(tools), 1)
+	testutil.Equal(t, parseLooseStringAny(tools[0]["type"]), "x_search")
 }
 
 // Two identical hosted declarations would reach the upstream as two identical
@@ -118,9 +104,7 @@ func TestChatRequestFromResponses_DeduplicatesHostedTools(t *testing.T) {
 	req := responsesSearchRequest()
 	req.Tools = append(req.Tools, map[string]interface{}{"type": "web_search_preview"})
 	chat, err := chatRequestFromResponses(req)
-	if err != nil {
-		t.Fatalf("chatRequestFromResponses() error = %v", err)
-	}
+	testutil.NoError(t, err, "chatRequestFromResponses() error = %v")
 	searches := 0
 	for _, tool := range chat.ResponsesTools {
 		if parseLooseStringAny(tool["type"]) == "web_search" {

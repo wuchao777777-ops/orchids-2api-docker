@@ -21,9 +21,7 @@ func TestGrokClientsUseConfiguredProxy(t *testing.T) {
 	cfg := &config.Config{ProxyURL: proxy.URL}
 
 	cli := NewCLIClient(cfg)
-	if cli.httpClient == nil {
-		t.Fatal("missing Grok CLI client")
-	}
+	testutil.False(t, cli.httpClient == nil, "missing Grok CLI client")
 	for _, tc := range []struct {
 		name   string
 		client *http.Client
@@ -33,13 +31,9 @@ func TestGrokClientsUseConfiguredProxy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, err)
 			resp, err := tc.client.Do(req)
-			if err != nil {
-				t.Fatalf("client did not reach configured proxy: %v", err)
-			}
+			testutil.NoError(t, err, "client did not reach configured proxy: %v")
 			defer resp.Body.Close()
 			testutil.Equal(t, resp.StatusCode, http.StatusTeapot)
 		})

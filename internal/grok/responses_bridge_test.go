@@ -32,9 +32,7 @@ func responsesBridgeFixture(t *testing.T, upstreamStatus int, upstreamBody, mode
 
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: "bridge:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 	t.Cleanup(func() { _ = s.Close() })
 
 	ctx := context.Background()
@@ -80,9 +78,8 @@ func TestHandleResponses_RelaysUpstreamFailureStatus(t *testing.T) {
 	h.HandleResponses(rec, req)
 
 	testutil.Equal(t, rec.Code, http.StatusServiceUnavailable)
-	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
-		t.Fatalf("Content-Type = %q, want application/json", got)
-	}
+	got := rec.Header().Get("Content-Type")
+	testutil.Falsef(t, !strings.HasPrefix(got, "application/json"), "Content-Type = %q, want application/json", got)
 	var payload struct {
 		Error struct {
 			Message string `json:"message"`
@@ -90,12 +87,10 @@ func TestHandleResponses_RelaysUpstreamFailureStatus(t *testing.T) {
 			Code    string `json:"code"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
-	}
-	if payload.Error.Code != "upstream_error" || payload.Error.Type != "server_error" {
-		t.Fatalf("error code/type = %q/%q, want upstream_error/server_error", payload.Error.Code, payload.Error.Type)
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &payload)
+	testutil.CheckNoError(t, err)
+	testutil.Equal(t, payload.Error.Code, "upstream_error")
+	testutil.Equal(t, payload.Error.Type, "server_error")
 	const wantMessage = "The upstream account session has expired. Re-authenticate the account and retry."
 	testutil.Equal(t, payload.Error.Message, wantMessage)
 	for _, leak := range []string{sensitiveBody, "OAuth token is invalid", "bridge-private-team", "bridge-secret-token", "x.ai/private-diagnostics", "status=", "body="} {

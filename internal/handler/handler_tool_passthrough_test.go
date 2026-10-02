@@ -35,9 +35,7 @@ func TestHandleMessages_CustomMCPToolCall_RemainsAllowed(t *testing.T) {
 		"model":"claude-opus-4-5",
 		"stream":false,
 		"conversation_id":"workbuddy_custom_mcp",
-		"messages":[
-			{"role":"user","content":"find router handlers"}
-		],
+		"messages":[{"role":"user","content":"find router handlers"}],
 		"tools":[
 			{"type":"function","function":{
 				"name":"workspace_search",
@@ -69,14 +67,9 @@ func TestHandleMessages_CustomMCPToolCall_RemainsAllowed(t *testing.T) {
 	testutil.Equal(t, len(calls[0].Tools), 1)
 
 	declared, ok := calls[0].Tools[0].(map[string]interface{})
-	if !ok {
-		t.Fatalf("declared tool type=%T want map[string]interface{}", calls[0].Tools[0])
-	}
+	testutil.True(t, ok, "declared tool type=%T want map[string]interface{}")
 	function, ok := declared["function"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("declared tool function=%T want map[string]interface{}", declared["function"])
-	}
-	if got, _ := function["name"].(string); got != "workspace_search" {
-		t.Fatalf("declared tool name=%q want workspace_search", got)
-	}
+	testutil.True(t, ok, "declared tool function=%T want map[string]interface{}")
+	got, _ := function["name"].(string)
+	testutil.Falsef(t, got != "workspace_search", "declared tool name=%q want workspace_search", got)
 }

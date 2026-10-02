@@ -1,6 +1,8 @@
 package grok
 
 import (
+	"orchids-api/internal/util"
+	"slices"
 	"strings"
 )
 
@@ -151,9 +153,7 @@ func normalizeCustomToolCallReplayItem(item map[string]interface{}) (map[string]
 		return nil, false
 	}
 	status := strings.TrimSpace(interfaceString(item["status"]))
-	if status == "" {
-		status = "completed"
-	}
+	status = util.FirstNonEmptyUntrimmed(status, "completed")
 	return map[string]interface{}{"type": "custom_tool_call", "status": status, "call_id": callID, "name": name, "input": input}, true
 }
 
@@ -187,12 +187,7 @@ func replayToolCallKeys(itemType, callID string) []string {
 }
 
 func anyReplayCallKeyExists(existing map[string]bool, keys []string) bool {
-	for _, key := range keys {
-		if existing[key] {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(keys, func(key string) bool { return existing[key] })
 }
 
 // cloneReplayItemWithCallID rebinds a replayed tool call to the spelling the

@@ -52,36 +52,28 @@ func TestSummarizeQuota_AggregatesPackages(t *testing.T) {
 	testutil.Equal(t, quota.PackageRemaining, 147.28)
 	testutil.NotEqual(t, quota.PackageName, "")
 	wantReset := time.Date(2026, 9, 26, 0, 13, 42, 0, time.UTC)
-	if !quota.ResetAt.Equal(wantReset) {
-		t.Fatalf("ResetAt = %v, want %v", quota.ResetAt, wantReset)
-	}
-	if quota.SyncedAt.IsZero() {
-		t.Fatal("SyncedAt is zero")
-	}
+	testutil.Falsef(t, !quota.ResetAt.Equal(wantReset), "ResetAt = %v, want %v", quota.ResetAt, wantReset)
+	testutil.False(t, quota.SyncedAt.IsZero(), "SyncedAt is zero")
 }
 
 func TestSummarizeQuota_EmptyMeterIsZeroNotError(t *testing.T) {
 	t.Parallel()
 
 	quota := summarizeQuota(resourceResponse{}, time.Now())
-	if quota.Limit != 0 || quota.Remaining != 0 {
-		t.Fatalf("quota = %+v, want a zero allowance", quota)
-	}
+	testutil.Equal(t, quota.Limit, 0)
+	testutil.Equal(t, quota.Remaining, 0)
 	testutil.Equal(t, quota.VisibleUsed(), 0)
 }
 
 func TestParseMeterTime_IgnoresPlaceholder(t *testing.T) {
 	t.Parallel()
 
-	if got := parseMeterTime("9999-99-99 99:99:99"); !got.IsZero() {
-		t.Fatalf("placeholder parsed as %v, want zero", got)
-	}
-	if got := parseMeterTime(""); !got.IsZero() {
-		t.Fatalf("empty parsed as %v, want zero", got)
-	}
-	if got := parseMeterTime("2026-09-26 00:13:42"); got.IsZero() {
-		t.Fatal("valid timestamp did not parse")
-	}
+	got := parseMeterTime("9999-99-99 99:99:99")
+	testutil.Falsef(t, !got.IsZero(), "placeholder parsed as %v, want zero", got)
+	got = parseMeterTime("")
+	testutil.Falsef(t, !got.IsZero(), "empty parsed as %v, want zero", got)
+	got = parseMeterTime("2026-09-26 00:13:42")
+	testutil.False(t, got.IsZero(), "valid timestamp did not parse")
 }
 
 func TestApplyQuota_MapsRemainingIntoSchedulingFields(t *testing.T) {
@@ -100,15 +92,10 @@ func TestApplyQuota_MapsRemainingIntoSchedulingFields(t *testing.T) {
 
 	// UsageCurrent is the REMAINING value for this channel; the renderer derives
 	// "used" from it, so storing used here would invert the quota bar.
-	if acc.UsageLimit != 350 || acc.UsageCurrent != 147.28 {
-		t.Fatalf("usage = %v/%v, want 147.28 remaining of 350", acc.UsageCurrent, acc.UsageLimit)
-	}
-	if acc.QuotaResetAt.IsZero() {
-		t.Fatal("QuotaResetAt was not set from the cycle end")
-	}
-	if acc.WorkBuddyQuota.PackageName == "" || acc.WorkBuddyQuota.SyncedAt.IsZero() {
-		t.Fatalf("snapshot = %+v", acc.WorkBuddyQuota)
-	}
+	testutil.Equal(t, acc.UsageLimit, 350)
+	testutil.Equal(t, acc.UsageCurrent, 147.28)
+	testutil.False(t, acc.QuotaResetAt.IsZero(), "QuotaResetAt was not set from the cycle end")
+	testutil.Falsef(t, acc.WorkBuddyQuota.PackageName == "" || acc.WorkBuddyQuota.SyncedAt.IsZero(), "snapshot = %+v", acc.WorkBuddyQuota)
 	testutil.Equal(t, acc.WorkBuddyQuota.Used, 202.72)
 }
 
@@ -218,11 +205,9 @@ func TestSummarizeQuota_LabelsThePackageWithTheMostLeft(t *testing.T) {
 
 	quota := summarizeQuota(payload, time.Now())
 	testutil.Equal(t, quota.PackageName, "Free Plan Subscription")
-	if quota.Remaining != 305 || quota.Limit != 450 {
-		t.Fatalf("quota = %v/%v, want 305 of 450", quota.Remaining, quota.Limit)
-	}
+	testutil.Equal(t, quota.Remaining, 305)
+	testutil.Equal(t, quota.Limit, 450)
 	// The earliest cycle end is the one worth acting on.
-	if want := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC); !quota.ResetAt.Equal(want) {
-		t.Fatalf("ResetAt = %v, want the earliest cycle end %v", quota.ResetAt, want)
-	}
+	want := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	testutil.Falsef(t, !quota.ResetAt.Equal(want), "ResetAt = %v, want the earliest cycle end %v", quota.ResetAt, want)
 }

@@ -141,10 +141,7 @@ func validateMediaInput(value string, fieldName string) error {
 		return fmt.Errorf("%s cannot be empty", fieldName)
 	}
 	lower := strings.ToLower(val)
-	if strings.HasPrefix(lower, "data:") {
-		return nil
-	}
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+	if strings.HasPrefix(lower, "data:") || strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
 		return nil
 	}
 	if looksLikeBase64Payload(val) {

@@ -28,11 +28,7 @@ globalThis.WorkBuddyLogin = (() => {
     authorizedStatus: '正在确认 WorkBuddy 授权结果…',
     popupBlockedMessage: 'WorkBuddy 登录弹窗被拦截，请允许本站弹窗后重试。',
     timeoutMessage: 'WorkBuddy 授权已超时，请重新发起登录。',
-    terminalMessages: {
-      complete: 'WorkBuddy 官方登录完成，账号已保存',
-      failed: 'WorkBuddy 授权失败，请重新发起登录。',
-      expired: 'WorkBuddy 授权已超时，请重新发起登录。',
-    },
+    terminalMessages: { complete: 'WorkBuddy 官方登录完成，账号已保存', failed: 'WorkBuddy 授权失败，请重新发起登录。', expired: 'WorkBuddy 授权已超时，请重新发起登录。' },
   });
 
   return { start: driver.start, stop: driver.stop };

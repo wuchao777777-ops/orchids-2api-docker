@@ -104,9 +104,7 @@ func (d openAIDelta) empty() bool {
 	return d.Role == nil && d.Content == nil && d.ReasoningContent == nil && len(d.ToolCalls) == 0
 }
 
-func stringPtr(v string) *string {
-	return &v
-}
+func stringPtr(v string) *string { return &v }
 
 func appendOpenAIJSONString(dst []byte, value string) ([]byte, bool) {
 	for i := 0; i < len(value); i++ {
@@ -443,10 +441,8 @@ func buildOpenAIChunkSlow(msgID string, created int64, event string, data []byte
 				return nil, false
 			}
 			choice.Delta.ToolCalls = []openAIToolCall{{
-				Index: 0,
-				Function: openAIFunction{
-					Arguments: *payload.Delta.PartialJSON,
-				},
+				Index:    0,
+				Function: openAIFunction{Arguments: *payload.Delta.PartialJSON},
 			}}
 		case "thinking_delta":
 			if payload.Delta.Thinking == nil {
@@ -463,9 +459,7 @@ func buildOpenAIChunkSlow(msgID string, created int64, event string, data []byte
 		}
 		mapped := normalizeOpenAIStopReason(*payload.Delta.StopReason)
 		choice.FinishReason = stringPtr(mapped)
-	case "message_stop":
-		return nil, false
-	case "content_block_stop":
+	case "message_stop", "content_block_stop":
 		return nil, false
 	default:
 		return nil, false

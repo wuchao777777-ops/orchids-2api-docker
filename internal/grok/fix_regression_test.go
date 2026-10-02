@@ -30,21 +30,15 @@ func TestResponsesUpstreamFailureMapsAuthAndRetryAfter(t *testing.T) {
 func TestSyntheticCooldownCarriesTypedHint(t *testing.T) {
 	err := newSyntheticCooldownError("build:team:t", "grok-4.6", 12*time.Second)
 	var hinted interface{ RetryAfter() time.Duration }
-	if !errors.As(err, &hinted) || hinted.RetryAfter() != 12*time.Second {
-		t.Fatalf("typed cooldown hint missing: %v", err)
-	}
-	if !isSharedGrokRateLimitError(err) || markAllGrokAccountStatuses(err) || !shouldSwitchGrokAccount(err) {
-		t.Fatalf("synthetic cooldown policy mismatch: %v", err)
-	}
+	testutil.Falsef(t, !errors.As(err, &hinted) || hinted.RetryAfter() != 12*time.Second, "typed cooldown hint missing: %v", err)
+	testutil.Falsef(t, !isSharedGrokRateLimitError(err) || markAllGrokAccountStatuses(err) || !shouldSwitchGrokAccount(err), "synthetic cooldown policy mismatch: %v", err)
 }
 
 func TestReadAndValidateNativeResponseBeforeCommit(t *testing.T) {
-	if _, err := readAndValidateNativeResponse(strings.NewReader(`not-json`)); err == nil {
-		t.Fatal("malformed upstream response accepted")
-	}
-	if raw, err := readAndValidateNativeResponse(strings.NewReader(`{"id":"resp_1","status":"completed"}`)); err != nil || len(raw) == 0 {
-		t.Fatalf("valid response rejected: %v", err)
-	}
+	_, err := readAndValidateNativeResponse(strings.NewReader(`not-json`))
+	testutil.Error(t, err)
+	raw, err := readAndValidateNativeResponse(strings.NewReader(`{"id":"resp_1","status":"completed"}`))
+	testutil.Falsef(t, err != nil || len(raw) == 0, "valid response rejected: %v", err)
 }
 
 // TestGrokErrorEnvelope pins the shared OpenAI error object for every status: the
@@ -70,9 +64,8 @@ func TestGrokErrorEnvelope(t *testing.T) {
 			rec := httptest.NewRecorder()
 			writeGrokError(rec, tc.status, tc.message)
 			testutil.Equal(t, rec.Code, tc.status)
-			if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
-				t.Fatalf("Content-Type = %q, want application/json", got)
-			}
+			got := rec.Header().Get("Content-Type")
+			testutil.Falsef(t, !strings.HasPrefix(got, "application/json"), "Content-Type = %q, want application/json", got)
 			var body struct {
 				Error struct {
 					Message string `json:"message"`
@@ -81,14 +74,11 @@ func TestGrokErrorEnvelope(t *testing.T) {
 					Param   any    `json:"param"`
 				} `json:"error"`
 			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
-			}
+			err := json.Unmarshal(rec.Body.Bytes(), &body)
+			testutil.CheckNoError(t, err)
 			testutil.Equal(t, body.Error.Type, tc.wantType)
 			testutil.Equal(t, body.Error.Code, tc.wantCode)
-			if tc.wantMessage != "" && body.Error.Message != tc.wantMessage {
-				t.Fatalf("message = %q, want %q", body.Error.Message, tc.wantMessage)
-			}
+			testutil.Falsef(t, tc.wantMessage != "" && body.Error.Message != tc.wantMessage, "message = %q, want %q", body.Error.Message, tc.wantMessage)
 		})
 	}
 }
@@ -154,20 +144,15 @@ func TestStreamRepeatTracker(t *testing.T) {
 				break
 			}
 		}
-		if err == nil {
-			t.Fatalf("tracker did not stop after %d identical deltas", contentDoomLoopThreshold+1)
-		}
-		if !errors.Is(err, errGrokUpstreamOutputLoop) {
-			t.Fatalf("error = %v, want errGrokUpstreamOutputLoop", err)
-		}
+		testutil.Error(t, err, "tracker did not stop after %d identical deltas")
+		testutil.Falsef(t, !errors.Is(err, errGrokUpstreamOutputLoop), "error = %v, want errGrokUpstreamOutputLoop", err)
 	})
 	t.Run("allows legitimate repetition", func(t *testing.T) {
 		tracker := &streamRepeatTracker{}
 		// Markdown separators and table borders repeat the same single character.
 		for i := 0; i < contentDoomLoopThreshold; i++ {
-			if err := tracker.observe(delta("-"), ""); err != nil {
-				t.Fatalf("legitimate repetition rejected at %d: %v", i, err)
-			}
+			err := tracker.observe(delta("-"), "")
+			testutil.CheckNoError(t, err)
 		}
 		// A different delta resets the run.
 		testutil.NoError(t, tracker.observe(delta("x"), ""), "run reset rejected: %v")
@@ -176,12 +161,8 @@ func TestStreamRepeatTracker(t *testing.T) {
 }
 
 func TestIsPrivateBuildControlEvent(t *testing.T) {
-	if !isPrivateBuildControlEvent("response.doom_loop_check") {
-		t.Fatal("doom loop control event must be treated as private")
-	}
-	if isPrivateBuildControlEvent("response.output_text.delta") {
-		t.Fatal("generated delta must not be treated as private")
-	}
+	testutil.False(t, !isPrivateBuildControlEvent("response.doom_loop_check"), "doom loop control event must be treated as private")
+	testutil.False(t, isPrivateBuildControlEvent("response.output_text.delta"), "generated delta must not be treated as private")
 }
 
 func TestIsModelScopedRefusal(t *testing.T) {
@@ -191,28 +172,20 @@ func TestIsModelScopedRefusal(t *testing.T) {
 		"grok cli upstream status=403 body={\"message\":\"not available for model grok-4.6\"}",
 	}
 	for _, raw := range scoped {
-		if !isModelScopedRefusal(errors.New(raw)) {
-			t.Fatalf("isModelScopedRefusal(%q) = false, want true", raw)
-		}
+		testutil.Falsef(t, !isModelScopedRefusal(errors.New(raw)), "isModelScopedRefusal(%q) = false, want true", raw)
 	}
 	for _, raw := range []string{
 		"grok upstream status=403 body=account banned",
 		"grok upstream status=401 body=unauthorized",
 		"grok upstream status=429 body=slow down",
 	} {
-		if isModelScopedRefusal(errors.New(raw)) {
-			t.Fatalf("isModelScopedRefusal(%q) = true, want false", raw)
-		}
+		testutil.Falsef(t, isModelScopedRefusal(errors.New(raw)), "isModelScopedRefusal(%q) = true, want false", raw)
 	}
 }
 
 func TestModelScopedFreeQuotaRefusal(t *testing.T) {
-	if !modelScopedFreeQuotaRefusal([]byte("You've used all the included free usage for model grok-4.6.")) {
-		t.Fatal("model-scoped free usage refusal not detected")
-	}
-	if modelScopedFreeQuotaRefusal([]byte("subscription:free-usage-exhausted")) {
-		t.Fatal("account-scoped refusal must not be treated as model-scoped")
-	}
+	testutil.False(t, !modelScopedFreeQuotaRefusal([]byte("You've used all the included free usage for model grok-4.6.")), "model-scoped free usage refusal not detected")
+	testutil.False(t, modelScopedFreeQuotaRefusal([]byte("subscription:free-usage-exhausted")), "account-scoped refusal must not be treated as model-scoped")
 }
 
 // TestNormalizeFunctionArguments covers the B=3 normalization rule: an integral
@@ -228,10 +201,8 @@ func TestNormalizeFunctionArguments(t *testing.T) {
 				"count":      map[string]interface{}{"type": "integer"},
 				"ratio":      map[string]interface{}{"type": "number"},
 				"nested": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"limit": map[string]interface{}{"type": "integer"},
-					},
+					"type":       "object",
+					"properties": map[string]interface{}{"limit": map[string]interface{}{"type": "integer"}},
 				},
 				"items": map[string]interface{}{
 					"type":  "array",
@@ -241,24 +212,19 @@ func TestNormalizeFunctionArguments(t *testing.T) {
 		}
 		raw := `{"timeout_ms":60000.0,"count":1e3,"ratio":1.5,"nested":{"limit":2.0},"items":[1.0,2e1]}`
 		got, changed := normalizeFunctionArguments(raw, schema)
-		if !changed {
-			t.Fatalf("expected normalization, got %q", got)
-		}
+		testutil.True(t, changed, "expected normalization, got %q")
 		var decoded map[string]interface{}
 		decoder := json.NewDecoder(strings.NewReader(got))
 		decoder.UseNumber()
-		if err := decoder.Decode(&decoded); err != nil {
-			t.Fatalf("normalized arguments are not JSON: %v (%s)", err, got)
-		}
+		err := decoder.Decode(&decoded)
+		testutil.CheckNoError(t, err)
 		check := func(path string, want string) {
 			t.Helper()
 			parts := strings.Split(path, ".")
 			var current interface{} = decoded
 			for _, part := range parts {
 				asMap, ok := current.(map[string]interface{})
-				if !ok {
-					t.Fatalf("%s: path not an object in %s", path, got)
-				}
+				testutil.True(t, ok, "%s: path not an object in %s")
 				current = asMap[part]
 			}
 			testutil.Equal(t, fmt.Sprint(current), want)
@@ -281,23 +247,19 @@ func TestNormalizeFunctionArguments(t *testing.T) {
 			"properties": map[string]interface{}{"ratio": map[string]interface{}{"type": "number"}},
 		}
 		for _, raw := range []string{`{"ratio":60000.0}`, `{"a":1} trailing`} {
-			if got, changed := normalizeFunctionArguments(raw, schema); changed || got != raw {
-				t.Fatalf("payload must be untouched: %q (changed=%v)", got, changed)
-			}
+			got, changed := normalizeFunctionArguments(raw, schema)
+			testutil.Falsef(t, changed || got != raw, "payload must be untouched: %q (changed=%v)", got, changed)
 		}
 	})
 }
 
 func TestNormalizeIntegralNumberBounds(t *testing.T) {
-	if _, ok := normalizeIntegralNumber("1.0"); !ok {
-		t.Fatal("1.0 should normalize to 1")
-	}
-	if _, ok := normalizeIntegralNumber("1.5"); ok {
-		t.Fatal("1.5 is not an integer")
-	}
-	if _, ok := normalizeIntegralNumber("1e400"); ok {
-		t.Fatal("1e400 does not fit an int64 and must be left alone")
-	}
+	_, ok := normalizeIntegralNumber("1.0")
+	testutil.False(t, !ok, "1.0 should normalize to 1")
+	_, ok = normalizeIntegralNumber("1.5")
+	testutil.False(t, ok, "1.5 is not an integer")
+	_, ok = normalizeIntegralNumber("1e400")
+	testutil.False(t, ok, "1e400 does not fit an int64 and must be left alone")
 }
 
 func TestAnthropicUsageCarriesCacheAndThinkingFields(t *testing.T) {
@@ -313,9 +275,8 @@ func TestAnthropicUsageCarriesCacheAndThinkingFields(t *testing.T) {
 	got := anthropicUsageFromOpenAI(usage)
 	testutil.Equal(t, got["input_tokens"], 70)
 	testutil.Equal(t, got["cache_read_input_tokens"], 30)
-	if _, ok := got["cache_creation_input_tokens"]; !ok {
-		t.Fatal("cache_creation_input_tokens must be reported (0 is a value, not absence)")
-	}
+	_, ok := got["cache_creation_input_tokens"]
+	testutil.False(t, !ok, "cache_creation_input_tokens must be reported (0 is a value, not absence)")
 	details, ok := got["output_tokens_details"].(map[string]interface{})
 	if !ok || details["thinking_tokens"] != 7 {
 		t.Fatalf("output_tokens_details = %v, want thinking_tokens=7", got["output_tokens_details"])
@@ -345,9 +306,8 @@ func TestOpenAIFinishToAnthropicMapsRefusal(t *testing.T) {
 func TestAnthropicMessageIDReshapesChatCompletionsID(t *testing.T) {
 	testutil.Equal(t, anthropicMessageID("chatcmpl_abc"), "msg_abc")
 	testutil.Equal(t, anthropicMessageID("msg_keep"), "msg_keep")
-	if got := anthropicMessageID(""); !strings.HasPrefix(got, "msg_") || len(got) != len("msg_")+24 {
-		t.Fatalf("empty id -> %q, want a generated msg_ id", got)
-	}
+	got := anthropicMessageID("")
+	testutil.Falsef(t, !strings.HasPrefix(got, "msg_") || len(got) != len("msg_")+24, "empty id -> %q, want a generated msg_ id", got)
 }
 
 func TestPrepareGrokSessionRecognizesAgentSessionHeaders(t *testing.T) {
@@ -366,24 +326,19 @@ func TestPrepareGrokSessionRecognizesAgentSessionHeaders(t *testing.T) {
 		testutil.NotEqual(t, session.Key, "")
 		// An explicit client identity permits encrypted reasoning replay; the
 		// message-prefix fallback is affinity-only.
-		if !session.Replay {
-			t.Fatalf("%s: session is not marked replay-capable", header)
-		}
+		testutil.Falsef(t, !session.Replay, "%s: session is not marked replay-capable", header)
 	}
 	// Two different clients using the same identifier must not collide.
 	reqA := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	reqA.Header.Set("X-Claude-Code-Session-Id", "shared")
 	reqB := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	reqB.Header.Set("X-Codex-Session-Id", "shared")
-	if a, b := prepareGrokSession(reqA, "grok-4.6", "", base), prepareGrokSession(reqB, "grok-4.6", "", base); a.Key == b.Key {
-		t.Fatal("identical seeds from different clients collided")
-	}
+	a, b := prepareGrokSession(reqA, "grok-4.6", "", base), prepareGrokSession(reqB, "grok-4.6", "", base)
+	testutil.False(t, a.Key == b.Key, "identical seeds from different clients collided")
 	// Without any client identity the fallback is affinity-only.
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	fallback := prepareGrokSession(req, "grok-4.6", "", base)
-	if fallback.Replay {
-		t.Fatal("a message-prefix fallback must not enable reasoning replay")
-	}
+	testutil.False(t, fallback.Replay, "a message-prefix fallback must not enable reasoning replay")
 }
 
 func TestAnthropicUpstreamErrorDoesNotLeakUpstreamBody(t *testing.T) {
@@ -401,19 +356,14 @@ func TestAnthropicUpstreamErrorDoesNotLeakUpstreamBody(t *testing.T) {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("envelope is not JSON: %v (%s)", err, body)
-	}
-	if envelope.Type != "error" || envelope.Error.Message == "" {
-		t.Fatalf("unexpected Anthropic error envelope: %+v", envelope)
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &envelope)
+	testutil.CheckNoError(t, err)
+	testutil.Falsef(t, envelope.Type != "error" || envelope.Error.Message == "", "unexpected Anthropic error envelope: %+v", envelope)
 }
 
 func TestIdleTimeoutIsClassifiedSeparately(t *testing.T) {
 	// The sentinel is exported so every plane can recognise the condition.
-	if !errors.Is(errGrokSemanticIdle, ErrGrokSemanticIdle) {
-		t.Fatal("the ported alias must resolve to the exported sentinel")
-	}
+	testutil.False(t, !errors.Is(errGrokSemanticIdle, ErrGrokSemanticIdle), "the ported alias must resolve to the exported sentinel")
 	code, message := classifySynthesizedFailure("stream_read_error", "stream read error", errGrokSemanticIdle)
 	testutil.Equal(t, code, "upstream_stream_idle_timeout")
 	testutil.MustNotContain(t, message, "parse")
@@ -456,9 +406,8 @@ func TestAnthropicErrorTypeFollowsStatus(t *testing.T) {
 				Code string `json:"code"`
 			} `json:"error"`
 		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-			t.Fatalf("status %d: invalid JSON %v", status, err)
-		}
+		err := json.Unmarshal(rec.Body.Bytes(), &envelope)
+		testutil.CheckNoError(t, err)
 		testutil.Equal(t, envelope.Error.Type, want)
 		testutil.NotEqual(t, envelope.Error.Code, "")
 	}
@@ -484,12 +433,8 @@ func TestResponsesAPIErrorTypeFollowsStatus(t *testing.T) {
 
 func TestBuildSessionUUIDIsStableAndValid(t *testing.T) {
 	first := buildSessionUUID("deadbeef")
-	if !isUUID(first) {
-		t.Fatalf("buildSessionUUID() = %q, want a UUID", first)
-	}
-	if first != buildSessionUUID("deadbeef") {
-		t.Fatal("the same session seed must map to the same UUID")
-	}
+	testutil.True(t, isUUID(first), "buildSessionUUID() = %q, want a UUID")
+	testutil.Equal(t, first, buildSessionUUID("deadbeef"))
 	testutil.NotEqual(t, first, buildSessionUUID("deadbeee"))
 	existing := "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 	testutil.Equal(t, buildSessionUUID(existing), existing)
@@ -502,9 +447,8 @@ func TestToolMessagesRequireCallID(t *testing.T) {
 	}
 	items, _ := responsesInputFromChatMessages(messages)
 	for _, item := range items {
-		if m, ok := item.(map[string]interface{}); ok && m["type"] == "function_call_output" {
-			t.Fatalf("a tool message without tool_call_id must not become a function_call_output: %#v", m)
-		}
+		m, ok := item.(map[string]interface{})
+		testutil.Falsef(t, ok && m["type"] == "function_call_output", "a tool message without tool_call_id must not become a function_call_output: %#v", m)
 	}
 }
 
@@ -513,9 +457,8 @@ func TestChatToolUseMustBeAnswered(t *testing.T) {
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Function: map[string]interface{}{"name": "read"}}}},
 		{Role: "user", Content: "next"},
 	}
-	if err := validateChatToolSequence(unanswered); err == nil {
-		t.Fatal("an unanswered tool_use must be rejected")
-	}
+	err := validateChatToolSequence(unanswered)
+	testutil.Error(t, err)
 	answered := append([]ChatMessage{}, unanswered[0], ChatMessage{Role: "tool", ToolCallID: "call_1", Content: "ok"})
 	testutil.NoError(t, validateChatToolSequence(answered), "a paired tool_use must be accepted: %v")
 }
@@ -569,18 +512,10 @@ func TestQualityDegradedDetection(t *testing.T) {
 
 func TestQualityExpectsReasoning(t *testing.T) {
 	none, low := "none", "low"
-	if qualityExpectsReasoning(&ChatCompletionsRequest{ReasoningEffort: &none}, false) {
-		t.Fatal("effort=none must not expect reasoning")
-	}
-	if !qualityExpectsReasoning(&ChatCompletionsRequest{ReasoningEffort: &low}, false) {
-		t.Fatal("effort=low must expect reasoning")
-	}
-	if !qualityExpectsReasoning(nil, true) {
-		t.Fatal("an active reasoning replay must expect reasoning")
-	}
-	if qualityExpectsReasoning(&ChatCompletionsRequest{}, false) {
-		t.Fatal("a request without an effort must not expect reasoning")
-	}
+	testutil.False(t, qualityExpectsReasoning(&ChatCompletionsRequest{ReasoningEffort: &none}, false), "effort=none must not expect reasoning")
+	testutil.False(t, !qualityExpectsReasoning(&ChatCompletionsRequest{ReasoningEffort: &low}, false), "effort=low must expect reasoning")
+	testutil.False(t, !qualityExpectsReasoning(nil, true), "an active reasoning replay must expect reasoning")
+	testutil.False(t, qualityExpectsReasoning(&ChatCompletionsRequest{}, false), "a request without an effort must not expect reasoning")
 }
 
 func TestUnbindAffinityDropsTheSessionBinding(t *testing.T) {
@@ -613,24 +548,20 @@ func TestBackfillReasoningForCalls(t *testing.T) {
 	filled := backfillReasoningForCalls(input, cached)
 	testutil.Equal(t, len(filled), 2)
 	first, _ := filled[0].(map[string]interface{})
-	if first["type"] != "reasoning" || first["encrypted_content"] != "cipher-1" {
-		t.Fatalf("first item = %#v, want the cached proof", first)
-	}
+	testutil.Equal(t, first["type"], "reasoning")
+	testutil.Equal(t, first["encrypted_content"], "cipher-1")
 	// A call that already carries its proof is not doubled.
 	withProof := append(cloneReplayItems([]interface{}{proof}), input...)
-	if got := backfillReasoningForCalls(withProof, cached); len(got) != len(withProof) {
-		t.Fatalf("a call that already carries its proof must not be doubled: %#v", got)
-	}
+	got := backfillReasoningForCalls(withProof, cached)
+	testutil.Falsef(t, len(got) != len(withProof), "a call that already carries its proof must not be doubled: %#v", got)
 	// An unknown call id is left alone.
 	unknown := []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_9", "name": "read"}}
-	if got := backfillReasoningForCalls(unknown, cached); len(got) != 1 {
-		t.Fatalf("an unknown call must not gain a proof: %#v", got)
-	}
+	got = backfillReasoningForCalls(unknown, cached)
+	testutil.Falsef(t, len(got) != 1, "an unknown call must not gain a proof: %#v", got)
 	// No cache means no change.
 	plain := []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_1"}}
-	if got := backfillReasoningForCalls(plain, nil); len(got) != 1 {
-		t.Fatalf("without cached items nothing may be inserted: %#v", got)
-	}
+	got = backfillReasoningForCalls(plain, nil)
+	testutil.Falsef(t, len(got) != 1, "without cached items nothing may be inserted: %#v", got)
 }
 
 func TestReasoningForCallsIndexesOnlyProofs(t *testing.T) {
@@ -640,12 +571,10 @@ func TestReasoningForCallsIndexesOnlyProofs(t *testing.T) {
 		map[string]interface{}{"type": "reasoning", "id": "rs_2", "encrypted_content": "cipher"},
 		map[string]interface{}{"type": "custom_tool_call", "call_id": "call_2"},
 	})
-	if _, ok := index["call_1"]; ok {
-		t.Fatal("a reasoning item without a proof must not be indexed")
-	}
-	if entry, ok := index["call_2"]; !ok || entry["id"] != "rs_2" {
-		t.Fatalf("call_2 index = %#v, want rs_2", entry)
-	}
+	_, ok := index["call_1"]
+	testutil.False(t, ok, "a reasoning item without a proof must not be indexed")
+	entry, ok := index["call_2"]
+	testutil.Falsef(t, !ok || entry["id"] != "rs_2", "call_2 index = %#v, want rs_2", entry)
 }
 
 // TestAccumulatedInputItemsWalksTheContinuationChain drives the real chain
@@ -653,9 +582,7 @@ func TestReasoningForCallsIndexesOnlyProofs(t *testing.T) {
 // documented bound, and a cycle terminates instead of looping forever.
 func TestAccumulatedInputItemsWalksTheContinuationChain(t *testing.T) {
 	t.Parallel()
-	if maxStoredInputChainDepth < 1 || maxStoredInputChainDepth > 64 {
-		t.Fatalf("chain depth = %d, want a bounded positive value no greater than 64", maxStoredInputChainDepth)
-	}
+	testutil.Falsef(t, maxStoredInputChainDepth < 1 || maxStoredInputChainDepth > 64, "chain depth = %d, want a bounded positive value no greater than 64", maxStoredInputChainDepth)
 
 	s := newTestGrokStore(t, "chain:")
 	h := NewHandler(nil, loadbalancer.NewWithCacheTTL(s, 0))
@@ -663,9 +590,7 @@ func TestAccumulatedInputItemsWalksTheContinuationChain(t *testing.T) {
 	ctx := context.Background()
 	save := func(id, previous, text string) {
 		raw, err := json.Marshal([]map[string]string{{"role": "user", "content": text}})
-		if err != nil {
-			t.Fatalf("marshal %s: %v", id, err)
-		}
+		testutil.Falsef(t, err != nil, "marshal %s: %v", id, err)
 		if err := s.SaveStoredResponse(ctx, &store.StoredResponse{
 			ResponseID:         id,
 			OwnerHash:          "owner",
@@ -692,9 +617,7 @@ func TestAccumulatedInputItemsWalksTheContinuationChain(t *testing.T) {
 
 	itemText := func(item interface{}) string {
 		entry, ok := item.(map[string]interface{})
-		if !ok {
-			t.Fatalf("input item = %#v, want an object", item)
-		}
+		testutil.True(t, ok, "input item = %#v, want an object")
 		return fmt.Sprint(entry["content"])
 	}
 

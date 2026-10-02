@@ -35,16 +35,13 @@ func TestCatalogContextWindowsSkipsRowsWithoutAWindow(t *testing.T) {
 	snapshot := CatalogSnapshot(newCatalog([]modelEntry{
 		{Key: "no-window", Name: "No Window"},
 	}))
-	if windows := CatalogContextWindows(snapshot); windows != nil {
-		t.Fatalf("windows = %#v, want nil", windows)
-	}
+	windows := CatalogContextWindows(snapshot)
+	testutil.Falsef(t, windows != nil, "windows = %#v, want nil", windows)
 }
 
 // A snapshot written before the richer form existed is a "<key>\t<name>" pair.
 // It still resolves, it simply carries no window.
 func TestCatalogContextWindowsAcceptsLegacySnapshot(t *testing.T) {
 	windows := CatalogContextWindows([]string{"legacykey\tLegacy Name"})
-	if windows != nil {
-		t.Fatalf("windows = %#v, want nil for a legacy row", windows)
-	}
+	testutil.Falsef(t, windows != nil, "windows = %#v, want nil for a legacy row", windows)
 }

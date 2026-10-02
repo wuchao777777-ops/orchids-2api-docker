@@ -48,20 +48,14 @@ func TestNormalizeWorkBuddyCredentials_SplitsDocumentIntoDedicatedFields(t *test
 	t.Parallel()
 
 	acc := &store.Account{AccountType: "workbuddy", ClientCookie: workBuddyAuthDocument}
-	if !NormalizeWorkBuddyCredentials(acc) {
-		t.Fatal("NormalizeWorkBuddyCredentials() = false, want true")
-	}
+	testutil.False(t, !NormalizeWorkBuddyCredentials(acc), "NormalizeWorkBuddyCredentials() = false, want true")
 	testutil.Equal(t, acc.WorkBuddyRefreshToken, "durable-refresh-token")
-	if acc.WorkBuddyAccessToken == "" || workbuddy.DecodeClaims(acc.WorkBuddyAccessToken).Sub != "07ab88c8-5596-4257-8d21-e9fcbe3a3810" {
-		t.Fatalf("WorkBuddyAccessToken = %q, want the embedded token", acc.WorkBuddyAccessToken)
-	}
+	testutil.Falsef(t, acc.WorkBuddyAccessToken == "" || workbuddy.DecodeClaims(acc.WorkBuddyAccessToken).Sub != "07ab88c8-5596-4257-8d21-e9fcbe3a3810", "WorkBuddyAccessToken = %q, want the embedded token", acc.WorkBuddyAccessToken)
 	testutil.Equal(t, acc.WorkBuddyUID, "07ab88c8-5596-4257-8d21-e9fcbe3a3810")
 	// The identity the table labels the row with comes from the token claims.
 	testutil.Equal(t, acc.Email, "operator@example.com")
 	testutil.Equal(t, acc.Name, "operator@example.com")
-	if acc.WorkBuddyExpiresAt.IsZero() {
-		t.Fatal("WorkBuddyExpiresAt is zero, want the millisecond expiry converted")
-	}
+	testutil.False(t, acc.WorkBuddyExpiresAt.IsZero(), "WorkBuddyExpiresAt is zero, want the millisecond expiry converted")
 	// The generic credential slots are shared with other channels and must stay
 	// empty so the refresh token is never echoed through the account list.
 	for _, value := range map[string]string{
@@ -77,9 +71,7 @@ func TestNormalizeWorkBuddyCredentials_AcceptsBareRefreshToken(t *testing.T) {
 	t.Parallel()
 
 	acc := &store.Account{AccountType: "workbuddy", ClientCookie: "opaque-refresh-token"}
-	if !NormalizeWorkBuddyCredentials(acc) {
-		t.Fatal("NormalizeWorkBuddyCredentials() = false, want true")
-	}
+	testutil.False(t, !NormalizeWorkBuddyCredentials(acc), "NormalizeWorkBuddyCredentials() = false, want true")
 	testutil.Equal(t, acc.WorkBuddyRefreshToken, "opaque-refresh-token")
 }
 
@@ -87,9 +79,7 @@ func TestNormalizeWorkBuddyCredentials_RejectsEmptyInput(t *testing.T) {
 	t.Parallel()
 
 	acc := &store.Account{AccountType: "workbuddy"}
-	if NormalizeWorkBuddyCredentials(acc) {
-		t.Fatal("NormalizeWorkBuddyCredentials() = true, want false for an empty credential")
-	}
+	testutil.False(t, NormalizeWorkBuddyCredentials(acc), "NormalizeWorkBuddyCredentials() = true, want false for an empty credential")
 }
 
 func TestRedactWorkBuddyOutput_HidesDurableSecrets(t *testing.T) {
@@ -105,18 +95,13 @@ func TestRedactWorkBuddyOutput_HidesDurableSecrets(t *testing.T) {
 		ClientCookie:          "legacy-client-cookie",
 	}
 	out := RedactWorkBuddyOutput(acc)
-	if out == nil {
-		t.Fatal("RedactWorkBuddyOutput() = nil")
-	}
-	if out.WorkBuddyRefreshToken != "" || out.RefreshToken != "" || out.Token != "" {
-		t.Fatalf("redacted output still carries a secret: %+v", out)
-	}
-	if out.WorkBuddyAccessToken != "visible-access-token" || out.WorkBuddyUID != "uid-1" {
-		t.Fatalf("redacted output dropped the visible fields: %+v", out)
-	}
-	if acc.WorkBuddyRefreshToken != "durable-refresh-token" {
-		t.Fatal("redaction mutated the source account")
-	}
+	testutil.False(t, out == nil, "RedactWorkBuddyOutput() = nil")
+	testutil.Equal(t, out.WorkBuddyRefreshToken, "")
+	testutil.Equal(t, out.RefreshToken, "")
+	testutil.Equal(t, out.Token, "")
+	testutil.Equal(t, out.WorkBuddyAccessToken, "visible-access-token")
+	testutil.Equal(t, out.WorkBuddyUID, "uid-1")
+	testutil.Equal(t, acc.WorkBuddyRefreshToken, "durable-refresh-token")
 }
 
 func TestWorkBuddyCredentialKey_UsesDurableToken(t *testing.T) {
@@ -139,9 +124,7 @@ func TestVerifyWorkBuddyAccount_RequiresCredential(t *testing.T) {
 	t.Parallel()
 
 	_, httpStatus, err := verifyWorkBuddyAccountWithStore(context.Background(), &store.Account{AccountType: "workbuddy"}, &config.Config{}, nil)
-	if err == nil {
-		t.Fatal("expected an error for a credential-less account")
-	}
+	testutil.False(t, err == nil, "expected an error for a credential-less account")
 	testutil.Equal(t, httpStatus, 400)
 }
 
@@ -159,13 +142,10 @@ func TestPreserveWorkBuddyCredentialsOnEdit_KeepsServerSideState(t *testing.T) {
 
 	PreserveWorkBuddyCredentialsOnEdit(edited, existing)
 
-	if edited.WorkBuddyAccessToken != "stored-access" || edited.WorkBuddyRefreshToken != "stored-refresh" {
-		t.Fatalf("credentials were dropped on edit: %+v", edited)
-	}
+	testutil.Equal(t, edited.WorkBuddyAccessToken, "stored-access")
+	testutil.Equal(t, edited.WorkBuddyRefreshToken, "stored-refresh")
 	testutil.Equal(t, len(edited.WorkBuddyModelIDs), 4)
-	if edited.WorkBuddyModelsSyncedAt.IsZero() {
-		t.Fatal("WorkBuddyModelsSyncedAt was reset")
-	}
+	testutil.False(t, edited.WorkBuddyModelsSyncedAt.IsZero(), "WorkBuddyModelsSyncedAt was reset")
 }
 
 func TestBuildQuotaResponseFields_WorkBuddyKeepsRemainingSemantics(t *testing.T) {
@@ -198,9 +178,8 @@ func TestBuildQuotaResponseFields_WorkBuddyKeepsRemainingSemantics(t *testing.T)
 	testutil.Equal(t, fields["quota_plan"], "Free Plan Subscription")
 	testutil.Equal(t, fields["quota_unit"], "credit")
 	testutil.Equal(t, fields["quota_consumed_units"], 52)
-	if _, ok := fields["quota_reset_at"]; !ok {
-		t.Fatal("quota_reset_at is missing")
-	}
+	_, ok := fields["quota_reset_at"]
+	testutil.False(t, !ok, "quota_reset_at is missing")
 }
 
 func TestBuildQuotaResponseFields_WorkBuddyWithoutMeterIsUnsupported(t *testing.T) {
@@ -257,32 +236,24 @@ func TestRefreshAccountState_WorkBuddySyncsModelsAndQuota(t *testing.T) {
 	}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("refreshAccountState() error = %v", err)
-	}
-	if status != "" || httpStatus != 0 {
-		t.Fatalf("status = %q httpStatus = %d, want a clean sync", status, httpStatus)
-	}
+	testutil.NoError(t, err, "refreshAccountState() error = %v")
+	testutil.Equal(t, status, "")
+	testutil.Equal(t, httpStatus, 0)
 
 	testutil.Equal(t, len(acc.WorkBuddyModelIDs), 2)
-	if acc.UsageLimit != 250 || acc.UsageCurrent != 47.28 {
-		t.Fatalf("usage = %v/%v, want 47.28 remaining of 250", acc.UsageCurrent, acc.UsageLimit)
-	}
+	testutil.Equal(t, acc.UsageLimit, 250)
+	testutil.Equal(t, acc.UsageCurrent, 47.28)
 	testutil.Equal(t, acc.WorkBuddyQuota.PackageName, "Free Plan Subscription")
-	if acc.WorkBuddyQuota.SyncedAt.IsZero() {
-		t.Fatal("quota snapshot has no timestamp; the UI cannot tell when to re-sync")
-	}
+	testutil.False(t, acc.WorkBuddyQuota.SyncedAt.IsZero(), "quota snapshot has no timestamp; the UI cannot tell when to re-sync")
 
 	// The columns are rendered from the API response, so assert on that shape.
 	fields := buildQuotaResponseFields(acc)
 	testutil.Equal(t, fields["quota_supported"], true)
-	if fields["quota_remaining"] != 47.28 || fields["quota_limit"] != 250.0 {
-		t.Fatalf("remaining/limit = %v/%v", fields["quota_remaining"], fields["quota_limit"])
-	}
+	testutil.Equal(t, fields["quota_remaining"], 47.28)
+	testutil.Equal(t, fields["quota_limit"], 250.0)
 	testutil.Equal(t, fields["quota_plan"], "Free Plan Subscription")
-	if used, ok := fields["quota_used"].(float64); !ok || math.Abs(used-202.72) > 0.01 {
-		t.Fatalf("quota_used = %v, want the derived consumption (202.72)", fields["quota_used"])
-	}
+	used, ok := fields["quota_used"].(float64)
+	testutil.Falsef(t, !ok || math.Abs(used-202.72) > 0.01, "quota_used = %v, want the derived consumption (202.72)", fields["quota_used"])
 }
 
 // TestRefreshAccountState_WorkBuddySpentMeterEnablesFreeOnlyMode pins the
@@ -319,23 +290,16 @@ func TestRefreshAccountState_WorkBuddySpentMeterEnablesFreeOnlyMode(t *testing.T
 	}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("refreshAccountState() error = %v", err)
-	}
-	if status != store.AccountStatusWorkBuddyQuotaExhausted || httpStatus != 0 {
-		t.Fatalf("status = %q httpStatus = %d, want WorkBuddy free-only verdict", status, httpStatus)
-	}
+	testutil.NoError(t, err, "refreshAccountState() error = %v")
+	testutil.Equal(t, status, store.AccountStatusWorkBuddyQuotaExhausted)
+	testutil.Equal(t, httpStatus, 0)
 	// The spent package must still be visible: the 配额 column renders remaining=0.
-	if acc.UsageLimit != 250 || acc.UsageCurrent != 0 {
-		t.Fatalf("usage = %v/%v, want 0 remaining of 250", acc.UsageCurrent, acc.UsageLimit)
-	}
-	if acc.WorkBuddyQuota.SyncedAt.IsZero() || acc.WorkBuddyQuota.Remaining != 0 {
-		t.Fatalf("workbuddy_quota = %+v, want a synced snapshot with remaining 0", acc.WorkBuddyQuota)
-	}
+	testutil.Equal(t, acc.UsageLimit, 250)
+	testutil.Equal(t, acc.UsageCurrent, 0)
+	testutil.Falsef(t, acc.WorkBuddyQuota.SyncedAt.IsZero() || acc.WorkBuddyQuota.Remaining != 0, "workbuddy_quota = %+v, want a synced snapshot with remaining 0", acc.WorkBuddyQuota)
 	fields := buildQuotaResponseFields(acc)
-	if fields["quota_remaining"] != 0.0 || fields["quota_supported"] != true {
-		t.Fatalf("quota_remaining/quota_supported = %v/%v", fields["quota_remaining"], fields["quota_supported"])
-	}
+	testutil.Equal(t, fields["quota_remaining"], 0.0)
+	testutil.Equal(t, fields["quota_supported"], true)
 }
 
 // TestHandleAccounts_CheckWorkBuddySpentMeterKeepsThePark covers an account parked
@@ -385,14 +349,10 @@ func TestHandleAccounts_CheckWorkBuddySpentMeterKeepsThePark(t *testing.T) {
 	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	stored, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, stored.StatusCode, store.AccountStatusWorkBuddyQuotaExhausted)
 	testutil.Equal(t, stored.StatusMessage, "")
-	if stored.VerifiedAt.IsZero() {
-		t.Fatal("the check must still record that the credential was exercised")
-	}
+	testutil.False(t, stored.VerifiedAt.IsZero(), "the check must still record that the credential was exercised")
 }
 
 // TestHandleAccounts_CheckWorkBuddyClearsParkOnceToppedUp is the release half, and
@@ -439,9 +399,7 @@ func TestHandleAccounts_CheckWorkBuddyClearsParkOnceToppedUp(t *testing.T) {
 	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	stored, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, stored.StatusCode, "")
 }
 
@@ -464,12 +422,9 @@ func TestRefreshAccountState_WorkBuddyMeterFailureKeepsAccountUsable(t *testing.
 	acc := &store.Account{ID: 4, AccountType: "workbuddy", WorkBuddyAccessToken: "access"}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("a meter failure must not fail the account sync: %v", err)
-	}
-	if status != "" || httpStatus != 0 {
-		t.Fatalf("status = %q httpStatus = %d", status, httpStatus)
-	}
+	testutil.NoError(t, err, "a meter failure must not fail the account sync: %v")
+	testutil.Equal(t, status, "")
+	testutil.Equal(t, httpStatus, 0)
 	testutil.Equal(t, len(acc.WorkBuddyModelIDs), 1)
 	fields := buildQuotaResponseFields(acc)
 	testutil.Equal(t, fields["quota_supported"], false)
@@ -512,9 +467,8 @@ func TestHandleAccounts_WorkBuddyRowCarriesTierAndQuota(t *testing.T) {
 	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	var rows []map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
-		t.Fatalf("decode accounts: %v (body=%s)", err, rec.Body.String())
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &rows)
+	testutil.CheckNoError(t, err)
 	testutil.Equal(t, len(rows), 1)
 	row := rows[0]
 	testutil.Equal(t, row["email"], "operator@example.com")
@@ -526,16 +480,11 @@ func TestHandleAccounts_WorkBuddyRowCarriesTierAndQuota(t *testing.T) {
 	} {
 		testutil.Equal(t, row[key], want)
 	}
-	if used, ok := row["quota_used"].(float64); !ok || math.Abs(used-202.72) > 0.01 {
-		t.Fatalf("quota_used = %v", row["quota_used"])
-	}
+	used, ok := row["quota_used"].(float64)
+	testutil.Falsef(t, !ok || math.Abs(used-202.72) > 0.01, "quota_used = %v", row["quota_used"])
 	quota, ok := row["workbuddy_quota"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("workbuddy_quota = %v, want the meter snapshot", row["workbuddy_quota"])
-	}
-	if quota["package_name"] != "Free Plan Subscription" || quota["synced_at"] == nil {
-		t.Fatalf("workbuddy_quota = %v, want the package label and a sync timestamp", quota)
-	}
+	testutil.True(t, ok, "workbuddy_quota = %v, want the meter snapshot")
+	testutil.Falsef(t, quota["package_name"] != "Free Plan Subscription" || quota["synced_at"] == nil, "workbuddy_quota = %v, want the package label and a sync timestamp", quota)
 	if row["workbuddy_refresh_token"] != nil {
 		t.Fatalf("the refresh token leaked into the account list: %v", row["workbuddy_refresh_token"])
 	}
@@ -557,9 +506,7 @@ func TestHandleAccounts_PostWorkBuddyDocumentCapturesIdentityAndQuota(t *testing
 		"enabled":       true,
 		"weight":        1,
 	})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testutil.NoError(t, err, "marshal: %v")
 	req := httptest.NewRequest(http.MethodPost, "/api/accounts", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -567,19 +514,15 @@ func TestHandleAccounts_PostWorkBuddyDocumentCapturesIdentityAndQuota(t *testing
 	testutil.Equal(t, rec.Code, http.StatusCreated)
 
 	var row map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &row); err != nil {
-		t.Fatalf("decode: %v (body=%s)", err, rec.Body.String())
-	}
+	err = json.Unmarshal(rec.Body.Bytes(), &row)
+	testutil.CheckNoError(t, err)
 	// The stubbed auth document embeds a JWT with sub/email claims.
 	testutil.Equal(t, row["email"], "operator@example.com")
 	testutil.Equal(t, row["workbuddy_uid"], "07ab88c8-5596-4257-8d21-e9fcbe3a3810")
 	testutil.Equal(t, row["quota_plan"], "Free Plan Subscription")
-	if row["quota_remaining"] != 47.28 || row["quota_limit"] != 250.0 {
-		t.Fatalf("quota = %v/%v", row["quota_remaining"], row["quota_limit"])
-	}
-	if row["workbuddy_refresh_token"] != nil {
-		t.Fatal("the refresh token leaked in the create response")
-	}
+	testutil.Equal(t, row["quota_remaining"], 47.28)
+	testutil.Equal(t, row["quota_limit"], 250.0)
+	testutil.False(t, row["workbuddy_refresh_token"] != nil, "the refresh token leaked in the create response")
 
 	// The same values must come back from the list endpoint the table reads.
 	listRec := httptest.NewRecorder()
@@ -587,9 +530,8 @@ func TestHandleAccounts_PostWorkBuddyDocumentCapturesIdentityAndQuota(t *testing
 	var rows []map[string]interface{}
 	testutil.NoError(t, json.Unmarshal(listRec.Body.Bytes(), &rows), "decode list: %v")
 	testutil.Equal(t, len(rows), 1)
-	if rows[0]["quota_plan"] != "Free Plan Subscription" || rows[0]["email"] != "operator@example.com" {
-		t.Fatalf("list row = %v", rows[0])
-	}
+	testutil.Equal(t, rows[0]["quota_plan"], "Free Plan Subscription")
+	testutil.Equal(t, rows[0]["email"], "operator@example.com")
 }
 
 // TestHandleAccounts_GrokRowCarriesSnapshotTimestamp covers the freshness signal
@@ -627,9 +569,7 @@ func TestHandleAccounts_GrokRowCarriesSnapshotTimestamp(t *testing.T) {
 	if !ok || billing["synced_at"] == nil {
 		t.Fatalf("Grok Build row is missing grok_billing.synced_at: %v", row["grok_billing"])
 	}
-	if row["grok_models_synced_at"] == nil {
-		t.Fatal("Grok Build row is missing grok_models_synced_at")
-	}
+	testutil.False(t, row["grok_models_synced_at"] == nil, "Grok Build row is missing grok_models_synced_at")
 }
 
 // TestAccountStatusReasonIsExposed covers the "未授权 with no explanation" problem:
@@ -657,9 +597,8 @@ func TestAccountStatusReasonIsExposed(t *testing.T) {
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rows), "decode: %v")
 	testutil.Equal(t, len(rows), 1)
 	testutil.Equal(t, rows[0]["status_code"], "401")
-	if got, _ := rows[0]["status_message"].(string); got == "" {
-		t.Fatal("status_message is missing; the UI can only show a bare 401")
-	}
+	got, _ := rows[0]["status_message"].(string)
+	testutil.False(t, got == "", "status_message is missing; the UI can only show a bare 401")
 
 	// A successful refresh must clear both the code and the stale reason.
 	acc.StatusCode = ""
@@ -672,9 +611,8 @@ func TestAccountStatusReasonIsExposed(t *testing.T) {
 	testutil.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &cleared), "decode: %v")
 	testutil.Equal(t, len(cleared), 1)
 	testutil.Equal(t, cleared[0]["status_code"], "")
-	if reason := cleared[0]["status_message"]; reason != nil && reason != "" {
-		t.Fatalf("status_message = %v, want cleared with the status", reason)
-	}
+	reason := cleared[0]["status_message"]
+	testutil.Falsef(t, reason != nil && reason != "", "status_message = %v, want cleared with the status", reason)
 }
 
 func TestResolveCredentials_MatchesClientResolution(t *testing.T) {
@@ -684,8 +622,7 @@ func TestResolveCredentials_MatchesClientResolution(t *testing.T) {
 	apiCreds := resolveWorkBuddyCredentials(acc)
 	clientCreds := workbuddy.ResolveCredentials(acc)
 
-	if apiCreds.AccessToken != clientCreds.AccessToken || apiCreds.RefreshToken != clientCreds.RefreshToken {
-		t.Fatalf("api=%+v client=%+v", apiCreds, clientCreds)
-	}
+	testutil.Equal(t, apiCreds.AccessToken, clientCreds.AccessToken)
+	testutil.Equal(t, apiCreds.RefreshToken, clientCreds.RefreshToken)
 	testutil.Equal(t, apiCreds.UID, clientCreds.UID)
 }

@@ -3,12 +3,15 @@ package audit
 import (
 	"context"
 	"log/slog"
+	"orchids-api/internal/util"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"encoding/json"
+
 	"github.com/redis/go-redis/v9"
 )
 
@@ -266,19 +269,12 @@ func sensitiveKey(key string) bool {
 	if name == "" {
 		return false
 	}
-	for _, needle := range redactedKeys {
-		if strings.Contains(name, needle) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(redactedKeys, func(needle string) bool { return strings.Contains(name, needle) })
 }
 
 // Redact sanitises a parsed request body for the operation journal. Credential
 // fields are replaced, not dropped, so the summary still shows which knob moved.
-func Redact(value interface{}) (interface{}, []string) {
-	return redactValue(value, "")
-}
+func Redact(value interface{}) (interface{}, []string) { return redactValue(value, "") }
 
 func redactValue(value interface{}, prefix string) (interface{}, []string) {
 	switch typed := value.(type) {
@@ -328,9 +324,7 @@ func redactString(value string, path string) (interface{}, []string) {
 	}
 	masked := urlCredentials.ReplaceAllString(value, "${1}${2}:"+redactedPlaceholder+"@")
 	label := path
-	if label == "" {
-		label = "url"
-	}
+	label = util.FirstNonEmptyUntrimmed(label, "url")
 	return masked, []string{label + " (embedded password)"}
 }
 

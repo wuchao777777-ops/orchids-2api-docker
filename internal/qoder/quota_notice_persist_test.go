@@ -60,28 +60,16 @@ func TestRecordQuotaNoticeMovesTheAccountView(t *testing.T) {
 	testutil.Equal(t, len(fake.patches), 1)
 	testutil.Equal(t, len(fake.full), 0)
 	patch := fake.patches[0]
-	if patch.Quota == nil {
-		t.Fatal("patch carried no quota; the notice was dropped on the way to the store")
-	}
-	if !patch.Quota.Exhausted {
-		t.Error("patch.Quota.Exhausted = false, want true")
-	}
-	if !patch.Quota.ResetAt.Equal(reset) {
-		t.Errorf("patch.Quota.ResetAt = %v, want the boundary the stream named (%v)", patch.Quota.ResetAt, reset)
-	}
+	testutil.False(t, patch.Quota == nil, "patch carried no quota; the notice was dropped on the way to the store")
+	testutil.CheckFalse(t, !patch.Quota.Exhausted, "patch.Quota.Exhausted = false, want true")
+	testutil.CheckFalsef(t, !patch.Quota.ResetAt.Equal(reset), "patch.Quota.ResetAt = %v, want the boundary the stream named (%v)", patch.Quota.ResetAt, reset)
 	testutil.CheckEqual(t, patch.Quota.UpgradeURL, "https://qoder.com/upgrade")
-	if !patch.Quota.SyncedAt.After(previousSynced) {
-		t.Errorf("SyncedAt = %v, want it newer than the reading it replaces (%v)", patch.Quota.SyncedAt, previousSynced)
-	}
+	testutil.CheckFalsef(t, !patch.Quota.SyncedAt.After(previousSynced), "SyncedAt = %v, want it newer than the reading it replaces (%v)", patch.Quota.SyncedAt, previousSynced)
 	// The stale counters must not be presented as current: the upstream said the
 	// allowance is spent, so the flag — which is authoritative over the
 	// arithmetic — has to say so too.
-	if !acc.QoderQuota.Exhausted {
-		t.Error("in-memory snapshot kept claiming credits after a quota_exceeded notice")
-	}
-	if !acc.QoderQuota.ResetAt.Equal(reset) {
-		t.Errorf("in-memory ResetAt = %v, want %v", acc.QoderQuota.ResetAt, reset)
-	}
+	testutil.CheckFalse(t, !acc.QoderQuota.Exhausted, "in-memory snapshot kept claiming credits after a quota_exceeded notice")
+	testutil.CheckFalsef(t, !acc.QoderQuota.ResetAt.Equal(reset), "in-memory ResetAt = %v, want %v", acc.QoderQuota.ResetAt, reset)
 	testutil.CheckEqual(t, acc.QoderQuota.PlanTier, "Pro Trial")
 }
 
@@ -108,10 +96,7 @@ func TestRecordQuotaNoticeWithoutAResetKeepsTheOldWindow(t *testing.T) {
 	client.recordQuotaNotice(context.Background(), &QuotaNotice{Kind: "NOTIFICATIONS", Exhausted: true})
 
 	testutil.Equal(t, len(fake.patches), 1)
-	if got := fake.patches[0].Quota.ResetAt; !got.Equal(previous) {
-		t.Errorf("ResetAt = %v, want the previous window %v preserved", got, previous)
-	}
-	if !acc.QoderQuota.Exhausted {
-		t.Error("Exhausted = false, want the verdict recorded even without a boundary")
-	}
+	got := fake.patches[0].Quota.ResetAt
+	testutil.CheckFalsef(t, !got.Equal(previous), "ResetAt = %v, want the previous window %v preserved", got, previous)
+	testutil.CheckFalse(t, !acc.QoderQuota.Exhausted, "Exhausted = false, want the verdict recorded even without a boundary")
 }

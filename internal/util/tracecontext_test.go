@@ -53,9 +53,7 @@ func TestTraceparentAcceptsEveryIdentifierShape(t *testing.T) {
 			t.Parallel()
 			got := Traceparent(tc.input)
 			testutil.Equal(t, got, tc.want)
-			if !traceparentPattern.MatchString(got) {
-				t.Fatalf("Traceparent(%q) = %q, which is not a version 00 trace context", tc.input, got)
-			}
+			testutil.Falsef(t, !traceparentPattern.MatchString(got), "Traceparent(%q) = %q, which is not a version 00 trace context", tc.input, got)
 			testutil.Equal(t, len(got), 55)
 		})
 	}
@@ -65,13 +63,9 @@ func TestTraceparentAcceptsEveryIdentifierShape(t *testing.T) {
 	testutil.Equal(t, Traceparent(uuid), Traceparent(uuid))
 	for _, input := range []string{"", "   ", "not-a-uuid", "zzzz", "-", "0", strings.Repeat("0", 32), strings.Repeat("0", 16) + strings.Repeat("a", 16)} {
 		got := Traceparent(input)
-		if !traceparentPattern.MatchString(got) {
-			t.Fatalf("Traceparent(%q) = %q, want a valid trace context", input, got)
-		}
+		testutil.Falsef(t, !traceparentPattern.MatchString(got), "Traceparent(%q) = %q, want a valid trace context", input, got)
 		parts := strings.Split(got, "-")
-		if parts[1] == strings.Repeat("0", 32) || parts[2] == strings.Repeat("0", 16) {
-			t.Errorf("Traceparent(%q) has a forbidden zero trace/span ID: %q", input, got)
-		}
+		testutil.CheckFalsef(t, parts[1] == strings.Repeat("0", 32) || parts[2] == strings.Repeat("0", 16), "Traceparent(%q) has a forbidden zero trace/span ID: %q", input, got)
 		testutil.CheckEqual(t, got, Traceparent(input))
 	}
 	testutil.NotEqual(t, Traceparent(""), Traceparent("zzzz"))

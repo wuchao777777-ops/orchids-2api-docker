@@ -48,12 +48,7 @@ func AccountSupportsModel(acc *store.Account, modelID string) bool {
 	if len(acc.GrokModels) == 0 {
 		return true
 	}
-	for _, model := range acc.GrokModels {
-		if strings.EqualFold(strings.TrimSpace(model), modelID) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(acc.GrokModels, func(model string) bool { return strings.EqualFold(strings.TrimSpace(model), modelID) })
 }
 
 const (

@@ -54,9 +54,7 @@ type modelEntry struct {
 // enabled reports whether the gateway currently serves this row. A missing flag
 // means enabled: the field is an opt-out, and treating absence as disabled would
 // hide every model from a deployment that omits it.
-func (m modelEntry) enabled() bool {
-	return m.Enable == nil || *m.Enable
-}
+func (m modelEntry) enabled() bool { return m.Enable == nil || *m.Enable }
 
 // Catalog is a resolved model catalog.
 type Catalog struct {

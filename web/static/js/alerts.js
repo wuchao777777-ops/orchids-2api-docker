@@ -10,44 +10,12 @@
   // threshold exists, because a number without its reason is a number an operator
   // will guess at.
   const FIELDS = [
-    {
-      key: 'MinRequests',
-      label: '最小请求数',
-      hint: '窗口内至少要有这么多次真实请求，成功率规则才允许触发；防止空闲渠道被一次失败打到。',
-      kind: 'int',
-      min: 0,
-    },
-    {
-      key: 'MinFailures',
-      label: '最小失败数',
-      hint: '警告级别还需要的失败次数；严重级别（低于严重阈值）不受此限制，因为几乎全部失败本身就是故障。',
-      kind: 'int',
-      min: 0,
-    },
-    {
-      key: 'SuccessRateWarning',
-      label: '告警成功率阈值',
-      hint: '成功率低于这个百分比触发警告级别（例如 90%）。',
-      kind: 'ratio',
-    },
-    {
-      key: 'SuccessRateCritical',
-      label: '严重成功率阈值',
-      hint: '低于这个百分比直接判严重；必须低于告警阈值，否则两档描述同一件事。',
-      kind: 'ratio',
-    },
-    {
-      key: 'ClearMargin',
-      label: '恢复余量',
-      hint: '已告警的渠道要回到“阈值 + 余量”以上才判定恢复；这是迟滞带，防止在阈值线上反复告警与恢复。',
-      kind: 'ratio',
-    },
-    {
-      key: 'RequireNoAvailableAccounts',
-      label: '检查账号池',
-      hint: '渠道有启用账号但全部不可用时触发严重告警（冷却、需重新登录都算不可用）。',
-      kind: 'bool',
-    },
+    { key: 'MinRequests', label: '最小请求数', hint: '窗口内至少要有这么多次真实请求，成功率规则才允许触发；防止空闲渠道被一次失败打到。', kind: 'int', min: 0 },
+    { key: 'MinFailures', label: '最小失败数', hint: '警告级别还需要的失败次数；严重级别（低于严重阈值）不受此限制，因为几乎全部失败本身就是故障。', kind: 'int', min: 0 },
+    { key: 'SuccessRateWarning', label: '告警成功率阈值', hint: '成功率低于这个百分比触发警告级别（例如 90%）。', kind: 'ratio' },
+    { key: 'SuccessRateCritical', label: '严重成功率阈值', hint: '低于这个百分比直接判严重；必须低于告警阈值，否则两档描述同一件事。', kind: 'ratio' },
+    { key: 'ClearMargin', label: '恢复余量', hint: '已告警的渠道要回到“阈值 + 余量”以上才判定恢复；这是迟滞带，防止在阈值线上反复告警与恢复。', kind: 'ratio' },
+    { key: 'RequireNoAvailableAccounts', label: '检查账号池', hint: '渠道有启用账号但全部不可用时触发严重告警（冷却、需重新登录都算不可用）。', kind: 'bool' },
   ];
 
 
@@ -57,9 +25,7 @@
 
 
 
-  function fmtRatio(value) {
-    return (Number(value || 0) * 100).toFixed(1) + '%';
-  }
+  function fmtRatio(value) { return (Number(value || 0) * 100).toFixed(1) + '%'; }
 
   // A ratio is stored as a fraction (0.9) and shown as a percentage (90%). The engine's
   // wire format does not change; only the form does, because "0.03 的恢复余量" is not
@@ -118,9 +84,7 @@
           input,
           make('span', 'alerts-field-unit', '%'),
         ]));
-      } else {
-        wrap.appendChild(input);
-      }
+      } else { wrap.appendChild(input); }
       wrap.appendChild(make('span', 'alerts-field-hint', field.hint));
       container.appendChild(wrap);
     });
@@ -217,9 +181,7 @@
       setState(state.editable ? '规则已加载' : '本部署未启用告警引擎（需要 Redis）', state.editable ? '' : 'is-warn');
       const note = el('alertsNote');
       if (note && payload.note) note.textContent = payload.note;
-    } catch (error) {
-      setState('读取失败：' + (error.message || error), 'is-error');
-    }
+    } catch (error) { setState('读取失败：' + (error.message || error), 'is-error'); }
   }
 
   async function saveRules() {
@@ -232,11 +194,7 @@
     setState('保存中…');
     try {
       const response = await ConsoleAPI.request('/api/ops/alerts/rules', {
-        method: 'PUT',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(rules),
-      });
+        method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rules) });
       if (!response.ok) throw new Error((await response.text()) || ('HTTP ' + response.status));
       const payload = await response.json();
       state.rules = payload.rules || rules;
@@ -298,9 +256,7 @@
         ].forEach((value) => tr.appendChild(make('td', '', String(value))));
         body.appendChild(tr);
       });
-    } catch (error) {
-      eventMessage(body, '读取触发记录失败：' + (error.message || error));
-    }
+    } catch (error) { eventMessage(body, '读取触发记录失败：' + (error.message || error)); }
   }
 
   // --- bind ------------------------------------------------------------------

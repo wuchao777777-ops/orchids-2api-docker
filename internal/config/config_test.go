@@ -15,9 +15,8 @@ func TestConfigDefaults(t *testing.T) {
 	testutil.Equal(t, cfg.ResponseStoreTTL, 720)
 	testutil.Equal(t, cfg.MediaDir, "data"+string(filepath.Separator)+"tmp")
 	testutil.Equal(t, cfg.GrokCLIClientVersionOrDefault(), "1.0.40")
-	if got := cfg.GrokCLIUserAgentOrDefault(); got != "grok-shell/1.0.40 (linux; x86_64)" {
-		t.Fatalf("GrokCLIUserAgentOrDefault()=%q", got)
-	}
+	got := cfg.GrokCLIUserAgentOrDefault()
+	testutil.Falsef(t, got != "grok-shell/1.0.40 (linux; x86_64)", "GrokCLIUserAgentOrDefault()=%q", got)
 }
 
 func TestCloneDeepCopiesReferenceFields(t *testing.T) {
@@ -44,9 +43,7 @@ func TestApplyDefaultsGeneratesRandomPassword(t *testing.T) {
 
 	testutil.NotEqual(t, cfg.AdminPass, "")
 	testutil.NotEqual(t, cfg.AdminPass, "admin123")
-	if len(cfg.AdminPass) < 16 {
-		t.Fatalf("AdminPass too short: got %d chars, want at least 16", len(cfg.AdminPass))
-	}
+	testutil.Falsef(t, len(cfg.AdminPass) < 16, "AdminPass too short: got %d chars, want at least 16", len(cfg.AdminPass))
 
 	// Verify each call generates a different password.
 	var cfg2 Config
@@ -83,9 +80,8 @@ func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 	testutil.Equal(t, cfg.AdminPass, "mypass")
 	testutil.Equal(t, cfg.AdminPath, "/myadmin")
 	testutil.Equal(t, cfg.RedisAddr, "redis:6380")
-	if cfg.DeploymentInstance != "replica-a" || cfg.MediaDir != "/srv/orchids-media" {
-		t.Fatalf("deployment instance and media directory were not preserved: %+v", cfg)
-	}
+	testutil.Equal(t, cfg.DeploymentInstance, "replica-a")
+	testutil.Equal(t, cfg.MediaDir, "/srv/orchids-media")
 }
 
 // Legacy inference_auth_enabled values must not disable managed-key checks.
@@ -94,7 +90,5 @@ func TestLegacyInferenceAuthOptOutIsIgnored(t *testing.T) {
 	var cfg Config
 	testutil.NoError(t, json.Unmarshal([]byte(`{"inference_auth_enabled":false}`), &cfg))
 	ApplyDefaults(&cfg)
-	if cfg.AnonymousAllowIPs != nil {
-		t.Fatal("legacy opt-out must not introduce an anonymous allowlist")
-	}
+	testutil.False(t, cfg.AnonymousAllowIPs != nil, "legacy opt-out must not introduce an anonymous allowlist")
 }

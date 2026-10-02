@@ -24,9 +24,7 @@ func NewRenderer() (*Renderer, error) {
 		return nil, err
 	}
 
-	return &Renderer{
-		templates: tmpl,
-	}, nil
+	return &Renderer{templates: tmpl}, nil
 }
 
 // parseTemplates parses all template files from the embedded filesystem

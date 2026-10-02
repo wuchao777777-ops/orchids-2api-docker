@@ -112,19 +112,12 @@ func TestAPIKeyBillingReservationSettles(t *testing.T) {
 
 	testutil.True(t, handlerRun, "handler must run for a reservation that fits")
 	testutil.Equal(t, seenBody, billingChatBody)
-	if seenHeld == nil || seenHeld.KeyID != 7 || seenHeld.EventID != "req-1" || seenHeld.Amount <= 0 {
-		t.Fatalf("reservation in context = %#v", seenHeld)
-	}
-	if !settleOK || settled.Model != "grok-4.6" {
-		t.Fatalf("settle = %#v, %v", settled, settleOK)
-	}
+	testutil.Falsef(t, seenHeld == nil || seenHeld.KeyID != 7 || seenHeld.EventID != "req-1" || seenHeld.Amount <= 0, "reservation in context = %#v", seenHeld)
+	testutil.Falsef(t, !settleOK || settled.Model != "grok-4.6", "settle = %#v, %v", settled, settleOK)
 	// 1000 input at 20000 ticks + 500 output at 60000 ticks.
-	if want := int64(1000*20000 + 500*60000); settled.CostInUSDTicks != want {
-		t.Fatalf("cost = %d, want %d", settled.CostInUSDTicks, want)
-	}
-	if len(ledger.settles) != 1 || ledger.settles[0] != settled.CostInUSDTicks || ledger.used != settled.CostInUSDTicks {
-		t.Fatalf("ledger after settle = %#v", ledger)
-	}
+	want := int64(1000*20000 + 500*60000)
+	testutil.Falsef(t, settled.CostInUSDTicks != want, "cost = %d, want %d", settled.CostInUSDTicks, want)
+	testutil.Falsef(t, len(ledger.settles) != 1 || ledger.settles[0] != settled.CostInUSDTicks || ledger.used != settled.CostInUSDTicks, "ledger after settle = %#v", ledger)
 	testutil.Equal(t, len(ledger.held), 0)
 	testutil.Equal(t, len(ledger.releases), 0)
 }
@@ -142,12 +135,10 @@ func TestAPIKeyBillingReservationReleasesUnsettledRequest(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler(recorder, billingRequest(http.MethodPost, "/v1/messages", billingChatBody, principal, "req-release"))
 
-	if len(ledger.releases) != 1 || ledger.releases[0] != "req-release" {
-		t.Fatalf("releases = %#v", ledger.releases)
-	}
-	if ledger.used != 0 || len(ledger.held) != 0 {
-		t.Fatalf("ledger after release = %#v", ledger)
-	}
+	testutil.Equal(t, len(ledger.releases), 1)
+	testutil.Equal(t, ledger.releases[0], "req-release")
+	testutil.Equal(t, ledger.used, 0)
+	testutil.Equal(t, len(ledger.held), 0)
 }
 
 // TestAPIKeyBillingReservationRefusesOverLimit pins the 402 contract and that a
@@ -164,9 +155,7 @@ func TestAPIKeyBillingReservationRefusesOverLimit(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler(recorder, billingRequest(http.MethodPost, "/v1/chat/completions", billingChatBody, principal, "req-over"))
 
-	if handlerRun {
-		t.Fatal("a refused reservation must not call the handler")
-	}
+	testutil.False(t, handlerRun, "a refused reservation must not call the handler")
 	testutil.Equal(t, recorder.Code, http.StatusPaymentRequired)
 	testutil.Equal(t, recorder.Header().Get("WWW-Authenticate"), "Bearer")
 	var envelope struct {
@@ -176,12 +165,10 @@ func TestAPIKeyBillingReservationRefusesOverLimit(t *testing.T) {
 			Code    string `json:"code"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("error envelope is not JSON: %v (%s)", err, recorder.Body.String())
-	}
-	if envelope.Error.Code != "billing_limit_exceeded" || envelope.Error.Message != "API key billing limit exceeded" {
-		t.Fatalf("error envelope = %#v", envelope.Error)
-	}
+	err := json.Unmarshal(recorder.Body.Bytes(), &envelope)
+	testutil.CheckNoError(t, err)
+	testutil.Equal(t, envelope.Error.Code, "billing_limit_exceeded")
+	testutil.Equal(t, envelope.Error.Message, "API key billing limit exceeded")
 	testutil.Equal(t, envelope.Error.Type, "insufficient_quota")
 	testutil.Equal(t, len(ledger.held), 0)
 }
@@ -200,9 +187,7 @@ func TestAPIKeyBillingReservationFailsClosedOnLedgerError(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler(recorder, billingRequest(http.MethodPost, "/v1/chat/completions", billingChatBody, principal, "req-err"))
 
-	if handlerRun {
-		t.Fatal("a failing ledger must not let the request through unmetered")
-	}
+	testutil.False(t, handlerRun, "a failing ledger must not let the request through unmetered")
 	testutil.Equal(t, recorder.Code, http.StatusServiceUnavailable)
 }
 
@@ -235,9 +220,7 @@ func TestAPIKeyBillingReservationSkipsUnbilledRequests(t *testing.T) {
 			handler(recorder, billingRequest(tc.method, tc.path, tc.body, tc.principal, "req-skip"))
 
 			testutil.True(t, handlerRun, "handler must still run")
-			if len(ledger.held) != 0 || len(ledger.settles) != 0 || len(ledger.releases) != 0 {
-				t.Fatalf("ledger was touched: %#v", ledger)
-			}
+			testutil.Falsef(t, len(ledger.held) != 0 || len(ledger.settles) != 0 || len(ledger.releases) != 0, "ledger was touched: %#v", ledger)
 		})
 	}
 }
@@ -275,13 +258,10 @@ func TestAPIKeyBillingReservationRestoresOversizedBody(t *testing.T) {
 	var size int
 	handler := APIKeyBillingReservation(func(w http.ResponseWriter, r *http.Request) {
 		raw, err := readAllBody(r)
-		if err != nil {
-			t.Errorf("handler could not read the body: %v", err)
-		}
+		testutil.CheckNoError(t, err, "handler could not read the body: %v")
 		size = len(raw)
-		if res := BillingReservationFrom(r.Context()); res == nil {
-			t.Error("oversized body was not reserved")
-		}
+		res := BillingReservationFrom(r.Context())
+		testutil.CheckFalse(t, res == nil, "oversized body was not reserved")
 		// Settle so the successful reservation stays observable after the
 		// middleware's deferred cleanup.
 		SettleAPIKeyBilling(r.Context(), ledger, "grok-4.6", audit.UsageSourceUpstream, 10, 0, 10)
@@ -318,18 +298,16 @@ func TestSettleAPIKeyBillingRules(t *testing.T) {
 	t.Run("estimated usage is not billed", func(t *testing.T) {
 		ledger := &stubBillingLedger{limit: 1_000_000_000_000}
 		ctx := reserved(t, ledger)
-		if _, priced := SettleAPIKeyBilling(ctx, ledger, "grok-4.6", audit.UsageSourceEstimated, 1000, 0, 500); priced {
-			t.Fatal("an estimated row must not be priced")
-		}
+		_, priced := SettleAPIKeyBilling(ctx, ledger, "grok-4.6", audit.UsageSourceEstimated, 1000, 0, 500)
+		testutil.False(t, priced, "an estimated row must not be priced")
 		testutil.Equal(t, len(ledger.settles), 0)
 	})
 
 	t.Run("unpriced model", func(t *testing.T) {
 		ledger := &stubBillingLedger{limit: 1_000_000_000_000}
 		ctx := reserved(t, ledger)
-		if _, priced := SettleAPIKeyBilling(ctx, ledger, "gpt-5", audit.UsageSourceUpstream, 1000, 0, 500); priced {
-			t.Fatal("an unpriced model must not be priced")
-		}
+		_, priced := SettleAPIKeyBilling(ctx, ledger, "gpt-5", audit.UsageSourceUpstream, 1000, 0, 500)
+		testutil.False(t, priced, "an unpriced model must not be priced")
 		testutil.Equal(t, len(ledger.settles), 0)
 	})
 
@@ -338,21 +316,16 @@ func TestSettleAPIKeyBillingRules(t *testing.T) {
 		ctx := reserved(t, ledger)
 		first, _ := SettleAPIKeyBilling(ctx, ledger, "grok-4.6", audit.UsageSourceUpstream, 1000, 0, 500)
 		second, priced := SettleAPIKeyBilling(ctx, ledger, "grok-4.6", audit.UsageSourceUpstream, 1000, 0, 500)
-		if !priced || first != second {
-			t.Fatalf("first=%#v second=%#v priced=%v", first, second, priced)
-		}
+		testutil.Falsef(t, !priced || first != second, "first=%#v second=%#v priced=%v", first, second, priced)
 		testutil.Equal(t, len(ledger.settles), 1)
 	})
 
 	t.Run("without a reservation the cost is still reported", func(t *testing.T) {
 		ledger := &stubBillingLedger{limit: 1_000_000_000_000}
 		result, priced := SettleAPIKeyBilling(context.Background(), ledger, "grok-4.6", audit.UsageSourceUpstream, 1000, 0, 500)
-		if !priced || result.Model != "grok-4.6" {
-			t.Fatalf("result=%#v priced=%v", result, priced)
-		}
-		if len(ledger.settles) != 0 || ledger.used != 0 {
-			t.Fatalf("unreserved request was charged: %#v", ledger)
-		}
+		testutil.Falsef(t, !priced || result.Model != "grok-4.6", "result=%#v priced=%v", result, priced)
+		testutil.Equal(t, len(ledger.settles), 0)
+		testutil.Equal(t, ledger.used, 0)
 	})
 
 	t.Run("nil settler falls back to the wired ledger", func(t *testing.T) {
@@ -360,9 +333,8 @@ func TestSettleAPIKeyBillingRules(t *testing.T) {
 		SetAPIKeyBillingStore(ledger)
 		t.Cleanup(func() { SetAPIKeyBillingStore(nil) })
 		ctx := reserved(t, ledger)
-		if _, priced := SettleAPIKeyBilling(ctx, nil, "grok-4.6", audit.UsageSourceUpstream, 1000, 0, 500); !priced {
-			t.Fatal("a wired ledger must be used")
-		}
+		_, priced := SettleAPIKeyBilling(ctx, nil, "grok-4.6", audit.UsageSourceUpstream, 1000, 0, 500)
+		testutil.False(t, !priced, "a wired ledger must be used")
 		testutil.Equal(t, len(ledger.settles), 1)
 	})
 
@@ -370,13 +342,10 @@ func TestSettleAPIKeyBillingRules(t *testing.T) {
 		ledger := &stubBillingLedger{limit: 1_000_000_000_000, settleErr: context.DeadlineExceeded}
 		ctx := reserved(t, ledger)
 		result, priced := SettleAPIKeyBilling(ctx, ledger, "grok-4.6", audit.UsageSourceUpstream, 1000, 0, 500)
-		if !priced || result.CostInUSDTicks == 0 {
-			t.Fatalf("result=%#v priced=%v", result, priced)
-		}
+		testutil.Falsef(t, !priced || result.CostInUSDTicks == 0, "result=%#v priced=%v", result, priced)
 		// The hold stays claimed so a retry cannot charge twice.
-		if res := BillingReservationFrom(ctx); res == nil || !res.Settled() {
-			t.Fatal("a failed settlement must still claim the reservation")
-		}
+		res := BillingReservationFrom(ctx)
+		testutil.False(t, res == nil || !res.Settled(), "a failed settlement must still claim the reservation")
 	})
 }
 
@@ -407,13 +376,9 @@ func TestBillingReservationConcurrentSettleIsIdempotent(t *testing.T) {
 func TestBillingRequestPathMatching(t *testing.T) {
 	priced := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/grok/v1/messages", "/workbuddy/v1/chat/completions"}
 	for _, path := range priced {
-		if !billingRequestPath(path) {
-			t.Fatalf("billingRequestPath(%q) = false, want true", path)
-		}
+		testutil.True(t, billingRequestPath(path), "billingRequestPath(%q) = false, want true")
 	}
 	for _, path := range []string{"/v1/models", "/api/keys", "/v1/tts", "/v1/images/generations", "/"} {
-		if billingRequestPath(path) {
-			t.Fatalf("billingRequestPath(%q) = true, want false", path)
-		}
+		testutil.Falsef(t, billingRequestPath(path), "billingRequestPath(%q) = true, want false", path)
 	}
 }

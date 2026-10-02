@@ -18,9 +18,8 @@ func TestGetModelByModelID_FallsBackWhenIndexPointsToWrongModel(t *testing.T) {
 	testutil.NoError(t, s.CreateModel(ctx, other))
 	mini.HSet("test:models:model_id_map", "target", other.ID)
 	got, err := s.GetModelByModelID(ctx, "target")
-	if err != nil || got.ModelID != "target" {
-		t.Fatalf("got=%+v err=%v", got, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, got.ModelID, "target")
 }
 
 func TestModelStatus_UnmarshalJSON(t *testing.T) {
@@ -57,9 +56,7 @@ func TestModelStatus_MarshalJSON(t *testing.T) {
 	t.Parallel()
 
 	b, err := json.Marshal(ModelStatusAvailable)
-	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
-	}
+	testutil.NoError(t, err, "marshal failed: %v")
 	testutil.Equal(t, string(b), `"available"`)
 }
 
@@ -88,15 +85,11 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 	}
 
 	workBuddyModel, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", sharedModelID)
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(workbuddy) error = %v", err)
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID(workbuddy) error = %v")
 	testutil.Equal(t, workBuddyModel.Channel, "WorkBuddy")
 
 	qoderModel, err := s.GetModelByChannelAndModelID(ctx, "qoder", sharedModelID)
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(qoder) error = %v", err)
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID(qoder) error = %v")
 	testutil.Equal(t, qoderModel.Channel, "Qoder")
 	if workBuddyModel.ModelID != sharedModelID || qoderModel.ModelID != sharedModelID ||
 		workBuddyModel.Name != "WorkBuddy Shared" || qoderModel.Name != "Qoder Shared" {
@@ -119,9 +112,7 @@ func TestStoreNew_PublishesNoBuiltInModels(t *testing.T) {
 
 	ctx := context.Background()
 	models, err := s.ListModels(ctx)
-	if err != nil {
-		t.Fatalf("ListModels() error = %v", err)
-	}
+	testutil.NoError(t, err, "ListModels() error = %v")
 	testutil.Equal(t, len(models), 0)
 	for _, probe := range []struct{ channel, modelID string }{
 		{"Grok", "grok-4.5"},
@@ -131,9 +122,8 @@ func TestStoreNew_PublishesNoBuiltInModels(t *testing.T) {
 		{"WorkBuddy", "default-model"},
 		{"Qoder", "Qwen3.7-Max"},
 	} {
-		if _, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID); err == nil {
-			t.Fatalf("%s/%s was published at startup, want an empty catalog", probe.channel, probe.modelID)
-		}
+		_, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID)
+		testutil.CheckError(t, err)
 	}
 }
 
@@ -149,9 +139,7 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 		RedisPrefix: "test:",
 	}
 	s, err := New(opts)
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &Model{
@@ -161,23 +149,16 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 	model, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", "deepseek-v4-pro")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID() error = %v")
 	testutil.NoError(t, s.DeleteModel(ctx, model.ID), "DeleteModel() error = %v")
 	_ = s.Close()
 
 	s, err = New(opts)
-	if err != nil {
-		t.Fatalf("store.New() second error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-	})
+	testutil.NoError(t, err, "store.New() second error = %v")
+	t.Cleanup(func() { _ = s.Close() })
 
-	if _, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", "deepseek-v4-pro"); err == nil {
-		t.Fatal("expected deleted model to stay deleted after store restart")
-	}
+	_, err = s.GetModelByChannelAndModelID(ctx, "workbuddy", "deepseek-v4-pro")
+	testutil.Error(t, err)
 }
 
 // TestStoreNew_KeepsUpstreamDiscoveredModels proves startup maintenance never
@@ -193,9 +174,7 @@ func TestStoreNew_KeepsUpstreamDiscoveredModels(t *testing.T) {
 		RedisPrefix: "test:",
 	}
 	s, err := New(opts)
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &Model{
 		Channel: "WorkBuddy", ModelID: "claude-opus-5", Name: "claude-opus-5",
@@ -212,24 +191,16 @@ func TestStoreNew_KeepsUpstreamDiscoveredModels(t *testing.T) {
 	_ = s.Close()
 
 	s, err = New(opts)
-	if err != nil {
-		t.Fatalf("store.New() second error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-	})
+	testutil.NoError(t, err, "store.New() second error = %v")
+	t.Cleanup(func() { _ = s.Close() })
 
 	for _, probe := range []struct{ channel, modelID string }{
 		{"WorkBuddy", "claude-opus-5"},
 		{"Grok", "grok-4.6"},
 	} {
 		model, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID)
-		if err != nil || model == nil {
-			t.Fatalf("discovered model %s/%s did not survive a restart: %v", probe.channel, probe.modelID, err)
-		}
-		if !model.Verified {
-			t.Fatalf("%s/%s lost its verified flag", probe.channel, probe.modelID)
-		}
+		testutil.Falsef(t, err != nil || model == nil, "discovered model %s/%s did not survive a restart: %v", probe.channel, probe.modelID, err)
+		testutil.Falsef(t, !model.Verified, "%s/%s lost its verified flag", probe.channel, probe.modelID)
 	}
 }
 
@@ -246,9 +217,7 @@ func TestStoreNew_RemovesDeprecatedGrokModelsOnly(t *testing.T) {
 		RedisPrefix: "test:",
 	}
 	s, err := New(opts)
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 
 	ctx := context.Background()
 	for _, record := range []*Model{
@@ -257,28 +226,21 @@ func TestStoreNew_RemovesDeprecatedGrokModelsOnly(t *testing.T) {
 		{Channel: "Grok", ModelID: "grok-4.3", Name: "legacy model", Status: ModelStatusAvailable, Verified: true},
 		{Channel: "Grok", ModelID: "grok-user-custom", Name: "User Custom", Status: ModelStatusAvailable, Verified: true},
 	} {
-		if err := s.CreateModel(ctx, record); err != nil {
-			t.Fatalf("CreateModel(%s) error = %v", record.ModelID, err)
-		}
+		err := s.CreateModel(ctx, record)
+		testutil.CheckNoError(t, err)
 	}
 	_ = s.Close()
 
 	s, err = New(opts)
-	if err != nil {
-		t.Fatalf("store.New() second error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-	})
+	testutil.NoError(t, err, "store.New() second error = %v")
+	t.Cleanup(func() { _ = s.Close() })
 
 	for _, id := range []string{"grok-4.5", "grok-imagine-image-quality", "grok-user-custom"} {
-		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err != nil {
-			t.Fatalf("expected %s to survive startup cleanup: %v", id, err)
-		}
+		_, err := s.GetModelByChannelAndModelID(ctx, "grok", id)
+		testutil.CheckNoError(t, err)
 	}
-	if _, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-4.3"); err == nil {
-		t.Fatal("expected deprecated grok-4.3 to be removed")
-	}
+	_, err = s.GetModelByChannelAndModelID(ctx, "grok", "grok-4.3")
+	testutil.Error(t, err)
 }
 
 // TestCleanupDeprecatedModelIDsIsChannelScoped proves a retired identifier is
@@ -296,9 +258,7 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 		RedisDB:     0,
 		RedisPrefix: "test:",
 	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 	ctx := context.Background()
 	for _, record := range []*Model{
 		{Channel: "Grok", ModelID: "grok-4.3", Name: "retired Grok route", Status: ModelStatusAvailable, Verified: true},
@@ -306,13 +266,10 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 		{Channel: "Cline", ModelID: "grok-build-0.1", Name: "upstream Cline route", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
 		{Channel: "Grok", ModelID: "grok-build-0.1", Name: "retired Grok route", Status: ModelStatusAvailable, Verified: true},
 	} {
-		if err := s.CreateModel(ctx, record); err != nil {
-			t.Fatalf("CreateModel(%s/%s) error = %v", record.Channel, record.ModelID, err)
-		}
+		err := s.CreateModel(ctx, record)
+		testutil.CheckNoError(t, err)
 	}
-	t.Cleanup(func() {
-		_ = s.Close()
-	})
+	t.Cleanup(func() { _ = s.Close() })
 
 	s.cleanupDeprecatedModelIDs(ctx)
 
@@ -320,16 +277,14 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 		{"WorkBuddy", "grok-4.3"},
 		{"Cline", "grok-build-0.1"},
 	} {
-		if _, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID); err != nil {
-			t.Fatalf("%s/%s was deleted from a channel that did not retire it: %v", probe.channel, probe.modelID, err)
-		}
+		_, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID)
+		testutil.CheckNoError(t, err)
 	}
 	for _, probe := range []struct{ channel, modelID string }{
 		{"Grok", "grok-4.3"},
 		{"Grok", "grok-build-0.1"},
 	} {
-		if _, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID); err == nil {
-			t.Fatalf("%s/%s was not retired", probe.channel, probe.modelID)
-		}
+		_, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID)
+		testutil.CheckError(t, err)
 	}
 }

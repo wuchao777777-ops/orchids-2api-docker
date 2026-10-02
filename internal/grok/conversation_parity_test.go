@@ -78,9 +78,7 @@ func parityTools(t *testing.T, stream string) map[int]*parityTool {
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	return calls
 }
 
@@ -91,18 +89,12 @@ func TestParityToolsDeduplicateAndAssociateInterleavedArguments(t *testing.T) {
 	stream += parityFrame("response.function_call_arguments.delta", map[string]interface{}{"item_id": "fc_a", "delta": " world\"}"})
 	stream += parityItem("response.output_item.done", "fc_a", "call_a", "Read", `{"path":"hello  world"}`) + parityItem("response.output_item.done", "fc_b", "call_b", "Search", `{"query":"b"}`) + parityTerminal("response.completed")
 	body, result := parityRun(t, stream)
-	if result.Err != nil {
-		t.Fatal(result.Err, body)
-	}
+	testutil.Fail(t, result.Err != nil, result.Err, body)
 	calls := parityTools(t, body)
-	if len(calls) != 2 || calls[0].starts != 1 || calls[1].starts != 1 || calls[0].args != `{"path":"hello  world"}` || calls[1].args != `{"query":"b"}` {
-		t.Fatalf("calls=%+v body=%s", calls, body)
-	}
+	testutil.Falsef(t, len(calls) != 2 || calls[0].starts != 1 || calls[1].starts != 1 || calls[0].args != `{"path":"hello  world"}` || calls[1].args != `{"query":"b"}`, "calls=%+v body=%s", calls, body)
 	var messages bytes.Buffer
 	testutil.NoError(t, translateOpenAIChatStreamToAnthropicWithInput(&messages, strings.NewReader(body), "grok-4.6", 0))
-	if strings.Count(messages.String(), `"type":"tool_use"`) != 2 || strings.Contains(messages.String(), "<nil>") {
-		t.Fatal(messages.String())
-	}
+	testutil.Fail(t, strings.Count(messages.String(), `"type":"tool_use"`) != 2 || strings.Contains(messages.String(), "<nil>"), messages.String())
 }
 
 func TestParityRejectsUnknownToolEventsAndInvalidIdentity(t *testing.T) {
@@ -115,9 +107,7 @@ func TestParityRejectsUnknownToolEventsAndInvalidIdentity(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			body, result := parityRun(t, stream)
-			if result.Err == nil || strings.Contains(body, `"finish_reason":"stop"`) {
-				t.Fatal(body)
-			}
+			testutil.Fail(t, result.Err == nil || strings.Contains(body, `"finish_reason":"stop"`), body)
 		})
 	}
 }
@@ -132,14 +122,10 @@ func TestParityTerminalErrorsReachMessages(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			body, result := parityRun(t, stream)
-			if result.Err == nil {
-				t.Fatal(body)
-			}
+			testutil.Fail(t, result.Err == nil, body)
 			var out bytes.Buffer
 			err := translateOpenAIChatStreamToAnthropicWithInput(&out, strings.NewReader(body), "grok-4.6", 0)
-			if err == nil || !strings.Contains(out.String(), "event: error") || strings.Contains(out.String(), "event: message_stop") {
-				t.Fatal(err, out.String())
-			}
+			testutil.Fail(t, err == nil || !strings.Contains(out.String(), "event: error") || strings.Contains(out.String(), "event: message_stop"), err, out.String())
 		})
 	}
 	for _, data := range []string{"data: {bad-json}\n\n", "data: {\"error\":{\"message\":\"explicit failure\"}}\n\n"} {
@@ -152,18 +138,14 @@ func TestParityTerminalErrorsReachMessages(t *testing.T) {
 
 func TestParityIncompleteAndStopSequences(t *testing.T) {
 	body, result := parityRun(t, parityText("partial")+parityTerminal("response.incomplete"))
-	if result.Err != nil || result.Finish != "length" {
-		t.Fatal(result, body)
-	}
+	testutil.Fail(t, result.Err != nil || result.Finish != "length", result, body)
 	var out bytes.Buffer
 	if err := translateOpenAIChatStreamToAnthropicWithInput(&out, strings.NewReader(body), "grok-4.6", 0); err != nil || !strings.Contains(out.String(), `"stop_reason":"max_tokens"`) {
 		t.Fatal(err, out.String())
 	}
 	for _, prefix := range []string{"before ", ""} {
 		body, result = parityRun(t, parityText(prefix+"E")+parityText("N")+parityText("D after")+parityTerminal("response.completed"), "END")
-		if result.Err != nil || strings.Contains(body, "after") || !strings.Contains(body, `"stop_sequence":"END"`) {
-			t.Fatal(result, body)
-		}
+		testutil.Fail(t, result.Err != nil || strings.Contains(body, "after") || !strings.Contains(body, `"stop_sequence":"END"`), result, body)
 		out.Reset()
 		if err := translateOpenAIChatStreamToAnthropicWithInput(&out, strings.NewReader(body), "grok-4.6", 0); err != nil || !strings.Contains(out.String(), `"stop_reason":"stop_sequence"`) {
 			t.Fatal(err, out.String())
@@ -171,23 +153,17 @@ func TestParityIncompleteAndStopSequences(t *testing.T) {
 	}
 	filter := stopFilter{sequences: []string{"结束"}}
 	text := filter.push("正文结", false) + filter.push("束后缀", false) + filter.push("", true)
-	if text != "正文" || filter.matched != "结束" {
-		t.Fatal(text, filter)
-	}
+	testutil.Fail(t, text != "正文" || filter.matched != "结束", text, filter)
 }
 
 func TestParityMissingToolIDsAndUsage(t *testing.T) {
 	for _, id := range []interface{}{nil, "", 42, "<nil>"} {
 		_, err := anthropicMessageToChat(anthropicMessage{Role: "assistant", Content: []interface{}{map[string]interface{}{"type": "tool_use", "id": id, "name": "Read", "input": map[string]interface{}{}}}})
-		if err == nil || strings.Contains(err.Error(), "duplicate") {
-			t.Fatal(id, err)
-		}
+		testutil.Fail(t, err == nil || strings.Contains(err.Error(), "duplicate"), id, err)
 	}
 	for _, cached := range []int{0, 80, 180} {
 		usage := anthropicUsageFromOpenAI(map[string]interface{}{"prompt_tokens": 100, "completion_tokens": 10, "prompt_tokens_details": map[string]interface{}{"cached_tokens": cached}})
-		if interfaceToInt(usage["input_tokens"])+interfaceToInt(usage["cache_read_input_tokens"]) != 100 {
-			t.Fatal(usage)
-		}
+		testutil.Equal(t, interfaceToInt(usage["input_tokens"])+interfaceToInt(usage["cache_read_input_tokens"]), 100)
 	}
 }
 
@@ -222,9 +198,7 @@ func TestParityToolsAreVisibleBeforeStreamCompletes(t *testing.T) {
 	_, _ = io.WriteString(writer, parityItem("response.output_item.done", "fc_a", "call_a", "Read", "{}")+parityTerminal("response.completed"))
 	select {
 	case result := <-done:
-		if result.Err != nil {
-			t.Fatal(result.Err)
-		}
+		testutil.Fail(t, result.Err != nil, result.Err)
 	case <-time.After(time.Second):
 		t.Fatal("terminal event did not complete the response")
 	}
@@ -242,15 +216,11 @@ func TestParityReasoningAndSearchBlocks(t *testing.T) {
 	stream += parityFrame("response.output_item.added", map[string]interface{}{"item": search}) + parityFrame("response.output_item.done", map[string]interface{}{"item": search})
 	stream += parityText("answer") + parityFrame("response.output_text.annotation.added", map[string]interface{}{"annotation": map[string]interface{}{"type": "url_citation", "url": "https://example.com/news", "title": "News"}}) + parityTerminal("response.completed")
 	body, result := parityRun(t, stream)
-	if result.Err != nil {
-		t.Fatal(result.Err)
-	}
+	testutil.Fail(t, result.Err != nil, result.Err)
 	var out bytes.Buffer
 	testutil.NoError(t, translateOpenAIChatStreamToAnthropicWithInput(&out, strings.NewReader(body), "grok-4.6", 0))
 	s := out.String()
-	if strings.Count(s, `"content_block":{"signature":"","thinking":"","type":"thinking"}`) != 2 || strings.Contains(s, "duplicate") || strings.Count(s, `"type":"server_tool_use"`) != 1 || strings.Count(s, `"type":"web_search_tool_result"`) != 1 || !strings.Contains(s, `"type":"citations_delta"`) {
-		t.Fatal(s)
-	}
+	testutil.Fail(t, strings.Count(s, `"content_block":{"signature":"","thinking":"","type":"thinking"}`) != 2 || strings.Contains(s, "duplicate") || strings.Count(s, `"type":"server_tool_use"`) != 1 || strings.Count(s, `"type":"web_search_tool_result"`) != 1 || !strings.Contains(s, `"type":"citations_delta"`), s)
 }
 
 func TestParityClientSearchToolsRemainClientTools(t *testing.T) {
@@ -258,18 +228,12 @@ func TestParityClientSearchToolsRemainClientTools(t *testing.T) {
 	spec, _ := ResolveModel("grok-4.6")
 	request := &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}, Tools: []ToolDef{{Type: "function", Function: map[string]interface{}{"name": "web_search", "parameters": map[string]interface{}{"type": "object"}}}}}
 	payload, err := h.responsesPayloadFromChat(spec, request, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	tools := interfaceMaps(payload["tools"])
-	if len(tools) != 1 || tools[0]["type"] != "function" || tools[0]["parameters"] == nil {
-		t.Fatal(tools)
-	}
+	testutil.Fail(t, len(tools) != 1 || tools[0]["type"] != "function" || tools[0]["parameters"] == nil, tools)
 	request.Tools = nil
 	payload, err = h.responsesPayloadFromChat(spec, request, false)
-	if err != nil || len(interfaceMaps(payload["tools"])) != 0 {
-		t.Fatal(payload, err)
-	}
+	testutil.Fail(t, err != nil || len(interfaceMaps(payload["tools"])) != 0, payload, err)
 }
 
 type parityAuditLog struct{ events []audit.Event }
@@ -289,9 +253,7 @@ func TestParityAuditCapturesTerminalUsageAndFailure(t *testing.T) {
 		}
 		_, _, result := copyNativeCLIResponseAndCaptureModel(httptest.NewRecorder(), strings.NewReader(parityText("hello")+parityFrame(kind, map[string]interface{}{"response": response})), "text/event-stream", "grok-4.6")
 		h.auditChatOutcome(context.Background(), &store.Account{ID: 1}, &ChatCompletionsRequest{Model: "grok-4.6", startedAt: time.Now().Add(-time.Second)}, result)
-		if len(events.events) != 1 || events.events[0].InputTokens != 100 || events.events[0].CachedInputTokens != 80 || (events.events[0].Status == "error") != failed {
-			t.Fatal(events.events)
-		}
+		testutil.Fail(t, len(events.events) != 1 || events.events[0].InputTokens != 100 || events.events[0].CachedInputTokens != 80 || (events.events[0].Status == "error") != failed, events.events)
 	}
 }
 
@@ -325,9 +287,7 @@ func TestParityNonStreamingDoesNotLeakReasoningAndPreservesAllMessages(t *testin
 		rec := httptest.NewRecorder()
 		result := (&Handler{}).collectBuildChat(rec, &ChatCompletionsRequest{Model: "grok-4.6"}, bytes.NewReader(data))
 		if onlyReasoning {
-			if result.Err == nil {
-				t.Fatal("reasoning-only completion accepted")
-			}
+			testutil.False(t, result.Err == nil, "reasoning-only completion accepted")
 		} else if result.Err != nil || !strings.Contains(rec.Body.String(), `"content":"first  second"`) {
 			t.Fatal(result, rec.Body.String())
 		}
@@ -339,7 +299,5 @@ type parityFailedWriter struct{}
 func (*parityFailedWriter) Write([]byte) (int, error) { return 0, errors.New("client disconnected") }
 func TestParityMessagesPropagatesWriteFailure(t *testing.T) {
 	err := translateOpenAIChatStreamToAnthropicWithInput(&parityFailedWriter{}, strings.NewReader("data: [DONE]\n\n"), "grok-4.6", 0)
-	if err == nil || !strings.Contains(err.Error(), "client disconnected") {
-		t.Fatal(err)
-	}
+	testutil.Fail(t, err == nil || !strings.Contains(err.Error(), "client disconnected"), err)
 }

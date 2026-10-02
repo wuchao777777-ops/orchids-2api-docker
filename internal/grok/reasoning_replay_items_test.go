@@ -26,21 +26,17 @@ func TestNormalizeReplayItemsRequiresAnAnchor(t *testing.T) {
 	message := map[string]interface{}{"type": "message", "role": "assistant", "content": []interface{}{map[string]interface{}{"type": "output_text", "text": "answer"}}}
 
 	items, ok := normalizeReplayItems([]interface{}{reasoning, message})
-	if !ok || len(items) != 2 {
-		t.Fatalf("items=%v ok=%v", items, ok)
-	}
+	testutil.Falsef(t, !ok || len(items) != 2, "items=%v ok=%v", items, ok)
 	// Reasoning items must carry only the portable shape; extra keys 400 upstream.
 	normalized, _ := items[0].(map[string]interface{})
 	testutil.Equal(t, len(normalized), 3)
 	// A message alone is not replayable.
-	if _, ok := normalizeReplayItems([]interface{}{message}); ok {
-		t.Fatal("message-only replay should not be anchorable")
-	}
+	_, ok = normalizeReplayItems([]interface{}{message})
+	testutil.False(t, ok, "message-only replay should not be anchorable")
 	// An undecodable cipher is dropped, so it cannot act as the anchor either.
 	bad := map[string]interface{}{"type": "reasoning", "encrypted_content": "gAAAA-not-a-cipher"}
-	if items, ok := normalizeReplayItems([]interface{}{bad, message}); ok || len(items) != 1 {
-		t.Fatalf("invalid cipher items=%v ok=%v", items, ok)
-	}
+	items, ok = normalizeReplayItems([]interface{}{bad, message})
+	testutil.Falsef(t, ok || len(items) != 1, "invalid cipher items=%v ok=%v", items, ok)
 }
 
 func TestFilterReplayItemsDropsWhatTheRequestAlreadyHas(t *testing.T) {
@@ -54,15 +50,13 @@ func TestFilterReplayItemsDropsWhatTheRequestAlreadyHas(t *testing.T) {
 		map[string]interface{}{"type": "reasoning", "encrypted_content": cipher},
 		map[string]interface{}{"role": "user", "content": "next"},
 	}
-	if got := filterReplayItemsForInput(duplicate, items); len(got) != 0 {
-		t.Fatalf("duplicate replay=%v", got)
-	}
+	got := filterReplayItemsForInput(duplicate, items)
+	testutil.Falsef(t, len(got) != 0, "duplicate replay=%v", got)
 	// A tool call whose output the request does not carry is not replayable.
 	plain := []interface{}{map[string]interface{}{"role": "user", "content": "next"}}
-	got := filterReplayItemsForInput(plain, items)
-	if len(got) != 1 || interfaceString(got[0].(map[string]interface{})["type"]) != "reasoning" {
-		t.Fatalf("expected only the reasoning item, got %v", got)
-	}
+	got = filterReplayItemsForInput(plain, items)
+	testutil.Equal(t, len(got), 1)
+	testutil.Equal(t, interfaceString(got[0].(map[string]interface{})["type"]), "reasoning")
 }
 
 func TestFilterReplayItemsMatchesPrefixedToolCallIDs(t *testing.T) {
@@ -108,13 +102,9 @@ func TestReplayItemsFromLegacyCipher(t *testing.T) {
 	testutil.Equal(t, interfaceString(items[0].(map[string]interface{})["encrypted_content"]), cipher)
 	// A normalized item list takes precedence when both forms are present.
 	encoded, err := json.Marshal(map[string]interface{}{"type": "reasoning", "summary": []interface{}{}, "encrypted_content": testReplayCipher(4)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	items = replayItemsFromStored(&store.StoredReasoningReplay{EncryptedContent: cipher, Items: []json.RawMessage{encoded}})
-	if len(items) != 1 || interfaceString(items[0].(map[string]interface{})["encrypted_content"]) == cipher {
-		t.Fatalf("items should win over the legacy cipher: %v", items)
-	}
+	testutil.Falsef(t, len(items) != 1 || interfaceString(items[0].(map[string]interface{})["encrypted_content"]) == cipher, "items should win over the legacy cipher: %v", items)
 }
 
 func TestCaptureReasoningReplayClearsStateWithoutAnchor(t *testing.T) {
@@ -126,9 +116,8 @@ func TestCaptureReasoningReplayClearsStateWithoutAnchor(t *testing.T) {
 			map[string]interface{}{"type": "message", "role": "assistant", "content": []interface{}{map[string]interface{}{"type": "output_text", "text": "hi"}}},
 		},
 	})
-	if items := h.loadReasoningReplayItems("grok-4.6", "session"); len(items) != 0 {
-		t.Fatalf("stale state kept: %v", items)
-	}
+	items := h.loadReasoningReplayItems("grok-4.6", "session")
+	testutil.Falsef(t, len(items) != 0, "stale state kept: %v", items)
 }
 
 func TestCaptureReasoningReplayFromStream(t *testing.T) {

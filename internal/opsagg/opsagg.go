@@ -410,16 +410,10 @@ func channelFromBucketKey(prefix, key string) (string, bool) {
 		return "", false
 	}
 	channel := parts[1]
-	if channel == "" {
+	if channel == "" || isDetailSuffix(channel) {
 		return "", false
 	}
-	if isDetailSuffix(channel) {
-		return "", false
-	}
-	if strings.HasSuffix(channel, ":dur") || strings.HasSuffix(channel, ":ttft") {
-		return "", false
-	}
-	if strings.Contains(channel, ":model:") {
+	if strings.HasSuffix(channel, ":dur") || strings.HasSuffix(channel, ":ttft") || strings.Contains(channel, ":model:") {
 		return "", false
 	}
 	return channel, true
@@ -468,10 +462,7 @@ func (a *Aggregator) SamplesForChecked(ctx context.Context, channel string, buck
 
 // bucketFromFields builds a bucket from the stored hash fields.
 func bucketFromFields(minute time.Time, channel string, fields map[string]string) *Bucket {
-	toInt := func(name string) int64 {
-		value, _ := strconv.ParseInt(fields[name], 10, 64)
-		return value
-	}
+	toInt := func(name string) int64 { value, _ := strconv.ParseInt(fields[name], 10, 64); return value }
 	return &Bucket{
 		Counters:         countersFrom(fields),
 		Channel:          normalizeChannel(channel),

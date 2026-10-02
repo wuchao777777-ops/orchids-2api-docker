@@ -1,6 +1,9 @@
 package qoder
 
-import "testing"
+import (
+	"orchids-api/internal/testutil"
+	"testing"
+)
 
 func TestFreeModelIDsRequiresExplicitZeroPriceFactor(t *testing.T) {
 	ids := []string{
@@ -10,14 +13,10 @@ func TestFreeModelIDsRequiresExplicitZeroPriceFactor(t *testing.T) {
 		"legacy-key\tLegacy Model",
 	}
 	for _, name := range []string{"free-key", "Free Model", "FREE MODEL"} {
-		if !IsFreeModel(ids, name) {
-			t.Fatalf("IsFreeModel(%q)=false, want true", name)
-		}
+		testutil.True(t, IsFreeModel(ids, name), "IsFreeModel(%q)=false, want true")
 	}
 	for _, name := range []string{"paid-key", "unknown-key", "legacy-key", "missing"} {
-		if IsFreeModel(ids, name) {
-			t.Fatalf("IsFreeModel(%q)=true, want false", name)
-		}
+		testutil.Falsef(t, IsFreeModel(ids, name), "IsFreeModel(%q)=true, want false", name)
 	}
 }
 
@@ -25,7 +24,5 @@ func TestCatalogSnapshotPreservesExplicitZeroPriceFactor(t *testing.T) {
 	zero := 0.0
 	catalog := newCatalog([]modelEntry{{Key: "qfmodel", Name: "Qwen3.8-Flash", PriceFactor: &zero}})
 	ids := CatalogSnapshot(catalog)
-	if len(ids) != 1 || !IsFreeModel(ids, "qwen3.8-flash") {
-		t.Fatalf("snapshot=%v did not preserve explicit zero price factor", ids)
-	}
+	testutil.Falsef(t, len(ids) != 1 || !IsFreeModel(ids, "qwen3.8-flash"), "snapshot=%v did not preserve explicit zero price factor", ids)
 }

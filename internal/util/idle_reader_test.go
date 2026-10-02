@@ -26,12 +26,8 @@ func TestMonitorReadIdleCancelsBlockedReadWithClassifiableError(t *testing.T) {
 	defer cancel()
 	body := MonitorReadIdle(&cancelAwareReadCloser{done: ctx.Done()}, 20*time.Millisecond, cancel, "grok")
 	_, err := body.Read(make([]byte, 1))
-	if err == nil || !strings.Contains(err.Error(), "grok stream idle timeout") {
-		t.Fatalf("Read() error=%v want Grok idle timeout", err)
-	}
-	if !errors.Is(ctx.Err(), context.Canceled) {
-		t.Fatalf("context error=%v want canceled", ctx.Err())
-	}
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "grok stream idle timeout"), "Read() error=%v want Grok idle timeout", err)
+	testutil.Falsef(t, !errors.Is(ctx.Err(), context.Canceled), "context error=%v want canceled", ctx.Err())
 	_ = body.Close()
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"orchids-api/internal/util"
 	"strings"
 	"time"
 )
@@ -24,9 +25,7 @@ type grokUpstreamError struct {
 
 func (e *grokUpstreamError) Error() string {
 	prefix := e.prefix
-	if prefix == "" {
-		prefix = "grok upstream"
-	}
+	prefix = util.FirstNonEmptyUntrimmed(prefix, "grok upstream")
 	var b strings.Builder
 	b.WriteString(prefix)
 	fmt.Fprintf(&b, " status=%d", e.status)

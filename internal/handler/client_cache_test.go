@@ -43,9 +43,7 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 	}
 
 	first := h.getOrCreateAccountClient(base)
-	if first == nil {
-		t.Fatal("expected first client")
-	}
+	testutil.False(t, first == nil, "expected first client")
 	testutil.Equal(t, created, 1)
 
 	statsOnly := *base
@@ -56,12 +54,8 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 	statsOnly.UsageCurrent = 678
 
 	second := h.getOrCreateAccountClient(&statsOnly)
-	if second == nil {
-		t.Fatal("expected second client")
-	}
-	if second != first {
-		t.Fatal("expected stats-only update to reuse cached client")
-	}
+	testutil.False(t, second == nil, "expected second client")
+	testutil.Equal(t, second, first)
 	testutil.Equal(t, created, 1)
 }
 
@@ -87,17 +81,13 @@ func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 	}
 
 	first := h.getOrCreateAccountClient(base)
-	if first == nil {
-		t.Fatal("expected first client")
-	}
+	testutil.False(t, first == nil, "expected first client")
 
 	changed := *base
 	changed.ClientCookie = "session-b"
 
 	second := h.getOrCreateAccountClient(&changed)
-	if second == nil {
-		t.Fatal("expected second client")
-	}
+	testutil.False(t, second == nil, "expected second client")
 	testutil.NotEqual(t, second, first)
 	testutil.Equal(t, created, 2)
 }
@@ -118,9 +108,7 @@ func TestGetOrCreateAccountClient_ConfigSaveOnlyRebuildsForClientInputs(t *testi
 		return &testCachedClient{id: created}
 	})
 	first := h.getOrCreateAccountClient(base)
-	if first == nil || created != 1 {
-		t.Fatalf("initial client=%v, builds=%d", first, created)
-	}
+	testutil.Falsef(t, first == nil || created != 1, "initial client=%v, builds=%d", first, created)
 
 	for _, tc := range []struct {
 		name   string
@@ -138,9 +126,8 @@ func TestGetOrCreateAccountClient_ConfigSaveOnlyRebuildsForClientInputs(t *testi
 			tc.mutate(&next)
 			h.SetConfig(&next)
 			h.AccountChanges([]int64{base.ID})
-			if got := h.getOrCreateAccountClient(base); got != first || created != 1 {
-				t.Fatalf("runtime-only config rebuilt client: got=%v, first=%v, builds=%d", got, first, created)
-			}
+			got := h.getOrCreateAccountClient(base)
+			testutil.Falsef(t, got != first || created != 1, "runtime-only config rebuilt client: got=%v, first=%v, builds=%d", got, first, created)
 		})
 	}
 
@@ -158,9 +145,8 @@ func TestGetOrCreateAccountClient_ConfigSaveOnlyRebuildsForClientInputs(t *testi
 			tc.mutate(&next)
 			h.SetConfig(&next)
 			h.AccountChanges([]int64{base.ID})
-			if got := h.getOrCreateAccountClient(base); got == previous || created < 2 {
-				t.Fatalf("client input change did not rebuild: got=%v, previous=%v, builds=%d", got, previous, created)
-			}
+			got := h.getOrCreateAccountClient(base)
+			testutil.Falsef(t, got == previous || created < 2, "client input change did not rebuild: got=%v, previous=%v, builds=%d", got, previous, created)
 		})
 	}
 }

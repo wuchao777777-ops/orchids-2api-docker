@@ -12,6 +12,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
+	"orchids-api/internal/util"
 )
 
 // The Qoder channel is OAuth-only, and the console drives the whole flow:
@@ -135,59 +136,15 @@ func (a *API) pollQoderLogin(ctx context.Context, id string) {
 	}
 	client := login.factory(nil, login.configSnapshot)
 	defer client.Close()
-
-	for {
-		login, ok := awaitLoginPoll(ctx, a.qoderLogins, id, "Qoder")
-		if !ok {
-			return
-		}
-
-		reqCtx, reqCancel := context.WithTimeout(ctx, 30*time.Second)
-		creds, err := client.PollLogin(reqCtx, &qoder.LoginTransaction{
-			VerifyURL: login.verifyURL,
-			Nonce:     login.nonce,
-			Verifier:  login.verifier,
-			MachineID: login.machineID,
-			ExpiresAt: login.expiresAt,
-		})
-		reqCancel()
-		if err != nil {
-			if errors.Is(err, qoder.ErrAuthPending) {
-				continue
-			}
-			if ctx.Err() != nil {
-				return
-			}
-			// Authorization itself failed (the transaction was consumed,
-			// cancelled, or rejected). Report it without echoing upstream text.
-			slog.Warn("Qoder authorization failed", "login_id", id, "error", err)
-			a.qoderLogins.finish(id, "failed", "Qoder authorization failed; start again", 0)
-			return
-		}
-
-		account, err := a.buildQoderAccountFromCredentialsWithFactory(ctx, id, login.machineID, creds, login.configSnapshot, login.factory)
-		if err != nil {
-			// The reason is carried to the operator because a credential that
-			// arrived but could not be persisted needs one specific action, and
-			// "could not be verified" alone does not say which. The error text is
-			// built from upstream status/path/business code only; no credential,
-			// verifier or nonce ever enters it.
-			slog.Warn("Qoder authorization succeeded but the account could not be stored", "login_id", id, "error", err)
-			a.qoderLogins.finish(id, "failed",
-				"Qoder authorization succeeded but the account could not be saved: "+truncateLoginReason(err), 0)
-			return
-		}
-		if ctx.Err() != nil || !a.qoderLogins.pending(id) {
-			return
-		}
-		if login.enabledKnown {
-			account.Enabled = login.enabled
-		}
-		finishBrowserLogin(a, ctx, a.qoderLogins, id, "Qoder", account, func(acc *store.Account) {
+	pollBrowserLogin(a, ctx, a.qoderLogins, id, "Qoder", qoder.ErrAuthPending,
+		func(reqCtx context.Context, login *qoderLoginTransaction) (qoder.Credentials, error) {
+			return client.PollLogin(reqCtx, &qoder.LoginTransaction{VerifyURL: login.verifyURL, Nonce: login.nonce, Verifier: login.verifier, MachineID: login.machineID, ExpiresAt: login.expiresAt})
+		},
+		func(login *qoderLoginTransaction, creds qoder.Credentials) (*store.Account, error) {
+			return a.buildQoderAccountFromCredentialsWithFactory(ctx, id, login.machineID, creds, login.configSnapshot, login.factory)
+		}, func(acc *store.Account) {
 			acc.ReplaceQoderCredentials = true
 		})
-		return
-	}
 }
 
 // buildQoderAccountFromCredentials turns a completed login into an account record.
@@ -213,9 +170,7 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 		Weight:            1,
 		Enabled:           true,
 	}
-	if normalized.Email != "" {
-		acc.Email = normalized.Email
-	}
+	acc.Email = util.FirstNonEmpty(normalized.Email, acc.Email)
 
 	client := factory(acc, cfg)
 	defer client.Close()
@@ -232,21 +187,7 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 	if profile, err := client.FetchProfile(ctx, accessToken); err != nil {
 		slog.Debug("Qoder profile lookup failed; keeping the login identity", "login_id", loginID, "error", err)
 	} else {
-		if uid := strings.TrimSpace(profile.UID); uid != "" {
-			acc.QoderUserID = uid
-		}
-		if name := strings.TrimSpace(profile.Name); name != "" {
-			acc.QoderUserName = name
-		}
-		if email := strings.TrimSpace(profile.Email); email != "" {
-			acc.Email = email
-		}
-		if orgID := strings.TrimSpace(profile.OrgID); orgID != "" {
-			acc.QoderOrganizationID = orgID
-		}
-		if len(profile.OrgTags) > 0 {
-			acc.QoderOrganizationTags = append([]string(nil), profile.OrgTags...)
-		}
+		profile.ApplyToAccount(acc)
 		client.ApplyProfile(profile)
 	}
 

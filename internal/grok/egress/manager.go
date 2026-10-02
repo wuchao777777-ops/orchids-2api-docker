@@ -92,9 +92,7 @@ func NewManager(cfg *config.Config) *Manager {
 }
 
 // Enabled reports whether the manager is active.
-func (m *Manager) Enabled() bool {
-	return m != nil && m.cfg != nil && m.cfg.GrokEgressEnabled
-}
+func (m *Manager) Enabled() bool { return m != nil && m.cfg != nil && m.cfg.GrokEgressEnabled }
 
 // Acquire selects a healthy Build proxy node and returns a sticky lease.
 // affinity keeps the same account on the same exit. When no healthy node exists,
@@ -165,9 +163,7 @@ func (m *Manager) pickNode(scope, affinity string) *Node {
 
 	// Sticky affinity: prefer the node this affinity last used when healthy.
 	stickyAffinity := affinity
-	if stickyAffinity == "" {
-		stickyAffinity = "default"
-	}
+	stickyAffinity = util.FirstNonEmptyUntrimmed(stickyAffinity, "default")
 	stickyKey := "scope:" + normalizedScope + ":" + stickyAffinity
 	if prev := m.sticky[stickyKey]; prev != "" {
 		for i := range candidates {

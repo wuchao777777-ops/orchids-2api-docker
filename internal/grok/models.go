@@ -60,9 +60,7 @@ func IsDeprecatedModelID(modelID string) bool {
 	return modelpolicy.IsDeprecatedGrokModelID(normalizeModelID(modelID))
 }
 
-func normalizeModelID(modelID string) string {
-	return strings.ToLower(strings.TrimSpace(modelID))
-}
+func normalizeModelID(modelID string) string { return strings.ToLower(strings.TrimSpace(modelID)) }
 
 // stripProviderPublicPrefix removes one provider qualifier, reporting whether it
 // removed anything.
@@ -130,6 +128,4 @@ func ResolveModel(modelID string) (ModelSpec, bool) {
 // modelRoutedToCLI reports whether a resolved model uses Build CLI. The
 // configured model table and dynamically discovered Build models explicitly
 // carry UpstreamCLI; legacy config model lists no longer affect routing.
-func modelRoutedToCLI(spec ModelSpec, _ *config.Config) bool {
-	return spec.Upstream == UpstreamCLI
-}
+func modelRoutedToCLI(spec ModelSpec, _ *config.Config) bool { return spec.Upstream == UpstreamCLI }

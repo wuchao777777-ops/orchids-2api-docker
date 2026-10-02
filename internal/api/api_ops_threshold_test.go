@@ -22,9 +22,8 @@ func TestSuccessTarget_ComesFromTheEngine(t *testing.T) {
 
 	custom := alerting.DefaultRules()
 	custom.SuccessRateWarning = 0.8
-	if got, _ := successTarget(alerting.NewEngine(custom, nil)); got != 0.8 {
-		t.Fatalf("successTarget() with a custom policy = %v, want 0.8", got)
-	}
+	got, _ := successTarget(alerting.NewEngine(custom, nil))
+	testutil.Falsef(t, got != 0.8, "successTarget() with a custom policy = %v, want 0.8", got)
 }
 
 // TestSuccessTarget_NilAndZeroValueFallBackToTheShippedPolicy covers the two ways
@@ -37,9 +36,8 @@ func TestSuccessTarget_NilAndZeroValueFallBackToTheShippedPolicy(t *testing.T) {
 	testutil.NotEqual(t, source, "")
 
 	zero := alerting.NewEngine(alerting.Rules{}, nil)
-	if got, _ := successTarget(zero); got != 0.9 {
-		t.Fatalf("successTarget() on a zero-value Rules = %v, want 0.9", got)
-	}
+	got, _ = successTarget(zero)
+	testutil.Falsef(t, got != 0.9, "successTarget() on a zero-value Rules = %v, want 0.9", got)
 	testutil.Equal(t, successTargetCritical(zero), 0.5)
 	testutil.Equal(t, successTargetCritical(nil), 0.5)
 }
@@ -48,9 +46,7 @@ func TestSuccessTarget_NilAndZeroValueFallBackToTheShippedPolicy(t *testing.T) {
 // as-is: short, and free of the characters that would need escaping in JSON.
 func TestSuccessTarget_SourceIsRenderable(t *testing.T) {
 	_, source := successTarget(nil)
-	if len([]rune(source)) > 40 {
-		t.Fatalf("success_target_source too long for a label: %q", source)
-	}
+	testutil.Falsef(t, len([]rune(source)) > 40, "success_target_source too long for a label: %q", source)
 	for _, forbidden := range []string{"\"", "\\", "\n", "\t", "<", ">"} {
 		testutil.MustNotContain(t, source, forbidden)
 	}
@@ -66,18 +62,14 @@ func TestHandleOpsOverview_PublishesTheTargetOnTheUnavailableBranch(t *testing.T
 
 	testutil.Equal(t, recorder.Code, http.StatusOK)
 	payload := map[string]interface{}{}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("overview is not JSON: %v (%s)", err, recorder.Body.String())
-	}
+	err := json.Unmarshal(recorder.Body.Bytes(), &payload)
+	testutil.CheckNoError(t, err)
 	if available, _ := payload["available"].(bool); available {
 		t.Fatalf("expected the unavailable branch, got available = %v", payload["available"])
 	}
 	target, ok := payload["success_target"].(float64)
-	if !ok {
-		t.Fatalf("success_target missing from the unavailable payload: %v", payload)
-	}
+	testutil.True(t, ok, "success_target missing from the unavailable payload: %v")
 	testutil.Equal(t, target, 0.9)
-	if _, ok := payload["success_target_source"].(string); !ok {
-		t.Fatalf("success_target_source missing: %v", payload)
-	}
+	_, ok = payload["success_target_source"].(string)
+	testutil.Falsef(t, !ok, "success_target_source missing: %v", payload)
 }

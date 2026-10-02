@@ -16,13 +16,15 @@ func TestUsageDimensionsAggregateAndTotalDrivesTPS(t *testing.T) {
 	at := time.Now().Truncate(time.Minute)
 	agg.Observe(ctx, Outcome{Channel: "grok", At: at, OK: true, UsageReported: true, InputTokens: 10, CachedTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 18})
 	buckets, err := agg.Range(ctx, "grok", at, at)
-	if err != nil || len(buckets) != 1 {
-		t.Fatalf("Range: buckets=%v err=%v", buckets, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, len(buckets), 1)
 	summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "grok", Buckets: buckets, WindowMinutes: 1, SamplesProvided: true})
-	if summary.CachedInputTokens != 4 || summary.ReasoningTokens != 3 || summary.TotalTokens != 18 || summary.TPS != 0.3 || summary.UnpricedRequests != 1 || summary.UnpricedTokens != 18 {
-		t.Fatalf("summary=%+v", summary)
-	}
+	testutil.Equal(t, summary.CachedInputTokens, 4)
+	testutil.Equal(t, summary.ReasoningTokens, 3)
+	testutil.Equal(t, summary.TotalTokens, 18)
+	testutil.Equal(t, summary.TPS, 0.3)
+	testutil.Equal(t, summary.UnpricedRequests, 1)
+	testutil.Equal(t, summary.UnpricedTokens, 18)
 }
 
 func newRedisClient(t *testing.T, addr string) *redis.Client {
@@ -51,26 +53,20 @@ func TestObserve_RollsUpIntoOneMinuteBucket(t *testing.T) {
 	agg.Observe(ctx, Outcome{Channel: "grok", Model: "grok-4.6", OK: false, DurationMS: 5000, At: at})
 
 	buckets, err := agg.Range(ctx, "grok", at, at)
-	if err != nil || len(buckets) != 1 {
-		t.Fatalf("buckets = %v err = %v", buckets, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, len(buckets), 1)
 	bucket := buckets[0]
-	if bucket.Requests != 3 || bucket.Success != 2 || bucket.Failed != 1 {
-		t.Fatalf("bucket = %+v", bucket)
-	}
+	testutil.Equal(t, bucket.Requests, 3)
+	testutil.Equal(t, bucket.Success, 2)
+	testutil.Equal(t, bucket.Failed, 1)
 
 	durations, ttfts, err := agg.SamplesForChecked(ctx, "grok", buckets)
-	if err != nil {
-		t.Fatalf("SamplesForChecked() error = %v", err)
-	}
+	testutil.NoError(t, err, "SamplesForChecked() error = %v")
 	summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "grok", Buckets: buckets, Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true})
 	testutil.Equal(t, summary.Requests, 3)
-	if got, want := summary.SuccessRate, 2.0/3.0; got < want-0.001 || got > want+0.001 {
-		t.Fatalf("success rate = %v, want %v", got, want)
-	}
-	if summary.DurationP95MS == 0 || summary.FirstTokenP95MS == 0 {
-		t.Fatalf("percentiles missing: %+v", summary)
-	}
+	got, want := summary.SuccessRate, 2.0/3.0
+	testutil.Falsef(t, got < want-0.001 || got > want+0.001, "success rate = %v, want %v", got, want)
+	testutil.Falsef(t, summary.DurationP95MS == 0 || summary.FirstTokenP95MS == 0, "percentiles missing: %+v", summary)
 	testutil.Equal(t, summary.Samples, 3)
 }
 
@@ -79,19 +75,16 @@ func TestObserve_RollsUpIntoOneMinuteBucket(t *testing.T) {
 func TestSummarize_NoSamplesIsZero(t *testing.T) {
 	agg, _ := newAggregator(t)
 	buckets, err := agg.Range(context.Background(), "workbuddy", time.Now().Add(-time.Hour), time.Now())
-	if err != nil {
-		t.Fatalf("Range() error = %v", err)
-	}
+	testutil.NoError(t, err, "Range() error = %v")
 	testutil.Equal(t, len(buckets), 0)
 	ctx := context.Background()
 	durations, ttfts, err := agg.SamplesForChecked(ctx, "workbuddy", buckets)
-	if err != nil {
-		t.Fatalf("SamplesForChecked() error = %v", err)
-	}
+	testutil.NoError(t, err, "SamplesForChecked() error = %v")
 	summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "workbuddy", Buckets: buckets, Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true})
-	if summary.Requests != 0 || summary.Samples != 0 || summary.SuccessRate != 0 || summary.RPM != 0 {
-		t.Fatalf("idle summary = %+v, want all zero", summary)
-	}
+	testutil.Equal(t, summary.Requests, 0)
+	testutil.Equal(t, summary.Samples, 0)
+	testutil.Equal(t, summary.SuccessRate, 0)
+	testutil.Equal(t, summary.RPM, 0)
 }
 
 // Range uses bounded Redis pipeline batches and includes both endpoint minutes,
@@ -107,9 +100,8 @@ func TestRange_BatchBoundariesAndErrors(t *testing.T) {
 	from := base.Add(50 * time.Second)
 	until := base.Add(299*time.Minute + 10*time.Second)
 	buckets, err := agg.Range(ctx, "grok", until, from) // reversed on purpose
-	if err != nil || len(buckets) != 4 {
-		t.Fatalf("reversed range: buckets=%v err=%v", buckets, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, len(buckets), 4)
 	for i, offset := range []int{0, 255, 256, 299} {
 		want := base.Add(time.Duration(offset) * time.Minute)
 		if !buckets[i].Minute.Equal(want) || buckets[i].Requests != 1 {
@@ -119,9 +111,7 @@ func TestRange_BatchBoundariesAndErrors(t *testing.T) {
 	mini.Del(agg.key(base.Add(256*time.Minute), "grok"))
 	testutil.NoError(t, mini.Set(agg.key(base.Add(256*time.Minute), "grok"), "not-a-hash"))
 	buckets, err = agg.Range(ctx, "grok", from, until)
-	if err == nil || buckets != nil {
-		t.Fatalf("wrongtype in second batch: buckets=%v err=%v, want nil and error", buckets, err)
-	}
+	testutil.Falsef(t, err == nil || buckets != nil, "wrongtype in second batch: buckets=%v err=%v, want nil and error", buckets, err)
 }
 
 func TestRange_TruncatesToLatestMinutes(t *testing.T) {
@@ -133,9 +123,8 @@ func TestRange_TruncatesToLatestMinutes(t *testing.T) {
 		agg.Observe(ctx, Outcome{Channel: "grok", OK: true, At: at})
 	}
 	buckets, err := agg.Range(ctx, "grok", base, last)
-	if err != nil || len(buckets) != 2 {
-		t.Fatalf("clamped range: buckets=%v err=%v, want two", buckets, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, len(buckets), 2)
 	if !buckets[0].Minute.Equal(base.Add(6*time.Minute)) || !buckets[1].Minute.Equal(last) {
 		t.Fatalf("clamped endpoints=%v, %v", buckets[0].Minute, buckets[1].Minute)
 	}
@@ -151,22 +140,15 @@ func TestRange_SpansMinutesInOrder(t *testing.T) {
 		agg.Observe(ctx, Outcome{Channel: "workbuddy", OK: true, DurationMS: 100, At: base.Add(time.Duration(i) * time.Minute)})
 	}
 	buckets, err := agg.Range(ctx, "workbuddy", base, base.Add(2*time.Minute))
-	if err != nil {
-		t.Fatalf("Range() error = %v", err)
-	}
+	testutil.NoError(t, err, "Range() error = %v")
 	testutil.Equal(t, len(buckets), 3)
 	for i := 1; i < len(buckets); i++ {
-		if !buckets[i].Minute.After(buckets[i-1].Minute) {
-			t.Fatalf("buckets are not in chronological order: %+v", buckets)
-		}
+		testutil.Falsef(t, !buckets[i].Minute.After(buckets[i-1].Minute), "buckets are not in chronological order: %+v", buckets)
 	}
 	durations, ttfts, err := agg.SamplesForChecked(ctx, "workbuddy", buckets)
-	if err != nil {
-		t.Fatalf("SamplesForChecked() error = %v", err)
-	}
-	if summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "workbuddy", Buckets: buckets, Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true}); summary.RPM <= 0 {
-		t.Fatalf("rpm = %v, want > 0 over three minutes", summary.RPM)
-	}
+	testutil.NoError(t, err, "SamplesForChecked() error = %v")
+	summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "workbuddy", Buckets: buckets, Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true})
+	testutil.Falsef(t, summary.RPM <= 0, "rpm = %v, want > 0 over three minutes", summary.RPM)
 }
 
 // TestModelStatsFromBuckets reports per-model quality without extra keys.
@@ -181,18 +163,15 @@ func TestModelStatsFromBuckets(t *testing.T) {
 	agg.Observe(ctx, Outcome{Channel: "grok", Model: "grok-4.5", OK: true, DurationMS: 50, At: at})
 
 	buckets, err := agg.Range(ctx, "grok", at, at)
-	if err != nil {
-		t.Fatalf("Range() error = %v", err)
-	}
+	testutil.NoError(t, err, "Range() error = %v")
 	stats, err := agg.ModelStatsFromBucketsChecked(ctx, "grok", buckets)
-	if err != nil {
-		t.Fatalf("ModelStatsFromBucketsChecked() error = %v", err)
-	}
+	testutil.NoError(t, err, "ModelStatsFromBucketsChecked() error = %v")
 	testutil.Equal(t, len(stats), 2)
 	// Sorted by request count: grok-4.6 leads.
-	if stats[0].Model != "grok-4.6" || stats[0].Requests != 3 || stats[0].Success != 2 || stats[0].Failed != 1 {
-		t.Fatalf("leading model = %+v", stats[0])
-	}
+	testutil.Equal(t, stats[0].Model, "grok-4.6")
+	testutil.Equal(t, stats[0].Requests, 3)
+	testutil.Equal(t, stats[0].Success, 2)
+	testutil.Equal(t, stats[0].Failed, 1)
 }
 
 // Mixed minutes must read only models present in each minute, while keeping
@@ -212,23 +191,17 @@ func TestModelStatsFromBuckets_MixedMinutesAndMissingDuration(t *testing.T) {
 	observe(2, "alpha", true, 0, 0)
 
 	// A request with no duration must not create a zero-valued model sample.
-	if mini.Exists(agg.key(at.Add(2*time.Minute), "grok") + ":model:gamma") {
-		t.Fatal("gamma has a duration list despite no duration sample")
-	}
+	testutil.False(t, mini.Exists(agg.key(at.Add(2*time.Minute), "grok")+":model:gamma"), "gamma has a duration list despite no duration sample")
 	buckets, err := agg.Range(ctx, "grok", at, at.Add(2*time.Minute))
-	if err != nil || len(buckets) != 3 {
-		t.Fatalf("Range: buckets=%v err=%v", buckets, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, len(buckets), 3)
 	before := mini.CommandCount()
 	stats, err := agg.ModelStatsFromBucketsChecked(ctx, "grok", buckets)
-	if err != nil {
-		t.Fatalf("ModelStatsFromBucketsChecked() error = %v", err)
-	}
+	testutil.NoError(t, err, "ModelStatsFromBucketsChecked() error = %v")
 	// Three HGETALLs plus two LRANGEs per present (minute, model) pair:
 	// alpha; alpha+beta; alpha+gamma = five pairs, not 3*3 models.
-	if got, want := mini.CommandCount()-before, 3+2*5; got != want {
-		t.Fatalf("model stats Redis reads=%d, want %d (3 hashes + 10 lists)", got, want)
-	}
+	got, want := mini.CommandCount()-before, 3+2*5
+	testutil.Falsef(t, got != want, "model stats Redis reads=%d, want %d (3 hashes + 10 lists)", got, want)
 	testutil.Equal(t, len(stats), 3)
 	byName := make(map[string]ModelStats, len(stats))
 	for _, stat := range stats {
@@ -249,9 +222,7 @@ func TestModelStatsFromBuckets_MixedMinutesAndMissingDuration(t *testing.T) {
 	}
 	// Channel-level summary semantics (as consumed by API stats) are unchanged.
 	durations, ttfts, err := agg.SamplesForChecked(ctx, "grok", buckets)
-	if err != nil {
-		t.Fatalf("SamplesForChecked() error = %v", err)
-	}
+	testutil.NoError(t, err, "SamplesForChecked() error = %v")
 	summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "grok", Buckets: buckets, Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true})
 	if summary.Requests != 5 || summary.Success != 4 || summary.Failed != 1 ||
 		summary.Samples != 3 || summary.DurationP95MS != 300 || summary.FirstTokenP95MS != 40 {
@@ -268,12 +239,10 @@ func TestChannels_ListsOnlyObservedChannels(t *testing.T) {
 	agg.Observe(ctx, Outcome{Channel: "workbuddy", OK: true, At: at})
 
 	channels, err := agg.Channels(ctx, at, at)
-	if err != nil {
-		t.Fatalf("Channels() error = %v", err)
-	}
-	if len(channels) != 2 || channels[0] != "grok" || channels[1] != "workbuddy" {
-		t.Fatalf("channels = %v", channels)
-	}
+	testutil.NoError(t, err, "Channels() error = %v")
+	testutil.Equal(t, len(channels), 2)
+	testutil.Equal(t, channels[0], "grok")
+	testutil.Equal(t, channels[1], "workbuddy")
 }
 
 func TestChannels_ReversedRangeAndExpiredEmpty(t *testing.T) {
@@ -284,16 +253,12 @@ func TestChannels_ReversedRangeAndExpiredEmpty(t *testing.T) {
 	newer := old.Add(time.Minute)
 	agg.Observe(ctx, Outcome{Channel: "new", OK: true, At: newer})
 	channels, err := agg.Channels(ctx, newer, old)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(channels) != 2 || channels[0] != "new" || channels[1] != "old" {
-		t.Fatalf("channels=%v", channels)
-	}
+	testutil.NoError(t, err)
+	testutil.Equal(t, len(channels), 2)
+	testutil.Equal(t, channels[0], "new")
+	testutil.Equal(t, channels[1], "old")
 	channels, err = agg.Channels(ctx, old.Add(2*time.Minute), old.Add(3*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, len(channels), 0)
 }
 
@@ -314,30 +279,20 @@ func TestChannels_IgnoresSideLists(t *testing.T) {
 	agg.Observe(ctx, Outcome{Channel: "grok", Model: "grok-4.6", OK: true, DurationMS: 120, FirstTokenMS: 40, At: at})
 
 	channels, err := agg.Channels(ctx, at, at)
-	if err != nil {
-		t.Fatalf("Channels() error = %v", err)
-	}
+	testutil.NoError(t, err, "Channels() error = %v")
 	for _, name := range channels {
-		if name == "dur" || name == "ttft" || name == "grok-4.6" {
-			t.Fatalf("side list leaked into the channel list: %v", channels)
-		}
+		testutil.Falsef(t, name == "dur" || name == "ttft" || name == "grok-4.6", "side list leaked into the channel list: %v", channels)
 	}
-	if len(channels) != 1 || channels[0] != "grok" {
-		t.Fatalf("channels = %v, want just grok", channels)
-	}
+	testutil.Equal(t, len(channels), 1)
+	testutil.Equal(t, channels[0], "grok")
 	// The percentile samples must survive for the summary to compute p95.
 	buckets, err := agg.Range(ctx, "grok", at, at)
-	if err != nil || len(buckets) != 1 {
-		t.Fatalf("buckets = %v err = %v", buckets, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, len(buckets), 1)
 	durations, ttfts, err := agg.SamplesForChecked(ctx, "grok", buckets)
-	if err != nil {
-		t.Fatalf("SamplesForChecked() error = %v", err)
-	}
+	testutil.NoError(t, err, "SamplesForChecked() error = %v")
 	summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "grok", Buckets: buckets, Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true})
-	if summary.Samples == 0 || summary.DurationP95MS != 120 {
-		t.Fatalf("summary = %+v, want a 120ms p95 sample", summary)
-	}
+	testutil.Falsef(t, summary.Samples == 0 || summary.DurationP95MS != 120, "summary = %+v, want a 120ms p95 sample", summary)
 }
 
 // TestSummarizeWith_RateUsesTheWindowNotTheBuckets is the reported RPM bug: a
@@ -350,13 +305,9 @@ func TestSummarizeWith_RateUsesTheWindowNotTheBuckets(t *testing.T) {
 	agg.Observe(ctx, Outcome{Channel: "grok", Model: "grok-4.6", OK: true, DurationMS: 100, At: at})
 
 	buckets, err := agg.Range(ctx, "grok", at.Add(-59*time.Minute), at)
-	if err != nil {
-		t.Fatalf("Range() error = %v", err)
-	}
+	testutil.NoError(t, err, "Range() error = %v")
 	durations, ttfts, err := agg.SamplesForChecked(ctx, "grok", buckets)
-	if err != nil {
-		t.Fatalf("SamplesForChecked() error = %v", err)
-	}
+	testutil.NoError(t, err, "SamplesForChecked() error = %v")
 
 	summary := agg.SummarizeWith(ctx, SummaryInput{
 		Channel:         "grok",
@@ -367,9 +318,7 @@ func TestSummarizeWith_RateUsesTheWindowNotTheBuckets(t *testing.T) {
 		SamplesProvided: true,
 	})
 	testutil.Equal(t, summary.Requests, 1)
-	if summary.RPM > 0.02 || summary.RPM < 0.01 {
-		t.Fatalf("rpm = %v, want about 0.0167 for one request in an hour", summary.RPM)
-	}
+	testutil.Falsef(t, summary.RPM > 0.02 || summary.RPM < 0.01, "rpm = %v, want about 0.0167 for one request in an hour", summary.RPM)
 }
 
 // TestSummarizeWith_MergedSamplesProducePercentiles is the reported P95 bug: the
@@ -387,13 +336,9 @@ func TestSummarizeWith_MergedSamplesProducePercentiles(t *testing.T) {
 	}
 
 	grokBuckets, err := agg.Range(ctx, "grok", at, at)
-	if err != nil {
-		t.Fatalf("Range(grok) error = %v", err)
-	}
+	testutil.NoError(t, err, "Range(grok) error = %v")
 	workbuddyBuckets, err := agg.Range(ctx, "workbuddy", at, at)
-	if err != nil {
-		t.Fatalf("Range(workbuddy) error = %v", err)
-	}
+	testutil.NoError(t, err, "Range(workbuddy) error = %v")
 	merged := append(append([]Bucket(nil), grokBuckets...), workbuddyBuckets...)
 	var durations, ttfts []int64
 	for _, pair := range []struct {
@@ -401,9 +346,7 @@ func TestSummarizeWith_MergedSamplesProducePercentiles(t *testing.T) {
 		buckets []Bucket
 	}{{"grok", grokBuckets}, {"workbuddy", workbuddyBuckets}} {
 		d, tt, err := agg.SamplesForChecked(ctx, pair.channel, pair.buckets)
-		if err != nil {
-			t.Fatalf("SamplesForChecked(%q) error = %v", pair.channel, err)
-		}
+		testutil.Falsef(t, err != nil, "SamplesForChecked(%q) error = %v", pair.channel, err)
 		durations = append(durations, d...)
 		ttfts = append(ttfts, tt...)
 	}
@@ -413,13 +356,9 @@ func TestSummarizeWith_MergedSamplesProducePercentiles(t *testing.T) {
 		Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true,
 	})
 	testutil.Equal(t, summary.Samples, 5)
-	if summary.DurationP95MS == 0 || summary.FirstTokenP95MS == 0 {
-		t.Fatalf("merged percentiles are zero: %+v", summary)
-	}
+	testutil.Falsef(t, summary.DurationP95MS == 0 || summary.FirstTokenP95MS == 0, "merged percentiles are zero: %+v", summary)
 	// The merged p95 must reflect the slowest channel, not only the first one.
-	if summary.DurationP95MS <= 300 {
-		t.Fatalf("duration p95 = %d, want it to include the slower channel", summary.DurationP95MS)
-	}
+	testutil.Falsef(t, summary.DurationP95MS <= 300, "duration p95 = %d, want it to include the slower channel", summary.DurationP95MS)
 }
 
 func TestDetailedOutcomePreservesUsageCohortsAndTruePercentiles(t *testing.T) {
@@ -433,34 +372,28 @@ func TestDetailedOutcomePreservesUsageCohortsAndTruePercentiles(t *testing.T) {
 		agg.Observe(ctx, Outcome{Channel: "grok", Model: "test", At: at, OK: i != 100, Status: "2xx", HTTPStatus: 200, Detailed: true, UsageReported: true, InputTokens: 10, OutputTokens: 20, DurationMS: int64(i * 100), FirstTokenMS: int64(i * 10), AttemptFailures: 1, AccountSwitches: 1})
 	}
 	buckets, err := agg.Range(ctx, "grok", at, at)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	durations, ttft, err := agg.SamplesForChecked(ctx, "grok", buckets)
-	if err != nil {
-		t.Fatalf("SamplesForChecked() error = %v", err)
-	}
+	testutil.NoError(t, err, "SamplesForChecked() error = %v")
 	summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "grok", Buckets: buckets, WindowMinutes: 5, Durations: durations, FirstTokenMS: ttft, SamplesProvided: true})
-	if summary.Duration.P95 != 9500 || summary.Duration.P99 != 9900 {
-		t.Fatalf("percentiles=%+v", summary.Duration)
-	}
-	if summary.InputTokens != 1000 || summary.OutputTokens != 2000 || summary.TPS != 10 || summary.UsageSamples != 100 {
-		t.Fatalf("usage=%+v", summary)
-	}
-	if summary.DurationFailed.Samples != 1 || summary.DurationAttempt.Samples != 100 || summary.AttemptFailures != 100 {
-		t.Fatalf("cohorts=%+v", summary)
-	}
+	testutil.Equal(t, summary.Duration.P95, 9500)
+	testutil.Equal(t, summary.Duration.P99, 9900)
+	testutil.Equal(t, summary.InputTokens, 1000)
+	testutil.Equal(t, summary.OutputTokens, 2000)
+	testutil.Equal(t, summary.TPS, 10)
+	testutil.Equal(t, summary.UsageSamples, 100)
+	testutil.Equal(t, summary.DurationFailed.Samples, 1)
+	testutil.Equal(t, summary.DurationAttempt.Samples, 100)
+	testutil.Equal(t, summary.AttemptFailures, 100)
 	channels, err := agg.Channels(ctx, at, at)
-	if err != nil || len(channels) != 1 || channels[0] != "grok" {
-		t.Fatalf("side lists treated as channels: %v %v", channels, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, len(channels), 1)
+	testutil.Equal(t, channels[0], "grok")
 	models, err := agg.ModelStatsFromBucketsChecked(ctx, "grok", buckets)
-	if err != nil {
-		t.Fatalf("ModelStatsFromBucketsChecked() error = %v", err)
-	}
-	if len(models) != 1 || models[0].FirstTokenSamples != 100 || models[0].FirstTokenP95MS != 950 {
-		t.Fatalf("model ttft=%+v", models)
-	}
+	testutil.NoError(t, err, "ModelStatsFromBucketsChecked() error = %v")
+	testutil.Equal(t, len(models), 1)
+	testutil.Equal(t, models[0].FirstTokenSamples, 100)
+	testutil.Equal(t, models[0].FirstTokenP95MS, 950)
 }
 
 // A priced row contributes its cost to the bucket, the summary and the API view;
@@ -483,23 +416,17 @@ func TestObserveAggregatesCostByPricedAndUnpriced(t *testing.T) {
 	})
 
 	buckets, err := aggregator.Range(ctx, "grok", now.Add(-time.Minute), now.Add(time.Minute))
-	if err != nil {
-		t.Fatalf("Range: %v", err)
-	}
+	testutil.NoError(t, err, "Range: %v")
 	testutil.Equal(t, len(buckets), 1)
 	testutil.Equal(t, buckets[0].CostInUSDTicks, 1_500_000)
-	if buckets[0].PricedRequests != 1 || buckets[0].UnpricedRequests != 1 {
-		t.Fatalf("priced=%d unpriced=%d", buckets[0].PricedRequests, buckets[0].UnpricedRequests)
-	}
+	testutil.Equal(t, buckets[0].PricedRequests, 1)
+	testutil.Equal(t, buckets[0].UnpricedRequests, 1)
 	durations, ttfts, err := aggregator.SamplesForChecked(ctx, "grok", buckets)
-	if err != nil {
-		t.Fatalf("SamplesForChecked: %v", err)
-	}
+	testutil.NoError(t, err, "SamplesForChecked: %v")
 	summary := aggregator.SummarizeWith(ctx, SummaryInput{Channel: "grok", Buckets: buckets, WindowMinutes: 1, Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true})
 	testutil.Equal(t, summary.CostInUSDTicks, 1_500_000)
-	if summary.PricedRequests != 1 || summary.UnpricedRequests != 1 {
-		t.Fatalf("summary priced=%d unpriced=%d", summary.PricedRequests, summary.UnpricedRequests)
-	}
+	testutil.Equal(t, summary.PricedRequests, 1)
+	testutil.Equal(t, summary.UnpricedRequests, 1)
 }
 
 func TestCheckedSamplesAndWriteHealthDoNotHideRedisFailure(t *testing.T) {
@@ -508,17 +435,13 @@ func TestCheckedSamplesAndWriteHealthDoNotHideRedisFailure(t *testing.T) {
 	ctx := context.Background()
 	agg.Observe(ctx, Outcome{Channel: "grok", OK: true, DurationMS: 100, At: now})
 	buckets, err := agg.Range(ctx, "grok", now, now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	mini.Del(agg.key(now, "grok") + ":dur")
 	mini.Set(agg.key(now, "grok")+":dur", "invalid")
-	if _, _, err := agg.SamplesForChecked(ctx, "grok", buckets); err == nil {
-		t.Fatal("unavailable latency was treated as empty samples")
-	}
+	_, _, err = agg.SamplesForChecked(ctx, "grok", buckets)
+	testutil.Error(t, err)
 	agg.Observe(ctx, Outcome{Channel: "grok", OK: true, DurationMS: 100, At: now})
 	health := agg.Health()
-	if health["written"] != uint64(1) || health["write_failed"] != uint64(1) {
-		t.Fatalf("health=%+v", health)
-	}
+	testutil.EqualAny(t, health["written"], uint64(1))
+	testutil.EqualAny(t, health["write_failed"], uint64(1))
 }

@@ -23,13 +23,7 @@ func TestModelAdminEditPreservesDiscoveredRoutingMetadata(t *testing.T) {
 	a.HandleModelByID(rec, req)
 	testutil.Equal(t, rec.Code, http.StatusOK)
 	got, err := s.GetModel(context.Background(), model.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.Verified || got.Provider != "build" || got.UpstreamModel != "grok-4.7" || got.Origin != "discovery" || len(got.Capabilities) != 2 || len(got.BoundAccountIDs) != 1 || got.CreatedAt.IsZero() {
-		t.Fatalf("metadata was lost: %+v", got)
-	}
-	if got.Name != "renamed" || got.Status != store.ModelStatusMaintenance || !got.IsDefault || got.SortOrder != 9 {
-		t.Fatalf("editable fields not applied: %+v", got)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, !got.Verified || got.Provider != "build" || got.UpstreamModel != "grok-4.7" || got.Origin != "discovery" || len(got.Capabilities) != 2 || len(got.BoundAccountIDs) != 1 || got.CreatedAt.IsZero(), "metadata was lost: %+v", got)
+	testutil.Falsef(t, got.Name != "renamed" || got.Status != store.ModelStatusMaintenance || !got.IsDefault || got.SortOrder != 9, "editable fields not applied: %+v", got)
 }

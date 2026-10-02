@@ -21,9 +21,8 @@ func TestModelCooldown_ScopedToModelNotAccount(t *testing.T) {
 		},
 	}
 
-	if got := ModelCooldownRemaining(acc, "grok-4.6", now); got <= 0 {
-		t.Fatalf("throttled model remaining = %v, want > 0", got)
-	}
+	got := ModelCooldownRemaining(acc, "grok-4.6", now)
+	testutil.Falsef(t, got <= 0, "throttled model remaining = %v, want > 0", got)
 	testutil.Equal(t, ModelCooldownRemaining(acc, "grok-4.5", now), 0)
 	testutil.Equal(t, ModelCooldownRemaining(acc, "grok-expired", now), 0)
 	testutil.Equal(t, ModelCooldownRemaining(nil, "grok-4.6", now), 0)
@@ -36,32 +35,25 @@ func TestRecordModelCooldown_SetsOnlyThatModel(t *testing.T) {
 	acc := &Account{AccountType: "grok"}
 
 	RecordModelCooldown(acc, "grok-4.6", now.Add(time.Minute))
-	if remaining := ModelCooldownRemaining(acc, "grok-4.6", now); remaining <= 0 {
-		t.Fatal("the throttled model must be marked")
-	}
+	remaining := ModelCooldownRemaining(acc, "grok-4.6", now)
+	testutil.False(t, remaining <= 0, "the throttled model must be marked")
 	testutil.Equal(t, ModelCooldownRemaining(acc, "grok-4.5", now), 0)
 	testutil.Equal(t, acc.StatusCode, "")
 
 	// A later deadline wins; an earlier one does not shorten it.
 	RecordModelCooldown(acc, "grok-4.6", now.Add(5*time.Minute))
-	if got := ModelCooldownRemaining(acc, "grok-4.6", now); got < 4*time.Minute {
-		t.Fatalf("remaining = %v, want the later deadline", got)
-	}
+	got := ModelCooldownRemaining(acc, "grok-4.6", now)
+	testutil.Falsef(t, got < 4*time.Minute, "remaining = %v, want the later deadline", got)
 	RecordModelCooldown(acc, "grok-4.6", now.Add(10*time.Second))
-	if got := ModelCooldownRemaining(acc, "grok-4.6", now); got < 4*time.Minute {
-		t.Fatalf("an earlier deadline shortened the cooldown to %v", got)
-	}
+	got = ModelCooldownRemaining(acc, "grok-4.6", now)
+	testutil.Falsef(t, got < 4*time.Minute, "an earlier deadline shortened the cooldown to %v", got)
 
 	// A past deadline is not recorded at all.
 	before := len(acc.ModelCooldowns)
 	RecordModelCooldown(acc, "grok-4.7", now.Add(-time.Minute))
-	if len(acc.ModelCooldowns) != before {
-		t.Fatal("an expired deadline must not be recorded")
-	}
+	testutil.Equal(t, len(acc.ModelCooldowns), before)
 	RecordModelCooldown(acc, "  ", now.Add(time.Minute))
-	if len(acc.ModelCooldowns) != before {
-		t.Fatal("an empty model name must not be recorded")
-	}
+	testutil.Equal(t, len(acc.ModelCooldowns), before)
 }
 
 // TestMergeModelCooldowns_KeepsLatestAndDropsExpired covers the write path: a
@@ -84,12 +76,9 @@ func TestMergeModelCooldowns_KeepsLatestAndDropsExpired(t *testing.T) {
 	if merged["grok-4.6"].Sub(now) < 4*time.Minute {
 		t.Fatalf("grok-4.6 = %v, want the later deadline", merged["grok-4.6"].Sub(now))
 	}
-	if _, dead := merged["grok-stale"]; dead {
-		t.Fatal("an expired cooldown must not be carried forward")
-	}
-	if mergeModelCooldowns(nil, nil) != nil {
-		t.Fatal("empty input must not create an empty map")
-	}
+	_, dead := merged["grok-stale"]
+	testutil.False(t, dead, "an expired cooldown must not be carried forward")
+	testutil.False(t, mergeModelCooldowns(nil, nil) != nil, "empty input must not create an empty map")
 }
 
 // TestUpdateAccount_PreservesModelCooldownsAcrossPartialWrites pins the guard:
@@ -99,31 +88,24 @@ func TestUpdateAccount_PreservesModelCooldownsAcrossPartialWrites(t *testing.T) 
 
 	ctx := t.Context()
 	acc := &Account{
-		AccountType: "grok",
-		Enabled:     true,
-		ModelCooldowns: map[string]time.Time{
-			"grok-4.6": time.Now().Add(2 * time.Minute),
-		},
+		AccountType:    "grok",
+		Enabled:        true,
+		ModelCooldowns: map[string]time.Time{"grok-4.6": time.Now().Add(2 * time.Minute)},
 	}
 	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 
 	// A request path that knows nothing about model cooldowns saves the account.
 	stale, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	stale.Weight = 3
 	stale.ModelCooldowns = nil
 	testutil.NoError(t, s.UpdateAccount(ctx, stale), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, after.Weight, 3)
-	if remaining := ModelCooldownRemaining(after, "grok-4.6", time.Now()); remaining <= 0 {
-		t.Fatal("a partial write erased the model cooldown")
-	}
+	remaining := ModelCooldownRemaining(after, "grok-4.6", time.Now())
+	testutil.False(t, remaining <= 0, "a partial write erased the model cooldown")
 }
 
 // TestModelCooldownKind_SeparatesPlanFromThrottle pins what the selection layer
@@ -212,9 +194,8 @@ func TestMergeModelCooldownReasons_FollowTheirDeadline(t *testing.T) {
 	); got != nil {
 		t.Fatalf("merged = %v, want nil: a label must not outlive its deadline", got)
 	}
-	if got := mergeModelCooldownReasons(nil, nil, nil, nil); got != nil {
-		t.Fatalf("merged = %v, want nil for empty input", got)
-	}
+	got := mergeModelCooldownReasons(nil, nil, nil, nil)
+	testutil.Falsef(t, got != nil, "merged = %v, want nil for empty input", got)
 }
 
 // TestModelCooldownReasonsSurviveRedis covers the persistence contract: the label
@@ -231,18 +212,14 @@ func TestModelCooldownReasonsSurviveRedis(t *testing.T) {
 
 	// A path that knows nothing about cooldowns saves the account.
 	stale, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	stale.Weight = 2
 	stale.ModelCooldowns = nil
 	stale.ModelCooldownReasons = nil
 	testutil.NoError(t, s.UpdateAccount(ctx, stale), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, ModelCooldownKind(after, "glm-5.3", time.Now()), ModelCooldownUnavailable)
 
 	// The deadline map still decodes exactly as an earlier binary wrote it.
@@ -254,9 +231,7 @@ func TestModelCooldownReasonsSurviveRedis(t *testing.T) {
 	// wrote. It knows only the deadline map, and encoding/json skips the sibling
 	// field it does not define, which is what makes a rollback safe.
 	raw, err := json.Marshal(after)
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
+	testutil.NoError(t, err, "Marshal() error = %v")
 	var previousBuild struct {
 		ModelCooldowns map[string]time.Time `json:"model_cooldowns,omitempty"`
 	}

@@ -58,9 +58,8 @@ func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
 			wrongMethod.Header.Set("Authorization", "Bearer "+e.managedKey)
 			e.mux.ServeHTTP(rec, wrongMethod)
 			testutil.Equal(t, rec.Code, http.StatusMethodNotAllowed)
-			if allow := rec.Header().Get("Allow"); !strings.Contains(allow, http.MethodPost) {
-				t.Fatalf("Allow = %q, want POST", allow)
-			}
+			allow := rec.Header().Get("Allow")
+			testutil.Falsef(t, !strings.Contains(allow, http.MethodPost), "Allow = %q, want POST", allow)
 		})
 	}
 
@@ -70,7 +69,5 @@ func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
 	resourceReq := httptest.NewRequest(http.MethodGet, "/v1/responses/resp_absent", nil)
 	resourceReq.Header.Set("Authorization", "Bearer "+e.managedKey)
 	e.mux.ServeHTTP(rec, resourceReq)
-	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "response_not_found") {
-		t.Fatalf("GET /v1/responses/resp_absent status = %d body = %s", rec.Code, rec.Body.String())
-	}
+	testutil.Falsef(t, rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "response_not_found"), "GET /v1/responses/resp_absent status = %d body = %s", rec.Code, rec.Body.String())
 }

@@ -73,7 +73,5 @@ func TestHandleCountTokensAnswersForAnUnknownModel(t *testing.T) {
 		InputTokens int `json:"input_tokens"`
 	}
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), "decode: %v")
-	if body.InputTokens <= 0 {
-		t.Fatalf("input_tokens = %d, want a positive estimate", body.InputTokens)
-	}
+	testutil.Falsef(t, body.InputTokens <= 0, "input_tokens = %d, want a positive estimate", body.InputTokens)
 }

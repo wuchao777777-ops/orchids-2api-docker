@@ -712,9 +712,7 @@ func (h *Handler) compactionCodecSnapshot() *gatewayCompactionCodec {
 
 // GatewayCompactionEnabled reports whether this deployment can own compaction
 // state. Callers use it to route compaction turns through the gateway.
-func (h *Handler) GatewayCompactionEnabled() bool {
-	return h.compactionCodecSnapshot().available()
-}
+func (h *Handler) GatewayCompactionEnabled() bool { return h.compactionCodecSnapshot().available() }
 
 // handleGatewayCompaction answers a compaction turn itself: it runs the canonical
 // summary request upstream, seals the cleaned summary into a gateway blob, and

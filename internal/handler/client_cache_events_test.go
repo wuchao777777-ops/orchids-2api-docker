@@ -112,17 +112,13 @@ func TestQoderDerivedRuntimeDoesNotEvictClient(t *testing.T) {
 	fixture.handler.AccountChanges([]int64{account.ID})
 	second, releaseSecond := fixture.handler.acquireAccountClient(&updated)
 	releaseSecond()
-	if first != second || len(fixture.builtClients()) != 1 {
-		t.Fatal("derived runtime write rebuilt the cached Qoder client")
-	}
+	testutil.False(t, first != second || len(fixture.builtClients()) != 1, "derived runtime write rebuilt the cached Qoder client")
 	updated.QoderAccessToken = "access-b"
 	fixture.setCurrent(&updated)
 	fixture.handler.AccountChanges([]int64{account.ID})
 	third, releaseThird := fixture.handler.acquireAccountClient(&updated)
 	releaseThird()
-	if third == first || len(fixture.builtClients()) != 2 {
-		t.Fatal("Qoder token rotation did not rebuild the cached client")
-	}
+	testutil.False(t, third == first || len(fixture.builtClients()) != 2, "Qoder token rotation did not rebuild the cached client")
 }
 
 // TestAccountChanges_RotationBuildsANewClient is the acceptance rule for
@@ -133,9 +129,7 @@ func TestAccountChanges_RotationBuildsANewClient(t *testing.T) {
 	account := testAccount(11, "session-a")
 
 	first, release := fixture.handler.acquireAccountClient(account)
-	if first == nil {
-		t.Fatal("no client built")
-	}
+	testutil.False(t, first == nil, "no client built")
 	release()
 
 	// Rotate the credential and notify, as the change bus would.
@@ -146,13 +140,10 @@ func TestAccountChanges_RotationBuildsANewClient(t *testing.T) {
 	second, releaseSecond := fixture.handler.acquireAccountClient(rotated)
 	defer releaseSecond()
 	testutil.NotEqual(t, second, first)
-	if built := fixture.builtClients(); len(built) != 2 {
-		t.Fatalf("clients built = %d, want a new one after rotation", len(built))
-	}
+	built := fixture.builtClients()
+	testutil.Falsef(t, len(built) != 2, "clients built = %d, want a new one after rotation", len(built))
 	// The evicted client was idle, so it is closed immediately.
-	if !fixture.builtClients()[0].isClosed() {
-		t.Fatal("the evicted idle client was not closed")
-	}
+	testutil.False(t, !fixture.builtClients()[0].isClosed(), "the evicted idle client was not closed")
 }
 
 // TestAccountChanges_DoesNotCloseAClientInUse is the concurrency guarantee: a
@@ -162,18 +153,14 @@ func TestAccountChanges_DoesNotCloseAClientInUse(t *testing.T) {
 	account := testAccount(12, "session-a")
 
 	inUse, releaseInUse := fixture.handler.acquireAccountClient(account)
-	if inUse == nil {
-		t.Fatal("no client built")
-	}
+	testutil.False(t, inUse == nil, "no client built")
 	clientInUse := fixture.builtClients()[0]
 
 	// A rotation arrives while the request is still running.
 	rotated := testAccount(12, "session-b")
 	fixture.setCurrent(rotated)
 	fixture.handler.AccountChanges([]int64{12})
-	if clientInUse.isClosed() {
-		t.Fatal("a client in use was closed by a credential change")
-	}
+	testutil.False(t, clientInUse.isClosed(), "a client in use was closed by a credential change")
 
 	// A new request already gets the fresh client.
 	fresh, releaseFresh := fixture.handler.acquireAccountClient(rotated)
@@ -182,9 +169,7 @@ func TestAccountChanges_DoesNotCloseAClientInUse(t *testing.T) {
 
 	// Finishing the first request releases the old client.
 	releaseInUse()
-	if !clientInUse.isClosed() {
-		t.Fatal("the retired client was not closed after its last user finished")
-	}
+	testutil.False(t, !clientInUse.isClosed(), "the retired client was not closed after its last user finished")
 }
 
 // TestAccountChanges_DeleteEvictsTheClient covers removal: no client survives for
@@ -195,21 +180,15 @@ func TestAccountChanges_DeleteEvictsTheClient(t *testing.T) {
 
 	client, release := fixture.handler.acquireAccountClient(account)
 	release()
-	if client == nil {
-		t.Fatal("no client built")
-	}
+	testutil.False(t, client == nil, "no client built")
 
 	fixture.handler.AccountChanges([]int64{13})
 
 	fixture.handler.clientCache.mu.RLock()
 	_, cached := fixture.handler.clientCache.entries[13]
 	fixture.handler.clientCache.mu.RUnlock()
-	if cached {
-		t.Fatal("the client of a deleted account is still cached")
-	}
-	if !fixture.builtClients()[0].isClosed() {
-		t.Fatal("the client of a deleted account was not closed")
-	}
+	testutil.False(t, cached, "the client of a deleted account is still cached")
+	testutil.False(t, !fixture.builtClients()[0].isClosed(), "the client of a deleted account was not closed")
 }
 
 // TestAcquireRelease_IsIdempotent keeps a double release from closing a client a
@@ -219,20 +198,14 @@ func TestAcquireRelease_IsIdempotent(t *testing.T) {
 	account := testAccount(14, "session-a")
 
 	client, release := fixture.handler.acquireAccountClient(account)
-	if client == nil {
-		t.Fatal("no client built")
-	}
+	testutil.False(t, client == nil, "no client built")
 	release()
 	release()
 
 	second, releaseSecond := fixture.handler.acquireAccountClient(account)
 	defer releaseSecond()
-	if second != client {
-		t.Fatal("the unchanged account rebuilt its client unnecessarily")
-	}
-	if fixture.builtClients()[0].isClosed() {
-		t.Fatal("an extra release closed a client still in the cache")
-	}
+	testutil.Equal(t, second, client)
+	testutil.False(t, fixture.builtClients()[0].isClosed(), "an extra release closed a client still in the cache")
 }
 
 // TestAcquireRelease_UnchangedAccountReusesTheClient pins what must NOT change: a
@@ -254,8 +227,6 @@ func TestAcquireRelease_UnchangedAccountReusesTheClient(t *testing.T) {
 
 	second, releaseSecond := fixture.handler.acquireAccountClient(same)
 	defer releaseSecond()
-	if second != first {
-		t.Fatal("a status-only change rebuilt the client")
-	}
+	testutil.Equal(t, second, first)
 	testutil.Equal(t, len(fixture.builtClients()), 1)
 }

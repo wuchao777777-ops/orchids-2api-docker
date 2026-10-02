@@ -11,9 +11,7 @@ type RegistryPayload struct {
 	Default   ID           `json:"defaultProviderKey"`
 }
 
-func Payload() RegistryPayload {
-	return RegistryPayload{Providers: All(), Default: Default().ID}
-}
+func Payload() RegistryPayload { return RegistryPayload{Providers: All(), Default: Default().ID} }
 
 func HandleRegistry(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

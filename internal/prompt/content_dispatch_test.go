@@ -41,24 +41,16 @@ func TestMessageContentUnmarshalDispatch(t *testing.T) {
 			var mc MessageContent
 			err := json.Unmarshal([]byte(tc.in), &mc)
 			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("expected an error for %s, got Text=%q Blocks=%d", tc.in, mc.Text, len(mc.Blocks))
-				}
+				testutil.Falsef(t, err == nil, "expected an error for %s, got Text=%q Blocks=%d", tc.in, mc.Text, len(mc.Blocks))
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error for %s: %v", tc.in, err)
-			}
+			testutil.Falsef(t, err != nil, "unexpected error for %s: %v", tc.in, err)
 			testutil.Equal(t, mc.Text, tc.wantText)
 			testutil.Equal(t, len(mc.Blocks), tc.wantBlks)
 			// Exactly one representation is armed: a string feed leaves Blocks nil,
 			// a block feed clears Text.
-			if tc.wantText != "" && !mc.IsString() {
-				t.Fatalf("string content should report IsString")
-			}
-			if tc.wantBlks > 0 && mc.IsString() {
-				t.Fatalf("block content should not report IsString")
-			}
+			testutil.False(t, tc.wantText != "" && !mc.IsString(), "string content should report IsString")
+			testutil.False(t, tc.wantBlks > 0 && mc.IsString(), "block content should not report IsString")
 		})
 	}
 }
@@ -71,13 +63,10 @@ func TestMessageContentRoundTrip(t *testing.T) {
 	in := []byte(`{"role":"user","content":[{"type":"text","text":"hi"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/tmp/a"}}]}`)
 	var m Message
 	testutil.NoError(t, json.Unmarshal(in, &m))
-	if len(m.Content.Blocks) != 2 || m.Content.Blocks[0].Text != "hi" {
-		t.Fatalf("decoded content = %+v", m.Content)
-	}
+	testutil.Equal(t, len(m.Content.Blocks), 2)
+	testutil.Equal(t, m.Content.Blocks[0].Text, "hi")
 	raw, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.MustContainAll(t, string(raw), `"text":"hi"`, `"name":"Read"`)
 }
 

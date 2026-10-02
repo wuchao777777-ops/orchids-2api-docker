@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"encoding/json"
+
 	"github.com/redis/go-redis/v9"
 
 	"orchids-api/internal/accountpolicy"
@@ -154,9 +155,7 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 	payload["available"] = true
 
 	scope := target
-	if scope == "" {
-		scope = "all"
-	}
+	scope = util.FirstNonEmptyUntrimmed(scope, "all")
 	buckets, durations, ttfts, err := a.opsBucketsWithSamples(r.Context(), scope, since, until)
 	if err != nil {
 		http.Error(w, "failed to read metric buckets", http.StatusInternalServerError)

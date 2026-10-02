@@ -13,9 +13,8 @@ func TestWithDefaultTimeout(t *testing.T) {
 		newCtx, cancel := WithDefaultTimeout(ctx, 100*time.Millisecond)
 		defer cancel()
 
-		if _, ok := newCtx.Deadline(); !ok {
-			t.Error("expected deadline to be set")
-		}
+		_, ok := newCtx.Deadline()
+		testutil.CheckFalse(t, !ok, "expected deadline to be set")
 	})
 
 	t.Run("preserves existing deadline", func(t *testing.T) {
@@ -28,9 +27,7 @@ func TestWithDefaultTimeout(t *testing.T) {
 		deadline1, _ := ctx.Deadline()
 		deadline2, _ := newCtx.Deadline()
 
-		if !deadline1.Equal(deadline2) {
-			t.Error("expected deadline to be preserved")
-		}
+		testutil.CheckFalse(t, !deadline1.Equal(deadline2), "expected deadline to be preserved")
 	})
 
 	t.Run("returns cancel func when timeout is zero", func(t *testing.T) {
@@ -38,9 +35,8 @@ func TestWithDefaultTimeout(t *testing.T) {
 		newCtx, cancel := WithDefaultTimeout(ctx, 0)
 		defer cancel()
 
-		if _, ok := newCtx.Deadline(); ok {
-			t.Error("expected no deadline when timeout is zero")
-		}
+		_, ok := newCtx.Deadline()
+		testutil.CheckFalse(t, ok, "expected no deadline when timeout is zero")
 	})
 }
 
@@ -92,10 +88,6 @@ func TestUniqueStrings(t *testing.T) {
 }
 
 func TestSecureCompare(t *testing.T) {
-	if !SecureCompare("secret", "secret") {
-		t.Fatal("equal values should match")
-	}
-	if SecureCompare("secret", "different") {
-		t.Fatal("different values should not match")
-	}
+	testutil.False(t, !SecureCompare("secret", "secret"), "equal values should match")
+	testutil.False(t, SecureCompare("secret", "different"), "different values should not match")
 }

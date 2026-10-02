@@ -19,9 +19,7 @@ func TestRegisterRoutes_GrokConversationSurfacesAreRetired(t *testing.T) {
 	} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		if rec.Code != http.StatusNotFound && rec.Code != http.StatusUnauthorized {
-			t.Errorf("GET %s = %d, want an unregistered 404 or the /v1 auth guard's 401", path, rec.Code)
-		}
+		testutil.CheckFalsef(t, rec.Code != http.StatusNotFound && rec.Code != http.StatusUnauthorized, "GET %s = %d, want an unregistered 404 or the /v1 auth guard's 401", path, rec.Code)
 	}
 
 	// Both legacy admin aliases are unregistered, including when an admin
@@ -94,7 +92,5 @@ func TestRegisterRoutes_GrokConversationSurfacesAreRetired(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/" {
-		t.Fatalf("GET / = %d location=%q, want 302 /admin/", rec.Code, rec.Header().Get("Location"))
-	}
+	testutil.Falsef(t, rec.Code != http.StatusFound || rec.Header().Get("Location") != "/admin/", "GET / = %d location=%q, want 302 /admin/", rec.Code, rec.Header().Get("Location"))
 }

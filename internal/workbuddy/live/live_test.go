@@ -36,9 +36,7 @@ func liveClient(t *testing.T) *workbuddy.Client {
 		t.Skip("set WB_LIVE=1 and WB_AUTH_FILE to run the live WorkBuddy checks")
 	}
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read auth file: %v", err)
-	}
+	testutil.NoError(t, err, "read auth file: %v")
 
 	return workbuddy.NewFromAccount(&store.Account{
 		AccountType:  "workbuddy",
@@ -55,9 +53,7 @@ func TestLive_FetchModels(t *testing.T) {
 	defer cancel()
 
 	models, err := client.FetchModels(ctx)
-	if err != nil {
-		t.Fatalf("FetchModels() error = %v", err)
-	}
+	testutil.NoError(t, err, "FetchModels() error = %v")
 	testutil.NotEqual(t, len(models), 0)
 
 	ids := make([]string, 0, len(models))
@@ -75,9 +71,7 @@ func TestLive_FetchModels(t *testing.T) {
 				break
 			}
 		}
-		if !found {
-			t.Errorf("model %q missing from the cli catalog", id)
-		}
+		testutil.CheckTrue(t, found, "model %q missing from the cli catalog")
 	}
 }
 
@@ -113,9 +107,7 @@ func TestLive_ChatStream(t *testing.T) {
 		}
 		eventTypes = append(eventTypes, msg.Type)
 	}, nil)
-	if err != nil {
-		t.Fatalf("SendRequestWithPayload() error = %v", err)
-	}
+	testutil.NoError(t, err, "SendRequestWithPayload() error = %v")
 
 	t.Logf("events=%v reasoning_len=%d", eventTypes, reasoning.Len())
 	t.Logf("text=%q", text.String())
@@ -160,9 +152,7 @@ func TestLive_ToolCall(t *testing.T) {
 		input, _ := msg.Event["input"].(string)
 		calls = append(calls, toolCall{name: name, input: input})
 	}, nil)
-	if err != nil {
-		t.Fatalf("SendRequestWithPayload() error = %v", err)
-	}
+	testutil.NoError(t, err, "SendRequestWithPayload() error = %v")
 
 	testutil.NotEqual(t, len(calls), 0)
 	t.Logf("tool calls: %+v", calls)

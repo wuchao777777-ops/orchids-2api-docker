@@ -26,10 +26,8 @@ func sampleIncomingTools() []interface{} {
 			"name":        "Read",
 			"description": "read file content",
 			"input_schema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"file_path": map[string]interface{}{"type": "string"},
-				},
+				"type":       "object",
+				"properties": map[string]interface{}{"file_path": map[string]interface{}{"type": "string"}},
 			},
 		},
 	}
@@ -41,9 +39,8 @@ func sampleIncomingTools() []interface{} {
 // schemas) that was never forwarded, which under-reported the input.
 func TestEstimateToolsTokensMeasuresTheToolsThatAreSent(t *testing.T) {
 	tools := sampleIncomingTools()
-	if got := estimateToolsTokens(tools); got <= 0 {
-		t.Fatalf("estimateToolsTokens() = %d, want a positive estimate", got)
-	}
+	got := estimateToolsTokens(tools)
+	testutil.Falsef(t, got <= 0, "estimateToolsTokens() = %d, want a positive estimate", got)
 	// A tool the old projection would have dropped must still change the
 	// estimate, otherwise the number does not describe the request.
 	withExtra := append(append([]interface{}{}, tools...), map[string]interface{}{
@@ -59,9 +56,7 @@ func TestEstimateToolsTokensMeasuresTheToolsThatAreSent(t *testing.T) {
 			},
 		},
 	})
-	if estimateToolsTokens(withExtra) <= estimateToolsTokens(tools) {
-		t.Fatal("a tool the projection would have dropped did not change the estimate")
-	}
+	testutil.False(t, estimateToolsTokens(withExtra) <= estimateToolsTokens(tools), "a tool the projection would have dropped did not change the estimate")
 }
 
 func TestEstimateToolsTokensIsEmptyForNoTools(t *testing.T) {
@@ -79,9 +74,7 @@ func TestEstimateToolsTokensCountsLongDescriptionsInFull(t *testing.T) {
 		"name":        "Bash",
 		"description": strings.Repeat("run a command with a great deal of extra guidance ", 40),
 	}}
-	if estimateToolsTokens(long) <= estimateToolsTokens(short) {
-		t.Fatal("a long description must count in full, not be capped at 128 characters")
-	}
+	testutil.False(t, estimateToolsTokens(long) <= estimateToolsTokens(short), "a long description must count in full, not be capped at 128 characters")
 }
 
 func BenchmarkEstimateToolsTokens(b *testing.B) {
@@ -98,9 +91,8 @@ func TestDeclaredToolNames_EmptyAndNoValidDeclarations(t *testing.T) {
 		{},
 		{map[string]interface{}{"name": "  "}, map[string]interface{}{"description": "missing name"}},
 	} {
-		if got := declaredToolNames(tools); got != nil {
-			t.Fatalf("declaredToolNames(%#v) = %#v, want nil", tools, got)
-		}
+		got := declaredToolNames(tools)
+		testutil.Falsef(t, got != nil, "declaredToolNames(%#v) = %#v, want nil", tools, got)
 	}
 }
 

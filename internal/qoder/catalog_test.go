@@ -21,9 +21,8 @@ func TestFetchModelsReadsOnlyTheObservedSnapshot(t *testing.T) {
 	client := NewFromAccount(acc, nil)
 	setTestEndpoints(client, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 
-	if _, err := client.FetchModels(context.Background()); !errors.Is(err, ErrNoUpstreamCatalog) {
-		t.Fatalf("FetchModels() with no snapshot error = %v, want ErrNoUpstreamCatalog", err)
-	}
+	_, err := client.FetchModels(context.Background())
+	testutil.Falsef(t, !errors.Is(err, ErrNoUpstreamCatalog), "FetchModels() with no snapshot error = %v, want ErrNoUpstreamCatalog", err)
 
 	// A recorded snapshot is served verbatim.
 	acc.QoderModelIDs = []string{
@@ -33,18 +32,14 @@ func TestFetchModelsReadsOnlyTheObservedSnapshot(t *testing.T) {
 	snapshotClient := NewFromAccount(acc, nil)
 	setTestEndpoints(snapshotClient, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 	snapshot, err := snapshotClient.FetchModels(context.Background())
-	if err != nil {
-		t.Fatalf("FetchModels() with a snapshot error = %v", err)
-	}
+	testutil.NoError(t, err, "FetchModels() with a snapshot error = %v")
 	testutil.Equal(t, snapshot.Len(), 2)
-	if _, resolveErr := snapshot.Resolve("Kimi-K2.7-Code"); resolveErr != nil {
-		t.Fatalf("the snapshot catalog cannot resolve its own model: %v", resolveErr)
-	}
+	_, resolveErr := snapshot.Resolve("Kimi-K2.7-Code")
+	testutil.Falsef(t, resolveErr != nil, "the snapshot catalog cannot resolve its own model: %v", resolveErr)
 	// A model the snapshot does not carry must not resolve, even though a
 	// compiled-in list used to contain it.
-	if _, resolveErr := snapshot.Resolve("GLM-5.3-Flash"); resolveErr == nil {
-		t.Fatal("a model absent from the snapshot resolved anyway")
-	}
+	_, resolveErr = snapshot.Resolve("GLM-5.3-Flash")
+	testutil.False(t, resolveErr == nil, "a model absent from the snapshot resolved anyway")
 }
 
 // TestLoadCatalogWithoutSnapshotYieldsErrNoUpstreamCatalog proves the chat path
@@ -56,7 +51,6 @@ func TestLoadCatalogWithoutSnapshotYieldsErrNoUpstreamCatalog(t *testing.T) {
 	acc := signedTestAccount()
 	acc.QoderModelIDs = nil
 	client := NewFromAccount(acc, nil)
-	if _, err := client.loadCatalog().Resolve("Qwen3.7-Max"); !errors.Is(err, ErrNoUpstreamCatalog) {
-		t.Fatalf("loadCatalog().Resolve() error = %v, want ErrNoUpstreamCatalog", err)
-	}
+	_, err := client.loadCatalog().Resolve("Qwen3.7-Max")
+	testutil.Falsef(t, !errors.Is(err, ErrNoUpstreamCatalog), "loadCatalog().Resolve() error = %v, want ErrNoUpstreamCatalog", err)
 }

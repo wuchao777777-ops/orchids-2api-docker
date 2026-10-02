@@ -130,38 +130,20 @@ func TestDecideQualityRetryPolicy(t *testing.T) {
 }
 
 func TestQualityRequestReplayUnsafe(t *testing.T) {
-	if qualityRequestReplayUnsafe(nil) {
-		t.Fatal("nil request must be replay-safe")
-	}
-	if qualityRequestReplayUnsafe(&ChatCompletionsRequest{}) {
-		t.Fatal("a plain request must be replay-safe")
-	}
+	testutil.False(t, qualityRequestReplayUnsafe(nil), "nil request must be replay-safe")
+	testutil.False(t, qualityRequestReplayUnsafe(&ChatCompletionsRequest{}), "a plain request must be replay-safe")
 	functionTool := map[string]interface{}{"type": "function", "name": "weather"}
-	if qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{functionTool}}) {
-		t.Fatal("a client-executed function tool must be replay-safe")
-	}
+	testutil.False(t, qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{functionTool}}), "a client-executed function tool must be replay-safe")
 	hosted := map[string]interface{}{"type": "web_search"}
-	if !qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{hosted}}) {
-		t.Fatal("a hosted search tool must block replay")
-	}
-	if !qualityRequestReplayUnsafe(&ChatCompletionsRequest{WebSearchOptions: map[string]interface{}{"search_context_size": "low"}}) {
-		t.Fatal("web_search_options must block replay")
-	}
-	if !qualityRequestReplayUnsafe(&ChatCompletionsRequest{MCPServers: []map[string]interface{}{{"url": "https://example.test"}}}) {
-		t.Fatal("mcp_servers must block replay")
-	}
+	testutil.False(t, !qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{hosted}}), "a hosted search tool must block replay")
+	testutil.False(t, !qualityRequestReplayUnsafe(&ChatCompletionsRequest{WebSearchOptions: map[string]interface{}{"search_context_size": "low"}}), "web_search_options must block replay")
+	testutil.False(t, !qualityRequestReplayUnsafe(&ChatCompletionsRequest{MCPServers: []map[string]interface{}{{"url": "https://example.test"}}}), "mcp_servers must block replay")
 	remoteShell := map[string]interface{}{"type": "shell", "environment": map[string]interface{}{"type": "container"}}
-	if !qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{remoteShell}}) {
-		t.Fatal("a hosted shell must block replay")
-	}
+	testutil.False(t, !qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{remoteShell}}), "a hosted shell must block replay")
 	localShell := map[string]interface{}{"type": "shell", "environment": map[string]interface{}{"type": "local"}}
-	if qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{localShell}}) {
-		t.Fatal("a local shell must stay replay-safe")
-	}
+	testutil.False(t, qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{localShell}}), "a local shell must stay replay-safe")
 	// Unknown tool types default to no replay.
-	if !qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{{"type": "code_execution"}}}) {
-		t.Fatal("an unknown hosted tool must block replay")
-	}
+	testutil.False(t, !qualityRequestReplayUnsafe(&ChatCompletionsRequest{ResponsesTools: []map[string]interface{}{{"type": "code_execution"}}}), "an unknown hosted tool must block replay")
 }
 
 func TestDeferredResponseWriterHoldsThenCommits(t *testing.T) {
@@ -169,23 +151,19 @@ func TestDeferredResponseWriterHoldsThenCommits(t *testing.T) {
 	deferred := newDeferredResponseWriter(rec)
 	deferred.Header().Set("Content-Type", "text/event-stream")
 	deferred.WriteHeader(http.StatusOK)
-	if _, err := io.WriteString(deferred, "data: first\n\n"); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	_, err := io.WriteString(deferred, "data: first\n\n")
+	testutil.CheckNoError(t, err)
 	deferred.Flush()
 
 	// Nothing may reach the client while the response is held.
-	if rec.Body.Len() != 0 || rec.Code != http.StatusOK {
-		t.Fatalf("held response leaked: code=%d body=%q", rec.Code, rec.Body.String())
-	}
+	testutil.Falsef(t, rec.Body.Len() != 0 || rec.Code != http.StatusOK, "held response leaked: code=%d body=%q", rec.Code, rec.Body.String())
 	testutil.NotEqual(t, deferred.Buffered(), 0)
 	testutil.NoError(t, deferred.Commit(), "commit: %v")
 	testutil.Equal(t, rec.Body.String(), "data: first\n\n")
 	testutil.Equal(t, rec.Header().Get("Content-Type"), "text/event-stream")
 	// After the commit the writer is transparent: no second status line.
-	if _, err := io.WriteString(deferred, "data: second\n\n"); err != nil {
-		t.Fatalf("write after commit: %v", err)
-	}
+	_, err = io.WriteString(deferred, "data: second\n\n")
+	testutil.CheckNoError(t, err)
 	testutil.Equal(t, rec.Body.String(), "data: first\n\ndata: second\n\n")
 }
 
@@ -196,13 +174,10 @@ func TestDeferredResponseWriterParksWithoutRevealing(t *testing.T) {
 	_, _ = io.WriteString(deferred, "degraded dump")
 
 	parked := deferred.Park()
-	if parked == nil || string(parked.body) != "degraded dump" {
-		t.Fatalf("parked=%+v", parked)
-	}
+	testutil.Falsef(t, parked == nil || string(parked.body) != "degraded dump", "parked=%+v", parked)
 	// A parked response stays invisible and later writes are swallowed.
-	if _, err := io.WriteString(deferred, "more"); err != nil {
-		t.Fatalf("write after park: %v", err)
-	}
+	_, err := io.WriteString(deferred, "more")
+	testutil.CheckNoError(t, err)
 	testutil.Equal(t, rec.Body.Len(), 0)
 	// Fail-open delivery writes the parked body to the real client.
 	testutil.NoError(t, parked.CommitTo(rec), "commit parked: %v")
@@ -217,9 +192,8 @@ func TestDeferredResponseWriterOverflowDelivers(t *testing.T) {
 		chunk[i] = 'x'
 	}
 	for i := 0; i < (qualityHoldMaxBytes>>20)+1; i++ {
-		if _, err := deferred.Write(chunk); err != nil {
-			t.Fatalf("write: %v", err)
-		}
+		_, err := deferred.Write(chunk)
+		testutil.CheckNoError(t, err)
 	}
 	// Past the cap the response is delivered instead of buffered without bound.
 	testutil.NotEqual(t, rec.Body.Len(), 0)
@@ -227,33 +201,22 @@ func TestDeferredResponseWriterOverflowDelivers(t *testing.T) {
 
 func TestQualityHoldPolicyDefaults(t *testing.T) {
 	policy := normalizeQualityHoldPolicy(qualityHoldPolicy{})
-	if policy.MaxAttempts != qualityHoldMaxAttemptsDefault || policy.HoldTimeout != qualityHoldTimeoutDefault {
-		t.Fatalf("policy=%+v", policy)
-	}
+	testutil.Equal(t, policy.MaxAttempts, qualityHoldMaxAttemptsDefault)
+	testutil.Equal(t, policy.HoldTimeout, qualityHoldTimeoutDefault)
 	// The zero value normalizes to fail-closed, matching the upstream helper; the
 	// handler's own default is fail-open, asserted below.
-	if policy.failOpen() {
-		t.Fatal("the zero-value policy must normalize to fail-closed")
-	}
-	if got := normalizeQualityHoldPolicy(qualityHoldPolicy{OnExhausted: qualityRetryFailClosed}); got.failOpen() {
-		t.Fatal("fail_closed was not honoured")
-	}
-	if got := normalizeQualityHoldPolicy(qualityHoldPolicy{OnExhausted: qualityRetryFailOpen}); !got.failOpen() {
-		t.Fatal("fail_open was not honoured")
-	}
-	if !(&Handler{}).qualityHoldPolicy().failOpen() {
-		t.Fatal("the handler default must fail open so a strange pool still answers")
-	}
+	testutil.False(t, policy.failOpen(), "the zero-value policy must normalize to fail-closed")
+	got := normalizeQualityHoldPolicy(qualityHoldPolicy{OnExhausted: qualityRetryFailClosed})
+	testutil.False(t, got.failOpen(), "fail_closed was not honoured")
+	got = normalizeQualityHoldPolicy(qualityHoldPolicy{OnExhausted: qualityRetryFailOpen})
+	testutil.False(t, !got.failOpen(), "fail_open was not honoured")
+	testutil.False(t, !(&Handler{}).qualityHoldPolicy().failOpen(), "the handler default must fail open so a strange pool still answers")
 	enabled := false
 	h := &Handler{cfg: &config.Config{QualityHoldEnabled: &enabled, QualityHoldMaxAttempts: 3, QualityHoldOnExhausted: qualityRetryFailClosed}}
-	if h.qualityHoldPolicy().Enabled {
-		t.Fatal("an explicit disable was ignored")
-	}
+	testutil.False(t, h.qualityHoldPolicy().Enabled, "an explicit disable was ignored")
 	h.cfg = &config.Config{QualityHoldMaxAttempts: 3, QualityHoldTimeoutMs: 2500}
 	policy = h.qualityHoldPolicy()
-	if !policy.Enabled || policy.MaxAttempts != 3 || policy.HoldTimeout != 2500*time.Millisecond {
-		t.Fatalf("policy=%+v", policy)
-	}
+	testutil.Falsef(t, !policy.Enabled || policy.MaxAttempts != 3 || policy.HoldTimeout != 2500*time.Millisecond, "policy=%+v", policy)
 }
 
 // degradedUpstream replays the cipher-drool dump: an encrypted stub with zero
@@ -337,9 +300,7 @@ func TestServeNativeChatWithholdsDegradedTurnAndRetriesAnotherAccount(t *testing
 	h.cliClient.oauth.httpClient = routing.Client()
 
 	sess, err := h.openCLIAccountSessionByID(ctx, degradedAcc.ID, "grok-4.5")
-	if err != nil {
-		t.Fatalf("openCLIAccountSessionByID: %v", err)
-	}
+	testutil.NoError(t, err, "openCLIAccountSessionByID: %v")
 	defer sess.Close()
 	spec, ok := h.resolveConversationModel(ctx, "grok-4.5")
 	testutil.True(t, ok, "grok-4.5 did not resolve")
@@ -360,16 +321,12 @@ func TestServeNativeChatWithholdsDegradedTurnAndRetriesAnotherAccount(t *testing
 
 	// The degraded credential is parked so it stops serving dumps.
 	stored, err := s.ListAccounts(ctx)
-	if err != nil {
-		t.Fatalf("ListAccounts: %v", err)
-	}
+	testutil.NoError(t, err, "ListAccounts: %v")
 	parked := 0
 	for _, acc := range stored {
 		if acc.QualityFailures > 0 {
 			parked++
-			if acc.QualityCooldownUntil.IsZero() || !acc.QualityCooldownUntil.After(time.Now()) {
-				t.Fatalf("account %d was counted but not cooled: %v", acc.ID, acc.QualityCooldownUntil)
-			}
+			testutil.Falsef(t, acc.QualityCooldownUntil.IsZero() || !acc.QualityCooldownUntil.After(time.Now()), "account %d was counted but not cooled: %v", acc.ID, acc.QualityCooldownUntil)
 		}
 	}
 	testutil.Equal(t, parked, 1)

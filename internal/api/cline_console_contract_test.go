@@ -26,9 +26,7 @@ func readConsoleScript(name string) (string, error) {
 // official-only account creation, not the shared registry contract.
 func TestAccountsJSPinsClineOfficialLoginLifecycle(t *testing.T) {
 	source, err := readConsoleScript("accounts.js")
-	if err != nil {
-		t.Fatalf("read accounts.js: %v", err)
-	}
+	testutil.NoError(t, err, "read accounts.js: %v")
 	testutil.CheckContain(t, source, `OrchidsProviderRegistry?.get(key)`)
 	// The login lifecycle must be stopped with the others: a transaction left
 	// polling after the modal closes keeps exchanging a live device code.
@@ -47,9 +45,7 @@ func TestAccountsJSPinsClineOfficialLoginLifecycle(t *testing.T) {
 // status guard. Both assertions read one file, so they share one pass.
 func TestCommonJSPinsTheCredentialVerdictAndQuotaGuard(t *testing.T) {
 	source, err := readConsoleScript("common.js")
-	if err != nil {
-		t.Fatalf("read common.js: %v", err)
-	}
+	testutil.NoError(t, err, "read common.js: %v")
 	for _, want := range []string{
 		`acc?.has_credential === true`,
 		`isQuotaOnlyStatus`,
@@ -62,9 +58,7 @@ func TestCommonJSPinsTheCredentialVerdictAndQuotaGuard(t *testing.T) {
 // label; provider tab membership is covered by the frontend registry suite.
 func TestModelsJSLabelsClineCatalogSource(t *testing.T) {
 	source, err := readConsoleScript("models.js")
-	if err != nil {
-		t.Fatalf("read models.js: %v", err)
-	}
+	testutil.NoError(t, err, "read models.js: %v")
 	testutil.CheckContain(t, source, "cline_recommended_models")
 }
 
@@ -72,9 +66,7 @@ func TestModelsJSLabelsClineCatalogSource(t *testing.T) {
 // credential-verdict rendering used on the Cline account page.
 func TestAccountsJSRendersTheClineRowCells(t *testing.T) {
 	source, err := readConsoleScript("accounts.js")
-	if err != nil {
-		t.Fatalf("read accounts.js: %v", err)
-	}
+	testutil.NoError(t, err, "read accounts.js: %v")
 	// 配额: an unmetered channel is now dropped from the Cline page rather than
 	// rendered as a permanent "未计量". The verdict itself stays in the source
 	// for every other surface that still renders the cell.

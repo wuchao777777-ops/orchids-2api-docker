@@ -27,9 +27,7 @@ func seedJournal(t *testing.T, a *API, events []audit.Event) {
 			event.Timestamp = time.Now()
 		}
 		raw, err := json.Marshal(event)
-		if err != nil {
-			t.Fatalf("marshal event: %v", err)
-		}
+		testutil.NoError(t, err, "marshal event: %v")
 		if _, err := client.XAdd(context.Background(), &redis.XAddArgs{
 			Stream: key,
 			Values: map[string]interface{}{"data": string(raw), "action": event.Action, "status": event.Status, "kind": string(event.Kind)},
@@ -46,9 +44,8 @@ func journalRequest(t *testing.T, a *API, query string) map[string]interface{} {
 	a.HandleJournalRecords(recorder, request)
 	testutil.Equal(t, recorder.Code, http.StatusOK)
 	var payload map[string]interface{}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("journal body is not JSON: %v (%s)", err, recorder.Body.String())
-	}
+	err := json.Unmarshal(recorder.Body.Bytes(), &payload)
+	testutil.CheckNoError(t, err)
 	return payload
 }
 
@@ -69,9 +66,7 @@ func TestJournalRecords_AttachAttemptsToTheirRequest(t *testing.T) {
 
 	payload := journalRequest(t, a, "?kind=request")
 	rows, ok := payload["data"].([]interface{})
-	if !ok {
-		t.Fatalf("data = %T, want a list", payload["data"])
-	}
+	testutil.True(t, ok, "data = %T, want a list")
 	testutil.Equal(t, len(rows), 1)
 	row, _ := rows[0].(map[string]interface{})
 	attempts, _ := row["attempts"].([]interface{})
@@ -100,9 +95,8 @@ func TestJournalRecords_CursorAdvancesPastScannedEntries(t *testing.T) {
 
 	// limit=1 makes the scan window (limit*6) smaller than the 41 stored entries.
 	first := journalRequest(t, a, "?kind=request&limit=1")
-	if rows, _ := first["data"].([]interface{}); len(rows) != 0 {
-		t.Fatalf("first page rows = %d, want 0 (newest 6 entries are operations)", len(rows))
-	}
+	rows, _ := first["data"].([]interface{})
+	testutil.Falsef(t, len(rows) != 0, "first page rows = %d, want 0 (newest 6 entries are operations)", len(rows))
 	// The cursor must point past everything that was scanned, so following it
 	// eventually reaches the request the first page could not fit.
 	cursor, _ := first["next_cursor"].(string)
@@ -117,9 +111,7 @@ func TestJournalRecords_CursorAdvancesPastScannedEntries(t *testing.T) {
 	found := false
 	seen := map[string]bool{}
 	for page := 0; page < 12 && cursor != "" && !found; page++ {
-		if seen[cursor] {
-			t.Fatalf("page %d reused cursor %s: paging is stuck", page, cursor)
-		}
+		testutil.Falsef(t, seen[cursor], "page %d reused cursor %s: paging is stuck", page, cursor)
 		seen[cursor] = true
 		payload := journalRequest(t, a, "?kind=request&limit=1&before="+cursor)
 		rows, _ := payload["data"].([]interface{})
@@ -143,9 +135,8 @@ func TestJournalRowCarriesItsPricingBreakdown(t *testing.T) {
 		InputTokens: 1000, CachedInputTokens: 400, OutputTokens: 500, CostInUSDTicks: 55_000_000,
 	})
 	testutil.True(t, ok, "a priced row produced no breakdown")
-	if breakdown.Model != "grok-4.6" || len(breakdown.Components) != 3 {
-		t.Fatalf("breakdown=%+v", breakdown)
-	}
+	testutil.Equal(t, breakdown.Model, "grok-4.6")
+	testutil.Equal(t, len(breakdown.Components), 3)
 	var total int64
 	for _, component := range breakdown.Components {
 		total += component.CostInUSDTicks
@@ -153,7 +144,6 @@ func TestJournalRowCarriesItsPricingBreakdown(t *testing.T) {
 	testutil.Equal(t, total, breakdown.CostInUSDTicks)
 
 	// An unpriced row stays without one rather than fabricating components.
-	if _, ok := pricingBreakdownForJournal(audit.Event{Action: "grok_request", Model: "future-model"}); ok {
-		t.Fatal("an unpriced row grew a breakdown")
-	}
+	_, ok = pricingBreakdownForJournal(audit.Event{Action: "grok_request", Model: "future-model"})
+	testutil.False(t, ok, "an unpriced row grew a breakdown")
 }

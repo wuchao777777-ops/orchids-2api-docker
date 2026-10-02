@@ -15,21 +15,17 @@ func TestCachedKeyIndexRejectsRotatedKeyAndReadsCurrentPolicy(t *testing.T) {
 	hash := func(raw string) string { sum := sha256.Sum256([]byte(raw)); return hex.EncodeToString(sum[:]) }
 	key := &ApiKey{Name: "perf", KeyHash: hash("old-secret"), Enabled: true}
 	testutil.NoError(t, s.CreateApiKey(ctx, key))
-	if _, err := s.AuthorizeApiKey(ctx, "old-secret"); err != nil {
-		t.Fatal(err)
-	}
+	_, err := s.AuthorizeApiKey(ctx, "old-secret")
+	testutil.NoError(t, err)
 	key.KeyHash = hash("new-secret")
 	key.AllowedModels = []string{"restricted"}
 	testutil.NoError(t, s.UpdateApiKey(ctx, key))
-	if _, err := s.AuthorizeApiKey(ctx, "old-secret"); !errors.Is(err, ErrNoRows) {
-		t.Fatalf("rotated key accepted: %v", err)
-	}
+	_, err = s.AuthorizeApiKey(ctx, "old-secret")
+	testutil.Falsef(t, !errors.Is(err, ErrNoRows), "rotated key accepted: %v", err)
 	current, err := s.AuthorizeApiKey(ctx, "new-secret")
-	if err != nil || len(current.AllowedModels) != 1 {
-		t.Fatalf("policy=%v err=%v", current, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, len(current.AllowedModels), 1)
 	testutil.NoError(t, s.DeleteApiKey(ctx, key.ID))
-	if _, err := s.AuthorizeApiKey(ctx, "new-secret"); !errors.Is(err, ErrNoRows) {
-		t.Fatalf("deleted key accepted: %v", err)
-	}
+	_, err = s.AuthorizeApiKey(ctx, "new-secret")
+	testutil.Falsef(t, !errors.Is(err, ErrNoRows), "deleted key accepted: %v", err)
 }

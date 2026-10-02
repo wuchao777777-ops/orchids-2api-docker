@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"orchids-api/internal/util"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -149,10 +150,7 @@ func isUpstreamFailure(err error) bool {
 		return false
 	}
 	var typed *grokUpstreamError
-	if errors.As(err, &typed) {
-		return true
-	}
-	if strings.Contains(strings.ToLower(err.Error()), upstreamStatusMarker) && parseUpstreamStatus(err) > 0 {
+	if errors.As(err, &typed) || strings.Contains(strings.ToLower(err.Error()), upstreamStatusMarker) && parseUpstreamStatus(err) > 0 {
 		return true
 	}
 	// Both transports in this channel render the same failure: the CLI/Build
@@ -176,12 +174,7 @@ func isUpstreamFailure(err error) bool {
 		return true
 	}
 	text := strings.ToLower(err.Error())
-	for _, marker := range []string{"upstream", "connection reset", "connection refused", "broken pipe", "no such host", "tls handshake"} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc([]string{"upstream", "connection reset", "connection refused", "broken pipe", "no such host", "tls handshake"}, func(marker string) bool { return strings.Contains(text, marker) })
 }
 
 // upstreamRetryAfterSeconds reads the backoff an upstream asked for. The typed

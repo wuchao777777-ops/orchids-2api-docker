@@ -49,12 +49,8 @@ func TestTTFTWaitsForGeneratedContent(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", nil))
 			got := (*outcomes)[0]
-			if got.FirstTokenMS < 25 || got.FirstTokenMS > got.DurationMS {
-				t.Fatalf("incorrect TTFT: %+v", got)
-			}
-			if rec.Body.String() != ": ping\n\n"+tc.control+tc.generated {
-				t.Fatal("response bytes changed")
-			}
+			testutil.Falsef(t, got.FirstTokenMS < 25 || got.FirstTokenMS > got.DurationMS, "incorrect TTFT: %+v", got)
+			testutil.Equal(t, rec.Body.String(), ": ping\n\n"+tc.control+tc.generated)
 		})
 	}
 }
@@ -83,15 +79,9 @@ func TestTokenDetectorFramingAndContent(t *testing.T) {
 		`{"type":"response.function_call_arguments.delta","delta":"{}"}`,
 	} {
 		var d tokenSSEDetector
-		if !d.observe([]byte(": keepalive\r\nevent: delta\r\ndata: " + data + "\r\n\r\n")) {
-			t.Errorf("missing content: %s", data)
-		}
+		testutil.CheckFalsef(t, !d.observe([]byte(": keepalive\r\nevent: delta\r\ndata: "+data+"\r\n\r\n")), "missing content: %s", data)
 	}
 	var d tokenSSEDetector
-	if d.observe([]byte("data: " + strings.Repeat("x", maxTokenEventBytes+10) + "\nignored line\n\n")) {
-		t.Fatal("oversized event accepted")
-	}
-	if !d.observe([]byte("event: response.output_text.delta\ndata: {\"delta\":\"hi\"}\n\n")) {
-		t.Fatal("did not recover after oversized event")
-	}
+	testutil.False(t, d.observe([]byte("data: "+strings.Repeat("x", maxTokenEventBytes+10)+"\nignored line\n\n")), "oversized event accepted")
+	testutil.False(t, !d.observe([]byte("event: response.output_text.delta\ndata: {\"delta\":\"hi\"}\n\n")), "did not recover after oversized event")
 }

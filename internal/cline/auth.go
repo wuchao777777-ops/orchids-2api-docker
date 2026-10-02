@@ -29,7 +29,6 @@ package cline
 import (
 	"errors"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +36,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/util"
 )
 
 // Default endpoints.
@@ -134,9 +134,7 @@ func (c Credentials) AccessValid(now time.Time) bool {
 
 // Bearer renders the request credential. The `workos:` prefix is part of the
 // value the upstream expects, not a scheme this client adds.
-func (c Credentials) Bearer() string {
-	return "workos:" + strings.TrimSpace(c.AccessToken)
-}
+func (c Credentials) Bearer() string { return "workos:" + strings.TrimSpace(c.AccessToken) }
 
 // Fields returns the normalized credential fields.
 func (c Credentials) Fields() (accessToken, refreshToken string, expiresAt time.Time, email string) {
@@ -310,28 +308,10 @@ func formatCapWait(wait time.Duration) string {
 // refusing it would make the setting unusable. Everything else is refused,
 // including a host that merely looks similar.
 func allowedLoginHost(host, configured string) bool {
-	host = strings.TrimSpace(strings.ToLower(host))
-	if host == "" {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") || host == "::1" {
-		return true
-	}
-	if parsed := net.ParseIP(host); parsed != nil && parsed.IsLoopback() {
-		return true
-	}
-	for _, allowed := range loginHosts {
-		if strings.EqualFold(host, allowed) {
-			return true
-		}
-	}
-	configured = strings.TrimSpace(strings.ToLower(configured))
-	return configured != "" && host == configured
+	return util.AllowedLoginHost(host, configured, loginHosts)
 }
 
 // newTaskID mints the per-request correlation id. The upstream uses it as the
 // session identity, so a retry of the same turn carries a new one exactly as a
 // new turn would.
-func newTaskID(now time.Time) string {
-	return fmt.Sprintf("%s%d", taskIDPrefix, now.UnixMilli())
-}
+func newTaskID(now time.Time) string { return fmt.Sprintf("%s%d", taskIDPrefix, now.UnixMilli()) }

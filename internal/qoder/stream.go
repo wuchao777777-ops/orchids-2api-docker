@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -314,9 +315,7 @@ func consumeStreamObserved(body io.Reader, toolsEnabled bool, onMessage func(ups
 	toolPrefixOffset := 0
 	sawNativeTools := false
 
-	emitText := func(text string) {
-		upstream.EmitTextDelta(onMessage, text, &result.SawMeaningfulEvent)
-	}
+	emitText := func(text string) { upstream.EmitTextDelta(onMessage, text, &result.SawMeaningfulEvent) }
 
 	flushPendingText := func() {
 		if pendingText.Len() == 0 {
@@ -733,21 +732,11 @@ func (e *agentLimitError) Error() string {
 }
 
 func isDuplicateRequest(values ...string) bool {
-	for _, value := range values {
-		if strings.Contains(strings.ToLower(value), "duplicate request") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(values, func(value string) bool { return strings.Contains(strings.ToLower(value), "duplicate request") })
 }
 
 func hasAgentLimitReset(values ...string) bool {
-	for _, value := range values {
-		if strings.Contains(strings.ToLower(value), "agentlimitresettime") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(values, func(value string) bool { return strings.Contains(strings.ToLower(value), "agentlimitresettime") })
 }
 
 func agentLimitResetAt(values ...string) time.Time {

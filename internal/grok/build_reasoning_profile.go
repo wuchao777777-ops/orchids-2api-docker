@@ -2,6 +2,7 @@ package grok
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"encoding/json"
@@ -139,12 +140,7 @@ func buildPayloadForAccount(immutable map[string]interface{}, acc *store.Account
 }
 
 func effortSupported(efforts []string, target string) bool {
-	for _, effort := range efforts {
-		if strings.EqualFold(strings.TrimSpace(effort), target) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(efforts, func(effort string) bool { return strings.EqualFold(strings.TrimSpace(effort), target) })
 }
 
 func replacePayload(dst map[string]interface{}, src map[string]interface{}) {

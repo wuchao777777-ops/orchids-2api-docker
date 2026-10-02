@@ -38,9 +38,7 @@ func TestEstimateTextTokens(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tokens := EstimateTextTokens(tt.text)
-			if tokens < tt.min || tokens > tt.max {
-				t.Errorf("EstimateTextTokens(%q) = %d, want between %d and %d", tt.text, tokens, tt.min, tt.max)
-			}
+			testutil.CheckFalsef(t, tokens < tt.min || tokens > tt.max, "EstimateTextTokens(%q) = %d, want between %d and %d", tt.text, tokens, tt.min, tt.max)
 		})
 	}
 }
@@ -81,9 +79,7 @@ func TestEstimatorMatchesEstimateTextTokens(t *testing.T) {
 			want := EstimateTextTokens(joined)
 			testutil.Equal(t, estimator.Count(), want)
 			estimator.Reset()
-			if estimator.Count() != 0 {
-				t.Fatal("expected reset estimator")
-			}
+			testutil.Equal(t, estimator.Count(), 0)
 		})
 	}
 }
@@ -98,9 +94,8 @@ func TestEstimatorAddBytesMatchesEstimateTextTokens(t *testing.T) {
 	for _, text := range tests {
 		var estimator Estimator
 		estimator.AddBytes([]byte(text))
-		if got, want := estimator.Count(), EstimateTextTokens(text); got != want {
-			t.Fatalf("AddBytes count=%d want=%d text=%q", got, want, text)
-		}
+		got, want := estimator.Count(), EstimateTextTokens(text)
+		testutil.Falsef(t, got != want, "AddBytes count=%d want=%d text=%q", got, want, text)
 	}
 }
 
@@ -192,15 +187,13 @@ func TestEstimatorMatchesReference(t *testing.T) {
 		var ref referenceEstimator
 		ref.add(in)
 
-		if got, want := fast.Count(), ref.count(); got != want {
-			t.Fatalf("Add(%q) = %d, reference = %d", in, got, want)
-		}
+		got, want := fast.Count(), ref.count()
+		testutil.Falsef(t, got != want, "Add(%q) = %d, reference = %d", in, got, want)
 
 		var fastBytes Estimator
 		fastBytes.AddBytes([]byte(in))
-		if got, want := fastBytes.Count(), ref.count(); got != want {
-			t.Fatalf("AddBytes(%q) = %d, reference = %d", in, got, want)
-		}
+		got, want = fastBytes.Count(), ref.count()
+		testutil.Falsef(t, got != want, "AddBytes(%q) = %d, reference = %d", in, got, want)
 	}
 
 	// Chunked accumulation must match one whole-string pass, which is how the
@@ -212,9 +205,8 @@ func TestEstimatorMatchesReference(t *testing.T) {
 		fast.Add(chunk)
 		ref.add(chunk)
 	}
-	if got, want := fast.Count(), ref.count(); got != want {
-		t.Fatalf("chunked Add = %d, reference = %d", got, want)
-	}
+	got, want := fast.Count(), ref.count()
+	testutil.Falsef(t, got != want, "chunked Add = %d, reference = %d", got, want)
 }
 
 func BenchmarkEstimateTextTokens_LongRun(b *testing.B) {

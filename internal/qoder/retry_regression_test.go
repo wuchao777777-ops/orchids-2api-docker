@@ -57,9 +57,7 @@ func TestRefreshReplayKeepsIndependentTransientBudget(t *testing.T) {
 			setTestEndpoints(client, server.URL, server.URL, server.URL)
 			err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{Model: "Qwen3.7-Max", Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hello"}}}}, nil, nil)
 			success := statuses[len(statuses)-1] == 200
-			if (err == nil) != success {
-				t.Fatalf("error=%v success wanted=%v", err, success)
-			}
+			testutil.Equal(t, (err == nil), success)
 			testutil.Equal(t, int(chats.Load()), len(statuses))
 			wantRefresh := int32(0)
 			for _, s := range statuses {
@@ -97,8 +95,6 @@ func TestTransientBackoffReturnsCancellation(t *testing.T) {
 	transport := &backoffCancelTransport{cancel: cancel}
 	client.stream = &http.Client{Transport: transport}
 	err := client.SendRequestWithPayload(ctx, upstream.UpstreamRequest{Model: "Qwen3.7-Max", Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hello"}}}}, nil, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("error=%v want context.Canceled", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, context.Canceled), "error=%v want context.Canceled", err)
 	testutil.Equal(t, transport.calls.Load(), 1)
 }

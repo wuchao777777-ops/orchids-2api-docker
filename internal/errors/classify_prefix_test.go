@@ -31,9 +31,7 @@ func TestClassifyAccountStatus_LeadingStatusCodePrefix(t *testing.T) {
 		{"unrelated detail", "the cache is cold", ""},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			testutil.Equal(t, ClassifyAccountStatus(tc.in), tc.want)
-		})
+		t.Run(tc.name, func(t *testing.T) { testutil.Equal(t, ClassifyAccountStatus(tc.in), tc.want) })
 	}
 }
 

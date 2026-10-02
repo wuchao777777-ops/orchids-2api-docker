@@ -42,9 +42,8 @@ func TestCodexCatalogExposesContextWindowAndModalities(t *testing.T) {
 		{"grok-unknown-model", 128000, []string{"text"}},
 	} {
 		entry := codexEntryFor(t, catalog, tc.slug)
-		if entry.ContextWindow != tc.context || entry.MaxContextWindow != tc.context {
-			t.Fatalf("%s context_window=%d max=%d want %d", tc.slug, entry.ContextWindow, entry.MaxContextWindow, tc.context)
-		}
+		testutil.Equal(t, entry.ContextWindow, tc.context)
+		testutil.Equal(t, entry.MaxContextWindow, tc.context)
 		testutil.Equal(t, len(entry.InputModalities), len(tc.modalities))
 		for i, want := range tc.modalities {
 			testutil.Equal(t, entry.InputModalities[i], want)
@@ -69,9 +68,8 @@ func TestCodexCatalogUsesObservedGrokProfile(t *testing.T) {
 	}
 	testutil.Equal(t, strings.Join(levels, ","), "low,high,xhigh")
 	testutil.Equal(t, entry.DefaultReasoningLevel, "high")
-	if entry.ContextWindow != 500000 || entry.MaxContextWindow != 1500000 {
-		t.Fatalf("observed windows = context %d max %d, want 500000 and 1500000", entry.ContextWindow, entry.MaxContextWindow)
-	}
+	testutil.Equal(t, entry.ContextWindow, 500000)
+	testutil.Equal(t, entry.MaxContextWindow, 1500000)
 	// The declared output budget travels with the catalog so a client can plan
 	// its own completion against the same number the gateway advertises.
 	testutil.Equal(t, entry.MaxOutputTokens, 1000000)
@@ -84,16 +82,14 @@ func TestCodexCatalogReasoningLevels(t *testing.T) {
 	})
 
 	entry := codexEntryFor(t, catalog, "grok-4.6")
-	if len(entry.SupportedReasoningLevels) != 4 || entry.DefaultReasoningLevel != "medium" {
-		t.Fatalf("grok-4.6 levels=%v default=%q", entry.SupportedReasoningLevels, entry.DefaultReasoningLevel)
-	}
+	testutil.Equal(t, len(entry.SupportedReasoningLevels), 4)
+	testutil.Equal(t, entry.DefaultReasoningLevel, "medium")
 	if entry.SupportedReasoningLevels[3].Effort != "xhigh" || entry.SupportedReasoningLevels[3].Description == "" {
 		t.Fatalf("grok-4.6 top level = %#v", entry.SupportedReasoningLevels[3])
 	}
 	// Grok 4.5 tops out at high.
-	if levels := codexEntryFor(t, catalog, "grok-4.5").SupportedReasoningLevels; len(levels) != 3 || levels[2].Effort != "high" {
-		t.Fatalf("grok-4.5 levels=%v", levels)
-	}
+	levels := codexEntryFor(t, catalog, "grok-4.5").SupportedReasoningLevels
+	testutil.Falsef(t, len(levels) != 3 || levels[2].Effort != "high", "grok-4.5 levels=%v", levels)
 }
 
 func TestCodexCatalogHidesMediaModels(t *testing.T) {
@@ -107,9 +103,8 @@ func TestCodexCatalogHidesMediaModels(t *testing.T) {
 		testutil.Equal(t, codexEntryFor(t, catalog, slug).Visibility, "hide")
 	}
 	// Agent tooling is only advertised for Responses-capable text models.
-	if entry := codexEntryFor(t, catalog, "grok-4.6"); entry.ApplyPatchToolType == nil || !entry.SupportsParallelToolCalls {
-		t.Fatalf("grok-4.6 tooling = %#v", entry)
-	}
+	entry := codexEntryFor(t, catalog, "grok-4.6")
+	testutil.Falsef(t, entry.ApplyPatchToolType == nil || !entry.SupportsParallelToolCalls, "grok-4.6 tooling = %#v", entry)
 	if entry := codexEntryFor(t, catalog, "grok-imagine-image"); entry.ApplyPatchToolType != nil {
 		t.Fatalf("media model advertised apply_patch")
 	}
@@ -138,9 +133,7 @@ func TestWriteCodexModelCatalogServesETag(t *testing.T) {
 	revalidate.Header.Set("If-None-Match", etag)
 	second := httptest.NewRecorder()
 	writeCodexModelCatalog(second, revalidate, catalog)
-	if second.Code != http.StatusNotModified || second.Body.Len() != 0 {
-		t.Fatalf("revalidate status=%d body=%q", second.Code, second.Body.String())
-	}
+	testutil.Falsef(t, second.Code != http.StatusNotModified || second.Body.Len() != 0, "revalidate status=%d body=%q", second.Code, second.Body.String())
 }
 
 // A channel may publish one model per effort level (gpt-5-6-sol-low, -medium,
@@ -163,15 +156,12 @@ func TestCodexCatalogGroupsEffortVariantsIntoOneFamily(t *testing.T) {
 	}
 	testutil.Equal(t, strings.Join(levels, ","), "low,medium,high,xhigh")
 	testutil.Equal(t, family.DefaultReasoningLevel, "medium")
-	if !family.SupportsReasoningSummaries || !family.SupportsReasoningSummaryParameter {
-		t.Fatalf("a family with effort levels must advertise reasoning support: %+v", family)
-	}
+	testutil.Falsef(t, !family.SupportsReasoningSummaries || !family.SupportsReasoningSummaryParameter, "a family with effort levels must advertise reasoning support: %+v", family)
 
 	plain := codexEntryFor(t, catalog, "auto-open")
 	// Models without effort variants keep the historical single "none" level.
-	if len(plain.SupportedReasoningLevels) != 1 || plain.SupportedReasoningLevels[0].Effort != "none" {
-		t.Fatalf("auto-open levels = %+v, want the default none level", plain.SupportedReasoningLevels)
-	}
+	testutil.Equal(t, len(plain.SupportedReasoningLevels), 1)
+	testutil.Equal(t, plain.SupportedReasoningLevels[0].Effort, "none")
 	testutil.Equal(t, plain.DefaultReasoningLevel, "none")
 }
 
@@ -185,9 +175,8 @@ func TestSplitEffortVariantSuffix(t *testing.T) {
 	}
 	for input, want := range cases {
 		family, level := splitEffortVariantSuffix(input)
-		if family != want[0] || level != want[1] {
-			t.Fatalf("splitEffortVariantSuffix(%q) = (%q, %q), want (%q, %q)", input, family, level, want[0], want[1])
-		}
+		testutil.Equal(t, family, want[0])
+		testutil.Equal(t, level, want[1])
 	}
 }
 
@@ -203,9 +192,8 @@ func TestCodexCatalogKeepsASingleEffortVariantUnderItsOwnID(t *testing.T) {
 	testutil.Equal(t, len(catalog.Models), 2)
 	entry := codexEntryFor(t, catalog, "gpt-5-6-sol-high")
 	testutil.Equal(t, entry.DefaultReasoningLevel, "none")
-	if len(entry.SupportedReasoningLevels) != 1 || entry.SupportedReasoningLevels[0].Effort != "none" {
-		t.Fatalf("single variant levels = %+v, want the default none level", entry.SupportedReasoningLevels)
-	}
+	testutil.Equal(t, len(entry.SupportedReasoningLevels), 1)
+	testutil.Equal(t, entry.SupportedReasoningLevels[0].Effort, "none")
 }
 
 // The family representative drives visibility, capabilities and metadata. A

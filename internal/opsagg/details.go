@@ -2,6 +2,7 @@ package opsagg
 
 import (
 	"context"
+	"slices"
 	"strconv"
 
 	"github.com/redis/go-redis/v9"
@@ -163,10 +164,7 @@ func (a *Aggregator) observeDetails(ctx context.Context, pipe redis.Pipeliner, k
 
 // Keep discovery on the request hashes; side lists are not channels.
 func isDetailSuffix(channel string) bool {
-	for _, suffix := range []string{":dur_failed", ":ttft_failed", ":dur_attempt", ":ttft_attempt"} {
-		if len(channel) >= len(suffix) && channel[len(channel)-len(suffix):] == suffix {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc([]string{":dur_failed", ":ttft_failed", ":dur_attempt", ":ttft_attempt"}, func(suffix string) bool {
+		return len(channel) >= len(suffix) && channel[len(channel)-len(suffix):] == suffix
+	})
 }

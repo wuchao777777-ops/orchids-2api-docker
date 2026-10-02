@@ -60,15 +60,10 @@ func TestObservedOutcome_TimeToFirstTokenSkipsKeepalives(t *testing.T) {
 
 	testutil.Equal(t, len(*outcomes), 1)
 	outcome := (*outcomes)[0]
-	if outcome.Channel != "grok" || outcome.StatusClass != "2xx" {
-		t.Fatalf("outcome = %+v, want the grok /v1 channel with a 2xx class", outcome)
-	}
-	if outcome.FirstTokenMS < 50 {
-		t.Fatalf("first_token_ms = %d, want it measured from the first payload byte (>= 50ms of keepalive)", outcome.FirstTokenMS)
-	}
-	if outcome.FirstTokenMS > outcome.DurationMS {
-		t.Fatalf("first_token_ms = %d exceeds duration_ms = %d", outcome.FirstTokenMS, outcome.DurationMS)
-	}
+	testutil.Equal(t, outcome.Channel, "grok")
+	testutil.Equal(t, outcome.StatusClass, "2xx")
+	testutil.Falsef(t, outcome.FirstTokenMS < 50, "first_token_ms = %d, want it measured from the first payload byte (>= 50ms of keepalive)", outcome.FirstTokenMS)
+	testutil.Falsef(t, outcome.FirstTokenMS > outcome.DurationMS, "first_token_ms = %d exceeds duration_ms = %d", outcome.FirstTokenMS, outcome.DurationMS)
 }
 
 // TestObservedOutcome_FallsBackToFirstWrite covers the non-streaming case: a JSON
@@ -118,13 +113,9 @@ func TestMarkStreamFailure_IsSafeOnForeignWriters(t *testing.T) {
 	MarkStreamFailure(httptest.NewRecorder())
 
 	traced := NewTracedResponseWriter(httptest.NewRecorder())
-	if traced.StreamFailed() {
-		t.Fatal("a fresh writer reports a stream failure")
-	}
+	testutil.False(t, traced.StreamFailed(), "a fresh writer reports a stream failure")
 	MarkStreamFailure(traced)
-	if !traced.StreamFailed() {
-		t.Fatal("MarkStreamFailure did not reach the traced writer")
-	}
+	testutil.False(t, !traced.StreamFailed(), "MarkStreamFailure did not reach the traced writer")
 }
 
 func TestIsPayloadWrite(t *testing.T) {

@@ -65,9 +65,8 @@ func TestUpstreamErrorIsStillSanitized(t *testing.T) {
 			// Credentials belong to the operator-owned pool, so legacy 403
 			// maps to 503 while a server-class upstream 502 stays 502.
 			testutil.Equal(t, rec.Code, tc.wantStatus)
-			if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
-				t.Fatalf("Content-Type = %q, want application/json", got)
-			}
+			got := rec.Header().Get("Content-Type")
+			testutil.Falsef(t, !strings.HasPrefix(got, "application/json"), "Content-Type = %q, want application/json", got)
 			var payload struct {
 				Error struct {
 					Message string `json:"message"`
@@ -75,12 +74,10 @@ func TestUpstreamErrorIsStillSanitized(t *testing.T) {
 					Code    string `json:"code"`
 				} `json:"error"`
 			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-				t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
-			}
-			if payload.Error.Code != tc.wantCode || payload.Error.Type != "server_error" {
-				t.Fatalf("error code/type = %q/%q, want %s/server_error", payload.Error.Code, payload.Error.Type, tc.wantCode)
-			}
+			err := json.Unmarshal(rec.Body.Bytes(), &payload)
+			testutil.CheckNoError(t, err)
+			testutil.Equal(t, payload.Error.Code, tc.wantCode)
+			testutil.Equal(t, payload.Error.Type, "server_error")
 			testutil.Equal(t, payload.Error.Message, tc.wantMessage)
 			for _, leak := range []string{"body=", "status=", "classify-private-team", "classify-secret-token", "bad gateway from xai", "forbidden"} {
 				testutil.CheckNotContain(t, rec.Body.String(), leak)

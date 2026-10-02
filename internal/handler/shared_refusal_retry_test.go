@@ -15,12 +15,8 @@ func TestQoderExplicitQueueRetryInterval(t *testing.T) {
 	wait := sharedRefusalWaitForChannel(30*time.Second, 1, "qoder", 15000)
 	testutil.Equal(t, wait, 15*time.Second)
 	budget := SharedRefusalWaitBudget(15000)
-	if !sharedRefusalWaitAllowedWithin(0, wait, budget) {
-		t.Fatal("first retry must fit the 15s budget")
-	}
-	if sharedRefusalWaitAllowedWithin(wait, wait, budget) {
-		t.Fatal("a second wait must not exceed the total budget")
-	}
+	testutil.False(t, !sharedRefusalWaitAllowedWithin(0, wait, budget), "first retry must fit the 15s budget")
+	testutil.False(t, sharedRefusalWaitAllowedWithin(wait, wait, budget), "a second wait must not exceed the total budget")
 	testutil.Equal(t, sharedRefusalSleepForChannel(wait, "qoder", 15000), wait)
 	testutil.Equal(t, sharedRefusalWaitForChannel(30*time.Second, 1, "qoder", 0), 30*time.Second)
 	testutil.Equal(t, sharedRefusalWaitForChannel(30*time.Second, 1, "workbuddy", 15000), sharedRefusalWait(30*time.Second, 1))
@@ -40,9 +36,7 @@ func TestSharedRefusalClassIsRecognised(t *testing.T) {
 		"upstream pool":        "qoder API error: the available upstream accounts are rate-limited",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if !isSharedUpstreamRefusalClass(apperrors.ClassifyUpstreamError(message)) {
-				t.Errorf("%q was not recognised as a shared refusal", message)
-			}
+			testutil.CheckFalsef(t, !isSharedUpstreamRefusalClass(apperrors.ClassifyUpstreamError(message)), "%q was not recognised as a shared refusal", message)
 		})
 	}
 
@@ -53,9 +47,7 @@ func TestSharedRefusalClassIsRecognised(t *testing.T) {
 		"cline prose cap": "cline inference cap reached: Try again in 17h 59m",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if isSharedUpstreamRefusalClass(apperrors.ClassifyUpstreamError(message)) {
-				t.Errorf("%q was treated as shared; it must still rotate", message)
-			}
+			testutil.CheckFalsef(t, isSharedUpstreamRefusalClass(apperrors.ClassifyUpstreamError(message)), "%q was treated as shared; it must still rotate", message)
 		})
 	}
 }
@@ -74,16 +66,12 @@ func TestSharedRefusalJitterIsBounded(t *testing.T) {
 		}
 		for i := 0; i < 200; i++ {
 			got := sharedRefusalJitter(delay)
-			if got < 0 {
-				t.Fatalf("jitter(%v) = %v, want non-negative", delay, got)
-			}
+			testutil.Falsef(t, got < 0, "jitter(%v) = %v, want non-negative", delay, got)
 			if limit <= 0 {
 				testutil.Equal(t, got, 0)
 				continue
 			}
-			if got >= limit {
-				t.Fatalf("jitter(%v) = %v, want < %v", delay, got, limit)
-			}
+			testutil.Falsef(t, got >= limit, "jitter(%v) = %v, want < %v", delay, got, limit)
 		}
 	}
 }
@@ -100,24 +88,17 @@ func TestSharedRefusalWaitRampsUpToTheHint(t *testing.T) {
 	cumulative := time.Duration(0)
 	for retry := 1; retry <= 3; retry++ {
 		wait := sharedRefusalWait(hint, retry)
-		if wait <= previous {
-			t.Fatalf("retry %d wait %v did not grow past %v", retry, wait, previous)
-		}
-		if wait > hint {
-			t.Fatalf("retry %d wait %v exceeds the hint %v", retry, wait, hint)
-		}
+		testutil.Falsef(t, wait <= previous, "retry %d wait %v did not grow past %v", retry, wait, previous)
+		testutil.Falsef(t, wait > hint, "retry %d wait %v exceeds the hint %v", retry, wait, hint)
 		previous = wait
 		cumulative += wait
 	}
 	// The first probe must be cheap: that is where the latency win comes from.
-	if first := sharedRefusalWait(hint, 1); first > hint/4 {
-		t.Errorf("first probe = %v, want well under the hint %v", first, hint)
-	}
+	first := sharedRefusalWait(hint, 1)
+	testutil.CheckFalsef(t, first > hint/4, "first probe = %v, want well under the hint %v", first, hint)
 	// Three retries must still cover roughly the whole window, or a slow queue
 	// would never be waited out.
-	if cumulative < hint {
-		t.Errorf("three retries cover %v, want at least the %v hint", cumulative, hint)
-	}
+	testutil.CheckFalsef(t, cumulative < hint, "three retries cover %v, want at least the %v hint", cumulative, hint)
 	// Beyond the schedule the hint is honoured, and every value stays bounded.
 	for retry := 4; retry <= 8; retry++ {
 		testutil.CheckEqual(t, sharedRefusalWait(hint, retry), hint)

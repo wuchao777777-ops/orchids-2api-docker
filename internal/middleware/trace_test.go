@@ -30,9 +30,7 @@ func TestGenerateTraceID(t *testing.T) {
 		ids := make(map[string]bool)
 		for i := 0; i < 1000; i++ {
 			id := GenerateTraceID()
-			if ids[id] {
-				t.Errorf("duplicate trace ID generated: %s", id)
-			}
+			testutil.CheckFalsef(t, ids[id], "duplicate trace ID generated: %s", id)
 			ids[id] = true
 		}
 	})
@@ -43,9 +41,7 @@ func TestGenerateTraceID(t *testing.T) {
 			t.Errorf("trace ID length = %d, want 32", len(id))
 		}
 		for _, c := range id {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-				t.Errorf("invalid character in trace ID: %c", c)
-			}
+			testutil.CheckFalsef(t, !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')), "invalid character in trace ID: %c", c)
 		}
 	})
 }
@@ -150,20 +146,14 @@ func TestTracedResponseWriter(t *testing.T) {
 		traced := NewTracedResponseWriter(w)
 		before := time.Now()
 		traced.Flush()
-		if traced.FirstWriteAt().Before(before) {
-			t.Fatalf("FirstWriteAt=%v, want a flush timestamp", traced.FirstWriteAt())
-		}
-		if !w.Flushed {
-			t.Fatal("Flush was not forwarded")
-		}
+		testutil.Falsef(t, traced.FirstWriteAt().Before(before), "FirstWriteAt=%v, want a flush timestamp", traced.FirstWriteAt())
+		testutil.False(t, !w.Flushed, "Flush was not forwarded")
 	})
 
 	t.Run("unwrap exposes the underlying writer", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		traced := NewTracedResponseWriter(w)
-		if traced.Unwrap() != w {
-			t.Fatal("Unwrap did not return the underlying writer")
-		}
+		testutil.EqualAny(t, traced.Unwrap(), w)
 	})
 
 	t.Run("hijack delegates to underlying writer", func(t *testing.T) {
@@ -171,12 +161,8 @@ func TestTracedResponseWriter(t *testing.T) {
 		traced := NewTracedResponseWriter(w)
 
 		_, _, err := traced.Hijack()
-		if err != nil {
-			t.Fatalf("Hijack() error = %v, want nil", err)
-		}
-		if !w.hijacked {
-			t.Fatal("Hijack() should delegate to underlying writer")
-		}
+		testutil.NoError(t, err, "Hijack() error = %v, want nil")
+		testutil.False(t, !w.hijacked, "Hijack() should delegate to underlying writer")
 	})
 
 	t.Run("hijack fails when underlying writer does not support it", func(t *testing.T) {
@@ -184,9 +170,7 @@ func TestTracedResponseWriter(t *testing.T) {
 		traced := NewTracedResponseWriter(w)
 
 		_, _, err := traced.Hijack()
-		if err == nil {
-			t.Fatal("Hijack() should fail when underlying writer is not hijackable")
-		}
+		testutil.False(t, err == nil, "Hijack() should fail when underlying writer is not hijackable")
 		testutil.MustContain(t, err.Error(), "does not support hijacking")
 	})
 }
@@ -228,15 +212,11 @@ func TestLoggingMiddleware_WebSocketUpgrade(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("Dial() error = %v", err)
-	}
+	testutil.NoError(t, err, "Dial() error = %v")
 	defer conn.Close()
 
 	_, msg, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("ReadMessage() error = %v", err)
-	}
+	testutil.NoError(t, err, "ReadMessage() error = %v")
 	testutil.Equal(t, string(msg), "ok")
 }
 

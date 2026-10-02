@@ -28,11 +28,7 @@ func TestUpdateAccountStaleRequestCannotOverwriteNewerQuota(t *testing.T) {
 	testutil.NoError(t, s.UpdateAccount(context.Background(), &stale))
 
 	got, err := s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.QuotaResetAt.Equal(newReset) || !got.QoderQuota.ResetAt.Equal(newReset) || !got.QoderQuota.Exhausted {
-		t.Fatalf("stale write overwrote quota: reset=%v snapshot=%+v", got.QuotaResetAt, got.QoderQuota)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, !got.QuotaResetAt.Equal(newReset) || !got.QoderQuota.ResetAt.Equal(newReset) || !got.QoderQuota.Exhausted, "stale write overwrote quota: reset=%v snapshot=%+v", got.QuotaResetAt, got.QoderQuota)
 	testutil.Equal(t, got.StatusCode, "402")
 }

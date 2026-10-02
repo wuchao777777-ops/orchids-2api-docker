@@ -25,21 +25,17 @@ func TestResolveConversationModelUsesAccountBuildCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec, ok := h.resolveConversationModel(context.Background(), "grok-future-account-model")
-	if !ok || spec.Upstream != UpstreamCLI || spec.UpstreamModel != "grok-future-account-model" {
-		t.Fatalf("dynamic spec=%#v,%v", spec, ok)
-	}
-	if _, ok := h.resolveConversationModel(context.Background(), "arbitrary-unadvertised-model"); ok {
-		t.Fatal("unadvertised model must not become an upstream probe")
-	}
+	testutil.Falsef(t, !ok || spec.Upstream != UpstreamCLI || spec.UpstreamModel != "grok-future-account-model", "dynamic spec=%#v,%v", spec, ok)
+	_, ok = h.resolveConversationModel(context.Background(), "arbitrary-unadvertised-model")
+	testutil.False(t, ok, "unadvertised model must not become an upstream probe")
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel: "grok", ModelID: "grok-future-account-model", Name: "future",
 		Status: store.ModelStatusOffline, Verified: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.ensureResolvedModelEnabled(context.Background(), spec.ID, spec); err == nil {
-		t.Fatal("disabled dynamic model must remain disabled")
-	}
+	err := h.ensureResolvedModelEnabled(context.Background(), spec.ID, spec)
+	testutil.Error(t, err)
 }
 
 func TestResponsesStreamTranslationIsIncremental(t *testing.T) {
@@ -120,18 +116,11 @@ func TestAnthropicAdvancedFieldsAndReasoningReplayArePreserved(t *testing.T) {
 		},
 	}
 	chat, err := anthropicRequestToChat(req)
-	if err != nil {
-		t.Fatalf("anthropicRequestToChat() error = %v", err)
-	}
-	if chat.ReasoningEffort == nil || *chat.ReasoningEffort != "high" || chat.PromptCacheKey != "claude-session" {
-		t.Fatalf("reasoning/session not preserved: %#v", chat)
-	}
-	if len(chat.Stop) != 1 || chat.Stop[0] != "END" || len(chat.ResponsesTools) != 1 || len(chat.ResponseText) == 0 {
-		t.Fatalf("advanced fields not preserved: %#v", chat)
-	}
-	if chat.Messages[0].ReasoningContent != "private plan" || chat.Messages[0].ReasoningEncryptedContent != "opaque-cipher" {
-		t.Fatalf("thinking history not preserved: %#v", chat.Messages[0])
-	}
+	testutil.NoError(t, err, "anthropicRequestToChat() error = %v")
+	testutil.Falsef(t, chat.ReasoningEffort == nil || *chat.ReasoningEffort != "high" || chat.PromptCacheKey != "claude-session", "reasoning/session not preserved: %#v", chat)
+	testutil.Falsef(t, len(chat.Stop) != 1 || chat.Stop[0] != "END" || len(chat.ResponsesTools) != 1 || len(chat.ResponseText) == 0, "advanced fields not preserved: %#v", chat)
+	testutil.Equal(t, chat.Messages[0].ReasoningContent, "private plan")
+	testutil.Equal(t, chat.Messages[0].ReasoningEncryptedContent, "opaque-cipher")
 }
 
 func TestReasoningReplayIsModelAndSessionIsolated(t *testing.T) {
@@ -152,9 +141,8 @@ func TestReasoningReplayIsModelAndSessionIsolated(t *testing.T) {
 	payload := map[string]interface{}{"input": []interface{}{map[string]interface{}{"role": "user", "content": "continue"}}}
 	h.applyNativeReasoningReplay("grok-4.6", "session-a", payload)
 	input := payload["input"].([]interface{})
-	if len(input) != 2 || input[0].(map[string]interface{})["encrypted_content"] != validTestReplayCipher() {
-		t.Fatalf("native replay injection=%#v", input)
-	}
+	testutil.Equal(t, len(input), 2)
+	testutil.EqualAny(t, input[0].(map[string]interface{})["encrypted_content"], validTestReplayCipher())
 }
 
 func TestReasoningReplayUsesPortableShapeAndCanBeStripped(t *testing.T) {
@@ -162,24 +150,18 @@ func TestReasoningReplayUsesPortableShapeAndCanBeStripped(t *testing.T) {
 	h.storeReasoningReplay("grok-4.6", "session-a", validTestReplayCipher())
 	req := &ChatCompletionsRequest{Model: "grok-4.6", PromptCacheKey: "session-a", ReasoningReplay: true, Messages: []ChatMessage{{Role: "user", Content: "next"}}}
 	payload, err := h.responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, req, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	input := payload["input"].([]interface{})
 	reasoning := input[0].(map[string]interface{})
-	if _, exists := reasoning["content"]; exists {
-		t.Fatalf("replay contains non-portable content field: %#v", reasoning)
-	}
+	_, exists := reasoning["content"]
+	testutil.Falsef(t, exists, "replay contains non-portable content field: %#v", reasoning)
 	if !stripInjectedReasoningReplay(payload) || len(payload["input"].([]interface{})) != 1 {
 		t.Fatalf("replay was not stripped: %#v", payload["input"])
 	}
 	stripped := payload["input"].([]interface{})[0].(map[string]interface{})
-	if _, exists := stripped["encrypted_content"]; exists {
-		t.Fatal("encrypted replay content was not removed")
-	}
-	if !isReasoningReplayDecodeError(fmt.Errorf("grok cli upstream status=400 body=Could not decode the compaction blob")) {
-		t.Fatal("compaction decode error was not recognized")
-	}
+	_, exists = stripped["encrypted_content"]
+	testutil.False(t, exists, "encrypted replay content was not removed")
+	testutil.False(t, !isReasoningReplayDecodeError(fmt.Errorf("grok cli upstream status=400 body=Could not decode the compaction blob")), "compaction decode error was not recognized")
 }
 
 func TestNativeReasoningReplayConvertsStringInput(t *testing.T) {
@@ -198,13 +180,9 @@ func TestPrepareGrokSessionSeparatesTenantsAndSoftReplay(t *testing.T) {
 	reqA := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	reqA.Header.Set("x-session-id", "same-client-session")
 	a := prepareGrokSession(reqA, "grok-4.6", "", []ChatMessage{{Role: "user", Content: "hello"}})
-	if a.Key == "" || !a.Replay {
-		t.Fatalf("explicit session=%#v", a)
-	}
+	testutil.Falsef(t, a.Key == "" || !a.Replay, "explicit session=%#v", a)
 	soft := prepareGrokSession(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), "grok-4.6", "", []ChatMessage{{Role: "user", Content: "hello"}})
-	if soft.Key == "" || soft.Replay {
-		t.Fatalf("soft session=%#v", soft)
-	}
+	testutil.Falsef(t, soft.Key == "" || soft.Replay, "soft session=%#v", soft)
 	otherModel := prepareGrokSession(reqA, "grok-4.5", "", []ChatMessage{{Role: "user", Content: "hello"}})
 	testutil.NotEqual(t, otherModel.Key, a.Key)
 }

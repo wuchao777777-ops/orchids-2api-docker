@@ -34,15 +34,12 @@ func TestGetAccountsByIDsReadsEveryRowInOneBatch(t *testing.T) {
 		2: `{"id":2,"name":"test2","enabled":true}`,
 		3: `{"id":3,"name":"test3","enabled":false}`,
 	} {
-		if err := s.client.Set(ctx, s.accountsKey(id), body, 0).Err(); err != nil {
-			t.Fatalf("seed account %d: %v", id, err)
-		}
+		err := s.client.Set(ctx, s.accountsKey(id), body, 0).Err()
+		testutil.CheckNoError(t, err)
 	}
 
 	accounts, err := s.getAccountsByIDs(ctx, []string{"1", "2", "3"}, false)
-	if err != nil {
-		t.Fatalf("getAccountsByIDs() error = %v", err)
-	}
+	testutil.NoError(t, err, "getAccountsByIDs() error = %v")
 	testutil.Equal(t, len(accounts), 3)
 	for i, want := range []string{"test1", "test2", "test3"} {
 		testutil.Equal(t, accounts[i].Name, want)
@@ -60,18 +57,13 @@ func TestGetAccountsByIDsSkipsMissingAndDisabledRows(t *testing.T) {
 
 	// id 2 has no row at all.
 	accounts, err := s.getAccountsByIDs(ctx, []string{"1", "2", "3"}, false)
-	if err != nil {
-		t.Fatalf("getAccountsByIDs() error = %v", err)
-	}
+	testutil.NoError(t, err, "getAccountsByIDs() error = %v")
 	testutil.Equal(t, len(accounts), 2)
 
 	enabled, err := s.getAccountsByIDs(ctx, []string{"1", "3"}, true)
-	if err != nil {
-		t.Fatalf("getAccountsByIDs(onlyEnabled) error = %v", err)
-	}
-	if len(enabled) != 1 || enabled[0].ID != 1 {
-		t.Fatalf("onlyEnabled result = %#v, want just account 1", enabled)
-	}
+	testutil.NoError(t, err, "getAccountsByIDs(onlyEnabled) error = %v")
+	testutil.Equal(t, len(enabled), 1)
+	testutil.Equal(t, enabled[0].ID, 1)
 }
 
 // TestGetAccountsByIDsEmptySelectionDoesNotReachRedis proves the empty and
@@ -86,12 +78,8 @@ func TestGetAccountsByIDsEmptySelectionDoesNotReachRedis(t *testing.T) {
 
 	for _, ids := range [][]string{nil, {}, {"not-an-id"}} {
 		accounts, err := s.getAccountsByIDs(ctx, ids, false)
-		if err != nil {
-			t.Fatalf("getAccountsByIDs(%v) error = %v, want no round trip", ids, err)
-		}
-		if accounts != nil {
-			t.Fatalf("getAccountsByIDs(%v) = %#v, want nil", ids, accounts)
-		}
+		testutil.Falsef(t, err != nil, "getAccountsByIDs(%v) error = %v, want no round trip", ids, err)
+		testutil.Falsef(t, accounts != nil, "getAccountsByIDs(%v) = %#v, want nil", ids, accounts)
 	}
 }
 
@@ -106,7 +94,6 @@ func TestGetAccountsByIDsReportsTransportFailure(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := s.getAccountsByIDs(ctx, []string{"1"}, false); err == nil {
-		t.Fatal("expected an error from an unreachable Redis, got nil")
-	}
+	_, err := s.getAccountsByIDs(ctx, []string{"1"}, false)
+	testutil.Error(t, err)
 }

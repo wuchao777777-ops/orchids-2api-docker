@@ -41,9 +41,7 @@ func TestRelayRepeatedRequestsAlwaysReachUpstream(t *testing.T) {
 			w := httptest.NewRecorder()
 			before := len(client.requests)
 			h.HandleMessages(w, r)
-			if w.Code != http.StatusOK || len(client.requests) != before+1 || !strings.Contains(w.Body.String(), "upstream answer") {
-				t.Fatalf("valid repeated request suppressed: status=%d calls=%d body=%s", w.Code, len(client.requests), w.Body.String())
-			}
+			testutil.Falsef(t, w.Code != http.StatusOK || len(client.requests) != before+1 || !strings.Contains(w.Body.String(), "upstream answer"), "valid repeated request suppressed: status=%d calls=%d body=%s", w.Code, len(client.requests), w.Body.String())
 		}
 	}
 }
@@ -65,15 +63,12 @@ func TestRelayForwardsCallerHistoryVerbatim(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.HandleMessages(w, r)
-	if w.Code != 200 || len(client.requests) != 1 {
-		t.Fatalf("status=%d body=%s calls=%d", w.Code, w.Body.String(), len(client.requests))
-	}
+	testutil.Falsef(t, w.Code != 200 || len(client.requests) != 1, "status=%d body=%s calls=%d", w.Code, w.Body.String(), len(client.requests))
 	got := client.requests[0].Messages
 	testutil.Equal(t, len(got), len(messages))
 	for i := range messages {
-		if got[i].Role != messages[i].Role || got[i].ExtractText() != messages[i].ExtractText() {
-			t.Fatalf("message %d rewritten: %+v", i, got[i])
-		}
+		testutil.Equal(t, got[i].Role, messages[i].Role)
+		testutil.Equal(t, got[i].ExtractText(), messages[i].ExtractText())
 	}
 }
 
@@ -179,9 +174,7 @@ func TestRelayIdenticalInflightRequestsBothReachUpstream(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		select {
 		case w := <-finished:
-			if w.Code != 200 || !strings.Contains(w.Body.String(), "parallel answer") {
-				t.Errorf("status=%d body=%s", w.Code, w.Body.String())
-			}
+			testutil.CheckFalsef(t, w.Code != 200 || !strings.Contains(w.Body.String(), "parallel answer"), "status=%d body=%s", w.Code, w.Body.String())
 		case <-time.After(3 * time.Second):
 			t.Fatal("parallel request failed to finish")
 		}

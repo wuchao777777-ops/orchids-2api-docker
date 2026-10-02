@@ -18,9 +18,7 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 		RedisPrefix:             "cipher-test:",
 		CredentialEncryptionKey: key,
 	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
+	testutil.NoError(t, err, "New() error = %v")
 	t.Cleanup(func() { _ = s.Close() })
 
 	ctx := context.Background()
@@ -40,9 +38,7 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 	}
 	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 	raw, err := mini.Get("cipher-test:accounts:id:1")
-	if err != nil {
-		t.Fatalf("read raw account: %v", err)
-	}
+	testutil.NoError(t, err, "read raw account: %v")
 	for _, secret := range []string{
 		"sso-secret", "access-secret", "refresh-secret", "wb-access-secret", "wb-refresh-secret",
 		"qoder-access-secret", "qoder-refresh-secret", "qoder-runtime-secret", "qoder-key-secret", "qoder-job-secret",
@@ -51,12 +47,10 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 	}
 	testutil.MustContain(t, raw, encryptedCredentialPrefix)
 	got, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
-	if got.ClientCookie != acc.ClientCookie || got.OAuthAccessToken != acc.OAuthAccessToken || got.OAuthRefreshToken != acc.OAuthRefreshToken {
-		t.Fatalf("decrypted credentials mismatch: %#v", got)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
+	testutil.Equal(t, got.ClientCookie, acc.ClientCookie)
+	testutil.Equal(t, got.OAuthAccessToken, acc.OAuthAccessToken)
+	testutil.Equal(t, got.OAuthRefreshToken, acc.OAuthRefreshToken)
 	if got.WorkBuddyRefreshToken != acc.WorkBuddyRefreshToken || got.QoderRefreshToken != acc.QoderRefreshToken ||
 		got.QoderRuntimeKey != acc.QoderRuntimeKey {
 		t.Fatalf("decrypted provider credentials mismatch: %#v", got)
@@ -66,14 +60,11 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 	mini.Set("cipher-test:accounts:id:2", legacy)
 	mini.SAdd("cipher-test:accounts:ids", "2")
 	legacyAcc, err := s.GetAccount(ctx, 2)
-	if err != nil || legacyAcc.ClientCookie != "legacy-secret" {
-		t.Fatalf("legacy read = %#v, %v", legacyAcc, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, legacyAcc.ClientCookie, "legacy-secret")
 	testutil.NoError(t, s.UpdateAccount(ctx, legacyAcc), "legacy migration update error = %v")
 	migrated, _ := mini.Get("cipher-test:accounts:id:2")
-	if strings.Contains(migrated, "legacy-secret") || !strings.Contains(migrated, encryptedCredentialPrefix) {
-		t.Fatalf("legacy account was not encrypted on write: %s", migrated)
-	}
+	testutil.Falsef(t, strings.Contains(migrated, "legacy-secret") || !strings.Contains(migrated, encryptedCredentialPrefix), "legacy account was not encrypted on write: %s", migrated)
 }
 
 // Retired account metadata is intentionally dropped even when an old Redis row
@@ -81,23 +72,18 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 func TestRetiredAccountFieldsAreDroppedOnRewrite(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "retired-fields:"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	ctx := context.Background()
 	mini.Set("retired-fields:accounts:id:1", `{"id":1,"name":"legacy","account_type":"workbuddy","enabled":true,"nsfw_enabled":true,"device_id":"old-device","request_id":"old-request","project_id":"old-project","upstream_mode":"old-mode","workbuddy_refresh_token":"live-refresh"}`)
 	mini.SAdd("retired-fields:accounts:ids", "1")
 	acc, err := s.GetAccount(ctx, 1)
-	if err != nil || acc.WorkBuddyRefreshToken != "live-refresh" {
-		t.Fatalf("GetAccount() = %+v, %v", acc, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, acc.WorkBuddyRefreshToken, "live-refresh")
 	acc.Name = "rewritten"
 	testutil.NoError(t, s.UpdateAccount(ctx, acc))
 	raw, err := mini.Get("retired-fields:accounts:id:1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	for _, field := range []string{"nsfw_enabled", "device_id", "request_id", "project_id", "upstream_mode"} {
 		testutil.CheckNotContain(t, raw, `"`+field+`"`)
 	}
@@ -108,36 +94,26 @@ func TestEncryptedAccountRejectsWrongKey(t *testing.T) {
 	cipherA, _ := newCredentialCipher(bytes.Repeat([]byte{1}, 32))
 	cipherB, _ := newCredentialCipher(bytes.Repeat([]byte{2}, 32))
 	value, err := cipherA.encrypt("secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cipherB.decrypt(value); err == nil {
-		t.Fatal("expected decryption with wrong key to fail")
-	}
+	testutil.NoError(t, err)
+	_, err = cipherB.decrypt(value)
+	testutil.Error(t, err)
 }
 
 func TestCredentialPlaintextWithMarkerIsStillEncrypted(t *testing.T) {
 	cipher, _ := newCredentialCipher(bytes.Repeat([]byte{3}, 32))
 	want := encryptedCredentialPrefix + "plain-token"
 	stored, err := cipher.encrypt(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored == want || !strings.HasPrefix(stored, encryptedCredentialPrefix) {
-		t.Fatalf("credential was not encrypted: %q", stored)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, stored == want || !strings.HasPrefix(stored, encryptedCredentialPrefix), "credential was not encrypted: %q", stored)
 	got, err := cipher.decrypt(stored)
-	if err != nil || got != want {
-		t.Fatalf("decrypt = %q, %v", got, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, got, want)
 }
 
 func TestStoreStartupMigratesLegacyCredentials(t *testing.T) {
 	mini := miniredis.RunT(t)
 	legacy, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "startup-migration:"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	acc := &Account{Name: "legacy", AccountType: "grok", Enabled: true, ClientCookie: "legacy-on-disk"}
 	testutil.NoError(t, legacy.CreateAccount(context.Background(), acc))
 	_ = legacy.Close()
@@ -147,18 +123,13 @@ func TestStoreStartupMigratesLegacyCredentials(t *testing.T) {
 		RedisPrefix:             "startup-migration:",
 		CredentialEncryptionKey: bytes.Repeat([]byte{9}, 32),
 	})
-	if err != nil {
-		t.Fatalf("secure reopen error = %v", err)
-	}
+	testutil.NoError(t, err, "secure reopen error = %v")
 	t.Cleanup(func() { _ = secure.Close() })
 	raw, _ := mini.Get("startup-migration:accounts:id:1")
-	if strings.Contains(raw, "legacy-on-disk") || !strings.Contains(raw, encryptedCredentialPrefix) {
-		t.Fatalf("startup migration did not encrypt legacy account: %s", raw)
-	}
+	testutil.Falsef(t, strings.Contains(raw, "legacy-on-disk") || !strings.Contains(raw, encryptedCredentialPrefix), "startup migration did not encrypt legacy account: %s", raw)
 	got, err := secure.GetAccount(context.Background(), acc.ID)
-	if err != nil || got.ClientCookie != "legacy-on-disk" {
-		t.Fatalf("migrated account = %#v, %v", got, err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, got.ClientCookie, "legacy-on-disk")
 }
 
 func TestStoreStartupRejectsWrongCredentialKey(t *testing.T) {
@@ -167,9 +138,7 @@ func TestStoreStartupRejectsWrongCredentialKey(t *testing.T) {
 		RedisAddr: mini.Addr(), RedisPrefix: "wrong-key:",
 		CredentialEncryptionKey: bytes.Repeat([]byte{1}, 32),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	if err := first.CreateAccount(context.Background(), &Account{
 		Name: "encrypted", AccountType: "grok", Enabled: true, ClientCookie: "secret",
 	}); err != nil {
@@ -182,9 +151,8 @@ func TestStoreStartupRejectsWrongCredentialKey(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected startup with a different credential key to fail")
 	}
-	if _, err := New(Options{RedisAddr: mini.Addr(), RedisPrefix: "wrong-key:"}); err == nil {
-		t.Fatal("expected startup without a credential key to fail")
-	}
+	_, err = New(Options{RedisAddr: mini.Addr(), RedisPrefix: "wrong-key:"})
+	testutil.Error(t, err)
 }
 
 func TestListAccountsReturnsCredentialDecryptionError(t *testing.T) {
@@ -193,13 +161,10 @@ func TestListAccountsReturnsCredentialDecryptionError(t *testing.T) {
 		RedisAddr: mini.Addr(), RedisPrefix: "corrupt-list:",
 		CredentialEncryptionKey: bytes.Repeat([]byte{4}, 32),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	mini.Set("corrupt-list:accounts:id:1", `{"id":1,"account_type":"grok","client_cookie":"enc:v1:not-valid"}`)
 	mini.SAdd("corrupt-list:accounts:ids", "1")
-	if _, err := s.ListAccounts(context.Background()); err == nil {
-		t.Fatal("expected corrupted encrypted credential to be reported")
-	}
+	_, err = s.ListAccounts(context.Background())
+	testutil.Error(t, err)
 }

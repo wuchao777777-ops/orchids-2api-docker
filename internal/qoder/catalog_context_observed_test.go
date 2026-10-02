@@ -19,30 +19,20 @@ const observedContextCatalog = `{"chat":[
 
 func TestObservedContextTiersAndRequestDefault(t *testing.T) {
 	c, err := parseModelList([]byte(observedContextCatalog))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	c = catalogFromIDs(catalogToIDs(c))
 	for _, tc := range []struct {
 		key        string
 		input, def int
 	}{{"ultimate", 1000000, 200000}, {"performance", 1000000, 272000}, {"qmodel_38max", 180000, 200000}} {
 		model, err := c.Resolve(tc.key)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 		info := model.ContextWindowInfo()
-		if info.DefaultInputTokens != tc.input || info.DefaultContextTokens != tc.def || info.MaxContextTokens != 1000000 || info.HasUnparsedConfig || info.DefaultConflict {
-			t.Fatalf("%s: %+v", tc.key, info)
-		}
+		testutil.Falsef(t, info.DefaultInputTokens != tc.input || info.DefaultContextTokens != tc.def || info.MaxContextTokens != 1000000 || info.HasUnparsedConfig || info.DefaultConflict, "%s: %+v", tc.key, info)
 		encoded, err := buildChatBodyProfile(upstream.UpstreamRequest{Prompt: "hello"}, model, "session", "request", "request-set", DefaultClientVersion, "", sceneBusinessProduct)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 		raw, err := decodeBody(encoded)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 		var body chatBody
 		testutil.NoError(t, json.Unmarshal(raw, &body))
 		parameters := body.Parameters.(map[string]interface{})
@@ -53,12 +43,8 @@ func TestObservedContextTiersAndRequestDefault(t *testing.T) {
 
 func TestObservedContextTierDuplicateMerge(t *testing.T) {
 	c, err := parseModelList([]byte(`[{"key":"k","max_input_tokens":180000,"context_config":{"default-label":{"token_count":200000,"is_default":true}}},{"key":"k","max_input_tokens":900000,"context_config":{"extended-label":{"token_count":1000000}}}]`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	model, _ := catalogFromIDs(catalogToIDs(c)).Resolve("k")
 	info := model.ContextWindowInfo()
-	if c.Len() != 1 || info.DefaultInputTokens != 180000 || info.DefaultContextTokens != 200000 || info.MaxContextTokens != 1000000 {
-		t.Fatalf("merged=%+v", info)
-	}
+	testutil.Falsef(t, c.Len() != 1 || info.DefaultInputTokens != 180000 || info.DefaultContextTokens != 200000 || info.MaxContextTokens != 1000000, "merged=%+v", info)
 }

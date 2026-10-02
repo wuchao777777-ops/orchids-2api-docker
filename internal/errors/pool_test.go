@@ -103,9 +103,7 @@ func TestClassifyPoolExhaustion_SelectorReasonsPickTheAnswer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			out := ClassifyPoolExhaustion(tc.selectErr, tc.lastErr)
 			if tc.wantCategory == "" {
-				if !out.Empty() {
-					t.Fatalf("expected no classification, got %+v", out)
-				}
+				testutil.Falsef(t, !out.Empty(), "expected no classification, got %+v", out)
 				return
 			}
 			testutil.Equal(t, out.Category, tc.wantCategory)

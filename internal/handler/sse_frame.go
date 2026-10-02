@@ -23,14 +23,10 @@ var (
 // swarHasZero returns a nonzero word iff any of v's eight bytes is zero. The
 // zero lane borrows out of its own byte, and the final mask reads that borrow out
 // of the 0x80 bit.
-func swarHasZero(v uint64) uint64 {
-	return (v - swarLo) & ^v & swarHi
-}
+func swarHasZero(v uint64) uint64 { return (v - swarLo) & ^v & swarHi }
 
 // swarHasByte returns a nonzero word iff any of w's eight bytes equals c.
-func swarHasByte(w uint64, c byte) uint64 {
-	return swarHasZero(w ^ (uint64(c) * swarLo))
-}
+func swarHasByte(w uint64, c byte) uint64 { return swarHasZero(w ^ (uint64(c) * swarLo)) }
 
 // The five characters encoding/json escapes beyond the control range are not
 // five independent tests' worth of work. Two of them sit exactly one bit away
@@ -49,9 +45,7 @@ const (
 // swarHasMaskedByte returns a nonzero word iff any byte of w matches value on the
 // bits mask keeps. With the masks above the only bytes that match are the two
 // members of each pair.
-func swarHasMaskedByte(w, mask, value uint64) uint64 {
-	return swarHasZero((w & mask) ^ value)
-}
+func swarHasMaskedByte(w, mask, value uint64) uint64 { return swarHasZero((w & mask) ^ value) }
 
 // load8LE reads eight bytes of a string as one little-endian word. The copy into
 // a fixed eight-byte array is not a pessimisation: it compiles to a single wide
@@ -344,9 +338,7 @@ func marshalSSEMessageDeltaBytes(stopReason string, outputTokens int) ([]byte, e
 	return appendSSEMessageDelta(make([]byte, 0, 88+len(stopReason)), stopReason, outputTokens)
 }
 
-func marshalSSEMessageStopBytes() ([]byte, error) {
-	return sseMessageStopBytes, nil
-}
+func marshalSSEMessageStopBytes() ([]byte, error) { return sseMessageStopBytes, nil }
 
 // appendAnthropicError renders the Anthropic protocol's in-band failure event.
 //

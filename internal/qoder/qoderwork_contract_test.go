@@ -22,12 +22,11 @@ import (
 func TestQoderWorkIdentityIsTheOnlyDialect(t *testing.T) {
 	t.Parallel()
 
-	if sceneClientID != "6" || sceneName != "qwork" || sessionType != "qoder_work" {
-		t.Fatalf("dialect = clientType %q scene %q session %q, want the QoderWork identity", sceneClientID, sceneName, sessionType)
-	}
-	if sceneBusinessProduct != "qoder_work" || DefaultClientVersion != "1.0.45" {
-		t.Fatalf("identity = product %q clientVersion %q, want QoderWork", sceneBusinessProduct, DefaultClientVersion)
-	}
+	testutil.Equal(t, sceneClientID, "6")
+	testutil.Equal(t, sceneName, "qwork")
+	testutil.Equal(t, sessionType, "qoder_work")
+	testutil.Equal(t, sceneBusinessProduct, "qoder_work")
+	testutil.Equal(t, DefaultClientVersion, "1.0.45")
 	// The capture reports client type 6 and machine type 5 in one request, so
 	// these cannot share a constant.
 	testutil.Equal(t, machineSceneType, "5")
@@ -47,13 +46,9 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 	model := modelEntry{Key: "qfmodel", DisplayName: "Qwen3.8-Flash", IsReasoning: true, IsVL: true, MaxInputTokens: 180000}
 	req := upstream.UpstreamRequest{Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}}}
 	encoded, err := buildChatBodyProfile(req, model, "session", "request", "request-set", DefaultClientVersion, "", sceneBusinessProduct)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	raw, err := decodeBodyForTest(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	var body map[string]interface{}
 	testutil.NoError(t, json.Unmarshal(raw, &body))
 
@@ -66,9 +61,8 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 	}
 	testutil.Equal(t, len(body), len(wantKeys))
 	for _, key := range wantKeys {
-		if _, present := body[key]; !present {
-			t.Fatalf("body is missing %q, which the capture carries", key)
-		}
+		_, present := body[key]
+		testutil.Falsef(t, !present, "body is missing %q, which the capture carries", key)
 	}
 
 	for key, want := range map[string]interface{}{
@@ -88,9 +82,9 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 
 	// request_id and chat_record_id carry the attempt; request_set_id carries
 	// the task. The capture shows them as two different values.
-	if body["request_id"] != "request" || body["chat_record_id"] != "request" || body["request_set_id"] != "request-set" {
-		t.Fatalf("request id wiring = %#v", body)
-	}
+	testutil.Equal(t, body["request_id"], "request")
+	testutil.Equal(t, body["chat_record_id"], "request")
+	testutil.Equal(t, body["request_set_id"], "request-set")
 
 	business := body["business"].(map[string]interface{})
 	testutil.Equal(t, len(business), 8)
@@ -107,15 +101,14 @@ func TestQoderWorkBodyMatchesCapture(t *testing.T) {
 
 	// is_reasoning follows the model's own catalog capability.
 	modelConfig := body["model_config"].(map[string]interface{})
-	if modelConfig["is_reasoning"] != true || modelConfig["is_vl"] != true || modelConfig["source"] != "system" {
-		t.Fatalf("model_config = %#v", modelConfig)
-	}
+	testutil.Equal(t, modelConfig["is_reasoning"], true)
+	testutil.Equal(t, modelConfig["is_vl"], true)
+	testutil.Equal(t, modelConfig["source"], "system")
 
 	// text and extra.originalContent are the same plain string in the capture.
 	context := body["chat_context"].(map[string]interface{})
-	if context["text"] != "hi" || context["chatPrompt"] != "" {
-		t.Fatalf("chat_context = %#v", context)
-	}
+	testutil.Equal(t, context["text"], "hi")
+	testutil.Equal(t, context["chatPrompt"], "")
 	extra := context["extra"].(map[string]interface{})
 	testutil.Equal(t, extra["originalContent"], "hi")
 	testutil.Equal(t, extra["modelConfig"].(map[string]interface{})["is_reasoning"], true)
@@ -133,9 +126,8 @@ func TestQoderWorkStreamFramesParse(t *testing.T) {
 	stream := "data:" + frame + "\n\n" + "event:finish\n\n"
 
 	types := map[string]int{}
-	if _, err := consumeStreamObserved(strings.NewReader(stream), false, func(m upstream.SSEMessage) { types[m.Type]++ }, nil); err != nil {
-		t.Fatalf("a captured frame failed to parse: %v", err)
-	}
+	_, err := consumeStreamObserved(strings.NewReader(stream), false, func(m upstream.SSEMessage) { types[m.Type]++ }, nil)
+	testutil.CheckNoError(t, err)
 	testutil.Equal(t, types["model.reasoning-delta"], 1)
 }
 
@@ -150,9 +142,7 @@ func TestArrayShapedRefusalStaysDiagnosable(t *testing.T) {
 	stream := "data:" + frame + "\n\n"
 
 	_, err := consumeStreamObserved(strings.NewReader(stream), false, func(upstream.SSEMessage) {}, nil)
-	if err == nil {
-		t.Fatal("an array-shaped body was accepted as a chunk")
-	}
+	testutil.False(t, err == nil, "an array-shaped body was accepted as a chunk")
 	testutil.MustContain(t, err.Error(), "10605")
 }
 
@@ -175,9 +165,7 @@ func TestNotificationsControlFrameDoesNotAbortTheStream(t *testing.T) {
 			}
 		}
 	}, nil)
-	if err != nil {
-		t.Fatalf("a notifications control frame aborted the stream: %v", err)
-	}
+	testutil.NoError(t, err, "a notifications control frame aborted the stream: %v")
 	testutil.Equal(t, res.ControlFrames["NOTIFICATIONS"], 1)
 	testutil.Equal(t, text.String(), "OK")
 }

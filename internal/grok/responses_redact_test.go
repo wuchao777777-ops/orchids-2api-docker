@@ -29,10 +29,8 @@ func TestRedactResponseErrorSeparatesRejectionFromFailure(t *testing.T) {
 			wantField:   "error",
 		},
 		{
-			name: "model not found is a rejection",
-			event: map[string]interface{}{
-				"error": map[string]interface{}{"message": "model not found"},
-			},
+			name:        "model not found is a rejection",
+			event:       map[string]interface{}{"error": map[string]interface{}{"message": "model not found"}},
 			wantCode:    upstreamRejectionCode,
 			wantMessage: "The upstream rejected the request parameters or model. Check the request and model selection.",
 			wantField:   "error",
@@ -72,25 +70,19 @@ func TestRedactResponseErrorSeparatesRejectionFromFailure(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if !redactResponseError(tc.event) {
-				t.Fatal("redactResponseError() = false, want true")
-			}
+			testutil.False(t, !redactResponseError(tc.event), "redactResponseError() = false, want true")
 			envelope := tc.event
 			if tc.wantField != "" {
 				nested, ok := tc.event[tc.wantField].(map[string]interface{})
-				if !ok {
-					t.Fatalf("%s envelope = %#v", tc.wantField, tc.event[tc.wantField])
-				}
+				testutil.True(t, ok, "%s envelope = %#v")
 				envelope = nested
 			}
 			testutil.Equal(t, interfaceString(envelope["code"]), tc.wantCode)
 			testutil.Equal(t, interfaceString(envelope["message"]), tc.wantMessage)
-			if _, leaked := tc.event["param"]; leaked {
-				t.Fatalf("error frame leaked the upstream param field: %#v", tc.event)
-			}
-			if _, leaked := tc.event["code"]; tc.wantField == "error" && leaked {
-				t.Fatalf("file error envelope wrote the code to the outer event: %#v", tc.event)
-			}
+			_, leaked := tc.event["param"]
+			testutil.Falsef(t, leaked, "error frame leaked the upstream param field: %#v", tc.event)
+			_, leaked = tc.event["code"]
+			testutil.Falsef(t, tc.wantField == "error" && leaked, "file error envelope wrote the code to the outer event: %#v", tc.event)
 		})
 	}
 }
@@ -107,9 +99,8 @@ func TestRedactResponseErrorNeverForwardsUpstreamText(t *testing.T) {
 	redactResponseError(event)
 	encoded := event["error"].(map[string]interface{})
 	testutil.MustNotContain(t, interfaceString(encoded["message"]), secret)
-	if got := codeForCategory("client"); interfaceString(encoded["code"]) != got {
-		t.Fatalf("code = %q, want %q", interfaceString(encoded["code"]), got)
-	}
+	got := codeForCategory("client")
+	testutil.Falsef(t, interfaceString(encoded["code"]) != got, "code = %q, want %q", interfaceString(encoded["code"]), got)
 }
 
 // A failed response envelope is normalized so the message inside it cannot
@@ -129,9 +120,8 @@ func TestRedactResponseErrorNormalizesFailedEnvelope(t *testing.T) {
 	response := event["response"].(map[string]interface{})
 	envelope := response["error"].(map[string]interface{})
 	testutil.Equal(t, interfaceString(envelope["code"]), upstreamRejectionCode)
-	if got := interfaceString(envelope["message"]); !strings.Contains(got, "rejected the request parameters") {
-		t.Fatalf("envelope message = %q", got)
-	}
+	got := interfaceString(envelope["message"])
+	testutil.Falsef(t, !strings.Contains(got, "rejected the request parameters"), "envelope message = %q", got)
 	testutil.Equal(t, interfaceString(response["status"]), "failed")
 }
 
@@ -139,9 +129,7 @@ func TestRedactResponseErrorNormalizesFailedEnvelope(t *testing.T) {
 // must not be rewritten into one.
 func TestRedactResponseErrorLeavesCompletedEnvelopeStatus(t *testing.T) {
 	event := map[string]interface{}{
-		"response": map[string]interface{}{
-			"id": "resp_1", "status": "completed", "error": nil,
-		},
+		"response": map[string]interface{}{"id": "resp_1", "status": "completed", "error": nil},
 	}
 	redactResponseError(event)
 	response := event["response"].(map[string]interface{})
@@ -183,9 +171,8 @@ func TestClassifySynthesizedFailureUpgradesRejection(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			code, message := classifySynthesizedFailure(tc.message, tc.message, tc.err)
-			if code != tc.wantCode || message != tc.wantMessage {
-				t.Fatalf("classifySynthesizedFailure() = (%q, %q), want (%q, %q)", code, message, tc.wantCode, tc.wantMessage)
-			}
+			testutil.Equal(t, code, tc.wantCode)
+			testutil.Equal(t, message, tc.wantMessage)
 		})
 	}
 }

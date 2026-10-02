@@ -96,9 +96,8 @@ func decodeLoginError(t *testing.T, body string) string {
 		Code  string `json:"code"`
 		Error string `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		t.Fatalf("login error is not JSON: %v (body=%q)", err, body)
-	}
+	err := json.Unmarshal([]byte(body), &payload)
+	testutil.CheckNoError(t, err)
 	testutil.NotEqual(t, payload.Error, "")
 	if payload.Code == "" {
 		// A code-less error cannot be translated by the UI.
@@ -212,16 +211,11 @@ func TestHandleWorkBuddyLogin_StartReturnsOfficialLoginURL(t *testing.T) {
 		ExpiresAt               string `json:"expires_at"`
 	}
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response), "decode: %v")
-	if response.ID == "" || response.Status != "pending" {
-		t.Fatalf("response = %+v", response)
-	}
+	testutil.Falsef(t, response.ID == "" || response.Status != "pending", "response = %+v", response)
 	parsed, err := url.Parse(response.VerificationURIComplete)
-	if err != nil {
-		t.Fatalf("login URL is not parseable: %v", err)
-	}
-	if parsed.Host != "www.workbuddy.ai" || parsed.Path != "/login" {
-		t.Fatalf("login URL = %q, want the official workbuddy.ai login page", response.VerificationURIComplete)
-	}
+	testutil.NoError(t, err, "login URL is not parseable: %v")
+	testutil.Equal(t, parsed.Host, "www.workbuddy.ai")
+	testutil.Equal(t, parsed.Path, "/login")
 	testutil.Equal(t, parsed.Query().Get("state"), "state-123")
 	testutil.Equal(t, parsed.Query().Get("version"), workbuddyClientVersion)
 
@@ -234,9 +228,7 @@ func TestHandleWorkBuddyLogin_StartReturnsOfficialLoginURL(t *testing.T) {
 	var polled deviceLoginResponse
 	testutil.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &polled), "decode poll: %v")
 	testutil.Equal(t, polled.UserCode, "")
-	if !strings.HasPrefix(polled.VerificationURIComplete, "https://www.workbuddy.ai/login?") {
-		t.Fatalf("poll returned an unexpected login URL: %q", polled.VerificationURIComplete)
-	}
+	testutil.Falsef(t, !strings.HasPrefix(polled.VerificationURIComplete, "https://www.workbuddy.ai/login?"), "poll returned an unexpected login URL: %q", polled.VerificationURIComplete)
 }
 
 func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
@@ -255,9 +247,8 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 	var started struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil || started.ID == "" {
-		t.Fatalf("start response = %q", rec.Body.String())
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &started)
+	testutil.Falsef(t, err != nil || started.ID == "", "start response = %q", rec.Body.String())
 
 	deadline := time.Now().Add(10 * time.Second)
 	var final deviceLoginResponse
@@ -275,18 +266,15 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 	testutil.NotEqual(t, final.AccountID, 0)
 
 	acc, err := s.GetAccount(context.Background(), final.AccountID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, acc.AccountType, "workbuddy")
 	testutil.Equal(t, acc.WorkBuddyRefreshToken, "refresh-abc")
-	if acc.WorkBuddyUID != "uid-abc" || acc.Email != "operator@example.com" {
-		t.Fatalf("identity = %q/%q", acc.WorkBuddyUID, acc.Email)
-	}
+	testutil.Equal(t, acc.WorkBuddyUID, "uid-abc")
+	testutil.Equal(t, acc.Email, "operator@example.com")
 	testutil.Equal(t, len(acc.WorkBuddyModelIDs), 2)
-	if acc.ClientCookie != "" || acc.Token != "" || acc.RefreshToken != "" {
-		t.Fatalf("login stored credentials in a shared slot: %+v", acc)
-	}
+	testutil.Equal(t, acc.ClientCookie, "")
+	testutil.Equal(t, acc.Token, "")
+	testutil.Equal(t, acc.RefreshToken, "")
 
 	// A second login for the same credential must update, not duplicate.
 	auth2 := workbuddyAuthServer(t, []string{
@@ -300,9 +288,8 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 	var second struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(rec3.Body.Bytes(), &second); err != nil || second.ID == "" {
-		t.Fatalf("second start response = %q", rec3.Body.String())
-	}
+	err = json.Unmarshal(rec3.Body.Bytes(), &second)
+	testutil.Falsef(t, err != nil || second.ID == "", "second start response = %q", rec3.Body.String())
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
@@ -315,13 +302,10 @@ func TestHandleWorkBuddyLogin_CompletesAndPersistsAccount(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if final.Status != "complete" || final.AccountID != acc.ID {
-		t.Fatalf("re-login = %+v, want the existing account %d", final, acc.ID)
-	}
+	testutil.Equal(t, final.Status, "complete")
+	testutil.Equal(t, final.AccountID, acc.ID)
 	accounts, err := s.ListAccounts(context.Background())
-	if err != nil {
-		t.Fatalf("ListAccounts() error = %v", err)
-	}
+	testutil.NoError(t, err, "ListAccounts() error = %v")
 	workbuddyAccounts := 0
 	for _, candidate := range accounts {
 		if strings.EqualFold(candidate.AccountType, "workbuddy") {
@@ -346,9 +330,8 @@ func TestHandleWorkBuddyLogin_ReportsVerificationFailure(t *testing.T) {
 	var started struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil || started.ID == "" {
-		t.Fatalf("start response = %q", rec.Body.String())
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &started)
+	testutil.Falsef(t, err != nil || started.ID == "", "start response = %q", rec.Body.String())
 
 	var final deviceLoginResponse
 	deadline := time.Now().Add(10 * time.Second)
@@ -363,13 +346,9 @@ func TestHandleWorkBuddyLogin_ReportsVerificationFailure(t *testing.T) {
 	}
 	testutil.Equal(t, final.Status, "failed")
 	accounts, err := s.ListAccounts(context.Background())
-	if err != nil {
-		t.Fatalf("ListAccounts() error = %v", err)
-	}
+	testutil.NoError(t, err, "ListAccounts() error = %v")
 	for _, candidate := range accounts {
-		if strings.EqualFold(candidate.AccountType, "workbuddy") {
-			t.Fatalf("an unverified account was persisted: %+v", candidate)
-		}
+		testutil.Falsef(t, strings.EqualFold(candidate.AccountType, "workbuddy"), "an unverified account was persisted: %+v", candidate)
 	}
 }
 
@@ -385,9 +364,8 @@ func TestHandleWorkBuddyLogin_CancelForgetsTransaction(t *testing.T) {
 	var started struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil || started.ID == "" {
-		t.Fatalf("start response = %q", rec.Body.String())
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &started)
+	testutil.Falsef(t, err != nil || started.ID == "", "start response = %q", rec.Body.String())
 
 	deleteRec := httptest.NewRecorder()
 	a.HandleWorkBuddyLogin(deleteRec, channelLoginRequest(t, http.MethodDelete, "/api/workbuddy/login/"+started.ID, ""))

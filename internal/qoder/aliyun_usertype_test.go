@@ -9,9 +9,8 @@ import (
 // chat body: the upstream sorts a request into a queue by it, so an unknown
 // class must still send a class it recognises rather than an empty field.
 func TestAliyunUserTypeFallsBackToADocumentedClass(t *testing.T) {
-	if got := aliyunUserTypeOr(""); got != defaultAliyunUserType || got == "" {
-		t.Fatalf("aliyunUserTypeOr(\"\") = %q, want a documented default", got)
-	}
+	got := aliyunUserTypeOr("")
+	testutil.Falsef(t, got != defaultAliyunUserType || got == "", "aliyunUserTypeOr(\"\") = %q, want a documented default", got)
 	testutil.Equal(t, aliyunUserTypeOr("personal_professional_trial"), "personal_professional_trial")
 	testutil.Equal(t, aliyunUserTypeOr("  "), defaultAliyunUserType)
 

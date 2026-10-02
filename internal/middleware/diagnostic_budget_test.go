@@ -5,9 +5,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"orchids-api/internal/debug"
+	"orchids-api/internal/testutil"
+
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
-	"orchids-api/internal/debug"
 )
 
 func TestDiagnosticSamplingAndConcurrentBudget(t *testing.T) {
@@ -29,12 +31,8 @@ func TestDiagnosticSamplingAndConcurrentBudget(t *testing.T) {
 	second, third := httptest.NewRecorder(), httptest.NewRecorder()
 	handler.ServeHTTP(second, httptest.NewRequest("POST", "/v1/responses", nil))
 	handler.ServeHTTP(third, httptest.NewRequest("POST", "/v1/responses", nil))
-	if second.Header().Get("X-Diagnostic-Capture") != "sampled-out" || third.Header().Get("X-Diagnostic-Capture") != "budget-exhausted" {
-		t.Fatal("diagnostic budget did not skip captures")
-	}
+	testutil.False(t, second.Header().Get("X-Diagnostic-Capture") != "sampled-out" || third.Header().Get("X-Diagnostic-Capture") != "budget-exhausted", "diagnostic budget did not skip captures")
 	close(release)
 	<-finished
-	if first.Code != http.StatusOK || first.Header().Get("X-Diagnostic-Capture") != "enabled" {
-		t.Fatal("capture changed response")
-	}
+	testutil.False(t, first.Code != http.StatusOK || first.Header().Get("X-Diagnostic-Capture") != "enabled", "capture changed response")
 }

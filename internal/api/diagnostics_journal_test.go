@@ -10,6 +10,7 @@ import (
 	"orchids-api/internal/debug"
 	"orchids-api/internal/handler"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/testutil"
 )
 
 func TestInvalidJSONDiagnosticIsReachableFromJournal(t *testing.T) {
@@ -26,23 +27,15 @@ func TestInvalidJSONDiagnosticIsReachableFromJournal(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, httptest.NewRequest("POST", "/workbuddy/v1/messages", strings.NewReader("bad-json")))
 	journal.Close() // Flush the asynchronous audit writer before querying the API.
-	if rec.Code != 400 {
-		t.Fatal(rec.Code)
-	}
+	testutil.Equal(t, rec.Code, 400)
 	list := journalRequest(t, a, "?kind=request&channel=workbuddy")
 	rows := list["data"].([]interface{})
-	if len(rows) != 1 {
-		t.Fatal(list)
-	}
+	testutil.Equal(t, len(rows), 1)
 	row := rows[0].(map[string]interface{})
 	event := row["event"].(map[string]interface{})
 	id := rec.Header().Get(middleware.DiagnosticRequestIDHeader)
-	if event["request_id"] != id || row["diagnostics"] == nil {
-		t.Fatal(row)
-	}
+	testutil.Fail(t, event["request_id"] != id || row["diagnostics"] == nil, row)
 	detail := httptest.NewRecorder()
 	a.HandleJournalDiagnostics(detail, httptest.NewRequest("GET", "/api/journal/diagnostics?request_id="+id, nil))
-	if detail.Code != 200 || !strings.Contains(detail.Body.String(), "bad-json") {
-		t.Fatal(detail.Code, detail.Body.String())
-	}
+	testutil.Fail(t, detail.Code != 200 || !strings.Contains(detail.Body.String(), "bad-json"), detail.Code, detail.Body.String())
 }

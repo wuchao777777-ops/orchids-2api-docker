@@ -14,9 +14,7 @@ import (
 func TestCredentialsBearerPinsTheWirePrefix(t *testing.T) {
 	creds := Credentials{AccessToken: "abc"}
 	testutil.Equal(t, creds.Bearer(), "workos:abc")
-	if !creds.HasCredential() {
-		t.Error("HasCredential() = false, want true")
-	}
+	testutil.CheckFalse(t, !creds.HasCredential(), "HasCredential() = false, want true")
 }
 
 // TestCredentialsAccessValidHonoursTheLead pins the renewal margin: a token is
@@ -25,16 +23,10 @@ func TestCredentialsBearerPinsTheWirePrefix(t *testing.T) {
 func TestCredentialsAccessValidHonoursTheLead(t *testing.T) {
 	now := time.Now()
 	creds := Credentials{AccessToken: "abc", ExpiresAt: now.Add(RefreshLead + time.Minute)}
-	if !creds.AccessValid(now) {
-		t.Error("AccessValid() = false, want true while the lead is covered")
-	}
+	testutil.CheckFalse(t, !creds.AccessValid(now), "AccessValid() = false, want true while the lead is covered")
 	creds.ExpiresAt = now.Add(RefreshLead - time.Minute)
-	if creds.AccessValid(now) {
-		t.Error("AccessValid() = true, want false inside the lead")
-	}
-	if (Credentials{}).AccessValid(now) {
-		t.Error("AccessValid() = true for an empty credential")
-	}
+	testutil.CheckFalse(t, creds.AccessValid(now), "AccessValid() = true, want false inside the lead")
+	testutil.CheckFalse(t, (Credentials{}).AccessValid(now), "AccessValid() = true for an empty credential")
 }
 
 // TestResolveCredentialsReadsTheChannelFields proves the channel reads only its
@@ -49,16 +41,11 @@ func TestResolveCredentialsReadsTheChannelFields(t *testing.T) {
 		RefreshToken:      "generic",
 	}
 	creds := ResolveCredentials(acc)
-	if creds.AccessToken != "access" || creds.RefreshToken != "refresh" {
-		t.Fatalf("credentials = %+v, want the trimmed pair", creds)
-	}
+	testutil.Equal(t, creds.AccessToken, "access")
+	testutil.Equal(t, creds.RefreshToken, "refresh")
 	testutil.CheckEqual(t, creds.Email, "operator@example.com")
-	if !creds.ExpiresAt.Equal(expires) {
-		t.Errorf("expires at = %v, want %v", creds.ExpiresAt, expires)
-	}
-	if ResolveCredentials(nil).HasCredential() {
-		t.Error("a nil account must resolve to no credential")
-	}
+	testutil.CheckFalsef(t, !creds.ExpiresAt.Equal(expires), "expires at = %v, want %v", creds.ExpiresAt, expires)
+	testutil.CheckFalse(t, ResolveCredentials(nil).HasCredential(), "a nil account must resolve to no credential")
 }
 
 // TestParseExpiryAcceptsEveryUpstreamSpelling covers the three shapes the two
@@ -72,17 +59,13 @@ func TestParseExpiryAcceptsEveryUpstreamSpelling(t *testing.T) {
 		"4102444800000",
 	} {
 		parsed := ParseExpiry(value)
-		if parsed.IsZero() {
-			t.Fatalf("ParseExpiry(%#v) = zero, want a timestamp", value)
-		}
+		testutil.Falsef(t, parsed.IsZero(), "ParseExpiry(%#v) = zero, want a timestamp", value)
 		testutil.CheckEqual(t, parsed.UnixMilli(), want)
 	}
-	if got := ParseExpiry("12345"); !got.IsZero() {
-		t.Errorf("ParseExpiry(12345) = %v, want zero", got)
-	}
-	if got := ParseExpiry(nil); !got.IsZero() {
-		t.Errorf("ParseExpiry(nil) = %v, want zero", got)
-	}
+	got := ParseExpiry("12345")
+	testutil.CheckFalsef(t, !got.IsZero(), "ParseExpiry(12345) = %v, want zero", got)
+	got = ParseExpiry(nil)
+	testutil.CheckFalsef(t, !got.IsZero(), "ParseExpiry(nil) = %v, want zero", got)
 }
 
 // TestParseInferenceCapDurationReadsTheStatedWait pins the one number the
@@ -126,19 +109,13 @@ func TestAllowedLoginHostRefusesForeignHosts(t *testing.T) {
 		"localhost", "127.0.0.1", "::1",
 	}
 	for _, host := range allowed {
-		if !allowedLoginHost(host, "") {
-			t.Errorf("allowedLoginHost(%q) = false, want true", host)
-		}
+		testutil.CheckTrue(t, allowedLoginHost(host, ""), "allowedLoginHost(%q) = false, want true")
 	}
 	for _, host := range []string{"", "evil.example.com", "api.workos.com.evil.example.com", "workos.com.co"} {
-		if allowedLoginHost(host, "") {
-			t.Errorf("allowedLoginHost(%q) = true, want false", host)
-		}
+		testutil.CheckFalsef(t, allowedLoginHost(host, ""), "allowedLoginHost(%q) = true, want false", host)
 	}
 	// A deployment that points the flow at its own host must still work.
-	if !allowedLoginHost("workos.internal", "workos.internal") {
-		t.Error("the configured authorization host must be honoured")
-	}
+	testutil.CheckFalse(t, !allowedLoginHost("workos.internal", "workos.internal"), "the configured authorization host must be honoured")
 }
 
 // TestNewTaskIDCarriesTheUpstreamPrefix pins the correlation header's shape: the

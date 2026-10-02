@@ -18,16 +18,13 @@ func newRedisSessionBackendForTest(t *testing.T) (*miniredis.Miniredis, SessionB
 	t.Cleanup(func() { _ = client.Close() })
 
 	backend := NewRedisSessionBackend(client, "test")
-	if backend == nil {
-		t.Fatal("NewRedisSessionBackend() returned nil for a live client")
-	}
+	testutil.False(t, backend == nil, "NewRedisSessionBackend() returned nil for a live client")
 	return mini, backend
 }
 
 func TestNewRedisSessionBackendRequiresClient(t *testing.T) {
-	if backend := NewRedisSessionBackend(nil, "test"); backend != nil {
-		t.Fatal("NewRedisSessionBackend(nil) must return nil so the in-process store stays in place")
-	}
+	backend := NewRedisSessionBackend(nil, "test")
+	testutil.False(t, backend != nil, "NewRedisSessionBackend(nil) must return nil so the in-process store stays in place")
 }
 
 func TestRedisSessionBackendRoundTrip(t *testing.T) {
@@ -35,24 +32,16 @@ func TestRedisSessionBackendRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	ok, err := backend.HasSession(ctx, "unknown-token")
-	if err != nil {
-		t.Fatalf("HasSession(unknown) error = %v", err)
-	}
-	if ok {
-		t.Fatal("an unknown token must not be valid")
-	}
+	testutil.NoError(t, err, "HasSession(unknown) error = %v")
+	testutil.False(t, ok, "an unknown token must not be valid")
 
 	testutil.NoError(t, backend.SaveSession(ctx, "token-1", time.Now().Add(time.Hour)), "SaveSession() error = %v")
 	ok, err = backend.HasSession(ctx, "token-1")
-	if err != nil || !ok {
-		t.Fatalf("HasSession(saved) = %v, %v; want true, nil", ok, err)
-	}
+	testutil.Falsef(t, err != nil || !ok, "HasSession(saved) = %v, %v; want true, nil", ok, err)
 
 	backend.DeleteSession(ctx, "token-1")
 	ok, err = backend.HasSession(ctx, "token-1")
-	if err != nil || ok {
-		t.Fatalf("HasSession(deleted) = %v, %v; want false, nil", ok, err)
-	}
+	testutil.Falsef(t, err != nil || ok, "HasSession(deleted) = %v, %v; want false, nil", ok, err)
 }
 
 func TestRedisSessionBackendExpiresWithTheSession(t *testing.T) {
@@ -63,12 +52,8 @@ func TestRedisSessionBackendExpiresWithTheSession(t *testing.T) {
 	mini.FastForward(3 * time.Minute)
 
 	ok, err := backend.HasSession(ctx, "token-1")
-	if err != nil {
-		t.Fatalf("HasSession() error = %v", err)
-	}
-	if ok {
-		t.Fatal("an expired session must not validate")
-	}
+	testutil.NoError(t, err, "HasSession() error = %v")
+	testutil.False(t, ok, "an expired session must not validate")
 }
 
 // Persisting an already expired session must fail loudly: reporting success
@@ -78,9 +63,8 @@ func TestRedisSessionBackendRejectsAlreadyExpiredSessions(t *testing.T) {
 	mini, backend := newRedisSessionBackendForTest(t)
 	ctx := context.Background()
 
-	if err := backend.SaveSession(ctx, "token-1", time.Now().Add(-time.Minute)); err == nil {
-		t.Fatal("SaveSession() of an expired session must return an error")
-	}
+	err := backend.SaveSession(ctx, "token-1", time.Now().Add(-time.Minute))
+	testutil.Error(t, err)
 	testutil.Equal(t, len(mini.Keys()), 0)
 }
 

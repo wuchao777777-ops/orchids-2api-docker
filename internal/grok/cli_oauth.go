@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -55,6 +54,15 @@ func (o *CLIOAuth) SetAccountStore(s *store.Store) {
 // AccessToken returns a valid access token for the account. It refreshes and
 // persists when the stored token is missing or within skew of expiry.
 func (o *CLIOAuth) AccessToken(ctx context.Context, acc *store.Account) (string, error) {
+	return o.accessToken(ctx, acc, false)
+}
+
+// ForceRefresh holds the same rotation lock but bypasses the validity shortcut.
+func (o *CLIOAuth) ForceRefresh(ctx context.Context, acc *store.Account) (string, error) {
+	return o.accessToken(ctx, acc, true)
+}
+
+func (o *CLIOAuth) accessToken(ctx context.Context, acc *store.Account, force bool) (string, error) {
 	if acc == nil {
 		return "", fmt.Errorf("empty cli oauth account")
 	}
@@ -72,33 +80,9 @@ func (o *CLIOAuth) AccessToken(ctx context.Context, acc *store.Account) (string,
 	refreshToken := strings.TrimSpace(acc.OAuthRefreshToken)
 	expiresAt := acc.OAuthExpiresAt
 
-	if accessToken != "" && (expiresAt.IsZero() || time.Until(expiresAt) > cliOAuthRefreshSkew) {
+	if !force && accessToken != "" && (expiresAt.IsZero() || time.Until(expiresAt) > cliOAuthRefreshSkew) {
 		return accessToken, nil
 	}
-	if refreshToken == "" {
-		return "", &cliOAuthError{status: http.StatusUnauthorized, message: "grok cli oauth refresh token is missing"}
-	}
-	return o.refreshAndPersist(ctx, acc, refreshToken)
-}
-
-// ForceRefresh rotates an access token after the upstream explicitly rejects
-// an otherwise unexpired token. Stateful Responses must retry the same account
-// rather than switching to a different account and losing conversation state.
-func (o *CLIOAuth) ForceRefresh(ctx context.Context, acc *store.Account) (string, error) {
-	if acc == nil {
-		return "", fmt.Errorf("empty cli oauth account")
-	}
-	lock := cliOAuthLockForAccount(acc)
-	lock.Lock()
-	defer lock.Unlock()
-	if o != nil && o.store != nil && acc.ID != 0 {
-		if latest, err := o.store.GetAccount(ctx, acc.ID); err == nil && latest != nil {
-			acc.OAuthAccessToken = latest.OAuthAccessToken
-			acc.OAuthRefreshToken = latest.OAuthRefreshToken
-			acc.OAuthExpiresAt = latest.OAuthExpiresAt
-		}
-	}
-	refreshToken := strings.TrimSpace(acc.OAuthRefreshToken)
 	if refreshToken == "" {
 		return "", &cliOAuthError{status: http.StatusUnauthorized, message: "grok cli oauth refresh token is missing"}
 	}
@@ -147,26 +131,9 @@ func (o *CLIOAuth) refresh(ctx context.Context, refreshToken string) (accessToke
 	form.Set("client_id", o.clientID())
 	form.Set("refresh_token", refreshToken)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.tokenURL(), strings.NewReader(form.Encode()))
+	body, status, err := postOAuthForm(ctx, o.httpClient, o.tokenURL(), form, cliOAuthMaxBodyBytes, nil, parseCLIOAuthErrorResponse)
 	if err != nil {
 		return "", "", "", time.Time{}, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return "", "", "", time.Time{}, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, cliOAuthMaxBodyBytes))
-	if err != nil {
-		return "", "", "", time.Time{}, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		oauthErr := parseCLIOAuthErrorResponse(body, resp.StatusCode)
-		return "", "", "", time.Time{}, oauthErr
 	}
 
 	var value struct {
@@ -179,7 +146,7 @@ func (o *CLIOAuth) refresh(ctx context.Context, refreshToken string) (accessToke
 		return "", "", "", time.Time{}, fmt.Errorf("grok cli oauth refresh parse: %w", err)
 	}
 	if strings.TrimSpace(value.AccessToken) == "" {
-		return "", "", "", time.Time{}, &cliOAuthError{status: resp.StatusCode, message: "grok cli oauth response missing access_token"}
+		return "", "", "", time.Time{}, &cliOAuthError{status: status, message: "grok cli oauth response missing access_token"}
 	}
 	expiresIn := value.ExpiresIn
 	if expiresIn <= 0 {

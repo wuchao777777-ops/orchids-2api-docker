@@ -100,9 +100,7 @@ func setupConnTrackerHandlerTest(t *testing.T) (*store.Store, *miniredis.Minired
 		RedisDB:     0,
 		RedisPrefix: "test:",
 	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 
 	return s, mini
 }
@@ -116,9 +114,8 @@ func createEnabledTestAccount(t *testing.T, s *store.Store, name, accountType st
 		Enabled:     true,
 		Weight:      1,
 	}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount(%s) error = %v", name, err)
-	}
+	err := s.CreateAccount(context.Background(), acc)
+	testutil.CheckNoError(t, err)
 	return acc
 }
 
@@ -147,12 +144,8 @@ func TestSelectAccount_UsesHandlerConnTracker(t *testing.T) {
 
 	_, selected, release, err := h.acquireAccountSelection(context.Background(), "workbuddy", true, nil, accountSelectionOptions{})
 	defer release()
-	if err != nil {
-		t.Fatalf("selectAccount() error = %v", err)
-	}
-	if selected == nil {
-		t.Fatal("selectAccount() returned nil account")
-	}
+	testutil.NoError(t, err, "selectAccount() error = %v")
+	testutil.False(t, selected == nil, "selectAccount() returned nil account")
 	testutil.Equal(t, selected.ID, acc2.ID)
 	testutil.NotEqual(t, localTracker.getCountsCalls, 0)
 	testutil.Equal(t, globalTracker.getCountsCalls, 0)
@@ -210,12 +203,8 @@ func TestAcquireReservedAccountSelection_WaitsForShortLease(t *testing.T) {
 	default:
 		t.Fatal("the selection succeeded before the lease was released")
 	}
-	if err != nil {
-		t.Fatalf("acquireReservedAccountSelection() error = %v", err)
-	}
-	if chosen == nil || chosen.ID != acc.ID {
-		t.Fatalf("selected account = %#v, want account %d", chosen, acc.ID)
-	}
+	testutil.NoError(t, err, "acquireReservedAccountSelection() error = %v")
+	testutil.Falsef(t, chosen == nil || chosen.ID != acc.ID, "selected account = %#v, want account %d", chosen, acc.ID)
 	testutil.Equal(t, trackedID, acc.ID)
 	testutil.Equal(t, tracker.GetCount(acc.ID), 1)
 	h.releaseTrackedAccount(trackedID)
@@ -275,12 +264,8 @@ func TestAcquireReservedAccountSelection_WaitsForBusyAccountLease(t *testing.T) 
 	default:
 		t.Fatal("the selection succeeded before the lease was released")
 	}
-	if err != nil {
-		t.Fatalf("acquireReservedAccountSelection() error = %v", err)
-	}
-	if chosen == nil || chosen.ID != acc.ID {
-		t.Fatalf("selected account = %#v, want account %d", chosen, acc.ID)
-	}
+	testutil.NoError(t, err, "acquireReservedAccountSelection() error = %v")
+	testutil.Falsef(t, chosen == nil || chosen.ID != acc.ID, "selected account = %#v, want account %d", chosen, acc.ID)
 	testutil.Equal(t, trackedID, acc.ID)
 	testutil.Equal(t, tracker.GetCount(acc.ID), 1)
 	h.releaseTrackedAccount(trackedID)
@@ -340,9 +325,8 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 	h.HandleMessages(rec, req)
 
 	testutil.Equal(t, rec.Code, http.StatusOK)
-	if globalTracker.acquireCalls != 0 || globalTracker.releaseCalls != 0 {
-		t.Fatalf("expected global tracker to stay idle, got acquire=%d release=%d", globalTracker.acquireCalls, globalTracker.releaseCalls)
-	}
+	testutil.Equal(t, globalTracker.acquireCalls, 0)
+	testutil.Equal(t, globalTracker.releaseCalls, 0)
 	testutil.Equal(t, localTracker.acquireCalls, 2)
 	testutil.Equal(t, localTracker.releaseCalls, 2)
 	testutil.Equal(t, localTracker.GetCount(acc1.ID), 0)
@@ -370,13 +354,11 @@ func TestTryAcquireTrackedAccount_DoesNotAdmitRequestPastLimit(t *testing.T) {
 	h := &Handler{connTracker: tracker}
 	acc := &store.Account{ID: 42, AccountType: "workbuddy"}
 	for i := 0; i < limit; i++ {
-		if _, ok := h.tryAcquireTrackedAccount(acc); !ok {
-			t.Fatalf("acquire %d unexpectedly rejected", i+1)
-		}
+		_, ok := h.tryAcquireTrackedAccount(acc)
+		testutil.Falsef(t, !ok, "acquire %d unexpectedly rejected", i+1)
 	}
-	if _, ok := h.tryAcquireTrackedAccount(acc); ok {
-		t.Fatalf("request %d was admitted past the %d-slot limit", limit+1, limit)
-	}
+	_, ok := h.tryAcquireTrackedAccount(acc)
+	testutil.Falsef(t, ok, "request %d was admitted past the %d-slot limit", limit+1, limit)
 	testutil.Equal(t, tracker.GetCount(acc.ID), limit)
 	for range limit {
 		h.releaseTrackedAccount(acc.ID)

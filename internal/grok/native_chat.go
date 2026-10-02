@@ -849,10 +849,7 @@ func consoleExtractEncryptedReasoning(raw map[string]interface{}) string {
 
 func consoleToolCallFromItem(raw interface{}) map[string]interface{} {
 	item, _ := raw.(map[string]interface{})
-	if item == nil {
-		return nil
-	}
-	if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "function_call") {
+	if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "function_call") {
 		return nil
 	}
 	name := strings.TrimSpace(fmt.Sprint(item["name"]))

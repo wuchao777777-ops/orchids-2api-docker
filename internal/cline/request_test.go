@@ -23,9 +23,7 @@ func TestBuildChatBodyCarriesTheUpstreamDefaults(t *testing.T) {
 		Model:    "x-ai/grok-4.1-fast",
 		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hello"}}},
 	}, "x-ai/grok-4.1-fast")
-	if err != nil {
-		t.Fatalf("buildChatBody() error = %v", err)
-	}
+	testutil.NoError(t, err, "buildChatBody() error = %v")
 	raw := string(body)
 	for _, want := range []string{
 		`"model":"x-ai/grok-4.1-fast"`,
@@ -50,9 +48,7 @@ func TestBuildChatBodyConvertsAnthropicToolsToOpenAI(t *testing.T) {
 		}},
 		ToolChoice: map[string]interface{}{"type": "tool", "name": "glob"},
 	}, "z-ai/glm-5.3-flash")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	var decoded map[string]interface{}
 	testutil.NoError(t, json.Unmarshal(body, &decoded))
 	tools, _ := decoded["tools"].([]interface{})
@@ -60,21 +56,16 @@ func TestBuildChatBodyConvertsAnthropicToolsToOpenAI(t *testing.T) {
 	tool := tools[0].(map[string]interface{})
 	testutil.Equal(t, tool["type"], "function")
 	function := tool["function"].(map[string]interface{})
-	if function["name"] != "glob" || function["parameters"] == nil {
-		t.Fatalf("function=%#v", function)
-	}
+	testutil.Falsef(t, function["name"] != "glob" || function["parameters"] == nil, "function=%#v", function)
 	choice := decoded["tool_choice"].(map[string]interface{})
-	if choice["type"] != "function" || choice["function"].(map[string]interface{})["name"] != "glob" {
-		t.Fatalf("tool_choice=%#v", choice)
-	}
+	testutil.Equal(t, choice["type"], "function")
+	testutil.Equal(t, choice["function"].(map[string]interface{})["name"], "glob")
 }
 
 func TestBuildChatBodyKeepsOpenAITools(t *testing.T) {
 	openAI := map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "bash", "parameters": map[string]interface{}{"type": "object"}}}
 	body, err := buildChatBody(upstream.UpstreamRequest{Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "run"}}}, Tools: []interface{}{openAI}}, "z-ai/glm-5.3-flash")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.MustContain(t, string(body), `"tools":[{"function":{"name":"bash","parameters":{"type":"object"}},"type":"function"}]`)
 }
 
@@ -101,15 +92,13 @@ func TestBuildMessagesMapsToolHistory(t *testing.T) {
 		},
 	})
 	testutil.Equal(t, len(out), 4)
-	if out[0].Role != "system" || out[0].Content != "be terse" {
-		t.Errorf("first message = %+v, want the system item", out[0])
-	}
-	if len(out[2].ToolCalls) != 1 || out[2].ToolCalls[0].Function.Name != "Read" {
-		t.Fatalf("assistant message = %+v, want one Read tool call", out[2])
-	}
-	if out[3].Role != "tool" || out[3].ToolCallID != "call-1" || out[3].Content != "file body" {
-		t.Errorf("tool result = %+v, want a paired tool message", out[3])
-	}
+	testutil.CheckEqual(t, out[0].Role, "system")
+	testutil.CheckEqual(t, out[0].Content, "be terse")
+	testutil.Equal(t, len(out[2].ToolCalls), 1)
+	testutil.Equal(t, out[2].ToolCalls[0].Function.Name, "Read")
+	testutil.CheckEqual(t, out[3].Role, "tool")
+	testutil.CheckEqual(t, out[3].ToolCallID, "call-1")
+	testutil.CheckEqual(t, out[3].Content, "file body")
 }
 
 // TestBuildMessagesDropsOrphanToolResults covers the case that would otherwise
@@ -127,9 +116,8 @@ func TestBuildMessagesDropsOrphanToolResults(t *testing.T) {
 			},
 		},
 	})
-	if len(out) != 1 || out[0].Content != "hi" {
-		t.Fatalf("messages = %+v, want only the user message", out)
-	}
+	testutil.Equal(t, len(out), 1)
+	testutil.Equal(t, out[0].Content, "hi")
 }
 
 // TestConsumeStreamEmitsTextAndUsage drives the SSE conversion that the handler
@@ -152,49 +140,32 @@ func TestConsumeStreamEmitsTextAndUsage(t *testing.T) {
 			finish = true
 		}
 	})
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
+	testutil.NoError(t, err, "consumeStream() error = %v")
 	testutil.CheckEqual(t, text.String(), "hello world")
-	if usage == nil || usage["inputTokens"] != 5 || usage["outputTokens"] != 2 {
-		t.Errorf("usage = %+v, want the normalized pair", usage)
-	}
-	if !result.SawMeaningfulEvent {
-		t.Error("SawMeaningfulEvent = false, want true")
-	}
-	if finish {
-		t.Error("consumeStream emitted a finish event; the caller owns it")
-	}
+	testutil.CheckFalsef(t, usage == nil || usage["inputTokens"] != 5 || usage["outputTokens"] != 2, "usage = %+v, want the normalized pair", usage)
+	testutil.CheckFalse(t, !result.SawMeaningfulEvent, "SawMeaningfulEvent = false, want true")
+	testutil.CheckFalse(t, finish, "consumeStream emitted a finish event; the caller owns it")
 }
 
 func TestConsumeStreamRejectsMalformedDataFrame(t *testing.T) {
 	t.Parallel()
 	stream := "data: {not-json}\n\ndata: [DONE]\n\n"
-	if _, err := consumeStream(strings.NewReader(stream), false, nil); err == nil || !strings.Contains(err.Error(), "protocol error") {
-		t.Fatalf("error = %v, want protocol error", err)
-	}
+	_, err := consumeStream(strings.NewReader(stream), false, nil)
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "protocol error"), "error = %v, want protocol error", err)
 }
 
 func TestConsumeStreamRejectsEOFBeforeFinish(t *testing.T) {
 	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
 	result, err := consumeStream(strings.NewReader(stream), false, nil)
-	if !errors.Is(err, ErrStreamTruncated) {
-		t.Fatalf("error=%v, want ErrStreamTruncated", err)
-	}
-	if !result.SawMeaningfulEvent {
-		t.Fatal("partial data should remain observable even though the stream failed")
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrStreamTruncated), "error=%v, want ErrStreamTruncated", err)
+	testutil.False(t, !result.SawMeaningfulEvent, "partial data should remain observable even though the stream failed")
 }
 
 func TestConsumeStreamAcceptsFinishReasonWithoutDone(t *testing.T) {
 	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"complete\"},\"finish_reason\":\"stop\"}]}\n\n"
 	result, err := consumeStream(strings.NewReader(stream), false, nil)
-	if err != nil {
-		t.Fatalf("error=%v", err)
-	}
-	if !result.SawMeaningfulEvent {
-		t.Fatal("complete stream was not observed")
-	}
+	testutil.NoError(t, err, "error=%v")
+	testutil.False(t, !result.SawMeaningfulEvent, "complete stream was not observed")
 }
 
 // TestConsumeStreamEmitsEachToolCallOnce is the regression the accumulator
@@ -213,9 +184,7 @@ func TestConsumeStreamEmitsEachToolCallOnce(t *testing.T) {
 		calls++
 		names = append(names, msg.Event["toolName"].(string))
 	})
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
+	testutil.NoError(t, err, "consumeStream() error = %v")
 	testutil.Equal(t, calls, 1)
 	testutil.CheckEqual(t, result.ToolCallCount, 1)
 	testutil.CheckEqual(t, result.FinishReason(), "tool_use")
@@ -234,56 +203,47 @@ func TestConsumeStreamConvertsGLMTextToolCall(t *testing.T) {
 			calls = append(calls, msg)
 		}
 	})
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
+	testutil.NoError(t, err, "consumeStream() error = %v")
 	testutil.Equal(t, text.String(), "checking ")
 	testutil.Equal(t, len(calls), 1)
-	if calls[0].Event["toolName"] != "bash" || calls[0].Event["input"] != `{"command":"ls -la /tmp/a"}` {
-		t.Fatalf("tool call = %#v", calls[0].Event)
-	}
-	if result.ToolCallCount != 1 || result.FinishReason() != "tool_use" {
-		t.Fatalf("result = %+v, want one tool_use", result)
-	}
+	testutil.Equal(t, calls[0].Event["toolName"], "bash")
+	testutil.Equal(t, calls[0].Event["input"], `{"command":"ls -la /tmp/a"}`)
+	testutil.Equal(t, result.ToolCallCount, 1)
+	testutil.Equal(t, result.FinishReason(), "tool_use")
 }
 
 func TestParseClineTextToolCallPreservesStructuredArguments(t *testing.T) {
 	markup := `<tool_call>write:ignored</arg_value><arg_key>content</arg_key><arg_value>{&quot;ok&quot;:true}</arg_value><arg_key>count</arg_key><arg_value>2</arg_value></tool_call>`
 	visible, calls := parseClineTextToolCalls(markup)
-	if visible != "" || len(calls) != 1 {
-		t.Fatalf("visible=%q calls=%+v", visible, calls)
-	}
+	testutil.Equal(t, visible, "")
+	testutil.Equal(t, len(calls), 1)
 	testutil.Equal(t, calls[0].Function.Arguments, `{"content":{"ok":true},"count":2}`)
 }
 
 func TestParseClineRepeatedTagToolCall(t *testing.T) {
 	text := `让我先看一下项目。<tool_call> GetType(ItemType) + $assetPath.Write and glob the workspace.<tool_call>glob<tool_call>glob: *<tool_call>args: {"pattern":"*"}<tool_call>run_in_background: false`
 	visible, calls := parseClineTextToolCalls(text)
-	if visible != "让我先看一下项目。" || len(calls) != 1 {
-		t.Fatalf("visible=%q calls=%+v", visible, calls)
-	}
-	if calls[0].Function.Name != "glob" || calls[0].Function.Arguments != `{"pattern":"*"}` {
-		t.Fatalf("call=%+v", calls[0])
-	}
+	testutil.Equal(t, visible, "让我先看一下项目。")
+	testutil.Equal(t, len(calls), 1)
+	testutil.Equal(t, calls[0].Function.Name, "glob")
+	testutil.Equal(t, calls[0].Function.Arguments, `{"pattern":"*"}`)
 }
 
 func TestParseClineCompactMultipleToolCalls(t *testing.T) {
 	text := `先查看结构。<tool_call>glob,{"pattern":"*"}<tool_call>glob,{"pattern":"*/*"}`
 	visible, calls := parseClineTextToolCalls(text)
-	if visible != "先查看结构。" || len(calls) != 2 {
-		t.Fatalf("visible=%q calls=%+v", visible, calls)
-	}
-	if calls[0].Function.Name != "glob" || calls[0].Function.Arguments != `{"pattern":"*"}` || calls[1].Function.Arguments != `{"pattern":"*/*"}` {
-		t.Fatalf("calls=%+v", calls)
-	}
+	testutil.Equal(t, visible, "先查看结构。")
+	testutil.Equal(t, len(calls), 2)
+	testutil.Equal(t, calls[0].Function.Name, "glob")
+	testutil.Equal(t, calls[0].Function.Arguments, `{"pattern":"*"}`)
+	testutil.Equal(t, calls[1].Function.Arguments, `{"pattern":"*/*"}`)
 }
 
 func TestParseClineRepeatedTagToolCallRejectsProse(t *testing.T) {
 	text := `plain <tool_call>this is not a tool<tool_call>args: {"x":1}`
 	visible, calls := parseClineTextToolCalls(text)
-	if visible != text || len(calls) != 0 {
-		t.Fatalf("visible=%q calls=%+v", visible, calls)
-	}
+	testutil.Equal(t, visible, text)
+	testutil.Equal(t, len(calls), 0)
 }
 
 func TestConsumeStreamLeavesTextToolMarkupWithoutDeclaredTools(t *testing.T) {
@@ -295,20 +255,14 @@ func TestConsumeStreamLeavesTextToolMarkupWithoutDeclaredTools(t *testing.T) {
 			text.WriteString(msg.Event["delta"].(string))
 		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if text.String() != markup || result.ToolCallCount != 0 {
-		t.Fatalf("text=%q result=%+v", text.String(), result)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, text.String() != markup || result.ToolCallCount != 0, "text=%q result=%+v", text.String(), result)
 }
 
 func mustJSON(t *testing.T, value interface{}) []byte {
 	t.Helper()
 	raw, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	return raw
 }
 
@@ -318,18 +272,15 @@ func mustJSON(t *testing.T, value interface{}) []byte {
 func TestClassifyStatusTurnsTheCapIntoAKnownWindow(t *testing.T) {
 	err := classifyStatus(429, []byte(`{"error":"INFERENCE_CAP_ERROR","message":"Try again in 17h 59m"}`))
 	capErr, ok := err.(*InferenceCapError)
-	if !ok {
-		t.Fatalf("classifyStatus(429) = %T (%v), want *InferenceCapError", err, err)
-	}
+	testutil.True(t, ok, "classifyStatus(429) = %T (%v), want *InferenceCapError")
 	testutil.CheckEqual(t, capErr.Wait, 17*time.Hour+59*time.Minute)
 }
 
 // TestClassifyStatusPreservesFailures checks the one local recovery path (401)
 // and the status details handed back to callers for non-auth failures.
 func TestClassifyStatusPreservesFailures(t *testing.T) {
-	if err := classifyStatus(401, []byte(`{"error":"unauthorized"}`)); !isUnauthorized(err) || !errors.Is(err, ErrCredentialMissing) {
-		t.Errorf("classifyStatus(401) = %v, want unauthorized credential error", err)
-	}
+	err := classifyStatus(401, []byte(`{"error":"unauthorized"}`))
+	testutil.CheckFalsef(t, !isUnauthorized(err) || !errors.Is(err, ErrCredentialMissing), "classifyStatus(401) = %v, want unauthorized credential error", err)
 	for _, tc := range []struct {
 		status int
 		body   string
@@ -340,9 +291,7 @@ func TestClassifyStatusPreservesFailures(t *testing.T) {
 		{503, `{"error":"unavailable"}`},
 	} {
 		err := classifyStatus(tc.status, []byte(tc.body))
-		if isUnauthorized(err) || errors.Is(err, ErrCredentialMissing) {
-			t.Errorf("classifyStatus(%d) = %v, must not trigger credential refresh", tc.status, err)
-		}
+		testutil.CheckFalsef(t, isUnauthorized(err) || errors.Is(err, ErrCredentialMissing), "classifyStatus(%d) = %v, must not trigger credential refresh", tc.status, err)
 		testutil.CheckContainAll(t, err.Error(), fmt.Sprintf("status=%d", tc.status), tc.body)
 	}
 }
@@ -366,16 +315,11 @@ func TestCatalogSnapshotRoundTripsTheObservedFeed(t *testing.T) {
 // rather than an empty catalog.
 func TestParseCatalogPublishesOnlyTheFreeTier(t *testing.T) {
 	models, err := parseCatalog([]byte(`{"free":[{"id":"x-ai/grok-4.1-fast","name":"Grok 4.1 Fast"}],"paid":[{"id":"anthropic/claude-opus","name":"Opus"}]}`))
-	if err != nil {
-		t.Fatalf("parseCatalog() error = %v", err)
-	}
-	if len(models) != 1 || models[0].ID != "x-ai/grok-4.1-fast" {
-		t.Fatalf("models = %+v, want only the free row", models)
-	}
+	testutil.NoError(t, err, "parseCatalog() error = %v")
+	testutil.Equal(t, len(models), 1)
+	testutil.Equal(t, models[0].ID, "x-ai/grok-4.1-fast")
 	testutil.CheckEqual(t, models[0].Provider, "x-ai")
-	if !models[0].RequiresStream {
-		t.Error("RequiresStream = false, want true for a bare identifier")
-	}
+	testutil.CheckFalse(t, !models[0].RequiresStream, "RequiresStream = false, want true for a bare identifier")
 	if models, err = parseCatalog([]byte(`{"free":[]}`)); err != nil || len(models) != 0 {
 		t.Errorf("an empty feed must parse as empty, got %+v / %v", models, err)
 	}
@@ -426,13 +370,9 @@ func TestConsumeStreamSignsReasoningDeltas(t *testing.T) {
 			signatures = append(signatures, sig)
 		}
 	})
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
+	testutil.NoError(t, err, "consumeStream() error = %v")
 	testutil.Equal(t, reasoning.String(), "step onestep two")
-	if len(signatures) != 2 || signatures[0] == "" || signatures[0] != signatures[1] {
-		t.Fatalf("signatures = %v, want one stable non-empty signature", signatures)
-	}
+	testutil.Falsef(t, len(signatures) != 2 || signatures[0] == "" || signatures[0] != signatures[1], "signatures = %v, want one stable non-empty signature", signatures)
 	if !strings.HasPrefix(signatures[0], "cline-v1:") {
 		t.Fatalf("signature = %q, want the cline-v1 prefix", signatures[0])
 	}
@@ -451,13 +391,9 @@ func TestConsumeStreamAcceptsGLMReasoningAliases(t *testing.T) {
 			text.WriteString(msg.Event["delta"].(string))
 		}
 	})
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
+	testutil.NoError(t, err, "consumeStream() error = %v")
 	testutil.Equal(t, reasoning.String(), "step onestep two")
-	if text.String() != "answer" || !result.SawMeaningfulEvent {
-		t.Fatalf("text/result = %q/%+v", text.String(), result)
-	}
+	testutil.Falsef(t, text.String() != "answer" || !result.SawMeaningfulEvent, "text/result = %q/%+v", text.String(), result)
 }
 func TestConsumeStreamSeparatesSplitThinkingTagsFromAnswer(t *testing.T) {
 	stream := `data: {"choices":[{"delta":{"content":"Hello <thi"}}]}` + "\n\n" +
@@ -474,12 +410,8 @@ func TestConsumeStreamSeparatesSplitThinkingTagsFromAnswer(t *testing.T) {
 				reasoning.WriteString(msg.Event["delta"].(string))
 			}
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if text.String() != "Hello  world" || reasoning.String() != "private reasoning" {
-			t.Fatalf("tools=%t text=%q reasoning=%q", toolsEnabled, text.String(), reasoning.String())
-		}
+		testutil.NoError(t, err)
+		testutil.Falsef(t, text.String() != "Hello  world" || reasoning.String() != "private reasoning", "tools=%t text=%q reasoning=%q", toolsEnabled, text.String(), reasoning.String())
 	}
 }
 
@@ -494,9 +426,7 @@ func TestConsumeStreamFlushesIncompleteThinkPrefixAsText(t *testing.T) {
 			reasoning.WriteString(msg.Event["delta"].(string))
 		}
 	})
-	if err != nil || !result.SawMeaningfulEvent || text.String() != "answer <thi" || reasoning.String() != "separate reasoning" {
-		t.Fatalf("text=%q reasoning=%q result=%+v err=%v", text.String(), reasoning.String(), result, err)
-	}
+	testutil.Falsef(t, err != nil || !result.SawMeaningfulEvent || text.String() != "answer <thi" || reasoning.String() != "separate reasoning", "text=%q reasoning=%q result=%+v err=%v", text.String(), reasoning.String(), result, err)
 }
 
 func TestBuildChatBodyHonorsClientReasoningEffort(t *testing.T) {
@@ -505,9 +435,7 @@ func TestBuildChatBodyHonorsClientReasoningEffort(t *testing.T) {
 		ReasoningEffort: "low",
 		Messages:        []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
 	}, "z-ai/glm-5.3-flash")
-	if err != nil {
-		t.Fatalf("buildChatBody() error = %v", err)
-	}
+	testutil.NoError(t, err, "buildChatBody() error = %v")
 	testutil.MustContain(t, string(body), `"reasoning_effort":"low"`)
 
 	body, err = buildChatBody(upstream.UpstreamRequest{
@@ -515,9 +443,7 @@ func TestBuildChatBodyHonorsClientReasoningEffort(t *testing.T) {
 		ReasoningEffort: "none",
 		Messages:        []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
 	}, "z-ai/glm-5.3-flash")
-	if err != nil {
-		t.Fatalf("buildChatBody() error = %v", err)
-	}
+	testutil.NoError(t, err, "buildChatBody() error = %v")
 	testutil.MustNotContain(t, string(body), `"reasoning_effort":"none"`)
 	testutil.MustContain(t, string(body), `"reasoning_effort":"high"`)
 }

@@ -14,9 +14,8 @@ import (
 func seedAdminModels(t *testing.T, s *store.Store, models ...*store.Model) {
 	t.Helper()
 	for _, m := range models {
-		if err := s.CreateModel(context.Background(), m); err != nil {
-			t.Fatalf("CreateModel(%s): %v", m.ID, err)
-		}
+		err := s.CreateModel(context.Background(), m)
+		testutil.CheckNoError(t, err)
 	}
 }
 
@@ -32,12 +31,10 @@ func TestHandleModelsStaysABareArrayWithoutPaging(t *testing.T) {
 
 	testutil.Equal(t, rec.Code, http.StatusOK)
 	var bare []store.Model
-	if err := json.Unmarshal(rec.Body.Bytes(), &bare); err != nil {
-		t.Fatalf("legacy array decode failed: %v (body=%s)", err, rec.Body.String())
-	}
-	if len(bare) != 1 || bare[0].ModelID != "grok-4.6" {
-		t.Fatalf("bare=%+v", bare)
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &bare)
+	testutil.CheckNoError(t, err)
+	testutil.Equal(t, len(bare), 1)
+	testutil.Equal(t, bare[0].ModelID, "grok-4.6")
 }
 
 // Asking for a page switches to the optional paged envelope.
@@ -54,19 +51,15 @@ func TestHandleModelsServesPagedEnvelopeOnRequest(t *testing.T) {
 	a.HandleModels(rec, httptest.NewRequest(http.MethodGet, "/api/models?page=1&pageSize=2", nil))
 
 	var envelope adminModelListEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("envelope decode failed: %v (body=%s)", err, rec.Body.String())
-	}
-	if envelope.Total != 3 || envelope.Page != 1 || envelope.PageSize != 2 || len(envelope.Items) != 2 {
-		t.Fatalf("envelope=%+v", envelope)
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &envelope)
+	testutil.CheckNoError(t, err)
+	testutil.Falsef(t, envelope.Total != 3 || envelope.Page != 1 || envelope.PageSize != 2 || len(envelope.Items) != 2, "envelope=%+v", envelope)
 
 	rec = httptest.NewRecorder()
 	a.HandleModels(rec, httptest.NewRequest(http.MethodGet, "/api/models?page=2&pageSize=2&search=grok", nil))
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope), "filtered envelope decode failed: %v")
-	if envelope.Total != 2 || len(envelope.Items) != 0 {
-		t.Fatalf("search+page envelope=%+v", envelope)
-	}
+	testutil.Equal(t, envelope.Total, 2)
+	testutil.Equal(t, len(envelope.Items), 0)
 
 	// pageSize is clamped so one request cannot dump the whole table.
 	rec = httptest.NewRecorder()

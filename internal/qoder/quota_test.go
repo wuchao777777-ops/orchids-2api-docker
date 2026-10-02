@@ -41,20 +41,12 @@ func TestFetchQuotaReadsTheWindowAndPlan(t *testing.T) {
 	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
 	quota, err := client.FetchQuota(context.Background())
-	if err != nil {
-		t.Fatalf("FetchQuota() error = %v", err)
-	}
+	testutil.NoError(t, err, "FetchQuota() error = %v")
 	testutil.Equal(t, quota.PlanTier, "Free")
-	if quota.PaidPlan {
-		t.Fatal("PaidPlan = true for a free account")
-	}
-	if !quota.Exhausted {
-		t.Fatal("Exhausted = false, want the gateway's verdict")
-	}
+	testutil.False(t, quota.PaidPlan, "PaidPlan = true for a free account")
+	testutil.False(t, !quota.Exhausted, "Exhausted = false, want the gateway's verdict")
 	testutil.NotEqual(t, quota.UpgradeURL, "")
-	if !quota.PeriodEnd.After(quota.SyncedAt) {
-		t.Fatalf("PeriodEnd = %v, want a millisecond timestamp normalized to the future", quota.PeriodEnd)
-	}
+	testutil.Falsef(t, !quota.PeriodEnd.After(quota.SyncedAt), "PeriodEnd = %v, want a millisecond timestamp normalized to the future", quota.PeriodEnd)
 }
 
 // TestApplyQuotaStoresRemainingAsUsageCurrent pins the scheduling convention: the
@@ -73,15 +65,11 @@ func TestApplyQuotaStoresRemainingAsUsageCurrent(t *testing.T) {
 		UpgradeURL: "https://qoder.com/pricing?client=qoder",
 		SyncedAt:   synced,
 	})
-	if acc.UsageLimit != 100 || acc.UsageCurrent != 60 {
-		t.Fatalf("usage = %v/%v, want limit 100 and remaining 60", acc.UsageLimit, acc.UsageCurrent)
-	}
-	if acc.QoderQuota.PlanTier != "Pro" || acc.QoderQuota.Used != 40 {
-		t.Fatalf("snapshot = %+v", acc.QoderQuota)
-	}
-	if !acc.QoderQuota.SyncedAt.Equal(synced) {
-		t.Fatalf("snapshot sync time = %v, want the observation time %v", acc.QoderQuota.SyncedAt, synced)
-	}
+	testutil.Equal(t, acc.UsageLimit, 100)
+	testutil.Equal(t, acc.UsageCurrent, 60)
+	testutil.Equal(t, acc.QoderQuota.PlanTier, "Pro")
+	testutil.Equal(t, acc.QoderQuota.Used, 40)
+	testutil.Falsef(t, !acc.QoderQuota.SyncedAt.Equal(synced), "snapshot sync time = %v, want the observation time %v", acc.QoderQuota.SyncedAt, synced)
 }
 
 // TestQuotaExhaustedWithoutNumbersIsStillExhausted proves the gateway's verdict
@@ -103,12 +91,8 @@ func TestQuotaExhaustedWithoutNumbersIsStillExhausted(t *testing.T) {
 	client := NewFromAccount(signedTestAccount(), nil)
 	setTestEndpoints(client, server.URL, server.URL, server.URL)
 	quota, err := client.FetchQuota(context.Background())
-	if err != nil {
-		t.Fatalf("FetchQuota() error = %v", err)
-	}
-	if !quota.Exhausted {
-		t.Fatal("Exhausted = false despite the upstream verdict")
-	}
+	testutil.NoError(t, err, "FetchQuota() error = %v")
+	testutil.False(t, !quota.Exhausted, "Exhausted = false despite the upstream verdict")
 }
 
 // TestNextDailyBoundary proves the reset is derived, not invented.
@@ -118,12 +102,10 @@ func TestNextDailyBoundary(t *testing.T) {
 	start := timeDate(2026, 9, 21, 16, 0, 0)
 	now := timeDate(2026, 9, 22, 3, 0, 0)
 	next := nextDailyBoundary(start, now)
-	if want := timeDate(2026, 9, 22, 16, 0, 0); !next.Equal(want) {
-		t.Fatalf("nextDailyBoundary() = %v, want %v", next, want)
-	}
+	want := timeDate(2026, 9, 22, 16, 0, 0)
+	testutil.Falsef(t, !next.Equal(want), "nextDailyBoundary() = %v, want %v", next, want)
 	// A boundary already in the future is returned unchanged.
 	future := timeDate(2026, 10, 1, 0, 0, 0)
-	if got := nextDailyBoundary(future, now); !got.Equal(future) {
-		t.Fatalf("nextDailyBoundary(future) = %v, want %v", got, future)
-	}
+	got := nextDailyBoundary(future, now)
+	testutil.Falsef(t, !got.Equal(future), "nextDailyBoundary(future) = %v, want %v", got, future)
 }

@@ -3,6 +3,7 @@ package grok
 import (
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -210,12 +211,7 @@ func BuildPlanIsPaid(subscription string) bool {
 	if plan == "" || plan == "unknown" {
 		return false
 	}
-	for _, paid := range []string{"super", "pro", "heavy", "lite", "x_basic", "xbasic", "x_premium", "xpremium", "paid", "team", "enterprise"} {
-		if strings.Contains(plan, paid) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc([]string{"super", "pro", "heavy", "lite", "x_basic", "xbasic", "x_premium", "xpremium", "paid", "team", "enterprise"}, func(paid string) bool { return strings.Contains(plan, paid) })
 }
 
 // InferFreeProfile decides whether a Build account can be called Free.
@@ -225,10 +221,7 @@ func BuildPlanIsPaid(subscription string) bool {
 // fact. Free is inferred only from a successful zero-value billing profile or from
 // the upstream's own plan name.
 func InferFreeProfile(acc *store.Account) FreeProfileVerdict {
-	if acc == nil || ProviderForAccount(acc) != ProviderBuild {
-		return FreeProfileVerdict{}
-	}
-	if BuildPlanIsPaid(acc.Subscription) {
+	if acc == nil || ProviderForAccount(acc) != ProviderBuild || BuildPlanIsPaid(acc.Subscription) {
 		return FreeProfileVerdict{}
 	}
 	if !acc.GrokFreeQuota.ConfirmedAt.IsZero() {

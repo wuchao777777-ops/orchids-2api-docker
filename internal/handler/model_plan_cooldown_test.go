@@ -27,12 +27,8 @@ func planCooldownHandler(t *testing.T, model string, cool func(acc *store.Accoun
 	t.Helper()
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisDB: 0, RedisPrefix: "plancooldown:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-	})
+	testutil.NoError(t, err, "store.New() error = %v")
+	t.Cleanup(func() { _ = s.Close() })
 
 	ctx := context.Background()
 	acc := &store.Account{Name: "qoder-1", AccountType: "qoder", QoderRefreshToken: "rt", Enabled: true, Weight: 1}

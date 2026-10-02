@@ -167,9 +167,7 @@ func TestBuildOpenAIChunk(t *testing.T) {
 			}
 			var got openAIChunk
 			testutil.NoError(t, json.Unmarshal(raw, &got), "unmarshal output: %v")
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("got=%#v want=%#v", got, tt.want)
-			}
+			testutil.Falsef(t, !reflect.DeepEqual(got, tt.want), "got=%#v want=%#v", got, tt.want)
 		})
 	}
 }
@@ -235,9 +233,7 @@ func TestBuildOpenAIChunkFastMatchesSlow(t *testing.T) {
 			testutil.NoError(t, json.Unmarshal(fastRaw, &fastChunk), "unmarshal fast output: %v")
 			var slowChunk openAIChunk
 			testutil.NoError(t, json.Unmarshal(slowRaw, &slowChunk), "unmarshal slow output: %v")
-			if !reflect.DeepEqual(fastChunk, slowChunk) {
-				t.Fatalf("fast=%#v slow=%#v", fastChunk, slowChunk)
-			}
+			testutil.Falsef(t, !reflect.DeepEqual(fastChunk, slowChunk), "fast=%#v slow=%#v", fastChunk, slowChunk)
 		})
 	}
 }
@@ -279,9 +275,7 @@ func TestAppendOpenAIChunkMatchesBuild(t *testing.T) {
 			if !gotOK {
 				return
 			}
-			if !bytes.Equal(got, want) {
-				t.Fatalf("got=%s want=%s", got, want)
-			}
+			testutil.Falsef(t, !bytes.Equal(got, want), "got=%s want=%s", got, want)
 			buf = got[:0]
 		})
 	}

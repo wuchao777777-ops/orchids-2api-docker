@@ -30,9 +30,8 @@ func TestHandleKeyByIDRotatesSecret(t *testing.T) {
 	testutil.Equal(t, createRec.Code, http.StatusCreated)
 	var created CreateKeyResponse
 	testutil.NoError(t, json.Unmarshal(createRec.Body.Bytes(), &created), "decode create response: %v")
-	if _, err := s.AuthorizeApiKey(ctx, created.Key); err != nil {
-		t.Fatalf("freshly created key does not authorize: %v", err)
-	}
+	_, err := s.AuthorizeApiKey(ctx, created.Key)
+	testutil.CheckNoError(t, err)
 
 	rotateReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/keys/%d/rotate", created.ID), nil)
 	rotateRec := httptest.NewRecorder()
@@ -40,20 +39,15 @@ func TestHandleKeyByIDRotatesSecret(t *testing.T) {
 	testutil.Equal(t, rotateRec.Code, http.StatusOK)
 	var rotated CreateKeyResponse
 	testutil.NoError(t, json.Unmarshal(rotateRec.Body.Bytes(), &rotated), "decode rotate response: %v")
-	if rotated.Key == "" || rotated.Key == created.Key {
-		t.Fatalf("rotated key = %q, want a new secret distinct from %q", rotated.Key, created.Key)
-	}
-	if rotated.ID != created.ID || rotated.Name != created.Name {
-		t.Fatalf("rotation changed the key identity: %#v vs %#v", rotated, created)
-	}
+	testutil.Falsef(t, rotated.Key == "" || rotated.Key == created.Key, "rotated key = %q, want a new secret distinct from %q", rotated.Key, created.Key)
+	testutil.Equal(t, rotated.ID, created.ID)
+	testutil.Equal(t, rotated.Name, created.Name)
 	testutil.Equal(t, rotated.KeySuffix, rotated.Key[len(rotated.Key)-4:])
 
-	if _, err := s.AuthorizeApiKey(ctx, rotated.Key); err != nil {
-		t.Fatalf("rotated key does not authorize: %v", err)
-	}
-	if _, err := s.AuthorizeApiKey(ctx, created.Key); err == nil {
-		t.Fatal("the retired secret still authorizes after rotation")
-	}
+	_, err = s.AuthorizeApiKey(ctx, rotated.Key)
+	testutil.CheckNoError(t, err)
+	_, err = s.AuthorizeApiKey(ctx, created.Key)
+	testutil.Error(t, err)
 
 	// The list must keep withholding the secret; rotation is the reveal path,
 	// not the listing endpoint.
@@ -95,7 +89,6 @@ func TestHandleKeyByIDRejectsUnknownAction(t *testing.T) {
 	}
 
 	// Neither refused request may have replaced the secret.
-	if _, err := s.AuthorizeApiKey(context.Background(), created.Key); err != nil {
-		t.Fatalf("refused requests rotated the key anyway: %v", err)
-	}
+	_, err := s.AuthorizeApiKey(context.Background(), created.Key)
+	testutil.CheckNoError(t, err)
 }

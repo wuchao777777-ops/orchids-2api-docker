@@ -25,16 +25,12 @@ func TestAuthorizeApiKeyBasicValidation(t *testing.T) {
 	}
 	testutil.NoError(t, s.CreateApiKey(context.Background(), key), "CreateApiKey() error = %v")
 
-	if authorized, err := s.AuthorizeApiKey(context.Background(), raw); err != nil || authorized == nil {
-		t.Fatalf("AuthorizeApiKey(valid) = %#v, %v", authorized, err)
-	}
+	authorized, err := s.AuthorizeApiKey(context.Background(), raw)
+	testutil.Falsef(t, err != nil || authorized == nil, "AuthorizeApiKey(valid) = %#v, %v", authorized, err)
 	persisted, err := s.GetApiKeyByID(context.Background(), key.ID)
-	if err != nil || persisted.LastUsedAt == nil {
-		t.Fatalf("unlimited key last_used_at was not persisted: key=%#v err=%v", persisted, err)
-	}
-	if rawRecord, err := mini.Get("auth-test:api_keys:id:1"); err != nil || strings.Contains(rawRecord, raw) || strings.Contains(rawRecord, "key_full") {
-		t.Fatalf("Redis must not contain the plaintext key: record=%q err=%v", rawRecord, err)
-	}
+	testutil.Falsef(t, err != nil || persisted.LastUsedAt == nil, "unlimited key last_used_at was not persisted: key=%#v err=%v", persisted, err)
+	rawRecord, err := mini.Get("auth-test:api_keys:id:1")
+	testutil.Falsef(t, err != nil || strings.Contains(rawRecord, raw) || strings.Contains(rawRecord, "key_full"), "Redis must not contain the plaintext key: record=%q err=%v", rawRecord, err)
 	if _, err = s.AuthorizeApiKey(context.Background(), "sk-wrong"); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("AuthorizeApiKey(wrong) error = %v, want ErrNoRows", err)
 	}
@@ -63,17 +59,12 @@ func TestAuthorizeApiKeyPolicyAndRPM(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		got, err := s.AuthorizeApiKey(context.Background(), raw)
-		if err != nil || got == nil || len(got.AllowedModels) != 1 || got.AllowedModels[0] != "grok-4.6" {
-			t.Fatalf("AuthorizeApiKey(%d) = %#v, %v", i, got, err)
-		}
+		testutil.Falsef(t, err != nil || got == nil || len(got.AllowedModels) != 1 || got.AllowedModels[0] != "grok-4.6", "AuthorizeApiKey(%d) = %#v, %v", i, got, err)
 	}
 	persisted, err := s.GetApiKeyByID(context.Background(), key.ID)
-	if err != nil || persisted.LastUsedAt == nil {
-		t.Fatalf("last_used_at was not persisted: key=%#v err=%v", persisted, err)
-	}
-	if _, err := s.AuthorizeApiKey(context.Background(), raw); err != ErrApiKeyRateLimited {
-		t.Fatalf("third AuthorizeApiKey() error = %v, want %v", err, ErrApiKeyRateLimited)
-	}
+	testutil.Falsef(t, err != nil || persisted.LastUsedAt == nil, "last_used_at was not persisted: key=%#v err=%v", persisted, err)
+	_, err = s.AuthorizeApiKey(context.Background(), raw)
+	testutil.CheckEqual(t, err, ErrApiKeyRateLimited)
 }
 
 func TestAuthorizeApiKeyRejectsExpiredKey(t *testing.T) {
@@ -91,9 +82,8 @@ func TestAuthorizeApiKeyRejectsExpiredKey(t *testing.T) {
 		ExpiresAt: &expiresAt,
 	}
 	testutil.NoError(t, s.CreateApiKey(context.Background(), key), "CreateApiKey() error = %v")
-	if _, err := s.AuthorizeApiKey(context.Background(), raw); err != ErrApiKeyExpired {
-		t.Fatalf("AuthorizeApiKey() error = %v, want %v", err, ErrApiKeyExpired)
-	}
+	_, err := s.AuthorizeApiKey(context.Background(), raw)
+	testutil.CheckEqual(t, err, ErrApiKeyExpired)
 }
 
 func TestUpdateApiKeyPolicyPersists(t *testing.T) {
@@ -107,10 +97,6 @@ func TestUpdateApiKeyPolicyPersists(t *testing.T) {
 	key.ExpiresAt = &expiresAt
 	testutil.NoError(t, s.UpdateApiKey(context.Background(), key), "UpdateApiKey() error = %v")
 	got, err := s.GetApiKeyByID(context.Background(), key.ID)
-	if err != nil {
-		t.Fatalf("GetApiKeyByID() error = %v", err)
-	}
-	if got.RPMLimit != 17 || got.ExpiresAt == nil || !got.ExpiresAt.Equal(expiresAt) || len(got.AllowedModels) != 2 {
-		t.Fatalf("persisted key = %#v", got)
-	}
+	testutil.NoError(t, err, "GetApiKeyByID() error = %v")
+	testutil.Falsef(t, got.RPMLimit != 17 || got.ExpiresAt == nil || !got.ExpiresAt.Equal(expiresAt) || len(got.AllowedModels) != 2, "persisted key = %#v", got)
 }

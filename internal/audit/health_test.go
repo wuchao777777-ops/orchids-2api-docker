@@ -14,9 +14,7 @@ func TestSinkHealthReportsPersistenceFailure(t *testing.T) {
 	logger.Log(context.Background(), Event{Action: "test"})
 	logger.Close()
 	health := logger.Health()
-	if health.WriteFailed != 1 || health.Written != 0 || health.LastFailure == nil || health.Queue != 0 || health.QueuedBytes != 0 {
-		t.Fatalf("health = %+v", health)
-	}
+	testutil.Falsef(t, health.WriteFailed != 1 || health.Written != 0 || health.LastFailure == nil || health.Queue != 0 || health.QueuedBytes != 0, "health = %+v", health)
 }
 
 func TestSinkRejectsOversizeAndSnapshotsMetadata(t *testing.T) {
@@ -29,9 +27,7 @@ func TestSinkRejectsOversizeAndSnapshotsMetadata(t *testing.T) {
 	logger.Close()
 	logger.Log(context.Background(), Event{Action: "after-close"})
 	health := logger.Health()
-	if health.Dropped != 2 || health.Written != 1 || health.LastSuccess == nil {
-		t.Fatalf("health = %+v", health)
-	}
+	testutil.Falsef(t, health.Dropped != 2 || health.Written != 1 || health.LastSuccess == nil, "health = %+v", health)
 	events := readLoggedEvents(t, logger, 1)
 	testutil.Equal(t, events[0].Metadata["value"], "original")
 }

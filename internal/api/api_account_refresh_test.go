@@ -19,9 +19,7 @@ func newTestAPI(t *testing.T) (*API, *store.Store, func()) {
 
 	s, _ := newTestStore(t, "api_test:")
 
-	return New(s, "", "", &config.Config{}), s, func() {
-		_ = s.Close()
-	}
+	return New(s, "", "", &config.Config{}), s, func() { _ = s.Close() }
 }
 
 func TestHandleAccountByID_PutPreservesGrokOAuthTokens(t *testing.T) {
@@ -49,14 +47,10 @@ func TestHandleAccountByID_PutPreservesGrokOAuthTokens(t *testing.T) {
 	testutil.Equal(t, rec.Code, http.StatusOK)
 
 	got, err := s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, got.OAuthAccessToken, "keep-access")
 	testutil.Equal(t, got.OAuthRefreshToken, "keep-refresh")
-	if got.Enabled {
-		t.Fatal("expected enabled=false after update")
-	}
+	testutil.False(t, got.Enabled, "expected enabled=false after update")
 	testutil.Equal(t, got.TeamID, "team-1")
 }
 

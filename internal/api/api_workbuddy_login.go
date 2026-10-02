@@ -113,47 +113,15 @@ func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
 	}
 	client := login.factory(nil, login.configSnapshot)
 	defer client.Close()
-
-	for {
-		login, ok := awaitLoginPoll(ctx, a.workbuddyLogins, id, "WorkBuddy")
-		if !ok {
-			return
-		}
-
-		reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		creds, err := client.PollAuthLogin(reqCtx, login.deviceCode)
-		cancel()
-		if err != nil {
-			if errors.Is(err, workbuddy.ErrAuthPending) {
-				continue
-			}
-			if ctx.Err() != nil {
-				return
-			}
-			// Authorization itself failed (state consumed, cancelled, or the
-			// upstream rejected it). Report it without echoing upstream text.
-			slog.Warn("WorkBuddy authorization failed", "login_id", id, "error", err)
-			a.workbuddyLogins.finish(id, "failed", "WorkBuddy authorization failed; start again", 0)
-			return
-		}
-
-		account, err := a.buildWorkBuddyAccountFromCredentialsWithFactory(ctx, id, creds, login.configSnapshot, login.factory)
-		if err != nil {
-			slog.Warn("WorkBuddy authorization succeeded but verification failed", "login_id", id, "error", err)
-			a.workbuddyLogins.finish(id, "failed", "WorkBuddy authorization succeeded but the account could not be verified", 0)
-			return
-		}
-		if ctx.Err() != nil || !a.workbuddyLogins.pending(id) {
-			return
-		}
-		if login.enabledKnown {
-			account.Enabled = login.enabled
-		}
-		finishBrowserLogin(a, ctx, a.workbuddyLogins, id, "WorkBuddy", account, func(acc *store.Account) {
+	pollBrowserLogin(a, ctx, a.workbuddyLogins, id, "WorkBuddy", workbuddy.ErrAuthPending,
+		func(reqCtx context.Context, login *workbuddyLogin) (workbuddy.Credentials, error) {
+			return client.PollAuthLogin(reqCtx, login.deviceCode)
+		},
+		func(login *workbuddyLogin, creds workbuddy.Credentials) (*store.Account, error) {
+			return a.buildWorkBuddyAccountFromCredentialsWithFactory(ctx, id, creds, login.configSnapshot, login.factory)
+		}, func(acc *store.Account) {
 			acc.ReplaceWorkBuddyCredentials = true
 		})
-		return
-	}
 }
 
 // buildWorkBuddyAccountFromCredentials turns a completed login into a verified

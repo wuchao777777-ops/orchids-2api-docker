@@ -31,14 +31,11 @@ func TestTLSALPNToRealHost(t *testing.T) {
 		t.Skip("set TLS_PROBE_HOST=host:port")
 	}
 	conn, err := (&net.Dialer{Timeout: 15 * time.Second}).Dial("tcp", host)
-	if err != nil {
-		t.Fatalf("dial %s: %v", host, err)
-	}
+	testutil.Falsef(t, err != nil, "dial %s: %v", host, err)
 	defer conn.Close()
 	tlsConn := tls.Client(conn, &tls.Config{ServerName: strings.Split(host, ":")[0]})
-	if err := tlsConn.Handshake(); err != nil {
-		t.Fatalf("handshake %s: %v", host, err)
-	}
+	err := tlsConn.Handshake()
+	testutil.CheckNoError(t, err)
 	state := tlsConn.ConnectionState()
 	fmt.Printf("ALPN host=%s negotiated=%q version=%#x\n", host, state.NegotiatedProtocol, state.Version)
 
@@ -77,9 +74,7 @@ func TestSharedTransportProtocolAgainstLocalH2(t *testing.T) {
 	}
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
 	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("local h2 request: %v", err)
-	}
+	testutil.NoError(t, err, "local h2 request: %v")
 	defer resp.Body.Close()
 	var out map[string]string
 	testutil.NoError(t, json.NewDecoder(resp.Body).Decode(&out), "decode: %v")

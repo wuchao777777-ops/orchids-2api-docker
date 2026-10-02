@@ -31,23 +31,15 @@ func TestPersistAccountCatalogSnapshotChannels(t *testing.T) {
 			want := []string{"model-a", "model-b"}
 			persistAccountCatalogSnapshot(ctx, s, acc, tt.channel, want, "test update failure")
 			got, err := s.GetAccount(ctx, acc.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(tt.ids(got), want) {
-				t.Fatalf("persisted ids = %v; want %v", tt.ids(got), want)
-			}
+			testutil.NoError(t, err)
+			testutil.Falsef(t, !reflect.DeepEqual(tt.ids(got), want), "persisted ids = %v; want %v", tt.ids(got), want)
 			stamp := tt.synced(got)
-			if stamp.Before(before) || stamp.After(time.Now()) {
-				t.Fatalf("persisted timestamp = %v, not within refresh interval", stamp)
-			}
+			testutil.Falsef(t, stamp.Before(before) || stamp.After(time.Now()), "persisted timestamp = %v, not within refresh interval", stamp)
 			// An empty observation must preserve the in-memory and stored last-known-good snapshot and timestamp.
 			for _, empty := range [][]string{nil, {}} {
 				persistAccountCatalogSnapshot(ctx, s, acc, tt.channel, empty, "test update failure")
 				after, err := s.GetAccount(ctx, acc.ID)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testutil.NoError(t, err)
 				if !reflect.DeepEqual(tt.ids(after), want) || !tt.synced(after).Equal(stamp) ||
 					!reflect.DeepEqual(tt.ids(acc), want) || !tt.synced(acc).Equal(stamp) {
 					t.Fatalf("empty observation changed snapshot: stored=%v/%v in-memory=%v/%v", tt.ids(after), tt.synced(after), tt.ids(acc), tt.synced(acc))
@@ -64,15 +56,11 @@ func TestPersistAccountCatalogSnapshotZeroIDPreservesAutoBehavior(t *testing.T) 
 	defer cleanup()
 	acc := &store.Account{}
 	persistAccountCatalogSnapshot(context.Background(), s, acc, "cline", []string{"m"}, "test update failure")
-	if !reflect.DeepEqual(acc.ClineModelIDs, []string{"m"}) || acc.ClineModelsSyncedAt.IsZero() {
-		t.Fatalf("zero-ID automatic snapshot was not mutated: %+v", acc)
-	}
+	testutil.Falsef(t, !reflect.DeepEqual(acc.ClineModelIDs, []string{"m"}) || acc.ClineModelsSyncedAt.IsZero(), "zero-ID automatic snapshot was not mutated: %+v", acc)
 	// Manual discovery keeps its pre-existing zero-ID guard.
 	manual := &store.Account{}
 	persistQoderCatalogSnapshot(context.Background(), nil, manual, nil)
 	persistWorkBuddyCatalogSnapshot(context.Background(), nil, manual, nil)
 	persistClineCatalogSnapshot(context.Background(), nil, manual, nil)
-	if !manual.QoderModelsSyncedAt.IsZero() || !manual.WorkBuddyModelsSyncedAt.IsZero() || !manual.ClineModelsSyncedAt.IsZero() {
-		t.Fatalf("zero-ID manual discovery mutated the account: %+v", manual)
-	}
+	testutil.Falsef(t, !manual.QoderModelsSyncedAt.IsZero() || !manual.WorkBuddyModelsSyncedAt.IsZero() || !manual.ClineModelsSyncedAt.IsZero(), "zero-ID manual discovery mutated the account: %+v", manual)
 }

@@ -72,9 +72,8 @@ func TestCatalogRequestCarriesTheClineProductIdentity(t *testing.T) {
 		control: server.Client(),
 		creds:   Credentials{AccessToken: "access-1"},
 	}
-	if _, err := client.FetchUpstreamModels(context.Background()); err != nil {
-		t.Fatalf("FetchUpstreamModels() error = %v", err)
-	}
+	_, err := client.FetchUpstreamModels(context.Background())
+	testutil.CheckNoError(t, err)
 	for name, want := range defaultClientHeaders {
 		testutil.CheckEqual(t, seen.Get(name), want)
 	}
@@ -108,9 +107,7 @@ func TestChat401RefreshRetryRebuildsThePOSTBody(t *testing.T) {
 		case "/chat/completions":
 			attempt := chatAttempts.Add(1)
 			raw, _ := io.ReadAll(r.Body)
-			if len(raw) == 0 || !strings.Contains(string(raw), `"content":"retry body"`) {
-				t.Errorf("attempt %d body=%q, want the complete POST body", attempt, raw)
-			}
+			testutil.CheckFalsef(t, len(raw) == 0 || !strings.Contains(string(raw), `"content":"retry body"`), "attempt %d body=%q, want the complete POST body", attempt, raw)
 			if attempt == 1 {
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = io.WriteString(w, `{"error":{"message":"expired"}}`)
@@ -142,9 +139,7 @@ func TestChat401RefreshRetryRebuildsThePOSTBody(t *testing.T) {
 	}, nil, nil); err != nil {
 		t.Fatalf("SendRequestWithPayload() error=%v", err)
 	}
-	if chatAttempts.Load() != 2 || refreshAttempts.Load() != 1 {
-		t.Fatalf("chat attempts=%d refresh attempts=%d", chatAttempts.Load(), refreshAttempts.Load())
-	}
+	testutil.Falsef(t, chatAttempts.Load() != 2 || refreshAttempts.Load() != 1, "chat attempts=%d refresh attempts=%d", chatAttempts.Load(), refreshAttempts.Load())
 }
 
 // TestClassifyStatusKeepsAForbiddenOutOfTheCredentialPath guards the other half
@@ -155,13 +150,9 @@ func TestClassifyStatusKeepsAForbiddenOutOfTheCredentialPath(t *testing.T) {
 	t.Parallel()
 
 	forbidden := classifyStatus(http.StatusForbidden, []byte(`{"error":{"message":"cline-free/x is only available via Cline product surfaces"}}`))
-	if isUnauthorized(forbidden) {
-		t.Error("403 must not be treated as unauthorized: a refresh cannot repair it")
-	}
+	testutil.CheckFalse(t, isUnauthorized(forbidden), "403 must not be treated as unauthorized: a refresh cannot repair it")
 	testutil.CheckContainAll(t, forbidden.Error(), "status=403", "cline-free/x")
 
 	unauthorized := classifyStatus(http.StatusUnauthorized, []byte(`{"error":{"message":"token expired"}}`))
-	if !isUnauthorized(unauthorized) {
-		t.Error("401 must stay unauthorized so one refresh is attempted")
-	}
+	testutil.CheckFalse(t, !isUnauthorized(unauthorized), "401 must stay unauthorized so one refresh is attempted")
 }

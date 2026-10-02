@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestPreserveClineCredentialsOnEditKeepsCatalogTimestamp(t *testing.T) {
@@ -17,10 +18,7 @@ func TestPreserveClineCredentialsOnEditKeepsCatalogTimestamp(t *testing.T) {
 	}
 	edited := &store.Account{}
 	PreserveClineCredentialsOnEdit(edited, existing)
-	if len(edited.ClineModelIDs) != 1 || edited.ClineModelIDs[0] != "model-a" {
-		t.Fatalf("ClineModelIDs = %v, want stored snapshot", edited.ClineModelIDs)
-	}
-	if !edited.ClineModelsSyncedAt.Equal(syncedAt) {
-		t.Fatalf("ClineModelsSyncedAt = %v, want %v", edited.ClineModelsSyncedAt, syncedAt)
-	}
+	testutil.Equal(t, len(edited.ClineModelIDs), 1)
+	testutil.Equal(t, edited.ClineModelIDs[0], "model-a")
+	testutil.Falsef(t, !edited.ClineModelsSyncedAt.Equal(syncedAt), "ClineModelsSyncedAt = %v, want %v", edited.ClineModelsSyncedAt, syncedAt)
 }

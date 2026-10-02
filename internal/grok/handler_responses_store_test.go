@@ -52,21 +52,15 @@ func TestBuildStoredResponseLifecycleAndOwnerIsolation(t *testing.T) {
 	}
 
 	created := call("owner-a", http.MethodPost, "/v1/responses", `{"model":"grok-4.6","input":"hello","stream":false}`, h.HandleResponses)
-	if created.Code != http.StatusOK || !strings.Contains(created.Body.String(), "resp_owned") {
-		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
-	}
+	testutil.Falsef(t, created.Code != http.StatusOK || !strings.Contains(created.Body.String(), "resp_owned"), "create status=%d body=%s", created.Code, created.Body.String())
 	deniedContinuation := call("owner-b", http.MethodPost, "/v1/responses", `{"model":"grok-4.6","input":"continue","stream":false,"previous_response_id":"resp_owned"}`, h.HandleResponses)
 	testutil.Equal(t, deniedContinuation.Code, http.StatusNotFound)
 	denied := call("owner-b", http.MethodGet, "/v1/responses/resp_owned", "", h.HandleResponseResource)
 	testutil.Equal(t, denied.Code, http.StatusNotFound)
 	got := call("owner-a", http.MethodGet, "/v1/responses/resp_owned", "", h.HandleResponseResource)
-	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), "resp_owned") {
-		t.Fatalf("get status=%d body=%s", got.Code, got.Body.String())
-	}
+	testutil.Falsef(t, got.Code != http.StatusOK || !strings.Contains(got.Body.String(), "resp_owned"), "get status=%d body=%s", got.Code, got.Body.String())
 	deleted := call("owner-a", http.MethodDelete, "/v1/responses/resp_owned", "", h.HandleResponseResource)
-	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deleted":true`) {
-		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
-	}
+	testutil.Falsef(t, deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deleted":true`), "delete status=%d body=%s", deleted.Code, deleted.Body.String())
 	missing := call("owner-a", http.MethodGet, "/v1/responses/resp_owned", "", h.HandleResponseResource)
 	testutil.Equal(t, missing.Code, http.StatusNotFound)
 	testutil.Equal(t, len(calls), 3)
@@ -104,9 +98,7 @@ func TestBuildPreviousResponsePinsCreatingAccount(t *testing.T) {
 	_ = json.Unmarshal(first.Body.Bytes(), &firstBody)
 	second := request(`{"model":"grok-4.6","input":"second","stream":false,"previous_response_id":"` + parseLooseStringAny(firstBody["id"]) + `"}`)
 	testutil.Equal(t, second.Code, http.StatusOK)
-	if len(authHeaders) != 2 || authHeaders[0] == "" || authHeaders[0] != authHeaders[1] {
-		t.Fatalf("requests were not pinned to the creating account: %v", authHeaders)
-	}
+	testutil.Falsef(t, len(authHeaders) != 2 || authHeaders[0] == "" || authHeaders[0] != authHeaders[1], "requests were not pinned to the creating account: %v", authHeaders)
 }
 
 func TestResponsesCompactForcesNonStreamingNativeEndpoint(t *testing.T) {
@@ -127,9 +119,7 @@ func TestResponsesCompactForcesNonStreamingNativeEndpoint(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.HandleResponsesCompact(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "encrypted_content") {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	testutil.Falsef(t, rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "encrypted_content"), "status=%d body=%s", rec.Code, rec.Body.String())
 }
 
 func configureStoredResponseTestHandler(t *testing.T, h *Handler, s *store.Store, upstream *httptest.Server) {
@@ -160,7 +150,6 @@ func buildTestAccount(t *testing.T, userID, teamID string) *store.Account {
 func TestResponseIDCaptureFromSSE(t *testing.T) {
 	input := "event: response.completed\ndata: {\"response\":\ndata: {\"id\":\"resp_stream\"}}\n\n"
 	recorder := httptest.NewRecorder()
-	if got, _, _ := copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6"); got != "resp_stream" {
-		t.Fatalf("response id=%q", got)
-	}
+	got, _, _ := copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6")
+	testutil.Falsef(t, got != "resp_stream", "response id=%q", got)
 }

@@ -21,7 +21,5 @@ func TestApplyCLIBillingDerivesPercentFromMonthly(t *testing.T) {
 	info := &CLIBillingInfo{MonthlyLimit: 200, MonthlyUsed: 50, HasMonthly: true}
 	acc := &store.Account{}
 	ApplyCLIBillingInfo(acc, info)
-	if !acc.GrokBilling.Weekly.HasUsage || acc.GrokBilling.Weekly.UsagePercent != 25 {
-		t.Fatalf("derived percent not persisted: %+v", acc.GrokBilling)
-	}
+	testutil.Falsef(t, !acc.GrokBilling.Weekly.HasUsage || acc.GrokBilling.Weekly.UsagePercent != 25, "derived percent not persisted: %+v", acc.GrokBilling)
 }

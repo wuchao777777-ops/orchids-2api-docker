@@ -54,10 +54,9 @@ func TestParseResponsesResourcePath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		id, action, ok := parseResponsesResourcePath(tc.path)
-		if ok != tc.wantOK || id != tc.wantID || action != tc.wantAction {
-			t.Fatalf("parseResponsesResourcePath(%q) = (%q, %q, %v), want (%q, %q, %v)",
-				tc.path, id, action, ok, tc.wantID, tc.wantAction, tc.wantOK)
-		}
+		testutil.Equal(t, ok, tc.wantOK)
+		testutil.Equal(t, id, tc.wantID)
+		testutil.Equal(t, action, tc.wantAction)
 		wantAction := ""
 		if tc.wantAction == responsesActionCancel || tc.wantAction == responsesActionInputItems {
 			wantAction = tc.wantAction
@@ -76,9 +75,8 @@ func TestResponsesInputItemsJSONNormalizesEveryInputShape(t *testing.T) {
 	var fromString []map[string]interface{}
 	testutil.NoError(t, json.Unmarshal(responsesInputItemsJSON("hello"), &fromString), "string input did not normalize: %v")
 	testutil.Equal(t, len(fromString), 1)
-	if fromString[0]["type"] != "message" || fromString[0]["role"] != "user" {
-		t.Fatalf("string input item = %#v", fromString[0])
-	}
+	testutil.Equal(t, fromString[0]["type"], "message")
+	testutil.Equal(t, fromString[0]["role"], "user")
 	if !strings.HasPrefix(interfaceString(fromString[0]["id"]), "msg_") {
 		t.Fatalf("string input item id = %#v, want a msg_ id", fromString[0]["id"])
 	}
@@ -95,14 +93,11 @@ func TestResponsesInputItemsJSONNormalizesEveryInputShape(t *testing.T) {
 	testutil.Equal(t, len(fromArray), 2)
 	testutil.Equal(t, fromArray[1]["id"], "fc_known")
 	for i, item := range fromArray {
-		if interfaceString(item["id"]) == "" || interfaceString(item["status"]) == "" {
-			t.Fatalf("item %d is missing id/status: %#v", i, item)
-		}
+		testutil.Falsef(t, interfaceString(item["id"]) == "" || interfaceString(item["status"]) == "", "item %d is missing id/status: %#v", i, item)
 	}
 
-	if got := responsesInputItemsJSON(nil); got != nil {
-		t.Fatalf("nil input produced %s, want no stored items", got)
-	}
+	got := responsesInputItemsJSON(nil)
+	testutil.Falsef(t, got != nil, "nil input produced %s, want no stored items", got)
 }
 
 func TestResponsesInputItemsServesPersistedItems(t *testing.T) {
@@ -132,19 +127,15 @@ func TestResponsesInputItemsServesPersistedItems(t *testing.T) {
 		FirstID string                   `json:"first_id"`
 		LastID  string                   `json:"last_id"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode input_items: %v (%s)", err, rec.Body.String())
-	}
-	if payload.Object != "list" || len(payload.Data) != 1 {
-		t.Fatalf("payload = %#v, want a one-item list", payload)
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &payload)
+	testutil.CheckNoError(t, err)
+	testutil.Equal(t, payload.Object, "list")
+	testutil.Equal(t, len(payload.Data), 1)
 	content, _ := payload.Data[0]["content"].([]interface{})
 	testutil.Equal(t, len(content), 1)
 	part, _ := content[0].(map[string]interface{})
 	testutil.Equal(t, part["text"], "first turn")
-	if payload.FirstID == "" || payload.FirstID != payload.LastID {
-		t.Fatalf("first_id/last_id = %q/%q, want the single item id", payload.FirstID, payload.LastID)
-	}
+	testutil.Falsef(t, payload.FirstID == "" || payload.FirstID != payload.LastID, "first_id/last_id = %q/%q, want the single item id", payload.FirstID, payload.LastID)
 }
 
 func TestResponsesInputItemsUnknownResponseIs404(t *testing.T) {
@@ -165,17 +156,13 @@ func TestResponsesSubResourcesRejectWrongMethod(t *testing.T) {
 	cancel := ResponsesCancelHandler(opts)
 	rec := httptest.NewRecorder()
 	cancel(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/resp_1/cancel", nil))
-	if rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Header().Get("Allow"), "POST") {
-		t.Fatalf("cancel GET: status=%d Allow=%q", rec.Code, rec.Header().Get("Allow"))
-	}
+	testutil.Falsef(t, rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Header().Get("Allow"), "POST"), "cancel GET: status=%d Allow=%q", rec.Code, rec.Header().Get("Allow"))
 	testutil.MustContain(t, rec.Body.String(), `"error"`)
 
 	items := ResponsesInputItemsHandler(opts)
 	rec = httptest.NewRecorder()
 	items(rec, httptest.NewRequest(http.MethodPost, "/v1/responses/resp_1/input_items", nil))
-	if rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Header().Get("Allow"), "GET") {
-		t.Fatalf("input_items POST: status=%d Allow=%q", rec.Code, rec.Header().Get("Allow"))
-	}
+	testutil.Falsef(t, rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Header().Get("Allow"), "GET"), "input_items POST: status=%d Allow=%q", rec.Code, rec.Header().Get("Allow"))
 }
 
 // TestResponsesCancelFlipsStoredStatus covers the whole observable contract:
@@ -200,19 +187,15 @@ func TestResponsesCancelFlipsStoredStatus(t *testing.T) {
 	cancel(first, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses/"+id+"/cancel", nil))
 	testutil.Equal(t, first.Code, http.StatusOK)
 	var cancelled map[string]interface{}
-	if err := json.Unmarshal(first.Body.Bytes(), &cancelled); err != nil {
-		t.Fatalf("decode cancel body: %v (%s)", err, first.Body.String())
-	}
-	if cancelled["status"] != "cancelled" || cancelled["id"] != id {
-		t.Fatalf("cancel body = %#v", cancelled)
-	}
+	err := json.Unmarshal(first.Body.Bytes(), &cancelled)
+	testutil.CheckNoError(t, err)
+	testutil.Equal(t, cancelled["status"], "cancelled")
+	testutil.EqualAny(t, cancelled["id"], id)
 	output, _ := cancelled["output"].([]interface{})
 	testutil.Equal(t, len(output), 1)
 
 	record, err := opts.store().GetStoredResponse(nil, id, "anonymous") //nolint:staticcheck // see above
-	if err != nil {
-		t.Fatalf("GetStoredResponse() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetStoredResponse() error = %v")
 	testutil.MustContain(t, string(record.Body), `"status":"cancelled"`)
 
 	second := httptest.NewRecorder()
@@ -227,9 +210,7 @@ func TestResponsesCancelUnknownResponseIs404(t *testing.T) {
 	cancel := ResponsesCancelHandler(ResponsesBridgeOptions{Store: store.NewMemoryResponseStore(0)})
 	rec := httptest.NewRecorder()
 	cancel(rec, httptest.NewRequest(http.MethodPost, "/v1/responses/resp_missing/cancel", nil))
-	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "response_not_found") {
-		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
-	}
+	testutil.Falsef(t, rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "response_not_found"), "status = %d body = %s", rec.Code, rec.Body.String())
 }
 
 // TestResponsesCancelAnswersBuildOwnershipRecords guards the build record case:
@@ -250,12 +231,11 @@ func TestResponsesCancelAnswersBuildOwnershipRecords(t *testing.T) {
 	ResponsesCancelHandler(opts)(rec, httptest.NewRequest(http.MethodPost, "/grok/v1/responses/"+id+"/cancel", nil))
 	testutil.Equal(t, rec.Code, http.StatusOK)
 	var decoded map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
-		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
-	}
-	if decoded["status"] != "cancelled" || decoded["id"] != id || decoded["model"] != "grok-4.6" {
-		t.Fatalf("body = %#v", decoded)
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &decoded)
+	testutil.CheckNoError(t, err)
+	testutil.Equal(t, decoded["status"], "cancelled")
+	testutil.EqualAny(t, decoded["id"], id)
+	testutil.Equal(t, decoded["model"], "grok-4.6")
 }
 
 // TestResponsesBridgeForwardsTextFormatAndInclude is gap ②/③: the bridge used
@@ -285,13 +265,10 @@ func TestResponsesBridgeForwardsTextFormatAndInclude(t *testing.T) {
 		t.Fatalf("response_format = %#v, want the text.format object", inner["response_format"])
 	}
 	include, _ := inner["include"].([]interface{})
-	if len(include) != 1 || include[0] != "reasoning.encrypted_content" {
-		t.Fatalf("include = %#v", inner["include"])
-	}
+	testutil.Equal(t, len(include), 1)
+	testutil.Equal(t, include[0], "reasoning.encrypted_content")
 	text, _ := inner["text"].(map[string]interface{})
-	if text == nil {
-		t.Fatalf("text controls were dropped: %#v", inner)
-	}
+	testutil.Falsef(t, text == nil, "text controls were dropped: %#v", inner)
 }
 
 // TestResponsesBridgePrefersTextFormatOverResponseFormat pins precedence: when a
@@ -338,24 +315,19 @@ func TestResponsesBridgeMemoryFallbackStoresResponses(t *testing.T) {
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"hi","store":true}`)))
 	testutil.Equal(t, create.Code, http.StatusOK)
 	var created map[string]interface{}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatalf("decode: %v (%s)", err, create.Body.String())
-	}
+	err := json.Unmarshal(create.Body.Bytes(), &created)
+	testutil.CheckNoError(t, err)
 	responseID, _ := created["id"].(string)
 	testutil.NotEqual(t, responseID, "")
 
 	get := httptest.NewRecorder()
 	resource(get, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID, nil))
-	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), "fallback-answer") {
-		t.Fatalf("get status=%d body=%s", get.Code, get.Body.String())
-	}
+	testutil.Falsef(t, get.Code != http.StatusOK || !strings.Contains(get.Body.String(), "fallback-answer"), "get status=%d body=%s", get.Code, get.Body.String())
 
 	// The in-process store must serve the items too, not just the body.
 	items := httptest.NewRecorder()
 	ResponsesInputItemsHandler(opts)(items, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID+"/input_items", nil))
-	if items.Code != http.StatusOK || !strings.Contains(items.Body.String(), "hi") {
-		t.Fatalf("input_items status=%d body=%s", items.Code, items.Body.String())
-	}
+	testutil.Falsef(t, items.Code != http.StatusOK || !strings.Contains(items.Body.String(), "hi"), "input_items status=%d body=%s", items.Code, items.Body.String())
 }
 
 // TestResponsesSubResourcesRoundTripThroughRedis drives create -> input_items ->
@@ -377,36 +349,27 @@ func TestResponsesSubResourcesRoundTripThroughRedis(t *testing.T) {
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"remember this turn","store":true}`)))
 	testutil.Equal(t, create.Code, http.StatusOK)
 	var created map[string]interface{}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatalf("decode create: %v (%s)", err, create.Body.String())
-	}
+	err := json.Unmarshal(create.Body.Bytes(), &created)
+	testutil.CheckNoError(t, err)
 	responseID, _ := created["id"].(string)
 	testutil.NotEqual(t, responseID, "")
 
 	items := httptest.NewRecorder()
 	ResponsesInputItemsHandler(opts)(items, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID+"/input_items", nil))
-	if items.Code != http.StatusOK || !strings.Contains(items.Body.String(), "remember this turn") {
-		t.Fatalf("input_items status=%d body=%s", items.Code, items.Body.String())
-	}
+	testutil.Falsef(t, items.Code != http.StatusOK || !strings.Contains(items.Body.String(), "remember this turn"), "input_items status=%d body=%s", items.Code, items.Body.String())
 
 	cancelled := httptest.NewRecorder()
 	ResponsesCancelHandler(opts)(cancelled, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses/"+responseID+"/cancel", nil))
-	if cancelled.Code != http.StatusOK || !strings.Contains(cancelled.Body.String(), `"status":"cancelled"`) {
-		t.Fatalf("cancel status=%d body=%s", cancelled.Code, cancelled.Body.String())
-	}
+	testutil.Falsef(t, cancelled.Code != http.StatusOK || !strings.Contains(cancelled.Body.String(), `"status":"cancelled"`), "cancel status=%d body=%s", cancelled.Code, cancelled.Body.String())
 
 	// The cancellation must be visible through a fresh read of the same store.
 	get := httptest.NewRecorder()
 	ResponsesResourceHandler(opts)(get, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID, nil))
-	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"status":"cancelled"`) {
-		t.Fatalf("get after cancel status=%d body=%s", get.Code, get.Body.String())
-	}
+	testutil.Falsef(t, get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"status":"cancelled"`), "get after cancel status=%d body=%s", get.Code, get.Body.String())
 	// input_items must still be readable after the status rewrite.
 	itemsAgain := httptest.NewRecorder()
 	ResponsesInputItemsHandler(opts)(itemsAgain, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID+"/input_items", nil))
-	if itemsAgain.Code != http.StatusOK || !strings.Contains(itemsAgain.Body.String(), "remember this turn") {
-		t.Fatalf("input_items after cancel status=%d body=%s", itemsAgain.Code, itemsAgain.Body.String())
-	}
+	testutil.Falsef(t, itemsAgain.Code != http.StatusOK || !strings.Contains(itemsAgain.Body.String(), "remember this turn"), "input_items after cancel status=%d body=%s", itemsAgain.Code, itemsAgain.Body.String())
 }
 
 // TestResponsesUnifiedResourceHandsTheRecordToItsOwner is gap ①: GET/DELETE on
@@ -443,9 +406,7 @@ func TestResponsesUnifiedResourceHandsTheRecordToItsOwner(t *testing.T) {
 		rec := httptest.NewRecorder()
 		handler(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/"+id, nil))
 		testutil.Equal(t, nativeCalls, 0)
-		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bridge") {
-			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-		}
+		testutil.Falsef(t, rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bridge"), "status=%d body=%s", rec.Code, rec.Body.String())
 	})
 
 	t.Run("build_record_stays_with_the_native_handler", func(t *testing.T) {
@@ -476,9 +437,7 @@ func TestResponsesUnifiedResourceHandsTheRecordToItsOwner(t *testing.T) {
 		rec := httptest.NewRecorder()
 		handler(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/resp_absent", nil))
 		testutil.Equal(t, nativeCalls, 0)
-		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "response_not_found") {
-			t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
-		}
+		testutil.Falsef(t, rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "response_not_found"), "status = %d body = %s", rec.Code, rec.Body.String())
 	})
 
 	// A store that cannot be read is a different answer: the native handler owns
@@ -507,8 +466,6 @@ func TestResponsesUnifiedResourceHandsTheRecordToItsOwner(t *testing.T) {
 		rec := httptest.NewRecorder()
 		handler(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/"+id+"/input_items", nil))
 		testutil.Equal(t, nativeCalls, 0)
-		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"object":"list"`) {
-			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-		}
+		testutil.Falsef(t, rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"object":"list"`), "status=%d body=%s", rec.Code, rec.Body.String())
 	})
 }

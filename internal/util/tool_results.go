@@ -101,10 +101,7 @@ func extractPersistedToolResultPath(text string) (string, bool) {
 
 func isSafePersistedToolResultPath(path string) bool {
 	clean := filepath.Clean(strings.TrimSpace(path))
-	if clean == "." || !filepath.IsAbs(clean) {
-		return false
-	}
-	if !strings.EqualFold(filepath.Ext(clean), ".txt") {
+	if clean == "." || !filepath.IsAbs(clean) || !strings.EqualFold(filepath.Ext(clean), ".txt") {
 		return false
 	}
 	if !strings.EqualFold(filepath.Base(filepath.Dir(clean)), "tool-results") {
@@ -117,9 +114,7 @@ func pathContainsOrderedComponents(path string, markers ...string) bool {
 	if len(markers) == 0 {
 		return true
 	}
-	parts := strings.FieldsFunc(path, func(r rune) bool {
-		return r == '/' || r == '\\'
-	})
+	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
 	match := 0
 	for _, part := range parts {
 		if strings.EqualFold(part, markers[match]) {

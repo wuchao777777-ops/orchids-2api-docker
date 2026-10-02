@@ -61,9 +61,7 @@ func buildChatBody(req upstream.UpstreamRequest, model string) ([]byte, error) {
 	if effort == "none" {
 		effort = ""
 	}
-	if effort == "" {
-		effort = DefaultReasoningEffort
-	}
+	effort = util.FirstNonEmptyUntrimmed(effort, DefaultReasoningEffort)
 	body := chatBody{
 		Model:           model,
 		MaxTokens:       maxTokens,

@@ -25,27 +25,20 @@ func TestRemainingSearchRestrictionsValidationAndWire(t *testing.T) {
 		{anthropicTool{AllowedDomains: []string{"a", "b", "c", "d", "e", "f"}}, true},
 	} {
 		tool, err := anthropicSearchTool(test.tool)
-		if (err != nil) != test.bad {
-			t.Fatalf("tool=%v err=%v", test.tool, err)
-		}
+		testutil.Falsef(t, (err != nil) != test.bad, "tool=%v err=%v", test.tool, err)
 		if err == nil && len(test.tool.BlockedDomains) > 0 {
 			filters := tool["filters"].(map[string]interface{})
-			if filters["excluded_domains"] == nil {
-				t.Fatal(tool)
-			}
+			testutil.Fail(t, filters["excluded_domains"] == nil, tool)
 		}
 	}
 	var req anthropicMessagesRequest
-	if err := json.Unmarshal([]byte(`{"tools":[{"allowed_domains":[1]}]}`), &req); err == nil {
-		t.Fatal("invalid domains accepted")
-	}
+	err := json.Unmarshal([]byte(`{"tools":[{"allowed_domains":[1]}]}`), &req)
+	testutil.Error(t, err)
 	tool, _ := anthropicSearchTool(anthropicTool{AllowedDomains: []string{"example.com"}})
 	h := &Handler{}
 	for _, build := range []bool{false, true} {
 		payload, err := h.responsesPayloadFromChat(ModelSpec{ID: "grok-4.6", UpstreamModel: "grok-4.6"}, &ChatCompletionsRequest{Model: "grok-4.6", Messages: []ChatMessage{{Role: "user", Content: "search"}}, ResponsesTools: []map[string]interface{}{tool}}, build)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 		data, _ := json.Marshal(payload)
 		testutil.MustContain(t, string(data), "example.com")
 	}
@@ -55,9 +48,7 @@ func TestRemainingRefusalNonstream(t *testing.T) {
 	raw := `{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"Cannot help."}]}]}`
 	w := httptest.NewRecorder()
 	out := (&Handler{}).collectBuildChat(w, &ChatCompletionsRequest{Model: "grok-4.6"}, strings.NewReader(raw))
-	if out.Err != nil {
-		t.Fatal(out.Err)
-	}
+	testutil.Fail(t, out.Err != nil, out.Err)
 	var chat map[string]interface{}
 	_ = json.Unmarshal(w.Body.Bytes(), &chat)
 	for _, v := range []map[string]interface{}{anthropicResponseFromChat("grok-4.6", chat), responsesObjectFromChat("grok-4.6", chat)} {
@@ -73,24 +64,16 @@ func TestRemainingResponsesSearchCitationsAndUsage(t *testing.T) {
 	s := remainingChatFrame(map[string]interface{}{"x_grok_search": search, "x_grok_search_done": false}, nil) + remainingChatFrame(map[string]interface{}{"x_grok_search": search, "x_grok_search_done": true}, nil) + remainingChatFrame(map[string]interface{}{"content": "answer"}, nil) + remainingChatFrame(map[string]interface{}{"annotations": []interface{}{ann, ann}}, "stop") + "data: [DONE]\n\n"
 	v := remainingResponse(t, s)
 	items := interfaceSlice(v["output"])
-	if len(items) != 2 {
-		t.Fatal(items)
-	}
+	testutil.Equal(t, len(items), 2)
 	first := items[0].(map[string]interface{})
-	if first["type"] != "web_search_call" || first["status"] != "completed" {
-		t.Fatal(first)
-	}
+	testutil.Fail(t, first["type"] != "web_search_call" || first["status"] != "completed", first)
 	msg := items[1].(map[string]interface{})
 	part := interfaceSlice(msg["content"])[0].(map[string]interface{})
 	annotations := interfaceSlice(part["annotations"])
-	if len(annotations) != 1 || annotations[0].(map[string]interface{})["url"] != "https://example.com" {
-		t.Fatal(annotations)
-	}
+	testutil.Fail(t, len(annotations) != 1 || annotations[0].(map[string]interface{})["url"] != "https://example.com", annotations)
 	chat := map[string]interface{}{"choices": []interface{}{map[string]interface{}{"message": map[string]interface{}{"content": " answer ", "annotations": []interface{}{ann}, "x_grok_searches": []interface{}{search}}, "finish_reason": "length"}}, "usage": map[string]interface{}{"prompt_tokens": 10, "completion_tokens": 4, "prompt_tokens_details": map[string]interface{}{"cached_tokens": 3}, "completion_tokens_details": map[string]interface{}{"reasoning_tokens": 2}}}
 	v = responsesObjectFromChat("grok-4.6", chat)
-	if v["status"] != "incomplete" || v["incomplete_details"] == nil {
-		t.Fatal(v)
-	}
+	testutil.Fail(t, v["status"] != "incomplete" || v["incomplete_details"] == nil, v)
 	b, _ := json.Marshal(v)
 	testutil.MustContainAll(t, string(b), `"text":" answer "`, `"cached_tokens":3`, `"reasoning_tokens":2`)
 }
@@ -105,9 +88,7 @@ func TestRemainingResponsesRejectsBadToolAndPreservesIncomplete(t *testing.T) {
 		if finish == "stop" {
 			want = "failed"
 		}
-		if v["status"] != want {
-			t.Fatal(v)
-		}
+		testutil.EqualAny(t, v["status"], want)
 	}
 	for _, s := range []string{
 		remainingChatFrame(map[string]interface{}{"tool_calls": []interface{}{map[string]interface{}{"index": 0, "function": map[string]interface{}{"arguments": "{}"}}}}, "tool_calls"),
@@ -115,23 +96,17 @@ func TestRemainingResponsesRejectsBadToolAndPreservesIncomplete(t *testing.T) {
 		remainingChatFrame(map[string]interface{}{"content": "a"}, "stop") + remainingChatFrame(map[string]interface{}{"content": "b"}, nil),
 	} {
 		v := remainingResponse(t, s+"data: [DONE]\n\n")
-		if v["status"] != "failed" {
-			t.Fatal(v)
-		}
+		testutil.Equal(t, v["status"], "failed")
 	}
 }
 
 func TestRemainingEarlyMessagesSignature(t *testing.T) {
 	s := parityFrame("response.output_item.added", map[string]interface{}{"item": map[string]interface{}{"type": "reasoning", "id": "rs_a", "encrypted_content": "synthetic-signature"}}) + parityFrame("response.reasoning_text.delta", map[string]interface{}{"item_id": "rs_a", "delta": "plan"}) + parityText("answer") + parityTerminal("response.completed")
 	body, out := parityRun(t, s)
-	if out.Err != nil {
-		t.Fatal(out.Err)
-	}
+	testutil.Fail(t, out.Err != nil, out.Err)
 	var messages bytes.Buffer
 	err := translateOpenAIChatStreamToAnthropicWithInput(&messages, strings.NewReader(body), "grok-4.6", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.MustContain(t, messages.String(), "synthetic-signature")
 }
 
@@ -152,24 +127,18 @@ func remainingResponse(t *testing.T, stream string) map[string]interface{} {
 		}
 		return nil
 	})
-	if err != nil || final == nil {
-		t.Fatalf("%v %s", err, w.Body.String())
-	}
+	testutil.Falsef(t, err != nil || final == nil, "%v %s", err, w.Body.String())
 	return final
 }
 func TestRemainingTerminalSignature(t *testing.T) {
 	s := parityFrame("response.reasoning_text.delta", map[string]interface{}{"item_id": "rs_a", "delta": "plan"}) + parityText("answer") + parityFrame("response.completed", map[string]interface{}{"response": map[string]interface{}{"status": "completed", "output": []interface{}{map[string]interface{}{"type": "reasoning", "id": "rs_a", "encrypted_content": "synthetic-signature"}}}})
 	body, out := parityRun(t, s)
-	if out.Err != nil {
-		t.Fatal(out.Err)
-	}
+	testutil.Fail(t, out.Err != nil, out.Err)
 	testutil.MustContain(t, body, "synthetic-signature")
 }
 func TestRemainingRefusal(t *testing.T) {
 	body, out := parityRun(t, parityFrame("response.refusal.delta", map[string]interface{}{"delta": "I cannot help with that."})+parityTerminal("response.completed"))
-	if out.Err != nil || !strings.Contains(body, "I cannot help with that.") {
-		t.Fatalf("refusal lost; err=%v", out.Err)
-	}
+	testutil.Falsef(t, out.Err != nil || !strings.Contains(body, "I cannot help with that."), "refusal lost; err=%v", out.Err)
 }
 func TestRemainingResponsesLength(t *testing.T) {
 	v := remainingResponse(t, remainingChatFrame(map[string]interface{}{"content": "partial"}, nil)+remainingChatFrame(map[string]interface{}{}, "length")+"data: [DONE]\n\n")
@@ -199,34 +168,26 @@ func TestRemainingSearchDomainRestriction(t *testing.T) {
 	var req anthropicMessagesRequest
 	_ = json.Unmarshal([]byte(`{"model":"grok-4.6","max_tokens":100,"messages":[{"role":"user","content":"search"}],"tools":[{"type":"web_search_20250305","name":"web_search","allowed_domains":["example.com"]}]}`), &req)
 	out, err := anthropicRequestToChat(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	b, _ := json.Marshal(out.ResponsesTools)
 	testutil.MustContain(t, string(b), "example.com")
 }
 
 func TestRemainingResponsesUsageDetails(t *testing.T) {
 	out := responsesUsageFromChat(map[string]interface{}{"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "prompt_tokens_details": map[string]interface{}{"cached_tokens": 80}, "completion_tokens_details": map[string]interface{}{"reasoning_tokens": 10}})
-	if out["input_tokens_details"] == nil || out["output_tokens_details"] == nil {
-		t.Fatalf("detailed usage lost: %v", out)
-	}
+	testutil.Falsef(t, out["input_tokens_details"] == nil || out["output_tokens_details"] == nil, "detailed usage lost: %v", out)
 }
 func TestRemainingTerminalCitations(t *testing.T) {
 	s := parityText("answer") + parityFrame("response.completed", map[string]interface{}{"response": map[string]interface{}{"status": "completed", "output": []interface{}{map[string]interface{}{"type": "message", "content": []interface{}{map[string]interface{}{"type": "output_text", "text": "answer", "annotations": []interface{}{map[string]interface{}{"type": "url_citation", "url": "https://example.com/source", "title": "Source", "start_index": 0, "end_index": 6}}}}}}}})
 	body, out := parityRun(t, s)
-	if out.Err != nil {
-		t.Fatal(out.Err)
-	}
+	testutil.Fail(t, out.Err != nil, out.Err)
 	testutil.MustContain(t, body, "https://example.com/source")
 }
 
 func TestRemainingLateMessagesSignatureKeepsOriginalBlock(t *testing.T) {
 	s := parityFrame("response.reasoning_text.delta", map[string]interface{}{"item_id": "rs_a", "delta": "plan"}) + parityText("answer") + parityFrame("response.completed", map[string]interface{}{"response": map[string]interface{}{"status": "completed", "output": []interface{}{map[string]interface{}{"type": "reasoning", "id": "rs_a", "encrypted_content": "late-signature"}}}})
 	chat, out := parityRun(t, s)
-	if out.Err != nil {
-		t.Fatal(out.Err)
-	}
+	testutil.Fail(t, out.Err != nil, out.Err)
 	var messages bytes.Buffer
 	testutil.NoError(t, translateOpenAIChatStreamToAnthropicWithInput(&messages, strings.NewReader(chat), "grok-4.6", 0))
 	thinkingIndex := -1
@@ -248,22 +209,16 @@ func TestRemainingLateMessagesSignatureKeepsOriginalBlock(t *testing.T) {
 		case "content_block_stop":
 			delete(open, index)
 		case "content_block_delta":
-			if !open[index] {
-				t.Error("delta after closed block")
-			}
+			testutil.CheckFalse(t, !open[index], "delta after closed block")
 			delta, _ := v["delta"].(map[string]interface{})
 			if delta["type"] == "signature_delta" {
 				signed = true
-				if index != thinkingIndex || delta["signature"] != "late-signature" {
-					t.Error("signature detached from thinking")
-				}
+				testutil.CheckFalse(t, index != thinkingIndex || delta["signature"] != "late-signature", "signature detached from thinking")
 			}
 		}
 		return nil
 	})
-	if err != nil || count != 1 || !signed || len(open) != 0 {
-		t.Fatal(err, count, signed, len(open))
-	}
+	testutil.Fail(t, err != nil || count != 1 || !signed || len(open) != 0, err, count, signed, len(open))
 }
 
 type remainingBrokenResponseWriter struct{ reads int }
@@ -276,7 +231,5 @@ func (r *remainingBrokenResponseWriter) Read([]byte) (int, error) { r.reads++; r
 func TestRemainingResponsesWriteFailureStopsReading(t *testing.T) {
 	w := &remainingBrokenResponseWriter{}
 	writeResponsesStreamFromChatReaderRequestWithHook(w, ResponsesCreateRequest{Model: "grok-4.6"}, w, nil)
-	if w.reads != 0 {
-		t.Fatal("reader consumed after client write failure")
-	}
+	testutil.Equal(t, w.reads, 0)
 }

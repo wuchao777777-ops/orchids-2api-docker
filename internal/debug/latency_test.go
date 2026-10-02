@@ -24,9 +24,7 @@ func TestLatencyCapturesReusedConnectionsAndSecrets(t *testing.T) {
 		a := BeginUpstream(ctx, req.Method, server.URL, req.Header, nil)
 		traced, l := a.Trace(ctx, map[string]interface{}{"model_key": "qfmodel"})
 		resp, err := client.Do(req.WithContext(traced))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 		l.Response(resp)
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
@@ -46,13 +44,11 @@ func TestLatencyCapturesReusedConnectionsAndSecrets(t *testing.T) {
 		testutil.NoError(t, json.Unmarshal([]byte(s.Payload), &v))
 		if count == 2 {
 			testutil.Equal(t, v["connection_reused"], true)
-			if _, ok := v["dns_ms"]; ok {
-				t.Fatal("invented DNS timing")
-			}
+			_, ok := v["dns_ms"]
+			testutil.False(t, ok, "invented DNS timing")
 		}
-		if v["http_status"] != float64(200) || v["http_protocol"] != "HTTP/1.1" {
-			t.Fatalf("missing response: %v", v)
-		}
+		testutil.EqualAny(t, v["http_status"], float64(200))
+		testutil.Equal(t, v["http_protocol"], "HTTP/1.1")
 	}
 	testutil.Equal(t, count, 2)
 }
@@ -60,9 +56,7 @@ func TestLatencyDisabledAndWaitCancellation(t *testing.T) {
 	ctx := context.Background()
 	var a *UpstreamAttempt
 	traced, l := a.Trace(ctx, nil)
-	if traced != ctx || l != nil {
-		t.Fatal("traced disabled capture")
-	}
+	testutil.False(t, traced != ctx || l != nil, "traced disabled capture")
 	l.Mark("x")
 	l.Finish(nil)
 	ctx, c := WithCapture(ctx, "cancelled")

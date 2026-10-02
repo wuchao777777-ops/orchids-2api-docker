@@ -600,9 +600,7 @@ func (p *parkedResponse) CommitTo(w http.ResponseWriter) error {
 }
 
 // isEmpty reports whether there is anything worth delivering.
-func (p *parkedResponse) isEmpty() bool {
-	return p == nil || len(p.body) == 0
-}
+func (p *parkedResponse) isEmpty() bool { return p == nil || len(p.body) == 0 }
 
 // buildQualityHold carries the withhold state of one streaming attempt.
 type buildQualityHold struct {
@@ -716,10 +714,7 @@ func (h *Handler) shouldHoldQualityTurn(req *ChatCompletionsRequest, provider st
 		return false
 	}
 	policy := h.qualityHoldPolicy()
-	if !policy.Enabled {
-		return false
-	}
-	if provider != ProviderBuild {
+	if !policy.Enabled || provider != ProviderBuild {
 		return false
 	}
 	return qualityExpectsReasoning(req, req.ReasoningReplay)

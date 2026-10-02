@@ -44,9 +44,7 @@ func TestStreamRepairsCommandEscalationAfterSplitArguments(t *testing.T) {
 	body := envelope(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"run_command","arguments":"{\"command\":\"python3 -m speedtest.speedtest --simple\","}}]}}]}`) +
 		envelope(`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"justification\":\"network test\"}"}}]},"finish_reason":"tool_calls"}]}`) + "event:finish\ndata: {}\n\n"
 	events, result, err := collectStream(t, body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	calls := 0
 	for _, event := range events {
 		if event.Type != "model.tool-call" {
@@ -55,13 +53,11 @@ func TestStreamRepairsCommandEscalationAfterSplitArguments(t *testing.T) {
 		calls++
 		testutil.Equal(t, event.Event["toolCallId"], "call_1")
 		input := event.Event["input"].(string)
-		if strings.Contains(input, "justification") || !strings.Contains(input, "speedtest.speedtest --simple") {
-			t.Fatalf("input=%s", input)
-		}
+		testutil.Falsef(t, strings.Contains(input, "justification") || !strings.Contains(input, "speedtest.speedtest --simple"), "input=%s", input)
 	}
-	if calls != 1 || result.ToolCallCount != 1 || result.FinishReason() != "tool_use" {
-		t.Fatalf("calls=%d result=%+v", calls, result)
-	}
+	testutil.Equal(t, calls, 1)
+	testutil.Equal(t, result.ToolCallCount, 1)
+	testutil.Equal(t, result.FinishReason(), "tool_use")
 }
 
 func TestTextToolFallbackRepairsOrphanEscalation(t *testing.T) {
@@ -69,15 +65,11 @@ func TestTextToolFallbackRepairsOrphanEscalation(t *testing.T) {
 	chunk, _ := json.Marshal(map[string]interface{}{"choices": []interface{}{map[string]interface{}{"delta": map[string]interface{}{"content": content}, "finish_reason": "stop"}}})
 	var events []upstream.SSEMessage
 	result, err := consumeStreamObserved(strings.NewReader(envelope(string(chunk))+"event:finish\ndata: {}\n\n"), true, func(event upstream.SSEMessage) { events = append(events, event) }, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	for _, event := range events {
 		if event.Type == "model.tool-call" {
 			testutil.MustNotContain(t, event.Event["input"].(string), "justification")
-			if result.ToolCallCount != 1 {
-				t.Fatal(result.ToolCallCount)
-			}
+			testutil.Equal(t, result.ToolCallCount, 1)
 			return
 		}
 	}

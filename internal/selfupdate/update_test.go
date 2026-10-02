@@ -54,69 +54,51 @@ func TestSemVer(t *testing.T) {
 		a, b string
 		want int
 	}{{"v1.0.3", "1.0.2", 1}, {"1.0.2+local", "v1.0.2", 0}, {"1.0.0-alpha.2", "1.0.0-alpha.10", -1}, {"1.0.0-beta", "1.0.0", -1}, {"1.0.0-2", "1.0.0-alpha", -1}, {"1.0.0-alpha", "1.0.0-alpha.1", -1}, {"999999999999999999999.0.0", "2.0.0", 1}} {
-		if c, ok := Compare(tt.a, tt.b); !ok || c != tt.want {
-			t.Fatalf("Compare(%s,%s)=%d/%t", tt.a, tt.b, c, ok)
-		}
+		c, ok := Compare(tt.a, tt.b)
+		testutil.Falsef(t, !ok || c != tt.want, "Compare(%s,%s)=%d/%t", tt.a, tt.b, c, ok)
 	}
 	for _, v := range []string{"dev", "v01.0.0", "1.0", "1.0.0-01", "1.0.0+"} {
-		if _, ok := Compare(v, "1.0.0"); ok {
-			t.Fatalf("accepted %s", v)
-		}
+		_, ok := Compare(v, "1.0.0")
+		testutil.Falsef(t, ok, "accepted %s", v)
 	}
 }
 func TestCheckCacheAndUnknown(t *testing.T) {
 	m := fixture(t, nil)
 	f := m.Source.(*fixtureSource)
 	a := m.Check(context.Background(), false)
-	if !a.Available || !a.HasUpdate {
-		t.Fatalf("%+v", a)
-	}
+	testutil.Falsef(t, !a.Available || !a.HasUpdate, "%+v", a)
 	m.Check(context.Background(), false)
-	if f.calls != 1 {
-		t.Fatal("cache bypassed")
-	}
+	testutil.Equal(t, f.calls, 1)
 	f.err = errors.New("offline")
 	a = m.Check(context.Background(), true)
-	if a.Warning == "" || !a.Available {
-		t.Fatal("valid stale cache not identified")
-	}
+	testutil.False(t, a.Warning == "" || !a.Available, "valid stale cache not identified")
 	m.checkedAt = time.Now().Add(-21 * time.Minute)
 	a = m.Check(context.Background(), true)
-	if a.Available || a.Warning == "" {
-		t.Fatal("failed check presented as latest")
-	}
+	testutil.False(t, a.Available || a.Warning == "", "failed check presented as latest")
 	f.err = nil
 	m.Info.Version = "dev"
 	a = m.Check(context.Background(), true)
-	if a.Warning == "" || a.HasUpdate {
-		t.Fatal("unknown source version guessed")
-	}
+	testutil.False(t, a.Warning == "" || a.HasUpdate, "unknown source version guessed")
 }
 func TestAssetAndChecksumContracts(t *testing.T) {
-	if _, _, e := selectAssets(Release{}, "linux", "amd64"); e == nil {
-		t.Fatal("missing checksum accepted")
-	}
+	_, _, e := selectAssets(Release{}, "linux", "amd64")
+	testutil.Error(t, e)
 	for _, value := range []string{"bad", "abcd  orchids-server-linux-amd64", ""} {
-		if _, e := checksumDigest(value, "orchids-server-linux-amd64"); e == nil {
-			t.Fatal("invalid checksum accepted")
-		}
+		_, e := checksumDigest(value, "orchids-server-linux-amd64")
+		testutil.Error(t, e)
 	}
-	if _, e := checksumDigest(strings.Repeat("a", 64)+" *orchids-server-linux-amd64", "orchids-server-linux-amd64"); e != nil {
-		t.Fatal(e)
-	}
+	_, e = checksumDigest(strings.Repeat("a", 64)+" *orchids-server-linux-amd64", "orchids-server-linux-amd64")
+	testutil.NoError(t, e)
 }
 func TestIntegrityFailurePreservesExecutable(t *testing.T) {
 	m := fixture(t, []byte("bad new binary"))
 	f := m.Source.(*fixtureSource)
 	f.files["orchids-server-linux-amd64.sha256"] = []byte(strings.Repeat("0", 64) + "  orchids-server-linux-amd64")
 	op := Operation{ID: "test", Target: buildinfo.Info{Version: "v1.0.3"}}
-	if e := m.perform(context.Background(), &op); e == nil || !strings.Contains(e.Error(), "SHA-256") {
-		t.Fatalf("%v", e)
-	}
+	e := m.perform(context.Background(), &op)
+	testutil.Falsef(t, e == nil || !strings.Contains(e.Error(), "SHA-256"), "%v", e)
 	b, _ := os.ReadFile(m.Executable)
-	if string(b) != "old binary" {
-		t.Fatal("old binary modified before verification")
-	}
+	testutil.Equal(t, string(b), "old binary")
 }
 
 type roundTrip func(*http.Request) (*http.Response, error)
@@ -124,9 +106,7 @@ type roundTrip func(*http.Request) (*http.Response, error)
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func TestTrustedDownloadsAndLimits(t *testing.T) {
 	for _, raw := range []string{"http://github.com/file", "https://evil.example/file", "https://github.com:444/file", "https://user@github.com/file"} {
-		if trustedURL(raw) {
-			t.Fatalf("trusted %s", raw)
-		}
+		testutil.Falsef(t, trustedURL(raw), "trusted %s", raw)
 	}
 	g := NewGitHub("zhangdailin/API-Console")
 	g.Client.Transport = roundTrip(func(r *http.Request) (*http.Response, error) {
@@ -134,16 +114,13 @@ func TestTrustedDownloadsAndLimits(t *testing.T) {
 	})
 	var output bytes.Buffer
 	asset := Asset{URL: "https://github.com/zhangdailin/API-Console/releases/download/v1.0.3/server"}
-	if e := g.Download(context.Background(), asset, &output, 4); e == nil {
-		t.Fatal("stream size limit bypassed")
-	}
+	e := g.Download(context.Background(), asset, &output, 4)
+	testutil.Error(t, e)
 	asset.URL = "https://github.com/other/repo/releases/download/v1.0.3/server"
-	if e := g.Download(context.Background(), asset, &output, 10); e == nil {
-		t.Fatal("other repository accepted")
-	}
-	if e := g.Client.CheckRedirect(&http.Request{URL: mustURL(t, "https://evil.example/payload")}, nil); e == nil {
-		t.Fatal("untrusted redirect accepted")
-	}
+	e = g.Download(context.Background(), asset, &output, 10)
+	testutil.Error(t, e)
+	e = g.Client.CheckRedirect(&http.Request{URL: mustURL(t, "https://evil.example/payload")}, nil)
+	testutil.Error(t, e)
 }
 func TestActionHTTPGuards(t *testing.T) {
 	m := fixture(t, nil)
@@ -164,8 +141,6 @@ func TestActionHTTPGuards(t *testing.T) {
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, e := url.Parse(raw)
-	if e != nil {
-		t.Fatal(e)
-	}
+	testutil.NoError(t, e)
 	return u
 }

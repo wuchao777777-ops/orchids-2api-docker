@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -138,56 +137,15 @@ func (a *API) pollClineLogin(ctx context.Context, id string) {
 	}
 	client := login.factory(nil, login.configSnapshot)
 	defer client.Close()
-
-	for {
-		login, ok := awaitLoginPoll(ctx, a.clineLogins, id, "Cline")
-		if !ok {
-			return
-		}
-
-		reqCtx, reqCancel := context.WithTimeout(ctx, 30*time.Second)
-		creds, err := client.PollLogin(reqCtx, &cline.LoginTransaction{
-			DeviceCode: login.deviceCode,
-			ExpiresAt:  login.expiresAt,
-		})
-		reqCancel()
-		if err != nil {
-			if errors.Is(err, cline.ErrAuthPending) {
-				continue
-			}
-			if ctx.Err() != nil {
-				return
-			}
-			// Authorization itself failed (the transaction was consumed,
-			// cancelled, or rejected). Report it without echoing upstream text.
-			slog.Warn("Cline authorization failed", "login_id", id, "error", err)
-			a.clineLogins.finish(id, "failed", "Cline authorization failed; start again", 0)
-			return
-		}
-
-		account, err := a.buildClineAccountFromCredentialsWithFactory(ctx, id, creds, login.configSnapshot, login.factory)
-		if err != nil {
-			// The reason is carried to the operator because a credential that
-			// arrived but could not be persisted needs one specific action, and
-			// "could not be verified" alone does not say which. The error text is
-			// built from upstream status/path/business code only; no credential
-			// or device code ever enters it.
-			slog.Warn("Cline authorization succeeded but the account could not be stored", "login_id", id, "error", err)
-			a.clineLogins.finish(id, "failed",
-				"Cline authorization succeeded but the account could not be saved: "+truncateLoginReason(err), 0)
-			return
-		}
-		if ctx.Err() != nil || !a.clineLogins.pending(id) {
-			return
-		}
-		if login.enabledKnown {
-			account.Enabled = login.enabled
-		}
-		finishBrowserLogin(a, ctx, a.clineLogins, id, "Cline", account, func(acc *store.Account) {
+	pollBrowserLogin(a, ctx, a.clineLogins, id, "Cline", cline.ErrAuthPending,
+		func(reqCtx context.Context, login *clineLoginTransaction) (cline.Credentials, error) {
+			return client.PollLogin(reqCtx, &cline.LoginTransaction{DeviceCode: login.deviceCode, ExpiresAt: login.expiresAt})
+		},
+		func(login *clineLoginTransaction, creds cline.Credentials) (*store.Account, error) {
+			return a.buildClineAccountFromCredentialsWithFactory(ctx, id, creds, login.configSnapshot, login.factory)
+		}, func(acc *store.Account) {
 			acc.ReplaceClineCredentials = true
 		})
-		return
-	}
 }
 
 // buildClineAccountFromCredentials turns a completed login into an account
@@ -217,27 +175,9 @@ func (a *API) buildClineAccountFromCredentialsWithFactory(ctx context.Context, l
 	client := factory(acc, cfg)
 	defer client.Close()
 
-	// The catalog is read from the upstream feed at login. A failed read leaves
-	// the snapshot empty on purpose: the account is saved and a later refresh
-	// records the catalog, but nothing compiled in is installed as if it had been
-	// observed.
-	if models, catalogErr := client.FetchUpstreamModels(ctx); catalogErr != nil {
-		slog.Warn("Cline upstream catalog read failed at login; leaving the snapshot empty",
-			"login_id", loginID, "error", catalogErr)
-	} else if ids := cline.CatalogSnapshot(models); len(ids) > 0 {
-		acc.ClineModelIDs = ids
-		acc.ClineModelsSyncedAt = time.Now()
-	}
-
-	// The tier is read at login so a freshly added account is labelled on its
-	// first render instead of waiting for the next refresh cycle. Like the
-	// catalog, a failed read is not a failed login.
-	if plan, planErr := client.FetchPlan(ctx); planErr != nil {
-		slog.Warn("Cline plan read failed at login; leaving the tier unset",
-			"login_id", loginID, "error", planErr)
-	} else if plan.Explicit {
-		acc.ClinePlan = plan.Name
-	}
+	observeClineAccount(ctx, client, acc, "login_id", loginID,
+		"Cline upstream catalog read failed at login; leaving the snapshot empty",
+		"Cline plan read failed at login; leaving the tier unset")
 
 	// Without a refresh token the account cannot survive its first token expiry,
 	// and the login would look successful until it silently dies.

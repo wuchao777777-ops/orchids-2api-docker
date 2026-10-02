@@ -374,14 +374,10 @@ func applyChatHeaders(req *http.Request, accessToken, uid, conversationID, reque
 	req.Header.Set("X-Request-ID", messageID)
 	req.Header.Set("X-Root-Request-ID", conversationRequestID)
 	traceID = strings.TrimSpace(traceID)
-	if traceID == "" {
-		traceID = conversationRequestID
-	}
+	traceID = util.FirstNonEmptyUntrimmed(traceID, conversationRequestID)
 	req.Header.Set("X-Trace-ID", traceID)
 	b3TraceID := validWorkBuddyTraceID(conversationRequestID)
-	if b3TraceID == "" {
-		b3TraceID = messageID
-	}
+	b3TraceID = util.FirstNonEmptyUntrimmed(b3TraceID, messageID)
 	req.Header.Set("X-B3-TraceId", b3TraceID)
 	req.Header.Set("X-B3-SpanId", messageID[:16])
 	req.Header.Set("X-B3-Sampled", "1")
@@ -471,9 +467,7 @@ func (e *APIError) RetryAfter() time.Duration {
 }
 
 // apiError renders an upstream failure in typed form.
-func apiError(status int, raw []byte) error {
-	return apiErrorWithRetry(status, raw, 0)
-}
+func apiError(status int, raw []byte) error { return apiErrorWithRetry(status, raw, 0) }
 
 func apiErrorWithRetry(status int, raw []byte, retryDelay time.Duration) error {
 	body := strings.TrimSpace(string(raw))
@@ -490,9 +484,7 @@ func apiErrorWithRetry(status int, raw []byte, retryDelay time.Duration) error {
 	if code != 0 && msg == "" {
 		msg = body
 	}
-	if msg == "" {
-		msg = body
-	}
+	msg = util.FirstNonEmptyUntrimmed(msg, body)
 	return &APIError{HTTPStatus: status, Code: code, Message: msg, RetryDelay: retryDelay}
 }
 

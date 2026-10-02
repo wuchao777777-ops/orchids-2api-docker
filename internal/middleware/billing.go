@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -114,9 +115,7 @@ var apiKeyBillingStore APIKeyBillingStore
 
 // SetAPIKeyBillingStore wires the default billing ledger for settle call sites
 // that do not carry one. Passing nil disables it.
-func SetAPIKeyBillingStore(store APIKeyBillingStore) {
-	apiKeyBillingStore = store
-}
+func SetAPIKeyBillingStore(store APIKeyBillingStore) { apiKeyBillingStore = store }
 
 type settleOptions struct {
 	allowEstimates bool
@@ -271,12 +270,7 @@ func billingRequestPath(path string) bool {
 		return false
 	}
 	path = strings.ToLower(path)
-	for _, suffix := range billingRequestPaths {
-		if strings.Contains(path, suffix) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(billingRequestPaths, func(suffix string) bool { return strings.Contains(path, suffix) })
 }
 
 // readBillingBody buffers the request body for estimation and restores it for

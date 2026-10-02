@@ -47,23 +47,17 @@ func TestSelectAccount_Distribution(t *testing.T) {
 
 	for i := 0; i < iterations; i++ {
 		acc := lb.selectAccountWithTracker(accounts, nil)
-		if acc == nil {
-			t.Fatal("selectAccount returned nil")
-		}
+		testutil.False(t, acc == nil, "selectAccount returned nil")
 		counts[acc.ID]++
 	}
 
-	if len(counts) < 2 {
-		t.Errorf("Expected distribution across multiple accounts, but only got %d accounts", len(counts))
-	}
+	testutil.CheckFalsef(t, len(counts) < 2, "Expected distribution across multiple accounts, but only got %d accounts", len(counts))
 
 	t.Logf("Counts after %d iterations: %+v", iterations, counts)
 
 	// Ensure each account got a reasonable number of hits (rough check)
 	for id, count := range counts {
-		if count < 200 {
-			t.Errorf("Account %d got suspiciously low hits: %d", id, count)
-		}
+		testutil.CheckFalsef(t, count < 200, "Account %d got suspiciously low hits: %d", id, count)
 	}
 }
 
@@ -85,9 +79,7 @@ func TestSelectAccount_WeightedDistribution(t *testing.T) {
 		counts[acc.ID]++
 	}
 
-	if counts[1] == 0 || counts[2] == 0 {
-		t.Errorf("Expected both accounts to be picked when tied at score 0, got counts: %+v", counts)
-	}
+	testutil.CheckFalsef(t, counts[1] == 0 || counts[2] == 0, "Expected both accounts to be picked when tied at score 0, got counts: %+v", counts)
 }
 
 func TestSelectAccount_ActiveConnections(t *testing.T) {
@@ -122,9 +114,7 @@ func TestSelectAccountWithTracker_UsesProvidedTracker(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		selected := lb.selectAccountWithTracker(accounts, custom)
-		if selected == nil || selected.ID != acc2.ID {
-			t.Fatalf("expected Acc2 to be selected via custom tracker, got %#v", selected)
-		}
+		testutil.Falsef(t, selected == nil || selected.ID != acc2.ID, "expected Acc2 to be selected via custom tracker, got %#v", selected)
 	}
 }
 
@@ -151,44 +141,36 @@ func TestQoderAccountsAreLoadBalanced(t *testing.T) {
 	counts := map[int64]int{}
 	for i := 0; i < 20; i++ {
 		selected, err := selectAccount(nil)
-		if err != nil {
-			t.Fatalf("selection %d: err=%v", i, err)
-		}
+		testutil.Falsef(t, err != nil, "selection %d: err=%v", i, err)
 		counts[selected.ID]++
 	}
-	if counts[first.ID] == 0 || counts[second.ID] == 0 {
-		t.Fatalf("qoder selection did not spread across the pool: %v", counts)
-	}
+	testutil.Falsef(t, counts[first.ID] == 0 || counts[second.ID] == 0, "qoder selection did not spread across the pool: %v", counts)
 
 	// A saturated account is skipped so the rest of the pool absorbs the
 	// request rather than the channel failing while capacity remains.
 	tracker.counts[first.ID] = EffectiveAccountConcurrencyLimit(first)
 	for i := 0; i < 5; i++ {
 		selected, err := selectAccount(nil)
-		if err != nil || selected.ID != second.ID {
-			t.Fatalf("saturated first: account=%v err=%v, want second", selected, err)
-		}
+		testutil.Equal(t, err, nil)
+		testutil.Equal(t, selected.ID, second.ID)
 	}
 
 	// Only a fully saturated pool reports a capacity error.
 	tracker.counts[second.ID] = EffectiveAccountConcurrencyLimit(second)
-	if selected, err := selectAccount(nil); selected != nil || err == nil || !strings.Contains(err.Error(), "concurrency limit") {
-		t.Fatalf("saturated pool: account=%v err=%v, want capacity error", selected, err)
-	}
+	selected, err := selectAccount(nil)
+	testutil.Falsef(t, selected != nil || err == nil || !strings.Contains(err.Error(), "concurrency limit"), "saturated pool: account=%v err=%v, want capacity error", selected, err)
 
 	// An explicitly excluded account stays out of the pool.
 	tracker.counts[first.ID] = 0
 	tracker.counts[second.ID] = 0
-	if selected, err := selectAccount([]int64{first.ID}); err != nil || selected.ID != second.ID {
-		t.Fatalf("excluded first: account=%v err=%v, want second", selected, err)
-	}
+	selected, err = selectAccount([]int64{first.ID})
+	testutil.Falsef(t, err != nil || selected.ID != second.ID, "excluded first: account=%v err=%v, want second", selected, err)
 
 	// A cooling account falls out of the pool for the next selection.
 	first.StatusCode = "429"
 	first.LastAttempt = now
-	if selected, err := selectAccount(nil); err != nil || selected.ID != second.ID {
-		t.Fatalf("cooling first: account=%v err=%v, want second", selected, err)
-	}
+	selected, err = selectAccount(nil)
+	testutil.Falsef(t, err != nil || selected.ID != second.ID, "cooling first: account=%v err=%v, want second", selected, err)
 }
 
 func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfulError(t *testing.T) {
@@ -203,9 +185,7 @@ func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfu
 	}
 
 	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "workbuddy", nil)
-	if err == nil {
-		t.Fatal("expected rate-limited selector error, got nil")
-	}
+	testutil.False(t, err == nil, "expected rate-limited selector error, got nil")
 	testutil.MustContain(t, err.Error(), "all matching accounts are rate-limited or cooling down")
 }
 
@@ -226,9 +206,7 @@ func TestGetNextAccountExcludingByChannelWithTracker_AllAllowanceParkedNamesTheA
 	}
 
 	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "workbuddy", nil)
-	if err == nil {
-		t.Fatal("expected an allowance-parked selector error, got nil")
-	}
+	testutil.False(t, err == nil, "expected an allowance-parked selector error, got nil")
 	testutil.MustContain(t, err.Error(), "have exhausted their allowance")
 }
 
@@ -241,20 +219,16 @@ func TestGetNextAccountExcludingByChannelWithTrackerFilter_ModelFilterEmptiesThe
 	now := time.Now()
 	tracker := NewMemoryConnTracker()
 	lb := &LoadBalancer{
-		connTracker: tracker,
-		cachedAccounts: []*store.Account{
-			{ID: 1, Name: "WB1", AccountType: "workbuddy", Enabled: true},
-		},
-		cacheExpires: now.Add(time.Minute),
+		connTracker:    tracker,
+		cachedAccounts: []*store.Account{{ID: 1, Name: "WB1", AccountType: "workbuddy", Enabled: true}},
+		cacheExpires:   now.Add(time.Minute),
 	}
 
 	_, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", tracker, func(*store.Account) error {
 		// The per-model cooldown filter: every candidate is withheld for this model.
 		return RejectModelThrottled
 	})
-	if err == nil {
-		t.Fatal("expected a model-filtered selector error, got nil")
-	}
+	testutil.False(t, err == nil, "expected a model-filtered selector error, got nil")
 	testutil.MustContain(t, err.Error(), "cooling down for the requested model")
 }
 
@@ -304,9 +278,7 @@ func TestFilterReasonsDecideTheEmptyPoolAnswer(t *testing.T) {
 				cacheExpires: now.Add(time.Minute),
 			}
 			_, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", tracker, tc.filter)
-			if err == nil {
-				t.Fatal("expected an empty-pool error")
-			}
+			testutil.False(t, err == nil, "expected an empty-pool error")
 			testutil.MustContain(t, err.Error(), tc.wantMsg)
 		})
 	}
@@ -339,9 +311,7 @@ func TestGetNextAccountExcludingByChannelWithTracker_MixedPoolNamesTheSplit(t *t
 	}
 
 	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "workbuddy", nil)
-	if err == nil {
-		t.Fatal("expected a mixed-pool selector error, got nil")
-	}
+	testutil.False(t, err == nil, "expected a mixed-pool selector error, got nil")
 	message := err.Error()
 	testutil.MustContain(t, message, "rate-limited or cooling down")
 	testutil.MustContainAll(t, message, "3 rate-limited", "4 parked for a spent allowance")
@@ -349,9 +319,7 @@ func TestGetNextAccountExcludingByChannelWithTracker_MixedPoolNamesTheSplit(t *t
 	// classify a recoverable mixed pool as a permanent quota verdict.
 	testutil.MustNotContain(t, message, "exhausted their allowance")
 	// And it must not degrade to the bare sentence that answered 503.
-	if strings.HasSuffix(message, "channel: workbuddy") {
-		t.Fatalf("mixed pool fell back to the unexplained selector sentence: %v", err)
-	}
+	testutil.Falsef(t, strings.HasSuffix(message, "channel: workbuddy"), "mixed pool fell back to the unexplained selector sentence: %v", err)
 }
 
 func TestGetNextAccountExcludingByChannelWithTracker_RejectsSingleAccountAtLimit(t *testing.T) {
@@ -367,60 +335,42 @@ func TestGetNextAccountExcludingByChannelWithTracker_RejectsSingleAccountAtLimit
 	}
 
 	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "grok", tracker)
-	if err == nil || !strings.Contains(err.Error(), "concurrency limit") {
-		t.Fatalf("expected concurrency limit error, got %v", err)
-	}
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "concurrency limit"), "expected concurrency limit error, got %v", err)
 }
 
 func TestMemoryConnTrackerTryAcquireIsBounded(t *testing.T) {
 	tracker := NewMemoryConnTracker()
-	if !tracker.TryAcquire(7, 1) {
-		t.Fatal("first reservation should succeed")
-	}
-	if tracker.TryAcquire(7, 1) {
-		t.Fatal("second reservation should be rejected")
-	}
+	testutil.False(t, !tracker.TryAcquire(7, 1), "first reservation should succeed")
+	testutil.False(t, tracker.TryAcquire(7, 1), "second reservation should be rejected")
 	tracker.Release(7)
-	if !tracker.TryAcquire(7, 1) {
-		t.Fatal("reservation should succeed after release")
-	}
+	testutil.False(t, !tracker.TryAcquire(7, 1), "reservation should succeed after release")
 }
 
 func TestIsAccountAvailable_401RequiresReauth(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{ID: 1, AccountType: "grok", StatusCode: "401", AuthStatus: store.AccountAuthStatusReauthRequired, LastAttempt: time.Now().Add(-24 * time.Hour)}
-	if lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("reauthRequired account must remain excluded regardless of age")
-	}
+	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "reauthRequired account must remain excluded regardless of age")
 }
 
 func TestIsAccountAvailable_PaidGrokBillingExhaustion(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{ID: 1, AccountType: "grok", GrokProvider: "build", CredentialType: "oauth", Subscription: "super"}
 	acc.GrokBilling.Monthly = store.GrokQuotaWindow{HasLimit: true, Limit: 100, HasRemaining: true, Remaining: 0, ResetAt: time.Now().Add(time.Hour)}
-	if lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("known exhausted paid Build account must be gated")
-	}
+	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "known exhausted paid Build account must be gated")
 	acc.GrokBilling.Monthly.Remaining = 1
-	if !lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("paid Build account with remaining billing must be available")
-	}
+	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "paid Build account with remaining billing must be available")
 }
 
 func TestIsAccountAvailable_Paid402UsesBillingPeriodEnd(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{ID: 1, AccountType: "grok", GrokProvider: "build", CredentialType: "oauth", Subscription: "super", StatusCode: "402", LastAttempt: time.Now().Add(-48 * time.Hour)}
 	acc.GrokBilling.Weekly = store.GrokQuotaWindow{HasUsage: true, UsagePercent: 100, ResetAt: time.Now().Add(time.Hour)}
-	if lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("paid 402 must remain gated until billing period end")
-	}
+	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "paid 402 must remain gated until billing period end")
 	acc.GrokBilling.Weekly.ResetAt = time.Now().Add(-time.Second)
 	// A post-period probe is admitted through the atomic store claim, not by a
 	// store-less LoadBalancer: without the claim every concurrent request would
 	// hit the exhausted account at once.
-	if lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("paid 402 must remain gated when no atomic probe store is configured")
-	}
+	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "paid 402 must remain gated when no atomic probe store is configured")
 }
 
 func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
@@ -433,13 +383,9 @@ func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
 		QuotaResetAt: time.Now().Add(-time.Second),
 	}
 
-	if !lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected expired quota reset to re-enable account")
-	}
+	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "expected expired quota reset to re-enable account")
 	testutil.Equal(t, acc.StatusCode, "")
-	if !acc.QuotaResetAt.IsZero() {
-		t.Fatalf("expected quota reset timestamp to be cleared, got %v", acc.QuotaResetAt)
-	}
+	testutil.Falsef(t, !acc.QuotaResetAt.IsZero(), "expected quota reset timestamp to be cleared, got %v", acc.QuotaResetAt)
 }
 
 func TestIsAccountAvailable_LegacyQoder402ReachesModelFilter(t *testing.T) {
@@ -451,9 +397,7 @@ func TestIsAccountAvailable_LegacyQoder402ReachesModelFilter(t *testing.T) {
 		LastAttempt: time.Now().Add(-5 * time.Minute),
 	}
 
-	if !lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected legacy Qoder 402 account to reach the free-model filter")
-	}
+	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "expected legacy Qoder 402 account to reach the free-model filter")
 	testutil.Equal(t, acc.StatusCode, "402")
 }
 
@@ -466,9 +410,7 @@ func TestIsAccountAvailable_WorkBuddyCreditExhaustionReachesModelFilter(t *testi
 		ID: 1, AccountType: "workbuddy", StatusCode: store.AccountStatusWorkBuddyQuotaExhausted,
 		StatusMessage: "credits exhausted", LastAttempt: time.Now(), QuotaResetAt: time.Now().Add(48 * time.Hour),
 	}
-	if !lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected exhausted WorkBuddy account to reach the free-model filter")
-	}
+	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "expected exhausted WorkBuddy account to reach the free-model filter")
 	testutil.Equal(t, acc.StatusCode, store.AccountStatusWorkBuddyQuotaExhausted)
 }
 
@@ -477,9 +419,7 @@ func TestIsAccountAvailable_WorkBuddyCreditExhaustionReachesModelFilter(t *testi
 func TestIsAccountAvailable_WorkBuddyCreditExhaustionClearsWhenQuotaReturns(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{ID: 1, AccountType: "workbuddy", StatusCode: store.AccountStatusWorkBuddyQuotaExhausted, UsageCurrent: 10}
-	if !lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected account to remain available when quota returns")
-	}
+	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "expected account to remain available when quota returns")
 	testutil.Equal(t, acc.StatusCode, "")
 }
 
@@ -495,18 +435,14 @@ func TestIsAccountAvailable_402KeepsLongCooldownForOtherChannels(t *testing.T) {
 		LastAttempt: time.Now().Add(-time.Hour),
 	}
 
-	if lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected non-Qoder 402 account to keep the long cooldown")
-	}
+	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "expected non-Qoder 402 account to keep the long cooldown")
 }
 
 func TestPersistAppliedAccountStatus_DoesNotMutateVerdictAgain(t *testing.T) {
 	lb := &LoadBalancer{
-		Store:       &store.Store{},
-		connTracker: NewMemoryConnTracker(),
-		cachedAccounts: []*store.Account{
-			{ID: 1, Name: "account", AccountType: "workbuddy", Enabled: true},
-		},
+		Store:          &store.Store{},
+		connTracker:    NewMemoryConnTracker(),
+		cachedAccounts: []*store.Account{{ID: 1, Name: "account", AccountType: "workbuddy", Enabled: true}},
 	}
 	acc := &store.Account{ID: 1, AccountType: "workbuddy"}
 	at := time.Now().Add(-time.Second)
@@ -520,25 +456,18 @@ func TestPersistAppliedAccountStatus_DoesNotMutateVerdictAgain(t *testing.T) {
 
 	lb.PersistAppliedAccountStatus(context.Background(), acc, "test")
 
-	if acc.RateLimitFailures != failures || acc.RateLimitFailures != 1 {
-		t.Fatalf("rate limit failures = %d, want exactly one application", acc.RateLimitFailures)
-	}
-	if !acc.LastAttempt.Equal(lastAttempt) {
-		t.Fatalf("last attempt mutated during persistence: got=%v want=%v", acc.LastAttempt, lastAttempt)
-	}
+	testutil.Equal(t, acc.RateLimitFailures, failures)
+	testutil.Equal(t, acc.RateLimitFailures, 1)
+	testutil.Falsef(t, !acc.LastAttempt.Equal(lastAttempt), "last attempt mutated during persistence: got=%v want=%v", acc.LastAttempt, lastAttempt)
 	cached := lb.cachedAccounts[0]
-	if cached.RateLimitFailures != 1 || cached.StatusMessage != "slow down" || !cached.LastAttempt.Equal(at) {
-		t.Fatalf("cached account did not copy applied verdict: %+v", cached)
-	}
+	testutil.Falsef(t, cached.RateLimitFailures != 1 || cached.StatusMessage != "slow down" || !cached.LastAttempt.Equal(at), "cached account did not copy applied verdict: %+v", cached)
 }
 
 func TestMarkAccountStatus_Repeated429RefreshesCooldownStart(t *testing.T) {
 	lb := &LoadBalancer{
-		Store:       &store.Store{},
-		connTracker: NewMemoryConnTracker(),
-		cachedAccounts: []*store.Account{
-			{ID: 1, Name: "WorkBuddy1", AccountType: "workbuddy", Enabled: true},
-		},
+		Store:          &store.Store{},
+		connTracker:    NewMemoryConnTracker(),
+		cachedAccounts: []*store.Account{{ID: 1, Name: "WorkBuddy1", AccountType: "workbuddy", Enabled: true}},
 	}
 	acc := &store.Account{
 		ID:          1,
@@ -550,24 +479,16 @@ func TestMarkAccountStatus_Repeated429RefreshesCooldownStart(t *testing.T) {
 	before := acc.LastAttempt
 	lb.MarkAccountStatus(context.Background(), acc, "429")
 
-	if !acc.LastAttempt.After(before) {
-		t.Fatalf("expected repeated 429 to refresh cooldown start, before=%v after=%v", before, acc.LastAttempt)
-	}
-	if got := lb.cachedAccounts[0].LastAttempt; !got.After(before) {
-		t.Fatalf("expected cached repeated 429 to refresh cooldown start, before=%v after=%v", before, got)
-	}
-	if acc.RateLimitFailures != 1 || lb.cachedAccounts[0].RateLimitFailures != 1 {
-		t.Fatalf("expected failure count persisted to account/cache: acc=%d cache=%d", acc.RateLimitFailures, lb.cachedAccounts[0].RateLimitFailures)
-	}
+	testutil.Falsef(t, !acc.LastAttempt.After(before), "expected repeated 429 to refresh cooldown start, before=%v after=%v", before, acc.LastAttempt)
+	got := lb.cachedAccounts[0].LastAttempt
+	testutil.Falsef(t, !got.After(before), "expected cached repeated 429 to refresh cooldown start, before=%v after=%v", before, got)
+	testutil.Equal(t, acc.RateLimitFailures, 1)
+	testutil.Equal(t, lb.cachedAccounts[0].RateLimitFailures, 1)
 	remaining := time.Until(acc.QuotaResetAt)
-	if remaining < 29*time.Second || remaining > 31*time.Second {
-		t.Fatalf("first 429 cooldown=%v want about 30s", remaining)
-	}
+	testutil.Falsef(t, remaining < 29*time.Second || remaining > 31*time.Second, "first 429 cooldown=%v want about 30s", remaining)
 	lb.MarkAccountStatus(context.Background(), acc, "429")
 	remaining = time.Until(acc.QuotaResetAt)
-	if acc.RateLimitFailures != 2 || remaining < 59*time.Second || remaining > 61*time.Second {
-		t.Fatalf("second 429 failures=%d cooldown=%v want about 1m", acc.RateLimitFailures, remaining)
-	}
+	testutil.Falsef(t, acc.RateLimitFailures != 2 || remaining < 59*time.Second || remaining > 61*time.Second, "second 429 failures=%d cooldown=%v want about 1m", acc.RateLimitFailures, remaining)
 }
 
 func TestSelectAccountRotatesAcrossEqualAccounts(t *testing.T) {
@@ -580,23 +501,17 @@ func TestSelectAccountRotatesAcrossEqualAccounts(t *testing.T) {
 	seen := map[int64]int{}
 	for i := 0; i < 30; i++ {
 		acc := lb.selectAccountWithTracker(accounts, nil)
-		if acc == nil {
-			t.Fatal("nil account")
-		}
+		testutil.False(t, acc == nil, "nil account")
 		seen[acc.ID]++
 	}
 	testutil.Equal(t, len(seen), 3)
 	for id, count := range seen {
-		if count < 5 {
-			t.Fatalf("account %d selected %d times out of 30; rotation is too uneven", id, count)
-		}
+		testutil.Falsef(t, count < 5, "account %d selected %d times out of 30; rotation is too uneven", id, count)
 	}
 }
 
 func TestLargePoolIsScannedInRotatingWindows(t *testing.T) {
-	if accountScanWindow < 8 {
-		t.Fatalf("window %d is too small to be useful", accountScanWindow)
-	}
+	testutil.Falsef(t, accountScanWindow < 8, "window %d is too small to be useful", accountScanWindow)
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	size := accountScanWindow * 3
 	seen := map[int]bool{}
@@ -639,9 +554,7 @@ func TestQoderExhaustedSnapshotRetiresAtItsResetBoundary(t *testing.T) {
 	// the account is admitted with its full capability restored.
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	stale := build(now.Add(-2*time.Hour), now.Add(-time.Hour))
-	if !lb.isAccountAvailable(context.Background(), stale) {
-		t.Fatal("an exhausted snapshot taken before its own reset boundary must be admitted")
-	}
+	testutil.False(t, !lb.isAccountAvailable(context.Background(), stale), "an exhausted snapshot taken before its own reset boundary must be admitted")
 	testutil.Equal(t, stale.StatusCode, "")
 
 	// Snapshot taken after the reset and still reporting exhaustion describes
@@ -649,24 +562,18 @@ func TestQoderExhaustedSnapshotRetiresAtItsResetBoundary(t *testing.T) {
 	// upstream just said was spent.
 	lb = &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	current := build(now.Add(-time.Minute), now.Add(-time.Hour))
-	if !lb.isAccountAvailable(context.Background(), current) {
-		t.Fatal("a spent account is still admitted to the model-aware selector")
-	}
+	testutil.False(t, !lb.isAccountAvailable(context.Background(), current), "a spent account is still admitted to the model-aware selector")
 	testutil.Equal(t, current.StatusCode, store.AccountStatusQoderQuotaExhausted)
 
 	// No boundary recorded at all: nothing proves the window reopened.
 	lb = &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	unknown := build(now.Add(-2*time.Hour), time.Time{})
-	if !lb.isAccountAvailable(context.Background(), unknown) {
-		t.Fatal("a spent account with no reset time is still admitted")
-	}
+	testutil.False(t, !lb.isAccountAvailable(context.Background(), unknown), "a spent account with no reset time is still admitted")
 	testutil.Equal(t, unknown.StatusCode, store.AccountStatusQoderQuotaExhausted)
 
 	// A non-Qoder row must not borrow the Qoder rule.
 	lb = &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	wrongChannel := build(now.Add(-2*time.Hour), now.Add(-time.Hour))
 	wrongChannel.AccountType = "workbuddy"
-	if lb.isAccountAvailable(context.Background(), wrongChannel) {
-		t.Fatal("a non-Qoder row holding the Qoder status must stay excluded")
-	}
+	testutil.False(t, lb.isAccountAvailable(context.Background(), wrongChannel), "a non-Qoder row holding the Qoder status must stay excluded")
 }

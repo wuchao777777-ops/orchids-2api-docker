@@ -9,11 +9,7 @@
 // The channel-specific wrappers share polling, resume-after-refresh and error
 // handling so their browser flows cannot drift apart.
 globalThis.DeviceAuthLogin = (() => {
-  const TERMINAL_MESSAGES = {
-    complete: '授权完成，账号已保存',
-    failed: '授权失败，请重新发起登录。',
-    expired: '授权已超时，请重新发起登录。',
-  };
+  const TERMINAL_MESSAGES = { complete: '授权完成，账号已保存', failed: '授权失败，请重新发起登录。', expired: '授权已超时，请重新发起登录。' };
 
   // Kind refers to whether the authorization URL is a different origin (popup)
   // or the option to open the URL in new tab.
@@ -113,10 +109,7 @@ globalThis.DeviceAuthLogin = (() => {
 
     function storeLogin(login) {
       try {
-        window.localStorage.setItem(storageKey, JSON.stringify({
-          loginId: login.loginId,
-          expiresAt: login.expiresAt,
-        }));
+        window.localStorage.setItem(storageKey, JSON.stringify({ loginId: login.loginId, expiresAt: login.expiresAt }));
       } catch (_) {
         /* ignore */
       }
@@ -130,9 +123,7 @@ globalThis.DeviceAuthLogin = (() => {
         if (!parsed || typeof parsed.loginId !== 'string' || !parsed.loginId) return null;
         if (typeof parsed.expiresAt === 'number' && Date.now() >= parsed.expiresAt) return null;
         return parsed;
-      } catch (_) {
-        return null;
-      }
+      } catch (_) { return null; }
     }
 
     function abortActive(silent) {
@@ -143,10 +134,7 @@ globalThis.DeviceAuthLogin = (() => {
       if (login.controller) login.controller.abort();
       if (login.popup && !login.popup.closed) login.popup.close();
       if (!silent && login.loginId) {
-        fetch(`${basePath}/${encodeURIComponent(login.loginId)}`, {
-          method: 'DELETE',
-          credentials: 'same-origin',
-        }).catch(() => {});
+        fetch(`${basePath}/${encodeURIComponent(login.loginId)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => {});
       }
       clearStoredLogin();
       setButton(false);
@@ -170,10 +158,7 @@ globalThis.DeviceAuthLogin = (() => {
         const loginId = active.loginId;
         active.loginId = '';
         if (loginId) {
-          fetch(`${basePath}/${encodeURIComponent(loginId)}`, {
-            method: 'DELETE',
-            credentials: 'same-origin',
-          }).catch(() => {});
+          fetch(`${basePath}/${encodeURIComponent(loginId)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => {});
         }
       }
       finish(message, 'error');
@@ -183,10 +168,7 @@ globalThis.DeviceAuthLogin = (() => {
       if (active !== login || !login.loginId || login.polling) return;
       login.polling = true;
       try {
-        const response = await fetch(`${basePath}/${encodeURIComponent(login.loginId)}`, {
-          credentials: 'same-origin',
-          signal: login.controller.signal,
-        });
+        const response = await fetch(`${basePath}/${encodeURIComponent(login.loginId)}`, { credentials: 'same-origin', signal: login.controller.signal });
         if (active !== login) return;
         if (response.status === 404) {
           fail(`${label} 登录会话已失效，请重新发起登录。`);
@@ -213,16 +195,12 @@ globalThis.DeviceAuthLogin = (() => {
         }
         if (login.popup && login.popup.closed && !login.resumed) {
           login.closedAt ||= Date.now();
-          if (Date.now() - login.closedAt >= 3000) {
-            fail(`${label} 登录窗口已关闭，尚未完成授权。`);
-          }
+          if (Date.now() - login.closedAt >= 3000) { fail(`${label} 登录窗口已关闭，尚未完成授权。`); }
         }
       } catch (err) {
         if (err && err.name === 'AbortError') return;
         // Transient network errors are retried on the next tick.
-      } finally {
-        login.polling = false;
-      }
+      } finally { login.polling = false; }
     }
 
     function messageForError(payload, fallback) {
@@ -242,20 +220,14 @@ globalThis.DeviceAuthLogin = (() => {
         } catch (_) {
           return { error: text.slice(0, 200) };
         }
-      } catch (_) {
-        return null;
-      }
+      } catch (_) { return null; }
     }
 
     function begin(enabled) {
       // The fetch is issued synchronously inside the click gesture so the popup
       // below is still treated as user-initiated by the browser.
       return fetch(basePath, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: enabled !== false }),
-      });
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled !== false }) });
     }
 
     function openPopup(login, authURL) {
@@ -267,9 +239,7 @@ globalThis.DeviceAuthLogin = (() => {
         try {
           login.popup.location.href = authURL;
           return true;
-        } catch (_) {
-          return false;
-        }
+        } catch (_) { return false; }
       }
     }
 
@@ -283,23 +253,14 @@ globalThis.DeviceAuthLogin = (() => {
       setLink('');
       status(statusPrefix);
 
-      const login = {
-        loginId: '',
-        expiresAt: 0,
-        popup: null,
-        timer: null,
-        controller: new AbortController(),
-        closedAt: 0,
-      };
+      const login = { loginId: '', expiresAt: 0, popup: null, timer: null, controller: new AbortController(), closedAt: 0 };
       active = login;
 
       // Reserve the popup window during the click gesture; it is navigated once
       // the server returns the official authorization URL.
       try {
         login.popup = window.open('about:blank', popupName, `popup,width=${popupWidth},height=${popupHeight}`);
-      } catch (_) {
-        login.popup = null;
-      }
+      } catch (_) { login.popup = null; }
 
       (async () => {
         try {
@@ -334,9 +295,7 @@ globalThis.DeviceAuthLogin = (() => {
             if (!openPopup(login, authURL)) {
               // No popup window: the flow still works through the visible link.
               status(`${label} 官方授权页面未能自动打开，请点击上方链接完成授权。`);
-            } else {
-              status(openingStatus || `请在 ${label} 官方页面完成登录与授权，本窗口会自动接管。`);
-            }
+            } else { status(openingStatus || `请在 ${label} 官方页面完成登录与授权，本窗口会自动接管。`); }
           } else {
             // A resumed transaction cannot re-open the original tab, but the
             // browser step may already be finished.

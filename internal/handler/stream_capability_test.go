@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -17,14 +18,10 @@ func (w *falseFlushWriter) Unwrap() http.ResponseWriter { return w.ResponseWrite
 
 func TestResponseWriterSupportsFlushUnwrapsTheWholeChain(t *testing.T) {
 	flushing := httptest.NewRecorder()
-	if !responseWriterSupportsFlush(&unwrapOnlyWriter{ResponseWriter: &unwrapOnlyWriter{ResponseWriter: flushing}}) {
-		t.Fatal("a wrapped flusher was not detected")
-	}
+	testutil.False(t, !responseWriterSupportsFlush(&unwrapOnlyWriter{ResponseWriter: &unwrapOnlyWriter{ResponseWriter: flushing}}), "a wrapped flusher was not detected")
 
 	nonFlushing := &plainResponseWriter{header: http.Header{}}
-	if responseWriterSupportsFlush(&falseFlushWriter{ResponseWriter: nonFlushing}) {
-		t.Fatal("a wrapper must not invent flush support when its underlying writer lacks it")
-	}
+	testutil.False(t, responseWriterSupportsFlush(&falseFlushWriter{ResponseWriter: nonFlushing}), "a wrapper must not invent flush support when its underlying writer lacks it")
 }
 
 type plainResponseWriter struct {

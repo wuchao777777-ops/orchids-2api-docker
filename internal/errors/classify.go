@@ -1,6 +1,9 @@
 package errors
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // HasExplicitHTTPStatus checks whether an error string contains an explicit
 // reference to the given HTTP status code (e.g. "HTTP 401", "status=429").
@@ -25,12 +28,7 @@ func HasExplicitHTTPStatus(lower string, code string) bool {
 		"response status " + code,
 		"response code " + code,
 	}
-	for _, p := range patterns {
-		if strings.Contains(lower, p) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(patterns, func(p string) bool { return strings.Contains(lower, p) })
 }
 
 // statusCodePrefixes lists the account-level codes that callers sometimes encode

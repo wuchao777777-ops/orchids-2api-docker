@@ -26,9 +26,7 @@ func TestChatDoesNotLocallyRetryNonAuthFailure(t *testing.T) {
 	defer server.Close()
 	client := &Client{apiBase: server.URL, stream: server.Client(), creds: Credentials{AccessToken: "token"}, account: &store.Account{ClineModelIDs: []string{"model-a"}}}
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{Model: "model-a", RequestID: "logical-1", Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}}}, nil, nil)
-	if err == nil {
-		t.Fatal("expected upstream error")
-	}
+	testutil.False(t, err == nil, "expected upstream error")
 	testutil.Equal(t, attempts.Load(), 1)
 }
 
@@ -51,32 +49,23 @@ func TestChatKeepsLogicalTaskIDAcross401Refresh(t *testing.T) {
 	defer server.Close()
 	client := &Client{apiBase: server.URL, stream: server.Client(), control: server.Client(), creds: Credentials{AccessToken: "old", RefreshToken: "refresh", ExpiresAt: time.Now().Add(time.Hour)}, account: &store.Account{ClineModelIDs: []string{"model-a"}}}
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{Model: "model-a", RequestID: "logical-1", Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}}}, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(taskIDs) != 2 || taskIDs[0] != "sess_logical-1" || taskIDs[1] != taskIDs[0] {
-		t.Fatalf("task ids=%v", taskIDs)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, len(taskIDs) != 2 || taskIDs[0] != "sess_logical-1" || taskIDs[1] != taskIDs[0], "task ids=%v", taskIDs)
 }
 
 func TestResolveModelEnforcesAccountCatalog(t *testing.T) {
 	client := &Client{account: &store.Account{ClineModelIDs: CatalogSnapshot([]Model{{ID: "allowed"}})}}
-	if _, err := client.resolveModel(upstream.UpstreamRequest{Model: "denied"}); err == nil {
-		t.Fatal("model absent from this account catalog was accepted")
-	}
-	if got, err := client.resolveModel(upstream.UpstreamRequest{Model: "ALLOWED"}); err != nil || got != "allowed" {
-		t.Fatalf("resolve allowed=%q err=%v", got, err)
-	}
+	_, err := client.resolveModel(upstream.UpstreamRequest{Model: "denied"})
+	testutil.Error(t, err)
+	got, err := client.resolveModel(upstream.UpstreamRequest{Model: "ALLOWED"})
+	testutil.Falsef(t, err != nil || got != "allowed", "resolve allowed=%q err=%v", got, err)
 }
 
 func TestConsumeStreamPreservesFinishReasonAndReasoningUsage(t *testing.T) {
 	body := `data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":5,"completion_tokens_details":{"reasoning_tokens":4}}}` + "\n\n"
 	result, err := consumeStream(strings.NewReader(body), false, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, result.FinishReason(), "max_tokens")
-	if result.Usage["reasoningTokens"] != 4 || result.Usage["reasoning_tokens"] != 4 {
-		t.Fatalf("usage=%v", result.Usage)
-	}
+	testutil.Equal(t, result.Usage["reasoningTokens"], 4)
+	testutil.Equal(t, result.Usage["reasoning_tokens"], 4)
 }

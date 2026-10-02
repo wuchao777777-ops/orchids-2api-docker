@@ -27,30 +27,22 @@ func TestConsumeStreamReportsUnifiedUsage(t *testing.T) {
 		`data: [DONE]`,
 	}, "\n")
 	events, result, err := collectEvents(body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	var sawUsage bool
 	var sawText bool
 	for _, event := range events {
 		switch event.Type {
 		case "model.tokens-used":
 			sawUsage = true
-			if event.Event["reasoningTokens"] != 4 || event.Event["reasoning_tokens"] != 4 {
-				t.Fatalf("usage event = %+v", event.Event)
-			}
+			testutil.Equal(t, event.Event["reasoningTokens"], 4)
+			testutil.Equal(t, event.Event["reasoning_tokens"], 4)
 		case "model.text-delta":
 			sawText = true
 			testutil.Equal(t, event.Event["delta"], "hi")
 		}
 	}
-	if !sawUsage || !sawText {
-		t.Fatalf("usage=%v text=%v events=%+v", sawUsage, sawText, events)
-	}
-	if result.Usage["reasoningTokens"] != 4 || result.Usage["reasoning_tokens"] != 4 {
-		t.Fatalf("result usage = %+v", result.Usage)
-	}
-	if !result.SawMeaningfulEvent {
-		t.Fatal("stream with content and usage was not marked meaningful")
-	}
+	testutil.Falsef(t, !sawUsage || !sawText, "usage=%v text=%v events=%+v", sawUsage, sawText, events)
+	testutil.Equal(t, result.Usage["reasoningTokens"], 4)
+	testutil.Equal(t, result.Usage["reasoning_tokens"], 4)
+	testutil.False(t, !result.SawMeaningfulEvent, "stream with content and usage was not marked meaningful")
 }

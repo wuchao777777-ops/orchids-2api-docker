@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/modelpolicy"
+	"orchids-api/internal/util"
 )
 
 var buildToolAliasInvalid = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
@@ -756,9 +757,7 @@ func buildToolAlias(namespace, name string) string {
 		value = namespace + "__" + name
 	}
 	value = strings.Trim(buildToolAliasInvalid.ReplaceAllString(value, "_"), "_")
-	if value == "" {
-		value = "tool"
-	}
+	value = util.FirstNonEmptyUntrimmed(value, "tool")
 	if len(value) > 128 {
 		value = value[:128]
 	}

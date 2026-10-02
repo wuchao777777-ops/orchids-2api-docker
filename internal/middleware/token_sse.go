@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"orchids-api/internal/util"
 	"strings"
 )
 
@@ -74,9 +75,7 @@ func generatedTokenEvent(event string, data []byte) bool {
 	}
 	var kind string
 	_ = json.Unmarshal(p["type"], &kind)
-	if kind == "" {
-		kind = event
-	}
+	kind = util.FirstNonEmptyUntrimmed(kind, event)
 	switch kind {
 	case "response.output_text.delta", "response.reasoning_text.delta",
 		"response.reasoning_summary_text.delta", "response.refusal.delta",

@@ -141,9 +141,7 @@ func (mc *MessageContent) ExtractText() string {
 }
 
 // ExtractText is a helper to extract text directly from the prompt.Message.
-func (m *Message) ExtractText() string {
-	return m.Content.ExtractText()
-}
+func (m *Message) ExtractText() string { return m.Content.ExtractText() }
 
 // Message 消息结构
 type Message struct {

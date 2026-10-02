@@ -27,26 +27,18 @@ func TestClassifyUpstreamErrorCreditsExhausted(t *testing.T) {
 
 	errClass := apperrors.ClassifyUpstreamError("workbuddy upstream error: no remaining quota: You have run out of credits.")
 	testutil.Equal(t, errClass.Category, "quota_exhausted")
-	if !errClass.Retryable {
-		t.Fatal("expected credits exhausted to be retryable")
-	}
-	if !errClass.SwitchAccount {
-		t.Fatal("expected credits exhausted to trigger account switch")
-	}
+	testutil.False(t, !errClass.Retryable, "expected credits exhausted to be retryable")
+	testutil.False(t, !errClass.SwitchAccount, "expected credits exhausted to trigger account switch")
 }
 
 func TestShouldRetryCurrentAccountWhenNoAlternative_RateLimit(t *testing.T) {
 	t.Parallel()
 
-	if shouldRetryCurrentAccountWhenNoAlternative("rate_limit") {
-		t.Fatal("expected rate_limit to stop retrying the same account when no alternative exists")
-	}
+	testutil.False(t, shouldRetryCurrentAccountWhenNoAlternative("rate_limit"), "expected rate_limit to stop retrying the same account when no alternative exists")
 }
 
 func TestShouldRetryCurrentAccountWhenNoAlternative_ModelUnavailable(t *testing.T) {
 	t.Parallel()
 
-	if !shouldRetryCurrentAccountWhenNoAlternative("model_unavailable") {
-		t.Fatal("expected model_unavailable to retry the current account when no alternative exists")
-	}
+	testutil.False(t, !shouldRetryCurrentAccountWhenNoAlternative("model_unavailable"), "expected model_unavailable to retry the current account when no alternative exists")
 }

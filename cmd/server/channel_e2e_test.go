@@ -21,6 +21,7 @@ import (
 	"orchids-api/internal/provider"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
+	"orchids-api/internal/testutil"
 )
 
 // accountUpdater is structurally identical to every provider's own AccountUpdater
@@ -41,9 +42,7 @@ type channelE2E struct {
 func (e *channelE2E) do(t *testing.T, method, path, body string, admin bool) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(method, e.server.URL+path, strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
+	testutil.NoError(t, err, "build request: %v")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", e.server.URL)
 	if admin {
@@ -52,9 +51,7 @@ func (e *channelE2E) do(t *testing.T, method, path, body string, admin bool) *ht
 		req.Header.Set("Authorization", "Bearer "+e.managedKey)
 	}
 	resp, err := e.client.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
-	}
+	testutil.Falsef(t, err != nil, "%s %s: %v", method, path, err)
 	return resp
 }
 
@@ -62,9 +59,7 @@ func (e *channelE2E) readBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
+	testutil.NoError(t, err, "read body: %v")
 	return string(raw)
 }
 
@@ -74,9 +69,7 @@ func newRouteMux(t *testing.T, redisPrefix string, cfg *config.Config) (*http.Se
 	t.Helper()
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: redisPrefix})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 	t.Cleanup(func() { _ = s.Close() })
 
 	lb := loadbalancer.NewWithCacheTTL(s, 0)
@@ -85,9 +78,7 @@ func newRouteMux(t *testing.T, redisPrefix string, cfg *config.Config) (*http.Se
 
 	apiHandler := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
 	renderer, err := template.NewRenderer()
-	if err != nil {
-		t.Fatalf("template.NewRenderer() error = %v", err)
-	}
+	testutil.NoError(t, err, "template.NewRenderer() error = %v")
 	mux := http.NewServeMux()
 	registerRoutes(mux, cfg, s, h, nil, apiHandler, middleware.NewConcurrencyLimiter(4, 0), nil, renderer)
 	return mux, s, h
@@ -109,13 +100,9 @@ func newChannelE2E(t *testing.T, redisPrefix, managedKey string, cfg *config.Con
 
 	h.SetClientFactory(func(acc *store.Account, c *config.Config) handler.UpstreamClient {
 		factory, ok := provider.Get(acc.AccountType)
-		if !ok {
-			t.Fatalf("no provider registered for %q", acc.AccountType)
-		}
+		testutil.True(t, ok, "no provider registered for %q")
 		client, ok := factory(acc, c).(handler.UpstreamClient)
-		if !ok {
-			t.Fatalf("provider %q returned an unusable client", acc.AccountType)
-		}
+		testutil.True(t, ok, "provider %q returned an unusable client")
 		if setter, ok := client.(interface {
 			SetAccountStore(accountUpdater)
 		}); ok {

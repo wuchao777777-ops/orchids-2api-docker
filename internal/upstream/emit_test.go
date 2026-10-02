@@ -16,13 +16,9 @@ func TestSharedEmittersMatchEveryCallersShape(t *testing.T) {
 	var events []SSEMessage
 	saw := false
 	EmitTextDelta(func(msg SSEMessage) { events = append(events, msg) }, "", &saw)
-	if saw || len(events) != 0 {
-		t.Fatalf("empty delta reported: saw=%v events=%v", saw, events)
-	}
+	testutil.Falsef(t, saw || len(events) != 0, "empty delta reported: saw=%v events=%v", saw, events)
 	EmitTextDelta(func(msg SSEMessage) { events = append(events, msg) }, "hi", &saw)
-	if !saw || len(events) != 1 || events[0].Type != "model.text-delta" || events[0].Event["delta"] != "hi" {
-		t.Fatalf("text delta = %v", events)
-	}
+	testutil.Falsef(t, !saw || len(events) != 1 || events[0].Type != "model.text-delta" || events[0].Event["delta"] != "hi", "text delta = %v", events)
 
 	// A nil callback must still count: the counter decides whether the attempt
 	// was meaningful, which is independent of whether anyone is listening.
@@ -31,27 +27,22 @@ func TestSharedEmittersMatchEveryCallersShape(t *testing.T) {
 	accumulator := util.NewToolCallAccumulator()
 	accumulator.Add(0, "", "Bash", `{"command":"ls"}`)
 	EmitToolCalls(nil, accumulator.CompleteAll(), &emitted, &toolCount)
-	if !emitted || toolCount != 1 {
-		t.Fatalf("tool emit with no listener: saw=%v count=%d", emitted, toolCount)
-	}
+	testutil.Falsef(t, !emitted || toolCount != 1, "tool emit with no listener: saw=%v count=%d", emitted, toolCount)
 
 	events = nil
 	accumulator = util.NewToolCallAccumulator()
 	accumulator.Add(0, "call-1", "Read", `{"path":"/tmp/a"}`)
 	accumulator.Add(1, "", "Glob", `{"pattern":"*"}`)
 	EmitToolCalls(func(msg SSEMessage) { events = append(events, msg) }, accumulator.CompleteAll(), &emitted, &toolCount)
-	if len(events) != 2 || toolCount != 3 {
-		t.Fatalf("tool emits = %+v count=%d", events, toolCount)
-	}
+	testutil.Equal(t, len(events), 2)
+	testutil.Equal(t, toolCount, 3)
 	for _, event := range events {
 		testutil.Equal(t, event.Type, "model.tool-call")
-		if _, ok := event.Event["toolCallId"].(string); !ok || event.Event["toolCallId"] == "" {
-			t.Fatalf("tool call without an id: %+v", event.Event)
-		}
+		_, ok := event.Event["toolCallId"].(string)
+		testutil.Falsef(t, !ok || event.Event["toolCallId"] == "", "tool call without an id: %+v", event.Event)
 	}
-	if events[0].Event["toolName"] != "Read" || events[1].Event["toolName"] != "Glob" {
-		t.Fatalf("tool names = %v / %v", events[0].Event["toolName"], events[1].Event["toolName"])
-	}
+	testutil.Equal(t, events[0].Event["toolName"], "Read")
+	testutil.Equal(t, events[1].Event["toolName"], "Glob")
 
 	// Draining is what makes the finish-time flush and the end-of-stream flush
 	// both safe on the same accumulator.
@@ -63,17 +54,12 @@ func TestSharedEmittersMatchEveryCallersShape(t *testing.T) {
 	stored := map[string]interface{}{}
 	sawUsage := false
 	ApplyStreamUsage(nil, nil, &sawUsage, &stored)
-	if sawUsage || len(stored) != 0 {
-		t.Fatalf("empty usage applied: saw=%v stored=%v", sawUsage, stored)
-	}
+	testutil.Falsef(t, sawUsage || len(stored) != 0, "empty usage applied: saw=%v stored=%v", sawUsage, stored)
 	events = nil
 	ApplyStreamUsage(func(msg SSEMessage) { events = append(events, msg) }, usage, &sawUsage, &stored)
-	if !sawUsage || stored["inputTokens"] != 1 {
-		t.Fatalf("usage not stored: saw=%v stored=%v", sawUsage, stored)
-	}
-	if len(events) != 1 || events[0].Type != "model.tokens-used" {
-		t.Fatalf("usage event = %+v", events)
-	}
+	testutil.Falsef(t, !sawUsage || stored["inputTokens"] != 1, "usage not stored: saw=%v stored=%v", sawUsage, stored)
+	testutil.Equal(t, len(events), 1)
+	testutil.Equal(t, events[0].Type, "model.tokens-used")
 }
 
 // TestNormalizeUsageMapUnifiesClineAndWorkBuddyAliases pins the merged
@@ -109,22 +95,19 @@ func TestNormalizeUsageMapUnifiesClineAndWorkBuddyAliases(t *testing.T) {
 	}
 	for _, tc := range cases {
 		got := NormalizeUsageMap(tc.raw)
-		if got["reasoningTokens"] != 4 || got["reasoning_tokens"] != 4 {
-			t.Fatalf("%s: reasoning = %v / %v, want 4", tc.name, got["reasoningTokens"], got["reasoning_tokens"])
-		}
-		if got["inputTokens"] != 5 || got["input_tokens"] != 5 || got["outputTokens"] != 2 || got["output_tokens"] != 2 {
-			t.Fatalf("%s: base usage = %+v", tc.name, got)
-		}
+		testutil.Equal(t, got["reasoningTokens"], 4)
+		testutil.Equal(t, got["reasoning_tokens"], 4)
+		testutil.Equal(t, got["inputTokens"], 5)
+		testutil.Equal(t, got["input_tokens"], 5)
+		testutil.Equal(t, got["outputTokens"], 2)
+		testutil.Equal(t, got["output_tokens"], 2)
 	}
 
-	if got := NormalizeUsageMap(nil); got != nil {
-		t.Fatalf("nil usage = %+v, want nil", got)
-	}
+	got := NormalizeUsageMap(nil)
+	testutil.Falsef(t, got != nil, "nil usage = %+v, want nil", got)
 	// A usage object with neither input nor output is not a usage report.
-	if got := NormalizeUsageMap(map[string]interface{}{"total_tokens": 9.0}); got != nil {
-		t.Fatalf("usage without input/output = %+v, want nil", got)
-	}
-	if got := NormalizeUsageMap(map[string]interface{}{"prompt_tokens": 3.0, "prompt_cache_hit_tokens": 2.0}); got["cacheReadTokens"] != 2 || got["cache_read_tokens"] != 2 {
-		t.Fatalf("cache read = %+v", got)
-	}
+	got = NormalizeUsageMap(map[string]interface{}{"total_tokens": 9.0})
+	testutil.Falsef(t, got != nil, "usage without input/output = %+v, want nil", got)
+	got = NormalizeUsageMap(map[string]interface{}{"prompt_tokens": 3.0, "prompt_cache_hit_tokens": 2.0})
+	testutil.Falsef(t, got["cacheReadTokens"] != 2 || got["cache_read_tokens"] != 2, "cache read = %+v", got)
 }

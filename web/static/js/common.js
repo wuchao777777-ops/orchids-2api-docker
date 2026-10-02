@@ -11,9 +11,7 @@ function setSidebarAccountStats(total, normal, abnormal) {
   if (footerAbnormal) footerAbnormal.textContent = String(abnormal || 0);
 }
 
-function normalizeSidebarAccountType(acc) {
-  return String(acc?.account_type || "").toLowerCase();
-}
+function normalizeSidebarAccountType(acc) { return String(acc?.account_type || "").toLowerCase(); }
 
 function normalizeSidebarStatusCode(statusCode) {
   if (statusCode === null || statusCode === undefined) return "";
@@ -26,9 +24,7 @@ function isSidebarGrokOAuthAccount(acc) {
     String(acc?.credential_type || "").trim().toLowerCase() === "oauth";
 }
 
-function hasSidebarAccountCredential(acc) {
-  return acc?.has_credential === true;
-}
+function hasSidebarAccountCredential(acc) { return acc?.has_credential === true; }
 
 function getSidebarQuotaStats(acc) {
   if (!acc) return null;
@@ -128,13 +124,9 @@ function isQuotaExhaustedQuota(acc, quota) {
 function isSidebarAccountAbnormal(acc) {
   if (!acc || !acc.enabled) return true;
 
-  if (isQuotaOnlyStatus(acc)) {
-    return false;
-  }
+  if (isQuotaOnlyStatus(acc)) { return false; }
 
-  if (normalizeSidebarStatusCode(acc.status_code)) {
-    return true;
-  }
+  if (normalizeSidebarStatusCode(acc.status_code)) { return true; }
 
   return !hasSidebarAccountCredential(acc);
 }
@@ -155,9 +147,7 @@ async function refreshSidebarAccountStats() {
     const accounts = await ConsoleAPI.json("/api/accounts", {}, { array: true });
     const stats = computeSidebarAccountStats(accounts);
     setSidebarAccountStats(stats.total, stats.normal, stats.abnormal);
-  } catch (err) {
-    console.debug("Failed to refresh sidebar account stats:", err);
-  }
+  } catch (err) { console.debug("Failed to refresh sidebar account stats:", err); }
 }
 
 function setSidebarOpen(open) {
@@ -174,9 +164,7 @@ function setSidebarOpen(open) {
     overlay.classList.toggle("active", shouldOpen);
     overlay.setAttribute("aria-hidden", shouldOpen ? "false" : "true");
   }
-  if (menuBtn) {
-    menuBtn.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
-  }
+  if (menuBtn) { menuBtn.setAttribute("aria-expanded", shouldOpen ? "true" : "false"); }
   document.body.classList.toggle("sidebar-open", shouldOpen);
 }
 
@@ -203,9 +191,7 @@ function showToast(msg, type = 'success') {
   container.setAttribute("aria-atomic", "true");
 
   const visibleToasts = Array.from(container.querySelectorAll(".toast"));
-  while (visibleToasts.length >= 4) {
-    visibleToasts.shift()?.remove();
-  }
+  while (visibleToasts.length >= 4) { visibleToasts.shift()?.remove(); }
 
   const toast = document.createElement("div");
   toast.className = "toast";
@@ -242,9 +228,7 @@ async function copyToClipboard(text) {
       document.body.removeChild(el);
     }
     showToast("已复制到剪切板");
-  } catch (err) {
-    showToast("复制失败", "error");
-  }
+  } catch (err) { showToast("复制失败", "error"); }
 }
 
 // Logout function
@@ -253,9 +237,7 @@ async function logout() {
     try {
       await fetch("/api/logout", { method: "POST" });
       window.location.href = "./login.html";
-    } catch (err) {
-      window.location.href = "./login.html";
-    }
+    } catch (err) { window.location.href = "./login.html"; }
   }
 }
 
@@ -307,9 +289,7 @@ document.addEventListener("DOMContentLoaded", () => {
   else if (sidebarMedia?.addListener) sidebarMedia.addListener(resetSidebar);
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      setSidebarOpen(false);
-    }
+    if (event.key === "Escape") { setSidebarOpen(false); }
   });
 });
 
@@ -326,17 +306,13 @@ function escapeHtml(text) {
   return String(text).replace(HTML_ESCAPE_RE, (ch) => HTML_ESCAPE_MAP[ch]);
 }
 
-function encodeData(value) {
-  return encodeURIComponent(value === null || value === undefined ? "" : String(value));
-}
+function encodeData(value) { return encodeURIComponent(value === null || value === undefined ? "" : String(value)); }
 
 function decodeData(value) {
   if (!value) return "";
   try {
     return decodeURIComponent(value);
-  } catch (err) {
-    return value;
-  }
+  } catch (err) { return value; }
 }
 
 function formatTime(iso) {
@@ -347,11 +323,5 @@ function formatTime(iso) {
   if (diff < 60) return "刚刚";
   if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
   if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
-  return d.toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
+  return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 }

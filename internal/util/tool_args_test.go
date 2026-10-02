@@ -28,13 +28,11 @@ func TestNormalizeToolInputUnwrapsNestedArguments(t *testing.T) {
 func TestUnwrapOpenAIArgumentsRejectsOtherShapes(t *testing.T) {
 	t.Parallel()
 
-	if got, ok := unwrapOpenAIArguments(`{"arguments":"{\"a\":1}"}`); !ok || got != `{"a":1}` {
-		t.Fatalf("unwrapOpenAIArguments() = (%q, %v), want the inner object", got, ok)
-	}
+	got, ok := unwrapOpenAIArguments(`{"arguments":"{\"a\":1}"}`)
+	testutil.Falsef(t, !ok || got != `{"a":1}`, "unwrapOpenAIArguments() = (%q, %v), want the inner object", got, ok)
 	// An argument envelope with no inner text still unwraps to an empty object.
-	if got, ok := unwrapOpenAIArguments(`{"arguments":"null"}`); !ok || got != "{}" {
-		t.Fatalf("unwrapOpenAIArguments(null text) = (%q, %v), want an empty object", got, ok)
-	}
+	got, ok = unwrapOpenAIArguments(`{"arguments":"null"}`)
+	testutil.Falsef(t, !ok || got != "{}", "unwrapOpenAIArguments(null text) = (%q, %v), want an empty object", got, ok)
 	for name, input := range map[string]string{
 		"no arguments key": `{"other":1}`,
 		"not an object":    `"plain"`,
@@ -42,9 +40,8 @@ func TestUnwrapOpenAIArgumentsRejectsOtherShapes(t *testing.T) {
 		"arguments number": `{"arguments":42}`,
 		"empty":            ``,
 	} {
-		if got, ok := unwrapOpenAIArguments(input); ok {
-			t.Fatalf("%s: unwrapOpenAIArguments(%q) = (%q, true), want false", name, input, got)
-		}
+		got, ok := unwrapOpenAIArguments(input)
+		testutil.Falsef(t, ok, "%s: unwrapOpenAIArguments(%q) = (%q, true), want false", name, input, got)
 	}
 }
 

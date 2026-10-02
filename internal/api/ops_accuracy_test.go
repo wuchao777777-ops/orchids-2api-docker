@@ -17,9 +17,7 @@ func TestPoolCountsLoginIndependentOfCooldown(t *testing.T) {
 		{ID: 5, AccountType: "grok", Enabled: true, StatusCode: "401"},
 	}
 	enabled, available, login, cooldowns := poolCounts(accounts, "grok", now)
-	if enabled != 4 || available != 2 || login != 3 || cooldowns != 1 {
-		t.Fatalf("enabled=%d available=%d login=%d cooldowns=%d", enabled, available, login, cooldowns)
-	}
+	testutil.Falsef(t, enabled != 4 || available != 2 || login != 3 || cooldowns != 1, "enabled=%d available=%d login=%d cooldowns=%d", enabled, available, login, cooldowns)
 	accounts[0].StatusCode = ""
 	_, _, login, _ = poolCounts(accounts, "grok", now)
 	testutil.Equal(t, login, 2)

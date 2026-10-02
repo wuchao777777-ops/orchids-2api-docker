@@ -51,27 +51,18 @@ func TestNormalizeToolDefinitionsMatchesSharedHelper(t *testing.T) {
 	workbuddyGot := util.NormalizeToolDefinitions(declarations)
 
 	qoderJSON, err := json.Marshal(qoderGot)
-	if err != nil {
-		t.Fatalf("marshal qoder tools: %v", err)
-	}
+	testutil.NoError(t, err, "marshal qoder tools: %v")
 	workbuddyJSON, err := json.Marshal(workbuddyGot)
-	if err != nil {
-		t.Fatalf("marshal workbuddy tools: %v", err)
-	}
-	if !reflect.DeepEqual(qoderGot, workbuddyGot) {
-		t.Fatalf("qoder and workbuddy normalization diverged:\nqoder:     %s\nworkbuddy: %s", qoderJSON, workbuddyJSON)
-	}
+	testutil.NoError(t, err, "marshal workbuddy tools: %v")
+	testutil.Falsef(t, !reflect.DeepEqual(qoderGot, workbuddyGot), "qoder and workbuddy normalization diverged:\nqoder:     %s\nworkbuddy: %s", qoderJSON, workbuddyJSON)
 	testutil.Equal(t, len(qoderGot), 4)
 
 	// The NoTools / empty guard is Qoder's own behavior, not the shared helper's.
-	if got := normalizeToolDefinitions(upstream.UpstreamRequest{NoTools: true, Tools: declarations}, modelEntry{Key: "k"}); got != nil {
-		t.Fatalf("NoTools must return nil, got %#v", got)
-	}
-	if got := normalizeToolDefinitions(upstream.UpstreamRequest{}, modelEntry{Key: "k"}); got != nil {
-		t.Fatalf("no declarations must return nil, got %#v", got)
-	}
+	got := normalizeToolDefinitions(upstream.UpstreamRequest{NoTools: true, Tools: declarations}, modelEntry{Key: "k"})
+	testutil.Falsef(t, got != nil, "NoTools must return nil, got %#v", got)
+	got = normalizeToolDefinitions(upstream.UpstreamRequest{}, modelEntry{Key: "k"})
+	testutil.Falsef(t, got != nil, "no declarations must return nil, got %#v", got)
 	// The shared helper itself stays non-nil so WorkBuddy's empty case is unchanged.
-	if got := util.NormalizeToolDefinitions(nil); got == nil || len(got) != 0 {
-		t.Fatalf("shared helper must return an empty non-nil slice for no tools, got %#v", got)
-	}
+	got = util.NormalizeToolDefinitions(nil)
+	testutil.Falsef(t, got == nil || len(got) != 0, "shared helper must return an empty non-nil slice for no tools, got %#v", got)
 }

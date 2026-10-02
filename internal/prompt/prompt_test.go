@@ -27,9 +27,7 @@ func TestMessageUnmarshalJSON_OpenAIToolCallsWithNullContent(t *testing.T) {
 	testutil.NoError(t, json.Unmarshal(raw, &msg), "unmarshal message: %v")
 
 	testutil.Equal(t, msg.Role, "assistant")
-	if msg.Content.IsString() {
-		t.Fatal("expected assistant tool call message to normalize into content blocks")
-	}
+	testutil.False(t, msg.Content.IsString(), "expected assistant tool call message to normalize into content blocks")
 
 	blocks := msg.Content.GetBlocks()
 	testutil.Equal(t, len(blocks), 1)
@@ -37,12 +35,9 @@ func TestMessageUnmarshalJSON_OpenAIToolCallsWithNullContent(t *testing.T) {
 	testutil.Equal(t, blocks[0].ID, "call_write_1")
 	testutil.Equal(t, blocks[0].Name, "Write")
 	input, ok := blocks[0].Input.(map[string]interface{})
-	if !ok {
-		t.Fatalf("block input type = %T, want map[string]interface{}", blocks[0].Input)
-	}
-	if input["file_path"] != "note.txt" || input["content"] != "hello world" {
-		t.Fatalf("block input = %#v", input)
-	}
+	testutil.True(t, ok, "block input type = %T, want map[string]interface{}")
+	testutil.Equal(t, input["file_path"], "note.txt")
+	testutil.Equal(t, input["content"], "hello world")
 }
 
 func TestMessageUnmarshalJSON_OpenAIToolResultMessage(t *testing.T) {
@@ -56,15 +51,12 @@ func TestMessageUnmarshalJSON_OpenAIToolResultMessage(t *testing.T) {
 	testutil.NoError(t, json.Unmarshal(raw, &msg), "unmarshal message: %v")
 
 	testutil.Equal(t, msg.Role, "user")
-	if msg.Content.IsString() {
-		t.Fatal("expected tool message to normalize into content blocks")
-	}
+	testutil.False(t, msg.Content.IsString(), "expected tool message to normalize into content blocks")
 
 	blocks := msg.Content.GetBlocks()
 	testutil.Equal(t, len(blocks), 1)
 	testutil.Equal(t, blocks[0].Type, "tool_result")
 	testutil.Equal(t, blocks[0].ToolUseID, "call_write_1")
-	if got, ok := blocks[0].Content.(string); !ok || got != "Write succeeded: note.txt created with hello world" {
-		t.Fatalf("tool_result content = %#v", blocks[0].Content)
-	}
+	got, ok := blocks[0].Content.(string)
+	testutil.Falsef(t, !ok || got != "Write succeeded: note.txt created with hello world", "tool_result content = %#v", blocks[0].Content)
 }

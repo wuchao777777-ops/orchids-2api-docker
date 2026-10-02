@@ -292,9 +292,7 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 	sawNativeTools := false
 	sawFinish := false
 
-	emitText := func(text string) {
-		upstream.EmitTextDelta(onMessage, text, &result.SawMeaningfulEvent)
-	}
+	emitText := func(text string) { upstream.EmitTextDelta(onMessage, text, &result.SawMeaningfulEvent) }
 
 	emitReasoning := func(reasoning string) {
 		if reasoning == "" {

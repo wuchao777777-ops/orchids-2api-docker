@@ -7,11 +7,7 @@ let pageSize = 20;
 let currentPage = 1;
 
 // DOM 缓存
-const domCache = {
-    accountsList: null,
-    paginationInfo: null,
-    paginationControls: null,
-};
+const domCache = { accountsList: null, paginationInfo: null, paginationControls: null };
 
 function initDOMCache() {
     domCache.accountsList = document.getElementById("accountsList");
@@ -42,14 +38,10 @@ async function loadAccounts() {
 }
 
 // Sort accounts (Default by ID desc)
-function sortAccounts() {
-  accounts.sort((a, b) => b.id - a.id);
-}
+function sortAccounts() { accounts.sort((a, b) => b.id - a.id); }
 
 // Normalize account type
-function normalizeAccountType(acc) {
-  return normalizeSidebarAccountType(acc);
-}
+function normalizeAccountType(acc) { return normalizeSidebarAccountType(acc); }
 
 // quotaProvenance reads where an account's quota number came from and how far it can
 // be trusted. The server publishes this next to every quota value (quota_type /
@@ -80,11 +72,7 @@ const QUOTA_SOURCE_LABELS = {
   unknown: "尚未同步",
 };
 
-const QUOTA_CONFIDENCE_LABELS = {
-  confirmed: "已确认",
-  observed: "实测",
-  estimated: "估算",
-};
+const QUOTA_CONFIDENCE_LABELS = { confirmed: "已确认", observed: "实测", estimated: "估算" };
 
 // quotaTooltip explains a quota cell: what the number means, where it came from and
 // how much it is worth. An estimate must never read like a balance.
@@ -97,20 +85,12 @@ function quotaTooltip(acc, quota) {
     parts.push("Free 实报额度");
   } else if (provenance.type === "free") {
     parts.push("Free");
-  } else if (provenance.type === "paid") {
-    parts.push("付费额度");
-  }
-  if (quota?.confirmedFree) {
-    parts.push("上游额度耗尽时返回的真实 actual/limit，非估算");
-  }
+  } else if (provenance.type === "paid") { parts.push("付费额度"); }
+  if (quota?.confirmedFree) { parts.push("上游额度耗尽时返回的真实 actual/limit，非估算"); }
   if (provenance.source) parts.push("来源: " + (QUOTA_SOURCE_LABELS[provenance.source] || provenance.source));
   if (provenance.confidence) parts.push("置信度: " + (QUOTA_CONFIDENCE_LABELS[provenance.confidence] || provenance.confidence));
-  if (quota?.estimated && !provenance.limitKnown) {
-    parts.push("限额未经上游确认，数字仅供估算");
-  }
-  if (quota?.estimated && !provenance.observed) {
-    parts.push("用量: 本网关未统计到窗口内用量，仅显示估算上限");
-  }
+  if (quota?.estimated && !provenance.limitKnown) { parts.push("限额未经上游确认，数字仅供估算"); }
+  if (quota?.estimated && !provenance.observed) { parts.push("用量: 本网关未统计到窗口内用量，仅显示估算上限"); }
   if (quota?.windowHours) parts.push("窗口: 滚动 " + quota.windowHours + " 小时");
   if (provenance.note) parts.push(provenance.note);
   return parts.join(" · ");
@@ -240,12 +220,7 @@ function subscriptionBadge(acc) {
     const plan = String(acc?.quota_plan || "").trim();
     if (!acc?.quota_supported) {
       // No snapshot yet: say so instead of showing a made-up level.
-      return {
-        text: "未同步",
-        bg: "rgba(100, 116, 139, 0.12)",
-        color: "#94a3b8",
-        tip: "尚未读取到 Qoder 计划与额度；点「检查」立即同步",
-      };
+      return { text: "未同步", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "尚未读取到 Qoder 计划与额度；点「检查」立即同步" };
     }
     if (plan) {
       const paid = acc?.quota_used !== undefined && plan.toLowerCase().indexOf("free") === -1;
@@ -256,12 +231,7 @@ function subscriptionBadge(acc) {
         tip: `Qoder 计划: ${plan}${acc?.quota_unit ? `（单位 ${acc.quota_unit}）` : ""}`,
       };
     }
-    return {
-      text: "未知",
-      bg: "rgba(100, 116, 139, 0.12)",
-      color: "#94a3b8",
-      tip: "Qoder 未返回计划档位",
-    };
+    return { text: "未知", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "Qoder 未返回计划档位" };
   }
   if (type === "cline") {
     // The tier comes from the upstream plan endpoint, not from the catalog:
@@ -285,37 +255,17 @@ function subscriptionBadge(acc) {
     // the badge says what is missing rather than asserting a tier.
     const modelCount = Array.isArray(acc?.cline_model_ids) ? acc.cline_model_ids.length : 0;
     if (modelCount === 0) {
-      return {
-        text: "未同步",
-        bg: "rgba(100, 116, 139, 0.12)",
-        color: "#94a3b8",
-        tip: "尚未读取到 Cline 模型目录；点「刷新」立即同步",
-      };
+      return { text: "未同步", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "尚未读取到 Cline 模型目录；点「刷新」立即同步" };
     }
-    return {
-      text: "未同步",
-      bg: "rgba(100, 116, 139, 0.12)",
-      color: "#94a3b8",
-      tip: `已读到 ${modelCount} 个免费模型，但尚未读到套餐档位；点「刷新」重新探测`,
-    };
+    return { text: "未同步", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: `已读到 ${modelCount} 个免费模型，但尚未读到套餐档位；点「刷新」重新探测` };
   }
   if (type === "workbuddy") {
     const plan = String(acc?.quota_plan || "").trim();
     if (plan) {
-      return {
-        text: plan,
-        bg: "rgba(52, 211, 153, 0.16)",
-        color: "#34d399",
-        tip: `WorkBuddy 计量包: ${plan}${acc?.quota_unit ? `（单位 ${acc.quota_unit}）` : ""}`,
-      };
+      return { text: plan, bg: "rgba(52, 211, 153, 0.16)", color: "#34d399", tip: `WorkBuddy 计量包: ${plan}${acc?.quota_unit ? `（单位 ${acc.quota_unit}）` : ""}` };
     }
     // No meter snapshot yet: say so instead of showing a made-up level.
-    return {
-      text: "未同步",
-      bg: "rgba(100, 116, 139, 0.12)",
-      color: "#94a3b8",
-      tip: "尚未读取到 WorkBuddy 计量包；点 Sync 刷新账号状态后重试",
-    };
+    return { text: "未同步", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "尚未读取到 WorkBuddy 计量包；点 Sync 刷新账号状态后重试" };
   }
   const level = normalizeAccountSubscription(acc);
   if (!level) {
@@ -339,9 +289,7 @@ function subscriptionBadge(acc) {
     }
     return { text: "-", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "暂无订阅等级" };
   }
-  if (type !== "grok") {
-    return { text: level, bg: "rgba(100, 116, 139, 0.12)", color: "#cbd5e1", tip: `订阅等级: ${level}` };
-  }
+  if (type !== "grok") { return { text: level, bg: "rgba(100, 116, 139, 0.12)", color: "#cbd5e1", tip: `订阅等级: ${level}` }; }
   switch (level) {
     case "unknown":
       return { text: "未知", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "xAI 未返回可验证的 Grok 套餐等级" };
@@ -427,9 +375,7 @@ function applyCredentialModeUI(type) {
 
 
 
-function accountTypeLabel(type) {
-  return window.OrchidsProviderRegistry?.label(type) || String(type || "").trim();
-}
+function accountTypeLabel(type) { return window.OrchidsProviderRegistry?.label(type) || String(type || "").trim(); }
 
 function getActiveAccountType() {
   const platform = String(currentPlatform || "").trim().toLowerCase();
@@ -475,9 +421,7 @@ function setAccountModalType(type) {
 }
 
 // extractAdminErrorDetail keeps update failures readable without exposing raw JSON.
-function extractAdminErrorDetail(raw) {
-  return ConsoleAPI.detail(raw, '');
-}
+function extractAdminErrorDetail(raw) { return ConsoleAPI.detail(raw, ''); }
 
 // The console's channel strip, shared with 模型管理: the same channels, in the same
 // order, with the same names, so an operator moving between the two pages does not have
@@ -499,9 +443,7 @@ const ACCOUNT_TYPE_NAMES = Object.fromEntries(
 // channel, and a column that is noise for one of them is still the only place
 // another reports its balance. So the decision is made on the filter, never on
 // the row: mixed rows keep every column.
-function clinePageOnly() {
-  return String(currentPlatform || "").trim().toLowerCase() === "cline";
-}
+function clinePageOnly() { return String(currentPlatform || "").trim().toLowerCase() === "cline"; }
 
 function currentPlatformLabel() {
   const key = String(currentPlatform || "").trim();
@@ -561,12 +503,8 @@ function updateAccountHealth(id, ok, msg = '') {
 
 function evaluateAccountStatus(acc) {
   const health = accountHealth[acc.id];
-  if (health && !health.ok) {
-    return { normal: false, text: '异常', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: health.msg || '状态同步失败' };
-  }
-  if (!acc.enabled) {
-    return { normal: false, text: '禁用', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '账号已禁用' };
-  }
+  if (health && !health.ok) { return { normal: false, text: '异常', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: health.msg || '状态同步失败' }; }
+  if (!acc.enabled) { return { normal: false, text: '禁用', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '账号已禁用' }; }
   const statusCode = normalizeSidebarStatusCode(acc.status_code);
   // A bare "401" or "429" hides the actionable cause (retired grant vs. a
   // partial write vs. upstream throttling), so the server's reason wins.
@@ -576,14 +514,7 @@ function evaluateAccountStatus(acc) {
     const limitText = quota && quota.limit > 0 ? quota.limit.toLocaleString() : '未知';
     const type = normalizeAccountType(acc);
     const providerName = accountTypeLabel(type);
-    return {
-      normal: true,
-      text: '额度不足',
-      color: '#f59e0b',
-      bg: 'rgba(245, 158, 11, 0.16)',
-      tip: providerName + ' 额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + limitText + ')',
-      quotaOnly: true,
-    };
+    return { normal: true, text: '额度不足', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: providerName + ' 额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + limitText + ')', quotaOnly: true };
   }
   if (statusCode) {
     // When the server recorded a reason, it is the actionable text; the generic
@@ -605,19 +536,8 @@ function evaluateAccountStatus(acc) {
 
   if (!hasSidebarAccountCredential(acc)) {
     const type = normalizeAccountType(acc);
-    const tips = {
-      grok: '缺少 Build OAuth 授权',
-      workbuddy: '缺少 WorkBuddy 凭证（refreshToken / accessToken）',
-      qoder: '缺少 Qoder 设备凭据，请重新使用官方网页登录',
-      cline: '缺少 Cline WorkOS 凭据，请重新使用官方网页登录',
-    };
-    return {
-      normal: false,
-      text: type === 'grok' ? '待登录' : '待补全',
-      color: '#f59e0b',
-      bg: 'rgba(245, 158, 11, 0.16)',
-      tip: tips[type] || '缺少账号凭据',
-    };
+    const tips = { grok: '缺少 Build OAuth 授权', workbuddy: '缺少 WorkBuddy 凭证（refreshToken / accessToken）', qoder: '缺少 Qoder 设备凭据，请重新使用官方网页登录', cline: '缺少 Cline WorkOS 凭据，请重新使用官方网页登录' };
+    return { normal: false, text: type === 'grok' ? '待登录' : '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: tips[type] || '缺少账号凭据' };
   }
 
   const quota = getQuotaStats(acc);
@@ -628,22 +548,13 @@ function evaluateAccountStatus(acc) {
   if (isQuotaExhaustedQuota(acc, quota)) {
     const providerName = accountTypeLabel(normalizeAccountType(acc));
     const limitText = quota && quota.limit > 0 ? quota.limit.toLocaleString() : '未知';
-    return {
-      normal: true,
-      text: '额度不足',
-      color: '#f59e0b',
-      bg: 'rgba(245, 158, 11, 0.16)',
-      tip: providerName + ' 额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + limitText + ')',
-      quotaOnly: true,
-    };
+    return { normal: true, text: '额度不足', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: providerName + ' 额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + limitText + ')', quotaOnly: true };
   }
 
   return { normal: true, text: '正常', color: '#34d399', bg: 'rgba(52, 211, 153, 0.16)', tip: '状态正常' };
 }
 
-function isAccountAbnormal(acc) {
-  return !evaluateAccountStatus(acc).normal;
-}
+function isAccountAbnormal(acc) { return !evaluateAccountStatus(acc).normal; }
 
 function matchesCurrentPlatform(acc) {
   if (!currentPlatform) return true;
@@ -652,9 +563,7 @@ function matchesCurrentPlatform(acc) {
 }
 
 // Get status badge for account
-function statusBadge(acc) {
-  return evaluateAccountStatus(acc);
-}
+function statusBadge(acc) { return evaluateAccountStatus(acc); }
 
 // Refresh single account via the shared check endpoint. Returns true when the
 // sync succeeded, so callers (auto-sync in particular) can tell a refreshed row
@@ -664,9 +573,7 @@ async function checkAccount(id, silent = false, actionText = "刷新") {
   let succeeded = false;
   try {
     const res = await ConsoleAPI.request(`/api/accounts/${id}/${action}`);
-    if (!res.ok) {
-      throw new Error(await res.text());
-    }
+    if (!res.ok) { throw new Error(await res.text()); }
     const updated = await res.json();
     accounts = accounts.map(a => (a.id === id ? updated : a));
     updateAccountHealth(id, true);
@@ -679,12 +586,8 @@ async function checkAccount(id, silent = false, actionText = "刷新") {
         const latest = await latestRes.json();
         accounts = accounts.map(a => (a.id === id ? latest : a));
         delete accountHealth[id];
-      } else {
-        updateAccountHealth(id, false, err.message || String(err));
-      }
-    } catch (_) {
-      updateAccountHealth(id, false, err.message || String(err));
-    }
+      } else { updateAccountHealth(id, false, err.message || String(err)); }
+    } catch (_) { updateAccountHealth(id, false, err.message || String(err)); }
     if (!silent) showToast(`账号 ${id} ${actionText}失败`, "error");
   } finally {
     renderAccounts();
@@ -792,9 +695,7 @@ function renderAccounts() {
       selectAll.type = "checkbox";
       selectAll.dataset.action = "select-all";
       th.appendChild(selectAll);
-    } else {
-      th.textContent = h.label;
-    }
+    } else { th.textContent = h.label; }
     headRow.appendChild(th);
   });
   thead.appendChild(headRow);
@@ -876,9 +777,7 @@ function renderAccounts() {
             "口径: 当前周期剩余 / 周期上限",
             quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
           ].filter(Boolean).join(" · ");
-        } else {
-          tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步";
-        }
+        } else { tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步"; }
       } else if (normalizeAccountType(acc) === "qoder") {
         if (quota && quota.supported) {
           tdQuota.title = [
@@ -889,9 +788,7 @@ function renderAccounts() {
             quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
             quota.upgradeUrl ? `升级: ${quota.upgradeUrl}` : "",
           ].filter(Boolean).join(" · ");
-        } else {
-          tdQuota.title = "尚未读取到 Qoder 计划与额度；点「检查」立即同步";
-        }
+        } else { tdQuota.title = "尚未读取到 Qoder 计划与额度；点「检查」立即同步"; }
       } else if (quota && (quota.estimated || quota.quotaUnavailable)) {
         // Every number in this cell carries its provenance, so an estimate is never
         // mistaken for a reported balance.
@@ -930,9 +827,7 @@ function renderAccounts() {
     const count = document.createElement("div");
     count.className = "account-usage-count";
     count.textContent = String(accountUsageCounter(acc));
-    if (normalizeAccountType(acc) === "workbuddy") {
-      count.title = "WorkBuddy 按计量口径统计的已消耗额度（点刷新同步）";
-    }
+    if (normalizeAccountType(acc) === "workbuddy") { count.title = "WorkBuddy 按计量口径统计的已消耗额度（点刷新同步）"; }
     const when = document.createElement("div");
     when.className = "account-usage-when";
     when.textContent = acc.last_used_at && !acc.last_used_at.startsWith('0001') ? formatTime(acc.last_used_at) : "未调用";
@@ -1187,9 +1082,7 @@ function buildQuotaMarkup(acc) {
     const windowText = quota.windowHours ? `滚动 ${quota.windowHours}h` : "";
     return `<span style="color:${color}">≈ ${usage} / ${formatCredit(quota.limit)}</span> <span style="color:#64748b;font-size:0.75rem">(Free 估算${windowText ? " · " + windowText : ""})</span>`;
   }
-  if (quota && quota.quotaUnavailable) {
-    return `<span style="color:#94a3b8">未知</span> <span style="color:#64748b;font-size:0.75rem">(xAI 未下发 Build 数值配额)</span>`;
-  }
+  if (quota && quota.quotaUnavailable) { return `<span style="color:#94a3b8">未知</span> <span style="color:#64748b;font-size:0.75rem">(xAI 未下发 Build 数值配额)</span>`; }
   if (quota && quota.unmetered) {
     // Unmetered is a verdict, not a missing number: the channel is billed by
     // rate limit rather than a balance, so the cell says so instead of showing
@@ -1213,9 +1106,7 @@ function buildQuotaMarkup(acc) {
   if (quota) {
     const pct = quota.pctRemaining;
     const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
-	if (quota.weeklyPercent) {
-	  return `<span style="color:${color}">${quota.remaining.toLocaleString()}%</span> <span style="color:#64748b;font-size:0.75rem">/ 100% (周度剩余)</span>`;
-	}
+	if (quota.weeklyPercent) { return `<span style="color:${color}">${quota.remaining.toLocaleString()}%</span> <span style="color:#64748b;font-size:0.75rem">/ 100% (周度剩余)</span>`; }
 	return `<span style="color:${color}">${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>`;
   }
   return `<span style="color:#64748b">-</span>`;
@@ -1240,9 +1131,7 @@ function bindAccountActions(container) {
   };
 }
 
-function renderPagination(current, total) {
-  ConsoleUI.pagination(domCache.paginationControls || document.getElementById('paginationControls'), current, total, goToPage);
-}
+function renderPagination(current, total) { ConsoleUI.pagination(domCache.paginationControls || document.getElementById('paginationControls'), current, total, goToPage); }
 
 function goToPage(page) {
   if (page < 1) return;
@@ -1270,9 +1159,7 @@ function filterByPlatform(platform) {
     btn.classList.toggle("active", key === platform);
   });
   const subtitle = document.getElementById("pageSubtitle");
-  if (subtitle) {
-    subtitle.textContent = currentPlatform ? `管理您的 ${currentPlatformLabel()} API 凭证` : "管理您的所有 API 凭证";
-  }
+  if (subtitle) { subtitle.textContent = currentPlatform ? `管理您的 ${currentPlatformLabel()} API 凭证` : "管理您的所有 API 凭证"; }
   renderAccounts();
 }
 
@@ -1410,28 +1297,18 @@ async function saveAccount(e) {
     return;
   }
   const existing = accounts.find((account) => String(account.id) === String(id));
-  const data = {
-    account_type: type,
-    weight: existing ? (parseInt(existing.weight, 10) || 1) : 1,
-    enabled: document.getElementById("enabled").checked,
-  };
+  const data = { account_type: type, weight: existing ? (parseInt(existing.weight, 10) || 1) : 1, enabled: document.getElementById("enabled").checked };
   if (type === "grok") {
     data.credential_type = "oauth";
     data.grok_provider = "build";
   }
   try {
-    const res = await ConsoleAPI.request(`/api/accounts/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
+    const res = await ConsoleAPI.request(`/api/accounts/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
     if (!res.ok) throw new Error(extractAdminErrorDetail(await res.text()));
     closeModal();
     loadAccounts();
     showToast("保存成功");
-  } catch (err) {
-    showToast("保存失败: " + err.message, "error");
-  }
+  } catch (err) { showToast("保存失败: " + err.message, "error"); }
 }
 
 // Edit account
@@ -1455,9 +1332,7 @@ async function deleteAccount(id) {
     if (!res.ok) throw new Error(await res.text());
     showToast("删除成功");
     loadAccounts();
-  } catch (err) {
-    showToast("删除失败: " + err.message, "error");
-  }
+  } catch (err) { showToast("删除失败: " + err.message, "error"); }
 }
 
 function parseDataId(value) {
@@ -1467,9 +1342,7 @@ function parseDataId(value) {
   return Number.isNaN(num) ? decoded : num;
 }
 
-function formatTokenDisplay(acc) {
-  return acc?.has_credential === true ? '凭证已配置' : acc?.has_credential === false ? '待登录' : '凭据状态未知';
-}
+function formatTokenDisplay(acc) { return acc?.has_credential === true ? '凭证已配置' : acc?.has_credential === false ? '待登录' : '凭据状态未知'; }
 
 // workBuddyIdentityLabel renders the account identity: the signed-in address when
 // the profile was fetched, otherwise a short uid, otherwise a placeholder.
@@ -1482,22 +1355,8 @@ function workBuddyIdentityLabel(acc) {
 }
 
 
-// qoderIdentityLabel renders the account identity: the signed-in address when
-// the profile was fetched, otherwise the display name, otherwise a short uid.
-function qoderIdentityLabel(acc) {
-  const email = String(acc?.email || "").trim();
-  if (email) return email;
-  const name = String(acc?.name || "").trim();
-  if (name && name !== "qoder-login") return name;
-  const uid = String(acc?.qoder_user_id || "").trim();
-  if (uid) return uid.length > 20 ? `uid ${uid.substring(0, 8)}...${uid.substring(uid.length - 4)}` : `uid ${uid}`;
-  return "-";
-}
-
 // Export accounts
-function exportAccounts() {
-  window.location.href = "/api/export";
-}
+function exportAccounts() { window.location.href = "/api/export"; }
 
 // Load accounts on page load
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1505,7 +1364,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   initDOMCache();
   loadAccounts();
   const typeSelect = document.getElementById("accountType");
-  if (typeSelect) {
-    applyTokenLabels(typeSelect.value);
-  }
+  if (typeSelect) { applyTokenLabels(typeSelect.value); }
 });

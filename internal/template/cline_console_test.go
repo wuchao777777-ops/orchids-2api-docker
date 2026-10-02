@@ -12,9 +12,7 @@ import (
 
 func TestAccountModalOffersClineLogin(t *testing.T) {
 	renderer, err := NewRenderer()
-	if err != nil {
-		t.Fatalf("NewRenderer() error = %v", err)
-	}
+	testutil.NoError(t, err, "NewRenderer() error = %v")
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=accounts", nil)
 	testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil), "RenderIndex() error = %v")
@@ -31,13 +29,10 @@ func TestAccountModalOffersClineLogin(t *testing.T) {
 
 func TestModelModalOffersClineChannel(t *testing.T) {
 	renderer, err := NewRenderer()
-	if err != nil {
-		t.Fatalf("NewRenderer() error = %v", err)
-	}
+	testutil.NoError(t, err, "NewRenderer() error = %v")
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=models", nil)
 	testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil), "RenderIndex() error = %v")
-	if page := recorder.Body.String(); !strings.Contains(page, `provider-registry.js`) || !strings.Contains(page, `id="modelChannel"`) {
-		t.Error("the model modal is not wired to the shared provider registry")
-	}
+	page := recorder.Body.String()
+	testutil.CheckFalse(t, !strings.Contains(page, `provider-registry.js`) || !strings.Contains(page, `id="modelChannel"`), "the model modal is not wired to the shared provider registry")
 }

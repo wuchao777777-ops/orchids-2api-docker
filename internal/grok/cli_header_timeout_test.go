@@ -36,15 +36,10 @@ func TestCLIResponsesHeaderTimeoutSwitchesAccount(t *testing.T) {
 	client, account := headerTimeoutTestClient(t, server, 20*time.Millisecond)
 	started := time.Now()
 	_, err := client.request(context.Background(), account, http.MethodPost, server.URL+"/v1/responses", []byte(`{}`), nil)
-	if err == nil || !strings.Contains(err.Error(), "response header timeout") {
-		t.Fatalf("err=%v", err)
-	}
-	if !shouldSwitchGrokAccount(err) {
-		t.Fatalf("timeout must switch account: %v", err)
-	}
-	if elapsed := time.Since(started); elapsed > 120*time.Millisecond {
-		t.Fatalf("header timeout took %s", elapsed)
-	}
+	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "response header timeout"), "err=%v", err)
+	testutil.True(t, shouldSwitchGrokAccount(err), "timeout must switch account: %v")
+	elapsed := time.Since(started)
+	testutil.Falsef(t, elapsed > 120*time.Millisecond, "header timeout took %s", elapsed)
 }
 
 func TestCLIResponsesHeaderTimeoutStopsAfterHeaders(t *testing.T) {
@@ -60,13 +55,9 @@ func TestCLIResponsesHeaderTimeoutStopsAfterHeaders(t *testing.T) {
 	defer server.Close()
 	client, account := headerTimeoutTestClient(t, server, 20*time.Millisecond)
 	resp, err := client.request(context.Background(), account, http.MethodPost, server.URL+"/v1/responses", []byte(`{}`), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, string(body), "data: done\n\n")
 }

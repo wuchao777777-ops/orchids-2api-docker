@@ -18,13 +18,9 @@ func buildAcc() *store.Account {
 func TestAccountUsableForModelHonorsBuildFreeReset(t *testing.T) {
 	acc := buildAcc()
 	acc.GrokFreeQuota.ResetAt = time.Now().Add(time.Hour)
-	if accountUsableForModel(context.Background(), acc) {
-		t.Fatal("Build Free account was selected before its confirmed reset")
-	}
+	testutil.False(t, accountUsableForModel(context.Background(), acc), "Build Free account was selected before its confirmed reset")
 	acc.GrokFreeQuota.ResetAt = time.Now().Add(-time.Second)
-	if !accountUsableForModel(context.Background(), acc) {
-		t.Fatal("Build Free account remained unavailable after its reset")
-	}
+	testutil.False(t, !accountUsableForModel(context.Background(), acc), "Build Free account remained unavailable after its reset")
 }
 
 // TestApplyFreeQuotaExhaustionReadsTheRealWindow pins the one place a Free allowance
@@ -36,26 +32,16 @@ func TestApplyFreeQuotaExhaustionReadsTheRealWindow(t *testing.T) {
 	acc := buildAcc()
 	body := []byte(`{"error":{"code":"subscription:free-usage-exhausted","message":"You have used all the included free usage for model grok-4.6. Tokens (actual/limit): 500123/500000"}}`)
 
-	if !ApplyFreeQuotaExhaustion(acc, body) {
-		t.Fatal("a Free-usage-exhausted refusal was not recognised")
-	}
-	if !acc.GrokFreeQuota.HasLimit {
-		t.Fatal("the actual/limit pair was not read out of the refusal")
-	}
-	if acc.GrokFreeQuota.Used != 500123 || acc.GrokFreeQuota.Limit != 500000 {
-		t.Fatalf("used/limit = %v/%v, want 500123/500000", acc.GrokFreeQuota.Used, acc.GrokFreeQuota.Limit)
-	}
-	if acc.GrokFreeQuota.ConfirmedAt.IsZero() {
-		t.Fatal("a confirmed window must record when it was confirmed")
-	}
-	if got := time.Until(acc.GrokFreeQuota.ResetAt); got <= 0 || got > FreeBuildUsageWindow+time.Minute {
-		t.Fatalf("reset in %v, want within the rolling %v window", got, FreeBuildUsageWindow)
-	}
+	testutil.False(t, !ApplyFreeQuotaExhaustion(acc, body), "a Free-usage-exhausted refusal was not recognised")
+	testutil.False(t, !acc.GrokFreeQuota.HasLimit, "the actual/limit pair was not read out of the refusal")
+	testutil.Equal(t, acc.GrokFreeQuota.Used, 500123)
+	testutil.Equal(t, acc.GrokFreeQuota.Limit, 500000)
+	testutil.False(t, acc.GrokFreeQuota.ConfirmedAt.IsZero(), "a confirmed window must record when it was confirmed")
+	got := time.Until(acc.GrokFreeQuota.ResetAt)
+	testutil.Falsef(t, got <= 0 || got > FreeBuildUsageWindow+time.Minute, "reset in %v, want within the rolling %v window", got, FreeBuildUsageWindow)
 	// The confirmed window is the strongest Free signal there is.
 	verdict := InferFreeProfile(acc)
-	if !verdict.Inferred || verdict.Source != FreeProfileSourceExhaustion {
-		t.Fatalf("verdict = %+v, want an inference sourced from %q", verdict, FreeProfileSourceExhaustion)
-	}
+	testutil.Falsef(t, !verdict.Inferred || verdict.Source != FreeProfileSourceExhaustion, "verdict = %+v, want an inference sourced from %q", verdict, FreeProfileSourceExhaustion)
 }
 
 // TestApplyFreeQuotaExhaustionWithoutNumbers pins the degraded case: the refusal is
@@ -66,18 +52,11 @@ func TestApplyFreeQuotaExhaustionWithoutNumbers(t *testing.T) {
 
 	acc := buildAcc()
 	body := []byte(`{"error":{"code":"subscription:free-usage-exhausted"}}`)
-	if !ApplyFreeQuotaExhaustion(acc, body) {
-		t.Fatal("a Free refusal without numbers was not recognised")
-	}
-	if acc.GrokFreeQuota.HasLimit {
-		t.Fatal("HasLimit=true without a readable pair")
-	}
-	if acc.GrokFreeQuota.ConfirmedAt.IsZero() {
-		t.Fatal("the confirmation timestamp is still useful knowledge")
-	}
-	if verdict := InferFreeProfile(acc); !verdict.Inferred || verdict.Source != FreeProfileSourceExhaustion {
-		t.Fatalf("verdict = %+v, want a Free inference from the refusal", verdict)
-	}
+	testutil.False(t, !ApplyFreeQuotaExhaustion(acc, body), "a Free refusal without numbers was not recognised")
+	testutil.False(t, acc.GrokFreeQuota.HasLimit, "HasLimit=true without a readable pair")
+	testutil.False(t, acc.GrokFreeQuota.ConfirmedAt.IsZero(), "the confirmation timestamp is still useful knowledge")
+	verdict := InferFreeProfile(acc)
+	testutil.Falsef(t, !verdict.Inferred || verdict.Source != FreeProfileSourceExhaustion, "verdict = %+v, want a Free inference from the refusal", verdict)
 }
 
 // TestApplyFreeQuotaExhaustionKeepsAPreviouslyReportedLimit pins that a later refusal
@@ -87,28 +66,17 @@ func TestApplyFreeQuotaExhaustionKeepsAPreviouslyReportedLimit(t *testing.T) {
 	t.Parallel()
 
 	acc := buildAcc()
-	if !ApplyFreeQuotaExhaustion(acc, []byte(`{"error":{"code":"subscription:free-usage-exhausted","message":"Tokens (actual/limit): 500123/500000"}}`)) {
-		t.Fatal("the first refusal was not recognised")
-	}
+	testutil.False(t, !ApplyFreeQuotaExhaustion(acc, []byte(`{"error":{"code":"subscription:free-usage-exhausted","message":"Tokens (actual/limit): 500123/500000"}}`)), "the first refusal was not recognised")
 	confirmedAt := acc.GrokFreeQuota.ConfirmedAt
 
-	if !ApplyFreeQuotaExhaustion(acc, []byte(`{"error":{"code":"subscription:free-usage-exhausted"}}`)) {
-		t.Fatal("the second refusal was not recognised")
-	}
-	if !acc.GrokFreeQuota.HasLimit || acc.GrokFreeQuota.Limit != 500000 || acc.GrokFreeQuota.Used != 500123 {
-		t.Fatalf("the previously confirmed pair was lost: %+v", acc.GrokFreeQuota)
-	}
-	if !acc.GrokFreeQuota.ConfirmedAt.After(confirmedAt) {
-		t.Fatal("the confirmation timestamp was not refreshed")
-	}
+	testutil.False(t, !ApplyFreeQuotaExhaustion(acc, []byte(`{"error":{"code":"subscription:free-usage-exhausted"}}`)), "the second refusal was not recognised")
+	testutil.Falsef(t, !acc.GrokFreeQuota.HasLimit || acc.GrokFreeQuota.Limit != 500000 || acc.GrokFreeQuota.Used != 500123, "the previously confirmed pair was lost: %+v", acc.GrokFreeQuota)
+	testutil.False(t, !acc.GrokFreeQuota.ConfirmedAt.After(confirmedAt), "the confirmation timestamp was not refreshed")
 
 	// A NEWER refusal with a different pair is the truth for the current window.
-	if !ApplyFreeQuotaExhaustion(acc, []byte(`{"error":{"code":"subscription:free-usage-exhausted","message":"Tokens (actual/limit): 12/900000"}}`)) {
-		t.Fatal("the third refusal was not recognised")
-	}
-	if acc.GrokFreeQuota.Limit != 900000 || acc.GrokFreeQuota.Used != 12 {
-		t.Fatalf("a newer reported pair did not replace the old one: %+v", acc.GrokFreeQuota)
-	}
+	testutil.False(t, !ApplyFreeQuotaExhaustion(acc, []byte(`{"error":{"code":"subscription:free-usage-exhausted","message":"Tokens (actual/limit): 12/900000"}}`)), "the third refusal was not recognised")
+	testutil.Equal(t, acc.GrokFreeQuota.Limit, 900000)
+	testutil.Equal(t, acc.GrokFreeQuota.Used, 12)
 }
 
 func TestApplyFreeQuotaExhaustionIgnoresEverythingElse(t *testing.T) {
@@ -124,12 +92,8 @@ func TestApplyFreeQuotaExhaustionIgnoresEverythingElse(t *testing.T) {
 		{"empty body", buildAcc(), ``},
 	}
 	for _, tc := range cases {
-		if ApplyFreeQuotaExhaustion(tc.acc, []byte(tc.body)) {
-			t.Fatalf("%s: the response was recorded as a Free refusal", tc.name)
-		}
-		if !tc.acc.GrokFreeQuota.ConfirmedAt.IsZero() {
-			t.Fatalf("%s: the account was modified by an unrecognised response", tc.name)
-		}
+		testutil.Falsef(t, ApplyFreeQuotaExhaustion(tc.acc, []byte(tc.body)), "%s: the response was recorded as a Free refusal", tc.name)
+		testutil.Falsef(t, !tc.acc.GrokFreeQuota.ConfirmedAt.IsZero(), "%s: the account was modified by an unrecognised response", tc.name)
 	}
 }
 
@@ -139,9 +103,8 @@ func TestInferFreeProfileDoesNotClaimPaidAccountsAsFree(t *testing.T) {
 	paid := []string{"supergrok", "XPremium", "x_premium_plus", "heavy", "lite", "Pro", "team", "enterprise"}
 	for _, plan := range paid {
 		acc := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: plan}
-		if verdict := InferFreeProfile(acc); verdict.Inferred {
-			t.Errorf("plan %q was inferred Free", plan)
-		}
+		verdict := InferFreeProfile(acc)
+		testutil.CheckFalsef(t, verdict.Inferred, "plan %q was inferred Free", plan)
 	}
 
 	// A billing profile with a real window is a paid/entitled account even when
@@ -149,15 +112,13 @@ func TestInferFreeProfileDoesNotClaimPaidAccountsAsFree(t *testing.T) {
 	entitled := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: "unknown"}
 	entitled.GrokBilling.SyncedAt = time.Now()
 	entitled.GrokBilling.Weekly.HasUsage = true
-	if verdict := InferFreeProfile(entitled); verdict.Inferred {
-		t.Error("an account with a reported weekly window was inferred Free")
-	}
+	verdict := InferFreeProfile(entitled)
+	testutil.CheckFalse(t, verdict.Inferred, "an account with a reported weekly window was inferred Free")
 
 	// No evidence at all stays unknown rather than being guessed at.
 	unsynced := &store.Account{AccountType: "grok", CredentialType: "oauth"}
-	if verdict := InferFreeProfile(unsynced); verdict.Inferred {
-		t.Error("an unsynced account was inferred Free")
-	}
+	verdict = InferFreeProfile(unsynced)
+	testutil.CheckFalse(t, verdict.Inferred, "an unsynced account was inferred Free")
 }
 
 func TestInferSubscriptionFromRateLimitInfoRequiresKnownShapes(t *testing.T) {

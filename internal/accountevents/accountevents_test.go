@@ -62,9 +62,8 @@ func TestBus_CoalescesBurstsByAccount(t *testing.T) {
 	waitFor(t, func() bool { return len(subscriber.all()) > 0 }, "no batch delivered")
 	batches := subscriber.all()
 	testutil.Equal(t, len(batches), 1)
-	if len(batches[0]) != 1 || batches[0][0] != 7 {
-		t.Fatalf("batch = %v, want just account 7", batches[0])
-	}
+	testutil.Equal(t, len(batches[0]), 1)
+	testutil.Equal(t, batches[0][0], 7)
 }
 
 // TestBus_DeliversEveryAccountOnce keeps the coalescing honest: different

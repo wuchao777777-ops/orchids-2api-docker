@@ -302,9 +302,7 @@ func (c *Client) persistPatch(ctx context.Context, patch store.ClineCredentialPa
 
 // Credentials returns the live credential snapshot. It exists so a login can
 // read back what it just obtained without reaching into the client's state.
-func (c *Client) Credentials() Credentials {
-	return c.currentCredentials()
-}
+func (c *Client) Credentials() Credentials { return c.currentCredentials() }
 
 // SendRequestWithPayload streams one chat completion to the caller.
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -501,9 +499,7 @@ func (c *Client) FetchUpstreamModels(ctx context.Context) ([]Model, error) {
 }
 
 // FetchModels is the provider-facing alias of FetchUpstreamModels.
-func (c *Client) FetchModels(ctx context.Context) ([]Model, error) {
-	return c.FetchUpstreamModels(ctx)
-}
+func (c *Client) FetchModels(ctx context.Context) ([]Model, error) { return c.FetchUpstreamModels(ctx) }
 
 // resolveModel maps the client's model name onto the account's observed catalog.
 //

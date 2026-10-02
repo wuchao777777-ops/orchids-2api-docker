@@ -21,9 +21,9 @@ func TestBuildResponsesNormalizerFlattensNamespaceAndNullableRoot(t *testing.T) 
 	}
 	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	tools := interfaceMaps(payload["tools"])
-	if len(tools) != 1 || tools[0]["name"] != "repo__read" || tools[0]["defer_loading"] != nil {
-		t.Fatalf("tools=%#v", tools)
-	}
+	testutil.Equal(t, len(tools), 1)
+	testutil.Equal(t, tools[0]["name"], "repo__read")
+	testutil.Equal(t, tools[0]["defer_loading"], nil)
 	parameters := tools[0]["parameters"].(map[string]interface{})
 	testutil.Equal(t, parameters["type"], "object")
 	choice := payload["tool_choice"].(map[string]interface{})
@@ -41,12 +41,11 @@ func TestBuildResponsesNormalizerEmulatesClientToolSearch(t *testing.T) {
 	}
 	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	tools := interfaceMaps(payload["tools"])
-	if len(tools) != 2 || tools[0]["name"] != "visible" || tools[1]["name"] != "tool_search" {
-		t.Fatalf("tools=%#v", tools)
-	}
-	if parallel, _ := payload["parallel_tool_calls"].(bool); parallel {
-		t.Fatalf("parallel_tool_calls=%#v", payload["parallel_tool_calls"])
-	}
+	testutil.Equal(t, len(tools), 2)
+	testutil.Equal(t, tools[0]["name"], "visible")
+	testutil.Equal(t, tools[1]["name"], "tool_search")
+	parallel, _ := payload["parallel_tool_calls"].(bool)
+	testutil.Falsef(t, parallel, "parallel_tool_calls=%#v", payload["parallel_tool_calls"])
 	warnings := takeBuildCompatibilityWarnings(payload)
 	testutil.MustContainAll(t, warnings, "client_tool_search_emulated", "client_tool_search_forced_serial")
 }
@@ -76,21 +75,15 @@ func TestBuildResponsesNormalizerPreservesNativeHistoryAndNormalizesExtensions(t
 	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	items := payload["input"].([]interface{})
 	first := items[0].(map[string]interface{})
-	if first["future"] != "keep" || first["type"] != "shell_call" {
-		t.Fatalf("native history changed: %#v", items[0])
-	}
+	testutil.Equal(t, first["future"], "keep")
+	testutil.Equal(t, first["type"], "shell_call")
 	agent := items[1].(map[string]interface{})
-	if agent["type"] != "message" || strings.Contains(agent["content"].([]interface{})[0].(map[string]interface{})["text"].(string), "must-not-leak") {
-		t.Fatalf("agent history=%#v", agent)
-	}
+	testutil.Falsef(t, agent["type"] != "message" || strings.Contains(agent["content"].([]interface{})[0].(map[string]interface{})["text"].(string), "must-not-leak"), "agent history=%#v", agent)
 	shell := items[2].(map[string]interface{})
-	if shell["type"] != "shell_call" || shell["call_id"] != "call_1" {
-		t.Fatalf("shell history=%#v", shell)
-	}
+	testutil.Equal(t, shell["type"], "shell_call")
+	testutil.Equal(t, shell["call_id"], "call_1")
 	mcp := items[3].(map[string]interface{})
-	if mcp["type"] != "message" || strings.Contains(fmt.Sprint(mcp), "secret") {
-		t.Fatalf("mcp history=%#v", mcp)
-	}
+	testutil.Falsef(t, mcp["type"] != "message" || strings.Contains(fmt.Sprint(mcp), "secret"), "mcp history=%#v", mcp)
 }
 
 func TestBuildResponsesNormalizerOpaqueAgentMessageUsesBoundary(t *testing.T) {
@@ -99,9 +92,7 @@ func TestBuildResponsesNormalizerOpaqueAgentMessageUsesBoundary(t *testing.T) {
 	}}}
 	testutil.NoError(t, normalizeBuildResponsesPayload(payload))
 	encoded := fmt.Sprint(payload["input"])
-	if strings.Contains(encoded, "opaque-secret") || !strings.Contains(encoded, "not portable") {
-		t.Fatalf("boundary=%s", encoded)
-	}
+	testutil.Falsef(t, strings.Contains(encoded, "opaque-secret") || !strings.Contains(encoded, "not portable"), "boundary=%s", encoded)
 }
 
 func TestResponsesPayloadFromChatPreservesMultimodalAndNormalizesBuildState(t *testing.T) {
@@ -113,16 +104,13 @@ func TestResponsesPayloadFromChatPreservesMultimodalAndNormalizesBuildState(t *t
 		}}},
 	}
 	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.5"}, req, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, payload["prompt_cache_key"], "session")
 	input := payload["input"].([]interface{})
 	message := input[0].(map[string]interface{})
 	parts := message["content"].([]interface{})
-	if len(parts) != 2 || parts[1].(map[string]interface{})["type"] != "input_image" {
-		t.Fatalf("input=%#v", input)
-	}
+	testutil.Equal(t, len(parts), 2)
+	testutil.Equal(t, parts[1].(map[string]interface{})["type"], "input_image")
 	testutil.Equal(t, payload["safety_identifier"], "user-1")
 }
 
@@ -136,16 +124,10 @@ func TestAnthropicRequestNormalizesMCPStrictAndOutputFormat(t *testing.T) {
 		Metadata:     map[string]interface{}{"user_id": "user-1"},
 	}
 	chat, err := anthropicRequestToChat(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if chat.Tools[0].Function["strict"] != true || len(chat.ResponsesTools) != 1 {
-		t.Fatalf("tools=%#v native=%#v", chat.Tools, chat.ResponsesTools)
-	}
-	if chat.ResponsesTools[0]["type"] != "mcp" || chat.ResponsesTools[0]["authorization"] != "secret" {
-		t.Fatalf("mcp=%#v", chat.ResponsesTools[0])
-	}
-	if chat.ResponseText["format"] == nil || chat.SafetyIdentifier != "user-1" {
-		t.Fatalf("text/safety=%#v %q", chat.ResponseText, chat.SafetyIdentifier)
-	}
+	testutil.NoError(t, err)
+	testutil.Equal(t, chat.Tools[0].Function["strict"], true)
+	testutil.Equal(t, len(chat.ResponsesTools), 1)
+	testutil.Equal(t, chat.ResponsesTools[0]["type"], "mcp")
+	testutil.Equal(t, chat.ResponsesTools[0]["authorization"], "secret")
+	testutil.Falsef(t, chat.ResponseText["format"] == nil || chat.SafetyIdentifier != "user-1", "text/safety=%#v %q", chat.ResponseText, chat.SafetyIdentifier)
 }

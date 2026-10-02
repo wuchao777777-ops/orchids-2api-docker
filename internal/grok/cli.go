@@ -526,10 +526,7 @@ func (c *CLIClient) request(ctx context.Context, acc *store.Account, method, end
 		var cancel context.CancelFunc
 		requestCtx, cancel = context.WithCancel(ctx)
 		cancelRequest = cancel
-		headerTimer = time.AfterFunc(c.responseHeaderTimeout, func() {
-			headerTimedOut.Store(true)
-			cancel()
-		})
+		headerTimer = time.AfterFunc(c.responseHeaderTimeout, func() { headerTimedOut.Store(true); cancel() })
 		requestCtx = httptrace.WithClientTrace(requestCtx, &httptrace.ClientTrace{
 			GotFirstResponseByte: func() { headerTimer.Stop() },
 		})

@@ -25,9 +25,8 @@ func TestAccountRedactionDoesNotMutateStoredAccount(t *testing.T) {
 		QoderAccessToken: "private-qoder", ClineAccessToken: "private-cline",
 		StatusMessage: "upstream rejected private-refresh",
 	}
-	if _, err := json.Marshal(normalizeAccountOutput(acc)); err != nil {
-		t.Fatal(err)
-	}
+	_, err := json.Marshal(normalizeAccountOutput(acc))
+	testutil.NoError(t, err)
 	if acc.Token != "private-token" || acc.RefreshToken != "private-refresh" ||
 		acc.OAuthAccessToken != "private-oauth" || acc.QoderAccessToken != "private-qoder" ||
 		acc.ClineAccessToken != "private-cline" ||
@@ -43,20 +42,15 @@ func TestDiagnosticTogglePersistsAndFailsSafely(t *testing.T) {
 	for _, enabled := range []string{"true", "false"} {
 		rec := httptest.NewRecorder()
 		a.HandleDiagnosticSettings(rec, httptest.NewRequest("PUT", "/api/journal/diagnostics/settings", strings.NewReader(`{"enabled":`+enabled+`}`)))
-		if rec.Code != 200 || a.DiagnosticsEnabled() != (enabled == "true") {
-			t.Fatalf("toggle failed: %d", rec.Code)
-		}
+		testutil.Equal(t, rec.Code, 200)
+		testutil.Equal(t, a.DiagnosticsEnabled(), (enabled == "true"))
 		stored, err := s.GetSetting(t.Context(), "config")
-		if err != nil || !strings.Contains(stored, `"debug_enabled":`+enabled) {
-			t.Fatal("toggle was not persisted")
-		}
+		testutil.False(t, err != nil || !strings.Contains(stored, `"debug_enabled":`+enabled), "toggle was not persisted")
 	}
 	mini.SetError("storage unavailable")
 	rec := httptest.NewRecorder()
 	a.HandleDiagnosticSettings(rec, httptest.NewRequest("PUT", "/api/journal/diagnostics/settings", strings.NewReader(`{"enabled":true}`)))
-	if rec.Code != 503 || a.DiagnosticsEnabled() {
-		t.Fatal("failed save changed runtime setting")
-	}
+	testutil.False(t, rec.Code != 503 || a.DiagnosticsEnabled(), "failed save changed runtime setting")
 	rec = httptest.NewRecorder()
 	a.HandleDiagnosticSettings(rec, httptest.NewRequest("GET", "/api/journal/diagnostics/settings", nil))
 	testutil.MustNotContainAny(t, rec.Body.String(), "secret", "admin")

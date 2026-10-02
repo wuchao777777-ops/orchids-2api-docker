@@ -16,9 +16,7 @@ import (
 var operationLogger audit.Logger
 
 // SetOperationAuditLogger wires the journal used by adminSessionAudit.
-func SetOperationAuditLogger(logger audit.Logger) {
-	operationLogger = logger
-}
+func SetOperationAuditLogger(logger audit.Logger) { operationLogger = logger }
 
 // maxAuditBodyBytes bounds how much of a request body is kept for the change
 // summary. Admin payloads are small; the cap keeps a large import from turning
@@ -94,9 +92,7 @@ func operationAction(method, path string) string {
 	}
 	if len(parts) > 1 && parts[1] != "" {
 		switch parts[1] {
-		case "login":
-			resource = "session"
-		case "logout":
+		case "login", "logout":
 			resource = "session"
 		default:
 			resource = resource + "." + parts[1]

@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"orchids-api/internal/testutil"
 	"testing"
 )
 
@@ -113,9 +114,7 @@ func TestClassifyUpstreamError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := ClassifyUpstreamError(tt.errStr)
-			if got.Category != tt.wantCategory || got.Retryable != tt.wantRetry || got.SwitchAccount != tt.wantSwitch {
-				t.Fatalf("ClassifyUpstreamError(%q) = %#v, want category=%q retry=%v switch=%v", tt.errStr, got, tt.wantCategory, tt.wantRetry, tt.wantSwitch)
-			}
+			testutil.Falsef(t, got.Category != tt.wantCategory || got.Retryable != tt.wantRetry || got.SwitchAccount != tt.wantSwitch, "ClassifyUpstreamError(%q) = %#v, want category=%q retry=%v switch=%v", tt.errStr, got, tt.wantCategory, tt.wantRetry, tt.wantSwitch)
 		})
 	}
 }

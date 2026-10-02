@@ -48,12 +48,8 @@ func planClient(t *testing.T, status int, body string, capture *http.Header) *Cl
 func TestPlanReadsASubscriberNamesThePlan(t *testing.T) {
 	client := planClient(t, http.StatusOK, `{"data":{"displayName":"Cline Pass (Monthly)"},"success":true}`, nil)
 	plan, err := client.FetchPlan(context.Background())
-	if err != nil {
-		t.Fatalf("FetchPlan() error = %v", err)
-	}
-	if !plan.Explicit {
-		t.Error("Explicit = false for a plan row the upstream returned")
-	}
+	testutil.NoError(t, err, "FetchPlan() error = %v")
+	testutil.CheckFalse(t, !plan.Explicit, "Explicit = false for a plan row the upstream returned")
 	testutil.CheckEqual(t, plan.Name, "Cline Pass (Monthly)")
 }
 
@@ -65,12 +61,8 @@ func TestPlanReadsASubscriberNamesThePlan(t *testing.T) {
 func TestPlanNoHistoryMeansFree(t *testing.T) {
 	client := planClient(t, http.StatusNotFound, `{"data":null,"error":"no plan history found for user","success":false}`, nil)
 	plan, err := client.FetchPlan(context.Background())
-	if err != nil {
-		t.Fatalf("FetchPlan() error = %v", err)
-	}
-	if !plan.Explicit || plan.Name != "free" {
-		t.Errorf("Plan = %+v, want {Name: free, Explicit: true}", plan)
-	}
+	testutil.NoError(t, err, "FetchPlan() error = %v")
+	testutil.CheckFalsef(t, !plan.Explicit || plan.Name != "free", "Plan = %+v, want {Name: free, Explicit: true}", plan)
 }
 
 // TestPlanNeverInventsATier is the guard the whole file exists for. An endpoint
@@ -91,12 +83,8 @@ func TestPlanNeverInventsATier(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			client := planClient(t, tc.status, tc.body, nil)
 			plan, err := client.FetchPlan(context.Background())
-			if err == nil {
-				t.Fatalf("FetchPlan() = %+v, want an error so no tier is recorded", plan)
-			}
-			if plan.Explicit || plan.Name != "" {
-				t.Errorf("Plan = %+v, want it empty", plan)
-			}
+			testutil.Error(t, err, "FetchPlan() = %+v, want an error so no tier is recorded")
+			testutil.CheckFalsef(t, plan.Explicit || plan.Name != "", "Plan = %+v, want it empty", plan)
 		})
 	}
 }
@@ -107,9 +95,7 @@ func TestPlanNeverInventsATier(t *testing.T) {
 func TestPlanRefusedCredentialIsNotAFreeVerdict(t *testing.T) {
 	client := planClient(t, http.StatusUnauthorized, `{"error":"unauthorized"}`, nil)
 	plan, err := client.FetchPlan(context.Background())
-	if err == nil {
-		t.Fatalf("FetchPlan() = %+v, want an error", plan)
-	}
+	testutil.Error(t, err, "FetchPlan() = %+v, want an error")
 	testutil.CheckEqual(t, plan.Name, "")
 }
 
@@ -119,9 +105,7 @@ func TestPlanRefusedCredentialIsNotAFreeVerdict(t *testing.T) {
 func TestClineAccountCarriesThePlanTier(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "cline-plan:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 	defer func() { _ = s.Close() }()
 
 	ctx := context.Background()
@@ -131,9 +115,7 @@ func TestClineAccountCarriesThePlanTier(t *testing.T) {
 	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 	testutil.CheckEqual(t, acc.ClinePlan, "")
 	stored, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.CheckEqual(t, stored.ClinePlan, "")
 
 	// A probed free tier survives a write and a reload, so "probed and free"
@@ -141,9 +123,7 @@ func TestClineAccountCarriesThePlanTier(t *testing.T) {
 	acc.ClinePlan = "free"
 	testutil.NoError(t, s.UpdateAccount(ctx, acc), "UpdateAccount() error = %v")
 	stored, err = s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.CheckEqual(t, stored.ClinePlan, "free")
 }
 
@@ -153,13 +133,11 @@ func TestClineAccountCarriesThePlanTier(t *testing.T) {
 func TestPlanRequestSendsTheProductIdentity(t *testing.T) {
 	var seen http.Header
 	client := planClient(t, http.StatusOK, `{"data":{"displayName":"Cline Pass"},"success":true}`, &seen)
-	if _, err := client.FetchPlan(context.Background()); err != nil {
-		t.Fatalf("FetchPlan() error = %v", err)
-	}
+	_, err := client.FetchPlan(context.Background())
+	testutil.CheckNoError(t, err)
 	for _, name := range []string{"X-CLIENT-TYPE", "X-CORE-VERSION", "User-Agent"} {
 		testutil.CheckEqual(t, seen.Get(name), defaultClientHeaders[name])
 	}
-	if got := seen.Get("Authorization"); !strings.HasPrefix(got, "Bearer workos:") {
-		t.Errorf("Authorization = %q, want the workos bearer prefix", got)
-	}
+	got := seen.Get("Authorization")
+	testutil.CheckFalsef(t, !strings.HasPrefix(got, "Bearer workos:"), "Authorization = %q, want the workos bearer prefix", got)
 }

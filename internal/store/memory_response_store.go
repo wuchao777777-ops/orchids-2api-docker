@@ -71,9 +71,7 @@ var defaultMemoryResponseStore = NewMemoryResponseStore(0)
 // fallback for a gateway with no response backend, not a cache in front of one.
 func DefaultMemoryResponseStore() *MemoryResponseStore { return defaultMemoryResponseStore }
 
-func memoryResponseKey(responseID, ownerHash string) string {
-	return ownerHash + "\x00" + responseID
-}
+func memoryResponseKey(responseID, ownerHash string) string { return ownerHash + "\x00" + responseID }
 
 func (s *MemoryResponseStore) timestamp() time.Time {
 	if s != nil && s.now != nil {

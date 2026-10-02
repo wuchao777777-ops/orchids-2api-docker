@@ -21,9 +21,7 @@ import (
 func TestRenderIndexShipsNoCompetingSidebarCount(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "template_test:"})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
+	testutil.NoError(t, err, "store.New() error = %v")
 	defer func() { _ = s.Close() }()
 
 	accounts := []*store.Account{
@@ -35,9 +33,7 @@ func TestRenderIndexShipsNoCompetingSidebarCount(t *testing.T) {
 	}
 
 	renderer, err := NewRenderer()
-	if err != nil {
-		t.Fatalf("NewRenderer() error = %v", err)
-	}
+	testutil.NoError(t, err, "NewRenderer() error = %v")
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=accounts", nil)
 	testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, s), "RenderIndex() error = %v")
@@ -55,9 +51,7 @@ func TestRenderIndexShipsNoCompetingSidebarCount(t *testing.T) {
 // the template now; tutorial.js only fills the current origin and handles copy.
 func TestTutorialPageListsEveryChannel(t *testing.T) {
 	renderer, err := NewRenderer()
-	if err != nil {
-		t.Fatalf("NewRenderer() error = %v", err)
-	}
+	testutil.NoError(t, err, "NewRenderer() error = %v")
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=tutorial", nil)
@@ -76,9 +70,7 @@ func TestTutorialPageListsEveryChannel(t *testing.T) {
 
 func TestPagesRenderOnlyTheirOwnModals(t *testing.T) {
 	renderer, err := NewRenderer()
-	if err != nil {
-		t.Fatalf("NewRenderer() error = %v", err)
-	}
+	testutil.NoError(t, err, "NewRenderer() error = %v")
 
 	tests := []struct {
 		tab       string
@@ -108,9 +100,7 @@ func TestPagesRenderOnlyTheirOwnModals(t *testing.T) {
 
 func TestSidebarUsesRealLinks(t *testing.T) {
 	renderer, err := NewRenderer()
-	if err != nil {
-		t.Fatalf("NewRenderer() error = %v", err)
-	}
+	testutil.NoError(t, err, "NewRenderer() error = %v")
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/?tab=ops", nil)
 	testutil.NoError(t, renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/console"}, nil), "RenderIndex() error = %v")
@@ -127,9 +117,7 @@ func TestSidebarUsesRealLinks(t *testing.T) {
 // stylesheet and title; this pins the include and the page's own marker.
 func TestEveryPageRendersTheSharedDocumentHead(t *testing.T) {
 	renderer, err := NewRenderer()
-	if err != nil {
-		t.Fatalf("NewRenderer() error = %v", err)
-	}
+	testutil.NoError(t, err, "NewRenderer() error = %v")
 
 	pages := map[string]string{
 		"ops":      "opsAlertRules",
@@ -143,9 +131,8 @@ func TestEveryPageRendersTheSharedDocumentHead(t *testing.T) {
 	for tab, marker := range pages {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/?tab="+tab, nil)
-		if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil); err != nil {
-			t.Fatalf("tab %q: RenderIndex() error = %v", tab, err)
-		}
+		err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil)
+		testutil.CheckNoError(t, err)
 		page := recorder.Body.String()
 		for _, want := range []string{"<!DOCTYPE html>", "/admin/css/main.css?v=", "</head>", `id="` + marker + `"`} {
 			testutil.CheckContain(t, page, want)

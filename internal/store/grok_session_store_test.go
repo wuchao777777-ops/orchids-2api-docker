@@ -19,20 +19,13 @@ func TestReasoningReplayItemsPersistenceAndExpiry(t *testing.T) {
 	}
 	original := &StoredReasoningReplay{Model: "grok-4.6", SessionKey: "session-items", Items: items}
 	testutil.NoError(t, s.SaveReasoningReplay(ctx, original, 2*time.Second), "SaveReasoningReplay(items) error = %v")
-	if !original.ExpiresAt.IsZero() {
-		t.Fatal("SaveReasoningReplay mutated caller expiry")
-	}
+	testutil.False(t, !original.ExpiresAt.IsZero(), "SaveReasoningReplay mutated caller expiry")
 	replay, err := s.GetReasoningReplay(ctx, original.Model, original.SessionKey)
-	if err != nil || replay == nil || !reflect.DeepEqual(replay.Items, items) || replay.EncryptedContent != "" {
-		t.Fatalf("GetReasoningReplay(items) = %#v, %v", replay, err)
-	}
-	if replay.ExpiresAt.IsZero() || time.Until(replay.ExpiresAt) <= 0 {
-		t.Fatalf("missing future replay expiry: %v", replay.ExpiresAt)
-	}
+	testutil.Falsef(t, err != nil || replay == nil || !reflect.DeepEqual(replay.Items, items) || replay.EncryptedContent != "", "GetReasoningReplay(items) = %#v, %v", replay, err)
+	testutil.Falsef(t, replay.ExpiresAt.IsZero() || time.Until(replay.ExpiresAt) <= 0, "missing future replay expiry: %v", replay.ExpiresAt)
 	mini.FastForward(3 * time.Second)
-	if replay, err := s.GetReasoningReplay(ctx, original.Model, original.SessionKey); !errors.Is(err, ErrNoRows) || replay != nil {
-		t.Fatalf("GetReasoningReplay(expired items) = %#v, %v; want ErrNoRows", replay, err)
-	}
+	replay, err = s.GetReasoningReplay(ctx, original.Model, original.SessionKey)
+	testutil.Falsef(t, !errors.Is(err, ErrNoRows) || replay != nil, "GetReasoningReplay(expired items) = %#v, %v; want ErrNoRows", replay, err)
 }
 
 func TestReasoningReplaySaveValidation(t *testing.T) {
@@ -59,9 +52,8 @@ func TestReasoningReplaySaveValidation(t *testing.T) {
 			}, time.Hour); err == nil {
 				t.Fatal("SaveReasoningReplay() accepted invalid items")
 			}
-			if replay, err := s.GetReasoningReplay(ctx, "grok-4.6", key); !errors.Is(err, ErrNoRows) || replay != nil {
-				t.Fatalf("GetReasoningReplay(invalid) = %#v, %v; want ErrNoRows", replay, err)
-			}
+			replay, err := s.GetReasoningReplay(ctx, "grok-4.6", key)
+			testutil.Falsef(t, !errors.Is(err, ErrNoRows) || replay != nil, "GetReasoningReplay(invalid) = %#v, %v; want ErrNoRows", replay, err)
 		})
 	}
 	// An existing legacy cipher remains writable, but invalid modern items
@@ -83,12 +75,10 @@ func TestReasoningReplayAndSessionAffinityLifecycle(t *testing.T) {
 		t.Fatalf("SaveReasoningReplay() error = %v", err)
 	}
 	replay, err := s.GetReasoningReplay(ctx, "grok-4.6", "session-a")
-	if err != nil || replay.EncryptedContent != "opaque" {
-		t.Fatalf("GetReasoningReplay() = %#v,%v", replay, err)
-	}
-	if _, err := s.GetReasoningReplay(ctx, "grok-4.5", "session-a"); !errors.Is(err, ErrNoRows) {
-		t.Fatalf("cross-model replay err=%v", err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, replay.EncryptedContent, "opaque")
+	_, err = s.GetReasoningReplay(ctx, "grok-4.5", "session-a")
+	testutil.Falsef(t, !errors.Is(err, ErrNoRows), "cross-model replay err=%v", err)
 
 	if err := s.SaveSessionAffinity(ctx, &StoredSessionAffinity{
 		Provider: "build", Model: "grok-4.6", SessionKey: "session-a", AccountID: 42,
@@ -96,10 +86,8 @@ func TestReasoningReplayAndSessionAffinityLifecycle(t *testing.T) {
 		t.Fatalf("SaveSessionAffinity() error = %v", err)
 	}
 	affinity, err := s.GetSessionAffinity(ctx, "build", "grok-4.6", "session-a")
-	if err != nil || affinity.AccountID != 42 {
-		t.Fatalf("GetSessionAffinity() = %#v,%v", affinity, err)
-	}
-	if _, err := s.GetSessionAffinity(ctx, "console", "grok-4.6", "session-a"); !errors.Is(err, ErrNoRows) {
-		t.Fatalf("cross-provider affinity err=%v", err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, affinity.AccountID, 42)
+	_, err = s.GetSessionAffinity(ctx, "console", "grok-4.6", "session-a")
+	testutil.Falsef(t, !errors.Is(err, ErrNoRows), "cross-provider affinity err=%v", err)
 }

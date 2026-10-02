@@ -40,12 +40,8 @@ func TestStartLoginBuildsOfficialURL(t *testing.T) {
 	setTestEntropy(client, strings.NewReader(strings.Repeat("\x00", 512)))
 
 	tx, err := client.StartLogin(context.Background())
-	if err != nil {
-		t.Fatalf("StartLogin() error = %v", err)
-	}
-	if !strings.HasPrefix(tx.VerifyURL, page.URL+"/device/selectAccounts?") {
-		t.Fatalf("VerifyURL = %q, want the official authorization path", tx.VerifyURL)
-	}
+	testutil.NoError(t, err, "StartLogin() error = %v")
+	testutil.Falsef(t, !strings.HasPrefix(tx.VerifyURL, page.URL+"/device/selectAccounts?"), "VerifyURL = %q, want the official authorization path", tx.VerifyURL)
 	for _, want := range []string{"challenge=", "challenge_method=S256", "nonce=", "machine_id=", "client_id=" + DefaultClientID} {
 		testutil.CheckContain(t, tx.VerifyURL, want)
 	}
@@ -53,12 +49,8 @@ func TestStartLoginBuildsOfficialURL(t *testing.T) {
 		testutil.CheckNotContain(t, tx.VerifyURL, unwanted)
 	}
 	testutil.CheckEqual(t, len(tx.MachineID), 36)
-	if len(tx.Verifier) < 43 || len(tx.Verifier) > 128 {
-		t.Errorf("Verifier length = %d, want 43..128", len(tx.Verifier))
-	}
-	if !tx.ExpiresAt.After(time.Now()) {
-		t.Error("ExpiresAt is not in the future")
-	}
+	testutil.CheckFalsef(t, len(tx.Verifier) < 43 || len(tx.Verifier) > 128, "Verifier length = %d, want 43..128", len(tx.Verifier))
+	testutil.CheckFalse(t, !tx.ExpiresAt.After(time.Now()), "ExpiresAt is not in the future")
 }
 
 // TestAuthorizationHostAllowlist pins the login redirect boundary: only the
@@ -70,14 +62,10 @@ func TestAuthorizationHostAllowlist(t *testing.T) {
 
 	client := NewFromAccount(nil, nil)
 	for _, host := range []string{"qoder.com", "www.qoder.com", "openapi.qoder.sh", "localhost", "127.0.0.1", "::1", "qoder.com"} {
-		if !client.allowedLoginHost(host) {
-			t.Errorf("allowedLoginHost(%q) = false, want true", host)
-		}
+		testutil.CheckFalsef(t, !client.allowedLoginHost(host), "allowedLoginHost(%q) = false, want true", host)
 	}
 	for _, host := range []string{"evil.example.com", "qoder.com.evil.example", "", "openapi.qoder.sh.evil"} {
-		if client.allowedLoginHost(host) {
-			t.Errorf("allowedLoginHost(%q) = true, want false", host)
-		}
+		testutil.CheckFalsef(t, client.allowedLoginHost(host), "allowedLoginHost(%q) = true, want false", host)
 	}
 }
 
@@ -88,16 +76,10 @@ func TestConfiguredOAuthHostIsAllowedButForeignHostsAreNot(t *testing.T) {
 	t.Parallel()
 
 	client := NewFromAccount(nil, &config.Config{QoderOAuthBaseURL: "https://auth.example.cn"})
-	if !client.allowedLoginHost("auth.example.cn") {
-		t.Fatal("the configured OAuth host was refused")
-	}
-	if client.allowedLoginHost("attacker.example") {
-		t.Fatal("an unrelated host was accepted because an override exists")
-	}
+	testutil.False(t, !client.allowedLoginHost("auth.example.cn"), "the configured OAuth host was refused")
+	testutil.False(t, client.allowedLoginHost("attacker.example"), "an unrelated host was accepted because an override exists")
 	// A suffix match is not a match.
-	if client.allowedLoginHost("auth.example.cn.evil") {
-		t.Fatal("a look-alike host was accepted")
-	}
+	testutil.False(t, client.allowedLoginHost("auth.example.cn.evil"), "a look-alike host was accepted")
 }
 
 // TestStartLoginClassifiesUnreachable proves a blocked egress path is reported
@@ -114,9 +96,7 @@ func TestStartLoginClassifiesUnreachable(t *testing.T) {
 	setTestEntropy(client, strings.NewReader(strings.Repeat("\x02", 512)))
 
 	_, err := client.StartLogin(context.Background())
-	if !errors.Is(err, ErrAuthUnavailable) {
-		t.Fatalf("error = %v, want ErrAuthUnavailable", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrAuthUnavailable), "error = %v, want ErrAuthUnavailable", err)
 }
 
 // TestPollLoginTreats404AsPending pins the pending signal: the device token
@@ -142,22 +122,15 @@ func TestPollLoginTreats404AsPending(t *testing.T) {
 	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	tx := &LoginTransaction{Nonce: "n", Verifier: "v", MachineID: "m", ExpiresAt: time.Now().Add(time.Minute)}
 
-	if _, err := client.PollLogin(context.Background(), tx); !errors.Is(err, ErrAuthPending) {
-		t.Fatalf("first poll error = %v, want ErrAuthPending", err)
-	}
+	_, err := client.PollLogin(context.Background(), tx)
+	testutil.Falsef(t, !errors.Is(err, ErrAuthPending), "first poll error = %v, want ErrAuthPending", err)
 	creds, err := client.PollLogin(context.Background(), tx)
-	if err != nil {
-		t.Fatalf("second poll error = %v", err)
-	}
-	if creds.AccessToken != "access-1" || creds.RefreshToken != "refresh-1" {
-		t.Fatalf("credentials = %+v, want the returned token pair", creds)
-	}
-	if creds.UID != "uid-1" || creds.Name != "tester" {
-		t.Fatalf("identity = %q/%q, want uid-1/tester", creds.UID, creds.Name)
-	}
-	if creds.AccessExpiresAt.IsZero() || creds.RefreshExpiresAt.IsZero() {
-		t.Fatalf("expiries = %v/%v, want both resolved from expires_in", creds.AccessExpiresAt, creds.RefreshExpiresAt)
-	}
+	testutil.NoError(t, err, "second poll error = %v")
+	testutil.Equal(t, creds.AccessToken, "access-1")
+	testutil.Equal(t, creds.RefreshToken, "refresh-1")
+	testutil.Equal(t, creds.UID, "uid-1")
+	testutil.Equal(t, creds.Name, "tester")
+	testutil.Falsef(t, creds.AccessExpiresAt.IsZero() || creds.RefreshExpiresAt.IsZero(), "expiries = %v/%v, want both resolved from expires_in", creds.AccessExpiresAt, creds.RefreshExpiresAt)
 }
 
 // TestPollLoginRejectsOtherStatuses proves a non-200, non-404 answer is a
@@ -174,9 +147,7 @@ func TestPollLoginRejectsOtherStatuses(t *testing.T) {
 	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	tx := &LoginTransaction{Nonce: "n", Verifier: "v"}
 	_, err := client.PollLogin(context.Background(), tx)
-	if !errors.Is(err, ErrAuthRejected) {
-		t.Fatalf("error = %v, want ErrAuthRejected", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrAuthRejected), "error = %v, want ErrAuthRejected", err)
 }
 
 // TestPollLoginRejectsTokenlessSuccess proves a 200 without a token is not
@@ -192,9 +163,7 @@ func TestPollLoginRejectsTokenlessSuccess(t *testing.T) {
 
 	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	_, err := client.PollLogin(context.Background(), &LoginTransaction{Nonce: "n", Verifier: "v"})
-	if !errors.Is(err, ErrAuthRejected) {
-		t.Fatalf("error = %v, want ErrAuthRejected", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrAuthRejected), "error = %v, want ErrAuthRejected", err)
 }
 
 // TestRefreshAcceptsBothTokenSpellings pins the field-name difference between
@@ -203,9 +172,8 @@ func TestRefreshAcceptsBothTokenSpellings(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/deviceToken/refresh" {
-			t.Errorf("request = %s %s, want POST /api/v1/deviceToken/refresh", r.Method, r.URL.Path)
-		}
+		testutil.CheckEqual(t, r.Method, http.MethodPost)
+		testutil.CheckEqual(t, r.URL.Path, "/api/v1/deviceToken/refresh")
 		body, _ := io.ReadAll(r.Body)
 		testutil.CheckContain(t, string(body), `"refresh_token":"refresh-1"`)
 		w.Header().Set("Content-Type", "application/json")
@@ -215,9 +183,7 @@ func TestRefreshAcceptsBothTokenSpellings(t *testing.T) {
 
 	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	creds, err := client.Refresh(context.Background(), "refresh-1")
-	if err != nil {
-		t.Fatalf("Refresh() error = %v", err)
-	}
+	testutil.NoError(t, err, "Refresh() error = %v")
 	testutil.Equal(t, creds.AccessToken, "access-2")
 	testutil.Equal(t, creds.RefreshToken, "refresh-2")
 }
@@ -236,9 +202,7 @@ func TestRefreshClassifiesReLoginRequired(t *testing.T) {
 
 	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	_, err := client.Refresh(context.Background(), "refresh-1")
-	if !errors.Is(err, ErrReLoginRequired) {
-		t.Fatalf("error = %v, want ErrReLoginRequired", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrReLoginRequired), "error = %v, want ErrReLoginRequired", err)
 }
 
 // TestRefreshWithoutTokenIsMissingCredential pins the refusal to call the
@@ -247,9 +211,8 @@ func TestRefreshWithoutTokenIsMissingCredential(t *testing.T) {
 	t.Parallel()
 
 	client := newLoginClient(t, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
-	if _, err := client.Refresh(context.Background(), "  "); !errors.Is(err, ErrCredentialMissing) {
-		t.Fatalf("error = %v, want ErrCredentialMissing", err)
-	}
+	_, err := client.Refresh(context.Background(), "  ")
+	testutil.Falsef(t, !errors.Is(err, ErrCredentialMissing), "error = %v, want ErrCredentialMissing", err)
 }
 
 // TestFetchProfileToleratesFailure proves the enrichment is best effort.
@@ -263,9 +226,8 @@ func TestFetchProfileToleratesFailure(t *testing.T) {
 	defer server.Close()
 
 	client := newLoginClient(t, server.URL, server.URL, server.URL)
-	if _, err := client.FetchProfile(context.Background(), "access-1"); err == nil {
-		t.Fatal("FetchProfile() error = nil for a 500 response")
-	}
+	_, err := client.FetchProfile(context.Background(), "access-1")
+	testutil.Error(t, err)
 }
 
 // TestResolveCredentialsPrefersDedicatedFields pins the field mapping, including
@@ -283,16 +245,15 @@ func TestResolveCredentialsPrefersDedicatedFields(t *testing.T) {
 		Token:             "some-other-channel-token",
 	}
 	creds := ResolveCredentials(acc)
-	if creds.AccessToken != "access" || creds.RefreshToken != "refresh" || creds.UID != "uid" {
-		t.Fatalf("credentials = %+v, want the dedicated fields", creds)
-	}
+	testutil.Equal(t, creds.AccessToken, "access")
+	testutil.Equal(t, creds.RefreshToken, "refresh")
+	testutil.Equal(t, creds.UID, "uid")
 
 	// With the dedicated fields empty, an unrelated opaque value must not be
 	// adopted.
 	other := &store.Account{AccountType: "qoder", Token: "opaque-value"}
-	if got := ResolveCredentials(other); got.HasCredential() {
-		t.Fatalf("credentials = %+v, want nothing resolved from an opaque generic slot", got)
-	}
+	got := ResolveCredentials(other)
+	testutil.Falsef(t, got.HasCredential(), "credentials = %+v, want nothing resolved from an opaque generic slot", got)
 }
 
 // TestParseCredentialDocumentRoundTrips proves an imported CLI credential is
@@ -303,18 +264,17 @@ func TestParseCredentialDocumentRoundTrips(t *testing.T) {
 	raw := `{"uid":"u1","name":"n1","email":"e@example.com","organization_id":"org1","organization_tags":["a","b"],"security_oauth_token":"sot","refresh_token":"rt","expire_time":1700000000,"refresh_token_expire_time":1700086400}`
 	creds, ok := ParseCredentialDocument(raw)
 	testutil.True(t, ok, "ParseCredentialDocument() = false, want true")
-	if creds.AccessToken != "sot" || creds.RefreshToken != "rt" || creds.UID != "u1" || creds.OrgID != "org1" {
-		t.Fatalf("credentials = %+v", creds)
-	}
+	testutil.Equal(t, creds.AccessToken, "sot")
+	testutil.Equal(t, creds.RefreshToken, "rt")
+	testutil.Equal(t, creds.UID, "u1")
+	testutil.Equal(t, creds.OrgID, "org1")
 	testutil.Equal(t, len(creds.OrgTags), 2)
 	testutil.Equal(t, creds.AccessExpiresAt.Unix(), 1700000000)
 
-	if _, ok := ParseCredentialDocument(`{"uid":"u1"}`); ok {
-		t.Fatal("ParseCredentialDocument() = true for a document without a token")
-	}
-	if _, ok := ParseCredentialDocument("not json"); ok {
-		t.Fatal("ParseCredentialDocument() = true for a non-JSON value")
-	}
+	_, ok = ParseCredentialDocument(`{"uid":"u1"}`)
+	testutil.False(t, ok, "ParseCredentialDocument() = true for a document without a token")
+	_, ok = ParseCredentialDocument("not json")
+	testutil.False(t, ok, "ParseCredentialDocument() = true for a non-JSON value")
 }
 
 // TestUnixSecondsNormalizesMilliseconds proves a millisecond timestamp does not
@@ -334,15 +294,12 @@ func TestParseExpiryAcceptsBothForms(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1700000000, 0)
-	if got := parseExpiry("", 3600, now); !got.Equal(now.Add(time.Hour)) {
-		t.Fatalf("parseExpiry(relative) = %v, want %v", got, now.Add(time.Hour))
-	}
-	if got := parseExpiry("2023-11-14T22:13:20Z", 0, now); got.Unix() != 1700000000 {
-		t.Fatalf("parseExpiry(absolute) = %v, want 1700000000", got.Unix())
-	}
-	if got := parseExpiry("", 0, now); !got.IsZero() {
-		t.Fatalf("parseExpiry(absent) = %v, want zero", got)
-	}
+	got := parseExpiry("", 3600, now)
+	testutil.Falsef(t, !got.Equal(now.Add(time.Hour)), "parseExpiry(relative) = %v, want %v", got, now.Add(time.Hour))
+	got = parseExpiry("2023-11-14T22:13:20Z", 0, now)
+	testutil.Falsef(t, got.Unix() != 1700000000, "parseExpiry(absolute) = %v, want 1700000000", got.Unix())
+	got = parseExpiry("", 0, now)
+	testutil.Falsef(t, !got.IsZero(), "parseExpiry(absent) = %v, want zero", got)
 }
 
 // TestProbeReachabilityDetectsBlockedEgress covers the startup diagnostic.
@@ -354,9 +311,8 @@ func TestProbeReachabilityDetectsBlockedEgress(t *testing.T) {
 	dead.Close()
 
 	client := newLoginClient(t, base, base, base)
-	if err := client.ProbeReachability(context.Background()); !errors.Is(err, ErrAuthUnavailable) {
-		t.Fatalf("error = %v, want ErrAuthUnavailable", err)
-	}
+	err := client.ProbeReachability(context.Background())
+	testutil.Falsef(t, !errors.Is(err, ErrAuthUnavailable), "error = %v, want ErrAuthUnavailable", err)
 
 	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -391,9 +347,7 @@ func TestEnsureAccessTokenSkipsRefreshWhileValid(t *testing.T) {
 	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
 	creds, err := client.ensureAccessToken(context.Background())
-	if err != nil {
-		t.Fatalf("ensureAccessToken() error = %v", err)
-	}
+	testutil.NoError(t, err, "ensureAccessToken() error = %v")
 	testutil.Equal(t, creds.AccessToken, "access-fresh")
 	testutil.Equal(t, refreshes, 0)
 }

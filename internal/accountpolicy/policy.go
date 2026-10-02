@@ -86,9 +86,7 @@ type retryAfterError interface {
 // Success is the verdict for an upstream result that proved the credential
 // works. It always stamps VerifiedAt so "never checked" stays distinguishable
 // from "checked and healthy".
-func Success(at time.Time) Verdict {
-	return Verdict{Scope: ScopeNone, At: at}
-}
+func Success(at time.Time) Verdict { return Verdict{Scope: ScopeNone, At: at} }
 
 // Apply records the verdict on the account. It is the only place that moves the
 // status, the reason and the verdict stamp together, so a partial write can

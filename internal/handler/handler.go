@@ -223,14 +223,10 @@ func (h *Handler) configSnapshot() *config.Config {
 }
 
 // SetAuditLogger replaces the default nop audit logger.
-func (h *Handler) SetAuditLogger(al audit.Logger) {
-	h.auditLogger = al
-}
+func (h *Handler) SetAuditLogger(al audit.Logger) { h.auditLogger = al }
 
 // SetClientFactory sets the factory used by selectAccount to create provider-specific clients.
-func (h *Handler) SetClientFactory(f ClientFactory) {
-	h.clientFactory = f
-}
+func (h *Handler) SetClientFactory(f ClientFactory) { h.clientFactory = f }
 
 func (h *Handler) computeRequestHash(r *http.Request, body []byte) string {
 	hasher := sha256.New()
@@ -452,9 +448,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	if isTopicClassifierRequest(req) {
 		logutil.DebugIf(verboseDiagnostics, "Handling topic classifier request locally")
-		logger.LogEarlyExit("topic_classifier", map[string]interface{}{
-			"mode": "local",
-		})
+		logger.LogEarlyExit("topic_classifier", map[string]interface{}{"mode": "local"})
 		writeTopicClassifierResponse(w, req, responseFormat, startTime, logger)
 		return
 	}
@@ -690,9 +684,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// Token 计数（用于前置 usage 展示）
 	inputTokens := breakdown.Total
 
-	sh := newStreamHandler(
-		cfg, w, logger, noThinking, isStream, responseFormat,
-	)
+	sh := newStreamHandler(cfg, w, logger, noThinking, isStream, responseFormat)
 	sh.setAllowedToolNames(declaredToolNames(effectiveTools))
 	if preSelectQoderRequest {
 		sh.setSurfaceToolRejects(true)

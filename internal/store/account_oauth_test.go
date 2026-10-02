@@ -25,9 +25,7 @@ func TestUpdateAccountPreservesAndDeepCopiesNewestGrokCatalog(t *testing.T) {
 	stale.GrokModelCatalog = []modelcatalog.Profile{{ModelID: "stale"}}
 	testutil.NoError(t, s.UpdateAccount(ctx, &stale))
 	got, _ := s.GetAccount(ctx, acc.ID)
-	if len(got.GrokModelCatalog) != 1 || got.GrokModelCatalog[0].ModelID != "grok-4.7" || got.GrokModelCatalog[0].ReasoningEfforts[0] != "xhigh" || got.GrokModels[0] != "grok-4.7" {
-		t.Fatalf("newest catalog was overwritten or aliased: %+v", got.GrokModelCatalog)
-	}
+	testutil.Falsef(t, len(got.GrokModelCatalog) != 1 || got.GrokModelCatalog[0].ModelID != "grok-4.7" || got.GrokModelCatalog[0].ReasoningEfforts[0] != "xhigh" || got.GrokModels[0] != "grok-4.7", "newest catalog was overwritten or aliased: %+v", got.GrokModelCatalog)
 }
 
 func TestUpdateAccount_PersistsGrokOAuthFields(t *testing.T) {
@@ -54,14 +52,10 @@ func TestUpdateAccount_PersistsGrokOAuthFields(t *testing.T) {
 	testutil.NoError(t, s.UpdateAccount(ctx, acc), "UpdateAccount() error = %v")
 
 	got, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, got.CredentialType, "oauth")
 	testutil.Equal(t, got.OAuthAccessToken, "new-access")
 	testutil.Equal(t, got.OAuthRefreshToken, "new-refresh")
 	testutil.Equal(t, got.TeamID, "team-new")
-	if got.OAuthExpiresAt.IsZero() || !got.OAuthExpiresAt.Equal(acc.OAuthExpiresAt) {
-		t.Fatalf("OAuthExpiresAt=%v want %v", got.OAuthExpiresAt, acc.OAuthExpiresAt)
-	}
+	testutil.Falsef(t, got.OAuthExpiresAt.IsZero() || !got.OAuthExpiresAt.Equal(acc.OAuthExpiresAt), "OAuthExpiresAt=%v want %v", got.OAuthExpiresAt, acc.OAuthExpiresAt)
 }

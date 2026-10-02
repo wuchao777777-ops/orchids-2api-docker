@@ -13,9 +13,7 @@ func TestAnthropicRequestToChatPreservesToolsAndMultimodalContent(t *testing.T) 
 	req := anthropicMessagesRequest{
 		Model:     "grok-4.6",
 		MaxTokens: 512,
-		System: []interface{}{
-			map[string]interface{}{"type": "text", "text": "Be precise."},
-		},
+		System:    []interface{}{map[string]interface{}{"type": "text", "text": "Be precise."}},
 		Messages: []anthropicMessage{
 			{Role: "user", Content: []interface{}{
 				map[string]interface{}{"type": "text", "text": "Inspect this"},
@@ -36,22 +34,18 @@ func TestAnthropicRequestToChatPreservesToolsAndMultimodalContent(t *testing.T) 
 	}
 
 	chat, err := anthropicRequestToChat(req)
-	if err != nil {
-		t.Fatalf("conversion error = %v", err)
-	}
-	if chat.MaxTokens == nil || *chat.MaxTokens != 512 || len(chat.Messages) != 5 {
-		t.Fatalf("unexpected converted request: %#v", chat)
-	}
-	if chat.Messages[0].Role != "system" || chat.Messages[3].Role != "tool" || chat.Messages[3].ToolCallID != "tool_1" || chat.Messages[4].Role != "user" {
-		t.Fatalf("message roles/history mismatch: %#v", chat.Messages)
-	}
+	testutil.NoError(t, err, "conversion error = %v")
+	testutil.Falsef(t, chat.MaxTokens == nil || *chat.MaxTokens != 512 || len(chat.Messages) != 5, "unexpected converted request: %#v", chat)
+	testutil.Equal(t, chat.Messages[0].Role, "system")
+	testutil.Equal(t, chat.Messages[3].Role, "tool")
+	testutil.Equal(t, chat.Messages[3].ToolCallID, "tool_1")
+	testutil.Equal(t, chat.Messages[4].Role, "user")
 	parts, ok := chat.Messages[1].Content.([]interface{})
 	if !ok || len(parts) != 2 || !strings.Contains(parts[1].(map[string]interface{})["image_url"].(map[string]interface{})["url"].(string), "data:image/png;base64,YWJj") {
 		t.Fatalf("multimodal content mismatch: %#v", chat.Messages[1].Content)
 	}
-	if len(chat.Messages[2].ToolCalls) != 1 || len(chat.Tools) != 1 {
-		t.Fatalf("tool conversion mismatch: %#v / %#v", chat.Messages[2].ToolCalls, chat.Tools)
-	}
+	testutil.Equal(t, len(chat.Messages[2].ToolCalls), 1)
+	testutil.Equal(t, len(chat.Tools), 1)
 }
 
 func TestAnthropicResponseFromChat(t *testing.T) {
@@ -72,17 +66,15 @@ func TestAnthropicResponseFromChat(t *testing.T) {
 		},
 	}
 	got := anthropicResponseFromChat("grok-4.6", chat)
-	if got["id"] != "chat_1" || got["stop_reason"] != "tool_use" {
-		t.Fatalf("response envelope mismatch: %#v", got)
-	}
+	testutil.Equal(t, got["id"], "chat_1")
+	testutil.Equal(t, got["stop_reason"], "tool_use")
 	content := got["content"].([]interface{})
-	if len(content) != 2 || content[1].(map[string]interface{})["type"] != "tool_use" {
-		t.Fatalf("content mismatch: %#v", content)
-	}
+	testutil.Equal(t, len(content), 2)
+	testutil.Equal(t, content[1].(map[string]interface{})["type"], "tool_use")
 	usage := got["usage"].(map[string]interface{})
-	if usage["input_tokens"] != 8 || usage["output_tokens"] != 7 || usage["cache_read_input_tokens"] != 3 {
-		t.Fatalf("usage mismatch: %#v", usage)
-	}
+	testutil.Equal(t, usage["input_tokens"], 8)
+	testutil.Equal(t, usage["output_tokens"], 7)
+	testutil.Equal(t, usage["cache_read_input_tokens"], 3)
 }
 
 func TestTranslateOpenAIChatStreamToAnthropic(t *testing.T) {
@@ -114,16 +106,12 @@ func TestBuildPayloadIncludesMaxOutputTokens(t *testing.T) {
 	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, &ChatCompletionsRequest{
 		Messages: []ChatMessage{{Role: "user", Content: "hello"}}, MaxTokens: &maxTokens,
 	}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, payload["max_output_tokens"], 321)
 }
 
 func TestChatRequestUnmarshalPreservesMaxTokens(t *testing.T) {
 	var req ChatCompletionsRequest
 	testutil.NoError(t, json.Unmarshal([]byte(`{"model":"grok-4.6","messages":[{"role":"user","content":"hi"}],"max_tokens":123}`), &req))
-	if req.MaxTokens == nil || *req.MaxTokens != 123 {
-		t.Fatalf("max_tokens=%v", req.MaxTokens)
-	}
+	testutil.Falsef(t, req.MaxTokens == nil || *req.MaxTokens != 123, "max_tokens=%v", req.MaxTokens)
 }

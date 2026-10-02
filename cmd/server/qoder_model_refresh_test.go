@@ -39,13 +39,9 @@ func TestDiscoverQoderModelsRequiresAnActiveAccount(t *testing.T) {
 	defer cleanup()
 
 	report, err := discoverAccountCatalogModels(context.Background(), &config.Config{}, s, "Qoder", defaultModelRefreshConcurrency)
-	items, source := report.Candidates, report.Source
-	if err == nil {
-		t.Fatalf("discoverAccountCatalogModels() items=%+v source=%q want error", items, source)
-	}
-	if !isNoActiveAccounts(err) {
-		t.Fatalf("error=%v want a no-active-account report", err)
-	}
+	items, _ := report.Candidates, report.Source
+	testutil.Error(t, err, "discoverAccountCatalogModels() items=%+v source=%q want error")
+	testutil.True(t, isNoActiveAccounts(err), "error=%v want a no-active-account report")
 	testutil.Equal(t, len(items), 0)
 }
 
@@ -70,29 +66,21 @@ func TestDiscoverQoderModelsWithoutAnUpstreamCatalogPublishesNothing(t *testing.
 	}
 	report, err := discoverAccountCatalogModels(ctx, cfg, s, "Qoder", defaultModelRefreshConcurrency)
 	items, source := report.Candidates, report.Source
-	if err == nil {
-		t.Fatalf("discoverAccountCatalogModels() items=%+v source=%q want error", items, source)
-	}
+	testutil.Error(t, err, "discoverAccountCatalogModels() items=%+v source=%q want error")
 	testutil.Equal(t, source, "")
 	testutil.Equal(t, len(items), 0)
 	testutil.MustNotContain(t, err.Error(), "builtin")
 
 	models, listErr := s.ListModels(ctx)
-	if listErr != nil {
-		t.Fatalf("ListModels() error = %v", listErr)
-	}
+	testutil.NoError(t, listErr, "ListModels() error = %v")
 	for _, model := range models {
-		if strings.EqualFold(strings.TrimSpace(model.Channel), "qoder") {
-			t.Fatalf("a compiled-in catalog was published: %+v", model)
-		}
+		testutil.Falsef(t, strings.EqualFold(strings.TrimSpace(model.Channel), "qoder"), "a compiled-in catalog was published: %+v", model)
 	}
 
 	// The credential is still good, so the account is untouched and a later
 	// refresh can record the catalog once the read works.
 	stored, getErr := s.GetAccount(ctx, acc.ID)
-	if getErr != nil {
-		t.Fatalf("GetAccount() error = %v", getErr)
-	}
+	testutil.NoError(t, getErr, "GetAccount() error = %v")
 	testutil.Equal(t, len(stored.QoderModelIDs), 0)
 }
 
@@ -108,9 +96,8 @@ func qoderCatalogStub(t *testing.T, status int, body string) *httptest.Server {
 		}
 		// The catalog read must carry the derived auth chain; without it the
 		// gateway refuses and the refresh would report the wrong cause.
-		if auth := r.Header.Get("Authorization"); !strings.HasPrefix(auth, "Bearer COSY.") {
-			t.Errorf("catalog request Authorization = %q, want a COSY bearer", auth)
-		}
+		auth := r.Header.Get("Authorization")
+		testutil.CheckFalsef(t, !strings.HasPrefix(auth, "Bearer COSY."), "catalog request Authorization = %q, want a COSY bearer", auth)
 		for _, header := range []string{"Cosy-Key", "Cosy-MachineId", "Cosy-Date"} {
 			testutil.CheckNotEqual(t, r.Header.Get(header), "")
 		}
@@ -140,23 +127,17 @@ func TestDiscoverQoderModelsPublishesTheObservedCatalog(t *testing.T) {
 
 	report, err := discoverAccountCatalogModels(ctx, &config.Config{QoderInferenceURL: stub.URL}, s, "Qoder", defaultModelRefreshConcurrency)
 	items, source := report.Candidates, report.Source
-	if err != nil {
-		t.Fatalf("discoverAccountCatalogModels() error = %v", err)
-	}
+	testutil.NoError(t, err, "discoverAccountCatalogModels() error = %v")
 	testutil.Equal(t, source, "qoder_upstream_models")
 	testutil.Equal(t, len(items), 2)
 	for _, item := range items {
-		if !item.Verified {
-			t.Fatalf("item %+v is not marked verified", item)
-		}
+		testutil.Falsef(t, !item.Verified, "item %+v is not marked verified", item)
 		testutil.Equal(t, item.ID, strings.ToLower(item.ID))
 	}
 
 	// The snapshot must carry the wire fields routing rebuilds the request from.
 	stored, getErr := s.GetAccount(ctx, acc.ID)
-	if getErr != nil {
-		t.Fatalf("GetAccount() error = %v", getErr)
-	}
+	testutil.NoError(t, getErr, "GetAccount() error = %v")
 	testutil.NotEqual(t, len(stored.QoderModelIDs), 0)
 	testutil.MustContain(t, strings.Join(stored.QoderModelIDs, ""), "max_input_tokens")
 }
@@ -177,20 +158,14 @@ func TestDiscoverQoderModelsReportsTheReadFailure(t *testing.T) {
 	testutil.NoError(t, s.CreateAccount(ctx, acc), "CreateAccount() error = %v")
 
 	report, err := discoverAccountCatalogModels(ctx, &config.Config{QoderInferenceURL: stub.URL}, s, "Qoder", defaultModelRefreshConcurrency)
-	items, source := report.Candidates, report.Source
-	if err == nil {
-		t.Fatalf("discoverAccountCatalogModels() items=%+v source=%q want error", items, source)
-	}
+	items, _ := report.Candidates, report.Source
+	testutil.Error(t, err, "discoverAccountCatalogModels() items=%+v source=%q want error")
 	testutil.MustContain(t, err.Error(), "status=403")
 	testutil.Equal(t, len(items), 0)
 	models, listErr := s.ListModels(ctx)
-	if listErr != nil {
-		t.Fatalf("ListModels() error = %v", listErr)
-	}
+	testutil.NoError(t, listErr, "ListModels() error = %v")
 	for _, model := range models {
-		if strings.EqualFold(strings.TrimSpace(model.Channel), "qoder") {
-			t.Fatalf("a failed read published a model: %+v", model)
-		}
+		testutil.Falsef(t, strings.EqualFold(strings.TrimSpace(model.Channel), "qoder"), "a failed read published a model: %+v", model)
 	}
 }
 
@@ -204,12 +179,8 @@ func TestNormalizeAdminModelChannel_AcceptsQoder(t *testing.T) {
 // TestShouldDeleteMissingModelsOnRefresh_OnlyPrunesUpstreamCatalogs proves
 // pruning follows an observed catalog, and never a locally produced list.
 func TestShouldDeleteMissingModelsOnRefresh_OnlyPrunesUpstreamCatalogs(t *testing.T) {
-	if !shouldDeleteMissingModelsOnRefresh("qoder", "qoder_upstream_models") {
-		t.Fatal("an observed Qoder catalog must prune rows it no longer advertises")
-	}
+	testutil.False(t, !shouldDeleteMissingModelsOnRefresh("qoder", "qoder_upstream_models"), "an observed Qoder catalog must prune rows it no longer advertises")
 	for _, source := range []string{"qoder_builtin_catalog", "cline_cached_models", "test", ""} {
-		if shouldDeleteMissingModelsOnRefresh("qoder", source) {
-			t.Fatalf("source %q pruned the catalog", source)
-		}
+		testutil.Falsef(t, shouldDeleteMissingModelsOnRefresh("qoder", source), "source %q pruned the catalog", source)
 	}
 }

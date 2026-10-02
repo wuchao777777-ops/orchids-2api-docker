@@ -108,12 +108,10 @@ func TestToolResultFollowupWorkdirAfterToolTurn_ReachesUpstream(t *testing.T) {
 	h.HandleMessages(rec, req)
 	testutil.Equal(t, rec.Code, http.StatusOK)
 
-	if calls := client.snapshotCalls(); len(calls) != 1 {
-		t.Fatalf("upstream calls = %d, want 1: the question must be answered upstream", len(calls))
-	}
-	if out := rec.Body.String(); strings.Contains(out, "当前工作目录未在本次请求中提供") {
-		t.Fatalf("gateway still answered the workdir question locally: %s", out)
-	}
+	calls := client.snapshotCalls()
+	testutil.Falsef(t, len(calls) != 1, "upstream calls = %d, want 1: the question must be answered upstream", len(calls))
+	out := rec.Body.String()
+	testutil.Falsef(t, strings.Contains(out, "当前工作目录未在本次请求中提供"), "gateway still answered the workdir question locally: %s", out)
 }
 
 func TestToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *testing.T) {
@@ -150,9 +148,7 @@ func TestToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *test
 
 	calls := client.snapshotCalls()
 	testutil.Equal(t, len(calls), 1)
-	if calls[0].NoTools {
-		t.Fatalf("expected workbuddy follow-up after sandbox path miss to keep tools enabled")
-	}
+	testutil.False(t, calls[0].NoTools, "expected workbuddy follow-up after sandbox path miss to keep tools enabled")
 }
 
 func TestOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testing.T) {
@@ -185,43 +181,32 @@ func TestOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testing.T) 
 
 	calls := client.snapshotCalls()
 	testutil.Equal(t, len(calls), 1)
-	if calls[0].NoTools {
-		t.Fatalf("expected openai workbuddy tool follow-up to keep tools enabled")
-	}
+	testutil.False(t, calls[0].NoTools, "expected openai workbuddy tool follow-up to keep tools enabled")
 
 	testutil.Equal(t, len(calls[0].Messages), 3)
 
 	assistantMsg := calls[0].Messages[1]
 	testutil.Equal(t, assistantMsg.Role, "assistant")
-	if assistantMsg.Content.IsString() {
-		t.Fatal("expected assistant tool call message to normalize into content blocks")
-	}
+	testutil.False(t, assistantMsg.Content.IsString(), "expected assistant tool call message to normalize into content blocks")
 	assistantBlocks := assistantMsg.Content.GetBlocks()
 	testutil.Equal(t, len(assistantBlocks), 1)
 	if assistantBlocks[0].Type != "tool_use" || assistantBlocks[0].Name != "Write" || assistantBlocks[0].ID != "call_write_1" {
 		t.Fatalf("unexpected assistant tool_use block: %#v", assistantBlocks[0])
 	}
 	input, ok := assistantBlocks[0].Input.(map[string]interface{})
-	if !ok {
-		t.Fatalf("assistant tool input type = %T, want map[string]interface{}", assistantBlocks[0].Input)
-	}
-	if input["file_path"] != "note.txt" || input["content"] != "hello world" {
-		t.Fatalf("assistant tool input = %#v", input)
-	}
+	testutil.True(t, ok, "assistant tool input type = %T, want map[string]interface{}")
+	testutil.Equal(t, input["file_path"], "note.txt")
+	testutil.Equal(t, input["content"], "hello world")
 
 	toolResultMsg := calls[0].Messages[2]
 	testutil.Equal(t, toolResultMsg.Role, "user")
-	if toolResultMsg.Content.IsString() {
-		t.Fatal("expected tool result follow-up to normalize into content blocks")
-	}
+	testutil.False(t, toolResultMsg.Content.IsString(), "expected tool result follow-up to normalize into content blocks")
 	resultBlocks := toolResultMsg.Content.GetBlocks()
 	testutil.Equal(t, len(resultBlocks), 1)
-	if resultBlocks[0].Type != "tool_result" || resultBlocks[0].ToolUseID != "call_write_1" {
-		t.Fatalf("unexpected tool_result block: %#v", resultBlocks[0])
-	}
-	if got, ok := resultBlocks[0].Content.(string); !ok || !strings.Contains(got, "Write succeeded") {
-		t.Fatalf("tool_result content = %#v", resultBlocks[0].Content)
-	}
+	testutil.Equal(t, resultBlocks[0].Type, "tool_result")
+	testutil.Equal(t, resultBlocks[0].ToolUseID, "call_write_1")
+	got, ok := resultBlocks[0].Content.(string)
+	testutil.Falsef(t, !ok || !strings.Contains(got, "Write succeeded"), "tool_result content = %#v", resultBlocks[0].Content)
 }
 
 func TestToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *testing.T) {
@@ -279,9 +264,8 @@ func TestToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *testi
 			rec := httptest.NewRecorder()
 			h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(tc.body)))
 			testutil.Equal(t, rec.Code, http.StatusOK)
-			if calls := client.snapshotCalls(); len(calls) != 1 {
-				t.Fatalf("expected one upstream passthrough call, got %d", len(calls))
-			}
+			calls := client.snapshotCalls()
+			testutil.Falsef(t, len(calls) != 1, "expected one upstream passthrough call, got %d", len(calls))
 			out := rec.Body.String()
 			testutil.MustContain(t, out, answer)
 			for _, unwanted := range []string{"Python", "JSON", "前端", "后端", "脚本层", "当前只拿到目录概览", "基于当前已读取内容"} {
@@ -308,9 +292,7 @@ func TestMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
 			{"role":"user","content":[
 				{"type":"tool_result","tool_use_id":"tool_write","content":"File created successfully at: calculator.py"}
 			]},
-			{"role":"assistant","content":[
-				{"type":"text","text":"完成！计算器已创建在项目目录中。"}
-			]},
+			{"role":"assistant","content":[{"type":"text","text":"完成！计算器已创建在项目目录中。"}]},
 			{"role":"user","content":[{"type":"text","text":"帮我添加科学计数法"}]}
 		],
 		"tools":[
@@ -338,9 +320,7 @@ func TestWorkBuddyPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) 
 
 	client := &fakePayloadClient{}
 	h := &Handler{
-		config: &config.Config{
-			DebugEnabled: false,
-		},
+		config:      &config.Config{DebugEnabled: false},
 		client:      client,
 		auditLogger: audit.NewNopLogger(),
 	}
@@ -361,9 +341,7 @@ func TestWorkBuddyPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) 
 	}
 
 	body, err := json.Marshal(reqPayload)
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
+	testutil.NoError(t, err, "marshal request: %v")
 	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
@@ -405,9 +383,7 @@ func TestToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
 		"messages":[
 			{
 				"role":"user",
-				"content":[
-					{"type":"text","text":"Create scratch.txt with alpha and beta"}
-				]
+				"content":[{"type":"text","text":"Create scratch.txt with alpha and beta"}]
 			},
 			{
 				"role":"assistant",
@@ -417,9 +393,7 @@ func TestToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
 			},
 			{
 				"role":"user",
-				"content":[
-					{"type":"tool_result","tool_use_id":"tool_old_1","content":"Done"}
-				]
+				"content":[{"type":"tool_result","tool_use_id":"tool_old_1","content":"Done"}]
 			}
 		],
 		"tools":[

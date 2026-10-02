@@ -34,16 +34,13 @@ func TestClineCatalogToDiscoveredPublishesTheFeedName(t *testing.T) {
 		{"poolside/laguna-s-2.1:free", "poolside/laguna-s-2.1:free", "poolside"},
 	}
 	for i, want := range want {
-		if got[i].ID != want.id || got[i].Name != want.name || got[i].Provider != want.provider {
-			t.Errorf("row %d = {%q %q %q}, want {%q %q %q}",
-				i, got[i].ID, got[i].Name, got[i].Provider, want.id, want.name, want.provider)
-		}
+		testutil.CheckEqual(t, got[i].ID, want.id)
+		testutil.CheckEqual(t, got[i].Name, want.name)
+		testutil.CheckEqual(t, got[i].Provider, want.provider)
 		// The upstream identifier is what the request path sends, so it is the
 		// upstream model of every published row.
 		testutil.CheckEqual(t, got[i].UpstreamModel, want.id)
-		if !got[i].Verified {
-			t.Errorf("row %d Verified=false: a catalog read is an observation", i)
-		}
+		testutil.CheckFalsef(t, !got[i].Verified, "row %d Verified=false: a catalog read is an observation", i)
 	}
 }
 
@@ -60,15 +57,11 @@ func TestApplyModelRefreshWritesTheClineRouteMetadata(t *testing.T) {
 		{ID: "cline-free/deepseek-v4.1-flash", Name: "Deepseek-v4.1-Flash", Provider: "cline-free"},
 		{ID: "z-ai/glm-5.3-flash", Name: "glm-5.3-flash", Provider: "z-ai"},
 	}), true)
-	if err != nil {
-		t.Fatalf("applyModelRefreshWithPrune() error = %v", err)
-	}
+	testutil.NoError(t, err, "applyModelRefreshWithPrune() error = %v")
 	testutil.Equal(t, result.Added, 2)
 
 	row, err := s.GetModelByChannelAndModelID(ctx, "Cline", "z-ai/glm-5.3-flash")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID() error = %v")
 	testutil.CheckEqual(t, row.Name, "glm-5.3-flash")
 	testutil.CheckEqual(t, row.Provider, "z-ai")
 	testutil.CheckEqual(t, row.UpstreamModel, "z-ai/glm-5.3-flash")
@@ -111,20 +104,14 @@ func TestApplyModelRefreshFillsInARowThatPredatesTheMetadata(t *testing.T) {
 	}
 
 	completed, err := s.GetModelByChannelAndModelID(ctx, "Cline", "cline-free/deepseek-v4.1-flash")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
-	}
-	if !completed.Verified {
-		t.Error("an observed row stayed unverified")
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID() error = %v")
+	testutil.CheckFalse(t, !completed.Verified, "an observed row stayed unverified")
 	// The name was a copy of the identifier, so it adopts the feed's name.
 	testutil.CheckEqual(t, completed.Name, "Deepseek-v4.1-Flash")
 	testutil.CheckEqual(t, completed.Provider, "cline-free")
 
 	kept, err := s.GetModelByChannelAndModelID(ctx, "Cline", "z-ai/glm-5.3-flash")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetModelByChannelAndModelID() error = %v")
 	testutil.CheckEqual(t, kept.Name, "运营改过的名字")
 	testutil.CheckEqual(t, kept.Provider, "hand-set")
 }
@@ -136,13 +123,9 @@ func TestDiscoverClineModelsReportsNoAccount(t *testing.T) {
 	defer cleanup()
 
 	_, err := discoverAccountCatalogModels(context.Background(), &config.Config{}, s, "Cline", defaultModelRefreshConcurrency)
-	if err == nil {
-		t.Fatal("discoverAccountCatalogModels() error = nil, want no active accounts")
-	}
+	testutil.False(t, err == nil, "discoverAccountCatalogModels() error = nil, want no active accounts")
 	var noAccount *noActiveAccountsError
-	if !errorsAs(err, &noAccount) {
-		t.Fatalf("error = %v, want noActiveAccountsError", err)
-	}
+	testutil.True(t, errorsAs(err, &noAccount), "error = %v, want noActiveAccountsError")
 }
 
 func errorsAs(err error, target **noActiveAccountsError) bool {
@@ -168,9 +151,7 @@ func errorsAs(err error, target **noActiveAccountsError) bool {
 // publish and prune: a refresh that reads the feed is authoritative for the
 // whole channel.
 func TestClineRefreshSourceIsAnUpstreamCatalog(t *testing.T) {
-	if !isUpstreamCatalogSource("cline_recommended_models") {
-		t.Fatal("cline_recommended_models must be an upstream catalog source")
-	}
+	testutil.False(t, !isUpstreamCatalogSource("cline_recommended_models"), "cline_recommended_models must be an upstream catalog source")
 	testutil.Equal(t, normalizeAdminModelChannel("cline"), "Cline")
 	testutil.CheckEqual(t, refreshModelRequestConfig(&config.Config{RequestTimeout: 600}, "cline").RequestTimeout, 15)
 }

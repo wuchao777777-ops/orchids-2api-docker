@@ -43,9 +43,8 @@ func TestDistributedCooldownVisibleToAnotherRegistry(t *testing.T) {
 	first := newTeamCooldownRegistry()
 	second := newTeamCooldownRegistry()
 	first.Note(RateLimitScopeRPM, "shared-team", "grok-4.6", time.Minute)
-	if remaining := second.RetryAfterFor(RateLimitScopeRPM, "shared-team", "grok-4.6"); remaining <= 0 {
-		t.Fatal("second process did not observe Redis cooldown")
-	}
+	remaining := second.RetryAfterFor(RateLimitScopeRPM, "shared-team", "grok-4.6")
+	testutil.False(t, remaining <= 0, "second process did not observe Redis cooldown")
 }
 
 func TestDistributedPacingSerializesReplicas(t *testing.T) {
@@ -53,18 +52,16 @@ func TestDistributedPacingSerializesReplicas(t *testing.T) {
 	testutil.NoError(t, backend.waitPacing(context.Background(), "shared-account", 2), "first pacing token failed: %v")
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
-	if err := backend.waitPacing(ctx, "shared-account", 2); err == nil {
-		t.Fatal("second replica bypassed distributed pacing interval")
-	}
+	err := backend.waitPacing(ctx, "shared-account", 2)
+	testutil.Error(t, err)
 }
 
 func TestTeamCooldownNoteAndRetry(t *testing.T) {
 	registry := newTeamCooldownRegistry()
 	registry.Note(RateLimitScopeRPS, "team-a", "grok-4.5", 30*time.Second)
 
-	if remaining := registry.RetryAfterFor(RateLimitScopeRPS, "team-a", "grok-4.5"); remaining <= 0 || remaining > 30*time.Second {
-		t.Fatalf("remaining = %s, want in (0, 30s]", remaining)
-	}
+	remaining := registry.RetryAfterFor(RateLimitScopeRPS, "team-a", "grok-4.5")
+	testutil.Falsef(t, remaining <= 0 || remaining > 30*time.Second, "remaining = %s, want in (0, 30s]", remaining)
 	// Different team/model must be unaffected.
 	testutil.Equal(t, registry.RetryAfterFor(RateLimitScopeRPS, "team-b", "grok-4.5"), 0)
 	testutil.Equal(t, registry.RetryAfterFor(RateLimitScopeRPM, "team-a", "grok-4.5"), 0)
@@ -74,12 +71,8 @@ func TestTeamCooldownNoteIgnoresEmptyTeamOrModel(t *testing.T) {
 	registry := newTeamCooldownRegistry()
 	registry.Note(RateLimitScopeRPS, "", "grok-4.5", time.Minute)
 	registry.Note(RateLimitScopeRPS, "team-a", "", time.Minute)
-	if registry.RetryAfterFor(RateLimitScopeRPS, "", "grok-4.5") != 0 {
-		t.Fatal("empty team must not create an entry")
-	}
-	if registry.RetryAfterFor(RateLimitScopeRPS, "team-a", "") != 0 {
-		t.Fatal("empty model must not create an entry")
-	}
+	testutil.Equal(t, registry.RetryAfterFor(RateLimitScopeRPS, "", "grok-4.5"), 0)
+	testutil.Equal(t, registry.RetryAfterFor(RateLimitScopeRPS, "team-a", ""), 0)
 }
 
 func TestTeamCooldownExpiry(t *testing.T) {
@@ -96,9 +89,7 @@ func TestTeamCooldownNoteKeepsLongest(t *testing.T) {
 	first := registry.RetryAfterFor(RateLimitScopeRPS, "team-a", "grok-4.5")
 	registry.Note(RateLimitScopeRPS, "team-a", "grok-4.5", 60*time.Second) // longer: extend
 	second := registry.RetryAfterFor(RateLimitScopeRPS, "team-a", "grok-4.5")
-	if second <= first {
-		t.Fatalf("longer note should extend cooldown: first=%s second=%s", first, second)
-	}
+	testutil.Falsef(t, second <= first, "longer note should extend cooldown: first=%s second=%s", first, second)
 }
 
 func TestTeamCooldownConcurrentNote(t *testing.T) {
@@ -112,13 +103,10 @@ func TestTeamCooldownConcurrentNote(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if remaining := registry.RetryAfterFor(RateLimitScopeRPS, "team-conc", "grok-4.5"); remaining <= 0 {
-		t.Fatalf("concurrent notes should leave an entry, got %s", remaining)
-	}
+	remaining := registry.RetryAfterFor(RateLimitScopeRPS, "team-conc", "grok-4.5")
+	testutil.Falsef(t, remaining <= 0, "concurrent notes should leave an entry, got %s", remaining)
 	registry.mu.Lock()
 	size := len(registry.entries)
 	registry.mu.Unlock()
-	if size > teamCooldownMaxSize {
-		t.Fatal("registry exceeded max size")
-	}
+	testutil.False(t, size > teamCooldownMaxSize, "registry exceeded max size")
 }

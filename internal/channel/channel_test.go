@@ -9,22 +9,17 @@ func TestRegistryInvariantsAndPathParsing(t *testing.T) {
 	seenID, seenLabel, seenPrefix := map[ID]bool{}, map[string]bool{}, map[string]bool{}
 	defaults := 0
 	for _, definition := range All() {
-		if seenID[definition.ID] || seenLabel[definition.Label] || seenPrefix[definition.APIPrefix] {
-			t.Fatalf("duplicate definition: %+v", definition)
-		}
+		testutil.Falsef(t, seenID[definition.ID] || seenLabel[definition.Label] || seenPrefix[definition.APIPrefix], "duplicate definition: %+v", definition)
 		seenID[definition.ID], seenLabel[definition.Label], seenPrefix[definition.APIPrefix] = true, true, true
 		if definition.Default {
 			defaults++
 		}
-		if id, ok := Parse(definition.Label); !ok || id != definition.ID {
-			t.Fatalf("label parse failed: %+v", definition)
-		}
-		if id, ok := FromPath(definition.APIPrefix + "/models"); !ok || id != definition.ID {
-			t.Fatalf("path parse failed: %+v", definition)
-		}
-		if id, model, ok := TrimModelPath(definition.APIPrefix + "/models/example"); !ok || id != definition.ID || model != "example" {
-			t.Fatalf("model path parse failed: %+v", definition)
-		}
+		id, ok := Parse(definition.Label)
+		testutil.Falsef(t, !ok || id != definition.ID, "label parse failed: %+v", definition)
+		id, ok = FromPath(definition.APIPrefix + "/models")
+		testutil.Falsef(t, !ok || id != definition.ID, "path parse failed: %+v", definition)
+		id, model, ok := TrimModelPath(definition.APIPrefix + "/models/example")
+		testutil.Falsef(t, !ok || id != definition.ID || model != "example", "model path parse failed: %+v", definition)
 	}
 	testutil.Equal(t, defaults, 1)
 }
@@ -34,9 +29,8 @@ func TestRegistryInvariantsAndPathParsing(t *testing.T) {
 // remaining four channels keep their order, so any accidental re-addition or
 // reordering of the registry fails here.
 func TestRegistryIsWorkBuddyDefaultAfterChannelRemoval(t *testing.T) {
-	if got := Default(); got.ID != WorkBuddy {
-		t.Fatalf("Default() = %q, want %q", got.ID, WorkBuddy)
-	}
+	got := Default()
+	testutil.Falsef(t, got.ID != WorkBuddy, "Default() = %q, want %q", got.ID, WorkBuddy)
 	want := []ID{WorkBuddy, Qoder, Cline, Grok}
 	all := All()
 	testutil.Equal(t, len(all), len(want))

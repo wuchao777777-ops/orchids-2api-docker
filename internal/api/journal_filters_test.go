@@ -46,9 +46,7 @@ func seedJournalAt(t *testing.T, a *API, events []audit.Event) {
 			event.Timestamp = time.Now()
 		}
 		raw, err := json.Marshal(event)
-		if err != nil {
-			t.Fatalf("marshal event: %v", err)
-		}
+		testutil.NoError(t, err, "marshal event: %v")
 		id := fmt.Sprintf("%d-%d", event.Timestamp.UnixMilli(), sequence)
 		sequence++
 		if _, err := client.XAdd(context.Background(), &redis.XAddArgs{
@@ -136,37 +134,29 @@ func TestJournalRecordsAppliesTimeAndOutcomeFilters(t *testing.T) {
 		return found
 	}
 
-	if got := ids("?kind=request&outcome=rate_limited"); len(got) != 1 || got[0] != "req-429" {
-		t.Fatalf("outcome=rate_limited listed %v, want only req-429", got)
-	}
-	if got := ids("?kind=request&outcome=failed"); len(got) != 3 {
-		t.Fatalf("outcome=failed listed %v, want the three failing requests", got)
-	}
-	if got := ids("?kind=request&outcome=success"); len(got) != 1 || got[0] != "req-ok" {
-		t.Fatalf("outcome=success listed %v, want only req-ok", got)
-	}
+	got := ids("?kind=request&outcome=rate_limited")
+	testutil.Falsef(t, len(got) != 1 || got[0] != "req-429", "outcome=rate_limited listed %v, want only req-429", got)
+	got = ids("?kind=request&outcome=failed")
+	testutil.Falsef(t, len(got) != 3, "outcome=failed listed %v, want the three failing requests", got)
+	got = ids("?kind=request&outcome=success")
+	testutil.Falsef(t, len(got) != 1 || got[0] != "req-ok", "outcome=success listed %v, want only req-ok", got)
 	boundary := now.Add(-90 * time.Second).UTC().Format(time.RFC3339)
 	// since cuts the two oldest records; the operation is not inference traffic.
-	if got := ids("?kind=request&since=" + boundary); len(got) != 2 {
-		t.Fatalf("since=90s ago listed %v, want the two newest requests", got)
-	}
+	got = ids("?kind=request&since=" + boundary)
+	testutil.Falsef(t, len(got) != 2, "since=90s ago listed %v, want the two newest requests", got)
 	// until bounds the scan itself, so a window that ended in the past must still be
 	// listed from the same boundary.
-	if got := ids("?kind=request&until=" + boundary); len(got) != 2 {
-		t.Fatalf("until=90s ago listed %v, want the two oldest requests", got)
-	}
-	if got := ids("?kind=request&since=" + boundary + "&outcome=failed"); len(got) != 2 {
-		t.Fatalf("since+failing listed %v, want the two newest failing requests", got)
-	}
+	got = ids("?kind=request&until=" + boundary)
+	testutil.Falsef(t, len(got) != 2, "until=90s ago listed %v, want the two oldest requests", got)
+	got = ids("?kind=request&since=" + boundary + "&outcome=failed")
+	testutil.Falsef(t, len(got) != 2, "since+failing listed %v, want the two newest failing requests", got)
 
 	// The page must state which result class it was narrowed to, or the reader
 	// cannot tell a filtered list from an empty one.
 	payload := journalRequest(t, a, "?kind=request&outcome=failed&since="+boundary)
 	used, _ := payload["filter_used"].(map[string]interface{})
 	testutil.Equal(t, used["outcome_label"], "失败（全部失败类型）")
-	if used["since"] == nil {
-		t.Fatal("filter_used.since is missing: the coverage note cannot warn about the retention edge")
-	}
+	testutil.False(t, used["since"] == nil, "filter_used.since is missing: the coverage note cannot warn about the retention edge")
 }
 
 // TestJournalRecordsOutcomeClassMatchesOverview pins that each row carries the
@@ -262,7 +252,6 @@ func TestJournalRecordsRecoversAttemptsBehindThePageWindow(t *testing.T) {
 
 	// The lookback must not move the cursor: the next page still starts before the
 	// last row shown, so no record behind it is skipped.
-	if cursor, _ := payload["next_cursor"].(string); cursor == "" {
-		t.Fatal("next_cursor is empty on a full page")
-	}
+	cursor, _ := payload["next_cursor"].(string)
+	testutil.False(t, cursor == "", "next_cursor is empty on a full page")
 }

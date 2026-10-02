@@ -11,6 +11,7 @@ import (
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/tiktoken"
+	"orchids-api/internal/util"
 
 	"github.com/kballard/go-shellquote"
 )
@@ -264,9 +265,7 @@ func writeLocalTextResponse(w http.ResponseWriter, req ClaudeRequest, responseFo
 
 func writeCommandPrefixResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, prefix string, startTime time.Time, logger *debug.Logger) {
 	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		prefix = "none"
-	}
+	prefix = util.FirstNonEmptyUntrimmed(prefix, "none")
 	writeLocalTextResponse(w, req, responseFormat, prefix, startTime, logger)
 }
 
@@ -372,31 +371,19 @@ func detectCommandPrefix(command string) string {
 }
 
 func isEnvAssignment(token string) bool {
-	if token == "" {
-		return false
-	}
-	if !envAssignPattern.MatchString(token) {
-		return false
-	}
-	return true
+	return !(token == "" || !envAssignPattern.MatchString(token))
 }
 
 var envAssignPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 func looksLikeCommandInjection(command string) bool {
-	if strings.Contains(command, "\n") || strings.Contains(command, "\r") {
-		return true
-	}
-	if strings.Contains(command, "`") || strings.Contains(command, "$(") {
+	if strings.Contains(command, "\n") || strings.Contains(command, "\r") || strings.Contains(command, "`") || strings.Contains(command, "$(") {
 		return true
 	}
 	if strings.Contains(command, ";") || strings.Contains(command, "||") || strings.Contains(command, "&&") {
 		return true
 	}
-	if strings.Contains(command, "|") {
-		return true
-	}
-	return false
+	return strings.Contains(command, "|")
 }
 
 func findGitSubcommandIndex(tokens []string, start int) int {

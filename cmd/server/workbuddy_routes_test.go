@@ -52,9 +52,7 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 	// The login endpoints must not be usable without an admin session.
 	unauth := httptest.NewRecorder()
 	mux.ServeHTTP(unauth, httptest.NewRequest(http.MethodPost, "/api/workbuddy/login", strings.NewReader("{}")))
-	if unauth.Code != http.StatusUnauthorized && unauth.Code != http.StatusForbidden {
-		t.Fatalf("unauthenticated login status = %d, want 401/403", unauth.Code)
-	}
+	testutil.Falsef(t, unauth.Code != http.StatusUnauthorized && unauth.Code != http.StatusForbidden, "unauthenticated login status = %d, want 401/403", unauth.Code)
 
 	// Authorized requests reach the handler, which asks the (local) upstream for
 	// a fresh authorization transaction. localhost is used so the same-origin
@@ -72,15 +70,10 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 		Status                  string `json:"status"`
 		VerificationURIComplete string `json:"verification_uri_complete"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil {
-		t.Fatalf("decode login response: %v (body=%s)", err, rec.Body.String())
-	}
-	if started.ID == "" || started.Status != "pending" {
-		t.Fatalf("login response = %+v", started)
-	}
-	if !strings.HasPrefix(started.VerificationURIComplete, "https://www.workbuddy.ai/login?") {
-		t.Fatalf("login response is not the official login page: %q", started.VerificationURIComplete)
-	}
+	err := json.Unmarshal(rec.Body.Bytes(), &started)
+	testutil.CheckNoError(t, err)
+	testutil.Falsef(t, started.ID == "" || started.Status != "pending", "login response = %+v", started)
+	testutil.Falsef(t, !strings.HasPrefix(started.VerificationURIComplete, "https://www.workbuddy.ai/login?"), "login response is not the official login page: %q", started.VerificationURIComplete)
 
 	// Poll the transaction, then cancel it so the test leaves no pending login.
 	pollReq := httptest.NewRequest(http.MethodGet, "/api/workbuddy/login/"+started.ID, nil)
@@ -133,18 +126,10 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 		allowedReq.RemoteAddr = "192.0.2.1:12345"
 		allowedRec := httptest.NewRecorder()
 		mux.ServeHTTP(allowedRec, allowedReq)
-		if allowedRec.Code == http.StatusUnauthorized || allowedRec.Code == http.StatusForbidden {
-			t.Fatalf("%s did not get through inference auth: %d %s", target, allowedRec.Code, allowedRec.Body.String())
-		}
-		if allowedRec.Code == http.StatusMethodNotAllowed || (allowedRec.Code >= 300 && allowedRec.Code < 400) {
-			t.Fatalf("%s %s rejected its registered method or redirected: %d %s", method, target, allowedRec.Code, allowedRec.Body.String())
-		}
-		if !json.Valid(allowedRec.Body.Bytes()) {
-			t.Fatalf("%s returned no API JSON envelope: %d %s", target, allowedRec.Code, allowedRec.Body.String())
-		}
-		if allowedRec.Body.String() == unknownBody || strings.Contains(allowedRec.Body.String(), "404 page not found") {
-			t.Fatalf("%s answered like an unregistered route: %d %s", target, allowedRec.Code, allowedRec.Body.String())
-		}
+		testutil.Falsef(t, allowedRec.Code == http.StatusUnauthorized || allowedRec.Code == http.StatusForbidden, "%s did not get through inference auth: %d %s", target, allowedRec.Code, allowedRec.Body.String())
+		testutil.Falsef(t, allowedRec.Code == http.StatusMethodNotAllowed || (allowedRec.Code >= 300 && allowedRec.Code < 400), "%s %s rejected its registered method or redirected: %d %s", method, target, allowedRec.Code, allowedRec.Body.String())
+		testutil.Falsef(t, !json.Valid(allowedRec.Body.Bytes()), "%s returned no API JSON envelope: %d %s", target, allowedRec.Code, allowedRec.Body.String())
+		testutil.Falsef(t, allowedRec.Body.String() == unknownBody || strings.Contains(allowedRec.Body.String(), "404 page not found"), "%s answered like an unregistered route: %d %s", target, allowedRec.Code, allowedRec.Body.String())
 	}
 	// The same allowlisted request to a missing /v1 path must now expose its
 	// real 404, instead of the authentication response used above.
@@ -152,7 +137,5 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 	missingReq.RemoteAddr = "192.0.2.1:12345"
 	missingRec := httptest.NewRecorder()
 	mux.ServeHTTP(missingRec, missingReq)
-	if missingRec.Code != http.StatusNotFound || missingRec.Body.String() != unknownBody {
-		t.Fatalf("missing allowlisted /v1 route = %d %s, want plain 404", missingRec.Code, missingRec.Body.String())
-	}
+	testutil.Falsef(t, missingRec.Code != http.StatusNotFound || missingRec.Body.String() != unknownBody, "missing allowlisted /v1 route = %d %s, want plain 404", missingRec.Code, missingRec.Body.String())
 }

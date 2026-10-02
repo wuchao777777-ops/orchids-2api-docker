@@ -29,16 +29,10 @@ func TestGenerationControlsReachUpstream(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
 			h.HandleMessages(rec, req)
-			if rec.Code != 200 || len(client.requests) != 1 {
-				t.Fatalf("status=%d calls=%d body=%s", rec.Code, len(client.requests), rec.Body.String())
-			}
+			testutil.Falsef(t, rec.Code != 200 || len(client.requests) != 1, "status=%d calls=%d body=%s", rec.Code, len(client.requests), rec.Body.String())
 			got := client.requests[0]
-			if got.MaxTokens == nil || *got.MaxTokens != tc.limit || got.Temperature == nil || *got.Temperature != 0 || got.TopP == nil || *got.TopP != 0.5 {
-				t.Fatalf("controls lost: %#v", got)
-			}
-			if tc.stop != "" && (len(got.Stop) != 1 || got.Stop[0] != tc.stop) {
-				t.Fatalf("stop=%v", got.Stop)
-			}
+			testutil.Falsef(t, got.MaxTokens == nil || *got.MaxTokens != tc.limit || got.Temperature == nil || *got.Temperature != 0 || got.TopP == nil || *got.TopP != 0.5, "controls lost: %#v", got)
+			testutil.Falsef(t, tc.stop != "" && (len(got.Stop) != 1 || got.Stop[0] != tc.stop), "stop=%v", got.Stop)
 		})
 	}
 }
@@ -46,19 +40,15 @@ func TestGenerationControlsReachUpstream(t *testing.T) {
 func TestGenerationControlsOmittedAndInvalid(t *testing.T) {
 	var req ClaudeRequest
 	testutil.NoError(t, json.Unmarshal([]byte(`{"messages":[],"stop":null}`), &req))
-	if req.outputTokenLimit() != nil || req.Temperature != nil || req.TopP != nil || req.stopSequences() != nil {
-		t.Fatal("omitted controls acquired defaults")
-	}
+	testutil.False(t, req.outputTokenLimit() != nil || req.Temperature != nil || req.TopP != nil || req.stopSequences() != nil, "omitted controls acquired defaults")
 	for _, raw := range []string{`{"stop":[]}`, `{"stop_sequences":[]}`} {
 		var empty ClaudeRequest
 		testutil.NoError(t, json.Unmarshal([]byte(raw), &empty))
-		if got := empty.stopSequences(); got == nil || len(got) != 0 {
-			t.Fatalf("explicit empty stop lost: %#v", got)
-		}
+		got := empty.stopSequences()
+		testutil.Falsef(t, got == nil || len(got) != 0, "explicit empty stop lost: %#v", got)
 	}
-	if err := json.Unmarshal([]byte(`{"stop":42}`), &req); err == nil {
-		t.Fatal("numeric stop accepted")
-	}
+	err := json.Unmarshal([]byte(`{"stop":42}`), &req)
+	testutil.Error(t, err)
 }
 
 func TestQoderSharedRefusalPreservesFullHintOnlyForQoder(t *testing.T) {
@@ -88,8 +78,7 @@ func TestCountTokensIncludesEntireRequest(t *testing.T) {
 		`{"model":"m","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"substantial tool result that needs to be counted"},{"type":"text","text":"hi"}]}]}`,
 		`{"model":"m","messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/i.png"}},{"type":"text","text":"hi"}]}]}`,
 	} {
-		if got := count(body); got <= base {
-			t.Fatalf("full request count=%d base=%d body=%s", got, base, body)
-		}
+		got := count(body)
+		testutil.Falsef(t, got <= base, "full request count=%d base=%d body=%s", got, base, body)
 	}
 }

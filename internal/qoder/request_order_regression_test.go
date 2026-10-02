@@ -49,9 +49,7 @@ func TestBlockMessagePreservesMultimodalOrderAcrossToolBoundaries(t *testing.T) 
 				{Role: role, Content: "plain one\nplain two"},
 				{Role: role, Contents: []chatPart{text("last"), image("https://example.test/three.png"), text("tail")}},
 			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("messages = %#v; want %#v", got, want)
-			}
+			testutil.Falsef(t, !reflect.DeepEqual(got, want), "messages = %#v; want %#v", got, want)
 			testutil.Equal(t, len(ids), 0)
 
 			// Verify the signed/encoded request path retains that exact representation.
@@ -62,18 +60,12 @@ func TestBlockMessagePreservesMultimodalOrderAcrossToolBoundaries(t *testing.T) 
 				}}}, msg,
 			}}
 			encoded, err := buildChatBodyProfile(req, modelEntry{Key: "test"}, "session", "request", "request-set", DefaultClientVersion, "", sceneBusinessProduct)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, err)
 			raw, err := decodeBodyForTest(encoded)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, err)
 			var body chatBody
 			testutil.NoError(t, json.Unmarshal(raw, &body))
-			if len(body.Messages) != len(want)+1 || !reflect.DeepEqual(body.Messages[1:], want) {
-				t.Fatalf("wire messages = %#v", body.Messages)
-			}
+			testutil.Falsef(t, len(body.Messages) != len(want)+1 || !reflect.DeepEqual(body.Messages[1:], want), "wire messages = %#v", body.Messages)
 		})
 	}
 }

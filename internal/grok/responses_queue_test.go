@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -20,17 +21,11 @@ func TestResponsesBridgeStreamCompletesAndCloses(t *testing.T) {
 	defer server.Close()
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Post(server.URL+"/qoder/v1/responses", "application/json", strings.NewReader(`{"model":"qwen3.8-flash","input":"hi","stream":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("stream did not terminate cleanly: %v", err)
-	}
-	if resp.StatusCode != 200 || strings.Count(string(body), "event: response.completed") != 1 || !strings.Contains(string(body), "response.output_text.delta") {
-		t.Fatalf("incomplete stream: %s", body)
-	}
+	testutil.NoError(t, err, "stream did not terminate cleanly: %v")
+	testutil.Falsef(t, resp.StatusCode != 200 || strings.Count(string(body), "event: response.completed") != 1 || !strings.Contains(string(body), "response.output_text.delta"), "incomplete stream: %s", body)
 }
 
 // Queue refusal must remain a retryable HTTP response, not become a malformed
@@ -47,9 +42,7 @@ func TestResponsesBridgePreservesQueueRefusal(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/qoder/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"qwen3.8-flash","input":"hi","stream":%v}`, stream)))
 			rec := httptest.NewRecorder()
 			bridge(rec, req)
-			if rec.Code != 429 || rec.Header().Get("Retry-After") != "30" || !strings.Contains(rec.Body.String(), "rate_limit_error") {
-				t.Fatalf("queue response lost: status=%d header=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
-			}
+			testutil.Falsef(t, rec.Code != 429 || rec.Header().Get("Retry-After") != "30" || !strings.Contains(rec.Body.String(), "rate_limit_error"), "queue response lost: status=%d header=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
 		})
 	}
 }

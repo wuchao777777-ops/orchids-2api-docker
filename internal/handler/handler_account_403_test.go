@@ -55,13 +55,9 @@ func TestHandleMessages_403MarksAccountBlocked(t *testing.T) {
 	h.HandleMessages(rec, req)
 
 	updated, err := s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
 	testutil.Equal(t, updated.StatusCode, "403")
-	if updated.LastAttempt.IsZero() {
-		t.Fatal("expected last_attempt to be set")
-	}
+	testutil.False(t, updated.LastAttempt.IsZero(), "expected last_attempt to be set")
 	testutil.Equal(t, upstreamCalls, 1)
 
 	payload["messages"] = []map[string]any{{"role": "user", "content": "hi again"}}

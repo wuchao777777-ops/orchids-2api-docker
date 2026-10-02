@@ -2,11 +2,13 @@ package loadbalancer
 
 import (
 	"context"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 type boundedCountTracker struct {
@@ -31,9 +33,7 @@ func TestLargeSelectionUsesBoundedCountsAndFindsCapacity(t *testing.T) {
 	tracker := &boundedCountTracker{fixedConnTracker: fixedConnTracker{counts: counts}}
 	lb := &LoadBalancer{}
 	picked := lb.selectAccountWithTracker(accounts, tracker)
-	if picked == nil || picked.ID != 4096 || tracker.maxBatch > accountScanWindow {
-		t.Fatalf("picked=%v batch=%d", picked, tracker.maxBatch)
-	}
+	testutil.Falsef(t, picked == nil || picked.ID != 4096 || tracker.maxBatch > accountScanWindow, "picked=%v batch=%d", picked, tracker.maxBatch)
 }
 func TestBatchRenewalDoesNotResurrectReleasedLease(t *testing.T) {
 	mini := miniredis.RunT(t)
@@ -41,27 +41,19 @@ func TestBatchRenewalDoesNotResurrectReleasedLease(t *testing.T) {
 	defer client.Close()
 	tracker := NewRedisConnTracker(client, "perf:")
 	defer tracker.Close()
-	if !tracker.TryAcquire(1, 1) {
-		t.Fatal("acquire")
-	}
+	testutil.False(t, !tracker.TryAcquire(1, 1), "acquire")
 	tracker.mu.Lock()
 	id := tracker.held[1][0].id
 	tracker.mu.Unlock()
 	before, err := client.ZScore(context.Background(), tracker.key(1), id).Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	time.Sleep(2 * time.Millisecond)
 	tracker.renewBatch()
 	after, err := client.ZScore(context.Background(), tracker.key(1), id).Result()
-	if err != nil || after <= before {
-		t.Fatalf("renew: %v %v", after, err)
-	}
+	testutil.Falsef(t, err != nil || after <= before, "renew: %v %v", after, err)
 	tracker.Release(1)
 	tracker.renewBatch()
-	if tracker.GetCount(1) != 0 {
-		t.Fatal("released lease resurrected")
-	}
+	testutil.Equal(t, tracker.GetCount(1), 0)
 }
 func TestCachedCountsNeverOverrideAtomicLimit(t *testing.T) {
 	mini := miniredis.RunT(t)
@@ -72,10 +64,6 @@ func TestCachedCountsNeverOverrideAtomicLimit(t *testing.T) {
 	b := NewRedisConnTracker(client, "limit:")
 	defer b.Close()
 	a.GetCounts([]int64{1})
-	if !b.TryAcquire(1, 1) {
-		t.Fatal("first acquire")
-	}
-	if a.TryAcquire(1, 1) {
-		t.Fatal("cached zero bypassed atomic admission")
-	}
+	testutil.False(t, !b.TryAcquire(1, 1), "first acquire")
+	testutil.False(t, a.TryAcquire(1, 1), "cached zero bypassed atomic admission")
 }

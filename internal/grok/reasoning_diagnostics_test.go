@@ -20,9 +20,7 @@ func TestBuildChatSummaryBoundary(t *testing.T) {
 					req.ReasoningEffort = &effort
 				}
 				payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, req, build)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testutil.NoError(t, err)
 				r, _ := payload["reasoning"].(map[string]interface{})
 				// Only the Build plane owns a Chat Completions summary contract: the
 				// official Build client always asks for a summary, so an omitted one
@@ -33,9 +31,7 @@ func TestBuildChatSummaryBoundary(t *testing.T) {
 					want = "concise"
 				}
 				testutil.Equal(t, r["summary"], want)
-				if effort == "" && r["effort"] != nil || effort != "" && r["effort"] != effort {
-					t.Fatalf("changed effort: %v", r)
-				}
+				testutil.Falsef(t, effort == "" && r["effort"] != nil || effort != "" && r["effort"] != effort, "changed effort: %v", r)
 			}
 		}
 	}
@@ -51,14 +47,11 @@ func TestChatReasoningSummaryIsClientOwned(t *testing.T) {
 				Messages: []ChatMessage{{Role: "user", Content: "hello"}},
 			}
 			payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, req, build)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, err)
 			r, _ := payload["reasoning"].(map[string]interface{})
 			// An explicit summary is never replaced by a plane default.
-			if r["summary"] != "auto" || r["effort"] != "low" {
-				t.Fatalf("build=%v operation=%q reasoning=%v", build, operation, r)
-			}
+			testutil.Equal(t, r["summary"], "auto")
+			testutil.Equal(t, r["effort"], "low")
 		}
 	}
 }
@@ -73,9 +66,7 @@ func TestChatAlwaysRequestsEncryptedReasoning(t *testing.T) {
 				req.ReasoningEffort = &effort
 			}
 			payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, req, build)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testutil.NoError(t, err)
 			found := false
 			switch values := payload["include"].(type) {
 			case []string:
@@ -91,9 +82,7 @@ func TestChatAlwaysRequestsEncryptedReasoning(t *testing.T) {
 					}
 				}
 			}
-			if !found {
-				t.Fatalf("build=%v effort=%q include=%v", build, effort, payload["include"])
-			}
+			testutil.True(t, found, "build=%v effort=%q include=%v")
 		}
 	}
 }
@@ -109,12 +98,9 @@ func TestAuditChatOutcomePersistsAccountTokens(t *testing.T) {
 		UsageSource: audit.UsageSourceUpstream,
 	})
 	got, err := s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.TokensToday != 150 || got.UsageTotal != 150 {
-		t.Fatalf("tokens_today=%v usage_total=%v want 150/150", got.TokensToday, got.UsageTotal)
-	}
+	testutil.NoError(t, err)
+	testutil.Equal(t, got.TokensToday, 150)
+	testutil.Equal(t, got.UsageTotal, 150)
 	testutil.Equal(t, got.RequestCount, 0)
 }
 
@@ -129,9 +115,7 @@ func TestReasoningDiagnosticsReachAttemptAndOutcome(t *testing.T) {
 		h := &Handler{auditLogger: log}
 		h.auditAttempt(ctx, nil, ProviderBuild, 1, time.Now(), nil)
 		h.auditChatOutcome(ctx, nil, &ChatCompletionsRequest{}, chatOutcome{Finish: "stop"})
-		if len(log.events) != 2 {
-			t.Fatal(log.events)
-		}
+		testutil.Equal(t, len(log.events), 2)
 		for _, event := range log.events {
 			want := effort
 			if effort == "private-secret" {
@@ -144,9 +128,7 @@ func TestReasoningDiagnosticsReachAttemptAndOutcome(t *testing.T) {
 			} else if event.Metadata["reasoning_effort"] != want {
 				t.Fatal(event.Metadata)
 			}
-			if event.Metadata["reasoning_summary"] != "concise" {
-				t.Fatal(event.Metadata)
-			}
+			testutil.Equal(t, event.Metadata["reasoning_summary"], "concise")
 		}
 	}
 }

@@ -81,18 +81,12 @@ func TestConcurrentRuntimeDerivationIsSingleFlight(t *testing.T) {
 	close(results)
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 	}
 	want := <-results
-	if !want.Complete() {
-		t.Fatal("derived runtime fields are incomplete")
-	}
+	testutil.False(t, !want.Complete(), "derived runtime fields are incomplete")
 	for got := range results {
-		if got != want {
-			t.Fatal("concurrent callers observed different runtime fields")
-		}
+		testutil.Equal(t, got, want)
 	}
 }
 
@@ -136,9 +130,7 @@ func TestConcurrentExpiredCredentialRefreshesOnlyOnce(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.NoError(t, err)
 	}
 	testutil.Equal(t, refreshes.Load(), 1)
 }
@@ -185,14 +177,11 @@ func TestRefreshReportsPersistenceFailureAndRetriesWriteBeforeReuse(t *testing.T
 	setTestEndpoints(client, server.URL, server.URL, server.URL)
 	updater := &failingQoderUpdater{fail: true}
 	client.SetAccountStore(updater)
-	if _, err := client.ensureAccessToken(context.Background()); err == nil {
-		t.Fatal("refresh succeeded even though the rotated token was not persisted")
-	}
+	_, err := client.ensureAccessToken(context.Background())
+	testutil.Error(t, err)
 	updater.fail = false
 	creds, err := client.ensureAccessToken(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, creds.AccessToken, "access-new")
 	testutil.Equal(t, refreshes, 1)
 	testutil.Equal(t, updater.calls, 2)
@@ -231,9 +220,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 	}, func(msg upstream.SSEMessage) {
 		events = append(events, msg)
 	}, nil)
-	if err != nil {
-		t.Fatalf("SendRequestWithPayload() error = %v", err)
-	}
+	testutil.NoError(t, err, "SendRequestWithPayload() error = %v")
 
 	var got captured
 	select {
@@ -276,39 +263,28 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 	// The capture carries a trace context on every API call, and the gateway
 	// echoes the trace id back as sw-trace-id, which is what makes a request
 	// correlatable upstream-side.
-	if trace := got.headers.Get("Traceparent"); !validTraceparent(trace) {
-		t.Errorf("Traceparent = %q, want a version 00 trace context", trace)
-	}
-	if got.headers.Get("Cosy-Key") == "" || got.headers.Get("Cosy-Key") == "runtime-key" {
-		t.Error("Cosy-Key was not rederived using the reference runtime identity")
-	}
+	trace := got.headers.Get("Traceparent")
+	testutil.CheckFalsef(t, !validTraceparent(trace), "Traceparent = %q, want a version 00 trace context", trace)
+	testutil.CheckFalse(t, got.headers.Get("Cosy-Key") == "" || got.headers.Get("Cosy-Key") == "runtime-key", "Cosy-Key was not rederived using the reference runtime identity")
 	testutil.CheckNotEqual(t, got.headers.Get("Cosy-Date"), "")
-	if auth := got.headers.Get("Authorization"); !strings.HasPrefix(auth, "Bearer COSY.") {
-		t.Errorf("Authorization = %q, want a COSY bearer", auth)
-	}
-	if got.headers.Get("Cosy-Organization-Id") != "" {
-		t.Error("an empty organization id was sent as a header")
-	}
+	auth := got.headers.Get("Authorization")
+	testutil.CheckFalsef(t, !strings.HasPrefix(auth, "Bearer COSY."), "Authorization = %q, want a COSY bearer", auth)
+	testutil.CheckEqual(t, got.headers.Get("Cosy-Organization-Id"), "")
 	if got := len(got.headers); got < 20 {
 		t.Errorf("header count = %d, want the full signed set", got)
 	}
 
 	// The body is in the private encoding and decodes to the chat payload.
 	decoded, err := decodeBodyForTest(got.body)
-	if err != nil {
-		t.Fatalf("DecodeBody() error = %v", err)
-	}
+	testutil.NoError(t, err, "DecodeBody() error = %v")
 	text := string(decoded)
 	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qoder_work"`, `"agent_id":"agent_common"`, `"task_id":"common"`, `"stream":true`, `"version":"3"`, `"key":"qmodel_latest"`, `"role":"user"`, `"context_length":1000000`} {
 		testutil.CheckContain(t, text, want)
 	}
 
-	if len(events) == 0 || events[len(events)-1].Type != "model.finish" {
-		t.Fatalf("events = %+v, want a trailing model.finish", events)
-	}
-	if reason, _ := events[len(events)-1].Event["finishReason"].(string); reason != "end_turn" {
-		t.Fatalf("finishReason = %v, want end_turn", events[len(events)-1].Event["finishReason"])
-	}
+	testutil.Falsef(t, len(events) == 0 || events[len(events)-1].Type != "model.finish", "events = %+v, want a trailing model.finish", events)
+	reason, _ := events[len(events)-1].Event["finishReason"].(string)
+	testutil.Falsef(t, reason != "end_turn", "finishReason = %v, want end_turn", events[len(events)-1].Event["finishReason"])
 }
 
 // TestSendRequestRefreshesOnceOnUnauthorized proves a single 401 forces one
@@ -349,9 +325,7 @@ func TestSendRequestRefreshesOnceOnUnauthorized(t *testing.T) {
 		Model:    "Qwen3.7-Max",
 		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hello"}}},
 	}, nil, nil)
-	if err != nil {
-		t.Fatalf("SendRequestWithPayload() error = %v", err)
-	}
+	testutil.NoError(t, err, "SendRequestWithPayload() error = %v")
 	testutil.Equal(t, chatCalls, 2)
 	testutil.Equal(t, refreshCalls, 1)
 }
@@ -359,9 +333,7 @@ func TestSendRequestRefreshesOnceOnUnauthorized(t *testing.T) {
 func TestForceRefreshRejectsExpiredDurableCredential(t *testing.T) {
 	client := NewFromAccount(signedTestAccount(), nil)
 	err := client.forceRefresh(context.Background(), Credentials{RefreshToken: "expired", RefreshExpiresAt: time.Now().Add(-time.Minute)})
-	if !errors.Is(err, ErrReLoginRequired) {
-		t.Fatalf("forceRefresh error=%v want ErrReLoginRequired", err)
-	}
+	testutil.Falsef(t, !errors.Is(err, ErrReLoginRequired), "forceRefresh error=%v want ErrReLoginRequired", err)
 	class := apperrors.ClassifyUpstreamError(err.Error())
 	testutil.Equal(t, class.Category, "auth")
 }
@@ -399,12 +371,8 @@ func TestSendRequestDoesNotReplayAfterOutput(t *testing.T) {
 	}, func(msg upstream.SSEMessage) {
 		events = append(events, msg)
 	}, nil)
-	if err == nil {
-		t.Fatal("SendRequestWithPayload() error = nil for a truncated stream")
-	}
-	if !errors.Is(err, ErrStreamTruncated) {
-		t.Fatalf("error = %v, want ErrStreamTruncated", err)
-	}
+	testutil.False(t, err == nil, "SendRequestWithPayload() error = nil for a truncated stream")
+	testutil.Falsef(t, !errors.Is(err, ErrStreamTruncated), "error = %v, want ErrStreamTruncated", err)
 	testutil.Equal(t, chatCalls, 1)
 	testutil.Equal(t, len(events), 1)
 }
@@ -416,16 +384,10 @@ func TestConfiguredClientVersionMatchesReferenceBodyAndHeader(t *testing.T) {
 	cfg := &config.Config{QoderClientVersion: "9.8.7"}
 	client := NewFromAccount(signedTestAccount(), cfg)
 	body, err := buildChatBodyProfile(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "request", "request-set", client.clientVersion, "", sceneBusinessProduct)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	raw, err := decodeBodyForTest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), `"business":{"product":"qoder_work","version":"9.8.7"`) {
-		t.Fatalf("body version is incoherent: %s", raw)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, !strings.Contains(string(raw), `"business":{"product":"qoder_work","version":"9.8.7"`), "body version is incoherent: %s", raw)
 	req, _ := http.NewRequest(http.MethodPost, "https://example.invalid/algo/chat", nil)
 	testutil.NoError(t, client.applyAuthHeaders(req, credsOf(signedTestAccount()), RuntimeFields{EncryptUserInfo: "info", Key: "key"}, "request", "m", "system", string(body), "/chat"))
 	testutil.Equal(t, req.Header.Get("Cosy-Version"), "9.8.7")
@@ -437,85 +399,63 @@ func TestReferenceRuntimeIdentityRebuiltAfterTokenRotation(t *testing.T) {
 	client := NewFromAccount(acc, nil)
 	initial := client.currentCredentials()
 	before, err := client.ensureRuntimeFields(context.Background(), initial)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	again, err := client.ensureRuntimeFields(context.Background(), initial)
-	if err != nil || again != before {
-		t.Fatalf("runtime pair changed without a credential rotation: err=%v", err)
-	}
+	testutil.Equal(t, err, nil)
+	testutil.Equal(t, again, before)
 	rotated := initial
 	rotated.AccessToken = "new-access"
 	rotated.RefreshToken = "new-refresh"
 	client.storeCredentials(rotated, true, initial.RefreshToken)
 	after, err := client.ensureRuntimeFields(context.Background(), rotated)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after == before || !after.Complete() {
-		t.Fatal("runtime identity was not renewed when the embedded tokens rotated")
-	}
+	testutil.NoError(t, err)
+	testutil.False(t, after == before || !after.Complete(), "runtime identity was not renewed when the embedded tokens rotated")
 }
 
 func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
 	model := modelEntry{Key: "qfmodel", DisplayName: "Qwen3.8-Flash", IsReasoning: true, MaxInputTokens: 180000}
 	req := upstream.UpstreamRequest{Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "你好 qoder"}}}}
 	encoded, err := buildChatBodyProfile(req, model, "session-id", "request-id", "request-set-id", DefaultClientVersion, "", sceneBusinessProduct)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	raw, err := decodeBodyForTest(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	var body map[string]interface{}
 	testutil.NoError(t, json.Unmarshal(raw, &body))
 	context := body["chat_context"].(map[string]interface{})
 	// The capture carries the same plain string in both fields; the
 	// {"type":"text","text":...} object shape this channel used to send is not
 	// something the QoderWork client produces.
-	if context["text"] != "你好 qoder" || context["extra"].(map[string]interface{})["originalContent"] != "你好 qoder" {
-		t.Fatalf("chat context did not carry the latest user text as a string: %#v", context)
-	}
+	testutil.Equal(t, context["text"], "你好 qoder")
+	testutil.Equal(t, context["extra"].(map[string]interface{})["originalContent"], "你好 qoder")
 	contextModel := context["extra"].(map[string]interface{})["modelConfig"].(map[string]interface{})
-	if contextModel["key"] != "qfmodel" || contextModel["is_reasoning"] != true {
-		t.Fatalf("context model config changed outside the thinking experiment: %#v", contextModel)
-	}
+	testutil.Equal(t, contextModel["key"], "qfmodel")
+	testutil.Equal(t, contextModel["is_reasoning"], true)
 	modelConfig := body["model_config"].(map[string]interface{})
-	if modelConfig["key"] != "qfmodel" || modelConfig["is_reasoning"] != true {
-		t.Fatalf("model_config must report the model's own reasoning capability: %#v", modelConfig)
-	}
+	testutil.Equal(t, modelConfig["key"], "qfmodel")
+	testutil.Equal(t, modelConfig["is_reasoning"], true)
 	testutil.Equal(t, body["business"].(map[string]interface{})["product"], "qoder_work")
 	params := body["parameters"].(map[string]interface{})
 	testutil.EqualAny(t, params["max_tokens"], float64(32000))
 	for _, field := range []string{"reasoning_effort", "enable_thinking"} {
-		if _, present := params[field]; present {
-			t.Fatalf("unexpected default %s in %#v", field, params)
-		}
+		_, present := params[field]
+		testutil.Falsef(t, present, "unexpected default %s in %#v", field, params)
 	}
 }
 
 func TestRefreshedReplayUsesFreshIdentityAndRetryFlag(t *testing.T) {
 	original, err := buildChatBodyProfile(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "old", "request-set", "1.2.3", "", sceneBusinessProduct)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	replayed, err := refreshedReplayBody(original, "new")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	raw, _ := decodeBodyForTest(replayed)
 	var body chatBody
 	testutil.NoError(t, json.Unmarshal(raw, &body))
 	// request_id and chat_record_id identify the attempt and are refreshed;
 	// request_set_id and business.id identify the task and stay put, which is
 	// what the capture shows across the requests of one task.
-	if body.RequestID != "new" || body.ChatRecordID != "new" || body.IsRetry {
-		t.Fatalf("replay request id not refreshed: %+v", body)
-	}
-	if body.RequestSetID != "request-set" || body.Business.ID != "request-set" {
-		t.Fatalf("replay moved the task set id: %+v", body)
-	}
+	testutil.Falsef(t, body.RequestID != "new" || body.ChatRecordID != "new" || body.IsRetry, "replay request id not refreshed: %+v", body)
+	testutil.Equal(t, body.RequestSetID, "request-set")
+	testutil.Equal(t, body.Business.ID, "request-set")
 }
 
 func TestClassifyStatus(t *testing.T) {
@@ -539,13 +479,10 @@ func TestClassifyStatus(t *testing.T) {
 	for _, tc := range cases {
 		err := classifyStatus(tc.status, "", []byte(tc.body))
 		var target *attemptStreamError
-		if !errors.As(err, &target) {
-			t.Fatalf("%s: error %v is not an attempt error", tc.name, err)
-		}
-		if target.unauth != tc.unauth || target.retryable != tc.retryable || target.busy != tc.busy {
-			t.Errorf("%s: verdict = unauth=%v retryable=%v busy=%v, want %v/%v/%v",
-				tc.name, target.unauth, target.retryable, target.busy, tc.unauth, tc.retryable, tc.busy)
-		}
+		testutil.Falsef(t, !errors.As(err, &target), "%s: error %v is not an attempt error", tc.name, err)
+		testutil.CheckEqual(t, target.unauth, tc.unauth)
+		testutil.CheckEqual(t, target.retryable, tc.retryable)
+		testutil.CheckEqual(t, target.busy, tc.busy)
 	}
 }
 
@@ -596,9 +533,8 @@ func TestEnsureRuntimeFieldsRequiresIdentity(t *testing.T) {
 	acc.QoderRuntimeKey = ""
 	acc.QoderUserID = ""
 	client := NewFromAccount(acc, nil)
-	if _, err := client.ensureRuntimeFields(context.Background(), credsOf(acc)); err == nil {
-		t.Fatal("ensureRuntimeFields() error = nil without a user id")
-	}
+	_, err := client.ensureRuntimeFields(context.Background(), credsOf(acc))
+	testutil.Error(t, err)
 }
 
 // TestEnsureRuntimeFieldsDerivesOnce proves the pair is derived on demand and
@@ -614,16 +550,10 @@ func TestEnsureRuntimeFieldsDerivesOnce(t *testing.T) {
 	setTestEntropy(client, strings.NewReader(strings.Repeat("\x11", 4096)))
 
 	first, err := client.ensureRuntimeFields(context.Background(), credsOf(acc))
-	if err != nil {
-		t.Fatalf("ensureRuntimeFields() error = %v", err)
-	}
-	if !first.Complete() {
-		t.Fatal("the derived pair is incomplete")
-	}
+	testutil.NoError(t, err, "ensureRuntimeFields() error = %v")
+	testutil.False(t, !first.Complete(), "the derived pair is incomplete")
 	second, err := client.ensureRuntimeFields(context.Background(), credsOf(acc))
-	if err != nil {
-		t.Fatalf("second ensureRuntimeFields() error = %v", err)
-	}
+	testutil.NoError(t, err, "second ensureRuntimeFields() error = %v")
 	testutil.Equal(t, first, second)
 }
 
@@ -638,9 +568,7 @@ func TestApplyAuthHeadersOmitsOrganizationWhenAbsent(t *testing.T) {
 	fields := RuntimeFields{EncryptUserInfo: "info", Key: "key"}
 
 	req, err := http.NewRequest(http.MethodPost, "https://example.invalid/algo/api/v2/quota/usage?Encode=1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.NoError(t, client.applyAuthHeaders(req, creds, fields, "req-1", "", "", "", signPath(req.URL.String())), "applyAuthHeaders() error = %v")
 	testutil.CheckEqual(t, req.Header.Get("Cosy-Organization-Id"), "")
 	testutil.CheckEqual(t, req.Header.Get("X-Model-Key"), "")
@@ -648,9 +576,7 @@ func TestApplyAuthHeadersOmitsOrganizationWhenAbsent(t *testing.T) {
 	creds.OrgID = "org-1"
 	creds.OrgTags = []string{"a", "b"}
 	req2, err := http.NewRequest(http.MethodPost, "https://example.invalid/algo/api/v2/service/pro/sse/agent_chat_generation", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.NoError(t, client.applyAuthHeaders(req2, creds, fields, "req-2", "dmodel", "", "body", signPath(req2.URL.String())), "applyAuthHeaders() error = %v")
 	testutil.CheckEqual(t, req2.Header.Get("Cosy-Organization-Id"), "org-1")
 	testutil.CheckEqual(t, req2.Header.Get("Cosy-Organization-Tags"), "a,b")
@@ -661,9 +587,7 @@ func TestApplyAuthHeadersOmitsOrganizationWhenAbsent(t *testing.T) {
 	}
 }
 
-func credsOf(acc *store.Account) Credentials {
-	return ResolveCredentials(acc)
-}
+func credsOf(acc *store.Account) Credentials { return ResolveCredentials(acc) }
 
 // TestEntitlementRefusalKeepsTheAccountUsable drives one real streaming request
 // against a stub that answers exactly what a live Qoder account without a
@@ -686,9 +610,7 @@ func TestEntitlementRefusalKeepsTheAccountUsable(t *testing.T) {
 		"statusCodeValue": 403,
 		"statusCode":      "FORBIDDEN",
 	})
-	if err != nil {
-		t.Fatalf("marshal fixture: %v", err)
-	}
+	testutil.NoError(t, err, "marshal fixture: %v")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -704,12 +626,8 @@ func TestEntitlementRefusalKeepsTheAccountUsable(t *testing.T) {
 		Model:    "Qwen3.7-Max",
 		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hello"}}},
 	}, nil, nil)
-	if requestErr == nil {
-		t.Fatal("SendRequestWithPayload() error = nil, want an entitlement refusal")
-	}
-	if !errors.Is(requestErr, ErrNoEntitlement) {
-		t.Fatalf("error = %v, want ErrNoEntitlement", requestErr)
-	}
+	testutil.False(t, requestErr == nil, "SendRequestWithPayload() error = nil, want an entitlement refusal")
+	testutil.Falsef(t, !errors.Is(requestErr, ErrNoEntitlement), "error = %v, want ErrNoEntitlement", requestErr)
 
 	// The handler's own classifier, on the handler's own input.
 	testutil.Equal(t, apperrors.ClassifyAccountStatus(requestErr.Error()), "")
@@ -726,8 +644,6 @@ func TestEntitlementRefusalSwitchesAccounts(t *testing.T) {
 
 	err := entitlementError(`{"code":"112","message":"{\"pricingUrl\":\"https://qoder.com/pricing?client=qoder\"}"}`)
 	class := apperrors.ClassifyUpstreamError(err.Error())
-	if class.Category != "model_unavailable" || !class.Retryable || !class.SwitchAccount {
-		t.Fatalf("classification = %+v, want switchable model_unavailable", class)
-	}
+	testutil.Falsef(t, class.Category != "model_unavailable" || !class.Retryable || !class.SwitchAccount, "classification = %+v, want switchable model_unavailable", class)
 	testutil.Equal(t, apperrors.ClassifyAccountStatus(err.Error()), "")
 }

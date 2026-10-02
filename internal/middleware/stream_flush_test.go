@@ -39,15 +39,11 @@ func TestCoalescedFlushKeepsFirstTerminalAndFinalDrain(t *testing.T) {
 	testutil.Equal(t, target.flushes, 1)
 	writer.Write([]byte("data: [DONE]\n\n"))
 	writer.Flush()
-	if target.flushes != 2 {
-		t.Fatal("terminal not immediate")
-	}
+	testutil.Equal(t, target.flushes, 2)
 	writer.Write([]byte("data: trailing\n\n"))
 	writer.Flush()
 	writer.close()
-	if target.flushes != 3 {
-		t.Fatal("trailing data not drained")
-	}
+	testutil.Equal(t, target.flushes, 3)
 }
 func TestCoalescedFlushDoesNotHoldSparseDeltaUntilNextToken(t *testing.T) {
 	target := &flushRecorder{ResponseRecorder: httptest.NewRecorder(), signal: make(chan struct{}, 4)}
@@ -70,15 +66,11 @@ func TestCoalescedFlushDoesNotHoldSparseDeltaUntilNextToken(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	target.mu.Lock()
 	defer target.mu.Unlock()
-	if target.flushes != before {
-		t.Fatal("flush after handler return")
-	}
+	testutil.Equal(t, target.flushes, before)
 }
 func TestCoalescingLeavesNonStreamingResponseUnchanged(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h := CoalesceStreamFlush(func() time.Duration { return time.Millisecond })(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(400); w.Write([]byte("bad")) })
 	h(rec, httptest.NewRequest("POST", "/", nil))
-	if rec.Code != 400 || rec.Body.String() != "bad" {
-		t.Fatalf("response %d %s", rec.Code, rec.Body.String())
-	}
+	testutil.Falsef(t, rec.Code != 400 || rec.Body.String() != "bad", "response %d %s", rec.Code, rec.Body.String())
 }

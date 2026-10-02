@@ -37,25 +37,18 @@ func TestChatRequestFromResponses_ConvertsInputToolsAndReasoning(t *testing.T) {
 	}
 
 	chatReq, err := chatRequestFromResponses(req)
-	if err != nil {
-		t.Fatalf("chatRequestFromResponses() error: %v", err)
-	}
+	testutil.NoError(t, err, "chatRequestFromResponses() error: %v")
 	testutil.Equal(t, len(chatReq.Messages), 4)
-	if chatReq.Messages[0].Role != "system" || chatReq.Messages[0].Content != "用中文回答" {
-		t.Fatalf("unexpected system message: %#v", chatReq.Messages[0])
-	}
+	testutil.Equal(t, chatReq.Messages[0].Role, "system")
+	testutil.Equal(t, chatReq.Messages[0].Content, "用中文回答")
 	testutil.Equal(t, chatReq.Messages[1].Content.([]interface{})[0].(map[string]interface{})["type"], "text")
 	testutil.Equal(t, chatReq.Messages[1].Content.([]interface{})[1].(map[string]interface{})["type"], "file")
 	testutil.Equal(t, len(chatReq.Messages[2].ToolCalls), 1)
-	if chatReq.Messages[3].Role != "tool" || chatReq.Messages[3].ToolCallID != "call_1" {
-		t.Fatalf("tool output message mismatch: %#v", chatReq.Messages[3])
-	}
-	if chatReq.ReasoningEffort == nil || *chatReq.ReasoningEffort != "high" {
-		t.Fatalf("reasoning_effort=%v want high", chatReq.ReasoningEffort)
-	}
-	if len(chatReq.Tools) != 1 || chatReq.Tools[0].Function["name"] != "get_weather" {
-		t.Fatalf("tools mismatch: %#v", chatReq.Tools)
-	}
+	testutil.Equal(t, chatReq.Messages[3].Role, "tool")
+	testutil.Equal(t, chatReq.Messages[3].ToolCallID, "call_1")
+	testutil.Falsef(t, chatReq.ReasoningEffort == nil || *chatReq.ReasoningEffort != "high", "reasoning_effort=%v want high", chatReq.ReasoningEffort)
+	testutil.Equal(t, len(chatReq.Tools), 1)
+	testutil.Equal(t, chatReq.Tools[0].Function["name"], "get_weather")
 	choice := chatReq.ToolChoice.(map[string]interface{})
 	fn := choice["function"].(map[string]interface{})
 	testutil.Equal(t, fn["name"], "get_weather")
@@ -76,24 +69,14 @@ func TestResponsesCreateRequest_AcceptsCompatibilityFields(t *testing.T) {
 
 	var req ResponsesCreateRequest
 	testutil.NoError(t, json.Unmarshal(raw, &req), "json.Unmarshal() error: %v")
-	if req.StreamProvided {
-		t.Fatal("stream should not be marked provided")
-	}
-	if req.MaxOutputTokens == nil || *req.MaxOutputTokens != 128 {
-		t.Fatalf("max_output_tokens=%v want 128", req.MaxOutputTokens)
-	}
-	if req.PreviousResponseID != "resp_prev" || req.Truncation != "auto" {
-		t.Fatalf("compat fields mismatch: %#v", req)
-	}
-	if req.Store == nil || *req.Store != false {
-		t.Fatalf("store=%v want false", req.Store)
-	}
-	if req.Background == nil || *req.Background != false {
-		t.Fatalf("background=%v want false", req.Background)
-	}
-	if len(req.Include) != 1 || req.Include[0] != "message.output_text.logprobs" {
-		t.Fatalf("include mismatch: %#v", req.Include)
-	}
+	testutil.False(t, req.StreamProvided, "stream should not be marked provided")
+	testutil.Falsef(t, req.MaxOutputTokens == nil || *req.MaxOutputTokens != 128, "max_output_tokens=%v want 128", req.MaxOutputTokens)
+	testutil.Equal(t, req.PreviousResponseID, "resp_prev")
+	testutil.Equal(t, req.Truncation, "auto")
+	testutil.Falsef(t, req.Store == nil || *req.Store != false, "store=%v want false", req.Store)
+	testutil.Falsef(t, req.Background == nil || *req.Background != false, "background=%v want false", req.Background)
+	testutil.Equal(t, len(req.Include), 1)
+	testutil.Equal(t, req.Include[0], "message.output_text.logprobs")
 }
 
 func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
@@ -101,20 +84,14 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 	h := &Handler{cfg: &config.Config{Stream: &streamDefault}}
 	var decoded ResponsesCreateRequest
 	testutil.NoError(t, json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello"}`), &decoded), "json.Unmarshal() error: %v")
-	if decoded.StreamProvided {
-		t.Fatal("stream should be omitted before handler defaulting")
-	}
+	testutil.False(t, decoded.StreamProvided, "stream should be omitted before handler defaulting")
 	h.applyDefaultResponsesStream(&decoded)
-	if decoded.Stream {
-		t.Fatal("default stream should be false from config")
-	}
+	testutil.False(t, decoded.Stream, "default stream should be false from config")
 
 	var provided ResponsesCreateRequest
 	testutil.NoError(t, json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello","stream":true}`), &provided), "json.Unmarshal() provided error: %v")
 	h.applyDefaultResponsesStream(&provided)
-	if !provided.Stream {
-		t.Fatal("explicit stream=true should be preserved")
-	}
+	testutil.False(t, !provided.Stream, "explicit stream=true should be preserved")
 }
 
 func TestValidateResponsesCompatibilityFor_RejectsUnsupportedBridgeFields(t *testing.T) {
@@ -123,9 +100,8 @@ func TestValidateResponsesCompatibilityFor_RejectsUnsupportedBridgeFields(t *tes
 		{Background: &background},
 		{Truncation: "invalid"},
 	} {
-		if err := validateResponsesCompatibilityFor(req, true); err == nil {
-			t.Fatalf("expected unsupported-field error for %#v", req)
-		}
+		err := validateResponsesCompatibilityFor(req, true)
+		testutil.CheckError(t, err)
 	}
 }
 
@@ -144,12 +120,8 @@ func TestChatRequestFromResponses_PreservesMaxOutputTokens(t *testing.T) {
 	chat, err := chatRequestFromResponses(ResponsesCreateRequest{
 		Model: "grok-4.6", Input: "hello", MaxOutputTokens: &maxOutputTokens,
 	})
-	if err != nil {
-		t.Fatalf("chatRequestFromResponses() error = %v", err)
-	}
-	if chat.MaxTokens == nil || *chat.MaxTokens != maxOutputTokens {
-		t.Fatalf("MaxTokens=%v want %d", chat.MaxTokens, maxOutputTokens)
-	}
+	testutil.NoError(t, err, "chatRequestFromResponses() error = %v")
+	testutil.Falsef(t, chat.MaxTokens == nil || *chat.MaxTokens != maxOutputTokens, "MaxTokens=%v want %d", chat.MaxTokens, maxOutputTokens)
 }
 
 func TestResponsesObjectFromChat_ConvertsMessageAndToolCalls(t *testing.T) {
@@ -160,10 +132,8 @@ func TestResponsesObjectFromChat_ConvertsMessageAndToolCalls(t *testing.T) {
 				"role":    "assistant",
 				"content": "answer",
 				"annotations": []interface{}{map[string]interface{}{
-					"type": "url_citation",
-					"url_citation": map[string]interface{}{
-						"url": "https://example.com",
-					},
+					"type":         "url_citation",
+					"url_citation": map[string]interface{}{"url": "https://example.com"},
 				}},
 				"tool_calls": []interface{}{map[string]interface{}{
 					"id":   "call_1",
@@ -179,22 +149,17 @@ func TestResponsesObjectFromChat_ConvertsMessageAndToolCalls(t *testing.T) {
 	}
 
 	resp := responsesObjectFromChat("grok-4.20-0309", chat)
-	if resp["object"] != "response" || resp["status"] != "completed" {
-		t.Fatalf("unexpected response metadata: %#v", resp)
-	}
+	testutil.Equal(t, resp["object"], "response")
+	testutil.Equal(t, resp["status"], "completed")
 	output := resp["output"].([]interface{})
 	testutil.Equal(t, len(output), 2)
 	fc := output[0].(map[string]interface{})
-	if fc["type"] != "function_call" || fc["call_id"] != "call_1" || fc["name"] != "get_weather" {
-		t.Fatalf("function_call mismatch: %#v", fc)
-	}
+	testutil.Falsef(t, fc["type"] != "function_call" || fc["call_id"] != "call_1" || fc["name"] != "get_weather", "function_call mismatch: %#v", fc)
 	msg := output[1].(map[string]interface{})
 	content := msg["content"].([]interface{})[0].(map[string]interface{})
 	testutil.Equal(t, content["text"], "answer")
 	usage := resp["usage"].(map[string]interface{})
-	if usage["input_tokens"] != 3 || usage["output_tokens"] != 4 || usage["total_tokens"] != 7 {
-		t.Fatalf("usage mismatch: %#v", usage)
-	}
+	testutil.Falsef(t, usage["input_tokens"] != 3 || usage["output_tokens"] != 4 || usage["total_tokens"] != 7, "usage mismatch: %#v", usage)
 }
 
 func TestWriteResponsesStreamFromChat_ConvertsToolCallChunk(t *testing.T) {
@@ -244,9 +209,7 @@ func TestWriteResponsesStreamFromChatFailsEmptyAndPrematureStreams(t *testing.T)
 			recorder := httptest.NewRecorder()
 			writeResponsesStreamFromChatReaderRequestWithHook(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(input), nil)
 			body := recorder.Body.String()
-			if !strings.Contains(body, "event: response.failed") || strings.Contains(body, "event: response.completed") {
-				t.Fatalf("body=%s", body)
-			}
+			testutil.Falsef(t, !strings.Contains(body, "event: response.failed") || strings.Contains(body, "event: response.completed"), "body=%s", body)
 			testutil.MustContainAll(t, body, `"model":"grok-4.6"`, "data: [DONE]")
 		})
 	}
@@ -314,20 +277,16 @@ func TestResponsesInputFileRoundTripsIntoChatMessages(t *testing.T) {
 			"content": []interface{}{map[string]interface{}{"type": "input_text", "text": "see attached"}, part},
 		}}
 		messages, err := responsesInputToMessages(input)
-		if err != nil {
-			t.Fatalf("%v: %v", part, err)
-		}
-		if err := validateChatMessages(messages); err != nil {
-			t.Fatalf("%v: chat validation rejected the converted message: %v", part, err)
-		}
+		testutil.Falsef(t, err != nil, "%v: %v", part, err)
+		err = validateChatMessages(messages)
+		testutil.CheckNoError(t, err)
 		parts, ok := messages[0].Content.([]interface{})
 		if !ok || len(parts) != 2 {
 			t.Fatalf("%v: converted content=%#v", part, messages[0].Content)
 		}
 		filePart, _ := parts[1].(map[string]interface{})
 		file, _ := filePart["file"].(map[string]interface{})
-		if data, _ := file["file_data"].(string); data == "" {
-			t.Fatalf("%v: file_data missing after conversion: %#v", part, filePart)
-		}
+		data, _ := file["file_data"].(string)
+		testutil.Falsef(t, data == "", "%v: file_data missing after conversion: %#v", part, filePart)
 	}
 }

@@ -27,18 +27,13 @@ func TestCatalogSnapshotRoundTripsWindows(t *testing.T) {
 // there is simply no window to recover from it.
 func TestCatalogContextWindowsAcceptsLegacyBareIDs(t *testing.T) {
 	input, output := CatalogContextWindows([]string{"legacy-model", `{"id":"new-model","max_input_tokens":1000000}`})
-	if _, ok := input["legacy-model"]; ok {
-		t.Fatalf("a bare id must not invent a window: %#v", input)
-	}
+	_, ok := input["legacy-model"]
+	testutil.Falsef(t, ok, "a bare id must not invent a window: %#v", input)
 	testutil.Equal(t, input["new-model"], 1000000)
-	if output != nil {
-		t.Fatalf("output budgets = %#v, want nil when none were declared", output)
-	}
+	testutil.Falsef(t, output != nil, "output budgets = %#v, want nil when none were declared", output)
 }
 
 func TestCatalogContextWindowsIgnoresMalformedRows(t *testing.T) {
 	input, _ := CatalogContextWindows([]string{"{not json", "", "   "})
-	if input != nil {
-		t.Fatalf("input windows = %#v, want nil", input)
-	}
+	testutil.Falsef(t, input != nil, "input windows = %#v, want nil", input)
 }

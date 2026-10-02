@@ -3,6 +3,7 @@ package util
 import (
 	"context"
 	"crypto/subtle"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -41,9 +42,7 @@ func UniqueStrings(input []string) []string {
 }
 
 // SecureCompare compares secrets without leaking a matching prefix through timing.
-func SecureCompare(a, b string) bool {
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
+func SecureCompare(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
 
 // FirstNonEmpty returns the first non-empty (after trimming) value, or "".
 // It is the single shared implementation of the firstNonEmpty helper that was
@@ -79,6 +78,27 @@ func FirstNonEmptyURL(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// AllowedLoginHost accepts only exact provider/configured hosts and loopback.
+func AllowedLoginHost(host, configured string, allowed []string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "" {
+		return false
+	}
+	if host == "localhost" || host == "::1" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	for _, candidate := range allowed {
+		if strings.EqualFold(host, candidate) {
+			return true
+		}
+	}
+	configured = strings.TrimSpace(strings.ToLower(configured))
+	return configured != "" && host == configured
 }
 
 // HostOf returns the host of an absolute URL, or "" when it cannot be parsed.

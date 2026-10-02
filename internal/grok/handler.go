@@ -15,6 +15,7 @@ import (
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
+	"orchids-api/internal/util"
 	"strings"
 	"sync"
 	"time"
@@ -287,19 +288,14 @@ func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error 
 			m, err = h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", rawID)
 		}
 	}
-	if err != nil || m == nil {
-		return fmt.Errorf("model not found")
-	}
-	if !modelpolicy.IsVisibleGrokModel(id, m.Verified) {
+	if err != nil || m == nil || !modelpolicy.IsVisibleGrokModel(id, m.Verified) {
 		return fmt.Errorf("model not found")
 	}
 	if !m.Status.Enabled() {
 		return fmt.Errorf("model not available")
 	}
 	channel := strings.TrimSpace(m.Channel)
-	if channel == "" {
-		channel = "grok"
-	}
+	channel = util.FirstNonEmptyUntrimmed(channel, "grok")
 	if !strings.EqualFold(channel, "grok") {
 		return fmt.Errorf("model not found")
 	}
@@ -390,9 +386,7 @@ func (h *Handler) applyPersistedRoute(ctx context.Context, spec ModelSpec) Model
 		return spec
 	}
 	upstream := strings.TrimSpace(model.UpstreamModel)
-	if upstream == "" {
-		upstream = spec.UpstreamModel
-	}
+	upstream = util.FirstNonEmptyUntrimmed(upstream, spec.UpstreamModel)
 	// Build is the only Grok plane this gateway serves, so a stored route row can
 	// only refine the upstream model name.
 	if strings.EqualFold(strings.TrimSpace(model.Provider), ProviderBuild) && upstream != "" {
@@ -541,10 +535,7 @@ const serverFaultHold = 5 * time.Second
 // isModelScopedRefusal reports whether an upstream failure refused one model
 // rather than the credential itself.
 func isModelScopedRefusal(err error) bool {
-	if err == nil {
-		return false
-	}
-	if parseUpstreamStatus(err) != 403 {
+	if err == nil || parseUpstreamStatus(err) != 403 {
 		return false
 	}
 	lower := strings.ToLower(err.Error())
@@ -652,10 +643,7 @@ func markAllGrokAccountStatuses(err error) bool {
 		return true
 	}
 	// A generic 403 must not mark the account; only explicit account blocks do.
-	if ClassifyUpstreamError(err) == UpstreamErrorGenericForbidden {
-		return false
-	}
-	return true
+	return !(ClassifyUpstreamError(err) == UpstreamErrorGenericForbidden)
 }
 
 func shouldSwitchGrokAccount(err error) bool {
@@ -676,10 +664,7 @@ func shouldSwitchGrokAccount(err error) bool {
 		return false
 	}
 	status := apperrors.ClassifyAccountStatus(err.Error())
-	if status == "401" || status == "429" {
-		return true
-	}
-	if isSharedGrokRateLimitError(err) {
+	if status == "401" || status == "429" || isSharedGrokRateLimitError(err) {
 		return true
 	}
 	if upstreamStatus := parseUpstreamStatus(err); upstreamStatus == http.StatusBadGateway ||

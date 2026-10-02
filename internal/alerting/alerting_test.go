@@ -38,9 +38,8 @@ func TestEvaluate_FiresRecoversAndClosesTheLoop(t *testing.T) {
 	at := time.Now()
 
 	// Healthy: nothing fires.
-	if transition := engine.Evaluate(Snapshot{At: at, Channels: []ChannelSnapshot{channel("grok", nil)}}); len(transition.Firing) != 0 {
-		t.Fatalf("healthy snapshot fired %+v", transition.Firing)
-	}
+	transition := engine.Evaluate(Snapshot{At: at, Channels: []ChannelSnapshot{channel("grok", nil)}})
+	testutil.Falsef(t, len(transition.Firing) != 0, "healthy snapshot fired %+v", transition.Firing)
 
 	// Degraded: one critical alert.
 	broken := Snapshot{At: at, Channels: []ChannelSnapshot{channel("grok", func(c *ChannelSnapshot) {
@@ -48,19 +47,16 @@ func TestEvaluate_FiresRecoversAndClosesTheLoop(t *testing.T) {
 		c.Failed = 8
 		c.SuccessRate = 0.2
 	})}}
-	transition := engine.Evaluate(broken)
-	if len(transition.Firing) != 1 || transition.Firing[0].Severity != SeverityCritical {
-		t.Fatalf("degraded transition = %+v", transition)
-	}
+	transition = engine.Evaluate(broken)
+	testutil.Equal(t, len(transition.Firing), 1)
+	testutil.Equal(t, transition.Firing[0].Severity, SeverityCritical)
 	// Still degraded: no re-announcement.
-	if again := engine.Evaluate(broken); len(again.Firing) != 0 {
-		t.Fatalf("a persisting condition must not re-fire: %+v", again.Firing)
-	}
+	again := engine.Evaluate(broken)
+	testutil.Falsef(t, len(again.Firing) != 0, "a persisting condition must not re-fire: %+v", again.Firing)
 	// Recovered: exactly one recovery for the alert that fired.
 	recovered := engine.Evaluate(Snapshot{At: at, Channels: []ChannelSnapshot{channel("grok", nil)}})
-	if len(recovered.Recovered) != 1 || recovered.Recovered[0].Key != transition.Firing[0].Key {
-		t.Fatalf("recovery = %+v", recovered.Recovered)
-	}
+	testutil.Equal(t, len(recovered.Recovered), 1)
+	testutil.Equal(t, recovered.Recovered[0].Key, transition.Firing[0].Key)
 	testutil.Equal(t, len(engine.Firing()), 0)
 
 	want := []string{"fired:success-rate:grok", "recovered:success-rate:grok"}
@@ -141,13 +137,9 @@ func TestEvaluate_SeverityOrdering(t *testing.T) {
 // aggregate out of alerting: /admin redirects and scanner 404s are not upstream
 // health, and a visitor must not be able to page an operator.
 func TestEvaluate_IgnoresInfrastructureAggregates(t *testing.T) {
-	if IsAlertableChannel("http") || IsAlertableChannel("probe") {
-		t.Fatal("the http and probe aggregates must not be alertable")
-	}
+	testutil.False(t, IsAlertableChannel("http") || IsAlertableChannel("probe"), "the http and probe aggregates must not be alertable")
 	for _, channel := range []string{"grok", "qoder", "cline", "workbuddy", "GROK"} {
-		if !IsAlertableChannel(channel) {
-			t.Fatalf("%s must remain alertable", channel)
-		}
+		testutil.True(t, IsAlertableChannel(channel), "%s must remain alertable")
 	}
 
 	transition := Evaluate(Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
@@ -181,9 +173,8 @@ func TestEvaluate_StillAlertsOnRealChannels(t *testing.T) {
 			c.SuccessRate = 0.1
 		}),
 	}}, nil, DefaultRules())
-	if len(transition.Firing) != 1 || transition.Firing[0].Key != "success-rate:workbuddy" {
-		t.Fatalf("a real channel must still alert: %+v", transition.Firing)
-	}
+	testutil.Equal(t, len(transition.Firing), 1)
+	testutil.Equal(t, transition.Firing[0].Key, "success-rate:workbuddy")
 }
 
 // TestEvaluate_HysteresisStopsFlapping is the fix for what production showed:// workbuddy hovered at 89% around the 90% line, so the alert fired and cleared on
@@ -223,9 +214,7 @@ func TestEvaluate_HysteresisStopsFlapping(t *testing.T) {
 	testutil.Equal(t, len(cleared.Recovered), 1)
 
 	// Without an existing alert, 91% raises nothing (no flapping on the way up).
-	if len(Evaluate(degraded(0.91), nil, rules).Firing) != 0 {
-		t.Fatal("91% must not raise a new alert")
-	}
+	testutil.Equal(t, len(Evaluate(degraded(0.91), nil, rules).Firing), 0)
 }
 
 // TestEvaluate_WarningBandNeedsEnoughFailures pins the noise production showed:
@@ -246,9 +235,8 @@ func TestEvaluate_WarningBandNeedsEnoughFailures(t *testing.T) {
 			c.Samples = 9
 		}),
 	}}
-	if firing := Evaluate(quiet, nil, rules).Firing; len(firing) != 0 {
-		t.Fatalf("a single failure in a quiet window fired: %+v", firing)
-	}
+	firing := Evaluate(quiet, nil, rules).Firing
+	testutil.Falsef(t, len(firing) != 0, "a single failure in a quiet window fired: %+v", firing)
 
 	// The same ratio with enough failures behind it does fire.
 	noisy := Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
@@ -260,9 +248,8 @@ func TestEvaluate_WarningBandNeedsEnoughFailures(t *testing.T) {
 			c.Samples = 30
 		}),
 	}}
-	if firing := Evaluate(noisy, nil, rules).Firing; len(firing) != 1 {
-		t.Fatalf("4 failures in 30 requests (87%%) must fire: %+v", firing)
-	}
+	firing = Evaluate(noisy, nil, rules).Firing
+	testutil.Falsef(t, len(firing) != 1, "4 failures in 30 requests (87%%) must fire: %+v", firing)
 }
 
 // TestEvaluate_SevereOutageIgnoresTheFailureFloor is the counterweight to the rule
@@ -284,9 +271,8 @@ func TestEvaluate_SevereOutageIgnoresTheFailureFloor(t *testing.T) {
 		}),
 	}}
 	firing := Evaluate(severe, nil, rules).Firing
-	if len(firing) != 1 || firing[0].Severity != SeverityCritical {
-		t.Fatalf("a 40%% success rate must fire as critical: %+v", firing)
-	}
+	testutil.Equal(t, len(firing), 1)
+	testutil.Equal(t, firing[0].Severity, SeverityCritical)
 }
 
 // TestEvaluate_FailureFloorDoesNotReleaseAFiringAlert keeps the interaction with
@@ -316,9 +302,8 @@ func TestEvaluate_FailureFloorDoesNotReleaseAFiringAlert(t *testing.T) {
 // so without this accessor the UI could never explain its own percentage.
 func TestEngine_ThresholdsExposesTheRules(t *testing.T) {
 	engine := NewEngine(DefaultRules(), nil)
-	if got := engine.Thresholds(); got.SuccessRateWarning != 0.9 || got.SuccessRateCritical != 0.5 {
-		t.Fatalf("Thresholds() = %+v, want the shipped 0.9/0.5", got)
-	}
+	got := engine.Thresholds()
+	testutil.Falsef(t, got.SuccessRateWarning != 0.9 || got.SuccessRateCritical != 0.5, "Thresholds() = %+v, want the shipped 0.9/0.5", got)
 
 	// A custom policy must be visible too, otherwise the page would always show
 	// the default while alerts fire on something else.
@@ -363,15 +348,11 @@ func TestRejectUnreachableRecoveryAndAllow100Percent(t *testing.T) {
 	rules := DefaultRules()
 	rules.SuccessRateWarning = .99
 	rules.ClearMargin = .03
-	if rules.Validate() == nil {
-		t.Fatal("accepted a 102% recovery line")
-	}
+	testutil.False(t, rules.Validate() == nil, "accepted a 102% recovery line")
 	rules.SuccessRateWarning = .97
 	testutil.NoError(t, rules.Validate())
 	engine := NewEngine(rules, nil)
 	engine.Evaluate(Snapshot{Channels: []ChannelSnapshot{channel("grok", func(c *ChannelSnapshot) { c.SuccessRate = .8; c.Failed = 5 })}})
 	recovery := engine.Evaluate(Snapshot{Channels: []ChannelSnapshot{channel("grok", nil)}})
-	if len(recovery.Recovered) != 1 || len(engine.Firing()) != 0 {
-		t.Fatal("100% must recover")
-	}
+	testutil.False(t, len(recovery.Recovered) != 1 || len(engine.Firing()) != 0, "100% must recover")
 }

@@ -10,13 +10,11 @@ import (
 func workBuddyAccount(t *testing.T, s *Store, usage, limit float64, syncedAt time.Time) *Account {
 	t.Helper()
 	acc := &Account{
-		AccountType:  "workbuddy",
-		Enabled:      true,
-		UsageLimit:   limit,
-		UsageCurrent: usage,
-		WorkBuddyQuota: WorkBuddyQuotaSnapshot{
-			Limit: limit, Remaining: usage, SyncedAt: syncedAt,
-		},
+		AccountType:    "workbuddy",
+		Enabled:        true,
+		UsageLimit:     limit,
+		UsageCurrent:   usage,
+		WorkBuddyQuota: WorkBuddyQuotaSnapshot{Limit: limit, Remaining: usage, SyncedAt: syncedAt},
 	}
 	testutil.NoError(t, s.CreateAccount(t.Context(), acc), "CreateAccount() error = %v")
 	return acc
@@ -38,15 +36,10 @@ func TestUpdateAccount_KeepsWorkBuddyUsageWithoutAMeterReading(t *testing.T) {
 	testutil.NoError(t, s.UpdateAccount(t.Context(), fresh), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(t.Context(), acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
-	if after.UsageCurrent != 350 || after.UsageLimit != 350 {
-		t.Fatalf("usage = %v/%v, want the stored reading 350/350", after.UsageCurrent, after.UsageLimit)
-	}
-	if after.WorkBuddyQuota.Remaining != 350 || after.WorkBuddyQuota.SyncedAt.IsZero() {
-		t.Fatalf("quota = %+v, want the stored snapshot", after.WorkBuddyQuota)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
+	testutil.Equal(t, after.UsageCurrent, 350)
+	testutil.Equal(t, after.UsageLimit, 350)
+	testutil.Falsef(t, after.WorkBuddyQuota.Remaining != 350 || after.WorkBuddyQuota.SyncedAt.IsZero(), "quota = %+v, want the stored snapshot", after.WorkBuddyQuota)
 }
 
 // TestUpdateAccount_AcceptsANewerMeterReading is the other half: a real reading
@@ -63,12 +56,9 @@ func TestUpdateAccount_AcceptsANewerMeterReading(t *testing.T) {
 	testutil.NoError(t, s.UpdateAccount(t.Context(), newer), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(t.Context(), acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
-	if after.UsageCurrent != 0 || after.UsageLimit != 100 {
-		t.Fatalf("usage = %v/%v, want the new reading 0/100", after.UsageCurrent, after.UsageLimit)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
+	testutil.Equal(t, after.UsageCurrent, 0)
+	testutil.Equal(t, after.UsageLimit, 100)
 	testutil.Equal(t, after.WorkBuddyQuota.Limit, 100)
 }
 
@@ -86,12 +76,9 @@ func TestUpdateAccount_IgnoresAnOlderMeterReading(t *testing.T) {
 	testutil.NoError(t, s.UpdateAccount(t.Context(), stale), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(t.Context(), acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
-	if after.UsageCurrent != 350 || after.WorkBuddyQuota.Remaining != 350 {
-		t.Fatalf("usage = %v quota = %v, want the newer stored reading", after.UsageCurrent, after.WorkBuddyQuota.Remaining)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
+	testutil.Equal(t, after.UsageCurrent, 350)
+	testutil.Equal(t, after.WorkBuddyQuota.Remaining, 350)
 }
 
 // TestUpdateAccount_OtherChannelsKeepWritingUsage guards the guard: the rule is
@@ -106,10 +93,7 @@ func TestUpdateAccount_OtherChannelsKeepWritingUsage(t *testing.T) {
 	testutil.NoError(t, s.UpdateAccount(t.Context(), updated), "UpdateAccount() error = %v")
 
 	after, err := s.GetAccount(t.Context(), acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
-	if after.UsageCurrent != 25 || after.UsageLimit != 40 {
-		t.Fatalf("usage = %v/%v, want the incoming 25/40", after.UsageCurrent, after.UsageLimit)
-	}
+	testutil.NoError(t, err, "GetAccount() error = %v")
+	testutil.Equal(t, after.UsageCurrent, 25)
+	testutil.Equal(t, after.UsageLimit, 40)
 }

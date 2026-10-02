@@ -13,6 +13,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/testutil"
 )
 
 func TestFetchCLIBillingUsesIdentityAndAppliesWeeklyQuota(t *testing.T) {
@@ -25,9 +26,7 @@ func TestFetchCLIBillingUsesIdentityAndAppliesWeeklyQuota(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || r.Header.Get("X-XAI-Token-Auth") != "xai-grok-cli" || r.Header.Get("x-userid") != "user-1" || r.Header.Get("x-grok-team-id") != "team-1" {
-			t.Fatalf("unexpected billing headers: %#v", r.Header)
-		}
+		testutil.Falsef(t, !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || r.Header.Get("X-XAI-Token-Auth") != "xai-grok-cli" || r.Header.Get("x-userid") != "user-1" || r.Header.Get("x-grok-team-id") != "team-1", "unexpected billing headers: %#v", r.Header)
 		var compressed bytes.Buffer
 		writer := gzip.NewWriter(&compressed)
 		_, _ = io.WriteString(writer, `{"config":{"currentPeriod":{"end":"2026-09-01T00:00:00Z"},"creditUsagePercent":96}}`)
@@ -44,13 +43,7 @@ func TestFetchCLIBillingUsesIdentityAndAppliesWeeklyQuota(t *testing.T) {
 		OAuthExpiresAt:   time.Now().Add(time.Hour),
 	}
 	info, err := client.FetchBilling(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("FetchBilling() error = %v", err)
-	}
-	if !info.HasUsagePercent || info.UsagePercent != 96 || acc.UserID != "user-1" || acc.TeamID != "team-1" {
-		t.Fatalf("info=%+v account=%+v", info, acc)
-	}
-	if !ApplyCLIBillingInfo(acc, info) || acc.Subscription != "XPremium" || acc.UsageLimit != 0 || acc.UsageCurrent != 0 || !acc.GrokBilling.Weekly.HasUsage || acc.GrokBilling.Weekly.UsagePercent != 96 {
-		t.Fatalf("billing not applied: %+v", acc)
-	}
+	testutil.NoError(t, err, "FetchBilling() error = %v")
+	testutil.Falsef(t, !info.HasUsagePercent || info.UsagePercent != 96 || acc.UserID != "user-1" || acc.TeamID != "team-1", "info=%+v account=%+v", info, acc)
+	testutil.Falsef(t, !ApplyCLIBillingInfo(acc, info) || acc.Subscription != "XPremium" || acc.UsageLimit != 0 || acc.UsageCurrent != 0 || !acc.GrokBilling.Weekly.HasUsage || acc.GrokBilling.Weekly.UsagePercent != 96, "billing not applied: %+v", acc)
 }

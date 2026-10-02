@@ -38,17 +38,11 @@ func TestEstimateCostUsesOfficialRates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, ok := EstimateCost(tc.model, 1, 0, 0, 0)
-			if !ok || got.Model != tc.canonical || got.CostInUSDTicks != tc.input {
-				t.Fatalf("input EstimateCost(%q) = %#v, %v; want %s / %d", tc.model, got, ok, tc.canonical, tc.input)
-			}
+			testutil.Falsef(t, !ok || got.Model != tc.canonical || got.CostInUSDTicks != tc.input, "input EstimateCost(%q) = %#v, %v; want %s / %d", tc.model, got, ok, tc.canonical, tc.input)
 			got, ok = EstimateCost(tc.model, 1, 1, 0, 0)
-			if !ok || got.CostInUSDTicks != tc.cached {
-				t.Fatalf("cached EstimateCost(%q) = %#v, %v; want %d", tc.model, got, ok, tc.cached)
-			}
+			testutil.Falsef(t, !ok || got.CostInUSDTicks != tc.cached, "cached EstimateCost(%q) = %#v, %v; want %d", tc.model, got, ok, tc.cached)
 			got, ok = EstimateCost(tc.model, 0, 0, 1, 0)
-			if !ok || got.CostInUSDTicks != tc.output {
-				t.Fatalf("output EstimateCost(%q) = %#v, %v; want %d", tc.model, got, ok, tc.output)
-			}
+			testutil.Falsef(t, !ok || got.CostInUSDTicks != tc.output, "output EstimateCost(%q) = %#v, %v; want %d", tc.model, got, ok, tc.output)
 		})
 	}
 }
@@ -61,13 +55,10 @@ func TestEstimateCostMatchesPublishedPerMillionPrices(t *testing.T) {
 	got, ok := EstimateCost("grok-4.6", 100_000, 0, 100_000, 100_000)
 	testutil.True(t, ok, "grok-4.6 is priced")
 	// 0.1M in at $2 + 0.1M out at $6 = $0.80 = 8e9 ticks (standard tier).
-	if want := int64(8) * 1_000_000_000; got.CostInUSDTicks != want {
-		t.Fatalf("cost = %d ticks, want %d", got.CostInUSDTicks, want)
-	}
+	want := int64(8) * 1_000_000_000
+	testutil.Falsef(t, got.CostInUSDTicks != want, "cost = %d ticks, want %d", got.CostInUSDTicks, want)
 	got, ok = EstimateCost("grok-build-0.1", 100_000, 0, 0, 0)
-	if !ok || got.CostInUSDTicks != 1_000_000_000 {
-		t.Fatalf("build input cost = %#v, %v; want $0.10", got, ok)
-	}
+	testutil.Falsef(t, !ok || got.CostInUSDTicks != 1_000_000_000, "build input cost = %#v, %v; want $0.10", got, ok)
 }
 
 // TestEstimateCostLongContextSwitch pins the >200k switch: exactly 200k is the
@@ -76,18 +67,12 @@ func TestEstimateCostLongContextSwitch(t *testing.T) {
 	t.Parallel()
 
 	atLimit, ok := EstimateCost("grok-4.6", 200_000, 0, 1, 200_000)
-	if !ok || atLimit.CostInUSDTicks != 200_000*20000+60000 {
-		t.Fatalf("at limit = %#v, %v", atLimit, ok)
-	}
+	testutil.Falsef(t, !ok || atLimit.CostInUSDTicks != 200_000*20000+60000, "at limit = %#v, %v", atLimit, ok)
 	overLimit, ok := EstimateCost("grok-4.6", 200_001, 0, 1, 200_001)
-	if !ok || overLimit.CostInUSDTicks != 200_001*40000+120000 {
-		t.Fatalf("over limit = %#v, %v", overLimit, ok)
-	}
+	testutil.Falsef(t, !ok || overLimit.CostInUSDTicks != 200_001*40000+120000, "over limit = %#v, %v", overLimit, ok)
 	// A zero context size falls back to the billed input size.
 	implicit, ok := EstimateCost("grok-4.6", 200_001, 0, 0, 0)
-	if !ok || implicit.CostInUSDTicks != 200_001*40000 {
-		t.Fatalf("implicit context = %#v, %v", implicit, ok)
-	}
+	testutil.Falsef(t, !ok || implicit.CostInUSDTicks != 200_001*40000, "implicit context = %#v, %v", implicit, ok)
 }
 
 func TestEstimateCostClampsInvalidInputs(t *testing.T) {
@@ -95,22 +80,17 @@ func TestEstimateCostClampsInvalidInputs(t *testing.T) {
 
 	// Cached can never exceed input, and negatives never credit the caller.
 	got, ok := EstimateCost("grok-4.6", 100, 5_000, 0, 0)
-	if !ok || got.CostInUSDTicks != 100*5000 {
-		t.Fatalf("cached clamp = %#v, %v", got, ok)
-	}
+	testutil.Falsef(t, !ok || got.CostInUSDTicks != 100*5000, "cached clamp = %#v, %v", got, ok)
 	got, ok = EstimateCost("grok-4.6", -10, -10, -10, -10)
-	if !ok || got.CostInUSDTicks != 0 {
-		t.Fatalf("negative clamp = %#v, %v", got, ok)
-	}
+	testutil.Falsef(t, !ok || got.CostInUSDTicks != 0, "negative clamp = %#v, %v", got, ok)
 }
 
 func TestEstimateCostUnknownModelIsNotZeroCost(t *testing.T) {
 	t.Parallel()
 
 	for _, model := range []string{"", "   ", "grok-imagine-image", "gpt-5", "claude-sonnet-4", "other/grok-4.6"} {
-		if got, ok := EstimateCost(model, 1_000, 0, 1_000, 0); ok {
-			t.Fatalf("EstimateCost(%q) = %#v, want unpriced", model, got)
-		}
+		got, ok := EstimateCost(model, 1_000, 0, 1_000, 0)
+		testutil.Falsef(t, ok, "EstimateCost(%q) = %#v, want unpriced", model, got)
 	}
 }
 
@@ -122,14 +102,10 @@ func TestEstimateTextReservationFromBodyMatchesLegacyEstimator(t *testing.T) {
 	}
 	for _, body := range bodies {
 		got, ok := EstimateTextReservationFromBody(body)
-		if !ok || got.Model == "" || got.CostInUSDTicks <= 0 {
-			t.Fatalf("body=%s got=%#v ok=%v", body, got, ok)
-		}
+		testutil.Falsef(t, !ok || got.Model == "" || got.CostInUSDTicks <= 0, "body=%s got=%#v ok=%v", body, got, ok)
 	}
 	malformed, ok := EstimateTextReservationFromBody([]byte(`{"model":"grok-4.6"`))
-	if !ok || malformed.CostInUSDTicks <= 0 {
-		t.Fatal("a truncated body with a complete model must use the conservative fallback")
-	}
+	testutil.False(t, !ok || malformed.CostInUSDTicks <= 0, "a truncated body with a complete model must use the conservative fallback")
 }
 
 func BenchmarkEstimateTextReservationFromBody(b *testing.B) {
@@ -145,9 +121,7 @@ func TestConstantsAreStable(t *testing.T) {
 	t.Parallel()
 
 	testutil.Equal(t, TicksPerUSD, 10_000_000_000)
-	if Version != "official-"+AsOf || Source == "" {
-		t.Fatalf("version %q / source %q", Version, Source)
-	}
+	testutil.Falsef(t, Version != "official-"+AsOf || Source == "", "version %q / source %q", Version, Source)
 }
 
 func TestReconstructBreakdownExplainsAStoredCost(t *testing.T) {
@@ -156,23 +130,17 @@ func TestReconstructBreakdownExplainsAStoredCost(t *testing.T) {
 	breakdown, ok := ReconstructBreakdown("grok-4.6", q)
 	testutil.True(t, ok, "grok-4.6 was not reconstructed")
 	direct, priced := EstimateCost("grok-4.6", q.InputTokens, q.CachedTokens, q.OutputTokens, q.InputTokens)
-	if !priced || breakdown.CostInUSDTicks != direct.CostInUSDTicks {
-		t.Fatalf("breakdown=%d direct=%d", breakdown.CostInUSDTicks, direct.CostInUSDTicks)
-	}
+	testutil.Falsef(t, !priced || breakdown.CostInUSDTicks != direct.CostInUSDTicks, "breakdown=%d direct=%d", breakdown.CostInUSDTicks, direct.CostInUSDTicks)
 	kinds := map[ComponentKind]int64{}
 	for _, component := range breakdown.Components {
 		kinds[component.Kind] = component.Quantity
 	}
-	if kinds[ComponentUncachedInput] != 600 || kinds[ComponentCachedInput] != 400 || kinds[ComponentOutput] != 500 {
-		t.Fatalf("components=%+v", breakdown.Components)
-	}
+	testutil.Falsef(t, kinds[ComponentUncachedInput] != 600 || kinds[ComponentCachedInput] != 400 || kinds[ComponentOutput] != 500, "components=%+v", breakdown.Components)
 	// The long-context tier is visible in the component price.
 	long, ok := ReconstructBreakdown("grok-4.6", Quantities{InputTokens: 300_000, OutputTokens: 10, ContextTokens: 300_000})
 	testutil.True(t, ok, "long-context row was not reconstructed")
 	for _, component := range long.Components {
-		if component.Kind == ComponentUncachedInput && component.UnitPriceInUSDTicks != 40_000 {
-			t.Fatalf("long-context input price=%d", component.UnitPriceInUSDTicks)
-		}
+		testutil.Falsef(t, component.Kind == ComponentUncachedInput && component.UnitPriceInUSDTicks != 40_000, "long-context input price=%d", component.UnitPriceInUSDTicks)
 	}
 
 }

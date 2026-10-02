@@ -40,11 +40,7 @@
   // ALERT_SEVERITY_LABELS names the levels the alert engine stores. The table prints the
   // name an operator reads: it used to show the raw key, so a row read "warning" in the
   // middle of Chinese text.
-  const ALERT_SEVERITY_LABELS = {
-    critical: '严重',
-    warning: '警告',
-    info: '提示',
-  };
+  const ALERT_SEVERITY_LABELS = { critical: '严重', warning: '警告', info: '提示' };
 
   // ALERT_CELLS names each alert column, in the order the row builds its cells. Desktop
   // hides the distinction inside a table; a phone turns the row into a card and places
@@ -60,20 +56,14 @@
     { className: 'ops-alert-detail', label: '说明' },
   ];
 
-  function outcomeTab(key) {
-    return OUTCOME_TABS.filter((tab) => tab.key === key)[0] || OUTCOME_TABS[0];
-  }
+  function outcomeTab(key) { return OUTCOME_TABS.filter((tab) => tab.key === key)[0] || OUTCOME_TABS[0]; }
 
   // The page state lives in the URL, so these two accessors are the only places
   // that touch window.location. Keeping them here means the render tests (which
   // stub a DOM without a location) exercise the same code as a browser.
-  function pagePath() {
-    return (window.location && window.location.pathname) || '';
-  }
+  function pagePath() { return (window.location && window.location.pathname) || ''; }
 
-  function pageSearch() {
-    return (window.location && window.location.search) || '';
-  }
+  function pageSearch() { return (window.location && window.location.search) || ''; }
 
   // windowStart/untilISO turn the selected window into the absolute range a
   // drill-down hands to the log centre. The chart and the list must cover the same
@@ -99,11 +89,7 @@
     const gap = journalCoverageGap(range.since);
     if (gap) showToast(gap, 'info');
     const params = assignParams(new URLSearchParams({ tab: 'logs', kind: 'request' }), {
-      since: range.since.toISOString(),
-      until: range.until.toISOString(),
-      channel: state.channel,
-      model: state.model,
-    });
+      since: range.since.toISOString(), until: range.until.toISOString(), channel: state.channel, model: state.model });
     assignParams(params, extra);
     // The overview's own scope travels with the link, so the log centre can offer
     // "返回" and land on exactly the view that was left.
@@ -214,9 +200,7 @@
     return params;
   }
 
-  function fmtInt(value) {
-    return Number(value || 0).toLocaleString('zh-CN');
-  }
+  function fmtInt(value) { return Number(value || 0).toLocaleString('zh-CN'); }
 
   function fmtAmount(value) {
     const num = Number(value || 0);
@@ -235,9 +219,7 @@
     return value + ' ms';
   }
 
-  function fmtClock(date) {
-    return date.toLocaleTimeString('zh-CN', { hour12: false });
-  }
+  function fmtClock(date) { return date.toLocaleTimeString('zh-CN', { hour12: false }); }
 
   function fmtMinute(iso) {
     if (!iso) return '';
@@ -246,9 +228,7 @@
     return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
   }
 
-  function emptyChart(container, text) {
-    emptyNote(container, text, 'ops-chart-empty');
-  }
+  function emptyChart(container, text) { emptyNote(container, text, 'ops-chart-empty'); }
 
   // --- charts (inline SVG; no chart library) --------------------------------
 
@@ -273,15 +253,7 @@
   // re-derives "where does the plot start" from its own padding constants.
   function plotBox(container, fallbackHeight, pad) {
     const box = chartBox(container, fallbackHeight);
-    return {
-      width: box.width,
-      height: box.height,
-      left: pad.left,
-      right: box.width - pad.right,
-      top: pad.top,
-      plotW: box.width - pad.left - pad.right,
-      plotH: box.height - pad.top - pad.bottom,
-    };
+    return { width: box.width, height: box.height, left: pad.left, right: box.width - pad.right, top: pad.top, plotW: box.width - pad.left - pad.right, plotH: box.height - pad.top - pad.bottom };
   }
 
   function svgEl(name, attrs) {
@@ -359,10 +331,7 @@
     axisLabels(svg, box, maxValue, 4, options.axisFormat);
 
     const step = box.plotW / Math.max(points.length - 1, 1);
-    const coords = points.map((point, index) => ({
-      x: points.length === 1 ? box.left + box.plotW / 2 : box.left + step * index,
-      y: box.top + box.plotH - (point.value / maxValue) * box.plotH,
-    }));
+    const coords = points.map((point, index) => ({ x: points.length === 1 ? box.left + box.plotW / 2 : box.left + step * index, y: box.top + box.plotH - (point.value / maxValue) * box.plotH }));
 
     if (options.area) {
       const baseline = (box.top + box.plotH).toFixed(1);
@@ -372,10 +341,7 @@
       }));
     }
 
-    svg.appendChild(svgEl('path', {
-      d: polyPath(coords, points.map((point) => point.value)),
-      class: options.className || 'series-qps',
-    }));
+    svg.appendChild(svgEl('path', { d: polyPath(coords, points.map((point) => point.value)), class: options.className || 'series-qps' }));
     // A sample alone in a gap would be invisible without a dot: a one-point path
     // has no segment to draw.
     coords.forEach((coord, index) => {
@@ -424,11 +390,7 @@
       const barH = Math.max(point.value > 0 ? 3 : 0.6, (point.value / maxValue) * box.plotH);
       const bar = svgEl('rect', {
         x: box.left + barStep * index,
-        y: box.top + box.plotH - barH,
-        width: barW,
-        height: barH,
-        class: (point.value > 0 || !opts.markZero) && opts.errorBars ? 'bar is-error' : 'bar',
-      });
+        y: box.top + box.plotH - barH, width: barW, height: barH, class: (point.value > 0 || !opts.markZero) && opts.errorBars ? 'bar is-error' : 'bar' });
       bar.appendChild(svgEl('title', {})).textContent = `${point.label}：${point.value}`;
       if (opts.onSelect) {
         // A chart that cannot be interrogated is a poster: the bar carries the
@@ -440,14 +402,8 @@
     if (overlay.length === points.length) {
       // The attempt-failure series shares the axis (both are request counts), so it
       // is drawn as a line over the bars rather than as a second scale.
-      const coords = overlay.map((point, index) => ({
-        x: box.left + barStep * index + barW / 2,
-        y: box.top + box.plotH - (point.value / maxValue) * box.plotH,
-      }));
-      svg.appendChild(svgEl('polyline', {
-        points: coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' '),
-        class: 'series-alt',
-      }));
+      const coords = overlay.map((point, index) => ({ x: box.left + barStep * index + barW / 2, y: box.top + box.plotH - (point.value / maxValue) * box.plotH }));
+      svg.appendChild(svgEl('polyline', { points: coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' '), class: 'series-alt' }));
     }
     timeAxis(svg, box, points, (index) => box.left + barStep * index + barW / 2);
     container.replaceChildren();
@@ -689,10 +645,7 @@
     // rateSeries turns the minute buckets into one line of points: per-second
     // rates, because the bucket still in progress covers fewer than 60 seconds.
     function rateSeries(tokenSum) {
-      return buckets.map((point) => ({
-        label: fmtMinute(point.minute),
-        value: tokenSum(point) / point.seconds,
-      }));
+      return buckets.map((point) => ({ label: fmtMinute(point.minute), value: tokenSum(point) / point.seconds }));
     }
     const qpsPoints = rateSeries((point) => point.requests);
     const tpsPoints = rateSeries((point) => (point.input_tokens || 0) + (point.output_tokens || 0));
@@ -847,10 +800,7 @@
   // bucketSeries turns the minute buckets into chart points. The value is taken
   // per point because every trend plots a different field of the same buckets.
   function bucketSeries(points, valueOf) {
-    return points.map((point) => ({
-      label: fmtMinute(point.minute),
-      value: valueOf(point),
-    }));
+    return points.map((point) => ({ label: fmtMinute(point.minute), value: valueOf(point) }));
   }
 
   function renderTrends(payload) {
@@ -872,14 +822,7 @@
       const tps = rateSeries((point) => (point.input_tokens || 0) + (point.output_tokens || 0));
       const hasTokens = tps.some((point) => point.value > 0);
       lineChart(throughput, {
-        points: qps,
-        secondaryPoints: hasTokens ? tps : null,
-        area: true,
-        className: 'series-qps',
-        height: 190,
-        rightAxis: hasTokens,
-        emptyText: '这段时间没有流量样本。',
-      });
+        points: qps, secondaryPoints: hasTokens ? tps : null, area: true, className: 'series-qps', height: 190, rightAxis: hasTokens, emptyText: '这段时间没有流量样本。' });
       setText('opsThroughputHint', hasTokens
         ? '左轴 QPS（次/秒） · 右轴 TPS（token/秒） · 当前分钟按已过时间计算'
         : '左轴 QPS（次/秒） · 窗口内请求未上报用量，TPS 暂不绘制');
@@ -891,11 +834,7 @@
       lineChart(switchTrend, {
         points: bucketSeries(points, (point) => (point.account_switch_count
           ? (point.account_switch_sum || 0) / point.account_switch_count
-          : null)),
-        className: 'series-switch',
-        height: 150,
-        emptyText: '这段时间没有账号切换样本。',
-      });
+          : null)), className: 'series-switch', height: 150, emptyText: '这段时间没有账号切换样本。' });
     }
     const errorTrend = el('opsErrorTrend');
     if (errorTrend) {
@@ -923,11 +862,7 @@
           const point = points[index];
           if (!point) return;
           const minute = new Date(point.minute);
-          drilldownToLogs({
-            outcome: 'failed',
-            since: minute.toISOString(),
-            until: new Date(minute.getTime() + 60 * 1000).toISOString(),
-          });
+          drilldownToLogs({ outcome: 'failed', since: minute.toISOString(), until: new Date(minute.getTime() + 60 * 1000).toISOString() });
         },
       });
     }
@@ -1513,8 +1448,6 @@
     bind();
     load();
   }
-  if (typeof document.addEventListener === 'function') {
-    document.addEventListener('visibilitychange', flushPendingRefresh);
-  }
+  if (typeof document.addEventListener === 'function') { document.addEventListener('visibilitychange', flushPendingRefresh); }
   state.timer = setInterval(tick, 1000);
 })();

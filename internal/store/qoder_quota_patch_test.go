@@ -31,15 +31,9 @@ func TestUpdateQoderAccountQuotaPatchRespectsFreshness(t *testing.T) {
 	}
 
 	got, err := s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.QoderQuota.Exhausted {
-		t.Fatalf("a notice against an empty snapshot was dropped: %+v", got.QoderQuota)
-	}
-	if !got.QoderQuota.ResetAt.Equal(reset) {
-		t.Fatalf("ResetAt = %v, want %v", got.QoderQuota.ResetAt, reset)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, !got.QoderQuota.Exhausted, "a notice against an empty snapshot was dropped: %+v", got.QoderQuota)
+	testutil.Falsef(t, !got.QoderQuota.ResetAt.Equal(reset), "ResetAt = %v, want %v", got.QoderQuota.ResetAt, reset)
 
 	// A newer notice replaces it, including the boundary the upstream named.
 	newer := first.Add(time.Minute)
@@ -50,12 +44,8 @@ func TestUpdateQoderAccountQuotaPatchRespectsFreshness(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.QoderQuota.ResetAt.Equal(newReset) {
-		t.Fatalf("ResetAt = %v, want the newer boundary %v", got.QoderQuota.ResetAt, newReset)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, !got.QoderQuota.ResetAt.Equal(newReset), "ResetAt = %v, want the newer boundary %v", got.QoderQuota.ResetAt, newReset)
 
 	// A notice older than the stored reading must not move it backwards.
 	if err := s.UpdateQoderAccount(context.Background(), acc.ID, QoderAccountPatch{
@@ -64,21 +54,13 @@ func TestUpdateQoderAccountQuotaPatchRespectsFreshness(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.QoderQuota.ResetAt.Equal(newReset) || !got.QoderQuota.Exhausted {
-		t.Fatalf("a stale notice rewound the snapshot: reset=%v snapshot=%+v", got.QoderQuota.ResetAt, got.QoderQuota)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, !got.QoderQuota.ResetAt.Equal(newReset) || !got.QoderQuota.Exhausted, "a stale notice rewound the snapshot: reset=%v snapshot=%+v", got.QoderQuota.ResetAt, got.QoderQuota)
 
 	// A patch that carries no quota leaves the stored snapshot alone, which is
 	// what a plain credential rotation relies on.
 	testutil.NoError(t, s.UpdateQoderAccount(context.Background(), acc.ID, QoderAccountPatch{UserID: "u-1"}))
 	got, err = s.GetAccount(context.Background(), acc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.QoderQuota.ResetAt.Equal(newReset) || got.QoderUserID != "u-1" {
-		t.Fatalf("a credential patch disturbed the quota: user=%q snapshot=%+v", got.QoderUserID, got.QoderQuota)
-	}
+	testutil.NoError(t, err)
+	testutil.Falsef(t, !got.QoderQuota.ResetAt.Equal(newReset) || got.QoderUserID != "u-1", "a credential patch disturbed the quota: user=%q snapshot=%+v", got.QoderUserID, got.QoderQuota)
 }

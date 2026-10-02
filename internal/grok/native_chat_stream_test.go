@@ -41,9 +41,7 @@ func TestStreamBuildChatStreamsFirstReasoningSourceWithoutDuplicates(t *testing.
 	}, "\n")
 	(&Handler{}).streamBuildChatHolding(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(stream), nil)
 	raw := recorder.Body.String()
-	if !strings.Contains(raw, `"reasoning_content":"duplicate summary"`) || strings.Contains(raw, "raw reasoning") {
-		t.Fatalf("first reasoning source should stream immediately without later duplication: %q", raw)
-	}
+	testutil.Falsef(t, !strings.Contains(raw, `"reasoning_content":"duplicate summary"`) || strings.Contains(raw, "raw reasoning"), "first reasoning source should stream immediately without later duplication: %q", raw)
 }
 
 func TestCollectBuildChatSeparatesReasoningFromContent(t *testing.T) {
@@ -54,9 +52,8 @@ func TestCollectBuildChatSeparatesReasoningFromContent(t *testing.T) {
 	testutil.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	choice := interfaceSlice(response["choices"])[0].(map[string]interface{})
 	message := choice["message"].(map[string]interface{})
-	if message["content"] != "public answer" || message["reasoning_content"] != "private plan" {
-		t.Fatalf("message=%#v", message)
-	}
+	testutil.Equal(t, message["content"], "public answer")
+	testutil.Equal(t, message["reasoning_content"], "private plan")
 }
 
 type failingBuildStreamReader struct {
@@ -84,7 +81,5 @@ func TestStreamBuildChatReportsScannerError(t *testing.T) {
 	(&Handler{}).streamBuildChatHolding(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, &failingBuildStreamReader{}, nil)
 
 	body := recorder.Body.String()
-	if !strings.Contains(body, "event: error") || !strings.Contains(body, "Use the request ID") || strings.Contains(body, "upstream connection interrupted") || !strings.Contains(body, "data: [DONE]") {
-		t.Fatalf("stream=%q want explicit SSE read error and terminator", body)
-	}
+	testutil.Falsef(t, !strings.Contains(body, "event: error") || !strings.Contains(body, "Use the request ID") || strings.Contains(body, "upstream connection interrupted") || !strings.Contains(body, "data: [DONE]"), "stream=%q want explicit SSE read error and terminator", body)
 }

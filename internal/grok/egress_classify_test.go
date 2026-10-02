@@ -60,9 +60,7 @@ func TestClassifyUpstreamError_LegacyText(t *testing.T) {
 		{name: "nil", err: nil, want: UpstreamErrorUnknown},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			testutil.Equal(t, ClassifyUpstreamError(c.err), c.want)
-		})
+		t.Run(c.name, func(t *testing.T) { testutil.Equal(t, ClassifyUpstreamError(c.err), c.want) })
 	}
 }
 
@@ -78,8 +76,6 @@ func TestClassifyUpstreamError_PlainText(t *testing.T) {
 		{name: "legacy no status", err: errors.New("forbidden"), want: UpstreamErrorUnknown},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			testutil.Equal(t, ClassifyUpstreamError(c.err), c.want)
-		})
+		t.Run(c.name, func(t *testing.T) { testutil.Equal(t, ClassifyUpstreamError(c.err), c.want) })
 	}
 }

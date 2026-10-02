@@ -61,9 +61,7 @@ type PoolExhaustion struct {
 
 // Empty reports whether the classifier recognised the cause. Callers use it to
 // decide between the classified answer and their own default.
-func (p PoolExhaustion) Empty() bool {
-	return strings.TrimSpace(p.Category) == ""
-}
+func (p PoolExhaustion) Empty() bool { return strings.TrimSpace(p.Category) == "" }
 
 // ClassifyPoolExhaustion maps "no account in this channel could take this
 // request" onto the answer the client gets.

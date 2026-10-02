@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/util"
 )
 
 type captureResponseWriter struct {
@@ -23,9 +24,7 @@ func newCaptureResponseWriter() *captureResponseWriter {
 	return &captureResponseWriter{header: make(http.Header), code: http.StatusOK}
 }
 
-func (w *captureResponseWriter) Header() http.Header {
-	return w.header
-}
+func (w *captureResponseWriter) Header() http.Header { return w.header }
 
 func (w *captureResponseWriter) WriteHeader(code int) {
 	if code != 0 {
@@ -33,9 +32,7 @@ func (w *captureResponseWriter) WriteHeader(code int) {
 	}
 }
 
-func (w *captureResponseWriter) Write(p []byte) (int, error) {
-	return w.body.Write(p)
-}
+func (w *captureResponseWriter) Write(p []byte) (int, error) { return w.body.Write(p) }
 
 func (w *captureResponseWriter) Flush() {}
 
@@ -733,9 +730,7 @@ func responseFunctionCallItem(call map[string]interface{}) map[string]interface{
 		return nil
 	}
 	args := streamString(fn["arguments"])
-	if args == "" {
-		args = "{}"
-	}
+	args = util.FirstNonEmptyUntrimmed(args, "{}")
 	return map[string]interface{}{
 		"id":        "fc_" + randomHex(12),
 		"type":      "function_call",

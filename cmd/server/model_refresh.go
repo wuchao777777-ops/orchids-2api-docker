@@ -177,20 +177,14 @@ func (c *modelRefreshCoordinator) tryAcquire(channel string) (func(), bool) {
 		return func() {}, true
 	}
 	key := strings.ToLower(strings.TrimSpace(channel))
-	if key == "" {
-		key = "*"
-	}
+	key = util.FirstNonEmptyUntrimmed(key, "*")
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, exists := c.running[key]; exists {
 		return nil, false
 	}
 	c.running[key] = struct{}{}
-	return func() {
-		c.mu.Lock()
-		delete(c.running, key)
-		c.mu.Unlock()
-	}, true
+	return func() { c.mu.Lock(); delete(c.running, key); c.mu.Unlock() }, true
 }
 
 func acquireDistributedModelRefresh(ctx context.Context, s *store.Store, channel string) (func(), bool) {

@@ -69,19 +69,15 @@ func TestPublicModelsOmitUnobservedContextWindow(t *testing.T) {
 
 	entries := fetchPublicModels(t, h, "/cline/v1/models")
 	entry, ok := entries["gpt-5-nano"]
-	if !ok {
-		t.Fatalf("model missing from the list: %#v", entries)
-	}
-	if entry.ContextLength != 0 || entry.MaxInputTokens != 0 {
-		t.Fatalf("unobserved window must be omitted, got %+v", entry)
-	}
+	testutil.True(t, ok, "model missing from the list: %#v")
+	testutil.Equal(t, entry.ContextLength, 0)
+	testutil.Equal(t, entry.MaxInputTokens, 0)
 
 	// Re-encode to prove the field is absent rather than present-and-zero.
 	rec := httptest.NewRecorder()
 	h.HandleModels(rec, httptest.NewRequest(http.MethodGet, "http://example.com/cline/v1/models", nil))
-	if body := rec.Body.String(); containsJSONField(body, "context_length") {
-		t.Fatalf("context_length must not be serialized when unobserved: %s", body)
-	}
+	body := rec.Body.String()
+	testutil.Falsef(t, containsJSONField(body, "context_length"), "context_length must not be serialized when unobserved: %s", body)
 }
 
 func TestPublicModelsPublishWorkBuddyContextWindow(t *testing.T) {

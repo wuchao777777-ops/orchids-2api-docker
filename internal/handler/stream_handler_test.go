@@ -41,9 +41,7 @@ func (w *failingResponseWriter) Write([]byte) (int, error) { return 0, w.err }
 func (w *failingResponseWriter) WriteHeader(int)           {}
 func (w *failingResponseWriter) Flush()                    {}
 
-func newFlushRecorder() *flushRecorder {
-	return &flushRecorder{header: make(http.Header), code: 200}
-}
+func newFlushRecorder() *flushRecorder { return &flushRecorder{header: make(http.Header), code: 200} }
 
 func (r *flushRecorder) Header() http.Header         { return r.header }
 func (r *flushRecorder) Write(b []byte) (int, error) { return r.buf.Write(b) }
@@ -54,59 +52,45 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	newline := string(byte('\n'))
 	expectedText := "he" + "\"" + "llo" + newline + "next"
 	raw, err := marshalSSEContentBlockDeltaTextBytes(7, expectedText)
-	if err != nil {
-		t.Fatalf("marshal text delta: %v", err)
-	}
+	testutil.NoError(t, err, "marshal text delta: %v")
 	var delta map[string]any
 	testutil.NoError(t, json.Unmarshal(raw, &delta), "unmarshal text delta: %v")
 	testutil.Equal(t, int(delta["index"].(float64)), 7)
 	deltaObj := delta["delta"].(map[string]any)
-	if deltaObj["type"] != "text_delta" || deltaObj["text"] != expectedText {
-		t.Fatalf("unexpected delta payload: %#v", deltaObj)
-	}
+	testutil.Equal(t, deltaObj["type"], "text_delta")
+	testutil.EqualAny(t, deltaObj["text"], expectedText)
 
 	expectedToolID := `tool_"1`
 	expectedToolName := "Wr" + newline + "ite"
 	raw, err = appendSSEContentBlockStartToolUse(nil, 3, expectedToolID, expectedToolName)
-	if err != nil {
-		t.Fatalf("marshal tool start: %v", err)
-	}
+	testutil.NoError(t, err, "marshal tool start: %v")
 	var startPayload map[string]any
 	testutil.NoError(t, json.Unmarshal(raw, &startPayload), "unmarshal tool start: %v")
 	contentBlock := startPayload["content_block"].(map[string]any)
-	if contentBlock["id"] != expectedToolID || contentBlock["name"] != expectedToolName {
-		t.Fatalf("unexpected tool payload: %#v", contentBlock)
-	}
+	testutil.EqualAny(t, contentBlock["id"], expectedToolID)
+	testutil.EqualAny(t, contentBlock["name"], expectedToolName)
 
 	expectedSignature := "sig\"" + newline + "next"
 	rawBytes, err := appendSSEContentBlockStartThinking(nil, 4, expectedSignature)
-	if err != nil {
-		t.Fatalf("marshal thinking start: %v", err)
-	}
+	testutil.NoError(t, err, "marshal thinking start: %v")
 	var thinkingStartPayload map[string]any
 	testutil.NoError(t, json.Unmarshal(rawBytes, &thinkingStartPayload), "unmarshal thinking start: %v")
 	thinkingBlock := thinkingStartPayload["content_block"].(map[string]any)
-	if thinkingBlock["type"] != "thinking" || thinkingBlock["signature"] != expectedSignature {
-		t.Fatalf("unexpected thinking payload: %#v", thinkingBlock)
-	}
+	testutil.Equal(t, thinkingBlock["type"], "thinking")
+	testutil.EqualAny(t, thinkingBlock["signature"], expectedSignature)
 
 	expectedPartialJSON := "{\"path\":\"a.txt\",\"content\":\"he\\\"llo" + newline + "next\"}"
 	rawBytes, err = appendSSEContentBlockDeltaInputJSON(nil, 5, expectedPartialJSON)
-	if err != nil {
-		t.Fatalf("marshal input_json delta: %v", err)
-	}
+	testutil.NoError(t, err, "marshal input_json delta: %v")
 	var inputJSONPayload map[string]any
 	testutil.NoError(t, json.Unmarshal(rawBytes, &inputJSONPayload), "unmarshal input_json delta: %v")
 	inputDelta := inputJSONPayload["delta"].(map[string]any)
-	if inputDelta["type"] != "input_json_delta" || inputDelta["partial_json"] != expectedPartialJSON {
-		t.Fatalf("unexpected input_json payload: %#v", inputDelta)
-	}
+	testutil.Equal(t, inputDelta["type"], "input_json_delta")
+	testutil.EqualAny(t, inputDelta["partial_json"], expectedPartialJSON)
 
 	expectedStopReason := "tool_\"use" + newline + "next"
 	rawBytes, err = marshalSSEMessageDeltaBytes(expectedStopReason, 42)
-	if err != nil {
-		t.Fatalf("marshal message delta: %v", err)
-	}
+	testutil.NoError(t, err, "marshal message delta: %v")
 	var msg map[string]any
 	testutil.NoError(t, json.Unmarshal(rawBytes, &msg), "unmarshal message delta: %v")
 	testutil.Equal(t, msg["type"], "message_delta")
@@ -114,41 +98,29 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 	testutil.Equal(t, int(msg["usage"].(map[string]any)["output_tokens"].(float64)), 42)
 
 	msgStartRaw, err := marshalSSEMessageStartBytes("msg_123", "claude-test", 12, 0)
-	if err != nil {
-		t.Fatalf("marshal message start: %v", err)
-	}
+	testutil.NoError(t, err, "marshal message start: %v")
 	var msgStart map[string]any
 	testutil.NoError(t, json.Unmarshal(msgStartRaw, &msgStart), "unmarshal message start: %v")
 	testutil.Equal(t, msgStart["type"], "message_start")
 	messageObj := msgStart["message"].(map[string]any)
-	if messageObj["id"] != "msg_123" || messageObj["model"] != "claude-test" {
-		t.Fatalf("unexpected message object: %#v", messageObj)
-	}
+	testutil.Equal(t, messageObj["id"], "msg_123")
+	testutil.Equal(t, messageObj["model"], "claude-test")
 	usageObj := messageObj["usage"].(map[string]any)
-	if int(usageObj["input_tokens"].(float64)) != 12 || int(usageObj["output_tokens"].(float64)) != 0 {
-		t.Fatalf("unexpected usage object: %#v", usageObj)
-	}
+	testutil.Equal(t, int(usageObj["input_tokens"].(float64)), 12)
+	testutil.Equal(t, int(usageObj["output_tokens"].(float64)), 0)
 
 	plainText := "hello ??"
 	rawBytes, err = marshalSSEContentBlockDeltaTextBytes(9, plainText)
-	if err != nil {
-		t.Fatalf("marshal plain text delta: %v", err)
-	}
+	testutil.NoError(t, err, "marshal plain text delta: %v")
 	var plainDelta map[string]any
 	testutil.NoError(t, json.Unmarshal(rawBytes, &plainDelta), "unmarshal plain text delta: %v")
 	testutil.EqualAny(t, plainDelta["delta"].(map[string]any)["text"], plainText)
 
 	htmlEscaped := "<tag>&\u2028\u2029"
 	rawBytes, err = marshalSSEContentBlockDeltaTextBytes(10, htmlEscaped)
-	if err != nil {
-		t.Fatalf("marshal html escaped delta: %v", err)
-	}
-	if !bytes.Contains(rawBytes, []byte("\\u003c")) || !bytes.Contains(rawBytes, []byte("\\u003e")) || !bytes.Contains(rawBytes, []byte("\\u0026")) {
-		t.Fatalf("expected html-sensitive bytes to be escaped, got: %s", rawBytes)
-	}
-	if !bytes.Contains(rawBytes, []byte("\\u2028")) || !bytes.Contains(rawBytes, []byte("\\u2029")) {
-		t.Fatalf("expected line separator bytes to be escaped, got: %s", rawBytes)
-	}
+	testutil.NoError(t, err, "marshal html escaped delta: %v")
+	testutil.Falsef(t, !bytes.Contains(rawBytes, []byte("\\u003c")) || !bytes.Contains(rawBytes, []byte("\\u003e")) || !bytes.Contains(rawBytes, []byte("\\u0026")), "expected html-sensitive bytes to be escaped, got: %s", rawBytes)
+	testutil.Falsef(t, !bytes.Contains(rawBytes, []byte("\\u2028")) || !bytes.Contains(rawBytes, []byte("\\u2029")), "expected line separator bytes to be escaped, got: %s", rawBytes)
 	var escapedDelta map[string]any
 	testutil.NoError(t, json.Unmarshal(rawBytes, &escapedDelta), "unmarshal html escaped delta: %v")
 	testutil.EqualAny(t, escapedDelta["delta"].(map[string]any)["text"], htmlEscaped)
@@ -277,11 +249,9 @@ func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
 			},
 		},
 		{
-			name:    "text start",
-			marshal: func() ([]byte, error) { return marshalSSEContentBlockStartTextBytes(4) },
-			appendTo: func(dst []byte) ([]byte, error) {
-				return appendSSEContentBlockStartText(dst, 4)
-			},
+			name:     "text start",
+			marshal:  func() ([]byte, error) { return marshalSSEContentBlockStartTextBytes(4) },
+			appendTo: func(dst []byte) ([]byte, error) { return appendSSEContentBlockStartText(dst, 4) },
 		},
 		{
 			name:    "thinking start",
@@ -314,11 +284,9 @@ func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
 			},
 		},
 		{
-			name:    "block stop",
-			marshal: func() ([]byte, error) { return marshalSSEContentBlockStopBytes(9) },
-			appendTo: func(dst []byte) ([]byte, error) {
-				return appendSSEContentBlockStop(dst, 9)
-			},
+			name:     "block stop",
+			marshal:  func() ([]byte, error) { return marshalSSEContentBlockStopBytes(9) },
+			appendTo: func(dst []byte) ([]byte, error) { return appendSSEContentBlockStop(dst, 9) },
 		},
 		{
 			name:    "message delta",
@@ -333,16 +301,10 @@ func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			want, err := tt.marshal()
-			if err != nil {
-				t.Fatalf("marshal: %v", err)
-			}
+			testutil.NoError(t, err, "marshal: %v")
 			got, err := tt.appendTo(buf[:0])
-			if err != nil {
-				t.Fatalf("append: %v", err)
-			}
-			if !bytes.Equal(got, want) {
-				t.Fatalf("got=%s want=%s", got, want)
-			}
+			testutil.NoError(t, err, "append: %v")
+			testutil.Falsef(t, !bytes.Equal(got, want), "got=%s want=%s", got, want)
 			buf = got[:0]
 		})
 	}
@@ -401,15 +363,12 @@ func TestRewriteToolCallToClient_PrunesNestedUnknownTodoFields(t *testing.T) {
 		},
 	}})
 	name, input := h.rewriteToolCallToClient("TodoWrite", `{"todos":[{"content":"one","status":"pending","id":"1"}]}`)
-	if name != "TodoWrite" || strings.Contains(input, `"id"`) {
-		t.Fatalf("unexpected sanitized todo call: name=%s input=%s", name, input)
-	}
+	testutil.Falsef(t, name != "TodoWrite" || strings.Contains(input, `"id"`), "unexpected sanitized todo call: name=%s input=%s", name, input)
 	var payload map[string]interface{}
 	testutil.NoError(t, json.Unmarshal([]byte(input), &payload))
 	todos := payload["todos"].([]interface{})
-	if _, ok := todos[0].(map[string]interface{})["content"]; !ok {
-		t.Fatalf("content was lost: %s", input)
-	}
+	_, ok := todos[0].(map[string]interface{})["content"]
+	testutil.Falsef(t, !ok, "content was lost: %s", input)
 }
 
 // newStreamTestHandler builds a stream handler over a flushing recorder for a
@@ -419,10 +378,7 @@ func newStreamTestHandler(t *testing.T, streaming, toolMode bool, format adapter
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	sh := newStreamHandler(&config.Config{DebugEnabled: false}, rec, logger, streaming, toolMode, format)
-	t.Cleanup(func() {
-		sh.release()
-		logger.Close()
-	})
+	t.Cleanup(func() { sh.release(); logger.Close() })
 	return sh, rec
 }
 
@@ -486,9 +442,7 @@ func TestStreamHandler_TokensUsed_OverridesEstimation(t *testing.T) {
 
 	// finishing should keep upstream usage (useUpstreamUsage=true)
 	sh.finishResponse("end_turn")
-	if sh.inputTokens != 12 || sh.outputTokens != 34 {
-		t.Fatalf("unexpected usage: in=%d out=%d", sh.inputTokens, sh.outputTokens)
-	}
+	testutil.Falsef(t, sh.inputTokens != 12 || sh.outputTokens != 34, "unexpected usage: in=%d out=%d", sh.inputTokens, sh.outputTokens)
 }
 
 func TestStreamHandler_UsageMissingFieldsKeepLocalEstimate(t *testing.T) {
@@ -496,15 +450,11 @@ func TestStreamHandler_UsageMissingFieldsKeepLocalEstimate(t *testing.T) {
 	defer sh.release()
 	sh.inputTokens, sh.outputTokens = 31, 17
 	sh.applyUpstreamUsageTokens(map[string]interface{}{"output_tokens": 9, "credits": 0.5})
-	if !sh.useUpstreamUsage || sh.inputTokens != 31 || sh.outputTokens != 9 || sh.usageMetadata["credits"] != 0.5 {
-		t.Fatalf("partial usage overwrote estimate or lost metadata: input=%d output=%d metadata=%v", sh.inputTokens, sh.outputTokens, sh.usageMetadata)
-	}
+	testutil.Falsef(t, !sh.useUpstreamUsage || sh.inputTokens != 31 || sh.outputTokens != 9 || sh.usageMetadata["credits"] != 0.5, "partial usage overwrote estimate or lost metadata: input=%d output=%d metadata=%v", sh.inputTokens, sh.outputTokens, sh.usageMetadata)
 	sh.resetRoundState()
 	sh.inputTokens, sh.outputTokens = 31, 17
 	sh.applyUpstreamUsageTokens(map[string]interface{}{"original_credits": 0.25})
-	if !sh.useUpstreamUsage || sh.inputTokens != 31 || sh.outputTokens != 17 || sh.usageMetadata["original_credits"] != 0.25 {
-		t.Fatalf("credits-only usage lost evidence or estimate: input=%d output=%d metadata=%v", sh.inputTokens, sh.outputTokens, sh.usageMetadata)
-	}
+	testutil.Falsef(t, !sh.useUpstreamUsage || sh.inputTokens != 31 || sh.outputTokens != 17 || sh.usageMetadata["original_credits"] != 0.25, "credits-only usage lost evidence or estimate: input=%d output=%d metadata=%v", sh.inputTokens, sh.outputTokens, sh.usageMetadata)
 }
 
 func TestStreamHandler_DetailedUsageIsAssignedIdempotently(t *testing.T) {
@@ -517,16 +467,11 @@ func TestStreamHandler_DetailedUsageIsAssignedIdempotently(t *testing.T) {
 	}
 	sh.handleMessage(upstream.SSEMessage{Type: "model.tokens-used", Event: usage})
 	sh.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"usage": usage}})
-	if sh.inputTokens != 1000 || sh.outputTokens != 20 || sh.cachedInputTokens != 900 || sh.cacheWriteTokens != 50 || sh.reasoningTokens != 7 {
-		t.Fatalf("detailed usage lost or doubled: in=%d out=%d cached=%d write=%d reasoning=%d", sh.inputTokens, sh.outputTokens, sh.cachedInputTokens, sh.cacheWriteTokens, sh.reasoningTokens)
-	}
-	if sh.usageMetadata["credits"] != 0.25 || sh.usageMetadata["original_credits"] != 0.5 {
-		t.Fatalf("usage metadata = %#v", sh.usageMetadata)
-	}
+	testutil.Falsef(t, sh.inputTokens != 1000 || sh.outputTokens != 20 || sh.cachedInputTokens != 900 || sh.cacheWriteTokens != 50 || sh.reasoningTokens != 7, "detailed usage lost or doubled: in=%d out=%d cached=%d write=%d reasoning=%d", sh.inputTokens, sh.outputTokens, sh.cachedInputTokens, sh.cacheWriteTokens, sh.reasoningTokens)
+	testutil.Equal(t, sh.usageMetadata["credits"], 0.25)
+	testutil.Equal(t, sh.usageMetadata["original_credits"], 0.5)
 	sh.resetRoundState()
-	if sh.cachedInputTokens != 0 || sh.cacheWriteTokens != 0 || sh.reasoningTokens != 0 || sh.usageMetadata != nil {
-		t.Fatalf("detailed usage survived round reset: %+v", sh)
-	}
+	testutil.Falsef(t, sh.cachedInputTokens != 0 || sh.cacheWriteTokens != 0 || sh.reasoningTokens != 0 || sh.usageMetadata != nil, "detailed usage survived round reset: %+v", sh)
 }
 
 func TestStreamHandler_FinalOutputTokens_MatchChunkedText(t *testing.T) {
@@ -575,9 +520,7 @@ func TestStreamHandler_TerminalWriteFailureOverridesClaimedSuccess(t *testing.T)
 	sh.finishResponse("end_turn")
 
 	returned, failed := sh.terminalState()
-	if !returned || !failed {
-		t.Fatalf("terminal state = returned:%v failed:%v, want terminal failure", returned, failed)
-	}
+	testutil.Falsef(t, !returned || !failed, "terminal state = returned:%v failed:%v, want terminal failure", returned, failed)
 	testutil.Equal(t, sh.finalStopReason, "write_error")
 }
 
@@ -601,9 +544,8 @@ func TestStreamHandler_TerminalStateAndKeepAliveAreRaceSafe(t *testing.T) {
 	}()
 	wg.Wait()
 
-	if returned, _ := sh.terminalState(); !returned {
-		t.Fatal("handler did not reach terminal state")
-	}
+	returned, _ := sh.terminalState()
+	testutil.False(t, !returned, "handler did not reach terminal state")
 }
 
 func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
@@ -622,9 +564,7 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	testutil.Equal(t, rec.flushes, 1)
 
 	thinkingData, err := appendSSEContentBlockDeltaThinking(nil, 0, "step")
-	if err != nil {
-		t.Fatalf("marshal thinking delta: %v", err)
-	}
+	testutil.NoError(t, err, "marshal thinking delta: %v")
 	// The seed above wrote the opening frame without marking the stream started
 	// (production's writeMessageStartLocked is what sets messageStartWritten), so
 	// the first delta also emits the deferred opening frame and flushes it. The
@@ -643,9 +583,7 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	testutil.Equal(t, rec.flushes, 3)
 
 	textData, err := marshalSSEContentBlockDeltaTextBytes(0, "hi")
-	if err != nil {
-		t.Fatalf("marshal text delta: %v", err)
-	}
+	testutil.NoError(t, err, "marshal text delta: %v")
 	writeFrame("content_block_delta", textData)
 	testutil.Equal(t, rec.flushes, 4)
 }
@@ -722,9 +660,7 @@ func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
 	// report that decides the fallback is the terminal one, and that is where the
 	// synthesised text has to be counted.
 	terminalAt := strings.Index(out, "event: message_delta")
-	if terminalAt < 0 {
-		t.Fatalf("expected a terminal usage report, got: %s", out)
-	}
+	testutil.Falsef(t, terminalAt < 0, "expected a terminal usage report, got: %s", out)
 	terminal := out[terminalAt:]
 	testutil.MustNotContain(t, terminal, `"output_tokens":0`)
 	testutil.MustContain(t, terminal, `"usage":{"output_tokens":`)
@@ -732,17 +668,13 @@ func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
 
 func TestResponseMessageID_OpenAIUsesChatCompletionPrefix(t *testing.T) {
 	id := responseMessageID(adapter.FormatOpenAI)
-	if !strings.HasPrefix(id, "chatcmpl-") {
-		t.Fatalf("id=%q want chatcmpl- prefix", id)
-	}
+	testutil.Falsef(t, !strings.HasPrefix(id, "chatcmpl-"), "id=%q want chatcmpl- prefix", id)
 	testutil.NotEqual(t, id, responseMessageID(adapter.FormatOpenAI))
 }
 
 func TestResponseMessageID_AnthropicKeepsMessagePrefix(t *testing.T) {
 	id := responseMessageID(adapter.FormatAnthropic)
-	if !strings.HasPrefix(id, "msg_") {
-		t.Fatalf("id=%q want msg_ prefix", id)
-	}
+	testutil.Falsef(t, !strings.HasPrefix(id, "msg_"), "id=%q want msg_ prefix", id)
 }
 
 func TestStreamHandler_ReasoningCountsAsUpstreamOutputWhenSuppressed(t *testing.T) {
@@ -753,12 +685,8 @@ func TestStreamHandler_ReasoningCountsAsUpstreamOutputWhenSuppressed(t *testing.
 		Event: map[string]any{"delta": "already generated and potentially billed"},
 	})
 
-	if !sh.hasAnyOutput() {
-		t.Fatal("suppressed reasoning must count as upstream output to prevent a billed retry")
-	}
-	if sh.hasVisibleOutput() {
-		t.Fatal("suppressed reasoning must not become visible client output")
-	}
+	testutil.False(t, !sh.hasAnyOutput(), "suppressed reasoning must count as upstream output to prevent a billed retry")
+	testutil.False(t, sh.hasVisibleOutput(), "suppressed reasoning must not become visible client output")
 }
 
 // TestReportRequestFailure_ClientRejectionAnswers400 pins the branch the

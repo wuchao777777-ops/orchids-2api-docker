@@ -14,9 +14,7 @@ data: { "type":"response.completed", "id":"resp_ok", "response":{"id":"resp_ok",
 `
 	rec := httptest.NewRecorder()
 	_, _, result := copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(line), "text/event-stream", "grok-4.6")
-	if result.Err != nil {
-		t.Fatal(result.Err)
-	}
+	testutil.Fail(t, result.Err != nil, result.Err)
 	// The native relay is byte-transparent: an event that already carries every
 	// field reaches the client exactly as the upstream wrote it, with no added
 	// frame (grok2api relays the same way).
@@ -29,9 +27,7 @@ func TestNativeResponsesCompatibilitySupplementsStrictClientFields(t *testing.T)
 		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
 	rec := httptest.NewRecorder()
 	_, _, result := copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(stream), "text/event-stream", "grok-4.6")
-	if result.Err != nil {
-		t.Fatal(result.Err)
-	}
+	testutil.Fail(t, result.Err != nil, result.Err)
 	got := rec.Body.String()
 	for _, required := range []string{`"annotations":[]`, `"id":"item_1"`, `"item_id":"item_1"`, `"object":"response"`, `"model":"grok-4.6"`, `"output":[]`} {
 		testutil.MustContain(t, got, required)

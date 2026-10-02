@@ -56,9 +56,7 @@ func TestSecretsCoversEveryCredentialShapedField(t *testing.T) {
 				break
 			}
 		}
-		if !covered {
-			t.Errorf("Account.%s looks like a credential but Secrets() does not return it", field.Name)
-		}
+		testutil.CheckTrue(t, covered, "Account.%s looks like a credential but Secrets() does not return it")
 		value.Field(i).SetString("")
 	}
 

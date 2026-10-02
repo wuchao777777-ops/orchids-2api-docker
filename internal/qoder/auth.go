@@ -32,6 +32,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -121,19 +122,12 @@ var (
 // backslashes a nested body carries, so a marker is recognised whether the body
 // arrived as raw JSON or as a JSON string one envelope deeper: `{"isQueued":true}`
 // and `{\"isQueued\":true}` normalise to the same text.
-func markerText(value string) string {
-	return strings.ReplaceAll(strings.ToLower(value), `\`, "")
-}
+func markerText(value string) string { return strings.ReplaceAll(strings.ToLower(value), `\`, "") }
 
 // IsDailyCountExceeded reports Qoder's per-account daily request-count refusal,
 // whatever envelope carried it.
 func IsDailyCountExceeded(values ...string) bool {
-	for _, value := range values {
-		if strings.Contains(markerText(value), "billing daily count exceeded") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(values, func(value string) bool { return strings.Contains(markerText(value), "billing daily count exceeded") })
 }
 
 // Credentials is the device credential pair plus the identity observed at login.
@@ -216,9 +210,7 @@ func resolveClientVersion(cfg *config.Config) string {
 
 // userAgent is the value the CLI identifies itself with, and the Cosy-Version
 // family value.
-func userAgent(version string) string {
-	return "qoder/" + version
-}
+func userAgent(version string) string { return "qoder/" + version }
 
 // signPath is the path component the COSY signature covers: the request path
 // without the `/algo` gateway prefix and without the query string.
@@ -352,6 +344,26 @@ type Profile struct {
 	OrgTags []string `json:"organization_tags"`
 }
 
+// ApplyToAccount applies non-empty identity fields and copies tags, keeping the
+// caller's account independent of the profile response backing array.
+func (profile Profile) ApplyToAccount(acc *store.Account) {
+	if uid := strings.TrimSpace(profile.UID); uid != "" {
+		acc.QoderUserID = uid
+	}
+	if name := strings.TrimSpace(profile.Name); name != "" {
+		acc.QoderUserName = name
+	}
+	if email := strings.TrimSpace(profile.Email); email != "" {
+		acc.Email = email
+	}
+	if orgID := strings.TrimSpace(profile.OrgID); orgID != "" {
+		acc.QoderOrganizationID = orgID
+	}
+	if len(profile.OrgTags) > 0 {
+		acc.QoderOrganizationTags = append([]string(nil), profile.OrgTags...)
+	}
+}
+
 // DeviceToken is the token pair one device flow exchange returned.
 type DeviceToken struct {
 	AccessToken      string    `json:"token"`
@@ -419,12 +431,7 @@ const pricingURLFragment = "qoder.com/pricing"
 // disable a perfectly valid account — which is exactly the misdiagnosis this
 // function exists to prevent.
 func DetectNoEntitlement(values ...string) bool {
-	for _, value := range values {
-		if strings.Contains(value, pricingURLFragment) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(values, func(value string) bool { return strings.Contains(value, pricingURLFragment) })
 }
 
 // entitlementError renders an entitlement refusal.
@@ -509,9 +516,7 @@ func sharedQueueRefusal(values ...string) bool {
 // envelopeCode returns the business code of an upstream error body. The gateway
 // reports 10605 (queue/concurrency refusal) as a string inside a 401/403
 // envelope, which is why the code is read before the HTTP status is trusted.
-func envelopeCode(raw []byte) string {
-	return envelopeCodeDepth(bytes.TrimSpace(raw), 0)
-}
+func envelopeCode(raw []byte) string { return envelopeCodeDepth(bytes.TrimSpace(raw), 0) }
 
 func envelopeCodeDepth(raw []byte, depth int) string {
 	if depth > 4 || len(raw) == 0 {

@@ -49,9 +49,7 @@ function switchConfigTab(tab) {
 // Toggle password visibility
 function togglePassword(fieldId) {
   const field = document.getElementById(fieldId);
-  if (field) {
-    field.type = field.type === 'password' ? 'text' : 'password';
-  }
+  if (field) { field.type = field.type === 'password' ? 'text' : 'password'; }
 }
 
 // ── Unsaved-change tracking ───────────────────────────────────────────────────
@@ -101,9 +99,7 @@ function syncToggleElement(checkbox) {
   if (label) label.classList.toggle("active", !!checkbox.checked);
 }
 
-function syncAllToggleStates() {
-  document.querySelectorAll(".toggle input[type=checkbox]").forEach(syncToggleElement);
-}
+function syncAllToggleStates() { document.querySelectorAll(".toggle input[type=checkbox]").forEach(syncToggleElement); }
 
 function countConfigChanges() {
   if (!configBaseline) return 0;
@@ -184,9 +180,7 @@ function resetConfigChanges() {
     if (!field || !(id in configBaseline)) return;
     if (field.type === "checkbox") {
       field.checked = configBaseline[id] === "true";
-    } else {
-      field.value = configBaseline[id];
-    }
+    } else { field.value = configBaseline[id]; }
   });
   setConfigSaveError("");
   handleConfigFieldChange();
@@ -218,9 +212,7 @@ function bindConfigNav() {
     let current = links[0].getAttribute("data-nav-group");
     links.forEach((link) => {
       const section = document.getElementById(link.getAttribute("data-nav-group"));
-      if (section && section.getBoundingClientRect().top <= 160) {
-        current = link.getAttribute("data-nav-group");
-      }
+      if (section && section.getBoundingClientRect().top <= 160) { current = link.getAttribute("data-nav-group"); }
     });
     setActiveConfigNav(current);
   };
@@ -251,9 +243,7 @@ function setConfigControlValue(id, value) {
 }
 
 function applyConfigurationPayload(cfg) {
-  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
-    throw new Error("配置接口返回格式无效");
-  }
+  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) { throw new Error("配置接口返回格式无效"); }
   setConfigControlValue("cfg_admin_pass", cfg.admin_password || cfg.admin_pass || "");
   setConfigControlValue("cfg_anonymous_allow_ips", Array.isArray(cfg.anonymous_allow_ips) ? cfg.anonymous_allow_ips.join("\n") : "");
   setConfigControlValue("cfg_proxy_url", cfg.proxy_url || "");
@@ -263,9 +253,7 @@ function applyConfigurationPayload(cfg) {
 async function loadConfiguration() {
   try {
     const payload = await ConsoleAPI.json('/api/config/list', { cache: 'no-store' });
-    if (payload && typeof payload.code !== 'undefined' && payload.code !== 0) {
-      throw new Error(ConsoleAPI.detail(payload, '加载配置失败'));
-    }
+    if (payload && typeof payload.code !== 'undefined' && payload.code !== 0) { throw new Error(ConsoleAPI.detail(payload, '加载配置失败')); }
     applyConfigurationPayload(payload?.data ?? payload);
     setConfigSaveError("");
     return true;
@@ -307,9 +295,7 @@ async function saveConfiguration() {
     });
     if (!res.ok) throw new Error(await res.text());
     const payload = await res.json();
-    if (payload.code !== 0) {
-      throw new Error(payload.message || payload.msg || "保存失败");
-    }
+    if (payload.code !== 0) { throw new Error(payload.message || payload.msg || "保存失败"); }
     setConfigSaveError("");
     showToast("配置保存成功");
     // What was just saved becomes the new comparison baseline: the bar goes
@@ -336,9 +322,7 @@ async function loadApiKeys() {
     renderApiKeys();
     // The key rows carry switches: paint them from their checkbox state.
     syncAllToggleStates();
-  } catch (err) {
-    showToast("加载 API Keys 失败", "error");
-  }
+  } catch (err) { showToast("加载 API Keys 失败", "error"); }
 }
 
 // Both table rows and mobile cards use the same delegated key actions.
@@ -468,9 +452,7 @@ function keyTip() {
 
 
 
-function parseAllowedModels(value) {
-  return String(value || "").split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
-}
+function parseAllowedModels(value) { return String(value || "").split(/[\n,]/).map((item) => item.trim()).filter(Boolean); }
 
 function formatKeyPolicy(key) {
   const models = Array.isArray(key.allowed_models) && key.allowed_models.length
@@ -491,17 +473,13 @@ function formatKeyPolicy(key) {
 // The ledger counts USD ticks (1 USD = 10_000_000_000 ticks) because it is
 // integer arithmetic; the admin plane shows dollars.
 const USD_TICKS = 10000000000;
-function ticksToUSD(ticks) {
-  return Math.floor(Number(ticks) || 0) / USD_TICKS;
-}
+function ticksToUSD(ticks) { return Math.floor(Number(ticks) || 0) / USD_TICKS; }
 function usdToTicks(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return 0;
   return Math.round(parsed * USD_TICKS);
 }
-function formatUSD(amount) {
-  return `$${Number(amount || 0).toFixed(2)}`;
-}
+function formatUSD(amount) { return `$${Number(amount || 0).toFixed(2)}`; }
 
 function periodSuffix(key) {
   const days = Number(key.billing_period_days) || 0;
@@ -542,23 +520,15 @@ async function rotateApiKey(id) {
     renderCreatedKeys();
     openShowKeyModal();
     loadApiKeys();
-  } catch (err) {
-    showToast(err.message || "重置失败", "error");
-  }
+  } catch (err) { showToast(err.message || "重置失败", "error"); }
 }
 
 // Toggle key status
 async function toggleKeyStatus(id, enabled) {
   try {
-    await ConsoleAPI.request(`/api/keys/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled }),
-    });
+    await ConsoleAPI.request(`/api/keys/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) });
     showToast(enabled ? "已启用" : "已禁用");
-  } catch (err) {
-    showToast("操作失败", "error");
-  }
+  } catch (err) { showToast("操作失败", "error"); }
 }
 
 // Open create key modal
@@ -573,9 +543,7 @@ function openCreateKeyModal() {
 }
 
 // Close create key modal
-function closeCreateKeyModal() {
-  closeModal("createKeyModal");
-}
+function closeCreateKeyModal() { closeModal("createKeyModal"); }
 
 // Create API key
 async function createApiKey(e) {
@@ -631,9 +599,7 @@ function openEditKeyModal(id) {
   openModal("editKeyModal");
 }
 
-function closeEditKeyModal() {
-  closeModal("editKeyModal");
-}
+function closeEditKeyModal() { closeModal("editKeyModal"); }
 
 async function saveKeyPolicy(e) {
   e.preventDefault();
@@ -646,18 +612,12 @@ async function saveKeyPolicy(e) {
     billing_period_days: Number(document.getElementById("editKeyBillingPeriod").value || 0),
   };
   try {
-    const res = await ConsoleAPI.request(`/api/keys/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const res = await ConsoleAPI.request(`/api/keys/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if (!res.ok) throw new Error(await res.text() || "保存失败");
     closeEditKeyModal();
     showToast("策略已保存");
     await loadApiKeys();
-  } catch (err) {
-    showToast("保存失败: " + err.message, "error");
-  }
+  } catch (err) { showToast("保存失败: " + err.message, "error"); }
 }
 
 // Render created keys
@@ -665,20 +625,10 @@ function renderCreatedKeys() {
   const container = document.getElementById("fullKeyDisplay");
   container.replaceChildren(...createdKeys.map((k) => attach(
     styled(make("div", "key-display"), {
-      marginBottom: "8px",
-      padding: "12px",
-      background: "var(--surface-2)",
-      border: "1px dashed var(--border-color)",
-      borderRadius: "8px",
-    }),
+      marginBottom: "8px", padding: "12px", background: "var(--surface-2)", border: "1px dashed var(--border-color)", borderRadius: "8px" }),
     [
       styled(make("div", "", k.name || ""), { fontSize: "0.8rem", color: "var(--text-secondary)" }),
-      styled(make("div", "", k.key || k.error || ""), {
-        fontWeight: "bold",
-        marginTop: "4px",
-        wordBreak: "break-all",
-        color: "var(--accent-green)",
-      }),
+      styled(make("div", "", k.key || k.error || ""), { fontWeight: "bold", marginTop: "4px", wordBreak: "break-all", color: "var(--accent-green)" }),
     ],
   )));
 }
@@ -691,13 +641,9 @@ function copyAllKeys() {
 
 // Open/close show key modal. This window is the only place a complete secret
 // exists in the UI -- the list only ever holds a prefix and suffix.
-function openShowKeyModal() {
-  openModal("showKeyModal");
-}
+function openShowKeyModal() { openModal("showKeyModal"); }
 
-function closeShowKeyModal() {
-  closeModal("showKeyModal");
-}
+function closeShowKeyModal() { closeModal("showKeyModal"); }
 
 // Open delete key modal
 function openDeleteKeyModal(id, name) {
@@ -707,9 +653,7 @@ function openDeleteKeyModal(id, name) {
 }
 
 // Close delete key modal
-function closeDeleteKeyModal() {
-  closeModal("deleteKeyModal");
-}
+function closeDeleteKeyModal() { closeModal("deleteKeyModal"); }
 
 // Confirm delete key
 async function confirmDeleteKey() {
@@ -719,9 +663,7 @@ async function confirmDeleteKey() {
     closeDeleteKeyModal();
     showToast("删除成功");
     loadApiKeys();
-  } catch (err) {
-    showToast("删除失败", "error");
-  }
+  } catch (err) { showToast("删除失败", "error"); }
 }
 
 // Load configuration on page load

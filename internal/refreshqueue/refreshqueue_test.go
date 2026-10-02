@@ -10,18 +10,12 @@ import (
 // of the same account must be merged, not started while the first is running.
 func TestHub_CollapsesDuplicateWork(t *testing.T) {
 	hub := NewHub()
-	if !hub.TryAcquire(7) {
-		t.Fatal("first lease must be granted")
-	}
-	if hub.TryAcquire(7) {
-		t.Fatal("a second concurrent lease for the same account must be refused")
-	}
+	testutil.False(t, !hub.TryAcquire(7), "first lease must be granted")
+	testutil.False(t, hub.TryAcquire(7), "a second concurrent lease for the same account must be refused")
 	testutil.Equal(t, hub.Len(), 1)
 	hub.Release(7)
 	testutil.Equal(t, hub.Len(), 0)
-	if !hub.TryAcquire(7) {
-		t.Fatal("the lease must be reusable after release")
-	}
+	testutil.False(t, !hub.TryAcquire(7), "the lease must be reusable after release")
 }
 
 // TestHub_ReleaseIsIdempotent keeps a deferred release from stealing another
@@ -31,9 +25,7 @@ func TestHub_ReleaseIsIdempotent(t *testing.T) {
 	hub.TryAcquire(1)
 	hub.Release(1)
 	hub.Release(1)
-	if !hub.TryAcquire(1) {
-		t.Fatal("lease must be available after a double release")
-	}
+	testutil.False(t, !hub.TryAcquire(1), "lease must be available after a double release")
 }
 
 // TestHub_ConcurrentAcquire grants exactly one lease under contention.
@@ -78,17 +70,13 @@ func TestWithLease_MergesConcurrentRefreshes(t *testing.T) {
 	}()
 	<-started
 
-	if WithLease(4242, func() { ran <- struct{}{} }) {
-		t.Fatal("a second lease for the same account must be refused")
-	}
+	testutil.False(t, WithLease(4242, func() { ran <- struct{}{} }), "a second lease for the same account must be refused")
 	close(release)
 	<-done
 
 	testutil.Equal(t, len(ran), 1)
 	// After the first lease is released the account is refreshable again.
-	if !WithLease(4242, func() { ran <- struct{}{} }) {
-		t.Fatal("the lease must be reusable once released")
-	}
+	testutil.False(t, !WithLease(4242, func() { ran <- struct{}{} }), "the lease must be reusable once released")
 	testutil.Equal(t, len(ran), 2)
 }
 
@@ -96,12 +84,8 @@ func TestWithLease_MergesConcurrentRefreshes(t *testing.T) {
 // must observe the same set, which is only true if Default() is a singleton.
 func TestDefault_IsSharedAcrossCallers(t *testing.T) {
 	first, second := Default(), Default()
-	if first != second {
-		t.Fatal("Default() must return one process-wide hub")
-	}
+	testutil.Equal(t, first, second)
 	first.TryAcquire(99)
 	t.Cleanup(func() { first.Release(99) })
-	if second.TryAcquire(99) {
-		t.Fatal("a lease taken on Default() must be visible to every caller")
-	}
+	testutil.False(t, second.TryAcquire(99), "a lease taken on Default() must be visible to every caller")
 }

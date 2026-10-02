@@ -15,36 +15,24 @@ func TestCatalogContextConfigMergeAndRoundTrip(t *testing.T) {
  {"key":"k","enable":false,"context_config":{"context_length":2000000,"is_default":true}}
  ]}}`)
 	catalog, err := parseModelList(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.NoError(t, err)
 	testutil.Equal(t, catalog.Len(), 1)
 	for _, c := range []*Catalog{catalog, catalogFromIDs(catalogToIDs(catalog))} {
 		for _, name := range []string{"k", "Model"} {
 			model, err := c.Resolve(name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if model.MaxInputTokens != 180000 || len(model.ContextConfigVariants) != 1 {
-				t.Fatalf("row=%+v", model)
-			}
+			testutil.NoError(t, err)
+			testutil.Equal(t, model.MaxInputTokens, 180000)
+			testutil.Equal(t, len(model.ContextConfigVariants), 1)
 			info := model.ContextWindowInfo()
-			if info.DefaultInputTokens != 180000 || info.DefaultContextTokens != 200000 || info.MaxContextTokens != 1000000 || info.DefaultConflict || info.HasUnparsedConfig {
-				t.Fatalf("info=%+v", info)
-			}
+			testutil.Falsef(t, info.DefaultInputTokens != 180000 || info.DefaultContextTokens != 200000 || info.MaxContextTokens != 1000000 || info.DefaultConflict || info.HasUnparsedConfig, "info=%+v", info)
 			var tiers []map[string]json.RawMessage
-			if err := json.Unmarshal(model.ContextConfig, &tiers); err != nil || string(tiers[0]["opaque"]) != "{\"price\":1}" {
-				t.Fatalf("lost raw config: %s", model.ContextConfig)
-			}
+			err = json.Unmarshal(model.ContextConfig, &tiers)
+			testutil.Falsef(t, err != nil || string(tiers[0]["opaque"]) != "{\"price\":1}", "lost raw config: %s", model.ContextConfig)
 		}
 	}
 	snapshot := catalogToIDs(catalog)
-	if CatalogContextWindows(snapshot)["model"] != 180000 {
-		t.Fatal("input budget replaced with total tier")
-	}
-	if len(catalogFromIDs(snapshot).entries[0].ContextConfigVariants) != 1 {
-		t.Fatal("roundtrip grew variants")
-	}
+	testutil.Equal(t, CatalogContextWindows(snapshot)["model"], 180000)
+	testutil.Equal(t, len(catalogFromIDs(snapshot).entries[0].ContextConfigVariants), 1)
 }
 
 func TestCatalogContextUnknownAndConflictingDefaults(t *testing.T) {

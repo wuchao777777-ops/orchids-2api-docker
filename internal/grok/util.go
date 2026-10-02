@@ -66,13 +66,9 @@ func randomUUID() string {
 
 // firstNonEmpty delegates to the shared implementation in internal/util so the
 // package keeps its short local name without duplicating the logic.
-func firstNonEmpty(values ...string) string {
-	return util.FirstNonEmpty(values...)
-}
+func firstNonEmpty(values ...string) string { return util.FirstNonEmpty(values...) }
 
-func isDigit(c byte) bool {
-	return c >= '0' && c <= '9'
-}
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func encodeJSONBytes(v interface{}) []byte {
 	buf := bytes.Buffer{}
@@ -88,9 +84,7 @@ func encodeJSONBytes(v interface{}) []byte {
 	return raw
 }
 
-func uniqueStrings(input []string) []string {
-	return util.UniqueStrings(input)
-}
+func uniqueStrings(input []string) []string { return util.UniqueStrings(input) }
 
 func interfaceToInt(v interface{}) int {
 	switch x := v.(type) {

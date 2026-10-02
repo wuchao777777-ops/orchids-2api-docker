@@ -10,16 +10,12 @@ import (
 
 func TestParallelFor(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
-		ParallelFor(0, func(i int) {
-			t.Error("should not be called")
-		})
+		ParallelFor(0, func(i int) { t.Error("should not be called") })
 	})
 
 	t.Run("single item", func(t *testing.T) {
 		var called int32
-		ParallelFor(1, func(i int) {
-			atomic.AddInt32(&called, 1)
-		})
+		ParallelFor(1, func(i int) { atomic.AddInt32(&called, 1) })
 		testutil.CheckEqual(t, called, 1)
 	})
 
@@ -37,34 +33,25 @@ func TestParallelFor(t *testing.T) {
 	t.Run("large batch (parallel)", func(t *testing.T) {
 		n := 100
 		var counter int64
-		ParallelFor(n, func(i int) {
-			atomic.AddInt64(&counter, 1)
-		})
+		ParallelFor(n, func(i int) { atomic.AddInt64(&counter, 1) })
 		testutil.CheckEqual(t, counter, int64(n))
 	})
 }
 
 func TestSleepWithContext(t *testing.T) {
 	t.Run("zero duration", func(t *testing.T) {
-		if !SleepWithContext(context.Background(), 0) {
-			t.Error("SleepWithContext(0) = false, want true")
-		}
+		testutil.CheckFalse(t, !SleepWithContext(context.Background(), 0), "SleepWithContext(0) = false, want true")
 	})
 
 	t.Run("negative duration", func(t *testing.T) {
-		if !SleepWithContext(context.Background(), -time.Second) {
-			t.Error("SleepWithContext(-1s) = false, want true")
-		}
+		testutil.CheckFalse(t, !SleepWithContext(context.Background(), -time.Second), "SleepWithContext(-1s) = false, want true")
 	})
 
 	t.Run("normal sleep", func(t *testing.T) {
 		start := time.Now()
-		if !SleepWithContext(context.Background(), 50*time.Millisecond) {
-			t.Error("SleepWithContext() = false, want true")
-		}
-		if elapsed := time.Since(start); elapsed < 40*time.Millisecond {
-			t.Errorf("elapsed = %v, want >= 40ms", elapsed)
-		}
+		testutil.CheckFalse(t, !SleepWithContext(context.Background(), 50*time.Millisecond), "SleepWithContext() = false, want true")
+		elapsed := time.Since(start)
+		testutil.CheckFalsef(t, elapsed < 40*time.Millisecond, "elapsed = %v, want >= 40ms", elapsed)
 	})
 
 	t.Run("canceled context", func(t *testing.T) {
@@ -76,11 +63,8 @@ func TestSleepWithContext(t *testing.T) {
 		}()
 
 		start := time.Now()
-		if SleepWithContext(ctx, 1*time.Second) {
-			t.Error("SleepWithContext() = true, want false for canceled context")
-		}
-		if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-			t.Errorf("elapsed = %v, want < 100ms", elapsed)
-		}
+		testutil.CheckFalse(t, SleepWithContext(ctx, 1*time.Second), "SleepWithContext() = true, want false for canceled context")
+		elapsed := time.Since(start)
+		testutil.CheckFalsef(t, elapsed > 100*time.Millisecond, "elapsed = %v, want < 100ms", elapsed)
 	})
 }

@@ -127,6 +127,4 @@ func (c *Client) fetchPlan(ctx context.Context) (Plan, error) {
 }
 
 // FetchPlan is the provider-facing alias of fetchPlan.
-func (c *Client) FetchPlan(ctx context.Context) (Plan, error) {
-	return c.fetchPlan(ctx)
-}
+func (c *Client) FetchPlan(ctx context.Context) (Plan, error) { return c.fetchPlan(ctx) }

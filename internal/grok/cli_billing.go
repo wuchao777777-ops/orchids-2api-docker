@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/util"
 )
 
 // CLIBillingInfo is the precise weekly Build-credit window exposed by xAI's
@@ -110,9 +111,7 @@ func ApplyCLIBillingInfo(acc *store.Account, info *CLIBillingInfo) bool {
 	// not an inferred allowance: some paid accounts intentionally do not expose
 	// a numeric Build-credit window.
 	subscription := strings.TrimSpace(info.Subscription)
-	if subscription == "" {
-		subscription = "unknown"
-	}
+	subscription = util.FirstNonEmptyUntrimmed(subscription, "unknown")
 	if acc.Subscription != subscription {
 		acc.Subscription = subscription
 		changed = true
