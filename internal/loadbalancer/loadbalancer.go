@@ -562,13 +562,17 @@ const (
 	// existing call sites and tests readable while giving every other entrance
 	// (scheduler, admin API, account table) the same numbers.
 	//
-	// 401 冷却时间：token 可能已刷新，较短间隔后重试
+	// 401 cooldown: the token may already have been refreshed, so retry after a
+	// short interval.
 	retry401Default = accountpolicy.CooldownAuth
-	// 402 通常表示余额/credits 不足，默认按日冷却，避免无额度账号反复撞上游。
+	// 402 usually means the balance/credits are gone. It cools for a day by
+	// default so the pool stops hammering an account with no allowance.
 	retry402Default = accountpolicy.CooldownPayment
-	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试
+	// 403/404 cooldown: the account may be banned or misconfigured, so retry
+	// after a longer interval.
 	retry403Default = accountpolicy.CooldownBlocked
-	// Grok 的 403 很多是 transient upstream denial/临时风控，不应长时间拉黑
+	// Many Grok 403s are a transient upstream denial or a temporary risk-control
+	// decision, so the account must not be blacklisted for long.
 	retry403Grok = accountpolicy.CooldownBlockedGro
 )
 
@@ -670,8 +674,10 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 				return false
 			}
 		}
-		// 402 通常表示余额/credits 不足。若上游给出 reset 时间则优先尊重，
-		// 否则使用更长的冷却，避免调度器持续撞到同一个无额度账号。
+		// 402 usually means the balance/credits are gone. A reset time from the
+		// upstream takes precedence when it gives one; otherwise the longer
+		// cooldown applies, so the scheduler does not keep hitting the same
+		// account that has no allowance.
 		if !acc.QuotaResetAt.IsZero() {
 			if !now.Before(acc.QuotaResetAt) {
 				lb.clearAccountStatus(ctx, acc, "402 冷却完成，自动恢复尝试")
@@ -685,8 +691,9 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		}
 		return false
 	case "403", "404":
-		// 403/404 可能是临时封禁或配置问题。
-		// 对 Grok 来说，403 很多是 transient upstream denial，不应长时间拉黑。
+		// 403/404 can be a temporary ban or a configuration problem.
+		// For Grok, a 403 is often a transient upstream denial, so the account
+		// must not be blacklisted for long.
 		cooldown := retry403Default
 		if strings.EqualFold(acc.AccountType, "grok") {
 			cooldown = retry403Grok
@@ -783,7 +790,8 @@ func (lb *LoadBalancer) PersistAppliedAccountStatus(ctx context.Context, acc *st
 	lb.persistAccountStatus(ctx, acc, reason)
 }
 
-// MarkAccountStatus 标记账号状态（供后台刷新等外部调用使用）。
+// MarkAccountStatus records an account status (for external callers such as the
+// background refresh).
 func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Account, status string) {
 	if acc == nil || lb.Store == nil || status == "" {
 		return

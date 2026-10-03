@@ -29,8 +29,7 @@ var (
 )
 
 // grokErrorCodeForStatus derives a stable machine-readable code from an HTTP
-// status so every Grok endpoint answers with the same OpenAI error envelope
-// grok2api emits.
+// status so every Grok endpoint answers with the same OpenAI error envelope.
 func grokErrorCodeForStatus(status int) string {
 	switch status {
 	case http.StatusBadRequest:
@@ -105,7 +104,7 @@ func writeGrokError(w http.ResponseWriter, status int, message string) {
 // upstream status=…" shape stay in the logs and diagnostics: a caller only ever
 // receives a sanitized category message plus a stable code. Credential-class
 // failures belong to the account pool the operator owns, so they are answered
-// as 503 rather than 401/403 (grok2api does the same), and a retryable failure
+// as 503 rather than 401/403, and a retryable failure
 // carries the upstream Retry-After back to the client.
 func writeGrokUpstreamError(w http.ResponseWriter, err error) {
 	if err == nil {

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Like grok2api's conversation converter, the response object's status takes
+// The response object's status takes
 // precedence over the event label. A terminal label cannot finish queued work.
 func responseTerminalFinish(kind string, response map[string]interface{}) (string, error) {
 	if kind == "response.failed" || kind == "error" || response["error"] != nil {

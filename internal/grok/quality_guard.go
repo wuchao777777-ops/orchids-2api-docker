@@ -11,8 +11,7 @@ import (
 
 // Quality guard.
 //
-// Ported from chenyme/grok2api (application/gateway/quality_retry.go). A
-// degraded upstream answers 200 with a response that looks fine but carries no
+// A degraded upstream answers 200 with a response that looks fine but carries no
 // reasoning: the visible text arrives as one late dump, or the reasoning is a
 // cipher-only stub with zero reasoning tokens while the answer streams out.
 // Those responses are indistinguishable from a healthy one by status alone, so

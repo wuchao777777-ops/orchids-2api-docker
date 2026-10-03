@@ -230,8 +230,8 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 	}
 	// A thinking request must also ask the upstream for a summary: without it
 	// the streamed thinking block would carry only a signature and the client
-	// (Claude Code included) would show no reasoning text at all. grok2api
-	// requests a detailed summary for thinking requests.
+	// (Claude Code included) would show no reasoning text at all, so a thinking
+	// request also asks upstream for a detailed summary.
 	var reasoningSummary *string
 	if wantsReasoningSummary {
 		summary := "detailed"
@@ -419,8 +419,7 @@ func validateChatToolSequence(messages []ChatMessage) error {
 func anthropicReasoningEffort(thinking, outputConfig map[string]interface{}) (*string, bool) {
 	// An explicit `thinking: {"type":"disabled"}` wins over output_config: a
 	// client that asked for no reasoning must not silently get reasoning just
-	// because a stale effort value was also present (grok2api resolves it the
-	// same way).
+	// because a stale effort value was also present; resolve in that order.
 	typeName := strings.ToLower(strings.TrimSpace(fmt.Sprint(thinking["type"])))
 	// A thinking request must also ask the upstream for a summary: without it the
 	// streamed thinking block would carry only a signature and the client (Claude
@@ -492,7 +491,7 @@ func anthropicSystemText(value interface{}) string {
 // stripAnthropicBillingHeader removes the per-request Claude Code billing
 // header. It changes on every request, and because the system prompt sits at the
 // very front of the upstream prefix, keeping it defeats the provider's prompt
-// cache (grok2api strips it for exactly that reason).
+// cache (the gateway strips it for exactly that reason).
 func stripAnthropicBillingHeader(text string) string {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" || !strings.Contains(strings.ToLower(trimmed), "x-anthropic-billing-header") {

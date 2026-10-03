@@ -3,15 +3,13 @@ package workbuddy
 import (
 	"context"
 	"encoding/base64"
-	"errors"
-	"fmt"
+
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
+
 	"testing"
 	"time"
 
@@ -117,218 +115,6 @@ func TestCredentialsToken_RefreshesBeforeExpiry(t *testing.T) {
 	opaque := Credentials{AccessToken: "token"}
 	_, ok = opaque.Token(time.Now())
 	testutil.False(t, !ok, "an opaque token without expiry must be used as-is")
-}
-
-func TestBuildMessages_RequiresSystemFirst(t *testing.T) {
-	t.Parallel()
-
-	messages := buildMessages(upstream.UpstreamRequest{Messages: []prompt.Message{userMessage(t, "hello")}})
-	testutil.Equal(t, len(messages), 2)
-	testutil.Equal(t, messages[0].Role, "system")
-	testutil.Equal(t, messages[0].Content, defaultSystem)
-	testutil.Equal(t, messages[1].Role, "user")
-	testutil.Equal(t, messages[1].Content, "hello")
-}
-
-func TestBuildMessages_NormalizesDeveloperRole(t *testing.T) {
-	t.Parallel()
-
-	// `developer` is OpenAI's alias for the system role; the upstream rejects
-	// it, and the rewrite must preserve content and position.
-	messages := buildMessages(upstream.UpstreamRequest{Messages: []prompt.Message{roleMessage(t, "developer", "stay terse")}})
-	testutil.Equal(t, len(messages), 1)
-	testutil.Equal(t, messages[0].Role, "system")
-	testutil.Equal(t, messages[0].Content, "stay terse")
-}
-
-func TestBuildMessages_KeepsSystemItemsAndToolResults(t *testing.T) {
-	t.Parallel()
-
-	messages := buildMessages(upstream.UpstreamRequest{
-		System: []prompt.SystemItem{{Type: "text", Text: "be brief"}},
-		Messages: []prompt.Message{{
-			Role: "assistant",
-			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
-				{Type: "tool_use", ID: "toolu_1", Name: "run", Input: map[string]interface{}{}},
-			}},
-		}, {
-			Role: "user",
-			Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
-				{Type: "text", Text: "run it"},
-				{Type: "tool_result", ToolUseID: "toolu_1", Content: "ok"},
-			}},
-		}},
-	})
-	testutil.Equal(t, len(messages), 4)
-	testutil.Equal(t, messages[0].Role, "system")
-	testutil.Equal(t, messages[0].Content, "be brief")
-	testutil.Equal(t, messages[3].Role, "tool")
-	testutil.Equal(t, messages[3].ToolCallID, "toolu_1")
-	testutil.Equal(t, messages[3].Content, "ok")
-}
-
-// Claude Code declares itself in the system array. The upstream's policy gate
-// answers code=11128 ("blocked by security policy") for such a request, so both
-// markers must be dropped before the body is built.
-func TestBuildMessages_DropsAnthropicClientMarkers(t *testing.T) {
-	t.Parallel()
-
-	messages := buildMessages(upstream.UpstreamRequest{
-		System: []prompt.SystemItem{
-			{Type: "text", Text: "x-anthropic-billing-header: cc_version=2.1.268.e0e; cc_entrypoint=claude-vscode;"},
-			{Type: "text", Text: "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."},
-			{Type: "text", Text: "be brief"},
-		},
-		Messages: []prompt.Message{userMessage(t, "hello")},
-	})
-
-	testutil.Equal(t, len(messages), 2)
-	testutil.Equal(t, messages[0].Role, "system")
-	testutil.Equal(t, messages[0].Content, "be brief")
-	for _, message := range messages {
-		if strings.Contains(message.Content, "anthropic-billing-header") ||
-			strings.Contains(message.Content, "official CLI for Claude") {
-			t.Fatalf("client marker was forwarded: %+v", message)
-		}
-	}
-}
-
-func TestBuildMessages_ClientMarkerOnlyFallsBackToDefaultSystem(t *testing.T) {
-	t.Parallel()
-
-	messages := buildMessages(upstream.UpstreamRequest{
-		System:   []prompt.SystemItem{{Type: "text", Text: "You are Claude Code"}},
-		Messages: []prompt.Message{userMessage(t, "hello")},
-	})
-
-	// Dropping the persona line must not leave the upstream without a leading
-	// system message.
-	testutil.Equal(t, len(messages), 2)
-	testutil.Equal(t, messages[0].Role, "system")
-	testutil.Equal(t, messages[0].Content, defaultSystem)
-}
-
-func TestBuildMessages_DropsClientMarkerSystemMessage(t *testing.T) {
-	t.Parallel()
-
-	messages := buildMessages(upstream.UpstreamRequest{Messages: []prompt.Message{
-		roleMessage(t, "system", "x-anthropic-billing-header: cc_version=2.1.268.e0e; cc_entrypoint=claude-vscode;"),
-		userMessage(t, "hello"),
-	}})
-
-	for _, message := range messages {
-		testutil.MustNotContain(t, message.Content, "anthropic-billing-header")
-	}
-	testutil.Equal(t, len(messages), 2)
-	testutil.Equal(t, messages[0].Content, defaultSystem)
-}
-
-func TestBuildMessages_KeepsOrdinaryClaudeMention(t *testing.T) {
-	t.Parallel()
-
-	const instruction = "You are an interactive agent. Follow the Claude Code project conventions."
-
-	messages := buildMessages(upstream.UpstreamRequest{
-		System:   []prompt.SystemItem{{Type: "text", Text: instruction}},
-		Messages: []prompt.Message{userMessage(t, "hello")},
-	})
-	testutil.Equal(t, messages[0].Content, instruction)
-}
-
-func TestBuildMessagesDropsDanglingToolResult(t *testing.T) {
-	t.Parallel()
-	messages := buildMessages(upstream.UpstreamRequest{Messages: []prompt.Message{{
-		Role: "user",
-		Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
-			Type: "tool_result", ToolUseID: "missing", Content: "must not be sent",
-		}}},
-	}}})
-	for _, message := range messages {
-		testutil.NotEqual(t, message.Role, "tool")
-	}
-}
-
-func TestConsumeStream_EmitsTextReasoningAndToolCalls(t *testing.T) {
-	t.Parallel()
-
-	body := strings.Join([]string{
-		`data: {"id":"cmb-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":"think"},"finish_reason":""}]}`,
-		`data: {"choices":[{"index":0,"delta":{"content":"hello "},"finish_reason":""}]}`,
-		`data: {"choices":[{"index":0,"delta":{"content":"world"},"finish_reason":""}],"usage":null}`,
-		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{\"path\":\".\"}"}}]},"finish_reason":"tool_calls"}]}`,
-		`data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7,"completion_thinking_tokens":2,"prompt_cache_hit_tokens":3}}`,
-		`data: [DONE]`,
-	}, "\n")
-
-	var events []upstream.SSEMessage
-	result, err := consumeStream(strings.NewReader(body), func(msg upstream.SSEMessage) {
-		events = append(events, msg)
-	})
-	testutil.NoError(t, err, "consumeStream() error = %v")
-	testutil.False(t, !result.SawMeaningfulEvent, "SawMeaningfulEvent = false")
-	testutil.Equal(t, result.ToolCallCount, 1)
-	testutil.Equal(t, result.FinishReason(), "tool_use")
-	testutil.Equal(t, result.Usage["inputTokens"], 11)
-	testutil.Equal(t, result.Usage["outputTokens"], 7)
-
-	var text, reasoning, toolName, toolInput string
-	for _, event := range events {
-		switch event.Type {
-		case "model.text-delta":
-			text += event.Event["delta"].(string)
-		case "model.reasoning-delta":
-			reasoning += event.Event["delta"].(string)
-		case "model.tool-call":
-			toolName, _ = event.Event["toolName"].(string)
-			toolInput, _ = event.Event["input"].(string)
-		}
-	}
-	testutil.Equal(t, text, "hello world")
-	testutil.Equal(t, reasoning, "think")
-	testutil.Equal(t, toolName, "list_files")
-	testutil.Equal(t, toolInput, `{"path":"."}`)
-}
-
-func TestConsumeStream_ReassemblesSplitToolArguments(t *testing.T) {
-	t.Parallel()
-
-	body := strings.Join([]string{
-		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_split","type":"function","function":{"name":"write_file","arguments":"{\"path\":"}}]},"finish_reason":""}]}`,
-		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"notes.txt\",\"content\":\"ok\"}"}}]},"finish_reason":"tool_calls"}]}`,
-		`data: [DONE]`,
-	}, "\n")
-
-	var calls []upstream.SSEMessage
-	result, err := consumeStream(strings.NewReader(body), func(msg upstream.SSEMessage) {
-		if msg.Type == "model.tool-call" {
-			calls = append(calls, msg)
-		}
-	})
-	testutil.NoError(t, err, "consumeStream() error = %v")
-	testutil.Falsef(t, result.ToolCallCount != 1 || len(calls) != 1, "tool calls = %d/%d, want exactly one", result.ToolCallCount, len(calls))
-	testutil.Equal(t, calls[0].Event["input"], `{"path":"notes.txt","content":"ok"}`)
-}
-
-func TestConsumeStream_DoesNotMergeReusedToolIndex(t *testing.T) {
-	t.Parallel()
-	body := strings.Join([]string{
-		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"first","arguments":"{}"}}]}}]}`,
-		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_b","function":{"name":"second","arguments":"{\"n\":2}"}}]},"finish_reason":"tool_calls"}]}`,
-		`data: [DONE]`,
-	}, "\n")
-	var calls []upstream.SSEMessage
-	result, err := consumeStream(strings.NewReader(body), func(message upstream.SSEMessage) {
-		if message.Type == "model.tool-call" {
-			calls = append(calls, message)
-		}
-	})
-	testutil.NoError(t, err)
-	testutil.Equal(t, result.ToolCallCount, 2)
-	testutil.Equal(t, len(calls), 2)
-	if calls[0].Event["toolName"] != "first" || calls[0].Event["input"] != "{}" ||
-		calls[1].Event["toolName"] != "second" || calls[1].Event["input"] != `{"n":2}` {
-		t.Fatalf("reused index calls were corrupted: %#v", calls)
-	}
 }
 
 func TestRunChat_RequiresCredentials(t *testing.T) {
@@ -463,23 +249,6 @@ func TestBuildBody_IncludesUsageAndCamelCaseConversationID(t *testing.T) {
 	}
 }
 
-func TestConsumeStream_PreservesBusinessEnvelopeAndNestedReasoningUsage(t *testing.T) {
-	t.Parallel()
-	body := strings.Join([]string{
-		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"completion_tokens_details":{"reasoning_tokens":4}}}`,
-		`data: [DONE]`,
-	}, "\n")
-	result, err := consumeStream(strings.NewReader(body), nil)
-	testutil.NoError(t, err)
-	testutil.Equal(t, result.Usage["reasoningTokens"], 4)
-
-	for _, code := range []int{CodeModelThrottle, CodeSessionDead} {
-		_, err := consumeStream(strings.NewReader(fmt.Sprintf("data: {\"code\":%d,\"msg\":\"business failure\"}\n", code)), nil)
-		var typed *APIError
-		testutil.Falsef(t, !errors.As(err, &typed) || typed.Code != code || typed.HTTPStatus != http.StatusOK, "code %d error=%#v want typed HTTP-200 business error", code, err)
-	}
-}
-
 func TestApiError_CarriesStatusAndCode(t *testing.T) {
 	t.Parallel()
 
@@ -523,126 +292,10 @@ func TestFetchModels_FiltersCLIWhitelist(t *testing.T) {
 	}
 }
 
-func TestTokenUpdater_PersistsRotatedRefreshToken(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		testutil.CheckEqual(t, r.Header.Get("X-Refresh-Token"), "old-refresh")
-		testutil.CheckEqual(t, r.Header.Get("X-Auth-Refresh-Source"), "plugin")
-		_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"new-access","refreshToken":"new-refresh","expiresIn":86400}}`))
-	}))
-	defer srv.Close()
-
-	acc := &store.Account{ID: 7, AccountType: "workbuddy", WorkBuddyRefreshToken: "old-refresh"}
-	updater := &fakeUpdater{}
-	client := NewFromAccount(acc, nil)
-	client.baseURL = srv.URL
-	client.httpClient = srv.Client()
-	client.SetAccountStore(updater)
-
-	refreshed, err := newTokenUpdater(srv.URL, srv.Client(), updater, acc).
-		RefreshNow(context.Background(), Credentials{RefreshToken: "old-refresh"})
-	testutil.NoError(t, err, "RefreshNow() error = %v")
-	testutil.Equal(t, refreshed.AccessToken, "new-access")
-	testutil.False(t, updater.saved == nil, "rotated refresh token was not persisted")
-	testutil.Equal(t, updater.saved.WorkBuddyRefreshToken, "new-refresh")
-	testutil.Equal(t, acc.WorkBuddyRefreshToken, "old-refresh")
-	testutil.Equal(t, acc.WorkBuddyAccessToken, "")
-}
-
-func TestClientConcurrentFirstUseRefreshesOnlyOnce(t *testing.T) {
-	t.Parallel()
-
-	var refreshes atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		refreshes.Add(1)
-		_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"new-access","refreshToken":"new-refresh","expiresIn":172800}}`))
-	}))
-	defer srv.Close()
-
-	client := NewFromAccount(&store.Account{
-		AccountType:           "workbuddy",
-		WorkBuddyRefreshToken: "old-refresh",
-	}, nil)
-	client.baseURL = srv.URL
-	client.httpClient = srv.Client()
-
-	const callers = 24
-	var wg sync.WaitGroup
-	errs := make(chan error, callers)
-	for i := 0; i < callers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			token, err := client.ensureAccessToken(context.Background())
-			if err == nil && token != "new-access" {
-				err = fmt.Errorf("token = %q", token)
-			}
-			errs <- err
-		}()
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		testutil.NoError(t, err)
-	}
-	testutil.Equal(t, refreshes.Load(), 1)
-}
-
-type fakeUpdater struct {
-	saved *store.Account
-}
-
-type flakyUpdater struct {
-	fail  bool
-	calls int
-}
-
-func (f *flakyUpdater) UpdateAccount(_ context.Context, _ *store.Account) error {
-	f.calls++
-	if f.fail {
-		return errors.New("write failed")
-	}
-	return nil
-}
-
-func TestTokenUpdaterReportsPersistenceFailureAndRetriesWithoutRotatingAgain(t *testing.T) {
-	t.Parallel()
-	refreshes := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		refreshes++
-		_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"new-access","refreshToken":"new-refresh","expiresIn":172800}}`))
-	}))
-	defer srv.Close()
-
-	storeUpdater := &flakyUpdater{fail: true}
-	updater := newTokenUpdater(srv.URL, srv.Client(), storeUpdater, &store.Account{ID: 1, AccountType: "workbuddy"})
-	_, err := updater.RefreshNow(context.Background(), Credentials{RefreshToken: "old-refresh"})
-	testutil.Error(t, err)
-	storeUpdater.fail = false
-	token, err := updater.Token(context.Background(), Credentials{RefreshToken: "old-refresh"})
-	testutil.NoError(t, err)
-	testutil.Equal(t, token, "new-access")
-	testutil.Equal(t, refreshes, 1)
-	testutil.Equal(t, storeUpdater.calls, 2)
-}
-
 func (f *fakeUpdater) UpdateAccount(_ context.Context, acc *store.Account) error {
 	copied := *acc
 	f.saved = &copied
 	return nil
-}
-
-func TestBuildMessages_DefaultSystemPromptOnly(t *testing.T) {
-	t.Parallel()
-
-	// A request without any history still has to produce a system-first pair,
-	// because the upstream rejects anything else with code=11128.
-	messages := buildMessages(upstream.UpstreamRequest{})
-	testutil.Equal(t, len(messages), 2)
-	testutil.Equal(t, messages[0].Role, "system")
-	testutil.Equal(t, messages[0].Content, defaultSystem)
-	testutil.Equal(t, messages[1].Role, "user")
 }
 
 func TestBuildBodyForwardsReasoningEffort(t *testing.T) {

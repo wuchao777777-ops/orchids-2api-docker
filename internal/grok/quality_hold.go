@@ -17,9 +17,8 @@ import (
 
 // Quality hold: withhold, retry, then deliver.
 //
-// Ported from chenyme/grok2api (application/gateway/quality_retry.go, HEAD
-// 906b9493). The detection half of that file lives in quality_guard.go; this is
-// the half that decides what the client is allowed to see.
+// The detection half of that logic lives in quality_guard.go; this is the half
+// that decides what the client is allowed to see.
 //
 // A degraded answer is a 200 whose content looks plausible but whose reasoning
 // never happened: the whole visible text arrives in one late dump, the
@@ -43,10 +42,10 @@ const (
 	// degraded account into an out-of-memory event.
 	qualityHoldMaxBytes = 8 << 20
 
-	// Dump shapes. grok2api compares token counts; this gateway measures the text
+	// Dump shapes. The thresholds are token counts; the gateway measures the text
 	// it saw and converts it with the same rune/4 estimate its usage accounting
 	// uses, so a threshold means the same thing on both sides. The encrypted
-	// content floor is a byte measure in grok2api too, which is why it is
+	// content floor is likewise a byte measure, which is why it is
 	// compared against the raw cipher length.
 	//
 	// qualityFakeEncFlushMS catches the 1.8s / ~2000-token fake-encrypted dump.
@@ -62,7 +61,7 @@ const (
 )
 
 // tokensFromChars applies the gateway's rune/4 text estimate, the same one the
-// usage accounting uses, so grok2api's token thresholds keep their meaning.
+// usage accounting uses, so the token thresholds keep their meaning.
 func tokensFromChars(chars int64) int64 {
 	if chars <= 0 {
 		return 0
@@ -146,7 +145,7 @@ type qualityStreamSignals struct {
 	VisibleTokens   int64
 	ReasoningTokens int64
 	OutputTokens    int64
-	// EncryptedBytes is the length of the cipher grok2api's floor is expressed in.
+	// EncryptedBytes is the length of the cipher the floor is expressed in.
 	EncryptedBytes int64
 	EncryptedFloor int64
 	UsageReported  bool
@@ -628,7 +627,7 @@ func newBuildQualityHold(w http.ResponseWriter, policy qualityHoldPolicy, outcom
 }
 
 // signals converts the stream's accounting into the classifier's inputs. The
-// character counts are converted to the token measure grok2api thresholds are
+// character counts are converted to the token measure the thresholds are
 // written in, with the same rune/4 estimate the usage accounting uses.
 func (c *buildQualityHold) signals(terminal bool) qualityStreamSignals {
 	if c == nil || c.outcome == nil {

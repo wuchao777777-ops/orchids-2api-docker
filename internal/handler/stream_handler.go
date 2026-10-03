@@ -187,6 +187,10 @@ type streamHandler struct {
 	allowedToolNames    map[string]struct{}
 	clientTools         []interface{}
 	emptyOutputFallback string
+	// structured validates the finished answer of a strict structured-output
+	// request. It is nil unless the caller sent `strict: true` with a schema
+	// this gateway could read, so an ordinary request pays nothing here.
+	structured structuredOutputCheck
 
 	// HTTP Response
 	w       http.ResponseWriter
@@ -338,6 +342,39 @@ func (h *streamHandler) setEmptyOutputFallback(text string) {
 	h.mu.Lock()
 	h.emptyOutputFallback = strings.TrimSpace(text)
 	h.mu.Unlock()
+}
+
+// setStructuredOutput installs the validator a strict structured-output request
+// carries. Nil is the ordinary case: a request that asked for no schema, or a
+// non-strict one, has nothing to enforce.
+func (h *streamHandler) setStructuredOutput(check structuredOutputCheck) {
+	h.mu.Lock()
+	h.structured = check
+	h.mu.Unlock()
+}
+
+// structuredOutputCheck validates one completed assistant answer against the
+// schema the caller declared. It is a function rather than an interface so the
+// handler keeps no reference to the request's schema object.
+type structuredOutputCheck func(text string) error
+
+// validateStructuredAnswer checks the answer accumulated so far against the
+// schema of a strict structured-output request. It returns nil when the request
+// declared no schema, and when the answer matches.
+//
+// Only the visible text is checked: reasoning is not part of the answer the
+// caller parses, and tool calls are validated by the tool pipeline already. An
+// empty answer is left to the empty-output fallback below rather than rejected
+// here, so a request that produced nothing still reports that.
+func (h *streamHandler) validateStructuredAnswer() error {
+	h.mu.Lock()
+	check := h.structured
+	text := h.responseText.String()
+	h.mu.Unlock()
+	if check == nil || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return check(text)
 }
 
 // growBuilderSlots extends a builder slice so idx is addressable. Content-block
@@ -910,7 +947,11 @@ func (h *streamHandler) resetRoundState() {
 	// Ensure any currently open block is closed before resetting state
 	h.closeActiveBlockLocked()
 
-	// 濠电姷鏁搁崑鐐哄垂閸洖绠伴柛婵勫劤閻捇鏌ｉ幋婵愭綗闁逞屽墮閹虫﹢寮崘顔肩＜婵﹩鍘肩粊鍫曟⒒娓氣偓濞佳団€﹂崼銉ョ閹艰揪绲挎稉宥囨喐閻楀牆绗氶柍閿嬪灴閺岀喓绱掑Ο铏诡儌闂佺粯甯楅幃鍌炲蓟濞戙垺鏅查柛娑卞枟閸犳劗绱?h.blockIndex闂?	// 濠电姷鏁搁崕鎴犲緤閽樺娲晜閻愵剙搴婇梺鍛婃处閸ㄦ澘效閺屻儲鐓冪憸婊堝礈濞戞碍顫曢柟鐑樻尵閻熷綊鏌涢…鎴濇灓濞寸姾鍋愮槐鎾存媴閻熼偊鏆㈤梺鍝勬噽婵炩偓鐎殿喖顭峰畷銊╁级閹寸媭鍞洪梻浣筋潐閹矂宕㈤挊澶樼唵闁哄啫鐗婇埛鎴︽煕濞戞﹫鍔熼柟铏姍閺屾盯濡搁妸銉у帿闁诲酣娼ч妶鎼佸春閿熺姴宸濇い鎾跺濡差垶鏌ｆ惔锛勭暛闁稿酣浜惰棟妞ゆ牗鍩冮弸宥夋煏韫囧鈧牠宕戦敐澶嬬厱闁靛绲芥俊鐣岀磼閳ь剟宕橀埡鈧换鍡涙煟閹邦厼绲婚柍褜鍓濋褍宓勯梺鍦濠㈡﹢锝為崨瀛樼厽婵☆垰鍚嬮弳鈺呮煃鐟欏嫮娲存慨濠冩そ楠炴牠鎮欓幓鎺懶戦梻浣侯焾椤戝洭宕伴幘璇茬闁圭儤顨忛弫鍐煥閺冨洤袚婵炲懏鐗犻弻锝堢疀閺囩偘鎴烽梺鐑╁墲濡啫鐣烽悽绋课у璺侯儑閸橀箖姊绘担鍝ヤ虎妞ゆ垵妫涚槐鐐哄箣閻愵亙绨婚梺瑙勫劤绾绢厾绮旈悜姗嗘闁绘劕妯婇崕鎰亜閿旀儳顣奸柟顖涙椤㈡瑩鎳￠妶鍥风闯闂傚倸鍊烽懗鍫曘€佹繝鍕濞村吋娼欑壕鍧楁煟閵忋埄鐒鹃柡?"Mismatched content block type"闂?
+	// The block indices below are the SSE positions handed to the client, so they
+	// are reset together with the per-block bookkeeping: a round that starts with
+	// a stale blockIndex would emit a content_block_delta for an index the client
+	// never saw a start for, which the client answers with "Mismatched content
+	// block type". h.blockIndex counts every block the round has opened.
 	h.activeThinkingBlockIndex = -1
 	h.activeThinkingSSEIndex = -1
 	h.activeTextBlockIndex = -1
@@ -1234,6 +1275,19 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		}
 	}
 
+	// A strict structured-output request is answered only when the answer
+	// matches the schema. The check happens before anything is committed: a
+	// stream that has not opened yet can still fail with a real status, and a
+	// non-stream response has committed nothing at all. Delivering an answer
+	// the caller's parser will reject, with a 200, is worse than an error it
+	// can retry or relax.
+	if err := h.validateStructuredAnswer(); err != nil {
+		slog.Warn("Structured output did not match the requested schema", "error", err)
+		h.reportRequestFailure("Reporting that the answer did not match the requested schema",
+			"schema_mismatch", err.Error(), 0)
+		return
+	}
+
 	if !h.hasVisibleOutput() {
 		h.mu.Lock()
 		fallback := h.emptyOutputFallback
@@ -1317,7 +1371,8 @@ func (h *streamHandler) finalizeCompletion(stopReason string) {
 	h.completionLogged = true
 	h.mu.Unlock()
 
-	// 闂傚倷娴囧畷鍨叏閹惰姤鍊块柨鏇楀亾妞ゎ厼鐏濊灒闁兼祴鏅濋ˇ顖炴倵楠炲灝鍔氭い锔诲灣缁鎮滃Ο鍦畾濡炪倖鐗楁笟妤呭磿閵夛妇绠?
+	// The summary is written outside the lock: LogSummary and the debug line only
+	// read counters, and the guard above already made this run once per round.
 	h.logger.LogSummary(h.inputTokens, h.outputTokens, time.Since(h.startTime), stopReason)
 	slog.Debug("Request completed", "input_tokens", h.inputTokens, "output_tokens", h.outputTokens, "duration", time.Since(h.startTime))
 }

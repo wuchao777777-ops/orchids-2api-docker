@@ -1,0 +1,37 @@
+# Line endings and diff drivers for the whole tree.
+#
+# Every path in this repository is stored with LF endings (git ls-files --eol
+# reports i/lf for all 600 tracked files), but a checkout on Windows with
+# core.autocrlf=true rewrites them to CRLF in the working tree. Go tooling does
+# not accept that: `gofmt -l` reports such a file as unformatted and its diff is
+# a whole-file rewrite, which is 445 of 516 Go files here. CI never saw it
+# because CI checks out on Linux.
+#
+# `text=auto` makes git normalise any text file to LF on check-in, and
+# `eol=lf` pins the checkout too, so a Windows working tree matches what the
+# index and gofmt both expect. The attribute overrides core.autocrlf, so no
+# per-developer git config is needed to keep the tree consistent.
+* text=auto eol=lf
+
+# Shell, systemd, nftables and Caddy units run on the deployment host. A CRLF
+# in these breaks the shebang line and the parser, so they are pinned rather
+# than left to the heuristic above.
+*.sh      text eol=lf
+*.service text eol=lf
+*.nft     text eol=lf
+Caddyfile text eol=lf
+
+# Go, web and doc sources: pinned so the heuristic above never has to guess.
+*.go   text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+*.cjs  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+
+# Generated lockfiles and the module manifest: normalising these would make
+# `go mod tidy -diff` and the audit job disagree with the tree.
+go.mod -text
+go.sum -text

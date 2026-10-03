@@ -38,9 +38,9 @@ func TestAccountSupportsModelUsesObservedBuildCatalog(t *testing.T) {
 	testutil.Falsef(t, AccountSupportsModel(acc, "grok-4.6") || !AccountSupportsModel(acc, "grok-4.5"), "observed catalog not enforced: %#v", acc.GrokModels)
 }
 
-// TestApplyCLIModelCatalogRestoresGrok2APICatalogCompletion checks observed
+// TestApplyCLIModelCatalogRestoresBuildCatalogCompletion checks observed
 // models and supported Build-derived entries.
-func TestApplyCLIModelCatalogRestoresGrok2APICatalogCompletion(t *testing.T) {
+func TestApplyCLIModelCatalogRestoresBuildCatalogCompletion(t *testing.T) {
 	acc := &store.Account{AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, Subscription: "super"}
 	ApplyCLIModelCatalog(acc, []modelcatalog.Profile{{ModelID: "grok-4.6"}, {ModelID: "grok-imagine-video-1.5"}, {ModelID: "grok-4.6"}}, time.Now())
 
@@ -55,5 +55,5 @@ func TestApplyCLIModelCatalogRestoresGrok2APICatalogCompletion(t *testing.T) {
 	testutil.False(t, acc.GrokModelsSyncedAt.IsZero(), "the snapshot was not dated")
 }
 
-// The only capability grok2api gates on tier is the video 1.5 entry: a Super
+// The only capability gated on tier is the video 1.5 entry: a Super
 // account gains it, anything below loses it even if the catalog listed it.

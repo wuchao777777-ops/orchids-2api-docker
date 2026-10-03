@@ -288,15 +288,14 @@ func scanReservationJSON(body []byte) (model string, inputTokens, outputTokens i
 
 // ── Media pricing (images, videos) ────────────────────────────────────────────
 //
-// Ported from grok2api's EstimateOfficialImageCost / EstimateOfficialImageEditCost
-// / EstimateOfficialVideoCost. The image and video planes are billed per produced
-// asset rather than per token, so they get their own estimators instead of a
-// token table.
+// Media pricing (images, videos). The image and video planes are billed per
+// produced asset rather than per token, so they get their own estimators instead
+// of a token table.
 
 // ── Cost reconstruction (PricingBreakdown) ────────────────────────────────────
 //
-// grok2api exposes the rate components behind a stored cost so an operator can
-// answer "why is this row this expensive" without re-deriving the formula. The
+// Cost reconstruction stores the rate components behind a cost row so an
+// operator can answer "why is this row this expensive" without re-deriving the formula. The
 // stored row keeps the quantities (tokens, images, seconds) and the pricing
 // model; this reconstructs the components that produced the number.
 

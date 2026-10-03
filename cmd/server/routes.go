@@ -73,8 +73,8 @@ func registerRoutes(
 	})
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		authenticated := middleware.APIKeyAuthWithRequest(
-			// A key is required, exactly as grok2api mounts middleware.ClientAuth on
-			// its whole /v1 group; `inference_auth_enabled: false` used to open every
+			// A key is required on the whole /v1 group; `inference_auth_enabled: false`
+			// used to open every
 			// inference route to anonymous callers and is now advisory only. The one
 			// exception is an explicit anonymous_allow_ips source, which a deployment
 			// names when it cannot yet update that client.
@@ -266,7 +266,7 @@ func registerRoutes(
 	mux.HandleFunc("/api/config/list", sessionAuth(apiHandler.HandleConfigList))
 	mux.HandleFunc("/api/config/save", sessionAuth(apiHandler.HandleConfigSave))
 	// Operations monitoring: the overview, the channel × model matrix and the
-	// alert set behind the 运维总览 page.
+	// alert set behind the operations overview page.
 	mux.HandleFunc("/api/ops/overview", sessionAuth(apiHandler.HandleOpsOverview))
 	mux.HandleFunc("/api/ops/alerts/rules", sessionAuth(apiHandler.HandleOpsAlertRules))
 	mux.HandleFunc("/api/ops/runtime", sessionAuth(apiHandler.HandleOpsRuntime))

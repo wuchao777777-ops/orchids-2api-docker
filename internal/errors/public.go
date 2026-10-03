@@ -47,6 +47,12 @@ var publicStatusForCategory = map[string]int{
 	"server":               http.StatusBadGateway,
 	"protocol":             http.StatusBadGateway,
 	"local_overload":       http.StatusBadGateway,
+	// A strict structured-output request the gateway could not satisfy is a fault
+	// of the model's answer, not of the caller's request: the caller sent a valid
+	// schema and a valid prompt. It is answered as an upstream fault so a client
+	// retries or relaxes the schema, rather than as a 400 that tells it its own
+	// request was wrong.
+	"schema_mismatch": http.StatusBadGateway,
 }
 
 func StatusForCategory(category string) int {
@@ -74,6 +80,7 @@ var messageForCategoryTable = map[string]string{
 	"server":               "The upstream service is temporarily unavailable. Retry later.",
 	"protocol":             "The upstream returned an unsupported stream format. Use the request ID to inspect diagnostics.",
 	"local_overload":       "The gateway is temporarily overloaded. Retry later.",
+	"schema_mismatch":      "The model's answer did not match the schema this strict request declared. Relax the schema or retry.",
 	"canceled":             "The request was canceled.",
 }
 

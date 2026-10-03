@@ -9,7 +9,7 @@ import (
 // teamCooldownRegistry tracks upstream resource-exhausted 429 cooldowns at
 // (scope, teamID, model) granularity. When one account in an xAI team hits a
 // rate limit for a model, sibling accounts sharing the team should not blindly
-// retry the same model (mirrors grok2api grokTeamModelRateLimit). This replaces
+// retry the same model. This replaces
 // the previous single global consoleTeamCooldownUntil with a bounded map.
 const (
 	teamCooldownMaxSize = 4096

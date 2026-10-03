@@ -10,10 +10,9 @@ import (
 	"time"
 )
 
-// Rate limit metadata parsing ported from grok2api
-// (backend/internal/infra/provider/rate_limit.go). xAI Build CLI
-// both return a structured `resource-exhausted` 429 body carrying the team,
-// model, and RPS/RPM window. Parsing it lets the gateway cool down at the
+// Rate limit metadata parsing. xAI Build CLI and the Grok Build endpoint both
+// return a structured `resource-exhausted` 429 body carrying the team, the
+// model, and the RPS/RPM window. Parsing it lets the gateway cool down at the
 // team+model granularity instead of a fixed 60s blanket cooldown.
 
 var (

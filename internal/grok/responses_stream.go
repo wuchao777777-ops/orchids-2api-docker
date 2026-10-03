@@ -45,8 +45,14 @@ func writeResponsesStreamFromChatReaderRequestWithHook(w http.ResponseWriter, re
 	finish := ""
 	sawDone := false
 	meaningful := false
+	sequence := 0
 	emit := func(kind string, payload map[string]interface{}) {
+		// sequence_number must increase by one per event: a client that
+		// reconnects with Last-Event-ID asks for everything after the last
+		// number it saw, and an event without one cannot be ordered at all.
 		payload["type"] = kind
+		payload["sequence_number"] = sequence
+		sequence++
 		data, err := json.Marshal(payload)
 		if err != nil {
 			writer.err = err

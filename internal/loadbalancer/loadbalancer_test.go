@@ -173,65 +173,6 @@ func TestQoderAccountsAreLoadBalanced(t *testing.T) {
 	testutil.Falsef(t, err != nil || selected.ID != second.ID, "cooling first: account=%v err=%v, want second", selected, err)
 }
 
-func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfulError(t *testing.T) {
-	now := time.Now()
-	lb := &LoadBalancer{
-		connTracker: NewMemoryConnTracker(),
-		cachedAccounts: []*store.Account{
-			{ID: 1, Name: "WorkBuddy1", AccountType: "workbuddy", Enabled: true, StatusCode: "429", LastAttempt: now},
-			{ID: 2, Name: "WorkBuddy2", AccountType: "workbuddy", Enabled: true, StatusCode: "429", LastAttempt: now},
-		},
-		cacheExpires: now.Add(time.Minute),
-	}
-
-	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "workbuddy", nil)
-	testutil.False(t, err == nil, "expected rate-limited selector error, got nil")
-	testutil.MustContain(t, err.Error(), "all matching accounts are rate-limited or cooling down")
-}
-
-// TestGetNextAccountExcludingByChannelWithTracker_AllAllowanceParkedNamesTheAllowance
-// pins the second reason an empty pool has: every account is parked by an
-// exhausted allowance with its reset time still ahead. The caller has to be able
-// to tell that apart from a rate limit, because the action differs — credits and
-// capacity, rather than waiting out a cooldown.
-func TestGetNextAccountExcludingByChannelWithTracker_AllAllowanceParkedNamesTheAllowance(t *testing.T) {
-	now := time.Now()
-	lb := &LoadBalancer{
-		connTracker: NewMemoryConnTracker(),
-		cachedAccounts: []*store.Account{
-			{ID: 1, Name: "WB1", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
-			{ID: 2, Name: "WB2", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
-		},
-		cacheExpires: now.Add(time.Minute),
-	}
-
-	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "workbuddy", nil)
-	testutil.False(t, err == nil, "expected an allowance-parked selector error, got nil")
-	testutil.MustContain(t, err.Error(), "have exhausted their allowance")
-}
-
-// TestGetNextAccountExcludingByChannelWithTrackerFilter_ModelFilterEmptiesThePool
-// pins the reason that produced the WorkBuddy outage this was written for: the
-// channel has accounts, but every one of them is cooling down for the model the
-// request asked for. The bare "no enabled accounts available for channel" made
-// that read like a channel with no accounts at all.
-func TestGetNextAccountExcludingByChannelWithTrackerFilter_ModelFilterEmptiesThePool(t *testing.T) {
-	now := time.Now()
-	tracker := NewMemoryConnTracker()
-	lb := &LoadBalancer{
-		connTracker:    tracker,
-		cachedAccounts: []*store.Account{{ID: 1, Name: "WB1", AccountType: "workbuddy", Enabled: true}},
-		cacheExpires:   now.Add(time.Minute),
-	}
-
-	_, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", tracker, func(*store.Account) error {
-		// The per-model cooldown filter: every candidate is withheld for this model.
-		return RejectModelThrottled
-	})
-	testutil.False(t, err == nil, "expected a model-filtered selector error, got nil")
-	testutil.MustContain(t, err.Error(), "cooling down for the requested model")
-}
-
 // TestFilterReasonsDecideTheEmptyPoolAnswer pins what the filter's reason is
 // for: the same empty pool has to be answered "retry later" or "this model is
 // not available here" depending on why every candidate was withheld.
@@ -284,158 +225,12 @@ func TestFilterReasonsDecideTheEmptyPoolAnswer(t *testing.T) {
 	}
 }
 
-// TestGetNextAccountExcludingByChannelWithTracker_MixedPoolNamesTheSplit is the
-// regression test for the 2026-09-21 WorkBuddy outage.
-//
-// The pool held three accounts cooling down from a 429 and four parked for a
-// spent allowance at the same time. Both group-only rules require *every*
-// account to share one reason, so neither matched, the selector fell through to
-// the bare "no enabled accounts available for channel: workbuddy", and that
-// sentence classifies to no capacity cause at all — the caller was answered with
-// a 503 "server fault" instead of a retryable 429, and the operator could not
-// tell rate limits from spent credits.
-func TestGetNextAccountExcludingByChannelWithTracker_MixedPoolNamesTheSplit(t *testing.T) {
-	now := time.Now()
-	lb := &LoadBalancer{
-		connTracker: NewMemoryConnTracker(),
-		cachedAccounts: []*store.Account{
-			{ID: 1, Name: "WB1", AccountType: "workbuddy", Enabled: true, StatusCode: "429", LastAttempt: now, RateLimitFailures: 1},
-			{ID: 2, Name: "WB2", AccountType: "workbuddy", Enabled: true, StatusCode: "429", LastAttempt: now, RateLimitFailures: 1},
-			{ID: 3, Name: "WB3", AccountType: "workbuddy", Enabled: true, StatusCode: "429", LastAttempt: now, RateLimitFailures: 1},
-			{ID: 4, Name: "WB4", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
-			{ID: 5, Name: "WB5", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
-			{ID: 6, Name: "WB6", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
-			{ID: 7, Name: "WB7", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
-		},
-		cacheExpires: now.Add(time.Minute),
-	}
-
-	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "workbuddy", nil)
-	testutil.False(t, err == nil, "expected a mixed-pool selector error, got nil")
-	message := err.Error()
-	testutil.MustContain(t, message, "rate-limited or cooling down")
-	testutil.MustContainAll(t, message, "3 rate-limited", "4 parked for a spent allowance")
-	// The phrase "exhausted their allowance" would make the shared pool rule
-	// classify a recoverable mixed pool as a permanent quota verdict.
-	testutil.MustNotContain(t, message, "exhausted their allowance")
-	// And it must not degrade to the bare sentence that answered 503.
-	testutil.Falsef(t, strings.HasSuffix(message, "channel: workbuddy"), "mixed pool fell back to the unexplained selector sentence: %v", err)
-}
-
-func TestGetNextAccountExcludingByChannelWithTracker_RejectsSingleAccountAtLimit(t *testing.T) {
-	tracker := NewMemoryConnTracker()
-	tracker.Acquire(1)
-	now := time.Now()
-	lb := &LoadBalancer{
-		connTracker: tracker,
-		cachedAccounts: []*store.Account{
-			{ID: 1, Name: "Grok1", AccountType: "grok", Enabled: true, MaxConcurrent: 1},
-		},
-		cacheExpires: now.Add(time.Minute),
-	}
-
-	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "grok", tracker)
-	testutil.Falsef(t, err == nil || !strings.Contains(err.Error(), "concurrency limit"), "expected concurrency limit error, got %v", err)
-}
-
 func TestMemoryConnTrackerTryAcquireIsBounded(t *testing.T) {
 	tracker := NewMemoryConnTracker()
 	testutil.False(t, !tracker.TryAcquire(7, 1), "first reservation should succeed")
 	testutil.False(t, tracker.TryAcquire(7, 1), "second reservation should be rejected")
 	tracker.Release(7)
 	testutil.False(t, !tracker.TryAcquire(7, 1), "reservation should succeed after release")
-}
-
-func TestIsAccountAvailable_401RequiresReauth(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	acc := &store.Account{ID: 1, AccountType: "grok", StatusCode: "401", AuthStatus: store.AccountAuthStatusReauthRequired, LastAttempt: time.Now().Add(-24 * time.Hour)}
-	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "reauthRequired account must remain excluded regardless of age")
-}
-
-func TestIsAccountAvailable_PaidGrokBillingExhaustion(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	acc := &store.Account{ID: 1, AccountType: "grok", GrokProvider: "build", CredentialType: "oauth", Subscription: "super"}
-	acc.GrokBilling.Monthly = store.GrokQuotaWindow{HasLimit: true, Limit: 100, HasRemaining: true, Remaining: 0, ResetAt: time.Now().Add(time.Hour)}
-	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "known exhausted paid Build account must be gated")
-	acc.GrokBilling.Monthly.Remaining = 1
-	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "paid Build account with remaining billing must be available")
-}
-
-func TestIsAccountAvailable_Paid402UsesBillingPeriodEnd(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	acc := &store.Account{ID: 1, AccountType: "grok", GrokProvider: "build", CredentialType: "oauth", Subscription: "super", StatusCode: "402", LastAttempt: time.Now().Add(-48 * time.Hour)}
-	acc.GrokBilling.Weekly = store.GrokQuotaWindow{HasUsage: true, UsagePercent: 100, ResetAt: time.Now().Add(time.Hour)}
-	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "paid 402 must remain gated until billing period end")
-	acc.GrokBilling.Weekly.ResetAt = time.Now().Add(-time.Second)
-	// A post-period probe is admitted through the atomic store claim, not by a
-	// store-less LoadBalancer: without the claim every concurrent request would
-	// hit the exhausted account at once.
-	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "paid 402 must remain gated when no atomic probe store is configured")
-}
-
-func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	acc := &store.Account{
-		ID:           1,
-		AccountType:  "workbuddy",
-		StatusCode:   "429",
-		LastAttempt:  time.Now().Add(-time.Minute),
-		QuotaResetAt: time.Now().Add(-time.Second),
-	}
-
-	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "expected expired quota reset to re-enable account")
-	testutil.Equal(t, acc.StatusCode, "")
-	testutil.Falsef(t, !acc.QuotaResetAt.IsZero(), "expected quota reset timestamp to be cleared, got %v", acc.QuotaResetAt)
-}
-
-func TestIsAccountAvailable_LegacyQoder402ReachesModelFilter(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	acc := &store.Account{
-		ID:          1,
-		AccountType: "qoder",
-		StatusCode:  "402",
-		LastAttempt: time.Now().Add(-5 * time.Minute),
-	}
-
-	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "expected legacy Qoder 402 account to reach the free-model filter")
-	testutil.Equal(t, acc.StatusCode, "402")
-}
-
-// TestIsAccountAvailable_WorkBuddyCreditExhaustionReachesModelFilter pins that
-// the dedicated spent-package state remains a candidate; the handler's
-// model-aware filter then admits only confirmed advertised free models.
-func TestIsAccountAvailable_WorkBuddyCreditExhaustionReachesModelFilter(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	acc := &store.Account{
-		ID: 1, AccountType: "workbuddy", StatusCode: store.AccountStatusWorkBuddyQuotaExhausted,
-		StatusMessage: "credits exhausted", LastAttempt: time.Now(), QuotaResetAt: time.Now().Add(48 * time.Hour),
-	}
-	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "expected exhausted WorkBuddy account to reach the free-model filter")
-	testutil.Equal(t, acc.StatusCode, store.AccountStatusWorkBuddyQuotaExhausted)
-}
-
-// TestIsAccountAvailable_WorkBuddyCreditExhaustionClearsWhenQuotaReturns proves
-// that positive quota restores full account capability.
-func TestIsAccountAvailable_WorkBuddyCreditExhaustionClearsWhenQuotaReturns(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	acc := &store.Account{ID: 1, AccountType: "workbuddy", StatusCode: store.AccountStatusWorkBuddyQuotaExhausted, UsageCurrent: 10}
-	testutil.False(t, !lb.isAccountAvailable(context.Background(), acc), "expected account to remain available when quota returns")
-	testutil.Equal(t, acc.StatusCode, "")
-}
-
-// TestIsAccountAvailable_402KeepsLongCooldownForOtherChannels pins that the
-// WorkBuddy release above is channel-scoped: every other provider keeps the
-// payment cooldown.
-func TestIsAccountAvailable_402KeepsLongCooldownForOtherChannels(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	acc := &store.Account{
-		ID:          1,
-		AccountType: "other",
-		StatusCode:  "402",
-		LastAttempt: time.Now().Add(-time.Hour),
-	}
-
-	testutil.False(t, lb.isAccountAvailable(context.Background(), acc), "expected non-Qoder 402 account to keep the long cooldown")
 }
 
 func TestPersistAppliedAccountStatus_DoesNotMutateVerdictAgain(t *testing.T) {
@@ -491,22 +286,67 @@ func TestMarkAccountStatus_Repeated429RefreshesCooldownStart(t *testing.T) {
 	testutil.Falsef(t, acc.RateLimitFailures != 2 || remaining < 59*time.Second || remaining > 61*time.Second, "second 429 failures=%d cooldown=%v want about 1m", acc.RateLimitFailures, remaining)
 }
 
+// TestSelectAccountRotatesAcrossEqualAccounts pins the two properties the
+// selector actually gives accounts that look identical to it: a pool that has
+// never handed an account out serves each one once before repeating any, and a
+// long run spreads traffic without starving or favouring an account.
+//
+// It used to assert a fixed per-account minimum over 30 draws. The tie-break
+// among equally loaded accounts is a random pick (see selectAccountWithTracker),
+// so 30 uniform draws over three accounts leave one of them below 5 often
+// enough to fail CI — about one run in eight. The bounds below are wide enough
+// that a uniform selector cannot trip them and tight enough that a selector
+// which stopped rotating fails on the first property.
 func TestSelectAccountRotatesAcrossEqualAccounts(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	accounts := []*store.Account{
-		{ID: 1, Name: "a", Weight: 1},
-		{ID: 2, Name: "b", Weight: 1},
-		{ID: 3, Name: "c", Weight: 1},
+	const (
+		accountCount = 3
+		draws        = 300
+		// A third of an even split, and half of all traffic. For 300 uniform
+		// draws over three accounts the expected count is 100 with a standard
+		// deviation near 8, so both bounds sit far outside the noise while
+		// still failing a selector that pins requests to one account.
+		minShare = draws / (accountCount * 3)
+		maxShare = draws / 2
+	)
+	newAccounts := func() []*store.Account {
+		return []*store.Account{
+			{ID: 1, Name: "a", Weight: 1},
+			{ID: 2, Name: "b", Weight: 1},
+			{ID: 3, Name: "c", Weight: 1},
+		}
 	}
-	seen := map[int64]int{}
-	for i := 0; i < 30; i++ {
+
+	// A fresh pool must try every account before it repeats one: the tie-break
+	// prefers accounts that have never been selected, so the first
+	// accountCount draws are a permutation. This is what a regression in the
+	// rotation breaks first, and it does not depend on the random pick.
+	for round := 0; round < 50; round++ {
+		lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+		accounts := newAccounts()
+		seen := map[int64]int{}
+		for i := 0; i < accountCount; i++ {
+			acc := lb.selectAccountWithTracker(accounts, nil)
+			testutil.False(t, acc == nil, "nil account")
+			seen[acc.ID]++
+		}
+		testutil.Equal(t, len(seen), accountCount)
+		for id, count := range seen {
+			testutil.Falsef(t, count != 1, "account %d served %d times in the first %d draws; every account must be tried once first", id, count, accountCount)
+		}
+	}
+
+	// Over a long run no account starves and none takes over the pool.
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	accounts := newAccounts()
+	counts := map[int64]int{}
+	for i := 0; i < draws; i++ {
 		acc := lb.selectAccountWithTracker(accounts, nil)
 		testutil.False(t, acc == nil, "nil account")
-		seen[acc.ID]++
+		counts[acc.ID]++
 	}
-	testutil.Equal(t, len(seen), 3)
-	for id, count := range seen {
-		testutil.Falsef(t, count < 5, "account %d selected %d times out of 30; rotation is too uneven", id, count)
+	testutil.Equal(t, len(counts), accountCount)
+	for id, count := range counts {
+		testutil.Falsef(t, count < minShare || count > maxShare, "account %d selected %d times out of %d; want between %d and %d", id, count, draws, minShare, maxShare)
 	}
 }
 

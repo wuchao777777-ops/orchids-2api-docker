@@ -17,7 +17,7 @@ data: { "type":"response.completed", "id":"resp_ok", "response":{"id":"resp_ok",
 	testutil.Fail(t, result.Err != nil, result.Err)
 	// The native relay is byte-transparent: an event that already carries every
 	// field reaches the client exactly as the upstream wrote it, with no added
-	// frame (grok2api relays the same way).
+	// frame (the relay adds nothing).
 	testutil.Equal(t, rec.Body.String(), line)
 }
 

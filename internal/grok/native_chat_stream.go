@@ -176,7 +176,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 	}
 	id, created := "chatcmpl_"+randomHex(8), time.Now().Unix()
 	// The converted stream needs the same degenerate-repeat guard the native relay
-	// has: grok2api tracks deltas in its stream layer, before protocol conversion.
+	// has: deltas are tracked in the stream layer, before protocol conversion.
 	repeatTracker := &streamRepeatTracker{}
 	var text, reasoning, refusal strings.Builder
 	tools := map[string]*responseToolState{}

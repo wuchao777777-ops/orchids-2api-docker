@@ -63,7 +63,7 @@ const alertingSuccessTargetSource = "告警阈值 SuccessRateWarning"
 // A nil engine — aggregation disabled, a test, or a deployment that never wired
 // alerting — still has to answer, and so does an engine built from a zero-value
 // Rules: the shipped policy is the honest fallback, because a returned 0 would
-// make the page print "目标 0.0%" and look broken.
+// make the page print "target 0.0%" and look broken.
 func successTarget(engine *alerting.Engine) (float64, string) {
 	return successTargets(engine).SuccessRateWarning, alertingSuccessTargetSource
 }
@@ -79,7 +79,7 @@ func successTargetCritical(engine *alerting.Engine) float64 {
 // policy wherever the engine carries no usable line. A nil engine — aggregation
 // disabled, a test, or a deployment that never wired alerting — still has to
 // answer, and so does an engine built from a zero-value Rules: a returned 0
-// would make the page print "目标 0.0%" and look broken.
+// would make the page print "target 0.0%" and look broken.
 func successTargets(engine *alerting.Engine) alerting.Rules {
 	rules := engine.Thresholds()
 	defaults := alerting.DefaultRules()
@@ -94,7 +94,7 @@ func successTargets(engine *alerting.Engine) alerting.Rules {
 
 // HandleOpsOverview answers the operations overview: KPI totals, a per-minute
 // trend and the current alert set. Every number states its sample count, so the
-// UI can show "暂无样本" instead of a healthy-looking zero.
+// UI can show "no samples yet" instead of a healthy-looking zero.
 func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
@@ -130,7 +130,7 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 	// stated target is exactly the confusion this field removes.
 	//
 	// success_target_critical is the severe line the alert detail already quotes
-	// ("阈值 <50%"); the page does not draw it yet, but keeping it in the same
+	// ("threshold <50%"); the page does not draw it yet, but keeping it in the same
 	// response means the two numbers an operator compares have one source.
 	successTargetValue, targetSource := successTarget(a.alertEngine)
 	if a.auditHealth != nil {
@@ -502,8 +502,8 @@ func decodeAuditEvent(entry redis.XMessage) (audit.Event, bool) {
 // Percentiles are not additive, so a merged view must collect the raw samples of
 // every channel before computing one percentile. The earlier code asked the
 // aggregator to summarise the scope label "all", whose own sample lists do not
-// exist, which is why both P95 figures came back as zero whenever 全部渠道 was
-// selected.
+// exist, which is why both P95 figures came back as zero whenever "all channels"
+// was selected.
 func (a *API) opsBucketsWithSamples(ctx context.Context, scope string, since, until time.Time) ([]opsagg.Bucket, []int64, []int64, error) {
 	if scope != "all" {
 		buckets, err := a.opsAggregator.Range(ctx, scope, since, until)

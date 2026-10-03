@@ -261,8 +261,8 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 	}
 	// The official Build client identifies itself and traces each request.
 	// Without these the upstream sees an anonymous caller, which is both a
-	// weaker identity and the reason session affinity behaved differently than
-	// through grok2api.
+	// weaker identity, and the reason session affinity behaved differently
+	// without them.
 	headers.Set("x-authenticateresponse", "authenticate-response")
 	headers.Set("x-grok-agent-id", buildClientIdentifier(c))
 	headers.Set("x-grok-model-override", strings.TrimSpace(fmt.Sprint(payload["model"])))

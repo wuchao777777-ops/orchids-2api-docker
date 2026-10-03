@@ -161,7 +161,6 @@ func ResponsesBridgeCompactHandler(chat http.HandlerFunc, opts ResponsesBridgeOp
 			w.Header().Set("Content-Type", "text/event-stream")
 			_ = writeGatewayCompactionStream(w, result)
 		} else {
-			result["object"] = "response.compaction"
 			util.WriteJSON(w, result)
 		}
 	}

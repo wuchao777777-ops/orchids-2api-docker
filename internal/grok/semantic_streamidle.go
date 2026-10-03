@@ -1,6 +1,5 @@
-// Derived from chenyme/grok2api, commit 44a390b890e7a3e0dd209b95b8c29a9f2b1be8dd.
-// Copyright (c) 2026 Chenyme. MIT license: ../../licenses/third-party-MIT.txt.
-// Source: backend/internal/infra/provider/cli/semantic_streamidle.go.
+// Semantic idle watchdog: an upstream that has stopped producing generated
+// output is not the same as a fast upstream.
 package grok
 
 import (

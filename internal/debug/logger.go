@@ -23,7 +23,7 @@ const (
 
 var debugLoggerCreateCount atomic.Uint64
 
-// Logger 调试日志记录器
+// Logger records debug logs for one request.
 type Logger struct {
 	capture    *Capture
 	attempt    *UpstreamAttempt
@@ -36,7 +36,7 @@ type Logger struct {
 	startTime  time.Time
 }
 
-// New 创建新的调试日志记录器
+// New creates a new debug logger.
 func New(enabled bool, sseEnabled bool) *Logger {
 	if !enabled {
 		return &Logger{enabled: false}
@@ -88,7 +88,7 @@ func pruneDebugLogDirectories(root string, keep int) {
 	}
 }
 
-// LogIncomingRequest 记录 1. 进入的 Claude API 请求
+// LogIncomingRequest records step 1: the incoming Claude API request.
 func (l *Logger) LogIncomingRequest(req interface{}) {
 	if !l.enabled {
 		return
@@ -96,7 +96,7 @@ func (l *Logger) LogIncomingRequest(req interface{}) {
 	l.writeJSON("1_claude_request.json", req)
 }
 
-// LogEarlyExit 记录提前返回的原因
+// LogEarlyExit records why the request returned early.
 func (l *Logger) LogEarlyExit(reason string, details map[string]interface{}) {
 	if !l.enabled {
 		return
@@ -111,7 +111,7 @@ func (l *Logger) LogEarlyExit(reason string, details map[string]interface{}) {
 	l.writeJSON("1_early_exit.json", payload)
 }
 
-// LogConvertedPrompt 记录 2. 转换后的 prompt
+// LogConvertedPrompt records step 2: the converted prompt.
 func (l *Logger) LogConvertedPrompt(prompt string) {
 	if !l.enabled {
 		return
@@ -119,7 +119,7 @@ func (l *Logger) LogConvertedPrompt(prompt string) {
 	l.writeFile("2_converted_prompt.md", prompt)
 }
 
-// LogUpstreamRequest 记录 3. 发送给上游的请求
+// LogUpstreamRequest records step 3: the request sent upstream.
 func (l *Logger) LogUpstreamRequest(url string, headers map[string]string, body interface{}) {
 	if !l.enabled {
 		return
@@ -157,7 +157,8 @@ func (l *Logger) LogUpstreamRequest(url string, headers map[string]string, body 
 	l.writeJSON("3_upstream_request.json", data)
 }
 
-// LogUpstreamHTTPError 记录上游 HTTP 错误（请求失败或返回非 200）
+// LogUpstreamHTTPError records an upstream HTTP error (the request failed or
+// the answer was not 200).
 func (l *Logger) LogUpstreamHTTPError(url string, status int, body string, err error) {
 	if !l.enabled {
 		return
@@ -186,7 +187,7 @@ func (l *Logger) LogUpstreamHTTPError(url string, status int, body string, err e
 	l.writeJSON("3_upstream_http_error.json", payload)
 }
 
-// LogOutputSSE 记录 5. 转换给客户端的 SSE（追加写入）
+// LogOutputSSE records step 5: the SSE handed to the client (appended).
 func (l *Logger) LogOutputSSE(event string, data string) {
 	if !l.enabled || !l.sseEnabled {
 		return
@@ -225,7 +226,7 @@ func (l *Logger) writeLimitedStream(file *os.File, written *int64, data string) 
 	*written += int64(n)
 }
 
-// LogInputTokenBreakdown 记录输入 token 分解
+// LogInputTokenBreakdown records the input token breakdown.
 func (l *Logger) LogInputTokenBreakdown(profile string, basePromptTokens, systemContextTokens, historyTokens, toolsTokens, total int) {
 	if !l.enabled {
 		return
@@ -242,7 +243,7 @@ func (l *Logger) LogInputTokenBreakdown(profile string, basePromptTokens, system
 	l.writeJSON("6_input_token_breakdown.json", payload)
 }
 
-// LogSummary 记录请求摘要
+// LogSummary records the request summary.
 func (l *Logger) LogSummary(inputTokens, outputTokens int, duration time.Duration, stopReason string) {
 	if !l.enabled {
 		return
@@ -258,7 +259,7 @@ func (l *Logger) LogSummary(inputTokens, outputTokens int, duration time.Duratio
 	l.writeJSON("6_summary.json", summary)
 }
 
-// Close 关闭日志文件
+// Close closes the log files.
 func (l *Logger) Close() {
 	if !l.enabled {
 		return

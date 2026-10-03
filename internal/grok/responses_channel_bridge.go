@@ -191,8 +191,8 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		}
 		response := responsesObjectFromChat(req.Model, chatBody)
 		applyBridgedResponseExtras(response, req)
-		// Ownership is recorded for any successful response, exactly as grok2api
-		// does: the caller's `store` asks the upstream to retain, not this gateway.
+		// Ownership is recorded for any successful response: the caller's `store`
+		// asks the upstream to retain, not this gateway.
 		if err := saveBridgedResponse(r, req, response, opts); err != nil {
 			writeGrokError(w, http.StatusServiceUnavailable, "failed to store response")
 			return

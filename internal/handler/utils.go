@@ -581,8 +581,9 @@ func generateTopicTitle(text string) string {
 	return strings.TrimSpace(string(runes))
 }
 
-// stripSystemRemindersForMode 移除 <system-reminder>...</system-reminder>，避免误判 plan/suggestion 模式
-// 使用 LastIndex 查找结束标签，正确处理嵌套的字面量标签
+// stripSystemRemindersForMode removes <system-reminder>...</system-reminder>, so a
+// plan/suggestion mode is not misdetected.
+// It locates the closing tag with LastIndex, which handles nested literal tags.
 func stripSystemRemindersForMode(text string) string {
 	text = stripModeTaggedBlock(text, "system-reminder", true)
 	for _, tag := range []string{

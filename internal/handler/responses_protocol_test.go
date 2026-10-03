@@ -13,7 +13,9 @@ func TestResponsesControlsReachRealSharedHandler(t *testing.T) {
 	for _, channel := range []string{"workbuddy", "qoder", "cline"} {
 		t.Run(channel, func(t *testing.T) {
 			h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
-			client := &relayRecordingClient{}
+			// The request is strict, so the recorded answer has to satisfy its
+			// schema; {} is the empty object that schema describes.
+			client := &relayRecordingClient{answer: "{}"}
 			h.client = client
 			body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":17,"temperature":0,"parallel_tool_calls":false,"text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"},"strict":true}}}`
 			w := httptest.NewRecorder()

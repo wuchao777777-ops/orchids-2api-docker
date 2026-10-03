@@ -1,18 +1,24 @@
 package qoder
 
-// 上游错误四分类（参照 qoder2api 的 internal/bridge/errors.go）
+// Upstream errors fall into four classes (modeled on qoder2api's
+// internal/bridge/errors.go).
 //
-// 分类语义：
-//   - 内容审核拒绝：上游安全审核命中（DataInspectionFailed 一类）。客户端状态
-//     统一 400，永不重试 —— 重试只会让同一份被拒内容再打一遍上游，并顺带把
-//     账号池里每个账号都标成限流。
-//   - 瞬时可重试：418（上游把 provider 故障包装成 418）、5xx、4xx 带
-//     provider_error，以及传输层 TLS/EOF/reset/超时。同账号退避重试。
-//   - 客户端参数错：invalid_parameter_error 一类。重试无效，快速失败。
-//   - 其余上游错误：按原样上抛。
+// Class semantics:
+//   - Content moderation refusal: the upstream safety review hit (the
+//     DataInspectionFailed family). The client always gets 400 and it is never
+//     retried — a retry only sends the same rejected content upstream again and,
+//     as a side effect, marks every account in the pool as rate limited.
+//   - Transient, retryable: 418 (the upstream wraps provider faults as 418),
+//     5xx, a 4xx carrying provider_error, and transport-layer TLS/EOF/reset/
+//     timeout. Retried with backoff on the same account.
+//   - Client parameter error: the invalid_parameter_error family. Retrying
+//     changes nothing, so it fails fast.
+//   - Every other upstream error: surfaced as-is.
 //
-// 401/403/429 各有专门路径（刷新凭证 / 额度 / 排队窗口），不归入瞬时重试类：
-// 把它们当成抖动重试，等于在凭证已经失效时把整池账号逐个刷一遍。
+// 401/403/429 each have a dedicated path (refresh the credential / quota /
+// queuing window) and are not folded into the transient class: treating them as
+// jitter worth retrying means walking every account in the pool one by one while
+// the credential is already dead.
 
 import (
 	"context"

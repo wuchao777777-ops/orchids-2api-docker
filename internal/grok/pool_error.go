@@ -71,8 +71,8 @@ func writeGrokAccountUnavailable(w http.ResponseWriter, err error, fallbackCode,
 // writeGrokNoAccountError answers a request the chat/completions plane could not
 // serve because the account pool had no usable credential. It is not the
 // caller's credential that failed, so the fallback status is 503 with a stable
-// code rather than the upstream status (grok2api answers the same situation with
-// upstream_unavailable) — but a pool that is merely cooling down or spent is a
+// code rather than the upstream status (upstream_unavailable) — but a pool that is
+// merely cooling down or spent is a
 // retryable capacity condition, and that is what the client is told.
 func writeGrokNoAccountError(w http.ResponseWriter, err error) {
 	answer := classifyGrokPoolFailure(err, "upstream_unavailable", grokModelAccountUnavailableMessage)

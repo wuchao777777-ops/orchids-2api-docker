@@ -1,4 +1,4 @@
-// Package errors 提供统一的错误处理机制
+// Package errors provides the shared error-handling mechanism.
 package errors
 
 import (
@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 )
 
-// AppError 表示应用层错误，包含错误码、消息和可选的原因
+// AppError is an application-layer error: a code, a message and an optional cause.
 type AppError struct {
 	Code       string `json:"code"`
 	Message    string `json:"message"`
@@ -23,7 +23,7 @@ type AppError struct {
 	RetryAfter time.Duration `json:"-"`
 }
 
-// ToJSON 返回错误的 JSON 表示
+// ToJSON returns the JSON representation of the error.
 func (e *AppError) ToJSON() []byte {
 	data, _ := json.Marshal(map[string]interface{}{
 		"type": "error",
@@ -35,7 +35,7 @@ func (e *AppError) ToJSON() []byte {
 	return data
 }
 
-// WriteResponse 将错误写入 HTTP 响应
+// WriteResponse writes the error into the HTTP response.
 func (e *AppError) WriteResponse(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	if e.RetryAfter > 0 {
@@ -49,7 +49,7 @@ func (e *AppError) WriteResponse(w http.ResponseWriter) {
 	w.Write(e.ToJSON())
 }
 
-// New 创建新的应用错误
+// New creates a new application error.
 func New(code, message string, httpStatus int) *AppError {
 	return &AppError{
 		Code:       code,

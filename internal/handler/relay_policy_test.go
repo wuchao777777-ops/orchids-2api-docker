@@ -18,11 +18,21 @@ import (
 	"orchids-api/internal/upstream"
 )
 
-type relayRecordingClient struct{ requests []upstream.UpstreamRequest }
+// relayRecordingClient replays a fixed answer and records what reached upstream.
+// answer is the text the fake model produces; the default is prose, which a
+// strict structured-output request must reject.
+type relayRecordingClient struct {
+	requests []upstream.UpstreamRequest
+	answer   string
+}
 
 func (c *relayRecordingClient) SendRequestWithPayload(_ context.Context, req upstream.UpstreamRequest, emit func(upstream.SSEMessage), _ *debug.Logger) error {
 	c.requests = append(c.requests, req)
-	for _, event := range []map[string]interface{}{{"type": "text-start"}, {"type": "text-delta", "delta": "upstream answer"}, {"type": "finish", "finishReason": "stop"}} {
+	answer := c.answer
+	if answer == "" {
+		answer = "upstream answer"
+	}
+	for _, event := range []map[string]interface{}{{"type": "text-start"}, {"type": "text-delta", "delta": answer}, {"type": "finish", "finishReason": "stop"}} {
 		emit(upstream.SSEMessage{Type: "model", Event: event})
 	}
 	return nil

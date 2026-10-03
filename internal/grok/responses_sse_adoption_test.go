@@ -12,7 +12,7 @@ import (
 	"testing/iotest"
 )
 
-func TestGrok2apiNativeOutcomeStatusAndEOF(t *testing.T) {
+func TestResponsesNativeOutcomeStatusAndEOF(t *testing.T) {
 	for _, test := range []struct {
 		status, finish string
 		fail           bool
@@ -36,19 +36,19 @@ func TestGrok2apiNativeOutcomeStatusAndEOF(t *testing.T) {
 	}
 }
 
-type grok2apiShortWriter struct{ http.ResponseWriter }
+type compatShortWriter struct{ http.ResponseWriter }
 
-func (w grok2apiShortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+func (w compatShortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
 
-func TestGrok2apiNativeOutcomeShortWriteAndStickyFailure(t *testing.T) {
-	_, _, result := copyNativeCLIResponseAndCaptureModel(grok2apiShortWriter{httptest.NewRecorder()}, strings.NewReader(parityTerminal("response.completed")), "text/event-stream", "grok-4.6")
+func TestResponsesNativeOutcomeShortWriteAndStickyFailure(t *testing.T) {
+	_, _, result := copyNativeCLIResponseAndCaptureModel(compatShortWriter{httptest.NewRecorder()}, strings.NewReader(parityTerminal("response.completed")), "text/event-stream", "grok-4.6")
 	testutil.Fail(t, !errors.Is(result.Err, io.ErrShortWrite) || result.Finish != "error", result)
 	stream := parityFrame("response.failed", map[string]interface{}{"response": map[string]interface{}{"error": map[string]interface{}{"message": "failed first"}}}) + parityTerminal("response.completed")
 	_, _, result = copyNativeCLIResponseAndCaptureModel(httptest.NewRecorder(), strings.NewReader(stream), "text/event-stream", "grok-4.6")
 	testutil.Fail(t, result.Err == nil || result.Finish != "error", result)
 }
 
-func TestGrok2apiNativeAuditBoundsWholeMultilineFrame(t *testing.T) {
+func TestResponsesNativeAuditBoundsWholeMultilineFrame(t *testing.T) {
 	line := "data: " + strings.Repeat("a", 64<<10) + "\n"
 	recorder := httptest.NewRecorder()
 	_, capture, result := copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(strings.Repeat(line, 130)), "text/event-stream", "grok-4.6")
@@ -57,16 +57,16 @@ func TestGrok2apiNativeAuditBoundsWholeMultilineFrame(t *testing.T) {
 	}
 }
 
-type grok2apiUnexpectedReader struct{ reads int }
+type compatUnexpectedReader struct{ reads int }
 
-func (r *grok2apiUnexpectedReader) Read([]byte) (int, error) {
+func (r *compatUnexpectedReader) Read([]byte) (int, error) {
 	r.reads++
 	return 0, errors.New("read after logical terminal")
 }
 
-func TestGrok2apiNativeSSEFramingAndLogicalTerminal(t *testing.T) {
+func TestResponsesNativeSSEFramingAndLogicalTerminal(t *testing.T) {
 	input := "\uFEFF: keepalive\r\nid: event_a\r\nretry: 1000\r\nevent: response.completed\r\ndata: {\"response\":\r\ndata: {\"id\":\"resp_a\",\"status\":\"completed\"}}\r\n\r\n"
-	tail := &grok2apiUnexpectedReader{}
+	tail := &compatUnexpectedReader{}
 	recorder := httptest.NewRecorder()
 	id, capture, result := copyNativeCLIResponseAndCaptureModel(recorder, io.MultiReader(strings.NewReader(input), tail), "text/event-stream", "grok-4.6")
 	testutil.Fail(t, id != "resp_a" || tail.reads != 0 || result.Err != nil || result.Finish != "stop", id, tail.reads, result)
@@ -75,7 +75,7 @@ func TestGrok2apiNativeSSEFramingAndLogicalTerminal(t *testing.T) {
 			t.Fatal("SSE metadata lost", want)
 		}
 	}
-	// grok2api relays the native Responses stream: no added [DONE], and the
+	// The relay passes the native Responses stream through: no added [DONE], and the
 	// upstream's own framing (CRLF, multi-line data) is what the client receives.
 	testutil.MustNotContain(t, recorder.Body.String(), "data: [DONE]")
 
@@ -91,7 +91,7 @@ func TestGrok2apiNativeSSEFramingAndLogicalTerminal(t *testing.T) {
 
 // An upstream [DONE] without a terminal response event is still a failure the
 // client has to see; the relay reports it instead of inventing a completion.
-func TestGrok2apiNativeDoneWithoutTerminalSynthesizesFailure(t *testing.T) {
+func TestResponsesNativeDoneWithoutTerminalSynthesizesFailure(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	_, _, _ = copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader("data: [DONE]\n\n"), "text/event-stream", "grok-4.6")
 	output := recorder.Body.String()

@@ -4,7 +4,7 @@
 // and the previously seen state, so the same inputs always produce the same
 // alerts and a restart cannot invent or lose a firing alert. Fired and recovered
 // transitions are written to the audit journal as system events, which is what
-// makes "故障和恢复形成闭环" traceable.
+// makes "a fault and its recovery close the loop" traceable.
 package alerting
 
 import (
@@ -328,13 +328,13 @@ func (e *Engine) Evaluate(snapshot Snapshot) Transition {
 // The rules are an unexported field, so nothing outside the package could read
 // them — which left the operations page showing a success-rate percentage with
 // no stated target and no way to explain where the number is measured against.
-// Exposing them lets the UI say "目标 90%" next to the rate instead of leaving
+// Exposing them lets the UI say "target 90%" next to the rate instead of leaving
 // the reader to guess why 84.6% is a problem.
 //
 // A nil engine has no rules at all, and a caller that is already nil-safe
 // (Firing() is) must not start panicking here: it falls back to DefaultRules so
 // the UI always gets the shipped 0.9 rather than a zero that renders as
-// "目标 0.0%".
+// "target 0.0%".
 func (e *Engine) Thresholds() Rules {
 	if e == nil {
 		return DefaultRules()

@@ -105,7 +105,7 @@ func TestWriteSSEBytesWritesEventFrame(t *testing.T) {
 }
 
 func TestWriteSSEBytesPropagatesShortWrite(t *testing.T) {
-	writer := grok2apiShortWriter{httptest.NewRecorder()}
+	writer := compatShortWriter{httptest.NewRecorder()}
 	err := writeSSEBytes(writer, "demo", []byte(`{"ok":true}`))
 	testutil.Falsef(t, !errors.Is(err, io.ErrShortWrite), "error=%v", err)
 }

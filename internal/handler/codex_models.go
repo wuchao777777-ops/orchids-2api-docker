@@ -106,10 +106,9 @@ var codexModelMetadataTable = map[string]codexModelMetadata{
 	"grok-composer-2.5-fast":       {200000, "xAI Grok Composer 2.5 model.", false},
 }
 
-// codexDefaultDescription is the single source for the unknown-model copy, and it
-// matches grok2api's string byte for byte. The audit recorded this as the last
-// deliberate wording difference; keeping it identical to the reference
-// implementation is what a side-by-side diff of the two gateways expects.
+// codexDefaultDescription is the single source for the unknown-model copy. The
+// wording is pinned: clients match on this string, so changing it is a wire
+// change even though nothing in the gateway parses it.
 const codexDefaultDescription = "Grok model served via grok2api."
 
 var codexDefaultMetadata = codexModelMetadata{

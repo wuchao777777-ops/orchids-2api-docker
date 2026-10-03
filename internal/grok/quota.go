@@ -167,7 +167,7 @@ func parseBuildRateLimitWindow(headers http.Header, dimension string) store.Grok
 //
 // xAI does not always tell a Build account what it is entitled to: the official
 // identity endpoint omits the plan name for Free accounts, and the billing endpoint
-// returns no numeric window at all for them. Reporting a bare "额度未知" leaves an
+// returns no numeric window at all for them. Reporting a bare "quota unknown" leaves an
 // operator unable to tell "this account is Free" from "this account was never
 // synced", while inventing a balance would be a lie. The projection therefore
 // carries three extra facts next to every number: WHERE the verdict came from

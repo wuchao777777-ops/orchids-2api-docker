@@ -1,4 +1,4 @@
-// Package middleware 提供 HTTP 中间件
+// Package middleware provides HTTP middleware.
 package middleware
 
 import (
@@ -19,36 +19,36 @@ import (
 	"orchids-api/internal/opsagg"
 )
 
-// TraceIDHeader 是请求追踪 ID 的 HTTP 头名称
+// TraceIDHeader is the name of the HTTP header carrying the request trace ID.
 const TraceIDHeader = "X-Trace-ID"
 
-// RequestIDHeader 是请求 ID 的 HTTP 头名称（别名）
+// RequestIDHeader is the name of the HTTP header carrying the request ID (an alias).
 const RequestIDHeader = "X-Request-ID"
 
-// traceIDKey 是 context 中存储 trace ID 的 key
+// traceIDKey is the context key the trace ID is stored under.
 type traceIDKey struct{}
 type requestIDKey struct{}
 
 const DiagnosticRequestIDHeader = "X-Orchids-Request-ID"
 
-// GenerateTraceID 生成一个新的 trace ID
+// GenerateTraceID generates a new trace ID.
 func GenerateTraceID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// 降级到时间戳
+		// Fall back to a timestamp.
 		return hex.EncodeToString([]byte(time.Now().Format("20060102150405.000000")))
 	}
 	return hex.EncodeToString(b)
 }
 
-// TraceMiddleware 添加请求追踪功能
-// 从请求头获取 trace ID，如果没有则生成新的
+// TraceMiddleware adds request tracing.
+// It reads the trace ID from the request headers and generates a new one when absent.
 func TraceMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := GenerateTraceID()
 		// Client trace IDs may span retries; the server request ID never does.
 		w.Header().Set(DiagnosticRequestIDHeader, requestID)
-		// 尝试从请求头获取 trace ID
+		// Try to read the trace ID from the request headers.
 		traceID := r.Header.Get(TraceIDHeader)
 		if traceID == "" {
 			traceID = r.Header.Get(RequestIDHeader)
@@ -57,22 +57,22 @@ func TraceMiddleware(next http.Handler) http.Handler {
 			traceID = requestID
 		}
 
-		// 将 trace ID 添加到响应头。 X-Request-ID is the header an
+		// Add the trace ID to the response headers. X-Request-ID is the header an
 		// OpenAI-compatible SDK reads when it reports a failed request, so it is
 		// echoed alongside the gateway's own trace headers.
 		w.Header().Set(TraceIDHeader, traceID)
 		w.Header().Set(RequestIDHeader, traceID)
 
-		// 将 trace ID 添加到 context
+		// Add the trace ID to the context.
 		ctx := context.WithValue(r.Context(), traceIDKey{}, traceID)
 		ctx = context.WithValue(ctx, requestIDKey{}, requestID)
 
-		// 继续处理请求
+		// Continue handling the request.
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// GetTraceID 从 context 获取 trace ID
+// GetTraceID reads the trace ID from the context.
 func GetTraceID(ctx context.Context) string {
 	if ctx == nil {
 		return ""
@@ -93,7 +93,7 @@ func GetRequestID(ctx context.Context) string {
 	return id
 }
 
-// TracedResponseWriter 包装 ResponseWriter 以记录响应状态
+// TracedResponseWriter wraps a ResponseWriter to record the response status.
 type TracedResponseWriter struct {
 	http.ResponseWriter
 	StatusCode   int
@@ -110,7 +110,7 @@ type TracedResponseWriter struct {
 	streamFailed bool
 }
 
-// NewTracedResponseWriter 创建新的 TracedResponseWriter
+// NewTracedResponseWriter creates a new TracedResponseWriter.
 func NewTracedResponseWriter(w http.ResponseWriter) *TracedResponseWriter {
 	return &TracedResponseWriter{
 		ResponseWriter: w,
@@ -170,7 +170,7 @@ func isPayloadWrite(b []byte) bool {
 	return false
 }
 
-// WriteHeader 实现 http.ResponseWriter
+// WriteHeader implements http.ResponseWriter.
 func (w *TracedResponseWriter) WriteHeader(code int) {
 	if w.firstWriteAt.IsZero() {
 		w.firstWriteAt = time.Now()
@@ -179,7 +179,7 @@ func (w *TracedResponseWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// Write 实现 http.ResponseWriter
+// Write implements http.ResponseWriter.
 func (w *TracedResponseWriter) Write(b []byte) (int, error) {
 	now := time.Now()
 	if w.firstWriteAt.IsZero() {
@@ -216,7 +216,7 @@ func (w *TracedResponseWriter) Flush() {
 // server writer through every observability layer.
 func (w *TracedResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// Hijack 实现 http.Hijacker，保证 WebSocket 升级等场景可用。
+// Hijack implements http.Hijacker so WebSocket upgrades and similar cases keep working.
 func (w *TracedResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	hj, ok := w.ResponseWriter.(http.Hijacker)
 	if !ok {
@@ -225,13 +225,13 @@ func (w *TracedResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return hj.Hijack()
 }
 
-// LoggingMiddleware 记录请求日志，包含 trace ID 和耗时
+// LoggingMiddleware logs requests, including the trace ID and the elapsed time.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		traceID := GetTraceID(r.Context())
 
-		// 包装 ResponseWriter
+		// Wrap the ResponseWriter.
 		wrapped := NewTracedResponseWriter(w)
 		wrapped.startedAt = start
 
@@ -247,10 +247,10 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			"remote_addr", r.RemoteAddr,
 		)
 
-		// 处理请求
+		// Handle the request.
 		next.ServeHTTP(wrapped, r)
 
-		// 记录请求完成
+		// Record the completed request.
 		duration := time.Since(start)
 		if capture := debug.FromContext(r.Context()); capture != nil {
 			capture.Finish(duration)
@@ -453,7 +453,7 @@ func httpStatusClass(status int) string {
 	}
 }
 
-// Chain 链式组合多个中间件
+// Chain combines several middlewares into one chain.
 func Chain(middlewares ...func(http.Handler) http.Handler) func(http.Handler) http.Handler {
 	return func(final http.Handler) http.Handler {
 		for i := len(middlewares) - 1; i >= 0; i-- {

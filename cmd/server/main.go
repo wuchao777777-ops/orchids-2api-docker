@@ -125,7 +125,7 @@ func main() {
 
 	slog.Debug("Store initialized", "mode", "redis", "addr", cfg.RedisAddr, "prefix", cfg.RedisPrefix)
 
-	// 从 Redis 加载已保存的配置（如果存在）
+	// Load the saved config from Redis when one is present.
 	if savedConfig, err := s.GetSetting(context.Background(), "config"); err == nil && savedConfig != "" {
 		if err := json.Unmarshal([]byte(savedConfig), cfg); err != nil {
 			slog.Warn("Failed to load config from Redis, using file config", "error", err)

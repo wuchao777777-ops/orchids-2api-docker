@@ -40,7 +40,7 @@ func TestAppendGrokCompatibilityAliasesUsesCaseInsensitiveIndex(t *testing.T) {
 	}
 }
 
-// grok2api publishes bare model names: the console/ and build/ qualifiers are
+// The catalog publishes bare model names: the console/ and build/ qualifiers are
 // routing details, and two routes that differ only by plane are the same public
 // model. Resolution keeps accepting both spellings.
 func TestPublicModelsPublishExternalIDs(t *testing.T) {

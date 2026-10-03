@@ -136,7 +136,7 @@ func verifyWorkBuddyAccountWithStore(ctx context.Context, acc *store.Account, cf
 
 	// Identity first: a credential added before this channel stored the claims (or
 	// pasted as a raw session document) still resolves to a UID and an address, so
-	// the 账号/邮箱 column fills in on the very next sync.
+	// the account/email column fills in on the very next sync.
 	creds := workbuddy.ResolveCredentials(acc)
 	if uid, _, email, _, _ := creds.Fields(); uid != "" || email != "" {
 		if acc.WorkBuddyUID == "" {

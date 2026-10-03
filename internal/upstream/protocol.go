@@ -41,6 +41,34 @@ func (r UpstreamRequest) ValidateProtocolControls(provider string) error {
 	return nil
 }
 
+// StrictSchema returns the compiled schema a strict structured-output request
+// asks the model to satisfy, and reports whether the request is strict at all.
+//
+// Only `strict: true` produces a schema worth checking. A non-strict request is
+// a hint to the model, not a contract, so its answer is never rejected here.
+// `json_object` names no schema, so it has nothing to validate either.
+func (r UpstreamRequest) StrictSchema() (*Schema, bool) {
+	format := r.ChatResponseFormat()
+	if len(format) == 0 {
+		return nil, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(format["type"])), "json_schema") {
+		return nil, false
+	}
+	envelope, _ := format["json_schema"].(map[string]interface{})
+	if len(envelope) == 0 {
+		return nil, false
+	}
+	if strict, ok := envelope["strict"].(bool); !ok || !strict {
+		return nil, false
+	}
+	schema := CompileSchema(envelope["schema"])
+	if schema == nil {
+		return nil, false
+	}
+	return schema, true
+}
+
 // ChatResponseFormat lowers Responses text.format to the chat spelling without
 // changing the client's schema or strictness. It also accepts chat-shaped input.
 func (r UpstreamRequest) ChatResponseFormat() map[string]interface{} {

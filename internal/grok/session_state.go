@@ -56,8 +56,8 @@ func withGrokSession(ctx context.Context, session grokSessionContext) context.Co
 func prepareGrokSession(r *http.Request, model, explicit string, messages []ChatMessage) grokSessionContext {
 	seed, agentHint := strings.TrimSpace(explicit), ""
 	if seed == "" && r != nil {
-		// The explicit identities an agent client already sends. grok2api reads
-		// the same ones: without them a Claude Code or Codex session never gets a
+		// The explicit identities an agent client already sends: without them a
+		// Claude Code or Codex session never gets a
 		// stable key, so prompt caching and encrypted-reasoning replay silently
 		// stay off for the clients that need them most.
 		for _, header := range []string{

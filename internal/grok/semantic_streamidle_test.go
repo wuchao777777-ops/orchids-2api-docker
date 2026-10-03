@@ -1,6 +1,3 @@
-// Derived from chenyme/grok2api, commit 44a390b890e7a3e0dd209b95b8c29a9f2b1be8dd.
-// Copyright (c) 2026 Chenyme. MIT license: ../../licenses/third-party-MIT.txt.
-// Source: backend/internal/infra/provider/cli/semantic_streamidle_test.go.
 package grok
 
 import (
@@ -208,7 +205,7 @@ func TestBuildSemanticIdleKeepalivesStillTimeoutWhileReading(t *testing.T) {
 }
 
 func TestBuildSemanticIdleIgnoresStaleTimerCallbackAfterActivityReset(t *testing.T) {
-	inner := &grok2apiCountingReadCloser{Reader: strings.NewReader("")}
+	inner := &semanticIdleCountingReader{Reader: strings.NewReader("")}
 	body := wrapBuildSemanticIdle(inner, time.Second).(*semanticIdleReadCloser)
 
 	body.mu.Lock()
@@ -233,7 +230,7 @@ func TestBuildSemanticIdleIgnoresStaleTimerCallbackAfterActivityReset(t *testing
 
 func TestBuildSemanticIdleStopsAfterEOFOrClose(t *testing.T) {
 	t.Run("EOF", func(t *testing.T) {
-		inner := &grok2apiCountingReadCloser{Reader: strings.NewReader("done")}
+		inner := &semanticIdleCountingReader{Reader: strings.NewReader("done")}
 		body := wrapBuildSemanticIdle(inner, 20*time.Millisecond).(*semanticIdleReadCloser)
 		_, err := io.ReadAll(body)
 		testutil.NoError(t, err)
@@ -244,7 +241,7 @@ func TestBuildSemanticIdleStopsAfterEOFOrClose(t *testing.T) {
 	})
 
 	t.Run("Close", func(t *testing.T) {
-		inner := &grok2apiCountingReadCloser{Reader: strings.NewReader("")}
+		inner := &semanticIdleCountingReader{Reader: strings.NewReader("")}
 		body := wrapBuildSemanticIdle(inner, 20*time.Millisecond).(*semanticIdleReadCloser)
 		testutil.NoError(t, body.Close())
 		testutil.NoError(t, body.Close())
@@ -254,12 +251,12 @@ func TestBuildSemanticIdleStopsAfterEOFOrClose(t *testing.T) {
 	})
 }
 
-type grok2apiCountingReadCloser struct {
+type semanticIdleCountingReader struct {
 	io.Reader
 	closes atomic.Int32
 }
 
-func (r *grok2apiCountingReadCloser) Close() error {
+func (r *semanticIdleCountingReader) Close() error {
 	r.closes.Add(1)
 	return nil
 }

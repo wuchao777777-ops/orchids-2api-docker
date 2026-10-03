@@ -1,6 +1,4 @@
-// Derived from chenyme/grok2api, commit 44a390b890e7a3e0dd209b95b8c29a9f2b1be8dd.
-// Copyright (c) 2026 Chenyme. MIT license: ../../licenses/third-party-MIT.txt.
-// Source: backend/internal/infra/provider/cli/responses_response.go (SSE codec).
+// Responses SSE codec: read the upstream byte stream without disturbing it.
 package grok
 
 import (
@@ -24,9 +22,9 @@ type compatibleSSEEvent struct {
 	data     []string
 	// raw is the frame exactly as it arrived, including its line endings and the
 	// terminating blank line. writeTo prefers it so an untouched frame is
-	// byte-identical to the upstream: grok2api relays the native Responses
-	// stream instead of re-rendering it, and a byte-identical relay is what makes
-	// a side-by-side diff of the two gateways meaningful.
+	// byte-identical to the upstream: the relay passes the native Responses
+	// stream through instead of re-rendering it, so the client receives exactly
+	// what the upstream wrote.
 	raw []byte
 }
 
@@ -174,7 +172,7 @@ func consumeCompatibleSSE(source io.Reader, handle func(compatibleSSEEvent) erro
 // isPrivateBuildControlEvent reports whether an event is Grok Build's private
 // control traffic rather than part of the public Responses stream. It matches
 // both the SSE event name and the payload `type`, because the upstream emits
-// the marker in either place (grok2api's isPrivateBuildControlEvent).
+// the marker in either place, so both spellings are matched.
 func isPrivateBuildControlEvent(kind string) bool {
 	return strings.TrimSpace(kind) == "response.doom_loop_check"
 }

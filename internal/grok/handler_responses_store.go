@@ -455,7 +455,7 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 			// response.doom_loop_check is a private Grok control event: it is
 			// not part of the Responses schema, and a strict client (Codex,
 			// Grok TUI) treats an unknown type as a protocol error. It never
-			// crosses the public boundary (grok2api filters it the same way).
+			// crosses the public boundary: it is filtered here.
 			if isPrivateBuildControlEvent(kind) {
 				return nil
 			}
@@ -543,7 +543,7 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 			return
 		}
 	}
-	// No trailing [DONE]: the Responses protocol has no such frame, and grok2api
+	// No trailing [DONE]: the Responses protocol has no such frame, and the relay
 	// relays the native stream as the upstream ends it. A strict serde client
 	// treats an unknown frame as a protocol error, and appending one made the two
 	// gateways produce different bytes for the same upstream stream.
@@ -729,8 +729,8 @@ func reconcileResponseErrorEnvelope(response map[string]interface{}) {
 func classifySynthesizedFailure(code, message string, err error) (string, string) {
 	// An idle timeout is its own condition: a client has to be able to tell
 	// "the upstream stalled" from "the stream was malformed", and the Responses
-	// plane has a dedicated code for it (grok2api reports
-	// upstream_stream_idle_timeout rather than a generic read error).
+	// plane has a dedicated code for it: upstream_stream_idle_timeout, rather
+	// than a generic read error.
 	if err != nil && errors.Is(err, ErrGrokSemanticIdle) {
 		return "upstream_stream_idle_timeout", "upstream stream timed out while waiting for generated output"
 	}

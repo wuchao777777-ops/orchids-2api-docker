@@ -20,7 +20,7 @@ import (
 // missing; the response_not_found envelope means the route exists and the store
 // simply has no such record.
 func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
-	// Inference auth is unconditional (grok2api has no switch on /v1), so the
+	// Inference auth is unconditional: no switch opens /v1, so the
 	// probe has to carry a managed key to reach the routing layer.
 	cfg := &config.Config{
 		AdminUser: "admin", AdminPass: "secret", AdminToken: "admintoken", AdminPath: "/admin",

@@ -8,8 +8,7 @@ import (
 	"encoding/json"
 )
 
-// Schema-driven argument normalization, ported from chenyme/grok2api
-// (cli/responses_arguments.go).
+// Schema-driven argument normalization.
 //
 // Grok Build sometimes serializes a semantically integral argument as a float
 // ("60000.0", "1e3"). A strict decoder on the client side (Codex uses one)

@@ -2,9 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,7 +9,6 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-
 	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/modelpolicy"
 )
@@ -83,7 +79,7 @@ type Account struct {
 	// QualityFailures counts consecutive responses this credential returned
 	// without the reasoning the request asked for (an upstream quality dump).
 	// The first offence parks the credential for a cooldown; a repeat disables
-	// it, mirroring grok2api's quality guard.
+	// it, mirroring the Grok quality guard.
 	QualityFailures int `json:"quality_failures,omitempty"`
 	// QualityCooldownUntil parks a credential whose responses are degraded.
 	QualityCooldownUntil time.Time `json:"quality_cooldown_until,omitempty"`
@@ -239,7 +235,7 @@ type Account struct {
 	// The recommended-models feed is per-account, but it lists four tiers at
 	// once, so "the free list is non-empty" proves free access and says nothing
 	// about whether the account also holds a paid plan — which is exactly the
-	// question the 等级 column asks. The upstream answers it at /users/me/plan:
+	// question the tier column asks. The upstream answers it at /users/me/plan:
 	// a subscriber gets a plan name, an account that never subscribed gets
 	// "no plan history found for user". Empty means not probed yet, and that is
 	// different from "free", so it is never defaulted.
@@ -253,137 +249,6 @@ type Account struct {
 	// model.
 	ClineModelIDs       []string  `json:"cline_model_ids,omitempty"`
 	ClineModelsSyncedAt time.Time `json:"cline_models_synced_at,omitempty"`
-}
-
-// QoderQuotaSnapshot is one Qoder credit/plan observation.
-//
-// Exhausted is the gateway's own verdict and is authoritative over the
-// arithmetic: an account whose counters have not refreshed can still be flagged
-// spent, which is what makes it usable as a scheduling signal.
-type QoderQuotaSnapshot struct {
-	Limit          float64   `json:"limit,omitempty"`
-	Remaining      float64   `json:"remaining,omitempty"`
-	Used           float64   `json:"used,omitempty"`
-	Exhausted      bool      `json:"exhausted,omitempty"`
-	PlanTier       string    `json:"plan_tier,omitempty"`
-	UserType       string    `json:"user_type,omitempty"`
-	PaidPlan       bool      `json:"paid_plan,omitempty"`
-	Unit           string    `json:"unit,omitempty"`
-	UpgradeURL     string    `json:"upgrade_url,omitempty"`
-	ResetAt        time.Time `json:"reset_at,omitempty"`
-	PeriodEnd      time.Time `json:"period_end,omitempty"`
-	LastKnownLimit float64   `json:"last_known_limit,omitempty"`
-	SyncedAt       time.Time `json:"synced_at,omitempty"`
-}
-
-// ResyncAt reports when the snapshot should be refreshed again. A quota that is
-// spent is the interesting case: the reset is the only moment it can recover, so
-// the snapshot is worth re-reading then.
-func (s QoderQuotaSnapshot) ResyncAt() time.Time {
-	if s.SyncedAt.IsZero() {
-		return time.Time{}
-	}
-	if !s.ResetAt.IsZero() {
-		return s.ResetAt
-	}
-	return s.SyncedAt
-}
-
-// WorkBuddyQuotaSnapshot is the WorkBuddy credit-meter snapshot. Remaining/Limit
-// describe the current cycle; Used/LastConsumedUnits are whole-credit figures
-// derived from the meter, because the upstream also reports fractions.
-type WorkBuddyQuotaSnapshot struct {
-	Limit             float64   `json:"limit,omitempty"`
-	Remaining         float64   `json:"remaining,omitempty"`
-	Used              float64   `json:"used,omitempty"`
-	PackageRemaining  float64   `json:"package_remaining,omitempty"`
-	LastConsumedUnits int       `json:"last_consumed_units,omitempty"`
-	ResetAt           time.Time `json:"reset_at,omitempty"`
-	PeriodEnd         time.Time `json:"period_end,omitempty"`
-	PackageName       string    `json:"package_name,omitempty"`
-	Unit              string    `json:"unit,omitempty"`
-	SyncedAt          time.Time `json:"synced_at,omitempty"`
-}
-
-// ResyncAt reports when the quota snapshot needs refreshing. The cycle reset is
-// the hard deadline: the allowance is re-armed then, but the console also wants
-// the displayed number to stay current between resets.
-func (s WorkBuddyQuotaSnapshot) ResyncAt() time.Time {
-	if s.SyncedAt.IsZero() {
-		return time.Time{}
-	}
-	if s.ResetAt.IsZero() {
-		return s.SyncedAt
-	}
-	return s.ResetAt
-}
-
-// GrokQuotaWindow is one explicit upstream usage or throttling dimension.
-// Values are meaningful only when their Has* marker is true; zero is valid.
-type GrokQuotaWindow struct {
-	Limit        float64   `json:"limit,omitempty"`
-	Remaining    float64   `json:"remaining,omitempty"`
-	UsagePercent float64   `json:"usage_percent,omitempty"`
-	HasLimit     bool      `json:"has_limit,omitempty"`
-	HasRemaining bool      `json:"has_remaining,omitempty"`
-	HasUsage     bool      `json:"has_usage,omitempty"`
-	ResetAt      time.Time `json:"reset_at,omitempty"`
-}
-
-// GrokBillingSnapshot stores official Build weekly/monthly windows only.
-type GrokBillingSnapshot struct {
-	Weekly   GrokQuotaWindow `json:"weekly,omitempty"`
-	Monthly  GrokQuotaWindow `json:"monthly,omitempty"`
-	SyncedAt time.Time       `json:"synced_at,omitempty"`
-	Source   string          `json:"source,omitempty"`
-	// NextProbeAt serializes probes after an exhausted paid period ends. Before
-	// the first claim PeriodEnd is the due time; each claim advances this by the
-	// bounded retry interval so concurrent selectors cannot hammer billing.
-	NextProbeAt time.Time `json:"next_probe_at,omitempty"`
-	LastProbeAt time.Time `json:"last_probe_at,omitempty"`
-}
-
-const GrokPaidQuotaProbeInterval = 15 * time.Minute
-
-// IsExhausted reports an authoritative paid-billing exhaustion signal. Monthly
-// numeric allowance wins when present; otherwise a 100% weekly usage snapshot
-// is sufficient when it also carries a real billing period.
-func (b GrokBillingSnapshot) IsExhausted() bool {
-	if b.Monthly.HasLimit && b.Monthly.Limit > 0 && b.Monthly.HasRemaining && b.Monthly.Remaining <= 0 {
-		return true
-	}
-	return b.Weekly.HasUsage && b.Weekly.UsagePercent >= 100 && !b.Weekly.ResetAt.IsZero()
-}
-
-// PeriodEnd returns the latest known paid billing reset.
-func (b GrokBillingSnapshot) PeriodEnd() time.Time {
-	if b.Monthly.ResetAt.After(b.Weekly.ResetAt) {
-		return b.Monthly.ResetAt
-	}
-	return b.Weekly.ResetAt
-}
-
-// GrokRateLimitSnapshot stores passive response headers separately from
-// billing. They can be useful for cooldown and diagnostics but must never be
-// rendered as a paid-plan balance.
-type GrokRateLimitSnapshot struct {
-	Requests   GrokQuotaWindow `json:"requests,omitempty"`
-	Tokens     GrokQuotaWindow `json:"tokens,omitempty"`
-	Model      string          `json:"model,omitempty"`
-	ObservedAt time.Time       `json:"observed_at,omitempty"`
-}
-
-// GrokFreeQuotaSnapshot is the Free allowance window the upstream CONFIRMED by
-// refusing a request ("subscription:free-usage-exhausted ... tokens (actual/limit):
-// N/M"). It is the one place a Free limit becomes a fact rather than an estimate, so
-// it is kept apart from GrokBilling (a paid window this account never returned) and
-// from the estimate derived from an inferred Free profile.
-type GrokFreeQuotaSnapshot struct {
-	Used        float64   `json:"used,omitempty"`
-	Limit       float64   `json:"limit,omitempty"`
-	HasLimit    bool      `json:"has_limit,omitempty"`
-	ResetAt     time.Time `json:"reset_at,omitempty"`
-	ConfirmedAt time.Time `json:"confirmed_at,omitempty"`
 }
 
 // Qoder quota exhaustion is a capability downgrade when, and only when, the
@@ -408,85 +273,6 @@ func AccountAuthActive(acc *Account) bool {
 	}
 	status := strings.TrimSpace(acc.AuthStatus)
 	return status == "" || strings.EqualFold(status, AccountAuthStatusActive)
-}
-
-type ApiKey struct {
-	ID            int64    `json:"id"`
-	Name          string   `json:"name"`
-	KeyHash       string   `json:"-"`
-	KeyFull       string   `json:"-"`
-	KeyPrefix     string   `json:"key_prefix"`
-	KeySuffix     string   `json:"key_suffix"`
-	Enabled       bool     `json:"enabled"`
-	AllowedModels []string `json:"allowed_models,omitempty"`
-	RPMLimit      int      `json:"rpm_limit,omitempty"`
-	MaxConcurrent int      `json:"max_concurrent,omitempty"`
-	// BillingLimitUSDTicks caps how much this key may spend, in USD ticks
-	// (1 USD = 10,000,000,000 ticks). Zero means unlimited, so a key created
-	// before this field existed keeps working unchanged.
-	BillingLimitUSDTicks int64 `json:"billing_limit_usd_ticks,omitempty"`
-	// BillingUsedUSDTicks is a read-only projection of the settled usage
-	// counter. The Redis counter is authoritative; this field reports it.
-	BillingUsedUSDTicks int64 `json:"billing_used_usd_ticks,omitempty"`
-	// BillingPeriodDays rolls the settled usage over on a fixed period, the way
-	// grok2api resets a key at the end of its billing period. Zero means the
-	// counter only ever moves when an operator resets it.
-	BillingPeriodDays int `json:"billing_period_days,omitempty"`
-	// BillingPeriodStartedAt is when the current period began. It is written by
-	// the rollover, not by the caller.
-	BillingPeriodStartedAt time.Time  `json:"billing_period_started_at,omitempty"`
-	ExpiresAt              *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt             *time.Time `json:"last_used_at"`
-	CreatedAt              time.Time  `json:"created_at"`
-}
-
-// StoredResponse records the ownership needed to continue or manage an
-// upstream Responses resource without retaining the request or response body.
-type StoredResponse struct {
-	ResponseID     string `json:"response_id"`
-	OwnerHash      string `json:"owner_hash"`
-	AccountID      int64  `json:"account_id"`
-	Model          string `json:"model"`
-	Provider       string `json:"provider"`
-	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
-	ContentType    string `json:"content_type,omitempty"`
-	Body           []byte `json:"body,omitempty"`
-	// InputItems is the request input the response was created from, normalized
-	// to the Responses item shape. GET /responses/{id}/input_items serves it
-	// back. Records written before this field existed simply report an empty
-	// list rather than failing, and previous_response_id expansion is unaffected
-	// because it reads Body.
-	InputItems json.RawMessage `json:"input_items,omitempty"`
-	// PreviousResponseID links a continuation to the response it continued, so
-	// the stored input list can report the whole conversation instead of only
-	// the last turn.
-	PreviousResponseID string    `json:"previous_response_id,omitempty"`
-	ExpiresAt          time.Time `json:"expires_at"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
-}
-
-// StoredReasoningReplay contains one opaque encrypted reasoning item. The key
-// is already tenant/model/session isolated by the gateway; Redis persistence
-// lets later turns resume on another replica without storing plaintext chain
-// of thought.
-type StoredReasoningReplay struct {
-	Model      string `json:"model"`
-	SessionKey string `json:"session_key"`
-	// EncryptedContent is the legacy single-cipher form. It is still written by
-	// paths that only observe one opaque reasoning item, and is always read for
-	// compatibility; Items takes precedence when present.
-	EncryptedContent string            `json:"encrypted_content,omitempty"`
-	Items            []json.RawMessage `json:"items,omitempty"`
-	ExpiresAt        time.Time         `json:"expires_at"`
-}
-
-type StoredSessionAffinity struct {
-	Provider   string    `json:"provider"`
-	Model      string    `json:"model"`
-	SessionKey string    `json:"session_key"`
-	AccountID  int64     `json:"account_id"`
-	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 type Store struct {
@@ -575,22 +361,6 @@ type settingsStore interface {
 	SetSetting(ctx context.Context, key, value string) error
 }
 
-type apiKeyStore interface {
-	CreateApiKey(ctx context.Context, key *ApiKey) error
-	ListApiKeys(ctx context.Context) ([]*ApiKey, error)
-	UpdateApiKey(ctx context.Context, key *ApiKey) error
-	DeleteApiKey(ctx context.Context, id int64) error
-	GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error)
-	GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey, error)
-	ConsumeApiKeyRPM(ctx context.Context, id int64, limit int, now time.Time) (bool, error)
-	TouchApiKeyLastUsed(ctx context.Context, id int64, now time.Time) error
-	ReserveApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64, expiresAt time.Time) (bool, error)
-	SettleApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64) error
-	ReleaseApiKeyBilling(ctx context.Context, id int64, eventID string) (bool, error)
-	ResetApiKeyBilling(ctx context.Context, id int64) error
-	RolloverApiKeyBilling(ctx context.Context, key *ApiKey, now time.Time) (bool, error)
-}
-
 type modelStore interface {
 	CreateModel(ctx context.Context, m *Model) error
 	UpdateModel(ctx context.Context, m *Model) error
@@ -600,20 +370,6 @@ type modelStore interface {
 	GetModelByModelID(ctx context.Context, modelID string) (*Model, error)
 	GetModelByChannelAndModelID(ctx context.Context, channel, modelID string) (*Model, error)
 	ReconcileDiscoveredModels(ctx context.Context, channel string, models []*Model, options ModelReconcileOptions) (*ModelReconcileResult, error)
-}
-
-type responseStore interface {
-	SaveStoredResponse(ctx context.Context, response *StoredResponse, ttl time.Duration) error
-	GetStoredResponse(ctx context.Context, responseID, ownerHash string) (*StoredResponse, error)
-	DeleteStoredResponse(ctx context.Context, responseID, ownerHash string) error
-}
-
-type reasoningReplayStore interface {
-	DeleteReasoningReplay(ctx context.Context, model, sessionKey string) error
-	SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error
-	GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error)
-	SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error
-	GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error)
 }
 
 // SetChangeEmitter wires account-change notifications. Passing nil disables
@@ -883,310 +639,6 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 		return s.settings.SetSetting(ctx, key, value)
 	}
 	return fmt.Errorf("settings store not configured")
-}
-
-func (s *Store) CreateApiKey(ctx context.Context, key *ApiKey) error {
-	if s.apiKeys != nil {
-		return s.apiKeys.CreateApiKey(ctx, key)
-	}
-	return fmt.Errorf("api keys store not configured")
-}
-
-// rolloverApiKeyBilling atomically advances an elapsed billing period in the
-// durable store. The Redis transaction updates the period record and resets only
-// settled usage/idempotency state; live holds remain attached to running requests.
-func (s *Store) rolloverApiKeyBilling(ctx context.Context, key *ApiKey, now time.Time) {
-	if key == nil || key.BillingPeriodDays <= 0 {
-		return
-	}
-	rolled, err := s.apiKeys.RolloverApiKeyBilling(ctx, key, now.UTC())
-	if err != nil {
-		slog.Warn("failed to roll the billing period over", "key_id", key.ID, "error", err)
-		return
-	}
-	if rolled {
-		key.BillingUsedUSDTicks = 0
-		key.BillingPeriodStartedAt = now.UTC()
-	}
-}
-
-// AuthorizeApiKey authenticates a raw client key and atomically applies its
-// optional per-minute request limit. Raw keys are never persisted by this path.
-func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error) {
-	if s == nil || s.apiKeys == nil {
-		return nil, fmt.Errorf("api key store not configured")
-	}
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, ErrNoRows
-	}
-	digest := sha256.Sum256([]byte(raw))
-	key, err := s.apiKeys.GetApiKeyByHash(ctx, hex.EncodeToString(digest[:]))
-	if err != nil {
-		return nil, err
-	}
-	if key == nil || !key.Enabled {
-		return nil, ErrNoRows
-	}
-	now := time.Now().UTC()
-	if key.ExpiresAt != nil && !now.Before(key.ExpiresAt.UTC()) {
-		return nil, ErrApiKeyExpired
-	}
-	// A key without an explicit per-minute limit has none. A silent 60 RPM
-	// default throttled a caller that never asked for a limit; the deployment's
-	// admission control is what protects the gateway.
-	if rpm := key.RPMLimit; rpm > 0 {
-		allowed, err := s.apiKeys.ConsumeApiKeyRPM(ctx, key.ID, rpm, now)
-		if err != nil {
-			return nil, err
-		}
-		if !allowed {
-			return nil, ErrApiKeyRateLimited
-		}
-	}
-	key.LastUsedAt = &now
-	if key.RPMLimit <= 0 {
-		// Persist only the usage touch. Rewriting the stale row here could race an
-		// atomic billing rollover and restore its old period start.
-		if err := s.touchApiKeyCoalesced(ctx, key.ID, now); err != nil {
-			return nil, err
-		}
-	}
-	s.rolloverApiKeyBilling(ctx, key, now)
-	return key, nil
-}
-
-// Coalesce display-only usage timestamps; policy and billing are still read
-// from the authoritative store on every authorization.
-func (s *Store) touchApiKeyCoalesced(ctx context.Context, id int64, now time.Time) error {
-	s.keyTouchMu.Lock()
-	previous := s.keyTouches[id]
-	if !previous.IsZero() && now.Sub(previous) < time.Minute {
-		s.keyTouchMu.Unlock()
-		return nil
-	}
-	if s.keyTouches == nil || len(s.keyTouches) >= 65536 {
-		s.keyTouches = make(map[int64]time.Time)
-	}
-	s.keyTouches[id] = now
-	s.keyTouchMu.Unlock()
-	if err := s.apiKeys.TouchApiKeyLastUsed(ctx, id, now); err != nil {
-		s.keyTouchMu.Lock()
-		if s.keyTouches[id].Equal(now) {
-			delete(s.keyTouches, id)
-		}
-		s.keyTouchMu.Unlock()
-		return err
-	}
-	return nil
-}
-
-func (s *Store) ListApiKeys(ctx context.Context) ([]*ApiKey, error) {
-	if s.apiKeys != nil {
-		return s.apiKeys.ListApiKeys(ctx)
-	}
-	return nil, fmt.Errorf("api keys store not configured")
-}
-
-func (s *Store) UpdateApiKey(ctx context.Context, key *ApiKey) error {
-	if s != nil && s.apiKeys != nil {
-		return s.apiKeys.UpdateApiKey(ctx, key)
-	}
-	return fmt.Errorf("api keys store not configured")
-}
-
-func (s *Store) DeleteApiKey(ctx context.Context, id int64) error {
-	if s.apiKeys != nil {
-		return s.apiKeys.DeleteApiKey(ctx, id)
-	}
-	return fmt.Errorf("api keys store not configured")
-}
-
-func (s *Store) GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error) {
-	if s.apiKeys != nil {
-		return s.apiKeys.GetApiKeyByID(ctx, id)
-	}
-	return nil, fmt.Errorf("api keys store not configured")
-}
-
-// ReserveApiKeyBilling atomically holds amount ticks of a key's billing limit
-// for one in-flight request. It returns false (with no error) when the limit
-// does not cover the request, and true when the hold already existed for the
-// same event id — retrying a request must not double reserve.
-func (s *Store) ReserveApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64, expiresAt time.Time) (bool, error) {
-	if s == nil || s.apiKeys == nil {
-		return false, fmt.Errorf("api key store not configured")
-	}
-	return s.apiKeys.ReserveApiKeyBilling(ctx, id, eventID, amount, expiresAt)
-}
-
-// SettleApiKeyBilling converts a hold into settled usage: the reservation is
-// dropped and amount ticks are added to the key's used counter. Actual usage is
-// authoritative, so settling an event whose hold already expired still charges.
-func (s *Store) SettleApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64) error {
-	if s == nil || s.apiKeys == nil {
-		return fmt.Errorf("api key store not configured")
-	}
-	return s.apiKeys.SettleApiKeyBilling(ctx, id, eventID, amount)
-}
-
-// ReleaseApiKeyBilling drops a hold without charging it and reports whether one
-// was actually held, so a settling path cannot be charged twice.
-func (s *Store) ReleaseApiKeyBilling(ctx context.Context, id int64, eventID string) (bool, error) {
-	if s == nil || s.apiKeys == nil {
-		return false, fmt.Errorf("api key store not configured")
-	}
-	return s.apiKeys.ReleaseApiKeyBilling(ctx, id, eventID)
-}
-
-// ResetApiKeyBilling zeroes the settled usage counter and drops every
-// outstanding reservation for the key. The configured limit is left in place.
-func (s *Store) ResetApiKeyBilling(ctx context.Context, id int64) error {
-	if s == nil || s.apiKeys == nil {
-		return fmt.Errorf("api key store not configured")
-	}
-	return s.apiKeys.ResetApiKeyBilling(ctx, id)
-}
-
-func (s *Store) SaveStoredResponse(ctx context.Context, response *StoredResponse, ttl time.Duration) error {
-	if s == nil || s.responses == nil {
-		return fmt.Errorf("response store not configured")
-	}
-	return s.responses.SaveStoredResponse(ctx, response, ttl)
-}
-
-func (s *Store) GetStoredResponse(ctx context.Context, responseID, ownerHash string) (*StoredResponse, error) {
-	if s == nil || s.responses == nil {
-		return nil, fmt.Errorf("response store not configured")
-	}
-	return s.responses.GetStoredResponse(ctx, responseID, ownerHash)
-}
-
-func (s *Store) DeleteStoredResponse(ctx context.Context, responseID, ownerHash string) error {
-	if s == nil || s.responses == nil {
-		return fmt.Errorf("response store not configured")
-	}
-	return s.responses.DeleteStoredResponse(ctx, responseID, ownerHash)
-}
-
-func (s *Store) DeleteReasoningReplay(ctx context.Context, model, key string) error {
-	if s == nil || s.reasoning == nil {
-		return nil
-	}
-	return s.reasoning.DeleteReasoningReplay(ctx, model, key)
-}
-
-func (s *Store) SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error {
-	if s == nil || s.reasoning == nil {
-		return fmt.Errorf("reasoning replay store not configured")
-	}
-	return s.reasoning.SaveReasoningReplay(ctx, replay, ttl)
-}
-
-func (s *Store) GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error) {
-	if s == nil || s.reasoning == nil {
-		return nil, fmt.Errorf("reasoning replay store not configured")
-	}
-	return s.reasoning.GetReasoningReplay(ctx, model, sessionKey)
-}
-
-func (s *Store) SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error {
-	if s == nil || s.reasoning == nil {
-		return fmt.Errorf("session affinity store not configured")
-	}
-	return s.reasoning.SaveSessionAffinity(ctx, affinity, ttl)
-}
-
-func (s *Store) GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error) {
-	if s == nil || s.reasoning == nil {
-		return nil, fmt.Errorf("session affinity store not configured")
-	}
-	return s.reasoning.GetSessionAffinity(ctx, provider, model, sessionKey)
-}
-
-// Model wrappers
-
-func (s *Store) CreateModel(ctx context.Context, m *Model) error {
-	if m != nil {
-		m.NormalizeRoute()
-	}
-	if s.models == nil {
-		return fmt.Errorf("models store not configured")
-	}
-	s.clearOtherModelDefaults(ctx, m, false)
-	return s.models.CreateModel(ctx, m)
-}
-
-func (s *Store) UpdateModel(ctx context.Context, m *Model) error {
-	if m != nil {
-		m.NormalizeRoute()
-	}
-	if s.models == nil {
-		return fmt.Errorf("models store not configured")
-	}
-	s.clearOtherModelDefaults(ctx, m, true)
-	return s.models.UpdateModel(ctx, m)
-}
-
-func (s *Store) clearOtherModelDefaults(ctx context.Context, m *Model, excludeSelf bool) {
-	if !m.IsDefault {
-		return
-	}
-	models, err := s.models.ListModels(ctx)
-	if err != nil {
-		return
-	}
-	for _, other := range models {
-		if other.Channel != m.Channel || excludeSelf && other.ID == m.ID || !other.IsDefault {
-			continue
-		}
-		other.IsDefault = false
-		if err := s.models.UpdateModel(ctx, other); err != nil {
-			slog.Warn("Failed to clear default flag on model", "model_id", other.ModelID, "error", err)
-		}
-	}
-}
-
-func (s *Store) DeleteModel(ctx context.Context, id string) error {
-	if s.models != nil {
-		return s.models.DeleteModel(ctx, id)
-	}
-	return fmt.Errorf("models store not configured")
-}
-
-func (s *Store) GetModel(ctx context.Context, id string) (*Model, error) {
-	if s.models != nil {
-		return s.models.GetModel(ctx, id)
-	}
-	return nil, fmt.Errorf("models store not configured")
-}
-
-func (s *Store) GetModelByModelID(ctx context.Context, modelID string) (*Model, error) {
-	if s.models != nil {
-		return s.models.GetModelByModelID(ctx, modelID)
-	}
-	return nil, fmt.Errorf("models store not configured")
-}
-
-func (s *Store) GetModelByChannelAndModelID(ctx context.Context, channel, modelID string) (*Model, error) {
-	if s.models != nil {
-		return s.models.GetModelByChannelAndModelID(ctx, channel, modelID)
-	}
-	return nil, fmt.Errorf("models store not configured")
-}
-
-func (s *Store) ReconcileDiscoveredModels(ctx context.Context, channel string, models []*Model, options ModelReconcileOptions) (*ModelReconcileResult, error) {
-	if s == nil || s.models == nil {
-		return nil, fmt.Errorf("models store not configured")
-	}
-	return s.models.ReconcileDiscoveredModels(ctx, channel, models, options)
-}
-
-func (s *Store) ListModels(ctx context.Context) ([]*Model, error) {
-	if s.models != nil {
-		return s.models.ListModels(ctx)
-	}
-	return nil, fmt.Errorf("models store not configured")
 }
 
 // Secrets returns every credential-bearing value the account holds.

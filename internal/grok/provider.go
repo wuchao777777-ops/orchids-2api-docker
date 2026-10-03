@@ -90,7 +90,7 @@ func ApplyCLIModelCatalog(acc *store.Account, catalog []modelcatalog.Profile, no
 		appendModel(model)
 	}
 
-	// grok2api's NormalizeAccountModelCapabilities, restored. The upstream's own
+	// Two entries are derived from the account, not listed. The upstream's own
 	// catalog is authoritative for what an account can serve, but two entries are
 	// derived from the account's tier and credential rather than listed: a Build
 	// account advertising 4.6 can always serve 4.5, and an OAuth Build account can

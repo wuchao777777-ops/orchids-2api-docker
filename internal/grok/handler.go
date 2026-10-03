@@ -488,7 +488,7 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	// "not available for model X") is a capability problem for that model only.
 	// Cooling the whole credential took every other model out of the pool for
 	// ten minutes; the model cooldown map exists for exactly this case
-	// (grok2api marks the model, not the account).
+	// (the cooldown marks the model, not the account).
 	// A 5xx is the upstream's own trouble, not the credential's: a short hold
 	// keeps the next request from immediately re-selecting the same account
 	// while the upstream recovers, without marking the credential as broken.
@@ -690,7 +690,7 @@ func isSharedGrokRateLimitError(err error) bool {
 		return false
 	}
 	// Only a parsed Team+Model response is shared. A bare 429/"too many
-	// requests" is account-scoped in grok2api and must cool the selected account;
+	// requests" is account-scoped and must cool the selected account;
 	// treating it as shared left every account looking healthy while requests
 	// repeatedly rotated through a pool of throttled credentials.
 	if ParseRateLimitMetadata([]byte(err.Error())) != nil {

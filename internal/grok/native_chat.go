@@ -341,7 +341,7 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 	}
 	// Rebuilding the usage object used to drop everything outside the four
 	// counts. The upstream also reports what the request cost and how much
-	// context it used; grok2api passes those through, and they are the only
+	// context it used; the gateway passes those through, and they are the only
 	// source for those figures downstream.
 	for _, key := range []string{
 		"cost_in_usd_ticks", "num_sources_used", "num_server_side_tools_used", "context_details",

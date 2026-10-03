@@ -50,7 +50,7 @@ type Config struct {
 	SuppressThinking bool `json:"-"`
 	// AnonymousAllowIPs names the sources that may call the inference routes
 	// without a managed key. Empty (the default) requires a key from everyone, as
-	// grok2api does; an operator that cannot update a client yet lists its address
+	// the default. An operator that cannot update a client yet lists its address
 	// here, and every other caller still needs a key.
 	AnonymousAllowIPs []string `json:"anonymous_allow_ips,omitempty"`
 

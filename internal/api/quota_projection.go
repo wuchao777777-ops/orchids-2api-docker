@@ -198,7 +198,7 @@ func projectLegacyQuota(fields map[string]interface{}, acc *store.Account, limit
 // buildGrokBuildQuotaFields projects one Build account's allowance.
 //
 // Upstream billing wins whenever it exists. When it does not, the account is not left
-// as a bare "未知": the projection says whether the plan is known to be paid, can be
+// as a bare "unknown": the projection says whether the plan is known to be paid, can be
 // inferred as Free, or is genuinely unknown — and a Free inference gets the estimated
 // window plus the usage this gateway observed inside it. The estimate is marked
 // estimated / limitKnown=false, so the number is a sense of scale rather than an

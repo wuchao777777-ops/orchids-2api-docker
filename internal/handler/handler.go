@@ -424,13 +424,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	responseFormat := adapter.DetectResponseFormat(r.URL.Path)
 
-	// 初始化调试日志
+	// Initialize debug logging
 	cfg := h.configSnapshot()
 	logger := debug.NewForContext(r.Context(), cfg.DebugEnabled, cfg.DebugLogSSE)
 	defer logger.Close()
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 
-	// 1. 记录进入的 Claude 请求
+	// 1. Log the incoming Claude request
 	logger.LogIncomingRequest(req)
 
 	reqHash := h.computeRequestHash(r, bodyBytes)
@@ -506,7 +506,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	// The gateway no longer models a working directory at all. It used to extract
 	// one from headers/system/messages, remember it per conversation, drop the
-	// upstream session whenever it changed, answer "当前工作目录" locally without
+	// upstream session whenever it changed, answer the "what is my current
+	// working directory" question locally without
 	// calling upstream, and rebase foreign tool paths onto it. Every one of those
 	// behaviours is gone: the request that reached upstream is now the request the
 	// caller wrote.
@@ -542,6 +543,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		apperrors.New("invalid_request_error", err.Error(), http.StatusBadRequest).WriteResponse(w)
 		return
 	}
+	// A strict structured-output request on a passthrough channel carries a
+	// contract upstream only honors on some models. The schema is compiled
+	// here, before account selection, so one compiled schema can both instruct
+	// the model and check its answer; a non-strict request yields nil and every
+	// path below is unchanged.
+	structured := upstream.NewStructuredOutput(protocolControls)
 	preSelectWorkBuddyRequest := preSelectChannel == "workbuddy"
 	preSelectQoderRequest := preSelectChannel == "qoder"
 	preSelectClineRequest := preSelectChannel == "cline"
@@ -572,7 +579,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		effectiveTools = nil
 		logutil.DebugIf(verboseDiagnostics, "tool_gate: disabled tools", "reasons", toolGateReasons)
 	}
-	// 选择账号 (Initial Selection)
+	// Select account (initial selection)
 	failedAccountIDs := []int64{}
 	failedAccountSet := make(map[int64]struct{})
 
@@ -623,10 +630,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// reservation from this point through the complete SSE prevents concurrent
 	// requests from racing past a per-account limit before either increments it.
 
-	// 构建 prompt（V2 Markdown 格式）
+	// Build the prompt (V2 Markdown format)
 	startBuild := time.Now()
 	logutil.DebugIf(verboseDiagnostics, "Starting prompt build...", "conversation_id", conversationKey)
-	// 映射模型（用于上游请求与提示一致）
+	// Map the model (so the upstream request and the prompt agree)
 	mappedModel := mapModel(req.Model)
 	if passthroughChannel != "" {
 		mappedModel = strings.TrimSpace(req.Model)
@@ -656,7 +663,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			apperrors.New("api_error", "Streaming not supported by underlying connection", http.StatusInternalServerError).WriteResponse(w)
 			return
 		}
-		// 设置 SSE 响应头
+		// Set the SSE response headers
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -665,7 +672,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 	}
 
-	// 状态管理
+	// State management
 	// msgID is now managed by streamHandler
 
 	upstreamMessages := append([]prompt.Message(nil), req.Messages...)
@@ -674,7 +681,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		builtPrompt = injectToolGate(builtPrompt, toolGateMessage)
 	}
 
-	// 2. 记录转换后的 prompt
+	// 2. Log the converted prompt
 	logutil.DebugIf(verboseDiagnostics, "Checkpoint: LogConvertedPrompt")
 	logger.LogConvertedPrompt(builtPrompt)
 
@@ -700,7 +707,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		breakdown.Total,
 	)
 
-	// Token 计数（用于前置 usage 展示）
+	// Token count (for the leading usage display)
 	inputTokens := breakdown.Total
 
 	sh := newStreamHandler(cfg, w, logger, noThinking, isStream, responseFormat)
@@ -715,6 +722,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	sh.setDisallowToolCalls(gateNoTools)
 	sh.setEmptyOutputFallback(successfulFileMutationToolResultFallback(upstreamMessages))
+	// The compiled schema gates the finished answer; a request that declared no
+	// schema installs a nil check and behaves exactly as before.
+	sh.setStructuredOutput(structured.Validate)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	defer sh.release()
 
@@ -783,7 +793,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(middleware.WithRequestModel(r.Context(), mappedModel))
 
 		payloadMessages := upstreamMessages
-		payloadSystem := req.System
+		// The schema instruction is prepended rather than appended: a channel
+		// that truncates a long system array keeps the shape the answer must
+		// have, not the caller's prose behind it.
+		payloadSystem := upstream.PrependSystemHint(req.System, structured.SystemHint())
 
 		upstreamReq := upstream.UpstreamRequest{
 			ResponseFormat:    req.ResponseFormat,
@@ -881,7 +894,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			// retried. The scheduler reads the same policy, so a failure cannot be
 			// "cooling down" for one entrance and "retryable" for the other.
 			verdict := accountpolicy.Classify(currentAccount, err, req.Model)
-			// 标记账号状态（auth 类错误始终标记，无论是否可重试）
+			// Mark the account status (auth-class errors are always marked,
+			// whether or not they are retryable)
 			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
 				if verdict.Scope == accountpolicy.ScopeModel && verdict.Model != "" && verdict.Cooldown > 0 {
 					// WorkBuddy code 6004 is a model-frequency limit. Persist only
@@ -983,7 +997,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 				slog.Warn("Account request failed, switching account", "account", currentAccount.Name, "unsuccessful_attempts", len(failedAccountIDs))
 
-				// 释放旧账号的连接计数
+				// Release the old account's connection count
 				if trackedAccountID != 0 {
 					h.releaseTrackedAccount(trackedAccountID)
 					trackedAccountID = 0
@@ -1134,7 +1148,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	run()
 
-	// 确保有最终响应
+	// Ensure a final response
 	if !sh.hasReturn {
 		sh.finishResponse("end_turn")
 	}

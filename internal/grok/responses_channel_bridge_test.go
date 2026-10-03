@@ -69,6 +69,53 @@ func recordingChat(t *testing.T, calls *[]recordedChatCall, mu *sync.Mutex) http
 	}
 }
 
+// Every event on the bridged stream carries a sequence_number that increases by
+// one: a client that reconnects with Last-Event-ID asks for everything after the
+// last number it saw, so an event without one cannot be ordered at all.
+func TestResponsesBridgeStreamNumbersEveryEvent(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	calls := []recordedChatCall{}
+	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu), ResponsesBridgeOptions{})
+
+	req := httptest.NewRequest(http.MethodPost, "/qoder/v1/responses",
+		strings.NewReader(`{"model":"gpt-5.6-luna","input":"say hi","stream":true}`))
+	rec := httptest.NewRecorder()
+	bridge(rec, req)
+	testutil.Equal(t, rec.Code, http.StatusOK)
+
+	var numbers []int
+	seen := 0
+	if err := consumeCompatibleSSE(strings.NewReader(rec.Body.String()), func(event compatibleSSEEvent) error {
+		// The [DONE] terminator is a chat-completions habit, not a Responses
+		// event, so it carries no envelope and no number.
+		if strings.TrimSpace(string(event.Data())) == "[DONE]" {
+			return nil
+		}
+		seen++
+		var payload map[string]interface{}
+		if err := json.Unmarshal(event.Data(), &payload); err != nil {
+			return fmt.Errorf("event %q: %v", event.Event, err)
+		}
+		number, ok := payload["sequence_number"].(float64)
+		if !ok {
+			return fmt.Errorf("event %q carries no sequence_number", event.Event)
+		}
+		numbers = append(numbers, int(number))
+		return nil
+	}); err != nil {
+		t.Fatalf("consume bridged stream: %v", err)
+	}
+	testutil.Falsef(t, seen == 0, "the bridge produced no events")
+	testutil.Equal(t, len(numbers), seen)
+	// The first number is 0 and each following one is exactly one higher, so a
+	// client can resume from any of them.
+	for i, number := range numbers {
+		testutil.Equal(t, number, i)
+	}
+}
+
 func TestResponsesBridgeStreamsChatAsResponses(t *testing.T) {
 	t.Parallel()
 

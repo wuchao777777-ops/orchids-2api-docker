@@ -66,7 +66,7 @@ func TestRelayNativeContextAndUpstreamDecisions(t *testing.T) {
 			testutil.NoError(t, h.lb.Store.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: "grok-4.6", Name: "Grok 4.6", Status: store.ModelStatusAvailable, Verified: true}))
 			payload := map[string]interface{}{
 				"model": "grok-4.6", "stream": false, "prompt_cache_key": "client-session",
-				// The gateway now applies grok2api's Build defaults: store=false for
+				// The gateway now applies the Build defaults: store=false for
 				// zero-data-retention, and the encrypted-reasoning include that makes
 				// a replay chain possible at all. Everything the client sent is still
 				// relayed verbatim.
@@ -198,11 +198,11 @@ func TestRelayBuildEffortAliasesFollowModelContract(t *testing.T) {
 	}
 }
 
-// grok2api terminates a degenerate upstream that repeats itself: more than 128
+// A degenerate upstream that repeats itself is terminated: more than 128
 // identical visible deltas or more than 256 identical reasoning deltas end the
 // turn as upstream_output_loop. Distinct deltas are untouched, however many of
 // them there are — the threshold counts repeats of one value, not volume.
-func TestRelayRepeatedDeltaThresholdsMatchGrok2API(t *testing.T) {
+func TestRelayRepeatedDeltaThresholds(t *testing.T) {
 	// 300 distinct content deltas all survive.
 	var distinct strings.Builder
 	for i := 0; i < 300; i++ {

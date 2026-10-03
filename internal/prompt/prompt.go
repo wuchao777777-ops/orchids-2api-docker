@@ -14,7 +14,7 @@ import (
 // Legacy prompt-building implementations (BuildPromptV2*, formatting, summarization, etc.)
 // have been removed in favor of AIClient-only routing.
 
-// ImageSource 表示图片来源
+// ImageSource describes where an image comes from.
 type ImageSource struct {
 	Type      string `json:"type"`
 	MediaType string `json:"media_type"`
@@ -22,12 +22,12 @@ type ImageSource struct {
 	URL       string `json:"url,omitempty"`
 }
 
-// CacheControl 缓存控制
+// CacheControl is the cache-control marker.
 type CacheControl struct {
 	Type string `json:"type"`
 }
 
-// ContentBlock 表示消息内容中的一个块
+// ContentBlock is one block of a message body.
 type ContentBlock struct {
 	ToolIndex *int         `json:"index,omitempty"`
 	Type      string       `json:"type"`
@@ -35,21 +35,21 @@ type ContentBlock struct {
 	Source    *ImageSource `json:"source,omitempty"`
 	URL       string       `json:"url,omitempty"`
 
-	// tool_use 字段
+	// tool_use fields
 	ID        string      `json:"id,omitempty"`
 	Name      string      `json:"name,omitempty"`
 	Input     interface{} `json:"input,omitempty"`
 	Thinking  string      `json:"thinking,omitempty"`
 	Signature string      `json:"signature,omitempty"`
 
-	// tool_result 字段
+	// tool_result fields
 	ToolUseID    string        `json:"tool_use_id,omitempty"`
 	Content      interface{}   `json:"content,omitempty"`
 	IsError      bool          `json:"is_error,omitempty"`
 	CacheControl *CacheControl `json:"cache_control,omitempty"`
 }
 
-// MessageContent 联合类型：string 或 ContentBlock[]
+// MessageContent is a union: either a string or a []ContentBlock.
 type MessageContent struct {
 	Text   string
 	Blocks []ContentBlock
@@ -143,7 +143,7 @@ func (mc *MessageContent) ExtractText() string {
 // ExtractText is a helper to extract text directly from the prompt.Message.
 func (m *Message) ExtractText() string { return m.Content.ExtractText() }
 
-// Message 消息结构
+// Message is a single conversation message.
 type Message struct {
 	Role             string          `json:"role"`
 	Content          MessageContent  `json:"content"`
@@ -253,7 +253,7 @@ func decodeOpenAIToolArguments(raw string) interface{} {
 	return map[string]interface{}{"raw": trimmed}
 }
 
-// SystemItem 系统提示词项
+// SystemItem is one entry of the system prompt.
 type SystemItem struct {
 	Type         string        `json:"type"`
 	Text         string        `json:"text"`

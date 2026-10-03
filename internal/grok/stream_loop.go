@@ -5,8 +5,7 @@ import (
 	"fmt"
 )
 
-// Upstream doom-loop guard, ported from chenyme/grok2api
-// (conversation/stream.go streamRepeatTracker).
+// Upstream doom-loop guard.
 //
 // A model that degenerates into emitting the same delta forever burns account
 // quota and floods the caller's context, and the semantic idle watchdog cannot
@@ -14,7 +13,7 @@ import (
 // repeat counter distinguishes the two.
 var errGrokUpstreamOutputLoop = errors.New("upstream output loop")
 
-// The thresholds are grok2api's: more than 128 identical visible deltas or more
+// The thresholds are deliberately generous: more than 128 identical visible
 // than 256 identical reasoning deltas is a degenerate upstream repeating itself.
 // They count repeats of one value, not volume, so a long answer made of distinct
 // chunks is never affected.
