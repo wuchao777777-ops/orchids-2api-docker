@@ -129,15 +129,22 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 			writeGrokUpstreamError(w, err)
 			return
 		}
-		if err := validateBridgeTools(req.Tools); err != nil {
-			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-			return
-		}
 		if !expandBridgedPreviousResponse(w, r, &req, opts) {
 			return
 		}
 		if err := expandBridgedCompaction(r, &req, opts); err != nil {
 			writeBridgeCompactionError(w, err)
+			return
+		}
+		// Grouped and emulated tool declarations (namespace, custom, apply_patch)
+		// are flattened here instead of being rejected: a chat upstream only
+		// understands flat function names, and rejecting them outright is what
+		// made Codex unusable on every non-Grok channel. The rewrite runs after a
+		// stored conversation was replayed so the calls it echoes back are renamed
+		// too.
+		aliases, err := normalizeBridgedTools(&req)
+		if err != nil {
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
 		chatReq, err := chatRequestFromResponses(req)
@@ -163,7 +170,6 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		subReq.ContentLength = int64(len(raw))
 
 		if chatReq.Stream {
-			onComplete := bridgedResponseRecorder(r, req, opts)
 			streamThroughChat(subReq, chat, func(status int, header http.Header, reader io.Reader) {
 				if status < 200 || status >= 300 {
 					for key, values := range header {
@@ -173,7 +179,10 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 					_, _ = io.Copy(w, reader)
 					return
 				}
-				writeResponsesStreamFromChatReaderRequestWithHook(w, req, reader, onComplete)
+				writeResponsesStreamFromChatReaderRequest(w, req, reader, chatStreamOptions{
+					toolAliases: aliases,
+					onComplete:  bridgedResponseRecorder(r, req, opts),
+				})
 			})
 			return
 		}
@@ -190,6 +199,7 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 			return
 		}
 		response := responsesObjectFromChat(req.Model, chatBody)
+		restoreBridgeToolIdentity(response, aliases)
 		applyBridgedResponseExtras(response, req)
 		// Ownership is recorded for any successful response: the caller's `store`
 		// asks the upstream to retain, not this gateway.

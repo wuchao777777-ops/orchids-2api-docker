@@ -36,6 +36,16 @@ func (s *buildToolNormalizationState) addWarning(value string) {
 	s.warnings = append(s.warnings, value)
 }
 
+// lookup returns the alias already assigned to namespace/name, or "" when the
+// rewrite never assigned one. Unlike alias it never invents a name: a caller
+// echoing a tool back must not gain an alias the declarations do not carry.
+func (s *buildToolNormalizationState) lookup(namespace, name string) string {
+	if s == nil {
+		return ""
+	}
+	return s.aliases[strings.TrimSpace(namespace)+"\x00"+strings.TrimSpace(name)]
+}
+
 func (s *buildToolNormalizationState) alias(namespace, name string) string {
 	key := strings.TrimSpace(namespace) + "\x00" + strings.TrimSpace(name)
 	if alias := s.aliases[key]; alias != "" {

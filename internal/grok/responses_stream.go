@@ -26,6 +26,23 @@ type chatResponseItem struct {
 // (the one carried by response.completed / failed / incomplete) so a caller
 // that promised to store the response can persist exactly what the client saw.
 func writeResponsesStreamFromChatReaderRequestWithHook(w http.ResponseWriter, request ResponsesCreateRequest, reader io.Reader, onComplete func(map[string]interface{})) {
+	writeResponsesStreamFromChatReaderRequest(w, request, reader, chatStreamOptions{onComplete: onComplete})
+}
+
+// chatStreamOptions configures one chat-to-Responses translation.
+type chatStreamOptions struct {
+	// onComplete receives the terminal response object after it is built.
+	onComplete func(map[string]interface{})
+	// toolAliases restores the identity of a tool the bridge flattened before it
+	// sent the request (see normalizeBridgedTools). Without it every event would
+	// report the flat `namespace__name` the chat layer needed, while the caller
+	// declared a grouped tool and answers by its short name.
+	toolAliases map[string]buildToolAliasIdentity
+}
+
+// writeResponsesStreamFromChatReaderRequest is the translation itself.
+func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request ResponsesCreateRequest, reader io.Reader, opts chatStreamOptions) {
+	aliases := opts.toolAliases
 	streamResponseHeaders(w)
 	writer := &checkedStreamWriter{target: w}
 	id := "resp_" + randomHex(12)
@@ -245,9 +262,14 @@ func writeResponsesStreamFromChatReaderRequestWithHook(w http.ResponseWriter, re
 						return fmt.Errorf("invalid or duplicate tool identity")
 					}
 					callIDs[callID] = true
-					state = add(map[string]interface{}{"id": "fc_" + randomHex(12), "type": "function_call", "call_id": callID, "name": name, "arguments": "", "status": "in_progress"})
+					// A grouped tool travels upstream as namespace__name; the
+					// item is put back on the name the caller declared straight
+					// away, so every event already carries it.
+					item := map[string]interface{}{"id": "fc_" + randomHex(12), "type": "function_call", "call_id": callID, "name": name, "arguments": "", "status": "in_progress"}
+					restoreBridgeToolCall(item, name, aliases)
+					state = add(item)
 					tools[index] = state
-				} else if (callID != "" && callID != state.value["call_id"]) || (name != "" && name != state.value["name"]) {
+				} else if (callID != "" && callID != state.value["call_id"]) || (name != "" && restoreBridgeToolName(name, aliases) != state.value["name"]) {
 					return fmt.Errorf("tool identity changed")
 				}
 				if fragment, exists := fn["arguments"]; exists {
@@ -355,8 +377,8 @@ func writeResponsesStreamFromChatReaderRequestWithHook(w http.ResponseWriter, re
 	if details != nil {
 		v["incomplete_details"] = details
 	}
-	if onComplete != nil {
-		onComplete(v)
+	if opts.onComplete != nil {
+		opts.onComplete(v)
 	}
 	emit("response."+status, map[string]interface{}{"response": v})
 	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
