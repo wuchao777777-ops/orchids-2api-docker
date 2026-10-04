@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"os"
 	"sort"
 	"strings"
@@ -235,7 +236,7 @@ func runProbe(t *testing.T, client *Client, creds Credentials, fields RuntimeFie
 	case "shared":
 		// Exactly the transport production uses for the chat stream, so the
 		// probe answers for the deployed path rather than for a lookalike.
-		httpClient = util.GetSharedHTTPClient("qoder-probe", 75*time.Second, nil)
+		httpClient = httpclient.GetSharedHTTPClient("qoder-probe", 75*time.Second, nil)
 		httpClient.Timeout = 75 * time.Second
 	}
 	resp, err := httpClient.Do(req)

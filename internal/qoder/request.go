@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/textproto"
+	"orchids-api/internal/httpclient"
 	"strconv"
 	"strings"
 	"time"
@@ -999,7 +1000,7 @@ func nestedInt64(raw []byte, key string, depth int) int64 {
 func retryAfterDelay(value string) time.Duration { return retryAfterDelayAt(value, time.Now()) }
 
 func retryAfterDelayAt(value string, now time.Time) time.Duration {
-	return util.ParseRetryAfter(value, now, 30*time.Second)
+	return httpclient.ParseRetryAfter(value, now, 30*time.Second)
 }
 
 func capWait(wait time.Duration) time.Duration {

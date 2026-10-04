@@ -1,7 +1,6 @@
 package grok
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -14,8 +13,7 @@ import (
 )
 
 var (
-	grokJSONEmptyObjectBytes = []byte("{}")
-	allowedMessageRoles      = map[string]struct{}{
+	allowedMessageRoles = map[string]struct{}{
 		"developer": {},
 		"system":    {},
 		"user":      {},
@@ -69,20 +67,6 @@ func randomUUID() string {
 func firstNonEmpty(values ...string) string { return util.FirstNonEmpty(values...) }
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
-
-func encodeJSONBytes(v interface{}) []byte {
-	buf := bytes.Buffer{}
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return grokJSONEmptyObjectBytes
-	}
-	raw := buf.Bytes()
-	if n := len(raw); n > 0 && raw[n-1] == '\n' {
-		return raw[:n-1]
-	}
-	return raw
-}
 
 func uniqueStrings(input []string) []string { return util.UniqueStrings(input) }
 

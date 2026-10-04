@@ -4,37 +4,18 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strings"
 
 	"encoding/json"
+
+	"orchids-api/internal/httpserver"
 )
 
-// checkedStreamWriter makes write failures visible to translators whose SSE
-// helpers predate error returns. The caller then closes its pipe and cancels
-// the upstream request instead of leaving a blocked producer behind.
-type checkedStreamWriter struct {
-	target io.Writer
-	err    error
-}
+// checkedStreamWriter lives in internal/httpserver: it is a generic io.Writer +
+// http.Flusher failure recorder, not Anthropic-search behaviour.
+type checkedStreamWriter = httpserver.CheckedStreamWriter
 
-func (w *checkedStreamWriter) Write(data []byte) (int, error) {
-	if w.err != nil {
-		return 0, w.err
-	}
-	n, err := w.target.Write(data)
-	if err == nil && n != len(data) {
-		err = io.ErrShortWrite
-	}
-	w.err = err
-	return n, err
-}
-func (w *checkedStreamWriter) Flush() {
-	if f, ok := w.target.(http.Flusher); ok {
-		f.Flush()
-	}
-}
 func nullableProtocolString(s string) interface{} {
 	if s == "" {
 		return nil

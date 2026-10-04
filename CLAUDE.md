@@ -53,10 +53,21 @@ was rewritten to CRLF — do not mass-reformat, fix the checkout instead.
 ## Architecture in one page
 
 ```
-cmd/server        startup, route registration, background loops
+cmd/server        startup, route registration (routes.go is the only assembly point)
+internal/dispatch     routes a unified endpoint by model
+internal/responses     OpenAI Responses protocol: wire types, conversions, SSE,
+                       sub-resources, compaction, chat→Responses bridge
+internal/chatwire     OpenAI Chat Completions wire types
+internal/httpserver   shared HTTP/SSE reading and writing, error envelopes
+internal/httpclient   HTTP transport: proxies, client pool, browser fingerprint
 internal/handler  shared pipeline for WorkBuddy / Qoder / Cline
 internal/grok     Grok Build native Messages / Chat Completions / Responses
 internal/channel  provider identity, prefixes, metadata (single source of truth)
+internal/provider     provider client construction and channel capabilities
+internal/modelrefresh model directory discovery and reconciliation
+internal/refresh      scheduled credential and quota refresh
+internal/alerting     alert rules, evaluation, snapshot assembly
+internal/poolstate    account-pool summaries (console and alert views)
 internal/loadbalancer  account selection, cooldowns, connection tracking
 internal/store    Redis-backed accounts, models, API keys, config
 internal/api      admin HTTP API
@@ -74,7 +85,7 @@ Two routing modes:
 
 Only Grok speaks Responses natively. The other three channels expose only
 `/v1/chat/completions`, so their Responses support goes through
-`internal/grok/responses_channel_bridge.go`. Capability differences are tabulated
+`internal/responses`. Capability differences are tabulated
 in `docs/coding-protocol-capabilities.md`.
 
 Upstream calls go through one interface
@@ -102,8 +113,7 @@ These are load-bearing. A change that "simplifies" any of them is a bug.
 4. **Model catalogs are observations only.** Model rows are published only from
    an upstream catalog read for a currently active account. When a channel has no
    active account, or the read fails, **publish nothing** — never a cached,
-   compiled-in or locally defaulted list (`cmd/server/model_refresh.go`,
-   `noActiveAccountsError`).
+   compiled-in or locally defaulted list (`internal/modelrefresh`, `noActiveAccountsError`).
 5. **Production deployment posture:** strong admin password, `debug_enabled`
    off, `/metrics` and the backend port not publicly reachable, and
    `trusted_proxies` containing only real proxy addresses. `settings:config` in

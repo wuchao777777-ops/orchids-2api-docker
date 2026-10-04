@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/dispatch"
 	"regexp"
 	"strings"
 	"sync"
@@ -427,11 +428,11 @@ func TestModelDispatcherPublishesTheResolvedModel(t *testing.T) {
 // would blame the model instead.
 func TestModelDispatcherRejectsOversizedBodyBeforeHandler(t *testing.T) {
 	called := false
-	dispatch := ModelDispatcher(func(http.ResponseWriter, *http.Request) { called = true }, func(http.ResponseWriter, *http.Request) { called = true }, nil)
+	router := ModelDispatcher(func(http.ResponseWriter, *http.Request) { called = true }, func(http.ResponseWriter, *http.Request) { called = true }, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", io.LimitReader(strings.NewReader(strings.Repeat("x", 1024)), 1024))
-	req.ContentLength = maxModelDispatcherBodyBytes + 1
+	req.ContentLength = dispatch.MaxBodyBytes + 1
 	rec := httptest.NewRecorder()
-	dispatch(rec, req)
+	router(rec, req)
 	testutil.Equal(t, rec.Code, http.StatusRequestEntityTooLarge)
 	testutil.False(t, called, "oversized request reached a downstream handler")
 }

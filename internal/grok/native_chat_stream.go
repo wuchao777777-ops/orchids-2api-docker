@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 
 	"orchids-api/internal/audit"
-	"orchids-api/internal/util"
 )
 
 type chatOutcome struct {
@@ -87,43 +86,6 @@ type responseToolState struct {
 type responseReasoningState struct {
 	source, signature, key string
 	text                   strings.Builder
-}
-
-// readResponseSSEBytes consumes whole SSE frames, including multi-line data,
-// while keeping payloads as bytes. Callers that decode JSON can therefore pass
-// the payload straight to json.Unmarshal without a string -> []byte round trip.
-func readResponseSSEBytes(reader io.Reader, consume func(string, []byte) error) error {
-	return consumeCompatibleSSE(reader, func(event compatibleSSEEvent) error {
-		if !event.HasData() {
-			return nil
-		}
-		return consume(event.Event, event.Data())
-	})
-}
-
-// readResponseSSE retains the string callback used by text-oriented callers.
-// Names are reset between frames; JSON type wins when a server supplies both.
-func readResponseSSE(reader io.Reader, consume func(string, string) error) error {
-	return readResponseSSEBytes(reader, func(event string, data []byte) error {
-		return consume(event, string(data))
-	})
-}
-
-func responseFailure(ev map[string]interface{}) error {
-	value := ev["error"]
-	if response, ok := ev["response"].(map[string]interface{}); ok {
-		value = response["error"]
-	}
-	// detail is a nil map when the upstream error is not an object; reading it is
-	// safe and yields the empty message.
-	detail, _ := value.(map[string]interface{})
-	message := firstNonEmpty(interfaceString(detail["message"]), interfaceString(value))
-	if message == "" {
-		// Kept separate from firstNonEmpty, which would trim the upstream text.
-		message = streamString(ev["message"])
-	}
-	message = util.FirstNonEmptyUntrimmed(message, "upstream response failed")
-	return fmt.Errorf("%s", message)
 }
 
 // streamBuildChatHolding is the Build streaming entry with the quality hold

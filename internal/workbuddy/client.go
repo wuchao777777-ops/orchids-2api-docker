@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"orchids-api/internal/httpclient"
 
 	"strings"
 	"sync"
@@ -105,8 +106,8 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	proxyKey := "direct"
 	baseURL := DefaultBaseURL
 	if cfg != nil {
-		proxyFunc = util.ProxyFuncFromConfig(cfg)
-		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
+		proxyFunc = httpclient.ProxyFuncFromConfig(cfg)
+		proxyKey = httpclient.GenerateProxyKeyFromConfig(cfg)
 		if override := strings.TrimSpace(cfg.WorkBuddyBaseURL); override != "" {
 			baseURL = strings.TrimRight(override, "/")
 		}
@@ -118,7 +119,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		accountSnapshot = &copied
 	}
 	return &Client{
-		httpClient:     util.GetSharedHTTPClientWithLimits(proxyKey+"|workbuddy-chat", timeout, proxyFunc, cfg != nil && cfg.WorkBuddyHTTP2Enabled, cfg),
+		httpClient:     httpclient.GetSharedHTTPClientWithLimits(proxyKey+"|workbuddy-chat", timeout, proxyFunc, cfg != nil && cfg.WorkBuddyHTTP2Enabled, cfg),
 		baseURL:        baseURL,
 		requestTimeout: timeout,
 		streamIdle:     streamIdle,
@@ -150,7 +151,7 @@ func (c *Client) Close() {}
 // label is the only per-channel difference: it is what an operator reads in the
 // timeout error.
 func monitorStreamIdle(body io.ReadCloser, idle time.Duration, cancel context.CancelFunc) io.ReadCloser {
-	return util.MonitorReadIdle(body, idle, cancel, "workbuddy")
+	return httpclient.MonitorReadIdle(body, idle, cancel, "workbuddy")
 }
 
 // SendRequestWithPayload streams one chat completion to the caller.
@@ -225,7 +226,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 }
 
 func parseRetryAfter(value string) time.Duration {
-	return util.ParseRetryAfter(value, time.Now(), 30*time.Second)
+	return httpclient.ParseRetryAfter(value, time.Now(), 30*time.Second)
 }
 
 // ensureAccessToken returns a usable bearer token, refreshing when the stored

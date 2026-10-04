@@ -4,12 +4,21 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+
+	"orchids-api/internal/channel"
 )
 
 // Explicit channel entrances have independent capacity budgets. Unified model
 // entrances remain protected by global and atomic per-account admission.
 func ProviderAdmission(limits func() map[string]int) func(http.HandlerFunc) http.HandlerFunc {
-	counts := map[string]*atomic.Int64{"grok": {}, "qoder": {}, "cline": {}, "workbuddy": {}}
+	// One counter per channel, built from the channel table rather than a
+	// hardcoded list: a removed channel loses its slot, and an added one gains
+	// one without this file changing. channel.ID is the URL's first segment
+	// ("/workbuddy/v1" -> "workbuddy"), which is exactly the key looked up below.
+	counts := map[string]*atomic.Int64{}
+	for _, definition := range channel.All() {
+		counts[string(definition.ID)] = &atomic.Int64{}
+	}
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			name, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"sort"
 	"strings"
 	"sync"
@@ -652,7 +653,7 @@ func (t *tokenUpdater) refresh(ctx context.Context, creds Credentials) (Credenti
 	req.Header.Set("X-Refresh-Token", creds.RefreshToken)
 	req.Header.Set("X-Auth-Refresh-Source", "plugin")
 
-	resp, raw, err := util.DoReadBody(t.httpClient, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(t.httpClient, req, 64<<10)
 	if err != nil {
 		return creds, fmt.Errorf("failed to refresh workbuddy token: %w", err)
 	}
@@ -783,7 +784,7 @@ func (c *Client) FetchModels(ctx context.Context) ([]WorkBuddyModel, error) {
 	}
 	applyHeaders(req, accessToken, c.creds.UID, "application/json")
 
-	resp, raw, err := util.DoReadBody(c.httpClient, req, 8<<20)
+	resp, raw, err := httpclient.DoReadBody(c.httpClient, req, 8<<20)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch workbuddy config: %w", err)
 	}

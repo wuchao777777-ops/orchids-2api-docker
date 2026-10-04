@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/responses"
 	"time"
 
 	"orchids-api/internal/audit"
@@ -22,13 +23,13 @@ func (h *Handler) SetCompactionCipher(cipher *secureblob.Cipher) {
 	if h == nil {
 		return
 	}
-	codec := newGatewayCompactionCodec(cipher)
+	codec := responses.NewCompactionCodec(cipher)
 	h.compactionMu.Lock()
 	h.compactionCode = codec
 	h.compactionMu.Unlock()
 }
 
-func (h *Handler) compactionCodecSnapshot() *gatewayCompactionCodec {
+func (h *Handler) compactionCodecSnapshot() *responses.CompactionCodec {
 	if h == nil {
 		return nil
 	}
@@ -37,7 +38,7 @@ func (h *Handler) compactionCodecSnapshot() *gatewayCompactionCodec {
 
 // GatewayCompactionEnabled reports whether this deployment can own compaction
 // state. Callers use it to route compaction turns through the gateway.
-func (h *Handler) GatewayCompactionEnabled() bool { return h.compactionCodecSnapshot().available() }
+func (h *Handler) GatewayCompactionEnabled() bool { return h.compactionCodecSnapshot().Available() }
 
 // handleGatewayCompaction answers a compaction turn itself: it runs the canonical
 // summary request upstream, seals the cleaned summary into a gateway blob, and
@@ -48,7 +49,7 @@ func (h *Handler) GatewayCompactionEnabled() bool { return h.compactionCodecSnap
 // them would burn another full summary generation for the same answer.
 func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request, modelID string, spec ModelSpec, payload map[string]interface{}, streaming bool) {
 	codec := h.compactionCodecSnapshot()
-	if !codec.available() {
+	if !codec.Available() {
 		writeResponsesAPIError(w, http.StatusServiceUnavailable, "service_unavailable", "gateway compaction is not configured")
 		return
 	}
@@ -57,13 +58,13 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 		return
 	}
 	sessionKey := sessionFromContext(r.Context()).Key
-	sample := prepareGatewayCompactionSample(payload)
+	sample := responses.PrepareCompactionSample(payload)
 	sample["model"] = spec.UpstreamModel
 
 	// lastErr is only used to decide whether another attempt is worthwhile; the
 	// client never sees upstream prose from this path.
 	var lastErr error
-	for attempt := 1; attempt <= gatewayCompactionMaxAttempts; attempt++ {
+	for attempt := 1; attempt <= responses.CompactionMaxAttempts; attempt++ {
 		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
 		if err != nil {
 			// The pool's note names why it is empty, and this path used to put it in
@@ -77,7 +78,7 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 		if callErr != nil {
 			sess.Close()
 			lastErr = callErr
-			if attempt < gatewayCompactionMaxAttempts && waitGatewayCompactionRetry(r.Context(), gatewayCompactionRetryPause) {
+			if attempt < responses.CompactionMaxAttempts && waitGatewayCompactionRetry(r.Context(), responses.CompactionRetryPause) {
 				continue
 			}
 			// The comment above says the client never sees upstream prose from this
@@ -95,7 +96,7 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 		sess.Close()
 		if readErr != nil {
 			lastErr = readErr
-			if attempt < gatewayCompactionMaxAttempts && waitGatewayCompactionRetry(r.Context(), gatewayCompactionRetryPause) {
+			if attempt < responses.CompactionMaxAttempts && waitGatewayCompactionRetry(r.Context(), responses.CompactionRetryPause) {
 				continue
 			}
 			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "upstream compaction response could not be read")
@@ -103,8 +104,8 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 		}
 		if status < 200 || status >= 300 {
 			lastErr = fmt.Errorf("upstream status=%d", status)
-			if attempt < gatewayCompactionMaxAttempts && compactionHTTPErrorIsTransient(status, string(data)) &&
-				waitGatewayCompactionRetry(r.Context(), gatewayCompactionRetryPause) {
+			if attempt < responses.CompactionMaxAttempts && responses.CompactionHTTPErrorIsTransient(status, string(data)) &&
+				waitGatewayCompactionRetry(r.Context(), responses.CompactionRetryPause) {
 				continue
 			}
 			writeResponsesAPIError(w, upstreamHTTPResponseStatus(lastErr), "upstream_error", "upstream compaction request failed")
@@ -114,25 +115,25 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 			writeResponsesAPIError(w, http.StatusBadGateway, "compaction_failed", "upstream compaction response was too large")
 			return
 		}
-		parsed, parseErr := parseGatewayCompactionStream(data)
-		if parseErr == nil && isDegenerateGatewayCompactionSummary(parsed.summary) {
-			parseErr = errGatewayCompactionDegenerate
+		parsed, parseErr := responses.ParseCompactionStream(data)
+		if parseErr == nil && responses.IsDegenerateCompactionSummary(parsed.Summary) {
+			parseErr = responses.ErrCompactionDegenerate
 		}
 		if parseErr != nil {
 			lastErr = parseErr
-			if gatewayCompactionErrorIsTransient(parseErr) && attempt < gatewayCompactionMaxAttempts &&
-				waitGatewayCompactionRetry(r.Context(), gatewayCompactionRetryPause) {
+			if responses.CompactionErrorIsTransient(parseErr) && attempt < responses.CompactionMaxAttempts &&
+				waitGatewayCompactionRetry(r.Context(), responses.CompactionRetryPause) {
 				continue
 			}
 			writeResponsesAPIError(w, http.StatusBadGateway, "compaction_failed", "Grok Build compaction failed")
 			return
 		}
-		blob, encodeErr := codec.encode(sessionKey, gatewayCompactionContinuation(parsed.summary))
+		blob, encodeErr := codec.Encode(sessionKey, responses.CompactionContinuation(parsed.Summary))
 		if encodeErr != nil {
 			writeResponsesAPIError(w, http.StatusBadGateway, "compaction_failed", "gateway compaction state could not be encoded")
 			return
 		}
-		result := buildGatewayCompactionResponse(parsed.response, blob, modelID)
+		result := responses.BuildCompactionResponse(parsed.Response, blob, modelID)
 		h.auditGatewayCompaction(r.Context(), accountID, modelID, result)
 		if !streaming {
 			util.WriteJSONStatus(w, http.StatusOK, result)
@@ -142,7 +143,7 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
-		if err := writeGatewayCompactionStream(w, result); err != nil {
+		if err := responses.WriteCompactionStream(w, result); err != nil {
 			slog.Debug("gateway compaction stream write failed", "error", err)
 		}
 		return
@@ -162,9 +163,9 @@ func (h *Handler) auditGatewayCompaction(ctx context.Context, accountID int64, m
 		Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_compaction",
 		APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Model: modelID,
 		Channel: "grok", Provider: ProviderBuild, Status: "success",
-		InputTokens:  int(nonNegativeJSONInteger(usage["input_tokens"])),
-		OutputTokens: int(nonNegativeJSONInteger(usage["output_tokens"])),
-		TotalTokens:  int(nonNegativeJSONInteger(usage["total_tokens"])),
+		InputTokens:  int(responses.NonNegativeJSONInteger(usage["input_tokens"])),
+		OutputTokens: int(responses.NonNegativeJSONInteger(usage["output_tokens"])),
+		TotalTokens:  int(responses.NonNegativeJSONInteger(usage["total_tokens"])),
 		UsageSource:  audit.UsageSourceUpstream,
 	})
 }
@@ -184,7 +185,7 @@ func waitGatewayCompactionRetry(ctx context.Context, delay time.Duration) bool {
 
 // compactionErrorParam exposes the input index an expansion failure points at.
 func compactionErrorParam(err error) string {
-	var blobErr *compactionBlobError
+	var blobErr *responses.CompactionBlobError
 	if errors.As(err, &blobErr) {
 		return blobErr.Param()
 	}

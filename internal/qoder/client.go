@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"slices"
 	"strings"
 	"sync"
@@ -99,8 +100,8 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	proxyKey := "direct"
 	http2 := false
 	if cfg != nil {
-		proxyFunc = util.ProxyFuncFromConfig(cfg)
-		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
+		proxyFunc = httpclient.ProxyFuncFromConfig(cfg)
+		proxyKey = httpclient.GenerateProxyKeyFromConfig(cfg)
 		http2 = cfg.QoderHTTP2Enabled
 	}
 
@@ -109,8 +110,8 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		endpoints:      resolveEndpoints(cfg),
 		clientID:       resolveClientID(cfg),
 		clientVersion:  resolveClientVersion(cfg),
-		control:        util.GetSharedHTTPClient(proxyKey, authRequestTimeout, proxyFunc),
-		stream:         util.GetSharedHTTPClientWithLimits(proxyKey+"|qoder-chat", 0, proxyFunc, http2, cfg),
+		control:        httpclient.GetSharedHTTPClient(proxyKey, authRequestTimeout, proxyFunc),
+		stream:         httpclient.GetSharedHTTPClientWithLimits(proxyKey+"|qoder-chat", 0, proxyFunc, http2, cfg),
 		requestTimeout: timeout,
 		entropy:        cryptoSource{},
 	}

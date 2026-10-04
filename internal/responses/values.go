@@ -1,0 +1,68 @@
+package responses
+
+import (
+	"fmt"
+	"strings"
+)
+
+// ParseLooseStringAny renders an arbitrary JSON-decoded value as a trimmed
+// string. A Responses payload routinely carries a number or a bool where the
+// protocol says string, and a nil must read as "" rather than "<nil>", so the
+// loose read is the only safe one on this boundary.
+func ParseLooseStringAny(value interface{}) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+// InterfaceMaps reads a JSON array as a slice of maps, accepting both the
+// decoded []interface{} form and an already-typed slice.
+func InterfaceMaps(value interface{}) []map[string]interface{} {
+	switch values := value.(type) {
+	case []map[string]interface{}:
+		return values
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(values))
+		for _, raw := range values {
+			if typed, ok := raw.(map[string]interface{}); ok {
+				out = append(out, typed)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// InterfaceSlice reads a JSON array as a []interface{}.
+func InterfaceSlice(value interface{}) []interface{} {
+	if typed, ok := value.([]interface{}); ok {
+		return typed
+	}
+	return nil
+}
+
+// CloneStringInterfaceMap copies a decoded JSON object shallowly: the rewrite
+// paths mutate what they were given, and a caller's payload must not change
+// under it.
+func CloneStringInterfaceMap(value map[string]interface{}) map[string]interface{} {
+	if len(value) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(value))
+	for key, item := range value {
+		out[key] = item
+	}
+	return out
+}
+
+// StreamString is the strict read: only a real string is a string. Used where
+// an upstream text must be passed through byte-for-byte, never formatted.
+func StreamString(value interface{}) string {
+	text, _ := value.(string)
+	return text
+}

@@ -105,7 +105,7 @@ func TestResponsesInputItemsServesPersistedItems(t *testing.T) {
 
 	opts := ResponsesBridgeOptions{Store: store.NewMemoryResponseStore(0)}
 	id := "resp_items_" + randomHex(8)
-	if err := opts.store().SaveStoredResponse(nil, &store.StoredResponse{ //nolint:staticcheck // nil ctx is fine for the in-process store
+	if err := opts.StoreFor().SaveStoredResponse(nil, &store.StoredResponse{ //nolint:staticcheck // nil ctx is fine for the in-process store
 		ResponseID: id,
 		OwnerHash:  "anonymous",
 		Model:      "gpt-5.6-luna",
@@ -175,7 +175,7 @@ func TestResponsesCancelFlipsStoredStatus(t *testing.T) {
 	id := "resp_cancel_" + randomHex(8)
 	body := `{"id":"` + id + `","object":"response","status":"completed","output":[` +
 		`{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}`
-	if err := opts.store().SaveStoredResponse(nil, &store.StoredResponse{ //nolint:staticcheck // nil ctx is fine for the in-process store
+	if err := opts.StoreFor().SaveStoredResponse(nil, &store.StoredResponse{ //nolint:staticcheck // nil ctx is fine for the in-process store
 		ResponseID: id, OwnerHash: "anonymous", Model: "gpt-5.6-luna",
 		Provider: bridgedResponseProvider, ContentType: "application/json", Body: []byte(body),
 	}, 0); err != nil {
@@ -194,7 +194,7 @@ func TestResponsesCancelFlipsStoredStatus(t *testing.T) {
 	output, _ := cancelled["output"].([]interface{})
 	testutil.Equal(t, len(output), 1)
 
-	record, err := opts.store().GetStoredResponse(nil, id, "anonymous") //nolint:staticcheck // see above
+	record, err := opts.StoreFor().GetStoredResponse(nil, id, "anonymous") //nolint:staticcheck // see above
 	testutil.NoError(t, err, "GetStoredResponse() error = %v")
 	testutil.MustContain(t, string(record.Body), `"status":"cancelled"`)
 
@@ -221,7 +221,7 @@ func TestResponsesCancelAnswersBuildOwnershipRecords(t *testing.T) {
 
 	opts := ResponsesBridgeOptions{Store: store.NewMemoryResponseStore(0)}
 	id := "resp_build_" + randomHex(8)
-	if err := opts.store().SaveStoredResponse(nil, &store.StoredResponse{ //nolint:staticcheck // nil ctx is fine for the in-process store
+	if err := opts.StoreFor().SaveStoredResponse(nil, &store.StoredResponse{ //nolint:staticcheck // nil ctx is fine for the in-process store
 		ResponseID: id, OwnerHash: "anonymous", Model: "grok-4.6", Provider: ProviderBuild,
 	}, 0); err != nil {
 		t.Fatalf("SaveStoredResponse() error = %v", err)

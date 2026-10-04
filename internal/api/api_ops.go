@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"orchids-api/internal/poolstate"
 	"orchids-api/internal/util"
 	"sort"
 	"strconv"
@@ -13,12 +14,10 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/opsagg"
 	"orchids-api/internal/pricing"
-	"orchids-api/internal/store"
 )
 
 // defaultOpsWindowMinutes is the window the overview opens with.
@@ -618,7 +617,8 @@ func (a *API) opsMatrix(ctx context.Context, channels []string, since, until tim
 		if !IsProviderChannel(channel) {
 			continue
 		}
-		enabled, available, needingLogin, modelCooldowns := poolCounts(accounts, channel, now)
+		pool := poolstate.Counts(accounts, channel, now, poolstate.NeedingLoginRefused)
+		enabled, available, needingLogin, modelCooldowns := pool.Enabled, pool.Available, pool.NeedingLogin, pool.ModelCooldowns
 		active := int64(0)
 		for _, acc := range accounts {
 			if acc != nil && strings.EqualFold(acc.AccountType, channel) {
@@ -664,34 +664,6 @@ func (a *API) opsMatrix(ctx context.Context, channels []string, since, until tim
 		rows = append(rows, row)
 	}
 	return rows, nil
-}
-
-// poolCounts summarizes a channel's account pool for the matrix.
-func poolCounts(accounts []*store.Account, channel string, now time.Time) (enabled, available, needingLogin, modelCooldowns int) {
-	for _, acc := range accounts {
-		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), channel) {
-			continue
-		}
-		if !acc.Enabled {
-			continue
-		}
-		enabled++
-		// A refused credential needs attention even while it is cooling down.
-		// NeedsReverify is a scheduler deadline, not a login status.
-		if strings.TrimSpace(acc.StatusCode) == "401" {
-			needingLogin++
-		}
-		for model, until := range acc.ModelCooldowns {
-			if strings.TrimSpace(model) != "" && until.After(now) {
-				modelCooldowns++
-			}
-		}
-		if accountpolicy.AccountHeld(acc, now) {
-			continue
-		}
-		available++
-	}
-	return enabled, available, needingLogin, modelCooldowns
 }
 
 func (a *API) firingAlerts() []alerting.Alert {

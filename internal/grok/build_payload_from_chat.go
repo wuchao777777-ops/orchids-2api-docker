@@ -105,7 +105,7 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 		// has no summary parameter, so make that Build-specific default explicit —
 		// without overriding a summary the caller already asked for, and without
 		// imposing it on native Responses or Anthropic requests.
-		if req.sourceOperation == "" && (req.ReasoningEffort == nil || *req.ReasoningEffort != "none") {
+		if req.SourceOperation == "" && (req.ReasoningEffort == nil || *req.ReasoningEffort != "none") {
 			reasoning, _ := payload["reasoning"].(map[string]interface{})
 			if reasoning == nil {
 				reasoning = map[string]interface{}{}

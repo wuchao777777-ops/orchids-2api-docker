@@ -4,17 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"orchids-api/internal/provider"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"orchids-api/internal/accountevents"
-	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
-	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
-	"orchids-api/internal/workbuddy"
 )
 
 type cachedAccountClient struct {
@@ -296,30 +293,25 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	if h != nil && h.clientFactory != nil {
 		return h.clientFactory(acc, cfg)
 	}
-	if strings.EqualFold(acc.AccountType, "workbuddy") {
-		client := workbuddy.NewFromAccount(acc, cfg)
-		if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-			client.SetAccountStore(h.loadBalancer.Store)
-		}
-		return client
+	// The constructor table lives in internal/provider, which is the same seam
+	// cmd/server uses. Repeating it here meant a fourth provider would have to
+	// be added in two places that could disagree.
+	factory, ok := provider.Get(acc.AccountType)
+	if !ok {
+		return nil
 	}
-	if strings.EqualFold(acc.AccountType, "qoder") {
-		client := qoder.NewFromAccount(acc, cfg)
-		if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-			client.SetAccountStore(h.loadBalancer.Store)
-		}
-		return client
+	client, ok := factory(acc, cfg).(UpstreamClient)
+	if !ok {
+		return nil
 	}
-	// Cline rotates its refresh token on every renewal as well, so the client
-	// needs the store for the same reason.
-	if strings.EqualFold(acc.AccountType, "cline") {
-		client := cline.NewFromAccount(acc, cfg)
-		if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-			client.SetAccountStore(h.loadBalancer.Store)
-		}
-		return client
+	// A rotating credential has to be written back: WorkBuddy rotates its token
+	// on every renewal, Qoder on its refresh, and Cline the same. Without the
+	// store the client would keep using a credential the pool already replaced.
+	if setter, wants := client.(interface{ SetAccountStore(*store.Store) }); wants &&
+		h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
+		setter.SetAccountStore(h.loadBalancer.Store)
 	}
-	return nil
+	return client
 }
 
 func (h *Handler) Close() {

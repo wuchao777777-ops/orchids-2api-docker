@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/httpclient"
 	"strings"
 	"time"
 
 	"encoding/json"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/util"
 )
 
 const (
@@ -62,7 +62,7 @@ type DeviceAuthenticator struct {
 func NewDeviceAuthenticator(cfg *config.Config) *DeviceAuthenticator {
 	return &DeviceAuthenticator{
 		cfg:        cfg,
-		httpClient: newHTTPClient(cfg, 20*time.Second, util.ProxyFuncFromConfig(cfg)),
+		httpClient: newHTTPClient(cfg, 20*time.Second, httpclient.ProxyFuncFromConfig(cfg)),
 		deviceURL:  cfg.GrokCLIOAuthDeviceURLOrDefault(),
 		tokenURL:   cfg.GrokCLIOAuthTokenURLOrDefault(),
 	}

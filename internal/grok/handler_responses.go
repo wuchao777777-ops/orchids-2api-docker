@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"orchids-api/internal/responses"
 	"strings"
 	"time"
 
@@ -35,131 +36,6 @@ func (w *captureResponseWriter) WriteHeader(code int) {
 func (w *captureResponseWriter) Write(p []byte) (int, error) { return w.body.Write(p) }
 
 func (w *captureResponseWriter) Flush() {}
-
-type ResponsesCreateRequest struct {
-	Model              string                   `json:"model"`
-	Input              interface{}              `json:"input"`
-	Instructions       string                   `json:"instructions,omitempty"`
-	Stream             bool                     `json:"stream,omitempty"`
-	StreamProvided     bool                     `json:"-"`
-	Reasoning          map[string]interface{}   `json:"reasoning,omitempty"`
-	Temperature        *float64                 `json:"temperature,omitempty"`
-	TopP               *float64                 `json:"top_p,omitempty"`
-	MaxOutputTokens    *int                     `json:"max_output_tokens,omitempty"`
-	Tools              []map[string]interface{} `json:"tools,omitempty"`
-	ToolChoice         interface{}              `json:"tool_choice,omitempty"`
-	ParallelToolCalls  *bool                    `json:"parallel_tool_calls,omitempty"`
-	PreviousResponseID string                   `json:"previous_response_id,omitempty"`
-	Store              *bool                    `json:"store,omitempty"`
-	Metadata           map[string]interface{}   `json:"metadata,omitempty"`
-	Truncation         string                   `json:"truncation,omitempty"`
-	Include            []string                 `json:"include,omitempty"`
-	Background         *bool                    `json:"background,omitempty"`
-	PromptCacheKey     string                   `json:"prompt_cache_key,omitempty"`
-	// Text carries the Responses text controls, whose only member is the output
-	// format (`text.format`). The chat-only channels express the same thing as
-	// `response_format`, so the bridge passes the object through unchanged and
-	// lets the chat layer decide how much of it the upstream honors.
-	Text map[string]interface{} `json:"text,omitempty"`
-	// ResponseFormat accepts the chat-shaped field as well. Clients that were
-	// written against the chat API and later migrated to Responses keep sending
-	// it, and silently dropping it used to turn a structured-output request into
-	// free-form prose.
-	ResponseFormat map[string]interface{} `json:"response_format,omitempty"`
-}
-
-func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
-	// The object is decoded in two passes. The members whose wire shape is
-	// already the one the handler consumes arrive through the embedded struct,
-	// decoded exactly as declared, so a malformed value is a request error
-	// instead of a silently dropped field. The scalar members accept several
-	// JSON shapes ("true", "1", a numeric string), so the interface{} members
-	// below shadow the typed ones and are parsed loosely afterwards.
-	type plainResponsesCreateRequest ResponsesCreateRequest
-	type rawResponsesCreateRequest struct {
-		plainResponsesCreateRequest
-		Model              interface{} `json:"model"`
-		Instructions       interface{} `json:"instructions,omitempty"`
-		Stream             interface{} `json:"stream,omitempty"`
-		Temperature        interface{} `json:"temperature,omitempty"`
-		TopP               interface{} `json:"top_p,omitempty"`
-		MaxOutputTokens    interface{} `json:"max_output_tokens,omitempty"`
-		ParallelToolCalls  interface{} `json:"parallel_tool_calls,omitempty"`
-		PreviousResponseID interface{} `json:"previous_response_id,omitempty"`
-		Store              interface{} `json:"store,omitempty"`
-		Truncation         interface{} `json:"truncation,omitempty"`
-		Background         interface{} `json:"background,omitempty"`
-		PromptCacheKey     interface{} `json:"prompt_cache_key,omitempty"`
-	}
-
-	var raw rawResponsesCreateRequest
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	stream, err := parseLooseBoolAny(raw.Stream)
-	if err != nil {
-		return err
-	}
-	temp, err := parseLooseFloatAny(raw.Temperature)
-	if err != nil {
-		return err
-	}
-	topP, err := parseLooseFloatAny(raw.TopP)
-	if err != nil {
-		return err
-	}
-	maxOutputTokens, err := parseLooseIntAny(raw.MaxOutputTokens)
-	if err != nil {
-		return err
-	}
-	var rawMap map[string]json.RawMessage
-	_ = json.Unmarshal(data, &rawMap)
-	_, streamProvided := rawMap["stream"]
-	var parallel *bool
-	if _, ok := rawMap["parallel_tool_calls"]; ok {
-		v, err := parseLooseBoolAnyForField(raw.ParallelToolCalls, "parallel_tool_calls")
-		if err != nil {
-			return err
-		}
-		parallel = &v
-	}
-	var store *bool
-	if _, ok := rawMap["store"]; ok {
-		v, err := parseLooseBoolAnyForField(raw.Store, "store")
-		if err != nil {
-			return err
-		}
-		store = &v
-	}
-	var background *bool
-	if _, ok := rawMap["background"]; ok {
-		v, err := parseLooseBoolAnyForField(raw.Background, "background")
-		if err != nil {
-			return err
-		}
-		background = &v
-	}
-	var maxOutput *int
-	if _, ok := rawMap["max_output_tokens"]; ok {
-		maxOutput = &maxOutputTokens
-	}
-
-	*r = ResponsesCreateRequest(raw.plainResponsesCreateRequest)
-	r.Model = parseLooseStringAny(raw.Model)
-	r.Instructions = parseLooseStringAny(raw.Instructions)
-	r.Stream = stream
-	r.StreamProvided = streamProvided
-	r.Temperature = temp
-	r.TopP = topP
-	r.MaxOutputTokens = maxOutput
-	r.ParallelToolCalls = parallel
-	r.PreviousResponseID = parseLooseStringAny(raw.PreviousResponseID)
-	r.Store = store
-	r.Truncation = parseLooseStringAny(raw.Truncation)
-	r.Background = background
-	r.PromptCacheKey = parseLooseStringAny(raw.PromptCacheKey)
-	return nil
-}
 
 func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
@@ -214,7 +90,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	// `compaction_trigger` and the Grok TUI appends the canonical summary
 	// prompt as its last user item. The gateway answers those itself so the
 	// resulting state stays portable across accounts.
-	if h.GatewayCompactionEnabled() && classifyResponsesCompactionPayload(nativePayload) != responsesCompactionNone {
+	if h.GatewayCompactionEnabled() && responses.ClassifyCompactionPayload(nativePayload) != responses.CompactionNone {
 		h.handleGatewayCompaction(w, r, req.Model, spec, nativePayload, responsesPayloadStreaming(nativePayload, req.Stream))
 		return
 	}
@@ -338,7 +214,7 @@ func chatRequestFromResponses(req ResponsesCreateRequest) (ChatCompletionsReques
 	// plain text turn, and the model then answered that it had no web access.
 	tools, hostedTools := responsesToolsToChatTools(req.Tools)
 	out := ChatCompletionsRequest{
-		sourceOperation:   "responses",
+		SourceOperation:   "responses",
 		Model:             model,
 		Messages:          messages,
 		Stream:            req.Stream,

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/httpclient"
 	"strings"
 	"time"
 
@@ -48,7 +49,7 @@ func (c *Client) StartAuthLogin(ctx context.Context, clientVersion string) (stat
 	}
 	applyHeaders(req, "", "", "application/json")
 
-	resp, raw, err := util.DoReadBody(c.httpClient, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(c.httpClient, req, 64<<10)
 	if err != nil {
 		return "", "", fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
@@ -104,7 +105,7 @@ func (c *Client) PollAuthLogin(ctx context.Context, state string) (Credentials, 
 	}
 	applyHeaders(req, "", "", "application/json")
 
-	resp, raw, err := util.DoReadBody(c.httpClient, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(c.httpClient, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
@@ -168,7 +169,7 @@ func (c *Client) FetchAccountIdentity(ctx context.Context, accessToken, state st
 	}
 	applyHeaders(req, accessToken, "", "application/json")
 
-	resp, raw, err := util.DoReadBody(c.httpClient, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(c.httpClient, req, 64<<10)
 	if err != nil {
 		return "", "", "", err
 	}

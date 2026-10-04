@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/modelrefresh"
 	"testing"
 	"time"
 
@@ -117,7 +118,7 @@ func TestClineChannelEndToEnd(t *testing.T) {
 
 	// 2. Refresh the channel catalog from the account.
 	refreshBody := e.readBody(t, e.do(t, http.MethodPost, "/api/models/refresh?channel=cline", "", true))
-	var refreshed modelRefreshResult
+	var refreshed modelrefresh.Result
 	err = json.Unmarshal([]byte(refreshBody), &refreshed)
 	testutil.CheckNoError(t, err)
 	testutil.Falsef(t, refreshed.Channel != "Cline" || refreshed.Discovered == 0, "refresh result = %+v, want a discovered Cline catalog", refreshed)

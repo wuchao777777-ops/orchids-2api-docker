@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"strconv"
 	"strings"
 
@@ -147,7 +148,7 @@ func configPayload(cfg *config.Config) (map[string]interface{}, error) {
 	// operators use sessions; inference callers use managed API keys.
 	delete(payload, "admin_token")
 	if rawProxyURL, ok := payload["proxy_url"].(string); !ok || strings.TrimSpace(rawProxyURL) == "" {
-		if proxyURL := util.ProxyURLFromConfig(cfg); proxyURL != nil {
+		if proxyURL := httpclient.ProxyURLFromConfig(cfg); proxyURL != nil {
 			payload["proxy_url"] = proxyURL.String()
 		}
 	}

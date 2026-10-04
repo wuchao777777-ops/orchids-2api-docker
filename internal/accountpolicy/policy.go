@@ -420,7 +420,7 @@ func isClientRefusal(lower string) bool {
 // happened to be in the same string.
 func isGlobalUpstreamRefusal(text string) bool {
 	text = strings.ReplaceAll(strings.ToLower(text), `\`, "")
-	return strings.Contains(text, "qoder gateway is busy") ||
+	return apperrors.IsQoderGatewayBusy(text) ||
 		strings.Contains(text, "available upstream accounts are rate-limited") ||
 		strings.Contains(text, "available upstream accounts are rate limited") ||
 		strings.Contains(text, "10605") ||
@@ -435,7 +435,7 @@ func isGlobalUpstreamRefusal(text string) bool {
 func isEntitlementRefusal(lower string) bool {
 	return strings.Contains(lower, "no usable plan or allowance") ||
 		strings.Contains(lower, "not subscribed to required model plan") ||
-		strings.Contains(lower, "only available via cline product surfaces") ||
+		apperrors.IsClineProductSurface(lower) ||
 		(strings.Contains(lower, "http 403") && strings.Contains(lower, "entitlement"))
 }
 
@@ -453,9 +453,9 @@ func modelCooldownKindFor(lower string) store.ModelCooldownReason {
 // the credential or the account's quota.
 func isModelScopedFailure(lower string) bool {
 	return strings.Contains(lower, "code=6004") ||
-		strings.Contains(lower, "qoder gateway is busy") ||
-		strings.Contains(lower, "qoder agent limit reached") ||
-		strings.Contains(lower, "qoder model rate limited") ||
+		apperrors.IsQoderGatewayBusy(lower) ||
+		apperrors.IsQoderAgentLimit(lower) ||
+		apperrors.IsQoderModelRateLimited(lower) ||
 		strings.Contains(lower, "available upstream accounts are rate-limited") ||
 		strings.Contains(lower, "agentlimitresettime") ||
 		strings.Contains(lower, "model is not found") ||
@@ -465,7 +465,7 @@ func isModelScopedFailure(lower string) bool {
 		strings.Contains(lower, "max_token_limit") ||
 		strings.Contains(lower, "model unavailable") ||
 		strings.Contains(lower, "not subscribed to required model plan") ||
-		strings.Contains(lower, "only available via cline product surfaces") ||
+		apperrors.IsClineProductSurface(lower) ||
 		(strings.Contains(lower, "http 403") && strings.Contains(lower, "entitlement")) ||
 		strings.Contains(lower, "requested base model")
 }
@@ -533,7 +533,7 @@ func AccountHeld(acc *store.Account, now time.Time) bool {
 			// hours), not an ordinary throttle. Preserve the upstream deadline;
 			// the generic 30m ceiling only guards billing-cycle timestamps that
 			// accidentally leak into normal rate-limit state.
-			if strings.Contains(strings.ToLower(acc.StatusMessage), "cline inference cap reached") ||
+			if apperrors.IsClineInferenceCap(strings.ToLower(acc.StatusMessage)) ||
 				(strings.EqualFold(acc.AccountType, "qoder") && strings.Contains(strings.ToLower(acc.StatusMessage), "billing daily count exceeded")) {
 				until = acc.QuotaResetAt
 			} else if ceiling := acc.LastAttempt.Add(CooldownRateLimitMax); ceiling.Before(acc.QuotaResetAt) {

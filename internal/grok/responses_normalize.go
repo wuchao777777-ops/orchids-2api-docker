@@ -2,141 +2,12 @@ package grok
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"encoding/json"
 
 	"orchids-api/internal/modelpolicy"
 )
-
-var buildToolAliasInvalid = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
-
-const buildCompatibilityWarningsKey = "__orchids_build_compatibility_warnings"
-
-type buildToolNormalizationState struct {
-	seen     map[string]int
-	aliases  map[string]string
-	warnings []string
-	warning  map[string]struct{}
-}
-
-func newBuildToolNormalizationState() *buildToolNormalizationState {
-	return &buildToolNormalizationState{seen: map[string]int{}, aliases: map[string]string{}, warning: map[string]struct{}{}}
-}
-
-func (s *buildToolNormalizationState) addWarning(value string) {
-	if s == nil || value == "" {
-		return
-	}
-	if _, exists := s.warning[value]; exists {
-		return
-	}
-	s.warning[value] = struct{}{}
-	s.warnings = append(s.warnings, value)
-}
-
-// lookup returns the alias already assigned to namespace/name, or "" when the
-// rewrite never assigned one. Unlike alias it never invents a name: a caller
-// echoing a tool back must not gain an alias the declarations do not carry.
-func (s *buildToolNormalizationState) lookup(namespace, name string) string {
-	if s == nil {
-		return ""
-	}
-	return s.aliases[strings.TrimSpace(namespace)+"\x00"+strings.TrimSpace(name)]
-}
-
-func (s *buildToolNormalizationState) alias(namespace, name string) string {
-	key := strings.TrimSpace(namespace) + "\x00" + strings.TrimSpace(name)
-	if alias := s.aliases[key]; alias != "" {
-		return alias
-	}
-	base := buildToolAlias(namespace, name)
-	alias := base
-	for index := 2; s.seen[alias] > 0; index++ {
-		suffix := fmt.Sprintf("_%d", index)
-		limit := 128 - len(suffix)
-		prefix := base
-		if limit < len(base) {
-			prefix = base[:limit]
-		}
-		alias = strings.TrimSuffix(prefix, "_") + suffix
-		s.addWarning("function_name_collision_renamed")
-	}
-	s.seen[alias] = 1
-	s.aliases[key] = alias
-	return alias
-}
-
-func takeBuildCompatibilityWarnings(payload map[string]interface{}) string {
-	if payload == nil {
-		return ""
-	}
-	raw := payload[buildCompatibilityWarningsKey]
-	delete(payload, buildCompatibilityWarningsKey)
-	values, _ := raw.([]string)
-	return strings.Join(values, ",")
-}
-
-type buildToolAliasIdentity struct {
-	Kind        string
-	Namespace   string
-	Name        string
-	Declaration map[string]interface{}
-}
-
-func collectBuildToolAliases(payload map[string]interface{}) map[string]buildToolAliasIdentity {
-	aliases := map[string]buildToolAliasIdentity{}
-	state := newBuildToolNormalizationState()
-	var collect func([]map[string]interface{}, string)
-	collect = func(tools []map[string]interface{}, namespace string) {
-		for _, tool := range tools {
-			kind := strings.ToLower(strings.TrimSpace(fmt.Sprint(tool["type"])))
-			switch kind {
-			case "namespace":
-				collect(interfaceMaps(tool["tools"]), strings.TrimSpace(fmt.Sprint(tool["name"])))
-			case "function":
-				name := strings.TrimSpace(fmt.Sprint(tool["name"]))
-				if nested, ok := tool["function"].(map[string]interface{}); ok {
-					name = strings.TrimSpace(fmt.Sprint(nested["name"]))
-				}
-				if name != "" && name != "<nil>" {
-					aliases[state.alias(namespace, name)] = buildToolAliasIdentity{Kind: "function", Namespace: namespace, Name: name, Declaration: cloneStringInterfaceMap(tool)}
-				}
-			case "tool_search":
-				if strings.EqualFold(strings.TrimSpace(fmt.Sprint(tool["execution"])), "client") {
-					aliases["tool_search"] = buildToolAliasIdentity{Kind: "tool_search", Name: "tool_search", Declaration: cloneStringInterfaceMap(tool)}
-				}
-			case "apply_patch":
-				aliases["apply_patch"] = buildToolAliasIdentity{Kind: "apply_patch", Name: "apply_patch", Declaration: cloneStringInterfaceMap(tool)}
-			case "custom":
-				name := strings.TrimSpace(fmt.Sprint(tool["name"]))
-				if name != "" && name != "<nil>" {
-					aliases[buildToolAlias(namespace, name)] = buildToolAliasIdentity{Kind: "custom", Namespace: namespace, Name: name, Declaration: cloneStringInterfaceMap(tool)}
-				}
-			}
-		}
-	}
-	collect(interfaceMaps(payload["tools"]), "")
-	return aliases
-}
-
-func interfaceMaps(value interface{}) []map[string]interface{} {
-	switch values := value.(type) {
-	case []map[string]interface{}:
-		return values
-	case []interface{}:
-		out := make([]map[string]interface{}, 0, len(values))
-		for _, value := range values {
-			if item, ok := value.(map[string]interface{}); ok {
-				out = append(out, item)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
 
 // applyBuildResponseDefaults applies two defaults to every Build request:
 // `store` defaults to false (ZDR) and `include` always asks for
@@ -231,12 +102,12 @@ func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 			"parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}, "additionalProperties": true},
 		})
 		if parallel, exists := payload["parallel_tool_calls"]; !exists || parallel != false {
-			state.addWarning("client_tool_search_forced_serial")
+			state.AddWarning("client_tool_search_forced_serial")
 		}
-		state.addWarning("client_tool_search_emulated")
+		state.AddWarning("client_tool_search_emulated")
 		payload["parallel_tool_calls"] = false
 	} else if serverSearch {
-		state.addWarning("server_tool_search_eager_loaded")
+		state.AddWarning("server_tool_search_eager_loaded")
 	}
 	if len(normalized) == 0 {
 		delete(payload, "tools")
@@ -251,7 +122,7 @@ func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 	// requested, so this does not broaden a caller's search permission.
 	if hasBuildHostedTool(normalized, "web_search") && !hasBuildHostedTool(normalized, "x_search") {
 		normalized = append(normalized, map[string]interface{}{"type": "x_search"})
-		state.addWarning("x_search_cache_route_added")
+		state.AddWarning("x_search_cache_route_added")
 	}
 	payload["tools"] = normalized
 	normalizeBuildToolChoice(payload, state)
@@ -270,14 +141,15 @@ func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 		if parseLooseStringAny(item["type"]) != "function_call" {
 			continue
 		}
-		key := strings.TrimSpace(parseLooseStringAny(item["namespace"])) + "\x00" + strings.TrimSpace(parseLooseStringAny(item["name"]))
-		if alias := state.aliases[key]; alias != "" {
+		namespace := parseLooseStringAny(item["namespace"])
+		name := parseLooseStringAny(item["name"])
+		if alias := state.AliasFor(namespace, name); alias != "" {
 			item["name"] = alias
 			delete(item, "namespace")
 		}
 	}
-	if len(state.warnings) > 0 {
-		payload[buildCompatibilityWarningsKey] = append([]string(nil), state.warnings...)
+	if warnings := state.Warnings(); len(warnings) > 0 {
+		payload[buildCompatibilityWarningsKey] = append([]string(nil), warnings...)
 	}
 	return nil
 }
@@ -368,32 +240,6 @@ func hasNativeSearchTool(tools []map[string]interface{}) bool {
 }
 
 // webSearchCompatibilityFields are newer OpenAI/Codex controls that the Grok
-// Build wire contract rejects. The gateway drops them (keeping only the native
-// minimal search tool) instead of letting the whole request fail; the
-// operator's intent — a web search — is preserved either way.
-var webSearchCompatibilityFields = []string{
-	"external_web_access",
-	"indexed_web_access",
-	"search_content_types",
-	"search_context_size",
-	"user_location",
-	"max_search_results",
-	"safe_search",
-}
-
-// stripWebSearchControlFields removes the controls above from a hosted search
-// tool, returning true when anything was removed.
-func stripWebSearchControlFields(tool map[string]interface{}) bool {
-	changed := false
-	for _, field := range webSearchCompatibilityFields {
-		if _, exists := tool[field]; exists {
-			delete(tool, field)
-			changed = true
-		}
-	}
-	return changed
-}
-
 // lowerEmulatedCallItem rewrites a client-side custom_tool_call / apply_patch_call
 // history item into the emulated function_call the Build plane accepts, so a
 // multi-turn agent loop keeps working after the tool declaration was emulated.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/modelrefresh"
 	"strings"
 	"time"
 
@@ -51,7 +52,7 @@ func registerRoutes(
 		}
 		return cfg
 	}
-	modelRefreshHandler := makeCoordinatedModelRefreshHandler(currentConfig, s, newModelRefreshCoordinator())
+	modelRefreshHandler := modelrefresh.NewRefreshHandler(currentConfig, s)
 	var anonymousCache middleware.AnonymousAllowlistCache
 	providerAdmission := middleware.ProviderAdmission(func() map[string]int {
 		current := currentConfig()

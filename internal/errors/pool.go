@@ -89,12 +89,14 @@ func ClassifyPoolExhaustion(selectErr error, lastErr string) PoolExhaustion {
 	case strings.Contains(lowerLastErr, "no usable plan or allowance") ||
 		strings.Contains(lowerLastErr, "not subscribed to required model plan"):
 		return PoolExhaustion{Category: "model_unavailable", Message: PoolModelUnavailableMessage}
-	case strings.Contains(lowerLastErr, "cline inference cap reached"):
+	case IsClineInferenceCap(lowerLastErr):
 		// The inference cap holds the whole account for the duration the
 		// upstream stated, not one model, so it gets its own answer.
 		return PoolExhaustion{Category: "rate_limit", Message: PoolClineInferenceCapMessage}
-	case strings.Contains(lowerLastErr, "qoder agent limit reached") ||
-		strings.Contains(lowerLastErr, "qoder model rate limited") ||
+	// Qoder's per-agent ceiling and per-model throttle share one answer: the
+	// fix is to pick another model or wait for that model's window.
+	case IsQoderAgentLimit(lowerLastErr) ||
+		IsQoderModelRateLimited(lowerLastErr) ||
 		strings.Contains(lowerLastErr, "model cooldown"):
 		return PoolExhaustion{Category: "rate_limit", Message: PoolQoderModelMessage}
 	case strings.Contains(lowerSelect, "cooling down for the requested model"):

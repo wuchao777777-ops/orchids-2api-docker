@@ -37,8 +37,8 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	req.startedAt = time.Now()
-	req.sourceOperation, _ = r.Context().Value(chatSourceOperationKey{}).(string)
+	req.StartedAt = time.Now()
+	req.SourceOperation, _ = r.Context().Value(chatSourceOperationKey{}).(string)
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 	debugLogSSE := h != nil && h.configSnapshot() != nil && h.configSnapshot().DebugLogSSE
 	logger := debug.NewForContext(r.Context(), verboseDiagnostics, verboseDiagnostics && debugLogSSE)
@@ -96,7 +96,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer sess.Close()
-	req.account = sess.acc
+	req.Account = sess.acc
 	h.serveNativeChat(r.Context(), w, &req, spec, sess, logger, true)
 }
 

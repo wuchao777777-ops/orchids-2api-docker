@@ -22,16 +22,22 @@ func channelFromPath(path string) string {
 // passthroughChannelName reports the canonical name of a passthrough channel —
 // WorkBuddy, Qoder or Cline — and "" for every other name. Those three forward
 // the caller's OpenAI-shaped request upstream verbatim.
+// passthroughChannelName resolves a name to the channel that forwards the
+// caller's OpenAI-shaped request upstream verbatim.
+//
+// The answer comes from the channel table rather than a local list: "generic" is
+// the property that says a channel has no protocol of its own, so a channel
+// added to internal/channel is picked up here without this file changing.
 func passthroughChannelName(name string) string {
-	switch {
-	case strings.EqualFold(name, string(channel.WorkBuddy)):
-		return string(channel.WorkBuddy)
-	case strings.EqualFold(name, string(channel.Qoder)):
-		return string(channel.Qoder)
-	case strings.EqualFold(name, string(channel.Cline)):
-		return string(channel.Cline)
+	id, ok := channel.Parse(name)
+	if !ok {
+		return ""
 	}
-	return ""
+	definition, ok := channel.DefinitionFor(id)
+	if !ok || !definition.Generic {
+		return ""
+	}
+	return string(id)
 }
 
 // mapModel normalizes only syntax. Availability and upstream identity come from

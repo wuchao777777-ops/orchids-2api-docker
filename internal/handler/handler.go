@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/provider"
 	rtdebug "runtime/debug"
 	"strings"
 	"sync"
@@ -31,7 +32,6 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
-	"orchids-api/internal/workbuddy"
 )
 
 type responseWriterUnwrapper interface {
@@ -922,7 +922,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					// the pool stops offering this account for it while the balance is
 					// spent; the account keeps its free-only capability state.
 					if verdict.Status == store.AccountStatusWorkBuddyQuotaExhausted &&
-						workbuddy.IsFreeModelInCatalog(currentAccount.WorkBuddyModelIDs, upstreamReq.Model) {
+						provider.IsFreeModel("workbuddy", currentAccount, upstreamReq.Model) {
 						// Hold the model out of this account until its plan resets, but
 						// never past the cap below: the reset comes from the upstream's
 						// wall clock, whose zone the gateway cannot verify, so a misread

@@ -68,18 +68,6 @@ func TestRefactorNativeJSONReadErrorIsNotAuditedAsSuccess(t *testing.T) {
 	testutil.Fail(t, !errors.Is(result.Err, readErr) || result.Finish != "error", result)
 }
 
-func TestRefactorChatStreamFreezesCommittedHeaders(t *testing.T) {
-	reader, writer := io.Pipe()
-	defer reader.Close()
-	defer writer.Close()
-	stream := newStreamingChatWriter(writer)
-	stream.Header().Set("X-Test", "initial")
-	stream.WriteHeader(http.StatusBadRequest)
-	stream.Header().Set("X-Test", "later")
-	stream.WriteHeader(http.StatusOK)
-	testutil.False(t, stream.status != http.StatusBadRequest || stream.committedHeader.Get("X-Test") != "initial", "committed response changed")
-}
-
 func TestRefactorChatBridgePropagatesErrorAndClosesPipe(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
 	var saved io.Reader

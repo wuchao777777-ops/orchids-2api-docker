@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/modelrefresh"
 	"strings"
 	"testing"
 	"time"
@@ -168,7 +169,7 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	refreshResp := e.do(t, http.MethodPost, "/api/models/refresh?channel=qoder", "", true)
 	refreshBody := e.readBody(t, refreshResp)
 	testutil.Equal(t, refreshResp.StatusCode, http.StatusOK)
-	var refreshed modelRefreshResult
+	var refreshed modelrefresh.Result
 	testutil.NoError(t, json.Unmarshal([]byte(refreshBody), &refreshed), "decode refresh: %v")
 	testutil.Falsef(t, refreshed.Channel != "Qoder" || refreshed.Discovered == 0, "refresh result = %+v, want a discovered Qoder catalog", refreshed)
 	// The catalog must have come from the signed upstream read, not from a

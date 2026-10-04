@@ -1,9 +1,7 @@
 package grok
 
 import (
-	"errors"
-	"io"
-	"net/http/httptest"
+	"orchids-api/internal/chatwire"
 	"testing"
 	"time"
 
@@ -26,7 +24,7 @@ func TestValidateChatMessages_AcceptsCaseInsensitiveRoleAndType(t *testing.T) {
 		},
 	}
 
-	testutil.NoError(t, validateChatMessages(messages), "validateChatMessages() error = %v")
+	testutil.NoError(t, chatwire.ValidateMessages(messages), "chatwire.ValidateMessages() error = %v")
 }
 
 func TestApplyQuotaInfo_InfersLiteSubscription(t *testing.T) {
@@ -82,63 +80,4 @@ func TestParseRateLimitReset_RFC3339(t *testing.T) {
 	got := parseRateLimitReset(raw)
 	want, _ := time.Parse(time.RFC3339, raw)
 	testutil.Falsef(t, !got.Equal(want), "parseRateLimitReset(%q)=%v want=%v", raw, got, want)
-}
-
-func TestEncodeJSONBytesDoesNotEscapeHTML(t *testing.T) {
-	payload := map[string]interface{}{
-		"type": "chunk",
-		"data": map[string]interface{}{
-			"text": "hello <world>",
-			"n":    1,
-		},
-	}
-	got := string(encodeJSONBytes(payload))
-	testutil.MustContain(t, got, "hello <world>")
-}
-
-func TestWriteSSEBytesWritesEventFrame(t *testing.T) {
-	bytesRec := httptest.NewRecorder()
-	writeSSEBytes(bytesRec, "demo", []byte(`{"ok":true}`))
-
-	got := bytesRec.Body.String()
-	testutil.MustContainAll(t, got, "event: demo\n", `data: {"ok":true}`)
-}
-
-func TestWriteSSEBytesPropagatesShortWrite(t *testing.T) {
-	writer := compatShortWriter{httptest.NewRecorder()}
-	err := writeSSEBytes(writer, "demo", []byte(`{"ok":true}`))
-	testutil.Falsef(t, !errors.Is(err, io.ErrShortWrite), "error=%v", err)
-}
-
-func TestStreamResponseHeadersMatchSSEProxyContract(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	recorder.Header().Set("Connection", "keep-alive")
-	streamResponseHeaders(recorder)
-	got := recorder.Header().Get("Content-Type")
-	testutil.Falsef(t, got != "text/event-stream; charset=utf-8", "content-type=%q", got)
-	testutil.Falsef(t, recorder.Header().Get("X-Accel-Buffering") != "no" || recorder.Header().Get("Connection") != "", "headers=%v", recorder.Header())
-}
-
-func BenchmarkEncodeJSON_Bytes(b *testing.B) {
-	payload := map[string]interface{}{
-		"id": "msg_1",
-		"choices": []map[string]interface{}{{
-			"index": 0,
-			"delta": map[string]interface{}{"content": "hello world"},
-		}},
-	}
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = encodeJSONBytes(payload)
-	}
-}
-
-func BenchmarkWriteSSE_Bytes(b *testing.B) {
-	writer := httptest.NewRecorder()
-	data := []byte(`{"ok":true}`)
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		writer.Body.Reset()
-		writeSSEBytes(writer, "demo", data)
-	}
 }

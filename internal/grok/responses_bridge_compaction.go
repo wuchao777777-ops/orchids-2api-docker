@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"orchids-api/internal/responses"
 	"strings"
 	"time"
 
@@ -53,7 +54,7 @@ func expandBridgedCompaction(r *http.Request, req *ResponsesCreateRequest, opts 
 		if !strings.HasPrefix(blob, bridgeCompactionPrefix) {
 			return fmt.Errorf("input[%d]: foreign compaction is not supported by this chat bridge", index)
 		}
-		record, err := opts.store().GetStoredResponse(r.Context(), strings.TrimPrefix(blob, bridgeCompactionPrefix), responsesOwnerHash(r.Context()))
+		record, err := opts.StoreFor().GetStoredResponse(r.Context(), strings.TrimPrefix(blob, bridgeCompactionPrefix), responsesOwnerHash(r.Context()))
 		if err != nil {
 			if !errors.Is(err, store.ErrNoRows) {
 				return errBridgeCompactionStore
@@ -140,26 +141,26 @@ func ResponsesBridgeCompactHandler(chat http.HandlerFunc, opts ResponsesBridgeOp
 		response := responsesObjectFromChat(req.Model, completion)
 		summary := strings.TrimSpace(parseLooseStringAny(response["output_text"]))
 		if summary == "" {
-			summary = strings.TrimSpace(extractCompactionSummary(response))
+			summary = strings.TrimSpace(responses.ExtractCompactionSummary(response))
 		}
 		if summary == "" || response["status"] != "completed" {
 			writeResponsesAPIError(w, http.StatusBadGateway, "invalid_upstream_response", "summary did not complete")
 			return
 		}
-		if len(summary) > maxGatewayCompactionSummary {
+		if len(summary) > responses.MaxCompactionSummary {
 			writeResponsesAPIError(w, http.StatusBadGateway, "invalid_upstream_response", "summary exceeds compaction limit")
 			return
 		}
-		id := "cmp_" + compactionRandomHex(16)
+		id := "cmp_" + responses.CompactionRandomHex(16)
 		state, _ := json.Marshal(bridgeCompactionRecord{Summary: summary, Model: req.Model, Channel: bridgeCompactionChannel(r.URL.Path)})
-		if err := opts.store().SaveStoredResponse(r.Context(), &store.StoredResponse{ResponseID: id, OwnerHash: responsesOwnerHash(r.Context()), Provider: bridgeCompactionProvider, Body: state, CreatedAt: time.Now()}, opts.ttl()); err != nil {
+		if err := opts.StoreFor().SaveStoredResponse(r.Context(), &store.StoredResponse{ResponseID: id, OwnerHash: responsesOwnerHash(r.Context()), Provider: bridgeCompactionProvider, Body: state, CreatedAt: time.Now()}, opts.TTLOrDefault()); err != nil {
 			writeResponsesAPIError(w, http.StatusServiceUnavailable, "server_error", "failed to store compaction")
 			return
 		}
-		result := buildGatewayCompactionResponse(response, bridgeCompactionPrefix+id, req.Model)
+		result := responses.BuildCompactionResponse(response, bridgeCompactionPrefix+id, req.Model)
 		if req.Stream {
 			w.Header().Set("Content-Type", "text/event-stream")
-			_ = writeGatewayCompactionStream(w, result)
+			_ = responses.WriteCompactionStream(w, result)
 		} else {
 			util.WriteJSON(w, result)
 		}

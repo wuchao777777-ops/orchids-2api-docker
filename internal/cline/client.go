@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"strings"
 	"sync"
 	"time"
@@ -78,8 +79,8 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	proxyFunc := http.ProxyFromEnvironment
 	proxyKey := "direct"
 	if cfg != nil {
-		proxyFunc = util.ProxyFuncFromConfig(cfg)
-		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
+		proxyFunc = httpclient.ProxyFuncFromConfig(cfg)
+		proxyKey = httpclient.GenerateProxyKeyFromConfig(cfg)
 	}
 
 	client := &Client{
@@ -87,8 +88,8 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		workOSAuthorizeURL: DefaultWorkOSAuthorizeURL,
 		workOSTokenURL:     DefaultWorkOSAuthenticateURL,
 		workOSClientID:     DefaultWorkOSClientID,
-		control:            util.GetSharedHTTPClient(proxyKey, authRequestTimeout, proxyFunc),
-		stream:             util.GetSharedHTTPClientWithLimits(proxyKey+"|cline-chat", 0, proxyFunc, cfg != nil && cfg.ClineHTTP2Enabled, cfg),
+		control:            httpclient.GetSharedHTTPClient(proxyKey, authRequestTimeout, proxyFunc),
+		stream:             httpclient.GetSharedHTTPClientWithLimits(proxyKey+"|cline-chat", 0, proxyFunc, cfg != nil && cfg.ClineHTTP2Enabled, cfg),
 		requestTimeout:     timeout,
 	}
 	if cfg != nil {
@@ -479,7 +480,7 @@ func (c *Client) FetchUpstreamModels(ctx context.Context) ([]Model, error) {
 	req.Header.Set("X-Task-ID", newTaskID(time.Now()))
 	applyClientHeaders(req.Header)
 
-	resp, raw, err := util.DoReadBody(c.control, req, 1<<20)
+	resp, raw, err := httpclient.DoReadBody(c.control, req, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}

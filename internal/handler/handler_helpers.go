@@ -7,18 +7,16 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"orchids-api/internal/provider"
 	"strings"
 	"time"
 
 	"encoding/json"
 
-	"orchids-api/internal/cline"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
-	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
-	"orchids-api/internal/workbuddy"
 )
 
 func normalizeRequestedModelID(modelID string) string {
@@ -351,13 +349,13 @@ func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetCha
 // per-model cooldown its own verdicts write. Qoder scopes agent/model windows;
 // WorkBuddy may scope a plan refusal while accounts with a truly exhausted
 // package remain account-wide parked.
+// honorsModelCooldown reports whether a channel's selection consults the
+// per-model cooldown its own verdicts write. Qoder scopes agent/model windows;
+// WorkBuddy may scope a plan refusal while accounts with a truly exhausted
+// package remain account-wide parked. The answer now comes from the channel's
+// registered capabilities instead of a hardcoded list here.
 func honorsModelCooldown(channel string) bool {
-	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "qoder", "workbuddy":
-		return true
-	default:
-		return false
-	}
+	return provider.HonorsModelCooldown(channel)
 }
 
 func (h *Handler) isCurrentFreeModel(ctx context.Context, channel, modelID string) bool {
@@ -379,7 +377,7 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "cline")
 	if needsFilter {
 		return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) error {
-			if channel == "cline" && !cline.CatalogSupportsModel(acc.ClineModelIDs, model) {
+			if channel == "cline" && !provider.SupportsModel("cline", acc, model) {
 				return loadbalancer.ErrAccountNotEligible
 			}
 			if honorsModelCooldown(channel) {
@@ -395,24 +393,24 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 			switch strings.TrimSpace(acc.StatusCode) {
 			case "402":
 				if channel == "qoder" {
-					if qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model) {
+					if provider.IsFreeModel("qoder", acc, model) && h.isCurrentFreeModel(ctx, "qoder", model) {
 						return nil
 					}
 					return loadbalancer.ErrAccountNotEligible
 				}
 				if channel == "workbuddy" {
-					if workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model) {
+					if provider.IsFreeModel("workbuddy", acc, model) {
 						return nil
 					}
 					return loadbalancer.ErrAccountNotEligible
 				}
 			case store.AccountStatusQoderQuotaExhausted:
-				if channel == "qoder" && qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model) {
+				if channel == "qoder" && provider.IsFreeModel("qoder", acc, model) && h.isCurrentFreeModel(ctx, "qoder", model) {
 					return nil
 				}
 				return loadbalancer.ErrAccountNotEligible
 			case store.AccountStatusWorkBuddyQuotaExhausted:
-				if channel == "workbuddy" && workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model) {
+				if channel == "workbuddy" && provider.IsFreeModel("workbuddy", acc, model) {
 					return nil
 				}
 				return loadbalancer.ErrAccountNotEligible

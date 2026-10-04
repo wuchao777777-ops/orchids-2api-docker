@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"strings"
 	"time"
 
@@ -73,7 +74,7 @@ func (c *Client) fetchPlan(ctx context.Context) (Plan, error) {
 	req.Header.Set("Accept", "application/json")
 	applyClientHeaders(req.Header)
 
-	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Plan{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}

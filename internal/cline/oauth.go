@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/httpclient"
 	"strings"
 	"time"
 
@@ -68,7 +69,7 @@ func (c *Client) StartLogin(ctx context.Context) (*LoginTransaction, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
@@ -146,7 +147,7 @@ func (c *Client) PollLogin(ctx context.Context, tx *LoginTransaction) (Credentia
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
@@ -210,7 +211,7 @@ func (c *Client) Register(ctx context.Context, workosAccess, workosRefresh strin
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
@@ -272,7 +273,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (Credentials,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}

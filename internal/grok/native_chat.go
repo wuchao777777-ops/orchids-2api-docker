@@ -447,8 +447,8 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		writeGrokError(w, http.StatusServiceUnavailable, "grok upstream client or account not configured")
 		return
 	}
-	if req.startedAt.IsZero() {
-		req.startedAt = time.Now()
+	if req.StartedAt.IsZero() {
+		req.StartedAt = time.Now()
 	}
 	payload, err := h.responsesPayloadFromChat(spec, req, true)
 	if err != nil {

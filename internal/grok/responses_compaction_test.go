@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/responses"
 	"strings"
 	"testing"
 	"time"
@@ -90,12 +91,12 @@ func TestClassifyResponsesCompactionPayload(t *testing.T) {
 	cases := []struct {
 		name    string
 		payload map[string]interface{}
-		want    gatewayCompactionKind
+		want    responses.CompactionKind
 	}{
 		{
 			name:    "codex remote-v2 trigger",
 			payload: map[string]interface{}{"input": []interface{}{map[string]interface{}{"type": "compaction_trigger"}}},
-			want:    responsesCompactionTrigger,
+			want:    responses.CompactionTrigger,
 		},
 		{
 			name: "trigger mixed with ordinary items",
@@ -103,48 +104,48 @@ func TestClassifyResponsesCompactionPayload(t *testing.T) {
 				map[string]interface{}{"type": "message", "role": "user", "content": "hello"},
 				map[string]interface{}{"type": "compaction_trigger"},
 			}},
-			want: responsesCompactionTrigger,
+			want: responses.CompactionTrigger,
 		},
 		{
 			name: "grok tui prompt as last user item",
 			payload: map[string]interface{}{"input": []interface{}{
 				map[string]interface{}{"type": "message", "role": "user", "content": "earlier turn"},
 				map[string]interface{}{"type": "message", "role": "user", "content": []interface{}{
-					map[string]interface{}{"type": "input_text", "text": "Please summarize. Note: " + clientCompactionPromptMarker},
+					map[string]interface{}{"type": "input_text", "text": "Please summarize. Note: " + responses.ClientCompactionPromptMarker},
 				}},
 			}},
-			want: responsesCompactionTUI,
+			want: responses.CompactionTUI,
 		},
 		{
 			name: "tui prompt recognised on the messages wire too",
 			payload: map[string]interface{}{"messages": []interface{}{
-				map[string]interface{}{"role": "user", "content": clientCompactionPromptMarker},
+				map[string]interface{}{"role": "user", "content": responses.ClientCompactionPromptMarker},
 			}},
-			want: responsesCompactionTUI,
+			want: responses.CompactionTUI,
 		},
 		{
 			name: "tui marker not last is an ordinary turn",
 			payload: map[string]interface{}{"input": []interface{}{
-				map[string]interface{}{"type": "message", "role": "user", "content": clientCompactionPromptMarker},
+				map[string]interface{}{"type": "message", "role": "user", "content": responses.ClientCompactionPromptMarker},
 				map[string]interface{}{"type": "message", "role": "assistant", "content": "ok"},
 			}},
-			want: responsesCompactionNone,
+			want: responses.CompactionNone,
 		},
 		{
 			name:    "assistant cannot trigger it",
-			payload: map[string]interface{}{"input": []interface{}{map[string]interface{}{"type": "message", "role": "assistant", "content": clientCompactionPromptMarker}}},
-			want:    responsesCompactionNone,
+			payload: map[string]interface{}{"input": []interface{}{map[string]interface{}{"type": "message", "role": "assistant", "content": responses.ClientCompactionPromptMarker}}},
+			want:    responses.CompactionNone,
 		},
 		{
 			name:    "ordinary conversation",
 			payload: map[string]interface{}{"input": []interface{}{map[string]interface{}{"type": "message", "role": "user", "content": "hello"}}},
-			want:    responsesCompactionNone,
+			want:    responses.CompactionNone,
 		},
-		{name: "empty payload", payload: nil, want: responsesCompactionNone},
+		{name: "empty payload", payload: nil, want: responses.CompactionNone},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			testutil.Equal(t, classifyResponsesCompactionPayload(tc.payload), tc.want)
+			testutil.Equal(t, responses.ClassifyCompactionPayload(tc.payload), tc.want)
 		})
 	}
 }
@@ -154,7 +155,7 @@ func TestBuildGatewayCompactionResponseShape(t *testing.T) {
 		"id": "resp_abc", "status": "completed", "output_text": "leak me not",
 		"usage": map[string]interface{}{"input_tokens": float64(10), "output_tokens": float64(5)},
 	}
-	result := buildGatewayCompactionResponse(response, "g2a_compact_v1.xyz", "grok-4.5")
+	result := responses.BuildCompactionResponse(response, "g2a_compact_v1.xyz", "grok-4.5")
 
 	testutil.Equal(t, result["id"], "resp_abc")
 	testutil.Equal(t, result["object"], "response.compaction")
@@ -170,13 +171,13 @@ func TestBuildGatewayCompactionResponseShape(t *testing.T) {
 	usage := result["usage"].(map[string]interface{})
 	testutil.EqualAny(t, usage["total_tokens"], int64(15))
 	// A response without usage keeps it absent instead of inventing zeros.
-	noUsage := buildGatewayCompactionResponse(map[string]interface{}{"id": "resp_x"}, "blob", "grok-4.5")
+	noUsage := responses.BuildCompactionResponse(map[string]interface{}{"id": "resp_x"}, "blob", "grok-4.5")
 	_, present = noUsage["usage"]
 	testutil.False(t, present, "usage was fabricated")
 
 	// The streamed form is the same answer as six ordered events.
 	var builder strings.Builder
-	testutil.NoError(t, writeGatewayCompactionStream(&builder, result), "write stream: %v")
+	testutil.NoError(t, responses.WriteCompactionStream(&builder, result), "write stream: %v")
 	names := make([]string, 0, 6)
 	var completedPayload map[string]interface{}
 	if err := consumeCompatibleSSE(strings.NewReader(builder.String()), func(event compatibleSSEEvent) error {
@@ -200,8 +201,8 @@ func TestBuildGatewayCompactionResponseShape(t *testing.T) {
 // for one assertion.
 func asError(err error, target interface{}) bool {
 	switch typed := target.(type) {
-	case **compactionBlobError:
-		blobErr, ok := err.(*compactionBlobError)
+	case **responses.CompactionBlobError:
+		blobErr, ok := err.(*responses.CompactionBlobError)
 		if ok {
 			*typed = blobErr
 		}
@@ -249,5 +250,5 @@ func TestHandleResponsesCompactionTriggerStreamsSyntheticEvents(t *testing.T) {
 	}
 	want := []string{"response.created", "response.in_progress", "response.output_item.added", "keepalive", "response.output_item.done", "response.completed"}
 	testutil.Equal(t, strings.Join(events, ","), strings.Join(want, ","))
-	testutil.Falsef(t, !strings.HasPrefix(blob, gatewayCompactionPrefix), "streamed blob=%q is not gateway-owned", blob)
+	testutil.Falsef(t, !strings.HasPrefix(blob, responses.CompactionPrefix), "streamed blob=%q is not gateway-owned", blob)
 }

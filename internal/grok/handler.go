@@ -14,6 +14,7 @@ import (
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/pricing"
+	"orchids-api/internal/responses"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 	"strings"
@@ -45,7 +46,7 @@ type Handler struct {
 	// Nil (no credential key configured) means the gateway cannot own a summary
 	// and compaction requests stay a plain upstream forward.
 	compactionMu   sync.RWMutex
-	compactionCode *gatewayCompactionCodec
+	compactionCode *responses.CompactionCodec
 
 	quotaOnce    sync.Once
 	quotaMu      sync.Mutex
@@ -158,10 +159,10 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 	metadata := map[string]interface{}{"finish_reason": result.Finish}
 	addReasoningDiagnostics(ctx, metadata)
 	duration := int64(0)
-	if !req.startedAt.IsZero() {
-		duration = time.Since(req.startedAt).Milliseconds()
+	if !req.StartedAt.IsZero() {
+		duration = time.Since(req.StartedAt).Milliseconds()
 		if !result.FirstToken.IsZero() {
-			metadata["first_token_ms"] = result.FirstToken.Sub(req.startedAt).Milliseconds()
+			metadata["first_token_ms"] = result.FirstToken.Sub(req.StartedAt).Milliseconds()
 		}
 	}
 	accountID := int64(0)

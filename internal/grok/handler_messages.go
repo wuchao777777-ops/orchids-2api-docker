@@ -238,7 +238,7 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 		reasoningSummary = &summary
 	}
 	return ChatCompletionsRequest{
-		sourceOperation:   "messages",
+		SourceOperation:   "messages",
 		Model:             req.Model,
 		Messages:          messages,
 		Stream:            req.Stream,
@@ -961,7 +961,7 @@ type anthropicStreamState struct {
 }
 
 func translateOpenAIChatStreamToAnthropicWithInput(w io.Writer, reader io.Reader, model string, inputTokens int) error {
-	tracked := &checkedStreamWriter{target: w}
+	tracked := &checkedStreamWriter{Target: w}
 	w = tracked
 	state := &anthropicStreamState{
 		id: "msg_" + randomHex(12), model: model, textIndex: -1, thinkIndex: -1,
@@ -980,13 +980,13 @@ func translateOpenAIChatStreamToAnthropicWithInput(w io.Writer, reader io.Reader
 		"type": "message_start", "message": map[string]interface{}{"id": state.id, "type": "message", "role": "assistant", "model": model, "created_at": time.Now().Unix(),
 			"content": []interface{}{}, "stop_reason": nil, "stop_sequence": nil, "usage": state.usage},
 	})
-	if tracked.err != nil {
-		return tracked.err
+	if tracked.Err != nil {
+		return tracked.Err
 	}
 	terminal := false
 	err := readResponseSSE(reader, func(event, data string) error {
-		if tracked.err != nil {
-			return tracked.err
+		if tracked.Err != nil {
+			return tracked.Err
 		}
 		if data == "[DONE]" {
 			if !terminal {
@@ -1051,7 +1051,7 @@ func translateOpenAIChatStreamToAnthropicWithInput(w io.Writer, reader io.Reader
 				terminal = true
 			}
 		}
-		return tracked.err
+		return tracked.Err
 	})
 	if err == io.EOF {
 		err = nil
@@ -1060,7 +1060,7 @@ func translateOpenAIChatStreamToAnthropicWithInput(w io.Writer, reader io.Reader
 		err = fmt.Errorf("chat stream closed before completion")
 	}
 	if err != nil {
-		if tracked.err == nil {
+		if tracked.Err == nil {
 			writeAnthropicSSE(w, "error", map[string]interface{}{"type": "error", "error": map[string]interface{}{"type": "api_error", "message": err.Error()}})
 		}
 		return err
@@ -1069,7 +1069,7 @@ func translateOpenAIChatStreamToAnthropicWithInput(w io.Writer, reader io.Reader
 		state.stopReason = "stop_sequence"
 	}
 	state.finish(w)
-	return tracked.err
+	return tracked.Err
 }
 
 func streamString(value interface{}) string {

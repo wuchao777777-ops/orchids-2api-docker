@@ -4,99 +4,94 @@ import (
 	"context"
 	"errors"
 	"io"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
-	"orchids-api/internal/util"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"encoding/json"
-
 	"orchids-api/internal/debug"
 	apperrors "orchids-api/internal/errors"
-	"orchids-api/internal/middleware"
+	"orchids-api/internal/httpserver"
 )
 
-var (
-	grokSSEEventPrefixBytes = []byte("event: ")
-	grokSSEDataPrefixBytes  = []byte("data: ")
-	grokSSENewlineBytes     = []byte("\n")
-	grokSSEFrameSuffixBytes = []byte("\n\n")
-)
+// The generic half of this file lives in internal/httpserver: the OpenAI error
+// envelope, bounded JSON reads and the SSE writers are shared with every other
+// inference-facing endpoint, so they must have exactly one implementation. What
+// stays here is the Build-specific upstream classifier plus the thin wrappers
+// the rest of the package still calls by their short local names.
 
-// grokErrorCodeForStatus derives a stable machine-readable code from an HTTP
-// status so every Grok endpoint answers with the same OpenAI error envelope.
-func grokErrorCodeForStatus(status int) string {
-	switch status {
-	case http.StatusBadRequest:
-		return "invalid_request"
-	case http.StatusUnauthorized:
-		return "invalid_api_key"
-	case http.StatusForbidden:
-		return "permission_denied"
-	case http.StatusNotFound:
-		return "not_found"
-	case http.StatusMethodNotAllowed:
-		return "method_not_allowed"
-	case http.StatusConflict:
-		return "conflict"
-	case http.StatusRequestEntityTooLarge:
-		return "request_too_large"
-	case http.StatusUnsupportedMediaType:
-		return "unsupported_media_type"
-	case http.StatusTooManyRequests:
-		return "rate_limit_exceeded"
-	case http.StatusServiceUnavailable:
-		return "service_unavailable"
-	case http.StatusGatewayTimeout:
-		return "timeout"
-	}
-	if status >= 500 {
-		return "server_error"
-	}
-	return "invalid_request"
-}
+// grokErrorCodeForStatus delegates to the shared status-to-code table.
+func grokErrorCodeForStatus(status int) string { return httpserver.ErrorCodeForStatus(status) }
 
-// writeGrokErrorCode writes the shared OpenAI-compatible error object:
-//
-//	{"error":{"message":…,"type":…,"code":…,"param":null}}
-//
-// Plain-text bodies (http.Error) cannot be parsed by an OpenAI/Anthropic SDK,
-// so every client-visible failure on a Grok endpoint goes through this writer.
+// writeGrokErrorCode writes the shared OpenAI-compatible error envelope.
 func writeGrokErrorCode(w http.ResponseWriter, status int, code, message string) {
-	if status < 400 {
-		status = http.StatusBadGateway
-	}
-	if strings.TrimSpace(message) == "" {
-		message = http.StatusText(status)
-	}
-	errorType := "invalid_request_error"
-	switch {
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		errorType = "authentication_error"
-	case status == http.StatusTooManyRequests:
-		errorType = "rate_limit_error"
-	case status >= 500:
-		errorType = "server_error"
-	}
-	util.WriteJSONStatus(w, status, map[string]interface{}{
-		"error": map[string]interface{}{
-			"message": message,
-			"type":    errorType,
-			"code":    strings.TrimSpace(code),
-			"param":   nil,
-		},
-	})
+	httpserver.WriteErrorCode(w, status, code, message)
 }
 
 // writeGrokError writes the shared error object with a code derived from status.
 func writeGrokError(w http.ResponseWriter, status int, message string) {
-	writeGrokErrorCode(w, status, grokErrorCodeForStatus(status), message)
+	httpserver.WriteError(w, status, message)
 }
+
+// requireMethod rejects every method but the one the endpoint serves.
+func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	return httpserver.RequireMethod(w, r, method)
+}
+
+// decodeJSONBody decodes the request body into v under the shared size limit.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, v interface{}) bool {
+	return httpserver.DecodeJSONBody(w, r, v)
+}
+
+// readBoundedJSONBody reads a JSON request body under the shared limit.
+func readBoundedJSONBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	return httpserver.ReadBoundedJSONBody(w, r)
+}
+
+// requireAPIKeyModel rejects a model the caller's key is not allowed to use.
+func requireAPIKeyModel(w http.ResponseWriter, r *http.Request, model string) bool {
+	return httpserver.RequireAPIKeyModel(w, r, model)
+}
+
+// streamResponseHeaders writes the standard SSE headers and returns the flusher.
+func streamResponseHeaders(w http.ResponseWriter) http.Flusher {
+	return httpserver.StreamResponseHeaders(w)
+}
+
+// deadlineResponseWriter refreshes the write deadline on every write.
+type deadlineResponseWriter = httpserver.DeadlineResponseWriter
+
+// writeSSEBytes sends a raw SSE frame without flushing.
+func writeSSEBytes(w http.ResponseWriter, event string, data []byte) error {
+	return httpserver.WriteSSEBytes(w, event, data)
+}
+
+// writeSSEError sends an OpenAI-style SSE error event (no flush, no [DONE]).
+func writeSSEError(w http.ResponseWriter, message, errType, code string) {
+	httpserver.WriteSSEError(w, message, errType, code)
+}
+
+// writeSSE sends an SSE frame and flushes when the writer supports it.
+func writeSSE(w http.ResponseWriter, flusher http.Flusher, event string, data []byte) {
+	httpserver.WriteSSE(w, flusher, event, data)
+}
+
+// writeSSEStreamError sends the named SSE error used by non-Chat protocols.
+func writeSSEStreamError(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, msg string) {
+	httpserver.WriteSSEStreamError(w, flusher, logger, msg)
+}
+
+// writeSSECodedError sends a typed SSE error frame followed by [DONE] and flushes.
+func writeSSECodedError(w http.ResponseWriter, flusher http.Flusher, message, code string) {
+	httpserver.WriteSSECodedError(w, flusher, message, code)
+}
+
+// writeGrokNoAccountError lives in pool_error.go: the answer depends on why the
+// pool is empty (cooling, rate limited, allowance spent, busy, or truly empty),
+// so it shares the classification every other entrance uses.
 
 // writeGrokUpstreamError maps an upstream failure to what the caller may see.
 //
@@ -197,207 +192,4 @@ func upstreamRetryAfterSeconds(err error) int {
 		}
 	}
 	return 0
-}
-
-// requireMethod writes the standard 405 response and returns false when the
-// request method does not match. Handlers use it as:
-//
-//	if !requireMethod(w, r, http.MethodGet) {
-//		return
-//	}
-func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
-	if r.Method != method {
-		writeGrokError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return false
-	}
-	return true
-}
-
-// maxGrokJSONBodyBytes bounds the request body of every JSON Grok endpoint: an
-// unbounded Decode lets one client allocate arbitrary memory in the gateway.
-const maxGrokJSONBodyBytes = 32 << 20
-
-// decodeJSONBody decodes the request body into v and writes the standard error
-// response on failure: 415 for a non-JSON content type, 413 for an oversized
-// body and 400 for malformed JSON.
-func decodeJSONBody(w http.ResponseWriter, r *http.Request, v interface{}) bool {
-	if r == nil {
-		writeGrokError(w, http.StatusBadRequest, "invalid request")
-		return false
-	}
-	if raw := strings.TrimSpace(r.Header.Get("Content-Type")); raw != "" {
-		mediaType, _, err := mime.ParseMediaType(raw)
-		if err != nil || !strings.EqualFold(mediaType, "application/json") {
-			writeGrokErrorCode(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
-			return false
-		}
-	}
-	if r.Body != nil {
-		r.Body = http.MaxBytesReader(w, r.Body, maxGrokJSONBodyBytes)
-	}
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			writeGrokErrorCode(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured limit")
-			return false
-		}
-		writeGrokError(w, http.StatusBadRequest, "invalid json")
-		return false
-	}
-	return true
-}
-
-func requireAPIKeyModel(w http.ResponseWriter, r *http.Request, model string) bool {
-	if middleware.APIKeyAllowsModel(r.Context(), model) {
-		return true
-	}
-	// The whole envelope shape is shared with every other Grok error, so a
-	// client can parse one object type: message, type, code and param.
-	writeGrokErrorCode(w, http.StatusForbidden, "model_not_allowed",
-		"API key is not allowed to use model "+strings.TrimSpace(model))
-	return false
-}
-
-// streamResponseHeaders writes the standard SSE headers and returns the
-// response flusher (possibly nil).
-func streamResponseHeaders(w http.ResponseWriter) http.Flusher {
-	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	// Without this a reverse proxy (nginx defaults to proxy_buffering on) holds
-	// the frames until the response ends, which silently defeats streaming.
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Del("Connection")
-	flusher, _ := w.(http.Flusher)
-	return flusher
-}
-
-const responseWriteTimeout = 30 * time.Second
-
-// setResponseWriteDeadline bounds downstream backpressure when the writer's
-// transport supports deadlines. In-memory/test writers legitimately do not.
-func setResponseWriteDeadline(w http.ResponseWriter) error {
-	err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(responseWriteTimeout))
-	if errors.Is(err, http.ErrNotSupported) {
-		return nil
-	}
-	return err
-}
-
-func writeAll(w io.Writer, p []byte) error {
-	n, err := w.Write(p)
-	if err == nil && n != len(p) {
-		err = io.ErrShortWrite
-	}
-	return err
-}
-
-type deadlineResponseWriter struct{ http.ResponseWriter }
-
-func (w deadlineResponseWriter) Write(p []byte) (int, error) {
-	if err := setResponseWriteDeadline(w.ResponseWriter); err != nil {
-		return 0, err
-	}
-	n, err := w.ResponseWriter.Write(p)
-	if err == nil && n != len(p) {
-		err = io.ErrShortWrite
-	}
-	return n, err
-}
-
-// writeSSEBytes sends a raw SSE frame without flushing. Its error result may be
-// ignored by legacy non-streaming helpers, while stream loops propagate it.
-func writeSSEBytes(w http.ResponseWriter, event string, data []byte) error {
-	if err := setResponseWriteDeadline(w); err != nil {
-		return err
-	}
-	var frame []byte
-	if event != "" {
-		frame = append(frame, grokSSEEventPrefixBytes...)
-		frame = append(frame, event...)
-		frame = append(frame, grokSSENewlineBytes...)
-	}
-	frame = append(frame, grokSSEDataPrefixBytes...)
-	frame = append(frame, data...)
-	frame = append(frame, grokSSEFrameSuffixBytes...)
-	return writeAll(w, frame)
-}
-
-// writeSSEError sends an OpenAI-style SSE error event (no flush, no [DONE]).
-//
-// An SSE error is written after the 200 status line is already committed, so the
-// HTTP status can no longer describe the outcome. The response writer is told
-// about it instead, which is how the operations overview counts a stream that
-// died after starting as a failure rather than a success.
-func writeSSEError(w http.ResponseWriter, message, errType, code string) {
-	middleware.MarkStreamFailure(w)
-	requestID := strings.TrimSpace(w.Header().Get(middleware.DiagnosticRequestIDHeader))
-	if strings.TrimSpace(errType) == "" {
-		errType = "server_error"
-	}
-	payload := map[string]interface{}{
-		// The top-level type is what OpenAI-compatible clients dispatch on; a
-		// frame without it looks like an ordinary chunk to them.
-		"type": "error",
-		"error": map[string]interface{}{
-			"message":    apperrors.PublicMessage(message),
-			"type":       strings.TrimSpace(errType),
-			"code":       strings.TrimSpace(code),
-			"request_id": requestID,
-		},
-	}
-	writeSSEBytes(w, "error", encodeJSONBytes(payload))
-}
-
-// writeSSE sends an SSE frame and flushes when the writer supports it.
-func writeSSE(w http.ResponseWriter, flusher http.Flusher, event string, data []byte) {
-	writeSSEBytes(w, event, data)
-	if flusher != nil {
-		flusher.Flush()
-	}
-}
-
-// writeSSEStreamError sends the named SSE error used by non-Chat protocols.
-func writeSSEStreamError(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, msg string) {
-	writeSSEError(w, msg, "server_error", "stream_error")
-	_ = writeSSEBytes(w, "", []byte("[DONE]"))
-	if logger != nil {
-		logger.LogOutputSSE("error", msg)
-		logger.LogOutputSSE("", "[DONE]")
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-}
-
-// writeSSECodedError sends a typed SSE error frame followed by [DONE] and flushes.
-// Use this when the error code is not the generic stream_error.
-func writeSSECodedError(w http.ResponseWriter, flusher http.Flusher, message, code string) {
-	writeSSEError(w, message, "server_error", code)
-	writeSSE(w, flusher, "", []byte("[DONE]"))
-}
-
-// writeGrokNoAccountError lives in pool_error.go: the answer depends on why the
-// pool is empty (cooling, rate limited, allowance spent, busy, or truly empty),
-// so it shares the classification every other entrance uses.
-
-// readBoundedJSONBody reads a JSON request body under the shared limit. It
-// writes the 413/400 response itself and returns an error so the caller only
-// has to return: an unbounded io.ReadAll lets one client allocate arbitrary
-// memory inside the gateway.
-func readBoundedJSONBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	if r == nil || r.Body == nil {
-		writeGrokError(w, http.StatusBadRequest, "invalid json")
-		return nil, errors.New("empty body")
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxGrokJSONBodyBytes))
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			writeGrokErrorCode(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured limit")
-			return nil, err
-		}
-		writeGrokError(w, http.StatusBadRequest, "invalid json")
-		return nil, err
-	}
-	return body, nil
 }

@@ -1,184 +1,16 @@
 package grok
 
 import (
-	"errors"
 	"net/http"
-	"net/url"
-	"orchids-api/internal/util"
 	"strings"
 	"time"
 
 	"encoding/json"
 
+	"orchids-api/internal/responses"
 	"orchids-api/internal/store"
+	"orchids-api/internal/util"
 )
-
-// The Responses API exposes two endpoints below a single response id. Both are
-// served from the response store, so they work for every channel the gateway
-// bridges rather than only for the one that happens to own the path.
-const (
-	responsesActionCancel     = "cancel"
-	responsesActionInputItems = "input_items"
-)
-
-// parseResponsesResourcePath splits a path below /responses/ into the response
-// id and an optional sibling action. `ok` is false when the trailing section is
-// empty or names the Create-compaction operation, which is a request of its own
-// rather than a resource, so callers keep their existing handling for it.
-func parseResponsesResourcePath(path string) (id, action string, ok bool) {
-	const marker = "/responses/"
-	trimmed := strings.TrimSpace(path)
-	index := strings.LastIndex(trimmed, marker)
-	if index < 0 {
-		return "", "", false
-	}
-	value := strings.Trim(trimmed[index+len(marker):], "/")
-	if value == "" {
-		return "", "", false
-	}
-	parts := strings.Split(value, "/")
-	candidate := strings.TrimSpace(parts[0])
-	if candidate == "" || strings.EqualFold(candidate, "compact") {
-		return "", "", false
-	}
-	decoded, err := url.PathUnescape(candidate)
-	if err != nil {
-		return "", "", false
-	}
-	candidate = strings.TrimSpace(decoded)
-	if candidate == "" {
-		return "", "", false
-	}
-	if len(parts) > 1 {
-		action = strings.ToLower(strings.TrimSpace(parts[len(parts)-1]))
-	}
-	return candidate, action, true
-}
-
-// responsesSubResourceAction reports which sibling endpoint a path names, or ""
-// when the path addresses the response itself (or something unknown, which the
-// resource handler turns into its own error).
-func responsesSubResourceAction(path string) string {
-	_, action, ok := parseResponsesResourcePath(path)
-	if !ok {
-		return ""
-	}
-	switch action {
-	case responsesActionCancel, responsesActionInputItems:
-		return action
-	}
-	return ""
-}
-
-// responsesSubResourceHandler returns the handler for one sibling action. Both
-// answers come from the store, which is why they are channel-agnostic: a record
-// written by any channel is served the same way.
-func responsesSubResourceHandler(action string, opts ResponsesBridgeOptions) http.HandlerFunc {
-	switch action {
-	case responsesActionCancel:
-		return ResponsesCancelHandler(opts)
-	case responsesActionInputItems:
-		return ResponsesInputItemsHandler(opts)
-	default:
-		return func(w http.ResponseWriter, r *http.Request) {
-			writeResponsesAPIError(w, http.StatusNotFound, "not_found", "unknown responses sub-resource")
-		}
-	}
-}
-
-// ResponsesCancelHandler implements POST /responses/{response_id}/cancel.
-func ResponsesCancelHandler(opts ResponsesBridgeOptions) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeResponsesMethodNotAllowed(w, http.MethodPost)
-			return
-		}
-		responseID, _, ok := parseResponsesResourcePath(r.URL.Path)
-		if !ok {
-			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "response_id is required")
-			return
-		}
-		st := opts.store()
-		record, err := st.GetStoredResponse(r.Context(), responseID, responsesOwnerHash(r.Context()))
-		if err != nil {
-			writeStoredResponseLookupError(w, err, "response not found")
-			return
-		}
-		if len(record.Body) == 0 {
-			// Ownership without a body means the response lives upstream (Build).
-			// The gateway still knows what it is, so it answers with that instead
-			// of pretending the response does not exist.
-			writeSyntheticCancelledResponse(w, record)
-			return
-		}
-		writeCancelledRecord(w, r, st, record, opts.ttl())
-	}
-}
-
-// ResponsesInputItemsHandler implements GET /responses/{response_id}/input_items.
-func ResponsesInputItemsHandler(opts ResponsesBridgeOptions) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeResponsesMethodNotAllowed(w, http.MethodGet)
-			return
-		}
-		responseID, _, ok := parseResponsesResourcePath(r.URL.Path)
-		if !ok {
-			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "response_id is required")
-			return
-		}
-		st := opts.store()
-		record, err := st.GetStoredResponse(r.Context(), responseID, responsesOwnerHash(r.Context()))
-		if err != nil {
-			writeStoredResponseLookupError(w, err, "response not found")
-			return
-		}
-		writeStoredInputItems(w, record)
-	}
-}
-
-// ResponsesUnifiedResource routes GET/DELETE /responses/{id} on a prefix that
-// serves every channel's models.
-//
-// The stored record decides who answers. A Build record is the only one that
-// needs the OAuth account that created it, so it goes to the native handler;
-// every other record is served from the store by the bridge. Deciding here is
-// what stops the unified prefix from depending on Grok's handler accidentally
-// accepting records it did not write.
-//
-// An id that was never stored is answered here rather than delegated: the store
-// is the same one both handlers read, so "no such record" cannot become a
-// different answer depending on which handler happens to receive it, and a
-// native handler that is not configured must not turn a missing response into a
-// backend failure. Every other lookup failure stays with the native handler,
-// which owns the response_store_unavailable envelope.
-func ResponsesUnifiedResource(nativeBuild http.HandlerFunc, opts ResponsesBridgeOptions) http.HandlerFunc {
-	bridged := ResponsesResourceHandler(opts)
-	return func(w http.ResponseWriter, r *http.Request) {
-		if action := responsesSubResourceAction(r.URL.Path); action != "" {
-			responsesSubResourceHandler(action, opts)(w, r)
-			return
-		}
-		if r.Method != http.MethodGet && r.Method != http.MethodDelete {
-			nativeBuild(w, r)
-			return
-		}
-		responseID := responseIDFromResourcePath(r.URL.Path)
-		if responseID == "" {
-			nativeBuild(w, r)
-			return
-		}
-		record, err := opts.store().GetStoredResponse(r.Context(), responseID, responsesOwnerHash(r.Context()))
-		switch {
-		case err == nil && !strings.EqualFold(strings.TrimSpace(record.Provider), ProviderBuild):
-			bridged(w, r)
-		case errors.Is(err, store.ErrNoRows):
-			writeResponsesAPIError(w, http.StatusNotFound, "response_not_found", "response not found")
-		default:
-			nativeBuild(w, r)
-		}
-	}
-}
 
 // writeCancelledRecord flips a stored response to `cancelled` and echoes the
 // response object, which is what the Responses SDK expects from cancel.
@@ -288,18 +120,6 @@ func writeStoredInputItems(w http.ResponseWriter, record *store.StoredResponse) 
 // the next turn's `input` must not be rejected for fields the gateway elided.
 // Items the client already labelled keep their own id, so a replay stays
 // byte-stable.
-func responsesInputItemsJSON(input interface{}) json.RawMessage {
-	items := responsesInputItems(input)
-	if len(items) == 0 {
-		return nil
-	}
-	encoded, err := json.Marshal(items)
-	if err != nil {
-		return nil
-	}
-	return encoded
-}
-
 func responsesInputItems(input interface{}) []interface{} {
 	switch value := input.(type) {
 	case nil:
@@ -347,3 +167,35 @@ func writeResponsesMethodNotAllowed(w http.ResponseWriter, allow string) {
 	w.Header().Set("Allow", allow)
 	writeResponsesAPIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
 }
+
+// The Responses sub-resource endpoints (/cancel, /input_items) are
+// protocol-level: they answer the same way for every channel, so they now live
+// in internal/responses. These aliases keep the names the grok resource handler
+// and cmd/server/routes.go already use.
+var (
+	responsesSubResourceAction  = responses.SubResourceAction
+	responsesSubResourceHandler = responses.SubResourceHandler
+)
+
+// Exported wrappers: cmd/server/routes.go registers these by name. They are
+// protocol-level handlers that now live in internal/responses.
+var (
+	ResponsesCancelHandler     = responses.CancelHandler
+	ResponsesInputItemsHandler = responses.InputItemsHandler
+)
+
+// ResponsesUnifiedResource hands a stored response to whichever plane owns it.
+// isNativeProvider is injected because "build" is a Grok provider label, not a
+// Responses protocol concept.
+func ResponsesUnifiedResource(nativeBuild http.HandlerFunc, opts ResponsesBridgeOptions) http.HandlerFunc {
+	return responses.UnifiedResource(nativeBuild, opts, func(provider string) bool {
+		return strings.EqualFold(strings.TrimSpace(provider), ProviderBuild)
+	})
+}
+
+// Test-facing aliases onto internal/responses.
+var (
+	parseResponsesResourcePath = responses.ParseResourcePath
+	responsesActionCancel      = responses.ActionCancel
+	responsesActionInputItems  = responses.ActionInputItems
+)

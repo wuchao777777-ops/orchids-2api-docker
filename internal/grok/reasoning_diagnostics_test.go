@@ -15,7 +15,7 @@ func TestBuildChatSummaryBoundary(t *testing.T) {
 	for _, operation := range []string{"", "messages", "responses"} {
 		for _, build := range []bool{false, true} {
 			for _, effort := range []string{"", "low", "xhigh", "none"} {
-				req := &ChatCompletionsRequest{Model: "grok-4.6", sourceOperation: operation, Messages: []ChatMessage{{Role: "user", Content: "hello"}}}
+				req := &ChatCompletionsRequest{Model: "grok-4.6", SourceOperation: operation, Messages: []ChatMessage{{Role: "user", Content: "hello"}}}
 				if effort != "" {
 					req.ReasoningEffort = &effort
 				}
@@ -42,7 +42,7 @@ func TestChatReasoningSummaryIsClientOwned(t *testing.T) {
 		for _, operation := range []string{"", "messages", "responses"} {
 			summary, effort := "auto", "low"
 			req := &ChatCompletionsRequest{
-				Model: "grok-4.6", sourceOperation: operation,
+				Model: "grok-4.6", SourceOperation: operation,
 				ReasoningEffort: &effort, ReasoningSummary: &summary,
 				Messages: []ChatMessage{{Role: "user", Content: "hello"}},
 			}

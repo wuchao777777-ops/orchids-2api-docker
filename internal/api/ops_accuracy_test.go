@@ -1,6 +1,7 @@
 package api
 
 import (
+	"orchids-api/internal/poolstate"
 	"orchids-api/internal/store"
 	"orchids-api/internal/testutil"
 	"testing"
@@ -16,9 +17,10 @@ func TestPoolCountsLoginIndependentOfCooldown(t *testing.T) {
 		{ID: 4, AccountType: "grok", Enabled: false, StatusCode: "401"},
 		{ID: 5, AccountType: "grok", Enabled: true, StatusCode: "401"},
 	}
-	enabled, available, login, cooldowns := poolCounts(accounts, "grok", now)
+	pool := poolstate.Counts(accounts, "grok", now, poolstate.NeedingLoginRefused)
+	enabled, available, login, cooldowns := pool.Enabled, pool.Available, pool.NeedingLogin, pool.ModelCooldowns
 	testutil.Falsef(t, enabled != 4 || available != 2 || login != 3 || cooldowns != 1, "enabled=%d available=%d login=%d cooldowns=%d", enabled, available, login, cooldowns)
 	accounts[0].StatusCode = ""
-	_, _, login, _ = poolCounts(accounts, "grok", now)
+	login = poolstate.Counts(accounts, "grok", now, poolstate.NeedingLoginRefused).NeedingLogin
 	testutil.Equal(t, login, 2)
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/responses"
 	"orchids-api/internal/util"
 	"strconv"
 	"strings"
@@ -43,8 +44,8 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	// Gateway-owned compaction state is expanded before the payload is
 	// normalized, so the summary reaches the upstream as an ordinary user
 	// message and the reasoning-replay machinery never sees a sealed blob.
-	if codec := h.compactionCodecSnapshot(); codec.available() {
-		drifted, expandErr := expandGatewayCompactionHistory(payload, codec, sessionFromContext(r.Context()).Key)
+	if codec := h.compactionCodecSnapshot(); codec.Available() {
+		drifted, expandErr := responses.ExpandCompactionHistory(payload, codec, sessionFromContext(r.Context()).Key)
 		if expandErr != nil {
 			writeResponsesAPIErrorWithParam(w, http.StatusBadRequest, "invalid_compaction_blob", expandErr.Error(), compactionErrorParam(expandErr))
 			return
@@ -152,7 +153,7 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		responseBody = rewritten
 	}
 	responseID, captured, result := copyNativeCLIResponseAndCaptureModel(w, responseBody, resp.Header.Get("Content-Type"), modelID)
-	h.auditChatOutcome(r.Context(), sess.acc, &ChatCompletionsRequest{Model: modelID, startedAt: started}, result)
+	h.auditChatOutcome(r.Context(), sess.acc, &ChatCompletionsRequest{Model: modelID, StartedAt: started}, result)
 	if session := sessionFromContext(r.Context()); session.Replay && len(captured) > 0 && result.Err == nil {
 		h.captureReasoningReplay(r.Context(), modelID, session.Key, captured)
 	}
@@ -433,7 +434,7 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 	}
 
 	flusher, _ := w.(http.Flusher)
-	target := io.MultiWriter(deadlineResponseWriter{w}, fullCapture)
+	target := io.MultiWriter(deadlineResponseWriter{ResponseWriter: w}, fullCapture)
 	terminal, done := false, false
 	failureCode, failureMessage := "", ""
 	tracker := &streamRepeatTracker{}
@@ -473,12 +474,11 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		}
 		if supplementResponsesEvent(event, compat) || redactResponseError(event) {
 			raw, _ := json.Marshal(event)
-			frame.data = []string{string(raw)}
 			// The compat layer changed the payload, so the frame cannot be relayed
 			// as the upstream sent it.
-			frame.raw = nil
+			frame.SetData(string(raw))
 		}
-		if err := frame.writeTo(target); err != nil {
+		if err := frame.WriteFrame(target); err != nil {
 			result.Err = err
 			return err
 		}
@@ -537,8 +537,9 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 				"error":  map[string]interface{}{"code": failureCode, "message": failureMessage},
 			},
 		})
-		frame := compatibleSSEEvent{Event: "response.failed", data: []string{string(failure)}}
-		if err := frame.writeTo(target); err != nil {
+		frame := compatibleSSEEvent{Event: "response.failed"}
+		frame.SetData(string(failure))
+		if err := frame.WriteFrame(target); err != nil {
 			result.Err = err
 			return
 		}

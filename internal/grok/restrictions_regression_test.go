@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/chatwire"
 	"strings"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func TestRestrictionsReasoningAliasesReachWire(t *testing.T) {
 func TestRestrictionsEmptyAndImageToolOutputs(t *testing.T) {
 	for _, content := range []interface{}{"", []interface{}{map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/a.png", "detail": "high"}}}} {
 		messages := []ChatMessage{{Role: "tool", ToolCallID: "call_a", Content: content}}
-		testutil.NoError(t, validateChatMessages(messages))
+		testutil.NoError(t, chatwire.ValidateMessages(messages))
 		input, _ := responsesInputFromChatMessages(messages)
 		item := input[0].(map[string]interface{})
 		testutil.Equal(t, item["call_id"], "call_a")
@@ -83,7 +84,7 @@ func TestRestrictionsEmptyAndImageToolOutputs(t *testing.T) {
 			testutil.Fail(t, parts[0].(map[string]interface{})["detail"] != "high", parts)
 		}
 	}
-	err := validateChatMessages([]ChatMessage{{Role: "tool", Content: ""}})
+	err := chatwire.ValidateMessages([]ChatMessage{{Role: "tool", Content: ""}})
 	testutil.Error(t, err)
 }
 

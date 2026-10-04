@@ -39,7 +39,7 @@ func normalizeBuildInputHistory(payload map[string]interface{}, state *buildTool
 			return fmt.Errorf("input[%d]: %w", index, err)
 		}
 		items[index] = converted
-		state.addWarning(kind + "_normalized")
+		state.AddWarning(kind + "_normalized")
 	}
 	payload["input"] = items
 	return nil

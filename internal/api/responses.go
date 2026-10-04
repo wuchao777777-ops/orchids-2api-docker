@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"orchids-api/internal/httpserver"
 	"orchids-api/internal/util"
 )
 
@@ -11,18 +12,18 @@ import (
 // requireMethod rejects every method but the one the endpoint serves. It
 // reports false when it has already written the 405, so the caller only has to
 // return.
+//
+// The admin console answers 405 with the plain-text form (see
+// httpserver.WritePlainMethodNotAllowed), which is why it does not use the
+// OpenAI-envelope httpserver.RequireMethod the inference endpoints share.
 func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
-	if r.Method == method {
-		return true
-	}
-	writeMethodNotAllowed(w)
-	return false
+	return httpserver.RequirePlainMethod(w, r, method)
 }
 
 // writeMethodNotAllowed answers the shared 405 body for the handlers that
 // dispatch on the method themselves and so cannot use requireMethod.
 func writeMethodNotAllowed(w http.ResponseWriter) {
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	httpserver.WritePlainMethodNotAllowed(w)
 }
 
 // writeCodeEnvelope answers the {"code":...} envelope the console's settings

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"strings"
 	"time"
 
@@ -107,7 +108,7 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 	}
 	applyHeaders(req, accessToken, c.creds.UID, "application/json")
 
-	resp, raw, err := util.DoReadBody(c.httpClient, req, 8<<20)
+	resp, raw, err := httpclient.DoReadBody(c.httpClient, req, 8<<20)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch workbuddy credits: %w", err)
 	}

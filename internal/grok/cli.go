@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptrace"
+	"orchids-api/internal/httpclient"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -54,7 +55,7 @@ func NewCLIClient(cfg *config.Config) *CLIClient {
 	client := &CLIClient{cfg: cfg, responseHeaderTimeout: defaultCLIResponseHeaderTimeout}
 	// Shared browser client keeps the utls Chrome TLS fingerprint; the CLI
 	// upstream tolerates browser-like TLS even though headers are CLI identity.
-	client.httpClient = util.GetSharedBrowserHTTPClientWithLimits("cli|"+util.GenerateProxyKeyFromConfig(cfg), cfg.GrokRequestTimeout(ProviderBuild), 0, util.ProxyFuncFromConfig(cfg), cfg)
+	client.httpClient = httpclient.GetSharedBrowserHTTPClientWithLimits("cli|"+httpclient.GenerateProxyKeyFromConfig(cfg), cfg.GrokRequestTimeout(ProviderBuild), 0, httpclient.ProxyFuncFromConfig(cfg), cfg)
 	client.oauth = NewCLIOAuth(cfg, client.httpClient)
 	client.egress = egress.NewManager(cfg)
 	return client

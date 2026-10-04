@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"strings"
 
 	"encoding/json"
@@ -101,7 +102,7 @@ func (c *Client) fetchModelListOnce(ctx context.Context, creds Credentials, fiel
 	// path's Accept header keeps a strict gateway from wrapping the reply.
 	req.Header.Set("Accept", "application/json")
 
-	resp, raw, err := util.DoReadBody(c.control, req, 4<<20)
+	resp, raw, err := httpclient.DoReadBody(c.control, req, 4<<20)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}

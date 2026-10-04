@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/responses"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func TestHandleResponsesCompactSealsGatewaySummary(t *testing.T) {
 	}
 	items := received["input"].([]interface{})
 	last := items[len(items)-1].(map[string]interface{})
-	testutil.EqualAny(t, last["content"], gatewayCompactionPrompt)
+	testutil.EqualAny(t, last["content"], responses.CompactionPrompt)
 
 	var payload map[string]interface{}
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode response: %v")
@@ -51,9 +52,9 @@ func TestHandleResponsesCompactSealsGatewaySummary(t *testing.T) {
 	item := output[0].(map[string]interface{})
 	testutil.Equal(t, item["type"], "compaction")
 	blob := item["encrypted_content"].(string)
-	testutil.Falsef(t, !strings.HasPrefix(blob, gatewayCompactionPrefix), "blob=%q is not gateway-owned", blob)
-	codec := newGatewayCompactionCodec(codecCipher)
-	summary, owned, _, err := codec.decode("", blob)
+	testutil.Falsef(t, !strings.HasPrefix(blob, responses.CompactionPrefix), "blob=%q is not gateway-owned", blob)
+	codec := responses.NewCompactionCodec(codecCipher)
+	summary, owned, _, err := codec.Decode("", blob)
 	testutil.Falsef(t, err != nil || !owned, "decode blob owned=%v err=%v", owned, err)
 	testutil.MustContain(t, summary, "This session is being continued from a previous conversation")
 	testutil.MustContain(t, summary, "Primary Request and Intent")
@@ -78,8 +79,8 @@ func TestHandleResponsesExpandsGatewayCompactionHistory(t *testing.T) {
 	h, _, cleanup := setupCompactionHandler(t, upstream)
 	defer cleanup()
 
-	codec := newGatewayCompactionCodec(testCompactionCipher(t))
-	blob, err := codec.encode("session-a", "Summary:\ncarried forward")
+	codec := responses.NewCompactionCodec(testCompactionCipher(t))
+	blob, err := codec.Encode("session-a", "Summary:\ncarried forward")
 	testutil.NoError(t, err, "encode: %v")
 	body, _ := json.Marshal(map[string]interface{}{
 		"model": "grok-4.5", "stream": true,
@@ -122,7 +123,7 @@ func TestHandleResponsesRejectsUnreadableGatewayCompactionBlob(t *testing.T) {
 		"model": "grok-4.5", "stream": false,
 		"input": []interface{}{
 			map[string]interface{}{"type": "message", "role": "user", "content": "hi"},
-			map[string]interface{}{"type": "compaction", "encrypted_content": gatewayCompactionPrefix + "broken"},
+			map[string]interface{}{"type": "compaction", "encrypted_content": responses.CompactionPrefix + "broken"},
 		},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
@@ -172,7 +173,7 @@ func TestHandleResponsesRelaysCompactionTriggerWhenDisabled(t *testing.T) {
 	testutil.Equal(t, items[0].(map[string]interface{})["type"], "compaction_trigger")
 	for _, raw := range items {
 		item, ok := raw.(map[string]interface{})
-		testutil.False(t, ok && item["content"] == gatewayCompactionPrompt, "the gateway ran a summary turn while the feature was disabled")
+		testutil.False(t, ok && item["content"] == responses.CompactionPrompt, "the gateway ran a summary turn while the feature was disabled")
 	}
 }
 
@@ -194,9 +195,8 @@ func TestHandleResponsesCompactFailsOnDegenerateSummary(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// A degenerate summary is retryable, so this exercises the real retry loop;
 	// only the pause is shrunk, because the production value is three seconds.
-	previousPause := gatewayCompactionRetryPause
-	gatewayCompactionRetryPause = time.Millisecond
-	defer func() { gatewayCompactionRetryPause = previousPause }()
+	previousPause := responses.SetCompactionRetryPause(time.Millisecond)
+	defer responses.SetCompactionRetryPause(previousPause)
 	h.HandleResponsesCompact(rec, req)
 
 	testutil.Equal(t, rec.Code, http.StatusBadGateway)
@@ -204,5 +204,5 @@ func TestHandleResponsesCompactFailsOnDegenerateSummary(t *testing.T) {
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload), "decode error body: %v")
 	errObj, _ := payload["error"].(map[string]interface{})
 	testutil.Equal(t, errObj["code"], "compaction_failed")
-	testutil.Equal(t, attempts, gatewayCompactionMaxAttempts)
+	testutil.Equal(t, attempts, responses.CompactionMaxAttempts)
 }

@@ -5,9 +5,8 @@ import (
 	"strings"
 
 	"orchids-api/internal/modelpolicy"
-	"orchids-api/internal/qoder"
+	"orchids-api/internal/provider"
 	"orchids-api/internal/store"
-	"orchids-api/internal/workbuddy"
 )
 
 // Model context windows.
@@ -88,22 +87,19 @@ func (h *Handler) observedModelContextWindows(ctx context.Context) *modelContext
 				}
 			}
 		}
-		switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
-		case "qoder":
-			// The Qoder catalog declares max_input_tokens per model and the
-			// request path already forwards it.
-			mergeInputWindows(w, "qoder", qoder.CatalogContextWindows(acc.QoderModelIDs))
-		case "cline":
-			// The Cline feed names models, not windows, and the upstream caps
-			// the request itself, so no window is recorded here.
-		case "workbuddy":
-			input, output := workbuddy.CatalogContextWindows(acc.WorkBuddyModelIDs)
-			mergeInputWindows(w, "workbuddy", input)
-			for modelID, limit := range output {
-				key := contextKey("workbuddy", modelID)
-				if existing, ok := w.output[key]; !ok || limit > existing {
-					w.output[key] = limit
-				}
+		// The channel declares its own windows: Qoder's catalog carries
+		// max_input_tokens per model, WorkBuddy carries input and output. Cline
+		// names models but not windows, so it registers none and contributes
+		// nothing here.
+		channel := strings.ToLower(strings.TrimSpace(acc.AccountType))
+		input, output := provider.ContextWindows(channel, acc)
+		if len(input) > 0 {
+			mergeInputWindows(w, channel, input)
+		}
+		for modelID, limit := range output {
+			key := contextKey(channel, modelID)
+			if existing, ok := w.output[key]; !ok || limit > existing {
+				w.output[key] = limit
 			}
 		}
 	}

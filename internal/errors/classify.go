@@ -105,7 +105,7 @@ func ClassifyAccountStatus(errStr string) string {
 	// An entitlement refusal means the credential was accepted. It must not be
 	// recorded as an account status, or a valid account is disabled by a plan
 	// problem — and the alarm says the channel is broken when it is not.
-	if strings.Contains(lower, "no usable plan or allowance") || strings.Contains(lower, "qoder.com/pricing") || isClineModelEntitlement(lower) {
+	if strings.Contains(lower, "no usable plan or allowance") || IsQoderEntitlement(lower) || isClineModelEntitlement(lower) {
 		return ""
 	}
 	// A status reason persisted by an admin handler is the wrapped error string,
@@ -139,7 +139,7 @@ func ClassifyAccountStatus(errStr string) string {
 		return "402"
 	case
 		HasExplicitHTTPStatus(lower, "429") ||
-			strings.Contains(lower, "qoder agent limit reached") ||
+			IsQoderAgentLimit(lower) ||
 			strings.Contains(lower, "agentlimitresettime") ||
 			strings.Contains(lower, "too many requests") ||
 			strings.Contains(lower, "rate limit") ||
@@ -255,12 +255,12 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	case strings.Contains(lower, "code=6004"):
 		return UpstreamErrorClass{Category: "rate_limit", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "429") ||
-		strings.Contains(lower, "qoder agent limit reached") ||
-		strings.Contains(lower, "qoder model rate limited") ||
+		IsQoderAgentLimit(lower) ||
+		IsQoderModelRateLimited(lower) ||
 		// Cline's inference cap arrives as 429 with the wait written in prose
 		// ("Try again in 17h 59m"). Recognising the phrase keeps it a rate limit
 		// instead of an unknown server fault, and the channel parses the wait.
-		strings.Contains(lower, "cline inference cap reached") ||
+		IsClineInferenceCap(lower) ||
 		strings.Contains(lower, "available upstream accounts are rate-limited") ||
 		strings.Contains(lower, "agentlimitresettime") ||
 		strings.Contains(lower, "too many requests") ||
@@ -329,8 +329,7 @@ func isUpstreamQueueGate(text string) bool {
 	// 10605 is Qoder's queue/busy business code, and "qoder gateway is busy" is
 	// the form this gateway renders it as once a parser has unwrapped the
 	// envelope. Both name the queue even when the flags were dropped on the way.
-	return strings.Contains(text, "10605") ||
-		strings.Contains(text, "qoder gateway is busy")
+	return IsQoderQueueGate(text)
 }
 
 // isUpstreamServiceUnavailable reports whether the upstream said the service
@@ -373,7 +372,7 @@ func isClineModelEntitlement(lower string) bool {
 	}
 	return strings.Contains(lower, "entitlement") ||
 		strings.Contains(lower, "not subscribed to required model plan") ||
-		strings.Contains(lower, "only available via cline product surfaces")
+		IsClineProductSurface(lower)
 }
 
 // IsCreditExhaustion reports whether a message says the account's allowance is
@@ -393,7 +392,7 @@ func isClineModelEntitlement(lower string) bool {
 func IsCreditExhaustion(errStr string) bool {
 	lower := strings.ToLower(errStr)
 	for _, phrase := range []string{
-		"qoder quota exhausted",
+		// Qoder names its exhaustion explicitly; see IsQoderQuotaExhausted.
 		"no ai credits remaining",
 		"insufficient_funds",
 		"insufficient funding",

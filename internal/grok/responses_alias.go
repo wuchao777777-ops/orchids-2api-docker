@@ -84,11 +84,11 @@ func rewriteBuildToolAliasSSE(dst io.Writer, source io.Reader, aliases map[strin
 	}
 	return consumeCompatibleSSE(source, func(frame compatibleSSEEvent) error {
 		if !frame.HasData() || string(frame.Data()) == "[DONE]" {
-			return frame.writeTo(dst)
+			return frame.WriteFrame(dst)
 		}
 		var payload map[string]interface{}
 		if json.Unmarshal(frame.Data(), &payload) != nil || payload == nil {
-			return frame.writeTo(dst)
+			return frame.WriteFrame(dst)
 		}
 		kind := firstNonEmpty(interfaceString(payload["type"]), frame.Event)
 		item, _ := payload["item"].(map[string]interface{})
@@ -146,11 +146,10 @@ func rewriteBuildToolAliasSSE(dst io.Writer, source io.Reader, aliases map[strin
 		if err != nil {
 			return err
 		}
-		frame.data = []string{string(converted)}
-		// A rewritten frame is no longer the upstream's bytes: drop the raw form so
-		// writeTo renders the new payload.
-		frame.raw = nil
-		return frame.writeTo(dst)
+		// A rewritten frame is no longer the upstream's bytes: SetData drops the raw
+		// form so WriteTo renders the new payload.
+		frame.SetData(string(converted))
+		return frame.WriteFrame(dst)
 	})
 }
 

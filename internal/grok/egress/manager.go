@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,7 +120,7 @@ func (m *Manager) Acquire(ctx context.Context, scope, affinity string) (*Lease, 
 	// proxy component is hashed so credentials never appear in cache keys or
 	// diagnostics, while a same-name node whose URL changes gets a fresh pool.
 	poolKey := "egress:" + node.Name + "|proxy=" + shortHash(node.URL) + "|" + fingerprint
-	client := util.GetSharedHTTPClient(poolKey, m.cfg.GrokRequestTimeout(strings.ToLower(strings.TrimSpace(scope))), proxyFuncForNode(*node))
+	client := httpclient.GetSharedHTTPClient(poolKey, m.cfg.GrokRequestTimeout(strings.ToLower(strings.TrimSpace(scope))), proxyFuncForNode(*node))
 
 	lease := &Lease{
 		NodeID:   node.Name,
@@ -361,7 +362,7 @@ func (m *Manager) probeNode(ctx context.Context, node Node) error {
 	target := "https://cli-chat-proxy.grok.com/"
 	probeCtx, cancel := context.WithTimeout(ctx, nodeProbeTimeout)
 	defer cancel()
-	client := util.GetSharedHTTPClient("egress-probe:"+node.Name+"|proxy="+shortHash(node.URL), nodeProbeTimeout, proxyFuncForNode(node))
+	client := httpclient.GetSharedHTTPClient("egress-probe:"+node.Name+"|proxy="+shortHash(node.URL), nodeProbeTimeout, proxyFuncForNode(node))
 	req, err := http.NewRequestWithContext(probeCtx, http.MethodHead, target, nil)
 	if err != nil {
 		return err

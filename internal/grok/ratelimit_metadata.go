@@ -3,7 +3,7 @@ package grok
 import (
 	"encoding/json"
 	"net/http"
-	"orchids-api/internal/util"
+	"orchids-api/internal/httpclient"
 	"regexp"
 	"strconv"
 	"strings"
@@ -183,5 +183,5 @@ func rateLimitResetAfter(body string) time.Duration {
 }
 
 func parseRetryAfterHeader(value string, now time.Time) time.Duration {
-	return util.ParseRetryAfter(value, now, 0)
+	return httpclient.ParseRetryAfter(value, now, 0)
 }

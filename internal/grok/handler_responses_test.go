@@ -2,6 +2,7 @@ package grok
 
 import (
 	"net/http/httptest"
+	"orchids-api/internal/chatwire"
 	"strings"
 	"testing"
 
@@ -278,7 +279,7 @@ func TestResponsesInputFileRoundTripsIntoChatMessages(t *testing.T) {
 		}}
 		messages, err := responsesInputToMessages(input)
 		testutil.Falsef(t, err != nil, "%v: %v", part, err)
-		err = validateChatMessages(messages)
+		err = chatwire.ValidateMessages(messages)
 		testutil.CheckNoError(t, err)
 		parts, ok := messages[0].Content.([]interface{})
 		if !ok || len(parts) != 2 {

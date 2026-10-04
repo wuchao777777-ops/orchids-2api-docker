@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/httpclient"
 	"strconv"
 	"strings"
 	"time"
@@ -20,17 +21,16 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/util"
 )
 
 // newHTTPClient builds the shared browser-fingerprinted HTTP client.
 func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
 	proxyKey := "direct"
 	if cfg != nil {
-		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
+		proxyKey = httpclient.GenerateProxyKeyFromConfig(cfg)
 	}
 
-	return util.GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey, timeout, 0, proxyFunc)
+	return httpclient.GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey, timeout, 0, proxyFunc)
 }
 
 // decodeHTTPResponseBody transparently decodes a compressed upstream body and

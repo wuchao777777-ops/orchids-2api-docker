@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"orchids-api/internal/httpclient"
 	"strings"
 	"time"
 
@@ -211,7 +212,7 @@ func (c *Client) getJSON(ctx context.Context, url string, creds Credentials, out
 		req.Header.Set("Cosy-MachineToken", machine)
 	}
 
-	resp, raw, err := util.DoReadBody(c.control, req, 64<<10)
+	resp, raw, err := httpclient.DoReadBody(c.control, req, 64<<10)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}

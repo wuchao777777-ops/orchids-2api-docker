@@ -252,7 +252,7 @@ func TestParityAuditCapturesTerminalUsageAndFailure(t *testing.T) {
 			response["error"] = map[string]interface{}{"message": "failed upstream"}
 		}
 		_, _, result := copyNativeCLIResponseAndCaptureModel(httptest.NewRecorder(), strings.NewReader(parityText("hello")+parityFrame(kind, map[string]interface{}{"response": response})), "text/event-stream", "grok-4.6")
-		h.auditChatOutcome(context.Background(), &store.Account{ID: 1}, &ChatCompletionsRequest{Model: "grok-4.6", startedAt: time.Now().Add(-time.Second)}, result)
+		h.auditChatOutcome(context.Background(), &store.Account{ID: 1}, &ChatCompletionsRequest{Model: "grok-4.6", StartedAt: time.Now().Add(-time.Second)}, result)
 		testutil.Fail(t, len(events.events) != 1 || events.events[0].InputTokens != 100 || events.events[0].CachedInputTokens != 80 || (events.events[0].Status == "error") != failed, events.events)
 	}
 }
