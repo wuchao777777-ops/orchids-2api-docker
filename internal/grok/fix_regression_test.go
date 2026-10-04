@@ -129,37 +129,6 @@ func TestWriteGrokUpstreamErrorKeepsLocalValidationMessage(t *testing.T) {
 	testutil.MustContain(t, rec.Body.String(), "missing model")
 }
 
-// TestStreamRepeatTracker pins both ends of the doom-loop rule: one identical
-// delta past the threshold ends the turn, while a run below the threshold — and
-// a run interrupted by a different delta — is legitimate output.
-func TestStreamRepeatTracker(t *testing.T) {
-	delta := func(value string) map[string]interface{} {
-		return map[string]interface{}{"type": "response.output_text.delta", "delta": value}
-	}
-	t.Run("stops runaway output", func(t *testing.T) {
-		tracker := &streamRepeatTracker{}
-		var err error
-		for i := 0; i <= contentDoomLoopThreshold; i++ {
-			if err = tracker.observe(delta("loop "), ""); err != nil {
-				break
-			}
-		}
-		testutil.Error(t, err, "tracker did not stop after %d identical deltas")
-		testutil.Falsef(t, !errors.Is(err, errGrokUpstreamOutputLoop), "error = %v, want errGrokUpstreamOutputLoop", err)
-	})
-	t.Run("allows legitimate repetition", func(t *testing.T) {
-		tracker := &streamRepeatTracker{}
-		// Markdown separators and table borders repeat the same single character.
-		for i := 0; i < contentDoomLoopThreshold; i++ {
-			err := tracker.observe(delta("-"), "")
-			testutil.CheckNoError(t, err)
-		}
-		// A different delta resets the run.
-		testutil.NoError(t, tracker.observe(delta("x"), ""), "run reset rejected: %v")
-		testutil.NoError(t, tracker.observe(delta("-"), ""), "post-reset delta rejected: %v")
-	})
-}
-
 func TestIsPrivateBuildControlEvent(t *testing.T) {
 	testutil.False(t, !isPrivateBuildControlEvent("response.doom_loop_check"), "doom loop control event must be treated as private")
 	testutil.False(t, isPrivateBuildControlEvent("response.output_text.delta"), "generated delta must not be treated as private")

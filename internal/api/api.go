@@ -43,6 +43,7 @@ import (
 )
 
 type API struct {
+	importMu     sync.Mutex
 	configMu     sync.Mutex
 	configHookMu sync.RWMutex
 	connTracker  loadbalancer.ConnTracker
@@ -127,9 +128,18 @@ type ExportData struct {
 }
 
 type ImportResult struct {
-	Total    int `json:"total"`
-	Imported int `json:"imported"`
-	Skipped  int `json:"skipped"`
+	Total      int           `json:"total"`
+	Imported   int           `json:"imported"`
+	Skipped    int           `json:"skipped"`
+	Duplicates int           `json:"duplicates"`
+	Invalid    int           `json:"invalid"`
+	Failed     int           `json:"failed"`
+	Issues     []ImportIssue `json:"issues,omitempty"`
+}
+
+type ImportIssue struct {
+	Index  int    `json:"index"`
+	Reason string `json:"reason"`
 }
 
 func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {

@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -28,65 +30,54 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 		Accounts: make([]store.Account, 0, len(accounts)),
 	}
 	for _, acc := range accounts {
-		normalized := *normalizeAccountOutput(acc).Account
-		// Restore the durable credential the read path hides, then drop anything
-		// that belongs to another channel. An export that drops a channel's
-		// durable credential is unusable on re-import: both WorkBuddy and Qoder
-		// rotate a refresh token that is the only way to renew, so an account
-		// restored from such a file works until its access token expires and then
-		// cannot recover.
-		restoreExportCredentials(&normalized, acc)
+		if acc == nil {
+			continue
+		}
+		normalized := *acc
+		// Export the stored state, not the management projection: projection
+		// redaction would destroy legacy credentials before they can be migrated.
+		normalizePortableAccount(&normalized)
 		redactForeignCredentials(&normalized)
 		normalized.ID = 0
 		normalized.RequestCount = 0
 		exportData.Accounts = append(exportData.Accounts, normalized)
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Disposition", "attachment; filename=accounts_export.json")
 	util.WriteJSON(w, exportData)
 }
 
-// restoreExportCredentials puts back the credential a channel needs to be usable
-// after import.
-//
-// normalizeAccountOutput hides these for list and query responses, so the export
-// has to restore them explicitly. Everything restored here is the channel's own
-// credential; a value that belongs to a different channel is cleared right after
-// by redactForeignCredentials, so the two steps compose to "this row exports
-// exactly the credential it can legitimately hold".
-func restoreExportCredentials(out, acc *store.Account) {
-	if out == nil || acc == nil {
-		return
-	}
-	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
-	case "grok":
-		if grokAccountIsOAuth(acc) {
-			out.OAuthAccessToken = acc.OAuthAccessToken
-			out.OAuthRefreshToken = acc.OAuthRefreshToken
-			out.OAuthExpiresAt = acc.OAuthExpiresAt
-		}
+// normalizePortableAccount migrates legacy credential documents without making
+// upstream calls. A durable refresh credential is required for a restorable row.
+func normalizePortableAccount(acc *store.Account) string {
+	acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
+	defer func() { acc.Token = ""; acc.RefreshToken = ""; acc.ClientCookie = "" }()
+	switch acc.AccountType {
 	case "workbuddy":
-		// The access token is short-lived; the refresh token is the durable
-		// credential Keycloak rotates.
-		out.WorkBuddyAccessToken = acc.WorkBuddyAccessToken
-		out.WorkBuddyRefreshToken = acc.WorkBuddyRefreshToken
-		out.WorkBuddyExpiresAt = acc.WorkBuddyExpiresAt
+		if !NormalizeWorkBuddyCredentials(acc) || strings.TrimSpace(acc.WorkBuddyRefreshToken) == "" {
+			return "missing_refresh_token"
+		}
 	case "qoder":
-		// The refresh token is the durable credential, and the runtime pair is
-		// derived from it at use time but is what the gateway requires on every
-		// request, so both travel with the account.
-		out.QoderAccessToken = acc.QoderAccessToken
-		out.QoderRefreshToken = acc.QoderRefreshToken
-		out.QoderExpiresAt = acc.QoderExpiresAt
-		out.QoderRuntimeInfo = acc.QoderRuntimeInfo
-		out.QoderRuntimeKey = acc.QoderRuntimeKey
+		if !NormalizeQoderCredentials(acc) || strings.TrimSpace(acc.QoderRefreshToken) == "" {
+			return "missing_refresh_token"
+		}
+		if strings.TrimSpace(acc.QoderMachineID) == "" {
+			return "missing_device_identity"
+		}
 	case "cline":
-		// The refresh token is the durable credential; the access token is what
-		// the chat endpoint spends.
-		out.ClineAccessToken = acc.ClineAccessToken
-		out.ClineRefreshToken = acc.ClineRefreshToken
-		out.ClineExpiresAt = acc.ClineExpiresAt
+		if !NormalizeClineCredentials(acc) || strings.TrimSpace(acc.ClineRefreshToken) == "" {
+			return "missing_refresh_token"
+		}
+	case "grok":
+		normalizeGrokTokenInput(acc)
+		if strings.TrimSpace(acc.OAuthRefreshToken) == "" {
+			return "missing_refresh_token"
+		}
+	default:
+		return "unsupported_channel"
 	}
+	return ""
 }
 
 // redactForeignCredentials clears the credential fields of channels other than
@@ -100,11 +91,7 @@ func restoreExportCredentials(out, acc *store.Account) {
 // RedactQoderOutput clears the generic slots at all — and without this the export
 // would publish it.
 //
-// The generic Token/RefreshToken/ClientCookie
-// slots are deliberately left alone. They are not "foreign" for WorkBuddy and
-// Qoder: both resolvers fall back to them to parse a credential document written
-// before the channel had fields of its own, so clearing them here would drop a
-// legacy credential from the export instead of protecting it.
+// Legacy generic credentials are migrated before this function is called.
 func redactForeignCredentials(acc *store.Account) {
 	if acc == nil {
 		return
@@ -141,41 +128,81 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	decoder := json.NewDecoder(r.Body)
 	var exportData ExportData
-	if err := json.NewDecoder(r.Body).Decode(&exportData); err != nil {
-		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+	if err := decoder.Decode(&exportData); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "Import file exceeds 8 MiB", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Invalid import JSON", http.StatusBadRequest)
+		}
 		return
 	}
-
-	result := ImportResult{Total: len(exportData.Accounts)}
-
-	for _, acc := range exportData.Accounts {
-		acc.ID = 0
-		acc.RequestCount = 0
-		acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
-		if strings.TrimSpace(acc.AccountType) == "" {
-			result.Skipped++
-			continue
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		http.Error(w, "Import must contain one JSON document", http.StatusBadRequest)
+		return
+	}
+	if exportData.Version != 1 || exportData.Accounts == nil {
+		http.Error(w, "Expected a version 1 account export", http.StatusBadRequest)
+		return
+	}
+	// Serialize imports in this process. Existing rows are never overwritten.
+	a.importMu.Lock()
+	defer a.importMu.Unlock()
+	existing, err := a.store.ListAccounts(r.Context())
+	if err != nil {
+		http.Error(w, "Cannot read existing accounts", http.StatusServiceUnavailable)
+		return
+	}
+	credentials, identities := map[string]bool{}, map[string]bool{}
+	remember := func(acc *store.Account) {
+		if key := normalizedAccountCredentialKey(acc); key != "" {
+			credentials[key] = true
 		}
-		if !isSupportedAccountType(acc.AccountType) {
-			result.Skipped++
-			continue
-		}
-		if strings.EqualFold(acc.AccountType, "grok") {
-			normalizeGrokTokenInput(&acc)
-			if !grokAccountIsOAuth(&acc) || !grokAccountHasOAuthCredentials(&acc) {
-				slog.Warn("Skipped grok import without Build OAuth credentials", "name", acc.Name)
-				result.Skipped++
-				continue
-			}
-		}
-		if err := a.store.CreateAccount(r.Context(), &acc); err != nil {
-			slog.Warn("Failed to import account", "name", acc.Name, "error", err)
-			result.Skipped++
-		} else {
-			result.Imported++
+		if key := stableProviderIdentityKey(acc); key != "" {
+			identities[key] = true
 		}
 	}
-
+	for _, acc := range existing {
+		remember(acc)
+	}
+	result := ImportResult{Total: len(exportData.Accounts)}
+	skip := func(index int, reason string) {
+		result.Skipped++
+		result.Issues = append(result.Issues, ImportIssue{Index: index + 1, Reason: reason})
+	}
+	for index, acc := range exportData.Accounts {
+		reason := normalizePortableAccount(&acc)
+		if reason != "" {
+			result.Invalid++
+			skip(index, reason)
+			continue
+		}
+		redactForeignCredentials(&acc)
+		if credentials[normalizedAccountCredentialKey(&acc)] || identities[stableProviderIdentityKey(&acc)] {
+			result.Duplicates++
+			skip(index, "duplicate_account")
+			continue
+		}
+		acc.ID = 0
+		acc.RequestCount = 0
+		acc.TokensToday = 0
+		acc.TokensDate = ""
+		acc.UpdatedAt = time.Time{}
+		if acc.Weight <= 0 {
+			acc.Weight = 1
+		}
+		if err := a.store.CreateAccount(r.Context(), &acc); err != nil {
+			slog.Warn("Failed to import account", "index", index+1, "channel", acc.AccountType)
+			result.Failed++
+			skip(index, "storage_error")
+		} else {
+			result.Imported++
+			remember(&acc)
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	util.WriteJSON(w, result)
 }

@@ -107,4 +107,4 @@ function_analysis_report.md
 
 # Local one-off diagnostic output and raw live verification records
 /docs/diagnostics/
-/docs/verification/*.jsonl
+/docs/verification/

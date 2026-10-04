@@ -24,7 +24,6 @@ var fetchGrokBuildModelsForRefresh = func(ctx context.Context, cfg *config.Confi
 }
 
 type grokBuildModelDiscovery struct {
-	index   int
 	account *store.Account
 	catalog []modelcatalog.Profile
 	err     error
@@ -78,8 +77,6 @@ func discoverGrokModelsReport(ctx context.Context, cfg *config.Config, s *store.
 			spec, ok := grok.ResolveModel(id)
 			if !ok {
 				spec = grok.ModelSpec{ID: id, Name: id, UpstreamModel: id, Upstream: grok.UpstreamCLI}
-			} else if spec.Upstream != grok.UpstreamCLI {
-				continue
 			}
 			candidate := discoveredModel{ID: spec.ID, Name: util.FirstNonEmpty(spec.Name, spec.ID), Verified: true}
 			attempt.Candidates = append(attempt.Candidates, candidate)

@@ -31,7 +31,7 @@ func NormalizeProvider(acc *store.Account) bool {
 		return false
 	}
 	provider := ProviderForAccount(acc)
-	if provider == "" || strings.EqualFold(strings.TrimSpace(acc.GrokProvider), provider) {
+	if strings.EqualFold(strings.TrimSpace(acc.GrokProvider), provider) {
 		return false
 	}
 	acc.GrokProvider = provider

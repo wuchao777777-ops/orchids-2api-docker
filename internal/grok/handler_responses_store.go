@@ -203,7 +203,7 @@ func (h *Handler) HandleResponsesCompact(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	spec, ok := h.resolveConversationModel(r.Context(), modelID)
-	if !ok || !modelRoutedToCLI(spec, h.configSnapshot()) {
+	if !ok {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses compact requires a Grok Build model")
 		return
 	}
@@ -437,7 +437,6 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 	target := io.MultiWriter(deadlineResponseWriter{ResponseWriter: w}, fullCapture)
 	terminal, done := false, false
 	failureCode, failureMessage := "", ""
-	tracker := &streamRepeatTracker{}
 	compat := &responsesCompatibilityState{model: model}
 	err := consumeCompatibleSSE(body, func(frame compatibleSSEEvent) error {
 		var event map[string]interface{}
@@ -464,13 +463,7 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 			if id := interfaceString(response["id"]); id != "" {
 				responseID = id
 			}
-			// Stop a degenerate upstream that repeats one delta forever; it
-			// would otherwise run until the request deadline while consuming
-			// quota and flooding the caller's context.
-			if loopErr := tracker.observe(event, frame.Event); loopErr != nil {
-				failureCode, failureMessage = "upstream_output_loop", loopErr.Error()
-				return loopErr
-			}
+
 		}
 		if supplementResponsesEvent(event, compat) || redactResponseError(event) {
 			raw, _ := json.Marshal(event)

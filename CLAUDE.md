@@ -135,7 +135,8 @@ These are load-bearing. A change that "simplifies" any of them is a bug.
   `internal/upstream/emit.go`, `internal/api/device_login_registry.go` (generic),
   `internal/api/quota_projection.go` and `account_refresh.go` (map dispatch),
   `internal/util/snapshot.go`, `internal/util/http_body.go`.
-- Real-upstream verification records live in `docs/verification/`. Local mocks
+- Real-upstream verification records are local operational material and must not
+  be committed. `docs/verification/` is ignored by Git. Local mocks
   passing does not mean an upstream accepted a request; when changing request
   construction or streaming, state explicitly what was verified against a live
   upstream and what was not.

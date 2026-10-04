@@ -69,18 +69,8 @@ func ExtractCompactionSummary(response map[string]interface{}) string {
 	return extractCompactionSummary(response)
 }
 
-// CompactionSummaryMessage wraps text as the summary user message.
-func CompactionSummaryMessage(text string) map[string]interface{} {
-	return gatewayCompactionSummaryMessage(text)
-}
-
 // CompactionStreamError is the typed failure of a summary turn.
 type CompactionStreamError = gatewayCompactionStreamError
-
-// NewCompactionStreamError builds a typed compaction stream failure.
-func NewCompactionStreamError(code, message string) error {
-	return newGatewayCompactionStreamError(code, message)
-}
 
 // CompactionErrorIsTransient reports whether a summary-turn failure is retryable.
 func CompactionErrorIsTransient(err error) bool { return gatewayCompactionErrorIsTransient(err) }
@@ -114,11 +104,6 @@ func SetCompactionRetryPause(d time.Duration) time.Duration {
 // CompactionPrompt is the summary prompt sent for a gateway compaction turn.
 var CompactionPrompt = gatewayCompactionPrompt
 
-// NormalizeCompactionUsage rewrites the usage block of a compaction result.
-func NormalizeCompactionUsage(response map[string]interface{}) {
-	normalizeGatewayCompactionUsage(response)
-}
-
 // Available reports whether the codec can seal and open blobs.
 func (c *CompactionCodec) Available() bool { return c.available() }
 
@@ -151,9 +136,6 @@ var ErrCompactionDegenerate = errGatewayCompactionDegenerate
 
 // NonNegativeJSONInteger reads a usage counter that must not be negative.
 func NonNegativeJSONInteger(value interface{}) int64 { return nonNegativeJSONInteger(value) }
-
-// NewCompactionBlobError builds the typed failure for an unopenable blob.
-func NewCompactionBlobError() *CompactionBlobError { return &compactionBlobError{} }
 
 // ClientCompactionPromptMarker is the distinctive line from the compaction
 // prompt that identifies a TUI-style compaction turn.

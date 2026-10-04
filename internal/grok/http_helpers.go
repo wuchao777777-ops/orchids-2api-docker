@@ -23,9 +23,6 @@ import (
 // stays here is the Build-specific upstream classifier plus the thin wrappers
 // the rest of the package still calls by their short local names.
 
-// grokErrorCodeForStatus delegates to the shared status-to-code table.
-func grokErrorCodeForStatus(status int) string { return httpserver.ErrorCodeForStatus(status) }
-
 // writeGrokErrorCode writes the shared OpenAI-compatible error envelope.
 func writeGrokErrorCode(w http.ResponseWriter, status int, code, message string) {
 	httpserver.WriteErrorCode(w, status, code, message)
@@ -64,29 +61,9 @@ func streamResponseHeaders(w http.ResponseWriter) http.Flusher {
 // deadlineResponseWriter refreshes the write deadline on every write.
 type deadlineResponseWriter = httpserver.DeadlineResponseWriter
 
-// writeSSEBytes sends a raw SSE frame without flushing.
-func writeSSEBytes(w http.ResponseWriter, event string, data []byte) error {
-	return httpserver.WriteSSEBytes(w, event, data)
-}
-
-// writeSSEError sends an OpenAI-style SSE error event (no flush, no [DONE]).
-func writeSSEError(w http.ResponseWriter, message, errType, code string) {
-	httpserver.WriteSSEError(w, message, errType, code)
-}
-
-// writeSSE sends an SSE frame and flushes when the writer supports it.
-func writeSSE(w http.ResponseWriter, flusher http.Flusher, event string, data []byte) {
-	httpserver.WriteSSE(w, flusher, event, data)
-}
-
 // writeSSEStreamError sends the named SSE error used by non-Chat protocols.
 func writeSSEStreamError(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, msg string) {
 	httpserver.WriteSSEStreamError(w, flusher, logger, msg)
-}
-
-// writeSSECodedError sends a typed SSE error frame followed by [DONE] and flushes.
-func writeSSECodedError(w http.ResponseWriter, flusher http.Flusher, message, code string) {
-	httpserver.WriteSSECodedError(w, flusher, message, code)
 }
 
 // writeGrokNoAccountError lives in pool_error.go: the answer depends on why the

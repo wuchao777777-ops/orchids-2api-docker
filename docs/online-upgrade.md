@@ -1,63 +1,99 @@
-# 自动发现与在线升级
+# 发行发现、在线升级与回退
 
-管理后台侧栏的版本按钮打开“版本与升级”。登录后自动检查 GitHub 最新稳定发行版，20 分钟缓存/检查一次；“检查更新”可强制刷新。网络失败显示检查失败，不作为“已是最新”的依据。安装需要管理员点击“升级并重启”，不会无人值守安装。
+## 1. 功能边界
 
-## 发布来源与构建
+管理后台“版本与升级”提供检查、安装、回退与操作进度。检查更新不等于安装，POST 返回 202 也只表示接受异步任务，不表示已重启成功。
 
-默认仓库为 `zhangdailin/API-Console`，编译期可覆盖 `internal/buildinfo.Repository`；浏览器不能指定下载 URL 或仓库。正式版本来自 `vMAJOR.MINOR.PATCH` 标签；比较遵循 SemVer，忽略构建元数据并正确处理预发行版本，自动发现只接受稳定 Release。
+默认来源由 internal/buildinfo.Repository 固定为 zhangdailin/API-Console；浏览器不能传任意仓库或下载 URL。检查通常有 20 分钟缓存，可强制刷新；网络失败明确报告，不作为“已是最新”的证据。
 
-`.github/workflows/release.yml` 将 Version、Commit、Date 和 BuildType=release 编译进程序，构建后用 `--version` 验证。嵌入的前端随二进制一起发布。当前发行平台是 linux/amd64，必须提供：
+## 2. 发行要求
 
-- `orchids-server-linux-amd64`
-- `orchids-server-linux-amd64.sha256`，标准 sha256sum 格式
-- `orchids-server-linux-amd64.build-info.txt`，包含 version、commit、built_at、goos、goarch
+当前 release 工作流构建 linux/amd64，注入 Version / Commit / Date / BuildType=release 并检查 --version：
 
-手动 workflow_dispatch 默认 dry_run，构建并验证，但不发布 Release。推送正式标签按原工作流发布。本次在线升级与前端改动随 v1.0.3 一起提交；发行产物由该标签触发的工作流构建，只有工作流成功发布后才能用于在线升级。
+- orchids-server-linux-amd64
+- orchids-server-linux-amd64.sha256
+- orchids-server-linux-amd64.build-info.txt
 
-## 运行环境
+产物名仍为兼容旧名，自动升级选择器也按该名称匹配。源码更名或改产物时要同时修改两端，不能只改 README。手动 workflow_dispatch 默认 dry_run；标签与实际发布结果才决定 Release 是否可供下载。
 
-在线替换仅在显式启用的 root Linux systemd 服务上提供，检查 ExecStart 与当前真实可执行路径、MainPID、重启策略和目录写权限。Windows、无版本 source 构建、手工前台运行、普通 Docker 均保留版本检查，但禁用安装；Docker 应更新镜像并重建。
+版本按 SemVer 比较，忽略构建元数据，正确处理预发行顺序；自动发现稳定发行。候选需比当前更新，并与实际最新发行信息一致。
 
-在目标应用服务的 drop-in 中配置，重载并重启后生效：
+## 3. 安装资格
+
+| 条件 | 原因 |
+|---|---|
+| Linux、root、非普通 Docker | 当前平台替换实现依赖 systemd 和进程检查 |
+| 显式启用 ORCHIDS_UPDATE_ENABLED=true | 运维 opt-in |
+| ORCHIDS_UPDATE_SERVICE 指向当前持久 .service | 防止重启错误服务 |
+| INVOCATION_ID / MainPID / ExecStart 匹配 | 验证当前进程归属与真实可执行路径 |
+| Restart=always 或 on-failure | 故障恢复基础 |
+| systemd-run 可用、二进制目录可写 | 独立守护与同目录替换 |
+| 有可比较构建版本 | 不能把普通 dev 构建当正式升级基线 |
+
+不符合资格仍可查看版本和检查发行，安装按钮禁用并显示原因。Windows 与前台 source 运行不提供该在线替换能力。
+
+示例 drop-in（服务名按实际设置）：
 
 ```ini
 [Service]
 Environment=ORCHIDS_UPDATE_ENABLED=true
-Environment=ORCHIDS_UPDATE_SERVICE=orchids-2api.service
+Environment=ORCHIDS_UPDATE_SERVICE=api-console.service
 ```
 
-服务须为持久 systemd 单元，具备 Restart=always 或 on-failure，以及运行 `systemd-run` 的权限。升级守护进程在独立 transient unit 运行，主服务重启不会杀死它。不要把应用本身设置为失败后自动回收的临时单元。
+主应用不要设为失败后自动回收的 transient unit。守护单元是独立临时单元，以便主服务停止时仍能恢复。
 
-## 操作与验证
+## 4. 管理接口
 
-管理员接口 `/api/system/version`、`check-updates`、`operation` 为 GET；`update` 和 `rollback` 为 POST，要求 application/json、同源浏览器请求和 Idempotency-Key。update 的 body 为 `{"version":"v1.0.3"}`，rollback 为 `{}`。接口受现有管理员认证及操作审计保护。
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | /api/system/version | 当前构建及安装能力 |
+| GET | /api/system/check-updates | 发行发现及更新情况 |
+| GET | /api/system/operation | 当前 / 最后操作状态 |
+| POST | /api/system/update | `{ "version": "<TARGET_RELEASE>" }` |
+| POST | /api/system/rollback | `{}`，使用可用本地回退备份 |
 
-任务异步执行，POST 返回 202 只表示已接受。幂等键和最后一次操作状态保存在磁盘；flock 串行化同一部署的系统操作。不是跨主机滚动升级协调器。下载最多 15 分钟，独立于浏览器请求取消；刷新页面会继续读取任务状态，不自动重发 POST。
+动作要求管理员身份、同源请求、JSON 正文（最多 4096 字节）和 Idempotency-Key。页面刷新应查询状态，不重复启动 POST。网络中断并不自动取消下载；状态和幂等信息写入本地磁盘。
 
-下载仅允许当前仓库的 GitHub HTTPS 产物以及受限 GitHub CDN 重定向，二进制最大 150 MiB，校验/构建信息各最大 64 KiB。必须匹配 SHA-256、ELF 平台架构和构建信息中的目标版本、commit。使用原始二进制，不解压归档。
+## 5. 下载与替换链
 
-在可执行文件目录下的 `.orchids-updates` 创建私有目录与持久操作状态；复制并同步旧程序，先启动独立守护进程，再在同文件系统原子 rename 覆盖目标。旧程序副本保留，没有先挪走可执行路径再挪入新程序的空缺。仍不将全部文件和状态写入描述为跨文件崩溃事务。
+1. 检查资格、版本、幂等和文件锁。
+2. 读取可信 GitHub 发行元数据并匹配平台资产。
+3. 受限下载二进制、摘要与 build-info；不是任意 URL 下载器。
+4. 校验 SHA-256、ELF 架构、版本与 commit 等构建信息。
+5. 在当前二进制目录的 .orchids-updates 中保存私有状态和旧程序副本。
+6. 先启动独立回退守护，再以同文件系统 rename 覆盖可执行文件。
+7. 守护重启 systemd 服务并检查目标身份。
 
-守护进程执行 systemctl restart，最长 90 秒检查 systemd MainPID 的 `/proc/PID/exe` SHA-256，以及 `/health` 返回的版本、commit、status。全部匹配才将状态设为 complete。新版本不通过则恢复旧程序并再次重启、验证；成功标为 rolled_back，恢复也失败则 recovery_failed，明确要求人工检查。
+二进制上限 150 MiB，摘要与构建信息各 64 KiB，下载有独立时间预算。HTTPS 来源和重定向受限；不会解压任意归档或执行远程安装脚本。
 
-失败恢复前清除 systemd failed/start-limit 状态。手动回退使用最近一次成功操作前的本地备份，校验后复用相同替换/重启/验证流程。备份留在私有操作目录，未自动删除。
+文件操作有原子替换与同步措施，但不是多个状态文件之间的完整崩溃事务。不能以“原子升级”概括所有数据与状态。
 
-程序回退不执行数据或配置回退。本项目现有 Redis 和凭据文件不会被升级删除；未来发行若含不兼容数据迁移，需要独立的数据备份与恢复方案。
+## 6. 成功与自动回退
 
-## 人工恢复
+守护最长 90 秒核对 systemd MainPID、`/proc/PID/exe` SHA-256，以及 /health 的 status、version、commit。健康接口 200 不是唯一判据。
 
-先查看 `/api/system/operation` 和 `journalctl -u orchids-update-<operation-id>`。若为 recovery_failed，使用状态中的 backup 路径核对 previous_sha256，再停止应用服务，复制该备份到目标同目录的临时文件并 chmod 0755、rename 覆盖；执行 systemctl reset-failed 和 restart，最后核对 `/health` 的 build、MainPID 产物哈希及业务接口。保留操作目录和备份以供排查。
+| 结果 | 含义 |
+|---|---|
+| complete | 新运行程序身份与健康检查通过 |
+| rolled_back | 新版本失败，已恢复旧程序并验证 |
+| recovery_failed | 恢复也失败，需要人工处理 |
+| 非终态 | 查询进度，不能先宣布升级成功 |
 
-## 验证范围
+重启前处理 failed / start-limit 状态。回退仅恢复程序，不恢复 Redis、配置或未来不兼容迁移。操作备份不会因本次成功自动全部删除，应按审计与空间需求管理。
 
-包含 SemVer、缓存错误状态、下载来源/大小/校验、HTTP/跨站保护、Linux flock/幂等、替换故障、目标验证和自动回退测试；前端测试检查未知状态、能力限制、操作互斥和幂等请求。另用隔离 systemd 服务演练实际升级、手动回退和新程序启动崩溃后的自动恢复，演练不连接正式 Redis。
+## 7. 人工恢复步骤
 
-## 本次上线记录
+1. 读取 /api/system/operation 和对应守护日志，保存错误及新旧摘要。
+2. 根据状态中的 backup 路径核对 previous_sha256，不凭目录中“最近文件”猜测。
+3. 停止目标服务，确认备份平台、版本与配置兼容。
+4. 将已校验备份复制到目标同目录临时文件，设置执行权限后 rename 替换。
+5. reset-failed、restart，核对 MainPID、运行映像哈希、/health 和受控业务请求。
+6. 保留失败操作目录，不用数据清空代替程序恢复。
 
-2026-09-30 已部署到 47.79.238.254（https://us1.daige.tech/admin/）。运行版本 v1.0.2+local.updater.20260930，build_type=local，commit=0c2abdd-dirty，明确区分未提交工作区与正式 Release。比较基线为当前已有稳定发行版 v1.0.2，构建元数据标注本次本地改造；不宣称本地代码等同该标签。
+守护单元名称仍为 orchids-update-<operation-id>。历史命名不代表有 Orchids 通道。
 
-运行文件 SHA-256：efa5ac8c4a25f89af7503894f01f566f8c916e4ee1f00ca5862ee6cce450f11a。备份：/opt/orchids-2api/backups/updater-20260930-123111。通过 root systemd drop-in 启用在线更新，配置文件与凭据文件保留。
+## 8. 本文验证边界
 
-126 项前端测试通过，Windows amd64 后端全量测试通过，Linux 升级专项测试通过；真实浏览器验证版本窗口及七页浅色/深色手机布局。隔离持久 systemd 服务完成真实升级、手动回退和新进程启动即退出后的自动恢复演练；临时服务回收问题已通过持久单元约束及 reset-failed 处理。演练服务随后停止并移除。
+这是一份当前源码运行手册，没有再次下载、安装、重启或访问生产。既有测试覆盖 SemVer、来源、大小、摘要、幂等、锁、替换失败、守护验证及回退；测试存在不等于当前生产通过。
 
-正式服务认证后验证版本、升级能力、GitHub 发现、操作状态、七个页面、22 个静态资源哈希及列表/运维/日志接口，本地和公网健康正常。GitHub 最新为 v1.0.2，has_update=false；没有下载安装该历史产物。未来新稳定标签必须先发布对应的新构建，才能在线升级。
+原文中的固定 IP、旧版本与部署哈希属于历史快照，不应放在当前安装指南中作为“当前线上”事实。部署验收请按 [部署手册](deployment.md) 重新取得证据。

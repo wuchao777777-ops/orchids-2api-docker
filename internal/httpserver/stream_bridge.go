@@ -15,11 +15,6 @@ type CheckedStreamWriter struct {
 	Err    error
 }
 
-// NewCheckedStreamWriter wraps target, recording the first write failure.
-func NewCheckedStreamWriter(target io.Writer) *CheckedStreamWriter {
-	return &CheckedStreamWriter{Target: target}
-}
-
 // Write forwards the write and remembers a failure or a short write.
 func (w *CheckedStreamWriter) Write(data []byte) (int, error) {
 	if w.Err != nil {

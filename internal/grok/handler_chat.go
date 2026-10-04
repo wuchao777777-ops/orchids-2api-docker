@@ -82,10 +82,6 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		writeGrokError(w, http.StatusBadRequest, modelValidationMessage(req.Model, err))
 		return
 	}
-	if !modelRoutedToCLI(spec, h.configSnapshot()) {
-		writeGrokErrorCode(w, http.StatusNotFound, "model_not_found", modelNotFoundMessage(req.Model))
-		return
-	}
 	// The request's model travels on the context so account selection can skip an
 	// account that is cooling down for this model only; the account's other models
 	// stay in the pool.

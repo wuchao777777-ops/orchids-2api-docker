@@ -11,7 +11,7 @@ import (
 type UpstreamKind int
 
 const (
-	// UpstreamAuto derives the upstream from ModelSpec fields and config.
+	// UpstreamAuto is the unspecified zero value; it does not select an upstream.
 	UpstreamAuto UpstreamKind = iota
 	// UpstreamCLI is cli-chat-proxy.grok.com/v1 + OAuth Bearer.
 	UpstreamCLI
@@ -22,7 +22,7 @@ type ModelSpec struct {
 	ID            string
 	Name          string
 	UpstreamModel string
-	// Upstream explicitly routes the model; UpstreamAuto derives from fields.
+	// Upstream explicitly routes the model; served models use UpstreamCLI.
 	Upstream UpstreamKind
 	// AliasReasoningEffort is populated only while resolving an effort-suffixed
 	// compatibility alias and is copied into the request before normalization.

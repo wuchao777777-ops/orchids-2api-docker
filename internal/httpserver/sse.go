@@ -162,14 +162,6 @@ func WriteSSEError(w http.ResponseWriter, message, errType, code string) {
 	WriteSSEBytes(w, "error", util.EncodeJSONBytes(payload))
 }
 
-// WriteSSE sends an SSE frame and flushes when the writer supports it.
-func WriteSSE(w http.ResponseWriter, flusher http.Flusher, event string, data []byte) {
-	WriteSSEBytes(w, event, data)
-	if flusher != nil {
-		flusher.Flush()
-	}
-}
-
 // WriteSSEStreamError sends the named SSE error used by non-Chat protocols.
 func WriteSSEStreamError(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, msg string) {
 	WriteSSEError(w, msg, "server_error", "stream_error")
@@ -181,11 +173,4 @@ func WriteSSEStreamError(w http.ResponseWriter, flusher http.Flusher, logger *de
 	if flusher != nil {
 		flusher.Flush()
 	}
-}
-
-// WriteSSECodedError sends a typed SSE error frame followed by [DONE] and
-// flushes. Use this when the error code is not the generic stream_error.
-func WriteSSECodedError(w http.ResponseWriter, flusher http.Flusher, message, code string) {
-	WriteSSEError(w, message, "server_error", code)
-	WriteSSE(w, flusher, "", []byte("[DONE]"))
 }

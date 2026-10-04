@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/opsagg"
 	"orchids-api/internal/poolstate"
@@ -147,30 +146,6 @@ func ChannelsForAccounts(accounts []*store.Account) []string {
 		out = append(out, name)
 	}
 	return out
-}
-
-func alertPoolCounts(accounts []*store.Account, channel string, now time.Time) (enabled, available, needingLogin, modelCooldowns int) {
-	for _, acc := range accounts {
-		if acc == nil {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), channel) || !acc.Enabled {
-			continue
-		}
-		enabled++
-		if !accountpolicy.AccountHeld(acc, now) {
-			available++
-		}
-		if accountpolicy.NeedsReverify(acc, now) {
-			needingLogin++
-		}
-		for model, until := range acc.ModelCooldowns {
-			if strings.TrimSpace(model) != "" && until.After(now) {
-				modelCooldowns++
-			}
-		}
-	}
-	return enabled, available, needingLogin, modelCooldowns
 }
 
 func AuditRecorder(logger audit.Logger) func(Alert, bool) {

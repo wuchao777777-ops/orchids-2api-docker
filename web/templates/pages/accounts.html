@@ -12,7 +12,7 @@
     <section class="header-section" id="accountsHeader">
       <div>
         <h1 id="pageTitle">账号管理</h1>
-        <p id="pageSubtitle" class="page-sub">统一维护渠道账号、状态和可用性，快速完成导出、清理和批量操作。</p>
+        <p id="pageSubtitle" class="page-sub">统一维护渠道账号、状态和可用性，快速完成备份恢复、清理和批量操作。</p>
       </div>
       <div class="page-actions">
         <button class="btn-primary" onclick="openModal()">添加账号</button>
@@ -64,7 +64,9 @@
 
         <div class="accounts-actions">
           <div class="accounts-action-cluster">
-            <button class="btn" onclick="exportAccounts()" title="导出的 JSON 包含账号的官方登录访问令牌和刷新令牌；请像密码一样妥善保管，切勿公开分享">导出（含凭据）</button>
+            <button class="btn" onclick="exportAccounts()" title="导出的 JSON 包含账号的官方登录访问令牌和刷新令牌；请像密码一样妥善保管，切勿公开分享">导出全部（含凭据）</button>
+            <button class="btn" id="accountImportOpen" type="button" onclick="openAccountImport()">导入账号</button>
+            <input id="accountImportFile" type="file" accept=".json,application/json" hidden onchange="readAccountImport(this)">
           </div>
           <div class="accounts-action-cluster is-danger">
             <button class="btn btn-danger-outline" id="batchDeleteBtn" disabled onclick="batchDeleteAccounts()">批量删除</button>
@@ -103,6 +105,18 @@
   </main>
 
   {{template "account-modal.html" .}}
+  <div class="modal" id="accountImportModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="accountImportTitle" style="display:none">
+    <div class="modal-content">
+      <div class="modal-header"><h2 id="accountImportTitle">恢复账号备份</h2><button class="modal-close" type="button" onclick="closeAccountImport()" aria-label="关闭">×</button></div>
+      <div class="modal-body">
+        <p>请选择本项目导出的 JSON 备份。恢复四个渠道的登录凭据及账号设置；已有账号会跳过，不覆盖现有凭据。不恢复 API Key、模型管理记录或历史请求日志。</p>
+        <p>备份包含明文登录凭据，请妥善保管。过期或已轮换的刷新令牌可能无法恢复登录，导入后请在账号列表检查状态，必要时重新授权。</p>
+        <p id="accountImportSummary" role="status" aria-live="polite"></p>
+        <div id="accountImportResult" role="status" aria-live="polite"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-outline" id="accountImportClose" type="button" onclick="closeAccountImport()">关闭</button><button class="btn btn-primary" id="accountImportConfirm" type="button" onclick="confirmAccountImport()" disabled>确认导入</button></div>
+    </div>
+  </div>
   <div class="toast-container" id="toastContainer"></div>
 
   {{template "page-scripts.html" .}}
@@ -112,6 +126,7 @@
   <script src="{{.AdminPath}}/js/qoder-auth.js?v={{.AssetVersion}}"></script>
   <script src="{{.AdminPath}}/js/cline-auth.js?v={{.AssetVersion}}"></script>
   <script src="{{.AdminPath}}/js/accounts.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/account-transfer.js?v={{.AssetVersion}}"></script>
 </body>
 
 </html>

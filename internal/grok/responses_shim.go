@@ -33,18 +33,17 @@ const (
 
 // Function aliases.
 var (
-	newBuildToolNormalizationState    = responses.NewToolNormalizationState
-	buildToolAlias                    = responses.BuildToolAlias
-	normalizeBuildTool                = responses.NormalizeTool
-	normalizeBuildToolChoice          = responses.NormalizeToolChoice
-	normalizeBuildFunctionRoot        = responses.NormalizeFunctionRoot
-	stripWebSearchControlFields       = responses.StripWebSearchControlFields
-	takeBuildCompatibilityWarnings    = responses.TakeCompatibilityWarnings
-	collectBuildToolAliases           = responses.CollectToolAliases
-	interfaceMaps                     = responses.InterfaceMaps
-	normalizeBridgedTools             = normalizeBridgedToolsLocal
-	restoreBridgeToolName             = responses.RestoreBridgeToolName
-	restoreBridgeToolCall             = responses.RestoreBridgeToolCall
+	newBuildToolNormalizationState = responses.NewToolNormalizationState
+	buildToolAlias                 = responses.BuildToolAlias
+	normalizeBuildTool             = responses.NormalizeTool
+	normalizeBuildToolChoice       = responses.NormalizeToolChoice
+	normalizeBuildFunctionRoot     = responses.NormalizeFunctionRoot
+
+	takeBuildCompatibilityWarnings = responses.TakeCompatibilityWarnings
+	collectBuildToolAliases        = responses.CollectToolAliases
+	interfaceMaps                  = responses.InterfaceMaps
+	normalizeBridgedTools          = normalizeBridgedToolsLocal
+
 	restoreBridgeToolIdentity         = responses.RestoreBridgeToolIdentity
 	aliasParameterSchema              = responses.AliasParameterSchema
 	normalizeFunctionArguments        = responses.NormalizeFunctionArguments

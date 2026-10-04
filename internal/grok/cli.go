@@ -357,22 +357,20 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 	if acc == nil {
 		return "", fmt.Errorf("missing cli account")
 	}
-	for {
-		resp, err := c.request(ctx, acc, http.MethodGet, c.baseURL()+"/models", nil, nil)
-		if err != nil {
-			if oauthErr, ok := err.(*cliOAuthError); ok {
-				return oauthErr.Status(), err
-			}
-			return "", err
+	resp, err := c.request(ctx, acc, http.MethodGet, c.baseURL()+"/models", nil, nil)
+	if err != nil {
+		if oauthErr, ok := err.(*cliOAuthError); ok {
+			return oauthErr.Status(), err
 		}
-		if resp.StatusCode == http.StatusOK {
-			_ = resp.Body.Close()
-			return "", nil
-		}
-		raw, headerCopy := readBoundedResponse(resp)
-
-		return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw)
+		return "", err
 	}
+	if resp.StatusCode == http.StatusOK {
+		_ = resp.Body.Close()
+		return "", nil
+	}
+	raw, headerCopy := readBoundedResponse(resp)
+
+	return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw)
 }
 
 // buildModelCatalogEntry accepts both the current snake_case Build response and

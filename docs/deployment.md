@@ -1,42 +1,123 @@
-# 部署注意事项
+# 部署、备份与运行手册
 
-本地启动步骤见 [README](../README.md)；配置字段见 [配置速查](configuration.md)。构建需符合 `go.mod` 中的 Go 版本（当前为 **1.26.6**），使用 Redis 保存账号及配置。以下沿用当前部署工具使用的 `orchids-server` 二进制文件名；项目展示名称已改为 **API Console**，此处不是二进制改名。
+## 1. 部署前确认
+
+| 项目 | 要求 |
+|---|---|
+| Go | 源码构建按 go.mod，当前 1.26.6 |
+| Redis | 保存账号、配置、Key、响应状态与监控；需可达且持久化 |
+| 平台 | 本地可构建支持平台；当前发布流程产物为 Linux amd64 |
+| 管理入口 | 强密码、HTTPS、受控访问 |
+| 上游 | 四通道对应授权与生成主机可达 |
+| 备份 | Redis、凭据主密钥、配置与必要运行状态 |
+
+项目正式名称为 API-Console。当前模块、二进制和运维环境变量仍保留部分旧命名，不要凭展示名称自行改 systemd ExecStart、Redis 前缀或发行产物。
+
+## 2. 源码启动与构建
 
 ```bash
+cp config.example.json config.json
 go test ./...
 go build -o orchids-server ./cmd/server
 ./orchids-server -config ./config.json
 ```
 
-- 显式设置强管理密码；`debug_enabled` 保持关闭。账号凭据的 `data/credential.key`（或环境变量密钥）必须与 Redis 一同备份和恢复。
-- Redis 的 `<redis_prefix>settings:config` 可覆盖文件配置，升级或修改参数后通过管理端核对实际值。
-- 后端默认监听所有网卡的端口；在防火墙或反向代理上阻止直接公网访问，尤其注意 `/metrics`。`trusted_proxies` 仅填写实际代理地址。
-- 多副本共享 Redis 和凭据加密密钥，并为每个副本配置不同的 `deployment_instance_id`；如需共享媒体与 egress 健康状态，请显式挂载同一媒体目录。
-- 启动后检查 `/health`，再使用 API Key 请求 `/v1/models`；必要时在管理端按通道刷新模型。回归测试执行 `go test ./...`。
+Windows 使用 Copy-Item 与 orchids-server.exe。Go 二进制嵌入网页，不要求在主机安装 Node.js 或从运行目录读取 web 文件。
 
-## 回归验证与手工探针
+普通 go build 默认为 dev / unknown / source 身份；仅修改文件名不能形成正式发行版。发布流程注入 version、commit、built_at、build_type 并用 --version 检查。
 
-默认回归不启用真实上游探针：
+## 3. 发行产物校验
+
+从项目 Release 下载同一版本的二进制、sha256 和 build-info 文件：
 
 ```bash
-go test ./... -cover -count=1 -p 1
-go test -race -count=1 -p 1 -timeout 15m ./...
-node --test web/*.test.cjs
-./scripts/check-provider-registry.sh
+sha256sum -c orchids-server-linux-amd64.sha256
+file orchids-server-linux-amd64
+chmod +x orchids-server-linux-amd64
+./orchids-server-linux-amd64 --version
 ```
 
-渠道注册表检查使用生成器的 `-check` 模式，只比较生成结果，不会重写工作树。
+校验目标架构、版本、commit 与下载摘要。不要用本地打包名称或网页最新版本替代运行进程身份。当前没有把源码 Dockerfile / Compose 作为通用应用发行方式；README 的 Docker 命令只是启动 Redis。
 
-Qoder、WorkBuddy 和 TLS/ALPN 手工探针需同时满足 `-tags live` 与对应显式开关；它们不属于默认 CI。只有明确需要验证真实上游时才运行，Qoder 会使用部署配置及 Redis，聊天探针可能消耗实际额度：
+## 4. 常驻服务与反向代理
 
-```bash
-# Qoder：在部署主机上使用部署配置与账号
-QODER_PROBE=1 go test -tags live ./internal/qoder -run '^TestLiveProbe$' -v -count=1 -timeout 20m
-# WorkBuddy：OAuth bootstrap 不需要账号；聊天/目录检查还需 WB_AUTH_FILE
-WB_LIVE=1 go test -tags live ./internal/workbuddy/live -run '^TestLive_StartAuthLogin$' -v -count=1
-# TLS：显式指定目标；本地 HTTP/2 探针只使用进程内 httptest 服务器
-TLS_PROBE_HOST=api2.qoder.sh:443 go test -tags live ./internal/util -run '^TestTLSALPNToRealHost$' -v -count=1
-TLS_PROBE_H2_LOCAL=1 go test -tags live ./internal/util -run '^TestSharedTransportProtocolAgainstLocalH2$' -v -count=1
+[deploy 目录](../deploy/README.md) 提供 Caddy、nftables 和部署脚本示例，需要核对域名、目录、服务名和现有站点。以下仅说明结构，不代表已创建服务：
+
+```ini
+[Unit]
+Description=API-Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/api-console
+ExecStart=/opt/api-console/orchids-server -config /opt/api-console/config.json
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-仓库附带 [Caddy 与 systemd 主机部署手册](../deploy/README.md) 和 [`scripts/deploy-orchids.sh`](../scripts/deploy-orchids.sh)；这是特定主机环境的示例，应用前请核对地址、路径及防火墙规则。
+使用匹配目录权限的运行用户。普通运行不需要因在线升级功能强制使用 root；只有选用当前在线替换机制时才需满足其资格门槛。
+
+程序监听 :3002，必须以防火墙 / 网络策略阻止绕过反向代理直连。TLS 终止后正确传递协议，trusted_proxies 仅信任真实代理；不可信来源转发头会被清理。
+
+/metrics 默认未包管理认证，不能仅靠管理页密码保护。pprof 在 debug 启动条件下注册，生产尽量关闭诊断。
+
+## 5. 部署脚本的实际范围
+
+`scripts/deploy-orchids.sh` 当前默认为旧部署目录和服务名；使用前显式核对 --install-dir、--service、--binary-name 等参数。
+
+它检查 Linux amd64 ELF、可选校验和、备份、同目录替换、重启及失败回退。**校验和参数是可选的**，不能描述为无条件强制完整发行验证。页面 200 / 301 / 302 与 service active 只证明 HTTP 响应，不校验实际运行映像和业务生成。
+
+部署脚本不等同在线升级守护机制。需要额外完成以下验收，不因脚本显示 healthy 就宣布业务可用。
+
+## 6. 部署后验收
+
+1. systemctl status 确认服务、MainPID、实际 ExecStart。
+2. 核对磁盘文件摘要和 `/proc/<PID>/exe` 的运行映像摘要，避免替换了磁盘但旧进程仍在运行。
+3. 读取二进制 --version 和 /health 的 build，核对 version / commit / build_type。
+4. 本机与公网分别请求 /health，确认代理和防火墙路径。
+5. 登录管理端检查当前配置、账号观察、模型目录和日志采集健康。
+6. 用托管 API Key 请求 /v1/models，再按需要执行一个受控生成请求。
+7. 对流式请求检查终止事件、工具参数和最终状态，而不只看首字节。
+
+真实生成可能消耗额度，需要选择明确账号 / 模型和请求预算。此次文档更新没有执行任何真实生成或部署。
+
+## 7. 备份与恢复
+
+| 对象 | 原因 |
+|---|---|
+| Redis | 账号密文、Key 策略、模型、配置、账本和状态 |
+| 凭据主密钥文件 / 环境来源 | 解密账号；派生网关压缩状态密钥 |
+| 文件配置与服务定义 | 连接信息、启动路径和权限 |
+| 发行二进制与元数据 | 确定可恢复版本及平台 |
+| 升级操作目录 | 回退备份、状态与故障审计 |
+
+先确认当前实际密钥来源，不要备份一个未被使用的默认路径就认为完整。导出账号文件包含凭据，按秘密保管；它不是完整 Redis / Key 账本备份。
+
+恢复时先恢复一致的数据与密钥，检查解密与有效配置，再开放流量。更换 redis_prefix 会让程序读取另一组键；不能把“看不到账号”直接当成数据丢失。二进制回退不自动回退数据库与配置。
+
+## 8. 多实例
+
+共享 Redis、前缀与凭据主密钥，每个副本设置独立 deployment_instance_id。响应历史和桥接压缩续接需要共享存储；内存响应后备不是 Redis 故障替代。
+
+| 状态 | 跨实例情况 |
+|---|---|
+| 账号 / 模型 / Key / 配置 / 响应 | Redis 持久化 |
+| 账号与 Key 并发槽 | 可用 Redis 租约协调 |
+| Grok 部分节奏与冷却 | Redis 共享，故障时部分回退本进程 |
+| 账号事件通知 / 本地客户端缓存 | 单进程 |
+| 进程总并发 / 显式通道准入 | 单进程 |
+| 告警当前触发集合 / 采集健康计数 | 单进程，重启影响状态 |
+| 在线升级互斥 | 当前主机文件锁，不是集群滚动发布 |
+
+不能用单副本 runtime 或 written 计数表示整个集群。配置变化后也要验证每副本实际值。
+
+## 9. 升级与回退
+
+先备份，选择不可变发行版本，校验产物，再更新目标副本。线上验收失败时保留新旧摘要和日志，再决定回退。在线升级资格与恢复详见 [升级手册](online-upgrade.md)。
+
+旧名称迁移需协调源码 import、release ldflags、发行资产、升级选择器、服务路径、脚本和文档。数据 namespace、会话哈希和加密派生域需兼容设计，不做全仓机械替换。

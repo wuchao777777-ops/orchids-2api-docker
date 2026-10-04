@@ -78,21 +78,6 @@ func OwnerHash(ctx context.Context) string {
 	return "anonymous"
 }
 
-// ChatPath maps a Responses endpoint onto the Chat Completions endpoint of the
-// same channel prefix, so "/workbuddy/v1/responses" is served by
-// "/workbuddy/v1/chat/completions" and the channel keeps deciding which
-// upstream pool the request uses. The unified "/v1/responses" keeps its own
-// path, which leaves channel selection to the model.
-func ChatPath(path string) string {
-	trimmed := strings.TrimRight(strings.TrimSpace(path), "/")
-	for _, suffix := range []string{"/responses/compact", "/responses"} {
-		if strings.HasSuffix(trimmed, suffix) {
-			return strings.TrimSuffix(trimmed, suffix) + "/chat/completions"
-		}
-	}
-	return "/v1/chat/completions"
-}
-
 // ResponseIDFromResourcePath reads the response id out of a resource path.
 func ResponseIDFromResourcePath(path string) string {
 	marker := "/responses/"

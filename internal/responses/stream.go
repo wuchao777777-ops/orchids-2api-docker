@@ -24,14 +24,6 @@ type chatResponseItem struct {
 	closed    bool
 }
 
-// WriteStreamFromChatReaderWithHook translates chat events into
-// Responses SSE. The optional terminal hook receives the final response object
-// (the one carried by response.completed / failed / incomplete) so a caller
-// that promised to store the response can persist exactly what the client saw.
-func WriteStreamFromChatReaderWithHook(w http.ResponseWriter, request CreateRequest, reader io.Reader, onComplete func(map[string]interface{})) {
-	WriteStreamFromChatReader(w, request, reader, StreamOptions{OnComplete: onComplete})
-}
-
 // chatStreamOptions configures one chat-to-Responses translation.
 type StreamOptions struct {
 	// onComplete receives the terminal response object after it is built.

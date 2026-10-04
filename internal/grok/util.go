@@ -12,29 +12,6 @@ import (
 	"orchids-api/internal/util"
 )
 
-var (
-	allowedMessageRoles = map[string]struct{}{
-		"developer": {},
-		"system":    {},
-		"user":      {},
-		"assistant": {},
-		"tool":      {},
-	}
-	userContentTypes = map[string]struct{}{
-		"text":        {},
-		"image_url":   {},
-		"input_audio": {},
-		"file":        {},
-		// The Anthropic Messages front end lowers its blocks onto this same
-		// validator, so the Responses-shaped parts it produces are valid here
-		// too. Without them a document or a multi-part tool_result is rejected
-		// before the request ever reaches the upstream.
-		"input_text":  {},
-		"input_image": {},
-		"input_file":  {},
-	}
-)
-
 func randomHex(n int) string {
 	if n <= 0 {
 		return ""
