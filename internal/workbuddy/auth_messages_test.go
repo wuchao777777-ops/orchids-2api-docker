@@ -31,6 +31,32 @@ func TestBuildMessages_NormalizesDeveloperRole(t *testing.T) {
 	testutil.Equal(t, messages[0].Content, "stay terse")
 }
 
+func TestBuildMessagesMergesInterleavedSystemWithoutLosingTools(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		System: []prompt.SystemItem{{Type: "text", Text: "first instruction"}},
+		Messages: []prompt.Message{
+			roleMessage(t, "developer", "second instruction"),
+			userMessage(t, "question one"),
+			roleMessage(t, "system", "third instruction"),
+			{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "call-one", Name: "read_file", Input: map[string]interface{}{"path": "file.txt"}}}}},
+			{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "call-one", Content: "file result"}}}},
+			userMessage(t, "question two"),
+		},
+	}
+	messages := buildMessages(req)
+	if len(messages) != 5 || messages[0].Content != "first instruction\n\nsecond instruction\n\nthird instruction" {
+		t.Fatalf("instructions lost: %#v", messages)
+	}
+	for i, role := range []string{"system", "user", "assistant", "tool", "user"} {
+		if messages[i].Role != role {
+			t.Fatalf("role order: %#v", messages)
+		}
+	}
+	if messages[2].ToolCalls[0].ID != "call-one" || messages[3].ToolCallID != "call-one" || messages[3].Content != "file result" {
+		t.Fatal("tool association lost")
+	}
+}
+
 func TestBuildMessages_KeepsSystemItemsAndToolResults(t *testing.T) {
 	t.Parallel()
 
@@ -148,4 +174,82 @@ func TestBuildMessages_DefaultSystemPromptOnly(t *testing.T) {
 	testutil.Equal(t, messages[0].Role, "system")
 	testutil.Equal(t, messages[0].Content, defaultSystem)
 	testutil.Equal(t, messages[1].Role, "user")
+}
+
+func TestBuildMessagesFiltersClientIdentityAcrossSystemForms(t *testing.T) {
+	t.Parallel()
+	const instructions = "You are Codex, based on GPT-5.\r\n" +
+		"Keep the user's changes.\r\n" +
+		"x-anthropic-billing-header: cc_version=test\r\n" +
+		"You are Claude Code, Anthropic's official CLI for Claude.\r\n" +
+		"Run the relevant tests."
+	const want = "Keep the user's changes.\r\nRun the relevant tests."
+	for _, form := range []string{"system_items", "system_string", "developer_string", "system_blocks", "developer_blocks"} {
+		t.Run(form, func(t *testing.T) {
+			req := upstream.UpstreamRequest{Messages: []prompt.Message{userMessage(t, "hello")}}
+			switch form {
+			case "system_items":
+				req.System = []prompt.SystemItem{{Type: "text", Text: instructions}}
+			case "system_string", "developer_string":
+				role := strings.TrimSuffix(form, "_string")
+				req.Messages = append([]prompt.Message{roleMessage(t, role, instructions)}, req.Messages...)
+			default:
+				role := strings.TrimSuffix(form, "_blocks")
+				req.Messages = append([]prompt.Message{{Role: role, Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "text", Text: "  yOu ArE cOdEx.  "},
+					{Type: "text", Text: instructions},
+				}}}}, req.Messages...)
+			}
+			messages := buildMessages(req)
+			testutil.Equal(t, len(messages), 2)
+			testutil.Equal(t, messages[0].Role, "system")
+			testutil.Equal(t, messages[0].Content, want)
+			testutil.Equal(t, messages[1].Content, "hello")
+		})
+	}
+}
+
+func TestFilterClientSystemTextPreservesRulesAfterCodexIdentity(t *testing.T) {
+	t.Parallel()
+	for _, identity := range []string{
+		"You are Codex, based on GPT-5.1. ",
+		"You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open source project led by OpenAI. ",
+	} {
+		const rule = "You are expected to be precise, safe, and helpful. Keep the user's changes."
+		testutil.Equal(t, filterClientSystemText(identity+rule), rule)
+	}
+	const context = "<app-context>\n# Codex desktop context\n- You are running inside the Codex (desktop) app, which allows some additional features not available in the CLI alone:\nUse mcp__codex_app__open_in_codex and codex://review.\nRead C:/Users/example/.codex/skills/SKILL.md.\n</app-context>"
+	const want = "<app-context>\n# Desktop context\n- The desktop app provides the following additional features:\nUse mcp__codex_app__open_in_codex and codex://review.\nRead C:/Users/example/.codex/skills/SKILL.md.\n</app-context>"
+	testutil.Equal(t, filterClientSystemText(context), want)
+	const explanation = "Within this context, Codex refers to the open-source agentic coding interface (not the old Codex language model built by OpenAI).\nFollow project rules."
+	testutil.Equal(t, filterClientSystemText(explanation), "Follow project rules.")
+}
+
+func TestBuildMessagesCodexMarkerFallbackAndHistoryPreservation(t *testing.T) {
+	t.Parallel()
+	const marker = "You are Codex."
+	messages := buildMessages(upstream.UpstreamRequest{
+		System: []prompt.SystemItem{{Type: "text", Text: marker}},
+		Messages: []prompt.Message{
+			userMessage(t, marker),
+			{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+				{Type: "text", Text: marker},
+				{Type: "tool_use", ID: "call-codex", Name: "read_file", Input: map[string]interface{}{"path": "README.md"}},
+			}}},
+			{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+				{Type: "tool_result", ToolUseID: "call-codex", Content: marker},
+				{Type: "text", Text: marker},
+			}}},
+		},
+	})
+	testutil.Equal(t, len(messages), 5)
+	testutil.Equal(t, messages[0].Content, defaultSystem)
+	for _, message := range messages[1:] {
+		testutil.Equal(t, message.Content, marker)
+	}
+	testutil.Equal(t, messages[2].ToolCalls[0].ID, messages[3].ToolCallID)
+	for _, ordinary := range []string{"Use Codex conventions.\r\nKeep this spacing.  ", "You are Codexify, a helper.", "Explain why `You are Codex` appears in requests."} {
+		got := buildMessages(upstream.UpstreamRequest{System: []prompt.SystemItem{{Type: "text", Text: ordinary}}})
+		testutil.Equal(t, got[0].Content, ordinary)
+	}
 }

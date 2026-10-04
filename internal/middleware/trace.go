@@ -407,7 +407,7 @@ func requestChannel(path string) string {
 		}
 	}
 	switch endpoint {
-	case "messages", "chat/completions":
+	case "messages", "chat/completions", "responses", "responses/compact":
 		if channelName != "" {
 			return channelName
 		}

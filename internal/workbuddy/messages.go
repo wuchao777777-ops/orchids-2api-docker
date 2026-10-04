@@ -40,6 +40,19 @@ type ToolCallFunction struct {
 var (
 	anthropicBillingHeaderPattern = regexp.MustCompile(`(?i)^x-[a-z0-9-]*billing-header\s*:`)
 	anthropicCLIIdentityPattern   = regexp.MustCompile(`(?i)^you are claude code\b`)
+	codexCLIIdentityPattern       = regexp.MustCompile(`(?i)^[ \t]*you are codex\b(?:[^.!?\r\n]|\.[0-9])*(?:[.!?][ \t]*|$)`)
+	codexCLIRuntimePattern        = regexp.MustCompile(`(?i)^[ \t]*you are a coding agent running in the codex cli\b[^.!?\r\n]*(?:[.!?][ \t]*|$)`)
+)
+
+// These are literal client boilerplate, not a general replacement of product
+// names. Paths, tool names, links, skills and project instructions keep their
+// original meaning and spelling.
+var codexSystemBoilerplate = strings.NewReplacer(
+	"Codex CLI is an open source project led by OpenAI. ", "",
+	"Codex CLI is an open source project led by OpenAI.", "",
+	"Within this context, Codex refers to the open-source agentic coding interface (not the old Codex language model built by OpenAI).", "",
+	"# Codex desktop context", "# Desktop context",
+	"You are running inside the Codex (desktop) app, which allows some additional features not available in the CLI alone:", "The desktop app provides the following additional features:",
 )
 
 // isAnthropicClientMarker reports whether a system block is first-party client
@@ -53,6 +66,37 @@ func isAnthropicClientMarker(text string) bool {
 		anthropicCLIIdentityPattern.MatchString(trimmed)
 }
 
+// filterClientSystemText removes known client identity sentences, not the whole
+// instruction block. Responses instructions can contain the Codex identity and
+// all of the task's working rules in a single string. Preserve non-marker lines
+// byte-for-byte, including their line endings, and never apply this to history
+// from users, assistants or tools.
+func filterClientSystemText(text string) string {
+	var out strings.Builder
+	changed := false
+	for _, line := range strings.SplitAfter(text, "\n") {
+		if isAnthropicClientMarker(line) {
+			changed = true
+			continue
+		}
+		cleaned := codexCLIIdentityPattern.ReplaceAllString(line, "")
+		cleaned = codexCLIRuntimePattern.ReplaceAllString(cleaned, "")
+		cleaned = codexSystemBoilerplate.Replace(cleaned)
+		if cleaned != line {
+			changed = true
+			// A removed marker-only line must not create an empty system block.
+			if strings.TrimSpace(cleaned) == "" {
+				continue
+			}
+		}
+		out.WriteString(cleaned)
+	}
+	if !changed {
+		return text
+	}
+	return out.String()
+}
+
 // buildMessages renders the request history. WorkBuddy validates roles against
 // a whitelist and requires messages[0] to be a system message, so system items
 // are emitted first, tool results become `tool` messages, and a minimal system
@@ -63,11 +107,11 @@ func buildMessages(req upstream.UpstreamRequest) []ChatMessage {
 	pendingToolCalls := make(map[string]bool)
 
 	for _, item := range req.System {
-		text := strings.TrimSpace(item.Text)
-		if text == "" || isAnthropicClientMarker(text) {
+		text := filterClientSystemText(item.Text)
+		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		out = append(out, ChatMessage{Role: "system", Content: item.Text})
+		out = append(out, ChatMessage{Role: "system", Content: text})
 	}
 
 	for _, msg := range req.Messages {
@@ -83,12 +127,12 @@ func buildMessages(req upstream.UpstreamRequest) []ChatMessage {
 
 		if msg.Content.IsString() {
 			text := msg.Content.GetText()
+			if role == "system" {
+				text = filterClientSystemText(text)
+			}
 			if strings.TrimSpace(text) == "" {
 				// An empty text message carries nothing for the upstream and
 				// trips its role/content validation.
-				continue
-			}
-			if role == "system" && isAnthropicClientMarker(text) {
 				continue
 			}
 			out = append(out, ChatMessage{Role: role, Content: text, ReasoningContent: reasoningForReplay(msg)})
@@ -112,10 +156,27 @@ func buildMessages(req upstream.UpstreamRequest) []ChatMessage {
 		}
 		out = append(out, ChatMessage{Role: "user", Content: prompt})
 	}
-	if !strings.EqualFold(strings.TrimSpace(out[0].Role), "system") {
+	hasSystem := false
+	for _, message := range out {
+		hasSystem = hasSystem || message.Role == "system"
+	}
+	if !hasSystem {
 		out = append([]ChatMessage{{Role: "system", Content: defaultSystem}}, out...)
 	}
-	return out
+	// WorkBuddy chat compatibility uses one leading system message. Preserve
+	// each system/developer block in encounter order, and leave the relative
+	// order and call identities of user/assistant/tool messages untouched.
+	var system []string
+	normalized := make([]ChatMessage, 1, len(out))
+	for _, message := range out {
+		if message.Role == "system" {
+			system = append(system, message.Content)
+			continue
+		}
+		normalized = append(normalized, message)
+	}
+	normalized[0] = ChatMessage{Role: "system", Content: strings.Join(system, "\n\n")}
+	return normalized
 }
 
 func reasoningForReplay(msg prompt.Message) string {
@@ -180,8 +241,12 @@ func convertBlockMessage(role string, msg prompt.Message, pendingToolCalls map[s
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
-			if strings.TrimSpace(block.Text) != "" {
-				pending = append(pending, block.Text)
+			text := block.Text
+			if role == "system" {
+				text = filterClientSystemText(text)
+			}
+			if strings.TrimSpace(text) != "" {
+				pending = append(pending, text)
 			}
 		case "tool_result":
 			flush()

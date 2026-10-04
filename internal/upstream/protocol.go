@@ -35,9 +35,8 @@ func (r UpstreamRequest) ValidateProtocolControls(provider string) error {
 			return fmt.Errorf("unsupported response format type %q", format["type"])
 		}
 	}
-	if provider == "qoder" && strings.TrimSpace(r.PromptCacheKey) != "" {
-		return fmt.Errorf("qoder does not support prompt_cache_key")
-	}
+	// Qoder has no wire field for this optional cache hint. Its request
+	// builder omits it; a cache selection hint must not reject generation.
 	return nil
 }
 

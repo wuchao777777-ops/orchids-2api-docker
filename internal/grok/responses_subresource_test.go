@@ -265,8 +265,8 @@ func TestResponsesBridgeForwardsTextFormatAndInclude(t *testing.T) {
 		t.Fatalf("response_format = %#v, want the text.format object", inner["response_format"])
 	}
 	include, _ := inner["include"].([]interface{})
-	testutil.Equal(t, len(include), 1)
-	testutil.Equal(t, include[0], "reasoning.encrypted_content")
+	testutil.Equal(t, len(include), 0)
+	testutil.True(t, rec.Header().Get("X-Grok2API-Compatibility-Warnings") != "", "missing encrypted reasoning compatibility warning")
 	text, _ := inner["text"].(map[string]interface{})
 	testutil.Falsef(t, text == nil, "text controls were dropped: %#v", inner)
 }

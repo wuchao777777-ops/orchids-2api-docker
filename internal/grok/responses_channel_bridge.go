@@ -123,6 +123,45 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		if !requireAPIKeyModel(w, r, req.Model) {
 			return
 		}
+		// This is an optional request for an output projection, not encrypted
+		// input. Chat backends cannot supply portable encrypted reasoning.
+		include := make([]string, 0, len(req.Include))
+		for _, field := range req.Include {
+			if field == "reasoning.encrypted_content" {
+				w.Header().Set("X-Grok2API-Compatibility-Warnings", "chat bridge does not produce encrypted reasoning content")
+				continue
+			}
+			include = append(include, field)
+		}
+		req.Include = include
+		// The caller explicitly selected chat compatibility without hosted
+		// search. Do not advertise a client function that Codex cannot execute.
+		tools := make([]map[string]interface{}, 0, len(req.Tools))
+		searchDisabled := false
+		for _, tool := range req.Tools {
+			kind, _ := tool["type"].(string)
+			if kind == "web_search" || kind == "web_search_preview" || kind == "web_search_preview_2025_03_11" {
+				searchDisabled = true
+				continue
+			}
+			tools = append(tools, tool)
+		}
+		if searchDisabled {
+			if choice, ok := req.ToolChoice.(string); ok && choice == "required" && len(tools) == 0 {
+				writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "web search is disabled for chat bridge; no executable required tool remains")
+				return
+			}
+			if choice, ok := req.ToolChoice.(map[string]interface{}); ok {
+				kind, _ := choice["type"].(string)
+				if strings.HasPrefix(kind, "web_search") {
+					writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "web search is disabled for chat bridge; a forced search cannot be fulfilled")
+					return
+				}
+			}
+			w.Header().Add("X-Grok2API-Compatibility-Warnings", "web search disabled for chat bridge")
+			req.Instructions += "\nHosted web search is unavailable for this request. Do not claim to search the web or invent search results."
+		}
+		req.Tools = tools
 		// The bridge can always persist a response, streamed or not, because it
 		// writes the terminal object the client saw rather than the raw stream.
 		if err := validateResponsesCompatibilityFor(req, true); err != nil {

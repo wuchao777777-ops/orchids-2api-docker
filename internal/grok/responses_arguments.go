@@ -225,5 +225,33 @@ func normalizeAliasedFunctionArguments(name, arguments string, aliases map[strin
 	if schema == nil {
 		return arguments, false
 	}
+	// Codex advertises these controls as number, but its Rust executor decodes
+	// them as unsigned integers. Use a private schema overlay; do not mutate
+	// the caller's declaration or round genuinely fractional values.
+	if identity.Name == "exec_command" || identity.Name == "write_stdin" {
+		properties, _ := schema["properties"].(map[string]interface{})
+		copySchema := make(map[string]interface{}, len(schema))
+		for key, value := range schema {
+			copySchema[key] = value
+		}
+		copyProperties := make(map[string]interface{}, len(properties))
+		for key, value := range properties {
+			copyProperties[key] = value
+		}
+		for _, key := range []string{"max_output_tokens", "yield_time_ms"} {
+			property, ok := properties[key].(map[string]interface{})
+			if !ok || property["type"] != "number" {
+				continue
+			}
+			copyProperty := make(map[string]interface{}, len(property))
+			for field, value := range property {
+				copyProperty[field] = value
+			}
+			copyProperty["type"] = "integer"
+			copyProperties[key] = copyProperty
+		}
+		copySchema["properties"] = copyProperties
+		schema = copySchema
+	}
 	return normalizeFunctionArguments(arguments, schema)
 }

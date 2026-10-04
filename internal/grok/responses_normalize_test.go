@@ -1,11 +1,39 @@
 package grok
 
 import (
+	"encoding/json"
 	"fmt"
 	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
 )
+
+func TestBuildFunctionRootPreservesReferencedUnions(t *testing.T) {
+	for _, keyword := range []string{"oneOf", "anyOf"} {
+		schema := map[string]interface{}{
+			"type":  "object",
+			"$defs": map[string]interface{}{"view": map[string]interface{}{"type": "object", "required": []interface{}{"id"}}, "update": map[string]interface{}{"oneOf": []interface{}{map[string]interface{}{"type": "object"}, map[string]interface{}{}}}},
+			keyword: []interface{}{map[string]interface{}{"$ref": "#/$defs/view"}, map[string]interface{}{"$ref": "#/$defs/update"}},
+			"allOf": []interface{}{map[string]interface{}{"required": []interface{}{"mode"}}},
+		}
+		before, _ := json.Marshal(schema)
+		out := normalizeBuildFunctionRoot(schema)
+		if out["type"] != "object" || out[keyword] != nil {
+			t.Fatalf("root still exposes union: %v", out)
+		}
+		parts := out["allOf"].([]interface{})
+		if len(parts) != 2 || !mapsEqualJSON(parts[1].(map[string]interface{}), map[string]interface{}{keyword: schema[keyword]}) || !mapsEqualJSON(out["$defs"].(map[string]interface{}), schema["$defs"].(map[string]interface{})) {
+			t.Fatal("union or references changed")
+		}
+		after, _ := json.Marshal(schema)
+		if string(before) != string(after) {
+			t.Fatal("caller schema mutated")
+		}
+		if !mapsEqualJSON(out, normalizeBuildFunctionRoot(out)) {
+			t.Fatal("normalization not idempotent")
+		}
+	}
+}
 
 func TestBuildResponsesNormalizerFlattensNamespaceAndNullableRoot(t *testing.T) {
 	payload := map[string]interface{}{

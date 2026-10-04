@@ -174,6 +174,24 @@ func normalizeBuildFunctionRoot(schema map[string]interface{}) map[string]interf
 			}
 		}
 	}
+	// Build requires a visibly object-shaped function root and rejects root
+	// unions before resolving their refs. For an already object-constrained
+	// root, moving each union into an allOf conjunct is logically equivalent:
+	// every object must still satisfy the exact original union and its refs.
+	// Keep $defs at the same document root so reference locations stay valid.
+	if out["type"] == "object" {
+		conjuncts, _ := out["allOf"].([]interface{})
+		conjuncts = append([]interface{}(nil), conjuncts...)
+		for _, keyword := range []string{"anyOf", "oneOf"} {
+			if branches, exists := out[keyword]; exists {
+				conjuncts = append(conjuncts, map[string]interface{}{keyword: branches})
+				delete(out, keyword)
+			}
+		}
+		if len(conjuncts) > 0 {
+			out["allOf"] = conjuncts
+		}
+	}
 	return out
 }
 

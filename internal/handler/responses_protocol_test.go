@@ -32,7 +32,7 @@ func TestResponsesControlsReachRealSharedHandler(t *testing.T) {
 }
 
 func TestUnsupportedResponsesControlsFailBeforeUpstream(t *testing.T) {
-	for _, extra := range []string{`"include":["reasoning.encrypted_content"]`, `"x_responses_tools":[{"type":"web_search"}]`, `"text":{"verbosity":"high"}`, `"mcp_servers":[{"name":"s","url":"https://example.test"}]`, `"prompt_cache_key":"session"`} {
+	for _, extra := range []string{`"include":["reasoning.encrypted_content"]`, `"x_responses_tools":[{"type":"web_search"}]`, `"text":{"verbosity":"high"}`, `"mcp_servers":[{"name":"s","url":"https://example.test"}]`} {
 		h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
 		client := &relayRecordingClient{}
 		h.client = client
@@ -41,5 +41,16 @@ func TestUnsupportedResponsesControlsFailBeforeUpstream(t *testing.T) {
 		if w.Code != 400 || len(client.requests) != 0 {
 			t.Fatalf("extra=%s status=%d calls=%d body=%s", extra, w.Code, len(client.requests), w.Body.String())
 		}
+	}
+}
+
+func TestQoderCacheHintDoesNotBlockSharedHandler(t *testing.T) {
+	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
+	client := &relayRecordingClient{}
+	h.client = client
+	w := httptest.NewRecorder()
+	h.HandleMessages(w, httptest.NewRequest(http.MethodPost, "/qoder/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"session"}`)))
+	if w.Code != 200 || len(client.requests) != 1 {
+		t.Fatalf("cache hint rejected: status=%d calls=%d", w.Code, len(client.requests))
 	}
 }

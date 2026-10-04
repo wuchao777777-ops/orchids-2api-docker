@@ -25,7 +25,11 @@ func TestProtocolControlsInWireParameters(t *testing.T) {
 		t.Fatalf("format lost: %s", decoded)
 	}
 	req.PromptCacheKey = "cache"
-	if _, err := buildChatBodyProfile(req, modelEntry{Key: "m"}, "s", "r", "set", "1", "user", "product"); err == nil {
-		t.Fatal("unsupported cache key accepted")
+	withHint, err := buildChatBodyProfile(req, modelEntry{Key: "m"}, "s", "r", "set", "1", "user", "product")
+	if err != nil {
+		t.Fatalf("optional cache hint rejected: %v", err)
+	}
+	if string(withHint) != string(raw) {
+		t.Fatal("ignored cache hint changed Qoder wire request")
 	}
 }
