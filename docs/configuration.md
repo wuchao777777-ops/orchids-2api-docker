@@ -71,8 +71,8 @@ Windows 用 `Copy-Item config.example.json config.json`。JSON 是推荐格式�
 | `concurrency_limit` | 100 | 1000000；进程总准入，满时立即拒绝 |
 | `provider_concurrency_limits` | 未配置 | 显式通道入口的本进程并发；非正关闭该限制 |
 | `stream_flush_interval_ms` | 有效值 2 毫秒 | 最大 20；负值关闭合并刷新 |
-| `upstream_max_conns_per_host` | 由传输层处理 | HTTP 连接配额，不等同账号槽 |
-| `upstream_max_idle_conns_per_host` | 由传输层处理 | 空闲连接复用 |
+| `upstream_max_conns_per_host` | 由传输层处理 | HTTP 连接配额，不等同账号槽；浏览器 HTTP/2 同时限制在途请求，等待可取消 |
+| `upstream_max_idle_conns_per_host` | 由传输层处理 | 标准 HTTP 空闲连接复用；浏览器 HTTP/2 每主机复用连接，闲置 90 秒回收 |
 
 另有 Key 并发和账号并发限制，它们与进程准入叠加。总超时、入口超时、上游 HTTP 期限、流空闲及边缘代理超时是不同层次，最终由最先触发者决定。
 
@@ -122,7 +122,7 @@ Grok 语义空闲按有效生成事件衡量，keepalive 不延长时钟；下�
 
 ## 9. 代理与缓存
 
-`proxy_url` 为通用代理，`proxy_http` / `proxy_https` 为分离配置，另有 proxy_user / proxy_pass / proxy_bypass。实际优先级与环境代理回退由 [proxy 实现](../internal/httpclient/proxy.go) 决定；不要以 UI 的“直连”文字替代真实请求路径证据。
+`proxy_url` 为通用代理，`proxy_http` / `proxy_https` 为分离配置，另有 proxy_user / proxy_pass / proxy_bypass。实际优先级与环境代理回退由 [proxy 实现](../internal/httpclient/proxy.go) 决定；不要以 UI 的“直连”文字替代真实请求路径证据。代理字段在文件加载、Redis 配置恢复和管理端保存时校验，无效值会被拒绝，不会静默直连；HTTP、HTTPS、SOCKS5 与 SOCKS5H 均可作为通用上游代理，Grok browser transport 也支持 HTTPS CONNECT 代理。
 
 `cache_strategy` 默认 mix，用于请求中的真实上游缓存提示。它不提供本地答案缓存，不保证上游命中，不删除重复用户输入。Qoder 没有等价缓存 key 字段时省略该提示。
 
