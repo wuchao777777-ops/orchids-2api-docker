@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/chatwire"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ func TestBuildChatAppliesSelectedAccountReasoningProfile(t *testing.T) {
 			h.cliClient = NewCLIClient(h.cfg)
 			h.cliClient.httpClient = upstream.Client()
 			h.cliClient.oauth.httpClient = upstream.Client()
-			req := ChatCompletionsRequest{Model: model, Messages: []ChatMessage{{Role: "user", Content: "hello"}}}
+			req := chatwire.Request{Model: model, Messages: []chatwire.Message{{Role: "user", Content: "hello"}}}
 			if tc.requested != "" {
 				req.ReasoningEffort = &tc.requested
 			}
@@ -114,7 +115,7 @@ func TestBuildExplicitNoneUsesLowestCompatibleEffort(t *testing.T) {
 			}
 			testutil.NoError(t, err)
 			reasoning := payload["reasoning"].(map[string]interface{})
-			got := interfaceString(reasoning["effort"])
+			got := chatwire.ParseLooseStringAny(reasoning["effort"])
 			testutil.Falsef(t, !strings.EqualFold(got, tc.want), "effort=%q want=%q", got, tc.want)
 			testutil.False(t, reasoning["summary"] != "auto" || source["reasoning"].(map[string]interface{})["effort"] != " NONE ", "summary or immutable source changed")
 		})

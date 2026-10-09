@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"orchids-api/internal/chatwire"
+	"orchids-api/internal/responses"
+	"orchids-api/internal/util"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -95,7 +98,7 @@ type responseReasoningState struct {
 // buffers frames, and the classifier decides after every content event whether
 // to release them (deliver), keep waiting, or drop them and let the caller retry
 // on another account (withhold). A nil hold keeps the plain streaming path.
-func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader, hold *buildQualityHold) (outcome chatOutcome) {
+func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *chatwire.Request, body io.Reader, hold *buildQualityHold) (outcome chatOutcome) {
 	outcomeStarted := time.Now()
 	if hold != nil {
 		// The hold reads this stream's own accounting, so point it at the outcome
@@ -108,7 +111,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 		outcome.Quality.Terminal = outcome.Err == nil
 		if outcome.Usage != nil {
 			if details, _ := outcome.Usage["completion_tokens_details"].(map[string]interface{}); details != nil {
-				outcome.Quality.ReasoningTokens = int64(interfaceToInt(details["reasoning_tokens"]))
+				outcome.Quality.ReasoningTokens = int64(responses.InterfaceToInt(details["reasoning_tokens"]))
 			}
 		}
 	}()
@@ -136,7 +139,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 		}
 		return hold.writer.Commit()
 	}
-	id, created := "chatcmpl_"+randomHex(8), time.Now().Unix()
+	id, created := "chatcmpl_"+util.RandomHex(8), time.Now().Unix()
 	var text, reasoning, refusal strings.Builder
 	tools := map[string]*responseToolState{}
 	byCall := map[string]*responseToolState{}
@@ -221,7 +224,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 		return emit(map[string]interface{}{"tool_calls": []map[string]interface{}{{"index": tc.index, "function": map[string]interface{}{"arguments": value}}}}, "", nil)
 	}
 	toolItem := func(item, ev map[string]interface{}) error {
-		itemID, callID, name := strings.TrimSpace(streamString(item["id"])), strings.TrimSpace(streamString(item["call_id"])), strings.TrimSpace(streamString(item["name"]))
+		itemID, callID, name := strings.TrimSpace(responses.StreamString(item["id"])), strings.TrimSpace(responses.StreamString(item["call_id"])), strings.TrimSpace(responses.StreamString(item["name"]))
 		if callID == "" {
 			callID = itemID
 		}
@@ -241,10 +244,10 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 			tools[itemID], byCall[callID] = tc, tc
 			ordered = append(ordered, tc)
 			if index, exists := ev["output_index"]; exists {
-				if prior := byIndex[interfaceToInt(index)]; prior != nil && prior != tc {
+				if prior := byIndex[responses.InterfaceToInt(index)]; prior != nil && prior != tc {
 					return fmt.Errorf("upstream output_index reused by different tools")
 				}
-				byIndex[interfaceToInt(index)] = tc
+				byIndex[responses.InterfaceToInt(index)] = tc
 			}
 			if err := emit(map[string]interface{}{"tool_calls": []map[string]interface{}{{"index": tc.index, "id": callID, "type": "function", "function": map[string]interface{}{"name": name, "arguments": ""}}}}, "", nil); err != nil {
 				return err
@@ -289,7 +292,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 		outcome.Quality.ReasoningChars += int64(len(value))
 		return emit(map[string]interface{}{"reasoning_content": value, "reasoning_item_id": state.key}, "", nil)
 	}
-	err := readResponseSSE(body, func(event, data string) error {
+	err := responses.ReadSSE(body, func(event, data string) error {
 		if withheld {
 			return errQualityWithheld
 		}
@@ -301,11 +304,11 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 		}
 		var ev map[string]interface{}
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			return fmt.Errorf("Build stream parse error: %w", err)
+			return fmt.Errorf("build stream parse error: %w", err)
 		}
-		kind := firstNonEmpty(interfaceString(ev["type"]), event)
+		kind := util.FirstNonEmpty(chatwire.ParseLooseStringAny(ev["type"]), event)
 		if kind == "error" || kind == "response.failed" {
-			return responseFailure(ev)
+			return responses.Failure(ev)
 		}
 		if terminal {
 			return nil
@@ -319,13 +322,13 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 		if kind == "response.output_item.done" && item != nil {
 			// Accumulate the portable items so the next turn can replay the whole
 			// completed turn, not just its opaque reasoning cipher.
-			switch interfaceString(item["type"]) {
+			switch chatwire.ParseLooseStringAny(item["type"]) {
 			case "reasoning", "message", "function_call", "custom_tool_call":
 				replayItems = append(replayItems, item)
 			}
 		}
 		if kind == "response.output_item.added" || kind == "response.output_item.done" {
-			switch interfaceString(item["type"]) {
+			switch chatwire.ParseLooseStringAny(item["type"]) {
 			case "function_call":
 				if filter.matched == "" {
 					return toolItem(item, ev)
@@ -340,7 +343,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 				if hold != nil {
 					hold.markReasoningStarted()
 				}
-				key := interfaceString(item["id"])
+				key := chatwire.ParseLooseStringAny(item["id"])
 				if filter.matched != "" {
 					return nil
 				}
@@ -359,7 +362,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 						}
 					}
 				}
-				if signature := streamString(item["encrypted_content"]); signature != "" && signature != state.signature {
+				if signature := responses.StreamString(item["encrypted_content"]); signature != "" && signature != state.signature {
 					outcome.Quality.EncryptedChars = int64(len(signature))
 					state.signature = signature
 					lastSignature = signature
@@ -377,11 +380,11 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 			if filter.matched != "" {
 				return nil
 			}
-			itemID := interfaceString(ev["item_id"])
+			itemID := chatwire.ParseLooseStringAny(ev["item_id"])
 			tc := tools[itemID]
 			if tc == nil && itemID == "" {
 				if index, exists := ev["output_index"]; exists {
-					tc = byIndex[interfaceToInt(index)]
+					tc = byIndex[responses.InterfaceToInt(index)]
 				}
 			}
 			if tc == nil {
@@ -402,7 +405,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 			if strings.Contains(kind, "summary") {
 				source = "summary"
 			}
-			return emitThought(interfaceString(ev["item_id"]), source, value)
+			return emitThought(chatwire.ParseLooseStringAny(ev["item_id"]), source, value)
 		}
 		if kind == "response.output_text.delta" && filter.matched == "" {
 			sawText = true
@@ -410,27 +413,27 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 			return emitText(filter.push(value, false))
 		}
 		if kind == "response.refusal.delta" && filter.matched == "" {
-			value := streamString(ev["delta"])
+			value := responses.StreamString(ev["delta"])
 			refusal.WriteString(value)
 			return emit(map[string]interface{}{"refusal": value}, "", nil)
 		}
 		if kind == "response.completed" || kind == "response.incomplete" {
 			response, _ := ev["response"].(map[string]interface{})
-			terminalFinish, err := responseTerminalFinish(kind, response)
+			terminalFinish, err := responses.TerminalFinish(kind, response)
 			if err != nil {
 				return err
 			}
 			finish = terminalFinish
-			for _, raw := range interfaceSlice(response["output"]) {
+			for _, raw := range responses.InterfaceSlice(response["output"]) {
 				entry, _ := raw.(map[string]interface{})
 				if filter.matched != "" {
 					continue
 				}
-				switch interfaceString(entry["type"]) {
+				switch chatwire.ParseLooseStringAny(entry["type"]) {
 				case "reasoning":
-					key := interfaceString(entry["id"])
+					key := chatwire.ParseLooseStringAny(entry["id"])
 					state := thought(key)
-					signature := interfaceString(entry["encrypted_content"])
+					signature := chatwire.ParseLooseStringAny(entry["encrypted_content"])
 					if signature != "" {
 						lastSignature = signature
 					}
@@ -464,7 +467,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 			}
 			// Some compatible servers only provide a final output snapshot.
 			if refusal.Len() == 0 && filter.matched == "" {
-				if value := consoleExtractRefusal(response); value != "" {
+				if value := responses.ExtractRefusal(response); value != "" {
 					refusal.WriteString(value)
 					if err := emit(map[string]interface{}{"refusal": value}, "", nil); err != nil {
 						return err
@@ -493,7 +496,7 @@ func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatComplet
 		return
 	}
 	if err != nil && err != io.EOF {
-		fail(fmt.Errorf("Build stream read error: %w", err))
+		fail(fmt.Errorf("build stream read error: %w", err))
 		return
 	}
 	if !terminal {

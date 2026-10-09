@@ -1,12 +1,12 @@
-package grok
+package responses
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"orchids-api/internal/dispatch"
+	"time"
+
 	"regexp"
 	"strings"
 	"sync"
@@ -14,7 +14,7 @@ import (
 
 	"encoding/json"
 
-	"orchids-api/internal/middleware"
+	"orchids-api/internal/store"
 	"orchids-api/internal/testutil"
 )
 
@@ -25,9 +25,9 @@ func TestResponsesChatPathMapsTheChannelPrefix(t *testing.T) {
 		"/workbuddy/v1/responses":         "/workbuddy/v1/chat/completions",
 		"/workbuddy/v1/responses/compact": "/workbuddy/v1/chat/completions",
 		"/cline/v1/responses/":            "/cline/v1/chat/completions",
-		"/v1/responses":                   "/v1/chat/completions",
+		"/workbuddy/responses":            "/workbuddy/chat/completions",
 		"  /qoder/v1/responses  ":         "/qoder/v1/chat/completions",
-		"/something/else":                 "/v1/chat/completions",
+		"/something/else":                 "/something/else",
 	}
 	for path, want := range cases {
 		testutil.Equal(t, responsesChatPath(path), want)
@@ -78,7 +78,7 @@ func TestResponsesBridgeStreamNumbersEveryEvent(t *testing.T) {
 
 	var mu sync.Mutex
 	calls := []recordedChatCall{}
-	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu), ResponsesBridgeOptions{})
+	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu), BridgeOptions{})
 
 	req := httptest.NewRequest(http.MethodPost, "/qoder/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"say hi","stream":true}`))
@@ -88,7 +88,7 @@ func TestResponsesBridgeStreamNumbersEveryEvent(t *testing.T) {
 
 	var numbers []int
 	seen := 0
-	if err := consumeCompatibleSSE(strings.NewReader(rec.Body.String()), func(event compatibleSSEEvent) error {
+	if err := ConsumeSSE(strings.NewReader(rec.Body.String()), func(event SSEEvent) error {
 		// The [DONE] terminator is a chat-completions habit, not a Responses
 		// event, so it carries no envelope and no number.
 		if strings.TrimSpace(string(event.Data())) == "[DONE]" {
@@ -122,7 +122,7 @@ func TestResponsesBridgeStreamsChatAsResponses(t *testing.T) {
 
 	var mu sync.Mutex
 	calls := []recordedChatCall{}
-	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu), ResponsesBridgeOptions{})
+	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu), BridgeOptions{})
 
 	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","instructions":"be brief","input":"say hi","stream":true}`))
@@ -157,7 +157,7 @@ func TestResponsesBridgeNonStreamReturnsAResponseObject(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"gpt-5.6-luna","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
 	}
-	bridge := ResponsesBridgeHandler(chat, ResponsesBridgeOptions{})
+	bridge := ResponsesBridgeHandler(chat, BridgeOptions{})
 
 	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"say hi"}`))
@@ -181,7 +181,7 @@ func TestResponsesBridgeForwardsChatErrors(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(w, `{"error":{"message":"model not found","type":"invalid_request_error"}}`)
 	}
-	bridge := ResponsesBridgeHandler(chat, ResponsesBridgeOptions{})
+	bridge := ResponsesBridgeHandler(chat, BridgeOptions{})
 
 	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"does-not-exist","input":"hi","stream":true}`))
@@ -197,7 +197,7 @@ func TestResponsesBridgeRejectsInvalidRequests(t *testing.T) {
 
 	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("inner chat handler must not run for an invalid request")
-	}, ResponsesBridgeOptions{})
+	}, BridgeOptions{})
 
 	for name, body := range map[string]string{
 		"missing_model": `{"input":"hi"}`,
@@ -217,7 +217,7 @@ func TestResponsesBridgeRejectsInvalidRequests(t *testing.T) {
 func TestResponsesBridgeRejectsNonPost(t *testing.T) {
 	t.Parallel()
 
-	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {}, ResponsesBridgeOptions{})
+	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {}, BridgeOptions{})
 	rec := httptest.NewRecorder()
 	bridge(rec, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses", nil))
 	testutil.Equal(t, rec.Code, http.StatusMethodNotAllowed)
@@ -228,7 +228,7 @@ func TestResponsesChannelSubpathServesCompactAndTrailingSlash(t *testing.T) {
 
 	var mu sync.Mutex
 	calls := []recordedChatCall{}
-	handler := ResponsesChannelSubpath(recordingChat(t, &calls, &mu), ResponsesBridgeOptions{})
+	handler := ResponsesChannelSubpath(recordingChat(t, &calls, &mu), BridgeOptions{})
 
 	for name, target := range map[string]string{
 		"trailing_slash": "/qoder/v1/responses/",
@@ -261,7 +261,7 @@ func TestResponsesChannelSubpathReportsUnstoredResponses(t *testing.T) {
 
 	handler := ResponsesChannelSubpath(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("the create handler must not serve a resource path")
-	}, ResponsesBridgeOptions{})
+	}, BridgeOptions{})
 
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/cline/v1/responses/resp_123", nil)
@@ -280,7 +280,7 @@ func TestResponsesChannelSubpathReportsUnstoredResponses(t *testing.T) {
 }
 
 func TestResponsesBridgeStoresAndServesResponses(t *testing.T) {
-	_, s, _ := setupValidationHandler(t)
+	s := store.NewMemoryResponseStore(time.Hour)
 
 	var mu sync.Mutex
 	var chatBodies []map[string]interface{}
@@ -295,9 +295,9 @@ func TestResponsesBridgeStoresAndServesResponses(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","object":"chat.completion","created":1,"model":"gpt-5.6-luna","choices":[{"index":0,"message":{"role":"assistant","content":"stored-answer"},"finish_reason":"stop"}]}`)
 	}
-	opts := ResponsesBridgeOptions{Store: s}
+	opts := BridgeOptions{Store: s}
 	bridge := ResponsesBridgeHandler(chat, opts)
-	resource := ResponsesResourceHandler(opts)
+	resource := ResourceHandler(opts)
 
 	create := httptest.NewRecorder()
 	bridge(create, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
@@ -332,13 +332,13 @@ func TestResponsesBridgeStoresAndServesResponses(t *testing.T) {
 }
 
 func TestResponsesBridgeStoresStreamedResponse(t *testing.T) {
-	_, s, _ := setupValidationHandler(t)
+	s := store.NewMemoryResponseStore(time.Hour)
 
 	var mu sync.Mutex
 	calls := []recordedChatCall{}
-	opts := ResponsesBridgeOptions{Store: s}
+	opts := BridgeOptions{Store: s}
 	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu), opts)
-	resource := ResponsesResourceHandler(opts)
+	resource := ResourceHandler(opts)
 
 	stream := httptest.NewRecorder()
 	bridge(stream, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
@@ -351,108 +351,3 @@ func TestResponsesBridgeStoresStreamedResponse(t *testing.T) {
 	resource(get, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+match[1], nil))
 	testutil.Falsef(t, get.Code != http.StatusOK || !strings.Contains(get.Body.String(), "hello"), "stored streamed response status=%d body=%s", get.Code, get.Body.String())
 }
-
-func TestResponsesDispatcherRoutesByModel(t *testing.T) {
-	t.Parallel()
-
-	nativeCalls := 0
-	bridgedCalls := 0
-	native := func(w http.ResponseWriter, r *http.Request) { nativeCalls++; _, _ = io.WriteString(w, "native") }
-	bridged := func(w http.ResponseWriter, r *http.Request) { bridgedCalls++; _, _ = io.WriteString(w, "bridged") }
-	dispatch := ModelDispatcher(native, bridged, func(_ context.Context, model string) (bool, error) {
-		return strings.HasPrefix(strings.ToLower(model), "grok-"), nil
-	})
-
-	call := func(method, target, body string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		dispatch(rec, httptest.NewRequest(method, target, strings.NewReader(body)))
-		return rec
-	}
-
-	rec := call(http.MethodPost, "/v1/responses", `{"model":"grok-4.6","input":"hi"}`)
-	testutil.Falsef(t, rec.Body.String() != "native", "grok model routed to %q, want native", rec.Body.String())
-	rec = call(http.MethodPost, "/v1/responses", `{"model":"gpt-5.6-luna","input":"hi"}`)
-	testutil.Falsef(t, rec.Body.String() != "bridged", "non-grok model routed to %q, want bridged", rec.Body.String())
-	rec = call(http.MethodGet, "/v1/responses/resp_1", "")
-	testutil.Falsef(t, rec.Body.String() != "native", "resource request routed to %q, want the native handler", rec.Body.String())
-	testutil.Equal(t, nativeCalls, 2)
-	testutil.Equal(t, bridgedCalls, 1)
-}
-
-// A channel lookup that fails must not be read as "not a Grok model": the
-// bridged handler resolves the channel itself and reports a channel-aware error,
-// while the native handler would answer Grok's misleading "model does not
-// exist" for a model that simply belongs to another channel.
-func TestModelDispatcherSendsLookupFailuresToTheBridgedHandler(t *testing.T) {
-	t.Parallel()
-
-	nativeCalls := 0
-	bridgedCalls := 0
-	native := func(w http.ResponseWriter, r *http.Request) { nativeCalls++; _, _ = io.WriteString(w, "native") }
-	bridged := func(w http.ResponseWriter, r *http.Request) { bridgedCalls++; _, _ = io.WriteString(w, "bridged") }
-	dispatch := ModelDispatcher(native, bridged, func(context.Context, string) (bool, error) {
-		return false, fmt.Errorf("redis unavailable")
-	})
-
-	rec := httptest.NewRecorder()
-	dispatch(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"workbuddy-model","input":"hi"}`)))
-	testutil.Equal(t, rec.Body.String(), "bridged")
-	testutil.Equal(t, nativeCalls, 0)
-	testutil.Equal(t, bridgedCalls, 1)
-}
-
-// The model that decided the routing is published on the context so downstream
-// token accounting and channel resolution reuse it instead of repeating the
-// lookup. The hint box is installed by the tracing middleware before the
-// dispatcher runs, which is what makes the publish visible to the inner handler.
-func TestModelDispatcherPublishesTheResolvedModel(t *testing.T) {
-	t.Parallel()
-
-	var seen string
-	native := func(w http.ResponseWriter, r *http.Request) {}
-	bridged := func(w http.ResponseWriter, r *http.Request) {
-		seen = middleware.RequestModelFromContext(r.Context())
-	}
-	dispatch := ModelDispatcher(native, bridged, func(context.Context, string) (bool, error) {
-		return false, nil
-	})
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"GPT-5-6-SOL","messages":[]}`))
-	ctx, _ := middleware.RequestModelHint(req.Context())
-	dispatch(rec, req.WithContext(ctx))
-	testutil.Equal(t, seen, "GPT-5-6-SOL")
-}
-
-// An unreadable body is a client-side fault; answering from the native handler
-// would blame the model instead.
-func TestModelDispatcherRejectsOversizedBodyBeforeHandler(t *testing.T) {
-	called := false
-	router := ModelDispatcher(func(http.ResponseWriter, *http.Request) { called = true }, func(http.ResponseWriter, *http.Request) { called = true }, nil)
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", io.LimitReader(strings.NewReader(strings.Repeat("x", 1024)), 1024))
-	req.ContentLength = dispatch.MaxBodyBytes + 1
-	rec := httptest.NewRecorder()
-	router(rec, req)
-	testutil.Equal(t, rec.Code, http.StatusRequestEntityTooLarge)
-	testutil.False(t, called, "oversized request reached a downstream handler")
-}
-
-func TestModelDispatcherFailsClosedOnUnreadableBody(t *testing.T) {
-	t.Parallel()
-
-	native := func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "native") }
-	bridged := func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "bridged") }
-	dispatch := ModelDispatcher(native, bridged, func(context.Context, string) (bool, error) {
-		return true, nil
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	req.Body = io.NopCloser(failingReader{})
-	rec := httptest.NewRecorder()
-	dispatch(rec, req)
-	testutil.Equal(t, rec.Code, http.StatusBadRequest)
-}
-
-type failingReader struct{}
-
-func (failingReader) Read([]byte) (int, error) { return 0, fmt.Errorf("boom") }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/responses"
 	"orchids-api/internal/testutil"
 	"strings"
 	"testing"
@@ -13,10 +14,10 @@ import (
 )
 
 func TestResponsesBridgeStreamCompletesAndCloses(t *testing.T) {
-	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {
+	bridge := responses.ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl-test\",\"model\":\"qwen3.8-flash\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
-	}, ResponsesBridgeOptions{})
+	}, responses.BridgeOptions{})
 	server := httptest.NewServer(bridge)
 	defer server.Close()
 	client := &http.Client{Timeout: 2 * time.Second}
@@ -33,12 +34,12 @@ func TestResponsesBridgeStreamCompletesAndCloses(t *testing.T) {
 func TestResponsesBridgePreservesQueueRefusal(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprint(stream), func(t *testing.T) {
-			bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {
+			bridge := responses.ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", "30")
 				w.WriteHeader(http.StatusTooManyRequests)
 				_, _ = w.Write([]byte(`{"error":{"type":"rate_limit_error","message":"upstream queue busy"}}`))
-			}, ResponsesBridgeOptions{})
+			}, responses.BridgeOptions{})
 			req := httptest.NewRequest(http.MethodPost, "/qoder/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"qwen3.8-flash","input":"hi","stream":%v}`, stream)))
 			rec := httptest.NewRecorder()
 			bridge(rec, req)
@@ -54,12 +55,12 @@ func TestResponsesBridgePropagatesQueueCancellation(t *testing.T) {
 			defer cancel()
 			started := make(chan struct{})
 			finished := make(chan struct{})
-			bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {
+			bridge := responses.ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {
 				close(started)
 				<-r.Context().Done()
 				w.WriteHeader(http.StatusServiceUnavailable)
 				_, _ = w.Write([]byte(`{"error":{"message":"request canceled"}}`))
-			}, ResponsesBridgeOptions{})
+			}, responses.BridgeOptions{})
 			req := httptest.NewRequest(http.MethodPost, "/qoder/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"qwen3.8-flash","input":"hi","stream":%v}`, stream))).WithContext(ctx)
 			go func() { defer close(finished); bridge(httptest.NewRecorder(), req) }()
 			select {

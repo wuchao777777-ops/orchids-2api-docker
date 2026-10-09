@@ -4,7 +4,7 @@
 
 **One gateway for WorkBuddy, Qoder, Cline, and Grok Build.**
 
-[![Go](https://img.shields.io/badge/Go-1.26.6%2B-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26.9%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Redis](https://img.shields.io/badge/Redis-required-DC382D?logo=redis&logoColor=white)](config.example.json)
 [![CI](https://github.com/zhangdailin/API-Console/actions/workflows/ci.yml/badge.svg)](https://github.com/zhangdailin/API-Console/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/zhangdailin/API-Console)](https://github.com/zhangdailin/API-Console/releases)
@@ -21,7 +21,7 @@ English | [简体中文](README_CN.md)
 
 API Console is a self-hosted AI API gateway written in Go. It connects multiple upstream accounts to a shared API, with a built-in web console for authorization, account management, model discovery, API keys, and operations monitoring.
 
-Applications can use Claude Messages, OpenAI Chat Completions, or Responses endpoints. The unified `/v1` entry routes requests by model; channel-specific entries give you explicit control over the upstream provider.
+Applications can use Claude Messages, OpenAI Chat Completions, or Responses endpoints. Every inference URL names a provider. Both `/{provider}` and `/{provider}/v1` serve the same endpoints; root and unified `/v1` inference routes return 404.
 
 ## Features
 
@@ -43,7 +43,6 @@ Applications can use Claude Messages, OpenAI Chat Completions, or Responses endp
 | Qoder | Official device authorization | `/qoder/v1` |
 | Cline | WorkOS device authorization | `/cline/v1` |
 | Grok | Build OAuth device authorization | `/grok/v1` |
-| Unified routing | Gateway API key; routes by model | `/v1` |
 
 Grok uses the **Build OAuth CLI upstream**. Available models and capabilities depend on the authorized accounts and their upstream entitlements. Catalog refresh failures preserve previously observed models rather than substituting a built-in model list.
 
@@ -51,7 +50,7 @@ Grok uses the **Build OAuth CLI upstream**. Available models and capabilities de
 
 | Component | Technology |
 |-----------|------------|
-| Backend | Go 1.26.6+, HTTP handlers, provider adapters |
+| Backend | Go 1.26.9+, HTTP handlers, provider adapters |
 | Frontend | Go templates, HTML, CSS, vanilla JavaScript |
 | Storage | Redis for accounts, configuration, API keys, response state, and operational data |
 | Packaging | Single binary with embedded web assets |
@@ -63,7 +62,7 @@ Grok uses the **Build OAuth CLI upstream**. Available models and capabilities de
 
 #### Prerequisites
 
-- Go **1.26.6+**, as specified in [go.mod](go.mod).
+- Go **1.26.9+**, as specified in [go.mod](go.mod).
 - A running Redis instance.
 - Network access to the upstream services you intend to use.
 
@@ -144,7 +143,7 @@ See [Online Upgrade](docs/online-upgrade.md) for eligibility, configuration, and
 
 ## API Usage
 
-Use `http://127.0.0.1:3002/v1` for automatic model routing, or replace `/v1` with a channel prefix.
+Use `http://127.0.0.1:3002/workbuddy/v1`, or choose `/qoder/v1`, `/cline/v1`, or `/grok/v1`. The corresponding unversioned provider bases expose the same endpoints.
 
 | Method | Path relative to the API prefix | Purpose |
 |--------|---------------------------------|---------|
@@ -159,7 +158,7 @@ Grok uses a native Build Responses path; the other channels bridge Responses thr
 ### List Models
 
 ```bash
-curl http://127.0.0.1:3002/v1/models \
+curl http://127.0.0.1:3002/workbuddy/v1/models \
   -H 'Authorization: Bearer <API_KEY>'
 ```
 
@@ -168,7 +167,7 @@ Replace `<API_KEY>` with a key created in the console and `<MODEL_ID>` below wit
 ### Chat Completions
 
 ```bash
-curl http://127.0.0.1:3002/v1/chat/completions \
+curl http://127.0.0.1:3002/workbuddy/v1/chat/completions \
   -H 'Authorization: Bearer <API_KEY>' \
   -H 'Content-Type: application/json' \
   -d '{"model":"<MODEL_ID>","messages":[{"role":"user","content":"Hello!"}],"stream":true}'
@@ -177,7 +176,7 @@ curl http://127.0.0.1:3002/v1/chat/completions \
 ### Claude Messages
 
 ```bash
-curl http://127.0.0.1:3002/v1/messages \
+curl http://127.0.0.1:3002/workbuddy/v1/messages \
   -H 'x-api-key: <API_KEY>' \
   -H 'Content-Type: application/json' \
   -d '{"model":"<MODEL_ID>","max_tokens":256,"messages":[{"role":"user","content":"Hello!"}]}'
@@ -186,7 +185,7 @@ curl http://127.0.0.1:3002/v1/messages \
 ### Responses
 
 ```bash
-curl http://127.0.0.1:3002/v1/responses \
+curl http://127.0.0.1:3002/workbuddy/v1/responses \
   -H 'Authorization: Bearer <API_KEY>' \
   -H 'Content-Type: application/json' \
   -d '{"model":"<MODEL_ID>","input":"Hello!","stream":true}'

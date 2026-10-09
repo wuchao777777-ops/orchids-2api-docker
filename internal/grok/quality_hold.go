@@ -6,6 +6,9 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"orchids-api/internal/chatwire"
+	"orchids-api/internal/responses"
+	"orchids-api/internal/util"
 	"strings"
 	"sync"
 	"time"
@@ -341,7 +344,7 @@ func boundQualityRetry(action qualityRetryAction, hasNextRoutingAttempt bool, on
 // qualityRequestReplayUnsafe reports whether replaying this request on another
 // account could duplicate an external side effect. Detection and penalty still
 // apply to such a request; only the retry is refused.
-func qualityRequestReplayUnsafe(req *ChatCompletionsRequest) bool {
+func qualityRequestReplayUnsafe(req *chatwire.Request) bool {
 	if req == nil {
 		return false
 	}
@@ -349,13 +352,13 @@ func qualityRequestReplayUnsafe(req *ChatCompletionsRequest) bool {
 		return true
 	}
 	for _, tool := range req.ResponsesTools {
-		switch strings.ToLower(strings.TrimSpace(interfaceString(tool["type"]))) {
+		switch strings.ToLower(strings.TrimSpace(chatwire.ParseLooseStringAny(tool["type"]))) {
 		case "", "function", "custom", "local_shell", "apply_patch", "tool_search":
 			// These only ask the model to return a call; the client runs it.
 			continue
 		case "shell":
 			environment, _ := tool["environment"].(map[string]interface{})
-			if strings.ToLower(strings.TrimSpace(interfaceString(environment["type"]))) != "local" {
+			if strings.ToLower(strings.TrimSpace(chatwire.ParseLooseStringAny(environment["type"]))) != "local" {
 				return true
 			}
 		default:
@@ -369,12 +372,12 @@ func qualityRequestReplayUnsafe(req *ChatCompletionsRequest) bool {
 		if declaration == nil {
 			declaration = map[string]interface{}{"type": tool.Type}
 		}
-		switch strings.ToLower(strings.TrimSpace(firstNonEmpty(tool.Type, interfaceString(declaration["type"])))) {
+		switch strings.ToLower(strings.TrimSpace(util.FirstNonEmpty(tool.Type, chatwire.ParseLooseStringAny(declaration["type"])))) {
 		case "", "function", "custom", "local_shell", "apply_patch", "tool_search":
 			continue
 		case "shell":
 			environment, _ := declaration["environment"].(map[string]interface{})
-			if strings.ToLower(strings.TrimSpace(interfaceString(environment["type"]))) != "local" {
+			if strings.ToLower(strings.TrimSpace(chatwire.ParseLooseStringAny(environment["type"]))) != "local" {
 				return true
 			}
 		default:
@@ -648,7 +651,7 @@ func (c *buildQualityHold) signals(terminal bool) qualityStreamSignals {
 		Terminal:         terminal || quality.Terminal,
 		HoldExpired:      c.expired,
 		ReasoningStarted: c.reasoningStarted,
-		OutputTokens:     int64(interfaceToInt(c.outcome.Usage["completion_tokens"])),
+		OutputTokens:     int64(responses.InterfaceToInt(c.outcome.Usage["completion_tokens"])),
 	}
 	sig.HasReasoningDelta = quality.ReasoningChars > 0
 	sig.EncryptedFloor = encryptedThinkingFloor(0, 0, quality.ReasoningTokens)
@@ -708,7 +711,7 @@ func (h *Handler) qualityHoldPolicy() qualityHoldPolicy {
 // hold. Only the two reasoning planes are held: a request that did not ask for
 // reasoning has nothing to be degraded about, and holding a hosted-tool request
 // could only ever refuse a turn whose side effect already happened.
-func (h *Handler) shouldHoldQualityTurn(req *ChatCompletionsRequest, provider string) bool {
+func (h *Handler) shouldHoldQualityTurn(req *chatwire.Request, provider string) bool {
 	if h == nil || req == nil {
 		return false
 	}
@@ -724,7 +727,7 @@ func (h *Handler) shouldHoldQualityTurn(req *ChatCompletionsRequest, provider st
 // The credential penalty is logged and persisted by the guard, but an operator
 // asking "why did this request take two accounts" needs a request-scoped row. A
 // healthy turn never writes one, so the journal stays quiet in normal operation.
-func (h *Handler) auditQualityDegraded(ctx context.Context, acc *store.Account, req *ChatCompletionsRequest, outcome chatOutcome, mode string) {
+func (h *Handler) auditQualityDegraded(ctx context.Context, acc *store.Account, req *chatwire.Request, outcome chatOutcome, mode string) {
 	if h == nil || h.auditLogger == nil {
 		return
 	}
@@ -744,8 +747,8 @@ func (h *Handler) auditQualityDegraded(ctx context.Context, acc *store.Account, 
 		Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_quality_degraded",
 		APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Model: model, Channel: "grok",
 		Provider: ProviderForAccount(acc), Status: "degraded", UsageSource: usageSource,
-		InputTokens:     interfaceToInt(outcome.Usage["prompt_tokens"]),
-		OutputTokens:    interfaceToInt(outcome.Usage["completion_tokens"]),
+		InputTokens:     responses.InterfaceToInt(outcome.Usage["prompt_tokens"]),
+		OutputTokens:    responses.InterfaceToInt(outcome.Usage["completion_tokens"]),
 		ReasoningTokens: int(outcome.Quality.ReasoningTokens),
 		Metadata: map[string]interface{}{
 			"mode":             mode,

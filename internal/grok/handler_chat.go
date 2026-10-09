@@ -2,6 +2,7 @@ package grok
 
 import (
 	"net/http"
+	"orchids-api/internal/chatwire"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ func (h *Handler) defaultChatStream() bool {
 	return h.configSnapshot().ChatDefaultStream()
 }
 
-func (h *Handler) applyDefaultChatStream(req *ChatCompletionsRequest) {
+func (h *Handler) applyDefaultChatStream(req *chatwire.Request) {
 	if req == nil || req.StreamProvided {
 		return
 	}
@@ -33,12 +34,12 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var req ChatCompletionsRequest
+	var req chatwire.Request
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	req.StartedAt = time.Now()
-	req.SourceOperation, _ = r.Context().Value(chatSourceOperationKey{}).(string)
+	req.SourceOperation = chatwire.SourceOperation(r.Context())
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 	debugLogSSE := h != nil && h.configSnapshot() != nil && h.configSnapshot().DebugLogSSE
 	logger := debug.NewForContext(r.Context(), verboseDiagnostics, verboseDiagnostics && debugLogSSE)

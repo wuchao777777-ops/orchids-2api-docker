@@ -40,8 +40,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"orchids-api/internal/util"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type redisStore struct {
@@ -288,10 +289,6 @@ func (s *redisStore) updateAccountAtomic(ctx context.Context, id int64, mutate f
 			if err != nil {
 				return err
 			}
-			legacyCredential, err := hasLegacyCredential(value)
-			if err != nil {
-				return err
-			}
 			current, err := s.unmarshalAccount(value, id)
 			if err != nil {
 				return err
@@ -305,9 +302,7 @@ func (s *redisStore) updateAccountAtomic(ctx context.Context, id int64, mutate f
 			// row or publish an event when a refresh observed exactly the state we
 			// already have.
 			current.UpdatedAt = previous.UpdatedAt
-			// A semantic no-op must still rewrite legacy plaintext credentials so
-			// the normal encrypted marshal path can complete the migration.
-			if reflect.DeepEqual(current, previous) && !(legacyCredential && s.credentials != nil) {
+			if reflect.DeepEqual(current, previous) {
 				return errAccountUnchanged
 			}
 			current.UpdatedAt = time.Now()
@@ -352,7 +347,6 @@ func (s *redisStore) UpdateWorkBuddyCredentials(ctx context.Context, id int64, p
 			&acc.WorkBuddyAccessToken, &acc.WorkBuddyRefreshToken, &acc.WorkBuddyExpiresAt); err != nil {
 			return err
 		}
-		patchString(&acc.ClientCookie, patch.RefreshToken)
 		patchString(&acc.WorkBuddyUID, patch.UID)
 		if email := strings.TrimSpace(patch.Email); email != "" && strings.TrimSpace(acc.Email) == "" {
 			acc.Email = email
@@ -600,27 +594,25 @@ func (s *redisStore) getAccountsByIDs(ctx context.Context, ids []string, onlyEna
 	}
 
 	results := make([]*Account, len(values))
-	decodeErrs := make([]error, len(values))
-	decode := func(i int) {
+	decode := func(i int) error {
+		if values[i] == nil {
+			return nil
+		}
 		strVal, ok := values[i].(string)
 		if !ok || strVal == "" {
-			return
+			return fmt.Errorf("invalid account record #%d", idNums[i])
 		}
 		acc, err := s.unmarshalAccount([]byte(strVal), idNums[i])
 		if err != nil {
-			decodeErrs[i] = err
-			return
+			return err
 		}
-		if onlyEnabled && !acc.Enabled {
-			return
+		if !onlyEnabled || acc.Enabled {
+			results[i] = acc
 		}
-		results[i] = acc
+		return nil
 	}
-	forEachIndex(len(values), decode)
-	for _, decodeErr := range decodeErrs {
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
+	if err := forEachIndex(len(values), decode); err != nil {
+		return nil, err
 	}
 	return compactNonNil(results), nil
 }

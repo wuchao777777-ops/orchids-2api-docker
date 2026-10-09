@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/audit"
+	"orchids-api/internal/chatwire"
 	"orchids-api/internal/config"
 	"orchids-api/internal/handler"
 	"orchids-api/internal/loadbalancer"
@@ -69,7 +70,7 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 			configureDistributedGrokLimits(lb.Store.RedisClient(), lb.Store.RedisPrefix())
 		}
 	}
-	instanceID := "grok-" + randomHex(16)
+	instanceID := "grok-" + util.RandomHex(16)
 	if cfg != nil && strings.TrimSpace(cfg.DeploymentInstance) != "" {
 		instanceID = strings.TrimSpace(cfg.DeploymentInstance)
 	}
@@ -143,7 +144,7 @@ func (h *Handler) auditAttempt(ctx context.Context, acc *store.Account, provider
 	h.auditAttemptDiagnostic(ctx, acc, provider, attempt, started, err, stage, nil, nil, "")
 }
 
-func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req *ChatCompletionsRequest, result chatOutcome) {
+func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req *chatwire.Request, result chatOutcome) {
 	logger := h.auditLoggerSnapshot()
 	if logger == nil {
 		return
@@ -181,8 +182,8 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 	}
 	event := audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
 		AccountID: accountID, Model: req.Model, Channel: "grok", Provider: provider, Status: status, Error: message, Duration: duration, Metadata: metadata,
-		InputTokens: interfaceToInt(usage["prompt_tokens"]), OutputTokens: interfaceToInt(usage["completion_tokens"]), TotalTokens: interfaceToInt(usage["total_tokens"]), UsageSource: usageSource,
-		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])}
+		InputTokens: responses.InterfaceToInt(usage["prompt_tokens"]), OutputTokens: responses.InterfaceToInt(usage["completion_tokens"]), TotalTokens: responses.InterfaceToInt(usage["total_tokens"]), UsageSource: usageSource,
+		CachedInputTokens: responses.InterfaceToInt(prompt["cached_tokens"]), ReasoningTokens: responses.InterfaceToInt(completion["reasoning_tokens"])}
 	// Price the turn and book it against the client key's reservation. Only
 	// upstream-reported usage is billed: an estimated count is this gateway's
 	// own guess and must never turn into money owed.
@@ -257,9 +258,6 @@ func (h *Handler) cacheValidatedModel(modelID string) {
 
 func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error {
 	id := normalizeModelID(modelID)
-	if IsDeprecatedModelID(id) {
-		return fmt.Errorf("model not found")
-	}
 	if h.isModelValidationCached(id) {
 		return nil
 	}
@@ -335,7 +333,7 @@ func (h *Handler) ensureResolvedModelCapability(ctx context.Context, modelID str
 // can never turn into upstream model probes.
 func (h *Handler) resolveConversationModel(ctx context.Context, modelID string) (ModelSpec, bool) {
 	id := normalizeModelID(modelID)
-	if id == "" || IsDeprecatedModelID(id) {
+	if id == "" {
 		return ModelSpec{}, false
 	}
 	if spec, effort, ok := ResolveModelAlias(modelID); ok {

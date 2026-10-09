@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/chatwire"
 	"reflect"
 	"strings"
 	"testing"
@@ -89,7 +90,7 @@ func TestRelayNativeContextAndUpstreamDecisions(t *testing.T) {
 			}
 			testutil.Falsef(t, rec.Code != tc.status || calls != 1, "status=%d want=%d calls=%d body=%s", rec.Code, tc.status, calls, rec.Body.String())
 			// Session keys are tenant-scoped routing metadata; content is not.
-			testutil.NotEqual(t, interfaceString(received["prompt_cache_key"]), "")
+			testutil.NotEqual(t, chatwire.ParseLooseStringAny(received["prompt_cache_key"]), "")
 			received["prompt_cache_key"] = payload["prompt_cache_key"]
 			if !reflect.DeepEqual(received, payload) {
 				for key, want := range payload {
@@ -143,12 +144,12 @@ func TestRelayNativeResponsesRecoversOpaqueReasoning(t *testing.T) {
 		reasoningSeen := false
 		for _, raw := range items {
 			item, _ := raw.(map[string]interface{})
-			switch interfaceString(item["type"]) {
+			switch chatwire.ParseLooseStringAny(item["type"]) {
 			case "reasoning":
 				reasoningSeen = true
-				testutil.Equal(t, interfaceString(item["encrypted_content"]), "")
+				testutil.Equal(t, chatwire.ParseLooseStringAny(item["encrypted_content"]), "")
 			case "compaction":
-				testutil.Equal(t, interfaceString(item["encrypted_content"]), "client-native-compaction")
+				testutil.Equal(t, chatwire.ParseLooseStringAny(item["encrypted_content"]), "client-native-compaction")
 			}
 		}
 		testutil.Falsef(t, reasoningSeen, "retry %d kept an empty reasoning item instead of dropping it: %v", index, items)
@@ -165,7 +166,7 @@ func TestRelayChatSamplingAndEffortAreClientOwned(t *testing.T) {
 	} {
 		effort := tc.effort
 		temperature, topP := 3.0, 1.5
-		req := &ChatCompletionsRequest{Model: "grok-4.5", Messages: []ChatMessage{{Role: "user", Content: "original"}}, ReasoningEffort: &effort, Temperature: &temperature, TopP: &topP}
+		req := &chatwire.Request{Model: "grok-4.5", Messages: []chatwire.Message{{Role: "user", Content: "original"}}, ReasoningEffort: &effort, Temperature: &temperature, TopP: &topP}
 		testutil.NoError(t, req.Validate())
 		payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{ID: req.Model, UpstreamModel: req.Model, Upstream: UpstreamCLI}, req, true)
 		testutil.NoError(t, err)
@@ -183,7 +184,7 @@ func TestRelayBuildEffortAliasesFollowModelContract(t *testing.T) {
 		{"grok-composer-2.5-fast", "high", ""},
 	} {
 		effort := tc.effort
-		req := &ChatCompletionsRequest{Model: tc.model, Messages: []ChatMessage{{Role: "user", Content: "hi"}}, ReasoningEffort: &effort}
+		req := &chatwire.Request{Model: tc.model, Messages: []chatwire.Message{{Role: "user", Content: "hi"}}, ReasoningEffort: &effort}
 		payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{ID: tc.model, UpstreamModel: tc.model, Upstream: UpstreamCLI}, req, true)
 		testutil.NoError(t, err)
 		reasoning, _ := payload["reasoning"].(map[string]interface{})

@@ -3,6 +3,7 @@ package grok
 import (
 	"net/http/httptest"
 	"orchids-api/internal/chatwire"
+	"orchids-api/internal/responses"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ import (
 func TestChatRequestFromResponses_ConvertsInputToolsAndReasoning(t *testing.T) {
 	effort := map[string]interface{}{"effort": "high"}
 	parallel := false
-	req := ResponsesCreateRequest{
+	req := responses.CreateRequest{
 		Model:        "grok-4.20-0309",
 		Instructions: "用中文回答",
 		Input: []interface{}{
@@ -37,8 +38,8 @@ func TestChatRequestFromResponses_ConvertsInputToolsAndReasoning(t *testing.T) {
 		ParallelToolCalls: &parallel,
 	}
 
-	chatReq, err := chatRequestFromResponses(req)
-	testutil.NoError(t, err, "chatRequestFromResponses() error: %v")
+	chatReq, err := responses.ChatRequestFromResponses(req)
+	testutil.NoError(t, err, "responses.ChatRequestFromResponses() error: %v")
 	testutil.Equal(t, len(chatReq.Messages), 4)
 	testutil.Equal(t, chatReq.Messages[0].Role, "system")
 	testutil.Equal(t, chatReq.Messages[0].Content, "用中文回答")
@@ -68,7 +69,7 @@ func TestResponsesCreateRequest_AcceptsCompatibilityFields(t *testing.T) {
 		"background":false
 	}`)
 
-	var req ResponsesCreateRequest
+	var req responses.CreateRequest
 	testutil.NoError(t, json.Unmarshal(raw, &req), "json.Unmarshal() error: %v")
 	testutil.False(t, req.StreamProvided, "stream should not be marked provided")
 	testutil.Falsef(t, req.MaxOutputTokens == nil || *req.MaxOutputTokens != 128, "max_output_tokens=%v want 128", req.MaxOutputTokens)
@@ -83,13 +84,13 @@ func TestResponsesCreateRequest_AcceptsCompatibilityFields(t *testing.T) {
 func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 	streamDefault := false
 	h := &Handler{cfg: &config.Config{Stream: &streamDefault}}
-	var decoded ResponsesCreateRequest
+	var decoded responses.CreateRequest
 	testutil.NoError(t, json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello"}`), &decoded), "json.Unmarshal() error: %v")
 	testutil.False(t, decoded.StreamProvided, "stream should be omitted before handler defaulting")
 	h.applyDefaultResponsesStream(&decoded)
 	testutil.False(t, decoded.Stream, "default stream should be false from config")
 
-	var provided ResponsesCreateRequest
+	var provided responses.CreateRequest
 	testutil.NoError(t, json.Unmarshal([]byte(`{"model":"grok-4.20-0309","input":"hello","stream":true}`), &provided), "json.Unmarshal() provided error: %v")
 	h.applyDefaultResponsesStream(&provided)
 	testutil.False(t, !provided.Stream, "explicit stream=true should be preserved")
@@ -97,31 +98,31 @@ func TestHandleResponses_AppliesDefaultStreamWhenOmitted(t *testing.T) {
 
 func TestValidateResponsesCompatibilityFor_RejectsUnsupportedBridgeFields(t *testing.T) {
 	background := true
-	for _, req := range []ResponsesCreateRequest{
+	for _, req := range []responses.CreateRequest{
 		{Background: &background},
 		{Truncation: "invalid"},
 	} {
-		err := validateResponsesCompatibilityFor(req, true)
+		err := responses.ValidateCompatibility(req, true)
 		testutil.CheckError(t, err)
 	}
 }
 
 func TestValidateResponsesCompatibilityFor_AcceptsBridgeFields(t *testing.T) {
 	store := true
-	if err := validateResponsesCompatibilityFor(ResponsesCreateRequest{
+	if err := responses.ValidateCompatibility(responses.CreateRequest{
 		Metadata: map[string]interface{}{"trace": "value"}, Truncation: "auto",
 		Include: []string{"reasoning.encrypted_content"}, Store: &store, Stream: true,
 	}, true); err != nil {
-		t.Fatalf("validateResponsesCompatibilityFor() error = %v", err)
+		t.Fatalf("responses.ValidateCompatibility() error = %v", err)
 	}
 }
 
 func TestChatRequestFromResponses_PreservesMaxOutputTokens(t *testing.T) {
 	maxOutputTokens := 128
-	chat, err := chatRequestFromResponses(ResponsesCreateRequest{
+	chat, err := responses.ChatRequestFromResponses(responses.CreateRequest{
 		Model: "grok-4.6", Input: "hello", MaxOutputTokens: &maxOutputTokens,
 	})
-	testutil.NoError(t, err, "chatRequestFromResponses() error = %v")
+	testutil.NoError(t, err, "responses.ChatRequestFromResponses() error = %v")
 	testutil.Falsef(t, chat.MaxTokens == nil || *chat.MaxTokens != maxOutputTokens, "MaxTokens=%v want %d", chat.MaxTokens, maxOutputTokens)
 }
 
@@ -192,7 +193,7 @@ func TestWriteResponsesStreamFromChat_ConvertsToolCallChunk(t *testing.T) {
 	b.WriteString("data: [DONE]\n\n")
 
 	rec := httptest.NewRecorder()
-	writeResponsesStreamFromChatReaderRequestWithHook(rec, ResponsesCreateRequest{Model: "grok-4.20-0309"}, strings.NewReader(b.String()), nil)
+	writeResponsesStreamFromChatReaderRequestWithHook(rec, responses.CreateRequest{Model: "grok-4.20-0309"}, strings.NewReader(b.String()), nil)
 
 	out := rec.Body.String()
 	testutil.MustContainAll(t, out, "response.output_item.added", "response.function_call_arguments.done")
@@ -208,7 +209,7 @@ func TestWriteResponsesStreamFromChatFailsEmptyAndPrematureStreams(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			writeResponsesStreamFromChatReaderRequestWithHook(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(input), nil)
+			writeResponsesStreamFromChatReaderRequestWithHook(recorder, responses.CreateRequest{Model: "grok-4.6"}, strings.NewReader(input), nil)
 			body := recorder.Body.String()
 			testutil.Falsef(t, !strings.Contains(body, "event: response.failed") || strings.Contains(body, "event: response.completed"), "body=%s", body)
 			testutil.MustContainAll(t, body, `"model":"grok-4.6"`, "data: [DONE]")
@@ -254,7 +255,7 @@ func TestWriteResponsesStreamFromChatPreservesReasoningEvents(t *testing.T) {
 		`data: [DONE]`,
 	}, "\n\n")
 	recorder := httptest.NewRecorder()
-	writeResponsesStreamFromChatReaderRequestWithHook(recorder, ResponsesCreateRequest{Model: "grok-4.3"}, strings.NewReader(raw), nil)
+	writeResponsesStreamFromChatReaderRequestWithHook(recorder, responses.CreateRequest{Model: "grok-4.3"}, strings.NewReader(raw), nil)
 	out := recorder.Body.String()
 	testutil.MustContainAll(t, out, `"type":"response.reasoning_summary_text.delta"`, `"delta":"plan"`)
 	testutil.MustContainAll(t, out, `"type":"response.output_text.delta"`, `"delta":"answer"`)
@@ -277,7 +278,7 @@ func TestResponsesInputFileRoundTripsIntoChatMessages(t *testing.T) {
 			"type": "message", "role": "user",
 			"content": []interface{}{map[string]interface{}{"type": "input_text", "text": "see attached"}, part},
 		}}
-		messages, err := responsesInputToMessages(input)
+		messages, err := responses.InputToMessages(input)
 		testutil.Falsef(t, err != nil, "%v: %v", part, err)
 		err = chatwire.ValidateMessages(messages)
 		testutil.CheckNoError(t, err)

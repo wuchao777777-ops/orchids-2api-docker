@@ -1,5 +1,6 @@
 // Key management shares the configuration page's modal and DOM primitives.
-let keyPage = 1, keysLoading = false, keysLoaded = false, keysLoadSequence = 0;
+let keyPage = 1, keysLoading = false, keysLoaded = false;
+const keyLoads = ConsoleUI.requestGate();
 const keyBusy = new Set();
 function keyStatus(key) {
   if (!key.enabled) return 'disabled';
@@ -13,25 +14,25 @@ function filteredKeys() {
 }
 function filterApiKeys() { keyPage = 1; renderApiKeys(); }
 async function loadApiKeys() {
-  const sequence = ++keysLoadSequence;
+  const ticket = keyLoads.begin();
   keysLoading = true;
   setText('keyLoadStatus', '正在刷新…');
   const refresh = document.getElementById('keyRefresh');
   if (refresh) refresh.disabled = true;
   if (!keysLoaded) document.getElementById('keysList').replaceChildren(make('div', 'key-loading', '正在加载密钥…'));
   try {
-    const result = await ConsoleAPI.json('/api/keys');
-    if (sequence !== keysLoadSequence) return;
+    const result = await ConsoleAPI.json('/api/keys', { signal: ticket.signal });
+    if (!ticket.isCurrent()) return;
     if (result !== null && !Array.isArray(result)) throw new Error('密钥列表格式无效');
     apiKeys = result || []; keysLoaded = true; renderApiKeys();
     setText('keyLoadStatus', '');
   } catch (err) {
-    if (sequence === keysLoadSequence) {
+    if (ticket.accepts(err)) {
       setText('keyLoadStatus', '加载失败，请点击刷新重试');
       if (!keysLoaded) document.getElementById('keysList').replaceChildren(make('div', 'empty-state', '密钥加载失败'));
     }
   } finally {
-    if (sequence === keysLoadSequence) { keysLoading = false; if (refresh) refresh.disabled = false; }
+    if (ticket.isCurrent()) { keysLoading = false; if (refresh) refresh.disabled = false; }
   }
 }
 function keyButton(label, action, id, danger = false) {
@@ -72,7 +73,6 @@ function renderApiKeys() {
   rows.slice((keyPage - 1) * 20, keyPage * 20).forEach(key => {
     const status = keyStatus(key), names = { enabled: '启用', disabled: '停用', expired: '已过期' };
     const identity = attach(make('td'), [make('div', 'key-name', key.name), make('code', 'key-masked', (key.key_prefix || 'sk-') + '••••' + key.key_suffix)]);
-    if (!key.secret_available) identity.appendChild(make('small', 'key-note', '轮换后可复制和导入'));
     const models = key.allowed_models?.length ? key.allowed_models : ['全部模型'];
     const permissions = attach(make('div', 'key-models'), models.slice(0, 2).map(model => make('span', 'tag', model)));
     if (models.length > 2) permissions.appendChild(make('span', 'key-note', '+' + (models.length - 2)));
@@ -85,15 +85,15 @@ function renderApiKeys() {
       keyButton('轮换', 'rotate-key', key.id), keyButton('删除', 'delete-key', key.id, true),
     ]);
     for (const button of actions.children) {
-      if (['copy-key', 'import-key'].includes(button.dataset.action) && !key.secret_available) { button.disabled = true; button.title = '旧密钥只存哈希，请手动轮换后使用'; }
+      if (['copy-key', 'import-key'].includes(button.dataset.action) && !key.secret_available) { button.disabled = true; button.title = '密钥内容不可用'; }
       if (button.dataset.action === 'import-key' && status !== 'enabled') { button.disabled = true; button.title = '密钥停用或已过期'; }
     }
     body.appendChild(attach(make('tr'), [identity, attach(make('td'), [make('span', 'key-status key-status-' + status, names[status])]), attach(make('td'), [permissions]), limits, dates, attach(make('td'), [actions])]));
   });
   table.appendChild(body); container.replaceChildren(ConsoleUI.responsiveTable(table)); bindApiKeyActions(container);
 }
-async function getKeySecret(id) {
-  const result = await ConsoleAPI.json('/api/keys/' + id + '/secret', { cache: 'no-store' });
+async function getKeySecret(id, options = {}) {
+  const result = await ConsoleAPI.json('/api/keys/' + id + '/secret', { ...options, cache: 'no-store' });
   if (!result || typeof result.key !== 'string' || !result.key.startsWith('sk-')) throw new Error('无法读取完整密钥');
   return result.key;
 }
