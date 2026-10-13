@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// RateLimiter implements a scalable token-bucket rate limiter keyed by IP.
+// RateLimiter bounds failed password attempts per source with a token bucket.
 type RateLimiter struct {
 	entries     sync.Map
 	maxAttempts int
@@ -18,8 +18,8 @@ type limiterEntry struct {
 	lastVisit time.Time
 }
 
-// NewRateLimiter creates a rate limiter that allows maxAttempts within the
-// given window duration per IP address.
+// NewRateLimiter creates a failed-password budget of maxAttempts within
+// the given window duration per source address.
 func NewRateLimiter(maxAttempts int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
 		maxAttempts: maxAttempts,
@@ -29,34 +29,12 @@ func NewRateLimiter(maxAttempts int, window time.Duration) *RateLimiter {
 	return rl
 }
 
-// Allow reports whether the given IP is allowed to make another attempt.
-func (rl *RateLimiter) Allow(ip string) bool {
-	// Optimistic fast path: check if entry already exists
-	if val, ok := rl.entries.Load(ip); ok {
-		entry := val.(*limiterEntry)
-		return rl.processExistingEntry(entry)
-	}
-
-	// Slow path: allocation and store
-	entry := &limiterEntry{
-		tokens:    float64(rl.maxAttempts - 1), // Pre-consume 1 token for this request
-		lastVisit: time.Now(),
-	}
-	val, loaded := rl.entries.LoadOrStore(ip, entry)
-	if !loaded {
-		// New entry was stored — first request from this IP, already consumed 1 token
-		return true
-	}
-
-	// Existing entry found (race condition during LoadOrStore)
-	return rl.processExistingEntry(val.(*limiterEntry))
-}
-
-// CheckCredentials serializes password attempts per source. Only failures
-// consume tokens, so authenticated polling cannot exhaust the login budget.
-func (rl *RateLimiter) CheckCredentials(ip string, verify func() bool) (valid, allowed bool) {
+// CheckCredentialsWithError serializes password attempts per source. Only
+// incorrect passwords consume tokens; backend failures do not spend the budget.
+func (rl *RateLimiter) CheckCredentialsWithError(ip string, verify func() (bool, error)) (valid, allowed bool, err error) {
 	if rl == nil {
-		return verify(), true
+		valid, err = verify()
+		return valid, true, err
 	}
 	value, _ := rl.entries.LoadOrStore(ip, &limiterEntry{tokens: float64(rl.maxAttempts), lastVisit: time.Now()})
 	entry := value.(*limiterEntry)
@@ -66,37 +44,13 @@ func (rl *RateLimiter) CheckCredentials(ip string, verify func() bool) (valid, a
 	entry.tokens = min(float64(rl.maxAttempts), entry.tokens+now.Sub(entry.lastVisit).Seconds()*float64(rl.maxAttempts)/rl.window.Seconds())
 	entry.lastVisit = now
 	if entry.tokens < 1 {
-		return false, false
+		return false, false, nil
 	}
-	valid = verify()
-	if !valid {
+	valid, err = verify()
+	if !valid && err == nil {
 		entry.tokens--
 	}
-	return valid, true
-}
-
-func (rl *RateLimiter) processExistingEntry(entry *limiterEntry) bool {
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-
-	now := time.Now()
-	elapsed := now.Sub(entry.lastVisit)
-
-	// Replenish tokens based on elapsed time
-	ratePerSec := float64(rl.maxAttempts) / rl.window.Seconds()
-	entry.tokens += elapsed.Seconds() * ratePerSec
-	if entry.tokens > float64(rl.maxAttempts) {
-		entry.tokens = float64(rl.maxAttempts)
-	}
-
-	entry.lastVisit = now
-
-	if entry.tokens >= 1 {
-		entry.tokens--
-		return true
-	}
-
-	return false
+	return valid, true, err
 }
 
 // cleanupLoop periodically removes expired entries to prevent unbounded

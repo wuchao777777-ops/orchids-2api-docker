@@ -47,6 +47,19 @@ func durableSessionBackend() SessionBackend {
 	return sessionBackend
 }
 
+// CurrentAdminCredentials reads shared credentials on every password entrance.
+// A replica's startup snapshot must never restore a revoked password.
+func CurrentAdminCredentials(ctx context.Context, user, password string) (string, string, error) {
+	if backend, ok := durableSessionBackend().(interface {
+		AdminCredentials(context.Context, string, string) (string, string, error)
+	}); ok {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		return backend.AdminCredentials(ctx, user, password)
+	}
+	return user, password, nil
+}
+
 type SessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]time.Time
@@ -66,10 +79,6 @@ func init() {
 			cleanupExpiredSessions()
 		}
 	}()
-}
-
-func GenerateSessionToken() (string, error) {
-	return GenerateSessionTokenForPassword("")
 }
 
 // GenerateSessionTokenForPassword rejects logins using stale replica credentials.
@@ -140,9 +149,9 @@ func rememberSession(token string, expiry time.Time) {
 
 // hasSession reads one session table under the store lock and forgets an entry
 // whose TTL has already passed.
-func (s *SessionStore) hasSession(table map[string]time.Time, token string) bool {
+func (s *SessionStore) hasSession(token string) bool {
 	s.mu.RLock()
-	expiry, exists := table[token]
+	expiry, exists := s.sessions[token]
 	s.mu.RUnlock()
 
 	if !exists {
@@ -156,7 +165,7 @@ func (s *SessionStore) hasSession(table map[string]time.Time, token string) bool
 }
 
 func memoryHasSession(token string) bool {
-	return globalSessionStore.hasSession(globalSessionStore.sessions, token)
+	return globalSessionStore.hasSession(token)
 }
 
 func forgetSession(token string) {
@@ -170,13 +179,9 @@ func cleanupExpiredSessions() {
 	defer globalSessionStore.mu.Unlock()
 
 	now := time.Now()
-	for _, sessions := range []map[string]time.Time{
-		globalSessionStore.sessions,
-	} {
-		for token, expiry := range sessions {
-			if now.After(expiry) {
-				delete(sessions, token)
-			}
+	for token, expiry := range globalSessionStore.sessions {
+		if now.After(expiry) {
+			delete(globalSessionStore.sessions, token)
 		}
 	}
 }

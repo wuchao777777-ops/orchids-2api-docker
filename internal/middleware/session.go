@@ -134,18 +134,10 @@ func APIKeyAllowsModel(ctx context.Context, model string) bool {
 	return false
 }
 
-// APIKeyAuthWithRequest protects model and inference endpoints with a managed
-// key. It accepts OpenAI-style Bearer auth and Anthropic's x-api-key header.
-// require returns whether a key is required for this request; a deployment that
-// must keep a known source reachable without a key names that source here, while
-// every other caller still needs one.
-func APIKeyAuthWithRequest(require func(*http.Request) bool, validate APIKeyValidator, next http.HandlerFunc) http.HandlerFunc {
+// APIKeyAuth requires a managed key on every model and inference request.
+// OpenAI Bearer auth and Anthropic x-api-key headers share the same validator.
+func APIKeyAuth(validate APIKeyValidator, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if require != nil && !require(r) {
-			ctx := context.WithValue(r.Context(), apiKeyFingerprintContextKey{}, "anonymous")
-			next(w, r.WithContext(ctx))
-			return
-		}
 		token := apiKeyToken(r)
 		if token == "" {
 			writeAPIKeyError(w, http.StatusUnauthorized, "Missing API key", "invalid_api_key")
@@ -231,6 +223,9 @@ func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next 
 
 		cookie, err := r.Cookie("session_token")
 		if err == nil && auth.ValidateSessionToken(cookie.Value) {
+			if !CheckAdminCookieWrite(w, r) {
+				return
+			}
 			audited(w, r)
 			return
 		}
@@ -249,10 +244,19 @@ func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next 
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		valid, allowed := limiter.CheckCredentials(ClientIP(r), func() bool {
+		valid, allowed, credentialErr := limiter.CheckCredentialsWithError(ClientIP(r), func() (bool, error) {
+			var credentialErr error
+			_, adminPass, credentialErr = auth.CurrentAdminCredentials(r.Context(), "", adminPass)
+			if credentialErr != nil {
+				return false, credentialErr
+			}
 			_, pass, ok := r.BasicAuth()
-			return matchesHeader(adminPass) || (ok && strings.TrimSpace(adminPass) != "" && util.SecureCompare(pass, adminPass))
+			return matchesHeader(adminPass) || (ok && strings.TrimSpace(adminPass) != "" && util.SecureCompare(pass, adminPass)), nil
 		})
+		if credentialErr != nil {
+			http.Error(w, "Admin authentication unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		if !allowed {
 			w.Header().Set("Retry-After", "180")
 			http.Error(w, "Too many login attempts, try again later", http.StatusTooManyRequests)
