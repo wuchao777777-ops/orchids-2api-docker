@@ -25,6 +25,8 @@ Windows 用 `Copy-Item config.example.json config.json`。JSON 是推荐格式�
 
 文件配置和 Redis 保存值不一致时，先查看管理端实际值；不能通过反复改文件解决 Redis 覆盖。管理列表不返回 admin_token 明文，管理保存也不接受修改它。
 
+管理页保存时，`admin_password` / `admin_pass` 的空字符串、纯空白或 `null` 表示保留现有密码；后端禁止保存空管理员密码。普通配置修改保留部署管理的 `admin_token`。修改管理密码或用户名会原子更新 Redis 会话版本，所有旧会话随即失效，需要重新登录。Redis 不可用时不接受缓存会话，也不创建临时本地会话；恢复后未撤销且未过期的持久会话仍可使用。登录、Basic Auth 和密码请求头共用每 IP 的失败预算（15 分钟补充 5 次）；正常会话访问和成功的密码认证不消耗预算。
+
 ## 3. 基础、安全与存储字段
 
 | 字段 | 默认 / 示例 | 说明 |
@@ -113,13 +115,12 @@ Grok 默认 base 为 `https://cli-chat-proxy.grok.com/v1`，CLI 版本当前默�
 | `grok_build_rps` | 非正 / 非有限关闭节奏；正值夹取 0.01–1000，按账号 / 团队范围执行 |
 | `grok_build_timeout_seconds` | 正值优先，最大 86400；未设时回退 request_timeout；示例文件显式为 600 |
 | `grok_build_stream_idle_seconds` | 优先于旧 grok_stream_idle_seconds；有效范围 30–600 秒，缺省 120 |
-| `grok_hide_reasoning` | 默认 false；true 隐藏 Grok 客户端输出中的思考文字，动态配置生效，不降低推理强度 |
 | `grok_egress_enabled` | 默认未启用，开启后没有健康节点则失败，不静默直连 |
 | `grok_egress_nodes` | name、url、weight、scope、proxied；URL 支持 http / socks5 / socks5h，scope 用 cli / all |
 | `quality_hold_enabled` | 指针字段保留显式 false，与省略不同 |
 | `quality_hold_max_attempts` / `quality_hold_timeout_ms` / `quality_hold_on_exhausted` | 质量暂存尝试、等待与预算耗尽策略；详见协议文档 |
 
-`grok_hide_reasoning` 同时处理 Chat、Messages、原生 Responses 的流与最终 JSON，以及原生响应资源 GET。答案、工具调用、费用和 reasoning_tokens 保留。原生 Responses 仍保留思考项身份和 encrypted_content，供客户端续接；后台原始推理回放与质量判断不受显示开关影响。该设置不会删除已经显示的历史消息，也不会改变上游生成或诊断采集中的原始内容。
+Grok 返回上游提供的思考内容：Chat 使用 `reasoning_content`，Messages 使用 `thinking` 内容块，原生 Responses 保留 reasoning 事件与输出项。思考与正文分别传输；思考项身份、`encrypted_content` 和 `reasoning_tokens` 保留，用于续接与计费。
 
 Grok 语义空闲按有效生成事件衡量，keepalive 不延长时钟；下游背压不应计成上游读取空闲。它与其他通道的字节空闲监视不同。
 
