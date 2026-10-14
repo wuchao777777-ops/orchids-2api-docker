@@ -28,7 +28,7 @@ func (h *Handler) cliHeaders(acc *store.Account, token string) http.Header {
 
 // Continuations keep the creating account and apply its capability profile just
 // as first turns do. They must never bypass reasoning validation or switch accounts.
-func (h *Handler) doCLIPinnedResponsesAt(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelID, path string) (*http.Response, error) {
+func (h *Handler) doCLIPinnedResponsesAt(ctx context.Context, sess *chatAccountSession, payload map[string]any, modelID, path string) (*http.Response, error) {
 	attempt, err := buildPayloadForAccount(payload, sess.acc, modelID)
 	if err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func (h *Handler) doCLIPinnedResponsesAt(ctx context.Context, sess *chatAccountS
 // doCLIWithAutoSwitchAt issues a CLI request, switching to another OAuth account
 // on transient failures (401 after refresh, 5xx) while treating team-level 429
 // as shared (no switch).
-func (h *Handler) doCLIWithAutoSwitchAt(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelID, path string) (*http.Response, error) {
+func (h *Handler) doCLIWithAutoSwitchAt(ctx context.Context, sess *chatAccountSession, payload map[string]any, modelID, path string) (*http.Response, error) {
 	if sess == nil || sess.acc == nil {
 		return nil, fmt.Errorf("empty cli chat session")
 	}
@@ -69,7 +69,7 @@ func (h *Handler) openCLIAccountSessionByID(ctx context.Context, accountID int64
 	if err != nil {
 		return nil, fmt.Errorf("stored response account is unavailable: %w", err)
 	}
-	if acc == nil || !acc.Enabled || ProviderForAccount(acc) != ProviderBuild || !AccountSupportsModel(acc, modelID) || !h.routeAllowsAccount(ctx, modelID, acc.ID) || !accountUsableForModel(ctx, acc) || accountpolicy.AccountHeld(acc, time.Now()) || !h.accountCapacityAvailable(acc) {
+	if acc == nil || !acc.Enabled || !isGrokAccount(acc) || !AccountSupportsModel(acc, modelID) || !h.routeAllowsAccount(ctx, modelID, acc.ID) || !accountUsableForModel(ctx, acc) || accountpolicy.AccountHeld(acc, time.Now()) || !h.accountCapacityAvailable(acc) {
 		return nil, fmt.Errorf("stored response account is unavailable")
 	}
 	token := strings.TrimSpace(acc.OAuthAccessToken)
@@ -109,7 +109,7 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 		// generic reason here: grok holds a model for its own windows (a free-usage
 		// window, an inference cap), and naming those as "the plan does not cover
 		// the model" would describe them worse than the existing wording does.
-		if acc == nil || ProviderForAccount(acc) != ProviderBuild || !AccountSupportsModel(acc, modelID) {
+		if acc == nil || !isGrokAccount(acc) || !AccountSupportsModel(acc, modelID) {
 			return loadbalancer.ErrAccountNotEligible
 		}
 		if !accountUsableForModel(ctx, acc) || !h.routeAllowsAccount(ctx, modelID, acc.ID) {

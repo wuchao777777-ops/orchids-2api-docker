@@ -121,33 +121,31 @@ func TestClassifyQualityHold(t *testing.T) {
 
 func TestDecideQualityRetryPolicy(t *testing.T) {
 	// Six attempts: the first five withhold-and-retry, the sixth delivers.
-	for attempt := 0; attempt < qualityHoldMaxAttemptsDefault-1; attempt++ {
-		testutil.Equal(t, decideQualityRetry(qualityWithhold, attempt, qualityHoldMaxAttemptsDefault, qualityRetryFailOpen), qualityActionRetry)
+	for attempt := range qualityHoldMaxAttemptsDefault - 1 {
+		testutil.Equal(t, decideQualityRetry(qualityWithhold, attempt, qualityHoldMaxAttemptsDefault), qualityActionRetry)
 	}
-	testutil.Equal(t, decideQualityRetry(qualityWithhold, qualityHoldMaxAttemptsDefault-1, qualityHoldMaxAttemptsDefault, qualityRetryFailOpen), qualityActionDeliverLast)
-	testutil.Equal(t, decideQualityRetry(qualityWithhold, qualityHoldMaxAttemptsDefault-1, qualityHoldMaxAttemptsDefault, qualityRetryFailClosed), qualityActionReject)
-	testutil.Equal(t, decideQualityRetry(qualityDeliver, 0, qualityHoldMaxAttemptsDefault, qualityRetryFailOpen), qualityActionDeliver)
-	// No routing attempt left: a retry must degrade into deliver-last or reject.
-	testutil.Equal(t, boundQualityRetry(qualityActionRetry, false, qualityRetryFailOpen), qualityActionDeliverLast)
-	testutil.Equal(t, boundQualityRetry(qualityActionRetry, false, qualityRetryFailClosed), qualityActionReject)
-	testutil.Equal(t, boundQualityRetry(qualityActionRetry, true, qualityRetryFailClosed), qualityActionRetry)
+	testutil.Equal(t, decideQualityRetry(qualityWithhold, qualityHoldMaxAttemptsDefault-1, qualityHoldMaxAttemptsDefault), qualityActionDeliverLast)
+	testutil.Equal(t, decideQualityRetry(qualityDeliver, 0, qualityHoldMaxAttemptsDefault), qualityActionDeliver)
+	// No routing attempt left: deliver the last response the upstream produced.
+	testutil.Equal(t, boundQualityRetry(qualityActionRetry, false), qualityActionDeliverLast)
+	testutil.Equal(t, boundQualityRetry(qualityActionRetry, true), qualityActionRetry)
 }
 
 func TestQualityRequestReplayUnsafe(t *testing.T) {
 	testutil.False(t, qualityRequestReplayUnsafe(nil), "nil request must be replay-safe")
 	testutil.False(t, qualityRequestReplayUnsafe(&chatwire.Request{}), "a plain request must be replay-safe")
-	functionTool := map[string]interface{}{"type": "function", "name": "weather"}
-	testutil.False(t, qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]interface{}{functionTool}}), "a client-executed function tool must be replay-safe")
-	hosted := map[string]interface{}{"type": "web_search"}
-	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]interface{}{hosted}}), "a hosted search tool must block replay")
-	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{WebSearchOptions: map[string]interface{}{"search_context_size": "low"}}), "web_search_options must block replay")
-	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{MCPServers: []map[string]interface{}{{"url": "https://example.test"}}}), "mcp_servers must block replay")
-	remoteShell := map[string]interface{}{"type": "shell", "environment": map[string]interface{}{"type": "container"}}
-	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]interface{}{remoteShell}}), "a hosted shell must block replay")
-	localShell := map[string]interface{}{"type": "shell", "environment": map[string]interface{}{"type": "local"}}
-	testutil.False(t, qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]interface{}{localShell}}), "a local shell must stay replay-safe")
+	functionTool := map[string]any{"type": "function", "name": "weather"}
+	testutil.False(t, qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]any{functionTool}}), "a client-executed function tool must be replay-safe")
+	hosted := map[string]any{"type": "web_search"}
+	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]any{hosted}}), "a hosted search tool must block replay")
+	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{WebSearchOptions: map[string]any{"search_context_size": "low"}}), "web_search_options must block replay")
+	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{MCPServers: []map[string]any{{"url": "https://example.test"}}}), "mcp_servers must block replay")
+	remoteShell := map[string]any{"type": "shell", "environment": map[string]any{"type": "container"}}
+	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]any{remoteShell}}), "a hosted shell must block replay")
+	localShell := map[string]any{"type": "shell", "environment": map[string]any{"type": "local"}}
+	testutil.False(t, qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]any{localShell}}), "a local shell must stay replay-safe")
 	// Unknown tool types default to no replay.
-	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]interface{}{{"type": "code_execution"}}}), "an unknown hosted tool must block replay")
+	testutil.False(t, !qualityRequestReplayUnsafe(&chatwire.Request{ResponsesTools: []map[string]any{{"type": "code_execution"}}}), "an unknown hosted tool must block replay")
 }
 
 func TestDeferredResponseWriterHoldsThenCommits(t *testing.T) {
@@ -195,7 +193,7 @@ func TestDeferredResponseWriterOverflowDelivers(t *testing.T) {
 	for i := range chunk {
 		chunk[i] = 'x'
 	}
-	for i := 0; i < (qualityHoldMaxBytes>>20)+1; i++ {
+	for range (qualityHoldMaxBytes >> 20) + 1 {
 		_, err := deferred.Write(chunk)
 		testutil.CheckNoError(t, err)
 	}
@@ -207,20 +205,8 @@ func TestQualityHoldPolicyDefaults(t *testing.T) {
 	policy := normalizeQualityHoldPolicy(qualityHoldPolicy{})
 	testutil.Equal(t, policy.MaxAttempts, qualityHoldMaxAttemptsDefault)
 	testutil.Equal(t, policy.HoldTimeout, qualityHoldTimeoutDefault)
-	// The zero value normalizes to fail-closed, matching the upstream helper; the
-	// handler's own default is fail-open, asserted below.
-	testutil.False(t, policy.failOpen(), "the zero-value policy must normalize to fail-closed")
-	got := normalizeQualityHoldPolicy(qualityHoldPolicy{OnExhausted: qualityRetryFailClosed})
-	testutil.False(t, got.failOpen(), "fail_closed was not honoured")
-	got = normalizeQualityHoldPolicy(qualityHoldPolicy{OnExhausted: qualityRetryFailOpen})
-	testutil.False(t, !got.failOpen(), "fail_open was not honoured")
-	testutil.False(t, !(&Handler{}).qualityHoldPolicy().failOpen(), "the handler default must fail open so a strange pool still answers")
-	enabled := false
-	h := &Handler{cfg: &config.Config{QualityHoldEnabled: &enabled, QualityHoldMaxAttempts: 3, QualityHoldOnExhausted: qualityRetryFailClosed}}
-	testutil.False(t, h.qualityHoldPolicy().Enabled, "an explicit disable was ignored")
-	h.cfg = &config.Config{QualityHoldMaxAttempts: 3, QualityHoldTimeoutMs: 2500}
-	policy = h.qualityHoldPolicy()
-	testutil.Falsef(t, !policy.Enabled || policy.MaxAttempts != 3 || policy.HoldTimeout != 2500*time.Millisecond, "policy=%+v", policy)
+	policy = normalizeQualityHoldPolicy(qualityHoldPolicy{MaxAttempts: 3, HoldTimeout: 2500 * time.Millisecond})
+	testutil.Falsef(t, policy.MaxAttempts != 3 || policy.HoldTimeout != 2500*time.Millisecond, "policy=%+v", policy)
 }
 
 // degradedUpstream replays the cipher-drool dump: an encrypted stub with zero
@@ -232,7 +218,7 @@ func degradedUpstream(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\""+encrypted+"\"}}\n\n")
 		dump := strings.Repeat("status loop ", 120)
-		payload, _ := json.Marshal(map[string]interface{}{"type": "response.output_text.delta", "delta": dump})
+		payload, _ := json.Marshal(map[string]any{"type": "response.output_text.delta", "delta": dump})
 		_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: "+string(payload)+"\n\n")
 		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_degraded\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":1440,\"output_tokens_details\":{\"reasoning_tokens\":0}}}}\n\n")
 	}))
@@ -314,7 +300,7 @@ func TestServeNativeChatWithholdsDegradedTurnAndRetriesAnotherAccount(t *testing
 		Messages: []chatwire.Message{{Role: "user", Content: "hello"}},
 	}
 	rec := httptest.NewRecorder()
-	h.serveNativeChat(ctx, rec, req, spec, sess, nil, true)
+	h.serveNativeChat(ctx, rec, req, spec, sess, nil)
 
 	testutil.Equal(t, rec.Code, http.StatusOK)
 	stream := rec.Body.String()
@@ -417,10 +403,10 @@ func TestServeNativeChatDoesNotReplayHostedToolTurn(t *testing.T) {
 	h.cliClient.httpClient = routing.Client()
 	h.cliClient.oauth.httpClient = routing.Client()
 
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"model": "grok-4.5", "stream": true, "reasoning_effort": "high",
-		"messages":          []map[string]interface{}{{"role": "user", "content": "search the web"}},
-		"x_responses_tools": []map[string]interface{}{{"type": "web_search"}},
+		"messages":          []map[string]any{{"role": "user", "content": "search the web"}},
+		"x_responses_tools": []map[string]any{{"type": "web_search"}},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", strings.NewReader(string(body)))
 	rec := httptest.NewRecorder()
@@ -430,78 +416,6 @@ func TestServeNativeChatDoesNotReplayHostedToolTurn(t *testing.T) {
 	// Fail-open: the held body is delivered because it cannot be replayed.
 	testutil.MustContain(t, rec.Body.String(), "status loop")
 	testutil.Equal(t, calls, 1)
-}
-
-// Fail-closed reports the degradation instead of delivering it.
-func TestServeNativeChatFailClosedRejectsWithheldTurn(t *testing.T) {
-	degraded := degradedUpstream(t)
-	defer degraded.Close()
-	h, s, _ := setupValidationHandler(t)
-	ctx := context.Background()
-	if err := s.CreateModel(ctx, &store.Model{
-		Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5",
-		Status: store.ModelStatusAvailable, Verified: true,
-	}); err != nil {
-		t.Fatalf("CreateModel: %v", err)
-	}
-	if err := s.CreateAccount(ctx, &store.Account{
-		AccountType: "grok", Enabled: true, CredentialType: "oauth", GrokProvider: ProviderBuild, Weight: 1,
-		OAuthAccessToken: "jwt-user-degraded", GrokModels: []string{"grok-4.5"}, GrokModelsSyncedAt: time.Now(),
-	}); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-	h.cfg = &config.Config{
-		GrokCLIBaseURL:         degraded.URL + "/v1",
-		QualityHoldMaxAttempts: 1,
-		QualityHoldOnExhausted: qualityRetryFailClosed,
-	}
-	h.cliClient = NewCLIClient(h.cfg)
-	h.cliClient.SetAccountStore(s)
-	h.cliClient.httpClient = degraded.Client()
-	h.cliClient.oauth.httpClient = degraded.Client()
-
-	body := `{"model":"grok-4.5","stream":true,"reasoning_effort":"high","messages":[{"role":"user","content":"hello"}]}`
-	req := httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-	h.HandleChatCompletions(rec, req)
-
-	testutil.Equal(t, rec.Code, http.StatusBadGateway)
-	testutil.MustNotContain(t, rec.Body.String(), "status loop")
-	testutil.MustContain(t, rec.Body.String(), "quality_degraded")
-}
-
-// A disabled hold keeps the historical behaviour: the dump is streamed through.
-func TestServeNativeChatStreamsThroughWhenHoldDisabled(t *testing.T) {
-	degraded := degradedUpstream(t)
-	defer degraded.Close()
-	h, s, _ := setupValidationHandler(t)
-	ctx := context.Background()
-	if err := s.CreateModel(ctx, &store.Model{
-		Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5",
-		Status: store.ModelStatusAvailable, Verified: true,
-	}); err != nil {
-		t.Fatalf("CreateModel: %v", err)
-	}
-	if err := s.CreateAccount(ctx, &store.Account{
-		AccountType: "grok", Enabled: true, CredentialType: "oauth", GrokProvider: ProviderBuild, Weight: 1,
-		OAuthAccessToken: "jwt-user-degraded", GrokModels: []string{"grok-4.5"}, GrokModelsSyncedAt: time.Now(),
-	}); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-	disabled := false
-	h.cfg = &config.Config{GrokCLIBaseURL: degraded.URL + "/v1", QualityHoldEnabled: &disabled}
-	h.cliClient = NewCLIClient(h.cfg)
-	h.cliClient.SetAccountStore(s)
-	h.cliClient.httpClient = degraded.Client()
-	h.cliClient.oauth.httpClient = degraded.Client()
-
-	body := `{"model":"grok-4.5","stream":true,"reasoning_effort":"high","messages":[{"role":"user","content":"hello"}]}`
-	req := httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-	h.HandleChatCompletions(rec, req)
-
-	testutil.Equal(t, rec.Code, http.StatusOK)
-	testutil.MustContain(t, rec.Body.String(), "status loop")
 }
 
 func TestNativeChatTransportAndQualityRetryShareBudget(t *testing.T) {
@@ -555,7 +469,7 @@ func TestNativeChatTransportAndQualityRetryShareBudget(t *testing.T) {
 			h, database, _ := setupValidationHandler(t)
 			ctx := context.Background()
 			var first *store.Account
-			for i := 0; i < 4; i++ {
+			for i := range 4 {
 				acc := &store.Account{AccountType: "grok", Enabled: true, CredentialType: "oauth", GrokProvider: ProviderBuild, Weight: 1,
 					OAuthAccessToken: fmt.Sprintf("jwt-user-%d", i), GrokModels: []string{"grok-4.5"}, GrokModelsSyncedAt: time.Now()}
 				testutil.NoError(t, database.CreateAccount(ctx, acc))
@@ -577,10 +491,10 @@ func TestNativeChatTransportAndQualityRetryShareBudget(t *testing.T) {
 			effort := "high"
 			req := &chatwire.Request{Model: "grok-4.5", Stream: true, ReasoningEffort: &effort, Messages: []chatwire.Message{{Role: "user", Content: "hello"}}}
 			if tc.unsafe {
-				req.WebSearchOptions = map[string]interface{}{}
+				req.WebSearchOptions = map[string]any{}
 			}
 			rec := httptest.NewRecorder()
-			h.serveNativeChat(ctx, rec, req, spec, sess, nil, true)
+			h.serveNativeChat(ctx, rec, req, spec, sess, nil)
 			sess.Close()
 			testutil.Equal(t, calls.Load(), tc.wantCalls)
 			testutil.Equal(t, rec.Code, tc.wantStatus)

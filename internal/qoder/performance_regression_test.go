@@ -72,16 +72,14 @@ func TestBatchedUUIDsMatchIndependentEntropyReads(t *testing.T) {
 }
 
 func TestPooledJSONEncodingPreservesWireAndOwnership(t *testing.T) {
-	values := []interface{}{
-		map[string]interface{}{"prompt": "中文 <>&\n\"", "tools": []interface{}{}, "empty": nil},
+	values := []any{
+		map[string]any{"prompt": "中文 <>&\n\"", "tools": []any{}, "empty": nil},
 		referenceChatContext(upstream.UpstreamRequest{Prompt: "中文"}, modelEntry{Key: "key", IsReasoning: true}),
-		map[string]interface{}{"large": string(bytes.Repeat([]byte("x"), 70000))},
+		map[string]any{"large": string(bytes.Repeat([]byte("x"), 70000))},
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 32 {
+		wg.Go(func() {
 			for _, value := range values {
 				raw, err := json.Marshal(value)
 				if err != nil {
@@ -93,10 +91,10 @@ func TestPooledJSONEncodingPreservesWireAndOwnership(t *testing.T) {
 					t.Error("pooled encoding changed wire")
 					return
 				}
-				_, _ = marshalEncodedBody(map[string]interface{}{"other": "reuses buffer"})
+				_, _ = marshalEncodedBody(map[string]any{"other": "reuses buffer"})
 				testutil.CheckFalse(t, !bytes.Equal(got, EncodeBody(raw)), "returned body aliases pool")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	_, err := marshalEncodedBody(make(chan int))

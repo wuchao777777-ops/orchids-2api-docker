@@ -1,12 +1,6 @@
 package responses
 
-import (
-	"fmt"
-	"strconv"
-	"strings"
-
-	"encoding/json"
-)
+import "encoding/json"
 
 // CreateRequest is the OpenAI Responses create request as a client sends it.
 //
@@ -17,53 +11,53 @@ import (
 // ("true", "1", a numeric string), so interface{} members shadow the typed ones
 // and are parsed loosely afterwards.
 type CreateRequest struct {
-	Model              string                   `json:"model"`
-	Input              interface{}              `json:"input"`
-	Instructions       string                   `json:"instructions,omitempty"`
-	Stream             bool                     `json:"stream,omitempty"`
-	StreamProvided     bool                     `json:"-"`
-	Reasoning          map[string]interface{}   `json:"reasoning,omitempty"`
-	Temperature        *float64                 `json:"temperature,omitempty"`
-	TopP               *float64                 `json:"top_p,omitempty"`
-	MaxOutputTokens    *int                     `json:"max_output_tokens,omitempty"`
-	Tools              []map[string]interface{} `json:"tools,omitempty"`
-	ToolChoice         interface{}              `json:"tool_choice,omitempty"`
-	ParallelToolCalls  *bool                    `json:"parallel_tool_calls,omitempty"`
-	PreviousResponseID string                   `json:"previous_response_id,omitempty"`
-	Store              *bool                    `json:"store,omitempty"`
-	Metadata           map[string]interface{}   `json:"metadata,omitempty"`
-	Truncation         string                   `json:"truncation,omitempty"`
-	Include            []string                 `json:"include,omitempty"`
-	Background         *bool                    `json:"background,omitempty"`
-	PromptCacheKey     string                   `json:"prompt_cache_key,omitempty"`
+	Model              string           `json:"model"`
+	Input              any              `json:"input"`
+	Instructions       string           `json:"instructions,omitempty"`
+	Stream             bool             `json:"stream,omitempty"`
+	StreamProvided     bool             `json:"-"`
+	Reasoning          map[string]any   `json:"reasoning,omitempty"`
+	Temperature        *float64         `json:"temperature,omitempty"`
+	TopP               *float64         `json:"top_p,omitempty"`
+	MaxOutputTokens    *int             `json:"max_output_tokens,omitempty"`
+	Tools              []map[string]any `json:"tools,omitempty"`
+	ToolChoice         any              `json:"tool_choice,omitempty"`
+	ParallelToolCalls  *bool            `json:"parallel_tool_calls,omitempty"`
+	PreviousResponseID string           `json:"previous_response_id,omitempty"`
+	Store              *bool            `json:"store,omitempty"`
+	Metadata           map[string]any   `json:"metadata,omitempty"`
+	Truncation         string           `json:"truncation,omitempty"`
+	Include            []string         `json:"include,omitempty"`
+	Background         *bool            `json:"background,omitempty"`
+	PromptCacheKey     string           `json:"prompt_cache_key,omitempty"`
 	// Text carries the Responses text controls, whose only member is the output
 	// format (`text.format`). The chat-only channels express the same thing as
 	// `response_format`, so the bridge passes the object through unchanged and
 	// lets the chat layer decide how much of it the upstream honors.
-	Text map[string]interface{} `json:"text,omitempty"`
+	Text map[string]any `json:"text,omitempty"`
 	// ResponseFormat accepts the chat-shaped field as well. Clients that were
 	// written against the chat API and later migrated to Responses keep sending
 	// it, and silently dropping it used to turn a structured-output request into
 	// free-form prose.
-	ResponseFormat map[string]interface{} `json:"response_format,omitempty"`
+	ResponseFormat map[string]any `json:"response_format,omitempty"`
 }
 
 func (r *CreateRequest) UnmarshalJSON(data []byte) error {
 	type plainCreateRequest CreateRequest
 	type rawCreateRequest struct {
 		plainCreateRequest
-		Model              interface{} `json:"model"`
-		Instructions       interface{} `json:"instructions,omitempty"`
-		Stream             interface{} `json:"stream,omitempty"`
-		Temperature        interface{} `json:"temperature,omitempty"`
-		TopP               interface{} `json:"top_p,omitempty"`
-		MaxOutputTokens    interface{} `json:"max_output_tokens,omitempty"`
-		ParallelToolCalls  interface{} `json:"parallel_tool_calls,omitempty"`
-		PreviousResponseID interface{} `json:"previous_response_id,omitempty"`
-		Store              interface{} `json:"store,omitempty"`
-		Truncation         interface{} `json:"truncation,omitempty"`
-		Background         interface{} `json:"background,omitempty"`
-		PromptCacheKey     interface{} `json:"prompt_cache_key,omitempty"`
+		Model              any `json:"model"`
+		Instructions       any `json:"instructions,omitempty"`
+		Stream             any `json:"stream,omitempty"`
+		Temperature        any `json:"temperature,omitempty"`
+		TopP               any `json:"top_p,omitempty"`
+		MaxOutputTokens    any `json:"max_output_tokens,omitempty"`
+		ParallelToolCalls  any `json:"parallel_tool_calls,omitempty"`
+		PreviousResponseID any `json:"previous_response_id,omitempty"`
+		Store              any `json:"store,omitempty"`
+		Truncation         any `json:"truncation,omitempty"`
+		Background         any `json:"background,omitempty"`
+		PromptCacheKey     any `json:"prompt_cache_key,omitempty"`
 	}
 
 	var raw rawCreateRequest
@@ -133,109 +127,4 @@ func (r *CreateRequest) UnmarshalJSON(data []byte) error {
 	r.Background = background
 	r.PromptCacheKey = ParseLooseStringAny(raw.PromptCacheKey)
 	return nil
-}
-
-// ParseLooseBoolAnyForField reads a boolean that a client may send as a bool,
-// a number or a word, naming the field in the error so the caller can quote it.
-func ParseLooseBoolAnyForField(value interface{}, field string) (bool, error) {
-	if strings.TrimSpace(field) == "" {
-		field = "value"
-	}
-	errText := field + " must be a boolean"
-	switch v := value.(type) {
-	case nil:
-		return false, nil
-	case bool:
-		return v, nil
-	case string:
-		raw := strings.TrimSpace(v)
-		if raw == "" {
-			return false, nil
-		}
-		switch strings.ToLower(raw) {
-		case "1", "true", "yes", "y", "on":
-			return true, nil
-		case "0", "false", "no", "n", "off":
-			return false, nil
-		default:
-			return false, fmt.Errorf("%s", errText)
-		}
-	case float64:
-		if v == 1 {
-			return true, nil
-		}
-		if v == 0 {
-			return false, nil
-		}
-		return false, fmt.Errorf("%s", errText)
-	default:
-		return false, fmt.Errorf("%s", errText)
-	}
-}
-
-// ParseLooseBoolAny is ParseLooseBoolAnyForField for the `stream` field.
-func ParseLooseBoolAny(value interface{}) (bool, error) {
-	return ParseLooseBoolAnyForField(value, "stream")
-}
-
-// ParseLooseIntAny reads an integer that a client may send as a number or a
-// numeric string.
-func ParseLooseIntAny(value interface{}) (int, error) {
-	switch v := value.(type) {
-	case nil:
-		return 0, nil
-	case int:
-		return v, nil
-	case int32:
-		return int(v), nil
-	case int64:
-		return int(v), nil
-	case float64:
-		return int(v), nil
-	case string:
-		raw := strings.TrimSpace(v)
-		if raw == "" {
-			return 0, nil
-		}
-		n, err := strconv.Atoi(raw)
-		if err != nil {
-			return 0, err
-		}
-		return n, nil
-	default:
-		return 0, fmt.Errorf("invalid integer value")
-	}
-}
-
-// ParseLooseFloatAny reads an optional float: nil stays nil, so a caller can
-// tell "absent" from "zero".
-func ParseLooseFloatAny(value interface{}) (*float64, error) {
-	switch v := value.(type) {
-	case nil:
-		return nil, nil
-	case float64:
-		out := v
-		return &out, nil
-	case int:
-		out := float64(v)
-		return &out, nil
-	case int32:
-		out := float64(v)
-		return &out, nil
-	case int64:
-		out := float64(v)
-		return &out, nil
-	case string:
-		raw := strings.TrimSpace(v)
-		if raw == "" {
-			return nil, nil
-		}
-		n, err := strconv.ParseFloat(raw, 64)
-		if err != nil {
-			return nil, err
-		}
-		return &n, nil
-	default:
-		return nil, fmt.Errorf("invalid float value")
-	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,7 +39,7 @@ type requestObservation struct {
 	journal                      audit.Logger
 	// annotations are facts a handler learned about the request as a whole,
 	// after the row that will become its journal entry was already built.
-	annotations map[string]interface{}
+	annotations map[string]any
 }
 
 // AnnotateRequest adds one fact to the request's journal row.
@@ -48,7 +49,7 @@ type requestObservation struct {
 // attempts — that an earlier turn was withheld, and how the request ended — has
 // no attempt row to live on, so it is recorded here and merged into the
 // metadata of that single row. Outside a traced request it is a no-op.
-func AnnotateRequest(ctx context.Context, key string, value interface{}) {
+func AnnotateRequest(ctx context.Context, key string, value any) {
 	box, ok := ctx.Value(requestObservationKey{}).(*requestObservation)
 	if !ok || key == "" {
 		return
@@ -56,7 +57,7 @@ func AnnotateRequest(ctx context.Context, key string, value interface{}) {
 	box.mu.Lock()
 	defer box.mu.Unlock()
 	if box.annotations == nil {
-		box.annotations = make(map[string]interface{}, 4)
+		box.annotations = make(map[string]any, 4)
 	}
 	box.annotations[key] = value
 }
@@ -202,7 +203,7 @@ func Diagnostics(store *debug.DiagnosticStore, enabled func() bool, budgets ...f
 			defer capture.Close()
 			writer := &diagnosticWriter{TracedResponseWriter: NewTracedResponseWriter(w), capture: capture}
 			defer func() {
-				capture.Set("6_http_summary.json", fmtJSON(map[string]interface{}{"status": writer.StatusCode, "bytes": writer.BytesWritten, "stream_failed": writer.StreamFailed()}))
+				capture.Set("6_http_summary.json", fmtJSON(map[string]any{"status": writer.StatusCode, "bytes": writer.BytesWritten, "stream_failed": writer.StreamFailed()}))
 				writer.saveResponseDiagnostic()
 				saveCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
@@ -214,7 +215,7 @@ func Diagnostics(store *debug.DiagnosticStore, enabled func() bool, budgets ...f
 		})
 	}
 }
-func fmtJSON(value interface{}) string { raw, _ := json.Marshal(value); return string(raw) }
+func fmtJSON(value any) string { raw, _ := json.Marshal(value); return string(raw) }
 
 type diagnosticReader struct {
 	io.ReadCloser
@@ -241,7 +242,7 @@ func (w *diagnosticWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 func (w *diagnosticWriter) saveResponseDiagnostic() {
-	raw, _ := json.Marshal(map[string]interface{}{"status": w.StatusCode, "content_type": w.Header().Get("Content-Type"), "bytes": w.BytesWritten, "stream_failed": w.StreamFailed()})
+	raw, _ := json.Marshal(map[string]any{"status": w.StatusCode, "content_type": w.Header().Get("Content-Type"), "bytes": w.BytesWritten, "stream_failed": w.StreamFailed()})
 	w.capture.Set("5_http_response_metadata.json", string(raw))
 }
 
@@ -288,10 +289,8 @@ func finishRequestJournal(r *http.Request, w *TracedResponseWriter, duration tim
 	e.RequestID, e.Duration = GetRequestID(r.Context()), duration.Milliseconds()
 	e.Timestamp = time.Now()
 	e.ClientIP, e.UserAgent = ClientIP(r), r.UserAgent()
-	metadata := map[string]interface{}{}
-	for k, v := range e.Metadata {
-		metadata[k] = v
-	}
+	metadata := map[string]any{}
+	maps.Copy(metadata, e.Metadata)
 	metadata["http_status"], metadata["path"], metadata["method"] = w.StatusCode, r.URL.Path, r.Method
 	metadata["trace_id"] = GetTraceID(r.Context())
 	if !w.FirstWriteAt().IsZero() {
@@ -320,17 +319,13 @@ func finishRequestJournal(r *http.Request, w *TracedResponseWriter, duration tim
 		box.mu.Lock()
 		metadata["upstream_http_phase_samples"] = box.httpPhaseSamples
 		phaseSnapshot := make(map[string]int64, len(box.httpPhases))
-		for k, v := range box.httpPhases {
-			phaseSnapshot[k] = v
-		}
+		maps.Copy(phaseSnapshot, box.httpPhases)
 		metadata["upstream_http_phases_sum"] = phaseSnapshot
 		metadata["retry_wait_ms"] = box.retryWaitMS
 		metadata["queue_wait_ms"] = box.queueWaitMS
 		metadata["upstream_attempts"] = box.attempts
 		metadata["account_switches"] = box.switches
-		for key, value := range box.annotations {
-			metadata[key] = value
-		}
+		maps.Copy(metadata, box.annotations)
 		box.mu.Unlock()
 	}
 	e.Metadata = metadata

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,7 +34,7 @@ func httpStatusFromAccountStatus(status string) int {
 	}
 }
 
-func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
+func buildQuotaResponseFields(acc *store.Account) map[string]any {
 	return buildQuotaResponseFieldsWithUsage(acc, 0, false)
 }
 
@@ -41,8 +42,8 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 // is the usage this gateway measured inside observedUsageWindow and
 // usageObserved says whether that measurement actually ran; both are used only by the
 // Free estimate, which must never present unmeasured usage as if it were measured.
-func buildQuotaResponseFieldsWithUsage(acc *store.Account, observedTokens int64, usageObserved bool) map[string]interface{} {
-	fields := map[string]interface{}{
+func buildQuotaResponseFieldsWithUsage(acc *store.Account, observedTokens int64, usageObserved bool) map[string]any {
+	fields := map[string]any{
 		"quota_limit":     0.0,
 		"quota_used":      0.0,
 		"quota_remaining": 0.0,
@@ -194,7 +195,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if isUsage {
-			resp := map[string]interface{}{
+			resp := map[string]any{
 				"account_id":     account.ID,
 				"name":           account.Name,
 				"account_type":   account.AccountType,
@@ -204,9 +205,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				"usage_total":    account.UsageTotal,
 				"quota_reset_at": account.QuotaResetAt,
 			}
-			for k, v := range buildQuotaResponseFields(account) {
-				resp[k] = v
-			}
+			maps.Copy(resp, buildQuotaResponseFields(account))
 			util.WriteJSON(w, resp)
 			return
 		}
@@ -221,10 +220,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if next, ok := a.checkNextAllowed[id]; ok && !next.IsZero() && now.Before(next) {
-				retryAfter := int(next.Sub(now).Seconds())
-				if retryAfter < 1 {
-					retryAfter = 1
-				}
+				retryAfter := max(int(next.Sub(now).Seconds()), 1)
 				a.checkMu.Unlock()
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 				http.Error(w, "account check backoff", http.StatusTooManyRequests)

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -13,13 +14,12 @@ import (
 
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/audit"
-	"orchids-api/internal/debug"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
 )
 
-func (h *Handler) finishMessages(w http.ResponseWriter, r *http.Request, sh *streamHandler, req ClaudeRequest, currentAccount *store.Account, forcedChannel string, isStream bool, responseFormat adapter.ResponseFormat, startTime time.Time, logger *debug.Logger) {
+func (h *Handler) finishMessages(w http.ResponseWriter, r *http.Request, sh *streamHandler, req ClaudeRequest, currentAccount *store.Account, forcedChannel string, isStream bool, responseFormat adapter.ResponseFormat, startTime time.Time) {
 	// Ensure a final response
 	if !sh.hasReturn {
 		sh.finishResponse("end_turn")
@@ -41,20 +41,20 @@ func (h *Handler) finishMessages(w http.ResponseWriter, r *http.Request, sh *str
 		}
 
 		if len(sh.contentBlocks) == 0 && sh.responseText.Len() > 0 {
-			sh.contentBlocks = append(sh.contentBlocks, map[string]interface{}{
+			sh.contentBlocks = append(sh.contentBlocks, map[string]any{
 				"type": "text",
 				"text": sh.responseText.String(),
 			})
 		}
 		if sh.contentBlocks == nil {
-			sh.contentBlocks = make([]map[string]interface{}, 0)
+			sh.contentBlocks = make([]map[string]any, 0)
 		}
 
-		var response interface{}
+		var response any
 		if responseFormat == adapter.FormatOpenAI {
 			response = buildOpenAINonStreamResponse(sh, req.Model, stopReason)
 		} else {
-			anthropicResponse := map[string]interface{}{
+			anthropicResponse := map[string]any{
 				"id":            sh.msgID,
 				"type":          "message",
 				"role":          "assistant",
@@ -101,7 +101,7 @@ func (h *Handler) finishMessages(w http.ResponseWriter, r *http.Request, sh *str
 		if sh.useUpstreamUsage {
 			usageSource = audit.UsageSourceUpstream
 		}
-		metadata := map[string]interface{}{
+		metadata := map[string]any{
 			"stream":               isStream,
 			"finish_reason":        sh.finalStopReason,
 			"requested_max_tokens": req.outputTokenLimit(),
@@ -121,9 +121,7 @@ func (h *Handler) finishMessages(w http.ResponseWriter, r *http.Request, sh *str
 		}
 		metadata["visible_output"] = visibleOutput
 		metadata["reasoning_only"] = reasoningOutput && !visibleOutput && !toolOutput
-		for key, value := range sh.usageMetadata {
-			metadata[key] = value
-		}
+		maps.Copy(metadata, sh.usageMetadata)
 		event := audit.Event{
 			// One journal schema for every channel: the log centre must be able to
 			// compare two channels' requests on the same fields.
@@ -161,11 +159,11 @@ func (h *Handler) finishMessages(w http.ResponseWriter, r *http.Request, sh *str
 	}
 }
 
-func toolChoiceDisablesTools(choice interface{}) bool {
+func toolChoiceDisablesTools(choice any) bool {
 	switch typed := choice.(type) {
 	case string:
 		return strings.EqualFold(strings.TrimSpace(typed), "none")
-	case map[string]interface{}:
+	case map[string]any:
 		return strings.EqualFold(strings.TrimSpace(fmt.Sprint(typed["type"])), "none")
 	default:
 		return false

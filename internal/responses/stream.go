@@ -18,7 +18,7 @@ import (
 // never a single global reasoning buffer. Public IDs remain stable throughout.
 type chatResponseItem struct {
 	index     int
-	value     map[string]interface{}
+	value     map[string]any
 	text      strings.Builder
 	signature string
 	closed    bool
@@ -30,20 +30,8 @@ type StreamOptions struct {
 	// Restore grouped function identities before any public item event.
 	ToolNamespaces ToolNamespaces
 	// onComplete receives the terminal response object after it is built.
-	OnComplete func(map[string]interface{})
-	// SearchHook turns a provider-private search delta into a Responses output
-	// item. Nil means the channel has no private search traffic, so the
-	// translator stays free of provider knowledge.
-	SearchHook SearchItemHook
+	OnComplete func(map[string]any)
 }
-
-// SearchItemHook reports the output item a chat delta carries for a provider's
-// private search channel. It returns a nil value when the delta has none.
-//
-// The hook exists because a search item is the one part of a chat stream that
-// has no Responses equivalent: it is injected by this gateway's own
-// provider-to-chat layer, under a private key the protocol never defines.
-type SearchItemHook func(delta map[string]interface{}) (identity string, value map[string]interface{}, done bool)
 
 // WriteStreamFromChatReader is the translation itself.
 func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, reader io.Reader, opts StreamOptions) {
@@ -55,19 +43,18 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 	thoughts := map[string]*chatResponseItem{}
 	tools := map[int]*chatResponseItem{}
 	callIDs := map[string]bool{}
-	searches := map[string]*chatResponseItem{}
 	var message *chatResponseItem
 	textIndex, refusalIndex := -1, -1
 	var text, refusal strings.Builder
-	annotations := []interface{}{}
+	annotations := []any{}
 	annotationKeys := map[string]bool{}
 	activeThought := ""
-	var usage map[string]interface{}
+	var usage map[string]any
 	finish := ""
 	sawDone := false
 	meaningful := false
 	sequence := 0
-	emit := func(kind string, payload map[string]interface{}) {
+	emit := func(kind string, payload map[string]any) {
 		// sequence_number must increase by one per event: a client that
 		// reconnects with Last-Event-ID asks for everything after the last
 		// number it saw, and an event without one cannot be ordered at all.
@@ -82,12 +69,12 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 		_ = writer.WriteSSE(kind, data)
 		writer.Flush()
 	}
-	response := func(status string) map[string]interface{} {
-		out := make([]interface{}, 0, len(items))
+	response := func(status string) map[string]any {
+		out := make([]any, 0, len(items))
 		for _, item := range items {
 			out = append(out, item.value)
 		}
-		v := map[string]interface{}{"id": id, "object": "response", "created_at": created, "model": request.Model, "status": status, "output": out}
+		v := map[string]any{"id": id, "object": "response", "created_at": created, "model": request.Model, "status": status, "output": out}
 		if usage != nil {
 			v["usage"] = usage
 		}
@@ -99,18 +86,18 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 		}
 		return v
 	}
-	add := func(value map[string]interface{}) *chatResponseItem {
+	add := func(value map[string]any) *chatResponseItem {
 		item := &chatResponseItem{index: len(items), value: value}
 		items = append(items, item)
-		emit("response.output_item.added", map[string]interface{}{"output_index": item.index, "item": value})
+		emit("response.output_item.added", map[string]any{"output_index": item.index, "item": value})
 		return item
 	}
 	ensureMessage := func() {
 		if message == nil {
-			message = add(map[string]interface{}{"id": "msg_" + util.RandomHex(12), "type": "message", "role": "assistant", "status": "in_progress", "content": []interface{}{}})
+			message = add(map[string]any{"id": "msg_" + util.RandomHex(12), "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}})
 		}
 	}
-	emit("response.created", map[string]interface{}{"response": response("in_progress")})
+	emit("response.created", map[string]any{"response": response("in_progress")})
 	if writer.Err != nil {
 		return
 	}
@@ -122,7 +109,7 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 			sawDone = true
 			return io.EOF
 		}
-		var chunk map[string]interface{}
+		var chunk map[string]any
 		if err := json.Unmarshal(data, &chunk); err != nil {
 			return fmt.Errorf("invalid chat SSE: %w", err)
 		}
@@ -132,18 +119,18 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 		if chunk["error"] != nil || event == "error" {
 			return Failure(chunk)
 		}
-		if u, ok := chunk["usage"].(map[string]interface{}); ok {
+		if u, ok := chunk["usage"].(map[string]any); ok {
 			usage = UsageFromChat(u)
 		}
 		for _, raw := range InterfaceSlice(chunk["choices"]) {
-			choice, ok := raw.(map[string]interface{})
+			choice, ok := raw.(map[string]any)
 			if !ok {
 				return fmt.Errorf("invalid chat choice")
 			}
 			if index, exists := choice["index"]; exists && InterfaceToInt(index) != 0 {
 				return fmt.Errorf("multiple chat choices are not supported by Responses")
 			}
-			delta, _ := choice["delta"].(map[string]interface{})
+			delta, _ := choice["delta"].(map[string]any)
 			if finish != "" && len(delta) > 0 {
 				return fmt.Errorf("chat output after finish_reason")
 			}
@@ -160,16 +147,16 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 				activeThought = key
 				state := thoughts[key]
 				if state == nil {
-					state = add(map[string]interface{}{"id": "rs_" + util.RandomHex(12), "type": "reasoning", "status": "in_progress", "summary": []interface{}{}})
+					state = add(map[string]any{"id": "rs_" + util.RandomHex(12), "type": "reasoning", "status": "in_progress", "summary": []any{}})
 					thoughts[key] = state
-					emit("response.reasoning_summary_part.added", map[string]interface{}{"item_id": state.value["id"], "output_index": state.index, "summary_index": 0, "part": map[string]interface{}{"type": "summary_text", "text": ""}})
+					emit("response.reasoning_summary_part.added", map[string]any{"item_id": state.value["id"], "output_index": state.index, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": ""}})
 				}
 				if thinking != "" {
 					if state.closed {
 						return fmt.Errorf("reasoning delta after item completion")
 					}
 					state.text.WriteString(thinking)
-					emit("response.reasoning_summary_text.delta", map[string]interface{}{"item_id": state.value["id"], "output_index": state.index, "summary_index": 0, "delta": thinking})
+					emit("response.reasoning_summary_text.delta", map[string]any{"item_id": state.value["id"], "output_index": state.index, "summary_index": 0, "delta": thinking})
 				}
 				if signature != "" {
 					state.signature = signature
@@ -184,31 +171,6 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 					state.closed = true
 				}
 				activeThought = ""
-			}
-			// A provider-private search delta becomes a Responses output item
-			// only when the caller registered a hook. x_grok_search is Grok
-			// Build's private spelling; the hook keeps that knowledge out of
-			// this package.
-			if opts.SearchHook != nil {
-				key, value, done := opts.SearchHook(delta)
-				if value != nil {
-					state := searches[key]
-					if state == nil {
-						state = add(value)
-						searches[key] = state
-					}
-					for k, v := range value {
-						if k != "id" && k != "status" {
-							state.value[k] = v
-						}
-					}
-					if done {
-						state.closed = true
-						state.value["status"] = value["status"]
-					}
-					meaningful = true
-					activeThought = ""
-				}
 			}
 			for _, kind := range []string{"content", "refusal"} {
 				value := StreamString(delta[kind])
@@ -229,18 +191,18 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 				if *partIndex < 0 {
 					parts := InterfaceSlice(message.value["content"])
 					*partIndex = len(parts)
-					part := map[string]interface{}{"type": partType}
+					part := map[string]any{"type": partType}
 					if kind == "content" {
 						part["text"] = ""
-						part["annotations"] = []interface{}{}
+						part["annotations"] = []any{}
 					} else {
 						part["refusal"] = ""
 					}
 					message.value["content"] = append(parts, part)
-					emit("response.content_part.added", map[string]interface{}{"item_id": message.value["id"], "output_index": message.index, "content_index": *partIndex, "part": part})
+					emit("response.content_part.added", map[string]any{"item_id": message.value["id"], "output_index": message.index, "content_index": *partIndex, "part": part})
 				}
 				builder.WriteString(value)
-				emit("response."+partType+".delta", map[string]interface{}{"item_id": message.value["id"], "output_index": message.index, "content_index": *partIndex, "delta": value})
+				emit("response."+partType+".delta", map[string]any{"item_id": message.value["id"], "output_index": message.index, "content_index": *partIndex, "delta": value})
 			}
 			for _, ann := range Annotations(delta["annotations"]) {
 				b, _ := json.Marshal(ann)
@@ -251,11 +213,11 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 				}
 			}
 			for _, raw := range InterfaceSlice(delta["tool_calls"]) {
-				call, ok := raw.(map[string]interface{})
+				call, ok := raw.(map[string]any)
 				if !ok {
 					return fmt.Errorf("invalid tool call")
 				}
-				fn, _ := call["function"].(map[string]interface{})
+				fn, _ := call["function"].(map[string]any)
 				index := InterfaceToInt(call["index"])
 				if index < 0 {
 					return fmt.Errorf("invalid tool index")
@@ -270,7 +232,7 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 					// A grouped tool travels upstream as namespace__name; the
 					// item is put back on the name the caller declared straight
 					// away, so every event already carries it.
-					item := map[string]interface{}{"id": "fc_" + util.RandomHex(12), "type": "function_call", "call_id": callID, "name": name, "arguments": "", "status": "in_progress"}
+					item := map[string]any{"id": "fc_" + util.RandomHex(12), "type": "function_call", "call_id": callID, "name": name, "arguments": "", "status": "in_progress"}
 					opts.ToolNamespaces.RestoreItem(item)
 					state = add(item)
 					state.wireName = name
@@ -285,7 +247,7 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 					}
 					state.text.WriteString(value)
 					if value != "" {
-						emit("response.function_call_arguments.delta", map[string]interface{}{"item_id": state.value["id"], "output_index": state.index, "delta": value})
+						emit("response.function_call_arguments.delta", map[string]any{"item_id": state.value["id"], "output_index": state.index, "delta": value})
 					}
 				}
 				meaningful = true
@@ -329,52 +291,48 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 	}
 	if err != nil {
 		v := response("failed")
-		v["error"] = map[string]interface{}{"code": "upstream_stream_error", "message": err.Error()}
-		emit("response.failed", map[string]interface{}{"response": v})
+		v["error"] = map[string]any{"code": "upstream_stream_error", "message": err.Error()}
+		emit("response.failed", map[string]any{"response": v})
 		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 		writer.Flush()
 		return
 	}
 	for _, item := range items {
 		kind := StreamString(item.value["type"])
-		itemStatus := status
-		if kind == "web_search_call" && item.closed {
-			itemStatus = ParseLooseStringAny(item.value["status"])
-		}
-		item.value["status"] = itemStatus
+		item.value["status"] = status
 		switch kind {
 		case "reasoning":
-			part := map[string]interface{}{"type": "summary_text", "text": item.text.String()}
-			item.value["summary"] = []interface{}{part}
+			part := map[string]any{"type": "summary_text", "text": item.text.String()}
+			item.value["summary"] = []any{part}
 			if item.signature != "" {
 				item.value["encrypted_content"] = item.signature
 			}
-			emit("response.reasoning_summary_text.done", map[string]interface{}{"item_id": item.value["id"], "output_index": item.index, "summary_index": 0, "text": item.text.String()})
-			emit("response.reasoning_summary_part.done", map[string]interface{}{"item_id": item.value["id"], "output_index": item.index, "summary_index": 0, "part": part})
+			emit("response.reasoning_summary_text.done", map[string]any{"item_id": item.value["id"], "output_index": item.index, "summary_index": 0, "text": item.text.String()})
+			emit("response.reasoning_summary_part.done", map[string]any{"item_id": item.value["id"], "output_index": item.index, "summary_index": 0, "part": part})
 		case "function_call":
-			emit("response.function_call_arguments.done", map[string]interface{}{"item_id": item.value["id"], "output_index": item.index, "arguments": item.value["arguments"]})
+			emit("response.function_call_arguments.done", map[string]any{"item_id": item.value["id"], "output_index": item.index, "arguments": item.value["arguments"]})
 		case "message":
 			parts := InterfaceSlice(item.value["content"])
 			for i, raw := range parts {
-				part := raw.(map[string]interface{})
+				part := raw.(map[string]any)
 				partType := StreamString(part["type"])
-				fields := map[string]interface{}{"item_id": item.value["id"], "output_index": item.index, "content_index": i}
+				fields := map[string]any{"item_id": item.value["id"], "output_index": item.index, "content_index": i}
 				if partType == "output_text" {
 					part["text"] = text.String()
 					part["annotations"] = annotations
 					fields["text"] = text.String()
 					for n, ann := range annotations {
-						emit("response.output_text.annotation.added", map[string]interface{}{"item_id": item.value["id"], "output_index": item.index, "content_index": i, "annotation_index": n, "annotation": ann})
+						emit("response.output_text.annotation.added", map[string]any{"item_id": item.value["id"], "output_index": item.index, "content_index": i, "annotation_index": n, "annotation": ann})
 					}
 				} else {
 					part["refusal"] = refusal.String()
 					fields["refusal"] = refusal.String()
 				}
 				emit("response."+partType+".done", fields)
-				emit("response.content_part.done", map[string]interface{}{"item_id": item.value["id"], "output_index": item.index, "content_index": i, "part": part})
+				emit("response.content_part.done", map[string]any{"item_id": item.value["id"], "output_index": item.index, "content_index": i, "part": part})
 			}
 		}
-		emit("response.output_item.done", map[string]interface{}{"output_index": item.index, "item": item.value})
+		emit("response.output_item.done", map[string]any{"output_index": item.index, "item": item.value})
 	}
 	if usage == nil {
 		usage = UsageFromChat(nil)
@@ -383,7 +341,7 @@ func WriteStreamFromChatReader(w http.ResponseWriter, request CreateRequest, rea
 	if details != nil {
 		v["incomplete_details"] = details
 	}
-	emit("response."+status, map[string]interface{}{"response": v})
+	emit("response."+status, map[string]any{"response": v})
 	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 	writer.Flush()
 	if writer.Err == nil && opts.OnComplete != nil {

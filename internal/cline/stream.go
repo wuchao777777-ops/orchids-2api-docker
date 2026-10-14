@@ -18,7 +18,7 @@ type streamResult struct {
 	SawMeaningfulEvent   bool
 	ToolCallCount        int
 	UpstreamFinishReason string
-	Usage                map[string]interface{}
+	Usage                map[string]any
 	// ThinkingSignature is one stable signature for every reasoning delta of
 	// the stream, generated on first sight so a multi-delta block stays signed.
 	ThinkingSignature string
@@ -38,9 +38,6 @@ func (r streamResult) FinishReason() string {
 		return r.UpstreamFinishReason
 	}
 }
-
-// NewToolCallID mints a local tool-call id for upstream deltas that omit one.
-func NewToolCallID() string { return util.NewToolCallID() }
 
 // newThinkingSignature mints the per-stream thinking signature the Anthropic
 // surface attaches to a thinking block. The prefix names the channel so a
@@ -75,7 +72,7 @@ type streamChunk struct {
 			} `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
-	Usage map[string]interface{} `json:"usage"`
+	Usage map[string]any `json:"usage"`
 	Error struct {
 		Message string          `json:"message"`
 		Code    json.RawMessage `json:"code"`
@@ -152,7 +149,7 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 			if result.ThinkingSignature == "" {
 				result.ThinkingSignature = newThinkingSignature()
 			}
-			onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{
+			onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]any{
 				"delta":     reasoning,
 				"signature": result.ThinkingSignature,
 			}})

@@ -11,12 +11,7 @@ const (
 	CapabilityResponses = "responses"
 	CapabilityChat      = "chat"
 	CapabilityMessages  = "messages"
-	CapabilityImage     = "image"
-	CapabilityImageEdit = "image_edit"
 	CapabilityVideo     = "video"
-	CapabilityTTS       = "tts"
-	CapabilitySTT       = "stt"
-	CapabilityRealtime  = "realtime"
 )
 
 // ModelStatus accepts only the current canonical states.
@@ -97,7 +92,7 @@ type Model struct {
 	// CreatedAt records when the route row was first seen. The public model
 	// list reports it as `created`; a row stored before this field existed
 	// leaves it zero and the caller falls back to the legacy constant.
-	CreatedAt time.Time `json:"created_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (m *Model) NormalizeRoute() {

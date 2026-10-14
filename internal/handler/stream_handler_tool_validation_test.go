@@ -215,7 +215,6 @@ func newToolValidationHandler(t *testing.T) *streamHandler {
 		&config.Config{},
 		httptest.NewRecorder(),
 		debug.New(false, false),
-		false,
 		false, // non-stream mode for easier assertions
 		adapter.FormatAnthropic,
 	)
@@ -227,7 +226,7 @@ func newToolValidationHandler(t *testing.T) *streamHandler {
 func sendToolCall(h *streamHandler, id, name, input string) {
 	h.handleMessage(upstream.SSEMessage{
 		Type: "model.tool-call",
-		Event: map[string]interface{}{
+		Event: map[string]any{
 			"toolCallId": id,
 			"toolName":   name,
 			"input":      input,
@@ -239,7 +238,7 @@ func sendToolCall(h *streamHandler, id, name, input string) {
 func sendToolCallWithoutID(h *streamHandler, name, input string) {
 	h.handleMessage(upstream.SSEMessage{
 		Type: "model.tool-call",
-		Event: map[string]interface{}{
+		Event: map[string]any{
 			"toolName": name,
 			"input":    input,
 		},
@@ -250,7 +249,7 @@ func sendToolCallWithoutID(h *streamHandler, name, input string) {
 func sendToolFinish(h *streamHandler) {
 	h.handleMessage(upstream.SSEMessage{
 		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
+		Event: map[string]any{"finishReason": "tool_use"},
 	})
 }
 

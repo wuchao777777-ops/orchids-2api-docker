@@ -159,7 +159,7 @@ func ResolveCredentials(acc *store.Account) Credentials {
 
 // ParseExpiry reads the upstream expiry, which reaches this client as a number,
 // a numeric string or an RFC3339 timestamp depending on the endpoint.
-func ParseExpiry(value interface{}) time.Time {
+func ParseExpiry(value any) time.Time {
 	switch typed := value.(type) {
 	case float64:
 		return millisToTime(int64(typed))
@@ -230,11 +230,11 @@ func inferenceCapError(raw string) *InferenceCapError {
 
 // ParseInferenceCapDuration reads the wait the upstream wrote in prose.
 func ParseInferenceCapDuration(body string) time.Duration {
-	index := strings.Index(body, "Try again in")
-	if index < 0 {
+	_, after, ok := strings.Cut(body, "Try again in")
+	if !ok {
 		return 0
 	}
-	rest := body[index+len("Try again in"):]
+	rest := after
 	end := len(rest)
 	if i := strings.IndexAny(rest, "\"\n\r}"); i >= 0 {
 		end = i

@@ -175,9 +175,9 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("qoder client is nil")
 	}
 	preparation := debug.BeginUpstream(ctx, "PREPARE", c.endpoints.inference, nil, nil)
-	var prepMetadata map[string]interface{}
+	var prepMetadata map[string]any
 	if debug.FromContext(ctx) != nil {
-		prepMetadata = map[string]interface{}{"kind": "preparation", "provider": "qoder"}
+		prepMetadata = map[string]any{"kind": "preparation", "provider": "qoder"}
 	}
 	_, prepTrace := preparation.Trace(ctx, prepMetadata)
 	defer func() {
@@ -290,8 +290,7 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		if upstream.RemainingAttempts(ctx) == 0 {
 			return err
 		}
-		var agentErr *agentLimitError
-		if errors.As(err, &agentErr) {
+		if _, ok := errors.AsType[*agentLimitError](err); ok {
 			// agentLimitResetTime is emitted by the inference agent and is not an
 			// authoritative account credit snapshot.  The OpenAPI quota endpoint
 			// may still report spendable credits, so do not overwrite QoderQuota or

@@ -38,7 +38,7 @@ type bodyJSONWriter struct {
 	encoder *json.Encoder
 }
 
-var bodyJSONWriters = sync.Pool{New: func() interface{} {
+var bodyJSONWriters = sync.Pool{New: func() any {
 	w := &bodyJSONWriter{}
 	w.buffer.Grow(4096)
 	w.encoder = json.NewEncoder(&w.buffer)
@@ -47,7 +47,7 @@ var bodyJSONWriters = sync.Pool{New: func() interface{} {
 
 // Only the intermediate JSON buffer is reused. The returned encoded body owns
 // its bytes, including while net/http may still be sending the request body.
-func marshalEncodedBody(value interface{}) ([]byte, error) {
+func marshalEncodedBody(value any) ([]byte, error) {
 	w := bodyJSONWriters.Get().(*bodyJSONWriter)
 	defer func() {
 		clear(w.buffer.Bytes())
@@ -73,7 +73,7 @@ func EncodeBody(raw []byte) []byte {
 	encoded := make([]byte, bodyEncoding.EncodedLen(len(raw)))
 	bodyEncoding.Encode(encoded, raw)
 	q := len(encoded) / 3
-	for i := 0; i < q; i++ {
+	for i := range q {
 		encoded[i], encoded[len(encoded)-q+i] = encoded[len(encoded)-q+i], encoded[i]
 	}
 	return encoded

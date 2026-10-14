@@ -55,7 +55,6 @@ type streamHandler struct {
 	// Configuration
 	config              *config.Config
 	isStream            bool
-	suppressThinking    bool
 	useUpstreamUsage    bool
 	responseFormat      adapter.ResponseFormat
 	disallowToolCalls   bool
@@ -97,7 +96,7 @@ type streamHandler struct {
 	cachedInputTokens        int
 	cacheWriteTokens         int
 	reasoningTokens          int
-	usageMetadata            map[string]interface{}
+	usageMetadata            map[string]any
 	activeThinkingBlockIndex int
 	activeThinkingSSEIndex   int
 	activeTextBlockIndex     int
@@ -114,7 +113,7 @@ type streamHandler struct {
 	textBlockBuilders        []*strings.Builder
 	thinkingBlockBuilders    []*strings.Builder
 	thinkingBlockSigs        []string
-	contentBlocks            []map[string]interface{}
+	contentBlocks            []map[string]any
 	pendingThinkingSig       string
 	hasTextOutput            bool
 	deferredFlushFrames      int
@@ -146,7 +145,6 @@ func newStreamHandler(
 	cfg *config.Config,
 	w http.ResponseWriter,
 	logger *debug.Logger,
-	suppressThinking bool,
 	isStream bool,
 	responseFormat adapter.ResponseFormat,
 ) *streamHandler {
@@ -158,13 +156,12 @@ func newStreamHandler(
 	}
 
 	h := &streamHandler{
-		config:           cfg,
-		w:                w,
-		flusher:          flusher,
-		isStream:         isStream,
-		logger:           logger,
-		suppressThinking: suppressThinking,
-		responseFormat:   responseFormat,
+		config:         cfg,
+		w:              w,
+		flusher:        flusher,
+		isStream:       isStream,
+		logger:         logger,
+		responseFormat: responseFormat,
 
 		blockIndex:               -1,
 		responseText:             perf.AcquireStringBuilder(),
@@ -273,9 +270,6 @@ func (h *streamHandler) resetRoundState() {
 }
 
 func (h *streamHandler) ensureBlock(blockType string) int {
-	if blockType == "thinking" && h.suppressThinking {
-		return -1
-	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -303,7 +297,7 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 	case "thinking":
 		signature := h.pendingThinkingSig
 		h.pendingThinkingSig = ""
-		h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
+		h.contentBlocks = append(h.contentBlocks, map[string]any{
 			"type":      "thinking",
 			"signature": signature,
 		})
@@ -323,7 +317,7 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 		h.ssePayloadScratch = raw[:0]
 		h.writeSSEBytesLockedWithHint("content_block_start", raw, true)
 	case "text":
-		h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
+		h.contentBlocks = append(h.contentBlocks, map[string]any{
 			"type": "text",
 		})
 		internalIdx := len(h.contentBlocks) - 1
@@ -388,14 +382,14 @@ func (h *streamHandler) closeActiveBlockLocked() {
 // Event Handlers
 
 // extractThinkingSignature extracts a signature from event or event.data.
-func extractThinkingSignature(event map[string]interface{}) string {
+func extractThinkingSignature(event map[string]any) string {
 	if event == nil {
 		return ""
 	}
 	if sig, ok := event["signature"].(string); ok {
 		return strings.TrimSpace(sig)
 	}
-	if data, ok := event["data"].(map[string]interface{}); ok {
+	if data, ok := event["data"].(map[string]any); ok {
 		if sig, ok := data["signature"].(string); ok {
 			return strings.TrimSpace(sig)
 		}
@@ -413,7 +407,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			if delta, ok := msg.Event["delta"]; ok {
 				fields = append(fields, "has_delta", delta != nil)
 			}
-			if data, ok := msg.Event["data"].(map[string]interface{}); ok {
+			if data, ok := msg.Event["data"].(map[string]any); ok {
 				fields = append(fields, "data_keys", mapKeys(data))
 				if msgStr, ok := data["message"].(string); ok {
 					fields = append(fields, "data_message_len", len(msgStr))
@@ -444,18 +438,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			if data, ok := msg.Event["data"]; ok {
 				slog.Warn("SSE Error Payload", "type", eventKey, "data", data)
 			}
-		}
-	}
-	if h.suppressThinking {
-		if strings.HasPrefix(eventKey, "model.reasoning-") {
-			if eventKey == "model.reasoning-delta" {
-				if delta, _ := msg.Event["delta"].(string); delta != "" {
-					h.mu.Lock()
-					h.hasReasoningOutput = true
-					h.mu.Unlock()
-				}
-			}
-			return
 		}
 	}
 
@@ -603,7 +585,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	case "model.finish":
 		stopReason := "end_turn"
-		if usage, ok := msg.Event["usage"].(map[string]interface{}); ok {
+		if usage, ok := msg.Event["usage"].(map[string]any); ok {
 			h.applyUpstreamUsageTokens(usage)
 		}
 		if finishReason, ok := msg.Event["finishReason"].(string); ok {

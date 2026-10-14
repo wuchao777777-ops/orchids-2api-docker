@@ -35,7 +35,7 @@ type messageExecution struct {
 	verboseDiagnostics bool
 	gateNoTools        bool
 	upstreamMessages   []prompt.Message
-	effectiveTools     []interface{}
+	effectiveTools     []any
 	structured         *upstream.StructuredOutput
 	logger             *debug.Logger
 	apiClient          UpstreamClient
@@ -50,10 +50,7 @@ func (e *messageExecution) run() {
 	// A per-request chat session id, reused across account switches so the
 	// upstream keeps one conversation for this downstream request.
 	chatSessionID := "chat_" + randomSessionID()
-	maxRetries := e.cfg.MaxRetries
-	if maxRetries < 0 {
-		maxRetries = 0
-	}
+	maxRetries := max(e.cfg.MaxRetries, 0)
 	retryDelay := time.Duration(e.cfg.RetryDelay) * time.Millisecond
 	retriesRemaining := maxRetries
 	budgetCtx, attemptBudget := upstream.WithAttemptBudget(e.r.Context(), maxRetries+1)

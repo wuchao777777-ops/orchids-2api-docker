@@ -13,12 +13,13 @@ import (
 
 	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/channel"
+	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 
 	"golang.org/x/sync/singleflight"
 )
 
-const defaultCacheTTL = 5 * time.Second
+const defaultCacheTTL = config.LoadBalancerCacheTTL
 
 // DefaultAccountConcurrency is the per-account in-flight ceiling every provider
 // falls back to when the account carries no explicit max_concurrent. A single
@@ -171,7 +172,7 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 	if len(accounts) > accountScanWindow {
 		start := lb.rotateScanCursor(len(accounts))
 		scanned = make([]*store.Account, 0, accountScanWindow)
-		for offset := 0; offset < accountScanWindow; offset++ {
+		for offset := range accountScanWindow {
 			scanned = append(scanned, accounts[(start+offset)%len(accounts)])
 		}
 	}
@@ -353,7 +354,7 @@ func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Accoun
 	}
 
 	// Use singleflight to prevent cache stampede
-	val, err, _ := lb.sfGroup.Do("getEnabledAccounts", func() (interface{}, error) {
+	val, err, _ := lb.sfGroup.Do("getEnabledAccounts", func() (any, error) {
 		// Double check after acquiring singleflight lock
 		if accounts, ok := lb.cachedAccountsBefore(now); ok {
 			return accounts, nil
@@ -455,7 +456,7 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 		var window [accountScanWindow]*store.Account
 		for offset := 0; offset < len(accounts); offset += accountScanWindow {
 			n := min(accountScanWindow, len(accounts)-offset)
-			for i := 0; i < n; i++ {
+			for i := range n {
 				window[i] = accounts[(start+offset+i)%len(accounts)]
 			}
 			if picked := lb.selectAccountWithTracker(window[:n], tracker); picked != nil {

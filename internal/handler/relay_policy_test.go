@@ -32,7 +32,7 @@ func (c *relayRecordingClient) SendRequestWithPayload(_ context.Context, req ups
 	if answer == "" {
 		answer = "upstream answer"
 	}
-	for _, event := range []map[string]interface{}{{"type": "text-start"}, {"type": "text-delta", "delta": answer}, {"type": "finish", "finishReason": "stop"}} {
+	for _, event := range []map[string]any{{"type": "text-start"}, {"type": "text-delta", "delta": answer}, {"type": "finish", "finishReason": "stop"}} {
 		emit(upstream.SSEMessage{Type: "model", Event: event})
 	}
 	return nil
@@ -43,7 +43,7 @@ func TestRelayRepeatedRequestsAlwaysReachUpstream(t *testing.T) {
 		h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
 		client := &relayRecordingClient{}
 		h.client = client
-		body, _ := json.Marshal(map[string]interface{}{"model": "claude-3-5-sonnet", "messages": []map[string]string{{"role": "user", "content": "Explain this example"}}, "stream": stream})
+		body, _ := json.Marshal(map[string]any{"model": "claude-3-5-sonnet", "messages": []map[string]string{{"role": "user", "content": "Explain this example"}}, "stream": stream})
 		for _, key := range []string{"", "", "once", "once"} {
 			r := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 			r.Header.Set("Idempotency-Key", key)
@@ -100,13 +100,13 @@ func TestRelayIdempotencyKeyIsCallerScoped(t *testing.T) {
 func TestRelayRepeatedTextIsNotFiltered(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
 		rec := httptest.NewRecorder()
-		h := newStreamHandler(&config.Config{}, rec, debug.New(false, false), false, streaming, adapter.FormatAnthropic)
+		h := newStreamHandler(&config.Config{}, rec, debug.New(false, false), streaming, adapter.FormatAnthropic)
 		text := "Hi! How can I help you today?"
-		h.handleMessage(upstream.SSEMessage{Type: "model.text-start", Event: map[string]interface{}{}})
-		for i := 0; i < 3; i++ {
-			h.handleMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": text + text}})
+		h.handleMessage(upstream.SSEMessage{Type: "model.text-start", Event: map[string]any{}})
+		for range 3 {
+			h.handleMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]any{"delta": text + text}})
 		}
-		h.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "stop"}})
+		h.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]any{"finishReason": "stop"}})
 		got := h.responseText.String()
 		if streaming {
 			got = rec.Body.String()
@@ -120,11 +120,11 @@ func TestRelayRepeatedToolCallsHaveIndependentIDs(t *testing.T) {
 	for _, format := range []adapter.ResponseFormat{adapter.FormatAnthropic, adapter.FormatOpenAI} {
 		for _, streaming := range []bool{false, true} {
 			rec := httptest.NewRecorder()
-			h := newStreamHandler(&config.Config{}, rec, debug.New(false, false), false, streaming, format)
+			h := newStreamHandler(&config.Config{}, rec, debug.New(false, false), streaming, format)
 			for _, id := range []string{"call_one", "call_two"} {
-				h.handleMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": id, "toolName": "Write", "input": `{"file_path":"repeat.txt","content":"same content"}`}})
+				h.handleMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]any{"toolCallId": id, "toolName": "Write", "input": `{"file_path":"repeat.txt","content":"same content"}`}})
 			}
-			h.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}})
+			h.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]any{"finishReason": "tool_use"}})
 			testutil.CheckEqual(t, h.toolCallCount, 2)
 			wire := rec.Body.String()
 			if !streaming {
@@ -151,8 +151,8 @@ func (c *relayConcurrentClient) SendRequestWithPayload(ctx context.Context, _ up
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	emit(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": "parallel answer"}})
-	emit(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "stop"}})
+	emit(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]any{"delta": "parallel answer"}})
+	emit(upstream.SSEMessage{Type: "model.finish", Event: map[string]any{"finishReason": "stop"}})
 	return nil
 }
 
@@ -161,7 +161,7 @@ func TestRelayIdenticalInflightRequestsBothReachUpstream(t *testing.T) {
 	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
 	h.client = client
 	finished := make(chan *httptest.ResponseRecorder, 2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		go func() {
 			r := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"Explain the same example"}]}`))
 			r.Header.Set("Idempotency-Key", "same-inflight-key")
@@ -181,7 +181,7 @@ func TestRelayIdenticalInflightRequestsBothReachUpstream(t *testing.T) {
 		}
 	}
 	close(client.release)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case w := <-finished:
 			testutil.CheckFalsef(t, w.Code != 200 || !strings.Contains(w.Body.String(), "parallel answer"), "status=%d body=%s", w.Code, w.Body.String())

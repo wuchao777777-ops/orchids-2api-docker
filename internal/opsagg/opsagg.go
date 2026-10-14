@@ -11,6 +11,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -269,11 +270,11 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 }
 
 // Health reports writes in this process, separately from the retained counters.
-func (a *Aggregator) Health() map[string]interface{} {
+func (a *Aggregator) Health() map[string]any {
 	if !a.Enabled() {
-		return map[string]interface{}{"available": false}
+		return map[string]any{"available": false}
 	}
-	return map[string]interface{}{"available": true, "written": a.written.Load(), "write_failed": a.writeFailed.Load()}
+	return map[string]any{"available": true, "written": a.written.Load(), "write_failed": a.writeFailed.Load()}
 }
 
 // Range reads the buckets of one channel between two instants (inclusive of the
@@ -352,10 +353,7 @@ func (a *Aggregator) Channels(ctx context.Context, from, to time.Time) ([]string
 			}
 		}
 		for start := 0; start < len(candidates); start += 256 {
-			end := start + 256
-			if end > len(candidates) {
-				end = len(candidates)
-			}
+			end := min(start+256, len(candidates))
 			pipe := a.client.Pipeline()
 			checks := make([]*redis.BoolCmd, 0, end-start)
 			for _, candidate := range candidates[start:end] {
@@ -611,7 +609,7 @@ func percentile(values []int64, p float64) int64 {
 		return 0
 	}
 	sorted := append([]int64(nil), values...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	slices.Sort(sorted)
 	rank := int(math.Ceil(float64(len(sorted))*p)) - 1
 	if rank >= len(sorted) {
 		rank = len(sorted) - 1

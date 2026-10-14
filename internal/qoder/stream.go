@@ -92,7 +92,7 @@ type streamResult struct {
 	SawMeaningfulEvent bool
 	ToolCallCount      int
 	FinishReasonValue  string
-	Usage              map[string]interface{}
+	Usage              map[string]any
 	ThinkingSignature  string
 	// ControlFrames counts the advisory frames the gateway multiplexed into the
 	// chunk channel, keyed by kind. They carry no model output, but a quota
@@ -207,15 +207,12 @@ func (r streamResult) emitFinish(onMessage func(upstream.SSEMessage)) {
 	if onMessage == nil {
 		return
 	}
-	event := map[string]interface{}{"finishReason": r.FinishReason()}
+	event := map[string]any{"finishReason": r.FinishReason()}
 	if len(r.Usage) > 0 {
 		event["usage"] = r.Usage
 	}
 	onMessage(upstream.SSEMessage{Type: "model.finish", Event: event})
 }
-
-// NewToolCallID mints a local tool-call id for upstream deltas that omit one.
-func NewToolCallID() string { return util.NewToolCallID() }
 
 // sseFrame is one accumulated SSE event.
 type sseFrame struct {
@@ -333,7 +330,7 @@ func consumeStreamObserved(body io.Reader, onMessage func(upstream.SSEMessage), 
 						var value int64
 						if json.Unmarshal(raw, &value) == nil && value >= 0 {
 							if result.Usage == nil {
-								result.Usage = map[string]interface{}{}
+								result.Usage = map[string]any{}
 							}
 							result.Usage[key] = value
 						}
@@ -494,7 +491,7 @@ func consumeStreamObserved(body io.Reader, onMessage func(upstream.SSEMessage), 
 				if result.ThinkingSignature == "" {
 					result.ThinkingSignature = newThinkingSignature()
 				}
-				onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{
+				onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]any{
 					"delta":     delta.ReasoningContent,
 					"signature": result.ThinkingSignature,
 				}})
@@ -674,11 +671,11 @@ func newThinkingSignature() string { return util.NewThinkingSignature("qoder-v1"
 // normalizeUsage maps the upstream usage object onto the key names the shared
 // stream handler consumes, keeping the credit fields under their own names so
 // a cost panel can read them.
-func normalizeUsage(usage *streamUsage) map[string]interface{} {
+func normalizeUsage(usage *streamUsage) map[string]any {
 	if usage == nil {
 		return nil
 	}
-	out := make(map[string]interface{}, 8)
+	out := make(map[string]any, 8)
 	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
 		out["inputTokens"] = usage.PromptTokens
 		out["input_tokens"] = usage.PromptTokens

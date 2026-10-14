@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -176,11 +177,10 @@ func (t *RedisConnTracker) key(accountID int64) string {
 	return fmt.Sprintf("%s%d", t.prefix, accountID)
 }
 
-func (t *RedisConnTracker) Acquire(accountID int64) { _, _ = t.acquire(accountID, 0) }
+func (t *RedisConnTracker) Acquire(accountID int64) { t.acquire(accountID, 0) }
 
 func (t *RedisConnTracker) TryAcquire(accountID int64, limit int64) bool {
-	_, ok := t.acquire(accountID, limit)
-	return ok
+	return t.acquire(accountID, limit)
 }
 
 func (t *RedisConnTracker) Release(accountID int64) {
@@ -277,7 +277,7 @@ func (t *RedisConnTracker) GetCounts(accountIDs []int64) map[int64]int64 {
 		key.WriteString(strconv.FormatInt(id, 10))
 		key.WriteByte(',')
 	}
-	value, _, _ := t.countGroup.Do(key.String(), func() (interface{}, error) {
+	value, _, _ := t.countGroup.Do(key.String(), func() (any, error) {
 		counts := t.fetchCounts(missing)
 		t.countMu.Lock()
 		if t.countCache == nil || len(t.countCache) > 65536 {
@@ -289,9 +289,7 @@ func (t *RedisConnTracker) GetCounts(accountIDs []int64) map[int64]int64 {
 		t.countMu.Unlock()
 		return counts, nil
 	})
-	for id, count := range value.(map[int64]int64) {
-		result[id] = count
-	}
+	maps.Copy(result, value.(map[int64]int64))
 	return result
 }
 
@@ -341,9 +339,9 @@ func (t *RedisConnTracker) fetchCounts(accountIDs []int64) map[int64]int64 {
 	return result
 }
 
-func (t *RedisConnTracker) acquire(accountID, limit int64) (*redisConnLease, bool) {
+func (t *RedisConnTracker) acquire(accountID, limit int64) bool {
 	if t == nil || t.client == nil || accountID == 0 {
-		return nil, false
+		return false
 	}
 	// A newly started process can briefly race Redis connection establishment or
 	// script loading. Retry one time so a transport hiccup is not misreported as
@@ -352,7 +350,7 @@ func (t *RedisConnTracker) acquire(accountID, limit int64) (*redisConnLease, boo
 	var lease *redisConnLease
 	var result int64
 	var err error
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		lease = &redisConnLease{id: newRedisConnLeaseID(), stop: make(chan struct{}), done: make(chan struct{})}
 		now := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -365,7 +363,7 @@ func (t *RedisConnTracker) acquire(accountID, limit int64) (*redisConnLease, boo
 		time.Sleep(25 * time.Millisecond)
 	}
 	if err != nil || result != 1 {
-		return nil, false
+		return false
 	}
 	t.mu.Lock()
 	if t.closed {
@@ -373,7 +371,7 @@ func (t *RedisConnTracker) acquire(accountID, limit int64) (*redisConnLease, boo
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = t.releaseScript.Run(ctx, t.client, []string{t.key(accountID)}, lease.id).Err()
-		return nil, false
+		return false
 	}
 	t.held[accountID] = append(t.held[accountID], lease)
 	t.mu.Unlock()
@@ -381,7 +379,7 @@ func (t *RedisConnTracker) acquire(accountID, limit int64) (*redisConnLease, boo
 	// goroutine or ticker. done remains the release/shutdown lifecycle barrier.
 	close(lease.done)
 	t.adjustCachedCount(accountID, 1)
-	return lease, true
+	return true
 }
 
 func (t *RedisConnTracker) renewLoop() {
@@ -436,7 +434,7 @@ func (t *RedisConnTracker) renewBatch() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		pipe := t.client.Pipeline()
 		for _, b := range batches[start:min(start+128, len(batches))] {
-			args := make([]interface{}, 0, len(b.ids)+2)
+			args := make([]any, 0, len(b.ids)+2)
 			args = append(args, time.Now().Add(redisConnLeaseTTL).UnixMilli(), (redisConnLeaseTTL * 2).Milliseconds())
 			for _, id := range b.ids {
 				args = append(args, id)

@@ -37,7 +37,7 @@ var accountSecretFields = map[string]func(*store.Account) string{
 // like runtime_info, so even non-secret fields are explicitly classified here.
 func TestAccountSecretFieldsAreComplete(t *testing.T) {
 	nonSecret := map[string]bool{}
-	for _, name := range strings.Fields(`
+	for name := range strings.FieldsSeq(`
 		ID Name AccountType UserID AgentMode Email Weight MaxConcurrent Enabled
 		Subscription UsageCurrent UsageTotal UsageLimit TokensToday TokensDate
 		StatusCode AuthStatus RateLimitFailures QualityFailures QualityCooldownUntil QualityReason
@@ -59,7 +59,7 @@ func TestAccountSecretFieldsAreComplete(t *testing.T) {
 	seenNonSecrets := map[string]bool{}
 	for i := 0; i < accountType.NumField(); i++ {
 		field := accountType.Field(i)
-		key := strings.Split(field.Tag.Get("json"), ",")[0]
+		key, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		read, secret := accountSecretFields[key]
 		testutil.CheckFalsef(t, secret && nonSecret[field.Name], "%s is classified as both secret and non-secret", field.Name)
 		if !secret {
@@ -175,7 +175,7 @@ func TestAccountResponsesNeverCarryCredentials(t *testing.T) {
 			leaked := findPlantedSecrets(raw)
 			testutil.Falsef(t, len(leaked) > 0, "%s account response leaked %v\n%s", channel, leaked, raw)
 			// Presence, not the value, is how the table proves a credential exists.
-			var row map[string]interface{}
+			var row map[string]any
 			testutil.NoError(t, json.Unmarshal(raw, &row), "decode rendered account: %v")
 			testutil.Equal(t, row["has_credential"], true)
 		})
@@ -189,7 +189,7 @@ func TestAccountResponsesHideCredentialKeys(t *testing.T) {
 	acc := accountWithSecrets("qoder")
 	raw, err := json.Marshal(normalizeAccountOutput(acc))
 	testutil.NoError(t, err, "marshal account output: %v")
-	var row map[string]interface{}
+	var row map[string]any
 	testutil.NoError(t, json.Unmarshal(raw, &row), "decode rendered account: %v")
 	for field := range accountSecretFields {
 		_, exists := row[field]

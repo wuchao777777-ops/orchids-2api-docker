@@ -116,7 +116,7 @@ func serveQualityTurn(t *testing.T, h *Handler, first *store.Account) *httptest.
 		Messages: []chatwire.Message{{Role: "user", Content: "hello"}},
 	}
 	rec := httptest.NewRecorder()
-	h.serveNativeChat(ctx, rec, req, spec, sess, nil, true)
+	h.serveNativeChat(ctx, rec, req, spec, sess, nil)
 	return rec
 }
 
@@ -196,41 +196,20 @@ func TestQualityHoldJournalsAWithheldTurnAndItsRecovery(t *testing.T) {
 	testutil.MustNotContainAny(t, dump, "status loop", "healthy answer", "jwt-user-degraded", "jwt-user-healthy", "ZmFrZS1jaXBoZXI")
 }
 
-// TestQualityHoldJournalsWhatTheClientReceived covers the two endings where no
-// healthy account answered. They look the same from the per-attempt rows and
-// are opposite for the client, so the resolution row has to tell them apart.
-func TestQualityHoldJournalsWhatTheClientReceived(t *testing.T) {
-	cases := []struct {
-		name            string
-		onExhausted     string
-		wantStatus      int
-		wantResolution  string
-		receivedDump    bool
-		responseHasDump bool
-	}{
-		{"fail open delivers the withheld turn", qualityRetryFailOpen, http.StatusOK, qualityResolutionDeliveredDegraded, true, true},
-		{"fail closed rejects it", qualityRetryFailClosed, http.StatusBadGateway, qualityResolutionRejected, false, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			h, journal, accounts := qualityLoggingHandler(t, func(base string) *config.Config {
-				return &config.Config{GrokCLIBaseURL: base, QualityHoldMaxAttempts: 1, QualityHoldOnExhausted: tc.onExhausted}
-			}, "jwt-user-degraded")
-
-			rec := serveQualityTurn(t, h, accounts[0])
-			testutil.Equal(t, rec.Code, tc.wantStatus)
-			testutil.Equal(t, strings.Contains(rec.Body.String(), "status loop"), tc.responseHasDump)
-
-			testutil.Equal(t, len(journal.byAction("grok_quality_degraded")), 1)
-			resolution := journal.byAction("grok_quality_resolution")
-			testutil.Equal(t, len(resolution), 1)
-			testutil.Equal(t, resolution[0].Status, tc.wantResolution)
-			testutil.Equal(t, resolution[0].Details, qualityStopAttemptsExhausted)
-			testutil.Equal(t, resolution[0].AccountID, accounts[0].ID)
-			testutil.EqualAny(t, resolution[0].Metadata["client_received_degraded"], tc.receivedDump)
-			testutil.EqualAny(t, resolution[0].Metadata["on_exhausted"], tc.onExhausted)
-		})
-	}
+// TestQualityRetryResolutionJournal checks the fixed fail-open policy.
+func TestQualityRetryResolutionJournal(t *testing.T) {
+	h, journal, accounts := qualityLoggingHandler(t, func(base string) *config.Config {
+		return &config.Config{GrokCLIBaseURL: base}
+	}, "jwt-user-degraded")
+	rec := serveQualityTurn(t, h, accounts[0])
+	testutil.Equal(t, rec.Code, http.StatusOK)
+	testutil.MustContain(t, rec.Body.String(), "status loop")
+	resolution := journal.byAction("grok_quality_resolution")
+	testutil.Equal(t, len(resolution), 1)
+	testutil.Equal(t, resolution[0].Status, qualityResolutionDeliveredDegraded)
+	testutil.Equal(t, resolution[0].AccountID, accounts[0].ID)
+	testutil.EqualAny(t, resolution[0].Metadata["client_received_degraded"], true)
+	testutil.EqualAny(t, resolution[0].Metadata["on_exhausted"], qualityRetryFailOpen)
 }
 
 func TestHealthyTurnJournalsQualityCheckProcess(t *testing.T) {
@@ -281,15 +260,6 @@ func TestCollectedTurnJournalsQualityCheckProcess(t *testing.T) {
 	}
 }
 
-func TestDisabledQualityHoldDoesNotInventCheckProcess(t *testing.T) {
-	disabled := false
-	h, journal, accounts := qualityLoggingHandler(t, func(base string) *config.Config {
-		return &config.Config{GrokCLIBaseURL: base, QualityHoldEnabled: &disabled}
-	}, "jwt-user-healthy")
-	serveQualityTurn(t, h, accounts[0])
-	testutil.Equal(t, len(journal.byAction("grok_quality_check")), 0)
-}
-
 func TestQualityHoldUsesAccountDefaultReasoning(t *testing.T) {
 	for _, streaming := range []bool{true, false} {
 		for _, requested := range []string{"omitted", "", "none"} {
@@ -321,7 +291,7 @@ func TestQualityHoldUsesAccountDefaultReasoning(t *testing.T) {
 				spec, ok := h.resolveConversationModel(context.Background(), req.Model)
 				testutil.True(t, ok, "model did not resolve")
 				rec := httptest.NewRecorder()
-				h.serveNativeChat(context.Background(), rec, req, spec, sess, nil, true)
+				h.serveNativeChat(context.Background(), rec, req, spec, sess, nil)
 				testutil.Equal(t, rec.Code, http.StatusOK)
 				checks := journal.byAction("grok_quality_check")
 				if requested == "none" {
@@ -360,7 +330,7 @@ func TestQualityHoldDefaultReasoningWithholdsAndRetries(t *testing.T) {
 	spec, ok := h.resolveConversationModel(context.Background(), req.Model)
 	testutil.True(t, ok, "model did not resolve")
 	rec := httptest.NewRecorder()
-	h.serveNativeChat(context.Background(), rec, req, spec, sess, nil, true)
+	h.serveNativeChat(context.Background(), rec, req, spec, sess, nil)
 	testutil.Equal(t, rec.Code, http.StatusOK)
 	testutil.MustContain(t, rec.Body.String(), "healthy answer")
 	testutil.MustNotContain(t, rec.Body.String(), "status loop")

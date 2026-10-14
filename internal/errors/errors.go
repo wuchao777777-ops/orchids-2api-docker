@@ -25,7 +25,7 @@ type AppError struct {
 
 // ToJSON returns the JSON representation of the error.
 func (e *AppError) ToJSON() []byte {
-	data, _ := json.Marshal(map[string]interface{}{
+	data, _ := json.Marshal(map[string]any{
 		"type": "error",
 		"error": map[string]string{
 			"type":    e.Code,
@@ -39,10 +39,7 @@ func (e *AppError) ToJSON() []byte {
 func (e *AppError) WriteResponse(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	if e.RetryAfter > 0 {
-		seconds := int(math.Ceil(e.RetryAfter.Seconds()))
-		if seconds < 1 {
-			seconds = 1
-		}
+		seconds := max(int(math.Ceil(e.RetryAfter.Seconds())), 1)
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
 	}
 	w.WriteHeader(e.HTTPStatus)

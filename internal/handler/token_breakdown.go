@@ -17,17 +17,14 @@ type inputTokenBreakdown struct {
 	Total               int
 }
 
-func estimateInputTokenBreakdown(promptText string, tools []interface{}) inputTokenBreakdown {
+func estimateInputTokenBreakdown(promptText string, tools []any) inputTokenBreakdown {
 	var bd inputTokenBreakdown
 	promptTokens := tiktoken.EstimateTextTokens(promptText)
 	sysText := extractTaggedContent(promptText, "sys")
 	if sysText == "" {
 		sysText = extractTaggedContent(promptText, "system_context")
 	}
-	sysTokens := tiktoken.EstimateTextTokens(sysText)
-	if sysTokens > promptTokens {
-		sysTokens = promptTokens
-	}
+	sysTokens := min(tiktoken.EstimateTextTokens(sysText), promptTokens)
 
 	bd.SystemContextTokens = sysTokens
 	bd.BasePromptTokens = promptTokens - sysTokens

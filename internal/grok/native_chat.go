@@ -20,16 +20,16 @@ import (
 	"orchids-api/internal/util"
 )
 
-func chatMessageContentText(content interface{}) string {
+func chatMessageContentText(content any) string {
 	switch v := content.(type) {
 	case nil:
 		return ""
 	case string:
 		return v
-	case []interface{}:
+	case []any:
 		var b strings.Builder
 		for _, part := range v {
-			m, ok := part.(map[string]interface{})
+			m, ok := part.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -50,16 +50,16 @@ func chatMessageContentText(content interface{}) string {
 	}
 }
 
-func buildToolsFromOpenAI(tools []chatwire.ToolDef) []map[string]interface{} {
+func buildToolsFromOpenAI(tools []chatwire.ToolDef) []map[string]any {
 	if len(tools) == 0 {
 		return nil
 	}
-	out := make([]map[string]interface{}, 0, len(tools))
+	out := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
 		// A hosted tool (web_search / x_search) is forwarded as-is: it is the
 		// server-side search the caller asked for, not a function to call back.
 		if normalized, native := chatwire.NativeToolTypes[strings.ToLower(strings.TrimSpace(tool.Type))]; native {
-			item := map[string]interface{}{"type": normalized}
+			item := map[string]any{"type": normalized}
 			for key, value := range tool.Raw {
 				switch key {
 				case "type", "function":
@@ -77,11 +77,11 @@ func buildToolsFromOpenAI(tools []chatwire.ToolDef) []map[string]interface{} {
 		if name == "" {
 			continue
 		}
-		item := map[string]interface{}{
+		item := map[string]any{
 			"type":        "function",
 			"name":        name,
 			"description": strings.TrimSpace(fmt.Sprint(tool.Function["description"])),
-			"parameters":  map[string]interface{}{},
+			"parameters":  map[string]any{},
 		}
 		if params, ok := tool.Function["parameters"]; ok && params != nil {
 			item["parameters"] = params
@@ -94,7 +94,7 @@ func buildToolsFromOpenAI(tools []chatwire.ToolDef) []map[string]interface{} {
 	return out
 }
 
-func buildToolChoiceFromOpenAI(choice interface{}) interface{} {
+func buildToolChoiceFromOpenAI(choice any) any {
 	switch v := choice.(type) {
 	case nil:
 		return nil
@@ -104,16 +104,16 @@ func buildToolChoiceFromOpenAI(choice interface{}) interface{} {
 			return nil
 		}
 		return c
-	case map[string]interface{}:
+	case map[string]any:
 		if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(v["type"])), "function") {
 			return v
 		}
-		fn, _ := v["function"].(map[string]interface{})
+		fn, _ := v["function"].(map[string]any)
 		name := strings.TrimSpace(fmt.Sprint(fn["name"]))
 		if name == "" {
 			return v
 		}
-		return map[string]interface{}{
+		return map[string]any{
 			"type": "function",
 			"name": name,
 		}
@@ -122,13 +122,13 @@ func buildToolChoiceFromOpenAI(choice interface{}) interface{} {
 	}
 }
 
-func consoleExtractText(v interface{}) string {
+func consoleExtractText(v any) string {
 	switch x := v.(type) {
 	case nil:
 		return ""
 	case string:
 		return x
-	case map[string]interface{}:
+	case map[string]any:
 		if t := strings.TrimSpace(fmt.Sprint(x["type"])); t == "output_text" || t == "text" || t == "message" {
 			if raw := x["text"]; raw != nil {
 				if s := strings.TrimSpace(fmt.Sprint(raw)); s != "" && s != "<nil>" {
@@ -160,7 +160,7 @@ func consoleExtractText(v interface{}) string {
 				}
 			}
 		}
-	case []interface{}:
+	case []any:
 		var b strings.Builder
 		for _, item := range x {
 			if s := strings.TrimSpace(consoleExtractText(item)); s != "" {
@@ -175,13 +175,12 @@ func consoleExtractText(v interface{}) string {
 	return ""
 }
 
-func consoleExtractMessageText(v interface{}) string {
-	switch x := v.(type) {
-	case map[string]interface{}:
-		if output, ok := x["output"].([]interface{}); ok {
+func consoleExtractMessageText(v any) string {
+	if x, ok := v.(map[string]any); ok {
+		if output, ok := x["output"].([]any); ok {
 			var text strings.Builder
 			for _, item := range output {
-				m, ok := item.(map[string]interface{})
+				m, ok := item.(map[string]any)
 				if !ok {
 					continue
 				}
@@ -190,7 +189,7 @@ func consoleExtractMessageText(v interface{}) string {
 					continue
 				}
 				for _, raw := range responses.InterfaceSlice(m["content"]) {
-					part, _ := raw.(map[string]interface{})
+					part, _ := raw.(map[string]any)
 					if kind := chatwire.ParseLooseStringAny(part["type"]); kind == "output_text" || kind == "text" {
 						text.WriteString(responses.StreamString(part["text"]))
 					}
@@ -202,9 +201,9 @@ func consoleExtractMessageText(v interface{}) string {
 	return strings.TrimSpace(consoleExtractText(v))
 }
 
-func consoleFlatAnnotations(v interface{}) []map[string]interface{} {
+func consoleFlatAnnotations(v any) []map[string]any {
 	seen := map[string]struct{}{}
-	out := make([]map[string]interface{}, 0)
+	out := make([]map[string]any, 0)
 	add := func(url, title string, start, end int) {
 		url = strings.TrimSpace(url)
 		if url == "" {
@@ -215,25 +214,25 @@ func consoleFlatAnnotations(v interface{}) []map[string]interface{} {
 			return
 		}
 		seen[key] = struct{}{}
-		out = append(out, map[string]interface{}{
+		out = append(out, map[string]any{
 			"url":         url,
 			"title":       strings.TrimSpace(title),
 			"start_index": start,
 			"end_index":   end,
 		})
 	}
-	var walk func(interface{})
-	walk = func(raw interface{}) {
+	var walk func(any)
+	walk = func(raw any) {
 		switch x := raw.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			t := strings.ToLower(strings.TrimSpace(fmt.Sprint(x["type"])))
 			if t == "url_citation" || (x["url"] != nil && (x["title"] != nil || x["start_index"] != nil || x["end_index"] != nil)) {
 				add(responses.StreamString(x["url"]), responses.StreamString(x["title"]), responses.InterfaceToInt(x["start_index"]), responses.InterfaceToInt(x["end_index"]))
 			}
 			if t == "web_search_call" {
-				if action, _ := x["action"].(map[string]interface{}); action != nil {
+				if action, _ := x["action"].(map[string]any); action != nil {
 					for _, src := range responses.InterfaceSlice(action["sources"]) {
-						if m, _ := src.(map[string]interface{}); m != nil {
+						if m, _ := src.(map[string]any); m != nil {
 							add(responses.StreamString(m["url"]), responses.StreamString(m["title"]), 0, 0)
 						}
 					}
@@ -247,7 +246,7 @@ func consoleFlatAnnotations(v interface{}) []map[string]interface{} {
 					walk(child)
 				}
 			}
-		case []interface{}:
+		case []any:
 			for _, item := range x {
 				walk(item)
 			}
@@ -257,15 +256,15 @@ func consoleFlatAnnotations(v interface{}) []map[string]interface{} {
 	return out
 }
 
-func consoleChatAnnotations(flat []map[string]interface{}) []interface{} {
+func consoleChatAnnotations(flat []map[string]any) []any {
 	if len(flat) == 0 {
-		return []interface{}{}
+		return []any{}
 	}
-	out := make([]interface{}, 0, len(flat))
+	out := make([]any, 0, len(flat))
 	for _, ann := range flat {
-		out = append(out, map[string]interface{}{
+		out = append(out, map[string]any{
 			"type": "url_citation",
-			"url_citation": map[string]interface{}{
+			"url_citation": map[string]any{
 				"url":         ann["url"],
 				"title":       ann["title"],
 				"start_index": ann["start_index"],
@@ -276,7 +275,7 @@ func consoleChatAnnotations(flat []map[string]interface{}) []interface{} {
 	return out
 }
 
-func appendUniqueConsoleAnnotations(dst []map[string]interface{}, src []map[string]interface{}) []map[string]interface{} {
+func appendUniqueConsoleAnnotations(dst []map[string]any, src []map[string]any) []map[string]any {
 	if len(src) == 0 {
 		return dst
 	}
@@ -295,8 +294,8 @@ func appendUniqueConsoleAnnotations(dst []map[string]interface{}, src []map[stri
 	return dst
 }
 
-func consoleUsage(v map[string]interface{}) map[string]interface{} {
-	raw, ok := v["usage"].(map[string]interface{})
+func consoleUsage(v map[string]any) map[string]any {
+	raw, ok := v["usage"].(map[string]any)
 	if !ok {
 		return nil
 	}
@@ -313,30 +312,30 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 		total = prompt + completion
 	}
 	reasoning := 0
-	if details, _ := raw["output_tokens_details"].(map[string]interface{}); details != nil {
+	if details, _ := raw["output_tokens_details"].(map[string]any); details != nil {
 		reasoning = responses.InterfaceToInt(details["reasoning_tokens"])
 	}
 	if reasoning == 0 {
 		reasoning = responses.InterfaceToInt(raw["reasoning_tokens"])
 	}
 	if reasoning == 0 {
-		if details, _ := raw["completion_tokens_details"].(map[string]interface{}); details != nil {
+		if details, _ := raw["completion_tokens_details"].(map[string]any); details != nil {
 			reasoning = responses.InterfaceToInt(details["reasoning_tokens"])
 		}
 	}
-	inputDetails, _ := responses.FirstNonNil(raw["input_tokens_details"], raw["prompt_tokens_details"]).(map[string]interface{})
+	inputDetails, _ := responses.FirstNonNil(raw["input_tokens_details"], raw["prompt_tokens_details"]).(map[string]any)
 	cached := min(max(responses.InterfaceToInt(inputDetails["cached_tokens"]), 0), max(prompt, 0))
-	normalized := map[string]interface{}{
+	normalized := map[string]any{
 		"prompt_tokens":     prompt,
 		"completion_tokens": completion,
 		"total_tokens":      total,
-		"prompt_tokens_details": map[string]interface{}{
+		"prompt_tokens_details": map[string]any{
 			"cached_tokens": cached,
 			"text_tokens":   prompt,
 			"audio_tokens":  0,
 			"image_tokens":  0,
 		},
-		"completion_tokens_details": map[string]interface{}{
+		"completion_tokens_details": map[string]any{
 			"text_tokens":      max(completion-reasoning, 0),
 			"audio_tokens":     0,
 			"reasoning_tokens": reasoning,
@@ -368,7 +367,7 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 //
 // qualityAttempt is the 1-based position of this attempt among the request's
 // quality attempts; it only labels the journal rows.
-func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter, req *chatwire.Request, sess *chatAccountSession, logger *debug.Logger, name, url string, headers func() http.Header, payload map[string]interface{}, resp *http.Response, err error, qualityAttempt int) (*parkedResponse, bool) {
+func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter, req *chatwire.Request, sess *chatAccountSession, logger *debug.Logger, name, url string, headers func() http.Header, payload map[string]any, resp *http.Response, err error, qualityAttempt int) (*parkedResponse, bool) {
 	if err != nil {
 		h.auditChatOutcome(ctx, sess.acc, req, chatOutcome{Finish: "error", Err: err})
 		slog.Error(name+" chat upstream failed", "url", url, "status", upstreamStatus(err), "error", err)
@@ -395,7 +394,7 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 	// Use this attempt's effective effort for quality checks without freezing a
 	// default into the original request that later account retries will reuse.
 	if req.ReasoningEffort == nil || strings.TrimSpace(*req.ReasoningEffort) == "" {
-		reasoning, _ := payload["reasoning"].(map[string]interface{})
+		reasoning, _ := payload["reasoning"].(map[string]any)
 		if effort, ok := reasoning["effort"].(string); ok && strings.TrimSpace(effort) != "" {
 			attemptReq := *req
 			attemptReq.ReasoningEffort = &effort
@@ -403,9 +402,6 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		}
 	}
 	provider := ProviderBuild
-	if sess.acc != nil {
-		provider = ProviderForAccount(sess.acc)
-	}
 	holdEnabled := h.shouldHoldQualityTurn(req, provider)
 	qualityStarted := time.Now()
 	mode := "collected"
@@ -495,7 +491,7 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 	return nil, false
 }
 
-func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, req *chatwire.Request, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger, build bool) {
+func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, req *chatwire.Request, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger) {
 	if h == nil || sess == nil || sess.acc == nil || h.buildClient() == nil {
 		writeGrokError(w, http.StatusServiceUnavailable, "grok upstream client or account not configured")
 		return
@@ -588,9 +584,8 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		// The account that produced the withheld turn; the session moves on below.
 		withheldAccount := sess.acc
 		action := boundQualityRetry(
-			decideQualityRetry(qualityWithhold, attempt, policy.MaxAttempts, policy.OnExhausted),
+			decideQualityRetry(qualityWithhold, attempt, policy.MaxAttempts),
 			attempt+1 < policy.MaxAttempts && remaining > 0 && ctx.Err() == nil && !replayUnsafe,
-			policy.OnExhausted,
 		)
 		if action != qualityActionRetry {
 			stopped := qualityStopAttemptsExhausted
@@ -602,7 +597,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 			case remaining <= 0:
 				stopped = qualityStopAccountBudget
 			}
-			resolution := h.deliverParkedQualityTurn(w, parked, action)
+			resolution := h.deliverParkedQualityTurn(w, parked)
 			h.auditDeliveredQualityTurn(ctx, withheldAccount, req, parked, resolution)
 			h.auditQualityResolution(ctx, withheldAccount, req, resolution, stopped, reasons, policy)
 			return
@@ -612,7 +607,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		if switchErr != nil {
 			// No other account can serve it: deliver the held turn instead of
 			// failing a request the upstream completed.
-			resolution := h.deliverParkedQualityTurn(w, parked, qualityActionDeliverLast)
+			resolution := h.deliverParkedQualityTurn(w, parked)
 			h.auditDeliveredQualityTurn(ctx, withheldAccount, req, parked, resolution)
 			h.auditQualityResolution(ctx, withheldAccount, req, resolution, qualityStopNoOtherAccount, reasons, policy)
 			return
@@ -623,14 +618,9 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 }
 
 // deliverParkedQualityTurn finishes a request whose attempts were all withheld
-// and reports what the client received. Fail-open (the default) writes the last
-// held response so the caller still gets the answer the upstream produced;
-// fail-closed reports the degradation instead.
-func (h *Handler) deliverParkedQualityTurn(w http.ResponseWriter, parked *parkedResponse, action qualityRetryAction) string {
-	if action == qualityActionReject {
-		writeGrokErrorCode(w, http.StatusBadGateway, "quality_degraded", "every candidate account returned a degraded response")
-		return qualityResolutionRejected
-	}
+// and reports what the client received. It writes the last held response so the
+// caller still gets the answer the upstream produced.
+func (h *Handler) deliverParkedQualityTurn(w http.ResponseWriter, parked *parkedResponse) string {
 	if parked.isEmpty() {
 		writeGrokErrorCode(w, http.StatusBadGateway, "quality_degraded", "the upstream response was withheld and could not be delivered")
 		return qualityResolutionUndeliverable
@@ -701,9 +691,6 @@ func (h *Handler) retryWithAccountSwitchLimit(ctx context.Context, sess *chatAcc
 		started := time.Now()
 		resp, err := doRequest()
 		provider := ProviderBuild
-		if sess.acc != nil {
-			provider = ProviderForAccount(sess.acc)
-		}
 		h.auditAttemptDiagnostic(ctx, sess.acc, provider, attempt, started, err, "account_attempt", resp, nil, "")
 		if err == nil {
 			return resp, nil
@@ -720,8 +707,7 @@ func (h *Handler) retryWithAccountSwitchLimit(ctx context.Context, sess *chatAcc
 
 		sess.Close()
 		pace := switchPace
-		var cooldown *syntheticCooldownError
-		if errors.As(err, &cooldown) {
+		if _, ok := errors.AsType[*syntheticCooldownError](err); ok {
 			// This attempt never reached upstream. Rotate immediately; sleeping
 			// would serialize the same-team skip and hide the cooldown outcome.
 			pace = 0
@@ -753,7 +739,7 @@ func (h *Handler) accountSwitchBudget() int {
 }
 
 func (h *Handler) collectBuildChat(w http.ResponseWriter, req *chatwire.Request, body io.Reader) (outcome chatOutcome) {
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.NewDecoder(body).Decode(&raw); err != nil {
 		outcome.Err = err
 		writeGrokUpstreamError(w, err)
@@ -776,11 +762,11 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *chatwire.Request,
 	// again. A malformed function_call is recorded and reported after the
 	// accounting below, exactly where the old validation loop returned.
 	seen := map[string]bool{}
-	var toolCalls []map[string]interface{}
-	var searches, reasoningItems []interface{}
+	var toolCalls []map[string]any
+	var searches, reasoningItems []any
 	var validationErr error
 	for _, entry := range responses.InterfaceSlice(raw["output"]) {
-		item, _ := entry.(map[string]interface{})
+		item, _ := entry.(map[string]any)
 		kind := chatwire.ParseLooseStringAny(item["type"])
 		if kind == "function_call" {
 			id := util.FirstNonEmpty(chatwire.ParseLooseStringAny(item["call_id"]), chatwire.ParseLooseStringAny(item["id"]))
@@ -817,7 +803,7 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *chatwire.Request,
 		FirstVisibleMS: -1,
 	}
 	upstreamUsage := consoleUsage(raw)
-	if details, _ := upstreamUsage["completion_tokens_details"].(map[string]interface{}); details != nil {
+	if details, _ := upstreamUsage["completion_tokens_details"].(map[string]any); details != nil {
 		outcome.Quality.ReasoningTokens = int64(responses.InterfaceToInt(details["reasoning_tokens"]))
 	}
 	if validationErr != nil {
@@ -825,7 +811,7 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *chatwire.Request,
 		writeGrokUpstreamError(w, outcome.Err)
 		return
 	}
-	message := map[string]interface{}{
+	message := map[string]any{
 		"role":        "assistant",
 		"content":     text,
 		"refusal":     nil,
@@ -877,14 +863,14 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *chatwire.Request,
 	}
 	outcome.Finish = finishReason
 	outcome.FirstToken = time.Now()
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"id":                 util.FirstNonEmpty(chatwire.ParseLooseStringAny(raw["id"]), "chatcmpl_"+util.RandomHex(8)),
 		"object":             "chat.completion",
 		"created":            time.Now().Unix(),
 		"model":              req.Model,
 		"service_tier":       nil,
 		"system_fingerprint": "",
-		"choices": []map[string]interface{}{{
+		"choices": []map[string]any{{
 			"index":         0,
 			"message":       message,
 			"finish_reason": finishReason,
@@ -906,10 +892,10 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *chatwire.Request,
 // consoleReasoningField concatenates the text of the parts of item[field]. A
 // non-empty partType keeps only parts of that type, which is how reasoning
 // content differs from the (untyped) summary.
-func consoleReasoningField(item map[string]interface{}, field, partType string) string {
+func consoleReasoningField(item map[string]any, field, partType string) string {
 	var out strings.Builder
 	for _, value := range responses.InterfaceSlice(item[field]) {
-		part, _ := value.(map[string]interface{})
+		part, _ := value.(map[string]any)
 		if part == nil {
 			continue
 		}
@@ -923,13 +909,13 @@ func consoleReasoningField(item map[string]interface{}, field, partType string) 
 	return out.String()
 }
 
-func consoleExtractReasoningText(raw map[string]interface{}) string {
+func consoleExtractReasoningText(raw map[string]any) string {
 	if raw == nil {
 		return ""
 	}
 	var result strings.Builder
 	for _, value := range responses.InterfaceSlice(raw["output"]) {
-		item, _ := value.(map[string]interface{})
+		item, _ := value.(map[string]any)
 		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
 			continue
 		}
@@ -942,13 +928,13 @@ func consoleExtractReasoningText(raw map[string]interface{}) string {
 	return result.String()
 }
 
-func consoleExtractEncryptedReasoning(raw map[string]interface{}) string {
+func consoleExtractEncryptedReasoning(raw map[string]any) string {
 	if raw == nil {
 		return ""
 	}
 	latest := ""
 	for _, value := range responses.InterfaceSlice(raw["output"]) {
-		item, _ := value.(map[string]interface{})
+		item, _ := value.(map[string]any)
 		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
 			continue
 		}
@@ -959,8 +945,8 @@ func consoleExtractEncryptedReasoning(raw map[string]interface{}) string {
 	return latest
 }
 
-func consoleToolCallFromItem(raw interface{}) map[string]interface{} {
-	item, _ := raw.(map[string]interface{})
+func consoleToolCallFromItem(raw any) map[string]any {
+	item, _ := raw.(map[string]any)
 	if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "function_call") {
 		return nil
 	}
@@ -988,21 +974,21 @@ func consoleToolCallFromItem(raw interface{}) map[string]interface{} {
 			}
 		}
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"id":   callID,
 		"type": "function",
-		"function": map[string]interface{}{
+		"function": map[string]any{
 			"name":      name,
 			"arguments": arguments,
 		},
 	}
 }
 
-func consoleUsageFromStreamEvent(ev map[string]interface{}) map[string]interface{} {
+func consoleUsageFromStreamEvent(ev map[string]any) map[string]any {
 	if ev == nil {
 		return nil
 	}
-	if resp, _ := ev["response"].(map[string]interface{}); resp != nil {
+	if resp, _ := ev["response"].(map[string]any); resp != nil {
 		if usage := consoleUsage(resp); len(usage) > 0 {
 			return usage
 		}
@@ -1010,7 +996,7 @@ func consoleUsageFromStreamEvent(ev map[string]interface{}) map[string]interface
 	return consoleUsage(ev)
 }
 
-func consoleReasoningDelta(event string, ev map[string]interface{}) string {
+func consoleReasoningDelta(event string, ev map[string]any) string {
 	event = strings.ToLower(strings.TrimSpace(event))
 	if !strings.Contains(event, "reasoning") || !strings.Contains(event, "delta") {
 		return ""

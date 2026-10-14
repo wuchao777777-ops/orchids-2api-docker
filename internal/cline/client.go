@@ -288,10 +288,6 @@ func (c *Client) persistPatch(ctx context.Context, patch store.ClineCredentialPa
 	return nil
 }
 
-// Credentials returns the live credential snapshot. It exists so a login can
-// read back what it just obtained without reaching into the client's state.
-func (c *Client) Credentials() Credentials { return c.currentCredentials() }
-
 // SendRequestWithPayload streams one chat completion to the caller.
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	if c == nil {
@@ -313,14 +309,14 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if logger != nil && !logger.Capturing() {
 		logger.LogUpstreamRequest(url, map[string]string{"provider": "cline", "model": model}, body)
 	}
-	return c.runChat(ctx, url, body, model, logicalTaskID(req.RequestID), creds, onMessage)
+	return c.runChat(ctx, url, body, logicalTaskID(req.RequestID), creds, onMessage)
 }
 
 // runChat performs one upstream call, except that an initial 401 gets one token
 // refresh and one replay. All non-auth retry budgeting belongs to the shared
 // handler so an account switch and a provider-local replay cannot both consume
 // capacity for the same logical attempt.
-func (c *Client) runChat(ctx context.Context, url string, body []byte, model, taskID string, creds Credentials, onMessage func(upstream.SSEMessage)) error {
+func (c *Client) runChat(ctx context.Context, url string, body []byte, taskID string, creds Credentials, onMessage func(upstream.SSEMessage)) error {
 	emitted := false
 	emit := func(msg upstream.SSEMessage) {
 		emitted = true
@@ -330,17 +326,17 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model, ta
 	}
 
 	attemptCredentials := creds
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		if current := c.currentCredentials(); current.HasCredential() {
 			attemptCredentials = current
 		}
-		result, err := c.attemptChat(ctx, url, body, model, taskID, attemptCredentials, emit)
+		result, err := c.attemptChat(ctx, url, body, taskID, attemptCredentials, emit)
 		if err == nil {
 			if !result.SawMeaningfulEvent {
 				return fmt.Errorf("cline stream produced no usable events")
 			}
 			if onMessage != nil {
-				event := map[string]interface{}{"finishReason": result.FinishReason()}
+				event := map[string]any{"finishReason": result.FinishReason()}
 				if len(result.Usage) > 0 {
 					event["usage"] = result.Usage
 				}
@@ -363,7 +359,7 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model, ta
 }
 
 // attemptChat performs one upstream attempt and consumes its stream.
-func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model, taskID string, creds Credentials, emit func(upstream.SSEMessage)) (result streamResult, attemptErr error) {
+func (c *Client) attemptChat(ctx context.Context, url string, body []byte, taskID string, creds Credentials, emit func(upstream.SSEMessage)) (result streamResult, attemptErr error) {
 	reqCtx, cancel := util.WithAttemptTimeout(ctx, c.requestTimeout)
 	defer cancel()
 

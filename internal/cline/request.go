@@ -14,26 +14,7 @@ import (
 )
 
 // chatMessage is one OpenAI-shaped message in the Cline payload.
-type chatMessage struct {
-	Role             string     `json:"role"`
-	Content          string     `json:"content"`
-	ReasoningContent string     `json:"reasoning_content,omitempty"`
-	ToolCalls        []toolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string     `json:"tool_call_id,omitempty"`
-}
-
-// toolCall is the OpenAI tool-call shape used both inbound and outbound.
-type toolCall struct {
-	ID       string           `json:"id"`
-	Type     string           `json:"type"`
-	Function toolCallFunction `json:"function"`
-}
-
-// toolCallFunction carries the tool name and JSON-encoded arguments.
-type toolCallFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
+type chatMessage = upstream.ChatMessage
 
 // chatBody is the upstream chat request.
 //
@@ -41,20 +22,20 @@ type toolCallFunction struct {
 // models, and it needs a session_id to correlate a turn, so both are always
 // present even when the client did not ask for them.
 type chatBody struct {
-	ResponseFormat    map[string]interface{} `json:"response_format,omitempty"`
-	PromptCacheKey    string                 `json:"prompt_cache_key,omitempty"`
-	Temperature       *float64               `json:"temperature,omitempty"`
-	TopP              *float64               `json:"top_p,omitempty"`
-	Stop              *[]string              `json:"stop,omitempty"`
-	ParallelToolCalls *bool                  `json:"parallel_tool_calls,omitempty"`
-	Model             string                 `json:"model"`
-	MaxTokens         int                    `json:"max_tokens"`
-	SessionID         string                 `json:"session_id"`
-	ReasoningEffort   string                 `json:"reasoning_effort"`
-	Messages          []chatMessage          `json:"messages"`
-	Stream            bool                   `json:"stream"`
-	Tools             []interface{}          `json:"tools,omitempty"`
-	ToolChoice        interface{}            `json:"tool_choice,omitempty"`
+	ResponseFormat    map[string]any `json:"response_format,omitempty"`
+	PromptCacheKey    string         `json:"prompt_cache_key,omitempty"`
+	Temperature       *float64       `json:"temperature,omitempty"`
+	TopP              *float64       `json:"top_p,omitempty"`
+	Stop              *[]string      `json:"stop,omitempty"`
+	ParallelToolCalls *bool          `json:"parallel_tool_calls,omitempty"`
+	Model             string         `json:"model"`
+	MaxTokens         int            `json:"max_tokens"`
+	SessionID         string         `json:"session_id"`
+	ReasoningEffort   string         `json:"reasoning_effort"`
+	Messages          []chatMessage  `json:"messages"`
+	Stream            bool           `json:"stream"`
+	Tools             []any          `json:"tools,omitempty"`
+	ToolChoice        any            `json:"tool_choice,omitempty"`
 }
 
 // buildChatBody renders one chat request.
@@ -134,7 +115,7 @@ func buildMessages(req upstream.UpstreamRequest) []chatMessage {
 
 		switch role {
 		case "assistant":
-			if converted, ok := convertAssistantMessage(msg, pendingToolCalls); ok {
+			if converted, ok := upstream.ConvertAssistantMessage(msg, pendingToolCalls); ok {
 				out = append(out, converted)
 			}
 		default:
@@ -157,45 +138,6 @@ func reasoningForReplay(msg prompt.Message) string {
 		return strings.TrimSpace(msg.ReasoningContent)
 	}
 	return ""
-}
-
-// convertAssistantMessage maps text, thinking and tool_use blocks onto one
-// assistant message.
-func convertAssistantMessage(msg prompt.Message, pendingToolCalls map[string]bool) (chatMessage, bool) {
-	message := chatMessage{Role: "assistant", ReasoningContent: strings.TrimSpace(msg.ReasoningContent)}
-	var text []string
-	for _, block := range msg.Content.GetBlocks() {
-		switch block.Type {
-		case "text":
-			if strings.TrimSpace(block.Text) != "" {
-				text = append(text, block.Text)
-			}
-		case "thinking":
-			if message.ReasoningContent == "" {
-				message.ReasoningContent = strings.TrimSpace(block.Thinking)
-			}
-		case "tool_use":
-			name := strings.TrimSpace(block.Name)
-			if name == "" {
-				continue
-			}
-			id := strings.TrimSpace(block.ID)
-			if id == "" {
-				id = NewToolCallID()
-			}
-			message.ToolCalls = append(message.ToolCalls, toolCall{
-				ID:   id,
-				Type: "function",
-				Function: toolCallFunction{
-					Name:      name,
-					Arguments: util.CompactToolInput(block.Input),
-				},
-			})
-			pendingToolCalls[id] = true
-		}
-	}
-	message.Content = strings.Join(text, "\n")
-	return message, message.Content != "" || len(message.ToolCalls) > 0 || message.ReasoningContent != ""
 }
 
 // convertBlockMessage maps user/system blocks, splitting tool_result blocks
@@ -239,7 +181,7 @@ func convertBlockMessage(role string, msg prompt.Message, pendingToolCalls map[s
 
 // toolResultText renders a tool_result payload as text. The upstream's `tool`
 // message carries a string, and a structured result is JSON.
-func toolResultText(content interface{}) string {
+func toolResultText(content any) string {
 	switch typed := content.(type) {
 	case nil:
 		return ""
@@ -256,18 +198,18 @@ func toolResultText(content interface{}) string {
 
 // normalizeToolDefinitions converts Anthropic declarations into the OpenAI
 // function envelope required by Cline. OpenAI declarations are retained as-is.
-func normalizeToolDefinitions(req upstream.UpstreamRequest) []interface{} {
+func normalizeToolDefinitions(req upstream.UpstreamRequest) []any {
 	if len(req.Tools) == 0 {
 		return nil
 	}
-	out := make([]interface{}, 0, len(req.Tools))
+	out := make([]any, 0, len(req.Tools))
 	for _, raw := range req.Tools {
-		tool, ok := raw.(map[string]interface{})
+		tool, ok := raw.(map[string]any)
 		if !ok || tool == nil {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(util.StringValue(tool["type"])), "function") {
-			if function, ok := tool["function"].(map[string]interface{}); ok && strings.TrimSpace(util.StringValue(function["name"])) != "" {
+			if function, ok := tool["function"].(map[string]any); ok && strings.TrimSpace(util.StringValue(function["name"])) != "" {
 				out = append(out, tool)
 			}
 			continue
@@ -278,16 +220,16 @@ func normalizeToolDefinitions(req upstream.UpstreamRequest) []interface{} {
 		}
 		parameters := tool["input_schema"]
 		if parameters == nil {
-			parameters = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+			parameters = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
-		function := map[string]interface{}{
+		function := map[string]any{
 			"name":       name,
 			"parameters": parameters,
 		}
 		if description := strings.TrimSpace(util.StringValue(tool["description"])); description != "" {
 			function["description"] = description
 		}
-		out = append(out, map[string]interface{}{"type": "function", "function": function})
+		out = append(out, map[string]any{"type": "function", "function": function})
 	}
 	if len(out) == 0 {
 		return nil
@@ -295,8 +237,8 @@ func normalizeToolDefinitions(req upstream.UpstreamRequest) []interface{} {
 	return out
 }
 
-func normalizeToolChoice(choice interface{}) interface{} {
-	object, ok := choice.(map[string]interface{})
+func normalizeToolChoice(choice any) any {
+	object, ok := choice.(map[string]any)
 	if !ok {
 		return choice
 	}
@@ -309,12 +251,12 @@ func normalizeToolChoice(choice interface{}) interface{} {
 	case "tool", "function":
 		name := strings.TrimSpace(util.StringValue(object["name"]))
 		if name == "" {
-			if function, ok := object["function"].(map[string]interface{}); ok {
+			if function, ok := object["function"].(map[string]any); ok {
 				name = strings.TrimSpace(util.StringValue(function["name"]))
 			}
 		}
 		if name != "" {
-			return map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": name}}
+			return map[string]any{"type": "function", "function": map[string]any{"name": name}}
 		}
 	}
 	return choice

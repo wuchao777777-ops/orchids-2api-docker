@@ -43,8 +43,8 @@ func TestHandleConfigListReturnsCodeFreeMaxShape(t *testing.T) {
 	api.HandleConfigList(rec, req)
 
 	var resp struct {
-		Code int                    `json:"code"`
-		Data map[string]interface{} `json:"data"`
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
 	}
 	testutil.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "unmarshal response: %v")
 
@@ -167,9 +167,7 @@ func TestPersistConfigConcurrentReadersSeeCompleteSnapshots(t *testing.T) {
 	errCh := make(chan error, 8)
 	done := make(chan struct{})
 	for range 8 {
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
+		readers.Go(func() {
 			for {
 				select {
 				case <-done:
@@ -188,7 +186,7 @@ func TestPersistConfigConcurrentReadersSeeCompleteSnapshots(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	for i := range updates {
