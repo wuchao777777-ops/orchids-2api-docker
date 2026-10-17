@@ -109,6 +109,7 @@ Grok 默认 base 为 `https://cli-chat-proxy.grok.com/v1`，CLI 版本当前默�
 
 | 字段 | 生效方式 |
 |---|---|
+| `grok_low_latency` | 默认 `false`；设为 `true` 跳过 Build 输出质量缓存和质量重试，直接交付上游内容；保留错误处理、用量统计和质量审计，代价是不再拦截疑似降质输出 |
 | `grok_build_rps` | 非正 / 非有限关闭节奏；正值夹取 0.01–1000，按账号 / 团队范围执行 |
 | `grok_egress_enabled` | 默认未启用，开启后没有健康节点则失败，不静默直连 |
 | `grok_egress_nodes` | name、url、weight、scope、proxied；URL 支持 http / socks5 / socks5h，scope 用 cli / all |
@@ -134,9 +135,9 @@ Grok 语义空闲按有效生成事件衡量，keepalive 不延长时钟；下�
 
 ## 固定生成策略
 
-配置页只保留后台凭据和代理控件；免鉴权来源及生成预算与延迟控件已删除。所有渠道的模型、推理、压缩和响应资源入口均要求托管 API Key，包括 loopback、IPv6 和可信代理转发的请求。`anonymous_allow_ips` 及旧 `inference_auth_enabled=false` 不能放行请求；管理令牌不能替代推理 Key。
+配置页提供后台凭据、请求策略和代理控件。请求策略只选择预设档位及 Grok 低延迟模式，不开放任意生成上限。所有渠道的模型、推理、压缩和响应资源入口均要求托管 API Key，包括 loopback、IPv6 和可信代理转发的请求。`anonymous_allow_ips` 及旧 `inference_auth_enabled=false` 不能放行请求；管理令牌不能替代推理 Key。
 
-固定值集中在 [inference_limits.go](../internal/config/inference_limits.go)：
+标准档固定值集中在 [inference_limits.go](../internal/config/inference_limits.go)：
 
 | 策略 | 固定值 |
 |---|---:|
@@ -144,15 +145,15 @@ Grok 语义空闲按有效生成事件衡量，keepalive 不延长时钟；下�
 | 入口及上游完整请求期限 | 7200 秒 |
 | WorkBuddy / Qoder / Cline 语义流空闲 | 300 秒 |
 | Grok 语义流空闲 | 120 秒 |
-| 共享拒绝排队睡眠预算 | 60 秒 |
+| 共享拒绝排队睡眠预算 | 默认 60 秒，可通过 `shared_refusal_wait_budget_ms` 缩短或关闭 |
 | Qoder 已分类队列闸门探测间隔 | 5 秒 |
 | 共享生成重试上限 | 20 次重试，认证重放占同一尝试预算 |
 
 首生成包括文本、推理和工具进展，不等同可见首字；生成进展后停止该计时。成功非流 JSON 的响应头释放流式看门狗，完整正文仍受总期限约束。心跳、角色和纯用量不刷新语义空闲，父取消始终有效。内部目录读取保留更短的操作期限，不开放为用户配置。
 
-Qoder 队列闸门仍在同一个账号上有界等待，不因共享队列拒绝切号。60 秒只计排队睡眠，网络往返和其他上游处理时间仍消耗首生成及完整期限。普通账号限流保留上游 Retry-After 与账号冷却逻辑。
+Qoder 队列闸门仍在同一个账号上有界等待，不因共享队列拒绝切号。预算只计排队睡眠（含抖动），网络往返和其他上游处理时间仍消耗首生成及完整期限。普通账号限流保留上游 Retry-After 与账号冷却逻辑。
 
-Grok 的传输切号总上限固定为 20；质量暂存固定开启，最多 6 次、每轮 30 秒，不设固定缓冲字节上限。Chat/Messages 沿用耗尽后交付最后结果的策略；原生 Responses 对已判异常的输出返回 `502 quality_degraded`。原生 Responses 的传输、推理解码恢复和质量重试共用调用预算。仅尚未交付且无上游副作用的请求可重放；`previous_response_id` 续接固定原账号，托管工具请求禁止跨账号重放。这些限制不能被配置文件或管理 API 覆盖。
+Grok 标准档的传输切号尝试上限为 20；默认开启输出前质量暂存，质量尝试最多 6 次，30 秒是随内容事件检查的策略阈值，并非独立计时器保证的释放期限。不设固定缓冲字节上限。`grok_low_latency: true` 跳过质量暂存和质量重试，保留异常处理、用量及质量审计。Chat/Messages 沿用质量尝试耗尽后交付最后结果的策略；原生 Responses 对已判异常的输出返回 `502 quality_degraded`。Chat/Messages 和原生 Responses 的传输、认证重放、推理解码恢复和质量重试都受同一个实际 HTTP 调用预算约束，标准档最多 21 次、交互档最多 4 次；OAuth 控制面刷新不计生成次数。仅尚未交付且无上游副作用的请求可重放；`previous_response_id` 续接固定原账号，托管工具请求禁止跨账号重放。质量阈值和安全限制不能被任意配置覆盖。
 
 客户端显式 `max_tokens`、`max_completion_tokens`、Responses `max_output_tokens` 及协议停止序列继续按原协议处理，未将客户端参数改成固定值。
 
@@ -161,3 +162,44 @@ WorkBuddy 请求未提供输出上限时，自动采用所选账号上游模型�
 旧文件与 Redis 中的预算、延迟、重试及质量配置字段会被忽略，下一次正常配置保存不再写回它们；管理 API 显式提交这些字段或 `anonymous_allow_ips` 返回 400。不需要为了升级删除 Redis 或凭据主密钥。
 
 推理传输不设网关固定的请求体、SSE 单事件、非流式响应、回放副本及压缩摘要字节上限；调试流日志也保留完整内容。大载荷受机器内存、磁盘、Redis 和上游服务容量约束。客户端工具输出预算属于客户端配置，网关无法恢复入站前已被裁掉的内容。
+
+## 推理延迟与等待预算
+
+`inference_profile` 可在配置文件、Redis 配置或控制台「请求策略」中选择；省略使用 `standard`，未知值会被拒绝。服务启动时 Redis 中保存的配置优先。预设只缩短已有上限，不改变模型、输出 Token 或完整请求期限。
+
+| 策略 | `standard` 标准 | `interactive` 交互优先 |
+|---|---:|---:|
+| 跨重试首生成期限 | 180 秒 | 30 秒 |
+| 实际生成 HTTP 调用总预算（含认证重放） | 21 次 | 4 次 |
+| 共享 handler 不同账号尝试上限 | 20 个 | 3 个 |
+| Grok 外层传输/质量尝试预算 | 20 次 | 3 次 |
+| 共享拒绝累计睡眠上限 | 60 秒 | 5 秒 |
+| 账号满载累计探测睡眠上限 | 2 秒 | 250 毫秒 |
+
+交互档在拥堵时更早返回错误，可能降低单次请求的恢复成功率。首生成包含上游文本、推理或工具进展，不能理解为 30 秒内一定交付可见答案；Grok 质量暂存可能继续等待。Grok 低延迟开关与恢复档位独立。完整期限仍为 7200 秒，生成开始后的语义空闲策略保持原值。重试等待若无法在剩余首生成或父请求期限内完成，直接返回已有失败。普通账号限流保留完整 Retry-After，不再截短到 30 秒；已分类共享队列仍沿用有界探测策略。
+
+Grok 请求审计记录 `quality_delivery_mode`（`quality` / `low_latency`）。启用暂存的成功释放或拒绝尝试还会记录 `quality_hold_ms`、`quality_upstream_first_content_ms`、`quality_release_ms`、`quality_added_delay_ms`，用于区分上游首内容与网关暂存。前两种时间点及释放时间相对该次上游正文消费起点；新增等待为释放减首内容时间。未观察到内容、未释放的值为 `-1`，低延迟请求不伪造暂存指标。这些数据描述网关观察与释放，不代表客户端网络收包时间。
+
+流式输出由外层统一合并刷新，首帧和终止帧优先发送，后续文本和思考增量不再等待凑齐固定帧数。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `stream_flush_interval_ms` | 2 | 0 使用默认，负数关闭合并，正数最多 20ms |
+| `shared_refusal_wait_budget_ms` | 60000 | 0 使用默认，负数禁用共享拒绝等待，正数最多 60000ms；累计睡眠包含抖动 |
+| `account_reservation_wait_budget_ms` | 2000 | 0 使用默认，负数禁用满载等待，正数最多 2000ms |
+
+两个等待预算用于 WorkBuddy、Qoder、Cline 的共享 handler，不控制 Grok 的独立重试逻辑。预算仅限制对应的等待，不包含上游执行、Redis 查询或其他错误重试耗时，正值不能超过所选档位的上限。`shared_refusal_wait_budget_ms` 仅通过配置文件或 Redis 配置设置，管理 API 仍拒绝该旧生成参数；`account_reservation_wait_budget_ms` 可通过管理 API 设置。Redis 中已保存的配置优先于文件。
+
+后台账号维护最多并发 4 个账号，每个账号继承服务取消信号并有 60 秒期限；同一轮去重账号 ID，各渠道继续自行检查模型、额度和凭据是否到期并保留原有刷新互斥。慢请求或单账号 panic 不再阻塞整轮其余账号，整轮结束后才处理下一轮。
+
+交互请求可设置 `shared_refusal_wait_budget_ms: 5000` 和 `account_reservation_wait_budget_ms: 250`。这会更早返回繁忙错误，可能降低上游拥堵时单次请求的恢复成功率。需要立即返回时设为 `-1`。
+
+Cline 未指定推理强度仍使用 `high`；显式 `reasoning_effort: "none"` 现在原样发送上游，不再回退为 `high`。是否支持关闭推理由上游模型决定，上游拒绝会按正常错误路径返回。
+
+## WorkBuddy 国际版请求头
+
+按 [PR #403](https://github.com/ardeyouxipianyi/workbuddy2api-hub/pull/403) 将桌面端版本和 UA 统一维护在 `internal/workbuddy/identity.go`。聊天和模型目录使用 `WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0`，额度查询使用 `WorkBuddy/5.8.4`，登录链接版本同源为 5.8.4。首段大写 `WorkBuddy` 来自内置 CLI 的平台身份，不替换为 Electron 旁路请求的小写前缀。
+
+WorkBuddy 的出站身份按 [workbuddy2api-hub PR #381](https://github.com/ardeyouxipianyi/workbuddy2api-hub/pull/381) 对齐为桌面端 5.8.4 / 内置 CLI 2.161.0。每次上游尝试生成新的 UUIDv7 会话头族：会话 ID 带连字符，请求和消息 ID 为 32 位小写 hex。请求 ID 与消息 ID 一致，根请求 ID 与会话请求 ID 一致；W3C 和 B3 追踪头使用同一组 trace/span。
+
+这些出站标识不复用调用方的会话 ID 或网关追踪 ID；网关自身的会话亲和性和请求体历史保持原逻辑。聊天请求不发送 `X-Machine-ID`、`X-Session-ID`，也不构造设备令牌。当前项目只实现国际版渠道，此修改不增加国内版、VSCode 或 CLI 身份切换。

@@ -54,13 +54,14 @@ func (e *messageExecution) run() {
 	if e.affinity.SessionID != "" {
 		chatSessionID = e.affinity.SessionID
 	}
-	maxRetries := max(e.cfg.MaxRetries, 0)
+	policy := e.cfg.InferencePolicy()
+	maxRetries := min(max(e.cfg.MaxRetries, 0), policy.MaxAttempts-1)
 	retryDelay := time.Duration(e.cfg.RetryDelay) * time.Millisecond
 	retriesRemaining := maxRetries
 	budgetCtx, attemptBudget := upstream.WithAttemptBudget(e.r.Context(), maxRetries+1)
 	e.r = e.r.WithContext(budgetCtx)
-	// sharedRefusalWaited accumulates only the waits spent on a refusal that
-	// every account shares, which is bounded separately from maxRetries.
+	// sharedRefusalWaited includes probe sleeps and jitter for a refusal that
+	// every account shares, bounded separately from maxRetries.
 	var sharedRefusalWaited time.Duration
 
 	// Publish the model this request resolved to, so the per-minute
@@ -75,6 +76,7 @@ func (e *messageExecution) run() {
 	payloadSystem := upstream.PrependSystemHint(e.req.System, e.structured.SystemHint())
 
 	upstreamReq := upstream.UpstreamRequest{
+		StreamToolDeltas:  e.req.Stream,
 		ResponseFormat:    e.req.ResponseFormat,
 		ResponseText:      e.req.ResponseText,
 		Include:           e.req.Include,
@@ -102,12 +104,13 @@ func (e *messageExecution) run() {
 		upstreamReq.ConversationID = e.affinity.SessionID
 	}
 	primaryHandler := func(msg upstream.SSEMessage) {
-		if msg.Type == "model.text-delta" || msg.Type == "model.reasoning-delta" || msg.Type == "model.tool-call" {
+		if msg.Type == "model.text-delta" || msg.Type == "model.reasoning-delta" || msg.Type == "model.tool-call" || msg.Type == "model.tool-call-delta" {
 			util.MarkGenerationProgress(e.r.Context())
 		}
 		e.sh.handleMessage(msg)
 	}
 	var attempt int
+	attemptedAccounts := make(map[int64]struct{})
 	for {
 		if returned, _ := e.sh.terminalState(); returned {
 			return
@@ -119,6 +122,7 @@ func (e *messageExecution) run() {
 		accountType, accountName := "", ""
 		if e.currentAccount != nil {
 			accountID, accountType, accountName = e.currentAccount.ID, e.currentAccount.AccountType, e.currentAccount.Name
+			attemptedAccounts[accountID] = struct{}{}
 		}
 		if e.verboseDiagnostics {
 			slog.Debug(
@@ -277,6 +281,11 @@ func (e *messageExecution) run() {
 				errClass.Category, apperrors.PublicMessage(errStr), upstreamRetryAfter(err))
 			return
 		}
+		if verdict.SwitchAccount && len(attemptedAccounts) >= policy.MaxAccounts {
+			e.sh.reportRequestFailure("Reporting that the account attempt budget is exhausted",
+				errClass.Category, apperrors.PublicMessage(errStr), upstreamRetryAfter(err))
+			return
+		}
 		retriesRemaining--
 		slog.Warn(
 			"Retrying upstream request without prior output",
@@ -351,23 +360,19 @@ func (e *messageExecution) run() {
 			retryDelayForAttempt = hinted
 		}
 		sharedRefusal := isSharedUpstreamRefusalClass(errClass)
-		// sharedRefusalWait is the selected interval, charged against the
-		// budget. The jitter below is added only to the sleep: it exists to
-		// decorrelate wake-ups, and charging it made the last reachable
-		// window unreachable (a 30s hint plus up to 5s of jitter spent 35s
-		// against a 60s budget that had already paid 30s).
+		// The probe interval must fit; jitter is capped by the remaining budget.
 		sharedRefusalWait := time.Duration(0)
 		if retryDelayForAttempt > 0 && sharedRefusal {
 			sharedRefusalWait = sharedRefusalWaitForChannel(retryDelayForAttempt, attempt+1, e.targetChannel, errClass.Category)
 		}
-		waitBudget := config.SharedRefusalWaitBudget
+		waitBudget := e.cfg.RefusalWaitBudget()
 		// A shared refusal is a gate on the upstream's side, not this account's
 		// throttle, so the wait is spent on the same account and can repeat.
 		// Bound the total by the shortest deadline in front of this process,
 		// which is the edge proxy's origin timeout, not the caller's patience:
 		// answering past the edge's limit does not give the caller the work,
 		// it gives it a 520 from the edge.
-		if sharedRefusal && (sharedRefusalWait > 0 && !sharedRefusalWaitAllowedWithin(sharedRefusalWaited, sharedRefusalWait, waitBudget)) {
+		if sharedRefusal && (waitBudget == 0 || (sharedRefusalWait > 0 && !sharedRefusalWaitAllowedWithin(sharedRefusalWaited, sharedRefusalWait, waitBudget))) {
 			slog.Warn("Shared upstream refusal exceeded the wait budget; answering now",
 				"trace_id", e.traceID,
 				"waited", sharedRefusalWaited,
@@ -380,7 +385,12 @@ func (e *messageExecution) run() {
 			return
 		}
 		if sharedRefusalWait > 0 {
-			retryDelayForAttempt = sharedRefusalSleepForChannel(sharedRefusalWait, e.targetChannel, errClass.Category)
+			retryDelayForAttempt = min(sharedRefusalSleepForChannel(sharedRefusalWait, e.targetChannel, errClass.Category), waitBudget-sharedRefusalWaited)
+		}
+		if !util.RetryWaitFits(e.r.Context(), retryDelayForAttempt) {
+			e.sh.reportRequestFailure("Retry wait cannot fit within the remaining request budget",
+				errClass.Category, apperrors.PublicMessage(errStr), upstreamRetryAfter(err))
+			return
 		}
 		// Holding this account's concurrency slot through the wait starves the
 		// pool: the slot is reserved for the whole request, so ten requests
@@ -405,13 +415,7 @@ func (e *messageExecution) run() {
 			return
 		}
 		if sharedRefusal {
-			sharedRefusalWaited += sharedRefusalWait
-			if sharedRefusalWait == 0 {
-				// No hint to charge, but the attempt is still repeated: count
-				// the delay actually spent so a hintless gate cannot loop
-				// forever without moving the budget.
-				sharedRefusalWaited += retryDelayForAttempt
-			}
+			sharedRefusalWaited += retryDelayForAttempt
 		}
 		if slotReleasedForWait && e.currentAccount != nil {
 			reacquiredID, acquired := e.h.tryAcquireTrackedAccount(e.currentAccount)

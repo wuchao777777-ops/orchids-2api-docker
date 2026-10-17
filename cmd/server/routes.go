@@ -100,7 +100,7 @@ func registerRoutes(
 			// concurrency must not hold budget) and before the handler runs, so a
 			// key whose limit cannot cover the request is answered 402 instead.
 			middleware.APIKeyConcurrencyWithTracker(
-				middleware.APIKeyBillingReservation(middleware.InferenceBudget(flowTracker.Track(coalesceFlush(next))), s, middleware.DefaultBillingReservationTTL),
+				middleware.APIKeyBillingReservation(middleware.InferenceBudgetWithConfig(flowTracker.Track(coalesceFlush(next)), currentConfig), s, middleware.DefaultBillingReservationTTL),
 				accountTracker,
 			),
 		)
@@ -136,7 +136,7 @@ func registerRoutes(
 	if cfg != nil && cfg.ResponseStoreTTL > 0 {
 		responseStoreTTL = time.Duration(cfg.ResponseStoreTTL) * time.Hour
 	}
-	bridgeOptions := responses.BridgeOptions{Store: s, TTL: responseStoreTTL}
+	bridgeOptions := responses.BridgeOptions{Store: s, TTL: responseStoreTTL, ExecuteChat: h.HandleChatRequest}
 	channelResponses := responses.ResponsesBridgeHandler(h.HandleMessages, bridgeOptions)
 	channelResponsesSub := responses.ResponsesChannelSubpath(h.HandleMessages, bridgeOptions)
 	registerWithPrefixes(mux, channelPrefixes, "/responses", inferenceAuth(channelResponses))
@@ -202,6 +202,7 @@ func registerRoutes(
 	mux.HandleFunc("/api/ops/alerts/rules", sessionAuth(apiHandler.HandleOpsAlertRules))
 	mux.HandleFunc("/api/ops/runtime", sessionAuth(apiHandler.HandleOpsRuntime))
 	mux.HandleFunc("/api/ops/flow", sessionAuth(apiHandler.HandleOpsFlow))
+	mux.HandleFunc("/api/ops/pools", sessionAuth(apiHandler.HandleOpsPools))
 	// Journal: one filtered endpoint for request, operation, and system entries,
 	// with the upstream attempts of each request joined in.
 	mux.HandleFunc("/api/journal/records", sessionAuth(apiHandler.HandleJournalRecords))
