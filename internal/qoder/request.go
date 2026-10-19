@@ -207,9 +207,9 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 	}
 	messages, systemText := buildMessages(req)
 
-	// Preserve explicit client controls; use the reference output budget only
-	// when the caller omitted it.
-	parameters := chatParameters{MaxTokens: 32000, Temperature: req.Temperature, TopP: req.TopP}
+	// Preserve explicit client controls; use the catalog's output cap only when
+	// the caller omitted it.
+	parameters := chatParameters{MaxTokens: model.defaultMaxOutputTokens(), Temperature: req.Temperature, TopP: req.TopP}
 	parameters.ResponseFormat = req.ChatResponseFormat()
 	if req.MaxTokens != nil {
 		parameters.MaxTokens = *req.MaxTokens
@@ -227,8 +227,10 @@ func buildChatBodyProfile(req upstream.UpstreamRequest, model modelEntry, sessio
 	if contextLength > 0 {
 		parameters.ContextLength = contextLength
 	}
-	// The catalog supplies the default; explicit client effort overrides every
-	// thinking switch together so the gateway never receives contradictory flags.
+	// The catalog supplies the default, read the way the official client reads
+	// it; explicit client effort overrides every thinking switch together so
+	// the gateway never receives contradictory flags.
+	model.IsReasoning = model.reasoningDefault()
 	effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
 	if effort != "" {
 		thinking := effort != "none"
@@ -381,7 +383,20 @@ func latestUserText(req upstream.UpstreamRequest) string {
 
 // Scope explicit conversation identities to the account without retaining raw IDs.
 func conversationSessionID(uid, conversation string) string {
-	sum := sha256.Sum256([]byte("qoder-session\x00" + uid + "\x00" + conversation))
+	return scopedUUID("qoder-session", uid, conversation)
+}
+
+// taskSetID derives request_set_id (and business.id) from the downstream
+// request, so the shared handler's retries of one request present one task:
+// the capture keeps request_set_id constant across the requests of a task while
+// request_id changes. A fresh set id on every retry made each 10605 queue retry
+// look like a new task to the gateway.
+func taskSetID(uid, downstreamRequestID string) string {
+	return scopedUUID("qoder-task", uid, downstreamRequestID)
+}
+
+func scopedUUID(namespace, uid, value string) string {
+	sum := sha256.Sum256([]byte(namespace + "\x00" + uid + "\x00" + value))
 	sum[6] = (sum[6] & 0x0f) | 0x80
 	sum[8] = (sum[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", sum[:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
