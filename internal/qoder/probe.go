@@ -60,6 +60,9 @@ type probeIdentity struct {
 	// carries user_type); reference sends the whole reference request.
 	referenceInfo bool
 	reference     bool
+	// cliProfile names the CLI profile a reference variant reproduces;
+	// empty means the reference profile.
+	cliProfile string
 	// fullRead reads the whole answer instead of stopping at its first token.
 	fullRead bool
 }
@@ -116,6 +119,7 @@ func (c *Client) probeIdentities(userType string) []probeIdentity {
 		{name: "E cli identity", host: primary, version: "0.1.43", body: cli, headers: cliHeaders},
 		{name: "H current + reference info", host: primary, version: c.clientVersion, referenceInfo: true},
 		{name: "I full reference request", host: primary, version: referenceCosyVersion, reference: true},
+		{name: "N full buddy-switch request", host: buddySwitchProbeHost(primary, c.endpoints.inferenceFallbacks), version: buddySwitchCosyVersion, reference: true, cliProfile: RequestProfileBuddySwitch},
 	}
 	// Every failover node is probed: the daily request count is kept per
 	// host, so whether a node also has its own admission capacity is the
@@ -157,6 +161,11 @@ type ProbeRoundOptions struct {
 	// Search replaces the identity variants with the web-search variants
 	// (see searchIdentities) and asks a question only a search can answer.
 	Search bool
+	// AlignWindow sends every request just after the low-priority queues'
+	// per-minute admission window opens (see queue_window.go), one per
+	// minute, instead of every Interval: most requests sent at a fixed
+	// interval land outside the window and are refused.
+	AlignWindow bool
 }
 
 // ProbeRounds sends the selected identities Rounds times. The order flips
@@ -197,7 +206,12 @@ func (c *Client) ProbeRounds(ctx context.Context, requestedModel string, opts Pr
 			slices.Reverse(order)
 		}
 		for _, identity := range order {
-			if !first && opts.Interval > 0 {
+			switch {
+			case opts.AlignWindow:
+				if err := sleepCtx(ctx, untilProbeWindow(time.Now())); err != nil {
+					return results, err
+				}
+			case !first && opts.Interval > 0:
 				if err := sleepCtx(ctx, opts.Interval); err != nil {
 					return results, err
 				}
@@ -245,8 +259,12 @@ func (c *Client) probeOnce(ctx context.Context, identity probeIdentity, req upst
 		result.Outcome, result.Detail = "error", err.Error()
 		return result
 	}
+	profile := identity.cliProfile
+	if profile == "" {
+		profile = RequestProfileReference
+	}
 	if identity.referenceInfo || identity.reference {
-		reference, err := c.referenceRuntimeFields(creds)
+		reference, err := c.cliRuntimeFields(creds, profile)
 		if err != nil {
 			return fail(err)
 		}
@@ -265,7 +283,7 @@ func (c *Client) probeOnce(ctx context.Context, identity probeIdentity, req upst
 		if err != nil {
 			return fail(err)
 		}
-		if raw, err = referenceBody(raw, c.aliyunUserType()); err != nil {
+		if raw, err = cliBody(raw, c.aliyunUserType(), profile); err != nil {
 			return fail(err)
 		}
 		encoded = EncodeBody(raw)
@@ -295,7 +313,7 @@ func (c *Client) probeOnce(ctx context.Context, identity probeIdentity, req upst
 		return fail(err)
 	}
 	if identity.reference {
-		if err := c.applyReferenceHeaders(httpReq, creds, fields, model.Key, model.Source, encoded, signPath(url)); err != nil {
+		if err := c.applyCLIHeaders(httpReq, creds, fields, model.Key, model.Source, encoded, signPath(url), profile); err != nil {
 			return fail(err)
 		}
 	} else if err := c.applyAuthHeadersBytes(httpReq, creds, fields, requestID, model.Key, model.Source, encoded, signPath(url)); err != nil {
@@ -463,4 +481,26 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 		}
 	}
 	return len(p), nil
+}
+
+// probeWindowSend is the second of the minute an aligned probe request is
+// sent at: just after the admission window opens.
+const probeWindowSend = queueWindowOpen + time.Second
+
+// untilProbeWindow is the wait until the next minute's probeWindowSend.
+func untilProbeWindow(now time.Time) time.Duration {
+	intoMinute := time.Duration(now.Second())*time.Second + time.Duration(now.Nanosecond())
+	if intoMinute < probeWindowSend {
+		return probeWindowSend - intoMinute
+	}
+	return time.Minute - intoMinute + probeWindowSend
+}
+
+// buddySwitchProbeHost is the node buddy-switch sends to: api1 when the
+// default nodes are in use, otherwise the configured host.
+func buddySwitchProbeHost(primary string, fallbacks []string) string {
+	if slices.Contains(fallbacks, "https://api1.qoder.sh") {
+		return "https://api1.qoder.sh"
+	}
+	return primary
 }
