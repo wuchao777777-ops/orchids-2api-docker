@@ -65,7 +65,8 @@ func copyNativeResponseWithQuality(w http.ResponseWriter, body io.Reader, conten
 		}
 		// Preserve JSON bytes unless restoring tool identities or masking errors.
 		// Partial SSE events also need strict-client supplementation below.
-		changed := namespaces.RestoreEnvelope(response)
+		changed := responses.FilterInternalSearchCalls(response)
+		changed = namespaces.RestoreEnvelope(response) || changed
 		if redactResponseError(response) || changed {
 			raw, _ = json.Marshal(response)
 		}
@@ -84,6 +85,8 @@ func copyNativeResponseWithQuality(w http.ResponseWriter, body io.Reader, conten
 	terminal, done := false, false
 	failureCode, failureMessage := "", ""
 	compat := &responsesCompatibilityState{model: model}
+	lowered := responses.NewLoweredCallFilter(namespaces)
+	internal := responses.NewInternalCallStreamFilter()
 	err := responses.ConsumeSSE(body, func(frame responses.SSEEvent) error {
 		var event map[string]any
 		kind := ""
@@ -112,7 +115,14 @@ func copyNativeResponseWithQuality(w http.ResponseWriter, body io.Reader, conten
 
 		}
 		quality.observe(event, kind, &result)
-		changed := namespaces.RestoreEnvelope(event)
+		if lowered.Drop(event) {
+			return nil
+		}
+		drop, changed := internal.Apply(event)
+		if drop {
+			return nil
+		}
+		changed = namespaces.RestoreEnvelope(event) || changed
 		changed = supplementResponsesEvent(event, compat) || changed
 		if redactResponseError(event) || changed {
 			raw, _ := json.Marshal(event)
@@ -137,7 +147,15 @@ func copyNativeResponseWithQuality(w http.ResponseWriter, body io.Reader, conten
 		}
 		item, _ := event["item"].(map[string]any)
 		meaningful := strings.HasSuffix(kind, ".delta") && responses.StreamString(event["delta"]) != ""
-		toolStart := kind == "response.output_item.added" && chatwire.ParseLooseStringAny(item["type"]) == "function_call" && chatwire.ParseLooseStringAny(item["name"]) != ""
+		toolStart := false
+		if kind == "response.output_item.added" {
+			switch chatwire.ParseLooseStringAny(item["type"]) {
+			case "function_call", "custom_tool_call":
+				toolStart = chatwire.ParseLooseStringAny(item["name"]) != ""
+			case "apply_patch_call":
+				toolStart = true
+			}
+		}
 		if result.FirstToken.IsZero() && (meaningful || toolStart) {
 			result.FirstToken = time.Now()
 		}

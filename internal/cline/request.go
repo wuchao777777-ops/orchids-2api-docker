@@ -1,12 +1,14 @@
 package cline
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"encoding/json"
 
@@ -114,7 +116,13 @@ func upstreamToolName(name string) string {
 		return name
 	}
 	sum := sha256.Sum256([]byte(name))
-	return fmt.Sprintf("%.55s_%x", name, sum[:4])
+	// The ceiling counts bytes; the prefix is cut on a rune boundary so a
+	// non-ASCII name neither overflows it nor splits a character.
+	prefix := name[:55]
+	for !utf8.ValidString(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return fmt.Sprintf("%s_%x", prefix, sum[:4])
 }
 
 // shortenToolNames rewrites over-long tool names in the declarations, the
@@ -193,7 +201,15 @@ func repairKind(err error, payload chatPayload) (int, bool) {
 	if err == nil {
 		return 0, false
 	}
-	text := strings.ToLower(err.Error())
+	// The refusal is read from the full upstream text: the gateway wraps the
+	// provider's message in ~250 characters of context, so the truncated error
+	// string can lose the very field name the repair is keyed on.
+	text := err.Error()
+	var attempt *attemptStreamError
+	if errors.As(err, &attempt) && attempt.detail != "" {
+		text = attempt.detail
+	}
+	text = strings.ToLower(text)
 	switch {
 	case strings.Contains(text, "reasoning_content") && strings.Contains(text, "missing required parameter"):
 		return repairReasoningReplay, true
@@ -211,8 +227,12 @@ func repairKind(err error, payload chatPayload) (int, bool) {
 // the body has nothing the repair could change, so a refusal is not replayed
 // unchanged.
 func repairChatBody(body []byte, kind int) ([]byte, bool) {
+	// UseNumber keeps every number in the body (tool schemas included) exactly
+	// as rendered; float64 would round large integers on the way back out.
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
 	var decoded map[string]any
-	if err := json.Unmarshal(body, &decoded); err != nil {
+	if err := decoder.Decode(&decoded); err != nil {
 		return nil, false
 	}
 	changed := false
@@ -235,7 +255,8 @@ func repairChatBody(body []byte, kind int) ([]byte, bool) {
 			changed = true
 		}
 	case repairMaxTokens:
-		if budget, ok := decoded["max_tokens"].(float64); ok && budget > repairMaxTokensBudget {
+		number, _ := decoded["max_tokens"].(json.Number)
+		if budget, err := number.Int64(); err == nil && budget > repairMaxTokensBudget {
 			decoded["max_tokens"] = repairMaxTokensBudget
 			changed = true
 		}
@@ -430,10 +451,12 @@ func normalizeToolChoice(choice any) any {
 	return choice
 }
 
-// attemptStreamError marks a rejected credential for the one refresh attempt.
+// attemptStreamError marks a rejected credential for the one refresh attempt,
+// and keeps the untruncated upstream text a request repair is classified on.
 type attemptStreamError struct {
 	err    error
 	unauth bool
+	detail string
 }
 
 func (e *attemptStreamError) Error() string { return e.err.Error() }
@@ -461,7 +484,7 @@ func classifyStatus(status int, raw []byte) error {
 		// not the token. Reporting it as a missing credential would take a
 		// healthy account out of rotation and demand a re-login that cannot fix
 		// it, so it is surfaced as a plain refusal for the scheduler to judge.
-		return &attemptStreamError{err: wrapped}
+		return &attemptStreamError{err: wrapped, detail: detail}
 	case http.StatusTooManyRequests:
 		// The inference cap names the account and states its own recovery
 		// window, so it is returned as-is: the scheduler cools the account for
@@ -473,5 +496,5 @@ func classifyStatus(status int, raw []byte) error {
 			return capErr
 		}
 	}
-	return &attemptStreamError{err: wrapped}
+	return &attemptStreamError{err: wrapped, detail: detail}
 }

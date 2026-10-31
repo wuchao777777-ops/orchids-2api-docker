@@ -47,7 +47,15 @@ WorkBuddy 将 `11128` 渠道校验拦截与 `11140` 账号受限分开处理。�
 
 `11140` 保存独立的 `workbuddy_restricted_until`，沿用原有 24 小时冷却。期间聊天、后台目录/额度刷新和手动验证均跳过该账号；凭据刷新、账号编辑或目录接口成功不能清除限制，重复触发也不会延长当前窗口。旧 `403/11140` 记录从原 `last_attempt` 推导截止时间，无需重新起算。客户端收到 `403 account_restricted`，区别于会话失效的 401；本地冷却结束不代表上游已解除限制。
 
+Anthropic 请求的 `thinking: {"type":"disabled"}` 视为显式关闭推理，在 WorkBuddy、Qoder、Cline 上按 `reasoning_effort: "none"` 处理，优先于 `output_config.effort`（与 Grok 原生路径一致）；OpenAI 字段 `reasoning_effort` 仍最优先。WorkBuddy 收到 `none` 时省略该字段；Cline 原样发送，上游拒绝后去掉该字段重试一次。
+
+Cline 在尚未向客户端输出前，对三类可修复的上游拒绝各本地重放一次：历史 assistant 缺 `reasoning_content`（GLM 系）时补占位符 `"."`；`reasoning_effort` 被拒时去掉该字段；网关默认 `max_tokens` 被拒时降到 32000（客户端显式值不改）。超过 64 字符的工具名按"前 55 字节 + sha256 前缀"确定性缩短，返回时还原。`/auth/refresh` 拒绝（400/401/403）时先用 WorkOS `refresh_token` 续期并经 `/auth/register` 换回 Cline 凭据，两者都拒绝才要求重新登录。
+
+2026-10-31 用生产账号对真实上游复核：`reflection/beam-free` 对缺 `reasoning_content` 的历史返回 200 + 首帧 `stream_initialization_failed` 错误（报错原文前有约 250 字符包装，修复按未截断原文判断），补 `"."` 后正常；65 字节工具名同样以 200 + 错误帧拒绝，64 字节通过；网关客户端端到端（缺推理历史、`none`、超长工具名）成功并还原原名。当时四个免费模型都接受 `reasoning_effort: "none"` 和 `max_tokens: 128000`，这两类修复暂未被触发，仅作兜底保留；模型目录不返回 `contextWindow`。WorkOS 续期会轮换生产账号的 refresh token，未在生产账号上实测。
+
 Qoder 未指定推理强度时保留账号实际目录的默认 `is_reasoning`；显式强度会同步更新 `model_config` 和 `chat_context.extra.modelConfig` 中的开关。`none` 发送 `reasoning_effort: "none"`、`max_thinking_tokens: 0` 和 `enable_thinking: false`，两处 `is_reasoning` 均为 false；其他显式档位同步开启。这是请求映射约定，是否支持该档位仍由国际版上游判定。
+
+Qoder 选号先在仍有可用额度的账号中进行；额度已耗尽（`qoder_quota_exhausted`、402 或额度快照为耗尽）的账号只在没有其他合格账号时作为后备，免费模型也不例外。2026-11-01 用生产账号实测：额度为 0 的 Free 账号对 `qfmodel` 连续两个准入窗口都返回 10605（`queueType: p4`、`subCode: RESOURCE_LIMIT`），而有额度的 Pro Trial 账号在同类窗口内 14 个模型中 13 个成功（`ultimate` 仍被拒）；此前大部分请求落到这类耗尽账号上并在等待后返回 429。每日签到接口（`/sash/api/v1/me/campaigns`）可用设备 access token 访问，但当天只有 `VIEW_DETAILS` 活动，没有可领取的额度活动。
 
 Qoder 的 `success:false` 错误既可以是裸 SSE JSON，也可以包在成功的 envelope 中。带有错误码或说明的失败帧使用与 HTTP 错误一致的分类，不会被后续 `event:finish` 覆盖为成功；已输出正文、推理或 usage 后不重放请求。
 
@@ -73,7 +81,9 @@ strict:false 和 json_object 不执行相同强制校验。答案围栏与外围
 
 工具名必须唯一，tool_choice 引用存在的声明，required 需要可执行工具。历史调用与结果按 call_id 配对，函数名不能替代身份。不同媒体内容必须提供 URL / data URI 等合法结构，不能直接塞裸 base64。
 
-四通道的 Responses 支持 Codex namespace 中的 function：将分组身份编码为稳定的上游函数名，并在 JSON、SSE 和响应资源中还原 namespace 与原始名称；tool_choice 和续轮历史使用同一映射，参数 JSON 不改写。Grok Build 保持原生 Responses 传输，映射随 Key 所有权和 TTL 保存，并保留推理回放中的分组身份。Build 函数声明的 object/null 根类型规范为 object；对象根的 anyOf/oneOf 移入 allOf，保留分支、其他约束、引用及嵌套 nullable 字段。工具声明在实际调用前就会被上游校验。custom、apply_patch、local_shell、tool_search 等扩展仍明确拒绝。文本中的工具标记仅作为文本输出，不转换为可执行调用；工具结果不读取客户端本地文件。
+四通道的 Responses 支持 Codex namespace 中的 function：将分组身份编码为稳定的上游函数名，并在 JSON、SSE 和响应资源中还原 namespace 与原始名称；tool_choice 和续轮历史使用同一映射，参数 JSON 不改写。Grok Build 保持原生 Responses 传输，映射随 Key 所有权和 TTL 保存，并保留推理回放中的分组身份。Build 函数声明的 object/null 根类型规范为 object；对象根的 anyOf/oneOf 移入 allOf，保留分支、其他约束、引用及嵌套 nullable 字段。工具声明在实际调用前就会被上游校验。Grok Build 原生 Responses 将 Codex 扩展工具降级为普通函数并在返回时还原：`custom` 变为带 `input` 字符串参数的函数（grammar 定义写入描述，无法强制），`apply_patch` 变为带 V4A `operation` 参数的函数，返回给客户端时分别还原为 `custom_tool_call` / `apply_patch_call`（JSON、SSE、续轮和响应资源一致；流式时不转发函数参数增量，完整条目随 `output_item.done` 给出）；`tool_search`（服务端执行）改为预先加载全部 `defer_loading` 函数，客户端执行的 `tool_search` 与 `local_shell` 仍拒绝。WorkBuddy、Qoder、Cline 的桥接路径仍拒绝这些扩展。2026-11-01 用生产 Grok 账号复核：Build 对原生 `custom`、`apply_patch`、`local_shell` 返回 422（unknown variant），对 `tool_search` + `defer_loading` 返回 403（仅 alpha 用户可用），因此降级与预先加载是必需的；降级后的 `apply_patch` 与 `custom` 函数被模型按预期调用，回传结果后续轮正常。客户端版本 1.0.60 与新请求头被接受，`/responses` 响应带 `x-models-etag`（`/models` 不带）。Build OAuth token 在 xAI 平面（`api.x.ai`）可认证，但免费账号返回 402/403 额度不足；当前无付费账号，故未实现 xAI 平面回退。
+
+Build 执行原生 x_search 时会在输出中插入已完成的内部子调用（`custom_tool_call`，名称如 `x_keyword_search`、`x_user_search`、`x_semantic_search`，call_id 以 `xs_call` 开头），原生 Responses 在 JSON 与 SSE 中移除这些条目及其输入流事件，并重排后续 `output_index`；客户端 custom 工具在发往上游前已降级为函数，因此上游的 `custom_tool_call` 不会是客户端自己的工具。Chat Completions / Messages 路径本就只转换 `function_call`，不受影响。同日实测：无工具对话本身即可命中 prompt 缓存（第二轮 6912/6959），无需注入搜索工具改走缓存路由；整数参数按整数输出（`60000`），无需修正。文本中的工具标记仅作为文本输出，不转换为可执行调用；工具结果不读取客户端本地文件。
 
 Grok Build 的 Chat、Messages 和 Responses 请求声明 function 参数 schema 时，网关暂存上游响应并检查完整参数，包括必填字段、已支持的类型和属性约束。合法输出保留原始参数字节；不补造缺失的 `prompt` 等值。参数不符合 schema 时，安全可重放的请求在原账号上携带校验反馈重新生成一次，仍受请求的物理调用总预算约束。再次失败返回 502，不下发无效调用；Chat/Responses 的错误代码为 `invalid_tool_arguments`，Messages 保留 Anthropic 的 `overloaded_error` 类型及 `upstream_unavailable` 代码。声明托管工具、MCP 服务、`store:true`、后台任务或 `previous_response_id` 的请求不做这次重新生成。函数请求的流式内容会在校验后发送，因此首段输出延后；真实生成时序仍用于质量判断。暂存超过 1 MiB 时转入临时文件，响应上限为 64 MiB，完成、失败和取消均清理临时文件。
 
