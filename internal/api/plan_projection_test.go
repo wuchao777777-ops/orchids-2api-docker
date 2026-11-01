@@ -23,11 +23,6 @@ func TestPlanProjectionSharesOneShapeAcrossChannels(t *testing.T) {
 		{"cline free", &store.Account{AccountType: "cline", ClinePlan: "free"}, "free", "free", "confirmed"},
 		{"cline pass", &store.Account{AccountType: "cline", ClinePlan: "Cline Pass"}, "Cline Pass", "paid", ""},
 
-		{"qoder unsynced", &store.Account{AccountType: "qoder"}, "", "unsynced", ""},
-		{"qoder no plan name", &store.Account{AccountType: "qoder", QoderQuota: store.QoderQuotaSnapshot{SyncedAt: synced}}, "", "unknown", ""},
-		{"qoder free", &store.Account{AccountType: "qoder", QoderQuota: store.QoderQuotaSnapshot{PlanTier: "Free", SyncedAt: synced}}, "Free", "free", "confirmed"},
-		{"qoder pro", &store.Account{AccountType: "qoder", QoderQuota: store.QoderQuotaSnapshot{PlanTier: "Pro", SyncedAt: synced}}, "Pro", "paid", ""},
-
 		{"workbuddy unsynced", &store.Account{AccountType: "workbuddy"}, "", "unsynced", ""},
 		{"workbuddy free package", &store.Account{AccountType: "workbuddy", WorkBuddyQuota: store.WorkBuddyQuotaSnapshot{PackageName: "Free Plan Subscription", SyncedAt: synced}}, "Free Plan Subscription", "free", "confirmed"},
 		{"workbuddy paid package", &store.Account{AccountType: "workbuddy", WorkBuddyQuota: store.WorkBuddyQuotaSnapshot{PackageName: "Pro Monthly", SyncedAt: synced}}, "Pro Monthly", "paid", ""},
@@ -36,8 +31,11 @@ func TestPlanProjectionSharesOneShapeAcrossChannels(t *testing.T) {
 		{"grok unknown", buildAccount("unknown", store.GrokBillingSnapshot{}), "", "unknown", ""},
 		{"grok paid plan", buildAccount("supergrok", store.GrokBillingSnapshot{}), "SuperGrok", "paid", ""},
 		{"grok billing window proves paid", buildAccount("", store.GrokBillingSnapshot{Monthly: store.GrokQuotaWindow{HasLimit: true, Limit: 10}, SyncedAt: synced}), "", "paid", ""},
-		{"grok free from plan name", buildAccount("free", store.GrokBillingSnapshot{}), "", "free", "confirmed"},
-		{"grok free from empty billing", buildAccount("", store.GrokBillingSnapshot{SyncedAt: synced}), "", "free", "inferred"},
+		{"grok free from plan name", buildAccount("free", store.GrokBillingSnapshot{}), "Free", "free", "confirmed"},
+		{"grok free from observed zero billing", buildAccount("", store.GrokBillingSnapshot{SyncedAt: synced, ProfileKnown: true}), "", "free", "inferred"},
+		{"grok missing billing profile", buildAccount("", store.GrokBillingSnapshot{SyncedAt: synced}), "", "unknown", ""},
+		{"grok X Basic", buildAccount("x_basic", store.GrokBillingSnapshot{}), "X Basic", "free", "confirmed"},
+		{"grok usage is not paid proof", buildAccount("", store.GrokBillingSnapshot{SyncedAt: synced, Weekly: store.GrokQuotaWindow{HasUsage: true, UsagePercent: 50}}), "", "unknown", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,4 +57,13 @@ func TestPlanProjectionConfirmsFreeFromExhaustion(t *testing.T) {
 	fields := buildQuotaResponseFields(acc)
 	testutil.Equal(t, fieldString(t, fields, "plan_tier"), "free")
 	testutil.Equal(t, fieldString(t, fields, "plan_confidence"), "confirmed")
+}
+
+func TestGrokAccountOutputPreservesInferredPlanConfidence(t *testing.T) {
+	acc := buildAccount("unknown", store.GrokBillingSnapshot{SyncedAt: time.Now(), ProfileKnown: true})
+	out := normalizeAccountOutput(acc)
+	testutil.Equal(t, fieldString(t, out.Quota, "plan_tier"), "free")
+	testutil.Equal(t, fieldString(t, out.Quota, "plan_confidence"), "inferred")
+	testutil.Equal(t, fieldString(t, out.Quota, "quota_source"), "billingProfile")
+	testutil.Equal(t, acc.Subscription, "unknown")
 }

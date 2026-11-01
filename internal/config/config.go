@@ -58,37 +58,6 @@ type Config struct {
 	// stubbed upstream. Empty means the production international host.
 	WorkBuddyBaseURL string `json:"workbuddy_base_url,omitempty"`
 
-	// ── Qoder (qoder.com CLI device authorization) ──
-	// The Qoder CLI talks to three hosts. They are configurable so a deployment
-	// can point at a regional endpoint (for example the CN gateway) and so tests
-	// can stub the upstream.
-	//
-	//   QoderOAuthBaseURL   browser authorization page   (default https://qoder.com)
-	//   QoderOpenAPIBaseURL device token + profile API   (default https://openapi.qoder.sh)
-	//   QoderInferenceURL   chat completion endpoint     (default https://api2.qoder.sh)
-	QoderOAuthBaseURL   string `json:"qoder_oauth_base_url,omitempty"`
-	QoderOpenAPIBaseURL string `json:"qoder_openapi_base_url,omitempty"`
-	QoderInferenceURL   string `json:"qoder_inference_base_url,omitempty"`
-	// QoderClientID is the public OAuth client id of the Qoder CLI. It is not a
-	// secret, and it is configurable so a future CLI build can be followed
-	// without a code change.
-	QoderClientID string `json:"qoder_client_id,omitempty"`
-	// QoderClientVersion is sent as the user agent / Cosy-Version family value
-	// and appended to the login URL.
-	QoderClientVersion string `json:"qoder_client_version,omitempty"`
-	// QoderHTTP2Enabled makes the Qoder chat transport use HTTP/2, matching the
-	// official client's offer on the wire. It is off by default because HTTP/2
-	// multiplexes every chat request to the host over one connection, so a
-	// single reset there fails every in-flight request at once, and Go queues at
-	// the peer's stream limit instead of opening another connection. It was also
-	// measured *not* to be the cause of the queue refusals: HTTP/1.1, an
-	// explicit HTTP/2 transport and the default client all answered in the same
-	// 1.5-2.0s window, and the refusals appeared on all three.
-	QoderHTTP2Enabled bool `json:"qoder_http2_enabled,omitempty"`
-	// QoderQueueWindowRetryDisabled turns off retrying a low-priority queue
-	// refusal (10605, queueType p3/p4) at the gateway's per-minute admission
-	// window; such refusals then follow the generic shared-refusal wait.
-	QoderQueueWindowRetryDisabled bool `json:"qoder_queue_window_retry_disabled,omitempty"`
 	// NonStreamKeepAliveDisabled turns off whitespace keep-alives for
 	// non-streaming answers that take longer than a minute (see
 	// handler.nonStreamOpenAfter).
@@ -273,6 +242,7 @@ func ApplyDefaults(cfg *Config) {
 // Only the profile name is persisted; individual generation limits cannot be
 // overridden through file, Redis or management JSON.
 func ApplyHardcoded(cfg *Config) {
+	NormalizeGrokCLIIdentity(cfg)
 	if ValidateInferenceProfile(cfg) == nil {
 		cfg.InferenceProfile = cfg.InferencePolicy().Name
 	}
@@ -327,17 +297,23 @@ func (c *Config) GrokCLIOAuthTokenURLOrDefault() string {
 // requests. A fixed CLI identity (not the browser UA) is required upstream.
 func (c *Config) GrokCLIUserAgentOrDefault() string {
 	if c != nil && strings.TrimSpace(c.GrokCLIUserAgent) != "" {
-		return strings.TrimSpace(c.GrokCLIUserAgent)
+		return grokCLIProductVersion.ReplaceAllStringFunc(strings.TrimSpace(c.GrokCLIUserAgent), func(product string) string {
+			name, version, _ := strings.Cut(product, "/")
+			if legacyGrokVersion(version) {
+				return name + "/" + c.GrokCLIClientVersionOrDefault()
+			}
+			return product
+		})
 	}
-	return "grok-shell/1.0.60 (linux; x86_64)"
+	return "grok-shell/" + c.GrokCLIClientVersionOrDefault() + " (linux; x86_64)"
 }
 
 // GrokCLIClientVersionOrDefault returns the x-grok-client-version header value.
 func (c *Config) GrokCLIClientVersionOrDefault() string {
 	if c != nil && strings.TrimSpace(c.GrokCLIClientVersion) != "" {
-		return strings.TrimSpace(c.GrokCLIClientVersion)
+		return normalizedGrokVersion(c.GrokCLIClientVersion)
 	}
-	return "1.0.60"
+	return grokCLIClientVersion
 }
 
 // GrokCLIClientIdentifierOrDefault returns the x-grok-client-identifier header.

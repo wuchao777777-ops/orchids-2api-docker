@@ -4,54 +4,6 @@ import (
 	"time"
 )
 
-// QoderCreditPool retains one observed allowance source without sharing mutable
-// pointers between account snapshots. Known distinguishes absence from zero.
-type QoderCreditPool struct {
-	Known     bool    `json:"known"`
-	Available bool    `json:"available"`
-	Limit     float64 `json:"limit"`
-	Used      float64 `json:"used"`
-	Remaining float64 `json:"remaining"`
-	Unit      string  `json:"unit,omitempty"`
-}
-
-// QoderQuotaSnapshot is one Qoder credit/plan observation.
-//
-// Exhausted is the gateway's own verdict and is authoritative over the
-// arithmetic: an account whose counters have not refreshed can still be flagged
-// spent, which is what makes it usable as a scheduling signal.
-type QoderQuotaSnapshot struct {
-	PlanQuota      QoderCreditPool `json:"plan_quota"`
-	AddOnQuota     QoderCreditPool `json:"add_on_quota"`
-	OrgQuota       QoderCreditPool `json:"org_quota"`
-	Limit          float64         `json:"limit,omitempty"`
-	Remaining      float64         `json:"remaining,omitempty"`
-	Used           float64         `json:"used,omitempty"`
-	Exhausted      bool            `json:"exhausted,omitempty"`
-	PlanTier       string          `json:"plan_tier,omitempty"`
-	UserType       string          `json:"user_type,omitempty"`
-	PaidPlan       bool            `json:"paid_plan,omitempty"`
-	Unit           string          `json:"unit,omitempty"`
-	UpgradeURL     string          `json:"upgrade_url,omitempty"`
-	ResetAt        time.Time       `json:"reset_at"`
-	PeriodEnd      time.Time       `json:"period_end"`
-	LastKnownLimit float64         `json:"last_known_limit,omitempty"`
-	SyncedAt       time.Time       `json:"synced_at"`
-}
-
-// ResyncAt reports when the snapshot should be refreshed again. A quota that is
-// spent is the interesting case: the reset is the only moment it can recover, so
-// the snapshot is worth re-reading then.
-func (s QoderQuotaSnapshot) ResyncAt() time.Time {
-	if s.SyncedAt.IsZero() {
-		return time.Time{}
-	}
-	if !s.ResetAt.IsZero() {
-		return s.ResetAt
-	}
-	return s.SyncedAt
-}
-
 // WorkBuddyQuotaSnapshot is the WorkBuddy credit-meter snapshot. Remaining/Limit
 // describe the current cycle; Used/LastConsumedUnits are whole-credit figures
 // derived from the meter, because the upstream also reports fractions.
@@ -99,6 +51,12 @@ type GrokBillingSnapshot struct {
 	Monthly  GrokQuotaWindow `json:"monthly"`
 	SyncedAt time.Time       `json:"synced_at"`
 	Source   string          `json:"source,omitempty"`
+	// ProfileKnown distinguishes parsed monetary fields from missing quota data.
+	ProfileKnown   bool    `json:"profile_known,omitempty"`
+	MonthlyUsed    float64 `json:"monthly_used,omitempty"`
+	OnDemandCap    float64 `json:"on_demand_cap,omitempty"`
+	OnDemandUsed   float64 `json:"on_demand_used,omitempty"`
+	PrepaidBalance float64 `json:"prepaid_balance,omitempty"`
 	// NextProbeAt serializes probes after an exhausted paid period ends. Before
 	// the first claim PeriodEnd is the due time; each claim advances this by the
 	// bounded retry interval so concurrent selectors cannot hammer billing.
@@ -107,6 +65,17 @@ type GrokBillingSnapshot struct {
 }
 
 const GrokPaidQuotaProbeInterval = 15 * time.Minute
+
+// HasPaidEntitlement excludes usage percentages: free accounts expose them too.
+func (b GrokBillingSnapshot) HasPaidEntitlement() bool {
+	return b.Monthly.Limit > 0 || b.OnDemandCap > 0 || b.OnDemandUsed > 0 || b.PrepaidBalance > 0
+}
+
+// HasZeroProfile requires observed monetary fields, not a failed or empty read.
+func (b GrokBillingSnapshot) HasZeroProfile() bool {
+	return b.ProfileKnown && !b.SyncedAt.IsZero() && !b.HasPaidEntitlement() &&
+		b.MonthlyUsed == 0 && b.Weekly.UsagePercent == 0
+}
 
 // IsExhausted reports an authoritative paid-billing exhaustion signal. Monthly
 // numeric allowance wins when present; otherwise a 100% weekly usage snapshot
