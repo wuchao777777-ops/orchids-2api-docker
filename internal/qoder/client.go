@@ -41,6 +41,10 @@ type Client struct {
 	// drifting under a live credential.
 	machineToken string
 	machineType  string
+	// identity is the client identity requests present, in the body and in the
+	// Cosy-* headers. It is fixed for the life of a serving client; the probe
+	// owns its client and replaces it through WithIdentity to compare queues.
+	identity Identity
 
 	// control answers the short control-plane calls (token, profile, catalog).
 	// stream answers the chat call, and has no client-level deadline so a long
@@ -125,9 +129,29 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		client.machineID = strings.TrimSpace(acc.QoderMachineID)
 	}
 	client.applyFingerprint()
+	client.identity = DefaultIdentity()
 	client.adoptStoredRuntime()
 	return client
 }
+
+// WithIdentity sets the client identity requests present and returns the same
+// client. It mutates instead of returning a copy on purpose: Client owns a lock
+// and a credential that is replaced in place on rotation, so a struct copy would
+// duplicate both. The probe is the only caller and owns its client, which is why
+// a mutation is safe there and a copy is not.
+func (c *Client) WithIdentity(identity Identity) *Client {
+	if c == nil {
+		return nil
+	}
+	if strings.TrimSpace(identity.Product) == "" {
+		identity = DefaultIdentity()
+	}
+	c.identity = identity
+	return c
+}
+
+// Identity returns the identity this client presents.
+func (c *Client) Identity() Identity { return c.identityOr() }
 
 // adoptStoredRuntime reuses the runtime pair stored beside the credential when
 // it was derived for the identity the account holds now. Without this every
@@ -250,7 +274,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	}
 
 	hosts := c.withoutSpentHosts(c.endpoints.orderedInferenceHosts(time.Now()), time.Now())
-	url := chatURL(hosts[0])
+	url := chatURLFor(hosts[0], c.identityOr())
 	if logger != nil && !logger.Capturing() {
 		logger.LogUpstreamRequest(url, map[string]string{"provider": "qoder", "model": model.Key}, body)
 	}
@@ -292,7 +316,7 @@ func (c *Client) runChat(ctx context.Context, hosts []string, body []byte, model
 	// a failover for one account's spent daily count must not steer every
 	// other account to the same node.
 	faultFailover := false
-	url := chatURL(host)
+	url := chatURLFor(host, c.identityOr())
 	emit := func(msg upstream.SSEMessage) {
 		emitted = true
 		if onMessage != nil {
@@ -400,7 +424,7 @@ func (c *Client) runChat(ctx context.Context, hosts []string, body []byte, model
 			slog.Warn("Qoder daily request count spent on this host; trying the next one", "host", host, "next_host", next)
 			host = next
 			faultFailover = false
-			url = chatURL(next)
+			url = chatURLFor(next, c.identityOr())
 			requestID, err = newUUID(c.entropy)
 			if err != nil {
 				return err
@@ -416,7 +440,7 @@ func (c *Client) runChat(ctx context.Context, hosts []string, body []byte, model
 			slog.Warn("Qoder inference host failed; failing over", "host", host, "next_host", next, "error", err)
 			host = next
 			faultFailover = true
-			url = chatURL(next)
+			url = chatURLFor(next, c.identityOr())
 			requestID, err = newUUID(c.entropy)
 			if err != nil {
 				return err
@@ -452,12 +476,36 @@ func (c *Client) runChat(ctx context.Context, hosts []string, body []byte, model
 		// fixed 30s hint is what gets the request in.
 		case c.queueWindowRetry && isWindowedQueueRefusal(err) && windowRetries < queueWindowMaxRetries && upstream.RemainingAttempts(ctx) != 0:
 			delay := nextQueueWindowDelay(queueWindowNow())
+			windowSource := "qoder_queue_window"
+			// A refusal without a queue class has no window to align to, so the
+			// wait it names is the one to honour.
+			if queueTypeOf(err.Error()) == "" {
+				if wait := queueRefusalWait(err.Error()); wait > 0 {
+					delay = wait
+					windowSource = "qoder_queue_hint"
+				}
+			}
+			// The refusal names the queue this request landed in, and the server
+			// publishes that queue's wait. Ask it before falling back to the
+			// window this gateway inferred from measurements: a published number
+			// is not a guess, and it is the difference between waiting 8 seconds
+			// and waiting out a window that is already spent.
+			// A status read needs the model the refusal is about; a refusal that
+			// does not name one cannot be asked about, and the window stays.
+			if refusalModel := modelKeyOf(err.Error()); refusalModel != "" {
+				if status, statusErr := c.QueueStatus(ctx, requestID, "", refusalModel, queueTypeOf(err.Error())); statusErr == nil {
+					if hint := status.RetryHint(); hint > 0 {
+						delay = hint
+						windowSource = "qoder_queue_status"
+					}
+				}
+			}
 			if windowWaited+delay > queueWindowMaxWait || !util.RetryWaitFits(ctx, delay) {
 				return c.alignQueueHint(err)
 			}
 			waitStarted := time.Now()
 			waitErr := sleepCtx(ctx, delay)
-			debug.RecordWait(ctx, "qoder_queue_window", delay, time.Since(waitStarted), waitErr != nil)
+			debug.RecordWait(ctx, windowSource, delay, time.Since(waitStarted), waitErr != nil)
 			if waitErr != nil {
 				return waitErr
 			}

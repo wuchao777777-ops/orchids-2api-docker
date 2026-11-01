@@ -26,9 +26,9 @@ func TestNextQueueWindowDelay(t *testing.T) {
 	}{
 		{0, 8 * time.Second},
 		{7.5, 500 * time.Millisecond},
-		{8, 3 * time.Second},   // open: step
-		{16, 3 * time.Second},  // 16+3 still inside
-		{17, 51 * time.Second}, // the next step would leave the window
+		{8, 1 * time.Second},   // open: step
+		{16, 1 * time.Second},  // 16+1 still inside
+		{19, 49 * time.Second}, // the next step would leave the window
 		{30, 38 * time.Second}, // the 30s hint would land at :00, outside
 		{59.5, 8500 * time.Millisecond},
 	} {
@@ -53,7 +53,13 @@ func TestQueueTypeOfProductionRefusal(t *testing.T) {
 
 // windowServer refuses with the given queue type until refusals are spent.
 func windowServer(t *testing.T, queueType string, refusals int32, calls *atomic.Int32) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The queue-status read is not a chat attempt: it must not consume the
+		// refusal budget these tests count, and this server has no such route.
+		if r.URL.Path == queueStatusPath {
+			http.NotFound(w, r)
+			return
+		}
 		if calls.Add(1) <= refusals {
 			_, _ = io.WriteString(w, queueRefusal(queueType))
 			return
@@ -143,6 +149,6 @@ func TestQueueWindowRetryIsBounded(t *testing.T) {
 	setTestEndpoints(client, server.URL, server.URL, server.URL)
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{Model: "Qwen3.7-Max", Prompt: "hello"}, nil, nil)
 	testutil.Error(t, err)
-	// 130s of 1ms waits would allow 130000 retries; the retry cap stops it.
+	// 200s of 1ms waits would allow 200000 retries; the retry cap stops it.
 	testutil.Equal(t, calls.Load(), int32(queueWindowMaxRetries+1))
 }
