@@ -66,13 +66,24 @@
 
     <div id="accountsTabContent">
       <div class="accounts-toolbar">
-        <div class="accounts-platform-switch filter-tabs" id="platformFilters"></div>
+        <div class="accounts-platform-group">
+          <div class="accounts-platform-switch filter-tabs" id="platformFilters"></div>
+          <div class="filter-tabs grok-plane-switch" id="grokPlaneFilters" role="tablist" aria-label="Grok 账号类型" hidden>
+            <button class="tab-item active" type="button" data-grok-plane="">全部</button>
+            <button class="tab-item" type="button" data-grok-plane="build">Grok Build</button>
+            <button class="tab-item" type="button" data-grok-plane="web">Grok Web</button>
+          </div>
+        </div>
 
         <div class="accounts-actions">
           <div class="accounts-action-cluster">
             <button class="btn" onclick="exportAccounts()" title="导出的 JSON 包含账号的官方登录访问令牌和刷新令牌；请像密码一样妥善保管，切勿公开分享">导出全部（含凭据）</button>
             <button class="btn" id="accountImportOpen" type="button" onclick="openAccountImport()">导入账号</button>
             <input id="accountImportFile" type="file" accept=".json,application/json" hidden onchange="readAccountImport(this)">
+          </div>
+          <div class="accounts-action-cluster" data-sso-toolbar>
+            <button class="btn" id="grokSSORefreshBtn" type="button" title="同步勾选的（未勾选则全部）Grok SSO 账号的额度与身份">同步 SSO 额度</button>
+            <button class="btn" id="grokSSONSFWBtn" type="button" title="为勾选的（未勾选则全部）Grok SSO 账号开启 NSFW">开启 NSFW</button>
           </div>
           <div class="accounts-action-cluster is-danger">
             <button class="btn btn-danger-outline" id="batchDeleteBtn" disabled onclick="batchDeleteAccounts()">批量删除</button>
@@ -132,6 +143,7 @@
   <script src="{{.AdminPath}}/js/cline-auth.js?v={{.AssetVersion}}"></script>
   <script src="{{.AdminPath}}/js/accounts.js?v={{.AssetVersion}}"></script>
   <script src="{{.AdminPath}}/js/account-transfer.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/grok-sso.js?v={{.AssetVersion}}"></script>
 </body>
 
 </html>
