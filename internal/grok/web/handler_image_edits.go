@@ -52,7 +52,7 @@ func (h *Handler) buildImageEditPayloadFromInputs(ctx context.Context, token str
 	refs := make([]imageEditReference, 0, len(inputs))
 	assets := make([]string, 0, len(inputs))
 	for _, input := range inputs {
-		fileID, _, err := h.uploadSingleInput(ctx, token, input)
+		fileID, err := h.uploadImageEditInput(ctx, token, input)
 		if err != nil {
 			return nil, fmt.Errorf("image upload failed: %w", err)
 		}
@@ -324,6 +324,12 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 	model = normalizeModelID(model)
 	if !requireAPIKeyModel(w, r, model) {
 		return
+	}
+	// Grok Web edits through one route. A client that names a generation
+	// model (the tools page names the one its quality tier selected) means an
+	// edit of the supplied images, so it is served by the edit route.
+	if generation, known := ResolveModel(model); known && generation.IsImage && !isImageEditModel(model) {
+		model = "grok-imagine-image-edit"
 	}
 	spec, ok := ResolveModel(model)
 	if !isImageEditModel(model) {
