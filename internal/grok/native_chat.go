@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"orchids-api/internal/chatwire"
 	"orchids-api/internal/config"
+	"orchids-api/internal/grok/grokbase"
 	"orchids-api/internal/httpserver"
 	"orchids-api/internal/responses"
 	"strings"
@@ -22,36 +23,6 @@ import (
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 )
-
-func chatMessageContentText(content any) string {
-	switch v := content.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	case []any:
-		var b strings.Builder
-		for _, part := range v {
-			m, ok := part.(map[string]any)
-			if !ok {
-				continue
-			}
-			t := strings.ToLower(strings.TrimSpace(fmt.Sprint(m["type"])))
-			switch t {
-			case "text", "input_text":
-				if s := strings.TrimSpace(fmt.Sprint(m["text"])); s != "" {
-					if b.Len() > 0 {
-						b.WriteByte('\n')
-					}
-					b.WriteString(s)
-				}
-			}
-		}
-		return b.String()
-	default:
-		return strings.TrimSpace(fmt.Sprint(v))
-	}
-}
 
 func buildToolsFromOpenAI(tools []chatwire.ToolDef) []map[string]any {
 	if len(tools) == 0 {
@@ -519,7 +490,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		return
 	}
 	provider, endpoint, model := ProviderBuild, h.cliBaseURL()+"/responses", spec.UpstreamModel
-	ctx = withReasoningDiagnostics(ctx, payload)
+	ctx = grokbase.WithReasoningDiagnostics(ctx, payload)
 	immutable, err := cloneBuildPayload(payload)
 	if err != nil {
 		writeGrokUpstreamError(w, err)
@@ -541,7 +512,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		if prepareErr := prepareBuildPayload(immutable, payload, sess.acc, model); prepareErr != nil {
 			return nil, prepareErr
 		}
-		ctx = withReasoningDiagnostics(ctx, payload)
+		ctx = grokbase.WithReasoningDiagnostics(ctx, payload)
 		attemptStarted := time.Now()
 		resp, requestErr := h.buildClient().doResponsesAt(ctx, sess.acc, "/responses", payload)
 		if requestErr == nil || !req.ReasoningReplay || !isReasoningReplayDecodeError(requestErr) || preservesClientCompaction(payload, requestErr) {
@@ -883,7 +854,7 @@ func (h *Handler) collectBuildChat(w http.ResponseWriter, req *chatwire.Request,
 		outcome.Usage = upstreamUsage
 		outcome.UsageSource = audit.UsageSourceUpstream
 	} else {
-		outcome.Usage = addReasoningUsage(buildChatUsagePayload(req, text+refusal, toolCalls), reasoning)
+		outcome.Usage = grokbase.AddReasoningUsage(buildChatUsagePayload(req, text+refusal, toolCalls), reasoning)
 		outcome.UsageSource = audit.UsageSourceEstimated
 	}
 	outcome.Finish = finishReason

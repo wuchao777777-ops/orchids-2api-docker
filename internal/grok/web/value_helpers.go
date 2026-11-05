@@ -3,8 +3,6 @@ package web
 import (
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -26,19 +24,6 @@ func interfaceMaps(value interface{}) []map[string]interface{} {
 	default:
 		return nil
 	}
-}
-
-func stringifyToolArguments(value interface{}) string {
-	if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-		return strings.TrimSpace(text)
-	}
-	if value == nil {
-		return "{}"
-	}
-	if raw, err := json.Marshal(value); err == nil {
-		return string(raw)
-	}
-	return "{}"
 }
 
 func writeResponsesAPIError(w http.ResponseWriter, status int, code, message string) {
@@ -78,15 +63,4 @@ func writeResponsesAPIErrorWithParam(w http.ResponseWriter, status int, code, me
 func tokenCacheKey(token string) string {
 	digest := sha256.Sum256([]byte(strings.TrimSpace(token)))
 	return base64.RawURLEncoding.EncodeToString(digest[:])
-}
-
-// TokenFingerprint returns a short, non-reversible identifier for a credential so
-// operators can tell whether two accounts share a token without printing it.
-func TokenFingerprint(token string) string {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return ""
-	}
-	digest := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(digest[:6])
 }

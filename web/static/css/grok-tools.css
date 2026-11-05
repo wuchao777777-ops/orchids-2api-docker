@@ -1091,7 +1091,6 @@
   min-height: var(--control-h);
 }
 
-.imagine-basic-field.is-model { flex: 1 1 200px; }
 .imagine-basic-field.is-count { flex: 0 0 84px; }
 .imagine-basic-field.is-resolution { flex: 0 0 96px; }
 .imagine-basic-field.is-quality { flex: 0 0 auto; }
@@ -1336,47 +1335,11 @@
   resize: vertical;
 }
 
-.voice-file-tools {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.voice-file-tools .voice-hint {
-  margin: var(--space-1) 0 0;
-}
-
-.voice-file-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.voice-file-wide {
-  grid-column: 1 / -1;
-}
-
-.voice-file-actions,
 .voice-transcript-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-}
-
-.voice-file-result {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.voice-file-result:empty {
-  display: none;
-}
-
-.voice-file-result audio {
-  width: 100%;
 }
 
 .voice-transcript {
@@ -1428,16 +1391,6 @@
 
 #audioStatus.is-error {
   color: var(--danger);
-}
-
-@media (max-width: 760px) {
-  .voice-file-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .voice-file-wide {
-    grid-column: auto;
-  }
 }
 
 .visualizer {
@@ -2275,25 +2228,6 @@
   font-weight: 650;
 }
 
-/* ---- Shared tags reused by the workbench surfaces ------------------------------------------------- */
-.warning-box {
-  padding: var(--space-3);
-  border: 1px solid var(--border-color);
-  border-left: 3px solid var(--warn);
-  border-radius: var(--radius-md);
-  background: var(--warn-soft);
-  color: var(--text-soft);
-  font-size: 0.82rem;
-  line-height: 1.6;
-}
-
-.protocol-tag {
-  color: var(--text-soft);
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.02em;
-}
-
 @media (max-width: 760px) {
   .grok-page-header p {
     flex: 1 1 100%;
@@ -2329,7 +2263,6 @@
     flex: 1 1 100%;
   }
 
-  .imagine-basic-field.is-model,
   .imagine-basic-field.is-count,
   .imagine-basic-field.is-resolution,
   .imagine-basic-field.is-quality,

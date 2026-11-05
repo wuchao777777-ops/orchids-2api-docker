@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/grok/ratelimit"
 	"orchids-api/internal/store"
 	"strings"
 	"time"
@@ -39,15 +40,6 @@ type mediaUnavailableError struct {
 func (e *mediaUnavailableError) Error() string { return e.message }
 
 func (e *mediaUnavailableError) Unwrap() error { return e.cause }
-
-func (h *Handler) openChatAccountSessionForImagineLite(ctx context.Context, excludeIDs []int64, spec ModelSpec) (*chatAccountSession, error) {
-	spec.Tier = grokTierLite
-	// Basic is the minimum tier for the lite image model, so a basic credential
-	// is a valid fallback rather than an excluded pool.
-	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, spec.PoolCandidates(), func(acc *store.Account) bool {
-		return h.routeAllowsAccount(ctx, spec.ID, acc.ID)
-	})
-}
 
 func (h *Handler) routeAllowsAccount(ctx context.Context, modelID string, accountID int64) bool {
 	if h == nil || h.lb == nil || h.lb.Store == nil || accountID == 0 {
@@ -379,7 +371,7 @@ func isSharedGrokRateLimitError(err error) bool {
 	// requests" is account-scoped in grok2api and must cool the selected account;
 	// treating it as shared left every account looking healthy while requests
 	// repeatedly rotated through a pool of throttled credentials.
-	if ParseRateLimitMetadata([]byte(err.Error())) != nil {
+	if ratelimit.ParseMetadata([]byte(err.Error())) != nil {
 		return true
 	}
 	// Errors emitted by waitScopedRateLimit are synthetic: the structured
@@ -445,7 +437,7 @@ func (h *Handler) persistGrokQuotaSync(job grokQuotaSyncJob) {
 	}
 
 	headers := job.headers
-	info := parseRateLimitInfo(headers)
+	info := ratelimit.ParseHeaders(headers)
 	requests := parseBuildRateLimitWindow(headers, "requests")
 	tokens := parseBuildRateLimitWindow(headers, "tokens")
 	hasBuildHeaders := requests.HasLimit || requests.HasRemaining || !requests.ResetAt.IsZero() || tokens.HasLimit || tokens.HasRemaining || !tokens.ResetAt.IsZero()

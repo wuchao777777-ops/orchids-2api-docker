@@ -4,6 +4,8 @@ import (
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok/egressnodes"
+	"orchids-api/internal/grok/grokbase"
+	"orchids-api/internal/grok/ratelimit"
 	"orchids-api/internal/grok/web"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/responses"
@@ -17,21 +19,20 @@ import (
 const grokModelValidationCacheTTL = 3 * time.Second
 
 type Handler struct {
-	base          *baseHandler
-	runtimeMu     sync.RWMutex
-	cfg           *config.Config
-	lb            *loadbalancer.LoadBalancer
-	cliClient     *CLIClient
-	connTracker   loadbalancer.ConnTracker
-	modelCacheMu  sync.RWMutex
-	modelCache    map[string]time.Time
-	sessionMu     sync.Mutex
-	affinityLocks [64]sync.Mutex
-	affinity      map[string]sessionAffinityEntry
-	replay        map[string]reasoningReplayEntry
-	replayGen     map[string]uint64
-	instanceID    string
-	auditLogger   audit.Logger
+	base         *grokbase.AccountTracker
+	runtimeMu    sync.RWMutex
+	cfg          *config.Config
+	lb           *loadbalancer.LoadBalancer
+	cliClient    *CLIClient
+	connTracker  loadbalancer.ConnTracker
+	modelCacheMu sync.RWMutex
+	modelCache   map[string]time.Time
+	sessionMu    sync.Mutex
+	affinity     grokbase.Affinity
+	replay       map[string]reasoningReplayEntry
+	replayGen    map[string]uint64
+	instanceID   string
+	auditLogger  audit.Logger
 	// compactionCode seals and opens gateway-owned remote-v2 compaction state.
 	// Nil (no credential key configured) means the gateway cannot own a summary
 	// and compaction requests stay a plain upstream forward.
@@ -60,7 +61,7 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	if lb != nil {
 		cliClient.SetAccountStore(lb.Store)
 		if lb.Store != nil {
-			configureDistributedGrokLimits(lb.Store.RedisClient(), lb.Store.RedisPrefix())
+			ratelimit.ConfigureRedis(lb.Store.RedisClient(), lb.Store.RedisPrefix())
 		}
 	}
 	instanceID := "grok-" + util.RandomHex(16)
@@ -68,13 +69,12 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 		instanceID = strings.TrimSpace(cfg.DeploymentInstance)
 	}
 	h := &Handler{
-		base:        newBaseHandler(lb),
+		base:        grokbase.NewAccountTracker(lb),
 		cfg:         cfg,
 		lb:          lb,
 		cliClient:   cliClient,
 		connTracker: loadbalancer.NewMemoryConnTracker(),
 		modelCache:  make(map[string]time.Time),
-		affinity:    make(map[string]sessionAffinityEntry),
 		replay:      make(map[string]reasoningReplayEntry),
 		replayGen:   make(map[string]uint64),
 		instanceID:  instanceID,

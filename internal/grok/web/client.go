@@ -9,6 +9,7 @@ import (
 
 	"encoding/json"
 
+	"orchids-api/internal/chatwire"
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok/web/egress"
 	"orchids-api/internal/httpclient"
@@ -174,6 +175,12 @@ func (c *Client) appChatImagePayload(spec ModelSpec, prompt, _ string, _ int) ma
 	payload["modeId"] = "fast"
 	payload["enableImageGeneration"] = true
 	payload["imageGenerationCount"] = 2
+	// Free accounts are shared by every caller: account memory would steer the
+	// drawing toward earlier prompts, and web search lets the chat model answer
+	// with searched pictures instead of drawing. Neither belongs in an image
+	// request, whatever the chat settings say.
+	payload["disableMemory"] = true
+	payload["disableSearch"] = true
 	return payload
 }
 
@@ -254,7 +261,7 @@ func (c *Client) doChat(ctx context.Context, token string, payload map[string]in
 // separate from doChat so the transport selector can fall back without
 // recursively calling itself.
 func (c *Client) doRESTChat(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
-	if err := waitScopedRateLimit(ctx, ProviderWeb, token, parseLooseStringAny(payload["modelName"]), c.cfg.GrokWebRequestsPerSecond()); err != nil {
+	if err := waitScopedRateLimit(ctx, ProviderWeb, token, chatwire.ParseLooseStringAny(payload["modelName"]), c.cfg.GrokWebRequestsPerSecond()); err != nil {
 		return nil, err
 	}
 	body, err := json.Marshal(payload)

@@ -8,6 +8,8 @@ import (
 	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
+	"orchids-api/internal/grok/grokbase"
+	"orchids-api/internal/grok/ratelimit"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/modelpolicy"
@@ -30,19 +32,17 @@ const grokModelValidationCacheTTL = 3 * time.Second
 // Imagine images, videos, media inputs, the media cache and the SSO account
 // tools. The parent grok channel dispatches Web models here.
 type Handler struct {
-	base          *baseHandler
-	runtimeMu     sync.RWMutex
-	cfg           *config.Config
-	lb            *loadbalancer.LoadBalancer
-	client        *Client
-	connTracker   loadbalancer.ConnTracker
-	modelCacheMu  sync.RWMutex
-	modelCache    map[string]time.Time
-	sessionMu     sync.Mutex
-	affinityLocks [64]sync.Mutex
-	affinity      map[string]sessionAffinityEntry
-	instanceID    string
-	auditLogger   audit.Logger
+	base         *grokbase.AccountTracker
+	runtimeMu    sync.RWMutex
+	cfg          *config.Config
+	lb           *loadbalancer.LoadBalancer
+	client       *Client
+	connTracker  loadbalancer.ConnTracker
+	modelCacheMu sync.RWMutex
+	modelCache   map[string]time.Time
+	affinity     grokbase.Affinity
+	instanceID   string
+	auditLogger  audit.Logger
 
 	quotaOnce    sync.Once
 	quotaMu      sync.Mutex
@@ -77,7 +77,7 @@ type imageEditReference struct {
 
 func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	if lb != nil && lb.Store != nil {
-		configureDistributedGrokLimits(lb.Store.RedisClient(), lb.Store.RedisPrefix())
+		ratelimit.ConfigureRedis(lb.Store.RedisClient(), lb.Store.RedisPrefix())
 	}
 	instanceID := "grok-web-" + randomHex(16)
 	if cfg != nil && strings.TrimSpace(cfg.DeploymentInstance) != "" {
@@ -87,13 +87,12 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 		cacheBaseDir = strings.TrimSpace(cfg.MediaDir)
 	}
 	h := &Handler{
-		base:        newBaseHandler(lb),
+		base:        grokbase.NewAccountTracker(lb),
 		cfg:         cfg,
 		lb:          lb,
 		client:      New(cfg),
 		connTracker: loadbalancer.NewMemoryConnTracker(),
 		modelCache:  make(map[string]time.Time),
-		affinity:    make(map[string]sessionAffinityEntry),
 		instanceID:  instanceID,
 		auditLogger: audit.NewNopLogger(),
 	}
@@ -197,7 +196,7 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 	prompt, _ := usage["prompt_tokens_details"].(map[string]interface{})
 	completion, _ := usage["completion_tokens_details"].(map[string]interface{})
 	metadata := map[string]interface{}{"finish_reason": result.Finish}
-	addReasoningDiagnostics(ctx, metadata)
+	grokbase.AddReasoningDiagnostics(ctx, metadata)
 	duration := int64(0)
 	if !req.startedAt.IsZero() {
 		duration = time.Since(req.startedAt).Milliseconds()
@@ -508,9 +507,9 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	// granularity), falling back to a 60s blanket cooldown.
 	if err != nil && isResourceExhaustedError(err) && acc != nil {
 		cooldown := accountpolicy.CooldownRateLimitBase
-		if meta := ParseRateLimitMetadata([]byte(err.Error())); meta != nil {
+		if meta := ratelimit.ParseMetadata([]byte(err.Error())); meta != nil {
 			identity := ProviderForAccount(acc) + ":" + rateLimitIdentity(withRateLimitAccount(ctx, acc), "")
-			if remaining := teamCooldown.RetryAfterFor(meta.Scope, identity, meta.Model); remaining > 0 {
+			if remaining := ratelimit.Cooldowns.RetryAfterFor(meta.Scope, identity, meta.Model); remaining > 0 {
 				cooldown = accountpolicy.BoundRateLimitCooldown(remaining)
 			} else if meta.RetryAfter > 0 {
 				cooldown = accountpolicy.BoundRateLimitCooldown(meta.RetryAfter)

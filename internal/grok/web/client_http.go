@@ -13,8 +13,10 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/chatwire"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/grok/ratelimit"
 	"orchids-api/internal/grok/web/egress"
 	"orchids-api/internal/httpclient"
 	"orchids-api/internal/util"
@@ -36,7 +38,7 @@ func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*ht
 }
 
 func parseRetryAfter(raw string) time.Duration {
-	return parseRetryAfterHeader(raw, time.Now())
+	return ratelimit.ParseRetryAfter(raw, time.Now())
 }
 
 func parseUpstreamStatus(err error) int {
@@ -199,7 +201,7 @@ func appChatRateLimitRequest(body []byte, headers http.Header) (token, model str
 	}
 	var payload map[string]interface{}
 	if json.Unmarshal(body, &payload) == nil {
-		model = firstNonEmpty(parseLooseStringAny(payload["modelName"]), parseLooseStringAny(payload["model"]))
+		model = firstNonEmpty(chatwire.ParseLooseStringAny(payload["modelName"]), chatwire.ParseLooseStringAny(payload["model"]))
 	}
 	return token, model
 }
