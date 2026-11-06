@@ -24,6 +24,7 @@
     rate_limited: '限流 429/529',
     client_error: '客户端错误 4xx',
     server_error: '上游错误 5xx',
+    gateway_unavailable: '未到上游 5xx（无可用账号等）',
     stream_error: '流中断',
     // Two 401/403 rows, because the status alone does not say who refused: the
     // provider refusing our credential is a channel failure, our gate refusing the
@@ -337,23 +338,43 @@
   }
 
   // firstTokenOf prefers the first visible token: the latency a user feels.
-  function firstTokenOf(event) {
-    const meta = event.metadata || {};
-    for (const value of [meta.first_visible_token_ms, event.first_token_ms, meta.first_token_ms]) {
-      if (value != null && Number.isFinite(Number(value))) return Number(value);
-    }
-    return null;
+  function finiteMs(value) {
+    return value != null && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
   }
 
-  // outputTPS is output tokens over the generation window (first token to the
-  // end); without a first-token time it falls back to the whole request.
-  function outputTPS(event) {
+  // isWholeBody: a non-streaming reply is written in one piece at the end, so
+  // its "first token" time is the time of the whole answer, not a first token.
+  function isWholeBody(event) {
+    return (event.metadata || {}).first_token_kind === 'body_ttfb';
+  }
+
+  // firstTokenOf is the first-token latency a user sees: the first visible text
+  // of a stream. A non-streaming reply has none (null).
+  function firstTokenOf(event) {
+    if (isWholeBody(event)) return null;
+    const meta = event.metadata || {};
+    return finiteMs(meta.first_visible_token_ms) ?? finiteMs(event.first_token_ms) ?? finiteMs(meta.first_token_ms);
+  }
+
+  // outputSpeed is output tokens per second. Output tokens include reasoning,
+  // so the generation window starts at the first generated content (reasoning
+  // included), not at the first visible text. When there is no real window —
+  // a non-streaming reply, or a stream held back and released at the end (the
+  // Grok quality hold) — dividing by the last few milliseconds gave figures in
+  // the millions; the speed is then taken over the whole request and marked so.
+  function outputSpeed(event) {
     const output = Number(event.output_tokens) || 0;
     const total = Number(event.duration_ms) || 0;
     if (output <= 0 || total <= 0) return null;
-    const first = firstTokenOf(event);
-    const window = first != null && total - first > 0 ? total - first : total;
-    return output / (window / 1000);
+    const meta = event.metadata || {};
+    const start = isWholeBody(event) ? null : finiteMs(meta.first_token_ms) ?? finiteMs(event.first_token_ms);
+    const window = start != null ? total - start : 0;
+    if (window >= Math.max(1000, total * 0.1)) return { tps: output / (window / 1000), overall: false };
+    return { tps: output / (total / 1000), overall: true };
+  }
+
+  function formatSpeed(speed) {
+    return speed.tps.toFixed(1) + ' tok/s' + (speed.overall ? '（整体）' : '');
   }
 
   function formatCount(value) { return (Number(value) || 0).toLocaleString('en-US'); }
@@ -378,6 +399,7 @@
     rate_limited: { tone: 'is-info', label: '限流' },
     client_error: { tone: 'is-error', label: '客户端错误' },
     server_error: { tone: 'is-error', label: '上游错误' },
+    gateway_unavailable: { tone: 'is-error', label: '未到上游' },
     stream_error: { tone: 'is-error', label: '流中断' },
     // Our gate refusing the caller is a warning about the caller; the provider
     // refusing our credential is an error about the channel.
@@ -638,10 +660,14 @@
 
     const latency = make('td', 'logs-cell-latency' + (String(event.status || '') === 'success' ? ' is-success' : ''));
     const first = firstTokenOf(event);
-    const tps = outputTPS(event);
-    latency.appendChild(labelledLine('首字', first != null ? formatSeconds(first) : '—'));
+    const speed = outputSpeed(event);
+    latency.appendChild(isWholeBody(event)
+      ? labelledLine('首字', '非流式', '非流式请求整段返回，没有首字时间')
+      : labelledLine('首字', first != null ? formatSeconds(first) : '—'));
     latency.appendChild(labelledLine('总耗时', formatSeconds(event.duration_ms) || '—'));
-    latency.appendChild(labelledLine('输出', tps != null ? tps.toFixed(1) + ' tok/s' : '—', '输出 Token ÷ 首字之后的生成时间'));
+    latency.appendChild(labelledLine('输出', speed ? formatSpeed(speed) : '—', speed && speed.overall
+      ? '没有可用的生成时段（非流式或整段延后返回），按整个请求时长计算'
+      : '输出 Token ÷ 开始生成之后的时长（含推理）'));
 
     const ip = make('td', 'logs-cell-ip', text(event.client_ip, '—'));
     return [endpoint, status, tokens, cost, latency, ip];
@@ -797,8 +823,8 @@
     // --- usage and latency --------------------------------------------------------
     const usageFacts = [];
     if (event.duration_ms) usageFacts.push(fact('总耗时', event.duration_ms + ' ms'));
-    const tps = outputTPS(event);
-    if (tps != null) usageFacts.push(fact('输出速度', tps.toFixed(1) + ' tok/s'));
+    const speed = outputSpeed(event);
+    if (speed) usageFacts.push(fact('输出速度', formatSpeed(speed), { title: speed.overall ? '没有可用的生成时段，按整个请求时长计算' : '' }));
     const cost = formatCost(event.cost_in_usd_ticks);
     if (cost) usageFacts.push(fact('费用', cost, { title: event.pricing_model ? '计价模型：' + event.pricing_model : '' }));
     // Same metadata contract as http_status above: the measured first-token latency
