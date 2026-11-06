@@ -331,8 +331,10 @@
 
 .ops-grid-3 > .ops-card { display: flex; flex-direction: column; }
 
+/* Rows stack from the top: spreading them across a card stretched to its
+   tallest neighbour left wide empty bands between them. */
 .ops-grid-3 > .ops-card > .ops-concurrency,
-.ops-grid-3 > .ops-card > .ops-errors { justify-content: space-between; }
+.ops-grid-3 > .ops-card > .ops-errors { justify-content: flex-start; }
 
 .ops-concurrency { display: flex; flex-direction: column; gap: var(--space-3); }
 
@@ -619,6 +621,67 @@
 
 .logs-cell-duration { text-align: right; font-variant-numeric: tabular-nums; }
 
+/* Inference rows: two-line cells for model, endpoint and latency. */
+.logs-table.is-request { min-width: 1080px; }
+
+.logs-table.is-request tbody td { vertical-align: top; padding-block: 10px; }
+
+.logs-model-requested { color: var(--text-main); font-weight: 600; overflow-wrap: anywhere; }
+
+.logs-model-upstream,
+.logs-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+
+.logs-model-upstream { margin-top: 2px; color: var(--text-secondary); font-weight: 500; }
+
+.logs-model-upstream .logs-line-value { font-family: var(--font-mono); overflow-wrap: anywhere; }
+
+.logs-model-upstream.is-remapped .logs-line-value { color: var(--warn); font-weight: 600; }
+
+.logs-model-provider { display: flex; align-items: baseline; gap: 6px; font-size: 0.76rem; line-height: 1.6; color: var(--text-secondary); }
+
+.logs-model-provider .logs-line-value { font-family: var(--font-mono); }
+
+.logs-model-provider.is-retried .logs-line-value { color: var(--warn); font-weight: 600; }
+
+.logs-line-label {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  font-weight: 550;
+}
+
+.logs-line-value { min-width: 0; color: var(--text-soft); font-variant-numeric: tabular-nums; }
+
+.logs-cell-endpoint .logs-line-value { font-family: var(--font-mono); font-size: 0.74rem; overflow-wrap: anywhere; }
+
+.logs-cell-tokens { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.logs-cell-tokens span + span { margin-left: 10px; }
+
+.logs-token-in { color: var(--info); }
+
+.logs-token-out { color: var(--ok); }
+
+.logs-cell-cost { color: var(--ok); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.logs-cell-latency { padding-left: 10px; border-left: 2px solid var(--border-strong); white-space: nowrap; }
+
+.logs-cell-latency.is-success { border-left-color: var(--ok); }
+
+.logs-table.is-request .logs-cell-status,
+.logs-table.is-request .logs-cell-status .logs-badge { white-space: nowrap; }
+
+.logs-table.is-request .logs-cell-endpoint { min-width: 220px; }
+
+.logs-cell-ip { color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.76rem; white-space: nowrap; }
+
 .logs-badge {
   display: inline-flex;
   align-items: center;
@@ -644,9 +707,15 @@
 
 .logs-badge.is-idle { color: var(--idle); }
 
-.logs-more { display: flex; justify-content: center; padding: var(--space-4) 0 0; }
+.logs-pager {
+  margin-top: var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
 
-.logs-more button[hidden] { display: none; }
+.logs-page-size { display: inline-flex; align-items: center; gap: var(--space-2); margin-right: var(--space-2); color: var(--text-muted); font-size: 0.76rem; }
+
 
 .logs-coverage { margin: 0; }
 
@@ -870,6 +939,27 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
 
 .logs-cell-action .logs-badge { margin-top: var(--space-1); }
 
+.logs-table.is-request { min-width: 0; }
+
+.logs-table.is-request tr {
+    grid-template-areas:
+      'time status'
+      'action action'
+      'endpoint endpoint'
+      'tokens cost'
+      'latency ip';
+  }
+
+.logs-cell-endpoint { grid-area: endpoint; }
+
+.logs-cell-tokens { grid-area: tokens; }
+
+.logs-cell-cost { grid-area: cost; justify-self: end; }
+
+.logs-cell-latency { grid-area: latency; }
+
+.logs-cell-ip { grid-area: ip; justify-self: end; align-self: end; }
+
 .table-empty-cell { display: block; padding: var(--space-4); text-align: center; }
 }
 
@@ -984,8 +1074,11 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
 }
 
 @media (max-width: 640px) {
-.ops-resources,
 .ops-kpi-grid { grid-template-columns: minmax(0, 1fr); }
+
+/* Resource tiles are a label and one number: two fit side by side on a phone,
+   which halves a ~600px column of six tiles. */
+.ops-resources { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 .ops-head-filters { width: 100%; }
 }

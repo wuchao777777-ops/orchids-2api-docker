@@ -7,7 +7,14 @@
   const { el, make, attach, emptyRow } = ConsoleUI;
 
   const listLoads = ConsoleUI.requestGate();
-  const state = { kind: 'request', cursor: '', records: [], selected: null, back: '' };
+  // The journal pages with a cursor: the server answers one window and the
+  // cursor that starts the next. pageStarts[n] is the cursor page n began at, so
+  // going back re-reads exactly the window that was shown. A filtered total
+  // cannot be known without scanning the whole ledger, so pages are numbered but
+  // never counted.
+  const PAGE_SIZES = [20, 50, 100];
+  const DEFAULT_PAGE_SIZE = 50;
+  const state = { kind: 'request', cursor: '', records: [], selected: null, back: '', page: 0, pageStarts: [''], pageSize: DEFAULT_PAGE_SIZE };
 
   // RESULT_LABELS names the classes the overview counts with, so the chip the log
   // centre shows and the chart that opened it use the same words.
@@ -114,7 +121,7 @@
   }
 
   // Journal labels. The server sends stable ids; the page shows what they mean.
-  const KIND_LABELS = { request: '请求', operation: '操作', system: '系统', debug: '诊断', http: 'HTTP', probe: '探测', grok: 'Grok', workbuddy: 'WorkBuddy' };
+  const KIND_LABELS = { request: '请求', operation: '操作', system: '系统', debug: '诊断', http: 'HTTP', probe: '探测', grok: 'Grok', workbuddy: 'WorkBuddy', cline: 'Cline' };
   const ACTION_LABELS = {
     debug_bundle: '请求诊断包',
     http_request: '推理请求',
@@ -271,6 +278,86 @@
     return date.toLocaleString();
   }
 
+  // Inference rows carry the route the gateway actually took: the inbound path,
+  // the upstream endpoint, the model it sent and the model the upstream said it
+  // ran. Older rows predate those fields, so every one of them is optional.
+  function requestRoute(event) {
+    const meta = event.metadata || {};
+    const requested = String(event.model || '').trim();
+    const served = String(meta.upstream_model || '').trim();
+    const sent = String(meta.upstream_model_sent || '').trim();
+    const upstream = served || sent;
+    const provider = String(meta.upstream_provider || '').trim();
+    const providerAttempts = Number(meta.upstream_provider_attempts) || 0;
+    return {
+      provider,
+      providerAttempts,
+      inbound: String(meta.path || '').trim(),
+      endpoint: String(meta.upstream_endpoint || '').trim(),
+      host: String(meta.upstream_host || '').trim(),
+      requested,
+      served,
+      sent,
+      upstream,
+      // Only a model the upstream reported can prove a substitution; a sent
+      // name that differs is the gateway's own mapping.
+      remapped: !!served && !!requested && !sameModel(served, requested),
+    };
+  }
+
+  // sameModel treats a vendor prefix and a dated snapshot suffix as the same
+  // model: "anthropic/claude-x" is "claude-x", and "grok-4.7-0401" is a snapshot
+  // of "grok-4.7". Any other difference ("grok-4" vs "grok-4-fast") is a swap.
+  function sameModel(served, requested) {
+    const a = bareModel(served);
+    const b = bareModel(requested);
+    return a === b || (a.startsWith(b + '-') && /^-\d[\d.-]*$/.test(a.slice(b.length)));
+  }
+
+  // bareModel drops a vendor prefix ("anthropic/claude-x" → "claude-x") so a
+  // provider-qualified spelling of the same model is not read as a swap.
+  function bareModel(model) {
+    const value = String(model || '').trim().toLowerCase();
+    const slash = value.lastIndexOf('/');
+    return slash >= 0 ? value.slice(slash + 1) : value;
+  }
+
+  const TICKS_PER_USD = 1e10;
+  function formatCost(ticks) {
+    const value = Number(ticks) || 0;
+    if (value <= 0) return '';
+    const usd = value / TICKS_PER_USD;
+    return '$' + (usd >= 1 ? usd.toFixed(4) : usd.toFixed(6));
+  }
+
+  function formatSeconds(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return '';
+    return value < 1000 ? Math.round(value) + 'ms' : (value / 1000).toFixed(2) + 's';
+  }
+
+  // firstTokenOf prefers the first visible token: the latency a user feels.
+  function firstTokenOf(event) {
+    const meta = event.metadata || {};
+    for (const value of [meta.first_visible_token_ms, event.first_token_ms, meta.first_token_ms]) {
+      if (value != null && Number.isFinite(Number(value))) return Number(value);
+    }
+    return null;
+  }
+
+  // outputTPS is output tokens over the generation window (first token to the
+  // end); without a first-token time it falls back to the whole request.
+  function outputTPS(event) {
+    const output = Number(event.output_tokens) || 0;
+    const total = Number(event.duration_ms) || 0;
+    if (output <= 0 || total <= 0) return null;
+    const first = firstTokenOf(event);
+    const window = first != null && total - first > 0 ? total - first : total;
+    return output / (window / 1000);
+  }
+
+  function formatCount(value) { return (Number(value) || 0).toLocaleString('en-US'); }
+
   function formatBytes(bytes) {
     const value = Number(bytes) || 0;
     if (value >= 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + ' MiB';
@@ -363,6 +450,10 @@
     // where the same bundles are reachable from the requests that produced them.
     // The tab is gone; the addresses that pointed at it keep working.
     state.back = params.get('back') || '';
+    const size = Number(params.get('size'));
+    state.pageSize = PAGE_SIZES.includes(size) ? size : DEFAULT_PAGE_SIZE;
+    const sizeSelect = el('logsPageSize');
+    if (sizeSelect) sizeSelect.value = String(state.pageSize);
     return applied;
   }
 
@@ -375,6 +466,7 @@
     params.set('tab', 'logs');
     params.set('kind', state.kind);
     if (state.back) params.set('back', state.back);
+    if (state.pageSize !== DEFAULT_PAGE_SIZE) params.set('size', String(state.pageSize));
     window.history.replaceState(null, '', window.location.pathname + '?' + params.toString());
   }
 
@@ -411,31 +503,22 @@
     ]);
   }
 
-  function renderRows(append) {
+  function renderRows() {
     const body = el('logsRows');
     if (!body) return;
-    if (!append) body.replaceChildren();
-    if (state.records.length === 0 && !append) {
+    body.replaceChildren();
+    if (state.records.length === 0) {
       // An empty page and a broken page look alike, so say which one this is and
       // what the window actually covers.
-      emptyRow(body, 5, state.kind === 'request'
+      emptyRow(body, tableColumns().length, state.kind === 'request'
         ? '保留窗口内没有匹配的请求。带"含诊断"的行可以在详情里展开该请求的诊断内容。'
         : '保留窗口内没有匹配的记录。');
       return;
     }
-    if (append) {
-      // The "no matching records" placeholder is a row but carries no record. Counting
-      // it as one made the FIRST record of the appended page look like an extra row, so
-      // it was never drawn: "加载更多" returned data and the list stayed empty.
-      body.querySelectorAll('tr').forEach((tr) => {
-        if (!tr.dataset || tr.dataset.index === undefined) tr.remove();
-      });
-    }
-    const start = append ? body.querySelectorAll('tr[data-index]').length : 0;
-    const rows = state.records.slice(start).map((record, index) => {
+    const rows = state.records.map((record, index) => {
       const event = record.event || {};
       const tr = make('tr');
-      tr.dataset.index = String(start + index);
+      tr.dataset.index = String(index);
       const probe = isProbeRecord(event);
       const channelLabel = KIND_LABELS[event.channel] || event.channel || '';
       const label = text(ACTION_LABELS[event.action] || actionLabel(event.action), '—');
@@ -450,6 +533,8 @@
         const target = make('span', 'logs-badge', text(event.provider || '未标注渠道', '未标注渠道'));
         target.title = '被探测渠道（合成探测请求，模型占位为 ' + PROBE_MODEL_LABEL + '）';
         action.appendChild(target);
+      } else if (state.kind === 'request') {
+        appendModelLines(action, event);
       } else if (event.model) { addBadge(action, event.model); }
       if (record.diagnostics || String(event.kind || '') === DIAGNOSTIC_INDEX_KIND) { addBadge(action, '含诊断', 'is-info'); }
       const quality = qualitySummary(record);
@@ -468,17 +553,98 @@
       if (event.target) target.title = event.target;
       const status = make('td', 'logs-cell-status');
       status.appendChild(resultBadge(record));
-      attach(tr, [
-        make('td', 'logs-cell-time', formatAbsoluteTime(event.timestamp)),
-        action,
-        target,
-        status,
-        make('td', 'logs-cell-duration', event.duration_ms ? event.duration_ms + ' ms' : '—'),
-      ]);
-      tr.addEventListener('click', () => select(start + index));
+      if (state.kind === 'request') {
+        attach(tr, [make('td', 'logs-cell-time', formatAbsoluteTime(event.timestamp)), action, ...requestCells(event, status)]);
+      } else {
+        attach(tr, [
+          make('td', 'logs-cell-time', formatAbsoluteTime(event.timestamp)),
+          action,
+          target,
+          status,
+          make('td', 'logs-cell-duration', event.duration_ms ? event.duration_ms + ' ms' : '—'),
+        ]);
+      }
+      tr.addEventListener('click', () => select(index));
       return tr;
     });
     rows.forEach((row) => body.appendChild(row));
+  }
+
+  // appendModelLines shows the requested model and, under it, the model the
+  // upstream actually ran (or, when it names none, the model the gateway sent).
+  function appendModelLines(cell, event) {
+    const route = requestRoute(event);
+    const requested = make('div', 'logs-model-requested', route.requested || '未标注模型');
+    requested.title = '客户端请求的模型';
+    cell.appendChild(requested);
+    if (!route.upstream) {
+      appendProviderLine(cell, route);
+      return;
+    }
+    const line = make('div', 'logs-model-upstream' + (route.remapped ? ' is-remapped' : ''));
+    line.appendChild(make('span', 'logs-line-label', route.served ? '上游' : '发送'));
+    line.appendChild(make('span', 'logs-line-value', route.upstream));
+    line.title = route.served
+      ? '上游返回的实际模型' + (route.sent && route.sent !== route.served ? '（网关发送：' + route.sent + '）' : '')
+      : '网关发送给上游的模型（上游未在响应中标注模型）';
+    cell.appendChild(line);
+    appendProviderLine(cell, route);
+  }
+
+  // appendProviderLine names the provider the upstream gateway says finally
+  // served the request, and how many provider attempts that took. Only a
+  // gateway that reports it (Cline) has this line.
+  function appendProviderLine(cell, route) {
+    if (!route.provider) return;
+    const retried = route.providerAttempts > 1;
+    const line = make('div', 'logs-model-provider' + (retried ? ' is-retried' : ''));
+    line.appendChild(make('span', 'logs-line-label', '服务商'));
+    line.appendChild(make('span', 'logs-line-value', route.provider + (retried ? ' · 第 ' + route.providerAttempts + ' 次尝试' : '')));
+    line.title = '上游网关报告的最终服务商' + (route.providerAttempts > 0 ? '；网关共尝试 ' + route.providerAttempts + ' 个服务商' : '');
+    cell.appendChild(line);
+  }
+
+  function labelledLine(label, value, title) {
+    const line = make('div', 'logs-line');
+    line.appendChild(make('span', 'logs-line-label', label));
+    line.appendChild(make('span', 'logs-line-value', value || '—'));
+    if (title) line.title = title;
+    return line;
+  }
+
+  // requestCells builds the inference columns after 渠道 / 模型.
+  function requestCells(event, status) {
+    const route = requestRoute(event);
+    const endpoint = make('td', 'logs-cell-endpoint');
+    endpoint.appendChild(labelledLine('入站', route.inbound, '客户端调用的网关路径'));
+    endpoint.appendChild(labelledLine('上游', route.endpoint, route.host ? '上游主机：' + route.host : '上游未记录端点'));
+
+    const tokens = make('td', 'logs-cell-tokens');
+    if ((Number(event.input_tokens) || 0) + (Number(event.output_tokens) || 0) > 0) {
+      tokens.appendChild(make('span', 'logs-token-in', '↓ ' + formatCount(event.input_tokens)));
+      tokens.appendChild(make('span', 'logs-token-out', '↑ ' + formatCount(event.output_tokens)));
+      const parts = ['输入 ' + formatCount(event.input_tokens), '输出 ' + formatCount(event.output_tokens)];
+      if (event.cached_input_tokens) parts.push('缓存命中 ' + formatCount(event.cached_input_tokens));
+      if (event.reasoning_tokens) parts.push('推理 ' + formatCount(event.reasoning_tokens));
+      parts.push(event.usage_source === 'upstream' ? '上游上报' : '网关估算');
+      tokens.title = parts.join(' · ');
+    } else {
+      tokens.textContent = '—';
+      tokens.title = '该请求未上报用量';
+    }
+
+    const cost = make('td', 'logs-cell-cost', formatCost(event.cost_in_usd_ticks) || '—');
+    if (event.pricing_model) cost.title = '计价模型：' + event.pricing_model;
+
+    const latency = make('td', 'logs-cell-latency' + (String(event.status || '') === 'success' ? ' is-success' : ''));
+    const first = firstTokenOf(event);
+    const tps = outputTPS(event);
+    latency.appendChild(labelledLine('首字', first != null ? formatSeconds(first) : '—'));
+    latency.appendChild(labelledLine('总耗时', formatSeconds(event.duration_ms) || '—'));
+    latency.appendChild(labelledLine('输出', tps != null ? tps.toFixed(1) + ' tok/s' : '—', '输出 Token ÷ 首字之后的生成时间'));
+
+    const ip = make('td', 'logs-cell-ip', text(event.client_ip, '—'));
+    return [endpoint, status, tokens, cost, latency, ip];
   }
 
   // A fact is a small label-over-value block: in a 560px drawer two columns of
@@ -599,8 +765,17 @@
       requestFacts.push(fact('被探测渠道', text(event.provider, '未标注渠道')));
       requestFacts.push(fact('模型', '探测请求不携带真实模型', { empty: true }));
     } else if (isRequest) {
+      const route = requestRoute(event);
       requestFacts.push(fact('渠道', text(event.channel, '未标注'), { empty: !event.channel }));
-      requestFacts.push(fact('模型', text(event.model, '未标注'), { empty: !event.model }));
+      requestFacts.push(fact('请求模型', text(event.model, '未标注'), { empty: !event.model }));
+      requestFacts.push(fact('上游实际模型', route.served || '上游未标注', { empty: !route.served }));
+      if (route.sent) requestFacts.push(fact('发送模型', route.sent));
+      if (route.provider) {
+        requestFacts.push(fact('上游服务商', route.provider, { title: '上游网关报告的最终服务商' }));
+        if (route.providerAttempts > 0) requestFacts.push(fact('服务商尝试', route.providerAttempts + ' 次'));
+      }
+      if (route.inbound) requestFacts.push(fact('入站端点', route.inbound));
+      if (route.endpoint) requestFacts.push(fact('上游端点', route.endpoint, { title: route.host ? route.host + route.endpoint : '' }));
     } else {
       requestFacts.push(fact('动作', text(ACTION_LABELS[event.action] || actionLabel(event.action), '—'), { wide: true, title: String(event.action || '') }));
       const objectName = targetLabel(event.target, event.action);
@@ -622,6 +797,10 @@
     // --- usage and latency --------------------------------------------------------
     const usageFacts = [];
     if (event.duration_ms) usageFacts.push(fact('总耗时', event.duration_ms + ' ms'));
+    const tps = outputTPS(event);
+    if (tps != null) usageFacts.push(fact('输出速度', tps.toFixed(1) + ' tok/s'));
+    const cost = formatCost(event.cost_in_usd_ticks);
+    if (cost) usageFacts.push(fact('费用', cost, { title: event.pricing_model ? '计价模型：' + event.pricing_model : '' }));
     // Same metadata contract as http_status above: the measured first-token latency
     // lives in metadata, so the row has to look there or the figure is never shown.
     const firstTokenMS = event.first_token_ms || meta.first_token_ms;
@@ -819,9 +998,8 @@
     const model = el('filterModel');
     if (channel) channel.value = String(event.channel || '');
     if (model) model.value = String(event.model || '');
-    state.cursor = '';
     syncUrl();
-    load(false);
+    restart();
   }
 
   // renderDiagnosticsSection shows the request's captured chain. The bundle is a
@@ -989,13 +1167,29 @@
     });
   }
 
+  // Inference rows answer "which model, through which endpoint, at what cost and
+  // speed" in the list itself; operations and system records keep the short form.
+  const REQUEST_COLUMNS = ['时间', '渠道 / 模型', '端点', '状态', 'Token', '费用', '延迟', 'IP'];
+  function tableColumns() {
+    if (state.kind === 'request') return REQUEST_COLUMNS;
+    // The second column holds a channel only for inference traffic; an operation has
+    // none, so the header says what the column really contains.
+    return ['时间', state.kind === 'operation' ? '动作' : '渠道 / 动作', '对象', '状态', '耗时'];
+  }
+
+  function renderHead() {
+    const row = el('logsHeadRow');
+    if (!row) return;
+    row.replaceChildren();
+    tableColumns().forEach((label) => row.appendChild(make('th', '', label)));
+    const table = el('logsTable');
+    if (table) table.classList.toggle('is-request', state.kind === 'request');
+  }
+
   function scopeNote() {
     const hint = el('logsFilterScope');
     if (hint) hint.textContent = FILTER_HINTS[state.kind] || '';
-    // The second column holds a channel only for inference traffic; an operation has
-    // none, so the header says what the column really contains.
-    const header = el('logsActionHeader');
-    if (header) header.textContent = state.kind === 'operation' ? '动作' : '渠道 / 动作';
+    renderHead();
   }
 
   function openDrawer() {
@@ -1034,11 +1228,17 @@
     openDrawer();
   }
 
-  async function load(append) {
+  // load reads page `page` (0-based) of the current tab and filters. Page 0, or
+  // a page whose starting cursor is unknown, restarts at the newest record.
+  async function load(page) {
+    let index = Number(page) || 0;
+    if (index < 0 || index >= state.pageStarts.length) index = 0;
+    if (index === 0) state.pageStarts = [''];
     const params = filters();
     params.set('kind', state.kind);
-    params.set('limit', '50');
-    if (append && state.cursor) params.set('before', state.cursor);
+    params.set('limit', String(state.pageSize));
+    const before = state.pageStarts[index];
+    if (before) params.set('before', before);
     // This load owns the list from here on. Anything still in flight answers an older
     // question (a previous tab, or a previous filter) and is dropped when it lands.
     const ticket = listLoads.begin();
@@ -1046,8 +1246,14 @@
       const payload = await ConsoleAPI.journal(params, { signal: ticket.signal });
       if (!ticket.isCurrent()) return;
       state.cursor = payload.next_cursor || '';
-      state.records = append ? state.records.concat(payload.data || []) : payload.data || [];
-      renderRows(append);
+      state.page = index;
+      state.pageStarts = state.pageStarts.slice(0, index + 1);
+      if (state.cursor) state.pageStarts.push(state.cursor);
+      state.records = payload.data || [];
+      renderRows();
+      renderPager();
+      const wrap = el('logsTableWrap');
+      if (wrap) wrap.scrollTop = 0;
       renderScope();
       const filterUsed = payload.filter_used || {};
       const matched = payload.matched;
@@ -1076,9 +1282,7 @@
         parts.push('为空的含义是"保留窗口内没有匹配"，不代表从未发生。');
         coverage.textContent = parts.join('；');
       }
-      const more = el('logsMore');
-      if (more) more.hidden = !state.cursor;
-      if (!append) renderDetail(null);
+      renderDetail(null);
     } catch (error) {
       // A failure that belongs to a superseded load must not replace the newer list
       // with an error row either.
@@ -1088,13 +1292,42 @@
         body.replaceChildren();
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = 5;
+        td.colSpan = tableColumns().length;
         td.className = 'table-empty-cell';
         td.textContent = '读取日志失败：' + (error.message || error);
         tr.appendChild(td);
         body.appendChild(tr);
       }
     }
+  }
+
+  function renderPager() {
+    const pager = el('logsPager');
+    if (!pager) return;
+    const hasNext = !!state.cursor;
+    const first = state.page === 0;
+    pager.hidden = first && !hasNext;
+    const info = el('logsPageInfo');
+    if (info) {
+      const count = state.records.length;
+      // A short page with a cursor means the scan budget ran out before the
+      // ledger did: there may be more matches further back.
+      info.textContent = `第 ${state.page + 1} 页 · 本页 ${count} 条` + (hasNext ? '' : ' · 已到最早记录');
+    }
+    const number = el('logsPageNo');
+    if (number) number.textContent = String(state.page + 1);
+    [['logsFirst', first], ['logsPrev', first], ['logsNext', !hasNext]].forEach(([id, disabled]) => {
+      const button = el(id);
+      if (button) button.disabled = disabled;
+    });
+  }
+
+  // restart reloads the first page: the scope changed, so later pages no longer
+  // describe the same list.
+  function restart() {
+    state.cursor = '';
+    state.pageStarts = [''];
+    return load(0);
   }
 
   function toggleFilters(force) {
@@ -1115,9 +1348,8 @@
       const node = el(entry.id);
       if (node) node.value = '';
     });
-    state.cursor = '';
     syncUrl();
-    load(false);
+    restart();
   }
 
   function bind() {
@@ -1135,19 +1367,19 @@
         tab.classList.add('is-active');
         tab.setAttribute('aria-selected', 'true');
         state.kind = tab.getAttribute('data-kind') || 'request';
-        state.cursor = '';
         scopeNote();
         closeDrawer();
         syncUrl();
-        load(false);
+        restart();
       });
     });
     const toggle = el('logsFiltersToggle');
     if (toggle) toggle.addEventListener('click', () => toggleFilters());
     const form = el('logsFilters');
-    if (form) form.addEventListener('submit', (event) => { event.preventDefault(); state.cursor = ''; syncUrl(); load(false); });
+    if (form) form.addEventListener('submit', (event) => { event.preventDefault(); syncUrl(); restart(); });
+    // 刷新 re-reads the page in view; page 1 therefore picks up new records.
     const reload = el('logsReload');
-    if (reload) reload.addEventListener('click', () => { state.cursor = ''; load(false); });
+    if (reload) reload.addEventListener('click', () => load(state.page));
     const clear = el('logsClear');
     if (clear) clear.addEventListener('click', clearFilters);
     const scopeClear = el('logsScopeClear');
@@ -1160,8 +1392,20 @@
         window.location.href = state.back || (window.location.pathname + '?tab=ops');
       });
     }
-    const more = el('logsMore');
-    if (more) more.addEventListener('click', () => load(true));
+    const pageActions = { logsFirst: () => load(0), logsPrev: () => load(state.page - 1), logsNext: () => load(state.page + 1) };
+    Object.entries(pageActions).forEach(([id, action]) => {
+      const button = el(id);
+      if (button) button.addEventListener('click', () => { closeDrawer(); action(); });
+    });
+    const sizeSelect = el('logsPageSize');
+    if (sizeSelect) {
+      sizeSelect.addEventListener('change', () => {
+        const size = Number(sizeSelect.value);
+        state.pageSize = PAGE_SIZES.includes(size) ? size : DEFAULT_PAGE_SIZE;
+        syncUrl();
+        restart();
+      });
+    }
     const close = el('logsDetailClose');
     if (close) close.addEventListener('click', closeDrawer);
     const backdrop = el('logsDetailBackdrop');

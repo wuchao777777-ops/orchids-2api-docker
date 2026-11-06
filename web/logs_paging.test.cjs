@@ -55,7 +55,7 @@ function load(){
   });
   let src=fs.readFileSync(path.join(__dirname,'static/js/logs.js'),'utf8');
   src=src.replace(/  if \(document\.readyState === 'loading'\)[\s\S]*?\r?\n  \}\r?\n\}\)\(\);\s*$/,
-    'globalThis.review={state,load,renderRows,renderDetail,filters,bind,scopeNote};\n})();');
+    'globalThis.review={state,load,renderRows,renderDetail,filters,bind,scopeNote,renderPager};\n})();');
   vm.runInContext(src,context);
   return {...context.review,context,ids};
 }
@@ -64,21 +64,54 @@ const allText=(node)=>[node.textContent||'',...node.children.map(allText)].join(
 
 const successResponse=(payload)=>({ok:true,status:200,json:async()=>payload});
 
-test('加载更多 draws the first record after an empty page',()=>{
+test('a page replaces the "nothing matched" placeholder with its records',()=>{
   const api=load();
   const body=api.ids.logsRows;
   // The page that matched nothing left the placeholder row behind.
   api.state.records=[];
-  api.renderRows(false);
+  api.renderRows();
   assert.equal(body.children.length,1,'an empty page states that nothing matched');
   // The next page returns exactly one record.
   api.state.records=[{event:{kind:'request',action:'grok_request',channel:'grok',model:'grok-4.6',status:'success',request_id:'req-1',timestamp:new Date().toISOString()}}];
-  api.renderRows(true);
+  api.renderRows();
   const rows=body.querySelectorAll('tr[data-index]');
-  assert.equal(rows.length,1,'the first record of the appended page was never drawn');
+  assert.equal(rows.length,1,'the first record of the next page was never drawn');
   assert.equal(rows[0].dataset.index,'0');
   assert.equal(body.querySelectorAll('tr').length,1,'the "no matching records" placeholder must not stay in the list');
   assert.match(allText(rows[0]),/Grok 请求/);
+});
+
+test('pages walk the journal cursor forward and back to the same windows',async()=>{
+  const api=load();
+  ['logsPager','logsPageInfo','logsFirst','logsPrev','logsNext','logsPageNo'].forEach((id)=>{api.ids[id]=element(id==='logsPager'?'nav':'button');});
+  const calls=[];
+  // Three pages: cur-1 and cur-2 start pages 2 and 3; page 3 is the last.
+  const pages={'':{next:'cur-1',action:'p1'},'cur-1':{next:'cur-2',action:'p2'},'cur-2':{next:'',action:'p3'}};
+  api.context.fetch=async(url)=>{
+    const params=new URL(url,'http://x').searchParams;
+    calls.push({before:params.get('before')||'',limit:params.get('limit')});
+    const page=pages[params.get('before')||''];
+    return successResponse({data:[{event:{kind:'operation',action:page.action,status:'ok'}}],next_cursor:page.next});
+  };
+  api.state.kind='operation';
+  await api.load(0);
+  assert.equal(api.ids.logsPrev.disabled,true,'page 1 has no previous page');
+  assert.equal(api.ids.logsNext.disabled,false);
+  assert.equal(api.ids.logsPager.hidden,false);
+  await api.load(api.state.page+1);
+  await api.load(api.state.page+1);
+  assert.equal(api.state.page,2);
+  assert.equal(api.ids.logsNext.disabled,true,'the last page has no next page');
+  assert.match(api.ids.logsPageInfo.textContent,/第 3 页.*已到最早记录/);
+  await api.load(api.state.page-1);
+  assert.equal(api.state.page,1);
+  assert.match(allText(api.ids.logsRows),/p2/,'going back re-reads the same window');
+  assert.deepEqual(calls.map((c)=>c.before),['','cur-1','cur-2','cur-1']);
+  assert.ok(calls.every((c)=>c.limit==='50'),'the default page size is 50');
+  // A changed scope restarts at the newest record.
+  await api.load(0);
+  assert.equal(calls.at(-1).before,'');
+  assert.equal(api.ids.logsFirst.disabled,true);
 });
 
 test('a superseded response does not overwrite the newer tab',async()=>{
@@ -238,4 +271,54 @@ test('an in-progress or interrupted quality check remains visible without a pare
   assert(allText(api.ids.logsDetailBody).includes(label));
   assert.doesNotMatch(allText(api.ids.logsDetailBody),/客户端没有收到被拦截的回答/);
  }
+});
+
+test('request rows show the upstream route, cost and latency in the list', () => {
+  const api = load();
+  api.state.kind = 'request';
+  api.state.records = [{ id: '1', outcome: 'success', event: {
+    kind: 'request', action: 'chat_request', status: 'success', channel: 'cline', model: 'claude-sonnet-4.6',
+    input_tokens: 3789, output_tokens: 1214, cost_in_usd_ticks: 197180000, duration_ms: 26810, client_ip: '161.118.140.32',
+    metadata: { path: '/cline/v1/messages', upstream_endpoint: '/api/v1/chat/completions', upstream_model_sent: 'anthropic/claude-sonnet-4.6',
+      upstream_model: 'grok-4.5-0309', first_visible_token_ms: 1320 } } }];
+  api.renderRows(false);
+  const row = allText(api.ids.logsRows);
+  for (const expected of ['claude-sonnet-4.6', '上游', 'grok-4.5-0309', '/cline/v1/messages', '/api/v1/chat/completions',
+    '↓ 3,789', '↑ 1,214', '$0.019718', '1.32s', '26.81s', '47.6 tok/s', '161.118.140.32']) {
+    assert.ok(row.includes(expected), 'row is missing ' + expected + ': ' + row);
+  }
+});
+
+test('a vendor prefix or a dated snapshot of the requested model is not flagged as a substitution', () => {
+  const api = load();
+  api.state.kind = 'request';
+  const event = (served) => ({ kind: 'request', action: 'chat_request', status: 'success', model: 'claude-sonnet-4.6', metadata: { upstream_model: served } });
+  api.state.records = [{ id: '1', event: event('anthropic/claude-sonnet-4.6') }, { id: '2', event: event('claude-opus-4.6') },
+    { id: '3', event: event('claude-sonnet-4.6-20260301') }, { id: '4', event: event('claude-sonnet-4.6-fast') }];
+  api.renderRows(false);
+  const classes = [];
+  const walk = (n) => { if (/logs-model-upstream/.test(n.className || '')) classes.push(n.className); n.children.forEach(walk); };
+  walk(api.ids.logsRows);
+  assert.deepEqual(classes, ['logs-model-upstream', 'logs-model-upstream is-remapped', 'logs-model-upstream', 'logs-model-upstream is-remapped']);
+});
+
+test('the gateway provider and its retry count are shown under the model', () => {
+  const api = load();
+  api.state.kind = 'request';
+  const ev = (meta) => ({ kind: 'request', action: 'chat_request', status: 'success', channel: 'cline', model: 'deepseek-v4.1-flash', metadata: meta });
+  api.state.records = [
+    { id: '1', event: ev({ upstream_model: 'deepseek-v4.1-flash', upstream_provider: 'alibaba', upstream_provider_attempts: '2' }) },
+    { id: '2', event: ev({ upstream_provider: 'deepseek', upstream_provider_attempts: '1' }) },
+    { id: '3', event: ev({ upstream_model: 'deepseek-v4.1-flash' }) },
+  ];
+  api.renderRows();
+  const rows = api.ids.logsRows.querySelectorAll('tr[data-index]').map(allText);
+  assert.match(rows[0], /服务商[\s\S]*alibaba · 第 2 次尝试/);
+  assert.match(rows[1], /服务商[\s\S]*deepseek/);
+  assert.doesNotMatch(rows[1], /次尝试/, 'a first-attempt success carries no retry note');
+  assert.doesNotMatch(rows[2], /服务商/, 'no provider line without a gateway report');
+  api.renderDetail(api.state.records[0]);
+  const detail = allText(api.ids.logsDetailBody);
+  assert.match(detail, /上游服务商[\s\S]*alibaba/);
+  assert.match(detail, /服务商尝试[\s\S]*2 次/);
 });
