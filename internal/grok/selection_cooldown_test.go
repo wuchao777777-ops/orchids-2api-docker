@@ -22,7 +22,7 @@ func TestCLISelectionSkipsSharedCooldownBeforeAttempt(t *testing.T) {
 				h, base := parityBuildHandler(t, server)
 				ctx := grokbase.WithSession(context.Background(), grokbase.Session{Key: t.Name(), Model: "grok-4.7"})
 				var accounts []*store.Account
-				for i := 0; i < 4; i++ {
+				for i := range 4 {
 					acc := *base
 					acc.ID = 0
 					acc.TeamID = t.Name() + "-limited"
@@ -62,7 +62,7 @@ func TestCLISelectionSkipsSharedCooldownBeforeAttempt(t *testing.T) {
 				// When only the cooling team remains, report a throttle rather
 				// than a missing model or an empty pool.
 				_, err := h.openCLIAccountSession(ctx, []int64{accounts[3].ID}, "grok-4.7")
-				if err == nil || classifyGrokPoolFailure(err, "", "").status != http.StatusTooManyRequests {
+				if err == nil || classifyGrokPoolFailure(err, "", "").Status != http.StatusTooManyRequests {
 					t.Fatalf("expected throttled pool, got %v", err)
 				}
 			})
@@ -86,7 +86,7 @@ func TestCLISelectionUsesAccountIdentityWithoutTeam(t *testing.T) {
 	t.Cleanup(func() { ratelimit.Cooldowns = previous })
 	ratelimit.Cooldowns.Note(ratelimit.ScopeRPM, identity, "grok-4.7", time.Minute)
 	_, err := h.openCLIAccountSession(ctx, nil, "grok-4.7")
-	if err == nil || classifyGrokPoolFailure(err, "", "").status != http.StatusTooManyRequests {
+	if err == nil || classifyGrokPoolFailure(err, "", "").Status != http.StatusTooManyRequests {
 		t.Fatalf("expected account cooldown to be honored, got %v", err)
 	}
 }

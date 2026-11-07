@@ -130,8 +130,38 @@ func (t *FlowTracker) Track(next http.HandlerFunc) http.HandlerFunc {
 
 		// The existing audit observation supplies authoritative cumulative usage;
 		// deltas avoid double counting a final row that repeats an attempt's usage.
+		// Until it arrives, which for most upstreams is when the answer ends, the
+		// streamed text is credited as an estimate so the output rate is live;
+		// the first authoritative figure then corrects the estimate either way.
 		var input, output int64
-		var hasUsage bool
+		var hasUsage, reported, estimatedInput, estimatedOutput bool
+		markUsage := func(bucket *flowBucket) {
+			if !hasUsage {
+				bucket.usageSamples++
+				hasUsage = true
+			}
+		}
+		traced.flowUsage = func(liveInput, liveOutput int64) {
+			t.mu.Lock()
+			if !reported {
+				bucket := route.bucket(time.Now())
+				markUsage(bucket)
+				if liveInput > 0 {
+					route.InputTokens += liveInput
+					bucket.input += liveInput
+					input += liveInput
+					estimatedInput = true
+				}
+				if liveOutput > 0 {
+					route.OutputTokens += liveOutput
+					bucket.output += liveOutput
+					output += liveOutput
+					estimatedOutput = true
+				}
+				t.notifyLocked()
+			}
+			t.mu.Unlock()
+		}
 		observeUsage := func() {
 			box, ok := r.Context().Value(requestObservationKey{}).(*requestObservation)
 			if !ok {
@@ -145,22 +175,20 @@ func (t *FlowTracker) Track(next http.HandlerFunc) http.HandlerFunc {
 			}
 			t.mu.Lock()
 			bucket := route.bucket(time.Now())
-			if !hasUsage {
-				bucket.usageSamples++
-				hasUsage = true
-			}
-			if currentInput > input {
+			markUsage(bucket)
+			if currentInput > input || (!reported && estimatedInput) {
 				delta := currentInput - input
 				route.InputTokens += delta
 				bucket.input += delta
 				input = currentInput
 			}
-			if currentOutput > output {
+			if currentOutput > output || (!reported && estimatedOutput) {
 				delta := currentOutput - output
 				route.OutputTokens += delta
 				bucket.output += delta
 				output = currentOutput
 			}
+			reported = true
 			t.notifyLocked()
 			t.mu.Unlock()
 		}
@@ -185,6 +213,7 @@ func (t *FlowTracker) Track(next http.HandlerFunc) http.HandlerFunc {
 			t.notifyLocked()
 			t.mu.Unlock()
 			traced.flowProgress = nil
+			traced.flowUsage = nil
 		}()
 		next(w, r)
 		finished = true
@@ -225,8 +254,10 @@ func (t *FlowTracker) Snapshot(scope string) FlowSnapshot {
 				}
 			}
 			route.QPS = float64(requests) / flowRateSeconds
-			route.InputTPS = float64(input) / flowRateSeconds
-			route.OutputTPS = float64(output) / flowRateSeconds
+			route.InputTPS = float64(max(input, 0)) / flowRateSeconds
+			// An estimate corrected downward leaves a negative bucket behind;
+			// the window as a whole never reports a negative rate.
+			route.OutputTPS = float64(max(output, 0)) / flowRateSeconds
 			route.TPS = route.InputTPS + route.OutputTPS
 			route.UsageAvailable = samples > 0 || (requests == 0 && route.Active == 0)
 			snapshot.Routes = append(snapshot.Routes, route)

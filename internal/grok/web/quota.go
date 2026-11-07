@@ -1,11 +1,9 @@
 package web
 
 import (
-	"net/http"
 	"strings"
 	"time"
 
-	"orchids-api/internal/grok/ratelimit"
 	"orchids-api/internal/store"
 )
 
@@ -75,10 +73,7 @@ func quotaWindowFromRateLimitInfo(info *RateLimitInfo) store.GrokQuotaWindow {
 		WindowSeconds: info.WindowSeconds,
 	}
 	if info.HasLimit && info.Limit > 0 && info.HasRemaining {
-		used := info.Limit - info.Remaining
-		if used < 0 {
-			used = 0
-		}
+		used := max(info.Limit-info.Remaining, 0)
 		window.UsagePercent = float64(used) * 100 / float64(info.Limit)
 		window.HasUsage = true
 	}
@@ -249,51 +244,4 @@ func applyQuotaInfo(acc *store.Account, info *RateLimitInfo, inferSubscription b
 		changed = true
 	}
 	return changed
-}
-
-// ApplyBuildRateLimits persists passive Build response headers separately from
-// subscription Billing. These values often describe a minute-scale request or
-// token bucket (such as 8300 tokens), never a remaining paid-plan balance.
-func ApplyBuildRateLimits(acc *store.Account, headers http.Header) bool {
-	if acc == nil || headers == nil {
-		return false
-	}
-	requests := parseBuildRateLimitWindow(headers, "requests")
-	tokens := parseBuildRateLimitWindow(headers, "tokens")
-	if !requests.HasLimit && !requests.HasRemaining && requests.ResetAt.IsZero() &&
-		!tokens.HasLimit && !tokens.HasRemaining && tokens.ResetAt.IsZero() {
-		return false
-	}
-	acc.GrokRateLimits = store.GrokRateLimitSnapshot{
-		Requests:   requests,
-		Tokens:     tokens,
-		ObservedAt: time.Now().UTC(),
-	}
-	return true
-}
-
-func parseBuildRateLimitWindow(headers http.Header, dimension string) store.GrokQuotaWindow {
-	limit := ratelimit.FirstHeader(headers,
-		"x-ratelimit-limit-"+dimension,
-		"x-rate-limit-limit-"+dimension,
-	)
-	remaining := ratelimit.FirstHeader(headers,
-		"x-ratelimit-remaining-"+dimension,
-		"x-rate-limit-remaining-"+dimension,
-	)
-	reset := ratelimit.FirstHeader(headers,
-		"x-ratelimit-reset-"+dimension,
-		"x-rate-limit-reset-"+dimension,
-	)
-	window := store.GrokQuotaWindow{}
-	if value, ok := ratelimit.ParseValue(limit); ok {
-		window.Limit = float64(value)
-		window.HasLimit = true
-	}
-	if value, ok := ratelimit.ParseValue(remaining); ok {
-		window.Remaining = float64(value)
-		window.HasRemaining = true
-	}
-	window.ResetAt = ratelimit.ParseReset(reset)
-	return window
 }

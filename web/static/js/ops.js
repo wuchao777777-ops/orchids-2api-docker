@@ -10,12 +10,14 @@
     window: 180,
     channel: '',
     model: '',
-    refreshSeconds: 15,
-    countdown: 15,
-    timer: null,
-    // Set when a refresh interval elapses while the tab is hidden; the work is
-    // deferred to the moment the operator looks at the dashboard again.
+    // Set when new data arrives while the tab is hidden or a read is in flight;
+    // the read happens as soon as the operator can see it.
     refreshPending: false,
+    // The live-update bookkeeping: the request counters last seen on the flow
+    // stream, when the last read started, and the timer of a deferred one.
+    flowMark: '',
+    lastLoadAt: 0,
+    liveTimer: null,
     // Prevent slow overview/runtime requests from overlapping on each refresh
     // tick and multiplying server aggregation plus SVG rendering work.
     loading: false,
@@ -80,12 +82,6 @@
 
   function drilldownToLogs(extra) {
     const range = windowRange();
-    // The chart covers its whole window from the aggregates; the list covers only what
-    // the journal still holds. When the window starts before the oldest retained
-    // record, say so at the entry point: otherwise a short list reads as "there were
-    // no failures" for a stretch that was never in it.
-    const gap = journalCoverageGap(range.since);
-    if (gap) showToast(gap, 'info');
     const params = assignParams(new URLSearchParams({ tab: 'logs', kind: 'request' }), {
       since: range.since.toISOString(), until: range.until.toISOString(), channel: state.channel, model: state.model });
     assignParams(params, extra);
@@ -93,17 +89,6 @@
     // "返回" and land on exactly the view that was left.
     params.set('back', currentOpsQuery());
     if (window.location) window.location.href = pagePath() + '?' + params.toString();
-  }
-
-  // journalCoverageGap describes the part of the window the journal cannot list, or ""
-  // when it covers the whole window. The overview payload carries the coverage, so the
-  // warning costs no extra request.
-  function journalCoverageGap(since) {
-    const coverage = (state.overview && state.overview.coverage) || null;
-    if (!coverage || !coverage.oldest || !since) return '';
-    const oldest = new Date(coverage.oldest);
-    if (Number.isNaN(oldest.getTime()) || since >= oldest) return '';
-    return '日志只保留到 ' + fmtMinute(oldest.toISOString()) + ' 之后：更早的部分只在图表统计里，下钻列表不会包含。';
   }
 
   // currentOpsQuery is the overview's state as a query string. It is the return
@@ -870,7 +855,8 @@
 
   // --- alerts ----------------------------------------------------------------
 
-  async function loadAlertEvents() {
+  async function loadAlertEvents(options) {
+    const live = Boolean(options && options.live);
     const table = el('opsAlertTable');
     if (!table) return;
     const body = table.querySelector('tbody');
@@ -881,13 +867,16 @@
     const ticket = alertLoads.begin();
     const current = () => ticket.isCurrent() && scope.window === state.window && scope.channel === state.channel;
     const range = windowRange();
-    body.replaceChildren();
+    // A live update replaces the rows only once the new ones are read, so the
+    // table does not blink empty on every request.
+    if (!live) body.replaceChildren();
     try {
       const params = assignParams(new URLSearchParams({ kind: 'system', action: 'alert_', limit: '50' }), {
         channel, since: range.since.toISOString(), until: range.until.toISOString(),
       });
       const payload = await ConsoleAPI.journal(params, { signal: ticket.signal });
       if (!current()) return;
+      body.replaceChildren();
       const rows = (payload.data || []).filter((record) => {
         const event = record.event || {};
         if (event.action !== 'alert_fired' && event.action !== 'alert_recovered') return false;
@@ -1071,47 +1060,6 @@
     return { model: '', requests, success, failed: requests - success, success_rate: success / requests, samples: requests };
   }
 
-  // --- coverage --------------------------------------------------------------
-
-  // excludedLabel explains an aggregate the matrix leaves out. These are counted
-  // but they are not channels, so a matrix that omits them has to say why.
-  function excludedLabel(name) {
-    if (name === 'http') return 'http（非推理路径：管理页、健康检查、公网扫描）';
-    if (name === 'probe') return 'probe（旧版本探测流量的历史聚合，已不再产生）';
-    return name;
-  }
-
-  function renderCoverage(payload) {
-    const node = el('opsCoverage');
-    if (!node) return;
-    const health = payload.ingestion;
-    const aggregationHealth = payload.aggregation_health;
-    setText("opsIngestion", health
-      ? `本实例日志采集：队列 ${health.queue} 条 / ${health.queued_bytes} 字节；已写入 ${health.written}；丢弃 ${health.dropped}；写入失败 ${health.write_failed}` + (health.last_success ? `；最近成功 ${health.last_success}` : "；尚无成功写入") + ((health.dropped || health.write_failed) ? "；日志可能不完整，请检查 Redis 和流量压力。" : "")
-      : "本实例日志采集健康状态不可用");
-    if (aggregationHealth && aggregationHealth.write_failed) {
- const node = el("opsIngestion");
- if (node) node.textContent += `；本实例指标聚合写入失败 ${aggregationHealth.write_failed} 次，统计可能不完整。`;
- }
-    const coverage = payload.coverage || {};
-    const parts = coverage.available !== false && typeof coverage.entries === 'number'
-      ? [`审计日志保留 ${coverage.entries} 条`]
-        .concat(coverage.oldest ? [`最早 ${coverage.oldest}`] : [])
-        .concat(coverage.newest ? [`最新 ${coverage.newest}`] : [])
-      : ['审计日志覆盖范围未能读取（接口未返回 coverage）'];
-    if (coverage.counts) {
-      const counts = Object.keys(coverage.counts).map((key) => `${key}=${coverage.counts[key]}`).join('、');
-      if (counts) parts.push(`采样计数：${counts}`);
-    }
-    parts.push('因此页面只承诺“保留窗口内”的结论，不承诺固定天数。');
-    const excluded = (payload.excluded_aggregates || []).map(excludedLabel);
-    if (excluded.length) parts.push('已计数但不在渠道矩阵中显示：' + excluded.join('；'));
-    if (payload.latency_precision) parts.push(payload.latency_precision);
-    parts.push('Token / TPS 只统计上报了用量的请求；未上报用量的渠道其 TPS 会偏低。');
-    // When the aggregation itself is disabled the reason matters more than the
-    // coverage caveat: the whole page is showing nothing because of it.
-    node.textContent = (payload.available === false && payload.note ? payload.note + '；' : '') + parts.join('；');
-  }
 
   // fillOptions rebuilds a <select> of one "all" entry plus the given values. The
   // options come from the payload, so they are rewritten on every refresh; the
@@ -1166,18 +1114,25 @@
 
   const overviewLoads = ConsoleUI.requestGate();
   const alertLoads = ConsoleUI.requestGate();
-  async function load() {
+  // load reads the overview. A live update (a request started or ended) keeps the
+  // page as it is until the new figures arrive and never cancels a read in
+  // flight; an operator's action (a filter, the refresh button) supersedes it.
+  async function load(options) {
+    const live = Boolean(options && options.live);
     if (state.loading) {
       state.refreshPending = true;
-      overviewLoads.cancel();
-      alertLoads.cancel();
+      if (!live) {
+        overviewLoads.cancel();
+        alertLoads.cancel();
+      }
       return;
     }
     state.loading = true;
+    state.lastLoadAt = Date.now();
     const ticket = overviewLoads.begin();
     const scope = { window: state.window, channel: state.channel };
     if (!state.overview) renderSkeletons();
-    setStatus('读取中…', 'is-warn');
+    if (!live) setStatus('读取中…', 'is-warn');
     syncUrl();
     try {
       const params = assignParams(new URLSearchParams({ window: String(state.window) }), { channel: state.channel });
@@ -1194,7 +1149,6 @@
       renderDistributions(payload);
       renderConcurrency(payload);
       renderMatrix(payload.matrix);
-      renderCoverage(payload);
       updateChannelOptions(payload.channels, state.channel);
       updateModelOptions(payload.matrix, state.model);
       if (runtimePayload) renderResources(runtimePayload);
@@ -1202,9 +1156,9 @@
       setText('opsRefreshedAt', fmtClock(new Date()));
       const collectionLoss = payload.ingestion && (payload.ingestion.dropped || payload.ingestion.write_failed);
       const aggregationLoss = payload.aggregation_health && payload.aggregation_health.write_failed;
-      setStatus(collectionLoss ? '日志采集存在丢失' : aggregationLoss ? '指标采集存在丢失' : '就绪', collectionLoss || aggregationLoss ? 'is-warn' : '');
-      state.countdown = state.refreshSeconds;
-      await loadAlertEvents();
+      if (payload.available === false && payload.note) setStatus(payload.note, 'is-warn');
+      else setStatus(collectionLoss ? '日志采集存在丢失' : aggregationLoss ? '指标采集存在丢失' : '就绪', collectionLoss || aggregationLoss ? 'is-warn' : '');
+      await loadAlertEvents({ live });
     } catch (error) {
       if (!ticket.accepts(error) || scope.window !== state.window || scope.channel !== state.channel) return;
       // A failed filter change has no valid historical scope to display.
@@ -1225,10 +1179,6 @@
         rowList(card, [{ label: '原因', value: String(error.message || error) }]);
         container.appendChild(card);
       }
-      // A failed read has no window to describe, so the coverage line states the
-      // failure instead of the retention it could not read.
-      setText('opsIngestion', '采集健康状态未能更新，请重试。');
-      setText('opsCoverage', `指标读取失败：${String(error.message || error)}。会话可能已过期，请重新登录后刷新。`);
       setStatus('读取失败', 'is-error');
       renderMatrix([]);
       await loadAlertEvents();
@@ -1238,7 +1188,7 @@
       // follow-up pass, rather than losing a filter change or starting N passes.
       if (state.refreshPending && (typeof document === 'undefined' || !document.hidden)) {
         state.refreshPending = false;
-        window.setTimeout(load, 0);
+        scheduleLiveRefresh();
       }
     }
   }
@@ -1319,30 +1269,46 @@
     });
   }
 
-  function tick() {
-    state.countdown -= 1;
-    if (state.countdown > 0) {
-      setText('opsCountdown', String(state.countdown));
-      return;
-    }
-    state.countdown = state.refreshSeconds;
-    // A background tab keeps no one informed: the dashboard it refreshes is not
-    // on screen, so the poll only burns the operator's quota and the server's
-    // aggregation budget. The backlog is fetched as soon as the tab is shown.
+  // The overview follows the live flow stream instead of a countdown: a request
+  // that starts or finishes changes the aggregates, so it triggers a read. Reads
+  // are spaced at least LIVE_MIN_GAP_MS apart so a busy gateway costs one read
+  // per gap, not one per request. LIVE_IDLE_MS re-reads a quiet page so the
+  // resource gauges and alert events still move with no traffic at all.
+  const LIVE_MIN_GAP_MS = 2000;
+  const LIVE_IDLE_MS = 30000;
+
+  function scheduleLiveRefresh() {
     if (typeof document !== 'undefined' && document.hidden) {
       state.refreshPending = true;
       return;
     }
-    flushPendingRefresh();
+    if (state.liveTimer != null) return;
+    const wait = Math.max(0, state.lastLoadAt + LIVE_MIN_GAP_MS - Date.now());
+    state.liveTimer = window.setTimeout(() => {
+      state.liveTimer = null;
+      return load({ live: true });
+    }, wait);
   }
 
-  // Returning to the tab has to catch up immediately: without this the operator
-  // can sit down to a dashboard that is up to a full refresh interval stale.
+  function onFlow(event) {
+    const detail = (event && event.detail) || {};
+    const mark = [detail.instance, detail.started, detail.completed].join(':');
+    if (mark === state.flowMark) return;
+    const first = state.flowMark === '';
+    state.flowMark = mark;
+    if (!first) scheduleLiveRefresh();
+  }
+
+  function idleRefresh() {
+    if (Date.now() - state.lastLoadAt >= LIVE_IDLE_MS) scheduleLiveRefresh();
+  }
+
+  // Returning to the tab catches up at once with whatever arrived while hidden.
   function flushPendingRefresh() {
     if (typeof document !== 'undefined' && document.hidden) return;
+    if (!state.refreshPending) return;
     state.refreshPending = false;
-    state.countdown = state.refreshSeconds;
-    load();
+    scheduleLiveRefresh();
   }
 
   // applyUrlState puts the page back where the URL says it should be: the filters
@@ -1373,5 +1339,6 @@
     load();
   }
   if (typeof document.addEventListener === 'function') { document.addEventListener('visibilitychange', flushPendingRefresh); }
-  state.timer = setInterval(tick, 1000);
+  if (typeof window.addEventListener === 'function') window.addEventListener('ops:flow', onFlow);
+  setInterval(idleRefresh, 5000);
 })();

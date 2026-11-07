@@ -53,7 +53,7 @@ func parseVideosRequest(r *http.Request) (VideosRequest, error) {
 	if err := decoder.Decode(&req); err != nil {
 		return req, err
 	}
-	var trailing interface{}
+	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return req, fmt.Errorf("unexpected trailing content in video request")
 	}
@@ -95,7 +95,15 @@ func rejectUnknownVideoFields(raw []byte) error {
 		return nil
 	}
 	sort.Strings(unknown)
-	return fmt.Errorf("unknown video request field %q", unknown[0])
+	return &unknownVideoFieldError{field: unknown[0]}
+}
+
+// unknownVideoFieldError names a JSON field the video endpoint does not
+// accept. The name is the caller's own input, so it is safe to echo.
+type unknownVideoFieldError struct{ field string }
+
+func (e *unknownVideoFieldError) Error() string {
+	return fmt.Sprintf("unknown video request field %q", e.field)
 }
 
 // normalizeVideoRequestAliases folds the grok2api-compatible spellings onto the
@@ -244,8 +252,8 @@ func (h *Handler) HandleVideosContent(w http.ResponseWriter, r *http.Request) {
 func videoIDFromPath(path string) string {
 	path = strings.TrimSpace(path)
 	for _, prefix := range []string{"/api/grok/tools/v1/videos/", "/grok/v1/videos/", "/v1/videos/"} {
-		if strings.HasPrefix(path, prefix) {
-			rest := strings.Trim(strings.TrimPrefix(path, prefix), "/")
+		if after, ok := strings.CutPrefix(path, prefix); ok {
+			rest := strings.Trim(after, "/")
 			rest = strings.TrimPrefix(rest, "generations/")
 			rest = strings.TrimSuffix(rest, "/content")
 			rest = strings.Trim(rest, "/")

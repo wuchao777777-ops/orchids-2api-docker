@@ -49,9 +49,6 @@
   const videoState = {
     taskID: "",
     running: false,
-    imageFileID: "",
-    referenceFileID: "",
-    sourceFileID: "",
     startAt: 0,
     elapsedTimer: null,
     lastProgress: 0,
@@ -262,12 +259,19 @@
       grokCapabilityState.counts = counts;
       grokCapabilityState.webSynced = Number(payload?.web_synced || 0);
       grokCapabilityState.webSyncError = String(payload?.web_sync_error || "");
+      // The Web plan mix and the media allowances steer the Imagine panel:
+      // a Free-only pool runs one image at a time, and a product no account
+      // has an allowance for is not offered.
+      grokCapabilityState.webPlans = payload?.web_plans && typeof payload.web_plans === "object" ? payload.web_plans : null;
+      grokCapabilityState.media = payload?.media && typeof payload.media === "object" ? payload.media : null;
       grokCapabilityState.failed = false;
     } catch (err) {
       grokCapabilityState.failed = true;
       console.debug("Failed to load Grok capabilities:", err);
     }
     grokCapabilityState.loaded = true;
+    window.GrokAvailability = Object.freeze({ webPlans: grokCapabilityState.webPlans || null, media: grokCapabilityState.media || null });
+    window.dispatchEvent(new CustomEvent("grok-availability", { detail: window.GrokAvailability }));
     ["chat", "imagine", "video", "voice", "cache"].forEach((tab) => {
       const badge = document.querySelector(`[data-capability="${tab}"]`);
       if (!badge) return;
@@ -2061,7 +2065,6 @@
           const option = document.createElement("option"); option.value = item.id; option.textContent = item.id; videoSelect.appendChild(option);
         });
         videoSelect.addEventListener("change", syncVideoRouteControls);
-        ["videoAction", "videoReferenceURL", "videoReferenceVoice"].forEach((id) => document.getElementById(id)?.addEventListener("change", syncVideoRouteControls));
         syncVideoRouteControls();
       }
       window.dispatchEvent(new CustomEvent("grok-models-loaded", { detail: routes }));
@@ -3216,71 +3219,33 @@
     return fileID;
   }
 
-  async function stagedVideoInput(fileID, url, expectedKind, importURL) {
-    if (fileID) return { file_id: fileID };
-    const value = String(url || "").trim();
-    if (!value) return null;
-    if (importURL && /^https?:\/\//i.test(value)) return { file_id: await importMediaURL(value, expectedKind) };
-    return { url: value };
-  }
-
   window.GrokMediaStaging = Object.freeze({ upload: stageMediaFile, importURL: importMediaURL });
 
-  function videoRouteActions(route) {
-    const explicit = Array.isArray(route?.video_actions)
-      ? route.video_actions.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean)
-      : [];
-    if (explicit.length) return new Set(explicit);
-    // A route that advertises no actions generates only.
-    return new Set(["generate"]);
-  }
-
+  // syncVideoRouteControls limits resolution and length to what the selected
+  // video route advertises (video_constraints). Grok Web generates from text
+  // only, so there are no reference or edit/extend controls to follow.
   function syncVideoRouteControls() {
     const route = chatState.routes?.find((item) => item.id === document.getElementById("videoModel")?.value);
-    const actions = videoRouteActions(route);
     const constraints = route?.video_constraints || {};
-    const action = document.getElementById("videoAction");
-    if (!action) return;
-    for (const option of action.options) option.disabled = !actions.has(option.value);
-    if (action.selectedOptions[0]?.disabled) action.value = actions.has("generate") ? "generate" : [...actions][0] || "generate";
-    const generate = action.value === "generate";
-    const canReferenceImages = constraints.reference_images === true;
-    const canReferenceAudio = constraints.reference_audio === true;
-    document.getElementById("videoReferenceURL").disabled = !canReferenceImages || !generate;
-    document.getElementById("videoReferenceVoice").disabled = !canReferenceAudio || !generate;
-    document.getElementById("videoSourceURL").disabled = generate;
     const resolution = document.getElementById("videoResolution");
-    const references = document.getElementById("videoReferenceURL").value || videoState.referenceFileID || document.getElementById("videoReferenceVoice").value;
-    const resolutions = Array.isArray(constraints.resolutions) ? new Set(constraints.resolutions) : null;
-    for (const option of resolution.options) {
-      const unsupported = resolutions ? !resolutions.has(option.value) : option.value === "1080p";
-      const blockedByReferences = !!references && option.value === "1080p" && constraints.max_resolution_with_references === "720p";
-      option.disabled = unsupported || blockedByReferences;
+    if (resolution) {
+      const resolutions = Array.isArray(constraints.resolutions) ? new Set(constraints.resolutions) : null;
+      for (const option of resolution.options) {
+        option.disabled = resolutions ? !resolutions.has(option.value) : option.value === "1080p";
+      }
+      if (resolution.selectedOptions[0]?.disabled) resolution.value = "720p";
     }
-    if (resolution.selectedOptions[0]?.disabled) resolution.value = "720p";
-    resolution.disabled = !generate;
     const length = document.getElementById("videoLength");
-    const range = constraints.lengths?.[action.value];
-    // Grok Web accepts 1–15 seconds (Free accounts are capped at 6 server-side).
-    length.min = Number(range?.min ?? 1);
-    length.max = Number(range?.max ?? 15);
-    length.disabled = action.value === "edit";
+    if (length) {
+      const range = constraints.lengths?.generate;
+      // Grok Web accepts 1–15 seconds (Free accounts are capped at 6 server-side).
+      length.min = Number(range?.min ?? 1);
+      length.max = Number(range?.max ?? 15);
+    }
   }
 
   async function createVideoTask(payload) {
-    const route = chatState.routes?.find((item) => item.id === payload.model);
-    const action = document.getElementById("videoAction")?.value || "generate";
-    let path = `${toolInferencePrefix()}/videos`;
-    if (action !== "generate") {
-      if (!videoRouteActions(route).has(action)) throw new Error("所选模型不支持此操作");
-      path += action === "edit" ? "/edits" : "/extensions";
-      const body = { model: payload.model, prompt: payload.prompt };
-      const video = await stagedVideoInput(videoState.sourceFileID, document.getElementById("videoSourceURL").value, "video", true);
-      if (!video) throw new Error("请填写原视频 URL 或上传原视频");
-      body.video = video;
-      if (action === "extend") body.duration = payload.seconds;
-      payload = body;
-    }
+    const path = `${toolInferencePrefix()}/videos`;
     const res = await fetch(path, {
       method: "POST",
       headers: toolAuthHeaders({ "Content-Type": "application/json" }),
@@ -3378,7 +3343,6 @@
       showToast(t("video.enterPrompt"), "error");
       return;
     }
-    const effort = String(document.getElementById("videoEffort")?.value || "").trim();
     const payload = {
       model: document.getElementById("videoModel")?.value || "grok-imagine-video",
       prompt,
@@ -3388,10 +3352,6 @@
       preset: String(document.getElementById("videoPreset")?.value || "custom"),
       input_references: [],
     };
-    const imageURL = String(document.getElementById("videoImageUrl")?.value || "").trim();
-    const imageRef = videoState.imageFileID ? { file_id: videoState.imageFileID } : (imageURL ? { url: imageURL } : null);
-    if (imageRef) payload.input_references = [imageRef];
-    if (effort) payload.reasoning_effort = effort;
     updateVideoMeta();
     resetVideoOutput(true);
     initVideoPreviewSlot();
@@ -4115,47 +4075,6 @@
         }
       });
     }
-    function bindStagedMediaInput({ buttonID, inputID, clearID, urlID, labelID, stateKey, kind }) {
-      const button = document.getElementById(buttonID);
-      const input = document.getElementById(inputID);
-      const clear = document.getElementById(clearID);
-      const url = document.getElementById(urlID);
-      const label = document.getElementById(labelID);
-      button?.addEventListener("click", () => input?.click());
-      input?.addEventListener("change", async () => {
-        const file = input.files?.[0];
-        if (!file) return;
-        videoState[stateKey] = "";
-        if (label) label.textContent = `${file.name} · 暂存中…`;
-        button.disabled = true;
-        try {
-          videoState[stateKey] = await stageMediaFile(file, kind);
-          if (url) url.value = "";
-          if (label) label.textContent = `${file.name} · 已暂存`;
-          syncVideoRouteControls();
-        } catch (err) {
-          input.value = "";
-          if (label) label.textContent = "暂存失败";
-          showToast(err.message || "媒体暂存失败", "error");
-        } finally { button.disabled = false; }
-      });
-      clear?.addEventListener("click", () => {
-        videoState[stateKey] = "";
-        if (input) input.value = "";
-        if (label) label.textContent = "未选择文件";
-        syncVideoRouteControls();
-      });
-      url?.addEventListener("input", () => {
-        if (!url.value.trim()) return;
-        videoState[stateKey] = "";
-        if (input) input.value = "";
-        if (label) label.textContent = "使用 URL";
-        syncVideoRouteControls();
-      });
-    }
-    bindStagedMediaInput({ buttonID: "videoSelectImageBtn", inputID: "videoImageFileInput", clearID: "videoClearImageBtn", urlID: "videoImageUrl", labelID: "videoImageFileName", stateKey: "imageFileID", kind: "image" });
-    bindStagedMediaInput({ buttonID: "videoSelectReferenceBtn", inputID: "videoReferenceFileInput", clearID: "videoClearReferenceBtn", urlID: "videoReferenceURL", labelID: "videoReferenceFileName", stateKey: "referenceFileID", kind: "image" });
-    bindStagedMediaInput({ buttonID: "videoSelectSourceBtn", inputID: "videoSourceFileInput", clearID: "videoClearSourceBtn", urlID: "videoSourceURL", labelID: "videoSourceFileName", stateKey: "sourceFileID", kind: "video" });
     const videoPrompt = document.getElementById("videoPrompt");
     if (videoPrompt) {
       videoPrompt.addEventListener("keydown", async (event) => {
@@ -4174,13 +4093,12 @@
       ["videoLength", "videoLength"],
       ["videoResolution", "videoResolution"],
       ["videoPreset", "videoPreset"],
-      ["videoEffort", "videoEffort"],
     ].forEach(([id, key]) => {
       const input = document.getElementById(id);
       if (!input) return;
       const sync = () => {
         saveGrokToolsUIState({ [key]: String(input.value || "") });
-        if (id !== "videoEffort") updateVideoMeta();
+        updateVideoMeta();
       };
       input.addEventListener("change", sync);
       input.addEventListener("input", sync);
@@ -4429,12 +4347,13 @@
     const videoLength = document.getElementById("videoLength");
     const videoResolution = document.getElementById("videoResolution");
     const videoPreset = document.getElementById("videoPreset");
-    const videoEffort = document.getElementById("videoEffort");
     if (videoRatio && typeof uiState.videoRatio === "string") videoRatio.value = uiState.videoRatio;
     if (videoLength && typeof uiState.videoLength === "string") videoLength.value = uiState.videoLength;
     if (videoResolution && typeof uiState.videoResolution === "string") videoResolution.value = uiState.videoResolution;
     if (videoPreset && typeof uiState.videoPreset === "string") videoPreset.value = uiState.videoPreset;
-    if (videoEffort && typeof uiState.videoEffort === "string") videoEffort.value = uiState.videoEffort;
+    // Video has no reasoning effort. A choice saved by the control this page
+    // used to show made every video request fail; forget it.
+    if (typeof uiState.videoEffort === "string") saveGrokToolsUIState({ videoEffort: undefined });
     resetVideoOutput();
     updateVideoMeta();
     setVideoButtons(false);

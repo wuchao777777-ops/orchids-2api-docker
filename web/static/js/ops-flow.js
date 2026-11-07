@@ -47,6 +47,9 @@
     if(snapshot && snapshot.instance_started!==next.instance_started){trend.clear();pulses.clear();}
     const delta=M.deltas(snapshot,next);
     snapshot=next;lastReceived=now();connected=true;
+    // The overview below has no stream of its own: every request that starts or
+    // ends here is its cue to re-read the aggregates.
+    if(typeof CustomEvent!=='undefined')window.dispatchEvent(new CustomEvent('ops:flow',{detail:{started:M.sum(next.routes||[],'started'),completed:M.sum(next.routes||[],'completed'),instance:next.instance_started}}));
     for(const [key,value] of delta)pulse(key,value);
     sample();schedule();
   }
@@ -147,7 +150,7 @@
     const known=snapshot&&!out;
     field(overviewFacts,'rate',known?M.number(rate.qps,2)+' req/s':'—');
     field(overviewFacts,'active',known?`${M.number(rate.active)} 进行中 · ${M.number(metric?.waiting)} 等待输出 · ${M.number(metric?.responding)} 已开始输出`:'—');
-    field(overviewFacts,'usage',known&&rate.output!=null?`输入 ${data.every(row=>M.numeric(row.input_tps)!=null)?M.number(M.sum(data,'input_tps'),1):'待上报'} / 输出 ${M.number(rate.output,1)} token/s；上游用量上报，不是逐字生成速度`:'待上报');
+    field(overviewFacts,'usage',known&&rate.output!=null?`输入 ${data.every(row=>M.numeric(row.input_tps)!=null)?M.number(M.sum(data,'input_tps'),1):'待上报'} / 输出 ${M.number(rate.output,1)} token/s`:'待上报');
     field(overviewFacts,'total',known?`接收 ${M.number(M.sum(data,'started'))} · 结束 ${M.number(M.sum(data,'completed'))}`:'—');
     field(overviewFacts,'failure',metric?`${M.number(metric.failed)}/${M.number(metric.completed)} 失败 · ${M.percent(metric.failure_rate)} · 限流 ${M.number(metric.rate_limited)} · 超时 ${M.number(metric.timeouts)} · 流中断 ${M.number(metric.stream_errors)} · 取消 ${M.number(metric.canceled)}`:'暂无样本');
     for(const key of ['accounts','capacity'])if(overviewFacts.get(key))overviewFacts.get(key).card.hidden=M.protocols.includes(selected);
@@ -171,11 +174,10 @@
       el(id).setAttribute('aria-selected',String(on));el(id).tabIndex=on?0:-1;
     }
   }
-  function openDetail(key,trigger,details=false){
-    selected=key;opener=trigger;tab(details?'details':detailTab);renderDetail();schedule();
+  function openDetail(key,trigger){
+    selected=key;opener=trigger;tab(detailTab);renderDetail();schedule();
     const drawer=el('flowDrawer');
     if(!drawer.open){drawer.showModal();el('flowDrawerClose').focus();}
-    if(details){const definitions=drawer.querySelector('details');if(definitions)definitions.open=true;}
   }
   function closeDetail(){el('flowDrawer').close();}
   // Band widths follow the 60-second request rate; with no rate in the window
@@ -299,7 +301,6 @@
       button.addEventListener('click',()=>tab(button.dataset.flowTab));
       button.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();tab(event.key==='Home'?'overview':event.key==='End'?'details':detailTab==='overview'?'details':'overview');el(detailTab==='overview'?'flowTabOverview':'flowTabDetails').focus();}});
     });
-    el('flowHelpOpen').addEventListener('click',()=>openDetail('gateway',el('flowHelpOpen'),true));
     el('flowMotion').addEventListener('click',()=>{motion=!motion;el('flowMotion').setAttribute('aria-pressed',String(motion));el('flowMotion').textContent=motion?'动画开启':'动画关闭';schedule();});
     el('flowFullscreen').addEventListener('click',()=>fullscreen().catch(()=>{}));
     document.addEventListener('fullscreenchange',fullscreenState);

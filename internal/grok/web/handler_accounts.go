@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/grok/grokbase"
 	"orchids-api/internal/grok/ratelimit"
 	"orchids-api/internal/store"
 	"strings"
@@ -192,34 +193,6 @@ func (s *chatAccountSession) Close() {
 	s.release = nil
 }
 
-// doSingleAccountRequest calls the Grok API once on a single account without retry switching.
-func (h *Handler) doSingleAccountRequest(
-	ctx context.Context,
-	sess *chatAccountSession,
-	payload map[string]interface{},
-	shouldMarkStatus grokAccountStatusPolicy,
-	callAPI func(*Client, context.Context, string, map[string]interface{}) (*http.Response, error),
-) (*http.Response, error) {
-	if sess == nil || strings.TrimSpace(sess.token) == "" {
-		return nil, fmt.Errorf("empty chat session")
-	}
-	client := h.currentClient()
-	if client == nil {
-		return nil, fmt.Errorf("grok client not configured")
-	}
-	requestCtx := withRateLimitAccount(ctx, sess.acc)
-	resp, err := callAPI(client, requestCtx, sess.token, payload)
-	if err != nil {
-		if shouldMarkStatus == nil || shouldMarkStatus(err) {
-			h.markAccountStatus(ctx, sess.acc, err)
-		}
-		return nil, err
-	}
-	return resp, nil
-}
-
-type grokAccountStatusPolicy func(error) bool
-
 func markAllGrokAccountStatuses(err error) bool {
 	if err == nil {
 		return false
@@ -249,8 +222,8 @@ func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
 func (h *Handler) doChatWithAutoSwitchRebuild(
 	ctx context.Context,
 	sess *chatAccountSession,
-	payload *map[string]interface{},
-	rebuild func(token string) (map[string]interface{}, error),
+	payload *map[string]any,
+	rebuild func(token string) (map[string]any, error),
 ) (*http.Response, error) {
 	return h.doAutoSwitchRequest(ctx, sess, payload, rebuild, (*Client).doChat)
 }
@@ -260,9 +233,9 @@ func (h *Handler) doChatWithAutoSwitchRebuild(
 func (h *Handler) doAutoSwitchRequest(
 	ctx context.Context,
 	sess *chatAccountSession,
-	payload *map[string]interface{},
-	rebuild func(token string) (map[string]interface{}, error),
-	callAPI func(*Client, context.Context, string, map[string]interface{}) (*http.Response, error),
+	payload *map[string]any,
+	rebuild func(token string) (map[string]any, error),
+	callAPI func(*Client, context.Context, string, map[string]any) (*http.Response, error),
 ) (*http.Response, error) {
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
@@ -374,86 +347,36 @@ func isSharedGrokRateLimitError(err error) bool {
 		strings.Contains(lower, " cooling down; retry-after=")
 }
 
-type grokQuotaSyncJob struct {
-	account  store.Account
-	headers  http.Header
-	requests int64
-}
-
 func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 	if acc == nil || h == nil || h.lb == nil || h.lb.Store == nil {
 		return
 	}
-	h.quotaOnce.Do(func() {
-		h.quotaPending = make(map[int64]grokQuotaSyncJob)
-		h.quotaWake = make(chan struct{}, 1)
-		go h.runGrokQuotaSync()
-	})
-	h.quotaMu.Lock()
-	job := h.quotaPending[acc.ID]
-	job.account = *acc
-	job.headers = headers.Clone()
-	job.requests++
-	h.quotaPending[acc.ID] = job
-	h.quotaMu.Unlock()
-	select {
-	case h.quotaWake <- struct{}{}:
-	default:
-	}
+	h.quota.Enqueue(acc, headers, h.persistGrokQuotaSync)
 }
 
-func (h *Handler) runGrokQuotaSync() {
-	for range h.quotaWake {
-		for {
-			h.quotaMu.Lock()
-			var accountID int64
-			var job grokQuotaSyncJob
-			for id, pending := range h.quotaPending {
-				accountID, job = id, pending
-				delete(h.quotaPending, id)
-				break
-			}
-			h.quotaMu.Unlock()
-			if accountID == 0 {
-				break
-			}
-			h.persistGrokQuotaSync(job)
-		}
-	}
-}
-
-func (h *Handler) persistGrokQuotaSync(job grokQuotaSyncJob) {
+func (h *Handler) persistGrokQuotaSync(job grokbase.QuotaJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := h.lb.Store.IncrementAccountStats(ctx, job.account.ID, 0, job.requests); err != nil {
-		slog.Warn("grok usage touch failed", "account_id", job.account.ID, "error", err)
+	if err := h.lb.Store.IncrementAccountStats(ctx, job.Account.ID, 0, job.Requests); err != nil {
+		slog.Warn("grok usage touch failed", "account_id", job.Account.ID, "error", err)
 	}
 
-	headers := job.headers
-	info := ratelimit.ParseHeaders(headers)
-	requests := parseBuildRateLimitWindow(headers, "requests")
-	tokens := parseBuildRateLimitWindow(headers, "tokens")
-	hasBuildHeaders := requests.HasLimit || requests.HasRemaining || !requests.ResetAt.IsZero() || tokens.HasLimit || tokens.HasRemaining || !tokens.ResetAt.IsZero()
-	if info == nil && !hasBuildHeaders {
-		provider := ProviderForAccount(&job.account)
-		if _, err := h.lb.Store.ConsumeGrokQuota(ctx, job.account.ID, provider, float64(job.requests)); err != nil {
-			slog.Warn("grok local quota decrement failed", "account_id", job.account.ID, "error", err)
+	// grok.com answers with quota headers only on some routes. Without them,
+	// count the request against the locally tracked window.
+	info := ratelimit.ParseHeaders(job.Headers)
+	if info == nil {
+		if _, err := h.lb.Store.ConsumeGrokQuota(ctx, job.Account.ID, ProviderForAccount(&job.Account), float64(job.Requests)); err != nil {
+			slog.Warn("grok local quota decrement failed", "account_id", job.Account.ID, "error", err)
 		}
 		return
 	}
-	latest, err := h.lb.Store.GetAccount(ctx, job.account.ID)
+	latest, err := h.lb.Store.GetAccount(ctx, job.Account.ID)
 	if err != nil || latest == nil {
-		slog.Warn("grok quota account reload failed", "account_id", job.account.ID, "error", err)
+		slog.Warn("grok quota account reload failed", "account_id", job.Account.ID, "error", err)
 		return
 	}
 	NormalizeProvider(latest)
-	provider := ProviderForAccount(latest)
-	changed := false
-	if provider == ProviderBuild {
-		changed = ApplyBuildRateLimits(latest, headers)
-	} else {
-		changed = info != nil && ApplyQuotaInfo(latest, info)
-	}
+	changed := ApplyQuotaInfo(latest, info)
 	if changed {
 		if err := h.lb.Store.UpdateAccount(ctx, latest); err != nil {
 			slog.Warn("grok quota update failed", "account_id", latest.ID, "error", err)

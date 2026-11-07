@@ -2,13 +2,10 @@ package web
 
 import (
 	"bytes"
-	"compress/flate"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand"
 	"net/http"
@@ -16,6 +13,7 @@ import (
 	"orchids-api/internal/chatwire"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/grok/grokbase"
 	"orchids-api/internal/grok/ratelimit"
 	"orchids-api/internal/grok/web/egress"
 	"orchids-api/internal/httpclient"
@@ -23,9 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/andybalholm/brotli"
-	"github.com/klauspost/compress/zstd"
 )
 
 func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
@@ -46,11 +41,11 @@ func parseUpstreamStatus(err error) int {
 		return 0
 	}
 	raw := err.Error()
-	idx := strings.Index(raw, "status=")
-	if idx < 0 {
+	_, after, ok := strings.Cut(raw, "status=")
+	if !ok {
 		return 0
 	}
-	rest := raw[idx+len("status="):]
+	rest := after
 	n := 0
 	for n < len(rest) && rest[n] >= '0' && rest[n] <= '9' {
 		n++
@@ -84,10 +79,7 @@ func backoffDelay(baseDelay, retry429Delay, lastDelay time.Duration, attempt int
 		if lastDelay <= 0 {
 			lastDelay = baseDelay
 		}
-		upper := lastDelay * 3
-		if upper < baseDelay {
-			upper = baseDelay
-		}
+		upper := max(lastDelay*3, baseDelay)
 		delay := baseDelay + time.Duration(rand.Int63n(int64(upper-baseDelay)+1))
 		if delay > maxDelay {
 			return maxDelay
@@ -98,90 +90,11 @@ func backoffDelay(baseDelay, retry429Delay, lastDelay time.Duration, attempt int
 	if baseDelay <= 0 {
 		baseDelay = 500 * time.Millisecond
 	}
-	exp := baseDelay * time.Duration(1<<max(0, attempt))
-	if exp > maxDelay {
-		exp = maxDelay
-	}
+	exp := min(baseDelay*time.Duration(1<<max(0, attempt)), maxDelay)
 	if exp <= 0 {
 		return baseDelay
 	}
 	return time.Duration(rand.Int63n(int64(exp) + 1))
-}
-
-type responseBodyCloser struct {
-	io.Reader
-	closers []io.Closer
-}
-
-type closeFunc func() error
-
-func (fn closeFunc) Close() error {
-	return fn()
-}
-
-func (r responseBodyCloser) Close() error {
-	var firstErr error
-	for _, closer := range r.closers {
-		if closer == nil {
-			continue
-		}
-		if err := closer.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
-func decodeHTTPResponseBody(resp *http.Response) error {
-	if resp == nil || resp.Body == nil {
-		return nil
-	}
-	encoding := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
-	if idx := strings.Index(encoding, ","); idx >= 0 {
-		encoding = strings.TrimSpace(encoding[:idx])
-	}
-	if encoding == "" || encoding == "identity" {
-		return nil
-	}
-
-	original := resp.Body
-	var (
-		reader  io.Reader
-		closers []io.Closer
-	)
-	switch encoding {
-	case "gzip":
-		gz, err := gzip.NewReader(original)
-		if err != nil {
-			return err
-		}
-		reader = gz
-		closers = append(closers, gz)
-	case "deflate":
-		fr := flate.NewReader(original)
-		reader = fr
-		closers = append(closers, fr)
-	case "br":
-		reader = brotli.NewReader(original)
-	case "zstd":
-		zr, err := zstd.NewReader(original)
-		if err != nil {
-			return err
-		}
-		reader = zr
-		closers = append(closers, closeFunc(func() error {
-			zr.Close()
-			return nil
-		}))
-	default:
-		return nil
-	}
-	closers = append(closers, original)
-	resp.Body = responseBodyCloser{Reader: reader, closers: closers}
-	resp.Header.Del("Content-Encoding")
-	resp.Header.Del("Content-Length")
-	resp.ContentLength = -1
-	return nil
 }
 
 func (c *Client) doRequest(ctx context.Context, reqURL string, method string, body []byte, headers http.Header, asset bool) (*http.Response, error) {
@@ -199,7 +112,7 @@ func appChatRateLimitRequest(body []byte, headers http.Header) (token, model str
 	if len(body) == 0 {
 		return token, ""
 	}
-	var payload map[string]interface{}
+	var payload map[string]any
 	if json.Unmarshal(body, &payload) == nil {
 		model = firstNonEmpty(chatwire.ParseLooseStringAny(payload["modelName"]), chatwire.ParseLooseStringAny(payload["model"]))
 	}
@@ -274,7 +187,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			do = lease.Do
 		}
 		diagnosticAttempt := debug.BeginUpstream(ctx, method, reqURL, req.Header, body)
-		resp, err = doUpstreamHTTP(req, do, c.cfg.GrokWebStreamIdleTimeout(), upstreamIdleBytes)
+		resp, err = doUpstreamHTTP(req, do, c.cfg.GrokWebStreamIdleTimeout())
 		diagnosticAttempt.Response(resp, err)
 		if err != nil {
 			if c.egress != nil && leaseNodeID != "" {
@@ -297,7 +210,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeSuccess)
 			}
 			if lease != nil {
-				resp.Body = &leaseResponseBody{ReadCloser: resp.Body, release: releaseLease}
+				resp.Body = &grokbase.LeaseBody{ReadCloser: resp.Body, Release: releaseLease}
 			}
 			return resp, nil
 		}

@@ -6,22 +6,29 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
-	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
 )
 
-func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, token, prompt, format string, n int, publicBase string) {
+// streamImageEdit streams one edit call. editInputs are the uploaded input
+// asset IDs, which the edit stream echoes back and which are not results.
+func (h *Handler) streamImageEdit(w http.ResponseWriter, body io.Reader, token, prompt, format string, publicBase string, editInputs []string) {
+	h.streamImageResults(w, body, token, prompt, format, 1, publicBase, editInputs)
+}
+
+// streamImageResults relays image progress and then the finished images. A
+// non-nil editInputs marks an edit stream, whose previews and echoed inputs
+// are dropped from the results.
+func (h *Handler) streamImageResults(w http.ResponseWriter, body io.Reader, token, prompt, format string, n int, publicBase string, editInputs []string) {
 	flusher := streamResponseHeaders(w)
 
 	field := imageResponseField(format)
 	var urls []string
 	targetIndex := -1
 
-	if err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
+	if err := parseUpstreamLines(body, func(resp map[string]any) error {
 		if index, progress, ok := extractImageProgress(resp); ok {
 			outIndex := index
 			if n == 1 {
@@ -33,7 +40,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 				}
 				outIndex = 0
 			}
-			data := map[string]interface{}{
+			data := map[string]any{
 				"type":     "image_generation.partial_image",
 				field:      "",
 				"index":    outIndex,
@@ -41,13 +48,20 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 			}
 			writeSSE(w, flusher, "image_generation.partial_image", encodeJSONBytes(data))
 		}
-		urls = appendImageResultURLs(urls, resp)
+		if editInputs != nil {
+			urls = appendImageEditResultURLs(urls, resp)
+		} else {
+			urls = appendImageResultURLs(urls, resp)
+		}
 		return nil
 	}); err != nil {
 		writeSSEStreamError(w, flusher, nil, "stream parse error: "+err.Error())
 		return
 	}
 
+	if editInputs != nil {
+		urls = withoutInputAssets(urls, editInputs)
+	}
 	urls = normalizeGeneratedImageURLs(urls, n)
 	if len(urls) == 0 {
 		writeSSECodedError(w, flusher, "no image generated", "no_image_generated")
@@ -72,7 +86,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 				val = publicBase + val
 			}
 		}
-		data := map[string]interface{}{
+		data := map[string]any{
 			"type":           "image_generation.completed",
 			field:            val,
 			"index":          i,
@@ -129,7 +143,7 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	}
 	req.ResponseFormat = normalizeImageResponseFormat(req.ResponseFormat)
 	if !isImageGenerationModel(req.Model) {
-		writeGrokError(w, http.StatusBadRequest, "image generation model must be one of [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0]")
+		writeGrokError(w, http.StatusBadRequest, "image generation model must be one of [grok-imagine-image, grok-imagine-image-2.0]")
 		return
 	}
 	ratio, ratioErr := normalizeImageAspectRatio(req.AspectRatio, req.Size)
@@ -150,10 +164,6 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	}
 	if req.Stream && req.N != 1 {
 		writeGrokError(w, http.StatusBadRequest, "Streaming is only supported with n=1.")
-		return
-	}
-	if req.Stream && normalizeModelID(req.Model) == "grok-imagine-image-lite" {
-		writeGrokError(w, http.StatusBadRequest, "grok-imagine-image-lite does not support stream")
 		return
 	}
 	if req.PartialImages != nil {
@@ -187,7 +197,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 
 	spec, ok := ResolveModel(req.Model)
 	if !ok || !spec.IsImage || !isImageGenerationModel(spec.ID) {
-		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0]", req.Model))
+		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-image, grok-imagine-image-2.0]", req.Model))
 		return
 	}
 	spec = h.applyPersistedRoute(ctx, spec)
@@ -204,33 +214,10 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	}()
 
 	if req.Stream {
-		if normalizeModelID(spec.ID) == "grok-imagine-image-lite" {
-			h.streamAppChatImagesGeneration(ctx, w, sess, spec, req, publicBase)
-			return
-		}
 		h.streamImagineWSGeneration(ctx, w, sess, spec, req)
 		return
 	}
-	if normalizeModelID(spec.ID) != "grok-imagine-image-lite" {
-		h.collectImagineWSGeneration(ctx, w, sess, spec, req, publicBase)
-		return
-	}
-	urls, err := h.collectAppChatImageURLs(ctx, sess, spec, req, true)
-	if err != nil {
-		writeGrokUpstreamError(w, err)
-		return
-	}
-	if len(urls) == 0 {
-		writeGrokError(w, http.StatusBadGateway, "no image generated")
-		return
-	}
-
-	h.writeImageResults(w, ctx, sess.token, req.Prompt, urls, req.ResponseFormat, publicBase, true)
-	if cost, priced := pricing.EstimateImageCost(spec.UpstreamModel, req.Resolution, req.Quality, len(urls)); priced {
-		h.settleMediaBilling(ctx, req.Model, cost, map[string]interface{}{
-			"plane": "web", "images": len(urls), "resolution": req.Resolution,
-		})
-	}
+	h.collectImagineWSGeneration(ctx, w, sess, spec, req, publicBase)
 }
 
 func imagineWSProModel(modelID string) bool {
@@ -277,7 +264,7 @@ func (h *Handler) streamImagineWSGeneration(ctx context.Context, w http.Response
 			value, err := h.imagineImageOutputValue(ctx, sess.token, ev, "b64_json")
 			if err == nil && strings.TrimSpace(value) != "" {
 				outputFormat := imageOutputFormatFromBase64(value)
-				writeSSE(w, flusher, "image_generation.partial_image", encodeJSONBytes(map[string]interface{}{
+				writeSSE(w, flusher, "image_generation.partial_image", encodeJSONBytes(map[string]any{
 					"type": "image_generation.partial_image", "b64_json": value,
 					"created_at": time.Now().Unix(), "size": imageEventSize("b64_json", value), "quality": "auto",
 					"background": "auto", "output_format": outputFormat, "partial_image_index": partialIndex,
@@ -294,7 +281,7 @@ func (h *Handler) streamImagineWSGeneration(ctx context.Context, w http.Response
 			return
 		}
 		outputFormat := imageOutputFormatFromBase64(value)
-		writeSSE(w, flusher, "image_generation.completed", encodeJSONBytes(map[string]interface{}{
+		writeSSE(w, flusher, "image_generation.completed", encodeJSONBytes(map[string]any{
 			"type": "image_generation.completed", "b64_json": value,
 			"created_at": time.Now().Unix(), "size": imageEventSize("b64_json", value), "quality": "auto",
 			"background": "auto", "output_format": outputFormat,
@@ -318,7 +305,7 @@ func (h *Handler) collectImagineWSGeneration(ctx context.Context, w http.Respons
 	nsfw := h.imagineNSFWAllowed(req.NSFW)
 	events, errs := h.streamImagineWSImages(ctx, sess, req.Prompt, req.AspectRatio, req.N, nsfw, imagineWSProModel(spec.ID))
 	field := imageResponseField(req.ResponseFormat)
-	data := make([]map[string]interface{}, 0, req.N)
+	data := make([]map[string]any, 0, req.N)
 	for ev := range events {
 		if !ev.Final || (strings.TrimSpace(ev.Blob) == "" && strings.TrimSpace(ev.URL) == "") {
 			continue
@@ -337,7 +324,7 @@ func (h *Handler) collectImagineWSGeneration(ctx context.Context, w http.Respons
 				value = publicBase + value
 			}
 		}
-		data = append(data, map[string]interface{}{
+		data = append(data, map[string]any{
 			field:            value,
 			"revised_prompt": "",
 			"mime_type":      imageMimeTypeForValue(field, value),
@@ -351,146 +338,8 @@ func (h *Handler) collectImagineWSGeneration(ctx context.Context, w http.Respons
 		writeGrokError(w, http.StatusBadGateway, "no image generated")
 		return
 	}
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"created": time.Now().Unix(), "data": data,
 		"usage": buildImageUsagePayload(req.Prompt, len(data)),
 	})
-}
-
-func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, publicBase string) {
-	onePayload := h.webClient().appChatImagePayload(spec, req.Prompt, req.Size, req.N)
-	ensureImageNSFW(onePayload)
-	resp, err := h.doAppChatImageRequest(ctx, sess, spec, &onePayload, true)
-	if err != nil {
-		slog.Warn("grok app-chat image stream upstream failed",
-			"model", req.Model,
-			"status", parseUpstreamStatus(err),
-			"error", err,
-		)
-		writeGrokUpstreamError(w, err)
-		return
-	}
-	defer resp.Body.Close()
-	h.syncGrokQuota(sess.acc, resp.Header)
-	h.streamImageGeneration(w, resp.Body, sess.token, req.Prompt, req.ResponseFormat, req.N, publicBase)
-	if cost, priced := pricing.EstimateImageCost(spec.UpstreamModel, req.Resolution, req.Quality, req.N); priced {
-		h.settleMediaBilling(ctx, req.Model, cost, map[string]interface{}{
-			"plane": "web", "stream": true, "images": req.N,
-		})
-	}
-}
-
-func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, allowSwitch bool) ([]string, error) {
-	var urls []string
-	var debugShapes []string
-	var debugNoImage []string
-
-	// Grok upstream may return only 2 images per call and may repeat.
-	// To reach N, request 1 image per call without rewriting the user's prompt.
-	maxAttempts := req.N * 2
-	if maxAttempts < 4 {
-		maxAttempts = 4
-	}
-	deadline := time.Now().Add(60 * time.Second)
-	excludedAccountIDs := make([]int64, 0, maxAttempts)
-	for i := 0; i < maxAttempts; i++ {
-		cur := normalizeGeneratedImageURLs(urls, 0)
-		if len(cur) >= req.N {
-			urls = cur
-			break
-		}
-		if time.Now().After(deadline) {
-			break
-		}
-		count := req.N
-		payload := h.webClient().appChatImagePayload(spec, req.Prompt, req.Size, count)
-		ensureImageNSFW(payload)
-		resp, err := h.doAppChatImageRequest(ctx, sess, spec, &payload, allowSwitch)
-		if err != nil {
-			slog.Warn("grok app-chat image upstream failed",
-				"model", req.Model,
-				"status", parseUpstreamStatus(err),
-				"error", err,
-			)
-			return nil, err
-		}
-		imageLimitHit := false
-		h.syncGrokQuota(sess.acc, resp.Header)
-		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
-			if len(debugShapes) < 20 {
-				debugShapes = append(debugShapes, imageDebugShape(line))
-			}
-			if len(debugNoImage) < 20 {
-				debugNoImage = append(debugNoImage, appChatImageNoImageDiagnostics(line)...)
-			}
-			if isAppChatImageLimitResponse(line) {
-				imageLimitHit = true
-			}
-			urls = append(urls, extractAppChatImageURLs(line)...)
-			return nil
-		})
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("stream parse error: %w", err)
-		}
-		urls = normalizeGeneratedImageURLs(urls, 0)
-		if len(urls) == 0 && imageLimitHit {
-			err := fmt.Errorf("grok upstream status=429 body=image generation limit reached")
-			if sess.acc != nil && sess.acc.GrokWebQuota.Weekly.HasLimit {
-				// Paid: the weekly pool is spent; the account still chats.
-				h.noteMediaExhausted(ctx, sess.acc, mediaLite)
-			} else {
-				h.markAccountStatus(ctx, sess.acc, err)
-			}
-			if !allowSwitch || sess == nil || i == maxAttempts-1 {
-				return nil, err
-			}
-			if sess.acc != nil && sess.acc.ID != 0 {
-				if !slices.Contains(excludedAccountIDs, sess.acc.ID) {
-					excludedAccountIDs = append(excludedAccountIDs, sess.acc.ID)
-				}
-				sess.Close()
-				next, switchErr := h.openChatAccountSessionForModelExcluding(ctx, excludedAccountIDs, spec)
-				if switchErr != nil {
-					// The switch failed, so the upgrade-limit error above is the one
-					// the client acts on — but the pool's reason must not vanish: it is
-					// the only record of why another account could not be found.
-					slog.Warn("No image account to switch to after the generation limit",
-						"error", switchErr, "account_id", sess.acc.ID)
-					return nil, err
-				}
-				sess.acc = next.acc
-				sess.token = next.token
-				sess.poolCandidates = next.poolCandidates
-				sess.release = next.release
-			}
-		}
-	}
-	urls = normalizeGeneratedImageURLs(urls, req.N)
-	if len(urls) == 0 {
-		slog.Warn("grok image generation returned no images",
-			"model", req.Model,
-			"attempts", maxAttempts,
-			"event_shapes", uniqueStrings(debugShapes),
-			"diagnostics", uniqueStrings(debugNoImage),
-		)
-		return nil, fmt.Errorf("no image generated")
-	}
-	return urls, nil
-}
-
-func (h *Handler) doAppChatImageRequest(ctx context.Context, sess *chatAccountSession, spec ModelSpec, payload *map[string]interface{}, allowSwitch bool) (*http.Response, error) {
-	if payload == nil {
-		return nil, fmt.Errorf("empty payload")
-	}
-	if normalizeModelID(spec.ID) == "grok-imagine-image-lite" {
-		if allowSwitch {
-			return h.doAutoSwitchRequest(ctx, sess, payload, nil, (*Client).doChat)
-		}
-		return h.doSingleAccountRequest(ctx, sess, *payload, markAllGrokAccountStatuses, (*Client).doChat)
-	}
-	if allowSwitch {
-		return h.doAutoSwitchRequest(ctx, sess, payload, nil, (*Client).doAppChatCreateAndRespond)
-	}
-	return h.doSingleAccountRequest(ctx, sess, *payload, markAllGrokAccountStatuses, (*Client).doAppChatCreateAndRespond)
 }

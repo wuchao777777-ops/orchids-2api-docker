@@ -259,7 +259,7 @@ func (h *Handler) imageOutputValue(ctx context.Context, token, url, format strin
 func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, token, prompt string, urls []string, format, publicBase string, strict bool) {
 	_ = strict // kept for callers: every conversion failure is fatal now.
 	field := imageResponseField(format)
-	data := make([]map[string]interface{}, 0, len(urls))
+	data := make([]map[string]any, 0, len(urls))
 	for _, u := range urls {
 		val, err := h.imageOutputValue(ctx, token, u, format)
 		if err != nil {
@@ -278,7 +278,7 @@ func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, 
 				val = publicBase + val
 			}
 		}
-		data = append(data, map[string]interface{}{
+		data = append(data, map[string]any{
 			field: val,
 			// Both fields are always present in grok2api's response: an empty
 			// string (not null) for the unused revised prompt, and an explicit
@@ -287,7 +287,7 @@ func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, 
 			"mime_type":      imageMimeTypeForValue(field, val),
 		})
 	}
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"created": time.Now().Unix(),
 		"data":    data,
 		"usage":   buildImageUsagePayload(prompt, len(data)),
@@ -297,14 +297,15 @@ func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, 
 // collectImageChatURLs runs the chat image edit/generation loop (n images from
 // ceil(n/2) calls) and returns the normalized URLs. On failure it writes the
 // error response and returns ok=false.
-func (h *Handler) collectImageChatURLs(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, rawPayload *map[string]interface{}, rebuildPayload func(string) (map[string]interface{}, error), n int) ([]string, bool) {
-	callsNeeded := (n + 1) / 2
-	if callsNeeded < 1 {
-		callsNeeded = 1
-	}
+// collectImageChatURLs runs image edit calls until n edited images are in hand.
+// One grok.com edit call produces one finished image (grok2api serves edits
+// with n=1 only); the other images its stream carries are the progressive
+// previews of that one image. Asking for two therefore takes two calls.
+func (h *Handler) collectImageChatURLs(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, rawPayload *map[string]any, rebuildPayload func(string) (map[string]any, error), n int) ([]string, bool) {
+	callsNeeded := max(n, 1)
 	var urls []string
 	excluded := make([]int64, 0, 4)
-	for i, switches := 0, 0; i < callsNeeded; i++ {
+	for i, switches := 0, 0; i < callsNeeded && len(uniqueStrings(urls)) < n; i++ {
 		resp, err := h.doChatWithAutoSwitchRebuild(ctx, sess, rawPayload, rebuildPayload)
 		if err != nil {
 			writeGrokUpstreamError(w, err)
@@ -315,11 +316,11 @@ func (h *Handler) collectImageChatURLs(ctx context.Context, w http.ResponseWrite
 		inputs := imageEditInputAssets(*rawPayload)
 		limitHit := false
 		var callURLs []string
-		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
+		err = parseUpstreamLines(resp.Body, func(line map[string]any) error {
 			if isAppChatImageLimitResponse(line) {
 				limitHit = true
 			}
-			callURLs = appendImageResultURLs(callURLs, line)
+			callURLs = appendImageEditResultURLs(callURLs, line)
 			return nil
 		})
 		resp.Body.Close()
@@ -367,15 +368,49 @@ func (h *Handler) collectImageChatURLs(ctx context.Context, w http.ResponseWrite
 	return urls, true
 }
 
+// appendImageEditResultURLs adds the finished images of one edit stream line.
+// A streamingImageGenerationResponse frame below 100% carries a progressive,
+// still blurry preview of the result, and a moderated frame an image grok.com
+// withheld; neither is a result.
+func appendImageEditResultURLs(urls []string, line map[string]any) []string {
+	if imageEditPreviewFrame(line) {
+		return urls
+	}
+	return appendImageResultURLs(urls, line)
+}
+
+// imageEditPreviewFrame reports a progressive or moderated image frame.
+func imageEditPreviewFrame(line map[string]any) bool {
+	frame := mapAtAnyPath(line,
+		[]string{"streamingImageGenerationResponse"},
+		[]string{"streaming_image_generation_response"},
+		[]string{"modelResponse", "streamingImageGenerationResponse"},
+	)
+	if frame == nil {
+		return false
+	}
+	if moderated, _ := frame["moderated"].(bool); moderated {
+		return true
+	}
+	if final, _ := frame["isFinal"].(bool); final {
+		return false
+	}
+	raw, ok := frame["progress"]
+	if !ok {
+		return false
+	}
+	return interfaceToInt(raw) < 100
+}
+
 // imageEditInputAssets returns the asset IDs an edit request uploaded.
-func imageEditInputAssets(payload map[string]interface{}) []string {
-	media, _ := payload["mediaGenInput"].(map[string]interface{})
-	edit, _ := media["imageToImage"].(map[string]interface{})
+func imageEditInputAssets(payload map[string]any) []string {
+	media, _ := payload["mediaGenInput"].(map[string]any)
+	edit, _ := media["imageToImage"].(map[string]any)
 	var out []string
 	switch assets := edit["inputAssets"].(type) {
 	case []string:
 		out = append(out, assets...)
-	case []interface{}:
+	case []any:
 		for _, value := range assets {
 			if id, ok := value.(string); ok {
 				out = append(out, id)
@@ -471,4 +506,12 @@ func imageEventSize(field, value string) string {
 		return "auto"
 	}
 	return imageSizeFromBase64(value)
+}
+
+// nonNilStrings returns values, or an empty non-nil slice for none.
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }

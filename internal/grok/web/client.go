@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"encoding/json"
@@ -87,7 +86,7 @@ func (c *Client) userAgent() string {
 	return defaultUA
 }
 
-func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCount int) map[string]interface{} {
+func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCount int) map[string]any {
 	cnt := imageCount
 	if cnt <= 0 {
 		cnt = 2
@@ -98,16 +97,16 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 		noMemory = c.cfg.GrokChatDisableMemory(noMemory)
 	}
 	includeModelFields := spec.IsImage || spec.IsVideo
-	responseMetadata := map[string]interface{}{}
+	responseMetadata := map[string]any{}
 	if includeModelFields {
-		responseMetadata["modelConfigOverride"] = map[string]interface{}{
-			"modelMap": map[string]interface{}{},
+		responseMetadata["modelConfigOverride"] = map[string]any{
+			"modelMap": map[string]any{},
 		}
-		responseMetadata["requestModelDetails"] = map[string]interface{}{
+		responseMetadata["requestModelDetails"] = map[string]any{
 			"modelId": spec.UpstreamModel,
 		}
 	}
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"collectionIds":               []string{},
 		"disabledConnectorIds":        []string{},
 		"temporary":                   temporary,
@@ -137,7 +136,7 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 		payload["modelName"] = spec.UpstreamModel
 	}
 	if imageCount > 0 {
-		payload["toolOverrides"] = map[string]interface{}{"imageGen": true}
+		payload["toolOverrides"] = map[string]any{"imageGen": true}
 	}
 	if includeModelFields && strings.TrimSpace(spec.ModelMode) != "" {
 		payload["modelMode"] = spec.ModelMode
@@ -158,30 +157,6 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 			payload["customPersonality"] = customPersonality
 		}
 	}
-	return payload
-}
-
-func (c *Client) appChatImagePayload(spec ModelSpec, prompt, _ string, _ int) map[string]interface{} {
-	message := strings.TrimSpace(prompt)
-	if message != "" && !strings.HasPrefix(strings.ToLower(message), "drawing:") {
-		message = "Drawing: " + message
-	}
-	// grok.com refuses image-model fields (modelName grok-imagine-image-lite,
-	// modelTier, requestModelDetails) for Free accounts with "Grok is under
-	// heavy usage"; a plain fast-mode chat with image generation enabled is
-	// what the web app sends, and it draws from the fast quota every plan has.
-	_ = spec
-	chat := ModelSpec{ID: "grok-chat-fast", UpstreamModel: "grok-chat-fast", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic}
-	payload := c.chatPayload(chat, message, false, 2)
-	payload["modeId"] = "fast"
-	payload["enableImageGeneration"] = true
-	payload["imageGenerationCount"] = 2
-	// Free accounts are shared by every caller: account memory would steer the
-	// drawing toward earlier prompts, and web search lets the chat model answer
-	// with searched pictures instead of drawing. Neither belongs in an image
-	// request, whatever the chat settings say.
-	payload["disableMemory"] = true
-	payload["disableSearch"] = true
 	return payload
 }
 
@@ -247,7 +222,7 @@ func (c *Client) clientForAppChat() *http.Client {
 	return http.DefaultClient
 }
 
-func (c *Client) doChat(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
+func (c *Client) doChat(ctx context.Context, token string, payload map[string]any) (*http.Response, error) {
 	if c == nil {
 		return nil, fmt.Errorf("grok client not configured")
 	}
@@ -261,7 +236,7 @@ func (c *Client) doChat(ctx context.Context, token string, payload map[string]in
 // doRESTChat preserves the proven REST app-chat transport.  It is intentionally
 // separate from doChat so the transport selector can fall back without
 // recursively calling itself.
-func (c *Client) doRESTChat(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
+func (c *Client) doRESTChat(ctx context.Context, token string, payload map[string]any) (*http.Response, error) {
 	if err := waitScopedRateLimit(ctx, ProviderWeb, token, chatwire.ParseLooseStringAny(payload["modelName"]), c.cfg.GrokWebRequestsPerSecond()); err != nil {
 		return nil, err
 	}
@@ -272,7 +247,7 @@ func (c *Client) doRESTChat(ctx context.Context, token string, payload map[strin
 
 	reqURL := c.baseURL() + defaultChatPath
 	headers := c.appChatHeadersFor(ctx, token, http.MethodPost, reqURL)
-	if media, _ := payload["mediaGenInput"].(map[string]interface{}); media["imageToImage"] != nil {
+	if media, _ := payload["mediaGenInput"].(map[string]any); media["imageToImage"] != nil {
 		headers.Set("Referer", c.baseURL()+"/imagine")
 	}
 	// grok.com does not name a model on its answer, so only the sent mode is
@@ -283,125 +258,4 @@ func (c *Client) doRESTChat(ctx context.Context, token string, payload map[strin
 	}
 	upstream.NoteUpstreamCall(ctx, reqURL, sent)
 	return c.doAppChatRequest(ctx, reqURL, body, headers)
-}
-
-func (c *Client) doAppChatCreateAndRespond(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
-	canvasID, err := c.createAppChatCanvas(ctx, token)
-	if err != nil {
-		return nil, err
-	}
-	referer := c.appChatImagineReferer(canvasID)
-	conversationID, err := c.createAppChatConversation(ctx, token, referer)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.linkAppChatConversationToCanvas(ctx, token, conversationID, canvasID); err != nil {
-		return nil, err
-	}
-	return c.doAppChatAddResponse(ctx, token, conversationID, canvasID, payload)
-}
-
-func (c *Client) appChatImagineReferer(canvasID string) string {
-	id := strings.TrimSpace(canvasID)
-	if id == "" {
-		return c.baseURL() + "/imagine/agent"
-	}
-	return c.baseURL() + "/imagine/agent/" + url.PathEscape(id)
-}
-
-func (c *Client) createAppChatCanvas(ctx context.Context, token string) (string, error) {
-	body, err := json.Marshal(map[string]interface{}{
-		"name": "",
-	})
-	if err != nil {
-		return "", err
-	}
-	reqURL := c.baseURL() + defaultCanvasCreatePath
-	headers := c.appChatHeadersWithReferer(token, c.appChatImagineReferer(""))
-	if statsig := c.statsigIDForRequest(ctx, token, http.MethodPost, reqURL); statsig != "" {
-		headers.Set("x-statsig-id", statsig)
-	}
-	resp, err := c.doAppChatRequest(ctx, reqURL, body, headers)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var payload map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", fmt.Errorf("grok app-chat create canvas decode failed: %w", err)
-	}
-	canvasID := extractAppChatCanvasID(payload)
-	if canvasID == "" {
-		return "", fmt.Errorf("grok app-chat create canvas returned no canvas id")
-	}
-	return canvasID, nil
-}
-
-func (c *Client) createAppChatConversation(ctx context.Context, token, referer string) (string, error) {
-	body, err := json.Marshal(map[string]interface{}{
-		"systemPromptName": "",
-		"temporary":        false,
-	})
-	if err != nil {
-		return "", err
-	}
-	reqURL := c.baseURL() + defaultConversationPath
-	headers := c.appChatHeadersWithReferer(token, referer)
-	if statsig := c.statsigIDForRequest(ctx, token, http.MethodPost, reqURL); statsig != "" {
-		headers.Set("x-statsig-id", statsig)
-	}
-	resp, err := c.doAppChatRequest(ctx, reqURL, body, headers)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var payload map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", fmt.Errorf("grok app-chat create conversation decode failed: %w", err)
-	}
-	conversationID := extractAppChatConversationID(payload)
-	if conversationID == "" {
-		return "", fmt.Errorf("grok app-chat create conversation returned no conversation id")
-	}
-	return conversationID, nil
-}
-
-func (c *Client) linkAppChatConversationToCanvas(ctx context.Context, token, conversationID, canvasID string) error {
-	conversationID = strings.TrimSpace(conversationID)
-	canvasID = strings.TrimSpace(canvasID)
-	if conversationID == "" {
-		return fmt.Errorf("empty app-chat conversation id")
-	}
-	if canvasID == "" {
-		return fmt.Errorf("empty app-chat canvas id")
-	}
-	body, err := json.Marshal(map[string]interface{}{
-		"conversationId": conversationID,
-		"canvasId":       canvasID,
-	})
-	if err != nil {
-		return err
-	}
-	reqURL := c.baseURL() + defaultMediaConvoPath
-	resp, err := c.doAppChatRequest(ctx, reqURL, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer(canvasID)))
-	if err != nil {
-		return err
-	}
-	_ = resp.Body.Close()
-	return nil
-}
-
-func (c *Client) doAppChatAddResponse(ctx context.Context, token, conversationID, canvasID string, payload map[string]interface{}) (*http.Response, error) {
-	id := strings.TrimSpace(conversationID)
-	if id == "" {
-		return nil, fmt.Errorf("empty app-chat conversation id")
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	reqURL := c.baseURL() + defaultConversationPath + "/" + url.PathEscape(id) + "/responses"
-	return c.doAppChatRequest(ctx, reqURL, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer(canvasID)))
 }

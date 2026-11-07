@@ -43,15 +43,12 @@ type Handler struct {
 	instanceID   string
 	auditLogger  audit.Logger
 
-	quotaOnce    sync.Once
-	quotaMu      sync.Mutex
-	quotaPending map[int64]grokQuotaSyncJob
-	quotaWake    chan struct{}
+	quota grokbase.QuotaQueue
 }
 
 // chatOutcome is what one Web turn produced, for the audit journal.
 type chatOutcome struct {
-	Usage       map[string]interface{}
+	Usage       map[string]any
 	UsageSource audit.UsageSource
 	Finish      string
 	FirstToken  time.Time
@@ -192,9 +189,9 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 		message = result.Err.Error()
 	}
 	usage := result.Usage
-	prompt, _ := usage["prompt_tokens_details"].(map[string]interface{})
-	completion, _ := usage["completion_tokens_details"].(map[string]interface{})
-	metadata := map[string]interface{}{"finish_reason": result.Finish}
+	prompt, _ := usage["prompt_tokens_details"].(map[string]any)
+	completion, _ := usage["completion_tokens_details"].(map[string]any)
+	metadata := map[string]any{"finish_reason": result.Finish}
 	grokbase.AddReasoningDiagnostics(ctx, metadata)
 	duration := int64(0)
 	if !req.startedAt.IsZero() {
@@ -458,33 +455,15 @@ func modelValidationMessage(modelID string, err error) string {
 }
 
 func (h *Handler) accountCapacityAvailable(acc *store.Account) bool {
-	tracker := h.connTrackerSnapshot()
-	limit := loadbalancer.EffectiveAccountConcurrencyLimit(acc)
-	if acc == nil || limit <= 0 || tracker == nil {
-		return true
-	}
-	return tracker.GetCount(acc.ID) < limit
+	return grokbase.AccountCapacityAvailable(h.connTrackerSnapshot(), acc)
 }
 
 func (h *Handler) reserveAccount(acc *store.Account) (func(), bool) {
-	tracker := h.connTrackerSnapshot()
-	if tracker == nil || acc == nil || acc.ID == 0 {
-		if h != nil && h.base != nil {
-			return h.base.TrackAccount(acc), true
-		}
-		return func() {}, true
+	var base *grokbase.AccountTracker
+	if h != nil {
+		base = h.base
 	}
-	if limiter, ok := tracker.(loadbalancer.LimitedConnTracker); ok {
-		if !limiter.TryAcquire(acc.ID, loadbalancer.EffectiveAccountConcurrencyLimit(acc)) {
-			return func() {}, false
-		}
-	} else {
-		if !h.accountCapacityAvailable(acc) {
-			return func() {}, false
-		}
-		tracker.Acquire(acc.ID)
-	}
-	return func() { tracker.Release(acc.ID) }, true
+	return base.Reserve(h.connTrackerSnapshot(), acc)
 }
 
 func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err error) {

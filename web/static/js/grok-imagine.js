@@ -1,17 +1,29 @@
 (() => {
   const batchSize = () => Math.max(1, Math.min(6, Number(document.getElementById("imagineCount")?.value) || 6));
-  const PARALLELISM = 2;
   const STORAGE_KEY = "grok_tools_ui_v1";
   let imageModels = [];
+  // availability is what the tools page learned about the Grok Web pool:
+  // webPlans counts accounts by plan, media whether any account still has
+  // the image_pro / image_edit allowance. Unknown (null) changes nothing.
+  let availability = { webPlans: null, media: null };
+  const PARALLELISM = 2;
 
-  // Quality tiers, as grok2api names them: 快速 is the lite model (a fast
-  // chat every plan can use), 标准 the Imagine model, 高质量 Imagine 2.0.
+  // freeOnlyPool reports a pool of Free Web accounts only. Such a pool runs
+  // one image at a time; any paid or unclassified account keeps the parallel
+  // batch.
+  function freeOnlyPool() {
+    const plans = availability.webPlans;
+    return Boolean(plans) && Number(plans.free) > 0 && !Number(plans.paid) && !Number(plans.unknown);
+  }
+
+  // Quality tiers: 标准 is the Imagine model, 高质量 Imagine 2.0. The lite
+  // (快速) tier is not offered: grok.com answered it with stock pictures
+  // instead of drawings of the prompt.
   function qualityModels() {
     const ids = imageModels.map((item) => String(item?.id || "")).filter(Boolean);
-    const lite = ids.find((id) => /image-lite$/i.test(id)) || ids[0] || "";
-    const basic = ids.find((id) => /^grok-imagine-image$/i.test(id)) || lite;
+    const basic = ids.find((id) => /^grok-imagine-image$/i.test(id)) || "grok-imagine-image";
     const quality = ids.find((id) => /image-2\.0$/i.test(id)) || basic;
-    return { basic, lite, quality };
+    return { basic, quality };
   }
 
   const state = {
@@ -77,25 +89,24 @@
 
   function qualityModel(quality) {
     const models = qualityModels();
-    return models[quality] || models.lite;
+    return models[quality] || models.basic;
   }
 
   function normalizeQuality(value) {
     const raw = String(value || "").toLowerCase();
-    if (raw === "basic" || raw === "quality") return raw;
-    return "lite";
+    return raw === "quality" ? "quality" : "basic";
   }
 
   function syncQualityModel() {
-    const quality = normalizeQuality(readToggle("#imagineQualityToggle", "imagineQuality", "lite"));
+    const quality = normalizeQuality(readToggle("#imagineQualityToggle", "imagineQuality", "basic"));
     const model = qualityModel(quality);
     return { quality, model };
   }
 
-  // The lite route has no resolution choice; the other tiers accept 1k/2k.
-  function syncResolution(quality) {
+  // Both tiers accept a 1k/2k resolution.
+  function syncResolution() {
     const resolution = document.getElementById("imagineResolution");
-    if (resolution) resolution.disabled = normalizeQuality(quality) === "lite";
+    if (resolution) resolution.disabled = false;
   }
 
   function aspectRatioCss(value) {
@@ -308,7 +319,7 @@
       badge.textContent = String(index + 1);
       const body = document.createElement("div");
       body.className = "imagine-masonry-tile-body";
-      body.innerHTML = '<div class="imagine-masonry-tile-progress"><div class="imagine-masonry-tile-progress-value">0%</div><div class="imagine-masonry-tile-progress-track"><div class="imagine-masonry-tile-progress-fill"></div></div></div>';
+      body.innerHTML = '<div class="imagine-masonry-tile-progress"><div class="imagine-masonry-tile-progress-value">排队中</div><div class="imagine-masonry-tile-progress-track"><div class="imagine-masonry-tile-progress-fill"></div></div></div>';
       tile.appendChild(checkbox);
       tile.appendChild(badge);
       tile.appendChild(body);
@@ -398,13 +409,11 @@
       .filter(Boolean);
   }
 
-  // One upstream call yields two images, so a request asks for up to two and
-  // fills two slots: asking one at a time doubled the upstream calls and ran
-  // into the per-minute limit. Every tier goes through /images/generations,
-  // where the server picks an account that still has the tier's allowance.
+  // Every tier goes through /images/generations, where the server picks an
+  // account that still has the tier's allowance. Edits go to /images/edits.
   async function requestImages(prompt, ratio, model, quality, nsfw, signal, count = 1) {
     if (imageOperation() === "edit") return requestImageEdit(prompt, ratio, model, quality, signal, count);
-    const chosen = String(model || "").trim() || "grok-imagine-image-lite";
+    const chosen = String(model || "").trim() || "grok-imagine-image";
     const res = await fetch(`${inferencePrefix()}/images/generations`, {
       method: "POST",
       headers: inferenceHeaders({ "Content-Type": "application/json" }),
@@ -417,7 +426,7 @@
         size: sizeForRatio(ratio),
         response_format: "url",
         nsfw,
-        ...(chosen !== "grok-imagine-image-lite" ? { resolution: document.getElementById("imagineResolution")?.value || "1k" } : {}),
+        resolution: document.getElementById("imagineResolution")?.value || "1k",
       }),
     });
     if (!res.ok) throw new Error(await res.text());
@@ -428,6 +437,7 @@
 
   async function runSlots(batch, slots, prompt, ratio, model, quality, nsfw, signal) {
     let tick = 0;
+    slots.forEach((slot) => setSlotProgress(slot, 0));
     const timer = window.setInterval(() => {
       tick += 1;
       slots.forEach((slot) => setSlotProgress(slot, Math.min(92, 8 + tick * 7)));
@@ -471,7 +481,23 @@
     }
   }
 
+  // runBatch fills the slots of one round. A Free-only pool runs one request
+  // for one image at a time (the other slots wait as 排队中); otherwise two
+  // requests of two images each run side by side.
   async function runBatch(batch, prompt, ratio, model, quality, nsfw, signal) {
+    if (!freeOnlyPool()) return runBatchParallel(batch, prompt, ratio, model, quality, nsfw, signal);
+    const results = new Array(batch.slots.length).fill(false);
+    for (let index = 0; index < batch.slots.length; index += 1) {
+      if (signal?.aborted) break;
+      const [ok] = await runSlots(batch, [batch.slots[index]], prompt, ratio, model, quality, nsfw, signal);
+      results[index] = ok;
+      // A spent allowance does not come back within the batch.
+      if (batch.quotaExhausted) break;
+    }
+    return results;
+  }
+
+  async function runBatchParallel(batch, prompt, ratio, model, quality, nsfw, signal) {
     const results = new Array(batch.slots.length).fill(false);
     let cursor = 0;
     const workers = Array.from({ length: Math.min(PARALLELISM, Math.ceil(batch.slots.length / 2)) }, async () => {
@@ -488,6 +514,28 @@
     });
     await Promise.all(workers);
     return results;
+  }
+
+  // applyAvailability reflects what the pool can serve: 标准/高质量 need an
+  // account with the image_pro allowance, and 编辑 one with image_edit (Free
+  // plans have none). An edit choice that is no longer offered falls back.
+  function applyAvailability() {
+    const media = availability.media || {};
+    const proAllowed = media.image_pro !== false;
+    const editAllowed = media.image_edit !== false;
+    document.querySelectorAll("#imagineQualityToggle [data-imagine-quality]").forEach((btn) => {
+      if (proAllowed) btn.removeAttribute("title");
+      else btn.title = "当前账号的标准/高质量出图额度已用完，等待重置后再试";
+    });
+    document.querySelectorAll("#imagineOperationToggle [data-imagine-operation='edit']").forEach((btn) => {
+      btn.disabled = !editAllowed;
+      if (editAllowed) btn.removeAttribute("title");
+      else btn.title = "当前账号没有改图额度（Free 账号不提供改图）";
+    });
+    if (!editAllowed && imageOperation() === "edit") {
+      setToggle("#imagineOperationToggle", "imagineOperation", "generate");
+      syncEditUI();
+    }
   }
 
   async function start() {
@@ -831,18 +879,25 @@
     const ui = options.uiState || loadState();
     if ($("imagineRatio") && typeof ui.imagineRatio === "string" && ui.imagineRatio) $("imagineRatio").value = ui.imagineRatio;
     const models = qualityModels();
-    const quality = normalizeQuality(ui.imagineQuality || (ui.imagineModel === models.quality ? "quality" : "lite"));
+    const quality = normalizeQuality(ui.imagineQuality || (ui.imagineModel === models.quality ? "quality" : "basic"));
     setToggle("#imagineQualityToggle", "imagineQuality", quality);
     syncResolution(quality);
     setToggle("#imagineOperationToggle", "imagineOperation", ui.imagineOperation === "edit" ? "edit" : "generate");
     setToggle("#imagineRunModeToggle", "imagineRunMode", ui.imagineRunMode === "continuous" ? "continuous" : "single");
     bindEvents();
+    if (window.GrokAvailability) availability = window.GrokAvailability;
     syncEditUI();
     syncRatioUI();
     resizePrompt();
     setButtons(false);
+    applyAvailability();
     setStatus("空闲");
   }
+
+  window.addEventListener("grok-availability", (event) => {
+    availability = event?.detail && typeof event.detail === "object" ? event.detail : { webPlans: null, media: null };
+    applyAvailability();
+  });
 
   window.addEventListener("grok-models-loaded", (event) => {
     imageModels = (Array.isArray(event.detail) ? event.detail : []).filter((item) => Array.isArray(item?.capabilities) && item.capabilities.includes("image"));

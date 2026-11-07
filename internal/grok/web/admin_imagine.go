@@ -2,26 +2,6 @@ package web
 
 import "net/http"
 
-func ensureImageNSFW(payload map[string]interface{}) {
-	if payload == nil {
-		return
-	}
-	modelConfigOverride, _ := payload["modelConfigOverride"].(map[string]interface{})
-	if modelConfigOverride == nil {
-		return
-	}
-	modelMap, _ := modelConfigOverride["modelMap"].(map[string]interface{})
-	if modelMap == nil {
-		return
-	}
-	imageGenCfg, _ := modelMap["imageGenModelConfig"].(map[string]interface{})
-	if imageGenCfg == nil {
-		return
-	}
-	delete(imageGenCfg, "enableNsfw")
-	delete(imageGenCfg, "enable_nsfw")
-}
-
 func (h *Handler) HandleAdminImagineConfig(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
@@ -35,7 +15,7 @@ func (h *Handler) HandleAdminImagineConfig(w http.ResponseWriter, r *http.Reques
 		nsfw = h.configSnapshot().PublicImagineNSFW()
 	}
 
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"final_min_bytes":  finalMinBytes,
 		"medium_min_bytes": mediumMinBytes,
 		"nsfw":             nsfw,
