@@ -2,6 +2,7 @@
 {{template "doc-head.html" .}}
   {{template "page-styles.html" .}}
   <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v={{.AssetVersion}}">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-workbench.css?v={{.AssetVersion}}">
 </head>
 
 <body>
@@ -9,15 +10,40 @@
 
 
   <main class="main-content grok-tools-page">
-    <section class="header-section grok-page-header">
-      <span class="grok-eyebrow">GROK WORKSPACE</span>
-      <h1>Grok 工作台</h1>
-      <p class="grok-page-lede">对话、图片、视频和语音集中管理；操作前会检查账号是否支持所需能力。</p>
-      <a class="btn btn-outline grok-account-link" href="{{.AdminPath}}/?tab=accounts">管理 Grok 账号</a>
-    </section>
+    <header class="gw-header">
+      <div class="gw-title">
+        <span class="gw-eyebrow">Grok Workspace</span>
+        <h1>Grok 工作台</h1>
+        <p>对话、图片、视频与语音在一处完成；每项操作前都会检查账号是否具备对应能力。</p>
+      </div>
+      <div class="gw-header-actions">
+        <div class="gw-identity" aria-label="API 测试身份">
+          <label class="gw-identity-label" for="grokRequestMode">调用身份</label>
+          <select id="grokRequestMode" class="form-input compact-select" title="管理员模式使用当前登录会话；Client Key 模式按真实密钥权限、限流和计费测试">
+            <option value="admin">管理员模式</option>
+            <option value="client">Client Key 模式</option>
+          </select>
+          <input id="grokClientKey" class="form-input hidden" type="password" autocomplete="off" placeholder="粘贴 sk-…（仅保存在当前标签页）">
+          <button id="grokClientKeyApply" class="btn btn-outline hidden" type="button">应用密钥</button>
+          <span id="grokClientKeyStatus" class="hint"></span>
+        </div>
+        <a class="btn btn-outline gw-account-link" href="{{.AdminPath}}/?tab=accounts">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          管理 Grok 账号
+        </a>
+      </div>
+    </header>
 
     <div class="grok-tools-workspace">
-      <section id="grokCapabilityBanner" class="grok-capability-banner is-loading" aria-live="polite">
+      <nav class="gw-tabs filter-tabs grok-tabs" id="grokToolsTabs" aria-label="Grok 工具导航">
+        <button class="tab-item" data-tab="chat" onclick="switchGrokToolTab('chat')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>对话</span><i class="gw-tab-dot" data-capability-dot="chat" aria-hidden="true"></i></button>
+        <button class="tab-item active" data-tab="imagine" onclick="switchGrokToolTab('imagine')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><span>图片</span><i class="gw-tab-dot" data-capability-dot="imagine" aria-hidden="true"></i></button>
+        <button class="tab-item" data-tab="video" onclick="switchGrokToolTab('video')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m22 8-5 4 5 4z"/></svg><span>视频</span><i class="gw-tab-dot" data-capability-dot="video" aria-hidden="true"></i></button>
+        <button class="tab-item" data-tab="voice" onclick="switchGrokToolTab('voice')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg><span>语音</span><i class="gw-tab-dot" data-capability-dot="voice" aria-hidden="true"></i></button>
+        <button class="tab-item" data-tab="cache" onclick="switchGrokToolTab('cache')"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg><span>媒体库</span><i class="gw-tab-dot" data-capability-dot="cache" aria-hidden="true"></i></button>
+      </nav>
+
+      <section id="grokCapabilityBanner" class="grok-capability-banner gw-capability is-loading" aria-live="polite">
         <span class="capability-indicator" aria-hidden="true"></span>
         <div class="capability-copy">
           <strong id="grokCapabilityTitle">正在检查可用能力</strong>
@@ -32,25 +58,6 @@
         </span>
         <a id="grokCapabilityAction" class="capability-action hidden" href="{{.AdminPath}}/?tab=accounts">添加所需账号</a>
       </section>
-      <div class="toolbar toolbar-compact grok-tools-toolbar" aria-label="Grok 工具导航">
-        <div class="grok-api-mode" aria-label="API 测试身份">
-          <label class="grok-api-mode-label" for="grokRequestMode">调用身份</label>
-          <select id="grokRequestMode" class="form-input compact-select" title="管理员模式使用当前登录会话；Client Key 模式按真实密钥权限、限流和计费测试">
-            <option value="admin">管理员模式</option>
-            <option value="client">Client Key 模式</option>
-          </select>
-          <input id="grokClientKey" class="form-input hidden" type="password" autocomplete="off" placeholder="粘贴 sk-…（仅保存在当前标签页）">
-          <button id="grokClientKeyApply" class="btn btn-outline hidden" type="button">应用密钥</button>
-          <span id="grokClientKeyStatus" class="hint"></span>
-        </div>
-        <div class="filter-tabs grok-tabs" id="grokToolsTabs">
-          <button class="tab-item" data-tab="chat" onclick="switchGrokToolTab('chat')">对话</button>
-          <button class="tab-item active" data-tab="imagine" onclick="switchGrokToolTab('imagine')">图片</button>
-          <button class="tab-item" data-tab="video" onclick="switchGrokToolTab('video')">视频</button>
-          <button class="tab-item" data-tab="voice" onclick="switchGrokToolTab('voice')">语音</button>
-          <button class="tab-item" data-tab="cache" onclick="switchGrokToolTab('cache')">缓存</button>
-        </div>
-      </div>
 
       <section id="grokChatSection" class="content-card grok-section chat-main section-hidden">
         <div class="chat-layout">
@@ -91,7 +98,7 @@
                 </button>
                 <div>
                 <h2 class="chat-title-text">对话</h2>
-                <p class="chat-subtitle">选择模型，直接开始一段 Grok 对话</p>
+                <p class="chat-subtitle">与 Grok 实时对话，支持推理与联网工具</p>
                 </div>
               </div>
               <div class="chat-title-actions">
@@ -100,11 +107,23 @@
               </div>
             </div>
             <div id="grokChatLog" class="chat-thread">
-              <div id="grokChatEmpty" class="chat-empty">输入一条消息开始对话。</div>
+              <div id="grokChatEmpty" class="chat-empty">
+                <div class="gw-hero">
+                  <span class="gw-hero-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg></span>
+                  <h3 class="gw-hero-title">今天想和 Grok 聊点什么？</h3>
+                  <p class="gw-hero-sub">在下方选择模型并输入问题；会话保存在本浏览器里。</p>
+                  <div class="gw-suggestions">
+                    <button type="button" class="gw-suggestion" data-chat-suggestion="用三句话解释量子纠缠，并给一个生活中的类比。"><strong>解释概念</strong><span>用三句话讲清量子纠缠</span></button>
+                    <button type="button" class="gw-suggestion" data-chat-suggestion="用 Go 写一个按 API Key 限流的令牌桶，支持突发 20、每秒 5 个。"><strong>写代码</strong><span>Go 实现按 Key 限流的令牌桶</span></button>
+                    <button type="button" class="gw-suggestion" data-chat-suggestion="帮我起草一封邮件，礼貌地把周会改到周四下午三点。"><strong>写邮件</strong><span>礼貌地改约周会时间</span></button>
+                    <button type="button" class="gw-suggestion" data-chat-suggestion="总结今天 X 上关于 AI 的热门讨论，列出三个要点。"><strong>看热点</strong><span>总结 X 上的 AI 热门讨论</span></button>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="composer-shell">
               <div class="composer-input">
-                <textarea id="grokPromptInput" class="composer-textarea" placeholder="询问任何内容"></textarea>
+                <textarea id="grokPromptInput" class="composer-textarea" placeholder="给 Grok 发送消息…  Enter 发送，Shift+Enter 换行"></textarea>
                 <div class="composer-actions">
                   <div class="model-chip" id="grokModelChip">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -146,8 +165,10 @@
                           </div>
                           <div class="settings-block">
                             <span class="field-label">联网工具</span>
-                            <label><input id="grokWebSearch" type="checkbox"> Web 搜索</label>
-                            <label><input id="grokXSearch" type="checkbox"> X 搜索</label>
+                            <div class="gw-switch-list">
+                              <label class="gw-switch"><span class="gw-switch-text">Web 搜索</span><input id="grokWebSearch" type="checkbox"><span class="gw-switch-track" aria-hidden="true"></span></label>
+                              <label class="gw-switch"><span class="gw-switch-text">X 搜索</span><input id="grokXSearch" type="checkbox"><span class="gw-switch-track" aria-hidden="true"></span></label>
+                            </div>
                           </div>
                         </div>
                         <div class="settings-block settings-block-full">
@@ -289,325 +310,222 @@
         </div>
       </section>
 
-      <section id="grokVideoSection" class="content-card grok-section function-stack section-hidden">
-        <div class="function-header-row video-header-row">
-          <div class="video-header-title">
-            <h2 class="function-title">视频生成</h2>
-            <p class="function-subtitle">文字生成短视频，支持进度展示与预览下载。</p>
-          </div>
-        </div>
-        <div class="function-divider"></div>
-        <div class="function-top-grid video-top-grid">
-          <div class="grok-panel video-card">
-            <div class="card-title">生成设置</div>
-            <div class="settings-grid">
-              <div class="settings-block prompt-block">
-                <label class="field-label" for="videoPrompt">提示词</label>
-                <textarea id="videoPrompt" class="form-input video-textarea" rows="4" placeholder="例如：街头霓虹雨夜，慢镜头，胶片质感"></textarea>
+      <section id="grokVideoSection" class="grok-section gw-studio section-hidden">
+        <div class="gw-studio-grid">
+          <section class="gw-composer-card video-card">
+            <header class="gw-card-head">
+              <div>
+                <h2 class="gw-card-title">视频生成</h2>
+                <p class="gw-card-sub">用一句话描述画面，Grok 会生成一段短视频。</p>
               </div>
-              <div class="video-basic-row">
-                <div class="settings-block model-block">
-                  <label class="field-label" for="videoModel">视频模型</label>
-                  <select id="videoModel" class="form-input"></select>
-                </div>
-                <div class="settings-block ratio-block">
-                  <label class="field-label" for="videoRatio">画面比例</label>
-                  <select id="videoRatio" class="form-input">
-                    <option value="16:9">16:9 宽屏</option>
-                    <option value="9:16">9:16 竖屏</option>
-                    <option value="3:2">3:2 横构图</option>
-                    <option value="2:3">2:3 竖构图</option>
-                    <option value="4:3">4:3 标准横屏</option>
-                    <option value="3:4">3:4 标准竖屏</option>
-                    <option value="1:1">1:1 方形</option>
-                  </select>
-                </div>
-                <div class="settings-block resolution-block">
-                  <label class="field-label" for="videoResolution">分辨率</label>
-                  <select id="videoResolution" class="form-input">
-                    <option value="480p">480p（付费）</option>
-                    <option value="720p" selected>720p</option>
-                    <option value="1080p">1080p</option>
-                  </select>
-                </div>
-                <div class="settings-block preset-block">
-                  <label class="field-label" for="videoPreset">风格预设</label>
-                  <select id="videoPreset" class="form-input">
-                    <option value="custom">自定义</option>
-                    <option value="fun">趣味</option>
-                    <option value="normal">自然</option>
-                    <option value="spicy">大胆</option>
-                  </select>
-                </div>
-                <div class="settings-block length-block">
-                  <label class="field-label" for="videoLength">视频时长</label>
-                  <input id="videoLength" class="form-input" type="number" min="1" max="15" step="1" value="6">
-                </div>
-              </div>
-              <div class="video-generation-actions">
-                <button class="btn btn-primary btn-lg" id="videoStartBtn" type="button">生成视频</button>
-                <button class="btn btn-outline btn-lg hidden" id="videoStopBtn" type="button">停止</button>
-              </div>
+            </header>
+            <label class="gw-field-label" for="videoPrompt">提示词</label>
+            <textarea id="videoPrompt" class="form-input gw-prompt" rows="5" placeholder="例如：街头霓虹雨夜，慢镜头，胶片质感"></textarea>
+            <div class="gw-param-grid">
+              <label class="gw-param"><span>模型</span><select id="videoModel" class="form-input"></select></label>
+              <label class="gw-param"><span>画面比例</span>
+                <select id="videoRatio" class="form-input">
+                  <option value="16:9">16:9 宽屏</option>
+                  <option value="9:16">9:16 竖屏</option>
+                  <option value="3:2">3:2 横构图</option>
+                  <option value="2:3">2:3 竖构图</option>
+                  <option value="4:3">4:3 标准横屏</option>
+                  <option value="3:4">3:4 标准竖屏</option>
+                  <option value="1:1">1:1 方形</option>
+                </select>
+              </label>
+              <label class="gw-param"><span>分辨率</span>
+                <select id="videoResolution" class="form-input">
+                  <option value="480p">480p（付费）</option>
+                  <option value="720p" selected>720p</option>
+                  <option value="1080p">1080p</option>
+                </select>
+              </label>
+              <label class="gw-param"><span>风格</span>
+                <select id="videoPreset" class="form-input">
+                  <option value="custom">自定义</option>
+                  <option value="fun">趣味</option>
+                  <option value="normal">自然</option>
+                  <option value="spicy">大胆</option>
+                </select>
+              </label>
+              <label class="gw-param"><span>时长（秒）</span><input id="videoLength" class="form-input" type="number" min="1" max="15" step="1" value="6"></label>
             </div>
-          </div>
-
-          <div class="grok-panel video-card">
-            <div class="status-header">
-              <div class="card-title">运行状态</div>
-              <span id="videoStatus" class="badge status-badge">空闲</span>
-            </div>
-            <p class="hint video-status-hint">空闲表示当前没有生成任务；生成需要可用的 Grok Web 账号。</p>
-            <div class="progress-wrap progress-wrap-spaced">
-              <div id="videoProgressBar" class="progress-bar">
-                <div id="videoProgressFill" class="progress-fill"></div>
-              </div>
-              <div class="progress-meta">
-                <span id="videoProgressText">0%</span>
-                <span id="videoDurationValue">耗时 -</span>
-              </div>
-            </div>
-            <div class="meta-grid">
-              <div class="meta-item"><div class="meta-label">比例</div><div id="videoAspectValue" class="meta-value">-</div></div>
-              <div class="meta-item"><div class="meta-label">时长</div><div id="videoLengthValue" class="meta-value">-</div></div>
-              <div class="meta-item"><div class="meta-label">分辨率</div><div id="videoResolutionValue" class="meta-value">-</div></div>
-              <div class="meta-item"><div class="meta-label">预设</div><div id="videoPresetValue" class="meta-value">-</div></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="grok-panel video-card video-preview-card">
-          <div class="video-preview-header">
-            <div class="card-title">视频预览</div>
-            <div class="preview-actions">
-              <button class="btn btn-outline" id="videoClearBtn" type="button">清空</button>
-            </div>
-          </div>
-          <div id="videoEmpty" class="video-empty">等待生成视频</div>
-          <div id="videoStage" class="video-stage hidden"></div>
-        </div>
-      </section>
-
-      <section id="grokVoiceSection" class="content-card grok-section function-stack section-hidden">
-        <div class="function-header-row voice-header-row">
-          <div>
-            <h2 class="function-title">语音对话</h2>
-            <p class="function-subtitle">通过 LiveKit 与 Grok 进行实时语音会话。</p>
-          </div>
-          <div class="function-actions voice-actions">
-            <button class="btn btn-primary" id="voiceStartBtn">开始会话</button>
-            <button class="btn btn-outline" id="voiceStopBtn" disabled>停止会话</button>
-          </div>
-        </div>
-        <div class="function-divider"></div>
-        <div class="voice-grid">
-          <section class="voice-primary">
-            <div class="grok-panel voice-card">
-              <div class="card-title">连接设置</div>
-              <div class="function-settings-row">
-                <div class="function-settings-block">
-                  <label class="field-label">声音</label>
-                  <select id="voiceName" class="form-input">
-                    <option value="ara">Ara (Warm Female)</option>
-                    <option value="eve">Eve (Energetic Female)</option>
-                    <option value="rex">Rex (Confident Male)</option>
-                    <option value="sal">Sal (Smooth Neutral)</option>
-                    <option value="leo">Leo (Authoritative Male)</option>
-                    <option value="gork">Gork (Lazy Male)</option>
-                    <option value="custom">Custom voice_id</option>
-                  </select>
-                </div>
-                <div class="function-settings-block">
-                  <label class="field-label">个性</label>
-                  <select id="voicePersonality" class="form-input">
-                    <option value="assistant">Assistant (Default)</option>
-                    <option value="custom">Custom</option>
-                    <option value="therapist">Therapist</option>
-                    <option value="storyteller">Storyteller</option>
-                    <option value="kids_story_time">Kids Story Time</option>
-                    <option value="kids_trivia_game">Kids Trivia Game</option>
-                    <option value="meditation">Meditation</option>
-                    <option value="doc">Grok "Doc"</option>
-                    <option value="unhinged">Unhinged 18+</option>
-                    <option value="sexy">Sexy 18+</option>
-                    <option value="motivation">Motivation 18+</option>
-                    <option value="conspiracy">Conspiracy</option>
-                    <option value="romantic">Romantic 18+</option>
-                    <option value="argumentative">Argumentative 18+</option>
-                  </select>
-                </div>
-              </div>
-              <div class="function-settings-block">
-                <span class="field-label">语音连接组件</span>
-                <div class="meta-value">稳定版 2.7.3</div>
-              </div>
-              <div id="voiceCustomBlock" class="function-settings-block hidden">
-                <label class="field-label" for="voiceCustomID">自定义 voice_id</label>
-                <input id="voiceCustomID" class="form-input" type="text" autocomplete="off" spellcheck="false" placeholder="粘贴 xAI Custom Voice 返回的 voice_id">
-              </div>
-              <div class="function-settings-block voice-speed-block">
-                <div class="function-header-row function-header-row-tight">
-                  <label class="field-label" for="voiceSpeed">语速</label>
-                  <span class="range-value"><span id="voiceSpeedValue">1.0</span>x</span>
-                </div>
-                <input id="voiceSpeed" class="range-input" type="range" min="0.5" max="2" step="0.1" value="1.0">
-              </div>
-              <div class="function-settings-block unavailable-field">
-                <label class="field-label" for="voiceInstruction">自定义指令</label>
-                <textarea id="voiceInstruction" class="form-input voice-instruction-input" rows="3" disabled placeholder="当前语音接口暂不支持自定义指令"></textarea>
-              </div>
-              <p class="voice-hint voice-hint-spaced">语音会话将使用上方的音色、人格和语速设置。</p>
-            </div>
-
-            <div class="grok-panel voice-card">
-              <div class="voice-log-header">
-                <div class="card-title">会话日志</div>
-                <div class="voice-log-actions">
-                  <button class="btn btn-outline" id="voiceCopyLogBtn">复制</button>
-                  <button class="btn btn-outline" id="voiceClearLogBtn">清空</button>
-                </div>
-              </div>
-              <pre id="voiceLogOutput" class="voice-log"></pre>
+            <div class="gw-composer-actions">
+              <button class="btn btn-outline hidden" id="videoStopBtn" type="button">停止</button>
+              <button class="btn btn-primary gw-primary-btn" id="videoStartBtn" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+                生成视频
+              </button>
             </div>
           </section>
 
-          <aside class="voice-side">
-            <div class="grok-panel voice-card">
-              <div class="voice-log-header voice-status-header">
-                <div class="card-title">会话状态</div>
-                <span id="voiceStatus" class="status-text">未连接</span>
+          <section class="gw-stage-card video-card video-preview-card">
+            <header class="gw-stage-head">
+              <div class="gw-stage-title">
+                <h3>预览</h3>
+                <span id="videoStatus" class="badge status-badge">空闲</span>
               </div>
-              <div class="meta-grid">
-                <div class="meta-item"><div class="meta-label">声音</div><div id="voiceStatusVoice" class="meta-value">-</div></div>
-                <div class="meta-item"><div class="meta-label">个性</div><div id="voiceStatusPersonality" class="meta-value">-</div></div>
-                <div class="meta-item"><div class="meta-label">语速</div><div id="voiceStatusSpeed" class="meta-value">-</div></div>
-                <div class="meta-item"><div class="meta-label">LiveKit 地址</div><div id="voiceStatusURL" class="meta-value">-</div></div>
+              <button class="btn btn-outline btn-sm" id="videoClearBtn" type="button">清空</button>
+            </header>
+            <div class="gw-stage">
+              <div id="videoEmpty" class="video-empty gw-stage-empty">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m22 8-5 4 5 4z"/></svg>
+                <strong>还没有视频</strong>
+                <span>在左侧填写提示词并点击"生成视频"</span>
               </div>
-              <div id="voiceVisualizer" class="visualizer"></div>
+              <div id="videoStage" class="video-stage hidden"></div>
             </div>
-
-            <div class="grok-panel voice-card">
-              <div class="voice-log-header">
-                <div class="card-title">音频输出</div>
-                <button class="btn btn-outline" id="voiceMuteOutputBtn" type="button">静音输出</button>
-              </div>
-              <div class="voice-hint">订阅到的音轨会自动插入此区域。</div>
-              <div id="voiceAudioRoot" class="audio-root"></div>
+            <div class="gw-progress-row">
+              <div id="videoProgressBar" class="progress-bar gw-progress-track"><div id="videoProgressFill" class="progress-fill"></div></div>
+              <span id="videoProgressText" class="gw-progress-value">0%</span>
+              <span id="videoDurationValue" class="gw-progress-value">耗时 -</span>
             </div>
+            <div class="gw-meta-pills">
+              <span class="gw-meta-pill"><em>比例</em><b id="videoAspectValue">-</b></span>
+              <span class="gw-meta-pill"><em>时长</em><b id="videoLengthValue">-</b></span>
+              <span class="gw-meta-pill"><em>分辨率</em><b id="videoResolutionValue">-</b></span>
+              <span class="gw-meta-pill"><em>风格</em><b id="videoPresetValue">-</b></span>
+            </div>
+          </section>
+        </div>
+      </section>
 
+      <section id="grokVoiceSection" class="grok-section gw-studio section-hidden">
+        <div class="gw-voice-grid">
+          <section class="gw-stage-card gw-voice-stage">
+            <header class="gw-stage-head">
+              <div class="gw-stage-title">
+                <h3>语音对话</h3>
+                <span id="voiceStatus" class="status-text gw-voice-status">未连接</span>
+              </div>
+              <button class="btn btn-outline btn-sm" id="voiceMuteOutputBtn" type="button">静音输出</button>
+            </header>
+            <div class="gw-voice-center">
+              <div class="gw-orb" aria-hidden="true"><span></span><span></span><span></span></div>
+              <div id="voiceVisualizer" class="visualizer gw-visualizer"></div>
+              <p class="gw-voice-hint">通过 LiveKit 与 Grok 实时语音对话，开始后请允许浏览器使用麦克风。</p>
+              <div class="gw-voice-actions">
+                <button class="btn btn-primary gw-primary-btn" id="voiceStartBtn" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>
+                  开始会话
+                </button>
+                <button class="btn btn-outline" id="voiceStopBtn" type="button" disabled>结束会话</button>
+              </div>
+            </div>
+            <div class="gw-meta-pills gw-meta-center">
+              <span class="gw-meta-pill"><em>声音</em><b id="voiceStatusVoice">-</b></span>
+              <span class="gw-meta-pill"><em>个性</em><b id="voiceStatusPersonality">-</b></span>
+              <span class="gw-meta-pill"><em>语速</em><b id="voiceStatusSpeed">-</b></span>
+              <span class="gw-meta-pill gw-meta-wide"><em>LiveKit</em><b id="voiceStatusURL">-</b></span>
+            </div>
+            <div id="voiceAudioRoot" class="audio-root gw-audio-root"></div>
+          </section>
+
+          <aside class="gw-side-stack">
+            <section class="gw-composer-card voice-card">
+              <header class="gw-card-head"><h2 class="gw-card-title">声音设置</h2></header>
+              <label class="gw-param"><span>声音</span>
+                <select id="voiceName" class="form-input">
+                  <option value="ara">Ara（温暖女声）</option>
+                  <option value="eve">Eve（活力女声）</option>
+                  <option value="rex">Rex（自信男声）</option>
+                  <option value="sal">Sal（平和中性）</option>
+                  <option value="leo">Leo（沉稳男声）</option>
+                  <option value="gork">Gork（慵懒男声）</option>
+                  <option value="custom">自定义 voice_id</option>
+                </select>
+              </label>
+              <div id="voiceCustomBlock" class="gw-param hidden">
+                <label class="gw-field-label" for="voiceCustomID">自定义 voice_id</label>
+                <input id="voiceCustomID" class="form-input" type="text" autocomplete="off" spellcheck="false" placeholder="粘贴 xAI Custom Voice 返回的 voice_id">
+              </div>
+              <label class="gw-param"><span>个性</span>
+                <select id="voicePersonality" class="form-input">
+                  <option value="assistant">Assistant（默认）</option>
+                  <option value="custom">Custom</option>
+                  <option value="therapist">Therapist</option>
+                  <option value="storyteller">Storyteller</option>
+                  <option value="kids_story_time">Kids Story Time</option>
+                  <option value="kids_trivia_game">Kids Trivia Game</option>
+                  <option value="meditation">Meditation</option>
+                  <option value="doc">Grok "Doc"</option>
+                  <option value="unhinged">Unhinged 18+</option>
+                  <option value="sexy">Sexy 18+</option>
+                  <option value="motivation">Motivation 18+</option>
+                  <option value="conspiracy">Conspiracy</option>
+                  <option value="romantic">Romantic 18+</option>
+                  <option value="argumentative">Argumentative 18+</option>
+                </select>
+              </label>
+              <label class="gw-param">
+                <span>连接方式</span>
+                <select id="voiceTransport" class="form-input">
+                  <option value="relay" selected>服务器中转（中国大陆可用）</option>
+                  <option value="direct">直连 livekit.grok.com</option>
+                </select>
+              </label>
+              <div class="gw-param voice-speed-block">
+                <div class="gw-range-head"><label for="voiceSpeed">语速</label><span class="range-value"><span id="voiceSpeedValue">1.0</span>x</span></div>
+                <input id="voiceSpeed" class="range-input" type="range" min="0.5" max="2" step="0.1" value="1.0">
+              </div>
+              <div class="gw-param unavailable-field">
+                <label class="gw-field-label" for="voiceInstruction">自定义指令</label>
+                <textarea id="voiceInstruction" class="form-input voice-instruction-input" rows="2" disabled placeholder="当前语音接口暂不支持自定义指令"></textarea>
+              </div>
+              <p class="gw-foot-note">语音连接组件：稳定版 2.7.3</p>
+            </section>
+
+            <section class="gw-composer-card voice-card">
+              <header class="gw-card-head">
+                <h2 class="gw-card-title">会话日志</h2>
+                <div class="gw-toolbar">
+                  <button class="btn btn-outline btn-sm" id="voiceCopyLogBtn" type="button">复制</button>
+                  <button class="btn btn-outline btn-sm" id="voiceClearLogBtn" type="button">清空</button>
+                </div>
+              </header>
+              <pre id="voiceLogOutput" class="voice-log gw-log"></pre>
+            </section>
           </aside>
         </div>
       </section>
 
-      <section id="grokCacheSection" class="content-card grok-section grok-tools-grid section-hidden">
-        <div class="grok-panel">
-          <h3>缓存总览</h3>
-          <p>本地缓存 + 在线资产概览。</p>
-          <div class="grok-form-grid cache-stats">
-            <div class="grok-kv"><span>图片缓存</span><strong id="cacheImageSummary">0 / 0 B</strong></div>
-            <div class="grok-kv"><span>视频缓存</span><strong id="cacheVideoSummary">0 / 0 B</strong></div>
-            <div class="grok-kv"><span>总计</span><strong id="cacheTotalSummary">0 / 0 B</strong></div>
-            <div class="grok-kv"><span>目录</span><strong id="cacheBaseDir">-</strong></div>
-            <div class="grok-kv"><span>在线资产</span><strong id="cacheOnlineCount">0</strong></div>
-            <div class="grok-kv"><span>在线状态</span><strong id="cacheOnlineStatus">未加载</strong></div>
-            <div class="grok-kv"><span>在线范围</span><strong id="cacheOnlineScope">未加载</strong></div>
-            <div class="grok-kv"><span>上次清理</span><strong id="cacheOnlineLastClear">-</strong></div>
-          </div>
-          <div class="grok-form-grid">
-            <div>
-              <label class="form-label">类型过滤</label>
-              <select id="cacheTypeFilter" class="form-input">
-                <option value="">全部</option>
-                <option value="image">图片</option>
-                <option value="video">视频</option>
-              </select>
+      <section id="grokCacheSection" class="grok-section gw-library section-hidden">
+        <section class="gw-panel">
+          <header class="gw-panel-head">
+            <div class="gw-panel-title">
+              <h3>生成图片</h3>
+              <span id="mediaImageStats" class="gw-count">加载中…</span>
             </div>
-            <div class="cache-inline-actions">
-              <button class="btn btn-outline" id="cacheRefreshBtn">刷新</button>
-              <button class="btn btn-danger-outline" id="cacheClearBtn">清空</button>
+            <div class="gw-toolbar">
+              <input id="mediaImageSearch" class="form-input gw-search" type="search" placeholder="搜索文件名" />
+              <select id="mediaImageSort" class="form-input"><option value="updated:desc">最新</option><option value="updated:asc">最早</option><option value="name:asc">名称 A-Z</option><option value="size:desc">大小降序</option></select>
+              <select id="mediaImagePageSize" class="form-input"><option value="12">12 / 页</option><option value="24">24 / 页</option><option value="48">48 / 页</option></select>
+              <button class="btn btn-danger-outline" id="mediaImageDeleteSelectedBtn" type="button">删除选中</button>
+              <button class="btn btn-outline gw-icon-btn" id="mediaImageRefreshBtn" type="button" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
             </div>
-          </div>
-        </div>
+          </header>
+          <div id="mediaImageGallery" class="gw-media-grid"><div class="gw-empty">暂无图片</div></div>
+          <footer class="gw-pager"><button class="btn btn-outline" id="mediaImagePrevBtn" type="button">上一页</button><span id="mediaImagePage">1 / 1</span><button class="btn btn-outline" id="mediaImageNextBtn" type="button">下一页</button></footer>
+        </section>
 
-        <div class="grok-panel">
-          <h3>本地缓存列表</h3>
-          <p>支持单个缓存文件删除。</p>
-          <div class="cache-list">
-            <table>
-              <thead>
-                <tr>
-                  <th>类型</th>
-                  <th>文件</th>
-                  <th>大小</th>
-                  <th>更新时间</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="cacheListBody">
-                <tr>
-                  <td colspan="5" class="table-empty-cell">暂无数据</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="grok-panel">
-          <div class="media-gallery-heading">
-            <div><h3>生成图片</h3><p>浏览本地生成结果；输入素材不会显示。</p></div>
-            <div class="media-gallery-controls"><input id="mediaImageSearch" class="form-input" type="search" placeholder="搜索文件名" /><select id="mediaImageSort" class="form-input"><option value="updated:desc">最新</option><option value="updated:asc">最早</option><option value="name:asc">名称 A-Z</option><option value="size:desc">大小降序</option></select><select id="mediaImagePageSize" class="form-input"><option value="12">12 / 页</option><option value="24">24 / 页</option><option value="48">48 / 页</option></select><button class="btn btn-danger-outline" id="mediaImageDeleteSelectedBtn" type="button">删除选中</button><button class="btn btn-outline" id="mediaImageRefreshBtn" type="button">刷新</button></div>
-          </div>
-          <div id="mediaImageStats" class="meta-text">正在加载图片统计…</div>
-          <div id="mediaImageGallery" class="admin-media-gallery"><div class="table-empty-cell">暂无图片</div></div>
-          <div class="media-gallery-pager"><button class="btn btn-outline" id="mediaImagePrevBtn" type="button">上一页</button><span id="mediaImagePage">1 / 1</span><button class="btn btn-outline" id="mediaImageNextBtn" type="button">下一页</button></div>
-        </div>
-
-        <div class="grok-panel">
-          <div class="media-gallery-heading">
-            <div><h3>视频任务历史</h3><p>来自持久化视频任务存储。</p></div>
-            <div class="media-gallery-controls"><input id="mediaVideoSearch" class="form-input" type="search" placeholder="搜索任务、Prompt 或模型" /><select id="mediaVideoStatus" class="form-input"><option value="">全部状态</option><option value="queued">queued</option><option value="in_progress">in_progress</option><option value="completed">completed</option><option value="failed">failed</option></select><select id="mediaVideoSort" class="form-input"><option value="updated:desc">最近更新</option><option value="updated:asc">最早更新</option><option value="created:desc">创建时间</option><option value="model:asc">模型</option><option value="status:asc">状态</option></select><select id="mediaVideoPageSize" class="form-input"><option value="12">12 / 页</option><option value="24">24 / 页</option><option value="48">48 / 页</option></select><button class="btn btn-outline" id="mediaVideoRefreshBtn" type="button">刷新</button></div>
-          </div>
-          <div id="mediaVideoStats" class="meta-text">正在加载任务统计…</div>
-          <div class="cache-list"><table><thead><tr><th>任务</th><th>状态</th><th>模型 / Prompt / 元数据</th><th>预览 / 文件</th><th>进度 / 创建时间</th><th>操作</th></tr></thead><tbody id="mediaVideoHistory"><tr><td colspan="6" class="table-empty-cell">暂无视频任务</td></tr></tbody></table></div>
-          <div class="media-gallery-pager"><button class="btn btn-outline" id="mediaVideoPrevBtn" type="button">上一页</button><span id="mediaVideoPage">1 / 1</span><button class="btn btn-outline" id="mediaVideoNextBtn" type="button">下一页</button></div>
-        </div>
-
-        <div class="grok-panel">
-          <h3>在线资产账号</h3>
-          <p>支持按账号加载在线资产数量并执行在线清理。</p>
-          <div class="cache-batch-actions">
-            <button class="btn btn-outline" id="cacheOnlineLoadSelectedBtn">加载选中统计</button>
-            <button class="btn btn-outline" id="cacheOnlineLoadAllBtn">加载全部统计</button>
-            <button class="btn btn-danger-outline" id="cacheOnlineClearSelectedBtn">清理选中在线资产</button>
-          </div>
-          <div class="cache-batch-progress">
-            <span class="tag" id="cacheOnlineBatchStatus">空闲</span>
-            <span class="cache-progress-text" id="cacheOnlineBatchProgress">0/0</span>
-            <progress id="cacheOnlineBatchBar" class="cache-progress-bar" value="0" max="100"></progress>
-            <button class="btn btn-outline is-hidden" id="cacheOnlineBatchCancelBtn">取消任务</button>
-          </div>
-          <div class="cache-list">
-            <table>
-              <thead>
-                <tr>
-                  <th class="table-checkbox-cell">
-                    <input id="cacheOnlineSelectAll" type="checkbox" />
-                  </th>
-                  <th>Token</th>
-                  <th>池</th>
-                  <th>资产数</th>
-                  <th>状态</th>
-                  <th>上次清理</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="cacheOnlineBody">
-                <tr>
-                  <td colspan="7" class="table-empty-cell">暂无在线账号</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <section class="gw-panel">
+          <header class="gw-panel-head">
+            <div class="gw-panel-title">
+              <h3>视频任务</h3>
+              <span id="mediaVideoStats" class="gw-count">加载中…</span>
+            </div>
+            <div class="gw-toolbar">
+              <input id="mediaVideoSearch" class="form-input gw-search" type="search" placeholder="搜索任务、提示词或模型" />
+              <select id="mediaVideoStatus" class="form-input"><option value="">全部状态</option><option value="queued">排队中</option><option value="in_progress">生成中</option><option value="completed">已完成</option><option value="failed">失败</option></select>
+              <select id="mediaVideoSort" class="form-input"><option value="updated:desc">最近更新</option><option value="updated:asc">最早更新</option><option value="created:desc">创建时间</option><option value="model:asc">模型</option><option value="status:asc">状态</option></select>
+              <select id="mediaVideoPageSize" class="form-input"><option value="12">12 / 页</option><option value="24">24 / 页</option><option value="48">48 / 页</option></select>
+              <button class="btn btn-outline gw-icon-btn" id="mediaVideoRefreshBtn" type="button" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
+            </div>
+          </header>
+          <div id="mediaVideoHistory" class="gw-video-grid"><div class="gw-empty">暂无视频任务</div></div>
+          <footer class="gw-pager"><button class="btn btn-outline" id="mediaVideoPrevBtn" type="button">上一页</button><span id="mediaVideoPage">1 / 1</span><button class="btn btn-outline" id="mediaVideoNextBtn" type="button">下一页</button></footer>
+        </section>
       </section>
     </div>
   </main>

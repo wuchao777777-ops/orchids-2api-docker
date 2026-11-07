@@ -75,3 +75,35 @@ test('chat markdown gives code blocks a language header and copy button, and kee
   const plain = context.window.md('```\nx\n```');
   assert.match(plain, /<span>代码<\/span>/, 'a fence without a language is labelled 代码');
 });
+
+test('a bare video link from a video model renders as a player, and only that', () => {
+  const escapeHtml = (value) => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const context = vm.createContext({ window: {}, escapeHtml,
+    document: { addEventListener() {}, getElementById() { return null; } } });
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/grok-tools.js'), 'utf8');
+  vm.runInContext(source.replace('document.addEventListener("DOMContentLoaded", init);', 'window.md = renderBasicMarkdown;'), context);
+  const url = 'https://example.com/api/grok/tools/v1/files/video/abc.mp4';
+  assert.match(context.window.md(url), new RegExp(`<video class="chat-video" src="${url.replace(/[.?/]/g, '\\$&')}" controls playsinline preload="metadata"></video>`));
+  // A link written as Markdown stays a link; a non-video URL stays text.
+  assert.doesNotMatch(context.window.md(`[下载](${url})`), /<video/);
+  assert.doesNotMatch(context.window.md('https://example.com/page.html'), /<video/);
+  // Script URLs never become a player source.
+  assert.doesNotMatch(context.window.md('javascript:alert(1).mp4'), /<video/);
+});
+
+test('voice signal goes through the relay only for livekit.grok.com and only when chosen', () => {
+  const context = vm.createContext({ window: {}, escapeHtml: String, URL,
+    document: { addEventListener() {}, getElementById() { return null; } } });
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/grok-tools.js'), 'utf8');
+  vm.runInContext(source.replace('document.addEventListener("DOMContentLoaded", init);', 'window.signalURL = voiceSignalURL;'), context);
+  const page = { protocol: 'https:', host: 'us1.daige.tech' };
+  const relay = context.window.signalURL;
+  assert.equal(relay('wss://livekit.grok.com', 'relay', page), 'wss://us1.daige.tech/api/grok/admin/voice/livekit');
+  assert.equal(relay('wss://livekit.grok.com', 'relay', { protocol: 'http:', host: 'localhost:3000' }), 'ws://localhost:3000/api/grok/admin/voice/livekit');
+  assert.equal(relay('wss://livekit.grok.com', 'direct', page), 'wss://livekit.grok.com');
+  // The server relays one fixed host; any other URL is used as returned.
+  assert.equal(relay('wss://other.livekit.cloud', 'relay', page), 'wss://other.livekit.cloud');
+  assert.equal(relay('not a url', 'relay', page), 'not a url');
+  const html = fs.readFileSync(path.join(__dirname, 'templates/pages/grok-tools.html'), 'utf8');
+  assert.match(html, /<select id="voiceTransport"[\s\S]*?<option value="relay" selected>/);
+});
