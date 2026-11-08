@@ -3,6 +3,7 @@ package responses
 import (
 	"net/http"
 	"net/url"
+	"orchids-api/internal/chatwire"
 	"orchids-api/internal/util"
 	"strings"
 	"time"
@@ -54,10 +55,10 @@ func parseResourcePath(path string) (id, action string, ok bool) {
 	return candidate, action, true
 }
 
-// subResourceAction reports which sibling endpoint a path names, or ""
+// SubResourceAction reports which sibling endpoint a path names, or ""
 // when the path addresses the response itself (or something unknown, which the
 // resource handler turns into its own error).
-func subResourceAction(path string) string {
+func SubResourceAction(path string) string {
 	_, action, ok := parseResourcePath(path)
 	if !ok {
 		return ""
@@ -69,10 +70,10 @@ func subResourceAction(path string) string {
 	return ""
 }
 
-// subResourceHandler returns the handler for one sibling action. Both
+// SubResourceHandler returns the handler for one sibling action. Both
 // answers come from the store, which is why they are channel-agnostic: a record
 // written by any channel is served the same way.
-func subResourceHandler(action string, opts BridgeOptions) http.HandlerFunc {
+func SubResourceHandler(action string, opts BridgeOptions) http.HandlerFunc {
 	switch action {
 	case responsesActionCancel:
 		return CancelHandler(opts)
@@ -149,7 +150,7 @@ func writeCancelledRecord(w http.ResponseWriter, r *http.Request, st Store, reco
 		WriteAPIError(w, http.StatusBadGateway, "invalid_stored_response", "stored response is not a JSON object")
 		return
 	}
-	if !strings.EqualFold(ParseLooseStringAny(response["status"]), "cancelled") {
+	if !strings.EqualFold(chatwire.ParseLooseStringAny(response["status"]), "cancelled") {
 		response["status"] = "cancelled"
 		markOutputItemsCancelled(response)
 		encoded, encodeErr := json.Marshal(response)
@@ -201,7 +202,7 @@ func markOutputItemsCancelled(response map[string]any) {
 		if item == nil {
 			continue
 		}
-		switch strings.ToLower(ParseLooseStringAny(item["status"])) {
+		switch strings.ToLower(chatwire.ParseLooseStringAny(item["status"])) {
 		case "", "in_progress", "queued":
 			item["status"] = "cancelled"
 		}
@@ -227,16 +228,16 @@ func writeStoredInputItems(w http.ResponseWriter, record *store.StoredResponse) 
 	}
 	if len(items) > 0 {
 		if first, ok := items[0].(map[string]any); ok {
-			payload["first_id"] = ParseLooseStringAny(first["id"])
+			payload["first_id"] = chatwire.ParseLooseStringAny(first["id"])
 		}
 		if last, ok := items[len(items)-1].(map[string]any); ok {
-			payload["last_id"] = ParseLooseStringAny(last["id"])
+			payload["last_id"] = chatwire.ParseLooseStringAny(last["id"])
 		}
 	}
 	util.WriteJSON(w, payload)
 }
 
-// inputItemsJSON normalizes a Responses `input` into the item array the
+// InputItemsJSON normalizes a Responses `input` into the item array the
 // resource endpoint reports.
 //
 // Every item carries an id and a terminal status because that is the shape the
@@ -244,7 +245,7 @@ func writeStoredInputItems(w http.ResponseWriter, record *store.StoredResponse) 
 // the next turn's `input` must not be rejected for fields the gateway elided.
 // Items the client already labelled keep their own id, so a replay stays
 // byte-stable.
-func inputItemsJSON(input any) json.RawMessage {
+func InputItemsJSON(input any) json.RawMessage {
 	items := InputItems(input)
 	if len(items) == 0 {
 		return nil
@@ -283,10 +284,10 @@ func InputItems(input any) []any {
 			if copied == nil {
 				continue
 			}
-			if ParseLooseStringAny(copied["id"]) == "" {
+			if chatwire.ParseLooseStringAny(copied["id"]) == "" {
 				copied["id"] = "item_" + util.RandomHex(12)
 			}
-			if ParseLooseStringAny(copied["status"]) == "" {
+			if chatwire.ParseLooseStringAny(copied["status"]) == "" {
 				copied["status"] = "completed"
 			}
 			out = append(out, copied)
@@ -304,21 +305,3 @@ func writeMethodNotAllowed(w http.ResponseWriter, allow string) {
 	w.Header().Set("Allow", allow)
 	WriteAPIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
 }
-
-// SubResourceAction reads the sub-resource action ("cancel", "input_items")
-// out of a resource path.
-func SubResourceAction(path string) string { return subResourceAction(path) }
-
-// SubResourceHandler serves one sub-resource action.
-func SubResourceHandler(action string, opts BridgeOptions) http.HandlerFunc {
-	return subResourceHandler(action, opts)
-}
-
-// InputItemsJSON renders a request's input as the stored input-item list.
-func InputItemsJSON(input any) json.RawMessage { return inputItemsJSON(input) }
-
-// Action names the two sub-resource endpoints below a response id.
-const (
-	ActionCancel     = responsesActionCancel
-	ActionInputItems = responsesActionInputItems
-)

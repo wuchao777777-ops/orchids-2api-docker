@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"orchids-api/internal/chatwire"
 )
 
 // NormalizeNamespacePayload preserves native fields outside the tool contract.
@@ -42,12 +43,42 @@ func NormalizeNamespacePayload(payload map[string]any) (ToolNamespaces, error) {
 	return aliases, nil
 }
 
+// NormalizeBridgedRequest is NormalizeNamespacePayload for a typed request:
+// Codex extension tools (custom, apply_patch, tool_search) are lowered to
+// functions, then namespaces are flattened and the result validated. The
+// Chat-only channels need the lowering as much as a native upstream does.
+func NormalizeBridgedRequest(req *CreateRequest) (ToolNamespaces, error) {
+	tools := make([]any, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		tools = append(tools, tool)
+	}
+	payload := map[string]any{"input": req.Input}
+	if req.Tools != nil {
+		payload["tools"] = tools
+	}
+	if req.ToolChoice != nil {
+		payload["tool_choice"] = req.ToolChoice
+	}
+	aliases, err := NormalizeNamespacePayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	if _, exists := payload["tools"]; exists {
+		req.Tools = InterfaceMaps(payload["tools"])
+	}
+	req.Input = payload["input"]
+	if _, exists := payload["tool_choice"]; exists {
+		req.ToolChoice = payload["tool_choice"]
+	}
+	return aliases, nil
+}
+
 // A plain function cannot reuse a wire name from an earlier namespace: the
 // upstream's call would otherwise have two possible public identities.
 func (aliases ToolNamespaces) ValidatePlainTools(tools any) error {
 	for _, tool := range InterfaceMaps(tools) {
 		if tool["type"] == "function" {
-			if _, exists := aliases[ParseLooseStringAny(tool["name"])]; exists {
+			if _, exists := aliases[chatwire.ParseLooseStringAny(tool["name"])]; exists {
 				return fmt.Errorf("function name conflicts with namespace history")
 			}
 		}
@@ -71,7 +102,7 @@ func (aliases ToolNamespaces) MergeStored(raw json.RawMessage) error {
 			if identity.Namespace == "" || identity.Name == "" || name != namespaceToolName(identity.Namespace, identity.Name) {
 				return fmt.Errorf("invalid stored namespace identity")
 			}
-		case toolKindCustom, toolKindApplyPatch:
+		case toolKindCustom, toolKindApplyPatch, toolKindToolSearch:
 			if identity.Namespace != "" || identity.Name == "" || name != codexWireName(identity) {
 				return fmt.Errorf("invalid stored tool identity")
 			}
@@ -102,7 +133,7 @@ func (aliases ToolNamespaces) RestoreEnvelope(envelope map[string]any) bool {
 		changed = aliases.RestoreEnvelope(response) || changed
 	}
 	if choice, ok := envelope["tool_choice"].(map[string]any); ok && choice["type"] == "function" {
-		if identity, found := aliases[ParseLooseStringAny(choice["name"])]; found {
+		if identity, found := aliases[chatwire.ParseLooseStringAny(choice["name"])]; found {
 			switch identity.Kind {
 			case toolKindCustom:
 				envelope["tool_choice"] = map[string]any{"type": toolKindCustom, "name": identity.Name}
@@ -119,7 +150,7 @@ func (aliases ToolNamespaces) RestoreEnvelope(envelope map[string]any) bool {
 	var restored []map[string]any
 	toolsChanged := false
 	for _, tool := range tools {
-		identity, found := aliases[ParseLooseStringAny(tool["name"])]
+		identity, found := aliases[chatwire.ParseLooseStringAny(tool["name"])]
 		if tool["type"] != "function" || !found {
 			restored = append(restored, tool)
 			continue

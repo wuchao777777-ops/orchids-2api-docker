@@ -23,7 +23,13 @@ func (r UpstreamRequest) ValidateProtocolControls(provider string) error {
 		return fmt.Errorf("%s does not support Responses include=%v", provider, r.Include)
 	}
 	for key := range r.ResponseText {
-		if key != "format" {
+		switch key {
+		case "format":
+		case "verbosity":
+			// A length hint, not a contract: Codex sends it on every turn.
+			// These channels have no wire field for it and never send `text`,
+			// so it is omitted like the cache hint below.
+		default:
 			return fmt.Errorf("%s does not support text.%s", provider, key)
 		}
 	}
