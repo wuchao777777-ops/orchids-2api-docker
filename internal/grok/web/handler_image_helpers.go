@@ -14,6 +14,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"orchids-api/internal/httpserver"
+	"orchids-api/internal/util"
 	"os"
 	"path"
 	"path/filepath"
@@ -271,7 +273,7 @@ func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, 
 		}
 		if field == "url" {
 			if publicBase == "" {
-				writeGrokErrorCode(w, http.StatusInternalServerError, "image_url_base_missing", "image URL base is not configured")
+				httpserver.WriteErrorCode(w, http.StatusInternalServerError, "image_url_base_missing", "image URL base is not configured")
 				return
 			}
 			if strings.HasPrefix(val, "/") {
@@ -287,7 +289,7 @@ func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, 
 			"mime_type":      imageMimeTypeForValue(field, val),
 		})
 	}
-	writeJSON(w, map[string]any{
+	util.WriteJSON(w, map[string]any{
 		"created": time.Now().Unix(),
 		"data":    data,
 		"usage":   buildImageUsagePayload(prompt, len(data)),
@@ -337,7 +339,7 @@ func (h *Handler) collectImageChatURLs(ctx context.Context, w http.ResponseWrite
 				excluded = append(excluded, sess.acc.ID)
 			}
 			if switches >= 3 || rebuildPayload == nil {
-				writeGrokErrorCode(w, http.StatusTooManyRequests, "media_quota_exhausted", h.mediaUnavailableMessage(ctx, mediaImageEdit))
+				httpserver.WriteErrorCode(w, http.StatusTooManyRequests, "media_quota_exhausted", h.mediaUnavailableMessage(ctx, mediaImageEdit))
 				return nil, false
 			}
 			sess.Close()
@@ -362,7 +364,7 @@ func (h *Handler) collectImageChatURLs(ctx context.Context, w http.ResponseWrite
 	}
 	urls = normalizeGeneratedImageURLs(urls, n)
 	if len(urls) == 0 {
-		writeGrokError(w, http.StatusBadGateway, "no image generated")
+		httpserver.WriteError(w, http.StatusBadGateway, "no image generated")
 		return nil, false
 	}
 	return urls, true
@@ -443,27 +445,33 @@ func withoutInputAssets(urls, inputs []string) []string {
 }
 
 func (h *Handler) cacheMediaBytes(rawURL, mediaType string, data []byte, mimeType string) (string, error) {
-	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return writeMediaCacheFile(mediaType, data, func(mediaType string) string {
+		sum := sha1.Sum([]byte(strings.TrimSpace(rawURL)))
+		return hex.EncodeToString(sum[:]) + mediaExtFromMime(mediaType, mimeType, rawURL)
+	})
+}
+
+// writeMediaCacheFile stores data in the media cache under the name nameFor
+// derives from the normalized media type ("image" or "video"). The name is
+// content-addressed by the caller, so an existing non-empty file is reused,
+// and the temp-file rename keeps a partially written file from being served.
+func writeMediaCacheFile(kind string, data []byte, nameFor func(mediaType string) string) (string, error) {
+	mediaType := strings.ToLower(strings.TrimSpace(kind))
 	if mediaType != "video" {
 		mediaType = "image"
 	}
 	if len(data) == 0 {
 		return "", fmt.Errorf("empty media data")
 	}
-
 	dir := filepath.Join(cacheBaseDir, mediaType)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-
-	sum := sha1.Sum([]byte(strings.TrimSpace(rawURL)))
-	name := hex.EncodeToString(sum[:]) + mediaExtFromMime(mediaType, mimeType, rawURL)
+	name := nameFor(mediaType)
 	fullPath := filepath.Join(dir, name)
-
 	if info, statErr := os.Stat(fullPath); statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
 		return name, nil
 	}
-
 	tmp := fullPath + ".tmp-" + randomHex(4)
 	if writeErr := os.WriteFile(tmp, data, 0o644); writeErr != nil {
 		_ = os.Remove(tmp)
