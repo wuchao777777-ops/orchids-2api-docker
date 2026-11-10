@@ -4,13 +4,14 @@ go 1.26.10
 
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
-	github.com/andybalholm/brotli v1.2.7
+	github.com/andybalholm/brotli v1.2.8
 	github.com/gorilla/websocket v1.5.3
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.20.3
 	github.com/prometheus/client_golang v1.25.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/refraction-networking/utls v1.8.2
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0

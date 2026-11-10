@@ -210,6 +210,7 @@ const grokDeviceLogin = globalThis.DeviceAuthLogin.create({
 const ACCOUNT_LOGIN_DRIVERS = {
   workbuddy: () => globalThis.WorkBuddyLogin,
   cline: () => globalThis.ClineLogin,
+	  doubao: () => globalThis.DoubaoLogin,
   grok: () => grokDeviceLogin,
 };
 function startOfficialLogin(provider) {
@@ -971,7 +972,7 @@ function grokWebMediaMarkup(imagine) {
     const n = Number(value.remaining || 0);
     return `${label} <span style="color:${n > 0 ? "#34d399" : "#fb7185"}">${n}</span>`;
   };
-  const parts = [part("出图", imagine.image_pro), part("改图", imagine.image_edit), part("视频", imagine.video), part("720p", imagine.video_720p)].filter(Boolean);
+  const parts = [part("标准", imagine.image), part("高质量", imagine.image_pro), part("改图", imagine.image_edit), part("视频", imagine.video), part("720p", imagine.video_720p)].filter(Boolean);
   return parts.length ? `<div style="color:#64748b;font-size:0.75rem">${parts.join(" · ")}</div>` : "";
 }
 
@@ -1143,6 +1144,7 @@ function openModal(account = null) {
   if (accountSave.busy) return;
   stopWorkBuddyLogin();
   stopClineLogin();
+	globalThis.DoubaoLogin?.reset?.();
   const title = document.getElementById("modalTitle");
   const form = document.getElementById("accountForm");
   const typeEl = document.getElementById("accountType");
@@ -1187,6 +1189,7 @@ function stopOfficialLogin(provider, statusId, linkId = "") {
 
 function stopWorkBuddyLogin() { stopOfficialLogin("WorkBuddyLogin", "workbuddyLoginStatus"); }
 function stopClineLogin() { stopOfficialLogin("ClineLogin", "clineLoginStatus", "clineLoginLink"); }
+function stopDoubaoLogin() { globalThis.DoubaoLogin?.stop?.(); }
 
 // Close modal
 function closeModal() {
@@ -1194,6 +1197,7 @@ function closeModal() {
   resetGrokDeviceLoginStatus();
   stopWorkBuddyLogin();
   stopClineLogin();
+	stopDoubaoLogin();
   ConsoleUI.modal("accountModal", false);
 }
 
