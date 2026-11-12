@@ -445,14 +445,24 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		logger.LogUpstreamRequest(c.baseURL()+"/chat/completion", map[string]string{"provider": "doubao", "model": req.Model}, body)
 	}
 	query := c.commonQuery(c.acc, fingerprintQuery(jar))
-	response, err := c.doJSONWithReferer(ctx, http.MethodPost, c.baseURL()+"/chat/completion?"+query, body, jar, false, "application/json", "text/event-stream", c.baseURL()+"/chat/"+localID)
+	chatURL := c.baseURL() + "/chat/completion?" + query
+	// The diagnostic bundle keeps the upstream stream as received, so a block
+	// this parser drops can be read afterwards. Only the chat call is captured:
+	// the upload calls carry short-lived storage credentials. No header is
+	// passed, so neither the cookie nor the CSRF token reaches the bundle.
+	attempt := debug.BeginUpstream(ctx, http.MethodPost, chatURL, nil, body)
+	response, err := c.doJSONWithReferer(ctx, http.MethodPost, chatURL, body, jar, false, "application/json", "text/event-stream", c.baseURL()+"/chat/"+localID)
+	attempt.Response(response, err)
 	if err != nil {
 		return err
 	}
+	response.Body = attempt.CaptureBody(response.Body)
 	defer response.Body.Close()
 	if response.StatusCode >= 400 {
 		raw, _ := io.ReadAll(io.LimitReader(response.Body, 8192))
-		return statusError(response.StatusCode, raw)
+		err := statusError(response.StatusCode, raw)
+		noteChallenge(c.acc.ID, err)
+		return err
 	}
 	text, err := consumeStream(response.Body, func(delta string) {
 		if !toolMode && onMessage != nil {
@@ -460,7 +470,11 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		}
 	})
 	if err != nil {
+		noteChallenge(c.acc.ID, err)
 		return err
+	}
+	if text != "" {
+		clearChallenge(c.acc.ID)
 	}
 	if text == "" {
 		slog.Warn("doubao answer was empty", "account_id", c.acc.ID, "model", req.Model, "attachments", len(attachments))
@@ -495,12 +509,8 @@ func validateTextOnly(req upstream.UpstreamRequest) error {
 	return req.ValidateProtocolControls("doubao")
 }
 
-func chatBody(conversationID, text, modelID string) ([]byte, error) {
-	return chatBodyWithAttachments(conversationID, fmt.Sprintf("local_%d", time.Now().UnixMilli()), text, modelID, nil)
-}
-
-// chatBodyWithAttachments is chatBody plus the attachment messages that must
-// precede the text block in the same request.
+// chatBodyWithAttachments builds the chat request, with the attachment
+// messages that must precede the text block in the same request.
 func chatBodyWithAttachments(conversationID, localID, text, modelID string, attachments []storeURI) ([]byte, error) {
 	model, ok := FindModel(modelID)
 	if !ok {
@@ -581,8 +591,8 @@ func statusError(status int, raw []byte) error {
 	// A challenge refused before the stream opened is still a challenge: it
 	// must park the account, not be retried as a rate limit.
 	if strings.Contains(text, "710022004") {
-		if decision := decisionFromText(text); decision.needsVerification() {
-			return &verificationRequired{code: "710022004", decision: decision}
+		if decision, raw := decisionFromText(text); decision.needsVerification() {
+			return &verificationRequired{code: "710022004", decision: decision, raw: raw}
 		}
 	}
 	if strings.Contains(text, "710022002") || strings.Contains(text, "710022004") || status == 429 {

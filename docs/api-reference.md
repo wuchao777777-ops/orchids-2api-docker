@@ -124,6 +124,7 @@ Chat 桥接写递增 sequence_number，便于客户端识别顺序；当前没�
 | `/api/providers` | GET 当前提供者注册表 |
 | `/api/accounts` | GET 列表、POST 创建；各通道创建限制以授权路径为准 |
 | `/api/accounts/{id}` | GET / PUT / DELETE；账号编辑及刷新分支以处理器为准 |
+| `/api/accounts/{id}/verification` | 豆包人机验证（会话认证）：GET 返回最近一次 `710022004` 挑战，供官方验证码 SDK 使用（原样的 decision、本账号请求所用的 `device_id` 与 `fp`；挑战在进程内保留 2 小时，账号无固定设备标识时不提供），无记录返回 404；POST 表示已完成验证，清除记录并只撤销人机验证造成的停用，不标记为已检测。SDK 在账号页的沙箱 iframe（仅 `allow-scripts`）中运行，无法访问后台会话。上游是否放行由下一次请求确认 |
 | `/api/keys` | GET 列表、POST 创建 |
 | `/api/keys/{id}` | PATCH 策略、DELETE 删除 |
 | `/api/keys/{id}/secret` | GET 管理员按需读取完整秘密，禁止缓存；内容不可用返回 503 |
@@ -150,7 +151,7 @@ Chat 桥接写递增 sequence_number，便于客户端识别顺序；当前没�
 | `/api/grok/sso/nsfw` | POST `{"account_ids":[...]}` 在 grok.com 开启 NSFW |
 | `/api/grok/availability` | GET 各 Grok 平面可用账号数 |
 | `/api/grok/tools/v1/*` | Grok 工具页推理投影（models、chat/completions、responses、images、videos、files、media/inputs），以管理会话鉴权，资源归属固定为 `admin-tools` |
-| `/api/grok/admin/*` | 工具页管理接口：imagine start/stop/sse/ws/config、video start/stop/sse、voice/token（LiveKit）、voice/livekit（LiveKit 信令中转：浏览器无法直连 livekit.grok.com 时由服务端转发 `/rtc` WebSocket 与 `/rtc/validate`，上游固定、同源校验；媒体 WebRTC 不经过本服务）、media 库、NSFW 批任务 |
+| `/api/grok/admin/*` | 工具页管理接口：imagine start/stop/sse/ws/config、video start/stop/sse、voice/token（LiveKit）、voice/livekit（LiveKit 信令中转：浏览器无法直连 livekit.grok.com 时由服务端转发 `/rtc` WebSocket 与 `/rtc/validate`，上游固定、同源校验；媒体 WebRTC 不经过本服务）、media 库 |
 
 API Key 创建和轮换时返回完整秘密，并使用主密钥派生的独立加密用途保存密文；认证继续使用哈希。管理员可通过 secret 接口读取，列表仅返回掩码及 secret_available。加密能力未配置、密文损坏或解密失败时明确报错，不回退明文。轮换原子替换密文、哈希及索引，使旧 Key 立即失效；列表掩码不能用于调用。前端创建默认消费不限额，编辑不提交预算字段，已有后台预算策略继续生效。支持模型白名单、请求限速、有效期、并发及预算；空模型白名单兼容解释为不限模型。费用预留和结算用整数 USD ticks，1 USD 为 100 亿 ticks。
 

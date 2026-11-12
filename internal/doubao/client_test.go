@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/debug"
 	"orchids-api/internal/httpclient"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
@@ -317,7 +318,7 @@ func TestFetchQRDecodesCompressedPassportJSON(t *testing.T) {
 }
 
 func TestChatBodyUsesConfiguredModel(t *testing.T) {
-	raw, err := chatBody("conversation", "hello", "doubao-pro")
+	raw, err := chatBodyWithAttachments("conversation", "local_test", "hello", "doubao-pro", nil)
 	testutil.NoError(t, err)
 	if !bytes.Contains(raw, []byte(`"model_item_key":"5"`)) || !bytes.Contains(raw, []byte(`"mode_id":"3"`)) {
 		t.Fatalf("body missing pro route: %s", raw)
@@ -327,7 +328,7 @@ func TestChatBodyUsesConfiguredModel(t *testing.T) {
 // The builder split must keep every field the web client depends on, including
 // the duplicated values that live in both option and ext.
 func TestChatBodyKeepsTheWebClientEnvelope(t *testing.T) {
-	raw, err := chatBody("conv-1", "hello", "doubao-work")
+	raw, err := chatBodyWithAttachments("conv-1", "local_test", "hello", "doubao-work", nil)
 	testutil.NoError(t, err)
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
@@ -360,7 +361,7 @@ func TestChatBodyKeepsTheWebClientEnvelope(t *testing.T) {
 // attachment turn look hand-built: the model reported no image until every
 // field the reference project documented was present.
 func TestChatBodyKeepsTheFullOptionEnvelope(t *testing.T) {
-	raw, err := chatBody("conv-1", "hello", "doubao")
+	raw, err := chatBodyWithAttachments("conv-1", "local_test", "hello", "doubao", nil)
 	testutil.NoError(t, err)
 	var body struct {
 		Option map[string]json.RawMessage `json:"option"`
@@ -561,7 +562,9 @@ func TestStreamErrorRecognisesAVerifyChallenge(t *testing.T) {
 	var asString, asObject map[string]any
 	testutil.NoError(t, json.Unmarshal([]byte(`{"error_code":710022004,"extra":{"decision":"`+decision+`"}}`), &asString))
 	testutil.NoError(t, json.Unmarshal([]byte(`{"error_code":710022004,"extra":{"decision":{"from":"shark_admin","type":"verify","detail":"d"}}}`), &asObject))
-	testutil.True(t, sharkDecision(asObject).needsVerification(), "an object decision was not read")
+	parsed, rawObject := sharkDecision(asObject)
+	testutil.True(t, parsed.needsVerification(), "an object decision was not read")
+	testutil.MustContain(t, rawObject, `"shark_admin"`)
 
 	err := upstreamStreamError(asString)
 	testutil.MustContain(t, err.Error(), "requires human verification")
@@ -577,4 +580,112 @@ func TestStatusErrorRecognisesAChallengeBody(t *testing.T) {
 	err := statusError(http.StatusForbidden, []byte(body))
 	testutil.MustContain(t, err.Error(), "requires human verification")
 	testutil.MustContain(t, statusError(http.StatusTooManyRequests, []byte(`{"code":710022004}`)).Error(), "status=429")
+}
+
+// The recorded challenge is handed to the SDK unchanged, with the device id
+// and fingerprint the refused request presented; an answered turn forgets it.
+func TestVerificationOffersTheRefusedChallenge(t *testing.T) {
+	decision := `{"from":"shark_admin","type":"verify","subtype":"semantic_reasoning","detail":"d"}`
+	var refusal map[string]any
+	encoded, _ := json.Marshal(decision)
+	testutil.NoError(t, json.Unmarshal([]byte(`{"error_code":710022004,"extra":{"decision":`+string(encoded)+`}}`), &refusal))
+	acc := &store.Account{ID: 9101, AccountType: "doubao", DoubaoDeviceID: "7500000000000000003", ClientCookie: `{"sessionid":"x","s_v_web_id":"verify_fp_1"}`}
+	t.Cleanup(func() { clearChallenge(acc.ID) })
+
+	_, ok := verification(acc)
+	testutil.False(t, ok, "a challenge was offered before any refusal")
+	noteChallenge(acc.ID, upstreamStreamError(refusal))
+	got, ok := verification(acc)
+	testutil.True(t, ok, "the refused challenge was not offered")
+	testutil.Equal(t, got.SDK, "bytedance_captcha")
+	testutil.EqualAny(t, got.Params["verify_data"], decision)
+	info := got.Params["info"].(map[string]any)
+	testutil.EqualAny(t, info["did"], acc.DoubaoDeviceID)
+	testutil.EqualAny(t, info["fp"], "verify_fp_1")
+
+	// Without a stored device id every request sends a new one: nothing to bind.
+	_, ok = verification(&store.Account{ID: acc.ID, AccountType: "doubao"})
+	testutil.False(t, ok, "a challenge was offered for an unbound identity")
+
+	clearChallenge(acc.ID)
+	_, ok = verification(acc)
+	testutil.False(t, ok, "a cleared challenge was still offered")
+}
+
+// A block the parser does not render is reported by layout only, and a text
+// block is not.
+func TestUnrenderedShapesNamesOnlyUnknownContent(t *testing.T) {
+	shapes := map[string]int{}
+	var frame map[string]any
+	testutil.NoError(t, json.Unmarshal([]byte(`{"content":{"content_block":[
+		{"block_type":10000,"content":{"text_block":{"text":"来啦"}}},
+		{"block_type":10099,"content":{"image_card_block":{"images":[{"url":"https://img/x.png"}]}}}]}}`), &frame))
+	blockShapes(frame, "STREAM_MSG_NOTIFY", shapes)
+	summary := shapeSummary(unrenderedShapes(shapes))
+	testutil.MustContain(t, summary, "block_type=10099")
+	testutil.MustContain(t, summary, "image_card_block")
+	testutil.MustNotContain(t, summary, "text_block")
+	testutil.MustNotContain(t, summary, "img/x.png")
+}
+
+// The diagnostic bundle receives the chat stream as the upstream sent it, and
+// the recorded request carries neither the cookie nor the CSRF token.
+func TestChatStreamIsCapturedForDiagnostics(t *testing.T) {
+	stream := "event: STREAM_MSG_NOTIFY\ndata: {\"content\":{\"content_block\":[{\"block_type\":10000,\"content\":{\"text_block\":{\"text\":\"来啦\"}}},{\"block_type\":10099,\"content\":{\"image_card_block\":{\"images\":[{\"url\":\"https://img/x.png\"}]}}}]}}\n\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/chat/completion") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, stream)
+			return
+		}
+		_, _ = io.WriteString(w, `{"status_code":0,"downlink_body":{"create_conv_downlink_body":{"conversation_info":{"conversation_id":"conv-1"}}}}`)
+	}))
+	defer server.Close()
+	acc := &store.Account{ID: 9103, AccountType: "doubao", ClientCookie: `{"sessionid":"secret-session","passport_csrf_token":"secret-csrf"}`, DoubaoDeviceID: "7500000000000000004", DoubaoWebID: "7500000000000000005"}
+	client := NewFromAccount(acc, &config.Config{DoubaoBaseURL: server.URL, DoubaoRequestGapMS: 1})
+	ctx, capture := debug.WithCapture(context.Background(), "doubao-capture-test")
+	var answer strings.Builder
+	err := client.SendRequestWithPayload(ctx, upstream.UpstreamRequest{Model: "doubao", Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "我想看小猫猫"}}}},
+		func(m upstream.SSEMessage) {
+			if delta, ok := m.Event["delta"].(string); ok {
+				answer.WriteString(delta)
+			}
+		}, nil)
+	testutil.NoError(t, err)
+	testutil.MustContain(t, answer.String(), "来啦")
+	sections := map[string]string{}
+	for _, section := range capture.Bundle().Sections {
+		sections[section.Name] = section.Payload
+	}
+	testutil.MustContain(t, sections["upstream_001_response.txt"], "image_card_block")
+	request := sections["upstream_001_request.json"]
+	testutil.MustContain(t, request, "/chat/completion")
+	testutil.MustNotContain(t, request, "secret-session")
+	testutil.MustNotContain(t, request, "secret-csrf")
+}
+
+// Image-search results ride on a text block's meta_info, ahead of the text
+// they illustrate. They are emitted where they arrive, once each, and the
+// returned answer keeps that order.
+func TestSearchImagesAreEmittedAheadOfTheText(t *testing.T) {
+	info, _ := json.Marshal(map[string]any{"scene_type": 1, "media": []any{
+		map[string]any{"type": 1, "image": map[string]any{"full_size_url": []any{"https://p5-flow-imagex-sign.byteimg.com/a.image?x-expires=1"}, "thumb_url": "https://p5-flow-imagex-sign.byteimg.com/a-thumb.image", "img_caption": "软萌[奶橘]"}},
+		map[string]any{"type": 1, "image": map[string]any{"thumb_url": "https://p5-flow-imagex-sign.byteimg.com/b(1).image", "img_caption": ""}},
+	}})
+	images, _ := json.Marshal(map[string]any{"patch_op": []any{map[string]any{"patch_object": 1, "patch_type": 1, "patch_value": map[string]any{"content_block": []any{
+		map[string]any{"block_type": 10000, "block_id": "b1", "content": map[string]any{"text_block": map[string]any{}}, "meta_info": []any{map[string]any{"type": 202, "info": string(info)}}},
+	}}}}})
+	text, _ := json.Marshal(map[string]any{"patch_op": []any{map[string]any{"patch_object": 1, "patch_type": 1, "patch_value": map[string]any{"content_block": []any{
+		map[string]any{"block_type": 10000, "block_id": "b1", "patch_type": 1, "content": map[string]any{"text_block": map[string]any{"text": "\n\n奶橘来啦！"}}},
+	}}}}})
+	stream := "event: STREAM_CHUNK\ndata: " + string(images) + "\n\nevent: STREAM_CHUNK\ndata: " + string(images) + "\n\nevent: STREAM_CHUNK\ndata: " + string(text) + "\n\n"
+	var deltas []string
+	got, err := consumeStream(strings.NewReader(stream), func(delta string) { deltas = append(deltas, delta) })
+	testutil.NoError(t, err)
+	want := "![软萌奶橘](https://p5-flow-imagex-sign.byteimg.com/a.image?x-expires=1)\n" +
+		"![image](https://p5-flow-imagex-sign.byteimg.com/b%281%29.image)\n" +
+		"\n\n奶橘来啦！"
+	testutil.Equal(t, got, want)
+	testutil.Equal(t, strings.Join(deltas, ""), want)
+	testutil.Equal(t, len(deltas), 3)
 }
