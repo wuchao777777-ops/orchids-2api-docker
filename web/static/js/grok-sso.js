@@ -213,8 +213,9 @@
 
   function matchesPlane(acc) {
     if (!state.plane || String(acc?.account_type || "").toLowerCase() !== "grok") return true;
-    const web = isSidebarGrokWebAccount(acc);
-    return state.plane === "web" ? web : !web;
+    // The Build tab lists Build (OAuth) accounts only; Console accounts show
+    // under the unfiltered list.
+    return state.plane === "web" ? isSidebarGrokWebAccount(acc) : isSidebarGrokOAuthAccount(acc);
   }
 
   function syncToolbar() {
@@ -269,6 +270,8 @@
     $("grokSSOSubmit")?.addEventListener("click", submit);
     $("grokSSORefreshBtn")?.addEventListener("click", () => batch("/api/grok/sso/refresh", "同步额度"));
     $("grokSSONSFWBtn")?.addEventListener("click", () => batch("/api/grok/sso/nsfw", "开启 NSFW"));
+    $("grokSSOConvertBuildBtn")?.addEventListener("click", () => batch("/api/grok/sso/convert-build", "转为 Build"));
+    $("grokSSOConvertConsoleBtn")?.addEventListener("click", () => batch("/api/grok/sso/convert-console", "转为 Console"));
     syncToolbar();
   });
 

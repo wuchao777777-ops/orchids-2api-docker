@@ -3,6 +3,7 @@ package grok
 import (
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
+	"orchids-api/internal/grok/console"
 	"orchids-api/internal/grok/grokbase"
 	"orchids-api/internal/grok/ratelimit"
 	"orchids-api/internal/grok/web"
@@ -36,9 +37,14 @@ type Handler struct {
 
 	// web serves the Grok Web (grok.com SSO) plane; see web_dispatch.go.
 	web *web.Handler
+	// console serves the Grok Console (console.x.ai SSO) plane.
+	console *console.Handler
 	webDispatch
 
 	quota grokbase.QuotaQueue
+
+	uploadsOnce  sync.Once
+	videoUploads *videoUploads
 }
 
 type chatAccountSession struct {
@@ -71,7 +77,9 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 		instanceID:  instanceID,
 		auditLogger: audit.NewNopLogger(),
 		web:         web.NewHandler(cfg, lb),
+		console:     console.NewHandler(cfg, lb),
 	}
+	h.web.SetVideoBackend(videoBackends{build: buildVideoBackend{h: h}, console: console.VideoBackend{H: h.console}})
 	return h
 }
 
@@ -91,6 +99,7 @@ func (h *Handler) SetConfig(cfg *config.Config) {
 	h.cliClient = cliClient
 	h.runtimeMu.Unlock()
 	h.web.SetConfig(cfg)
+	h.console.SetConfig(cfg)
 }
 
 func (h *Handler) configSnapshot() *config.Config {
@@ -113,6 +122,7 @@ func (h *Handler) SetAuditLogger(logger audit.Logger) {
 		h.auditLogger = logger
 		h.runtimeMu.Unlock()
 		h.web.SetAuditLogger(logger)
+		h.console.SetAuditLogger(logger)
 	}
 }
 

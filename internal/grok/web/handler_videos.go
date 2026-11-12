@@ -321,6 +321,10 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, http.StatusBadRequest, "prompt cannot be empty")
 		return
 	}
+	if upstreamModel, ok := h.backendVideoModel(r.Context(), req.Model); ok {
+		h.startBackendVideoJob(w, r, req, upstreamModel)
+		return
+	}
 	spec, ok := ResolveModel(req.Model)
 	if !ok || !spec.IsVideo {
 		httpserver.WriteError(w, http.StatusBadRequest, fmt.Sprintf("Model %q is not a video model", req.Model))
@@ -419,6 +423,8 @@ func (h *Handler) runVideoCreateJob(ctx context.Context, job *videoJob, spec Mod
 		videoJobsMu.Unlock()
 		h.persistVideoJob(ctx, job)
 	}
+	release, _ := h.holdVideoLease(ctx, job)
+	defer release()
 	update("in_progress", 1)
 
 	// Retry opening a session with account switching — video generation

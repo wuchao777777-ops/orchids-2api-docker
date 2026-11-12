@@ -95,6 +95,19 @@ type Config struct {
 	GrokCLIOAuthDeviceURL   string  `json:"grok_cli_oauth_device_url,omitempty"`
 	GrokCLIOAuthTokenURL    string  `json:"grok_cli_oauth_token_url,omitempty"`
 	GrokBuildRPS            float64 `json:"grok_build_rps,omitempty"`
+	// GrokBuildVideoUploadBaseURL is the public https origin of this gateway
+	// (for example https://api.example.com). Setting it enables the Build video
+	// fallback: a paid account refused (403) on the CLI proxy retries on the xAI
+	// API, which uploads the finished video to a one-time URL under this
+	// origin. Empty (the default) disables the fallback.
+	GrokBuildVideoUploadBaseURL string `json:"grok_build_video_upload_base_url,omitempty"`
+	// GrokBuildFallbackBaseURL is the xAI API the fallback calls; empty
+	// selects https://api.x.ai/v1.
+	GrokBuildFallbackBaseURL string `json:"grok_build_fallback_base_url,omitempty"`
+	// GrokAutoCleanReauthHours deletes a Grok account (Build or Web) that has
+	// needed a new login for at least this many hours. Zero (the default)
+	// disables the cleanup.
+	GrokAutoCleanReauthHours int `json:"grok_auto_clean_reauth_hours,omitempty"`
 
 	// ── Grok Web (grok.com SSO) upstream ──
 	// Configurable via config.json / Redis. Empty values select the defaults in
@@ -104,7 +117,11 @@ type Config struct {
 	// GrokWebProxyURL routes only grok.com (Web SSO) traffic through a proxy,
 	// for a host whose own address Cloudflare challenges. Empty uses the
 	// general proxy settings.
-	GrokWebProxyURL          string  `json:"grok_web_proxy_url,omitempty"`
+	GrokWebProxyURL string `json:"grok_web_proxy_url,omitempty"`
+	// GrokConsoleBaseURL is the console.x.ai origin used by the Grok Console
+	// plane. Empty selects https://console.x.ai. Console traffic uses the same
+	// transport (and grok_web_proxy_url) as grok.com.
+	GrokConsoleBaseURL       string  `json:"grok_console_base_url,omitempty"`
 	GrokStatsigSignerURL     *string `json:"grok_statsig_signer_url,omitempty"`
 	GrokStatsigID            string  `json:"grok_statsig_id,omitempty"`
 	GrokConfigCFClearance    string  `json:"grok_cf_clearance,omitempty"`
