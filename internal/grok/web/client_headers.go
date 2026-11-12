@@ -2,13 +2,11 @@ package web
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
-	"orchids-api/internal/store"
 	"strconv"
 	"strings"
 	"sync"
@@ -315,15 +313,6 @@ func applyChromiumClientHints(header http.Header, userAgent string) {
 	header.Set("Sec-Ch-Ua-Platform", strconv.Quote(platform))
 }
 
-func credentialAffinity(token string) string {
-	normalized := NormalizeSSOToken(token)
-	if normalized == "" {
-		normalized = strings.TrimSpace(token)
-	}
-	sum := sha256.Sum256([]byte(normalized))
-	return fmt.Sprintf("sso_%x", sum[:16])
-}
-
 // headersFor is headers with the statsig id resolved for one request. The plain
 // headers method keeps the manual-only behaviour for callers without a context.
 func (c *Client) headersFor(ctx context.Context, token, method, reqURL string) http.Header {
@@ -456,7 +445,3 @@ func (c *Client) assetDownloadHeaders(token, link string) http.Header {
 	}
 	return headers
 }
-
-// EgressAffinity is the affinity key the Web egress manager uses for an
-// account, so account bindings can be computed outside a request.
-func EgressAffinity(acc *store.Account) string { return credentialAffinity(SSOToken(acc)) }

@@ -61,8 +61,8 @@ test('save sends security and proxy settings but no local cache settings',async(
  node('cfg_anonymous_allow_ips').value='203.0.113.1';
  node('cfg_proxy_bypass').value='example.com';
  await api.saveConfiguration();
- same(saved,{admin_password:'changed',proxy_url:'http://proxy.example:8080',proxy_bypass:['example.com'],grok_low_latency:false,grok_clearance_mode:'manual',grok_cf_clearance:'',grok_flaresolverr_url:'',grok_web_proxy_url:'',
-  grok_clearance_timeout_seconds:0,grok_clearance_refresh_interval:0,grok_cli_base_url:'',grok_cli_client_version:'',grok_cli_client_identifier:'',grok_cli_user_agent:'',grok_build_rps:0,
+ same(saved,{admin_password:'changed',proxy_url:'http://proxy.example:8080',proxy_bypass:['example.com'],grok_cf_clearance:'',grok_web_proxy_url:'',
+  grok_cli_base_url:'',grok_cli_client_version:'',grok_cli_client_identifier:'',grok_cli_user_agent:'',grok_build_rps:0,
   grok_web_base_url:'',grok_web_user_agent:'',grok_statsig_id:'',grok_statsig_signer_url:null,grok_web_timeout_seconds:0,grok_web_stream_idle_seconds:0,grok_web_rps:0,
   grok_temporary:true,grok_disable_memory:false,grok_custom_instruction:'',grok_image_nsfw:true,
   doubao_base_url:'',doubao_accounts_url:'',doubao_user_agent:'',doubao_request_gap_ms:0});
@@ -133,23 +133,24 @@ test('configuration page removes anonymous and generation customization',()=>{
  assert.doesNotMatch(js,/PERFORMANCE_FIELDS|parseAnonymousAllowIPs|anonymous_allow_ips|first_token_timeout_seconds/);
 });
 
-test('grok delivery control hydrates, saves, tracks changes and resets',async()=>{
+test('a boolean setting hydrates, saves, tracks changes and resets',async()=>{
  let saved;
  const {api,node}=loadConfig(async(_url,options)=>{
   saved=JSON.parse(options.body);
   return {ok:true,json:async()=>({code:0})};
  });
- node('cfg_grok_low_latency').type='checkbox';
- api.applyConfigurationPayload({grok_low_latency:true});
+ node('cfg_grok_disable_memory').type='checkbox';
+ api.applyConfigurationPayload({grok_disable_memory:true});
  api.captureConfigBaseline();
- assert.equal(node('cfg_grok_low_latency').checked,true);
- node('cfg_grok_low_latency').checked=false;
+ assert.equal(node('cfg_grok_disable_memory').checked,true);
+ node('cfg_grok_disable_memory').checked=false;
  assert.equal(api.countConfigChanges(),1);
  api.resetConfigChanges();
- assert.equal(node('cfg_grok_low_latency').checked,true);
+ assert.equal(node('cfg_grok_disable_memory').checked,true);
  await api.saveConfiguration();
  assert.equal(saved.inference_profile,undefined);
- assert.equal(saved.grok_low_latency,true);
+ assert.equal(saved.grok_disable_memory,true);
+ assert.equal(saved.grok_low_latency,undefined);
 });
 
 test('saving config preserves newer edits as dirty and resets to the submitted snapshot', async () => {
@@ -207,16 +208,14 @@ test('blank admin password is omitted when saving unrelated settings',async()=>{
  assert.equal(Object.hasOwn(saved,'admin_password'),false);
 });
 
-test('statsig source and clearance mode round-trip through their radio groups',async()=>{
+test('statsig source round-trips through its radio group',async()=>{
  let saved;
  const {api,node}=loadConfig(async(_url,options)=>{saved=JSON.parse(options.body);return {ok:true,json:async()=>({code:0})};});
- api.applyConfigurationPayload({grok_statsig_id:'abc',grok_clearance_mode:'on_demand',grok_web_timeout_seconds:600});
+ api.applyConfigurationPayload({grok_statsig_id:'abc',grok_web_timeout_seconds:600});
  assert.equal(node('cfg_statsig_mode_manual').checked,true);
- assert.equal(node('cfg_clearance_mode_on_demand').checked,true);
  await api.saveConfiguration();
  assert.equal(saved.grok_statsig_id,'abc');
  assert.equal(saved.grok_statsig_signer_url,'');
- assert.equal(saved.grok_clearance_mode,'on_demand');
  assert.equal(saved.grok_web_timeout_seconds,600);
  node('cfg_statsig_mode_manual').checked=false;node('cfg_statsig_mode_url').checked=true;
  await api.saveConfiguration();

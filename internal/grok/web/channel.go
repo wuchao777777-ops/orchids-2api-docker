@@ -39,7 +39,7 @@ func webTransportKey(cfg *config.Config) string {
 		return ""
 	}
 	return strings.Join([]string{cfg.ProxyURL, cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.GrokWebProxyURL,
-		cfg.GrokConfigCFClearance, cfg.GrokConfigCFBM, cfg.GrokClearanceMode, cfg.GrokFlareSolverrURL, cfg.GrokWebBaseURL, cfg.GrokWebUserAgent}, "\x00")
+		cfg.GrokConfigCFClearance, cfg.GrokConfigCFBM, cfg.GrokWebBaseURL, cfg.GrokWebUserAgent}, "\x00")
 }
 
 // webObservationTTL bounds how old a successful quota read may be and still
@@ -130,10 +130,6 @@ func PrepareUpdate(acc, existing *store.Account) error {
 	acc.UsageCurrent = existing.UsageCurrent
 	acc.UsageTotal = existing.UsageTotal
 	acc.UsageLimit = existing.UsageLimit
-	acc.QualityRevision = existing.QualityRevision
-	acc.QualityFailures = existing.QualityFailures
-	acc.QualityCooldownUntil = existing.QualityCooldownUntil
-	acc.QualityReason = existing.QualityReason
 	if strings.TrimSpace(acc.Subscription) == "" {
 		acc.Subscription = existing.Subscription
 	}
