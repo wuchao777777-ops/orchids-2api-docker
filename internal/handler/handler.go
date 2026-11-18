@@ -18,6 +18,7 @@ import (
 
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/audit"
+	"orchids-api/internal/chatwire"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	apperrors "orchids-api/internal/errors"
@@ -82,82 +83,10 @@ type Handler struct {
 // by the channel port; the alias keeps the pipeline's own name for it.
 type UpstreamClient = provider.Client
 
-type ClaudeRequest struct {
-	MaxTokens           *int             `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int             `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64         `json:"temperature,omitempty"`
-	TopP                *float64         `json:"top_p,omitempty"`
-	Stop                StopSequences    `json:"stop,omitempty"`
-	StopSequences       []string         `json:"stop_sequences,omitempty"`
-	Model               string           `json:"model"`
-	Messages            []prompt.Message `json:"messages"`
-	System              SystemItems      `json:"system"`
-	Tools               []any            `json:"tools"`
-	ToolChoice          any              `json:"tool_choice,omitempty"`
-	ParallelToolCalls   *bool            `json:"parallel_tool_calls,omitempty"`
-	Stream              bool             `json:"stream"`
-	ConversationID      string           `json:"conversation_id"`
-	ConversationIDAlt   string           `json:"conversationId"`
-	Metadata            map[string]any   `json:"metadata"`
-	ClientMetadata      map[string]any   `json:"client_metadata,omitempty"`
-	// ReasoningEffort is the OpenAI-style effort hint. A catalog publishes models
-	// as "<family>-<effort>", so a client that asks for the family name plus an
-	// effort must have it resolved onto the catalog entry.
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	// OutputConfig and Thinking carry the Anthropic-side effort hints Claude
-	// Code sends (output_config.effort, thinking.effort/budget_tokens). They
-	// feed the same effort resolution as reasoning_effort.
-	OutputConfig   map[string]any   `json:"output_config,omitempty"`
-	Thinking       map[string]any   `json:"thinking,omitempty"`
-	ResponseFormat map[string]any   `json:"response_format,omitempty"`
-	ResponseText   map[string]any   `json:"text,omitempty"`
-	Include        []string         `json:"include,omitempty"`
-	PromptCacheKey string           `json:"prompt_cache_key,omitempty"`
-	ResponsesTools []map[string]any `json:"x_responses_tools,omitempty"`
-	MCPServers     []map[string]any `json:"mcp_servers,omitempty"`
-}
-
 type toolCall struct {
 	id    string
 	name  string
 	input string
-}
-
-type openAINonStreamToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-
-type openAINonStreamMessage struct {
-	Role             string                    `json:"role"`
-	Content          any                       `json:"content"`
-	ReasoningContent string                    `json:"reasoning_content,omitempty"`
-	ToolCalls        []openAINonStreamToolCall `json:"tool_calls,omitempty"`
-}
-
-type openAINonStreamChoice struct {
-	Index        int                    `json:"index"`
-	Message      openAINonStreamMessage `json:"message"`
-	FinishReason *string                `json:"finish_reason"`
-}
-
-type openAINonStreamUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-type openAINonStreamResponse struct {
-	ID      string                  `json:"id"`
-	Object  string                  `json:"object"`
-	Created int64                   `json:"created"`
-	Model   string                  `json:"model"`
-	Choices []openAINonStreamChoice `json:"choices"`
-	Usage   openAINonStreamUsage    `json:"usage"`
 }
 
 const keepAliveInterval = 15 * time.Second
@@ -272,6 +201,34 @@ func shortRequestTrace(hash string) string {
 	return hash[:12]
 }
 
+// explicitResumeForRequest accepts one boolean header, never a comma-separated
+// list or repeated field. Header names are case-insensitive even for requests
+// constructed directly in process rather than decoded by net/http.
+func explicitResumeForRequest(r *http.Request, targetChannel string) (bool, error) {
+	var values []string
+	fields := 0
+	for name, entries := range r.Header {
+		if strings.EqualFold(name, "X-Warp-Resume") {
+			fields++
+			values = append(values, entries...)
+		}
+	}
+	if fields == 0 {
+		return false, nil
+	}
+	if fields != 1 || len(values) != 1 {
+		return false, errors.New("X-Warp-Resume must be a single true or false value")
+	}
+	value := strings.TrimSpace(values[0])
+	if !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
+		return false, errors.New("X-Warp-Resume must be a single true or false value")
+	}
+	if spec, ok := provider.Lookup(targetChannel); !ok || !spec.ExplicitResume {
+		return false, errors.New("X-Warp-Resume is unsupported by this provider")
+	}
+	return strings.EqualFold(value, "true"), nil
+}
+
 func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	h.handleMessages(w, r, nil, nil)
 }
@@ -308,8 +265,20 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, prepare
 		return
 	}
 
+	explicitResume, err := explicitResumeForRequest(r, forcedChannel)
+	if err != nil {
+		if adapter.DetectResponseFormat(r.URL.Path) == adapter.FormatOpenAI {
+			httpserver.WriteErrorCode(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		} else {
+			apperrors.New("invalid_request_error", err.Error(), http.StatusBadRequest).WriteResponse(w)
+		}
+		return
+	}
+	// Keep the opt-in on the request itself so timeout, attempt and observer
+	// contexts retain it. This is transport intent, never an auth bypass.
+	r = r.WithContext(upstream.WithExplicitResume(r.Context(), explicitResume))
+
 	var req ClaudeRequest
-	var err error
 	if prepared == nil {
 		if maxRequestBytes > 0 {
 			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
@@ -634,6 +603,7 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, prepare
 	r = r.WithContext(upstreamCtx)
 	sh := newStreamHandler(cfg, w, logger, isStream, responseFormat)
 	sh.cancelUpstream = cancelUpstream
+	sh.canonicalWireUsage = responseFormat == adapter.FormatOpenAI || chatwire.SourceOperation(r.Context()) == "responses"
 	sh.setAllowedToolNames(declaredToolNames(effectiveTools))
 	sh.setDisallowToolCalls(gateNoTools)
 	// The compiled schema gates the finished answer; a request that declared no

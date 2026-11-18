@@ -73,6 +73,10 @@ type Spec struct {
 	// Capabilities answers catalog questions for the shared pipeline.
 	Capabilities Capabilities
 
+	// Selection optionally repairs stale control-plane state before choosing
+	// an inference account. Refresh must never start a paid generation.
+	Selection *Selection
+
 	Probe *Probe
 
 	// Catalog reads the channel's upstream model catalog.
@@ -95,10 +99,18 @@ type Spec struct {
 	// SkipSharedCacheMarkers leaves this provider's tools and text untouched by
 	// Anthropic-specific cache_control injection from the shared cache policy.
 	SkipSharedCacheMarkers bool
+	// ExplicitResume accepts the caller's explicit continuation opt-in header.
+	// Unsupported providers reject the header rather than silently ignoring it.
+	ExplicitResume bool
 
 	// PublishModels reconciles routes backed by verified account state for a
 	// channel that has no upstream model-list endpoint.
 	PublishModels func(ctx context.Context, env Env) error
+}
+
+type Selection struct {
+	NeedsRefresh func(*store.Account) bool
+	Refresh      func(context.Context, Env, *store.Account) error
 }
 
 // specs is written only by Register during package initialization and read
