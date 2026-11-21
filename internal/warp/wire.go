@@ -141,15 +141,13 @@ func buildRequest(model string, prepared preparedRequest) ([]byte, error) {
 	taskContext := warpapi.Request_TaskContext_builder{}.Build()
 	serverID := clientMCPServerID
 	if len(prepared.RootTaskContext) > 0 {
-		root, err := decodeContinuationState(prepared.RootTaskContext)
+		var err error
+		taskContext, err = decodeTaskContext(prepared.RootTaskContext)
 		if err != nil {
 			return nil, err
 		}
-		serverID, err = mcpServerIDForRoot(root)
+		serverID, err = mcpServerIDForRoot(taskContext.GetTasks()[0])
 		if err != nil {
-			return nil, err
-		}
-		if err := proto.Unmarshal(prepared.RootTaskContext, taskContext); err != nil {
 			return nil, err
 		}
 	}
@@ -207,15 +205,6 @@ func buildMCPToolResult(result preparedToolResult) *warpapi.Request_Input_ToolCa
 	return builder.Build()
 }
 
-// readStream buffers output until a safe terminal event.
-func readStream(source io.Reader, expectedModel string) (streamResult, error) {
-	return readStreamWithContext(source, expectedModel, nil)
-}
-
-func readStreamWithContext(source io.Reader, expectedModel string, initial []byte) (result streamResult, parseErr error) {
-	return readStreamWithProgress(source, expectedModel, initial, nil)
-}
-
 func readStreamWithProgress(source io.Reader, expectedModel string, initial []byte, progress func()) (result streamResult, parseErr error) {
 	state := newContinuationAccumulator(initial)
 	models := newModelObservations(state.root)
@@ -260,11 +249,7 @@ func readStreamWithProgress(source io.Reader, expectedModel string, initial []by
 	createdTask := false
 	previousMCP := make(map[string]bool)
 	serverCalls := observedServerCalls{calls: make(map[string]bool)}
-	if len(initial) > 0 {
-		root, err := decodeContinuationState(initial)
-		if err != nil {
-			return result, errStreamStream
-		}
+	if root := state.root; root != nil {
 		taskID, createdTask = root.GetId(), true
 		for _, message := range root.GetMessages() {
 			serverCalls.observe(message, taskID)
@@ -454,6 +439,7 @@ func readStreamWithProgress(source io.Reader, expectedModel string, initial []by
 					result.RejectAction = int(action.WhichAction())
 					return errStreamStream
 				}
+				preview := messageActionPreview{state: state, action: action}
 				for messageIndex, message := range messages {
 					if !bindTask(message.GetTaskId()) {
 						result.RejectMessage = int(message.WhichMessage())
@@ -462,12 +448,12 @@ func readStreamWithProgress(source io.Reader, expectedModel string, initial []by
 					}
 					var err error
 					effectiveText := false
-					message, effectiveText, err = effectiveVisibleUpdate(state, action, message)
+					message, effectiveText, err = preview.visible(message)
 					if err != nil {
 						result.Failure = failureFromState("masked_update", state)
 						return errStreamStream
 					}
-					message, err = effectiveBookkeepingMessage(state, action, message)
+					message, err = preview.bookkeeping(message)
 					if err != nil {
 						return err
 					}
@@ -527,7 +513,7 @@ func readStreamWithProgress(source io.Reader, expectedModel string, initial []by
 							return err
 						}
 						if message.GetToolCallResult().WhichResult() == warpapi.Message_ToolCallResult_Server_case {
-							if err := validateServerResultAction(state, action); err != nil {
+							if err := preview.evaluate(); err != nil {
 								return err
 							}
 						}
@@ -600,7 +586,7 @@ func readStreamWithProgress(source io.Reader, expectedModel string, initial []by
 				// Track the complete validated root state privately for a client
 				// tool follow-up. Pure text fixtures may not contain CreateTask;
 				// only a tool-bearing completion requires a valid snapshot.
-				if err := state.apply(action); err == nil {
+				if err := preview.commit(); err == nil {
 					switch action.WhichAction() {
 					case warpapi.ClientAction_AddMessagesToTask_case, warpapi.ClientAction_UpdateTaskMessage_case, warpapi.ClientAction_AppendToMessageContent_case, warpapi.ClientAction_UpdateTaskServerData_case:
 						checkpointProgress = true

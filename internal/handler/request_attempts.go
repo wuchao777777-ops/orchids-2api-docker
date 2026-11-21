@@ -57,6 +57,14 @@ func (e *messageExecution) run() {
 	if spec, ok := provider.Lookup(e.targetChannel); ok && spec.SingleGenerationAttempt {
 		maxRetries = 0
 	}
+	if e.targetChannel == "doubao" {
+		maxRetries = min(maxRetries, 1)
+		// An explicit dialog is pinned even on its first turn. A retry could
+		// duplicate an accepted turn or silently start a competing history.
+		if explicitConversationID(e.r, e.req) != "" {
+			maxRetries = 0
+		}
+	}
 	retryDelay := time.Duration(e.cfg.RetryDelay) * time.Millisecond
 	retriesRemaining := maxRetries
 	budgetCtx, attemptBudget := upstream.WithAttemptBudget(e.r.Context(), maxRetries+1)
@@ -213,6 +221,8 @@ func (e *messageExecution) run() {
 				store.RecordModelCooldownWithReason(e.currentAccount, verdict.Model, time.Now().Add(verdict.Cooldown), verdict.ModelCooldownKind)
 				if persistErr := e.h.loadBalancer.Store.UpdateAccount(e.r.Context(), e.currentAccount); persistErr != nil {
 					slog.Warn("persist model cooldown failed", "account_id", e.currentAccount.ID, "model", verdict.Model, "error", persistErr)
+				} else {
+					e.h.loadBalancer.InvalidateAccounts([]int64{e.currentAccount.ID})
 				}
 			} else if verdict.Status != "" {
 				logutil.DebugIf(e.verboseDiagnostics, "标记账号状态", "account_id", e.currentAccount.ID, "status", verdict.Status, "scope", string(verdict.Scope), "category", errClass.Category)

@@ -106,6 +106,8 @@ func honorsModelCooldown(channel string) bool {
 	return provider.HonorsModelCooldown(channel)
 }
 
+type pinnedDoubaoAccountKey struct{}
+
 func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string, failedAccountIDs []int64, modelID string) (*store.Account, error) {
 	if h == nil || h.loadBalancer == nil {
 		return nil, errors.New("load balancer not configured")
@@ -113,10 +115,14 @@ func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string,
 	model := strings.TrimSpace(modelID)
 	channel := strings.ToLower(strings.TrimSpace(targetChannel))
 	spec, _ := provider.Lookup(channel)
-	needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "cline" || spec.Selection != nil)
+	pinned, _ := ctx.Value(pinnedDoubaoAccountKey{}).(int64)
+	needsFilter := (channel == "doubao" && pinned != 0) || model != "" && (honorsModelCooldown(channel) || channel == "cline" || spec.Selection != nil)
 	var filter loadbalancer.AccountFilter
 	if needsFilter {
 		filter = func(acc *store.Account) error {
+			if channel == "doubao" && pinned != 0 && acc.ID != pinned {
+				return loadbalancer.ErrAccountNotEligible
+			}
 			if spec.Selection != nil && spec.Selection.NeedsRefresh != nil && spec.Selection.NeedsRefresh(acc) {
 				return loadbalancer.ErrAccountNotEligible
 			}
@@ -172,7 +178,7 @@ func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string,
 			refreshFailed = true
 			slog.Warn("Account selection catalog refresh failed", "channel", channel, "account_id", candidate.ID)
 		}
-		h.loadBalancer.InvalidateAccounts([]int64{candidate.ID})
+		h.loadBalancer.InvalidateAccountSnapshot(candidate)
 		if account, err := selectFresh(refreshCtx); err == nil {
 			return account, nil
 		} else {

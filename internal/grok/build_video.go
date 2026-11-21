@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"orchids-api/internal/grok/console"
 	"orchids-api/internal/grok/grokbase"
 	"orchids-api/internal/grok/web"
 	"orchids-api/internal/store"
@@ -20,37 +19,7 @@ import (
 // row, so an account pool that never observed the model serves nothing. Jobs
 // run on the Web plane's video job runtime through web.VideoBackend.
 
-const (
-	buildVideoPollInterval   = 2 * time.Second
-	maxBuildVideoInlineBytes = 32 << 20
-)
-
-// videoBackends routes a video job to the plane its model belongs to.
-type videoBackends struct {
-	build   buildVideoBackend
-	console console.VideoBackend
-}
-
-func (v videoBackends) VideoModel(ctx context.Context, modelID string) (string, bool) {
-	if console.IsConsoleModelID(modelID) {
-		return v.console.VideoModel(ctx, modelID)
-	}
-	return v.build.VideoModel(ctx, modelID)
-}
-
-func (v videoBackends) ResumeVideo(ctx context.Context, job web.VideoBackendJob, accountID int64, requestID string) (web.VideoBackendResult, error) {
-	if console.IsConsoleModelID(job.Model) {
-		return v.console.ResumeVideo(ctx, job, accountID, requestID)
-	}
-	return v.build.ResumeVideo(ctx, job, accountID, requestID)
-}
-
-func (v videoBackends) RunVideo(ctx context.Context, job web.VideoBackendJob) (web.VideoBackendResult, error) {
-	if console.IsConsoleModelID(job.Model) {
-		return v.console.RunVideo(ctx, job)
-	}
-	return v.build.RunVideo(ctx, job)
-}
+const buildVideoPollInterval = 2 * time.Second
 
 // buildVideoBackend adapts the Build plane to web.VideoBackend.
 type buildVideoBackend struct{ h *Handler }
@@ -62,7 +31,7 @@ func (b buildVideoBackend) VideoModel(ctx context.Context, modelID string) (stri
 		return "", false
 	}
 	id := strings.TrimPrefix(normalizeModelID(modelID), "build/")
-	if id == "" || web.IsWebModelID(id) || console.IsConsoleModelID(id) {
+	if id == "" || web.IsWebModelID(id) {
 		return "", false
 	}
 	row, err := h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", id)
@@ -139,11 +108,11 @@ func pollBuildVideo(ctx context.Context, client *CLIClient, acc *store.Account, 
 			return web.VideoBackendResult{}, err
 		}
 		if done {
-			data, mimeType, err := grokbase.DownloadVideo(ctx, client.httpClient, videoURL)
+			asset, mimeType, err := grokbase.OpenVideo(ctx, client.httpClient, videoURL)
 			if err != nil {
 				return web.VideoBackendResult{}, err
 			}
-			return web.VideoBackendResult{URL: videoURL, Data: data, MimeType: mimeType}, nil
+			return web.VideoBackendResult{URL: videoURL, Body: asset, MimeType: mimeType}, nil
 		}
 		timer := time.NewTimer(buildVideoPollInterval)
 		select {
@@ -186,7 +155,7 @@ func buildVideoPayload(job web.VideoBackendJob) (map[string]any, error) {
 			}
 			if strings.HasPrefix(strings.ToLower(reference), "data:") {
 				inline += len(reference)
-				if inline > maxBuildVideoInlineBytes {
+				if inline > web.MaxVideoInlineReferenceBytes {
 					return nil, errors.New("combined inline reference images exceed 32 MiB")
 				}
 			}
