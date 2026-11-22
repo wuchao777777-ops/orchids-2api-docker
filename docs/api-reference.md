@@ -64,6 +64,10 @@ curl http://127.0.0.1:3002/workbuddy/v1/chat/completions \
 
 stream 省略时可能采用服务默认，需 JSON 非流式结果时显式 stream:false。max_completion_tokens 在 Chat 请求中优先于 max_tokens；各上游可能进一步规范化预算和推理档位。
 
+WorkBuddy 和 Cline 的图文输入可用 Chat Completions 的 `image_url`、Messages 的 `image` 或 Responses 的 `input_image` 用户内容块。可传 PNG、JPEG、GIF、WebP 的 Base64 data URI（Messages 也接受 `source.type: "base64"`）。每次请求最多 8 张，内联图片解码后合计最多 16 MiB。网关也会转发公开 HTTP(S) URL；WorkBuddy 上游负责读取，Cline 的上游 URL 支持尚未实测，建议优先使用 Base64。
+
+请选用支持图片的模型。WorkBuddy 模型列表从账号目录公布已观察到的 `supports_images` 和 `input_modalities`；若旧目录没有这些字段，可先刷新模型目录。Cline 账号目录没有明确的图片能力字段，网关不会根据模型名称推断；如果账号列出了 `cline-free/nemotron-3.5-super-vl`，可用它验收。
+
 Grok Web 文本模型（例如 `grok-chat-fast`）可在 `POST /grok/v1/chat/completions` 的用户消息中附带 PDF：
 
 ```json
@@ -73,7 +77,9 @@ Grok Web 文本模型（例如 `grok-chat-fast`）可在 `POST /grok/v1/chat/com
 ]}]}
 ```
 
-也可以用 `file_data: "data:application/pdf;base64,..."` 替代 `file_url`，或使用扁平的 `input_file` 文件块。同一请求的文档解码后合计最多 16 MiB；只允许公开 HTTP(S) 附件地址。这个入口不接收 `file_id`，也不提供独立的 Grok PDF 文件上传接口。Grok 工作台选择 Web 文本模型后可以直接选 PDF；文件内容只在当前页面内存中保留，刷新后需要重新选择。
+也可以用 `file_data: "data:application/pdf;base64,..."` 替代 `file_url`，或使用扁平的 `input_file` 文件块。每个文件只能提供一个来源，只允许公开 HTTP(S) 附件地址。单次 Web 对话最多 8 个附件，解码后所有附件合计最多 64 MiB，其中全部文档合计最多 16 MiB。网关先去重并验证整批附件，再向 Grok 上传。这个入口不接收 `file_id`，也不提供独立的 Grok PDF 文件上传接口。
+
+Web Responses 使用相同的附件限制。用 `store:true` 保存后，可用同一个 API Key 和模型通过 `previous_response_id` 续接；网关会重放保存的输入并重新上传其中的附件，文件 URL 仍需可访问。工作台支持在同一会话中保留最多 8 份 PDF（共 16 MiB），文件内容只留在当前页面内存，刷新后需要重新选择。
 
 Grok Build（例如 `grok-4.7`）的 Chat Completions 也接收上述 URL 或内联文件块；Messages 接收 Anthropic 的 `document` 块。两条路径将文件转为 `input_file` 交给 Build 的原生 Responses 代理，网关不代上传或下载。原生 Responses 仍可直接传 `input_file`。Build 兼容路径不接收只传 `file_id` 的请求，因为网关没有与上游账号绑定的文件资源。该格式已通过本地转发测试，Build 上游能否读取 PDF 尚未验收。
 
