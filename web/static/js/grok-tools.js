@@ -31,7 +31,6 @@
     running: false,
     startAt: 0,
     elapsedTimer: null,
-    lastProgress: 0,
     currentPreviewItem: null,
     previewCount: 0,
     pollTimer: null,
@@ -81,11 +80,8 @@
     "common.generating": "生成中",
     "common.done": "已完成",
     "common.connectionError": "连接中断",
-    "common.createTaskFailed": "创建任务失败",
-    "common.enterPrompt": "请输入 Prompt",
     "video.alreadyRunning": "Video 任务已在运行中",
     "video.enterPrompt": "请输入 Video Prompt",
-    "video.superResolution": "超分辨率处理中...",
     "video.downloadFailed": "视频下载失败",
     "video.taskEmpty": "创建任务失败：空 task_id",
     "video.startFailed": "启动失败",
@@ -93,19 +89,10 @@
     "voice.alreadyRunning": "Voice 会话已在运行中",
     "voice.tokenUnavailable": "voice token unavailable",
     "voice.connected": "已连接",
-    "voice.stopped": "未连接",
     "voice.connectFailed": "连接失败",
   };
 
-  function t(key, vars) {
-    let text = i18nMap[key] || key;
-    if (vars && typeof vars === "object") {
-      Object.keys(vars).forEach((name) => {
-        text = text.replace(new RegExp(`\\{${name}\\}`, "g"), String(vars[name]));
-      });
-    }
-    return text;
-  }
+  function t(key) { return i18nMap[key]; }
 
   function handleUnauthorized(res) {
     if (!res || res.status !== 401) return false;
@@ -267,19 +254,6 @@
     });
     applyGrokCapabilityControls();
     updateGrokCapabilityPresentation(currentGrokToolTab());
-  }
-
-  function formatBytes(bytes) {
-    const num = Number(bytes || 0);
-    if (!Number.isFinite(num) || num <= 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let value = num;
-    let idx = 0;
-    while (value >= 1024 && idx < units.length - 1) {
-      value /= 1024;
-      idx++;
-    }
-    return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[idx]}`;
   }
 
   function relativeTime(ms) {
@@ -489,7 +463,6 @@
               ? {
                   name: String(msg.attachment.name || ""),
                   type: String(msg.attachment.type || ""),
-                  dataUrl: msg.attachment.dataUrl,
                 }
               : undefined,
           }))
@@ -527,11 +500,12 @@
       const bounded = boundedChatPayload();
       // Keep memory and disk subject to the same limits, so an evicted session
       // cannot reappear during the next save in this tab.
-      chatState.sessions = bounded.sessions;
+      const liveSessions = new Map(chatState.sessions.map((session) => [session.id, session]));
+      chatState.sessions = bounded.sessions.map((session) => liveSessions.get(session.id));
       if (!chatState.sessions.some((item) => item.id === chatState.activeId)) {
         chatState.activeId = chatState.sessions[0]?.id || "";
       }
-      localStorage.setItem(scopedChatStorageKey(), chatPayloadJSON(chatState.sessions));
+      localStorage.setItem(scopedChatStorageKey(), bounded.payload);
     } catch (err) {
       updateChatStatus("浏览器存储空间不足，会话尚未保存；请释放存储空间后重试", "error");
     }
@@ -1772,6 +1746,11 @@
     const route = chatState.routes?.find((item) => item.id === chatState.model);
     const effortControl = document.getElementById("grokReasoningEffort");
     const session = activeChatSession();
+    const documentInput = document.getElementById("grokChatDocument");
+    if (documentInput) {
+      documentInput.disabled = !supportsChatDocuments(chatState.model);
+      if (documentInput.disabled) documentInput.value = "";
+    }
     if (effortControl) {
       const labels = { none: "关闭", low: "低", medium: "中", high: "高", xhigh: "极高" };
       const advertised = Array.isArray(route?.reasoning_efforts)
@@ -2019,14 +1998,17 @@
       throw new Error("missing chat session");
     }
     const input = [];
+    const documentMessage = supportsChatDocuments(chatState.model)
+      ? session.messages.findLast((msg) => msg.role === "user" && msg.attachment?.dataUrl)
+      : null;
     session.messages.forEach((msg) => {
       const role = msg.role === "assistant" ? "assistant" : "user";
       const parts = [];
       if (msg.content) {
         parts.push({ type: role === "assistant" ? "output_text" : "input_text", text: String(msg.content || "") });
       }
-      if (role === "user" && msg.attachment?.dataUrl) {
-        parts.push({ type: "input_file", file: { data: msg.attachment.dataUrl } });
+      if (msg === documentMessage) {
+        parts.push({ type: "input_file", filename: msg.attachment.name, file_data: msg.attachment.dataUrl });
       }
       if (parts.length === 0) return;
       input.push({ type: "message", role, content: parts });
@@ -2066,14 +2048,47 @@
     if (xSearch) xSearch.checked = session?.xSearch === true;
   }
 
+  function supportsChatDocuments(model) {
+    return /^(?:web\/)?grok-chat-(?:fast|auto|expert|heavy)$/i.test(String(model || ""));
+  }
+
   async function sendChatMessage() {
-    if (chatState.sending) return;
+    if (chatState.sending || chatState.readingDocument) return;
     const input = document.getElementById("grokPromptInput");
+    const fileInput = document.getElementById("grokChatDocument");
+    const file = fileInput?.files?.[0];
     const prompt = String(input?.value || "").trim();
-    if (!prompt) return;
+    if (!prompt && !file) return;
     const session = activeChatSession();
     if (!session) return;
-    session.messages.push({ role: "user", content: prompt });
+    const message = { role: "user", content: prompt };
+    if (file) {
+      if (!supportsChatDocuments(chatState.model) || !/\.pdf$/i.test(file.name) || !file.size || file.size > 16 * 1024 * 1024) {
+        updateChatStatus("请选择 Grok Web 文本模型，并使用不超过 16 MiB 的 PDF", "error");
+        return;
+      }
+      try {
+        chatState.readingDocument = true;
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+        if (activeChatSession() !== session || !supportsChatDocuments(chatState.model) || fileInput.files?.[0] !== file) return;
+        for (const previous of session.messages) {
+          if (previous.attachment) delete previous.attachment.dataUrl;
+        }
+        message.attachment = { name: file.name, type: "application/pdf", dataUrl: dataUrl.replace(/^data:[^,]*,/, "data:application/pdf;base64,") };
+        fileInput.value = "";
+      } catch (_) {
+        updateChatStatus("无法读取 PDF，请重新选择文件", "error");
+        return;
+      } finally {
+        chatState.readingDocument = false;
+      }
+    }
+    session.messages.push(message);
     session.updatedAt = Date.now();
     ensureChatTitle(session);
     renderChatSessions();
@@ -2829,7 +2844,6 @@
 
   function setVideoProgress(value) {
     const safe = Math.max(0, Math.min(100, Number(value) || 0));
-    videoState.lastProgress = safe;
     const fill = document.getElementById("videoProgressFill");
     const text = document.getElementById("videoProgressText");
     if (fill) fill.style.width = `${safe}%`;
@@ -2873,7 +2887,6 @@
   function resetVideoOutput(keepPreview) {
     const stage = document.getElementById("videoStage");
     const empty = document.getElementById("videoEmpty");
-    videoState.lastProgress = 0;
     videoState.currentPreviewItem = null;
     setVideoProgress(0);
     setVideoIndeterminate(false);
@@ -3058,24 +3071,7 @@
     return fileID;
   }
 
-  async function importMediaURL(url, expectedKind) {
-    const clientMode = toolAuthState.mode === "client";
-    const res = await fetch(clientMode ? "/grok/v1/media/inputs/import" : "/api/grok/admin/media/inputs/import", {
-      method: "POST",
-      headers: toolAuthHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ url }),
-    });
-    if (!clientMode && handleUnauthorized(res)) throw new Error("登录已失效");
-    if (!res.ok) throw new Error(await res.text());
-    const payload = await res.json();
-    const data = clientMode ? payload : (payload?.data || {});
-    if (expectedKind && data.kind !== expectedKind) throw new Error(`URL 必须指向${expectedKind === "image" ? "图片" : "视频"}`);
-    const fileID = String(data.file_id || data.fileId || data.id || "").trim();
-    if (!fileID) throw new Error("暂存响应缺少 file_id");
-    return fileID;
-  }
-
-  window.GrokMediaStaging = Object.freeze({ upload: stageMediaFile, importURL: importMediaURL });
+  window.GrokMediaStaging = Object.freeze({ upload: stageMediaFile });
 
   // syncVideoRouteControls limits resolution and length to what the selected
   // video route advertises (video_constraints). Grok Web generates from text
